@@ -88,12 +88,16 @@ def _kicad_mod(item, base, fp_file):
 
 
 def _pad_rects(pads):
+    """(designator, x, y, w, h, odd angle, corner radius) in mm: round pads (Altium shape 1) have round ends, rounded
+    rectangles (9) a corner of corner % of half the short side."""
     out = []
     for r in pads:
         w, h = AL.to_mm(r["w"]), AL.to_mm(r["h"])
         if round(r["rot"]) % 180 == 90:
             w, h = h, w
-        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, r["rot"] % 90 != 0))
+        rad = min(w, h) / 2 * (1.0 if r["shape"] == AL.SHAPE["round"] else
+                                (r["corner"] or 0) / 100 if r["shape"] == AL.SHAPE["roundrect"] else 0.0)
+        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, r["rot"] % 90 != 0, rad))
     return out
 
 
@@ -118,7 +122,8 @@ def _pcblib_minimal(fp, pin_names=None, courtyard=AL.MECH15, pin1=None):
         for b in rects[i + 1:]:
             if a[0] and a[0] == b[0] or a[5] or b[5]:
                 continue
-            if abs(a[1] - b[1]) < (a[3] + b[3]) / 2 - 0.005 and abs(a[2] - b[2]) < (a[4] + b[4]) / 2 - 0.005:
+            gap = FC._rect_gap(*({"x": q[1], "y": q[2], "w": q[3], "h": q[4], "r": q[6]} for q in (a, b)))
+            if gap < -0.005:                       # round ends and corners: boxes meeting at a corner don't touch
                 msg = f"pads {a[0]} and {b[0]} overlap"
                 (warns if _same_net(msg, pin_names or {}) else fails).append(msg)
     if not any(r["layer"] == courtyard for r in fp["records"] if r["type"] in ("track", "arc", "region")):
@@ -231,12 +236,19 @@ def check_item(item, base=".", rules=None):
                 r = r[1] if kind == "symbol" else r
                 if not r:
                     raise ValueError("library is empty")
-                if kind == "symbol":
-                    syms = r
-                else:
-                    fps = r
             except Exception as e:             # unreadable: altium_lib's reader is the gate
                 add("files", f"{kind} file does not read back ({type(e).__name__}: {e})")
+                continue
+            from .kicad_export import _pick
+            try:                               # a library of many (dedupe --merge onto a company file): the entry the
+                r = [_pick(r, item[kind].get("ref"), f, kind)]          # plan names, not the first one or all of them
+            except ValueError as e:
+                add("files", str(e))
+                continue
+            if kind == "symbol":
+                syms = r
+            else:
+                fps = r
     # ---- pins vs pads
     if syms and fps:
         pins = {r["num"] for s in syms for r in s["records"] if r.get("RECORD") == "2"}

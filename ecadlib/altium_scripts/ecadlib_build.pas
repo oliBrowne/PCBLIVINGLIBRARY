@@ -244,6 +244,15 @@ Begin
     End
     Else
         Pad.HoleSize := 0;
+    If (EbF.Count > 20) And ((EbN(19) <> 0) Or (EbN(20) <> 0)) Then
+    Begin                                      { copper offset from the hole (pad frame, y up), as ecadlib's file has it }
+        Pad.SetState_XPadOffset(eTopLayer, EbN(19));
+        Pad.SetState_XPadOffset(eMidLayer1, EbN(19));
+        Pad.SetState_XPadOffset(eBottomLayer, EbN(19));
+        Pad.SetState_YPadOffset(eTopLayer, EbN(20));
+        Pad.SetState_YPadOffset(eMidLayer1, EbN(20));
+        Pad.SetState_YPadOffset(eBottomLayer, EbN(20));
+    End;
     If EbF[7] = 'roundrect' Then
     Begin
         Pad.SetState_StackCRPctOnLayer(eTopLayer, EbN(8));

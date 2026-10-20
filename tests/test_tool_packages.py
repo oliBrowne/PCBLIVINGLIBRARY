@@ -19,21 +19,22 @@ def _tmp():
     return Path(tempfile.mkdtemp(prefix="ecadlib-pkg-"))
 
 
-def _plan():
-    """tests.test_kicad_export's librarian run (made once), copied per test: (plan.json, http)."""
+def _plan(base=None):
+    """tests.test_kicad_export's librarian run (made once), copied per test into base (a test's tmp_path, removed after
+    it; None: a new temp folder): (plan.json, http)."""
     if "dir" not in _PLAN:
         from tests import test_kicad_export as TX
         d = _tmp()
         plan, _, http = TX._plan(d)
         _PLAN.update(dir=plan.parent, http=http)
-    d = _tmp() / "plan"
+    d = (Path(base) if base else _tmp()) / "plan"
     shutil.copytree(_PLAN["dir"], d)
     return d / "plan.json", _PLAN["http"]
 
 
-def _export(with_model=True):
+def _export(with_model=True, base=None):
     """kicad-export of the plan into a fresh folder; with_model adds a STEP model to the SOIC-8 footprint."""
-    plan, http = _plan()
+    plan, http = _plan(base)
     out = plan.parent.parent / "k"
     rep = X.export(plan, out, "lib", http=http, log=lambda *a: None)
     assert not rep["errors"], rep["errors"]

@@ -109,7 +109,7 @@ def _fmt(v):
 
 
 def _natural(s):
-    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", str(s))]
+    return [int(t) if t.isdecimal() else t for t in re.split(r"(\d+)", str(s))]
 
 
 def _settings(rules=None):
@@ -441,11 +441,11 @@ def facts(fp, pin1_names=PIN1_NAMES):
         if a1 and box:
             out["pin1"] = {"num": a1["num"], "x": round(a1["x"], 3), "y": round(a1["y"], 3), "where": _quadrant(a1["x"], a1["y"], box)}
     else:
-        num = sorted({int(p["num"]) for p in pins if p["num"].isdigit()})
+        num = sorted({int(p["num"]) for p in pins if p["num"].isdecimal()})
         if len(num) >= 3:
             cen = {}
             for p in pins:
-                if p["num"].isdigit():
+                if p["num"].isdecimal():
                     cen.setdefault(int(p["num"]), (p["x"], p["y"]))
             ring = [cen[n] for n in num]
             area = sum(a[0] * -b[1] - b[0] * -a[1] for a, b in zip(ring, ring[1:] + ring[:1])) / 2   # y up

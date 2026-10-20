@@ -434,7 +434,7 @@ def build_demo(ws, tool="both", bom=None, log=print):
     if reset:
         log(f"      note: {rel} was edited since the last demo run; it is reset to "
             f"{'the bundled sample' if not bom else src.name} and your edited copy is kept as {ws.rel(reset)}")
-    log(f"[1/3] BOM: {rel} ({sum(1 for _ in open(dest, encoding='utf-8')) - 1} lines)")
+    log(f"[1/3] BOM: {rel} ({len(ws._read_bom(dest)[0])} lines)")    # the librarian's reader: XLSX, cp1252, ...
     log("[2/3] finding symbols and footprints (built-in standard parts; no network, no API key) ...")
     res = ws.librarian_run(rel, sources=["standard"])
     files = {"plan": res["reports"]}

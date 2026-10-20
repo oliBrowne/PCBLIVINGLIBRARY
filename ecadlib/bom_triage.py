@@ -10,8 +10,9 @@ from pathlib import Path
 import pandas as pd
 
 from . import providers as P, sheetsafe as SS
+from .fsutil import report_file
 from .httpcache import CachedHTTP
-from .kicad_index import KiCadIndex, package_of, parse_value
+from .kicad_index import KiCadIndex, package_of, parse_value, two_readings
 
 FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctuation -> space)
     "mpn": ["mpn", "manufacturer part number", "mfr part number", "mfr part", "mfg part number", "mfr pn",
@@ -44,10 +45,15 @@ def _hnorm(h):
     return _norm(re.sub(r"(?i)\bp\s*/\s*n\b", " pn ", str(h)).replace("#", " no "))
 
 
+HIDDEN_HEADER = "<hidden>"     # a column the workbook hides, in a CSV copy of it (dedupe --bom): map_headers skips a header
+                               # with '<' and the other header rules match whole headers, so it is never read as live
+
+
 def map_headers(headers, threshold=0.72):
     """Fuzzy, case-insensitive header -> field mapping. Returns {field: header}."""
+    dist = {nj for nj, _ in _supplier_pairs(headers)}            # 'Vendor' beside 'Vendor Part Number': a distributor
     scores = []
-    for h in headers:
+    for j, h in enumerate(headers):
         nh = _hnorm(h)
         if len(nh) > 80 or "<" in str(h):          # a sentence or a line of markup is not a column header
             continue
@@ -59,7 +65,12 @@ def map_headers(headers, threshold=0.72):
                                                                      # its own code, 'Manufacturer Part Number' the MPN
                     sc = 0.9 if (f, s) in (("value", "comment"), ("mpn", "part")) else sc   # 'Value' wins over
                                                                      # Altium's 'Comment' ('Resistor'); a real MPN column
-                                                                     # over a purchasing BOM's 'Part' 
+                                                                     # over a purchasing BOM's 'Part'
+                    sc = 0.74 if (f, s) in (("manufacturer", "vendor"), ("description", "notes")) else sc   # a
+                                                                     # fallback: any header naming the maker or the
+                                                                     # description ('Mfg Name', 'Part Description',
+                                                                     # 0.75 and up) wins over a distributor 'Vendor'
+                                                                     # or 'Notes'
                 elif f == "fitted" or (f, s) == ("mpn", "part"):
                     continue                                             # one word: exact only ('Mount Side' isn't it,
                                                                          # 'Part Type' is no MPN)
@@ -89,6 +100,8 @@ def map_headers(headers, threshold=0.72):
                 best *= 0.5                                              # nor is a distributor's order code
             if f == "manufacturer" and re.search(r"\b(part|pn|number|no)\b", nh):
                 best *= 0.6                                              # 'Mfr Part #' is not the maker
+            if f == "manufacturer" and j in dist:
+                best = 0.0                                               # nor is Digi-Key, named beside its order code
             scores.append((best, f, h))
     mapping, used = {}, set()
     for sc, f, h in sorted(scores, key=lambda t: -t[0]):
@@ -156,9 +169,11 @@ def _decode_line(b):
     return b.decode("latin-1")
 
 
-def _read_csv(p):
+def _read_csv(p, widths=None):
     """Tolerant CSV read: Altium ActiveBOM exports put title rows ('Bill of Materials;;;;;', a blank
-    row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded."""
+    row) above a wider header, which pandas' sniffer chokes on. Rows may be ragged; they are padded. widths: a list
+    to fill with each row's cell count before padding (not df.attrs: pandas deep-copies attrs into every row
+    iterrows() makes, so a per-row list there makes reading a BOM quadratic)."""
     data = Path(p).read_bytes()
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):                             # Excel "Unicode Text" is UTF-16 + tabs
         data = data.decode("utf-16").encode("utf-8")
@@ -186,9 +201,9 @@ def _read_csv(p):
         raise ValueError(f"{p}: the BOM file is empty")
 
     def score(d):                                                         # rows sharing the commonest width > 1
-        widths = [len(r) for r in csv.reader(lines[:30], delimiter=d)]
-        common = max(set(widths), key=widths.count)
-        return (widths.count(common) if common > 1 else 0, common)
+        ws = [len(r) for r in csv.reader(lines[:30], delimiter=d)]
+        common = max(set(ws), key=ws.count)
+        return (ws.count(common) if common > 1 else 0, common)
 
     try:
         delim = max(DELIMS, key=score)
@@ -210,6 +225,8 @@ def _read_csv(p):
     df = pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)                         # <newline>0603'
     df.attrs["text"] = True                                               # cells past the header are an unquoted comma
     df.attrs["delimiter"] = delim
+    if widths is not None:
+        widths[:] = [len(r) for r in rows]                                # before padding: 'Footprint,' declares a column
     return df
 
 
@@ -254,7 +271,8 @@ def read_bom(path, columns=None, rules=None, root=None):
             return _BI().read_kicad_sch(sch, columns, root)
         raise ValueError(f"{p}: a KiCad {p.suffix} file is not a BOM and {sch.name} is not next to it; "
                          "give the project's .kicad_sch (or a BOM export)")
-    raw = _read_excel(p, columns) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else _read_csv(p)
+    widths = []                                                   # a CSV's cells per row, before padding
+    raw = _read_excel(p, columns, widths) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else _read_csv(p, widths)
     text_src = bool(raw.attrs.get("text"))
     raw = raw.fillna("")
     if raw.empty or not raw.astype(str).apply(lambda c: c.str.strip()).ne("").any().any():
@@ -277,7 +295,11 @@ def read_bom(path, columns=None, rules=None, root=None):
         if "value" in col else None                              # Value and Comment both there: Comment backs Value up
     decimal_comma = raw.attrs.get("delimiter") == ";"            # ';' CSVs come from decimal-comma Excel: 1,000 = 1
     hlen = max((j + 1 for j, h in enumerate(headers) if h), default=0)
+    hwidth = max(widths[hdr_row:hdr_row + (2 if two else 1)]) if widths else 0   # the header row's own cells: Excel
+                                                                  # saves an unnamed notes column as 'Footprint,'
     suppliers = _supplier_pairs(headers)
+    nxt = _column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
+                                                                  # after Value holds in the rows that fit the header
     lines, skipped = [], 0
     for idx, row in df.iterrows():
         cells = [str(x).strip() for x in row]
@@ -286,10 +308,13 @@ def read_bom(path, columns=None, rules=None, root=None):
         if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
-                    and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])):
+                    and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])
+                    and _fraction_fits(cells, vj, col, nxt)):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
-                note.append(f"value {cells[vj]} was split by an unquoted decimal comma; read as one cell")
-            else:
+                note.append(f"value {cells[vj]} was split by an unquoted {'' if two_readings(cells[vj]) else 'decimal '}"
+                            "comma; read as one cell")              # '4,700p' reads two ways: triage says so
+            elif not (widths and widths[idx] <= hwidth):          # else a stray comma, unless the header row has that
+                                                                  # cell too (Excel's unnamed notes column)
                 shifted = True
                 note.append(f"row {idx + 1} has {n} cells but the header has {hlen} (an unquoted comma?): its MPN and "
                             "footprint were not used; quote the cell or fix the row")
@@ -370,6 +395,39 @@ def read_bom(path, columns=None, rules=None, root=None):
 HEADER_ROWS = 50                                                 # title blocks and blank rows above the header
 
 
+def _shape(cell):
+    """A cell's shape, its numbers as 9: '50V', '6.3V' -> '9v'; '0603' -> '9'; '1%' -> '9%'."""
+    return re.sub(r"\d+(?:[.,]\d+)?", "9", str(cell).strip().lower())
+
+
+def _column_shapes(df, j, hlen):
+    """The shapes of column j's cells (an empty one too) in the rows with no cell past the header's hlen columns."""
+    if j >= df.shape[1]:
+        return set()
+    return {_shape(r[j]) for r in df.to_numpy() if not any(str(c).strip() for c in r[hlen:])}
+
+
+def _fraction_fits(cells, vj, col, shapes=()):
+    """cells[vj] | cells[vj + 1] ('4' | '7k', '22' | '1') is one value split at its decimal comma, not Value 100 then
+    the next column (Qty 2, Footprint 0603, Voltage 50V, Tolerance 1%) with the stray comma further on. It is not when
+    the fraction has a '%' (a tolerance, never a value's decimals); when the column after Value holds cells shaped like
+    it in the rows that fit the header (shapes: '50V' among '25V', '16V') and the joined reading's cell there does not;
+    when a bare number makes a value of more than 3 significant digits (the E-series: 4,7  22,1  4,99); or when a Qty
+    column after Value, read from the joined row, no longer counts the designators."""
+    frac = cells[vj + 1]
+    if "%" in frac:
+        return False
+    if _shape(frac) in shapes and _shape(cells[vj + 2] if vj + 2 < len(cells) else "") not in shapes:
+        return False
+    if not re.search(r"[^\d\s]", frac) and len((cells[vj] + re.sub(r"\D", "", frac)).lstrip("0")) > 3:
+        return False
+    qj, dj = col.get("qty"), col.get("designator")
+    if qj is None or qj < vj:
+        return True
+    q, ref = cells[qj + 1], cells[dj + (dj > vj)] if dj is not None else ""
+    return bool(re.fullmatch(r"\d+", q)) and (not ref or count_refs(ref) == int(q))
+
+
 def header_row(raw, columns=None):
     """The row of a raw sheet that is the BOM header: the one, among the first HEADER_ROWS, whose cells map to the
     most fields."""
@@ -433,10 +491,13 @@ def _two_row_header(top, sub, columns=None):
     return out if score(out) > score(list(top)) else None
 
 
-def _bom_sheet(p, sheets, columns=None):
+def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
     """[(sheet name, frame, uncached formula cells)] -> the BOM frame. Hidden sheets and hidden columns are left out (an old BOM kept hidden);
     blank rows are dropped (title blocks); the sheet with the best header wins, then the one with more rows; sheets
-    with the very same header (a Top and a Bottom BOM) are read together; any other BOM-like sheet is named."""
+    with the very same header (a Top and a Bottom BOM) are read together; any other BOM-like sheet is named.
+    keep_hidden: a copy of the BOM to write back (dedupe --bom) keeps the hidden columns' cells; they still take no
+    part in choosing the sheet and its header, and attrs['hidden_cols'] lists them. A row with text only in hidden
+    columns is still dropped: rows are kept as read_bom sees them, so the copy is the sheet read_bom picks."""
     try:
         hidden = _BI().xlsx_hidden(p)
     except Exception:                                    # not an .xlsx zip (old .xls): nothing is known to be hidden
@@ -448,20 +509,23 @@ def _bom_sheet(p, sheets, columns=None):
         if name in hidden and hidden[name] is None:
             continue
         df = df.copy()
-        for j in hidden.get(name) or ():
-            if j < df.shape[1]:
-                df.iloc[:, j] = ""
+        pos = {c: k for k, c in enumerate(df.columns)}  # sheet column (0 = A) -> frame column: a sparse frame leaves
+        hid = {pos[j] for j in hidden.get(name) or () if j in pos}   # out empty ones
+        df.columns = range(df.shape[1])
+        full = df.fillna("")                             # the cells as the sheet has them
+        for j in hid:
+            df.iloc[:, j] = ""
         df = df.fillna("")
-        df = df[df.astype(str).apply(lambda c: c.str.strip()).ne("").any(axis=1)].reset_index(drop=True)
-        frames.append((name, df))
+        rows = df.astype(str).apply(lambda c: c.str.strip()).ne("").any(axis=1)
+        frames.append((name, df[rows].reset_index(drop=True), full[rows].reset_index(drop=True), hid))
     if not frames:
         return pd.DataFrame()
     info = []
-    for name, df in frames:
+    for name, df, full, hid in frames:
         score = _header_score(df, columns)
         h = header_row(df, columns) if len(df) else 0
         head = tuple(_norm(x) for x in df.iloc[h]) if len(df) else ()
-        info.append((score, len(df) - h - 1, name, df, h, head))
+        info.append((score, len(df) - h - 1, name, full if keep_hidden else df, h, head, hid))
     best = max(info, key=lambda t: (t[0], t[1]))
     same = [t for t in info if t is not best and t[0] == best[0] and t[5] == best[5] and best[0] >= 2]
     other = [t[2] for t in info if t is not best and t not in same and t[0] >= 3]
@@ -476,6 +540,8 @@ def _bom_sheet(p, sheets, columns=None):
     if other:
         print(f"  note: {Path(p).name}: read sheet {best[2]!r}; sheet(s) {', '.join(map(repr, other))} also look like "
               "a BOM and were not read", file=sys.stderr)
+    if keep_hidden:
+        out.attrs["hidden_cols"] = sorted(set().union(*(t[6] for t in [best] + same)))
     return out
 
 
@@ -531,8 +597,8 @@ MAX_XL_CELLS = 2_000_000
 
 
 def _compact(cells, where):
-    """{(row, col): text} -> rows of text with the empty rows and columns left out (a sheet with one cell at
-    XFD1048576 is two cells, not a 17-billion-cell grid)."""
+    """{(row, col): text} -> (rows of text with the empty rows and columns left out, the sheet column of each one
+    (0 = A)): a sheet with one cell at XFD1048576 is two cells, not a 17-billion-cell grid."""
     rows, cols = sorted({r for r, _ in cells}), sorted({c for _, c in cells})
     if len(rows) * len(cols) > MAX_XL_CELLS:
         raise ValueError(f"{where}: the sheet is {len(rows)} rows x {len(cols)} columns; is this really a BOM?")
@@ -541,7 +607,7 @@ def _compact(cells, where):
     ri = {r: k for k, r in enumerate(rows)}
     for (r, c), v in cells.items():
         out[ri[r]][ci[c]] = v
-    return out
+    return out, [c - 1 for c in cols]
 
 
 def _uncached_message(p, sheet, refs):
@@ -604,8 +670,9 @@ def _sparse_frames(p):
     for ws in wb.worksheets:
         cells = {k: _xl_text(c.value).strip() for k, c in getattr(ws, "_cells", {}).items() if c.value is not None}
         cells = {k: v for k, v in cells.items() if v}
-        out.append((ws.title, pd.DataFrame(_compact(cells, f"{p}: sheet {ws.title!r}") if cells else [], dtype=object)))
-    return out
+        rows, cols = _compact(cells, f"{p}: sheet {ws.title!r}") if cells else ([], [])
+        out.append((ws.title, pd.DataFrame(rows, columns=cols, dtype=object)))   # labelled by sheet column, as
+    return out                                                                   # _bom_sheet hides by it
 
 
 def _uncached_formulas(p):
@@ -619,12 +686,13 @@ def _uncached_formulas(p):
     return out
 
 
-def _read_excel(p, columns=None):
+def _read_excel(p, columns=None, widths=None, keep_hidden=False):
     """The sheet that holds the BOM: workbooks often put a cover / notes sheet first. columns: the rules' [bom]
-    columns, so a sheet with house headers is found behind a cover sheet."""
+    columns, so a sheet with house headers is found behind a cover sheet. widths: as for _read_csv, when the file
+    is text. keep_hidden: see _bom_sheet."""
     head = Path(p).read_bytes()[:8]
     if not head.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0")):     # not a workbook: CSV / tab text named .xls(x)
-        return _read_csv(p)
+        return _read_csv(p, widths)
     if head.startswith(b"PK"):
         sheets = _xlsx_frames(p)
     else:
@@ -635,7 +703,7 @@ def _read_excel(p, columns=None):
             raise ValueError(f"{p}: can't read this old .xls workbook ({e}); save it as .xlsx or CSV") from e
         except Exception as e:                                            # truncated / corrupt file
             raise ValueError(f"{p}: not a readable Excel workbook ({type(e).__name__}: {e})") from e
-    return _bom_sheet(p, sheets, columns)
+    return _bom_sheet(p, sheets, columns, keep_hidden)
 
 
 TOTAL = re.compile(r"((grand\s*|sub\s*)?totals?|sum|summe|gesamt(summe)?|insgesamt|totale?|somme)"
@@ -820,6 +888,10 @@ def triage(lines, index, provs, http):
         if pns and not ln.get("mpn"):
             work["mpn"] = pns[0]                               # let providers search by the Comment/LibRef part number
             notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")
+        both = two_readings(ln.get("value"))
+        if both:
+            notes.append(f"value {ln['value'].strip()} reads two ways: {both[0]} or {both[1]} (a decimal or a thousands comma); "
+                         "no library part was picked by it: write the value without the comma")
         if ln.get("altium_mpn_source") == "Comment":
             notes.append("MPN taken from the schematic Comment (the component has no Manufacturer Part Number parameter)")
         if re.fullmatch(r"\d+(\.\d+)?E\+\d+", ln.get("mpn", ""), re.I):     # Excel turned 530470610 into 5.30E+08
@@ -928,7 +1000,7 @@ def _yn(v):
 def write_reports(rows, mapping, provs, http, out, bom):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
+    with open(report_file(out, ".csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = SS.DictWriter(f, fieldnames=list(rows[0]) if rows else ["line", "status"])   # no formulas from BOM cells
         w.writeheader()
         w.writerows(rows)
@@ -951,7 +1023,7 @@ def write_reports(rows, mapping, provs, http, out, bom):
         h = re.sub(r"^https?://([^/]+).*", r"\1", u)
         hosts.setdefault(h, []).append(("cache " if cached else "") + str(st))
     md += ["", "## HTTP (this run)", ""] + [f"- `{h}`: {len(v)} requests -> {sorted(set(v))}" for h, v in hosts.items()]
-    out.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    report_file(out, ".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return counts
 
 
@@ -971,6 +1043,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     from .firstrun import default_out
     a.out = a.out or default_out("triage", a.bom)
+    if Path(a.out).suffix.lower() in (".md", ".csv", ".json"):         # -o out/t.md: the stem out/t, as before
+        a.out = str(Path(a.out).with_suffix(""))
 
     from . import rules as RU
     from . import plugins as PL
@@ -1002,7 +1076,7 @@ def main(argv=None):
     if a.json:                                           # stable shape: docs/command-line.md "Machine-readable output (--json)"
         print(json.dumps({"bom": str(a.bom), "lines": len(rows), "mapping": mapping,
                           "counts": {str(k): int(v) for k, v in counts.items()}, "rows": rows,
-                          "reports": [Path(a.out).with_suffix(x).as_posix() for x in (".md", ".csv")]}, indent=2, default=str))
+                          "reports": [report_file(a.out, x).as_posix() for x in (".md", ".csv")]}, indent=2, default=str))
         return 0
     print_result(rows, counts, a)
 
@@ -1047,7 +1121,7 @@ def print_result(rows, counts, a, t=None):
                       "run again online, or add API keys (`ecadlib doctor` lists them)"))
     stem = Path(a.out)
     t.summary(f"{M.plural(len(rows), 'BOM line')}: " + ", ".join(f"{v} {k}" for k, v in by.items()),
-              written=[(str(stem.with_suffix(".md")), "triage report"), (str(stem.with_suffix(".csv")), "the same as a table")],
+              written=[(str(report_file(stem, ".md")), "triage report"), (str(report_file(stem, ".csv")), "the same as a table")],
               next=[(f"ecadlib librarian {a.bom} -o {_lib_out(a.bom)}", "fill the missing parts and build the library")],
               notes=notes)
 

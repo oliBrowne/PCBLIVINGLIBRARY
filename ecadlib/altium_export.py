@@ -21,7 +21,7 @@ import pandas as pd
 
 from .altium_lib import file_stem, lib_name, not_cp1252, storable
 from .bom_triage import placeholder_mpn, read_bom
-from .kicad_index import norm_mpn, package_of, parse_value
+from .kicad_index import norm_mpn, package_of, parse_value, two_readings
 
 PLAIN_VALUE = re.compile(r"(\d+(?:[.,]\d+)?\s*[pnuµμmkKMGR]?|\d+[pnuµμmkKMGR]\d+)\s*(?:F|H|Ω|R|ohms?)?", re.I)   # '4k7',
                                                                   # '100nF': only a value (not '100nF 50V')
@@ -161,7 +161,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         value = ln.get("value", "")
         if cat in GENERIC_SYMBOL and not mpn and PLAIN_VALUE.fullmatch(value.strip()):
             pv = parse_value(value)                   # 1uF / 1u / 1µF, 100nF / 0.1uF, 4k7 / 4.7k: one part, named
-            if pv is not None:                        # with the first spelling the BOM uses
+            if pv is not None and not two_readings(value):   # with the first spelling the BOM uses ('4,700pF' reads
+                                                             # two ways: its own part)
                 value = same_value.setdefault((cat, pkg, fp_ref, f"{pv:.6g}"), value)
         name_mpn = re.sub(r"\s+", "_", mpn.strip())   # a space in an MPN is a separator ('FC-135 32.768KA-AG0'
         if custom:                                    # -> FC-135_32.768KA-AG0, as kicad_export.kname), not dropped

@@ -245,7 +245,7 @@ def table_rows(path):
     """A CSV (DbLib table, parts export) or SQLite file -> sorted rows as lines."""
     path = Path(path)
     if path.suffix == ".sqlite":
-        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        con = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)    # quoted: a '#', '?' or '%' in the path
         try:
             out = []
             for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):

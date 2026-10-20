@@ -13,7 +13,7 @@ leaves it byte-identical):
      "parts": {"<name>": {"key": <the BOM-line fingerprint>,
                "built_with": {"ecadlib": "0.3.0", "rules_sha256": ...},
                "inputs": [{"method": "GET", "url": ..., "sha256": <sha256 of the response text>}, ...] or null,
-               "local": [{"file": <--lib file>, "sha256": ...}],
+               "local": [{"file": <--lib file, relative to the library folder>, "sha256": ...}],
                "datasheet": {"url", "pdf_sha256", "model", "provider", "schema"} (parts read from a datasheet),
                "symbol": {"source", "file", "sha256", "norm_sha256"},
                "footprint": {"source", "file", "sha256", "norm_sha256", "kicad_mod": {"file", "sha256"}}}}}
@@ -28,13 +28,16 @@ chose with `ecadlib resolve` stay), and runs the librarian again from the lock's
 `--offline` (the HTTP cache only; a datasheet part is rebuilt only from the cached model answer, a model is never
 called). It then reports, per part and file, identical / identical after normalising / DRIFT, plus inputs that
 changed (the BOM, the rules, a cached response, a --lib file) and parts built by another ecadlib version. Exit 0: no
-drift; 1: drift; 2: cannot rebuild (no lock, BOM missing)."""
+drift; 1: drift; 2: cannot rebuild (no lock, BOM missing) or a refused --keep. --keep DIR puts the copy in
+DIR/<library name>: never on, in or around the library or what the lock reads (BOM, cache, --lib files, rules file), and
+an existing DIR/<library name> is replaced only when an earlier --check --keep made it (it holds .ecadlib-rebuild-copy)."""
 import argparse, contextlib, hashlib, json, os, re, shutil, sys, tempfile
 from pathlib import Path
 
 from . import __version__
 
 LOCK = "library.lock.json"
+COPY_MARK = ".ecadlib-rebuild-copy"                  # in a --check --keep copy: a later --check --keep may replace it
 SKIP_URL = re.compile(r"/repository/tree\?")        # the KiCad name index crawl: shared, cached in its own file
 
 
@@ -217,7 +220,7 @@ def build_lock(out, items, state, bom, libs, sources, cache, providers, gen_step
         local = []
         for k in ("symbol", "footprint"):
             for f in _local_inputs((st.get(k) or {}).get("source"), libs):
-                e = {"file": str(Path(f).resolve()), "sha256": file_sha(f)}
+                e = {"file": _rel(f, out), "sha256": file_sha(f)}
                 if e not in local:
                     local.append(e)
         if local:
@@ -346,7 +349,7 @@ def check_inputs(lock, lib_dir, rules, http):
             elif sha(r.text) != e["sha256"]:
                 drift.append({"part": name, "what": "input", "detail": f"{e['url']}: cached response changed"})
         for e in p.get("local") or []:
-            if file_sha(e["file"]) != e["sha256"]:
+            if file_sha(_abs(e["file"], lib_dir)) != e["sha256"]:
                 drift.append({"part": name, "what": "input", "detail": f"{e['file']}: --lib file changed or missing"})
     return drift
 
@@ -385,18 +388,45 @@ def compare(old, new):
     return rows
 
 
+class KeepError(ValueError):
+    """--check --keep DIR would put the rebuilt copy on, inside or around the library or one of the lock's inputs, or
+    replace a folder an earlier --check --keep did not make (the CLI exits 2, no traceback)."""
+    plain_error = True
+    hint = "keep the rebuilt copy in a new folder outside the library and its inputs, e.g. --keep /tmp/rb"
+
+
+def _lock_paths(lock, lib_dir):
+    """Every file or folder the lock reads: the BOM, the HTTP cache, the --lib libraries and files, the rules file."""
+    s = lock.get("settings") or {}
+    paths = [lock["bom"]["file"], s.get("cache"), *(s.get("libs") or []), s.get("rules_file")]
+    paths += [e.get("file") for p in (lock.get("parts") or {}).values() for e in p.get("local") or []]
+    return [Path(_abs(p, lib_dir)).resolve() for p in paths if p]
+
+
 def check(lib_dir, keep=None, log=print):
     """Rebuild into a temporary copy and compare with the lock. -> report dict (ok, rows, inputs)."""
     lib_dir = Path(lib_dir).resolve()
     old = read_lock(lib_dir)
     tmp = Path(keep).resolve() if keep else Path(tempfile.mkdtemp(prefix="ecadlib-rebuild-"))
+    dst = tmp / lib_dir.name
+    if dst.is_relative_to(lib_dir) or lib_dir.is_relative_to(dst):    # the copy is replaced first: never the library
+        raise KeepError(f"--keep {keep}: the rebuilt copy would go to {dst}, which is the library {lib_dir} "
+                        "or overlaps it; --check changes nothing in the library")
+    for p in _lock_paths(old, lib_dir):                # nor what the library is built from
+        if p.is_relative_to(dst) or dst.is_relative_to(p):
+            raise KeepError(f"--keep {keep}: the rebuilt copy would go to {dst}, which holds or is inside {p}, "
+                            "an input the library is built from; --check changes nothing")
+    if dst.exists() and not (dst / COPY_MARK).is_file():   # only a copy an earlier --check --keep made is replaced
+        raise KeepError(f"--keep {keep}: {dst} exists and is not a copy `rebuild --check` made; "
+                        "remove it or choose another --keep")
     try:
-        dst = tmp / lib_dir.name
         if dst.exists():
             shutil.rmtree(dst)
         # without the change-control ledger: the rebuild must reproduce the files, not be held back to them
         shutil.copytree(lib_dir, dst, ignore=shutil.ignore_patterns(".ecadlib_backup", "*.tmp", ".ecadlib",
                                                                     "library.ledger.jsonl", "library.usage.json"))
+        (dst / COPY_MARK).write_text(f"a copy of {lib_dir} made by `ecadlib rebuild --check`; "
+                                     "the next --check --keep here replaces it\n", encoding="utf-8")
         from . import migrate as MG            # the copy keeps no ledger: its stamp must not say it does
         st = dst / MG.STAMP
         if st.is_file():
@@ -412,6 +442,9 @@ def check(lib_dir, keep=None, log=print):
         s["cache"] = str(_abs(s["cache"], lib_dir))
         if s.get("rules_file"):
             s["rules_file"] = str(_abs(s["rules_file"], lib_dir))
+        for p in lk["parts"].values():
+            for e in p.get("local") or []:
+                e["file"] = str(_abs(e["file"], lib_dir))
         (dst / LOCK).write_text(json.dumps(lk), encoding="utf-8")
         new, inputs = rebuild(dst, dst, log=log, clean=True)
         rows = compare(old, new)
@@ -469,8 +502,8 @@ def main(argv=None):
                                                                   TM.VERBOSITY))
             return 0 if rep["ok"] else 1
         new, drift = rebuild(lib, log=quiet if a.json else print)
-    except FileNotFoundError as e:
-        print(f"ecadlib rebuild: {e}", file=sys.stderr)
+    except (FileNotFoundError, KeepError) as e:
+        print(f"ecadlib rebuild: {e}" + (f"\n  hint: {e.hint}" if isinstance(e, KeepError) else ""), file=sys.stderr)
         return 2
     rep = {"lock": str(lib / LOCK), "parts": len(new["parts"]), "inputs": drift}
     print(json.dumps(rep, indent=1) if a.json else f"rebuilt {len(new['parts'])} part(s) from {lib / LOCK}"

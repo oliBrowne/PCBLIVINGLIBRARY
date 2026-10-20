@@ -322,7 +322,10 @@ def check_formats(ws):
                 where = Path(r["path"]).resolve().relative_to(Path(ws).resolve()).as_posix()
             except (OSError, ValueError):
                 where = r["path"]
-            return _c("file formats", "FAIL", f"{where}: {r.get('error') or 'unreadable'}",
+            err = r.get("error") or "unreadable"
+            err = err[len(r["path"]) + 2:] if err.startswith(r["path"] + ": ") else err   # a stamp's names its path
+            return _c("file formats", "FAIL", f"{where}: {err}",
+                      f"restore {MG.STAMP} {MG.STAMP_FIX}" if r["kind"] == "stamp" else
                       "restore it from a backup or version control, or delete its folder and run the step that made it again")
         return _c("file formats", "FAIL", r.get("error") or f"{r['path']}: made by ecadlib {r['made_by'] or '?'} "
                   f"({r['kind']} schema {r['version']})", "upgrade ecadlib (pip install -U ecadlib)")

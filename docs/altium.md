@@ -223,7 +223,11 @@ In KiCad: Plugin and Content Manager > Install from File... > the zip. KiCad's P
 symbols' Footprint fields say `PCM_<lib>:<footprint>` and the footprints' models
 `${KICADn_3RD_PARTY}/3dmodels/<id>/<lib>.3dshapes/...` (n = `--kicad`; `--prefix ""` if you cleared KiCad's prefix).
 `--kicad 7` writes KiCad 7 files; the default 8 keeps the export's KiCad 8 files (KiCad 8, 9, 10). The version is
-`--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file. With
+`--pkg-version`, or kept while the content is unchanged, else today's date, so a re-run changes no file; a second
+change the same day takes the version after the last one (2026.10.17 after 2026.10.16), as KiCad offers only a newer
+version as an update (so a `--pkg-version` that is not newer, 1.2 after 1.2.0 included, is refused for a changed
+library). The last one is this package's newest in `--out` (its zips there, `packages.json`, `kicad_pcm.json`), so
+packages sharing a folder keep their own versions. With
 `--base-url` it also writes `repository.json` and `packages.json` (sha256, sizes) for Manage Repositories; KiCad only
 fetches repositories over http(s) (`kicad_curl_easy.cpp`), so a `file://` URL is refused.
 `--plugin` writes a PCM *plugin* package: an **ecadlib** button in the PCB editor's top toolbar (and Tools > External

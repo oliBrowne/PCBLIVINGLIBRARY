@@ -38,6 +38,7 @@ import argparse, copy, json, math, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL, sexpr
+from .fsutil import report_file
 
 TOL = {"position": 0.001, "size": 0.001, "drill": 0.001, "margin": 0.001, "rotation": 0.01, "corner": 1.0,
        "courtyard": 0.005, "window": 0.002, "outline": 0.005, "coverage": 0.5,
@@ -818,6 +819,11 @@ class KiCadLib:
             if len(syms) != 1:
                 raise ValueError(f"{folder}: {len(syms)} .kicad_sym files; pass --name")
             name = syms[0].stem
+        elif not (self.dir / f"{name}.kicad_sym").is_file():   # the --name given to kicad-export, which names the
+            from .kicad_export import libname                    # files libname(name); an older export: as given
+            if not (self.dir / f"{libname(name)}.kicad_sym").is_file():
+                raise ValueError(f"{folder}: no {name}.kicad_sym (the --name given to kicad-export)")
+            name = libname(name)
         self.name = name
         f = self.dir / f"{name}.kicad_sym"
         self.symbols = {}
@@ -849,8 +855,10 @@ def check_item(item, base=".", rules=None, kicad=None, altium_rows=None, second_
     fp_f, sym_f = _rel(base, (item.get("footprint") or {}).get("file")), _rel(base, (item.get("symbol") or {}).get("file"))
     fps = AL.read_pcblib(fp_f) if fp_f and fp_f.is_file() else None
     syms = AL.read_schlib(sym_f)[1] if sym_f and sym_f.is_file() else None
-    a_fp = altium_footprint(fps[0], _courtyard_layer(rules)) if fps else None
-    a_sym = altium_symbol(syms[0]) if syms else None
+    # a library of many (dedupe --merge onto a company file): the entry the plan names, as kicad-export writes it; a ref
+    # the file does not hold raises (check_plan reports the part), never the file's first entry
+    a_fp = altium_footprint(X._pick(fps, item["footprint"].get("ref"), fp_f, "footprint"), _courtyard_layer(rules)) if fps else None
+    a_sym = altium_symbol(X._pick(syms, item["symbol"].get("ref"), sym_f, "symbol")) if syms else None
     k_fp = k_sym = None
     if kicad is None:
         kmod = RC._kicad_mod(item, base, fp_f) if fp_f else None
@@ -914,7 +922,7 @@ def kicad_db_rows(folder, lib):
     if not f.is_file() or not (Path(folder) / f"{lib}.kicad_dbl").is_file():
         return None
     out = {}
-    con = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+    con = sqlite3.connect(f.resolve().as_uri() + "?mode=ro", uri=True)    # quoted: a '#', '?' or '%' in the path
     try:
         for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
             cur = con.execute(f'SELECT * FROM "{t}"')
@@ -927,24 +935,6 @@ def kicad_db_rows(folder, lib):
     return out
 
 
-def _dblib_workbook(lib):
-    """The parts workbook a .DbLib / .SVNDbLib reads: LibraryDatabasePath (next to it), else dblib-sync's name for it
-    (data_file_name: 'Bibliothèque.DbLib' -> 'Bibliotheque.xlsx'). -> (xlsx path, csv mirror path)."""
-    from pathlib import PureWindowsPath
-    from .altium_dblib_sync import _kv, _sections, data_file_name
-    from .fsutil import read_ini_text
-    try:
-        db = next((x for x in _sections(read_ini_text(lib)[0]) if x[0] == "DatabaseLinks"), None)
-    except (OSError, ValueError):
-        db = None
-    path = (_kv(db[1]) if db else {}).get("LibraryDatabasePath", "").strip()
-    names = ([PureWindowsPath(path).stem] if path else []) + [data_file_name(lib.stem), lib.stem]
-    for n in names:
-        if (lib.parent / f"{n}.xlsx").is_file() or (lib.parent / f"{n}.csv").is_file():
-            return lib.parent / f"{n}.xlsx", lib.parent / f"{n}.csv"
-    return lib.parent / f"{names[0]}.xlsx", lib.parent / f"{names[0]}.csv"
-
-
 def altium_db_rows(folder, notes=None):
     """{Part Number: row} from the DbLib's parts table (the .csv mirror dblib-sync writes next to the workbook the DbLib
     names, else that .xlsx), or None when the folder has no .DbLib / .SVNDbLib. notes: gets a line when the folder has several."""
@@ -954,7 +944,8 @@ def altium_db_rows(folder, notes=None):
     libs = sorted(folder.glob("*.DbLib")) + sorted(folder.glob("*.SVNDbLib"))
     if not libs:
         return None
-    found = [(lib, *_dblib_workbook(lib)) for lib in libs]
+    from .altium_dblib_sync import dblib_table_paths
+    found = [(lib, *dblib_table_paths(lib)) for lib in libs]
     lib, xlsx, csvf = next((f for f in found if f[1].is_file() or f[2].is_file()), found[0])
     if len(libs) > 1 and notes is not None:
         notes.append(f"{len(libs)} database libraries in {folder}; compared {lib.name}")
@@ -997,7 +988,12 @@ def compare_databases(kicad_rows, altium_rows, kicad, altium_dir, rules=None):
                 _d(out, "error", what, col, "-", a.get(col), "file missing")
             elif a.get(col):
                 names = {s["name"] for s in AL.read_schlib(f)[1]} if f.suffix.lower() == ".schlib" else {p["name"] for p in AL.read_pcblib(f)}
-                if AL.lib_name(a.get(ref, "")) not in names:
+                try:
+                    stored = AL.lib_name(a.get(ref, ""))
+                except ValueError as e:                     # typed into the workbook: a part's error, not the check's
+                    _d(out, "error", what, ref, "-", a.get(ref), str(e))
+                    continue
+                if stored not in names:
                     _d(out, "error", what, ref, "-", a.get(ref), f"not in {f.name}")
         kf = {f: k.get(c, "") for f, c in zip(KEY_FIELDS, ("Value", "Description", "Manufacturer", "MPN", "Datasheet"))}
         kf.update({f: v for f, v in kicad_fields(k, rules).items() if v})
@@ -1054,7 +1050,7 @@ def check_plan(plan, kicad_dir=None, lib=None, altium_dir=None, rules=None, seco
 def write_report(rep, stem):
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
-    stem.with_suffix(".json").write_text(json.dumps(rep, indent=2, default=str) + "\n", encoding="utf-8")
+    report_file(stem, ".json").write_text(json.dumps(rep, indent=2, default=str) + "\n", encoding="utf-8")
     from . import messages as M
     c = rep["counts"]
     where = Path(str(rep.get("plan") or "")).parent.name
@@ -1088,7 +1084,7 @@ def write_report(rep, stem):
     if rep["database"]:
         md += ["## Database rows", ""] + [f"- {M.clean(d['msg'])}" for d in rep["database"]] + [""]
     md += ["## Details", "", f"Compared in {rep['mode']} mode. Every number is in the machine-readable report next to this file (.json)."]
-    stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    report_file(stem, ".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return stem
 
 
@@ -1197,7 +1193,7 @@ def print_result(rep, stem, plan, t=None):
             + (f"; database rows {rep['database_rows']['kicad']} KiCad / {rep['database_rows']['altium']} Altium, "
                f"{c['database_errors']} differences" if rep.get("database_rows") else ""))
     nxt = [(f"ecadlib parity {plan} -v", "every difference, part by part")] if c["mismatch"] else []
-    t.summary(head, written=[(str(stem.with_suffix(".md")), "parity report")], next=nxt)
+    t.summary(head, written=[(str(report_file(stem, ".md")), "parity report")], next=nxt)
 
 
 def main(argv=None):
@@ -1265,9 +1261,11 @@ def main(argv=None):
     except (ValueError, OSError) as e:
         print(f"ecadlib parity: {e}", file=sys.stderr)
         return 2
+    if a.out and Path(a.out).suffix.lower() in (".md", ".json"):    # -o out/p.md: the stem out/p, as before
+        a.out = str(Path(a.out).with_suffix(""))
     stem = write_report(rep, a.out or Path(a.plan).parent / "parity")
     if a.json:
-        print(json.dumps(dict(rep, report=str(stem.with_suffix(".md"))), indent=2, default=str))
+        print(json.dumps(dict(rep, report=str(report_file(stem, ".md"))), indent=2, default=str))
     else:
         print_result(rep, stem, a.plan)
     return 0 if rep["ok"] else 1

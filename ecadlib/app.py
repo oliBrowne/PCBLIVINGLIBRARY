@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import bom_triage as T, footprint_gen as F, providers as P, rules as RU, sexpr
-from .fsutil import write_text_atomic
+from .fsutil import report_file, write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex
 from . import userconfig as UC
@@ -219,11 +219,11 @@ class Workspace:
             out = {"bom": self.rel(bom_path) if self.root in bom_path.resolve().parents else str(bom_path),
                    "mapping": mapping, "rows": rows,
                    "counts": {k: int(v) for k, v in counts.items()},
-                   "reports": [self.rel(stem.with_suffix(".md")), self.rel(stem.with_suffix(".csv"))]}
+                   "reports": [self.rel(report_file(stem, ".md")), self.rel(report_file(stem, ".csv"))]}
             meta = {"id": self._key(bom_path), "name": bom_path.name, "finished": _now(), "user": user or None}
             tmp = stem.with_name(stem.name + f".{os.getpid()}.{secrets.token_hex(3)}.tmp")
             tmp.write_text(json.dumps({**meta, **out}, default=str), encoding="utf-8")
-            os.replace(tmp, stem.with_suffix(".json"))
+            os.replace(tmp, report_file(stem, ".json"))
         return {**out, **meta}
 
     # ------------------------------------------------------------------ past triages (read-only)
@@ -510,7 +510,7 @@ class Workspace:
             raise ValueError(q["text"])
         cap, yes = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
         rd = self._datasheet_reader(out, batch=False, yes=yes)
-        rd.cfg["max_cost_usd"] = cap                  # never more than the person saw and approved
+        rd.set_cap(cap)                               # never more than the person saw and approved: a cap they set
         log, n = [], [0]
 
         def note(msg):
@@ -872,7 +872,7 @@ class Workspace:
         if q is not None:                             # None: nothing left to buy (a submitted batch is only collected)
             cap, unknown_ok = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
             rd.yes = rd.yes or unknown_ok
-            rd.cfg["max_cost_usd"] = cap              # never more than the person saw and approved
+            rd.set_cap(cap)                           # never more than the person saw and approved: a cap they set
         log = []
         rd.say = lambda m: log.append(str(m).strip())
         items = D.fill_plan(out / "plan.json", rd, self.rules(), log=log.append, parts=set(parts or []) or None)
@@ -891,9 +891,11 @@ class Workspace:
         plan_f = out / "plan.json"
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        est = D.estimate_plan(plan_f, self._datasheet_reader(out, estimate=True))
+        rd = self._datasheet_reader(out, estimate=True)
+        est = D.estimate_plan(plan_f, rd)
         from . import ai_cost as AC                   # datasheet_batch's approved_usd is this quote's approve_usd
-        return dict(est, key_set=est["exact_input"], ai=AC.quote(est, self.rules(), key_set=est["exact_input"]))
+        return dict(est, key_set=bool(rd.key), ai=AC.quote(est, self.rules(), key_set=bool(rd.key)))   # not exact_input:
+        # an OpenAI key is set but never counts tokens
 
     def cross_checks(self, bom):
         """Which datasheet parts of the librarian plan were cross-checked against a second source (ecadlib.crosscheck)
@@ -1056,6 +1058,12 @@ class Workspace:
         return {"file": self._label(f or self.rules_file()), "exists": bool(f), "text": f.read_text(encoding="utf-8-sig") if f else "",
                 "rules": RU.effective(self.rules()), "defaults": RU.DEFAULTS}
 
+    def _given_path(self, p):
+        """A folder or file a caller named: absolute as given, relative to the workspace (where --confine checks it),
+        never to the folder the server was started in."""
+        q = Path(str(p).strip()).expanduser()
+        return str(q if q.is_absolute() else self.root / q)
+
     def _rules_sources(self):
         """What a scan looks at when the person names nothing: the --lib folders, uploaded BOMs and Altium 365 state."""
         out = list(self.libs) + [str(self.root / "uploads")]
@@ -1069,10 +1077,12 @@ class Workspace:
         choices {setting key: value} answer the proposal's questions. A diff is included when a file exists."""
         from . import rules_infer as I
         paths, a365 = ([x] if isinstance(x, (str, Path)) else x for x in (paths, a365))   # one path, not its letters
-        paths = [str(p).strip() for p in (paths or []) if str(p).strip()] or self._rules_sources()
+        paths = [self._given_path(p) for p in (paths or []) if str(p).strip()] or self._rules_sources()
         if progress:
             progress(0, 1, "scanning " + ", ".join(Path(p).name for p in paths)[:80])
-        out = I.propose(paths, [str(x) for x in (a365 or [])], choices, existing=self.rules_file())
+        out = I.propose(paths, [self._given_path(x) for x in (a365 or [])], choices,   # from the rules in force: a
+                        existing=self.rules_in_use() or self.rules_file())          # workspace file replaces init's
+                                                                                     # ./ecadlib.toml, so keep its settings
         out["paths"], out["file"] = paths, self.rel(self.rules_file())
         if progress:
             progress(1, 1, "done")
@@ -1116,7 +1126,7 @@ class Workspace:
         ecadlib.ai_cost quote); style_guide() sends it once the person approved that."""
         from . import house_style as HS
         paths = [paths] if isinstance(paths, (str, Path)) else paths
-        paths = [str(x).strip() for x in (paths or []) if str(x).strip()] or self._rules_sources()
+        paths = [self._given_path(x) for x in (paths or []) if str(x).strip()] or self._rules_sources()
         direction = [direction] if isinstance(direction, str) else list(direction or [])
         f = self._style_file()
         old = HS.load(self.rules(), path=f) if f.is_file() else None
@@ -1372,17 +1382,18 @@ class Workspace:
         or with kicad=True the KiCad export in kicad/<bom>/ (run kicad_dblib first) against the Altium files, its
         .kicad_dbl rows included. Report in reports/parity_<bom>.md / .json. Never touches the network."""
         from . import parity as PY
-        from .kicad_export import kname
+        from .kicad_export import kname, libname
         bom_path, plan_f, _ = self._plan(bom)
         kdir = None
         if kicad:
             kdir = self.root / "kicad" / self._key(bom_path)
-            if not (kdir / f"{kname(str(name))[:60]}.kicad_sym").is_file():
+            lib = kname(str(name))[:60]                       # what kicad_dblib passes on; its files: libname(lib)
+            if not any((kdir / f"{n}.kicad_sym").is_file() for n in (lib, libname(lib))):
                 raise ValueError(f"no KiCad export in {self.rel(kdir)} yet: run kicad_dblib (or kicad-export) first")
         rep = PY.check_plan(plan_f, kdir, kname(str(name))[:60] if kdir else None, rules=self.rules_in_use())
         stem = PY.write_report(rep, self.root / "reports" / f"parity_{self._key(bom_path)}")
         bad = [p for p in rep["parts"] if p["result"] == "mismatch"]
-        return {"mode": rep["mode"], "ok": rep["ok"], "counts": rep["counts"], "report": self.rel(stem.with_suffix(".md")),
+        return {"mode": rep["mode"], "ok": rep["ok"], "counts": rep["counts"], "report": self.rel(report_file(stem, ".md")),
                 "mismatches": {p["part"]: [d["msg"] for d in p["diffs"] if d["level"] == "error"][:20] for p in bad},
                 "database": [d["msg"] for d in rep["database"]][:50]}
 

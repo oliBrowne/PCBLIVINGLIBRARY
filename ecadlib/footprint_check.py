@@ -129,12 +129,12 @@ def _pad_rects(tree):
 def _rect_gap(a, b):
     """Copper gap between two pads. A roundrect is its inner rectangle grown by a disc of radius r,
     so the gap is the inner rectangles' distance minus both radii (exact for rounded corners)."""
-    dx = abs(a["x"] - b["x"]) - (a["w"] + b["w"]) / 2
-    dy = abs(a["y"] - b["y"]) - (a["h"] + b["h"]) / 2
-    if dx < 0 and dy < 0:
-        return max(dx, dy)                       # overlap (negative)
     ra, rb = a.get("r", 0.0), b.get("r", 0.0)
-    return math.hypot(max(dx + ra + rb, 0), max(dy + ra + rb, 0)) - ra - rb
+    ix = abs(a["x"] - b["x"]) - (a["w"] + b["w"]) / 2 + ra + rb      # the inner rectangles' gaps: round pads whose
+    iy = abs(a["y"] - b["y"]) - (a["h"] + b["h"]) / 2 + ra + rb      # boxes meet only at a corner don't touch
+    if ix < 0 and iy < 0:
+        return max(ix, iy) - ra - rb             # overlap (negative)
+    return math.hypot(max(ix, 0), max(iy, 0)) - ra - rb
 
 
 def _pt_seg(px, py, a, b):
@@ -223,7 +223,7 @@ def _bbox(segs):
 
 def _ranges(nums):
     """['1','2','3','5'] -> '1-3, 5'."""
-    ints = sorted({int(n) for n in nums if str(n).isdigit()})
+    ints = sorted({int(n) for n in nums if str(n).isdecimal()})
     out, i = [], 0
     while i < len(ints):
         j = i
@@ -231,7 +231,7 @@ def _ranges(nums):
             j += 1
         out.append(f"{ints[i]}-{ints[j]}" if j > i else str(ints[i]))
         i = j + 1
-    return ", ".join(out + sorted(str(n) for n in nums if not str(n).isdigit()))
+    return ", ".join(out + sorted(str(n) for n in nums if not str(n).isdecimal()))
 
 
 def _share_copper(a, b):
@@ -325,7 +325,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     for p in sig:
         if p["num"] not in big:
             uniq.setdefault(p["num"], p)
-    order = sorted((n for n in uniq if str(n).isdigit()), key=int)
+    order = sorted((n for n in uniq if str(n).isdecimal()), key=int)
     if len(order) >= 3 and not _zigzag(order, uniq):
         mx = sum(uniq[n]["x"] for n in order) / len(order)
         my = sum(uniq[n]["y"] for n in order) / len(order)
@@ -553,7 +553,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     bad = 0
     for f in a.files:
-        issues = check(Path(f).read_text())
+        issues = check(Path(f).read_text(encoding="utf-8"))          # footprint_gen and KiCad write UTF-8
         bad += any(l == "error" for l, _, _ in issues)
         print(f"{'OK  ' if not issues else 'WARN' if all(l == 'warning' for l, _, _ in issues) else 'FAIL'} {f}")
         for lvl, rule, msg in issues:

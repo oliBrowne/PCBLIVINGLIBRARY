@@ -215,7 +215,8 @@ def merge(base, over):
 def load(path=None, start="."):
     """Rules merged over DEFAULTS. path: an explicit file (must exist), a dict (used as the file's content), or None to
     search `start` and its parents, then the current folder. No file -> a copy of DEFAULTS. Bad content raises RulesError
-    naming the key. The result carries `_file` (where it came from, '' for none)."""
+    naming the key. The result carries `_file` (where it came from, '' for none) and `_set` (the "section.key" names
+    the file itself set: a value equal to its default, max_cost_usd = 10, is still one the person chose)."""
     if isinstance(path, dict):
         if "_file" in path and all(k in path for k in DEFAULTS):
             return path                       # already loaded
@@ -236,6 +237,7 @@ def load(path=None, start="."):
     validate(raw, where)
     out = merge(DEFAULTS, {k: v for k, v in raw.items() if not k.startswith("_")})
     out["_file"] = "" if isinstance(path, dict) else where
+    out["_set"] = sorted(f"{s}.{k}" for s, v in raw.items() if isinstance(v, dict) and not s.startswith("_") for k in v)
     _normalise(out)
     return out
 
@@ -443,8 +445,8 @@ def _check_table(where, sec, k, v, d):
             if not isinstance(vv, int) or isinstance(vv, bool) or not lo <= vv <= hi:
                 _err(where, key, f"must be a whole number from {lo} to {hi}")
         elif isinstance(dd, float):
-            if not isinstance(vv, (int, float)) or isinstance(vv, bool) or vv < 0:
-                _err(where, key, "must be a number of 0 or more")
+            if not isinstance(vv, (int, float)) or isinstance(vv, bool) or not math.isfinite(vv) or vv < 0:
+                _err(where, key, "must be a number of 0 or more (not nan or inf)")
         elif not isinstance(vv, str):
             _err(where, key, "must be text")
     if (sec, k) == ("agent", "proof"):
@@ -625,9 +627,9 @@ def fmt_value(raw, cat, style):
     """BOM value -> the rules' value style. Unparseable values and style 'keep' come back unchanged."""
     if style == "keep" or cat not in UNIT or not str(raw or "").strip():
         return raw
-    from .kicad_index import parse_value
+    from .kicad_index import parse_value, two_readings
     v = parse_value(raw)
-    return raw if v is None else fmt_number(v, cat, style)
+    return raw if v is None or two_readings(raw) else fmt_number(v, cat, style)     # '4,700pF' stays as written
 
 
 def fmt_number(v, cat, style):
