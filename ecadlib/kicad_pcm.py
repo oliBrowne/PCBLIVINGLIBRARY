@@ -244,26 +244,39 @@ UNCHECKED_NOTE = "NOT CHECKED: packaged with --unchecked from a KiCad folder eca
 def _source(src, name, include_held, http, offline, cache, log, unchecked=False):
     """(export folder, library name, kicad_export report or None, temp dir to clean up or None). unchecked: a folder
     with no kicad_export.json (not written by ecadlib) is packaged without the change-control check; a folder
-    kicad-export wrote is always checked."""
+    kicad-export wrote is always checked. name: the library to package (None: a folder's only library; a plan's is
+    exported as 'ecadlib')."""
+    from . import kicad_export as X
     src = Path(src)
     if src.is_dir():
         exp = src / "kicad_export.json"
         rep = json.loads(exp.read_text(encoding="utf-8")) if exp.is_file() else None
-        lib = (rep or {}).get("library") or name
-        if not (src / f"{lib}.kicad_sym").is_file() and not (src / f"{lib}.pretty").is_dir():
+        # one kicad_export.json, several libraries (EXP-27): each library's own record is under "libraries"; the top
+        # level is only the library exported last (a report from before then: that one library)
+        recs = {k: v for k, v in rep["libraries"].items() if isinstance(v, dict)} \
+            if isinstance((rep or {}).get("libraries"), dict) else {}
+        if rep and rep.get("library") and rep["library"] not in recs and "written" in rep:
+            recs[rep["library"]] = rep
+        if name is None and len(recs) > 1:
+            raise ValueError(f"{src} holds {len(recs)} libraries kicad-export wrote ({', '.join(sorted(recs))}): "
+                             f"pass --name with the one to package")
+        lib = X.libname(name) if name is not None else next(iter(recs), None) or "ecadlib"
+        if recs and lib not in recs:
+            raise ValueError(f"{src}: kicad-export wrote no library {lib} here (it holds {', '.join(sorted(recs))}): "
+                             f"pass --name with one of them")
+        if not (src / f"{lib}.kicad_sym").is_file() and not (src / f"{lib}.pretty").is_dir() and not recs:
             libs = sorted(p.stem for p in src.glob("*.kicad_sym")) or sorted(p.stem for p in src.glob("*.pretty"))
             if not libs:
                 raise FileNotFoundError(f"{src} has no <lib>.kicad_sym or <lib>.pretty: run `ecadlib kicad-export PLAN -o {src}` first")
             lib = libs[0]
         if not (unchecked and rep is None):
-            check_export_folder(src, lib, rep)
+            check_export_folder(src, lib, rep if (rep or {}).get("library") == lib else recs.get(lib, rep))
         return src, lib, rep, None
     if not src.is_file():
         raise FileNotFoundError(f"{src}: no such plan.json or kicad-export folder")
-    from . import kicad_export as X
     from .httpcache import CachedHTTP
     tmp = Path(tempfile.mkdtemp(prefix="ecadlib-pcm-"))
-    rep = X.export(src, tmp, name, include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60), log=log)
+    rep = X.export(src, tmp, name or "ecadlib", include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60), log=log)
     return tmp, rep["library"], rep, tmp
 
 
@@ -305,11 +318,12 @@ def content_hash(files):
     return h.hexdigest()
 
 
-def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_="CC-BY-SA-4.0",
+def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_="CC-BY-SA-4.0",
           author="ecadlib user", description=None, homepage=None, base_url=None, include_held=False, http=None,
           offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False):
     """Build the PCM package from a plan.json or a kicad-export folder into `out`; returns the report dict.
-    unchecked: package a KiCad folder ecadlib did not export (no kicad_export.json) as it is; the package's NOTICE.txt
+    name: with a plan, the library name to export it as (None: 'ecadlib'); with a folder, the library to package
+    (None: the folder's only one). unchecked: package a KiCad folder ecadlib did not export (no kicad_export.json) as it is; the package's NOTICE.txt
     and the report say it was not checked."""
     if int(kicad) < 7:
         raise ValueError("--kicad must be 7 or newer (the Plugin and Content Manager came with KiCad 6, libraries with 7)")
@@ -334,7 +348,7 @@ def build(src, out, name="ecadlib", identifier=None, pkg_version=None, kicad=8, 
             shutil.rmtree(tmp, ignore_errors=True)
     if (xrep or {}).get("kicad_content") and license_ not in ("CC-BY-SA-4.0",):
         log(f"  note: the library holds KiCad library content (CC-BY-SA 4.0); --license {license_} may not be allowed")
-    chash = content_hash(files | {"#settings": json.dumps([name, identifier, kicad, prefix, license_, author, description, homepage]).encode()})
+    chash = content_hash(files | {"#settings": json.dumps([name or "ecadlib", identifier, kicad, prefix, license_, author, description, homepage]).encode()})
     prev = out / "kicad_pcm.json"
     old = json.loads(prev.read_text(encoding="utf-8")) if prev.is_file() else {}
     if pkg_version:
@@ -467,7 +481,8 @@ def main(argv=None):
     ap.add_argument("--plugin", action="store_true",
                     help="instead: package the ecadlib PCB editor plugin: toolbar button and window (KiCad 7+)")
     ap.add_argument("-o", "--out", default="out/pcm", help="output folder (default %(default)s)")
-    ap.add_argument("--name", default="ecadlib", help="library name when building from a plan (default %(default)s)")
+    ap.add_argument("--name", help="library name: with a plan, the name to export it as (default ecadlib); with a "
+                    "kicad-export folder, the library to package (needed when the folder holds several)")
     ap.add_argument("--identifier", help="package id, e.g. com.example.mylib (default local.ecadlib.<lib>)")
     ap.add_argument("--pkg-version", help="package version major.minor.patch (default: kept while unchanged, else today's date)")
     ap.add_argument("--kicad", type=int, default=8, choices=(7, 8, 9, 10), help="oldest KiCad to install it (default 8)")
