@@ -155,3 +155,16 @@ def test_ds2_32_footprint_gen_reads_a_utf8_spec_whatever_the_locale(tmp_path):
     assert p.returncode == 0, p.stderr
     mod = (tmp_path / "out.pretty" / f"{spec['name']}.kicad_mod").read_text(encoding="utf-8")
     assert '(descr "SOIC-8 ±1 % tolerance — 封装 (Müller)' in mod, mod[:300]
+
+
+def test_ds2_33_round_pads_whose_boxes_overlap_only_at_the_corners_are_not_an_overlap():
+    # Two 1.5 mm round pads staggered by (1.02, 1.27) mm are 1.629 mm apart centre to centre: 0.129 mm of real copper
+    # gap. The check returned the bounding boxes' overlap (-0.23 mm) before applying the pads' radii.
+    from ecadlib import footprint_check as FC
+    pads = lambda x, y: ('(footprint "T" (layer "F.Cu")\n'
+                         '  (pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.9) (layers "*.Cu" "*.Mask"))\n'
+                         f'  (pad "2" thru_hole circle (at {x} {y}) (size 1.5 1.5) (drill 0.9) (layers "*.Cu" "*.Mask"))\n)')
+    copper = lambda txt: [(lvl, msg) for lvl, rule, msg in FC.check(txt) if rule == "copper"]
+    assert not [c for c in copper(pads(1.02, 1.27)) if "overlap" in c[1]], copper(pads(1.02, 1.27))
+    # really touching: 1.0, 1.0 apart -> 1.414 mm between centres, 0.086 mm of overlap
+    assert ("error", "pads 1 and 2 overlap by 0.086 mm") in copper(pads(1.0, 1.0)), copper(pads(1.0, 1.0))
