@@ -453,7 +453,7 @@ def remap_bom(bom, mapping, out, columns=None):
             columns = RU.bom_columns(RU.load(None, start=p.parent))
         except Exception as e:                    # a broken ecadlib.toml: the fuzzy header guess alone
             print(f"  warning: rules for {p.name} not loaded ({e}); BOM columns guessed", file=sys.stderr)
-    raw = (T._read_excel(p) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else T._read_csv(p)).fillna("")   # the BOM sheet,
+    raw = (T._read_excel(p, columns) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else T._read_csv(p)).fillna("")   # the BOM sheet,
                                                                                   # as read_bom picks it (not a cover sheet)
     hdr = T.header_row(raw, columns)
     headers = [str(h).strip() for h in raw.iloc[hdr]]

@@ -63,3 +63,23 @@ def test_ds2_02_merge_onto_multi_entry_library_checks_the_named_entry(tmp_path):
     f, _, _ = RC.check_item(it, tmp_path)
     assert [r for r, m in f] == ["files"] and "SO8_RENAMED" in f[0][1] and "Company.PcbLib" in f[0][1], f
     assert R.item_pads(it, tmp_path) is None
+
+
+@lite
+def test_ds2_06_remap_bom_finds_house_header_sheet_behind_cover(tmp_path):
+    """The BOM sheet has the house headers of ecadlib.toml [bom.columns]; a cover sheet with 'Part Number /
+    Description / Qty' comes first. read_bom reads the BOM sheet; dedupe --bom picked the sheet without the house
+    columns, wrote the cover sheet as the deduped BOM and remapped nothing."""
+    import pandas as pd
+    (tmp_path / "ecadlib.toml").write_text('[bom.columns]\ndesignator = "Bauteil"\nvalue = "Wert"\nmpn = "Herst.-Nr."\n'
+                                           'footprint = "Gehäuse"\n', encoding="utf-8")
+    x = tmp_path / "bom.xlsx"
+    with pd.ExcelWriter(x) as w:
+        pd.DataFrame({"Part Number": ["PCB-1234"], "Description": ["Sensor board assembly"], "Qty": [1]}).to_excel(
+            w, sheet_name="Deckblatt", index=False)
+        pd.DataFrame({"Bauteil": ["R1", "C1"], "Wert": ["10k", "100n"], "Herst.-Nr.": ["RC0603FR-0710KL", "GRM188R71H104KA93D"],
+                      "Gehäuse": ["R0603_OLD", "C_0603_1608Metric"]}).to_excel(w, sheet_name="Stueckliste", index=False)
+    out, n = DD.remap_bom(x, [{"kind": "footprint", "from": "R0603_OLD", "to": "R_0603_1608Metric"}], tmp_path / "deduped.csv")
+    rows = out.read_text(encoding="utf-8-sig").splitlines()
+    assert n == 1 and rows == ["Bauteil,Wert,Herst.-Nr.,Gehäuse", "R1,10k,RC0603FR-0710KL,R_0603_1608Metric",
+                               "C1,100n,GRM188R71H104KA93D,C_0603_1608Metric"], (n, rows)
