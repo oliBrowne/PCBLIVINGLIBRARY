@@ -211,7 +211,9 @@ def check_export_folder(src, lib, rep):
     """Change control (#105): a kicad-export folder is packaged only as kicad-export wrote it. kicad_export.json lists
     every file the export wrote with its sha256 (taken from the released revisions); a symbol library or footprint
     edited, replaced or added by hand since is refused, so a package never carries a change no one approved. A 3D
-    model the export did not write stays the user's file (kicad-export keeps those too). Raises ValueError."""
+    model the export did not write stays the user's file (kicad-export keeps those too). CRLF line ends (a git checkout
+    with core.autocrlf) are not an edit, as for kicad-export. Raises ValueError."""
+    from .kicad_export import _same
     src = Path(src)
     how = f"run `ecadlib kicad-export PLAN -o {src}` again (or package the plan.json itself)"
     if not rep or "written" not in rep:
@@ -227,7 +229,7 @@ def check_export_folder(src, lib, rep):
         rel = f.relative_to(src).as_posix()
         if rel not in written:
             bad.append(f"{rel} (not written by kicad-export)")
-        elif hashlib.sha256(f.read_bytes()).hexdigest() != written[rel]:
+        elif not _same(f.read_bytes(), written[rel]):
             parts = [p["part"] for p in rep.get("parts") or [] if rel.endswith(f"/{p.get('footprint')}.kicad_mod")]
             bad.append(f"{rel} (changed since kicad-export wrote it" + (f"; part {', '.join(parts)}" if parts else "") + ")")
     gone = [r for r in written if r.startswith((f"{lib}.kicad_sym", f"{lib}.pretty/")) and not (src / r).is_file()]

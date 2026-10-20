@@ -46,3 +46,12 @@ def test_ds2_41_easyeda_smd_footprint_with_npth_pegs_stays_smd():
         attrs = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("(attr")]
         assert attrs == [f"(attr {want})"], (peg, attrs)
         assert not [f for f in FR.check(text, "SW_Pegs.kicad_mod") if f[1] == "attr"], peg   # nothing to hold it on
+
+
+def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder():
+    _, out, _ = TP._export(False)
+    lf = KP.build(out, out.parent / "pcm_lf", log=QUIET)
+    for f in [out / "lib.kicad_sym", *(out / "lib.pretty").glob("*.kicad_mod")]:   # git core.autocrlf on Windows
+        f.write_bytes(f.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    crlf = KP.build(out, out.parent / "pcm_crlf", log=QUIET)     # not an edit: kicad-export does not call it one (EXP-65)
+    assert crlf["content_sha256"] == lf["content_sha256"] and crlf["footprints"] == lf["footprints"] == 4, (crlf, lf)
