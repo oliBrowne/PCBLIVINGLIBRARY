@@ -190,3 +190,9 @@ def test_quiet_kicad_dblib_and_kicad_pcm_print_only_the_outcome(tmp_path):
     assert rc == 0 and "wrote p/" in pcm and "Plugin and Content Manager" not in pcm and "symbol library" not in pcm, (pcm, err)
     rc, pcm, _ = _run(["kicad-pcm", plan, "-o", "p", "--name", "mylib"], cwd=tmp_path)
     assert "Plugin and Content Manager" in pcm, pcm
+
+
+# T087
+def test_kicad_menu_check_bom_help_shows_kicads_placeholder():
+    rc, out, _ = _run(["kicad-menu", "check-bom", "-h"])
+    assert rc == 0 and '"%I"' in out and '"%%I"' not in out, out

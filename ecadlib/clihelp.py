@@ -105,7 +105,7 @@ def _fill(parser, fallback=""):
         if isinstance(act, argparse._SubParsersAction):
             helps = {ca.dest: ca.help for ca in act._choices_actions}
             for name, sub in act.choices.items():
-                _fill(sub, helps.get(name) or "")
+                _fill(sub, (helps.get(name) or "").replace("%%", "%"))   # help= is %-formatted, a description is not
 
 
 def polish(parser, cmd, summary=""):
