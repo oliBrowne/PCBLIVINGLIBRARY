@@ -747,13 +747,23 @@ Begin
         Box := EditMaker
     Else
         Exit;
-    If InSet(ssCtrl, Shift) And (Key = 86) Then PasteInto(Box)
-    Else If InSet(ssShift, Shift) And (Key = 45) Then PasteInto(Box)
+    If (InSet(ssCtrl, Shift) And (Key = 86)) Or (InSet(ssShift, Shift) And (Key = 45)) Then
+    Begin
+        Box.SelectAll;                { a paste replaces the box (it doubled the part number when appended) }
+        PasteInto(Box);
+    End
     Else If InSet(ssCtrl, Shift) And (Key = 67) Then Box.CopyToClipboard
     Else If InSet(ssCtrl, Shift) And (Key = 88) Then Box.CutToClipboard
     Else If InSet(ssCtrl, Shift) And (Key = 65) Then Box.SelectAll
     Else Exit;
     Key := 0;
+End;
+
+Procedure TEcadlibDialog.EcadlibDialogKeyPress(Sender : TObject; Var Key : Char);
+{ The edit box would paste, copy or cut again on the Ctrl+V / C / X character KeyDown already handled. }
+Begin
+    If ((ActiveControl = EditMpn) Or (ActiveControl = EditMaker)) And ((Key = #22) Or (Key = #3) Or (Key = #24)) Then
+        Key := #0;
 End;
 
 Procedure TEcadlibDialog.PasteMpnClick(Sender : TObject);

@@ -1,12 +1,15 @@
-"""EasyEDA / JLCPCB search (undocumented endpoints) are off until the librarian opts in; `ecadlib init` asks."""
+"""EasyEDA / JLCPCB search (undocumented endpoints) are on, asked after the official APIs, until the librarian says
+no; `ecadlib init` asks."""
 from unittest import mock
 
 import tests
 from ecadlib import firstrun as FR, providers as P, rules as RU
 
 
-def test_shipped_default_is_off():
-    assert tests.SHIPPED_UNOFFICIAL is False             # what ships (the test package turns it on for old fixtures)
+def test_shipped_default_is_on():
+    assert tests.SHIPPED_UNOFFICIAL is True              # what ships: LCSC-only parts (YXC crystals) are found
+    assert P.unofficial_allowed(None) and P.unofficial_allowed({"providers": {}})
+    assert not P.unofficial_allowed({"providers": {"unofficial": False}})
     with mock.patch.dict(RU.DEFAULTS["providers"], unofficial=False):
         assert not P.unofficial_allowed(None) and not P.unofficial_allowed({"providers": {}})
         assert P.unofficial_allowed({"providers": {"unofficial": True}})
@@ -30,3 +33,8 @@ def test_init_asks_and_writes_the_answer():
         assert ans["unofficial"] is True, ans
         ans = _ask(["n", "n"])                           # no online lookups: not asked, nothing written
         assert ans["unofficial"] is None and "providers" not in FR.setup_raw(ans), ans
+    with mock.patch.dict(RU.DEFAULTS["providers"], unofficial=tests.SHIPPED_UNOFFICIAL):
+        ans = _ask(["", "", "n"])                        # Enter keeps the shipped default: on
+        assert ans["unofficial"] is True, ans
+        ans = _ask(["", "n", "n"])                       # unless the person says no
+        assert ans["unofficial"] is False and FR.setup_raw(ans)["providers"] == {"unofficial": False}, ans

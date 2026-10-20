@@ -231,6 +231,25 @@ def is_passive_part(item, ln=None):
     return folder in PASSIVE_FOLDERS or bool(ref and ref.group(0) in ("R", "C", "L", "FB", "Y"))
 
 
+def quiet_two_pin(sym):
+    """A two-pin passive (R / C / L / ferrite bead / crystal) shows no pin names or numbers, whatever the source drew
+    (Oliver's rule, as the standard symbols): a crystal's "1"/"2" or "OSC1"/"OSC2" ran over each other in its narrow body."""
+    pins = [pr[1] for pr in sym.get("prims") or [] if pr[0] == "pin" and not pr[1].get("hidden")]
+    if len(pins) != 2 or len({p["num"] for p in pins}) != 2:
+        return sym
+    prims = [(pr[0], dict(pr[1], show_name=False, show_num=False), *pr[2:]) if pr[0] == "pin" and not pr[1].get("hidden")
+             else pr for pr in sym["prims"]]
+    return dict(sym, prims=prims)
+
+
+def category_designator(sym, folder):
+    """The part's category letter for a symbol its source calls U? (EasyEDA draws crystals, transistors ... as U?):
+    a crystal filed under Crystals is Y?. A source's own non-U letter (X? for a crystal) is kept."""
+    pre = re.match(r"[A-Z]*", str(sym.get("designator") or "").upper()).group(0)
+    ref = RU.CAT_REF.get(str(folder or "").rstrip("/").rsplit("/", 1)[-1])
+    return dict(sym, designator=ref + "?") if ref and ref != "U" and pre in ("", "U", "IC") else sym
+
+
 def passive_pins(sym):
     """sym with every pin Passive; unchanged when a pin looks like an oscillator's supply / output / enable."""
     pins = [pr[1] for pr in sym.get("prims") or [] if pr[0] == "pin"]
@@ -380,6 +399,9 @@ class Run:
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
         if st.get("kind") in SHARED_KINDS:      # one Resistor / Capacitor / Inductor symbol for every value and size,
             sym = shared_symbol(sym)            # whichever source drew it: no footprint, no one part's MPN
+        sym = category_designator(sym, st.get("folder"))
+        if st.get("passive") or re.match(r"(FB|[RCLYX])\??$", str(sym.get("designator") or "").upper()):
+            sym = quiet_two_pin(sym)
         if st.get("passive"):
             sym = passive_pins(sym)
         fr = st.get("footprint") or {}
@@ -427,7 +449,7 @@ class Run:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
         kind, fp_name, sym_name = passive_kind(item), item["footprint"]["ref"], item["symbol"]["ref"]
-        st["passive"] = is_passive_part(item, ln)
+        st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
             self.local(st, row, kind, fp_name, sym_name)

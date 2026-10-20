@@ -140,6 +140,7 @@ def dialog_dfm_text():
   OldCreateOrder = False
   OnClose = EcadlibDialogClose
   OnKeyDown = EcadlibDialogKeyDown
+  OnKeyPress = EcadlibDialogKeyPress
   Position = poMainFormCenter
   PixelsPerInch = 96
   TextHeight = 15
