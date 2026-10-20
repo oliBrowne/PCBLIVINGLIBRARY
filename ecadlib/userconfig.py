@@ -226,6 +226,14 @@ def secret(name, environ=None):
     env = os.environ if environ is None else environ
     if not name:
         return None
+    if name == "NEXAR_TOKEN" and not os.environ.get(NO_STORED):
+        try:                                          # signed in with the user's own Nexar app: a fresh token
+            from . import nexar_signin
+            v = nexar_signin.access_token()
+        except Exception:
+            v = None
+        if v:
+            return v
     try:
         v = None if os.environ.get(NO_STORED) else get_key(name)
     except Exception:                                 # a broken config folder must not stop any command
@@ -237,7 +245,7 @@ def key_source(name, environ=None):
     """Where secret(name) comes from: "stored", "environment" or None (names only, never the value)."""
     env = os.environ if environ is None else environ
     try:
-        if not os.environ.get(NO_STORED) and get_key(name):
+        if not os.environ.get(NO_STORED) and (get_key(name) or name == "NEXAR_TOKEN" and get_key("NEXAR_SIGNIN")):
             return "stored"
     except Exception:
         pass

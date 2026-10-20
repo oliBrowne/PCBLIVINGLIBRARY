@@ -38,6 +38,7 @@ CASES = [
     (["style", "--profile", "{out}/house_style.json", "learn", "--from", "{in}/lib", "--direction", "names in capitals"], (0,)),
     (["style", "--profile", "{out}/house_style.json", "show"], (0,)),
     (["keys", "list"], (0,)),
+    (["nexar", "status"], (0, 1)),
     (["init", "--from", "{in}/lib", "-o", "{out}/ecadlib.toml", "--yes"], (0,)),
     (["demo", "-o", "{out}/demo"], (0,)),
     (["triage", "{in}/bom.csv", "--lib", "{in}/lib", "-o", "{out}/triage", "--offline", "--cache", "{out}/cache"], (0,)),

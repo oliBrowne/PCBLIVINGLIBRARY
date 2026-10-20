@@ -132,7 +132,8 @@ approve them. A rejected part is held either way, policy or not, until it is app
 ecadlib approve ecadlib_workspace/librarian/my_bom/plan.json approve --part CH340C -m "pinout checked"
 ```
 
-**5. Release to Altium 365.** Set `NEXAR_TOKEN` (or `ecadlib keys set NEXAR_TOKEN`), check the plan with a dry run,
+**5. Release to Altium 365.** Sign in once with `ecadlib nexar signin` (your own free Nexar app; ecadlib stays signed
+in, see [docs/altium.md](docs/altium.md#signing-in-to-altium-365-ecadlib-nexar-signin)), check the plan with a dry run,
 then push. Only parts that pass the release check are pushed: push checks each part's files again before it uploads
 them, and held parts are never pushed. A part already in the workspace gets a new revision, and only after change
 control lets it through.

@@ -967,7 +967,7 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
             res = ws.altium365_push(bom_rel, url, dry_run=False)
         except ValueError as e:
             return {"target": "a365", "install": [], "problems": [str(e)], "workspace": url,
-                    "fix": "store your Nexar token on the setup page (Start menu > ecadlib setup) or with `ecadlib keys set NEXAR_TOKEN`, then try again" if "NEXAR_TOKEN" in str(e) else ""}
+                    "fix": "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again" if "NEXAR_TOKEN" in str(e) else ""}
         acts = [r.get("action") for r in res["results"]]
         return {"target": "a365", "install": [], "problems": [f"{r['name']}: {r.get('detail')}" for r in res["results"]
                                                               if r.get("action") == "error"],
@@ -1483,7 +1483,7 @@ def _error(e):
     if isinstance(e, FileNotFoundError) or "no such file" in msg:
         fix = "save the project, then try again"
     elif "NEXAR_TOKEN" in msg:
-        fix = "store your Nexar token on the setup page (Start menu > ecadlib setup) or with `ecadlib keys set NEXAR_TOKEN`, then try again"
+        fix = "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again"
     elif "ecadlib.toml" in msg or "rules" in msg.lower():
         fix = "`ecadlib rules check` shows the problem in ecadlib.toml"
     return {"status": "error", "message": msg if isinstance(e, (ValueError, OSError)) else f"{type(e).__name__}: {msg}",

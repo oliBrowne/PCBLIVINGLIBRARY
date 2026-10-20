@@ -3,6 +3,7 @@
     ecadlib setup                                 the setup page in your browser: AI model + key, Altium / KiCad, folders
     ecadlib start                                 the desktop app (what the Windows Start menu entry runs)
     ecadlib keys      list|set NAME|remove NAME   API keys stored for you (encrypted on Windows), instead of env variables
+    ecadlib nexar     signin|status|signout       Altium 365 sign-in with your own Nexar app; stays signed in
     ecadlib init      [--yes] [--tool T] [--lib DIR] [--from DIR ...]   set up: tool, libraries, workspace, sources -> ecadlib.toml, doctor
     ecadlib demo      [-o DIR]                    a small library from a bundled BOM, offline, no keys (start here)
     ecadlib rules     check|show                  validate the rules file / print the defaults
@@ -65,6 +66,7 @@ COMMANDS = {
     "setup": ("ecadlib.easy_setup", "open the setup page: AI model and key, Altium / KiCad, folders, add ecadlib to Altium and KiCad"),
     "start": ("ecadlib.launcher", "the desktop app: start ecadlib in the background and open it in the browser (setup page on first run)"),
     "keys": ("ecadlib.userconfig", "API keys stored for this user instead of environment variables: list, set, remove"),
+    "nexar": ("ecadlib.nexar_signin", "sign in to Altium 365 once with your own Nexar app; ecadlib keeps the sign-in fresh"),
     "init": ("ecadlib.rules_infer", "set up ecadlib: tool, library folders, workspace, sources; learn your conventions -> ecadlib.toml"),
     "demo": ("ecadlib.firstrun:demo_main", "build a small library from a bundled sample BOM, offline, no API keys"),
     "rules": ("ecadlib.rules", "check or show the library rules"),
