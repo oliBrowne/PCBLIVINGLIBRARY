@@ -55,7 +55,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
-- Add part from MPN (Altium and KiCad menus): text that reads as a description ("SOSET 16M 20PF 10PPM") is turned back as "not a part number" instead of being looked up; an LCSC number or lcsc.com link is looked up by that number; and a part not found while `[providers] unofficial = false` says LCSC was not asked and which file and setting turn it on, instead of "no part source knows this part number".
+- Add part from MPN (Altium and KiCad menus): a part number pasted twice (Ctrl+V pasted on both the key and its character) is cut back to one and the box's paste now replaces its text; a miss on text that reads as a description ("SOSET 16M 20PF 10PPM") says so; an LCSC number or lcsc.com link is looked up by that number; and a part not found while `[providers] unofficial = false` says LCSC was not asked and which file and setting turn it on, instead of "no part source knows this part number".
 - Fixes from testing PRs #81-#103 by running them (tests in `tests/test_review_1018_merges.py`):
   - A failed Altium build installs the library you had again (it was uninstalled to build); the dialog says "Not found" for a bad part number, and a wrong LCSC number is no longer reported as a bad MPN.
   - `dblib-sync`: a library file open in Altium is reported by name and skipped, instead of stopping halfway with "[Errno 13] Permission denied".

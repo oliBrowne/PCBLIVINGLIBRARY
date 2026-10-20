@@ -1035,10 +1035,19 @@ VALUE_WORD = re.compile(r"\d+(\.\d+)?(r|k|m|g|meg|hz|khz|mhz|ghz|pf|nf|uf|ph|nh|
 
 
 def looks_like_description(text):
-    """'SOSET 16M 20PF 10PPM', '10k 0603 1%': several words, at least one a value with its unit. A part number is one
-    word (X322512MSB4SI), so this is what someone copied from a Comment, Description or shop title instead."""
+    """'SOSET 16M 20PF 10PPM', '10k 0603 1%': several words, at least one a value with its unit. Most part numbers are
+    one word (X322512MSB4SI), but not all (SOSET's crystal C2975360 is "16M 20PF 10PPM"), so this only shapes the
+    not-found message, it never stops a lookup."""
     words = str(text or "").split()
     return len(words) >= 2 and any(VALUE_WORD.fullmatch(w) for w in words)
+
+
+def undouble(text):
+    """'X322512MSB4SIX322512MSB4SI' -> 'X322512MSB4SI': a part number pasted twice into the dialog's box (AD26 pasted
+    on both Ctrl+V's key and its character). Only an exact repeat of something with a digit in it is cut."""
+    t = str(text or "").strip()
+    h = t[:len(t) // 2]
+    return h.strip() if len(t) % 2 == 0 and len(h) >= 4 and t == h + h and re.search(r"\d", h) else t
 
 
 def lcsc_input(text):
@@ -1052,15 +1061,9 @@ def lcsc_input(text):
 
 def add_part(cfg, mpn, manufacturer="", progress=None, **hints):
     """Build one part from its MPN and publish it. Returns the result dict. An LCSC number (or lcsc.com link) is
-    looked up by that number; text that reads as a description is turned back with a message saying so."""
+    looked up by that number; a part number pasted twice is cut back to one."""
     progress = progress or Progress()
-    mpn = (mpn or "").strip()
-    if looks_like_description(mpn):
-        return {"status": "error", "reason": "description", "big": "Not a part number", "mpn": mpn,
-                "message": f"{mpn} looks like a description (values and units), not a manufacturer part number, "
-                           "so no part source can look it up.",
-                "fix": "Type the manufacturer part number instead (on the maker's or the shop's page, e.g. "
-                       "X322512MSB4SI), or an LCSC number such as C2975360."}
+    mpn = undouble(mpn)
     lcsc = lcsc_input(mpn)
     ws = _workspace(cfg)
     if lcsc:
@@ -1107,6 +1110,11 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
         res.update(status="error", reason="not_found", message=f"{mpn} was not found: no part source knows this part "
                    "number, so ecadlib has no symbol, footprint or data for it.",
                    fix="Check the part number (a typo, or a suffix missing), then add it again.")
+        if looks_like_description(mpn):    # a real MPN can look like this too (SOSET's "16M 20PF 10PPM"): only a hint
+            res.update(reason="description", message=f"{mpn} was not found, and it reads like a description (values "
+                       "and units) more than a manufacturer part number.",
+                       fix="Type the part number from the maker's or the shop's page, or its LCSC number (C2975360 "
+                           "on lcsc.com), then add it again.")
         lcsc_off(res, ws, mpn)
     else:
         res.update(status="held", message=f"{mpn} is held ({nm}): " + (" ".join(w["text"] for w in whys[:3]) or "see the review."),
@@ -1115,7 +1123,7 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     res.update(rows_result(cost_rows(ai_cost) + part_rows(it), {"ready": "Ready", "duplicate": "Already in your library",
                                                                 "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
     if res["status"] == "error":
-        res["big"] = "Not found" if res.get("reason") in ("not_found", "not_searched") else "Not published"
+        res["big"] = "Not found" if res.get("reason") in ("not_found", "not_searched", "description") else "Not published"
     if res["status"] == "held" and ai and nm in ai["names"]:
         q = ws.ai_quote(rel, parts=[nm]) if ai["parts"] > 1 else ai      # the menu's list may hold other parts too
         if q:
