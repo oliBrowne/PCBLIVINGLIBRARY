@@ -247,7 +247,7 @@ UNCHECKED_NOTE = "NOT CHECKED: packaged with --unchecked from a KiCad folder eca
 
 
 def _source(src, name, include_held, http, offline, cache, log, unchecked=False):
-    """(export folder, library name, kicad_export report or None, temp dir to clean up or None). unchecked: a folder
+    """(export folder, library name, that library's kicad_export record or None, temp dir to clean up or None). unchecked: a folder
     with no kicad_export.json (not written by ecadlib) is packaged without the change-control check; a folder
     kicad-export wrote is always checked. name: the library to package (None: a folder's only library; a plan's is
     exported as 'ecadlib')."""
@@ -274,9 +274,10 @@ def _source(src, name, include_held, http, offline, cache, log, unchecked=False)
             if not libs:
                 raise FileNotFoundError(f"{src} has no <lib>.kicad_sym or <lib>.pretty: run `ecadlib kicad-export PLAN -o {src}` first")
             lib = libs[0]
+        own = rep if (rep or {}).get("library") == lib else recs.get(lib, rep)     # the top level is the last one only
         if not (unchecked and rep is None):
-            check_export_folder(src, lib, rep if (rep or {}).get("library") == lib else recs.get(lib, rep))
-        return src, lib, rep, None
+            check_export_folder(src, lib, own)
+        return src, lib, own, None
     if not src.is_file():
         raise FileNotFoundError(f"{src}: no such plan.json or kicad-export folder")
     from .httpcache import CachedHTTP

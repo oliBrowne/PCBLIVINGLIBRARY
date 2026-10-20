@@ -902,8 +902,9 @@ def _keep_aside(out, path, rel):
 
 def _lib_record(rep):
     """What a later export (and kicad-dblib) needs of one library's export: the files written with their sha256, the
-    parts with their symbol / footprint, the footprints, the plan it came from."""
-    return {"plan": rep.get("plan"), "written": dict(rep.get("written") or {}),
+    parts with their symbol / footprint, the footprints, the plan it came from, whether it holds KiCad library content
+    (kicad-pcm's licence note)."""
+    return {"plan": rep.get("plan"), "written": dict(rep.get("written") or {}), "kicad_content": bool(rep.get("kicad_content")),
             "parts": [{"part": p.get("part"), "symbol_name": p.get("symbol_name"), "symbol": bool(p.get("symbol")),
                        "footprint": p.get("footprint")} for p in rep.get("parts") or [] if isinstance(p, dict)],
             "footprints": sorted(rep.get("footprints") or {})}

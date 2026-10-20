@@ -37,6 +37,20 @@ def test_ds2_40_kicad_pcm_packages_the_named_library_of_a_two_library_folder():
     assert not (out.parent / "pcm2").exists()
 
 
+def test_ds2_40_kicad_pcm_licence_note_is_about_the_packaged_library():
+    """alpha holds KiCad library content (CC-BY-SA), beta, exported after it, none: packaging alpha under MIT warns."""
+    plan, http = TP._plan()
+    out = plan.parent.parent / "k"
+    assert X.export(plan, out, "alpha", http=http, log=QUIET)["kicad_content"]
+    ee = plan.with_name("plan_easyeda.json")
+    ee.write_text(json.dumps([i for i in json.loads(plan.read_text(encoding="utf-8")) if i["name"] == "EEPART1"]))
+    assert not X.export(ee, out, "beta", http=http, log=QUIET)["kicad_content"]
+    for lib, warned in (("alpha", True), ("beta", False)):
+        logs = []
+        KP.build(out, out.parent / f"pcm_{lib}", name=lib, license_="MIT", log=lambda *a: logs.append(" ".join(map(str, a))))
+        assert any("may not be allowed" in ln for ln in logs) == warned, (lib, logs)
+
+
 def test_ds2_41_easyeda_smd_footprint_with_npth_pegs_stays_smd():
     from ecadlib import easyeda_convert as EC, footprint_rules as FR
     smd = ["PAD~RECT~-10~0~4~6~1~~1~0~~0~g1~0~~Y~0", "PAD~RECT~10~0~4~6~1~~2~0~~0~g2~0~~Y~0"]
