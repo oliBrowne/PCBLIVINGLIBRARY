@@ -42,3 +42,17 @@ def test_ds2_16_second_read_takes_a_value_printed_with_its_tolerance():
     for nom in ("3±0.1", "2.9~3.1", "3 +0.1/-0.1"):
         got = CC.parse(_second_read(nom))[0]["body_length"]
         assert got == (3.0, 2.9, 3.1), (nom, got)
+
+
+# ---------------------------------------------------------------- DS2-17: ask_above_usd = 0 and the house style guide
+def test_ds2_17_style_guide_quote_asks_twice_when_ask_above_is_zero():
+    """ask_above_usd = 0 means 'ask twice for any paid request' (DS-46); the style guide's quote let one yes through."""
+    from ecadlib import ai_cost as AC
+    q = AC.style_quote("You write a house style guide.", "the scan", {"type": "object"}, "claude-opus-5-5",
+                       {"datasheet": {"ask_above_usd": 0}})
+    assert q["usd_max"] > 0 and q["over_limit"] is True, q
+    try:
+        AC.approve(q, q["approve_usd"])
+        raise AssertionError("a paid style guide was approved with one yes under ask_above_usd = 0")
+    except ValueError as e:
+        assert "confirm the higher cost first" in str(e), e

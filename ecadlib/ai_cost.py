@@ -33,6 +33,12 @@ def limit(rules=None):
     return float(s.get("ask_above_usd") or 0), "ask_above_usd"
 
 
+def _over(worst, lim, which):
+    """Ask a second time? Price unknown, or above the limit. max_cost_usd 0 = no cap; ask_above_usd 0 = ask twice for
+    any paid request (the cautious setting). One rule for every quote, so they cannot drift apart."""
+    return worst is None or ((lim > 0 or which == "ask_above_usd") and worst > lim)
+
+
 def up(v):
     """v rounded up to what money() shows (cents from $0.095, else tenths of a cent): the "at most" a dialog prints
     and the amount it approves are then the same number, never the approval a cent above the text."""
@@ -90,8 +96,7 @@ def quote(est, rules=None, key_set=True):
     models = list(est.get("models") or {}) or [est.get("model") or cfg["model"]]
     q = {"step": "datasheet", "parts": len(rows), "names": [r["part"] for r in rows], "model": ", ".join(models),
          "usd": usd, "usd_max": worst, "limit_usd": lim, "limit_name": which, "price_known": worst is not None,
-         # max_cost_usd 0 = no cap; ask_above_usd 0 = ask twice for any paid read (the cautious setting)
-         "over_limit": worst is None or ((lim > 0 or which == "ask_above_usd") and worst > lim), "exact": bool(est.get("exact_input")),
+         "over_limit": _over(worst, lim, which), "exact": bool(est.get("exact_input")),
          "cross_check": str(cfg.get("cross_check") or "auto") != "off", "key_set": bool(key_set),
          "skipped": [s["part"] for s in est.get("skipped") or []], "cached": list(est.get("cached") or [])}
     q["approve_usd"] = up(worst) if worst is not None else None
@@ -199,7 +204,7 @@ def style_quote(system, user, schema, model, rules=None, max_tokens=8000, retry=
     usd = round((tin * p[0] + 2000 * p[1]) / 1e6, 4) if p else None
     worst = round((tin * p[0] + max_tokens * p[1]) / 1e6 * (2.2 if retry else 1), 4) if p else None
     q = {"step": "style", "parts": 1, "names": [], "model": model, "usd": usd, "usd_max": worst, "limit_usd": lim,
-         "limit_name": which, "price_known": worst is not None, "over_limit": worst is None or (lim > 0 and worst > lim),
+         "limit_name": which, "price_known": worst is not None, "over_limit": _over(worst, lim, which),
          "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": []}
     q["approve_usd"] = up(worst) if worst is not None else None
     if worst is None:
@@ -218,7 +223,7 @@ def request_quote(step, model, usd, worst, rules=None, key_set=True, what="This 
     lim, which = limit(rules)
     q = {"step": step, "parts": 1, "names": [], "model": model, "usd": usd, "usd_max": worst, "limit_usd": lim,
          "limit_name": which, "price_known": worst is not None,
-         "over_limit": worst is None or ((lim > 0 or which == "ask_above_usd") and worst > lim),
+         "over_limit": _over(worst, lim, which),
          "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": []}
     q["approve_usd"] = up(worst) if worst is not None else None
     if worst is None:
