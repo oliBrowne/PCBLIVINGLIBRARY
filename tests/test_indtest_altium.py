@@ -356,3 +356,22 @@ if __name__ == "__main__":
         if n.startswith("test_") and callable(f):
             f()
             print("ok", n)
+
+
+# T095 on Windows: a write to a closed pipe raises EINVAL and the flush of an empty buffer still succeeds, so
+# _pipe_gone writes a byte to find out
+def test_pipe_gone_counts_windows_einval_only_when_stdout_is_gone():
+    import errno, io, sys as _sys
+    from ecadlib import cli
+    class Gone(io.StringIO):
+        def write(self, s):
+            raise OSError(errno.EINVAL, "Invalid argument")
+    old = _sys.stdout
+    try:
+        _sys.stdout = Gone()
+        assert cli._pipe_gone(OSError(errno.EINVAL, "Invalid argument"))
+        _sys.stdout = io.StringIO()
+        assert not cli._pipe_gone(OSError(errno.EINVAL, "Invalid argument"))
+        assert not cli._pipe_gone(OSError(errno.ENOENT, "No such file"))
+    finally:
+        _sys.stdout = old
