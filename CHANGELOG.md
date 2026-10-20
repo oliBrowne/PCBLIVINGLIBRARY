@@ -43,7 +43,7 @@ a minor release may change command-line options and file formats.
 
 ### Changed
 
-- EasyEDA / LCSC and the JLCPCB search (undocumented endpoints) are off by default: `[providers] unofficial = false`. `ecadlib init` asks whether to use them; set `unofficial = true` to opt in.
+- EasyEDA / LCSC and the JLCPCB search (undocumented endpoints) stay on by default and are always asked after the official APIs (they were briefly opt-in; parts such as YXC crystals are only on LCSC). `ecadlib init` asks whether to use them; `[providers] unofficial = false` turns them off.
 - `[datasheet] max_cost_usd` defaults to $10 per run (0 = no cap), so a scripted run on a big BOM has a ceiling. `--yes` no longer lifts the cap; `--max-cost-usd N` on `ecadlib datasheet` and `ecadlib eval run` changes it for one run. The dialogs still ask twice above `ask_above_usd` (or a cap you set).
 - `ecadlib eval run` without an API key reports the parts that needed the AI read as "not run: no API key", not as wrong, and prices them as an estimate.
 - When a setting fails to load and ecadlib falls back to a default (a model setting, a house-style parameter name, a model's guide rails), it prints a warning and review.md / review.html lead with it, instead of carrying on silently.
@@ -55,6 +55,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Add part from MPN (Altium and KiCad menus): text that reads as a description ("SOSET 16M 20PF 10PPM") is turned back as "not a part number" instead of being looked up; an LCSC number or lcsc.com link is looked up by that number; and a part not found while `[providers] unofficial = false` says LCSC was not asked and which file and setting turn it on, instead of "no part source knows this part number".
 - Fixes from testing PRs #81-#103 by running them (tests in `tests/test_review_1018_merges.py`):
   - A failed Altium build installs the library you had again (it was uninstalled to build); the dialog says "Not found" for a bad part number, and a wrong LCSC number is no longer reported as a bad MPN.
   - `dblib-sync`: a library file open in Altium is reported by name and skipped, instead of stopping halfway with "[Errno 13] Permission denied".

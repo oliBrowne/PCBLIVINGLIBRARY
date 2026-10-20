@@ -36,8 +36,8 @@ rest goes to **Altium 365** or **KiCad**. Free and open source (MIT); you bring 
 * **BOM in.** Altium BOMs and ActiveBOMs, an Altium project, KiCad BOMs and schematics, or a hand-made CSV/XLSX. Each
   line comes back as already in your library, available from a source, needs a footprint, or DNP.
 * **Official sources first.** Nexar, DigiKey and Mouser identify the part. Symbols and footprints come from your own
-  libraries and the official KiCad libraries before anything else; EasyEDA/LCSC is an unofficial source, off unless
-  you opt in (`ecadlib init` asks; `[providers] unofficial = true`), and then used last.
+  libraries and the official KiCad libraries before anything else; EasyEDA/LCSC is an unofficial source, used last,
+  and `[providers] unofficial = false` turns it off (`ecadlib init` asks).
 * **Drawn from the datasheet when nobody has it.** A datasheet reader fills in the package dimensions and a
   deterministic IPC-7351B generator draws the land pattern. Claude by default, or any model you choose.
 * **Your house style.** `ecadlib style learn` reads your existing libraries, and new parts follow the same naming,
