@@ -878,7 +878,7 @@ def generate(src, height=None, name=None, pads=None):
     if isinstance(src, dict):
         spec = src
     elif str(src).endswith(".json") and Path(src).exists():
-        spec = json.loads(Path(src).read_text())
+        spec = json.loads(Path(src).read_text(encoding="utf-8-sig"))      # UTF-8 (a BOM too), not the locale's
     else:
         spec = spec_from_name(str(src))
         if spec is None:

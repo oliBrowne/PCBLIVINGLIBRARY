@@ -553,7 +553,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     bad = 0
     for f in a.files:
-        issues = check(Path(f).read_text())
+        issues = check(Path(f).read_text(encoding="utf-8"))          # footprint_gen and KiCad write UTF-8
         bad += any(l == "error" for l, _, _ in issues)
         print(f"{'OK  ' if not issues else 'WARN' if all(l == 'warning' for l, _, _ in issues) else 'FAIL'} {f}")
         for lvl, rule, msg in issues:

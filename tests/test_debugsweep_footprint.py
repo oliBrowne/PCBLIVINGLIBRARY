@@ -230,3 +230,64 @@ def test_ds2_33_pad_table_round_pads_whose_boxes_overlap_only_at_the_corners_are
     for s in (spec(1.0, 1.0), spec(0.95, 0.95, type="smd", w=1, h=1, shape="rect"),
               spec(1.02, 1.27, type="tht", d=1.5, drill=0.9)):
         assert len(overlap(s)) == 1 and "pads 1 (pads[0]) and 2 (pads[1]) overlap" in overlap(s)[0], overlap(s)
+
+
+def _c_locale_env():
+    """A locale that can't decode UTF-8 (C: ASCII), as cp1252 can't on Windows: a file read with the locale's encoding
+    fails on '封' (its UTF-8 has byte 0x81, which cp1252 has no character for)."""
+    from tests import e2e_support as E
+    env = {k: v for k, v in E.clean_env().items() if not k.startswith(("LC_", "LANG", "PYTHONUTF8", "PYTHONIOENCODING"))}
+    env.update(LC_ALL="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0", PYTHONIOENCODING="utf-8")
+    return env
+
+
+@lite
+def test_ds2_32_altium_lib_step_gen_and_footprint_check_read_utf8_whatever_the_locale(tmp_path):
+    # Siblings of footprint gen's spec read: altium-lib pcblib / schlib, step-gen and footprint_check read their JSON
+    # spec or .kicad_mod with the locale's encoding, so a UTF-8 file with '±' or CJK text failed or turned to mojibake.
+    import json, subprocess, sys
+    from pathlib import Path
+    from tests import e2e_support as E
+    root = Path(__file__).resolve().parent.parent
+    text = "SOIC-8 ±1 % tolerance — 封装 (Müller)"
+    spec = json.loads((root / "ecadlib" / "package_specs" / "SOIC-8_3.9x4.9mm_P1.27mm.json").read_text(encoding="utf-8"))
+    spec["description"] = text
+    (tmp_path / "soic8.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    sym = json.loads((root / "examples" / "symbols" / "CH340C.json").read_text(encoding="utf-8"))
+    sym["description"] = text
+    (tmp_path / "sym.json").write_text(json.dumps(sym, ensure_ascii=False), encoding="utf-8")
+    txt, _ = F.build(spec)
+    assert text in txt
+    (tmp_path / "soic8.kicad_mod").write_text(txt, encoding="utf-8")
+    env = _c_locale_env()
+    runs = {"altium-lib pcblib": E.ecadlib(tmp_path, "altium-lib", "pcblib", "soic8.json", "-o", "al", env=env, check=False),
+            "altium-lib schlib": E.ecadlib(tmp_path, "altium-lib", "schlib", "sym.json", "-o", "al", env=env, check=False),
+            "step-gen": E.ecadlib(tmp_path, "step-gen", "soic8.json", "-o", "soic8.step", env=env, check=False),
+            "footprint_check": subprocess.run([sys.executable, "-m", "ecadlib.footprint_check", "soic8.kicad_mod"], cwd=tmp_path,
+                                              env=env, capture_output=True, text=True, timeout=300)}
+    for what, p in runs.items():
+        assert p.returncode == 0 and "Traceback" not in p.stderr, (what, p.returncode, p.stdout[-800:], p.stderr[-1500:])
+    assert (tmp_path / "al" / f"{spec['name']}.PcbLib").is_file() and (tmp_path / "al" / "CH340C.SchLib").is_file()
+    assert (tmp_path / "soic8.step").is_file()
+    assert runs["footprint_check"].stdout.startswith(("OK   soic8.kicad_mod", "WARN soic8.kicad_mod")), runs["footprint_check"].stdout
+
+
+@lite
+def test_ds2_31_altium_lib_pcblib_reports_a_bad_spec_and_goes_on(tmp_path):
+    # altium-lib pcblib validated each spec outside any try: the first spec that didn't validate (or build) stopped the
+    # batch with 'internal error', and the specs after it were never written. footprint gen reports each one and goes on.
+    import json
+    from pathlib import Path
+    from tests import e2e_support as E
+    root = Path(__file__).resolve().parent.parent
+    good = json.loads((root / "ecadlib" / "package_specs" / "R_0603_1608Metric.json").read_text(encoding="utf-8"))
+    (tmp_path / "good.json").write_text(json.dumps(good), encoding="utf-8")
+    (tmp_path / "bad.json").write_text(json.dumps({"name": "BAD_qfn", "package_type": "qfn", "pin_count": 16}), encoding="utf-8")
+    (tmp_path / "list.json").write_text("[1, 2]", encoding="utf-8")
+    (tmp_path / "broken.json").write_text("{not json", encoding="utf-8")
+    p = E.ecadlib(tmp_path, "altium-lib", "pcblib", "bad.json", "list.json", "broken.json", "good.json", "-o", "al", check=False)
+    assert "internal error" not in p.stderr and "Traceback" not in p.stderr, p.stderr
+    for name in ("BAD_qfn", "list.json", "broken.json"):
+        assert f"{name}: not written" in p.stderr, (name, p.stderr)
+    assert (tmp_path / "al" / f"{good['name']}.PcbLib").is_file(), (p.stdout, p.stderr)
+    assert p.returncode == 1, p.returncode
