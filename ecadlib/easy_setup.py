@@ -234,8 +234,9 @@ def install_altium_menu(ws_root):
     out = ws / "altium-menu"
     cmd = UC.self_command()
     command = " ".join(f'"{c}"' if " " in c else c for c in cmd)
-    rep = AM.build(out, workspace=str(ws), library=str(ws / "altium-library"), command=command,
-                   win_dir=str(out) if os.name == "nt" else None)
+    # build() names this folder in the menu file on Windows, or leaves that file out when the folder can't go in one
+    # (an accented user name): the menu bar below needs no menu file
+    rep = AM.build(out, workspace=str(ws), library=str(ws / "altium-library"), command=command)
     ini = out / AM.INI
     _set_ini_command(ini, command)                           # an older build's .ini is kept: point it at this ecadlib
     project = out / AM.PROJECT
@@ -257,8 +258,9 @@ def install_altium_menu(ws_root):
         why = f" ({bar['error']})" if bar.get("error") else ""
         res["steps"] = [f"Close Altium Designer{why}",
                         f"Run: ecadlib altium-menu install-menu --out \"{out}\" (or press Add to Altium here again)",
-                        "Start Altium: the ecadlib menu is in the menu bar, before Window. Without closing Altium: "
-                        f"Preferences > Load... with {out / AM.PREFS} (see ALTIUM_MENU_README.txt)"]
+                        "Start Altium: the ecadlib menu is in the menu bar, before Window."
+                        + (f" Without closing Altium: Preferences > Load... with {out / AM.PREFS} (see "
+                           "ALTIUM_MENU_README.txt)" if res["menu_file"] else "")]
     return res
 
 

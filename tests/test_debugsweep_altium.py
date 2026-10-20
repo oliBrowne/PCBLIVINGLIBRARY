@@ -68,6 +68,23 @@ def test_ds2_36_menu_build_with_a_non_ascii_win_dir_fails_cleanly_before_writing
     assert [p.name for p in out.rglob("*")] == [], "nothing written: no half-built menu folder"
 
 
+@lite
+def test_ds2_36_add_to_altium_in_a_non_ascii_windows_workspace_installs_without_the_menu_file(tmp_path, monkeypatch):
+    import os
+    if os.name != "nt":                  # the menu file is only built on Windows (Windows CI runs this)
+        return
+    from ecadlib import altium_menu as AM, easy_setup as ES
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))     # no Altium here: the menu bar step says so
+    ws = tmp_path.resolve() / "José" / "ws"
+    r = ES.install_altium_menu(ws)       # was: ValueError from the menu file, so "Add to Altium" installed nothing
+    out = ws / "altium-menu"
+    assert r["menu_file"] is None and not (out / AM.PREFS).exists(), r
+    assert (out / AM.PROJECT).is_file() and (out / "altium_menu.json").is_file()
+    assert "no Altium Designer settings folder" in r["menu_bar"].get("error", ""), r["menu_bar"]   # install-menu ran
+    assert not any(AM.PREFS in s for s in r["steps"]), r["steps"]      # no step names a file that is not there
+
+
 # ---------------------------------------------------------------- DS2-37: svn commit of a new nested STEP folder
 def _r0603_with_step(models):
     """The test plan's R_0603 footprint, written again with an embedded STEP body (ecadlib_3d/<fp>_0/R_0603.step)."""
