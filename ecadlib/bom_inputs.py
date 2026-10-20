@@ -30,13 +30,14 @@ def _field_map(names, columns):
     """{field: [KiCad field names]} for the custom fields, matched like CSV headers. Several names for one field
     (MPN on one sheet, "Mfr Part #" on another) are all kept: a part's value is the first one it has. The rules'
     [bom] columns (a name or a list of names) replace the guess for that field."""
-    from .bom_triage import _norm, map_headers
+    from .bom_triage import _norm, _supplier_pairs, map_headers
     custom = sorted({n for n in names if n not in STD and not SKIP_FIELD.fullmatch(n)})
     skip = ("qty", "designator", "value", "footprint", "datasheet")
     fmap = {f: [h] for f, h in map_headers(custom).items() if f not in skip}
     taken = {h for hs in fmap.values() for h in hs}
-    for n in custom:                                           # other names that on their own mean the same field
-        for f, h in map_headers([n]).items():
+    taken |= {custom[j] for j, _ in _supplier_pairs(custom)}   # 'Vendor' beside 'Vendor PN': a distributor, which
+    for n in custom:                                           # map_headers([n]) alone can't tell; other names that
+        for f, h in map_headers([n]).items():                  # on their own mean the same field
             if f in fmap and n not in taken:
                 fmap[f].append(n)
                 taken.add(n)

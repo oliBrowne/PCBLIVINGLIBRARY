@@ -204,6 +204,18 @@ def test_ds2_10_real_manufacturer_and_description_columns_win_whatever_the_order
     assert "manufacturer" not in mapping, mapping
     assert [(l["designator"], l.get("manufacturer"), l.get("lcsc")) for l in lines] == \
         [("U1", None, None), ("C1", None, "C14663")], lines
+    # nor does a KiCad 'Vendor' field beside 'Vendor PN' back up an empty Manufacturer
+    net = tmp_path / "board.xml"
+    net.write_text('<?xml version="1.0"?>\n<export version="E"><components>\n'
+                   '<comp ref="U1"><value>LM358</value><fields><field name="Manufacturer">Texas Instruments</field>'
+                   '<field name="Vendor">Digi-Key</field><field name="Vendor PN">296-1395-1-ND</field>'
+                   '<field name="MPN">LM358DR</field></fields></comp>\n'
+                   '<comp ref="U2"><value>NE555</value><fields><field name="Manufacturer"></field>'
+                   '<field name="Vendor">Digi-Key</field><field name="Vendor PN">296-1411-5-ND</field>'
+                   '<field name="MPN">NE555P</field></fields></comp>\n</components></export>\n', encoding="utf-8")
+    lines, mapping = T.read_bom(net)
+    assert [(l["designator"], l.get("manufacturer")) for l in lines] == [("U1", "Texas Instruments"), ("U2", None)], \
+        (mapping, lines)
 
 
 @lite
