@@ -1030,6 +1030,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
                 r.written.setdefault(str(out / st[k]["file"]), st[k])
         else:
             todo.append((it, ln, row, fpr))
+    redone = [old[it["name"]] for it, *_ in todo if it["name"] in old]
+    if redone:                                 # a hand edit of a released part is held (kept) before it is built again
+        gate.keep_edits(redone)
     keeps = {}
     for it, ln, row, fpr in todo:
         old_st = state.get(it["name"]) or {}

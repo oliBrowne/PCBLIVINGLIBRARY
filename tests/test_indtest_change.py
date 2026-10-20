@@ -1,7 +1,7 @@
 """Regression tests for the 2026-10-20 independent testing pass, change-control area (T-ids from
 /mnt/project-files/tests/2026-10-20_independent_test/REPORT.md). Nothing live.
     python3 -m tests.run_all test_indtest_change"""
-import os, subprocess, sys, tempfile
+import hashlib, json, os, subprocess, sys, tempfile
 from pathlib import Path
 
 from ecadlib import release_check as RC
@@ -41,3 +41,35 @@ def test_t009_release_check_after_reject_without_policy():
         assert "internal error" not in out and "not in fieldnames" not in out, out
         assert rc.returncode == 2, (rc.returncode, out)                  # CH340C has no symbol: held
         assert "AO3401A" in (d / "ws/librarian/demo_bom_demo/release_check.csv").read_text(encoding="utf-8-sig")
+
+
+def _ledger(lib):
+    return [json.loads(x) for x in (lib / "library.ledger.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+
+
+def _demo(d):
+    d = Path(d)
+    assert _run(d, d / "home", "demo", "-o", "ws").returncode == 0
+    return d / "ws/librarian/demo_bom_demo"
+
+
+# ------------------------------------------------------------------ T002: --refresh / rebuild overwrote a hand edit unrecorded
+def test_t002_refresh_and_rebuild_keep_a_hand_edit_of_a_released_part():
+    with tempfile.TemporaryDirectory() as d:
+        lib = _demo(d)
+        kmod = lib / "models/KiCad/R_0603_1608Metric.kicad_mod"
+        released = kmod.read_text(encoding="utf-8")
+        assert "(size 0.8 0.95)" in released
+        for size, how in (("0.9", ("librarian", "ws/uploads/demo/demo_bom.csv", "-o", lib, "--offline", "--sources",
+                                   "standard", "--refresh", "RES-0603-10k")), ("1.1", ("rebuild", lib))):
+            kmod.write_text(released.replace("(size 0.8 0.95)", f"(size {size} 0.95)", 1), encoding="utf-8")
+            sha = hashlib.sha256(kmod.read_bytes()).hexdigest()
+            n = len(_ledger(lib))
+            r = _run(d, Path(d) / "home", *how)
+            assert r.returncode in (0, 2), r.stdout + r.stderr
+            assert "change hold  RES-0603-10k" in r.stdout, r.stdout
+            assert (lib / ".ecadlib/blobs" / sha[:2] / sha).is_file(), how      # the edited bytes are kept
+            assert any(e.get("event") == "hold" and e.get("part") == "RES-0603-10k" and
+                       any(f"0.8 x 0.95 -> {size} x 0.95 mm" in c["text"] for c in e.get("changes") or [])
+                       for e in _ledger(lib)[n:]), how
+            assert "(size 0.8 0.95)" in kmod.read_text(encoding="utf-8")       # the released revision stays on disk

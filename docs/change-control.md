@@ -10,7 +10,9 @@ review picks, `dedupe --merge`, datasheet passes, `style apply`, and the publish
 `kicad-dblib`, `export-parts`, exporter plugins, `kicad-pcm`, `altium-pkg`, `altium-dblib-sync`, `altium365 push`),
 from the command line, the web UI and MCP alike. `tests/test_change_control.py` fails the build when a module that
 writes library files does not go through the gate, and `tests/test_change_control_round4.py` when a publisher does
-not settle the library before it reads it.
+not settle the library before it reads it. A writer that builds released parts again (`librarian --refresh`, the
+web UI's Redo all, `rebuild LIB` in place) first settles what is on disk, so a hand edit is held (its bytes kept in
+the blob store, a `hold` ledger line) before the rebuild overwrites it.
 
 ## What counts as a change
 

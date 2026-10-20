@@ -556,6 +556,14 @@ class Guard:
     def _has_files(self, it):
         return any((self.base / p if not Path(p).is_absolute() else Path(p)).is_file() for p in LG.item_files(it).values())
 
+    def keep_edits(self, items):
+        """Before a writer builds released parts again (librarian --refresh, rebuild in place, a changed BOM line):
+        settle what is on disk now, so a hand edit is held (its bytes kept, a ledger line) before it is overwritten.
+        items: the plan items as they are on disk. The library lock is held again for the writer's work."""
+        rows = self.settle(items)
+        self.hold_lock()
+        return rows
+
     # ------------------------------------------------------------ after the writer
     @_locked_step
     def settle(self, items):
