@@ -182,7 +182,7 @@ Parts converted from EasyEDA come from the **JLCEDA/EasyEDA Official Library** (
 ([gitlab.com/kicad/libraries](https://gitlab.com/kicad/libraries), CC-BY-SA 4.0 with a design-use exception) are
 labelled `(CC-BY-SA 4.0)` in the footprint description. ecadlib keeps the credit on every such part (a `Credit`
 property in KiCad, a `Library Credit` parameter in Altium) and writes a `NOTICE.txt` listing the third-party terms of
-each librarian run. Leave them in place if you share or publish the library.
+each librarian run, and copies it into the KiCad export, the dblib-sync folder and the altium-pkg package. Leave them in place if you share or publish the library.
 
 ## License
 

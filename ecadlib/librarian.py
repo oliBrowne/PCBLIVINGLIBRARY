@@ -483,7 +483,8 @@ class Run:
             if props.get("Description"):
                 st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))
             shared = kind in ("R", "C", "CP", "L")            # one generic symbol for every value: no MPN, no footprint link
-            extra = [] if shared or not mpn else [("MPN", mpn)]
+            extra = ([] if shared or not mpn else [("MPN", mpn)]) + [("Library Credit", K.KICAD_CREDIT)]   # CC-BY-SA:
+            # the credit travels in the .SchLib too, so an .IntLib compiled from it keeps it
             self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", extra)
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
             if "check" in how:                     # a near name: a person checks it before it is released

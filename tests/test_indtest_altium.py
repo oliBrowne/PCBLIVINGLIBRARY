@@ -177,6 +177,28 @@ def test_a365_merge_drops_the_old_name_of_a_house_named_field():
     assert {p["name"] for p in A3.merged_params(existing, item)} == {"Supplier Part Number 1", "LCSC PN", "Notes"}
 
 
+# T039: an Altium package of KiCad-sourced parts keeps the CC-BY-SA credit: NOTICE.txt and a Library Credit parameter
+@lite
+def test_altium_pkg_keeps_the_kicad_credit(tmp_path, monkeypatch):
+    import contextlib, io
+    from ecadlib import altium_pkg as PK, kicad_export as KX, librarian as LB, release_check as RC
+    from tests import e2e_support as E
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    E.seed_cache(tmp_path / "cache")
+    (tmp_path / "ecadlib.toml").write_text("[providers]\nunofficial = true\n")
+    (tmp_path / "bom.csv").write_text("Designator,Qty,Value,Footprint,Manufacturer,Mfr Part #,LCSC,Description\n"
+                                      "U2,1,LM358DR,SOIC-8_3.9x4.9mm_P1.27mm,Texas Instruments,LM358DR,,Dual op amp\n")
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        _exit_code(lambda: LB.main(["bom.csv", "-o", "lib", "--offline", "--cache", "cache"]))
+        _exit_code(lambda: RC.main(["lib/plan.json", "--allow", "LM358DR", "--user", "test"]))
+        PK.build(tmp_path / "lib/plan.json", tmp_path / "pkg", log=lambda *a, **k: None)
+    assert KX.KICAD_NOTICE.strip() in (tmp_path / "pkg/NOTICE.txt").read_text(encoding="utf-8")
+    recs = AL.read_schlib(tmp_path / "pkg/SchLib/LM358DR.SchLib")[1][0]["records"]
+    credit = [r.get("TEXT") for r in recs if r.get("RECORD") == "41" and r.get("NAME") == "Library Credit"]
+    assert credit and credit[0].startswith("From the KiCad libraries"), credit
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):

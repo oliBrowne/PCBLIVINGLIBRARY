@@ -501,6 +501,9 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
                                  f"against the released revisions: name it with --plan PLAN, package the plan.json "
                                  f"itself, or pass --unchecked to package them as they are")
             files = collect(src, out, kept)
+            if lib:                            # the library's third-party terms go with its files (as from a plan)
+                from .librarian import write_notice
+                write_notice(out, json.loads(lib.read_text(encoding="utf-8")))
         rep["kept_edits"] = kept
         rep["checked"] = str(lib) if lib else None
         if not lib and unchecked:

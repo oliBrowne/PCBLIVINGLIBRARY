@@ -822,6 +822,12 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                             "table": "", "kind": "file"})
             if not dry_run:
                 f.unlink()
+    if tables and not dry_run:                      # the third-party terms (KiCad CC-BY-SA, EasyEDA credit) go with
+        from .librarian import write_notice         # the library, as kicad-export's do; a NOTICE.txt of yours is kept
+        nf = to / "NOTICE.txt"
+        before = nf.read_bytes() if nf.is_file() else None
+        if write_notice(to, items) and nf.read_bytes() != before:
+            written.append(nf.name)
     st = {"rows": sorted(managed_rows), "files": sorted(managed_files)}
     if st != {"rows": sorted(state.get("rows", [])), "files": sorted(state.get("files", []))}:
         put(STATE, json.dumps(st, indent=1) + "\n")
