@@ -12,6 +12,7 @@ bottom (power_side = "left"). Each pin is put in a functional group from its nam
   input) -> left
   power_out (VOUT, VCAP), uart, i2c, spi, can, eth, ports (PA0..PE15, GPIO12, P0.1), outputs (OUT, Q, PG, SW, type
   output), nc -> right
+  (a uart / i2c / spi / can / eth group whose pins are all type input is inputs named like a bus: left)
   other (no name rule and no direction: passive, bidirectional) -> left, moved right when that keeps the symbol square
 Alternate-function names ("PA9/USART1_TX", "PH0-OSC_IN") are grouped by their first (primary) name; overbars
 ('~{RESET}', 'R\\E\\S\\E\\T\\', '/RESET', 'RESET#') are ignored for grouping. Port pins are sorted by port and
@@ -46,6 +47,7 @@ SIDES = {"power": "top", "analog": "top", "power_out": "right", "ground": "botto
          "other": "left", "uart": "right", "i2c": "right", "spi": "right", "can": "right", "eth": "right",
          "ports": "right", "other_out": "right", "nc": "right"}
 POWER_GROUPS = {"power", "analog", "power_out", "ground", "ep"}
+BUSES = ("uart", "i2c", "spi", "can", "eth")
 FLEX = ("ports", "other")                      # may move between left and right to balance the symbol
 STACKS = ("stack", "hide", "none")
 POWER_SIDES = ("top", "left")
@@ -229,6 +231,11 @@ def _blocks(pins, s):
         port = port_of(p.get("name", "")) if g == "ports" else None
         sub = port[0] if port else ""
         by.setdefault((g, sub), []).append((port[1] if port else i, i, p))
+    for g in BUSES:                       # a bus group on the right whose pins are all type input is no bus but inputs
+        items = by.get((g, ""))           # named like one (SS/TR, a soft-start input): they go left with the inputs
+        if items and sides.get(g) == "right" and all(str(t[2].get("type") or "").lower() == "input" for t in items):
+            by.setdefault(("other_in", ""), []).extend(by.pop((g, "")))
+            by[("other_in", "")].sort(key=lambda t: t[1])
     blocks = []
     for (g, sub), items in sorted(by.items(), key=lambda kv: (order[kv[0][0]], _natural(kv[0][1]))):
         if g == "ports":

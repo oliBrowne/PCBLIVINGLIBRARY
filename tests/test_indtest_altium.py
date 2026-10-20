@@ -283,6 +283,20 @@ def test_no_native_build_package_has_no_recipes(tmp_path, monkeypatch):
     assert list((d / "models").rglob(f"*{AN.EXT}"))        # the library's own recipes stay
 
 
+# T093: an input named like a bus pin (TPS62133 SS/TR, soft start) goes left with the inputs; a real bus stays together
+def test_input_named_like_a_bus_pin_goes_left():
+    from ecadlib import symbol_layout as SL
+    pins = [{"num": "1", "name": "SW", "type": "output"}, {"num": "9", "name": "SS/TR", "type": "input"},
+            {"num": "13", "name": "EN", "type": "input"}, {"num": "5", "name": "FB", "type": "input"},
+            {"num": "16", "name": "GND", "type": "power_in"}, {"num": "11", "name": "VIN", "type": "power_in"}]
+    side = {p["name"]: p["side"] for p in SL.arrange_pins(pins)}
+    assert side["SS/TR"] == "left" and side["EN"] == "left" and side["SW"] == "right", side
+    uart = [{"num": "1", "name": "TXD", "type": "output"}, {"num": "2", "name": "RXD", "type": "input"},
+            {"num": "3", "name": "VCC", "type": "power_in"}, {"num": "4", "name": "GND", "type": "power_in"}]
+    side = {p["name"]: p["side"] for p in SL.arrange_pins(uart)}
+    assert side["RXD"] == side["TXD"] == "right", side
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
