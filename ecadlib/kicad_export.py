@@ -904,7 +904,8 @@ def _lib_record(rep):
     parts with their symbol / footprint, the footprints."""
     return {"written": dict(rep.get("written") or {}),
             "parts": [{"part": p.get("part"), "symbol_name": p.get("symbol_name"), "symbol": bool(p.get("symbol")),
-                       "footprint": p.get("footprint")} for p in rep.get("parts") or [] if isinstance(p, dict)],
+                       "footprint": p.get("footprint"), "held": bool(p.get("held"))}
+                      for p in rep.get("parts") or [] if isinstance(p, dict)],
             "footprints": sorted(rep.get("footprints") or {}),
             "kept": [dict(p) for p in rep.get("kept") or [] if isinstance(p, dict)]}
 
@@ -1000,9 +1001,10 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     before = {r["part"]: r for r in (mine.get("parts") or []) + (mine.get("kept") or [])
               if isinstance(r, dict) and r.get("part") and r.get("symbol") and r.get("symbol_name")}
     sym_file = out / f"{lib}.kicad_sym"
-    try:
+    try:                                       # only as the last export wrote it: a hand edit is not taken in as ours
         old_syms = {str(x[1]): x for x in sexpr.find(sexpr.parse(sym_file.read_text(encoding="utf-8"), keep_quotes=True),
-                                                     "symbol")} if before and sym_file.is_file() else {}
+                                                     "symbol")} \
+            if before and sym_file.is_file() and _same(sym_file.read_bytes(), prev_hash.get(f"{lib}.kicad_sym")) else {}
     except (ValueError, OSError, IndexError):
         old_syms = {}
 
@@ -1012,26 +1014,29 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
 
     def keep(it, why):
         """A held part released and exported before: its symbol, footprint and 3D files stay as they were (a footprint
-        another part writes now, under the same name, is that part's). One never released (an --include-held export)
-        is not kept. -> True if kept."""
+        another part writes now, under the same name, is that part's). Not kept: one --include-held exported while held
+        or never released, or one whose files were edited by hand since (the edit is not taken in as ours). -> kept?"""
         r = before.get(it["name"])
-        sym = old_syms.get(str(r["symbol_name"])) if r else None
+        sym = old_syms.get(str(r["symbol_name"])) if r and not r.get("held") else None
         if sym is None or r["symbol_name"] in symbols or not (lg.exists() and lg.head(it["name"])):
             return False
         symbols[r["symbol_name"]] = sym
-        fpn = r.get("footprint")
+        fpn, note = r.get("footprint"), ""
         f = pretty / f"{fpn}.kicad_mod" if fpn else None
+        rel = f.relative_to(out).as_posix() if f is not None else ""
         if f is not None and f.is_file() and fpn not in fps:
             fps[fpn] = {"from": "kept from the last export", "by": it["name"], "notes": [], "check": "held", "failures": []}
-            rel = f.relative_to(out).as_posix()
             rep["written"][rel] = prev_hash.get(rel) or _sha(f)
             for fn in re.findall(r'\(model "\$\{KIPRJMOD\}/' + re.escape(lib) + r'\.3dshapes/([^"]+)"', f.read_text(encoding="utf-8")):
-                if (shapes / fn).is_file():
-                    rep["models"].setdefault(fn, "kept from the last export")
+                if (shapes / fn).is_file():            # a STEP put there by hand stays the user's file
+                    rep["models"].setdefault(fn, "kept from the last export" if f"{lib}.3dshapes/{fn}" in owned
+                                             else f"{lib}.3dshapes/{fn} (existing file kept)")
+        elif fpn in fps and fps[fpn].get("by") != it["name"] and rep["written"].get(rel) != prev_hash.get(rel):
+            note = f"; its footprint {lib}:{fpn} is now {fps[fpn].get('by')}'s, written anew"
         rep["kept"].append({"part": it["name"], "symbol_name": r["symbol_name"], "symbol": True,
                             "footprint": fpn if fpn in fps else None})
         rep["warnings"].append(f"{it['name']}: held ({'; '.join(why)}); the version exported before stays in {lib} "
-                               f"until it passes the check again")
+                               f"until it passes the check again{note}")
         return True
 
     def fp_source(it, fpn, fnotes):
@@ -1053,6 +1058,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             rep["skipped"].append({"part": it["name"], "why": "awaiting_approval: waiting for sign-off, not released yet",
                                    "says": [{"code": "awaiting_approval", "text": "Waiting for sign-off: not released yet.",
                                              "fix": f"ecadlib approve {plan} status"}]})
+            held.append((it, ["waiting for sign-off"]))
             continue
         why = [] if status == "held" else RC.publish_problems(it, plan_dir, rules)   # checked again: `ready` is not
         if why and not include_held:                                                  # taken on trust
@@ -1065,7 +1071,8 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         if str((it.get("source") or {}).get("symbol") or "").startswith("easyeda:") and not P.unofficial_allowed(rules):
             notes.append("EasyEDA not fetched again ([providers] unofficial = false): the symbol is read back from the SchLib")
             it = dict(it, source=dict(it["source"], symbol=""))
-        row = {"part": it["name"], "symbol_name": sname, "status": status, "symbol": None, "footprint": None, "notes": notes}
+        row = {"part": it["name"], "symbol_name": sname, "status": status, "symbol": None, "footprint": None, "notes": notes,
+               "held": status == "held" or bool(why)}    # --include-held wrote it while held: never kept as released
         if sname in symbols:
             rep["errors"].append(f"{it['name']}: symbol name {sname} already used by another part"); continue
         src = it.get("source") or {}
@@ -1293,12 +1300,15 @@ def print_result(rep, out, plan, t=None):
     steps = sum(1 for v in rep["models"].values() if v)
     lib = rep["library"]
     waiting = [s for s in rep["skipped"] if str(s["why"]).startswith("awaiting_approval")]
-    held = [s for s in rep["skipped"] if s not in waiting]
+    kept = {k.get("part") for k in rep.get("kept") or [] if isinstance(k, dict)}
+    held = [s for s in rep["skipped"] if s not in waiting and s["part"] not in kept]
+    waiting = [s for s in waiting if s["part"] not in kept]
     q = lambda p: _shell_quote(str(p))
     head = (f"{M.plural(rep['symbols'], 'symbol')}, {M.plural(len(rep['footprints']), 'footprint')}, "
             f"{steps}/{len(rep['models'])} 3D models written"
             + (f"; {M.plural(len(held), 'held part')} left out (--include-held adds them)" if held else "")
-            + (f"; {M.plural(len(waiting), 'part')} waiting for sign-off left out" if waiting else ""))
+            + (f"; {M.plural(len(waiting), 'part')} waiting for sign-off left out" if waiting else "")
+            + (f"; {M.plural(len(kept), 'held part')} kept as exported before" if kept else ""))
     t.summary(head, written=[(f"{out}/{lib}.kicad_sym", "symbols"), (f"{out}/{lib}.pretty/", "footprints"),
                              (f"{out}/sym-lib-table, fp-lib-table", "library tables (paths use ${KIPRJMOD})")],
               next=[(f"ecadlib kicad-export {q(plan)} -o <your KiCad project folder> --name {q(lib)}",

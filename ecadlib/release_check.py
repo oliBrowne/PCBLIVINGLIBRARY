@@ -147,43 +147,55 @@ def _supplier_number(par, field, rules):
 
 
 # The librarian's doubtful-source notes, each about the half (None: either) it took from the source it names:
-# (half, source prefix, the note; group 1 = what the source gave). A note holds the part while that half still comes
-# from there: a half replaced since (ecadlib resolve, the review queue's Pick) drops its note. ecadlib up to 0.3 wrote
-# them to librarian.review only (a note, not a hold), and a part an older version finished keeps them there, so those
-# count too, but only while the source they name supplied the part.
+# (half, source prefix, the note; group 1 = what the source gave). A note holds the part until a person releases it,
+# or picks another symbol or footprint for that half (ecadlib resolve, the review queue's Pick: clear_doubts). ecadlib
+# up to 0.3 wrote them to librarian.review only (a note, not a hold), and a part an older version finished keeps them
+# there, so those count too, while that half still comes from that kind of source.
 DOUBTS = (("symbol", "kicad:", re.compile(r"symbol (\S+) matched by .*check")),
           ("footprint", "kicad:", re.compile(r"footprint (\S+) chosen by (?:shortest|footprint named)")),
           (None, "easyeda:", re.compile(r"EasyEDA (\S+) conversion: ")),
           ("symbol", "standard:", re.compile(r"symbol pinout (\S+) from the .+ family table")))
 
 
-def _doubt(note, src):
-    """For a doubtful-source note: (the halves it is about, whether one of them still comes from that source);
-    None for any other note."""
+def _doubt(note):
+    """A doubtful-source note -> (the halves it is about, the source prefix, what that source gave); else None."""
     for half, prefix, rx in DOUBTS:
-        m = rx.match(note)
+        m = rx.match(str(note))
         if m:
-            halves = [half] if half else ["symbol", "footprint"]
-            return halves, any(str(src.get(h) or "") == prefix + m.group(1) for h in halves)
+            return ([half] if half else ["symbol", "footprint"]), prefix, m.group(1)
     return None
 
 
 def doubts(item):
-    """The `verify` notes that hold the item: its own, less the doubtful-source notes about a half it no longer takes
-    from that source, plus the ones an older ecadlib left in librarian.review (DOUBTS)."""
-    src, out = item.get("source") or {}, []
-    for v in item.get("verify") or []:
-        v = str(v)
-        d = _doubt(v, src)
-        if d and not d[1] and any(src.get(h) for h in d[0]):
-            continue                           # that half was replaced since: the note is about a file it no longer uses
-        out.append(v)
+    """The `verify` notes that hold the item: its own, plus the doubtful-source notes an older ecadlib left in
+    librarian.review (DOUBTS) while that half still comes from that kind of source."""
+    src, out = item.get("source") or {}, [str(v) for v in item.get("verify") or []]
     for r in (item.get("librarian") or {}).get("review") or []:
-        r = str(r)
-        d = _doubt(r, src)
-        if d and d[1] and r not in out:
-            out.append(r)
+        d = _doubt(r)
+        if d and str(r) not in out and any(str(src.get(h) or "").startswith(d[1]) for h in d[0]):
+            out.append(str(r))
     return out
+
+
+def clear_doubts(entry, src, halves):
+    """A person picked another symbol / footprint (`halves`) and it was applied: drop the doubtful-source notes about
+    what that half had before from a plan item or its librarian_state entry (`verify`, and the older ecadlib's review
+    notes). An EasyEDA note goes once neither half comes from EasyEDA. -> the notes dropped."""
+    def gone(note):
+        d = _doubt(note)
+        if not d:
+            return False
+        hs, prefix, ref = d
+        if hs == ["symbol", "footprint"]:
+            return not any(str(src.get(h) or "").startswith(prefix) for h in hs)
+        return hs[0] in halves and str(src.get(hs[0]) or "") != prefix + ref
+    dropped = []
+    for holder, key in ((entry, "verify"), (entry, "review"), (entry.get("librarian") or {}, "review")):
+        notes = holder.get(key)
+        if isinstance(notes, list):
+            dropped += [n for n in notes if gone(n)]
+            holder[key] = [n for n in notes if not gone(n)]
+    return dropped
 
 
 def check_item(item, base=".", rules=None):

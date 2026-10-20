@@ -633,6 +633,11 @@ def test_publish_reports_a_part_the_publisher_held_again():
     for tool, lib in (("altium", cfg["library"]), ("kicad", str(Path(cfg["library"]).parent / "kicad lib"))):
         pub = AM.publish(ws, rel, lib, cfg["name"], tool=tool)
         assert pub["held"] == {"CAP-0402-100nF": "held: fields: Description is empty"}, (tool, pub)
+        with mock.patch.object(AM, "publish", lambda *a, **k: pub):          # fill: the same hold, in its message
+            r = AM._fill_result(cfg, ws, rel, {"parts": 1, "ready": 1, "held": 0, "awaiting_approval": 0,
+                                               "duplicates": 0}, AM.Progress())
+        assert r["status"] == "error" and "Not published: CAP-0402-100nF: held: fields: Description is empty" in \
+            r["message"], (tool, r)
 
 
 def test_open_queue_starts_reuses_and_refuses():

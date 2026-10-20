@@ -128,6 +128,23 @@ def write_sqlite(path, tables):
         tmp.unlink(missing_ok=True)
 
 
+def _old_rows(path, parts):
+    """{Part ID: (table, row)} of `parts` in the database the last build wrote ({} when there is none to read)."""
+    out = {}
+    try:
+        with closing(sqlite3.connect(str(path))) as con:       # only read (the caller checked it is there)
+            for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall():
+                cur = con.execute(f"SELECT * FROM {_ident(t)}")
+                cols = [c[0] for c in cur.description]
+                for vals in cur.fetchall():
+                    row = {c: v for c, v in zip(cols, vals) if v not in (None, "")}
+                    if row.get("Part ID") in parts:
+                        out[row["Part ID"]] = (t, row)
+    except sqlite3.Error:
+        return {}
+    return out
+
+
 def _copy_into(src, dst):
     """Replace every table of the database dst by those of src, in one transaction (works while dst is open)."""
     with closing(sqlite3.connect(dst, isolation_level=None, timeout=30)) as con:
@@ -264,9 +281,20 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
         xr = ((full.get("libraries") or {}).get(lib) if isinstance(full.get("libraries"), dict) else None) \
             or (full if full.get("library", lib) == lib and full else None)
     if xr is not None:                                       # only point at symbols / footprints that were written
-        syms = {p["symbol_name"] for p in xr.get("parts", []) if p.get("symbol")}
-        owner = {p["symbol_name"]: p["part"] for p in xr.get("parts", []) if p.get("symbol")}
-        own_fp = {p["part"]: p.get("footprint") for p in xr.get("parts", [])}
+        kept = [p for p in xr.get("kept") or [] if isinstance(p, dict) and p.get("part")]
+        db = out / rep["database"]                         # a held part kicad-export kept as exported before keeps the
+        for pid, (t, row) in sorted((_old_rows(db, {p["part"] for p in kept}) if kept and db.is_file() else {}).items()):
+            s = next((s for s in skipped if s["part"] == pid and str(s["why"]).startswith(("held", "awaiting"))), None)
+            if s is None or any(r["Part ID"] == pid for rs in tables.values() for r in rs):     # row it had too: never
+                continue                                                                          # the held fields
+            skipped.remove(s)
+            tables.setdefault(next((k for k in tables if k.casefold() == t.casefold()), t), []).append(row)
+            rep["warnings"].append(f"{pid}: {s['why'].replace(': ', ' (', 1)}); the row exported before stays in "
+                                   f"{rep['database']} until it passes the check again")
+        parts = list(xr.get("parts", [])) + kept
+        syms = {p["symbol_name"] for p in parts if p.get("symbol")}
+        owner = {p["symbol_name"]: p["part"] for p in parts if p.get("symbol")}
+        own_fp = {p["part"]: p.get("footprint") for p in parts}
         fps = set((xr.get("footprints") or {}))
         for t, rows in list(tables.items()):
             for r in list(rows):
