@@ -129,6 +129,10 @@ a minor release may change command-line options and file formats.
 - Altium menu: shared resistor / capacitor / inductor symbols carry no footprint, so each DbLib row's Footprint Ref picks it; passive parts get Passive pins; distributor categories (including LCSC's "LED Indication - Discrete") route parts to the Capacitors, Transistors, Diodes, Crystals and Connectors tables; *Open review queue* lists the menu's held parts; an MPN no source knows is "Not found", not held.
 - A space in an MPN becomes `_` in the DbLib part name (`FC-135 32.768KA-AG0` → `FC-135_32.768KA-AG0`); the Manufacturer Part Number column keeps the space.
 
+## [0.3.2.dev0] - 2026-10-20
+
+The development build of main (not on PyPI). It writes files 0.3.1 cannot read (librarian_state v3), so it no longer calls itself 0.3.1: a refusal of a newer file now names a version that can read it. Its changes are the ones under [Unreleased] above.
+
 ## [0.3.1] - 2026-10-17
 
 ### Added

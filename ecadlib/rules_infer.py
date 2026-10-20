@@ -1223,7 +1223,12 @@ def main(argv=None, inp=input, environ=None):
         if x not in RU.SOURCES:
             print(f"ecadlib init: unknown source {x!r}\n  hint: sources are {', '.join(RU.SOURCES)}", file=sys.stderr)
             return 2
-    broken = None                                        # an existing file that does not parse: --force replaces it
+    for flag, p in [("--lib", l) for l in a.lib] + [("--from", f) for f in a.paths]:   # a typo: nothing learned
+        if not Path(p).expanduser().exists():                                        # from ".", nothing written
+            print(f"ecadlib init: {'library folder' if flag == '--lib' else 'path'} not found: {p}\n  hint: check the "
+                  f"{flag} path (relative paths start at {Path.cwd()}); nothing was written", file=sys.stderr)
+            return 2
+    broken = None                                       # an existing file that does not parse: --force replaces it
     try:
         old_raw = RU.parse_text(out.read_text(encoding="utf-8"), out.name) if out.is_file() else {}
     except (RU.RulesError, OSError) as e:

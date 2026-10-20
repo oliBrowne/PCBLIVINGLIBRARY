@@ -39,7 +39,7 @@ pins and footprint pads are compared. Exit code 1 when a check fails.
 
 KiCad's libraries are CC-BY-SA 4.0 (with a design-use exception): exports holding KiCad content get a NOTICE.txt
 and must not be committed here (out/kicad/ is in .gitignore)."""
-import argparse, copy, hashlib, json, math, re, struct, sys
+import argparse, copy, hashlib, json, math, re, struct, sys, time
 from pathlib import Path
 
 from . import altium_lib as AL, easyeda_convert as EC, footprint_check as FC, fsutil, kicad_import as K, providers as P, \
@@ -530,7 +530,18 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
     f = item["symbol"].get("file")
     if not f or not (plan_dir / f).exists():
         raise FileNotFoundError("no symbol: " + "; ".join(why or ["no source and no .SchLib"]))
-    return symbol_from_schlib(plan_dir / f, name, notes, pick=item["symbol"].get("ref")), f"{f} read back ({src or 'no source'})" + (f"; {'; '.join(why)}" if why else "")
+    sym = symbol_from_schlib(plan_dir / f, name, notes, pick=item["symbol"].get("ref"))
+    if src.startswith("standard:Regulator_Linear_"):   # Altium has one Power type: a standard regulator's VO is power_out
+        from . import stdparts as SP                     # in ecadlib's own symbol and in KiCad's (ERC needs a rail driver)
+        try:
+            want = {p[0]: p[2] for p in SP._regulator(src.split("_")[2:], ())[4]}
+        except KeyError:
+            want = {}
+        for u in sexpr.find(sym, "symbol"):
+            for p in sexpr.find(u, "pin"):
+                if p[1] == "power_in" and want.get(str(sexpr.first(p, "number")[1]).strip('"')) == "power_out" and "hide" not in p:
+                    p[1] = "power_out"
+    return sym, f"{f} read back ({src or 'no source'})" + (f"; {'; '.join(why)}" if why else "")
 
 
 # ---------------------------------------------------------------- footprints
@@ -1190,7 +1201,12 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"], kpins=kpins)
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
-            set_fields(sym, plan_fields(it, lib, row["footprint"], props, rules))
+            fields = plan_fields(it, lib, row["footprint"], props, rules)
+            names = ((rules or {}).get("parameters") or {}).get("names") or {}
+            gone = ({k for k, v in names.items() if v != k} | ({"MPN"} if names.get("Manufacturer Part Number", "MPN") != "MPN"
+                    else set())) - {k for k, _ in fields}      # a house name replaces the field the .SchLib carried
+            sym[:] = [c for c in sym if not (isinstance(c, list) and c[0] == "property" and str(c[1]) in gone)]
+            set_fields(sym, fields)
             sym[:] = [c for c in sym if not (isinstance(c, list) and c[:2] == ["property", "ki_description"])]   # KiCad 7 -> Description
             symbols[sname] = sym
             row["symbol"] = how
@@ -1228,7 +1244,11 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                                f"{lib}: {', '.join(gone[:8])}{' ...' if len(gone) > 8 else ''}; a KiCad project using "
                                f"them loses those links" + ("" if same else " (give each plan its own -o folder)"))
     stale =[p for p in pretty.glob("*.kicad_mod") if p.stem not in fps]
-    stale += [p for p in (shapes.glob("*") if shapes.exists() else []) if p.is_file() and not rep["models"].get(p.name)]
+    for p in (shapes.glob("*") if shapes.exists() else []):
+        if p.is_file() and fsutil.atomic_tmp(p) and time.time() - p.stat().st_mtime > 600:
+            p.unlink()                        # ecadlib's own temp file a killed export left: no one's work
+        elif p.is_file() and not fsutil.atomic_tmp(p) and not rep["models"].get(p.name):
+            stale.append(p)
     for old in stale:                         # a re-export drops the files no longer in the plan; one it did not write
         rel = old.relative_to(out).as_posix()  # (added by hand) is moved aside and reported, not lost
         if rel not in owned:
@@ -1326,12 +1346,8 @@ def print_result(rep, out, plan, t=None):
 
 
 def _shell_quote(s):
-    """A path as one shell word for a printed command: as it is when it needs no quoting, else quoted for the shell
-    it will be pasted into (cmd.exe on Windows, sh elsewhere)."""
-    import os, shlex, subprocess
-    if re.fullmatch(r"[\w@%+=:,./\\-]+", s):
-        return s
-    return subprocess.list2cmdline([s]) if os.name == "nt" else shlex.quote(s)
+    from .cliutil import shell_word
+    return shell_word(s)
 
 
 def main(argv=None):

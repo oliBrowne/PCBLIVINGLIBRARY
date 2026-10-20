@@ -144,12 +144,14 @@ for _cmd, _what in (("agent", "the library agent"), ("agent-watch", "the library
 
 def _pipe_gone(e):
     """The reader of stdout went away (`| head`, a closed pager): POSIX says EPIPE (BrokenPipeError); Windows says
-    EINVAL on the write, so there it counts only when stdout cannot be flushed either."""
+    EINVAL on the write, so there it counts only when stdout cannot be written either (an empty buffer flushes
+    fine, so one byte is written to find out)."""
     if isinstance(e, BrokenPipeError) or getattr(e, "errno", None) == errno.EPIPE:
         return True
     if getattr(e, "errno", None) != errno.EINVAL:
         return False
     try:
+        sys.stdout.write("\n")
         sys.stdout.flush()
     except (OSError, ValueError):
         return True

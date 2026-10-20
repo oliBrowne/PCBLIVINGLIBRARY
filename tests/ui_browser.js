@@ -1,5 +1,5 @@
 // Drives the ecadlib web UI in Chromium for tests/test_ui_browser.py (which starts the servers and reads the result).
-//   node tests/ui_browser.js '{"local": {"1280": URL, "390": URL} (one workspace per width), "empty": URL, "demo": {"1280": URL, "390": URL}, "bom": PATH, "shots": DIR|null}'
+//   node tests/ui_browser.js '{"local": {"1280": URL, "390": URL} (one workspace per width), "empty": URL, "demo": {"1280": URL, "390": URL}, "planned": URL, "bom": PATH, "shots": DIR|null}'
 // Prints one JSON line: {"checks": [[name, ok, detail], ...]}. A check never stops the run; the Python side asserts.
 const { chromium } = require("playwright");
 const cfg = JSON.parse(process.argv[2]);
@@ -9,7 +9,8 @@ const check = (name, ok, detail = "") => checks.push([name, !!ok, String(detail)
 async function page(browser, width) {
   const ctx = await browser.newContext({ viewport: { width, height: 900 } });
   const p = await ctx.newPage();
-  p.errors = [];
+  p.errors = []; p.bad = [];
+  p.on("response", r => { if (r.status() >= 400) p.bad.push(`${r.status()} ${new URL(r.url()).pathname}`); });
   p.on("pageerror", e => p.errors.push("pageerror: " + e.message));
   p.on("console", m => { if (m.type() === "error" && !/status of (401|400|409)/.test(m.text())) p.errors.push("console: " + m.text()); });
   p.on("dialog", d => d.accept());
@@ -129,6 +130,8 @@ async function local(browser, width) {
     await p.click("#pbody [data-allow]");
     await p.waitForSelector('#plist .pcard[data-part="TYPE-C-31-M-12"] .pill.s-info', { timeout: 10000 });
     check("release anyway is recorded at once" + w, /released anyway/.test(await text(p, '#plist .pcard[data-part="TYPE-C-31-M-12"]')));
+    const tt = await text(p, "#toast");           // T052: no symbol / footprint file cannot be released anyway
+    check("release anyway on a missing file says it stays held" + w, /TYPE-C-31-M-12 stays held/.test(tt) && !/goes to Altium with/.test(tt), tt);
     await p.locator("#toast .t button", { hasText: "Undo" }).last().click();
     await p.waitForFunction(() => !/released anyway/.test(document.querySelector('#plist .pcard[data-part="TYPE-C-31-M-12"]').innerText), null, { timeout: 10000 });
     check("undo holds it again" + w, true);
@@ -155,6 +158,11 @@ async function local(browser, width) {
   await step("footprint dialog" + w, async () => {
     await p.click("#newfp");
     await p.waitForSelector("#dlg[open]");
+    await p.click("#previewbtn");                 // T113: at 390 px the spec and the preview stay inside the dialog
+    await p.waitForSelector("#preview svg", { timeout: 20000 });
+    const fit = await p.evaluate(() => { const r = s => document.querySelector(s).getBoundingClientRect().right;
+      return { dlg: r("#dlg"), preview: r("#preview"), spec: r("#spec") }; });
+    check("footprint dialog fits the screen" + w, fit.preview <= fit.dlg && fit.spec <= fit.dlg, JSON.stringify(fit));
     await p.keyboard.press("Escape");
     check("Escape closes the footprint dialog" + w, await p.locator("#dlg[open]").count() === 0);
   });
@@ -182,6 +190,8 @@ async function demo(browser, width) {
   await p.waitForFunction(() => /dropped\.csv/.test(document.querySelector("#bomname").textContent), null, { timeout: 30000 });
   check("drop anywhere checks the BOM" + w, true);
   check("drop overlay hidden again" + w, !(await p.locator("#dropall.on").count()));
+  await p.waitForLoadState("networkidle");
+  check("a new BOM asks for no plan it has not got (no 400)" + w, !p.bad.length, p.bad.join(" | "));   // T112
   check("demo: no page errors" + w, !p.errors.length, p.errors.join(" | "));
   await p.context().close();
 }
@@ -214,6 +224,19 @@ async function a11y(browser) {
   }
 }
 
+// a workspace with a library plan but no BOM check (`ecadlib demo`, `ecadlib librarian`) opens that plan (T051)
+async function planned(browser, width) {
+  const p = await page(browser, width), w = `@${width}`;
+  await p.goto(cfg.planned);
+  await p.waitForSelector("#plist .pcard", { timeout: 30000 });
+  check("planned: step 2 opens on the plan's held part" + w, await p.isVisible("#libcard") &&
+        await p.locator('#plist [data-openp="AO3401A"]').count() === 1, await text(p, "#plist"));
+  await p.click('#libout [data-pf=""]');
+  check("planned: all 7 parts of the plan" + w, await p.locator("#plist .pcard").count() === 7, await p.locator("#plist .pcard").count());
+  check("planned: no page errors" + w, !p.errors.length && !p.bad.length, p.errors.concat(p.bad).join(" | "));
+  await p.context().close();
+}
+
 async function empty(browser, width) {
   const p = await page(browser, width), w = `@${width}`;
   await p.goto(cfg.empty);
@@ -234,6 +257,7 @@ async function empty(browser, width) {
       if (cfg.local) await local(browser, width).catch(e => check("local run", false, e.message));
       if (cfg.empty) await empty(browser, width).catch(e => check("empty run", false, e.message));
       if (cfg.demo) await demo(browser, width).catch(e => check("demo run", false, e.message));
+      if (cfg.planned) await planned(browser, width).catch(e => check("planned run", false, e.message));
     }
     await a11y(browser).catch(e => check("a11y run", false, e.message));
   } finally { await browser.close(); }

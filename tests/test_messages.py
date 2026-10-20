@@ -74,6 +74,8 @@ EXAMPLES = {
     "librarian.value_two_ways": "verify: value 4,700pF reads two ways: 4.7pF or 4700pF; write it without the comma",
     "approval.waiting": "awaiting approval: 1 approval from role librarian",
     "approval.changed": "changed since the release check: run release-check again",
+    "change.held": "change control: new part with the MPN of released RES-0603-10k r1 (pad 1 moved 0.2 mm in x); a person "
+                   "approves it: ecadlib part show",
     "dedupe.duplicate": "duplicate of R_10k_0603 (dedupe)",
     "a365.deleted": "deleted in the Altium 365 workspace",
     "proof.doubt": "proof doubt: the pin 1 mark is on the other side",

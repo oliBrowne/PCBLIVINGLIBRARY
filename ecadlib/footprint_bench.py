@@ -188,7 +188,8 @@ def report(results, summary):
             note += f"; courtyard ours {r['courtyard_ours']} KiCad {r['courtyard_kicad']}"
         out.append(f"{r['name']:<58} {r['pads_ok']:>4}/{r['pads']:<4} {r['worst_pos']:>7.3f}/{r['worst_size']:<7.3f} {crt:>10}  {note}")
     s = summary
-    pct = lambda a, b: f"{100 * a / b:.0f} %" if b else "-"
+    pct = lambda a, b: "-" if not b else f"{100 * a / b:.0f} %" if a == b or 100 * a / b < 99.5 else \
+        f"{int(1000 * a / b) / 10:.1f} %"                  # a failing run never rounds up to 100 %
     out += ["", f"pads within {POS_TOL} mm / {SIZE_TOL} mm: {s['pads_ok']}/{s['pads']} ({pct(s['pads_ok'], s['pads'])}); "
             f"footprints with every pad matching: {s['footprints_all_pads_ok']}/{s['footprints']} "
             f"({pct(s['footprints_all_pads_ok'], s['footprints'])}); courtyards within {CRT_TOL:.2f} mm: "

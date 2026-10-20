@@ -272,6 +272,9 @@ def make_handler(ws: Workspace):
                 return self._send(403, {"error": "unexpected Host header"})
             if method == "POST" and not self._origin_ok():
                 return self._send(403, {"error": "cross-origin request refused"})
+            if u.path.startswith("/api/") and not (ws.root / "uploads").is_dir():   # the workspace folder was deleted or
+                with contextlib.suppress(OSError):                                   # moved while this runs: make it again
+                    ws.ensure_folders()
             return u
 
         # ---------------------------------------------------------- request bodies
@@ -363,7 +366,10 @@ def make_handler(ws: Workspace):
                     except KeyError as e:
                         return self._send(404, {"error": _msg(e)})
                 if u.path == "/api/parts":                      # part cards of a BOM's library plan
-                    return self._send(200, ws.library_parts(self._bom({"bom": q.get("bom")}), q.get("pictures") != "0"))
+                    bom = self._bom({"bom": q.get("bom")})
+                    if q.get("ifplan") == "1" and not ws.has_plan(bom):   # no plan yet is no error (a new BOM)
+                        return self._send(200, {"plan": None})
+                    return self._send(200, ws.library_parts(bom, q.get("pictures") != "0"))
                 if u.path == "/api/job":                        # a running job (its live log)
                     job = jobs.get(q.get("id", ""))
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})
@@ -622,6 +628,8 @@ def main(argv=None):
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--setup", action="store_true", help="open the setup page (AI model and key, Altium / KiCad, folders)")
     a = ap.parse_args(argv)
+    if not 0 <= a.port <= 65535:                            # bind() raises OverflowError: a typo, not a bug
+        ap.error("--port must be from 0 to 65535")
     from .. import userconfig
     userconfig.apply_env()                                  # kicad-cli on PATH; stored keys are read when needed
     if not _loopback(a.host):
@@ -635,9 +643,9 @@ def main(argv=None):
         sys.exit(f"can't listen on {a.host}:{a.port} ({e.strerror}); is ecadlib already running? Try --port {a.port + 1}")
     shown = f"[{a.host}]" if ":" in a.host and not a.host.startswith("[") else a.host   # IPv6 literal in a URL
     url = f"http://{shown}:{srv.server_address[1]}/"
-    print(f"ecadlib UI on {url}  (workspace {ws.root}; Ctrl+C to stop)")
-    if not a.no_browser:
-        webbrowser.open(url + ("setup" if a.setup else ""))
+    print(f"ecadlib UI on {url}{'setup' if a.setup else ''}  (workspace {ws.root}; Ctrl+C to stop)")
+    if not a.no_browser:                    # a thread: a console browser (w3m, lynx) waits for the page we serve below
+        threading.Thread(target=webbrowser.open, args=(url + ("setup" if a.setup else ""),), daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

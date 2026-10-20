@@ -87,6 +87,7 @@ M.error("no_api_key")                                   # (what went wrong, how 
 | `datasheet.*` | No datasheet link, no API key, PDF not downloaded, only some pages read, the read failed. |
 | `librarian.*` | How a part was found and what to double-check (LCSC mismatch, footprint chosen by name, EasyEDA conversion, family pinout). |
 | `approval.waiting`, `approval.changed`, `dedupe.duplicate`, `a365.deleted` | Sign-off, duplicates, Altium 365 workspace state. |
+| `change.held` | A change to a released part waits for `ecadlib part approve` (release anyway cannot release it). |
 | `proof.doubt`, `proof.finding` | The independent visual check. |
 | `other` | Anything not in the table: shown as written (cleaned), with a generic next step. |
 

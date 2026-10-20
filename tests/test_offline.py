@@ -61,7 +61,7 @@ def _models(d, symbols, footprints):
         AL.write_schlib(Path(d) / "SchLib" / f"{ref}.SchLib", [sym])
     for ref, spec in footprints.items():
         fp = AL.footprint_from_spec(json.loads((SPECS / f"{spec}.json").read_text()))[0]
-        AL.write_pcblib(Path(d) / "PcbLib" / f"{ref}.PcbLib", [fp])
+        AL.write_pcblib(Path(d) / "PcbLib" / f"{ref}.PcbLib", [dict(fp, name=ref)])   # holds the ref (push reads it back)
 
 
 def _ch340c(d):

@@ -2,7 +2,7 @@
 (when node, Playwright and Chromium are installed) a real Chromium driving the main flows at desktop and phone width:
 load a BOM, triage, fill the library, held parts, Altium export / plan / dry run, status and the setup check. The browser part skips cleanly without them.
 Run:  python3 -m tests.test_ui_browser      (ECADLIB_UI_SHOTS=DIR also saves screenshots)"""
-import contextlib, json, os, shutil, subprocess, tempfile, threading
+import contextlib, io, json, os, shutil, subprocess, tempfile, threading
 from pathlib import Path
 
 from ecadlib.app import Workspace
@@ -200,6 +200,17 @@ def _browser():
     return (node, mods, exe) if probe.returncode == 0 else None
 
 
+def planned_workspace(root):
+    """What `ecadlib demo` leaves: a librarian plan for uploads/demo/demo_bom.csv and no BOM check (triage history)."""
+    from ecadlib import firstrun as FR
+    ws = Workspace(root, [FX.LIB], providers=["digikey"], offline=True)
+    (ws.root / "uploads" / "demo").mkdir(parents=True, exist_ok=True)
+    (ws.root / "uploads" / "demo" / "demo_bom.csv").write_bytes(FR.DEMO_BOM.read_bytes())
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        ws.librarian_run("uploads/demo/demo_bom.csv", sources=["kicad", "standard"])
+    return ws
+
+
 @contextlib.contextmanager
 def _servers(d):
     srvs, urls = [], {"local": {}}
@@ -214,6 +225,7 @@ def _servers(d):
             urls["local"][str(w)] = up(FX.build(Path(d) / f"local{w}")[0])
         urls["empty"] = up(Workspace(Path(d) / "empty", [FX.LIB], providers=["digikey"], offline=True))
         urls["demo"] = {str(w): up(Workspace(Path(d) / f"demo{w}", [FX.LIB], providers=["digikey"], offline=True)) for w in (1280, 390)}
+        urls["planned"] = up(planned_workspace(Path(d) / "planned"))
         yield urls
     finally:
         for s in srvs:

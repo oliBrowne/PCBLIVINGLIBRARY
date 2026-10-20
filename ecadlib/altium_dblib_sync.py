@@ -50,8 +50,15 @@ KINDS = (("symbol", "SchLib", "Library"), ("footprint", "PcbLib", "Footprint"))
 # ------------------------------------------------------------------ plan -> rows
 def load_plan(path):
     """plan.json's items as written: model paths stay relative to the plan's folder (sync resolves them against
-    `base`), so the change-control bookkeeping that may rewrite plan.json never puts this machine's paths in it."""
-    return json.loads(Path(path).read_text())
+    `base`), so the change-control bookkeeping that may rewrite plan.json never puts this machine's paths in it.
+    A file that is not a plan ({}, a broken entry) raises ValueError before anything is touched (kicad_export.check_plan)."""
+    from .kicad_export import PlanError, check_plan
+    try:
+        items = json.loads(Path(path).read_text(encoding="utf-8"))
+    except ValueError as e:
+        raise PlanError(f"{path}: not a librarian plan ({e})") from e
+    check_plan(items, path)
+    return items
 
 
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")     # what openpyxl refuses in a cell (ILLEGAL_CHARACTERS_RE)
@@ -490,6 +497,21 @@ def _readback(path, kind, ref):
     return None if want in names else f"{fname} holds {names}, not {want!r}"
 
 
+def readback_problems(item, base="."):
+    """_readback of a plan item's .SchLib / .PcbLib files (paths absolute or relative to base) -> [problem]: a file
+    named for one part that holds another's model. altium365 push and change control's first release (change_gate
+    Guard.baseline) refuse such a part as dblib-sync does; a missing file or another format is left to them."""
+    out = []
+    for k, d, _ in KINDS:
+        f, ref = (item.get(k) or {}).get("file"), (item.get(k) or {}).get("ref")
+        p = Path(base) / f if f and not Path(f).is_absolute() else Path(f or "")
+        if f and ref and p.suffix.lower() == f".{d.lower()}" and p.is_file():
+            err = _readback(p, d, ref)
+            if err:
+                out.append(err)
+    return out
+
+
 def _copy_recipe(to, src, dst):
     """AN.copy_recipe, -> the files it wrote (recipe, STEP files, .ecadstate) relative to `to`, for svn."""
     st = dst.with_name(dst.name + AN.STATE_EXT)
@@ -526,12 +548,15 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     items = load_plan(plan) if isinstance(plan, (str, Path)) else plan
     base = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
     to = Path(target_dir)
-    from .rules import param_name, resolve
+    from .rules import KEY_COLUMNS, param_name, resolve
     rules = resolve(rules, base)                            # house parameter names: ecadlib.toml found from the plan
     if not name or name in (".", "..") or Path(name).name != name or PureWindowsPath(name).name != name:
         raise ValueError(f"--name {name!r} is a file name, not a path: use --to for the folder")
     check_existing_dblib(to / f"{name}{EXT[mode]}", data_file_name(name), name)
-    from . import change_gate as CG                         # change control (#105): hand edits settle first; a held
+    if not items and isinstance(plan, (str, Path)) and any((to / f).exists() for f in (STATE, f"{name}{EXT[mode]}")):
+        raise ValueError(f"{plan} has no parts: syncing it would empty the library {name}{EXT[mode]} in {to}; "
+                         "nothing written (delete the library folder by hand if that is what you want)")
+    from . import change_gate as CG                        # change control (#105): hand edits settle first; a held
     if not dry_run:                                         # change syncs the released revision
         CG.publish_guard(plan if isinstance(plan, (str, Path)) else base, items, mode, rules=rules, base=base)
     fname = data_file_name(name)
@@ -691,7 +716,9 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         for c in (param_name(c, rules) for c in it.get("cleared", [])):
             if c in new:
                 new[c] = ""
-        new.update(want)
+        for c in [c for c in new if c not in KEY_COLUMNS and param_name(c, rules) != c and param_name(c, rules) in want]:
+            new[c] = ""                                     # ecadlib's own name of a field the house name now carries:
+        new.update(want)                                    # never a second, stale value of it
         changed = [c for c in new if str(new.get(c, "")) != str(cur.get(c, ""))]
         if old_t != t:                                      # category changed: move the row
             tables[old_t][1].remove(cur)
@@ -706,7 +733,8 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             rows[rows.index(cur)] = new
         if changed:
             notes.insert(0, "row: " + ", ".join(changed))
-        res["action"] = "updated" if notes else "up_to_date"
+        # a library kept as changed in Altium is a note, not an update: nothing was written for it
+        res["action"] = "updated" if any(not n.endswith(AN.EDITED_NOTE) for n in notes) else "up_to_date"
         res["detail"] = "; ".join(notes)
         managed_rows.add(it["name"])
 
@@ -853,6 +881,12 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                             "table": "", "kind": "file"})
             if not dry_run:
                 f.unlink()
+    if tables and not dry_run:                      # the third-party terms (KiCad CC-BY-SA, EasyEDA credit) go with
+        from .librarian import write_notice         # the library, as kicad-export's do; a NOTICE.txt of yours is kept
+        nf = to / "NOTICE.txt"
+        before = nf.read_bytes() if nf.is_file() else None
+        if write_notice(to, items) and nf.read_bytes() != before:
+            written.append(nf.name)
     st = {"rows": sorted(managed_rows), "files": sorted(managed_files)}
     if st != {"rows": sorted(state.get("rows", [])), "files": sorted(state.get("files", []))}:
         put(STATE, json.dumps(st, indent=1) + "\n")
@@ -892,8 +926,8 @@ def main(argv=None):
         out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run,
                    rules=a.rules, overwrite_edits=a.overwrite_edits)
     except ValueError as e:                        # a wrong --name, a library folder that isn't ecadlib's kind
-        print(f"ecadlib dblib-sync: {e}", file=sys.stderr)
-        sys.exit(2)
+        from .cliutil import refuse
+        sys.exit(refuse("dblib-sync", e, "check the plan and --to / --name (`ecadlib dblib-sync -h`)"))
     from . import messages as M, term as TM
     t = TM.Term()
     rows = []
