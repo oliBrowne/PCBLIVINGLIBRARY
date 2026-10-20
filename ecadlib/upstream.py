@@ -534,7 +534,8 @@ def main(argv=None):
             man = json.loads(Path(a.manifest).read_text(encoding="utf-8"))
             rows, worst = check_kicad(man, GitLab(token=UC.secret("GITLAB_TOKEN")))
         except Exception as e:
-            print(f"check-kicad: {type(e).__name__}: {e}", file=sys.stderr); return 2
+            from .cliutil import refuse
+            return refuse("upstream check-kicad", e, "give the manifest.json `ecadlib.kicad_import batch` wrote")
         if a.update:
             ch = [r for r in rows if r["status"] == "changed"]
             todo = {r["entry"] for r in ch}

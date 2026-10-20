@@ -109,6 +109,16 @@ def friendly(e):
     return None
 
 
+def refuse(cmd, e, hint, out=None):
+    """For a command that catches its own errors: friendly()'s line and hint when it knows the error, else the
+    error's own words with `hint`; exit 2. A FileNotFoundError without a file name already says which path."""
+    import sys
+    f = None if isinstance(e, FileNotFoundError) and not e.filename else friendly(e)
+    msg, why = (f[0], f[1]) if f else (str(e), hint)
+    print(f"ecadlib {cmd}: {msg}\n  hint: {why}", file=out or sys.stderr)
+    return 2
+
+
 def report(cmd, e, out):
     """Print one line (and a hint) for e to `out`; returns the exit code."""
     f = friendly(e)

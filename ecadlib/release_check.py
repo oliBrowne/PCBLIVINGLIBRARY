@@ -549,13 +549,20 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the result as JSON (plan, report, counts, rows)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
-    from .approvals import cli_plan_lock, load_policy
+    from .approvals import cli_plan_lock, load_policy, policy_error
     try:
         load_policy(plan.parent)               # a broken approvals file: say so, before anything is changed
     except ValueError as e:
-        sys.exit(f"approval policy: {e}")
+        return policy_error("release-check", e)
     with cli_plan_lock(plan):                  # the web UI may be recording into this plan right now
         items = json.loads(plan.read_text(encoding="utf-8"))
+        from .kicad_export import PlanError, check_plan
+        try:                                   # {} / null / an entry without a name: refused, the plan not rewritten
+            check_plan(items, plan)
+        except PlanError as e:
+            print(f"ecadlib release-check: {e}\n  hint: is this the right file? plan.json is written by "
+                  f"`ecadlib librarian`", file=sys.stderr)
+            return 2
         unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
         if unknown:
             sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")

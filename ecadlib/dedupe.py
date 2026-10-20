@@ -49,6 +49,8 @@ MPN_COLS = ("Manufacturer Part Number", "MPN", "Mfr Part Number")
 
 def load_config(path=None, base=None):
     f = Path(path) if path else (Path(base) / "dedupe.json" if base else None)
+    if path and not f.exists():               # a typo must not fall back to the default rules
+        raise FileNotFoundError(f"--config {path}: not found")
     raw = json.loads(f.read_text(encoding="utf-8")) if f and f.exists() else {}
     bad = set(raw) - set(CONFIG)
     if bad:
@@ -165,7 +167,18 @@ def sym_pinout(sym):
     """(designator prefix, sorted (number, name)) of an altium_lib read_schlib entry."""
     pins = sorted({(r["num"], _pin_name(r.get("name"))) for r in sym["records"] if r.get("RECORD") == "2"})
     des = next((r.get("TEXT", "") for r in sym["records"] if r.get("RECORD") == "34"), "")
-    return re.match(r"[A-Za-z]*", des).group(0).upper(), pins
+    return re.match(r"[A-Za-z]*", des).group(0).upper() + _polarity(sym), pins
+
+
+def _polarity(sym):
+    """':N' / ':P' / ':NP' for a transistor symbol whose name or description says so: NMOS and PMOS (NPN and PNP)
+    draw the same pins 1=G 2=S 3=D and differ only in the arrow, so the pins alone would make them one symbol."""
+    text = " ".join(str(r.get(k) or "") for r in sym["records"] if r.get("RECORD") in ("1", "41")
+                    for k in ("LIBREFERENCE", "COMPONENTDESCRIPTION", "TEXT"))
+    nb, ne = r"(?<![A-Z0-9])", r"(?![A-Z0-9])"
+    tag = "".join(c for c, w in (("N", r"N-?CH(ANNEL)?|NMOS|NFET|NPN"), ("P", r"P-?CH(ANNEL)?|PMOS|PFET|PNP"))
+                  if re.search(f"{nb}({w}){ne}", text, re.I))
+    return f":{tag}" if tag else ""
 
 
 def sym_hash(pinout, min_pins=3):
@@ -454,7 +467,8 @@ def remap_bom(bom, mapping, out, columns=None):
     hdr = T.header_row(raw, columns)
     headers = [str(h).strip() for h in raw.iloc[hdr]]
     cols = T.apply_columns(T.map_headers(headers), headers, columns)
-    m = {k: {r["from"]: r["to"] for r in mapping if r["kind"] == k} for k in ("symbol", "footprint")}
+    m = {k: {r["from"]: r["to"] for r in mapping if r["kind"] == k and r.get("file") != ""}   # "": a keeper the merge
+         for k in ("symbol", "footprint")}                                                # did not adopt, cell kept
     n = 0
     for field, kind in (("libref", "symbol"), ("footprint", "footprint")):
         if field not in cols:
@@ -586,8 +600,8 @@ def main(argv=None):
         with cli_plan_lock(a.plan) if a.merge else contextlib.nullcontext():   # the web UI may be recording into this plan
             r = run(a.plan, a.lib, a.a365, a.config, a.keep, a.merge, tuple(k for k in a.kinds.split(",") if k), a.out, a.bom)
     except (OSError, ValueError, json.JSONDecodeError) as e:
-        print(f"dedupe: {type(e).__name__}: {e}", file=sys.stderr)
-        return 2
+        from .cliutil import refuse
+        return refuse("dedupe", e, "check the plan, --lib, --a365 and --config paths (`ecadlib dedupe -h`)")
     for g in r["groups"]:
         print(f"  {g['kind']:<18} keep {g['keeper'] or '-':<28} " + ", ".join(m["name"] for m in g["members"] if m["name"] != g["keeper"]))
     for e in r["errors"]:
