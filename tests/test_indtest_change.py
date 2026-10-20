@@ -234,3 +234,27 @@ def test_t100_resolve_mistakes_are_one_line_errors():
         lib = _demo(d)
         r = _run(d, Path(d) / "home", "resolve", lib / "plan.json", "--part", "AO3401A", "--offline", "choose", "footprint", "SOT-23")
         assert r.returncode == 2 and "internal error" not in r.stderr and "unknown footprint candidate id" in r.stderr, r.stderr
+
+
+# ------------------------------------------------------------------ T101: fp-edit recorded the login name, not who you are
+def test_t101_fp_edit_records_who_you_are():
+    import contextlib, io
+    from ecadlib import fp_edit as FE
+    from ecadlib.eval import gate as G
+    with tempfile.TemporaryDirectory() as d:
+        G.run(out=d, ids=["connector-NLJ2MDXX-V"])
+        plan = Path(d) / "lib" / "plan.json"
+        old = os.environ.get("ECADLIB_USER")
+        os.environ["ECADLIB_USER"] = "Ann Lee <ann@example.com>"
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                FE.main([str(plan), "--part", "NLJ2MDXX-V", "rename", "1+=1"])
+            assert json.loads((plan.parent / FE.FILE).read_text())["NLJ2MDXX-V"]["by"] == "Ann Lee <ann@example.com>"
+            with contextlib.redirect_stdout(io.StringIO()):
+                FE.main([str(plan), "--part", "NLJ2MDXX-V", "--user", "Bob <bob@example.com>", "rename", "1-=2"])
+            assert json.loads((plan.parent / FE.FILE).read_text())["NLJ2MDXX-V"]["by"] == "Bob <bob@example.com>"
+        finally:
+            if old is None:
+                os.environ.pop("ECADLIB_USER", None)
+            else:
+                os.environ["ECADLIB_USER"] = old
