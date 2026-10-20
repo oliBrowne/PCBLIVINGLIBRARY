@@ -82,6 +82,9 @@ def test_ds2_05_triage_reports_of_dotted_bom_names_keep_the_whole_name(tmp_path,
         assert got == ["triage_PowerBoard_rev1.1_BOM.csv", "triage_PowerBoard_rev1.1_BOM.md",
                        "triage_PowerBoard_rev1.2_BOM.csv", "triage_PowerBoard_rev1.2_BOM.md"], got
         assert "rev1.1" in (reports / "triage_PowerBoard_rev1.1_BOM.md").read_text(encoding="utf-8").splitlines()[0]
+        T.main(["PowerBoard_rev1.1_BOM.csv", "--providers", "", "--offline", "-o", str(tmp_path / "out" / "x.md")])
+        got = sorted(p.name for p in (tmp_path / "out").iterdir() if p.is_file())           # -o the report's own name
+        assert got == ["x.csv", "x.md"], got
 
         w = Workspace(tmp_path / "web", providers=[], offline=True)      # web / MCP: an upload keyed by its file name
         up = w.save_upload("PowerBoard_rev1.2_BOM.csv", b"Designator,Qty,Value,MPN\nR1,1,4k7,RC0603FR-074K7L\n")
