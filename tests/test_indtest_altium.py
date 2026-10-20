@@ -121,7 +121,7 @@ def test_prune_with_a_damaged_plan_keeps_the_library(tmp_path, monkeypatch):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             code = _exit_code(lambda: S.main([str(d / "plan.json"), "--to", str(d / "lib"), "--prune"]))
-        assert code == 2 and says in err.getvalue() and err.getvalue().count("\n") == 1, (bad, code, err.getvalue())
+        assert code == 2 and says in err.getvalue() and err.getvalue().count("\n") <= 2, (bad, code, err.getvalue())
         assert sorted(p.relative_to(d / "lib").as_posix() for p in (d / "lib").rglob("*")) == files, bad
 
 

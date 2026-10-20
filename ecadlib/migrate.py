@@ -42,7 +42,7 @@ UPGRADE = ('upgrade ecadlib to the build that made it (pip install -U ecadlib; w
 class SchemaTooNew(RuntimeError):
     """A file written by a newer ecadlib, in a format this one does not know."""
     plain_error = True                         # expected bad input: one line + hint, exit 2 (cliutil.friendly), not a bug
-    hint = "pip install -U ecadlib; `ecadlib migrate --check PATH` lists the files"
+    hint = "`ecadlib migrate --check PATH` lists the files and the version each needs"
 
 
 class Kind:
