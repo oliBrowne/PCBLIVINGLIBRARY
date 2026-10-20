@@ -407,8 +407,9 @@ def check_folder(out, libpkg, dblibs):
     for sym, fp in links:
         if fp and fp not in names["PcbLib"]:
             probs.append(f"symbol {sym} links footprint {fp}, which no PcbLib in the package holds")
+    from .parity import _dblib_workbook
     for db in dblibs:
-        csvf = (out / db).with_suffix(".csv")
+        csvf = _dblib_workbook(out / db)[1]            # the table the DbLib names ('Bibliothèque' -> 'Bibliotheque.csv')
         if not csvf.is_file():
             continue
         import csv

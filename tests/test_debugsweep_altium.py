@@ -111,3 +111,19 @@ def test_ds2_38_prune_svn_deletes_the_recipe_and_ecadstate_of_a_pruned_library(t
     assert set(sidecars) <= set(delete), delete
     left = sorted(p.relative_to(wc).as_posix() for p in wc.rglob("*") if "C_0402" in p.name or "Capacitor" in p.name)
     assert left == [], left
+
+
+# ---------------------------------------------------------------- DS2-39: altium-pkg rows of a non-ASCII DbLib name
+@lite
+def test_ds2_39_pkg_check_reads_the_rows_of_a_dblib_with_a_non_ascii_name(tmp_path):
+    from ecadlib import altium_pkg as P
+    from tests.test_dblib_sync import _base_items, _models, _plan
+    _models(tmp_path)
+    out = tmp_path / "pkg"
+    rep = P.build(_plan(tmp_path, _base_items()), out, name="Bibliothèque", log=lambda *a: None)
+    assert rep["dblibs"] == ["Bibliothèque.DbLib"], rep["dblibs"]
+    table = out / "Bibliotheque.csv"                     # dblib-sync's ASCII name for the parts table
+    table.write_bytes(table.read_bytes().replace(b"PcbLib\\R_0603_1608Metric.PcbLib", b"PcbLib\\MISSING.PcbLib"))
+    probs, facts = P.check_folder(out, rep["libpkg"], rep["dblibs"])
+    assert facts["dblib_rows"] == 2, facts
+    assert probs == ["Bibliothèque.DbLib: RES-0603-10k Footprint Path PcbLib\\MISSING.PcbLib does not exist"], probs
