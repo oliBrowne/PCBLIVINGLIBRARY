@@ -519,8 +519,11 @@ def check_pad_table(spec, pads=None):
     unit = t.get("unit", "mm")
     raw = _expand_table(t) if t else []
     sizes = [abs(v) for p in raw for k, v in p.items() if k in ("w", "h", "d", "drill") and isinstance(v, (int, float))]
-    # pad sizes and the spacing between pads, not their positions: a long mm connector drawn from pin 1 (DIN41612,
-    # 86 mm) is still mm, and its length or origin says nothing about the unit
+    # mils typed as mm: everything 39 times too big. Not the pads' distance from the origin (a long mm connector drawn
+    # from pin 1, DIN41612 at 86 mm, is still mm) and not the spacing alone (a 2-terminal 18650 holder has its two
+    # 6 x 8 mm pads 77 mm apart). Any of: a pad or hole over 60; the table over 200 across (a 288-pin DIMM is 122 mm);
+    # the closest two pads the spec's pitch in mils; the closest two pads over 10 apart, the table over 60 across and
+    # pads more than a quarter of that spacing (mm parts that far apart have small pads: holders, axial leads).
     num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
     at = sorted({(p["x"], p["y"]) for p in raw if num(p.get("x")) and num(p.get("y"))})
     gap = None                                             # the closest two pad centres
@@ -530,8 +533,18 @@ def check_pad_table(spec, pads=None):
                 break
             gap = math.hypot(bx - ax, by - ay) if gap is None else min(gap, math.hypot(bx - ax, by - ay))
     big = max(sizes, default=0)
-    if raw and unit == "mm" and (big > 60 or (gap or 0) > 60):
-        what = f"pad / hole sizes up to {big:g}" if big > 60 else f"no two pads closer than {gap:g}"
+    span = max(max(a) - min(a) for a in zip(*at)) if at else 0
+    sp = spec.get("pitch")
+    what = None
+    if big > 60:
+        what = f"pad / hole sizes up to {big:g}"
+    elif span > 200:
+        what = f"pads spread over {span:g}"
+    elif gap and num(sp) and sp > 0 and abs(gap * UNIT["mil"] - sp) <= 0.03 * sp:
+        what = f"the closest pads {gap:g} apart, the spec's {sp:g} mm pitch in mils,"
+    elif gap and gap > 10 and span > 60 and big > 0.25 * gap:
+        what = f"no two pads closer than {gap:g} (pads up to {big:g})"
+    if raw and unit == "mm" and what:
         add("error", "units", f"pad_table {what} with unit mm: that looks like mils (set unit to mil)")
     if raw and unit == "mil" and sizes and max(sizes) < 4:
         add("warning", "units", f"pad_table unit is mil but no pad or hole is bigger than {max(sizes):g} mil "

@@ -54,11 +54,52 @@ def test_ds2_27_long_mm_pad_table_is_not_taken_for_mils():
     F.validate(din)
     _, rep = F.build(din)
     assert rep["courtyard"][0] > 90, rep["courtyard"]
-    # a table really in mils typed as mm (100 mil pitch, 65 mil pad, 40 mil drill) is still refused
+    # a 2-terminal 18650 holder: two 6 x 8 mm pads 77 mm apart, nothing closer. Far apart is not mils when the pads
+    # are small next to the spacing (in mils they'd be 0.15 x 0.2 mm on a 2 mm spacing)
+    holder = {"name": "BatteryHolder_1x18650", "package_type": "connector", "pin_count": 2,
+              "pad_table": {"unit": "mm", "y_axis": "down", "origin": "center",
+                            "pads": [{"number": "1", "x": -38.5, "y": 0, "w": 6, "h": 8},
+                                     {"number": "2", "x": 38.5, "y": 0, "w": 6, "h": 8}]}}
+    assert units(holder) == [], units(holder)
+    F.validate(holder)
+    F.build(holder)
+    # tables really in mils typed as mm are still refused: 100 mil pitch, 65 mil pad, 40 mil drill ...
     mil = _header_table(4, "pin1")
     mil["pad_table"].update(default_pad={"type": "tht", "drill": 40, "d": 65},
                             arrays=[{"count": 4, "x": 0, "y": 0, "dx": 100, "dy": 0}])
     assert any("mils" in m for m in units(mil)), units(mil)
+    # ... a 1.27 mm 2 x 20 connector (50 mil pitch, rows 150 mil apart, 25 x 50 mil pads; pads and pitch under 60):
+    # it built a 976 x 201 mm footprint with only a pitch warning
+    fine = {"name": "Conn_2x20_P1.27mm", "package_type": "connector", "pin_count": 40, "pitch": 1.27,
+            "body_length": {"nom": 27}, "body_width": {"nom": 6},
+            "pad_table": {"unit": "mm", "y_axis": "down", "origin": "center",
+                          "default_pad": {"type": "smd", "w": 25, "h": 50},
+                          "arrays": [{"count": 20, "x": -475, "y": y, "dx": 50, "dy": 0, "first_number": n, "number_step": 2}
+                                     for n, y in ((1, -75), (2, 75))]}}
+    assert any("mils" in m for m in units(fine)), units(fine)
+    try:
+        F.build(fine)
+    except ValueError as e:
+        assert "mils" in str(e), e
+    else:
+        raise AssertionError("a 50 mil pitch table typed as mm was built")
+    # ... and the small ones, each caught one way only
+    tbl = lambda name, pad, arrays, **kw: dict({"name": name, "package_type": "custom", "pad_table": {
+        "unit": "mm", "y_axis": "down", "origin": "center", "default_pad": dict({"type": "smd"}, **pad), "arrays": arrays}}, **kw)
+    small = [
+        # MSOP-10, no pitch in the spec: 19.7 mil pitch, 57 x 12 mil pads, rows 173 mil apart (the old check caught it)
+        tbl("MSOP-10", {"w": 57, "h": 12}, [{"count": 5, "x": -86.6, "y": -39.4, "dy": 19.7},
+                                            {"count": 5, "x": 86.6, "y": 39.4, "dy": -19.7, "first_number": 6}]),
+        # WLCSP-6 at 0.35 mm: 13.8 mil pitch, 7.9 mil lands, 28 mil across; only the spec's pitch gives it away
+        tbl("WLCSP-6", {"d": 7.9}, [{"count": 2, "x": -6.9, "y": y, "dx": 13.78, "first_number": n} for n, y in
+                                    ((1, -13.78), (3, 0), (5, 13.78))], pitch=0.35),
+        # one 100 mil square test pad
+        tbl("TestPad_2.54mm", {"w": 100, "h": 100}, [{"count": 1, "x": 0, "y": 0}]),
+        # 12 test points of 40 mil on a 200 mil grid: small pads far apart, 2200 mil long
+        tbl("TestPoints_1x12", {"d": 40}, [{"count": 12, "x": -1100, "y": 0, "dx": 200}]),
+    ]
+    for spec in small:
+        assert any("mils" in m for m in units(spec)), (spec["name"], units(spec))
 
 
 @lite
