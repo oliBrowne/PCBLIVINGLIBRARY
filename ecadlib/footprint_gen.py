@@ -558,7 +558,7 @@ def validate(spec):
     The validator is built once: jsonschema.validate re-checks the whole schema on every call (~80 ms)."""
     import jsonschema                                   # a runtime dependency: never skip validation silently
     if not _VALIDATOR:
-        schema = json.loads((Path(__file__).with_name("package_schema.json")).read_text())
+        schema = json.loads((Path(__file__).with_name("package_schema.json")).read_text(encoding="utf-8"))
         cls = jsonschema.validators.validator_for(schema)
         cls.check_schema(schema)
         _VALIDATOR.append(cls(schema))
@@ -570,7 +570,7 @@ def validate(spec):
 # ---------------------------------------------------------------- comparison vs a reference footprint
 def compare(mine_path, ref_text):
     from . import sexpr
-    a, b = sexpr.parse(Path(mine_path).read_text()), sexpr.parse(ref_text)
+    a, b = sexpr.parse(Path(mine_path).read_text(encoding="utf-8")), sexpr.parse(ref_text)
     pa = {p["number"]: p for p in sexpr.pads(a) if p["number"]}
     pb = {p["number"]: p for p in sexpr.pads(b) if p["number"]}
     rows = []
@@ -596,17 +596,22 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.cmd == "gen":
+        from jsonschema import ValidationError
         from . import rules as RU
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
         rules = RU.load(a.rules, start=outdir)
         bad = 0
         for sp in a.specs:
-            spec = json.loads(Path(sp).read_text())
-            validate(spec)
+            spec = None
             try:
+                spec = json.loads(Path(sp).read_text(encoding="utf-8-sig"))     # UTF-8 (Notepad's BOM too), not the locale's
+                validate(spec)
                 txt, rep = build(spec, RU.density_for(spec, rules, a.density))
-            except ValueError as e:                               # a spec that doesn't add up: say why, write nothing
-                print(f"{spec.get('name', sp)}: not written: {e}", file=sys.stderr)
+            except (ValueError, ValidationError) as e:            # a spec that doesn't add up: say why, write nothing
+                if isinstance(e, ValidationError):                # (and go on with the next spec)
+                    where = "/".join(map(str, e.absolute_path))
+                    e = f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}"
+                print(f"{spec.get('name', sp) if isinstance(spec, dict) else sp}: not written: {e}", file=sys.stderr)
                 bad += 1
                 continue
             if shorts(rep):
@@ -635,7 +640,7 @@ def main(argv=None):
                 sys.exit(f"fetch failed: {r.error or r.status}")
             ref = r.text
         else:
-            ref = Path(a.ref).read_text()
+            ref = Path(a.ref).read_text(encoding="utf-8")
         rows, ca, cb = compare(a.mine, ref)
         print(f"{'pad':>4} {'mine (x,y,w,h)':>30} {'kicad (x,y,w,h)':>30}  d_pos       d_size")
         for r in rows[:4] + (rows[-1:] if len(rows) > 4 else []):
