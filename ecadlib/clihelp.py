@@ -79,7 +79,8 @@ EXAMPLES = {
     "keys": ["ecadlib keys list", "ecadlib keys set ANTHROPIC_API_KEY", "ecadlib keys remove NEXAR_TOKEN"],
     "doctor": ["ecadlib doctor", "ecadlib doctor --workspace ws --lib ~/kicad/libs --json"],
     "status": ["ecadlib status", "ecadlib status --workspace ws --json"],
-    "completion": ["ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib",
+    "completion": ["mkdir -p ~/.local/share/bash-completion/completions && "
+                   "ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib",
                    "source <(ecadlib completion zsh)"],
     "plugins": ["ecadlib plugins list", "ecadlib plugins export myexporter ws/library/plan.json -o out/x"],
     "notify": ["ecadlib notify show", "ecadlib notify test --event upkeep_changes"],
@@ -105,7 +106,7 @@ def _fill(parser, fallback=""):
         if isinstance(act, argparse._SubParsersAction):
             helps = {ca.dest: ca.help for ca in act._choices_actions}
             for name, sub in act.choices.items():
-                _fill(sub, helps.get(name) or "")
+                _fill(sub, (helps.get(name) or "").replace("%%", "%"))   # help= is %-formatted, a description is not
 
 
 def polish(parser, cmd, summary=""):

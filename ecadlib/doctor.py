@@ -325,7 +325,7 @@ def check_formats(ws):
             return _c("file formats", "FAIL", f"{where}: {r.get('error') or 'unreadable'}",
                       "restore it from a backup or version control, or delete its folder and run the step that made it again")
         return _c("file formats", "FAIL", r.get("error") or f"{r['path']}: made by ecadlib {r['made_by'] or '?'} "
-                  f"({r['kind']} schema {r['version']})", "upgrade ecadlib (pip install -U ecadlib)")
+                  f"({r['kind']} schema {r['version']})", MG.UPGRADE)
     if old:
         return _c("file formats", "WARN", f"{len(old)} file(s) from an older ecadlib ({', '.join(sorted({r['kind'] for r in old}))})",
                   "they are migrated when used; `ecadlib migrate` does it now (backups in .ecadlib_backup/)")

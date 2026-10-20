@@ -170,7 +170,9 @@ version in the folder's `ecadlib_schema.json`; files a person edits and the lock
   records each footprint's name and geometry hash (what `fp_share` would compute from its `.kicad_mod` anyway; a
   footprint shared by name only is left unchecked so the librarian re-checks it).
 * **Newer** files are refused with one line, never misread: `librarian/board/plan.json was made by ecadlib 0.5.0 (plan
-  schema 2; this ecadlib 0.3.0 reads up to 1): upgrade ecadlib (pip install -U ecadlib)`. Checked when the web UI / MCP
+  schema 2; this ecadlib 0.3.0 reads up to 1): upgrade ecadlib to the build that made it (pip install -U ecadlib; when
+  that says it is up to date, the main-branch build: pip install -U "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY")`
+  (a main-branch build can write a newer format while still saying the last release's version). Checked when the web UI / MCP
   workspace opens, by the librarian, HTTP cache, rules and approvals loaders. A kind only a newer ecadlib
   knows is left alone.
 * `ecadlib migrate [PATH] [--check] [--dry-run] [--json]` lists every versioned file under PATH (ok / old / new) and

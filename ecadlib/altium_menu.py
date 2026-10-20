@@ -1165,8 +1165,19 @@ def not_found(triage_csv, mpn, item):
 
 
 def _library_mpns(cfg, ws):
-    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item."""
+    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item.
+    KiCad (cfg tool kicad): the part number properties of the library's .kicad_sym files, which travel with the
+    project (the workspace may not, and a deleted library has nothing in it)."""
     have = set()
+    if cfg.get("tool") == "kicad":
+        for f in sorted(Path(cfg["library"]).glob("*.kicad_sym")):
+            try:
+                text = f.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            have |= {v.replace('\\"', '"').strip().upper() for k, v in re.findall(r'\(property "([^"]*)" "((?:[^"\\]|\\.)*)"', text)
+                     if v.strip() and re.search(r"\bmpn\b|part ?(number|no\b|#)|\bmfr\.? ?pn\b", k, re.I)}
+        return have
     for f in sorted(Path(cfg["library"]).glob("*.csv")):
         try:
             for row in csv.DictReader(f.open(encoding="utf-8", newline="")):
@@ -1193,7 +1204,7 @@ def _bom_of(ws, project):
     return str(p.resolve()), None
 
 
-def report_html(title, rows, counts, md_link):
+def report_html(title, rows, counts, md_link, tool="altium"):
     e = html.escape
     head = ["#", "Designators", "Qty", "MPN", "Manufacturer", "In your library", "Lookup", "Notes"]
     body = "".join("<tr>" + "".join(f"<td>{e(str(c))}</td>" for c in (
@@ -1206,7 +1217,7 @@ td,th{{border:1px solid #ccc;padding:3px 8px;text-align:left;vertical-align:top}
 <p>{counts['lines']} BOM lines: <b>{counts['in_library']}</b> in your library, <span class="n">{counts['missing']}</span>
 not yet, {counts['dnp']} not fitted. Full lookup report: <a href="{e(md_link)}">{e(Path(md_link).name)}</a>.</p>
 <table><tr>{''.join(f'<th>{h}</th>' for h in head)}</tr>
-{body}</table><p><small>written by ecadlib {__version__} (ecadlib altium-menu check-bom)</small></p></body></html>
+{body}</table><p><small>written by ecadlib {__version__} (ecadlib {tool}-menu check-bom)</small></p></body></html>
 """
 
 
@@ -1234,9 +1245,10 @@ def check_bom(cfg, project, opener=None, progress=None):
                   else "footprint" if st.startswith("needs_footprint") else "unverified" if st.startswith("unverified")
                   else "source"] += 1
     stem = Path(tri["reports"][0]).with_suffix("").name
-    out = ws.root / "reports" / f"{stem}_altium.html"
+    tool = "kicad" if cfg.get("tool") == "kicad" else "altium"
+    out = ws.root / "reports" / f"{stem}_{tool}.html"
     name = pb["project"] if pb else Path(project).name
-    out.write_text(report_html(f"BOM check: {name}", rows, counts, (ws.root / tri["reports"][0]).as_uri()),
+    out.write_text(report_html(f"BOM check: {name}", rows, counts, (ws.root / tri["reports"][0]).as_uri(), tool),
                    encoding="utf-8")
     opened = _open(out, opener)
     res = {"status": "ok", "message": f"{name}: {counts['lines']} BOM lines, {counts['in_library']} in your library, "
@@ -1384,15 +1396,21 @@ def queue_anchor(ws):
 def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0, sleep=time.sleep):
     """Open the web UI at the review queue, starting `ecadlib ui` for the workspace when nothing answers."""
     port, ws = cfg["port"], Path(cfg["workspace"])
+    kicad = cfg.get("tool") == "kicad"
+    for p in range(port, port + 20) if kicad else ():   # KiCad reads no settings file: one UI per project, on the first
+        k, served = probe(p)                            # port that serves this workspace or is free
+        if k is None or (k == "ecadlib" and served and Path(served).resolve() == ws.resolve()):
+            port = p
+            break
     url = f"http://127.0.0.1:{port}/{queue_anchor(ws)}"
     kind, served = probe(port)
     started = False
     if kind == "other":
         return {"status": "error", "message": f"port {port} is used by another program",
-                "fix": f"set port= to a free port in {INI}"}
+                "fix": "close the program on that port" if kicad else f"set port= to a free port in {INI}"}
     if kind == "ecadlib" and served and Path(served).resolve() != ws.resolve():
         return {"status": "error", "message": f"port {port} already serves another ecadlib workspace ({served})",
-                "fix": f"stop that `ecadlib ui`, or set port= to another port in {INI}"}
+                "fix": "stop that `ecadlib ui`" + ("" if kicad else f", or set port= to another port in {INI}")}
     if kind is None:
         ws.mkdir(parents=True, exist_ok=True)
         launcher(ws, port)

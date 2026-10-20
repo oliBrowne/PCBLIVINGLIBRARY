@@ -952,7 +952,8 @@ def write_reports(rows, mapping, provs, http, out, bom):
         h = re.sub(r"^https?://([^/]+).*", r"\1", u)
         hosts.setdefault(h, []).append(("cache " if cached else "") + str(st))
     md += ["", "## HTTP (this run)", ""] + [f"- `{h}`: {len(v)} requests -> {sorted(set(v))}" for h, v in hosts.items()]
-    out.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    out.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8",   # a path from a C-locale non-ASCII folder
+                                      errors="surrogateescape")                 # keeps its own (UTF-8) bytes
     return counts
 
 

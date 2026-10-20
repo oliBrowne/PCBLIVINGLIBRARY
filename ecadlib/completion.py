@@ -1,9 +1,9 @@
 """`ecadlib completion bash|zsh|fish`: a shell completion script generated from the commands' own argparse parsers,
 so it always matches this version (commands, subcommands, options, fixed choices).
 
-    ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib
+    mkdir -p ~/.local/share/bash-completion/completions && ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib
     ecadlib completion zsh  > "${fpath[1]}/_ecadlib"          (or: source <(ecadlib completion zsh))
-    ecadlib completion fish > ~/.config/fish/completions/ecadlib.fish
+    mkdir -p ~/.config/fish/completions && ecadlib completion fish > ~/.config/fish/completions/ecadlib.fish
 
 Each command's parser is captured by running its main() with parse_args replaced by a stub that stops at once, so
 nothing is read, written or fetched. A command whose parser cannot be captured still completes by name."""

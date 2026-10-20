@@ -129,3 +129,13 @@ def report(cmd, e, out):
         msg, hint, code = f[0], f[1] + "; --debug shows the traceback", f[2]
     print(f"ecadlib {cmd}: {msg}\n  hint: {hint}", file=out)
     return code
+
+
+def shell_word(s):
+    """A path as one shell word for a printed command (a "next:" hint): as it is when it needs no quoting, else quoted
+    for the shell it will be pasted into (cmd.exe on Windows, sh elsewhere)."""
+    import re, shlex, subprocess
+    s = str(s)
+    if re.fullmatch(r"[\w@%+=:,./\\-]+", s):
+        return s
+    return subprocess.list2cmdline([s]) if os.name == "nt" else shlex.quote(s)

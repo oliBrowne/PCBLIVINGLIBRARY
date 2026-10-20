@@ -114,7 +114,7 @@ class Workspace:
         full path for any other location, so /projA/BOM.csv and /projB/BOM.csv don't share (and overwrite) one triage. A named
         folder (uploads/demo/) keeps <stem>_<folder>."""
         bom_path = Path(bom_path).resolve()
-        h = hashlib.sha1(str(bom_path).encode()).hexdigest()[:8]
+        h = hashlib.sha1(os.fsencode(str(bom_path))).hexdigest()[:8]   # the path as bytes: also a C-locale non-ASCII one
         if bom_path.parent == self.root / "uploads":
             # a flat uploads/<stem>_<dir>.csv would share uploads/<dir>/<stem>.*'s key (and its librarian folder,
             # plan and sign-offs): uploads now always go in a folder, so the flat file gives way and gets a hash
