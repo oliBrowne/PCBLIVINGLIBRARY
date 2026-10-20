@@ -159,7 +159,8 @@ def test_save_writes_the_workspace_rules_and_settings():
         from ecadlib import rules as RU
         rules = RU.load(ws / "ecadlib.toml")
         assert rules["ai"]["provider"] == "openai" and rules["ai"]["model"] == "gpt-5-mini"
-        assert rules["setup"]["tool"] == "kicad" and rules["setup"]["libs"] == [str(lib)]
+        # the folder is stored resolved: a Windows temp path is an 8.3 short name (RUNNER~1)
+        assert rules["setup"]["tool"] == "kicad" and rules["setup"]["libs"] == [str(lib.resolve())]
         assert "sk-" not in (ws / "ecadlib.toml").read_text()
         st = ES.state(ws)
         assert st["done"] and st["ai"] == {"provider": "openai", "model": "gpt-5-mini"} and st["tool"] == "kicad"
