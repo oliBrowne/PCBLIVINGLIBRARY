@@ -241,3 +241,27 @@ def test_unreadable_bom_writes_nothing(tmp_path, monkeypatch):
     with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
         assert T.main(["hdr.csv", "--offline", "-o", "o/t", "--cache", "o/cache"]) == 2
     assert not (tmp_path / "o").exists()
+
+
+# T122: release-check refuses a plan.json that is {} / null / has a nameless entry (exit 2), and does not rewrite it
+@lite
+def test_release_check_malformed_plan(tmp_path, monkeypatch):
+    from ecadlib import release_check as RC
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "home")
+    plan = tmp_path / "plan.json"
+    for content in ("{}", "null", '[{"symbol": {}, "footprint": {}}]'):
+        plan.write_text(content)
+        with redirect_stderr(io.StringIO()) as e, redirect_stdout(io.StringIO()):
+            assert RC.main([str(plan)]) == 2
+        assert "not a" in e.getvalue() and "hint:" in e.getvalue() and plan.read_text() == content
+
+
+# T124: release-check / approve on a broken ecadlib.toml: one line + hint, exit 2 (the RulesError reaches cli.py)
+@lite
+def test_release_check_and_approve_broken_toml(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "home")
+    (tmp_path / "ecadlib.toml").write_text("[naming\n")
+    (tmp_path / "plan.json").write_text("[]")
+    for args in (["release-check", "plan.json"], ["approve", "plan.json", "status"]):
+        p = cli(*args, cwd=tmp_path, home=tmp_path / "home")
+        assert p.returncode == 2 and "not valid TOML" in p.stderr and "hint:" in p.stderr, (args, p.returncode, p.stderr)
