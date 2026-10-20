@@ -493,7 +493,7 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
         it[k]["file"] = rec["file"]
         if k == "footprint":
             it[k]["kicad_mod"] = rec.get("kicad_mod")
-            shared = [o["by"] for o in others.values() if o.get("file") == rec["file"]]
+            shared = [i["name"] for i in items if i is not it and (i.get("footprint") or {}).get("file") == rec["file"]]
             if rec.get("name") and rec["name"] != it[k].get("ref"):     # another part's file has other pads: own name
                 old = it[k]["ref"]
                 it[k]["bom_ref"], it[k]["ref"] = it[k].get("bom_ref") or it[k]["ref"], rec["name"]

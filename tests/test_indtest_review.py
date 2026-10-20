@@ -151,6 +151,18 @@ def test_release_check_compares_the_symbol_link(tmp_path):
     assert ("pins", "the symbol links footprint R_0603_1608Metric, not the part's C_0402_1005Metric") in RC.check_item(bad, d)[0]
 
 
+# T011 follow-up: the "footprint file is shared with" note names the other parts using the file, once each, not the
+# part that wrote it (here the chosen part itself)
+@lite
+def test_choose_shared_footprint_note_names_the_other_parts(tmp_path, monkeypatch):
+    from ecadlib import resolve as R
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "home")
+    items, http, out = _resistors(tmp_path)
+    r = R.choose(out / "plan.json", "RES-0603-10k", "footprint", "kicad:Resistor_SMD:R_0603_1608Metric",
+                 src=R.Sources(tmp_path / "cache", http=http))
+    assert "footprint file is shared with RES-0603-22k: the same pads" in r["notes"], r["notes"]
+
+
 # kicad-pcm follow-up: -q keeps the warning that the library's KiCad content (CC-BY-SA) may not allow --license
 @lite
 def test_kicad_pcm_quiet_keeps_the_license_warning(tmp_path):
