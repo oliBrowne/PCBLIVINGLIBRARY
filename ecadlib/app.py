@@ -848,8 +848,10 @@ class Workspace:
                 "reports": [self.rel(f) for f in files.values()]}
     def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False):
         from . import datasheet as D
-        return D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
-                        http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+        rd = D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
+                      http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+        rd.count_tokens = False     # quotes send nothing before the click: rough; the send-time cap check counts the same way
+        return rd
 
     def datasheet_quote(self, bom, sync=False, parts=None):
         """datasheet_batch's cost as an ecadlib.ai_cost quote (batch price, or sync=True one request per part),
