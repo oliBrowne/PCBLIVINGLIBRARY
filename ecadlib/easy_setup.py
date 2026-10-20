@@ -131,7 +131,8 @@ def save(ws_root, b):
     libs = b.get("libs") or []
     if not isinstance(libs, list) or not all(isinstance(x, str) for x in libs) or len(libs) > 50:
         raise ValueError("libs must be a list of folders")
-    libs = [str(Path(x.strip()).expanduser()) for x in libs if x.strip()]
+    libs = [str(Path(x.strip()).expanduser().resolve()) for x in libs if x.strip()]   # the folder checked below,
+                                                                                       # not one under the workspace
     missing = [x for x in libs if not Path(x).is_dir()]
     if missing:
         raise ValueError(f"library folder not found: {missing[0]}")

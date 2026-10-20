@@ -208,6 +208,20 @@ def test_ds2_53_setup_page_save_gives_the_running_server_the_library_folders(tmp
     assert (info2["libs"], info2["symbols"]) == ([], 0), info2               # a folder taken off the page goes too
 
 
+@lite
+def test_ds2_53_setup_page_keeps_the_relative_library_folder_it_checked(tmp_path, monkeypatch):
+    """The setup page checked a relative library folder from the server's current folder but stored it relative, and
+    the desktop app reads [setup] libs from the workspace: it then pointed at <workspace>/mylib, which is missing."""
+    from ecadlib import easy_setup as ES
+    home = tmp_path.resolve()
+    monkeypatch.setenv("ECADLIB_HOME", home / "home")
+    monkeypatch.chdir(home)
+    _sym_lib(home / "mylib" / "my.kicad_sym", "MYPART", "My own part")
+    ws = home / "ws"
+    assert ES.save(ws, {"workspace": str(ws), "tool": "kicad", "libs": ["mylib"], "provider": "none"})["saved"]
+    assert ES.ws_libs(ws) == [str(home / "mylib")], ES.ws_libs(ws)
+
+
 # ------------------------------------------------------------------ DS2-54
 @lite
 def test_ds2_54_setup_page_save_keeps_the_workspace_sources_order(tmp_path, monkeypatch):
