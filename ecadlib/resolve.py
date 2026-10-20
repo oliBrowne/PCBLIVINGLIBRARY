@@ -36,6 +36,20 @@ LIB_HINT = {"R": ("Device", "Resistor"), "C": ("Device", "Capacitor"), "L": ("De
             "J": ("Connector",)}
 
 
+class ResolveError(ValueError):
+    """A mistake in what was asked (a part name, a candidate id): one line and a hint, exit 2 (cliutil.friendly)."""
+    plain_error = True
+    __str__ = Exception.__str__
+
+    def __init__(self, msg, hint=""):
+        super().__init__(msg)
+        self.hint = hint
+
+
+class NotInPlan(ResolveError, KeyError):
+    """A part name the plan does not have (a KeyError too, for callers that look parts up)."""
+
+
 class Sources:
     """Where candidates come from. Everything is lazy: nothing is fetched until a candidate list needs it."""
 
@@ -207,7 +221,8 @@ def load(cid, kind, src, rules=None):
                 raise FileNotFoundError(f"{cid}: no package spec {ref}.json in {src.specs} (or its advanced/ folder)")
             spec = json.loads(f.read_text(encoding="utf-8"))
             return F.build(spec, RU.density_for(spec, rules or RU.DEFAULTS))[0], (F.dim(spec["height_max"])[2] if spec.get("height_max") else None)
-    raise ValueError(f"unknown {kind} candidate id {cid!r} (use kicad:Lib:Name, local:Lib:Name or spec:Name)")
+    raise ResolveError(f"unknown {kind} candidate id {cid!r}", "use kicad:Lib:Name, local:Lib:Name or spec:Name "
+                       "(`ecadlib resolve PLAN --part PART list` shows the candidates with their ids)")
 
 
 # ---------------------------------------------------------------- ranking
@@ -288,7 +303,7 @@ def candidates(item, kind, base=".", src=None, limit=10, open_=12):
     """Ranked candidates for one half of a plan item: [{id, kind, name, origin, score, why[], count, match,
     pins_without_pad, pads_without_pin, pin_map, current, error?}]. `open_` = how many top names are opened."""
     if kind not in KINDS:
-        raise ValueError(f"kind must be one of {KINDS}")
+        raise ResolveError(f"kind must be one of {KINDS}")
     src = src or Sources()
     other = item_pads(item, base) if kind == "symbol" else item_pins(item, base)
     scored = _name_scores(item, kind, src)
@@ -373,7 +388,10 @@ def _load_plan(plan):
 def _item(items, part):
     it = next((i for i in items if i["name"] == part), None)
     if not it:
-        raise KeyError(f"{part!r} is not in the plan")
+        import difflib
+        near = difflib.get_close_matches(str(part), [i["name"] for i in items], 3)
+        raise NotInPlan(f"{part!r} is not in the plan", (f"did you mean {', '.join(near)}? " if near else "") +
+                        "names are the plan's Part Numbers (`ecadlib resolve PLAN list` shows the held ones)")
     return it
 
 
@@ -437,7 +455,7 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
     pads share it, other pads get their own name). The result's "change" lists what the gate did. approve=False (an MCP agent that named
     no person): the choice is nobody's approval, so a change to a released part is held for a person to approve."""
     if kind not in KINDS:
-        raise ValueError(f"kind must be one of {KINDS}")
+        raise ResolveError(f"kind must be one of {KINDS}")
     plan, src = Path(plan), src or Sources()
     base = Path(base) if base else plan.parent
     items = _load_plan(plan)
@@ -446,7 +464,8 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
     if pin_map and kind == "footprint":            # the map lives in the symbol: re-convert it
         sid = (it.get("source") or {}).get("symbol") or ""
         if not sid.startswith(("kicad:", "local:")):
-            raise ValueError(f"--map with a footprint needs a KiCad symbol to re-convert; {part}'s symbol is from {sid or 'nowhere'}")
+            raise ResolveError(f"--map with a footprint needs a KiCad symbol to re-convert; {part}'s symbol is from "
+                               f"{sid or 'nowhere'}", f"choose a KiCad symbol for {part} first, or leave out --map")
         done.append(("symbol", sid, pin_map))
     state_f = base / "librarian_state.json"
     state = json.loads(state_f.read_text(encoding="utf-8")) if state_f.exists() else None

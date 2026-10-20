@@ -214,3 +214,23 @@ def test_t099_revert_records_the_held_change_it_drops():
         assert rv.returncode == 0 and "was dropped" in rv.stdout, rv.stdout + rv.stderr
         assert any(e["event"] == "superseded" and e.get("digest") == dg for e in _ledger(lib)[n:]), _ledger(lib)[n:]
         assert not (lib / ".ecadlib/proposed/CAP-0402-100nF.json").exists()
+
+
+# ------------------------------------------------------------------ T100: ordinary resolve mistakes were "internal error"
+def test_t100_resolve_mistakes_are_one_line_errors():
+    from ecadlib import cliutil as CU, resolve as R
+    for call in (lambda: R._item([{"name": "AO3401A"}], "AO3401"), lambda: R.load("SOT-23", "footprint", None)):
+        try:
+            call()
+            raise AssertionError("no error")
+        except (KeyError, ValueError) as e:            # still what API callers catch
+            msg, hint, code = CU.friendly(e)
+            assert code == 2 and "internal" not in msg and hint, (msg, hint)
+    try:
+        R._item([{"name": "AO3401A"}], "AO3401")
+    except KeyError as e:
+        assert str(e) == "'AO3401' is not in the plan" and "did you mean AO3401A" in e.hint, (str(e), e.hint)
+    with tempfile.TemporaryDirectory() as d:
+        lib = _demo(d)
+        r = _run(d, Path(d) / "home", "resolve", lib / "plan.json", "--part", "AO3401A", "--offline", "choose", "footprint", "SOT-23")
+        assert r.returncode == 2 and "internal error" not in r.stderr and "unknown footprint candidate id" in r.stderr, r.stderr
