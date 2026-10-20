@@ -21,3 +21,20 @@ def test_ds2_57_freeze_dotted_project_name_leaves_the_sibling_project_alone(tmp_
     assert {f: (d / f).read_bytes() for f in sibling} == sibling, "freeze rewrote the PSU_v1 project"
     assert '"PSU_v1.1-frozen:QN"' in (d / "PSU_v1.1.kicad_sch").read_text()
     assert '"PSU_v1.1-frozen:SOT23"' in (d / "PSU_v1.1.kicad_pcb").read_text()
+
+
+FIX_SCH = Path(__file__).parent / "fixtures" / "kicad_sch"
+
+
+@lite
+def test_ds2_58_freeze_follows_sub_sheets_whose_file_name_case_differs(tmp_path):
+    """A project drawn on Windows / macOS: the Sheetfile says sub.kicad_sch, the file is Sub.kicad_sch. KiCad opens it,
+    so freeze must point that sheet (and sub2/Leaf.kicad_sch below it) at the frozen library too."""
+    d = tmp_path.resolve() / "caseproj"
+    shutil.copytree(FIX_SCH, d)
+    (d / "sub.kicad_sch").rename(d / "Sub.kicad_sch")
+    (d / "sub2" / "leaf.kicad_sch").rename(d / "sub2" / "Leaf.kicad_sch")
+    PJ.freeze_kicad(d / "board.kicad_pro")
+    for sheet in ("Sub.kicad_sch", "sub2/Leaf.kicad_sch"):
+        text = (d / sheet).read_text()
+        assert '(lib_id "Device:' not in text and '(lib_id "board-frozen:' in text, f"{sheet} still uses the live library"

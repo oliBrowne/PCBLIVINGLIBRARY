@@ -70,8 +70,14 @@ def sheet_files(root):
         for sh in sexpr.find(_load_sch(f), "sheet"):
             props = {str(x[1]): str(x[2]) for x in sexpr.find(sh, "property") if len(x) > 2}
             sub = props.get("Sheetfile") or props.get("Sheet file")
-            if sub and (f.parent / sub).is_file():
-                todo.append(f.parent / sub)
+            if not sub:
+                continue
+            target = f.parent / sub
+            if not target.is_file():           # drawn on Windows / macOS: the case may differ (as bom_inputs reads it)
+                from .altium_project import _find_file
+                target = _find_file(f.parent, sub) or target
+            if target.is_file():
+                todo.append(target)
         if len(out) > 2000:
             raise ProjectError(f"{Path(root).name}: more than 2000 sheet files")
     return out
