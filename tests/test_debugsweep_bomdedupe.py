@@ -65,12 +65,9 @@ def test_ds2_01_company_dblib_without_mpn_column_keys_on_part_number(tmp_path):
     assert _mpn_groups(r) == [("RC0603FR0710KL", [("RC0603FR-0710KL", "dblib"), ("RES-0603-10k", "plan")])], _mpn_groups(r)
 
 
-@lite
-def test_ds2_02_merge_onto_multi_entry_library_checks_the_named_entry(tmp_path):
-    """dedupe --merge points a plan item at one footprint / symbol of a company library that holds many. The release
-    check and resolve read the file's first footprint (a SOIC-16 here: pads 9-16 without a pin) and the pins of every
-    symbol in the SchLib (pins 9-14 without a pad), so the merged part was held on another part's geometry."""
-    from ecadlib import altium_lib as AL, kicad_import as K, release_check as RC, resolve as R
+def _merged_onto_company(tmp_path):
+    """PART1 (SOIC-8) merged by dedupe onto the 2nd footprint / symbol of a company PcbLib / SchLib -> plan path."""
+    from ecadlib import altium_lib as AL, kicad_import as K
     from tests.test_release_check import SOIC, make
     it = make(tmp_path)
     plan = tmp_path / "plan.json"
@@ -87,6 +84,16 @@ def test_ds2_02_merge_onto_multi_entry_library_checks_the_named_entry(tmp_path):
     pins = lambda n: [{"num": str(p), "name": f"P{p}", "type": "io", "side": "left"} for p in range(1, n + 1)]
     AL.write_schlib(lib / "Company.SchLib", [AL.ic_symbol("QUAD_HOUSE", pins(14)), AL.ic_symbol("PART_HOUSE", pins(8))])
     DD.run(plan, libs=[lib], do_merge=True, kinds=("footprint", "symbol"), log=lambda *a, **k: None)
+    return plan
+
+
+@lite
+def test_ds2_02_merge_onto_multi_entry_library_checks_the_named_entry(tmp_path):
+    """dedupe --merge points a plan item at one footprint / symbol of a company library that holds many. The release
+    check and resolve read the file's first footprint (a SOIC-16 here: pads 9-16 without a pin) and the pins of every
+    symbol in the SchLib (pins 9-14 without a pad), so the merged part was held on another part's geometry."""
+    from ecadlib import release_check as RC, resolve as R
+    plan = _merged_onto_company(tmp_path)
     it = json.loads(plan.read_text(encoding="utf-8"))[0]
     assert it["footprint"] == {"ref": "SO8_HOUSE", "file": "company/Company.PcbLib"}, it["footprint"]
     assert it["symbol"] == {"ref": "PART_HOUSE", "file": "company/Company.SchLib"}, it["symbol"]
@@ -99,6 +106,25 @@ def test_ds2_02_merge_onto_multi_entry_library_checks_the_named_entry(tmp_path):
     assert [r for r, m in f] == ["files"] and "SO8_RENAMED" in f[0][1] and "Company.PcbLib" in f[0][1], f
     assert R.item_pads(it, tmp_path) is None
 
+
+@lite
+def test_ds2_02_parity_export_mode_compares_the_named_entry(tmp_path):
+    """kicad-export writes the footprint / symbol the plan names (SO8_HOUSE, PART_HOUSE); parity compared them with the
+    file's first entries (the SOIC-16, the 14-pin symbol) and reported the merged part as a mismatch. A ref the file
+    does not hold is an error, not the first entry."""
+    from ecadlib import kicad_export as KX, parity as P
+    plan = _merged_onto_company(tmp_path)
+    KX.export(plan, tmp_path / "kicad", "house", log=lambda *a, **k: None)
+    rep = P.check_plan(plan, kicad_dir=tmp_path / "kicad", second_reader=False)
+    r = {p["part"]: p for p in rep["parts"]}["PART1"]
+    assert r["result"] == "match", [d["msg"] for d in r["diffs"]]
+    assert "footprint (8 pads)" in r["checked"] and "symbol (8 pins)" in r["checked"], r["checked"]
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    items[0]["footprint"]["ref"] = "SO8_RENAMED"           # renamed in the company library since
+    plan.write_text(json.dumps(items))
+    r = P.check_plan(plan, kicad_dir=tmp_path / "kicad", second_reader=False)["parts"][0]
+    assert r["result"] == "mismatch" and [d["level"] for d in r["diffs"]] == ["error"] \
+        and "SO8_RENAMED" in r["diffs"][0]["msg"] and "Company.PcbLib" in r["diffs"][0]["msg"], r
 
 @lite
 def test_ds2_06_remap_bom_finds_house_header_sheet_behind_cover(tmp_path):
