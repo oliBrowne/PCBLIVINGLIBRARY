@@ -339,6 +339,21 @@ def test_ds2_43_change_control_and_the_value_parser_agree_on_which_values_read_t
 
 
 @lite
+def test_ds2_43_a_rejoined_value_that_reads_two_ways_is_not_called_a_decimal_comma(tmp_path):
+    """An unquoted 4,700p in a comma CSV is rejoined into one cell (DS2-09), whose note said it was split by a decimal
+    comma while triage says it reads two ways: the rejoin note no longer says which comma it is."""
+    from ecadlib import bom_triage as T, kicad_index as KI
+    bom = tmp_path / "bom.csv"
+    bom.write_text("Designator,Value,Footprint,MPN\nC1,4,700p,C_0603_1608Metric,X1\nC2,4,7p,C_0603_1608Metric,X2\n")
+    lines, _ = T.read_bom(bom)
+    assert [(ln["value"], ln["bom_note"]) for ln in lines] == [
+        ("4,700p", "value 4,700p was split by an unquoted comma; read as one cell"),
+        ("4,7p", "value 4,7p was split by an unquoted decimal comma; read as one cell")], lines
+    row = T.triage(lines, KI.KiCadIndex([]), [], None)[0]
+    assert "reads two ways" in row["notes"] and "decimal comma;" not in row["notes"], row["notes"]
+
+
+@lite
 def test_ds2_44_kicad_pcm_packages_a_crlf_checkout_of_a_kicad_export_folder(tmp_path):
     _, out, _ = TP._export(False, tmp_path)
     lf = KP.build(out, out.parent / "pcm_lf", log=QUIET)

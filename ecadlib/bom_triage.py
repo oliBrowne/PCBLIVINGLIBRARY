@@ -311,7 +311,8 @@ def read_bom(path, columns=None, rules=None, root=None):
                     and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])
                     and _fraction_fits(cells, vj, col, nxt)):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
-                note.append(f"value {cells[vj]} was split by an unquoted decimal comma; read as one cell")
+                note.append(f"value {cells[vj]} was split by an unquoted {'' if two_readings(cells[vj]) else 'decimal '}"
+                            "comma; read as one cell")              # '4,700p' reads two ways: triage says so
             elif not (widths and widths[idx] <= hwidth):          # else a stray comma, unless the header row has that
                                                                   # cell too (Excel's unnamed notes column)
                 shifted = True
