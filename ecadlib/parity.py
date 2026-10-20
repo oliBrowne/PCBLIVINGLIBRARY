@@ -997,7 +997,12 @@ def compare_databases(kicad_rows, altium_rows, kicad, altium_dir, rules=None):
                 _d(out, "error", what, col, "-", a.get(col), "file missing")
             elif a.get(col):
                 names = {s["name"] for s in AL.read_schlib(f)[1]} if f.suffix.lower() == ".schlib" else {p["name"] for p in AL.read_pcblib(f)}
-                if AL.lib_name(a.get(ref, "")) not in names:
+                try:
+                    stored = AL.lib_name(a.get(ref, ""))
+                except ValueError as e:                     # typed into the workbook: a part's error, not the check's
+                    _d(out, "error", what, ref, "-", a.get(ref), str(e))
+                    continue
+                if stored not in names:
                     _d(out, "error", what, ref, "-", a.get(ref), f"not in {f.name}")
         kf = {f: k.get(c, "") for f, c in zip(KEY_FIELDS, ("Value", "Description", "Manufacturer", "MPN", "Datasheet"))}
         kf.update({f: v for f, v in kicad_fields(k, rules).items() if v})
