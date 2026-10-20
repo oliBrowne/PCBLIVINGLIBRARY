@@ -347,7 +347,7 @@ def check_released(src, plan, rules=None):
     from . import change_diff as CD, change_gate as CG, fingerprint as FP, ledger as LG
     src, plan = Path(src).resolve(), Path(plan)
     lib = plan.parent.resolve()
-    items = CG.settled_plan(plan, "altium-pkg", rules=rules, log=lambda *a, **k: None)
+    items = CG.settled_plan(plan, "altium-pkg", rules=rules)
     lg = LG.Ledger(lib)
     by_name = {}
     for it in items:

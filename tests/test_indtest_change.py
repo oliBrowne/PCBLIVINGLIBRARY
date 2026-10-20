@@ -148,3 +148,18 @@ def test_t044_export_ships_the_released_revision_after_a_release_check_of_a_hand
             assert "the released revision r1 is exported" in kx.stdout, kx.stdout
             assert (Path(d) / f"kx{n}/m.pretty/C_0402_1005Metric.kicad_mod").is_file(), kx.stdout
         assert next(i for i in json.loads(plan.read_text(encoding="utf-8")) if i["name"] == "CAP-0402-100nF")["status"] == "ready"
+
+
+# ------------------------------------------------------------------ T096: publishers held a hand edit without a word
+def test_t096_publishers_say_they_held_a_hand_edit():
+    with tempfile.TemporaryDirectory() as d:
+        lib, home = _demo(d), Path(d) / "home"
+        plan = lib / "plan.json"
+        kmod = lib / "models/KiCad/C_0402_1005Metric.kicad_mod"
+        released = kmod.read_text(encoding="utf-8")
+        for size, cmd in (("0.9", ("dblib-sync", plan, "--to", "dbl", "--name", "m")), ("0.8", ("export-parts", plan, "-o", "p.csv")),
+                          ("0.7", ("kicad-dblib", plan, "-o", "kdb"))):
+            kmod.write_text(released.replace("(size 0.56 0.62)", f"(size {size} 0.62)", 1), encoding="utf-8")
+            r = _run(d, home, *cmd)
+            assert "change hold  CAP-0402-100nF" in r.stderr and "ecadlib part show" in r.stderr, (cmd, r.stdout, r.stderr)
+            assert kmod.read_text(encoding="utf-8") == released

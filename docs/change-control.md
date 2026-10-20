@@ -211,7 +211,8 @@ the change is matched on what its stored fingerprint recorded.
 - **Altium 365**: an approved change becomes a new revision of the same component, never a new component. If
   `a365_transition` is set, ecadlib applies that life-cycle transition to the new revision.
 - **KiCad export and DbLib sync**: they publish only released revisions. A hand edit found in the library folder is
-  checked against the policy first, the same as any other writer's change. A symbol that `kicad-export` (and so
+  checked against the policy first, the same as any other writer's change, and every publisher says what it held
+  ("change hold PART what changed", on stderr for those without a progress log). A symbol that `kicad-export` (and so
   `kicad-pcm` and `kicad-dblib --export`) takes again from the part's source (`kicad:`, `local:` from `--lib`,
   `easyeda:`) is compared with the released .SchLib first. When the source changed more than cosmetics since the
   release (an upstream pin swap), the released .SchLib is exported instead and the export lists a warning; run

@@ -50,7 +50,7 @@ def part_rows(plan, lib, include_held=False, rules=None):
         raise ValueError(f"{plan}: not a librarian plan (expected a list of parts)")
     # change control (#105): a hand edit of a released part's fields is held, and its released fields go out
     with CG.publishing(plan.parent):
-        items = CG.settled_plan(plan, "kicad-dblib", rules=rules, log=lambda *a, **k: None)
+        items = CG.settled_plan(plan, "kicad-dblib", rules=rules)
     tables, skipped, seen, spelled = {}, [], {}, {}
     for it in sorted(items, key=lambda i: str(i.get("name", ""))):
         if not isinstance(it, dict) or not it.get("name"):

@@ -947,10 +947,17 @@ def write_plan(plan, items):
 def publish_guard(plan, items, target, rules=None, user=None, log=None, base=None, save=True):
     """Before a publisher writes anything: settle changes made since the last writer (hand edits), record first
     releases, and say per item whether its head may be published. -> {name: None | reason}. The plan file is
-    rewritten when settling changed an item (a held hand edit put the released version back)."""
+    rewritten when settling changed an item (a held hand edit put the released version back). log: where the settle
+    rows go ("change hold PART what changed"); default stderr, so no publisher puts a released file back silently."""
     plan = Path(plan)
     folder = plan.parent if plan.suffix.lower() == ".json" else plan
     before = json.dumps(items, sort_keys=True, default=str)
+    if log is None:
+        def log(m, *a, **k):
+            import sys
+            held = m.split()[2] if m.startswith("  change hold") and len(m.split()) > 2 else None
+            print(m + (f"\n    held for approval; the released revision is published (ecadlib part show {plan} {held})"
+                       if held else ""), file=sys.stderr)
     g = Guard(folder, "hand-edit", rules=rules, user=user, log=log, base=base or folder)
     try:                                       # under the library lock: parallel publishers settle one at a time
         g.finish(items)
