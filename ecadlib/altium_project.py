@@ -1087,7 +1087,7 @@ def main(argv=None):
                   f"{g['designator'][:40]}{'  DNP' if g['dnp'] else ''}")
     for w in prj["warnings"]:
         print(f"warning: {w}", file=sys.stderr)
-    print(f"wrote {out}")
+    print(f"wrote {out}", file=sys.stderr if a.json else sys.stdout)     # --json: stdout is the JSON, nothing else
     return 0
 
 

@@ -38,3 +38,17 @@ def test_fp_share_needs_the_same_library_footprint(tmp_path):
     name, path, same, _ = FS.pick(written, tmp_path / "models", "0603", led, "kicad:LED_SMD:LED_0603_1608Metric",
                                   "D2", tmp_path, cache)
     assert same is written[pcb] and name == "0603"           # the same footprint from another source still shares
+
+
+# T017: `project --json` prints only the JSON on stdout; "wrote <csv>" goes to stderr
+@lite
+def test_project_json_stdout_is_only_json(tmp_path, monkeypatch):
+    from ecadlib import altium_project as AP
+    prj = {"name": "B", "sheets": [], "components": [], "variants": [], "warnings": []}
+    monkeypatch.setattr(AP, "load_project", lambda p: prj)
+    monkeypatch.setattr(AP, "bom_groups", lambda p, v: [{"qty": 1}])
+    monkeypatch.setattr(AP, "write_bom_csv", lambda g, out, v: out)
+    o, e = io.StringIO(), io.StringIO()
+    with redirect_stdout(o), redirect_stderr(e):
+        assert AP.main([str(tmp_path / "B.PrjPcb"), "--json"]) == 0
+    assert json.loads(o.getvalue()) == [{"qty": 1}] and "wrote" in e.getvalue()
