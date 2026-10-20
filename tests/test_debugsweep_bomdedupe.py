@@ -85,28 +85,59 @@ def test_ds2_06_remap_bom_finds_house_header_sheet_behind_cover(tmp_path):
                                "C1,100n,GRM188R71H104KA93D,C_0603_1608Metric"], (n, rows)
 
 
+def _hidden_col_xlsx(path, rows, hidden="C"):
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "BOM"
+    for r in rows:
+        ws.append(r)
+    ws.column_dimensions[hidden].hidden = True            # an old column, kept hidden
+    wb.save(path)
+    return path
+
+
+def _read_back(bom):
+    from ecadlib import bom_triage as T
+    return [(l["designator"], l.get("mpn"), l.get("footprint")) for l in T.read_bom(bom, {})[0]]
+
+
 @lite
 def test_ds2_07_remap_bom_keeps_hidden_columns(tmp_path):
     """remap_bom promises a copy with only LibRef / Footprint changed. It wrote triage's view of the sheet, where a
     hidden column is blanked (so an old hidden MPN or footprint is not read): the copy lost that column's header and
-    every value. The hidden column is still not the one remapped."""
-    from openpyxl import Workbook
-    x = tmp_path / "bom.xlsx"
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "BOM"
-    for r in (["Designator", "Value", "Footprint", "MPN", "Footprint"],
-              ["R1", "10k", "R0603_OLD", "RC0603FR-0710KL", "R0603_OLD"],
-              ["C1", "100n", "keep this note", "GRM188R71H104KA93D", "C_0603_1608Metric"]):
-        ws.append(r)
-    ws.column_dimensions["C"].hidden = True               # the old footprint column, kept hidden
-    wb.save(x)
+    every value. The hidden column is still not the one remapped, and a CSV cannot hide a column: the copy marks it,
+    so read_bom (triage, the librarian) reads the copy as it reads the workbook, not the old values under the same
+    header (first matching column wins)."""
+    x = _hidden_col_xlsx(tmp_path / "bom.xlsx", (["Designator", "Value", "Footprint", "MPN", "Footprint"],
+                                                 ["R1", "10k", "R0603_OLD", "RC0603FR-0710KL", "R0603_OLD"],
+                                                 ["C1", "100n", "C0603_OLD", "GRM188R71H104KA93D", "C_0603_1608Metric"]))
     out, n = DD.remap_bom(x, [{"kind": "footprint", "from": "R0603_OLD", "to": "R_0603_1608Metric"}], tmp_path / "d.csv",
                           columns={})
     rows = out.read_text(encoding="utf-8-sig").splitlines()
-    assert n == 1 and rows == ["Designator,Value,Footprint,MPN,Footprint",
+    assert n == 1 and rows == ["Designator,Value,<hidden> Footprint,MPN,Footprint",
                                "R1,10k,R0603_OLD,RC0603FR-0710KL,R_0603_1608Metric",
-                               "C1,100n,keep this note,GRM188R71H104KA93D,C_0603_1608Metric"], (n, rows)
+                               "C1,100n,C0603_OLD,GRM188R71H104KA93D,C_0603_1608Metric"], (n, rows)
+    assert _read_back(out) == [("R1", "RC0603FR-0710KL", "R_0603_1608Metric"),
+                               ("C1", "GRM188R71H104KA93D", "C_0603_1608Metric")], _read_back(out)
+
+
+@lite
+def test_ds2_07_remap_bom_hidden_mpn_is_not_read_from_the_copy(tmp_path):
+    """An old MPN kept in a hidden column: under the live column's own header (read first) and as the only MPN column
+    (a header that merely contains 'MPN' is still mapped to the MPN). The copy reads back as the workbook does."""
+    x = _hidden_col_xlsx(tmp_path / "dup.xlsx", (
+        ["Designator", "Value", "Manufacturer Part Number", "Manufacturer Part Number", "Footprint"],
+        ["U1", "LM358", "OLD-OBSOLETE-1", "LM358DR", "SOIC-8_OLD"]))
+    out, n = DD.remap_bom(x, [{"kind": "footprint", "from": "SOIC-8_OLD", "to": "SOIC-8_HOUSE"}], tmp_path / "dup.csv",
+                          columns={})
+    assert n == 1 and _read_back(out) == [("U1", "LM358DR", "SOIC-8_HOUSE")], (n, _read_back(out))
+    x = _hidden_col_xlsx(tmp_path / "only.xlsx", (["Designator", "Value", "MPN", "Footprint"],
+                                                  ["R1", "10k", "OLD-OBSOLETE-2", "R0603_OLD"]))
+    assert _read_back(x) == [("R1", None, "R0603_OLD")], _read_back(x)
+    out, n = DD.remap_bom(x, [{"kind": "footprint", "from": "R0603_OLD", "to": "R_0603_1608Metric"}], tmp_path / "only.csv",
+                          columns={})
+    assert n == 1 and _read_back(out) == [("R1", None, "R_0603_1608Metric")], (n, _read_back(out))
 
 
 def test_ds2_08_chip_size_before_a_word_starting_with_r_k_v_w():

@@ -443,7 +443,7 @@ def merge(items, groups, base, kinds=("mpn", "footprint", "symbol"), who="ecadli
 def remap_bom(bom, mapping, out, columns=None):
     """Copy of the BOM with LibRef / Footprint cells mapped to the keepers (other columns untouched). columns: the
     rules' [bom] columns, as read_bom uses them (None: from the ecadlib.toml found from the BOM's folder). The copy
-    keeps a CSV's delimiter."""
+    keeps a CSV's delimiter, and a workbook's hidden columns under a '<hidden> ' header (read_bom leaves them out)."""
     from . import bom_triage as T
     import pandas as pd
     p = Path(bom)
@@ -473,6 +473,8 @@ def remap_bom(bom, mapping, out, columns=None):
             if ref in m[kind]:
                 raw.iat[i, j] = (f"{lib}:" if lib else "") + m[kind][ref]
                 n += 1
+    for j in raw.attrs.get("hidden_cols") or ():   # a CSV cannot hide a column: '<hidden> MPN', never read as the MPN
+        raw.iat[hdr, j] = f"{T.HIDDEN_HEADER} {str(raw.iat[hdr, j]).strip()}".rstrip()
     out = Path(out)
     SS.frame(raw).to_csv(out, header=False, index=False, sep=raw.attrs.get("delimiter") or ",", encoding="utf-8-sig")
     return out, n

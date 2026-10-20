@@ -44,6 +44,10 @@ def _hnorm(h):
     return _norm(re.sub(r"(?i)\bp\s*/\s*n\b", " pn ", str(h)).replace("#", " no "))
 
 
+HIDDEN_HEADER = "<hidden>"     # a column the workbook hides, in a CSV copy of it (dedupe --bom): map_headers skips a header
+                               # with '<' and the other header rules match whole headers, so it is never read as live
+
+
 def map_headers(headers, threshold=0.72):
     """Fuzzy, case-insensitive header -> field mapping. Returns {field: header}."""
     scores = []
