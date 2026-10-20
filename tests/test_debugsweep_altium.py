@@ -26,3 +26,29 @@ def test_ds2_34_compare_reports_a_rebuild_that_dropped_the_drill_offset(tmp_path
     probs = AN.compare_one(lib, rp)
     assert len(probs) == 2 and all("offset (0, 0) != (275591, 0)" in p for p in probs), probs
     assert AN.lib_state(lib, save=False) == "edited"
+
+
+# ---------------------------------------------------------------- DS2-35: a hand-added workbook row with a bad ref
+@lite
+def test_ds2_35_hand_row_with_a_ref_altium_cannot_store_is_reported_not_fatal(tmp_path):
+    import openpyxl
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_dblib_sync import _base_items, _models, _plan
+    _models(tmp_path)
+    plan = _plan(tmp_path, _base_items())
+    S.sync(plan, tmp_path / "lib")
+    x = tmp_path / "lib/ecadlib.xlsx"
+    wb = openpyxl.load_workbook(x)
+    ws = wb["Resistors"]
+    hdr = [c.value for c in ws[1]]
+    row = dict.fromkeys(hdr, "")
+    row.update({"Part Number": "HAND-R1", "Library Ref": "Res", "Footprint Ref": "R_0603→"})
+    ws.append([row[h] for h in hdr])
+    wb.save(x)
+    out = S.sync(plan, tmp_path / "lib")
+    acts = {r["name"]: r["action"] for r in out["results"]}
+    assert acts["RES-0603-10k"] == "up_to_date" and acts["CAP-0402-100nF"] == "up_to_date", out["results"]
+    bad = [r for r in out["results"] if r["name"] == "HAND-R1" and r["action"] == "error"]
+    assert len(bad) == 1 and "Footprint Ref 'R_0603→'" in bad[0]["detail"] and bad[0]["table"] == "Resistors", out["results"]
+    kept = {r["Part Number"]: r for r in S.read_tables(x)["Resistors"][1]}
+    assert kept["HAND-R1"]["Footprint Ref"] == "R_0603→", kept

@@ -688,8 +688,18 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             else:
                 res["detail"] = "kept (--prune deletes it)"
             results.append(res)
-    used = {f"{d}/{AL.file_stem(r.get(f'{w} Ref', ''))}.{d}" for _, (_, rows) in tables.items() for r in rows
-            for _, d, w in KINDS if r.get(f"{w} Ref")}
+    used = set()
+    for t, (_, rows) in tables.items():
+        for r in rows:
+            for _, d, w in KINDS:
+                ref = r.get(f"{w} Ref")
+                if not ref:
+                    continue
+                try:
+                    used.add(f"{d}/{AL.file_stem(ref)}.{d}")
+                except ValueError as e:     # typed into the workbook: names no file ecadlib wrote; the row is kept
+                    results.append({"name": r.get("Part Number", ""), "action": "error", "table": t, "kind": "row",
+                                    "detail": f"{w} Ref {ref!r}: {e} in the workbook (row kept)"})
     for _, d, _ in KINDS:
         for f in sorted((to / d).glob(f"*.{d}")) if (to / d).is_dir() else []:
             rel = f"{d}/{f.name}"
