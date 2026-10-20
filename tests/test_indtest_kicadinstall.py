@@ -167,3 +167,12 @@ def test_kicad_export_house_name_replaces_the_mpn_field(tmp_path):
     for s in sexpr.find(t, "symbol"):
         props = [str(p[1]).strip('"') for p in sexpr.find(s, "property")]
         assert "Mfr PN" in props and "MPN" not in props and "Manufacturer" not in props, (s[1], props)
+
+
+# T085
+def test_kicad_docs_say_generated_footprints_get_the_pcblib_3d_model():
+    rep = json.loads((_demo() / "kicad" / "demo_bom_demo" / "kicad_export.json").read_text(encoding="utf-8"))
+    assert rep["models"] and all("from the .PcbLib" in v for v in rep["models"].values()), rep["models"]
+    doc = " ".join((ROOT / "docs" / "kicad.md").read_text(encoding="utf-8").split())
+    assert "ecadlib-generated footprints have none" not in doc and "cannot be downloaded offline stay missing" not in doc
+    assert "gets its `.PcbLib`'s 3D model" in doc
