@@ -220,7 +220,7 @@ class Collector:
         base = Path(base)
         for i, it in enumerate(items):
             par = {p["name"]: p["value"] for p in it.get("parameters") or []}
-            mpn = next((par[c] for c in MPN_COLS if par.get(c)), it["name"])
+            mpn = next((par[c] for c in MPN_COLS if par.get(c)), "")   # not the name: 'CAP-0603-2.2u' is no MPN
             self.parts.append({"name": it["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "plan", "where": "plan",
                                "plan_index": i, "status": it.get("status", ""), "symbol": (it.get("symbol") or {}).get("ref") or "",
                                "footprint": (it.get("footprint") or {}).get("ref") or "", "source": it.get("source") or {}})
@@ -302,7 +302,7 @@ class Collector:
                 pn = str(r.get("Part Number") or "").strip()
                 if not pn:
                     continue
-                mpn = next((str(r[c]) for c in MPN_COLS if str(r.get(c) or "").strip()), pn)
+                mpn = next((str(r[c]) for c in MPN_COLS if str(r.get(c) or "").strip()), "")   # the Part Number is no MPN
                 self.parts.append({"name": pn, "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "dblib",
                                    "where": f"{via or f} [{t}]", "status": "", "symbol": str(r.get("Library Ref") or ""),
                                    "footprint": str(r.get("Footprint Ref") or ""), "source": {}})
@@ -312,10 +312,14 @@ class Collector:
         component nodes (with parameters)."""
         data = json.loads(Path(f).read_text(encoding="utf-8"))
         nodes = data if isinstance(data, list) else [{"name": k, **(v if isinstance(v, dict) else {})} for k, v in data.items()]
+        plan = {p["name"]: p["mpn"] for p in self.parts if p["origin"] == "plan"}
         for n in nodes:
             par = n["parameters"] if isinstance(n.get("parameters"), dict) else \
                 {p["name"]: p["value"] for p in ((n.get("details") or {}).get("parameters") or [])}
-            mpn = next((par[c] for c in MPN_COLS if par.get(c)), n["name"])
+            # no MPN parameter: a check-a365 state (names only) is keyed by the plan's part names, so a name the plan has
+            # is that part and takes its MPN (none for a passive named by value: 'CAP-0603-2.2u' is no MPN); only a
+            # name the plan does not have is taken as the MPN
+            mpn = next((par[c] for c in MPN_COLS if par.get(c)), plan.get(n["name"], n["name"]))
             self.parts.append({"name": n["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "a365", "where": str(f),
                                "status": "released", "symbol": "", "footprint": "", "source": {}})
 
