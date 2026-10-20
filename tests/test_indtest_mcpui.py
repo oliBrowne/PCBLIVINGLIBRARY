@@ -203,3 +203,24 @@ def test_release_anyway_toast_reads_the_new_status():
     fn = PAGE[PAGE.index("async function release("):PAGE.index("async function partClick")]
     assert 'effective(p) === "held"' in fn and "stays held" in fn, fn
     assert fn.index("stays held") < fn.index("goes to Altium with the next push"), fn
+
+
+# T053
+def test_setup_check_key_checks_the_pasted_key():
+    """Setup page: pasting a key and pressing Check key said "no key yet: paste your key above" (only the stored key was
+    checked); with a key stored, the stored one was checked instead of the pasted one."""
+    from ecadlib import easy_setup as ES
+    from tests.test_easy_setup import _R, _home
+    with _home():
+        seen = []
+
+        def get(url, headers, timeout):
+            seen.append(headers["x-api-key"])
+            return _R(200, {"data": []})
+        r = ES.check_key({"provider": "anthropic", "key": " sk-ant-pasted "}, get=get)
+        assert r["ok"] and seen == ["sk-ant-pasted"] and "Save" in r["message"] and "sk-ant" not in r["message"], r
+        assert not ES.check_key({"provider": "anthropic", "key": ""}, get=get)["ok"]          # nothing pasted, none stored
+        assert not ES.check_key({"provider": "anthropic", "key": "two words"}, get=get)["ok"] and len(seen) == 1
+    page = (REPO / "ecadlib" / "ui" / "static" / "setup.html").read_text(encoding="utf-8")
+    fn = page[page.index('$("checkkey").onclick'):]
+    assert 'key: $("key").value' in fn[:400], fn[:400]
