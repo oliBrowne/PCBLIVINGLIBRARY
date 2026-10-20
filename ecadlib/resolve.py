@@ -400,10 +400,13 @@ def show(plan, part):
             "tried": (it.get("librarian") or {}).get("tried", []), "review": (it.get("librarian") or {}).get("review", [])}
 
 
-def _write(item, kind, cid, src, base, pin_map=None):
-    """Convert candidate `cid` into <base>/models like the librarian; returns the librarian-style half record."""
+def _write(item, kind, cid, src, base, pin_map=None, others=None):
+    """Convert candidate `cid` into <base>/models like the librarian; returns the librarian-style half record.
+    others: {PcbLib path: footprint record} of the plan's other parts: a footprint file one of them uses is shared only
+    when the pads are the same, else the chosen footprint gets its own name (fp_share), so it never rewrites theirs."""
     rules = RU.load(None, start=base)              # the house rules (layers, density), as the librarian uses them
     r = L.Run(base, src.http, None, src.libs, [], rules=rules)
+    r.written.update(others or {})
     st = {"name": item["name"], "symbol": None, "footprint": None}
     got, height = load(cid, kind, src, rules)
     if kind == "footprint":
@@ -429,8 +432,9 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
     """Use candidate_id for one half of a plan item, write plan.json (and librarian_state.json when present), re-run
     release_check on that item. Returns {name, status, hold_reasons, warnings, file, source, notes, pins_vs_pads}.
     A released part goes through change control (#105): the choice is `user`'s approval (default: approvals.identity),
-    so it is released as a new revision, or held for a second person under [change] approvers = 2. Parts sharing the
-    overwritten file go with it. The result's "change" lists what the gate did. approve=False (an MCP agent that named
+    so it is released as a new revision, or held for a second person under [change] approvers = 2. Parts sharing an
+    overwritten symbol file go with it; a footprint file another part uses is never overwritten (fp_share: the same
+    pads share it, other pads get their own name). The result's "change" lists what the gate did. approve=False (an MCP agent that named
     no person): the choice is nobody's approval, so a change to a released part is held for a person to approve."""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {KINDS}")
@@ -449,17 +453,34 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
     shared_with = lambda k: [i["name"] for i in items if i is not it and i[k].get("file") and
                              i[k]["file"] == os.path.relpath(base / "models" / ("SchLib" if k == "symbol" else "PcbLib") /
                                                              f"{AL.file_stem(it[k]['ref'])}.{'SchLib' if k == 'symbol' else 'PcbLib'}", base).replace(os.sep, "/")]
-    shared = shared_with(kind)
-    rewritten = {n for k, _, _ in done for n in shared_with(k)}      # every part whose model file this choice overwrites
+    shared = shared_with(kind) if kind == "symbol" else []
+    rewritten = {n for k, _, _ in done if k == "symbol" for n in shared_with(k)}   # parts whose symbol file this overwrites
+    others = {}                                # the other parts' footprint files: shared only with the same pads
+    for i in items:
+        f = i is not it and (i.get("footprint") or {}).get("file")
+        if f:
+            rec = ((state or {}).get(i["name"]) or {}).get("footprint") or {}
+            others[str(base / f)] = rec if rec.get("file") == f and rec.get("by") else dict(
+                {k: v for k, v in i["footprint"].items() if k in ("file", "kicad_mod")}, by=i["name"],
+                name=i["footprint"].get("ref"), source=(i.get("source") or {}).get("footprint"),
+                **({"renamed_from": i["footprint"]["bom_ref"]} if i["footprint"].get("bom_ref") else {}))
     notes = []
     from . import approvals as AP, change_gate as CG
     gate = CG.Guard(plan.parent, "resolve", base=base, chosen_by=AP.identity(user, cwd=plan.parent) if approve else None)
     gate.begin(items)
     for k, cid, pm in done:
-        rec = _write(it, k, cid, src, base, pm)
+        rec = _write(it, k, cid, src, base, pm, others if k == "footprint" else None)
         it[k]["file"] = rec["file"]
         if k == "footprint":
             it[k]["kicad_mod"] = rec.get("kicad_mod")
+            shared = [o["by"] for o in others.values() if o.get("file") == rec["file"]]
+            if rec.get("name") and rec["name"] != it[k].get("ref"):     # another part's file has other pads: own name
+                it[k]["bom_ref"], it[k]["ref"] = it[k].get("bom_ref") or it[k]["ref"], rec["name"]
+                rec["renamed_from"] = it[k]["bom_ref"]
+                sid = (it.get("source") or {}).get("symbol") or ""
+                if sid.startswith(("kicad:", "local:")) and not any(h == "symbol" for h, _, _ in done) \
+                        and (((state or {}).get(part) or {}).get("symbol") or {}).get("by", part) == part:
+                    done.append(("symbol", sid, it["symbol"].get("pin_map")))     # its footprint link: the new name
         if pm:
             it[k]["pin_map"] = dict(pm)
         else:
@@ -473,7 +494,8 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
             state[part][k] = rec
             state[part].setdefault("tried", []).append(msg)
     if shared:
-        notes.append(f"{kind} file is shared with {', '.join(shared)}: they now use this {kind} too")
+        notes.append(f"{kind} file is shared with {', '.join(shared)}: " +
+                     (f"they now use this {kind} too" if kind == "symbol" else "the same pads"))
     gated = gate.settle([it] + [i for i in items if i["name"] in rewritten])
     for r in gated:
         if r["action"] == "hold" and r.get("refused"):

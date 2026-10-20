@@ -73,3 +73,30 @@ def test_t002_refresh_and_rebuild_keep_a_hand_edit_of_a_released_part():
                        any(f"0.8 x 0.95 -> {size} x 0.95 mm" in c["text"] for c in e.get("changes") or [])
                        for e in _ledger(lib)[n:]), how
             assert "(size 0.8 0.95)" in kmod.read_text(encoding="utf-8")       # the released revision stays on disk
+
+
+# ------------------------------------------------------------------ T011: resolve choose rewrote a file another released part uses
+def test_t011_chosen_footprint_gets_its_own_file():
+    bom = ("Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description,Datasheet\n"
+           "D1,1,RED,LED_0603_1608Metric,Hubei KENTO Elec,KT-0603R,C2286,LED red 0603,https://example.com/r.pdf\n"
+           "D2,1,GREEN,LED_0603_1608Metric,Hubei KENTO Elec,KT-0603G,C2287,LED green 0603,https://example.com/g.pdf\n")
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "bom.csv").write_text(bom, encoding="utf-8")
+        assert _run(d, d / "home", "librarian", "bom.csv", "-o", "lib", "--offline", "--sources", "standard").returncode == 0
+        lib = d / "lib"
+        shared = lib / "models/KiCad/LED_0603_1608Metric.kicad_mod"
+        before = shared.read_bytes()
+        r = _run(d, d / "home", "resolve", "lib/plan.json", "--part", "KT-0603R", "--offline", "choose", "footprint",
+                 "spec:LED_0805_2012Metric")
+        assert r.returncode == 0 and "is another part's, with other pads" in r.stdout, r.stdout + r.stderr
+        items = {i["name"]: i for i in json.loads((lib / "plan.json").read_text(encoding="utf-8"))}
+        red, green = items["KT-0603R"]["footprint"], items["KT-0603G"]["footprint"]
+        assert red["ref"] == "LED_0603_1608Metric_LED_0805_2012Metric" and red["bom_ref"] == "LED_0603_1608Metric", red
+        assert red["file"] != green["file"] and green["kicad_mod"] == "models/KiCad/LED_0603_1608Metric.kicad_mod"
+        assert shared.read_bytes() == before                                  # KT-0603G keeps its released pads
+        assert [e["revision"] for e in _ledger(lib) if e.get("part") == "KT-0603G" and e["event"] == "release"] == [1]
+        assert [e["revision"] for e in _ledger(lib) if e.get("part") == "KT-0603R" and e["event"] == "release"] == [1, 2]
+        assert _run(d, d / "home", "librarian", "bom.csv", "-o", "lib", "--offline", "--sources", "standard").returncode == 0
+        again = {i["name"]: i["footprint"] for i in json.loads((lib / "plan.json").read_text(encoding="utf-8"))}
+        assert again["KT-0603R"]["file"] == red["file"] and again["KT-0603G"]["file"] == green["file"]   # a re-run keeps both
