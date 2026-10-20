@@ -39,6 +39,8 @@ def test_dialog_offers_keep_working_while_it_runs():
     assert "KeepWorking" in _routine(pas, "TEcadlibDialog.SecondaryClick")
     assert "KeepWorking" in _routine(pas, "TEcadlibDialog.CloseClick")     # the X does the same, no question
     assert "MarkJob(Job, 'finished.txt')" in _routine(pas, "Finish")
+    closed = _routine(pas, "TEcadlibDialog.EcadlibDialogClose")       # Alt+F4 while it works: not lost either
+    assert "AddWaiting(Job)" in closed and "Not FileExists(Job + '\\background.txt')" in closed
 
 
 def test_finished_background_job_reopens_the_dialog():

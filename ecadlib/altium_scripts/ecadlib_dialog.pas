@@ -744,9 +744,16 @@ Begin
 End;
 
 Procedure TEcadlibDialog.EcadlibDialogClose(Sender : TObject; Var CloseAction : TCloseAction);
-{ A closed form's enabled timer fires again whenever this script project runs (AD 26.10): stop it. }
+{ A closed form's enabled timer fires again whenever this script project runs (AD 26.10): stop it. Closed another
+  way while it works (Alt+F4, the taskbar): the job still goes on waiting.txt, as with Keep working. }
 Begin
     Tick.Enabled := False;
+    If (Phase = 'run') And (Second = 'background') Then
+        If Not FileExists(Job + '\background.txt') Then
+        Begin
+            MarkJob(Job, 'background.txt');
+            AddWaiting(Job);
+        End;
 End;
 
 Procedure TEcadlibDialog.CloseClick(Sender : TObject);
