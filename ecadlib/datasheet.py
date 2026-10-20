@@ -2570,6 +2570,10 @@ class Reader:
             jb = batch and not j.get("sync")          # a synchronous request of a batch run (cross-check, feedback)
             mult = BATCH_DISCOUNT if jb else 1.0
             model = j.get("model") or self.model
+            try:                                      # resolved first: price_of knows an endpoint:model ("oai:gpt-6-
+                self.info(model)                      # luna") only once resolved, and the default cap's keyless
+            except DatasheetError:                    # estimate would otherwise price its first request as unknown
+                pass                                  # a setup that does not resolve is reported where it is sent
             pin, pout = price_of(model) or (None, None)
             tin, unknown = None, False
             if self.key and self._plain(model):

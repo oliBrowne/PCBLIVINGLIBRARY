@@ -139,3 +139,23 @@ def test_ds2_23_quote_prices_an_endpoint_cross_check_model_not_yet_used(tmp_path
     assert AC.approve(q, q["approve_usd"]) == (0.4, False)           # held to what was approved
     q = AC.quote(est, RU.load({"ai": ai, "datasheet": {"cross_check_model": "oai:gpt-6-luna"}}))
     assert q["price_known"] and q["usd_max"] > 0.4, q
+
+
+@lite
+def test_ds2_23_default_cap_holds_the_first_request_to_a_model_not_yet_used(tmp_path, monkeypatch):
+    """Under the default $10 cap the guard prices without a key, so nothing resolved an endpoint:model first: the
+    first second read on "oai:gpt-6-luna" in a process was 'no price known' and went out with nothing held."""
+    from tests import test_datasheet_batch as TB
+    monkeypatch.setattr(LL, "_REG", {})
+    monkeypatch.setattr(LR, "_INFO", {})
+    rules = RU.load({"ai": {"detect": False, "endpoints": {"oai": {"provider": "openai"}}},
+                     "datasheet": {"cross_check_model": "oai:gpt-6-luna"}})
+    rd = D.Reader(tmp_path / "out", tmp_path / "cache", key=TB.KEY, log=None, rules=rules, sleep=lambda s: None)
+    assert rd.cfg["max_cost_usd"] == D.DEFAULT_MAX_COST_USD
+    job = lambda k: {"key": k, "name": "P", "model": "oai:gpt-6-luna", "sync": True, "url": "",
+                     "body": {"model": "oai:gpt-6-luna", "max_tokens": 8000, "messages": []},
+                     "prov": {"pages": 3, "sent_as": "base64"}}
+    rd._guard_cost([job("first")])
+    first = rd.committed_usd
+    rd._guard_cost([job("second")])                   # the model is resolved by now
+    assert first > 0 and abs(first - (rd.committed_usd - first)) < 1e-12, (first, rd.committed_usd)
