@@ -50,8 +50,15 @@ KINDS = (("symbol", "SchLib", "Library"), ("footprint", "PcbLib", "Footprint"))
 # ------------------------------------------------------------------ plan -> rows
 def load_plan(path):
     """plan.json's items as written: model paths stay relative to the plan's folder (sync resolves them against
-    `base`), so the change-control bookkeeping that may rewrite plan.json never puts this machine's paths in it."""
-    return json.loads(Path(path).read_text())
+    `base`), so the change-control bookkeeping that may rewrite plan.json never puts this machine's paths in it.
+    A file that is not a plan ({}, a broken entry) raises ValueError before anything is touched (kicad_export.check_plan)."""
+    from .kicad_export import PlanError, check_plan
+    try:
+        items = json.loads(Path(path).read_text(encoding="utf-8"))
+    except ValueError as e:
+        raise PlanError(f"{path}: not a librarian plan ({e})") from e
+    check_plan(items, path)
+    return items
 
 
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")     # what openpyxl refuses in a cell (ILLEGAL_CHARACTERS_RE)
@@ -504,7 +511,10 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     if not name or name in (".", "..") or Path(name).name != name or PureWindowsPath(name).name != name:
         raise ValueError(f"--name {name!r} is a file name, not a path: use --to for the folder")
     check_existing_dblib(to / f"{name}{EXT[mode]}", data_file_name(name), name)
-    from . import change_gate as CG                         # change control (#105): hand edits settle first; a held
+    if not items and isinstance(plan, (str, Path)) and any((to / f).exists() for f in (STATE, f"{name}{EXT[mode]}")):
+        raise ValueError(f"{plan} has no parts: syncing it would empty the library {name}{EXT[mode]} in {to}; "
+                         "nothing written (delete the library folder by hand if that is what you want)")
+    from . import change_gate as CG                        # change control (#105): hand edits settle first; a held
     if not dry_run:                                         # change syncs the released revision
         CG.publish_guard(plan if isinstance(plan, (str, Path)) else base, items, mode, rules=rules, base=base)
     fname = data_file_name(name)

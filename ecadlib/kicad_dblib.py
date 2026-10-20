@@ -46,8 +46,7 @@ def part_rows(plan, lib, include_held=False, rules=None):
     from . import change_gate as CG, release_check as RC
     plan = Path(plan)
     rules = resolve(rules, plan.parent)
-    if not isinstance(json.loads(plan.read_text(encoding="utf-8")), list):
-        raise ValueError(f"{plan}: not a librarian plan (expected a list of parts)")
+    X.check_plan(json.loads(plan.read_text(encoding="utf-8")), plan)   # {} or a broken entry: nothing written
     # change control (#105): a hand edit of a released part's fields is held, and its released fields go out
     with CG.publishing(plan.parent):
         items = CG.settled_plan(plan, "kicad-dblib", rules=rules, log=lambda *a, **k: None)
@@ -264,6 +263,9 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
     out.mkdir(parents=True, exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "dblib": f"{lib}.kicad_dbl", "database": f"{lib}.sqlite",
            "nickname": f"{lib}-db", "tables": {}, "skipped": [], "warnings": []}
+    if (out / rep["database"]).is_file() and json.loads(Path(plan).read_text(encoding="utf-8")) == []:
+        raise ValueError(f"{plan} has no parts: building it would empty the database library {lib} in {out}; "
+                         f"nothing written (delete {lib}.sqlite by hand if that is what you want)")
     if export:
         from . import kicad_export as X
         xr = X.export(plan, out, name, include_held, http=http, log=log, rules=rules)

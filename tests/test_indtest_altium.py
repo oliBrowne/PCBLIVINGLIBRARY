@@ -96,6 +96,51 @@ def test_refused_first_sync_releases_nothing_and_the_fix_syncs(tmp_path, monkeyp
     assert LG.Ledger(d).head("CAP-0402-100nF")["revision"] == 1
 
 
+def _exit_code(fn):
+    try:
+        fn()
+    except SystemExit as e:
+        return e.code
+    return 0
+
+
+# T006: dblib-sync --prune with a plan.json of {} or [] refuses (exit 2) instead of deleting the whole library
+@lite
+def test_prune_with_a_damaged_plan_keeps_the_library(tmp_path, monkeypatch):
+    import contextlib, io
+    d = tmp_path
+    monkeypatch.setenv("ECADLIB_HOME", d / "home")
+    _models(d)
+    items = released_anyway([_item("CAP-0402-100nF", "Capacitors", "Capacitor", "C_0402_1005Metric", Value="100nF"),
+                             _item("RES-0603-10k", "Resistors", "Resistor", "R_0603_1608Metric", Value="10k")], d)
+    (d / "plan.json").write_text(json.dumps(items, indent=1))
+    assert {r["action"] for r in S.sync(d / "plan.json", d / "lib")["results"]} == {"added"}
+    files = sorted(p.relative_to(d / "lib").as_posix() for p in (d / "lib").rglob("*"))
+    for bad, says in (("{}", "not a librarian plan"), ("[]", "has no parts")):
+        (d / "plan.json").write_text(bad)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = _exit_code(lambda: S.main([str(d / "plan.json"), "--to", str(d / "lib"), "--prune"]))
+        assert code == 2 and says in err.getvalue() and err.getvalue().count("\n") == 1, (bad, code, err.getvalue())
+        assert sorted(p.relative_to(d / "lib").as_posix() for p in (d / "lib").rglob("*")) == files, bad
+
+
+# T006: kicad-dblib refuses a {} plan and a [] plan that would empty its database
+@lite
+def test_kicad_dblib_refuses_a_damaged_plan(tmp_path):
+    from ecadlib import kicad_dblib as KD
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out/ecadlib.sqlite").write_bytes(b"db")
+    for bad, says in (("{}", "not a librarian plan"), ("[]", "has no parts")):
+        (tmp_path / "plan.json").write_text(bad)
+        try:
+            KD.build(tmp_path / "plan.json", tmp_path / "out")
+            raise AssertionError(f"{bad}: built")
+        except ValueError as e:
+            assert says in str(e), e
+        assert (tmp_path / "out/ecadlib.sqlite").read_bytes() == b"db"
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
