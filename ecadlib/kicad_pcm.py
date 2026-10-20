@@ -367,7 +367,7 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
         log(f"  note: the library holds KiCad library content (CC-BY-SA 4.0); --license {license_} may not be allowed")
     chash = content_hash(files | {"#settings": json.dumps([name or "ecadlib", identifier, kicad, prefix, license_, author, description, homepage]).encode()})
     prev = out / "kicad_pcm.json"
-    old = json.loads(prev.read_text(encoding="utf-8")) if prev.is_file() else {}
+    old = _read(prev)                       # garbled or not an object: no record (the zips and packages.json still count)
     zips, prior = _previous(out, identifier, old)
     install_size = sum(len(v) for k, v in files.items() if k.split("/", 1)[0] in PKG_DIRS)
     meta_for = lambda v: metadata(lib, identifier, v, kicad, license_, author, description, homepage=homepage,

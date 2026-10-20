@@ -171,6 +171,9 @@ def test_ds2_42_kicad_pcm_keeps_no_version_from_kicad_pcm_json_that_is_not_one(t
     for bad in (2026, ["2026.10.20"], "2026.10.20.1"):
         p.write_text(json.dumps(dict(json.loads(p.read_text()), version=bad)))
         assert KP.build(exp, out, today=day, log=QUIET)["version"] == "2026.10.20", bad
+    for garbled in ("[]", "{not json"):                # the whole file: read as no record, the zip still counts
+        p.write_text(garbled)
+        assert KP.build(exp, out, today=day, log=QUIET)["version"] == "2026.10.20", garbled
     assert [f.name for f in out.glob("*.zip")] == [z.name] and z.stat().st_mtime_ns == snap
 
 
