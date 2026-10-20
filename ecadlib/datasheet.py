@@ -740,10 +740,11 @@ def from_wire(ext):
         m = re.match(r"\s*([a-z_.]+)\b[^(]*\(printed as ([^),;]+)", str(u))
         tol = m and m.group(1) in dims and _toleranced(m.group(2))
         tu = tol and tol.pop("unit", None)
-        if tu and tu != _unit_name(dims[m.group(1)].get("unit")):
+        merge = tol and dims[m.group(1)].get("unit") and tol["nom"] == (dims[m.group(1)].get("nom") or tol["nom"])
+        if merge and tu and tu != _unit_name(dims[m.group(1)].get("unit")):   # one never merged stays for review
             raise DatasheetError(f"response {m.group(1)} is printed as {m.group(2)!r}, in {tu!r}, but the dimension's "
                                  f"unit is {dims[m.group(1)].get('unit')!r}; rejected")
-        if tol and dims[m.group(1)].get("unit") and tol["nom"] == (dims[m.group(1)].get("nom") or tol["nom"]):
+        if merge:
             dims[m.group(1)].update(tol)
         else:
             unres.append(u)

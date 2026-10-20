@@ -16,6 +16,13 @@ def test_ds2_12_toleranced_value_in_another_unit_is_rejected():
         w["package"]["unresolved"] = ["terminal_length min/max (printed as 0.4±0.1 in)"]
     _rejected(_wire(printed_in_inches), "terminal_length", "'in'", "'mm'")
 
+    def inch_column_noted(w, d):                      # read in mm; the note quotes the inch column of a dual-unit drawing
+        d["terminal_length"].update(min="0.30", nom="0.40", max="0.50")
+        w["package"]["unresolved"] = ["terminal_length (printed as 0.016±0.004 in)"]
+    res, (kind, _) = _review(inch_column_noted)       # never merged, so nothing to reject: the note is left for review
+    assert {k: res["spec"]["terminal_length"][k] for k in ("min", "nom", "max")} == {"min": 0.3, "nom": 0.4, "max": 0.5}
+    assert res["spec"]["unresolved"] == ["terminal_length (printed as 0.016±0.004 in)"] and kind == "incomplete", kind
+
     res, (kind, _) = _review(lambda w, d: d["terminal_length"].update(min="", nom="0.3~0.5 mm", max=""))
     assert kind == "ok", (kind, res["needs_review"])  # the record's own unit written in the cell is fine
     assert {k: res["spec"]["terminal_length"][k] for k in ("min", "nom", "max")} == {"min": 0.3, "nom": 0.4, "max": 0.5}
