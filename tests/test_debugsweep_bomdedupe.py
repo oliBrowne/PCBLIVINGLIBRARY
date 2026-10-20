@@ -30,6 +30,41 @@ def test_ds2_01_mpnless_passives_10x_apart_are_not_one_part(tmp_path):
     assert not [n for n, i in after.items() if i.get("status") == "duplicate" or i.get("duplicate_of")], after
 
 
+def _mpn_groups(r):
+    return [(g["key"], sorted((m["name"], m["origin"]) for m in g["members"])) for g in r["groups"] if g["kind"] == "mpn"]
+
+
+@lite
+def test_ds2_01_part_named_by_its_part_number_keeps_its_mpn_key(tmp_path):
+    """Only a passive named by its value is no MPN. A Comment-only line (Altium's usual BOM) names the part after its
+    part number and gives it no MPN parameter (Value = the name), in the plan and in ecadlib's own DbLib of it (empty
+    MPN column): LM358DR and LM358DR/TR (a packaging suffix) are still one part."""
+    bom = tmp_path / "ics.csv"
+    bom.write_text("Designator,Qty,Comment,Footprint\nU1,1,LM358DR,SOIC-8\nU2,1,LM358DR/TR,SOIC-8\n")
+    L.run(bom, out=tmp_path / "lib", sources=["standard"], offline=True, cache=tmp_path / "cache", log=lambda *a, **k: None)
+    plan = tmp_path / "lib" / "plan.json"
+    r = DD.run(plan, kinds=("mpn",), log=lambda *a, **k: None)
+    assert _mpn_groups(r) == [("LM358DR", [("LM358DR", "plan"), ("LM358DR/TR", "plan")])], _mpn_groups(r)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert X.main([str(bom), "-o", str(tmp_path / "dbl")]) in (0, None)
+    r = DD.run(plan, libs=[tmp_path / "dbl"], kinds=("mpn",), log=lambda *a, **k: None)
+    assert _mpn_groups(r) == [("LM358DR", [("LM358DR", "dblib"), ("LM358DR/TR", "dblib")])], _mpn_groups(r)
+
+
+@lite
+def test_ds2_01_company_dblib_without_mpn_column_keys_on_part_number(tmp_path):
+    """A company DbLib with no MPN column keeps the MPN in Part Number: a plan part of that MPN is that row."""
+    import pandas as pd
+    bom = tmp_path / "res.csv"
+    bom.write_text("Designator,Qty,Value,Manufacturer Part Number,Footprint\nR1,1,10k,RC0603FR-0710KL,0603\n")
+    L.run(bom, out=tmp_path / "lib", sources=["standard"], offline=True, cache=tmp_path / "cache", log=lambda *a, **k: None)
+    (tmp_path / "company").mkdir()
+    pd.DataFrame({"Part Number": ["RC0603FR-0710KL"], "Value": ["10k"], "Library Ref": ["RES"], "Footprint Ref": ["R0603"]}
+                 ).to_excel(tmp_path / "company" / "company.xlsx", sheet_name="Resistors", index=False)
+    r = DD.run(tmp_path / "lib" / "plan.json", libs=[tmp_path / "company"], kinds=("mpn",), log=lambda *a, **k: None)
+    assert _mpn_groups(r) == [("RC0603FR0710KL", [("RC0603FR-0710KL", "dblib"), ("RES-0603-10k", "plan")])], _mpn_groups(r)
+
+
 @lite
 def test_ds2_02_merge_onto_multi_entry_library_checks_the_named_entry(tmp_path):
     """dedupe --merge points a plan item at one footprint / symbol of a company library that holds many. The release

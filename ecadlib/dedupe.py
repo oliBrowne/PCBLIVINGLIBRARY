@@ -33,7 +33,7 @@ from pathlib import Path, PureWindowsPath
 
 from . import altium_lib as AL, sexpr
 from . import sheetsafe as SS
-from .kicad_index import norm_mpn
+from .kicad_index import norm_mpn, parse_value
 from .fsutil import write_text_atomic
 
 DEFAULT_SUFFIXES = [
@@ -56,6 +56,13 @@ def load_config(path=None, base=None):
     cfg = {**CONFIG, **raw}
     cfg["patterns"] = [re.compile(p, re.I) for p in (DEFAULT_SUFFIXES if cfg["default_suffixes"] else []) + list(cfg["strip_suffixes"])]
     return cfg
+
+
+def _name_mpn(name, value):
+    """The MPN of a part that has none: its name (a DbLib Part Number) when it is named after its part number
+    ('LM358DR', Value LM358DR); none for a passive named by its value ('CAP-0603-2.2u', Value 2.2u), as the key strips
+    the punctuation and 2.2u would be 22u."""
+    return "" if parse_value(str(value or "")) is not None else name
 
 
 def mpn_key(s, cfg=None):
@@ -220,7 +227,7 @@ class Collector:
         base = Path(base)
         for i, it in enumerate(items):
             par = {p["name"]: p["value"] for p in it.get("parameters") or []}
-            mpn = next((par[c] for c in MPN_COLS if par.get(c)), "")   # not the name: 'CAP-0603-2.2u' is no MPN
+            mpn = next((par[c] for c in MPN_COLS if par.get(c)), None) or _name_mpn(it["name"], par.get("Value"))
             self.parts.append({"name": it["name"], "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "plan", "where": "plan",
                                "plan_index": i, "status": it.get("status", ""), "symbol": (it.get("symbol") or {}).get("ref") or "",
                                "footprint": (it.get("footprint") or {}).get("ref") or "", "source": it.get("source") or {}})
@@ -302,7 +309,8 @@ class Collector:
                 pn = str(r.get("Part Number") or "").strip()
                 if not pn:
                     continue
-                mpn = next((str(r[c]) for c in MPN_COLS if str(r.get(c) or "").strip()), "")   # the Part Number is no MPN
+                mpn = next((str(r[c]) for c in MPN_COLS if str(r.get(c) or "").strip()), None) or (
+                    _name_mpn(pn, r.get("Value")) if any(c in r for c in MPN_COLS) else pn)   # no MPN column: Part Number is it
                 self.parts.append({"name": pn, "mpn": mpn, "key": mpn_key(mpn, self.cfg), "origin": "dblib",
                                    "where": f"{via or f} [{t}]", "status": "", "symbol": str(r.get("Library Ref") or ""),
                                    "footprint": str(r.get("Footprint Ref") or ""), "source": {}})
