@@ -28,3 +28,38 @@ def test_ds2_01_mpnless_passives_10x_apart_are_not_one_part(tmp_path):
     assert mpn == [], mpn
     after = {i["name"]: i for i in json.loads(plan.read_text(encoding="utf-8"))}
     assert not [n for n, i in after.items() if i.get("status") == "duplicate" or i.get("duplicate_of")], after
+
+
+@lite
+def test_ds2_02_merge_onto_multi_entry_library_checks_the_named_entry(tmp_path):
+    """dedupe --merge points a plan item at one footprint / symbol of a company library that holds many. The release
+    check and resolve read the file's first footprint (a SOIC-16 here: pads 9-16 without a pin) and the pins of every
+    symbol in the SchLib (pins 9-14 without a pad), so the merged part was held on another part's geometry."""
+    from ecadlib import altium_lib as AL, kicad_import as K, release_check as RC, resolve as R
+    from tests.test_release_check import SOIC, make
+    it = make(tmp_path)
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps([it]))
+    lib = tmp_path / "company"
+    lib.mkdir()
+    soic16 = (Path(__file__).parent.parent / "out" / "footprints" / "ecadlib.pretty" / "SOIC-16_3.9x9.9mm_P1.27mm.kicad_mod").read_text()
+    fps = []
+    for text, name in ((soic16, "SO16_HOUSE"), (SOIC, "SO8_HOUSE")):
+        fp, t = K.convert_footprint(text, name)
+        K.add_body(fp, t, None, None)
+        fps.append(fp)
+    AL.write_pcblib(lib / "Company.PcbLib", fps)
+    pins = lambda n: [{"num": str(p), "name": f"P{p}", "type": "io", "side": "left"} for p in range(1, n + 1)]
+    AL.write_schlib(lib / "Company.SchLib", [AL.ic_symbol("QUAD_HOUSE", pins(14)), AL.ic_symbol("PART_HOUSE", pins(8))])
+    DD.run(plan, libs=[lib], do_merge=True, kinds=("footprint", "symbol"), log=lambda *a, **k: None)
+    it = json.loads(plan.read_text(encoding="utf-8"))[0]
+    assert it["footprint"] == {"ref": "SO8_HOUSE", "file": "company/Company.PcbLib"}, it["footprint"]
+    assert it["symbol"] == {"ref": "PART_HOUSE", "file": "company/Company.SchLib"}, it["symbol"]
+    f, _, _ = RC.check_item(it, tmp_path)
+    assert f == [], f
+    assert [p for p, _ in R.item_pads(it, tmp_path)] == [str(n) for n in range(1, 9)], R.item_pads(it, tmp_path)
+    assert R.item_pins(it, tmp_path) == [str(n) for n in range(1, 9)], R.item_pins(it, tmp_path)
+    it["footprint"]["ref"] = "SO8_RENAMED"                 # renamed in the company library since: held, not the first one
+    f, _, _ = RC.check_item(it, tmp_path)
+    assert [r for r, m in f] == ["files"] and "SO8_RENAMED" in f[0][1] and "Company.PcbLib" in f[0][1], f
+    assert R.item_pads(it, tmp_path) is None
