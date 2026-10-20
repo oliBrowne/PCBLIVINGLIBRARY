@@ -238,6 +238,30 @@ def test_ds2_42_kicad_pcm_a_change_gets_a_newer_version_without_kicad_pcm_json(t
     assert build(base_url=url) == "2026.10.26"
 
 
+@lite
+def test_ds2_42_kicad_pcm_refuses_a_pkg_version_not_after_the_previous_one_for_a_changed_library(tmp_path):
+    """--pkg-version equal to the previous build's would write over the published zip, a lower one (or 1.2, which is
+    1.2.0 to KiCad) is never offered as an update: refused for a changed library, fine for a re-run."""
+    _, exp, _ = TP._export(False, tmp_path)
+    out = exp.parent / "pcm"
+    build = lambda v: KP.build(exp, out, pkg_version=v, log=QUIET)["version"]
+    assert build("1.2.0") == build("1.2.0") == "1.2.0"                  # unchanged: the same version again
+    z = out / "local.ecadlib.lib-1.2.0.zip"
+    published = z.read_bytes()
+    f = exp / "lib.pretty" / "R_0603_1608Metric.kicad_mod"
+    f.write_text(f.read_text().replace("(attr smd)", "(attr smd)\n\t(tags \"changed\")", 1))
+    TP._as_written(exp, f)
+    for v in ("1.2.0", "1.2", "1.1.9"):
+        try:
+            build(v)
+        except ValueError as e:
+            assert "1.2.0" in str(e) and "KiCad offers only a newer version" in str(e), e
+        else:
+            raise AssertionError(f"--pkg-version {v} taken for a library changed since 1.2.0")
+    assert [p.name for p in out.glob("*.zip")] == [z.name] and z.read_bytes() == published
+    assert build("1.2.1") == "1.2.1"
+
+
 def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_or_merged_by_value():
     """'4,700pF' is 4.7 pF with a decimal comma and 4.7 nF with a thousands separator (change_diff._readings): no
     library part is picked by its value, no value style rewrites it, no other line's part takes it."""

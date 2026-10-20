@@ -30,7 +30,8 @@ kicad_pcm.json's content_sha256 matches (it records the last build in --out, of 
 or the zip in --out of this package's newest version holds the same files (that version is kept). This package's newest
 version is the highest of its zips' (<identifier>-<version>.zip), the ones packages.json lists for it and kicad_pcm.json's
 when that build was this package. KiCad offers an update only for a newer version, so a change built when that version
-is today's date or later takes the version after it (a second change on 2026.10.16 is 2026.10.17). Whenever
+is today's date or later takes the version after it (a second change on 2026.10.16 is 2026.10.17), and a --pkg-version
+that is not newer than that version (1.2 is 1.2.0 to KiCad) is refused for a changed library. Whenever
 packages.json changes, repository.json's update_timestamp moves past the one --out's repository.json (or
 kicad_pcm.json) has, so KiCad fetches it again.
 The metadata is checked against KiCad's PCM JSON schema when one is found (--schema, or the pcm.v1.schema.json a KiCad
@@ -370,12 +371,20 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
     install_size = sum(len(v) for k, v in files.items() if k.split("/", 1)[0] in PKG_DIRS)
     meta_for = lambda v: metadata(lib, identifier, v, kicad, license_, author, description, homepage=homepage,
                                   install_size=install_size)
-    if pkg_version:
-        version = pkg_version
-    elif old.get("content_sha256") == chash and _ver_tuple(old.get("version")):
-        version = old["version"]
+    if old.get("content_sha256") == chash and _ver_tuple(old.get("version")):
+        same = old["version"]               # unchanged since the last build
     elif prior in zips and _unzip(zips[prior]) == files | {"metadata.json": (json.dumps(meta_for(prior), indent=2) + "\n").encode()}:
-        version = prior                     # unchanged since its newest zip (kicad_pcm.json: another package's, or gone)
+        same = prior                        # unchanged since its newest zip (kicad_pcm.json: another package's, or gone)
+    else:
+        same = None
+    if pkg_version:
+        if not same and prior and _ver_tuple(pkg_version) and _ver_tuple(pkg_version) <= _ver_tuple(prior):
+            raise ValueError(f"--pkg-version {pkg_version} is not newer than {prior}, the previous build's version in "
+                             f"{out}, and the library changed since: KiCad offers only a newer version as an update; "
+                             f"give a later version, or leave --pkg-version out")
+        version = pkg_version
+    elif same:
+        version = same
     else:
         d, p = today or datetime.date.today(), _ver_tuple(prior)
         version = ".".join(map(str, max((d.year, d.month, d.day), p[:2] + (p[2] + 1,) if p else ())))
@@ -552,8 +561,9 @@ def main(argv=None):
     ap.add_argument("--name", help="library name: with a plan, the name to export it as (default ecadlib); with a "
                     "kicad-export folder, the library to package (needed when the folder holds several)")
     ap.add_argument("--identifier", help="package id, e.g. com.example.mylib (default local.ecadlib.<lib>)")
-    ap.add_argument("--pkg-version", help="package version major.minor.patch (default: kept while unchanged, else today's "
-                    "date, or the version after this package's previous one in --out when that is today's date or later)")
+    ap.add_argument("--pkg-version", help="package version major.minor.patch, newer than this package's previous one in "
+                    "--out when the library changed (default: kept while unchanged, else today's date, or the version "
+                    "after the previous one when that is today's date or later)")
     ap.add_argument("--kicad", type=int, default=8, choices=(7, 8, 9, 10), help="oldest KiCad to install it (default 8)")
     ap.add_argument("--prefix", default="PCM_", help="KiCad's library nickname prefix for PCM libraries (default %(default)s)")
     ap.add_argument("--license", default="CC-BY-SA-4.0", help="license from KiCad's PCM list (default %(default)s)")
