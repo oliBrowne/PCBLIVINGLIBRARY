@@ -12,13 +12,18 @@ from tests import test_datasheet as TD, test_librarian as TL
 
 FIX = Path(__file__).parent / "fixtures" / "kicad"
 FPS = Path(__file__).parent.parent / "out" / "footprints" / "ecadlib.pretty"
+CHECKED = ("TPS1234DSGR", "EEPART1")     # held to verify (ordering-suffix symbol, EasyEDA conversion), released anyway
+REVIEWER = "Test Reviewer <reviewer@example.com>"
 
 
 def _plan(d, api_key=None):
-    """Librarian run on test_librarian's BOM; with api_key the datasheet reader is mocked (DSPART1 held: verify)."""
+    """Librarian run on test_librarian's BOM; with api_key the datasheet reader is mocked (DSPART1 held: verify).
+    TPS1234DSGR and EEPART1 are held for a person to verify; a reviewer looked and released them anyway (--allow),
+    so the KiCad-symbol and EasyEDA paths get exported."""
     ext = copy.deepcopy(TD.GOOD)
     with mock.patch.object(D, "call", lambda headers, body, key, timeout=600: (ext, TD.message(ext))):
-        items, http = TL.run(d, api_key=api_key)
+        items, http = TL.run(d, api_key=api_key, allow=list(CHECKED), user=REVIEWER)
+    assert all(items[n]["status"] == "ready" for n in CHECKED), {n: items[n]["hold_reasons"] for n in CHECKED}
     return Path(d) / "out" / "plan.json", items, http
 
 

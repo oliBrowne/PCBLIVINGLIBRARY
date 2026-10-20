@@ -166,7 +166,8 @@ def test_librarian_standard_source():
         assert c1["source"] == {"symbol": "standard:C", "footprint": "standard:Capacitor_SMD:C_0603_1608Metric"}, c1["source"]
         q1 = next(i for i in items.values() if "MMBT3904" in json.dumps(i))
         assert q1["source"] == {"symbol": "standard:Q_NPN_BEC", "footprint": "standard:Package_TO_SOT_SMD:SOT-23"}, q1["source"]
-        assert any("family table" in r for r in q1["librarian"]["review"]), q1["librarian"]["review"]
+        assert any("family table" in r for r in q1["verify"]), q1["verify"]          # a pinout to check: held
+        assert q1["status"] == "held" and any("family table" in r for r in q1["hold_reasons"]), q1["hold_reasons"]
         u1 = next(i for i in items.values() if "AMS1117" in json.dumps(i))
         assert u1["source"]["footprint"] == "standard:Package_TO_SOT_SMD:SOT-223-3_TabPin2", u1["source"]
         assert u1["source"]["symbol"].startswith("standard:Regulator_Linear"), u1["source"]
@@ -176,8 +177,9 @@ def test_librarian_standard_source():
         u3 = next(i for i in items.values() if "QFNPART" in json.dumps(i))
         assert u3["source"]["footprint"] is None and any("no body size" in t for t in u3["librarian"]["tried"])
         out = Path(d) / "out"
+        assert c1["status"] == "ready", c1["hold_reasons"]
+        assert u1["status"] == "held" and [h for h in u1["hold_reasons"] if "family table" in h], u1["hold_reasons"]
         for it in (c1, q1, u1):
-            assert it["status"] == "ready", (it["name"], it["hold_reasons"])
             assert (out / it["symbol"]["file"]).exists() and (out / it["footprint"]["kicad_mod"]).exists()
         assert not any("datasheet" in t for t in q1["librarian"]["tried"])     # Claude never asked
 

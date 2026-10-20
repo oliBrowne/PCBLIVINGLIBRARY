@@ -30,7 +30,8 @@ ecadlib init [--yes] [--tool T] [--lib DIR ...] [--workspace W] [--sources LIST]
 * **`demo`** writes a real workspace (default `./ecadlib-demo`) with its own `ecadlib.toml` (`[sources] order =
   ["standard"]`, so a rules file in a parent folder cannot change it), the bundled BOM in `uploads/demo/`, the librarian
   plan and Altium models in `librarian/`, and for KiCad the `.kicad_sym`, `.pretty`, lib tables and database library in
-  `kicad/`. Re-running reuses the workspace (finished parts are skipped). Measured here: 1.0 s, 6 ready + 1 held.
+  `kicad/`. Re-running reuses the workspace (finished parts are skipped). Measured here: 0.8 s, 4 ready + 3 held (CH340C has no symbol;
+  AMS1117-3.3 and AO3401A wait for a person because their pinouts come from a family table).
 * **Help.** Every command and subcommand has a one-line description and every command's `-h` ends with examples that
   parse (`tests/test_firstrun.py` walks the whole argparse tree and parses every example). Same names for the same
   things: `--lib`, `--workspace`, `-o/--out`, `--json`, `--dry-run`, `--offline`. `librarian` and `kicad-export` gained

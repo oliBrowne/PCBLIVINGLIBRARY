@@ -53,23 +53,24 @@ def test_demo_builds_offline_and_reruns_without_churn():
         assert rc == 0, err
         assert time.time() - t0 < 60
         res = json.loads(out)
-        assert (res["parts"], res["ready"], res["held"], res["held_parts"]) == (7, 6, 1, ["CH340C"])
+        # CH340C has no symbol; the regulator and the MOSFET wait for a person to check their family-table pinouts
+        assert (res["parts"], res["ready"], res["held"], res["held_parts"]) == (7, 4, 3, ["AMS1117-3.3", "CH340C", "AO3401A"])
         ws = Path(d) / "demo"
         assert len(res["altium"]) >= 10 and all((ws / f).read_bytes()[:8] == bytes.fromhex("d0cf11e0a1b11ae1") for f in res["altium"])
         kd = ws / res["kicad"]["folder"]
         for f in ("ecadlib_demo.kicad_sym", "fp-lib-table", "sym-lib-table", "ecadlib_demo.kicad_dbl", "ecadlib_demo.sqlite"):
             assert (kd / f).is_file(), f
-        assert len(list((kd / "ecadlib_demo.pretty").glob("*.kicad_mod"))) == 5
-        assert res["parity"]["ok"] and res["parity"]["counts"]["match"] == 6, res["parity"]    # KiCad == Altium (ecadlib.parity)
-        assert len(list((kd / "ecadlib_demo.3dshapes").glob("*.step"))) == 5                  # the Altium 3D models, for KiCad
+        assert len(list((kd / "ecadlib_demo.pretty").glob("*.kicad_mod"))) == 3                # the ready parts' footprints
+        assert res["parity"]["ok"] and res["parity"]["counts"]["match"] == 4, res["parity"]    # KiCad == Altium (ecadlib.parity)
+        assert len(list((kd / "ecadlib_demo.3dshapes").glob("*.step"))) == 3                  # the Altium 3D models, for KiCad
         plan = (ws / res["plan"]).read_bytes()
         with _no_network():
             rc, out2, _ = _run(["demo", "-o", "demo"], cwd=d)           # again: same plan, nothing new
-        assert rc == 0 and "6 ready, 1 held" in out2 and "next:" in out2 and "ecadlib ui --workspace demo" in out2
+        assert rc == 0 and "4 ready, 3 held" in out2 and "next:" in out2 and "ecadlib ui --workspace demo" in out2
         assert (ws / res["plan"]).read_bytes() == plan
         assert len(list((ws / "uploads").rglob("*.csv"))) == 1
         rc, out3, _ = _run(["status", "--workspace", "demo"], cwd=d)
-        assert rc == 0 and "6 ready, 1 held" in out3
+        assert rc == 0 and "4 ready, 3 held" in out3
 
 
 def test_demo_refuses_a_workspace_with_its_own_rules():

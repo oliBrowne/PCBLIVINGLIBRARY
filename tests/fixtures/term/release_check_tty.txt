@@ -1,12 +1,14 @@
   [32m✓ ready[0m  CAP-0402-100nF
   [32m✓ ready[0m  KT-0603R
-  [32m✓ ready[0m  AMS1117-3.3
+  [33m! held[0m   AMS1117-3.3     The pinout of Regulator_Linear_GND_VO_VI comes from the AMS1117-3.3
+                           family table, not from this part's datasheet.
   [33m! held[0m   CH340C          There is no symbol for this part yet.
   [32m✓ ready[0m  RES-0603-10k
   [32m✓ ready[0m  RES-0603-4.7k
-  [32m✓ ready[0m  AO3401A
+  [33m! held[0m   AO3401A         The pinout of Q_PMOS_GSD comes from the AO3401A family table, not from
+                           this part's datasheet.
 
-[1m6 ready, 1 held  (held: CH340C)[0m
+[1m4 ready, 3 held  (held: AMS1117-3.3, CH340C, AO3401A)[0m
 written:
   ws/librarian/demo_bom_demo/release_check.md  release check report
   ws/librarian/demo_bom_demo/plan.json         library plan, statuses updated

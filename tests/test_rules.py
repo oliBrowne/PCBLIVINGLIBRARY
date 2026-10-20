@@ -211,7 +211,7 @@ def test_librarian_follows_a_house_rules_file():
         # push sends house parameter names
         plan = json.loads((out / "plan.json").read_text())
         res = A.push([dict(p, status="ready") for p in plan if p["name"] == "RES_0603_10K_1%"], None, "https://w", dry_run=True,
-                     rules=RU.load(Path(d) / "ecadlib.toml"), policy={})
+                     rules=RU.load(Path(d) / "ecadlib.toml"), policy={}, folder=out)    # files are relative to the plan
         names = [p["name"] for p in res[0]["detail"]["input"]["parameters"]]
         assert "MPN" in names and "Manufacturer Part Number" not in names and "Datasheet" in names, names
 
