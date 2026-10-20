@@ -334,3 +334,20 @@ def test_ds2_22_ten_dollars_approved_in_the_web_ui_is_a_cap_you_set(tmp_path, mo
         except Read:
             pass
     assert seen == [(10.0, True), (10.0, True)], seen   # $10.00 approved holds like $9.99: not the default cap
+
+
+# ---- DS2-12 (the cross-check's second read): "0.016 in" in an mm record was read as 0.016 mm
+def test_ds2_12_second_read_value_in_another_unit_is_not_compared_as_the_records_unit():
+    import json
+    from ecadlib import crosscheck as CC
+
+    def second(nom):
+        dim = {"name": "pitch", "label": "e", "min": "", "nom": nom, "max": "", "unit": "mm", "page": 1}
+        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(
+            {"package": {"name": "SOIC-8", "package_type": "gullwing", "pin_count": 8, "dims": [dim]}, "pins": []})}]}
+    assert CC.parse(second("1.27 mm"))[0]["pitch"] == (1.27, 1.27, 1.27)    # the record's own unit written: fine
+    try:
+        CC.parse(second("0.050 in"))
+        raise AssertionError("0.050 in compared as 0.05 mm")
+    except CC.Unavailable as e:                      # unchecked, said so: not a false disagreement
+        assert "pitch.nom" in str(e) and "'in'" in str(e) and "'mm'" in str(e), e
