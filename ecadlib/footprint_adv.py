@@ -939,11 +939,15 @@ def _header(spec, density):
     pads, extra = [], []
     if spec.get("mount", "tht") == "tht":
         drill = _dim(spec["drill"])[1] if spec.get("drill") else HEADER_TH[key][0] if abs(key - e) < 0.01 else None
-        dia = _dim(spec["land_diameter"])[1] if spec.get("land_diameter") else HEADER_TH[key][1] if abs(key - e) < 0.01 else None
+        table = abs(key - e) < 0.01 and abs(drill - HEADER_TH[key][0]) < 1e-6 if drill is not None else False
+        dia = _dim(spec["land_diameter"])[1] if spec.get("land_diameter") else HEADER_TH[key][1] if table else None
         if drill is None:
             raise ValueError(f"no default drill for a {e:g} mm pitch header: give drill (and land_diameter)")
-        if dia is None:
+        if dia is None:                                 # a custom drill gets its own land, not the table's
             dia = round(min(drill + 2 * TH_RING, e - 0.5), 2)
+        if (dia - drill) / 2 < TH_RING_MIN - 1e-6:
+            raise ValueError(f"pin_header: drill {drill:g} mm leaves a {(dia - drill) / 2:.3f} mm ring in a {dia:g} mm land "
+                             f"(need >= {TH_RING_MIN} mm): drill and land_diameter are in mm, not mils")
         for k in range(n):
             r, c = divmod(k, cols)
             pads.append({"num": str(k + 1), "kind": "thru_hole", "shape": "rect" if k == 0 else "circle", "x": _r4(c * e),

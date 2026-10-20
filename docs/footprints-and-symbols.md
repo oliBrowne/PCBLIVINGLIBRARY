@@ -69,8 +69,9 @@ ecadlib footprint-bench [--offline] [--fixture tests/fixtures/kicad_bench.json] 
   `ball_diameter` (collapsing balls −25 % from 0.55 mm, −20 % from 0.25 mm, −15 % below; non-collapsing +5 %; LGA =
   terminal). `land_style` NSMD (mask 0.05 mm bigger) or SMD (copper 0.05 mm bigger, mask = land). Courtyard body + 1.0 mm.
   Silk and fab mark the A1 corner.
-* `pin_header`: 1 or 2 columns, through-hole (pin 1 at the origin, square pad 1, KiCad's drill/pad per pitch) or SMD
-  (`land`, single rows alternate sides).
+* `pin_header`: 1 or 2 columns, through-hole (pin 1 at the origin, square pad 1, KiCad's drill/pad per pitch; a
+  custom `drill` gets drill + 1.0 mm, at most pitch - 0.5, and a ring under 0.15 mm is refused) or SMD (`land`,
+  single rows alternate sides).
 * `connector` and `custom`: a `pad_table` copied from the datasheet's land-pattern drawing in the drawing's own terms:
   `unit` (mm, mil, in), `y_axis` (up, down), `view` (top, bottom = mirrored), `origin` (center, pin1, datum +
   `center_at`), then `pads` and `arrays` (N pads at a pitch). Pads can be SMD, plated through-hole (round or slot:

@@ -69,3 +69,18 @@ def test_t007_compare_reports_every_difference(tmp_path):
     assert re.search(r"^\s*6\s.*\(-1\.0, 0\.0\)", out.getvalue(), re.M), out.getvalue()
     with redirect_stdout(io.StringIO()):
         FG.main(["compare", str(tmp_path / "mine.kicad_mod"), str(tmp_path / "mine.kicad_mod")])   # same: no exit
+
+
+# T023: a pin_header custom drill gets its own land (ring >= 0.15 mm) or is refused (mils typed as mm)
+def test_t023_header_custom_drill():
+    spec = lambda d: {"name": "H", "package_type": "pin_header", "pin_count": 3, "cols": 1, "rows": 3, "pitch": 2.54,
+                      "drill": {"nom": d}}
+    txt, _ = FG.build(spec(1.6))
+    assert "(size 2.04 2.04) (drill 1.6" in txt, txt
+    assert "(size 1.7 1.7) (drill 1" in FG.build(spec(1.0))[0]          # the table drill keeps the table land
+    for d in (2.6, 40):
+        try:
+            FG.build(spec(d))
+            assert False, d
+        except ValueError as e:
+            assert "ring" in str(e), e
