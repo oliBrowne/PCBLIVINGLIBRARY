@@ -297,6 +297,34 @@ def test_input_named_like_a_bus_pin_goes_left():
     assert side["RXD"] == side["TXD"] == "right", side
 
 
+# T094: altium-lib dump names the file that is not an Altium library
+@lite
+def test_dump_names_the_file_that_is_not_an_altium_library(tmp_path):
+    import contextlib, io
+    _models(tmp_path)
+    good = str(tmp_path / "models/PcbLib/R_0603_1608Metric.PcbLib")
+    (tmp_path / "notes.PcbLib").write_text("not an Altium library\n")
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        code = _exit_code(lambda: AL.main(["dump", good, str(tmp_path / "notes.PcbLib"), good]))
+    assert code == 2 and "notes.PcbLib" in err.getvalue() and "OLE2" in err.getvalue(), (code, err.getvalue())
+
+
+# T095: `python3 -m ecadlib.altium_lib dump ... | head -1` stops quietly, as the `ecadlib altium-lib` form does
+@lite
+def test_module_form_dump_into_a_closed_pipe_has_no_traceback(tmp_path):
+    _models(tmp_path)
+    files = [str(tmp_path / "models/PcbLib/R_0603_1608Metric.PcbLib")] * 600     # more output than a pipe buffer holds
+    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    p = subprocess.Popen([sys.executable, "-m", "ecadlib.altium_lib", "dump", *files], cwd=str(tmp_path), env=env,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    first = p.stdout.readline()
+    p.stdout.close()                                     # what `| head -1` does
+    err = p.stderr.read().decode("utf-8", "replace")
+    p.wait(timeout=120)
+    assert first.startswith(files[0].encode()) and "Traceback" not in err and "BrokenPipe" not in err, err[-600:]
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
