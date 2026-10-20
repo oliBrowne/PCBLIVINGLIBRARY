@@ -158,3 +158,52 @@ def test_schema_too_new_is_a_plain_refusal():
     assert CU.report("librarian", MG.too_new("plan", 99, "9.9.9", "lib/plan.json"), out) == 2
     assert "upgrade ecadlib" in out.getvalue() and "pip install -U ecadlib" in out.getvalue()
     assert "internal error" not in out.getvalue() and "please report" not in out.getvalue()
+
+
+# T073: `stdparts resolve --kicad-mod newdir/x.kicad_mod` creates the folder and writes the footprint
+@lite
+def test_stdparts_kicad_mod_into_a_new_folder(tmp_path):
+    from ecadlib import stdparts as SP
+    f = tmp_path / "newdir" / "soic8.kicad_mod"
+    with redirect_stdout(io.StringIO()):
+        assert SP.main(["resolve", "SOIC-8 3.9x4.9mm", "--kicad-mod", str(f)]) == 0
+    assert '(footprint "SOIC-8_3.9x4.9mm_P1.27mm"' in f.read_text()
+
+
+# T074: stdparts coverage files an FB-designator ferrite bead as an inductor, as the librarian does
+@lite
+def test_stdparts_coverage_ferrite_bead(tmp_path):
+    from ecadlib import stdparts as SP
+    b = tmp_path / "bom.csv"
+    b.write_text("Designator,Qty,Value,Footprint,Mfr. Part #,Description\nFB1,1,600R,0603,BLM18PG601SN1D,Ferrite bead 600R 0603\n")
+    row = SP.coverage([str(b)])[0]
+    assert row["kicad_ref"] == "Inductor_SMD:L_0603_1608Metric", row
+
+
+# T075: stdparts coverage on an empty or unrecognised BOM: "cannot read BOM" + hint, exit 2
+@lite
+def test_stdparts_coverage_unreadable_bom(tmp_path):
+    from ecadlib import stdparts as SP
+    for name, text in (("empty.csv", ""), ("house.csv", "Pos,Bauteilwert,Gehaeuse\nR1,10k,0603\n")):
+        (tmp_path / name).write_text(text)
+        with redirect_stderr(io.StringIO()) as e:
+            assert SP.main(["coverage", str(tmp_path / name)]) == 2
+        assert "cannot read BOM" in e.getvalue() and "hint:" in e.getvalue()
+
+
+# T077: the "ambiguous" hint names what tells the fitting packages apart (body / exposed pad), not a missing pitch
+def test_stdparts_ambiguous_hint_names_the_difference():
+    from ecadlib import stdparts as SP
+    assert SP.ic_package("SOIC-8 208mil")[1].endswith("give the body)")
+    assert SP.ic_package("WQFN-16 3x3mm EP1.7x1.7mm")[1].endswith("give the epsize)")
+
+
+# T131: `stdparts -h` describes the command in a whole sentence
+def test_stdparts_help_is_a_whole_sentence():
+    from ecadlib import stdparts as SP
+    with redirect_stdout(io.StringIO()) as o:
+        try:
+            SP.main(["-h"])
+        except SystemExit:
+            pass
+    assert "the symbol) offline and deterministically" in " ".join(o.getvalue().split())
