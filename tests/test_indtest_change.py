@@ -163,3 +163,15 @@ def test_t096_publishers_say_they_held_a_hand_edit():
             r = _run(d, home, *cmd)
             assert "change hold  CAP-0402-100nF" in r.stderr and "ecadlib part show" in r.stderr, (cmd, r.stdout, r.stderr)
             assert kmod.read_text(encoding="utf-8") == released
+
+
+# ------------------------------------------------------------------ T097: review sent a change-control hold to --allow
+def test_t097_review_names_part_show_for_a_change_hold():
+    from ecadlib import messages as M, review_cli as RV
+    why = ("change control: new part with the MPN of released RES-0603-10k r1 (pad 1 size 0.8 x 0.95 -> 0.6 x 0.6 mm); "
+           "a person approves it: ecadlib part show")
+    e = M.explain(why)
+    assert e["code"] == "change.held" and "part approve" in e["fix"] and "release anyway" not in e["fix"].split("(")[0], e
+    cmds = RV.fix_commands("lib/plan.json", {"name": "RES-0402-10k", "hold_reasons": [why]}, [])
+    assert cmds == ["ecadlib part show lib/plan.json RES-0402-10k"], cmds
+    assert RV.fix_commands("p.json", {"name": "X", "hold_reasons": ["verify: check it"]}, []) == ["ecadlib release-check p.json --allow X"]
