@@ -77,7 +77,7 @@ def procedures():
     return [p for p, _, _ in PROCS] + [p for p, _, _ in BUILD_PROCS]
 MENU_BOM = "uploads/altium-menu/parts.csv"
 HEADER = ["Designator", "Qty", "Value", "Footprint", "Manufacturer", "Mfr. Part #", "LCSC Part Number", "Description", "Datasheet"]
-ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read")
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read", "release")
 QUEUE_ANCHOR = "#libcard"
 
 # Every identifier the .pas calls from Altium / DelphiScript, and where it is documented. TRxxxx = Altium's scripting
@@ -1099,6 +1099,9 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     whys = M.explain_all(it.get("hold_reasons") or [])
     if st == "ready":
         res["message"] = f"{mpn} is ready as {nm}: {_where(cfg, pub)}."
+        notes = [M.explain(w)["text"] for w in (it.get("release_check") or {}).get("warnings") or [] if str(w).startswith("height:")]
+        if notes:                              # a 3D height is a note to check, not a hold ([release] height)
+            res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
         if pub.get("problems") or nm in (pub.get("held") or {}):
@@ -1128,6 +1131,8 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
                                                                 "awaiting_approval": "Waiting for sign-off"}.get(st, "Held")))
     if res["status"] == "error":
         res["big"] = "Not found" if res.get("reason") in ("not_found", "not_searched", "description") else "Not published"
+    if res["status"] == "held":
+        offer_release(res, it, rel, mpn)
     if res["status"] == "held" and ai and nm in ai["names"]:
         q = ws.ai_quote(rel, parts=[nm]) if ai["parts"] > 1 else ai      # the menu's list may hold other parts too
         if q:
@@ -1154,6 +1159,68 @@ def offer_ai(res, q, bom, mpn="", part=""):
                            f"limit of {AC.money(q['limit_usd'])} ([datasheet] {q['limit_name']}). Go ahead anyway?")
                if q["price_known"] else f"ecadlib does not know what {q['model']} costs. Read the datasheets anyway?")
     return res
+
+
+def releasable(it):
+    """The hold reasons a person may release anyway, explained ([] = none): not a missing or broken file (nothing to
+    release) and not a held change (that waits for `ecadlib part approve`), as in `ecadlib review`."""
+    from . import messages as M, release_check as RC
+    out = []
+    for r in it.get("hold_reasons") or []:
+        e = M.explain(r)
+        if e["code"].startswith("files.") or str(r).startswith(RC.CHANGE_HOLD) or str(r).endswith("(cannot be overridden)"):
+            return []
+        if e["text"] not in out:
+            out.append(e["text"])
+    return out
+
+
+def offer_release(res, it, bom, mpn=""):
+    """result.ini keys for the dialog's Release anyway: the part, its BOM and why it is held (release_why1..4), so
+    the dialog can show the reasons before it asks for a reason of its own. Nothing is released here."""
+    whys = releasable(it)
+    if whys:
+        res.update(offer_release="1", release_bom=bom, release_mpn=mpn, release_part=it["name"],
+                   **{f"release_why{i}": w for i, w in enumerate(whys[:4], 1)})
+    return res
+
+
+def release_part(cfg, req, progress=None):
+    """The dialog's Release anyway, after the person saw the hold reasons and typed why it is fine: the same release
+    as the review queue's (release-check --allow, who and why kept in the plan, revision 1 in the change-control
+    ledger), then the part is published like add-part."""
+    from . import approvals as A, review_cli as RV
+    progress = progress or Progress()
+    reason = " ".join(str(req.get("reason") or "").split())
+    name, rel = req.get("part", ""), req.get("bom", "")
+    mpn = req.get("mpn") or name
+    if not reason:
+        return {"status": "error", "message": f"{name} was not released: Release anyway needs a reason.",
+                "fix": "Click Release anyway again and say why the part is fine as it is."}
+    ws = _workspace(cfg)
+    bom = ws._bom_path(rel)
+    plan = ws._librarian_dir(bom) / "plan.json"
+    try:
+        items = json.loads(plan.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        items = []
+    it = next((i for i in items if i.get("name") == name), None)
+    if it is None:
+        return {"status": "error", "message": f"{name} is not in the library plan any more, so nothing was released.",
+                "fix": f"Add {mpn} again, or release it from the review queue ({_queue_hint(cfg)})."}
+    if it.get("status") == "held":
+        if not releasable(it):
+            return {"status": "error", "message": f"{name} cannot be released anyway: "
+                    + "; ".join(it.get("hold_reasons") or ["a file is missing or a change waits for approval"]) + ".",
+                    "fix": f"Fix it in the review queue ({_queue_hint(cfg)})."}
+        progress.step(0, 0, f"releasing {name}")
+        who = A.identity(req.get("user") or None, cwd=plan.parent)
+        RV.release_anyway(plan, name, who, reason=reason)
+        res = _part_result(cfg, ws, bom, rel, mpn, progress)
+        if res.get("status") != "error":
+            res["message"] = f"Released anyway by {who}: {reason}. " + (res.get("message") or "")
+        return res
+    return _part_result(cfg, ws, bom, rel, mpn, progress)       # released meanwhile (the queue): just publish it
 
 
 def cost_rows(c):
@@ -1470,6 +1537,8 @@ def run_action(cfg, action, req, opener=None, progress=None):
         return fill(cfg, req.get("project", ""), progress=progress)
     if action == "ai-read":                    # only after the dialog showed the cost and the person said yes
         return ai_read(cfg, req, progress=progress)
+    if action == "release":                    # only after the dialog showed the hold reasons and was given a reason
+        return release_part(cfg, req, progress=progress)
     if action == "open":                       # a report or review the dialog offers: only files in the workspace
         return open_file(cfg, req.get("path", ""), opener=opener)
     if action == "queue":
