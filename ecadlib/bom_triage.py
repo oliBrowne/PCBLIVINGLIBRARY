@@ -442,7 +442,8 @@ def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
     blank rows are dropped (title blocks); the sheet with the best header wins, then the one with more rows; sheets
     with the very same header (a Top and a Bottom BOM) are read together; any other BOM-like sheet is named.
     keep_hidden: a copy of the BOM to write back (dedupe --bom) keeps the hidden columns' cells; they still take no
-    part in choosing the sheet and its header, and attrs['hidden_cols'] lists them."""
+    part in choosing the sheet and its header, and attrs['hidden_cols'] lists them. A row with text only in hidden
+    columns is still dropped: rows are kept as read_bom sees them, so the copy is the sheet read_bom picks."""
     try:
         hidden = _BI().xlsx_hidden(p)
     except Exception:                                    # not an .xlsx zip (old .xls): nothing is known to be hidden
