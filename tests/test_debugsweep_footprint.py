@@ -91,3 +91,21 @@ def test_ds2_29_polygon_pin_1_with_origin_pin1_is_checked_not_a_crash():
                                    + pwr["pad_table"]["pads"][1:]))
     pin1 = [c["message"] for c in A.check_pad_table(off) if c["rule"] == "pin1" and c["level"] == "error"]
     assert pin1 and "(3, 0)" in pin1[0], pin1
+
+
+@lite
+def test_ds2_30_nan_or_inf_in_a_nested_money_setting_is_rejected(tmp_path):
+    # [agent.proof] max_cost_usd = nan loaded as NaN, and every 'estimate > NaN' is False: no proof call was refused
+    # on cost. The top-level [datasheet] key already refused nan / inf; the nested table did not.
+    from ecadlib import rules as RU
+    f = tmp_path / "ecadlib.toml"
+    for v in ("nan", "inf", "+inf"):
+        f.write_text(f"[agent.proof]\nmax_cost_usd = {v}\n")
+        try:
+            got = RU.load(f)["agent"]["proof"]["max_cost_usd"]
+        except ValueError as e:
+            assert "agent.proof.max_cost_usd" in str(e) and "nan or inf" in str(e), e
+        else:
+            raise AssertionError(f"[agent.proof] max_cost_usd = {v} accepted, loaded as {got!r}")
+    f.write_text("[agent.proof]\nmax_cost_usd = 0.5\n")
+    assert RU.load(f)["agent"]["proof"]["max_cost_usd"] == 0.5

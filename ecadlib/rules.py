@@ -440,8 +440,8 @@ def _check_table(where, sec, k, v, d):
             if not isinstance(vv, int) or isinstance(vv, bool) or not lo <= vv <= hi:
                 _err(where, key, f"must be a whole number from {lo} to {hi}")
         elif isinstance(dd, float):
-            if not isinstance(vv, (int, float)) or isinstance(vv, bool) or vv < 0:
-                _err(where, key, "must be a number of 0 or more")
+            if not isinstance(vv, (int, float)) or isinstance(vv, bool) or not math.isfinite(vv) or vv < 0:
+                _err(where, key, "must be a number of 0 or more (not nan or inf)")
         elif not isinstance(vv, str):
             _err(where, key, "must be text")
     if (sec, k) == ("agent", "proof"):
