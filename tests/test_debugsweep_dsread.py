@@ -1,6 +1,7 @@
 """Regression tests for the datasheet-reading debug sweep (group dsread: DS2-12 ..).
 Plain functions (tests.run_all, no pytest). Every API is faked; nothing is sent anywhere."""
 from ecadlib import datasheet as D
+from tests.fixtures_lite import lite
 from tests.test_bughunt_dsa import _rejected, _review, _wire
 
 
@@ -32,3 +33,28 @@ def test_ds2_14_circled_digit_pin_number_is_a_review_line_not_a_crash():
         assert kind != "ok", kind
     diff = CC.compare_pins([("1", "VIN"), ("2", "GND")], [("①", "VIN"), ("2", "GND")])   # the cross-check's second read
     assert diff[0]["field"] == "pins" and "only here: ①" in diff[0]["second"], diff
+
+
+# ---- DS2-15: a batch answer for a part not in the collecting run was cached with page_offset 0 and url ''
+@lite
+def test_ds2_15_batch_answer_for_a_part_not_in_this_run_keeps_its_pages(tmp_path):
+    from tests import test_datasheet_batch as TB, test_ds_route as T
+    pdfs = {"https://a/ldo.pdf": T.pdf_lines(T.ldo_pages())}
+    api = T.ModelAPI(lambda m, n: T.on_page(T.GOOD, 4))           # every value cited on page 4 of the pages sent
+    a, b = ("TESTLDO-H33TRG1", "SOT-223-3_TabPin2"), ("TESTLDO-R33TRG1", "SOT-89-3")
+    src = [("https://a/ldo.pdf", "BOM")]
+    with TB.patched(api):
+        rd = T.reader(tmp_path, pdfs, batch=True, wait=False)       # run 1: A and B submitted (--no-wait)
+        for part, pkg in (a, b):
+            rd.submit(rd.job(part, src, pkg))
+        rd.flush()
+        rd = T.reader(tmp_path, pdfs, batch=True, wait=True)        # run 2: only A (--part A) collects the batch
+        rd.submit(rd.job(a[0], src, a[1]))
+        rd.flush()
+        rd = T.reader(tmp_path, pdfs)                               # run 3: B, answered from the cache
+        jb = rd.job(b[0], src, b[1])
+        assert jb["offset"][3] == 14, jb["offset"]                  # page 4 sent = original page 14 (B's SOT89 drawing)
+        res = rd.cached(jb)
+    assert len(api.of("/v1/messages/batches")) == 1                 # B was paid for once, in run 1
+    assert res["sidecar"]["pin_table"]["page"] == 14, res["sidecar"]["pin_table"]
+    assert rd.results.get(jb["key"])["url"] == "https://a/ldo.pdf"

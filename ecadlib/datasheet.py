@@ -2902,12 +2902,13 @@ class Reader:
                 chunks[-1].append(j)
                 size += n
             for chunk in (c for c in chunks if c):
-                taken, reqs, ids, models = set(), [], {}, {}
+                taken, reqs, ids, models, sent = set(), [], {}, {}, {}
                 for j in chunk:
                     cid = custom_id(j["name"], taken)
                     taken.add(cid)
                     ids[cid] = j["key"]
                     models[cid] = j.get("model") or self.model
+                    sent[cid] = {"offset": j.get("offset", 0), "url": j.get("url", "")}   # for a run without this part
                     api_model = self.info(models[cid])["ep"]["model"]      # 'claude:x' (a named endpoint) -> 'x'
                     reqs.append({"custom_id": cid, "params": j["body"] if j["body"]["model"] == api_model
                                  else dict(j["body"], model=api_model)})
@@ -2937,7 +2938,7 @@ class Reader:
                 st["pending_creates"].remove(mark)
                 self._creates_done.add(mark["fingerprint"])
                 st["batches"].append({"id": b["id"], "created": b.get("created_at"), "model": self.model, "models": models,
-                                      "requests": ids, "parts": {c: j["name"] for c, j in zip(ids, chunk)},
+                                      "sent": sent, "requests": ids, "parts": {c: j["name"] for c, j in zip(ids, chunk)},
                                       "status": b.get("processing_status"), "collected": False})
                 self._save_state(st)
                 _IN_FLIGHT.discard(mark["fingerprint"])
@@ -2994,7 +2995,9 @@ class Reader:
                         continue                      # stored from an earlier, damaged download of these results
                     if r.get("type") == "succeeded":
                         try:
-                            self._store(job or {"key": key, "part": b["parts"].get(line["custom_id"]), "url": "", "offset": 0,
+                            was = (b.get("sent") or {}).get(line["custom_id"]) or {}   # a part not in this run
+                            self._store(job or {"key": key, "part": b["parts"].get(line["custom_id"]),
+                                                "url": was.get("url", ""), "offset": was.get("offset", 0),
                                                 "model": (b.get("models") or {}).get(line["custom_id"]) or b.get("model")},
                                         r["message"], f"batch {b['id']}")
                         except DatasheetError as e:
