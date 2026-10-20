@@ -268,3 +268,21 @@ def test_t102_docs_name_the_current_librarian_state_version():
     said = re.search(r"`librarian_state` \(now v(\d+)\)", doc)
     assert said and int(said.group(1)) == MG.KINDS["librarian_state"].current, said and said.group(0)
     assert "The one so far" not in doc
+
+
+# ------------------------------------------------------------------ T031: a KLC power stack was "not the released revision"
+def test_t031_unchanged_kicad_symbol_with_klc_stacked_power_pins_is_reused():
+    from tests import e2e_support as E
+    bom = ("Designator,Qty,Value,Footprint,Manufacturer,Mfr Part #,Description,Datasheet\n"
+           "U1,1,STM32F103C8T6,,STMicroelectronics,STM32F103C8T6,MCU ARM Cortex-M3 64k LQFP-48,"
+           "https://datasheets.example.com/stm32f103.pdf\n")
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        E.seed_cache(d / "cache")
+        (d / "bom.csv").write_text(bom, encoding="utf-8")
+        _run(d, d / "home", "librarian", "bom.csv", "-o", "lib/k", "--offline", "--cache", "cache")
+        r = _run(d, d / "home", "kicad-export", "lib/k/plan.json", "-o", "kicad", "--name", "k", "--offline", "--cache",
+                 "cache", "--json")
+        rep = json.loads(r.stdout)
+        assert not [w for w in rep["warnings"] if "not the released revision" in w], rep["warnings"]
+        assert "SYS_JTMS-SWDIO" in (d / "kicad/k.kicad_sym").read_text(encoding="utf-8")   # the KiCad symbol, alternates kept
