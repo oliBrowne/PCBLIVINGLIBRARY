@@ -426,7 +426,8 @@ def test_footprint_dialog_column_can_shrink_on_a_phone():
 
 
 # T114
-def test_ui_port_out_of_range_is_a_plain_message():
+@lite
+def test_ui_port_out_of_range_is_a_plain_message(tmp_path):
     """`ecadlib ui --port 99999` said "internal error (OverflowError: bind(): port must be 0-65535.)" and asked for a
     bug report. Now argparse refuses it: one line, exit 2."""
     import contextlib, io
@@ -435,7 +436,7 @@ def test_ui_port_out_of_range_is_a_plain_message():
         err = io.StringIO()
         try:
             with contextlib.redirect_stderr(err):
-                S.main(["--no-browser", "--port", port, "--workspace", "unused"])
+                S.main(["--no-browser", "--port", port, "--workspace", str(tmp_path / "ws")])
             raise AssertionError("not refused")
         except SystemExit as e:
             assert e.code == 2 and "--port must be from 0 to 65535" in err.getvalue(), (e.code, err.getvalue())
