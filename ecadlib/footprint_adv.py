@@ -354,6 +354,11 @@ def _expand_table(t):
             p["x"], p["y"] = a["x"] + k * a.get("dx", 0), a["y"] + k * a.get("dy", 0)
             p["_src"] = f"arrays[{i}] #{k + 1}"
             rows.append(p)
+    for p in rows:                                         # a polygon pad without x/y sits at the middle of its points
+        if p.get("polygon"):
+            xs, ys = [v["x"] for v in p["polygon"]], [v["y"] for v in p["polygon"]]
+            p.setdefault("x", (min(xs) + max(xs)) / 2)
+            p.setdefault("y", (min(ys) + max(ys)) / 2)
     return rows
 
 
@@ -377,11 +382,9 @@ def table_layout(spec):
     raw = _expand_table(t)
     if not raw:
         raise ValueError("pad_table has no pads")
-    for p in raw:                                          # polygon pads: position and extent from their points
+    for p in raw:                                          # polygon pads: extent from their points (position: _expand_table)
         if p.get("polygon"):
             xs, ys = [v["x"] for v in p["polygon"]], [v["y"] for v in p["polygon"]]
-            p.setdefault("x", (min(xs) + max(xs)) / 2)
-            p.setdefault("y", (min(ys) + max(ys)) / 2)
             p["_ext"] = (min(xs), min(ys), max(xs), max(ys))
         elif "x" not in p or "y" not in p:
             raise ValueError(f"{p['_src']} (pad {p.get('number')}): no x/y")

@@ -73,3 +73,21 @@ def test_ds2_28_footprint_names_differing_only_in_case_never_share_a_file_path(t
     assert w["file"].casefold() != n1["file"].casefold(), ("WIDE1 (other pads) writes over NARROW1's file", w["file"])
     assert w["file"] == "models/PcbLib/SOIC-8_5.3x5.3mm_P1.27mm.PcbLib", w
     assert (n2["file"], n2["ref"]) == ("models/PcbLib/SOIC-8.PcbLib", "SOIC-8"), n2     # same pads: NARROW1's file
+
+
+def test_ds2_29_polygon_pin_1_with_origin_pin1_is_checked_not_a_crash():
+    # check_pad_table read pin 1's x/y from a fresh expansion of the table, where a polygon pad has only its points:
+    # KeyError 'x'. A polygon pad sits at the middle of its points, the same as table_layout places it.
+    square = [{"x": -1, "y": -1}, {"x": 1, "y": -1}, {"x": 1, "y": 1}, {"x": -1, "y": 1}]
+    pwr = {"name": "PWR_MOD", "package_type": "custom", "pin_count": 3,
+           "pad_table": {"unit": "mm", "y_axis": "down", "origin": "pin1",
+                         "pads": [{"number": "1", "polygon": square}, {"number": "2", "x": 4, "y": 0, "w": 1.5, "h": 1.5},
+                                  {"number": "3", "x": 8, "y": 0, "w": 1.5, "h": 1.5}]}}
+    F.validate(pwr)
+    _, rep = F.build(pwr)                                     # pin 1's middle is the drawing's 0,0: no pin-1 problem
+    assert not [c for c in rep.get("table_checks", []) if "pin 1" in str(c)], rep.get("table_checks")
+    # the same pad 3 mm off the origin: the pin-1 error, not a crash
+    off = dict(pwr, pad_table=dict(pwr["pad_table"], pads=[{"number": "1", "polygon": [dict(v, x=v["x"] + 3) for v in square]}]
+                                   + pwr["pad_table"]["pads"][1:]))
+    pin1 = [c["message"] for c in A.check_pad_table(off) if c["rule"] == "pin1" and c["level"] == "error"]
+    assert pin1 and "(3, 0)" in pin1[0], pin1
