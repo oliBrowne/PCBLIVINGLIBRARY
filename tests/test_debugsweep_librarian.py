@@ -25,8 +25,9 @@ def _library(d, out=None):
     out = Path(out).resolve() if out else d / "lib"
     (d / "bom.csv").write_text(UF.BOM, encoding="utf-8")
     seed_cache(d / "cache")
-    L.run(d / "bom.csv", out=out, offline=True, cache=d / "cache", rules={}, log=QUIET)
-    return out
+    L.run(d / "bom.csv", out=out, offline=True, cache=d / "cache", rules={}, log=QUIET,
+          allow=["EEPART1"], user="Test Reviewer <reviewer@example.com>")   # its EasyEDA conversion checked: released,
+    return out                                                                # so the library has a ledger
 
 
 def _check_keep(lib, keep):
