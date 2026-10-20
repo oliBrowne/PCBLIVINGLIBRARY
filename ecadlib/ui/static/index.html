@@ -389,7 +389,7 @@ details summary { cursor: pointer; color: var(--muted); }
     <div class="grid3" style="margin-top:10px">
       <div class="box">
         <h3>Database library (DbLib)</h3>
-        <p class="muted small">Writes parts.sqlite, parts.xlsx and two .DbLib files for this BOM. Open a .DbLib in Altium Designer; the SQLite one needs the SQLite3 ODBC driver, the Excel one needs the Access database engine.</p>
+        <p class="muted small">After step 2: a .DbLib, its Excel table (.xlsx, also as .csv) and the ready parts' .SchLib / .PcbLib, in altium/&lt;BOM&gt;/; held parts stay out. Open the .DbLib in Altium Designer (it needs the Access database engine). Before step 2: a draft from the BOM check (SQLite and Excel tables, no symbols or footprints yet).</p>
         <button id="dblib">Export DbLib</button>
         <div class="out" id="dblibout"></div>
       </div>

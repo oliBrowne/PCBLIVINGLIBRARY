@@ -399,3 +399,18 @@ def test_docs_and_part_panel_name_no_review_queue_the_ui_lacks():
     assert keys <= listed, sorted(keys - listed)
     assert "Review queue" not in PAGE and not re.search(r"Review queue \(with how many|in the review queue\)", doc)
     assert "review queue" not in M.explain("awaiting approval: a reviewer")["fix"]
+
+
+# T111
+@lite
+def test_dblib_card_names_only_files_export_writes(tmp_path):
+    """Step 3's DbLib card promised parts.sqlite, parts.xlsx and two .DbLib files; after step 2 Export DbLib writes the
+    plan's <name>.DbLib, .xlsx, .csv (and the models in SchLib/ PcbLib/)."""
+    import re
+    from tests.test_ui_browser import planned_workspace
+    ws = planned_workspace(tmp_path / "ws")
+    written = {f.rsplit("/", 1)[-1] for f in ws.export_dblib("uploads/demo/demo_bom.csv")["files"]}
+    box = re.search(r"<h3>Database library \(DbLib\)</h3>\s*<p[^>]*>(.*?)</p>", PAGE, re.S).group(1)
+    promised = set(re.findall(r"\b[\w-]+\.(?:sqlite|xlsx|DbLib)\b", box))
+    assert promised <= written, (sorted(promised), sorted(written))
+    assert "After step 2" in box and any(f.endswith(".DbLib") for f in written)
