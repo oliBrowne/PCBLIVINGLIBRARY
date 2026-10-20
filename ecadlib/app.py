@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import bom_triage as T, footprint_gen as F, providers as P, rules as RU, sexpr
-from .fsutil import write_text_atomic
+from .fsutil import report_file, write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex
 from . import userconfig as UC
@@ -219,11 +219,11 @@ class Workspace:
             out = {"bom": self.rel(bom_path) if self.root in bom_path.resolve().parents else str(bom_path),
                    "mapping": mapping, "rows": rows,
                    "counts": {k: int(v) for k, v in counts.items()},
-                   "reports": [self.rel(stem.with_suffix(".md")), self.rel(stem.with_suffix(".csv"))]}
+                   "reports": [self.rel(report_file(stem, ".md")), self.rel(report_file(stem, ".csv"))]}
             meta = {"id": self._key(bom_path), "name": bom_path.name, "finished": _now(), "user": user or None}
             tmp = stem.with_name(stem.name + f".{os.getpid()}.{secrets.token_hex(3)}.tmp")
             tmp.write_text(json.dumps({**meta, **out}, default=str), encoding="utf-8")
-            os.replace(tmp, stem.with_suffix(".json"))
+            os.replace(tmp, report_file(stem, ".json"))
         return {**out, **meta}
 
     # ------------------------------------------------------------------ past triages (read-only)
@@ -1382,7 +1382,7 @@ class Workspace:
         rep = PY.check_plan(plan_f, kdir, kname(str(name))[:60] if kdir else None, rules=self.rules_in_use())
         stem = PY.write_report(rep, self.root / "reports" / f"parity_{self._key(bom_path)}")
         bad = [p for p in rep["parts"] if p["result"] == "mismatch"]
-        return {"mode": rep["mode"], "ok": rep["ok"], "counts": rep["counts"], "report": self.rel(stem.with_suffix(".md")),
+        return {"mode": rep["mode"], "ok": rep["ok"], "counts": rep["counts"], "report": self.rel(report_file(stem, ".md")),
                 "mismatches": {p["part"]: [d["msg"] for d in p["diffs"] if d["level"] == "error"][:20] for p in bad},
                 "database": [d["msg"] for d in rep["database"]][:50]}
 
