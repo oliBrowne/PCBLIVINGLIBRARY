@@ -235,6 +235,49 @@ def test_ds2_24_sot223_tab_on_pin2_reads_with_the_schemas_pin_count():
         assert "pin_count is 5" in str(e), e
 
 
+# body_length (along the row), body_width, lead_span, terminal_length, terminal_width, tab width (mm) and height_max
+DPAK = (("6.35", "6.54", "6.73"), ("5.97", "6.10", "6.22"), ("9.40", "9.90", "10.41"), ("1.40", "1.59", "1.78"),
+        ("0.63", "0.76", "0.89"), 5.2, "2.38")
+D2PAK = (("10.00", "10.20", "10.40"), ("8.60", "9.00", "9.40"), ("14.60", "15.25", "15.90"), ("1.80", "2.30", "2.80"),
+         ("0.66", "0.78", "0.91"), 7.0, "4.70")
+
+
+def _tab_read(name, pitch, leads, tab, pin_count, size=DPAK):
+    """A correct DPAK / D2PAK style read: the leads numbered `leads` in one row at `pitch` (a missing number is a cut
+    lead: TO-252-2 has leads 1 and 3), the tab on the other side numbered `tab`; the pin table lists each number once."""
+    import json
+    d = lambda nm, lab, v: {"name": nm, "label": lab, "min": v[0], "nom": v[1], "max": v[2], "unit": "mm", "page": 9,
+                            "figure": name}
+    bl, bw, ls, tl, tw, w, h = size
+    mid = (1 + int(leads[-1])) / 2
+    wire = {"package": {"name": name, "description": name, "package_type": "gullwing", "drawing": name, "unresolved": [],
+                        "dims": [d("body_length", "E", bl), d("body_width", "D", bw), d("lead_span", "H", ls),
+                                 d("pitch", "e", ("", pitch, "")), d("terminal_length", "L", tl),
+                                 d("terminal_width", "b", tw), d("height_max", "A", ("", "", h))],
+                        "other_json": json.dumps({"pin_count": pin_count,
+                                                  "pin_positions": [{"number": n, "side": "L", "offset": round(
+                                                      (int(n) - mid) * float(pitch), 3)} for n in leads],
+                                                  "tab": {"number": tab, "side": "R", "offset": 0,
+                                                          "width": {"min": w - 0.2, "nom": w, "max": w + 0.2}}})},
+            "pin_table": {"page": 3, "figure": "Pin functions", "rows": len(set(leads) | {tab})},
+            "pins": [{"num": n, "name": f"P{n}", "type": "power", "side": "left", "page": 3}
+                     for n in sorted(set(leads) | {tab}, key=int)],
+            "symbol_description": "regulator", "notes": [], "embedded_instructions": []}
+    return D.process(D.parse_message({"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(wire)}]}),
+                     "LM2940", "ds.pdf")
+
+
+# ---- DS2-24 (review): KiCad's names count the leads without the tab (TO-252-2: leads 1 and 3 + tab 2), so the
+# self-check held a read with the schema's pin_count (3), and footprint_gen refuses 2: such a read could never pass
+def test_ds2_24_a_name_that_counts_the_leads_without_the_tab_passes_the_self_check():
+    from ecadlib import ds_route as DR
+    for name, leads, tab, n in (("TO-252-2", ["1", "3"], "2", 3), ("TO-252-3_TabPin4", ["1", "2", "3"], "4", 4)):
+        res = _tab_read(name, "2.29", leads, tab, n)
+        assert DR.assess(res) == ("ok", []), (name, DR.assess(res), res["needs_review"])
+    res = _tab_read("TO-252-2", "2.29", ["1", "2", "3"], "4", 4)   # 3 leads: not what the name says
+    assert "self-check: name TO-252-2 says 2 pins, pin_count is 4" in res["needs_review"], res["needs_review"]
+
+
 # ---- DS2-21: the 2.30 mm pitch every SOT-223 drawing prints (JEDEC TO-261AA, e = 2.30 BSC) failed the self-check
 def test_ds2_21_sot223_pitch_2_30_is_a_standard_pitch():
     from ecadlib import ds_route as DR

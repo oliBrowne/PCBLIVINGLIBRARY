@@ -1322,7 +1322,9 @@ def self_check(spec, ext, review):
     t, n, e = spec.get("package_type"), spec.get("pin_count"), spec.get("pitch")
     f = name_facts(spec.get("name") or "")
     tab = 1 if spec.get("tab") else 0
-    if f["count"] is not None and n is not None and f["count"] not in (n, n + tab):
+    # KiCad's names count the leads without the tab (TO-252-2: leads 1 and 3 + tab 2), as footprint_rules._name_rules
+    leads = len({str(p.get("number")) for p in spec.get("pin_positions") or [] if isinstance(p, dict)})
+    if f["count"] is not None and n is not None and f["count"] not in (n, n + tab) and not (tab and f["count"] == leads):
         add(f"name {spec['name']} says {f['count']} pins, pin_count is {n}")
     pins = [p["num"] for p in ext.get("pins", [])]
     if n is not None and pins:
