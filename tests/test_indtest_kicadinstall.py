@@ -364,3 +364,15 @@ def test_next_commands_of_demo_and_init_survive_a_space_in_the_folder(tmp_path):
     rc, out, _ = _run(["demo", "-o", "my demo"], cwd=tmp_path, env={"ECADLIB_HOME": str(tmp_path / "h"), "COLUMNS": "250"})
     status = next(ln.split("  #")[0].strip() for ln in out.splitlines() if ln.strip().startswith("ecadlib status"))
     assert rc == 0 and shlex.split(status)[2:] == ["--workspace", "my demo"], status
+
+
+# T071
+@lite
+def test_demo_in_a_non_ascii_folder_with_the_c_locale(tmp_path):
+    if not sys.platform.startswith("linux"):     # byte paths and the C locale
+        return
+    cwd = tmp_path / "Projekte Ωµ"
+    cwd.mkdir()
+    r = _sub(["demo"], cwd, env={"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"})
+    assert r.returncode == 0 and "7 parts: 4 ready, 3 held" in r.stdout, (r.stdout + r.stderr)[-800:]
+    assert "Projekte Ωµ" in (cwd / "ecadlib-demo" / "librarian" / "demo_bom_demo" / "triage.md").read_text(encoding="utf-8")
