@@ -877,7 +877,7 @@ def generate(src, height=None, name=None, pads=None):
     the model is then turned so its leads sit on them (fit_rotation), info["rotation"]."""
     if isinstance(src, dict):
         spec = src
-    elif str(src).endswith(".json") and Path(src).exists():
+    elif str(src).endswith(".json"):                 # a spec path, never a footprint name: a missing file is not found
         spec = json.loads(Path(src).read_text())
     else:
         spec = spec_from_name(str(src))

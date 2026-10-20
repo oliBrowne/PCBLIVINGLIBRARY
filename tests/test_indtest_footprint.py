@@ -217,3 +217,26 @@ def test_t081_schema_paste_default():
     s = json.loads((ROOT / "ecadlib" / "package_schema.json").read_text())
     assert s["properties"]["exposed_pad"]["properties"]["paste_coverage"]["default"] == 0.65
     assert re.search(r'paste_coverage"\), 0\.65\)|paste_coverage", 0\.65\)', (ROOT / "ecadlib" / "footprint_gen.py").read_text())
+
+
+# T082: footprint-bench never prints 100 % for a run where some pads fail
+def test_t082_bench_percent_not_100_when_failing():
+    from ecadlib import footprint_bench as FB
+    s = {"pads_ok": 2940, "pads": 2942, "footprints_all_pads_ok": 39, "footprints": 40, "courtyards_ok": 40,
+         "check_clean": 40, "unavailable": 0}
+    line = FB.report([], s).splitlines()[-1]
+    assert "2940/2942 (99.9 %)" in line and "40/40 (100 %)" in line, line
+
+
+# T083: step-gen on a .json path that does not exist says the file is not found
+@lite
+def test_t083_step_gen_missing_json(tmp_path):
+    from ecadlib import step_gen as SG
+    try:
+        SG.generate(str(tmp_path / "specs" / "QFN-24-1EP_4x4mm_P0.5mm_EP2.6x2.6mm.json"))
+        assert False
+    except FileNotFoundError as e:
+        assert "QFN-24" in str(e.filename), e
+    from ecadlib import cliutil
+    code = cliutil.report("step-gen", FileNotFoundError(2, "No such file", "x.json"), io.StringIO())
+    assert code == 2
