@@ -204,18 +204,28 @@ def test_ds2_38_prune_svn_deletes_the_step_file_and_emptied_folders_of_a_pruned_
     assert not (wc / "PcbLib/ecadlib_3d").exists()
 
 
-@lite
-def test_ds2_38_prune_commit_leaves_no_step_file_in_a_real_svn_repository(tmp_path):
+def _svn_wc(tmp_path):
+    """A new local repository and its working copy, (repo, wc); None without svn (CI has none: the tests that use
+    this check what the command-level tests beside them cannot, real svn's answer)."""
     import shutil, subprocess
-    if not (shutil.which("svn") and shutil.which("svnadmin")):     # CI has no svn: the test above covers the commands
-        return
-    from ecadlib import altium_dblib_sync as S
-    from tests.test_altium_ad26_overnight import _models_with_step
-    from tests.test_dblib_sync import _base_items, _plan
-    _models_with_step(tmp_path)
+    if not (shutil.which("svn") and shutil.which("svnadmin")):
+        return None
     repo, wc = tmp_path.resolve() / "repo", tmp_path.resolve() / "wc"
     subprocess.run(["svnadmin", "create", str(repo)], check=True, capture_output=True)
     subprocess.run(["svn", "checkout", repo.as_uri(), str(wc)], check=True, capture_output=True)
+    return repo, wc
+
+
+@lite
+def test_ds2_38_prune_commit_leaves_no_step_file_in_a_real_svn_repository(tmp_path):
+    import subprocess
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_altium_ad26_overnight import _models_with_step
+    from tests.test_dblib_sync import _base_items, _plan
+    if not (svn := _svn_wc(tmp_path)):
+        return
+    repo, wc = svn
+    _models_with_step(tmp_path)
     first = S.sync(_plan(tmp_path, _base_items()), wc, mode="svndblib", svn_url=repo.as_uri())
     assert S.svn_step(wc, first["written"], first["removed"], commit=True)["ran"]
     no_res = [i for i in _base_items() if i["name"] != "RES-0603-10k"]
@@ -226,6 +236,58 @@ def test_ds2_38_prune_commit_leaves_no_step_file_in_a_real_svn_repository(tmp_pa
     assert status.strip() == "", status                             # was '!' for the STEP file and both folders
     ls = subprocess.run(["svn", "ls", "-R", repo.as_uri()], capture_output=True, text=True).stdout
     assert "ecadlib_3d" not in ls and "R_0603" not in ls, ls
+
+
+@lite
+def test_ds2_38_prune_commit_skips_files_svn_never_added(tmp_path):
+    """A working copy an older ecadlib synced: it svn-added the libraries but not their recipe / .ecadstate (or the
+    commands were never run). svn delete of a path svn does not know fails, and took the whole prune commit with it."""
+    import subprocess
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_dblib_sync import _base_items, _models, _plan
+    if not (svn := _svn_wc(tmp_path)):
+        return
+    repo, wc = svn
+    _models(tmp_path)
+    first = S.sync(_plan(tmp_path, _base_items()), wc, mode="svndblib", svn_url=repo.as_uri())
+    old = [w for w in first["written"] if not w.endswith((".ecadbuild", ".ecadstate"))]
+    assert S.svn_step(wc, old, [], commit=True)["ran"]
+    no_cap = [i for i in _base_items() if i["name"] != "CAP-0402-100nF"]
+    out = S.sync(_plan(tmp_path, no_cap), wc, mode="svndblib", svn_url=repo.as_uri(), prune=True)
+    assert "PcbLib/C_0402_1005Metric.PcbLib.ecadbuild" in out["removed"], out["removed"]
+    res = S.svn_step(wc, out["written"], out["removed"], commit=True)
+    assert res["ran"], res
+    assert "PcbLib/C_0402_1005Metric.PcbLib.ecadbuild" in res["not_versioned"], res
+    ls = subprocess.run(["svn", "ls", "-R", repo.as_uri()], capture_output=True, text=True).stdout
+    assert "C_0402" not in ls and "Capacitor" not in ls, ls          # the libraries' deletion is committed
+
+
+@lite
+def test_ds2_38_svn_step_leaves_paths_svn_does_not_know_out_of_delete_and_commit(tmp_path):
+    """The same with svn faked (CI has none): `svn status --xml` as svn 1.14 prints it, an entry for a path it knows
+    (here missing: deleted by the sync), a bare <target> for one it does not."""
+    from types import SimpleNamespace
+    from ecadlib import altium_dblib_sync as S
+    known = {"PcbLib/C_0402_1005Metric.PcbLib", "SchLib/Capacitor.SchLib"}
+    removed = sorted(known | {"PcbLib/C_0402_1005Metric.PcbLib.ecadbuild", "SchLib/Capacitor.SchLib.ecadstate"})
+    calls = []
+
+    def svn(cmd, cwd=None):
+        calls.append(cmd)
+        if cmd[1] == "status":
+            body = "".join(f'<target\n   path="{p}">\n' + (f'<entry\n   path="{p}">\n<wc-status\n   props="none"\n'
+                           '   item="missing"\n   revision="1">\n</wc-status>\n</entry>\n' if p in known else "")
+                           + "</target>\n" for p in cmd[cmd.index("empty") + 1:])
+            return SimpleNamespace(returncode=0, stdout=f'<?xml version="1.0" encoding="UTF-8"?>\n<status>\n{body}</status>\n',
+                                   stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    res = S.svn_step(tmp_path, ["ecadlib.csv"], removed, commit=True, runner=svn, which=lambda _: "svn")
+    assert res["ran"] and res["not_versioned"] == ["PcbLib/C_0402_1005Metric.PcbLib.ecadbuild",
+                                                   "SchLib/Capacitor.SchLib.ecadstate"], res
+    delete = next(c for c in calls if c[1] == "delete")
+    commit = next(c for c in calls if c[1] == "commit")
+    assert delete[3:] == sorted(known), delete
+    assert not any(p.endswith((".ecadbuild", ".ecadstate")) for p in commit), commit
 
 
 # ---------------------------------------------------------------- DS2-39: altium-pkg rows of a non-ASCII DbLib name

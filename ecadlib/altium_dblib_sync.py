@@ -420,6 +420,11 @@ def svn_step(target, written, removed, commit=False, message="ecadlib dblib-sync
     elif runner(["svn", "info", str(target)]).returncode != 0:
         res["note"] = f"{target} is not an svn working copy: check it out first, then run these"
     else:
+        known = _svn_known(target, removed, runner)
+        if known is not None and set(known) != set(removed):    # svn delete of one fails, and the whole commit with it
+            res["not_versioned"] = sorted(set(removed) - set(known))
+            cmds = svn_commands(written, known, message)
+            res["commands"] = [" ".join(_q(c) for c in cmd) for cmd in cmds]
         for cmd in cmds:
             r = runner(cmd, cwd=str(target))
             res["output"].append((r.stdout or "") + (r.stderr or ""))
@@ -429,6 +434,25 @@ def svn_step(target, written, removed, commit=False, message="ecadlib dblib-sync
         else:
             res["ran"] = True
     return res
+
+
+def _svn_known(target, paths, runner):
+    """The paths svn has (versioned or scheduled, here mostly missing: the sync deleted them), or None when svn's
+    answer can't be read. A file svn never added (an older ecadlib's recipe, commands never run) has no entry."""
+    if not paths:
+        return []
+    r = runner(["svn", "status", "--xml", "-v", "--depth", "empty", *sorted(set(paths))], cwd=str(target))
+    try:
+        from xml.etree import ElementTree as ET
+        root = ET.fromstring(r.stdout or "")
+    except Exception:
+        return None
+    known = set()
+    for e in root.iter("entry"):
+        st = e.find("wc-status")
+        if st is not None and st.get("item") not in ("unversioned", "ignored", "none"):
+            known.add(e.get("path", "").replace("\\", "/"))       # Windows svn prints PcbLib\X.PcbLib
+    return [p for p in paths if p in known]
 
 
 def _q(s):
@@ -865,6 +889,8 @@ def main(argv=None):
         s = svn_step(a.to, out["written"], out["removed"], a.commit, a.message)
         out["svn"] = s
         t.write(f"svn: {s.get('note') or ('committed' if s['ran'] else s.get('error', ''))}")
+        if s.get("not_versioned"):
+            t.write(f"  deleted here only (svn never added them): {', '.join(s['not_versioned'])}")
         if not s["ran"]:
             for c in s["commands"]:
                 t.write(f"  {c}")
