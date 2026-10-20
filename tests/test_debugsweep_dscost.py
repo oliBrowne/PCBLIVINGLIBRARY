@@ -44,6 +44,18 @@ def test_ds2_16_second_read_takes_a_value_printed_with_its_tolerance():
         assert got == (3.0, 2.9, 3.1), (nom, got)
 
 
+def test_ds2_25_second_read_rejects_a_value_written_in_another_unit():
+    """'0.050 in' in a row whose unit is mm was read as 0.05 mm (and '1.27 mm' in an inch row as 32.258 mm), so a
+    correct part was held as 'disagreed'. The first read rejects the same row (DS-3): the check is then not made."""
+    for nom, unit in (("0.050 in", "mm"), ("1.27 mm", "in")):
+        try:
+            got = CC.parse(_second_read(nom, unit=unit, name="pitch"))[0]["pitch"]
+            raise AssertionError(f"{nom!r} in a {unit} row was read as {got} mm")
+        except CC.Unavailable as e:
+            assert "is written in" in str(e), e
+    assert CC.parse(_second_read("1.27 mm", name="pitch"))[0]["pitch"] == (1.27, 1.27, 1.27)   # the same unit: kept
+
+
 # ---------------------------------------------------------------- DS2-17: ask_above_usd = 0 and the house style guide
 def test_ds2_17_style_guide_quote_asks_twice_when_ask_above_is_zero():
     """ask_above_usd = 0 means 'ask twice for any paid request' (DS-46); the style guide's quote let one yes through."""

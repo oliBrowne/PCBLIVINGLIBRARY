@@ -379,9 +379,8 @@ def parse(msg):
         pkg = dict(pkg, pin_count=pkg.get("pin_count") or None)
         for d in pkg["dims"]:
             if isinstance(d, dict) and d.get("name") in CHECK_DIMS:
-                tol = next((t for t in (D._toleranced(d.get(k)) for k in ("nom", "min", "max")) if t), None)
-                try:                                  # "6.5±0.2" / "6.3~6.7" in one cell, as the first read takes it
-                    raw = dict(d, **(tol or {k: D._wire_num(d.get(k), f"{d['name']}.{k}") for k in ("min", "nom", "max")}))
+                try:                                  # as the first read takes it: "6.5±0.2", a unit that disagrees
+                    raw = dict(d, **D._wire_dim(d, d["name"]))
                 except D.DatasheetError as e:
                     raise Unavailable(str(e))
                 if d["name"].startswith("exposed_pad."):

@@ -635,6 +635,20 @@ def _toleranced(v):
     return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}
 
 
+def _wire_dim(d, n):
+    """One dims row as the model wrote it -> {min, nom, max}. Raises DatasheetError. The first read (from_wire) and
+    the cross-check's second read (crosscheck.parse) both read a row this way, so the two cannot drift apart."""
+    tol = next((t for t in (_toleranced(d.get(k)) for k in ("nom", "min", "max")) if t), None)
+    if tol:                                           # "6.5±0.2" / "6.3~6.7" printed in one cell
+        return tol
+    got = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
+    for k, (x, u) in got.items():                     # "0.016 in" in a row whose unit is mm: which one is it?
+        if u and u != _unit_name(d.get("unit")):
+            raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
+                                 f"{d.get('unit')!r}; rejected")
+    return {k: x for k, (x, _) in got.items()}
+
+
 def _nullable(s):
     t = s.get("type")
     return any(_nullable(b) for b in s.get("anyOf") or []) or t == "null" or (isinstance(t, list) and "null" in t)
@@ -710,16 +724,7 @@ def from_wire(ext):
         if not isinstance(d, dict) or d.get("name") not in WIRE_DIMS:
             continue
         n = d["name"]
-        tol = next((t for t in (_toleranced(d.get(k)) for k in ("nom", "min", "max")) if t), None)
-        if tol:                                       # "6.5±0.2" / "6.3~6.7" printed in one cell
-            vals = tol
-        else:
-            got = {k: _wire_val(d.get(k), f"{n}.{k}") for k in ("min", "nom", "max")}
-            for k, (x, u) in got.items():             # "0.016 in" in a row whose unit is mm: which one is it?
-                if u and u != _unit_name(d.get("unit")):
-                    raise DatasheetError(f"response {n}.{k} {d.get(k)!r} is written in {u!r} but the dimension's unit is "
-                                         f"{d.get('unit')!r}; rejected")
-            vals = {k: x for k, (x, _) in got.items()}
+        vals = _wire_dim(d, n)
         new = {"label": d.get("label", ""), **vals, "unit": d.get("unit"), "page": d.get("page"), "figure": d.get("figure", "")}
         if n in dims and any(dims[n].get(k) != new.get(k) for k in ("min", "nom", "max", "unit")):
             raise DatasheetError(f"response gives {n} twice with different values ({_dimtxt(dims[n])} and {_dimtxt(new)}): "
