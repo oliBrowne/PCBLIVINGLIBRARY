@@ -239,3 +239,28 @@ def test_rerun_init_yes_turns_online_lookups_and_the_reader_back_on():
     assert ask(["standard"], ["y", "y", "n"]) == ["kicad", "easyeda", "standard"]
     assert ask(["kicad", "standard"], ["y", "n", "n"]) is None                  # unchanged: nothing written
     assert ask(["standard", "kicad"], ["n", "n"]) == ["standard"]
+
+
+# T013
+@lite
+def test_ui_serves_the_page_to_a_browser_that_waits_for_it(tmp_path, monkeypatch):
+    import threading, urllib.request
+    from ecadlib.ui import server as S
+    made, seen = [], []
+    real = S.make_server
+    monkeypatch.setattr(S, "make_server", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
+
+    def console_browser(url, *a, **k):          # like w3m: fetches the page and only then returns
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with direct.open(url, timeout=3) as r:
+                seen.append(r.status)
+        except OSError as e:
+            seen.append(type(e).__name__)
+        threading.Thread(target=made[0].shutdown, daemon=True).start()
+        return True
+    monkeypatch.setattr(S.webbrowser, "open", console_browser)
+    with contextlib.redirect_stdout(io.StringIO()):
+        S.main(["--workspace", str(tmp_path / "ws"), "--port", "0", "--setup"])
+    made[0].server_close()
+    assert seen == [200], seen
