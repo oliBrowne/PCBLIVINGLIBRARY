@@ -120,7 +120,7 @@ dialog[open] { animation: pop .45s var(--ease) both; }
 dialog::backdrop { background: color-mix(in srgb, var(--bg) 55%, transparent); backdrop-filter: blur(3px); }
 .dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); gap: 10px; flex-wrap: wrap; }
 .dlg-body { display: grid; grid-template-columns: 1fr 1.15fr; gap: 18px; padding: 18px; }
-@media (max-width: 760px) { .dlg-body { grid-template-columns: 1fr; } input[type=search] { min-width: 0; width: 100%; } }
+@media (max-width: 760px) { .dlg-body { grid-template-columns: minmax(0, 1fr); } input[type=search] { min-width: 0; width: 100%; } }   /* minmax: the layer strip scrolls, the column never outgrows the dialog */
 textarea { width: 100%; min-height: 330px; font: 12px/1.5 var(--mono); background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
 /* footprint preview: Altium's PCB editor */
 .preview { background: var(--pcb-board); border: 1px solid #000; border-radius: 10px 10px 0 0; padding: 0; text-align: center; min-height: 240px; display: grid; place-items: center; overflow: hidden; }

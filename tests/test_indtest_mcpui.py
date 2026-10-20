@@ -414,3 +414,12 @@ def test_dblib_card_names_only_files_export_writes(tmp_path):
     promised = set(re.findall(r"\b[\w-]+\.(?:sqlite|xlsx|DbLib)\b", box))
     assert promised <= written, (sorted(promised), sorted(written))
     assert "After step 2" in box and any(f.endswith(".DbLib") for f in written)
+
+
+# T113 (the browser check: tests/ui_browser.js, "footprint dialog fits the screen")
+def test_footprint_dialog_column_can_shrink_on_a_phone():
+    """At 390 px the Generate footprint dialog's spec and preview were ~496 px wide in a ~357 px dialog: a 1fr track
+    does not shrink below its content (the layer strip); minmax(0, 1fr) does."""
+    import re
+    m = re.search(r"@media \(max-width: 760px\) \{ \.dlg-body \{ grid-template-columns: ([^;]+);", PAGE)
+    assert m and m.group(1) == "minmax(0, 1fr)", m and m.group(1)

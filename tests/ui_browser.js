@@ -158,6 +158,11 @@ async function local(browser, width) {
   await step("footprint dialog" + w, async () => {
     await p.click("#newfp");
     await p.waitForSelector("#dlg[open]");
+    await p.click("#previewbtn");                 // T113: at 390 px the spec and the preview stay inside the dialog
+    await p.waitForSelector("#preview svg", { timeout: 20000 });
+    const fit = await p.evaluate(() => { const r = s => document.querySelector(s).getBoundingClientRect().right;
+      return { dlg: r("#dlg"), preview: r("#preview"), spec: r("#spec") }; });
+    check("footprint dialog fits the screen" + w, fit.preview <= fit.dlg && fit.spec <= fit.dlg, JSON.stringify(fit));
     await p.keyboard.press("Escape");
     check("Escape closes the footprint dialog" + w, await p.locator("#dlg[open]").count() === 0);
   });
