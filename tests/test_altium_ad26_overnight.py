@@ -116,7 +116,10 @@ def test_prune_removes_the_step_folder_ecadlib_wrote():
         assert (lib / "PcbLib/ecadlib_3d/Mine/mine.step").read_bytes() == b"user"
         assert any(r["name"] == "PcbLib/ecadlib_3d/R_0603_1608Metric_0/R_0603.step" and r["action"] == "removed"
                    for r in out["results"]), out["results"]
-        assert "PcbLib/ecadlib_3d/R_0603_1608Metric_0/R_0603.step" not in out["removed"]      # never `svn delete`d
+        # svn added the file and its folders, so they are `svn delete`d too; ecadlib_3d keeps the user's folder
+        assert {"PcbLib/ecadlib_3d/R_0603_1608Metric_0/R_0603.step",
+                "PcbLib/ecadlib_3d/R_0603_1608Metric_0"} <= set(out["removed"]), out["removed"]
+        assert "PcbLib/ecadlib_3d" not in out["removed"], out["removed"]
         assert not any("ecadlib_3d" in f for f in json.loads((lib / S.STATE).read_text())["files"])
 
 

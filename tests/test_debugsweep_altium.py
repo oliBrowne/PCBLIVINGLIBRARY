@@ -113,6 +113,50 @@ def test_ds2_38_prune_svn_deletes_the_recipe_and_ecadstate_of_a_pruned_library(t
     assert left == [], left
 
 
+STEP_REL = "PcbLib/ecadlib_3d/R_0603_1608Metric_0/R_0603.step"
+
+
+@lite
+def test_ds2_38_prune_svn_deletes_the_step_file_and_emptied_folders_of_a_pruned_footprint(tmp_path):
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_altium_ad26_overnight import _models_with_step
+    from tests.test_dblib_sync import _base_items, _plan
+    _models_with_step(tmp_path)
+    wc = tmp_path / "wc"
+    first = S.sync(_plan(tmp_path, _base_items()), wc, mode="svndblib", svn_url="file:///repo/lib")
+    assert STEP_REL in first["written"], first["written"]           # svn add --parents: the file and its folders
+    no_res = [i for i in _base_items() if i["name"] != "RES-0603-10k"]
+    out = S.sync(_plan(tmp_path, no_res), wc, mode="svndblib", svn_url="file:///repo/lib", prune=True)
+    delete = next(c for c in S.svn_commands(out["written"], out["removed"], "m") if c[1] == "delete")
+    want = {STEP_REL, "PcbLib/ecadlib_3d/R_0603_1608Metric_0", "PcbLib/ecadlib_3d"}
+    assert want <= set(delete), sorted(want - set(delete))
+    assert not (wc / "PcbLib/ecadlib_3d").exists()
+
+
+@lite
+def test_ds2_38_prune_commit_leaves_no_step_file_in_a_real_svn_repository(tmp_path):
+    import shutil, subprocess
+    if not (shutil.which("svn") and shutil.which("svnadmin")):     # CI has no svn: the test above covers the commands
+        return
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_altium_ad26_overnight import _models_with_step
+    from tests.test_dblib_sync import _base_items, _plan
+    _models_with_step(tmp_path)
+    repo, wc = tmp_path.resolve() / "repo", tmp_path.resolve() / "wc"
+    subprocess.run(["svnadmin", "create", str(repo)], check=True, capture_output=True)
+    subprocess.run(["svn", "checkout", repo.as_uri(), str(wc)], check=True, capture_output=True)
+    first = S.sync(_plan(tmp_path, _base_items()), wc, mode="svndblib", svn_url=repo.as_uri())
+    assert S.svn_step(wc, first["written"], first["removed"], commit=True)["ran"]
+    no_res = [i for i in _base_items() if i["name"] != "RES-0603-10k"]
+    out = S.sync(_plan(tmp_path, no_res), wc, mode="svndblib", svn_url=repo.as_uri(), prune=True)
+    res = S.svn_step(wc, out["written"], out["removed"], commit=True)
+    assert res["ran"], res
+    status = subprocess.run(["svn", "status", str(wc)], capture_output=True, text=True).stdout
+    assert status.strip() == "", status                             # was '!' for the STEP file and both folders
+    ls = subprocess.run(["svn", "ls", "-R", repo.as_uri()], capture_output=True, text=True).stdout
+    assert "ecadlib_3d" not in ls and "R_0603" not in ls, ls
+
+
 # ---------------------------------------------------------------- DS2-39: altium-pkg rows of a non-ASCII DbLib name
 @lite
 def test_ds2_39_pkg_check_reads_the_rows_of_a_dblib_with_a_non_ascii_name(tmp_path):

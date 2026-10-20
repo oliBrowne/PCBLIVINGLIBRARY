@@ -736,14 +736,16 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         if rel not in managed_files:
             continue
         managed_files.discard(rel)
-        if (to / rel).is_file():                # not in `removed`: svn never added them (svn delete would fail)
+        if (to / rel).is_file():                # svn added it (svn add --parents, with its folders): svn deletes them
             results.append({"name": rel, "action": "removed", "detail": "STEP model of a pruned footprint", "table": "",
                             "kind": "3d"})
+            removed.append(rel)
             if not dry_run:
                 (to / rel).unlink()
                 for folder in ((to / rel).parent, (to / rel).parent.parent):
                     if folder.name != "PcbLib" and folder.is_dir() and not any(folder.iterdir()):
                         folder.rmdir()
+                        removed.append(folder.relative_to(to).as_posix())
     managed_files |= {w for w in written if not w.endswith((AN.EXT, AN.STATE_EXT)) and "/ecadlib_3d/" not in w}
     had = {table_key(t) for t in old}
     tables = {t: v for t, v in tables.items() if v[1] or table_key(t) in had}  # never create an empty sheet
