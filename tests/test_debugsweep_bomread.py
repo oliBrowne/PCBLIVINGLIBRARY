@@ -111,6 +111,39 @@ def test_ds2_09_integer_value_is_not_glued_to_the_next_column(tmp_path):
 
 
 @lite
+def test_ds2_09_voltage_or_tolerance_after_value_is_its_own_column(tmp_path):
+    # Value 100 then Voltage 50V / Tolerance 1%, the stray comma in the Description: not the value '100,50V'
+    v = tmp_path / "volt.csv"                       # well-formed rows show what the Voltage column holds
+    v.write_text("Designator,Value,Voltage,Footprint,MPN,Description\n"
+                 "C10,100n,50V,0603,GRM188R71H104KA93D,CAP CER 100nF 50V X7R\n"
+                 "C11,1u,25V,0603,GRM188R61E105KA12D,CAP CER 1uF 25V X5R\n"
+                 "C1,100,50V,0603,GRM1885C1H101JA01D,CAP 100pF, C0G\n"
+                 "C2,10,16V,0603,GRM188R61C106KA73D,CAP 10uF, X5R\n"
+                 "C3,4,7u,25V,0603,GRM188R61E475KE11D,CAP\n", encoding="utf-8")
+    t = tmp_path / "tol.csv"                        # no well-formed row: a '1%' is a tolerance, never a value's decimals
+    t.write_text("Designator,Value,Tolerance,Footprint,MPN,Description\n"
+                 "R1,10,1%,0603,RC0603FR-0710RL,RES 10 ohm, 1%\n"
+                 "R2,47,5%,0603,RC0603JR-0747RL,RES 47 ohm, 5%\n"
+                 "R3,4,7k,1%,0603,RC0603FR-074K7L,RES\n", encoding="utf-8")
+    q = tmp_path / "volt_qty.csv"                   # no well-formed row: the Qty after Value still counts the designators
+    q.write_text("Designator,Value,Voltage,Qty,Footprint,MPN,Description\n"
+                 "C1 C2,100,50V,2,0603,GRM1885C1H101JA01D,CAP 100pF, C0G\n"
+                 "C3 C4,4,7u,25V,2,0603,GRM188R61E475KE11D,CAP\n", encoding="utf-8")
+    got = {p.name: [(l["designator"], l["value"], l.get("qty"), l.get("footprint"), l.get("mpn"))
+                    for l in T.read_bom(p)[0]] for p in (v, t, q)}
+    assert got == {
+        "volt.csv": [("C10", "100n", None, "0603", "GRM188R71H104KA93D"), ("C11", "1u", None, "0603", "GRM188R61E105KA12D"),
+                     ("C1", "100", None, None, None), ("C2", "10", None, None, None),
+                     ("C3", "4,7u", None, "0603", "GRM188R61E475KE11D")],
+        "tol.csv": [("R1", "10", None, None, None), ("R2", "47", None, None, None),
+                    ("R3", "4,7k", None, "0603", "RC0603FR-074K7L")],
+        "volt_qty.csv": [("C1 C2", "100", "2", None, None), ("C3 C4", "4,7u", "2", "0603", "GRM188R61E475KE11D")],
+    }, got
+    notes = [l.get("bom_note", "") for p in (v, t, q) for l in T.read_bom(p)[0]]
+    assert "header has 6" in notes[2] and "header has 6" in notes[5] and "header has 7" in notes[8], notes
+
+
+@lite
 def test_ds2_10_real_manufacturer_and_description_columns_win_whatever_the_order(tmp_path):
     v = tmp_path / "vendor.csv"
     v.write_text("Designator,Qty,Value,Vendor,Vendor PN,Manufacturer,MPN\n"

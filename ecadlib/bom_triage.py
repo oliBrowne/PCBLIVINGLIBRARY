@@ -288,6 +288,8 @@ def read_bom(path, columns=None, rules=None, root=None):
     hwidth = max(widths[hdr_row:hdr_row + (2 if two else 1)]) if widths else 0   # the header row's own cells: Excel
                                                                   # saves an unnamed notes column as 'Footprint,'
     suppliers = _supplier_pairs(headers)
+    nxt = _column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
+                                                                  # after Value holds in the rows that fit the header
     lines, skipped = [], 0
     for idx, row in df.iterrows():
         cells = [str(x).strip() for x in row]
@@ -298,7 +300,7 @@ def read_bom(path, columns=None, rules=None, root=None):
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
                     and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])
-                    and _fraction_fits(cells, vj, col)):
+                    and _fraction_fits(cells, vj, col, nxt)):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
                 note.append(f"value {cells[vj]} was split by an unquoted decimal comma; read as one cell")
             else:
@@ -382,15 +384,31 @@ def read_bom(path, columns=None, rules=None, root=None):
 HEADER_ROWS = 50                                                 # title blocks and blank rows above the header
 
 
-def _fraction_fits(cells, vj, col):
-    """cells[vj] | cells[vj + 1] ('22' | '1') is one value split at its decimal comma, not Value 100 then the next
-    column (Qty 2, Footprint 0603) with the stray comma further on. A fraction with a unit ('7k', '768kHz') is a value;
-    a bare number is one when the joined value has at most 3 significant digits (the E-series: 4,7  22,1  4,99) and a
-    Qty column after Value, read from the joined row, still counts the designators."""
+def _shape(cell):
+    """A cell's shape, its numbers as 9: '50V', '6.3V' -> '9v'; '0603' -> '9'; '1%' -> '9%'."""
+    return re.sub(r"\d+(?:[.,]\d+)?", "9", str(cell).strip().lower())
+
+
+def _column_shapes(df, j, hlen):
+    """The shapes of column j's cells (an empty one too) in the rows with no cell past the header's hlen columns."""
+    if j >= df.shape[1]:
+        return set()
+    return {_shape(r[j]) for r in df.to_numpy() if not any(str(c).strip() for c in r[hlen:])}
+
+
+def _fraction_fits(cells, vj, col, shapes=()):
+    """cells[vj] | cells[vj + 1] ('4' | '7k', '22' | '1') is one value split at its decimal comma, not Value 100 then
+    the next column (Qty 2, Footprint 0603, Voltage 50V, Tolerance 1%) with the stray comma further on. It is not when
+    the fraction has a '%' (a tolerance, never a value's decimals); when the column after Value holds cells shaped like
+    it in the rows that fit the header (shapes: '50V' among '25V', '16V') and the joined reading's cell there does not;
+    when a bare number makes a value of more than 3 significant digits (the E-series: 4,7  22,1  4,99); or when a Qty
+    column after Value, read from the joined row, no longer counts the designators."""
     frac = cells[vj + 1]
-    if re.search(r"[^\d\s%]", frac):
-        return True
-    if len((cells[vj] + re.sub(r"\D", "", frac)).lstrip("0")) > 3:
+    if "%" in frac:
+        return False
+    if _shape(frac) in shapes and _shape(cells[vj + 2] if vj + 2 < len(cells) else "") not in shapes:
+        return False
+    if not re.search(r"[^\d\s]", frac) and len((cells[vj] + re.sub(r"\D", "", frac)).lstrip("0")) > 3:
         return False
     qj, dj = col.get("qty"), col.get("designator")
     if qj is None or qj < vj:
