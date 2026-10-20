@@ -481,6 +481,7 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
         rep["sync"] = DS.summary(res)
         bad = [r for r in res["results"] if r["action"] == "error"]
         rep["sync_errors"] = [f"{r['name']}: {r['detail']}" for r in bad]
+        rep["recheck"] = {r["name"]: "held: " + r["detail"] for r in res["results"] if r.get("recheck")}   # held by the check again
         rep["kept_edits"] = [f"{r['name']}: {n}" for r in res["results"] for n in (r.get("detail") or "").split("; ")
                              if "changed in Altium" in n]
         files = sorted(p for p in out.rglob("*") if p.is_file())

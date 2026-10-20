@@ -68,6 +68,8 @@ SYMBOLS = {
     "61300511121": ("J", "PinHeader_1x05_P2.54mm_Vertical", [(str(i), f"Pin_{i}", "passive", "L") for i in range(1, 6)]),
 }
 WIN_DIR = r"C:\ecadlib\testpack"            # where the checklist asks for the altium folder (the .DbLib's Excel path)
+CHECKED = ("MMBT3904LT1G",)                  # family-table pinouts checked against the datasheet (released anyway)
+CHECKED_BY = "ecadlib testpack (pinout checked against the maker's datasheet)"
 LOCAL_FP = ("USB_C_Receptacle_HRO_TYPE-C-31-M-12", "PinHeader_1x05_P2.54mm_Vertical", "VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm")
 # what a person must see, per part (CHECKLIST.md)
 EXPECT = {   # checked against the generated .kicad_mod by tests/test_testpack.py
@@ -144,8 +146,10 @@ def build(out, name=NAME, log=print):
     src = write_source(out / "source")
     bom = write_bom(out / "bom.csv")
     quiet = lambda *a, **k: None
-    items = L.run(str(bom), [str(src)], out / "library", ["standard"], None, False, [], True, out / "library" / "cache",
-                  0.0, [], log=quiet, gen_step=True)
+    # Q1's pinout comes from the stdparts family table, which holds a part until a person checks it: the pack's
+    # maintainers checked it against onsemi's datasheet (MMBT3904LT1/D: 1 = B, 2 = E, 3 = C), so it is released anyway
+    items = L.run(str(bom), [str(src)], out / "library", ["standard"], None, False, list(CHECKED), True,
+                  out / "library" / "cache", 0.0, [], log=quiet, gen_step=True, user=CHECKED_BY)
     plan = out / "library" / "plan.json"
     held = {i["name"]: i.get("hold_reasons") for i in items if i["status"] != "ready"}
     kx = X.export(plan, out / "kicad", name, libs=[str(src)], log=quiet)

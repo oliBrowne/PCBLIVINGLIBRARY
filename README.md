@@ -44,7 +44,9 @@ rest goes to **Altium 365** or **KiCad**. Free and open source (MIT); you bring 
   descriptions, value formats and parameters.
 * **Checked, or held.** A release check runs on every part: every pin has a pad, the footprint passes the rule book,
   the 3D height is plausible, the part fields are filled in and the files read back. A part that fails is held back
-  from Altium 365 with the reason and the next step in plain words.
+  from Altium 365 with the reason and the next step in plain words. Parts from a source that needs a second look (a
+  datasheet read, an EasyEDA conversion, a pinout from a family table, a KiCad part picked by a near name) are held
+  until a person releases them, and every export from a plan checks the files again before it writes them out.
 * **Change control.** Once a part is released, no library update can change it behind your back. A change to pins,
   pads or the part's identity waits for a person, who sees it in plain words ("pad 5 removed; pad SH added").
 * **Released to your workspace.** Parts go to your Altium 365 workspace, or out as `.SchLib`/`.PcbLib`, a database
@@ -78,7 +80,7 @@ About a second, offline, no API keys. It builds a 7-part library (0603 resistors
 MOSFET, a SOT-223 regulator and a SOIC-16 chip) from a BOM bundled with ecadlib:
 
 ```
-7 parts: 6 ready, 1 held in 0.7 s (held: CH340C; that is expected, see the review)
+7 parts: 4 ready, 3 held in 0.7 s (held: AMS1117-3.3, CH340C, AO3401A; that is expected, see the review)
 written:
   ecadlib-demo/librarian/demo_bom_demo/plan.json     the library plan
   ecadlib-demo/librarian/demo_bom_demo/review.md     review: what to check, part by part
@@ -86,11 +88,12 @@ written:
   ecadlib-demo/kicad/demo_bom_demo/                  KiCad: .kicad_dbl, .kicad_sym, .pretty/
 ```
 
-CH340C is held on purpose, so you see what a held part looks like. `ecadlib ui --workspace ecadlib-demo` opens the
-result in your browser.
+CH340C is held on purpose (the demo has no symbol for it), so you see what a held part looks like. The regulator and
+the MOSFET are held too: their pinouts come from a family table, and makers differ, so a person checks them against
+the datasheet and releases them. `ecadlib ui --workspace ecadlib-demo` opens the result in your browser.
 
 <p align="center">
-  <img alt="Fill the library: 6 of 7 parts ready for Altium 365, CH340C held with the reason" src="docs/ui-librarian.png" width="100%">
+  <img alt="Fill the library: 4 of 7 parts ready; AMS1117-3.3, CH340C and AO3401A held, each with the reason" src="docs/ui-librarian.png" width="100%">
 </p>
 
 ## From BOM to Altium 365
@@ -130,7 +133,8 @@ ecadlib approve ecadlib_workspace/librarian/my_bom/plan.json approve --part CH34
 ```
 
 **5. Release to Altium 365.** Set `NEXAR_TOKEN` (or `ecadlib keys set NEXAR_TOKEN`), check the plan with a dry run,
-then push. Held parts are never pushed. A part already in the workspace gets a new revision, and only after change
+then push. Only parts that pass the release check are pushed: push checks each part's files again before it uploads
+them, and held parts are never pushed. A part already in the workspace gets a new revision, and only after change
 control lets it through.
 
 ```

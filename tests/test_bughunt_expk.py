@@ -14,12 +14,15 @@ QUIET = lambda *a, **k: None
 def _plan(d):
     """The test_librarian plan (4 ready parts with .kicad_mod, .PcbLib and .SchLib), as a plain folder: no change
     control history (ledger, lock, usage record, stored released files, or the schema stamp that says there was a
-    ledger), so a hand edit to the plan in a test is not settled back."""
+    ledger), so a hand edit to the plan in a test is not settled back. TPS1234DSGR (symbol matched with an ordering
+    suffix) and EEPART1 (EasyEDA conversion), held for a person to verify, come released anyway (TX.CHECKED)."""
     import shutil
     plan, items, http = TX._plan(d)
     for f in ("library.ledger.jsonl", "library.lock.json", "library.usage.json", "ecadlib_schema.json"):
         (plan.parent / f).unlink(missing_ok=True)
     shutil.rmtree(plan.parent / ".ecadlib", ignore_errors=True)
+    ready = {i["name"] for i in json.loads(plan.read_text(encoding="utf-8")) if i["status"] == "ready"}
+    assert ready == {"RES-0603-10k", "LED-RED-0603", "TPS1234DSGR", "EEPART1"}, ready   # the parts the tests export
     return plan, items, http
 
 
@@ -59,7 +62,7 @@ def test_exp57_malformed_entry_is_named():
         except X.PlanError as e:
             assert "RES-0603-10k" in str(e) and "has no name" in str(e), e
         _edit(plan, lambda it: (it["RES-0603-10k"]["parameters"].pop(), it["EEPART1"].update(parameters=None)))
-        rows = PE.rows(plan)                                        # export-parts: "parameters": null is no parameters
+        rows = PE.rows(plan, include_held=True)                     # export-parts: "parameters": null is no parameters
         assert any(r["Part ID"] == "EEPART1" for r in rows)
         assert X.plan_fields({"name": "P", "parameters": [{"value": "1"}, {"name": "Value", "value": "2"}]}, "l", None, {})[1] == ("Value", "2")
 
@@ -177,7 +180,10 @@ def test_exp14_symbol_pins_without_a_pad_fail_the_export():
     with tempfile.TemporaryDirectory() as d:
         plan, _, http = _plan(d)
         _edit(plan, lambda it: it["TPS1234DSGR"].update(footprint=dict(it["RES-0603-10k"]["footprint"])))
-        rep = X.export(plan, Path(d) / "kx", "ecadlib", http=http, log=QUIET)
+        rep = X.export(plan, Path(d) / "kx", "ecadlib", http=http, log=QUIET)   # the release check, run again, holds it
+        assert any(s["part"] == "TPS1234DSGR" and "symbol pins without a pad" in s["why"] for s in rep["skipped"]), rep["skipped"]
+        assert "TPS1234DSGR" not in {r["part"] for r in rep["parts"]} and "TPS1234DSGR" not in TX._syms(Path(d) / "kx" / "ecadlib.kicad_sym")
+        rep = X.export(plan, Path(d) / "kx2", "ecadlib", include_held=True, http=http, log=QUIET)   # the export's own check
         assert any("TPS1234DSGR: symbol pins without a pad" in e for e in rep["errors"]), rep["errors"]
 
 

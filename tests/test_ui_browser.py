@@ -71,7 +71,7 @@ def test_parts_endpoint_says_why_with_both_values_and_cost():
         try:
             st, r = call("GET", "/api/parts?bom=" + bom)
             assert st == 200, r
-            assert r["counts"] == {"parts": 14, "ready": 6, "held": 8, "waiting": 0, "cross_check_disagreed": 1,
+            assert r["counts"] == {"parts": 14, "ready": 5, "held": 9, "waiting": 0, "cross_check_disagreed": 1,
                                    "parity_mismatch": 1, "changes_held": 0}, r["counts"]
             assert r["cost"]["usd"] == 0.111 and r["cost"]["models"] == ["claude-sonnet-4-5"] and r["cost"]["answers"] == 2
             by = {p["part"]: p for p in r["parts"]}
@@ -97,7 +97,7 @@ def test_parts_endpoint_says_why_with_both_values_and_cost():
             got = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                 "params": {"name": "library_parts", "arguments": {"bom": bom}}})
             mc = json.loads(got["result"]["content"][0]["text"])
-            assert mc["counts"]["held"] == 8 and all(p["picture"] is None for p in mc["parts"]), mc["counts"]
+            assert mc["counts"]["held"] == 9 and all(p["picture"] is None for p in mc["parts"]), mc["counts"]
             st, r = call("GET", "/api/parts?bom=uploads/nope.csv")
             assert st == 400 and str(ws.root) not in r["error"], r
         finally:
