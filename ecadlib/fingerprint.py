@@ -919,15 +919,23 @@ def of_kicad(symbol=None, kicad_mod=None, params=None, part=None, footprint_ref=
                  footprint_ref=footprint_ref)
 
 
+def spec_file(spec):
+    """'X.PcbLib[:Name]', 'X.SchLib[:Name]', 'X.kicad_mod', 'Lib.kicad_sym[:Name]' -> (Path, Name or None); None when
+    spec names no library file. The file ends at the first library extension, so a drive letter (C:\\lib\\X.SchLib,
+    C:/lib/X.SchLib:Name) is part of the path, not a :Name."""
+    m = re.match(r"(.+?\.(?:PcbLib|SchLib|kicad_mod|kicad_sym))(?::(.+))?$", str(spec), re.I)
+    return (Path(m.group(1)), m.group(2)) if m else None
+
+
 def of_files(*paths, part=None, params=None):
     """Any mix of 'X.PcbLib[:Name]', 'X.SchLib[:Name]', 'X.kicad_mod', 'Lib.kicad_sym[:Name]' -> one fingerprint."""
     sym = land = art = model = None
     props, tool = {}, set()
     for spec in paths:
-        m = re.match(r"(.+?\.(?:PcbLib|SchLib|kicad_mod|kicad_sym))(?::(.+))?$", str(spec), re.I)
-        if not m:
+        f = spec_file(spec)
+        if not f:
             raise ValueError(f"{spec}: give a .PcbLib, .SchLib, .kicad_mod or .kicad_sym (optionally :NAME)")
-        path, name = Path(m.group(1)), m.group(2)
+        path, name = f
         if not path.is_file():
             raise FileNotFoundError(f"{path}: no such file")
         ext = path.suffix.lower()

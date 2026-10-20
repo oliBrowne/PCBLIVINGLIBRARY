@@ -84,8 +84,8 @@ def version(spec, plan=None):
     if "+" in s and not Path(s).exists():
         parts = s.split("+")
         return s, FP.of_files(*parts)
-    f = FP.re.match(r"(.+?\.(?:PcbLib|SchLib|kicad_mod|kicad_sym))(?::.+)?$", s, FP.re.I)   # the file, as FP.of_files reads it
-    if f and Path(f.group(1)).exists():                 # (C:\lib\X.SchLib, C:/lib/X.SchLib:NAME: a drive letter is no :NAME)
+    f = FP.spec_file(s)                                 # the file, as FP.of_files reads it (a drive letter is no :NAME)
+    if f and f[0].exists():
         return s, FP.of_files(s)
     m = FP.re.match(r"(?:(.+\.json|.+?)[:])?([^:@]+)(?:@(\w+))?$", s)
     if not m:
