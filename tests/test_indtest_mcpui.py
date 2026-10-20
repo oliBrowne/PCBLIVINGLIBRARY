@@ -105,3 +105,50 @@ def test_cut_answer_advises_only_arguments_the_tool_takes_and_library_parts_page
     ws.mcp_options = M.Options(wait=120, max_chars=200)
     err, txt = _mcp(ws, "workspace_info", {})
     assert "cannot return less" in txt and "--max-chars" in txt, txt
+
+
+def _http(url, method, headers, body=None):
+    import http.client
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    c = http.client.HTTPConnection(u.hostname, u.port, timeout=20)
+    c.request(method, u.path, body=body, headers=headers)
+    r = c.getresponse()
+    out = r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
+    c.close()
+    return out
+
+
+# T049
+@lite
+def test_http_server_answers_cors_only_for_allowed_origins(tmp_path):
+    """A page at an --allow-origin origin could not call `ecadlib mcp --http` from a browser: OPTIONS was 501 and no
+    answer carried Access-Control-Allow-Origin. Only origins given with --allow-origin get CORS; the token still counts."""
+    from ecadlib import mcp_http as H
+    ws = Workspace(tmp_path / "ws", offline=True)
+    good, bad, local = "https://app.example", "https://evil.example", "http://localhost:5173"
+    srv, url = H.serve_in_thread(ws, token="tok", origins=[good + "/"])
+    pre = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization,content-type"}
+    init = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}})
+    post = {"Content-Type": "application/json", "Authorization": "Bearer tok"}
+    try:
+        st, h, _ = _http(url, "OPTIONS", dict(pre, Origin=good))
+        assert st == 204 and h["access-control-allow-origin"] == good, (st, h)
+        assert "POST" in h["access-control-allow-methods"] and "authorization" in h["access-control-allow-headers"].lower()
+        for o in (bad, local):                     # neither a foreign nor a local page gets CORS it was not given
+            st, h, _ = _http(url, "OPTIONS", dict(pre, Origin=o))
+            assert st == 403 and "access-control-allow-origin" not in h, (o, st, h)
+        st, h, b = _http(url, "POST", dict(post, Origin=good), init)
+        assert st == 200 and h["access-control-allow-origin"] == good and json.loads(b)["result"], (st, h, b)
+        st, h, _ = _http(url, "POST", {"Content-Type": "application/json", "Origin": good}, init)
+        assert st == 401, st                       # the token still counts
+        st, h, _ = _http(url, "POST", dict(post, Origin=bad), init)
+        assert st == 403 and "access-control-allow-origin" not in h, (st, h)
+        st, h, _ = _http(url, "POST", dict(post, Origin=local), init)
+        assert st == 200 and "access-control-allow-origin" not in h, (st, h)
+        st, h, _ = _http(url, "POST", post, init)
+        assert st == 200 and "access-control-allow-origin" not in h, (st, h)
+    finally:
+        srv.shutdown()
+        srv.server_close()

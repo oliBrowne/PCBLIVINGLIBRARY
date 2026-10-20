@@ -11,6 +11,8 @@ Safety, because a tunnel puts this on the internet even when it listens on 127.0
 - every request needs "Authorization: Bearer <token>" (or the bare token) (--token / ECADLIB_MCP_TOKEN, else a new one is printed);
   --no-auth is refused unless the server listens on a loopback address, and then the Host header must be local too;
 - a request from a web page (an Origin header) is refused unless the origin is local or given with --allow-origin;
+  only an origin given with --allow-origin gets the CORS answers (OPTIONS preflight, Access-Control-Allow-Origin) a
+  browser needs to read the reply, and it still needs the token;
 - file arguments must be inside the workspace or a --lib folder (--any-path lifts that);
 - bodies over 10 MB are refused. Standard library only."""
 import hmac, http.server, ipaddress, json, secrets, sys, threading
@@ -62,7 +64,7 @@ def make_server(ws, host="127.0.0.1", port=8766, path="/mcp", token=None, origin
             if status >= 400:                               # the body may be unread: never parse it as a request
                 self.close_connection = True
                 self.send_header("Connection", "close")
-            for k, v in (headers or {}).items():
+            for k, v in dict(self._cors(), **(headers or {})).items():
                 self.send_header(k, v)
             if body is not None:
                 self.send_header("Content-Type", "application/json" if not isinstance(body, bytes) else "text/plain; charset=utf-8")
@@ -71,6 +73,13 @@ def make_server(ws, host="127.0.0.1", port=8766, path="/mcp", token=None, origin
             self.end_headers()
             if data and self.command != "HEAD":
                 self.wfile.write(data)
+
+        def _cors(self):
+            """CORS headers for a page at an origin given with --allow-origin (no other origin, not even a local one)."""
+            origin = self.headers.get("Origin") or ""
+            if not origin or origin.rstrip("/").lower() not in allowed_origins:
+                return {"Vary": "Origin"} if origin else {}
+            return {"Access-Control-Allow-Origin": origin, "Vary": "Origin", "Access-Control-Expose-Headers": "Mcp-Session-Id"}
 
         def _refuse(self):
             """None when the request may go on, else the refusal already sent."""
@@ -102,6 +111,15 @@ def make_server(ws, host="127.0.0.1", port=8766, path="/mcp", token=None, origin
             if self._refuse():
                 return
             self._send(405, {"error": "this server does not push messages: POST requests only"}, {"Allow": "POST"})
+
+        def do_OPTIONS(self):                               # CORS preflight: a browser asks before it POSTs
+            if not self._ours():
+                return self._send(404, {"error": "not found"})
+            if "Access-Control-Allow-Origin" not in self._cors():
+                return self._send(403, {"error": "origin not allowed (start the server with --allow-origin to allow it)"})
+            self._send(204, None, {"Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS", "Access-Control-Max-Age": "600",
+                                   "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, MCP-Protocol-Version, "
+                                                                   "Mcp-Session-Id, Last-Event-ID"})
 
         def do_DELETE(self):                                # end of session: there is no session state to drop
             if not self._ours():

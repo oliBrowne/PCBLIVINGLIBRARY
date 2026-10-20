@@ -98,7 +98,9 @@ A tunnel puts the server on the internet even though it listens on 127.0.0.1, so
   use every tool you offer.
 - `--no-auth` is only allowed on 127.0.0.1 or localhost, and then only requests addressed to a local name are answered.
 - A request from a web page (it carries an `Origin` header) is refused unless the page is on this computer or you
-  allow it with `--allow-origin`.
+  allow it with `--allow-origin`. Only an origin given with `--allow-origin` gets the CORS answers a browser needs
+  (the `OPTIONS` preflight and `Access-Control-Allow-Origin`), so only a page there can read the replies, and its
+  requests still need the token.
 - File arguments must be inside the workspace or a `--lib` folder. `--any-path` lifts that.
 - Offer fewer tools to a remote agent: `--tools read-only` changes nothing but its own reports in the workspace
   (parity, project BOM, where-used, the Altium 365 plan file when there is no librarian plan), and `--tools core`
