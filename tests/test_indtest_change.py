@@ -133,3 +133,18 @@ def test_t043_refused_choice_puts_the_released_step_back():
         r = _run(d, home, "resolve", plan, "--part", "AO3401A", "--offline", "choose", "footprint", "spec:SOT-23-5")
         assert r.returncode == 2 and "not applied" in r.stdout, r.stdout + r.stderr
         assert step.read_bytes() == released
+
+
+# ------------------------------------------------------------------ T044: kicad-export left a held hand edit's released part out
+def test_t044_export_ships_the_released_revision_after_a_release_check_of_a_hand_edit():
+    with tempfile.TemporaryDirectory() as d:
+        lib, home = _demo(d), Path(d) / "home"
+        plan = lib / "plan.json"
+        kmod = lib / "models/KiCad/C_0402_1005Metric.kicad_mod"
+        kmod.write_text(kmod.read_text(encoding="utf-8").replace("(size 0.56 0.62)", "(size 0.9 0.62)", 1), encoding="utf-8")
+        assert "CAP-0402-100nF" in _run(d, home, "release-check", plan).stdout          # held on the edited files
+        for n in (1, 2):
+            kx = _run(d, home, "kicad-export", plan, "-o", f"kx{n}", "--name", "m")
+            assert "the released revision r1 is exported" in kx.stdout, kx.stdout
+            assert (Path(d) / f"kx{n}/m.pretty/C_0402_1005Metric.kicad_mod").is_file(), kx.stdout
+        assert next(i for i in json.loads(plan.read_text(encoding="utf-8")) if i["name"] == "CAP-0402-100nF")["status"] == "ready"

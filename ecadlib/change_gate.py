@@ -862,6 +862,9 @@ class Guard:
         name = it["name"]
         self._restore(head.get("files"))
         LG.apply_content(it, head.get("item") or {})
+        if it.get("status") and not it.get("_manifest"):   # a status the release check gave the edited files is not
+            from . import release_check as RC              # the released revision's: check what is back on disk
+            RC.apply([it], self.base, rules=self.rules)
         it["change"] = held_block(prop, self.ledger)
         return {"part": name, "action": "hold", "revision": head["revision"], "summary": CD.summary(changes),
                 "changes": [{"class": c["class"], "text": c["text"]} for c in changes],
