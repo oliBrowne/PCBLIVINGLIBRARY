@@ -179,3 +179,34 @@ def test_ds2_45_kicad_export_warns_of_removed_parts_after_another_library_was_ex
     assert [w for w in rep["warnings"] if "removed from" in w] == [
         f"1 part exported last time and not in this plan removed from alpha: {items[0]['name']}; a KiCad project "
         "using them loses those links"], rep["warnings"]
+
+
+# ---- DS2-45 with main's kept parts: a part kept as exported before (held now) that then leaves the plan is reported
+# as removed, from the per-library record and from a legacy single-library record alike
+@lite
+def test_ds2_45_kept_part_that_leaves_the_plan_is_reported_removed(tmp_path):
+    import json
+    from ecadlib import kicad_export as KX, release_check as RC
+    from tests.test_release_check import make
+    quiet = lambda *a, **k: None
+    for form in ("libraries", "legacy"):
+        d = tmp_path / form
+        d.mkdir()
+        ok, two = make(d), make(d, name="PART2", fp_name="SOIC-8_other")
+        RC.apply([ok, two], d)
+        (d / "plan.json").write_text(json.dumps([ok, two]))
+        KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
+        two["description"] = ""                           # now held: kept as exported before
+        (d / "plan.json").write_text(json.dumps([ok, two]))
+        rep = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
+        assert [k["part"] for k in rep["kept"]] == ["PART2"], rep["kept"]
+        if form == "legacy":                              # a kicad_export.json from before per-library records
+            f = d / "kicad" / "kicad_export.json"
+            rec = json.loads(f.read_text())
+            rec.pop("libraries", None)
+            f.write_text(json.dumps(rec))
+        (d / "plan.json").write_text(json.dumps([ok]))    # PART2 leaves the plan
+        rep = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
+        assert [w for w in rep["warnings"] if "removed from" in w] == [
+            "1 part exported last time and not in this plan removed from mylib: PART2; a KiCad project using them "
+            "loses those links"], (form, rep["warnings"])
