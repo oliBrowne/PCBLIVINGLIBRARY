@@ -92,3 +92,22 @@ def test_ds2_37_svn_commit_targets_every_new_folder_add_parents_schedules(tmp_pa
     targets = set(commit[6:])
     want = {"PcbLib", "SchLib", "PcbLib/ecadlib_3d", "PcbLib/ecadlib_3d/R_0603_1608Metric_0"}
     assert want <= targets, sorted(want - targets)
+
+
+# ---------------------------------------------------------------- DS2-38: --prune --svn and the recipe / .ecadstate
+@lite
+def test_ds2_38_prune_svn_deletes_the_recipe_and_ecadstate_of_a_pruned_library(tmp_path):
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_dblib_sync import _base_items, _models, _plan
+    _models(tmp_path)
+    wc = tmp_path / "wc"
+    first = S.sync(_plan(tmp_path, _base_items()), wc, mode="svndblib", svn_url="file:///repo/lib")
+    sidecars = ["PcbLib/C_0402_1005Metric.PcbLib.ecadbuild", "PcbLib/C_0402_1005Metric.PcbLib.ecadstate",
+                "SchLib/Capacitor.SchLib.ecadbuild", "SchLib/Capacitor.SchLib.ecadstate"]
+    assert set(sidecars) <= set(first["written"]), first["written"]           # svn-added by the first run
+    no_cap = [i for i in _base_items() if i["name"] != "CAP-0402-100nF"]
+    out = S.sync(_plan(tmp_path, no_cap), wc, mode="svndblib", svn_url="file:///repo/lib", prune=True)
+    delete = next(c for c in S.svn_commands(out["written"], out["removed"], "m") if c[1] == "delete")
+    assert set(sidecars) <= set(delete), delete
+    left = sorted(p.relative_to(wc).as_posix() for p in wc.rglob("*") if "C_0402" in p.name or "Capacitor" in p.name)
+    assert left == [], left

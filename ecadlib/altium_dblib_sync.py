@@ -717,9 +717,13 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                 steps = _steps(to, rel)             # read from its recipe before that is deleted
                 if not dry_run:
                     f.unlink()
-                    recipe = f.with_name(f.name + AN.EXT)      # else Altium's rebuild would make a file put here later
-                    if recipe.is_file():                       # from the recipe of the one pruned
-                        recipe.unlink()
+                # its recipe (else Altium's rebuild would make a file put here later from the recipe of the one
+                # pruned) and its .ecadstate go too; svn added both, so they are `svn delete`d with it
+                for side in (f.with_name(f.name + AN.EXT), f.with_name(f.name + AN.STATE_EXT)):
+                    if side.is_file():
+                        removed.append(f"{d}/{side.name}")
+                        if not dry_run:
+                            side.unlink()
                 prune_steps.update(steps)
             else:
                 res["detail"] = "no row uses it; kept (--prune deletes it)"

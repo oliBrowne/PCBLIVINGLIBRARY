@@ -150,7 +150,9 @@ def test_removed_items_reported_then_pruned():
         assert rep["PcbLib/Hand_Made.PcbLib"] == ("not_in_plan", "not written by ecadlib: kept"), rep
         assert not (lib / "SchLib/Resistor.SchLib").exists() and (lib / "PcbLib/Hand_Made.PcbLib").exists()
         assert S.read_tables(lib / "ecadlib.xlsx")["Resistors"][1] == []
-        assert sorted(out["removed"]) == ["PcbLib/R_0603_1608Metric.PcbLib", "SchLib/Resistor.SchLib"]
+        assert sorted(out["removed"]) == ["PcbLib/R_0603_1608Metric.PcbLib", "PcbLib/R_0603_1608Metric.PcbLib.ecadbuild",
+                                          "PcbLib/R_0603_1608Metric.PcbLib.ecadstate", "SchLib/Resistor.SchLib",
+                                          "SchLib/Resistor.SchLib.ecadbuild", "SchLib/Resistor.SchLib.ecadstate"]
 
 
 def test_bad_model_is_an_error_and_never_reaches_the_table():
@@ -226,7 +228,9 @@ def test_svndblib_and_commit_with_fake_svn():
         S.sync(_plan(d, _base_items()[1:]), d / "wc", mode="svndblib", runner=svn, which=lambda _: "x")
         out = S.sync(_plan(d, _base_items()[1:]), d / "wc", mode="svndblib", prune=True, runner=svn, which=lambda _: "x")
         cmds = S.svn_commands(out["written"], out["removed"], "m")
-        assert ["svn", "delete", "--force", "PcbLib/R_0603_1608Metric.PcbLib", "SchLib/Resistor.SchLib"] in cmds, cmds
+        assert ["svn", "delete", "--force", "PcbLib/R_0603_1608Metric.PcbLib", "PcbLib/R_0603_1608Metric.PcbLib.ecadbuild",
+                "PcbLib/R_0603_1608Metric.PcbLib.ecadstate", "SchLib/Resistor.SchLib", "SchLib/Resistor.SchLib.ecadbuild",
+                "SchLib/Resistor.SchLib.ecadstate"] in cmds, cmds
 
 
 def test_svn_without_svn_or_working_copy_prints_commands():
