@@ -1179,7 +1179,7 @@ def sanity(spec, review):
         if b and b[2] >= e:
             review.append(f"terminal_width max {b[2]} >= pitch {e}: leads would touch")
         if t == "gullwing":
-            if n % 2:
+            if n % 2 and not spec.get("pin_positions") and not spec.get("tab"):   # SOT-23, SOT-223: listed pads
                 review.append(f"pin_count {n} is odd for a dual-row package")
             rows, low = [("pin rows", n // 2, "body_length")], 0.6
         else:

@@ -132,29 +132,49 @@ def test_ds2_20_single_part_estimate_follows_the_configured_provider(tmp_path, m
     assert api.calls == [], [(c[1], (c[2] or {}).get("x-api-key")) for c in api.calls]   # nothing sent to Anthropic
 
 
-def _sot223(pitch):
-    """A correct SOT-223 read (AMS1117 style: 3 leads at e, the tab numbered 4 as KiCad's SOT-223 has it)."""
+def _sot223(pitch, name="SOT-223", tab="4", pin_count=4):
+    """A correct SOT-223 read (AMS1117 style: 3 leads at e, the tab numbered 4 as KiCad's SOT-223 has it, or 2 as
+    SOT-223-3_TabPin2 has it: then the pin table has 3 rows)."""
     import json
     d = lambda nm, lab, mn, nom, mx: {"name": nm, "label": lab, "min": mn, "nom": nom, "max": mx, "unit": "mm", "page": 9,
                                       "figure": "SOT-223"}
-    wire = {"package": {"name": "SOT-223", "description": "SOT-223", "package_type": "gullwing", "drawing": "SOT-223",
+    wire = {"package": {"name": name, "description": "SOT-223", "package_type": "gullwing", "drawing": "SOT-223",
                         "unresolved": [],
                         "dims": [d("body_length", "D", "6.30", "6.50", "6.70"), d("body_width", "E1", "3.30", "3.50", "3.70"),
                                  d("lead_span", "E", "6.70", "7.00", "7.30"), d("pitch", "e", "", pitch, ""),
                                  d("terminal_length", "L", "0.90", "1.00", "1.10"),
                                  d("terminal_width", "b", "0.66", "0.75", "0.84"), d("height_max", "A", "", "", "1.80")],
-                        "other_json": json.dumps({"pin_count": 4,
+                        "other_json": json.dumps({"pin_count": pin_count,
                                                   "pin_positions": [{"number": "1", "side": "L", "offset": -2.3},
                                                                     {"number": "2", "side": "L", "offset": 0},
                                                                     {"number": "3", "side": "L", "offset": 2.3}],
-                                                  "tab": {"number": "4", "side": "R", "offset": 0,
+                                                  "tab": {"number": tab, "side": "R", "offset": 0,
                                                           "width": {"min": 2.9, "nom": 3.0, "max": 3.1}}})},
-            "pin_table": {"page": 3, "figure": "Pin functions", "rows": 4},
+            "pin_table": {"page": 3, "figure": "Pin functions", "rows": 3 if tab == "2" else 4},
             "pins": [{"num": n, "name": nm, "type": "power", "side": s, "page": 3} for n, nm, s in
-                     [("1", "GND", "left"), ("2", "VOUT", "right"), ("3", "VIN", "left"), ("4", "VOUT", "right")]],
+                     [("1", "GND", "left"), ("2", "VOUT", "right"), ("3", "VIN", "left"), ("4", "VOUT", "right")][:3 if tab == "2" else 4]],
             "symbol_description": "LDO", "notes": [], "embedded_instructions": []}
     return D.process(D.parse_message({"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(wire)}]}),
                      "AMS1117-3.3", "ds.pdf")
+
+
+# ---- DS2-24: a SOT-223-3_TabPin2 read (tab = pin 2) was held whatever pin_count it gave: 4 wanted a pin 4 in the
+# table, 3 (signal pins, as package_schema.json defines pin_count) was refused by footprint_gen ("a tab counts")
+def test_ds2_24_sot223_tab_on_pin2_reads_with_the_schemas_pin_count():
+    from ecadlib import crosscheck as CC, ds_route as DR, footprint_gen as F
+    from tests.test_footprints import SPEC
+    res = _sot223("2.30", name="SOT-223-3_TabPin2", tab="2", pin_count=3)   # 3 signal pins, the tab is pin 2 again
+    assert DR.assess(res) == ("ok", []), (DR.assess(res), res["needs_review"])
+    spec = SPEC("SOT-223-3_TabPin2")                  # the bundled spec counts as the standard table does: agreed
+    assert CC.against_table(CC.critical(spec), "SOT-223-3_TabPin2", "x")["status"] == "agreed"
+    _, rep = F.build(spec)
+    assert sorted(p["num"] for p in rep["pads"]) == ["1", "2", "2", "3"], rep["pads"]
+    F.build(dict(spec, pin_count=4))                  # a spec file written when the generator said "a tab counts"
+    try:
+        F.build(dict(spec, pin_count=5))
+        raise AssertionError("pin_count 5 built for 3 pins and a tab")
+    except ValueError as e:
+        assert "pin_count is 5" in str(e), e
 
 
 # ---- DS2-21: the 2.30 mm pitch every SOT-223 drawing prints (JEDEC TO-261AA, e = 2.30 BSC) failed the self-check
