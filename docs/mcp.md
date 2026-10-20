@@ -149,8 +149,8 @@ estimate has gone up since. The house style guide works the same way: `learn_hou
 and `house_style_guide` spends it. `datasheet_batch`, `visual_check` and `apply_house_style` with `ai` are held the
 same way, by the server and not only by their descriptions: each needs `approved_usd`, the amount you said yes to, and
 is refused without it, when it is less than the quote, or when the quote is over your limit and `over_limit_ok` is not
-set. The quotes come from `datasheet_estimate` (its `ai`, for `datasheet_batch`; a `sync` read is priced by
-`datasheet_quote`, at full price), `visual_check` with `render_only` (its `ai`) and `apply_house_style` with `ai` but no
+set. The quotes come from `datasheet_estimate` (its `ai`, for `datasheet_batch`; a `sync` read costs full price, and
+`datasheet_batch` with `sync` but no `approved_usd` refuses with that quote), `visual_check` with `render_only` (its `ai`) and `apply_house_style` with `ai` but no
 `approved_usd` (its `ai`: nothing is sent). A server started with `--offline` makes no model call at all. See
 [api-keys.md](api-keys.md) for where your key lives.
 

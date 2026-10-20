@@ -309,3 +309,15 @@ def test_preview_symbol_refusal_says_symbol(tmp_path):
         ws.safe_name("SOIC-8/TI_D", strict=True)
     except ValueError as e:
         assert str(e).startswith("footprint name"), e
+
+
+# T107
+def test_mcp_docs_name_only_real_tools():
+    """docs/mcp.md told the user to price a sync datasheet read with `datasheet_quote`, which is no MCP tool."""
+    import re
+    from ecadlib import mcp_server as M
+    names = {t["name"] for t in M.TOOLS}
+    args = {k for t in M.TOOLS for k in t["inputSchema"].get("properties", {})}
+    doc = (REPO / "docs" / "mcp.md").read_text(encoding="utf-8")
+    named = set(re.findall(r"`([a-z][a-z0-9]*_[a-z0-9_]+)`", doc)) - args
+    assert sorted(n for n in named if n not in names) == []
