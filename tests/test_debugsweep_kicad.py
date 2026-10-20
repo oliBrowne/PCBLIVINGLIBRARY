@@ -262,6 +262,19 @@ def test_ds2_42_kicad_pcm_refuses_a_pkg_version_not_after_the_previous_one_for_a
     assert build("1.2.1") == "1.2.1"
 
 
+@lite
+def test_ds2_42_kicad_pcm_the_version_after_patch_999999_is_the_next_minor(tmp_path):
+    """A patch has at most 6 digits (KiCad's schema): after 2026.10.999999 comes 2026.11.0, not 2026.10.1000000."""
+    import datetime
+    _, exp, _ = TP._export(False, tmp_path)
+    out = exp.parent / "pcm"
+    KP.build(exp, out, pkg_version="2026.10.999999", log=QUIET)
+    f = exp / "lib.pretty" / "R_0603_1608Metric.kicad_mod"
+    f.write_text(f.read_text().replace("(attr smd)", "(attr smd)\n\t(tags \"changed\")", 1))
+    TP._as_written(exp, f)
+    assert KP.build(exp, out, today=datetime.date(2026, 10, 20), log=QUIET)["version"] == "2026.11.0"
+
+
 def test_ds2_43_a_value_with_a_thousands_or_decimal_comma_is_not_bound_renamed_or_merged_by_value():
     """'4,700pF' is 4.7 pF with a decimal comma and 4.7 nF with a thousands separator (change_diff._readings): no
     library part is picked by its value, no value style rewrites it, no other line's part takes it."""

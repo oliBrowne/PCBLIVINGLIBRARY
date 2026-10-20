@@ -30,10 +30,11 @@ kicad_pcm.json's content_sha256 matches (it records the last build in --out, of 
 or the zip in --out of this package's newest version holds the same files (that version is kept). This package's newest
 version is the highest of its zips' (<identifier>-<version>.zip), the ones packages.json lists for it and kicad_pcm.json's
 when that build was this package. KiCad offers an update only for a newer version, so a change built when that version
-is today's date or later takes the version after it (a second change on 2026.10.16 is 2026.10.17), and a --pkg-version
-that is not newer than that version (1.2 is 1.2.0 to KiCad) is refused for a changed library. Whenever
-packages.json changes, repository.json's update_timestamp moves past the one --out's repository.json (or
-kicad_pcm.json) has, so KiCad fetches it again.
+is today's date or later takes the version after it (a second change on 2026.10.16 is 2026.10.17; after a patch of
+999999, the most the schema allows, the next minor: 2026.11.0 after 2026.10.999999), and a --pkg-version that is not
+newer than that version (1.2 is 1.2.0 to KiCad) is refused for a changed library. Whenever packages.json changes,
+repository.json's update_timestamp moves past the one --out's repository.json (or kicad_pcm.json) has, so KiCad
+fetches it again.
 The metadata is checked against KiCad's PCM JSON schema when one is found (--schema, or the pcm.v1.schema.json a KiCad
 install ships in share/kicad/schemas) and the jsonschema package is installed, and always against the schema's
 required fields and patterns written out below."""
@@ -387,7 +388,9 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
         version = same
     else:
         d, p = today or datetime.date.today(), _ver_tuple(prior)
-        version = ".".join(map(str, max((d.year, d.month, d.day), p[:2] + (p[2] + 1,) if p else ())))
+        if p:                               # the version after it: patch + 1, or the next minor (VER_RE: 6 patch digits)
+            p = p[:2] + (p[2] + 1,) if p[2] < 999999 else (p[0], p[1] + 1, 0)
+        version = ".".join(map(str, max((d.year, d.month, d.day), p or ())))
     if not VER_RE.match(version):
         raise ValueError(f"version {version!r} must be major[.minor[.patch]], e.g. 1.2.0")
     meta = meta_for(version)
