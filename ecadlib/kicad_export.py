@@ -1337,12 +1337,8 @@ def print_result(rep, out, plan, t=None):
 
 
 def _shell_quote(s):
-    """A path as one shell word for a printed command: as it is when it needs no quoting, else quoted for the shell
-    it will be pasted into (cmd.exe on Windows, sh elsewhere)."""
-    import os, shlex, subprocess
-    if re.fullmatch(r"[\w@%+=:,./\\-]+", s):
-        return s
-    return subprocess.list2cmdline([s]) if os.name == "nt" else shlex.quote(s)
+    from .cliutil import shell_word
+    return shell_word(s)
 
 
 def main(argv=None):

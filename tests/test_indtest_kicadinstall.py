@@ -196,3 +196,17 @@ def test_quiet_kicad_dblib_and_kicad_pcm_print_only_the_outcome(tmp_path):
 def test_kicad_menu_check_bom_help_shows_kicads_placeholder():
     rc, out, _ = _run(["kicad-menu", "check-bom", "-h"])
     assert rc == 0 and '"%I"' in out and '"%%I"' not in out, out
+
+
+# T088
+@lite
+def test_parity_next_hint_keeps_the_export_folder(tmp_path):
+    shutil.copytree(_demo(), tmp_path / "ws")
+    plan = "ws/librarian/demo_bom_demo/plan.json"
+    assert _run(["kicad-export", plan, "-o", "my k", "--name", "mylib"], cwd=tmp_path)[0] == 0
+    fp = tmp_path / "my k" / "mylib.pretty" / "R_0603_1608Metric.kicad_mod"
+    fp.write_text(fp.read_text(encoding="utf-8").replace("(size 0.8 0.95)", "(size 0.9 0.95)", 1), encoding="utf-8")
+    rc, out, _ = _run(["parity", plan, "--kicad", "my k", "--name", "mylib"], cwd=tmp_path)
+    assert rc == 1 and "2 differ" in out, out
+    from ecadlib.cliutil import shell_word
+    assert f"ecadlib parity {plan} --kicad {shell_word('my k')} --name mylib -v" in out, out
