@@ -55,3 +55,14 @@ def test_ds2_59_freeze_backup_keeps_both_sheets_that_share_a_file_name(tmp_path)
     kept = [p.read_bytes() for p in Path(res["backup"]).rglob("*") if p.is_file()]
     for f, b in originals.items():
         assert b in kept, f"the backup lost the original {f}"
+
+
+@lite
+def test_ds2_60_parity_with_a_library_name_kicad_export_normalises(tmp_path):
+    """--name "My Lib": kicad-export writes My_Lib.kicad_sym / .pretty / .sqlite; parity given the same --name must
+    read those files, so the identical libraries match and the database rows are compared."""
+    from ecadlib import testpack as TP
+    s = TP.build(tmp_path.resolve() / "tp", name="My Lib", log=lambda *a, **k: None)
+    assert (tmp_path / "tp" / "kicad" / "My_Lib.kicad_sym").is_file()
+    assert s["parity"]["match"] == 6 and s["parity"]["mismatch"] == 0, s["parity"]
+    assert s["parity"]["database_rows"] == {"kicad": 6, "altium": 6}, s["parity"]
