@@ -286,3 +286,11 @@ def test_first_start_prints_the_setup_page_and_the_main_page_links_to_it(tmp_pat
         assert L.main(["--no-browser", "--port", "0", "--workspace", str(tmp_path / "ws")]) == 0
     assert "<title>ecadlib setup</title>" in got["printed"], got["out"].getvalue()
     assert re.search(r'href="setup"', got["main"])
+
+
+# T015
+def test_newer_file_refusal_names_an_upgrade_that_can_work():
+    from ecadlib import migrate as MG
+    msg = str(MG.too_new("librarian_state", 9, "0.3.1", "librarian_state.json"))
+    assert "made by ecadlib 0.3.1" in msg and "pip install -U ecadlib" in msg, msg
+    assert "git+https://github.com/oliBrowne/PCBLIVINGLIBRARY" in msg, msg    # PyPI may have nothing newer

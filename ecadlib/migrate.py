@@ -33,6 +33,12 @@ STAMP_FORMAT = 1
 BACKUP = ".ecadlib_backup"
 
 
+# what a refusal tells the person: PyPI has only releases, while a file can come from a newer main-branch build that
+# still says the last release's version, so `pip install -U ecadlib` alone may change nothing
+UPGRADE = ('upgrade ecadlib to the build that made it (pip install -U ecadlib; when that says it is up to date, the '
+           'main-branch build: pip install -U "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY")')
+
+
 class SchemaTooNew(RuntimeError):
     """A file written by a newer ecadlib, in a format this one does not know."""
 
@@ -134,7 +140,7 @@ def read_stamp(folder):
     if not isinstance(d, dict) or _ver(d.get("schema_version")) > STAMP_FORMAT:
         raise SchemaTooNew(f"{f} was made by ecadlib {d.get('ecadlib', '?') if isinstance(d, dict) else '?'} "
                            f"(stamp format {d.get('schema_version') if isinstance(d, dict) else '?'}; this ecadlib "
-                           f"{__version__} reads up to {STAMP_FORMAT}): upgrade ecadlib (pip install -U ecadlib)")
+                           f"{__version__} reads up to {STAMP_FORMAT}): {UPGRADE}")
     return d
 
 
@@ -157,7 +163,7 @@ def write_stamp(folder, kinds):
 def too_new(kind, version, made_by, where):
     k = KINDS[kind]
     return SchemaTooNew(f"{where} was made by ecadlib {made_by or '?'} ({kind} schema {version}; this ecadlib "
-                        f"{__version__} reads up to {k.current}): upgrade ecadlib (pip install -U ecadlib)")
+                        f"{__version__} reads up to {k.current}): {UPGRADE}")
 
 
 def folder_version(folder, kind):
@@ -438,7 +444,8 @@ def main(argv=None):
         if dry and n_old:
             nxt.append((f"ecadlib migrate {a.path}", "upgrade them (backups go to .ecadlib_backup/ first)"))
         if any(r["state"] == "new" for r in rows):
-            nxt.append(("pip install -U ecadlib", "a file was written by a newer ecadlib"))
+            nxt.append(("pip install -U ecadlib", "a file was written by a newer ecadlib (up to date already: the main-branch "
+                                                  "build, see README Install)"))
         if any(r["state"] == "error" for r in rows):
             nxt.append(("restore the unreadable file", "from a backup or version control, or delete its folder and run "
                                                         "the step that made it again"))
