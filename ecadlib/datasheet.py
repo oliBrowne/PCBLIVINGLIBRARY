@@ -1436,15 +1436,21 @@ def ordering_check(pkg, facts, review):
 
 def _pin_count_from(spec, ext):
     """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
-    name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "")."""
+    name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "").
+    The name counts the leads (name_facts: SOT-223's 223 is the outline), so the pin table may have one number more:
+    a tab with a number of its own (TO-252-2: leads 1 and 3, tab 2)."""
     m = re.match(r"[A-Za-z]+[A-Za-z0-9]*?-(\d+)(?:-(\d+)(?=[_]|$))?(?=[-_]|$)", str(spec.get("name") or ""))
     if m and m.group(2) and int(m.group(2)) > int(m.group(1)):
         return None, ""                               # SOIC-14-16 (UCC256301): 14 pins on 16 places, which ones isn't said
-    by_name = int(m.group(1)) if m else None
+    by_name = name_facts(str(spec.get("name") or ""))["count"]
     nums = {str(p.get("num")) for p in ext.get("pins") or [] if str(p.get("num") or "").isdigit()}
     by_pins = len(nums) - (1 if spec.get("exposed_pad") and str(len(nums)) in nums else 0) if nums else None
-    if by_name and by_pins and by_name != by_pins:
+    tab = str((spec.get("tab") or {}).get("number"))
+    own = tab in nums - {str(p.get("number")) for p in spec.get("pin_positions") or [] if isinstance(p, dict)}
+    if by_name and by_pins and by_pins not in (by_name, by_name + own):
         return None, ""
+    if by_name and by_pins == by_name + 1:
+        return by_pins, f"the pin table (the package name {spec['name']} counts the leads, the tab is pin {tab})"
     return (by_name, f"the package name {spec['name']}") if by_name else (by_pins, "the pin table") if by_pins else (None, "")
 
 

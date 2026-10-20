@@ -292,6 +292,18 @@ def test_ds2_24_a_single_row_of_leads_beside_a_tab_fills_the_body():
     assert review == ["pin rows: 5 pins x pitch 0.65 = 3.25 mm, under 60% of body_length 10.2 mm"], review
 
 
+# ---- DS2-24 (review): a blank pin_count was filled from the name's first number, the outline of a SOT / TO name
+# (SOT-223 -> 223, TO-252-2 -> 252), so a tab part's was never filled, or filled with nonsense
+def test_ds2_24_a_blank_pin_count_of_a_tab_part_comes_from_its_name_and_pin_table():
+    from ecadlib import ds_route as DR
+    for res, n in ((_sot223("2.30", pin_count=None), 4), (_tab_read("TO-252-2", "2.29", ["1", "3"], "2", None), 3)):
+        assert res["spec"].get("pin_count") == n, (res["spec"].get("pin_count"), res["needs_review"])
+        assert DR.assess(res) == ("ok", []), (DR.assess(res), res["needs_review"])
+    assert D._pin_count_from({"name": "SOT-223"}, {"pins": []}) == (None, "")   # SOT-223's name has no pin count
+    tab2 = {"name": "SOT-223-3_TabPin2", "tab": {"number": "2"}, "pin_positions": [{"number": n} for n in "123"]}
+    assert D._pin_count_from(tab2, {"pins": [{"num": n} for n in "1234"]}) == (None, "")   # the tab is pin 2: 4 isn't it
+
+
 # ---- DS2-21: the 2.30 mm pitch every SOT-223 drawing prints (JEDEC TO-261AA, e = 2.30 BSC) failed the self-check
 def test_ds2_21_sot223_pitch_2_30_is_a_standard_pitch():
     from ecadlib import ds_route as DR
