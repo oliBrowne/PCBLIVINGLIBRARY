@@ -123,8 +123,9 @@ def test_ds2_63_partial_combining_overline_is_not_a_whole_name_active_low():
     from ecadlib import house_style as H
     for name in ("R/B̅", "R/W̅", "C̅S̅/SHDN"):
         for style in H.PIN_STYLES:
-            out = H.convert_pin(name, style)
-            assert H.pin_low(out)[1] is None, (name, style, out)
+            assert H.convert_pin(name, style) == name, (name, style)
+    assert H.convert_pin("C̅E̅", "overbar") == "~{CE}"          # a bar over the whole name still is active-low
+    assert H.convert_pin("C̅E̅", "hash") == "CE#"
 
 
 def test_ds2_64_clean_shortens_paths_with_spaces_or_forward_slashes():
