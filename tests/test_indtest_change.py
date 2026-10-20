@@ -175,3 +175,17 @@ def test_t097_review_names_part_show_for_a_change_hold():
     cmds = RV.fix_commands("lib/plan.json", {"name": "RES-0402-10k", "hold_reasons": [why]}, [])
     assert cmds == ["ecadlib part show lib/plan.json RES-0402-10k"], cmds
     assert RV.fix_commands("p.json", {"name": "X", "hold_reasons": ["verify: check it"]}, []) == ["ecadlib release-check p.json --allow X"]
+
+
+# ------------------------------------------------------------------ T098: the table said "ready" for parts waiting for sign-off
+def test_t098_release_check_table_says_waiting_for_sign_off():
+    import io
+    from ecadlib import term as TM
+    row = dict.fromkeys(("symbol_source", "footprint_source", "height_mm", "failures", "warnings", "allowed"), "")
+    rows = [dict(row, name="PART-A", status="awaiting_approval", result="pass"),
+            dict(row, name="PART-B", status="ready", result="allowed"), dict(row, name="PART-C", status="ready", result="pass")]
+    out = io.StringIO()
+    RC.print_result(rows, "plan.json", Path("release_check"), TM.Term(out, styled=False, width=120))
+    lines = {l.split()[-1]: l for l in out.getvalue().splitlines() if l.strip().startswith(("ready", "waiting", "released"))}
+    assert "waiting for sign-off" in lines["PART-A"], out.getvalue()
+    assert "released anyway" in lines["PART-B"] and "ready" in lines["PART-C"], out.getvalue()

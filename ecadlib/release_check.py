@@ -523,8 +523,8 @@ def print_result(rows, plan, stem, t=None):
     t = t or TM.Term()
     table = []
     for r in rows:
-        st = {"pass": "ready", "allowed": "ready"}.get(r["result"], r["status"])
-        word = "released anyway" if r["result"] == "allowed" else None
+        st = r["status"]                    # a pass that waits for sign-off (or is a duplicate) is not ready
+        word = "released anyway" if r["result"] == "allowed" and st == "ready" else None
         reasons = _split(r["failures"]) if r["status"] == "held" else []
         why = M.explain_all(reasons)
         first = why[0]["text"] + (f" (+{len(why) - 1} more)" if len(why) > 1 else "") if why else ""
