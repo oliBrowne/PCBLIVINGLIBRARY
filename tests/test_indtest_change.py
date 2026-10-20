@@ -286,3 +286,23 @@ def test_t031_unchanged_kicad_symbol_with_klc_stacked_power_pins_is_reused():
         rep = json.loads(r.stdout)
         assert not [w for w in rep["warnings"] if "not the released revision" in w], rep["warnings"]
         assert "SYS_JTMS-SWDIO" in (d / "kicad/k.kicad_sym").read_text(encoding="utf-8")   # the KiCad symbol, alternates kept
+
+
+# ------------------------------------------------------------------ T123: a killed export's temp file was "a hand edit"
+def test_t123_leftover_atomic_tmp_is_not_a_hand_edit():
+    from ecadlib import fsutil
+    assert fsutil.atomic_tmp(".SOT-23.step.4242.139999999999999.tmp") and not fsutil.atomic_tmp("SOT-23.step")
+    assert not fsutil.atomic_tmp("my.notes.tmp")
+    with tempfile.TemporaryDirectory() as d:
+        lib, home = _demo(d), Path(d) / "home"
+        assert _run(d, home, "kicad-export", lib / "plan.json", "-o", "K", "--name", "m").returncode in (0, 1)
+        shapes = Path(d) / "K/m.3dshapes"
+        step = sorted(shapes.glob("*.step"))[0]
+        old, new = shapes / f".{step.name}.4242.1399.tmp", shapes / f".{step.name}.4243.1399.tmp"
+        old.write_bytes(step.read_bytes()[:100])
+        new.write_bytes(step.read_bytes()[:100])
+        os.utime(old, (1, 1))                                                 # left by an export killed long ago
+        r = _run(d, home, "kicad-export", lib / "plan.json", "-o", "K", "--name", "m", "--json")
+        rep = json.loads(r.stdout)
+        assert not [w for w in rep["warnings"] if "not written by ecadlib" in w], rep["warnings"]
+        assert not (Path(d) / "K/ecadlib-hand-edits").exists() and not old.exists() and new.exists()

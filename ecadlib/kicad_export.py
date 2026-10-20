@@ -39,7 +39,7 @@ pins and footprint pads are compared. Exit code 1 when a check fails.
 
 KiCad's libraries are CC-BY-SA 4.0 (with a design-use exception): exports holding KiCad content get a NOTICE.txt
 and must not be committed here (out/kicad/ is in .gitignore)."""
-import argparse, copy, hashlib, json, math, re, struct, sys
+import argparse, copy, hashlib, json, math, re, struct, sys, time
 from pathlib import Path
 
 from . import altium_lib as AL, easyeda_convert as EC, footprint_check as FC, fsutil, kicad_import as K, providers as P, \
@@ -1223,7 +1223,11 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                                f"{lib}: {', '.join(gone[:8])}{' ...' if len(gone) > 8 else ''}; a KiCad project using "
                                f"them loses those links" + ("" if same else " (give each plan its own -o folder)"))
     stale =[p for p in pretty.glob("*.kicad_mod") if p.stem not in fps]
-    stale += [p for p in (shapes.glob("*") if shapes.exists() else []) if p.is_file() and not rep["models"].get(p.name)]
+    for p in (shapes.glob("*") if shapes.exists() else []):
+        if p.is_file() and fsutil.atomic_tmp(p) and time.time() - p.stat().st_mtime > 600:
+            p.unlink()                        # ecadlib's own temp file a killed export left: no one's work
+        elif p.is_file() and not fsutil.atomic_tmp(p) and not rep["models"].get(p.name):
+            stale.append(p)
     for old in stale:                         # a re-export drops the files no longer in the plan; one it did not write
         rel = old.relative_to(out).as_posix()  # (added by hand) is moved aside and reported, not lost
         if rel not in owned:
