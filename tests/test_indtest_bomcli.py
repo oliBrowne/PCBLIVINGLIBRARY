@@ -114,3 +114,15 @@ def test_dedupe_missing_config_is_an_error(tmp_path):
         raise AssertionError("missing --config accepted")
     except FileNotFoundError as e:
         assert "typo.json" in str(e)
+
+
+# T061: `project check --json -o STEM` prints one JSON object on stdout; "-> STEM.md" goes to stderr
+@lite
+def test_project_check_json_out_stdout_is_only_json(tmp_path, monkeypatch):
+    from ecadlib import project_check as PC
+    monkeypatch.setattr(PC, "check_kicad", lambda *a, **k: {"tool": "kicad", "held": []})
+    monkeypatch.setattr(PC, "write_report", lambda res, out: Path(out).with_suffix(".md"))
+    o, e = io.StringIO(), io.StringIO()
+    with redirect_stdout(o), redirect_stderr(e):
+        assert PC.main(["check", str(tmp_path / "b.kicad_pro"), "--json", "-o", str(tmp_path / "drift")]) == 0
+    assert json.loads(o.getvalue())["tool"] == "kicad" and "drift.md" in e.getvalue()

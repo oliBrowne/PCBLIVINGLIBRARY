@@ -816,8 +816,8 @@ def main(argv=None):
                 print(json.dumps(res, indent=1))
             else:
                 print_check(res)
-            if a.out:
-                print(f"-> {write_report(res, a.out)}")
+            if a.out:                              # --json: stdout is the JSON, nothing else
+                print(f"-> {write_report(res, a.out)}", file=sys.stderr if a.json else sys.stdout)
             return 1 if res["held"] else 0
         if a.cmd == "freeze":
             res = freeze_kicad(a.project, a.name, a.dry_run)
