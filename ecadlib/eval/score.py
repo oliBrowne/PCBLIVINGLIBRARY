@@ -245,13 +245,19 @@ def maker_land(mine, spec, tol=None):
     span, T, b = rng("lead_span"), rng("terminal_length"), rng("terminal_width")
     sane = not (span and T and b) or (pc + pl / 2 >= min(span) / 2 - t["pos"] and
                                      pc - pl / 2 <= max(span) / 2 - min(T) + t["pos"] and pw >= min(b) - 1e-9)
+    ea, eb = land.get("ep_across"), land.get("ep_along")     # the maker's thermal land, when the land gives one
+    ep_used = [p[0] for p in ep if isinstance(ea, (int, float)) and isinstance(eb, (int, float))
+               and ((near(p[3], ea, "size") and near(p[4], eb, "size")) or (near(p[3], eb, "size") and near(p[4], ea, "size")))]
     return {"followed": bool(rest) and len(used) == len(rest) and sane, "pads": used, "ep": [p[0] for p in ep],
+            "ep_land": ep_used,
             **({} if sane else {"implausible": "the land does not cover the leads read from the same drawing"})}
 
 
 def only_maker_land(fields, ml):
     """A KiCad miss explained by the maker's land: only pads (and the courtyard, which follows the pads) differ, and
-    every pad that differs is one of the land's pads (an exposed pad that differs is a real miss)."""
+    every pad that differs is one of the land's pads. An exposed pad that differs is a real miss unless it is the
+    land's own thermal pad (ep_across x ep_along: ISL8117FVEZ, Renesas M16.173A 3 x 3, where KiCad's reference is a
+    TI HTSSOP-16 with 3.4 x 5)."""
     if not ml or not ml["followed"]:
         return False
     failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
@@ -263,7 +269,7 @@ def only_maker_land(fields, ml):
     pitch = (fields.get("pitch") or {}).get("ref")
     if (pads.get("worst") or {}).get("pos", 0) >= (pitch / 2 if pitch else 0.5):
         return False
-    return set(pads.get("bad_pads") or []) <= set(ml["pads"])
+    return set(pads.get("bad_pads") or []) <= set(ml["pads"]) | set(ml.get("ep_land") or [])
 
 
 BODY_EXCESS_MAX = 0.6     # IPC-7351B courtyard excess is 0.1-0.5 mm, plus rounding out to 0.01 mm

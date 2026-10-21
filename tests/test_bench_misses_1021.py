@@ -188,3 +188,30 @@ def test_pads_on_the_wrong_lead_are_not_a_maker_land():
                      "pitch": {"ok": True, "ours": 0.95, "ref": 0.95}, "pin1": {"ok": True}, "origin": {"ok": True}}
     assert not S.only_maker_land(f(2.4), ml)
     assert S.only_maker_land(f(0.225), ml)
+
+
+TLC = {"name": "HTSSOP-38-1EP", "package_type": "gullwing", "pin_count": 38, "exposed_pad": {"length": {"min": 5.05, "max": 6.35}},
+       "source": {"datasheet": "https://www.ti.com/lit/ds/symlink/tlc5951.pdf"}}
+
+
+def test_a_ti_powerpad_read_without_its_thermal_land_is_held():
+    # TLC5951DAP: TI's land page (p51, no text layer) puts a 12.5 x 5.2 board pad under the 5.7 x 3 exposed pad; the
+    # read gave only the package's pad, so the copper came out 6.8 mm short
+    assert D.thermal_land_missing(dict(TLC)).startswith("no footprint: TI's PowerPAD thermal land")
+    assert D.thermal_land_missing(dict(TLC, land={"ep_across": 5.2, "ep_along": 12.5})) is None
+    assert D.thermal_land_missing(dict(TLC, source={"datasheet": "https://www.diodes.com/x.pdf"})) is None
+    assert D.thermal_land_missing(dict(TLC, exposed_pad=None)) is None
+    assert D.thermal_land_missing(dict(TLC, package_type="qfn")) is None          # QFN lands follow the pad
+
+
+def test_the_makers_own_thermal_pad_is_part_of_its_land():
+    # ISL8117FVEZ: Renesas's land (M16.173A) has a 3 x 3 thermal pad; KiCad's reference is a TI HTSSOP-16 (3.4 x 5)
+    mine = {"pads": [[str(i + 1), -2.825 if i < 4 else 2.825, -0.975 + 0.65 * (i % 4), 1.45, 0.35, 0.0] for i in range(8)]
+            + [["9", 0.0, 0.0, 3.0, 3.0, 0.0]], "courtyard": []}
+    spec = {"land": {"pad_length": 1.45, "pad_width": 0.35, "pad_center": 2.825, "ep_across": 3.0, "ep_along": 3.0}}
+    ml = S.maker_land(mine, spec)
+    assert ml["followed"] and ml["ep_land"] == ["9"]
+    bad = {"pads": {"ok": False, "bad_pads": [str(i) for i in range(1, 10)], "worst": {"pos": 0.05, "size": 2.0}},
+           "pitch": {"ok": True, "ref": 0.65}}
+    assert S.only_maker_land(bad, ml)
+    assert not S.only_maker_land(bad, dict(ml, ep_land=[]))                     # a pad the land doesn't give: a miss

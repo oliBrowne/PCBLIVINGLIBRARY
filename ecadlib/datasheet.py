@@ -1193,6 +1193,24 @@ def joined_to_pad(spec, pins):
     return None
 
 
+TI_URL = re.compile(r"(^|[/.])ti\.com/", re.I)
+
+
+def thermal_land_missing(spec):
+    """The hold line for a TI leaded package with an exposed pad (PowerPAD: HTSSOP, HSOP, HTQFP...) read without its
+    thermal land. TI's land pattern page puts a board thermal pad well larger than the exposed pad (TLC5951DAP p51:
+    12.5 x 5.2 under a 5.7 x 3 pad; TPS70345 PWP), often on a page with no text layer, so a read that gives only the
+    package's pad would build the copper too small. None otherwise, or when the land's thermal pad was read."""
+    ep, land = spec.get("exposed_pad"), spec.get("land") or {}
+    src = str((spec.get("source") or {}).get("datasheet") or "")
+    if not (ep and spec.get("package_type") in ("gullwing", "qfp") and TI_URL.search(src)):
+        return None
+    if land.get("ep_across") and land.get("ep_along"):
+        return None
+    return ("no footprint: TI's PowerPAD thermal land (the board pad under the exposed pad, larger than it) was not "
+            "read; check the land pattern page at the end of the datasheet")
+
+
 NO_NET = re.compile(r"^(|~|-|n\.?\s*c\.?|n/c|d\.?n\.?c\.?|n\.?u\.?|nc\d*|no\s*connect.*|reserved|rsvd)$", re.I)
 
 
