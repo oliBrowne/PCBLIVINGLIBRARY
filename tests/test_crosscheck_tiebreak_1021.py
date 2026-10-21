@@ -208,3 +208,19 @@ def test_a_connector_with_a_body_and_a_bare_vertical_header_still_build():
     assert D.body_unread({"package_type": "pin_header", "name": "PinHeader_1x04_P2.54mm_Vertical", "pin_count": 4,
                           "pitch": 2.54}) is None
     assert D.body_unread({"package_type": "custom", "name": "Tag-Connect_TC2030", "pin_count": 6}) is None    # no housing
+
+
+def test_a_bare_smd_pad_pattern_typed_connector_has_no_housing_to_read():
+    # Tag-Connect TC2030: six SMD contacts and three alignment holes; a read may type it "connector" (benchmark 2026-10-21)
+    pads = [{"number": str(i), "x": x, "y": y, "type": "smd", "w": 0.787, "h": 0.787, "shape": "circle"}
+            for i, (x, y) in enumerate([(-1.27, -0.635), (-1.27, 0.635), (0, -0.635), (0, 0.635), (1.27, -0.635), (1.27, 0.635)], 1)]
+    holes = [{"x": x, "y": y, "type": "npth", "drill": 0.991} for x, y in [(-2.54, 0), (2.54, 1.016), (2.54, -1.016)]]
+    tc = {"package_type": "connector", "name": "TC2030-IDC-NL", "pin_count": 6, "pad_table": {"unit": "mm", "pads": pads + holes}}
+    assert D.bare_pads(tc) and D.body_unread(tc) is None
+    assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": pads})) is None                   # no holes at all
+    # a mounting pad, through-hole pins or holes alone mean a housing sits on the board
+    mp = dict(tc, pad_table={"unit": "mm", "pads": pads + [{"number": "MP1", "x": 4, "y": 0, "type": "smd", "w": 1, "h": 2}]})
+    assert D.body_unread(mp)
+    assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": [dict(p, type="tht", drill=0.5) for p in pads]}))
+    assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": holes}))
+    assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": [{"number": "1"}]}))             # unreadable: still held

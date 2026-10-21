@@ -1196,6 +1196,21 @@ def joined_to_pad(spec, pins):
 SIDEWAYS = re.compile(r"horizontal|right[ -]?angle|\bR/?A\b|side[ -]?entry", re.I)
 
 
+def bare_pads(spec):
+    """True when a pad table is only SMD contact pads, plus at most alignment holes (NPTH): a pad pattern a plug or
+    pogo cable presses onto (Tag-Connect TC2030), with no housing to read. Through-hole pins or mounting/shield pads
+    mean a housing sits on the board (S28B-PHDSS, S13B-EH)."""
+    if not (spec.get("pad_table") or {}).get("pads") and not (spec.get("pad_table") or {}).get("arrays"):
+        return False
+    from . import footprint_adv as FA
+    try:
+        pads = FA.table_layout(spec)[0]
+    except Exception:                                       # an unreadable table: no sign there is no housing
+        return False
+    return any(p["kind"] == "smd" for p in pads) and \
+        all(p["kind"] == "smd" and p["role"] == "pin" or p["kind"] == "np_thru_hole" for p in pads)
+
+
 def body_unread(spec):
     """The hold line when a connector's courtyard would be a guess: no body outline was read (pad_table body,
     body_length x body_width), so the courtyard would hug the pads. A connector's housing reaches well past its pins,
@@ -1207,6 +1222,8 @@ def body_unread(spec):
             t == "connector" and (spec.get("pad_table") or {}).get("body"):
         return None
     if t == "pin_header" and not SIDEWAYS.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
+        return None
+    if t == "connector" and bare_pads(spec):
         return None
     return ("no footprint: the datasheet read left the connector's body outline blank, so its courtyard would hug the "
             "pads while the housing reaches past them; read the body size from the drawing")
