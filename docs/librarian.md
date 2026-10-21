@@ -215,6 +215,31 @@ other pads makes it ambiguous, and then nothing changes. The chosen entry must a
   ambiguous or a package type the table does not cover (chips, SOT, connectors). Its effect on the live benchmark has not been
   measured yet.
 
+## A web search for a datasheet nobody linked (`[datasheet] web_search`)
+
+Maker links die: documents get new numbers, sites move their files, a link lands on a product page instead of the PDF.
+When none of a part's links, part sources or folder files gives its PDF (or the BOM line has no link at all), ecadlib
+can ask Claude's web search tool for the maker's current PDF.
+
+```toml
+[datasheet]
+web_search = true          # off by default: every search is billed
+web_search_model = ""      # "" = the reader's model
+web_search_max_uses = 3    # searches per part
+```
+
+- One short request per part names the MPN, the BOM's maker and the package, and asks for direct PDF links: the
+  maker's own first, then a major distributor's copy. Each link is only a candidate: it is downloaded the usual way
+  and kept only if it is a PDF that names the part.
+- The cost (tokens plus $10 per 1,000 searches; about $0.03 to $0.36 a part on Opus 5.5 in the 2026-10-21 test, mostly
+  the search results it reads) counts toward `max_cost_usd` and is written to `cost.jsonl` (via "web search"). A
+  search that could pass the cap (budgeted at its worst case) is not sent, and the part's review says so.
+- A link found is kept in `<out>/datasheet/web_search.json`, so the part is not searched again.
+- The search needs a Claude model and key: with another provider it fails with a note and the part goes on as
+  before. `--offline` never searches.
+- The 2026-10-21 test on the kicad-v1 parts whose links had died: 14 of the 16 tried were found (6 on the maker's
+  site, 8 as distributor copies).
+
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 
 **Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file

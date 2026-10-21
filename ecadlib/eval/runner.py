@@ -284,7 +284,7 @@ class EvalReader(D.Reader):
             self.key = k
         return {"input_tokens": r["input_tokens"], "output_tokens": r["output_tokens"], "usd": r["usd"], "how": r["how"]}
 
-    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None):
+    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None, maker=None):
         if self.replay:
             f = self.replay / f"{_safe(part)}.json"
             if not f.exists():
@@ -295,7 +295,7 @@ class EvalReader(D.Reader):
                    "where": j["where"], "offset": j["offset"], "headers": {}, "body": {"max_tokens": D.MAX_TOKENS},
                    "prov": j["prov"], "recording": rec, "fp_needed": fp_needed}
         else:
-            job = super().job(part, urls, package, pages, name, fp_needed, mpn)
+            job = super().job(part, urls, package, pages, name, fp_needed, mpn, maker)
         job["estimate"] = (job.get("recording") or {}).get("estimate") or self._estimate(job)
         self.used.setdefault(part, {"estimate": job["estimate"]})
         pv = job.get("prov") or {}                     # the PDF read: pinned by its SHA-256 (<set>.pins.json)
