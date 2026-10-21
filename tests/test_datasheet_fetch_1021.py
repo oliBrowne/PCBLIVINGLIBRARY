@@ -208,11 +208,10 @@ def test_the_store_says_the_pdf_does_not_mention_the_part_and_the_next_link_is_t
         rd = D.Reader(d, d, key=TB.KEY, http=Scripted({a: [wrong], b: [right]}), log=None, sleep=lambda s: None)
         j = rd.job("LTC4060EDHC#PBF", [(a, "BOM"), (b, "mouser datasheet link")], "DFN-10", mpn="LTC4060EDHC#PBF")
         assert j["url"] == b and j["prov"]["attempts"][0]["error"] == f"the PDF at {a} doesn't mention LTC4060EDHC#PBF", j["prov"]
-        try:                                                                   # the wrong PDF alone: never sent to the API
-            rd.job("LTC4060EDHC#PBF", [(a, "BOM")], "DFN-10", mpn="LTC4060EDHC#PBF")
-            raise AssertionError("sent")
-        except D.DatasheetError as e:
-            assert "no datasheet link gave a PDF" in str(e) and "doesn't mention LTC4060EDHC#PBF" in str(e), e
+        # the only PDF there is: read all the same (a connector catalog or a family sheet can name the part only in a
+        # table the check misses), never sent as a URL, and flagged for the person who reviews the part
+        j = rd.job("LTC4060EDHC#PBF", [(a, "BOM")], "DFN-10", mpn="LTC4060EDHC#PBF")
+        assert j["url"] == a and j["data"] == wrong and "doesn't mention LTC4060EDHC#PBF" in j["prov"]["unnamed"], j["prov"]
         j = rd.job("U7", [(a, "BOM")], "DFN-10")                               # no MPN known: not checked
         assert j["url"] == a and j["data"] == wrong
 

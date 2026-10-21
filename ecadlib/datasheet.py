@@ -2447,6 +2447,13 @@ class Reader:
                     break
                 except DatasheetError as e:
                     attempts.append({"url": url, "where": where, "error": str(e)})
+        unnamed = next((a for a in attempts if re.match(r"the PDF at .* doesn't mention ", a["error"])), None)
+        if data is None and unnamed:                  # the only PDF there is: read it, flagged (a connector catalog or a
+            try:                                      # family sheet can name the part only in a table the check misses)
+                data, prov = self.store.fetch(unnamed["url"], unnamed["where"], part=part, handoff=False)
+                prov = dict(prov, unnamed=unnamed["error"])
+            except DatasheetError:
+                data = None
         if data is None:
             if not urls:
                 raise DatasheetError("no datasheet URL known")
@@ -2610,6 +2617,8 @@ class Reader:
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
+        if job["prov"].get("unnamed"):
+            res["needs_review"].append(f"{job['prov']['unnamed']} (no other link gave a PDF): check it is this part's datasheet")
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)
