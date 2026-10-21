@@ -224,3 +224,9 @@ def test_a_bare_smd_pad_pattern_typed_connector_has_no_housing_to_read():
     assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": [dict(p, type="tht", drill=0.5) for p in pads]}))
     assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": holes}))
     assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": [{"number": "1"}]}))             # unreadable: still held
+    # a housed SMD connector: rectangular contacts (with or without locating holes), or a seated height read
+    rect = [dict(p, w=0.6, h=1.8, shape="rect") for p in pads]
+    assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": rect}))
+    assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": rect + holes}))
+    assert D.body_unread(dict(tc, pad_table={"unit": "mm", "pads": [{k: v for k, v in p.items() if k != "shape"} for p in pads]}))
+    assert D.body_unread(dict(tc, height_max=4.5))

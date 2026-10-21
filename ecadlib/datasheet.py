@@ -1197,18 +1197,21 @@ SIDEWAYS = re.compile(r"horizontal|right[ -]?angle|\bR/?A\b|side[ -]?entry", re.
 
 
 def bare_pads(spec):
-    """True when a pad table is only SMD contact pads, plus at most alignment holes (NPTH): a pad pattern a plug or
-    pogo cable presses onto (Tag-Connect TC2030), with no housing to read. Through-hole pins or mounting/shield pads
-    mean a housing sits on the board (S28B-PHDSS, S13B-EH)."""
-    if not (spec.get("pad_table") or {}).get("pads") and not (spec.get("pad_table") or {}).get("arrays"):
+    """True when the read shows a bare pad pattern a plug or pogo cable presses onto (Tag-Connect TC2030), not a
+    housed connector: every contact is a round SMD land (a housed SMD connector's leads land on rectangles), the only
+    other pads are alignment holes (NPTH), and no seated height was read. Through-hole pins, mounting/shield pads,
+    rectangular contacts or a height mean a housing sits on the board (S28B-PHDSS, S13B-EH)."""
+    tab = spec.get("pad_table") or {}
+    if not (tab.get("pads") or tab.get("arrays")) or spec.get("height_max"):
         return False
     from . import footprint_adv as FA
     try:
         pads = FA.table_layout(spec)[0]
     except Exception:                                       # an unreadable table: no sign there is no housing
         return False
-    return any(p["kind"] == "smd" for p in pads) and \
-        all(p["kind"] == "smd" and p["role"] == "pin" or p["kind"] == "np_thru_hole" for p in pads)
+    smd = [p for p in pads if p["kind"] == "smd"]
+    return bool(smd) and all(p["role"] == "pin" and p["shape"] == "circle" for p in smd) and \
+        all(p["kind"] in ("smd", "np_thru_hole") for p in pads)
 
 
 def body_unread(spec):
