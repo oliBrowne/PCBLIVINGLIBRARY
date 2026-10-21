@@ -168,9 +168,10 @@ standard_land = "auto"      # "off" (default) | "auto" | "always"
 
 - The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf`, or the MPN followed by a separator
   (`LTM4671IY-PBF_datasheet.pdf`, `TP4056中文资料.pdf`). Names compare as part numbers do elsewhere in ecadlib: `µ` is
-  `U`, accented and full-width letters are plain, Cyrillic and Greek letters count (`К561ТМ2.pdf` is never
-  `К561ЛН2`'s), and Chinese, Japanese and Korean words and symbols are separators. That file is read before any link,
-  and a BOM line with no link at all is read from it too. Any other match is used only with a hold that names the file (the part is not released until a
+  `U`, accented and full-width letters are plain, and every other letter counts (`К561ТМ2.pdf` is never `К561ЛН2`'s,
+  `HX-2.54-4P直针` never takes `HX-2.54-4P弯针.pdf`). After a part number in letters and digits, a Chinese, Japanese or
+  Korean word or a symbol is a separator. That file is read before any link, and a BOM line with no link at all is
+  read from it too. Any other match is used only with a hold that names the file (the part is not released until a
   person confirms the PDF is this part's), and only after the part's own links: the longest
   name the MPN starts with (`LTM4671.pdf` for `LTM4671IY#PBF`, at least 4 characters and half the MPN) is a family
   datasheet, read when no link gave a PDF (before ecadlib opens a refused link in your browser), and a name that goes
@@ -181,9 +182,9 @@ standard_land = "auto"      # "off" (default) | "auto" | "always"
   again. A character no file name can hold (`/ \ : * ? " < > |`) is written as `-` (`LM1117MPX-3.3-NOPB.pdf` for
   `LM1117MPX-3.3/NOPB`), and that file is then read as the part's own. With no `folder` set, it says how to set one. A
   file already there under that name that is not a PDF (a web page saved as `.pdf`) is named first: replace it.
-  `ecadlib datasheet batch PLAN` run again says this as the folder is now: once the PDF is read, or the link no longer
-  gives a PDF at all, the advice goes; while the site still refuses the link and nothing new was read (the API busy,
-  over the cost cap, a batch not back yet), it stays.
+  `ecadlib datasheet batch PLAN` run again says this as the folder is now: once an answer comes back (even one held
+  by the cross-check), or the link no longer gives a PDF at all, the advice goes; while the site still refuses the
+  link and no answer came back (the API busy, over the cost cap, a batch not back yet), it stays.
 - A `folder` that does not exist, is not a folder or cannot be read (no access) is named, by its name only, in the
   refused link's review line, in what was tried for a line with no link and in the part's error; the links are tried
   as ever, and `ecadlib doctor` warns about it.
