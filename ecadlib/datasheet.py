@@ -1194,16 +1194,19 @@ def joined_to_pad(spec, pins):
 
 
 TI_URL = re.compile(r"(^|[/.])ti\.com/", re.I)
+TI_MAKER = re.compile(r"^\s*(texas\s+instruments|ti)\b", re.I)
 
 
-def thermal_land_missing(spec):
+def thermal_land_missing(spec, maker=None, url=None):
     """The hold line for a TI leaded package with an exposed pad (PowerPAD: HTSSOP, HSOP, HTQFP...) read without its
     thermal land. TI's land pattern page puts a board thermal pad well larger than the exposed pad (TLC5951DAP p51:
     12.5 x 5.2 under a 5.7 x 3 pad; TPS70345 PWP), often on a page with no text layer, so a read that gives only the
-    package's pad would build the copper too small. None otherwise, or when the land's thermal pad was read."""
+    package's pad would build the copper too small. None otherwise, or when the land's thermal pad was read.
+    TI is known from the part's maker (BOM, or the source that found the part), or from a ti.com link: a datasheet
+    from a distributor's link or the datasheet folder carries no ti.com URL."""
     ep, land = spec.get("exposed_pad"), spec.get("land") or {}
-    src = str((spec.get("source") or {}).get("datasheet") or "")
-    if not (ep and spec.get("package_type") in ("gullwing", "qfp") and TI_URL.search(src)):
+    src = " ".join(str(v or "") for v in ((spec.get("source") or {}).get("datasheet"), url))
+    if not (ep and spec.get("package_type") in ("gullwing", "qfp") and (TI_URL.search(src) or TI_MAKER.match(maker or ""))):
         return None
     if land.get("ep_across") and land.get("ep_along"):
         return None

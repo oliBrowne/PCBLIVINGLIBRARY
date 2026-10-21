@@ -202,6 +202,12 @@ def test_a_ti_powerpad_read_without_its_thermal_land_is_held():
     assert D.thermal_land_missing(dict(TLC, source={"datasheet": "https://www.diodes.com/x.pdf"})) is None
     assert D.thermal_land_missing(dict(TLC, exposed_pad=None)) is None
     assert D.thermal_land_missing(dict(TLC, package_type="qfn")) is None          # QFN lands follow the pad
+    # a TI part whose PDF came from a distributor's link or the datasheet folder: TI is known from its maker
+    other = dict(TLC, source={"datasheet": "TLC5951.pdf"})
+    assert D.thermal_land_missing(other) is None
+    assert D.thermal_land_missing(other, maker="Texas Instruments").startswith("no footprint")
+    assert D.thermal_land_missing(other, url="https://www.ti.com/lit/ds/symlink/tlc5951.pdf").startswith("no footprint")
+    assert D.thermal_land_missing(other, maker="Tiger Electronics") is None
 
 
 def test_the_makers_own_thermal_pad_is_part_of_its_land():
@@ -215,6 +221,12 @@ def test_the_makers_own_thermal_pad_is_part_of_its_land():
            "pitch": {"ok": True, "ref": 0.65}}
     assert S.only_maker_land(bad, ml)
     assert not S.only_maker_land(bad, dict(ml, ep_land=[]))                     # a pad the land doesn't give: a miss
+    # the thermal land is centred, with ep_across across the rows: off-centre or turned, it is not the maker's land
+    rect = lambda x, w, h: S.maker_land(dict(mine, pads=mine["pads"][:8] + [["9", x, 0.0, w, h, 0.0]]),
+                                        {"land": dict(spec["land"], ep_across=2.0, ep_along=3.0)})["ep_land"]
+    assert rect(0.0, 2.0, 3.0) == ["9"]
+    assert rect(0.0, 3.0, 2.0) == []                                            # across and along swapped
+    assert rect(0.5, 2.0, 3.0) == []                                            # off the pads' centre
 
 
 def test_a_pad_table_body_box_is_the_datasheet_body():
@@ -222,10 +234,15 @@ def test_a_pad_table_body_box_is_the_datasheet_body():
     mine = {"pads": [["MP", -9.35, 1.35, 1.0, 2.7, 0], ["MP", 9.35, 1.35, 1.0, 2.7, 0]]
             + [[str(i + 1), -7.5 + 1.25 * i, -1.85, 0.6, 1.7, 0] for i in range(13)], "courtyard": [-11.5, -3.2, 11.5, 3.2]}
     ref = dict(mine, courtyard=[-10.35, -3.2, 10.35, 3.2])
-    spec = {"pad_table": {"unit": "mm", "body": {"x1": -3.5, "y1": 0.25, "x2": 18.5, "y2": 4.5}}}
+    table = lambda x1, x2: {"pad_table": {
+        "unit": "mm", "y_axis": "down", "origin": "datum", "body": {"x1": x1, "y1": 0.25, "x2": x2, "y2": 4.5},
+        "pads": [{"number": str(i + 1), "x": 1.25 * i, "y": 0.0, "w": 0.6, "h": 1.7} for i in range(13)]
+        + [{"number": "MP", "x": -1.85, "y": 3.2, "w": 1.0, "h": 2.7}, {"number": "MP", "x": 16.85, "y": 3.2, "w": 1.0, "h": 2.7}]}}
     f = S.score_footprint(mine, ref)
-    assert S.datasheet_body(f, mine, spec)["body"] == [22.0, 4.25]
-    assert S.datasheet_body(f, mine, {"pad_table": {"unit": "mm", "body": {"x1": -2.0, "y1": 0.25, "x2": 17.0, "y2": 4.5}}}) is None
+    assert S.datasheet_body(f, mine, table(-3.5, 18.5))["body"] == [22.0, 4.25]
+    assert S.datasheet_body(f, mine, table(-2.0, 17.0)) is None                    # a 19 mm body: ours is too big
+    # the same 22 mm body set 3.5 mm off the pads' centre: recentring it would hide a courtyard that misses the body
+    assert S.datasheet_body(f, mine, table(0.0, 22.0)) is None
 
 
 def test_an_exposed_pad_pin_on_another_pins_net_is_not_a_wrong_pin():
@@ -234,6 +251,9 @@ def test_an_exposed_pad_pin_on_another_pins_net_is_not_a_wrong_pin():
     f = S.score_symbol(ref + [("7", "VSS")], ref)["symbol_pins"]
     assert f["ok"] and f["ep_not_in_kicad"] == ["7"]
     assert not S.score_symbol(ref + [("7", "PAD")], ref)["symbol_pins"]["ok"]     # a net of its own: a real pin
+    # only one pad, numbered right after KiCad's last pin: more pins on a KiCad net are invented pins
+    assert not S.score_symbol(ref + [("7", "VSS"), ("8", "VSS")], ref)["symbol_pins"]["ok"]
+    assert not S.score_symbol(ref + [("9", "VSS")], ref)["symbol_pins"]["ok"]
 
 
 def test_a_dfn_read_without_a_pin_split_is_built_on_two_sides():
