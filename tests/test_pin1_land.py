@@ -52,3 +52,17 @@ def test_the_scorer_counts_a_pin_1_of_its_own_as_the_makers_land():
     assert ml["followed"] and "1" in ml["pads"]
     plain = dict(DFN8, land={k: v for k, v in DFN8["land"].items() if k != "pin1_length"})
     assert "1" not in S.maker_land(mine, plain)["pads"]                        # pin 1 isn't the plain land's pad
+
+
+def test_a_pin_1_too_narrow_for_its_lead_is_not_the_makers_land():
+    # the land is the model's own reading: a pin 1 narrower than the lead (0.1 mm for a 0.3 mm minimum) is a misread
+    spec = {"name": "SOT-143", "package_type": "gullwing", "pitch": 1.9, "pin_count": 4,
+            "body_length": {"min": 2.8, "max": 3.0}, "body_width": {"min": 1.2, "max": 1.4}, "lead_span": {"min": 2.1, "max": 2.5},
+            "terminal_length": {"min": 0.3, "max": 0.5}, "terminal_width": {"min": 0.3, "max": 0.5}, "height_max": 1.1,
+            "pin_positions": [{"number": "1", "side": "L", "offset": -0.75}, {"number": "2", "side": "L", "offset": 0.95},
+                              {"number": "3", "side": "R", "offset": 0.95}, {"number": "4", "side": "R", "offset": -0.95}],
+            "land": {"pad_length": 0.7, "pad_width": 0.6, "pad_center": 1.0, "pin1_width": 1.0}}
+    assert S.maker_land(B.numbers(F.build(spec)[0]), spec)["followed"]
+    bad = dict(spec, land=dict(spec["land"], pin1_width=0.1))
+    ml = S.maker_land(B.numbers(F.build(bad)[0]), bad)
+    assert not ml["followed"] and ml.get("implausible")
