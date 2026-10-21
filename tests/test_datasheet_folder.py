@@ -86,13 +86,17 @@ def test_a_word_or_symbol_before_the_part_number_is_a_separator_too():
 
 def test_the_part_s_own_file_beats_a_longer_name_that_starts_with_it():
     """ESP32-S3.pdf (the name the review asks for) is ESP32-S3's file, even beside ESP32-S3-WROOM-1.pdf (the module),
-    'BAT54 (1).pdf' or an errata, whose names sort first."""
+    'BAT54 (1).pdf', an errata or an older copy with words in front ('(中文)TP4056.pdf'), whose names sort first."""
     with tempfile.TemporaryDirectory() as d:
         f = folder(d, "ESP32-S3-WROOM-1.pdf", "ESP32-S3.pdf", "BAT54 (1).pdf", "BAT54.pdf", "STM32F103C8T6 errata.pdf",
-                   "stm32f103c8t6.pdf")
-        for part in ("ESP32-S3", "BAT54", "STM32F103C8T6"):
+                   "stm32f103c8t6.pdf", "(中文)TP4056.pdf", "TP4056.pdf")
+        for part in ("ESP32-S3", "BAT54", "STM32F103C8T6", "TP4056"):
             p, how = D.local_datasheet(f, part)
             assert p.name.lower() == f"{part.lower()}.pdf" and how == f"{p.name} in the datasheet folder", (part, how)
+    with tempfile.TemporaryDirectory() as d:                   # a full-width MPN's own name sorts after every CJK word
+        own = D.folder_file_name("ＩＲＦ540ＮＰＢＦ")
+        f = folder(d, "数据手册-IRF540NPBF.pdf", "【原厂】IRF540NPBF.pdf", own)
+        assert D.local_datasheet(f, "ＩＲＦ540ＮＰＢＦ")[0].name == own
 
 
 def test_the_family_file_is_the_longest_start_of_the_part_number_never_a_sibling_s():
@@ -107,13 +111,28 @@ def test_the_family_file_is_the_longest_start_of_the_part_number_never_a_sibling
                            ("ADP5070ACPZ", "ADP5070A.pdf"), ("LTM4671EY", "LTM4671 中文资料.pdf")):
             p, how = D.local_datasheet(f, part)
             assert p.name == name and how.endswith(f"(a family datasheet: the name is the start of {part})"), (part, how)
-    with tempfile.TemporaryDirectory() as d:
-        f = folder(d, "HX-2.54-4P弯针.pdf", "KSD301-85℉.pdf", "0603绿灯.pdf", "KSD9700-70℃常闭.pdf", "PH2.0-2P卧贴.pdf")
-        for part in ("HX-2.54-4P直针", "KSD301-85℃", "0603红灯", "KSD9700-70℃常开", "PH2.0-2P立贴"):
+    for part, name in (("HX-2.54-4P直针", "HX-2.54-4P弯针.pdf"), ("HX-2.54-4P直针", "弯针HX-2.54-4P.pdf"),
+                       ("KSD301-85℃", "KSD301-85℉.pdf"), ("KSD301-85℃", "℉KSD301-85.pdf"), ("0603红灯", "0603绿灯.pdf"),
+                       ("0603红灯", "绿灯0603.pdf"), ("KSD9700-70℃常开", "KSD9700-70℃常闭.pdf"),
+                       ("KSD9700-70C常开", "KSD9700-70℃常闭.pdf"), ("KSD9700-70°C常开", "KSD9700-70°C常闭.pdf"),
+                       ("PH2.0-2P立贴", "PH2.0-2P卧贴.pdf"),
+                       # a symbol inside the part number (°, ×, ±, ~, +) is no separator: what follows it counts
+                       ("KSD301-85°C-NO", "KSD301-85°C-NC.pdf"), ("KSD301-85°F", "KSD301-85°C.pdf"),
+                       ("PH2.0-2×10P", "PH2.0-2×4P.pdf"), ("PH2.0-2x10P", "PH2.0-2×4P.pdf"),
+                       ("NTC-10K±1%-3950", "NTC-10K±5%-3950.pdf"), ("AC220V~12V", "AC220V~5V.pdf"),
+                       ("TYPE-C-16P+2", "TYPE-C-16P+6.pdf"), ("LTM4671IY#PBF", "LTM4671®EY.pdf"),
+                       # a word in the name, then more part number: another variant's
+                       ("HX-2.54-5P直针", "HX-2.54 直针 4P.pdf"), ("AMS1117-ADJ", "AMS1117 稳压 3.3V.pdf"),
+                       ("ESP32-S3", "ESP32 模组 WROOM-32E.pdf"), ("NE555DR", "NE555™P.pdf")):
+        with tempfile.TemporaryDirectory() as d:
+            f = folder(d, name)
             assert D.local_datasheet(f, part)[0] is None, (part, D.local_datasheet(f, part))
-    with tempfile.TemporaryDirectory() as d:
-        f = folder(d, "HX-2.54-4P.pdf")
-        assert "family datasheet" in D.local_datasheet(f, "HX-2.54-4P直针")[1]
+    for part, name in (("HX-2.54-4P直针", "HX-2.54-4P.pdf"), ("KSD9700-70℃常开", "KSD9700-70℃.pdf"),
+                       ("KSD301-85°C-NO", "KSD301-85 中文资料.pdf"), ("LTM4671IY#PBF", "数据手册-LTM4671.pdf"),
+                       ("LTM4671IY#PBF", "LTM4671®.pdf")):
+        with tempfile.TemporaryDirectory() as d:
+            f = folder(d, name)
+            assert "family datasheet" in D.local_datasheet(f, part)[1], (part, D.local_datasheet(f, part))
 
 
 def test_local_datasheet_kinds():
@@ -210,16 +229,19 @@ def test_a_family_file_comes_after_the_links_and_another_parts_file_after_the_ha
         hand["pdf"] = TC.pdf3()                                # the person saved BAT54's own PDF: BAT54S.pdf is not read
         prov = rd.job("BAT54", [(bat2, "BOM")], "SOT-23")["base_prov"]
         assert asked[-1] == (bat2, "BAT54") and prov["via"] == "handoff" and "local" not in prov, prov
-    with tempfile.TemporaryDirectory() as d:                   # a sibling's file is no family's: the person is asked
-        hx = "https://www.example.com/HX-2.54-4P.pdf"
-        f = folder(d, "HX-2.54-4P弯针.pdf")
-        rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=TDL.Scripted({hx: [403]}), log=None,
-                      sleep=lambda s: None, poll=0, handoff=True, rules={"datasheet": {"folder": str(f), "downloads_folder": d}})
-        asked = []
-        rd.store.fns = dict(rd.store.fns, handoff=lambda u, p: asked.append((u, p)) or (
-            200, TC.pdf3(), "application/pdf", u, None, {"x-ecadlib-file": "hx.pdf"}))
-        prov = rd.job("HX-2.54-4P直针", [(hx, "BOM")], "THT")["base_prov"]
-        assert asked == [(hx, "HX-2.54-4P直针")] and prov["via"] == "handoff" and "local" not in prov, (asked, prov)
+    for part, name in (("HX-2.54-4P直针", "HX-2.54-4P弯针.pdf"), ("HX-2.54-4P直针", "弯针HX-2.54-4P.pdf"),
+                       ("PH2.0-2×10P", "PH2.0-2×4P.pdf")):
+        with tempfile.TemporaryDirectory() as d:               # another variant's file is no family's: the person is asked
+            link = "https://www.example.com/series.pdf"
+            f = folder(d, name)
+            rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=TDL.Scripted({link: [403]}), log=None,
+                          sleep=lambda s: None, poll=0, handoff=True,
+                          rules={"datasheet": {"folder": str(f), "downloads_folder": d}})
+            asked = []
+            rd.store.fns = dict(rd.store.fns, handoff=lambda u, p: asked.append((u, p)) or (
+                200, TC.pdf3(), "application/pdf", u, None, {"x-ecadlib-file": "own.pdf"}))
+            prov = rd.job(part, [(link, "BOM")], "THT")["base_prov"]
+            assert asked == [(link, part)] and prov["via"] == "handoff" and "local" not in prov, (name, asked, prov)
 
 
 def test_a_bom_line_with_no_link_is_read_from_the_folder():
@@ -556,15 +578,28 @@ class CheckOverloaded(TC.API):
         return super().post(url, headers, json, timeout)
 
 
+class FeedbackOverloaded(TC.API):
+    """The model API: the read is answered, the feedback turn (the answer and its errors sent back) gets 529 every time."""
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        if url.endswith("/v1/messages") and len(json["messages"]) > 1:
+            self.calls.append(("POST", url, headers, json))
+            return TB.R(529, {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}},
+                        headers={"retry-after": "0"})
+        return super().post(url, headers, json, timeout)
+
+
 def test_a_read_that_comes_back_takes_the_advice_out():
     """The API fetches the link this time and an answer comes back, though not one to build from (the cross-check
-    disagrees or cannot be sent, the model declines, the same in a batch): the earlier run's advice goes, as on a
-    fresh run."""
+    disagrees or cannot be sent, the model declines, its feedback turn gets no answer, the same in a batch): the
+    earlier run's advice goes, as on a fresh run."""
     held = lambda: TC.API(lambda k, m, b: TC.first() if k == "read" else TC.check_answer(pitch=0.65),
                           answer=lambda cid: TD.message(TC.first()))
     declined = lambda cid: dict(TD.message(TD.GOOD), stop_reason="refusal", content=[])
+    bad = TC.first(body_length=TD.dim("D", 3.1, 3.0, 2.9))   # min > max: fails the checks, so a feedback turn is sent
     for api, kw in ((held, {}), (lambda: TC.API(lambda k, m, b: "refusal"), {}), (held, {"batch": True, "wait": False}),
                     (lambda: CheckOverloaded(lambda k, m, b: TC.first()), {}),
+                    (lambda: FeedbackOverloaded(lambda k, m, b: bad), {}),
                     (lambda: TB.FakeAPI(answer=declined), {"batch": True, "wait": False})):
         with tempfile.TemporaryDirectory() as d:
             TL.run(d, http=TB.PdfHTTP({}), bom=TL.BOM)
@@ -579,6 +614,53 @@ def test_a_read_that_comes_back_takes_the_advice_out():
             assert not [r for r in it["librarian"]["review"] if r.startswith("datasheet download refused")], \
                 (kw, it["librarian"]["review"], it["librarian"]["tried"][-2:])
             assert not [h for h in it["hold_reasons"] if "refused" in h], it["hold_reasons"]
+
+
+class ByModel(TB.FakeAPI):
+    """Message Batches: a request for `model` gets `first`, any other `later` (a message, or 'expired')."""
+
+    def __init__(self, model, first, later):
+        super().__init__(answer=lambda cid: None)
+        self.model, self.first, self.later = model, first, later
+
+    def _results(self, bid):
+        if "lines" in self.batches[bid]:
+            return self.batches[bid]["lines"]
+        lines = []
+        for rq in self.batches[bid]["requests"]:
+            a = self.first if rq["params"]["model"] == self.model else self.later
+            lines.append({"custom_id": rq["custom_id"],
+                          "result": {"type": "expired"} if a == "expired" else {"type": "succeeded", "message": a}})
+        if self.batches[bid]["polls"] > self.polls:
+            self.batches[bid]["lines"] = lines
+        return lines
+
+
+def test_an_answer_on_an_earlier_step_of_the_route_takes_the_advice_out():
+    """[datasheet] route = "ladder", `datasheet batch PLAN --no-wait`: the first model's answer comes back (declined) and
+    the part goes on to the next model. The API fetched the link, so the advice goes then, and does not come back when
+    the next model's request expires."""
+    declined = dict(TD.message(TD.GOOD), stop_reason="refusal", content=[])
+    lines = lambda it: [r for r in it["librarian"]["review"] if r.startswith("datasheet download refused")]
+    with tempfile.TemporaryDirectory() as d:
+        TL.run(d, http=TB.PdfHTTP({}), bom=TL.BOM)
+        plan = Path(d) / "out" / "plan.json"                   # a medium package: the route starts on the middle model
+        items = json.loads(plan.read_text())
+        next(i for i in items if i["name"] == "DSPART1")["footprint"]["ref"] = "SOIC-8"
+        plan.write_text(json.dumps(items))
+        f = Path(d) / "pdfs"
+        f.mkdir()
+        rules = {"datasheet": {"folder": str(f), "route": "ladder",
+                               "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]}}
+        assert len(lines(fill_again(d, rules)["DSPART1"])) == 1   # the API could not fetch it: advice
+        api = ByModel("claude-sonnet-5-5", declined, "expired")
+        fill_again(d, rules, api=api, batch=True, wait=False)     # the first step sent
+        it = fill_again(d, rules, api=api, batch=True, wait=False)["DSPART1"]
+        assert "next step claude-opus-5-5" in it["librarian"]["tried"][-1] and lines(it) == [], lines(it)
+        it = fill_again(d, rules, api=api, batch=True, wait=False)["DSPART1"]   # the next step sent
+        assert lines(it) == [], lines(it)
+        it = fill_again(d, rules, api=api, batch=True, wait=False)["DSPART1"]   # ... and expired
+        assert "expired" in it["librarian"]["tried"][-1] and lines(it) == [], (it["librarian"]["tried"][-1], lines(it))
 
 
 def test_a_line_with_no_link_says_the_folder_as_it_is_now():

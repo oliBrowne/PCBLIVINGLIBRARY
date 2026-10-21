@@ -678,7 +678,7 @@ class Run:
         if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
             try:
                 job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
-                if self.reading(st):
+                if self.reading(st) and not rd.answered(job):
                     self.refused(st, job, None, cfg.get("folder"))
                 self.folder_file_failed(st, job)
                 res = rd.cached(job)
@@ -700,7 +700,7 @@ class Run:
             rd.recollect()
         refused_before = self.reading(st)             # (a link that no longer gives a PDF at all: said no more)
         job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
-        if refused_before:
+        if refused_before and not rd.answered(job):   # (an earlier answer: the API fetched the link)
             self.refused(st, job, None, cfg.get("folder"))
         self.folder_file_failed(st, job)
         try:
@@ -724,8 +724,9 @@ class Run:
     def reading(st):
         """The datasheet is fetched or read again (`datasheet batch PLAN` keeps each part's state): an earlier run's
         refused-download advice is taken out -> whether there was one. `refused(st, job, None, folder)` says it again,
-        as the folder is now, while the maker's site still refuses the link it is sent as; an answer that comes back
-        takes it out for good (put_datasheet, cross_check_held, read_failed)."""
+        as the folder is now, while the maker's site still refuses the link it is sent as and the API has not answered
+        it (Reader.answered); an answer that comes back takes it out (put_datasheet, cross_check_held, read_failed,
+        flush_datasheets)."""
         had = any(r.startswith("datasheet download refused by ") for r in st["review"])
         st["review"][:] = [r for r in st["review"] if not r.startswith("datasheet download refused by ")]
         return had
@@ -789,6 +790,8 @@ class Run:
                 st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url'] or job['where']})")
             else:
                 st["tried"].append(f"datasheet: {r or 'not sent'}" + ("; run again to collect" if str(r).startswith("pending") else ""))
+                if self.reader.answered(job):          # (pending: next step: an answer came back, the route goes on)
+                    self.reading(st)
         self.waiting = []
 
     def standard_land(self, spec):

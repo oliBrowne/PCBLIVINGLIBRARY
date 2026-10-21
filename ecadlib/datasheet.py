@@ -1823,15 +1823,19 @@ def _after_mpn(stem, key):
     return stem[i:]
 
 
-def _name_head(stem):
-    """A file-name stem before the word or symbol that follows its letters or digits -> (head, tail):
-    'LTM4671 中文资料' -> ('LTM4671 ', '中文资料'), 'KSD301-85℉' -> ('KSD301-85', '℉'), '蜂鸣器' -> ('蜂鸣器', '')."""
-    last = ""
-    for i, c in enumerate(stem):
-        if _word(c) and last and not _word(last):
-            return stem[:i], stem[i:]
-        last = c if _mpn_key(c) else last
-    return stem, ""
+def _spelled(stem, key):
+    """How much of `key` a file-name stem spells from its start, each character read as _mpn_key reads it
+    (punctuation skipped) -> (that many key characters, the stem after them): ('LTM4671 中文资料', 'LTM4671IYPBF') ->
+    (7, '中文资料'); ('PH2.0-2×4P', 'PH20210P') -> (5, '4P')."""
+    i = n = 0
+    while i < len(stem):
+        k = _mpn_key(stem[i])
+        if k:
+            if key[n:n + len(k)] != k:
+                break
+            n += len(k)
+        i += 1
+    return n, stem[i:]
 
 
 def _sibling(part, s):
@@ -1894,9 +1898,10 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     datasheet; a name that goes on with more letters or digits (BAT54S.pdf for BAT54, LM317HV.pdf for LM317) is
     "other", another part number. A word or symbol before or after a part number in letters and digits is a separator
     (数据手册-TP4056.pdf, LTM4671 中文资料.pdf), never where the part number itself goes on with another (HX-2.54-4P弯针.pdf
-    is no file of HX-2.54-4P直针's). <MPN>.pdf beats a longer exact name (ESP32-S3-WROOM-1.pdf). kinds: the matches to
-    look for (Reader.job tries the links between them). For makers whose sites refuse downloads from scripts
-    (analog.com, Nexperia). `why` never holds the folder's path."""
+    and 弯针HX-2.54-4P.pdf are no files of HX-2.54-4P直针's); a family name has nothing after the start of the MPN but
+    words (HX-2.54 直针 4P.pdf, PH2.0-2×4P.pdf name other variants). <MPN>.pdf beats any other exact name
+    (ESP32-S3-WROOM-1.pdf, (中文)TP4056.pdf). kinds: the matches to look for (Reader.job tries the links between them).
+    For makers whose sites refuse downloads from scripts (analog.com, Nexperia). `why` never holds the folder's path."""
     files, why = _folder_pdfs(folder)
     if files is None:
         return None, why
@@ -1907,22 +1912,21 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     latin = not _word(next((c for c in part if _mpn_key(c)), "-"))   # the part number starts with a letter or digit
     own, exact, prefix, other, plen = None, None, None, None, 0
     for f in files:
-        stem = unicodedata.normalize("NFC", f.stem)  # (macOS saves names decomposed: LM318A + U+0301 is LM318Á)
-        if latin:                                     # 数据手册-TP4056, 【原厂】NE555: the words before it go
-            stem = stem[next((i for i, c in enumerate(stem) if _mpn_key(c) and not _word(c)), len(stem)):]
+        name = unicodedata.normalize("NFC", f.stem)  # (macOS saves names decomposed: LM318A + U+0301 is LM318Á)
+        cut = name[:next((i for i, c in enumerate(name) if _mpn_key(c) and not _word(c)), len(name))] if latin else ""
+        stem, whole = name[len(cut):], _after_mpn(name, key)   # 数据手册-TP4056, 【原厂】NE555: the words before it go
         rest = _after_mpn(stem, key)
-        if rest is not None and not _mpn_key(rest):
+        if whole is not None and not _mpn_key(whole):
             own = own or f                            # BAT54.pdf, bat54_.pdf: the name the review asks for
         elif rest is not None and not _goes_on(stem, rest):
             exact = exact or f                        # BAT54_datasheet.pdf, bat54-rev3.pdf, TP4056中文资料.pdf
         elif rest is not None:
             other = other or f                        # BAT54S.pdf: another part number that starts like this one
         else:
-            head, tail = _name_head(stem)             # LTM4671 中文资料 -> LTM4671 (its words are no part number)
-            s = _mpn_key(head)
-            if (4 <= len(s) < len(key) and 2 * len(s) >= len(key) and key.startswith(s) and len(s) > plen
-                    and not (tail and _sibling(part, s))):
-                prefix, plen = f, len(s)
+            n, tail = _spelled(stem, key)             # LTM4671 中文资料: words after the start of the MPN, no more of it
+            if (4 <= n < len(key) and 2 * n >= len(key) and n > plen and all(_word(k) for c in tail for k in _mpn_key(c))
+                    and not (any(_word(c) for c in cut + tail) and _sibling(part, key[:n]))):
+                prefix, plen = f, n
     exact = own or exact
     if exact and "exact" in kinds:
         return exact, f"{exact.name} in the datasheet folder"
@@ -2732,7 +2736,8 @@ class Reader:
                 return job
             if best is None or rank > tuple(best[0]):
                 best = [list(rank), job["rung"], job["level"], len(done)]
-            job = self._at(dict(job, route=dict(job["route"], attempts=done, best=best)), *nxt)
+            job = self._at(dict(job, route=dict(job["route"], attempts=done, best=best),
+                                earlier_keys=job.get("earlier_keys", []) + [job["key"]]), *nxt)   # (Reader.answered)
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
@@ -2829,12 +2834,15 @@ class Reader:
         return self._result(job, self.results.get(job["key"]))
 
     def answered(self, job, error=None):
-        """Whether the API has answered this read, in this run or an earlier one: an answer kept under the job's key,
-        or one that came back declined or not readable (`error.answered`), so it fetched the link. An error before any
-        answer (the API's HTTP error, no connection, over the cost cap, an endpoint that cannot fetch links, a batch
-        request expired or errored, a batch not back yet or gone) says nothing about the link."""
-        rec = self.results.get(job["key"])
-        return bool(getattr(error, "answered", False)) or (rec is not None and not rec.get("not_answered"))
+        """Whether the API has answered this read, in this run or an earlier one: an answer kept under the key of this
+        step or an earlier step of the part's route, or one that came back declined or not readable (`error.answered`),
+        so it fetched the link. An error before any answer (the API's HTTP error, no connection, over the cost cap, an
+        endpoint that cannot fetch links, a batch request expired or errored, a batch not back yet or gone) says
+        nothing about the link."""
+        if getattr(error, "answered", False):
+            return True
+        recs = (self.results.get(k) for k in [job["key"], *job.get("earlier_keys", [])])
+        return any(r is not None and not r.get("not_answered") for r in recs)
 
     def _pages_sent(self, job):
         return len(job["offset"]) if isinstance(job.get("offset"), list) else None
