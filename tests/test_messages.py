@@ -70,6 +70,7 @@ EXAMPLES = {
     "datasheet.no_key": "needs datasheet reader (no API key): https://x.example/a.pdf (BOM)",
     "datasheet.awaiting_ok": "datasheet: waiting for your OK to read it with AI (https://x.example/a.pdf)",
     "datasheet.not_downloaded": "the PDF was not downloaded here (sent as a URL): its content was not validated locally",
+    "crosscheck.tie_break": "cross-check agreed once a difference was set aside: package type read custom, other source connector: a word only, the pads are built as the read lists them; check it on the drawing",
     "datasheet.unnamed": "the PDF at https://x/a.pdf doesn't mention LTC4060EDHC (no other link gave a PDF): check it is this part's datasheet",
     "datasheet.some_pages": "only some pages were sent (pages 1-4 of 40): check nothing was missed",
     "datasheet.family_pdf": "datasheet from your folder: LTM4671.pdf in the datasheet folder (a family datasheet: the name is the "

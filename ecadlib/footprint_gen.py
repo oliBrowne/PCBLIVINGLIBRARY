@@ -373,6 +373,36 @@ def sanity(spec):
     return errs
 
 
+def orient_ep(spec):
+    """(spec, notes): the spec with its exposed pad the way build() lays it. Each turn needs the read's own numbers to
+    rule the other way out, never a reference footprint; the cross-check compares what is built (crosscheck.critical).
+    - gullwing: a PowerPAD read long side first in a body that runs down the rows turns to run with the body
+      (TLC5951DAP, benchmark 2026-10-18: 5.7 x 3.04 across the rows pushed every heel out past the body).
+    - qfn with pins on two sides only (DFN): an exposed pad that cannot sit between the two rows of terminals as read
+      (pad + 2 terminal lengths wider than the body, at nominal) but clears them turned, by MIN_EP_CLEAR a side, is
+      turned (LT3652IDD, benchmark 2026-10-21: DFN-12 3 x 3, EP 2.38 x 1.65 read with 0.4 mm terminals; 1.65 across
+      the rows). When both ways fit, or neither, the pad stays as read."""
+    ep, t = spec.get("exposed_pad"), spec.get("package_type")
+    if not isinstance(ep, dict) or ep.get("length") is None or ep.get("width") is None:
+        return spec, []
+    try:
+        el, ew = dim(ep["length"])[1], dim(ep["width"])[1]
+        turned = dict(spec, exposed_pad=dict(ep, length=ep["width"], width=ep["length"]))
+        if t == "gullwing" and spec.get("body_length") and spec.get("body_width") and \
+                el > ew and dim(spec["body_length"])[1] > dim(spec["body_width"])[1]:
+            return turned, [f"exposed pad turned to run with the body: {round(ew, 3)} across the rows, "
+                            f"{round(el, 3)} along them"]
+        if t == "qfn" and spec.get("pins_top_bottom") == 0 and spec.get("terminal_length") and spec.get("body_length"):
+            room = dim(spec["body_length"])[1] - 2 * dim(spec["terminal_length"])[1]     # between the two rows
+            if el > room + 1e-9 and ew <= room - 2 * MIN_EP_CLEAR + 1e-9 and (not spec.get("body_width") or el < dim(spec["body_width"])[1]):
+                return turned, [f"exposed pad turned to clear the terminals: {round(ew, 3)} across the rows, "
+                                f"{round(el, 3)} along them ({round(el, 3)} does not fit the {round(room, 3)} mm "
+                                "between the rows)"]
+    except (TypeError, KeyError, ValueError):         # a malformed number: sanity() says what is wrong
+        pass
+    return spec, []
+
+
 ADVANCED = ("bga", "pin_header", "connector", "custom")
 
 
@@ -381,14 +411,7 @@ def build(spec, density=None):
     if spec["package_type"] in ADVANCED:
         from . import footprint_adv
         return footprint_adv.build(spec, density)
-    ep, turned = spec.get("exposed_pad"), []
-    if spec["package_type"] == "gullwing" and ep and spec.get("body_length") and spec.get("body_width") and \
-            dim(ep["length"])[1] > dim(ep["width"])[1] and dim(spec["body_length"])[1] > dim(spec["body_width"])[1]:
-        # TLC5951DAP (benchmark 2026-10-18): a PowerPAD read long side first (5.7 x 3.04) in a body that runs down the
-        # rows; across the rows it pushed every heel out past the body. The EP runs with the body, like its length.
-        spec = dict(spec, exposed_pad=dict(ep, length=ep["width"], width=ep["length"]))
-        turned.append(f"exposed pad turned to run with the body: {round(dim(ep['width'])[1], 3)} across the rows, "
-                      f"{round(dim(ep['length'])[1], 3)} along them")
+    spec, turned = orient_ep(spec)
     problems = sanity(spec)
     if problems:
         raise ValueError("the package numbers don't add up: " + "; ".join(problems))

@@ -496,14 +496,15 @@ def test_active_low_marks_in_any_notation_agree():
 
 
 def test_a_package_type_alone_still_holds_and_says_so():
-    """TC2030 connector vs custom, BD33FC0FP gullwing vs custom: the type picks the builder, so the part is held, but
-    the message says every number agrees. IR4301 (custom vs qfn, 14 vs 15 pins, 0.65 vs 0.775 pitch) and
-    BSC026N08NS5 (9 pins vs 8) are real."""
-    for a, b in (("connector", "custom"), ("gullwing", "custom")):
+    """BD33FC0FP gullwing vs custom, a header vs a connector: the type picks the builder, so the part is held, but
+    the message says every number agrees (connector vs custom is one builder: test_crosscheck_tiebreak_1021). IR4301
+    (custom vs qfn, 14 vs 15 pins, 0.65 vs 0.775 pitch) and BSC026N08NS5 (9 pins vs 8) are real."""
+    for a, b in (("pin_header", "connector"), ("gullwing", "custom")):
         first = CC.critical({"package_type": a, "pin_count": 6, "pitch": 1.27, "body_length": 5, "body_width": 4})
         rec = CC.compare(first, dict(first, package_type=b), "read")
         assert rec["status"] == "disagreed" and [d["field"] for d in rec["disagreed"]] == ["package_type"]
-        assert rec["disagreed"][0]["note"] == "only the type label differs: pin count, pitch, body length, body width agree"
+        ep = "exposed pad, " if "custom" not in (a, b) else ""                 # (a custom read has no has_ep to compare)
+        assert rec["disagreed"][0]["note"] == f"only the type label differs: pin count, {ep}pitch, body length, body width agree"
         line = CC.summary_line({"status": "disagreed", "checks": [dict(rec, against="second read (m)", source="second read")]})
         assert f"package type read {a}, second read {b} - only the type label differs" in line
         assert "| package type | " + a + " | " + b + " - only the type label differs" in "\n".join(

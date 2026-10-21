@@ -3015,6 +3015,8 @@ class Reader:
             res["sidecar"]["cross_check"] = res["cross_check"] = cc
             if cc["status"] in ("unchecked", "self-checked"):
                 res["needs_review"].append(f"cross-check: {CC.summary_line(cc)}")
+            res["needs_review"] += [f"cross-check agreed once a difference was set aside: {t}; check it on the drawing"
+                                    for c in cc.get("checks") or [] for t in c.get("tie_breaks") or []]
             res["needs_review"] += [f"{INJECTION} (cross-check read): {q[:200]!r}" for c in cc.get("checks") or []
                                     for q in c.get("embedded_instructions") or []]
         write(res, self.dir)
