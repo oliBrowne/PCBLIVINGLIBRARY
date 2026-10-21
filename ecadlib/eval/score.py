@@ -260,6 +260,40 @@ def only_maker_land(fields, ml):
     return set((fields.get("pads") or {}).get("bad_pads") or []) <= set(ml["pads"])
 
 
+BODY_EXCESS_MAX = 0.6     # IPC-7351B courtyard excess is 0.1-0.5 mm, plus rounding out to 0.01 mm
+
+
+def datasheet_body(fields, mine, spec):
+    """A KiCad miss on the courtyard alone, where ours is the IPC courtyard around our pads and the body the datasheet
+    gives (centred on the pads, either way round). KiCad sizes some courtyards from a nominal body per pin count
+    (every DIP-16 is 20.32 mm long, every DIP-28 35.56 mm), which can be smaller or larger than the real part.
+    -> None when it does not apply, else {"body": [length, width] used}."""
+    failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
+    if failed != {"courtyard"} or not mine or not mine.get("courtyard") or not spec:
+        return None
+    def rng(k):
+        d = spec.get(k)
+        v = [d.get(x) for x in ("min", "nom", "max")] if isinstance(d, dict) else []
+        v = [x for x in v if isinstance(x, (int, float))]
+        return (min(v), (d["nom"] if isinstance(d.get("nom"), (int, float)) else (min(v) + max(v)) / 2), max(v)) if v else None
+    L, W = rng("body_length"), rng("body_width")
+    pads = [p for p in mine["pads"] if not p[5] or p[0]]
+    if not (L and W and pads):
+        return None
+    x0, y0 = min(p[1] - p[3] / 2 for p in pads), min(p[2] - p[4] / 2 for p in pads)
+    x1, y1 = max(p[1] + p[3] / 2 for p in pads), max(p[2] + p[4] / 2 for p in pads)
+    cx, cy = _centre(pads)
+    ca = mine["courtyard"]
+    for bx, by in ((L, W), (W, L)):
+        need = lambda i: [min(x0, cx - bx[i] / 2), min(y0, cy - by[i] / 2), max(x1, cx + bx[i] / 2), max(y1, cy + by[i] / 2)]
+        hi, nom = need(2), need(1)               # must hold the largest body; may grow past the nominal by the excess
+        out = [hi[0] - ca[0], hi[1] - ca[1], ca[2] - hi[2], ca[3] - hi[3]]
+        over = [nom[0] - ca[0], nom[1] - ca[1], ca[2] - nom[2], ca[3] - nom[3]]
+        if min(out) >= -1e-6 and max(over) <= BODY_EXCESS_MAX + 1e-6:
+            return {"body": [bx[1], by[1]]}
+    return None
+
+
 def verdict(fields):
     return all(f["ok"] for k, f in fields.items() if k not in INFO_ONLY)
 

@@ -150,7 +150,7 @@ def test_replay_runs_the_pipeline_and_scores():
         s = rep["summary"]
         assert s["overall"]["pass"] == 2 and s["families"]["qfn"]["rate"] == 1.0 and s["by_source"]["datasheet"]["cases"] == 2
         md = (Path(d) / "a" / "report.md").read_text()
-        assert "**Pass: 2/2 (100.0 %)**" in md and "| qfn | 1 | 1 | 100.0 % | datasheet 1 |" in md
+        assert "**Right: 2/2 (100.0 %)**" in md and "| qfn | 1 | 1 | 100.0 % | datasheet 1 |" in md
         # a wrong answer (0.65 mm pitch) and a missing recording: compare shows the flips
         rec2 = record_dir(Path(d) / "rec2", {"QFNPART": qfn_ext(pitch=0.65)})
         rep2 = run(d, "b", replay=rec2)
@@ -469,7 +469,7 @@ def test_a_footprint_on_the_makers_land_is_told_apart_from_a_misread():
     assert ml["followed"] and ml["ep"] == ["15"] and not S.only_maker_land(sc["fields"], ml)
     rows = [{"id": "a", "family": "soic", "pass": False, "source": "datasheet", "fields": {}, "tokens_in": 0,
              "tokens_out": 0, "usd": 0, "maker_land": {"followed": True}, "kicad_differs_maker_land": True, "tried": []}]
-    assert R.summarize(rows)["maker_land"] == {"given": 1, "followed": 1, "kicad_differs": ["a"]}
+    assert R.summarize(rows)["maker_land"] == {"given": 1, "followed": 1, "kicad_differs": ["a"], "body_differs": []}
 
 
 def test_a_checked_reference_erratum_scores_the_datasheets_pins_right():

@@ -94,10 +94,13 @@ def publish(report, out, title=None):
     rep = _load_report(report)
     m, s = rep["meta"], rep["summary"]
     o, pm = s["overall"], (s.get("pad_match") or {}).get("built") or {}
-    head = (f"{m['model']}, {o['cases']} real parts: {o['pass']} right ({_pct(o['rate'])})"
+    ds = o.get("right", o["pass"]) - o["pass"]
+    head = (f"{m['model']}, {o['cases']} real parts: {o.get('right', o['pass'])} right ({_pct(o.get('right_rate', o['rate']))})"
+            + (f", {o['pass']} of them matching KiCad exactly and {ds} the datasheet where KiCad differs" if ds else "")
             + (f", pad match {_pct(pm['rate'])} over {pm['parts']} footprints built" if pm.get("of") else "")
             + (f", {_usd(o['usd_per_part'])} per part" if o.get("usd") else "")
-            + (f". {o['cases'] - o['pass']} failures, by type: " + ", ".join(f"{k} {len(v)}" for k, v in s["failures"].items())
+            + (f". {o['cases'] - o['pass'] - ds} failures, by type: " + ", ".join(f"{k} {len(v)}" for k, v in s["failures"].items()
+                                                                               if k not in DATASHEET_RIGHT)
                if s.get("failures") else "") + ".")
     body = report_md(rep).splitlines()
     md = [f"# {title or 'Accuracy benchmark results'}", "", f"**{head}**", "",
@@ -124,6 +127,7 @@ FAILURE_TYPES = {
     "thermal_pad": "only the exposed / thermal pad differs",
     "misread_dimension": "a dimension misread or made up (pads or courtyard off)",
     "maker_land": "follows the datasheet's own land pattern, which KiCad's differs from",
+    "datasheet_body": "only the courtyard differs: ours is around the datasheet's body, KiCad's around a nominal one",
     "symbol": "the footprint is right; the symbol's pins or names differ",
 }
 
@@ -147,6 +151,8 @@ def failure_type(row, mine, spec):
         return "no_footprint"
     if row.get("kicad_differs_maker_land"):
         return "maker_land"
+    if row.get("kicad_differs_body"):
+        return "datasheet_body"
     f = row["fields"]
     failed = {k for k, v in f.items() if not v["ok"] and k not in S.INFO_ONLY}
     if failed <= {"symbol_pins", "symbol_names"}:
@@ -477,6 +483,15 @@ def no_datasheet(row):
     return row["source"] == "none" and any(NO_DATASHEET.search(str(t)) for t in row.get("tried") or [])
 
 
+DATASHEET_RIGHT = ("maker_land", "datasheet_body")      # failure types that are right by the datasheet
+
+
+def datasheet_right(row):
+    """Wrong by KiCad but right by the datasheet (Oliver 2026-10-21: the maker's datasheet is the truth, KiCad the
+    fallback): the maker's recommended land, or a courtyard around the datasheet's real body."""
+    return not row["pass"] and bool(row.get("kicad_differs_maker_land") or row.get("kicad_differs_body"))
+
+
 def not_run(row):
     """Estimate mode (no API key): the part needed the AI datasheet read, which was never sent. Not a wrong answer."""
     return bool(row.get("not_run"))
@@ -486,8 +501,10 @@ def summarize(rows):
     def agg(rs):
         n = len(rs)
         p = sum(r["pass"] for r in rs)
+        ok = p + sum(datasheet_right(r) for r in rs)
         cost = [r["usd"] for r in rs if r["usd"]]
         return {"cases": n, "pass": p, "rate": round(p / n, 4) if n else None,
+                "right": ok, "right_rate": round(ok / n, 4) if n else None,
                 "tokens_in": sum(r["tokens_in"] for r in rs), "tokens_out": sum(r["tokens_out"] for r in rs),
                 "usd": round(sum(cost), 4), "usd_per_part": round(sum(cost) / n, 5) if n else None,
                 "sources": dict(sorted({s: sum(r["source"] == s for r in rs) for s in {r["source"] for r in rs}}.items()))}
@@ -513,7 +530,8 @@ def summarize(rows):
     skipped = [r for r in rows if not_run(r)]
     given = [r for r in rows if r.get("maker_land")]
     maker = {"given": len(given), "followed": sum(r["maker_land"]["followed"] for r in given),
-             "kicad_differs": [r["id"] for r in rows if r.get("kicad_differs_maker_land")]}
+             "kicad_differs": [r["id"] for r in rows if r.get("kicad_differs_maker_land")],
+             "body_differs": [r["id"] for r in rows if r.get("kicad_differs_body") and not r.get("kicad_differs_maker_land")]}
     built = [r for r in rows if r.get("pads_of") and r["source"] != "none"]
     pad = lambda rs: {"right": sum(r.get("pads_right", 0) for r in rs), "of": sum(r.get("pads_of", 0) for r in rs),
                       "parts": len(rs)}
@@ -626,7 +644,10 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
                      "files": files, "cross_check": (it.get("cross_check") or {}).get("status", ""),
                      "source": src, "symbol_source": ((it.get("source") or {}).get("symbol") or "none").split(":")[0],
                      "errors": sc["errors"], "fields": sc["fields"], "maker_land": ml, "errata": errata,
-                     "kicad_differs_maker_land": not sc["pass"] and S.only_maker_land(sc["fields"], ml), "tokens_in": tin, "tokens_out": tout, "usd": cost,
+                     "kicad_differs_maker_land": not sc["pass"] and S.only_maker_land(sc["fields"], ml),
+                     "kicad_differs_body": bool(not sc["pass"] and src == "datasheet"
+                                                and S.datasheet_body(sc["fields"], S.drop_vias(mine) if mine else None, used.get("spec"))),
+                     "tokens_in": tin, "tokens_out": tout, "usd": cost,
                      "cost_how": how, "footprint_shared_with": shared, "api_s": (reader.used.get(c["mpn"]) or {}).get("api_s"),
                      "tried": ((it.get("librarian") or {}).get("tried") or []),
                      "pads_right": (sc["fields"].get("pads") or {}).get("right", 0), "pads_of": ref_pads,
@@ -704,7 +725,8 @@ def report_md(rep):
     """Outcome first (lines 2-5 are what `ecadlib eval run` prints), then the wrong parts, then the breakdowns."""
     m, s = rep["meta"], rep["summary"]
     o = s["overall"]
-    bad = [r for r in rep["cases"] if not r["pass"] and not not_run(r)]
+    bad = [r for r in rep["cases"] if not r["pass"] and not not_run(r) and not datasheet_right(r)]
+    dsr = [r for r in rep["cases"] if datasheet_right(r)]
     pm = (s.get("pad_match") or {}).get("built") or {}
     pad = (f"Pad match {_pct(pm['rate'])} ({pm['right']} of KiCad's {pm['of']} pads, over the {pm['parts']} footprints "
            "built). " if pm.get("of") else "")
@@ -716,7 +738,10 @@ def report_md(rep):
                 + (f"{len(bad)} wrong: see \"Wrong parts\" below." if bad else ""))
         cost = f"the AI reads would cost about {_usd(o['usd'])} ({_usd(o['usd_per_part'])} per part; estimate, nothing billed)."
     else:
-        head = (f"**Pass: {o['pass']}/{o['cases']} ({_pct(o['rate'])})**. " + pad
+        right = o.get("right", o["pass"])
+        head = (f"**Right: {right}/{o['cases']} ({_pct(o.get('right_rate', o['rate']))})**"
+                + (f": {o['pass']} match KiCad exactly and {len(dsr)} match the datasheet where KiCad differs (see "
+                   "\"Right by the datasheet\")" if dsr else "") + ". " + pad
                 + (f"{len(bad)} {'part was' if len(bad) == 1 else 'parts were'} wrong: see \"Wrong parts\" below." if bad else "Every part was right."))
         cost = f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part."
     md = [f"# Accuracy: {m['set']} (v{m['set_version']})", "", head.rstrip(), "",
@@ -752,21 +777,23 @@ def report_md(rep):
         md += [f"{len(s['errata'])} {'part is' if len(s['errata']) == 1 else 'parts are'} scored right where KiCad's reference "
                "disagrees with the datasheet (checked by hand, see the set's errata file): "
                + ", ".join(f"{k} ({', '.join(v)})" for k, v in s["errata"].items()) + ".", ""]
-    ml = s.get("maker_land") or {}
-    if ml.get("kicad_differs"):
-        n = len(ml["kicad_differs"])
-        md += [f"{n} of the wrong {'part follows' if n == 1 else 'parts follow'} the datasheet's recommended land pattern, "
-               f"which KiCad's land (worked out from the package dimensions) does not: {', '.join(ml['kicad_differs'])}. "
-               f"With them: **{o['pass'] + n}/{o['cases']} ({_pct(round((o['pass'] + n) / o['cases'], 4))})** match KiCad "
-               "or the maker's land.", ""]
+    if dsr:
+        md += [f"## Right by the datasheet ({len(dsr)})", "",
+               "Counted as right: the maker's datasheet is the truth, KiCad's library the fallback. These differ from "
+               "KiCad only where KiCad follows its own convention.", ""]
+        for r in dsr:
+            why = ("the datasheet's recommended land; KiCad works its land out from the package dimensions"
+                   if r.get("kicad_differs_maker_land") else
+                   "courtyard around the datasheet's body; KiCad's is around a nominal body for the pin count")
+            md.append(f"- **{r['id']}**: {why} ({'; '.join(r['errors'][:2])})")
+        md.append("")
     if bad:
         md += [f"## Wrong parts ({len(bad)})", ""]
         for r in bad:
             why = "; ".join(r["errors"][:3]) if r["source"] != "none" else "no source had it: " + "; ".join(r["tried"][-2:])
             sh = f" [footprint shared with {r['footprint_shared_with']}]" if r.get("footprint_shared_with") else ""
-            ml_ = " [follows the datasheet's land pattern; KiCad's differs]" if r.get("kicad_differs_maker_land") else ""
             ft = f" [{r['failure']}]" if r.get("failure") else ""
-            md.append(f"- **{r['id']}**{ft} (from {r['source']}){sh}{ml_}: {why}")
+            md.append(f"- **{r['id']}**{ft} (from {r['source']}){sh}: {why}")
         md.append("")
     md += ["## By package family", "", "| Family | Cases | Pass | Rate | Answered by | USD / part |", "|---|---|---|---|---|---|"]
     for k, f in s["families"].items():

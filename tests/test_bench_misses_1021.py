@@ -136,3 +136,45 @@ def test_a_pin_table_that_runs_over_pages_goes_whole():
     pages, why = R.pick_pages(texts, 8, "ATSAME70Q19A-AN", "LQFP-144")
     assert {3, 5, 6, 7, 10} <= set(pages) and 8 not in pages and 4 not in pages, (pages, why)
     assert "pin table (continued)" in why[6]
+
+
+def _dip16(court):
+    pads = [[str(i + 1), 0.0, 2.54 * i, 1.6, 1.6, 0.8] for i in range(8)] + \
+           [[str(16 - i), 7.62, 2.54 * i, 1.6, 1.6, 0.8] for i in range(8)]
+    return {"pads": pads, "courtyard": court}
+
+
+DIP_SPEC = {"body_length": {"min": 18.92, "max": 19.69}, "body_width": {"min": 6.1, "max": 6.6}}
+
+
+def test_a_courtyard_around_the_datasheet_body_is_right_by_the_datasheet():
+    # AM26LS31CN: every pad right; KiCad's DIP-16 courtyard is around a 20.32 mm body (all DIP-16s), ours around TI's
+    # 18.92-19.69 mm one. Counted right by the datasheet (Oliver 2026-10-21: the maker's datasheet is the truth)
+    mine, ref = _dip16([-1.05, -1.05, 8.67, 18.83]), _dip16([-1.06, -1.52, 8.67, 19.3])
+    f = S.score_footprint(mine, ref)
+    assert not f["courtyard"]["ok"] and all(v["ok"] for k, v in f.items() if k != "courtyard")
+    assert S.datasheet_body(f, mine, DIP_SPEC)["body"] == [6.35, 19.305]
+
+
+def test_a_courtyard_that_cuts_the_body_or_runs_far_past_it_is_still_wrong():
+    ref = _dip16([-1.06, -1.52, 8.67, 19.3])
+    for court in ([-1.05, -0.9, 8.67, 18.6],          # shorter than the 19.69 mm body
+                  [-1.05, -2.5, 8.67, 20.3]):         # 1.5 mm past the body: not the IPC excess
+        mine = _dip16(court)
+        assert S.datasheet_body(S.score_footprint(mine, ref), mine, DIP_SPEC) is None
+    off = dict(_dip16([-1.05, -1.05, 8.67, 18.83]))   # a pad wrong too: a real miss
+    off["pads"] = [list(p) for p in off["pads"]]
+    off["pads"][3][1] += 0.3
+    assert S.datasheet_body(S.score_footprint(off, ref), off, DIP_SPEC) is None
+    mine = _dip16([-1.05, -1.05, 8.67, 18.83])       # no body read: nothing to follow
+    assert S.datasheet_body(S.score_footprint(mine, ref), mine, {}) is None
+
+
+def test_the_headline_counts_parts_right_by_the_datasheet():
+    from ecadlib.eval import runner as R
+    base = {"family": "x", "source": "datasheet", "usd": 0, "tokens_in": 0, "tokens_out": 0, "tried": [], "fields": {}}
+    rows = [dict(base, id="a", **{"pass": True}), dict(base, id="b", **{"pass": False, "kicad_differs_maker_land": True}),
+            dict(base, id="c", **{"pass": False, "kicad_differs_body": True}), dict(base, id="d", **{"pass": False})]
+    o = R.summarize(rows)["overall"]
+    assert (o["pass"], o["right"], o["right_rate"]) == (1, 3, 0.75)
+    assert [R.datasheet_right(r) for r in rows] == [False, True, True, False]
