@@ -1056,6 +1056,21 @@ def to_mm(key, raw, offset, prov, review):
     return vals or None
 
 
+def _one_sided(v, where, review):
+    """A dimension printed with one bound only ("0.9 MIN" for a SOT-223 lead length): package_schema.json wants a
+    range or a nominal, so the read was rejected and sent again until it gave up (LP38693MP-1.8, IRFS4115's tab.width).
+    The printed bound becomes the nominal too (footprint_gen.dim: no tolerance on the other side), with a note."""
+    if isinstance(v, dict) and set(v) <= {"min", "nom", "max", "tol"} and "nom" not in v and len(v.keys() & {"min", "max"}) == 1:
+        k = "min" if "min" in v else "max"
+        if isinstance(v[k], (int, float)) and not isinstance(v[k], bool):
+            review.append(f"{where}: printed only as {v[k]:g} mm {k.upper()}; used as the nominal, check the land "
+                          "against the drawing")
+            return dict(v, nom=v[k])
+    if isinstance(v, dict):
+        return {k: _one_sided(x, f"{where}.{k}", review) for k, x in v.items()}
+    return v
+
+
 def _drop_nulls(v):
     if isinstance(v, dict):
         return {k: _drop_nulls(x) for k, x in v.items() if x is not None}
@@ -1079,7 +1094,7 @@ def to_spec(pkg, part, datasheet, model, offset, review):
     for k in DIMS:
         v = to_mm(k, pkg.get(k), offset, prov, review)
         if v:
-            spec[k] = v
+            spec[k] = _one_sided(v, k, review)
     hrev = []                                         # a blank height is not a blank footprint dimension
     h = to_mm("height_max", pkg.get("height_max"), offset, prov, hrev)
     review += [r for r in hrev if not r.endswith(": no value printed")]
@@ -1092,13 +1107,13 @@ def to_spec(pkg, part, datasheet, model, offset, review):
                       "default height)")
     if pkg.get("exposed_pad"):
         ep = {d: to_mm(f"exposed_pad.{d}", pkg["exposed_pad"][d], offset, prov, review) for d in ("length", "width")}
-        spec["exposed_pad"] = {d: v for d, v in ep.items() if v}
+        spec["exposed_pad"] = {d: _one_sided(v, f"exposed_pad.{d}", review) for d, v in ep.items() if v}
     for k in PASS:
         if pkg.get(k) is not None:
             spec[k] = pkg[k]
     for k in MM_OBJS:
         if pkg.get(k) is not None:
-            spec[k] = _drop_nulls(pkg[k])
+            spec[k] = _one_sided(_drop_nulls(pkg[k]), k, review)
             review.append(f"{k}: values were asked for in mm with no per-value unit or page; check them against the drawing")
     numeric = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) if not isinstance(v, (dict, list)) else \
         any(numeric(x) for x in (v.values() if isinstance(v, dict) else v))
