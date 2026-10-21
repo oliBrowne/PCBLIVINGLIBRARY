@@ -665,8 +665,9 @@ class Run:
         urls = D.datasheet_urls(item, ln, row, st["found"])
         cfg = getattr(self.reader, "cfg", None) or D.settings(self.rules)   # the reader's [datasheet] settings
         local = None if urls else D.local_datasheet(cfg.get("folder"), mpn or item["name"])[0]   # [datasheet] folder
-        if not urls and local is None:
-            st["tried"].append("datasheet: no datasheet URL known")
+        if not urls and local is None:                # (a folder set but not there or unreadable: said, by name)
+            note = D.folder_problem(cfg.get("folder"))
+            st["tried"].append("datasheet: no datasheet URL known" + (f"; {note}" if note else ""))
             return
         first = urls[0] if urls else (local.name, "datasheet folder")   # (the file's name only, never its path)
         if self.reader is None:
@@ -675,6 +676,7 @@ class Run:
         if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
             try:
                 job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+                self.folder_file_failed(st, job)
                 res = rd.cached(job)
             except CC.Held as e:
                 self.cross_check_held(st, e)
@@ -693,6 +695,7 @@ class Run:
             rd._recollected = True
             rd.recollect()
         job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+        self.folder_file_failed(st, job)
         try:
             res = hit = rd.cached(job)
             if res is None and rd.deferred:
@@ -706,15 +709,23 @@ class Run:
             self.cross_check_held(st, e)
             return
         except Exception as e:
-            self.refused(st, job, e)
+            self.refused(st, job, e, cfg.get("folder"))
             raise
         self.put_datasheet(st, res, job, fp_name, sym_name, "cached" if hit else "")
 
     @staticmethod
-    def refused(st, job, error):
+    def folder_file_failed(st, job):
+        """The part's own file in the [datasheet] folder is no PDF (a web page saved as .pdf) or does not read: said
+        first, so the person replaces it instead of saving it again under the same name."""
+        bad = D.folder_failure(job.get("prov"))
+        if bad:
+            st["tried"].append(f"datasheet: {bad}")
+
+    @staticmethod
+    def refused(st, job, error, folder=None):
         """A maker's site refused the PDF here and the API's fetcher failed too: the cause and the way round it, which
-        the release check shows in place of "no footprint"."""
-        line = D.refused_line(job, error)
+        the release check shows in place of "no footprint". folder: [datasheet] folder (the review keeps its name)."""
+        line = D.refused_line(job, error, folder)
         if line:
             st["review"].append(line)
 
@@ -744,7 +755,7 @@ class Run:
                     st["tried"].append(f"datasheet: failed ({type(e).__name__}: {e})")
             elif isinstance(r, Exception):
                 st["tried"].append(f"datasheet reader: failed ({r})")
-                self.refused(st, job, r)
+                self.refused(st, job, r, (getattr(self.reader, "cfg", None) or D.settings(self.rules)).get("folder"))
             elif r == "estimate only":                    # priced, not sent: the person approves the cost first
                 st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url'] or job['where']})")
             else:

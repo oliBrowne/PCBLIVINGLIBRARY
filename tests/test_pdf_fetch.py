@@ -468,8 +468,23 @@ def test_handoff_with_no_browser_here_says_so_at_once(tmp_path):
     h = PF.Handoff(tmp_path, wait_s=60, say=said.append, open_url=lambda url: False, sleep=clock.sleep, clock=clock)
     r = h.get(URL, "LTM4671")
     assert r[4] == "no browser could be opened here" and clock.t == 0 and not h.gone, r[4]
-    assert any(URL in m and "save it as LTM4671.pdf in your [datasheet] folder and run again" in m
-               and "ecadlib datasheet FILE.pdf --part LTM4671" in m for m in said), said     # the folder way first
+    assert any(URL in m and "then set folder under [datasheet] in ecadlib.toml to a folder, save it there as LTM4671.pdf "
+               "and run again" in m and "ecadlib datasheet FILE.pdf --part LTM4671" in m for m in said), said
+    ds, said[:] = tmp_path / "datasheets", []                        # a folder set: where it is (this is your screen)
+    h = PF.Handoff(tmp_path, say=said.append, open_url=lambda url: False, datasheet_folder=str(ds))
+    h.get(URL, "LTM4671")                                             # ... and when it is not there, that first
+    assert f"then fix folder under [datasheet] in ecadlib.toml: your [datasheet] folder (datasheets) does not exist " \
+           f"({ds}); save it there as LTM4671.pdf and run again" in said[0], said
+    ds.mkdir()
+    said[:] = []
+    h = PF.Handoff(tmp_path, wait_s=60, say=said.append, open_url=lambda url: False, sleep=clock.sleep, clock=clock,
+                   datasheet_folder=str(ds))
+    h.get(URL, "LM1117MPX-3.3/NOPB")                                  # no file name holds '/': '-'
+    assert f"then save it as LM1117MPX-3.3-NOPB.pdf in your [datasheet] folder ({ds}) and run again (or read it alone " \
+           "with `ecadlib datasheet FILE.pdf --part LM1117MPX-3.3/NOPB`)" in said[0], said
+    said[:] = []
+    PF.Handoff(tmp_path, say=said.append, open_url=lambda url: False, datasheet_folder=str(ds)).get(URL, "DSPART1 REV A")
+    assert 'save it as DSPART1 REV A.pdf in your' in said[0] and '--part "DSPART1 REV A"`' in said[0], said
 
 
 @lite

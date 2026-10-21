@@ -657,10 +657,13 @@ class Handoff:
     A new .pdf there (not one that was there before, not a partial download) is taken when its name matches the
     link's file name or the part number, or its text names the part; anything else is left alone, so an unrelated
     download is never read as this part's datasheet. The file stays where it is (it is the person's); its bytes are
-    kept in ecadlib's datasheet cache under the link, so the next run needs no browser."""
+    kept in ecadlib's datasheet cache under the link, so the next run needs no browser. datasheet_folder: [datasheet]
+    folder, where the person is told to save a PDF no browser could fetch here."""
 
-    def __init__(self, folder=None, wait_s=180, say=None, open_url=None, poll=1.0, sleep=None, clock=None):
+    def __init__(self, folder=None, wait_s=180, say=None, open_url=None, poll=1.0, sleep=None, clock=None,
+                 datasheet_folder=None):
         self.folder = Path(folder) if folder else downloads_dir()
+        self.datasheet_folder = str(datasheet_folder or "").strip()
         self.wait_s, self.poll = wait_s, poll
         self.say = say or (lambda m: print(m, file=sys.stderr, flush=True))
         self.open_url = open_url
@@ -673,6 +676,22 @@ class Handoff:
                     if p.is_file() and p.suffix.lower() == ".pdf" and not p.name.lower().endswith(PARTIAL)}
         except OSError:
             return {}
+
+    def save_where(self, part):
+        """Where to save a part's PDF by hand, and how to read it alone. This goes to the terminal only (never kept),
+        so it may show the folder's path: the person is at this machine."""
+        from .datasheet import folder_file_name, folder_problem, part_arg
+        name, note = folder_file_name(part), folder_problem(self.datasheet_folder)
+        if self.datasheet_folder:
+            try:
+                where = str(Path(self.datasheet_folder).expanduser())
+            except RuntimeError:                      # '~nosuchuser/x': as written (ecadlib doctor says what is wrong)
+                where = self.datasheet_folder
+            how = (f"fix folder under [datasheet] in ecadlib.toml: {note} ({where}); save it there as {name} and run "
+                   "again" if note else f"save it as {name} in your [datasheet] folder ({where}) and run again")
+        else:
+            how = f"set folder under [datasheet] in ecadlib.toml to a folder, save it there as {name} and run again"
+        return f"{how} (or read it alone with `ecadlib datasheet FILE.pdf --part {part_arg(part or 'MPN')}`)"
 
     def get(self, url, part=None):
         from .datasheet import is_pdf
@@ -701,9 +720,7 @@ class Handoff:
                 return 0, None, "", url, f"could not open your browser ({type(e).__name__}: {e})"
             if ok is False:                           # no browser here (SSH, a container): nothing can arrive
                 self.say(f"  The site refused ecadlib's download of {part or 'this datasheet'}, and no browser could be "
-                         f"opened here. Download it yourself:\n    {url}\n  then save it as {part or 'MPN'}.pdf in your "
-                         f"[datasheet] folder and run again (or read it alone with "
-                         f"`ecadlib datasheet FILE.pdf --part {part or 'MPN'}`).")
+                         f"opened here. Download it yourself:\n    {url}\n  then {self.save_where(part)}.")
                 return 0, None, "", url, "no browser could be opened here"
             self.say(f"  The site refused ecadlib's download of {part or 'this datasheet'}; it is open in your browser:\n"
                      f"    {url}\n  Save the PDF to {self.folder} (if it opens in the browser, use its Download button).\n"

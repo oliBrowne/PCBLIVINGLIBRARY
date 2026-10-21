@@ -1802,6 +1802,51 @@ def _after_mpn(stem, key):
     return stem[i:]
 
 
+def folder_name(folder):
+    """The [datasheet] folder's own name, for text that is kept (never its path)."""
+    return Path(str(folder or "").strip()).name or "?"
+
+
+def _folder_pdfs(folder):
+    """The .pdf files in the [datasheet] folder, sorted -> (files, None), or (None, why) when it is not set, not
+    there, not a folder or cannot be read (no access to it: PermissionError; '~nosuchuser/x': RuntimeError). why
+    names the folder, never its path, and nothing here raises: a read goes on to the links."""
+    if not str(folder or "").strip():
+        return None, "no [datasheet] folder"
+    name = folder_name(folder)
+    try:
+        d = Path(str(folder).strip()).expanduser()
+        if not d.is_dir():
+            return None, f"your [datasheet] folder ({name}) " + ("is not a folder" if d.exists() else "does not exist")
+        return [f for f in sorted(d.iterdir()) if f.suffix.lower() == ".pdf" and f.is_file()], None
+    except (OSError, RuntimeError) as e:
+        return None, f"your [datasheet] folder ({name}) cannot be read ({type(e).__name__})"
+
+
+def folder_problem(folder):
+    """Why the [datasheet] folder that is set gives no file at all (not there, not a folder, cannot be read), or None
+    (not set, or it reads). Said wherever the person is told to put a PDF there."""
+    return _folder_pdfs(folder)[1] if str(folder or "").strip() else None
+
+
+def folder_file_name(part):
+    """The name to save a part's PDF under in the [datasheet] folder: <MPN>.pdf, with each character no file name
+    can hold (/ \\ : * ? " < > |) as '-' (LM1117MPX-3.3/NOPB -> LM1117MPX-3.3-NOPB.pdf). local_datasheet reads it
+    as the part's own file: names are compared without punctuation."""
+    return re.sub(r'[\\/:*?"<>|]', "-", str(part or "").strip() or "MPN") + ".pdf"
+
+
+def part_arg(part):
+    """A part number as a --part value to paste into a shell: quoted when it holds a space or a shell character."""
+    s = str(part or "").strip().replace('"', "")
+    return s if re.fullmatch(r"[\w.#+/,=:@%-]+", s) else f'"{s}"'
+
+
+def folder_failure(prov):
+    """What was wrong with the part's own file in the [datasheet] folder (not a PDF, cannot be read), or None."""
+    return next((a["error"] for a in (prov or {}).get("attempts") or [] if a.get("where") == "datasheet folder"), None)
+
+
 def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     """The PDF for `part` in a folder of datasheets a person downloaded -> (Path, how) or (None, why). Names are compared
     without case and punctuation: <MPN>.pdf, or the MPN then a separator (LTM4671IY-PBF_datasheet.pdf) is "exact". Any
@@ -1810,18 +1855,14 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     datasheet; a name that goes on with more letters or digits (BAT54S.pdf for BAT54, LM317HV.pdf for LM317) is
     "other", another part number. kinds: the matches to look for (Reader.job tries the links between them). For
     makers whose sites refuse downloads from scripts (analog.com, Nexperia). `why` never holds the folder's path."""
-    if not str(folder or "").strip():
-        return None, "no [datasheet] folder"
-    d = Path(str(folder)).expanduser()
-    if not d.is_dir():
-        return None, f"your [datasheet] folder ({d.name or '?'}) " + ("is not a folder" if d.exists() else "does not exist")
+    files, why = _folder_pdfs(folder)
+    if files is None:
+        return None, why
     key = _mpn_key(part)
     if not key:
         return None, "no MPN"
     exact, prefix, other = None, None, None
-    for f in sorted(d.iterdir()):
-        if f.suffix.lower() != ".pdf" or not f.is_file():
-            continue
+    for f in files:
         s, rest = _mpn_key(f.stem), _after_mpn(f.stem, key)
         if rest is not None and not rest[:1].isalnum():
             exact = exact or f                        # BAT54.pdf, BAT54_datasheet.pdf, bat54-rev3.pdf
@@ -1893,17 +1934,30 @@ API_FETCH_FAILED = re.compile(r"could not (be )?(fetch|download)|unable to (fetc
                               r"|unable to connect to the remote server", re.I)
 
 
-def refused_line(job, error):
+def refused_line(job, error, folder=None):
     """The review line for a part whose PDF a maker's site refused here and the API could not fetch: the likely cause
-    and the way round it. None when that is not what happened."""
+    and the way round it. None when that is not what happened. folder: [datasheet] folder (its name only is kept).
+    The way round, first that applies: the part's file already in the folder is no PDF (replace it); the folder set
+    is not there or cannot be read (fix it); save it in the folder; no folder set (how to set one)."""
     prov = job.get("prov") or {}
     r = refusal(prov.get("attempts")) if prov.get("sent_as") == "url" and API_FETCH_FAILED.search(str(error)) else None
     if not r:
         return None
     url, host, why = r
-    return (f"datasheet download refused by {host} ({why}): the maker's site likely blocks automated downloads; download "
-            f"{url} in a browser, save it as {job['part']}.pdf in your [datasheet] folder and run again (or read it alone "
-            f"with `ecadlib datasheet FILE.pdf --part {job['part']}`)")
+    name, bad, note = folder_file_name(job["part"]), folder_failure(prov), prov.get("folder_note")
+    if bad:
+        how = f"{bad}: download {url} in a browser, save it as {name} and run again"
+    elif note:
+        how = (f"{note}: fix folder under [datasheet] in ecadlib.toml, then download {url} in a browser, save it there as "
+               f"{name} and run again")
+    elif str(folder or "").strip():
+        how = (f"download {url} in a browser, save it as {name} in your [datasheet] folder ({folder_name(folder)}) and "
+               "run again")
+    else:
+        how = (f"download {url} in a browser, set folder under [datasheet] in ecadlib.toml to a folder, save it there as "
+               f"{name} and run again")
+    return (f"datasheet download refused by {host} ({why}): the maker's site likely blocks automated downloads; {how} "
+            f"(or read it alone with `ecadlib datasheet FILE.pdf --part {part_arg(job['part'])}`)")
 
 
 def refusal(attempts):
@@ -2357,7 +2411,8 @@ class Reader:
         # UI, MCP, the menus: Workspace). It tells the person what to save on stderr, never through `log` (a filter
         # may drop it); librarian.run points it at its progress line.
         self.store = PdfStore(cache_dir, http, sleep=sleep, download=dl, handoff=PF.Handoff(
-            PF.downloads_dir(self.cfg.get("downloads_folder")), wait_s=float(self.cfg.get("handoff_wait_s") or 180))
+            PF.downloads_dir(self.cfg.get("downloads_folder")), wait_s=float(self.cfg.get("handoff_wait_s") or 180),
+            datasheet_folder=self.cfg.get("folder"))
             if handoff is not False and self.cfg.get("handoff") == "auto" and not estimate
             and not self.offline and (handoff or PF.interactive()) else None)
         self.results = ResultCache(cache_dir)
@@ -2427,7 +2482,9 @@ class Reader:
         n0 = len(self.store.refusals)
         # [datasheet] folder: the part's own file (<MPN>.pdf) beats every link and needs no network; a family file comes
         # once no link gave a PDF, before the person is asked for one; a file named for another part number comes last
+        # (a folder set but not there, or not readable, is said in the part's review and error; the links go on)
         data, prov, how = self._folder_pdf(part, urls, ("exact",), attempts)
+        note = folder_problem(self.cfg.get("folder")) if data is None else None
         tries = [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))] if data is None else []
         for url, where in tries:                      # http, then https
             try:
@@ -2456,10 +2513,9 @@ class Reader:
                      if re.search(BROKEN_LINK, re.sub(r" \(also tried .*\)$", "", a["error"], flags=re.S))}
             usable = [(u, w) for u, w in urls if u not in wrong and api_url(u) not in wrong]
             if not usable:
-                folder = str(self.cfg.get("folder") or "").strip()
                 raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts) + (
-                    f"; {how}" if folder and not Path(folder).expanduser().is_dir() else   # a typo in the folder's name
-                    "" if folder else "; download it by hand into a folder and set [datasheet] folder"))
+                    f"; {note}" if note else "" if self.cfg.get("folder") else   # a typo in the folder's name, no access
+                    "; download it by hand into a folder and set [datasheet] folder"))
             url, where = usable[0]
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
@@ -2475,6 +2531,8 @@ class Reader:
             sent = sorted({p for L in lv if isinstance(L, list) for p in L}) or (list(range(1, n + 1)) if n and n <= 40 else [])
             tables = DR.dim_tables(data, sent, texts) if texts and sent and not pages else None
         prov["attempts"] = attempts
+        if note:                                      # said where the person is told to save the PDF (refused_line)
+            prov["folder_note"] = note
         sent0 = len(lv[0]) if isinstance(lv[0], list) else None
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
@@ -2496,12 +2554,14 @@ class Reader:
         f, how = local_datasheet(self.cfg.get("folder"), part, kinds)
         if f is None:
             return None, None, how
-        try:
+        try:                                          # (said first in the review: asking for <MPN>.pdf again would loop)
             data = f.read_bytes()
         except OSError as e:
-            data, err = None, f"{f.name}: {type(e).__name__}"
+            data, err = None, (f"{f.name} in your [datasheet] folder cannot be read ({type(e).__name__}): replace it "
+                               "with the PDF")
         else:
-            err = None if is_pdf(data) else f"{f.name}: not a PDF"
+            err = None if is_pdf(data) else (f"{f.name} in your [datasheet] folder is not a PDF (a web page saved as "
+                                             ".pdf?): replace it with the PDF")
         if err:
             attempts.append({"url": f.name, "where": "datasheet folder", "error": err})
             return None, None, err

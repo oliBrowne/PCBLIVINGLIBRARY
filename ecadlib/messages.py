@@ -72,6 +72,8 @@ def plural(n, one, many=None):
 # ---------------------------------------------------------------- held reasons
 # code -> (text, fix, patterns). patterns: regexes matched (re.search) against a raw reason (release-check
 # "rule: message", librarian review lines, cross-check summaries); their named groups are the values.
+_PART = r"(?:.*?--part (?P<part>\"[^\"]+\"|[^`\s]+))?"   # a --part value, quoted when it holds a space
+
 CODES = {
     # files (release check rule `files`; cannot be released anyway)
     "files.no_symbol": ("There is no symbol for this part yet.",
@@ -81,13 +83,26 @@ CODES = {
                            "Pick a footprint from the candidates, or let the datasheet reader build one.",
                            [r"^files: no footprint model", r"^no footprint found"]),
     # the maker's site refused the PDF here (403 web page, reset connection, timeouts) and the API's fetcher failed too
+    # (datasheet.refused_line); first: the part's own file in the datasheet folder is a web page saved as .pdf
+    "files.datasheet_not_pdf": ("{bad} in your datasheet folder {problem}, and {host} would not let ecadlib download the "
+                                "datasheet (it {why}).",
+                                "Replace {bad} with the PDF: download it in a browser[ ({url})], save it as {file} and run "
+                                "again; or read it alone with ecadlib datasheet FILE.pdf[ --part {part}]; or pick a "
+                                "footprint by hand.",
+                                [r"datasheet download refused by (?P<host>\S+) \((?P<why>[^)]*)\).*?automated downloads; "
+                                 r"(?P<bad>.+?\.pdf) in your \[datasheet\] folder (?:(?P<not_pdf>is not a PDF)|cannot be "
+                                 r"read \((?P<err>\w+)\))(?:.*?download (?P<url>\S+) in a browser)?"
+                                 r"(?:.*?save it as (?P<file>.+?\.pdf) and run again)?" + _PART]),
     "files.datasheet_refused": ("{host} would not let ecadlib download the datasheet (it {why}): the maker's site most "
                                 "likely blocks automated downloads (bot protection).",
-                                "Download the PDF in a browser[ ({url})], save it[ as {part}.pdf] in your datasheet folder "
-                                "(set `folder` under datasheet in ecadlib.toml) and run again; or read it alone with "
-                                "ecadlib datasheet FILE.pdf[ --part {part}]; or pick a footprint by hand.",
+                                "{advice}; or read it alone with ecadlib datasheet FILE.pdf[ --part {part}]; or pick a "
+                                "footprint by hand.",
                                 [r"datasheet download refused by (?P<host>\S+) \((?P<why>[^)]*)\)"
-                                 r"(?:.*?download (?P<url>\S+) in a browser)?(?:.*?--part (?P<part>[^`\s]+))?"]),
+                                 r"(?:.*?automated downloads; (?P<note>your \[datasheet\] folder \(.*?\) .+?): fix folder "
+                                 r"under \[datasheet\])?(?:.*?download (?P<url>\S+) in a browser)?"
+                                 r"(?P<unset>, set folder under \[datasheet\] in ecadlib\.toml to a folder)?"
+                                 r"(?:.*?save it (?:there )?as (?P<file>.+?\.pdf) (?:in your \[datasheet\] folder "
+                                 r"(?:\((?P<folder>[^)]*)\) )?)?and run again)?" + _PART]),
     "files.missing": ("The {kind} file is missing.",
                       "Fill the library again so the file is written.",
                       [r"^files: (?P<kind>symbol|footprint) file missing"]),
@@ -226,10 +241,13 @@ CODES = {
                              "Compare the footprint with the datasheet before you release it.",
                              [r"cross-check unchecked: (?P<why>.+)", r"not checked \((?P<why>[^)]+)\)"]),
     # the datasheet reader
-    "datasheet.no_link": ("No datasheet link is known, so the datasheet could not be read.",
+    "datasheet.no_link": ("No datasheet link is known, so the datasheet could not be read[, and {folder_note}].",
                           "Add the datasheet link to the BOM line, save the PDF as MPN.pdf in your datasheet folder (set "
                           "`folder` under datasheet in ecadlib.toml), or pick a footprint by hand.",
-                          [r"no datasheet URL known"]),
+                          # (and why the [datasheet] folder gave nothing: datasheet.folder_problem, a file that is no PDF)
+                          [r"no datasheet URL known(?:; | and )?(?P<folder_note>(?:your \[datasheet\] folder \(.*?\) |"
+                           r".+?\.pdf in your \[datasheet\] folder )(?:does not exist|is not a folder|is not a PDF|cannot "
+                           r"be read \(\w+\)))?"]),
     "datasheet.no_key": ("The datasheet reader is not set up (no model API key).",
                          "Add a model API key (ecadlib init shows how), or pick a footprint by hand.",
                          [r"needs datasheet reader \(no API key\)"]),
@@ -354,9 +372,38 @@ def _derive(code, v):
         v.setdefault("side", "KiCad" if str(v.get("k")) == "present" else "Altium")
     elif code == "verify.datasheet_read":
         v["made"] = " and ".join(x.strip() for x in str(v.get("made") or "part").split(",") if x.strip()) or "part"
+    elif code == "datasheet.no_link" and v.get("folder_note"):
+        v["folder_note"] = v["folder_note"].replace("[datasheet] ", "datasheet ")
+    elif code in ("files.datasheet_refused", "files.datasheet_not_pdf"):
+        _refused_advice(code, v)
     elif code == "other":
         v["detail"] = str(v.get("detail") or "").rstrip(".") + "."
     return v
+
+
+def _refused_advice(code, v):
+    """The way round a refused datasheet download, as datasheet.refused_line wrote it (each version kept in plans):
+    the folder named (or not there, or not set), the name to save the PDF under (from --part in older lines)."""
+    from .datasheet import folder_file_name
+    if not v.get("file") and v.get("part"):
+        v["file"] = folder_file_name(str(v["part"]).strip('"'))
+    if code == "files.datasheet_not_pdf":
+        v.setdefault("file", v.get("bad"))
+        v["problem"] = (f"cannot be read ({v['err']})" if v.get("err") else
+                        "is not a PDF (it may be a web page saved as .pdf)")
+        return
+    url = f" ({v['url']})" if v.get("url") else ""
+    file = f" as {v['file']}" if v.get("file") else ""
+    if v.get("note"):
+        note = v["note"].replace("[datasheet] ", "datasheet ")
+        v["advice"] = (f"{note[:1].upper()}{note[1:]}: fix `folder` under datasheet in ecadlib.toml, then download the "
+                       f"PDF in a browser{url}, save it there{file} and run again")
+    elif v.get("unset"):
+        v["advice"] = (f"Download the PDF in a browser{url}, set `folder` under datasheet in ecadlib.toml to a folder, "
+                       f"save it there{file} and run again")
+    else:
+        where = f"({v['folder']})" if v.get("folder") else "(set `folder` under datasheet in ecadlib.toml)"
+        v["advice"] = f"Download the PDF in a browser{url}, save it{file} in your datasheet folder {where} and run again"
 
 
 def _crosscheck_detail(detail):

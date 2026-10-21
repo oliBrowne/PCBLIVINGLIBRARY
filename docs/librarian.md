@@ -173,9 +173,15 @@ standard_land = "auto"      # "off" (default) | "auto" | "always"
   name the MPN starts with (`LTM4671.pdf` for `LTM4671IY#PBF`, at least 4 characters and half the MPN) is a family
   datasheet, read when no link gave a PDF (before ecadlib opens a refused link in your browser), and a name that goes
   on with more letters or digits (`BAT54S.pdf` for `BAT54`, `LM317HV.pdf` for `LM317`) is another part number, read
-  only when nothing else worked, your browser included. A part whose own link works never reads either.
-- When a maker's site refuses the download, the review says to save the PDF as `<MPN>.pdf` in this folder and run
-  again. A `folder` that does not exist is named in the part's error and `ecadlib doctor` warns about it.
+  only when no link gave a PDF here and your browser got none either (before a refused link is left to the API to
+  fetch). A part whose own link works never reads either.
+- When a maker's site refuses the download, the review says to save the PDF in this folder as `<MPN>.pdf` and run
+  again. A character no file name can hold (`/ \ : * ? " < > |`) is written as `-` (`LM1117MPX-3.3-NOPB.pdf` for
+  `LM1117MPX-3.3/NOPB`), and that file is then read as the part's own. With no `folder` set, it says how to set one. A
+  file already there under that name that is not a PDF (a web page saved as `.pdf`) is named first: replace it.
+- A `folder` that does not exist, is not a folder or cannot be read (no access) is named, by its name only, in the
+  refused link's review line, in what was tried for a line with no link and in the part's error; the links are tried
+  as ever, and `ecadlib doctor` warns about it.
 - The part keeps its public datasheet link in the library; the read's provenance records only the file's name, never
   a path on your machine.
 - `ecadlib eval run --datasheets DIR` does the same for a benchmark run. The report counts the parts read from the

@@ -3,13 +3,14 @@ standard_land (a read that identifies a checked standard package gets the table'
 
 Nothing live: the API is test_crosscheck's fake, PDFs are test_ds_route's SYNTHETIC text PDFs, extractions are
 test_datasheet's SYNTHETIC fixtures."""
-import copy, json, tempfile
+import copy, json, re, tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from ecadlib import datasheet as D, librarian as L, rules as RU, stdparts as SP
+from ecadlib import datasheet as D, librarian as L, messages as M, rules as RU, stdparts as SP
 from tests import test_crosscheck as TC, test_datasheet as TD, test_datasheet_batch as TB, test_ds_route as TR
 from tests import test_datasheet_downloads as TDL, test_librarian as TL
+from tests.fixtures_lite import lite
 
 SOIC = "SOIC-8_3.9x4.9mm_P1.27mm"
 
@@ -197,6 +198,153 @@ def test_a_folder_that_is_not_there_is_said():
         toml.write_text(f"[datasheet]\nfolder = '{gone}'\n", encoding="utf-8")
         rep = DR.run(str(Path(d) / "ws"), [], str(toml), {})
         assert [x["level"] for x in rep["checks"] if x["check"] == "datasheet folder"] == ["WARN"], rep["checks"]
+        tilde = "~nosuchuser/datasheets"                       # a user that is not there: expanduser raises
+        assert [x["level"] for x in DR.check_datasheet_folder({"datasheet": {"folder": tilde}})] == ["WARN"]
+        toml.write_text(f"[datasheet]\nfolder = '{tilde}'\n", encoding="utf-8")
+        rep = DR.run(str(Path(d) / "ws"), [], str(toml), {})  # (init and the web UI's setup check run this too)
+        assert [x["level"] for x in rep["checks"] if x["check"] == "datasheet folder"] == ["WARN"], rep["checks"]
+        p, why = D.local_datasheet(tilde, "TESTPART")
+        assert p is None and why.startswith("your [datasheet] folder (datasheets) "), why
+
+
+@lite
+def test_a_folder_that_cannot_be_read_never_stops_a_read(tmp_path, monkeypatch):
+    """No access to the [datasheet] folder (macOS privacy settings, chmod 000, a Windows ACL): a part with a working
+    link is read from it, a line with no link says why the folder gave nothing, and nothing stored names its path."""
+    f = folder(tmp_path, "DSPART1.pdf", "NOWHERE1.pdf")
+    real = Path.iterdir
+
+    def iterdir(p):
+        if Path(p) == f:
+            raise PermissionError(1, "Operation not permitted", str(p))
+        return real(p)
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    rules, note = {"datasheet": {"folder": str(f)}}, "your [datasheet] folder (pdfs) cannot be read (PermissionError)"
+    assert D.local_datasheet(f, "DSPART1") == (None, note)
+    job = TC.reader(tmp_path / "a", rules).job("TESTPART", [(TC.URL, "BOM")], TC.QFN)    # TC.reader serves TC.URL
+    assert job["data"] == TC.pdf3() and job["base_prov"]["folder_note"] == note, job["base_prov"]
+    b = tmp_path / "b"
+    b.mkdir()
+    http = TB.PdfHTTP({LINK: TB.PDF})
+    rd = D.Reader(b / "out", b / "cache", key=TB.KEY, http=http, batch=False, poll=0, sleep=lambda s: None,
+                  log=lambda *a: None, rules=rules)
+    with TB.patched(TC.API(lambda k, m, b: TR.on_page(TD.INCH))):
+        items, _ = TL.run(b, http=http, bom=TL.BOM, reader=rd, rules=rules)
+    assert items["DSPART1"]["source"]["footprint"] == f"datasheet:{LINK}", items["DSPART1"]["librarian"]["tried"]
+    assert f"datasheet: no datasheet URL known; {note}" in items["NOWHERE1"]["librarian"]["tried"]
+    for p in (b / "out").rglob("*"):
+        if p.suffix in (".json", ".csv", ".md", ".html", ".jsonl", ".txt"):
+            assert str(f) not in p.read_text(encoding="utf-8", errors="replace"), p
+    from ecadlib import doctor as DR
+    c = DR.check_datasheet_folder(rules)
+    assert [x["level"] for x in c] == ["WARN"] and "cannot be read" in c[0]["detail"], c
+
+
+# ---------------------------------------------------------------- a refused link: what the review says, followed
+LINK = "https://example.com/ds.pdf"
+
+
+class NoURLFetch(TC.API):
+    """The model API, whose own fetcher cannot download the refused link either (its words in the #42 run)."""
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        if url.endswith("/v1/messages") and (json["messages"][0]["content"][0].get("source") or {}).get("type") == "url":
+            self.calls.append(("POST", url, headers, json))
+            return TB.R(400, {"type": "error", "error": {"type": "invalid_request_error",
+                                                         "message": "Unable to download the file. Please verify the URL"}})
+        return super().post(url, headers, json, timeout)
+
+
+def refused_run(d, rules, mpn="DSPART1"):
+    """The librarian on TL.BOM with DSPART1's MPN set to `mpn`; its maker link answers 403 with a web page and the API
+    cannot fetch it either. Run again in the same folder to follow the advice. -> (that part's plan item, all items)"""
+    bom = TL.BOM.replace("U3,1,DSPART1,,ACME,DSPART1,,", f"U3,1,{mpn},,ACME,{mpn},,")
+    http = TDL.Scripted({LINK: [403]})
+    rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=http, batch=False, poll=0, sleep=lambda s: None,
+                  log=lambda *a: None, rules=rules)
+    with TB.patched(NoURLFetch(lambda k, m, b: TR.on_page(TD.INCH))):
+        items, _ = TL.run(d, http=http, bom=bom, reader=rd, rules=rules)
+    return next(v for k, v in items.items() if D._mpn_key(k) == D._mpn_key(mpn)), items
+
+
+def refused(it):
+    """The part's review line for the refused download, and what a person is shown for it."""
+    line = next(r for r in it["librarian"]["review"] if r.startswith("datasheet download refused"))
+    return line, next(e for e in M.explain_all(it["hold_reasons"]) if e["code"].startswith("files.datasheet"))
+
+
+def test_following_the_refused_advice_reads_the_part_s_own_file():
+    """The review says what to save where. A character no file name can hold ('/' in LM1117MPX-3.3/NOPB) becomes '-';
+    an MPN with spaces keeps them, and its --part is quoted. Saved under the name the shown fix gives, the next run
+    reads it as the part's own file: no hold for a folder file."""
+    for mpn, name, arg in (("LM1117MPX-3.3/NOPB", "LM1117MPX-3.3-NOPB.pdf", "LM1117MPX-3.3/NOPB"),
+                           ("DSPART1 REV A", "DSPART1 REV A.pdf", '"DSPART1 REV A"')):
+        with tempfile.TemporaryDirectory() as d:
+            f = folder(d)
+            rules = {"datasheet": {"folder": str(f)}}
+            it, _ = refused_run(d, rules, mpn)
+            line, e = refused(it)
+            assert f"download {LINK} in a browser, save it as {name} in your [datasheet] folder (pdfs) and run again (or " \
+                   f"read it alone with `ecadlib datasheet FILE.pdf --part {arg}`)" in line and str(d) not in line, line
+            assert e["code"] == "files.datasheet_refused" and e["fix"] == (
+                f"Download the PDF in a browser ({LINK}), save it as {name} in your datasheet folder (pdfs) and run again; "
+                f"or read it alone with ecadlib datasheet FILE.pdf --part {arg}; or pick a footprint by hand."), e["fix"]
+            (f / re.search(r"save it as (.+?\.pdf) in your", e["fix"]).group(1)).write_bytes(TC.pdf3())
+            it, _ = refused_run(d, rules, mpn)                 # the advice followed: run again
+            tried = [t for t in it["librarian"]["tried"] if t.startswith("datasheet reader")]
+            assert tried and tried[0].startswith(f"datasheet reader ({name} in the datasheet folder): footprint"), \
+                it["librarian"]["tried"]
+            assert not [h for h in it["hold_reasons"] if "datasheet from your folder" in h], it["hold_reasons"]
+
+
+def test_a_web_page_saved_as_the_part_s_pdf_is_said_first():
+    """A bot-check page saved as DSPART1.pdf: the review and the tried lines say that file is no PDF and to replace it,
+    instead of asking for DSPART1.pdf again (which would change nothing)."""
+    with tempfile.TemporaryDirectory() as d:
+        f = folder(d)
+        (f / "DSPART1.pdf").write_bytes(b"<!doctype html><html><body>Access Denied</body></html>")
+        it, _ = refused_run(d, {"datasheet": {"folder": str(f)}})
+        bad = "DSPART1.pdf in your [datasheet] folder is not a PDF (a web page saved as .pdf?): replace it with the PDF"
+        line, e = refused(it)
+        assert line.split("; ", 1)[1].startswith(f"{bad}: download {LINK} in a browser, save it as DSPART1.pdf and run "
+                                                 "again"), line
+        tried = [t for t in it["librarian"]["tried"] if t.startswith("datasheet")]
+        assert tried[0] == f"datasheet: {bad}" and tried[1].startswith("datasheet: failed (APIError"), tried
+        assert e["code"] == "files.datasheet_not_pdf", e
+        assert e["text"] == ("DSPART1.pdf in your datasheet folder is not a PDF (it may be a web page saved as .pdf), and "
+                             "example.com would not let ecadlib download the datasheet (it answered HTTP 403 with a web "
+                             "page)."), e["text"]
+        assert e["fix"] == (f"Replace DSPART1.pdf with the PDF: download it in a browser ({LINK}), save it as DSPART1.pdf "
+                            "and run again; or read it alone with ecadlib datasheet FILE.pdf --part DSPART1; or pick a "
+                            "footprint by hand."), e["fix"]
+
+
+def test_a_missing_folder_is_named_for_a_refused_link_and_a_line_with_no_link():
+    """A typo in [datasheet] folder, said where the person looks: the refused link's review line (and its shown fix),
+    and the tried line of a BOM line with no link. Its name only, never its path."""
+    with tempfile.TemporaryDirectory() as d:
+        gone = Path(d) / "datasheetz"
+        it, items = refused_run(d, {"datasheet": {"folder": str(gone)}})
+        note = "your [datasheet] folder (datasheetz) does not exist"
+        line, e = refused(it)
+        assert f"; {note}: fix folder under [datasheet] in ecadlib.toml, then download {LINK} in a browser, save it there " \
+               "as DSPART1.pdf and run again (or read it" in line and str(gone) not in line, line
+        assert e["fix"] == ("Your datasheet folder (datasheetz) does not exist: fix `folder` under datasheet in ecadlib.toml, "
+                            f"then download the PDF in a browser ({LINK}), save it there as DSPART1.pdf and run again; or "
+                            "read it alone with ecadlib datasheet FILE.pdf --part DSPART1; or pick a footprint by hand."), e["fix"]
+        assert f"datasheet: no datasheet URL known; {note}" in items["NOWHERE1"]["librarian"]["tried"], \
+            items["NOWHERE1"]["librarian"]["tried"]
+
+
+def test_with_no_folder_set_the_advice_says_how_to_set_one():
+    with tempfile.TemporaryDirectory() as d:
+        it, _ = refused_run(d, None)
+        line, e = refused(it)
+        assert f"download {LINK} in a browser, set folder under [datasheet] in ecadlib.toml to a folder, save it there as " \
+               "DSPART1.pdf and run again (or read it alone with `ecadlib datasheet FILE.pdf --part DSPART1`)" in line, line
+        assert e["fix"] == (f"Download the PDF in a browser ({LINK}), set `folder` under datasheet in ecadlib.toml to a "
+                            "folder, save it there as DSPART1.pdf and run again; or read it alone with ecadlib datasheet "
+                            "FILE.pdf --part DSPART1; or pick a footprint by hand."), e["fix"]
 
 
 def test_folder_pdf_is_used_before_a_refused_link_and_keeps_the_link():
@@ -219,7 +367,8 @@ def test_folder_pdf_is_used_before_a_refused_link_and_keeps_the_link():
 def test_no_pdf_says_where_to_put_one():
     with tempfile.TemporaryDirectory() as d, TB.patched(TC.API(lambda k, m, b: TC.first())):
         f = folder(d, "TESTPART.txt.pdf")                      # named .pdf, not a PDF
-        for rules, want in ((None, "set [datasheet] folder"), ({"datasheet": {"folder": str(f)}}, "TESTPART.txt.pdf: not a PDF")):
+        for rules, want in ((None, "set [datasheet] folder"),
+                            ({"datasheet": {"folder": str(f)}}, "TESTPART.txt.pdf in your [datasheet] folder is not a PDF")):
             try:
                 TC.reader(d, rules).job("TESTPART", [], TC.QFN)
                 raise AssertionError("no PDF, yet a job")

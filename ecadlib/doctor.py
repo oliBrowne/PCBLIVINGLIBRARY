@@ -368,20 +368,27 @@ def check_paths(libs=(), rules=None):
 
 
 def check_datasheet_folder(rules=None):
-    """[datasheet] folder (PDFs you downloaded by hand): a name that is not a folder (a typo) is a WARN, since a run
-    that finds no file there just goes on to the links. No line when it is not set."""
+    """[datasheet] folder (PDFs you downloaded by hand): a name that is not a folder (a typo), a home folder that is not
+    there (~nosuchuser/x) or a folder this terminal may not read is a WARN, since a run that finds no file there just
+    goes on to the links (datasheet.local_datasheet). No line when it is not set."""
     folder = str((((rules if isinstance(rules, dict) else {}).get("datasheet")) or {}).get("folder") or "").strip()
     if not folder:
         return []
-    p = Path(folder).expanduser()
-    if not p.is_dir():
-        return [_c("datasheet folder", "WARN", f"{p}: " + ("not a folder" if p.exists() else "not found") + " (the PDFs "
-                   "you downloaded by hand are not read)", "fix [datasheet] folder in ecadlib.toml (relative paths start "
-                   "at the folder you run ecadlib in)")]
+    fix = "fix [datasheet] folder in ecadlib.toml (relative paths start at the folder you run ecadlib in)"
     try:
+        p = Path(folder).expanduser()
+    except RuntimeError:                              # '~nosuchuser/datasheets': no such user, so no home folder
+        return [_c("datasheet folder", "WARN", f"{folder}: no such home folder (the PDFs you downloaded by hand are not "
+                   "read)", fix)]
+    try:
+        if not p.is_dir():
+            return [_c("datasheet folder", "WARN", f"{p}: " + ("not a folder" if p.exists() else "not found") + " (the "
+                       "PDFs you downloaded by hand are not read)", fix)]
         n = sum(1 for f in p.iterdir() if f.suffix.lower() == ".pdf")
-    except OSError as e:
-        return [_c("datasheet folder", "WARN", f"{p}: cannot be read ({e.strerror or e})", "fix the folder's permissions")]
+    except OSError as e:                              # no access (chmod, macOS privacy settings, a Windows ACL)
+        return [_c("datasheet folder", "WARN", f"{p}: cannot be read ({e.strerror or type(e).__name__})",
+                   "let this terminal read the folder (its permissions; macOS: System Settings > Privacy & Security > "
+                   "Files and Folders) or " + fix.split(" (")[0])]
     return [_c("datasheet folder", "OK", f"{p} ({n} PDF{'s' if n != 1 else ''})")]
 
 
