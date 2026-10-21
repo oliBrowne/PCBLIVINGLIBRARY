@@ -97,6 +97,19 @@ def test_the_part_s_own_file_beats_a_longer_name_that_starts_with_it():
         own = D.folder_file_name("ＩＲＦ540ＮＰＢＦ")
         f = folder(d, "数据手册-IRF540NPBF.pdf", "【原厂】IRF540NPBF.pdf", own)
         assert D.local_datasheet(f, "ＩＲＦ540ＮＰＢＦ")[0].name == own
+    for part, names in (("WS2812B", ("WS2812B-2020.pdf", "数据手册-WS2812B.pdf")),   # words in front, then the MPN alone:
+                        ("WS2812B", ("数据手册-WS2812B-2020.pdf", "数据手册-WS2812B.pdf")),   # still the part's own file,
+                        ("ESP32-S3", ("ESP32-S3-WROOM-1.pdf", "【原厂】ESP32-S3.pdf")),     # never the variant's, the
+                        ("STM32F103C8T6", ("STM32F103C8T6 errata.pdf", "数据手册-STM32F103C8T6.pdf")),   # module's or
+                        ("BAT54", ("BAT54 errata.pdf", "规格书_BAT54.pdf")),                # an errata that sorts first
+                        ("TP4056", ("TP4056-rev1.pdf", "데이터시트_TP4056.pdf")),
+                        ("LM1117", ("LM1117-ADJ.pdf", "データシート LM1117.pdf")),
+                        ("AMS1117", ("规格书_AMS1117-3.3.pdf", "规格书_AMS1117.pdf")),
+                        ("HX-2.54-4P", ("HX-2.54-4P弯针.pdf", "数据手册-HX-2.54-4P.pdf"))):
+        with tempfile.TemporaryDirectory() as d:
+            f = folder(d, *names)
+            p, how = D.local_datasheet(f, part)
+            assert p.name == names[1] and how == f"{p.name} in the datasheet folder", (part, how)
 
 
 def test_the_family_file_is_the_longest_start_of_the_part_number_never_a_sibling_s():
@@ -123,7 +136,10 @@ def test_the_family_file_is_the_longest_start_of_the_part_number_never_a_sibling
                        ("TYPE-C-16P+2", "TYPE-C-16P+6.pdf"), ("LTM4671IY#PBF", "LTM4671®EY.pdf"),
                        # a word in the name, then more part number: another variant's
                        ("HX-2.54-5P直针", "HX-2.54 直针 4P.pdf"), ("AMS1117-ADJ", "AMS1117 稳压 3.3V.pdf"),
-                       ("ESP32-S3", "ESP32 模组 WROOM-32E.pdf"), ("NE555DR", "NE555™P.pdf")):
+                       ("ESP32-S3", "ESP32 模组 WROOM-32E.pdf"), ("NE555DR", "NE555™P.pdf"),
+                       # a shorter series name, then a word, where the part number has a word or symbol of its own
+                       ("HX-2.54-4P直针", "HX-2.54 弯针.pdf"), ("XH2.54-4P直针", "XH2.54 弯针 规格书.pdf"),
+                       ("PH2.0-2P卧贴", "PH2.0 立贴.pdf"), ("KSD9700-70℃常开", "KSD9700常闭.pdf")):
         with tempfile.TemporaryDirectory() as d:
             f = folder(d, name)
             assert D.local_datasheet(f, part)[0] is None, (part, D.local_datasheet(f, part))
@@ -230,7 +246,7 @@ def test_a_family_file_comes_after_the_links_and_another_parts_file_after_the_ha
         prov = rd.job("BAT54", [(bat2, "BOM")], "SOT-23")["base_prov"]
         assert asked[-1] == (bat2, "BAT54") and prov["via"] == "handoff" and "local" not in prov, prov
     for part, name in (("HX-2.54-4P直针", "HX-2.54-4P弯针.pdf"), ("HX-2.54-4P直针", "弯针HX-2.54-4P.pdf"),
-                       ("PH2.0-2×10P", "PH2.0-2×4P.pdf")):
+                       ("PH2.0-2×10P", "PH2.0-2×4P.pdf"), ("HX-2.54-4P直针", "HX-2.54 弯针.pdf")):
         with tempfile.TemporaryDirectory() as d:               # another variant's file is no family's: the person is asked
             link = "https://www.example.com/series.pdf"
             f = folder(d, name)

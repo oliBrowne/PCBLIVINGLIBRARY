@@ -166,19 +166,22 @@ folder = "~/datasheets"     # <MPN>.pdf, read before any link; "" = links only
 standard_land = "auto"      # "off" (default) | "auto" | "always"
 ```
 
-- The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf` first, else the MPN followed by a separator
-  (`LTM4671IY-PBF_datasheet.pdf`, `TP4056中文资料.pdf`). Names compare as part numbers do elsewhere in ecadlib: `µ` is
-  `U`, accented and full-width letters are plain, and every other letter counts (`К561ТМ2.pdf` is never `К561ЛН2`'s,
-  `HX-2.54-4P直针` never takes `HX-2.54-4P弯针.pdf`). Before or after a part number in letters and digits, a Chinese,
-  Japanese or Korean word or a symbol is a separator (`数据手册-TP4056.pdf`); a symbol inside it (`°`, `×`, `±`) is not.
-  That file is read before any link, and a BOM line with no link at all is read from it too. Any other match is used
-  only with a hold that names the file (the part is not released until a person confirms the PDF is this part's), and
-  only after the part's own links: the longest name the MPN starts with, with only words after it (`LTM4671.pdf` or
+- The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf` first, then the MPN alone after a separator
+  (`数据手册-TP4056.pdf`), else the MPN followed by a separator (`LTM4671IY-PBF_datasheet.pdf`, `TP4056中文资料.pdf`;
+  `WS2812B-2020.pdf` never beats `数据手册-WS2812B.pdf` for `WS2812B`). Names compare as part numbers do elsewhere in
+  ecadlib: `µ` is `U`, accented and full-width letters are plain, and every other letter counts (`К561ТМ2.pdf` is never
+  `К561ЛН2`'s, `HX-2.54-4P直针` never takes `HX-2.54-4P弯针.pdf`). Before or after a part number in letters and digits, a
+  Chinese, Japanese or Korean word or a symbol is a separator (`数据手册-TP4056.pdf`); a symbol inside it (`°`, `×`, `±`) is
+  not. That file is read before any link, and a BOM line with no link at all is read from it too. Any other match is
+  used only with a hold that names the file (the part is not released until a person confirms the PDF is this part's),
+  and only after the part's own links: the longest name the MPN starts with, with only words after it (`LTM4671.pdf` or
   `LTM4671 中文资料.pdf` for `LTM4671IY#PBF`, at least 4 characters and half the MPN; never another variant's such as
-  `HX-2.54-4P弯针.pdf` or `PH2.0-2×4P.pdf`) is a family datasheet, read when no link gave a PDF (before ecadlib opens a
-  refused link in your browser), and a name that goes on with more letters or digits (`BAT54S.pdf` for `BAT54`,
-  `LM317HV.pdf` for `LM317`) is another part number, read only when no link gave a PDF here and your browser got none
-  either (before a refused link is left to the API to fetch). A part whose own link works never reads either.
+  `HX-2.54-4P弯针.pdf` or `PH2.0-2×4P.pdf`, and no name with a word at all where the part number has a word or symbol of
+  its own: `HX-2.54 弯针.pdf` is no family file of `HX-2.54-4P直针`'s) is a family datasheet, read when no link gave a PDF
+  (before ecadlib opens a refused link in your browser), and a name that goes on with more letters or digits
+  (`BAT54S.pdf` for `BAT54`, `LM317HV.pdf` for `LM317`) is another part number, read only when no link gave a PDF here
+  and your browser got none either (before a refused link is left to the API to fetch). A part whose own link works
+  never reads either.
 - When a maker's site refuses the download, the review says to save the PDF in this folder as `<MPN>.pdf` and run
   again. A character no file name can hold (`/ \ : * ? " < > |`) is written as `-` (`LM1117MPX-3.3-NOPB.pdf` for
   `LM1117MPX-3.3/NOPB`), and that file is then read as the part's own. With no `folder` set, it says how to set one. A

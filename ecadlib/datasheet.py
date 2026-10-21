@@ -1839,10 +1839,11 @@ def _spelled(stem, key):
 
 
 def _sibling(part, s):
-    """Whether the part number goes on with a word or symbol after the characters that spell `s` (HX-2.54-4P直针 after
-    HX2544P): a name with a word or symbol of its own there is another variant's (HX-2.54-4P弯针.pdf), no family's."""
+    """Whether the part number has a word or symbol anywhere after the characters that spell `s` (直针 in HX-2.54-4P直针
+    after HX2544P or after HX254): a name with a word or symbol of its own is then another variant's (HX-2.54-4P弯针.pdf,
+    HX-2.54 弯针.pdf), no family's."""
     after = _after_mpn(part, s)
-    return after is None or _word(next((c for c in after if _mpn_key(c)), "-"))
+    return after is None or any(_word(c) for c in after if _mpn_key(c))
 
 
 def folder_name(folder):
@@ -1899,8 +1900,10 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     "other", another part number. A word or symbol before or after a part number in letters and digits is a separator
     (数据手册-TP4056.pdf, LTM4671 中文资料.pdf), never where the part number itself goes on with another (HX-2.54-4P弯针.pdf
     and 弯针HX-2.54-4P.pdf are no files of HX-2.54-4P直针's); a family name has nothing after the start of the MPN but
-    words (HX-2.54 直针 4P.pdf, PH2.0-2×4P.pdf name other variants). <MPN>.pdf beats any other exact name
-    (ESP32-S3-WROOM-1.pdf, (中文)TP4056.pdf). kinds: the matches to look for (Reader.job tries the links between them).
+    words (HX-2.54 直针 4P.pdf, PH2.0-2×4P.pdf name other variants), and none at all where the part number has a word or
+    symbol of its own (HX-2.54 弯针.pdf for HX-2.54-4P直针). <MPN>.pdf beats any other exact name (ESP32-S3-WROOM-1.pdf,
+    (中文)TP4056.pdf), then the MPN alone after words (数据手册-WS2812B.pdf beats WS2812B-2020.pdf). kinds: the matches
+    to look for (Reader.job tries the links between them).
     For makers whose sites refuse downloads from scripts (analog.com, Nexperia). `why` never holds the folder's path."""
     files, why = _folder_pdfs(folder)
     if files is None:
@@ -1910,7 +1913,7 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
         return None, "no MPN"
     part = unicodedata.normalize("NFC", str(part))
     latin = not _word(next((c for c in part if _mpn_key(c)), "-"))   # the part number starts with a letter or digit
-    own, exact, prefix, other, plen = None, None, None, None, 0
+    own, alone, exact, prefix, other, plen = None, None, None, None, None, 0
     for f in files:
         name = unicodedata.normalize("NFC", f.stem)  # (macOS saves names decomposed: LM318A + U+0301 is LM318Á)
         cut = name[:next((i for i, c in enumerate(name) if _mpn_key(c) and not _word(c)), len(name))] if latin else ""
@@ -1918,6 +1921,8 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
         rest = _after_mpn(stem, key)
         if whole is not None and not _mpn_key(whole):
             own = own or f                            # BAT54.pdf, bat54_.pdf: the name the review asks for
+        elif rest is not None and not _mpn_key(rest):
+            alone = alone or f                        # 数据手册-TP4056.pdf: words in front, then the MPN alone
         elif rest is not None and not _goes_on(stem, rest):
             exact = exact or f                        # BAT54_datasheet.pdf, bat54-rev3.pdf, TP4056中文资料.pdf
         elif rest is not None:
@@ -1927,7 +1932,7 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
             if (4 <= n < len(key) and 2 * n >= len(key) and n > plen and all(_word(k) for c in tail for k in _mpn_key(c))
                     and not (any(_word(c) for c in cut + tail) and _sibling(part, key[:n]))):
                 prefix, plen = f, n
-    exact = own or exact
+    exact = own or alone or exact
     if exact and "exact" in kinds:
         return exact, f"{exact.name} in the datasheet folder"
     if prefix and "family" in kinds:
