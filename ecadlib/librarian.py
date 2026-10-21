@@ -840,6 +840,9 @@ class Run:
                                 f"land was used. Check the package code on the drawing is this one")
         elif not st["footprint"]:
             st["review"].extend(pad_table_problems(res["spec"]))
+            joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins"))
+            if joined:                                # leads merged with the pad: separate pads would be a wrong land
+                raise D.DatasheetError(joined)
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
             except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: name it, not KeyError

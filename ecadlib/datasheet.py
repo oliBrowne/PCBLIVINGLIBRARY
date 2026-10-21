@@ -1171,6 +1171,28 @@ def no_footprint(spec, error):
             + (f" (unresolved in the read: {', '.join(unres)})" if unres else ""))
 
 
+def joined_to_pad(spec, pins):
+    """The hold line when every lead on one side of a dual-row package is the exposed pad's own pin (FDMT800100DC,
+    BSC026N08NS5, benchmark 2026-10-21: drain leads 5-8 and pad 9 all "D", one piece of metal). The makers' lands
+    merge them into one pad; building the leads as separate pads would be a wrong land, so the part is held. A pad
+    named for ground or no net is left alone (that side's leads are ordinary pins on the same net). None otherwise."""
+    n, t, ep = spec.get("pin_count"), spec.get("package_type"), spec.get("exposed_pad")
+    if not (isinstance(n, int) and n >= 4 and n % 2 == 0 and ep and not spec.get("pin_positions")):
+        return None
+    if not (t == "gullwing" or t == "qfn" and spec.get("pins_top_bottom") == 0):
+        return None
+    name = {str(p.get("num")).strip(): str(p.get("name") or "").strip() for p in pins or []}
+    pad = [v for k, v in name.items() if not (k.isdecimal() and 1 <= int(k) <= n)]
+    if len(pad) != 1 or NO_NET.match(pad[0]) or re.match(r"^(?:[ADPS]?GND|[ADP]?VSS|GROUND|0V)", pad[0], re.I):
+        return None
+    for side in (range(1, n // 2 + 1), range(n // 2 + 1, n + 1)):
+        if all(name.get(str(i), "").upper() == pad[0].upper() for i in side):
+            return (f"no footprint: leads {side[0]}-{side[-1]} and the exposed pad are all {pad[0]} (one piece of "
+                    "metal): the maker's land merges them into one pad, which this footprint would build as separate "
+                    "pads; check the land on the drawing")
+    return None
+
+
 NO_NET = re.compile(r"^(|~|-|n\.?\s*c\.?|n/c|d\.?n\.?c\.?|n\.?u\.?|nc\d*|no\s*connect.*|reserved|rsvd)$", re.I)
 
 
@@ -3036,6 +3058,8 @@ class Reader:
             res["sidecar"]["cross_check"] = res["cross_check"] = cc
             if cc["status"] in ("unchecked", "self-checked"):
                 res["needs_review"].append(f"cross-check: {CC.summary_line(cc)}")
+            res["needs_review"] += [f"cross-check agreed once a difference was set aside: {t}; check it on the drawing"
+                                    for c in cc.get("checks") or [] for t in c.get("tie_breaks") or []]
             res["needs_review"] += [f"{INJECTION} (cross-check read): {q[:200]!r}" for c in cc.get("checks") or []
                                     for q in c.get("embedded_instructions") or []]
         write(res, self.dir)
