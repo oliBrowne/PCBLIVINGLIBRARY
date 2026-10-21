@@ -178,3 +178,13 @@ def test_the_headline_counts_parts_right_by_the_datasheet():
     o = R.summarize(rows)["overall"]
     assert (o["pass"], o["right"], o["right_rate"]) == (1, 3, 0.75)
     assert [R.datasheet_right(r) for r in rows] == [False, True, True, False]
+
+
+def test_pads_on_the_wrong_lead_are_not_a_maker_land():
+    # AH1806-W (10-21 re-score): pads 2 and 3 swapped (2.4 mm off) were counted as the maker's land because each pad
+    # still had the land's size and distance from the centre
+    ml = {"followed": True, "pads": ["1", "2", "3"], "ep": []}
+    f = lambda pos: {"pads": {"ok": False, "bad_pads": ["2", "3"], "worst": {"pos": pos, "size": 0.3, "drill": 0}},
+                     "pitch": {"ok": True, "ours": 0.95, "ref": 0.95}, "pin1": {"ok": True}, "origin": {"ok": True}}
+    assert not S.only_maker_land(f(2.4), ml)
+    assert S.only_maker_land(f(0.225), ml)

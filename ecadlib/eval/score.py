@@ -257,7 +257,13 @@ def only_maker_land(fields, ml):
     failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
     if not failed or not failed <= {"pads", "courtyard"}:
         return False
-    return set((fields.get("pads") or {}).get("bad_pads") or []) <= set(ml["pads"])
+    pads = fields.get("pads") or {}
+    # a maker's land moves pads along their lead (pad_center), never into a neighbour's place: a pad off by half the
+    # pitch or more is on the wrong lead (AH1806-W 10-21: pads 2 and 3 swapped, 2.4 mm off, are not a land choice)
+    pitch = (fields.get("pitch") or {}).get("ref")
+    if (pads.get("worst") or {}).get("pos", 0) >= (pitch / 2 if pitch else 0.5):
+        return False
+    return set(pads.get("bad_pads") or []) <= set(ml["pads"])
 
 
 BODY_EXCESS_MAX = 0.6     # IPC-7351B courtyard excess is 0.1-0.5 mm, plus rounding out to 0.01 mm
