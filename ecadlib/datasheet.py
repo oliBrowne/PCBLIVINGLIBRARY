@@ -1193,6 +1193,24 @@ def joined_to_pad(spec, pins):
     return None
 
 
+SIDEWAYS = re.compile(r"horizontal|right[ -]?angle|\bR/?A\b|side[ -]?entry", re.I)
+
+
+def body_unread(spec):
+    """The hold line when a connector's courtyard would be a guess: no body outline was read (pad_table body,
+    body_length x body_width), so the courtyard would hug the pads. A connector's housing reaches well past its pins,
+    and a horizontal one far behind them (S28B-PHDSS 6.4 mm, S13B-EH 5.75 mm off: benchmark 2026-10-21). A bare
+    vertical pin header is drawn from its pitch (footprint_adv._header) and still builds. None otherwise."""
+    t = spec.get("package_type")
+    if t not in ("connector", "pin_header") or (spec.get("pad_table") or {}).get("body") or \
+            spec.get("body_length") and spec.get("body_width"):
+        return None
+    if t == "pin_header" and not SIDEWAYS.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
+        return None
+    return ("no footprint: the datasheet read left the connector's body outline blank, so its courtyard would hug the "
+            "pads while the housing reaches past them; read the body size from the drawing")
+
+
 NO_NET = re.compile(r"^(|~|-|n\.?\s*c\.?|n/c|d\.?n\.?c\.?|n\.?u\.?|nc\d*|no\s*connect.*|reserved|rsvd)$", re.I)
 
 

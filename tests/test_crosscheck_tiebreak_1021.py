@@ -186,3 +186,23 @@ def test_a_pad_that_only_shares_a_net_with_some_leads_or_is_ground_still_builds(
     assert D.joined_to_pad(power8(), plain) is None                       # no pad pin listed: no sign
     assert D.joined_to_pad(power8(exposed_pad=None), plain + [{"num": "9", "name": "D"}]) is None
     assert D.joined_to_pad(power8("qfn", pins_top_bottom=2), plain + [{"num": "9", "name": "D"}]) is None   # 4 sides
+
+
+# ---------------------------------------------------------------- a connector with no housing read
+def test_a_connector_whose_body_was_not_read_is_held_not_built_with_a_guessed_courtyard():
+    phd = {"package_type": "connector", "name": "JST_PHD_S28B-PHDSS_2x14_P2.00mm_Horizontal", "pin_count": 28,
+           "pitch": 2.0, "pad_table": {"arrays": [{"count": 14, "x": 0, "y": 0, "dx": -2, "dy": 0}]}}
+    line = D.body_unread(phd)                                                          # S28B-PHDSS
+    assert line and "left the connector's body outline blank" in line, line
+    eh = {"package_type": "pin_header", "name": "JST_EH_S13B-EH_1x13_P2.50mm_Horizontal", "pin_count": 13, "pitch": 2.5}
+    assert D.body_unread(eh)                                                           # S13B-EH
+    assert D.body_unread(dict(eh, name="S13B-EH", description="13 pin right angle header"))
+
+
+def test_a_connector_with_a_body_and_a_bare_vertical_header_still_build():
+    phd = {"package_type": "connector", "name": "JST_PHD", "pin_count": 28, "pitch": 2.0}
+    assert D.body_unread(dict(phd, pad_table={"body": {"x1": 0, "y1": 0, "x2": 30, "y2": 9}})) is None
+    assert D.body_unread(dict(phd, body_length=30.0, body_width=9.0)) is None
+    assert D.body_unread({"package_type": "pin_header", "name": "PinHeader_1x04_P2.54mm_Vertical", "pin_count": 4,
+                          "pitch": 2.54}) is None
+    assert D.body_unread({"package_type": "custom", "name": "Tag-Connect_TC2030", "pin_count": 6}) is None    # no housing
