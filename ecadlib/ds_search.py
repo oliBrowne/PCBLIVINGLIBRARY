@@ -19,7 +19,9 @@ TOOL_BASIC = "web_search_20250305"  # every other model
 SEARCH_USD = 0.01                   # $10 per 1,000 searches, on top of the tokens
 MAX_USES = 3                        # searches per part
 MAX_TURNS = 3                       # pause_turn continuations
-EST_TOKENS = (12000, 1500)          # rough input / output tokens of one search request, for the cost cap
+# input / output tokens one part's search may use, for the cost cap: the search results the model reads are most of
+# it (benchmark 2026-10-21, Opus 5.5, 3 searches: $0.03-$0.36 a part, ENS210 about 80K input tokens)
+EST_TOKENS = (90000, 4000)
 URL_RE = re.compile(r"https?://[^\s\"'<>\])}]+")
 NEW_TOOL_MODELS = ("claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                    "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6", "claude-fable")
