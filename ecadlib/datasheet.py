@@ -45,6 +45,7 @@ MM_OBJS = ("pin_positions", "tab", "land")            # numbers the model must g
 # Any other schema key (a family added later: rows, cols, ball_map, pad_table, mount, ...) is copied as given; objects
 # and arrays holding numbers are flagged for review like MM_OBJS. Keys each family must have, beyond its body:
 NEED = {"chip": [], "gullwing": ["pitch", "lead_span", "terminal_width"], "qfn": ["pitch", "terminal_width"],
+        "qfp": ["pitch", "lead_span", "terminal_width"],
         "bga": ["pitch", "rows", "cols", "ball_diameter|land_diameter"], "connector": ["pad_table"], "custom": ["pad_table"]}
 NO_BODY = ("pin_header", "connector", "custom")       # families whose body size is optional in package_schema.json
 MAX_TOKENS = 16000                                    # non-streaming request; thinking counts toward it
@@ -1079,11 +1080,16 @@ def to_spec(pkg, part, datasheet, model, offset, review):
         v = to_mm(k, pkg.get(k), offset, prov, review)
         if v:
             spec[k] = v
-    h = to_mm("height_max", pkg.get("height_max"), offset, prov, review)
+    hrev = []                                         # a blank height is not a blank footprint dimension
+    h = to_mm("height_max", pkg.get("height_max"), offset, prov, hrev)
+    review += [r for r in hrev if not r.endswith(": no value printed")]
     if h and "max" in h:
         spec["height_max"] = h["max"]
     elif h:
         unres.append("height_max")
+    if "height_max" not in spec:                      # TLP2361 (2026-10-19) was held "left height_max unresolved"
+        review.append("height_max: height not read; the footprint does not need it (the 3D body uses the family's "
+                      "default height)")
     if pkg.get("exposed_pad"):
         ep = {d: to_mm(f"exposed_pad.{d}", pkg["exposed_pad"][d], offset, prov, review) for d in ("length", "width")}
         spec["exposed_pad"] = {d: v for d, v in ep.items() if v}
@@ -1115,6 +1121,36 @@ def to_spec(pkg, part, datasheet, model, offset, review):
     if unres:
         spec["unresolved"] = sorted(set(unres))
     return spec, prov
+
+
+def build_blockers(spec):
+    """The keys footprint_gen.build needs that this spec lacks (package_schema.json's allOf; height_max and
+    courtyard_excess are never among them): what a hold must name, whatever the read listed as unresolved."""
+    t = spec.get("package_type")
+    keys = [] if t in NO_BODY else ["body_length", "body_width"]
+    keys += ["terminal_length|inner_span"] if t in ("chip", "molded") else ["terminal_length"] if t in LINEAR_TYPES else []
+    need = list(NEED.get(t, []))
+    if t in ("gullwing", "qfp", "qfn") and not spec.get("pin_positions"):
+        need.insert(0, "pin_count")
+    elif t == "gullwing":                             # listed pads: their offsets are the pitch
+        need.remove("pitch")
+    return [k.replace("|", " or ") for k in keys + need if not any(spec.get(x) is not None for x in k.split("|"))]
+
+
+def no_footprint(spec, error):
+    """The hold line for a read footprint_gen.build could not use (KeyError / TypeError): the field(s) the builder
+    needed first, the read's own unresolved list only as an aside (TLP2361, 2026-10-19: "left height_max unresolved"
+    hid the real blank)."""
+    miss, unres = build_blockers(spec), list(spec.get("unresolved") or [])
+    key = str(error.args[0]) if isinstance(error, KeyError) and error.args else None
+    if key and not any(key in m.split(" or ") for m in miss) and (miss or unres):
+        miss.append(key)
+    if not miss:
+        what = f"{error} blank" if isinstance(error, KeyError) else f"a value the footprint needs unusable ({error})"
+        return f"no footprint: the datasheet read left {what}" + (
+            f" (unresolved in the read: {', '.join(unres)})" if unres else " (and did not list it as unresolved)")
+    return (f"no footprint: the datasheet read left {', '.join(miss)} blank, which the footprint needs"
+            + (f" (unresolved in the read: {', '.join(unres)})" if unres else ""))
 
 
 NO_NET = re.compile(r"^(|~|-|n\.?\s*c\.?|n/c|d\.?n\.?c\.?|n\.?u\.?|nc\d*|no\s*connect.*|reserved|rsvd)$", re.I)
@@ -1277,7 +1313,9 @@ def check_pins(spec, ext, review):
         return
     if rows != n:
         review.append(f"pin count: drawing says {n}, pin table has {rows}")
-    want = {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if spec.get("exposed_pad") else set())
+    listed = {str(p.get("number")) for p in _listed(spec)}          # a depopulated row: its pads' own numbers
+    want = listed if len(listed) == n and not spec.get("exposed_pad") and not spec.get("tab") else \
+        {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if spec.get("exposed_pad") else set())
     key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)
     miss, extra = sorted(want - set(nums), key=key), sorted(set(nums) - want, key=key)
     if miss:
@@ -1336,7 +1374,12 @@ def self_check(spec, ext, review):
     tab = 1 if spec.get("tab") else 0
     # KiCad's names count the leads without the tab (TO-252-2: leads 1 and 3 + tab 2), as footprint_rules._name_rules
     leads = len({str(p.get("number")) for p in _listed(spec)})
-    if f["count"] is not None and n is not None and f["count"] not in (n, n + tab) and not (tab and f["count"] == leads):
+    places = None                                     # a depopulated dual row (SO-6 with 5 pins): the name counts places
+    if leads and e and not tab:
+        offs = [[p["offset"] for p in _listed(spec) if p.get("side") == sd and isinstance(p.get("offset"), (int, float))]
+                for sd in "LR"]
+        places = 2 * max(round((max(o) - min(o)) / e) + 1 if o else 0 for o in offs)
+    if f["count"] is not None and n is not None and f["count"] not in (n, n + tab, places) and not (tab and f["count"] == leads):
         add(f"name {spec['name']} says {f['count']} pins, pin_count is {n}")
     pins = [p["num"] for p in ext.get("pins", [])]
     if n is not None and pins:
@@ -1428,6 +1471,64 @@ def table_check(pkg, tables, offset, review):
                     d[x] = row[x]
                 review.append(f"{k} ({lab}) {', '.join(f'{x} {row[x]:g}' for x in fill)} mm filled from {where}; "
                               "the read left it blank")
+    _fill_left_out(pkg, found, offset, review)
+
+
+def _table_symbols(pkg, rows):
+    """{field: symbol} for the gullwing / QFP dimensions a read left out, by the conventional symbols, where the table
+    names exactly one candidate: lead_span is E beside a body E1 (D beside D1) or HE beside a body E; the foot is L,
+    or Lp where NXP prints both (its L is the whole lead); the lead width b or bp; the seated height A (max)."""
+    lab = re.sub(r"(\s*\(\d*\)?)+$", "", str((pkg.get("body_width") or {}).get("label") or "").strip())
+    base = lab[:-1] if lab.endswith("1") else lab
+    cands = {"lead_span": ([base] if lab.endswith("1") else []) + (["H" + base] if base else []),
+             "terminal_length": ["Lp"] if "Lp" in rows else ["L"], "terminal_width": ["b", "bp"], "height_max": ["A"]}
+    out = {}
+    for k, cs in cands.items():
+        hit = [c for c in cs if c in rows]
+        if len(hit) == 1:
+            out[k] = hit[0]
+    return out
+
+
+def _fill_left_out(pkg, found, offset, review):
+    """A gullwing / QFP dimension the read left out entirely (ATSAME70N19A-AN, MKL24Z32VLK4: body and pitch read, the
+    span, foot and lead width not; live benchmark 2026-10-19), from the one dimension table that agrees with every row
+    of the read matched to it (two at least) and names the field's symbol unambiguously. Anything less stays blank and
+    unresolved: the part is held as before."""
+    if pkg.get("package_type") not in ("gullwing", "qfp"):
+        return
+    blank = [k for k in ("lead_span", "terminal_length", "terminal_width", "height_max") if not pkg.get(k)]
+    good = [t for t, rows in found.values() if t.get("unit") == "mm" and not any(r[4] for r in rows)
+            and sum(1 for r in rows if r[0] in DIMS + NUM_DIMS) >= 2]
+    if not blank or len(good) != 1:
+        return
+    t = good[0]
+    if isinstance(offset, list):                      # the sent page to cite, as the model cites its own
+        cite = offset.index(t["page"]) + 1 if t["page"] in offset else None
+    else:
+        cite = t["page"] - (offset or 0) if t["page"] - (offset or 0) >= 1 else None
+    if cite is None:
+        return
+    sym, done = _table_symbols(pkg, t["rows"]), []
+    for k in blank:
+        row = t["rows"].get(sym.get(k))
+        if not row:
+            continue
+        if row["span"]:                               # "12.00 BSC": a basic size, its one value is the nominal
+            vals = {"min": None, "nom": next(row[x] for x in ("min", "nom", "max") if row[x] is not None), "max": None}
+        elif k == "height_max":
+            vals = {"min": None, "nom": None, "max": row["max"]}
+        else:
+            vals = {x: row[x] for x in ("min", "nom", "max")}
+        if all(v is None for v in vals.values()):
+            continue
+        pkg[k] = {"label": sym[k], **vals, "unit": "mm", "page": cite, "figure": f"dimension table p.{t['page']}"}
+        done.append(k)
+        review.append(f"{k} ({sym[k]}) {', '.join(f'{x} {v:g}' for x, v in vals.items() if v is not None)} mm filled "
+                      f"from the dimension table p.{t['page']}, read in code; the read left it out")
+    if done and isinstance(pkg.get("unresolved"), list):
+        from . import ds_route as DR
+        pkg["unresolved"] = [u for u in pkg["unresolved"] if DR.unresolved_field(u) not in done]
 
 
 def ordering_check(pkg, facts, review):
@@ -1464,6 +1565,38 @@ def _pin_count_from(spec, ext):
     return (by_name, f"the package name {spec['name']}") if by_name else (by_pins, "the pin table") if by_pins else (None, "")
 
 
+DEPOP_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*?-(\d+)-(\d+)(?=_|$)")   # SOIC-14-16: 14 pins on 16 places
+
+
+def _depop_positions(spec, ext):
+    """A dual row with places left empty (TLP2361: SO-6 with pin 2 absent; UCC256301: SOIC-14-16, pins 1,3..12,14..16,
+    live benchmark 2026-10-19) -> (pin_positions, places, absent numbers) from the pin table, whose numbers are the
+    places: or None. Only when nothing else can explain the gaps: the name gives the place count (SO-6, SOIC-14-16),
+    the table's numbers are distinct, start at 1 and end at the last place (a table cut short ends early), the read's
+    pin_count (if any) is the table's count, and there is no tab or exposed pad (whose number would land on a place)."""
+    if spec.get("package_type") != "gullwing" or any(spec.get(k) for k in ("pin_positions", "tab", "exposed_pad", "pad_table")):
+        return None
+    e, name = spec.get("pitch"), str(spec.get("name") or "")
+    nums = [str(p.get("num") or "") for p in ext.get("pins") or []]
+    if not isinstance(e, (int, float)) or e <= 0 or not nums or not all(x.isdecimal() for x in nums) or len(set(nums)) != len(nums):
+        return None
+    ints = sorted(int(x) for x in nums)
+    m = DEPOP_NAME.match(name)
+    if m and int(m.group(2)) > int(m.group(1)):
+        if int(m.group(1)) != len(ints):
+            return None
+        places = int(m.group(2))
+    else:
+        places = name_facts(name)["count"]
+    n = spec.get("pin_count")
+    if not places or places % 2 or len(ints) >= places or ints[0] != 1 or ints[-1] != places or n not in (None, len(ints)):
+        return None
+    per = places // 2
+    pos = [{"number": str(i), "side": "L", "offset": round((i - 1 - (per - 1) / 2) * e, 4)} if i <= per else
+           {"number": str(i), "side": "R", "offset": round(((per - 1) / 2 - (i - per - 1)) * e, 4)} for i in ints]
+    return pos, places, sorted(set(range(1, places + 1)) - set(ints))
+
+
 INJECTION = "document contains instruction-like text (ignored)"
 
 
@@ -1482,6 +1615,14 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
         ordering_check(ext["package"], facts, review)
         table_check(ext["package"], tables, offset, review)
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
+    dp = _depop_positions(spec, ext)
+    if dp:
+        spec["pin_positions"], spec["pin_count"] = dp[0], len(dp[0])
+        spec["unresolved"] = [u for u in spec.get("unresolved") or [] if u != "pin_count"]
+        if not spec["unresolved"]:
+            del spec["unresolved"]
+        review.append(f"pin_positions: {len(dp[0])} pins on the {dp[1]} places of {spec['name']}, places "
+                      f"{', '.join(map(str, dp[2]))} empty, from the pin table's numbers; check against the drawing")
     if spec.get("pin_count") is None and not spec.get("pad_table"):
         n, how = _pin_count_from(spec, ext)
         if n:

@@ -759,10 +759,8 @@ class Run:
             st["review"].extend(pad_table_problems(res["spec"]))
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
-            except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: say so, not KeyError
-                unres = res["spec"].get("unresolved") or []
-                raise D.DatasheetError("no footprint: the datasheet read left " + (", ".join(unres) + " unresolved" if unres else
-                                       f"{e} blank (and did not list it as unresolved)")) from e
+            except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: name it, not KeyError
+                raise D.DatasheetError(D.no_footprint(res["spec"], e)) from e
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")
