@@ -671,7 +671,7 @@ class Run:
         rd = self.reader
         if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
             try:
-                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
                 res = rd.cached(job)
             except CC.Held as e:
                 self.cross_check_held(st, e)
@@ -689,7 +689,7 @@ class Run:
         if not getattr(rd, "_recollected", False):    # answers paid for in earlier batches, before a parser fix
             rd._recollected = True
             rd.recollect()
-        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
         try:
             res = hit = rd.cached(job)
             if res is None and rd.deferred:

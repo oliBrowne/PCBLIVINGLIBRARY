@@ -786,15 +786,15 @@ def review_lines(out):
 
 
 # ---------------------------------------------------------------- `ecadlib datasheet pages`: what a read would send
-def page_texts(data):
-    """Text of every page (pypdf), or None when there is no pypdf or the PDF can't be read."""
+def page_texts(data, limit=None):
+    """Text of every page (the first `limit` only), or None when there is no pypdf or the PDF can't be read."""
     try:
         import logging, pypdf
         logging.getLogger("pypdf").setLevel(logging.ERROR)
         rd = pypdf.PdfReader(io.BytesIO(data))
         if rd.is_encrypted and not rd.decrypt(""):    # a user password: the text can't be read here
             return None
-        pages = list(rd.pages)
+        pages = list(rd.pages)[:limit]
     except Exception:
         return None
     out = []
