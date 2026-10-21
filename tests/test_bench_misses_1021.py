@@ -101,7 +101,7 @@ def test_a_read_with_no_drawing_says_its_dimensions_are_blank(tmp_path):
             "unresolved": ["body_length", "body_width", "lead_span", "pitch"]}
     st = {"name": "BD33FC0FP", "footprint": None, "symbol": None, "review": [], "tried": [], "verify": []}
     try:
-        run.put_datasheet(st, {"spec": spec, "needs_review": []}, {"url": "u", "where": "w", "part": "BD33FC0FP"}, "fp", "sym")
+        run.put_datasheet(st, {"spec": spec, "needs_review": [], "sidecar": {}}, {"url": "u", "where": "w", "part": "BD33FC0FP"}, "fp", "sym")
     except D.DatasheetError as e:
         assert str(e).startswith("no footprint: the datasheet read left body_length, body_width, lead_span, pitch unresolved")
     else:
