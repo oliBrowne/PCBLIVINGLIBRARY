@@ -677,7 +677,7 @@ class Run:
         rd = self.reader
         if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
             try:
-                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
                 if self.reading(st) and not rd.answered(job):
                     self.refused(st, job, None, cfg.get("folder"))
                 self.folder_file_failed(st, job)
@@ -699,7 +699,7 @@ class Run:
             rd._recollected = True
             rd.recollect()
         refused_before = self.reading(st)             # (a link that no longer gives a PDF at all: said no more)
-        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
         if refused_before and not rd.answered(job):   # (an earlier answer: the API fetched the link)
             self.refused(st, job, None, cfg.get("folder"))
         self.folder_file_failed(st, job)
@@ -814,7 +814,8 @@ class Run:
         return name, how, why
 
     def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
-        url, where = job["url"], job["where"]
+        pdf = res["sidecar"].get("pdf") or {}        # the link read (the next one when the API could not fetch the first)
+        url, where = pdf.get("url") or job["url"], pdf.get("where") or job["where"]
         self.reading(st)                              # read: no refused-download advice left
         from . import fp_edit as FE                   # hand edits of this part's pad table (ecadlib fp-edit)
         res, edited = FE.apply(FE.for_part(FE.load(self.out), st.get("name"), job.get("name"), job["part"]), res)
@@ -841,10 +842,8 @@ class Run:
             st["review"].extend(pad_table_problems(res["spec"]))
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
-            except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: say so, not KeyError
-                unres = res["spec"].get("unresolved") or []
-                raise D.DatasheetError("no footprint: the datasheet read left " + (", ".join(unres) + " unresolved" if unres else
-                                       f"{e} blank (and did not list it as unresolved)")) from e
+            except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: name it, not KeyError
+                raise D.DatasheetError(D.no_footprint(res["spec"], e)) from e
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")
