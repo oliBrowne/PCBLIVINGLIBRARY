@@ -179,8 +179,9 @@ CODES = {
     # fields (rule `fields`)
     "fields.no_datasheet": ("There is no datasheet link.", "Add the datasheet link to the BOM line or the part.",
                             [r"^fields: no datasheet link"]),
-    "fields.no_description": ("The description is empty.",
-                              "Add a short description, e.g. \"MOSFET N-CH 30 V 5 A SOT-23\".",
+    "fields.no_description": ("The description is empty: no part source had one (ecadlib does not make one up).",
+                              "Type the maker's or distributor's description, e.g. \"MOSFET N-CH 30 V 5 A SOT-23\" "
+                              "or \"16MHz 20pF ±10ppm SMD3225-4P crystal\".",
                               [r"^fields: Description is empty"]),
     "fields.empty": ("{field} is empty.", "Fill in {field} on the BOM line or the part.",
                      [r"^fields: (?P<field>.+?) is empty"]),

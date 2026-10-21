@@ -239,7 +239,8 @@ MALFORMED = (IndexError, TypeError, AttributeError, KeyError, OverflowError, Zer
 def convert_footprint(text, name=None, source="", notes=None, license_=""):
     """.kicad_mod text -> altium_lib footprint dict (mm, y up), no 3D body yet. Raises ValueError for a file that
     does not parse or is missing what a footprint needs (a pad without a size, a line without an end ...).
-    license_: the source's license, added to the description after "from <source>" (KICAD_LICENSE for KiCad parts)."""
+    license_: the source's license: "from <source> (<license>)" is added to the description (KICAD_LICENSE for KiCad
+    parts); a source without one is not named there."""
     try:
         return _convert_footprint(text, name, source, notes, license_)
     except MALFORMED as e:
@@ -250,7 +251,8 @@ def _convert_footprint(text, name=None, source="", notes=None, license_=""):
     notes = [] if notes is None else notes
     t = inherit_margins(sexpr.parse(text))
     descr = (sexpr.first(t, "descr") or ["", ""])[1]
-    origin = f"from {source}" + (f" ({license_})" if license_ else "") if source else ""
+    origin = f"from {source} ({license_})" if source and license_ else ""     # the attribution a license asks for;
+    # other sources are named in the plan (source, field_sources), not in the part's description
     fp = {"name": name or t[1], "description": AL.clean("; ".join(x for x in (descr, origin) if x)),
           "height_mm": 0.0, "pads": [], "tracks": [], "fills": [], "regions": [], "arcs": [], "bodies": [], "texts": []}
     for p in sexpr.find(t, "pad"):
@@ -864,10 +866,9 @@ def import_part(spec, out, http, step=False, write=True, gen_step=True, layers=N
         rep["pcblib"] = str(AL.write_pcblib(Path(out) / "PcbLib" / f"{AL.file_stem(fp['name'])}.PcbLib", [fp], layers)) if write else None
         rep["pads"] = len(fp["pads"])
         if spec.get("symbol"):
-            chain, ssrc = load_symbol(spec["symbol"], http)
+            chain, _ = load_symbol(spec["symbol"], http)
             extra = [("MPN", spec["mpn"])] if spec.get("mpn") else []
             sym = convert_symbol(chain, spec.get("symbol_as") or spec.get("mpn"), fp["name"], extra, spec.get("pin_map"), rep["notes"])
-            sym["description"] = sym["description"] or ssrc
             rep["schlib"] = str(AL.write_schlib(Path(out) / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib", [sym])) if write else None
             rep["pins"] = sum(pr[0] == "pin" for pr in sym["prims"])
             if len(chain) > 1:

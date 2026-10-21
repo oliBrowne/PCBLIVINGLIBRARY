@@ -310,7 +310,9 @@ class Browser:
                 probe.close()
             except Exception:
                 ua = BROWSER_UA
-            s.ctx = s.browser.new_context(accept_downloads=True, user_agent=ua, locale="en-US",
+            # no downloads: the browser stops its own copy of a PDF at once, as the page fetches it (two copies would
+            # halve the speed; cancelling a download once it started came too late on Windows)
+            s.ctx = s.browser.new_context(accept_downloads=False, user_agent=ua, locale="en-US",
                                           viewport={"width": 1366, "height": 768})
             if not self.allow_local:
                 from . import datasheet as D
@@ -345,14 +347,8 @@ class Browser:
             except Exception:
                 pass
 
-        def on_download(d):
-            downloads.append(d)
-            try:                                      # the page fetches it again: two copies would halve the speed
-                d.cancel()
-            except Exception:
-                pass
         page.on("response", on_response)
-        page.on("download", on_download)
+        page.on("download", lambda d: downloads.append(d))   # (only its link: the context lets no download happen)
         try:
             host = urlparse(url).netloc
             if host not in s.warm:                    # the site's own scripts (bot checks) run on its home page first
@@ -410,12 +406,6 @@ class Browser:
         except PWError as e:
             return 0, None, "", url, f"browser: {str(e).splitlines()[0][:160]}"
         finally:
-            for d in downloads:                       # the bytes came from the page's fetch: no file left behind
-                try:
-                    d.cancel()
-                    d.delete()
-                except Exception:
-                    pass
             try:                                      # Edge 151+ never closes a page left on its error page
                 page.goto("about:blank", timeout=1500)
             except Exception:

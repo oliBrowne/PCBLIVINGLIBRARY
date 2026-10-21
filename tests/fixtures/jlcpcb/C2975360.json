@@ -1,0 +1,23 @@
+{
+ "_fixture": "REAL (trimmed): JLCPCB's parts search answer for the keyword C2975360 (selectSmtComponentList), recorded 2026-10-20 in the http_cache of an Altium-menu workspace; only the fields ecadlib reads are kept.",
+ "code": 200,
+ "data": {
+  "componentPageInfo": {
+   "total": 1,
+   "list": [
+    {
+     "componentCode": "C2975360",
+     "componentModelEn": "16M 20PF 10PPM",
+     "componentBrandEn": "SST",
+     "componentSpecificationEn": "HC-49S-SMD-2P-Mini",
+     "describe": "-20℃~+70℃ 16MHz 20pF ±10ppm ±30ppm HC-49S-SMD-2P-Mini Crystals ROHS",
+     "firstSortName": "Crystals",
+     "secondSortName": "Crystals, Oscillators, Resonators",
+     "erpComponentName": "16MHz ±10ppm 20pF",
+     "componentLibraryType": "expand",
+     "stockCount": 1278
+    }
+   ]
+  }
+ }
+}

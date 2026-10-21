@@ -1526,7 +1526,8 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
                 review.append(f"footprint_gen.build failed: {F.shorts(rep)}")
         except Exception as e:
             review.append(f"footprint_gen.build failed: {e!r}")
-    sym = {"name": part, "description": f"{ext['symbol_description']} (read from the datasheet by ecadlib.datasheet; review before use)",
+    sym = {"name": part, "description": ext["symbol_description"],     # the part's own words; the read is held for
+           # a person by its verify notes, not marked in the text
            "designator": "U?", "footprint": spec["name"], "needs_datasheet_verification": True,
            "pins": [{k: p[k] for k in ("num", "name", "type", "side")} for p in ext["pins"]],
            "source": {"datasheet": datasheet, "pin_table_page": _pg(ext["pin_table"]["page"], offset),
@@ -1908,13 +1909,15 @@ def refused_line(job, error):
 def refusal(attempts):
     """The first download a maker's site refused, as bot protection does: -> (url, host, why), or None. A 403 that
     is a web page (Nexperia BAT160_SERIES.pdf), a reset connection (analog.com LTM4671, WinError 10054) or a timeout
-    on every try (analog.com LT8610, st.com STULPI01A). A TLS failure (liteon over http) is not one."""
+    on every try (analog.com LT8610, st.com STULPI01A). A TLS failure (liteon over http) is not one, nor a host that
+    never answers the connection (www.ixys.com): no browser gets further (pdf_fetch.refused)."""
     from urllib.parse import urlparse
     for a in attempts or []:
         e = re.sub(r" \(also tried .*\)$", "", a.get("error") or "", flags=re.S)   # what the other ways got (pdf_fetch)
         why = ("answered HTTP 403 with a web page" if re.search(r"HTTP 403 \(a web page", e) else
                "reset the connection" if re.search(r"ConnectionResetError|Connection reset|10054|RemoteDisconnected", e) else
-               "timed out on every try" if re.search(r"timeout|timed out", e, re.I) and re.search(r"\(\d+ tries\)$", e) else "")
+               "timed out on every try" if re.search(r"timeout|timed out", e, re.I) and re.search(r"\(\d+ tries\)$", e)
+               and not re.search(r"ConnectTimeout|connect timeout", e, re.I) else "")
         if why:
             return a["url"], urlparse(a["url"]).hostname or a["url"], why
     return None
