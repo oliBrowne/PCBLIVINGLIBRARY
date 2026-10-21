@@ -2897,28 +2897,38 @@ class Reader:
         if not urls:
             model = self.cfg.get("web_search_model") or self.model
             uses = int(self.cfg.get("web_search_max_uses") or WS.MAX_USES)
-            est, cap = WS.estimate(model, uses), float(self.cfg.get("max_cost_usd") or 0)
+            fallback = model in FALLBACK_MODELS       # a classifier decline is re-run on another model, as for a read
+            est, cap = WS.estimate(model, uses, fallback), float(self.cfg.get("max_cost_usd") or 0)
             if cap and (est is None or self.committed_usd + est > cap):
                 attempts.append({"url": "", "where": "web search", "error": f"not searched: about ${est or 0:.2f} more "
                                  f"would pass [datasheet] max_cost_usd = {cap:g}"})
                 return None, None
-            headers, extra = {}, {}
-            if model in FALLBACK_MODELS:              # a classifier decline is re-run on another model, as for a read
-                headers, extra = {"anthropic-beta": FALLBACK_BETA}, {"fallbacks": "default"}
+            headers, extra = ({"anthropic-beta": FALLBACK_BETA}, {"fallbacks": "default"}) if fallback else ({}, {})
+
+            def may_continue(turns):                  # a pause_turn continuation: only while another turn fits the cap
+                return not cap or self.committed_usd + (WS.usd(model, turns) or 0.0) + est <= cap
             try:
-                urls, usage, msg = WS.search(self.client(model), part, model, maker=maker, package=package, max_uses=uses,
-                                             headers=headers, extra=extra)
-            except DatasheetError as e:
+                client = self.client(model)
+            except DatasheetError as e:               # (--offline, no key: nothing was sent)
                 attempts.append({"url": "", "where": "web search", "error": f"search failed: {e}"})
                 return None, None
-            usd = WS.usd(model, usage)
-            self.committed_usd += usd if usd is not None else (est or 0.0)
-            self.ledger.add({"part": part, "name": part, "model": model, "model_served": msg.get("model"),
-                             "via": "web search", "input_tokens": usage.get("input_tokens", 0),
-                             "output_tokens": usage.get("output_tokens", 0),
-                             "web_searches": usage.get("web_search_requests", 0), "usd": usd,
-                             "how": "usage" if usd is not None else "estimate", "verdict": f"{len(urls)} links"})
-            if not urls:
+            urls, usage, turns, err = WS.search(client, part, model, maker=maker, package=package, max_uses=uses,
+                                                headers=headers, extra=extra, may_continue=may_continue)
+            usd = WS.usd(model, turns)
+            how = "usage" if usd is not None and not err else "estimate"
+            if usd is None:                           # (a model with no known price: the worst case is held)
+                usd = est or 0.0
+            if err:                                   # the failed request may still have been billed: hold its worst case
+                usd += est or 0.0
+            self.committed_usd += usd
+            self.ledger.add({"part": part, "name": part, "model": model,
+                             "model_served": (turns[-1] if turns else {}).get("model"), "via": "web search",
+                             "input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0),
+                             "web_searches": usage.get("web_search_requests", 0), "usd": round(usd, 6), "how": how,
+                             "verdict": f"search failed: {err}" if err else f"{len(urls)} links"})
+            if err and not urls:
+                attempts.append({"url": "", "where": "web search", "error": f"search failed: {err}"})
+            elif not urls:
                 attempts.append({"url": "", "where": "web search", "error": "the search found no PDF link"})
         for url in urls:
             try:
@@ -2978,8 +2988,9 @@ class Reader:
             data, prov = self._web_search(mpn or part, package, attempts, maker)
         if data is None:
             how = "; ".join(a["error"] for a in attempts if a["where"] == "datasheet folder") or how
+            searched = "; ".join(a["error"] for a in attempts if a["where"] == "web search")
             if not urls:
-                raise DatasheetError("no datasheet URL known" + (f" and {how}" if self.cfg.get("folder") else
+                raise DatasheetError("no datasheet URL known" + (f"; web search: {searched}" if searched else "") + (f" and {how}" if self.cfg.get("folder") else
                                      "; put the PDF in a folder and set [datasheet] folder"))
             wrong = {a["url"] for a in attempts      # (what the other ways got says nothing of the link itself)
                      if re.search(BROKEN_LINK, re.sub(r" \(also tried .*\)$", "", a["error"], flags=re.S))}

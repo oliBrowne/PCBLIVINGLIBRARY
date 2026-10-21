@@ -23,8 +23,8 @@ MAX_TURNS = 3                       # pause_turn continuations
 # it (benchmark 2026-10-21, Opus 5.5, 3 searches: $0.03-$0.36 a part, ENS210 about 80K input tokens)
 EST_TOKENS = (90000, 4000)
 URL_RE = re.compile(r"https?://[^\s\"'<>\])}]+")
-NEW_TOOL_MODELS = ("claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
-                   "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6", "claude-fable")
+NEW_TOOL_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+                   "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6"}
 
 PROMPT = """Find the datasheet PDF for the electronic part {mpn}{maker}{package}.
 
@@ -38,15 +38,21 @@ The PDF must cover this part's package drawing. Answer with one line of JSON and
 
 
 def tool_type(model):
-    return TOOL if str(model).startswith(NEW_TOOL_MODELS) else TOOL_BASIC
+    from . import datasheet as D
+    return TOOL if D.base_model(model) in NEW_TOOL_MODELS else TOOL_BASIC
 
 
 def request_body(mpn, model, maker=None, package=None, max_uses=MAX_USES):
     text = PROMPT.format(mpn=mpn, maker=f" made by {maker}" if maker else "",
                          package=f" (package {package})" if package else "")
-    return {"model": model, "max_tokens": 4096, "output_config": {"effort": "low"},
+    from . import datasheet as D
+    levels = D.EFFORT_LEVELS.get(D.base_model(model))   # (Haiku 4.5, Sonnet 4.5 reject output_config.effort)
+    body = {"model": model, "max_tokens": 4096}
+    if levels is None or "low" in levels:
+        body["output_config"] = {"effort": "low"}
+    return dict(body, **{
             "tools": [{"type": tool_type(model), "name": "web_search", "max_uses": max_uses}],
-            "messages": [{"role": "user", "content": text}]}
+            "messages": [{"role": "user", "content": text}]})
 
 
 def links_in(content):
@@ -74,31 +80,53 @@ def add_usage(total, u):
     return total
 
 
-def search(client, mpn, model, maker=None, package=None, max_uses=MAX_USES, headers=None, extra=None):
-    """One search conversation (continued on pause_turn). extra: more request fields (fallbacks), with their beta in
-    headers. -> (links, usage summed over the turns, last message)"""
+def search(client, mpn, model, maker=None, package=None, max_uses=MAX_USES, headers=None, extra=None,
+           may_continue=None):
+    """One search conversation (continued on pause_turn while may_continue(turns) says the cost cap allows another
+    turn). extra: more request fields (fallbacks), with their beta in headers. A request that fails ends it: the turns
+    answered before it are kept, so what they cost is still counted. -> (links, usage summed over the turns, the
+    answered turns' messages, the error or None)"""
     body = dict(request_body(mpn, model, maker, package, max_uses), **(extra or {}))
-    usage, msg = {}, {}
+    usage, turns = {}, []
     for _ in range(MAX_TURNS):
-        msg = client.messages(body, headers)
+        if turns and may_continue and not may_continue(turns):
+            break
+        try:
+            msg = client.messages(body, headers)
+        except Exception as e:                    # (DatasheetError, a timeout: the request may still have been billed)
+            return links_in((turns[-1] if turns else {}).get("content")), usage, turns, e
+        turns.append(msg)
         add_usage(usage, msg.get("usage"))
         if msg.get("stop_reason") != "pause_turn":
             break
         body = dict(body, messages=body["messages"] + [{"role": "assistant", "content": msg.get("content") or []}])
-    return links_in(msg.get("content")), usage, msg
+    return links_in((turns[-1] if turns else {}).get("content")), usage, turns, None
 
 
-def usd(model, usage):
-    """Tokens at the model's price plus the searches. None when the model has no known price."""
+def usd(model, turns):
+    """Each turn's tokens at the price of the model that served it (a server-side fallback is billed at its own
+    rates), plus the searches. None when a turn's model has no known price."""
     from . import ds_route as DR
-    tok = DR.usage_usd(model, usage)
-    return None if tok is None else round(tok + SEARCH_USD * usage.get("web_search_requests", 0), 6)
+    total = 0.0
+    for m in turns:
+        u = add_usage({}, m.get("usage"))
+        tok = DR.usage_usd(DR.billed_model(model, m), u)
+        if tok is None:
+            return None
+        total += tok + SEARCH_USD * u.get("web_search_requests", 0)
+    return round(total, 6)
 
 
-def estimate(model, max_uses=MAX_USES):
+def estimate(model, max_uses=MAX_USES, fallback=False):
+    """The most one part's search may cost, for the cost cap. fallback: a declined request may be re-run on another
+    model, priced at the higher of the model's own and datasheet.FALLBACK_PRICE (as a read's worst case is)."""
     from . import datasheet as D
     p = D.price_of(model)
-    return None if not p else (EST_TOKENS[0] * p[0] + EST_TOKENS[1] * p[1]) / 1e6 + SEARCH_USD * max_uses
+    if not p:
+        return None
+    if fallback:
+        p = (max(p[0], D.FALLBACK_PRICE[0]), max(p[1], D.FALLBACK_PRICE[1]))
+    return (EST_TOKENS[0] * p[0] + EST_TOKENS[1] * p[1]) / 1e6 + SEARCH_USD * max_uses
 
 
 class Found:

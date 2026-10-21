@@ -74,8 +74,8 @@ def test_a_part_with_no_link_is_searched_with_its_maker():
 
 def test_pause_turn_is_continued():
     cl = Client(_answer([], stop="pause_turn"), _answer([FOUND]))
-    links, usage, _ = WS.search(cl, "TESTPART", "claude-opus-5-5")
-    assert links == [FOUND] and usage["web_search_requests"] == 2 and len(cl.sent) == 2
+    links, usage, turns, err = WS.search(cl, "TESTPART", "claude-opus-5-5")
+    assert links == [FOUND] and err is None and len(turns) == 2 and usage["web_search_requests"] == 2 and len(cl.sent) == 2
     assert cl.sent[1][0]["messages"][-1]["role"] == "assistant"
 
 
@@ -100,3 +100,57 @@ def test_a_search_link_that_is_not_a_pdf_of_the_part_is_skipped():
         job = _reader(d, cl, web_search=True).job("TESTPART", [(DEAD, "BOM")], "SOIC-8")
         assert job["url"] == FOUND
         assert any(a["where"] == "web search" and a["url"] == DEAD for a in job["base_prov"]["attempts"])
+
+
+class Failing(Client):
+    def messages(self, body, headers=None):
+        if not self.answers:
+            self.sent.append((body, headers))
+            raise D.DatasheetError("timed out")
+        return super().messages(body, headers)
+
+
+def test_a_failed_continuation_keeps_the_paid_turn_and_holds_the_failed_one():
+    cl = Failing(_answer([], stop="pause_turn"))
+    with tempfile.TemporaryDirectory() as d:
+        rd = _reader(d, cl, web_search=True)
+        assert "search failed: timed out" in _fails(rd)
+        first = WS.usd("claude-opus-5-5", [_answer([])])
+        est = WS.estimate("claude-opus-5-5", WS.MAX_USES, fallback=True)
+        assert abs(rd.committed_usd - (first + est)) < 1e-6, rd.committed_usd
+        led = [json.loads(x) for x in open(Path(d) / "out" / "datasheet" / "cost.jsonl")]
+        assert [x["how"] for x in led if x["via"] == "web search"] == ["estimate"]
+
+
+def test_a_continuation_that_could_pass_the_cap_is_not_sent():
+    cl = Client(_answer([], stop="pause_turn"), _answer([FOUND]))
+    est = WS.estimate("claude-opus-5-5", WS.MAX_USES, fallback=True)
+    with tempfile.TemporaryDirectory() as d:
+        rd = _reader(d, cl, web_search=True, max_cost_usd=est + 0.01)   # room for one turn's worst case, not two
+        assert "the search found no PDF link" in _fails(rd)
+        assert len(cl.sent) == 1 and rd.committed_usd <= est + 0.01
+
+
+def test_a_fallback_answer_is_priced_at_the_model_that_served_it():
+    msg = dict(_answer([FOUND]), model="claude-opus-4-8")
+    want = WS.usd("claude-opus-4-8", [dict(msg)])
+    assert WS.usd("claude-opus-5-5", [msg]) == want
+    assert WS.estimate("claude-opus-5-5", fallback=True) >= WS.estimate("claude-opus-5-5")
+
+
+def test_models_that_reject_effort_are_not_sent_it():
+    assert "output_config" not in WS.request_body("X", "claude-haiku-4-5")
+    assert "output_config" not in WS.request_body("X", "claude-sonnet-4-5-20250929")
+    assert WS.request_body("X", "claude-opus-5-5")["output_config"] == {"effort": "low"}
+    assert WS.request_body("X", "claude-sonnet-4-5")["tools"][0]["type"] == "web_search_20250305"
+
+
+def test_a_part_with_no_link_says_why_the_search_did_not_run():
+    with tempfile.TemporaryDirectory() as d:
+        rd = _reader(d, Client(), web_search=True, max_cost_usd=0.001)
+        try:
+            rd.job("TESTPART", [], "SOIC-8")
+        except D.DatasheetError as e:
+            assert "no datasheet URL known; web search: not searched" in str(e), str(e)
+        else:
+            raise AssertionError("a PDF was found")
