@@ -716,7 +716,10 @@ class Run:
     @staticmethod
     def folder_file_failed(st, job):
         """The part's own file in the [datasheet] folder is no PDF (a web page saved as .pdf) or does not read: said
-        first, so the person replaces it instead of saving it again under the same name."""
+        first, so the person replaces it instead of saving it again under the same name. Said as the file is now: what
+        an earlier run of the same part said of it (`datasheet batch PLAN` keeps the state) is dropped."""
+        st["tried"][:] = [t for t in st["tried"]
+                          if not re.match(r"datasheet: .+ in your \[datasheet\] folder (is not a PDF|cannot be read)", t)]
         bad = D.folder_failure(job.get("prov"))
         if bad:
             st["tried"].append(f"datasheet: {bad}")
@@ -726,7 +729,8 @@ class Run:
         """A maker's site refused the PDF here and the API's fetcher failed too: the cause and the way round it, which
         the release check shows in place of "no footprint". folder: [datasheet] folder (the review keeps its name)."""
         line = D.refused_line(job, error, folder)
-        if line:
+        if line:                                      # in place of an earlier run's (the folder may be fixed since)
+            st["review"][:] = [r for r in st["review"] if not r.startswith("datasheet download refused by ")]
             st["review"].append(line)
 
     @staticmethod

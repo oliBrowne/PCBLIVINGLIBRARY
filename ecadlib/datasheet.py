@@ -1787,6 +1787,11 @@ def _mpn_key(s):
     return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
 
 
+def _mpn_char(c):
+    """A character _mpn_key keeps (A-Z, 0-9 in any case); any other (µ in µPD720202) is punctuation to it."""
+    return c.isascii() and c.isalnum()
+
+
 def _after_mpn(stem, key):
     """The raw file-name stem after the characters that spell `key` (punctuation skipped), or None when the stem's
     letters and digits do not start with `key`."""
@@ -1794,7 +1799,7 @@ def _after_mpn(stem, key):
     while n < len(key):
         if i >= len(stem):
             return None
-        if stem[i].isalnum():
+        if _mpn_char(stem[i]):
             if stem[i].upper() != key[n]:
                 return None
             n += 1
@@ -1864,7 +1869,7 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     exact, prefix, other = None, None, None
     for f in files:
         s, rest = _mpn_key(f.stem), _after_mpn(f.stem, key)
-        if rest is not None and not rest[:1].isalnum():
+        if rest is not None and not (rest and _mpn_char(rest[0])):
             exact = exact or f                        # BAT54.pdf, BAT54_datasheet.pdf, bat54-rev3.pdf
         elif rest is not None:
             other = other or f                        # BAT54S.pdf: another part number that starts like this one

@@ -276,9 +276,11 @@ def refused(it):
 def test_following_the_refused_advice_reads_the_part_s_own_file():
     """The review says what to save where. A character no file name can hold ('/' in LM1117MPX-3.3/NOPB) becomes '-';
     an MPN with spaces keeps them, and its --part is quoted. Saved under the name the shown fix gives, the next run
-    reads it as the part's own file: no hold for a folder file."""
+    reads it as the part's own file (µPD720202 too: a letter outside A-Z is punctuation to the MPN, as in its key):
+    no hold for a folder file."""
     for mpn, name, arg in (("LM1117MPX-3.3/NOPB", "LM1117MPX-3.3-NOPB.pdf", "LM1117MPX-3.3/NOPB"),
-                           ("DSPART1 REV A", "DSPART1 REV A.pdf", '"DSPART1 REV A"')):
+                           ("DSPART1 REV A", "DSPART1 REV A.pdf", '"DSPART1 REV A"'),
+                           ("µPD720202K8-711-BAA-A", "µPD720202K8-711-BAA-A.pdf", "µPD720202K8-711-BAA-A")):
         with tempfile.TemporaryDirectory() as d:
             f = folder(d)
             rules = {"datasheet": {"folder": str(f)}}
@@ -317,6 +319,38 @@ def test_a_web_page_saved_as_the_part_s_pdf_is_said_first():
         assert e["fix"] == (f"Replace DSPART1.pdf with the PDF: download it in a browser ({LINK}), save it as DSPART1.pdf "
                             "and run again; or read it alone with ecadlib datasheet FILE.pdf --part DSPART1; or pick a "
                             "footprint by hand."), e["fix"]
+
+
+def test_a_run_again_shows_the_advice_for_the_folder_as_it_is_now():
+    """`ecadlib datasheet batch PLAN` keeps each part's state between runs: the refused link's advice and what was
+    wrong with the folder's file are said as they are now, never as an earlier run found them (the folder not there
+    yet, a web page saved as the PDF since deleted)."""
+    def fill(d, rules):
+        rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=TDL.Scripted({LINK: [403]}), batch=False,
+                      poll=0, sleep=lambda s: None, log=lambda *a: None, rules=rules)
+        with TB.patched(NoURLFetch(lambda k, m, b: TR.on_page(TD.INCH))):
+            items = D.fill_plan(Path(d) / "out" / "plan.json", rd, rules=rules, log=lambda *a: None)
+        it = next(i for i in items if i["name"] == "DSPART1")
+        lines = [r for r in it["librarian"]["review"] if r.startswith("datasheet download refused")]
+        bad = [t for t in it["librarian"]["tried"] if "in your [datasheet] folder" in t]
+        return lines, refused(it)[1], bad
+    with tempfile.TemporaryDirectory() as d:
+        TL.run(d, http=TB.PdfHTTP({}), bom=TL.BOM)            # no key: DSPART1 stays open
+        f = Path(d) / "pdfs"
+        rules = {"datasheet": {"folder": str(f)}}
+        lines, e, bad = fill(d, rules)                         # the folder is not there yet
+        assert len(lines) == 1 and e["fix"].startswith("Your datasheet folder (pdfs) does not exist"), (lines, e)
+        f.mkdir()                                              # made, and what the browser gave saved in it
+        (f / "DSPART1.pdf").write_bytes(b"<!doctype html><html><body>Access Denied</body></html>")
+        lines, e, bad = fill(d, rules)
+        assert len(lines) == 1 and e["code"] == "files.datasheet_not_pdf", (lines, e)
+        assert bad == ["datasheet: DSPART1.pdf in your [datasheet] folder is not a PDF (a web page saved as .pdf?): "
+                       "replace it with the PDF"], bad
+        (f / "DSPART1.pdf").unlink()                           # deleted, not yet saved again
+        lines, e, bad = fill(d, rules)
+        assert len(lines) == 1 and e["code"] == "files.datasheet_refused" and bad == [], (lines, bad)
+        assert e["fix"].startswith(f"Download the PDF in a browser ({LINK}), save it as DSPART1.pdf in your datasheet "
+                                   "folder (pdfs) and run again"), e["fix"]
 
 
 def test_a_missing_folder_is_named_for_a_refused_link_and_a_line_with_no_link():
