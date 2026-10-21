@@ -243,8 +243,12 @@ def maker_land(mine, spec, tol=None):
     near = lambda a, b, k: abs(a - b) <= t[k] + 1e-9
     def fits(p):
         x, y = abs(p[1] - cx), abs(p[2] - cy)
-        return (near(p[3], pl, "size") and near(p[4], pw, "size") and near(x, pc, "pos")) or \
-               (near(p[4], pl, "size") and near(p[3], pw, "size") and near(y, pcy, "pos"))
+        l, w, c, cyy = pl, pw, pc, pcy
+        if str(p[0]) == "1" and (land.get("pin1_length") or land.get("pin1_width")):   # pin 1 drawn another size
+            l1 = land.get("pin1_length") or pl                                        # (its outer end with the row's)
+            c, cyy, l, w = pc + (pl - l1) / 2, pcy + (pl - l1) / 2, l1, land.get("pin1_width") or pw
+        return (near(p[3], l, "size") and near(p[4], w, "size") and near(x, c, "pos")) or \
+               (near(p[4], l, "size") and near(p[3], w, "size") and near(y, cyy, "pos"))
     rest = [p for p in pads if p not in ep]
     used = [p[0] for p in rest if fits(p)]
     # the land is the model's own reading, so "followed" alone cannot tell it from a misread: it must at least solder
