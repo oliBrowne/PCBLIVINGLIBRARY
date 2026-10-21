@@ -6,18 +6,18 @@ counterpart of the accuracy gate (`ecadlib eval gate`, 328/331 on a committed sy
 The gate is a check of the generator and the pipeline: it says the footprint is right *when the reader's answer is
 right*. This page measures the whole thing, reading included: how often ecadlib reads a real datasheet correctly.
 
-**Run of 2026-10-21** (set kicad-v1, Claude Opus 5.5, sources `standard,datasheet`, Message Batches, code at
+**Run of 2026-10-21** (set kicad-v1, Claude Opus 5.5 and Haiku 5.5, sources `standard,datasheet`, Message Batches, code at
 main 4f78db8, pages picked automatically):
 
-| | Opus, zoom on | Opus, default settings |
-|---|---|---|
-| Right, every part | **43/110 (39 %)** | 39/110 (35 %) |
-| Counting the maker's land as right (below) | 46/110 (42 %) | 42/110 (38 %) |
-| Built from a datasheet read: right | 20 of 35 built | 16 of 35 built |
-| Built from the standard-package table: right | 23 of 24 | 23 of 24 |
-| Pad match over the footprints built | 72.6 % (939/1,293 pads, 59 footprints) | 72.2 % (921/1,276, 59) |
-| Parts with no PDF to read | 19 | 19 |
-| Real cost (API usage) | $23.19, $0.21 a part | $18.73, $0.17 a part |
+| | Opus, zoom on | Opus, default settings | Haiku 5.5, default |
+|---|---|---|---|
+| Right, every part | **43/110 (39 %)** | 39/110 (35 %) | 31/110 (28 %) |
+| Counting the maker's land as right (below) | 46/110 (42 %) | 42/110 (38 %) | 32/110 (29 %) |
+| Built from a datasheet read: right | 20 of 35 built | 16 of 35 built | 8 of 26 built |
+| Built from the standard-package table: right | 23 of 24 | 23 of 24 | 23 of 24 |
+| Pad match over the footprints built | 72.6 % (939/1,293 pads, 59 footprints) | 72.2 % (921/1,276, 59) | 65.0 % (606/933, 50) |
+| Parts with no PDF to read | 19 | 19 | 19 |
+| Real cost (API usage) | $23.19, $0.21 a part | $18.73, $0.17 a part | $0.92, under a cent a part |
 
 "Zoom on" is `[datasheet] zoom_drawings = true`: the drawing and land-pattern pages are also sent as close-ups. It
 is off by default. Over the default it got AH1806-W, TPS70345, STULPI01A, NCP4308AMT and S10B-PH-K right and lost
@@ -36,7 +36,11 @@ so the gain is in the datasheet reads, not in the table. It comes from code, not
 downloads that get past maker sites that refuse a script (#145: 39 parts without a PDF became 19; 49 PDFs came
 plain, 19 with Chrome's TLS fingerprint, 1 through a headless browser, 2 were sent as a link), the cross-check's
 new rules, and a fix to batch reads (#147) where one part's hold was given to every part waiting with it. The zoom
-run lost no part that was right on 10-19. A Haiku 5.5 run on the same code is still finishing and will be added.
+run lost no part that was right on 10-19.
+
+**Haiku 5.5** reads for under a cent a part and scores 31/110 (27 on 10-19). Most of its losses are holds: its
+cross-check's second read disagreed on 29 parts, against 17 for Opus, so it builds fewer parts rather than more
+wrong ones.
 
 The target set in #42 is a 97 % pad match. **These runs are still well short of it.** The rest of this page says
 where the misses are.
@@ -137,6 +141,7 @@ From the API's own usage (cost.jsonl), all in Message Batches at half price:
 * Opus, zoom on: $23.19 ($0.21 a part over the set), 7.67 M tokens in, 0.36 M out, about 80 minutes.
 * Opus, default settings: $18.73 ($0.17 a part), 6.57 M tokens in, 0.36 M out, about 50 minutes, plus $6.68 of
   that for the cross-checks the #147 bug had skipped on the first pass.
+* Haiku, default settings: $0.92, 7.64 M tokens in, 1.14 M out.
 
 The reports' own totals are a little lower ($21.69 and $18.01); the figures above are from the usage the API
 returned. The re-scores (`--cached-only`) cost nothing.
