@@ -748,8 +748,9 @@ class Run:
         self.waiting = []
 
     def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
-        url, where = job["url"], job["where"]
-        from . import fp_edit as FE                   # hand edits of this part's pad table (ecadlib fp-edit)
+        pdf = res["sidecar"].get("pdf") or {}        # the link read (the next one when the API could not fetch the first)
+        url, where = pdf.get("url") or job["url"], pdf.get("where") or job["where"]
+        from . import fp_edit as FE                  # hand edits of this part's pad table (ecadlib fp-edit)
         res, edited = FE.apply(FE.for_part(FE.load(self.out), st.get("name"), job.get("name"), job["part"]), res)
         if edited:
             st["tried"].extend(edited)

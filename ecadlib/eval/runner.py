@@ -389,6 +389,8 @@ class EvalReader(D.Reader):
         msg = rec["message"]
         u = self.used.setdefault(job["part"], {"estimate": job.get("estimate")})
         u.setdefault("via", rec.get("via") or "live")
+        if (job.get("prov") or {}).get("url"):        # the link read: the next one when the API could not fetch the first
+            u.setdefault("datasheet", {})["url"] = job["prov"]["url"]
         u["batch"] = str(rec.get("via") or "").startswith("batch") or bool((job.get("recording") or {}).get("batch"))
         from .. import ds_route as DR                 # priced as the served model when its price is known
         u.update(usage=msg.get("usage"), model=DR.billed_model(rec.get("model") or job.get("model") or self.model, msg))

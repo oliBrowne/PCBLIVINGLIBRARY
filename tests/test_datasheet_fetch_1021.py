@@ -50,6 +50,79 @@ def test_a_symbol_miss_whose_pdf_never_reached_the_model_is_no_pdf():
     assert R.failure_type(row(tried=["datasheet reader (BOM): symbol"]), None, None) == "symbol"   # it was read
 
 
+A, B = "https://www.st.com/resource/en/datasheet/sm6t.pdf", "https://www.mouser.com/datasheet/2/389/sm6t-1849.pdf"
+NO_FETCH = {"type": "error", "error": {"type": "invalid_request_error",
+                                       "message": "Unable to download the file. Please verify the URL and try again."}}
+PLAIN = {"datasheet": {"download": "plain"}}                                  # no other way to download here
+
+
+def sources(api):
+    return [c[3]["messages"][0]["content"][0]["source"].get("url") for c in api.of("/v1/messages")]
+
+
+def test_a_link_the_api_could_not_fetch_moves_on_to_the_next_one():
+    api = TB.FakeAPI(script=[(400, NO_FETCH)])
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = D.Reader(d, d, key=TB.KEY, http=Scripted({A: [403], B: [403]}), log=None, sleep=lambda s: None, rules=PLAIN)
+        j = rd.job("TESTPART", [(A, "BOM"), (B, "mouser datasheet link")], "RGT")
+        assert j["prov"]["sent_as"] == "url" and j["url"] == A
+        res = rd.read_now(j)
+        assert sources(api) == [A, B], sources(api)                           # one request per link, each once
+        assert res["sidecar"]["pdf"]["url"] == B and res["sidecar"]["pdf"]["where"] == "mouser datasheet link"
+        tried = res["sidecar"]["pdf"]["attempts"]
+        assert tried[-1]["url"] == A and "the API could not fetch it" in tried[-1]["error"], tried
+        assert rd.committed_usd > 0 and not rd._holds                          # only the answer is paid for
+
+
+def test_the_same_document_is_never_asked_for_twice_and_the_last_failure_stands():
+    api = TB.FakeAPI(script=[(400, NO_FETCH), (400, NO_FETCH), (400, NO_FETCH)])
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = D.Reader(d, d, key=TB.KEY, http=Scripted({A: [403], B: [403], "http://www.st.com/x.pdf": [403],
+                                                         "https://www.st.com/x.pdf": [403]}),
+                      log=None, sleep=lambda s: None, rules=PLAIN)
+        try:
+            rd.read_now(rd.job("TESTPART", [(A, "BOM"), (B, "mouser")], "RGT"))
+            raise AssertionError("answered")
+        except D.APIError as e:
+            assert "Unable to download" in str(e)
+        assert sources(api) == [A, B] and not rd._holds and rd.committed_usd == 0, sources(api)
+        api.calls.clear()
+        try:                                                                   # http and https: one document
+            rd.read_now(rd.job("TESTPART", [("http://www.st.com/x.pdf", "BOM"), ("https://www.st.com/x.pdf", "kicad")], "RGT"))
+            raise AssertionError("answered")
+        except D.APIError:
+            pass
+        assert sources(api) == ["https://www.st.com/x.pdf"], sources(api)
+    api = TB.FakeAPI(script=[(400, {"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}})])
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):                # another error: no other link is tried
+        rd = D.Reader(d, d, key=TB.KEY, http=Scripted({A: [403], B: [403]}), log=None, sleep=lambda s: None, rules=PLAIN)
+        try:
+            rd.read_now(rd.job("TESTPART", [(A, "BOM"), (B, "mouser")], "RGT"))
+            raise AssertionError("answered")
+        except D.APIError:
+            pass
+        assert sources(api) == [A], sources(api)
+
+
+def test_a_batch_request_the_api_could_not_fetch_goes_again_with_the_next_link():
+    seen = []
+
+    def answer(cid):
+        seen.append(cid)
+        return ("errored", "invalid_request_error", "The request timed out while trying to download the file.") \
+            if len(seen) == 1 else TB.TD.message(TB.TD.GOOD)
+    api = TB.FakeAPI(answer=answer, polls=0)
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = D.Reader(d, d, key=TB.KEY, http=Scripted({A: [403], B: [403]}), batch=True, poll=0, log=None,
+                      sleep=lambda s: None, rules=PLAIN)
+        j = rd.job("TESTPART", [(A, "BOM"), (B, "mouser")], "RGT")
+        rd.submit(j)
+        got = rd.flush()[j["key"]]
+        assert isinstance(got, dict) and got["sidecar"]["pdf"]["url"] == B, got
+        sent = [rq["params"]["messages"][0]["content"][0]["source"]["url"] for b in api.batches.values() for rq in b["requests"]]
+        assert sent == [A, B], sent
+
+
 # ---------------------------------------------------------------- 3. document-download links on product pages
 def page(*hrefs):
     return ("<!DOCTYPE html><html><body>" + "".join(f'<a href="{h}">link</a>' for h in hrefs) + "</body></html>").encode()

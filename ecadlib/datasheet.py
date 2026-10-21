@@ -2442,12 +2442,13 @@ class Reader:
             if not usable:
                 raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts))
             url, where = usable[0]
+            more = [(u, w) for u, w in usable[1:] if api_url(u) != api_url(url)]   # if the API can't fetch it (_next_link)
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
             facts = tables = None
         else:
             url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
-            lv, why = [None], {}
+            lv, why, more = [None], {}, []
             texts = self._page_texts(data, src_hash) if n else None
             facts = DR.ordering_facts(texts, part, data) if texts else None
             if not pages and self.page_budget and n and n > self.page_budget:
@@ -2460,7 +2461,7 @@ class Reader:
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
                 "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov, "fp_needed": fp_needed,
-                "facts": facts, "tables": tables,
+                "facts": facts, "tables": tables, "more_urls": more,
                 "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
                           "attempts": []}}
         first = self._at(base, rung, 0)
@@ -2469,6 +2470,21 @@ class Reader:
             if self.results.get(whole["key"]):
                 first = whole
         return self._walk(first)
+
+    def _next_link(self, job, error):
+        """A part sent as a URL the API could not fetch (API_FETCH_FAILED; not billed): the same step of its route with
+        its next usable link, or None. A link is asked for once (http and https of one link are one document)."""
+        rest = [(u, w) for u, w in job.get("more_urls") or () if api_url(u) != api_url(job["url"])]
+        if job.get("data") is not None or "rung" not in job or not rest or not API_FETCH_FAILED.search(str(error)):
+            return None
+        (url, where), why = rest[0], re.sub(r"^.*?(invalid_request_error: |API request failed: )", "", str(error))[:200]
+        self.say(f"  datasheet {job.get('name') or job['part']}: the API could not fetch {job['url']}; trying {url}")
+        prov = dict(job["base_prov"], url=url, where=where,
+                    attempts=list(job["base_prov"].get("attempts") or []) + [
+                        {"url": job["url"], "where": job["where"], "error": f"the API could not fetch it: {why}"}])
+        base = dict(job, url=url, where=where, src_hash="url" + hashlib.sha256(url.encode()).hexdigest(), base_prov=prov,
+                    more_urls=rest[1:])
+        return self._walk(self._at(base, job["rung"], job["level"]))
 
     def _page_marks(self, data, digest):
         from . import ds_route as DR
@@ -2722,7 +2738,11 @@ class Reader:
                 if msg is None:                       # no answer came back (API error): nothing to record
                     if not getattr(e, "maybe_billed", False):
                         self._release(job["key"])
-                    raise
+                    nxt = self._next_link(job, e)     # the API could not fetch the link: the next one, if any
+                    if nxt is None:
+                        raise
+                    job = nxt
+                    continue
             err = None
             try:
                 self._store(job, msg, "sync")         # refusal / max_tokens / not schema-shaped: recorded with its usage
@@ -3349,8 +3369,9 @@ class Reader:
                     out[j["key"]] = self._result(j, rec)
                 except DatasheetError as e:
                     out[j["key"]] = e
-            elif j["key"] in errors:
-                out[j["key"]] = DatasheetError(errors[j["key"]])
+            elif j["key"] in errors:                 # the API could not fetch the link: its next one, in another round
+                nx = self._next_link(j, errors[j["key"]])
+                out[j["key"]] = _Advance(nx) if nx is not None else DatasheetError(errors[j["key"]])
             else:
                 bid = next((b["id"] for b in st["batches"] if j["key"] in b["requests"].values() and not b.get("collected")), "")
                 out[j["key"]] = f"pending {bid}".strip()
