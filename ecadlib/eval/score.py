@@ -182,6 +182,14 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     # pins on 54 of the 331 kicad-v1 parts and drop them on others (LTC7810: 15 NC pins, live benchmark 2026-10-21)
     nc = [n for n in extra if NC_RX.match(norm_name(a[n]) or "")]
     extra = [n for n in extra if n not in nc]
+    # the exposed pad as one more pin, on the net of a pin KiCad has (PCA9557BS: 17 VSS, with VSS on 6): KiCad's
+    # symbol leaves the pad out because the pad joins that pin's net; a pad on a net of its own would be a real pin
+    # One pad only, numbered right after KiCad's last pin: two extra pins (7 VSS, 8 VSS) are invented pins
+    top = max((int(n) for n in b if n.isdecimal()), default=0)
+    ep = [n for n in extra if n.isdecimal() and int(n) > top and norm_name(a[n])
+          and any(norm_name(a.get(m)) == norm_name(a[n]) for m in b)]
+    ep = ep if len(ep) == 1 and int(ep[0]) == top + 1 and len([n for n in extra if n.isdecimal() and int(n) > top]) == 1 else []
+    extra = [n for n in extra if n not in ep]
     names = {}
     for n, s in mine_pins:                            # one pin number with two different names: two pins on one pad
         names.setdefault(str(n), set()).add(norm_name(s))
@@ -189,7 +197,8 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     out = {"symbol_pins": _f(not missing and not extra and not twice, f"ours {len(a)} pins, KiCad {len(b)}"
                              + (f"; missing {missing[:8]}" if missing else "") + (f"; extra {extra[:8]}" if extra else "")
                              + (f"; pin number used twice {twice[:8]}" if twice else ""),
-                             ours=len(a), ref=len(b), **({"nc_not_in_kicad": nc} if nc else {}))}
+                             ours=len(a), ref=len(b), **({"nc_not_in_kicad": nc} if nc else {}),
+                             **({"ep_not_in_kicad": ep} if ep else {}))}
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
         same = [n for n, s in named.items() if norm_name(a.get(n)) == s]
@@ -245,13 +254,27 @@ def maker_land(mine, spec, tol=None):
     span, T, b = rng("lead_span"), rng("terminal_length"), rng("terminal_width")
     sane = not (span and T and b) or (pc + pl / 2 >= min(span) / 2 - t["pos"] and
                                      pc - pl / 2 <= max(span) / 2 - min(T) + t["pos"] and pw >= min(b) - 1e-9)
+    # the maker's thermal land, when the land gives one: centred on the pads, ep_across running across the pad rows
+    # (the lead pads' long side runs across the rows: pads wider than tall are rows at +-x, so across is the pad's
+    # width; taller than wide, its height; both kinds, a quad package: either way round. Not the pads' extent: a long
+    # TSSOP's rows reach further along y than the rows sit apart, TPS70345 PWP 3.575 vs 2.9)
+    ea, eb = land.get("ep_across"), land.get("ep_along")
+    ep_used = []
+    if isinstance(ea, (int, float)) and isinstance(eb, (int, float)) and rest:
+        wide, tall = sum(p[3] > p[4] for p in rest), sum(p[4] > p[3] for p in rest)
+        ways = [(ea, eb)] if wide and not tall else [(eb, ea)] if tall and not wide else [(ea, eb), (eb, ea)]
+        ep_used = [p[0] for p in ep if near(p[1], cx, "pos") and near(p[2], cy, "pos")
+                   and any(near(p[3], w, "size") and near(p[4], h, "size") for w, h in ways)]
     return {"followed": bool(rest) and len(used) == len(rest) and sane, "pads": used, "ep": [p[0] for p in ep],
+            "ep_land": ep_used,
             **({} if sane else {"implausible": "the land does not cover the leads read from the same drawing"})}
 
 
 def only_maker_land(fields, ml):
     """A KiCad miss explained by the maker's land: only pads (and the courtyard, which follows the pads) differ, and
-    every pad that differs is one of the land's pads (an exposed pad that differs is a real miss)."""
+    every pad that differs is one of the land's pads. An exposed pad that differs is a real miss unless it is the
+    land's own thermal pad (ep_across x ep_along: ISL8117FVEZ, Renesas M16.173A 3 x 3, where KiCad's reference is a
+    TI HTSSOP-16 with 3.4 x 5)."""
     if not ml or not ml["followed"]:
         return False
     failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
@@ -263,7 +286,26 @@ def only_maker_land(fields, ml):
     pitch = (fields.get("pitch") or {}).get("ref")
     if (pads.get("worst") or {}).get("pos", 0) >= (pitch / 2 if pitch else 0.5):
         return False
-    return set(pads.get("bad_pads") or []) <= set(ml["pads"])
+    return set(pads.get("bad_pads") or []) <= set(ml["pads"]) | set(ml.get("ep_land") or [])
+
+
+def _table_body(spec):
+    """A pad table's body box (SM13B-GHS-TB: JST's B = 22.00 mm), in mm -> (size x, size y, the body's centre less
+    the pads' centre), or None. The offset keeps a body that is not centred on the pads (a connector's housing
+    reaching past one row) where the table put it."""
+    bd = (spec.get("pad_table") or {}).get("body") or {}
+    if not all(isinstance(bd.get(k), (int, float)) for k in ("x1", "x2", "y1", "y2")):
+        return None
+    from .. import footprint_adv as FA
+    try:
+        pads, body, *_ = FA.table_layout(spec)
+    except (KeyError, TypeError, ValueError):
+        return None
+    pads = [p for p in pads if p["kind"] == "smd" or p["num"]]
+    if not (body and pads):
+        return None
+    cx, cy = _centre([(p["num"], p["x"], p["y"]) for p in pads])
+    return (body[2] - body[0], body[3] - body[1], (body[0] + body[2]) / 2 - cx, (body[1] + body[3]) / 2 - cy)
 
 
 BODY_EXCESS_MAX = 0.6     # IPC-7351B courtyard excess is 0.1-0.5 mm, plus rounding out to 0.01 mm
@@ -271,7 +313,8 @@ BODY_EXCESS_MAX = 0.6     # IPC-7351B courtyard excess is 0.1-0.5 mm, plus round
 
 def datasheet_body(fields, mine, spec):
     """A KiCad miss on the courtyard alone, where ours is the IPC courtyard around our pads and the body the datasheet
-    gives (centred on the pads, either way round). KiCad sizes some courtyards from a nominal body per pin count
+    gives (from body_length / body_width, centred on the pads, either way round; or a pad table's body box where the
+    table puts it). KiCad sizes some courtyards from a nominal body per pin count
     (every DIP-16 is 20.32 mm long, every DIP-28 35.56 mm), which can be smaller or larger than the real part.
     -> None when it does not apply, else {"body": [length, width] used}."""
     failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
@@ -283,14 +326,25 @@ def datasheet_body(fields, mine, spec):
         v = [x for x in v if isinstance(x, (int, float))]
         return (min(v), (d["nom"] if isinstance(d.get("nom"), (int, float)) else (min(v) + max(v)) / 2), max(v)) if v else None
     L, W = rng("body_length"), rng("body_width")
+    ways = [(L, W, 0.0, 0.0), (W, L, 0.0, 0.0)]  # (along x, along y, the body's centre less the pads' centre)
+    if not (L and W):
+        box = _table_body(spec)
+        if not box:
+            return None
+        (bx, by, ox, oy) = box
+        L, W = (bx,) * 3, (by,) * 3
+        # the table's frame may be mirrored or turned against ours: the offset goes with the body, either sign
+        ways = [(L, W, sx * ox, sy * oy) for sx in (1, -1) for sy in (1, -1)] + \
+               [(W, L, sx * oy, sy * ox) for sx in (1, -1) for sy in (1, -1)]
     pads = [p for p in mine["pads"] if not p[5] or p[0]]
-    if not (L and W and pads):
+    if not pads:
         return None
     x0, y0 = min(p[1] - p[3] / 2 for p in pads), min(p[2] - p[4] / 2 for p in pads)
     x1, y1 = max(p[1] + p[3] / 2 for p in pads), max(p[2] + p[4] / 2 for p in pads)
-    cx, cy = _centre(pads)
+    pcx, pcy = _centre(pads)
     ca = mine["courtyard"]
-    for bx, by in ((L, W), (W, L)):
+    for bx, by, ox, oy in ways:
+        cx, cy = pcx + ox, pcy + oy
         need = lambda i: [min(x0, cx - bx[i] / 2), min(y0, cy - by[i] / 2), max(x1, cx + bx[i] / 2), max(y1, cy + by[i] / 2)]
         hi, nom = need(2), need(1)               # must hold the largest body; may grow past the nominal by the excess
         out = [hi[0] - ca[0], hi[1] - ca[1], ca[2] - hi[2], ca[3] - hi[3]]

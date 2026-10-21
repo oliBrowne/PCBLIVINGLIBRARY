@@ -448,7 +448,7 @@ class Run:
         par = _par(item)
         mpn = par.get("Manufacturer Part Number", "")
         st = {"name": item["name"], "symbol": None, "footprint": None, "tried": [], "review": [], "verify": [],
-              "found": {}, "hint_fp": ""}
+              "found": {}, "hint_fp": "", "maker": par.get("Manufacturer", "")}
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
@@ -840,8 +840,10 @@ class Run:
                                 f"land was used. Check the package code on the drawing is this one")
         elif not st["footprint"]:
             st["review"].extend(pad_table_problems(res["spec"]))
-            joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or D.body_unread(res["spec"])
-            if joined:                                # leads merged with the pad, or no housing to draw: a wrong land
+            maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
+            joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
+                D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"])
+            if joined:                                # leads merged with the pad, a TI thermal land not read, or no housing to draw
                 raise D.DatasheetError(joined)
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))

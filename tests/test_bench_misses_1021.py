@@ -188,3 +188,94 @@ def test_pads_on_the_wrong_lead_are_not_a_maker_land():
                      "pitch": {"ok": True, "ours": 0.95, "ref": 0.95}, "pin1": {"ok": True}, "origin": {"ok": True}}
     assert not S.only_maker_land(f(2.4), ml)
     assert S.only_maker_land(f(0.225), ml)
+
+
+TLC = {"name": "HTSSOP-38-1EP", "package_type": "gullwing", "pin_count": 38, "exposed_pad": {"length": {"min": 5.05, "max": 6.35}},
+       "source": {"datasheet": "https://www.ti.com/lit/ds/symlink/tlc5951.pdf"}}
+
+
+def test_a_ti_powerpad_read_without_its_thermal_land_is_held():
+    # TLC5951DAP: TI's land page (p51, no text layer) puts a 12.5 x 5.2 board pad under the 5.7 x 3 exposed pad; the
+    # read gave only the package's pad, so the copper came out 6.8 mm short
+    assert D.thermal_land_missing(dict(TLC)).startswith("no footprint: TI's PowerPAD thermal land")
+    assert D.thermal_land_missing(dict(TLC, land={"ep_across": 5.2, "ep_along": 12.5})) is None
+    assert D.thermal_land_missing(dict(TLC, source={"datasheet": "https://www.diodes.com/x.pdf"})) is None
+    assert D.thermal_land_missing(dict(TLC, exposed_pad=None)) is None
+    assert D.thermal_land_missing(dict(TLC, package_type="qfn")) is None          # QFN lands follow the pad
+    # a TI part whose PDF came from a distributor's link or the datasheet folder: TI is known from its maker
+    other = dict(TLC, source={"datasheet": "TLC5951.pdf"})
+    assert D.thermal_land_missing(other) is None
+    assert D.thermal_land_missing(other, maker="Texas Instruments").startswith("no footprint")
+    assert D.thermal_land_missing(other, url="https://www.ti.com/lit/ds/symlink/tlc5951.pdf").startswith("no footprint")
+    assert D.thermal_land_missing(other, maker="Tiger Electronics") is None
+
+
+def test_the_makers_own_thermal_pad_is_part_of_its_land():
+    # ISL8117FVEZ: Renesas's land (M16.173A) has a 3 x 3 thermal pad; KiCad's reference is a TI HTSSOP-16 (3.4 x 5)
+    mine = {"pads": [[str(i + 1), -2.825 if i < 4 else 2.825, -0.975 + 0.65 * (i % 4), 1.45, 0.35, 0.0] for i in range(8)]
+            + [["9", 0.0, 0.0, 3.0, 3.0, 0.0]], "courtyard": []}
+    spec = {"land": {"pad_length": 1.45, "pad_width": 0.35, "pad_center": 2.825, "ep_across": 3.0, "ep_along": 3.0}}
+    ml = S.maker_land(mine, spec)
+    assert ml["followed"] and ml["ep_land"] == ["9"]
+    bad = {"pads": {"ok": False, "bad_pads": [str(i) for i in range(1, 10)], "worst": {"pos": 0.05, "size": 2.0}},
+           "pitch": {"ok": True, "ref": 0.65}}
+    assert S.only_maker_land(bad, ml)
+    assert not S.only_maker_land(bad, dict(ml, ep_land=[]))                     # a pad the land doesn't give: a miss
+    # the thermal land is centred, with ep_across across the rows: off-centre or turned, it is not the maker's land
+    rect = lambda x, w, h: S.maker_land(dict(mine, pads=mine["pads"][:8] + [["9", x, 0.0, w, h, 0.0]]),
+                                        {"land": dict(spec["land"], ep_across=2.0, ep_along=3.0)})["ep_land"]
+    assert rect(0.0, 2.0, 3.0) == ["9"]
+    assert rect(0.0, 3.0, 2.0) == []                                            # across and along swapped
+    assert rect(0.5, 2.0, 3.0) == []                                            # off the pads' centre
+    # TPS70345 PWP (HTSSOP-24): the rows reach 3.575 along y but sit 2.9 apart; the land's 2.4 x 4.18 runs 2.4 across
+    tps = {"pads": [[str(i + 1), -2.9 if i < 12 else 2.9, -3.575 + 0.65 * (i % 12), 1.5, 0.45, 0.0] for i in range(24)]
+           + [["25", 0.0, 0.0, 2.4, 4.18, 0.0]], "courtyard": []}
+    land = {"land": {"pad_length": 1.5, "pad_width": 0.45, "pad_center": 2.9, "ep_across": 2.4, "ep_along": 4.18}}
+    assert S.maker_land(tps, land)["ep_land"] == ["25"]
+    tps["pads"][-1] = ["25", 0.0, 0.0, 4.18, 2.4, 0.0]
+    assert S.maker_land(tps, land)["ep_land"] == []
+
+
+def test_a_pad_table_body_box_is_the_datasheet_body():
+    # SM13B-GHS-TB: every pad right; ours is around JST's 22.00 mm body (B for 13 circuits), KiCad's stops at 20.7 mm
+    mine = {"pads": [["MP", -9.35, 1.35, 1.0, 2.7, 0], ["MP", 9.35, 1.35, 1.0, 2.7, 0]]
+            + [[str(i + 1), -7.5 + 1.25 * i, -1.85, 0.6, 1.7, 0] for i in range(13)], "courtyard": [-11.5, -3.2, 11.5, 3.2]}
+    ref = dict(mine, courtyard=[-10.35, -3.2, 10.35, 3.2])
+    table = lambda x1, x2: {"pad_table": {
+        "unit": "mm", "y_axis": "down", "origin": "datum", "body": {"x1": x1, "y1": 0.25, "x2": x2, "y2": 4.5},
+        "pads": [{"number": str(i + 1), "x": 1.25 * i, "y": 0.0, "w": 0.6, "h": 1.7} for i in range(13)]
+        + [{"number": "MP", "x": -1.85, "y": 3.2, "w": 1.0, "h": 2.7}, {"number": "MP", "x": 16.85, "y": 3.2, "w": 1.0, "h": 2.7}]}}
+    f = S.score_footprint(mine, ref)
+    assert S.datasheet_body(f, mine, table(-3.5, 18.5))["body"] == [22.0, 4.25]
+    assert S.datasheet_body(f, mine, table(-2.0, 17.0)) is None                    # a 19 mm body: ours is too big
+    # the same 22 mm body set 3.5 mm off the pads' centre: recentring it would hide a courtyard that misses the body
+    assert S.datasheet_body(f, mine, table(0.0, 22.0)) is None
+
+
+def test_an_exposed_pad_pin_on_another_pins_net_is_not_a_wrong_pin():
+    # PCA9557BS: NXP numbers the centre pad 17 (VSS, as pin 6); KiCad's symbol has 16 pins
+    ref = [(str(i), n) for i, n in enumerate(["A0", "A1", "A2", "IO0", "IO1", "VSS"], 1)]
+    f = S.score_symbol(ref + [("7", "VSS")], ref)["symbol_pins"]
+    assert f["ok"] and f["ep_not_in_kicad"] == ["7"]
+    assert not S.score_symbol(ref + [("7", "PAD")], ref)["symbol_pins"]["ok"]     # a net of its own: a real pin
+    # only one pad, numbered right after KiCad's last pin: more pins on a KiCad net are invented pins
+    assert not S.score_symbol(ref + [("7", "VSS"), ("8", "VSS")], ref)["symbol_pins"]["ok"]
+    assert not S.score_symbol(ref + [("9", "VSS")], ref)["symbol_pins"]["ok"]
+
+
+def test_a_dfn_read_without_a_pin_split_is_built_on_two_sides():
+    # NCP4308AMT: WDFN8 2x2, pins_left_right / pins_top_bottom left blank; the QFN default put 2 pins on each of 4 sides
+    spec = {"name": "WDFN-8_2x2mm_P0.5mm", "package_type": "qfn", "pitch": 0.5, "body_length": {"nom": 2.0},
+            "body_width": {"nom": 2.0}, "terminal_length": {"min": 0.4, "max": 0.6}, "terminal_width": {"min": 0.2, "max": 0.3},
+            "height_max": 0.8, "pin_count": 8}
+    review = []
+    D.two_sided(spec, review)
+    assert (spec["pins_left_right"], spec["pins_top_bottom"]) == (4, 0) and "two-sided" in review[0]
+    p = _pads(F.build(spec)[0])
+    assert p["1"][0] < 0 and p["4"][0] < 0 and p["5"][0] > 0 and p["8"][0] > 0
+    assert p["1"][1] < p["2"][1] < p["3"][1] < p["4"][1]
+    for kept in ({"name": "QFN-16_3x3mm", "package_type": "qfn", "pin_count": 16},
+                 {"name": "DFN-8", "package_type": "qfn", "pin_count": 8, "pins_top_bottom": 2}):
+        before = dict(kept)
+        D.two_sided(kept, [])
+        assert kept == before
