@@ -99,8 +99,6 @@ def critical(spec):
     from . import datasheet as D
     tab = spec.get("tab") if isinstance(spec.get("tab"), dict) else {}   # SOT-223-3_TabPin2: the tab is pin 2 again
     out["tab_repeats_lead"] = bool(tab) and str(tab.get("number")) in {str(p.get("number")) for p in D._listed(spec)}
-    out["lists_pads"] = bool(D._listed(spec)) or bool((spec.get("pad_table") or {}).get("pads")
-                                                       or (spec.get("pad_table") or {}).get("arrays"))
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
         nlr = spec.get("pins_left_right", n // 4)
@@ -114,8 +112,6 @@ EP_NAMES = {"EP", "EPAD", "PAD", "POWERPAD", "THERMALPAD", "EXPOSEDPAD", "DAP", 
 
 
 SPELLED = {"DONOTCONNECT": "DNC", "NOCONNECT": "NC", "NOTCONNECTED": "NC", "NOINTERNALCONNECTION": "NC"}
-# a second read that describes the exposed pad instead of naming it ("exposed center pad", "Exposed Pad (DO NOT CONNECT)")
-EP_TEXT = re.compile(r"\b(?:exposed|thermal|power|die|center|centre)(?:\s+\w+)?\s*pad\b|\bpaddle\b|\bslug\b", re.I)
 MINUS = dict.fromkeys(map(ord, "\u2212\u2013\u2010\u2011"), "-")    # a minus sign or dash PDF text gives (SENSE\u2212)
 
 
@@ -132,21 +128,7 @@ def _names(s):
     for part in [raw] + re.split(r"[()\[\],]", raw):   # (before norm_pin_name, which reads "NOCONNECT" as active-low "OCONNECT")
         if re.sub(r"[^A-Z]", "", part.upper()) in SPELLED:
             out.add(SPELLED[re.sub(r"[^A-Z]", "", part.upper())])
-    if EP_TEXT.search(raw):
-        out.add("EP")
     return out - {""}
-
-
-def _described(name, text):
-    """A second read that gives a pin's description where the first gives its name ("I/O1" vs "ESD protection I/O
-    channel 1"): the name's letters stand as a word in it and its number is the description's only number. A name
-    with no number never matches a description (VCC vs "supply voltage" stays a disagreement)."""
-    m = re.fullmatch(r"([A-Za-z][A-Za-z/]*?)[-_ ]?(\d+)", str(name or "").strip())
-    if not m or len(str(text or "").split()) < 3:
-        return False
-    stem, num = m.group(1).upper(), m.group(2)
-    words = {w.upper() for w in re.findall(r"[A-Za-z][A-Za-z/]*", str(text))}
-    return stem in words and re.findall(r"\d+", str(text)) == [num]
 
 
 GROUNDISH = re.compile(r"^(?:[PADS]?GND|VSS|[PA]?VSS|GROUND|0V|EP|EPAD|PAD|THERMAL)")
@@ -156,17 +138,15 @@ def names_agree(a, b):
     """Two reads name a pin the same: equal after normalising, one read's name is the other's alias in brackets
     ("K" vs "cathode (K)", "VO" vs "VO (output)"), or one calls the exposed pad by its pad name ("GND" vs "PowerPAD")."""
     na, nb = _names(a), _names(b)
-    if na & nb or _described(a, b) or _described(b, a):
+    if na & nb:
         return True
     from .house_style import pin_low
     (ba, sa), (bb, sb) = pin_low(a), pin_low(b)
     if sa and sb and norm_pin_name(ba) == norm_pin_name(bb):     # RESET_N vs ~{RESET}: both mark it active low
         return True
     # the pad name only stands in for a ground / pad name: "TAB" vs "VIN" is a real disagreement (SOT-223 numbering)
-    # the most negative supply is where an exposed pad goes too (OPA569DWP: "V-" vs "PowerPAD")
-    padish = lambda n, raw: bool(n & EP_NAMES) or any(GROUNDISH.match(x) for x in n) or \
-        bool(re.fullmatch(r"\s*(?:V-|VEE|VNEG|VS-)\s*", str(raw or "").translate(MINUS), re.I))
-    return bool((na & EP_NAMES and padish(nb, b)) or (nb & EP_NAMES and padish(na, a)))
+    padish = lambda n: bool(n & EP_NAMES) or any(GROUNDISH.match(x) for x in n)
+    return bool((na & EP_NAMES and padish(nb)) or (nb & EP_NAMES and padish(na)))
 
 
 def _show(v):
@@ -216,10 +196,9 @@ def _turn(first, second, table):
         rows = first.get("rows")
         ok = first.get("package_type") == second.get("package_type") == "qfn" and rows and second.get("rows") == rows[::-1]
     else:
-        # a second read gives no rows, so it never checks where the pads stand, turned or not: a body and exposed pad
-        # that both turn are one package written D x E the other way (LTC2942-1: DFN-6 2 x 3, EP 1.35 x 1.65 read,
-        # 3 x 2 and 1.65 x 1.35 printed)
-        ok = first.get("package_type") in TURN_FREE and body == {1} or body == {1} and ep == {1}
+        # a qfn body and pad that both turn still hold: LTC2942-1 (DFN-6 2 x 3 read, 3 x 2 printed) released that way
+        # was built with its axes swapped (free re-score of the 2026-10-21 run)
+        ok = first.get("package_type") in TURN_FREE and body == {1}
     return [w for w, t in (("body", body), ("exposed pad", ep)) if t == {1}] if ok else []
 
 
@@ -228,11 +207,10 @@ DRAWN = ("custom", "connector")     # one builder (footprint_adv._table): the pa
 
 def _label_only(first, second):
     """A package type the build does not stand on: custom and connector place the pads the read lists the same way,
-    so the second read's word changes nothing built (TC2030). A gullwing or qfn word against a custom read only when
-    the read lists its pads (BCV61's SOT-143). pin_header vs connector still holds: a header is built from pitch and
-    rows, and a connector word may mean mounting pads the header would leave out (S13B-EH)."""
-    a, b = first.get("package_type"), second.get("package_type")
-    return a in DRAWN and b in DRAWN or a == "custom" and first.get("lists_pads")
+    so the second read's word changes nothing built (TC2030). Every other pair still holds: pin_header vs connector
+    (a header is built from pitch and rows, and a connector word may mean mounting pads it would leave out: S13B-EH),
+    and gullwing or qfn vs custom (BD33FC0FP, BCV61)."""
+    return first.get("package_type") in DRAWN and second.get("package_type") in DRAWN
 
 
 def _type_only(rec, first=None, second=None):
@@ -316,17 +294,6 @@ def compare(first, second, kind="read"):
 
 
 NO_PIN = re.compile(r"^\s*(?:missing|removed|omitted|absent|not present|no pin|depopulated|cut)\b(?!.*\bconnect)", re.I)
-SUPPLY_NAME = re.compile(r"^(?:V[CDS]{2}\w*|VIN|VBAT|VS|V\+|VPWR)$", re.I)
-
-
-def _one_supply(n, names, words):
-    """Pin n is the part's one supply in both reads: named so in `names` (VCC) and described so in `words` ("supply
-    voltage"), and no other pin of either read is a supply (IP4234CZ6). Two supplies stay a disagreement."""
-    w = str(words[n])
-    if len(w.split()) < 2 or not re.search(r"\bsupply\b|\bpower\b", w, re.I) or not SUPPLY_NAME.match(str(names[n]).strip()):
-        return False
-    return sum(bool(SUPPLY_NAME.match(str(x).strip())) for x in names.values()) == 1 and \
-        sum(bool(re.search(r"\bsupply\b|\bpower\b", str(x), re.I)) for x in words.values()) == 1
 
 
 def compare_pins(a, b):
@@ -342,30 +309,10 @@ def compare_pins(a, b):
                     "second": f"{len(db)} pins" + (f", only here: {', '.join(only_b[:12])}" if only_b else "")})
     na, nb = {str(n): s for n, s in a}, {str(n): s for n, s in b}
     diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not names_agree(na[n], nb[n])]
-    diff = [n for n in diff if not _one_supply(n, na, nb) and not _one_supply(n, nb, na)]
     if diff:
         out.append({"field": "pin_names", "first": "; ".join(f"{n} {na[n]}" for n in diff[:12]),
                     "second": "; ".join(f"{n} {nb[n]}" for n in diff[:12])})
     return out
-
-
-def _numbered_pad(c, first, second, first_pins, pins):
-    """One read counts the tab or exposed pad as a numbered pin, the other as an exposed pad (BUK7M10-40EX, LFPAK33:
-    5 pins read, 4 pins + exposed pad in the second read, whose own pin list numbers it 5). Set aside only when that
-    is all that differs and both pin lists give every pin the same number: the same terminals counted two ways."""
-    d = {x["field"]: x for x in c["disagreed"]}
-    if set(d) != {"pin_count", "has_ep"} or "pins" not in c["agreed"]:
-        return
-    a, b = first.get("pin_count"), second.get("pin_count")
-    if not (first.get("has_ep") != second.get("has_ep") and isinstance(a, int) and isinstance(b, int)):
-        return
-    few, many, listed = (b, a, len(pins)) if second.get("has_ep") else (a, b, len(first_pins))
-    if few + 1 == many and listed == many and len(first_pins) == len(pins) == many:
-        c["disagreed"] = [x for x in c["disagreed"] if x["field"] not in d]
-        c["agreed"] += ["pin_count", "has_ep"]
-        c.setdefault("tie_breaks", []).append(
-            f"pin count read {a}, other source {b} with the {'other' if second.get('has_ep') else 'read'} side's exposed "
-            f"pad: both pin lists number {many} pins the same, so the pad is pin {many} counted two ways")
 
 
 # ---------------------------------------------------------------- the standard table
@@ -531,7 +478,6 @@ def against_read(first, second, first_pins, pins):
         c["compared"] += ["pins", "pin_names"]
         c["agreed"] += [f for f in ("pins", "pin_names") if f not in {d["field"] for d in extra}]
         c["disagreed"] += extra
-        _numbered_pad(c, first, second, first_pins, pins)
         _type_only(c)
         if c["disagreed"]:
             c["status"] = "disagreed"

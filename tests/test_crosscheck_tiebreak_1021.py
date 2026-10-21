@@ -1,5 +1,5 @@
 """Cross-check tie-breaks, 2026-10-21: a difference that changes nothing built is set aside, everything else still
-holds. The numbers are the first and second reads of held parts from the 2026-10-21 live benchmark (data:
+holds, including differences that looked like wording but hid a wrongly built part (checked by a free re-score). The numbers are the first and second reads of held parts from the 2026-10-21 live benchmark (data:
 /mnt/project-files/benchmark/oct21/held/); every rule also has cases built to sneak a wrong part through, which must
 stay held.   python3 -m tests.run_all test_crosscheck_tiebreak_1021"""
 from ecadlib import crosscheck as CC, footprint_gen as F
@@ -75,16 +75,33 @@ def test_orient_ep_never_raises_on_one_sided_numbers():
     assert F.orient_ep(s)[0] is s
 
 
-# ---------------------------------------------------------------- a whole package written the other way
-def test_a_body_and_exposed_pad_that_both_turn_agree_with_a_second_read():
+# ---------------------------------------------------------------- held on purpose: released, they were built wrong
+# The first version of these tie-breaks released LTC2942-1, PSMN5R2-60YL, OPA569DWP and IP4234CZ6; the free re-score
+# of the 2026-10-21 run built all four wrong (axes swapped, mirrored, thermal land, pad size). The cross-check's
+# disagreement was the only sign, so these differences hold.
+def test_a_qfn_body_and_exposed_pad_that_both_turn_against_a_second_read_still_hold():
     s = dfn(2.0, 3.0, (1.35, 1.65), n=6, pitch=0.5)    # LTC2942-1
-    assert read(s, nominal(body_length=3.0, body_width=2.0, ep=(1.65, 1.35), pitch=0.5, pin_count=6))["status"] == "agreed"
+    assert read(s, nominal(body_length=3.0, body_width=2.0, ep=(1.65, 1.35), pitch=0.5, pin_count=6))["status"] == "disagreed"
+    assert read(s, nominal(body_length=3.0, body_width=2.0, ep=(1.35, 1.65), pitch=0.5, pin_count=6))["status"] == "disagreed"
 
 
-def test_a_body_that_turns_while_its_exposed_pad_does_not_still_holds():
-    s = dfn(2.0, 3.0, (1.35, 1.65), n=6, pitch=0.5)
-    c = read(s, nominal(body_length=3.0, body_width=2.0, ep=(1.35, 1.65), pitch=0.5, pin_count=6))
-    assert c["status"] == "disagreed", c
+def test_a_tab_counted_as_a_pin_in_one_read_and_a_pad_in_the_other_still_holds():
+    first = {"package_type": "gullwing", "name": "LFPAK56", "pin_count": 5, "pitch": 1.27,
+             "body_length": {"min": 4.8, "max": 5.0}, "body_width": {"min": 3.8, "max": 4.1}, "lead_span": {"min": 5.8, "max": 6.2}}
+    second = {"package_type": "gullwing", "name": "LFPAK56", "pin_count": 4, "pitch": 1.27,
+              "body_length": {"min": 3.8, "max": 4.1}, "body_width": {"min": 4.8, "max": 5.0}, "lead_span": {"min": 5.8, "max": 6.2},
+              "exposed_pad": {"length": {"max": 4.2}, "width": {"min": 3.1, "max": 3.3}}}
+    pins = [("1", "S"), ("2", "S"), ("3", "S"), ("4", "G"), ("5", "D")]
+    c = read(first, second, pins, pins)                 # PSMN5R2-60YL
+    assert c["status"] == "disagreed" and {d["field"] for d in c["disagreed"]} == {"pin_count", "has_ep"}, c
+
+
+def test_pin_descriptions_and_pad_descriptions_are_not_names():
+    first = [("1", "I/O1"), ("2", "GND"), ("3", "I/O1"), ("4", "I/O2"), ("5", "VCC"), ("6", "I/O2")]
+    second = [("1", "ESD protection I/O channel 1"), ("2", "ground"), ("3", "ESD protection I/O channel 1"),
+              ("4", "ESD protection I/O channel 2"), ("5", "supply voltage"), ("6", "ESD protection I/O channel 2")]
+    assert CC.compare_pins(first, second) != []                                        # IP4234CZ6
+    assert not CC.names_agree("V\u2013", "PowerPAD") and not CC.names_agree("VSS", "exposed center pad")   # OPA569DWP
 
 
 # ---------------------------------------------------------------- package type words
@@ -92,9 +109,7 @@ def test_a_package_type_word_is_set_aside_when_the_pads_are_built_as_listed():
     tc = {"package_type": "custom", "name": "Tag-Connect", "pin_count": 6, "pitch": 1.27}
     c = read(tc, nominal(package_type="connector", pitch=1.27, pin_count=6))          # TC2030
     assert c["status"] == "agreed" and "a word only" in c["tie_breaks"][0], c
-    sot = {"package_type": "custom", "name": "SOT-143", "pin_count": 4, "pitch": 1.9,
-           "pin_positions": [{"number": n, "x": 0, "y": 0} for n in "1234"]}
-    assert read(sot, nominal(package_type="gullwing", pitch=1.9, pin_count=4))["status"] == "agreed"   # BCV61's pads
+    assert read(dict(tc, package_type="connector"), nominal(package_type="custom", pitch=1.27, pin_count=6))["status"] == "agreed"
 
 
 def test_a_package_type_word_still_holds_when_the_type_picks_the_builder_or_nothing_else_agrees():
@@ -102,43 +117,14 @@ def test_a_package_type_word_still_holds_when_the_type_picks_the_builder_or_noth
     assert read(eh, nominal(package_type="connector", pitch=2.5, pin_count=13))["status"] == "disagreed"   # has no MP
     gw = {"package_type": "gullwing", "name": "SOIC-8", "pin_count": 8, "pitch": 1.27}
     assert read(gw, nominal(package_type="qfn", pitch=1.27, pin_count=8))["status"] == "disagreed"
-    bare = {"package_type": "custom", "name": "SOT-143", "pin_count": 4, "pitch": 1.9}              # no pads listed
-    assert read(bare, nominal(package_type="gullwing", pitch=1.9, pin_count=4))["status"] == "disagreed"
+    sot = {"package_type": "custom", "name": "SOT-143", "pin_count": 4, "pitch": 1.9,                 # BCV61
+           "pin_positions": [{"number": n, "x": 0, "y": 0} for n in "1234"]}
+    assert read(sot, nominal(package_type="gullwing", pitch=1.9, pin_count=4))["status"] == "disagreed"
     tc = {"package_type": "custom", "name": "Tag-Connect"}
     assert read(tc, nominal(package_type="connector"))["status"] != "agreed"           # nothing else compared
     off = {"package_type": "custom", "name": "Tag-Connect", "pin_count": 6, "pitch": 1.27}
     c = read(off, nominal(package_type="connector", pitch=2.54, pin_count=6))           # the word, and the pitch
     assert c["status"] == "disagreed" and {d["field"] for d in c["disagreed"]} == {"pitch"}, c
-
-
-# ---------------------------------------------------------------- a tab counted as a pin or as a pad
-LFPAK = {"package_type": "gullwing", "name": "LFPAK33", "pin_count": 5, "pitch": 0.65, "body_length": {"min": 3.2, "max": 3.4},
-         "body_width": {"nom": 2.6}, "lead_span": {"min": 3.2, "max": 3.4}}
-SSSGD = [("1", "S"), ("2", "S"), ("3", "S"), ("4", "G"), ("5", "D")]
-
-
-def lfpak_second(**kw):
-    s = {"package_type": "gullwing", "name": "LFPAK33", "pin_count": 4, "pitch": 0.65, "body_length": {"nom": 2.6},
-         "body_width": {"min": 3.2, "max": 3.4}, "lead_span": {"min": 3.2, "max": 3.4},
-         "exposed_pad": {"length": {"min": 1.9, "max": 2.35}, "width": {"min": 2.0, "max": 2.45}}}
-    s.update(kw)
-    return s
-
-
-def test_a_tab_one_read_numbers_and_the_other_calls_an_exposed_pad_is_the_same_pin():
-    c = read(LFPAK, lfpak_second(), SSSGD, SSSGD)                                    # BUK7M10-40EX
-    assert c["status"] == "agreed" and "counted two ways" in c["tie_breaks"][0], c
-
-
-def test_a_tab_count_still_holds_when_the_pin_lists_differ_or_the_count_is_off_by_more():
-    c = read(LFPAK, lfpak_second(), SSSGD, SSSGD[:4])                     # the second read has no pin 5
-    assert c["status"] == "disagreed", c
-    c = read(LFPAK, lfpak_second(), SSSGD, SSSGD[:4] + [("5", "S")])     # pin 5 named differently
-    assert c["status"] == "disagreed", c
-    c = read(dict(LFPAK, pin_count=6), lfpak_second(), SSSGD + [("6", "D")], SSSGD + [("6", "D")])
-    assert c["status"] == "disagreed", c                                     # 6 vs 4 + pad
-    c = read(LFPAK, lfpak_second(exposed_pad=None), SSSGD, SSSGD)            # 5 vs 4, no pad anywhere
-    assert c["status"] == "disagreed", c
 
 
 # ---------------------------------------------------------------- pin lists
@@ -152,25 +138,10 @@ def test_a_place_one_read_marks_missing_is_no_pin():
     assert CC.compare_pins(first, first + [("17", "MISO")]) != []                     # (not "missing")
 
 
-def test_pin_descriptions_agree_with_names_only_when_they_pin_one_pin_down():
-    first = [("1", "I/O1"), ("2", "GND"), ("3", "I/O1"), ("4", "I/O2"), ("5", "VCC"), ("6", "I/O2")]
-    second = [("1", "ESD protection I/O channel 1"), ("2", "ground"), ("3", "ESD protection I/O channel 1"),
-              ("4", "ESD protection I/O channel 2"), ("5", "supply voltage"), ("6", "ESD protection I/O channel 2")]
-    assert CC.compare_pins(first, second) == []                                        # IP4234CZ6
-    swapped = second[:3] + [("4", "ESD protection I/O channel 1")] + second[4:]
-    assert CC.compare_pins(first, swapped) != []
-    two = [("1", "VCC"), ("2", "VDDIO"), ("3", "GND")]
-    assert CC.compare_pins(two, [("1", "supply voltage"), ("2", "I/O supply voltage"), ("3", "ground")]) != []
-    assert not CC.names_agree("VCC", "supply voltage")                               # alone, a word is not a name
-    assert not CC.names_agree("I/O1", "ESD protection I/O channel 12")
-
-
-def test_exposed_pad_names_and_described_pads_agree_with_the_pad_net_only():
-    assert CC.names_agree("V–", "PowerPAD") and CC.names_agree("VEE", "thermal pad")        # OPA569DWP
-    assert CC.names_agree("VSS", "exposed center pad")                                           # PCA9557BS
-    assert CC.names_agree("DNC", "Exposed Pad (DO NOT CONNECT)") and CC.names_agree("NC", "no connect")   # LTC2942-1
-    assert not CC.names_agree("V+", "PowerPAD") and not CC.names_agree("VIN", "exposed pad")
-    assert not CC.names_agree("TAB", "VIN") and not CC.names_agree("NC", "DNC")
+def test_spelled_out_no_connect_names_agree():
+    assert CC.names_agree("DNC", "Exposed Pad (DO NOT CONNECT)") and CC.names_agree("NC", "no connect")
+    assert CC.names_agree("NC", "not connected") and not CC.names_agree("NC", "DNC")
+    assert not CC.names_agree("TAB", "VIN")
 
 
 def test_a_minus_sign_from_pdf_text_is_a_minus():
@@ -187,3 +158,31 @@ def test_a_tie_break_is_said_in_the_summary_and_the_review_report():
     assert "set aside: package type read custom" in CC.summary_line(rec)
     assert any("set aside:" in line for line in CC.report_md(rec))
 
+
+
+# ---------------------------------------------------------------- leads that are one metal with the pad
+from ecadlib import datasheet as D
+
+
+def power8(t="gullwing", **kw):
+    s = {"package_type": t, "name": "PQFN-8", "pin_count": 8, "pitch": 1.27, "exposed_pad": {"length": 4.0, "width": 3.0}}
+    s.update(kw)
+    return s
+
+
+def test_leads_joined_to_the_exposed_pad_hold_instead_of_building_separate_pads():
+    pins = [{"num": str(i), "name": n} for i, n in enumerate("SSSGDDDD", 1)] + [{"num": "9", "name": "D"}]
+    line = D.joined_to_pad(power8(), pins)                  # FDMT800100DC / BSC026N08NS5: drain 5-8 and pad 9
+    assert line and line.startswith("no footprint: leads 5-8 and the exposed pad are all D"), line
+    assert D.joined_to_pad(power8("qfn", pins_top_bottom=0), pins)
+
+
+def test_a_pad_that_only_shares_a_net_with_some_leads_or_is_ground_still_builds():
+    some = [{"num": str(i), "name": n} for i, n in enumerate("SSSGDDOD", 1)] + [{"num": "9", "name": "D"}]
+    assert D.joined_to_pad(power8(), some) is None                        # pin 7 is not D
+    gnd = [{"num": str(i), "name": n} for i, n in enumerate(["IN", "EN", "FB", "PG", "GND", "GND", "GND", "GND"], 1)]
+    assert D.joined_to_pad(power8(), gnd + [{"num": "9", "name": "GND"}]) is None
+    plain = [{"num": str(i), "name": n} for i, n in enumerate("SSSGDDDD", 1)]
+    assert D.joined_to_pad(power8(), plain) is None                       # no pad pin listed: no sign
+    assert D.joined_to_pad(power8(exposed_pad=None), plain + [{"num": "9", "name": "D"}]) is None
+    assert D.joined_to_pad(power8("qfn", pins_top_bottom=2), plain + [{"num": "9", "name": "D"}]) is None   # 4 sides
