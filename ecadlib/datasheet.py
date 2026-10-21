@@ -2886,10 +2886,11 @@ class Reader:
                                   sleep=self.sleep)
         return self._client
 
-    def _web_search(self, part, package, attempts):
-        """[datasheet] web_search: once no link, part source or folder file gave a PDF, one search for the maker's PDF
-        (ecadlib.ds_search), held under [datasheet] max_cost_usd and written to cost.jsonl. A link found before for the
-        part is downloaded again without a search. -> (data, prov) or (None, None), the misses in attempts."""
+    def _web_search(self, part, package, attempts, maker=None):
+        """[datasheet] web_search: once no link, part source or folder file gave a PDF (or the part had no link at
+        all), one search for the maker's PDF (ecadlib.ds_search), held under [datasheet] max_cost_usd and written to
+        cost.jsonl. A link found before for the part is downloaded again without a search. maker: the BOM's or a part
+        source's manufacturer, named in the search. -> (data, prov) or (None, None), the misses in attempts."""
         from . import ds_search as WS
         found = WS.Found(self.dir)
         urls = [found.get(part)] if found.get(part) else []
@@ -2905,7 +2906,7 @@ class Reader:
             if model in FALLBACK_MODELS:              # a classifier decline is re-run on another model, as for a read
                 headers, extra = {"anthropic-beta": FALLBACK_BETA}, {"fallbacks": "default"}
             try:
-                urls, usage, msg = WS.search(self.client(model), part, model, package=package, max_uses=uses,
+                urls, usage, msg = WS.search(self.client(model), part, model, maker=maker, package=package, max_uses=uses,
                                              headers=headers, extra=extra)
             except DatasheetError as e:
                 attempts.append({"url": "", "where": "web search", "error": f"search failed: {e}"})
@@ -2930,7 +2931,7 @@ class Reader:
         return None, None
 
     # --- jobs
-    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None):
+    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None, maker=None):
         """fp_needed: False when the part's footprint comes from another source ([datasheet] cross_check = "auto" then
         skips the cross-check). mpn: the part's MPN, when it has one: a PDF that does not name it is skipped
         (PdfStore.fetch). Try each (url, where) until one is a PDF ([datasheet] folder files around them: see
@@ -2974,7 +2975,7 @@ class Reader:
         if data is None:
             data, prov, _ = self._folder_pdf(part, urls, ("other",), attempts)
         if data is None and self.cfg.get("web_search") and not self.estimate_only:
-            data, prov = self._web_search(mpn or part, package, attempts)
+            data, prov = self._web_search(mpn or part, package, attempts, maker)
         if data is None:
             how = "; ".join(a["error"] for a in attempts if a["where"] == "datasheet folder") or how
             if not urls:

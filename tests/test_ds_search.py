@@ -64,6 +64,14 @@ def test_a_dead_link_is_found_by_search_kept_and_billed():
         assert job2["url"] == FOUND
 
 
+def test_a_part_with_no_link_is_searched_with_its_maker():
+    cl = Client(_answer([FOUND]))
+    with tempfile.TemporaryDirectory() as d:
+        job = _reader(d, cl, web_search=True).job("TESTPART", [], "SOIC-8", maker="ACME Corp")
+        assert job["url"] == FOUND
+        assert "made by ACME Corp" in cl.sent[0][0]["messages"][0]["content"]
+
+
 def test_pause_turn_is_continued():
     cl = Client(_answer([], stop="pause_turn"), _answer([FOUND]))
     links, usage, _ = WS.search(cl, "TESTPART", "claude-opus-5-5")
