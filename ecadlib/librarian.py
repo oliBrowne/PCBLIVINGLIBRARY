@@ -842,8 +842,8 @@ class Run:
             st["review"].extend(pad_table_problems(res["spec"]))
             maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
             joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
-                D.thermal_land_missing(res["spec"], maker, url)
-            if joined:                                # leads merged with the pad, or a TI thermal land not read: a wrong land
+                D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"])
+            if joined:                                # leads merged with the pad, a TI thermal land not read, or no housing to draw
                 raise D.DatasheetError(joined)
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
