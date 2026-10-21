@@ -161,5 +161,6 @@ def test_a_qfp_with_blank_dims_builds_after_the_table_fills_them():
            "notes": [], "embedded_instructions": []}
     res = run(_complete(ext), offset=[2, 5, 9], tables=[QFP_TABLE])
     s = res["spec"]
-    assert s["lead_span"] == {"nom": 12.0} and s["height_max"] == 1.2 and not s.get("unresolved"), s
+    # 12.0 nominal only is a basic size: datasheet.basic_span gives it +-0.2 for the land (PR #151)
+    assert s["lead_span"] == {"nom": 12.0, "min": 11.8, "max": 12.2} and s["height_max"] == 1.2 and not s.get("unresolved"), s
     F.build(s)

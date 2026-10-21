@@ -844,6 +844,11 @@ class Run:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
             except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: name it, not KeyError
                 raise D.DatasheetError(D.no_footprint(res["spec"], e)) from e
+            except ValueError as e:                # numbers that don't add up because the read left the drawing's
+                unres = res["spec"].get("unresolved") or []   # dimensions blank (BD33FC0FP 2026-10-21: no TO252
+                if not unres:                                 # drawing in the PDF): the blanks are the cause
+                    raise
+                raise D.DatasheetError(f"no footprint: the datasheet read left {', '.join(unres)} unresolved ({e})") from e
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")

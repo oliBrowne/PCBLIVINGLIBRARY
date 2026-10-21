@@ -57,13 +57,19 @@ where the misses are.
   of KiCad's (centre) and 0.10 mm (size), the pitch, pad numbers, pin 1 and courtyard agree, and the symbol has
   KiCad's pins with at least 80 % of the names. The origin is reported but does not fail a part (KiCad puts THT
   origins on pin 1). Thermal vias are not compared.
-* **Against the maker's land pattern.** KiCad works most lands out from the package dimensions (IPC-7351B). When a
-  datasheet gives its own example board layout, ecadlib uses that instead, so a part can miss KiCad while being
-  exactly what the maker asks for. The report marks those (`kicad_differs_maker_land`) and gives the rate counting
-  them as right. In the zoom run three did: CD4066BM (TI D0014A, p25: 1.55 x 0.6 pads on 5.4 mm), BCR430UW6
-  (Diodes SOT26, p8: X 0.55, Y 0.80, C 2.40), both checked by hand against the datasheet page on 10-18, and
-  C8051F320-GQ, not yet checked by hand. KiCad's pads are 1.95 and 1.6 mm long. A misread land would be followed
-  too, which is why the headline does not count these.
+* **Right by the datasheet.** The maker's datasheet is the truth and KiCad's library the fallback (Oliver,
+  2026-10-21). KiCad works most lands out from the package dimensions (IPC-7351B) and sizes some courtyards from a
+  nominal body per pin count (every DIP-16 is 20.32 mm long). So a part that misses KiCad only where it follows the
+  datasheet counts as right, and the report lists each one under "Right by the datasheet":
+  - `maker_land`: every pad that differs is the datasheet's own recommended land (its example board layout), and that
+    land still covers the leads read from the same drawing. In the zoom run: CD4066BM (TI D0014A, p25: 1.55 x 0.6 pads
+    on 5.4 mm), BCR430UW6 (Diodes SOT26, p8: X 0.55, Y 0.80, C 2.40), both checked by hand against the datasheet page
+    on 10-18, and C8051F320-GQ, not yet checked by hand. KiCad's pads are 1.95 and 1.6 mm long.
+  - `datasheet_body`: only the courtyard differs, and ours is the IPC courtyard (0.1-0.5 mm excess) around our pads
+    and the largest body the datasheet gives, centred on the pads: AM26LS31CN (TI body 18.92-19.69 mm) and 27C256
+    (37.0 mm, longer than the 35.56 mm KiCad allows for any DIP-28).
+  The report still gives the exact KiCad match count next to it. A misread land or body would be followed too; the
+  checks above (leads covered, body centred on the pads, nothing else wrong) are what keeps that out.
 * **KiCad errata.** One case where KiCad's reference disagrees with the datasheet is scored right, with the
   evidence in `ecadlib/eval/sets/kicad-v1.errata.json`: AH1806-W, whose SC59 pins 2 and 3 KiCad swaps (Diodes
   AH1806 datasheet p1-2: pin 2 GND, pin 3 OUTPUT).
