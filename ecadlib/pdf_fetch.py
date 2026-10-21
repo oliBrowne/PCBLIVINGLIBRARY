@@ -711,8 +711,9 @@ class Handoff:
                 return 0, None, "", url, f"could not open your browser ({type(e).__name__}: {e})"
             if ok is False:                           # no browser here (SSH, a container): nothing can arrive
                 self.say(f"  The site refused ecadlib's download of {part or 'this datasheet'}, and no browser could be "
-                         f"opened here. Download it yourself:\n    {url}\n  and give it to ecadlib with "
-                         f"`ecadlib datasheet FILE.pdf --part {part or 'MPN'}`.")
+                         f"opened here. Download it yourself:\n    {url}\n  then save it as {part or 'MPN'}.pdf in your "
+                         f"[datasheet] folder and run again (or read it alone with "
+                         f"`ecadlib datasheet FILE.pdf --part {part or 'MPN'}`).")
                 return 0, None, "", url, "no browser could be opened here"
             self.say(f"  The site refused ecadlib's download of {part or 'this datasheet'}; it is open in your browser:\n"
                      f"    {url}\n  Save the PDF to {self.folder} (if it opens in the browser, use its Download button).\n"

@@ -200,6 +200,8 @@ def test_a_refused_download_says_why_and_what_to_do():
         line = D.refused_line(j, fetch_err)
         assert line.startswith("datasheet download refused by assets.nexperia.com (answered HTTP 403 with a web page)"), line
         assert "`ecadlib datasheet FILE.pdf --part BAT160A`" in line and nexperia in line
+        assert f"download {nexperia} in a browser, save it as BAT160A.pdf in your [datasheet] folder and run again (or " \
+               "read it alone with `ecadlib datasheet FILE.pdf --part BAT160A`)" in line, line   # the folder way first
         assert D.refused_line(j, "max_cost_usd reached") is None            # not a download failure: no such advice
         j = rd.job("LTM4671", [(adi, "nexar datasheet link")])
         assert j["prov"]["attempts"][0]["error"].endswith("(3 tries)")
@@ -216,8 +218,9 @@ def test_a_refused_download_says_why_and_what_to_do():
         assert [e["code"] for e in said] == ["files.datasheet_refused"], said
         assert said[0]["text"] == ("www.analog.com would not let ecadlib download the datasheet (it reset the connection): the "
                                    "maker's site most likely blocks automated downloads (bot protection)."), said[0]["text"]
-        assert said[0]["fix"] == (f"Download the PDF in a browser ({adi}) and read it with ecadlib datasheet FILE.pdf "
-                                  "--part LTM4671, or pick a footprint by hand."), said[0]["fix"]
+        assert said[0]["fix"] == (f"Download the PDF in a browser ({adi}), save it as LTM4671.pdf in your datasheet folder "
+                                  "(set `folder` under datasheet in ecadlib.toml) and run again; or read it alone with "
+                                  "ecadlib datasheet FILE.pdf --part LTM4671; or pick a footprint by hand."), said[0]["fix"]
     for e, why in ((TIMEOUT + " (3 tries)", "timed out on every try"), (TIMEOUT, None),
                    ("SSLError: certificate verify failed (3 tries)", None), ("HTTP 404", None)):
         r = D.refusal([{"url": "https://www.st.com/stulpi01a.pdf", "error": "https://www.st.com/stulpi01a.pdf: " + e}])

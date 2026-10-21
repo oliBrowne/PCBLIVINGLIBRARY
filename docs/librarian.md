@@ -162,16 +162,20 @@ some parts have no link at all. Download those PDFs by hand into one folder and 
 
 ```toml
 [datasheet]
-folder = "~/datasheets"     # <MPN>.pdf, tried before any link; "" = links only
+folder = "~/datasheets"     # <MPN>.pdf, read before any link; "" = links only
 standard_land = "auto"      # "off" (default) | "auto" | "always"
 ```
 
 - The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf`, or the MPN followed by a separator
-  (`LTM4671IY-PBF_datasheet.pdf`). Any other match is used only with a hold that names the file (the part is not released until a
-  person confirms the PDF is this part's): the longest
+  (`LTM4671IY-PBF_datasheet.pdf`). That file is read before any link, and a BOM line with no link at all is read
+  from it too. Any other match is used only with a hold that names the file (the part is not released until a
+  person confirms the PDF is this part's), and only after the part's own links: the longest
   name the MPN starts with (`LTM4671.pdf` for `LTM4671IY#PBF`, at least 4 characters and half the MPN) is a family
-  datasheet, and a name that goes on with more letters or digits (`BAT54S.pdf` for `BAT54`, `LM317HV.pdf` for
-  `LM317`) is another part number, picked only when nothing else fits.
+  datasheet, read when no link gave a PDF (before ecadlib opens a refused link in your browser), and a name that goes
+  on with more letters or digits (`BAT54S.pdf` for `BAT54`, `LM317HV.pdf` for `LM317`) is another part number, read
+  only when nothing else worked, your browser included. A part whose own link works never reads either.
+- When a maker's site refuses the download, the review says to save the PDF as `<MPN>.pdf` in this folder and run
+  again. A `folder` that does not exist is named in the part's error and `ecadlib doctor` warns about it.
 - The part keeps its public datasheet link in the library; the read's provenance records only the file's name, never
   a path on your machine.
 - `ecadlib eval run --datasheets DIR` does the same for a benchmark run. The report counts the parts read from the
@@ -190,7 +194,7 @@ other pads makes it ambiguous, and then nothing changes. The chosen entry must a
 - `always`: the table's land whenever the read identifies one.
 - The symbol and the 3D height (`height_max`, when read) still come from the read. The review says which package was identified and asks a person to check
   the package code on the drawing.
-- Fed every table entry as if a datasheet printed exactly its numbers, `identify` names 292 of 618 (itself or an
+- Fed every table entry as if a datasheet printed exactly its numbers, `identify` names 294 of 618 (itself or an
   entry with the same pads) and never one with other pads (`tests/test_datasheet_folder.py`). The other entries are
   ambiguous or a package type the table does not cover (chips, SOT, connectors). Its effect on the live benchmark has not been
   measured yet.

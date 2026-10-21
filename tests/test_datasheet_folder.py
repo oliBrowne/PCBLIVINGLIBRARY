@@ -3,12 +3,13 @@ standard_land (a read that identifies a checked standard package gets the table'
 
 Nothing live: the API is test_crosscheck's fake, PDFs are test_ds_route's SYNTHETIC text PDFs, extractions are
 test_datasheet's SYNTHETIC fixtures."""
-import copy, tempfile
+import copy, json, tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
 from ecadlib import datasheet as D, librarian as L, rules as RU, stdparts as SP
 from tests import test_crosscheck as TC, test_datasheet as TD, test_datasheet_batch as TB, test_ds_route as TR
+from tests import test_datasheet_downloads as TDL, test_librarian as TL
 
 SOIC = "SOIC-8_3.9x4.9mm_P1.27mm"
 
@@ -32,9 +33,24 @@ def test_local_datasheet_names():
         p, how = D.local_datasheet(f, "LTM4671EY")
         assert p.name == "ltm4671.pdf" and "family datasheet" in how
         assert D.local_datasheet(f, "AD7606")[0] is None                                 # 3 characters name no family
-        assert D.local_datasheet(f, "LT8610")[0] is None
+        p, why = D.local_datasheet(f, "LT8610")
+        assert p is None and "LT8610" in why and str(d) not in why, why                  # the folder's path is never said
         assert D.local_datasheet("", "LT8610") == (None, "no [datasheet] folder")
-        assert "does not exist" in D.local_datasheet(Path(d) / "nope", "LT8610")[1]
+        why = D.local_datasheet(Path(d) / "nope", "LT8610")[1]
+        assert "does not exist" in why and "(nope)" in why and str(d) not in why, why
+
+
+def test_local_datasheet_kinds():
+    """kinds: only the matches asked for, so a reader can try the links between the MPN's own file and the others."""
+    with tempfile.TemporaryDirectory() as d:
+        f = folder(d, "LTM4671.pdf", "BAT54S.pdf", "TESTPART.pdf")
+        assert D.local_datasheet(f, "TESTPART", kinds=("exact",))[0].name == "TESTPART.pdf"
+        assert D.local_datasheet(f, "LTM4671IY#PBF", kinds=("exact",))[0] is None
+        assert D.local_datasheet(f, "LTM4671IY#PBF", kinds=("exact", "other"))[0] is None
+        assert D.local_datasheet(f, "LTM4671IY#PBF", kinds=("family",))[0].name == "LTM4671.pdf"
+        assert D.local_datasheet(f, "BAT54", kinds=("exact", "family"))[0] is None
+        assert D.local_datasheet(f, "BAT54", kinds=("other",))[0].name == "BAT54S.pdf"
+        assert D.local_datasheet(f, "BAT54")[0].name == "BAT54S.pdf"                   # every kind by default
 
 
 def test_a_longer_part_number_is_never_taken_for_this_part():
@@ -57,13 +73,130 @@ def test_a_longer_part_number_is_never_taken_for_this_part():
     with tempfile.TemporaryDirectory() as d:                   # through the librarian: a review item, every time
         f = folder(d, "DSPART1X.pdf")
         rules = {"datasheet": {"folder": str(f)}}
-        items, _, _ = TB.run2(d, TC.API(lambda k, m, b: TR.on_page(TD.INCH)), reader_kw={"batch": False, "rules": rules},
-                              rules=rules)
+        http = TDL.Scripted({"https://example.com/ds.pdf": [403], "https://www.lcsc.com/datasheet/C9999.pdf": TB.PDF})
+        items, _, _ = TB.run2(d, TC.API(lambda k, m, b: TR.on_page(TD.INCH)), http=http,
+                              reader_kw={"batch": False, "rules": rules}, rules=rules)
+        assert "https://example.com/ds.pdf" in http.fetched   # its own link first: the site refused it (a 403 web page)
         a = items["DSPART1"]                                   # held, and the hold names the file
         assert a["status"] == "held" and any(h.startswith("verify: datasheet from your folder: DSPART1X.pdf")
                                              for h in a["hold_reasons"]), a["hold_reasons"]
         review = (Path(d) / "out" / "review.md").read_text()
         assert "from a file not named exactly for this part (DSPART1X.pdf)" in review, review
+
+
+def test_a_working_link_beats_a_file_named_for_another_part_number():
+    """BAT54's own link gives its own PDF: BAT54S.pdf in the folder (another part) is never read for it, and the
+    part is not held for a folder file."""
+    api = TC.API(lambda k, m, b: TC.first())
+    own = TR.pdf_lines([["BAT54 Schottky barrier diode", "page one"], ["Package outline", "page two"]])
+    with tempfile.TemporaryDirectory() as d:
+        f = folder(d, "BAT54S.pdf")
+        http = TB.PdfHTTP({TC.URL: own})
+        with TB.patched(api):
+            rd = TC.reader(d, {"datasheet": {"folder": str(f)}}, http=http)
+            job = rd.job("BAT54", [(TC.URL, "BOM")], TC.QFN)
+            res = rd.read_now(job)
+        prov = job["base_prov"]
+        assert job["data"] == own and "local" not in prov and prov["where"] == "BOM" and http.fetched == [TC.URL], prov
+        assert not [r for r in res["needs_review"] if r.startswith("datasheet from your folder")], res["needs_review"]
+    with tempfile.TemporaryDirectory() as d:                   # through the librarian: DSPART1's link works, no hold
+        f = folder(d, "DSPART1X.pdf")
+        rules = {"datasheet": {"folder": str(f)}}
+        items, _, _ = TB.run2(d, TC.API(lambda k, m, b: TR.on_page(TD.INCH)), reader_kw={"batch": False, "rules": rules},
+                              rules=rules)
+        a = items["DSPART1"]
+        assert not [h for h in a["hold_reasons"] if "datasheet from your folder" in h], a["hold_reasons"]
+        assert a["source"]["footprint"] == "datasheet:https://example.com/ds.pdf", a["source"]
+
+
+def test_a_family_file_comes_after_the_links_and_another_parts_file_after_the_hand_off():
+    """A family datasheet (LTM4671.pdf for LTM4671IY#PBF) is read once no link gave a PDF, before the person is asked
+    for one in their browser; a file named for another part number (BAT54S.pdf for BAT54) only when the hand-off got
+    nothing either."""
+    ltm, bat = "https://www.analog.com/media/ltm4671.pdf", "https://assets.nexperia.com/documents/data-sheet/BAT54_SER.pdf"
+    bat2 = bat.replace("BAT54_SER", "BAT54")
+    with tempfile.TemporaryDirectory() as d:
+        f = folder(d, "LTM4671.pdf", "BAT54S.pdf")
+        http = TDL.Scripted({ltm: [403], bat: [403], bat2: [403]})
+        rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=http, log=None, sleep=lambda s: None, poll=0,
+                      handoff=True, rules={"datasheet": {"folder": str(f), "downloads_folder": d}})
+        asked, hand = [], {"pdf": None}
+        rd.store.fns = dict(rd.store.fns, handoff=lambda u, p: asked.append((u, p)) or (
+            (200, hand["pdf"], "application/pdf", u, None, {"x-ecadlib-file": "bat54.pdf"}) if hand["pdf"] else
+            (0, None, "", u, "no PDF for it appeared in your Downloads folder within 180 s")))
+        prov = rd.job("LTM4671IY#PBF", [(ltm, "BOM")], "QFN")["base_prov"]
+        assert http.fetched == [ltm] and asked == [], (http.fetched, asked)     # the link first; nobody asked
+        assert prov["local"] == "LTM4671.pdf" and "family datasheet" in prov["where"] and prov["url"] == ltm, prov
+        prov = rd.job("BAT54", [(bat, "BOM")], "SOT-23")["base_prov"]
+        assert http.fetched[-1] == bat and asked == [(bat, "BAT54")], (http.fetched, asked)   # the link, the person, ...
+        assert prov["local"] == "BAT54S.pdf" and "another part number" in prov["where"], prov  # ... then the other file
+        assert [a["url"] for a in prov["attempts"]] == [bat, bat], prov["attempts"]
+        hand["pdf"] = TC.pdf3()                                # the person saved BAT54's own PDF: BAT54S.pdf is not read
+        prov = rd.job("BAT54", [(bat2, "BOM")], "SOT-23")["base_prov"]
+        assert asked[-1] == (bat2, "BAT54") and prov["via"] == "handoff" and "local" not in prov, prov
+
+
+def test_a_bom_line_with_no_link_is_read_from_the_folder():
+    """A BOM line with no datasheet link at all (and none found) is read from the [datasheet] folder."""
+    api = TC.API(lambda k, m, b: TR.on_page(TD.INCH))
+    with tempfile.TemporaryDirectory() as d:
+        f = folder(d, "DSPART1.pdf")
+        rules = {"datasheet": {"folder": str(f)}}
+        bom = TB.BOM2.replace("Datasheet-only part,https://example.com/ds.pdf", "Datasheet-only part,")
+        assert bom != TB.BOM2
+        http = TB.PdfHTTP({"https://www.lcsc.com/datasheet/C9999.pdf": TB.PDF})
+        rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=http, batch=False, poll=0,
+                      sleep=lambda s: None, log=lambda *a: None, rules=rules)
+        with TB.patched(api):
+            items, _ = TL.run(d, http=http, bom=bom, reader=rd, rules=rules)
+        tried = items["DSPART1"]["librarian"]["tried"]
+        assert "datasheet: no datasheet URL known" not in tried, tried
+        assert any(t.startswith("datasheet reader (DSPART1.pdf in the datasheet folder): footprint, symbol")
+                   for t in tried), tried
+        assert items["DSPART1"]["footprint"].get("file") and not [u for u in http.fetched if "example.com" in u]
+        assert any("compare with DSPART1.pdf in the datasheet folder" in h for h in items["DSPART1"]["hold_reasons"])
+        lock = json.loads((Path(d) / "out" / "library.lock.json").read_text())
+        assert "datasheet" not in lock["parts"]["DSPART1"], lock["parts"]["DSPART1"]   # no link: no other part's read
+    with tempfile.TemporaryDirectory() as d:                   # `ecadlib datasheet batch PLAN` (fill_plan) too
+        f = folder(d, "DSPART1.pdf")
+        rules = {"datasheet": {"folder": str(f)}}
+        bom = TB.BOM2.replace("Datasheet-only part,https://example.com/ds.pdf", "Datasheet-only part,")
+        http = TB.PdfHTTP({"https://www.lcsc.com/datasheet/C9999.pdf": TB.PDF})
+        TL.run(d, http=http, bom=bom)                          # no key and no folder: DSPART1 stays open
+        rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=http, batch=False, poll=0,
+                      sleep=lambda s: None, log=lambda *a: None, rules=rules)
+        with TB.patched(api):
+            D.fill_plan(Path(d) / "out" / "plan.json", rd, rules=rules, log=lambda *a: None)
+        tried = json.loads((Path(d) / "out" / "librarian_state.json").read_text())["DSPART1"]["tried"]
+        assert any(t.startswith("datasheet reader (DSPART1.pdf in the datasheet folder)") for t in tried), tried
+    with tempfile.TemporaryDirectory() as d:                   # no file for it: as before, no reader at all
+        f = folder(d, "OTHER.pdf")
+        rules = {"datasheet": {"folder": str(f)}}
+        items, _ = TL.run(d, bom=TL.BOM, rules=rules)
+        assert "datasheet: no datasheet URL known" in items["NOWHERE1"]["librarian"]["tried"]
+
+
+def test_a_folder_that_is_not_there_is_said():
+    """A typo in [datasheet] folder: the error of a part whose links all failed says so (with the folder's name, never
+    its path), and `ecadlib doctor` warns."""
+    from ecadlib import doctor as DR
+    with tempfile.TemporaryDirectory() as d:
+        gone = Path(d) / "datasheetz"
+        try:
+            rd = TC.reader(d, {"datasheet": {"folder": str(gone)}}, http=TB.PdfHTTP({TC.URL: 404}))
+            rd.job("TESTPART", [(TC.URL, "BOM")], TC.QFN)
+            raise AssertionError("no PDF, yet a job")
+        except D.DatasheetError as e:
+            msg = str(e)
+        assert msg.startswith("no datasheet link gave a PDF") and "(datasheetz) does not exist" in msg and d not in msg, msg
+        c = DR.check_datasheet_folder({"datasheet": {"folder": str(gone)}})
+        assert [x["level"] for x in c] == ["WARN"] and "datasheetz" in c[0]["detail"], c
+        assert DR.check_datasheet_folder({"datasheet": {"folder": d}})[0]["level"] == "OK"
+        assert DR.check_datasheet_folder({"datasheet": {"folder": ""}}) == [] and DR.check_datasheet_folder(None) == []
+        toml = Path(d) / "ecadlib.toml"
+        toml.write_text(f"[datasheet]\nfolder = '{gone}'\n", encoding="utf-8")
+        rep = DR.run(str(Path(d) / "ws"), [], str(toml), {})
+        assert [x["level"] for x in rep["checks"] if x["check"] == "datasheet folder"] == ["WARN"], rep["checks"]
 
 
 def test_folder_pdf_is_used_before_a_refused_link_and_keeps_the_link():

@@ -8,7 +8,8 @@ kicad-cli unless you only make Altium libraries; kicad-cli is also found in KiCa
 not on PATH); which API keys are set (names only, never the values; Altium 365 and GitHub warn only when configured,
 the optional part-lookup services are one line); the rules file
 (ecadlib.toml: which one is used and whether it is valid - errors name file:line where the line can be found); the
-workspace (exists, writable); the library folders (--lib / $ECADLIB_LIB); the Altium menu's command= (--altium-menu, else an ecadlib_menu.ini in the current folder or
+workspace (exists, writable); the library folders (--lib / $ECADLIB_LIB); [datasheet] folder, when set (WARN when it is
+not a folder); the Altium menu's command= (--altium-menu, else an ecadlib_menu.ini in the current folder or
 out/altium_menu): set, and the program it names runs `ecadlib --version`; with --altium-menu the workspace checked is
 the ini's workspace= unless --workspace is given. Exit code 1 when any line is FAIL, else 0. --json prints {"ok", "checks": [{"check",
 "level", "detail", "hint"}]}. Nothing is written except a temporary probe file in the workspace, removed at once."""
@@ -366,6 +367,24 @@ def check_paths(libs=(), rules=None):
     return out
 
 
+def check_datasheet_folder(rules=None):
+    """[datasheet] folder (PDFs you downloaded by hand): a name that is not a folder (a typo) is a WARN, since a run
+    that finds no file there just goes on to the links. No line when it is not set."""
+    folder = str((((rules if isinstance(rules, dict) else {}).get("datasheet")) or {}).get("folder") or "").strip()
+    if not folder:
+        return []
+    p = Path(folder).expanduser()
+    if not p.is_dir():
+        return [_c("datasheet folder", "WARN", f"{p}: " + ("not a folder" if p.exists() else "not found") + " (the PDFs "
+                   "you downloaded by hand are not read)", "fix [datasheet] folder in ecadlib.toml (relative paths start "
+                   "at the folder you run ecadlib in)")]
+    try:
+        n = sum(1 for f in p.iterdir() if f.suffix.lower() == ".pdf")
+    except OSError as e:
+        return [_c("datasheet folder", "WARN", f"{p}: cannot be read ({e.strerror or e})", "fix the folder's permissions")]
+    return [_c("datasheet folder", "OK", f"{p} ({n} PDF{'s' if n != 1 else ''})")]
+
+
 MENU_INI = "ecadlib_menu.ini"
 
 
@@ -452,6 +471,7 @@ def run(workspace=None, libs=(), rules_path=None, environ=None, altium_menu=None
     if Path(workspace).is_dir():
         checks.append(check_formats(workspace))
     checks += check_paths(libs, rules)
+    checks += check_datasheet_folder(rules)
     if menu is not None:
         checks.append(check_altium_menu(menu, probe=bool(altium_menu)))   # run its command only when named
     return {"ok": not any(c["level"] == "FAIL" for c in checks), "checks": checks}

@@ -83,8 +83,9 @@ CODES = {
     # the maker's site refused the PDF here (403 web page, reset connection, timeouts) and the API's fetcher failed too
     "files.datasheet_refused": ("{host} would not let ecadlib download the datasheet (it {why}): the maker's site most "
                                 "likely blocks automated downloads (bot protection).",
-                                "Download the PDF in a browser[ ({url})] and read it with ecadlib datasheet FILE.pdf[ "
-                                "--part {part}], or pick a footprint by hand.",
+                                "Download the PDF in a browser[ ({url})], save it[ as {part}.pdf] in your datasheet folder "
+                                "(set `folder` under datasheet in ecadlib.toml) and run again; or read it alone with "
+                                "ecadlib datasheet FILE.pdf[ --part {part}]; or pick a footprint by hand.",
                                 [r"datasheet download refused by (?P<host>\S+) \((?P<why>[^)]*)\)"
                                  r"(?:.*?download (?P<url>\S+) in a browser)?(?:.*?--part (?P<part>[^`\s]+))?"]),
     "files.missing": ("The {kind} file is missing.",
@@ -225,7 +226,8 @@ CODES = {
                              [r"cross-check unchecked: (?P<why>.+)", r"not checked \((?P<why>[^)]+)\)"]),
     # the datasheet reader
     "datasheet.no_link": ("No datasheet link is known, so the datasheet could not be read.",
-                          "Add the datasheet link to the BOM line, put the PDF in your [datasheet] folder, or pick a footprint by hand.",
+                          "Add the datasheet link to the BOM line, save the PDF as MPN.pdf in your datasheet folder (set "
+                          "`folder` under datasheet in ecadlib.toml), or pick a footprint by hand.",
                           [r"no datasheet URL known"]),
     "datasheet.no_key": ("The datasheet reader is not set up (no model API key).",
                          "Add a model API key (ecadlib init shows how), or pick a footprint by hand.",
@@ -241,7 +243,7 @@ CODES = {
                              [r"only some pages were sent \((?P<pages>[^)]*)\)"]),
     "datasheet.family_pdf": ("The datasheet came from your datasheet folder, from a file not named exactly for this part ({file}).",
                              "Check the PDF covers this exact part number, package and pinout.",
-                             [r"datasheet from your folder: (?P<file>\S+) in the datasheet folder"]),
+                             [r"datasheet from your folder: (?P<file>.+?(?i:\.pdf)) in the datasheet folder"]),
     "datasheet.standard_land": ("The datasheet read named the standard package {package} ({why}), so its checked land was used "
                                 "instead of the pads read from the drawing.",
                                 "Check the package code on the datasheet's drawing is {package}.",

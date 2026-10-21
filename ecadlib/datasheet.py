@@ -1801,19 +1801,19 @@ def _after_mpn(stem, key):
     return stem[i:]
 
 
-def local_datasheet(folder, part):
+def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     """The PDF for `part` in a folder of datasheets a person downloaded -> (Path, how) or (None, why). Names are compared
-    without case and punctuation: <MPN>.pdf, or the MPN then a separator (LTM4671IY-PBF_datasheet.pdf). Any other
-    name is another part's or a family's file and is said so in `how` (its read gets a review item): the longest
-    name the MPN starts with (LTM4671.pdf for LTM4671IY#PBF; at least 4 characters and half the MPN) is a family
+    without case and punctuation: <MPN>.pdf, or the MPN then a separator (LTM4671IY-PBF_datasheet.pdf) is "exact". Any
+    other name is another part's or a family's file and is said so in `how` (its read gets a review item): the longest
+    name the MPN starts with (LTM4671.pdf for LTM4671IY#PBF; at least 4 characters and half the MPN) is a "family"
     datasheet; a name that goes on with more letters or digits (BAT54S.pdf for BAT54, LM317HV.pdf for LM317) is
-    another part number, used only when nothing else fits. For makers whose sites refuse downloads from scripts
-    (analog.com, Nexperia)."""
+    "other", another part number. kinds: the matches to look for (Reader.job tries the links between them). For
+    makers whose sites refuse downloads from scripts (analog.com, Nexperia). `why` never holds the folder's path."""
     if not str(folder or "").strip():
         return None, "no [datasheet] folder"
     d = Path(str(folder)).expanduser()
     if not d.is_dir():
-        return None, f"[datasheet] folder {d} does not exist"
+        return None, f"your [datasheet] folder ({d.name or '?'}) " + ("is not a folder" if d.exists() else "does not exist")
     key = _mpn_key(part)
     if not key:
         return None, "no MPN"
@@ -1828,13 +1828,13 @@ def local_datasheet(folder, part):
             other = other or f                        # BAT54S.pdf: another part number that starts like this one
         elif len(s) >= 4 and 2 * len(s) >= len(key) and key.startswith(s) and (prefix is None or len(s) > len(_mpn_key(prefix.stem))):
             prefix = f
-    if exact:
+    if exact and "exact" in kinds:
         return exact, f"{exact.name} in the datasheet folder"
-    if prefix:
+    if prefix and "family" in kinds:
         return prefix, f"{prefix.name} in the datasheet folder (a family datasheet: the name is the start of {part})"
-    if other:
+    if other and "other" in kinds:
         return other, f"{other.name} in the datasheet folder (named for another part number that starts with {part})"
-    return None, f"no {part}.pdf in {d}"
+    return None, f"no {part}.pdf in your [datasheet] folder"
 
 
 def _quiet_pypdf():
@@ -1901,7 +1901,8 @@ def refused_line(job, error):
         return None
     url, host, why = r
     return (f"datasheet download refused by {host} ({why}): the maker's site likely blocks automated downloads; download "
-            f"{url} in a browser and read it with `ecadlib datasheet FILE.pdf --part {job['part']}`")
+            f"{url} in a browser, save it as {job['part']}.pdf in your [datasheet] folder and run again (or read it alone "
+            f"with `ecadlib datasheet FILE.pdf --part {job['part']}`)")
 
 
 def refusal(attempts):
@@ -2412,38 +2413,27 @@ class Reader:
     # --- jobs
     def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None):
         """fp_needed: False when the part's footprint comes from another source ([datasheet] cross_check = "auto" then
-        skips the cross-check). Try each (url, where) until one is a PDF. A link that cannot be downloaded here (blocked host) is sent
+        skips the cross-check). Try each (url, where) until one is a PDF ([datasheet] folder files around them: see
+        below). A link that cannot be downloaded here (blocked host) is sent
         as a URL source for the API to fetch, so a part is never stuck on this machine's network.
         The job is the first step of the part's route (ds_route): the pages picked for [datasheet] page_budget and the
         model the router starts on; answers already in the result cache are replayed, so a part whose cheap attempt
         failed before starts where it left off ('final' = the cached answer at this step is the one to use)."""
         from . import ds_route as DR
-        attempts, data, prov = [], None, None
+        attempts = []
         n0 = len(self.store.refusals)
-        f, how = local_datasheet(self.cfg.get("folder"), part)
-        if f is not None:                             # a person's own copy beats every link (and needs no network)
-            try:
-                data = f.read_bytes()
-            except OSError as e:
-                attempts.append({"url": f.name, "where": "datasheet folder", "error": f"{f.name}: {type(e).__name__}"})
-                data = None
-            if data is not None and not is_pdf(data):
-                attempts.append({"url": f.name, "where": "datasheet folder", "error": f"{f.name}: not a PDF"})
-                data = None
-            if data is None:
-                how = attempts[-1]["error"]
-            else:                                     # the part keeps its public link (never a path on this machine)
-                link = urls[0][0] if urls else ""
-                prov = {"url": link, "final_url": link, "where": how, "status": None, "content_type": "application/pdf",
-                        "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
-                        "from_cache": False, "local": f.name}   # the name only: no path on this machine
-                urls = []
-        for url, where in [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))]:   # http, then https
+        # [datasheet] folder: the part's own file (<MPN>.pdf) beats every link and needs no network; a family file comes
+        # once no link gave a PDF, before the person is asked for one; a file named for another part number comes last
+        data, prov, how = self._folder_pdf(part, urls, ("exact",), attempts)
+        tries = [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))] if data is None else []
+        for url, where in tries:                      # http, then https
             try:
                 data, prov = self.store.fetch(url, where, part=part, handoff=False)
                 break
             except DatasheetError as e:
                 attempts.append({"url": url, "where": where, "error": str(e)})
+        if data is None:
+            data, prov, _ = self._folder_pdf(part, urls, ("family",), attempts)
         if data is None and self.store.handoff is not None:   # no link worked by itself: ask the person, link by link
             for url, where, page in dict.fromkeys(self.store.refusals[n0:]):
                 try:
@@ -2453,6 +2443,9 @@ class Reader:
                 except DatasheetError as e:
                     attempts.append({"url": url, "where": where, "error": str(e)})
         if data is None:
+            data, prov, _ = self._folder_pdf(part, urls, ("other",), attempts)
+        if data is None:
+            how = "; ".join(a["error"] for a in attempts if a["where"] == "datasheet folder") or how
             if not urls:
                 raise DatasheetError("no datasheet URL known" + (f" and {how}" if self.cfg.get("folder") else
                                      "; put the PDF in a folder and set [datasheet] folder"))
@@ -2460,8 +2453,10 @@ class Reader:
                      if re.search(BROKEN_LINK, re.sub(r" \(also tried .*\)$", "", a["error"], flags=re.S))}
             usable = [(u, w) for u, w in urls if u not in wrong and api_url(u) not in wrong]
             if not usable:
-                raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts)
-                                     + ("" if self.cfg.get("folder") else "; download it by hand into a folder and set [datasheet] folder"))
+                folder = str(self.cfg.get("folder") or "").strip()
+                raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts) + (
+                    f"; {how}" if folder and not Path(folder).expanduser().is_dir() else   # a typo in the folder's name
+                    "" if folder else "; download it by hand into a folder and set [datasheet] folder"))
             url, where = usable[0]
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
@@ -2490,6 +2485,27 @@ class Reader:
             if self.results.get(whole["key"]):
                 first = whole
         return self._walk(first)
+
+    def _folder_pdf(self, part, urls, kinds, attempts):
+        """The part's PDF from the [datasheet] folder when a file there is one of `kinds` of match (local_datasheet)
+        -> (bytes, prov, how) or (None, None, why). A file that does not read or is not a PDF goes into attempts. The
+        part keeps its first public link; prov names the file, never a path on this machine."""
+        f, how = local_datasheet(self.cfg.get("folder"), part, kinds)
+        if f is None:
+            return None, None, how
+        try:
+            data = f.read_bytes()
+        except OSError as e:
+            data, err = None, f"{f.name}: {type(e).__name__}"
+        else:
+            err = None if is_pdf(data) else f"{f.name}: not a PDF"
+        if err:
+            attempts.append({"url": f.name, "where": "datasheet folder", "error": err})
+            return None, None, err
+        link = urls[0][0] if urls else ""
+        return data, {"url": link, "final_url": link, "where": how, "status": None, "content_type": "application/pdf",
+                      "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
+                      "from_cache": False, "local": f.name}, how
 
     def _page_marks(self, data, digest):
         from . import ds_route as DR

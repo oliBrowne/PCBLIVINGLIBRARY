@@ -14,8 +14,9 @@ EXAMPLES = {
     "files.no_footprint": "files: no footprint model (.PcbLib) (cannot be overridden)",
     "files.datasheet_refused": "files: datasheet download refused by www.analog.com (reset the connection): the maker's site "
                                "likely blocks automated downloads; download https://www.analog.com/media/en/technical-"
-                               "documentation/data-sheets/LTM4671.pdf in a browser and read it with `ecadlib datasheet "
-                               "FILE.pdf --part LTM4671`",
+                               "documentation/data-sheets/LTM4671.pdf in a browser, save it as LTM4671.pdf in your "
+                               "[datasheet] folder and run again (or read it alone with `ecadlib datasheet FILE.pdf --part "
+                               "LTM4671`)",
     "files.missing": "files: footprint file missing: /srv/ws/models/PcbLib/X.PcbLib",
     "files.unreadable": "files: symbol file does not read back (ValueError: library is empty)",
     "pins.no_pins": "pins: symbol has no pins",
@@ -104,6 +105,28 @@ def test_every_code_has_an_example_that_explains_to_it():
         assert e["code"] == code, (code, raw, e)
         assert "?" not in e["text"] and "{" not in e["text"] and "[" not in e["text"], e
         assert not M.leaks(e["text"]) and not M.leaks(e["fix"]), e
+
+
+def test_no_template_writes_brackets_of_its_own():
+    """fill() keeps or drops each [...] by the {values} in it, and never prints the brackets: "put the PDF in your
+    [datasheet] folder" came out as "your datasheet folder". So a bracket group in a template always holds a value."""
+    for code, (text, fix) in [(c, v[:2]) for c, v in M.CODES.items()] + list(M.ERRORS.items()):
+        for t in (text, fix):
+            bare = [g for g in re.findall(r"\[([^\[\]]*)\]", t) if not re.search(r"{\w+}", g)]
+            assert not bare, (code, bare)
+    fix = M.explain(EXAMPLES["datasheet.no_link"])["fix"]
+    assert fix == ("Add the datasheet link to the BOM line, save the PDF as MPN.pdf in your datasheet folder (set "
+                   "`folder` under datasheet in ecadlib.toml), or pick a footprint by hand."), fix
+    fix = M.explain(EXAMPLES["files.datasheet_refused"])["fix"]
+    assert "save it as LTM4671.pdf in your datasheet folder (set `folder` under datasheet in ecadlib.toml) and run " \
+           "again; or read it alone with ecadlib datasheet FILE.pdf --part LTM4671; or pick" in fix, fix
+
+
+def test_a_folder_file_with_spaces_in_its_name_is_named_whole():
+    for name in ("BAT54S (1).pdf", "BAT54S datasheet.pdf", "BAT54S.PDF"):
+        e = M.explain(f"verify: datasheet from your folder: {name} in the datasheet folder (named for another part "
+                      "number that starts with BAT54); check it covers this part")
+        assert e["code"] == "datasheet.family_pdf" and e["text"].endswith(f"({name})."), (name, e)
 
 
 def test_held_fills_values_and_drops_optional_parts():

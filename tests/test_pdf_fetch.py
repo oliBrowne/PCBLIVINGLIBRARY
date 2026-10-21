@@ -468,7 +468,8 @@ def test_handoff_with_no_browser_here_says_so_at_once(tmp_path):
     h = PF.Handoff(tmp_path, wait_s=60, say=said.append, open_url=lambda url: False, sleep=clock.sleep, clock=clock)
     r = h.get(URL, "LTM4671")
     assert r[4] == "no browser could be opened here" and clock.t == 0 and not h.gone, r[4]
-    assert any(URL in m and "ecadlib datasheet FILE.pdf --part LTM4671" in m for m in said), said
+    assert any(URL in m and "save it as LTM4671.pdf in your [datasheet] folder and run again" in m
+               and "ecadlib datasheet FILE.pdf --part LTM4671" in m for m in said), said     # the folder way first
 
 
 @lite

@@ -656,9 +656,12 @@ class Run:
     def src_datasheet(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         st["tried"] = [t for t in st["tried"] if "waiting for your OK to read it with AI" not in t]   # asked again now
         urls = D.datasheet_urls(item, ln, row, st["found"])
-        if not urls:
+        cfg = getattr(self.reader, "cfg", None) or D.settings(self.rules)   # the reader's [datasheet] settings
+        local = None if urls else D.local_datasheet(cfg.get("folder"), mpn or item["name"])[0]   # [datasheet] folder
+        if not urls and local is None:
             st["tried"].append("datasheet: no datasheet URL known")
             return
+        first = urls[0] if urls else (local.name, "datasheet folder")   # (the file's name only, never its path)
         if self.reader is None:
             self.reader = D.Reader(self.out, Path(self._kicad_args[0] or self.out / "cache").parent, self.api_key, self.rules, self.http)
         rd = self.reader
@@ -672,12 +675,12 @@ class Run:
             except D.DatasheetError:
                 res = None
             if res is None:
-                st["tried"].append(f"datasheet: {D.OFFLINE} ({urls[0][0]})")
+                st["tried"].append(f"datasheet: {D.OFFLINE} ({first[0]})")
                 return
             self.put_datasheet(st, res, job, fp_name, sym_name, "cached")
             return
         if not rd.key and not rd.estimate_only:
-            st["tried"].append(f"needs datasheet reader (no API key): {urls[0][0]} ({urls[0][1]})")
+            st["tried"].append(f"needs datasheet reader (no API key): {first[0]} ({first[1]})")
             return
         if not getattr(rd, "_recollected", False):    # answers paid for in earlier batches, before a parser fix
             rd._recollected = True
@@ -688,7 +691,8 @@ class Run:
             if res is None and rd.deferred:
                 rd.submit(job)
                 self.waiting.append((st, job, fp_name, sym_name))
-                st["tried"].append(f"datasheet: queued for the batch ({job['url']}, {job['where']})")
+                at = ", ".join(x for x in (job["url"], job["where"]) if x)
+                st["tried"].append(f"datasheet: queued for the batch ({at})")
                 return
             res = res or rd.read_now(job)
         except CC.Held as e:
@@ -735,7 +739,7 @@ class Run:
                 st["tried"].append(f"datasheet reader: failed ({r})")
                 self.refused(st, job, r)
             elif r == "estimate only":                    # priced, not sent: the person approves the cost first
-                st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url']})")
+                st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url'] or job['where']})")
             else:
                 st["tried"].append(f"datasheet: {r or 'not sent'}" + ("; run again to collect" if str(r).startswith("pending") else ""))
         self.waiting = []
@@ -813,8 +817,10 @@ class Run:
         if cc:
             st["cross_check"] = {"status": cc["status"], "summary": CC.summary_line(cc)}
             st["tried"].append(f"cross-check ({cc['mode']}): {cc['status']}: {CC.summary_line(cc)}")
-        st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
-        st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url}; see datasheet/*.review.md"
+        if url:                                       # (a PDF from the [datasheet] folder of a line with no link has none)
+            st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
+        st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
+                            "see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
 
 
