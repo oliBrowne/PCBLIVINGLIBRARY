@@ -1202,8 +1202,9 @@ def body_unread(spec):
     and a horizontal one far behind them (S28B-PHDSS 6.4 mm, S13B-EH 5.75 mm off: benchmark 2026-10-21). A bare
     vertical pin header is drawn from its pitch (footprint_adv._header) and still builds. None otherwise."""
     t = spec.get("package_type")
-    if t not in ("connector", "pin_header") or (spec.get("pad_table") or {}).get("body") or \
-            spec.get("body_length") and spec.get("body_width"):
+    # the body each builder draws: _table a pad_table body or body_length x body_width, _header only the latter
+    if t not in ("connector", "pin_header") or spec.get("body_length") and spec.get("body_width") or \
+            t == "connector" and (spec.get("pad_table") or {}).get("body"):
         return None
     if t == "pin_header" and not SIDEWAYS.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
         return None

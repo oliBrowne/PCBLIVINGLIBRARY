@@ -197,6 +197,8 @@ def test_a_connector_whose_body_was_not_read_is_held_not_built_with_a_guessed_co
     eh = {"package_type": "pin_header", "name": "JST_EH_S13B-EH_1x13_P2.50mm_Horizontal", "pin_count": 13, "pitch": 2.5}
     assert D.body_unread(eh)                                                           # S13B-EH
     assert D.body_unread(dict(eh, name="S13B-EH", description="13 pin right angle header"))
+    # a header is drawn by footprint_adv._header, which never reads a pad_table body
+    assert D.body_unread(dict(eh, pad_table={"body": {"x1": 0, "y1": 0, "x2": 32, "y2": 9}}))
 
 
 def test_a_connector_with_a_body_and_a_bare_vertical_header_still_build():
