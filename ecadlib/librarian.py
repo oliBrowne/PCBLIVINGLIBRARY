@@ -716,7 +716,7 @@ class Run:
             self.cross_check_held(st, e)
             return
         except Exception as e:
-            self.read_failed(st, job, e, cfg.get("folder"))
+            self.read_failed(st, job, e, cfg.get("folder"), rd.answered(job, e))
             raise
         self.put_datasheet(st, res, job, fp_name, sym_name, "cached" if hit else "")
 
@@ -748,10 +748,11 @@ class Run:
             st["review"].append(line)
 
     @staticmethod
-    def read_failed(st, job, error, folder=None):
-        """The read failed. An answer that came back (declined, not readable) takes an earlier run's advice out, as a
-        read does; an error before any answer (D.nothing_back) leaves it; the API's fetcher failing says it."""
-        if not D.nothing_back(error):
+    def read_failed(st, job, error, folder=None, answered=False):
+        """The read failed. answered (Reader.answered): the API answered it (declined, not readable, its cross-check
+        not sent), so it fetched the link: an earlier run's advice goes, as on a read; an error before any answer leaves
+        it. The API's fetcher failing says it."""
+        if answered:
             Run.reading(st)
         Run.refused(st, job, error, folder)
 
@@ -782,7 +783,8 @@ class Run:
                     st["tried"].append(f"datasheet: failed ({type(e).__name__}: {e})")
             elif isinstance(r, Exception):
                 st["tried"].append(f"datasheet reader: failed ({r})")
-                self.read_failed(st, job, r, (getattr(self.reader, "cfg", None) or D.settings(self.rules)).get("folder"))
+                self.read_failed(st, job, r, (getattr(self.reader, "cfg", None) or D.settings(self.rules)).get("folder"),
+                                 self.reader.answered(job, r))
             elif r == "estimate only":                    # priced, not sent: the person approves the cost first
                 st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url'] or job['where']})")
             else:

@@ -1823,6 +1823,24 @@ def _after_mpn(stem, key):
     return stem[i:]
 
 
+def _name_head(stem):
+    """A file-name stem before the word or symbol that follows its letters or digits -> (head, tail):
+    'LTM4671 中文资料' -> ('LTM4671 ', '中文资料'), 'KSD301-85℉' -> ('KSD301-85', '℉'), '蜂鸣器' -> ('蜂鸣器', '')."""
+    last = ""
+    for i, c in enumerate(stem):
+        if _word(c) and last and not _word(last):
+            return stem[:i], stem[i:]
+        last = c if _mpn_key(c) else last
+    return stem, ""
+
+
+def _sibling(part, s):
+    """Whether the part number goes on with a word or symbol after the characters that spell `s` (HX-2.54-4P直针 after
+    HX2544P): a name with a word or symbol of its own there is another variant's (HX-2.54-4P弯针.pdf), no family's."""
+    after = _after_mpn(part, s)
+    return after is None or _word(next((c for c in after if _mpn_key(c)), "-"))
+
+
 def folder_name(folder):
     """The [datasheet] folder's own name, for text that is kept (never its path)."""
     return Path(str(folder or "").strip()).name or "?"
@@ -1874,24 +1892,38 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     other name is another part's or a family's file and is said so in `how` (its read gets a review item): the longest
     name the MPN starts with (LTM4671.pdf for LTM4671IY#PBF; at least 4 characters and half the MPN) is a "family"
     datasheet; a name that goes on with more letters or digits (BAT54S.pdf for BAT54, LM317HV.pdf for LM317) is
-    "other", another part number. kinds: the matches to look for (Reader.job tries the links between them). For
-    makers whose sites refuse downloads from scripts (analog.com, Nexperia). `why` never holds the folder's path."""
+    "other", another part number. A word or symbol before or after a part number in letters and digits is a separator
+    (数据手册-TP4056.pdf, LTM4671 中文资料.pdf), never where the part number itself goes on with another (HX-2.54-4P弯针.pdf
+    is no file of HX-2.54-4P直针's). <MPN>.pdf beats a longer exact name (ESP32-S3-WROOM-1.pdf). kinds: the matches to
+    look for (Reader.job tries the links between them). For makers whose sites refuse downloads from scripts
+    (analog.com, Nexperia). `why` never holds the folder's path."""
     files, why = _folder_pdfs(folder)
     if files is None:
         return None, why
     key = _mpn_key(part)
     if not key:
         return None, "no MPN"
-    exact, prefix, other = None, None, None
+    part = unicodedata.normalize("NFC", str(part))
+    latin = not _word(next((c for c in part if _mpn_key(c)), "-"))   # the part number starts with a letter or digit
+    own, exact, prefix, other, plen = None, None, None, None, 0
     for f in files:
         stem = unicodedata.normalize("NFC", f.stem)  # (macOS saves names decomposed: LM318A + U+0301 is LM318Á)
-        s, rest = _mpn_key("".join(" " if _word(c) else c for c in stem)), _after_mpn(stem, key)
-        if rest is not None and not _goes_on(stem, rest):
-            exact = exact or f                        # BAT54.pdf, BAT54_datasheet.pdf, bat54-rev3.pdf
+        if latin:                                     # 数据手册-TP4056, 【原厂】NE555: the words before it go
+            stem = stem[next((i for i, c in enumerate(stem) if _mpn_key(c) and not _word(c)), len(stem)):]
+        rest = _after_mpn(stem, key)
+        if rest is not None and not _mpn_key(rest):
+            own = own or f                            # BAT54.pdf, bat54_.pdf: the name the review asks for
+        elif rest is not None and not _goes_on(stem, rest):
+            exact = exact or f                        # BAT54_datasheet.pdf, bat54-rev3.pdf, TP4056中文资料.pdf
         elif rest is not None:
             other = other or f                        # BAT54S.pdf: another part number that starts like this one
-        elif len(s) >= 4 and 2 * len(s) >= len(key) and key.startswith(s) and (prefix is None or len(s) > len(_mpn_key(prefix.stem))):
-            prefix = f
+        else:
+            head, tail = _name_head(stem)             # LTM4671 中文资料 -> LTM4671 (its words are no part number)
+            s = _mpn_key(head)
+            if (4 <= len(s) < len(key) and 2 * len(s) >= len(key) and key.startswith(s) and len(s) > plen
+                    and not (tail and _sibling(part, s))):
+                prefix, plen = f, len(s)
+    exact = own or exact
     if exact and "exact" in kinds:
         return exact, f"{exact.name} in the datasheet folder"
     if prefix and "family" in kinds:
@@ -1956,11 +1988,13 @@ API_FETCH_FAILED = re.compile(r"could not (be )?(fetch|download)|unable to (fetc
                               r"|unable to connect to the remote server", re.I)
 
 
-def nothing_back(e):
-    """An error before any answer came back (the API's HTTP error, no connection, over the cost cap, a batch not back
-    yet): it says nothing about the PDF, so an earlier run's advice for it stands."""
-    return isinstance(e, (APIError, requests.exceptions.RequestException)) or bool(
-        re.search(r"nothing sent|^waiting in Message Batch", str(e)))
+def came_back(msg):
+    """Whether `msg` is the model's answer, so the API fetched the link: not the failed answer Reader._ask writes for a
+    request refused before or without one (rails, or an endpoint that cannot fetch links, giving up with no usage)."""
+    if not msg:
+        return False
+    usage = [v for v in (msg.get("usage") or {}).values() if isinstance(v, (int, float))]
+    return not (msg.get("ecadlib") or {}).get("error") or any(usage)
 
 
 def refused_line(job, error, folder=None):
@@ -2794,6 +2828,14 @@ class Reader:
                 return None
         return self._result(job, self.results.get(job["key"]))
 
+    def answered(self, job, error=None):
+        """Whether the API has answered this read, in this run or an earlier one: an answer kept under the job's key,
+        or one that came back declined or not readable (`error.answered`), so it fetched the link. An error before any
+        answer (the API's HTTP error, no connection, over the cost cap, an endpoint that cannot fetch links, a batch
+        request expired or errored, a batch not back yet or gone) says nothing about the link."""
+        rec = self.results.get(job["key"])
+        return bool(getattr(error, "answered", False)) or (rec is not None and not rec.get("not_answered"))
+
     def _pages_sent(self, job):
         return len(job["offset"]) if isinstance(job.get("offset"), list) else None
 
@@ -2823,8 +2865,10 @@ class Reader:
             nx = step("failed")
             self.ledger.add(DR.attempt_record(job["part"], job.get("name"), model, msg, via, self._pages_sent(job),
                                               job.get("n_pages"), "error", label(nx), e))
+            e.answered = came_back(msg)               # (Reader.answered)
             if nx:
-                self.results.put(job["key"], dict(base, error=str(e)[:300], usage=(msg or {}).get("usage")))
+                self.results.put(job["key"], dict(base, error=str(e)[:300], usage=(msg or {}).get("usage"),
+                                                  **({} if e.answered else {"not_answered": True})))
             raise
         rec = dict(base, message=msg)
         self.results.put(job["key"], rec)
@@ -3382,7 +3426,7 @@ class Reader:
                 self._save_state(st)
                 _IN_FLIGHT.discard(mark["fingerprint"])
                 self.say(f"  datasheet batch {b['id']}: {len(reqs)} parts submitted")
-            errors = {}
+            errors, came = {}, set()
             t0 = time.time()
             for b in st["batches"]:
                 if b.get("collected") or not set(b["requests"].values()) & {j["key"] for j in jobs}:
@@ -3441,6 +3485,7 @@ class Reader:
                                         r["message"], f"batch {b['id']}")
                         except DatasheetError as e:
                             errors[key] = f"{e}"
+                            came.add(key)             # (an answer, declined or not readable: Reader.answered)
                     elif r.get("type") == "errored":
                         et, em = _err_of(r.get("error"))
                         errors[key] = f"batch request errored: {et}: {em}"
@@ -3481,6 +3526,7 @@ class Reader:
                     out[j["key"]] = e
             elif j["key"] in errors:
                 out[j["key"]] = DatasheetError(errors[j["key"]])
+                out[j["key"]].answered = j["key"] in came
             else:
                 bid = next((b["id"] for b in st["batches"] if j["key"] in b["requests"].values() and not b.get("collected")), "")
                 out[j["key"]] = f"pending {bid}".strip()
