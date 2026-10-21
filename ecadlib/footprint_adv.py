@@ -512,6 +512,16 @@ def tht_pad_size(pads, pitch=None):
                 w = lim
             elif dy > dx and lim < full:
                 h = lim
+            # a grid (two rows at the pitch, S28B-PHDSS 2 x 14 at 2 mm, live benchmark 2026-10-21): the next row is as
+            # close as the next pin, so the pad is held back that way too (KiCad: 1.2 mm round, not a 1.2 x 1.7 oval)
+            across = min((v[1] for v in near if v[0] < 1e-6), default=None) if dx >= dy else \
+                min((v[0] for v in near if v[1] < 1e-6), default=None)
+            if across:
+                lim2 = _r4(max(across - TH_PAD_GAP, d + 2 * TH_RING_MIN))
+                if dx >= dy and lim2 < h:
+                    h = lim2
+                elif dy > dx and lim2 < w:
+                    w = lim2
         if round((p.get("rot") or 0) / 90) % 2:            # w / h are in the pad's own frame: KiCad turns the pad by rot
             w, h = h, w
         p["w"], p["h"] = w, h
@@ -1058,6 +1068,7 @@ def table_geometry(spec):
     if errs:
         raise ValueError("the pad table doesn't add up: " + "; ".join(p["message"] for p in errs))
     t = spec["pad_table"]
+    turned, body = _pin1_upper_left(pads, body, keepouts)
     has_th = any(p["kind"] == "thru_hole" and p["role"] in PIN_ROLES for p in pads)
     if t.get("footprint_origin", "pin1" if has_th else "center") == "pin1":
         p1 = next((p for p in pads if p["num"] in ("1", "A1") and p["role"] in PIN_ROLES), None)
@@ -1072,9 +1083,35 @@ def table_geometry(spec):
             body = (_r4(body[0] - ox), _r4(body[1] - oy), _r4(body[2] - ox), _r4(body[3] - oy))
         for k in keepouts:
             k["pts"] = [(_r4(x - ox), _r4(y - oy)) for x, y in k["pts"]]
-    notes = []
+    notes = [turned] if turned else []
     pads = _finish_pads(pads, notes)
     return pads, body, keepouts, info, problems, notes
+
+
+def _pin1_upper_left(pads, body, keepouts):
+    """Turn a pad table whose pin 1 lies right of the pins' centre and not above it half a turn about that centre, so
+    pin 1 sits upper left (IPC-7351B zero orientation, KLC F1.2). A half turn changes no connection, only the angle
+    the part is placed at. S28B-PHDSS (live benchmark 2026-10-21): JST draws its side-entry layout with No. 1 at
+    the right end of the lower row; KiCad, like any IPC library, has it upper left. Returns (note or None, body);
+    pads and keepouts are changed in place."""
+    pins = [p for p in pads if p["role"] in PIN_ROLES]
+    p1 = next((p for p in pins if p["num"] in ("1", "A1")), None)
+    if p1 is None or len(pins) < 2:
+        return None, body
+    xs, ys = [p["x"] for p in pins], [p["y"] for p in pins]
+    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    if not (p1["x"] > cx + 1e-6 and p1["y"] >= cy - 1e-6):     # y grows downwards here (KiCad)
+        return None, body
+    for p in pads:
+        p["x"], p["y"] = _r4(2 * cx - p["x"]), _r4(2 * cy - p["y"])
+        if p.get("poly"):
+            p["poly"] = [(_r4(2 * cx - x), _r4(2 * cy - y)) for x, y in p["poly"]]
+    if body:
+        body = (_r4(2 * cx - body[2]), _r4(2 * cy - body[3]), _r4(2 * cx - body[0]), _r4(2 * cy - body[1]))
+    for k in keepouts:
+        k["pts"] = [(_r4(2 * cx - x), _r4(2 * cy - y)) for x, y in k["pts"]]
+    return "turned half a turn so pin 1 is upper left (IPC-7351B zero orientation); no connection changes", body
+
 
 
 def _table(spec, density):

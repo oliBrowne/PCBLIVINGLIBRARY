@@ -79,6 +79,9 @@ WORDS = {"ENABLE": "EN", "GROUND": "GND", "INPUT": "IN", "OUTPUT": "OUT", "CATHO
 OVERLINE = dict.fromkeys(map(ord, "\u0305\u0304"))     # a combining overline / macron: the bar PDF text gives (AM26LS31CN G̅)
 
 
+NC_RX = re.compile(r"^(NC|DNC|N/C)$")                   # norm_name() of a no-connect pin's name
+
+
 def norm_name(s):
     s = str(s or "").translate(OVERLINE).upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
     s = s.replace("~", "")
@@ -175,6 +178,10 @@ def score_symbol(mine_pins, ref_pins, tol=None):
         return {"symbol_pins": _f(False, "no symbol")}
     a, b = dict((str(n), s) for n, s in mine_pins), dict((str(n), s) for n, s in ref_pins)
     missing, extra = sorted(set(b) - set(a), key=_natural), sorted(set(a) - set(b), key=_natural)
+    # a no-connect pin the datasheet lists and KiCad's symbol leaves out is not a wrong pin: KiCad's symbols keep NC
+    # pins on 54 of the 331 kicad-v1 parts and drop them on others (LTC7810: 15 NC pins, live benchmark 2026-10-21)
+    nc = [n for n in extra if NC_RX.match(norm_name(a[n]) or "")]
+    extra = [n for n in extra if n not in nc]
     names = {}
     for n, s in mine_pins:                            # one pin number with two different names: two pins on one pad
         names.setdefault(str(n), set()).add(norm_name(s))
@@ -182,7 +189,7 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     out = {"symbol_pins": _f(not missing and not extra and not twice, f"ours {len(a)} pins, KiCad {len(b)}"
                              + (f"; missing {missing[:8]}" if missing else "") + (f"; extra {extra[:8]}" if extra else "")
                              + (f"; pin number used twice {twice[:8]}" if twice else ""),
-                             ours=len(a), ref=len(b))}
+                             ours=len(a), ref=len(b), **({"nc_not_in_kicad": nc} if nc else {}))}
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
         same = [n for n, s in named.items() if norm_name(a.get(n)) == s]
@@ -251,6 +258,40 @@ def only_maker_land(fields, ml):
     if not failed or not failed <= {"pads", "courtyard"}:
         return False
     return set((fields.get("pads") or {}).get("bad_pads") or []) <= set(ml["pads"])
+
+
+BODY_EXCESS_MAX = 0.6     # IPC-7351B courtyard excess is 0.1-0.5 mm, plus rounding out to 0.01 mm
+
+
+def datasheet_body(fields, mine, spec):
+    """A KiCad miss on the courtyard alone, where ours is the IPC courtyard around our pads and the body the datasheet
+    gives (centred on the pads, either way round). KiCad sizes some courtyards from a nominal body per pin count
+    (every DIP-16 is 20.32 mm long, every DIP-28 35.56 mm), which can be smaller or larger than the real part.
+    -> None when it does not apply, else {"body": [length, width] used}."""
+    failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
+    if failed != {"courtyard"} or not mine or not mine.get("courtyard") or not spec:
+        return None
+    def rng(k):
+        d = spec.get(k)
+        v = [d.get(x) for x in ("min", "nom", "max")] if isinstance(d, dict) else []
+        v = [x for x in v if isinstance(x, (int, float))]
+        return (min(v), (d["nom"] if isinstance(d.get("nom"), (int, float)) else (min(v) + max(v)) / 2), max(v)) if v else None
+    L, W = rng("body_length"), rng("body_width")
+    pads = [p for p in mine["pads"] if not p[5] or p[0]]
+    if not (L and W and pads):
+        return None
+    x0, y0 = min(p[1] - p[3] / 2 for p in pads), min(p[2] - p[4] / 2 for p in pads)
+    x1, y1 = max(p[1] + p[3] / 2 for p in pads), max(p[2] + p[4] / 2 for p in pads)
+    cx, cy = _centre(pads)
+    ca = mine["courtyard"]
+    for bx, by in ((L, W), (W, L)):
+        need = lambda i: [min(x0, cx - bx[i] / 2), min(y0, cy - by[i] / 2), max(x1, cx + bx[i] / 2), max(y1, cy + by[i] / 2)]
+        hi, nom = need(2), need(1)               # must hold the largest body; may grow past the nominal by the excess
+        out = [hi[0] - ca[0], hi[1] - ca[1], ca[2] - hi[2], ca[3] - hi[3]]
+        over = [nom[0] - ca[0], nom[1] - ca[1], ca[2] - nom[2], ca[3] - nom[3]]
+        if min(out) >= -1e-6 and max(over) <= BODY_EXCESS_MAX + 1e-6:
+            return {"body": [bx[1], by[1]]}
+    return None
 
 
 def verdict(fields):

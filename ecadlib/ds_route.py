@@ -38,6 +38,9 @@ FAMILY = {  # package family words -> a canonical family (SOIC-8 / SO8 / SOP-8 a
     "SIP": "SIP", "LGA": "LGA"}
 NEEDS_NUM = {"SO", "SC", "TO", "DO", "SOT", "SOD", "SIP", "SMA", "SMB", "SMC"}   # too common as plain words
 _FAM_RX = re.compile(r"(?<![A-Z0-9])(" + "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(\s?-\s?|\s)?(\d{1,3})?(?:\s?-\s?(\d{1,3}))?(?![0-9])")
+_COUNT_FAM_RX = re.compile(r"(?<![A-Z0-9.])(\d{1,3})\s?-?\s?(?:PIN|LEAD|BALL|TERMINAL)S?\s+(" +
+                           "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(?![A-Z])")
+CONTINUED = re.compile(r"\bcontinued\b|\(cont(?:\.|inued)?\)", re.I)
 THREE_PIN = {"SOT23", "SOT323", "SOT523", "SOT416", "SOT346", "SC59", "SC70", "SC75", "SC89", "TO92", "SOT89"}
 OUTLINE_FAMS = {"SOT", "SOD", "SC", "TO", "DO", "TO252", "TO263"}             # first number names the outline, not pins
 CATS = {
@@ -69,10 +72,18 @@ def package_tokens(text):
     without a number ('WSON') gives the family alone, unless the text also numbers it ("LQFP144, 144-lead LQFP" is
     QFP144 only: a family-only token would match every other LQFP)."""
     out = set()
-    for m in _FAM_RX.finditer(norm_text(text).upper()):
+    up = norm_text(text).upper()
+    counted = {}                                      # "64-PIN LQFP": the count before the family (SAM E70 bookmarks)
+    for m in _COUNT_FAM_RX.finditer(up):
+        counted[m.start(2)] = m.group(1)
+    for m in _FAM_RX.finditer(up):
         fam, sep, n1 = FAMILY[m.group(1)], m.group(2) or "", m.group(3)
+        if fam in OUTLINE_FAMS:                       # SOT's number names the outline, not the pin count
+            counted.pop(m.start(1), None)
         if fam in NEEDS_NUM and (not n1 or sep.strip() == "" and sep):   # "TO-220", "SO8"; never "to 85" or "SO 2"
-            continue
+            if n1 or not counted.get(m.start(1)):
+                continue
+        n1 = n1 or counted.get(m.start(1))
         out.add(fam + (n1 or ""))
     return {t for t in out if re.search(r"\d$", t) or not any(o != t and re.sub(r"\d+$", "", o) == t for o in out)}
 
@@ -504,6 +515,29 @@ def pick_pages(texts, budget, part=None, package=None, marks=None):
         j = best["drawing"] + 1
         if j < len(rows) and (rows[j]["drawing"] or rows[j]["land"] or rows[j]["blank"]) and not rows[j]["other"]:
             add(j, "drawing (continued)")
+            # image-only pages right after it: TI's land pattern page for the same package has no text layer
+            # (TLC5951DAP p51, "LAND PATTERN DATA - DAP", live benchmark 2026-10-21: never sent, so the thermal land
+            # was never read); up to two more
+            for k in (j + 1, j + 2):
+                if k < len(rows) and rows[k]["blank"] and not rows[k]["other"]:
+                    add(k, "drawing (continued, no text layer)")
+                else:
+                    break
+    for p in sorted({best.get("pinout"), *[q - 1 for q in keep if "pinout (this package)" in why.get(q, [])]} - {None}):
+        if not rows[p]["own"]:
+            continue
+        # a pin table that runs over the following pages ("...continued": SAM E70's 144-pin table, p31-35 after the
+        # p29 figure, live benchmark 2026-10-21: only the figure was sent, the read had no pins); another package's
+        # page between (the BGA outline) is stepped over once
+        skipped = False
+        for j in range(p + 1, min(len(rows), p + 9)):
+            t = norm_text(texts[j])
+            if rows[j]["other"] and not skipped:
+                skipped = True
+                continue
+            if rows[j]["other"] or not (TABLE["pinout"].search(t) or CONTINUED.search(t[:300])):
+                break
+            add(j, "pin table (continued)")
     for i in sorted(range(len(rows)), key=lambda i: (-total(i), i)):
         if total(i) <= 0 or len(keep) >= budget:
             break
