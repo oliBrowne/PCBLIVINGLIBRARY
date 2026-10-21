@@ -1603,6 +1603,22 @@ def ordering_check(pkg, facts, review):
         review.append(f"pin_count {n} differs from {src}: check the package variant")
 
 
+DUAL_ROW_NAME = re.compile(r"^[A-Z0-9]{0,3}(?:DFN|SON)(?![A-Z])", re.I)   # DFN, WDFN, UDFN, TDFN, SON, VSON, WSON, X2SON
+
+
+def two_sided(spec, review):
+    """A DFN / SON read with no pin split: the leads are on two sides (NCP4308AMT WDFN8 2x2, benchmark 2026-10-21:
+    built 2 per side round all four sides by the QFN default). Sets pins_left_right = pin_count / 2 and
+    pins_top_bottom = 0 with a review line; a split the read gave is kept."""
+    n = spec.get("pin_count")
+    if spec.get("package_type") != "qfn" or not isinstance(n, int) or n % 2 or spec.get("pin_positions") \
+            or "pins_left_right" in spec or "pins_top_bottom" in spec or not DUAL_ROW_NAME.match(str(spec.get("name") or "")):
+        return
+    spec["pins_left_right"], spec["pins_top_bottom"] = n // 2, 0
+    review.append(f"pins_left_right / pins_top_bottom were left blank: {n // 2} per side on two sides, as "
+                  f"{spec['name']} is a two-sided package; check against the drawing")
+
+
 def _pin_count_from(spec, ext):
     """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
     name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "").
@@ -1707,6 +1723,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
         if n:
             spec["pin_count"] = n
             review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
+    two_sided(spec, review)
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):

@@ -215,3 +215,40 @@ def test_the_makers_own_thermal_pad_is_part_of_its_land():
            "pitch": {"ok": True, "ref": 0.65}}
     assert S.only_maker_land(bad, ml)
     assert not S.only_maker_land(bad, dict(ml, ep_land=[]))                     # a pad the land doesn't give: a miss
+
+
+def test_a_pad_table_body_box_is_the_datasheet_body():
+    # SM13B-GHS-TB: every pad right; ours is around JST's 22.00 mm body (B for 13 circuits), KiCad's stops at 20.7 mm
+    mine = {"pads": [["MP", -9.35, 1.35, 1.0, 2.7, 0], ["MP", 9.35, 1.35, 1.0, 2.7, 0]]
+            + [[str(i + 1), -7.5 + 1.25 * i, -1.85, 0.6, 1.7, 0] for i in range(13)], "courtyard": [-11.5, -3.2, 11.5, 3.2]}
+    ref = dict(mine, courtyard=[-10.35, -3.2, 10.35, 3.2])
+    spec = {"pad_table": {"unit": "mm", "body": {"x1": -3.5, "y1": 0.25, "x2": 18.5, "y2": 4.5}}}
+    f = S.score_footprint(mine, ref)
+    assert S.datasheet_body(f, mine, spec)["body"] == [22.0, 4.25]
+    assert S.datasheet_body(f, mine, {"pad_table": {"unit": "mm", "body": {"x1": -2.0, "y1": 0.25, "x2": 17.0, "y2": 4.5}}}) is None
+
+
+def test_an_exposed_pad_pin_on_another_pins_net_is_not_a_wrong_pin():
+    # PCA9557BS: NXP numbers the centre pad 17 (VSS, as pin 6); KiCad's symbol has 16 pins
+    ref = [(str(i), n) for i, n in enumerate(["A0", "A1", "A2", "IO0", "IO1", "VSS"], 1)]
+    f = S.score_symbol(ref + [("7", "VSS")], ref)["symbol_pins"]
+    assert f["ok"] and f["ep_not_in_kicad"] == ["7"]
+    assert not S.score_symbol(ref + [("7", "PAD")], ref)["symbol_pins"]["ok"]     # a net of its own: a real pin
+
+
+def test_a_dfn_read_without_a_pin_split_is_built_on_two_sides():
+    # NCP4308AMT: WDFN8 2x2, pins_left_right / pins_top_bottom left blank; the QFN default put 2 pins on each of 4 sides
+    spec = {"name": "WDFN-8_2x2mm_P0.5mm", "package_type": "qfn", "pitch": 0.5, "body_length": {"nom": 2.0},
+            "body_width": {"nom": 2.0}, "terminal_length": {"min": 0.4, "max": 0.6}, "terminal_width": {"min": 0.2, "max": 0.3},
+            "height_max": 0.8, "pin_count": 8}
+    review = []
+    D.two_sided(spec, review)
+    assert (spec["pins_left_right"], spec["pins_top_bottom"]) == (4, 0) and "two-sided" in review[0]
+    p = _pads(F.build(spec)[0])
+    assert p["1"][0] < 0 and p["4"][0] < 0 and p["5"][0] > 0 and p["8"][0] > 0
+    assert p["1"][1] < p["2"][1] < p["3"][1] < p["4"][1]
+    for kept in ({"name": "QFN-16_3x3mm", "package_type": "qfn", "pin_count": 16},
+                 {"name": "DFN-8", "package_type": "qfn", "pin_count": 8, "pins_top_bottom": 2}):
+        before = dict(kept)
+        D.two_sided(kept, [])
+        assert kept == before

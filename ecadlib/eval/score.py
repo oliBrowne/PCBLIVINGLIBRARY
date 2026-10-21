@@ -182,6 +182,12 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     # pins on 54 of the 331 kicad-v1 parts and drop them on others (LTC7810: 15 NC pins, live benchmark 2026-10-21)
     nc = [n for n in extra if NC_RX.match(norm_name(a[n]) or "")]
     extra = [n for n in extra if n not in nc]
+    # the exposed pad as one more pin, on the net of a pin KiCad has (PCA9557BS: 17 VSS, with VSS on 6): KiCad's
+    # symbol leaves the pad out because the pad joins that pin's net; a pad on a net of its own would be a real pin
+    top = max((int(n) for n in b if n.isdecimal()), default=0)
+    ep = [n for n in extra if n.isdecimal() and int(n) > top and norm_name(a[n])
+          and any(norm_name(a.get(m)) == norm_name(a[n]) for m in b)]
+    extra = [n for n in extra if n not in ep]
     names = {}
     for n, s in mine_pins:                            # one pin number with two different names: two pins on one pad
         names.setdefault(str(n), set()).add(norm_name(s))
@@ -189,7 +195,8 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     out = {"symbol_pins": _f(not missing and not extra and not twice, f"ours {len(a)} pins, KiCad {len(b)}"
                              + (f"; missing {missing[:8]}" if missing else "") + (f"; extra {extra[:8]}" if extra else "")
                              + (f"; pin number used twice {twice[:8]}" if twice else ""),
-                             ours=len(a), ref=len(b), **({"nc_not_in_kicad": nc} if nc else {}))}
+                             ours=len(a), ref=len(b), **({"nc_not_in_kicad": nc} if nc else {}),
+                             **({"ep_not_in_kicad": ep} if ep else {}))}
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
         same = [n for n, s in named.items() if norm_name(a.get(n)) == s]
@@ -277,7 +284,7 @@ BODY_EXCESS_MAX = 0.6     # IPC-7351B courtyard excess is 0.1-0.5 mm, plus round
 
 def datasheet_body(fields, mine, spec):
     """A KiCad miss on the courtyard alone, where ours is the IPC courtyard around our pads and the body the datasheet
-    gives (centred on the pads, either way round). KiCad sizes some courtyards from a nominal body per pin count
+    gives (centred on the pads, either way round), from body_length / body_width or a pad table's body box. KiCad sizes some courtyards from a nominal body per pin count
     (every DIP-16 is 20.32 mm long, every DIP-28 35.56 mm), which can be smaller or larger than the real part.
     -> None when it does not apply, else {"body": [length, width] used}."""
     failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
@@ -289,6 +296,11 @@ def datasheet_body(fields, mine, spec):
         v = [x for x in v if isinstance(x, (int, float))]
         return (min(v), (d["nom"] if isinstance(d.get("nom"), (int, float)) else (min(v) + max(v)) / 2), max(v)) if v else None
     L, W = rng("body_length"), rng("body_width")
+    pt = spec.get("pad_table") or {}
+    bd = pt.get("body") or {}
+    if not (L and W) and pt.get("unit", "mm") == "mm" and all(isinstance(bd.get(k), (int, float)) for k in ("x1", "x2", "y1", "y2")):
+        L = (abs(bd["x2"] - bd["x1"]),) * 3      # a pad table's body box (SM13B-GHS-TB: JST's B = 22.00 mm)
+        W = (abs(bd["y2"] - bd["y1"]),) * 3
     pads = [p for p in mine["pads"] if not p[5] or p[0]]
     if not (L and W and pads):
         return None
