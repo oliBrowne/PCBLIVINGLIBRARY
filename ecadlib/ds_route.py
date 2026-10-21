@@ -655,10 +655,21 @@ FAILED = re.compile(r"^(schema:|self-check:|symbol:|footprint_gen\.build failed|
                     r"dual-row|lead_span min|^exposed_pad\.\w+ [\d.]+ >=|under \d+% of", re.I)
 
 
+# unresolved fields the footprint never reads (package_schema.json: height_max is "used for 3D/descr only"): a review
+# note, never a reason to send more pages or a better model
+ADVISORY = ("height_max", "height", "courtyard_excess")
+
+
+def unresolved_field(u):
+    """'lead_span (not printed)' -> 'lead_span': the field an unresolved entry names."""
+    m = re.match(r"\s*([A-Za-z_.]+)", str(u))
+    return m.group(1) if m else ""
+
+
 def assess(res):
     """-> (ok | incomplete | failed, reasons) from datasheet.process()'s spec and review list."""
     rev = list(res.get("needs_review") or [])
-    unres = list((res.get("spec") or {}).get("unresolved") or [])
+    unres = [u for u in (res.get("spec") or {}).get("unresolved") or [] if unresolved_field(u) not in ADVISORY]
     inc = [f"unresolved: {', '.join(unres)}"] if unres else []
     inc += [r for r in rev if INCOMPLETE.search(r)]
     bad = [r for r in rev if FAILED.search(r) and r not in inc]
@@ -820,15 +831,15 @@ def review_lines(out):
 
 
 # ---------------------------------------------------------------- `ecadlib datasheet pages`: what a read would send
-def page_texts(data):
-    """Text of every page (pypdf), or None when there is no pypdf or the PDF can't be read."""
+def page_texts(data, limit=None):
+    """Text of every page (the first `limit` only), or None when there is no pypdf or the PDF can't be read."""
     try:
         import logging, pypdf
         logging.getLogger("pypdf").setLevel(logging.ERROR)
         rd = pypdf.PdfReader(io.BytesIO(data))
         if rd.is_encrypted and not rd.decrypt(""):    # a user password: the text can't be read here
             return None
-        pages = list(rd.pages)
+        pages = list(rd.pages)[:limit]
     except Exception:
         return None
     out = []

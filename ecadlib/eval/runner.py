@@ -95,8 +95,11 @@ def publish(report, out, title=None):
     m, s = rep["meta"], rep["summary"]
     o, pm = s["overall"], (s.get("pad_match") or {}).get("built") or {}
     ds = o.get("right", o["pass"]) - o["pass"]
+    hl = s.get("headline") or {}
     head = (f"{m['model']}, {o['cases']} real parts: {o.get('right', o['pass'])} right ({_pct(o.get('right_rate', o['rate']))})"
             + (f", {o['pass']} of them matching KiCad exactly and {ds} the datasheet where KiCad differs" if ds else "")
+            + (f"; of KiCad's matches {hl['from_datasheet']} read from a datasheet, {hl['from_standard']} from the "
+               "standard-package table" if hl.get("right") else "")
             + (f", pad match {_pct(pm['rate'])} over {pm['parts']} footprints built" if pm.get("of") else "")
             + (f", {_usd(o['usd_per_part'])} per part" if o.get("usd") else "")
             + (f". {o['cases'] - o['pass'] - ds} failures, by type: " + ", ".join(f"{k} {len(v)}" for k, v in s["failures"].items()
@@ -155,8 +158,8 @@ def failure_type(row, mine, spec):
         return "datasheet_body"
     f = row["fields"]
     failed = {k for k, v in f.items() if not v["ok"] and k not in S.INFO_ONLY}
-    if failed <= {"symbol_pins", "symbol_names"}:
-        return "symbol"
+    if failed <= {"symbol_pins", "symbol_names"}:            # SM6T100A (10-19): the PDF never reached the model
+        return "no_pdf" if any(NO_DATASHEET.search(str(t)) for t in row.get("tried") or []) else "symbol"
     pa, pb = (f.get("pitch") or {}).get("ours"), (f.get("pitch") or {}).get("ref")
     if "pitch" in failed and pa and pb and any(abs(pa / pb - r) < 0.03 * r for r in (25.4, 1 / 25.4, 39.37, 1 / 39.37)):
         return "wrong_unit"
@@ -203,6 +206,12 @@ def apply_errata(sc, mine_pins, errata, ref_pins=None, tol=None):
         sc["pass"] = S.verdict(sc["fields"])
         sc["errors"] = [x for x in sc["errors"] if x.split(":")[0] not in fixed]
     return fixed
+
+
+def reference_for(case, errata):
+    """The case's KiCad reference footprint, or the one its erratum names when KiCad's is another variant of the package
+    (PCA9557BS: the set's 3 x 3 mm HVQFN-16 for a 4 x 4 mm SOT629-1 part). Every field is then scored against it."""
+    return ((errata.get(case["mpn"]) or {}).get("reference") or {}).get("footprint") or case["footprint"]
 
 
 def load_set(name):
@@ -275,7 +284,7 @@ class EvalReader(D.Reader):
             self.key = k
         return {"input_tokens": r["input_tokens"], "output_tokens": r["output_tokens"], "usd": r["usd"], "how": r["how"]}
 
-    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None):
+    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None):
         if self.replay:
             f = self.replay / f"{_safe(part)}.json"
             if not f.exists():
@@ -286,7 +295,7 @@ class EvalReader(D.Reader):
                    "where": j["where"], "offset": j["offset"], "headers": {}, "body": {"max_tokens": D.MAX_TOKENS},
                    "prov": j["prov"], "recording": rec, "fp_needed": fp_needed}
         else:
-            job = super().job(part, urls, package, pages, name, fp_needed)
+            job = super().job(part, urls, package, pages, name, fp_needed, mpn)
         job["estimate"] = (job.get("recording") or {}).get("estimate") or self._estimate(job)
         self.used.setdefault(part, {"estimate": job["estimate"]})
         pv = job.get("prov") or {}                     # the PDF read: pinned by its SHA-256 (<set>.pins.json)
@@ -312,6 +321,10 @@ class EvalReader(D.Reader):
             if not got:
                 raise CC.Unavailable("no recorded second read")
             msg, via = got["message"], "replay"
+        elif self.cached_only and "message" not in (self.results.get_check(key) or {}):
+            # never "unchecked": unchecked passes, so a part the live run held could pass for free (review 2026-10-20 #5)
+            raise D.DatasheetError("not sent (--cached-only: saved answers only): the cross-check's second read was not "
+                                   "saved, so the part is not scored; a live run reads it")
         else:
             msg, via = super().check_message(job, model, headers, body, key, pages_sent)
         from .. import ds_route as DR
@@ -395,6 +408,8 @@ class EvalReader(D.Reader):
         msg = rec["message"]
         u = self.used.setdefault(job["part"], {"estimate": job.get("estimate")})
         u.setdefault("via", rec.get("via") or "live")
+        if (job.get("prov") or {}).get("url"):        # the link read: the next one when the API could not fetch the first
+            u.setdefault("datasheet", {})["url"] = job["prov"]["url"]
         u["batch"] = str(rec.get("via") or "").startswith("batch") or bool((job.get("recording") or {}).get("batch"))
         from .. import ds_route as DR                 # priced as the served model when its price is known
         u.update(usage=msg.get("usage"), model=DR.billed_model(rec.get("model") or job.get("model") or self.model, msg))
@@ -550,7 +565,13 @@ def summarize(rows):
     for r in rows:
         if r.get("prompt_version"):
             pv[r["prompt_version"]] = pv.get(r["prompt_version"], 0) + 1
-    return {"cross_check": dict(sorted(cc.items())), "overall": agg(rows), "maker_land": maker, "pad_match": pm,
+    right = [r for r in rows if r["pass"]]            # the standard table is KiCad's own pad data: it matches by construction
+    head = {"right": len(right), "from_datasheet": sum(r["source"] == "datasheet" for r in right),
+            "from_standard": sum(r["source"] == "standard" for r in right),
+            "datasheet_built": sum(r["source"] == "datasheet" for r in rows),
+            "unchecked_passes": sum(r.get("cross_check") == "unchecked" for r in right)}
+    head["other"] = head["right"] - head["from_datasheet"] - head["from_standard"]
+    return {"cross_check": dict(sorted(cc.items())), "overall": agg(rows), "maker_land": maker, "pad_match": pm, "headline": head,
             "failures": dict(sorted(fails.items(), key=lambda kv: -len(kv[1]))), "datasheet_pins": dict(sorted(pins.items())),
             "answer_prompt_versions": pv,
             "errata": {r["id"]: r["errata"] for r in rows if r.get("errata")},
@@ -628,19 +649,20 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         mine = FB.numbers((lib / fp).read_text(encoding="utf-8")) if fp and (lib / fp).exists() else None
         sf = (it.get("symbol") or {}).get("file")
         sym_pins = _symbol_pins(lib / sf) if sf and (lib / sf).exists() else None
-        sc = S.score(mine, data["references"][c["footprint"]], sym_pins, c.get("pins"), tol)
+        ref_fp = reference_for(c, erratas)
+        sc = S.score(mine, data["references"][ref_fp], sym_pins, c.get("pins"), tol)
         errata = apply_errata(sc, sym_pins, erratas.get(c["mpn"]), c.get("pins"), tol)
         tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model, not reader.estimate_only)
         src = ((it.get("source") or {}).get("footprint") or "none").split(":")[0]
         used = reader.used.get(c["mpn"]) or {}
         ml = S.maker_land(mine, used.get("spec")) if src == "datasheet" else None
-        ref_pads = len(S.drop_vias(data["references"][c["footprint"]])["pads"])
+        ref_pads = len(S.drop_vias(data["references"][ref_fp])["pads"])
         shared = next((n[len("shared with "):] for n in (it.get("librarian") or {}).get("notes", []) if n.startswith("shared with ")), "")
         files = {}                                    # what this run wrote for the part (consistency between runs)
         for kind, rel in (("kicad_mod", fp), ("pcblib", (it.get("footprint") or {}).get("file")), ("schlib", sf)):
             if rel and (lib / rel).exists():
                 files[kind] = file_fingerprint(lib / rel)
-        rows.append({"id": c["id"], "family": c["family"], "mpn": c["mpn"], "footprint": c["footprint"], "pass": sc["pass"],
+        rows.append({"id": c["id"], "family": c["family"], "mpn": c["mpn"], "footprint": ref_fp, "pass": sc["pass"],
                      "files": files, "cross_check": (it.get("cross_check") or {}).get("status", ""),
                      "source": src, "symbol_source": ((it.get("source") or {}).get("symbol") or "none").split(":")[0],
                      "errors": sc["errors"], "fields": sc["fields"], "maker_land": ml, "errata": errata,
@@ -744,6 +766,15 @@ def report_md(rep):
                    "\"Right by the datasheet\")" if dsr else "") + ". " + pad
                 + (f"{len(bad)} {'part was' if len(bad) == 1 else 'parts were'} wrong: see \"Wrong parts\" below." if bad else "Every part was right."))
         cost = f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part."
+    hl = s.get("headline") or {}
+    if hl.get("right"):
+        head += (f" Of the {hl['right']} that match KiCad: {hl['from_datasheet']} read from a datasheet, {hl['from_standard']} from the "
+                 "standard-package table (KiCad's own pad data, so those match KiCad by construction)"
+                 + (f", {hl['other']} from other sources" if hl.get("other") else "")
+                 + f". {hl['from_datasheet']} of the {hl['datasheet_built']} footprints built from a datasheet match KiCad.")
+        if hl.get("unchecked_passes"):
+            head += (f" {hl['unchecked_passes']} of the passes had no second read (unchecked): the cross-check could not "
+                     "be made, so nothing confirmed those reads.")
     md = [f"# Accuracy: {m['set']} (v{m['set_version']})", "", head.rstrip(), "",
           f"Model {m['model']}, sources {', '.join(m['sources'])}, mode {m['mode']}. {m['cases']} parts in {m['wall_s']} s "
           f"({m['wall_s_per_part']} s per part); {o['tokens_in']} tokens in / {o['tokens_out']} out; " + cost, ""]

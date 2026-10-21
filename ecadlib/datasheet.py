@@ -46,6 +46,7 @@ MM_OBJS = ("pin_positions", "tab", "land")            # numbers the model must g
 # Any other schema key (a family added later: rows, cols, ball_map, pad_table, mount, ...) is copied as given; objects
 # and arrays holding numbers are flagged for review like MM_OBJS. Keys each family must have, beyond its body:
 NEED = {"chip": [], "gullwing": ["pitch", "lead_span", "terminal_width"], "qfn": ["pitch", "terminal_width"],
+        "qfp": ["pitch", "lead_span", "terminal_width"],
         "bga": ["pitch", "rows", "cols", "ball_diameter|land_diameter"], "connector": ["pad_table"], "custom": ["pad_table"]}
 NO_BODY = ("pin_header", "connector", "custom")       # families whose body size is optional in package_schema.json
 MAX_TOKENS = 16000                                    # non-streaming request; thinking counts toward it
@@ -1097,11 +1098,16 @@ def to_spec(pkg, part, datasheet, model, offset, review):
         v = to_mm(k, pkg.get(k), offset, prov, review)
         if v:
             spec[k] = _one_sided(v, k, review)
-    h = to_mm("height_max", pkg.get("height_max"), offset, prov, review)
+    hrev = []                                         # a blank height is not a blank footprint dimension
+    h = to_mm("height_max", pkg.get("height_max"), offset, prov, hrev)
+    review += [r for r in hrev if not r.endswith(": no value printed")]
     if h and "max" in h:
         spec["height_max"] = h["max"]
     elif h:
         unres.append("height_max")
+    if "height_max" not in spec:                      # TLP2361 (2026-10-19) was held "left height_max unresolved"
+        review.append("height_max: height not read; the footprint does not need it (the 3D body uses the family's "
+                      "default height)")
     if pkg.get("exposed_pad"):
         ep = {d: to_mm(f"exposed_pad.{d}", pkg["exposed_pad"][d], offset, prov, review) for d in ("length", "width")}
         spec["exposed_pad"] = {d: _one_sided(v, f"exposed_pad.{d}", review) for d, v in ep.items() if v}
@@ -1133,6 +1139,36 @@ def to_spec(pkg, part, datasheet, model, offset, review):
     if unres:
         spec["unresolved"] = sorted(set(unres))
     return spec, prov
+
+
+def build_blockers(spec):
+    """The keys footprint_gen.build needs that this spec lacks (package_schema.json's allOf; height_max and
+    courtyard_excess are never among them): what a hold must name, whatever the read listed as unresolved."""
+    t = spec.get("package_type")
+    keys = [] if t in NO_BODY else ["body_length", "body_width"]
+    keys += ["terminal_length|inner_span"] if t in ("chip", "molded") else ["terminal_length"] if t in LINEAR_TYPES else []
+    need = list(NEED.get(t, []))
+    if t in ("gullwing", "qfp", "qfn") and not spec.get("pin_positions"):
+        need.insert(0, "pin_count")
+    elif t == "gullwing":                             # listed pads: their offsets are the pitch
+        need.remove("pitch")
+    return [k.replace("|", " or ") for k in keys + need if not any(spec.get(x) is not None for x in k.split("|"))]
+
+
+def no_footprint(spec, error):
+    """The hold line for a read footprint_gen.build could not use (KeyError / TypeError): the field(s) the builder
+    needed first, the read's own unresolved list only as an aside (TLP2361, 2026-10-19: "left height_max unresolved"
+    hid the real blank)."""
+    miss, unres = build_blockers(spec), list(spec.get("unresolved") or [])
+    key = str(error.args[0]) if isinstance(error, KeyError) and error.args else None
+    if key and not any(key in m.split(" or ") for m in miss) and (miss or unres):
+        miss.append(key)
+    if not miss:
+        what = f"{error} blank" if isinstance(error, KeyError) else f"a value the footprint needs unusable ({error})"
+        return f"no footprint: the datasheet read left {what}" + (
+            f" (unresolved in the read: {', '.join(unres)})" if unres else " (and did not list it as unresolved)")
+    return (f"no footprint: the datasheet read left {', '.join(miss)} blank, which the footprint needs"
+            + (f" (unresolved in the read: {', '.join(unres)})" if unres else ""))
 
 
 NO_NET = re.compile(r"^(|~|-|n\.?\s*c\.?|n/c|d\.?n\.?c\.?|n\.?u\.?|nc\d*|no\s*connect.*|reserved|rsvd)$", re.I)
@@ -1295,7 +1331,9 @@ def check_pins(spec, ext, review):
         return
     if rows != n:
         review.append(f"pin count: drawing says {n}, pin table has {rows}")
-    want = {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if spec.get("exposed_pad") else set())
+    listed = {str(p.get("number")) for p in _listed(spec)}          # a depopulated row: its pads' own numbers
+    want = listed if len(listed) == n and not spec.get("exposed_pad") and not spec.get("tab") else \
+        {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if spec.get("exposed_pad") else set())
     key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)
     miss, extra = sorted(want - set(nums), key=key), sorted(set(nums) - want, key=key)
     if miss:
@@ -1354,7 +1392,12 @@ def self_check(spec, ext, review):
     tab = 1 if spec.get("tab") else 0
     # KiCad's names count the leads without the tab (TO-252-2: leads 1 and 3 + tab 2), as footprint_rules._name_rules
     leads = len({str(p.get("number")) for p in _listed(spec)})
-    if f["count"] is not None and n is not None and f["count"] not in (n, n + tab) and not (tab and f["count"] == leads):
+    places = None                                     # a depopulated dual row (SO-6 with 5 pins): the name counts places
+    if leads and e and not tab:
+        offs = [[p["offset"] for p in _listed(spec) if p.get("side") == sd and isinstance(p.get("offset"), (int, float))]
+                for sd in "LR"]
+        places = 2 * max(round((max(o) - min(o)) / e) + 1 if o else 0 for o in offs)
+    if f["count"] is not None and n is not None and f["count"] not in (n, n + tab, places) and not (tab and f["count"] == leads):
         add(f"name {spec['name']} says {f['count']} pins, pin_count is {n}")
     pins = [p["num"] for p in ext.get("pins", [])]
     if n is not None and pins:
@@ -1446,6 +1489,64 @@ def table_check(pkg, tables, offset, review):
                     d[x] = row[x]
                 review.append(f"{k} ({lab}) {', '.join(f'{x} {row[x]:g}' for x in fill)} mm filled from {where}; "
                               "the read left it blank")
+    _fill_left_out(pkg, found, offset, review)
+
+
+def _table_symbols(pkg, rows):
+    """{field: symbol} for the gullwing / QFP dimensions a read left out, by the conventional symbols, where the table
+    names exactly one candidate: lead_span is E beside a body E1 (D beside D1) or HE beside a body E; the foot is L,
+    or Lp where NXP prints both (its L is the whole lead); the lead width b or bp; the seated height A (max)."""
+    lab = re.sub(r"(\s*\(\d*\)?)+$", "", str((pkg.get("body_width") or {}).get("label") or "").strip())
+    base = lab[:-1] if lab.endswith("1") else lab
+    cands = {"lead_span": ([base] if lab.endswith("1") else []) + (["H" + base] if base else []),
+             "terminal_length": ["Lp"] if "Lp" in rows else ["L"], "terminal_width": ["b", "bp"], "height_max": ["A"]}
+    out = {}
+    for k, cs in cands.items():
+        hit = [c for c in cs if c in rows]
+        if len(hit) == 1:
+            out[k] = hit[0]
+    return out
+
+
+def _fill_left_out(pkg, found, offset, review):
+    """A gullwing / QFP dimension the read left out entirely (ATSAME70N19A-AN, MKL24Z32VLK4: body and pitch read, the
+    span, foot and lead width not; live benchmark 2026-10-19), from the one dimension table that agrees with every row
+    of the read matched to it (two at least) and names the field's symbol unambiguously. Anything less stays blank and
+    unresolved: the part is held as before."""
+    if pkg.get("package_type") not in ("gullwing", "qfp"):
+        return
+    blank = [k for k in ("lead_span", "terminal_length", "terminal_width", "height_max") if not pkg.get(k)]
+    good = [t for t, rows in found.values() if t.get("unit") == "mm" and not any(r[4] for r in rows)
+            and sum(1 for r in rows if r[0] in DIMS + NUM_DIMS) >= 2]
+    if not blank or len(good) != 1:
+        return
+    t = good[0]
+    if isinstance(offset, list):                      # the sent page to cite, as the model cites its own
+        cite = offset.index(t["page"]) + 1 if t["page"] in offset else None
+    else:
+        cite = t["page"] - (offset or 0) if t["page"] - (offset or 0) >= 1 else None
+    if cite is None:
+        return
+    sym, done = _table_symbols(pkg, t["rows"]), []
+    for k in blank:
+        row = t["rows"].get(sym.get(k))
+        if not row:
+            continue
+        if row["span"]:                               # "12.00 BSC": a basic size, its one value is the nominal
+            vals = {"min": None, "nom": next(row[x] for x in ("min", "nom", "max") if row[x] is not None), "max": None}
+        elif k == "height_max":
+            vals = {"min": None, "nom": None, "max": row["max"]}
+        else:
+            vals = {x: row[x] for x in ("min", "nom", "max")}
+        if all(v is None for v in vals.values()):
+            continue
+        pkg[k] = {"label": sym[k], **vals, "unit": "mm", "page": cite, "figure": f"dimension table p.{t['page']}"}
+        done.append(k)
+        review.append(f"{k} ({sym[k]}) {', '.join(f'{x} {v:g}' for x, v in vals.items() if v is not None)} mm filled "
+                      f"from the dimension table p.{t['page']}, read in code; the read left it out")
+    if done and isinstance(pkg.get("unresolved"), list):
+        from . import ds_route as DR
+        pkg["unresolved"] = [u for u in pkg["unresolved"] if DR.unresolved_field(u) not in done]
 
 
 def ordering_check(pkg, facts, review):
@@ -1480,6 +1581,38 @@ def _pin_count_from(spec, ext):
     if by_name and by_pins == by_name + 1:
         return by_pins, f"the pin table (the package name {spec['name']} counts the leads, the tab is pin {tab})"
     return (by_name, f"the package name {spec['name']}") if by_name else (by_pins, "the pin table") if by_pins else (None, "")
+
+
+DEPOP_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*?-(\d+)-(\d+)(?=_|$)")   # SOIC-14-16: 14 pins on 16 places
+
+
+def _depop_positions(spec, ext):
+    """A dual row with places left empty (TLP2361: SO-6 with pin 2 absent; UCC256301: SOIC-14-16, pins 1,3..12,14..16,
+    live benchmark 2026-10-19) -> (pin_positions, places, absent numbers) from the pin table, whose numbers are the
+    places: or None. Only when nothing else can explain the gaps: the name gives the place count (SO-6, SOIC-14-16),
+    the table's numbers are distinct, start at 1 and end at the last place (a table cut short ends early), the read's
+    pin_count (if any) is the table's count, and there is no tab or exposed pad (whose number would land on a place)."""
+    if spec.get("package_type") != "gullwing" or any(spec.get(k) for k in ("pin_positions", "tab", "exposed_pad", "pad_table")):
+        return None
+    e, name = spec.get("pitch"), str(spec.get("name") or "")
+    nums = [str(p.get("num") or "") for p in ext.get("pins") or []]
+    if not isinstance(e, (int, float)) or e <= 0 or not nums or not all(x.isdecimal() for x in nums) or len(set(nums)) != len(nums):
+        return None
+    ints = sorted(int(x) for x in nums)
+    m = DEPOP_NAME.match(name)
+    if m and int(m.group(2)) > int(m.group(1)):
+        if int(m.group(1)) != len(ints):
+            return None
+        places = int(m.group(2))
+    else:
+        places = name_facts(name)["count"]
+    n = spec.get("pin_count")
+    if not places or places % 2 or len(ints) >= places or ints[0] != 1 or ints[-1] != places or n not in (None, len(ints)):
+        return None
+    per = places // 2
+    pos = [{"number": str(i), "side": "L", "offset": round((i - 1 - (per - 1) / 2) * e, 4)} if i <= per else
+           {"number": str(i), "side": "R", "offset": round(((per - 1) / 2 - (i - per - 1)) * e, 4)} for i in ints]
+    return pos, places, sorted(set(range(1, places + 1)) - set(ints))
 
 
 INJECTION = "document contains instruction-like text (ignored)"
@@ -1521,6 +1654,14 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
         table_check(ext["package"], tables, offset, review)
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
     basic_span(spec, review)
+    dp = _depop_positions(spec, ext)
+    if dp:
+        spec["pin_positions"], spec["pin_count"] = dp[0], len(dp[0])
+        spec["unresolved"] = [u for u in spec.get("unresolved") or [] if u != "pin_count"]
+        if not spec["unresolved"]:
+            del spec["unresolved"]
+        review.append(f"pin_positions: {len(dp[0])} pins on the {dp[1]} places of {spec['name']}, places "
+                      f"{', '.join(map(str, dp[2]))} empty, from the pin table's numbers; check against the drawing")
     if spec.get("pin_count") is None and not spec.get("pad_table"):
         n, how = _pin_count_from(spec, ext)
         if n:
@@ -1738,7 +1879,7 @@ def lcsc_number(item=None, ln=None, row=None):
     par = {p["name"]: p["value"] for p in (item or {}).get("parameters", [])}
     for v in ((ln or {}).get("lcsc"), (row or {}).get("lcsc"),
               *(par.get(f"Supplier Part Number {i}") for i in range(1, 10) if str(par.get(f"Supplier {i}", "")).upper() == "LCSC")):
-        m = re.fullmatch(r"\s*(C\d{3,})\s*", str(v or ""))
+        m = re.fullmatch(r"\s*(C\d{3,})\s*(\([^()]*\)\s*)?", str(v or ""))   # triage's "C10800 (via MPN)" too
         if m:
             return m.group(1)
     return None
@@ -1996,6 +2137,37 @@ def is_pdf(data):
     return isinstance(data, (bytes, bytearray)) and b"%PDF-" in data[:1024]
 
 
+MENTION_PAGES = 5                                     # the first pages a datasheet names its part (or family) on
+
+
+def mentions_part(texts, mpn):
+    """Does the text of a PDF's first pages name the part? True: the MPN, or a prefix of it that keeps its whole
+    numeric core (AD5274BRM -> AD5274 in "AD5272/AD5274"; LTC4060EDHC -> LTC4060, never LTC40, which LTC4054 has),
+    a family name with x for any character (C8051F32x, TPS2660x) or a range that holds it (MAX22201-MAX22207).
+    False: none of these. None: it can't be told (no text layer, a scanned PDF, no part number), never a rejection."""
+    key = re.sub(r"[^A-Z0-9]", "", re.split(r"[#/]", str(mpn or "").strip().upper())[0])   # #PBF, /NOPB tails off
+    core = re.match(r"\d*[A-Z]*\d+", key)
+    raw = " ".join(t or "" for t in texts or []).upper()
+    flat = re.sub(r"[^A-Z0-9]", "", raw)
+    if len(key) < 4 or not core or len(flat) < 40:
+        return None
+    n = max(4, core.end())
+    if any(key[:i] in flat for i in range(len(key), n - 1, -1)):
+        return True
+    for m in re.finditer(r"([A-Z0-9]*\d[A-Z0-9]*?)(X+)\b", raw):          # C8051F32x: x is any character
+        stem, nx = m.group(1), len(m.group(2))
+        if len(stem) + nx >= n and len(key) >= len(stem) + nx and key.startswith(stem):
+            return True
+    lead = re.match(r"([A-Z]+)(\d+)", key)
+    for m in re.finditer(r"\b([A-Z]+)(\d+)[A-Z]*\s*[-–—/]\s*([A-Z]+)?(\d+)", raw) if lead else ():
+        a, b = m.group(2), m.group(4)                 # MAX22201-MAX22207, AD5272/74
+        b = a[:len(a) - len(b)] + b if len(b) < len(a) else b
+        if m.group(1) == lead.group(1) and m.group(3) in (None, m.group(1)) and len(a) == len(b) == len(lead.group(2)) \
+                and min(a, b) <= lead.group(2) <= max(a, b):
+            return True
+    return False
+
+
 _NO_FETCH_HOSTS = re.compile(r"(localhost|.*\.localhost|metadata|metadata\.google\.internal|instance-data(\.ec2\.internal)?)\.?",
                              re.I)
 
@@ -2244,12 +2416,22 @@ class PdfStore:
             h.log.append(("GET", url, r.status_code, False))
         return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None, r.headers
 
-    def fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None):
+    def fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None, mpn=None):
         """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF.
         follow: a link that gives a product HTML page is followed once to the PDF the page links to.
         part: the MPN, for a PDF taken from the Downloads folder (pdf_fetch.Handoff checks it names the part).
         handoff: False leaves the hand-off out (Reader.job asks a person only once no link of the part worked);
-        "only" tries just the hand-off, for a link every other way was refused for this run."""
+        "only" tries just the hand-off, for a link every other way was refused for this run.
+        mpn: the part's MPN: a PDF whose first pages do not name it (mentions_part) is not its datasheet (a press
+        release a link redirected to; LTC4060EDHC's link serving the LTC4054 datasheet). Kept in the cache all the same."""
+        data, meta = self._fetch(url, where, follow, part, handoff, _page)
+        if mpn:
+            from . import ds_route as DR
+            if mentions_part(DR.page_texts(data, MENTION_PAGES), mpn) is False:
+                raise DatasheetError(f"the PDF at {meta.get('url') or url} doesn't mention {mpn}")
+        return data, meta
+
+    def _fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None):
         stem = hashlib.sha256(url.encode()).hexdigest()[:24]
         pdf_f, meta_f = self.dir / f"{stem}.pdf", self.dir / f"{stem}.json"
         if pdf_f.exists() and meta_f.exists():
@@ -2282,10 +2464,10 @@ class PdfStore:
             raise DatasheetError(f"{url}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
         if not is_pdf(data):
             html = bool(re.search(rb"<(!doctype|html)", data[:2048], re.I))
-            link = pdf_link(data, final or url) if html and follow else None
+            link = pdf_link(data, final or url, docs=True) if html and follow else None
             if link and link != url:
                 try:
-                    pdf, meta = self.fetch(link, where, follow=False, part=part, handoff=handoff, _page=url)
+                    pdf, meta = self._fetch(link, where, follow=False, part=part, handoff=handoff, _page=url)
                     return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
                 except DatasheetError as e:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
@@ -2306,15 +2488,27 @@ class PdfStore:
         return data, dict(meta, from_cache=False)
 
 
-def pdf_link(html, base):
+# Document-download links that do not end .pdf (followed only when nothing on the page does; fetch keeps the answer only
+# when it is a PDF): Broadcom docs.broadcom.com/docs/<id>, Infineon /dgdl/...?fileId=, Lattice view_document?document_id=,
+# Panasonic & co file-download links.
+DOC_LINK = re.compile(r"docs\.broadcom\.com/docs/[\w.-]+|/dgdl/|[?&](fileId|document_?id|docid)=|/view_document\b"
+                      r"|/file-?download\b", re.I)
+
+
+def pdf_link(html, base, docs=False):
     """The datasheet PDF an HTML product page links to (an href ending .pdf, or a meta refresh), absolute; a link
-    whose name says datasheet, and then one on the page's own site, is preferred. None when there is none."""
+    whose name says datasheet, and then one on the page's own site, is preferred. None when there is none.
+    docs: with no such link, a document-download link (DOC_LINK) instead (PdfStore.fetch following a page)."""
+    import html as H_
     from urllib.parse import urljoin, urlparse
     text = html.decode("utf-8", "replace") if isinstance(html, bytes) else str(html)
     refresh = re.search(r"""http-equiv=["']?refresh["']?[^>]*?url=([^"'>\s]+)""", text, re.I)
     links = [m.group(1) for m in re.finditer(r"""href=["']([^"'#]+?\.pdf(?:\?[^"']*)?)["']""", text, re.I)]
     if refresh:
         links.insert(0, refresh.group(1))
+    if docs and not links:
+        links = [H_.unescape(m.group(1)) for m in re.finditer(r"""href=["']([^"'#]+)["']""", text, re.I)
+                 if DOC_LINK.search(H_.unescape(m.group(1)))]
     links = [u for u in links if urlparse(urljoin(base, u)).scheme.lower() in ("http", "https")]   # no file:, data:
     if not links:
         return None
@@ -2414,6 +2608,20 @@ class ResultCache:
             return None
         return rec if isinstance(rec, dict) else None
 
+    def get_check(self, key):
+        """A cross-check's saved second read. Its own inputs decide it (PDF, model, part, package, pages, effort and the
+        check's version, all in the key's last hash), so one saved under an earlier reader schema still counts: a re-score
+        after a reader change keeps its checks, and a live run doesn't pay for the same check again."""
+        rec = self.get(key)
+        if rec is not None or not key.startswith("check-"):
+            return rec
+        head, _, h = key.rsplit("-", 2)               # check-<src>-<model>-<reader schema>-<hash>
+        for f in sorted(self.dir.glob(f"{head}-*-{h}.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+            rec = self.get(f.stem)
+            if rec and "message" in rec:
+                return rec
+        return None
+
     def put(self, key, rec):
         self.dir.mkdir(parents=True, exist_ok=True)
         write_text_atomic(self.dir / f"{key}.json", json.dumps(rec, indent=1))   # own temp file per writer
@@ -2458,7 +2666,7 @@ def _create_in_flight(m):
 
 # A link that is wrong everywhere: not a PDF, too big, or gone. 401 / 403 / 429 are not in it: a maker's site that
 # refuses this machine (bot rules, a corporate proxy) usually serves the API's fetcher, so such a link goes as a URL.
-BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than"
+BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than|doesn't mention"
 
 
 def hold_on_doubt(inf, model, res):
@@ -2579,9 +2787,10 @@ class Reader:
         return self._client
 
     # --- jobs
-    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None):
+    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None):
         """fp_needed: False when the part's footprint comes from another source ([datasheet] cross_check = "auto" then
-        skips the cross-check). Try each (url, where) until one is a PDF ([datasheet] folder files around them: see
+        skips the cross-check). mpn: the part's MPN, when it has one: a PDF that does not name it is skipped
+        (PdfStore.fetch). Try each (url, where) until one is a PDF ([datasheet] folder files around them: see
         below). A link that cannot be downloaded here (blocked host) is sent
         as a URL source for the API to fetch, so a part is never stuck on this machine's network.
         The job is the first step of the part's route (ds_route): the pages picked for [datasheet] page_budget and the
@@ -2598,7 +2807,7 @@ class Reader:
         tries = [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))] if data is None else []
         for url, where in tries:                      # http, then https
             try:
-                data, prov = self.store.fetch(url, where, part=part, handoff=False)
+                data, prov = self.store.fetch(url, where, part=part, handoff=False, mpn=mpn)
                 break
             except DatasheetError as e:
                 attempts.append({"url": url, "where": where, "error": str(e)})
@@ -2607,11 +2816,18 @@ class Reader:
         if data is None and self.store.handoff is not None:   # no link worked by itself: ask the person, link by link
             for url, where, page in dict.fromkeys(self.store.refusals[n0:]):
                 try:
-                    data, prov = self.store.fetch(url, where, part=part, handoff="only")
+                    data, prov = self.store.fetch(url, where, part=part, handoff="only", mpn=mpn)
                     prov = dict(prov, **({"page_url": page} if page else {}))
                     break
                 except DatasheetError as e:
                     attempts.append({"url": url, "where": where, "error": str(e)})
+        unnamed = next((a for a in attempts if re.match(r"the PDF at .* doesn't mention ", a["error"])), None)
+        if data is None and unnamed:                  # the only PDF there is: read it, flagged (a connector catalog or a
+            try:                                      # family sheet can name the part only in a table the check misses)
+                data, prov = self.store.fetch(unnamed["url"], unnamed["where"], part=part, handoff=False)
+                prov = dict(prov, unnamed=unnamed["error"])
+            except DatasheetError:
+                data = None
         if data is None:
             data, prov, _ = self._folder_pdf(part, urls, ("other",), attempts)
         if data is None:
@@ -2627,12 +2843,13 @@ class Reader:
                     f"; {note}" if note else "" if self.cfg.get("folder") else   # a typo in the folder's name, no access
                     "; download it by hand into a folder and set [datasheet] folder"))
             url, where = usable[0]
+            more = [(u, w) for u, w in usable[1:] if api_url(u) != api_url(url)]   # if the API can't fetch it (_next_link)
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
             facts = tables = None
         else:
             url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
-            lv, why = [None], {}
+            lv, why, more = [None], {}, []
             texts = self._page_texts(data, src_hash) if n else None
             facts = DR.ordering_facts(texts, part, data) if texts else None
             if not pages and self.page_budget and n and n > self.page_budget:
@@ -2647,7 +2864,7 @@ class Reader:
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
                 "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov, "fp_needed": fp_needed,
-                "facts": facts, "tables": tables,
+                "facts": facts, "tables": tables, "more_urls": more,
                 "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
                           "attempts": []}}
         first = self._at(base, rung, 0)
@@ -2656,6 +2873,21 @@ class Reader:
             if self.results.get(whole["key"]):
                 first = whole
         return self._walk(first)
+
+    def _next_link(self, job, error):
+        """A part sent as a URL the API could not fetch (API_FETCH_FAILED; not billed): the same step of its route with
+        its next usable link, or None. A link is asked for once (http and https of one link are one document)."""
+        rest = [(u, w) for u, w in job.get("more_urls") or () if api_url(u) != api_url(job["url"])]
+        if job.get("data") is not None or "rung" not in job or not rest or not API_FETCH_FAILED.search(str(error)):
+            return None
+        (url, where), why = rest[0], re.sub(r"^.*?(invalid_request_error: |API request failed: )", "", str(error))[:200]
+        self.say(f"  datasheet {job.get('name') or job['part']}: the API could not fetch {job['url']}; trying {url}")
+        prov = dict(job["base_prov"], url=url, where=where,
+                    attempts=list(job["base_prov"].get("attempts") or []) + [
+                        {"url": job["url"], "where": job["where"], "error": f"the API could not fetch it: {why}"}])
+        base = dict(job, url=url, where=where, src_hash="url" + hashlib.sha256(url.encode()).hexdigest(), base_prov=prov,
+                    more_urls=rest[1:])
+        return self._walk(self._at(base, job["rung"], job["level"]))
 
     def _folder_pdf(self, part, urls, kinds, attempts):
         """The part's PDF from the [datasheet] folder when a file there is one of `kinds` of match (local_datasheet)
@@ -2791,6 +3023,8 @@ class Reader:
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
+        if job["prov"].get("unnamed"):
+            res["needs_review"].append(f"{job['prov']['unnamed']} (no other link gave a PDF): check it is this part's datasheet")
         if job["prov"].get("local") and re.search(r"\((?:a family datasheet|named for another part number)", str(job["prov"].get("where"))):
             res["needs_review"].append(f"datasheet from your folder: {job['prov']['where']}; check it covers this part")
         if job["prov"].get("pages_sent"):
@@ -2814,7 +3048,7 @@ class Reader:
         through the same provider layer as the first read (guided models get their capability rails and JSON repair);
         its tokens and USD go to cost.jsonl. -> (message, via). Raises crosscheck.Unavailable."""
         from . import crosscheck as CC, ds_route as DR
-        rec = self.results.get(key)
+        rec = self.results.get_check(key)
         if rec and "message" in rec:
             return rec["message"], "cached"
         if self.estimate_only or not self.key:
@@ -2948,7 +3182,11 @@ class Reader:
                 if msg is None:                       # no answer came back (API error): nothing to record
                     if not getattr(e, "maybe_billed", False):
                         self._release(job["key"])
-                    raise
+                    nxt = self._next_link(job, e)     # the API could not fetch the link: the next one, if any
+                    if nxt is None:
+                        raise
+                    job = nxt
+                    continue
             err = None
             try:
                 self._store(job, msg, "sync")         # refusal / max_tokens / not schema-shaped: recorded with its usage
@@ -3576,9 +3814,13 @@ class Reader:
                     out[j["key"]] = self._result(j, rec)
                 except DatasheetError as e:
                     out[j["key"]] = e
-            elif j["key"] in errors:
-                out[j["key"]] = DatasheetError(errors[j["key"]])
-                out[j["key"]].answered = j["key"] in came
+            elif j["key"] in errors:                 # the API could not fetch the link: its next one, in another round
+                nx = self._next_link(j, errors[j["key"]])
+                if nx is not None:
+                    out[j["key"]] = _Advance(nx)
+                else:
+                    out[j["key"]] = DatasheetError(errors[j["key"]])
+                    out[j["key"]].answered = j["key"] in came
             else:
                 bid = next((b["id"] for b in st["batches"] if j["key"] in b["requests"].values() and not b.get("collected")), "")
                 out[j["key"]] = f"pending {bid}".strip()
@@ -3641,7 +3883,8 @@ def estimate_plan(plan, reader, parts=None):
         ln, mpn = _plan_line(it)
         urls = datasheet_urls(it, ln, {}, (state.get(it["name"]) or {}).get("found"))
         try:
-            jobs.append(reader.job(mpn or it["name"], urls, it["footprint"].get("ref") or AL.lib_name(it["name"]), name=it["name"]))
+            jobs.append(reader.job(mpn or it["name"], urls, it["footprint"].get("ref") or AL.lib_name(it["name"]), name=it["name"],
+                                   mpn=mpn or None))
         except DatasheetError as e:
             skipped.append({"part": it["name"], "why": str(e)})
     est = reader.estimate([j for j in jobs if not reader.results.get(j["key"])])

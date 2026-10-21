@@ -338,6 +338,11 @@ def sanity(spec):
     if t == "gullwing" and n and not spec.get("pin_positions") and n % 2:
         errs.append(f"pin_count {n} is odd: a dual-row part needs an even count, or list the pads in pin_positions "
                     "(as for SOT-23)")
+    dep = re.match(r"[A-Za-z][A-Za-z0-9]*?-(\d+)-(\d+)(?=_|$)", str(spec.get("name") or ""))
+    if t == "gullwing" and n and not spec.get("pin_positions") and dep and n < int(dep.group(2)) and \
+            int(dep.group(1)) < int(dep.group(2)):        # UCC256301's SOIC-14-16 built as 7 + 7 would be a wrong land
+        errs.append(f"{spec['name']} puts {dep.group(1)} pins on {dep.group(2)} places: list the pads in pin_positions "
+                    f"(a full dual row of {n} pads puts them on the wrong places)")
     if t in ("qfn", "qfp") and n:
         nlr = spec.get("pins_left_right", n // 4)
         ntb = spec.get("pins_top_bottom", (n - 2 * nlr) // 2)

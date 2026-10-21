@@ -1,5 +1,5 @@
 {
- "about": "Cases where KiCad's reference disagrees with the maker's datasheet, checked by hand against the datasheet text. A field listed here that fails against KiCad is scored as right (the report lists it as a reference erratum) when ours is what the datasheet says. A number under \"ours\" (e.g. the pitch) must match ours, or none of the case's errata apply: the other fields (pads, pin 1, courtyard) are excused only when we built the datasheet's package.",
+ "about": "Cases where KiCad's reference disagrees with the maker's datasheet, checked by hand against the datasheet text. A field listed here that fails against KiCad is scored as right (the report lists it as a reference erratum) when ours is what the datasheet says. A number under \"ours\" (e.g. the pitch) must match ours, or none of the case's errata apply: the other fields (pads, pin 1, courtyard) are excused only when we built the datasheet's package. \"reference\": {\"footprint\": <a footprint in the set's references>} scores the case against that KiCad footprint instead, when KiCad's own reference is another variant of the package.",
  "cases": {
   "AH1806-W": {
    "symbol_names": {
@@ -18,22 +18,10 @@
    }
   },
   "PCA9557BS": {
-   "pitch": {
-    "ours": 0.65,
-    "why": "NXP PCA9557.pdf Rev. 7 p2 ordering table: PCA9557BS is HVQFN16 SOT629-1; p20 Fig 25 SOT629-1: body 4 x 4 x 0.85 mm, e 0.65, Dh/Eh 1.95-2.25, b 0.23-0.38; p26 Fig 29 footprint: pitch 0.65, pad 0.30 x 1.10, solder land 2.0 x 2.0. KiCad's reference HVQFN-16-1EP_3x3mm_P0.5mm_EP1.5x1.5mm is the 3 x 3 mm 0.5 mm package, another variant.",
-    "checked": "2026-10-19"
-   },
-   "pads": {
-    "why": "NXP PCA9557.pdf Rev. 7 p2 ordering table: PCA9557BS is HVQFN16 SOT629-1; p20 Fig 25 SOT629-1: body 4 x 4 x 0.85 mm, e 0.65, Dh/Eh 1.95-2.25, b 0.23-0.38; p26 Fig 29 footprint: pitch 0.65, pad 0.30 x 1.10, solder land 2.0 x 2.0. KiCad's reference HVQFN-16-1EP_3x3mm_P0.5mm_EP1.5x1.5mm is the 3 x 3 mm 0.5 mm package, another variant.",
-    "checked": "2026-10-19"
-   },
-   "pin1": {
-    "why": "NXP PCA9557.pdf Rev. 7 p2 ordering table: PCA9557BS is HVQFN16 SOT629-1; p20 Fig 25 SOT629-1: body 4 x 4 x 0.85 mm, e 0.65, Dh/Eh 1.95-2.25, b 0.23-0.38; p26 Fig 29 footprint: pitch 0.65, pad 0.30 x 1.10, solder land 2.0 x 2.0. KiCad's reference HVQFN-16-1EP_3x3mm_P0.5mm_EP1.5x1.5mm is the 3 x 3 mm 0.5 mm package, another variant.",
-    "checked": "2026-10-19"
-   },
-   "courtyard": {
-    "why": "NXP PCA9557.pdf Rev. 7 p2 ordering table: PCA9557BS is HVQFN16 SOT629-1; p20 Fig 25 SOT629-1: body 4 x 4 x 0.85 mm, e 0.65, Dh/Eh 1.95-2.25, b 0.23-0.38; p26 Fig 29 footprint: pitch 0.65, pad 0.30 x 1.10, solder land 2.0 x 2.0. KiCad's reference HVQFN-16-1EP_3x3mm_P0.5mm_EP1.5x1.5mm is the 3 x 3 mm 0.5 mm package, another variant.",
-    "checked": "2026-10-19"
+   "reference": {
+    "footprint": "Package_DFN_QFN:Texas_RGV0016A_VQFN-16-1EP_4x4mm_P0.65mm_EP2.1x2.1mm",
+    "why": "NXP PCA9557.pdf Rev. 7 p2 ordering table: PCA9557BS is HVQFN16 SOT629-1; p20 Fig 25 SOT629-1: body 4 x 4 x 0.85 mm, e 0.65, Dh/Eh 1.95-2.25, b 0.23-0.38; p26 Fig 29 footprint: pitch 0.65, pad 0.30 x 1.10, solder land 2.0 x 2.0. KiCad's reference HVQFN-16-1EP_3x3mm_P0.5mm_EP1.5x1.5mm is the 3 x 3 mm 0.5 mm package, another variant. Scored against KiCad's 4 x 4 mm 0.65 mm VQFN-16 with a 2.1 mm exposed pad instead (Texas RGV0016A, already in the set's references; Dh/Eh nom 2.1 like SOT629-1), so pad 1, pitch, pads and courtyard are all checked; it replaced an erratum that excused those fields whenever the pitch was 0.65.",
+    "checked": "2026-10-21"
    }
   },
   "27C256": {

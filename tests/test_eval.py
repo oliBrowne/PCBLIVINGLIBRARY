@@ -422,6 +422,22 @@ def test_parts_without_a_datasheet_pdf_are_reported_apart():
     assert (s["overall"]["pass"], s["overall"]["cases"]) == (1, 4) and (s["with_datasheet"]["pass"], s["with_datasheet"]["cases"]) == (1, 3)
 
 
+def test_the_headline_splits_datasheet_reads_from_the_standard_table_and_counts_unchecked_passes():
+    """The standard table holds KiCad's own pad data, so its parts match KiCad by construction: the report says how many
+    right parts were read from a datasheet, and how many passes had no second read (unchecked)."""
+    row = lambda i, ok, src, cc="": {"id": i, "family": "qfn", "mpn": i, "pass": ok, "source": src, "fields": {}, "usd": None,
+                                     "tokens_in": 0, "tokens_out": 0, "tried": [], "cross_check": cc, "errors": []}
+    rows = [row("a", True, "standard"), row("b", True, "standard"), row("c", True, "datasheet", "agreed"),
+            row("d", True, "datasheet", "unchecked"), row("e", False, "datasheet", "disagreed"), row("f", False, "none")]
+    s = R.summarize(rows)
+    assert s["headline"] == {"right": 4, "from_datasheet": 2, "from_standard": 2, "other": 0, "datasheet_built": 3,
+                             "unchecked_passes": 1}, s["headline"]
+    md = R.report_md({"meta": {"set": "mini", "set_version": 1, "model": "m", "sources": ["standard", "datasheet"],
+                               "mode": "live", "cases": 6, "wall_s": 1, "wall_s_per_part": 0.2}, "summary": s, "cases": rows})
+    assert "2 read from a datasheet, 2 from the standard-package table" in md, md
+    assert "1 of the passes had no second read (unchecked)" in md, md
+
+
 def test_kicad_subscript_pin_names_match_plain_ones():
     """KiCad writes V_{SS}; a datasheet says VSS: the same pin name (CD4066BNS failed on this alone)."""
     assert S.norm_name("V_{SS}") == S.norm_name("VSS") and S.norm_name("V_{DD}") == S.norm_name("Vdd")
@@ -489,17 +505,42 @@ def test_a_checked_reference_erratum_scores_the_datasheets_pins_right():
     assert "kicad-v1.errata" not in R.available() and R.load_errata("nonexistent.json") == {}
 
 
-def test_a_wrong_variant_reference_is_excused_only_when_we_built_the_datasheets_package():
+def test_a_wrong_variant_reference_is_replaced_by_the_right_package_not_excused():
     """PCA9557BS (live benchmark 2026-10-19): the datasheet's BS part is SOT629-1, 4 x 4 mm at 0.65 mm; KiCad's reference
-    is the 3 x 3 mm 0.5 mm HVQFN-16. Ours at 0.65 mm passes by the erratum; ours at any other pitch does not."""
+    is the 3 x 3 mm 0.5 mm HVQFN-16. The old erratum excused pads, pin 1 and courtyard whenever our pitch was 0.65, so a
+    mirrored part passed. Now the case is scored against KiCad's 4 x 4 mm 0.65 mm VQFN-16: every field is checked."""
     er = R.load_errata("kicad-v1")["PCA9557BS"]
-    f = lambda ok=False, **k: dict(ok=ok, error="" if ok else "x", **k)
-    for ours, excused in ((0.65, True), (0.8, False)):
-        sc = {"pass": False, "errors": ["pitch: x", "pads: x", "pin1: x", "courtyard: x"],
-              "fields": {"pitch": f(ours=ours, ref=0.5), "pads": f(), "pin1": f(), "courtyard": f(), "pad_count": f(True)}}
-        got = R.apply_errata(sc, None, er)
-        assert (sorted(got) == ["courtyard", "pads", "pin1", "pitch"] and sc["pass"]) if excused else (got == [] and not sc["pass"])
+    assert set(er) == {"reference"}, er
+    refs = R.load_set("kicad-v1")["references"]
+    ref = refs[er["reference"]["footprint"]]
+    assert R.reference_for({"mpn": "PCA9557BS", "footprint": "x"}, {"PCA9557BS": er}) == er["reference"]["footprint"]
+    assert R.reference_for({"mpn": "OTHER", "footprint": "x"}, {"PCA9557BS": er}) == "x"
+    assert S.score(ref, ref)["pass"]
+    mirrored = dict(ref, pads=[[p[0], -p[1], p[2], *p[3:]] for p in ref["pads"]])
+    sc = S.score(mirrored, ref)
+    assert not sc["pass"] and R.apply_errata(sc, None, er) == [] and not sc["pass"], sc["errors"]
     assert "O0 - O7" in R.load_errata("kicad-v1")["27C256"]["symbol_names"]["why"]
+
+
+def test_cached_only_never_passes_a_part_whose_cross_check_was_not_saved():
+    """Review 2026-10-20 finding 5: a re-score with no saved second read scored the part "unchecked", and unchecked
+    passes, so a part the live run held could pass for free. Now it is not scored (not_read), and nothing is sent."""
+    pdfs = {"https://example.com/soic.pdf": TD.PDF, "https://example.com/qfn.pdf": TD.PDF}
+    api = TB.FakeAPI(answer=lambda part: TD.message(TD.INCH if part == "SOICPART" else qfn_ext()), polls=0)
+    with tempfile.TemporaryDirectory() as d:
+        kw = dict(cache=Path(d) / "cache", http=TB.PdfHTTP(pdfs), log=lambda *a: None)
+        with TB.patched(api), mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": TB.KEY}):
+            rep = R.run(mini_set(d), Path(d) / "live", **kw)
+            live = {c["mpn"]: c for c in rep["cases"]}
+            assert live["QFNPART"]["pass"] and live["QFNPART"]["cross_check"] == "agreed", live["QFNPART"]
+            gone = [f.unlink() for f in (Path(d) / "live").rglob("check-*.json")]
+            assert gone, "no saved cross-check to remove"
+            sent = len(api.calls)
+            rep2 = R.run(mini_set(d), Path(d) / "live", cached_only=True, **kw)
+        assert not [c for c in api.calls[sent:] if c[0] == "POST"], "something was sent"
+        q = {c["mpn"]: c for c in rep2["cases"]}["QFNPART"]
+        assert not q["pass"] and q["failure"] == "not_read", q
+        assert "not scored" in R.report_md(rep2) or "not_read" in R.report_md(rep2)
 
 
 def test_cached_only_rescores_after_the_schema_changes():
@@ -553,6 +594,7 @@ def test_live_harness_pins_datasheets_types_failures_and_publishes():
         head = R.publish(Path(d) / "live", Path(d) / "results.md")
         page = (Path(d) / "results.md").read_text()
         assert head.startswith(f"{rep2['meta']['model']}, 2 real parts: 1 right (50") and "pad match" in head, head
+        assert "read from a datasheet" in head and "standard-package table" in head, head
         assert "## Why parts failed" in page and bad["failure"] in page and "benchmark.md" in page
 
 
