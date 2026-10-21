@@ -2192,6 +2192,20 @@ class ResultCache:
             return None
         return rec if isinstance(rec, dict) else None
 
+    def get_check(self, key):
+        """A cross-check's saved second read. Its own inputs decide it (PDF, model, part, package, pages, effort and the
+        check's version, all in the key's last hash), so one saved under an earlier reader schema still counts: a re-score
+        after a reader change keeps its checks, and a live run doesn't pay for the same check again."""
+        rec = self.get(key)
+        if rec is not None or not key.startswith("check-"):
+            return rec
+        head, _, h = key.rsplit("-", 2)               # check-<src>-<model>-<reader schema>-<hash>
+        for f in sorted(self.dir.glob(f"{head}-*-{h}.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+            rec = self.get(f.stem)
+            if rec and "message" in rec:
+                return rec
+        return None
+
     def put(self, key, rec):
         self.dir.mkdir(parents=True, exist_ok=True)
         write_text_atomic(self.dir / f"{key}.json", json.dumps(rec, indent=1))   # own temp file per writer
@@ -2548,7 +2562,7 @@ class Reader:
         through the same provider layer as the first read (guided models get their capability rails and JSON repair);
         its tokens and USD go to cost.jsonl. -> (message, via). Raises crosscheck.Unavailable."""
         from . import crosscheck as CC, ds_route as DR
-        rec = self.results.get(key)
+        rec = self.results.get_check(key)
         if rec and "message" in rec:
             return rec["message"], "cached"
         if self.estimate_only or not self.key:
