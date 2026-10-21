@@ -68,7 +68,9 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "page_budget": 6, "route": "single", "ladder": ["claude-haiku-5-5", "claude-sonnet-5-5", MODEL],
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
             "zoom_drawings": False,                         # close-ups of the drawing pages: zoom_blocks()
-            "cross_check": "auto", "cross_check_model": ""}  # second source before a footprint is accepted: ecadlib.crosscheck
+            "cross_check": "auto", "cross_check_model": "",  # second source before a footprint is accepted: ecadlib.crosscheck
+            "download": "auto",                             # a refused PDF link: other ways to download it (ecadlib.pdf_fetch)
+            "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""}   # ... last, your own browser
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
 # for a listed model = it rejects output_config.effort: Haiku 4.5, Sonnet 4.5), and the PDF page limit of
@@ -1849,13 +1851,15 @@ def refused_line(job, error):
 def refusal(attempts):
     """The first download a maker's site refused, as bot protection does: -> (url, host, why), or None. A 403 that
     is a web page (Nexperia BAT160_SERIES.pdf), a reset connection (analog.com LTM4671, WinError 10054) or a timeout
-    on every try (analog.com LT8610, st.com STULPI01A). A TLS failure (liteon over http) is not one."""
+    on every try (analog.com LT8610, st.com STULPI01A). A TLS failure (liteon over http) is not one, nor a host that
+    never answers the connection (www.ixys.com): no browser gets further (pdf_fetch.refused)."""
     from urllib.parse import urlparse
     for a in attempts or []:
-        e = a.get("error") or ""
+        e = re.sub(r" \(also tried .*\)$", "", a.get("error") or "", flags=re.S)   # what the other ways got (pdf_fetch)
         why = ("answered HTTP 403 with a web page" if re.search(r"HTTP 403 \(a web page", e) else
                "reset the connection" if re.search(r"ConnectionResetError|Connection reset|10054|RemoteDisconnected", e) else
-               "timed out on every try" if re.search(r"timeout|timed out", e, re.I) and re.search(r"\(\d+ tries\)$", e) else "")
+               "timed out on every try" if re.search(r"timeout|timed out", e, re.I) and re.search(r"\(\d+ tries\)$", e)
+               and not re.search(r"ConnectTimeout|connect timeout", e, re.I) else "")
         if why:
             return a["url"], urlparse(a["url"]).hostname or a["url"], why
     return None
@@ -1867,10 +1871,104 @@ class PdfStore:
     rate limit and offline switch as the CachedHTTP passed in are used. A download that fails in a way that may
     pass is tried again (httpcache.RETRIES), except on a host that already failed every try in this run."""
 
-    def __init__(self, cache_dir, http=None, offline=None, sleep=None):
+    def __init__(self, cache_dir, http=None, offline=None, sleep=None, download="plain", handoff=None):
+        """download: [datasheet] download: "plain" (ecadlib's own request only), "auto" (pdf_fetch.TIERS) or a list of
+        ecadlib.pdf_fetch ways, tried in order when the site refuses ecadlib's own request (pdf_fetch.refused).
+        handoff: a pdf_fetch.Handoff, the last way (a run someone is watching), or None."""
+        from . import pdf_fetch as PF
         self.dir, self.http = Path(cache_dir) / "datasheets", http
         self.offline = getattr(http, "offline", False) if offline is None else offline
         self.sleep, self.gave_up = sleep or time.sleep, set()
+        ways = PF.TIERS if download == "auto" else () if download in ("plain", None, False) else \
+            download.split(",") if isinstance(download, str) else download
+        self.ways = [w.strip() for w in ways if w.strip() in PF.TIERS]   # never the hand-off: that is always last
+        self.handoff, self.prefer = handoff, {}
+        self.refusals = []                            # (link, where, page it was on) every way refused, in order
+        self.fns = {"headers": lambda url, part: PF.headers_get(url),
+                    "impersonate": lambda url, part: self._tool("impersonate").get(url),
+                    "browser": lambda url, part: self._tool("browser").get(url),
+                    "handoff": lambda url, part: self.handoff.get(url, part)}
+        self.missing = {"impersonate": None if PF.impersonate_available() else f"not installed ({PF.INSTALL})",
+                        "browser": None if PF.playwright_available() else f"not installed ({PF.INSTALL})"}
+
+    def _tool(self, name):
+        from . import pdf_fetch as PF
+        return PF.shared(name)                        # one headless browser per process, not one per reader
+
+    def _pace(self, url):
+        """The per-host rate limit of the CachedHTTP passed in, for a request that does not go through it."""
+        h = self.http
+        if h is not None and getattr(h, "min_interval", 0) and isinstance(getattr(h, "_last", None), dict):
+            from urllib.parse import urlparse
+            host = urlparse(url).netloc
+            wait = h.min_interval - (time.time() - h._last.get(host, 0))
+            if wait > 0:
+                time.sleep(wait)
+            h._last[host] = time.time()
+
+    def _download(self, url, part=None, handoff=True):
+        """ecadlib's own request, then each [datasheet] download way while the site refuses (pdf_fetch.refused): a
+        403 / bot-check page / dropped connection moves on; a 404, a proxy refusal or a name that does not resolve
+        never does, and a 404 from any way ends it (another way's own network error is a note). A way that worked for a site is tried first for its next link this run (ecadlib's
+        own request then only if it fails). The hand-off (handoff=True, or "only": a link refused before) is always
+        last and never remembered. -> (status, bytes, content-type, final url, error, way, [what each other way
+        got][, response headers])"""
+        from urllib.parse import urlparse
+        from . import pdf_fetch as PF
+        host, notes = urlparse(url).hostname or "", []
+        ways = [] if handoff == "only" else list(self.ways)
+        if handoff and self.handoff is not None:
+            ways.append("handoff")
+        # a page whose only "PDF link" is itself (a refresh to the same URL) has none
+        link = lambda base: lambda h: (lambda u: u if u and u not in (url, base) else None)(pdf_link(h, base))
+        if not ways:
+            first = self._get_retrying(url)
+            if handoff is False and self.handoff is not None and PF.refused(first[0], first[1], first[4], link(first[3] or url)):
+                self.refusals.append(url)             # download = "plain": still the person's browser, after every link
+            return (*first, "plain", notes)
+        pref, first = self.prefer.get(host), None
+        if handoff == "only":
+            pass                                      # refused by every other way already this run
+        elif pref in ways:
+            ways.remove(pref)
+            ways.insert(0, pref)
+        else:
+            first = self._get_retrying(url)
+            if not PF.refused(first[0], first[1], first[4], link(first[3] or url)):
+                return (*first, "plain", notes)
+        for w in ways:
+            if self.missing.get(w):
+                notes.append(f"{PF.WAYS.get(w, w)}: {self.missing[w]}")
+                continue
+            self._pace(url)
+            try:
+                status, data, ctype, final, err, *more = self.fns[w](url, part)
+            except Exception as e:                    # a way that broke is a note, never the end of the part
+                status, data, ctype, final, err, more = 0, None, "", url, f"{type(e).__name__}: {str(e)[:160]}", []
+            html = bool(re.search(rb"<(!doctype|html)", (data or b"")[:2048], re.I))
+            if not err and 200 <= (status or 0) < 300 and (is_pdf(data) or (html and link(final or url)(data))):
+                if w != "handoff":
+                    self.prefer[host] = w
+                return (status, data, ctype, final, None, w, notes, *more)
+            if status in (404, 410):                  # the file is gone: no other way (or person) can get it
+                return (status, data, ctype, final, err, w, notes, *more)
+            if w == pref:
+                self.prefer.pop(host, None)           # it did not work this time: ecadlib's own request first again
+            notes.append(f"{PF.WAYS.get(w, w)}: " + (err or (f"status {status}" if not 200 <= (status or 0) < 300 else
+                                                              "a web page with no PDF link" if html else
+                                                              f"no PDF in its answer ({ctype or 'unknown type'}, "
+                                                              f"{len(data or b'')} bytes)")))
+            if w == pref and first is None:           # the way that worked before did not: ecadlib's own request now
+                first = self._get_retrying(url)
+                if not PF.refused(first[0], first[1], first[4], link(first[3] or url)):
+                    return (*first, "plain", notes)
+        if first is None and handoff != "only":
+            first = self._get_retrying(url)
+        if first is None:
+            return (0, None, "", url, notes.pop() if notes else "not tried", "handoff", notes)
+        if PF.refused(first[0], first[1], first[4], link(first[3] or url)):
+            self.refusals.append(url)
+        return (*first, "plain", notes)
 
     def _get_retrying(self, url):
         """_get, tried again on a transient failure. -> (status, bytes, content-type, final url, error)"""
@@ -1917,16 +2015,19 @@ class PdfStore:
             r.close()
             return 0, None, "", url, str(e)
         except (requests.RequestException, requests.packages.urllib3.exceptions.HTTPError) as e:   # the body cut off
-            m = re.search(r"Tunnel connection failed: ([^'\")]+)", str(e))
-            return 0, None, "", url, f"{type(e).__name__}: " + (f"proxy CONNECT refused ({m.group(1).strip()})" if m else str(e)[:160])
+            from .pdf_fetch import _err
+            return 0, None, "", url, _err(e)
         r.close()
         if h is not None and hasattr(h, "log"):
             h.log.append(("GET", url, r.status_code, False))
         return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None, r.headers
 
-    def fetch(self, url, where="", follow=True):
+    def fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None):
         """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF.
-        follow: a link that gives a product HTML page is followed once to the PDF the page links to."""
+        follow: a link that gives a product HTML page is followed once to the PDF the page links to.
+        part: the MPN, for a PDF taken from the Downloads folder (pdf_fetch.Handoff checks it names the part).
+        handoff: False leaves the hand-off out (Reader.job asks a person only once no link of the part worked);
+        "only" tries just the hand-off, for a link every other way was refused for this run."""
         stem = hashlib.sha256(url.encode()).hexdigest()[:24]
         pdf_f, meta_f = self.dir / f"{stem}.pdf", self.dir / f"{stem}.json"
         if pdf_f.exists() and meta_f.exists():
@@ -1942,15 +2043,19 @@ class PdfStore:
             raise DatasheetError(f"{url}: not downloaded ({why})")
         if self.offline:
             raise DatasheetError(f"{url}: offline and not downloaded before")
-        status, data, ctype, final, err = self._get_retrying(url)
+        n = len(self.refusals)
+        status, data, ctype, final, err, way, notes, *more = self._download(url, part, handoff)
+        if len(self.refusals) > n:                    # for the hand-off later: where the link came from
+            self.refusals[n:] = [(url, where, _page)]
+        also = f" (also tried {'; '.join(notes)})" if notes else ""
         if err:
-            raise DatasheetError(f"{url}: {err}")
+            raise DatasheetError(f"{url}: {err}{also}")
         why = unsafe_download(final) if final and final != url else None
         if why:                                       # redirected there: the bytes are not kept or sent anywhere
             raise DatasheetError(f"{url}: redirected to {final}, not used ({why})")
         if not 200 <= (status or 0) < 300:
             page = status == 403 and bool(re.search(rb"<(!doctype|html)", (data or b"")[:2048], re.I))
-            raise DatasheetError(f"{url}: HTTP {status}" + (" (a web page: the site refused the download)" if page else ""))
+            raise DatasheetError(f"{url}: HTTP {status}" + (" (a web page: the site refused the download)" if page else "") + also)
         if len(data) > MAX_DOWNLOAD:
             raise DatasheetError(f"{url}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
         if not is_pdf(data):
@@ -1958,15 +2063,20 @@ class PdfStore:
             link = pdf_link(data, final or url) if html and follow else None
             if link and link != url:
                 try:
-                    pdf, meta = self.fetch(link, where, follow=False)
-                    return pdf, dict(meta, page_url=url)
+                    pdf, meta = self.fetch(link, where, follow=False, part=part, handoff=handoff, _page=url)
+                    return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
                 except DatasheetError as e:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
             kind = "an HTML page" if html else f"{ctype or 'unknown type'}"
-            raise DatasheetError(f"{url}: not a PDF ({kind}, {len(data)} bytes)")
+            raise DatasheetError(f"{url}: not a PDF ({kind}, {len(data)} bytes){also}")
         meta = {"url": url, "final_url": final, "where": where, "status": status, "content_type": ctype,
                 "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
                 "fetched": datetime.datetime.now().isoformat(timespec="seconds")}
+        if way != "plain":                            # how it got past a refusal (ecadlib.pdf_fetch)
+            meta["via"] = way
+            got = more[0].get("x-ecadlib-file") if more and hasattr(more[0], "get") else None
+            if got:                                   # the file's name only: never a path on this machine
+                meta["file"] = got
         self.dir.mkdir(parents=True, exist_ok=True)
         from .fsutil import write_bytes_atomic        # own temp file per writer: two runs fetching one PDF never collide
         write_bytes_atomic(pdf_f, data)
@@ -2148,7 +2258,8 @@ class Reader:
     run picks the same batch up next time instead of paying twice."""
 
     def __init__(self, out, cache_dir, key=None, rules=None, http=None, model=None, effort=None, batch=False, wait=True,
-                 poll=60.0, max_wait_s=24 * 3600, estimate=False, auto_pages=None, client=None, log=print, sleep=None, yes=False):
+                 poll=60.0, max_wait_s=24 * 3600, estimate=False, auto_pages=None, client=None, log=print, sleep=None, yes=False,
+                 handoff=None):
         self.cfg = settings(rules)
         self.cap_set = cap_chosen(rules)              # the person's cap, not the default one (set_cap: --max-cost-usd)
         self.out, self.cache_dir = Path(out), Path(cache_dir)
@@ -2174,7 +2285,24 @@ class Reader:
         self.estimate_only, self.yes = estimate, yes
         self.count_tokens = True                      # False: an estimate that promised to send nothing (rough)
         self.auto_pages = self.cfg["auto_pages"] if auto_pages is None else auto_pages
-        self.store, self.results = PdfStore(cache_dir, http, sleep=sleep), ResultCache(cache_dir)
+        from . import pdf_fetch as PF                 # a site that refuses ecadlib's own request ([datasheet] download)
+        env = os.environ.get("ECADLIB_DOWNLOAD", "").strip()
+        dl = env or self.cfg.get("download")
+        dl = "auto" if dl is None else dl
+        if isinstance(dl, str) and dl not in ("auto", "plain"):
+            dl = [w.strip() for w in dl.split(",") if w.strip()]
+            bad = [w for w in dl if w not in PF.TIERS]
+            if bad:
+                raise DatasheetError(f"{'ECADLIB_DOWNLOAD' if env else '[datasheet] download'}: {', '.join(bad)} is not a way "
+                                     f"to download: use auto, plain or a comma list of {', '.join(PF.TIERS)}")
+        # handoff: None = when [datasheet] handoff = "auto" and a person watches this terminal; False = never (the web
+        # UI, MCP, the menus: Workspace). It tells the person what to save on stderr, never through `log` (a filter
+        # may drop it); librarian.run points it at its progress line.
+        self.store = PdfStore(cache_dir, http, sleep=sleep, download=dl, handoff=PF.Handoff(
+            PF.downloads_dir(self.cfg.get("downloads_folder")), wait_s=float(self.cfg.get("handoff_wait_s") or 180))
+            if handoff is not False and self.cfg.get("handoff") == "auto" and not estimate
+            and not self.offline and (handoff or PF.interactive()) else None)
+        self.results = ResultCache(cache_dir)
         self.dir = self.out / "datasheet"
         self.log_file = self.dir / "api_log.jsonl"
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
@@ -2237,16 +2365,26 @@ class Reader:
         failed before starts where it left off ('final' = the cached answer at this step is the one to use)."""
         from . import ds_route as DR
         attempts, data, prov = [], None, None
+        n0 = len(self.store.refusals)
         for url, where in [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))]:   # http, then https
             try:
-                data, prov = self.store.fetch(url, where)
+                data, prov = self.store.fetch(url, where, part=part, handoff=False)
                 break
             except DatasheetError as e:
                 attempts.append({"url": url, "where": where, "error": str(e)})
+        if data is None and self.store.handoff is not None:   # no link worked by itself: ask the person, link by link
+            for url, where, page in dict.fromkeys(self.store.refusals[n0:]):
+                try:
+                    data, prov = self.store.fetch(url, where, part=part, handoff="only")
+                    prov = dict(prov, **({"page_url": page} if page else {}))
+                    break
+                except DatasheetError as e:
+                    attempts.append({"url": url, "where": where, "error": str(e)})
         if data is None:
             if not urls:
                 raise DatasheetError("no datasheet URL known")
-            wrong = {a["url"] for a in attempts if re.search(BROKEN_LINK, a["error"])}
+            wrong = {a["url"] for a in attempts      # (what the other ways got says nothing of the link itself)
+                     if re.search(BROKEN_LINK, re.sub(r" \(also tried .*\)$", "", a["error"], flags=re.S))}
             usable = [(u, w) for u, w in urls if u not in wrong and api_url(u) not in wrong]
             if not usable:
                 raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts))

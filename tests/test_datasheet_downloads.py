@@ -10,6 +10,9 @@ from tests import test_datasheet_batch as TB
 PDF = TB.PDF
 HTML = b"<!DOCTYPE html><html><body>Access Denied</body></html>"
 TIMEOUT = "ReadTimeout: HTTPSConnectionPool(host='www.analog.com', port=443): Read timed out. (read timeout=60)"
+CONNECT_TIMEOUT = ("ConnectTimeout: (ConnectTimeoutError) HTTPSConnectionPool(host='www.ixys.com', port=443): Max retries "
+                   "exceeded (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object>, 'Connection to "
+                   "www.ixys.com timed out. (connect timeout=60)'))")
 RESET = ("ConnectionError: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly "
          "closed by the remote host', None, 10054, None))")
 
@@ -219,7 +222,8 @@ def test_a_refused_download_says_why_and_what_to_do():
         assert said[0]["fix"] == (f"Download the PDF in a browser ({adi}) and read it with ecadlib datasheet FILE.pdf "
                                   "--part LTM4671, or pick a footprint by hand."), said[0]["fix"]
     for e, why in ((TIMEOUT + " (3 tries)", "timed out on every try"), (TIMEOUT, None),
-                   ("SSLError: certificate verify failed (3 tries)", None), ("HTTP 404", None)):
+                   ("SSLError: certificate verify failed (3 tries)", None), ("HTTP 404", None),
+                   (CONNECT_TIMEOUT + " (3 tries)", None)):                  # www.ixys.com never answers: not a refusal
         r = D.refusal([{"url": "https://www.st.com/stulpi01a.pdf", "error": "https://www.st.com/stulpi01a.pdf: " + e}])
         assert (r and r[2]) == why, (e, r)
 

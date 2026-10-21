@@ -154,6 +154,8 @@ and its artifact.
 ## Next steps toward 97 %
 
 1. Read the thermal-pad land from the datasheet's land page (7 parts, about $2 to re-read in a batch, estimated).
-2. Fetch the 26 PDFs another way (a person's download, or the maker's API), then read them.
+2. Fetch the 26 PDFs another way, then read them. ecadlib now tries browser headers, Chrome's TLS fingerprint and a
+   headless browser when a site refuses a script (docs/bom-and-datasheets.md); each case records `via`, the way that
+   got its PDF. The benchmark never hands a link to a person's browser.
 3. Find out why the ATSAME70 reads came back with every dimension blank.
 4. Check PCA9557BS and S10B-PH-K against the parts themselves, and add what is right to the errata or the fixes.

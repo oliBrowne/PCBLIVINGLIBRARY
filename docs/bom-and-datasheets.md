@@ -145,6 +145,33 @@ All parts go into one Message Batch (half price), one request per part with `cus
 
 **Not tested live:** no API key is available here, so no successful extraction or batch has run. With an invalid key the live API returned 401 `authentication_error` for messages, count_tokens, batch create and batch retrieve, and the client reported each one correctly. The tests use a fake HTTP layer in the documented Messages, count_tokens and Batches shapes. Datasheet hosts (LCSC and the others) are blocked from this sandbox.
 
+### When a maker's site refuses the download (`pdf_fetch.py`)
+
+Some makers' sites answer a script with 403, a bot-check page or a dropped connection, and give the same link to a person's browser (analog.com and Nexperia refused 17 of the 110 benchmark PDFs, see [benchmark.md](benchmark.md)). ecadlib first downloads a link as it always did. Only when the site refuses it does it try the next way, in this order, and stop at the first one that gets a PDF:
+
+1. **Browser headers:** the same request with a desktop Chrome's headers (User-Agent, Accept, Accept-Language, Referer).
+2. **Chrome's TLS fingerprint:** [curl_cffi](https://github.com/lexiforest/curl_cffi) makes the connection look like Chrome's own, which is what bot managers such as Akamai check first. No browser runs.
+3. **A headless browser:** [Playwright](https://playwright.dev/python/) drives the Edge or Chrome already installed on the machine (else Playwright's own Chromium), headless and in a fresh profile, so none of your cookies or sign-ins are used. It opens the site's home page first so the site's own scripts run, then the link, and keeps the PDF the browser receives (a download, or the PDF it would show).
+4. **Your own browser:** only when none of the part's links gave a PDF by itself (an LCSC copy after a refused maker link is used without asking), each refused link opens in your default browser in turn, and ecadlib waits (`handoff_wait_s`, default 3 minutes) for the PDF to land in your Downloads folder (on Linux the XDG Downloads folder). It takes a new file only when its name matches the link or the part number, or its text names the part, and leaves anything else alone. It asks once per link, and after one wait with nothing downloaded it stops asking for the rest of the run. When no browser can be opened (an SSH session, or only a console browser such as w3m), it prints the link to download yourself. This step runs only when you are watching a run in a terminal (stdin, stdout and stderr all on it: with `2>file` it is skipped); never in CI, the benchmark, the web UI, the Altium or KiCad menus or the MCP server.
+
+None of these solves a CAPTCHA, signs in, reads your browser's cookies or goes through a third-party proxy. A link that is simply gone (404 or 410), a proxy refusal, a name that does not resolve, a closed port or a host that never answers the connection never moves on, from any way: those are not the site refusing a script, and no other way would get further. (Behind a proxy, a host that never answers looks like a site that stalls, so the other ways are tried for it.) A TLS or certificate error does move on: Edge and Chrome check certificates against your system's own store (a company network that inspects HTTPS) and talk to older servers that Python's TLS refuses; every way still checks the certificate. The automatic way that worked is tried first for that site's next link during the run (your own browser never is), and the cached PDF's record (`via`) says which way got it. When every way is refused, the error lists what each one got. One headless browser serves the whole run; one that stops answering (a site that stops sending halfway) is given up after a time limit and a new one starts, so a run never hangs on it.
+
+```
+pip install "ecadlib[browser]"          # curl_cffi + Playwright; without them the chain skips ways 2 and 3 and says so
+playwright install chromium             # only when the machine has neither Edge nor Chrome
+ecadlib doctor                          # shows whether curl_cffi and playwright are installed
+```
+
+```toml
+[datasheet]
+download = "auto"          # "auto": every way above, in order | "plain": ecadlib's own request only | a list, e.g. ["headers", "browser"]
+handoff = "auto"           # "auto": open a refused link in your browser when you watch the run | "off"
+handoff_wait_s = 180       # seconds to wait for the PDF in Downloads (10 to 3600)
+downloads_folder = ""      # "" = the system Downloads folder (on Windows the one Explorer uses)
+```
+
+`ECADLIB_DOWNLOAD=plain` (or a comma list such as `headers,browser`) overrides `download` for one run, and `ECADLIB_NO_HANDOFF=1` turns the hand-off off. `ECADLIB_BROWSER` points the headless browser at a particular Chrome or Edge executable. The test suite sets `ECADLIB_DOWNLOAD=plain` and `ECADLIB_NO_HANDOFF=1`; `tests/test_pdf_fetch.py` checks each way against a local site that refuses scripts the ways bot managers do (a User-Agent check, a cookie set by a script, a challenge page that reloads itself, a link written by a script).
+
 ### Fewer pages, a model per part, and what it cost (`ds_route.py`)
 
 ```

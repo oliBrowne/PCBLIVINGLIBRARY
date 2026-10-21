@@ -849,7 +849,8 @@ class Workspace:
     def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False):
         from . import datasheet as D
         rd = D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
-                      http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None)
+                      http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None,
+                      handoff=False)          # the web UI, MCP and the menus: no terminal to tell what to save where
         rd.count_tokens = False     # quotes send nothing before the click: rough; the send-time cap check counts the same way
         return rd
 

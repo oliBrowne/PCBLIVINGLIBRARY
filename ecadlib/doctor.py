@@ -21,7 +21,9 @@ CORE = (("requests", "requests"), ("pandas", "pandas"), ("openpyxl", "openpyxl")
         ("olefile", "olefile"))
 OPTIONAL = (("PIL", "pillow", "visual-check pictures"), ("pypdf", "pypdf", "datasheet page trimming"),
             ("pdfplumber", "pdfplumber", "datasheet ordering tables read by column"),
-            ("pypdfium2", "pypdfium2", "datasheet page pictures (pdftoppm works too)"))
+            ("pypdfium2", "pypdfium2", "datasheet page pictures (pdftoppm works too)"),
+            ("curl_cffi", "curl_cffi", "datasheet links a site refuses to scripts: Chrome's TLS fingerprint"),
+            ("playwright", "playwright", "datasheet links a site refuses to scripts: a headless Edge / Chrome"))
 TOOLS = (("pdftoppm", "datasheet page pictures when pypdfium2 is missing", "pip install pypdfium2, or install poppler-utils"),
          ("kicad-cli", "KiCad checks and SVG previews", "install KiCad 7 or newer"),
          ("git", "upkeep pull requests", "install git"))

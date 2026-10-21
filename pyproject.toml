@@ -44,8 +44,10 @@ Changelog = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/CHANGELOG.m
 altium = ["olefile"]                   # kept for old install commands; olefile is now a core dependency
 pdf = ["pypdf", "pdfplumber", "pypdfium2"]   # pdfplumber: ordering tables read by column (text lines without it); pypdfium2: page pictures
 vision = ["pillow", "pypdf", "pypdfium2"]   # visual-check: draw footprints / symbols; pypdfium2 renders datasheet pages (else pdftoppm)
-all = ["olefile", "pypdf", "pillow", "pdfplumber", "pypdfium2"]
-dev = ["olefile", "graphql-core", "pyaltiumlib", "pypdf", "pillow", "tomli", "pdfplumber", "pypdfium2"]   # tomli: the Python 3.10 path is tested
+browser = ["curl_cffi", "playwright>=1.57"]    # datasheet links a maker's site refuses to scripts: Chrome's TLS fingerprint,
+                                       # then the installed Edge / Chrome, headless (ecadlib.pdf_fetch)
+all = ["olefile", "pypdf", "pillow", "curl_cffi", "playwright>=1.57", "pdfplumber", "pypdfium2"]
+dev = ["curl_cffi", "playwright>=1.57", "olefile", "graphql-core", "pyaltiumlib", "pypdf", "pillow", "tomli", "pdfplumber", "pypdfium2"]   # tomli: the Python 3.10 path is tested
 
 [project.scripts]
 ecadlib = "ecadlib.cli:main"
