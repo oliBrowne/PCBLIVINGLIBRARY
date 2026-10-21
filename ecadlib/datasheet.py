@@ -1217,6 +1217,24 @@ def thermal_land_missing(spec, maker=None, url=None):
 SIDEWAYS = re.compile(r"horizontal|right[ -]?angle|\bR/?A\b|side[ -]?entry", re.I)
 
 
+def bare_pads(spec):
+    """True when the read shows a bare pad pattern a plug or pogo cable presses onto (Tag-Connect TC2030), not a
+    housed connector: every contact is a round SMD land (a housed SMD connector's leads land on rectangles), the only
+    other pads are alignment holes (NPTH), and no seated height was read. Through-hole pins, mounting/shield pads,
+    rectangular contacts or a height mean a housing sits on the board (S28B-PHDSS, S13B-EH)."""
+    tab = spec.get("pad_table") or {}
+    if not (tab.get("pads") or tab.get("arrays")) or spec.get("height_max"):
+        return False
+    from . import footprint_adv as FA
+    try:
+        pads = FA.table_layout(spec)[0]
+    except Exception:                                       # an unreadable table: no sign there is no housing
+        return False
+    smd = [p for p in pads if p["kind"] == "smd"]
+    return bool(smd) and all(p["role"] == "pin" and p["shape"] == "circle" for p in smd) and \
+        all(p["kind"] in ("smd", "np_thru_hole") for p in pads)
+
+
 def body_unread(spec):
     """The hold line when a connector's courtyard would be a guess: no body outline was read (pad_table body,
     body_length x body_width), so the courtyard would hug the pads. A connector's housing reaches well past its pins,
@@ -1228,6 +1246,8 @@ def body_unread(spec):
             t == "connector" and (spec.get("pad_table") or {}).get("body"):
         return None
     if t == "pin_header" and not SIDEWAYS.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
+        return None
+    if t == "connector" and bare_pads(spec):
         return None
     return ("no footprint: the datasheet read left the connector's body outline blank, so its courtyard would hug the "
             "pads while the housing reaches past them; read the body size from the drawing")
