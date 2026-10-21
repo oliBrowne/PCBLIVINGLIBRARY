@@ -1699,7 +1699,7 @@ def lcsc_number(item=None, ln=None, row=None):
     par = {p["name"]: p["value"] for p in (item or {}).get("parameters", [])}
     for v in ((ln or {}).get("lcsc"), (row or {}).get("lcsc"),
               *(par.get(f"Supplier Part Number {i}") for i in range(1, 10) if str(par.get(f"Supplier {i}", "")).upper() == "LCSC")):
-        m = re.fullmatch(r"\s*(C\d{3,})\s*", str(v or ""))
+        m = re.fullmatch(r"\s*(C\d{3,})\s*(\([^()]*\)\s*)?", str(v or ""))   # triage's "C10800 (via MPN)" too
         if m:
             return m.group(1)
     return None
@@ -1797,6 +1797,37 @@ def pdf_pages(data):
 
 def is_pdf(data):
     return isinstance(data, (bytes, bytearray)) and b"%PDF-" in data[:1024]
+
+
+MENTION_PAGES = 5                                     # the first pages a datasheet names its part (or family) on
+
+
+def mentions_part(texts, mpn):
+    """Does the text of a PDF's first pages name the part? True: the MPN, or a prefix of it that keeps its whole
+    numeric core (AD5274BRM -> AD5274 in "AD5272/AD5274"; LTC4060EDHC -> LTC4060, never LTC40, which LTC4054 has),
+    a family name with x for any character (C8051F32x, TPS2660x) or a range that holds it (MAX22201-MAX22207).
+    False: none of these. None: it can't be told (no text layer, a scanned PDF, no part number), never a rejection."""
+    key = re.sub(r"[^A-Z0-9]", "", re.split(r"[#/]", str(mpn or "").strip().upper())[0])   # #PBF, /NOPB tails off
+    core = re.match(r"\d*[A-Z]*\d+", key)
+    raw = " ".join(t or "" for t in texts or []).upper()
+    flat = re.sub(r"[^A-Z0-9]", "", raw)
+    if len(key) < 4 or not core or len(flat) < 40:
+        return None
+    n = max(4, core.end())
+    if any(key[:i] in flat for i in range(len(key), n - 1, -1)):
+        return True
+    for m in re.finditer(r"([A-Z0-9]*\d[A-Z0-9]*?)(X+)\b", raw):          # C8051F32x: x is any character
+        stem, nx = m.group(1), len(m.group(2))
+        if len(stem) + nx >= n and len(key) >= len(stem) + nx and key.startswith(stem):
+            return True
+    lead = re.match(r"([A-Z]+)(\d+)", key)
+    for m in re.finditer(r"\b([A-Z]+)(\d+)[A-Z]*\s*[-–—/]\s*([A-Z]+)?(\d+)", raw) if lead else ():
+        a, b = m.group(2), m.group(4)                 # MAX22201-MAX22207, AD5272/74
+        b = a[:len(a) - len(b)] + b if len(b) < len(a) else b
+        if m.group(1) == lead.group(1) and m.group(3) in (None, m.group(1)) and len(a) == len(b) == len(lead.group(2)) \
+                and min(a, b) <= lead.group(2) <= max(a, b):
+            return True
+    return False
 
 
 _NO_FETCH_HOSTS = re.compile(r"(localhost|.*\.localhost|metadata|metadata\.google\.internal|instance-data(\.ec2\.internal)?)\.?",
@@ -2022,12 +2053,22 @@ class PdfStore:
             h.log.append(("GET", url, r.status_code, False))
         return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None, r.headers
 
-    def fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None):
+    def fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None, mpn=None):
         """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF.
         follow: a link that gives a product HTML page is followed once to the PDF the page links to.
         part: the MPN, for a PDF taken from the Downloads folder (pdf_fetch.Handoff checks it names the part).
         handoff: False leaves the hand-off out (Reader.job asks a person only once no link of the part worked);
-        "only" tries just the hand-off, for a link every other way was refused for this run."""
+        "only" tries just the hand-off, for a link every other way was refused for this run.
+        mpn: the part's MPN: a PDF whose first pages do not name it (mentions_part) is not its datasheet (a press
+        release a link redirected to; LTC4060EDHC's link serving the LTC4054 datasheet). Kept in the cache all the same."""
+        data, meta = self._fetch(url, where, follow, part, handoff, _page)
+        if mpn:
+            from . import ds_route as DR
+            if mentions_part(DR.page_texts(data, MENTION_PAGES), mpn) is False:
+                raise DatasheetError(f"the PDF at {meta.get('url') or url} doesn't mention {mpn}")
+        return data, meta
+
+    def _fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None):
         stem = hashlib.sha256(url.encode()).hexdigest()[:24]
         pdf_f, meta_f = self.dir / f"{stem}.pdf", self.dir / f"{stem}.json"
         if pdf_f.exists() and meta_f.exists():
@@ -2060,10 +2101,10 @@ class PdfStore:
             raise DatasheetError(f"{url}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
         if not is_pdf(data):
             html = bool(re.search(rb"<(!doctype|html)", data[:2048], re.I))
-            link = pdf_link(data, final or url) if html and follow else None
+            link = pdf_link(data, final or url, docs=True) if html and follow else None
             if link and link != url:
                 try:
-                    pdf, meta = self.fetch(link, where, follow=False, part=part, handoff=handoff, _page=url)
+                    pdf, meta = self._fetch(link, where, follow=False, part=part, handoff=handoff, _page=url)
                     return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
                 except DatasheetError as e:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
@@ -2084,15 +2125,27 @@ class PdfStore:
         return data, dict(meta, from_cache=False)
 
 
-def pdf_link(html, base):
+# Document-download links that do not end .pdf (followed only when nothing on the page does; fetch keeps the answer only
+# when it is a PDF): Broadcom docs.broadcom.com/docs/<id>, Infineon /dgdl/...?fileId=, Lattice view_document?document_id=,
+# Panasonic & co file-download links.
+DOC_LINK = re.compile(r"docs\.broadcom\.com/docs/[\w.-]+|/dgdl/|[?&](fileId|document_?id|docid)=|/view_document\b"
+                      r"|/file-?download\b", re.I)
+
+
+def pdf_link(html, base, docs=False):
     """The datasheet PDF an HTML product page links to (an href ending .pdf, or a meta refresh), absolute; a link
-    whose name says datasheet, and then one on the page's own site, is preferred. None when there is none."""
+    whose name says datasheet, and then one on the page's own site, is preferred. None when there is none.
+    docs: with no such link, a document-download link (DOC_LINK) instead (PdfStore.fetch following a page)."""
+    import html as H_
     from urllib.parse import urljoin, urlparse
     text = html.decode("utf-8", "replace") if isinstance(html, bytes) else str(html)
     refresh = re.search(r"""http-equiv=["']?refresh["']?[^>]*?url=([^"'>\s]+)""", text, re.I)
     links = [m.group(1) for m in re.finditer(r"""href=["']([^"'#]+?\.pdf(?:\?[^"']*)?)["']""", text, re.I)]
     if refresh:
         links.insert(0, refresh.group(1))
+    if docs and not links:
+        links = [H_.unescape(m.group(1)) for m in re.finditer(r"""href=["']([^"'#]+)["']""", text, re.I)
+                 if DOC_LINK.search(H_.unescape(m.group(1)))]
     links = [u for u in links if urlparse(urljoin(base, u)).scheme.lower() in ("http", "https")]   # no file:, data:
     if not links:
         return None
@@ -2250,7 +2303,7 @@ def _create_in_flight(m):
 
 # A link that is wrong everywhere: not a PDF, too big, or gone. 401 / 403 / 429 are not in it: a maker's site that
 # refuses this machine (bot rules, a corporate proxy) usually serves the API's fetcher, so such a link goes as a URL.
-BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than"
+BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than|doesn't mention"
 
 
 def hold_on_doubt(inf, model, res):
@@ -2370,9 +2423,9 @@ class Reader:
         return self._client
 
     # --- jobs
-    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None):
+    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None):
         """fp_needed: False when the part's footprint comes from another source ([datasheet] cross_check = "auto" then
-        skips the cross-check). Try each (url, where) until one is a PDF. A link that cannot be downloaded here (blocked host) is sent
+        skips the cross-check). mpn: the part's MPN, when it has one: a PDF that does not name it is skipped (PdfStore.fetch). Try each (url, where) until one is a PDF. A link that cannot be downloaded here (blocked host) is sent
         as a URL source for the API to fetch, so a part is never stuck on this machine's network.
         The job is the first step of the part's route (ds_route): the pages picked for [datasheet] page_budget and the
         model the router starts on; answers already in the result cache are replayed, so a part whose cheap attempt
@@ -2382,14 +2435,14 @@ class Reader:
         n0 = len(self.store.refusals)
         for url, where in [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))]:   # http, then https
             try:
-                data, prov = self.store.fetch(url, where, part=part, handoff=False)
+                data, prov = self.store.fetch(url, where, part=part, handoff=False, mpn=mpn)
                 break
             except DatasheetError as e:
                 attempts.append({"url": url, "where": where, "error": str(e)})
         if data is None and self.store.handoff is not None:   # no link worked by itself: ask the person, link by link
             for url, where, page in dict.fromkeys(self.store.refusals[n0:]):
                 try:
-                    data, prov = self.store.fetch(url, where, part=part, handoff="only")
+                    data, prov = self.store.fetch(url, where, part=part, handoff="only", mpn=mpn)
                     prov = dict(prov, **({"page_url": page} if page else {}))
                     break
                 except DatasheetError as e:
@@ -2403,12 +2456,13 @@ class Reader:
             if not usable:
                 raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts))
             url, where = usable[0]
+            more = [(u, w) for u, w in usable[1:] if api_url(u) != api_url(url)]   # if the API can't fetch it (_next_link)
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
             facts = tables = None
         else:
             url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
-            lv, why = [None], {}
+            lv, why, more = [None], {}, []
             texts = self._page_texts(data, src_hash) if n else None
             facts = DR.ordering_facts(texts, part, data) if texts else None
             if not pages and self.page_budget and n and n > self.page_budget:
@@ -2421,7 +2475,7 @@ class Reader:
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
                 "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov, "fp_needed": fp_needed,
-                "facts": facts, "tables": tables,
+                "facts": facts, "tables": tables, "more_urls": more,
                 "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
                           "attempts": []}}
         first = self._at(base, rung, 0)
@@ -2430,6 +2484,21 @@ class Reader:
             if self.results.get(whole["key"]):
                 first = whole
         return self._walk(first)
+
+    def _next_link(self, job, error):
+        """A part sent as a URL the API could not fetch (API_FETCH_FAILED; not billed): the same step of its route with
+        its next usable link, or None. A link is asked for once (http and https of one link are one document)."""
+        rest = [(u, w) for u, w in job.get("more_urls") or () if api_url(u) != api_url(job["url"])]
+        if job.get("data") is not None or "rung" not in job or not rest or not API_FETCH_FAILED.search(str(error)):
+            return None
+        (url, where), why = rest[0], re.sub(r"^.*?(invalid_request_error: |API request failed: )", "", str(error))[:200]
+        self.say(f"  datasheet {job.get('name') or job['part']}: the API could not fetch {job['url']}; trying {url}")
+        prov = dict(job["base_prov"], url=url, where=where,
+                    attempts=list(job["base_prov"].get("attempts") or []) + [
+                        {"url": job["url"], "where": job["where"], "error": f"the API could not fetch it: {why}"}])
+        base = dict(job, url=url, where=where, src_hash="url" + hashlib.sha256(url.encode()).hexdigest(), base_prov=prov,
+                    more_urls=rest[1:])
+        return self._walk(self._at(base, job["rung"], job["level"]))
 
     def _page_marks(self, data, digest):
         from . import ds_route as DR
@@ -2683,7 +2752,11 @@ class Reader:
                 if msg is None:                       # no answer came back (API error): nothing to record
                     if not getattr(e, "maybe_billed", False):
                         self._release(job["key"])
-                    raise
+                    nxt = self._next_link(job, e)     # the API could not fetch the link: the next one, if any
+                    if nxt is None:
+                        raise
+                    job = nxt
+                    continue
             err = None
             try:
                 self._store(job, msg, "sync")         # refusal / max_tokens / not schema-shaped: recorded with its usage
@@ -3310,8 +3383,9 @@ class Reader:
                     out[j["key"]] = self._result(j, rec)
                 except DatasheetError as e:
                     out[j["key"]] = e
-            elif j["key"] in errors:
-                out[j["key"]] = DatasheetError(errors[j["key"]])
+            elif j["key"] in errors:                 # the API could not fetch the link: its next one, in another round
+                nx = self._next_link(j, errors[j["key"]])
+                out[j["key"]] = _Advance(nx) if nx is not None else DatasheetError(errors[j["key"]])
             else:
                 bid = next((b["id"] for b in st["batches"] if j["key"] in b["requests"].values() and not b.get("collected")), "")
                 out[j["key"]] = f"pending {bid}".strip()
@@ -3374,7 +3448,8 @@ def estimate_plan(plan, reader, parts=None):
         ln, mpn = _plan_line(it)
         urls = datasheet_urls(it, ln, {}, (state.get(it["name"]) or {}).get("found"))
         try:
-            jobs.append(reader.job(mpn or it["name"], urls, it["footprint"].get("ref") or AL.lib_name(it["name"]), name=it["name"]))
+            jobs.append(reader.job(mpn or it["name"], urls, it["footprint"].get("ref") or AL.lib_name(it["name"]), name=it["name"],
+                                   mpn=mpn or None))
         except DatasheetError as e:
             skipped.append({"part": it["name"], "why": str(e)})
     est = reader.estimate([j for j in jobs if not reader.results.get(j["key"])])

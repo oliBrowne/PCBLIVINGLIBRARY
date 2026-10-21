@@ -152,8 +152,8 @@ def failure_type(row, mine, spec):
         return "maker_land"
     f = row["fields"]
     failed = {k for k, v in f.items() if not v["ok"] and k not in S.INFO_ONLY}
-    if failed <= {"symbol_pins", "symbol_names"}:
-        return "symbol"
+    if failed <= {"symbol_pins", "symbol_names"}:            # SM6T100A (10-19): the PDF never reached the model
+        return "no_pdf" if any(NO_DATASHEET.search(str(t)) for t in row.get("tried") or []) else "symbol"
     pa, pb = (f.get("pitch") or {}).get("ours"), (f.get("pitch") or {}).get("ref")
     if "pitch" in failed and pa and pb and any(abs(pa / pb - r) < 0.03 * r for r in (25.4, 1 / 25.4, 39.37, 1 / 39.37)):
         return "wrong_unit"
@@ -278,7 +278,7 @@ class EvalReader(D.Reader):
             self.key = k
         return {"input_tokens": r["input_tokens"], "output_tokens": r["output_tokens"], "usd": r["usd"], "how": r["how"]}
 
-    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None):
+    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None):
         if self.replay:
             f = self.replay / f"{_safe(part)}.json"
             if not f.exists():
@@ -289,7 +289,7 @@ class EvalReader(D.Reader):
                    "where": j["where"], "offset": j["offset"], "headers": {}, "body": {"max_tokens": D.MAX_TOKENS},
                    "prov": j["prov"], "recording": rec, "fp_needed": fp_needed}
         else:
-            job = super().job(part, urls, package, pages, name, fp_needed)
+            job = super().job(part, urls, package, pages, name, fp_needed, mpn)
         job["estimate"] = (job.get("recording") or {}).get("estimate") or self._estimate(job)
         self.used.setdefault(part, {"estimate": job["estimate"]})
         pv = job.get("prov") or {}                     # the PDF read: pinned by its SHA-256 (<set>.pins.json)
@@ -402,6 +402,8 @@ class EvalReader(D.Reader):
         msg = rec["message"]
         u = self.used.setdefault(job["part"], {"estimate": job.get("estimate")})
         u.setdefault("via", rec.get("via") or "live")
+        if (job.get("prov") or {}).get("url"):        # the link read: the next one when the API could not fetch the first
+            u.setdefault("datasheet", {})["url"] = job["prov"]["url"]
         u["batch"] = str(rec.get("via") or "").startswith("batch") or bool((job.get("recording") or {}).get("batch"))
         from .. import ds_route as DR                 # priced as the served model when its price is known
         u.update(usage=msg.get("usage"), model=DR.billed_model(rec.get("model") or job.get("model") or self.model, msg))

@@ -671,7 +671,7 @@ class Run:
         rd = self.reader
         if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
             try:
-                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
                 res = rd.cached(job)
             except CC.Held as e:
                 self.cross_check_held(st, e)
@@ -689,7 +689,7 @@ class Run:
         if not getattr(rd, "_recollected", False):    # answers paid for in earlier batches, before a parser fix
             rd._recollected = True
             rd.recollect()
-        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
         try:
             res = hit = rd.cached(job)
             if res is None and rd.deferred:
@@ -748,8 +748,9 @@ class Run:
         self.waiting = []
 
     def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
-        url, where = job["url"], job["where"]
-        from . import fp_edit as FE                   # hand edits of this part's pad table (ecadlib fp-edit)
+        pdf = res["sidecar"].get("pdf") or {}        # the link read (the next one when the API could not fetch the first)
+        url, where = pdf.get("url") or job["url"], pdf.get("where") or job["where"]
+        from . import fp_edit as FE                  # hand edits of this part's pad table (ecadlib fp-edit)
         res, edited = FE.apply(FE.for_part(FE.load(self.out), st.get("name"), job.get("name"), job["part"]), res)
         if edited:
             st["tried"].extend(edited)
