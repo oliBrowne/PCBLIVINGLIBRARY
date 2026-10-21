@@ -109,7 +109,12 @@ def feedback(body, msg, kind, why, inf, send, judge, rec, guard=None, schema=Non
         except DatasheetError as e:                   # over the cost cap: keep the first answer, send nothing more
             rec["feedback"] = {"errors": why[:15], "before": kind, "after": f"not sent: {e}"[:300], "kept": "first"}
             return msg, None
-    msg2 = R.repair_message(send(fbody), schema or body["output_config"]["format"]["schema"], p)
+    try:
+        sent = send(fbody)
+    except Exception as e:                            # no answer to the feedback turn: the first one did come back
+        e.answered = True                             # (datasheet.Reader.answered)
+        raise
+    msg2 = R.repair_message(sent, schema or body["output_config"]["format"]["schema"], p)
     kind2, why2 = judge(msg2)
     keep = _better(kind, why, kind2, why2)
     rec["feedback"] = {"errors": why[:15], "before": kind, "after": kind2, "kept": "retry" if keep else "first"}

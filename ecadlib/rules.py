@@ -71,6 +71,13 @@ DEFAULTS = {
                   "zoom_drawings": False,               # also send sharper close-ups of the drawing pages (A/B test first)
                   # ecadlib.crosscheck: a second source (standard table / a second read) before a footprint is accepted
                   "cross_check": "auto", "cross_check_model": "",
+                  # a folder of datasheet PDFs a person downloaded (<MPN>.pdf), tried before any link: for makers' sites
+                  # that refuse downloads from scripts
+                  "folder": "",
+                  # a read whose pin count, pitch, body and exposed pad fit exactly one checked standard package:
+                  # off (default until measured live) = the read's pads; auto = the table's land unless the datasheet
+                  # gives its own; always
+                  "standard_land": "off",
                   # ecadlib.pdf_fetch: a PDF link the maker's site refuses to ecadlib's own request. "auto": a browser's
                   # headers, then a Chrome TLS fingerprint, then a headless Edge / Chrome (the last two need
                   # pip install "ecadlib[browser]"); "plain": ecadlib's own request only; or a list of those ways
@@ -390,6 +397,11 @@ def validate(raw, where="ecadlib.toml"):
     if "cross_check" in ds and ds["cross_check"] not in ("auto", "always", "off"):
         _err(where, "datasheet.cross_check", f"= {ds['cross_check']!r}: must be auto (standard table, else a second read), "
                                              "always (a second read for every part) or off")
+    if "standard_land" in ds and ds["standard_land"] not in ("auto", "always", "off"):
+        _err(where, "datasheet.standard_land", f"= {ds['standard_land']!r}: must be auto (the table's land unless the "
+                                               "datasheet gives its own), always or off (the read's pads)")
+    if "folder" in ds and not isinstance(ds["folder"], str):
+        _err(where, "datasheet.folder", "must be a folder path (text)")
     if ds.get("cross_check_model") and not _LL.MODEL_RE.fullmatch(str(ds["cross_check_model"])):
         _err(where, "datasheet.cross_check_model", f"= {ds['cross_check_model']!r}: must be a model id (or endpoint:model); "
                                                    "\"\" = the model whose answer is checked")

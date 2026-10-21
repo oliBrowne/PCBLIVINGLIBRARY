@@ -155,6 +155,66 @@ of cases with identical files and cross-check results. `ecadlib eval consistency
 
 Tested offline only, with fake and recorded answers (`tests/test_crosscheck.py`). No live model of any provider was run.
 
+## Datasheets you downloaded, and standard lands from a read (`[datasheet] folder`, `standard_land`)
+
+Some makers' sites refuse downloads from scripts (analog.com and Nexperia did in the benchmark of 2026-10-18), and
+some parts have no link at all. Download those PDFs by hand into one folder and point ecadlib at it:
+
+```toml
+[datasheet]
+folder = "~/datasheets"     # <MPN>.pdf, read before any link; "" = links only
+standard_land = "auto"      # "off" (default) | "auto" | "always"
+```
+
+- The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf` first, then the MPN alone after a separator
+  (`数据手册-TP4056.pdf`), else the MPN followed by a separator (`LTM4671IY-PBF_datasheet.pdf`, `TP4056中文资料.pdf`;
+  `WS2812B-2020.pdf` never beats `数据手册-WS2812B.pdf` for `WS2812B`). Names compare as part numbers do elsewhere in
+  ecadlib: `µ` is `U`, accented and full-width letters are plain, and every other letter counts (`К561ТМ2.pdf` is never
+  `К561ЛН2`'s, `HX-2.54-4P直针` never takes `HX-2.54-4P弯针.pdf`). Before or after a part number in letters and digits, a
+  Chinese, Japanese or Korean word or a symbol is a separator (`数据手册-TP4056.pdf`); a symbol inside it (`°`, `×`, `±`) is
+  not. That file is read before any link, and a BOM line with no link at all is read from it too. Any other match is
+  used only with a hold that names the file (the part is not released until a person confirms the PDF is this part's),
+  and only after the part's own links: the longest name the MPN starts with, with only words after it (`LTM4671.pdf` or
+  `LTM4671 中文资料.pdf` for `LTM4671IY#PBF`, at least 4 characters and half the MPN; never another variant's such as
+  `HX-2.54-4P弯针.pdf` or `PH2.0-2×4P.pdf`, and no name with a word at all where the part number has a word or symbol of
+  its own: `HX-2.54 弯针.pdf` is no family file of `HX-2.54-4P直针`'s) is a family datasheet, read when no link gave a PDF
+  (before ecadlib opens a refused link in your browser), and a name that goes on with more letters or digits
+  (`BAT54S.pdf` for `BAT54`, `LM317HV.pdf` for `LM317`) is another part number, read only when no link gave a PDF here
+  and your browser got none either (before a refused link is left to the API to fetch). A part whose own link works
+  never reads either.
+- When a maker's site refuses the download, the review says to save the PDF in this folder as `<MPN>.pdf` and run
+  again. A character no file name can hold (`/ \ : * ? " < > |`) is written as `-` (`LM1117MPX-3.3-NOPB.pdf` for
+  `LM1117MPX-3.3/NOPB`), and that file is then read as the part's own. With no `folder` set, it says how to set one. A
+  file already there under that name that is not a PDF (a web page saved as `.pdf`) is named first: replace it.
+  `ecadlib datasheet batch PLAN` run again says this as the folder is now: once an answer comes back (even one held
+  by the cross-check), or the link no longer gives a PDF at all, the advice goes; while the site still refuses the
+  link and no answer came back (the API busy, over the cost cap, a batch not back yet or expired), it stays.
+- A `folder` that does not exist, is not a folder or cannot be read (no access) is named, by its name only, in the
+  refused link's review line, in what was tried for a line with no link and in the part's error; the links are tried
+  as ever, and `ecadlib doctor` warns about it.
+- The part keeps its public datasheet link in the library; the read's provenance records only the file's name, never
+  a path on your machine.
+- `ecadlib eval run --datasheets DIR` does the same for a benchmark run. The report counts the parts read from the
+  folder and gives the pass rate without them, so the number for maker links stays its own.
+
+**Standard land from a read.** A read that left one number blank (a missing terminal length, tab length or annular ring) used to
+be held with no footprint. Now, `stdparts.identify` checks whether the read's pin count, pitch, body and exposed pad fit
+exactly one package in the checked standard table, within the family the drawing is titled with. Every other table
+entry the read could be, and every KiCad generic package that is not in the table, counts as a rival; a rival with
+other pads makes it ambiguous, and then nothing changes. The chosen entry must also agree with the whole read, lead span included.
+
+- `off` (the default for now): the read's pads, as before. It stays the default until a live benchmark run with
+  `auto` shows the number moves the right way.
+- `auto`: the table's land is used when the read left a number blank or the datasheet prints no land of its own. A
+  maker's recommended land, when printed, is kept.
+- `always`: the table's land whenever the read identifies one.
+- The symbol and the 3D height (`height_max`, when read) still come from the read. The review says which package was identified and asks a person to check
+  the package code on the drawing.
+- Fed every table entry as if a datasheet printed exactly its numbers, `identify` names 294 of 618 (itself or an
+  entry with the same pads) and never one with other pads (`tests/test_datasheet_folder.py`). The other entries are
+  ambiguous or a package type the table does not cover (chips, SOT, connectors). Its effect on the live benchmark has not been
+  measured yet.
+
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 
 **Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file

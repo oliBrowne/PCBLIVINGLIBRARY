@@ -75,7 +75,7 @@ def pin_state(ds, pinned):
 def write_pins(report, out):
     """The datasheets a report read (URL, SHA-256, pages) as a pins file: commit it next to the set."""
     rep = _load_report(report)
-    cases = {r["mpn"]: {k: r["datasheet"][k] for k in ("url", "sha256", "bytes", "pages") if r["datasheet"].get(k)}
+    cases = {r["mpn"]: {k: r["datasheet"][k] for k in ("url", "sha256", "bytes", "pages", "local") if r["datasheet"].get(k)}
              for r in rep["cases"] if (r.get("datasheet") or {}).get("sha256")}
     doc = {"about": "The datasheet PDF each case of the set was benchmarked on: its URL and SHA-256. `ecadlib eval run` "
                     "flags a part whose PDF has changed since (datasheet_pin = changed). Written by `ecadlib eval pin`.",
@@ -284,7 +284,7 @@ class EvalReader(D.Reader):
         job["estimate"] = (job.get("recording") or {}).get("estimate") or self._estimate(job)
         self.used.setdefault(part, {"estimate": job["estimate"]})
         pv = job.get("prov") or {}                     # the PDF read: pinned by its SHA-256 (<set>.pins.json)
-        self.used[part]["datasheet"] = {k: pv.get(k) for k in ("url", "sha256", "bytes", "pages", "sent_as", "via") if pv.get(k)}
+        self.used[part]["datasheet"] = {k: pv.get(k) for k in ("url", "sha256", "bytes", "pages", "sent_as", "via", "local") if pv.get(k)}
         return job
 
     def cached(self, job):
@@ -509,6 +509,7 @@ def summarize(rows):
         if r.get("cross_check"):
             cc[r["cross_check"]] = cc.get(r["cross_check"], 0) + 1
     unread = [r for r in rows if no_datasheet(r)]
+    local = [r for r in rows if (r.get("datasheet") or {}).get("local")]   # read from --datasheets, not a maker's link
     skipped = [r for r in rows if not_run(r)]
     given = [r for r in rows if r.get("maker_land")]
     maker = {"given": len(given), "followed": sum(r["maker_land"]["followed"] for r in given),
@@ -537,6 +538,7 @@ def summarize(rows):
             "errata": {r["id"]: r["errata"] for r in rows if r.get("errata")},
             "no_datasheet": {"cases": len(unread), "ids": [r["id"] for r in unread]},
             "not_run": {"cases": len(skipped), "ids": [r["id"] for r in skipped]},
+            "hand_downloaded": {**agg(local), "ids": [r["id"] for r in local]},
             "ran": agg([r for r in rows if not not_run(r)]),
             "with_datasheet": agg([r for r in rows if not no_datasheet(r)]), "shared_footprints": {"cases": len(shared), "failing": sum(not r["pass"] for r in shared)}, "families": {k: agg(v) for k, v in sorted(fams.items())},
             "by_source": {k: agg(v) for k, v in sorted(srcs.items())},
@@ -546,7 +548,7 @@ def summarize(rows):
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
         tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1, batch=False,
-        cached_only=False, pins=None, max_cost_usd=None):
+        cached_only=False, pins=None, max_cost_usd=None, datasheets=None):
     """repeat: run the same cases again (into <out>/repeat-2 ...) and report how many parts gave the same files
     (summary["consistency"]): from the recorded answers when there are any (--record / --replay: the code must be
     deterministic), else live again (the model's own consistency; this pays again).
@@ -554,7 +556,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     provider can be compared on the same set: e.g. provider="ollama", model="qwen2.5:7b" against the Claude default.
     batch: the datasheet reads go out as one Message Batch (half price; the run waits for it).
     cached_only: re-score a live run's out folder with nothing sent: its cached answers, and the answers of its
-    collected batches downloaded again (free), are read by this code; a part that needs another read is reported."""
+    collected batches downloaded again (free), are read by this code; a part that needs another read is reported.
+    datasheets: a folder of PDFs downloaded by hand, read before any link ([datasheet] folder)."""
     data = load_set(set_name)
     cases = select(data["cases"], families, ids, limit)
     if not cases:
@@ -575,6 +578,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
                      datasheet={**rules.get("datasheet", {}), **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
                                 **({"api_key_env": ""} if provider and provider != "anthropic" else {})})
         RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
+    if datasheets:
+        rules = dict(rules, datasheet={**rules.get("datasheet", {}), "folder": str(datasheets)})
     sources = list(sources) if sources else [s for s in rules["sources"]["order"] if s != "kicad"]
     if "kicad" in sources:
         log("  note: `kicad` is the ground truth of this set; parts it resolves are scored against themselves")
@@ -736,6 +741,13 @@ def report_md(rep):
         w = s["with_datasheet"]
         md += [f"{nd['cases']} {'part' if nd['cases'] == 1 else 'parts'} never reached the model (no datasheet PDF could be "
                f"fetched); without them: **{w['pass']}/{w['cases']} ({_pct(w['rate'])})**.", ""]
+    hd = s.get("hand_downloaded") or {}
+    if hd.get("cases"):
+        md += [f"{hd['cases']} {'part was' if hd['cases'] == 1 else 'parts were'} read from PDFs downloaded by hand "
+               f"(--datasheets), not from a maker's link: {hd['pass']}/{hd['cases']} of them pass. Without them: "
+               f"**{o['pass'] - hd['pass']}/{o['cases'] - hd['cases']}"
+               + (f" ({_pct(round((o['pass'] - hd['pass']) / (o['cases'] - hd['cases']), 4))})" if o['cases'] > hd['cases'] else "")
+               + "**.", ""]
     if s.get("errata"):
         md += [f"{len(s['errata'])} {'part is' if len(s['errata']) == 1 else 'parts are'} scored right where KiCad's reference "
                "disagrees with the datasheet (checked by hand, see the set's errata file): "
