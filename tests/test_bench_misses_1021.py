@@ -106,3 +106,33 @@ def test_a_read_with_no_drawing_says_its_dimensions_are_blank(tmp_path):
         assert str(e).startswith("no footprint: the datasheet read left body_length, body_width, lead_span, pitch unresolved")
     else:
         raise AssertionError("built a footprint from no dimensions")
+
+
+def test_image_only_pages_after_the_drawing_go_with_it():
+    # TLC5951DAP: TI's "LAND PATTERN DATA - DAP" page (p51) has no text layer, so nothing scored it and the thermal
+    # land was never read; the blank pages right after the drawing's continuation now go with it (two at most)
+    from ecadlib import ds_route as R
+    texts = ["TLC5951 24-channel LED driver HTSSOP-38", "Pin functions top view pin name I/O", "Electrical", "Timing",
+             "Application", "PACKAGE OUTLINE HTSSOP-38 DAP mm MIN NOM MAX A1 E1 D1", "", "", "", "IMPORTANT NOTICE"]
+    pages, why = R.pick_pages(texts, 6, "TLC5951DAP", "HTSSOP-38")
+    assert {6, 7, 8, 9} <= set(pages) and 10 not in pages, (pages, why)
+    assert "drawing (continued, no text layer)" in why[8] and "drawing (continued, no text layer)" in why[9]
+
+
+def test_a_pin_table_that_runs_over_pages_goes_whole():
+    # SAM E70 (1976 pages): the 144-pin table runs over the pages after the figure ("...continued"), past a BGA outline
+    # page; only the figure was sent and the read came back with no pins. "64-pin LQFP" is another package (QFP64),
+    # not this one: it used to match QFP144 as a bare LQFP and its outline was sent as the drawing
+    from ecadlib import ds_route as R
+    assert R.package_tokens("6.5.2. 64-pin LQFP Package Outline") == {"QFP64"}
+    assert R.package_tokens("5-LEAD SOT") == set() and R.package_tokens("3-pin SOT-23") == {"SOT23"}
+    texts = ["SAM E70 family", "Ordering information Q = 144 pins",
+             "6. Package and Pinout 6.1.1 144-pin LQFP Package Outline Pin configuration (top view)",
+             "6.1.2 144-ball LFBGA Package Outline pin configuration (top view)",
+             "Table 6-2. 144-lead pinout ...continued LQFP Pin Signal Name I/O Type",
+             "...continued PA1 PA2 PA3 PB0", "...continued PC0 PC1 PD0",
+             "6.5.2 64-pin LQFP Package Outline pin configuration (top view)",
+             "Electrical characteristics", "62.1 LQFP144 144-lead LQFP package outline dimensions mm MIN MAX A1 E1 D1"]
+    pages, why = R.pick_pages(texts, 8, "ATSAME70Q19A-AN", "LQFP-144")
+    assert {3, 5, 6, 7, 10} <= set(pages) and 8 not in pages and 4 not in pages, (pages, why)
+    assert "pin table (continued)" in why[6]
