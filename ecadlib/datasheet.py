@@ -17,7 +17,7 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, time
+import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, time, unicodedata
 from pathlib import Path
 
 import requests
@@ -1784,10 +1784,15 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     return out
 
 
+# what no part number is written in: CJK, kana and hangul (a word glued to a name: TP4056中文资料.pdf)
+_NOT_MPN = re.compile("[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uffdc\U00020000-\U0003ffff]")
+
+
 def _mpn_key(s):
     """A part number or file name as part numbers are compared everywhere (kicad_index.norm_mpn): no case or
-    punctuation, µ as U, accented and full-width letters plain; a letter with no ASCII form (К561ТМ2) is kept."""
-    return norm_mpn(s)
+    punctuation, µ as U, accented and full-width letters plain, a Cyrillic or Greek letter kept (К561ТМ2). CJK, kana,
+    hangul and symbols (NE555™.pdf) are punctuation here."""
+    return norm_mpn("".join(" " if _NOT_MPN.match(c) or unicodedata.category(c)[0] == "S" else c for c in str(s or "")))
 
 
 def _after_mpn(stem, key):
@@ -1867,7 +1872,8 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
         return None, "no MPN"
     exact, prefix, other = None, None, None
     for f in files:
-        s, rest = _mpn_key(f.stem), _after_mpn(f.stem, key)
+        stem = unicodedata.normalize("NFC", f.stem)  # (macOS saves names decomposed: LM318A + U+0301 is LM318Á)
+        s, rest = _mpn_key(stem), _after_mpn(stem, key)
         if rest is not None and not _mpn_key(rest[:1]):
             exact = exact or f                        # BAT54.pdf, BAT54_datasheet.pdf, bat54-rev3.pdf
         elif rest is not None:
@@ -1940,11 +1946,13 @@ API_FETCH_FAILED = re.compile(r"could not (be )?(fetch|download)|unable to (fetc
 
 def refused_line(job, error, folder=None):
     """The review line for a part whose PDF a maker's site refused here and the API could not fetch: the likely cause
-    and the way round it. None when that is not what happened. folder: [datasheet] folder (its name only is kept).
+    and the way round it. None when that is not what happened. error: the API's error, or None when an earlier run's
+    showed it could not fetch the link (its line said again). folder: [datasheet] folder (its name only is kept).
     The way round, first that applies: the part's file already in the folder is no PDF (replace it); the folder set
     is not there or cannot be read (fix it); save it in the folder; no folder set (how to set one)."""
     prov = job.get("prov") or {}
-    r = refusal(prov.get("attempts")) if prov.get("sent_as") == "url" and API_FETCH_FAILED.search(str(error)) else None
+    r = refusal(prov.get("attempts")) if prov.get("sent_as") == "url" and (
+        error is None or API_FETCH_FAILED.search(str(error))) else None
     if not r:
         return None
     url, host, why = r

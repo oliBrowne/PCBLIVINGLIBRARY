@@ -3,7 +3,7 @@ standard_land (a read that identifies a checked standard package gets the table'
 
 Nothing live: the API is test_crosscheck's fake, PDFs are test_ds_route's SYNTHETIC text PDFs, extractions are
 test_datasheet's SYNTHETIC fixtures."""
-import copy, json, re, tempfile
+import copy, json, re, tempfile, unicodedata
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,10 +44,13 @@ def test_local_datasheet_names():
 def test_a_part_number_in_any_script_matches_only_its_own_file():
     """Names are compared as part numbers are everywhere (kicad_index.norm_mpn): µ and μ are U, an accented, full-width
     or Turkish dotless letter is its plain letter, and a letter with no ASCII form (Cyrillic) is kept, so К561ТМ2 never
-    takes К561ЛН2's file (with the letters dropped both would be 5612)."""
+    takes К561ЛН2's file (with the letters dropped both would be 5612). What no part number is written in (CJK, kana,
+    hangul, symbols) is punctuation: TP4056中文资料.pdf is TP4056's own file. A name saved decomposed (macOS) reads the
+    same as composed."""
     with tempfile.TemporaryDirectory() as d:
         f = folder(d, "К561ЛН2.pdf", "К561ТМ2.pdf", "КР142ЕН5Б.pdf", "uPD720202K8-711-BAA-A.pdf", "ırf540npbf.pdf",
-                   "BAT54_техпаспорт.pdf", "LM358Ж.pdf")
+                   "BAT54_техпаспорт.pdf", "LM358Ж.pdf", "TP4056中文资料.pdf", "TPS62130データシート.pdf",
+                   "LM2596데이터시트.pdf", "LTM4671中文资料.pdf", "NE555™.pdf", unicodedata.normalize("NFD", "LM318Á1.pdf"))
         assert D.local_datasheet(f, "К561ТМ2")[0].name == "К561ТМ2.pdf"            # not К561ЛН2.pdf, sorted first
         assert D.local_datasheet(f, "к561лн2", kinds=("exact",))[0].name == "К561ЛН2.pdf"
         assert D.local_datasheet(f, "КР142ЕН5А")[0] is None                        # the 5 V part: the 6 V one's file
@@ -57,6 +60,11 @@ def test_a_part_number_in_any_script_matches_only_its_own_file():
         assert D.local_datasheet(f, "BAT54", kinds=("exact",))[0].name == "BAT54_техпаспорт.pdf"
         assert D.local_datasheet(f, "LM358", kinds=("exact", "family"))[0] is None   # LM358Ж: another part number
         assert D.local_datasheet(f, "LM358")[0].name == "LM358Ж.pdf"
+        for part in ("TP4056", "TPS62130", "LM2596", "NE555"):
+            p, how = D.local_datasheet(f, part, kinds=("exact",))
+            assert p and how == f"{p.name} in the datasheet folder", (part, how)
+        assert "family datasheet" in D.local_datasheet(f, "LTM4671IY#PBF")[1]
+        assert D.local_datasheet(f, "LM318A", kinds=("exact", "family"))[0] is None   # LM318Á1, decomposed: not LM318A
 
 
 def test_local_datasheet_kinds():
@@ -339,12 +347,15 @@ def test_a_web_page_saved_as_the_part_s_pdf_is_said_first():
                             "footprint by hand."), e["fix"]
 
 
-def fill_again(d, rules, api=None, **kw):
+def fill_again(d, rules, api=None, cap=None, offline=False, **kw):
     """`ecadlib datasheet batch PLAN` (fill_plan) on the plan of an earlier run in `d`, DSPART1's link refused as in
-    refused_run. api: the model API (the same one again to collect a batch); kw: Reader settings (batch=True,
-    wait=False: sent, not waited for) -> the plan items by name."""
+    refused_run. api: the model API (the same one again to collect a batch); cap: --max-cost-usd; offline: --offline;
+    kw: Reader settings (batch=True, wait=False: sent, not waited for) -> the plan items by name."""
     rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=TDL.Scripted({LINK: [403]}), poll=0,
                   sleep=lambda s: None, log=lambda *a: None, rules=rules, **{"batch": False, **kw})
+    if cap is not None:
+        rd.set_cap(cap)
+    rd.offline = offline
     with TB.patched(api or NoURLFetch(lambda k, m, b: TR.on_page(TD.INCH))):
         items = D.fill_plan(Path(d) / "out" / "plan.json", rd, rules=rules, log=lambda *a: None)
     return {i["name"]: i for i in items}
@@ -384,6 +395,43 @@ def test_a_run_again_shows_the_advice_for_the_folder_as_it_is_now():
             (lines, shown, it["librarian"]["tried"])
         it, lines, shown, bad = run(d, rules, api=api, batch=True)   # and collected
         assert it["footprint"].get("file") and lines == shown == bad == [], (lines, shown, it["librarian"]["tried"])
+
+
+class Overloaded(NoURLFetch):
+    """The model API, overloaded when the link is sent: a passing failure, which says nothing about the link."""
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        if url.endswith("/v1/messages") and (json["messages"][0]["content"][0].get("source") or {}).get("type") == "url":
+            self.calls.append(("POST", url, headers, json))
+            return TB.R(529, {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}},
+                        headers={"retry-after": "0"})
+        return super().post(url, headers, json, timeout)
+
+
+def test_a_run_again_that_learns_nothing_new_keeps_the_advice():
+    """The link still refused here and nothing read this time (the API overloaded, over the cost cap, --offline, a batch
+    not back yet): the advice stays, said as the folder is now. Once a read comes back (the batch), it goes."""
+    answer = lambda k, m, b: TR.on_page(TD.INCH)
+    with tempfile.TemporaryDirectory() as d:
+        TL.run(d, http=TB.PdfHTTP({}), bom=TL.BOM)
+        f = Path(d) / "pdfs"
+        rules = {"datasheet": {"folder": str(f)}}
+
+        def advice(**kw):
+            it = fill_again(d, rules, **kw)["DSPART1"]
+            return it, {e["fix"] for e in M.explain_all(it["hold_reasons"]) if e["code"] == "files.datasheet_refused"}
+        it, fix = advice()
+        assert len(fix) == 1 and fix.pop().startswith("Your datasheet folder (pdfs) does not exist"), fix
+        f.mkdir()                                              # made since: said as it is now
+        now = f"Download the PDF in a browser ({LINK}), save it as DSPART1.pdf in your datasheet folder (pdfs) and run again"
+        api = NoURLFetch(answer)
+        for kw in ({"api": Overloaded(answer)}, {"cap": 0.0001}, {"offline": True}, {"api": api, "batch": True, "wait": False}):
+            it, fix = advice(**kw)
+            assert len(fix) == 1 and fix.pop().startswith(now), (kw, fix, it["librarian"]["tried"][-1])
+            assert len([r for r in it["librarian"]["review"] if r.startswith("datasheet download refused")]) == 1
+        it, fix = advice(api=api, batch=True)                  # the batch back, read
+        assert it["footprint"].get("file") and not fix, (fix, it["librarian"]["tried"])
+        assert not [r for r in it["librarian"]["review"] if r.startswith("datasheet download refused")]
 
 
 def test_a_line_with_no_link_says_the_folder_as_it_is_now():

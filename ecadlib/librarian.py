@@ -677,7 +677,8 @@ class Run:
         if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
             try:
                 job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
-                self.reading(st)
+                if self.reading(st):
+                    self.refused(st, job, None, cfg.get("folder"))
                 self.folder_file_failed(st, job)
                 res = rd.cached(job)
             except CC.Held as e:
@@ -696,8 +697,10 @@ class Run:
         if not getattr(rd, "_recollected", False):    # answers paid for in earlier batches, before a parser fix
             rd._recollected = True
             rd.recollect()
-        self.reading(st)
+        refused_before = self.reading(st)             # (a link that no longer gives a PDF at all: said no more)
         job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+        if refused_before:
+            self.refused(st, job, None, cfg.get("folder"))
         self.folder_file_failed(st, job)
         try:
             res = hit = rd.cached(job)
@@ -718,9 +721,13 @@ class Run:
 
     @staticmethod
     def reading(st):
-        """The datasheet is fetched or read again: an earlier run's refused-download advice goes (`datasheet batch PLAN`
-        keeps the state), so the folder and the link are said as they are now; a refusal this time says it again."""
+        """The datasheet is fetched or read again (`datasheet batch PLAN` keeps each part's state): an earlier run's
+        refused-download advice is taken out -> whether there was one. `refused(st, job, None, folder)` says it again,
+        as the folder is now, while the maker's site still refuses the link it is sent as; a read that comes back takes
+        it out for good (put_datasheet)."""
+        had = any(r.startswith("datasheet download refused by ") for r in st["review"])
         st["review"][:] = [r for r in st["review"] if not r.startswith("datasheet download refused by ")]
+        return had
 
     @staticmethod
     def folder_file_failed(st, job):
@@ -733,9 +740,10 @@ class Run:
     @staticmethod
     def refused(st, job, error, folder=None):
         """A maker's site refused the PDF here and the API's fetcher failed too: the cause and the way round it, which
-        the release check shows in place of "no footprint". folder: [datasheet] folder (the review keeps its name)."""
+        the release check shows in place of "no footprint". error: the API's, or None (`reading`). folder: [datasheet]
+        folder (the review keeps its name)."""
         line = D.refused_line(job, error, folder)
-        if line:
+        if line and line not in st["review"]:
             st["review"].append(line)
 
     @staticmethod
@@ -792,6 +800,7 @@ class Run:
 
     def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
         url, where = job["url"], job["where"]
+        self.reading(st)                              # read: no refused-download advice left
         from . import fp_edit as FE                   # hand edits of this part's pad table (ecadlib fp-edit)
         res, edited = FE.apply(FE.for_part(FE.load(self.out), st.get("name"), job.get("name"), job["part"]), res)
         if edited:
