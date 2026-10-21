@@ -1485,6 +1485,26 @@ def _pin_count_from(spec, ext):
 INJECTION = "document contains instruction-like text (ignored)"
 
 
+BASIC_SPAN_TOL = 0.2
+
+
+def basic_span(spec, review):
+    """A gull-wing lead span printed as a basic size only ("16.00 BSC": ATSAME70 LQFP100, LTC7810 LQFP48, live
+    benchmark 2026-10-21) has no tolerance, and IPC-7351B sizes the toe from it: with none every pad comes out short
+    (0.125 mm on the LQFP100). The span's real tolerance is in the lead tip profile; TI and NXP print it as +-0.2 to
+    +-0.25 for the same packages (TI PZ 15.8-16.2, NXP SOT407-1 15.75-16.25, TI PW 6.2-6.6), so +-0.2 is taken, with
+    a review line. Only for datasheet reads: the standard-package table's spans are KiCad's own numbers."""
+    if spec.get("package_type") not in ("gullwing", "qfp"):
+        return
+    for k in ("lead_span", "lead_span_y"):
+        d = spec.get(k)
+        if isinstance(d, dict) and isinstance(d.get("nom"), (int, float)) and "min" not in d and "max" not in d \
+                and not d.get("tol"):
+            spec[k] = dict(d, min=round(d["nom"] - BASIC_SPAN_TOL, 4), max=round(d["nom"] + BASIC_SPAN_TOL, 4))
+            review.append(f"{k} {d['nom']:g} mm is printed as a basic size (no tolerance): +-{BASIC_SPAN_TOL:g} mm "
+                          "taken for the land; check the drawing's lead tip tolerance")
+
+
 def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, facts=None, tables=None):
     """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass.
     n_sent: how many pages were sent when offset is an int (--pages A-B), so citations past them are caught too.
@@ -1500,6 +1520,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
         ordering_check(ext["package"], facts, review)
         table_check(ext["package"], tables, offset, review)
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
+    basic_span(spec, review)
     if spec.get("pin_count") is None and not spec.get("pad_table"):
         n, how = _pin_count_from(spec, ext)
         if n:

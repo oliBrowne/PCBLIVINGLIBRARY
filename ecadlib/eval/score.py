@@ -79,6 +79,9 @@ WORDS = {"ENABLE": "EN", "GROUND": "GND", "INPUT": "IN", "OUTPUT": "OUT", "CATHO
 OVERLINE = dict.fromkeys(map(ord, "\u0305\u0304"))     # a combining overline / macron: the bar PDF text gives (AM26LS31CN G̅)
 
 
+NC_RX = re.compile(r"^(NC|DNC|N/C)$")                   # norm_name() of a no-connect pin's name
+
+
 def norm_name(s):
     s = str(s or "").translate(OVERLINE).upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
     s = s.replace("~", "")
@@ -175,6 +178,10 @@ def score_symbol(mine_pins, ref_pins, tol=None):
         return {"symbol_pins": _f(False, "no symbol")}
     a, b = dict((str(n), s) for n, s in mine_pins), dict((str(n), s) for n, s in ref_pins)
     missing, extra = sorted(set(b) - set(a), key=_natural), sorted(set(a) - set(b), key=_natural)
+    # a no-connect pin the datasheet lists and KiCad's symbol leaves out is not a wrong pin: KiCad's symbols keep NC
+    # pins on 54 of the 331 kicad-v1 parts and drop them on others (LTC7810: 15 NC pins, live benchmark 2026-10-21)
+    nc = [n for n in extra if NC_RX.match(norm_name(a[n]) or "")]
+    extra = [n for n in extra if n not in nc]
     names = {}
     for n, s in mine_pins:                            # one pin number with two different names: two pins on one pad
         names.setdefault(str(n), set()).add(norm_name(s))
@@ -182,7 +189,7 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     out = {"symbol_pins": _f(not missing and not extra and not twice, f"ours {len(a)} pins, KiCad {len(b)}"
                              + (f"; missing {missing[:8]}" if missing else "") + (f"; extra {extra[:8]}" if extra else "")
                              + (f"; pin number used twice {twice[:8]}" if twice else ""),
-                             ours=len(a), ref=len(b))}
+                             ours=len(a), ref=len(b), **({"nc_not_in_kicad": nc} if nc else {}))}
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
         same = [n for n, s in named.items() if norm_name(a.get(n)) == s]

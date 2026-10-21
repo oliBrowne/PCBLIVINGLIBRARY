@@ -845,6 +845,11 @@ class Run:
                 unres = res["spec"].get("unresolved") or []
                 raise D.DatasheetError("no footprint: the datasheet read left " + (", ".join(unres) + " unresolved" if unres else
                                        f"{e} blank (and did not list it as unresolved)")) from e
+            except ValueError as e:                # numbers that don't add up because the read left the drawing's
+                unres = res["spec"].get("unresolved") or []   # dimensions blank (BD33FC0FP 2026-10-21: no TO252
+                if not unres:                                 # drawing in the PDF): the blanks are the cause
+                    raise
+                raise D.DatasheetError(f"no footprint: the datasheet read left {', '.join(unres)} unresolved ({e})") from e
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")
