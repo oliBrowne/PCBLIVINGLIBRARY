@@ -1784,15 +1784,27 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     return out
 
 
-# what no part number is written in: CJK, kana and hangul (a word glued to a name: TP4056中文资料.pdf)
-_NOT_MPN = re.compile("[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uffdc\U00020000-\U0003ffff]")
-
-
 def _mpn_key(s):
     """A part number or file name as part numbers are compared everywhere (kicad_index.norm_mpn): no case or
-    punctuation, µ as U, accented and full-width letters plain, a Cyrillic or Greek letter kept (К561ТМ2). CJK, kana,
-    hangul and symbols (NE555™.pdf) are punctuation here."""
-    return norm_mpn("".join(" " if _NOT_MPN.match(c) or unicodedata.category(c)[0] == "S" else c for c in str(s or "")))
+    punctuation, µ as U, accented and full-width letters plain, any other letter kept (К561ТМ2, 蜂鸣器)."""
+    return norm_mpn(s)
+
+
+# CJK, kana and hangul: in a file name after the part number, words (TP4056中文资料.pdf), as symbols are (NE555™.pdf)
+_WORDS = re.compile("[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uffdc\U00020000-\U0003ffff]")
+
+
+def _word(c):
+    return bool(_WORDS.match(c)) or unicodedata.category(c)[0] == "S"
+
+
+def _goes_on(stem, rest):
+    """Whether a file name goes on with more part number after the MPN (rest: what follows it in stem): a letter or
+    digit, but not a word or symbol after a part number in letters and digits (TP4056中文资料.pdf); after one in
+    Chinese, a Chinese character goes on (蜂鸣器.pdf is not 蜂鸣's)."""
+    if not rest or not _mpn_key(rest[0]):
+        return False
+    return not _word(rest[0]) or _word(stem[len(stem) - len(rest) - 1])
 
 
 def _after_mpn(stem, key):
@@ -1873,8 +1885,8 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     exact, prefix, other = None, None, None
     for f in files:
         stem = unicodedata.normalize("NFC", f.stem)  # (macOS saves names decomposed: LM318A + U+0301 is LM318Á)
-        s, rest = _mpn_key(stem), _after_mpn(stem, key)
-        if rest is not None and not _mpn_key(rest[:1]):
+        s, rest = _mpn_key("".join(" " if _word(c) else c for c in stem)), _after_mpn(stem, key)
+        if rest is not None and not _goes_on(stem, rest):
             exact = exact or f                        # BAT54.pdf, BAT54_datasheet.pdf, bat54-rev3.pdf
         elif rest is not None:
             other = other or f                        # BAT54S.pdf: another part number that starts like this one
@@ -1942,6 +1954,13 @@ def unsafe_download(url):
 # The API's fetcher could not get a URL source either (its words in the #42 Opus run: LTM4671, LTV-352T).
 API_FETCH_FAILED = re.compile(r"could not (be )?(fetch|download)|unable to (fetch|download)|timed out while trying to download"
                               r"|unable to connect to the remote server", re.I)
+
+
+def nothing_back(e):
+    """An error before any answer came back (the API's HTTP error, no connection, over the cost cap, a batch not back
+    yet): it says nothing about the PDF, so an earlier run's advice for it stands."""
+    return isinstance(e, (APIError, requests.exceptions.RequestException)) or bool(
+        re.search(r"nothing sent|^waiting in Message Batch", str(e)))
 
 
 def refused_line(job, error, folder=None):

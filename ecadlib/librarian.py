@@ -669,6 +669,7 @@ class Run:
         if not urls and local is None:                # (a folder set but not there or unreadable: said, by name)
             note = D.folder_problem(cfg.get("folder"))
             st["tried"].append("datasheet: no datasheet URL known" + (f"; {note}" if note else ""))
+            self.reading(st)                          # (no link: none refused)
             return
         first = urls[0] if urls else (local.name, "datasheet folder")   # (the file's name only, never its path)
         if self.reader is None:
@@ -715,7 +716,7 @@ class Run:
             self.cross_check_held(st, e)
             return
         except Exception as e:
-            self.refused(st, job, e, cfg.get("folder"))
+            self.read_failed(st, job, e, cfg.get("folder"))
             raise
         self.put_datasheet(st, res, job, fp_name, sym_name, "cached" if hit else "")
 
@@ -723,8 +724,8 @@ class Run:
     def reading(st):
         """The datasheet is fetched or read again (`datasheet batch PLAN` keeps each part's state): an earlier run's
         refused-download advice is taken out -> whether there was one. `refused(st, job, None, folder)` says it again,
-        as the folder is now, while the maker's site still refuses the link it is sent as; a read that comes back takes
-        it out for good (put_datasheet)."""
+        as the folder is now, while the maker's site still refuses the link it is sent as; an answer that comes back
+        takes it out for good (put_datasheet, cross_check_held, read_failed)."""
         had = any(r.startswith("datasheet download refused by ") for r in st["review"])
         st["review"][:] = [r for r in st["review"] if not r.startswith("datasheet download refused by ")]
         return had
@@ -747,8 +748,17 @@ class Run:
             st["review"].append(line)
 
     @staticmethod
+    def read_failed(st, job, error, folder=None):
+        """The read failed. An answer that came back (declined, not readable) takes an earlier run's advice out, as a
+        read does; an error before any answer (D.nothing_back) leaves it; the API's fetcher failing says it."""
+        if not D.nothing_back(error):
+            Run.reading(st)
+        Run.refused(st, job, error, folder)
+
+    @staticmethod
     def cross_check_held(st, e):
         """A datasheet read whose cross-check disagreed: nothing is written; both values go to the review."""
+        Run.reading(st)                               # (an answer came back: no refused-download advice)
         st["cross_check"] = {"status": "disagreed", "summary": CC.summary_line(e.record)}
         st["tried"].append("datasheet reader: held, the cross-check disagrees (see datasheet/*.review.md)")
         st["review"].append(f"cross-check disagrees, nothing written: {CC.summary_line(e.record)}")
@@ -772,7 +782,7 @@ class Run:
                     st["tried"].append(f"datasheet: failed ({type(e).__name__}: {e})")
             elif isinstance(r, Exception):
                 st["tried"].append(f"datasheet reader: failed ({r})")
-                self.refused(st, job, r, (getattr(self.reader, "cfg", None) or D.settings(self.rules)).get("folder"))
+                self.read_failed(st, job, r, (getattr(self.reader, "cfg", None) or D.settings(self.rules)).get("folder"))
             elif r == "estimate only":                    # priced, not sent: the person approves the cost first
                 st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url'] or job['where']})")
             else:

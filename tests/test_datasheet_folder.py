@@ -44,13 +44,15 @@ def test_local_datasheet_names():
 def test_a_part_number_in_any_script_matches_only_its_own_file():
     """Names are compared as part numbers are everywhere (kicad_index.norm_mpn): µ and μ are U, an accented, full-width
     or Turkish dotless letter is its plain letter, and a letter with no ASCII form (Cyrillic) is kept, so К561ТМ2 never
-    takes К561ЛН2's file (with the letters dropped both would be 5612). What no part number is written in (CJK, kana,
-    hangul, symbols) is punctuation: TP4056中文资料.pdf is TP4056's own file. A name saved decomposed (macOS) reads the
-    same as composed."""
+    takes К561ЛН2's file (with the letters dropped both would be 5612). A word or symbol after the part number is a
+    separator (TP4056中文资料.pdf is TP4056's own file), never a reason for another part to match: HX-2.54-4P直针 never
+    takes HX-2.54-4P弯针's file, and a part named in Chinese alone has its own file. A name saved decomposed (macOS)
+    reads the same as composed."""
     with tempfile.TemporaryDirectory() as d:
         f = folder(d, "К561ЛН2.pdf", "К561ТМ2.pdf", "КР142ЕН5Б.pdf", "uPD720202K8-711-BAA-A.pdf", "ırf540npbf.pdf",
                    "BAT54_техпаспорт.pdf", "LM358Ж.pdf", "TP4056中文资料.pdf", "TPS62130データシート.pdf",
-                   "LM2596데이터시트.pdf", "LTM4671中文资料.pdf", "NE555™.pdf", unicodedata.normalize("NFD", "LM318Á1.pdf"))
+                   "LM2596데이터시트.pdf", "LTM4671中文资料.pdf", "NE555™.pdf", unicodedata.normalize("NFD", "LM318Á1.pdf"),
+                   "HX-2.54-4P弯针.pdf", "KSD301-85℉.pdf", "蜂鸣器.pdf")
         assert D.local_datasheet(f, "К561ТМ2")[0].name == "К561ТМ2.pdf"            # not К561ЛН2.pdf, sorted first
         assert D.local_datasheet(f, "к561лн2", kinds=("exact",))[0].name == "К561ЛН2.pdf"
         assert D.local_datasheet(f, "КР142ЕН5А")[0] is None                        # the 5 V part: the 6 V one's file
@@ -65,6 +67,10 @@ def test_a_part_number_in_any_script_matches_only_its_own_file():
             assert p and how == f"{p.name} in the datasheet folder", (part, how)
         assert "family datasheet" in D.local_datasheet(f, "LTM4671IY#PBF")[1]
         assert D.local_datasheet(f, "LM318A", kinds=("exact", "family"))[0] is None   # LM318Á1, decomposed: not LM318A
+        assert D.local_datasheet(f, "HX-2.54-4P直针", kinds=("exact",))[0] is None     # the right-angle header's file
+        assert D.local_datasheet(f, "KSD301-85℃", kinds=("exact",))[0] is None        # the 85 °F switch's file
+        assert D.local_datasheet(f, "蜂鸣器", kinds=("exact",))[0].name == "蜂鸣器.pdf"
+        assert D.local_datasheet(f, "蜂鸣", kinds=("exact",))[0] is None              # a longer name in Chinese
 
 
 def test_local_datasheet_kinds():
@@ -432,6 +438,27 @@ def test_a_run_again_that_learns_nothing_new_keeps_the_advice():
         it, fix = advice(api=api, batch=True)                  # the batch back, read
         assert it["footprint"].get("file") and not fix, (fix, it["librarian"]["tried"])
         assert not [r for r in it["librarian"]["review"] if r.startswith("datasheet download refused")]
+
+
+def test_a_read_that_comes_back_takes_the_advice_out():
+    """The API fetches the link this time and an answer comes back, though not one to build from (the cross-check
+    disagrees, the model declines, the same in a batch): the earlier run's advice goes, as on a fresh run."""
+    held = lambda: TC.API(lambda k, m, b: TC.first() if k == "read" else TC.check_answer(pitch=0.65),
+                          answer=lambda cid: TD.message(TC.first()))
+    for api, kw in ((held, {}), (lambda: TC.API(lambda k, m, b: "refusal"), {}), (held, {"batch": True, "wait": False})):
+        with tempfile.TemporaryDirectory() as d:
+            TL.run(d, http=TB.PdfHTTP({}), bom=TL.BOM)
+            f = Path(d) / "pdfs"
+            f.mkdir()
+            rules = {"datasheet": {"folder": str(f)}}
+            fill_again(d, rules)                               # the API could not fetch it: advice
+            a = api()
+            it = fill_again(d, rules, api=a, **kw)["DSPART1"]
+            if kw:
+                it = fill_again(d, rules, api=a, batch=True)["DSPART1"]   # collected
+            assert not [r for r in it["librarian"]["review"] if r.startswith("datasheet download refused")], \
+                (kw, it["librarian"]["review"], it["librarian"]["tried"][-2:])
+            assert not [h for h in it["hold_reasons"] if "refused" in h], it["hold_reasons"]
 
 
 def test_a_line_with_no_link_says_the_folder_as_it_is_now():
