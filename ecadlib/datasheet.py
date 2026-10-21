@@ -1699,7 +1699,7 @@ def lcsc_number(item=None, ln=None, row=None):
     par = {p["name"]: p["value"] for p in (item or {}).get("parameters", [])}
     for v in ((ln or {}).get("lcsc"), (row or {}).get("lcsc"),
               *(par.get(f"Supplier Part Number {i}") for i in range(1, 10) if str(par.get(f"Supplier {i}", "")).upper() == "LCSC")):
-        m = re.fullmatch(r"\s*(C\d{3,})\s*", str(v or ""))
+        m = re.fullmatch(r"\s*(C\d{3,})\s*(\([^()]*\)\s*)?", str(v or ""))   # triage's "C10800 (via MPN)" too
         if m:
             return m.group(1)
     return None
