@@ -226,7 +226,8 @@ def build_lock(out, items, state, bom, libs, sources, cache, providers, gen_step
         if local:
             p["local"] = local
         urls = sorted({str((st.get(k) or {}).get("source"))[len("datasheet:"):] for k in ("symbol", "footprint")
-                       if str((st.get(k) or {}).get("source") or "").startswith("datasheet:")})
+                       if str((st.get(k) or {}).get("source") or "").startswith("datasheet:")}
+                      - {""})                         # "": read from the [datasheet] folder, the line has no link
         if urls:
             p["datasheet"] = _datasheet(out, urls[0])
         parts[it["name"]] = p

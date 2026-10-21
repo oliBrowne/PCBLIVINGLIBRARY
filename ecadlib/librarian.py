@@ -661,17 +661,26 @@ class Run:
         st["tried"].append("standard: " + "; ".join(got + why))
 
     def src_datasheet(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
-        st["tried"] = [t for t in st["tried"] if "waiting for your OK to read it with AI" not in t]   # asked again now
+        st["tried"] = [t for t in st["tried"] if "waiting for your OK to read it with AI" not in t   # asked again now
+                       and "your [datasheet] folder" not in t]     # said below as the folder is now (`batch PLAN`)
         urls = D.datasheet_urls(item, ln, row, st["found"])
-        if not urls:
-            st["tried"].append("datasheet: no datasheet URL known")
+        cfg = getattr(self.reader, "cfg", None) or D.settings(self.rules)   # the reader's [datasheet] settings
+        local = None if urls else D.local_datasheet(cfg.get("folder"), mpn or item["name"])[0]   # [datasheet] folder
+        if not urls and local is None:                # (a folder set but not there or unreadable: said, by name)
+            note = D.folder_problem(cfg.get("folder"))
+            st["tried"].append("datasheet: no datasheet URL known" + (f"; {note}" if note else ""))
+            self.reading(st)                          # (no link: none refused)
             return
+        first = urls[0] if urls else (local.name, "datasheet folder")   # (the file's name only, never its path)
         if self.reader is None:
             self.reader = D.Reader(self.out, Path(self._kicad_args[0] or self.out / "cache").parent, self.api_key, self.rules, self.http)
         rd = self.reader
         if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
             try:
                 job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
+                if self.reading(st) and not rd.answered(job):
+                    self.refused(st, job, None, cfg.get("folder"))
+                self.folder_file_failed(st, job)
                 res = rd.cached(job)
             except CC.Held as e:
                 self.cross_check_held(st, e)
@@ -679,44 +688,79 @@ class Run:
             except D.DatasheetError:
                 res = None
             if res is None:
-                st["tried"].append(f"datasheet: {D.OFFLINE} ({urls[0][0]})")
+                st["tried"].append(f"datasheet: {D.OFFLINE} ({first[0]})")
                 return
             self.put_datasheet(st, res, job, fp_name, sym_name, "cached")
             return
         if not rd.key and not rd.estimate_only:
-            st["tried"].append(f"needs datasheet reader (no API key): {urls[0][0]} ({urls[0][1]})")
+            st["tried"].append(f"needs datasheet reader (no API key): {first[0]} ({first[1]})")
             return
         if not getattr(rd, "_recollected", False):    # answers paid for in earlier batches, before a parser fix
             rd._recollected = True
             rd.recollect()
+        refused_before = self.reading(st)             # (a link that no longer gives a PDF at all: said no more)
         job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
+        if refused_before and not rd.answered(job):   # (an earlier answer: the API fetched the link)
+            self.refused(st, job, None, cfg.get("folder"))
+        self.folder_file_failed(st, job)
         try:
             res = hit = rd.cached(job)
             if res is None and rd.deferred:
                 rd.submit(job)
                 self.waiting.append((st, job, fp_name, sym_name))
-                st["tried"].append(f"datasheet: queued for the batch ({job['url']}, {job['where']})")
+                at = ", ".join(x for x in (job["url"], job["where"]) if x)
+                st["tried"].append(f"datasheet: queued for the batch ({at})")
                 return
             res = res or rd.read_now(job)
         except CC.Held as e:
             self.cross_check_held(st, e)
             return
         except Exception as e:
-            self.refused(st, job, e)
+            self.read_failed(st, job, e, cfg.get("folder"), rd.answered(job, e))
             raise
         self.put_datasheet(st, res, job, fp_name, sym_name, "cached" if hit else "")
 
     @staticmethod
-    def refused(st, job, error):
+    def reading(st):
+        """The datasheet is fetched or read again (`datasheet batch PLAN` keeps each part's state): an earlier run's
+        refused-download advice is taken out -> whether there was one. `refused(st, job, None, folder)` says it again,
+        as the folder is now, while the maker's site still refuses the link it is sent as and the API has not answered
+        it (Reader.answered); an answer that comes back takes it out (put_datasheet, cross_check_held, read_failed,
+        flush_datasheets)."""
+        had = any(r.startswith("datasheet download refused by ") for r in st["review"])
+        st["review"][:] = [r for r in st["review"] if not r.startswith("datasheet download refused by ")]
+        return had
+
+    @staticmethod
+    def folder_file_failed(st, job):
+        """The part's own file in the [datasheet] folder is no PDF (a web page saved as .pdf) or does not read: said
+        first, so the person replaces it instead of saving it again under the same name."""
+        bad = D.folder_failure(job.get("prov"))
+        if bad:
+            st["tried"].append(f"datasheet: {bad}")
+
+    @staticmethod
+    def refused(st, job, error, folder=None):
         """A maker's site refused the PDF here and the API's fetcher failed too: the cause and the way round it, which
-        the release check shows in place of "no footprint"."""
-        line = D.refused_line(job, error)
-        if line:
+        the release check shows in place of "no footprint". error: the API's, or None (`reading`). folder: [datasheet]
+        folder (the review keeps its name)."""
+        line = D.refused_line(job, error, folder)
+        if line and line not in st["review"]:
             st["review"].append(line)
+
+    @staticmethod
+    def read_failed(st, job, error, folder=None, answered=False):
+        """The read failed. answered (Reader.answered): the API answered it (declined, not readable, its cross-check
+        not sent), so it fetched the link: an earlier run's advice goes, as on a read; an error before any answer leaves
+        it. The API's fetcher failing says it."""
+        if answered:
+            Run.reading(st)
+        Run.refused(st, job, error, folder)
 
     @staticmethod
     def cross_check_held(st, e):
         """A datasheet read whose cross-check disagreed: nothing is written; both values go to the review."""
+        Run.reading(st)                               # (an answer came back: no refused-download advice)
         st["cross_check"] = {"status": "disagreed", "summary": CC.summary_line(e.record)}
         st["tried"].append("datasheet reader: held, the cross-check disagrees (see datasheet/*.review.md)")
         st["review"].append(f"cross-check disagrees, nothing written: {CC.summary_line(e.record)}")
@@ -740,23 +784,61 @@ class Run:
                     st["tried"].append(f"datasheet: failed ({type(e).__name__}: {e})")
             elif isinstance(r, Exception):
                 st["tried"].append(f"datasheet reader: failed ({r})")
-                self.refused(st, job, r)
+                self.read_failed(st, job, r, (getattr(self.reader, "cfg", None) or D.settings(self.rules)).get("folder"),
+                                 self.reader.answered(job, r))
             elif r == "estimate only":                    # priced, not sent: the person approves the cost first
-                st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url']})")
+                st["tried"].append(f"datasheet: waiting for your OK to read it with AI ({job['url'] or job['where']})")
             else:
                 st["tried"].append(f"datasheet: {r or 'not sent'}" + ("; run again to collect" if str(r).startswith("pending") else ""))
+                if self.reader.answered(job):          # (pending: next step: an answer came back, the route goes on)
+                    self.reading(st)
         self.waiting = []
+
+    def standard_land(self, spec):
+        """[datasheet] standard_land: a read whose pin count, pitch, body and exposed pad name exactly one checked standard
+        package (stdparts.identify) -> (table name, how, why it is used) or None. off (the default): never. auto: when
+        the read left a number blank or gave no land of its own (the maker's recommended land, when printed, is kept);
+        always: whenever it identifies one."""
+        from . import stdparts as SP
+        mode = str(D.settings(self.rules).get("standard_land") or "off")
+        if mode == "off":
+            return None
+        name, how = SP.identify(spec)
+        if not name:
+            return None
+        own = spec.get("land") or spec.get("pad_table")
+        if mode == "auto" and own and not spec.get("unresolved"):
+            return None
+        why = ("the read left " + ", ".join(spec["unresolved"]) + " blank") if spec.get("unresolved") else \
+            "the datasheet gives no land of its own" if not own else "[datasheet] standard_land = always"
+        return name, how, why
 
     def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
         pdf = res["sidecar"].get("pdf") or {}        # the link read (the next one when the API could not fetch the first)
         url, where = pdf.get("url") or job["url"], pdf.get("where") or job["where"]
-        from . import fp_edit as FE                  # hand edits of this part's pad table (ecadlib fp-edit)
+        self.reading(st)                              # read: no refused-download advice left
+        from . import fp_edit as FE                   # hand edits of this part's pad table (ecadlib fp-edit)
         res, edited = FE.apply(FE.for_part(FE.load(self.out), st.get("name"), job.get("name"), job["part"]), res)
         if edited:
             st["tried"].extend(edited)
             st["review"].extend(edited)
+        from . import stdparts as SP
+        other = [r for r in res["needs_review"] if r.startswith("datasheet from your folder:")]   # another file's PDF
+        st["review"].extend(other)
+        st["verify"].extend(other)                    # its own hold reason: a person confirms this PDF is this part's
         got = []
-        if not st["footprint"]:
+        std = self.standard_land(res["spec"]) if not st["footprint"] else None
+        if std:                                       # the read named a checked package: its land, not the read's pads
+            pkg, found, why = std
+            sp = SP.spec(pkg)
+            text, _ = SP.build(pkg, RU.density_for(sp, self.rules))
+            hs = res["spec"].get("height_max") and "datasheet height_max" or sp.get("height_max") and "standard package table"
+            h = F.dim((res["spec"] if hs == "datasheet height_max" else sp)["height_max"])[2] if hs else None   # this part's own height first
+            self.put_fp(st, text, fp_name, f"standard:{SP.kicad_ref(pkg)}", None, h, hs or "", sp)
+            got.append(f"footprint {SP.kicad_ref(pkg)} (identified from the read)")
+            st["review"].append(f"standard land: the datasheet read identified {pkg} ({found}); {why}, so the checked standard "
+                                f"land was used. Check the package code on the drawing is this one")
+        elif not st["footprint"]:
             st["review"].extend(pad_table_problems(res["spec"]))
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
@@ -785,8 +867,10 @@ class Run:
         if cc:
             st["cross_check"] = {"status": cc["status"], "summary": CC.summary_line(cc)}
             st["tried"].append(f"cross-check ({cc['mode']}): {cc['status']}: {CC.summary_line(cc)}")
-        st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
-        st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url}; see datasheet/*.review.md"
+        if url:                                       # (a PDF from the [datasheet] folder of a line with no link has none)
+            st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
+        st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
+                            "see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
 
 

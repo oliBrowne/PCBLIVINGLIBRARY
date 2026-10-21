@@ -17,7 +17,7 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, time
+import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, time, unicodedata
 from pathlib import Path
 
 import requests
@@ -25,6 +25,7 @@ import requests
 from . import altium_lib as AL, footprint_gen as F
 from . import httpcache as H
 from .fsutil import write_text_atomic
+from .kicad_index import norm_mpn
 from . import userconfig as UC
 
 API_BASE = "https://api.anthropic.com"
@@ -70,6 +71,8 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
             "zoom_drawings": False,                         # close-ups of the drawing pages: zoom_blocks()
             "cross_check": "auto", "cross_check_model": "",  # second source before a footprint is accepted: ecadlib.crosscheck
+            "folder": "",                                   # PDFs a person downloaded, <MPN>.pdf: tried before any link
+            "standard_land": "off",                         # a read that identifies a standard package: off | auto | always
             "download": "auto",                             # a refused PDF link: other ways to download it (ecadlib.pdf_fetch)
             "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""}   # ... last, your own browser
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -1937,6 +1940,164 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
     return out
 
 
+def _mpn_key(s):
+    """A part number or file name as part numbers are compared everywhere (kicad_index.norm_mpn): no case or
+    punctuation, µ as U, accented and full-width letters plain, any other letter kept (К561ТМ2, 蜂鸣器)."""
+    return norm_mpn(s)
+
+
+# CJK, kana and hangul: in a file name after the part number, words (TP4056中文资料.pdf), as symbols are (NE555™.pdf)
+_WORDS = re.compile("[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uffdc\U00020000-\U0003ffff]")
+
+
+def _word(c):
+    return bool(_WORDS.match(c)) or unicodedata.category(c)[0] == "S"
+
+
+def _goes_on(stem, rest):
+    """Whether a file name goes on with more part number after the MPN (rest: what follows it in stem): a letter or
+    digit, but not a word or symbol after a part number in letters and digits (TP4056中文资料.pdf); after one in
+    Chinese, a Chinese character goes on (蜂鸣器.pdf is not 蜂鸣's)."""
+    if not rest or not _mpn_key(rest[0]):
+        return False
+    return not _word(rest[0]) or _word(stem[len(stem) - len(rest) - 1])
+
+
+def _after_mpn(stem, key):
+    """The raw file-name stem after the characters that spell `key`, each read as _mpn_key reads it (punctuation
+    skipped), or None when the stem's letters and digits do not start with `key`."""
+    i = n = 0
+    while n < len(key):
+        if i >= len(stem):
+            return None
+        k = _mpn_key(stem[i])                         # '' for punctuation; 'U' for µ, 'SS' for ß
+        if k:
+            if key[n:n + len(k)] != k:
+                return None
+            n += len(k)
+        i += 1
+    return stem[i:]
+
+
+def _spelled(stem, key):
+    """How much of `key` a file-name stem spells from its start, each character read as _mpn_key reads it
+    (punctuation skipped) -> (that many key characters, the stem after them): ('LTM4671 中文资料', 'LTM4671IYPBF') ->
+    (7, '中文资料'); ('PH2.0-2×4P', 'PH20210P') -> (5, '4P')."""
+    i = n = 0
+    while i < len(stem):
+        k = _mpn_key(stem[i])
+        if k:
+            if key[n:n + len(k)] != k:
+                break
+            n += len(k)
+        i += 1
+    return n, stem[i:]
+
+
+def _sibling(part, s):
+    """Whether the part number has a word or symbol anywhere after the characters that spell `s` (直针 in HX-2.54-4P直针
+    after HX2544P or after HX254): a name with a word or symbol of its own is then another variant's (HX-2.54-4P弯针.pdf,
+    HX-2.54 弯针.pdf), no family's."""
+    after = _after_mpn(part, s)
+    return after is None or any(_word(c) for c in after if _mpn_key(c))
+
+
+def folder_name(folder):
+    """The [datasheet] folder's own name, for text that is kept (never its path)."""
+    return Path(str(folder or "").strip()).name or "?"
+
+
+def _folder_pdfs(folder):
+    """The .pdf files in the [datasheet] folder, sorted -> (files, None), or (None, why) when it is not set, not
+    there, not a folder or cannot be read (no access to it: PermissionError; '~nosuchuser/x': RuntimeError). why
+    names the folder, never its path, and nothing here raises: a read goes on to the links."""
+    if not str(folder or "").strip():
+        return None, "no [datasheet] folder"
+    name = folder_name(folder)
+    try:
+        d = Path(str(folder).strip()).expanduser()
+        if not d.is_dir():
+            return None, f"your [datasheet] folder ({name}) " + ("is not a folder" if d.exists() else "does not exist")
+        return [f for f in sorted(d.iterdir()) if f.suffix.lower() == ".pdf" and f.is_file()], None
+    except (OSError, RuntimeError) as e:
+        return None, f"your [datasheet] folder ({name}) cannot be read ({type(e).__name__})"
+
+
+def folder_problem(folder):
+    """Why the [datasheet] folder that is set gives no file at all (not there, not a folder, cannot be read), or None
+    (not set, or it reads). Said wherever the person is told to put a PDF there."""
+    return _folder_pdfs(folder)[1] if str(folder or "").strip() else None
+
+
+def folder_file_name(part):
+    """The name to save a part's PDF under in the [datasheet] folder: <MPN>.pdf, with each character no file name
+    can hold (/ \\ : * ? " < > |) as '-' (LM1117MPX-3.3/NOPB -> LM1117MPX-3.3-NOPB.pdf). local_datasheet reads it
+    as the part's own file: names are compared without punctuation."""
+    return re.sub(r'[\\/:*?"<>|]', "-", str(part or "").strip() or "MPN") + ".pdf"
+
+
+def part_arg(part):
+    """A part number as a --part value to paste into a shell: quoted when it holds a space or a shell character."""
+    s = str(part or "").strip().replace('"', "")
+    return s if re.fullmatch(r"[\w.#+/,=:@%-]+", s) else f'"{s}"'
+
+
+def folder_failure(prov):
+    """What was wrong with the part's own file in the [datasheet] folder (not a PDF, cannot be read), or None."""
+    return next((a["error"] for a in (prov or {}).get("attempts") or [] if a.get("where") == "datasheet folder"), None)
+
+
+def local_datasheet(folder, part, kinds=("exact", "family", "other")):
+    """The PDF for `part` in a folder of datasheets a person downloaded -> (Path, how) or (None, why). Names are compared
+    without case and punctuation: <MPN>.pdf, or the MPN then a separator (LTM4671IY-PBF_datasheet.pdf) is "exact". Any
+    other name is another part's or a family's file and is said so in `how` (its read gets a review item): the longest
+    name the MPN starts with (LTM4671.pdf for LTM4671IY#PBF; at least 4 characters and half the MPN) is a "family"
+    datasheet; a name that goes on with more letters or digits (BAT54S.pdf for BAT54, LM317HV.pdf for LM317) is
+    "other", another part number. A word or symbol before or after a part number in letters and digits is a separator
+    (数据手册-TP4056.pdf, LTM4671 中文资料.pdf), never where the part number itself goes on with another (HX-2.54-4P弯针.pdf
+    and 弯针HX-2.54-4P.pdf are no files of HX-2.54-4P直针's); a family name has nothing after the start of the MPN but
+    words (HX-2.54 直针 4P.pdf, PH2.0-2×4P.pdf name other variants), and none at all where the part number has a word or
+    symbol of its own (HX-2.54 弯针.pdf for HX-2.54-4P直针). <MPN>.pdf beats any other exact name (ESP32-S3-WROOM-1.pdf,
+    (中文)TP4056.pdf), then the MPN alone after words (数据手册-WS2812B.pdf beats WS2812B-2020.pdf). kinds: the matches
+    to look for (Reader.job tries the links between them).
+    For makers whose sites refuse downloads from scripts (analog.com, Nexperia). `why` never holds the folder's path."""
+    files, why = _folder_pdfs(folder)
+    if files is None:
+        return None, why
+    key = _mpn_key(part)
+    if not key:
+        return None, "no MPN"
+    part = unicodedata.normalize("NFC", str(part))
+    latin = not _word(next((c for c in part if _mpn_key(c)), "-"))   # the part number starts with a letter or digit
+    own, alone, exact, prefix, other, plen = None, None, None, None, None, 0
+    for f in files:
+        name = unicodedata.normalize("NFC", f.stem)  # (macOS saves names decomposed: LM318A + U+0301 is LM318Á)
+        cut = name[:next((i for i, c in enumerate(name) if _mpn_key(c) and not _word(c)), len(name))] if latin else ""
+        stem, whole = name[len(cut):], _after_mpn(name, key)   # 数据手册-TP4056, 【原厂】NE555: the words before it go
+        rest = _after_mpn(stem, key)
+        if whole is not None and not _mpn_key(whole):
+            own = own or f                            # BAT54.pdf, bat54_.pdf: the name the review asks for
+        elif rest is not None and not _mpn_key(rest):
+            alone = alone or f                        # 数据手册-TP4056.pdf: words in front, then the MPN alone
+        elif rest is not None and not _goes_on(stem, rest):
+            exact = exact or f                        # BAT54_datasheet.pdf, bat54-rev3.pdf, TP4056中文资料.pdf
+        elif rest is not None:
+            other = other or f                        # BAT54S.pdf: another part number that starts like this one
+        else:
+            n, tail = _spelled(stem, key)             # LTM4671 中文资料: words after the start of the MPN, no more of it
+            if (4 <= n < len(key) and 2 * n >= len(key) and n > plen and all(_word(k) for c in tail for k in _mpn_key(c))
+                    and not (any(_word(c) for c in cut + tail) and _sibling(part, key[:n]))):
+                prefix, plen = f, n
+    exact = own or alone or exact
+    if exact and "exact" in kinds:
+        return exact, f"{exact.name} in the datasheet folder"
+    if prefix and "family" in kinds:
+        return prefix, f"{prefix.name} in the datasheet folder (a family datasheet: the name is the start of {part})"
+    if other and "other" in kinds:
+        return other, f"{other.name} in the datasheet folder (named for another part number that starts with {part})"
+    return None, f"no {part}.pdf in your [datasheet] folder"
+
+
 def _quiet_pypdf():
     import logging
     logging.getLogger("pypdf").setLevel(logging.ERROR)    # a damaged PDF is reported by us, not as log noise
@@ -2023,16 +2184,41 @@ API_FETCH_FAILED = re.compile(r"could not (be )?(fetch|download)|unable to (fetc
                               r"|unable to connect to the remote server", re.I)
 
 
-def refused_line(job, error):
+def came_back(msg):
+    """Whether `msg` is the model's answer, so the API fetched the link: not the failed answer Reader._ask writes for a
+    request refused before or without one (rails, or an endpoint that cannot fetch links, giving up with no usage)."""
+    if not msg:
+        return False
+    usage = [v for v in (msg.get("usage") or {}).values() if isinstance(v, (int, float))]
+    return not (msg.get("ecadlib") or {}).get("error") or any(usage)
+
+
+def refused_line(job, error, folder=None):
     """The review line for a part whose PDF a maker's site refused here and the API could not fetch: the likely cause
-    and the way round it. None when that is not what happened."""
+    and the way round it. None when that is not what happened. error: the API's error, or None when an earlier run's
+    showed it could not fetch the link (its line said again). folder: [datasheet] folder (its name only is kept).
+    The way round, first that applies: the part's file already in the folder is no PDF (replace it); the folder set
+    is not there or cannot be read (fix it); save it in the folder; no folder set (how to set one)."""
     prov = job.get("prov") or {}
-    r = refusal(prov.get("attempts")) if prov.get("sent_as") == "url" and API_FETCH_FAILED.search(str(error)) else None
+    r = refusal(prov.get("attempts")) if prov.get("sent_as") == "url" and (
+        error is None or API_FETCH_FAILED.search(str(error))) else None
     if not r:
         return None
     url, host, why = r
-    return (f"datasheet download refused by {host} ({why}): the maker's site likely blocks automated downloads; download "
-            f"{url} in a browser and read it with `ecadlib datasheet FILE.pdf --part {job['part']}`")
+    name, bad, note = folder_file_name(job["part"]), folder_failure(prov), prov.get("folder_note")
+    if bad:
+        how = f"{bad}: download {url} in a browser, save it as {name} and run again"
+    elif note:
+        how = (f"{note}: fix folder under [datasheet] in ecadlib.toml, then download {url} in a browser, save it there as "
+               f"{name} and run again")
+    elif str(folder or "").strip():
+        how = (f"download {url} in a browser, save it as {name} in your [datasheet] folder ({folder_name(folder)}) and "
+               "run again")
+    else:
+        how = (f"download {url} in a browser, set folder under [datasheet] in ecadlib.toml to a folder, save it there as "
+               f"{name} and run again")
+    return (f"datasheet download refused by {host} ({why}): the maker's site likely blocks automated downloads; {how} "
+            f"(or read it alone with `ecadlib datasheet FILE.pdf --part {part_arg(job['part'])}`)")
 
 
 def refusal(attempts):
@@ -2522,7 +2708,8 @@ class Reader:
         # UI, MCP, the menus: Workspace). It tells the person what to save on stderr, never through `log` (a filter
         # may drop it); librarian.run points it at its progress line.
         self.store = PdfStore(cache_dir, http, sleep=sleep, download=dl, handoff=PF.Handoff(
-            PF.downloads_dir(self.cfg.get("downloads_folder")), wait_s=float(self.cfg.get("handoff_wait_s") or 180))
+            PF.downloads_dir(self.cfg.get("downloads_folder")), wait_s=float(self.cfg.get("handoff_wait_s") or 180),
+            datasheet_folder=self.cfg.get("folder"))
             if handoff is not False and self.cfg.get("handoff") == "auto" and not estimate
             and not self.offline and (handoff or PF.interactive()) else None)
         self.results = ResultCache(cache_dir)
@@ -2581,20 +2768,30 @@ class Reader:
     # --- jobs
     def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None):
         """fp_needed: False when the part's footprint comes from another source ([datasheet] cross_check = "auto" then
-        skips the cross-check). mpn: the part's MPN, when it has one: a PDF that does not name it is skipped (PdfStore.fetch). Try each (url, where) until one is a PDF. A link that cannot be downloaded here (blocked host) is sent
+        skips the cross-check). mpn: the part's MPN, when it has one: a PDF that does not name it is skipped
+        (PdfStore.fetch). Try each (url, where) until one is a PDF ([datasheet] folder files around them: see
+        below). A link that cannot be downloaded here (blocked host) is sent
         as a URL source for the API to fetch, so a part is never stuck on this machine's network.
         The job is the first step of the part's route (ds_route): the pages picked for [datasheet] page_budget and the
         model the router starts on; answers already in the result cache are replayed, so a part whose cheap attempt
         failed before starts where it left off ('final' = the cached answer at this step is the one to use)."""
         from . import ds_route as DR
-        attempts, data, prov = [], None, None
+        attempts = []
         n0 = len(self.store.refusals)
-        for url, where in [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))]:   # http, then https
+        # [datasheet] folder: the part's own file (<MPN>.pdf) beats every link and needs no network; a family file comes
+        # once no link gave a PDF, before the person is asked for one; a file named for another part number comes last
+        # (a folder set but not there, or not readable, is said in the part's review and error; the links go on)
+        data, prov, how = self._folder_pdf(part, urls, ("exact",), attempts)
+        note = folder_problem(self.cfg.get("folder")) if data is None else None
+        tries = [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))] if data is None else []
+        for url, where in tries:                      # http, then https
             try:
                 data, prov = self.store.fetch(url, where, part=part, handoff=False, mpn=mpn)
                 break
             except DatasheetError as e:
                 attempts.append({"url": url, "where": where, "error": str(e)})
+        if data is None:
+            data, prov, _ = self._folder_pdf(part, urls, ("family",), attempts)
         if data is None and self.store.handoff is not None:   # no link worked by itself: ask the person, link by link
             for url, where, page in dict.fromkeys(self.store.refusals[n0:]):
                 try:
@@ -2611,13 +2808,19 @@ class Reader:
             except DatasheetError:
                 data = None
         if data is None:
+            data, prov, _ = self._folder_pdf(part, urls, ("other",), attempts)
+        if data is None:
+            how = "; ".join(a["error"] for a in attempts if a["where"] == "datasheet folder") or how
             if not urls:
-                raise DatasheetError("no datasheet URL known")
+                raise DatasheetError("no datasheet URL known" + (f" and {how}" if self.cfg.get("folder") else
+                                     "; put the PDF in a folder and set [datasheet] folder"))
             wrong = {a["url"] for a in attempts      # (what the other ways got says nothing of the link itself)
                      if re.search(BROKEN_LINK, re.sub(r" \(also tried .*\)$", "", a["error"], flags=re.S))}
             usable = [(u, w) for u, w in urls if u not in wrong and api_url(u) not in wrong]
             if not usable:
-                raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts))
+                raise DatasheetError("no datasheet link gave a PDF: " + "; ".join(a["error"] for a in attempts) + (
+                    f"; {note}" if note else "" if self.cfg.get("folder") else   # a typo in the folder's name, no access
+                    "; download it by hand into a folder and set [datasheet] folder"))
             url, where = usable[0]
             more = [(u, w) for u, w in usable[1:] if api_url(u) != api_url(url)]   # if the API can't fetch it (_next_link)
             prov = {"url": url, "where": where, "sent_as": "url", "note": "not downloaded here; sent as a URL for the API to fetch"}
@@ -2634,6 +2837,8 @@ class Reader:
             sent = sorted({p for L in lv if isinstance(L, list) for p in L}) or (list(range(1, n + 1)) if n and n <= 40 else [])
             tables = DR.dim_tables(data, sent, texts) if texts and sent and not pages else None
         prov["attempts"] = attempts
+        if note:                                      # said where the person is told to save the PDF (refused_line)
+            prov["folder_note"] = note
         sent0 = len(lv[0]) if isinstance(lv[0], list) else None
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
@@ -2662,6 +2867,29 @@ class Reader:
         base = dict(job, url=url, where=where, src_hash="url" + hashlib.sha256(url.encode()).hexdigest(), base_prov=prov,
                     more_urls=rest[1:])
         return self._walk(self._at(base, job["rung"], job["level"]))
+
+    def _folder_pdf(self, part, urls, kinds, attempts):
+        """The part's PDF from the [datasheet] folder when a file there is one of `kinds` of match (local_datasheet)
+        -> (bytes, prov, how) or (None, None, why). A file that does not read or is not a PDF goes into attempts. The
+        part keeps its first public link; prov names the file, never a path on this machine."""
+        f, how = local_datasheet(self.cfg.get("folder"), part, kinds)
+        if f is None:
+            return None, None, how
+        try:                                          # (said first in the review: asking for <MPN>.pdf again would loop)
+            data = f.read_bytes()
+        except OSError as e:
+            data, err = None, (f"{f.name} in your [datasheet] folder cannot be read ({type(e).__name__}): replace it "
+                               "with the PDF")
+        else:
+            err = None if is_pdf(data) else (f"{f.name} in your [datasheet] folder is not a PDF (a web page saved as "
+                                             ".pdf?): replace it with the PDF")
+        if err:
+            attempts.append({"url": f.name, "where": "datasheet folder", "error": err})
+            return None, None, err
+        link = urls[0][0] if urls else ""
+        return data, {"url": link, "final_url": link, "where": how, "status": None, "content_type": "application/pdf",
+                      "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
+                      "from_cache": False, "local": f.name}, how
 
     def _page_marks(self, data, digest):
         from . import ds_route as DR
@@ -2760,7 +2988,8 @@ class Reader:
                 return job
             if best is None or rank > tuple(best[0]):
                 best = [list(rank), job["rung"], job["level"], len(done)]
-            job = self._at(dict(job, route=dict(job["route"], attempts=done, best=best)), *nxt)
+            job = self._at(dict(job, route=dict(job["route"], attempts=done, best=best),
+                                earlier_keys=job.get("earlier_keys", []) + [job["key"]]), *nxt)   # (Reader.answered)
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
@@ -2775,6 +3004,8 @@ class Reader:
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
         if job["prov"].get("unnamed"):
             res["needs_review"].append(f"{job['prov']['unnamed']} (no other link gave a PDF): check it is this part's datasheet")
+        if job["prov"].get("local") and re.search(r"\((?:a family datasheet|named for another part number)", str(job["prov"].get("where"))):
+            res["needs_review"].append(f"datasheet from your folder: {job['prov']['where']}; check it covers this part")
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)
@@ -2856,6 +3087,17 @@ class Reader:
                 return None
         return self._result(job, self.results.get(job["key"]))
 
+    def answered(self, job, error=None):
+        """Whether the API has answered this read, in this run or an earlier one: an answer kept under the key of this
+        step or an earlier step of the part's route, or one that came back declined or not readable (`error.answered`),
+        so it fetched the link. An error before any answer (the API's HTTP error, no connection, over the cost cap, an
+        endpoint that cannot fetch links, a batch request expired or errored, a batch not back yet or gone) says
+        nothing about the link."""
+        if getattr(error, "answered", False):
+            return True
+        recs = (self.results.get(k) for k in [job["key"], *job.get("earlier_keys", [])])
+        return any(r is not None and not r.get("not_answered") for r in recs)
+
     def _pages_sent(self, job):
         return len(job["offset"]) if isinstance(job.get("offset"), list) else None
 
@@ -2885,8 +3127,10 @@ class Reader:
             nx = step("failed")
             self.ledger.add(DR.attempt_record(job["part"], job.get("name"), model, msg, via, self._pages_sent(job),
                                               job.get("n_pages"), "error", label(nx), e))
+            e.answered = came_back(msg)               # (Reader.answered)
             if nx:
-                self.results.put(job["key"], dict(base, error=str(e)[:300], usage=(msg or {}).get("usage")))
+                self.results.put(job["key"], dict(base, error=str(e)[:300], usage=(msg or {}).get("usage"),
+                                                  **({} if e.answered else {"not_answered": True})))
             raise
         rec = dict(base, message=msg)
         self.results.put(job["key"], rec)
@@ -3451,7 +3695,7 @@ class Reader:
                 self._save_state(st)
                 _IN_FLIGHT.discard(mark["fingerprint"])
                 self.say(f"  datasheet batch {b['id']}: {len(reqs)} parts submitted")
-            errors = {}
+            errors, came = {}, set()
             t0 = time.time()
             for b in st["batches"]:
                 if b.get("collected") or not set(b["requests"].values()) & {j["key"] for j in jobs}:
@@ -3510,6 +3754,7 @@ class Reader:
                                         r["message"], f"batch {b['id']}")
                         except DatasheetError as e:
                             errors[key] = f"{e}"
+                            came.add(key)             # (an answer, declined or not readable: Reader.answered)
                     elif r.get("type") == "errored":
                         et, em = _err_of(r.get("error"))
                         errors[key] = f"batch request errored: {et}: {em}"
@@ -3550,7 +3795,11 @@ class Reader:
                     out[j["key"]] = e
             elif j["key"] in errors:                 # the API could not fetch the link: its next one, in another round
                 nx = self._next_link(j, errors[j["key"]])
-                out[j["key"]] = _Advance(nx) if nx is not None else DatasheetError(errors[j["key"]])
+                if nx is not None:
+                    out[j["key"]] = _Advance(nx)
+                else:
+                    out[j["key"]] = DatasheetError(errors[j["key"]])
+                    out[j["key"]].answered = j["key"] in came
             else:
                 bid = next((b["id"] for b in st["batches"] if j["key"] in b["requests"].values() and not b.get("collected")), "")
                 out[j["key"]] = f"pending {bid}".strip()

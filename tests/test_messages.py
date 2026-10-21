@@ -12,10 +12,16 @@ ROOT = Path(__file__).resolve().parents[1] / "ecadlib"
 EXAMPLES = {
     "files.no_symbol": "files: no symbol model (.SchLib)",
     "files.no_footprint": "files: no footprint model (.PcbLib) (cannot be overridden)",
+    "files.datasheet_not_pdf": "files: datasheet download refused by assets.nexperia.com (answered HTTP 403 with a web page): "
+                               "the maker's site likely blocks automated downloads; BAT160A.pdf in your [datasheet] folder "
+                               "is not a PDF (a web page saved as .pdf?): replace it with the PDF: download https://assets."
+                               "nexperia.com/documents/data-sheet/BAT160_SERIES.pdf in a browser, save it as BAT160A.pdf and "
+                               "run again (or read it alone with `ecadlib datasheet FILE.pdf --part BAT160A`)",
     "files.datasheet_refused": "files: datasheet download refused by www.analog.com (reset the connection): the maker's site "
                                "likely blocks automated downloads; download https://www.analog.com/media/en/technical-"
-                               "documentation/data-sheets/LTM4671.pdf in a browser and read it with `ecadlib datasheet "
-                               "FILE.pdf --part LTM4671`",
+                               "documentation/data-sheets/LTM4671.pdf in a browser, save it as LTM4671.pdf in your "
+                               "[datasheet] folder (datasheets) and run again (or read it alone with `ecadlib datasheet "
+                               "FILE.pdf --part LTM4671`)",
     "files.missing": "files: footprint file missing: /srv/ws/models/PcbLib/X.PcbLib",
     "files.unreadable": "files: symbol file does not read back (ValueError: library is empty)",
     "pins.no_pins": "pins: symbol has no pins",
@@ -66,6 +72,11 @@ EXAMPLES = {
     "datasheet.not_downloaded": "the PDF was not downloaded here (sent as a URL): its content was not validated locally",
     "datasheet.unnamed": "the PDF at https://x/a.pdf doesn't mention LTC4060EDHC (no other link gave a PDF): check it is this part's datasheet",
     "datasheet.some_pages": "only some pages were sent (pages 1-4 of 40): check nothing was missed",
+    "datasheet.family_pdf": "datasheet from your folder: LTM4671.pdf in the datasheet folder (a family datasheet: the name is the "
+                            "start of LTM4671IY#PBF); check it covers this part",
+    "datasheet.standard_land": "standard land: the datasheet read identified SOIC-8_3.9x4.9mm_P1.27mm (8 pins, pitch 1.27, body "
+                               "3.9 x 4.9 -> SOIC-8_3.9x4.9mm_P1.27mm); the read left terminal_length blank, so the checked "
+                               "standard land was used. Check the package code on the drawing is this one",
     "datasheet.failed": "datasheet reader: failed (HTTP 500)",
     "librarian.lcsc_mismatch": "LCSC C123 is BSS84, not BSS138: fix the BOM's LCSC number",
     "librarian.footprint_guess": "footprint SOT-23 chosen by name: compare with the datasheet land pattern",
@@ -100,6 +111,95 @@ def test_every_code_has_an_example_that_explains_to_it():
         assert e["code"] == code, (code, raw, e)
         assert "?" not in e["text"] and "{" not in e["text"] and "[" not in e["text"], e
         assert not M.leaks(e["text"]) and not M.leaks(e["fix"]), e
+
+
+def test_no_template_writes_brackets_of_its_own():
+    """fill() keeps or drops each [...] by the {values} in it, and never prints the brackets: "put the PDF in your
+    [datasheet] folder" came out as "your datasheet folder". So a bracket group in a template always holds a value."""
+    for code, (text, fix) in [(c, v[:2]) for c, v in M.CODES.items()] + list(M.ERRORS.items()):
+        for t in (text, fix):
+            bare = [g for g in re.findall(r"\[([^\[\]]*)\]", t) if not re.search(r"{\w+}", g)]
+            assert not bare, (code, bare)
+    fix = M.explain(EXAMPLES["datasheet.no_link"])["fix"]
+    assert fix == ("Add the datasheet link to the BOM line, save the PDF as MPN.pdf in your datasheet folder (set "
+                   "`folder` under datasheet in ecadlib.toml), or pick a footprint by hand."), fix
+    fix = M.explain(EXAMPLES["files.datasheet_refused"])["fix"]
+    assert "save it as LTM4671.pdf in your datasheet folder (datasheets) and run again; or read it alone with ecadlib " \
+           "datasheet FILE.pdf --part LTM4671; or pick" in fix, fix
+
+
+REFUSED = ("files: datasheet download refused by www.analog.com (reset the connection): the maker's site likely blocks "
+           "automated downloads; ")
+URL = "https://www.analog.com/ltm4671.pdf"
+
+
+def test_every_refused_download_line_explains_in_full():
+    """Each way datasheet.refused_line writes its advice (folder set, not set, missing; a file there that is no PDF;
+    an MPN with spaces or a '/'), and the lines of earlier versions kept in plans, come out whole: the file name and
+    the --part value as written, nothing unfilled."""
+    alone = " (or read it alone with `ecadlib datasheet FILE.pdf --part {}`)"
+    tail = "; or read it alone with ecadlib datasheet FILE.pdf --part {}; or pick a footprint by hand."
+    cases = [
+        (f"download {URL} in a browser, save it as LTM4671.pdf in your [datasheet] folder (ds) and run again" + alone.format("LTM4671"),
+         "files.datasheet_refused", f"Download the PDF in a browser ({URL}), save it as LTM4671.pdf in your datasheet folder "
+                                    "(ds) and run again" + tail.format("LTM4671")),
+        (f"download {URL} in a browser, set folder under [datasheet] in ecadlib.toml to a folder, save it there as "
+         "DSPART1 REV A.pdf and run again" + alone.format('"DSPART1 REV A"'),
+         "files.datasheet_refused", f"Download the PDF in a browser ({URL}), set `folder` under datasheet in ecadlib.toml to "
+                                    "a folder, save it there as DSPART1 REV A.pdf and run again" + tail.format('"DSPART1 REV A"')),
+        ("your [datasheet] folder (datasheetz) does not exist: fix folder under [datasheet] in ecadlib.toml, then download "
+         f"{URL} in a browser, save it there as LM1117MPX-3.3-NOPB.pdf and run again" + alone.format("LM1117MPX-3.3/NOPB"),
+         "files.datasheet_refused", "Your datasheet folder (datasheetz) does not exist: fix `folder` under datasheet in "
+                                    f"ecadlib.toml, then download the PDF in a browser ({URL}), save it there as "
+                                    "LM1117MPX-3.3-NOPB.pdf and run again" + tail.format("LM1117MPX-3.3/NOPB")),
+        ("your [datasheet] folder (ds) cannot be read (PermissionError): fix folder under [datasheet] in ecadlib.toml, then "
+         f"download {URL} in a browser, save it there as LTM4671.pdf and run again" + alone.format("LTM4671"),
+         "files.datasheet_refused", "Your datasheet folder (ds) cannot be read (PermissionError): fix `folder` under "
+                                    f"datasheet in ecadlib.toml, then download the PDF in a browser ({URL}), save it there "
+                                    "as LTM4671.pdf and run again" + tail.format("LTM4671")),
+        ("DSPART1 REV A.pdf in your [datasheet] folder cannot be read (PermissionError): replace it with the PDF: download "
+         f"{URL} in a browser, save it as DSPART1 REV A.pdf and run again" + alone.format('"DSPART1 REV A"'),
+         "files.datasheet_not_pdf", f"Replace DSPART1 REV A.pdf with the PDF: download it in a browser ({URL}), save it as "
+                                    "DSPART1 REV A.pdf and run again" + tail.format('"DSPART1 REV A"')),
+        # written by earlier versions, still in plans: the folder's way with the part's own name
+        (f"download {URL} in a browser, save it as LTM4671.pdf in your [datasheet] folder and run again" + alone.format("LTM4671"),
+         "files.datasheet_refused", f"Download the PDF in a browser ({URL}), save it as LTM4671.pdf in your datasheet folder "
+                                    "(set `folder` under datasheet in ecadlib.toml) and run again" + tail.format("LTM4671")),
+        (f"download {URL} in a browser and read it with `ecadlib datasheet FILE.pdf --part LM1117MPX-3.3/NOPB`",
+         "files.datasheet_refused", f"Download the PDF in a browser ({URL}), save it as LM1117MPX-3.3-NOPB.pdf in your "
+                                    "datasheet folder (set `folder` under datasheet in ecadlib.toml) and run again"
+                                    + tail.format("LM1117MPX-3.3/NOPB")),
+    ]
+    for raw, code, fix in cases:
+        e = M.explain(REFUSED + raw)
+        assert (e["code"], e["fix"]) == (code, fix), (raw, e)
+        assert not re.search(r"[{}\[\]?]", e["text"] + e["fix"]) and not M.leaks(e["text"] + e["fix"]), e
+    e = M.explain(REFUSED.rstrip("; "))                             # nothing after the cause: still a whole sentence
+    assert e["code"] == "files.datasheet_refused" and "?" not in e["fix"] and "{" not in e["fix"], e
+
+
+def test_a_line_with_no_link_keeps_what_is_wrong_with_the_folder():
+    """A BOM line with no link, and a [datasheet] folder that gave nothing for it (not there, no access, the part's
+    file no PDF): the shown sentence says so, by the folder's name."""
+    no_link = "No datasheet link is known, so the datasheet could not be read"
+    for raw, said in (("datasheet: no datasheet URL known; your [datasheet] folder (datasheetz) does not exist",
+                       ", and your datasheet folder (datasheetz) does not exist."),
+                      ("datasheet: no datasheet URL known; your [datasheet] folder (ds) cannot be read (PermissionError)",
+                       ", and your datasheet folder (ds) cannot be read (PermissionError)."),
+                      ("datasheet: failed (DatasheetError: no datasheet URL known and DSPART1.pdf in your [datasheet] folder "
+                       "is not a PDF (a web page saved as .pdf?): replace it with the PDF)",
+                       ", and DSPART1.pdf in your datasheet folder is not a PDF."),
+                      ("datasheet: no datasheet URL known", ".")):
+        e = M.explain(raw)
+        assert e["code"] == "datasheet.no_link" and e["text"] == no_link + said, (raw, e)
+        assert not re.search(r"[{}\[\]?]", e["text"] + e["fix"]), e
+
+
+def test_a_folder_file_with_spaces_in_its_name_is_named_whole():
+    for name in ("BAT54S (1).pdf", "BAT54S datasheet.pdf", "BAT54S.PDF"):
+        e = M.explain(f"verify: datasheet from your folder: {name} in the datasheet folder (named for another part "
+                      "number that starts with BAT54); check it covers this part")
+        assert e["code"] == "datasheet.family_pdf" and e["text"].endswith(f"({name})."), (name, e)
 
 
 def test_held_fills_values_and_drops_optional_parts():
@@ -192,7 +292,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 9, "datasheet.py": 4,
+    "librarian.py": 10, "datasheet.py": 5,
 }
 
 

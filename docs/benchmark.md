@@ -6,20 +6,44 @@ counterpart of the accuracy gate (`ecadlib eval gate`, 328/331 on a committed sy
 The gate is a check of the generator and the pipeline: it says the footprint is right *when the reader's answer is
 right*. This page measures the whole thing, reading included: how often ecadlib reads a real datasheet correctly.
 
-**Run of 2026-10-18** (set kicad-v1, Claude Opus 5.5, sources `standard,datasheet`, code at PR #102):
+**Run of 2026-10-21** (set kicad-v1, Claude Opus 5.5 and Haiku 5.5, sources `standard,datasheet`, Message Batches, code at
+main 4f78db8, pages picked automatically):
 
-| | Parts | Right | Rate |
+| | Opus, zoom on | Opus, default settings | Haiku 5.5, default |
 |---|---|---|---|
-| Every part | 110 | 30 | 27 % |
-| Parts with a datasheet link | 97 | 30 | 31 % |
-| Parts not stopped by a missing or unfetchable PDF | 71 | 30 | 42 % |
-| Counting the maker's land as right (below) | 110 | 33 | 30 % |
+| Right, every part | **43/110 (39 %)** | 39/110 (35 %) | 31/110 (28 %) |
+| Counting the maker's land as right (below) | 46/110 (42 %) | 42/110 (38 %) | 32/110 (29 %) |
+| Built from a datasheet read: right | 20 of 35 built | 16 of 35 built | 8 of 26 built |
+| Built from the standard-package table: right | 23 of 24 | 23 of 24 | 23 of 24 |
+| Pad match over the footprints built | 72.6 % (939/1,293 pads, 59 footprints) | 72.2 % (921/1,276, 59) | 65.0 % (606/933, 50) |
+| Parts with no PDF to read | 19 | 19 | 19 |
+| Real cost (API usage) | $23.19, $0.21 a part | $18.73, $0.17 a part | $0.92, under a cent a part |
 
-**Pad match**, over the 46 footprints built: every pad within tolerance on 33 (72 %), 36 (78 %) counting the
-maker's land as right. Pitch 44/46, pad count 45/46, pin 1 43/46, courtyard 40/46. Pin names 30/32.
+"Zoom on" is `[datasheet] zoom_drawings = true`: the drawing and land-pattern pages are also sent as close-ups. It
+is off by default. Over the default it got AH1806-W, TPS70345, STULPI01A, NCP4308AMT and S10B-PH-K right and lost
+TC2030 (the cross-check's second read disagreed, so it was held), for $4.46 more.
 
-The target set in #42 is a 97 % pad match. **This run is well short of it.** The rest of this page says where the
-misses are, so the next steps are the ones that move the number.
+**Read the split, not just the total.** 23 of the right parts are standard packages (chip resistors and capacitors,
+diodes, SOT-23 and the like) built from ecadlib's own table with no model involved; that table is right on 23 of
+24. The part of the pipeline this benchmark is really about is the datasheet read: with zoom on, 20 of the 35
+footprints built from a datasheet were right, and 51 parts got no footprint at all (no PDF, a dimension left blank,
+or held because the second read disagreed). A held part is the intended behaviour, not a wrong part in a library:
+it waits for a person.
+
+**Against earlier runs.** On 2026-10-19 the same set scored 33/110 (Opus, default settings, $16.00), and on
+2026-10-18 30/110 ($14.34). On 10-19, 10 of the 21 footprints built from a datasheet were right; now 20 of 35 are,
+so the gain is in the datasheet reads, not in the table. It comes from code, not from re-tuning to the answer key:
+downloads that get past maker sites that refuse a script (#145: 39 parts without a PDF became 19; 49 PDFs came
+plain, 19 with Chrome's TLS fingerprint, 1 through a headless browser, 2 were sent as a link), the cross-check's
+new rules, and a fix to batch reads (#147) where one part's hold was given to every part waiting with it. The zoom
+run lost no part that was right on 10-19.
+
+**Haiku 5.5** reads for under a cent a part and scores 31/110 (27 on 10-19). Most of its losses are holds: its
+cross-check's second read disagreed on 29 parts, against 17 for Opus, so it builds fewer parts rather than more
+wrong ones.
+
+The target set in #42 is a 97 % pad match. **These runs are still well short of it.** The rest of this page says
+where the misses are.
 
 ## What was measured
 
@@ -36,79 +60,97 @@ misses are, so the next steps are the ones that move the number.
 * **Against the maker's land pattern.** KiCad works most lands out from the package dimensions (IPC-7351B). When a
   datasheet gives its own example board layout, ecadlib uses that instead, so a part can miss KiCad while being
   exactly what the maker asks for. The report marks those (`kicad_differs_maker_land`) and gives the rate counting
-  them as right. Three did, each checked by hand against the datasheet page:
-  CD4066BM (TI D0014A, p25: 1.55 x 0.6 pads on 5.4 mm), UCC256301 (TI DDB0014A, p70: the same) and BCR430UW6
-  (Diodes SOT26, p8: X 0.55, Y 0.80, C 2.40). KiCad's pads are 1.95 and 1.6 mm long. 13 of the parts read from a
-  datasheet came with a land pattern, and ecadlib built each of those footprints from it (a misread land would be
-  followed too, so only the three above are counted, after a hand check).
+  them as right. In the zoom run three did: CD4066BM (TI D0014A, p25: 1.55 x 0.6 pads on 5.4 mm), BCR430UW6
+  (Diodes SOT26, p8: X 0.55, Y 0.80, C 2.40), both checked by hand against the datasheet page on 10-18, and
+  C8051F320-GQ, not yet checked by hand. KiCad's pads are 1.95 and 1.6 mm long. A misread land would be followed
+  too, which is why the headline does not count these.
 * **KiCad errata.** One case where KiCad's reference disagrees with the datasheet is scored right, with the
   evidence in `ecadlib/eval/sets/kicad-v1.errata.json`: AH1806-W, whose SC59 pins 2 and 3 KiCad swaps (Diodes
   AH1806 datasheet p1-2: pin 2 GND, pin 3 OUTPUT).
 
 ## By family
 
-| Family | Right | Notes |
-|---|---|---|
-| chip | 10/10 | standard table |
-| diode | 9/10 | |
-| sot | 3/10 | +1 counting the maker's land |
-| bga | 2/10 | |
-| soic | 2/10 | +2 counting the maker's land |
-| tht | 2/10 | |
-| connector | 1/10 | 5 Neutrik parts have no PCB drawing in the PDF |
-| qfn | 1/10 | |
-| power | 0/10 | |
-| qfp | 0/10 | 3 ATSAME70 reads left every dimension blank |
-| tssop | 0/10 | PowerPAD thermal lands (below) |
+| Family | Zoom on | Default | 10-19 (Opus) | Notes |
+|---|---|---|---|---|
+| chip | 10/10 | 10/10 | 10/10 | standard table |
+| diode | 9/10 | 9/10 | 9/10 | |
+| tssop | 6/10 | 5/10 | 4/10 | |
+| bga | 5/10 | 4/10 | 1/10 | |
+| qfp | 3/10 | 3/10 | 0/10 | 3 ATSAME70 reads still miss |
+| soic | 3/10 | 3/10 | 2/10 | |
+| sot | 3/10 | 2/10 | 3/10 | |
+| tht | 2/10 | 2/10 | 2/10 | |
+| connector | 1/10 | 1/10 | 1/10 | 5 Neutrik parts have no PCB drawing in the PDF |
+| qfn | 1/10 | 0/10 | 1/10 | |
+| power | 0/10 | 0/10 | 0/10 | |
 
 ## Where the misses are
 
-Of the 80 parts that were not right:
+**The 15 footprints built from a datasheet that miss KiCad (zoom run)** are mostly not misread numbers: the read
+is right and the footprint is built by different rules than KiCad's.
 
-* **13 have no usable datasheet link** (dead links, HTML pages with no PDF): ENS210, ICE40HX8K-BG121, AQY282GS,
-  MKE02Z16VLD4, GBU4A, C3D02065E, KBU4A, AUIPS6011R, AP1117-18, 2ED21824S06J, HCPL-314J, C3D08060G, 16550.
-* **26 never reached the model**: the maker's site refused the download here and the API's own fetcher could not
-  get it either. analog.com x11 (LTM4671, LT3652IDD, LTC4060EDHC, LTC2942-1, LTC7810, ADAU1702, AD5274BRM, AD7606,
-  LT8610, MAX22201, AD7616), Nexperia x6 (BUK7M10-40EX, PSMN5R2-60YL, IP4234CZ6, BCV61, BAT160A, BAT160C), ST x2,
-  Altera x2, and M2GL090T-FG484, DNA40U2200GU, C8051F320-GQ, LTV-352T, IPS6011RPBF. A person with the PDF can give
-  it to ecadlib directly; the benchmark does not.
-* **20 reads left a dimension blank** (the part is held, nothing is built): the PDF has no PCB drawing (5 Neutrik
-  connectors), every dimension came back blank (ATSAME70 x3), several did (MKL24Z32VLK4, MC33063MNTXG, UCC1895J),
-  or one number is missing (TLP2361 height, LP38693MP-1.8 tab length, S28B-PHDSS annular ring and others).
-* **6 were held because the cross-check's second read disagreed**: OPA569DWP, BSC026N08NS5, AT24CS01-MAHM,
-  BD33FC0FP, IR4301 and one other. Holding them is the intended behaviour; they are counted as misses.
-* **7 thermal pads**: TI's PowerPAD parts (BQ24004, TPS26633PWP, TPS70345, TPS26600PWP, UCC25800, TLC5951DAP, and
-  ISL8117FVEZ, whose Renesas PDF was not checked) get the package's exposed pad as their copper, while the datasheet's land page gives a larger thermal
-  land (for example 3.4 x 5.0 mm around a 3.3 x 3.3 pad, TPS2660 p53), which KiCad uses. Their signal pads are
-  right. The fix is to read the thermal land too; it needs a new field in the reader's answer and a re-read of
-  these parts.
-* **The rest** are single misses: PCA9557BS read as 4 x 4 mm, 0.65 mm pitch (SOT629-1) against KiCad's
-  3 x 3 mm, 0.5 mm footprint (not yet checked which is right); S10B-PH-K numbered right to left ("No. 1 circuit at
-  right" on JST's side-entry drawing), mirrored against KiCad; S13B-EH's courtyard 0.55 mm short behind the pins
-  (the drawing does not give the body depth); 27C256 named O0-O7 as the datasheet does (KiCad: D0-D7) and a
-  courtyard 0.73 mm longer than KiCad's, for the real 37 mm body; FDMT800100DC, whose same-net pads KiCad merges
-  into one.
+* Courtyard only, every pad right (3): AM26LS31CN, 27C256, SM13B-GHS-TB. ecadlib draws the courtyard around the
+  pads; KiCad draws it around the body (DIP body, connector housing).
+* Every pad off by the same amount (6), a land-size rule: CD4066BM, BCR430UW6 and C8051F320-GQ follow the maker's
+  land; ATSAME70N19A/N20A (all 100 pads 0.125 mm), ISL8117FVEZ (0.4 mm) and LTC7810 (0.175 mm).
+* Pads KiCad merges (2): FDMT800100DC and BSC026N08NS5, drain leads merged into the exposed pad (3 and 5 pads).
+* Thermal pad (1): TLC5951DAP got the package's exposed metal (3.04 x 5.7 mm); KiCad's copper is the PowerPAD
+  land (5.2 x 12.5 mm).
+* Real reading errors (about 3): S28B-PHDSS numbered from the other end; ATSAME70Q19A-AN's pin table was not on the
+  pages sent (footprint right, no symbol pins); LTC7810's symbol has 49 pins to KiCad's 34 (KiCad merges repeated
+  power pins).
+
+The larger loss is the 51 parts that get no footprint at all. All 67 misses of the zoom run:
+
+* **19 had no PDF to read.** 12 have no usable link in the set (dead links, HTML pages): ENS210, ICE40HX8K-BG121,
+  MKE02Z16VLD4, GBU4A, C3D02065E, KBU4A, AUIPS6011R, AP1117-18, 2ED21824S06J, HCPL-314J, C3D08060G, 16550. The rest are links that still fail every way ecadlib tries (404 behind a 403, or no answer): EPM240F100,
+  EPM1270M256, LTV-352T, DNA40U2200GU, BAT160A, BAT160C, IPS6011RPBF. A person with the PDF can give it to
+  ecadlib directly; the benchmark does not. On 10-19 there were 39 of these; the new download chain got 20 more,
+  including all 11 analog.com parts.
+* **17 were held because the cross-check's second read disagreed**: BUK7M10-40EX, TC2030, LT3652IDD,
+  PSMN5R2-60YL, IP4234CZ6, OPA569DWP, LTC2942-1, AT24CS01-MAHM, BCV61, PCA9557BS, S13B-EH, UCC256301, IR4301,
+  LT8610, MAX22201, IRFS4115, AL8860MP. Holding them is the intended behaviour (nothing wrong is published); they are
+  counted as misses.
+* **14 reads left a dimension blank** (held, nothing built): the PDF has no PCB drawing (Neutrik NC3FAAV1-0,
+  NC3FBH2-DA, NC3MBV-1, NLJ2MDXX-V), the PDF is the wrong document (M2GL090T-FG484's link gives a press release,
+  LTC4060EDHC's gives the LTC4054 sheet), or one number is missing or given only as a minimum (LP38693MP-1.8's lead
+  length is printed "0.9 MIN", which the reader's schema rejects; KTY83, NSJ12HF-1, TLP2361, MC33063MNTXG,
+  BQ51051BYFP, UCC1895J, MKL24Z32VLK4).
+* **7 scored misread_dimension**, all covered above: ISL8117FVEZ, ATSAME70N19A-AN, ATSAME70N20A-AN, LTC7810,
+  AM26LS31CN, SM13B-GHS-TB, 27C256.
+* **3 follow the maker's land pattern** (above), and **2 have a right footprint but a different symbol**
+  (ATSAME70Q19A-AN; SM6T100A, never read, standard footprint).
+* **2 are the package KiCad merges**: FDMT800100DC and BSC026N08NS5 were read as 8 leads and an exposed pad; KiCad
+  merges the drain pins into the pad (3 and 5 pads).
+* **The rest**: BD33FC0FP (a TO-252 with a tab, read without the tab's position, so no footprint), TLC5951DAP
+  (built the 3.04 x 5.7 mm exposed pad; KiCad uses a 5.2 x 12.5 mm thermal land), S28B-PHDSS (numbered from the
+  other end, mirrored against KiCad).
 
 ## Review
 
 The benchmark builds what a BOM run builds, but no one reviews it, so `ecadlib status` has no approvals to count
 (#45). What it does show: every one of the parts built from a datasheet is held for a person to compare with the
-drawing before release, with the pages to check in its `datasheet/<part>.review.md`; the 6 cross-check
+drawing before release, with the pages to check in its `datasheet/<part>.review.md`; the 17 cross-check
 disagreements are held with both values side by side. The review rate on a real library (passed first time, approved, rejected, changed) comes from
 `ecadlib status` on a workspace after people have reviewed it, and the trial reports quote it.
 
 ## Cost and time
 
-$14.34 in all, from the API's own usage: 139 answers for the 54 parts that reached Claude (113 in Message Batches
-at half price, 26 sent one at a time), including 50 escalations where the reader asked again with more pages or a
-stronger setting. That is $0.13 per part over the whole set, $0.27 per part read. The re-scores after it
-(`--cached-only`, below) cost nothing.
+From the API's own usage (cost.jsonl), all in Message Batches at half price:
+
+* Opus, zoom on: $23.19 ($0.21 a part over the set), 7.67 M tokens in, 0.36 M out, about 80 minutes.
+* Opus, default settings: $18.73 ($0.17 a part), 6.57 M tokens in, 0.36 M out, about 50 minutes, plus $6.68 of
+  that for the cross-checks the #147 bug had skipped on the first pass.
+* Haiku, default settings: $0.92, 7.64 M tokens in, 1.14 M out.
+
+The reports' own totals are a little lower ($21.69 and $18.01); the figures above are from the usage the API
+returned. The re-scores (`--cached-only`) cost nothing.
 
 ## Running it again
 
 ```
 ecadlib eval run --set kicad-v1 --limit 110 --sources standard,datasheet --batch \
-    --record bench/rec -o bench/run                      # live: reads every datasheet, about $15
+    --record bench/rec -o bench/run                      # live: reads every datasheet, about $19
 ecadlib eval run --set kicad-v1 --limit 110 --sources standard,datasheet \
     --replay bench/rec -o bench/replay                   # free: the saved answers, scored by today's code
 ecadlib eval run --set kicad-v1 --limit 110 --sources standard,datasheet --cached-only -o bench/run
@@ -119,7 +161,7 @@ ecadlib eval publish bench/run -o docs/benchmark-results.md   # the results page
 ```
 
 The run needs an Anthropic API key (`ecadlib keys`); `[datasheet] max_cost_usd` caps what one run may spend
-($10 by default; the 110-part batch run cost $14.34, so pass `--max-cost-usd 20`; `--yes` does not lift it), and the estimate is shown before anything is sent. `report.md` and `report.json`
+($10 by default; the 110-part batch runs cost $18.73 and $23.19, so pass `--max-cost-usd 35`; `--yes` does not lift it), and the estimate is shown before anything is sent. `report.md` and `report.json`
 in the out folder have every part's result, the reason for each miss, and the cost. Any model works: `--model`, or
 `--provider` and `--base-url` for another provider.
 
@@ -153,9 +195,13 @@ and its artifact.
 
 ## Next steps toward 97 %
 
-1. Read the thermal-pad land from the datasheet's land page (7 parts, about $2 to re-read in a batch, estimated).
-2. Fetch the 26 PDFs another way, then read them. ecadlib now tries browser headers, Chrome's TLS fingerprint and a
-   headless browser when a site refuses a script (docs/bom-and-datasheets.md); each case records `via`, the way that
-   got its PDF. The benchmark never hands a link to a person's browser.
-3. Find out why the ATSAME70 reads came back with every dimension blank.
-4. Check PCA9557BS and S10B-PH-K against the parts themselves, and add what is right to the errata or the fixes.
+1. Accept a dimension the drawing gives with one bound only ("0.9 MIN"), with a review note (LP38693MP-1.8,
+   IRFS4115's tab; draft PR #148).
+2. Check that a downloaded PDF names the part before reading it (M2GL090T-FG484, LTC4060EDHC).
+3. Look at the 17 cross-check holds one by one: which of the two reads was right, and whether the rules are too
+   strict.
+4. Build footprints by KiCad's own rules where the read is already right: courtyard around the body as well as the
+   pads, the land size worked out as KiCad's generator does, drain leads merged into the pad on power DFNs, and the
+   PowerPAD land as the thermal copper (about 10 of the 15 built-but-wrong parts, an estimate; a free
+   `--cached-only` re-score shows the real effect).
+5. TO-252 tab parts read without the tab's position (BD33FC0FP), and ATSAME70Q19A-AN's pin table.

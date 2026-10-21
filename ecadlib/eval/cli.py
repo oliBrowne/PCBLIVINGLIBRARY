@@ -60,6 +60,8 @@ def main(argv=None):
     r.add_argument("--rules", help="library rules file")
     r.add_argument("--tol", action="append", default=[], metavar="FIELD=MM",
                    help=f"override a tolerance ({', '.join(f'{k}={v}' for k, v in S.TOL.items())})")
+    r.add_argument("--datasheets", metavar="DIR", help="a folder of datasheet PDFs downloaded by hand (<MPN>.pdf), read before "
+                   "any link: for makers' sites that refuse scripts ([datasheet] folder)")
     r.add_argument("--pins", help="pinned datasheets (URL + SHA-256) to check against (default: <set>.pins.json)")
     r.add_argument("-o", "--out", default="out/eval/run")
     r.add_argument("--json", action="store_true", help="print the summary as JSON")
@@ -135,7 +137,7 @@ def main(argv=None):
     rep = R.run(a.set, a.out, a.limit, a.model, a.record, a.replay, _list(a.sources), _list(a.family), _list(a.case),
                 a.offline, a.cache, rules=a.rules, providers=a.providers, tol=tol, provider=a.provider,
                 base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env, repeat=a.repeat, batch=a.batch,
-                cached_only=a.cached_only, pins=a.pins, max_cost_usd=a.max_cost_usd)
+                cached_only=a.cached_only, pins=a.pins, max_cost_usd=a.max_cost_usd, datasheets=a.datasheets)
     if a.json:
         print(json.dumps(rep["summary"], indent=1))
     else:
