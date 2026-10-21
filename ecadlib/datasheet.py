@@ -3115,7 +3115,10 @@ class Reader:
                 if isinstance(r, _Advance):
                     j2 = r.job
                     if j2.get("final"):
-                        r = self._result(j2, self.results.get(j2["key"]))
+                        try:                          # a hold or a failed read is this part's alone (live benchmark
+                            r = self._result(j2, self.results.get(j2["key"]))   # 2026-10-21: one escaped flush() and
+                        except DatasheetError as e:   # the librarian gave it to all 71 waiting parts)
+                            r = e
                     elif self.batch and not self.wait:
                         r = f"pending: next step {j2['model']} ({self._pages_sent(j2) or 'all'} pages); run again"
                     else:
