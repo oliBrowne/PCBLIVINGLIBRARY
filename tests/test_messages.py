@@ -64,6 +64,7 @@ EXAMPLES = {
     "datasheet.no_key": "needs datasheet reader (no API key): https://x.example/a.pdf (BOM)",
     "datasheet.awaiting_ok": "datasheet: waiting for your OK to read it with AI (https://x.example/a.pdf)",
     "datasheet.not_downloaded": "the PDF was not downloaded here (sent as a URL): its content was not validated locally",
+    "datasheet.unnamed": "the PDF at https://x/a.pdf doesn't mention LTC4060EDHC (no other link gave a PDF): check it is this part's datasheet",
     "datasheet.some_pages": "only some pages were sent (pages 1-4 of 40): check nothing was missed",
     "datasheet.failed": "datasheet reader: failed (HTTP 500)",
     "librarian.lcsc_mismatch": "LCSC C123 is BSS84, not BSS138: fix the BOM's LCSC number",
@@ -191,7 +192,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 9, "datasheet.py": 3,
+    "librarian.py": 9, "datasheet.py": 4,
 }
 
 
