@@ -661,7 +661,8 @@ class Run:
         st["tried"].append("standard: " + "; ".join(got + why))
 
     def src_datasheet(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
-        st["tried"] = [t for t in st["tried"] if "waiting for your OK to read it with AI" not in t]   # asked again now
+        st["tried"] = [t for t in st["tried"] if "waiting for your OK to read it with AI" not in t   # asked again now
+                       and "your [datasheet] folder" not in t]     # said below as the folder is now (`batch PLAN`)
         urls = D.datasheet_urls(item, ln, row, st["found"])
         cfg = getattr(self.reader, "cfg", None) or D.settings(self.rules)   # the reader's [datasheet] settings
         local = None if urls else D.local_datasheet(cfg.get("folder"), mpn or item["name"])[0]   # [datasheet] folder
@@ -676,6 +677,7 @@ class Run:
         if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
             try:
                 job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
+                self.reading(st)
                 self.folder_file_failed(st, job)
                 res = rd.cached(job)
             except CC.Held as e:
@@ -694,6 +696,7 @@ class Run:
         if not getattr(rd, "_recollected", False):    # answers paid for in earlier batches, before a parser fix
             rd._recollected = True
             rd.recollect()
+        self.reading(st)
         job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"])
         self.folder_file_failed(st, job)
         try:
@@ -714,12 +717,15 @@ class Run:
         self.put_datasheet(st, res, job, fp_name, sym_name, "cached" if hit else "")
 
     @staticmethod
+    def reading(st):
+        """The datasheet is fetched or read again: an earlier run's refused-download advice goes (`datasheet batch PLAN`
+        keeps the state), so the folder and the link are said as they are now; a refusal this time says it again."""
+        st["review"][:] = [r for r in st["review"] if not r.startswith("datasheet download refused by ")]
+
+    @staticmethod
     def folder_file_failed(st, job):
         """The part's own file in the [datasheet] folder is no PDF (a web page saved as .pdf) or does not read: said
-        first, so the person replaces it instead of saving it again under the same name. Said as the file is now: what
-        an earlier run of the same part said of it (`datasheet batch PLAN` keeps the state) is dropped."""
-        st["tried"][:] = [t for t in st["tried"]
-                          if not re.match(r"datasheet: .+ in your \[datasheet\] folder (is not a PDF|cannot be read)", t)]
+        first, so the person replaces it instead of saving it again under the same name."""
         bad = D.folder_failure(job.get("prov"))
         if bad:
             st["tried"].append(f"datasheet: {bad}")
@@ -729,8 +735,7 @@ class Run:
         """A maker's site refused the PDF here and the API's fetcher failed too: the cause and the way round it, which
         the release check shows in place of "no footprint". folder: [datasheet] folder (the review keeps its name)."""
         line = D.refused_line(job, error, folder)
-        if line:                                      # in place of an earlier run's (the folder may be fixed since)
-            st["review"][:] = [r for r in st["review"] if not r.startswith("datasheet download refused by ")]
+        if line:
             st["review"].append(line)
 
     @staticmethod

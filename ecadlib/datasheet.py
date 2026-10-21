@@ -25,6 +25,7 @@ import requests
 from . import altium_lib as AL, footprint_gen as F
 from . import httpcache as H
 from .fsutil import write_text_atomic
+from .kicad_index import norm_mpn
 from . import userconfig as UC
 
 API_BASE = "https://api.anthropic.com"
@@ -1784,25 +1785,23 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
 
 
 def _mpn_key(s):
-    return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
-
-
-def _mpn_char(c):
-    """A character _mpn_key keeps (A-Z, 0-9 in any case); any other (µ in µPD720202) is punctuation to it."""
-    return c.isascii() and c.isalnum()
+    """A part number or file name as part numbers are compared everywhere (kicad_index.norm_mpn): no case or
+    punctuation, µ as U, accented and full-width letters plain; a letter with no ASCII form (К561ТМ2) is kept."""
+    return norm_mpn(s)
 
 
 def _after_mpn(stem, key):
-    """The raw file-name stem after the characters that spell `key` (punctuation skipped), or None when the stem's
-    letters and digits do not start with `key`."""
+    """The raw file-name stem after the characters that spell `key`, each read as _mpn_key reads it (punctuation
+    skipped), or None when the stem's letters and digits do not start with `key`."""
     i = n = 0
     while n < len(key):
         if i >= len(stem):
             return None
-        if _mpn_char(stem[i]):
-            if stem[i].upper() != key[n]:
+        k = _mpn_key(stem[i])                         # '' for punctuation; 'U' for µ, 'SS' for ß
+        if k:
+            if key[n:n + len(k)] != k:
                 return None
-            n += 1
+            n += len(k)
         i += 1
     return stem[i:]
 
@@ -1869,7 +1868,7 @@ def local_datasheet(folder, part, kinds=("exact", "family", "other")):
     exact, prefix, other = None, None, None
     for f in files:
         s, rest = _mpn_key(f.stem), _after_mpn(f.stem, key)
-        if rest is not None and not (rest and _mpn_char(rest[0])):
+        if rest is not None and not _mpn_key(rest[:1]):
             exact = exact or f                        # BAT54.pdf, BAT54_datasheet.pdf, bat54-rev3.pdf
         elif rest is not None:
             other = other or f                        # BAT54S.pdf: another part number that starts like this one

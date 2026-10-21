@@ -41,6 +41,24 @@ def test_local_datasheet_names():
         assert "does not exist" in why and "(nope)" in why and str(d) not in why, why
 
 
+def test_a_part_number_in_any_script_matches_only_its_own_file():
+    """Names are compared as part numbers are everywhere (kicad_index.norm_mpn): µ and μ are U, an accented, full-width
+    or Turkish dotless letter is its plain letter, and a letter with no ASCII form (Cyrillic) is kept, so К561ТМ2 never
+    takes К561ЛН2's file (with the letters dropped both would be 5612)."""
+    with tempfile.TemporaryDirectory() as d:
+        f = folder(d, "К561ЛН2.pdf", "К561ТМ2.pdf", "КР142ЕН5Б.pdf", "uPD720202K8-711-BAA-A.pdf", "ırf540npbf.pdf",
+                   "BAT54_техпаспорт.pdf", "LM358Ж.pdf")
+        assert D.local_datasheet(f, "К561ТМ2")[0].name == "К561ТМ2.pdf"            # not К561ЛН2.pdf, sorted first
+        assert D.local_datasheet(f, "к561лн2", kinds=("exact",))[0].name == "К561ЛН2.pdf"
+        assert D.local_datasheet(f, "КР142ЕН5А")[0] is None                        # the 5 V part: the 6 V one's file
+        assert D.local_datasheet(f, "1554ЛА3")[0] is None
+        assert D.local_datasheet(f, "µPD720202K8-711-BAA-A", kinds=("exact",))[0].name == "uPD720202K8-711-BAA-A.pdf"
+        assert D.local_datasheet(f, "ＩＲＦ540NPBF", kinds=("exact",))[0].name == "ırf540npbf.pdf"
+        assert D.local_datasheet(f, "BAT54", kinds=("exact",))[0].name == "BAT54_техпаспорт.pdf"
+        assert D.local_datasheet(f, "LM358", kinds=("exact", "family"))[0] is None   # LM358Ж: another part number
+        assert D.local_datasheet(f, "LM358")[0].name == "LM358Ж.pdf"
+
+
 def test_local_datasheet_kinds():
     """kinds: only the matches asked for, so a reader can try the links between the MPN's own file and the others."""
     with tempfile.TemporaryDirectory() as d:
@@ -321,36 +339,67 @@ def test_a_web_page_saved_as_the_part_s_pdf_is_said_first():
                             "footprint by hand."), e["fix"]
 
 
+def fill_again(d, rules, api=None, **kw):
+    """`ecadlib datasheet batch PLAN` (fill_plan) on the plan of an earlier run in `d`, DSPART1's link refused as in
+    refused_run. api: the model API (the same one again to collect a batch); kw: Reader settings (batch=True,
+    wait=False: sent, not waited for) -> the plan items by name."""
+    rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=TDL.Scripted({LINK: [403]}), poll=0,
+                  sleep=lambda s: None, log=lambda *a: None, rules=rules, **{"batch": False, **kw})
+    with TB.patched(api or NoURLFetch(lambda k, m, b: TR.on_page(TD.INCH))):
+        items = D.fill_plan(Path(d) / "out" / "plan.json", rd, rules=rules, log=lambda *a: None)
+    return {i["name"]: i for i in items}
+
+
 def test_a_run_again_shows_the_advice_for_the_folder_as_it_is_now():
     """`ecadlib datasheet batch PLAN` keeps each part's state between runs: the refused link's advice and what was
     wrong with the folder's file are said as they are now, never as an earlier run found them (the folder not there
-    yet, a web page saved as the PDF since deleted)."""
-    def fill(d, rules):
-        rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=TDL.Scripted({LINK: [403]}), batch=False,
-                      poll=0, sleep=lambda s: None, log=lambda *a: None, rules=rules)
-        with TB.patched(NoURLFetch(lambda k, m, b: TR.on_page(TD.INCH))):
-            items = D.fill_plan(Path(d) / "out" / "plan.json", rd, rules=rules, log=lambda *a: None)
-        it = next(i for i in items if i["name"] == "DSPART1")
+    yet, a web page saved as the PDF since deleted, the PDF saved since: sent in a batch, then read)."""
+    def run(d, rules, **kw):
+        it = fill_again(d, rules, **kw)["DSPART1"]
         lines = [r for r in it["librarian"]["review"] if r.startswith("datasheet download refused")]
-        bad = [t for t in it["librarian"]["tried"] if "in your [datasheet] folder" in t]
-        return lines, refused(it)[1], bad
+        shown = [e for e in M.explain_all(it["hold_reasons"]) if e["code"].startswith("files.datasheet")]
+        bad = [t for t in it["librarian"]["tried"] if "your [datasheet] folder" in t]
+        return it, lines, shown, bad
     with tempfile.TemporaryDirectory() as d:
         TL.run(d, http=TB.PdfHTTP({}), bom=TL.BOM)            # no key: DSPART1 stays open
         f = Path(d) / "pdfs"
         rules = {"datasheet": {"folder": str(f)}}
-        lines, e, bad = fill(d, rules)                         # the folder is not there yet
-        assert len(lines) == 1 and e["fix"].startswith("Your datasheet folder (pdfs) does not exist"), (lines, e)
+        it, lines, shown, bad = run(d, rules)                  # the folder is not there yet
+        assert len(lines) == 1 and shown[0]["fix"].startswith("Your datasheet folder (pdfs) does not exist"), (lines, shown)
         f.mkdir()                                              # made, and what the browser gave saved in it
         (f / "DSPART1.pdf").write_bytes(b"<!doctype html><html><body>Access Denied</body></html>")
-        lines, e, bad = fill(d, rules)
-        assert len(lines) == 1 and e["code"] == "files.datasheet_not_pdf", (lines, e)
+        it, lines, shown, bad = run(d, rules)
+        assert len(lines) == 1 and shown[0]["code"] == "files.datasheet_not_pdf", (lines, shown)
         assert bad == ["datasheet: DSPART1.pdf in your [datasheet] folder is not a PDF (a web page saved as .pdf?): "
                        "replace it with the PDF"], bad
         (f / "DSPART1.pdf").unlink()                           # deleted, not yet saved again
-        lines, e, bad = fill(d, rules)
-        assert len(lines) == 1 and e["code"] == "files.datasheet_refused" and bad == [], (lines, bad)
-        assert e["fix"].startswith(f"Download the PDF in a browser ({LINK}), save it as DSPART1.pdf in your datasheet "
-                                   "folder (pdfs) and run again"), e["fix"]
+        it, lines, shown, bad = run(d, rules)
+        assert len(lines) == 1 and shown[0]["code"] == "files.datasheet_refused" and bad == [], (lines, bad)
+        assert shown[0]["fix"].startswith(f"Download the PDF in a browser ({LINK}), save it as DSPART1.pdf in your "
+                                          "datasheet folder (pdfs) and run again"), shown[0]["fix"]
+        (f / "DSPART1.pdf").write_bytes(TC.pdf3())             # the advice followed; the read sent in a batch
+        api = NoURLFetch(lambda k, m, b: TR.on_page(TD.INCH))
+        it, lines, shown, bad = run(d, rules, api=api, batch=True, wait=False)
+        assert lines == shown == bad == [] and any("queued for the batch" in t for t in it["librarian"]["tried"]), \
+            (lines, shown, it["librarian"]["tried"])
+        it, lines, shown, bad = run(d, rules, api=api, batch=True)   # and collected
+        assert it["footprint"].get("file") and lines == shown == bad == [], (lines, shown, it["librarian"]["tried"])
+
+
+def test_a_line_with_no_link_says_the_folder_as_it_is_now():
+    """The same for a BOM line with no link: the folder not there, then a web page saved as its PDF, then deleted."""
+    with tempfile.TemporaryDirectory() as d:
+        TL.run(d, http=TB.PdfHTTP({}), bom=TL.BOM)
+        f = Path(d) / "pdfs"
+        rules = {"datasheet": {"folder": str(f)}}
+        said = lambda: [t for t in fill_again(d, rules)["NOWHERE1"]["librarian"]["tried"] if "your [datasheet] folder" in t]
+        assert said() == ["datasheet: no datasheet URL known; your [datasheet] folder (pdfs) does not exist"], said()
+        f.mkdir()
+        (f / "NOWHERE1.pdf").write_bytes(b"<!doctype html><html><body>Access Denied</body></html>")
+        now = said()
+        assert len(now) == 1 and "NOWHERE1.pdf in your [datasheet] folder is not a PDF" in now[0], now
+        (f / "NOWHERE1.pdf").unlink()
+        assert said() == []
 
 
 def test_a_missing_folder_is_named_for_a_refused_link_and_a_line_with_no_link():
