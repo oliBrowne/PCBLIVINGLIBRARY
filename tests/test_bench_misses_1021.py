@@ -227,6 +227,13 @@ def test_the_makers_own_thermal_pad_is_part_of_its_land():
     assert rect(0.0, 2.0, 3.0) == ["9"]
     assert rect(0.0, 3.0, 2.0) == []                                            # across and along swapped
     assert rect(0.5, 2.0, 3.0) == []                                            # off the pads' centre
+    # TPS70345 PWP (HTSSOP-24): the rows reach 3.575 along y but sit 2.9 apart; the land's 2.4 x 4.18 runs 2.4 across
+    tps = {"pads": [[str(i + 1), -2.9 if i < 12 else 2.9, -3.575 + 0.65 * (i % 12), 1.5, 0.45, 0.0] for i in range(24)]
+           + [["25", 0.0, 0.0, 2.4, 4.18, 0.0]], "courtyard": []}
+    land = {"land": {"pad_length": 1.5, "pad_width": 0.45, "pad_center": 2.9, "ep_across": 2.4, "ep_along": 4.18}}
+    assert S.maker_land(tps, land)["ep_land"] == ["25"]
+    tps["pads"][-1] = ["25", 0.0, 0.0, 4.18, 2.4, 0.0]
+    assert S.maker_land(tps, land)["ep_land"] == []
 
 
 def test_a_pad_table_body_box_is_the_datasheet_body():

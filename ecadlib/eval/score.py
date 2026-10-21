@@ -255,12 +255,14 @@ def maker_land(mine, spec, tol=None):
     sane = not (span and T and b) or (pc + pl / 2 >= min(span) / 2 - t["pos"] and
                                      pc - pl / 2 <= max(span) / 2 - min(T) + t["pos"] and pw >= min(b) - 1e-9)
     # the maker's thermal land, when the land gives one: centred on the pads, ep_across running across the pad rows
-    # (rows at +-x: across is the pad's width; rows at +-y: its height; a quad package: either way round)
+    # (the lead pads' long side runs across the rows: pads wider than tall are rows at +-x, so across is the pad's
+    # width; taller than wide, its height; both kinds, a quad package: either way round. Not the pads' extent: a long
+    # TSSOP's rows reach further along y than the rows sit apart, TPS70345 PWP 3.575 vs 2.9)
     ea, eb = land.get("ep_across"), land.get("ep_along")
     ep_used = []
     if isinstance(ea, (int, float)) and isinstance(eb, (int, float)) and rest:
-        rx, ry = max(abs(p[1] - cx) for p in rest), max(abs(p[2] - cy) for p in rest)
-        ways = [(ea, eb)] if rx > ry + t["pos"] else [(eb, ea)] if ry > rx + t["pos"] else [(ea, eb), (eb, ea)]
+        wide, tall = sum(p[3] > p[4] for p in rest), sum(p[4] > p[3] for p in rest)
+        ways = [(ea, eb)] if wide and not tall else [(eb, ea)] if tall and not wide else [(ea, eb), (eb, ea)]
         ep_used = [p[0] for p in ep if near(p[1], cx, "pos") and near(p[2], cy, "pos")
                    and any(near(p[3], w, "size") and near(p[4], h, "size") for w, h in ways)]
     return {"followed": bool(rest) and len(used) == len(rest) and sane, "pads": used, "ep": [p[0] for p in ep],
