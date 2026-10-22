@@ -745,7 +745,9 @@ def symbol_text(key, mpn=""):
         name, ref, desc, g, pins = SYMBOLS[key]
     body = " ".join(g)
     pin_txt = " ".join(_pin(*p) for p in pins)
-    hide_names = "(pin_names (offset 0) hide)" if all(p[1] in ("~", "1", "2", "K", "A") for p in pins) else "(pin_names (offset 0.254))"
+    # pin names hidden on 2-pin parts and on transistors (KiCad's Q_*: G / S / D written over the gate and channel lines)
+    quiet = all(p[1] in ("~", "1", "2", "K", "A") for p in pins) or ref == "Q"
+    hide_names = "(pin_names (offset 0) hide)" if quiet else "(pin_names (offset 0.254))"
     if key in SYMBOLS:                         # 2-pin passives and diodes: no "1"/"2" or K/A text on the body (as KiCad's Device:R)
         hide_names += " (pin_numbers hide)"
     flat = all(p[5] in (0, 180) for p in pins)  # horizontal 2-pin parts (diodes): labels above and below, not on the body

@@ -60,8 +60,13 @@ def test_a_blank_height_builds_with_a_note_and_triggers_no_re_read():
 
 # ---------------------------------------------------------------- 2. depopulated dual rows
 def test_depopulated_so6_builds_pads_at_the_pin_table_positions():
-    """TLP2361: SO-6 outline, pin 2 absent; pin_count left blank (name 6, table 5 disagree)."""
-    res = run(_so("SO-6_P1.27mm", ["1", "3", "4", "5", "6"]))
+    """TLP2361: SO-6 outline, pin 2 absent; pin_count left blank (name 6, table 5 disagree). Review 2026-10-22: a
+    plain SO-6 name does not say place 2 is empty (a SOIC-8 table that leaves out its NC pin 7 looks the same), so it
+    is held; a name that says so (SO-6-N2, KiCad style) builds at the table's positions."""
+    held = run(_so("SO-6_P1.27mm", ["1", "3", "4", "5", "6"]))
+    assert "pin_positions" not in held["spec"] and DR.assess(held)[0] != "ok", DR.assess(held)
+    assert any(r.startswith("symbol: the pin table leaves out pin(s) 2 ") for r in held["needs_review"]), held["needs_review"]
+    res = run(_so("SO-6-N2_P1.27mm", ["1", "3", "4", "5", "6"]))
     s = res["spec"]
     assert s["pin_count"] == 5, s.get("pin_count")
     pos = {str(p["number"]): (p["side"], p["offset"]) for p in s["pin_positions"]}

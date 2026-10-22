@@ -72,7 +72,19 @@ def plural(n, one, many=None):
 # ---------------------------------------------------------------- held reasons
 # code -> (text, fix, patterns). patterns: regexes matched (re.search) against a raw reason (release-check
 # "rule: message", librarian review lines, cross-check summaries); their named groups are the values.
-_PART = r"(?:.*?--part (?P<part>\"[^\"]+\"|[^`\s]+))?"   # a --part value, quoted when it holds a space
+_PART = r"(?:.*?--part (?P<part>'[^']*'(?:\"'\"'[^']*')*|\"[^\"]+\"|[^`\s]+))?"   # a --part value, quoted as part_arg quotes it
+
+
+def unquote_part(v):
+    """A --part value as datasheet.part_arg wrote it (bare, "double" or shell 'single' quoted) -> the part number."""
+    v = str(v or "")
+    if v[:1] == "'":
+        import shlex
+        try:
+            return shlex.split(v)[0]
+        except (ValueError, IndexError):
+            return v.strip("'")
+    return v.strip('"')
 
 CODES = {
     # files (release check rule `files`; cannot be released anyway)
@@ -398,7 +410,7 @@ def _refused_advice(code, v):
     the folder named (or not there, or not set), the name to save the PDF under (from --part in older lines)."""
     from .datasheet import folder_file_name
     if not v.get("file") and v.get("part"):
-        v["file"] = folder_file_name(str(v["part"]).strip('"'))
+        v["file"] = folder_file_name(unquote_part(v["part"]))
     if code == "files.datasheet_not_pdf":
         v.setdefault("file", v.get("bad"))
         v["problem"] = (f"cannot be read ({v['err']})" if v.get("err") else

@@ -678,9 +678,11 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
                      "files": files, "cross_check": (it.get("cross_check") or {}).get("status", ""),
                      "source": src, "symbol_source": ((it.get("source") or {}).get("symbol") or "none").split(":")[0],
                      "errors": sc["errors"], "fields": sc["fields"], "maker_land": ml, "errata": errata,
-                     "kicad_differs_maker_land": not sc["pass"] and S.only_maker_land(sc["fields"], ml),
+                     "kicad_differs_maker_land": not sc["pass"] and S.only_maker_land(
+                         sc["fields"], ml, S.body_evidence(used.get("spec"), ref_fp, S.drop_vias(ref))),
                      "kicad_differs_body": bool(not sc["pass"] and src == "datasheet"
-                                                and S.datasheet_body(sc["fields"], S.drop_vias(mine) if mine else None, used.get("spec"))),
+                                                and S.datasheet_body(sc["fields"], S.drop_vias(mine) if mine else None, used.get("spec"),
+                                                                     ref_fp, S.drop_vias(ref))),
                      "tokens_in": tin, "tokens_out": tout, "usd": cost,
                      "cost_how": how, "footprint_shared_with": shared, "api_s": (reader.used.get(c["mpn"]) or {}).get("api_s"),
                      "tried": ((it.get("librarian") or {}).get("tried") or []),
@@ -810,11 +812,12 @@ def report_md(rep):
         md += [f"{nd['cases']} {'part' if nd['cases'] == 1 else 'parts'} never reached the model (no datasheet PDF could be "
                f"fetched); without them: **{w['pass']}/{w['cases']} ({_pct(w['rate'])})**.", ""]
     hd = s.get("hand_downloaded") or {}
-    if hd.get("cases"):
+    if hd.get("cases"):                               # counted as the headline is: right, not only matching KiCad
+        hr, orr = hd.get("right", hd["pass"]), o.get("right", o["pass"])
         md += [f"{hd['cases']} {'part was' if hd['cases'] == 1 else 'parts were'} read from PDFs downloaded by hand "
-               f"(--datasheets), not from a maker's link: {hd['pass']}/{hd['cases']} of them pass. Without them: "
-               f"**{o['pass'] - hd['pass']}/{o['cases'] - hd['cases']}"
-               + (f" ({_pct(round((o['pass'] - hd['pass']) / (o['cases'] - hd['cases']), 4))})" if o['cases'] > hd['cases'] else "")
+               f"(--datasheets), not from a maker's link: {hr}/{hd['cases']} of them right. Without them: "
+               f"**{orr - hr}/{o['cases'] - hd['cases']}"
+               + (f" ({_pct(round((orr - hr) / (o['cases'] - hd['cases']), 4))})" if o['cases'] > hd['cases'] else "")
                + "**.", ""]
     if s.get("errata"):
         md += [f"{len(s['errata'])} {'part is' if len(s['errata']) == 1 else 'parts are'} scored right where KiCad's reference "
