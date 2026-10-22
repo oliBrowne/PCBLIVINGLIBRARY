@@ -468,9 +468,15 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
         layers = (sexpr.first(p, "layers") or ["layers"])[1:]
         if p[2] != "smd" or p[3] == "custom":
             K._pad(fp, p, notes); continue
-        if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill or region
-            if layers != ["F.Paste"] or rot:
+        if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill or region; mask-only
+            if layers not in (["F.Paste"], ["F.Mask"]) or rot:   # (a mask-defined thermal land's opening) -> Top Solder
                 raise ValueError(f"{fp['name']}: unsupported non-copper pad on {layers}")
+            if layers == ["F.Mask"] and p[3] != "rect":
+                raise ValueError(f"{fp['name']}: unsupported {p[3]} mask-only pad")
+            if layers == ["F.Mask"]:
+                fp["regions"].append(([(x - w / 2, y - h / 2), (x + w / 2, y - h / 2), (x + w / 2, y + h / 2),
+                                       (x - w / 2, y + h / 2)], TOP_SOLDER))      # as kicad_import writes mask windows
+                continue
             rr = sexpr.first(p, "roundrect_rratio")
             r = min(float(rr[1]), 0.5) * min(w, h) if rr and p[3] == "roundrect" else 0.0
             if r > 0:                         # rounded window (the rounding controls EP voiding): a region with
@@ -482,7 +488,9 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
         pad = {"designator": p[1], "x": x, "y": y, "w": w, "h": h, "rot": rot, "shape": p[3],
                "corner": float(rr[1]) * 200 if rr else 0,          # KiCad r/min(w,h) -> Altium r/(min(w,h)/2) %
                "paste": None if "F.Paste" in layers else "none"}
-        if sexpr.first(p, "solder_mask_margin"):                   # e.g. BGA NSMD: mask opening = land + margin
+        if "F.Mask" not in layers:                                 # tented: a mask-only pad opens it (PowerPAD land)
+            pad["mask"] = "none"
+        elif sexpr.first(p, "solder_mask_margin"):                 # e.g. BGA NSMD: mask opening = land + margin
             pad["mask"] = float(sexpr.first(p, "solder_mask_margin")[1])
         if "F.Paste" in layers and sexpr.first(p, "solder_paste_margin"):   # e.g. SMD-defined BGA land: paste = land
             pad["paste"] = float(sexpr.first(p, "solder_paste_margin")[1])

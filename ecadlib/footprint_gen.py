@@ -454,6 +454,16 @@ def orient_ep(spec):
 ADVANCED = ("bga", "pin_header", "connector", "custom")
 
 
+
+def ep_mask(land, ew, eh):
+    """The solder mask opening on a thermal land of ew x eh copper: the land's ep_mask_across x ep_mask_along when the
+    datasheet draws the land solder-mask-defined (TI PowerPAD: TLC5951DAP 3.39 x 6.35 open on 5.2 x 12.5 copper), else
+    the copper itself. A mask read larger than the copper, or one size only, is not a mask-defined land: the copper."""
+    ma, mb = (land or {}).get("ep_mask_across"), (land or {}).get("ep_mask_along")
+    if not (isinstance(ma, (int, float)) and isinstance(mb, (int, float)) and 0 < ma <= ew + 1e-9 and 0 < mb <= eh + 1e-9):
+        return ew, eh
+    return (ew, eh) if (ma, mb) == (ew, eh) else (ma, mb)
+
 def build(spec, density=None):
     """Return (kicad_mod_text, report_dict)."""
     if spec["package_type"] in ADVANCED:
@@ -513,23 +523,30 @@ def build(spec, density=None):
         gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]    # qfn top/bottom rows vs EP
         if gaps and min(gaps) < MIN_PAD_GAP - 1e-6:
             rep["warning"] = f"EP to pad gap {min(gaps):.3f} < {MIN_PAD_GAP}"
-        ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
+        mw, mh = ep_mask(land, ew, eh)
+        if (mw, mh) == (ew, eh):
+            ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
+        else:                                       # solder-mask-defined (TI PowerPAD land): the copper spreads heat
+            ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu",)))  # under the mask, the opening
+            ep_lines.append(pad("", 0, 0, mw, mh, shape="rect", layers=("F.Mask",)))  # is a pad of its own, as KiCad
+            rep["ep_mask"] = (mw, mh)                                                    # draws it
         cov = ep.get("paste_coverage", 0.65)                          # KLC F6.3: 50-80 %, 65 % recommended
         grid = ep.get("paste_grid")                                   # split into windows of about 1.2 mm or less
-        gx = grid or max(1, min(5, math.ceil(ew / 1.2 - 1e-9)))
-        gy = grid or max(1, min(5, math.ceil(eh / 1.2 - 1e-9)))
-        sw, sh = ew * math.sqrt(cov) / gx, eh * math.sqrt(cov) / gy
+        gx = grid or max(1, min(5, math.ceil(mw / 1.2 - 1e-9)))       # paste only where the mask is open
+        gy = grid or max(1, min(5, math.ceil(mh / 1.2 - 1e-9)))
+        sw, sh = mw * math.sqrt(cov) / gx, mh * math.sqrt(cov) / gy
         for i in range(gx):
             for j in range(gy):
-                cx, cy = (i - (gx - 1) / 2) * ew / gx, (j - (gy - 1) / 2) * eh / gy
+                cx, cy = (i - (gx - 1) / 2) * mw / gx, (j - (gy - 1) / 2) * mh / gy
                 ep_lines.append(pad("", round(cx, 4), round(cy, 4), round(sw, 3), round(sh, 3), layers=("F.Paste",)))
         rep["EP"] = (ew, eh, f"paste {gx}x{gy} @ {cov:.0%}")
-    copper = pads + ([(None, 0, 0, dim(ep["length"])[1], dim(ep["width"])[1])] if ep else [])
+        rep["ep_num"] = epnum
+    copper = pads + ([(None, 0, 0, ew, eh)] if ep else [])        # the copper drawn: a thermal land, not the package's pad
 
     # ---- courtyard: union(pads, body) + excess, rounded up to the 0.01 mm grid (KLC F5.3)
     exc = fil[3]
-    px = max([abs(p[1]) + p[3] / 2 for p in pads] + [bx])
-    py = max([abs(p[2]) + p[4] / 2 for p in pads] + [by])
+    px = max([abs(p[1]) + p[3] / 2 for p in copper] + [bx])
+    py = max([abs(p[2]) + p[4] / 2 for p in copper] + [by])
     cx, cy = rup(px + exc), rup(py + exc)
     rep["courtyard"] = (round(2 * cx, 2), round(2 * cy, 2))
 
@@ -608,8 +625,16 @@ def shorts(rep):
     """build()'s copper errors (overlapping or touching pads: a short on the board) as one sentence, or None.
     `footprint gen` refuses to write such a footprint; the librarian's release check holds it."""
     short = [c["message"] for c in rep.get("checks") or [] if c["level"] == "error" and c["rule"] == "copper"]
+    if not short:
+        return None
+    n = rep.get("ep_num")
+    if rep.get("ep_land") == "datasheet" and n and all(f" and {n} " in m or f"pads {n} and" in m for m in short):
+        w, h = rep["EP"][:2]                    # OPA569DWP: TI's "Thermal Land, Minimum Area (7.59mm x 12.95mm)"
+        return (f"the pads would short: the maker's thermal land ({w:g} x {h:g} mm) reaches the lead pads ("  # reaches
+                + "; ".join(short[:3]) + (" ..." if len(short) > 3 else "") + "); a land given as a minimum copper "
+                "area must be trimmed clear of the leads by hand")
     return ("the pads would short: " + "; ".join(short) + " (check pitch, pin_count and terminal_length against the "
-            "drawing)") if short else None
+            "drawing)")
 
 
 def altium_footprint(spec, density=None):

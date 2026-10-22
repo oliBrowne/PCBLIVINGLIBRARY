@@ -32,14 +32,16 @@ def h(o):
 # 2026-10-19 (#42): SYSTEM asks for a toleranced value (6.5±0.2) copied into nom; nothing else changed.
 # 2026-10-21: land gains pin1_length / pin1_width, a pin 1 pad drawn another size; nothing else changed (checked with
 # the earlier schema: the earlier hashes).
-GOLDEN = {"build_sync": "2b6d0540d1de1ff2932e62c29252fdf8643502788c6a7aa80f4134ff1ccc4206",
-          "build_batch": "a7e2b93c5da407712e85a42aeaa15dfd63353f0b85c6414adbf9aac18a31ce1f",
-          "build_url_haiku": "89d68ec8c8e86b336a8d99520b205289f231f78c5b420b86b4081560a241b66d",
-          "reader_sync_calls": ["d947561555ee8a7f9e842080cadcca58f0422eba4d4519863179a2a1529e98fc",
-                                "674c1b3c4243d47e2df39cc24b9219595852b7c837ee006ae79fa8df494bf37a"],
+# 2026-10-22: land gains ep_mask_across / ep_mask_along, a solder-mask-defined thermal land (TI PowerPAD); nothing else
+# changed (checked with the earlier schema: the earlier hashes).
+GOLDEN = {"build_sync": "1137bd7b3e1a9f122117f3ab936a6b346f3b84b9f99d456e5c93e388053f77ef",
+          "build_batch": "72f288a100fa6d1c89744915fa0d46b2ba1efe53f1ac92f90a0476ef5e3de1ff",
+          "build_url_haiku": "f2c08c4829b0cc60ec24b55c12e90418b67130d8bcaf41d84c9d92378c2724e6",
+          "reader_sync_calls": ["b37cc3db9f3941ba4b3396cd3817d7e0126fb738534f45c78fa06138eb541690",
+                                "7d4783fd737357fbee90462479b2b4f7f1eee7bf28951607dedee5bdfcf5ffac"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["c57a1957107a34b1924068333eb0763adb8ed5c353b108dd9633c01630d9d65b",
-                          "6a263426192d45fa2291af9feb690aad9a260409d21aceb159c42f47ebf71311"]}
+          "batch_posts": ["cf119f2291183d77100f9b67b5b5ef55c4f699633433f3beb772244b63373bf7",
+                          "d7bb1e8fbb3a94ad1c897ef883f3dc43c61c01bde6b634a2149b243f66ceb969"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 
