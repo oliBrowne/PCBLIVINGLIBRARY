@@ -1225,6 +1225,24 @@ def thermal_land_missing(spec, maker=None, url=None):
             "read; check the land pattern page at the end of the datasheet")
 
 
+IPC_LAND = ("chip", "molded", "gullwing", "qfp", "qfn")      # builders that size the pads by IPC-7351B when no land is read
+LAND_KEYS = ("pad_length", "pad_width", "pad_center", "ep_across", "ep_along")
+
+
+def land_unread(spec, pages):
+    """The hold line when the pages the read was sent print the maker's recommended land for this package
+    (ds_route.land_pages) but the read gave no land: the IPC-7351B pads it would build differ from the maker's
+    (benchmark 2026-10-22, default run: BCR430UW6 SOT26 "Suggested Pad Layout", NCP4308AMT "RECOMMENDED SOLDERING
+    FOOTPRINT", BCV61 SOT143B footprint figure; each read without its land built every pad off, while the zoom run read
+    the same pages' land and matched). A pad table is the read's own land. None otherwise."""
+    land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
+    if not pages or spec.get("package_type") not in IPC_LAND or spec.get("pad_table") or any(land.get(k) for k in LAND_KEYS):
+        return None
+    where = ", ".join(str(p) for p in pages[:4])
+    return (f"no footprint: the datasheet prints a recommended land for this package (page {where}) but the read did not "
+            "return it, so the IPC pads would differ from the maker's land; read the land from that page")
+
+
 SIDEWAYS = re.compile(r"horizontal|right[ -]?angle|\bR/?A\b|side[ -]?entry", re.I)
 
 
@@ -1246,20 +1264,31 @@ def bare_pads(spec):
         all(p["kind"] in ("smd", "np_thru_hole") for p in pads)
 
 
+DRAWN_TABLE = ("connector", "custom")     # footprint_adv._table: the pads as listed, the body from pad_table.body
+
+
 def body_unread(spec):
-    """The hold line when a connector's courtyard would be a guess: no body outline was read (pad_table body,
-    body_length x body_width), so the courtyard would hug the pads. A connector's housing reaches well past its pins,
-    and a horizontal one far behind them (S28B-PHDSS 6.4 mm, S13B-EH 5.75 mm off: benchmark 2026-10-21). A bare
-    vertical pin header is drawn from its pitch (footprint_adv._header) and still builds. None otherwise."""
-    t = spec.get("package_type")
+    """The hold line when a connector's or a custom pad table's courtyard would be a guess: no body outline was read
+    (pad_table body, body_length x body_width), so the courtyard would hug the pads. A connector's housing reaches well
+    past its pins, and a horizontal one far behind them (S28B-PHDSS 6.4 mm, S13B-EH 5.75 mm off: benchmark 2026-10-21);
+    a custom part's body can too (27C256). A bare vertical pin header is drawn from its pitch (footprint_adv._header)
+    and still builds, and so does a bare pad pattern with no housing (bare_pads: TC2030). None otherwise."""
+    t, tab = spec.get("package_type"), spec.get("pad_table") or {}
     # the body each builder draws: _table a pad_table body or body_length x body_width, _header only the latter
-    if t not in ("connector", "pin_header") or spec.get("body_length") and spec.get("body_width") or \
-            t == "connector" and (spec.get("pad_table") or {}).get("body"):
+    if t not in ("connector", "pin_header", "custom") or spec.get("body_length") and spec.get("body_width") or \
+            t in DRAWN_TABLE and tab.get("body"):
+        return None
+    if t == "custom" and not (tab.get("pads") or tab.get("arrays")):     # no pad table: nothing is built from it
         return None
     if t == "pin_header" and not SIDEWAYS.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
         return None
-    if t == "connector" and bare_pads(spec):
+    if t in DRAWN_TABLE and bare_pads(spec):
         return None
+    if t == "custom":
+        # a pad table of any part: its body can reach past the pads (27C256 DIP-28, benchmark 2026-10-22 default run:
+        # body 37 mm over 33 mm of pads, the courtyard hugging the pads was 0.48 mm short at both ends)
+        return ("no footprint: the datasheet read left the part's body outline blank, so its courtyard would hug the "
+                "pads while the body may reach past them; read the body size from the drawing")
     return ("no footprint: the datasheet read left the connector's body outline blank, so its courtyard would hug the "
             "pads while the housing reaches past them; read the body size from the drawing")
 
@@ -3400,6 +3429,22 @@ class Reader:
             out["outline_missing"] = missing
         return merged, out
 
+    def _land_pages(self, job):
+        """ds_route.land_pages for the pages this read was sent (all from the offset when the whole PDF went); [] when
+        the PDF was sent as a link or has no text layer."""
+        from . import ds_route as DR
+        data, off = job.get("data"), job.get("offset")
+        if data is None or not job.get("src_hash"):
+            return []
+        try:
+            texts = self._page_texts(data, job["src_hash"])
+        except Exception:                             # a damaged PDF says nothing about its land
+            return []
+        if not texts:
+            return []
+        pages = off if isinstance(off, list) else list(range(int(off or 0) + 1, len(texts) + 1))
+        return DR.land_pages(texts, pages, job.get("part"), job.get("package"))
+
     def _page_texts(self, data, digest):
         from . import ds_route as DR
         if digest not in self._texts:                 # None (no pypdf, encrypted, damaged): the whole PDF, as before
@@ -3503,6 +3548,9 @@ class Reader:
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
             if (job["route"].get("picked") or {}).get("_from_pdf"):   # the package the PDF's ordering key / table
                 res["sidecar"]["package_from_pdf"] = job["route"]["picked"]["_from_pdf"]   # names: standard_land
+        lp = self._land_pages(job)
+        if lp:                                        # the maker's land was on the pages read (librarian: land_unread)
+            res["sidecar"]["land_pages"] = lp
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
         if job["prov"].get("unnamed"):

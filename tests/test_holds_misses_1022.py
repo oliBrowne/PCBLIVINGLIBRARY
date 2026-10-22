@@ -1,0 +1,127 @@
+"""Free re-score of the 2026-10-21 Opus answers on main 3c3bd08 (2026-10-22): the parts built wrong are held instead.
+- a read with no land of its own while the pages it was sent print the maker's recommended land (default run:
+  BCR430UW6, NCP4308AMT, BCV61 built IPC pads that differ from that land; the zoom run read the land and matched);
+- a custom pad table read without its body (default run: 27C256 DIP-28, the courtyard hugged the pads and missed the
+  37 mm body at both ends).
+The PDFs here are SYNTHETIC text laid out like those datasheets, not copies.   python3 -m tests.run_all test_holds_misses_1022"""
+import copy, tempfile
+from pathlib import Path
+
+from ecadlib import datasheet as D, ds_route as DR
+from tests import test_crosscheck as TC, test_datasheet as TD, test_datasheet_batch as TB, test_ds_route as TR
+
+LAND_PAGE = ["Package Information", "Suggested Pad Layout", "Package Type: SOT26",
+             "Dimensions Value (in mm)", "C 0.950", "X 0.550", "Y 0.800", "Y1 3.200", "Z 1.200", "G 1.600"]
+POINTER = ["Thermal information", "For the land pattern, see the Mechanical, Packaging and Orderable Information section.",
+           "Theta JA 120 C/W", "Theta JC 45 C/W"]
+
+
+# ---------------------------------------------------------------- which pages print a land
+def test_a_land_heading_with_its_sizes_is_a_land_page_and_a_pointer_to_it_is_not():
+    texts = [" ".join(TR.ldo_pages()[0]), " ".join(POINTER), "\n".join(LAND_PAGE)]
+    assert DR.land_pages(texts, [1, 2, 3], "TESTPART", "SOT-23-6") == [3]
+    assert DR.land_pages(texts, [1, 2], "TESTPART", "SOT-23-6") == []          # the land page was not sent
+    assert DR.land_pages(texts, [], "TESTPART") == [] and DR.land_pages(None, [1]) == []
+    for head in ("RECOMMENDED SOLDERING FOOTPRINT*", "LAND PATTERN EXAMPLE", "Footprint information for reflow soldering",
+                 "RECOMMENDED SOLDER PAD LAYOUT", "RECOMMENDED LAND PATTERN"):
+        t = "\n".join([head] + LAND_PAGE[3:])
+        assert DR.land_pages([t], [1]) == [1], head
+    # "footprint" alone, or a layout section with sizes, is no land of the package
+    for head in ("PCB footprint", "Layout Guidelines", "Board layout", "Thermal pad layout"):
+        assert DR.land_pages(["\n".join([head] + LAND_PAGE[3:])], [1]) == [], head
+    assert DR.land_pages(["\n".join(LAND_PAGE[:3] + ["see table"])], [1]) == []  # a heading with no sizes
+
+
+def test_the_only_land_page_of_a_pdf_counts_even_when_it_names_the_package_otherwise():
+    # Diodes BCR430UW6: the BOM says SC-74-6, the one pad layout page says SOT26 (the same package): page_scores calls it
+    # another package, but a PDF with one land page has no other package to print a land for
+    texts = [" ".join(TR.ldo_pages()[0]), " ".join(POINTER), "\n".join(LAND_PAGE)]
+    assert DR.land_pages(texts, [3], "BCR430UW6", "SC-74-6") == [3]
+
+
+def test_a_land_page_about_another_package_only_does_not_count():
+    pages = TR.ldo_pages()                          # SOT223 / SOT89 pad layouts on p19 / p20
+    for p in (18, 19):
+        pages[p] = pages[p] + ["C 0.950 X 0.550 Y 0.800 Y1 3.200 Z 1.200 G 1.600"]
+    texts = ["\n".join(p) for p in pages]
+    assert DR.land_pages(texts, [19, 20], "TESTLDO-H33TRG1", "SOT223") == [19]
+    assert DR.land_pages(texts, [19, 20], "TESTLDO-R33TRG1", "SOT89") == [20]
+
+
+# ---------------------------------------------------------------- the hold
+def gull():
+    return {"package_type": "gullwing", "name": "SOT-23-6", "pin_count": 6, "pitch": 0.95}
+
+
+def test_no_land_read_while_the_pages_print_one_is_held():
+    line = D.land_unread(gull(), [6])
+    assert line and line.startswith("no footprint:") and "recommended land" in line and "page 6" in line, line
+    for t in ("qfn", "qfp", "chip", "molded"):
+        assert D.land_unread(dict(gull(), package_type=t), [6]), t
+
+
+def test_a_land_read_or_no_land_page_or_a_pad_table_builds():
+    assert D.land_unread(gull(), []) is None and D.land_unread(gull(), None) is None
+    assert D.land_unread(dict(gull(), land={"pad_length": 0.8, "pad_width": 0.55, "pad_center": 1.2}), [6]) is None
+    # a land page that sizes only the thermal land is the maker's land too; the signal pads come from IPC
+    assert D.land_unread(dict(gull(), land={"ep_across": 3.4, "ep_along": 5.0}), [6]) is None
+    assert D.land_unread(dict(gull(), package_type="custom", pad_table={"pads": [{"number": "1"}]}), [6]) is None
+    assert D.land_unread(dict(gull(), pad_table={"pads": [{"number": "1"}]}), [6]) is None
+    for t in ("bga", "connector", "pin_header", "custom"):        # these never size pads by IPC from the body
+        assert D.land_unread(dict(gull(), package_type=t), [6]) is None, t
+
+
+def read_through_librarian(ext, pdf):
+    api = TC.API(lambda k, m, b: TR.on_page(TD._complete(copy.deepcopy(ext))))
+    with tempfile.TemporaryDirectory() as d:
+        http = TB.PdfHTTP({"https://example.com/ds.pdf": pdf, "https://www.lcsc.com/datasheet/C9999.pdf": pdf})
+        items, _, _ = TB.run2(d, api, http=http, reader_kw={"batch": False, "rules": TR.no_cross_check({})})
+        a = items["DSPART1"]
+        side = Path(d) / "out" / "datasheet"
+        return a, sorted(side.glob("*.extraction.json"))
+
+
+def test_the_librarian_holds_a_read_that_missed_the_land_on_its_pages():
+    pdf = TR.pdf_lines([["TESTPART 3 A buck converter", "VQFN-16 3x3 mm"], POINTER, LAND_PAGE])
+    a, _ = read_through_librarian(TD.GOOD, pdf)
+    assert not (a.get("footprint") or {}).get("file"), a.get("footprint")
+    tried = [t for t in a["librarian"]["tried"] if t.startswith("datasheet")]
+    assert any("recommended land for this package (page 3)" in t for t in tried), tried
+    # the same read with the land block builds from it
+    with_land = copy.deepcopy(TD.GOOD)
+    keys = D.output_schema()["properties"]["package"]["properties"]["land"]["anyOf"][0]["properties"]
+    with_land["package"]["land"] = dict(dict.fromkeys(keys), pad_length=0.8, pad_width=0.3, pad_center=1.45)
+    a, _ = read_through_librarian(with_land, pdf)
+    assert (a.get("footprint") or {}).get("file"), a["librarian"]["tried"]
+    # and a PDF without the land page builds the IPC land as before
+    a, _ = read_through_librarian(TD.GOOD, TR.pdf_lines([["TESTPART 3 A buck converter", "VQFN-16 3x3 mm"], POINTER]))
+    assert (a.get("footprint") or {}).get("file"), a["librarian"]["tried"]
+
+
+# ---------------------------------------------------------------- a custom pad table with no body
+def dip28(**kw):
+    s = {"package_type": "custom", "name": "DIP-28_W15.24mm", "pin_count": 28, "pitch": 2.54,
+         "pad_table": {"unit": "mm", "default_pad": {"type": "tht", "drill": 0.8, "w": 1.6, "h": 1.6, "shape": "oval"},
+                       "arrays": [{"count": 14, "x": 0, "y": 0, "dx": 0, "dy": 2.54, "first_number": 1},
+                                  {"count": 14, "x": 15.24, "y": 33.02, "dx": 0, "dy": -2.54, "first_number": 15}]}}
+    s.update(kw)
+    return s
+
+
+def test_a_custom_pad_table_with_no_body_is_held():
+    line = D.body_unread(dip28())
+    assert line and "left the part's body outline blank" in line, line
+
+
+def test_a_custom_pad_table_with_a_body_or_a_bare_pad_pattern_still_builds():
+    assert D.body_unread(dip28(body_length={"min": 36.703, "max": 37.338}, body_width={"min": 13.462, "max": 13.97})) is None
+    t = dip28()
+    t["pad_table"]["body"] = {"x1": -0.6, "y1": -1.8, "x2": 15.8, "y2": 34.8}
+    assert D.body_unread(t) is None
+    assert D.body_unread({"package_type": "custom", "name": "x", "pin_count": 6}) is None   # no pad table to build from
+    pads = [{"number": str(i), "x": x, "y": y, "type": "smd", "w": 0.787, "h": 0.787, "shape": "circle"}
+            for i, (x, y) in enumerate([(-1.27, -0.635), (-1.27, 0.635), (0, -0.635), (0, 0.635), (1.27, -0.635), (1.27, 0.635)], 1)]
+    holes = [{"x": x, "y": y, "type": "npth", "drill": 0.991} for x, y in [(-2.54, 0), (2.54, 1.016), (2.54, -1.016)]]
+    tc = {"package_type": "custom", "name": "Tag-Connect_TC2030", "pin_count": 6, "pad_table": {"unit": "mm", "pads": pads + holes}}
+    assert D.bare_pads(tc) and D.body_unread(tc) is None                       # TC2030 (zoom run: passes)
+    assert D.body_unread(dict(tc, height_max=4.5))                             # a seated height: a housing is there

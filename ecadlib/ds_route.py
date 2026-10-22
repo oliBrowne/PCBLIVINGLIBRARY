@@ -820,6 +820,31 @@ def pick_pages(texts, budget, part=None, package=None, marks=None, first=None):
     return sorted(keep), why
 
 
+# a page that prints the maker's own land for the package (the heading, not "footprint" alone nor layout advice):
+# TI "LAND PATTERN EXAMPLE", Diodes "Suggested Pad Layout", onsemi "RECOMMENDED SOLDERING FOOTPRINT", Nexperia
+# "Footprint information for reflow soldering", LT "RECOMMENDED SOLDER PAD LAYOUT", Microchip "RECOMMENDED LAND PATTERN"
+LAND_PRINTED = re.compile(r"land pattern|recommended\s+(?:soldering\s+|pcb\s+)?(?:footprint|lands?|solder(?:ing)?\s+pad)|"
+                          r"(?:suggested|recommended)\s+pad\s+layout|soldering\s+footprint|"
+                          r"footprint\s+(?:information\s+)?for\s+(?:reflow|wave)|solder\s+lands", re.I)
+DIM_NUM = re.compile(r"(?<![\d.])\d*\.\d+(?![\d.])")
+
+
+def land_pages(texts, pages, part=None, package=None):
+    """The pages among `pages` (1-based, the ones a read was sent) that print a recommended land for this part's
+    package: a land heading (LAND_PRINTED) with the land's sizes on the page (6 decimal numbers or more), not a table
+    of contents or noise. A sentence that points to the land elsewhere ("for the land pattern, see the mechanical
+    section") has no sizes. When the PDF prints more than one land, a page about another package only (page_scores
+    'other') is left out; a PDF's only land page counts even when it names the package another way than the hint
+    (BCR430UW6: SC-74-6 in the BOM, SOT26 on the page). [] when nothing qualifies."""
+    if not texts or not pages:
+        return []
+    rows = page_scores(texts, part, package)[0]
+    lands = [i + 1 for i, raw in enumerate(texts) if not (rows[i]["toc"] or rows[i]["noise"])
+             and LAND_PRINTED.search(norm_text(raw or "")) and len(DIM_NUM.findall(norm_text(raw or ""))) >= 6]
+    sent = {int(q) for q in pages if isinstance(q, int) and not isinstance(q, bool)}
+    return [p for p in lands if p in sent and (len(lands) == 1 or not rows[p - 1]["other"])]
+
+
 def levels(texts, budget, part=None, package=None, n_pages=None, marks=None):
     """The page sets to try, smallest first: [pages] for budget, 3x budget, then None (= the whole PDF). A PDF that
     fits the budget, or has no text layer, gets [None] (whole, as before)."""

@@ -842,8 +842,9 @@ class Run:
         if not st["footprint"]:                       # before any land choice: a table land never replaces these holds
             maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
             joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
-                D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"])
-            if joined:                                # leads merged with the pad, a TI thermal land not read, or no housing to draw
+                D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"]) or \
+                (None if std else D.land_unread(res["spec"], res["sidecar"].get("land_pages")))
+            if joined:                                # leads merged with the pad, a thermal / maker land not read, or no housing to draw
                 raise D.DatasheetError(joined)
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
