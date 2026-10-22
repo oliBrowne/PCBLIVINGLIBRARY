@@ -1,5 +1,5 @@
 {
- "about": "Cases where KiCad's reference disagrees with the maker's datasheet, checked by hand against the datasheet text. A field listed here that fails against KiCad is scored as right (the report lists it as a reference erratum) when ours is what the datasheet says. A number under \"ours\" (e.g. the pitch) must match ours, or none of the case's errata apply: the other fields (pads, pin 1, courtyard) are excused only when we built the datasheet's package. \"reference\": {\"footprint\": <a footprint in the set's references>} scores the case against that KiCad footprint instead, when KiCad's own reference is another variant of the package.",
+ "about": "Cases where KiCad's reference disagrees with the maker's datasheet, checked by hand against the datasheet text. A field listed here that fails against KiCad is scored as right (the report lists it as a reference erratum) when ours is what the datasheet says. A number under \"ours\" (e.g. the pitch) must match ours, or none of the case's errata apply: the other fields (pads, pin 1, courtyard) are excused only when we built the datasheet's package. \"reference\": {\"footprint\": <a footprint in the set's references>} scores the case against that KiCad footprint instead, when KiCad's own reference is another variant of the package. \"reference\": {\"renumber\": {\"<KiCad pad>\": \"<datasheet pin>\"}} scores the case against KiCad's footprint with those pads renumbered, when the datasheet numbers the same package's pads otherwise.",
  "cases": {
   "AH1806-W": {
    "symbol_names": {
@@ -15,6 +15,14 @@
     ],
     "why": "Diodes AH1806 datasheet (AH1806.pdf) p1 pinout and p2 pin table: SC59 (the -W package, p5) pin 1 VDD, pin 2 GND, pin 3 OUTPUT. KiCad's Sensor_Magnetic:AH1806-W has 2 OUTPUT, 3 GND.",
     "checked": "2026-10-18"
+   },
+   "reference": {
+    "renumber": {
+     "2": "3",
+     "3": "2"
+    },
+    "why": "Diodes AH1806 datasheet (DS36104 Rev. 8-2) p1 Pin Assignments, SC59 top view: pin 2 (GND) alone on one side, pins 3 (OUTPUT) and 1 (VDD) on the other; p2 pin table 1 VDD, 2 GND, 3 OUTPUT. KiCad's SC-59 footprint numbers the lone pad 3 (SOT-23 order), so its pads 2 and 3 are scored as the datasheet's 3 and 2.",
+    "checked": "2026-10-21"
    }
   },
   "PCA9557BS": {

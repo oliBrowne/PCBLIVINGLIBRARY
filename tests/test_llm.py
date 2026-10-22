@@ -30,14 +30,16 @@ def h(o):
 # 2026-10-18: requests ask for wire_schema() (the API takes at most 16 union-typed fields)
 # 2026-10-18 (#42): land gains ep_across / ep_along, the maker's thermal-pad land; nothing else changed.
 # 2026-10-19 (#42): SYSTEM asks for a toleranced value (6.5±0.2) copied into nom; nothing else changed.
-GOLDEN = {"build_sync": "46deb2d1702b084d323dc3b53ef5aa9cce9ca33e0f24fea0ac89fc0060cd81fa",
-          "build_batch": "973a103bfd91777c1a73df938dae41ae9613272d5e8266090d4669f138058fab",
-          "build_url_haiku": "fbc0658c29a56d4939e64a797e10757fe2573c01ff6b6a4342d875213382bb4b",
-          "reader_sync_calls": ["e8169f69d5ee1271fdea8c9070f80a3a5bf002e8705a85c53a64ff5e67fad854",
-                                "ccd5fd8f69e6fe086259fdd001b538ccf926b9c8b4b967e50cade6686800acfe"],
+# 2026-10-21: land gains pin1_length / pin1_width, a pin 1 pad drawn another size; nothing else changed (checked with
+# the earlier schema: the earlier hashes).
+GOLDEN = {"build_sync": "2b6d0540d1de1ff2932e62c29252fdf8643502788c6a7aa80f4134ff1ccc4206",
+          "build_batch": "a7e2b93c5da407712e85a42aeaa15dfd63353f0b85c6414adbf9aac18a31ce1f",
+          "build_url_haiku": "89d68ec8c8e86b336a8d99520b205289f231f78c5b420b86b4081560a241b66d",
+          "reader_sync_calls": ["d947561555ee8a7f9e842080cadcca58f0422eba4d4519863179a2a1529e98fc",
+                                "674c1b3c4243d47e2df39cc24b9219595852b7c837ee006ae79fa8df494bf37a"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["192d054ccc1eef1d5f1f30e4802b3603399c73133ca0e8a1108a70130c50c524",
-                          "337d52207392e5bfb30d21395cb54ad6248a8f068639a4fca409a48701492b0c"]}
+          "batch_posts": ["c57a1957107a34b1924068333eb0763adb8ed5c353b108dd9633c01630d9d65b",
+                          "6a263426192d45fa2291af9feb690aad9a260409d21aceb159c42f47ebf71311"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 

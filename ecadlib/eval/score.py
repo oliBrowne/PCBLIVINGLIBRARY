@@ -243,8 +243,12 @@ def maker_land(mine, spec, tol=None):
     near = lambda a, b, k: abs(a - b) <= t[k] + 1e-9
     def fits(p):
         x, y = abs(p[1] - cx), abs(p[2] - cy)
-        return (near(p[3], pl, "size") and near(p[4], pw, "size") and near(x, pc, "pos")) or \
-               (near(p[4], pl, "size") and near(p[3], pw, "size") and near(y, pcy, "pos"))
+        l, w, c, cyy = pl, pw, pc, pcy
+        if str(p[0]) == "1" and (land.get("pin1_length") or land.get("pin1_width")):   # pin 1 drawn another size
+            l1 = land.get("pin1_length") or pl                                        # (its outer end with the row's)
+            c, cyy, l, w = pc + (pl - l1) / 2, pcy + (pl - l1) / 2, l1, land.get("pin1_width") or pw
+        return (near(p[3], l, "size") and near(p[4], w, "size") and near(x, c, "pos")) or \
+               (near(p[4], l, "size") and near(p[3], w, "size") and near(y, cyy, "pos"))
     rest = [p for p in pads if p not in ep]
     used = [p[0] for p in rest if fits(p)]
     # the land is the model's own reading, so "followed" alone cannot tell it from a misread: it must at least solder
@@ -252,8 +256,10 @@ def maker_land(mine, spec, tol=None):
     rng = lambda k: [v for v in ((spec.get(k) or {}).get(x) for x in ("min", "nom", "max")) if isinstance(v, (int, float))] \
         if isinstance(spec.get(k), dict) else []
     span, T, b = rng("lead_span"), rng("terminal_length"), rng("terminal_width")
-    sane = not (span and T and b) or (pc + pl / 2 >= min(span) / 2 - t["pos"] and
-                                     pc - pl / 2 <= max(span) / 2 - min(T) + t["pos"] and pw >= min(b) - 1e-9)
+    covers = lambda l, w, c: c + l / 2 >= min(span) / 2 - t["pos"] and c - l / 2 <= max(span) / 2 - min(T) + t["pos"] \
+        and w >= min(b) - 1e-9
+    l1 = land.get("pin1_length") or pl                # a pin 1 of its own size must solder its lead too
+    sane = not (span and T and b) or (covers(pl, pw, pc) and covers(l1, land.get("pin1_width") or pw, pc + (pl - l1) / 2))
     # the maker's thermal land, when the land gives one: centred on the pads, ep_across running across the pad rows
     # (the lead pads' long side runs across the rows: pads wider than tall are rows at +-x, so across is the pad's
     # width; taller than wide, its height; both kinds, a quad package: either way round. Not the pads' extent: a long

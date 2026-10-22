@@ -214,6 +214,17 @@ def reference_for(case, errata):
     return ((errata.get(case["mpn"]) or {}).get("reference") or {}).get("footprint") or case["footprint"]
 
 
+def reference_numbers(case, errata, refs):
+    """The numbers the case is scored against: its reference footprint's, with the pads renumbered where the erratum
+    says the datasheet numbers them otherwise ("reference": {"renumber": {"2": "3", "3": "2"}}: AH1806-W, whose SC59
+    has pin 2 alone on one side where KiCad's SOT-23 numbering puts pin 3)."""
+    ref = refs[reference_for(case, errata)]
+    m = ((errata.get(case["mpn"]) or {}).get("reference") or {}).get("renumber")
+    if not m:
+        return ref
+    return dict(ref, pads=[[m.get(str(p[0]), p[0])] + list(p[1:]) for p in ref["pads"]])
+
+
 def load_set(name):
     return json.loads(set_path(name).read_text(encoding="utf-8"))
 
@@ -650,13 +661,14 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         sf = (it.get("symbol") or {}).get("file")
         sym_pins = _symbol_pins(lib / sf) if sf and (lib / sf).exists() else None
         ref_fp = reference_for(c, erratas)
-        sc = S.score(mine, data["references"][ref_fp], sym_pins, c.get("pins"), tol)
+        ref = reference_numbers(c, erratas, data["references"])
+        sc = S.score(mine, ref, sym_pins, c.get("pins"), tol)
         errata = apply_errata(sc, sym_pins, erratas.get(c["mpn"]), c.get("pins"), tol)
         tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model, not reader.estimate_only)
         src = ((it.get("source") or {}).get("footprint") or "none").split(":")[0]
         used = reader.used.get(c["mpn"]) or {}
         ml = S.maker_land(mine, used.get("spec")) if src == "datasheet" else None
-        ref_pads = len(S.drop_vias(data["references"][ref_fp])["pads"])
+        ref_pads = len(S.drop_vias(ref)["pads"])
         shared = next((n[len("shared with "):] for n in (it.get("librarian") or {}).get("notes", []) if n.startswith("shared with ")), "")
         files = {}                                    # what this run wrote for the part (consistency between runs)
         for kind, rel in (("kicad_mod", fp), ("pcblib", (it.get("footprint") or {}).get("file")), ("schlib", sf)):

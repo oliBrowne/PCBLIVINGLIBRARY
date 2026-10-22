@@ -60,6 +60,8 @@ def refused(status, data, err, pdf_link=None):
         return bool(_DROPPED.search(err)) and not _NOT_THE_SITE.search(err)
     if status in REFUSED_STATUS or 520 <= (status or 0) <= 530:
         return True
+    if 200 <= (status or 0) < 300 and not (data or b"").strip():
+        return True                                   # an empty 200: how Infineon answers a script (2ED21824S06J)
     if 200 <= (status or 0) < 300 and data and b"%PDF-" not in data[:1024]:
         head = data[:4096]
         if re.search(rb"<(!doctype|html)", head, re.I):

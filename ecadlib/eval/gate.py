@@ -158,7 +158,7 @@ def make_replay(set_name="kicad-v1", out=None):
     data = R.load_set(set_name)
     er = R.load_errata(set_name)                     # a case scored against another KiCad footprint (PCA9557BS) is read as that
     cs = [dict(c, footprint=R.reference_for(c, er)) for c in data["cases"]]
-    answers = {c["mpn"]: synth_answer(c, data["references"][c["footprint"]]) for c in cs}
+    answers = {c["mpn"]: synth_answer(c, R.reference_numbers(c, er, data["references"])) for c in cs}
     pack = {"meta": {"set": data["meta"]["name"], "set_version": data["meta"].get("version"), "model": MODEL,
                      "about": "SYNTHETIC answers (ecadlib/eval/gate.py synth_answer), not a model's reading",
                      "answers": len(answers)}, "answers": dict(sorted(answers.items())),

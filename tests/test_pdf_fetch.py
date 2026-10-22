@@ -22,6 +22,7 @@ def test_refused_moves_on_for_a_refusal_never_for_a_missing_file():
     product = b"<html><body><a href='/files/testpart.pdf'>Datasheet</a></body></html>"
     link = lambda h: D.pdf_link(h, "https://www.maker.com/p/testpart")
     for status, data, err in ((403, page, None), (401, b"", None), (429, b"", None), (503, page, None),
+                              (200, b"", None), (200, b"  \r\n", None),    # an empty 200 (Infineon 2ED21824S06J)
                               (200, page, None), (0, None, "ConnectionError: ('Connection aborted.', RemoteDisconnected())"),
                               (0, None, "ReadTimeout: read timed out"), (0, None, "download too slow (12 KB in 120 s); stopped"),
                               (0, None, "ConnectionError: ('Connection aborted.', ConnectionResetError(10054, 'An "
