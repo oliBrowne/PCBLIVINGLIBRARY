@@ -67,6 +67,8 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- `ecadlib.cli.main` called in-process (tests, an app that embeds ecadlib) puts `-q` / `-v` / `--json` and `sys.argv` back when it returns, so the caller's own output is not left unstyled. Three tests that failed only now and then under `pytest -n 4` are fixed: the terminal-style test (it inherited `--json` from another test), the browser UI test (fixed scroll pauses became waits) and the fresh-install doctor test (it no longer fails where the optional browser extras are not installed).
+
 - `ecadlib eval run --cached-only`: an answer saved from another step of a part's route is reported with the pages that read was sent. Before, its sidecar showed the pages this run's picker would send now, and today's zoom pages. TLC5951DAP's re-score named a land page (51) that the scored read never saw.
 - Makers' AES-encrypted datasheets with no open password (Panasonic's AQY282GS) are read: ecadlib now depends on `pypdf[crypto]`, since pypdf needs the cryptography package for AES. Without it the PDF's text came back empty, so no pages were picked for the part.
 - Datasheet reads of tab packages (DS2-24): `pin_count` counts each pad number once, as `package_schema.json` says. A tab that is a lead's pin again (SOT-223-3_TabPin2) adds nothing and needs `pin_positions`; a tab with its own number counts (TO-252-2: 3). SOT-223-3_TabPin2, TO-252-2, TO-252-3_TabPin4, TO-263-2 and single-row parts like TO-263-5_TabPin3 can now pass the checks; before, each was held whatever `pin_count` it gave. A blank `pin_count` is no longer filled from a SOT/TO outline number (SOT-223 -> 223). The bundled SOT-223-3_TabPin2 spec says 3; a spec file that says 4 still builds.

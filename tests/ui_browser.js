@@ -36,7 +36,8 @@ async function local(browser, width) {
     const t = await text(p, "#tnext");
     check("triage says what next" + w, /Next:/.test(t) && /step 2/.test(t), t);
     await p.click("#tnext [data-go]");
-    await p.waitForTimeout(700);
+    // smooth scroll: wait for it to arrive (a busy machine takes longer than a fixed pause), then measure
+    await p.waitForFunction(() => document.querySelector("#libcard").getBoundingClientRect().y < 300, null, { timeout: 5000 }).catch(() => {});
     const box = await p.locator("#libcard").boundingBox();
     check("go to step 2 scrolls there" + w, box && box.y < 300, box && box.y);
     check("focus lands on Fill missing parts" + w, await p.evaluate(() => document.activeElement && document.activeElement.id) === "librun");
@@ -88,7 +89,7 @@ async function local(browser, width) {
     await p.waitForSelector("#error .banner", { timeout: 30000 });
     const e = await text(p, "#error");
     check("bad upload: one plain line" + w, /couldn't read notes\.csv/.test(e) && !/Error:|Traceback|\/tmp\/|[A-Z]:\\/.test(e), e);
-    await p.waitForTimeout(600);
+    await p.waitForFunction(() => { const y = document.querySelector("#error").getBoundingClientRect().y; return y >= 0 && y < 900; }, null, { timeout: 5000 }).catch(() => {});
     const box = await p.locator("#error").boundingBox();
     check("bad upload: error scrolled into view" + w, box && box.y >= 0 && box.y < 900, box && box.y);
   });

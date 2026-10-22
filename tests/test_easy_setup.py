@@ -1,7 +1,7 @@
 """The no-terminal setup: stored keys (ecadlib.userconfig), finding Altium / KiCad (ecadlib.detect), the setup page's
 logic and routes (ecadlib.easy_setup, ui/server.py), the desktop app (ecadlib.launcher) and the quieter doctor.
 Offline: key checks use a fake HTTP get. Run:  python3 -m tests.test_easy_setup"""
-import contextlib, http.client, io, json, os, stat, sys, tempfile, threading, time, types
+import contextlib, http.client, importlib.util, io, json, os, stat, sys, tempfile, threading, time, types
 from pathlib import Path
 from unittest import mock
 
@@ -342,7 +342,9 @@ def test_doctor_on_a_fresh_install_warns_only_about_what_matters():
     d = _tmp()
     rep = DR.run(str(d / "ecadlib_workspace"), [], None, {"PATH": ""})
     warn = sorted(c["check"] for c in rep["checks"] if c["level"] != "OK")
-    assert set(warn) <= {"key anthropic", "tool kicad-cli"}, warn
+    # an optional extra this Python really lacks (curl_cffi / playwright without .[dev]) is a fair warning, not noise
+    lacking = {f"optional {pip}" for mod, pip, _ in DR.OPTIONAL if importlib.util.find_spec(mod) is None}
+    assert set(warn) <= {"key anthropic", "tool kicad-cli"} | lacking, warn
     hints = " ".join(c["hint"] for c in rep["checks"])
     assert "export " not in hints and "ecadlib keys set ANTHROPIC_API_KEY" in hints
     rules = {"agent": {"github_repo": "me/lib"}, "altium365": {"workspace": "https://x.365.altium.com"}, "setup": {"tool": "altium"}}
