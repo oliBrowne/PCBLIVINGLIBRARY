@@ -666,18 +666,21 @@ class Run:
         urls = D.datasheet_urls(item, ln, row, st["found"])
         cfg = getattr(self.reader, "cfg", None) or D.settings(self.rules)   # the reader's [datasheet] settings
         local = None if urls else D.local_datasheet(cfg.get("folder"), mpn or item["name"])[0]   # [datasheet] folder
-        if not urls and local is None:                # (a folder set but not there or unreadable: said, by name)
+        if not urls and local is None and not cfg.get("web_search"):   # (no link: [datasheet] web_search may find one)
             note = D.folder_problem(cfg.get("folder"))
             st["tried"].append("datasheet: no datasheet URL known" + (f"; {note}" if note else ""))
             self.reading(st)                          # (no link: none refused)
             return
-        first = urls[0] if urls else (local.name, "datasheet folder")   # (the file's name only, never its path)
+        # (the folder file's name only, never its path)
+        first = urls[0] if urls else (local.name, "datasheet folder") if local else ("a web search", "web search")
+        maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0] or None
         if self.reader is None:
             self.reader = D.Reader(self.out, Path(self._kicad_args[0] or self.out / "cache").parent, self.api_key, self.rules, self.http)
         rd = self.reader
         if getattr(rd, "offline", False) and not rd.estimate_only:   # --offline: an answer already cached, else none
             try:
-                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
+                job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"],
+                             mpn=mpn or None, maker=maker)
                 if self.reading(st) and not rd.answered(job):
                     self.refused(st, job, None, cfg.get("folder"))
                 self.folder_file_failed(st, job)
@@ -699,7 +702,8 @@ class Run:
             rd._recollected = True
             rd.recollect()
         refused_before = self.reading(st)             # (a link that no longer gives a PDF at all: said no more)
-        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"], mpn=mpn or None)
+        job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"],
+                     mpn=mpn or None, maker=maker)
         if refused_before and not rd.answered(job):   # (an earlier answer: the API fetched the link)
             self.refused(st, job, None, cfg.get("folder"))
         self.folder_file_failed(st, job)

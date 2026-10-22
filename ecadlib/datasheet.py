@@ -74,6 +74,7 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "folder": "",                                   # PDFs a person downloaded, <MPN>.pdf: tried before any link
             "standard_land": "off",                         # a read that identifies a standard package: off | auto | always
             "download": "auto",                             # a refused PDF link: other ways to download it (ecadlib.pdf_fetch)
+            "web_search": False, "web_search_model": "", "web_search_max_uses": 3,   # no link worked: ecadlib.ds_search
             "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""}   # ... last, your own browser
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
@@ -2885,8 +2886,62 @@ class Reader:
                                   sleep=self.sleep)
         return self._client
 
+    def _web_search(self, part, package, attempts, maker=None):
+        """[datasheet] web_search: once no link, part source or folder file gave a PDF (or the part had no link at
+        all), one search for the maker's PDF (ecadlib.ds_search), held under [datasheet] max_cost_usd and written to
+        cost.jsonl. A link found before for the part is downloaded again without a search. maker: the BOM's or a part
+        source's manufacturer, named in the search. -> (data, prov) or (None, None), the misses in attempts."""
+        from . import ds_search as WS
+        found = WS.Found(self.dir)
+        urls = [found.get(part)] if found.get(part) else []
+        if not urls:
+            model = self.cfg.get("web_search_model") or self.model
+            uses = int(self.cfg.get("web_search_max_uses") or WS.MAX_USES)
+            fallback = model in FALLBACK_MODELS       # a classifier decline is re-run on another model, as for a read
+            est, cap = WS.estimate(model, uses, fallback), float(self.cfg.get("max_cost_usd") or 0)
+            if cap and (est is None or self.committed_usd + est > cap):
+                attempts.append({"url": "", "where": "web search", "error": f"not searched: about ${est or 0:.2f} more "
+                                 f"would pass [datasheet] max_cost_usd = {cap:g}"})
+                return None, None
+            headers, extra = ({"anthropic-beta": FALLBACK_BETA}, {"fallbacks": "default"}) if fallback else ({}, {})
+
+            def may_continue(turns):                  # a pause_turn continuation: only while another turn fits the cap
+                return not cap or self.committed_usd + (WS.usd(model, turns) or 0.0) + est <= cap
+            try:
+                client = self.client(model)
+            except DatasheetError as e:               # (--offline, no key: nothing was sent)
+                attempts.append({"url": "", "where": "web search", "error": f"search failed: {e}"})
+                return None, None
+            urls, usage, turns, err = WS.search(client, part, model, maker=maker, package=package, max_uses=uses,
+                                                headers=headers, extra=extra, may_continue=may_continue)
+            usd = WS.usd(model, turns)
+            how = "usage" if usd is not None and not err else "estimate"
+            if usd is None:                           # (a model with no known price: the worst case is held)
+                usd = est or 0.0
+            if err:                                   # the failed request may still have been billed: hold its worst case
+                usd += est or 0.0
+            self.committed_usd += usd
+            self.ledger.add({"part": part, "name": part, "model": model,
+                             "model_served": (turns[-1] if turns else {}).get("model"), "via": "web search",
+                             "input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0),
+                             "web_searches": usage.get("web_search_requests", 0), "usd": round(usd, 6), "how": how,
+                             "verdict": f"search failed: {err}" if err else f"{len(urls)} links"})
+            if err and not urls:
+                attempts.append({"url": "", "where": "web search", "error": f"search failed: {err}"})
+            elif not urls:
+                attempts.append({"url": "", "where": "web search", "error": "the search found no PDF link"})
+        for url in urls:
+            try:
+                data, prov = self.store.fetch(url, "web search", part=part, handoff=False, mpn=part)
+            except DatasheetError as e:
+                attempts.append({"url": url, "where": "web search", "error": str(e)})
+                continue
+            found.put(part, url)
+            return data, dict(prov, found_by="web search")
+        return None, None
+
     # --- jobs
-    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None):
+    def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None, maker=None):
         """fp_needed: False when the part's footprint comes from another source ([datasheet] cross_check = "auto" then
         skips the cross-check). mpn: the part's MPN, when it has one: a PDF that does not name it is skipped
         (PdfStore.fetch). Try each (url, where) until one is a PDF ([datasheet] folder files around them: see
@@ -2929,10 +2984,13 @@ class Reader:
                 data = None
         if data is None:
             data, prov, _ = self._folder_pdf(part, urls, ("other",), attempts)
+        if data is None and self.cfg.get("web_search") and not self.estimate_only:
+            data, prov = self._web_search(mpn or part, package, attempts, maker)
         if data is None:
             how = "; ".join(a["error"] for a in attempts if a["where"] == "datasheet folder") or how
+            searched = "; ".join(a["error"] for a in attempts if a["where"] == "web search")
             if not urls:
-                raise DatasheetError("no datasheet URL known" + (f" and {how}" if self.cfg.get("folder") else
+                raise DatasheetError("no datasheet URL known" + (f"; web search: {searched}" if searched else "") + (f" and {how}" if self.cfg.get("folder") else
                                      "; put the PDF in a folder and set [datasheet] folder"))
             wrong = {a["url"] for a in attempts      # (what the other ways got says nothing of the link itself)
                      if re.search(BROKEN_LINK, re.sub(r" \(also tried .*\)$", "", a["error"], flags=re.S))}
