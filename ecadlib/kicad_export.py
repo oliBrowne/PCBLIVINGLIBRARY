@@ -766,6 +766,11 @@ def footprint_from_pcblib(path, name, notes, pick=None, rules=None):
                             + (f' (roundrect_rratio {_num(round(rr, 4))})' if rr else "") + ")")
                 if t == "region" and len(pts) != 4 and not rr:
                     K._note(notes, "paste region written as its bounding rectangle")
+            elif layer in ("F.Mask", "B.Mask") and len(pts) == 4 and len({round(x) for x, _ in pts}) == 2 \
+                    and len({round(y) for _, y in pts}) == 2:   # a mask window (a PowerPAD land's opening): a mask-only
+                xs, ys = [p[0] for p in pts], [p[1] for p in pts]      # pad, as KiCad draws it, so the pad checks see it
+                pads.append(f'\t(pad "" smd rect (at {pt((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)}) '
+                            f'(size {m(max(xs) - min(xs))} {m(max(ys) - min(ys))}) (layers "{layer}"))')
             else:
                 xy = " ".join(f"(xy {pt(x, y)})" for x, y in pts)
                 out.append(f'\t(fp_poly (pts {xy}) (stroke (width 0) (type solid)) (fill solid) (layer "{layer}"))')

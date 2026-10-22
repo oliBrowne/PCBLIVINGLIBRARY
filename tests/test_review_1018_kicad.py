@@ -114,9 +114,9 @@ def test_altium_bottom_paste_and_mask_are_kept():
                        regions=[([(-5, -1), (-3, -1), (-3, 1), (-5, 1)], AL.BOTTOM_SOLDER)]))
     notes = []
     t = sexpr.parse(X.footprint_from_pcblib(f, "PROBE", notes))
-    layers = {sexpr.first(g, "layer")[1] for g in sexpr.find(t, "fp_poly")}
-    paste = [p for p in sexpr.find(t, "pad") if p[1] == ""]
-    assert "B.Mask" in layers and paste and sexpr.first(paste[0], "layers")[1:] == ["B.Paste"], (layers, paste, notes)
+    windows = {tuple(sexpr.first(p, "layers")[1:]) for p in sexpr.find(t, "pad") if p[1] == ""}
+    # a rectangular mask window comes back as a mask-only pad (#166: as KiCad draws a PowerPAD land's opening)
+    assert windows == {("B.Paste",), ("B.Mask",)}, (windows, notes)
     assert not [n for n in notes if "not converted" in n], notes
 
 

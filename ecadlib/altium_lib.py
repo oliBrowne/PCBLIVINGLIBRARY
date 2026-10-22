@@ -488,7 +488,7 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
         pad = {"designator": p[1], "x": x, "y": y, "w": w, "h": h, "rot": rot, "shape": p[3],
                "corner": float(rr[1]) * 200 if rr else 0,          # KiCad r/min(w,h) -> Altium r/(min(w,h)/2) %
                "paste": None if "F.Paste" in layers else "none"}
-        if "F.Mask" not in layers:                                 # tented: a mask-only pad opens it (PowerPAD land)
+        if not {"F.Mask", "*.Mask"} & set(layers):                # tented: a mask-only pad opens it (PowerPAD land)
             pad["mask"] = "none"
         elif sexpr.first(p, "solder_mask_margin"):                 # e.g. BGA NSMD: mask opening = land + margin
             pad["mask"] = float(sexpr.first(p, "solder_mask_margin")[1])

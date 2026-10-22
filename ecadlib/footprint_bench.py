@@ -100,7 +100,9 @@ def numbers(text):
     # a solder-mask-defined thermal land (TI PowerPAD) opens its mask with an unnumbered mask-only pad inside the copper
     opens = [r for _, r in rects if not r["num"] and set(r["layers"]) & {"F.Mask", "*.Mask"}
              and not set(r["layers"]) & {"F.Cu", "*.Cu", "F&B.Cu"}]
-    inside = lambda o, r: abs(o["x"] - r["x"]) + o["w"] / 2 <= r["w"] / 2 + 1e-6 and abs(o["y"] - r["y"]) + o["h"] / 2 <= r["h"] / 2 + 1e-6
+    # inside the pad and over its centre (a corner of a round pad's box is no copper): KiCad's PowerPAD lands centre it
+    inside = lambda o, r: abs(o["x"] - r["x"]) + o["w"] / 2 <= r["w"] / 2 + 1e-6 and abs(o["y"] - r["y"]) + o["h"] / 2 <= r["h"] / 2 + 1e-6 \
+        and abs(o["x"] - r["x"]) <= o["w"] / 2 + 1e-6 and abs(o["y"] - r["y"]) <= o["h"] / 2 + 1e-6
     for p, r in rects:
         if not any(l.startswith(("F.", "*.", "F&B.")) for l in r["layers"]):
             continue                                         # B.Cu-only copy of an exposed pad (heat spreader): not compared

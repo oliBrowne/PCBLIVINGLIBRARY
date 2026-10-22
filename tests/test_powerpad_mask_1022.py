@@ -106,6 +106,48 @@ def test_a_minimum_copper_area_that_reaches_the_leads_is_held_with_its_reason():
 
 
 def test_other_shorts_keep_their_hint():
-    rep = {"checks": [{"level": "error", "rule": "copper", "message": "pads 1 and 2 overlap by 0.100 mm"}],
-           "ep_land": "datasheet", "ep_num": "21", "EP": (7.59, 12.95, "")}
+    rep = {"checks": [{"level": "error", "rule": "copper", "message": "pads 1 and 21 overlap by 0.100 mm"}],
+           "ep_land": "datasheet", "ep_num": "2", "EP": (7.59, 12.95, "")}             # pad 21 is not the EP 2
     assert F.shorts(rep).endswith("(check pitch, pin_count and terminal_length against the drawing)")
+
+
+def test_a_land_read_the_other_way_round_is_called_a_misread():
+    # review of #166: TLC5951's 5.2 x 12.5 read 12.5 x 5.2 is no land to trim; the near miss form says the same
+    for across, along in ((12.5, 5.2), (5.83, 12.5)):
+        _, rep = F.build(dict(TLC, land=dict(LAND, ep_across=across, ep_along=along)))
+        why = F.shorts(rep)
+        assert why and why.startswith(f"the pads would short: the maker's thermal land ({across:g} x {along:g} mm)"), why
+    _, rep = F.build(dict(TLC, land=dict(LAND, ep_across=12.5, ep_along=5.2)))
+    assert "turned (5.2 across the rows, 12.5 along them) it would fit" in F.shorts(rep)
+
+
+def test_a_mask_read_the_other_way_round_is_turned_with_a_note():
+    text, rep = F.build(dict(TLC, land=dict(LAND, ep_mask_across=6.35, ep_mask_along=3.39)))
+    assert [p for p in _pads(text) if p[5] == ("F.Mask",)] == [("", 0.0, 0.0, 3.39, 6.35, ("F.Mask",))]
+    assert any(n.startswith("thermal land mask opening turned") for n in rep["notes"])
+    text, rep = F.build(dict(TLC, land=dict(LAND, ep_mask_across=6.0, ep_mask_along=6.35)))
+    assert any("does not fit inside" in n for n in rep["notes"]) and "ep_mask" not in rep
+
+
+def test_the_paste_check_measures_the_mask_opening():
+    from ecadlib import footprint_check as FC
+    text, _ = F.build(dict(TLC))
+    assert not [i for i in FC.check(text) if i[1] == "paste"]
+
+
+def test_altium_and_back_keeps_the_opening(tmp_path):
+    from ecadlib import kicad_export as KE
+    text, _ = F.build(dict(TLC))
+    AL.write_pcblib(tmp_path / "t.PcbLib", [AL.footprint_from_kicad(text)])
+    back = KE.footprint_from_pcblib(tmp_path / "t.PcbLib", None, [])
+    assert B.numbers(back)["layers"]["no_mask"] == []
+    assert not [i for i in R.check(back) if i[0] == "error" and i[1] == "layers"]
+    assert [p for p in _pads(back) if p[5] == ("F.Mask",)] == [("", 0.0, 0.0, 3.39, 6.35, ("F.Mask",))]
+
+
+def test_a_mask_opening_off_the_pads_centre_does_not_count():
+    # Greptile on #166: a 2 mm round pad with a 0.1 mm opening at (0.9, 0.9) is inside its box but off the copper
+    mod = lambda at: ('(footprint "t" (layer "F.Cu") (pad "1" smd circle (at 0 0) (size 2 2) (layers "F.Cu" "F.Paste"))'
+                      f' (pad "" smd rect (at {at}) (size 0.1 0.1) (layers "F.Mask")))')
+    assert B.numbers(mod("0.9 0.9"))["layers"]["no_mask"] == ["1"]
+    assert B.numbers(mod("0 0"))["layers"]["no_mask"] == []

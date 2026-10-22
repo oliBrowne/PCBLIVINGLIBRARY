@@ -447,12 +447,17 @@ def check(text, allow_duplicate_pads=None, same_net=None):
         if not any(abs(q["x"]) < p["w"] / 2 and abs(q["y"]) < p["h"] / 2 for q in others) and p["x"] == 0 and p["y"] == 0:
             windows = [q for q in pads if q["paste"] and not q["copper"]
                        and abs(q["x"] - p["x"]) < p["w"] / 2 and abs(q["y"] - p["y"]) < p["h"] / 2]
+            # a solder-mask-defined land (TI PowerPAD) is pasted inside its mask-only opening: coverage of the opening
+            opening = [q for q in pads if not q["copper"] and not q["num"] and {"F.Mask", "*.Mask"} & set(q["layers"])
+                       and abs(q["x"] - p["x"]) + q["w"] / 2 <= p["w"] / 2 + EPS and abs(q["y"] - p["y"]) + q["h"] / 2 <= p["h"] / 2 + EPS]
+            area = opening[0]["w"] * opening[0]["h"] if len(opening) == 1 and not any("Mask" in l for l in p["layers"]) else p["w"] * p["h"]
             if p["paste"] and not windows:
                 cov = 1.0
             else:
-                cov = sum(q["w"] * q["h"] for q in windows) / (p["w"] * p["h"])
+                cov = sum(q["w"] * q["h"] for q in windows) / area
             if not 0.5 - EPS <= cov <= 0.9 + EPS:
-                add("warning", "paste", f"exposed pad {p['num']} paste covers {cov:.0%} of its copper (typical 50-80%)")
+                add("warning", "paste", f"exposed pad {p['num']} paste covers {cov:.0%} of its "
+                    f"{'mask opening' if area != p['w'] * p['h'] else 'copper'} (typical 50-80%)")
     return issues
 
 

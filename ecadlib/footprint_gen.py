@@ -456,13 +456,23 @@ ADVANCED = ("bga", "pin_header", "connector", "custom")
 
 
 def ep_mask(land, ew, eh):
-    """The solder mask opening on a thermal land of ew x eh copper: the land's ep_mask_across x ep_mask_along when the
-    datasheet draws the land solder-mask-defined (TI PowerPAD: TLC5951DAP 3.39 x 6.35 open on 5.2 x 12.5 copper), else
-    the copper itself. A mask read larger than the copper, or one size only, is not a mask-defined land: the copper."""
+    """(width, height, note) of the solder mask opening on a thermal land of ew x eh copper: the land's ep_mask_across x
+    ep_mask_along when the datasheet draws the land solder-mask-defined (TI PowerPAD: TLC5951DAP 3.39 x 6.35 open on
+    5.2 x 12.5 copper), turned when it only fits inside the copper the other way round (with a note), else the copper
+    itself (with a note when a mask was read but cannot be the opening: larger than the copper, or one size only)."""
     ma, mb = (land or {}).get("ep_mask_across"), (land or {}).get("ep_mask_along")
-    if not (isinstance(ma, (int, float)) and isinstance(mb, (int, float)) and 0 < ma <= ew + 1e-9 and 0 < mb <= eh + 1e-9):
-        return ew, eh
-    return (ew, eh) if (ma, mb) == (ew, eh) else (ma, mb)
+    num = lambda v: isinstance(v, (int, float)) and v > 0
+    if not (num(ma) or num(mb)):
+        return ew, eh, None
+    fits = lambda a, b: num(a) and num(b) and a <= ew + 1e-9 and b <= eh + 1e-9
+    if fits(ma, mb):
+        return (ew, eh, None) if (ma, mb) == (ew, eh) else (ma, mb, None)
+    if fits(mb, ma):
+        return mb, ma, (f"thermal land mask opening turned to fit its copper: {mb:g} across the rows, {ma:g} along "
+                        f"them (read {ma:g} x {mb:g} on {ew:g} x {eh:g} copper)")
+    return ew, eh, (f"thermal land mask opening {ma} x {mb} does not fit inside the {ew:g} x {eh:g} copper either way: "
+                    "the whole land is open (check the land page)")
+
 
 def build(spec, density=None):
     """Return (kicad_mod_text, report_dict)."""
@@ -521,9 +531,14 @@ def build(spec, density=None):
         lr = _left_right(spec, pads)                                                  # gullwing: all pads are L/R
         gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p, s in zip(pads, lr) if s]         # left/right rows vs EP
         gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]    # qfn top/bottom rows vs EP
+        rx = [abs(p[1]) - p[3] / 2 for p, s in zip(pads, lr) if s]                    # the room between the rows, less
+        ry = [abs(p[2]) - p[4] / 2 for p, s in zip(pads, lr) if not s]                # the mask web: shorts() asks
+        rep["ep_room"] = (2 * (min(rx) - MIN_PAD_GAP) if rx else None, 2 * (min(ry) - MIN_PAD_GAP) if ry else None)
         if gaps and min(gaps) < MIN_PAD_GAP - 1e-6:
             rep["warning"] = f"EP to pad gap {min(gaps):.3f} < {MIN_PAD_GAP}"
-        mw, mh = ep_mask(land, ew, eh)
+        mw, mh, why = ep_mask(land, ew, eh)
+        if why:
+            rep.setdefault("notes", []).append(why)
         if (mw, mh) == (ew, eh):
             ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
         else:                                       # solder-mask-defined (TI PowerPAD land): the copper spreads heat
@@ -628,11 +643,18 @@ def shorts(rep):
     if not short:
         return None
     n = rep.get("ep_num")
-    if rep.get("ep_land") == "datasheet" and n and all(f" and {n} " in m or f"pads {n} and" in m for m in short):
-        w, h = rep["EP"][:2]                    # OPA569DWP: TI's "Thermal Land, Minimum Area (7.59mm x 12.95mm)"
-        return (f"the pads would short: the maker's thermal land ({w:g} x {h:g} mm) reaches the lead pads ("  # reaches
-                + "; ".join(short[:3]) + (" ..." if len(short) > 3 else "") + "); a land given as a minimum copper "
-                "area must be trimmed clear of the leads by hand")
+    ep = n and re.compile(rf"(?:\bpads {re.escape(n)} and |\band {re.escape(n)} |\bfrom pad {re.escape(n)}\b)")
+    if rep.get("ep_land") == "datasheet" and ep and all(ep.search(m) for m in short):
+        w, h = rep["EP"][:2]
+        rx, ry = rep.get("ep_room") or (None, None)
+        fits = lambda a, b: (rx is None or a <= rx + 1e-9) and (ry is None or b <= ry + 1e-9)
+        clash = "; ".join(short[:3]) + (" ..." if len(short) > 3 else "")
+        if fits(h, w):                          # TLC5951DAP's 5.2 x 12.5 read 12.5 x 5.2: a misread, not a land to trim
+            return (f"the pads would short: the maker's thermal land ({w:g} x {h:g} mm) reaches the lead pads ({clash}); "
+                    f"turned ({h:g} across the rows, {w:g} along them) it would fit: check land.ep_across / ep_along "
+                    "against the land page")
+        return (f"the pads would short: the maker's thermal land ({w:g} x {h:g} mm) reaches the lead pads ({clash}); "
+                "a land given as a minimum copper area must be trimmed clear of the leads by hand")  # OPA569DWP p19
     return ("the pads would short: " + "; ".join(short) + " (check pitch, pin_count and terminal_length against the "
             "drawing)")
 
