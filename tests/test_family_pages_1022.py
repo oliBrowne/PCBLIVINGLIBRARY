@@ -313,3 +313,8 @@ def test_a_powerpad_land_given_in_prose_counts_as_land():
     texts = [texts[0], texts[1], texts[2], texts[3], " \n".join(texts[4:])] + ["Electrical characteristics"] * 20
     rows = R.page_scores(texts, "OPA569DWP", "SOIC-20")[0]
     assert rows[4]["land"] > 0 and rows[3]["land"] == 0, (rows[3], rows[4])
+    # the prose alone, without the "Etch and Via Pattern" caption, still counts
+    for prose in ("Thermal pad area: 140 mils x 176 mils (3.56mm x 4.47mm) with 24 vias.",
+                  "Thermal Land 299 mils x 510 mils Minimum Area (7.59mm x 12.95mm) (Copper)"):
+        rows = R.page_scores(texts[:4] + [prose] + texts[5:], "OPA569DWP", "SOIC-20")[0]
+        assert rows[4]["land"] > 0, (prose, rows[4])
