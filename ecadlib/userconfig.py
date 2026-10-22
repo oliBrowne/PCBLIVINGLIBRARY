@@ -208,10 +208,10 @@ def get_key(name, environ=None):
         stamp = (str(f), st.st_mtime_ns, st.st_size)
     except OSError:
         return None
-    if _CACHE.get("stamp") != stamp:                  # decrypt once per change of keys.json, not on every request
-        _CACHE.clear()
-        _CACHE.update(stamp=stamp, values={})
-    vals = _CACHE["values"]
+    vals = _CACHE.get("values") if _CACHE.get("stamp") == stamp else None
+    if vals is None:                                  # decrypt once per change of keys.json, not on every request
+        vals = {}                                     # (a local: a set_key clearing _CACHE meanwhile can't break it)
+        _CACHE.update(stamp=stamp, values=vals)
     if name not in vals:
         stored = _read_json(f).get(name)
         try:

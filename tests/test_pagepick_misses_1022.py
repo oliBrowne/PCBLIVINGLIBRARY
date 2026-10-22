@@ -100,6 +100,36 @@ def test_altera_ordering_code_names_the_bga_and_its_pin_count():
     assert 117 in pages and "drawing" in why[117] and 112 not in pages, (pages, why)
 
 
+def test_an_adi_drawing_sharing_its_page_with_the_ordering_guide_is_a_drawing():
+    # ADAU1702 p52: "OUTLINE DIMENSIONS" over the LQFP drawing, then the ORDERING GUIDE with a "13" Tape and Reel" row;
+    # that row made the whole page a tape-and-reel page, so the drawing scored 0
+    p52 = ("ADAU1702 Data Sheet Page 52 of 52\nOUTLINE DIMENSIONS\nCOMPLIANT TO JEDEC STANDARDS MS-026-BBC\nTOP VIEW "
+           "(PINS DOWN)\n0.27 0.22 0.17 0.50 BSC LEAD PITCH 1.60 MAX 9.20 9.00 SQ 8.80 7.20 7.00 SQ 6.80\n" + FILL * 3 +
+           "\nFigure 40. 48-Lead Low-Profile Quad Flat Package [LQFP] (ST-48) Dimensions shown in millimeters\n"
+           "ORDERING GUIDE\nModel Temperature Range Package Description Package Option\nADAU1702JSTZ 0C to +70C "
+           "48-Lead LQFP ST-48\nADAU1702JSTZ-RL 0C to +70C 48-Lead LQFP in 13\" Tape and Reel ST-48")
+    texts = _pages(52, p51=p52, p41="Register map pin control bits pin configuration", p1="Pin configuration LQFP-48 top view")
+    assert R.page_scores(texts, "ADAU1702JSTZ", "LQFP-48")[0][51]["drawing"] > 0
+    pages, why = R.pick_pages(texts, 6, "ADAU1702JSTZ", "LQFP-48")
+    assert 52 in pages and "drawing" in why[52], (pages, why)
+    # a page that is about tape and reel still counts as one
+    reel = "TAPE AND REEL INFORMATION\nReel diameter A0 B0 K0 package outline drawing min max A1 D1 E1 mm"
+    assert R.page_scores(_pages(5, p2=reel), "X", "LQFP-48")[0][2]["drawing"] < 3
+
+
+def test_powerpad_land_prose_needs_a_size_and_wins_at_a_small_budget():
+    # #164 review: layout advice ("connect the thermal land ... 0.3 mm vias") is not a land page; a label and its
+    # size on separate lines (pdfplumber figure callouts) still are
+    advice = "Layout guidelines: connect the thermal land to the ground plane with 0.3 mm vias, 1.2 mm pitch."
+    land = "FIGURE 16. 20-Pin DWP PowerPAD PCB\nThermal Land\n299 mils x 510 mils Minimum Area"
+    texts = _pages(21, p12=advice, p19=land, p6="Pin configuration SOIC-20 top view")
+    rows = R.page_scores(texts, "OPA569DWP", "SOIC-20")[0]
+    assert rows[12]["land"] == 0 and rows[19]["land"] > 0, (rows[12], rows[19])
+    for b in (3, 4, 5):
+        pages, why = R.pick_pages(texts, b, "OPA569DWP", "SOIC-20")
+        assert 20 in pages and 13 not in pages, (b, pages, why)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -232,12 +232,6 @@ def test_cli_signin_asks_for_the_app_once(tmp_path, monkeypatch):
                    out=out.append) == 0
 
 
-if __name__ == "__main__":
-    import sys
-    from tests.run_all import main
-    sys.exit(main(["test_nexar_signin"]))
-
-
 @lite
 def test_a_same_size_rewrite_in_one_clock_tick_is_read_back(tmp_path, monkeypatch):
     # Windows: keys.json rewritten within one mtime tick at the same size kept the old stamp, so the old value came back
@@ -252,3 +246,9 @@ def test_a_same_size_rewrite_in_one_clock_tick_is_read_back(tmp_path, monkeypatc
     assert UC.get_key("NEXAR_CLIENT_ID") == "bbbb"
     UC.remove_key("NEXAR_CLIENT_ID")
     assert UC.get_key("NEXAR_CLIENT_ID") is None
+
+
+if __name__ == "__main__":
+    import sys
+    from tests.run_all import main
+    sys.exit(main(["test_nexar_signin"]))

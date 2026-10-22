@@ -50,11 +50,12 @@ CONTINUED = re.compile(r"\bcontinued\b|\(cont(?:\.|inued)?\)", re.I)
 THREE_PIN = {"SOT23", "SOT323", "SOT523", "SOT416", "SOT346", "SC59", "SC70", "SC75", "SC89", "TO92", "SOT89"}
 OUTLINE_FAMS = {"SOT", "SOD", "SC", "TO", "DO", "TO252", "TO263"}             # first number names the outline, not pins
 CATS = {
-    "drawing": re.compile(r"package (outline|drawing|dimensions?|information)|outline dimensions?|mechanical (data|drawing|"
+    "drawing": re.compile(r"package (outline|drawing|dimensions?|information)|outline dimensions?|dimensions shown in|mechanical (data|drawing|"
                           r"dimensions?)|physical dimensions?|shape (&|and) dimensions|case outline|packaging information|"
                           r"dimensions\s*(-|in)\s*(mm|millimet)|chip resistor outlines|package profile|外形尺寸|封装尺寸", re.I),
     "land": re.compile(r"land pattern|board layout|etch and via pattern|"
-                       r"thermal (?:pad area|land)\b(?=[^\n]{0,80}\d\s*(?:mm|mils?)\b)|"   # PowerPAD lands in prose (OPA569DWP p19)
+                       r"thermal (?:pad areas?|lands?)\b(?=[\s\S]{0,80}?\d\s*(?:mm|mils?)?\s*[x×]\s*\d)|"   # PowerPAD lands in
+                       # prose, with a size ("Thermal Land 299 mils x 510 mils", OPA569DWP p19), not layout advice
                        r"recommended (footprint|land|pcb|solder|pad)|(suggested|recommended) pad layout|"
                        r"soldering footprint|solder lands|\bfootprint\b|pad layout|soldering pad|焊盘", re.I),
     "pinout": re.compile(r"pin (configurations?|functions?|descriptions?|assignments?|definitions?)|pinning information|"
@@ -70,6 +71,13 @@ NOISE = re.compile(r"tape and reel|reel dimensions|carrier tape|package material
 STOP = {"ACTIVE", "NRND", "OBSOLETE", "ROHS", "GREEN", "LEVEL", "TAPE", "REEL", "TUBE", "TRAY", "TBD", "YES", "NO",
         "PB", "FREE", "MSL", "LIFEBUY", "PREVIEW", "NIPDAU", "SNAGCU", "SN", "CU", "AU", "MM", "MAX", "MIN", "TYP", "UNIT",
         "PCS", "QTY", "PART", "NUMBER", "DEVICE", "PACKAGE", "PINS", "PIN", "TYPE", "TEMP", "RANGE"}
+
+
+def _noise(t):
+    """A tape-and-reel / revision / notice page. "Tape and Reel" alone is one when it heads the page: an ordering guide
+    lists "48-Lead LQFP in 13" Tape and Reel" under the drawing it shares a page with (ADAU1702 p52)."""
+    hits = [m_ for m_ in NOISE.finditer(t)]
+    return any(m_.group(0).lower() != "tape and reel" or m_.start() < 300 for m_ in hits)
 
 
 def norm_text(t):
@@ -614,7 +622,7 @@ def page_scores(texts, part=None, package=None, marks=None):
         if re.search(r"orderable|package option addendum|ordering information", t, re.I):
             s["drawing"] //= 3                        # "Package Drawing" is a column of the ordering table there
         toc = len(re.findall(r"\.{5,}|(?:\. ){5,}", t)) >= 6
-        if toc or NOISE.search(t):
+        if toc or _noise(t):
             for c in CATS:
                 s[c] = s[c] // 4
         s["toc"] = toc
@@ -626,7 +634,7 @@ def page_scores(texts, part=None, package=None, marks=None):
             s["drawing"] = max(s["drawing"], 5)       # an image drawing captioned only "Package Name TO252-3" (ROHM)
         s["mark"] = ""
         m = (marks[i] if marks and i < len(marks) else "") or ""
-        if m and not toc and not NOISE.search(t):
+        if m and not toc and not _noise(t):
             secs, hits, leaves = m.split(" | "), set(), []
             mine = theirs = 0                         # sections on the page about this package / only another one
             sure = False                              # one of them names this package (family and count) alone
