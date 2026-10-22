@@ -236,3 +236,19 @@ if __name__ == "__main__":
     import sys
     from tests.run_all import main
     sys.exit(main(["test_nexar_signin"]))
+
+
+@lite
+def test_a_same_size_rewrite_in_one_clock_tick_is_read_back(tmp_path, monkeypatch):
+    # Windows: keys.json rewritten within one mtime tick at the same size kept the old stamp, so the old value came back
+    _home(tmp_path, monkeypatch)
+    UC.set_key("NEXAR_CLIENT_ID", "aaaa")
+    f = UC.config_dir() / UC.KEYS
+    st = f.stat()
+    assert UC.get_key("NEXAR_CLIENT_ID") == "aaaa"
+    UC.set_key("NEXAR_CLIENT_ID", "bbbb")
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert f.stat().st_size == st.st_size
+    assert UC.get_key("NEXAR_CLIENT_ID") == "bbbb"
+    UC.remove_key("NEXAR_CLIENT_ID")
+    assert UC.get_key("NEXAR_CLIENT_ID") is None
