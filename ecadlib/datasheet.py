@@ -1381,6 +1381,17 @@ def sanity(spec, review):
         review.append(f"land.pad_center {lc:g} mm puts the pads past the leads ({'lead_span' if g('lead_span') else 'body_width'} "
                       f"max {outer[2]:g} mm): pad_center is from the part centre to each pad centre, half the "
                       f"centre-to-centre distance across the rows (C/2 = {lc / 2:g} if {lc:g} is C)")
+    given = [k for k in ("pad_length", "pad_width", "pad_center") if isinstance(land.get(k), (int, float))]
+    given_land = isinstance(spec.get("land"), dict)   # an empty land ({}, every field null) is an answer too
+    if given_land and 0 < len(given) < 3:             # signal pads: all three or none (IPC-7351B then)
+        review.append(f"land pattern: land gives {', '.join(given)} but not {', '.join(k for k in ('pad_length', 'pad_width', 'pad_center') if k not in given)}: "
+                      "the signal pads need all three, or none for IPC-7351B pads")
+    elif given_land and not given and not (land.get("ep_across") and land.get("ep_along")):
+        review.append("land pattern: land gives neither the signal pads (pad_length, pad_width, pad_center) nor the "
+                      "thermal land (ep_across, ep_along)")
+    small = F.thermal_land_small(spec)
+    if small:
+        review.append(f"land pattern: {small}")
     review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
 
 
@@ -1476,6 +1487,25 @@ def _pair_close(a, b):
     return all(abs(x - y) <= tol(max(x, y)) for x, y in zip(sorted(a), sorted(b)))
 
 
+def _ep_name_fits(size, spec):
+    """A name's EP size that is not the drawing's nominal pad can still be the maker's: the land page's copper or
+    mask opening (TI names a PowerPAD by its mask-defined land, EP3.39x6.35 for a 2.69-3.39 x 5.05-6.35 pad) when
+    that land's copper is what gets built, or a size inside the drawing's min-max in either orientation."""
+    land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0
+    ea, eb = land.get("ep_across"), land.get("ep_along")
+    if num(ea) and num(eb):                           # only when the land's copper is what is built (not the drawing's
+        mask = F.ep_mask(land, ea, eb)[:2]            # pad), and its mask only as the builder opens it: one that
+        if _pair_close(size, (ea, eb)) or _pair_close(size, mask):   # cannot fit the copper is not drawn
+            return True
+    ep = spec.get("exposed_pad") or {}
+    rng = [_dim(ep.get(k)) for k in ("length", "width")]
+    if not all(rng):
+        return False
+    inside = lambda x, r: r[0] - 0.005 <= x <= r[2] + 0.005
+    return any(inside(a, r1) and inside(b, r2) for (a, b) in (size, size[::-1]) for r1, r2 in [rng])
+
+
 def self_check(spec, ext, review):
     """Compare what the model read with what its own package name says and with the family's usual range.
     Disagreements go to review (prefixed 'self-check:'); returns info lines (what was and was not checked)."""
@@ -1508,7 +1538,7 @@ def self_check(spec, ext, review):
         add(f"name says body {f['body'][0]:g}x{f['body'][1]:g} mm, the drawing gives {body[0]:g}x{body[1]:g} mm")
     ep = spec.get("exposed_pad") or {}
     eps = tuple(x for x in (_nom(ep.get("length")), _nom(ep.get("width"))) if x)
-    if f["ep_size"] and len(eps) == 2 and not _pair_close(f["ep_size"], eps):
+    if f["ep_size"] and len(eps) == 2 and not _pair_close(f["ep_size"], eps) and not _ep_name_fits(f["ep_size"], spec):
         add(f"name says EP {f['ep_size'][0]:g}x{f['ep_size'][1]:g} mm, the drawing gives {eps[0]:g}x{eps[1]:g} mm")
     if e is not None and not any(abs(e - s) < 0.006 for s in STD_PITCH):
         add(f"pitch {e} mm is not a standard pitch ({', '.join(map(str, STD_PITCH[:12]))} ...): unit or reading error?")
@@ -1826,7 +1856,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             sexpr.parse(txt)
             if rep.get("warning"):
                 review.append(f"footprint_gen: {rep['warning']}")
-            if spec.get("land"):                      # the maker's land pattern becomes copper as given: check it now,
+            if F.lead_land(spec):                     # the maker's land pattern becomes copper as given: check it now,
                 from . import footprint_check as FC   # as the release check will (ds_route.FAILED: "land pattern:")
                 for lvl, rule, m in FC.check(txt, same_net=spec.get("same_net")):
                     if lvl == "error" and rule == "copper":
@@ -2859,10 +2889,11 @@ def select_pages(data, budget):
     return sorted(best)
 
 
-def prepare(data, pages=None, auto_pages=40, max_pages=MAX_PAGES):
+def prepare(data, pages=None, auto_pages=40, max_pages=MAX_PAGES, first=None):
     """PDF bytes -> (bytes to send, page map or offset, pages hint for the prompt, note).
     pages: (a, b) chosen by a person. Otherwise a PDF over auto_pages pages (or over the size/page limits) is cut
-    to the pages select_pages finds; the page map turns page numbers back into the original file's."""
+    to the pages select_pages finds; the page map turns page numbers back into the original file's.
+    first: pages a cut must keep (the pages an earlier, narrower try sent), ahead of select_pages' own."""
     if pages:
         cut = trim(data, pages)
         if cut is None:
@@ -2873,7 +2904,13 @@ def prepare(data, pages=None, auto_pages=40, max_pages=MAX_PAGES):
     n = pdf_pages(data) or 0
     over = len(data) > MAX_PDF or n > max_pages
     if over or (auto_pages and n > auto_pages):
-        keep = select_pages(data, min(auto_pages or max_pages, max_pages))
+        cap = min(auto_pages or max_pages, max_pages)
+        keep = select_pages(data, cap)
+        must = list(dict.fromkeys(p for p in first or [] if isinstance(p, int) and 1 <= p <= n))[:cap]   # in the
+        if must:                                      # order given (the first try's pages first). The text picker
+            extra = [p for p in keep or [] if p not in must]   # misses image-only pages (TLC5951DAP p51, the land
+            keep = sorted(must + extra[:cap - len(must)])      # pattern: 10-22, the whole-PDF retry cut to 22 pages
+                                                               # without the 49-52 the first try had sent)
         if keep:
             try:
                 cut = trim(data, keep)
@@ -3387,7 +3424,8 @@ class Reader:
             prov.update(note=f"{len(lv)} of {base['n_pages']} pages sent (picked for this part: {_ranges(lv)}; "
                              f"{'first try' if level == 0 else 'widened'})", picked_why=why)
         else:
-            sent, offset, hint, note = prepare(base["data"], base["pages"], self.auto_pages, page_limit(model))
+            earlier = [p for L in base["levels"][:level] if isinstance(L, list) for p in L]
+            sent, offset, hint, note = prepare(base["data"], base["pages"], self.auto_pages, page_limit(model), earlier)
             src = ("base64", sent)
             prov["note"] = note + (" (the picked pages could not be cut from this PDF)" if isinstance(lv, list) else "")
         if src[0] == "base64":

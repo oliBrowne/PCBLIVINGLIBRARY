@@ -325,6 +325,32 @@ def land_short(spec):
     return out
 
 
+def lead_land(spec):
+    """The maker's land sizes the signal pads (pad_length, pad_width and pad_center all given), not only the thermal
+    land: a land page that dimensions just the thermal pad leaves the signal pads to IPC-7351B."""
+    land = spec.get("land") or {}
+    return isinstance(land, dict) and all(isinstance(land.get(k), (int, float)) and not isinstance(land.get(k), bool)
+                                          for k in ("pad_length", "pad_width", "pad_center"))
+
+
+def thermal_land_small(spec):
+    """The land's thermal copper (ep_across x ep_along) smaller than the package's exposed pad at its minimum, either
+    way round: the copper would not cover the pad it solders, so the land was misread (a land is never smaller than
+    the pad it is for). -> the reason, or None."""
+    land, ep = spec.get("land") or {}, spec.get("exposed_pad") or {}
+    a, b = land.get("ep_across"), land.get("ep_along")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (a, b)):
+        return None
+    try:
+        mins = sorted(dim(ep[k])[0] for k in ("length", "width"))
+    except (KeyError, TypeError):
+        return None
+    if all(x >= m - 0.05 for x, m in zip(sorted((a, b)), mins)):
+        return None
+    return (f"the thermal land {a:g} x {b:g} mm is smaller than the exposed pad's minimum {mins[0]:g} x {mins[1]:g} mm "
+            "(check land.ep_across / ep_along against the land page)")
+
+
 def _apply_land(spec, pads):
     """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab keeps its IPC size). A pin 1
     the land draws another size (pin1_length / pin1_width) keeps the row's outer end and its lead's centre line."""
@@ -512,7 +538,7 @@ def build(spec, density=None):
     if short:
         why = "the exposed pad leaves no room for the pads" if spec.get("exposed_pad") else "the lead dimensions leave no room"
         raise ValueError(f"{why}: pad {short[0][0]} would be {min(short[0][3], short[0][4]):.2f} mm (check the drawing)")
-    if spec.get("land"):                                      # the datasheet's recommended land pattern wins over IPC
+    if lead_land(spec):                                       # the datasheet's recommended land pattern wins over IPC
         pads = _apply_land(spec, pads)
         lw, ll, lc = spec["land"]["pad_width"], spec["land"]["pad_length"], spec["land"]["pad_center"]
         rep.update({"Z": round(2 * lc + ll, 4), "G": round(2 * lc - ll, 4), "X": lw, "land_source": "datasheet"})
