@@ -96,7 +96,14 @@ def numbers(text):
     (a stray copper area shorts every pad it touches). Older numbers() dicts (an eval set's references) have no "layers"."""
     t = sexpr.parse(text)
     pads, lay = [], {"no_copper": [], "no_mask": [], "stray_copper": 0}
-    for p, r in zip(sexpr.find(t, "pad"), C._pad_rects(t)):
+    rects = list(zip(sexpr.find(t, "pad"), C._pad_rects(t)))
+    # a solder-mask-defined thermal land (TI PowerPAD) opens its mask with an unnumbered mask-only pad inside the copper
+    opens = [r for _, r in rects if not r["num"] and set(r["layers"]) & {"F.Mask", "*.Mask"}
+             and not set(r["layers"]) & {"F.Cu", "*.Cu", "F&B.Cu"}]
+    # inside the pad and over its centre (a corner of a round pad's box is no copper): KiCad's PowerPAD lands centre it
+    inside = lambda o, r: abs(o["x"] - r["x"]) + o["w"] / 2 <= r["w"] / 2 + 1e-6 and abs(o["y"] - r["y"]) + o["h"] / 2 <= r["h"] / 2 + 1e-6 \
+        and abs(o["x"] - r["x"]) <= o["w"] / 2 + 1e-6 and abs(o["y"] - r["y"]) <= o["h"] / 2 + 1e-6
+    for p, r in rects:
         if not any(l.startswith(("F.", "*.", "F&B.")) for l in r["layers"]):
             continue                                         # B.Cu-only copy of an exposed pad (heat spreader): not compared
         ls = set(r["layers"])
@@ -104,7 +111,7 @@ def numbers(text):
         smd = len(p) > 2 and str(p[2]) in ("smd", "connect")
         if r["num"] and str(p[2]) == "smd" and not cu:
             lay["no_copper"].append(r["num"])
-        elif r["num"] and str(p[2]) == "smd" and not ls & {"F.Mask", "*.Mask"}:
+        elif r["num"] and str(p[2]) == "smd" and not ls & {"F.Mask", "*.Mask"} and not any(inside(o, r) for o in opens):
             lay["no_mask"].append(r["num"])
         elif not r["num"] and smd and cu:
             lay["stray_copper"] += 1

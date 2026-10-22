@@ -1056,6 +1056,16 @@
           "exclusiveMinimum": 0,
           "description": "The same thermal land measured along the pad rows (top to bottom), e.g. TI's (5) or (6.5)."
         },
+        "ep_mask_across": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Only for a solder-mask-defined thermal land: the solder mask opening on the thermal land, across the pad rows, when the land page draws it smaller than the copper (TI: SOLDER MASK DEFINED PAD, the thermal pad area or exposed metal inside a larger copper area; TLC5951DAP 3.39 inside 5.2). Leave out when the mask opening matches the copper or is not given."
+        },
+        "ep_mask_along": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "The same solder mask opening along the pad rows (TLC5951DAP 6.35 inside 12.5)."
+        },
         "pin1_length": {
           "type": "number",
           "exclusiveMinimum": 0,

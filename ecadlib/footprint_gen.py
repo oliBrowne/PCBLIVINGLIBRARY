@@ -454,6 +454,26 @@ def orient_ep(spec):
 ADVANCED = ("bga", "pin_header", "connector", "custom")
 
 
+
+def ep_mask(land, ew, eh):
+    """(width, height, note) of the solder mask opening on a thermal land of ew x eh copper: the land's ep_mask_across x
+    ep_mask_along when the datasheet draws the land solder-mask-defined (TI PowerPAD: TLC5951DAP 3.39 x 6.35 open on
+    5.2 x 12.5 copper), turned when it only fits inside the copper the other way round (with a note), else the copper
+    itself (with a note when a mask was read but cannot be the opening: larger than the copper, or one size only)."""
+    ma, mb = (land or {}).get("ep_mask_across"), (land or {}).get("ep_mask_along")
+    num = lambda v: isinstance(v, (int, float)) and v > 0
+    if not (num(ma) or num(mb)):
+        return ew, eh, None
+    fits = lambda a, b: num(a) and num(b) and a <= ew + 1e-9 and b <= eh + 1e-9
+    if fits(ma, mb):
+        return (ew, eh, None) if (ma, mb) == (ew, eh) else (ma, mb, None)
+    if fits(mb, ma):
+        return mb, ma, (f"thermal land mask opening turned to fit its copper: {mb:g} across the rows, {ma:g} along "
+                        f"them (read {ma:g} x {mb:g} on {ew:g} x {eh:g} copper)")
+    return ew, eh, (f"thermal land mask opening {ma} x {mb} does not fit inside the {ew:g} x {eh:g} copper either way: "
+                    "the whole land is open (check the land page)")
+
+
 def build(spec, density=None):
     """Return (kicad_mod_text, report_dict)."""
     if spec["package_type"] in ADVANCED:
@@ -511,25 +531,37 @@ def build(spec, density=None):
         lr = _left_right(spec, pads)                                                  # gullwing: all pads are L/R
         gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p, s in zip(pads, lr) if s]         # left/right rows vs EP
         gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]    # qfn top/bottom rows vs EP
+        rx = [abs(p[1]) - p[3] / 2 for p, s in zip(pads, lr) if s]                    # the room between the rows, less
+        ry = [abs(p[2]) - p[4] / 2 for p, s in zip(pads, lr) if not s]                # the mask web: shorts() asks
+        rep["ep_room"] = (2 * (min(rx) - MIN_PAD_GAP) if rx else None, 2 * (min(ry) - MIN_PAD_GAP) if ry else None)
         if gaps and min(gaps) < MIN_PAD_GAP - 1e-6:
             rep["warning"] = f"EP to pad gap {min(gaps):.3f} < {MIN_PAD_GAP}"
-        ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
+        mw, mh, why = ep_mask(land, ew, eh)
+        if why:
+            rep.setdefault("notes", []).append(why)
+        if (mw, mh) == (ew, eh):
+            ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
+        else:                                       # solder-mask-defined (TI PowerPAD land): the copper spreads heat
+            ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu",)))  # under the mask, the opening
+            ep_lines.append(pad("", 0, 0, mw, mh, shape="rect", layers=("F.Mask",)))  # is a pad of its own, as KiCad
+            rep["ep_mask"] = (mw, mh)                                                    # draws it
         cov = ep.get("paste_coverage", 0.65)                          # KLC F6.3: 50-80 %, 65 % recommended
         grid = ep.get("paste_grid")                                   # split into windows of about 1.2 mm or less
-        gx = grid or max(1, min(5, math.ceil(ew / 1.2 - 1e-9)))
-        gy = grid or max(1, min(5, math.ceil(eh / 1.2 - 1e-9)))
-        sw, sh = ew * math.sqrt(cov) / gx, eh * math.sqrt(cov) / gy
+        gx = grid or max(1, min(5, math.ceil(mw / 1.2 - 1e-9)))       # paste only where the mask is open
+        gy = grid or max(1, min(5, math.ceil(mh / 1.2 - 1e-9)))
+        sw, sh = mw * math.sqrt(cov) / gx, mh * math.sqrt(cov) / gy
         for i in range(gx):
             for j in range(gy):
-                cx, cy = (i - (gx - 1) / 2) * ew / gx, (j - (gy - 1) / 2) * eh / gy
+                cx, cy = (i - (gx - 1) / 2) * mw / gx, (j - (gy - 1) / 2) * mh / gy
                 ep_lines.append(pad("", round(cx, 4), round(cy, 4), round(sw, 3), round(sh, 3), layers=("F.Paste",)))
         rep["EP"] = (ew, eh, f"paste {gx}x{gy} @ {cov:.0%}")
-    copper = pads + ([(None, 0, 0, dim(ep["length"])[1], dim(ep["width"])[1])] if ep else [])
+        rep["ep_num"] = epnum
+    copper = pads + ([(None, 0, 0, ew, eh)] if ep else [])        # the copper drawn: a thermal land, not the package's pad
 
     # ---- courtyard: union(pads, body) + excess, rounded up to the 0.01 mm grid (KLC F5.3)
     exc = fil[3]
-    px = max([abs(p[1]) + p[3] / 2 for p in pads] + [bx])
-    py = max([abs(p[2]) + p[4] / 2 for p in pads] + [by])
+    px = max([abs(p[1]) + p[3] / 2 for p in copper] + [bx])
+    py = max([abs(p[2]) + p[4] / 2 for p in copper] + [by])
     cx, cy = rup(px + exc), rup(py + exc)
     rep["courtyard"] = (round(2 * cx, 2), round(2 * cy, 2))
 
@@ -608,8 +640,23 @@ def shorts(rep):
     """build()'s copper errors (overlapping or touching pads: a short on the board) as one sentence, or None.
     `footprint gen` refuses to write such a footprint; the librarian's release check holds it."""
     short = [c["message"] for c in rep.get("checks") or [] if c["level"] == "error" and c["rule"] == "copper"]
+    if not short:
+        return None
+    n = rep.get("ep_num")
+    ep = n and re.compile(rf"(?:\bpads {re.escape(n)} and |\band {re.escape(n)} |\bfrom pad {re.escape(n)}\b)")
+    if rep.get("ep_land") == "datasheet" and ep and all(ep.search(m) for m in short):
+        w, h = rep["EP"][:2]
+        rx, ry = rep.get("ep_room") or (None, None)
+        fits = lambda a, b: (rx is None or a <= rx + 1e-9) and (ry is None or b <= ry + 1e-9)
+        clash = "; ".join(short[:3]) + (" ..." if len(short) > 3 else "")
+        if fits(h, w):                          # TLC5951DAP's 5.2 x 12.5 read 12.5 x 5.2: a misread, not a land to trim
+            return (f"the pads would short: the maker's thermal land ({w:g} x {h:g} mm) reaches the lead pads ({clash}); "
+                    f"turned ({h:g} across the rows, {w:g} along them) it would fit: check land.ep_across / ep_along "
+                    "against the land page")
+        return (f"the pads would short: the maker's thermal land ({w:g} x {h:g} mm) reaches the lead pads ({clash}); "
+                "a land given as a minimum copper area must be trimmed clear of the leads by hand")  # OPA569DWP p19
     return ("the pads would short: " + "; ".join(short) + " (check pitch, pin_count and terminal_length against the "
-            "drawing)") if short else None
+            "drawing)")
 
 
 def altium_footprint(spec, density=None):
