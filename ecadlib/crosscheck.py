@@ -132,6 +132,13 @@ def _names(s):
 
 
 GROUNDISH = re.compile(r"^(?:[PADS]?GND|VSS|[PA]?VSS|GROUND|0V|EP|EPAD|PAD|THERMAL)")
+# the exposed pad named in words: "exposed center pad" (PCA9557BS), "Exposed Pad (DO NOT CONNECT)", "thermal pad"
+EP_WORDS = re.compile(r"EXPOSED|THERMAL\s*PAD|POWER\s*PAD|\bE?PAD\b|\bDAP\b|\bSLUG\b|\bPADDLE\b", re.I)
+
+
+def ep_named(s):
+    """A pin name that says it is the exposed pad."""
+    return bool(_names(s) & EP_NAMES or EP_WORDS.search(str(s or "")))
 
 
 def names_agree(a, b):
@@ -296,23 +303,40 @@ def compare(first, second, kind="read"):
 NO_PIN = re.compile(r"^\s*(?:missing|removed|omitted|absent|not present|no pin|depopulated|cut)\b(?!.*\bconnect)", re.I)
 
 
-def compare_pins(a, b):
-    """a, b: [(num, name)] from two reads -> list of disagreements (pin numbers, names)."""
+def compare_pins(a, b, ep=()):
+    """a, b: [(num, name)] from two reads -> list of disagreements (pin numbers, names). ep: the pad numbers that can
+    only be the exposed pad (both reads have one, and the number is past the leads both count): one read may number
+    it while the other leaves it out (MAX22201: 13 is the TDFN-12's pad), and its name may be the pad's or its net's
+    (OPA569DWP: "V-" vs "PowerPAD", PCA9557BS: "VSS" vs "exposed center pad"). Its copper is compared as the exposed
+    pad's size; a number inside the leads (SOT-223's tab, pin 2 again) is never one."""
     out = []
     # a place one read lists only to say no pin is there (UCC256301's SOIC-14-16: 2 and 13 "Missing") is no pin
     a, b = [(n, s) for n, s in a if not NO_PIN.search(str(s or ""))], [(n, s) for n, s in b if not NO_PIN.search(str(s or ""))]
+    ep = {str(n) for n in ep}
     da, db = {str(n): norm_pin_name(s) for n, s in a}, {str(n): norm_pin_name(s) for n, s in b}
     key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)   # '①' is isdigit(), not int()
-    only_a, only_b = sorted(set(da) - set(db), key=key), sorted(set(db) - set(da), key=key)
+    only_a, only_b = sorted(set(da) - set(db) - ep, key=key), sorted(set(db) - set(da) - ep, key=key)
     if only_a or only_b:
         out.append({"field": "pins", "first": f"{len(da)} pins" + (f", only here: {', '.join(only_a[:12])}" if only_a else ""),
                     "second": f"{len(db)} pins" + (f", only here: {', '.join(only_b[:12])}" if only_b else "")})
     na, nb = {str(n): s for n, s in a}, {str(n): s for n, s in b}
-    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not names_agree(na[n], nb[n])]
+    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not names_agree(na[n], nb[n])
+            and not (n in ep and (ep_named(na[n]) or ep_named(nb[n])))]
     if diff:
         out.append({"field": "pin_names", "first": "; ".join(f"{n} {na[n]}" for n in diff[:12]),
                     "second": "; ".join(f"{n} {nb[n]}" for n in diff[:12])})
     return out
+
+
+def ep_numbers(first, second, first_pins, pins):
+    """The pad numbers past the leads both reads count, when both have an exposed pad: at most one on each side (more
+    is no exposed pad, but pins one read left out)."""
+    n = [x.get("pin_count") for x in (first, second)]
+    if not (first.get("has_ep") and second.get("has_ep")) or None in n:
+        return set()
+    lead = min(n)
+    past = [{str(p) for p, _ in side if str(p).isdecimal() and int(p) > lead} for side in (first_pins, pins)]
+    return set().union(*past) if all(len(x) <= 1 for x in past) else set()
 
 
 # ---------------------------------------------------------------- the standard table
@@ -474,7 +498,7 @@ def against_read(first, second, first_pins, pins):
     """compare() with the second read's numbers, then its pin list -> the check record (no source fields)."""
     c = compare(first, second, "read")
     if first_pins and pins:
-        extra = compare_pins(first_pins, pins)
+        extra = compare_pins(first_pins, pins, ep_numbers(first, second, first_pins, pins))
         c["compared"] += ["pins", "pin_names"]
         c["agreed"] += [f for f in ("pins", "pin_names") if f not in {d["field"] for d in extra}]
         c["disagreed"] += extra
@@ -531,11 +555,46 @@ def run(reader, job, res, model):
         checks.append(second_read(reader, job, first, first_pins, model))
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
+    standard = _settle_turn(checks)
     st = [c["status"] for c in checks]
     ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong and not _self(c)]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
         else "self-checked" if any(c["status"] == "agreed" for c in strong) else "unchecked"
-    return {"mode": mode, "status": status, "checks": checks}
+    out = {"mode": mode, "status": status, "checks": checks}
+    if standard:
+        out["standard"] = standard
+    return out
+
+
+SWAPPED = "the same with length and width swapped"
+
+
+def _settle_turn(checks):
+    """A standard table entry that differs from the read only in which way round length and width go (AT24CS01-MAHM:
+    DFN-8 body 2 x 3 and pad 1.5 x 1.3 read, 3 x 2 and 1.3 x 1.5 in the table; AL8860MP: MSOP-8 pad 1.8 x 1.5 read,
+    1.5 x 1.8 in the table), with the pin count, pitch and exposed pad agreeing and no second read disagreeing: the
+    sizes are the same and only the axes differ, and the table's footprint is the package's own (KiCad's generator
+    data), so the part is built from the table, not held, and the review says so. The read's axes are never turned
+    to fit (LTC2942-1, with no table entry, stays held). -> the table name, or None."""
+    if any(c["status"] == "disagreed" for c in checks if c.get("source") != "standard table"):
+        return None
+    for c in checks:
+        if c.get("source") != "standard table" or c["status"] != "disagreed":
+            continue
+        pair_fields = {f for _, pair in PAIRS for f in pair}
+        if not all(d["field"] in pair_fields and SWAPPED in (d.get("note") or "") for d in c["disagreed"]):
+            continue
+        if not {"pin_count", "pitch", "has_ep"} <= set(c["agreed"]):
+            continue
+        name = c["against"].split(":", 1)[1]
+        moved = ", ".join(f"{LABEL[d['field']]} {d['first']} read, {d['second']} in the table" for d in c["disagreed"])
+        c.setdefault("tie_breaks", []).append(
+            f"{moved}: the same sizes with length and width the other way round, so the footprint is built from "
+            f"the standard table's {name}")
+        c["agreed"] += [d["field"] for d in c["disagreed"]]
+        c["disagreed"], c["status"], c["settled"] = [], "agreed", "standard table"
+        return name
+    return None
 
 
 def _self(c):

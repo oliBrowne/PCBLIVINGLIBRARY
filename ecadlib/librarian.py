@@ -832,6 +832,10 @@ class Run:
         st["verify"].extend(other)                    # its own hold reason: a person confirms this PDF is this part's
         got = []
         std = self.standard_land(res["spec"]) if not st["footprint"] else None
+        settled = (res.get("cross_check") or {}).get("standard")
+        if settled and not st["footprint"]:           # the read gave this table package's sizes the other way round
+            std = (settled, "the cross-check", "the read gave its length and width the other way round (crosscheck."
+                   "_settle_turn)")
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
             sp = SP.spec(pkg)
