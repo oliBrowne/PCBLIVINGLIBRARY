@@ -26,6 +26,7 @@ from . import altium_lib as AL, footprint_gen as F
 from . import httpcache as H
 from .fsutil import write_text_atomic
 from .kicad_index import norm_mpn
+from .pdf_fetch import looks_html
 from . import userconfig as UC
 
 API_BASE = "https://api.anthropic.com"
@@ -2273,6 +2274,17 @@ def is_pdf(data):
     return isinstance(data, (bytes, bytearray)) and b"%PDF-" in data[:1024]
 
 
+def pdf_complete(data):
+    """A PDF that ends with its end-of-file marker (%%EOF in its last KB, white space and NULs after it allowed). A
+    connection a server closes half way leaves a PDF without one, which pypdf still half reads (its first pages); a
+    text answer that only starts "%PDF-" has none either."""
+    return is_pdf(data) and b"%%EOF" in bytes(data).rstrip(b"\x00\t\n\x0c\r ")[-1024:]
+
+
+def cut_off(data):
+    return f"the PDF is cut off ({len(data) >> 10} KB, no end-of-file marker): the download stopped early"
+
+
 MENTION_PAGES = 5                                     # the first pages a datasheet names its part (or family) on
 
 
@@ -2538,8 +2550,8 @@ class PdfStore:
                 status, data, ctype, final, err, *more = self.fns[w](url, part)
             except Exception as e:                    # a way that broke is a note, never the end of the part
                 status, data, ctype, final, err, more = 0, None, "", url, f"{type(e).__name__}: {str(e)[:160]}", []
-            html = bool(re.search(rb"<(!doctype|html)", (data or b"")[:2048], re.I))
-            if not err and 200 <= (status or 0) < 300 and (is_pdf(data) or (html and link(final or url)(data))):
+            html = looks_html(data)
+            if not err and 200 <= (status or 0) < 300 and (pdf_complete(data) or (html and link(final or url)(data))):
                 if w != "handoff":
                     self.prefer[host] = w
                 return (status, data, ctype, final, None, w, notes, *more)
@@ -2549,6 +2561,7 @@ class PdfStore:
                 self.prefer.pop(host, None)           # it did not work this time: ecadlib's own request first again
             notes.append(f"{PF.WAYS.get(w, w)}: " + (err or (f"status {status}" if not 200 <= (status or 0) < 300 else
                                                               "a web page with no PDF link" if html else
+                                                              cut_off(data) if is_pdf(data) else
                                                               f"no PDF in its answer ({ctype or 'unknown type'}, "
                                                               f"{len(data or b'')} bytes)")))
             if w == pref and first is None:           # the way that worked before did not: ecadlib's own request now
@@ -2570,7 +2583,10 @@ class PdfStore:
         tries = 1 if host in self.gave_up else H.RETRIES + 1
         for n in range(1, tries + 1):
             status, data, ctype, final, err, *more = self._get(url)
-            again = bool(H.TRANSIENT.search(err)) if err else status == 429 or 500 <= (status or 0) < 600
+            if not err and 200 <= (status or 0) < 300 and is_pdf(data) and not pdf_complete(data):
+                err, data = cut_off(data), None       # the connection closed half way: worth another try
+            again = bool(H.TRANSIENT.search(err) or err.startswith("the PDF is cut off")) if err else \
+                status == 429 or 500 <= (status or 0) < 600
             if not again or n == tries:
                 break
             hdr = more[0] if more and more[0] is not None else {}
@@ -2641,7 +2657,7 @@ class PdfStore:
                 meta = json.loads(meta_f.read_text(encoding="utf-8"))
             except (OSError, ValueError):             # a damaged record: downloaded again
                 meta = None
-            if isinstance(meta, dict) and hashlib.sha256(data).hexdigest() == meta.get("sha256"):
+            if isinstance(meta, dict) and hashlib.sha256(data).hexdigest() == meta.get("sha256") and pdf_complete(data):
                 return data, dict(meta, where=where or meta.get("where"), from_cache=True)
         why = unsafe_download(url, public)            # a BOM cell or a page's link to this machine / cloud metadata
         if why:
@@ -2663,13 +2679,13 @@ class PdfStore:
         if why:                                       # redirected there: the bytes are not kept or sent anywhere
             raise DatasheetError(f"{url}: redirected to {final}, not used ({why})")
         if not 200 <= (status or 0) < 300:
-            page = status == 403 and bool(re.search(rb"<(!doctype|html)", (data or b"")[:2048], re.I))
+            page = status == 403 and looks_html(data)
             raise DatasheetError(f"{url}: HTTP {status}" + (" (a web page: the site refused the download)" if page else "") + also)
         if len(data) > MAX_DOWNLOAD:
             raise DatasheetError(f"{url}: larger than {MAX_DOWNLOAD >> 20} MB; download it and pass --pages")
         if not is_pdf(data):
-            html = bool(re.search(rb"<(!doctype|html)", data[:2048], re.I))
-            link = pdf_link(data, final or url, docs=True) if html and follow else None
+            html = looks_html(data)
+            link = pdf_link(data, final or url, docs=True, part=part) if html and follow else None
             if link and link != url:
                 try:
                     pdf, meta = self._fetch(link, where, follow=False, part=part, handoff=handoff, _page=url,
@@ -2679,6 +2695,8 @@ class PdfStore:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
             kind = "an HTML page" if html else f"{ctype or 'unknown type'}"
             raise DatasheetError(f"{url}: not a PDF ({kind}, {len(data)} bytes){also}")
+        if not pdf_complete(data):                    # (a way past a refusal can be cut off too)
+            raise DatasheetError(f"{url}: {cut_off(data)}{also}")
         meta = {"url": url, "final_url": final, "where": where, "status": status, "content_type": ctype,
                 "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "pages": pdf_pages(data),
                 "fetched": datetime.datetime.now().isoformat(timespec="seconds")}
@@ -2731,26 +2749,53 @@ DOC_LINK = re.compile(r"docs\.broadcom\.com/docs/[\w.-]+|/dgdl/|[?&](fileId|docu
                       r"|/file-?download\b", re.I)
 
 
-def pdf_link(html, base, docs=False):
-    """The datasheet PDF an HTML product page links to (an href ending .pdf, or a meta refresh), absolute; a link
-    whose name says datasheet, and then one on the page's own site, is preferred. None when there is none.
+def _refresh_url(text):
+    """The URL a meta refresh moves to, however it is written (content="0; URL='x'", url = x, either attribute
+    first), or None."""
+    for tag in re.findall(r"<meta\b[^>]*>", text, re.I):
+        if not re.search(r"""http-equiv\s*=\s*["']?refresh\b""", tag, re.I):
+            continue
+        c = re.search(r"""\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", tag, re.I)
+        c = c and next(g for g in c.groups() if g is not None)
+        u = c and re.search(r"""\burl\s*=\s*["']?\s*([^"'\s]+)""", c, re.I)
+        if u:
+            return u.group(1)
+    return None
+
+
+def _names_part(link, part):
+    """Whether a link's path names the part: its MPN, or its letters and first digits (TPS2660 of TPS2660PWPR)."""
+    from urllib.parse import urlparse
+    key, path = _mpn_key(part), _mpn_key(urlparse(link).path)
+    base = re.match(r"[A-Z]+\d+", key)
+    return bool(key) and (key in path or bool(base and len(base.group(0)) >= 4 and base.group(0) in path))
+
+
+def pdf_link(html, base, docs=False, part=None):
+    """The datasheet PDF an HTML product page links to (an href ending .pdf, or a meta refresh), absolute, read as a
+    browser reads it: entities decoded (&amp;), white space inside the quotes and a #page= fragment dropped. A link
+    named for the part (part: its MPN), then one whose name says datasheet, then one on the page's own site, is
+    preferred. None when there is none.
     docs: with no such link, a document-download link (DOC_LINK) instead (PdfStore.fetch following a page)."""
     import html as H_
     from urllib.parse import urljoin, urlparse
     text = html.decode("utf-8", "replace") if isinstance(html, bytes) else str(html)
-    refresh = re.search(r"""http-equiv=["']?refresh["']?[^>]*?url=([^"'>\s]+)""", text, re.I)
-    links = [m.group(1) for m in re.finditer(r"""href=["']([^"'#]+?\.pdf(?:\?[^"']*)?)["']""", text, re.I)]
+    refresh = _refresh_url(text)
+    links = [m.group(1) for m in re.finditer(r"""href\s*=\s*["']\s*([^"'#]+?\.pdf(?:\?[^"'#]*)?)\s*(?:#[^"']*)?["']""",
+                                             text, re.I)]
     if refresh:
-        links.insert(0, refresh.group(1))
+        links.insert(0, refresh)
     if docs and not links:
-        links = [H_.unescape(m.group(1)) for m in re.finditer(r"""href=["']([^"'#]+)["']""", text, re.I)
+        links = [m.group(1) for m in re.finditer(r"""href\s*=\s*["']\s*([^"'#]+?)\s*(?:#[^"']*)?["']""", text, re.I)
                  if DOC_LINK.search(H_.unescape(m.group(1)))]
-    links = [u for u in links if urlparse(urljoin(base, u)).scheme.lower() in ("http", "https")]   # no file:, data:
+    links = [urljoin(base, H_.unescape(u).strip()) for u in links]
+    links = [u for u in links if urlparse(u).scheme.lower() in ("http", "https")]   # no file:, data:
     if not links:
         return None
     host = urlparse(base).netloc
-    key = lambda u: (not re.search(r"data.?sheet|/ds/|_ds|-ds", u, re.I), urlparse(urljoin(base, u)).netloc != host)
-    return urljoin(base, sorted(links, key=key)[0])
+    key = lambda u: (not (part and _names_part(u, part)), not re.search(r"data.?sheet|/ds/|_ds|-ds", u, re.I),
+                     urlparse(u).netloc != host)
+    return sorted(links, key=key)[0]
 
 
 def select_pages(data, budget):

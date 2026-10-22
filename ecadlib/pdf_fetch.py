@@ -46,9 +46,16 @@ _NOT_THE_SITE = re.compile(r"proxy CONNECT refused|ProxyError|NameResolution|get
                            r"nodename nor servname|No address associated|ConnectTimeout|connect timeout|NewConnectionError|"
                            r"Connection refused|ConnectionRefused|ERR_NAME_NOT_RESOLVED|ERR_PROXY|ERR_TUNNEL_CONNECTION|"
                            r"ERR_CERT|ERR_SSL|ERR_CONNECTION_REFUSED|ERR_ADDRESS_UNREACHABLE|ERR_INTERNET_DISCONNECTED", re.I)
+_HTML = re.compile(rb"<(!doctype|html)", re.I)
+HTML_HEAD = 16384                                     # a page can start with a long prolog of comments and white space
 _CHALLENGE = re.compile(rb"Just a moment|cf-chl|challenge-platform|_Incapsula_Resource|Access Denied|"
                         rb"Request unsuccessful|captcha|bot.?(detection|protection)|enable JavaScript|"
                         rb"Reference #\d|akamai|perimeterx|px-captcha|distil", re.I)
+
+
+def looks_html(data):
+    """A web page rather than a PDF: <!doctype or <html within its first HTML_HEAD bytes."""
+    return bool(data) and b"%PDF-" not in data[:1024] and bool(_HTML.search(data[:HTML_HEAD]))
 
 
 def refused(status, data, err, pdf_link=None):
@@ -63,10 +70,9 @@ def refused(status, data, err, pdf_link=None):
     if 200 <= (status or 0) < 300 and not (data or b"").strip():
         return True                                   # an empty 200: how Infineon answers a script (2ED21824S06J)
     if 200 <= (status or 0) < 300 and data and b"%PDF-" not in data[:1024]:
-        head = data[:4096]
-        if re.search(rb"<(!doctype|html)", head, re.I):
+        if looks_html(data):
             return not (pdf_link and pdf_link(data))
-        return bool(_CHALLENGE.search(head))
+        return bool(_CHALLENGE.search(data[:HTML_HEAD]))
     return False
 
 
