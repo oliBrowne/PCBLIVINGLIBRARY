@@ -1022,12 +1022,7 @@
     "land": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "pad_length",
-        "pad_width",
-        "pad_center"
-      ],
-      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. It replaces the IPC-7351B pads for the signal pins (a tab keeps its own size; an exposed pad takes ep_across x ep_along when given, else the package's exposed_pad). pad_center = distance from the part centre to each pad centre: half the centre-to-centre distance across the rows (a datasheet's C / 2).",
+      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. pad_length, pad_width and pad_center (all three) replace the IPC-7351B pads for the signal pins (a tab keeps its own size; an exposed pad takes ep_across x ep_along when given, else the package's exposed_pad). A land page that sizes only the thermal land (the signal pads not dimensioned) is still the maker's: give just its ep_across / ep_along (and ep_mask_*), and the signal pads come from IPC-7351B. pad_center = distance from the part centre to each pad centre: half the centre-to-centre distance across the rows (a datasheet's C / 2).",
       "properties": {
         "pad_length": {
           "type": "number",
@@ -1049,7 +1044,7 @@
         "ep_across": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "The exposed/thermal pad's copper on the recommended land, measured across the pad rows (left to right), when the land page gives one (TI PowerPAD: the (3.4) next to the 16X (1.5)). Not the package's exposed pad or a stencil opening."
+          "description": "The exposed/thermal pad's copper on the recommended land, measured across the pad rows (left to right), when the land page gives one (TI PowerPAD: the (3.4) next to the 16X (1.5)); a minimum copper area the page asks for counts (OPA569DWP: 7.59 x 12.95 minimum, across x along). Not the package's exposed pad or a stencil opening."
         },
         "ep_along": {
           "type": "number",

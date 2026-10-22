@@ -1058,7 +1058,7 @@ def _header(spec, density):
         family = "pin_header_tht"
     else:
         land = spec.get("land")
-        if land:
+        if _F().lead_land(spec):
             ll, lw, lc = land["pad_length"], land["pad_width"], land["pad_center"]
         elif abs(key - e) < 0.01 and key in (HEADER_SMD1 if cols == 1 else HEADER_SMD):
             ll, lw, lc = (HEADER_SMD1 if cols == 1 else HEADER_SMD)[key]     # single-row headers have their own land

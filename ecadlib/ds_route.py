@@ -740,10 +740,11 @@ def _rank(s, cat):
     return v
 
 
-def pick_pages(texts, budget, part=None, package=None, marks=None):
+def pick_pages(texts, budget, part=None, package=None, marks=None, first=None):
     """-> (sorted 1-based pages, {page: [why]}) or (None, {}) when there is no text layer or nothing matched.
-    The best page for each need (drawing, pin table, land pattern, ordering) goes in first, then the page after the
-    drawing (drawings and their tables run over), then the rest by score, up to budget pages."""
+    first: pages that go in before anything else (a wider try keeps every page the narrower one sent). Then the best
+    page for each need (drawing, pin table, land pattern, ordering), then the page after the drawing (drawings and
+    their tables run over), then the rest by score, up to budget pages."""
     if not texts or not any((t or "").strip() for t in texts) or budget <= 0:
         return None, {}
     rows, own, codes, found = page_scores(texts, part, package, marks)
@@ -751,6 +752,10 @@ def pick_pages(texts, budget, part=None, package=None, marks=None):
     if not any(total(i) for i in range(len(rows))):
         return None, {}
     keep, why = [], {}
+    for q in first or []:
+        if 1 <= q <= len(rows) and q not in keep and len(keep) < budget:
+            keep.append(q)
+            why.setdefault(q, []).append("sent on the narrower try")
 
     def add(i, reason):
         if 0 <= i < len(rows) and len(keep) < budget and i + 1 not in keep:
@@ -825,8 +830,10 @@ def levels(texts, budget, part=None, package=None, n_pages=None, marks=None):
     for b in (budget, budget * 3):
         if b >= n:
             break
-        got, w = pick_pages(texts, b, part, package, marks)
-        if got and (not out or len(set(got) - set(out[-1])) >= max(2, budget // 2)):   # a wider step must add pages
+        # a wider step keeps the narrower one's pages (TLC5951DAP 10-22: the 22-page try lost the land pattern pages
+        # 49-52 the 6-page one had sent, so a better model never saw the thermal land) and must add pages
+        got, w = pick_pages(texts, b, part, package, marks, first=out[-1] if out else None)
+        if got and (not out or len(set(got) - set(out[-1])) >= max(2, budget // 2)):
             out.append(got)
             why = why or w
     return out + [None], why

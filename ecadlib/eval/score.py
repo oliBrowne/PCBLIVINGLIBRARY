@@ -241,10 +241,14 @@ def maker_land(mine, spec, tol=None):
     the maker's example board layout) rather than an IPC-7351B land worked out from the package dimensions? KiCad
     builds its land from the dimensions, so a maker's land can miss KiCad's pads while being what the datasheet asks
     for. -> None (no land given or no footprint), else {followed, pads: the pads that use it, ep: the exposed pad
-    numbers (not part of the land)}."""
+    numbers (not part of the land), ep_land: those that are the land's thermal pad}. A land that sizes only the
+    thermal pad (thermal_only) is followed when the exposed pad is it."""
     land = (spec or {}).get("land") or {}
     pl, pw, pc = (land.get(k) for k in ("pad_length", "pad_width", "pad_center"))
-    if mine is None or not all(isinstance(v, (int, float)) for v in (pl, pw, pc)):
+    ea, eb = land.get("ep_across"), land.get("ep_along")
+    lead = all(isinstance(v, (int, float)) for v in (pl, pw, pc))
+    thermal = isinstance(ea, (int, float)) and isinstance(eb, (int, float))
+    if mine is None or not (lead or thermal):        # a land of the thermal pad only: the signal pads are IPC's
         return None
     t = dict(TOL, **(tol or {}))
     pcy = land.get("pad_center_y") if isinstance(land.get("pad_center_y"), (int, float)) else pc
@@ -263,6 +267,9 @@ def maker_land(mine, spec, tol=None):
         return (near(p[3], l, "size") and near(p[4], w, "size") and near(x, c, "pos")) or \
                (near(p[4], l, "size") and near(p[3], w, "size") and near(y, cyy, "pos"))
     rest = [p for p in pads if p not in ep]
+    if not lead:                                      # the signal pads are IPC's, scored against KiCad as any;
+        used = _ep_land(ep, rest, ea, eb, cx, cy, near)   # only the thermal pad is the maker's
+        return {"followed": bool(used), "pads": [], "ep": [p[0] for p in ep], "ep_land": used, "thermal_only": True}
     used = [p[0] for p in rest if fits(p)]
     # the land is the model's own reading, so "followed" alone cannot tell it from a misread: it must at least solder
     # the leads it read (reach the toe, start inside the shortest foot, be no narrower than the lead)
@@ -284,16 +291,20 @@ def maker_land(mine, spec, tol=None):
     # (the lead pads' long side runs across the rows: pads wider than tall are rows at +-x, so across is the pad's
     # width; taller than wide, its height; both kinds, a quad package: either way round. Not the pads' extent: a long
     # TSSOP's rows reach further along y than the rows sit apart, TPS70345 PWP 3.575 vs 2.9)
-    ea, eb = land.get("ep_across"), land.get("ep_along")
-    ep_used = []
-    if isinstance(ea, (int, float)) and isinstance(eb, (int, float)) and rest:
-        wide, tall = sum(p[3] > p[4] for p in rest), sum(p[4] > p[3] for p in rest)
-        ways = [(ea, eb)] if wide and not tall else [(eb, ea)] if tall and not wide else [(ea, eb), (eb, ea)]
-        ep_used = [p[0] for p in ep if near(p[1], cx, "pos") and near(p[2], cy, "pos")
-                   and any(near(p[3], w, "size") and near(p[4], h, "size") for w, h in ways)]
+    ep_used = _ep_land(ep, rest, ea, eb, cx, cy, near) if thermal else []
     return {"followed": bool(rest) and len(used) == len(rest) and sane, "pads": used, "ep": [p[0] for p in ep],
             "ep_land": ep_used,
             **({} if sane else {"implausible": "the land does not cover the leads read from the same drawing"})}
+
+
+def _ep_land(ep, rest, ea, eb, cx, cy, near):
+    """The exposed pads that are the land's thermal pad (ep_across x ep_along, centred on the pads)."""
+    if not rest:
+        return []
+    wide, tall = sum(p[3] > p[4] for p in rest), sum(p[4] > p[3] for p in rest)
+    ways = [(ea, eb)] if wide and not tall else [(eb, ea)] if tall and not wide else [(ea, eb), (eb, ea)]
+    return [p[0] for p in ep if near(p[1], cx, "pos") and near(p[2], cy, "pos")
+            and any(near(p[3], w, "size") and near(p[4], h, "size") for w, h in ways)]
 
 
 def only_maker_land(fields, ml, body=None):

@@ -12,28 +12,28 @@ compares our footprint and symbol with the datasheet drawing.
 
 | Model | $ in / MTok | $ out / MTok | Datasheet read | Read as batch | Visual check | 50-line BOM | 50-line BOM + checks | 500-part library | 500-part library, batch | Visual check on all 500 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Claude Fable 5.1 | $10 | $50 | $0.631 | $0.282 | $0.547 | $6.31 | $11.78 | $63.06 | $28.23 | $273.64 |
-| Claude Opus 5.5 (default) | $4 | $20 | $0.252 | $0.113 | $0.219 | $2.52 | $4.71 | $25.23 | $11.29 | $109.46 |
-| Claude Sonnet 5.5 | $2 | $10 | $0.126 | $0.056 | $0.109 | $1.26 | $2.36 | $12.61 | $5.65 | $54.73 |
-| Claude Haiku 5.5 | $0.1 | $0.5 | $0.0063 | $0.0028 | $0.0055 | $0.063 | $0.118 | $0.631 | $0.282 | $2.74 |
-| OpenAI GPT-6 Astra | $10 | $50 | $0.565 | n/a | $0.547 | $5.65 | $11.12 | $56.45 | n/a | $273.64 |
-| OpenAI GPT-6.1 Sol | $2 | $10 | $0.113 | n/a | $0.109 | $1.13 | $2.22 | $11.29 | n/a | $54.73 |
-| OpenAI GPT-5.6 Terra | $2 | $12 | $0.125 | n/a | $0.115 | $1.25 | $2.40 | $12.49 | n/a | $57.73 |
-| OpenAI GPT-5.4 mini | $0.75 | $4.5 | $0.047 | n/a | $0.043 | $0.468 | $0.901 | $4.68 | n/a | $21.65 |
-| OpenAI GPT-6 Luna | $0.1 | $0.5 | $0.0056 | n/a | $0.0055 | $0.056 | $0.111 | $0.565 | n/a | $2.74 |
-| OpenAI GPT-5 nano | $0.05 | $0.4 | $0.0037 | n/a | $0.0032 | $0.037 | $0.069 | $0.372 | n/a | $1.59 |
-| Google Gemini 4 Argon | $2 | $10 | $0.113 | n/a | $0.109 | $1.13 | $2.22 | $11.29 | n/a | $54.73 |
-| Google Gemini 3.1 Pro | $2 | $12 | $0.125 | n/a | $0.115 | $1.25 | $2.40 | $12.49 | n/a | $57.73 |
-| Google Gemini 3.8 Flash | $0.75 | $3.75 | $0.042 | n/a | $0.041 | $0.423 | $0.834 | $4.23 | n/a | $20.52 |
-| Google Gemini 3.1 Flash-Lite | $0.25 | $1.5 | $0.016 | n/a | $0.014 | $0.156 | $0.300 | $1.56 | n/a | $7.22 |
-| DeepSeek V4 Pro | $1.32 | $3.96 | $0.059 | n/a | n/a | $0.587 | n/a | $5.87 | n/a | n/a |
-| DeepSeek V4.1 Flash | $0.3 | $1.2 | $0.015 | n/a | $0.016 | $0.151 | $0.307 | $1.51 | n/a | $7.76 |
+| Claude Fable 5.1 | $10 | $50 | $0.632 | $0.283 | $0.547 | $6.32 | $11.79 | $63.20 | $28.28 | $273.64 |
+| Claude Opus 5.5 (default) | $4 | $20 | $0.253 | $0.113 | $0.219 | $2.53 | $4.72 | $25.28 | $11.31 | $109.46 |
+| Claude Sonnet 5.5 | $2 | $10 | $0.126 | $0.057 | $0.109 | $1.26 | $2.36 | $12.64 | $5.66 | $54.73 |
+| Claude Haiku 5.5 | $0.1 | $0.5 | $0.0063 | $0.0028 | $0.0055 | $0.063 | $0.118 | $0.632 | $0.283 | $2.74 |
+| OpenAI GPT-6 Astra | $10 | $50 | $0.566 | n/a | $0.547 | $5.66 | $11.13 | $56.56 | n/a | $273.64 |
+| OpenAI GPT-6.1 Sol | $2 | $10 | $0.113 | n/a | $0.109 | $1.13 | $2.23 | $11.31 | n/a | $54.73 |
+| OpenAI GPT-5.6 Terra | $2 | $12 | $0.125 | n/a | $0.115 | $1.25 | $2.41 | $12.51 | n/a | $57.73 |
+| OpenAI GPT-5.4 mini | $0.75 | $4.5 | $0.047 | n/a | $0.043 | $0.469 | $0.902 | $4.69 | n/a | $21.65 |
+| OpenAI GPT-6 Luna | $0.1 | $0.5 | $0.0057 | n/a | $0.0055 | $0.057 | $0.111 | $0.566 | n/a | $2.74 |
+| OpenAI GPT-5 nano | $0.05 | $0.4 | $0.0037 | n/a | $0.0032 | $0.037 | $0.069 | $0.373 | n/a | $1.59 |
+| Google Gemini 4 Argon | $2 | $10 | $0.113 | n/a | $0.109 | $1.13 | $2.23 | $11.31 | n/a | $54.73 |
+| Google Gemini 3.1 Pro | $2 | $12 | $0.125 | n/a | $0.115 | $1.25 | $2.41 | $12.51 | n/a | $57.73 |
+| Google Gemini 3.8 Flash | $0.75 | $3.75 | $0.042 | n/a | $0.041 | $0.424 | $0.835 | $4.24 | n/a | $20.52 |
+| Google Gemini 3.1 Flash-Lite | $0.25 | $1.5 | $0.016 | n/a | $0.014 | $0.156 | $0.301 | $1.56 | n/a | $7.22 |
+| DeepSeek V4 Pro | $1.32 | $3.96 | $0.059 | n/a | n/a | $0.588 | n/a | $5.88 | n/a | n/a |
+| DeepSeek V4.1 Flash | $0.3 | $1.2 | $0.015 | n/a | $0.016 | $0.152 | $0.307 | $1.52 | n/a | $7.76 |
 | Local model (Ollama, LM Studio, vLLM) | $0 | $0 | $0 | n/a | $0 | $0 | $0 | $0 | n/a | $0 |
 
 These are **estimates**, made from the request sizes the code builds and list prices checked on 2026-10-16. They
 are not measured bills.
 
-- **Datasheet read:** about 26,451 tokens in (6 picked datasheet pages, the prompt and the output format)
+- **Datasheet read:** about 26,560 tokens in (6 picked datasheet pages, the prompt and the output format)
   and about 6,000 tokens out. On Claude a synchronous read bills its input as a prompt-cache write (1.25x).
 - **Read as batch:** Claude's Message Batches API is half price. ecadlib sends a whole BOM as one batch
   (`ecadlib datasheet batch BOM`). Other providers are called one request at a time.

@@ -34,14 +34,16 @@ def h(o):
 # the earlier schema: the earlier hashes).
 # 2026-10-22: land gains ep_mask_across / ep_mask_along, a solder-mask-defined thermal land (TI PowerPAD); nothing else
 # changed (checked with the earlier schema: the earlier hashes).
-GOLDEN = {"build_sync": "1137bd7b3e1a9f122117f3ab936a6b346f3b84b9f99d456e5c93e388053f77ef",
-          "build_batch": "72f288a100fa6d1c89744915fa0d46b2ba1efe53f1ac92f90a0476ef5e3de1ff",
-          "build_url_haiku": "f2c08c4829b0cc60ec24b55c12e90418b67130d8bcaf41d84c9d92378c2724e6",
-          "reader_sync_calls": ["b37cc3db9f3941ba4b3396cd3817d7e0126fb738534f45c78fa06138eb541690",
-                                "7d4783fd737357fbee90462479b2b4f7f1eee7bf28951607dedee5bdfcf5ffac"],
+# 2026-10-22: land's pad_length / pad_width / pad_center are optional (a land page that sizes only the thermal land);
+# nothing else changed (checked with the earlier schema: the earlier hashes).
+GOLDEN = {"build_sync": "86907b27c88f819b6bf33b753b97a30791bb278dd522cc33bf753437b4d7c744",
+          "build_batch": "23519f8caf5fbe08b00219ad3645cd24f66a62434b050b1ef3531cecea2f8e07",
+          "build_url_haiku": "b28a138bc37d4306d8cd00d4b52d448a126f93005bc37a1bc8df068a16a5933c",
+          "reader_sync_calls": ["7805482007d67a90fd0229196bca51dd8eb5e30c96176b7af7b9bf83a47f1e38",
+                                "ad84af88bfd21b77a2add08aa3e5fd8b7c5541c26d41c2b5e637d0e0bb40dd1a"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["cf119f2291183d77100f9b67b5b5ef55c4f699633433f3beb772244b63373bf7",
-                          "d7bb1e8fbb3a94ad1c897ef883f3dc43c61c01bde6b634a2149b243f66ceb969"]}
+          "batch_posts": ["6b0ff1a3ac83acaa3581bbee588500917dd4e2dbc9e5d4cd01b417d6cf7d9f40",
+                          "7642d0cb92dd447fe71f3cd2f3079e5ef8872ef0b442e401d352ff86d26580b5"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 

@@ -325,6 +325,14 @@ def land_short(spec):
     return out
 
 
+def lead_land(spec):
+    """The maker's land sizes the signal pads (pad_length, pad_width and pad_center all given), not only the thermal
+    land: a land page that dimensions just the thermal pad leaves the signal pads to IPC-7351B."""
+    land = spec.get("land") or {}
+    return isinstance(land, dict) and all(isinstance(land.get(k), (int, float)) and not isinstance(land.get(k), bool)
+                                          for k in ("pad_length", "pad_width", "pad_center"))
+
+
 def _apply_land(spec, pads):
     """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab keeps its IPC size). A pin 1
     the land draws another size (pin1_length / pin1_width) keeps the row's outer end and its lead's centre line."""
@@ -512,7 +520,7 @@ def build(spec, density=None):
     if short:
         why = "the exposed pad leaves no room for the pads" if spec.get("exposed_pad") else "the lead dimensions leave no room"
         raise ValueError(f"{why}: pad {short[0][0]} would be {min(short[0][3], short[0][4]):.2f} mm (check the drawing)")
-    if spec.get("land"):                                      # the datasheet's recommended land pattern wins over IPC
+    if lead_land(spec):                                       # the datasheet's recommended land pattern wins over IPC
         pads = _apply_land(spec, pads)
         lw, ll, lc = spec["land"]["pad_width"], spec["land"]["pad_length"], spec["land"]["pad_center"]
         rep.update({"Z": round(2 * lc + ll, 4), "G": round(2 * lc - ll, 4), "X": lw, "land_source": "datasheet"})
