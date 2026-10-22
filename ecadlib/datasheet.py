@@ -2282,8 +2282,9 @@ def _numeric_core(main, key):
     (SN74LVC1G08 of SN74LVC1G08DBVR, ESP32S3WROOM1), not counting a last -segment that starts with digits and goes on
     in letters (ATTINY85 of ATTINY85-20PU: speed and package). Digit runs are counted within -segments."""
     segs = [s for s in re.split(r"[^A-Z0-9]+", main) if s]
-    if len(segs) > 1 and re.fullmatch(r"\d+[A-Z][A-Z0-9]*", segs[-1]):
-        segs = segs[:-1]
+    if len(segs) > 1 and re.fullmatch(r"\d+[A-Z][A-Z0-9]*", segs[-1]) or \
+            len(segs) > 2 and re.search(r"[A-Z]", segs[-1]) and re.search(r"\d", segs[-1]):
+        segs = segs[:-1]                              # (ESP32-S3-WROOM-1-N8R8: flash/PSRAM code, not the name)
     at, runs = 0, []
     for s in segs:
         runs += [(len(m.group()), at + m.end()) for m in re.finditer(r"\d+", s)]
@@ -2318,7 +2319,12 @@ def mentions_part(texts, mpn):
                 re.match(re.escape(t[0]) + "".join("." if c == "X" else c for c in t[1:]), key):
             return True
     lead = re.match(r"([A-Z]+)(\d+)", key)
-    for m in re.finditer(r"\b([A-Z]+)(\d+)[A-Z]*\s*[-–—/]\s*([A-Z]+)?(\d+)", raw) if lead else ():
+    for m in re.finditer(r"\b([A-Z]+)\d+[A-Z]*((?:/[A-Z]*\d*[A-Z]*)+)", raw) if lead else ():
+        for w in m.group(2).split("/")[1:]:            # ATMEGA48A/PA/88A/PA/168A/PA/328/P: 328 is ATMEGA328
+            w = re.match(r"\d+", w) if w[:1].isdigit() else None
+            if w and m.group(1) + w.group() == key[:n]:
+                return True
+    for m in re.finditer(r"\b([A-Z]+)(\d+)[A-Z]*(?:\s*[-–—/]\s*|\s+(?:THRU|TO)\s+)([A-Z]+)?(\d+)", raw) if lead else ():
         a, b = m.group(2), m.group(4)                 # MAX22201-MAX22207, AD5272/74
         b = a[:len(a) - len(b)] + b if len(b) < len(a) else b
         if m.group(1) == lead.group(1) and m.group(3) in (None, m.group(1)) and len(a) == len(b) == len(lead.group(2)) \
