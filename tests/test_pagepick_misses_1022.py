@@ -141,6 +141,44 @@ def test_powerpad_land_as_the_page_lays_it_out_one_callout_line_each():
     assert R.page_scores(_pages(21, p19=mask), "OPA569DWP", "SOIC-20")[0][19]["land"] == 0
 
 
+def test_a_tape_and_reel_outline_after_the_drawing_is_not_its_continuation():
+    # STULPI01A: p41 "Figure 14. Tape and reel uTFBGA36 package outline" took the b6 slot of the p8 pin table
+    texts = _pages(45, p6="Table 2. Pinout and bump description pin name pin number uTFBGA36 top view",
+                   p7="Table 2. Pinout and bump description (continued) pin name pin number",
+                   p39="uTFBGA36 package outline mechanical data min max A1 D1 E1 mm",
+                   p40="Figure 14. Tape and reel uTFBGA36 package outline / 1. Drawing not to scale.")
+    pages, why = R.pick_pages(texts, 6, "STULPI01A", "uTFBGA-36")
+    assert 40 in pages and 8 in pages and "drawing (continued)" not in why.get(41, []), (pages, why)
+
+
+def test_rohm_image_drawing_under_the_running_header_and_footer():
+    # BD33FC0FP p35 as page_texts returns it: ~200 characters of header/footer every page repeats, then the caption
+    def page(n, body):
+        return (f" \n{n}/38 \nBDxxFC0 series \n \nTSZ02201-0G2G0A600040-1-2 \n \n\xa9 2017 ROHM Co., Ltd. All rights "
+                f"reserved. \n15.Apr.2026 Rev.007 \n \n \nwww.rohm.com \nTSZ22111\u30fb15\u30fb001 \n{body} \n \n \n")
+    texts = [page(i + 1, FILL) for i in range(38)]
+    texts[33], texts[34], texts[35] = page(34, "Package Name HTSOP-J8"), page(35, "Package Name TO252-3"), \
+        page(36, "Package Name TO252-5")
+    rows = R.page_scores(texts, "BD33FC0FP", "TO-252-2")[0]
+    assert rows[34]["drawing"] > 0, rows[34]
+    assert not rows[33]["drawing"], rows[33]       # (TO252-5 on p36 is the same outline name: lead counts differ
+                                                   # between makers, KiCad's TO-252-2 is ROHM's TO252-3)
+    pages, why = R.pick_pages(texts, 6, "BD33FC0FP", "TO-252-2")
+    assert 35 in pages and "drawing" in why[35], (pages, why)
+
+
+def test_ti_dsbga_size_box_with_the_values_after_both_labels():
+    # BQ51051BYFP p43 exactly as its text layer comes out
+    box = "D: Max = \nE: Max = \n3.036 mm, Min = \n1.913 mm, Min = \n2.976 mm\n1.852 mm"
+    pages, why = R.pick_pages(_pages(50, p42=box), 6, "BQ51051BYFPR", "DSBGA-28")
+    assert 43 in pages and "drawing" in why[43], (pages, why)
+
+
+def test_a_hints_second_number_still_agrees_with_the_ordering_lines():
+    # UCC256301 hint "SOIC-14-16" (14 pins in a 16-pin body): the ordering lines' SO16 is the same package
+    assert R._agree({"SO14"}, {"SO16", "SO8"}, {"14", "16"}) == {"SO16"}
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -64,7 +64,8 @@ CATS = {
                            r"ordering|part number|订购|订货", re.I)}
 TABLE = {"drawing": re.compile(r"\b(min\.?|minimum)\b[\s\S]{0,80}\b(max\.?|maximum)\b", re.I),
          "pinout": re.compile(r"\bpin\s*(no\.?|number|#)|\bno\.\s+name\b|\bname\s+(type|i/o)\b|pin name", re.I)}
-DSBGA_BOX = re.compile(r"\bD\s*:?\s*Max\s*=\s*\d[\s\S]{0,160}?\bE\s*:?\s*Max\s*=\s*\d", re.I)   # "D: Max = 1.19 mm, Min = ..."
+DSBGA_BOX = re.compile(r"\bD\s*:\s*Max\s*=[\s\S]{0,160}?\bE\s*:\s*Max\s*=[\s\S]{0,160}?\d\.\d+\s*mm,?\s*Min\s*=", re.I)
+                                                      # "D: Max = \nE: Max = \n3.036 mm, Min = \n..." (the values may follow)
 DIM_SYMS = re.compile(r"(?<![A-Za-z0-9])(A1|A2|D1|E1|D2|E2)(?![A-Za-z0-9])")
 NOISE = re.compile(r"tape and reel|reel dimensions|carrier tape|package materials information|revision history|"
                    r"important notice|tape dimensions|stencil design", re.I)
@@ -78,6 +79,21 @@ def _noise(t):
     lists "48-Lead LQFP in 13" Tape and Reel" under the drawing it shares a page with (ADAU1702 p52)."""
     hits = [m_ for m_ in NOISE.finditer(t)]
     return any(m_.group(0).lower() != "tape and reel" or m_.start() < 300 for m_ in hits)
+
+
+def _line_key(ln):
+    return re.sub(r"\d+", "#", " ".join(ln.split()))
+
+
+def _boilerplate(texts):
+    """The lines (page numbers aside) printed on at least half the pages: the running header and footer."""
+    if len(texts) < 6:
+        return set()
+    seen = {}
+    for t in texts:
+        for k in {_line_key(ln) for ln in norm_text(t).splitlines()} - {""}:
+            seen[k] = seen.get(k, 0) + 1
+    return {k for k, v in seen.items() if v >= max(3, len(texts) // 2)}
 
 
 def norm_text(t):
@@ -128,14 +144,15 @@ def _fam_n(t):
     return (t, "") if f in OUTLINE_FAMS else (f, t[len(f):])
 
 
-def _agree(hint, toks):
+def _agree(hint, toks, alt=()):
     """The ordering lines' packages for this part that agree with a hint naming one (family, and pin count where both give
     one): a PDF line that names another package (AUIPS6011R's TO220 next to its DPAK, 16550's "44-Pin PDIP" printed
     for the 40-pin one) never outvotes the package asked for. No hint, or a hint with no family: all of them."""
     hs = [_fam_n(h) for h in hint]
     if not hs:
         return toks
-    return {t for t in toks for f, n in [_fam_n(t)] if any(f == hf and (not n or not hn or n == hn) for hf, hn in hs)}
+    return {t for t in toks for f, n in [_fam_n(t)]
+            if any(f == hf and (not n or not hn or n == hn or n in alt) for hf, hn in hs)}
 
 
 def mpn_variants(part):
@@ -577,7 +594,7 @@ def page_scores(texts, part=None, package=None, marks=None):
     desig = {fx["code"].upper()} if fx and fx.get("code") else set()
     desig |= {c for c in codes if re.fullmatch(r"[A-Z]{1,4}", c)}   # "TXB0101YZP": YZP on the line naming the part
     ktoks, key, sizes = ordering_key(texts, part, hint | otoks)
-    otoks = _agree(hint, otoks)                       # (the ordering key is decoded from the MPN itself: it stays)
+    otoks = _agree(hint, otoks, set(re.findall(r"\d+", package or "")))   # "SOIC-14-16": 14 pins, 16 body                       # (the ordering key is decoded from the MPN itself: it stays)
     own = hint | otoks | ktoks
     own_counts = {int(x) for x in (re.search(r"\d+$", t) for t in own) for x in ([x.group(0)] if x else [])}
     sec_n = {}
@@ -589,6 +606,7 @@ def page_scores(texts, part=None, package=None, marks=None):
     vs = mpn_variants(part)
     n, rows = len(texts), []
     first_mech = None
+    boiler = _boilerplate(texts)
     for i, raw in enumerate(texts):
         t = norm_text(raw)
         s = {c: min(2, len(rx.findall(t))) * (3 if c != "ordering" else 2) for c, rx in CATS.items()}
@@ -622,16 +640,19 @@ def page_scores(texts, part=None, package=None, marks=None):
         if re.search(r"orderable|package option addendum|ordering information", t, re.I):
             s["drawing"] //= 3                        # "Package Drawing" is a column of the ordering table there
         toc = len(re.findall(r"\.{5,}|(?:\. ){5,}", t)) >= 6
-        if toc or _noise(t):
+        s["noise"] = _noise(t)
+        if toc or s["noise"]:
             for c in CATS:
                 s[c] = s[c] // 4
         s["toc"] = toc
         if first_mech is None and (s["drawing"] or s["land"]) and i >= n // 3:
             first_mech = i
+        body = "\n".join(ln for ln in t.splitlines() if _line_key(ln) not in boiler).strip()   # (the running
         s["blank"] = len(t.strip()) < 40
-        if len(t.strip()) < 120 and s["solo"] and any(re.search(r"\d", x) for x in ptoks) and not \
+        if len(body) < 120 and s["solo"] and any(re.search(r"\d", x) for x in ptoks) and not \
                 any(s[c] for c in CATS) and re.search(r"\bpackage|\boutline", t, re.I):
-            s["drawing"] = max(s["drawing"], 5)       # an image drawing captioned only "Package Name TO252-3" (ROHM)
+            s["drawing"] = max(s["drawing"], 5)       # header and footer aside, an image drawing captioned only
+                                                      # "Package Name TO252-3" (ROHM BD33FC0FP p35)
         s["mark"] = ""
         m = (marks[i] if marks and i < len(marks) else "") or ""
         if m and not toc and not _noise(t):
@@ -721,7 +742,8 @@ def pick_pages(texts, budget, part=None, package=None, marks=None):
         add(max(pins_own, key=lambda i: (rows[i]["solo"], _rank(rows[i], "pinout"), -i)), "pinout (this package)")
     if "drawing" in best:                             # the drawing's continuation (table, notes, second view)
         j = best["drawing"] + 1
-        if j < len(rows) and (rows[j]["drawing"] or rows[j]["land"] or rows[j]["blank"]) and not rows[j]["other"]:
+        if j < len(rows) and (rows[j]["drawing"] or rows[j]["land"] or rows[j]["blank"]) and not rows[j]["other"] \
+                and not rows[j]["noise"]:                 # (STULPI01A p41: the tape-and-reel outline that follows)
             add(j, "drawing (continued)")
             # image-only pages right after it: TI's land pattern page for the same package has no text layer
             # (TLC5951DAP p51, "LAND PATTERN DATA - DAP", live benchmark 2026-10-21: never sent, so the thermal land
