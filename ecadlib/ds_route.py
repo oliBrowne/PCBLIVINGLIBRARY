@@ -53,7 +53,7 @@ CATS = {
     "drawing": re.compile(r"package (outline|drawing|dimensions?|information)|outline dimensions?|dimensions shown in|mechanical (data|drawing|"
                           r"dimensions?)|physical dimensions?|shape (&|and) dimensions|case outline|packaging information|"
                           r"dimensions\s*(-|in)\s*(mm|millimet)|chip resistor outlines|package profile|外形尺寸|封装尺寸", re.I),
-    "land": re.compile(r"land pattern|board layout|etch and via pattern|"
+    "land": re.compile(r"land pattern|board layout|etch and via\s+pattern|"
                        r"thermal (?:pad areas?|lands?)\b(?=[\s\S]{0,80}?\d\s*(?:mm|mils?)?\s*[x×]\s*\d)|"   # PowerPAD lands in
                        # prose, with a size ("Thermal Land 299 mils x 510 mils", OPA569DWP p19), not layout advice
                        r"recommended (footprint|land|pcb|solder|pad)|(suggested|recommended) pad layout|"

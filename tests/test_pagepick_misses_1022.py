@@ -130,6 +130,17 @@ def test_powerpad_land_prose_needs_a_size_and_wins_at_a_small_budget():
         assert 20 in pages and 13 not in pages, (b, pages, why)
 
 
+def test_powerpad_land_as_the_page_lays_it_out_one_callout_line_each():
+    # OPA569DWP p19 as page_texts returns it: label, mils and mm on their own lines; the caption split over two
+    p19 = ("FIGURE 17. Via Connection.\nThermal Land\n299 mils x 510 mils\nMinimum Area (7.59mm x 12.95mm)\n(Copper)\n"
+           "OPTIONAL:\nAdditional 4 vias outside of\nthermal pad area but under\nthe package\n(Via diameter = 25 mils)")
+    assert R.page_scores(_pages(21, p19=p19), "OPA569DWP", "SOIC-20")[0][19]["land"] > 0
+    caption = "FIGURE 18. 20-Pin DWP PowerPAD PCB Etch and Via\nPattern."
+    assert R.page_scores(_pages(21, p19=caption), "OPA569DWP", "SOIC-20")[0][19]["land"] > 0
+    mask = "7. The top-side solder mask should leave the terminals of the\npad connections and the thermal pad area exposed."
+    assert R.page_scores(_pages(21, p19=mask), "OPA569DWP", "SOIC-20")[0][19]["land"] == 0
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
