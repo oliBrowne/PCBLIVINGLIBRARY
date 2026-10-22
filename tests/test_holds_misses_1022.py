@@ -81,21 +81,39 @@ def read_through_librarian(ext, pdf):
         return a, sorted(side.glob("*.extraction.json"))
 
 
+def odd_ep():
+    """GOOD with an exposed pad no checked VQFN-16 has: stdparts.identify names no package for it."""
+    e = copy.deepcopy(TD.GOOD)
+    e["package"]["exposed_pad"] = {"length": TD.dim("D2", None, 1.37, None, page=32), "width": TD.dim("E2", None, 1.21, None, page=32)}
+    e["package"]["name"] = "VQFN-16-1EP_3x3mm_P0.5mm_EP1.37x1.21mm"
+    return e
+
+
 def test_the_librarian_holds_a_read_that_missed_the_land_on_its_pages():
     pdf = TR.pdf_lines([["TESTPART 3 A buck converter", "VQFN-16 3x3 mm"], POINTER, LAND_PAGE])
-    a, _ = read_through_librarian(TD.GOOD, pdf)
+    a, _ = read_through_librarian(odd_ep(), pdf)
     assert not (a.get("footprint") or {}).get("file"), a.get("footprint")
     tried = [t for t in a["librarian"]["tried"] if t.startswith("datasheet")]
     assert any("recommended land for this package (page 3)" in t for t in tried), tried
     # the same read with the land block builds from it
-    with_land = copy.deepcopy(TD.GOOD)
+    with_land = odd_ep()
     keys = D.output_schema()["properties"]["package"]["properties"]["land"]["anyOf"][0]["properties"]
     with_land["package"]["land"] = dict(dict.fromkeys(keys), pad_length=0.8, pad_width=0.3, pad_center=1.45)
     a, _ = read_through_librarian(with_land, pdf)
     assert (a.get("footprint") or {}).get("file"), a["librarian"]["tried"]
     # and a PDF without the land page builds the IPC land as before
-    a, _ = read_through_librarian(TD.GOOD, TR.pdf_lines([["TESTPART 3 A buck converter", "VQFN-16 3x3 mm"], POINTER]))
-    assert (a.get("footprint") or {}).get("file"), a["librarian"]["tried"]
+    a, _ = read_through_librarian(odd_ep(), TR.pdf_lines([["TESTPART 3 A buck converter", "VQFN-16 3x3 mm"], POINTER]))
+    assert (a.get("footprint") or {}).get("file") and a["source"]["footprint"].startswith("datasheet:"), a["librarian"]["tried"]
+
+
+def test_a_missed_land_on_a_checked_package_builds_the_checked_standard_land_and_says_so():
+    # the read names exactly one checked package (stdparts.identify): its land, KiCad's, rather than IPC pads from the
+    # body (default run 2026-10-22: LT3652IDD, LT8610, LTC7810 matched KiCad that way and would otherwise be held)
+    pdf = TR.pdf_lines([["TESTPART 3 A buck converter", "VQFN-16 3x3 mm"], POINTER, LAND_PAGE])
+    a, _ = read_through_librarian(TD.GOOD, pdf)
+    assert (a.get("footprint") or {}).get("file") and a["source"]["footprint"].startswith("standard:"), a["source"]
+    rv = [r for r in a["librarian"]["review"] if r.startswith("standard land:")]
+    assert rv and "prints its own land (page 3) but the read did not return it" in rv[0], a["librarian"]["review"]
 
 
 # ---------------------------------------------------------------- a custom pad table with no body
