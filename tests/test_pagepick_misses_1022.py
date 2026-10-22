@@ -179,6 +179,16 @@ def test_a_hints_second_number_still_agrees_with_the_ordering_lines():
     assert R._agree({"SO14"}, {"SO16", "SO8"}, {"14", "16"}) == {"SO16"}
 
 
+def test_a_spelled_out_ball_grid_array_heading_names_its_pin_count():
+    # EPM1270M256 p117: the 144-ball figure's caption at the top, this package's heading and table below it
+    assert R.package_tokens("256-Pin Micro FineLine Ball-Grid Array (MBGA)") == {"BGA256"}
+    assert R.package_tokens("100-ball ball grid array") == {"BGA100"}
+    p117 = ("Package Outline Dimension Table (Part 1 of 2) Symbol Millimeters Min. Nom. Max. A1 0.15 A2 1.00 D 11.00 BSC\n"
+            "Figure 7-6. 144-Pin Micro FineLine BGA Package Outline TOP VIEW\n256-Pin Micro FineLine Ball-Grid Array (MBGA)")
+    rows = R.page_scores(_pages(130, p116=p117), "EPM1270M256C5", "FBGA-256")[0]
+    assert rows[116]["own"] and not rows[116]["other"], rows[116]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

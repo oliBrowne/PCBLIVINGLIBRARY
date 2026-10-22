@@ -105,7 +105,7 @@ def package_tokens(text):
     without a number ('WSON') gives the family alone, unless the text also numbers it ("LQFP144, 144-lead LQFP" is
     QFP144 only: a family-only token would match every other LQFP)."""
     out = set()
-    up = norm_text(text).upper()
+    up = re.sub(r"BALL[\s-]*GRID[\s-]*ARRAY", "BGA", norm_text(text).upper())   # "256-Pin Micro FineLine Ball-Grid Array"
     counted = {}                                      # "64-PIN LQFP": the count before the family (SAM E70 bookmarks)
     for m in _COUNT_FAM_RX.finditer(up):
         counted[m.start(2)] = m.group(1)
