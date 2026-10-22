@@ -2189,9 +2189,14 @@ def folder_file_name(part):
 
 
 def part_arg(part):
-    """A part number as a --part value to paste into a shell: quoted when it holds a space or a shell character."""
-    s = str(part or "").strip().replace('"', "")
-    return s if re.fullmatch(r"[\w.#+/,=:@%-]+", s) else f'"{s}"'
+    """A part number as a --part value to paste into a shell: quoted when it holds a space or a shell character, in
+    double quotes (messages reads them back), or shlex.quote's single quotes when a double-quoted value would still
+    run something ($(...), backticks, \\, !, a quote)."""
+    import shlex
+    s = str(part or "").strip()
+    if re.fullmatch(r"[\w.+/,=:@%-][\w.#+/,=:@%-]*", s):
+        return s
+    return shlex.quote(s) if re.search(r"[$`\\\"!]", s) else f'"{s}"'
 
 
 def folder_failure(prov):
@@ -2271,23 +2276,46 @@ def is_pdf(data):
 MENTION_PAGES = 5                                     # the first pages a datasheet names its part (or family) on
 
 
+def _numeric_core(main, key):
+    """Where an MPN's part number ends and its ordering suffix starts (a length of key), or None (no digits): after its
+    first run of 3+ digits (STM32F103 of STM32F103C8T6, TPS7A4701 of TPS7A4701RGWR), else after its last digit run
+    (SN74LVC1G08 of SN74LVC1G08DBVR, ESP32S3WROOM1), not counting a last -segment that starts with digits and goes on
+    in letters (ATTINY85 of ATTINY85-20PU: speed and package). Digit runs are counted within -segments."""
+    segs = [s for s in re.split(r"[^A-Z0-9]+", main) if s]
+    if len(segs) > 1 and re.fullmatch(r"\d+[A-Z][A-Z0-9]*", segs[-1]):
+        segs = segs[:-1]
+    at, runs = 0, []
+    for s in segs:
+        runs += [(len(m.group()), at + m.end()) for m in re.finditer(r"\d+", s)]
+        at += len(s)
+    if not runs:
+        return None
+    return next((end for n, end in runs if n >= 3), runs[-1][1])
+
+
 def mentions_part(texts, mpn):
     """Does the text of a PDF's first pages name the part? True: the MPN, or a prefix of it that keeps its whole
-    numeric core (AD5274BRM -> AD5274 in "AD5272/AD5274"; LTC4060EDHC -> LTC4060, never LTC40, which LTC4054 has),
-    a family name with x for any character (C8051F32x, TPS2660x) or a range that holds it (MAX22201-MAX22207).
-    False: none of these. None: it can't be told (no text layer, a scanned PDF, no part number), never a rejection."""
-    key = re.sub(r"[^A-Z0-9]", "", re.split(r"[#/]", str(mpn or "").strip().upper())[0])   # #PBF, /NOPB tails off
-    core = re.match(r"\d*[A-Z]*\d+", key)
+    numeric core (AD5274BRM -> AD5274 in "AD5272/AD5274"; LTC4060EDHC -> LTC4060, never LTC40, which LTC4054 has;
+    STM32F103C8T6 -> STM32F103, never STM32, which STM32L476 has), its series name as a word of its own (SM6T for
+    SM6T100A), a family name with x for any one character (C8051F32x, TPS2660x, SNx4HC595, STM32F103x8) or a range
+    that holds it (MAX22201-MAX22207). False: none of these. None: it can't be told (no text layer, a scanned PDF, no
+    part number), never a rejection."""
+    main = re.split(r"[#/]", str(mpn or "").strip().upper())[0]                         # #PBF, /NOPB tails off
+    key = re.sub(r"[^A-Z0-9]", "", main)
+    core = _numeric_core(main, key)
     raw = " ".join(t or "" for t in texts or []).upper()
     flat = re.sub(r"[^A-Z0-9]", "", raw)
     if len(key) < 4 or not core or len(flat) < 40:
         return None
-    n = max(4, core.end())
+    n = max(4, core)
     if any(key[:i] in flat for i in range(len(key), n - 1, -1)):
         return True
-    for m in re.finditer(r"([A-Z0-9]*\d[A-Z0-9]*?)(X+)\b", raw):          # C8051F32x: x is any character
-        stem, nx = m.group(1), len(m.group(2))
-        if len(stem) + nx >= n and len(key) >= len(stem) + nx and key.startswith(stem):
+    series = re.match(r"\d*[A-Z]*\d+[A-Z]+", key)     # SM6T100A -> SM6T: only as a word, never inside SM6T200A
+    if series and 4 <= series.end() < n and series.group() in {re.sub(r"[^A-Z0-9]", "", w) for w in raw.split()}:
+        return True
+    for t in set(re.findall(r"[A-Z0-9]+", raw)):      # C8051F32x, SNx4HC595: x is any one character
+        if "X" in t[1:] and re.search(r"\d", t) and n <= len(t) <= len(key) and \
+                re.match(re.escape(t[0]) + "".join("." if c == "X" else c for c in t[1:]), key):
             return True
     lead = re.match(r"([A-Z]+)(\d+)", key)
     for m in re.finditer(r"\b([A-Z]+)(\d+)[A-Z]*\s*[-–—/]\s*([A-Z]+)?(\d+)", raw) if lead else ():
@@ -2303,11 +2331,28 @@ _NO_FETCH_HOSTS = re.compile(r"(localhost|.*\.localhost|metadata|metadata\.googl
                              re.I)
 
 
-def unsafe_download(url):
+def _resolve(host):
+    """The addresses a host name resolves to ([] when it does not): for unsafe_download(public=True)."""
+    import socket
+    try:
+        return [a[4][0] for a in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)]
+    except (OSError, UnicodeError, ValueError):
+        return []
+
+
+def _private(ip):
+    """A private network's address (10.x, 172.16/12, 192.168.x, CGNAT 100.64/10, fc00::/7 ...): not the internet's."""
+    import ipaddress
+    return ip.is_private or (ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"))
+
+
+def unsafe_download(url, public=False):
     """Why a datasheet link must not be downloaded, or None: only http(s), and never this machine (loopback), a
     link-local address (cloud metadata at 169.254.169.254) or another non-routable address. A datasheet link comes
     from a BOM or a web page someone else wrote, and the bytes are stored and sent to the model; a datasheet server
-    on your own network (10.x, 192.168.x) stays allowed. Literal addresses and well-known names only (no DNS lookup)."""
+    on your own network (10.x, 192.168.x) stays allowed. Literal addresses and well-known names only (no DNS lookup).
+    public: a link a web search gave (no person chose it): a private network's address is refused too, and so is a
+    name that resolves to any such address (names under .example / .test / .invalid are not looked up)."""
     import ipaddress
     from urllib.parse import urlsplit
     try:
@@ -2322,12 +2367,22 @@ def unsafe_download(url):
     if _NO_FETCH_HOSTS.fullmatch(host):
         return f"{host} is this machine or a cloud metadata service"
     try:
-        ip = ipaddress.ip_address(host)
+        ips = [ipaddress.ip_address(host)]
     except ValueError:
-        return None
-    ip = getattr(ip, "ipv4_mapped", None) or ip
-    if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved:
-        return f"{host} is this machine, a link-local or a reserved address"
+        if not public or re.search(r"\.(example|test|invalid)\.?$", host, re.I):
+            return None
+        ips = []
+        for a in _resolve(host):
+            try:
+                ips.append(ipaddress.ip_address(a.split("%")[0]))
+            except ValueError:
+                continue
+    for ip in ips:
+        ip = getattr(ip, "ipv4_mapped", None) or ip
+        if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved:
+            return f"{host} is this machine, a link-local or a reserved address"
+        if public and _private(ip):
+            return f"{host} is a private network's address (a web search's link: only public sites)"
     return None
 
 
@@ -2547,22 +2602,23 @@ class PdfStore:
             h.log.append(("GET", url, r.status_code, False))
         return r.status_code, data, r.headers.get("content-type", ""), getattr(r, "url", url), None, r.headers
 
-    def fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None, mpn=None):
+    def fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None, mpn=None, public=False):
         """-> (pdf bytes, provenance). Raises DatasheetError (with the reason) when it is not a usable PDF.
         follow: a link that gives a product HTML page is followed once to the PDF the page links to.
         part: the MPN, for a PDF taken from the Downloads folder (pdf_fetch.Handoff checks it names the part).
         handoff: False leaves the hand-off out (Reader.job asks a person only once no link of the part worked);
         "only" tries just the hand-off, for a link every other way was refused for this run.
         mpn: the part's MPN: a PDF whose first pages do not name it (mentions_part) is not its datasheet (a press
-        release a link redirected to; LTC4060EDHC's link serving the LTC4054 datasheet). Kept in the cache all the same."""
-        data, meta = self._fetch(url, where, follow, part, handoff, _page)
+        release a link redirected to; LTC4060EDHC's link serving the LTC4054 datasheet). Kept in the cache all the same.
+        public: a web search's link: it, its redirect and its page's PDF link must be public (unsafe_download)."""
+        data, meta = self._fetch(url, where, follow, part, handoff, _page, public)
         if mpn:
             from . import ds_route as DR
             if mentions_part(DR.page_texts(data, MENTION_PAGES), mpn) is False:
                 raise DatasheetError(f"the PDF at {meta.get('url') or url} doesn't mention {mpn}")
         return data, meta
 
-    def _fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None):
+    def _fetch(self, url, where="", follow=True, part=None, handoff=True, _page=None, public=False):
         stem = hashlib.sha256(url.encode()).hexdigest()[:24]
         pdf_f, meta_f = self.dir / f"{stem}.pdf", self.dir / f"{stem}.json"
         if pdf_f.exists() and meta_f.exists():
@@ -2573,7 +2629,7 @@ class PdfStore:
                 meta = None
             if isinstance(meta, dict) and hashlib.sha256(data).hexdigest() == meta.get("sha256"):
                 return data, dict(meta, where=where or meta.get("where"), from_cache=True)
-        why = unsafe_download(url)                    # a BOM cell or a page's link to this machine / cloud metadata
+        why = unsafe_download(url, public)            # a BOM cell or a page's link to this machine / cloud metadata
         if why:
             raise DatasheetError(f"{url}: not downloaded ({why})")
         if self.offline:
@@ -2585,7 +2641,7 @@ class PdfStore:
         also = f" (also tried {'; '.join(notes)})" if notes else ""
         if err:
             raise DatasheetError(f"{url}: {err}{also}")
-        why = unsafe_download(final) if final and final != url else None
+        why = unsafe_download(final, public) if final and final != url else None
         if why:                                       # redirected there: the bytes are not kept or sent anywhere
             raise DatasheetError(f"{url}: redirected to {final}, not used ({why})")
         if not 200 <= (status or 0) < 300:
@@ -2598,7 +2654,8 @@ class PdfStore:
             link = pdf_link(data, final or url, docs=True) if html and follow else None
             if link and link != url:
                 try:
-                    pdf, meta = self._fetch(link, where, follow=False, part=part, handoff=handoff, _page=url)
+                    pdf, meta = self._fetch(link, where, follow=False, part=part, handoff=handoff, _page=url,
+                                            public=public)
                     return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
                 except DatasheetError as e:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
@@ -2747,7 +2804,9 @@ class ResultCache:
         if rec is not None or not key.startswith("check-"):
             return rec
         head, _, h = key.rsplit("-", 2)               # check-<src>-<model>-<reader schema>-<hash>
-        for f in sorted(self.dir.glob(f"{head}-*-{h}.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+        same = re.compile(re.escape(head) + r"-[^-]+-" + re.escape(h))   # the schema is one segment: a claude-opus-5
+        for f in sorted((f for f in self.dir.glob(f"{head}-*-{h}.json") if same.fullmatch(f.stem)),   # key never
+                        key=lambda f: f.stat().st_mtime, reverse=True):         # takes a claude-opus-5-5 check
             rec = self.get(f.stem)
             if rec and "message" in rec:
                 return rec
@@ -2920,56 +2979,73 @@ class Reader:
     def _web_search(self, part, package, attempts, maker=None):
         """[datasheet] web_search: once no link, part source or folder file gave a PDF (or the part had no link at
         all), one search for the maker's PDF (ecadlib.ds_search), held under [datasheet] max_cost_usd and written to
-        cost.jsonl. A link found before for the part is downloaded again without a search. maker: the BOM's or a part
-        source's manufacturer, named in the search. -> (data, prov) or (None, None), the misses in attempts."""
+        cost.jsonl. A link found before for the part is downloaded again without a search (one that fails now is
+        dropped, and searched for again). maker: the BOM's or a part source's manufacturer, named in the search.
+        Search links must be public addresses (unsafe_download public=True). -> (data, prov) or (None, None), the
+        misses in attempts."""
         from . import ds_search as WS
         found = WS.Found(self.dir)
-        urls = [found.get(part)] if found.get(part) else []
-        if not urls:
-            model = self.cfg.get("web_search_model") or self.model
-            uses = int(self.cfg.get("web_search_max_uses") or WS.MAX_USES)
-            fallback = model in FALLBACK_MODELS       # a classifier decline is re-run on another model, as for a read
-            est, cap = WS.estimate(model, uses, fallback), float(self.cfg.get("max_cost_usd") or 0)
-            if cap and (est is None or self.committed_usd + est > cap):
-                attempts.append({"url": "", "where": "web search", "error": f"not searched: about ${est or 0:.2f} more "
-                                 f"would pass [datasheet] max_cost_usd = {cap:g}"})
-                return None, None
-            headers, extra = ({"anthropic-beta": FALLBACK_BETA}, {"fallbacks": "default"}) if fallback else ({}, {})
+        saved = found.get(part)
+        if saved:
+            got = self._fetch_found(saved, part, attempts)
+            if got:
+                return got
+            found.drop(part)                          # it gave its PDF once and no longer does: search again
+        model = self.cfg.get("web_search_model") or self.model
+        uses = self.cfg.get("web_search_max_uses")
+        uses = WS.MAX_USES if uses is None or str(uses).strip() == "" else int(uses)
+        if uses < 1:                                  # 0: no search may be made
+            attempts.append({"url": "", "where": "web search", "error": f"not searched: [datasheet] web_search_max_uses "
+                             f"= {uses}"})
+            return None, None
+        fallback = model in FALLBACK_MODELS           # a classifier decline is re-run on another model, as for a read
+        est, cap = WS.estimate(model, uses, fallback), float(self.cfg.get("max_cost_usd") or 0)
+        if cap and (est is None or self.committed_usd + est > cap):
+            attempts.append({"url": "", "where": "web search", "error": f"not searched: about ${est or 0:.2f} more "
+                             f"would pass [datasheet] max_cost_usd = {cap:g}"})
+            return None, None
+        headers, extra = ({"anthropic-beta": FALLBACK_BETA}, {"fallbacks": "default"}) if fallback else ({}, {})
 
-            def may_continue(turns):                  # a pause_turn continuation: only while another turn fits the cap
-                return not cap or self.committed_usd + (WS.usd(model, turns) or 0.0) + est <= cap
-            try:
-                client = self.client(model)
-            except DatasheetError as e:               # (--offline, no key: nothing was sent)
-                attempts.append({"url": "", "where": "web search", "error": f"search failed: {e}"})
-                return None, None
-            urls, usage, turns, err = WS.search(client, part, model, maker=maker, package=package, max_uses=uses,
-                                                headers=headers, extra=extra, may_continue=may_continue)
-            usd = WS.usd(model, turns)
-            how = "usage" if usd is not None and not err else "estimate"
-            if usd is None:                           # (a model with no known price: the worst case is held)
-                usd = est or 0.0
-            if err:                                   # the failed request may still have been billed: hold its worst case
-                usd += est or 0.0
-            self.committed_usd += usd
-            self.ledger.add({"part": part, "name": part, "model": model,
-                             "model_served": (turns[-1] if turns else {}).get("model"), "via": "web search",
-                             "input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0),
-                             "web_searches": usage.get("web_search_requests", 0), "usd": round(usd, 6), "how": how,
-                             "verdict": f"search failed: {err}" if err else f"{len(urls)} links"})
-            if err and not urls:
-                attempts.append({"url": "", "where": "web search", "error": f"search failed: {err}"})
-            elif not urls:
-                attempts.append({"url": "", "where": "web search", "error": "the search found no PDF link"})
+        def may_continue(turns):                      # a continuation resends what was read: only while it fits the cap
+            nxt = WS.next_turn(model, turns, uses, fallback)
+            return not cap or (nxt is not None and self.committed_usd + WS.usd(model, turns, unknown=est) + nxt <= cap)
+        try:
+            client = self.client(model)
+        except DatasheetError as e:                   # (--offline, no key: nothing was sent)
+            attempts.append({"url": "", "where": "web search", "error": f"search failed: {e}"})
+            return None, None
+        urls, usage, turns, err = WS.search(client, part, model, maker=maker, package=package, max_uses=uses,
+                                            headers=headers, extra=extra, may_continue=may_continue)
+        how = "usage" if WS.usd(model, turns) is not None and not err else "estimate"
+        usd = WS.usd(model, turns, unknown=est or 0.0)   # each turn with no usage (or no price) holds its worst case
+        if err:                                       # the failed request may still have been billed: hold its worst case
+            usd += est or 0.0
+        self.committed_usd += usd
+        self.ledger.add({"part": part, "name": part, "model": model,
+                         "model_served": (turns[-1] if turns else {}).get("model"), "via": "web search",
+                         "input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0),
+                         "web_searches": usage.get("web_search_requests", 0), "usd": round(usd, 6), "how": how,
+                         "verdict": f"search failed: {err}" if err else f"{len(urls)} links"})
+        if err and not urls:
+            attempts.append({"url": "", "where": "web search", "error": f"search failed: {err}"})
+        elif not urls:
+            attempts.append({"url": "", "where": "web search", "error": "the search found no PDF link"})
         for url in urls:
-            try:
-                data, prov = self.store.fetch(url, "web search", part=part, handoff=False, mpn=part)
-            except DatasheetError as e:
-                attempts.append({"url": url, "where": "web search", "error": str(e)})
-                continue
-            found.put(part, url)
-            return data, dict(prov, found_by="web search")
+            got = self._fetch_found(url, part, attempts)
+            if got:
+                found.put(part, url)
+                return got
         return None, None
+
+    def _fetch_found(self, url, part, attempts):
+        """A link a web search gave -> (data, prov) or None (the miss in attempts). Never a private address: the link
+        is a web page's, not the person's own BOM's."""
+        try:
+            data, prov = self.store.fetch(url, "web search", part=part, handoff=False, mpn=part, public=True)
+        except DatasheetError as e:
+            attempts.append({"url": url, "where": "web search", "error": str(e)})
+            return None
+        return data, dict(prov, found_by="web search")
 
     # --- jobs
     def job(self, part, urls, package=None, pages=None, name=None, fp_needed=None, mpn=None, maker=None):
@@ -2996,6 +3072,7 @@ class Reader:
                 break
             except DatasheetError as e:
                 attempts.append({"url": url, "where": where, "error": str(e)})
+        linked = list(attempts)                       # what the part's own links got (not the hand-off, not a search)
         if data is None:
             data, prov, _ = self._folder_pdf(part, urls, ("family",), attempts)
         if data is None and self.store.handoff is not None:   # no link worked by itself: ask the person, link by link
@@ -3006,17 +3083,19 @@ class Reader:
                     break
                 except DatasheetError as e:
                     attempts.append({"url": url, "where": where, "error": str(e)})
-        unnamed = next((a for a in attempts if re.match(r"the PDF at .* doesn't mention ", a["error"])), None)
-        if data is None and unnamed:                  # the only PDF there is: read it, flagged (a connector catalog or a
-            try:                                      # family sheet can name the part only in a table the check misses)
-                data, prov = self.store.fetch(unnamed["url"], unnamed["where"], part=part, handoff=False)
-                prov = dict(prov, unnamed=unnamed["error"])
-            except DatasheetError:
-                data = None
         if data is None:
             data, prov, _ = self._folder_pdf(part, urls, ("other",), attempts)
         if data is None and self.cfg.get("web_search") and not self.estimate_only:
             data, prov = self._web_search(mpn or part, package, attempts, maker)
+        unnamed = next((a for a in linked if re.match(r"the PDF at .* doesn't mention ", a["error"])), None)
+        # the only PDF there is, once nothing else (folder, hand-off, search) gave one: read it, flagged (a connector
+        # catalog or a family sheet can name the part only in a table the check misses)
+        if data is None and unnamed:
+            try:
+                data, prov = self.store.fetch(unnamed["url"], unnamed["where"], part=part, handoff=False)
+                prov = dict(prov, unnamed=unnamed["error"])
+            except DatasheetError:
+                data = None
         if data is None:
             how = "; ".join(a["error"] for a in attempts if a["where"] == "datasheet folder") or how
             searched = "; ".join(a["error"] for a in attempts if a["where"] == "web search")

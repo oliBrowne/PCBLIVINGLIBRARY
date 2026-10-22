@@ -653,12 +653,20 @@ def names_part(data, part, pages=3):
     return bool(base and len(base.group(0)) >= 4 and base.group(0) in text)
 
 
+# a link's file name that says nothing of the document (…/download?fileId=…, …/view.jsp): never a match by itself
+GENERIC_STEMS = {"DOWNLOAD", "DOWNLOADS", "DOWNLOADFILE", "FILEDOWNLOAD", "DATASHEET", "DATASHEETS", "VIEW",
+                 "VIEWDOCUMENT", "VIEWER", "FILE", "FILES", "PDF", "GETFILE", "GETPDF", "GETDOCUMENT", "GETDATASHEET",
+                 "DOCUMENT", "DOCUMENTS", "DOC", "DOCS", "INDEX", "GET", "DL", "SHOW", "OPEN", "ATTACHMENT", "CONTENT",
+                 "ASSET", "ASSETS", "MEDIA", "RESOURCE", "DGDL", "LIT", "DS", "PRODUCT"}
+
+
 class Handoff:
     """Open a refused link in the person's own browser and take the PDF from their Downloads folder.
 
     A new .pdf there (not one that was there before, not a partial download) is taken when its name matches the
-    link's file name or the part number, or its text names the part; anything else is left alone, so an unrelated
-    download is never read as this part's datasheet. The file stays where it is (it is the person's); its bytes are
+    link's file name (a generic one, GENERIC_STEMS, never) or the part number, or its text names the part, and its
+    first pages do not name another part instead (datasheet.mentions_part); anything else is left alone and never
+    kept, so an unrelated download is never read as this part's datasheet. The file stays where it is (it is the person's); its bytes are
     kept in ecadlib's datasheet cache under the link, so the next run needs no browser. datasheet_folder: [datasheet]
     folder, where the person is told to save a PDF no browser could fetch here."""
 
@@ -696,7 +704,8 @@ class Handoff:
         return f"{how} (or read it alone with `ecadlib datasheet FILE.pdf --part {part_arg(part or 'MPN')}`)"
 
     def get(self, url, part=None):
-        from .datasheet import is_pdf
+        from .datasheet import MENTION_PAGES, is_pdf, mentions_part
+        from .ds_route import page_texts
         if not self.folder.is_dir():                  # (no path in what is returned: it is kept in the part's record)
             return 0, None, "", url, "your Downloads folder was not found (set [datasheet] downloads_folder)"
         try:
@@ -744,8 +753,11 @@ class Handoff:
                         others.add(seen)
                         continue
                     k, pk = _key(p.stem), _key(part)
-                    if (stem and (k == stem or (len(stem) >= 4 and k.startswith(stem)))) or (len(pk) >= 4 and pk in k) \
-                            or (part and names_part(data, part)):
+                    ok = bool(stem and stem not in GENERIC_STEMS and (k == stem or (len(stem) >= 4 and k.startswith(stem)))
+                              or (len(pk) >= 4 and pk in k) or (part and names_part(data, part)))
+                    if ok and part:                   # named for it, yet its pages name another part: not its PDF
+                        ok = mentions_part(page_texts(data, MENTION_PAGES), part) is not False
+                    if ok:
                         self.say(f"  Got {p.name} ({len(data) >> 10} KB).")
                         return 200, data, "application/pdf", url, None, {"x-ecadlib-file": p.name}
                     others.add(seen)
