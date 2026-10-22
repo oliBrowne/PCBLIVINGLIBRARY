@@ -372,14 +372,69 @@ def ic_package(text, defaults=True):
 READ_FAMILIES = {"gullwing": set(FAMILIES) - NO_LEAD - QUAD_LEADED, "qfp": QUAD_LEADED, "qfn": NO_LEAD}
 
 
-def identify(read):
+# ds_route's package families (an ordering key's or ordering table's "QFP144") -> the KiCad family names they cover
+ROUTE_FAMILIES = {"QFP": QUAD_LEADED, "QFN": {"QFN", "VQFN", "WQFN", "UQFN", "TQFN", "HVQFN", "LQFN"},
+                  "SON": {"DFN", "TDFN", "WDFN", "UDFN", "SON", "VSON", "WSON", "USON"}, "SO": {"SOIC", "SO", "SOP"},
+                  "SSOP": {"SSOP", "QSOP"}, "TSSOP": {"TSSOP", "HTSSOP"}, "MSOP": {"MSOP", "VSSOP"}, "TSOP": {"TSOP"}}
+
+
+def _identify_known(read, c, known, miss):
+    """identify() for a read that left pitch or body blank, when the PDF's own ordering key or ordering table named
+    the package (ds_route: "QFP144"): the KiCad generic names of that family and pin count that fit everything the
+    read does give (pitch, body, exposed pad, the family its drawing is titled with) -> (name, how) when exactly one
+    land is left and it is in the checked table, else (None, why). The known package only narrows; it never stands
+    in for a number the read gives."""
+    from . import crosscheck as CC
+    m = re.fullmatch(r"([A-Z]+?)(\d+)(?: ([\d.]+)x([\d.]+)mm)?", str(known or ""))
+    if not m or m.group(1) not in ROUTE_FAMILIES:
+        return None, f"the read has no {', '.join(miss)}"
+    fams, pins = ROUTE_FAMILIES[m.group(1)] & READ_FAMILIES.get(read.get("package_type"), set()), int(m.group(2))
+    if not fams or (c["pin_count"] is not None and c["pin_count"] != pins):
+        return None, f"the read has no {', '.join(miss)}; the PDF's ordering information names {known}, which does not fit the read"
+    fam = next((a["fam"] for a in map(_free_attrs, (read.get("name"), read.get("description"))) if a), None)
+    if fam in fams:
+        fams = {fam}
+    fits = lambda k, a, x: CC._close(k, a, (x, x, x), True)
+    body = sorted((c["body_length"], c["body_width"]), key=lambda v: v[0]) \
+        if c["body_length"] is not None and c["body_width"] is not None else None
+    ep = sorted((c["ep_length"], c["ep_width"]), key=lambda v: v[0]) if c["has_ep"] else None
+    printed = tuple(sorted((float(m.group(3)), float(m.group(4))))) if m.group(3) else None   # "LK = 80 LQFP (12 mm x 12 mm)"
+    if printed and body and not all(fits("body_width", a, x) for a, x in zip(body, printed)):
+        return None, f"the read has no {', '.join(miss)}; the PDF's ordering information names {known}, not the read's body"
+    names = []
+    for g, n in _generic():
+        if g["fam"] not in fams or g["pins"] != pins or g["ep"] != c["has_ep"] or g["variant"] and n not in packages():
+            continue
+        if c["pitch"] is not None and not fits("pitch", c["pitch"], g["pitch"]):
+            continue
+        if body and not all(fits("body_width", a, x) for a, x in zip(body, g["body"])):
+            continue
+        if printed and not all(abs(a - x) <= 0.05 for a, x in zip(printed, g["body"])):
+            continue
+        if ep and not (g["epsize"] and all(fits("ep_width", a, x) for a, x in zip(ep, g["epsize"]))):
+            continue
+        names.append(n)
+    label = f"the read has no {', '.join(miss)}, the PDF's ordering information names {known}"
+    if not names:
+        return None, f"{label}: no standard package fits"
+    if any(n not in packages() for n in names) or len(names) > 1 and not _same_land(names):
+        return None, f"{label}: ambiguous ({', '.join(sorted(names)[:3])})"
+    c2 = dict(c, pin_count=pins)
+    if any(CC.compare(c2, CC.critical(spec(n)), "table")["disagreed"] for n in names):
+        return None, f"{label}: fits {', '.join(sorted(names)[:3])}, but the read's other numbers disagree"
+    best = sorted(names, key=len)[0]
+    return best, f"{label} -> {best}"
+
+
+def identify(read, known=None):
     """A datasheet read's package (a footprint_gen spec) -> (table name, how) when its own numbers name exactly one
     checked package, else (None, why). Pin count, pitch, body and exposed pad pick the KiCad generic names that fit, in
     the family the drawing is titled with when it names one; a fit that is not in the checked table makes it ambiguous
     (as in ic_package). Each table entry left must agree with the whole read, lead span included (crosscheck.compare
     against the table), and so must no other entry with other pads: a maker's own outline the read names (a slightly
     other exposed pad) makes it ambiguous. The read's terminal and land numbers never pick: a misread there cannot
-    pick wrong."""
+    pick wrong. known: the package the PDF's own ordering key or ordering table names for this part (ds_route,
+    "QFP144" or "QFP80 12x12mm"), for a read that left the pitch or body blank (_identify_known)."""
     from . import crosscheck as CC
     fams = READ_FAMILIES.get(read.get("package_type"))
     if not fams:
@@ -389,7 +444,9 @@ def identify(read):
     if c["has_ep"] and (c["ep_length"] is None or c["ep_width"] is None):
         miss.append("exposed pad size")
     if miss:
-        return None, f"the read has no {', '.join(miss)}"
+        return _identify_known(read, c, known, miss) if known and set(miss) <= {"pin_count", "pitch", "body_length",
+                                                                               "body_width"} \
+            else (None, f"the read has no {', '.join(miss)}")
     fits = lambda k, a, x: CC._close(k, a, (x, x, x), True)
     body = sorted((c["body_length"], c["body_width"]), key=lambda v: v[0])
     ep = sorted((c["ep_length"], c["ep_width"]), key=lambda v: v[0]) if c["has_ep"] else None

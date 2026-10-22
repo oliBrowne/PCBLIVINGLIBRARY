@@ -777,7 +777,7 @@ def test_eval_counts_parts_read_from_the_folder():
     assert s["hand_downloaded"]["cases"] == 1 and s["hand_downloaded"]["ids"] == ["a"]
     rep = {"meta": {"set": "t", "set_version": 1, "model": "m", "sources": ["datasheet"], "mode": "live", "cases": 3,
                     "wall_s": 1, "wall_s_per_part": 0.3}, "summary": s, "cases": []}
-    assert "1 part was read from PDFs downloaded by hand (--datasheets), not from a maker's link: 1/1 of them pass. " \
+    assert "1 part was read from PDFs downloaded by hand (--datasheets), not from a maker's link: 1/1 of them right. " \
            "Without them: **1/2 (50.0 %)**." in R.report_md(rep), R.report_md(rep)
 
 

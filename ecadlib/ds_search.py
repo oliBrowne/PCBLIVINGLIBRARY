@@ -19,10 +19,15 @@ TOOL_BASIC = "web_search_20250305"  # every other model
 SEARCH_USD = 0.01                   # $10 per 1,000 searches, on top of the tokens
 MAX_USES = 3                        # searches per part
 MAX_TURNS = 3                       # pause_turn continuations
+MAX_TOKENS = 4096                   # a turn's max_tokens: the most output it is billed for
 # input / output tokens one part's search may use, for the cost cap: the search results the model reads are most of
 # it (benchmark 2026-10-21, Opus 5.5, 3 searches: $0.03-$0.36 a part, ENS210 about 80K input tokens)
-EST_TOKENS = (90000, 4000)
+EST_TOKENS = (90000, MAX_TOKENS)
 URL_RE = re.compile(r"https?://[^\s\"'<>\])}]+")
+# datasheet aggregators and mirrors (the prompt asks for the maker's or a distributor's copy): a host or domain never taken
+AGGREGATORS = ("alldatasheet", "alldatasheetcn", "datasheetspdf", "datasheet4u", "datasheetarchive", "datasheets360",
+               "datasheetcatalog", "datasheetq", "datasheet.live", "datasheethub", "datasheetgo", "datasheets.com",
+               "elcodis", "icpdf", "kynix")
 NEW_TOOL_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                    "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6"}
 
@@ -47,7 +52,7 @@ def request_body(mpn, model, maker=None, package=None, max_uses=MAX_USES):
                          package=f" (package {package})" if package else "")
     from . import datasheet as D
     levels = D.EFFORT_LEVELS.get(D.base_model(model))   # (Haiku 4.5, Sonnet 4.5 reject output_config.effort)
-    body = {"model": model, "max_tokens": 4096}
+    body = {"model": model, "max_tokens": MAX_TOKENS}
     if levels is None or "low" in levels:
         body["output_config"] = {"effort": "low"}
     return dict(body, **{
@@ -55,8 +60,24 @@ def request_body(mpn, model, maker=None, package=None, max_uses=MAX_USES):
             "messages": [{"role": "user", "content": text}]})
 
 
+def _split(url):
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(url)
+        return (u.hostname or "").lower(), u.path
+    except ValueError:
+        return None, ""
+
+
+def aggregator(url):
+    """Is the link on a datasheet aggregator or mirror (AGGREGATORS: the host or a domain it is under)?"""
+    host = _split(url)[0]
+    return host is None or any(re.search(r"(^|\.)" + re.escape(a) + r"(\.|$)", host) for a in AGGREGATORS)
+
+
 def links_in(content):
-    """The answer's links, in its order, then the PDF-looking links of the search results. -> [url]"""
+    """The answer's links, in its order, then the PDF-looking links of the search results (.pdf, or "datasheet" in the
+    path: never the host's name); never an aggregator's (AGGREGATORS). -> [url]"""
     said, found = [], []
     for b in content or []:
         if b.get("type") == "text":
@@ -68,8 +89,9 @@ def links_in(content):
                     said += URL_RE.findall(blob)
         elif b.get("type") == "web_search_tool_result" and isinstance(b.get("content"), list):
             found += [r.get("url") for r in b["content"] if isinstance(r, dict) and r.get("url")
-                      and re.search(r"\.pdf($|[?#])|datasheet", r["url"], re.I)]
-    return [u for u in dict.fromkeys(u.strip().rstrip(".,;") for u in said + found) if u.startswith("http")]
+                      and re.search(r"\.pdf$|datasheet", _split(r["url"])[1], re.I)]
+    return [u for u in dict.fromkeys(u.strip().rstrip(".,;") for u in said + found)
+            if u.startswith("http") and not aggregator(u)]
 
 
 def add_usage(total, u):
@@ -103,30 +125,60 @@ def search(client, mpn, model, maker=None, package=None, max_uses=MAX_USES, head
     return links_in((turns[-1] if turns else {}).get("content")), usage, turns, None
 
 
-def usd(model, turns):
+TOKENS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+
+
+def _known(m):
+    """Did the turn say what it used? (a gateway may send no usage block, or one without token counts)"""
+    return any((m.get("usage") or {}).get(k) for k in TOKENS)
+
+
+def usd(model, turns, unknown=None):
     """Each turn's tokens at the price of the model that served it (a server-side fallback is billed at its own
-    rates), plus the searches. None when a turn's model has no known price."""
+    rates), plus the searches. A turn with no usage, or whose model has no known price, costs `unknown` (the worst
+    case held for it); None when such a turn was answered and unknown is None."""
     from . import ds_route as DR
     total = 0.0
     for m in turns:
         u = add_usage({}, m.get("usage"))
-        tok = DR.usage_usd(DR.billed_model(model, m), u)
+        tok = DR.usage_usd(DR.billed_model(model, m), u) if _known(m) else None
         if tok is None:
-            return None
+            if unknown is None:
+                return None
+            total += unknown
+            continue
         total += tok + SEARCH_USD * u.get("web_search_requests", 0)
     return round(total, 6)
+
+
+def _price(model, fallback):
+    """(input, output) USD per MTok; fallback: the higher of the model's own and datasheet.FALLBACK_PRICE."""
+    from . import datasheet as D
+    p = D.price_of(model)
+    if p and fallback:
+        p = (max(p[0], D.FALLBACK_PRICE[0]), max(p[1], D.FALLBACK_PRICE[1]))
+    return p
 
 
 def estimate(model, max_uses=MAX_USES, fallback=False):
     """The most one part's search may cost, for the cost cap. fallback: a declined request may be re-run on another
     model, priced at the higher of the model's own and datasheet.FALLBACK_PRICE (as a read's worst case is)."""
-    from . import datasheet as D
-    p = D.price_of(model)
+    p = _price(model, fallback)
     if not p:
         return None
-    if fallback:
-        p = (max(p[0], D.FALLBACK_PRICE[0]), max(p[1], D.FALLBACK_PRICE[1]))
     return (EST_TOKENS[0] * p[0] + EST_TOKENS[1] * p[1]) / 1e6 + SEARCH_USD * max_uses
+
+
+def next_turn(model, turns, max_uses=MAX_USES, fallback=False):
+    """The most a pause_turn continuation after `turns` may cost: it resends the conversation (every search result
+    read so far), so its input is at least what the turns read and wrote, plus EST_TOKENS more (a turn with no usage
+    counts as EST_TOKENS). Priced as estimate() is; None with no known price."""
+    p = _price(model, fallback)
+    if not p:
+        return None
+    sent = sum(sum(add_usage({}, m.get("usage")).get(k, 0) for k in TOKENS) if _known(m) else sum(EST_TOKENS)
+               for m in turns)
+    return ((sent + EST_TOKENS[0]) * p[0] + EST_TOKENS[1] * p[1]) / 1e6 + SEARCH_USD * max_uses
 
 
 class Found:
@@ -142,10 +194,19 @@ class Found:
             return None
 
     def put(self, part, url):
+        """url None: the part's link is dropped (it no longer gives its PDF)."""
         try:
             d = json.loads(self.file.read_text(encoding="utf-8")) if self.file.exists() else {}
         except (OSError, ValueError):
             d = {}
-        d[part] = url
+        d = d if isinstance(d, dict) else {}
+        if url is None:
+            d.pop(part, None)
+        else:
+            d[part] = url
+        from .fsutil import write_text_atomic         # a temp file, then replaced: never half a file
         self.file.parent.mkdir(parents=True, exist_ok=True)
-        self.file.write_text(json.dumps(d, indent=1, sort_keys=True), encoding="utf-8")
+        write_text_atomic(self.file, json.dumps(d, indent=1, sort_keys=True))
+
+    def drop(self, part):
+        self.put(part, None)
