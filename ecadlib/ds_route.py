@@ -41,7 +41,8 @@ _FAM_RX = re.compile(r"(?<![A-Z0-9])(" + "|".join(sorted(FAMILY, key=len, revers
 _COUNT_FAM_RX = re.compile(r"(?<![A-Z0-9.])(\d{1,3})\s?-?\s?(?:PIN|LEAD|BALL|TERMINAL)S?\s+(" +
                            "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(?![A-Z])")
 _COUNT_RX = re.compile(r"(?<![\d.])(\d{1,3})\s?-?\s?(?:pin|lead|ball|terminal)s?\b", re.I)
-_DWG_ID = re.compile(r"(?<![A-Z0-9-])([A-Z]{1,4})\d{4}[A-Z](?![A-Z0-9])")    # TI drawing numbers: D0014A, RGE0024B
+_DWG_ID = re.compile(r"(?<![A-Z0-9-])([A-Z]{1,4})0\d{3}[A-Z](?![A-Za-z0-9])")   # TI drawing numbers: D0014A, RGE0024B
+                                                                                # (pins padded to 4 digits: never UCC1895J)
 _SEC_NO = re.compile(r"^\s*(?:\d+(?:\.\d+)*\.?|[A-Z]\.\d+(?:\.\d+)*)\s+")   # "6 ", "6.2 ", "62.1. ", "A.3 "
 CONTINUED = re.compile(r"\bcontinued\b|\(cont(?:\.|inued)?\)", re.I)
 THREE_PIN = {"SOT23", "SOT323", "SOT523", "SOT416", "SOT346", "SC59", "SC70", "SC75", "SC89", "TO92", "SOT89"}
@@ -537,7 +538,6 @@ def page_scores(texts, part=None, package=None, marks=None):
     desig = {fx["code"].upper()} if fx and fx.get("code") else set()
     ktoks, key, sizes = ordering_key(texts, part, hint | otoks)
     own = hint | otoks | ktoks
-    own = {t for t in own if re.search(r"\d$", t) or not any(o != t and re.sub(r"\d+$", "", o) == t for o in own)}
     own_counts = {int(x) for x in (re.search(r"\d+$", t) for t in own) for x in ([x.group(0)] if x else [])}
     sec_n = {}
     for x in marks or ():
@@ -563,7 +563,7 @@ def page_scores(texts, part=None, package=None, marks=None):
         s["own"] = bool((own and _tok_match(own, ptoks)) or has_code)
         s["other"] = bool(ptoks) and not s["own"] and bool(own or codes)
         s["solo"] = s["own"] and len(ptoks) <= 1      # names this package and no other
-        ids = {m_.group(1) for m_ in _DWG_ID.finditer(t.upper())} if desig else set()
+        ids = {m_.group(1) for m_ in _DWG_ID.finditer(t)} if desig else set()   # (as printed: "heightD0014A")
         if ids:                                       # TI drawing numbers (D0014A, NS0014A): SOIC-14 and SOP-14 are
             if ids & desig:                           # both "SO14", the designator tells them apart
                 s["own"], s["other"], s["solo"] = True, False, len(ids) == 1

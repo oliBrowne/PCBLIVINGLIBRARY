@@ -266,9 +266,9 @@ def _ti_logic_pages():
     pages[18] = ["PACKAGE OPTION ADDENDUM", "Orderable part number Status Package type Package drawing Pins",
                  "CD4099BE ACTIVE PDIP N 14 25", "CD4099BM ACTIVE SOIC D 14 50", "CD4099BNSR ACTIVE SO NS 14 2000",
                  "CD4099BPW ACTIVE TSSOP PW 14 90"]
-    pages[23] = ["D0014A SOIC - 1.75 mm max height", "PACKAGE OUTLINE SMALL OUTLINE INTEGRATED CIRCUIT"]
+    pages[23] = ["SOIC - 1.75 mm max heightD0014A", "PACKAGE OUTLINE SMALL OUTLINE INTEGRATED CIRCUIT"]
     pages[24] = ["D0014A SOIC - 1.75 mm max height", "EXAMPLE BOARD LAYOUT"]
-    pages[26] = ["NS0014A SOP - 2.00 mm max height", "PACKAGE OUTLINE SMALL OUTLINE PACKAGE"]
+    pages[26] = ["SOP - 2.00 mm max heightNS0014A", "PACKAGE OUTLINE SMALL OUTLINE PACKAGE"]
     pages[27] = ["NS0014A SOP - 2.00 mm max height", "EXAMPLE BOARD LAYOUT"]
     pages[29] = ["PW0014A TSSOP - 1.2 mm max height", "PACKAGE OUTLINE SMALL OUTLINE PACKAGE"]
     return [" \n".join(p) for p in pages]
@@ -299,3 +299,7 @@ def test_a_pin_page_naming_this_package_among_others_stays_this_package_s():
 def test_a_temperature_range_is_no_to_package():
     assert R.package_tokens("LTC2942CDCB-1#PBF -40°C TO 85°C") == set()
     assert R.package_tokens("LTC2942IDCB-1 –40°C to 85°C 6-Lead (2mm × 3mm) Plastic DFN") <= {"SON", "SON6"}
+
+
+def test_a_part_number_is_no_ti_drawing_number():
+    assert [m.group(1) for m in R._DWG_ID.finditer("UCC1895J UCC2895DW D0020A heightPW0014A")] == ["D", "PW"]
