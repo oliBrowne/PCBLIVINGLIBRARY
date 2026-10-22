@@ -224,7 +224,7 @@ can ask Claude's web search tool for the maker's current PDF.
 ```toml
 [datasheet]
 web_search = true          # off by default: every search is billed
-web_search_model = ""      # "" = the reader's model
+web_search_model = ""      # "" = claude-haiku-5-5 (see the 2026-10-22 test below)
 web_search_max_uses = 3    # searches per part
 ```
 
@@ -237,8 +237,15 @@ web_search_max_uses = 3    # searches per part
 - A link found is kept in `<out>/datasheet/web_search.json`, so the part is not searched again.
 - The search needs a Claude model and key: with another provider it fails with a note and the part goes on as
   before. `--offline` never searches.
+- The links are downloaded in this order: the maker's own site (a label of the host starts with the maker's name),
+  then a major distributor's copy (Mouser, DigiKey, Arrow, Farnell, LCSC, ...), then any other site. A mirror's copy
+  can be an old revision, so it is used only when no better copy gives the part's PDF.
 - The 2026-10-21 test on the kicad-v1 parts whose links had died: 14 of the 16 tried were found (6 on the maker's
   site, 8 as distributor copies).
+- The 2026-10-22 test on the 41 kicad-v1 parts whose BOM links were dead (`$2` cap each): Haiku 5.5 found 39 (23 on
+  the maker's site, 12 distributor copies, 4 mirrors) for $1.04, about $0.025 a part. Opus 5.5 found 14 of the 18 its
+  cap let it try for $1.47: it often answered from memory without searching, and those were its misses. So the search
+  runs on Haiku unless `web_search_model` names another model.
 
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 

@@ -28,9 +28,12 @@ class Client:
         return self.answers.pop(0)
 
 
-def _reader(d, client, **ds):
+def _reader(d, client, http=None, **ds):
+    """A Reader whose searches run on Opus 5.5 (the pricing and fallback tests below are written for it), unless
+    web_search_model is given."""
+    ds = {"web_search_model": "claude-opus-5-5", **ds}
     return D.Reader(Path(d) / "out", Path(d) / "cache", key=KEY, log=None, client=client,
-                    http=PdfHTTP({FOUND: PDF, DEAD: 404}),
+                    http=http or PdfHTTP({FOUND: PDF, DEAD: 404}),
                     rules={"datasheet": {"cross_check": "off", **ds}})
 
 
@@ -154,3 +157,34 @@ def test_a_part_with_no_link_says_why_the_search_did_not_run():
             assert "no datasheet URL known; web search: not searched" in str(e), str(e)
         else:
             raise AssertionError("a PDF was found")
+
+
+def test_a_search_runs_on_haiku_unless_a_model_is_set():
+    with tempfile.TemporaryDirectory() as d:
+        cl = Client(_answer([FOUND]))
+        _reader(d + "/a", cl, web_search=True, web_search_model="").job("TESTPART", [(DEAD, "BOM")], "SOIC-8")
+        assert cl.sent[0][0]["model"] == WS.DEFAULT_MODEL == "claude-haiku-5-5" and cl.sent[0][1] == {}
+        cl = Client(_answer([FOUND]))
+        _reader(d + "/b", cl, web_search=True, web_search_model="claude-sonnet-5-5").job("TESTPART", [(DEAD, "BOM")])
+        assert cl.sent[0][0]["model"] == "claude-sonnet-5-5"
+
+
+def test_the_makers_copy_then_a_distributors_then_a_mirrors():
+    urls = ["https://www.rlocman.ru/i/sfh216.pdf", "https://www.mouser.com/datasheet/2/sfh216.pdf",
+            "https://dammedia.osram.info/media/sfh216.pdf", "https://datasheet.lcsc.com/sfh216.pdf"]
+    assert WS.rank(urls, "OSRAM Opto Semiconductors GmbH") == [urls[2], urls[1], urls[3], urls[0]]
+    assert WS.rank(urls) == [urls[1], urls[3], urls[0], urls[2]]       # no maker: distributors first, order kept
+    assert WS.rank(["https://optoelectronics.liteon.com/x.pdf", "https://a.example/x.pdf"][::-1], "Lite-On Inc.")[0] \
+        == "https://optoelectronics.liteon.com/x.pdf"
+    assert WS.maker_names("ON Semiconductor") == set()                 # too short to tell: no site counts as its own
+    assert WS.aggregator("https://pdf.datasheetz.com/x.pdf")
+
+
+def test_a_mirror_is_downloaded_only_after_the_makers_copy_fails():
+    mirror, maker = "https://mirror.example/x.pdf", "https://www.acme.com/ds/x.pdf"
+    http = PdfHTTP({mirror: PDF, maker: 404})
+    with tempfile.TemporaryDirectory() as d:
+        job = _reader(d, Client(_answer([mirror, maker])), http=http, web_search=True).job(
+            "TESTPART", [(DEAD, "BOM")], "SOIC-8", maker="ACME Corp")
+        tried = [a["url"] for a in job["base_prov"]["attempts"] if a["where"] == "web search"]
+        assert job["url"] == mirror and tried == [maker], (job["url"], tried)

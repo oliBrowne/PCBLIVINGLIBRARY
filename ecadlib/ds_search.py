@@ -27,7 +27,18 @@ URL_RE = re.compile(r"https?://[^\s\"'<>\])}]+")
 # datasheet aggregators and mirrors (the prompt asks for the maker's or a distributor's copy): a host or domain never taken
 AGGREGATORS = ("alldatasheet", "alldatasheetcn", "datasheetspdf", "datasheet4u", "datasheetarchive", "datasheets360",
                "datasheetcatalog", "datasheetq", "datasheet.live", "datasheethub", "datasheetgo", "datasheets.com",
-               "elcodis", "icpdf", "kynix")
+               "elcodis", "icpdf", "kynix", "datasheetz")
+# the model a search runs on when [datasheet] web_search_model is "": test 2026-10-22, the 41 kicad-v1 parts whose BOM
+# links were dead: Haiku 5.5 found 39 for $1.04 (it always searched); Opus 5.5 found 14 of the 18 its $2 cap let it try,
+# for $1.47 (it often answered from memory without a search, and those were its misses)
+DEFAULT_MODEL = "claude-haiku-5-5"
+# major distributors whose copy of the maker's PDF is the next best thing to the maker's own (rank)
+DISTRIBUTORS = ("mouser", "digikey", "arrow", "farnell", "newark", "element14", "lcsc", "rsonline", "tme", "avnet",
+                "futureelectronics", "ttiinc", "rutronik")
+# words of a maker's name that never name its web site (rank)
+MAKER_WORDS = {"inc", "corp", "corporation", "co", "ltd", "llc", "gmbh", "ag", "sa", "bv", "nv", "plc", "group",
+               "semiconductor", "semiconductors", "semi", "electronics", "electronic", "technology", "technologies",
+               "international", "components", "devices", "the", "and", "of"}
 NEW_TOOL_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                    "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6"}
 
@@ -73,6 +84,28 @@ def aggregator(url):
     """Is the link on a datasheet aggregator or mirror (AGGREGATORS: the host or a domain it is under)?"""
     host = _split(url)[0]
     return host is None or any(re.search(r"(^|\.)" + re.escape(a) + r"(\.|$)", host) for a in AGGREGATORS)
+
+
+def maker_names(maker):
+    """The ways a maker's name may start a label of its site's host: each word of three letters or more (MAKER_WORDS
+    left out) and the words run together ('Lite-On' -> liteon, 'Power Integrations' -> powerintegrations)."""
+    words = [w for w in re.findall(r"[a-z0-9]+", str(maker or "").lower()) if w not in MAKER_WORDS]
+    return {n for n in [w for w in words if len(w) >= 3] + ["".join(words)] if len(n) >= 3}
+
+
+def rank(urls, maker=None):
+    """The links in the order they are downloaded: the maker's own site first (a label of the host starts with its
+    name: yageogroup.com for Yageo, assets.wolfspeed.com), then a major distributor's (DISTRIBUTORS), then any other (a
+    mirror, or a site the maker's name does not show in); the search's order kept within each. A mirror's copy can be
+    an old revision, so it is taken only when no better one gives the part's PDF. -> [url]"""
+    names = maker_names(maker)
+
+    def tier(url):
+        labels = [re.sub(r"[^a-z0-9]", "", l) for l in (_split(url)[0] or "").split(".")]
+        if any(l.startswith(n) for l in labels for n in names):
+            return 0
+        return 1 if any(l in DISTRIBUTORS for l in labels) else 2
+    return sorted(urls, key=tier)
 
 
 def links_in(content):
