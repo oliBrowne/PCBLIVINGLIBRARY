@@ -397,6 +397,7 @@ def _identify_known(read, c, known, miss):
     fits = lambda k, a, x: CC._close(k, a, (x, x, x), True)
     body = sorted((c["body_length"], c["body_width"]), key=lambda v: v[0]) \
         if c["body_length"] is not None and c["body_width"] is not None else None
+    ep = sorted((c["ep_length"], c["ep_width"]), key=lambda v: v[0]) if c["has_ep"] else None
     printed = tuple(sorted((float(m.group(3)), float(m.group(4))))) if m.group(3) else None   # "LK = 80 LQFP (12 mm x 12 mm)"
     if printed and body and not all(fits("body_width", a, x) for a, x in zip(body, printed)):
         return None, f"the read has no {', '.join(miss)}; the PDF's ordering information names {known}, not the read's body"
@@ -409,6 +410,8 @@ def _identify_known(read, c, known, miss):
         if body and not all(fits("body_width", a, x) for a, x in zip(body, g["body"])):
             continue
         if printed and not all(abs(a - x) <= 0.05 for a, x in zip(printed, g["body"])):
+            continue
+        if ep and not (g["epsize"] and all(fits("ep_width", a, x) for a, x in zip(ep, g["epsize"]))):
             continue
         names.append(n)
     label = f"the read has no {', '.join(miss)}, the PDF's ordering information names {known}"

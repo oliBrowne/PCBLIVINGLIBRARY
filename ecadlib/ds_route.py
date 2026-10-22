@@ -194,8 +194,9 @@ def ordering_key(texts, part, families=()):
             if fam and n:
                 full.add(fam + n)
                 sz = _KEY_SIZE.search(desc)
-                if sz:
-                    sizes[fam + n] = tuple(sorted((float(sz.group(1)), float(sz.group(2)))))
+                if sz:                                # two entries printing two bodies: no size (never by text order)
+                    v = tuple(sorted((float(sz.group(1)), float(sz.group(2)))))
+                    sizes[fam + n] = v if sizes.get(fam + n, v) == v else None
             elif fam:
                 fams.add(fam)
             elif n:
@@ -210,7 +211,7 @@ def ordering_key(texts, part, families=()):
         pin_all = pin_all if len(pin_all) == 1 else set()
         full = set()
     if full:
-        return full, why, {k: v for k, v in sizes.items() if k in full}
+        return full, why, {k: v for k, v in sizes.items() if k in full and v}
     if not fam_all and pin_all:
         fam_all = {re.sub(r"\d+$", "", f) for f in families}
         if len(fam_all) != 1:
@@ -573,6 +574,7 @@ def page_scores(texts, part=None, package=None, marks=None):
         if m and not toc and not NOISE.search(t):
             secs, hits, leaves = m.split(" | "), set(), []
             mine = theirs = 0                         # sections on the page about this package / only another one
+            sure = False                              # one of them names this package (family and count) alone
             for sec in secs:                          # (a page where bookmarks start holds each section: page_marks)
                 chain = sec.split(" > ")
                 leaf = chain[-1]
@@ -588,12 +590,13 @@ def page_scores(texts, part=None, package=None, marks=None):
                 count = next((int(m_.group(1)) for x in reversed(chain) for m_ in [_COUNT_RX.search(x)] if m_), None)
                 if hit and mtoks and (own or codes):
                     if own and _tok_match(own, mtoks):
-                        mine += 1 if len(mtoks) <= 1 else 0.5
+                        mine += 1
+                        sure = sure or len(mtoks) <= 1
                     else:
                         theirs += 1
                 elif hit and count and own_counts:    # "6.2 144-lead Package Pinout": the pin count alone
                     if count in own_counts:
-                        mine += 0.5                   # (this package's count; another package may share it)
+                        mine += 1                     # (this package's count; another package may share it: never solo)
                     else:
                         theirs += 1
                 if hit:
@@ -601,7 +604,7 @@ def page_scores(texts, part=None, package=None, marks=None):
             for c in hits:
                 s[c] += MARK_W[c]
             if mine:                                  # a section about this package is on the page
-                s["own"], s["other"], s["solo"] = True, False, mine >= 1 and not theirs
+                s["own"], s["other"], s["solo"] = True, False, sure and not theirs
             elif theirs:                              # the chapter is about another package, whatever the page says
                 s["own"], s["other"], s["solo"] = False, True, False
             if leaves:

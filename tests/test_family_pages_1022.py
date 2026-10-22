@@ -232,3 +232,25 @@ def test_a_body_size_after_the_family_is_not_its_pin_count():
     assert R.package_tokens("64 pin LQFP 10x10") == {"QFP64"}
     assert R.package_tokens("LQFP 10x10 mm") == {"QFP"}
     assert R.package_tokens("LQFP-64 10x10") == {"QFP64"} and R.package_tokens("SOT-23") == {"SOT23"}
+
+
+def test_greptile_two_bodies_for_one_package_give_no_size():
+    key = NXP_KEY + "\nPP Package identifier LK = 80 LQFP (14 mm x 14 mm)"
+    toks, _, sizes = R.ordering_key([key], "MKL24Z32VLK4")
+    assert toks == {"QFP80"} and sizes == {}, (toks, sizes)
+
+
+def test_greptile_the_read_s_exposed_pad_narrows_a_known_package():
+    # VQFN-16 3x3 comes with two exposed pads; the read's 1.45 x 1.45 pad leaves one even with the body blank
+    from ecadlib import stdparts as SP
+    read = {"name": "VQFN-16", "package_type": "qfn", "pin_count": 16, "pitch": {"nom": 0.5},
+            "exposed_pad": {"length": {"nom": 1.45}, "width": {"nom": 1.45}}, "unresolved": ["body_length", "body_width"]}
+    name, how = SP.identify(read, known="QFN16")
+    assert name and "1.45x1.45" in name, how
+
+
+def test_greptile_pin_count_chapters_never_make_a_page_this_package_alone():
+    texts = ["Ordering", "drawing page"]
+    marks = ["", "6. Package Outlines > 6.1 144-lead Package Outline | 6. Package Outlines > 6.2 144-ball Package Outline"]
+    rows = R.page_scores(texts, "ATSAME70Q19A-AN", "LQFP-144", marks)[0]
+    assert rows[1]["own"] and not rows[1]["solo"], rows[1]
