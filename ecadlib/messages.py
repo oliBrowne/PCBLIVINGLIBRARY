@@ -281,6 +281,12 @@ CODES = {
     "datasheet.family_pdf": ("The datasheet came from your datasheet folder, from a file not named exactly for this part ({file}).",
                              "Check the PDF covers this exact part number, package and pinout.",
                              [r"datasheet from your folder: (?P<file>.+?(?i:\.pdf)) in the datasheet folder"]),
+    "datasheet.outline_doc": ("The package drawing came from a separate document, {doc} ({src}), added to the datasheet.",
+                              "Check the drawing in {doc} is this part's package.",
+                              [r"the package drawing came from (?P<doc>\S+) \((?P<src>.+)\), appended from page"]),
+    "datasheet.outline_missing": ("The datasheet has no drawing of this package, only its document number: {doc}.",
+                                  "Download that document, save it under its number (.pdf) in your datasheet folder and run again.",
+                                  [r"the datasheet has no drawing of this package, only its document number: (?P<doc>\S+)"]),
     "datasheet.standard_land": ("The datasheet read named the standard package {package} ({why}), so its checked land was used "
                                 "instead of the pads read from the drawing.",
                                 "Check the package code on the datasheet's drawing is {package}.",

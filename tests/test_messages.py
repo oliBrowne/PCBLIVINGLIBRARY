@@ -73,6 +73,10 @@ EXAMPLES = {
     "crosscheck.tie_break": "cross-check agreed once a difference was set aside: package type read custom, other source connector: a word only, the pads are built as the read lists them; check it on the drawing",
     "datasheet.unnamed": "the PDF at https://x/a.pdf doesn't mention LTC4060EDHC (no other link gave a PDF): check it is this part's datasheet",
     "datasheet.some_pages": "only some pages were sent (pages 1-4 of 40): check nothing was missed",
+    "datasheet.outline_doc": "the package drawing came from 98ASS23174W (https://www.nxp.com/docs/en/package-information/"
+                             "98ASS23174W.pdf), appended from page 55: check it is this part's package",
+    "datasheet.outline_missing": "the datasheet has no drawing of this package, only its document number: 98ASS23174W (named "
+                                 "on page 2; save it as 98ASS23174W.pdf in your datasheet folder)",
     "datasheet.family_pdf": "datasheet from your folder: LTM4671.pdf in the datasheet folder (a family datasheet: the name is the "
                             "start of LTM4671IY#PBF); check it covers this part",
     "datasheet.standard_land": "standard land: the datasheet read identified SOIC-8_3.9x4.9mm_P1.27mm (8 pins, pitch 1.27, body "
@@ -293,7 +297,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 10, "datasheet.py": 5,
+    "librarian.py": 10, "datasheet.py": 7,
 }
 
 
