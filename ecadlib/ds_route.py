@@ -51,7 +51,9 @@ CATS = {
     "drawing": re.compile(r"package (outline|drawing|dimensions?|information)|outline dimensions?|mechanical (data|drawing|"
                           r"dimensions?)|physical dimensions?|shape (&|and) dimensions|case outline|packaging information|"
                           r"dimensions\s*(-|in)\s*(mm|millimet)|chip resistor outlines|package profile|外形尺寸|封装尺寸", re.I),
-    "land": re.compile(r"land pattern|board layout|recommended (footprint|land|pcb|solder|pad)|(suggested|recommended) pad layout|"
+    "land": re.compile(r"land pattern|board layout|etch and via pattern|"
+                       r"thermal (?:pad area|land)\b(?=[^\n]{0,80}\d\s*(?:mm|mils?)\b)|"   # PowerPAD lands in prose (OPA569DWP p19)
+                       r"recommended (footprint|land|pcb|solder|pad)|(suggested|recommended) pad layout|"
                        r"soldering footprint|solder lands|\bfootprint\b|pad layout|soldering pad|焊盘", re.I),
     "pinout": re.compile(r"pin (configurations?|functions?|descriptions?|assignments?|definitions?)|pinning information|"
                          r"\bpinouts?\b|terminal functions?|\(top view\)|top view|引脚", re.I),

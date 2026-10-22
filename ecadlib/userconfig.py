@@ -184,6 +184,7 @@ def set_key(name, value, environ=None):
     keys = _read_for_write(f)
     keys[name] = _encode(value)
     _write_private(f, json.dumps(keys, indent=2) + "\n")
+    _CACHE.clear()                                    # a same-size rewrite inside one clock tick keeps the old stamp
 
 
 def remove_key(name, environ=None):
@@ -192,6 +193,7 @@ def remove_key(name, environ=None):
     if keys.pop(check_name(name), None) is None:
         return False
     _write_private(f, json.dumps(keys, indent=2) + "\n")
+    _CACHE.clear()
     return True
 
 
