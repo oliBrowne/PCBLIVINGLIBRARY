@@ -1383,11 +1383,14 @@ def sanity(spec, review):
                       f"centre-to-centre distance across the rows (C/2 = {lc / 2:g} if {lc:g} is C)")
     given = [k for k in ("pad_length", "pad_width", "pad_center") if isinstance(land.get(k), (int, float))]
     if land and 0 < len(given) < 3:                   # signal pads: all three or none (IPC-7351B then)
-        review.append(f"land gives {', '.join(given)} but not {', '.join(k for k in ('pad_length', 'pad_width', 'pad_center') if k not in given)}: "
+        review.append(f"land pattern: land gives {', '.join(given)} but not {', '.join(k for k in ('pad_length', 'pad_width', 'pad_center') if k not in given)}: "
                       "the signal pads need all three, or none for IPC-7351B pads")
     elif land and not given and not (land.get("ep_across") and land.get("ep_along")):
-        review.append("land gives neither the signal pads (pad_length, pad_width, pad_center) nor the thermal land "
-                      "(ep_across, ep_along)")
+        review.append("land pattern: land gives neither the signal pads (pad_length, pad_width, pad_center) nor the "
+                      "thermal land (ep_across, ep_along)")
+    small = F.thermal_land_small(spec)
+    if small:
+        review.append(f"land pattern: {small}")
     review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
 
 
@@ -1485,14 +1488,15 @@ def _pair_close(a, b):
 
 def _ep_name_fits(size, spec):
     """A name's EP size that is not the drawing's nominal pad can still be the maker's: the land page's copper or
-    mask opening (TI names a PowerPAD by its mask-defined land, EP3.39x6.35 for a 2.69-3.39 x 5.05-6.35 pad), or a
-    size inside the drawing's min-max in either orientation."""
+    mask opening (TI names a PowerPAD by its mask-defined land, EP3.39x6.35 for a 2.69-3.39 x 5.05-6.35 pad) when
+    that land's copper is what gets built, or a size inside the drawing's min-max in either orientation."""
     land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
     num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0
-    for ks in (("ep_across", "ep_along"), ("ep_mask_across", "ep_mask_along")):
-        pair = tuple(land.get(k) for k in ks)
-        if all(map(num, pair)) and _pair_close(size, pair):
-            return True
+    if num(land.get("ep_across")) and num(land.get("ep_along")):    # only when the land's copper is what is built
+        for ks in (("ep_across", "ep_along"), ("ep_mask_across", "ep_mask_along")):   # (not the drawing's pad)
+            pair = tuple(land.get(k) for k in ks)
+            if all(map(num, pair)) and _pair_close(size, pair):
+                return True
     ep = spec.get("exposed_pad") or {}
     rng = [_dim(ep.get(k)) for k in ("length", "width")]
     if not all(rng):
@@ -2901,10 +2905,11 @@ def prepare(data, pages=None, auto_pages=40, max_pages=MAX_PAGES, first=None):
     if over or (auto_pages and n > auto_pages):
         cap = min(auto_pages or max_pages, max_pages)
         keep = select_pages(data, cap)
-        must = sorted({p for p in first or [] if isinstance(p, int) and 1 <= p <= n})[:cap]
-        if must:                                      # the text picker misses image-only pages (TLC5951DAP p51, the
-            extra = [p for p in keep or [] if p not in must]   # land pattern: 10-22, the whole-PDF retry cut to 22
-            keep = sorted(must + extra[:cap - len(must)])      # pages without the 49-52 the first try had sent)
+        must = list(dict.fromkeys(p for p in first or [] if isinstance(p, int) and 1 <= p <= n))[:cap]   # in the
+        if must:                                      # order given (the first try's pages first). The text picker
+            extra = [p for p in keep or [] if p not in must]   # misses image-only pages (TLC5951DAP p51, the land
+            keep = sorted(must + extra[:cap - len(must)])      # pattern: 10-22, the whole-PDF retry cut to 22 pages
+                                                               # without the 49-52 the first try had sent)
         if keep:
             try:
                 cut = trim(data, keep)

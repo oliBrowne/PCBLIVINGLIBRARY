@@ -333,6 +333,24 @@ def lead_land(spec):
                                           for k in ("pad_length", "pad_width", "pad_center"))
 
 
+def thermal_land_small(spec):
+    """The land's thermal copper (ep_across x ep_along) smaller than the package's exposed pad at its minimum, either
+    way round: the copper would not cover the pad it solders, so the land was misread (a land is never smaller than
+    the pad it is for). -> the reason, or None."""
+    land, ep = spec.get("land") or {}, spec.get("exposed_pad") or {}
+    a, b = land.get("ep_across"), land.get("ep_along")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (a, b)):
+        return None
+    try:
+        mins = sorted(dim(ep[k])[0] for k in ("length", "width"))
+    except (KeyError, TypeError):
+        return None
+    if all(x >= m - 0.05 for x, m in zip(sorted((a, b)), mins)):
+        return None
+    return (f"the thermal land {a:g} x {b:g} mm is smaller than the exposed pad's minimum {mins[0]:g} x {mins[1]:g} mm "
+            "(check land.ep_across / ep_along against the land page)")
+
+
 def _apply_land(spec, pads):
     """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab keeps its IPC size). A pin 1
     the land draws another size (pin1_length / pin1_width) keeps the row's outer end and its lead's centre line."""

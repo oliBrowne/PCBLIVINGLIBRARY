@@ -243,6 +243,7 @@ def maker_land(mine, spec, tol=None):
     for. -> None (no land given or no footprint), else {followed, pads: the pads that use it, ep: the exposed pad
     numbers (not part of the land), ep_land: those that are the land's thermal pad}. A land that sizes only the
     thermal pad (thermal_only) is followed when the exposed pad is it."""
+    from .. import footprint_gen as F
     land = (spec or {}).get("land") or {}
     pl, pw, pc = (land.get(k) for k in ("pad_length", "pad_width", "pad_center"))
     ea, eb = land.get("ep_across"), land.get("ep_along")
@@ -268,8 +269,10 @@ def maker_land(mine, spec, tol=None):
                (near(p[4], l, "size") and near(p[3], w, "size") and near(y, cyy, "pos"))
     rest = [p for p in pads if p not in ep]
     if not lead:                                      # the signal pads are IPC's, scored against KiCad as any;
-        used = _ep_land(ep, rest, ea, eb, cx, cy, near)   # only the thermal pad is the maker's
-        return {"followed": bool(used), "pads": [], "ep": [p[0] for p in ep], "ep_land": used, "thermal_only": True}
+        used = _ep_land(ep, rest, ea, eb, cx, cy, near)   # only the thermal pad is the maker's, when it can be:
+        small = F.thermal_land_small(spec)                # never smaller than the package's pad
+        return {"followed": bool(used) and not small, "pads": [], "ep": [p[0] for p in ep],
+                "ep_land": [] if small else used, "thermal_only": True, **({"implausible": small} if small else {})}
     used = [p[0] for p in rest if fits(p)]
     # the land is the model's own reading, so "followed" alone cannot tell it from a misread: it must at least solder
     # the leads it read (reach the toe, start inside the shortest foot, be no narrower than the lead)
@@ -291,7 +294,7 @@ def maker_land(mine, spec, tol=None):
     # (the lead pads' long side runs across the rows: pads wider than tall are rows at +-x, so across is the pad's
     # width; taller than wide, its height; both kinds, a quad package: either way round. Not the pads' extent: a long
     # TSSOP's rows reach further along y than the rows sit apart, TPS70345 PWP 3.575 vs 2.9)
-    ep_used = _ep_land(ep, rest, ea, eb, cx, cy, near) if thermal else []
+    ep_used = _ep_land(ep, rest, ea, eb, cx, cy, near) if thermal and not F.thermal_land_small(spec) else []
     return {"followed": bool(rest) and len(used) == len(rest) and sane, "pads": used, "ep": [p[0] for p in ep],
             "ep_land": ep_used,
             **({} if sane else {"implausible": "the land does not cover the leads read from the same drawing"})}

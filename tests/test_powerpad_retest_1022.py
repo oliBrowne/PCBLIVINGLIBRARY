@@ -91,7 +91,7 @@ def test_a_part_land_is_flagged_and_an_empty_land_too():
         assert any(want in r for r in review), review
     review = []
     D.sanity(dict(TLC, land={"ep_across": 5.2, "ep_along": 12.5}), review)
-    assert not any(r.startswith("land gives") for r in review), review
+    assert not any("land gives" in r for r in review), review
 
 
 def test_the_scorer_counts_a_thermal_only_land_by_its_thermal_pad():
@@ -152,3 +152,41 @@ def test_a_whole_pdf_retry_cut_to_the_limit_keeps_the_pages_the_first_try_sent()
     sent, offset, _, _ = D.prepare(data, None, 2, 100, first=[9, 10, 11])
     assert offset == [9, 10]                                                 # never past the limit
     assert D.prepare(data, None, 20, 100, first=[9])[1] == 0                 # within the limit: the whole PDF
+
+
+# ---------------------------------------------------------------- review of the fixes (independent review, 10-22)
+def test_a_thermal_land_smaller_than_the_exposed_pad_fails_the_read_and_is_never_scored_right():
+    from ecadlib import ds_route as R
+    spec = dict(TLC, land={"ep_across": 4.4, "ep_along": 3.1})              # under the pad's 5.05 x 2.69 minimum
+    review = []
+    D.sanity(spec, review)
+    bad = [r for r in review if "smaller than the exposed pad" in r]
+    assert bad and R.FAILED.search(bad[0])
+    text, _ = F.build(spec)
+    ml = S.maker_land(B.numbers(text), spec)
+    assert ml["followed"] is False and ml["ep_land"] == [] and ml["implausible"]
+    review = []
+    D.sanity(dict(TLC, land=TLC_LAND), review)                             # 5.2 x 12.5 around it: fine
+    assert not any("smaller than the exposed pad" in r for r in review)
+
+
+def test_a_part_land_fails_the_read_so_the_route_retries_it():
+    from ecadlib import ds_route as R
+    for land in ({"pad_length": 1.8, "pad_width": 0.3}, {"ep_mask_across": 3.39, "ep_mask_along": 6.35}):
+        review = []
+        D.sanity(dict(TLC, land=land), review)
+        assert any(R.FAILED.search(r) for r in review if "land gives" in r), review
+
+
+def test_a_name_matching_the_mask_alone_does_not_excuse_a_misread_pad():
+    # no thermal copper in the land: the drawing's pad is built, so the name must agree with the drawing
+    spec = dict(TLC, exposed_pad={"length": {"nom": 7.0}, "width": {"nom": 4.0}},
+                land={"ep_mask_across": 3.39, "ep_mask_along": 6.35})
+    assert _ep_lines(spec)
+
+
+def test_the_whole_pdf_cut_keeps_the_first_trys_pages_before_later_ones():
+    data = _blank_pdf(60)
+    first = [49, 50, 51, 52] + list(range(1, 9))                             # level 0's pages, then the wider level's
+    _, offset, _, _ = D.prepare(data, None, 6, 100, first=first)
+    assert offset == [1, 2, 49, 50, 51, 52]
