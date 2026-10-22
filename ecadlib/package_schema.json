@@ -1055,6 +1055,16 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "The same thermal land measured along the pad rows (top to bottom), e.g. TI's (5) or (6.5)."
+        },
+        "pin1_length": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Pin 1's pad length (across the rows) when the land draws pin 1 a different size from the other pads (onsemi DFN: pin 1 0.88 vs 0.78). Its outer end stays with the row's; leave out when pin 1 is like the others."
+        },
+        "pin1_width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Pin 1's pad width (along the row) when the land draws it wider or narrower than the others (SOT-143: pin 1 1.0 vs 0.6). Leave out when pin 1 is like the others."
         }
       }
     }

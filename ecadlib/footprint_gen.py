@@ -282,20 +282,25 @@ def _left_right(spec, pads):
 
 
 def _apply_land(spec, pads):
-    """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab keeps its IPC size)."""
+    """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab keeps its IPC size). A pin 1
+    the land draws another size (pin1_length / pin1_width) keeps the row's outer end and its lead's centre line."""
     land = spec["land"]
-    ll, lw, lc = land["pad_length"], land["pad_width"], land["pad_center"]
-    lcy = land.get("pad_center_y", lc)
+    lcy = land.get("pad_center_y", land["pad_center"])
     n_sig = len(pads) - (1 if spec.get("tab") else 0)
     lr = _left_right(spec, pads)
     out = []
     for i, (num, x, y, w, h) in enumerate(pads):
+        ll, lw, lc, cy = land["pad_length"], land["pad_width"], land["pad_center"], lcy
+        if str(num) == "1" and (land.get("pin1_length") or land.get("pin1_width")):
+            l1 = land.get("pin1_length") or ll
+            lc, cy = lc + (ll - l1) / 2, cy + (ll - l1) / 2
+            ll, lw = l1, land.get("pin1_width") or lw
         if i >= n_sig:
             out.append((num, x, y, w, h))
         elif lr[i]:                                           # left/right row: length runs along X
             out.append((num, math.copysign(lc, x), y, ll, lw))
         else:                                                 # top/bottom row (QFN/QFP)
-            out.append((num, x, math.copysign(lcy, y), lw, ll))
+            out.append((num, x, math.copysign(cy, y), lw, ll))
     return out
 
 
