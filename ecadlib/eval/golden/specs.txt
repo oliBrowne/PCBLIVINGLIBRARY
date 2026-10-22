@@ -562,7 +562,7 @@ graphics fp_poly F.Fab: 1 bbox(-0.85,-0.625,0.85,0.625) #2c8f27f01b
 graphics fp_rect F.CrtYd: 1 bbox(-1.95,-0.88,1.95,0.88) #4ad4920935
 ### spec/Example_Custom_LPad_Slot.PcbLib:Example_Custom_LPad_Slot
 params DESCRIPTION=Odd-shape example: L-shaped thermal pad with split paste and vias, a signal pad in its notch, a plated slot, a locating hole and a via keep-out; 3 pins; land pattern from the datasheet drawing HEIGHT=0mil PATTERN=Example_Custom_LPad_Slot
-text ".Designator" layer=33 at=(-1.7905,3.45) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.7905,3.775) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-4.108,-4.45) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.7905,-0.5) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(-2,1.4583) layer=1 size=(1,1) hole=0 shape=1 rot=0 corner=None plated=True paste=2/-0.51 mask=2/0 hole_shape=0 slot=0 hole_rot=0
@@ -588,7 +588,7 @@ footprint Example_Custom_LPad_Slot
 (descr "Odd-shape example: L-shaped thermal pad with split paste and vias, a signal pad in its notch, a plated slot, a locating hole and a via keep-out | 3 pins | land pattern from the datasheet drawing")
 (tags "custom custom IPC-7351B density-B")
 (attr through_hole)
-fp_text reference REF** layer=F.SilkS at=(at -0.4 -3.95)
+fp_text reference REF** layer=F.SilkS at=(at -0.4 -4.275)
 fp_text value Example_Custom_LPad_Slot layer=F.Fab at=(at -0.4 3.95)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at -0.4 0)
 (zone (net 0) (net_name "") (layers F.Cu) (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.25) (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour allowed) (footprints allowed)) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 1.6 -2.8) (xy 2.8 -2.8) (xy 2.8 -1.2) (xy 1.6 -1.2))))
@@ -605,7 +605,7 @@ graphics fp_poly F.Fab: 1 bbox(-3.8,-3,3,3) #36a655ce05
 graphics fp_poly F.SilkS: 1 bbox(-2.24,-3.59,-1.76,-3.26) #c798508df8
 ### spec/JST_GH_SM04B-GHS-TB_1x04-1MP_P1.25mm_Horizontal.PcbLib:JST_GH_SM04B-GHS-TB_1x04-1MP_P1.25mm_Horizontal
 params DESCRIPTION=JST GH series connector, SM04B-GHS-TB, side entry, 4 pins + mounting pads, 1.25 mm pitch; 4 pins, 2 mounting/shield pads; src http://www.jst-mfg.com/product/pdf/eng/eGH.pdf; land pattern from the datasheet drawing HEIGHT=0mil PATTERN=JST_GH_SM04B-GHS-TB_1x04-1MP_P1.25mm_Horizontal
-text ".Designator" layer=33 at=(-1.3905,3.4) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,3.495) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-4.4) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.925) h=1 w=0.15 rot=0 mirror=False
 pad MP at=(-3.725,-1.35) layer=1 size=(1,2.7) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -625,7 +625,7 @@ footprint JST_GH_SM04B-GHS-TB_1x04-1MP_P1.25mm_Horizontal
 (descr "JST GH series connector, SM04B-GHS-TB, side entry, 4 pins + mounting pads, 1.25 mm pitch | 4 pins, 2 mounting/shield pads | src http://www.jst-mfg.com/product/pdf/eng/eGH.pdf | land pattern from the datasheet drawing")
 (tags "connector connector IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -3.9)
+fp_text reference REF** layer=F.SilkS at=(at 0 -3.995)
 fp_text value JST_GH_SM04B-GHS-TB_1x04-1MP_P1.25mm_Horizontal layer=F.Fab at=(at 0 3.9)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0.425)
 (pad MP smd roundrect (at -3.725 1.35) (size 1 2.7) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
@@ -706,7 +706,7 @@ graphics fp_poly F.Fab: 1 bbox(-5.95,-3.2,5.95,4.4) #fe6bfcd6f9
 graphics fp_poly F.SilkS: 1 bbox(-3.24,-5.21,-2.76,-4.88) #ce2f408059
 ### spec/JST_SH_SM04B-SRSS-TB_1x04-1MP_P1.00mm_Horizontal.PcbLib:JST_SH_SM04B-SRSS-TB_1x04-1MP_P1.00mm_Horizontal
 params DESCRIPTION=JST SH series connector, SM04B-SRSS-TB, side entry, 4 pins + mounting pads, 1.00 mm pitch; 4 pins, 2 mounting/shield pads; src http://www.jst-mfg.com/product/pdf/eng/eSH.pdf; land pattern from the datasheet drawing HEIGHT=116.1417mil PATTERN=JST_SH_SM04B-SRSS-TB_1x04-1MP_P1.00mm_Horizontal
-text ".Designator" layer=33 at=(-1.3905,3.48) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,3.57) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-4.48) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.95) h=1 w=0.15 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=116.1417mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=116.1417mil pts=-3,-2.575;3,-2.575;3,1.675;-2,1.675;-3,0.675
@@ -727,7 +727,7 @@ footprint JST_SH_SM04B-SRSS-TB_1x04-1MP_P1.00mm_Horizontal
 (descr "JST SH series connector, SM04B-SRSS-TB, side entry, 4 pins + mounting pads, 1.00 mm pitch | 4 pins, 2 mounting/shield pads | src http://www.jst-mfg.com/product/pdf/eng/eSH.pdf | land pattern from the datasheet drawing")
 (tags "connector connector IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -3.98)
+fp_text reference REF** layer=F.SilkS at=(at 0 -4.07)
 fp_text value JST_SH_SM04B-SRSS-TB_1x04-1MP_P1.00mm_Horizontal layer=F.Fab at=(at 0 3.98)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0.45)
 (pad MP smd roundrect (at -2.8 1.875) (size 1.2 1.8) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.2083))
@@ -742,7 +742,7 @@ graphics fp_poly F.Fab: 1 bbox(-3,-1.675,3,2.575) #02b2d1e9a1
 graphics fp_poly F.SilkS: 1 bbox(-1.74,-3.385,-1.26,-3.055) #c24021706f
 ### spec/JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical.PcbLib:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical
 params DESCRIPTION=JST XH series connector, B2B-XH-A, top entry, 2 pins, 2.50 mm pitch; 2 pins; src https://www.jst-mfg.com/product/pdf/eng/eXH.pdf; land pattern from the datasheet drawing HEIGHT=0mil PATTERN=JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical
-text ".Designator" layer=33 at=(-0.1405,3.05) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-0.1405,3.125) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-2.458,-5.1) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-0.1405,-1.025) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(0,0) layer=74 size=(1.7,2) hole=1 shape=9 rot=0 corner=29 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -758,7 +758,7 @@ footprint JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical
 (descr "JST XH series connector, B2B-XH-A, top entry, 2 pins, 2.50 mm pitch | 2 pins | src https://www.jst-mfg.com/product/pdf/eng/eXH.pdf | land pattern from the datasheet drawing")
 (tags "connector connector IPC-7351B density-B")
 (attr through_hole)
-fp_text reference REF** layer=F.SilkS at=(at 1.25 -3.55)
+fp_text reference REF** layer=F.SilkS at=(at 1.25 -3.625)
 fp_text value JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical layer=F.Fab at=(at 1.25 4.6)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 1.25 0.525)
 (pad 1 thru_hole roundrect (at 0 0) (size 1.7 2) (drill 1) (layers *.Cu *.Mask) (roundrect_rratio 0.1471))
@@ -1041,7 +1041,7 @@ graphics fp_poly F.SilkS: 1 bbox(-1.86,-0.24,-1.53,0.24) #34edc647b4
 graphics fp_rect F.CrtYd: 1 bbox(-1.77,-3.42,9.39,3.38) #efaceba711
 ### spec/Molex_PicoBlade_53398-0471_1x04-1MP_P1.25mm_Vertical.PcbLib:Molex_PicoBlade_53398-0471_1x04-1MP_P1.25mm_Vertical
 params DESCRIPTION=Molex PicoBlade series connector, 53398-0471, vertical SMD, 4 pins + mounting pads, 1.25 mm pitch; 4 pins, 2 mounting/shield pads; src http://www.molex.com/pdm_docs/sd/533980271_sd.pdf; land pattern from the datasheet drawing HEIGHT=0mil PATTERN=Molex_PicoBlade_53398-0471_1x04-1MP_P1.25mm_Vertical
-text ".Designator" layer=33 at=(-1.3905,2.6) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,2.695) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-4.7) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-1.25) h=1 w=0.15 rot=0 mirror=False
 pad MP at=(-4.425,-1.5) layer=1 size=(2.1,3) hole=0 shape=9 rot=0 corner=24 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -1061,7 +1061,7 @@ footprint Molex_PicoBlade_53398-0471_1x04-1MP_P1.25mm_Vertical
 (descr "Molex PicoBlade series connector, 53398-0471, vertical SMD, 4 pins + mounting pads, 1.25 mm pitch | 4 pins, 2 mounting/shield pads | src http://www.molex.com/pdm_docs/sd/533980271_sd.pdf | land pattern from the datasheet drawing")
 (tags "connector connector IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -3.1)
+fp_text reference REF** layer=F.SilkS at=(at 0 -3.195)
 fp_text value Molex_PicoBlade_53398-0471_1x04-1MP_P1.25mm_Vertical layer=F.Fab at=(at 0 4.2)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0.75)
 (pad MP smd roundrect (at -4.425 1.5) (size 2.1 3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.119))
@@ -1076,7 +1076,7 @@ graphics fp_poly F.Fab: 1 bbox(-5.075,-1.1,5.075,2.6) #cff91817ac
 graphics fp_poly F.SilkS: 1 bbox(-2.115,-2.51,-1.635,-2.18) #8d47ea03e8
 ### spec/PinHeader_1x05_P1.00mm_Vertical_SMD_Pin1Left.PcbLib:PinHeader_1x05_P1.00mm_Vertical_SMD_Pin1Left
 params DESCRIPTION=pin header, 1x05, 1.00 mm pitch, SMD (KiCad's land table, no land given); 1x5 pins, pitch 1 mm, pads 1.75x0.6 mm HEIGHT=0mil PATTERN=PinHeader_1x05_P1.00mm_Vertical_SMD_Pin1Left
-text ".Designator" layer=33 at=(-1.3905,3.2) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,3.275) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-4.2) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(-0.875,2) layer=1 size=(1.75,0.6) hole=0 shape=2 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -1095,7 +1095,7 @@ footprint PinHeader_1x05_P1.00mm_Vertical_SMD_Pin1Left
 (descr "pin header, 1x05, 1.00 mm pitch, SMD (KiCad's land table, no land given) | 1x5 pins, pitch 1 mm, pads 1.75x0.6 mm")
 (tags "pin_header pin_header_smd IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -3.7)
+fp_text reference REF** layer=F.SilkS at=(at 0 -3.775)
 fp_text value PinHeader_1x05_P1.00mm_Vertical_SMD_Pin1Left layer=F.Fab at=(at 0 3.7)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd rect (at -0.875 -2) (size 1.75 0.6) (layers F.Cu F.Paste F.Mask))
@@ -1109,7 +1109,7 @@ graphics fp_poly F.Fab: 1 bbox(-0.5,-2.5,0.5,2.5) #aac3040651
 graphics fp_poly F.SilkS: 1 bbox(-1.115,-3.09,-0.635,-2.76) #ad4de153c1
 ### spec/PinHeader_1x05_P1.27mm_Vertical_SMD_Pin1Left.PcbLib:PinHeader_1x05_P1.27mm_Vertical_SMD_Pin1Left
 params DESCRIPTION=pin header, 1x05, 1.27 mm pitch, SMD (KiCad's land table, no land given); 1x5 pins, pitch 1.27 mm, pads 3x0.65 mm HEIGHT=169.2913mil PATTERN=PinHeader_1x05_P1.27mm_Vertical_SMD_Pin1Left
-text ".Designator" layer=33 at=(-1.3905,3.88) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,3.95) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-4.88) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=169.2913mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=169.2913mil pts=-0.635,-3.175;0.635,-3.175;0.635,3.175;-0.3175,3.175;-0.635,2.8575
@@ -1129,7 +1129,7 @@ footprint PinHeader_1x05_P1.27mm_Vertical_SMD_Pin1Left
 (descr "pin header, 1x05, 1.27 mm pitch, SMD (KiCad's land table, no land given) | 1x5 pins, pitch 1.27 mm, pads 3x0.65 mm")
 (tags "pin_header pin_header_smd IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -4.38)
+fp_text reference REF** layer=F.SilkS at=(at 0 -4.45)
 fp_text value PinHeader_1x05_P1.27mm_Vertical_SMD_Pin1Left layer=F.Fab at=(at 0 4.38)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd rect (at -1.5 -2.54) (size 3 0.65) (layers F.Cu F.Paste F.Mask))
@@ -1176,7 +1176,7 @@ graphics fp_poly F.SilkS: 1 bbox(-1.59,-0.24,-1.26,0.24) #1f0d8a0059
 graphics fp_rect F.CrtYd: 1 bbox(-1.5,-1.5,1.5,9.5) #c7033205c1
 ### spec/PinHeader_1x05_P2.00mm_Vertical_SMD_Pin1Left.PcbLib:PinHeader_1x05_P2.00mm_Vertical_SMD_Pin1Left
 params DESCRIPTION=pin header, 1x05, 2.00 mm pitch, SMD (KiCad's land table, no land given); 1x5 pins, pitch 2 mm, pads 2.35x0.85 mm HEIGHT=0mil PATTERN=PinHeader_1x05_P2.00mm_Vertical_SMD_Pin1Left
-text ".Designator" layer=33 at=(-1.3905,5.7) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,5.775) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-6.7) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(-1.175,4) layer=1 size=(2.35,0.85) hole=0 shape=2 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -1195,7 +1195,7 @@ footprint PinHeader_1x05_P2.00mm_Vertical_SMD_Pin1Left
 (descr "pin header, 1x05, 2.00 mm pitch, SMD (KiCad's land table, no land given) | 1x5 pins, pitch 2 mm, pads 2.35x0.85 mm")
 (tags "pin_header pin_header_smd IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -6.2)
+fp_text reference REF** layer=F.SilkS at=(at 0 -6.275)
 fp_text value PinHeader_1x05_P2.00mm_Vertical_SMD_Pin1Left layer=F.Fab at=(at 0 6.2)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd rect (at -1.175 -4) (size 2.35 0.85) (layers F.Cu F.Paste F.Mask))
@@ -1242,7 +1242,7 @@ graphics fp_poly F.SilkS: 1 bbox(-1.86,-0.24,-1.53,0.24) #34edc647b4
 graphics fp_rect F.CrtYd: 1 bbox(-1.77,-1.77,1.77,11.93) #c466c13940
 ### spec/PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left.PcbLib:PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left
 params DESCRIPTION=pin header, 1x05, 2.54 mm pitch; 1x5 pins, pitch 2.54 mm, pads 2.51x1 mm HEIGHT=0mil PATTERN=PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left
-text ".Designator" layer=33 at=(-1.3905,7.05) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,7.125) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-8.05) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(-1.655,5.08) layer=1 size=(2.51,1) hole=0 shape=2 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -1261,7 +1261,7 @@ footprint PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left
 (descr "pin header, 1x05, 2.54 mm pitch | 1x5 pins, pitch 2.54 mm, pads 2.51x1 mm")
 (tags "pin_header pin_header_smd IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -7.55)
+fp_text reference REF** layer=F.SilkS at=(at 0 -7.625)
 fp_text value PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Left layer=F.Fab at=(at 0 7.55)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd rect (at -1.655 -5.08) (size 2.51 1) (layers F.Cu F.Paste F.Mask))
@@ -1275,7 +1275,7 @@ graphics fp_poly F.Fab: 1 bbox(-2.54,-6.35,2.54,6.35) #8cfd991d51
 graphics fp_poly F.SilkS: 1 bbox(-1.895,-6.94,-1.415,-6.61) #bc805ed7d1
 ### spec/PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Right.PcbLib:PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Right
 params DESCRIPTION=pin header, 1x05, 2.54 mm pitch, SMD (KiCad's land table, no land given); 1x5 pins, pitch 2.54 mm, pads 2.51x1 mm HEIGHT=0mil PATTERN=PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Right
-text ".Designator" layer=33 at=(-1.3905,7.05) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,7.125) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-8.05) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(1.655,5.08) layer=1 size=(2.51,1) hole=0 shape=2 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -1294,7 +1294,7 @@ footprint PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Right
 (descr "pin header, 1x05, 2.54 mm pitch, SMD (KiCad's land table, no land given) | 1x5 pins, pitch 2.54 mm, pads 2.51x1 mm")
 (tags "pin_header pin_header_smd IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -7.55)
+fp_text reference REF** layer=F.SilkS at=(at 0 -7.625)
 fp_text value PinHeader_1x05_P2.54mm_Vertical_SMD_Pin1Right layer=F.Fab at=(at 0 7.55)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd rect (at 1.655 -5.08) (size 2.51 1) (layers F.Cu F.Paste F.Mask))
@@ -1308,7 +1308,7 @@ graphics fp_poly F.Fab: 1 bbox(-1.27,-6.35,1.27,6.35) #57fce7868e
 graphics fp_poly F.SilkS: 1 bbox(1.415,-6.94,1.895,-6.61) #d4ca44416f
 ### spec/PinHeader_1x10_P1.00mm_Vertical.PcbLib:PinHeader_1x10_P1.00mm_Vertical
 params DESCRIPTION=pin header, 1x10, 1.00 mm pitch (KiCad's 0.5 / 0.85 mm drill / pad table); 1x10 pins, pitch 1 mm, drill 0.5 mm, pad 0.85 mm HEIGHT=0mil PATTERN=PinHeader_1x10_P1.00mm_Vertical
-text ".Designator" layer=33 at=(-1.3905,1.2) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,1.275) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-11.2) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-5) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(0,0) layer=74 size=(0.85,0.85) hole=0.5 shape=2 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -1332,7 +1332,7 @@ footprint PinHeader_1x10_P1.00mm_Vertical
 (descr "pin header, 1x10, 1.00 mm pitch (KiCad's 0.5 / 0.85 mm drill / pad table) | 1x10 pins, pitch 1 mm, drill 0.5 mm, pad 0.85 mm")
 (tags "pin_header pin_header_tht IPC-7351B density-B")
 (attr through_hole)
-fp_text reference REF** layer=F.SilkS at=(at 0 -1.7)
+fp_text reference REF** layer=F.SilkS at=(at 0 -1.775)
 fp_text value PinHeader_1x10_P1.00mm_Vertical layer=F.Fab at=(at 0 10.7)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 4.5)
 (pad 1 thru_hole rect (at 0 0) (size 0.85 0.85) (drill 0.5) (layers *.Cu *.Mask))
@@ -1351,7 +1351,7 @@ graphics fp_poly F.SilkS: 1 bbox(-0.24,-1.09,0.24,-0.76) #8a90b07a34
 graphics fp_rect F.CrtYd: 1 bbox(-1.14,-1,1.14,10) #326ee6f698
 ### spec/PinHeader_2x05_P1.00mm_Vertical_SMD.PcbLib:PinHeader_2x05_P1.00mm_Vertical_SMD
 params DESCRIPTION=pin header, 2x05, 1.00 mm pitch, SMD (KiCad's land table, no land given); 2x5 pins, pitch 1 mm, pads 2x0.5 mm HEIGHT=0mil PATTERN=PinHeader_2x05_P1.00mm_Vertical_SMD
-text ".Designator" layer=33 at=(-1.3905,3.2) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,3.275) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-4.2) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(-1.65,2) layer=1 size=(2,0.5) hole=0 shape=2 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -1375,7 +1375,7 @@ footprint PinHeader_2x05_P1.00mm_Vertical_SMD
 (descr "pin header, 2x05, 1.00 mm pitch, SMD (KiCad's land table, no land given) | 2x5 pins, pitch 1 mm, pads 2x0.5 mm")
 (tags "pin_header pin_header_smd IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -3.7)
+fp_text reference REF** layer=F.SilkS at=(at 0 -3.775)
 fp_text value PinHeader_2x05_P1.00mm_Vertical_SMD layer=F.Fab at=(at 0 3.7)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd rect (at -1.65 -2) (size 2 0.5) (layers F.Cu F.Paste F.Mask))
@@ -1394,7 +1394,7 @@ graphics fp_poly F.Fab: 1 bbox(-1,-2.5,1,2.5) #de3f0f29d3
 graphics fp_poly F.SilkS: 1 bbox(-1.89,-3.09,-1.41,-2.76) #6acb3d5fe8
 ### spec/PinHeader_2x05_P1.27mm_Vertical.PcbLib:PinHeader_2x05_P1.27mm_Vertical
 params DESCRIPTION=pin header, 2x05, 1.27 mm pitch; 2x5 pins, pitch 1.27 mm, drill 0.65 mm, pad 1 mm HEIGHT=0mil PATTERN=PinHeader_2x05_P1.27mm_Vertical
-text ".Designator" layer=33 at=(-0.7555,1.34) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-0.7555,1.41) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.073,-7.42) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-0.7555,-3.04) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(0,0) layer=74 size=(1,1) hole=0.65 shape=2 rot=0 corner=None plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
@@ -1418,7 +1418,7 @@ footprint PinHeader_2x05_P1.27mm_Vertical
 (descr "pin header, 2x05, 1.27 mm pitch | 2x5 pins, pitch 1.27 mm, drill 0.65 mm, pad 1 mm")
 (tags "pin_header pin_header_tht IPC-7351B density-B")
 (attr through_hole)
-fp_text reference REF** layer=F.SilkS at=(at 0.635 -1.84)
+fp_text reference REF** layer=F.SilkS at=(at 0.635 -1.91)
 fp_text value PinHeader_2x05_P1.27mm_Vertical layer=F.Fab at=(at 0.635 6.92)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0.635 2.54)
 (pad 1 thru_hole rect (at 0 0) (size 1 1) (drill 0.65) (layers *.Cu *.Mask))
@@ -1437,7 +1437,7 @@ graphics fp_poly F.SilkS: 1 bbox(-0.24,-1.225,0.24,-0.895) #c64644d0e7
 graphics fp_rect F.CrtYd: 1 bbox(-1.57,-1.14,2.84,6.22) #260dda8512
 ### spec/PinHeader_2x05_P1.27mm_Vertical_SMD.PcbLib:PinHeader_2x05_P1.27mm_Vertical_SMD
 params DESCRIPTION=pin header, 2x05, 1.27 mm pitch; 2x5 pins, pitch 1.27 mm, pads 2.4x0.74 mm HEIGHT=169.2913mil PATTERN=PinHeader_2x05_P1.27mm_Vertical_SMD
-text ".Designator" layer=33 at=(-1.3905,3.88) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,3.95) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-4.88) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=169.2913mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=169.2913mil pts=-2.75,-3.175;2.75,-3.175;2.75,3.175;-1.75,3.175;-2.75,2.175
@@ -1462,7 +1462,7 @@ footprint PinHeader_2x05_P1.27mm_Vertical_SMD
 (descr "pin header, 2x05, 1.27 mm pitch | 2x5 pins, pitch 1.27 mm, pads 2.4x0.74 mm")
 (tags "pin_header pin_header_smd IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -4.38)
+fp_text reference REF** layer=F.SilkS at=(at 0 -4.45)
 fp_text value PinHeader_2x05_P1.27mm_Vertical_SMD layer=F.Fab at=(at 0 4.38)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd rect (at -1.95 -2.54) (size 2.4 0.74) (layers F.Cu F.Paste F.Mask))
@@ -1975,7 +1975,7 @@ graphics fp_poly F.SilkS: 1 bbox(-3.2275,-3.365,-2.7475,-3.035) #e9a4e95859
 graphics fp_rect F.CrtYd: 1 bbox(-4.25,-3.5,4.25,3.5) #24c9f1f92b
 ### spec/SOT-23-5.PcbLib:SOT-23-5
 params DESCRIPTION=SOT-23-5 (MO-178AA); IPC-7351B gullwing density B: Z=3.60 G=0.95 X=0.60 HEIGHT=47.2441mil PATTERN=SOT-23-5
-text ".Designator" layer=33 at=(-1.3905,1.9) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,2.025) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-2.9) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.0012,-0.36) h=0.72 w=0.108 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=47.2441mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=47.2441mil pts=-0.8,-1.45;0.8,-1.45;0.8,1.45;-0.4,1.45;-0.8,1.05
@@ -1995,7 +1995,7 @@ footprint SOT-23-5
 (descr "SOT-23-5 (MO-178AA) | IPC-7351B gullwing density B: Z=3.60 G=0.95 X=0.60")
 (tags "gullwing gullwing IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -2.4)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.525)
 fp_text value SOT-23-5 layer=F.Fab at=(at 0 2.4)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd roundrect (at -1.1375 -0.95) (size 1.325 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
@@ -2009,7 +2009,7 @@ graphics fp_poly F.SilkS: 1 bbox(-1.3775,-1.84,-0.8975,-1.51) #e5ea6e0675
 graphics fp_rect F.CrtYd: 1 bbox(-2.05,-1.7,2.05,1.7) #4e9c34dac6
 ### spec/SOT-23-6.PcbLib:SOT-23-6
 params DESCRIPTION=SOT-23-6 (MO-178AB); IPC-7351B gullwing density B: Z=3.60 G=0.95 X=0.60 HEIGHT=47.2441mil PATTERN=SOT-23-6
-text ".Designator" layer=33 at=(-1.3905,1.9) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,2.025) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-2.9) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.0012,-0.36) h=0.72 w=0.108 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=47.2441mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=47.2441mil pts=-0.8,-1.45;0.8,-1.45;0.8,1.45;-0.4,1.45;-0.8,1.05
@@ -2030,7 +2030,7 @@ footprint SOT-23-6
 (descr "SOT-23-6 (MO-178AB) | IPC-7351B gullwing density B: Z=3.60 G=0.95 X=0.60")
 (tags "gullwing gullwing IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -2.4)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.525)
 fp_text value SOT-23-6 layer=F.Fab at=(at 0 2.4)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd roundrect (at -1.1375 -0.95) (size 1.325 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
@@ -2045,7 +2045,7 @@ graphics fp_poly F.SilkS: 1 bbox(-1.3775,-1.84,-0.8975,-1.51) #e5ea6e0675
 graphics fp_rect F.CrtYd: 1 bbox(-2.05,-1.7,2.05,1.7) #4e9c34dac6
 ### spec/SOT-23.PcbLib:SOT-23
 params DESCRIPTION=SOT-23 (TO-236AB), 3 pins; IPC-7351B gullwing density B: Z=3.35 G=0.40 X=0.60 HEIGHT=47.2441mil PATTERN=SOT-23
-text ".Designator" layer=33 at=(-1.3905,1.9) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,2.025) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-2.9) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.0012,-0.36) h=0.72 w=0.108 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=47.2441mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=47.2441mil pts=-0.65,-1.45;0.65,-1.45;0.65,1.45;-0.325,1.45;-0.65,1.125
@@ -2063,7 +2063,7 @@ footprint SOT-23
 (descr "SOT-23 (TO-236AB), 3 pins | IPC-7351B gullwing density B: Z=3.35 G=0.40 X=0.60")
 (tags "gullwing gullwing IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -2.4)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.525)
 fp_text value SOT-23 layer=F.Fab at=(at 0 2.4)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd roundrect (at -0.9375 -0.95) (size 1.475 0.6) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
@@ -2575,7 +2575,7 @@ graphics fp_poly F.SilkS: 1 bbox(-6.715,-4.69,-6.235,-4.36) #e62904239e
 graphics fp_rect F.CrtYd: 1 bbox(-7.6,-7.6,7.6,7.6) #38173c8a9a
 ### standard/Nexperia_HUSON-16_USON-16-1EP_1.35x3.3mm_P0.4mm_EP0.4x2.8mm.PcbLib:Nexperia_HUSON-16_USON-16-1EP_1.35x3.3mm_P0.4mm_EP0.4x2.8mm
 params DESCRIPTION=Nexperia_HUSON-16_USON-16-1EP_1.35x3.3mm_P0.4mm_EP0.4x2.8mm; IPC-7351B qfn density B: Z=2.10 G=0.80 X=0.20 HEIGHT=31.4961mil PATTERN=Nexperia_HUSON-16_USON-16-1EP_1.35x3.3mm_P0.4mm_EP0.4x2.8mm
-text ".Designator" layer=33 at=(-1.3905,2.1) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,2.275) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-3.1) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.1402,-0.41) h=0.82 w=0.123 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-0.675,-1.65;0.675,-1.65;0.675,1.65;-0.3375,1.65;-0.675,1.3125
@@ -2594,7 +2594,7 @@ footprint Nexperia_HUSON-16_USON-16-1EP_1.35x3.3mm_P0.4mm_EP0.4x2.8mm
 (descr "Nexperia_HUSON-16_USON-16-1EP_1.35x3.3mm_P0.4mm_EP0.4x2.8mm | IPC-7351B qfn density B: Z=2.10 G=0.80 X=0.20")
 (tags "qfn qfn IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -2.6)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.775)
 fp_text value Nexperia_HUSON-16_USON-16-1EP_1.35x3.3mm_P0.4mm_EP0.4x2.8mm layer=F.Fab at=(at 0 2.6)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd roundrect (at -0.725 -1.4) (size 0.65 0.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
@@ -2940,14 +2940,15 @@ graphics fp_rect F.CrtYd: 1 bbox(-4.7,-3.85,4.7,3.85) #14e43beb93
 params DESCRIPTION=TO-252-2; 3 pins; land pattern from the datasheet drawing HEIGHT=0mil PATTERN=TO-252-2
 text ".Designator" layer=33 at=(-2.2305,3.7) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-4.548,-4.7) h=1 w=0.15 rot=0 mirror=False
-text ".Designator" layer=69 at=(-2.2405,-0.5) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=69 at=(-0.8905,-0.5) h=1 w=0.15 rot=0 mirror=False
 pad 1 at=(-5.04,2.28) layer=1 size=(2.2,1.2) hole=0 shape=9 rot=0 corner=42 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pad 2 at=(1.26,0) layer=1 size=(6.4,5.8) hole=0 shape=9 rot=0 corner=9 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(1.26,0) layer=1 size=(6.4,5.8) hole=0 shape=9 rot=0 corner=9 plated=True paste=2/-3.21 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 pad 3 at=(-5.04,-2.28) layer=1 size=(2.2,1.2) hole=0 shape=9 rot=0 corner=42 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
 graphics region 33: 1 bbox(-5.28,3.51,-4.8,3.84) #9de4e4629f
-graphics track 33: 9 bbox(-5.92,-3.36,4.22,3.84) #935dd72396
-graphics track 69: 5 bbox(-5.81,-3.25,4.11,3.25) #75b4af0bae
-graphics track 71: 16 bbox(-6.39,-3.5,4.71,3.5) #caff5951e3
+graphics region 35: 30 bbox(-1.8367,-2.7875,4.3567,2.7875) #e75d0a4d53
+graphics track 33: 7 bbox(-5.28,-3.36,4.22,3.84) #2fb82895aa
+graphics track 69: 5 bbox(-3.11,-3.25,4.11,3.25) #90b45e935c
+graphics track 71: 4 bbox(-6.39,-3.5,4.71,3.5) #09483c1853
 ### standard/TO-252-2.kicad_mod
 footprint TO-252-2
 (version 20221018)
@@ -2957,14 +2958,15 @@ footprint TO-252-2
 (attr smd)
 fp_text reference REF** layer=F.SilkS at=(at -0.84 -4.2)
 fp_text value TO-252-2 layer=F.Fab at=(at -0.84 4.2)
-fp_text user "${REFERENCE}" layer=F.Fab at=(at -0.85 0)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0.5 0)
 (pad 1 smd roundrect (at -5.04 -2.28) (size 2.2 1.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.2083))
-(pad 2 smd roundrect (at 1.26 0) (size 6.4 5.8) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.0431))
-(pad 3 smd roundrect (at -5.04 2.28) (size 2.2 1.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.2083))
-graphics fp_line F.SilkS: 6 bbox(-5.92,-3.36,4.22,3.36) #84ddcc595f
-graphics fp_poly F.CrtYd: 1 bbox(-6.39,-3.5,4.71,3.5) #895c5af100
-graphics fp_poly F.Fab: 1 bbox(-5.81,-3.25,4.11,3.25) #854fbbbc97
+pads x30 (smd roundrect (size 0.86 0.935) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-1.4067,-2.32,3.9267,2.32) #2c979f2906
+pads x2 (smd roundrect (size 2.2 1.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.2083)) centres bbox(-5.04,-2.28,-5.04,2.28) #6f4e454d0b
+pads x1 (smd roundrect (size 6.4 5.8) (layers F.Cu F.Mask) (roundrect_rratio 0.0431)) centres bbox(1.26,0,1.26,0) #9862211faf
+graphics fp_line F.SilkS: 4 bbox(-3.22,-3.36,4.22,3.36) #6abb6e96e0
+graphics fp_poly F.Fab: 1 bbox(-3.11,-3.25,4.11,3.25) #7fab75fd35
 graphics fp_poly F.SilkS: 1 bbox(-5.28,-3.84,-4.8,-3.51) #4d6ed5f223
+graphics fp_rect F.CrtYd: 1 bbox(-6.39,-3.5,4.71,3.5) #c95729a9da
 ### standard/TQFP-100-1EP_14x14mm_P0.5mm_EP5x5mm.PcbLib:TQFP-100-1EP_14x14mm_P0.5mm_EP5x5mm
 params DESCRIPTION=TQFP-100-1EP_14x14mm_P0.5mm_EP5x5mm; IPC-7351B gullwing_fine density B: Z=16.80 G=13.85 X=0.30 HEIGHT=62.9921mil PATTERN=TQFP-100-1EP_14x14mm_P0.5mm_EP5x5mm
 text ".Designator" layer=33 at=(-1.3905,8.85) h=1 w=0.15 rot=0 mirror=False
@@ -3056,7 +3058,7 @@ graphics fp_poly F.SilkS: 1 bbox(-4.9025,-4.99,-4.4225,-4.66) #855b1aa69e
 graphics fp_rect F.CrtYd: 1 bbox(-5.65,-5.1,5.65,5.1) #f1deb1d2a6
 ### standard/Texas_R-PUSON-N14.PcbLib:Texas_R-PUSON-N14
 params DESCRIPTION=Texas_R-PUSON-N14; IPC-7351B qfn density B: Z=2.10 G=0.60 X=0.20 HEIGHT=31.4961mil PATTERN=Texas_R-PUSON-N14
-text ".Designator" layer=33 at=(-1.3905,2.2) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=33 at=(-1.3905,2.375) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-3.2) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.2097,-0.435) h=0.87 w=0.131 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-0.675,-1.75;0.675,-1.75;0.675,1.75;-0.3375,1.75;-0.675,1.4125
@@ -3085,7 +3087,7 @@ footprint Texas_R-PUSON-N14
 (descr "Texas_R-PUSON-N14 | IPC-7351B qfn density B: Z=2.10 G=0.60 X=0.20")
 (tags "qfn qfn IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -2.7)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.875)
 fp_text value Texas_R-PUSON-N14 layer=F.Fab at=(at 0 2.7)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
 (pad 1 smd roundrect (at -0.675 -1.5) (size 0.75 0.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))

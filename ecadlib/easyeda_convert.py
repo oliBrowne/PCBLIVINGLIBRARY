@@ -2,7 +2,7 @@
 
 The KiCad text then goes through kicad_import (convert_footprint / convert_symbol) to Altium, and footprint_check
 can read the .kicad_mod. Only what a land pattern and a pin map need is converted:
-  footprint: PAD (RECT / ELLIPSE / OVAL; POLYGON as its bounding rectangle), SMD and through-hole (round or slot,
+  footprint: PAD (RECT / ELLIPSE / OVAL; POLYGON as a custom pad, or a plain one when it is a rectangle), SMD and through-hole (round or slot,
              plated or not), HOLE (NPTH), TRACK, RECT, CIRCLE (as a 16-gon) and circular ARC on silk / fab layers, the body
              region (SOLIDREGION on layer 99) as a fab outline; a courtyard is drawn around pads and fab (EasyEDA
              has no courtyard layer); TEXT, VIA and other regions (layer-100 lead shapes) are dropped with a note;
@@ -102,24 +102,40 @@ def footprint_to_kicad(data, name=None, notes=None):
         if kind == "PAD":
             shape, cx, cy, w, h, layer, num, hole_r = f[1], X(f[2]), Y(f[3]), _f(f[4]) * U, _f(f[5]) * U, f[6], f[8], _f(f[9]) * U
             rot, hole_len = _f(f[11]) % 360, _f(f[13]) * U
+            poly = None
             if shape == "POLYGON":
                 pts = _nums(f[10])
                 xs, ys = [X(v) for v in pts[0::2]], [Y(v) for v in pts[1::2]]
                 if xs:
                     cx, cy, w, h, rot = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, max(xs) - min(xs), max(ys) - min(ys), 0
-                notes.append(f"pad {num}: polygon pad written as its bounding rectangle {w:.3f}x{h:.3f} mm")
+                    poly = _polygon(list(zip(xs, ys)))
+                if poly:           # an L / T shape (SOT-89's lead + tab): its bounding box would put copper next to the
+                    notes.append(f"pad {num}: polygon pad kept as a KiCad custom pad ({len(poly)} points)")   # other pins
+                else:
+                    notes.append(f"pad {num}: polygon pad is a plain rectangle {w:.3f}x{h:.3f} mm")
             kshape = {"RECT": "rect", "OVAL": "oval", "ELLIPSE": "circle" if abs(w - h) < 1e-6 else "oval"}.get(shape, "rect")
             at = f"(at {_n(cx)} {_n(cy)}{' ' + _n(rot) if rot else ''})"
+            size, prims = f"(size {_n(w)} {_n(h)})", ""
+            if poly:
+                from .footprint_adv import _interior_point
+                d, ax, ay = _interior_point(poly)
+                kshape, a = "custom", round(max(0.05, min(1.6 * d, 1.0)), 3)
+                if hole_r > 0:            # KiCad drills at the pad's anchor: keep it on EasyEDA's hole, sized to the hole
+                    ax, ay, a = X(f[2]), Y(f[3]), round(2 * hole_r, 3)
+                ax, ay = round(ax, 4), round(ay, 4)
+                at, size = f"(at {_n(ax)} {_n(ay)})", f"(size {_n(a)} {_n(a)})"
+                prims = (" (options (clearance outline) (anchor circle)) (primitives (gr_poly (pts "
+                         + " ".join(f"(xy {_n(x - ax)} {_n(y - ay)})" for x, y in poly) + ") (width 0) (fill yes)))")
             if hole_r > 0:
                 d = 2 * hole_r
                 drill = f"(drill {_n(d)})"
                 if hole_len > d + 1e-6:       # slot along the pad's long side (easyeda2kicad's rule)
                     drill = f"(drill oval {_n(hole_len)} {_n(d)})" if w >= h else f"(drill oval {_n(d)} {_n(hole_len)})"
                 kind_ = "np_thru_hole" if _no(f[15]) else "thru_hole"
-                pads.append(f'  (pad {_q(num)} {kind_} {kshape} {at} (size {_n(w)} {_n(h)}) {drill} (layers "*.Cu" "*.Mask"))')
+                pads.append(f'  (pad {_q(num)} {kind_} {kshape} {at} {size} {drill} (layers "*.Cu" "*.Mask"){prims})')
             else:
                 side = "B" if str(layer) == "2" else "F"
-                pads.append(f'  (pad {_q(num)} smd {kshape} {at} (size {_n(w)} {_n(h)}) (layers "{side}.Cu" "{side}.Paste" "{side}.Mask"))')
+                pads.append(f'  (pad {_q(num)} smd {kshape} {at} {size} (layers "{side}.Cu" "{side}.Paste" "{side}.Mask"){prims})')
             extent += _rect(cx, cy, w, h, rot)
             copper.append({"num": num, "x": cx, "y": cy, "w": w, "h": h, "rot": rot, "shape": kshape})
         elif kind == "HOLE":
@@ -201,6 +217,30 @@ def footprint_to_kicad(data, name=None, notes=None):
                f'(end {_n(crt[2])} {_n(crt[3])}) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))')
     notes.append("courtyard drawn by ecadlib: pads and fab outline + 0.25 mm (EasyEDA has no courtyard layer)")
     return "\n".join(out + pads) + "\n)\n"
+
+
+def _polygon(pts):
+    """A pad polygon's corners (repeats and points on a straight edge dropped), or None when it is just its bounding
+    rectangle (then a plain pad says the same)."""
+    out = []
+    for p in pts:
+        if not out or abs(p[0] - out[-1][0]) > 1e-6 or abs(p[1] - out[-1][1]) > 1e-6:
+            out.append(p)
+    if len(out) > 1 and abs(out[0][0] - out[-1][0]) < 1e-6 and abs(out[0][1] - out[-1][1]) < 1e-6:
+        out.pop()
+    i = 0
+    while len(out) > 3 and i < len(out):                     # collinear middle points
+        a, b, c = out[i - 1], out[i], out[(i + 1) % len(out)]
+        if abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) < 1e-9:
+            out.pop(i)
+        else:
+            i += 1
+    if len(out) < 3:
+        return None
+    xs, ys = {round(x, 6) for x, _ in out}, {round(y, 6) for _, y in out}
+    if len(out) == 4 and len(xs) == 2 and len(ys) == 2:
+        return None
+    return out
 
 
 def _svg_arc(path, X=lambda v: v, Y=lambda v: v):

@@ -88,10 +88,11 @@ def _err(e):
 
 # ---------------------------------------------------------------- headers: plain requests, a browser's headers
 def headers_get(url, session=None, timeout=60):
-    from .datasheet import read_capped, DatasheetError
+    from .datasheet import read_capped, DatasheetError, redirect_hooks
     s = session or requests.Session()
     try:
-        r = s.get(url, timeout=timeout, allow_redirects=True, stream=True, headers=dict(BROWSER_HEADERS, Referer=origin(url)))
+        r = s.get(url, timeout=timeout, allow_redirects=True, stream=True, headers=dict(BROWSER_HEADERS, Referer=origin(url)),
+                  **redirect_hooks())
         try:
             data = read_capped(r)
         finally:
@@ -123,7 +124,7 @@ class Impersonate:
             return self._get(url)
 
     def _get(self, url):
-        from .datasheet import MAX_DOWNLOAD, DOWNLOAD_S
+        from .datasheet import MAX_DOWNLOAD, DOWNLOAD_S, public_only, redirect_refused
         try:
             from curl_cffi import requests as cr
         except Exception as e:
@@ -131,7 +132,19 @@ class Impersonate:
         if self._s is None:
             self._s = cr.Session(impersonate="chrome")
         try:
-            r = self._s.get(url, timeout=self.timeout, allow_redirects=True, stream=True, headers={"Referer": origin(url)})
+            at, public = url, public_only()           # a web search's link: each redirect checked before it is followed
+            for _ in range(10):
+                r = self._s.get(at, timeout=self.timeout, allow_redirects=not public, stream=True,
+                                headers={"Referer": origin(at)})
+                where = public and 300 <= r.status_code < 400 and r.headers.get("location")
+                if not where:
+                    break
+                r.close()
+                why = redirect_refused(at, where)
+                if why:
+                    return 0, None, "", url, why
+                from urllib.parse import urljoin
+                at = urljoin(at, where)
             buf, t0 = bytearray(), time.monotonic()
             try:
                 for chunk in r.iter_content():
@@ -239,7 +252,7 @@ class _State:
 
     def __init__(self):
         self.pw = self.browser = self.ctx = self.why = self.engine = self.pid = None
-        self.warm = set()
+        self.warm, self.public = set(), getattr(self, "public", False)   # (kept when a dead browser is started again)
 
 
 class Browser:
@@ -318,7 +331,8 @@ class Browser:
                                           viewport={"width": 1366, "height": 768})
             if not self.allow_local:
                 from . import datasheet as D
-                s.ctx.route("**/*", lambda route: route.abort() if D.unsafe_download(route.request.url) else route.continue_())
+                s.ctx.route("**/*", lambda route: route.abort() if D.unsafe_download(route.request.url, s.public)
+                            else route.continue_())
         except Exception as e:                        # the driver cannot run (a broken install, a frozen build)
             self._close(s)
             s.why = f"could not start a browser ({type(e).__name__}: {str(e).splitlines()[0][:120] if str(e) else ''})"
@@ -483,11 +497,13 @@ class Browser:
 
     # -- from any thread
     def get(self, url):
+        from .datasheet import public_only
         limit = self.limit
         with self._lock:                              # one page at a time
             if self._worker is None:                  # closed: open again
                 self._worker, self._s = _Worker(), _State()
             s = self._s
+            s.public = public_only()                  # (the worker thread's route check: a web search's link)
             try:
                 return self._worker.call(lambda: self._get(url, s), limit)
             except concurrent.futures.TimeoutError:   # stuck (a site that stopped sending): a new worker and browser
@@ -653,12 +669,20 @@ def names_part(data, part, pages=3):
     return bool(base and len(base.group(0)) >= 4 and base.group(0) in text)
 
 
+# a link's file name that says nothing of the document (…/download?fileId=…, …/view.jsp): never a match by itself
+GENERIC_STEMS = {"DOWNLOAD", "DOWNLOADS", "DOWNLOADFILE", "FILEDOWNLOAD", "DATASHEET", "DATASHEETS", "VIEW",
+                 "VIEWDOCUMENT", "VIEWER", "FILE", "FILES", "PDF", "GETFILE", "GETPDF", "GETDOCUMENT", "GETDATASHEET",
+                 "DOCUMENT", "DOCUMENTS", "DOC", "DOCS", "INDEX", "GET", "DL", "SHOW", "OPEN", "ATTACHMENT", "CONTENT",
+                 "ASSET", "ASSETS", "MEDIA", "RESOURCE", "DGDL", "LIT", "DS", "PRODUCT"}
+
+
 class Handoff:
     """Open a refused link in the person's own browser and take the PDF from their Downloads folder.
 
     A new .pdf there (not one that was there before, not a partial download) is taken when its name matches the
-    link's file name or the part number, or its text names the part; anything else is left alone, so an unrelated
-    download is never read as this part's datasheet. The file stays where it is (it is the person's); its bytes are
+    link's file name (a generic one, GENERIC_STEMS, never) or the part number, or its text names the part, and its
+    first pages do not name another part instead (datasheet.mentions_part); anything else is left alone and never
+    kept, so an unrelated download is never read as this part's datasheet. The file stays where it is (it is the person's); its bytes are
     kept in ecadlib's datasheet cache under the link, so the next run needs no browser. datasheet_folder: [datasheet]
     folder, where the person is told to save a PDF no browser could fetch here."""
 
@@ -696,7 +720,8 @@ class Handoff:
         return f"{how} (or read it alone with `ecadlib datasheet FILE.pdf --part {part_arg(part or 'MPN')}`)"
 
     def get(self, url, part=None):
-        from .datasheet import is_pdf
+        from .datasheet import MENTION_PAGES, is_pdf, mentions_part
+        from .ds_route import page_texts
         if not self.folder.is_dir():                  # (no path in what is returned: it is kept in the part's record)
             return 0, None, "", url, "your Downloads folder was not found (set [datasheet] downloads_folder)"
         try:
@@ -744,8 +769,11 @@ class Handoff:
                         others.add(seen)
                         continue
                     k, pk = _key(p.stem), _key(part)
-                    if (stem and (k == stem or (len(stem) >= 4 and k.startswith(stem)))) or (len(pk) >= 4 and pk in k) \
-                            or (part and names_part(data, part)):
+                    ok = bool(stem and stem not in GENERIC_STEMS and (k == stem or (len(stem) >= 4 and k.startswith(stem)))
+                              or (len(pk) >= 4 and pk in k) or (part and names_part(data, part)))
+                    if ok and part:                   # named for it, yet its pages name another part: not its PDF
+                        ok = mentions_part(page_texts(data, MENTION_PAGES), part) is not False
+                    if ok:
                         self.say(f"  Got {p.name} ({len(data) >> 10} KB).")
                         return 200, data, "application/pdf", url, None, {"x-ecadlib-file": p.name}
                     others.add(seen)

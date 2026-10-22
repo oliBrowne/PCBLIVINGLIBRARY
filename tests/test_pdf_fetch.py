@@ -407,19 +407,22 @@ class Clock:
             self.then.pop(0)()
 
 
+LTM_PDF = TB.pdf_with(["LTM4671 Quad DC/DC uModule Regulator with Configurable Output Array"])   # names the part
+
+
 @lite
 def test_handoff_takes_the_new_pdf_named_for_the_link(tmp_path):
-    (tmp_path / "old.pdf").write_bytes(PDF)                         # there before: never taken
+    (tmp_path / "old.pdf").write_bytes(LTM_PDF)                     # there before: never taken
     clock, said = Clock(), []
 
     def opened(url):                                                  # the browser writes a partial file, then the PDF
         part = tmp_path / "ltm4671.pdf.crdownload"
         part.write_bytes(b"%PDF-1.4 partial")
         clock.then += [lambda: None, lambda: part.rename(tmp_path / "ltm4671.pdf"),
-                       lambda: (tmp_path / "ltm4671.pdf").write_bytes(PDF)]
+                       lambda: (tmp_path / "ltm4671.pdf").write_bytes(LTM_PDF)]
     h = PF.Handoff(tmp_path, wait_s=30, say=said.append, open_url=opened, sleep=clock.sleep, clock=clock)
     status, data, ctype, final, err, hdr = h.get(URL, "LTM4671")
-    assert (status, data, err, hdr["x-ecadlib-file"]) == (200, PDF, None, "ltm4671.pdf"), (status, err)
+    assert (status, data, err, hdr["x-ecadlib-file"]) == (200, LTM_PDF, None, "ltm4671.pdf"), (status, err)
     assert any(URL in m for m in said) and any("Got ltm4671.pdf" in m for m in said)
     assert h.get(URL.replace("https://", "http://"), "LTM4671")[4] == "already opened in your browser this run"
 
@@ -454,13 +457,13 @@ def test_handoff_takes_a_firefox_download_saved_over_its_empty_placeholder(tmp_p
     def opened(url):                                                  # Firefox: an empty file first, the bytes in .part
         (tmp_path / "ltm4671.pdf").write_bytes(b"")
         part = tmp_path / "ltm4671.pdf.part"
-        part.write_bytes(PDF[:100])
-        clock.then += [lambda: None, lambda: None, lambda: part.write_bytes(PDF),
+        part.write_bytes(LTM_PDF[:100])
+        clock.then += [lambda: None, lambda: None, lambda: part.write_bytes(LTM_PDF),
                        lambda: os.replace(part, tmp_path / "ltm4671.pdf")]
         return True
     h = PF.Handoff(tmp_path, wait_s=30, say=lambda m: None, open_url=opened, sleep=clock.sleep, clock=clock)
     r = h.get(URL, "LTM4671")
-    assert r[1] == PDF and r[4] is None, r[4]
+    assert r[1] == LTM_PDF and r[4] is None, r[4]
 
 
 @lite
@@ -958,7 +961,7 @@ def test_the_whole_chain_against_the_local_site(tmp_path, monkeypatch):
     if b is None:
         return
     srv, base = site()
-    monkeypatch.setattr(D, "unsafe_download", lambda url: None)
+    monkeypatch.setattr(D, "unsafe_download", lambda url, public=False: None)
     try:
         st = D.PdfStore(tmp_path, None, download="auto", sleep=lambda s: None)
         st.fns["browser"] = lambda url, part: b.get(url)            # this test's browser, not the shared one

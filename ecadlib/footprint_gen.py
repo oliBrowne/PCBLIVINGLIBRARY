@@ -215,12 +215,19 @@ def _gullwing(spec, fil):
     return pads, (body_x, body_y), rep
 
 
+def rows(spec):
+    """(pins_left_right, pins_top_bottom) as _qfn lays a QFN / QFP out: a split the read left blank is the default
+    (a quarter of the pins per side; with only pins_left_right given, the rest on top/bottom, so 0 for a DFN)."""
+    n = spec["pin_count"]
+    nlr = spec.get("pins_left_right", n // 4)
+    return nlr, spec.get("pins_top_bottom", (n - 2 * nlr) // 2)
+
+
 def _qfn(spec, fil):
     """Quad (or dual) rows: QFN/DFN toes sit at the body edge; QFP toes at the lead span."""
     npins, e = spec["pin_count"], spec["pitch"]
     body_x, body_y, T, bw = dim(spec["body_length"]), dim(spec["body_width"]), dim(spec["terminal_length"]), dim(spec["terminal_width"])
-    nlr = spec.get("pins_left_right", npins // 4)
-    ntb = spec.get("pins_top_bottom", (npins - 2 * nlr) // 2)
+    nlr, ntb = rows(spec)
     span_x = dim(spec["lead_span"]) if spec.get("lead_span") else body_x
     span_y = dim(spec.get("lead_span_y") or spec["lead_span"]) if spec.get("lead_span") else body_y
     ep = spec.get("exposed_pad")                              # heels pulled back to keep MIN_EP_CLEAR to the EP (KLC F6.3)
@@ -274,11 +281,48 @@ def _left_right(spec, pads):
     t = spec["package_type"]
     if t not in ("qfn", "qfp"):
         return [True] * len(pads)                             # chips, gull-wings (and their tab): all along X
-    npins = spec["pin_count"]
-    nlr = spec.get("pins_left_right", npins // 4)
-    ntb = spec.get("pins_top_bottom", (npins - 2 * nlr) // 2)
+    nlr, ntb = rows(spec)
     side = ([True] * nlr + [False] * ntb) * 2                 # _qfn(): left, bottom, right, top
     return [side[i] if i < len(side) else True for i in range(len(pads))]
+
+
+def land_short(spec):
+    """What of the maker's land (spec["land"]) would not solder the leads read from the same drawing, as _apply_land
+    lays it: a pad (pin 1's own size included) narrower than terminal_width min, short of the lead tip (lead_span, or
+    the body edge for a QFN/DFN, as _qfn takes it) or starting past the shortest foot's heel. The eval scorer's
+    maker_land test (eval.score covers); a 0.1 mm wide pin 1 misread for a 0.3 mm lead would become copper. -> lines."""
+    land, t = spec.get("land") or {}, spec.get("package_type")
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    pl, pw, pc = (land.get(k) for k in ("pad_length", "pad_width", "pad_center"))
+    if t not in ("gullwing", "qfp", "qfn") or not all(num(v) for v in (pl, pw, pc)):
+        return []
+    try:
+        T, b = (dim(spec[k]) if spec.get(k) else None for k in ("terminal_length", "terminal_width"))
+        sx = dim(spec["lead_span"]) if spec.get("lead_span") else dim(spec["body_length"]) if t == "qfn" and spec.get("body_length") else None
+        sy = dim(spec.get("lead_span_y") or spec["lead_span"]) if spec.get("lead_span") else \
+            dim(spec["body_width"]) if t == "qfn" and spec.get("body_width") else None
+        ntb = rows(spec)[1] if t != "gullwing" and isinstance(spec.get("pin_count"), int) else 0
+    except (KeyError, TypeError, ValueError):         # a malformed dimension: sanity() / the schema check say what
+        return []
+    pcy = land["pad_center_y"] if num(land.get("pad_center_y")) else pc
+    l1 = land["pin1_length"] if num(land.get("pin1_length")) and land["pin1_length"] > 0 else pl
+    w1 = land["pin1_width"] if num(land.get("pin1_width")) and land["pin1_width"] > 0 else pw
+    pads = [("pin 1 pad", l1, w1, pc + (pl - l1) / 2, sx)] if (l1, w1) != (pl, pw) else []
+    pads += [("row pads" if ntb else "pads", pl, pw, pc, sx)] + ([("top/bottom row pads", pl, pw, pcy, sy)] if ntb else [])
+    out, tol = [], 0.05                               # eval.score TOL["pos"]
+    for what, l, w, c, span in pads:
+        why = []
+        if b and w < b[0] - 1e-9:
+            why.append(f"{w:g} mm wide, narrower than terminal_width min {b[0]:g}")
+        if span and T and c + l / 2 < span[0] / 2 - tol:
+            why.append(f"outer end at {c + l / 2:g} mm, short of the lead tip at {span[0] / 2:g}")
+        if span and T and c - l / 2 > span[2] / 2 - T[0] + tol:
+            why.append(f"inner end at {c - l / 2:g} mm, past the shortest foot's heel at {span[2] / 2 - T[0]:g}")
+        if why:
+            out.append(f"land pattern: the {what} ({l:g} x {w:g} mm at {c:g}) would not solder the lead read from the "
+                       f"same drawing: {'; '.join(why)} (check land pad_length / pad_width / pad_center"
+                       f"{' / pin1_length / pin1_width' if what == 'pin 1 pad' else ''} against the drawing)")
+    return out
 
 
 def _apply_land(spec, pads):
@@ -349,8 +393,7 @@ def sanity(spec):
         errs.append(f"{spec['name']} puts {dep.group(1)} pins on {dep.group(2)} places: list the pads in pin_positions "
                     f"(a full dual row of {n} pads puts them on the wrong places)")
     if t in ("qfn", "qfp") and n:
-        nlr = spec.get("pins_left_right", n // 4)
-        ntb = spec.get("pins_top_bottom", (n - 2 * nlr) // 2)
+        nlr, ntb = rows(spec)
         if 2 * nlr + 2 * ntb != n:
             errs.append(f"pin_count {n} doesn't equal 2 x {nlr} (left/right) + 2 x {ntb} (top/bottom); "
                         "set pins_left_right / pins_top_bottom")
@@ -371,7 +414,7 @@ def sanity(spec):
         errs.append("the exposed pad is as big as the body: check its length/width")
     elif ep and t == "qfn" and T:
         tmin = dim(spec["terminal_length"])[0]
-        tb = spec.get("pins_top_bottom", 1)
+        tb = rows(spec)[1] if isinstance(n, int) else spec.get("pins_top_bottom", 1)
         if dim(ep["length"])[1] + 2 * tmin > dim(spec["body_length"])[2] or (
                 tb and dim(ep["width"])[1] + 2 * tmin > dim(spec["body_width"])[2]):
             errs.append("the exposed pad would overlap the terminals: check its size against the body and terminal_length")
@@ -397,7 +440,7 @@ def orient_ep(spec):
                 el > ew and dim(spec["body_length"])[1] > dim(spec["body_width"])[1]:
             return turned, [f"exposed pad turned to run with the body: {round(ew, 3)} across the rows, "
                             f"{round(el, 3)} along them"]
-        if t == "qfn" and spec.get("pins_top_bottom") == 0 and spec.get("terminal_length") and spec.get("body_length"):
+        if t == "qfn" and spec.get("terminal_length") and spec.get("body_length") and rows(spec)[1] == 0:
             room = dim(spec["body_length"])[1] - 2 * dim(spec["terminal_length"])[1]     # between the two rows
             if el > room + 1e-9 and ew <= room - 2 * MIN_EP_CLEAR + 1e-9 and (not spec.get("body_width") or el < dim(spec["body_width"])[1]):
                 return turned, [f"exposed pad turned to clear the terminals: {round(ew, 3)} across the rows, "
@@ -533,7 +576,7 @@ def build(spec, density=None):
         out += [line(a[0], a[1], b[0], b[1], "F.SilkS", SILK_W) for a, b in segs]
         silk_y = max((abs(v[1]) for sg in segs for v in sg), default=0.0)
         if not two_term:                                              # pin-1 triangle just above pad 1
-            if t == "qfn" and spec.get("pins_top_bottom", 1) != 0:
+            if t == "qfn" and rows(spec)[1] != 0:
                 ax, ay = -sx, -sy
                 for _ in pads:                                        # tiny QFN: the top row reaches the corner,
                     hit = [p for p in pads if p[2] - p[4] / 2 - c < ay and p[2] + p[4] / 2 + c > ay - 0.33 and
@@ -547,6 +590,7 @@ def build(spec, density=None):
 
     if silk_y + SILK_W / 2 > cy:                                      # silk outline past the courtyard (density C):
         out[5] = text("reference", "REF**", 0, -round(silk_y + SILK_W / 2 + 0.7, 4), "F.SilkS")  # keep REF** off it
+    clear_reference(out)                                              # and off the pin-1 triangle
     out.append(rect(-cx, -cy, cx, cy, "F.CrtYd", CRT_W))
     out += [pad(*p) for p in pads] + ep_lines
     if spec.get("model_3d"):
@@ -575,6 +619,38 @@ def altium_footprint(spec, density=None):
     from . import altium_lib as AL
     fp, rep = AL.footprint_from_spec(spec, density)
     return fp, rep.get("altium_notes", [])
+
+
+_XY = re.compile(r"\((?:start|end|xy) (-?[\d.]+) (-?[\d.]+)\)")
+_W = re.compile(r"\(stroke \(width ([\d.]+)\)")
+
+
+def clear_reference(out, gap=0.05):
+    """Move the F.SilkS Reference (REF**) up when it would sit on silkscreen: the pin-1 triangle stands above pad 1
+    and can reach past the courtyard on small parts (SC-70, 2 x 2 mm DFN); KiCad's DRC calls that silk_overlap.
+    out: the footprint's lines (in place). Only F.SilkS lines, polygons and rectangles in the text's x range count."""
+    k = next((i for i, l in enumerate(out) if l.lstrip().startswith("(fp_text reference")), None)
+    if k is None:
+        return out
+    m = re.search(r"\(at (-?[\d.]+) (-?[\d.]+)", out[k])
+    sz = re.search(r"\(size ([\d.]+) ([\d.]+)\)", out[k])
+    x, y, h = float(m.group(1)), float(m.group(2)), float(sz.group(2)) if sz else 1.0
+    th = re.search(r"\(thickness ([\d.]+)\)", out[k])
+    h += float(th.group(1)) if th else 0.15                  # KiCad's DRC box takes in the stroke (ST_UQFN-6L flagged
+    half_w = 0.6 * h * len("REF**") / 2                      # KiCad stroke font: about 0.6 x the height per character
+    top = None
+    for l in out:
+        if '"F.SilkS"' not in l or "fp_text" in l:
+            continue
+        w = float((_W.search(l) or [0, 0.12])[1]) / 2
+        pts = [(float(a), float(b)) for a, b in _XY.findall(l)]
+        if pts and min(a for a, _ in pts) - w < x + half_w and max(a for a, _ in pts) + w > x - half_w:
+            t = min(b for _, b in pts) - w
+            top = t if top is None else min(top, t)
+    # at 0.025 mm); KiCad's own SOT-23 puts REF** on its pin-1 triangle, so that one moves 0.13 mm up too
+    if top is not None and y + h / 2 > top + 1e-6:
+        out[k] = re.sub(r"\(at (-?[\d.]+) (-?[\d.]+)", f"(at {n(x)} {n(round(top - gap - h / 2, 4))}", out[k], count=1)
+    return out
 
 
 def pin1_triangle(x, y):

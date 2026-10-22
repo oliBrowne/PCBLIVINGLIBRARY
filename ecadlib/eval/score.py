@@ -138,6 +138,7 @@ def score_footprint(mine, ref, tol=None):
     else:
         out["pitch"] = _f(pa is not None and abs(pa - pb) <= t["pitch"] + 1e-9, f"pitch {pa} mm, KiCad {pb} mm", ours=pa, ref=pb)
     left, worst, bad, bad_pads = list(ref["pads"]), {"pos": 0.0, "size": 0.0, "drill": 0.0}, [], []
+    row = 0.0                                         # worst offset along the pad rows, across the leads (only_maker_land)
     compared = 0
     for p in m["pads"]:
         cands = [r for r in left if r[0] == p[0]]
@@ -150,12 +151,14 @@ def score_footprint(mine, ref, tol=None):
              "drill": abs(p[5] - r[5])}
         for k, v in e.items():
             worst[k] = max(worst[k], v)
+        ex, ey = abs(p[1] - r[1]), abs(p[2] - r[2])     # KiCad's pad longer in x: its lead runs along x, the row along y
+        row = max(row, ey if r[3] > r[4] + 1e-9 else ex if r[4] > r[3] + 1e-9 else max(ex, ey))
         why = [f"{k} off {v:.3f}" for k, v in e.items() if v > t[k] + 1e-9]
         if why:
             bad.append(f"pad {p[0] or '(hole)'}: " + ", ".join(why))
             bad_pads.append(p[0])
     out["pads"] = _f(not bad, f"{len(bad)} pads out of tolerance: " + "; ".join(bad[:4]) + (" ..." if len(bad) > 4 else ""),
-                     worst={k: round(v, 4) for k, v in worst.items()}, bad=len(bad), bad_pads=bad_pads,
+                     worst={**{k: round(v, 4) for k, v in worst.items()}, "row": round(row, 4)}, bad=len(bad), bad_pads=bad_pads,
                      right=compared - len(bad), of=len(ref["pads"]))     # pad match: right / of (KiCad's pads)
     ca, cb = m["courtyard"], ref["courtyard"]
     if not cb:
@@ -223,6 +226,16 @@ def ep_numbers(num):
     return [p[0] for p in pads if p[3] * p[4] > big]
 
 
+def _top_bottom(spec):
+    """The top / bottom pins as the builder lays them out (footprint_gen.rows: 0 for a DFN read with only
+    pins_left_right), or 1 (checked) when the read's pin count can't say."""
+    from .. import footprint_gen as F
+    try:
+        return F.rows(spec)[1]
+    except (KeyError, TypeError):
+        return spec.get("pins_top_bottom", 1)
+
+
 def maker_land(mine, spec, tol=None):
     """Does our footprint use the datasheet's recommended land (spec["land"]: pad_length x pad_width at +-pad_center,
     the maker's example board layout) rather than an IPC-7351B land worked out from the package dimensions? KiCad
@@ -255,11 +268,18 @@ def maker_land(mine, spec, tol=None):
     # the leads it read (reach the toe, start inside the shortest foot, be no narrower than the lead)
     rng = lambda k: [v for v in ((spec.get(k) or {}).get(x) for x in ("min", "nom", "max")) if isinstance(v, (int, float))] \
         if isinstance(spec.get(k), dict) else []
-    span, T, b = rng("lead_span"), rng("terminal_length"), rng("terminal_width")
-    covers = lambda l, w, c: c + l / 2 >= min(span) / 2 - t["pos"] and c - l / 2 <= max(span) / 2 - min(T) + t["pos"] \
+    # the toes at the span the builder uses: lead_span, or for a no-lead quad / dual (QFN, DFN: no lead_span) the
+    # body's edge, body_length for the left / right rows and lead_span_y or body_width for the top / bottom ones
+    quad = spec.get("package_type") in ("qfn", "qfp")
+    span = rng("lead_span") or (rng("body_length") if quad else [])
+    span_y = (rng("lead_span_y") or span) if spec.get("lead_span") else rng("body_width") if quad else []
+    T, b = rng("terminal_length"), rng("terminal_width")
+    covers = lambda l, w, c, s=span: c + l / 2 >= min(s) / 2 - t["pos"] and c - l / 2 <= max(s) / 2 - min(T) + t["pos"] \
         and w >= min(b) - 1e-9
     l1 = land.get("pin1_length") or pl                # a pin 1 of its own size must solder its lead too
-    sane = not (span and T and b) or (covers(pl, pw, pc) and covers(l1, land.get("pin1_width") or pw, pc + (pl - l1) / 2))
+    tb = quad and _top_bottom(spec) and span_y        # top / bottom rows (a DFN has none)
+    sane = not (span and T and b) or (covers(pl, pw, pc) and covers(l1, land.get("pin1_width") or pw, pc + (pl - l1) / 2)
+                                      and (not tb or covers(pl, pw, pcy, span_y)))
     # the maker's thermal land, when the land gives one: centred on the pads, ep_across running across the pad rows
     # (the lead pads' long side runs across the rows: pads wider than tall are rows at +-x, so across is the pad's
     # width; taller than wide, its height; both kinds, a quad package: either way round. Not the pads' extent: a long
@@ -276,21 +296,24 @@ def maker_land(mine, spec, tol=None):
             **({} if sane else {"implausible": "the land does not cover the leads read from the same drawing"})}
 
 
-def only_maker_land(fields, ml):
+def only_maker_land(fields, ml, body=None):
     """A KiCad miss explained by the maker's land: only pads (and the courtyard, which follows the pads) differ, and
     every pad that differs is one of the land's pads. An exposed pad that differs is a real miss unless it is the
     land's own thermal pad (ep_across x ep_along: ISL8117FVEZ, Renesas M16.173A 3 x 3, where KiCad's reference is a
-    TI HTSSOP-16 with 3.4 x 5)."""
+    TI HTSSOP-16 with 3.4 x 5). The courtyard follows the body read too: when it differs, a body that body_evidence
+    contradicts (body False) is a misread, not the land."""
     if not ml or not ml["followed"]:
         return False
     failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
-    if not failed or not failed <= {"pads", "courtyard"}:
+    if not failed or not failed <= {"pads", "courtyard"} or ("courtyard" in failed and body is False):
         return False
     pads = fields.get("pads") or {}
     # a maker's land moves pads along their lead (pad_center), never into a neighbour's place: a pad off by half the
-    # pitch or more is on the wrong lead (AH1806-W 10-21: pads 2 and 3 swapped, 2.4 mm off, are not a land choice)
-    pitch = (fields.get("pitch") or {}).get("ref")
-    if (pads.get("worst") or {}).get("pos", 0) >= (pitch / 2 if pitch else 0.5):
+    # pitch or more along its row is on the wrong lead (AH1806-W 10-21: pads 2 and 3 swapped, 2.4 mm off, are not a
+    # land choice). Either way: along the row only would miss pads swapped across the rows (an SOIC-8's 2 and 7 sit
+    # at one y), and a fine-pitch land moved half the pitch out is then not counted (never a wrong part counted right)
+    pitch, w = (fields.get("pitch") or {}).get("ref"), pads.get("worst") or {}
+    if w.get("pos", 0) >= (pitch / 2 if pitch else 0.5):
         return False
     return set(pads.get("bad_pads") or []) <= set(ml["pads"]) | set(ml.get("ep_land") or [])
 
@@ -315,33 +338,79 @@ def _table_body(spec):
 
 
 BODY_EXCESS_MAX = 0.6     # IPC-7351B courtyard excess is 0.1-0.5 mm, plus rounding out to 0.01 mm
+NAME_BODY_TOL = 0.15      # KiCad names round the body (TSSOP-16_4.4x5mm for 4.9-5.1)
+NAME_BODY_RX = re.compile(r"_(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x\d+(?:\.\d+)?)?mm(?=_|$)")
 
 
-def datasheet_body(fields, mine, spec):
-    """A KiCad miss on the courtyard alone, where ours is the IPC courtyard around our pads and the body the datasheet
-    gives (from body_length / body_width, centred on the pads, either way round; or a pad table's body box where the
-    table puts it). KiCad sizes some courtyards from a nominal body per pin count
-    (every DIP-16 is 20.32 mm long, every DIP-28 35.56 mm), which can be smaller or larger than the real part.
-    -> None when it does not apply, else {"body": [length, width] used}."""
-    failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
-    if failed != {"courtyard"} or not mine or not mine.get("courtyard") or not spec:
-        return None
+def _body_ways(spec):
+    """The body read from the datasheet -> [(along x, along y, the body's centre less the pads' centre)], each size
+    (min, nom, max), either way round; or None. body_length / body_width centred on the pads, else a pad table's
+    body box where the table puts it."""
     def rng(k):
         d = spec.get(k)
         v = [d.get(x) for x in ("min", "nom", "max")] if isinstance(d, dict) else []
         v = [x for x in v if isinstance(x, (int, float))]
         return (min(v), (d["nom"] if isinstance(d.get("nom"), (int, float)) else (min(v) + max(v)) / 2), max(v)) if v else None
     L, W = rng("body_length"), rng("body_width")
-    ways = [(L, W, 0.0, 0.0), (W, L, 0.0, 0.0)]  # (along x, along y, the body's centre less the pads' centre)
-    if not (L and W):
-        box = _table_body(spec)
-        if not box:
-            return None
-        (bx, by, ox, oy) = box
-        L, W = (bx,) * 3, (by,) * 3
-        # the table's frame may be mirrored or turned against ours: the offset goes with the body, either sign
-        ways = [(L, W, sx * ox, sy * oy) for sx in (1, -1) for sy in (1, -1)] + \
-               [(W, L, sx * oy, sy * ox) for sx in (1, -1) for sy in (1, -1)]
+    if L and W:
+        return [(L, W, 0.0, 0.0), (W, L, 0.0, 0.0)]
+    box = _table_body(spec)
+    if not box:
+        return None
+    (bx, by, ox, oy) = box
+    L, W = (bx,) * 3, (by,) * 3
+    # the table's frame may be mirrored or turned against ours: the offset goes with the body, either sign
+    return [(L, W, sx * ox, sy * oy) for sx in (1, -1) for sy in (1, -1)] + \
+           [(W, L, sx * oy, sy * ox) for sx in (1, -1) for sy in (1, -1)]
+
+
+def body_evidence(spec, ref_name=None, ref=None):
+    """Does the body we read agree with evidence that is not our own reading? The courtyard always fits the body we
+    read, so a misread body (SOIC-16 read 12.0 long, really 9.9) would otherwise count as right by the datasheet.
+    1. KiCad's reference name gives the body (SOIC-16_3.9x9.9mm, TSSOP-16_4.4x5mm, MSOP-8_3x3mm): the read's
+       min..max must hold it, either way round, within NAME_BODY_TOL.
+    2. Else KiCad's courtyard (its pads plus some body) must be no larger than its pads and the largest body we read
+       plus the IPC excess: a body read too small is the dangerous misread. (A body read too large is not caught
+       here: KiCad's courtyard can be smaller than the real part, SM13B-GHS-TB, so it is no bound from below.)
+    -> True (agrees), False (contradicted), None: no independent evidence (no body read, no body in the name, no
+    KiCad courtyard), where the read body is taken on its own, as before."""
+    ways = _body_ways(spec or {})
+    if not ways:
+        return None
+    m = NAME_BODY_RX.search(str(ref_name or "").split(":")[-1])
+    if m:
+        a, b = float(m.group(1)), float(m.group(2))
+        holds = lambda r, v: r[0] - NAME_BODY_TOL <= v <= r[2] + NAME_BODY_TOL
+        return any(holds(bx, a) and holds(by, b) or holds(bx, b) and holds(by, a) for bx, by, _, _ in ways)
+    pads = [p for p in ((ref or {}).get("pads") or []) if not p[5] or p[0]]
+    rc = (ref or {}).get("courtyard")
+    if not (pads and rc):
+        return None
+    x0, y0 = min(p[1] - p[3] / 2 for p in pads), min(p[2] - p[4] / 2 for p in pads)
+    x1, y1 = max(p[1] + p[3] / 2 for p in pads), max(p[2] + p[4] / 2 for p in pads)
+    pcx, pcy = _centre(pads)
+    e = BODY_EXCESS_MAX + TOL["courtyard"]
+    for bx, by, ox, oy in ways:
+        cx, cy = pcx + ox, pcy + oy
+        hi = [min(x0, cx - bx[2] / 2), min(y0, cy - by[2] / 2), max(x1, cx + bx[2] / 2), max(y1, cy + by[2] / 2)]
+        if rc[0] >= hi[0] - e - 1e-6 and rc[1] >= hi[1] - e - 1e-6 and rc[2] <= hi[2] + e + 1e-6 and rc[3] <= hi[3] + e + 1e-6:
+            return True
+    return False
+
+
+def datasheet_body(fields, mine, spec, ref_name=None, ref=None):
+    """A KiCad miss on the courtyard alone, where ours is the IPC courtyard around our pads and the body the datasheet
+    gives (from body_length / body_width, centred on the pads, either way round; or a pad table's body box where the
+    table puts it). KiCad sizes some courtyards from a nominal body per pin count
+    (every DIP-16 is 20.32 mm long, every DIP-28 35.56 mm), which can be smaller or larger than the real part.
+    The read body earns the credit only when body_evidence (KiCad's name, or its courtyard; ref_name / ref) does not
+    contradict it. -> None when it does not apply, else {"body": [length, width] used}."""
+    failed = {k for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY}
+    if failed != {"courtyard"} or not mine or not mine.get("courtyard") or not spec:
+        return None
+    ways = _body_ways(spec)
+    if not ways or body_evidence(spec, ref_name, ref) is False:
+        return None
     pads = [p for p in mine["pads"] if not p[5] or p[0]]
     if not pads:
         return None

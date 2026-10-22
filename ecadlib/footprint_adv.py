@@ -455,7 +455,8 @@ def table_layout(spec):
         for k in ("mask_margin", "paste_margin"):
             if p.get(k) is not None:
                 q[k] = _r4(p[k] * f)
-        q["paste"] = p.get("paste", "none" if kind != "smd" else "full")
+        q["paste"] = p.get("paste") or ("none" if kind != "smd" else "full")
+        q["_paste_default"] = not p.get("paste") and p.get("paste_margin") is None   # a given margin is the source's paste
         for k in ("paste_coverage", "paste_grid", "thermal_vias"):
             if p.get(k) is not None:
                 q[k] = p[k]
@@ -494,34 +495,31 @@ def table_layout(spec):
 
 def tht_pad_size(pads, pitch=None):
     """KiCad's connector rule for through-hole pads given only a drill: drill + 2 x 0.5 mm, but no wider than
-    pitch - 0.8 mm across the row (then oval), never less than a 0.15 mm ring."""
+    pitch - 0.8 mm across the row (then oval), never less than a 0.15 mm ring. The spacing is measured per axis
+    from the pads themselves; the pitch stands for any spacing within 10 % of it."""
     pins = [p for p in pads if p["kind"] == "thru_hole"]
     for p in pins:
         if not p.pop("auto_size", False):
             continue
         d = max(p["drill"])
         full = _r4(d + 2 * TH_RING)
-        near = sorted(((abs(q["x"] - p["x"]), abs(q["y"] - p["y"])) for q in pins if q is not p),
-                      key=lambda v: math.hypot(*v))
-        w = h = full
-        if near:
-            dx, dy = near[0]
-            gap = pitch or math.hypot(dx, dy)
-            lim = _r4(max(gap - TH_PAD_GAP, d + 2 * TH_RING_MIN))
-            if dx >= dy and lim < full:
-                w = lim
-            elif dy > dx and lim < full:
-                h = lim
-            # a grid (two rows at the pitch, S28B-PHDSS 2 x 14 at 2 mm, live benchmark 2026-10-21): the next row is as
-            # close as the next pin, so the pad is held back that way too (KiCad: 1.2 mm round, not a 1.2 x 1.7 oval)
-            across = min((v[1] for v in near if v[0] < 1e-6), default=None) if dx >= dy else \
-                min((v[0] for v in near if v[1] < 1e-6), default=None)
-            if across:
-                lim2 = _r4(max(across - TH_PAD_GAP, d + 2 * TH_RING_MIN))
-                if dx >= dy and lim2 < h:
-                    h = lim2
-                elif dy > dx and lim2 < w:
-                    w = lim2
+        near = [(abs(q["x"] - p["x"]), abs(q["y"] - p["y"])) for q in pins if q is not p]
+        # each axis by its nearest neighbour on that axis: along x the next pad in the row (dy 0), along y the next
+        # row (dx 0; S28B-PHDSS 2 x 14 at 2 mm: KiCad 1.2 mm round, not a 1.2 x 1.7 oval). Not the pitch across the
+        # rows: two rows 1.8 mm apart at 2.5 mm pitch got 1.7 mm pads, 0.1 mm of copper between the rows. A pad off
+        # both axes (staggered rows) by its distance, either way. Never under the minimum ring: then the pad keeps
+        # it and check_pad_table reports the clearance.
+        # A neighbour about the pitch away is taken at the pitch: one pad drawn 0.05 off keeps the row's size, so the
+        # pitch check still sees the row as one (and names the odd pad)
+        ring = d + 2 * TH_RING_MIN
+        lim = lambda g: _r4(max((pitch if pitch and abs(g - pitch) <= 0.1 * pitch else g) - TH_PAD_GAP, ring))
+        ax = min((v[0] for v in near if v[1] < 1e-6), default=None)
+        ay = min((v[1] for v in near if v[0] < 1e-6), default=None)
+        diag = min((math.hypot(*v) for v in near if v[0] >= 1e-6 and v[1] >= 1e-6), default=None)
+        w = min(full, lim(ax)) if ax is not None else full
+        h = min(full, lim(ay)) if ay is not None else full
+        if diag and lim(diag) < max(w, h):
+            w, h = min(w, lim(diag)), min(h, lim(diag))
         if round((p.get("rot") or 0) / 90) % 2:            # w / h are in the pad's own frame: KiCad turns the pad by rot
             w, h = h, w
         p["w"], p["h"] = w, h
@@ -925,8 +923,36 @@ def _emit(spec, pads, body, rep, excess, extra_rects=(), keepouts=(), corner_mar
                    f' (keepout {ko}) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts {pts})))')
     if spec.get("model_3d"):
         out.append(f'  (model {_q(spec["model_3d"])} (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))')
+    F.clear_reference(out)                                 # REF** off the pin-1 mark (KiCad DRC silk_overlap)
     out.append(")")
     return "\n".join(out) + "\n"
+
+
+THERMAL_SIDE = 2.5            # mm: an SMD pad at least this wide both ways is a tab / thermal pad (DPAK, D2PAK, PowerPAK)
+THERMAL_AREA = 2.5            # an exposed pad: the biggest pad, among the others, this many times the next one's area
+
+
+def _thermal(p, pads):
+    """True for a big SMD pad whose paste should be split into windows (KLC F6.3, IPC-7525: 50-80 % on thermal pads):
+    a tab / thermal pad at least THERMAL_SIDE mm both ways, or an exposed pad (the biggest SMD pad, THERMAL_AREA times
+    the next, with its centre among the other pads, as on QFN / DFN / SOIC-EP). A SOT-223 tab (2.15 mm) keeps full
+    paste, as KiCad's."""
+    if p["kind"] != "smd" or p.get("role") in ("mount", "mp", "shield"):
+        return False
+    rot = p.get("rot") or 0
+    if not p.get("poly") and abs(rot / 90 - round(rot / 90)) > 1e-6:
+        return False                    # the windows are axis-aligned: a pad at 45 deg keeps its full paste
+    x1, y1, x2, y2 = pad_bbox(p)
+    if min(x2 - x1, y2 - y1) >= THERMAL_SIDE - 1e-9:
+        return True
+    smd = [q for q in pads if q["kind"] == "smd" and q is not p and q.get("num")]
+    if len(smd) < 2:
+        return False
+    area = lambda q: (lambda b: (b[2] - b[0]) * (b[3] - b[1]))(pad_bbox(q))
+    if area(p) < THERMAL_AREA * max(area(q) for q in smd) or min(x2 - x1, y2 - y1) < 1.0:
+        return False
+    xs, ys = [q["x"] for q in smd], [q["y"] for q in smd]
+    return min(xs) < p["x"] < max(xs) and min(ys) < p["y"] < max(ys)
 
 
 def _finish_pads(pads, notes=None):
@@ -937,6 +963,11 @@ def _finish_pads(pads, notes=None):
             d, ax, ay = _interior_point(p["poly"])
             p["anchor"] = (_r4(ax), _r4(ay), round(max(0.05, min(1.6 * d, 1.0)), 3))
             p["x"], p["y"] = _r4(ax), _r4(ay)
+    for p in pads:
+        if p.pop("_paste_default", False) and p.get("paste") == "full" and _thermal(p, pads):
+            p["paste"] = "grid"
+            if notes is not None:
+                notes.append(f"pad {p.get('num')}: thermal pad, paste split into windows (65 % of the copper, KLC F6.3)")
         if p["kind"] == "smd" and p.get("paste") == "grid":
             wins, g = _paste_windows(p, p.get("paste_coverage", 0.65), p.get("paste_grid"))
             p["windows"] = wins
@@ -1100,7 +1131,9 @@ def _pin1_upper_left(pads, body, keepouts):
         return None, body
     xs, ys = [p["x"] for p in pins], [p["y"] for p in pins]
     cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-    if not (p1["x"] > cx + 1e-6 and p1["y"] >= cy - 1e-6):     # y grows downwards here (KiCad)
+    # y grows downwards here (KiCad): right of centre and not above it, or on the centre line and below it (a single
+    # column, 1 x N, drawn with pin 1 at the bottom)
+    if not (p1["x"] > cx + 1e-6 and p1["y"] >= cy - 1e-6 or abs(p1["x"] - cx) <= 1e-6 and p1["y"] > cy + 1e-6):
         return None, body
     for p in pads:
         p["x"], p["y"] = _r4(2 * cx - p["x"]), _r4(2 * cy - p["y"])

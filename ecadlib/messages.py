@@ -72,7 +72,19 @@ def plural(n, one, many=None):
 # ---------------------------------------------------------------- held reasons
 # code -> (text, fix, patterns). patterns: regexes matched (re.search) against a raw reason (release-check
 # "rule: message", librarian review lines, cross-check summaries); their named groups are the values.
-_PART = r"(?:.*?--part (?P<part>\"[^\"]+\"|[^`\s]+))?"   # a --part value, quoted when it holds a space
+_PART = r"(?:.*?--part (?P<part>'[^']*'(?:\"'\"'[^']*')*|\"[^\"]+\"|[^`\s]+))?"   # a --part value, quoted as part_arg quotes it
+
+
+def unquote_part(v):
+    """A --part value as datasheet.part_arg wrote it (bare, "double" or shell 'single' quoted) -> the part number."""
+    v = str(v or "")
+    if v[:1] == "'":
+        import shlex
+        try:
+            return shlex.split(v)[0]
+        except (ValueError, IndexError):
+            return v.strip("'")
+    return v.strip('"')
 
 CODES = {
     # files (release check rule `files`; cannot be released anyway)
@@ -269,6 +281,12 @@ CODES = {
     "datasheet.family_pdf": ("The datasheet came from your datasheet folder, from a file not named exactly for this part ({file}).",
                              "Check the PDF covers this exact part number, package and pinout.",
                              [r"datasheet from your folder: (?P<file>.+?(?i:\.pdf)) in the datasheet folder"]),
+    "datasheet.outline_doc": ("The package drawing came from a separate document, {doc} ({src}), added to the datasheet.",
+                              "Check the drawing in {doc} is this part's package.",
+                              [r"the package drawing came from (?P<doc>\S+) \((?P<src>.+)\), appended from page"]),
+    "datasheet.outline_missing": ("The datasheet has no drawing of this package, only its document number: {doc}.",
+                                  "Download that document, save it under its number (.pdf) in your datasheet folder and run again.",
+                                  [r"the datasheet has no drawing of this package, only its document number: (?P<doc>\S+)"]),
     "datasheet.standard_land": ("The datasheet read named the standard package {package} ({why}), so its checked land was used "
                                 "instead of the pads read from the drawing.",
                                 "Check the package code on the datasheet's drawing is {package}.",
@@ -392,7 +410,7 @@ def _refused_advice(code, v):
     the folder named (or not there, or not set), the name to save the PDF under (from --part in older lines)."""
     from .datasheet import folder_file_name
     if not v.get("file") and v.get("part"):
-        v["file"] = folder_file_name(str(v["part"]).strip('"'))
+        v["file"] = folder_file_name(unquote_part(v["part"]))
     if code == "files.datasheet_not_pdf":
         v.setdefault("file", v.get("bad"))
         v["problem"] = (f"cannot be read ({v['err']})" if v.get("err") else

@@ -99,6 +99,8 @@ def critical(spec):
     from . import datasheet as D
     tab = spec.get("tab") if isinstance(spec.get("tab"), dict) else {}   # SOT-223-3_TabPin2: the tab is pin 2 again
     out["tab_repeats_lead"] = bool(tab) and str(tab.get("number")) in {str(p.get("number")) for p in D._listed(spec)}
+    # whether this read is held for no body (body_unread) under each drawn type: a type word that flips it is no word only
+    out["unread_as"] = {t: bool(D.body_unread(dict(spec, package_type=t))) for t in DRAWN}
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
         nlr = spec.get("pins_left_right", n // 4)
@@ -217,7 +219,9 @@ def _label_only(first, second):
     so the second read's word changes nothing built (TC2030). Every other pair still holds: pin_header vs connector
     (a header is built from pitch and rows, and a connector word may mean mounting pads it would leave out: S13B-EH),
     and gullwing or qfn vs custom (BD33FC0FP, BCV61)."""
-    return first.get("package_type") in DRAWN and second.get("package_type") in DRAWN
+    a, b, u = first.get("package_type"), second.get("package_type"), first.get("unread_as") or {}
+    # ...unless the type decides a hold: a housed connector read "custom" with no body would build pads-hugging
+    return a in DRAWN and b in DRAWN and u.get(a) == u.get(b)
 
 
 def _type_only(rec, first=None, second=None):
@@ -233,6 +237,8 @@ def _type_only(rec, first=None, second=None):
             rec.setdefault("tie_breaks", []).append(
                 f"package type read {x['first']}, other source {x['second']}: a word only, the pads are built as "
                 "the read lists them")
+        elif first is not None and {first.get("package_type"), second.get("package_type")} <= set(DRAWN):
+            d[0]["note"] = "the type decides whether the read's blank body outline holds the part"
         elif len(d) == 1:
             d[0]["note"] = "only the type label differs: " + (", ".join(LABEL[f] for f in rec["agreed"]) + " agree"
                                                                if rec["agreed"] else "nothing else to compare")
@@ -311,7 +317,9 @@ def compare_pins(a, b, ep=()):
     pad's size; a number inside the leads (SOT-223's tab, pin 2 again) is never one."""
     out = []
     # a place one read lists only to say no pin is there (UCC256301's SOIC-14-16: 2 and 13 "Missing") is no pin
-    a, b = [(n, s) for n, s in a if not NO_PIN.search(str(s or ""))], [(n, s) for n, s in b if not NO_PIN.search(str(s or ""))]
+    # only the second read's: the first read's list is the symbol built, where such a place is still a pin
+    gone = [str(n) for n, s in a if NO_PIN.search(str(s or ""))]
+    b = [(n, s) for n, s in b if not NO_PIN.search(str(s or ""))]
     ep = {str(n) for n in ep}
     da, db = {str(n): norm_pin_name(s) for n, s in a}, {str(n): norm_pin_name(s) for n, s in b}
     key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)   # '①' is isdigit(), not int()
@@ -319,6 +327,9 @@ def compare_pins(a, b, ep=()):
     if only_a or only_b:
         out.append({"field": "pins", "first": f"{len(da)} pins" + (f", only here: {', '.join(only_a[:12])}" if only_a else ""),
                     "second": f"{len(db)} pins" + (f", only here: {', '.join(only_b[:12])}" if only_b else "")})
+        if set(gone) & set(only_a):
+            out[-1]["note"] = f"the read marks {', '.join(sorted(set(gone) & set(only_a), key=key)[:12])} as no pin, " \
+                              "but the symbol still has a pin there"
     na, nb = {str(n): s for n, s in a}, {str(n): s for n, s in b}
     diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not names_agree(na[n], nb[n])
             and not (n in ep and (ep_named(na[n]) or ep_named(nb[n])))]

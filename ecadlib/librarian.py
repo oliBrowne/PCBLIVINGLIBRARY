@@ -798,16 +798,19 @@ class Run:
                     self.reading(st)
         self.waiting = []
 
-    def standard_land(self, spec):
+    def standard_land(self, spec, known=None):
         """[datasheet] standard_land: a read whose pin count, pitch, body and exposed pad name exactly one checked standard
         package (stdparts.identify) -> (table name, how, why it is used) or None. off (the default): never. auto: when
         the read left a number blank or gave no land of its own (the maker's recommended land, when printed, is kept);
-        always: whenever it identifies one."""
+        always: whenever it identifies one. known: the packages the PDF's own ordering key or ordering table name for
+        this part (ds_route, "QFP144"); when it is one, a read that left the pitch or body blank can still name the
+        one checked package of that family and pin count that fits what it did read."""
         from . import stdparts as SP
         mode = str(D.settings(self.rules).get("standard_land") or "off")
         if mode == "off":
             return None
-        name, how = SP.identify(spec)
+        known = list(known or [])
+        name, how = SP.identify(spec, known[0] if len(known) == 1 else None)
         if not name:
             return None
         own = spec.get("land") or spec.get("pad_table")
@@ -831,11 +834,17 @@ class Run:
         st["review"].extend(other)
         st["verify"].extend(other)                    # its own hold reason: a person confirms this PDF is this part's
         got = []
-        std = self.standard_land(res["spec"]) if not st["footprint"] else None
+        std = self.standard_land(res["spec"], res["sidecar"].get("package_from_pdf")) if not st["footprint"] else None
         settled = (res.get("cross_check") or {}).get("standard")
         if settled and not st["footprint"]:           # the read gave this table package's sizes the other way round
             std = (settled, "the cross-check", "the read gave its length and width the other way round (crosscheck."
                    "_settle_turn)")
+        if not st["footprint"]:                       # before any land choice: a table land never replaces these holds
+            maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
+            joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
+                D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"])
+            if joined:                                # leads merged with the pad, a TI thermal land not read, or no housing to draw
+                raise D.DatasheetError(joined)
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
             sp = SP.spec(pkg)
@@ -848,11 +857,6 @@ class Run:
                                 f"land was used. Check the package code on the drawing is this one")
         elif not st["footprint"]:
             st["review"].extend(pad_table_problems(res["spec"]))
-            maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
-            joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
-                D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"])
-            if joined:                                # leads merged with the pad, a TI thermal land not read, or no housing to draw
-                raise D.DatasheetError(joined)
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
             except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: name it, not KeyError
@@ -930,16 +934,29 @@ def _done(st, out):
     return all(st.get(k) and (Path(out) / st[k]["file"]).exists() for k in ("symbol", "footprint"))
 
 
+OWN_UNIT = {"Resistors": ("R", "kKMG"), "Capacitors": ("F", "pnuµμ"), "Inductors": ("H", "nuµμ")}
+
+
+def passive_value(raw, cat):
+    """A BOM value in the part type's own unit ('10kΩ', '100nF', '600R' is no inductance) or bare with a prefix only
+    that type uses ('10k' resistor, '100n' cap, '4.7u' cap / inductor) -> float, else None: a bare number or EIA code
+    ('104', '1002', '0.1') and another unit ('3.3V', '600R@100MHz' bead, '2A') are no value of it."""
+    from .kicad_index import parse_value
+    v, u = parse_value(raw, with_unit=True)
+    unit, prefixes = OWN_UNIT[cat]
+    m = re.match(r"\d+(?:[.,]\d+)?\s*(\D)", raw)
+    return v if v is not None and (u == unit or not u and m and m.group(1) in prefixes) else None
+
+
 def passive_description(item, st, ln):
     """A resistor / capacitor / inductor no source described, in a distributor's words from its own BOM line: 'RES 10kΩ
     1% 0603', 'CAP 100nF 16V X7R 0402' (value, tolerance, voltage, dielectric, power, package; nothing guessed). ''
     for any other part, or a value that is not a number: only a source describes those."""
-    from .kicad_index import parse_value
     cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
     raw = str(_par(item).get("Value") or ln.get("value") or "").strip()
-    v = parse_value(raw) if cat in RU.PASSIVES and raw else None
+    v = passive_value(raw, cat) if cat in RU.PASSIVES and raw else None
     if v is None and cat in ("Capacitors", "Inductors") and raw:     # '100N', '4N7', '10U': BOM capitals
-        v = parse_value(raw.lower())
+        v = passive_value(raw.lower(), cat)
     if v is None:
         return ""
     pkg = next((p for p in (package_of(str(t or "").split(":")[-1]) for t in (
