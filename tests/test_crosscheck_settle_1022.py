@@ -62,7 +62,11 @@ def test_a_read_with_no_table_entry_is_never_turned_to_fit():
     s = dict(AT24, name="DFN-6-1EP_2x3mm_P0.5mm_EP1.35x1.65mm", pin_count=6, pins_left_right=3,
              exposed_pad={"length": r(1.25, 1.35, 1.45), "width": r(1.55, 1.65, 1.75)})
     assert CC.standard_matches(None, s["name"]) == []
-    assert "standard" not in CC.compare(CC.critical(s), CC.critical(AT24), "read")
+    printed = dict(s, body_length=s["body_width"], body_width=s["body_length"],
+                   exposed_pad={"length": s["exposed_pad"]["width"], "width": s["exposed_pad"]["length"]})
+    second = CC.against_read(CC.critical(s), CC.critical(printed), [], [])
+    assert second["status"] == "disagreed" and any(CC.SWAPPED in (d.get("note") or "") for d in second["disagreed"])
+    assert CC._settle_turn([second]) is None and second["status"] == "disagreed" and "settled" not in second
 
 
 # ---------------------------------------------------------------- (2) the exposed pad's own number
@@ -91,6 +95,8 @@ def test_past_the_leads_but_no_exposed_pad_still_holds():
     assert CC.ep_numbers(crit(), crit(ep=False), a, b) == set()                 # the other read has no pad
     two = a + [("14", "EP2")]                                                   # two numbers past the leads: pins missed
     assert CC.ep_numbers(crit(), crit(), two, b) == set()
+    b13 = b + [("14", "EP")]                                                    # 13 in one read, 14 in the other
+    assert CC.ep_numbers(crit(), crit(), a, b13) == set() and CC.compare_pins(a, b13, CC.ep_numbers(crit(), crit(), a, b13))
     a2 = [(str(i), f"P{i}") for i in range(1, 13)] + [("13", "SDA")]            # both number it, neither calls it the pad
     b2 = [(str(i), f"P{i}") for i in range(1, 13)] + [("13", "SCL")]
     assert CC.compare_pins(a2, b2, CC.ep_numbers(crit(), crit(), a2, b2))[0]["field"] == "pin_names"

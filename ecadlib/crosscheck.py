@@ -329,14 +329,16 @@ def compare_pins(a, b, ep=()):
 
 
 def ep_numbers(first, second, first_pins, pins):
-    """The pad numbers past the leads both reads count, when both have an exposed pad: at most one on each side (more
-    is no exposed pad, but pins one read left out)."""
+    """The pad number past the leads, when both reads have an exposed pad and at most one such number appears across
+    both (more is no exposed pad but pins one read left out; 13 in one read and 14 in the other is a numbering
+    disagreement)."""
     n = [x.get("pin_count") for x in (first, second)]
     if not (first.get("has_ep") and second.get("has_ep")) or None in n:
         return set()
     lead = min(n)
     past = [{str(p) for p, _ in side if str(p).isdecimal() and int(p) > lead} for side in (first_pins, pins)]
-    return set().union(*past) if all(len(x) <= 1 for x in past) else set()
+    both = set().union(*past)
+    return both if len(both) <= 1 else set()
 
 
 # ---------------------------------------------------------------- the standard table
