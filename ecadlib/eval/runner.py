@@ -272,6 +272,21 @@ def _safe(s):
     return re.sub(r"[^A-Za-z0-9._-]", "_", str(s))[:100] or "part"
 
 
+
+def saved_prov(prov, offset):
+    """The PDF record of a saved answer scored in place of a step never sent: its own pages, not the pages this run's
+    picker would send. TLC5951DAP's 10-21 answer read pages 4,5,15,39,49,50; stamped with today's pick (4,5,39,49-51) its
+    sidecar named a land page (51) the scored read never saw. The zoom pages and why each page was picked describe
+    today's request too, so they go."""
+    p = {k: v for k, v in (prov or {}).items() if k not in ("zoom_pages", "picked_why", "pages_sent", "note")}
+    if isinstance(offset, list) and offset:
+        p.update(pages_sent=list(offset), note=f"{len(offset)} pages sent by the saved read ({D._ranges(offset)}); "
+                                               "this run's page picking was not used")
+    else:
+        p["note"] = ("the saved read records no page list (the whole PDF, or a batch answer that kept none)" if not offset
+                     else f"the saved read was sent the pages from {offset + 1}")
+    return p
+
 class EvalReader(D.Reader):
     """datasheet.Reader that remembers what each part cost, and can record answers or replay them."""
 
@@ -377,7 +392,8 @@ class EvalReader(D.Reader):
         if rec is None:
             raise D.DatasheetError("not sent (--cached-only: saved answers only); a live run reads it")
         self.used.setdefault(j["part"], {"estimate": j.get("estimate")})["via"] = "cached (another step of its route)"
-        return self._result(dict(j, final=True, offset=rec.get("page_offset", j["offset"])), rec)
+        off = rec.get("page_offset", j["offset"])
+        return self._result(dict(j, final=True, offset=off, prov=saved_prov(j.get("prov"), off)), rec)
 
     def _saved_answer(self, job):
         """The part's saved answer for the same datasheet (any step of its route) that does best: ok first, then one
