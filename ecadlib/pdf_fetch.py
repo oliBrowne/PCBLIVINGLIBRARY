@@ -33,6 +33,7 @@ BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHT
 BROWSER_HEADERS = {"User-Agent": BROWSER_UA,
                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8",
                    "Accept-Language": "en-US,en;q=0.9", "Upgrade-Insecure-Requests": "1"}
+HEADERS_S = 20                                         # the headers way's wait when a stronger way follows it
 REFUSED_STATUS = {401, 403, 405, 406, 418, 429, 451, 503}
 # A dropped or reset connection or a timeout: bot managers (Akamai) often answer a script by never answering, or by
 # cutting its TLS handshake (Python's TLS looks like no browser's). A TLS or certificate error moves on too: Edge and
@@ -74,6 +75,23 @@ def refused(status, data, err, pdf_link=None):
             return not (pdf_link and pdf_link(data))
         return bool(_CHALLENGE.search(data[:HTML_HEAD]))
     return False
+
+
+_GONE = re.compile(r"not.?found|page.?not|/404\b|[?&]error=404|/errors?/", re.I)
+_SEARCH = re.compile(r"(^|/)search(/|$)", re.I)
+
+
+def soft_404(url, final):
+    """A link the site now sends to its home page, a site search or a not-found page: the file it named is gone, as a
+    404 says (5 of the 7 "web pages with no PDF link" of the 2026-10-22 survey: ams, osram, skyworks, onsemi)."""
+    if not final or final.split("#")[0] == url.split("#")[0]:
+        return False
+    u, f = urlparse(url), urlparse(final)
+    if not f.path.strip("/") and not f.query and u.path.strip("/"):
+        return True
+    if _GONE.search(f"{f.path}?{f.query}") and not _GONE.search(f"{u.path}?{u.query}"):
+        return True
+    return bool(_SEARCH.search(f.path)) and not _SEARCH.search(u.path)
 
 
 def origin(url):

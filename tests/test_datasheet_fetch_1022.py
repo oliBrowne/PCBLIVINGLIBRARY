@@ -4,11 +4,12 @@ product page's PDF link is read as a browser reads it (&amp; in its query, a #pa
 a quoted meta refresh); a page with several PDFs gives the one named for the part; a page whose HTML starts after a
 long prolog is still read as a page.
     python3 -m tests.test_datasheet_fetch_1022"""
-import tempfile
+import re, tempfile
 
 from ecadlib import datasheet as D, pdf_fetch as PF
 from tests import test_datasheet_batch as TB
 from tests.test_datasheet_downloads import Scripted
+from tests.fixtures_lite import lite
 
 FILLER = " Features: low quiescent current, wide input range, thermal shutdown, small package, RoHS compliant."
 GOOD = TB.pdf_with(["TPS2660 60-V, 2-A industrial eFuse" + FILLER, "Pin Functions", "Package outline"])
@@ -98,6 +99,129 @@ def test_a_page_whose_html_starts_after_a_long_prolog_is_still_a_page():
         data, meta = D.PdfStore(d, http, sleep=lambda s: None).fetch(BASE, "BOM", mpn="TPS2660PWPR")
         assert data == GOOD and meta["page_url"] == BASE, meta
     assert PF.refused(200, b" " * 5000 + b"<html><body>Please enable JavaScript</body></html>", None, lambda h: None)
+
+
+# ---------------------------------------------------------------- 3. a site that stalls scripts (the PC survey's slow links)
+SLOW = "https://www.analog.com/media/en/technical-documentation/data-sheets/ad5160.pdf"
+
+
+def test_a_stalled_or_reset_request_moves_straight_on_when_another_way_follows():
+    """analog.com / molex.com answer ecadlib's own request with a reset or a 60 s stall; three tries of it cost 65-186 s
+    per link before curl_cffi got the PDF in under 2 s. A refusal is tried once when another way follows."""
+    from tests.test_pdf_fetch import store
+    for err in ("ConnectionError: ('Connection aborted.', ConnectionResetError(10054, 'forcibly closed'))",
+                "ReadTimeout: HTTPSConnectionPool(host='www.analog.com', port=443): Read timed out. (read timeout=60)"):
+        with tempfile.TemporaryDirectory() as d:
+            st, http, calls = store(d, {}, impersonate=(200, GOOD, "application/pdf", SLOW, None))
+            http.pdfs[SLOW] = [err]
+            st.http = Scripted(http.pdfs)
+            waits = []
+            st.sleep = waits.append
+            data, meta = st.fetch(SLOW, "BOM", part="AD5160")
+            assert data == GOOD and meta["via"] == "impersonate" and st.http.fetched == [SLOW] and waits == [], \
+                (st.http.fetched, waits)
+            assert "www.analog.com" not in st.gave_up                     # (one try is no proof the host is down)
+
+
+def test_a_stalled_request_with_no_other_way_is_still_tried_again():
+    with tempfile.TemporaryDirectory() as d:
+        waits = []
+        st = D.PdfStore(d, Scripted({SLOW: ["ReadTimeout: read timed out", GOOD]}), sleep=waits.append)
+        assert st.fetch(SLOW, "BOM")[0] == GOOD and len(waits) == 1
+
+
+@lite
+def test_the_browser_headers_way_waits_less_when_a_stronger_way_follows(monkeypatch):
+    got = []
+    monkeypatch.setattr(PF, "headers_get", lambda url, session=None, timeout=60: got.append(timeout) or
+                        (403, b"<html>Access Denied</html>", "text/html", url, None))
+    with tempfile.TemporaryDirectory() as d:
+        st = D.PdfStore(d, Scripted({SLOW: [403]}), download="headers,impersonate", sleep=lambda s: None)
+        st.missing = {}
+        st.fns["impersonate"] = lambda url, part: (200, GOOD, "application/pdf", url, None)
+        assert st.fetch(SLOW, "BOM")[0] == GOOD and got == [PF.HEADERS_S], got
+        st2 = D.PdfStore(d, Scripted({SLOW + "?2": [403]}), download="headers", sleep=lambda s: None)
+        try:
+            st2.fetch(SLOW + "?2", "BOM")
+        except D.DatasheetError:
+            pass
+        assert got[-1] == 60, got                                        # the last way: the full wait
+
+
+# ---------------------------------------------------------------- 4. a link that now goes to a home page or a search
+def test_a_link_redirected_to_a_home_page_search_or_not_found_page_is_gone():
+    for url, final in (("https://www.osram-os.com/Graphics/XPic1/00029253_0.pdf/SFH", "https://ams-osram.com/"),
+                       ("https://ams.com/ens210", "https://ams-osram.com/"),
+                       ("https://www.skyworksinc.com/uploads/documents/AS179_92LF_200176H.pdf",
+                        "https://www.skyworksinc.com:443/search?q=as179_92lf_200176h#documents"),
+                       ("https://www.onsemi.com/pub/Collateral/NCP1207B.PDF",
+                        "https://www.onsemi.com/design/technical-documentation?notFound=NCP1207B.PDF"),
+                       ("https://www.maker.com/ds/x.pdf", "https://www.maker.com/errors/page-not-found")):
+        assert PF.soft_404(url, final), (url, final)
+    for url, final in (("https://www.maker.com/ds/x.pdf", "https://www.maker.com/ds/x.pdf"),
+                       ("https://www.maker.com/", "https://www.maker.com/"),
+                       ("https://www.maker.com/p/tps2660", "https://www.maker.com/product/TPS2660"),
+                       ("https://www.ti.com/lit/gpn/tps2660", "https://www.ti.com/lit/ds/symlink/tps2660.pdf"),
+                       ("https://www.maker.com/search?q=tps2660", "https://www.maker.com/search?q=tps2660&page=1")):
+        assert not PF.soft_404(url, final), (url, final)
+
+
+def test_a_gone_link_tries_no_other_way_and_is_a_broken_link():
+    from tests.test_pdf_fetch import store
+    url, home = "https://www.osram-os.com/Graphics/XPic1/00029253_0.pdf/SFH", "https://ams-osram.com/"
+
+    class Moved(TB.PdfHTTP):
+        def get_bytes(self, u):
+            self.fetched.append(u)
+            return 200, b"<!doctype html><html><body>ams OSRAM home</body></html>", "text/html", home, None
+    with tempfile.TemporaryDirectory() as d:
+        st, _, calls = store(d, {})
+        st.http = Moved()
+        try:
+            st.fetch(url, "BOM", part="SFH216")
+            raise AssertionError("taken")
+        except D.DatasheetError as e:
+            msg = str(e)
+        assert calls == [] and "gone" in msg and home in msg and re.search(D.BROKEN_LINK, msg), (calls, msg)
+
+
+# ---------------------------------------------------------------- 5. the part-name check on the right datasheet
+def _jst(text):
+    """JST's connector PDFs (eXH.pdf ...): a font whose text layer comes out 31 code points low (space as \\x01,
+    digits as \\x11-\\x1a), only the heading in clear (survey 2026-10-22: 12 parts rejected)."""
+    return "".join(chr(ord(c) - 31) if ord(c) > 32 else "\x01" if c == " " else c for c in text)
+
+
+def test_an_unreadable_text_layer_can_not_tell_and_never_rejects():
+    body = ("This is a 2.5 mm pitch wire-to-board connector that meets the needs of high density PCB requirements and "
+            "provides design flexibility in all sorts of electronic devices. S13B-XH-A B2B-XH-A ") * 6
+    garbled = ["XH CONNECTOR\n" + _jst(body)] * 3
+    assert D.mentions_part(garbled, "S13B-XH-A") is None
+    assert D.mentions_part(["XH CONNECTOR\n" + body] * 3, "S13B-XH-A") is True          # (read in clear: named)
+    assert D.mentions_part(["LTC4054 Standalone Linear Li-Ion Battery Charger" + FILLER], "LTC4060EDHC") is False
+
+
+def test_a_big_family_datasheet_is_looked_at_up_to_its_configuration_summary():
+    """SAM D21 / SAM E70 (1115 / 1976 pages): the first pages say only "SAM E70/S70/V70/V71 Family"; the order codes
+    are in the Configuration Summary on p14."""
+    pages = ["SAM E70/S70/V70/V71 Family Arm Cortex-M7 MCUs" + FILLER] * 13 + \
+            ["1. Configuration Summary ATSAME70Q21 ATSAME70Q20 ATSAME70Q19 ATSAME70N21 ATSAME70N20 ATSAME70N19" + FILLER] + \
+            ["Peripheral chapter" + FILLER] * 60
+    big = TB.pdf_with(pages)
+    url = "https://ww1.microchip.com/downloads/en/DeviceDoc/SAM-E70-S70-V70-V71-Family-Data-Sheet-DS60001527D.pdf"
+    with tempfile.TemporaryDirectory() as d:
+        data, meta = D.PdfStore(d, Scripted({url: [big]}), sleep=lambda s: None).fetch(url, "BOM", mpn="ATSAME70N19A-AN")
+        assert data == big
+    # a short datasheet of another part naming this one only in its last page's related-parts table: still rejected
+    small = TB.pdf_with(["LTC4054 Standalone Linear Li-Ion Battery Charger" + FILLER] * 15 +
+                        ["Related Parts: LTC4060 Standalone Linear NiMH/NiCd Fast Battery Charger" + FILLER])
+    url2 = "https://www.analog.com/media/en/technical-documentation/data-sheets/405442xf.pdf"
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            D.PdfStore(d, Scripted({url2: [small]}), sleep=lambda s: None).fetch(url2, "BOM", mpn="LTC4060EDHC")
+            raise AssertionError("taken")
+        except D.DatasheetError as e:
+            assert "doesn't mention LTC4060EDHC" in str(e), e
 
 
 if __name__ == "__main__":

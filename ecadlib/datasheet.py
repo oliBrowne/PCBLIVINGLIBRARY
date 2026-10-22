@@ -2286,6 +2286,9 @@ def cut_off(data):
 
 
 MENTION_PAGES = 5                                     # the first pages a datasheet names its part (or family) on
+# a family manual over MENTION_BIG pages (SAM D21, SAM E70) lists its order codes in a configuration summary a few pages
+# in (p14); a short datasheet's later pages are its related-parts table, which names other parts
+MENTION_BIG, MENTION_DEEP = 60, 20
 
 
 def _numeric_core(main, key):
@@ -2316,8 +2319,8 @@ def mentions_part(texts, mpn):
     numeric core (AD5274BRM -> AD5274 in "AD5272/AD5274"; LTC4060EDHC -> LTC4060, never LTC40, which LTC4054 has;
     STM32F103C8T6 -> STM32F103, never STM32, which STM32L476 has), its series name as a word of its own (SM6T for
     SM6T100A), a family name with x for any one character (C8051F32x, TPS2660x, SNx4HC595, STM32F103x8) or a range
-    that holds it (MAX22201-MAX22207). False: none of these. None: it can't be told (no text layer, a scanned PDF, no
-    part number), never a rejection."""
+    that holds it (MAX22201-MAX22207). False: none of these. None: it can't be told (no text layer, a scanned PDF, a
+    text layer in a font that does not read, no part number), never a rejection."""
     main = re.split(r"[#/]", str(mpn or "").strip().upper())[0]                         # #PBF, /NOPB tails off
     key = re.sub(r"[^A-Z0-9]", "", main)
     core = _numeric_core(main, key)
@@ -2325,6 +2328,8 @@ def mentions_part(texts, mpn):
     flat = re.sub(r"[^A-Z0-9]", "", raw)
     if len(key) < 4 or not core or len(flat) < 40:
         return None
+    if sum(ord(c) < 32 and c not in "\t\n\r" for c in raw) > 0.05 * len(raw):
+        return None                                   # a text layer that does not read (JST: every character 31 low)
     n = max(4, core)
     if any(key[:i] in flat for i in range(len(key), n - 1, -1)):
         return True
@@ -2489,12 +2494,19 @@ class PdfStore:
         self.ways = [w.strip() for w in ways if w.strip() in PF.TIERS]   # never the hand-off: that is always last
         self.handoff, self.prefer = handoff, {}
         self.refusals = []                            # (link, where, page it was on) every way refused, in order
-        self.fns = {"headers": lambda url, part: PF.headers_get(url),
+        self.fns = {"headers": lambda url, part: PF.headers_get(url, timeout=self._headers_s()),
                     "impersonate": lambda url, part: self._tool("impersonate").get(url),
                     "browser": lambda url, part: self._tool("browser").get(url),
                     "handoff": lambda url, part: self.handoff.get(url, part)}
         self.missing = {"impersonate": None if PF.impersonate_available() else f"not installed ({PF.INSTALL})",
                         "browser": None if PF.playwright_available() else f"not installed ({PF.INSTALL})"}
+
+    def _headers_s(self):
+        """The headers way's read timeout: short when a stronger way follows it (a site that stalls a script's TLS
+        stalls this one too: analog.com, molex.com), the full minute when it is the last."""
+        from . import pdf_fetch as PF
+        later = self.ways[self.ways.index("headers") + 1:] if "headers" in self.ways else []
+        return PF.HEADERS_S if any(not self.missing.get(w) for w in later) else 60
 
     def _tool(self, name):
         from . import pdf_fetch as PF
@@ -2526,6 +2538,10 @@ class PdfStore:
             ways.append("handoff")
         # a page whose only "PDF link" is itself (a refresh to the same URL) has none
         link = lambda base: lambda h: (lambda u: u if u and u not in (url, base) else None)(pdf_link(h, base))
+        gone = lambda a: PF.soft_404(url, a[3]) and looks_html(a[1]) and not link(a[3])(a[1])   # no other way helps
+        # ecadlib's own request refused (a reset, a stall) is tried once when another way follows: that way gets the
+        # site's answer at once (analog.com, molex.com: 65-186 s of tries before curl_cffi got it in 2 s)
+        move_on = any(w != "handoff" and not self.missing.get(w) for w in ways)
         if not ways:
             first = self._get_retrying(url)
             if handoff is False and self.handoff is not None and PF.refused(first[0], first[1], first[4], link(first[3] or url)):
@@ -2538,8 +2554,8 @@ class PdfStore:
             ways.remove(pref)
             ways.insert(0, pref)
         else:
-            first = self._get_retrying(url)
-            if not PF.refused(first[0], first[1], first[4], link(first[3] or url)):
+            first = self._get_retrying(url, move_on)
+            if gone(first) or not PF.refused(first[0], first[1], first[4], link(first[3] or url)):
                 return (*first, "plain", notes)
         for w in ways:
             if self.missing.get(w):
@@ -2565,7 +2581,7 @@ class PdfStore:
                                                               f"no PDF in its answer ({ctype or 'unknown type'}, "
                                                               f"{len(data or b'')} bytes)")))
             if w == pref and first is None:           # the way that worked before did not: ecadlib's own request now
-                first = self._get_retrying(url)
+                first = self._get_retrying(url, move_on)
                 if not PF.refused(first[0], first[1], first[4], link(first[3] or url)):
                     return (*first, "plain", notes)
         if first is None and handoff != "only":
@@ -2576,9 +2592,11 @@ class PdfStore:
             self.refusals.append(url)
         return (*first, "plain", notes)
 
-    def _get_retrying(self, url):
-        """_get, tried again on a transient failure. -> (status, bytes, content-type, final url, error)"""
+    def _get_retrying(self, url, move_on=False):
+        """_get, tried again on a transient failure; move_on: not when the site refused it (pdf_fetch.refused) and
+        another way follows. -> (status, bytes, content-type, final url, error)"""
         from urllib.parse import urlparse
+        from . import pdf_fetch as PF
         host = urlparse(url).hostname or ""
         tries = 1 if host in self.gave_up else H.RETRIES + 1
         for n in range(1, tries + 1):
@@ -2587,6 +2605,8 @@ class PdfStore:
                 err, data = cut_off(data), None       # the connection closed half way: worth another try
             again = bool(H.TRANSIENT.search(err) or err.startswith("the PDF is cut off")) if err else \
                 status == 429 or 500 <= (status or 0) < 600
+            if again and move_on and PF.refused(status, data, err):
+                again = False                         # the next way tries it now (and it says nothing of the host)
             if not again or n == tries:
                 break
             hdr = more[0] if more and more[0] is not None else {}
@@ -2644,7 +2664,10 @@ class PdfStore:
         data, meta = self._fetch(url, where, follow, part, handoff, _page, public)
         if mpn:
             from . import ds_route as DR
-            if mentions_part(DR.page_texts(data, MENTION_PAGES), mpn) is False:
+            said = mentions_part(DR.page_texts(data, MENTION_PAGES), mpn)
+            if said is False and (meta.get("pages") or pdf_pages(data) or 0) > MENTION_BIG:
+                said = mentions_part(DR.page_texts(data, MENTION_DEEP), mpn)
+            if said is False:
                 raise DatasheetError(f"the PDF at {meta.get('url') or url} doesn't mention {mpn}")
         return data, meta
 
@@ -2693,6 +2716,10 @@ class PdfStore:
                     return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
                 except DatasheetError as e:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
+            from .pdf_fetch import soft_404
+            if html and soft_404(url, final):
+                raise DatasheetError(f"{url}: the link is gone: it now goes to {final} (a home page, a search or a "
+                                     f"not-found page){also}")
             kind = "an HTML page" if html else f"{ctype or 'unknown type'}"
             raise DatasheetError(f"{url}: not a PDF ({kind}, {len(data)} bytes){also}")
         if not pdf_complete(data):                    # (a way past a refusal can be cut off too)
@@ -2949,7 +2976,7 @@ def _create_in_flight(m):
 
 # A link that is wrong everywhere: not a PDF, too big, or gone. 401 / 403 / 429 are not in it: a maker's site that
 # refuses this machine (bot rules, a corporate proxy) usually serves the API's fetcher, so such a link goes as a URL.
-BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than|doesn't mention"
+BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than|doesn't mention|the link is gone"
 
 
 def hold_on_doubt(inf, model, res):
