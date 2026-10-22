@@ -40,6 +40,7 @@ NEEDS_NUM = {"SO", "SC", "TO", "DO", "SOT", "SOD", "SIP", "SMA", "SMB", "SMC"}  
 _FAM_RX = re.compile(r"(?<![A-Z0-9])(" + "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(\s?-\s?|\s)?(\d{1,3})?(?:\s?-\s?(\d{1,3}))?(?![0-9])")
 _COUNT_FAM_RX = re.compile(r"(?<![A-Z0-9.])(\d{1,3})\s?-?\s?(?:PIN|LEAD|BALL|TERMINAL)S?\s+(" +
                            "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(?![A-Z])")
+_COUNT_RX = re.compile(r"(?<![\d.])(\d{1,3})\s?-?\s?(?:pin|lead|ball|terminal)s?\b", re.I)
 CONTINUED = re.compile(r"\bcontinued\b|\(cont(?:\.|inued)?\)", re.I)
 THREE_PIN = {"SOT23", "SOT323", "SOT523", "SOT416", "SOT346", "SC59", "SC70", "SC75", "SC89", "TO92", "SOT89"}
 OUTLINE_FAMS = {"SOT", "SOD", "SC", "TO", "DO", "TO252", "TO263"}             # first number names the outline, not pins
@@ -78,6 +79,8 @@ def package_tokens(text):
         counted[m.start(2)] = m.group(1)
     for m in _FAM_RX.finditer(up):
         fam, sep, n1 = FAMILY[m.group(1)], m.group(2) or "", m.group(3)
+        if n1 and re.match(r"\s?(?:[.,]\d|[xX×]\s?\d)", up[m.end(3):]):   # "QFN 3x3", "LQFP 10.0 x 10.0": a body size
+            n1, sep = None, ""
         if fam in OUTLINE_FAMS:                       # SOT's number names the outline, not the pin count
             counted.pop(m.start(1), None)
         if fam in NEEDS_NUM and (not n1 or sep.strip() == "" and sep):   # "TO-220", "SO8"; never "to 85" or "SO 2"
@@ -131,6 +134,93 @@ def ordering_codes(texts, part):
     return toks, set(sorted(codes)[:6])
 
 
+_KEY_ENTRY = re.compile(r"(?<![A-Za-z0-9.+-])([A-Z0-9]{1,3})\s?=\s?")
+_KEY_FAM = re.compile(r"^\s*(?:(\d{1,3})\s?-?\s?(?:pins?|leads?|balls?|terminals?)?[\s,]+)?(?:[a-z]+\s+){0,2}(" +
+                      "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(?:\s?-?\s?(\d{1,3}))?(?![A-Z0-9])")
+_KEY_SIZE = re.compile(r"^[^=]{0,30}?\(?(\d{1,2}(?:\.\d+)?)\s?(?:mm)?\s?[x×]\s?(\d{1,2}(?:\.\d+)?)\s?mm")
+_KEY_PINS = re.compile(r"^\s*(\d{1,3})\s?-?\s?(?:pins?|leads?|balls?|terminals?)\b", re.I)
+
+
+def _siblings(texts, part):
+    """The family's other MPNs printed in the PDF (same length, same first four characters, a few characters
+    different): where they differ from this MPN is where its ordering key varies."""
+    p = re.sub(r"\s+", "", str(part or "")).upper()
+    if len(p) < 6:
+        return p, set()
+    rx = re.compile(rf"(?<![A-Z0-9-]){re.escape(p[:4])}[A-Z0-9-]{{{len(p) - 4}}}([A-Z0-9])?(?![A-Z0-9])")
+    out = set()
+    for t in texts:
+        for m in rx.finditer(norm_text(t).upper()):
+            w = m.group(0)
+            if m.group(1) and m.group(1) not in "RTG":    # one character longer: only a tape-and-reel suffix
+                continue
+            w = w[:len(p)]
+            if w != p and 0 < sum(a != b for a, b in zip(w, p)) <= max(2, len(p) // 3):
+                out.add(w)
+    return p, out
+
+
+def ordering_key(texts, part, families=()):
+    """A family datasheet's ordering-key legend ("Pin Count  J = 64 pins  N = 100 pins  Q = 144 pins", "Package Type
+    A = LQFP", "PP  Package identifier ... LK = 80 LQFP (12 mm x 12 mm)") read against this MPN -> ({'QFP144'},
+    [the legend entries used]). A code counts only where it sits in the MPN at a place the family's other MPNs in the
+    PDF differ (the N of SAM E70's "-AN" is the temperature range on every part, not 100 pins), so no family MPNs
+    printed = nothing decoded. Two entries that disagree (two pin counts, two families) leave that part undecoded.
+    A pin count with no family takes the family of families (the hint's or the ordering table's) when it has one.
+    -> (tokens, entries used, {token: (a, b)} the body size an entry prints, "LK = 80 LQFP (12 mm x 12 mm)")."""
+    p, sibs = _siblings(texts, part)
+    if not sibs:
+        return set(), [], {}
+    vary = {i for s in sibs for i, (a, b) in enumerate(zip(s, p)) if a != b}
+    full, fams, pins, why, sizes = set(), set(), set(), [], {}
+    for t in texts:
+        t = norm_text(t)
+        ents = list(_KEY_ENTRY.finditer(t))
+        for k, m in enumerate(ents):
+            code = m.group(1)
+            desc = t[m.end():ents[k + 1].start() if k + 1 < len(ents) else m.end() + 60][:60]
+            fm, pm = _KEY_FAM.match(desc), _KEY_PINS.match(desc)
+            if not fm and not pm:
+                continue
+            spans = [i for i in range(len(p) - len(code) + 1) if p.startswith(code, i)]
+            if not any(vary & set(range(i, i + len(code))) for i in spans):
+                continue
+            n = fm and (fm.group(1) or fm.group(3)) or pm and pm.group(1)
+            fam = fm and FAMILY[fm.group(2)]
+            if fam in NEEDS_NUM and not (fm.group(1) or fm.group(3)):   # "SO" / "TO" alone is a word, not a package
+                fam = None
+                if not pm:
+                    continue
+            if fam and n:
+                full.add(fam + n)
+                sz = _KEY_SIZE.search(desc)
+                if sz:
+                    sizes[fam + n] = tuple(sorted((float(sz.group(1)), float(sz.group(2)))))
+            elif fam:
+                fams.add(fam)
+            elif n:
+                pins.add(n)
+            why.append(f"{code} = {' '.join(desc.split())[:40]}")
+    if len(full) > 1:
+        return set(), why, {}
+    fam_all = {re.sub(r"\d+$", "", x) for x in full} | fams
+    pin_all = {re.sub(r"^\D+", "", x) for x in full} | pins
+    if len(fam_all) > 1 or len(pin_all) > 1:          # disagreeing entries: whatever is agreed is still kept below
+        fam_all = fam_all if len(fam_all) == 1 else set()
+        pin_all = pin_all if len(pin_all) == 1 else set()
+        full = set()
+    if full:
+        return full, why, {k: v for k, v in sizes.items() if k in full}
+    if not fam_all and pin_all:
+        fam_all = {re.sub(r"\d+$", "", f) for f in families}
+        if len(fam_all) != 1:
+            return set(), why, {}
+    if not fam_all:
+        return set(), why, {}
+    f = next(iter(fam_all))
+    return {f + next(iter(pin_all), "")}, why, {}
+
+
 MARK = {"drawing": re.compile(CATS["drawing"].pattern + r"|packag(e|ing)\b|mechanical", re.I),
         "land": CATS["land"], "pinout": CATS["pinout"], "ordering": CATS["ordering"]}
 MARK_W = {"drawing": 4, "land": 3, "pinout": 3, "ordering": 2}
@@ -141,7 +231,10 @@ def page_marks(data):
     """The PDF's bookmarks (outline) as the chapter each page is in: per page, the titles from the top level down to the
     deepest bookmark that covers it ("62. Packaging Information > 62.5 LQFP100"), "" where none does. None when the
     PDF has no bookmarks or pypdf cannot read them. A bookmark covers its page up to the next bookmark at its level
-    or above."""
+    or above. A page where other bookmarks start holds each of them, as chains of their own joined by " | ", in
+    document order: the section still in force at its top (unless one starts at the top), then each one that starts on
+    it (SAM E70 p30: the end of 6.1.1, 6.1.2 and 6.1.3, then "6. Package and Pinout > 6.2 144-lead Package Pinout",
+    never 6.2 as a child of 6.1.3; p1931: LQFP144's tables above the LFBGA144 bookmark half-way down)."""
     try:
         import logging, pypdf
         logging.getLogger("pypdf").setLevel(logging.ERROR)
@@ -158,18 +251,39 @@ def page_marks(data):
                 except Exception:
                     continue
                 if pg is not None and 0 <= pg < n:
-                    flat.append((depth, pg, " ".join(str(getattr(it, "title", "") or "").split())))
+                    try:                              # how far down the page the bookmark points (1 = the top)
+                        top = getattr(it, "top", None)
+                        h = float(rd.pages[pg].mediabox.height)
+                        frac = min(1.0, float(top) / h) if top is not None and h > 0 else 1.0
+                    except Exception:
+                        frac = 1.0
+                    flat.append((depth, pg, " ".join(str(getattr(it, "title", "") or "").split()), frac))
         walk(rd.outline or [], 0)
     except Exception:
         return None
     if not flat:
         return None
-    marks = [[] for _ in range(n)]
-    for k, (depth, start, title) in enumerate(flat):
-        end = next((pg for d, pg, _ in flat[k + 1:] if d <= depth), n)
-        for i in range(start, max(end, start + 1)):     # two bookmarks on one page: the page is in both
-            marks[i].append((depth, title))
-    return [" > ".join(t for _, t in sorted(m)) for m in marks]
+    chains, stack = [], []                            # each bookmark's titles from the top level down
+    for depth, _, title, _ in flat:
+        stack = stack[:depth] + [title]
+        chains.append(" > ".join(stack))
+    starts = {}
+    for k, (_, pg, _, _) in enumerate(flat):
+        starts.setdefault(pg, []).append(k)
+    marks, cur = [], None                             # cur: the last bookmark started before this page
+    for i in range(n):
+        here = starts.get(i, [])
+        secs = ([] if cur is None or here and flat[here[0]][3] >= 0.75 else [cur]) + here
+        out = []
+        for k in secs:
+            c = chains[k]
+            out = [o for o in out if not c.startswith(o + " > ")]   # an ancestor goes when its child is listed
+            if c not in out:
+                out.append(c)
+        marks.append(" | ".join(out))
+        if here:
+            cur = here[-1]
+    return marks
 
 
 _STATUS = r"(?:ACTIVE|NRND|PREVIEW|OBSOLETE|LIFEBUY|Active|Preview|Obsolete)"
@@ -408,14 +522,24 @@ def dim_tables(data, pages, texts=None):
 
 
 def page_scores(texts, part=None, package=None, marks=None):
-    """Per page: {cat: score} plus 'own' (names this part's package or drawing code) and 'other' (names only another
+    """-> (rows, own, codes, {pdf: the packages the PDF's ordering table or ordering key names for this part, key: the
+    ordering-key entries used}). Per page: {cat: score} plus 'own' (names this part's package or drawing code) and 'other' (names only another
     package). Table-of-contents pages and tape/reel/revision pages score low. marks (page_marks): the bookmark chapter
     each page is in; a page in a "Packaging Information" / "Pin Configuration" chapter scores for it, and a chapter
     titled with a package ("62.5 LQFP100") says which package the page is about, even when the page is a drawing
     with little text."""
     hint = package_tokens(package or "")
     otoks, codes = ordering_codes(texts, part)
-    own = hint | otoks
+    ktoks, key, sizes = ordering_key(texts, part, hint | otoks)
+    own = hint | otoks | ktoks
+    own = {t for t in own if re.search(r"\d$", t) or not any(o != t and re.sub(r"\d+$", "", o) == t for o in own)}
+    own_counts = {int(x) for x in (re.search(r"\d+$", t) for t in own) for x in ([x.group(0)] if x else [])}
+    sec_n = {}
+    for x in marks or ():
+        for sec in (x or "").split(" | "):
+            sec_n[sec] = sec_n.get(sec, 0) + 1
+    found = {"pdf": sorted(t + (" {:g}x{:g}mm".format(*sizes[t]) if t in sizes else "")   # "QFP80 12x12mm"
+                           for t in otoks | ktoks if re.search(r"\d$", t)), "key": key}
     vs = mpn_variants(part)
     n, rows = len(texts), []
     first_mech = None
@@ -447,29 +571,46 @@ def page_scores(texts, part=None, package=None, marks=None):
         s["mark"] = ""
         m = (marks[i] if marks and i < len(marks) else "") or ""
         if m and not toc and not NOISE.search(t):
-            chain = m.split(" > ")
-            leaf = chain[-1]
-            hit, named = [], package_tokens(leaf)
-            wide = marks.count(m) > 4                 # a whole chapter, not one drawing or table
-            for c, rx in MARK.items():                # the deepest bookmark says what the page is ("Table 82. LQFP32 -
-                if MARK_NOISE.search(leaf) or wide and not named:   # Mechanical data"). A chapter ("Mechanical,
-                    break                             # Packaging, and Orderable Information") also holds tape-and-reel
-                if rx.search(leaf) or named and any(rx.search(x) for x in chain[:-1]):   # and notice pages: it counts
-                    s[c] += MARK_W[c]                 # only when it names a package ("62.5 LQFP100")
-                    hit.append(c)
-            mtoks = next((tk for tk in (package_tokens(x) for x in reversed(chain)) if tk), set())
-            if hit and mtoks and (own or codes):
-                if own and _tok_match(own, mtoks):
-                    s["own"], s["other"], s["solo"] = True, False, len(mtoks) <= 1
-                else:                                 # the chapter is about another package, whatever the page says
-                    s["own"], s["other"], s["solo"] = False, True, False
-            if hit:
-                s["mark"] = leaf
+            secs, hits, leaves = m.split(" | "), set(), []
+            mine = theirs = 0                         # sections on the page about this package / only another one
+            for sec in secs:                          # (a page where bookmarks start holds each section: page_marks)
+                chain = sec.split(" > ")
+                leaf = chain[-1]
+                hit, named = [], package_tokens(leaf) or _COUNT_RX.search(leaf)
+                wide = sec_n.get(sec, 0) > 4          # a whole chapter, not one drawing or table
+                for c, rx in MARK.items():            # the deepest bookmark says what the page is ("Table 82. LQFP32 -
+                    if MARK_NOISE.search(leaf) or wide and not named:   # Mechanical data"). A chapter ("Mechanical,
+                        break                         # Packaging, and Orderable Information") also holds tape-and-reel
+                    if rx.search(leaf) or named and any(rx.search(x) for x in chain[:-1]):   # and notice pages: it
+                        hit.append(c)                 # counts only when it names a package ("62.5 LQFP100")
+                hits |= set(hit)
+                mtoks = next((tk for tk in (package_tokens(x) for x in reversed(chain)) if tk), set())
+                count = next((int(m_.group(1)) for x in reversed(chain) for m_ in [_COUNT_RX.search(x)] if m_), None)
+                if hit and mtoks and (own or codes):
+                    if own and _tok_match(own, mtoks):
+                        mine += 1 if len(mtoks) <= 1 else 0.5
+                    else:
+                        theirs += 1
+                elif hit and count and own_counts:    # "6.2 144-lead Package Pinout": the pin count alone
+                    if count in own_counts:
+                        mine += 0.5                   # (this package's count; another package may share it)
+                    else:
+                        theirs += 1
+                if hit:
+                    leaves.append(leaf)
+            for c in hits:
+                s[c] += MARK_W[c]
+            if mine:                                  # a section about this package is on the page
+                s["own"], s["other"], s["solo"] = True, False, mine >= 1 and not theirs
+            elif theirs:                              # the chapter is about another package, whatever the page says
+                s["own"], s["other"], s["solo"] = False, True, False
+            if leaves:
+                s["mark"] = " | ".join(leaves)
         rows.append(s)
     for i, s in enumerate(rows):                      # image-only drawing pages at the back of the document
         if s["blank"] and first_mech is not None and i > first_mech - 3 and i >= n // 2 and i < n - 1:
             s["drawing"] = max(s["drawing"], 3)
-    return rows, own, codes
+    return rows, own, codes, found
 
 
 def _rank(s, cat):
@@ -489,7 +630,7 @@ def pick_pages(texts, budget, part=None, package=None, marks=None):
     drawing (drawings and their tables run over), then the rest by score, up to budget pages."""
     if not texts or not any((t or "").strip() for t in texts) or budget <= 0:
         return None, {}
-    rows, own, codes = page_scores(texts, part, package, marks)
+    rows, own, codes, found = page_scores(texts, part, package, marks)
     total = lambda i: (sum(_rank(rows[i], c) for c in CATS) + rows[i]["mpn"])
     if not any(total(i) for i in range(len(rows))):
         return None, {}
@@ -550,6 +691,10 @@ def pick_pages(texts, budget, part=None, package=None, marks=None):
             why.setdefault(p, []).append(f"bookmark: {rows[p - 1]['mark'][:60]}")
     if own or codes:
         why["_package"] = sorted(own | codes)
+    if found["key"]:
+        why["_key"] = found["key"][:6]
+    if found["pdf"]:                                  # what the PDF itself says this part is (not the hint):
+        why["_from_pdf"] = found["pdf"]               # librarian.standard_land
     return sorted(keep), why
 
 
@@ -893,6 +1038,10 @@ def pages_main(argv=None):
     for k, v in why.items():
         if k == "_package":
             print(f"  this part's package: {', '.join(v)}")
+        elif k == "_from_pdf":
+            print(f"  package named in the PDF for this part: {', '.join(v)}")
+        elif k == "_key":
+            print(f"  from the ordering key: {'; '.join(v)}")
         else:
             print(f"    p{k}: {', '.join(v)}")
     print(f"  model: {router.ladder[rung]} ({reason}); rough input {out['rough_tokens_first_try']:,} tokens vs "

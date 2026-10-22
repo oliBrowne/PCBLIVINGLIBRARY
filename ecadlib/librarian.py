@@ -798,16 +798,19 @@ class Run:
                     self.reading(st)
         self.waiting = []
 
-    def standard_land(self, spec):
+    def standard_land(self, spec, known=None):
         """[datasheet] standard_land: a read whose pin count, pitch, body and exposed pad name exactly one checked standard
         package (stdparts.identify) -> (table name, how, why it is used) or None. off (the default): never. auto: when
         the read left a number blank or gave no land of its own (the maker's recommended land, when printed, is kept);
-        always: whenever it identifies one."""
+        always: whenever it identifies one. known: the packages the PDF's own ordering key or ordering table name for
+        this part (ds_route, "QFP144"); when it is one, a read that left the pitch or body blank can still name the
+        one checked package of that family and pin count that fits what it did read."""
         from . import stdparts as SP
         mode = str(D.settings(self.rules).get("standard_land") or "off")
         if mode == "off":
             return None
-        name, how = SP.identify(spec)
+        known = list(known or [])
+        name, how = SP.identify(spec, known[0] if len(known) == 1 else None)
         if not name:
             return None
         own = spec.get("land") or spec.get("pad_table")
@@ -831,7 +834,7 @@ class Run:
         st["review"].extend(other)
         st["verify"].extend(other)                    # its own hold reason: a person confirms this PDF is this part's
         got = []
-        std = self.standard_land(res["spec"]) if not st["footprint"] else None
+        std = self.standard_land(res["spec"], res["sidecar"].get("package_from_pdf")) if not st["footprint"] else None
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
             sp = SP.spec(pkg)

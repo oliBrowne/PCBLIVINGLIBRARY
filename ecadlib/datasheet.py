@@ -3178,6 +3178,8 @@ class Reader:
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
+            if (job["route"].get("picked") or {}).get("_from_pdf"):   # the package the PDF's ordering key / table
+                res["sidecar"]["package_from_pdf"] = job["route"]["picked"]["_from_pdf"]   # names: standard_land
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
         if job["prov"].get("unnamed"):
