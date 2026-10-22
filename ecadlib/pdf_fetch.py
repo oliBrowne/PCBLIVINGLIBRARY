@@ -42,7 +42,8 @@ REFUSED_STATUS = {401, 403, 405, 406, 418, 429, 451, 503}
 # refusal (this machine's network), a name that does not resolve, a closed port and a host that never answers the
 # connection are the same for every way, so they never move on.
 _DROPPED = re.compile(r"ReadTimeout|Timeout|ConnectionError|ChunkedEncodingError|ProtocolError|IncompleteRead|"
-                      r"Connection reset|RemoteDisconnected|Connection aborted|too slow|SSLError|SSL:|CERTIFICATE_VERIFY", re.I)
+                      r"Connection reset|RemoteDisconnected|Connection aborted|too slow|SSLError|SSL:|CERTIFICATE_VERIFY|"
+                      r"PDF is cut off", re.I)
 _NOT_THE_SITE = re.compile(r"proxy CONNECT refused|ProxyError|NameResolution|getaddrinfo|Name or service not known|"
                            r"nodename nor servname|No address associated|ConnectTimeout|connect timeout|NewConnectionError|"
                            r"Connection refused|ConnectionRefused|ERR_NAME_NOT_RESOLVED|ERR_PROXY|ERR_TUNNEL_CONNECTION|"
@@ -92,6 +93,13 @@ def soft_404(url, final):
     if _GONE.search(f"{f.path}?{f.query}") and not _GONE.search(f"{u.path}?{u.query}"):
         return True
     return bool(_SEARCH.search(f.path)) and not _SEARCH.search(u.path)
+
+
+def gone_page(url, status, data, final):
+    """An answer that says the link is gone: a web page (no refusal, no bot check) at a home page, a search or a
+    not-found page the link now goes to (soft_404). A 403 or a bot-check page there is a refusal: other ways try."""
+    return (200 <= (status or 0) < 300 and soft_404(url, final) and looks_html(data)
+            and not _CHALLENGE.search(data[:HTML_HEAD]))
 
 
 def origin(url):

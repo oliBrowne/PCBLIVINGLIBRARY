@@ -224,6 +224,56 @@ def test_a_big_family_datasheet_is_looked_at_up_to_its_configuration_summary():
             assert "doesn't mention LTC4060EDHC" in str(e), e
 
 
+# ---------------------------------------------------------------- 6. review of #165 (Greptile)
+def test_a_refusal_or_bot_check_at_the_home_page_is_no_gone_link():
+    from tests.test_pdf_fetch import store
+    url, home = "https://www.maker.com/ds/tps2660.pdf", "https://www.maker.com/"
+    for status, body in ((403, b"<!doctype html><html><body>Access Denied. Reference #18.2f</body></html>"),
+                         (200, b"<!doctype html><html><body>Just a moment... enable JavaScript</body></html>")):
+        class AtHome(TB.PdfHTTP):
+            def get_bytes(self, u):
+                self.fetched.append(u)
+                return status, body, "text/html", home, None
+        with tempfile.TemporaryDirectory() as d:
+            st, _, calls = store(d, {}, impersonate=(200, GOOD, "application/pdf", url, None))
+            st.http = AtHome()
+            data, meta = st.fetch(url, "BOM", part="TPS2660")
+            assert data == GOOD and meta["via"] == "impersonate", (status, meta)
+    assert not PF.gone_page(url, 403, b"<html>Access Denied</html>", home)
+    assert PF.gone_page(url, 200, b"<!doctype html><html><body>Welcome to Maker</body></html>", home)
+
+
+def test_a_cut_off_pdf_moves_on_to_the_next_way():
+    from tests.test_pdf_fetch import store
+    url = "https://www.ti.com/lit/ds/symlink/tps2660.pdf"
+    assert PF.refused(0, None, D.cut_off(GOOD[:700]))
+    with tempfile.TemporaryDirectory() as d:
+        st, http, calls = store(d, {}, headers=(200, GOOD[:700], "application/pdf", url, None),
+                                impersonate=(200, GOOD, "application/pdf", url, None))
+        st.http = Scripted({url: [GOOD[:700]]})
+        data, meta = st.fetch(url, "BOM", part="TPS2660")
+        assert data == GOOD and meta["via"] == "impersonate" and [c[0] for c in calls] == ["headers", "impersonate"]
+
+
+def test_a_link_named_for_another_part_of_the_range_is_not_the_parts():
+    page = b'<a href="/files/STM32L476.pdf">L4</a> <a href="/files/datasheet.pdf">Datasheet</a>'
+    assert D.pdf_link(page, BASE, part="STM32F103C8T6") == "https://www.maker.com/files/datasheet.pdf"
+    assert D.pdf_link(page + b'<a href="/files/stm32f103c8.pdf">F1</a>', BASE, part="STM32F103C8T6") == \
+        "https://www.maker.com/files/stm32f103c8.pdf"
+
+
+def test_the_headers_way_gets_the_full_wait_when_it_is_the_last_way_left():
+    from tests.test_pdf_fetch import URL
+    got = []
+    with tempfile.TemporaryDirectory() as d:
+        st = D.PdfStore(d, Scripted({URL: [403]}), download="headers,impersonate", sleep=lambda s: None)
+        st.missing = {}
+        st.prefer["www.analog.com"] = "impersonate"                   # impersonate worked for this site before
+        st.fns["impersonate"] = lambda url, part: (403, b"<html>Access Denied</html>", "text/html", url, None)
+        st.fns["headers"] = lambda url, part: got.append(st._headers_s()) or (200, GOOD, "application/pdf", url, None)
+        assert st.fetch(URL, "BOM")[0] == GOOD and got == [60], got
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all

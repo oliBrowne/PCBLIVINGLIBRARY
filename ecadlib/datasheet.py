@@ -17,7 +17,7 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, time, unicodedata
+import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, threading, time, unicodedata
 from pathlib import Path
 
 import requests
@@ -2492,7 +2492,7 @@ class PdfStore:
         ways = PF.TIERS if download == "auto" else () if download in ("plain", None, False) else \
             download.split(",") if isinstance(download, str) else download
         self.ways = [w.strip() for w in ways if w.strip() in PF.TIERS]   # never the hand-off: that is always last
-        self.handoff, self.prefer = handoff, {}
+        self.handoff, self.prefer, self._left = handoff, {}, threading.local()
         self.refusals = []                            # (link, where, page it was on) every way refused, in order
         self.fns = {"headers": lambda url, part: PF.headers_get(url, timeout=self._headers_s()),
                     "impersonate": lambda url, part: self._tool("impersonate").get(url),
@@ -2505,8 +2505,10 @@ class PdfStore:
         """The headers way's read timeout: short when a stronger way follows it (a site that stalls a script's TLS
         stalls this one too: analog.com, molex.com), the full minute when it is the last."""
         from . import pdf_fetch as PF
-        later = self.ways[self.ways.index("headers") + 1:] if "headers" in self.ways else []
-        return PF.HEADERS_S if any(not self.missing.get(w) for w in later) else 60
+        later = getattr(self._left, "ways", None)     # the ways still to try in this download (_download's order)
+        if later is None:
+            later = self.ways[self.ways.index("headers") + 1:] if "headers" in self.ways else []
+        return PF.HEADERS_S if any(w != "handoff" and not self.missing.get(w) for w in later) else 60
 
     def _tool(self, name):
         from . import pdf_fetch as PF
@@ -2538,7 +2540,7 @@ class PdfStore:
             ways.append("handoff")
         # a page whose only "PDF link" is itself (a refresh to the same URL) has none
         link = lambda base: lambda h: (lambda u: u if u and u not in (url, base) else None)(pdf_link(h, base))
-        gone = lambda a: PF.soft_404(url, a[3]) and looks_html(a[1]) and not link(a[3])(a[1])   # no other way helps
+        gone = lambda a: PF.gone_page(url, a[0], a[1], a[3]) and not link(a[3])(a[1])   # no other way helps
         # ecadlib's own request refused (a reset, a stall) is tried once when another way follows: that way gets the
         # site's answer at once (analog.com, molex.com: 65-186 s of tries before curl_cffi got it in 2 s)
         move_on = any(w != "handoff" and not self.missing.get(w) for w in ways)
@@ -2557,15 +2559,18 @@ class PdfStore:
             first = self._get_retrying(url, move_on)
             if gone(first) or not PF.refused(first[0], first[1], first[4], link(first[3] or url)):
                 return (*first, "plain", notes)
-        for w in ways:
+        for i, w in enumerate(ways):
             if self.missing.get(w):
                 notes.append(f"{PF.WAYS.get(w, w)}: {self.missing[w]}")
                 continue
             self._pace(url)
+            self._left.ways = ways[i + 1:]
             try:
                 status, data, ctype, final, err, *more = self.fns[w](url, part)
             except Exception as e:                    # a way that broke is a note, never the end of the part
                 status, data, ctype, final, err, more = 0, None, "", url, f"{type(e).__name__}: {str(e)[:160]}", []
+            finally:
+                self._left.ways = None
             html = looks_html(data)
             if not err and 200 <= (status or 0) < 300 and (pdf_complete(data) or (html and link(final or url)(data))):
                 if w != "handoff":
@@ -2716,8 +2721,8 @@ class PdfStore:
                     return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
                 except DatasheetError as e:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
-            from .pdf_fetch import soft_404
-            if html and soft_404(url, final):
+            from .pdf_fetch import gone_page
+            if gone_page(url, status, data, final):
                 raise DatasheetError(f"{url}: the link is gone: it now goes to {final} (a home page, a search or a "
                                      f"not-found page){also}")
             kind = "an HTML page" if html else f"{ctype or 'unknown type'}"
@@ -2791,11 +2796,13 @@ def _refresh_url(text):
 
 
 def _names_part(link, part):
-    """Whether a link's path names the part: its MPN, or its letters and first digits (TPS2660 of TPS2660PWPR)."""
+    """Whether a link's path names the part: its MPN, or the MPN up to the end of its whole numeric core, as
+    mentions_part reads it (TPS2660 of TPS2660PWPR, STM32F103 of STM32F103C8T6, never STM32, which STM32L476 has)."""
     from urllib.parse import urlparse
-    key, path = _mpn_key(part), _mpn_key(urlparse(link).path)
-    base = re.match(r"[A-Z]+\d+", key)
-    return bool(key) and (key in path or bool(base and len(base.group(0)) >= 4 and base.group(0) in path))
+    main = re.split(r"[#/]", str(part or "").strip().upper())[0]
+    key, path = re.sub(r"[^A-Z0-9]", "", main), _mpn_key(urlparse(link).path)
+    core = _numeric_core(main, key)
+    return len(key) >= 4 and (key in path or bool(core and key[:max(4, core)] in path))
 
 
 def pdf_link(html, base, docs=False, part=None):
