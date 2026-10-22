@@ -1180,22 +1180,31 @@ def joined_to_pad(spec, pins):
     n, t, ep = spec.get("pin_count"), spec.get("package_type"), spec.get("exposed_pad")
     if not (isinstance(n, int) and n >= 4 and n % 2 == 0 and ep and not spec.get("pin_positions")):
         return None
-    if not (t == "gullwing" or t == "qfn" and spec.get("pins_top_bottom") == 0):
+    if not (t == "gullwing" or t == "qfn" and F.rows(spec)[1] == 0):   # the split the builder lays out, blanks included
         return None
     name = {str(p.get("num")).strip(): str(p.get("name") or "").strip() for p in pins or []}
     pad = [v for k, v in name.items() if not (k.isdecimal() and 1 <= int(k) <= n)]
     if len(pad) != 1 or NO_NET.match(pad[0]) or re.match(r"^(?:[ADPS]?GND|[ADP]?VSS|GROUND|0V)", pad[0], re.I):
         return None
+    from . import crosscheck as CC                    # "D", "DRAIN", "D (exposed pad)": one net. A pad's own name
+    net = lambda v: CC._names(v) - CC.EP_NAMES - {"NC", "DNC"}   # (PAD, EP) or no net matches no lead
     for side in (range(1, n // 2 + 1), range(n // 2 + 1, n + 1)):
-        if all(name.get(str(i), "").upper() == pad[0].upper() for i in side):
+        if all(net(name.get(str(i), "")) & net(pad[0]) for i in side):
             return (f"no footprint: leads {side[0]}-{side[-1]} and the exposed pad are all {pad[0]} (one piece of "
                     "metal): the maker's land merges them into one pad, which this footprint would build as separate "
                     "pads; check the land on the drawing")
     return None
 
 
-TI_URL = re.compile(r"(^|[/.])ti\.com/", re.I)
-TI_MAKER = re.compile(r"^\s*(texas\s+instruments|ti)\b", re.I)
+TI_URL = re.compile(r"(^|[/.])ti\.com(?![\w.-])", re.I)            # www.ti.com/lit/..., http://www.ti.com
+TI_MAKER = re.compile(r"^(?:texasinstruments|burrbrown)")             # on the maker's letters: Texas-Instruments
+
+
+def ti_maker(maker):
+    """The maker is TI: its letters start Texas Instruments / Burr-Brown, or it has the word TI ("Burr-Brown (TI)",
+    "TI(德州仪器)"; not "Tiger" or "Titan")."""
+    low = str(maker or "").lower()
+    return bool(TI_MAKER.match(re.sub(r"[^a-z]", "", low)) or "ti" in re.findall(r"[a-z]+", low))
 
 
 def thermal_land_missing(spec, maker=None, url=None):
@@ -1207,7 +1216,7 @@ def thermal_land_missing(spec, maker=None, url=None):
     from a distributor's link or the datasheet folder carries no ti.com URL."""
     ep, land = spec.get("exposed_pad"), spec.get("land") or {}
     src = " ".join(str(v or "") for v in ((spec.get("source") or {}).get("datasheet"), url))
-    if not (ep and spec.get("package_type") in ("gullwing", "qfp") and (TI_URL.search(src) or TI_MAKER.match(maker or ""))):
+    if not (ep and spec.get("package_type") in ("gullwing", "qfp") and (TI_URL.search(src) or ti_maker(maker))):
         return None
     if land.get("ep_across") and land.get("ep_along"):
         return None
@@ -1344,8 +1353,7 @@ def sanity(spec, review):
             per = max(round((max(o) - min(o)) / e) + 1 if o else 0 for o in offs) if pos else n // 2
             rows, low = [("pin rows", per, "body_length")], 0.6
         else:
-            nlr = spec.get("pins_left_right", n // 4)
-            ntb = spec.get("pins_top_bottom", (n - 2 * nlr) // 2)
+            nlr, ntb = F.rows(spec)
             if 2 * (nlr + ntb) != n:
                 review.append(f"pins per side {nlr}+{ntb}+{nlr}+{ntb} != pin_count {n}")
             rows, low = [("left/right rows", nlr, "body_width"), ("top/bottom rows", ntb, "body_length")], 0.4
@@ -1372,6 +1380,7 @@ def sanity(spec, review):
         review.append(f"land.pad_center {lc:g} mm puts the pads past the leads ({'lead_span' if g('lead_span') else 'body_width'} "
                       f"max {outer[2]:g} mm): pad_center is from the part centre to each pad centre, half the "
                       f"centre-to-centre distance across the rows (C/2 = {lc / 2:g} if {lc:g} is C)")
+    review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
 
 
 def check_pins(spec, ext, review):
@@ -1646,7 +1655,11 @@ def ordering_check(pkg, facts, review):
         review.append(f"pin_count {n} differs from {src}: check the package variant")
 
 
-DUAL_ROW_NAME = re.compile(r"^[A-Z0-9]{0,3}(?:DFN|SON)(?![A-Z])", re.I)   # DFN, WDFN, UDFN, TDFN, SON, VSON, WSON, X2SON
+# DFN, WDFN, TDFN, SON, VSON(P), WSON, X2SON, TDSON, PVSON: the package token anywhere after a vendor prefix
+# (Infineon_PG-TDSON-8, Texas_VSONP-8, S-PVSON-N8)
+DUAL_ROW_NAME = re.compile(r"(?:^|[-_\s])[A-Z0-9]{0,3}(?:DFN|SONP?)(?![A-Z])", re.I)
+DUAL_ROW_FEW = re.compile(r"(?:^|[-_\s])LFCSP", re.I)   # an LFCSP of up to 10 leads is two-sided (8-lead 3x2, 10-lead
+DUAL_ROW_FEW_MAX = 10                                     # 3x3); 12 and up are four-sided
 
 
 def two_sided(spec, review):
@@ -1655,7 +1668,10 @@ def two_sided(spec, review):
     pins_top_bottom = 0 with a review line; a split the read gave is kept."""
     n = spec.get("pin_count")
     if spec.get("package_type") != "qfn" or not isinstance(n, int) or n % 2 or spec.get("pin_positions") \
-            or "pins_left_right" in spec or "pins_top_bottom" in spec or not DUAL_ROW_NAME.match(str(spec.get("name") or "")):
+            or "pins_left_right" in spec or "pins_top_bottom" in spec:
+        return
+    name = str(spec.get("name") or "")
+    if not (DUAL_ROW_NAME.search(name) or DUAL_ROW_FEW.search(name) and n <= DUAL_ROW_FEW_MAX):
         return
     spec["pins_left_right"], spec["pins_top_bottom"] = n // 2, 0
     review.append(f"pins_left_right / pins_top_bottom were left blank: {n // 2} per side on two sides, as "
@@ -1685,12 +1701,17 @@ def _pin_count_from(spec, ext):
 DEPOP_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*?-(\d+)-(\d+)(?=_|$)")   # SOIC-14-16: 14 pins on 16 places
 
 
-def _depop_positions(spec, ext):
-    """A dual row with places left empty (TLP2361: SO-6 with pin 2 absent; UCC256301: SOIC-14-16, pins 1,3..12,14..16,
-    live benchmark 2026-10-19) -> (pin_positions, places, absent numbers) from the pin table, whose numbers are the
-    places: or None. Only when nothing else can explain the gaps: the name gives the place count (SO-6, SOIC-14-16),
-    the table's numbers are distinct, start at 1 and end at the last place (a table cut short ends early), the read's
-    pin_count (if any) is the table's count, and there is no tab or exposed pad (whose number would land on a place)."""
+DEPOP_N = re.compile(r"[A-Za-z][A-Za-z0-9]*?-(\d+)-N(\d+)(?=_|$)")    # SOIC-8-N7 (KiCad): 8 places, pin 7 absent
+
+
+def _depop_positions(spec, ext, review=None):
+    """A dual row with places left empty (UCC256301: SOIC-14-16, pins 1,3..12,14..16, live benchmark 2026-10-19;
+    SOIC-8-N7) -> (pin_positions, places, absent numbers) from the pin table, whose numbers are the places: or None.
+    Only when the name says places are empty (SOIC-14-16 gives the pin count, SOIC-8-N7 the empty place) and the
+    table agrees: its numbers distinct, starting at 1 and ending at the last place, the read's pin_count (if any) the
+    table's count, no tab or exposed pad (whose number would land on a place). A table that just leaves a pin out of
+    a full row (an NC pin 7 of a SOIC-8, review 2026-10-22; TLP2361's SO-6 looked the same) is not taken as an empty
+    place: a review line holds it (the lead is there, its pad would be dropped)."""
     if spec.get("package_type") != "gullwing" or any(spec.get(k) for k in ("pin_positions", "tab", "exposed_pad", "pad_table")):
         return None
     e, name = spec.get("pitch"), str(spec.get("name") or "")
@@ -1698,15 +1719,25 @@ def _depop_positions(spec, ext):
     if not isinstance(e, (int, float)) or e <= 0 or not nums or not all(x.isdecimal() for x in nums) or len(set(nums)) != len(nums):
         return None
     ints = sorted(int(x) for x in nums)
-    m = DEPOP_NAME.match(name)
+    m, mn = DEPOP_NAME.match(name), DEPOP_N.match(name)
+    said = None                                       # the empty places the name gives, when it gives them
     if m and int(m.group(2)) > int(m.group(1)):
         if int(m.group(1)) != len(ints):
             return None
         places = int(m.group(2))
+    elif mn and 0 < int(mn.group(2)) <= int(mn.group(1)):
+        places, said = int(mn.group(1)), [int(mn.group(2))]
     else:
         places = name_facts(name)["count"]
     n = spec.get("pin_count")
     if not places or places % 2 or len(ints) >= places or ints[0] != 1 or ints[-1] != places or n not in (None, len(ints)):
+        return None
+    gone = sorted(set(range(1, places + 1)) - set(ints))
+    if not (m and int(m.group(2)) > int(m.group(1))) and said != gone:
+        if review is not None:
+            review.append(f"symbol: the pin table leaves out pin(s) {', '.join(map(str, gone))} of the {places} places "
+                          f"of {name}, which does not say they are empty places: the lead may be there (an NC pin left "
+                          "out of the table), so its pad is not dropped; check the pin table and drawing")
         return None
     per = places // 2
     pos = [{"number": str(i), "side": "L", "offset": round((i - 1 - (per - 1) / 2) * e, 4)} if i <= per else
@@ -1753,7 +1784,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
         table_check(ext["package"], tables, offset, review)
     spec, prov = to_spec(ext["package"], part, datasheet, model, offset, review)
     basic_span(spec, review)
-    dp = _depop_positions(spec, ext)
+    dp = _depop_positions(spec, ext, review)
     if dp:
         spec["pin_positions"], spec["pin_count"] = dp[0], len(dp[0])
         spec["unresolved"] = [u for u in spec.get("unresolved") or [] if u != "pin_count"]
