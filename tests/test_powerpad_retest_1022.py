@@ -172,7 +172,7 @@ def test_a_thermal_land_smaller_than_the_exposed_pad_fails_the_read_and_is_never
 
 def test_a_part_land_fails_the_read_so_the_route_retries_it():
     from ecadlib import ds_route as R
-    for land in ({"pad_length": 1.8, "pad_width": 0.3}, {"ep_mask_across": 3.39, "ep_mask_along": 6.35}):
+    for land in ({"pad_length": 1.8, "pad_width": 0.3}, {"ep_mask_across": 3.39, "ep_mask_along": 6.35}, {}):
         review = []
         D.sanity(dict(TLC, land=land), review)
         assert any(R.FAILED.search(r) for r in review if "land gives" in r), review
@@ -190,3 +190,12 @@ def test_the_whole_pdf_cut_keeps_the_first_trys_pages_before_later_ones():
     first = [49, 50, 51, 52] + list(range(1, 9))                             # level 0's pages, then the wider level's
     _, offset, _, _ = D.prepare(data, None, 6, 100, first=first)
     assert offset == [1, 2, 49, 50, 51, 52]
+
+
+def test_a_mask_the_builder_discards_does_not_excuse_the_name():
+    # Greptile on #169: a 6 x 13 mask cannot open on 5.2 x 12.5 copper, so the whole land is open and a name EP6x13
+    # agrees with nothing that is built
+    land = {"ep_across": 5.2, "ep_along": 12.5, "ep_mask_across": 6.0, "ep_mask_along": 13.0}
+    assert _ep_lines(dict(TLC, name="HTSSOP-38-1EP_6.1x12.5mm_P0.65mm_EP6x13mm", land=land))
+    turned = dict(TLC_LAND, ep_mask_across=6.35, ep_mask_along=3.39)      # read the other way round: turned, drawn
+    assert _ep_lines(dict(TLC, land=turned)) == []

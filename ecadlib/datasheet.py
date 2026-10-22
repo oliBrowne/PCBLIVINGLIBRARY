@@ -1382,10 +1382,11 @@ def sanity(spec, review):
                       f"max {outer[2]:g} mm): pad_center is from the part centre to each pad centre, half the "
                       f"centre-to-centre distance across the rows (C/2 = {lc / 2:g} if {lc:g} is C)")
     given = [k for k in ("pad_length", "pad_width", "pad_center") if isinstance(land.get(k), (int, float))]
-    if land and 0 < len(given) < 3:                   # signal pads: all three or none (IPC-7351B then)
+    given_land = isinstance(spec.get("land"), dict)   # an empty land ({}, every field null) is an answer too
+    if given_land and 0 < len(given) < 3:             # signal pads: all three or none (IPC-7351B then)
         review.append(f"land pattern: land gives {', '.join(given)} but not {', '.join(k for k in ('pad_length', 'pad_width', 'pad_center') if k not in given)}: "
                       "the signal pads need all three, or none for IPC-7351B pads")
-    elif land and not given and not (land.get("ep_across") and land.get("ep_along")):
+    elif given_land and not given and not (land.get("ep_across") and land.get("ep_along")):
         review.append("land pattern: land gives neither the signal pads (pad_length, pad_width, pad_center) nor the "
                       "thermal land (ep_across, ep_along)")
     small = F.thermal_land_small(spec)
@@ -1492,11 +1493,11 @@ def _ep_name_fits(size, spec):
     that land's copper is what gets built, or a size inside the drawing's min-max in either orientation."""
     land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
     num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0
-    if num(land.get("ep_across")) and num(land.get("ep_along")):    # only when the land's copper is what is built
-        for ks in (("ep_across", "ep_along"), ("ep_mask_across", "ep_mask_along")):   # (not the drawing's pad)
-            pair = tuple(land.get(k) for k in ks)
-            if all(map(num, pair)) and _pair_close(size, pair):
-                return True
+    ea, eb = land.get("ep_across"), land.get("ep_along")
+    if num(ea) and num(eb):                           # only when the land's copper is what is built (not the drawing's
+        mask = F.ep_mask(land, ea, eb)[:2]            # pad), and its mask only as the builder opens it: one that
+        if _pair_close(size, (ea, eb)) or _pair_close(size, mask):   # cannot fit the copper is not drawn
+            return True
     ep = spec.get("exposed_pad") or {}
     rng = [_dim(ep.get(k)) for k in ("length", "width")]
     if not all(rng):
