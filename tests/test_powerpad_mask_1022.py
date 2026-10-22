@@ -135,8 +135,11 @@ def test_the_paste_check_measures_the_mask_opening():
     assert not [i for i in FC.check(text) if i[1] == "paste"]
 
 
-def test_altium_and_back_keeps_the_opening(tmp_path):
+def test_altium_and_back_keeps_the_opening():
+    import tempfile
+    from pathlib import Path
     from ecadlib import kicad_export as KE
+    tmp_path = Path(tempfile.mkdtemp())                     # no fixtures: CI runs the tests without pytest
     text, _ = F.build(dict(TLC))
     AL.write_pcblib(tmp_path / "t.PcbLib", [AL.footprint_from_kicad(text)])
     back = KE.footprint_from_pcblib(tmp_path / "t.PcbLib", None, [])
