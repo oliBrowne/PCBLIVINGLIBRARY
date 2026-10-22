@@ -3008,6 +3008,12 @@ class Reader:
             url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
             lv, why, more = [None], {}, []
             texts = self._page_texts(data, src_hash) if n else None
+            got = self._outline_docs(data, texts, part, package, prov) if texts else None
+            if got:                                   # the package drawing is a separate document: appended
+                data, prov = got
+                if prov.get("outline"):
+                    src_hash, n = prov["sha256"], pdf_pages(data)
+                    texts = self._page_texts(data, src_hash)
             facts = DR.ordering_facts(texts, part, data) if texts else None
             if not pages and self.page_budget and n and n > self.page_budget:
                 if texts:
@@ -3077,6 +3083,47 @@ class Reader:
         if digest not in marks:                       # None: no bookmarks, pages are picked by their text alone
             marks[digest] = DR.page_marks(data)
         return marks[digest]
+
+    def _outline_docs(self, data, texts, part, package, prov):
+        """A datasheet with no drawing of this part's package that prints the drawing's document number
+        (ecadlib.outline_docs): each document from the [datasheet] folder (<number>.pdf) or the maker's link, appended
+        to the PDF -> (bytes, prov) or None. What could not be got is said in prov["outline_missing"] (the bytes
+        then unchanged)."""
+        from . import outline_docs as OD
+        found, got, missing = OD.refs(texts, part, package), [], []
+        for code, maker, page in found:
+            f, _ = local_datasheet(self.cfg.get("folder"), code, ("exact",))
+            if f is not None:
+                try:
+                    b = f.read_bytes()
+                    if is_pdf(b):
+                        got.append((code, b, f"{f.name} in your [datasheet] folder"))
+                        continue
+                except OSError:
+                    pass
+            errs = []
+            for url in OD.links(code, maker):
+                try:
+                    b, meta = self.store.fetch(url, f"package outline {code}", part=part, handoff=False, mpn=code)
+                    got.append((code, b, meta.get("url") or url))
+                    break
+                except DatasheetError as e:
+                    errs.append(str(e))
+            else:
+                missing.append(f"{code} (named on page {page}" + (f"; {errs[-1][:160]}" if errs else
+                               f"; save it as {code}.pdf in your datasheet folder") + ")")
+        merged = OD.append(data, [b for _, b, _ in got]) if got else None
+        if merged is None:
+            return (data, dict(prov, outline_missing=missing)) if missing else None
+        out = dict(prov, sha256=hashlib.sha256(merged).hexdigest(), pages=pdf_pages(merged),
+                   outline=[{"code": c, "from": w, "first_page": None} for c, _, w in got])
+        k = (pdf_pages(data) or 0) + 1
+        for o, (_, b, _) in zip(out["outline"], got):
+            o["first_page"] = k
+            k += pdf_pages(b) or 0
+        if missing:
+            out["outline_missing"] = missing
+        return merged, out
 
     def _page_texts(self, data, digest):
         from . import ds_route as DR
@@ -3186,6 +3233,11 @@ class Reader:
             res["needs_review"].append(f"{job['prov']['unnamed']} (no other link gave a PDF): check it is this part's datasheet")
         if job["prov"].get("local") and re.search(r"\((?:a family datasheet|named for another part number)", str(job["prov"].get("where"))):
             res["needs_review"].append(f"datasheet from your folder: {job['prov']['where']}; check it covers this part")
+        for o in job["prov"].get("outline") or ():
+            res["needs_review"].append(f"the package drawing came from {o['code']} ({o['from']}), appended from page "
+                                       f"{o['first_page']}: check it is this part's package")
+        for m in job["prov"].get("outline_missing") or ():
+            res["needs_review"].append(f"the datasheet has no drawing of this package, only its document number: {m}")
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)
