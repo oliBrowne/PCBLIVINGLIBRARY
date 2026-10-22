@@ -26,7 +26,7 @@ LADDER = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
 ROUTES = ("single", "ladder")
 
 # ---------------------------------------------------------------- page picking
-_DASH = str.maketrans({"−": "-", "–": "-", "—": "-", " ": " "})
+_DASH = str.maketrans({"−": "-", "–": "-", "—": "-", " ": " ", "µ": "u", "μ": "u"})   # "µTFBGA36" (ST) is uTFBGA
 FAMILY = {  # package family words -> a canonical family (SOIC-8 / SO8 / SOP-8 are one package)
     "SOIC": "SO", "SOP": "SO", "SO": "SO", "PSOP": "SO", "PDSO": "SO", "SSOP": "SSOP", "QSOP": "SSOP", "TSSOP": "TSSOP",
     "HTSSOP": "TSSOP", "MSOP": "MSOP", "VSSOP": "MSOP", "TSOP": "TSOP", "SOT": "SOT", "TSOT": "SOT", "SOD": "SOD",
@@ -34,25 +34,32 @@ FAMILY = {  # package family words -> a canonical family (SOIC-8 / SO8 / SOP-8 a
     "QFN": "QFN", "VQFN": "QFN", "WQFN": "QFN", "UQFN": "QFN", "HVQFN": "QFN", "UFQFPN": "QFN", "VFQFPN": "QFN",
     "DFN": "SON", "SON": "SON", "WSON": "SON", "VSON": "SON", "HVSON": "SON", "USON": "SON", "XSON": "SON",
     "QFP": "QFP", "LQFP": "QFP", "TQFP": "QFP", "PQFP": "QFP", "HTQFP": "QFP", "BGA": "BGA", "UFBGA": "BGA",
-    "LFBGA": "BGA", "TFBGA": "BGA", "FBGA": "BGA", "WLCSP": "CSP", "CSP": "CSP", "DIP": "DIP", "PDIP": "DIP",
+    "LFBGA": "BGA", "TFBGA": "BGA", "UTFBGA": "BGA", "VFBGA": "BGA", "WFBGA": "BGA", "FBGA": "BGA", "MBGA": "BGA",
+    "PBGA": "BGA", "CABGA": "BGA", "FCBGA": "BGA", "UBGA": "BGA",
+    "UDFN": "SON", "USOIC": "SO", "UCSP": "CSP",                               # "µDFN" (the µ reads as u)
+    "WLCSP": "CSP", "CSP": "CSP", "WCSP": "CSP", "DSBGA": "CSP", "DIP": "DIP", "PDIP": "DIP",
     "SIP": "SIP", "LGA": "LGA"}
 NEEDS_NUM = {"SO", "SC", "TO", "DO", "SOT", "SOD", "SIP", "SMA", "SMB", "SMC"}   # too common as plain words
 _FAM_RX = re.compile(r"(?<![A-Z0-9])(" + "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(\s?-\s?|\s)?(\d{1,3})?(?:\s?-\s?(\d{1,3}))?(?![0-9])")
-_COUNT_FAM_RX = re.compile(r"(?<![A-Z0-9.])(\d{1,3})\s?-?\s?(?:PIN|LEAD|BALL|TERMINAL)S?\s+(" +
+_PKG_WORDS = (r"MICRO|FINELINE|FINE|PITCH|PLASTIC|CERAMIC|MOLDED|THIN|VERY|SHRINK|SMALL|OUTLINE|QUAD|DUAL|FLAT|"
+              r"LOW|PROFILE|LOW-PROFILE|POWER|THERMALLY|ENHANCED|EXPOSED|PAD|WAFER|LEVEL|CHIP|SCALE|HEAT|SINK|NO-LEAD")
+_COUNT_FAM_RX = re.compile(r"(?<![A-Z0-9.])(\d{1,3})[ \t]?-?[ \t]?(?:PIN|LEAD|BALL|TERMINAL)S?,?[ \t]+"   # "256-Pin
+                           rf"(?:(?:{_PKG_WORDS})[ \t]+){{0,3}}(" +    # Micro FineLine BGA" (Altera), "14 LEAD PLASTIC SOIC"
                            "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(?![A-Z])")
 _COUNT_RX = re.compile(r"(?<![\d.])(\d{1,3})\s?-?\s?(?:pin|lead|ball|terminal)s?\b", re.I)
-_DWG_ID = re.compile(r"(?<![A-Z0-9-])([A-Z]{1,4})0\d{3}[A-Z](?![A-Za-z0-9])")   # TI drawing numbers: D0014A, RGE0024B
+_DWG_ID = re.compile(r"(?<![A-Z0-9-])([A-Z]{1,4})(0\d{3})[A-Z](?![A-Za-z0-9])")   # TI drawing numbers: D0014A, RGE0024B
                                                                                 # (pins padded to 4 digits: never UCC1895J)
 _SEC_NO = re.compile(r"^\s*(?:\d+(?:\.\d+)*\.?|[A-Z]\.\d+(?:\.\d+)*)\s+")   # "6 ", "6.2 ", "62.1. ", "A.3 "
 CONTINUED = re.compile(r"\bcontinued\b|\(cont(?:\.|inued)?\)", re.I)
 THREE_PIN = {"SOT23", "SOT323", "SOT523", "SOT416", "SOT346", "SC59", "SC70", "SC75", "SC89", "TO92", "SOT89"}
 OUTLINE_FAMS = {"SOT", "SOD", "SC", "TO", "DO", "TO252", "TO263"}             # first number names the outline, not pins
 CATS = {
-    "drawing": re.compile(r"package (outline|drawing|dimensions?|information)|outline dimensions?|mechanical (data|drawing|"
+    "drawing": re.compile(r"package (outline|drawing|dimensions?|information)|outline dimensions?|dimensions shown in|mechanical (data|drawing|"
                           r"dimensions?)|physical dimensions?|shape (&|and) dimensions|case outline|packaging information|"
                           r"dimensions\s*(-|in)\s*(mm|millimet)|chip resistor outlines|package profile|外形尺寸|封装尺寸", re.I),
-    "land": re.compile(r"land pattern|board layout|etch and via pattern|"
-                       r"thermal (?:pad area|land)\b(?=[^\n]{0,80}\d\s*(?:mm|mils?)\b)|"   # PowerPAD lands in prose (OPA569DWP p19)
+    "land": re.compile(r"land pattern|board layout|etch and via\s+pattern|"
+                       r"thermal (?:pad areas?|lands?)\b(?=[\s\S]{0,80}?\d\s*(?:mm|mils?)?\s*[x×]\s*\d)|"   # PowerPAD lands in
+                       # prose, with a size ("Thermal Land 299 mils x 510 mils", OPA569DWP p19), not layout advice
                        r"recommended (footprint|land|pcb|solder|pad)|(suggested|recommended) pad layout|"
                        r"soldering footprint|solder lands|\bfootprint\b|pad layout|soldering pad|焊盘", re.I),
     "pinout": re.compile(r"pin (configurations?|functions?|descriptions?|assignments?|definitions?)|pinning information|"
@@ -61,12 +68,47 @@ CATS = {
                            r"ordering|part number|订购|订货", re.I)}
 TABLE = {"drawing": re.compile(r"\b(min\.?|minimum)\b[\s\S]{0,80}\b(max\.?|maximum)\b", re.I),
          "pinout": re.compile(r"\bpin\s*(no\.?|number|#)|\bno\.\s+name\b|\bname\s+(type|i/o)\b|pin name", re.I)}
+CAPTION = re.compile(r"package\s+(?:name|outline|drawing|dimensions?)|\boutline\b", re.I)
+DSBGA_BOX = re.compile(r"\bD\s*:\s*Max\s*=[\s\S]{0,160}?\bE\s*:\s*Max\s*=[\s\S]{0,160}?\d\.\d+\s*mm,?\s*Min\s*=", re.I)
+                                                      # "D: Max = \nE: Max = \n3.036 mm, Min = \n..." (the values may follow)
 DIM_SYMS = re.compile(r"(?<![A-Za-z0-9])(A1|A2|D1|E1|D2|E2)(?![A-Za-z0-9])")
 NOISE = re.compile(r"tape and reel|reel dimensions|carrier tape|package materials information|revision history|"
                    r"important notice|tape dimensions|stencil design", re.I)
 STOP = {"ACTIVE", "NRND", "OBSOLETE", "ROHS", "GREEN", "LEVEL", "TAPE", "REEL", "TUBE", "TRAY", "TBD", "YES", "NO",
         "PB", "FREE", "MSL", "LIFEBUY", "PREVIEW", "NIPDAU", "SNAGCU", "SN", "CU", "AU", "MM", "MAX", "MIN", "TYP", "UNIT",
         "PCS", "QTY", "PART", "NUMBER", "DEVICE", "PACKAGE", "PINS", "PIN", "TYPE", "TEMP", "RANGE"}
+
+
+def _noise(t, vs=()):
+    """A tape-and-reel / revision / notice page. "Tape and Reel" on a line that names this part is an ordering-guide
+    row ("ADAU1702JSTZ-RL ... 48-Lead LQFP in 13" Tape and Reel"), not the subject of the page: ADAU1702 p52 holds
+    the drawing above it."""
+    rows = None
+    for m_ in NOISE.finditer(t):
+        if m_.group(0).lower() != "tape and reel":
+            return True
+        ln = t[t.rfind("\n", 0, m_.start()) + 1:t.find("\n", m_.end()) % (len(t) + 1)]
+        if rows is None:                              # an ordering table on the page ("ORDERING GUIDE")
+            rows = bool(CATS["ordering"].search(t))
+        if not rows or re.search(r"figure|outline|drawing|dimension", ln, re.I) or \
+                not any(v in re.sub(r"\s+", "", ln).upper() for v in vs):   # (a reel figure's caption may name
+            return True                               # the part too: "Figure 14. Tape and reel STULPI01A ...")
+    return False
+
+
+def _line_key(ln):
+    return re.sub(r"\d+", "#", " ".join(ln.split()))
+
+
+def _boilerplate(texts):
+    """The lines (page numbers aside) printed on at least half the pages: the running header and footer."""
+    if len(texts) < 6:
+        return set()
+    seen = {}
+    for t in texts:
+        for k in {_line_key(ln) for ln in norm_text(t).splitlines()} - {""}:
+            seen[k] = seen.get(k, 0) + 1
+    return {k for k, v in seen.items() if v >= max(3, len(texts) // 2)}
 
 
 def norm_text(t):
@@ -78,12 +120,15 @@ def package_tokens(text):
     without a number ('WSON') gives the family alone, unless the text also numbers it ("LQFP144, 144-lead LQFP" is
     QFP144 only: a family-only token would match every other LQFP)."""
     out = set()
-    up = norm_text(text).upper()
+    up = re.sub(r"BALL[\s-]*GRID[\s-]*ARRAY", "BGA", norm_text(text).upper())   # "256-Pin Micro FineLine Ball-Grid Array"
     counted = {}                                      # "64-PIN LQFP": the count before the family (SAM E70 bookmarks)
     for m in _COUNT_FAM_RX.finditer(up):
         counted[m.start(2)] = m.group(1)
     for m in _FAM_RX.finditer(up):
         fam, sep, n1 = FAMILY[m.group(1)], m.group(2) or "", m.group(3)
+        if fam[-1].isdigit() and n1:                  # DPAK -> TO252 already names the outline: "DPAK - 5 Leads"
+            counted.pop(m.start(1), None)             # is TO252, not "TO2525"
+            n1, sep = None, ""
         if n1 and re.match(r"\s?(?:[.,]\d|[xX×]\s?\d)", up[m.end(3):]):   # "QFN 3x3", "LQFP 10.0 x 10.0": a body size
             n1, sep = None, ""
         if fam in OUTLINE_FAMS:                       # SOT's number names the outline, not the pin count
@@ -108,6 +153,32 @@ def _tok_match(own, page_toks):
     return False
 
 
+def _fam_n(t):
+    """'QFP144' -> ('QFP', '144'), 'TO252' -> ('TO252', ''): an outline family's number is its name, not a pin count."""
+    f = re.sub(r"\d+$", "", t)
+    return (t, "") if f in OUTLINE_FAMS else (f, t[len(f):])
+
+
+SAME_OUTLINE = [{"SOT23", "SOT25", "SOT26", "SOT753", "SOT457", "SC74", "SOT346", "SC59"},   # one body under the
+                {"SC70", "SC88", "SOT323", "SOT353", "SOT363"},                            # makers' names
+                {"SOT89", "SC62"}, {"SOT223", "SC73"}, {"SOT416", "SC75"}, {"SOT523", "SC89"}]
+
+
+def _agree(hint, toks, alt=()):
+    """The ordering lines' packages for this part that agree with a hint naming one (family, and pin count where both give
+    one): a PDF line that names another package (AUIPS6011R's TO220 next to its DPAK, 16550's "44-Pin PDIP" printed
+    for the 40-pin one) never outvotes the package asked for. No hint, or a hint with no family: all of them."""
+    hs = [_fam_n(h) for h in hint]
+    if not hs:
+        return toks
+
+    def fits(f, n, hf, hn):
+        if f == hf:
+            return not n or not hn or n == hn or n in alt
+        return {f, hf} == {"BGA", "CSP"} or any(f in g and hf in g for g in SAME_OUTLINE)
+    return {t for t in toks for f, n in [_fam_n(t)] if any(fits(f, n, hf, hn) for hf, hn in hs)}
+
+
 def mpn_variants(part):
     p = re.sub(r"\s+", "", str(part or "")).upper()
     out = {p} if len(p) >= 4 else set()
@@ -123,6 +194,7 @@ def ordering_codes(texts, part):
     toks, codes = set(), set()
     if not vs:
         return toks, codes
+    head = {re.match(r"[A-Z]*", v).group(0) for v in vs}   # STULPI01A: "ULPI" is the family name, not a package code
     for t in texts:
         last = set()
         for ln in norm_text(t).upper().splitlines():
@@ -131,7 +203,7 @@ def ordering_codes(texts, part):
             if any(v in flat for v in vs):
                 toks |= here or last
                 for w in re.findall(r"(?<![A-Z0-9])([A-Z]{2,4}|\d{2}[A-Z]\d?(?:-[A-Z])?|[A-Z]{1,4}\d{4}[A-Z])(?![A-Z0-9])", ln):
-                    if w not in STOP and w not in FAMILY and not any(w == v for v in vs) and (
+                    if w not in STOP and w not in FAMILY and not any(w == v or w in h for v in vs for h in head) and (
                             any(w in v for v in vs) or re.fullmatch(r"\d{2}[A-Z]\d?(?:-[A-Z])?", w)):
                         codes.add(w)
             if here:
@@ -140,7 +212,7 @@ def ordering_codes(texts, part):
 
 
 _KEY_ENTRY = re.compile(r"(?<![A-Za-z0-9.+-])([A-Z0-9]{1,3})\s?=\s?")
-_KEY_FAM = re.compile(r"^\s*(?:(\d{1,3})\s?-?\s?(?:pins?|leads?|balls?|terminals?)?[\s,]+)?(?:[a-z]+\s+){0,2}(" +
+_KEY_FAM = re.compile(r"^\s*(?:(\d{1,3})\s?-?\s?(?:pins?|leads?|balls?|terminals?)?[\s,]+)?(?:[A-Za-z]+\s+){0,2}(" +   # "Micro FineLine BGA"
                       "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(?:\s?-?\s?(\d{1,3}))?(?![A-Z0-9])")
 _KEY_SIZE = re.compile(r"^[^=]{0,30}?\(?(\d{1,2}(?:\.\d+)?)\s?(?:mm)?\s?[x×]\s?(\d{1,2}(?:\.\d+)?)\s?mm")
 _KEY_PINS = re.compile(r"^\s*(\d{1,3})\s?-?\s?(?:pins?|leads?|balls?|terminals?)\b", re.I)
@@ -192,6 +264,13 @@ def ordering_key(texts, part, families=()):
                 continue
             n = fm and (fm.group(1) or fm.group(3)) or pm and pm.group(1)
             fam = fm and FAMILY[fm.group(2)]
+            if fam and not n:                         # Altera's EPM1270M256: M = Micro FineLine BGA, then the pin
+                for i in spans:                       # count printed in the MPN right after it (where siblings differ)
+                    d = re.match(r"\d{2,4}(?![0-9])", p[i + len(code):])
+                    if d and vary & set(range(i + len(code), i + len(code) + len(d.group(0)))) and any(
+                            re.search(rf"(?<![\d.]){d.group(0)}\s?-?\s?(?:pin|ball|lead)s?\b", x, re.I) for x in texts):
+                        n = d.group(0)            # (printed as a count: Cyclone's F17 is a 17 mm body, not 17 pins)
+                        break
             if fam in NEEDS_NUM and not (fm.group(1) or fm.group(3)):   # "SO" / "TO" alone is a word, not a package
                 fam = None
                 if not pm:
@@ -538,9 +617,11 @@ def page_scores(texts, part=None, package=None, marks=None):
     otoks, codes = ordering_codes(texts, part)
     fx = ordering_facts(texts, part)                  # TI's addendum: this part's package designator (D, NS, PW ...)
     desig = {fx["code"].upper()} if fx and fx.get("code") else set()
+    desig |= {c for c in codes if re.fullmatch(r"[A-Z]{1,4}", c)}   # "TXB0101YZP": YZP on the line naming the part
     ktoks, key, sizes = ordering_key(texts, part, hint | otoks)
-    own = hint | otoks | ktoks
-    own_counts = {int(x) for x in (re.search(r"\d+$", t) for t in own) for x in ([x.group(0)] if x else [])}
+    otoks = _agree(hint, otoks, set(re.findall(r"\d+", package or "")))   # ("SOIC-14-16": 14 pins, 16 body; the
+    own = hint | otoks | ktoks                        # ordering key is decoded from the MPN itself: it stays)
+    own_counts = {int(n_) for t in own for _, n_ in [_fam_n(t)] if n_}   # pin counts (SOT23's 23 is its name)
     sec_n = {}
     for x in marks or ():
         for sec in (x or "").split(" | "):
@@ -550,6 +631,7 @@ def page_scores(texts, part=None, package=None, marks=None):
     vs = mpn_variants(part)
     n, rows = len(texts), []
     first_mech = None
+    boiler = None
     for i, raw in enumerate(texts):
         t = norm_text(raw)
         s = {c: min(2, len(rx.findall(t))) * (3 if c != "ordering" else 2) for c, rx in CATS.items()}
@@ -561,29 +643,47 @@ def page_scores(texts, part=None, package=None, marks=None):
         if s["mpn"] and s["ordering"]:
             s["ordering"] += 4
         ptoks = package_tokens(t)
+        if DSBGA_BOX.search(t):                       # TI's old image-only DSBGA drawing: its only text is the size box
+            s["drawing"] += 5
         has_code = any(re.search(rf"(?<![A-Z0-9]){re.escape(c)}(?![A-Z]|\d(?![\dA-Z]))", t.upper()) for c in codes)
         s["own"] = bool((own and _tok_match(own, ptoks)) or has_code)
         s["other"] = bool(ptoks) and not s["own"] and bool(own or codes)
         s["solo"] = s["own"] and len(ptoks) <= 1      # names this package and no other
-        ids = {m_.group(1) for m_ in _DWG_ID.finditer(t)} if desig else set()   # (as printed: "heightD0014A")
-        if ids:                                       # TI drawing numbers (D0014A, NS0014A): SOIC-14 and SOP-14 are
-            if ids & desig:                           # both "SO14", the designator tells them apart
-                s["own"], s["other"], s["solo"] = True, False, len(ids) == 1
-            elif s["drawing"] or s["land"] or TABLE["drawing"].search(t):
+        dwg = {m_.group(1): int(m_.group(2)) for m_ in _DWG_ID.finditer(t)}   # (as printed: "heightD0014A")
+        mech = s["drawing"] or s["land"] or TABLE["drawing"].search(t)
+        if dwg and desig:                             # TI drawing numbers (D0014A, NS0014A): SOIC-14 and SOP-14 are
+            if set(dwg) & desig:                      # both "SO14", the designator tells them apart
+                s["own"], s["other"], s["solo"] = True, False, len(dwg) == 1
+            elif mech:
+                s["own"], s["other"], s["solo"] = False, True, False
+        elif dwg and own_counts and mech:             # no designator known: the drawing number's pin count (16550:
+            if any(v in own_counts for v in dwg.values()) and not s["other"]:   # N0040A is the DIP-40, FN0044A
+                # another package; a TSSOP-14 page's PW0014A stays another package for a SOIC-14)
+                s["own"], s["other"] = True, False
+                s["solo"] = s["solo"] and len(dwg) == 1
+            else:
                 s["own"], s["other"], s["solo"] = False, True, False
         if re.search(r"orderable|package option addendum|ordering information", t, re.I):
             s["drawing"] //= 3                        # "Package Drawing" is a column of the ordering table there
         toc = len(re.findall(r"\.{5,}|(?:\. ){5,}", t)) >= 6
-        if toc or NOISE.search(t):
+        s["noise"] = _noise(t, vs)
+        if toc or s["noise"]:
             for c in CATS:
                 s[c] = s[c] // 4
         s["toc"] = toc
         if first_mech is None and (s["drawing"] or s["land"]) and i >= n // 3:
             first_mech = i
         s["blank"] = len(t.strip()) < 40
+        if s["solo"] and not any(s[c] for c in CATS) and CAPTION.search(t) and any(re.search(r"\d", x) for x in ptoks):
+            if boiler is None:
+                boiler = _boilerplate(texts)
+            body = "\n".join(ln for ln in t.splitlines() if _line_key(ln) not in boiler).strip()
+            if len(body) < 120 and CAPTION.search(body) and not MARK_NOISE.search(body):
+                s["drawing"] = max(s["drawing"], 5)   # the running header and footer aside, an image drawing captioned
+                                                      # only "Package Name TO252-3" (ROHM BD33FC0FP p35)
         s["mark"] = ""
         m = (marks[i] if marks and i < len(marks) else "") or ""
-        if m and not toc and not NOISE.search(t):
+        if m and not toc and not s["noise"]:
             secs, hits, leaves = m.split(" | "), set(), []
             mine = theirs = 0                         # sections on the page about this package / only another one
             sure = False                              # one of them names this package (family and count) alone
@@ -670,7 +770,8 @@ def pick_pages(texts, budget, part=None, package=None, marks=None):
         add(max(pins_own, key=lambda i: (rows[i]["solo"], _rank(rows[i], "pinout"), -i)), "pinout (this package)")
     if "drawing" in best:                             # the drawing's continuation (table, notes, second view)
         j = best["drawing"] + 1
-        if j < len(rows) and (rows[j]["drawing"] or rows[j]["land"] or rows[j]["blank"]) and not rows[j]["other"]:
+        if j < len(rows) and (rows[j]["drawing"] or rows[j]["land"] or rows[j]["blank"]) and not rows[j]["other"] \
+                and not rows[j]["noise"]:                 # (STULPI01A p41: the tape-and-reel outline that follows)
             add(j, "drawing (continued)")
             # image-only pages right after it: TI's land pattern page for the same package has no text layer
             # (TLC5951DAP p51, "LAND PATTERN DATA - DAP", live benchmark 2026-10-21: never sent, so the thermal land
