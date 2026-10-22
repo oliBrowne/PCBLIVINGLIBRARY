@@ -120,6 +120,8 @@ def footprint_to_kicad(data, name=None, notes=None):
                 from .footprint_adv import _interior_point
                 d, ax, ay = _interior_point(poly)
                 kshape, a = "custom", round(max(0.05, min(1.6 * d, 1.0)), 3)
+                if hole_r > 0:            # KiCad drills at the pad's anchor: keep it on EasyEDA's hole, sized to the hole
+                    ax, ay, a = X(f[2]), Y(f[3]), round(2 * hole_r, 3)
                 ax, ay = round(ax, 4), round(ay, 4)
                 at, size = f"(at {_n(ax)} {_n(ay)})", f"(size {_n(a)} {_n(a)})"
                 prims = (" (options (clearance outline) (anchor circle)) (primitives (gr_poly (pts "

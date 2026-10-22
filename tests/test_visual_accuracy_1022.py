@@ -225,3 +225,36 @@ def test_kicad_export_keeps_altium_label_corner():
     for prop in ("Reference", "Value"):
         node = next(p for p in sexpr.find(k, "property") if p[1] == prop)
         assert sexpr.first(sexpr.first(node, "effects"), "justify")[1:] == ["left", "bottom"], node
+
+
+def test_easyeda_drilled_polygon_keeps_its_hole():
+    """Greptile on #162: the custom pad's anchor moved to the polygon's interior point, and KiCad drills at the anchor,
+    so a drilled polygon pad's hole left EasyEDA's spot. The anchor stays on the hole for a drilled pad."""
+    f = SOT89_EE["shape"][1].split("~")
+    f[6], f[9] = "11", "1.5"                                 # multi-layer, hole radius 1.5 (x 10 mil)
+    data = dict(SOT89_EE, shape=[SOT89_EE["shape"][0], "~".join(f), SOT89_EE["shape"][2]])
+    p2 = _pads(EC.footprint_to_kicad(data, "EE_THT"))["2"]
+    assert p2[2] == "thru_hole" and p2[3] == "custom", p2
+    x, y = (float(v) for v in sexpr.first(p2, "at")[1:3])
+    assert abs(x - (3998.819 - 4000) * 0.254) < 1e-3 and abs(y) < 1e-3, (x, y)
+    assert abs(float(sexpr.first(p2, "size")[1]) - 0.762) < 1e-3, p2
+
+
+def test_thermal_paste_rule_leaves_a_given_margin_and_rotated_pads():
+    """Greptile on #162: a big pad with the source's paste_margin, or one turned 45 deg (axis-aligned windows would
+    fall off its copper), went to windows. Both keep their full, source-given paste."""
+    from ecadlib import footprint_gen as F
+    pads = [{"number": str(i + 1), "x": -1.4625 if i < 4 else 1.4625, "y": -0.75 + 0.5 * (i % 4), "w": 0.8, "h": 0.25} for i in range(8)]
+    spec = {"name": "DFN-8-1EP_T", "package_type": "custom", "pin_count": 9,
+            "pad_table": {"unit": "mm", "origin": "center", "body": {"x1": -1.5, "y1": -1.5, "x2": 1.5, "y2": 1.5},
+                          "pads": pads + [{"number": "9", "x": 0, "y": 0, "w": 1.7, "h": 2.4, "paste_margin": -0.1}]}}
+    text = F.build(spec)[0]
+    p9 = [p for p in sexpr.find(sexpr.parse(text), "pad") if p[1] == "9"]
+    assert len(p9) == 1 and "F.Paste" in str(p9[0]), p9
+    assert sexpr.first(p9[0], "solder_paste_margin")[1] == "-0.1", p9
+    tab = {"number": "3", "x": 0, "y": 0, "w": 4, "h": 1, "rotation": 45}
+    spec2 = {"name": "ROT_T", "package_type": "custom", "pin_count": 3,
+             "pad_table": {"unit": "mm", "origin": "center", "body": {"x1": -3, "y1": -3, "x2": 3, "y2": 3},
+                           "pads": [{"number": "1", "x": -4, "y": 0, "w": 1, "h": 1}, {"number": "2", "x": 4, "y": 0, "w": 1, "h": 1}, tab]}}
+    p3 = [p for p in sexpr.find(sexpr.parse(F.build(spec2)[0]), "pad") if p[1] == "3"]
+    assert len(p3) == 1 and "F.Paste" in str(p3[0]), p3

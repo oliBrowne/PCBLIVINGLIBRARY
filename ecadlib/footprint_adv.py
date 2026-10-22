@@ -456,7 +456,7 @@ def table_layout(spec):
             if p.get(k) is not None:
                 q[k] = _r4(p[k] * f)
         q["paste"] = p.get("paste") or ("none" if kind != "smd" else "full")
-        q["_paste_default"] = not p.get("paste")
+        q["_paste_default"] = not p.get("paste") and p.get("paste_margin") is None   # a given margin is the source's paste
         for k in ("paste_coverage", "paste_grid", "thermal_vias"):
             if p.get(k) is not None:
                 q[k] = p[k]
@@ -942,6 +942,9 @@ def _thermal(p, pads):
     paste, as KiCad's."""
     if p["kind"] != "smd" or p.get("role") in ("mount", "mp", "shield"):
         return False
+    rot = p.get("rot") or 0
+    if not p.get("poly") and abs(rot / 90 - round(rot / 90)) > 1e-6:
+        return False                    # the windows are axis-aligned: a pad at 45 deg keeps its full paste
     x1, y1, x2, y2 = pad_bbox(p)
     if min(x2 - x1, y2 - y1) >= THERMAL_SIDE - 1e-9:
         return True
