@@ -254,3 +254,48 @@ def test_greptile_pin_count_chapters_never_make_a_page_this_package_alone():
     marks = ["", "6. Package Outlines > 6.1 144-lead Package Outline | 6. Package Outlines > 6.2 144-ball Package Outline"]
     rows = R.page_scores(texts, "ATSAME70Q19A-AN", "LQFP-144", marks)[0]
     assert rows[1]["own"] and not rows[1]["solo"], rows[1]
+
+
+# ---------------------------------------------------------------- PC page-pick score regressions (2026-10-22)
+def _ti_logic_pages():
+    """SYNTHETIC, laid out like a TI logic sheet with five packages: one pinout figure for all of them, an orderable
+    addendum, and one drawing per package named by its TI drawing number."""
+    pages = [["CD4099B quad bilateral switch, electrical characteristics and typical curves"] for _ in range(32)]
+    pages[2] = ["Figure 4-1. N, J, D, NS, or PW Packages 14-Pin PDIP, CDIP, SOIC, SOP, or TSSOP Top View",
+                "Pin Functions PIN NAME NO. I/O DESCRIPTION"]
+    pages[18] = ["PACKAGE OPTION ADDENDUM", "Orderable part number Status Package type Package drawing Pins",
+                 "CD4099BE ACTIVE PDIP N 14 25", "CD4099BM ACTIVE SOIC D 14 50", "CD4099BNSR ACTIVE SO NS 14 2000",
+                 "CD4099BPW ACTIVE TSSOP PW 14 90"]
+    pages[23] = ["D0014A SOIC - 1.75 mm max height", "PACKAGE OUTLINE SMALL OUTLINE INTEGRATED CIRCUIT"]
+    pages[24] = ["D0014A SOIC - 1.75 mm max height", "EXAMPLE BOARD LAYOUT"]
+    pages[26] = ["NS0014A SOP - 2.00 mm max height", "PACKAGE OUTLINE SMALL OUTLINE PACKAGE"]
+    pages[27] = ["NS0014A SOP - 2.00 mm max height", "EXAMPLE BOARD LAYOUT"]
+    pages[29] = ["PW0014A TSSOP - 1.2 mm max height", "PACKAGE OUTLINE SMALL OUTLINE PACKAGE"]
+    return [" \n".join(p) for p in pages]
+
+
+def test_a_ti_designator_from_the_addendum_picks_that_drawing_number():
+    # SOIC-14 (D) and SOP-14 (NS) are both "SO14": the addendum's designator and the drawing number tell them apart
+    texts = _ti_logic_pages()
+    ns, why = R.pick_pages(texts, 6, "CD4099BNS", "SO-14")
+    assert 27 in ns and not {24, 25} & set(ns), (ns, why)
+    m, why = R.pick_pages(texts, 6, "CD4099BM", "SO-14")
+    assert 24 in m and not {27, 28} & set(m), (m, why)
+
+
+def test_a_pin_page_naming_this_package_among_others_stays_this_package_s():
+    # TPS26600 / CD4066B: one pin table for several packages, under a bookmark chapter; the continuation page goes too
+    texts = ["Device", "x", "x", "PWP (HTSSOP, 16) RGE (VQFN, 24) Pin Configuration Top View",
+             "Pin Functions PIN NAME HTSSOP VQFN TYPE DESCRIPTION OUT 15 23 Power",
+             "Pin Functions (continued) PIN NAME HTSSOP VQFN TYPE DESCRIPTION EN 3 4 Input",
+             "Specifications Absolute maximum ratings"] + ["Electrical"] * 20
+    marks = ["", "", "", "5 Device Comparison Table | 6 Pin Configuration and Functions",
+             "6 Pin Configuration and Functions", "6 Pin Configuration and Functions",
+             "7 Specifications"] + ["7 Specifications"] * 20
+    pages, why = R.pick_pages(texts, 6, "TPS26600PWP", "HTSSOP-16-1EP", marks)
+    assert {4, 5, 6} <= set(pages), (pages, why)
+
+
+def test_a_temperature_range_is_no_to_package():
+    assert R.package_tokens("LTC2942CDCB-1#PBF -40°C TO 85°C") == set()
+    assert R.package_tokens("LTC2942IDCB-1 –40°C to 85°C 6-Lead (2mm × 3mm) Plastic DFN") <= {"SON", "SON6"}

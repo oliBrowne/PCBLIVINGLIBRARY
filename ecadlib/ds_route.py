@@ -41,6 +41,8 @@ _FAM_RX = re.compile(r"(?<![A-Z0-9])(" + "|".join(sorted(FAMILY, key=len, revers
 _COUNT_FAM_RX = re.compile(r"(?<![A-Z0-9.])(\d{1,3})\s?-?\s?(?:PIN|LEAD|BALL|TERMINAL)S?\s+(" +
                            "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(?![A-Z])")
 _COUNT_RX = re.compile(r"(?<![\d.])(\d{1,3})\s?-?\s?(?:pin|lead|ball|terminal)s?\b", re.I)
+_DWG_ID = re.compile(r"(?<![A-Z0-9-])([A-Z]{1,4})\d{4}[A-Z](?![A-Z0-9])")    # TI drawing numbers: D0014A, RGE0024B
+_SEC_NO = re.compile(r"^\s*(?:\d+(?:\.\d+)*\.?|[A-Z]\.\d+(?:\.\d+)*)\s+")   # "6 ", "6.2 ", "62.1. ", "A.3 "
 CONTINUED = re.compile(r"\bcontinued\b|\(cont(?:\.|inued)?\)", re.I)
 THREE_PIN = {"SOT23", "SOT323", "SOT523", "SOT416", "SOT346", "SC59", "SC70", "SC75", "SC89", "TO92", "SOT89"}
 OUTLINE_FAMS = {"SOT", "SOD", "SC", "TO", "DO", "TO252", "TO263"}             # first number names the outline, not pins
@@ -531,6 +533,8 @@ def page_scores(texts, part=None, package=None, marks=None):
     with little text."""
     hint = package_tokens(package or "")
     otoks, codes = ordering_codes(texts, part)
+    fx = ordering_facts(texts, part)                  # TI's addendum: this part's package designator (D, NS, PW ...)
+    desig = {fx["code"].upper()} if fx and fx.get("code") else set()
     ktoks, key, sizes = ordering_key(texts, part, hint | otoks)
     own = hint | otoks | ktoks
     own = {t for t in own if re.search(r"\d$", t) or not any(o != t and re.sub(r"\d+$", "", o) == t for o in own)}
@@ -559,6 +563,12 @@ def page_scores(texts, part=None, package=None, marks=None):
         s["own"] = bool((own and _tok_match(own, ptoks)) or has_code)
         s["other"] = bool(ptoks) and not s["own"] and bool(own or codes)
         s["solo"] = s["own"] and len(ptoks) <= 1      # names this package and no other
+        ids = {m_.group(1) for m_ in _DWG_ID.finditer(t.upper())} if desig else set()
+        if ids:                                       # TI drawing numbers (D0014A, NS0014A): SOIC-14 and SOP-14 are
+            if ids & desig:                           # both "SO14", the designator tells them apart
+                s["own"], s["other"], s["solo"] = True, False, len(ids) == 1
+            elif s["drawing"] or s["land"] or TABLE["drawing"].search(t):
+                s["own"], s["other"], s["solo"] = False, True, False
         if re.search(r"orderable|package option addendum|ordering information", t, re.I):
             s["drawing"] //= 3                        # "Package Drawing" is a column of the ordering table there
         toc = len(re.findall(r"\.{5,}|(?:\. ){5,}", t)) >= 6
@@ -578,7 +588,7 @@ def page_scores(texts, part=None, package=None, marks=None):
             for sec in secs:                          # (a page where bookmarks start holds each section: page_marks)
                 chain = sec.split(" > ")
                 leaf = chain[-1]
-                hit, named = [], package_tokens(leaf) or _COUNT_RX.search(leaf)
+                hit, named = [], package_tokens(leaf) or _COUNT_RX.search(_SEC_NO.sub("", leaf))
                 wide = sec_n.get(sec, 0) > 4          # a whole chapter, not one drawing or table
                 for c, rx in MARK.items():            # the deepest bookmark says what the page is ("Table 82. LQFP32 -
                     if MARK_NOISE.search(leaf) or wide and not named:   # Mechanical data"). A chapter ("Mechanical,
@@ -587,7 +597,8 @@ def page_scores(texts, part=None, package=None, marks=None):
                         hit.append(c)                 # counts only when it names a package ("62.5 LQFP100")
                 hits |= set(hit)
                 mtoks = next((tk for tk in (package_tokens(x) for x in reversed(chain)) if tk), set())
-                count = next((int(m_.group(1)) for x in reversed(chain) for m_ in [_COUNT_RX.search(x)] if m_), None)
+                count = next((int(m_.group(1)) for x in reversed(chain) for m_ in [_COUNT_RX.search(_SEC_NO.sub("", x))]
+                              if m_), None)   # ("6 Pin Configuration": the 6 is the chapter's number, not a pin count)
                 if hit and mtoks and (own or codes):
                     if own and _tok_match(own, mtoks):
                         mine += 1
