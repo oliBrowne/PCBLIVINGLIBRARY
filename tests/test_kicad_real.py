@@ -424,8 +424,9 @@ def test_reference_text_clears_silk_past_the_courtyard():
         y = float(sexpr.first(ref, "at")[2])
         silk = max(abs(float(sexpr.first(g, k)[2])) for g in sexpr.find(t, "fp_line") if sexpr.first(g, "layer")[1] == "F.SilkS" for k in ("start", "end"))
         assert abs(y) - 0.5 - 0.075 >= silk + F.SILK_W / 2, (dens, y, silk)
-    t = sexpr.parse(F.build(json.loads(B.spec_path("SOT-23").read_text()))[0])     # density B keeps KiCad's spot
-    assert sexpr.first(next(g for g in sexpr.find(t, "fp_text") if g[1] == "reference"), "at")[1:3] == ["0", "-2.4"]
+    t = sexpr.parse(F.build(json.loads(B.spec_path("SOT-23").read_text()))[0])     # density B: KiCad's spot (-2.4) sat on
+    y = float(sexpr.first(next(g for g in sexpr.find(t, "fp_text") if g[1] == "reference"), "at")[2])   # the pin-1 triangle
+    assert -2.6 < y < -2.4, y                                    # (top -1.90): just clear of it, not moved further
 
 
 def test_bench_numbers_take_a_drill_offset():

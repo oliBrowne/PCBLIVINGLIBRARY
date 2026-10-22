@@ -547,6 +547,7 @@ def build(spec, density=None):
 
     if silk_y + SILK_W / 2 > cy:                                      # silk outline past the courtyard (density C):
         out[5] = text("reference", "REF**", 0, -round(silk_y + SILK_W / 2 + 0.7, 4), "F.SilkS")  # keep REF** off it
+    clear_reference(out)                                              # and off the pin-1 triangle
     out.append(rect(-cx, -cy, cx, cy, "F.CrtYd", CRT_W))
     out += [pad(*p) for p in pads] + ep_lines
     if spec.get("model_3d"):
@@ -575,6 +576,38 @@ def altium_footprint(spec, density=None):
     from . import altium_lib as AL
     fp, rep = AL.footprint_from_spec(spec, density)
     return fp, rep.get("altium_notes", [])
+
+
+_XY = re.compile(r"\((?:start|end|xy) (-?[\d.]+) (-?[\d.]+)\)")
+_W = re.compile(r"\(stroke \(width ([\d.]+)\)")
+
+
+def clear_reference(out, gap=0.05):
+    """Move the F.SilkS Reference (REF**) up when it would sit on silkscreen: the pin-1 triangle stands above pad 1
+    and can reach past the courtyard on small parts (SC-70, 2 x 2 mm DFN); KiCad's DRC calls that silk_overlap.
+    out: the footprint's lines (in place). Only F.SilkS lines, polygons and rectangles in the text's x range count."""
+    k = next((i for i, l in enumerate(out) if l.lstrip().startswith("(fp_text reference")), None)
+    if k is None:
+        return out
+    m = re.search(r"\(at (-?[\d.]+) (-?[\d.]+)", out[k])
+    sz = re.search(r"\(size ([\d.]+) ([\d.]+)\)", out[k])
+    x, y, h = float(m.group(1)), float(m.group(2)), float(sz.group(2)) if sz else 1.0
+    th = re.search(r"\(thickness ([\d.]+)\)", out[k])
+    h += float(th.group(1)) if th else 0.15                  # KiCad's DRC box takes in the stroke (ST_UQFN-6L flagged
+    half_w = 0.6 * h * len("REF**") / 2                      # KiCad stroke font: about 0.6 x the height per character
+    top = None
+    for l in out:
+        if '"F.SilkS"' not in l or "fp_text" in l:
+            continue
+        w = float((_W.search(l) or [0, 0.12])[1]) / 2
+        pts = [(float(a), float(b)) for a, b in _XY.findall(l)]
+        if pts and min(a for a, _ in pts) - w < x + half_w and max(a for a, _ in pts) + w > x - half_w:
+            t = min(b for _, b in pts) - w
+            top = t if top is None else min(top, t)
+    # at 0.025 mm); KiCad's own SOT-23 puts REF** on its pin-1 triangle, so that one moves 0.13 mm up too
+    if top is not None and y + h / 2 > top + 1e-6:
+        out[k] = re.sub(r"\(at (-?[\d.]+) (-?[\d.]+)", f"(at {n(x)} {n(round(top - gap - h / 2, 4))}", out[k], count=1)
+    return out
 
 
 def pin1_triangle(x, y):

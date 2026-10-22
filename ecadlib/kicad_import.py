@@ -754,16 +754,31 @@ def _convert_symbol(chain, name=None, footprint=None, extra=(), pin_map=None, no
     if nm > 1:
         notes.append(f"De Morgan body style written as Altium display mode 1 ({nm} display modes)")
     norm = [pr for pr, m in zip(prims, modes) if not m]                 # labels placed from the normal view
-    xs = [v for pr in norm if pr[0] != "pin" for v in _prim_xs(pr)[0]] + [pr[3] for pr in norm if pr[0] == "pin"]
-    ys = [v for pr in norm if pr[0] != "pin" for v in _prim_xs(pr)[1]] + [pr[4] for pr in norm if pr[0] == "pin"]
+    ends = [_pin_end(pr) for pr in norm if pr[0] == "pin"]             # the pins' outer ends: a label under the body
+    xs = [v for pr in norm if pr[0] != "pin" for v in _prim_xs(pr)[0]] + [pr[3] for pr in norm if pr[0] == "pin"] + \
+        [e[0] for e in ends]                                            # would sit on a bottom (GND) pin
+    ys = [v for pr in norm if pr[0] != "pin" for v in _prim_xs(pr)[1]] + [pr[4] for pr in norm if pr[0] == "pin"] + \
+        [e[1] for e in ends]
     left, top, bot = min(xs or [0]), max(ys or [0]), min(ys or [0])
+    label_at = ((left, top + 3), (left, bot - 8))
+    pins = [pr for pr in norm if pr[0] == "pin"]
+    body = [v for pr in norm if pr[0] != "pin" for v in _prim_xs(pr)[0]]
+    if 0 < len(pins) <= 2 and body and all(pr[2] in ("top", "bottom") for pr in pins):
+        right = max(body + [pr[3] for pr in pins])                     # vertical R / C / L: beside the body, as KiCad's
+        label_at = ((right + 2, 1), (right + 2, -9))                    # Device:R, clear of the pin line
     ref = props.get("Reference", "U")
     keep = [("KiCad Footprint" if k == "Footprint" else k, props.get(k, "")) for k in ("Value", "Footprint", "Datasheet", "Description", "MPN")]
     params = [(k, v) for k, v in keep + list(extra) if v and v != "~"]
     params = list({k: (k, v) for k, v in params}.values())         # extra overrides
     return {"name": name or chain[0][1], "description": props.get("Description", ""), "designator": ref if ref.endswith("?") else ref + "?",
             "comment": "*", "footprint": footprint or (props.get("Footprint", "").split(":")[-1] or None), "prims": prims,
-            "prim_parts": parts, "parts": n, "prim_modes": modes, "modes": nm, "params": params, "label_at": ((left, top + 3), (left, bot - 8))}
+            "prim_parts": parts, "parts": n, "prim_modes": modes, "modes": nm, "params": params, "label_at": label_at}
+
+
+def _pin_end(pr):
+    """A pin prim's outer end (x, y): ("pin", p, side, x, y, length, ...) is drawn from (x, y) away from the body."""
+    _, _, side, x, y, L = pr[:6]
+    return {"left": (x - L, y), "right": (x + L, y), "top": (x, y + L), "bottom": (x, y - L)}.get(side, (x, y))
 
 
 def _prim_xs(pr):

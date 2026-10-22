@@ -95,12 +95,13 @@ def _num(v):
     return f"{round(float(v), 4) + 0:g}"
 
 
-def _effects(hide=False, size=1.27):
-    return ["effects", ["font", ["size", _num(size), _num(size)]]] + (["hide"] if hide else [])
+def _effects(hide=False, size=1.27, justify=()):
+    return ["effects", ["font", ["size", _num(size), _num(size)]]] + ([["justify", *justify]] if justify else []) + \
+        (["hide"] if hide else [])
 
 
-def _prop(name, value, hide=True, at=(0, 0, 0)):
-    return ["property", Q(name), Q(value), ["at", *map(_num, at)], _effects(hide)]
+def _prop(name, value, hide=True, at=(0, 0, 0), justify=()):
+    return ["property", Q(name), Q(value), ["at", *map(_num, at)], _effects(hide, justify=justify)]
 
 
 # ---------------------------------------------------------------- KiCad 9/10 syntax -> KiCad 8
@@ -374,7 +375,9 @@ def symbol_from_schlib(path, name, notes, pick=None):
         sym.append(["pin_numbers", "hide"])
     sym.append(["pin_names", ["offset", "1.016"]] + (["hide"] if show and not any(p["conglomerate"] & 0x08 for p in show) else []))
     sym += [["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"]]
-    sym += [_prop("Reference", ref, False, (*ref_at, 0)), _prop("Value", name, False, (*value_at, 0)), _prop("Footprint", ""),
+    # an Altium parameter's location is its bottom-left corner (no JUSTIFICATION record), so the KiCad text is too
+    bl = ("left", "bottom")
+    sym += [_prop("Reference", ref, False, (*ref_at, 0), bl), _prop("Value", name, False, (*value_at, 0), bl), _prop("Footprint", ""),
             _prop("Datasheet", ""), _prop("Description", comp.get("COMPONENTDESCRIPTION", ""))]
     sym += [_prop(k, val) for k, val in params if k not in ("Value", "Footprint", "Datasheet", "Description", "Reference", "KiCad Footprint")]
     for (u, st), items in sorted(units.items()):

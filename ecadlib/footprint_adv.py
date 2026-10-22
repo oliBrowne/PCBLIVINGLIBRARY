@@ -455,7 +455,8 @@ def table_layout(spec):
         for k in ("mask_margin", "paste_margin"):
             if p.get(k) is not None:
                 q[k] = _r4(p[k] * f)
-        q["paste"] = p.get("paste", "none" if kind != "smd" else "full")
+        q["paste"] = p.get("paste") or ("none" if kind != "smd" else "full")
+        q["_paste_default"] = not p.get("paste")
         for k in ("paste_coverage", "paste_grid", "thermal_vias"):
             if p.get(k) is not None:
                 q[k] = p[k]
@@ -925,8 +926,33 @@ def _emit(spec, pads, body, rep, excess, extra_rects=(), keepouts=(), corner_mar
                    f' (keepout {ko}) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts {pts})))')
     if spec.get("model_3d"):
         out.append(f'  (model {_q(spec["model_3d"])} (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))')
+    F.clear_reference(out)                                 # REF** off the pin-1 mark (KiCad DRC silk_overlap)
     out.append(")")
     return "\n".join(out) + "\n"
+
+
+THERMAL_SIDE = 2.5            # mm: an SMD pad at least this wide both ways is a tab / thermal pad (DPAK, D2PAK, PowerPAK)
+THERMAL_AREA = 2.5            # an exposed pad: the biggest pad, among the others, this many times the next one's area
+
+
+def _thermal(p, pads):
+    """True for a big SMD pad whose paste should be split into windows (KLC F6.3, IPC-7525: 50-80 % on thermal pads):
+    a tab / thermal pad at least THERMAL_SIDE mm both ways, or an exposed pad (the biggest SMD pad, THERMAL_AREA times
+    the next, with its centre among the other pads, as on QFN / DFN / SOIC-EP). A SOT-223 tab (2.15 mm) keeps full
+    paste, as KiCad's."""
+    if p["kind"] != "smd" or p.get("role") in ("mount", "mp", "shield"):
+        return False
+    x1, y1, x2, y2 = pad_bbox(p)
+    if min(x2 - x1, y2 - y1) >= THERMAL_SIDE - 1e-9:
+        return True
+    smd = [q for q in pads if q["kind"] == "smd" and q is not p and q.get("num")]
+    if len(smd) < 2:
+        return False
+    area = lambda q: (lambda b: (b[2] - b[0]) * (b[3] - b[1]))(pad_bbox(q))
+    if area(p) < THERMAL_AREA * max(area(q) for q in smd) or min(x2 - x1, y2 - y1) < 1.0:
+        return False
+    xs, ys = [q["x"] for q in smd], [q["y"] for q in smd]
+    return min(xs) < p["x"] < max(xs) and min(ys) < p["y"] < max(ys)
 
 
 def _finish_pads(pads, notes=None):
@@ -937,6 +963,11 @@ def _finish_pads(pads, notes=None):
             d, ax, ay = _interior_point(p["poly"])
             p["anchor"] = (_r4(ax), _r4(ay), round(max(0.05, min(1.6 * d, 1.0)), 3))
             p["x"], p["y"] = _r4(ax), _r4(ay)
+    for p in pads:
+        if p.pop("_paste_default", False) and p.get("paste") == "full" and _thermal(p, pads):
+            p["paste"] = "grid"
+            if notes is not None:
+                notes.append(f"pad {p.get('num')}: thermal pad, paste split into windows (65 % of the copper, KLC F6.3)")
         if p["kind"] == "smd" and p.get("paste") == "grid":
             wins, g = _paste_windows(p, p.get("paste_coverage", 0.65), p.get("paste_grid"))
             p["windows"] = wins
