@@ -1,6 +1,8 @@
 """The package drawings the page picker still missed on the 46 hand-labelled family datasheets (2026-10-22, PR #164's
 free re-score). Each test is a general rule, shown on the kind of datasheet that exposed it. The page texts are
 SYNTHETIC, laid out like the makers' pages, not copies."""
+import re
+
 from ecadlib import ds_route as R
 
 FILL = "Electrical characteristics VDD supply current typical conditions"
@@ -53,7 +55,7 @@ def test_ti_dsbga_size_box_is_a_drawing():
 # ---------------------------------------------------------------- whose package a page is about
 def test_a_package_code_in_the_family_name_is_not_a_package_code():
     # STULPI01A: "ULPI" is the family's name, so every ULPI page counted as this package's
-    toks, codes = R.ordering_codes(["Order code STULPI01A uTFBGA36 tape and reel"], "STULPI01A")
+    toks, codes = R.ordering_codes(["Order code STULPI01A ULPI uTFBGA36 tape and reel"], "STULPI01A")
     assert "ULPI" not in codes and toks == {"BGA36"}, (toks, codes)
     toks, codes = R.ordering_codes(["BQ771800DPJR ACTIVE WSON DPJ 8 3000"], "BQ771800DPJR")   # after the digits it still is
     assert "DPJ" in codes
@@ -109,7 +111,8 @@ def test_an_adi_drawing_sharing_its_page_with_the_ordering_guide_is_a_drawing():
            "ORDERING GUIDE\nModel Temperature Range Package Description Package Option\nADAU1702JSTZ 0C to +70C "
            "48-Lead LQFP ST-48\nADAU1702JSTZ-RL 0C to +70C 48-Lead LQFP in 13\" Tape and Reel ST-48")
     texts = _pages(52, p51=p52, p41="Register map pin control bits pin configuration", p1="Pin configuration LQFP-48 top view")
-    assert R.page_scores(texts, "ADAU1702JSTZ", "LQFP-48")[0][51]["drawing"] > 0
+    row = R.page_scores(texts, "ADAU1702JSTZ", "LQFP-48")[0][51]
+    assert not row["noise"] and row["drawing"] >= 6, row             # not divided as a tape-and-reel page
     pages, why = R.pick_pages(texts, 6, "ADAU1702JSTZ", "LQFP-48")
     assert 52 in pages and "drawing" in why[52], (pages, why)
     # a page that is about tape and reel still counts as one
@@ -146,9 +149,12 @@ def test_a_tape_and_reel_outline_after_the_drawing_is_not_its_continuation():
     texts = _pages(45, p6="Table 2. Pinout and bump description pin name pin number uTFBGA36 top view",
                    p7="Table 2. Pinout and bump description (continued) pin name pin number",
                    p39="uTFBGA36 package outline mechanical data min max A1 D1 E1 mm",
-                   p40="Figure 14. Tape and reel uTFBGA36 package outline / 1. Drawing not to scale.")
+                   p40="0.30 0.20 4.00 2.00 8.00 1.75 3.50 Ø1.55 Ø0.50 " * 8 +   # the callouts come first
+                   "\nFigure 14. Tape and reel uTFBGA36 package outline / 1. Drawing not to scale.")
     pages, why = R.pick_pages(texts, 6, "STULPI01A", "uTFBGA-36")
-    assert 40 in pages and 8 in pages and "drawing (continued)" not in why.get(41, []), (pages, why)
+    assert 40 in pages and 8 in pages and "drawing" not in why.get(41, []) and \
+        "drawing (continued)" not in why.get(41, []), (pages, why)
+    assert R.page_scores(texts, "STULPI01A", "uTFBGA-36")[0][40]["noise"]
 
 
 def test_rohm_image_drawing_under_the_running_header_and_footer():
@@ -187,6 +193,32 @@ def test_a_spelled_out_ball_grid_array_heading_names_its_pin_count():
             "Figure 7-6. 144-Pin Micro FineLine BGA Package Outline TOP VIEW\n256-Pin Micro FineLine Ball-Grid Array (MBGA)")
     rows = R.page_scores(_pages(130, p116=p117), "EPM1270M256C5", "FBGA-256")[0]
     assert rows[116]["own"] and not rows[116]["other"], rows[116]
+
+
+def test_review_cases_that_must_keep_working():
+    # independent review of this change, 2026-10-22: each of these broke in a draft of it
+    # a SOT-23-5's own TI drawing (DBV0005A): SOT23's 23 is its name, not a pin count, so it is not "another package"
+    texts = _pages(25, p20="PACKAGE OUTLINE DBV0005A SOT-23 min max A1 D1 E1 mm")
+    rows = R.page_scores(texts, None, "SOT-23-5")[0]
+    assert rows[20]["own"] and not rows[20]["other"], rows[20]
+    assert 21 in R.pick_pages(texts, 6, None, "SOT-23-5")[0]
+    # a maker's name for the same small outline (Diodes' SOT25 for SOT-23-5, TI's SC70 for SOT-353) is kept
+    assert R._agree({"SOT23"}, {"SOT25"}) == {"SOT25"} and R._agree({"SOT353"}, {"SC70"}) == {"SC70"}
+    assert R._agree({"TO252"}, {"TO220"}) == set() and R._agree({"BGA36"}, {"CSP36"}) == {"CSP36"}
+    # µ-prefixed names
+    for name, tok in (("\u00b5DFN-8", "SON8"), ("\u00b5BGA-48", "BGA48"), ("\u00b5SOIC-8", "SO8"), ("\u00b5CSP-9", "CSP9"),
+                      ("8-Lead \u00b5DFN", "SON8")):
+        assert R.package_tokens(name) == {tok}, name
+    # words between a count and a family are package words only, on one line
+    for txt in ("2 pins tied together VQFN", "3 balls SPACING BGA", "8 PINS MAXIMUM SOIC", "16 PIN\nNUMBER TSSOP"):
+        assert not any(re.search(r"\d", t) for t in R.package_tokens(txt)), txt
+    # Intel/Altera keys where the digits after the package letter are the body size (F17 = 17 mm), not a pin count
+    texts = ["Cyclone IV E ordering EP4CE22F17C8N EP4CE22E22C8N EP4CE22U14C8N", "Package type F = FineLine BGA",
+             "256-Pin FineLine BGA package outline"]
+    assert R.ordering_key(texts, "EP4CE22F17C8N")[0] == {"BGA"}
+    # a short marking or application page that names the package is not an image drawing
+    for p in ("Package Marking\nSOT-23-5\nXXXX = Device code", "Typical application circuit, SOT-23-5 package\nVIN VOUT"):
+        assert R.page_scores(_pages(10, p8=p), None, "SOT-23-5")[0][8]["drawing"] == 0, p
 
 
 if __name__ == "__main__":
