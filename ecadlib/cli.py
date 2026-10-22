@@ -168,6 +168,8 @@ def _quiet_stdout():
 
 
 def main(argv=None):
+    from . import term
+    flags, argv0 = (term.VERBOSITY, term.JSON), sys.argv     # -q / -v / --json and sys.argv are this call's: an in-process
     try:
         code = _main(argv)
         sys.stdout.flush()                                   # a closed pipe shows up here for buffered output
@@ -176,6 +178,8 @@ def main(argv=None):
         if not _pipe_gone(e):
             raise
         return _quiet_stdout()
+    finally:                                                 # caller (a test, an embedding app) keeps its own
+        (term.VERBOSITY, term.JSON), sys.argv = flags, argv0
 
 
 def _main(argv=None):

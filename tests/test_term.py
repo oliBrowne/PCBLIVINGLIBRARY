@@ -130,6 +130,25 @@ def test_style_only_on_a_terminal_and_never_with_no_color_ci_or_json():
         TM.JSON = False
 
 
+def test_a_json_or_quiet_cli_call_leaves_the_next_callers_styling_alone():
+    # cli.main called in-process (tests, an embedding app) once left term.JSON / VERBOSITY set, so whatever ran next in
+    # that Python lost its colour (test_style_only_on_a_terminal... failed when it shared a pytest-xdist worker)
+    with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        old, argv0 = os.getcwd(), sys.argv[0]
+        try:
+            os.chdir(d)
+            for argv in (["rules", "check", "--json"], ["rules", "check", "-q"], ["rules", "check", "-v"]):
+                try:
+                    cli.main(argv)
+                except SystemExit:                     # rules check takes no --json: argparse refuses it, the flag was still seen
+                    pass
+                assert (TM.JSON, TM.VERBOSITY, sys.argv[0]) == (False, 0, argv0), argv
+        finally:
+            os.chdir(old)
+    with env():
+        assert TM.wants_style(TTY())
+
+
 def test_quiet_verbose_flags_are_stripped_everywhere_but_after_double_dash():
     try:
         assert TM.set_from_argv(["plan.json", "-q", "--allow", "X"]) == ["plan.json", "--allow", "X"] and TM.VERBOSITY == -1
