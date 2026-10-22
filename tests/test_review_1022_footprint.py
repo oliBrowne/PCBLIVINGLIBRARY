@@ -99,6 +99,15 @@ def test_a_no_lead_land_narrower_than_the_lead_is_not_the_makers_land():
     assert not S.maker_land(B.numbers(F.build(far)[0]), far)["followed"]
 
 
+
+def test_a_dfn_read_with_only_pins_left_right_has_no_top_bottom_row_to_check():
+    # (Greptile on #160) rows() gives 0 top / bottom pins for 8 pins, 4 a side: no top / bottom row may fail the land
+    spec = {k: v for k, v in DFN8.items() if k != "pins_top_bottom"}
+    spec = dict(spec, name="WDFN-8_2x3mm_P0.5mm", body_width={"nom": 3.0})
+    assert F.rows(spec) == (4, 0)
+    ml = S.maker_land(B.numbers(F.build(spec)[0]), spec)
+    assert ml["followed"] and not ml.get("implausible"), ml
+
 def test_a_single_column_with_pin_1_at_the_bottom_is_turned_pin_1_up():
     spec = {"name": "PinHeader_1x04_P2.54mm_Vertical", "package_type": "connector", "pin_count": 4, "pitch": 2.54,
             "pad_table": {"unit": "mm", "y_axis": "down", "view": "top", "origin": "pin1", "footprint_origin": "pin1",

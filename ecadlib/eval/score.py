@@ -226,6 +226,16 @@ def ep_numbers(num):
     return [p[0] for p in pads if p[3] * p[4] > big]
 
 
+def _top_bottom(spec):
+    """The top / bottom pins as the builder lays them out (footprint_gen.rows: 0 for a DFN read with only
+    pins_left_right), or 1 (checked) when the read's pin count can't say."""
+    from .. import footprint_gen as F
+    try:
+        return F.rows(spec)[1]
+    except (KeyError, TypeError):
+        return spec.get("pins_top_bottom", 1)
+
+
 def maker_land(mine, spec, tol=None):
     """Does our footprint use the datasheet's recommended land (spec["land"]: pad_length x pad_width at +-pad_center,
     the maker's example board layout) rather than an IPC-7351B land worked out from the package dimensions? KiCad
@@ -267,7 +277,7 @@ def maker_land(mine, spec, tol=None):
     covers = lambda l, w, c, s=span: c + l / 2 >= min(s) / 2 - t["pos"] and c - l / 2 <= max(s) / 2 - min(T) + t["pos"] \
         and w >= min(b) - 1e-9
     l1 = land.get("pin1_length") or pl                # a pin 1 of its own size must solder its lead too
-    tb = quad and spec.get("pins_top_bottom", 1) and span_y   # top / bottom rows (a DFN has none)
+    tb = quad and _top_bottom(spec) and span_y        # top / bottom rows (a DFN has none)
     sane = not (span and T and b) or (covers(pl, pw, pc) and covers(l1, land.get("pin1_width") or pw, pc + (pl - l1) / 2)
                                       and (not tb or covers(pl, pw, pcy, span_y)))
     # the maker's thermal land, when the land gives one: centred on the pads, ep_across running across the pad rows

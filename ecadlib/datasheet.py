@@ -2592,13 +2592,14 @@ class PdfStore:
             if wait > 0:
                 time.sleep(wait)
             h._last[host] = time.time()
-        get = sess.get if sess is not None else requests.get
+        get, r = sess.get if sess is not None else requests.get, None
         try:
             r = get(url, timeout=60, allow_redirects=True, stream=True,
-                    headers={"Accept": "application/pdf,*/*;q=0.8"})
+                    headers={"Accept": "application/pdf,*/*;q=0.8"}, **redirect_hooks())
             data = read_capped(r)
-        except DatasheetError as e:                   # too slow: not a broken link, so the URL can still go to the API
-            r.close()
+        except DatasheetError as e:                   # too slow (the URL can still go to the API), or a redirect refused
+            if r is not None:
+                r.close()
             return 0, None, "", url, str(e)
         except (requests.RequestException, requests.packages.urllib3.exceptions.HTTPError) as e:   # the body cut off
             from .pdf_fetch import _err
@@ -2640,8 +2641,12 @@ class PdfStore:
             raise DatasheetError(f"{url}: not downloaded ({why})")
         if self.offline:
             raise DatasheetError(f"{url}: offline and not downloaded before")
-        n = len(self.refusals)
-        status, data, ctype, final, err, way, notes, *more = self._download(url, part, handoff)
+        n, was = len(self.refusals), public_only()
+        _PUBLIC.on = public                           # every way checks each redirect of a web search's link
+        try:
+            status, data, ctype, final, err, way, notes, *more = self._download(url, part, handoff)
+        finally:
+            _PUBLIC.on = was
         if len(self.refusals) > n:                    # for the hand-off later: where the link came from
             self.refusals[n:] = [(url, where, _page)]
         also = f" (also tried {'; '.join(notes)})" if notes else ""
@@ -2680,6 +2685,36 @@ class PdfStore:
         write_bytes_atomic(pdf_f, data)
         write_text_atomic(meta_f, json.dumps(meta, indent=2))
         return data, dict(meta, from_cache=False)
+
+
+_PUBLIC = __import__("threading").local()             # .on: this thread downloads a web search's link (PdfStore._fetch)
+
+
+def public_only():
+    """Is this thread downloading a web search's link? Then every redirect it follows must be public too."""
+    return getattr(_PUBLIC, "on", False)
+
+
+def redirect_refused(base, location):
+    """Why a redirect from base to location must not be followed for a web search's link, or None."""
+    from urllib.parse import urljoin
+    nxt = urljoin(base, location or "")
+    why = unsafe_download(nxt, public=True)
+    return f"redirected to {nxt}, not followed ({why})" if why else None
+
+
+def redirect_hooks():
+    """requests hooks for a web search's link: a redirect to an address unsafe_download(public=True) refuses stops
+    before it is requested (the response hook runs on each hop, before requests follows it). {} for any other link."""
+    if not public_only():
+        return {}
+
+    def check(r, **_):
+        why = r.is_redirect and redirect_refused(r.url, r.headers.get("location"))
+        if why:
+            r.close()
+            raise DatasheetError(why)
+    return {"hooks": {"response": [check]}}
 
 
 # Document-download links that do not end .pdf (followed only when nothing on the page does; fetch keeps the answer only

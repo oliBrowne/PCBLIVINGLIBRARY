@@ -88,10 +88,11 @@ def _err(e):
 
 # ---------------------------------------------------------------- headers: plain requests, a browser's headers
 def headers_get(url, session=None, timeout=60):
-    from .datasheet import read_capped, DatasheetError
+    from .datasheet import read_capped, DatasheetError, redirect_hooks
     s = session or requests.Session()
     try:
-        r = s.get(url, timeout=timeout, allow_redirects=True, stream=True, headers=dict(BROWSER_HEADERS, Referer=origin(url)))
+        r = s.get(url, timeout=timeout, allow_redirects=True, stream=True, headers=dict(BROWSER_HEADERS, Referer=origin(url)),
+                  **redirect_hooks())
         try:
             data = read_capped(r)
         finally:
@@ -123,7 +124,7 @@ class Impersonate:
             return self._get(url)
 
     def _get(self, url):
-        from .datasheet import MAX_DOWNLOAD, DOWNLOAD_S
+        from .datasheet import MAX_DOWNLOAD, DOWNLOAD_S, public_only, redirect_refused
         try:
             from curl_cffi import requests as cr
         except Exception as e:
@@ -131,7 +132,19 @@ class Impersonate:
         if self._s is None:
             self._s = cr.Session(impersonate="chrome")
         try:
-            r = self._s.get(url, timeout=self.timeout, allow_redirects=True, stream=True, headers={"Referer": origin(url)})
+            at, public = url, public_only()           # a web search's link: each redirect checked before it is followed
+            for _ in range(10):
+                r = self._s.get(at, timeout=self.timeout, allow_redirects=not public, stream=True,
+                                headers={"Referer": origin(at)})
+                where = public and 300 <= r.status_code < 400 and r.headers.get("location")
+                if not where:
+                    break
+                r.close()
+                why = redirect_refused(at, where)
+                if why:
+                    return 0, None, "", url, why
+                from urllib.parse import urljoin
+                at = urljoin(at, where)
             buf, t0 = bytearray(), time.monotonic()
             try:
                 for chunk in r.iter_content():
@@ -239,7 +252,7 @@ class _State:
 
     def __init__(self):
         self.pw = self.browser = self.ctx = self.why = self.engine = self.pid = None
-        self.warm = set()
+        self.warm, self.public = set(), getattr(self, "public", False)   # (kept when a dead browser is started again)
 
 
 class Browser:
@@ -318,7 +331,8 @@ class Browser:
                                           viewport={"width": 1366, "height": 768})
             if not self.allow_local:
                 from . import datasheet as D
-                s.ctx.route("**/*", lambda route: route.abort() if D.unsafe_download(route.request.url) else route.continue_())
+                s.ctx.route("**/*", lambda route: route.abort() if D.unsafe_download(route.request.url, s.public)
+                            else route.continue_())
         except Exception as e:                        # the driver cannot run (a broken install, a frozen build)
             self._close(s)
             s.why = f"could not start a browser ({type(e).__name__}: {str(e).splitlines()[0][:120] if str(e) else ''})"
@@ -483,11 +497,13 @@ class Browser:
 
     # -- from any thread
     def get(self, url):
+        from .datasheet import public_only
         limit = self.limit
         with self._lock:                              # one page at a time
             if self._worker is None:                  # closed: open again
                 self._worker, self._s = _Worker(), _State()
             s = self._s
+            s.public = public_only()                  # (the worker thread's route check: a web search's link)
             try:
                 return self._worker.call(lambda: self._get(url, s), limit)
             except concurrent.futures.TimeoutError:   # stuck (a site that stopped sending): a new worker and browser

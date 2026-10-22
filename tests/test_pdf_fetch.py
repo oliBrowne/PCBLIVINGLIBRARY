@@ -961,7 +961,7 @@ def test_the_whole_chain_against_the_local_site(tmp_path, monkeypatch):
     if b is None:
         return
     srv, base = site()
-    monkeypatch.setattr(D, "unsafe_download", lambda url: None)
+    monkeypatch.setattr(D, "unsafe_download", lambda url, public=False: None)
     try:
         st = D.PdfStore(tmp_path, None, download="auto", sleep=lambda s: None)
         st.fns["browser"] = lambda url, part: b.get(url)            # this test's browser, not the shared one

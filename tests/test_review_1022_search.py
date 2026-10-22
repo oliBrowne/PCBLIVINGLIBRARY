@@ -251,3 +251,70 @@ def test_part_arg_is_safe_to_paste_into_a_shell():
         assert shlex.split(q) == [s.strip()], (s, q)
         assert "$(" not in q or q.startswith("'"), q
 
+
+
+# ---------------------------------------------------------------- Greptile on #160: redirects, --part quoting
+def _redirect_server(to):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    hits = []
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", to)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, hits
+
+
+@lite
+def test_a_search_links_redirect_to_a_private_address_is_never_requested(tmp_path, monkeypatch):
+    # the local test server stands for a public site (allowed here); the redirect goes to a private address
+    real = D.unsafe_download
+    monkeypatch.setattr(D, "unsafe_download", lambda url, public=False: None if "127.0.0.1" in url else real(url, public))
+    asked = []
+    monkeypatch.setattr(D, "_resolve", lambda host: asked.append(host) or [])
+    srv, hits = _redirect_server("http://10.255.255.1/secret.pdf")
+    try:
+        url = f"http://127.0.0.1:{srv.server_port}/ds.pdf"
+        st = D.PdfStore(tmp_path, None, offline=False)
+        try:
+            st.fetch(url, "web search", handoff=False, public=True)
+            assert False, "fetched"
+        except D.DatasheetError as e:
+            assert "not followed" in str(e) and "10.255.255.1" in str(e), e
+        assert hits == ["/ds.pdf"]
+    finally:
+        srv.shutdown()
+
+
+@lite
+def test_a_bom_links_redirect_to_your_own_network_is_still_followed(tmp_path, monkeypatch):
+    real = D.unsafe_download
+    monkeypatch.setattr(D, "unsafe_download", lambda url, public=False: None if "127.0.0.1" in url else real(url, public))
+    srv, hits = _redirect_server("/next.pdf")
+    try:
+        url = f"http://127.0.0.1:{srv.server_port}/ds.pdf"
+        assert D.redirect_hooks() == {}                                    # not a search's link: no check at all
+        st = D.PdfStore(tmp_path, None, offline=False)
+        try:
+            st.fetch(url, "BOM", handoff=False)
+        except D.DatasheetError as e:
+            assert "not followed" not in str(e), e
+        assert len(hits) > 1                                               # the redirect was followed
+    finally:
+        srv.shutdown()
+
+
+def test_a_single_quoted_part_reads_back_from_the_refused_line():
+    from ecadlib import messages as M
+    for part in ('A "B"', "it's $(x)", "LM317 `x`"):
+        arg = D.part_arg(part)
+        m = __import__("re").search(M._PART + "$", f"... and run again --part {arg}")
+        assert m and M.unquote_part(m.group("part")) == part, (part, arg, m and m.group("part"))
