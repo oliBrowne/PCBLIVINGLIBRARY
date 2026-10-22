@@ -221,6 +221,18 @@ def test_review_cases_that_must_keep_working():
         assert R.page_scores(_pages(10, p8=p), None, "SOT-23-5")[0][8]["drawing"] == 0, p
 
 
+def test_greptile_cases_on_pr_167():
+    # a same-count drawing number of another family stays another package (TSSOP-14's PW0014A for a SOIC-14)
+    rows = R.page_scores(_pages(20, p15="PACKAGE OUTLINE PW0014A TSSOP-14 min max A1 D1 E1 mm"), None, "SOIC-14")[0]
+    assert rows[15]["other"] and not rows[15]["own"], rows[15]
+    # only known aliases of one outline agree: SOT-223 is not a SOT-23, a SOT-23 is not a QFP-144
+    assert R._agree({"SOT23"}, {"SOT223"}) == set() and R._agree({"QFP144"}, {"SOT23"}) == set()
+    # a reel figure whose caption names the part is still a tape-and-reel page
+    assert R._noise("Figure 14. Tape and reel STULPI01A uTFBGA36 package outline", {"STULPI01A"})
+    assert R._noise("Packing: STULPI01ATR Tape and reel 3000 pcs", {"STULPI01A"})    # no ordering table on the page
+    assert not R._noise("ORDERING GUIDE\nADAU1702JSTZ-RL 48-Lead LQFP in 13\" Tape and Reel ST-48", {"ADAU1702JSTZ"})
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

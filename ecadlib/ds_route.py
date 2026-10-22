@@ -83,12 +83,16 @@ def _noise(t, vs=()):
     """A tape-and-reel / revision / notice page. "Tape and Reel" on a line that names this part is an ordering-guide
     row ("ADAU1702JSTZ-RL ... 48-Lead LQFP in 13" Tape and Reel"), not the subject of the page: ADAU1702 p52 holds
     the drawing above it."""
+    rows = None
     for m_ in NOISE.finditer(t):
         if m_.group(0).lower() != "tape and reel":
             return True
         ln = t[t.rfind("\n", 0, m_.start()) + 1:t.find("\n", m_.end()) % (len(t) + 1)]
-        if not any(v in re.sub(r"\s+", "", ln).upper() for v in vs):
-            return True
+        if rows is None:                              # an ordering table on the page ("ORDERING GUIDE")
+            rows = bool(CATS["ordering"].search(t))
+        if not rows or re.search(r"figure|outline|drawing|dimension", ln, re.I) or \
+                not any(v in re.sub(r"\s+", "", ln).upper() for v in vs):   # (a reel figure's caption may name
+            return True                               # the part too: "Figure 14. Tape and reel STULPI01A ...")
     return False
 
 
@@ -155,6 +159,11 @@ def _fam_n(t):
     return (t, "") if f in OUTLINE_FAMS else (f, t[len(f):])
 
 
+SAME_OUTLINE = [{"SOT23", "SOT25", "SOT26", "SOT753", "SOT457", "SC74", "SOT346", "SC59"},   # one body under the
+                {"SC70", "SC88", "SOT323", "SOT353", "SOT363"},                            # makers' names
+                {"SOT89", "SC62"}, {"SOT223", "SC73"}, {"SOT416", "SC75"}, {"SOT523", "SC89"}]
+
+
 def _agree(hint, toks, alt=()):
     """The ordering lines' packages for this part that agree with a hint naming one (family, and pin count where both give
     one): a PDF line that names another package (AUIPS6011R's TO220 next to its DPAK, 16550's "44-Pin PDIP" printed
@@ -166,10 +175,7 @@ def _agree(hint, toks, alt=()):
     def fits(f, n, hf, hn):
         if f == hf:
             return not n or not hn or n == hn or n in alt
-        if re.sub(r"\d+$", "", f) in OUTLINE_FAMS or re.sub(r"\d+$", "", hf) in OUTLINE_FAMS:   # SOT25 / SOT23-5,
-            # SC70 / SOT353, SOT89 / SC62: one body under
-            return not (f.startswith("TO") and hf.startswith("TO"))   # makers' names; TO-220, TO-252 never are
-        return {f, hf} == {"BGA", "CSP"}
+        return {f, hf} == {"BGA", "CSP"} or any(f in g and hf in g for g in SAME_OUTLINE)
     return {t for t in toks for f, n in [_fam_n(t)] if any(fits(f, n, hf, hn) for hf, hn in hs)}
 
 
@@ -651,7 +657,8 @@ def page_scores(texts, part=None, package=None, marks=None):
             elif mech:
                 s["own"], s["other"], s["solo"] = False, True, False
         elif dwg and own_counts and mech:             # no designator known: the drawing number's pin count (16550:
-            if any(v in own_counts for v in dwg.values()):   # N0040A is the DIP-40, FN0044A another package)
+            if any(v in own_counts for v in dwg.values()) and not s["other"]:   # N0040A is the DIP-40, FN0044A
+                # another package; a TSSOP-14 page's PW0014A stays another package for a SOIC-14)
                 s["own"], s["other"] = True, False
                 s["solo"] = s["solo"] and len(dwg) == 1
             else:
