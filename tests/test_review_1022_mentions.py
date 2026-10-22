@@ -62,6 +62,12 @@ POS = [
  ("MPU-6050", "MPU-6000 and MPU-6050 Product Specification Revision 3.4. InvenSense Inc."),
  ("ENS210-LQFM", "ENS210 Relative Humidity and Temperature Sensor with I2C Interface. Datasheet"),
  ("SI7021-A20-GM1R", "Si7021-A20 I2C HUMIDITY AND TEMPERATURE SENSOR. Features Precision Relative Humidity Sensor"),
+ ("TPS7A4701RGWR", "TPS7A47 36-V, 1-A, 4.17-uVRMS, RF Low-Dropout (LDO) Voltage Regulator. Device Information TPS7A47"),
+ ("TPS7A2033PDBVR", "TPS7A20 300-mA, Ultra-Low-Noise, Low-IQ, High-PSRR Low-Dropout (LDO) Linear Regulator"),
+ ("TPS7A0533PDBVR", "TPS7A05 1-uA Ultra-Low IQ, 200-mA, Low-Dropout Regulator in Small-Size Packages"),
+ ("ESP32-WROOM-32E-N4", "ESP32-WROOM-32E ESP32-WROOM-32UE Datasheet Version 1.7 2.4 GHz Wi-Fi + Bluetooth + Bluetooth LE module"),
+ ("ESP32-S3-WROOM-1-N16R8", "ESP32-S3-WROOM-1 ESP32-S3-WROOM-1U Datasheet Version 1.2 2.4 GHz Wi-Fi + Bluetooth LE module"),
+ ("ESP32-C6-WROOM-1-N8", "ESP32-C6-WROOM-1 ESP32-C6-WROOM-1U Datasheet Version 1.1 Wi-Fi 6 module"),
 ]
 NEG = [
  ("STM32F103C8T6", "STM32F030x4 STM32F030x6 STM32F030x8 STM32F030xC Value-line Arm-based 32-bit MCU"),
@@ -89,6 +95,9 @@ NEG = [
  ("ENS210-LQFM", "ENS160 Digital Metal-Oxide Multi-Gas Sensor. Datasheet"),
  ("NRF52832-QFAA-R", "nRF52840 Product Specification v1.7. Bluetooth 5, Thread, Zigbee SoC"),
  ("TJA1051T/3", "TJA1057 High-speed CAN transceiver Product data sheet"),
+ ("TPS7A2033PDBVR", "TPS7A02 Nanopower IQ, 25-nA, 200-mA, Low-Dropout Voltage Regulator"),
+ ("TPS7A4701RGWR", "TPS7A4501 Low-Noise Fast-Transient-Response 1.5-A Low-Dropout Voltage Regulators"),
+ ("ESP32-WROOM-32E-N4", "ESP32-WROVER-E ESP32-WROVER-IE Datasheet Version 1.8 module"),
 ]
 
 

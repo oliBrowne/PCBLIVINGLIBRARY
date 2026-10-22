@@ -1710,8 +1710,8 @@ def _depop_positions(spec, ext, review=None):
     Only when the name says places are empty (SOIC-14-16 gives the pin count, SOIC-8-N7 the empty place) and the
     table agrees: its numbers distinct, starting at 1 and ending at the last place, the read's pin_count (if any) the
     table's count, no tab or exposed pad (whose number would land on a place). A table that just leaves a pin out of
-    a full row (an NC pin 7 of a SOIC-8, review 2026-10-22; TLP2361's SO-6 looked the same) is not taken as an empty
-    place: a review line holds it (the lead is there, its pad would be dropped)."""
+    a full row (an NC pin 7 of a SOIC-8, review 2026-10-22) is not taken as an empty place unless the read's pin_count
+    is the table's (TLP2361's SO-6: 5 pins): a review line holds it (the lead is there, its pad would be dropped)."""
     if spec.get("package_type") != "gullwing" or any(spec.get(k) for k in ("pin_positions", "tab", "exposed_pad", "pad_table")):
         return None
     e, name = spec.get("pitch"), str(spec.get("name") or "")
@@ -1733,7 +1733,7 @@ def _depop_positions(spec, ext, review=None):
     if not places or places % 2 or len(ints) >= places or ints[0] != 1 or ints[-1] != places or n not in (None, len(ints)):
         return None
     gone = sorted(set(range(1, places + 1)) - set(ints))
-    if not (m and int(m.group(2)) > int(m.group(1))) and said != gone:
+    if not (m and int(m.group(2)) > int(m.group(1))) and said != gone and n != len(ints):   # (n: the maker's count)
         if review is not None:
             review.append(f"symbol: the pin table leaves out pin(s) {', '.join(map(str, gone))} of the {places} places "
                           f"of {name}, which does not say they are empty places: the lead may be there (an NC pin left "
@@ -2278,7 +2278,7 @@ MENTION_PAGES = 5                                     # the first pages a datash
 
 def _numeric_core(main, key):
     """Where an MPN's part number ends and its ordering suffix starts (a length of key), or None (no digits): after its
-    first run of 3+ digits (STM32F103 of STM32F103C8T6, TPS7A4701 of TPS7A4701RGWR), else after its last digit run
+    first run of 3+ digits (STM32F103 of STM32F103C8T6; TPS7A47 of TPS7A4701RGWR, see below), else after its last digit run
     (SN74LVC1G08 of SN74LVC1G08DBVR, ESP32S3WROOM1), not counting a last -segment that starts with digits and goes on
     in letters (ATTINY85 of ATTINY85-20PU: speed and package). Digit runs are counted within -segments."""
     segs = [s for s in re.split(r"[^A-Z0-9]+", main) if s]
@@ -2291,7 +2291,12 @@ def _numeric_core(main, key):
         at += len(s)
     if not runs:
         return None
-    return next((end for n, end in runs if n >= 3), runs[-1][1])
+    i = next((i for i, (n, _) in enumerate(runs) if n >= 3), len(runs) - 1)
+    n, end = runs[i]
+    # a run of 4+ digits after an earlier digit run keeps only its first 2 (TPS7A47 of TPS7A4701, TPS7A20 of
+    # TPS7A2033: the last digits are a voltage / option code); a part's only or first run stays whole (LTC4060, never
+    # LTC40; MAX22205, never MAX222)
+    return end - (n - 2) if i and n >= 4 else end
 
 
 def mentions_part(texts, mpn):
@@ -2349,6 +2354,8 @@ def _resolve(host):
 def _private(ip):
     """A private network's address (10.x, 172.16/12, 192.168.x, CGNAT 100.64/10, fc00::/7 ...): not the internet's."""
     import ipaddress
+    if ip.version == 4 and ip in ipaddress.ip_network("198.18.0.0/15"):
+        return False                                  # (a fake-IP proxy, Clash / Surge: every name resolves there)
     return ip.is_private or (ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"))
 
 

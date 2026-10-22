@@ -124,8 +124,18 @@ def test_a_pin_table_missing_a_pin_is_not_taken_as_depopulated():
     review = []
     assert D._depop_positions(spec, ext, review) is None
     assert review and review[0].startswith("symbol:") and "7" in review[0], review
-    review = []
-    assert D._depop_positions(dict(spec, pin_count=7), ext, review) is None and review
+
+
+
+def test_a_read_pin_count_equal_to_the_table_says_the_place_is_empty():
+    # (second-pass review) the maker's own pin count (TLP2361's SO-6 has 5 pins, a Power Integrations SO-8C 7) is
+    # evidence of an empty place; with no pin count read, the part is held as above
+    so8 = {"name": "SOIC-8_3.9x4.9mm_P1.27mm", "package_type": "gullwing", "pitch": 1.27, "pin_count": 7}
+    pos, places, absent = D._depop_positions(so8, {"pins": [{"num": str(i)} for i in (1, 2, 3, 4, 5, 6, 8)]})
+    assert places == 8 and absent == [7] and len(pos) == 7
+    so6 = {"name": "SO-6_P1.27mm", "package_type": "gullwing", "pitch": 1.27, "pin_count": 5}
+    pos, places, absent = D._depop_positions(so6, {"pins": [{"num": str(i)} for i in (1, 3, 4, 5, 6)]})
+    assert places == 6 and absent == [2]
 
 
 def test_a_name_that_says_which_places_are_empty_is_depopulated():

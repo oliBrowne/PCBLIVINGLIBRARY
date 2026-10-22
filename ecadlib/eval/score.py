@@ -310,9 +310,10 @@ def only_maker_land(fields, ml, body=None):
     pads = fields.get("pads") or {}
     # a maker's land moves pads along their lead (pad_center), never into a neighbour's place: a pad off by half the
     # pitch or more along its row is on the wrong lead (AH1806-W 10-21: pads 2 and 3 swapped, 2.4 mm off, are not a
-    # land choice). Along the row only: at 0.4 mm pitch a land 0.25 mm further out is still the land
+    # land choice). Either way: along the row only would miss pads swapped across the rows (an SOIC-8's 2 and 7 sit
+    # at one y), and a fine-pitch land moved half the pitch out is then not counted (never a wrong part counted right)
     pitch, w = (fields.get("pitch") or {}).get("ref"), pads.get("worst") or {}
-    if w.get("row", w.get("pos", 0)) >= (pitch / 2 if pitch else 0.5):
+    if w.get("pos", 0) >= (pitch / 2 if pitch else 0.5):
         return False
     return set(pads.get("bad_pads") or []) <= set(ml["pads"]) | set(ml.get("ep_land") or [])
 

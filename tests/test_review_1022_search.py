@@ -171,6 +171,8 @@ def test_a_search_link_whose_name_resolves_privately_is_refused(tmp_path, monkey
     assert D.unsafe_download("http://10.0.0.5/x.pdf") is None            # a BOM link to your own network stays allowed
     assert D.unsafe_download("http://10.0.0.5/x.pdf", public=True)
     assert D.unsafe_download("http://localhost/x.pdf", public=True)
+    names["www.ti.com"] = ["198.18.0.7"]                                 # a fake-IP proxy's answer: not a private network
+    assert D.unsafe_download("https://www.ti.com/lit/ds/x.pdf", public=True) is None
     cl = Client(_answer(["https://intranet.maker.com/ds.pdf", FOUND]))
     rd = _reader(tmp_path, cl, web_search=True)
     job = rd.job("TESTPART", [(DEAD, "BOM")], "SOIC-8")

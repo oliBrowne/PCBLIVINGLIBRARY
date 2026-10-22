@@ -156,22 +156,30 @@ def test_tht_pads_are_held_back_by_the_nearest_pad_on_each_axis():
     assert any(c["level"] == "error" and "apart" in c["message"] for c in rep.get("checks", [])), rep.get("checks")
 
 
-def test_a_fine_pitch_maker_land_moved_along_its_leads_is_still_the_land():
-    # 0.4 mm pitch: a land 0.25 mm further out than KiCad's is off by more than pitch / 2 along the leads, not across
+def test_pads_swapped_across_the_rows_are_never_a_maker_land():
+    # (second-pass review) an SOIC-8's pads 2 and 7 sit at one y: an along-the-row check alone would call the swap a
+    # land choice. A wrong part is never counted right, so a fine-pitch land moved half the pitch out is not either
+    so8 = {"name": "SOIC-8_3.9x4.9mm_P1.27mm", "package_type": "gullwing", "pitch": 1.27, "pin_count": 8,
+           "body_length": {"min": 4.8, "max": 5.0}, "body_width": {"min": 3.8, "max": 4.0},
+           "lead_span": {"min": 5.8, "max": 6.2}, "terminal_length": {"min": 0.4, "max": 1.27},
+           "terminal_width": {"min": 0.31, "max": 0.51}, "height_max": 1.75,
+           "land": {"pad_length": 1.55, "pad_width": 0.6, "pad_center": 2.7}}
+    ref = B.numbers(F.build(dict(so8, land=None))[0])
+    mine = B.numbers(F.build(so8)[0])
+    ml = S.maker_land(mine, so8)
+    pos = {p[0]: p[1:3] for p in mine["pads"]}
+    swapped = dict(mine, pads=[[p[0], *pos[{"2": "7", "7": "2"}.get(p[0], p[0])], *p[3:]] for p in mine["pads"]])
+    f = S.score_footprint(swapped, ref)
+    assert f["pads"]["worst"]["row"] < 1e-6 and f["pads"]["worst"]["pos"] > 1
+    assert not S.only_maker_land(f, ml)
     q = {"name": "QFN-32_4x4mm_P0.4mm", "package_type": "qfn", "pitch": 0.4, "body_length": {"min": 3.9, "max": 4.1},
          "body_width": {"min": 3.9, "max": 4.1}, "terminal_length": {"min": 0.3, "max": 0.5},
          "terminal_width": {"min": 0.15, "max": 0.25}, "height_max": 0.8, "pin_count": 32}
-    ref = B.numbers(F.build(q)[0])
-    p1 = [p for p in ref["pads"] if p[0] == "1"][0]
+    qref = B.numbers(F.build(q)[0])
+    p1 = [p for p in qref["pads"] if p[0] == "1"][0]
     spec = dict(q, land={"pad_length": p1[3], "pad_width": p1[4], "pad_center": abs(p1[1]) + 0.25})
-    mine = B.numbers(F.build(spec)[0])
-    f, ml = S.score_footprint(mine, ref), S.maker_land(mine, spec)
-    assert f["pads"]["worst"]["pos"] >= 0.2 and f["pads"]["worst"]["row"] < 1e-6
-    assert S.only_maker_land(f, ml)
-    # a pad moved along its row by half the pitch is on the wrong lead
-    moved = dict(mine, pads=[[p[0], p[1], p[2] + 0.2, *p[3:]] if p[0] == "1" else p for p in mine["pads"]])
-    f = S.score_footprint(moved, ref)
-    assert f["pads"]["worst"]["row"] >= 0.2 and not S.only_maker_land(f, ml)
+    qmine = B.numbers(F.build(spec)[0])
+    assert not S.only_maker_land(S.score_footprint(qmine, qref), S.maker_land(qmine, spec))
 
 
 def test_the_hand_downloaded_line_counts_right_as_the_headline_does():
