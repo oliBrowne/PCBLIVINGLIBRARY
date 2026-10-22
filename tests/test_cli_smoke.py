@@ -212,9 +212,12 @@ def test_third_party_imports_are_declared():
     """A fresh `pip install ecadlib` gets only the declared dependencies: olefile was an extra, so the release check
     held every part ('symbol file does not read back: No module named olefile') and kicad-export wrote nothing."""
     import ast, re
-    pyproject = (HERE.parent / "pyproject.toml").read_text()
-    deps = re.search(r"^dependencies = \[(.*?)\]", pyproject, re.M | re.S).group(1)
-    declared = {re.split(r"[<>=!~ \[]", d.strip().strip('"'))[0].lower() for d in deps.split(",") if d.strip()}
+    try:
+        import tomllib
+    except ImportError:                              # Python 3.10
+        import tomli as tomllib
+    deps = tomllib.loads((HERE.parent / "pyproject.toml").read_text())["project"]["dependencies"]   # (a regex stopped at pypdf[crypto]'s "]")
+    declared = {re.split(r"[<>=!~ ;\[]", d.strip())[0].lower() for d in deps}
     used = {}
     for f in PKG.rglob("*.py"):
         if "assets" in f.relative_to(PKG).parts:     # runs inside KiCad's Python (pcbnew, wx), not ecadlib's

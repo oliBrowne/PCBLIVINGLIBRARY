@@ -11,9 +11,10 @@ license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "oliver browne" }]
 requires-python = ">=3.10"
-dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile", "pypdf", "tomli>=1.1; python_version < '3.11'"]   # olefile: the release check,
+dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile", "pypdf[crypto]", "tomli>=1.1; python_version < '3.11'"]   # olefile: the release check,
                                        # kicad-export, dedupe and project BOMs read .SchLib/.PcbLib/.SchDoc back;
-                                       # pypdf: the datasheet reader sends only the pages it needs (a 1976-page PDF fails whole)
+                                       # pypdf: the datasheet reader sends only the pages it needs (a 1976-page PDF fails whole);
+                                       # [crypto]: makers' AES-encrypted PDFs with no open password (AQY282GS) read as blank without it
 keywords = [
     "ecad", "pcb", "eda", "footprint", "ipc-7351", "kicad", "altium", "altium-365",
     "component-library", "bom", "datasheet", "mcp",
