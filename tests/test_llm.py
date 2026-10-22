@@ -73,9 +73,10 @@ def _claude_calls(rules):
 
 def test_claude_requests_are_byte_identical_to_before():
     """Frontier Claude with no [ai] table, an empty one, or [ai] spelling out the defaults: the same bytes as before."""
-    hd, b = D.build_request(("base64", TD.PDF), "TESTPART", "RGT", None, D.MODEL, "high", True, True)
+    pdf0 = b"%PDF-1.4\n% fake datasheet for tests\n"   # TD.PDF when the golden hashes were taken (it now ends %%EOF)
+    hd, b = D.build_request(("base64", pdf0), "TESTPART", "RGT", None, D.MODEL, "high", True, True)
     assert h([hd, b]) == GOLDEN["build_sync"]
-    hd, b = D.build_request(("base64", TD.PDF), "TESTPART", "RGT", None, D.MODEL, "high", False, False)
+    hd, b = D.build_request(("base64", pdf0), "TESTPART", "RGT", None, D.MODEL, "high", False, False)
     assert h([hd, b]) == GOLDEN["build_batch"]
     hd, b = D.build_request(("url", "https://example.com/x.pdf"), "TESTPART", None, (3, 4), "claude-haiku-4-5", "high", True, True)
     assert h([hd, b]) == GOLDEN["build_url_haiku"]

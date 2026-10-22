@@ -33,6 +33,7 @@ BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHT
 BROWSER_HEADERS = {"User-Agent": BROWSER_UA,
                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8",
                    "Accept-Language": "en-US,en;q=0.9", "Upgrade-Insecure-Requests": "1"}
+HEADERS_S = 20                                         # the headers way's wait when a stronger way follows it
 REFUSED_STATUS = {401, 403, 405, 406, 418, 429, 451, 503}
 # A dropped or reset connection or a timeout: bot managers (Akamai) often answer a script by never answering, or by
 # cutting its TLS handshake (Python's TLS looks like no browser's). A TLS or certificate error moves on too: Edge and
@@ -41,14 +42,22 @@ REFUSED_STATUS = {401, 403, 405, 406, 418, 429, 451, 503}
 # refusal (this machine's network), a name that does not resolve, a closed port and a host that never answers the
 # connection are the same for every way, so they never move on.
 _DROPPED = re.compile(r"ReadTimeout|Timeout|ConnectionError|ChunkedEncodingError|ProtocolError|IncompleteRead|"
-                      r"Connection reset|RemoteDisconnected|Connection aborted|too slow|SSLError|SSL:|CERTIFICATE_VERIFY", re.I)
+                      r"Connection reset|RemoteDisconnected|Connection aborted|too slow|SSLError|SSL:|CERTIFICATE_VERIFY|"
+                      r"PDF is cut off", re.I)
 _NOT_THE_SITE = re.compile(r"proxy CONNECT refused|ProxyError|NameResolution|getaddrinfo|Name or service not known|"
                            r"nodename nor servname|No address associated|ConnectTimeout|connect timeout|NewConnectionError|"
                            r"Connection refused|ConnectionRefused|ERR_NAME_NOT_RESOLVED|ERR_PROXY|ERR_TUNNEL_CONNECTION|"
                            r"ERR_CERT|ERR_SSL|ERR_CONNECTION_REFUSED|ERR_ADDRESS_UNREACHABLE|ERR_INTERNET_DISCONNECTED", re.I)
+_HTML = re.compile(rb"<(!doctype|html)", re.I)
+HTML_HEAD = 16384                                     # a page can start with a long prolog of comments and white space
 _CHALLENGE = re.compile(rb"Just a moment|cf-chl|challenge-platform|_Incapsula_Resource|Access Denied|"
                         rb"Request unsuccessful|captcha|bot.?(detection|protection)|enable JavaScript|"
                         rb"Reference #\d|akamai|perimeterx|px-captcha|distil", re.I)
+
+
+def looks_html(data):
+    """A web page rather than a PDF: <!doctype or <html within its first HTML_HEAD bytes."""
+    return bool(data) and b"%PDF-" not in data[:1024] and bool(_HTML.search(data[:HTML_HEAD]))
 
 
 def refused(status, data, err, pdf_link=None):
@@ -63,11 +72,34 @@ def refused(status, data, err, pdf_link=None):
     if 200 <= (status or 0) < 300 and not (data or b"").strip():
         return True                                   # an empty 200: how Infineon answers a script (2ED21824S06J)
     if 200 <= (status or 0) < 300 and data and b"%PDF-" not in data[:1024]:
-        head = data[:4096]
-        if re.search(rb"<(!doctype|html)", head, re.I):
+        if looks_html(data):
             return not (pdf_link and pdf_link(data))
-        return bool(_CHALLENGE.search(head))
+        return bool(_CHALLENGE.search(data[:HTML_HEAD]))
     return False
+
+
+_GONE = re.compile(r"not.?found|page.?not|/404\b|[?&]error=404|/errors?/", re.I)
+_SEARCH = re.compile(r"(^|/)search(/|$)", re.I)
+
+
+def soft_404(url, final):
+    """A link the site now sends to its home page, a site search or a not-found page: the file it named is gone, as a
+    404 says (5 of the 7 "web pages with no PDF link" of the 2026-10-22 survey: ams, osram, skyworks, onsemi)."""
+    if not final or final.split("#")[0] == url.split("#")[0]:
+        return False
+    u, f = urlparse(url), urlparse(final)
+    if not f.path.strip("/") and not f.query and u.path.strip("/"):
+        return True
+    if _GONE.search(f"{f.path}?{f.query}") and not _GONE.search(f"{u.path}?{u.query}"):
+        return True
+    return bool(_SEARCH.search(f.path)) and not _SEARCH.search(u.path)
+
+
+def gone_page(url, status, data, final):
+    """An answer that says the link is gone: a web page (no refusal, no bot check) at a home page, a search or a
+    not-found page the link now goes to (soft_404). A 403 or a bot-check page there is a refusal: other ways try."""
+    return (200 <= (status or 0) < 300 and soft_404(url, final) and looks_html(data)
+            and not _CHALLENGE.search(data[:HTML_HEAD]))
 
 
 def origin(url):

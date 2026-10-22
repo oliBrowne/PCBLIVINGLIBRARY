@@ -8,7 +8,7 @@ from unittest import mock
 
 from ecadlib import altium_lib as AL, datasheet as D, footprint_gen as F
 
-PDF = b"%PDF-1.4\n% fake datasheet for tests\n"
+PDF = b"%PDF-1.4\n% fake datasheet for tests\n%%EOF\n"
 
 
 def dim(label, mn, nom, mx, unit="mm", page=31, figure="RGT0016C VQFN package outline"):
