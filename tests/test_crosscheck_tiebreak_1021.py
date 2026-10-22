@@ -105,8 +105,14 @@ def test_pin_descriptions_and_pad_descriptions_are_not_names():
 
 
 # ---------------------------------------------------------------- package type words
+# TC2030's bare round contacts (test_a_bare_smd_pad_pattern_typed_connector...): no housing under either type word, so
+# its type is a word only; without them a "connector" with no body read is held (body_unread) and the type decides it
+TC_PADS = {"unit": "mm", "pads": [{"number": str(i), "x": x, "y": y, "type": "smd", "w": 0.787, "h": 0.787, "shape": "circle"}
+           for i, (x, y) in enumerate([(-1.27, -0.635), (-1.27, 0.635), (0, -0.635), (0, 0.635), (1.27, -0.635), (1.27, 0.635)], 1)]}
+
+
 def test_a_package_type_word_is_set_aside_when_the_pads_are_built_as_listed():
-    tc = {"package_type": "custom", "name": "Tag-Connect", "pin_count": 6, "pitch": 1.27}
+    tc = {"package_type": "custom", "name": "Tag-Connect", "pin_count": 6, "pitch": 1.27, "pad_table": TC_PADS}
     c = read(tc, nominal(package_type="connector", pitch=1.27, pin_count=6))          # TC2030
     assert c["status"] == "agreed" and "a word only" in c["tie_breaks"][0], c
     assert read(dict(tc, package_type="connector"), nominal(package_type="custom", pitch=1.27, pin_count=6))["status"] == "agreed"
@@ -122,7 +128,7 @@ def test_a_package_type_word_still_holds_when_the_type_picks_the_builder_or_noth
     assert read(sot, nominal(package_type="gullwing", pitch=1.9, pin_count=4))["status"] == "disagreed"
     tc = {"package_type": "custom", "name": "Tag-Connect"}
     assert read(tc, nominal(package_type="connector"))["status"] != "agreed"           # nothing else compared
-    off = {"package_type": "custom", "name": "Tag-Connect", "pin_count": 6, "pitch": 1.27}
+    off = {"package_type": "custom", "name": "Tag-Connect", "pin_count": 6, "pitch": 1.27, "pad_table": TC_PADS}
     c = read(off, nominal(package_type="connector", pitch=2.54, pin_count=6))           # the word, and the pitch
     assert c["status"] == "disagreed" and {d["field"] for d in c["disagreed"]} == {"pitch"}, c
 
@@ -151,7 +157,7 @@ def test_a_minus_sign_from_pdf_text_is_a_minus():
 
 # ---------------------------------------------------------------- said where a person looks
 def test_a_tie_break_is_said_in_the_summary_and_the_review_report():
-    tc = {"package_type": "custom", "name": "Tag-Connect", "pin_count": 6, "pitch": 1.27}
+    tc = {"package_type": "custom", "name": "Tag-Connect", "pin_count": 6, "pitch": 1.27, "pad_table": TC_PADS}
     c = dict(read(tc, nominal(package_type="connector", pitch=1.27, pin_count=6)), source="second read",
              against="second read (m)")
     rec = {"mode": "auto", "status": "agreed", "checks": [c]}
