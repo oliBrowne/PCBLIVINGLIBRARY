@@ -166,23 +166,72 @@ def test_a_link_redirected_to_a_home_page_search_or_not_found_page_is_gone():
         assert not PF.soft_404(url, final), (url, final)
 
 
-def test_a_gone_link_tries_no_other_way_and_is_a_broken_link():
+def test_a_gone_link_is_said_once_every_way_failed_and_is_a_broken_link():
     from tests.test_pdf_fetch import store
     url, home = "https://www.osram-os.com/Graphics/XPic1/00029253_0.pdf/SFH", "https://ams-osram.com/"
+    page = b"<!doctype html><html><body>ams OSRAM home</body></html>"
 
     class Moved(TB.PdfHTTP):
         def get_bytes(self, u):
             self.fetched.append(u)
-            return 200, b"<!doctype html><html><body>ams OSRAM home</body></html>", "text/html", home, None
+            return 200, page, "text/html", home, None
     with tempfile.TemporaryDirectory() as d:
-        st, _, calls = store(d, {})
+        st, _, calls = store(d, {}, headers=(200, page, "text/html", home, None),
+                             impersonate=(200, page, "text/html", home, None), browser=(200, page, "text/html", home, None))
         st.http = Moved()
         try:
             st.fetch(url, "BOM", part="SFH216")
             raise AssertionError("taken")
         except D.DatasheetError as e:
             msg = str(e)
-        assert calls == [] and "gone" in msg and home in msg and re.search(D.BROKEN_LINK, msg), (calls, msg)
+        assert [c[0] for c in calls] == ["headers", "impersonate", "browser"], calls
+        assert "gone" in msg and home in msg and re.search(D.BROKEN_LINK, msg), msg
+
+
+def test_a_link_sent_to_a_site_search_that_a_browser_resolves_is_kept():
+    """Skyworks (survey re-run 2026-10-22, AAT1217ICA-3.3): ecadlib's own request lands on the site search, the
+    browser's on the PDF."""
+    from tests.test_pdf_fetch import store
+    url = "http://www.skyworksinc.com/uploads/documents/AAT1217_202050B.pdf"
+    search = "https://www.skyworksinc.com:443/search?q=aat1217_202050b#documents"
+    page = b"<!doctype html><html><body>Skyworks | Search Results</body></html>"
+
+    class Search(TB.PdfHTTP):
+        def get_bytes(self, u):
+            self.fetched.append(u)
+            return 200, page, "text/html", search, None
+    with tempfile.TemporaryDirectory() as d:
+        st, _, calls = store(d, {}, headers=(200, page, "text/html", search, None),
+                             impersonate=(200, page, "text/html", search, None),
+                             browser=(200, GOOD, "application/pdf", url, None))
+        st.http = Search()
+        data, meta = st.fetch(url, "BOM", part="AAT1217ICA-3.3")
+        assert data == GOOD and meta["via"] == "browser", meta
+
+
+@lite
+def test_ecadlib_own_request_waits_less_when_another_way_follows(monkeypatch):
+    got = []
+
+    class Sess:
+        def get(self, url, timeout=None, **kw):
+            got.append(timeout[1] if isinstance(timeout, tuple) else timeout)    # (connect, read)
+            raise D.requests.exceptions.ReadTimeout(f"Read timed out. (read timeout={got[-1]})")
+
+    class Http:
+        s, min_interval = Sess(), 0
+    with tempfile.TemporaryDirectory() as d:
+        st = D.PdfStore(d, Http(), download="impersonate", sleep=lambda s: None)
+        st.missing = {}
+        st.fns["impersonate"] = lambda url, part: (200, GOOD, "application/pdf", url, None)
+        assert st.fetch(SLOW, "BOM")[0] == GOOD and got == [PF.HEADERS_S], got
+        got.clear()
+        st2 = D.PdfStore(d, Http(), sleep=lambda s: None)                  # plain only: the full minute, tried again
+        try:
+            st2.fetch(SLOW + "?x", "BOM")
+        except D.DatasheetError:
+            pass
+        assert got == [60, 60, 60], got
 
 
 # ---------------------------------------------------------------- 5. the part-name check on the right datasheet

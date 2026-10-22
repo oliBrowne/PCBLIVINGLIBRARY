@@ -2540,9 +2540,10 @@ class PdfStore:
             ways.append("handoff")
         # a page whose only "PDF link" is itself (a refresh to the same URL) has none
         link = lambda base: lambda h: (lambda u: u if u and u not in (url, base) else None)(pdf_link(h, base))
-        gone = lambda a: PF.gone_page(url, a[0], a[1], a[3]) and not link(a[3])(a[1])   # no other way helps
-        # ecadlib's own request refused (a reset, a stall) is tried once when another way follows: that way gets the
-        # site's answer at once (analog.com, molex.com: 65-186 s of tries before curl_cffi got it in 2 s)
+        # ecadlib's own request refused (a reset, a stall) is tried once, with a shorter wait, when another way follows:
+        # that way gets the site's answer at once (analog.com, molex.com: 65-186 s of tries before curl_cffi got it in
+        # 2 s). A link that lands on a home page or a site search goes on too: a browser can still reach the file there
+        # (Skyworks); it is said to be gone once every way failed (_fetch)
         move_on = any(w != "handoff" and not self.missing.get(w) for w in ways)
         if not ways:
             first = self._get_retrying(url)
@@ -2557,7 +2558,7 @@ class PdfStore:
             ways.insert(0, pref)
         else:
             first = self._get_retrying(url, move_on)
-            if gone(first) or not PF.refused(first[0], first[1], first[4], link(first[3] or url)):
+            if not PF.refused(first[0], first[1], first[4], link(first[3] or url)):
                 return (*first, "plain", notes)
         for i, w in enumerate(ways):
             if self.missing.get(w):
@@ -2598,14 +2599,14 @@ class PdfStore:
         return (*first, "plain", notes)
 
     def _get_retrying(self, url, move_on=False):
-        """_get, tried again on a transient failure; move_on: not when the site refused it (pdf_fetch.refused) and
-        another way follows. -> (status, bytes, content-type, final url, error)"""
+        """_get, tried again on a transient failure; move_on: another way follows, so a read waits HEADERS_S, not a
+        minute, and a refusal (pdf_fetch.refused) is not tried again. -> (status, bytes, content-type, final url, error)"""
         from urllib.parse import urlparse
         from . import pdf_fetch as PF
         host = urlparse(url).hostname or ""
         tries = 1 if host in self.gave_up else H.RETRIES + 1
         for n in range(1, tries + 1):
-            status, data, ctype, final, err, *more = self._get(url)
+            status, data, ctype, final, err, *more = self._get(url, PF.HEADERS_S if move_on else 60)
             if not err and 200 <= (status or 0) < 300 and is_pdf(data) and not pdf_complete(data):
                 err, data = cut_off(data), None       # the connection closed half way: worth another try
             again = bool(H.TRANSIENT.search(err) or err.startswith("the PDF is cut off")) if err else \
@@ -2623,8 +2624,8 @@ class PdfStore:
             err = f"{err} ({n} tries)"
         return status, data, ctype, final, err
 
-    def _get(self, url):
-        """-> (status, bytes, content-type, final url, error[, response headers])"""
+    def _get(self, url, timeout=60):
+        """-> (status, bytes, content-type, final url, error[, response headers]). timeout: the read timeout."""
         h = self.http
         if h is not None and hasattr(h, "get_bytes"):
             return h.get_bytes(url)
@@ -2642,7 +2643,7 @@ class PdfStore:
             h._last[host] = time.time()
         get, r = sess.get if sess is not None else requests.get, None
         try:
-            r = get(url, timeout=60, allow_redirects=True, stream=True,
+            r = get(url, timeout=60 if timeout == 60 else (60, timeout), allow_redirects=True, stream=True,
                     headers={"Accept": "application/pdf,*/*;q=0.8"}, **redirect_hooks())
             data = read_capped(r)
         except DatasheetError as e:                   # too slow (the URL can still go to the API), or a redirect refused
