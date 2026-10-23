@@ -1476,7 +1476,7 @@ def check_pins(spec, ext, review):
 
 
 # ---------------------------------------------------------------- self-check: the extraction against itself and family norms
-STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, 1.0, 1.1, 1.25, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.3, 2.5, 2.54,
+STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.75, 0.8, 0.95, 1.0, 1.1, 1.25, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.3, 2.5, 2.54,
              3.0, 3.5, 3.81, 3.96, 5.0, 5.08)
 FAMILY_CODES = re.compile(r"(T?SOT|SSOT|SuperSOT|SOD|TO|DO|SC|SMA|SMB|SMC|D?PAK|DO-?\d+)\d*", re.I)   # first number is the outline, not pins
 # package_type -> (pitch mm range or None, longest body side mm range, pin_count range). A family the schema gains
@@ -1805,6 +1805,31 @@ def _depop_positions(spec, ext, review=None):
     return pos, places, sorted(set(range(1, places + 1)) - set(ints))
 
 
+def grid_from_balls(spec, ext, review):
+    """A BGA read that left rows / cols blank while its pin table names every ball (CY14U256LA-BA, live benchmark
+    2026-10-23: TFBGA-48 A1..H6, the read wrote "6 x 8 ball grid" in its notes but left both fields null) -> rows and
+    cols from the ball names, with a review line. Only when the names (JEDEC rows) fill the whole grid: a table with
+    balls left out may be leaving out NC balls or a depopulated area, and which ones isn't known, so that stays blank.
+    A row or column count the read gave is never changed."""
+    if spec.get("package_type") != "bga" or spec.get("rows") and spec.get("cols"):
+        return
+    from . import ds_route as DR, footprint_adv as FA
+    names = {str(p.get("num") or "").strip().upper() for p in ext.get("pins") or []}
+    idx = [FA.ball_index(x) for x in names]
+    if not names or None in idx:
+        return
+    rows, cols = max(i for i, _ in idx) + 1, max(j for _, j in idx) + 1
+    if len(set(idx)) != rows * cols or spec.get("rows") not in (None, rows) or spec.get("cols") not in (None, cols):
+        return
+    spec["rows"], spec["cols"] = rows, cols
+    if spec.get("unresolved"):
+        spec["unresolved"] = [u for u in spec["unresolved"] if DR.unresolved_field(u) not in ("rows", "cols")]
+        if not spec["unresolved"]:
+            del spec["unresolved"]
+    review.append(f"rows / cols were left blank: {rows} x {cols} from the pin table's ball names "
+                  f"({FA.row_name(0)}1..{FA.row_name(rows - 1)}{cols}, every ball named); check against the drawing")
+
+
 INJECTION = "document contains instruction-like text (ignored)"
 
 
@@ -1858,6 +1883,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             spec["pin_count"] = n
             review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     two_sided(spec, review)
+    grid_from_balls(spec, ext, review)
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):
