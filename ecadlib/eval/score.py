@@ -6,7 +6,12 @@ choice, not part of the land pattern. Ours is then moved so the centre of its pa
 (a different origin is reported in `origin` but does not fail the case: KiCad puts THT origins on pin 1, others
 use the body centre). Fields, each {ok, error, ...}:
   pad_count     same number of pads and the same pad numbers (lists the missing / extra ones)
-  pin1          pad 1 (A1 for ball grids) within TOL["pin1"] of the reference's: a mirrored or rotated part fails
+  rotation      (information only) ours turned by a quarter turn to lie as the reference does, when that matches its
+                pads better: a footprint is placed at any angle, so a maker's land drawn another way round is the same
+                land (C3D02065E: Wolfspeed draws the DPAK leads down, KiCad's TabPin1 left). Never mirrored
+  renumbered    (information only) ours has a pad the reference numbers otherwise, joined to one of its pins (a tab
+                numbered 3 on the cathode's net where KiCad numbers it 1, as the symbol rule for an exposed pad)
+  pin1          pad 1 (A1 for ball grids) within TOL["pin1"] of the reference's: a mirrored part fails
   pitch         the most common nearest-neighbour spacing within TOL["pitch"]
   pads          every pad matched by number: centre within TOL["pos"], size within TOL["size"], drill within TOL["drill"]
   courtyard     every edge of the courtyard box within TOL["courtyard"]
@@ -18,7 +23,7 @@ import math, re
 from collections import Counter
 
 TOL = {"pos": 0.05, "size": 0.10, "drill": 0.05, "pitch": 0.01, "courtyard": 0.25, "pin1": 0.25, "names": 0.8}
-INFO_ONLY = ("origin",)
+INFO_ONLY = ("origin", "rotation", "renumbered")
 
 
 def drop_vias(num):
@@ -42,6 +47,36 @@ def _shift(num, dx, dy):
     c = num["courtyard"]
     return {"pads": [[p[0], p[1] + dx, p[2] + dy, p[3], p[4], p[5]] for p in num["pads"]],
             "courtyard": [c[0] + dx, c[1] + dy, c[2] + dx, c[3] + dy] if c else []}
+
+
+def _turn(num, k):
+    """numbers() dict turned k quarter turns about the origin ((x, y) -> (-y, x) each, KiCad's y down: a quarter turn
+    clockwise on screen), pad sizes swapped with it. A turn, never a mirror: the pads keep their order around the part."""
+    pads, c = [list(p) for p in num["pads"]], list(num.get("courtyard") or [])
+    for _ in range(k % 4):
+        pads = [[p[0], -p[2], p[1], p[4], p[3], p[5]] for p in pads]
+        c = [-c[3], c[0], -c[1], c[2]] if c else []
+    return {"pads": pads, "courtyard": c}
+
+
+def _fit(mine, ref):
+    """How far ours lies from the reference with the pad-box centres aligned: the sum, over the reference's pads, of the
+    distance to our nearest pad of the same number (missing numbers cost nothing: pad_count reports them)."""
+    (mx, my), (rx, ry) = _centre(mine["pads"]), _centre(ref["pads"])
+    total = 0.0
+    for r in ref["pads"]:
+        d = [math.hypot(p[1] - mx - r[1] + rx, p[2] - my - r[2] + ry) for p in mine["pads"] if p[0] == r[0]]
+        total += min(d) if d else 0.0
+    return total
+
+
+def _pin1_off(mine, ref):
+    """How far our pad 1 lies from the reference's, pad-box centres aligned (inf when either has none)."""
+    p, q = pin1(mine["pads"]), pin1(ref["pads"])
+    if p is None or q is None:
+        return math.inf
+    (mx, my), (rx, ry) = _centre(mine["pads"]), _centre(ref["pads"])
+    return max(abs(p[1] - mx - q[1] + rx), abs(p[2] - my - q[2] + ry))
 
 
 def _natural(s):
@@ -123,12 +158,22 @@ def _f(ok, error="", **kw):
     return dict(ok=bool(ok), error="" if ok else error, **kw)
 
 
-def score_footprint(mine, ref, tol=None):
-    """mine/ref: numbers() dicts -> {field: {...}}."""
+def score_footprint(mine, ref, tol=None, renumber=None):
+    """mine/ref: numbers() dicts -> {field: {...}}. renumber: {our pad number: the reference's} (joined_pads)."""
     t = dict(TOL, **(tol or {}))
     lay = mine.get("layers")
     mine, ref = drop_vias(mine), drop_vias(ref)
     out = {}
+    if renumber:
+        mine = dict(mine, pads=[[renumber.get(p[0], p[0])] + list(p[1:]) for p in mine["pads"]])
+        out["renumbered"] = _f(False, "; ".join(f"our pad {a} scored as KiCad's {b} (the same pin's net)"
+                                                for a, b in sorted(renumber.items())), pads=dict(renumber))
+    if mine["pads"] and ref["pads"]:                  # the quarter turn that lays ours as the reference lies, if any:
+        fits = [_fit(_turn(mine, k), ref) for k in range(4)]   # one that also brings pad 1 no further from KiCad's (a
+        k = min(range(4), key=lambda i: (round(fits[i], 6), i))   # part with two pads swapped, AH1806-W, is not turned
+        if k and fits[k] < fits[0] - 1e-6 and _pin1_off(_turn(mine, k), ref) <= _pin1_off(mine, ref) + 1e-6:   # round)
+            mine = _turn(mine, k)
+            out["rotation"] = _f(False, f"ours turned {90 * k} degrees to lie as KiCad's does", turns=k)
     if lay is not None:                               # ours only: the references keep no layers
         why = ([f"pads {lay['no_copper'][:8]} have no copper"] if lay["no_copper"] else []) + \
               ([f"pads {lay['no_mask'][:8]} have no solder-mask opening"] if lay["no_mask"] else []) + \
@@ -463,16 +508,32 @@ def datasheet_body(fields, mine, spec, ref_name=None, ref=None):
     return None
 
 
+def joined_pads(mine_fp, ref_fp, mine_pins, ref_pins, sym):
+    """{our pad: the reference's} for the one pin the symbol score took as a pad on another pin's net (symbol_pins
+    ep_not_in_kicad: C3D02065E's tab 3, CATHODE like pin 1) when the reference has no pad of that number and puts a
+    second pad on the pin of that name (KiCad's TO-252-2_TabPin1: the tab is pad 1). None otherwise."""
+    ep = ((sym or {}).get("symbol_pins") or {}).get("ep_not_in_kicad") or []
+    if len(ep) != 1 or not mine_fp or not ref_fp:
+        return None
+    mine_names = {str(n): norm_name(s) for n, s in mine_pins or []}
+    ref_nums = [str(n) for n, s in ref_pins or [] if norm_name(s) == mine_names.get(ep[0])]
+    counts = Counter(p[0] for p in ref_fp["pads"])
+    if len(ref_nums) != 1 or counts.get(ep[0]) or counts.get(ref_nums[0], 0) < 2:
+        return None
+    return {ep[0]: ref_nums[0]}
+
+
 def verdict(fields):
     return all(f["ok"] for k, f in fields.items() if k not in INFO_ONLY)
 
 
 def score(mine_fp, ref_fp, mine_pins=None, ref_pins=None, tol=None):
     """One case -> {pass, fields, errors}. mine_fp None = no footprint made."""
+    sym = score_symbol(mine_pins, ref_pins, tol)
     if mine_fp is None:
         fields = {"footprint": _f(False, "no footprint")}
     else:
-        fields = score_footprint(mine_fp, ref_fp, tol)
-    fields.update(score_symbol(mine_pins, ref_pins, tol))
+        fields = score_footprint(mine_fp, ref_fp, tol, joined_pads(mine_fp, ref_fp, mine_pins, ref_pins, sym))
+    fields.update(sym)
     ok = verdict(fields)
     return {"pass": ok, "fields": fields, "errors": [f"{k}: {f['error']}" for k, f in fields.items() if not f["ok"] and k not in INFO_ONLY]}
