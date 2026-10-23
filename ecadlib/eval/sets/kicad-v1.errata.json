@@ -1,5 +1,5 @@
 {
- "about": "Cases where KiCad's reference disagrees with the maker's datasheet, checked by hand against the datasheet text. A field listed here that fails against KiCad is scored as right (the report lists it as a reference erratum) when ours is what the datasheet says. A number under \"ours\" (e.g. the pitch) must match ours, or none of the case's errata apply: the other fields (pads, pin 1, courtyard) are excused only when we built the datasheet's package. \"reference\": {\"footprint\": <a footprint in the set's references>} scores the case against that KiCad footprint instead, when KiCad's own reference is another variant of the package. \"reference\": {\"renumber\": {\"<KiCad pad>\": \"<datasheet pin>\"}} scores the case against KiCad's footprint with those pads renumbered, when the datasheet numbers the same package's pads otherwise.",
+ "about": "Cases where KiCad's reference disagrees with the maker's datasheet, checked by hand against the datasheet text. A field listed here that fails against KiCad is scored as right (the report lists it as a reference erratum) when ours is what the datasheet says. A number under \"ours\" (e.g. the pitch) must match ours, or none of the case's errata apply: the other fields (pads, pin 1, courtyard) are excused only when we built the datasheet's package. \"reference\": {\"footprint\": <a footprint in the set's references>} scores the case against that footprint instead, when KiCad's own reference is another variant of the package, or against the maker's own recommended land (a reference named \"Maker:...\", its numbers copied by hand from the datasheet's land drawing; it gives no courtyard, so none is scored). \"reference\": {\"renumber\": {\"<KiCad pad>\": \"<datasheet pin>\"}} scores the case against KiCad's footprint with those pads renumbered, when the datasheet numbers the same package's pads otherwise.",
  "cases": {
   "AH1806-W": {
    "symbol_names": {
@@ -96,6 +96,13 @@
    "reference": {
     "footprint": "Package_DIP:DIP-20_W7.62mm",
     "why": "TI ucc3895.pdf p52 J (R-GDIP-T**) ceramic DIP 4040083/F: 20 pins, 2.54 mm pitch, rows 7.62 mm apart, no land pattern or hole size printed. KiCad's reference for the part is DIP-20_W7.62mm_LongPads, the hand-soldering variant (2.4 x 1.6 mm pads) of the same DIP-20; the datasheet gives no reason for long pads, so the plain DIP-20_W7.62mm is scored.",
+    "checked": "2026-10-23"
+   }
+  },
+  "C3D02065E": {
+   "reference": {
+    "footprint": "Maker:Wolfspeed_TO-252-2L_Recommended_Solder_Pad_Layout",
+    "why": "Wolfspeed C3D02065E datasheet (Rev. 7, Nov 2024) p6 Recommended Solder Pad Layout: tab 5.60 x 5.85, lead pads 2X 1.30 x 2.00 at 2X 2.27 from the centre line, 2X 2.50 from the tab; p5 TO 252-2L top view and pin table: pin 1 CATHODE (left lead), 2 ANODE (right lead), 3 CATHODE (tab). KiCad's TO-252-2_TabPin1 works its pads out from the package (3.5 x 2.0 leads, 7 x 7 tab) and numbers the tab 1; the maker's land is the truth (Oliver 2026-10-21). The datasheet draws no courtyard.",
     "checked": "2026-10-23"
    }
   }
