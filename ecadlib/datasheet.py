@@ -629,10 +629,10 @@ def _non_finite(v, path="$"):
     return None
 
 
-# A nominal printed with its tolerance: "6.5±0.2", "6.5 +/- 0.2", "3.56 +0.15/-0.25", "0.74 +0.05 -0.08"
+# A nominal printed with its tolerance: "6.5±0.2", "6.5 +/- 0.2", "3.56 +0.15/-0.25", "0.74 +0.05 -0.08", "0.7 +0.1/0"
 _UNIT = r"\s*(mm|mils?|in|inch(?:es)?|\")?\.?\s*"      # a unit written after the value, as _wire_val reads it
-_TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:(?:±|\+/-|\+-)\s*(\d*\.?\d+)|\+\s*(\d*\.?\d+)\s*/?\s*[-\u2212\u2013]\s*(\d*\.?\d+))"
-                  + _UNIT, re.I)
+_TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:±|\+/-|\+-)\s*(\d*\.?\d+)" + _UNIT, re.I)
+_TOL2 = re.compile(r"\s*([-+]?\d*\.?\d+)\s*([-+]?)\s*(\d*\.?\d+)\s*(?:/\s*|\s+)([-+]?)\s*(\d*\.?\d+)" + _UNIT, re.I)
 
 
 def _toleranced(v):
@@ -641,19 +641,40 @@ def _toleranced(v):
     return _toleranced_unit(v)[0]
 
 
+def _two_sided(m):
+    """(below, above) from a nominal's two signed sides ("+0.15/-0.25", "-0/+0.1"); None when they cannot be told apart.
+    A side written without a sign is read only when it is zero (S28B-PHDSS, live benchmark 2026-10-23: JST prints
+    the board hole "0.7 +0.1/0"): "+0.1/0.05" could mean either way, and a guess could build the part wrong."""
+    sides = [(m.group(2), float(m.group(3))), (m.group(4), float(m.group(5)))]
+    if sum(not s for s, _ in sides) == 1:            # the unsigned side must be a zero; it takes the other's sign
+        (s0, v0), (s1, v1) = sides
+        if (v1 if not s1 else v0) != 0:
+            return None
+        sides = [(s0 or ("-" if s1 == "+" else "+"), v0), (s1 or ("-" if s0 == "+" else "+"), v1)]
+    signs = {s for s, _ in sides}
+    if signs != {"+", "-"}:                           # both unsigned, or both the same sign: not a two-sided tolerance
+        return None
+    d = dict(sides)
+    return d["-"], d["+"]
+
+
 def _toleranced_unit(v):
     """_toleranced(v) and the unit written after it ("6.5±0.2 mm" -> mm; None when none is written)."""
-    t = str(v or "").replace(",", ".")
+    t = str(v or "").replace(",", ".").replace("\u2212", "-").replace("\u2013", "-")
     r = re.fullmatch(r"\s*(\d*\.?\d+)\s*(?:~|\.\.|to)\s*(\d*\.?\d+)" + _UNIT, t, re.I)
     if r and float(r.group(1)) < float(r.group(2)):       # "6.3~6.7": a range printed in one cell
         lo, hi = float(r.group(1)), float(r.group(2))
         return {"min": lo, "nom": round((lo + hi) / 2, 6), "max": hi}, _unit_name(r.group(3))
     m = _TOL.fullmatch(t)
-    if not m:
-        return None, None
-    nom = float(m.group(1))
-    lo, hi = (float(m.group(2)),) * 2 if m.group(2) else (float(m.group(4)), float(m.group(3)))
-    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}, _unit_name(m.group(5))
+    if m:
+        nom, lo, hi, u = float(m.group(1)), float(m.group(2)), float(m.group(2)), m.group(3)
+    else:
+        m = _TOL2.fullmatch(t)
+        lohi = _two_sided(m) if m else None
+        if not lohi:
+            return None, None
+        (lo, hi), nom, u = lohi, float(m.group(1)), m.group(6)
+    return {"min": round(nom - lo, 6), "nom": nom, "max": round(nom + hi, 6)}, _unit_name(u)
 
 
 def _wire_dim(d, n):
@@ -860,6 +881,16 @@ def build_request(source, part, package=None, pages=None, model=MODEL, effort="h
 ZOOM_PX = 2240            # a close-up's width: 0.55 of a Letter / A4 page at 2240 px wide is ~4560 visual tokens, under the 4784
 ZOOM_PAGES = 3            # cap of the newer models (2576 px long edge), so it is sent as rendered, not downscaled
 ZOOM_BANDS = ((0.0, 0.55), (0.45, 1.0))              # top and bottom half, overlapping so no dimension is cut in two
+
+
+def no_zoom():
+    """Why [datasheet] zoom_drawings can send no close-ups here; None when it can. The 10-23 live benchmark's venv had
+    no PDF renderer, so a run with zoom on read every part without close-ups and nothing said so."""
+    from . import pdf_render
+    if pdf_render.renderer() is None:
+        return ("[datasheet] zoom_drawings is on but no PDF renderer is installed, so no close-ups are sent: "
+                "pip install pypdfium2 (or ecadlib[pdf]), or put poppler's pdftoppm on PATH")
+    return None
 
 
 def zoom_blocks(pdf, sent, why):
@@ -2981,14 +3012,33 @@ class ResultCache:
         h = hashlib.sha256(json.dumps([part, package, pages, effort]).encode()).hexdigest()[:12]
         return f"{src_hash[:16]}-{re.sub(r'[^A-Za-z0-9.-]', '_', model)}-{schema_version()}-{h}"
 
-    def get(self, key):
-        """The cached record, or None; a damaged entry (cut short by a crash, a sync tool) is a miss, not a crash."""
-        f = self.dir / f"{key}.json"
+    def _load(self, f):
         try:
             rec = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
         except (OSError, ValueError):
             return None
         return rec if isinstance(rec, dict) else None
+
+    def get(self, key):
+        """The cached record, or None; a damaged entry (cut short by a crash, a sync tool) is a miss, not a crash. An
+        answer this parser reads that an earlier one rejected (put_rejected) is the record, marked reparsed."""
+        rec = self._load(self.dir / f"{key}.json")
+        if (rec is None or "message" not in rec) and not key.startswith("check-"):
+            rej = self._load(self.dir / "rejected" / f"{key}.json")
+            if rej and isinstance(rej.get("message"), dict):
+                try:
+                    parse_message(rej["message"])
+                except DatasheetError:
+                    return rec
+                return dict({k: v for k, v in rej.items() if k != "error"}, reparsed=rej.get("error") or True)
+        return rec
+
+    def put_rejected(self, key, rec):
+        """Keep an answer the parser rejected, apart from the answers it reads: a later parser fix reads it again for free
+        (S28B-PHDSS, live benchmark 2026-10-23: "0.7 +0.1/0" was rejected and only the error was kept, so checking the
+        fix meant paying for the read again)."""
+        (self.dir / "rejected").mkdir(parents=True, exist_ok=True)
+        write_text_atomic(self.dir / "rejected" / f"{key}.json", json.dumps(rec, indent=1))
 
     def get_check(self, key):
         """A cross-check's saved second read. Its own inputs decide it (PDF, model, part, package, pages, effort and the
@@ -3481,7 +3531,12 @@ class Reader:
                                       cache_doc=not self.batch)
         from .llm import rails as LRL
         sig = LRL.signature(self.info(model)["plan"])  # "" for a plain request: the cache keys of before
-        if self.cfg.get("zoom_drawings") and cut is not None:
+        if self.cfg.get("zoom_drawings") and cut is not None and no_zoom():
+            prov["zoom_skipped"] = no_zoom()          # the run reads without close-ups: say it once, mark each part
+            if not getattr(self, "_said_no_zoom", False):
+                self._said_no_zoom = True
+                self.say(f"  warning: {no_zoom()}")
+        elif self.cfg.get("zoom_drawings") and cut is not None:
             zoom = zoom_blocks(cut, lv, base["route"]["picked"])
             if zoom:                                  # before the task text; its own cache key (a different request)
                 body["messages"][0]["content"][1:1] = zoom
@@ -3686,6 +3741,8 @@ class Reader:
             self.ledger.add(DR.attempt_record(job["part"], job.get("name"), model, msg, via, self._pages_sent(job),
                                               job.get("n_pages"), "error", label(nx), e))
             e.answered = came_back(msg)               # (Reader.answered)
+            if e.answered and isinstance(msg, dict):
+                self.results.put_rejected(job["key"], dict(base, message=msg, error=str(e)[:300]))
             if nx:
                 self.results.put(job["key"], dict(base, error=str(e)[:300], usage=(msg or {}).get("usage"),
                                                   **({} if e.answered else {"not_answered": True})))
