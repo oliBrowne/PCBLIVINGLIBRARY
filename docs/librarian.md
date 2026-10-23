@@ -257,10 +257,12 @@ package drawing: a package-information document, a case outline, a product drawi
   page captioned as its drawing, and no image-only page after the first (an image-only page may be the drawing). A PDF
   with no text layer is never searched for.
 - A PDF the search finds is kept only if it names the part, a document number the datasheet gives for it, or the
-  part's package. Its pages go after the datasheet's, like an outline document's. The review says where the drawing
+  part's package with its pin count (FBGA-484, not just "BGA"). Its pages go after the datasheet's, like an outline document's. The review says where the drawing
   came from, and that the drawing must be checked against the part's package.
 - The search costs the same as a datasheet search. It is written to `cost.jsonl` as "web search (package drawing)".
-  The link it finds is kept in `web_search.json` as "<part> package drawing".
+  The link it finds is kept in `web_search.json` as "<part> package drawing". A search that found nothing is kept
+  there too, for 30 days and for that datasheet only, so re-running a held part doesn't pay for the same empty
+  search again. Delete the entry to search sooner.
 - If nothing is found, the datasheet is read alone and the review says no package drawing was found. The part is
   still held if the read leaves a dimension blank.
 

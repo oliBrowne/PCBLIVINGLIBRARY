@@ -3221,7 +3221,7 @@ class Reader:
     def _search_links(self, part, package, attempts, maker=None, kind="datasheet", refs=()):
         """One web search (ds_search.search, kind "datasheet" or "package"), held under [datasheet] max_cost_usd and
         written to cost.jsonl -> the links ranked (the maker's copy, then a distributor's, then a mirror's), or None
-        when no search was made; the misses in attempts."""
+        when no search was made or it failed with no links; the misses in attempts."""
         from . import ds_search as WS
         model = self.cfg.get("web_search_model") or WS.DEFAULT_MODEL
         uses = self.cfg.get("web_search_max_uses")
@@ -3262,7 +3262,8 @@ class Reader:
                          "verdict": f"search failed: {err}" if err else f"{len(urls)} links"})
         if err and not urls:
             attempts.append({"url": "", "where": where, "error": f"search failed: {err}"})
-        elif not urls:
+            return None
+        if not urls:
             attempts.append({"url": "", "where": where, "error": "the search found no PDF link"})
         return WS.rank(urls, maker)
 
@@ -3275,47 +3276,56 @@ class Reader:
         "<part> package drawing"). What could not be got is said in prov["outline_missing"], the misses in attempts."""
         from . import ds_route as DR, ds_search as WS, outline_docs as OD
         own = DR.page_scores(texts, part, package)[1]
-        found, key = WS.Found(self.dir), f"{part} package drawing"
-        saved, tries = found.get(key), attempts
+        found, key, where = WS.Found(self.dir), f"{part} package drawing", "web search (package drawing)"
+        saved, n0 = found.get(key), len(attempts)
         got = None
 
         def take(url):
             try:
-                b, meta = self.store.fetch(url, "web search (package drawing)", part=part, handoff=False, public=True)
+                b, meta = self.store.fetch(url, where, part=part, handoff=False, public=True)
             except DatasheetError as e:
-                tries.append({"url": url, "where": "web search (package drawing)", "error": str(e)})
+                attempts.append({"url": url, "where": where, "error": str(e)})
                 return None
             if hashlib.sha256(b).hexdigest() == prov.get("sha256"):
-                tries.append({"url": url, "where": "web search (package drawing)", "error": "the datasheet itself"})
+                attempts.append({"url": url, "where": where, "error": "the datasheet itself"})
                 return None
             if not OD.names_it(DR.page_texts(b), part, codes, own, meta.get("url") or url):
-                tries.append({"url": url, "where": "web search (package drawing)",
-                              "error": f"the PDF at {meta.get('url') or url} names neither {part} nor its package"})
+                attempts.append({"url": url, "where": where,
+                                 "error": f"the PDF at {meta.get('url') or url} names neither {part} nor its package"})
                 return None
             return b, meta.get("url") or url
-        if saved:
+
+        def missing(why):
+            return data, dict(prov, outline_missing=list(prov.get("outline_missing") or []) + [
+                f"no package drawing: the datasheet has none of this package and {why}"])
+        if WS.Found.none_for(saved, prov.get("sha256")):   # searched for this datasheet before, nothing found: not again
+            return missing(f"a web search on {saved['at']} found no PDF of it (delete \"{key}\" from "
+                           "web_search.json to search again)")
+        if isinstance(saved, str):
             got = take(saved)
             if not got:
                 found.drop(key)
         if not got:
-            urls = self._search_links(part, package, tries, maker, kind="package", refs=list(codes))
-            if urls is None:
+            urls = self._search_links(part, package, attempts, maker, kind="package", refs=list(codes))
+            if urls is None:                          # no search was made, or it failed: nothing is remembered
                 return None
             for url in urls:
                 got = take(url)
                 if got:
                     found.put(key, url)
                     break
-        out = dict(prov)
-        merged = OD.append(data, [got[0]]) if got else None
+            else:
+                found.put(key, WS.Found.none(prov.get("sha256")))
+        if not got:
+            mine = [a for a in attempts[n0:] if a["where"] == where]
+            return missing("a web search found no PDF of it" + (f" ({mine[-1]['error'][:160]})" if mine else ""))
+        merged = OD.append(data, [got[0]])
         if merged is None:
-            return data, dict(out, outline_missing=list(out.get("outline_missing") or []) + [
-                "no package drawing: the datasheet has none of this package and a web search found no PDF of it"
-                + (f" ({tries[-1]['error'][:160]})" if tries else "")])
+            return missing(f"the PDF found ({got[1]}) could not be appended")
         first = (pdf_pages(data) or 0) + 1
-        return merged, dict(out, sha256=hashlib.sha256(merged).hexdigest(), pages=pdf_pages(merged),
-                            outline=list(out.get("outline") or []) + [{"code": "web search", "from": got[1],
-                                                                       "first_page": first}])
+        return merged, dict(prov, sha256=hashlib.sha256(merged).hexdigest(), pages=pdf_pages(merged),
+                            outline=list(prov.get("outline") or []) + [{"code": "web search", "from": got[1],
+                                                                        "first_page": first}])
 
     def _fetch_found(self, url, part, attempts):
         """A link a web search gave -> (data, prov) or None (the miss in attempts). Never a private address: the link

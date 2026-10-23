@@ -107,3 +107,43 @@ def test_nothing_found_is_said_and_the_datasheet_read_alone():
         j = _reader(d, cl, {DS: pdf_lines(product_sheet())}, web_search=True).job("NC3XYZ-1", [(DS, "BOM")], None)
         assert j["n_pages"] == 2 and "outline" not in j["base_prov"]
         assert any("package drawing" in m for m in j["base_prov"]["outline_missing"]), j["base_prov"]
+
+
+# ---------------------------------------------------------------- Greptile on #175
+def test_a_drawing_of_another_size_of_the_family_is_not_taken():
+    assert OD.names_it(["FBGA-484 package outline, DIM MIN MAX"], "M2GL090T-FG484", own={"BGA484"})
+    assert not OD.names_it(["BGA package outline: FBGA-256, DIM MIN MAX"], "M2GL090T-FG484", own={"BGA484"})
+    assert not OD.names_it(["Ball grid array packages: general handling notes"], "M2GL090T-FG484", own={"BGA484"})
+
+
+def test_a_page_that_only_points_to_the_packaging_specification_is_not_a_drawing():
+    pages = [["PIC16F18446 28/40-pin microcontroller", "Ordering: PIC16F18446-I/SS SSOP-20"],
+             ["Package information: see the Microchip Packaging Specification for the package drawing of every "
+              "package listed here, with its dimensions, land pattern and marking. "
+              "The specification is updated as packages are added, so always use the current revision. " * 2,
+              "Electrical characteristics follow on the next pages: supply voltage, current, timing and temperature."]]
+    assert OD.drawing_missing(_texts(pages), "PIC16F18446-I/SS", "SSOP-20")
+
+
+def test_a_search_that_found_nothing_is_not_paid_for_again():
+    import datetime
+    with tempfile.TemporaryDirectory() as d:
+        files = {DS: pdf_lines(product_sheet())}
+        cl = Client(_answer([]))
+        _reader(d, cl, files, web_search=True).job("NC3XYZ-1", [(DS, "BOM")], None)
+        assert len(cl.sent) == 1
+        cl2 = Client()
+        j = _reader(d, cl2, files, web_search=True).job("NC3XYZ-1", [(DS, "BOM")], None)
+        assert not cl2.sent and "found no PDF of it" in j["base_prov"]["outline_missing"][0], j["base_prov"]
+        entry = WS.Found(Path(d) / "out" / "datasheet").get("NC3XYZ-1 package drawing")
+        later = datetime.date.fromisoformat(entry["at"]) + datetime.timedelta(days=WS.NONE_DAYS)
+        assert WS.Found.none_for(entry, entry["none"]) and not WS.Found.none_for(entry, entry["none"], later)
+        assert not WS.Found.none_for(entry, "another datasheet")
+
+
+def test_a_failed_search_is_not_remembered_as_found_nothing():
+    from tests.test_ds_search import Failing
+    with tempfile.TemporaryDirectory() as d:
+        files = {DS: pdf_lines(product_sheet())}
+        _reader(d, Failing(), files, web_search=True).job("NC3XYZ-1", [(DS, "BOM")], None)
+        assert WS.Found(Path(d) / "out" / "datasheet").get("NC3XYZ-1 package drawing") is None

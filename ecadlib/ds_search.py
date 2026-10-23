@@ -18,6 +18,7 @@ TOOL = "web_search_20260209"        # dynamic filtering: Opus 5.5 / 5 / 4.8 / 4.
 TOOL_BASIC = "web_search_20250305"  # every other model
 SEARCH_USD = 0.01                   # $10 per 1,000 searches, on top of the tokens
 MAX_USES = 3                        # searches per part
+NONE_DAYS = 30                      # a package-drawing search that found nothing is not repeated for this long
 MAX_TURNS = 3                       # pause_turn continuations
 MAX_TOKENS = 4096                   # a turn's max_tokens: the most output it is billed for
 # input / output tokens one part's search may use, for the cost cap: the search results the model reads are most of
@@ -261,3 +262,22 @@ class Found:
 
     def drop(self, part):
         self.put(part, None)
+
+    @staticmethod
+    def none(digest, today=None):
+        """The entry for a package-drawing search that found nothing for the datasheet with this sha256 (kept
+        NONE_DAYS, so a held part re-run does not pay for the same empty search again)."""
+        import datetime
+        return {"none": digest, "at": (today or datetime.date.today()).isoformat()}
+
+    @staticmethod
+    def none_for(entry, digest, today=None):
+        """Is entry a recent "found nothing" for this datasheet (same sha256, under NONE_DAYS old)?"""
+        import datetime
+        if not isinstance(entry, dict) or not digest or entry.get("none") != digest:
+            return False
+        try:
+            at = datetime.date.fromisoformat(str(entry.get("at")))
+        except ValueError:
+            return False
+        return ((today or datetime.date.today()) - at).days < NONE_DAYS

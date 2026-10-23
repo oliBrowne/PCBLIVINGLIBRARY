@@ -17,6 +17,7 @@ CODES = [(re.compile(r"(?<![A-Z0-9])(98A[A-Z]{2,3}\d{5}[A-Z])(\d)?(?![A-Z0-9])")
 LINKS = {"nxp": ["https://www.nxp.com/docs/en/package-information/{code}.pdf"],
          "microchip": []}                                # versioned Packaging Specification: the folder or web search
 MAX_DOCS = 2
+CAPTION_ONLY = 400                                       # characters: a drawing page's caption, header and footer
 
 
 def _has_drawing(texts, rows):
@@ -38,10 +39,16 @@ def drawing_missing(texts, part=None, package=None):
     rows = DR.page_scores(texts, part, package)[0]
     if _has_drawing(texts, rows):
         return False
-    for i, r in enumerate(rows):
+    if refs(texts, part, package):                    # it names the drawing's document instead of printing it
+        return True
+    for i, (t, r) in enumerate(zip(texts, rows)):
         if r["toc"] or r["noise"]:
             continue
-        if r["blank"] and i > 0 or r["drawing"] and not r["other"]:
+        if r["blank"] and i > 0:
+            return False
+        # a page captioned as this package's drawing with little else on it: an image drawing. A line pointing to
+        # another document on a page of text ("Package information: see the Packaging Specification") is not one
+        if r["drawing"] and not r["other"] and len(DR.norm_text(t).strip()) <= CAPTION_ONLY:
             return False
     return True
 
@@ -57,10 +64,17 @@ def names_it(texts, part, codes=(), own=(), url=""):
     flat = re.sub(r"[^A-Z0-9]", "", " ".join(t or "" for t in texts).upper())
     if any(re.sub(r"[^A-Z0-9]", "", c.upper()) in flat for c in codes if c):
         return True
-    if own and any(DR._tok_match(own, DR.package_tokens(DR.norm_text(t or ""))) for t in texts):
+    if _same_package(own, set().union(*(DR.package_tokens(DR.norm_text(t or "")) for t in texts))):
         return True
     key = re.sub(r"[^A-Z0-9]", "", str(part or "").upper())
     return said is None and len(key) >= 4 and key in re.sub(r"[^A-Z0-9]", "", str(url).upper())
+
+
+def _same_package(own, toks):
+    """This part's package by family and count (BGA484), never by family alone: a drawing of another BGA is not it.
+    A part whose package is known only as a family (no count) matches that family."""
+    counted = {t for t in own if re.search(r"\d$", t)}
+    return bool(counted & toks) if counted else bool(own) and DR._tok_match(own, toks)
 
 
 def refs(texts, part=None, package=None):
