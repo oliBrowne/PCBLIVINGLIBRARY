@@ -864,9 +864,16 @@ class Run:
         if not st["footprint"]:                       # before any land choice: a table land never replaces these holds
             maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
             joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
-                D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"])
-            if joined:                                # leads merged with the pad, a TI thermal land not read, or no housing to draw
-                raise D.DatasheetError(joined)
+                D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"]) or \
+                (None if std else D.tab_land_unread(res["spec"])) or D.tht_holes_unread(res["spec"]) or \
+                D.body_on_holes(res["spec"])                  # (a checked standard land carries its own tab land)
+            if joined:                                # leads merged with the pad, a TI thermal land not read or too
+                raise D.DatasheetError(joined)        # small, no housing to draw, half a maker's land, guessed holes
+            dip = D.standard_dip_holes(res["spec"])
+            if dip:                                   # a DIP whose holes the datasheet doesn't print: KiCad's, not a guess
+                res = dict(res, spec=dip)
+                st["review"].append("DIP holes: the datasheet prints no hole size, so KiCad's DIP hole and pad (0.8 mm / "
+                                    "1.6 mm) were used in place of the read's; check the maker's recommended hole")
             unread = None if std else D.land_unread(res["spec"], res["sidecar"].get("land_pages"))
             if unread:                                # the maker's land is printed but was not read: IPC pads from the
                 known = list(res["sidecar"].get("package_from_pdf") or [])   # body would differ from it

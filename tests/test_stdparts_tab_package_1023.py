@@ -115,7 +115,7 @@ def test_the_librarian_builds_the_checked_tab_land_for_a_d2pak_read_and_says_so(
     assert rv and "a tab land runs under the body" in rv[0], a["librarian"]["review"]
 
 
-def test_a_tab_read_with_the_makers_own_land_keeps_it():
+def test_a_tab_read_with_the_makers_own_lead_land_is_held_not_swapped_for_the_table():
     from tests import test_datasheet as TD, test_ds_route as TR, test_holds_misses_1022 as HM
     from ecadlib import datasheet as D
     e = _d2pak_extraction()
@@ -123,7 +123,10 @@ def test_a_tab_read_with_the_makers_own_land_keeps_it():
     e["package"]["land"] = dict(dict.fromkeys(keys), pad_length=4.6, pad_width=1.1, pad_center=7.65)
     pdf = TR.pdf_lines([["TESTPART N-channel MOSFET", "D2Pak"], ["Package outline", "D2Pak (TO-263AB)"]])
     a, _ = HM.read_through_librarian(e, pdf)
-    assert a["source"]["footprint"].startswith("datasheet:"), (a.get("source"), a["librarian"]["tried"])
+    # the maker's land is the read's own: no table land replaces it, and #176's tab_land_unread holds it (the builder
+    # would put an IPC tab beside the maker's lead pads)
+    assert not (a.get("footprint") or {}).get("file"), (a.get("source"), a["librarian"]["tried"])
+    assert any("tab's land" in t for t in a["librarian"]["tried"]), a["librarian"]["tried"]
 
 
 # ---------------------------------------------------------------- the cross-check: tab counting

@@ -295,6 +295,10 @@ CODES = {
                              "the symbol has no pin {tab}.",
                              "Check in the datasheet's pin table that the tab and pin {lead} are the same connection.",
                              [r"tab: the datasheet numbers the tab (?P<tab>\S+), on pin (?P<lead>\S+)'s net"]),
+    "datasheet.dip_holes": ("The datasheet prints no hole size for this DIP, so KiCad's DIP hole and pad (0.8 mm / 1.6 mm) "
+                            "were used in place of the sizes the read chose.",
+                            "Check the maker's recommended hole if the leads are unusually wide.",
+                            [r"DIP holes: the datasheet prints no hole size"]),
     "datasheet.failed": ("Reading the datasheet failed[ ({why})].",
                          "Try again later, or pick a footprint by hand.",
                          [r"datasheet(?: reader)?: failed \((?P<why>.+)\)"]),
