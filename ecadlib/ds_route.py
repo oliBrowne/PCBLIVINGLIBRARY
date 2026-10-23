@@ -820,6 +820,50 @@ def pick_pages(texts, budget, part=None, package=None, marks=None, first=None):
     return sorted(keep), why
 
 
+# a page that prints the maker's own land for the package (the heading, not "footprint" alone nor layout advice):
+# TI "LAND PATTERN EXAMPLE", Diodes "Suggested Pad Layout", onsemi "RECOMMENDED SOLDERING FOOTPRINT", Nexperia
+# "Footprint information for reflow soldering", LT "RECOMMENDED SOLDER PAD LAYOUT", Microchip "RECOMMENDED LAND PATTERN"
+LAND_PRINTED = re.compile(r"land pattern|recommended\s+(?:soldering\s+|pcb\s+)?(?:footprint|lands?|solder(?:ing)?\s+pad)|"
+                          r"(?:suggested|recommended)\s+pad\s+layout|soldering\s+footprint|"
+                          r"footprint\s+(?:information\s+)?for\s+(?:reflow|wave)|solder\s+lands", re.I)
+# a sentence that sends the reader elsewhere for the land ("For the land pattern, see the Mechanical ... section")
+LAND_POINTER = re.compile(r"\b(?:see|refer(?:s|red)?\s+to|shown\s+in|described\s+in|given\s+in|available\s+(?:in|at|on)|"
+                          r"go\s+to|visit|download)\b", re.I)
+DIM_NUM = re.compile(r"(?<![\d.])\d*\.\d+(?![\d.])")
+LAND_SIZES = 2              # sizes printed right after the heading (the Z / X of a two-pad layout at least)
+LAND_SPAN = 600             # characters after the heading the land's sizes are looked for in
+
+
+def prints_land(text):
+    """The page prints a land: a land heading (LAND_PRINTED) that is not part of a sentence pointing elsewhere, with
+    at least LAND_SIZES decimal sizes in the LAND_SPAN characters that follow it (body dimensions elsewhere on the
+    page, an outline page's table, do not count)."""
+    t = norm_text(text or "")
+    for m in LAND_PRINTED.finditer(t):
+        a = max(t.rfind(".", 0, m.start()), t.rfind("\n", 0, m.start())) + 1
+        ends = [x for x in (t.find(".", m.end()), t.find("\n", m.end())) if x >= 0]
+        if LAND_POINTER.search(t[a:min(ends) if ends else len(t)]):
+            continue
+        if len(DIM_NUM.findall(t[m.end():m.end() + LAND_SPAN])) >= LAND_SIZES:
+            return True
+    return False
+
+
+def land_pages(texts, pages, part=None, package=None):
+    """The pages among `pages` (1-based, the ones a read was sent) that print a recommended land for this part's
+    package (prints_land), not a table of contents or noise. A page about another package only (page_scores 'other')
+    is left out, unless the whole PDF names one package only: then its land page is this part's even when it names
+    the package another way than the hint (BCR430UW6: SC-74-6 in the BOM, SOT26 on the page). [] when nothing
+    qualifies."""
+    if not texts or not pages:
+        return []
+    rows = page_scores(texts, part, package)[0]
+    lands = [i + 1 for i, raw in enumerate(texts) if not (rows[i]["toc"] or rows[i]["noise"]) and prints_land(raw)]
+    sent = {int(q) for q in pages if isinstance(q, int) and not isinstance(q, bool)}
+    named = set().union(*(package_tokens(norm_text(t or "")) for t in texts))    # every package the PDF names
+    return [p for p in lands if p in sent and (not rows[p - 1]["other"] or len(named) <= 1)]
+
+
 def levels(texts, budget, part=None, package=None, n_pages=None, marks=None):
     """The page sets to try, smallest first: [pages] for budget, 3x budget, then None (= the whole PDF). A PDF that
     fits the budget, or has no text layer, gets [None] (whole, as before)."""

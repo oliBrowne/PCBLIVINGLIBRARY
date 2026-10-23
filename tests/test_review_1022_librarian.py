@@ -52,9 +52,15 @@ def test_custom_vs_connector_is_kept_when_the_type_decides_the_body_hold():
     # a housed horizontal connector read "custom" with no body: as a connector it would be held (body_unread)
     first = {"package_type": "custom", "name": "JST_PHD_S28B-PHDSS_2x14_P2.00mm_Horizontal", "pin_count": 28, "pitch": 2.0,
              "pad_table": {"arrays": [{"count": 14, "x": 0, "y": 0, "dx": -2, "dy": 0}]}}
-    assert D.body_unread(dict(first, package_type="connector")) and not D.body_unread(first)
+    # since 2026-10-22 (27C256) a custom pad table with no body is held too: the type no longer decides the hold, so
+    # it is a word only, and the read is still held for its blank body
+    assert D.body_unread(dict(first, package_type="connector")) and D.body_unread(first)
     c = read(first, nominal(package_type="connector", pitch=2.0, pin_count=28))
-    assert c["status"] == "disagreed" and "package_type" in {d["field"] for d in c["disagreed"]}, c
+    assert c["status"] == "agreed" and c.get("tie_breaks"), c
+    # where only one of the two types would hold (a bare pad pattern is held as neither), the type still decides it
+    from ecadlib import crosscheck as CCm
+    one = {"package_type": "custom", "unread_as": {"custom": False, "connector": True}}
+    assert not CCm._label_only(one, {"package_type": "connector"})
     # with its body read, the type is still a word only (TC2030)
     housed = dict(first, body_length={"nom": 12.0}, body_width={"nom": 8.0})
     c = read(housed, nominal(package_type="connector", pitch=2.0, pin_count=28))
