@@ -291,6 +291,10 @@ CODES = {
                                 "instead of the pads read from the drawing.",
                                 "Check the package code on the datasheet's drawing is {package}.",
                                 [r"standard land: the datasheet read identified (?P<package>\S+) \(.*\); (?P<why>.+?), so the checked standard land"]),
+    "datasheet.dip_holes": ("The datasheet prints no hole size for this DIP, so KiCad's DIP hole and pad (0.8 mm / 1.6 mm) "
+                            "were used in place of the sizes the read chose.",
+                            "Check the maker's recommended hole if the leads are unusually wide.",
+                            [r"DIP holes: the datasheet prints no hole size"]),
     "datasheet.failed": ("Reading the datasheet failed[ ({why})].",
                          "Try again later, or pick a footprint by hand.",
                          [r"datasheet(?: reader)?: failed \((?P<why>.+)\)"]),

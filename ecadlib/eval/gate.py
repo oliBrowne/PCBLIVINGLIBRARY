@@ -114,6 +114,9 @@ def _table(name, ref):
         xs += [x]; ys += [y]
     tht = any(p.get("type") == "tht" for p in pads)
     c = ref.get("courtyard") or []
+    if len(c) != 4 and ref["pads"]:                  # a maker's land gives no courtyard (Maker:... references): the body
+        c = [min(p[1] - p[3] / 2 for p in ref["pads"]) - 0.25, min(p[2] - p[4] / 2 for p in ref["pads"]) - 0.25,   # as
+             max(p[1] + p[3] / 2 for p in ref["pads"]) + 0.25, max(p[2] + p[4] / 2 for p in ref["pads"]) + 0.25]  # read is the pads' box
     body = {"x1": c[0] + 0.25, "y1": c[1] + 0.25, "x2": c[2] - 0.25, "y2": c[3] - 0.25} if len(c) == 4 else None
     pt = {"unit": "mm", "y_axis": "down", "view": "top", "origin": "datum",
           "center_at": {"x": round((min(xs) + max(xs)) / 2, 4), "y": round((min(ys) + max(ys)) / 2, 4)},
