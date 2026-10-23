@@ -82,6 +82,9 @@ DEFAULTS = {
                   # headers, then a Chrome TLS fingerprint, then a headless Edge / Chrome (the last two need
                   # pip install "ecadlib[browser]"); "plain": ecadlib's own request only; or a list of those ways
                   "download": "auto",
+                  # ecadlib.ds_search: no link, part source or folder file gave a PDF: ask Claude's web search for the
+                  # maker's (else a distributor's) PDF; off by default, counted in max_cost_usd ("" model = Haiku)
+                  "web_search": False, "web_search_model": "", "web_search_max_uses": 3,
                   # last: open the link in your own browser and take the PDF from Downloads ("auto": when a person is
                   # watching the run in a terminal; "off"), waiting this long; "" = the system Downloads folder
                   "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""},
@@ -135,7 +138,7 @@ MAP_KEYS = {("naming", "by_category"), ("parameters", "names"), ("parameters", "
 INT_RANGE = {("parameters", "supplier_slots"): (0, 9),
              ("symbols", "layout_pins"): (0, 100_000), ("symbols", "split_pins"): (0, 100_000), ("symbols", "unit_pins"): (8, 10_000),
              ("symbols", "pin_length"): (50, 1000), ("symbols", "grid"): (50, 100), ("datasheet", "auto_pages"): (0, 600), ("datasheet", "page_budget"): (0, 600),
-             ("datasheet", "max_attempts"): (1, 10), ("datasheet", "handoff_wait_s"): (10, 3600),
+             ("datasheet", "max_attempts"): (1, 10), ("datasheet", "web_search_max_uses"): (0, 10), ("datasheet", "handoff_wait_s"): (10, 3600),
              ("notify", "retries"): (0, 10), ("change", "approvers"): (1, 9), ("notify", "timeout_s"): (1, 120)}
 BOM_FIELDS = ("mpn", "manufacturer", "lcsc", "qty", "designator", "value", "footprint", "description", "libref", "dnp", "datasheet")
 
@@ -405,6 +408,9 @@ def validate(raw, where="ecadlib.toml"):
     if ds.get("cross_check_model") and not _LL.MODEL_RE.fullmatch(str(ds["cross_check_model"])):
         _err(where, "datasheet.cross_check_model", f"= {ds['cross_check_model']!r}: must be a model id (or endpoint:model); "
                                                    "\"\" = the model whose answer is checked")
+    if ds.get("web_search_model") and not _LL.MODEL_RE.fullmatch(str(ds["web_search_model"])):
+        _err(where, "datasheet.web_search_model", f"= {ds['web_search_model']!r}: must be a model id such as "
+                                                  "claude-haiku-5-5; \"\" = the default (claude-haiku-5-5)")
     if "ladder" in ds and isinstance(ds["ladder"], list) and not ds["ladder"]:
         _err(where, "datasheet.ladder", "must name at least one model")
     st = raw.get("setup") or {}
@@ -903,6 +909,11 @@ HELP = {
     "datasheet.cross_check": "auto: compare every datasheet footprint with the standard package table, or (not in the table) "
                              "with a second read of only the critical numbers; disagreement holds the part | always: the "
                              "second read for every datasheet part | off",
+    "datasheet.web_search": "when no link, part source or datasheet folder gave a PDF, ask Claude's web search for the "
+                            "maker's PDF (else a distributor's); the PDF must name the part; its cost counts in "
+                            "max_cost_usd (off by default)",
+    "datasheet.web_search_model": "model for the web search (\"\" = claude-haiku-5-5)",
+    "datasheet.web_search_max_uses": "most searches per part (default 3; 0 = none)",
     "datasheet.cross_check_model": "model for the second read (\"\" = the model whose answer is checked; endpoint:model works)",
     "ai.temperature": "auto: temperature 0 (+ seed) where the model takes one; Claude 4.7+/5.x reject it and get nothing | "
                       "off | a number 0-2",
