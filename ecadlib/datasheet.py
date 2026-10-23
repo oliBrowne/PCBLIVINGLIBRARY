@@ -1170,7 +1170,9 @@ def no_footprint(spec, error):
         return f"no footprint: the datasheet read left {what}" + (
             f" (unresolved in the read: {', '.join(unres)})" if unres else " (and did not list it as unresolved)")
     return (f"no footprint: the datasheet read left {', '.join(miss)} blank, which the footprint needs"
-            + (f" (unresolved in the read: {', '.join(unres)})" if unres else ""))
+            + (f" (unresolved in the read: {', '.join(unres)})" if unres else "")
+            + (ipc_hole_hint(spec, [m for m in miss if not re.match(r"\s*(drill|holes?)\b", m, re.I)])
+               if drill_unread(spec) else ""))
 
 
 def joined_to_pad(spec, pins):
@@ -1429,14 +1431,57 @@ def standard_dip_holes(spec):
     return out
 
 
+IPC_HOLE_B = 0.20                          # IPC-2222 level B: hole = largest lead dimension + 0.20 mm (A 0.25, C 0.15)
+
+
+def ipc_hole(spec):
+    """The IPC-2222 level B hole for a through-hole part's leads -> mm (rounded up to 0.05), or None when the read
+    gave no lead size. From terminal_width's max: the lead diameter, or a flat lead's width (its diagonal is larger,
+    so the hold line says to check a flat lead). KTY83 0.55 mm wire -> 0.75; GBU4A 1.27 mm pin -> 1.5 (diagonal of
+    1.27 x 0.66: 1.65)."""
+    big = _lead_max(spec)
+    return round(math.ceil(round((big + IPC_HOLE_B) / 0.05, 6)) * 0.05, 2) if big else None
+
+
+def _lead_max(spec):
+    """terminal_width's largest value (a one-sided "0.55 max" too), or None when it is blank or not a lead's size."""
+    w = spec.get("terminal_width")
+    if isinstance(w, dict):
+        w = [w.get(k) for k in ("min", "nom", "max")] + [(w.get("nom") or 0) + (w.get("tol") or 0)]
+    big = max((v for v in (w if isinstance(w, list) else [w]) if isinstance(v, (int, float))), default=None)
+    return big if big and 0 < big <= 5 else None
+
+
+def ipc_hole_hint(spec, rest=()):
+    """The suggestion a hole hold carries: the IPC-2222 hole and the command that confirms it, or "" without a lead
+    size. A person who checks it confirms with `ecadlib fp-edit ... hole` (fp_edit), and the part builds with it,
+    unless `rest` (other blanks: KTY83's bend spacing, GBU4A's pin positions) still needs the drawing."""
+    h = ipc_hole(spec)
+    if not h:
+        return ""
+    lead = _lead_max(spec)
+    then = (f"; the hole alone does not build it, {', '.join(rest)} is blank too" if rest else
+            " and the part builds with it")
+    return (f". Suggested hole: {h:g} mm (IPC-2222 level B: the {lead:g} mm lead + {IPC_HOLE_B:g} mm; for a flat or "
+            f"square lead use its diagonal). If it is right, confirm it with `ecadlib fp-edit PLAN --part PART hole "
+            f"{h:g}`{then}")
+
+
+def drill_unread(spec):
+    """True when the read lists the part's hole (drill / hole / land / pad table) as not found and printed no drill."""
+    return not spec.get("drill") and any(HOLES_UNREAD.match(str(u)) for u in spec.get("unresolved") or [])
+
+
 def tht_holes_unread(spec):
     """The hold line for a through-hole pad table whose holes the datasheet does not print and that is no plain DIP
     (standard_dip_holes builds those with KiCad's DIP holes): the hole and pad sizes would be the model's guess
-    (KBU4A: 1.5 mm holes, 2.2 mm pads, an assumed 5.08 mm lead spacing). None otherwise."""
+    (KBU4A: 1.5 mm holes, 2.2 mm pads, an assumed 5.08 mm lead spacing). It suggests the IPC-2222 hole (ipc_hole),
+    which a person confirms with fp-edit (Oliver 2026-10-23: hold, suggest IPC-2222, release once confirmed).
+    None otherwise."""
     if not holes_unread(spec) or standard_dip_holes(spec):
         return None
     return ("no footprint: the datasheet prints no hole size for these through-hole pins, so the hole and pad sizes in "
-            "the read are a guess; check the maker's recommended hole on the drawing")
+            "the read are a guess; check the maker's recommended hole on the drawing" + ipc_hole_hint(spec))
 
 
 def body_on_holes(spec):

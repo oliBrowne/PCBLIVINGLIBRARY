@@ -3,15 +3,18 @@
     ecadlib fp-edit PLAN --part P show                     the pad table as read, with the check's problems
     ecadlib fp-edit PLAN --part P rename OLD=NEW [...]     renumber pads (the symbol pin with that number follows)
     ecadlib fp-edit PLAN --part P same-net A,B[,C] [...]   pads on one net, which may overlap
+    ecadlib fp-edit PLAN --part P hole [MM]                confirm the through-hole size (default: the IPC-2222 one)
     ecadlib fp-edit PLAN --part P undo                     drop this part's edits
 
 A pad table the datasheet reader returned can fail the pad-table check (footprint_adv.check_pad_table) for reasons
 a person can settle from the datasheet: a connector that names its pads T, R, S instead of 1, 2, 3 (every footprint
 needs a pad 1 or A1, so a person picks which pad is 1), or two pads that touch because they are one net. The check
-is never relaxed for that part; the edit changes the table it checks. Each command prints the result of the check on
+is never relaxed for that part; the edit changes the table it checks. A through-hole part whose datasheet prints no
+hole is held with an IPC-2222 hole suggested (datasheet.ipc_hole); `hole` confirms it (or another size), every pin
+gets that hole and KiCad's pad around it, and the hold lifts. Each command prints the result of the check on
 the edited table, so `show` -> `rename` -> `show` is the loop.
 
-Edits live in <plan dir>/footprint_edits.json ({part: {rename: {old: new}, same_net: [[..]], by, at}}) and are
+Edits live in <plan dir>/footprint_edits.json ({part: {rename: {old: new}, same_net: [[..]], hole: mm, by, at}}) and are
 applied every time the librarian builds the part from its datasheet answer (librarian.put_datasheet), so a re-run
 of the librarian on the plan builds it. The edit is noted in the part's review notes, with who made it.
 API: load(base), apply(edits, res) -> (res, notes), table(plan, part, edits) -> {pads, problems, ...}."""
@@ -103,8 +106,35 @@ def apply(edit, res):
         from .datasheet import same_net_from_pins
         spec["same_net"] = same_net_from_pins([], (spec.get("same_net") or []) + edit["same_net"])
         notes.append("pads on one net by hand: " + "; ".join(",".join(g) for g in edit["same_net"]))
+    if edit.get("hole"):
+        notes.append(_set_hole(spec, float(edit["hole"])))
     who = f" ({edit.get('by')}, {edit.get('at')})" if edit.get("by") else ""
     return res, [f"footprint edited: {n}{who}" for n in notes]
+
+
+def _set_hole(spec, mm):
+    """A confirmed hole (mm) on every through-hole pin: the drill set, the read's guessed pad sizes dropped so KiCad's
+    ring is put round it (footprint_adv.tht_pad_size), and the hole no longer listed as unresolved -> the note."""
+    from . import datasheet as D, footprint_adv as FA
+    spec["drill"] = mm
+    t = spec.get("pad_table") or {}
+    if t:
+        f = FA.UNIT[t.get("unit", "mm")]
+        drill = round(mm / f, 6)
+        for e in [t.setdefault("default_pad", {})] + list(t.get("arrays") or []) + list(t.get("pads") or []):
+            if e.get("type") in ("smd", "npth") or e.get("polygon"):
+                continue                              # SMD pads and mounting holes keep theirs
+            if e is t["default_pad"] or e.get("drill") is not None:
+                e["drill"] = drill                    # (a pad with no drill of its own takes the default's)
+            e.pop("drill_h", None)
+            for k in ("d", "w", "h", "shape"):
+                e.pop(k, None)
+    # the hole is settled; with no pad table read, its land / pad table is still blank (the pin positions)
+    spec["unresolved"] = [u for u in spec.get("unresolved") or [] if not D.HOLES_UNREAD.match(str(u))
+                          or not t and re.match(r"\s*(land|pad)", str(u), re.I)]
+    ipc = D.ipc_hole(spec)
+    how = " (the IPC-2222 suggestion)" if ipc and abs(ipc - mm) < 1e-6 else ""
+    return f"hole confirmed by hand: {mm:g} mm{how}, the pads sized round it by KiCad's rule"
 
 
 def read(plan, part):
@@ -185,12 +215,14 @@ def main(argv=None):
     r.add_argument("pairs", nargs="+", metavar="OLD=NEW")
     s = sub.add_parser("same-net", help="pads on one net: A,B[,C] ...")
     s.add_argument("groups", nargs="+", metavar="A,B")
+    h = sub.add_parser("hole", help="confirm the through-hole size in mm (default: the IPC-2222 suggestion)")
+    h.add_argument("mm", nargs="?", type=float)
     sub.add_parser("undo", help="drop this part's edits")
     a = ap.parse_args(argv)
     base = _base(a.plan)
     edits = load(base)
     try:
-        read(a.plan, a.part)
+        got = read(a.plan, a.part)
     except FileNotFoundError as e:
         print(f"ecadlib fp-edit: {e}", file=sys.stderr)
         return 2
@@ -207,6 +239,12 @@ def main(argv=None):
                         ap.error(f"rename {pr!r}: use OLD=NEW, e.g. T=1")
                     ren[old.strip()] = new.strip()
                 e["rename"] = ren
+            elif a.cmd == "hole":
+                from .datasheet import ipc_hole
+                mm = a.mm or ipc_hole(got["spec"])
+                if not mm or not 0.1 <= mm <= 10:
+                    ap.error("hole: give the hole in mm, e.g. hole 0.8 (the read has no lead size to suggest one)")
+                e["hole"] = round(mm, 3)
             else:
                 gs = [[x.strip() for x in g.split(",") if x.strip()] for g in a.groups]
                 if any(len(g) < 2 for g in gs):

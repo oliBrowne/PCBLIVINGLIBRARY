@@ -247,6 +247,15 @@ web_search_max_uses = 3    # searches per part
   cap let it try for $1.47: it often answered from memory without searching, and those were its misses. So the search
   runs on Haiku unless `web_search_model` names another model.
 
+**A through-hole part with no printed hole.** Some datasheets give the leads but never the hole: NXP's KTY83
+(an axial glass sensor) and Vishay's GBU4A (a bridge with four flat pins) print no hole, pad or footprint in any of
+their documents. A plain DIP gets KiCad's DIP hole. Any other part is held, because the hole would be a guess. The hold
+suggests the IPC-2222 level B hole: the largest lead size plus 0.20 mm, rounded up to 0.05 mm (KTY83's 0.55 mm wire
+gives 0.75 mm). For a flat or square lead, use its diagonal. If the suggestion is right, a person confirms it with
+`ecadlib fp-edit PLAN --part PART hole`, or gives another size with `hole 1.7`. Every through-hole pin then gets that
+hole and KiCad's pad around it, the edit is noted with who made it, and the part builds on the next librarian run.
+When other values are blank too (KTY83 has no bend spacing), the hold says the hole alone does not build it.
+
 **The package drawing, when the datasheet has none.** Some datasheets have no drawing of the part's package at all. Neutrik's
 product sheets have only photos and spec tables. Altera, Lattice and Microchip family sheets keep their BGA drawings in
 a separate package-information document. An onsemi revision dropped a package. On the 2026-10-23 live benchmark these
