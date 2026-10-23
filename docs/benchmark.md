@@ -20,7 +20,7 @@ main 4f78db8, pages picked automatically):
 | Real cost (API usage) | $23.19, $0.21 a part | $18.73, $0.17 a part | $0.92, under a cent a part |
 
 "Zoom on" is `[datasheet] zoom_drawings = true`: the drawing and land-pattern pages are also sent as close-ups. It
-is off by default. Over the default it got AH1806-W, TPS70345, STULPI01A, NCP4308AMT and S10B-PH-K right and lost
+is off by default. It needs a PDF renderer (pypdfium2, which pip installs with ecadlib, or poppler's `pdftoppm`); an eval run with zoom on and no renderer stops before it reads. The 2026-10-23 run's venv had none, so that run read every part without close-ups. Over the default it got AH1806-W, TPS70345, STULPI01A, NCP4308AMT and S10B-PH-K right and lost
 TC2030 (the cross-check's second read disagreed, so it was held), for $4.46 more.
 
 **Read the split, not just the total.** 23 of the right parts are standard packages (chip resistors and capacitors,
