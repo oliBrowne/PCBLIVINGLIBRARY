@@ -85,9 +85,15 @@ NC_RX = re.compile(r"^(NC|DNC|N/C)$")                   # norm_name() of a no-co
 PLAIN_GROUND = {"GND", "VSS", "GNDPAD"}
 
 
-def same_name(ours, ref):
-    """Two norm_name() pin names for the same pin."""
-    return ours == ref or ours in PLAIN_GROUND and ref in PLAIN_GROUND
+def same_name(ours, ref, ground=True):
+    """Two norm_name() pin names for the same pin. ground: the plain-ground spellings are one name (False when either
+    symbol uses two of them, as IR4301's GND on pin 2 and VSS on pin 7: there they are two connections)."""
+    return ours == ref or ground and ours in PLAIN_GROUND and ref in PLAIN_GROUND
+
+
+def one_ground(*names):
+    """No list of norm_name() pin names spells the plain ground two ways."""
+    return all(len(set(n) & PLAIN_GROUND) <= 1 for n in names)
 
 
 def norm_name(s):
@@ -212,7 +218,8 @@ def score_symbol(mine_pins, ref_pins, tol=None):
                              **({"ep_not_in_kicad": ep} if ep else {}))}
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
-        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s)]
+        ground = one_ground(named.values(), [norm_name(s) for s in a.values()])
+        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, ground)]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
         moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1   # a name KiCad has on another pin:

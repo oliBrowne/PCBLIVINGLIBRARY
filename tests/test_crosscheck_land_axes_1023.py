@@ -85,3 +85,15 @@ def test_a_quad_qfn_is_not_turned_by_its_land():
     first = dfn(3.0, 5.0, (1.65, 4.4), 16, 0.5, LTC4060_LAND)
     first.update(pins_left_right=5, pins_top_bottom=3)
     assert read(first, nominal(5.0, 3.0, (4.4, 1.65), 16, 0.5))["status"] == "disagreed"
+
+
+def test_an_oblong_pad_the_land_does_not_size_still_holds():
+    # Greptile #174: rows that fix the body say nothing of which way an oblong pad runs; only ep_across x ep_along do
+    signal_only = {"pad_length": 0.65, "pad_width": 0.25, "pad_center": 1.425}
+    first = dfn(3.0, 5.0, (1.2, 1.8), 16, 0.5, signal_only)
+    assert not CC.land_axes(first)
+    assert read(first, nominal(5.0, 3.0, (1.8, 1.2), 16, 0.5))["status"] == "disagreed"
+    # a square pad the land does not size: the rows settle the body alone
+    first = dfn(3.0, 5.0, (1.5, 1.5), 16, 0.5, signal_only)
+    assert CC.land_axes(first)
+    assert read(first, nominal(5.0, 3.0, (1.5, 1.5), 16, 0.5))["status"] == "agreed"

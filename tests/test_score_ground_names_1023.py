@@ -34,3 +34,15 @@ def test_ground_on_a_supply_pin_is_still_wrong():
     mine = [("1", "VSS"), ("2", "VDD"), ("3", "A"), ("4", "B"), ("5", "C")]
     r = _names(mine, ref)
     assert not r["ok"] and r["moved"], r
+
+
+def test_a_symbol_with_both_gnd_and_vss_keeps_them_apart():
+    # Greptile #174: IR4301's KiCad symbol has GND on pin 2 and VSS on pin 7, two connections; a swap still fails
+    ref = [("1", "IN"), ("2", "GND"), ("3", "A"), ("4", "B"), ("5", "C"), ("6", "D"), ("7", "VSS"), ("8", "OUT")]
+    mine = [("1", "IN"), ("2", "VSS"), ("3", "A"), ("4", "B"), ("5", "C"), ("6", "D"), ("7", "GND"), ("8", "OUT")]
+    r = _names(mine, ref)
+    assert not r["ok"] and r["matched"] == 6 and r["moved"] == 2, r
+    # ours spelling the ground two ways where KiCad has one GND is not merged either
+    ref = [("1", "IN"), ("2", "GND"), ("3", "GND"), ("4", "OUT")]
+    mine = [("1", "IN"), ("2", "GND"), ("3", "VSS"), ("4", "OUT")]
+    assert _names(mine, ref)["matched"] == 3

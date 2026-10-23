@@ -116,7 +116,8 @@ def land_axes(spec):
     one could tell them apart: rows nearer the read's body length than its width (a body that is not square), and the
     land's ep_across x ep_along equal to the read's exposed pad length x width (a pad that is not square). Then a second
     read with the same sizes the other way round printed D x E in the other order (LTC4060EDHC: DFN 5 x 3 printed,
-    read 3 x 5 with the maker's land; ENS210: 2 x 2 body, EP 0.7 x 1.6 read and land, 1.6 x 0.7 printed)."""
+    read 3 x 5 with the maker's land; ENS210: 2 x 2 body, EP 0.7 x 1.6 read and land, 1.6 x 0.7 printed). An oblong
+    exposed pad needs the land's own ep_across x ep_along: rows that fix the body say nothing of the pad's way."""
     from . import footprint_gen as FG
     land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
     if spec.get("package_type") != "qfn" or not _num(land.get("pad_center")) or not spec.get("pin_count"):
@@ -131,9 +132,11 @@ def land_axes(spec):
         pc = float(land["pad_center"])
         facts.append(abs(pc - body[0][0] / 2) < abs(pc - body[1][0] / 2))
     ea, eg = land.get("ep_across"), land.get("ep_along")
+    el, ew = (_val(ep.get("length")), _val(ep.get("width"))) if isinstance(ep, dict) else (None, None)
     if isinstance(ep, dict) and _num(ea) and _num(eg) and abs(float(ea) - float(eg)) > 0.2:
-        el, ew = _val(ep.get("length")), _val(ep.get("width"))
         facts.append(el is not None and ew is not None and abs(float(ea) - el[0]) <= 0.05 and abs(float(eg) - ew[0]) <= 0.05)
+    elif el is not None and ew is not None and abs(el[0] - ew[0]) > 0.2:
+        return False                                  # an oblong pad the land does not size: the rows can't say its way
     return bool(facts) and all(facts)
 
 
