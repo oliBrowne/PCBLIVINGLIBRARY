@@ -610,7 +610,7 @@ def run(reader, job, res, model):
         checks.append(second_read(reader, job, first, first_pins, model))
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
-    standard = _settle_turn(checks) or _settle_tab(checks, res["spec"])
+    standard = _settle_turn(checks) or _settle_tab(checks, res["spec"], first_pins)
     st = [c["status"] for c in checks]
     ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong and not _self(c)]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
@@ -655,7 +655,7 @@ def _settle_turn(checks):
 ONLY_HERE = re.compile(r"only here: (.+)$")
 
 
-def _settle_tab(checks, spec):
+def _settle_tab(checks, spec, pins=None):
     """A power package with a tab whose read names exactly one checked tab land (stdparts.identify_tab: the drawing's
     family, the tab's number, every lead at its place, the body length), where the other source differs only in how it
     counts the tab: one pin more or less (PSMN5R2-60YL: 5 with the tab, 4 without), the tab given as an exposed pad,
@@ -666,7 +666,7 @@ def _settle_tab(checks, spec):
     if not any(c["status"] == "disagreed" for c in checks):
         return None
     from . import stdparts as S
-    name, how = S.identify_tab(spec)
+    name, how = S.identify_tab(spec, pins)
     if not name:
         return None
     pads = {str(p.get("number")) for p in S.packages()[name]["pad_table"]["pads"] if p.get("number")}

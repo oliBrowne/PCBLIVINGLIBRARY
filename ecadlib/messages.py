@@ -291,6 +291,10 @@ CODES = {
                                 "instead of the pads read from the drawing.",
                                 "Check the package code on the datasheet's drawing is {package}.",
                                 [r"standard land: the datasheet read identified (?P<package>\S+) \(.*\); (?P<why>.+?), so the checked standard land"]),
+    "datasheet.tab_joined": ("The datasheet numbers the tab {tab}, on pin {lead}'s net. The checked land numbers the tab {lead}, so "
+                             "the symbol has no pin {tab}.",
+                             "Check in the datasheet's pin table that the tab and pin {lead} are the same connection.",
+                             [r"tab: the datasheet numbers the tab (?P<tab>\S+), on pin (?P<lead>\S+)'s net"]),
     "datasheet.failed": ("Reading the datasheet failed[ ({why})].",
                          "Try again later, or pick a footprint by hand.",
                          [r"datasheet(?: reader)?: failed \((?P<why>.+)\)"]),

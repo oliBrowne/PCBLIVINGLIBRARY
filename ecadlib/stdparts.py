@@ -497,10 +497,12 @@ def identify(read, known=None):
     return best, f"{label} -> {best}"
 
 
-# power packages with a tab that KiCad draws by hand (the table's pad tables): the drawing's family name -> table prefix
-TAB_FAMILY = re.compile(r"(?<![A-Z0-9])(TO-?252|DPAK|TO-?263|D2PAK|SOT-?223|TO-?261)(?:[-_ ]?(\d)(?!\d))?")
+# power packages with a tab that KiCad draws by hand (the table's pad tables): the drawing's family name (or Nexperia's
+# SOT outline code) -> table prefix
+TAB_FAMILY = re.compile(r"(?<![A-Z0-9])(TO-?252|DPAK|TO-?263|D2PAK|SOT-?223|TO-?261|LFPAK-?56|LFPAK-?33|SOT-?669|SOT-?1210)"
+                        r"(?:[-_ ]?(\d)(?!\d))?")
 TAB_PREFIX = {"TO252": "TO-252", "DPAK": "TO-252", "TO263": "TO-263", "D2PAK": "TO-263", "SOT223": "SOT-223",
-              "TO261": "SOT-223"}
+              "TO261": "SOT-223", "LFPAK56": "LFPAK56", "SOT669": "LFPAK56", "LFPAK33": "LFPAK33", "SOT1210": "LFPAK33"}
 TAB_POS_TOL = 0.06          # a lead's place along the row: TO-252's 2.28 mm is printed 2.3 (e1) on many drawings
 TAB_BODY_TOL = 0.3          # the table's body length (KiCad's fab outline) against the read's min..max
 
@@ -509,7 +511,13 @@ def _tab_entry(name):
     """A pad-table entry with one tab -> (tab number, {lead number: y}, lead side sign, body length) or None. The tab
     is the largest pad; the leads are every other pad, all on the other side."""
     e = packages()[name]
-    pads = [p for p in (e.get("pad_table") or {}).get("pads") or [] if p.get("number") and "w" in p]
+    pads = []
+    for p in (e.get("pad_table") or {}).get("pads") or []:
+        if p.get("number") and p.get("polygon"):        # LFPAK's mounting base: its box
+            xs, ys = [q["x"] for q in p["polygon"]], [q["y"] for q in p["polygon"]]
+            p = dict(p, x=(min(xs) + max(xs)) / 2, y=(min(ys) + max(ys)) / 2, w=max(xs) - min(xs), h=max(ys) - min(ys))
+        if p.get("number") and "w" in p:
+            pads.append(p)
     body = (e.get("pad_table") or {}).get("body")
     if len(pads) < 3 or not body:
         return None
@@ -520,15 +528,31 @@ def _tab_entry(name):
     return str(tab["number"]), {str(p["number"]): p["y"] for p in leads}, body["y2"] - body["y1"]
 
 
-def identify_tab(read):
-    """A datasheet read of a power package with a tab (DPAK / D2PAK / SOT-223: gullwing with a tab and pin_positions)
+def tab_joins(read, pins):
+    """The lead number a read's tab takes when the tab has a number of its own but the pin table puts it on exactly one
+    lead's net (C3D08060G: 1 CATHODE, 2 ANODE, 3 CATHODE the tab; KiCad's TO-263-2_TabPin1 numbers that tab 1, as
+    KiCad's _TabPinN lands do), else None. pins: [(number, name)] from the same read."""
+    from .eval.score import norm_name
+    tab = read.get("tab") if isinstance(read.get("tab"), dict) else {}
+    leads = {str(p.get("number")) for p in read.get("pin_positions") or [] if isinstance(p, dict)}
+    names = {str(n): norm_name(s) for n, s in pins or []}
+    t = str(tab.get("number"))
+    if not tab or t in leads or not names.get(t):
+        return None
+    same = [n for n in leads if names.get(n) == names[t]]
+    return same[0] if len(same) == 1 else None
+
+
+def identify_tab(read, pins=None):
+    """A datasheet read of a power package with a tab (DPAK / D2PAK / SOT-223 / LFPAK: gullwing with a tab and pin_positions)
     -> (table name, how) when exactly one of the table's hand-drawn tab lands fits it, else (None, why). It fits when
     the drawing's family name (TO-252, D2PAK, SOT-223 ...) names the entry's family, the tab carries the entry's tab
     number, every lead the read places is one of the entry's leads at its place along the row (TAB_POS_TOL), on the
     side away from the tab, and the body length (along the leads) fits the entry's. A lead the read leaves out is
     only allowed when it carries the tab's number and the name counts it (TO-252-5_TabPin3: five leads by its name,
     the read gives 1 2 4 5 and tab 3). The builder's tab is the exposed tab only (IPC from the lead span); a tab land
-    runs under the body, so the checked land of the package the read names is the footprint."""
+    runs under the body, so the checked land of the package the read names is the footprint. pins (the read's pin
+    table): a tab numbered on its own but on one lead's net may take that lead's number (tab_joins)."""
     if read.get("package_type") != "gullwing" or not isinstance(read.get("tab"), dict):
         return None, "not a gullwing read with a tab"
     said = " ".join(str(read.get(k) or "") for k in ("name", "description", "drawing")).upper()
@@ -546,6 +570,7 @@ def identify_tab(read):
         return None, "the read gives no tab number, lead places or body length"
     if not leads or len(sides) != 1 or sides == {read["tab"].get("side", "R")}:
         return None, "the read's leads are not all on the side away from the tab"
+    join = tab_joins(read, pins)
     fits = []
     for name in packages():
         if not name.startswith(prefix):
@@ -555,7 +580,7 @@ def identify_tab(read):
             continue
         t, ys, length = e
         n_leads = counted if counted is not None else len(leads)
-        if t != tab_no or len(ys) != n_leads or not set(leads) <= set(ys) or set(ys) - set(leads) - {t}:
+        if t not in (tab_no, join) or len(ys) != n_leads or not set(leads) <= set(ys) or set(ys) - set(leads) - {t}:
             continue
         if any(abs(leads[n] - ys[n]) > TAB_POS_TOL for n in leads):
             continue
@@ -566,6 +591,8 @@ def identify_tab(read):
     if len(fits) != 1:
         return None, f"{label}: {'no' if not fits else 'more than one'} checked tab land fits" + \
             (f" ({', '.join(sorted(fits))})" if fits else "")
+    if _tab_entry(fits[0])[0] != tab_no:
+        label += f" (on lead {join}'s net, so numbered {join})"
     return fits[0], f"{label} -> {fits[0]}"
 
 

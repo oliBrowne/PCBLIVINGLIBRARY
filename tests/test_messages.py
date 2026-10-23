@@ -82,6 +82,8 @@ EXAMPLES = {
     "datasheet.standard_land": "standard land: the datasheet read identified SOIC-8_3.9x4.9mm_P1.27mm (8 pins, pitch 1.27, body "
                                "3.9 x 4.9 -> SOIC-8_3.9x4.9mm_P1.27mm); the read left terminal_length blank, so the checked "
                                "standard land was used. Check the package code on the drawing is this one",
+    "datasheet.tab_joined": "tab: the datasheet numbers the tab 3, on pin 1's net; the land numbers it 1, so the symbol has "
+                            "no pin 3 (check the pin table)",
     "datasheet.failed": "datasheet reader: failed (HTTP 500)",
     "librarian.lcsc_mismatch": "LCSC C123 is BSS84, not BSS138: fix the BOM's LCSC number",
     "librarian.footprint_guess": "footprint SOT-23 chosen by name: compare with the datasheet land pattern",
@@ -297,7 +299,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 10, "datasheet.py": 7,
+    "librarian.py": 11, "datasheet.py": 7,
 }
 
 

@@ -65,6 +65,22 @@ def stacked_pins(sym):
 
 
 # ---------------------------------------------------------------- official KiCad library name index
+
+def drop_joined_tab(res, table_spec, st):
+    """A read's tab numbered on its own but on one lead's net (stdparts.tab_joins), built from a table land that numbers
+    the tab with that lead (C3D08060G: tab 3 CATHODE, TO-263-2_TabPin1 numbers it 1): the symbol's pin for the tab's
+    own number has no pad left, so it goes, and the review says so. -> res (a copy when changed)."""
+    from . import stdparts as SP
+    pins = (res.get("symbol") or {}).get("pins") or []
+    lead = SP.tab_joins(res["spec"], [(q["num"], q["name"]) for q in pins])
+    tab = str((res["spec"].get("tab") or {}).get("number"))
+    pads = {str(q.get("number")) for q in (table_spec.get("pad_table") or {}).get("pads") or []}
+    if not lead or tab in pads or lead not in pads:
+        return res
+    st["review"].append(f"tab: the datasheet numbers the tab {tab}, on pin {lead}'s net; the land numbers it {lead}, so "
+                        f"the symbol has no pin {tab} (check the pin table)")
+    return dict(res, symbol=dict(res["symbol"], pins=[q for q in pins if str(q["num"]) != tab]))
+
 class KiCadLibrary:
     """Name index of the official KiCad libraries (see the module docstring). Building it reads ~400 GitLab tree pages;
     each page is kept in the HTTP cache, so a build that stops (timeout, HTTP 429) resumes where it stopped. After a
@@ -840,7 +856,8 @@ class Run:
             std = (settled, "the cross-check", "the read gave its length and width the other way round (crosscheck."
                    "_settle_turn)")
         if not std and not st["footprint"] and not (res["spec"].get("land") or res["spec"].get("pad_table")):
-            tab, found = SP.identify_tab(res["spec"])   # DPAK / D2PAK / SOT-223: the IPC tab is the exposed tab only
+            # DPAK / D2PAK / SOT-223: the IPC tab is the exposed tab only
+            tab, found = SP.identify_tab(res["spec"], [(q["num"], q["name"]) for q in (res.get("symbol") or {}).get("pins") or []])
             if tab:
                 std = (tab, found, "a tab land runs under the body, where the IPC tab built from the read covers only "
                        "the exposed tab, and the datasheet gives no land of its own")
@@ -861,6 +878,7 @@ class Run:
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
             sp = SP.spec(pkg)
+            res = drop_joined_tab(res, sp, st)
             text, _ = SP.build(pkg, RU.density_for(sp, self.rules))
             hs = res["spec"].get("height_max") and "datasheet height_max" or sp.get("height_max") and "standard package table"
             h = F.dim((res["spec"] if hs == "datasheet height_max" else sp)["height_max"])[2] if hs else None   # this part's own height first

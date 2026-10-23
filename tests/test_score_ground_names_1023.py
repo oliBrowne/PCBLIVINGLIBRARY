@@ -42,10 +42,14 @@ def test_a_symbol_with_both_gnd_and_vss_keeps_them_apart():
     mine = [("1", "IN"), ("2", "VSS"), ("3", "A"), ("4", "B"), ("5", "C"), ("6", "D"), ("7", "GND"), ("8", "OUT")]
     r = _names(mine, ref)
     assert not r["ok"] and r["matched"] == 6 and r["moved"] == 2, r
-    # ours spelling the ground two ways where KiCad has one GND is not merged either
-    ref = [("1", "IN"), ("2", "GND"), ("3", "GND"), ("4", "OUT")]
-    mine = [("1", "IN"), ("2", "GND"), ("3", "VSS"), ("4", "OUT")]
-    assert _names(mine, ref)["matched"] == 3
+
+
+def test_one_ground_on_kicads_gnd_and_gndpad_is_one_net():
+    # LTC4060EDHC (free re-score 62b4697): KiCad's 16 GND and 17 GNDPAD, ours GND on both; not a swap
+    ref = [(str(i), f"P{i}") for i in range(1, 16)] + [("16", "GND"), ("17", "GNDPAD")]
+    mine = [(str(i), f"P{i}") for i in range(1, 16)] + [("16", "GND"), ("17", "GND")]
+    r = _names(mine, ref)
+    assert r["ok"] and r["matched"] == 17 and not r["moved"], r
 
 
 def test_a_regulators_vin_vout_are_kicads_vi_vo():

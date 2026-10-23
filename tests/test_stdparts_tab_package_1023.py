@@ -184,3 +184,84 @@ def test_a_second_read_that_calls_the_tab_package_custom_is_built_from_the_tab_l
     # but another type (qfn) picks another builder: still held
     name, c = _settle(IPS6011, _second(IPS6011, package_type="qfn"), pins, pins + [("6", "Vcc")])
     assert name is None
+
+
+# ---------------------------------------------------------------- a tab on one lead's net
+C3D = {"name": "TO-263-2", "package_type": "gullwing", "pin_count": 3, "pitch": 2.54,
+       "body_length": {"min": 10.04, "max": 10.28}, "body_width": {"min": 8.89, "max": 9.4},
+       "lead_span": {"min": 14.73, "max": 15.75}, "terminal_length": {"min": 2.29, "max": 2.79},
+       "terminal_width": {"min": 0.71, "max": 0.94}, "height_max": 4.57, "polarized": True,
+       "pin_positions": [{"number": 1, "side": "L", "offset": -2.54}, {"number": 2, "side": "L", "offset": 2.54}],
+       "tab": {"number": 3, "side": "R", "offset": 0, "width": {"min": 7.535, "max": 8.425},
+               "length": {"min": 6.48, "max": 6.88}}}
+C3D_PINS = [("1", "CATHODE"), ("2", "ANODE"), ("3", "CATHODE")]
+
+
+def test_a_tab_on_one_leads_net_takes_that_leads_number():
+    # C3D08060G (10-23): Wolfspeed numbers the tab 3, on the cathode like lead 1; KiCad's TO-263-2_TabPin1 numbers it 1
+    assert SP.tab_joins(C3D, C3D_PINS) == "1"
+    name, how = SP.identify_tab(C3D, C3D_PINS)
+    assert name == "TO-263-2_TabPin1" and "numbered 1" in how, how
+    assert SP.identify_tab(C3D)[0] is None                       # without the pin table: no land has tab 3
+
+
+def test_a_tab_on_two_leads_nets_or_its_own_net_joins_nothing():
+    assert SP.tab_joins(C3D, [("1", "CATHODE"), ("2", "CATHODE"), ("3", "CATHODE")]) is None
+    assert SP.tab_joins(C3D, [("1", "CATHODE"), ("2", "ANODE"), ("3", "SUBSTRATE")]) is None
+    assert SP.identify_tab(C3D, [("1", "CATHODE"), ("2", "ANODE"), ("3", "SUBSTRATE")])[0] is None
+
+
+def test_the_cross_check_settles_a_joined_tab_called_custom_with_one_pin_less():
+    # C3D08060G 10-23: second read custom, pin_count 2, the tab as an exposed pad
+    second = _second(C3D, package_type="custom", pin_count=2, tab=None, pin_positions=None, lead_span=None)
+    name, c = _settle(C3D, second, C3D_PINS, C3D_PINS)
+    assert name is None                                          # (_settle passes no pins)
+    from ecadlib import crosscheck as CC
+    c = CC.against_read(CC.critical(C3D), CC.critical(second), C3D_PINS, C3D_PINS)
+    assert CC._settle_tab([c], C3D, C3D_PINS) == "TO-263-2_TabPin1" and c["status"] == "agreed", c
+
+
+def test_the_librarian_drops_the_joined_tabs_own_pin():
+    from ecadlib import librarian as L
+    st = {"review": []}
+    res = {"spec": C3D, "symbol": {"pins": [{"num": n, "name": s} for n, s in C3D_PINS]}}
+    out = L.drop_joined_tab(res, SP.spec("TO-263-2_TabPin1"), st)
+    assert [q["num"] for q in out["symbol"]["pins"]] == ["1", "2"] and "numbers the tab 3" in st["review"][0]
+    assert res["symbol"]["pins"][2]["num"] == "3"                # the read itself is left as it was
+    assert L.drop_joined_tab(res, SP.spec("TO-263-2"), {"review": []}) is res
+
+
+# ---------------------------------------------------------------- LFPAK (Nexperia SOT669 / SOT1210)
+PSMN5R2 = {"name": "LFPAK56", "package_type": "gullwing", "pin_count": 5, "pitch": 1.27,
+           "body_length": {"min": 4.8, "max": 5.0}, "body_width": {"min": 3.8, "max": 4.1},
+           "lead_span": {"min": 5.8, "max": 6.2}, "terminal_length": {"min": 0.4, "max": 0.85},
+           "terminal_width": {"min": 0.35, "max": 0.5}, "height_max": 1.2,
+           "pin_positions": [{"number": 1, "side": "L", "offset": -1.905}, {"number": 2, "side": "L", "offset": -0.635},
+                             {"number": 3, "side": "L", "offset": 0.635}, {"number": 4, "side": "L", "offset": 1.905}],
+           "tab": {"number": 5, "side": "R", "offset": 0, "width": {"min": 3.62, "max": 4.41},
+                   "length": {"min": 0.8, "max": 1.3}}}
+
+
+def test_an_lfpak56_read_names_kicads_lfpak56_and_its_drain_tab():
+    # PSMN5R2-60YL 10-23: IPC built the drain tab 2.05 x 4.5 at +2.425; KiCad's mounting base runs under the body
+    assert SP.identify_tab(PSMN5R2)[0] == "LFPAK56"
+    assert SP.identify_tab(dict(PSMN5R2, name="SOT669"))[0] == "LFPAK56"
+    s = copy.deepcopy(PSMN5R2)
+    s["pin_positions"][0]["offset"] = -1.7                       # a lead elsewhere: no land
+    assert SP.identify_tab(s)[0] is None
+    assert SP.identify_tab(dict(PSMN5R2, name="LFPAK33"))[0] is None   # LFPAK33's leads are at 0.65 pitch
+
+
+def test_the_lfpak_lands_match_kicads():
+    # the table entries are KiCad's hand-made LFPAK56 / LFPAK33 (pad 5 the custom pad's outline): built, every pad
+    # where KiCad's is (eval reference boxes)
+    from ecadlib import footprint_bench as B
+    from ecadlib.eval import score as S
+    import json
+    from pathlib import Path
+    refs = json.loads((Path(SP.__file__).parent / "eval" / "sets" / "kicad-v1.json").read_text())["references"]
+    for n in ("LFPAK56", "LFPAK33"):
+        mine = B.numbers(SP.build(n)[0])
+        ref = refs[f"Package_TO_SOT_SMD:{n}"]
+        res = S.score_footprint(mine, ref)
+        assert res["pads"]["ok"] and res["courtyard"]["ok"], (n, res)
