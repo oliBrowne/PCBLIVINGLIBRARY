@@ -52,15 +52,33 @@ obsolete, the last manufacturer datasheet is fine.
 The PDF must cover this part's package drawing. Answer with one line of JSON and nothing after it:
 {{"urls": ["<best direct PDF link>", "<second choice>", ...]}}"""
 
+# the part's datasheet holds no drawing of its package (outline_docs.drawing_missing): the drawing is often a document
+# of its own (benchmark 2026-10-23: Altera / Lattice / Microchip package information documents, Neutrik product
+# drawings and PCB layouts, onsemi case outlines, Maxim 21-xxxx outlines)
+PACKAGE_PROMPT = """Find the package outline drawing PDF for the electronic part {mpn}{maker}{package}.
+
+Its datasheet has no drawing of this package{refs}. Makers publish the drawing as a document of its own: a package
+information or packaging specification document, a case outline, a mechanical or product drawing, or a PCB layout
+drawing (connectors). I need direct links to a PDF that gives this package's dimensions (body, pitch, leads, balls or
+pins and holes) and, when the maker publishes one, its recommended PCB land pattern. Prefer the manufacturer's own site;
+a major distributor's copy is the next best. Never give a datasheet aggregator or mirror site.
+
+Answer with one line of JSON and nothing after it:
+{{"urls": ["<best direct PDF link>", "<second choice>", ...]}}"""
+
 
 def tool_type(model):
     from . import datasheet as D
     return TOOL if D.base_model(model) in NEW_TOOL_MODELS else TOOL_BASIC
 
 
-def request_body(mpn, model, maker=None, package=None, max_uses=MAX_USES):
-    text = PROMPT.format(mpn=mpn, maker=f" made by {maker}" if maker else "",
-                         package=f" (package {package})" if package else "")
+def request_body(mpn, model, maker=None, package=None, max_uses=MAX_USES, kind="datasheet", refs=()):
+    """kind: "datasheet" (the part's datasheet) or "package" (its package drawing, PACKAGE_PROMPT; refs: the
+    document numbers the datasheet gives for it)."""
+    said = f"; it names the document {', '.join(refs)} for it" if refs else ""
+    text = (PACKAGE_PROMPT if kind == "package" else PROMPT).format(
+        mpn=mpn, maker=f" made by {maker}" if maker else "", package=f" (package {package})" if package else "",
+        refs=said)
     from . import datasheet as D
     levels = D.EFFORT_LEVELS.get(D.base_model(model))   # (Haiku 4.5, Sonnet 4.5 reject output_config.effort)
     body = {"model": model, "max_tokens": MAX_TOKENS}
@@ -136,12 +154,12 @@ def add_usage(total, u):
 
 
 def search(client, mpn, model, maker=None, package=None, max_uses=MAX_USES, headers=None, extra=None,
-           may_continue=None):
+           may_continue=None, kind="datasheet", refs=()):
     """One search conversation (continued on pause_turn while may_continue(turns) says the cost cap allows another
     turn). extra: more request fields (fallbacks), with their beta in headers. A request that fails ends it: the turns
     answered before it are kept, so what they cost is still counted. -> (links, usage summed over the turns, the
     answered turns' messages, the error or None)"""
-    body = dict(request_body(mpn, model, maker, package, max_uses), **(extra or {}))
+    body = dict(request_body(mpn, model, maker, package, max_uses, kind, refs), **(extra or {}))
     usage, turns = {}, []
     for _ in range(MAX_TURNS):
         if turns and may_continue and not may_continue(turns):

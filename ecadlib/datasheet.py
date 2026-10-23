@@ -3211,19 +3211,32 @@ class Reader:
             if got:
                 return got
             found.drop(part)                          # it gave its PDF once and no longer does: search again
+        for url in self._search_links(part, package, attempts, maker) or ():
+            got = self._fetch_found(url, part, attempts)
+            if got:
+                found.put(part, url)
+                return got
+        return None, None
+
+    def _search_links(self, part, package, attempts, maker=None, kind="datasheet", refs=()):
+        """One web search (ds_search.search, kind "datasheet" or "package"), held under [datasheet] max_cost_usd and
+        written to cost.jsonl -> the links ranked (the maker's copy, then a distributor's, then a mirror's), or None
+        when no search was made; the misses in attempts."""
+        from . import ds_search as WS
         model = self.cfg.get("web_search_model") or WS.DEFAULT_MODEL
         uses = self.cfg.get("web_search_max_uses")
         uses = WS.MAX_USES if uses is None or str(uses).strip() == "" else int(uses)
+        where = "web search" if kind == "datasheet" else "web search (package drawing)"
         if uses < 1:                                  # 0: no search may be made
-            attempts.append({"url": "", "where": "web search", "error": f"not searched: [datasheet] web_search_max_uses "
+            attempts.append({"url": "", "where": where, "error": f"not searched: [datasheet] web_search_max_uses "
                              f"= {uses}"})
-            return None, None
+            return None
         fallback = model in FALLBACK_MODELS           # a classifier decline is re-run on another model, as for a read
         est, cap = WS.estimate(model, uses, fallback), float(self.cfg.get("max_cost_usd") or 0)
         if cap and (est is None or self.committed_usd + est > cap):
-            attempts.append({"url": "", "where": "web search", "error": f"not searched: about ${est or 0:.2f} more "
+            attempts.append({"url": "", "where": where, "error": f"not searched: about ${est or 0:.2f} more "
                              f"would pass [datasheet] max_cost_usd = {cap:g}"})
-            return None, None
+            return None
         headers, extra = ({"anthropic-beta": FALLBACK_BETA}, {"fallbacks": "default"}) if fallback else ({}, {})
 
         def may_continue(turns):                      # a continuation resends what was read: only while it fits the cap
@@ -3232,30 +3245,77 @@ class Reader:
         try:
             client = self.client(model)
         except DatasheetError as e:                   # (--offline, no key: nothing was sent)
-            attempts.append({"url": "", "where": "web search", "error": f"search failed: {e}"})
-            return None, None
+            attempts.append({"url": "", "where": where, "error": f"search failed: {e}"})
+            return None
         urls, usage, turns, err = WS.search(client, part, model, maker=maker, package=package, max_uses=uses,
-                                            headers=headers, extra=extra, may_continue=may_continue)
+                                            headers=headers, extra=extra, may_continue=may_continue, kind=kind,
+                                            refs=refs)
         how = "usage" if WS.usd(model, turns) is not None and not err else "estimate"
         usd = WS.usd(model, turns, unknown=est or 0.0)   # each turn with no usage (or no price) holds its worst case
         if err:                                       # the failed request may still have been billed: hold its worst case
             usd += est or 0.0
         self.committed_usd += usd
         self.ledger.add({"part": part, "name": part, "model": model,
-                         "model_served": (turns[-1] if turns else {}).get("model"), "via": "web search",
+                         "model_served": (turns[-1] if turns else {}).get("model"), "via": where,
                          "input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0),
                          "web_searches": usage.get("web_search_requests", 0), "usd": round(usd, 6), "how": how,
                          "verdict": f"search failed: {err}" if err else f"{len(urls)} links"})
         if err and not urls:
-            attempts.append({"url": "", "where": "web search", "error": f"search failed: {err}"})
+            attempts.append({"url": "", "where": where, "error": f"search failed: {err}"})
         elif not urls:
-            attempts.append({"url": "", "where": "web search", "error": "the search found no PDF link"})
-        for url in WS.rank(urls, maker):             # the maker's copy, then a distributor's, then a mirror's
-            got = self._fetch_found(url, part, attempts)
-            if got:
-                found.put(part, url)
-                return got
-        return None, None
+            attempts.append({"url": "", "where": where, "error": "the search found no PDF link"})
+        return WS.rank(urls, maker)
+
+    def _package_search(self, data, texts, part, package, prov, attempts, maker=None, codes=()):
+        """[datasheet] web_search, for a datasheet with no drawing of the part's package (outline_docs.drawing_missing:
+        a product sheet with photos only, a family sheet whose package drawings are a document of their own): one
+        search for the package drawing (ds_search PACKAGE_PROMPT), the first PDF found that is about this part or its
+        package (outline_docs.names_it) appended to the datasheet like an outline document -> (bytes, prov), or None
+        when no search was made. A link found before is used again without a search (<out>/datasheet/web_search.json,
+        "<part> package drawing"). What could not be got is said in prov["outline_missing"], the misses in attempts."""
+        from . import ds_route as DR, ds_search as WS, outline_docs as OD
+        own = DR.page_scores(texts, part, package)[1]
+        found, key = WS.Found(self.dir), f"{part} package drawing"
+        saved, tries = found.get(key), attempts
+        got = None
+
+        def take(url):
+            try:
+                b, meta = self.store.fetch(url, "web search (package drawing)", part=part, handoff=False, public=True)
+            except DatasheetError as e:
+                tries.append({"url": url, "where": "web search (package drawing)", "error": str(e)})
+                return None
+            if hashlib.sha256(b).hexdigest() == prov.get("sha256"):
+                tries.append({"url": url, "where": "web search (package drawing)", "error": "the datasheet itself"})
+                return None
+            if not OD.names_it(DR.page_texts(b), part, codes, own, meta.get("url") or url):
+                tries.append({"url": url, "where": "web search (package drawing)",
+                              "error": f"the PDF at {meta.get('url') or url} names neither {part} nor its package"})
+                return None
+            return b, meta.get("url") or url
+        if saved:
+            got = take(saved)
+            if not got:
+                found.drop(key)
+        if not got:
+            urls = self._search_links(part, package, tries, maker, kind="package", refs=list(codes))
+            if urls is None:
+                return None
+            for url in urls:
+                got = take(url)
+                if got:
+                    found.put(key, url)
+                    break
+        out = dict(prov)
+        merged = OD.append(data, [got[0]]) if got else None
+        if merged is None:
+            return data, dict(out, outline_missing=list(out.get("outline_missing") or []) + [
+                "no package drawing: the datasheet has none of this package and a web search found no PDF of it"
+                + (f" ({tries[-1]['error'][:160]})" if tries else "")])
+        first = (pdf_pages(data) or 0) + 1
+        return merged, dict(out, sha256=hashlib.sha256(merged).hexdigest(), pages=pdf_pages(merged),
+                            outline=list(out.get("outline") or []) + [{"code": "web search", "from": got[1],
+                                                                       "first_page": first}])
 
     def _fetch_found(self, url, part, attempts):
         """A link a web search gave -> (data, prov) or None (the miss in attempts). Never a private address: the link
@@ -3341,9 +3401,16 @@ class Reader:
             got = self._outline_docs(data, texts, part, package, prov) if texts else None
             if got:                                   # the package drawing is a separate document: appended
                 data, prov = got
-                if prov.get("outline"):
-                    src_hash, n = prov["sha256"], pdf_pages(data)
-                    texts = self._page_texts(data, src_hash)
+            if texts and not prov.get("outline") and self.cfg.get("web_search") and not self.estimate_only:
+                from . import outline_docs as OD
+                if OD.drawing_missing(texts, part, package):   # none of this package at all: search for its drawing
+                    codes = [c for c, _, _ in OD.refs(texts, part, package)]
+                    got = self._package_search(data, texts, part, package, prov, attempts, maker, codes) or got
+                    if got:
+                        data, prov = got
+            if got and prov.get("outline"):
+                src_hash, n = prov["sha256"], pdf_pages(data)
+                texts = self._page_texts(data, src_hash)
             facts = DR.ordering_facts(texts, part, data) if texts else None
             if not pages and self.page_budget and n and n > self.page_budget:
                 if texts:
@@ -3587,7 +3654,8 @@ class Reader:
             res["needs_review"].append(f"the package drawing came from {o['code']} ({o['from']}), appended from page "
                                        f"{o['first_page']}: check it is this part's package")
         for m in job["prov"].get("outline_missing") or ():
-            res["needs_review"].append(f"the datasheet has no drawing of this package, only its document number: {m}")
+            res["needs_review"].append(m if m.startswith("no package drawing") else
+                                       f"the datasheet has no drawing of this package, only its document number: {m}")
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)

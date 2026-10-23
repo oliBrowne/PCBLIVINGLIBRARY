@@ -28,6 +28,41 @@ def _has_drawing(texts, rows):
     return False
 
 
+def drawing_missing(texts, part=None, package=None):
+    """Does the PDF hold no drawing of this part's package (the case for a web search for the package document,
+    Reader._package_search)? True only when it can be told from the text: no dimension table of this package (or one
+    naming no other package), no page captioned as a drawing of it, and no image-only page past the first (an image
+    can be the drawing: CY14U256LA-BA, IR4301, benchmark 2026-10-23). A PDF with no text layer: False."""
+    if not texts or not any((t or "").strip() for t in texts):
+        return False
+    rows = DR.page_scores(texts, part, package)[0]
+    if _has_drawing(texts, rows):
+        return False
+    for i, r in enumerate(rows):
+        if r["toc"] or r["noise"]:
+            continue
+        if r["blank"] and i > 0 or r["drawing"] and not r["other"]:
+            return False
+    return True
+
+
+def names_it(texts, part, codes=(), own=(), url=""):
+    """Is a package document found by search about this part? It names the part (datasheet.mentions_part), one of
+    the document numbers the datasheet gives, or this part's package (a package information document lists packages,
+    not parts). A PDF whose text can't be read counts only when its link names the part (a drawing PDF named for it)."""
+    from . import datasheet as D
+    said = D.mentions_part(texts, part)
+    if said:
+        return True
+    flat = re.sub(r"[^A-Z0-9]", "", " ".join(t or "" for t in texts).upper())
+    if any(re.sub(r"[^A-Z0-9]", "", c.upper()) in flat for c in codes if c):
+        return True
+    if own and any(DR._tok_match(own, DR.package_tokens(DR.norm_text(t or ""))) for t in texts):
+        return True
+    key = re.sub(r"[^A-Z0-9]", "", str(part or "").upper())
+    return said is None and len(key) >= 4 and key in re.sub(r"[^A-Z0-9]", "", str(url).upper())
+
+
 def refs(texts, part=None, package=None):
     """[(document number, maker, 1-based page)] the PDF prints for this part's package, when it has no drawing of
     it. A number counts only on a line (or the line before it) that names this package: a list of every package's

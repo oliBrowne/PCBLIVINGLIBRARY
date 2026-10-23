@@ -247,6 +247,23 @@ web_search_max_uses = 3    # searches per part
   cap let it try for $1.47: it often answered from memory without searching, and those were its misses. So the search
   runs on Haiku unless `web_search_model` names another model.
 
+**The package drawing, when the datasheet has none.** Some datasheets have no drawing of the part's package at all. Neutrik's
+product sheets have only photos and spec tables. Altera, Lattice and Microchip family sheets keep their BGA drawings in
+a separate package-information document. An onsemi revision dropped a package. On the 2026-10-23 live benchmark these
+were 12 of the 17 parts held for a blank dimension. With `web_search = true`, such a part gets a second search, for its
+package drawing: a package-information document, a case outline, a product drawing or a PCB layout.
+
+- It runs only when the PDF's text shows no drawing of this package. That means no dimension table for this package, no
+  page captioned as its drawing, and no image-only page after the first (an image-only page may be the drawing). A PDF
+  with no text layer is never searched for.
+- A PDF the search finds is kept only if it names the part, a document number the datasheet gives for it, or the
+  part's package. Its pages go after the datasheet's, like an outline document's. The review says where the drawing
+  came from, and that the drawing must be checked against the part's package.
+- The search costs the same as a datasheet search. It is written to `cost.jsonl` as "web search (package drawing)".
+  The link it finds is kept in `web_search.json` as "<part> package drawing".
+- If nothing is found, the datasheet is read alone and the review says no package drawing was found. The part is
+  still held if the read leaves a dimension blank.
+
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 
 **Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file
