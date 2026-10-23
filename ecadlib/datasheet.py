@@ -1219,10 +1219,24 @@ def thermal_land_missing(spec, maker=None, url=None):
     src = " ".join(str(v or "") for v in ((spec.get("source") or {}).get("datasheet"), url))
     if not (ep and spec.get("package_type") in ("gullwing", "qfp") and (TI_URL.search(src) or ti_maker(maker))):
         return None
-    if land.get("ep_across") and land.get("ep_along"):
+    a, b = land.get("ep_across"), land.get("ep_along")
+    if not (a and b):
+        return ("no footprint: TI's PowerPAD thermal land (the board pad under the exposed pad, larger than it) was not "
+                "read; check the land pattern page at the end of the datasheet")
+    # the land read must cover the exposed pad at its largest: OPA569DWP (benchmark 2026-10-23, zoom run) was read as
+    # 3.56 x 4.47 mm, the figure's "required" via area, while TI prints a 7.6 x 13 mm minimum copper there and the
+    # pad itself reaches 3.81 x 4.32 mm; the thermal pad built was 7.6 mm short of KiCad's (TI's) land
+    from . import footprint_gen as F
+    try:
+        top = sorted(F.dim(ep[k])[2] for k in ("length", "width"))
+    except (KeyError, TypeError):
         return None
-    return ("no footprint: TI's PowerPAD thermal land (the board pad under the exposed pad, larger than it) was not "
-            "read; check the land pattern page at the end of the datasheet")
+    if all(isinstance(v, (int, float)) for v in (a, b)) and \
+            any(x < m - 0.05 for x, m in zip(sorted((a, b)), top)):
+        return (f"no footprint: the TI PowerPAD thermal land read ({a:g} x {b:g} mm) does not cover the exposed pad at "
+                f"its largest ({top[0]:g} x {top[1]:g} mm), while TI's land is larger than the pad; read the thermal "
+                "land's copper from the land pattern page")
+    return None
 
 
 IPC_LAND = ("chip", "molded", "gullwing", "qfp", "qfn")      # builders that size the pads by IPC-7351B when no land is read
@@ -1241,6 +1255,21 @@ def land_unread(spec, pages):
     where = ", ".join(str(p) for p in pages[:4])
     return (f"no footprint: the datasheet prints a recommended land for this package (page {where}) but the read did not "
             "return it, so the IPC pads would differ from the maker's land; read the land from that page")
+
+
+def tab_land_unread(spec):
+    """The hold line when the maker's recommended land was read for the leads of a tab package (SOT-223, DPAK) but the
+    builder can size only those: footprint_gen._apply_land keeps the tab's IPC size, so the footprint would be half the
+    maker's land and half IPC's (benchmark 2026-10-23, zoom run: LP38693MP-1.8 TI NDC0005A land 1 x 1.5 mm leads
+    with a 3.3 x 1.5 mm tab land, BAT160C Nexperia SOT223 reflow footprint 1.2 mm leads with a 3.6 x 1.2 mm tab land;
+    both leads matched the maker, both tabs were built off). None otherwise."""
+    land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
+    if not spec.get("tab") or spec.get("pad_table") or \
+            not all(isinstance(land.get(k), (int, float)) for k in ("pad_length", "pad_width", "pad_center")):
+        return None
+    return ("no footprint: the datasheet's recommended land was read for the leads but this builder can't take the "
+            "tab's land from it, so the tab pad would be an IPC size beside the maker's lead pads; check the tab's land "
+            "on the land pattern page")
 
 
 SIDEWAYS = re.compile(r"horizontal|right[ -]?angle|\bR/?A\b|side[ -]?entry", re.I)
@@ -1291,6 +1320,134 @@ def body_unread(spec):
                 "pads while the body may reach past them; read the body size from the drawing")
     return ("no footprint: the datasheet read left the connector's body outline blank, so its courtyard would hug the "
             "pads while the housing reaches past them; read the body size from the drawing")
+
+
+DIP_ROWS = (7.62, 10.16, 15.24, 22.86)      # 300 / 400 / 600 / 900 mil row spacing
+DIP_PAD = {"drill": 0.8, "pad": 1.6}       # KiCad Package_DIP (and IPC-2222 for 0.46-0.56 mm leads): hole 0.8, pad 1.6
+
+
+def _tht_layout(spec):
+    """A pad table's pins as footprint_adv.table_layout lays them out, when they are all through-hole -> (pins, body
+    box or None), else None."""
+    from . import footprint_adv as FA
+    try:
+        pads, body, *_ = FA.table_layout(spec)
+    except Exception:                                 # a table the layout rejects: footprint_gen.build says why
+        return None
+    pins = [p for p in pads if p["role"] == "pin"]
+    if not pins or any(p["kind"] != "thru_hole" for p in pins):
+        return None
+    return pins, body
+
+
+def dip_table(spec):
+    """True when a pad table is a plain DIP: two columns of N/2 through-hole pins 2.54 mm apart, the columns 300, 400,
+    600 or 900 mil apart, numbered down one column and back up the other (counter-clockwise from pin 1)."""
+    got = _tht_layout(spec)
+    if not got:
+        return False
+    pins = got[0]
+    n = len(pins)
+    if n < 4 or n % 2:
+        return False
+    for xy in ((lambda p: p["x"], lambda p: p["y"]), (lambda p: p["y"], lambda p: p["x"])):
+        across, along = xy
+        cols = sorted({round(across(p), 2) for p in pins})
+        if len(cols) != 2 or not any(abs(cols[1] - cols[0] - w) <= 0.1 for w in DIP_ROWS):
+            continue
+        by = {c: sorted((p for p in pins if round(across(p), 2) == c), key=along) for c in cols}
+        if any(len(v) != n // 2 for v in by.values()):
+            continue
+        if any(abs(along(b) - along(a) - 2.54) > 0.03 for v in by.values() for a, b in zip(v, v[1:])):
+            continue
+        nums = [str(p["num"]) for p in pins]
+        if sorted(nums, key=lambda v: (len(v), v)) != [str(i) for i in range(1, n + 1)]:
+            continue
+        one = next(p for p in pins if str(p["num"]) == "1")
+        col = by[round(across(one), 2)]
+        down = [str(p["num"]) for p in (col if col[0] is one else col[::-1])]
+        other = by[cols[1] if col is by[cols[0]] else cols[0]]
+        back = [str(p["num"]) for p in (other[::-1] if col[0] is one else other)]
+        if down == [str(i) for i in range(1, n // 2 + 1)] and back == [str(i) for i in range(n // 2 + 1, n + 1)]:
+            return True
+    return False
+
+
+HOLES_UNREAD = re.compile(r"\s*(drill|holes?|land(\s+pattern)?|pad[ _]table)\b", re.I)
+
+
+def holes_unread(spec):
+    """True when a through-hole pad table's holes are not the datasheet's: every pin is through-hole and the read lists
+    the drill, the hole or the land among what it could not find (unresolved), so the table's hole and pad sizes are
+    the model's own choice (benchmark 2026-10-23, zoom run: 16550 PDIP-40 "drill (not given on drawing; chosen from
+    lead width)", 0.035 in holes, 0.09 mm over KiCad's; KBU4A "land pattern (not given in datasheet)", 1.5 mm holes
+    and 2.2 mm pads assumed from the lead diameter; UCC1895J and AM26LS31CN "drill"). A drill the read printed, or a
+    pad copper size alone left open around a printed hole (S10B-PH-K), is the datasheet's."""
+    if spec.get("package_type") not in DRAWN_TABLE or spec.get("drill") or not (spec.get("pad_table") or {}):
+        return False
+    if not any(HOLES_UNREAD.match(str(u)) for u in spec.get("unresolved") or []):
+        return False
+    return _tht_layout(spec) is not None
+
+
+def standard_dip_holes(spec):
+    """A plain DIP pad table whose holes the datasheet does not print (holes_unread) -> the spec with KiCad's DIP holes
+    and pads (0.8 mm / 1.6 mm, every DIP in Package_DIP) in place of the model's choice, or None when it is not one.
+    The pad positions and the body stay the read's."""
+    if not (holes_unread(spec) and dip_table(spec)):
+        return None
+    tw = spec.get("terminal_width")
+    if isinstance(tw, dict) and isinstance(tw.get("max"), (int, float)) and tw["max"] > 0.7:
+        return None                                   # leads too wide for the 0.8 mm hole
+    import copy
+    from . import footprint_adv as FA
+    out = copy.deepcopy(spec)
+    t = out["pad_table"]
+    f = FA.UNIT[t.get("unit", "mm")]
+    drill, pad = round(DIP_PAD["drill"] / f, 6), round(DIP_PAD["pad"] / f, 6)
+    for e in [t.setdefault("default_pad", {})] + list(t.get("arrays") or []) + list(t.get("pads") or []):
+        sized = e is t["default_pad"] or any(e.get(k) is not None for k in ("drill", "d", "w", "h"))
+        if e.get("drill") is not None or e is t["default_pad"]:
+            e["drill"] = drill
+        e.pop("drill_h", None)
+        if sized:
+            for k in ("d", "w", "h"):
+                if e.get(k) is not None or (e is t["default_pad"] and k != "d"):
+                    e[k] = pad
+    return out
+
+
+def tht_holes_unread(spec):
+    """The hold line for a through-hole pad table whose holes the datasheet does not print and that is no plain DIP
+    (standard_dip_holes builds those with KiCad's DIP holes): the hole and pad sizes would be the model's guess
+    (KBU4A: 1.5 mm holes, 2.2 mm pads, an assumed 5.08 mm lead spacing). None otherwise."""
+    if not holes_unread(spec) or standard_dip_holes(spec):
+        return None
+    return ("no footprint: the datasheet prints no hole size for these through-hole pins, so the hole and pad sizes in "
+            "the read are a guess; check the maker's recommended hole on the drawing")
+
+
+def body_on_holes(spec):
+    """The hold line when a through-hole part's body outline (pad_table body) runs through its pin holes: an edge
+    within a hole's radius of a whole row of pins, so the housing behind the row was not read (benchmark 2026-10-23,
+    zoom run: S13B-EH side entry read 0 to 6.7 mm from the hole row, the mating side only; KiCad's housing reaches
+    1.5 mm behind the row, so the courtyard was 0.55 mm short). None otherwise."""
+    got = _tht_layout(spec) if spec.get("package_type") in DRAWN_TABLE and (spec.get("pad_table") or {}).get("body") \
+        else None                                     # (a body from body_length x body_width is the moulding's: a
+    if not got or not got[1]:                         # DIP's sits between its rows, CDIP up to the row spacing)
+        return None
+    pins, (x1, y1, x2, y2) = got
+    r = min(min(p["drill"]) if isinstance(p.get("drill"), (tuple, list)) else p.get("drill") or 0.8 for p in pins) / 2
+    for coord, edges in ((lambda p: p["y"], (y1, y2)), (lambda p: p["x"], (x1, x2))):
+        rows = {}
+        for p in pins:
+            rows.setdefault(round(coord(p), 2), []).append(p)
+        for c, row in rows.items():
+            if len(row) >= 2 and any(abs(e - c) < r for e in edges):
+                return ("no footprint: the body outline read runs through a row of pin holes, so the housing behind "
+                        "that row was not read and the courtyard would cut through it; read the body's full depth from "
+                        "the drawing")
+    return None
 
 
 NO_NET = re.compile(r"^(|~|-|n\.?\s*c\.?|n/c|d\.?n\.?c\.?|n\.?u\.?|nc\d*|no\s*connect.*|reserved|rsvd)$", re.I)
@@ -2373,19 +2530,20 @@ def _numeric_core(main, key):
     return end - (n - 2) if i and n >= 4 else end
 
 
-def mentions_part(texts, mpn):
+def mentions_part(texts, mpn, short=False):
     """Does the text of a PDF's first pages name the part? True: the MPN, or a prefix of it that keeps its whole
     numeric core (AD5274BRM -> AD5274 in "AD5272/AD5274"; LTC4060EDHC -> LTC4060, never LTC40, which LTC4054 has;
     STM32F103C8T6 -> STM32F103, never STM32, which STM32L476 has), its series name as a word of its own (SM6T for
     SM6T100A), a family name with x for any one character (C8051F32x, TPS2660x, SNx4HC595, STM32F103x8) or a range
     that holds it (MAX22201-MAX22207). False: none of these. None: it can't be told (no text layer, a scanned PDF, a
-    text layer in a font that does not read, no part number), never a rejection."""
+    text layer in a font that does not read, no part number), never a rejection. short: a few words (a running header), not a page:
+    no minimum length of text."""
     main = re.split(r"[#/]", str(mpn or "").strip().upper())[0]                         # #PBF, /NOPB tails off
     key = re.sub(r"[^A-Z0-9]", "", main)
     core = _numeric_core(main, key)
     raw = " ".join(t or "" for t in texts or []).upper()
     flat = re.sub(r"[^A-Z0-9]", "", raw)
-    if len(key) < 4 or not core or len(flat) < 40:
+    if len(key) < 4 or not core or len(flat) < (1 if short else 40):
         return None
     if sum(ord(c) < 32 and c not in "\t\n\r" for c in raw) > 0.05 * len(raw):
         return None                                   # a text layer that does not read (JST: every character 31 low)
@@ -2412,6 +2570,59 @@ def mentions_part(texts, mpn):
                 and min(a, b) <= lead.group(2) <= max(a, b):
             return True
     return False
+
+
+OTHER_DOC = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|\bPCN\b|\bnotification\s+of\b|"
+                       r"\bdeclaration\s+letter\b|\b(?:development|evaluation|demo)\s+(?:board|kit)\b|"
+                       r"\buser'?s?\s+(?:guide|manual)\b|\bapplication\s+note\b|\bend[- ]of[- ]life\b", re.I)
+
+
+def not_a_datasheet(texts):
+    """The reason when a PDF's first page opens as another kind of document (its first 400 characters: a change or
+    discontinuation notice, a letter, a development board's sheet, a user guide or application note), else None.
+    Web searches found these for parts in the 2026-10-23 run: AUIPS6011R an Infineon product discontinuation, DNA40U2200GU
+    a Littelfuse order-quantity notification, EPM1270M256 the MAX II development board sheet; none has a drawing."""
+    first = (list(texts or []) or [""])[0] or ""
+    m = OTHER_DOC.search(first[:400])
+    return f"the PDF opens as \"{m.group()}\", not a datasheet" if m else None
+
+
+def sibling_sheet(texts, mpn):
+    """A datasheet whose running header (a line on at least half its pages, 3 or more) names a sibling of the part and
+    never the part itself -> the reason, else None. A family sheet can list the part in a comparison table on its
+    first pages, which mentions_part accepts, while every drawing and pin table in it is the sibling's (benchmark
+    2026-10-23: a web search gave 2ED21824S06J the "2ED2184 (4) S06F (J)" sheet, whose family table lists 2ED21824S06J;
+    the symbol read from it missed a pin). mentions_part takes 2ED2184 for the part (its numeric core is 2ED21), so the
+    header is read here by whole part numbers: a sibling shares the part's letters and leading digits but its own digit
+    run differs (2ED2184 against 2ED21824). The part's own number, a family name it starts with (TPS7A47 of TPS7A4701,
+    KBU4A, C8051F32x of C8051F320) or a range holding it (MAX22201-MAX22207) in the header keeps the sheet."""
+    from collections import Counter
+    pages = [t or "" for t in texts or []]
+    if len(pages) < 3:
+        return None
+    seen = Counter()
+    for t in pages:
+        seen.update({re.sub(r"\s+", " ", ln).strip() for ln in t.splitlines() if ln.strip()})
+    lines = [ln.upper() for ln, n in seen.items() if n >= max(3, len(pages) / 2)]
+    key = re.sub(r"[^A-Z0-9]", "", re.split(r"[#/]", str(mpn or "").strip().upper())[0])
+    whole = lambda v: (re.match(r"[A-Z0-9]*?\d{3,}", v) or re.match(r".*", v)).group()   # through its first 3+ digits
+    if len(key) < 4 or not re.search(r"\d{3}", key):
+        return None
+
+    def names(tok):                                   # the part, a family name it starts with (x: any one character)
+        lead = len(tok) >= 4 and len(tok) <= len(key) and \
+            all(a == b or a == "X" and i for i, (a, b) in enumerate(zip(tok, key)))
+        return lead or whole(key) in tok
+    ranges = re.compile(r"\b[A-Z]+\d+[A-Z]*(?:\s*[-\u2013\u2014]\s*|\s+(?:THRU|TO)\s+)[A-Z]*\d+")
+    toks = [t for ln in lines for t in re.findall(r"[A-Z0-9]+", ln) if re.search(r"[A-Z]", t) and re.search(r"\d{3}", t)]
+    if any(names(t) for t in toks) or any(mentions_part([m.group()], mpn, short=True)
+                                          for ln in lines for m in ranges.finditer(ln)):
+        return None
+    for tok in toks:
+        same = next((i for i, (a, b) in enumerate(zip(tok, key)) if a != b), min(len(tok), len(key)))
+        if same >= 4 and re.search(r"\d", tok[:same]) and whole(tok) != whole(key):
+            return f"the PDF's running header names {tok}, not {mpn}: it is a sibling part's datasheet"
+    return None
 
 
 _NO_FETCH_HOSTS = re.compile(r"(localhost|.*\.localhost|metadata|metadata\.google\.internal|instance-data(\.ec2\.internal)?)\.?",
@@ -3238,6 +3449,12 @@ class Reader:
             data, prov = self.store.fetch(url, "web search", part=part, handoff=False, mpn=part, public=True)
         except DatasheetError as e:
             attempts.append({"url": url, "where": "web search", "error": str(e)})
+            return None
+        from . import ds_route as DR                  # a search finds family sheets: one whose every page is headed
+        pages = DR.page_texts(data, 40)               # by a sibling is not this part's (2ED21824S06J, 2026-10-23),
+        sib = not_a_datasheet(pages) or sibling_sheet(pages, part)   # nor is a notice (AUIPS6011R)
+        if sib:
+            attempts.append({"url": url, "where": "web search", "error": sib})
             return None
         return data, dict(prov, found_by="web search")
 

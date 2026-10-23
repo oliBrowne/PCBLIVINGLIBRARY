@@ -75,6 +75,29 @@
     "why": "doc0014.pdf p11 28P6 PDIP: D 36.703-37.338 mm, E1 13.462-13.970 mm (our body); KiCad's DIP-28_W15.24mm courtyard is drawn around a generic, shorter DIP-28 body.",
     "checked": "2026-10-19"
    }
+  },
+  "SM6T100A": {
+   "symbol_names": {
+    "ours": [
+     [
+      "1",
+      "K"
+     ],
+     [
+      "2",
+      "A"
+     ]
+    ],
+    "why": "ST SM6T datasheet (the copy at farnell.com/datasheets/1761324.pdf) p1: 'Unidirectional and bidirectional types', the unidirectional symbol drawn K / A; p3 table of order codes 'SM6T100A/CA': the A suffix is the unidirectional part, CA the bidirectional one. KiCad's Diode:SM6T100A, itself described as unidirectional, names its pins A1 / A2, the bidirectional part's names.",
+    "checked": "2026-10-23"
+   }
+  },
+  "UCC1895J": {
+   "reference": {
+    "footprint": "Package_DIP:DIP-20_W7.62mm",
+    "why": "TI ucc3895.pdf p52 J (R-GDIP-T**) ceramic DIP 4040083/F: 20 pins, 2.54 mm pitch, rows 7.62 mm apart, no land pattern or hole size printed. KiCad's reference for the part is DIP-20_W7.62mm_LongPads, the hand-soldering variant (2.4 x 1.6 mm pads) of the same DIP-20; the datasheet gives no reason for long pads, so the plain DIP-20_W7.62mm is scored.",
+    "checked": "2026-10-23"
+   }
   }
  }
 }
