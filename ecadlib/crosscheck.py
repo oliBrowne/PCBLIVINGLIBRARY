@@ -216,10 +216,15 @@ DRAWN = ("custom", "connector")     # one builder (footprint_adv._table): the pa
 
 def _label_only(first, second):
     """A package type the build does not stand on: custom and connector place the pads the read lists the same way,
-    so the second read's word changes nothing built (TC2030). Every other pair still holds: pin_header vs connector
-    (a header is built from pitch and rows, and a connector word may mean mounting pads it would leave out: S13B-EH),
-    and gullwing or qfn vs custom (BD33FC0FP, BCV61)."""
+    so the second read's word changes nothing built (TC2030), and nor does a second read's pin_header for a read's own
+    pad table with its body (AM26LS31CN). Every other pair still holds: a read's pin_header vs connector (a header is
+    built from pitch and rows, and a connector word may mean mounting pads it would leave out: S13B-EH), and gullwing
+    or qfn vs custom (BD33FC0FP, BCV61)."""
     a, b, u = first.get("package_type"), second.get("package_type"), first.get("unread_as") or {}
+    # a read's pad table with its body, called a pin header by the other source (AM26LS31CN DIP-16, default run
+    # 2026-10-22): the pads and the outline are built as the read lists them; the header builder is never used
+    if a in DRAWN and b == "pin_header" and u and not u.get(a):
+        return True
     # ...unless the type decides a hold: a housed connector read "custom" with no body would build pads-hugging
     return a in DRAWN and b in DRAWN and u.get(a) == u.get(b)
 

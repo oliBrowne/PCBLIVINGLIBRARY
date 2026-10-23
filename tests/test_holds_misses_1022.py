@@ -143,3 +143,23 @@ def test_a_custom_pad_table_with_a_body_or_a_bare_pad_pattern_still_builds():
     tc = {"package_type": "custom", "name": "Tag-Connect_TC2030", "pin_count": 6, "pad_table": {"unit": "mm", "pads": pads + holes}}
     assert D.bare_pads(tc) and D.body_unread(tc) is None                       # TC2030 (zoom run: passes)
     assert D.body_unread(dict(tc, height_max=4.5))                             # a seated height: a housing is there
+
+
+# ---------------------------------------------------------------- a pad table with its body, called a pin header
+def test_a_pad_table_with_its_body_called_a_pin_header_by_the_second_read_is_a_word_only():
+    from ecadlib import crosscheck as CC
+    from tests.test_crosscheck_tiebreak_1021 import read, nominal
+    # AM26LS31CN (default run): DIP-16 read as a custom pad table with its body; the second read says pin_header
+    dip16 = dip28(name="DIP-16_W7.62mm", pin_count=16, body_length={"min": 18.92, "max": 19.69},
+                  body_width={"min": 6.1, "max": 6.6})
+    c = read(dip16, nominal(package_type="pin_header", pitch=2.54, pin_count=16))
+    assert c["status"] == "agreed" and c.get("tie_breaks"), c
+    # with no body read it stays held (the type would decide nothing, but the read is held for its body anyway),
+    # and a count that differs still holds
+    assert read(dip28(), nominal(package_type="pin_header", pitch=2.54, pin_count=28))["status"] == "disagreed"
+    assert read(dip16, nominal(package_type="pin_header", pitch=2.54, pin_count=14))["status"] == "disagreed"
+    # the other way round, a read's pin header against a connector, still holds (S13B-EH, S10B-PH-K)
+    hdr = {"package_type": "pin_header", "name": "JST_PH_S10B-PH-K_1x10_P2.00mm_Horizontal", "pin_count": 10, "pitch": 2.0}
+    assert read(hdr, nominal(package_type="connector", pitch=2.0, pin_count=10))["status"] == "disagreed"
+    assert not CC._label_only({"package_type": "pin_header", "unread_as": {"custom": False, "connector": False}},
+                              {"package_type": "custom"})
