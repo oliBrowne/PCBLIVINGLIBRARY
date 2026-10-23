@@ -11,11 +11,17 @@ import io, re
 
 from . import ds_route as DR
 
-# (document number pattern, the maker whose links are tried)
-CODES = [(re.compile(r"(?<![A-Z0-9])(98A[A-Z]{2,3}\d{5}[A-Z])(\d)?(?![A-Z0-9])"), "nxp"),     # 98ASS23174W(1)
-         (re.compile(r"(?<![A-Z0-9])(C04-\d{3,5}[A-Z]?)(?![A-Z0-9])"), "microchip")]          # C04-076
+# (document number pattern, the maker whose links are tried, the word its line must have: Maxim's bare numbers are
+# documents only as "Outline Number 21-0664" / "Land Pattern Number 90-0397", MAX22201's Package Information)
+CODES = [(re.compile(r"(?<![A-Z0-9])(98A[A-Z]{2,3}\d{5}[A-Z])(\d)?(?![A-Z0-9])"), "nxp", None),   # 98ASS23174W(1)
+         (re.compile(r"(?<![A-Z0-9])(C04-\d{3,5}[A-Z]?)(?![A-Z0-9])"), "microchip", None),       # C04-076
+         (re.compile(r"(?<![A-Z0-9-])(21-\d{4,6}[A-Z]?)(?![A-Z0-9])"), "maxim", re.compile(r"OUTLINE")),
+         (re.compile(r"(?<![A-Z0-9-])(90-\d{4,6}[A-Z]?)(?![A-Z0-9])"), "maxim", re.compile(r"LAND\s*PATTERN"))]
 LINKS = {"nxp": ["https://www.nxp.com/docs/en/package-information/{code}.pdf"],
-         "microchip": []}                                # versioned Packaging Specification: the folder or web search
+         "microchip": [],                                # versioned Packaging Specification: the folder or web search
+         "maxim": {"21": ["https://pdfserv.maximintegrated.com/package_dwgs/{code}.PDF"],
+                   "90": ["https://pdfserv.maximintegrated.com/land_patterns/{code}.PDF"]}}
+BACK = 3                # lines above a number its package name may be on (Maxim: name, package code, outline number)
 MAX_DOCS = 2
 
 
@@ -32,7 +38,7 @@ def refs(texts, part=None, package=None):
     """[(document number, maker, 1-based page)] the PDF prints for this part's package, when it has no drawing of
     it. A number counts only on a line (or the line before it) that names this package: a list of every package's
     document numbers gives this one's only."""
-    if not texts or not any(rx.search(DR.norm_text(t).upper()) for t in texts for rx, _ in CODES):
+    if not texts or not any(rx.search(DR.norm_text(t).upper()) for t in texts for rx, _, _ in CODES):
         return []
     rows, own, _, _ = DR.page_scores(texts, part, package)
     if not own or _has_drawing(texts, rows):
@@ -41,11 +47,14 @@ def refs(texts, part=None, package=None):
     for i, t in enumerate(texts):
         lines = DR.norm_text(t).upper().splitlines()
         for k, ln in enumerate(lines):
-            for rx, maker in CODES:
+            for rx, maker, need in CODES:
+                if need is not None and not need.search(ln):
+                    continue
                 for m in rx.finditer(ln):
                     before = ln[:m.start()]
+                    # the nearest package name above: each block of a list owns the numbers under its name
                     toks = DR.package_tokens(before) or DR.package_tokens(ln) or \
-                        (DR.package_tokens(lines[k - 1]) if k else set())
+                        next((t for t in map(DR.package_tokens, lines[max(0, k - BACK):k][::-1]) if t), set())
                     if toks and DR._tok_match(own, toks) and m.group(1) not in seen:
                         seen.add(m.group(1))
                         out.append((m.group(1), maker, i + 1))
@@ -53,7 +62,10 @@ def refs(texts, part=None, package=None):
 
 
 def links(code, maker):
-    return [u.format(code=code) for u in LINKS.get(maker, [])]
+    urls = LINKS.get(maker, [])
+    if isinstance(urls, dict):                        # Maxim: outline (21-) and land pattern (90-) documents
+        urls = urls.get(code.split("-")[0], [])
+    return [u.format(code=code) for u in urls]
 
 
 def append(data, extra):
