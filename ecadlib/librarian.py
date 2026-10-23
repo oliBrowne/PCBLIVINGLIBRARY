@@ -839,6 +839,11 @@ class Run:
         if settled and not st["footprint"]:           # the read gave this table package's sizes the other way round
             std = (settled, "the cross-check", "the read gave its length and width the other way round (crosscheck."
                    "_settle_turn)")
+        if not std and not st["footprint"] and not (res["spec"].get("land") or res["spec"].get("pad_table")):
+            tab, found = SP.identify_tab(res["spec"])   # DPAK / D2PAK / SOT-223: the IPC tab is the exposed tab only
+            if tab:
+                std = (tab, found, "a tab land runs under the body, where the IPC tab built from the read covers only "
+                       "the exposed tab, and the datasheet gives no land of its own")
         if not st["footprint"]:                       # before any land choice: a table land never replaces these holds
             maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
             joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \

@@ -46,3 +46,12 @@ def test_a_symbol_with_both_gnd_and_vss_keeps_them_apart():
     ref = [("1", "IN"), ("2", "GND"), ("3", "GND"), ("4", "OUT")]
     mine = [("1", "IN"), ("2", "GND"), ("3", "VSS"), ("4", "OUT")]
     assert _names(mine, ref)["matched"] == 3
+
+
+def test_a_regulators_vin_vout_are_kicads_vi_vo():
+    # AP1117-18: the datasheet's GND / VOUT / VIN, KiCad's GND / VO / VI
+    r = _names([("1", "GND"), ("2", "VOUT"), ("3", "VIN")], [("1", "GND"), ("2", "VO"), ("3", "VI")])
+    assert r["ok"] and r["matched"] == 3, r
+    # swapped, they are still on the wrong pins
+    r = _names([("1", "GND"), ("2", "VIN"), ("3", "VOUT")], [("1", "GND"), ("2", "VO"), ("3", "VI")])
+    assert not r["ok"], r

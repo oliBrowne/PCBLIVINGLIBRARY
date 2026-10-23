@@ -80,20 +80,22 @@ OVERLINE = dict.fromkeys(map(ord, "\u0305\u0304"))     # a combining overline / 
 
 
 NC_RX = re.compile(r"^(NC|DNC|N/C)$")                   # norm_name() of a no-connect pin's name
-# the plain ground, however it is spelled (norm_name): a maker's VSS is KiCad's GND (ENS210), a GND exposed pad KiCad's
-# GNDPAD (LTC4060EDHC). AGND, PGND, DGND ... are nets of their own and are not in it
+# one pin, two spellings (norm_name): the plain ground (a maker's VSS is KiCad's GND, ENS210; a GND exposed pad KiCad's
+# GNDPAD, LTC4060EDHC; AGND, PGND, DGND ... are nets of their own and are not in it), and a regulator's input and output
+# (AP1117's VIN / VOUT, KiCad's VI / VO)
 PLAIN_GROUND = {"GND", "VSS", "GNDPAD"}
+SPELLINGS = (PLAIN_GROUND, {"VIN", "VI"}, {"VOUT", "VO"})
 
 
-def same_name(ours, ref, ground=True):
-    """Two norm_name() pin names for the same pin. ground: the plain-ground spellings are one name (False when either
-    symbol uses two of them, as IR4301's GND on pin 2 and VSS on pin 7: there they are two connections)."""
-    return ours == ref or ground and ours in PLAIN_GROUND and ref in PLAIN_GROUND
+def same_name(ours, ref, groups=SPELLINGS):
+    """Two norm_name() pin names for the same pin. groups: the SPELLINGS that count as one name (one_spelling leaves out
+    a group either symbol uses twice, as IR4301's GND on pin 2 and VSS on pin 7: there they are two connections)."""
+    return ours == ref or any(ours in g and ref in g for g in groups)
 
 
-def one_ground(*names):
-    """No list of norm_name() pin names spells the plain ground two ways."""
-    return all(len(set(n) & PLAIN_GROUND) <= 1 for n in names)
+def one_spelling(*names):
+    """The SPELLINGS groups no list of norm_name() pin names uses two of."""
+    return tuple(g for g in SPELLINGS if all(len(set(n) & g) <= 1 for n in names))
 
 
 def norm_name(s):
@@ -218,8 +220,8 @@ def score_symbol(mine_pins, ref_pins, tol=None):
                              **({"ep_not_in_kicad": ep} if ep else {}))}
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
-        ground = one_ground(named.values(), [norm_name(s) for s in a.values()])
-        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, ground)]
+        groups = one_spelling(named.values(), [norm_name(s) for s in a.values()])
+        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, groups)]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
         moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1   # a name KiCad has on another pin:

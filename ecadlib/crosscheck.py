@@ -610,7 +610,7 @@ def run(reader, job, res, model):
         checks.append(second_read(reader, job, first, first_pins, model))
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
-    standard = _settle_turn(checks)
+    standard = _settle_turn(checks) or _settle_tab(checks, res["spec"])
     st = [c["status"] for c in checks]
     ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong and not _self(c)]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
@@ -650,6 +650,54 @@ def _settle_turn(checks):
         c["disagreed"], c["status"], c["settled"] = [], "agreed", "standard table"
         return name
     return None
+
+
+ONLY_HERE = re.compile(r"only here: (.+)$")
+
+
+def _settle_tab(checks, spec):
+    """A power package with a tab whose read names exactly one checked tab land (stdparts.identify_tab: the drawing's
+    family, the tab's number, every lead at its place, the body length), where the other source differs only in how it
+    counts the tab: one pin more or less (PSMN5R2-60YL: 5 with the tab, 4 without), the tab given as an exposed pad,
+    or the tab under a number of its own that is no pad of the land (IRFS4115: tab 4 DRAIN in the second read, 2 in the
+    first and in KiCad's TO-263-2; IPS6011RPBF: 6 Vcc), and gullwing against custom (the land is a pad table). The land is the table's, so how the tab is counted moves no copper; the part is
+    built from it, not held, and the review says so. A difference in a name, a lead number the land has, or any size
+    still holds. -> the table name, or None."""
+    if not any(c["status"] == "disagreed" for c in checks):
+        return None
+    from . import stdparts as S
+    name, how = S.identify_tab(spec)
+    if not name:
+        return None
+    pads = {str(p.get("number")) for p in S.packages()[name]["pad_table"]["pads"] if p.get("number")}
+
+    def counting(d):
+        f = d["field"]
+        if f == "has_ep":
+            return True
+        if f == "package_type":                       # the tab land is a pad table: gullwing or custom builds the same
+            return {d["first"], d["second"]} <= {"gullwing", "custom"}
+        if f == "pin_count":
+            try:
+                return abs(int(d["first"]) - int(d["second"])) == 1
+            except (TypeError, ValueError):
+                return False
+        if f == "pins" and not d.get("note"):
+            extra = [n.strip() for side in (d["first"], d["second"]) for m in [ONLY_HERE.search(str(side))] if m
+                     for n in m.group(1).split(",")]
+            return len(extra) == 1 and extra[0] not in pads
+        return f in ("body_length", "body_width") and SWAPPED in (d.get("note") or "")
+    bad = [c for c in checks if c["status"] == "disagreed"]
+    if not all(c["disagreed"] and all(counting(d) for d in c["disagreed"]) for c in bad):
+        return None
+    for c in bad:
+        moved = "; ".join(f"{LABEL.get(d['field'], d['field'])} {d['first']} vs {d['second']}" for d in c["disagreed"])
+        c.setdefault("tie_breaks", []).append(
+            f"{moved}: only how the tab is counted differs, and the read names the checked tab land {name} ({how}), "
+            "so the footprint is built from it")
+        c["agreed"] += [d["field"] for d in c["disagreed"]]
+        c["disagreed"], c["status"], c["settled"] = [], "agreed", "standard table"
+    return name
 
 
 def _self(c):
