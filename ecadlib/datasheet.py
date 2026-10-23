@@ -1226,16 +1226,25 @@ def thermal_land_missing(spec, maker=None, url=None):
     # the land read must cover the exposed pad at its largest: OPA569DWP (benchmark 2026-10-23, zoom run) was read as
     # 3.56 x 4.47 mm, the figure's "required" via area, while TI prints a 7.6 x 13 mm minimum copper there and the
     # pad itself reaches 3.81 x 4.32 mm; the thermal pad built was 7.6 mm short of KiCad's (TI's) land
+    # Each axis as built when the body says which way the pad runs: footprint_gen.build lays the land's ep_across over
+    # the turned pad's length (orient_ep) and ep_along over its width, so a land read the other way round would leave
+    # the pad's long ends bare. In a square body (UCC25800 DGN 3 x 3: pad 2.15 x 1.85 read, TI's land 2 x 3) the read's
+    # length and width do not say which runs across, so the land need only cover the pad one way round.
     from . import footprint_gen as F
     try:
-        top = sorted(F.dim(ep[k])[2] for k in ("length", "width"))
-    except (KeyError, TypeError):
+        oep = F.orient_ep(spec)[0]["exposed_pad"]
+        top = [F.dim(oep[k])[2] for k in ("length", "width")]
+        bl, bw = (F.dim(spec.get(k))[1] if spec.get(k) else None for k in ("body_length", "body_width"))
+    except (KeyError, TypeError, ValueError):
         return None
-    if all(isinstance(v, (int, float)) for v in (a, b)) and \
-            any(x < m - 0.05 for x, m in zip(sorted((a, b)), top)):
-        return (f"no footprint: the TI PowerPAD thermal land read ({a:g} x {b:g} mm) does not cover the exposed pad at "
-                f"its largest ({top[0]:g} x {top[1]:g} mm), while TI's land is larger than the pad; read the thermal "
-                "land's copper from the land pattern page")
+    if not (bl and bw and abs(bl - bw) > 0.1):
+        top, land_ab = sorted(top), sorted((a, b)) if all(isinstance(v, (int, float)) for v in (a, b)) else (a, b)
+    else:
+        land_ab = (a, b)
+    if all(isinstance(v, (int, float)) for v in (a, b)) and any(x < m - 0.05 for x, m in zip(land_ab, top)):
+        return (f"no footprint: the TI PowerPAD thermal land read ({a:g} across x {b:g} along the rows) does not cover "
+                f"the exposed pad at its largest ({top[0]:g} x {top[1]:g} mm, as built), while TI's land is larger "
+                "than the pad; read the thermal land's copper from the land pattern page")
     return None
 
 
@@ -1328,7 +1337,7 @@ DIP_PAD = {"drill": 0.8, "pad": 1.6}       # KiCad Package_DIP (and IPC-2222 for
 
 def _tht_layout(spec):
     """A pad table's pins as footprint_adv.table_layout lays them out, when they are all through-hole -> (pins, body
-    box or None), else None."""
+    box or None, the table's other pads: mounting holes, shields), else None."""
     from . import footprint_adv as FA
     try:
         pads, body, *_ = FA.table_layout(spec)
@@ -1337,14 +1346,14 @@ def _tht_layout(spec):
     pins = [p for p in pads if p["role"] == "pin"]
     if not pins or any(p["kind"] != "thru_hole" for p in pins):
         return None
-    return pins, body
+    return pins, body, [p for p in pads if p["role"] != "pin"]
 
 
 def dip_table(spec):
     """True when a pad table is a plain DIP: two columns of N/2 through-hole pins 2.54 mm apart, the columns 300, 400,
     600 or 900 mil apart, numbered down one column and back up the other (counter-clockwise from pin 1)."""
     got = _tht_layout(spec)
-    if not got:
+    if not got or got[2]:                             # a mounting hole or shield beside the pins: not a plain DIP
         return False
     pins = got[0]
     n = len(pins)
@@ -1396,11 +1405,14 @@ def standard_dip_holes(spec):
     The pad positions and the body stay the read's."""
     if not (holes_unread(spec) and dip_table(spec)):
         return None
-    tw = spec.get("terminal_width")
-    if isinstance(tw, dict) and isinstance(tw.get("max"), (int, float)) and tw["max"] > 0.7:
-        return None                                   # leads too wide for the 0.8 mm hole
     import copy
-    from . import footprint_adv as FA
+    from . import footprint_adv as FA, footprint_gen as F
+    try:
+        lead = F.dim(spec.get("terminal_width"))
+    except (KeyError, TypeError):
+        lead = None
+    if lead and isinstance(lead[2], (int, float)) and lead[2] > 0.7:
+        return None                                   # leads too wide for the 0.8 mm hole
     out = copy.deepcopy(spec)
     t = out["pad_table"]
     f = FA.UNIT[t.get("unit", "mm")]
@@ -1436,7 +1448,7 @@ def body_on_holes(spec):
         else None                                     # (a body from body_length x body_width is the moulding's: a
     if not got or not got[1]:                         # DIP's sits between its rows, CDIP up to the row spacing)
         return None
-    pins, (x1, y1, x2, y2) = got
+    pins, (x1, y1, x2, y2), _ = got
     r = min(min(p["drill"]) if isinstance(p.get("drill"), (tuple, list)) else p.get("drill") or 0.8 for p in pins) / 2
     for coord, edges in ((lambda p: p["y"], (y1, y2)), (lambda p: p["x"], (x1, x2))):
         rows = {}
@@ -2577,14 +2589,23 @@ OTHER_DOC = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\b
                        r"\buser'?s?\s+(?:guide|manual)\b|\bapplication\s+note\b|\bend[- ]of[- ]life\b", re.I)
 
 
+POINTER = re.compile(r"\b(?:available|see|refer|visit|download|for\s+more|included)\b", re.I)   # a banner or link, not a title
+
+
 def not_a_datasheet(texts):
-    """The reason when a PDF's first page opens as another kind of document (its first 400 characters: a change or
-    discontinuation notice, a letter, a development board's sheet, a user guide or application note), else None.
+    """The reason when a PDF's first page opens as another kind of document (a heading in its first 400 characters: a
+    change or discontinuation notice, a letter, a development board's sheet, a user guide or application note), else
+    None. A heading is a line that starts with the phrase, or a short line (60 characters or less) that holds it; a
+    datasheet's "Evaluation Kit Available" banner or "see application note" link does not count.
     Web searches found these for parts in the 2026-10-23 run: AUIPS6011R an Infineon product discontinuation, DNA40U2200GU
     a Littelfuse order-quantity notification, EPM1270M256 the MAX II development board sheet; none has a drawing."""
     first = (list(texts or []) or [""])[0] or ""
-    m = OTHER_DOC.search(first[:400])
-    return f"the PDF opens as \"{m.group()}\", not a datasheet" if m else None
+    for line in first[:400].splitlines():
+        line = line.strip()
+        m = OTHER_DOC.search(line)
+        if m and len(line) <= 90 and (m.start() == 0 or len(line) <= 60) and not POINTER.search(line):
+            return f"the PDF opens as \"{m.group()}\", not a datasheet"
+    return None
 
 
 def sibling_sheet(texts, mpn):

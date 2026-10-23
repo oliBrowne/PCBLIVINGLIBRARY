@@ -843,7 +843,8 @@ class Run:
             maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
             joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
                 D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"]) or \
-                D.tab_land_unread(res["spec"]) or D.tht_holes_unread(res["spec"]) or D.body_on_holes(res["spec"])
+                (None if std else D.tab_land_unread(res["spec"])) or D.tht_holes_unread(res["spec"]) or \
+                D.body_on_holes(res["spec"])                  # (a checked standard land carries its own tab land)
             if joined:                                # leads merged with the pad, a TI thermal land not read or too
                 raise D.DatasheetError(joined)        # small, no housing to draw, half a maker's land, guessed holes
             dip = D.standard_dip_holes(res["spec"])

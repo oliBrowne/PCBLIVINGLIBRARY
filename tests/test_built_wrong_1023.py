@@ -69,14 +69,19 @@ def test_a_web_search_skips_a_siblings_sheet_and_takes_the_next_link():
 
 def test_a_notice_or_a_board_sheet_is_not_a_datasheet():
     for first in ("Product Discontinuation PD_053_17 Last Order Date: 2018-01-15",
-                  "8755 W. Example Road Suite 500 Dec 22th, 2021 Notification of Thyristor Package Part Numbers MOQ Change",
-                  "Example Corporation Data Sheet DS-1 MAX II Development Board Features",
+                  "8755 W. Example Road\nSuite 500\nDec 22th, 2021\nNotification of Thyristor Package Part Numbers MOQ Change",
+                  "Example Corporation 1\nData Sheet\nDS-1\nMAX II Development Board\nFeatures",
                   "Product Change Notice PCN-2021-04", "TESTPART Evaluation Kit User Guide"):
         assert D.not_a_datasheet([first, "page 2"]), first
     for first in ("TESTPART 600 W TVS diode, unidirectional and bidirectional types",
                   "TESTPART 3 A buck converter " + "x " * 250 + "evaluation board available"):   # past the title
         assert D.not_a_datasheet([first]) is None, first
     assert D.not_a_datasheet([]) is None
+    # a datasheet's banner or pointer near its title is not the document's own heading
+    for first in ("MAX1234\nEvaluation Kit Available\nGeneral Description",
+                  "LM1234\nSee application note AN-1 for the layout\nFeatures",
+                  "TESTPART\nFeatures\n- Pin-compatible with the TESTPART-2, used on the Example evaluation board in every reference design"):
+        assert D.not_a_datasheet([first]) is None, first
 
 
 # ---------------------------------------------------------------- a tab package's land read for the leads only
@@ -116,10 +121,24 @@ def test_a_ti_thermal_land_that_does_not_cover_the_pad_is_held():
 
 
 def test_a_ti_thermal_land_over_the_pad_builds():
-    assert D.thermal_land_missing(powerpad(3.9, 4.4)) is None
+    assert D.thermal_land_missing(powerpad(4.4, 3.9)) is None
     assert D.thermal_land_missing(powerpad(7.59, 12.95)) is None
     assert D.thermal_land_missing(dict(powerpad(3.56, 4.47), source={"datasheet": "https://maker.example/x.pdf"})) is None
     assert "was not read" in D.thermal_land_missing(powerpad(None, None))
+
+
+def test_a_ti_thermal_land_is_compared_axis_by_axis_as_built():
+    # a 3 x 5 pad in a body that runs down the rows is built 3 across x 5 along (orient_ep): a 5.1 x 3.1 land, the
+    # right sizes the wrong way round, would leave the pad's long ends bare
+    s = dict(powerpad(5.1, 3.1), body_length={"nom": 6.5}, body_width={"nom": 4.4},
+             exposed_pad={"length": {"nom": 5.0, "tol": 0}, "width": {"nom": 3.0, "tol": 0}})
+    assert D.thermal_land_missing(s)
+    assert D.thermal_land_missing(dict(s, land={"ep_across": 3.1, "ep_along": 5.1})) is None
+    # a square body does not say which way the pad runs: one way round is enough (UCC25800 DGN 3 x 3, TI's 2 x 3 land)
+    sq = dict(powerpad(2.0, 3.0), body_length={"min": 2.9, "max": 3.1}, body_width={"min": 2.9, "max": 3.1},
+              exposed_pad={"length": {"min": 1.95, "max": 2.15}, "width": {"min": 1.646, "max": 1.846}})
+    assert D.thermal_land_missing(sq) is None
+    assert D.thermal_land_missing(dict(sq, land={"ep_across": 1.6, "ep_along": 3.0}))
 
 
 # ---------------------------------------------------------------- holes the datasheet does not print
@@ -160,6 +179,8 @@ def test_printed_holes_or_no_dip_are_left_alone_or_held():
     assert not D.holes_unread(dip(unresolved=["pad copper size (only hole diameter given)"]))     # S10B-PH-K
     assert D.standard_dip_holes(dip(row=12.0)) is None and not D.dip_table(dip(row=12.0))
     assert D.standard_dip_holes(dip(terminal_width={"min": 0.9, "max": 1.0})) is None
+    assert D.standard_dip_holes(dip(terminal_width={"nom": 0.9, "tol": 0.1})) is None   # either dimension form
+    assert D.standard_dip_holes(dip(terminal_width={"nom": 0.46, "tol": 0.05}))
     # KBU4A: four pins in a row, holes and pads "assumed from the lead diameter"
     kbu = {"package_type": "custom", "name": "KBU", "pin_count": 4, "unresolved": ["land pattern (not given in datasheet)"],
            "pad_table": {
@@ -169,6 +190,12 @@ def test_printed_holes_or_no_dip_are_left_alone_or_held():
     assert why and why.startswith("no footprint:") and "hole size" in why, why
     smd = dict(kbu, pad_table=dict(kbu["pad_table"], default_pad={"type": "smd", "w": 2, "h": 2}))
     assert not D.holes_unread(smd) and D.tht_holes_unread(smd) is None
+
+
+def test_a_dip_with_a_mounting_hole_is_no_plain_dip():
+    s = dip(n=8, row=7.62)
+    s["pad_table"]["pads"] = [{"number": "MH", "x": 3.81, "y": 10.0, "type": "npth", "drill": 3.2, "d": 3.2}]
+    assert not D.dip_table(s) and D.standard_dip_holes(s) is None    # its 3.2 mm hole is never turned into 0.8 mm
 
 
 def test_a_dip_numbered_otherwise_is_no_plain_dip():
