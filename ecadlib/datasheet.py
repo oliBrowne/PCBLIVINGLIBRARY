@@ -3411,13 +3411,6 @@ class Reader:
             got = self._outline_docs(data, texts, part, package, prov) if texts else None
             if got:                                   # the package drawing is a separate document: appended
                 data, prov = got
-            if texts and not prov.get("outline") and self.cfg.get("web_search") and not self.estimate_only:
-                from . import outline_docs as OD
-                if OD.drawing_missing(texts, part, package):   # none of this package at all: search for its drawing
-                    codes = [c for c, _, _ in OD.refs(texts, part, package)]
-                    got = self._package_search(data, texts, part, package, prov, attempts, maker, codes) or got
-                    if got:
-                        data, prov = got
             if got and prov.get("outline"):
                 src_hash, n = prov["sha256"], pdf_pages(data)
                 texts = self._page_texts(data, src_hash)
@@ -3434,7 +3427,7 @@ class Reader:
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
                 "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov, "fp_needed": fp_needed,
-                "facts": facts, "tables": tables, "more_urls": more,
+                "facts": facts, "tables": tables, "more_urls": more, "maker": maker,
                 "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
                           "attempts": []}}
         first = self._at(base, rung, 0)
@@ -3626,6 +3619,10 @@ class Reader:
                                                 "usage": (rec.get("message") or {}).get("usage") or rec.get("usage")}]
             nxt = self.router.next_step(job["rung"], job["level"], len(job["levels"]), kind, len(done))
             best = job["route"].get("best")           # [rank, rung, level, answer no.] of the best answer so far
+            more = self._package_retry(job, res, done) if nxt is None and "message" in rec else None
+            if more is not None:                      # the read left the footprint's dimensions blank and the
+                job = more                            # datasheet has no drawing of the package: read again with it
+                continue
             if nxt is None:
                 if best and tuple(best[0]) > rank:    # CY14U256LA-BA: the whole-PDF read came back with no pins and no
                     job = self._at(job, best[1], best[2])  # grid ("x"), after a 5-page read that had them: keep that one
@@ -3639,6 +3636,56 @@ class Reader:
                 best = [list(rank), job["rung"], job["level"], len(done)]
             job = self._at(dict(job, route=dict(job["route"], attempts=done, best=best),
                                 earlier_keys=job.get("earlier_keys", []) + [job["key"]]), *nxt)   # (Reader.answered)
+
+    def _package_retry(self, job, res, done):
+        """The route ended on an answer that leaves a dimension the footprint needs blank (build_blockers, or a
+        connector / pad table with no body: body_unread), and the datasheet's text shows no drawing of the part's
+        package (outline_docs.drawing_missing): with [datasheet] web_search, the package drawing is searched for
+        (_package_search) and the route goes on, at the same model, with the drawing's pages appended -> that step,
+        or None. Only after such a read, so a part read right from its datasheet never pays for a search (benchmark
+        2026-10-23: ten parts read right had vector drawings the text check alone took for no drawing). Once per part;
+        nothing found is said in the review."""
+        if job.get("package_doc") is not None or job.get("data") is None or job.get("pages") or \
+                not self.cfg.get("web_search") or self.estimate_only:
+            return None
+        spec = (res or {}).get("spec") or {}
+        try:
+            blank = build_blockers(spec) or body_unread(spec)
+        except Exception:                             # an answer too broken to say: not a blank dimension
+            blank = None
+        if not blank:
+            return None
+        from . import ds_route as DR, outline_docs as OD
+        part, package, data = job["part"], job["package"], job["data"]
+        texts = self._page_texts(data, job["src_hash"])
+        if not texts or not OD.drawing_missing(texts, part, package):
+            return None
+        attempts = list(job["base_prov"].get("attempts") or [])
+        codes = [c for c, _, _ in OD.refs(texts, part, package)]
+        got = self._package_search(data, texts, part, package, job["base_prov"], attempts, job.get("maker"), codes)
+        if not got:                                   # no search could be made (cap, no key): the answer stands
+            job["package_doc"] = False
+            return None
+        data, prov = got
+        prov = dict(prov, attempts=attempts)
+        if not prov.get("outline"):                   # nothing found: the answer stands, the review says so
+            job["package_doc"] = False
+            job["prov"] = dict(job["prov"], outline_missing=prov.get("outline_missing") or [])
+            job["base_prov"] = prov
+            return None
+        src_hash, n = prov["sha256"], pdf_pages(data)
+        texts = self._page_texts(data, src_hash)
+        lv, why = [None], {}
+        if self.page_budget and n and n > self.page_budget and texts:
+            lv, why = DR.levels(texts, self.page_budget, part, package, n, self._page_marks(data, src_hash))
+        sent = sorted({p for L in lv if isinstance(L, list) for p in L}) or (list(range(1, n + 1)) if n and n <= 40 else [])
+        base = dict(job, data=data, src_hash=src_hash, levels=lv, n_pages=n, base_prov=prov,
+                    facts=DR.ordering_facts(texts, part, data) if texts else None,
+                    tables=DR.dim_tables(data, sent, texts) if texts and sent else None,
+                    package_doc=prov["outline"][-1]["from"], earlier_keys=job.get("earlier_keys", []) + [job["key"]],
+                    route=dict(job["route"], picked=why, attempts=done, best=None,
+                               package_doc=prov["outline"][-1]["from"]))
+        return self._at(base, job["rung"], 0)
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])

@@ -253,18 +253,20 @@ a separate package-information document. An onsemi revision dropped a package. O
 were 12 of the 17 parts held for a blank dimension. With `web_search = true`, such a part gets a second search, for its
 package drawing: a package-information document, a case outline, a product drawing or a PCB layout.
 
-- It runs only when the PDF's text shows no drawing of this package. That means no dimension table for this package, no
-  page captioned as its drawing, and no image-only page after the first (an image-only page may be the drawing). A PDF
-  with no text layer is never searched for.
+- It runs only after a read that left a dimension the footprint needs blank, so a part read right from its datasheet
+  never pays for a search. The PDF's text must also show no drawing of this package: no dimension table for it, no
+  short page captioned as its drawing, and no image-only page after the first (that page may be the drawing). A PDF
+  with no text layer is never searched for. When a drawing is found, the part is read again with it, on the same
+  model.
 - A PDF the search finds is kept only if it names the part, a document number the datasheet gives for it, or the
-  part's package with its pin count (FBGA-484, not just "BGA"). Its pages go after the datasheet's, like an outline document's. The review says where the drawing
-  came from, and that the drawing must be checked against the part's package.
+  part's package with its pin count (FBGA-484, not just "BGA"). Its pages go after the datasheet's, like an outline
+  document's. The review says where the drawing came from, and that it must be checked against the part's package.
 - The search costs the same as a datasheet search. It is written to `cost.jsonl` as "web search (package drawing)".
   The link it finds is kept in `web_search.json` as "<part> package drawing". A search that found nothing is kept
   there too, for 30 days and for that datasheet only, so re-running a held part doesn't pay for the same empty
   search again. Delete the entry to search sooner.
-- If nothing is found, the datasheet is read alone and the review says no package drawing was found. The part is
-  still held if the read leaves a dimension blank.
+- If nothing is found, the first read stands and the review says no package drawing was found. The part is still
+  held for the blank dimension.
 
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 

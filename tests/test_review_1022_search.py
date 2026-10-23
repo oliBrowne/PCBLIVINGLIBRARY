@@ -94,20 +94,15 @@ def _ltc(d, cl, web_search=True):
     return rd.job("LTC4060EDHC#PBF", [(A, "BOM")], "DFN-10", mpn="LTC4060EDHC#PBF")
 
 
-def _ds_searches(cl):
-    """The datasheet searches sent (these one-page PDFs have no drawing, so a package-drawing search follows)."""
-    return sum("Find the datasheet PDF" in b["messages"][0]["content"] for b, _ in cl.sent)
-
-
 def test_a_pdf_of_another_part_waits_for_the_search():
     with tempfile.TemporaryDirectory() as d:
-        cl = Client(_answer([B]), _answer([]))
+        cl = Client(_answer([B]))
         j = _ltc(d, cl)
-        assert _ds_searches(cl) == 1 and j["url"] == B and j["data"] == RIGHT and not j["base_prov"].get("unnamed")
+        assert len(cl.sent) == 1 and j["url"] == B and j["data"] == RIGHT and not j["base_prov"].get("unnamed")
     with tempfile.TemporaryDirectory() as d:          # the search found nothing: the only PDF there is, flagged
-        cl = Client(_answer([]), _answer([]))
+        cl = Client(_answer([]))
         j = _ltc(d, cl)
-        assert _ds_searches(cl) == 1 and j["url"] == A and j["base_prov"].get("unnamed")
+        assert len(cl.sent) == 1 and j["url"] == A and j["base_prov"].get("unnamed")
     with tempfile.TemporaryDirectory() as d:          # no search: as before
         j = _ltc(d, Client(), web_search=False)
         assert j["url"] == A and j["base_prov"].get("unnamed")
