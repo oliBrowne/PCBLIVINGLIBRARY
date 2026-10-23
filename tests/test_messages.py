@@ -79,6 +79,8 @@ EXAMPLES = {
                                  "on page 2; save it as 98ASS23174W.pdf in your datasheet folder)",
     "datasheet.family_pdf": "datasheet from your folder: LTM4671.pdf in the datasheet folder (a family datasheet: the name is the "
                             "start of LTM4671IY#PBF); check it covers this part",
+    "datasheet.dip_holes": "DIP holes: the datasheet prints no hole size, so KiCad's DIP hole and pad (0.8 mm / 1.6 mm) were "
+                           "used in place of the read's; check the maker's recommended hole",
     "datasheet.standard_land": "standard land: the datasheet read identified SOIC-8_3.9x4.9mm_P1.27mm (8 pins, pitch 1.27, body "
                                "3.9 x 4.9 -> SOIC-8_3.9x4.9mm_P1.27mm); the read left terminal_length blank, so the checked "
                                "standard land was used. Check the package code on the drawing is this one",
@@ -297,7 +299,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 10, "datasheet.py": 7,
+    "librarian.py": 11, "datasheet.py": 7,
 }
 
 
