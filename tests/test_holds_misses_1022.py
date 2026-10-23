@@ -18,7 +18,7 @@ POINTER = ["Thermal information", "For the land pattern, see the Mechanical, Pac
 
 # ---------------------------------------------------------------- which pages print a land
 def test_a_land_heading_with_its_sizes_is_a_land_page_and_a_pointer_to_it_is_not():
-    texts = [" ".join(TR.ldo_pages()[0]), " ".join(POINTER), "\n".join(LAND_PAGE)]
+    texts = ["TESTPART 100 mA LED driver in SOT26", " ".join(POINTER), "\n".join(LAND_PAGE)]
     assert DR.land_pages(texts, [1, 2, 3], "TESTPART", "SOT-23-6") == [3]
     assert DR.land_pages(texts, [1, 2], "TESTPART", "SOT-23-6") == []          # the land page was not sent
     assert DR.land_pages(texts, [], "TESTPART") == [] and DR.land_pages(None, [1]) == []
@@ -35,17 +35,26 @@ def test_a_land_heading_with_its_sizes_is_a_land_page_and_a_pointer_to_it_is_not
 def test_the_only_land_page_of_a_pdf_counts_even_when_it_names_the_package_otherwise():
     # Diodes BCR430UW6: the BOM says SC-74-6, the one pad layout page says SOT26 (the same package): page_scores calls it
     # another package, but a PDF with one land page has no other package to print a land for
-    texts = [" ".join(TR.ldo_pages()[0]), " ".join(POINTER), "\n".join(LAND_PAGE)]
+    texts = ["TESTPART 100 mA LED driver in SOT26", " ".join(POINTER), "\n".join(LAND_PAGE)]
     assert DR.land_pages(texts, [3], "BCR430UW6", "SC-74-6") == [3]
 
 
 def test_a_land_page_about_another_package_only_does_not_count():
-    pages = TR.ldo_pages()                          # SOT223 / SOT89 pad layouts on p19 / p20
-    for p in (18, 19):
-        pages[p] = pages[p] + ["C 0.950 X 0.550 Y 0.800 Y1 3.200 Z 1.200 G 1.600"]
-    texts = ["\n".join(p) for p in pages]
+    texts = ["\n".join(p) for p in TR.ldo_pages()]   # SOT223 / SOT89 pad layouts on p19 / p20 (3 and 2 sizes), as is
     assert DR.land_pages(texts, [19, 20], "TESTLDO-H33TRG1", "SOT223") == [19]
     assert DR.land_pages(texts, [19, 20], "TESTLDO-R33TRG1", "SOT89") == [20]
+    # a family sheet whose only land page is another package's: not this part's land (Greptile, PR #171)
+    del texts[18]
+    assert DR.land_pages(texts, [19], "TESTLDO-H33TRG1", "SOT223") == []
+
+
+def test_an_outline_page_that_points_to_the_land_elsewhere_is_no_land_page():
+    # body dimensions on the page, and a sentence sending the reader to the land pattern section (Greptile, PR #171)
+    outline = ["Package Outline Dimensions (All dimensions in mm)", "Dim Min Max", "A 0.90 1.10", "D 2.80 3.00",
+               "E 1.50 1.70", "e 0.95 BSC", "For the land pattern, see the Mechanical, Packaging and Orderable "
+               "Information section. Refer to the recommended land pattern 1.20 x 0.60 in the app note."]
+    assert DR.land_pages(["\n".join(outline)], [1]) == []
+    assert not DR.prints_land("Package Outline Dimensions D 2.80 3.00 E 1.50 1.70 A 0.90 1.10\nLand pattern\nsee page 9")
 
 
 # ---------------------------------------------------------------- the hold
