@@ -20,6 +20,15 @@ def test_an_asymmetric_tolerance_printed_minus_first_reads_the_same():
     assert D._toleranced("0.7 -0/+0.1") == {"min": 0.7, "nom": 0.7, "max": 0.8}
 
 
+def test_a_nominal_is_never_split_and_compact_signed_sides_still_read():
+    # Greptile on PR #173: "10 +0.1" matched as nominal 1, side 0 and +0.1; "3.56+0.15-0.25" no longer matched
+    assert D._toleranced("10 +0.1") is None and D._toleranced("10 -0.1") is None
+    assert D._toleranced("10 +0.1/0") == {"min": 10.0, "nom": 10.0, "max": 10.1}
+    assert D._toleranced("3.56+0.15-0.25") == {"min": 3.31, "nom": 3.56, "max": 3.71}
+    assert D._toleranced("0.7+0.1/0") == {"min": 0.7, "nom": 0.7, "max": 0.8}
+    assert D._toleranced("1.25 +0.1/0") == {"min": 1.25, "nom": 1.25, "max": 1.35}
+
+
 def test_an_unsigned_non_zero_side_or_two_same_signs_stays_unread():
     # "0.7 +0.1/0.05": is 0.05 below or above? A guess could build the part wrong, so the value is left for the hold
     for v in ("0.7 +0.1/0.05", "0.7 +0.1/+0.05", "0.7 -0.1/-0.05", "0.7 0.1/0", "0.7 +0.1", "0.7/0.8"):

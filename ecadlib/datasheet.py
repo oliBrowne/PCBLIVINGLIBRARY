@@ -632,7 +632,9 @@ def _non_finite(v, path="$"):
 # A nominal printed with its tolerance: "6.5±0.2", "6.5 +/- 0.2", "3.56 +0.15/-0.25", "0.74 +0.05 -0.08", "0.7 +0.1/0"
 _UNIT = r"\s*(mm|mils?|in|inch(?:es)?|\")?\.?\s*"      # a unit written after the value, as _wire_val reads it
 _TOL = re.compile(r"\s*([-+]?\d*\.?\d+)\s*(?:±|\+/-|\+-)\s*(\d*\.?\d+)" + _UNIT, re.I)
-_TOL2 = re.compile(r"\s*([-+]?\d*\.?\d+)\s*([-+]?)\s*(\d*\.?\d+)\s*(?:/\s*|\s+)([-+]?)\s*(\d*\.?\d+)" + _UNIT, re.I)
+# two sides after a nominal: never inside one number ("10 +0.1" is not 1, 0, +0.1), split by "/", a space or a sign
+_TOL2 = re.compile(r"\s*([-+]?\d*\.?\d+)(?![\d.])\s*([-+]?)\s*(\d*\.?\d+)(?![\d.])\s*(?:/\s*|(?<=\s)|(?=[-+]))"
+                   r"([-+]?)\s*(\d*\.?\d+)" + _UNIT, re.I)
 
 
 def _toleranced(v):
