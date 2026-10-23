@@ -80,6 +80,14 @@ OVERLINE = dict.fromkeys(map(ord, "\u0305\u0304"))     # a combining overline / 
 
 
 NC_RX = re.compile(r"^(NC|DNC|N/C)$")                   # norm_name() of a no-connect pin's name
+# the plain ground, however it is spelled (norm_name): a maker's VSS is KiCad's GND (ENS210), a GND exposed pad KiCad's
+# GNDPAD (LTC4060EDHC). AGND, PGND, DGND ... are nets of their own and are not in it
+PLAIN_GROUND = {"GND", "VSS", "GNDPAD"}
+
+
+def same_name(ours, ref):
+    """Two norm_name() pin names for the same pin."""
+    return ours == ref or ours in PLAIN_GROUND and ref in PLAIN_GROUND
 
 
 def norm_name(s):
@@ -204,7 +212,7 @@ def score_symbol(mine_pins, ref_pins, tol=None):
                              **({"ep_not_in_kicad": ep} if ep else {}))}
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
-        same = [n for n, s in named.items() if norm_name(a.get(n)) == s]
+        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s)]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
         moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1   # a name KiCad has on another pin:
