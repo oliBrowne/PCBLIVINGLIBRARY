@@ -3156,7 +3156,7 @@ class Reader:
             if got:
                 return got
             found.drop(part)                          # it gave its PDF once and no longer does: search again
-        model = self.cfg.get("web_search_model") or self.model
+        model = self.cfg.get("web_search_model") or WS.DEFAULT_MODEL
         uses = self.cfg.get("web_search_max_uses")
         uses = WS.MAX_USES if uses is None or str(uses).strip() == "" else int(uses)
         if uses < 1:                                  # 0: no search may be made
@@ -3195,7 +3195,7 @@ class Reader:
             attempts.append({"url": "", "where": "web search", "error": f"search failed: {err}"})
         elif not urls:
             attempts.append({"url": "", "where": "web search", "error": "the search found no PDF link"})
-        for url in urls:
+        for url in WS.rank(urls, maker):             # the maker's copy, then a distributor's, then a mirror's
             got = self._fetch_found(url, part, attempts)
             if got:
                 found.put(part, url)
