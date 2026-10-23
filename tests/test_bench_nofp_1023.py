@@ -1,5 +1,7 @@
 """Live benchmark 2026-10-23 (Opus zoom + web search, main 47328c9): parts that got no footprint at all.
 Each test is a general rule, shown on the part that exposed it."""
+import json
+
 from ecadlib import datasheet as D
 
 
@@ -103,3 +105,76 @@ def test_a_kept_rejected_answer_that_still_does_not_parse_is_no_answer():
         assert c.get("k1") is None
         c.put("k1", {"key": "k1", "error": "x"})
         assert "message" not in c.get("k1")
+
+
+# ---------------------------------------------------------------- the maker's land read but left in the notes
+def _land_runs(answers):
+    """read_through_librarian with the reads answered in turn (the feedback turn is the second read)."""
+    import copy
+    from tests import test_holds_misses_1022 as HM, test_crosscheck as TC, test_ds_route as TR
+    sent = []
+
+    def by(kind, model, body):
+        if "Part: DSPART1" not in json.dumps(body["messages"][0]):
+            return TR.on_page(TD_complete(copy.deepcopy(answers[0])))
+        sent.append(body)
+        return TR.on_page(TD_complete(copy.deepcopy(answers[min(len(sent), len(answers)) - 1])))
+    pdf = TR.pdf_lines([["TESTPART 3 A buck converter", "VQFN-16 3x3 mm"], HM.POINTER, HM.LAND_PAGE])
+    api = TC.API(by)
+    import tempfile
+    from tests import test_datasheet_batch as TB
+    with tempfile.TemporaryDirectory() as d:
+        http = TB.PdfHTTP({"https://example.com/ds.pdf": pdf, "https://www.lcsc.com/datasheet/C9999.pdf": pdf})
+        items, _, _ = TB.run2(d, api, http=http, reader_kw={"batch": False, "rules": TR.no_cross_check({})})
+        return items["DSPART1"], sent
+
+
+def TD_complete(e):
+    from tests import test_datasheet as TD
+    return TD._complete(e)
+
+
+def _with_land(e):
+    keys = D.output_schema()["properties"]["package"]["properties"]["land"]["anyOf"][0]["properties"]
+    e["package"]["land"] = dict(dict.fromkeys(keys), pad_length=0.8, pad_width=0.3, pad_center=1.45)
+    return e
+
+
+def test_a_read_that_left_the_printed_land_out_gets_one_turn_naming_the_land_page():
+    # BAT160A (p5 Fig.5) and TPS70345 (p46), 10-23: the read wrote the maker's land into its notes only, so the part
+    # was held. The feedback turn now names the page and the land fields; the first request is unchanged (cached)
+    from tests import test_holds_misses_1022 as HM
+    a, sent = _land_runs([HM.odd_ep(), _with_land(HM.odd_ep())])
+    assert len(sent) == 2, len(sent)
+    fb = json.dumps(sent[1]["messages"][-1]["content"])
+    assert "page 3" in fb and "land" in fb and "pad_length" in fb, fb
+    assert (a.get("footprint") or {}).get("file"), a["librarian"]["tried"]
+
+
+def test_a_land_turn_that_still_gives_no_land_keeps_the_part_held():
+    from tests import test_holds_misses_1022 as HM
+    a, sent = _land_runs([HM.odd_ep(), HM.odd_ep()])
+    assert len(sent) == 2
+    assert not (a.get("footprint") or {}).get("file")
+    assert any("recommended land for this package (page 3)" in t for t in a["librarian"]["tried"]), a["librarian"]["tried"]
+
+
+def test_a_read_with_its_land_or_with_no_land_page_gets_no_land_turn():
+    from tests import test_holds_misses_1022 as HM
+    _, sent = _land_runs([_with_land(HM.odd_ep())])
+    assert len(sent) == 1
+
+
+def test_a_ti_powerpad_read_without_its_thermal_land_gets_the_thermal_land_fields_named():
+    import tempfile
+    from tests.test_ds_route import reader
+    spec = {"package_type": "gullwing", "pin_count": 24, "exposed_pad": {"length": {"nom": 4.0}, "width": {"nom": 2.0}},
+            "land": {"pad_length": 1.5, "pad_width": 0.45, "pad_center": 2.9}}
+    with tempfile.TemporaryDirectory() as d:
+        rd = reader(d, {})
+        rd._land_pages = lambda job: []               # TI's land page often has no text layer
+        why = rd._land_left_out({"url": "http://www.ti.com/lit/ds/symlink/tps703.pdf", "maker": None}, {"spec": spec})
+        assert len(why) == 1 and "ep_across, ep_along" in why[0] and why[0].startswith("land pattern:"), why
+        assert rd._land_left_out({"url": "https://example.com/x.pdf", "maker": "Acme"}, {"spec": spec}) == []
+        done = dict(spec, land=dict(spec["land"], ep_across=3.4, ep_along=7.8))
+        assert rd._land_left_out({"url": "http://www.ti.com/x.pdf"}, {"spec": done}) == []

@@ -3381,7 +3381,7 @@ class Reader:
         rung, reason = self.router.start(package, n, sent0)
         base = {"name": name or part, "part": part, "package": package, "url": url, "where": where, "pages": pages,
                 "data": data, "src_hash": src_hash, "levels": lv, "n_pages": n, "base_prov": prov, "fp_needed": fp_needed,
-                "facts": facts, "tables": tables, "more_urls": more,
+                "facts": facts, "tables": tables, "more_urls": more, "maker": maker,
                 "route": {"route": self.router.route, "ladder": self.router.ladder, "start": reason, "picked": why,
                           "attempts": []}}
         first = self._at(base, rung, 0)
@@ -3896,8 +3896,38 @@ class Reader:
             return "refused", ["model declined"]
         if (msg or {}).get("stop_reason") == "max_tokens":
             return "truncated", ["answer hit max_tokens"]
-        kind, why, _ = self._judge(job, {"message": msg, "model": job.get("model")})
+        kind, why, res = self._judge(job, {"message": msg, "model": job.get("model")})
+        if kind == "ok":
+            why = self._land_left_out(job, res)
+            kind = "failed" if why else kind
         return kind, why
+
+    def _land_left_out(self, job, res):
+        """The feedback turn's errors when an answer that passes the checks leaves out a land the librarian would hold
+        the part for (land_unread, thermal_land_missing): its page and the land fields, so the one turn can give them.
+        BAT160A and TPS70345 (live benchmark 2026-10-23): each read wrote the maker's land into its notes only. [] else.
+        Only the feedback turn asks this; the route's own verdict (_judge) is unchanged, so no answer is re-bought."""
+        spec = (res or {}).get("spec") or {}
+        pages = self._land_pages(job)
+        unread = land_unread(spec, pages)
+        if unread:                                    # the librarian builds a checked package's land then, not a hold
+            from . import stdparts as SP
+            known = list((((job.get("route") or {}).get("picked") or {}).get("_from_pdf")) or [])
+            unread = None if SP.identify(spec, known[0] if len(known) == 1 else None)[0] else unread
+        thermal = thermal_land_missing(spec, job.get("maker"), job.get("url"))
+        if not (unread or thermal):
+            return []
+        where = f"page {', '.join(map(str, pages[:4]))}" if pages else "the land pattern page"
+        out = []
+        if unread:
+            out.append(f"land pattern: {where} prints the maker's recommended land for this package, but the answer did "
+                       "not give it: give it in other_json land (pad_length, pad_width, pad_center as printed there), "
+                       "not only in notes; leave it out only if that page does not dimension it")
+        if thermal:
+            out.append(f"land pattern: the land pattern page{f' ({where})' if pages else ''} gives the board's thermal pad under the exposed "
+                       "pad, larger than the package's pad: give its size in other_json land (ep_across, ep_along; "
+                       "ep_mask_across, ep_mask_along for a solder mask opening), not only in notes")
+        return out
 
     def submit(self, job):
         self.pending[job["key"]] = job
