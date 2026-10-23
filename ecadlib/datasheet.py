@@ -3700,7 +3700,13 @@ class Reader:
             job = self._walk(job)
             if not job.get("final"):
                 return None
-        return self._result(job, self.results.get(job["key"]))
+        rec = self.results.get(job["key"])
+        if "rung" in job and not getattr(self, "cached_only", False):
+            try:                                      # a saved batch answer's feedback turn, when a check added since
+                rec = self._batch_feedback(job, rec)  # fails it (a land left in the notes): asked once, then saved
+            except DatasheetError as e:
+                self.say(f"  datasheet {job.get('name') or job['part']}: feedback turn not answered ({str(e)[:160]})")
+        return self._result(job, rec)
 
     def answered(self, job, error=None):
         """Whether the API has answered this read, in this run or an earlier one: an answer kept under the key of this

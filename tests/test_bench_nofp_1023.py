@@ -187,3 +187,25 @@ def test_a_ti_powerpad_read_without_its_thermal_land_gets_the_thermal_land_field
         assert rd._land_left_out({"url": "https://example.com/x.pdf", "maker": "Acme"}, {"spec": spec}) == []
         done = dict(spec, land=dict(spec["land"], ep_across=3.4, ep_along=7.8))
         assert rd._land_left_out({"url": "http://www.ti.com/x.pdf"}, {"spec": done}) == []
+
+
+def test_a_saved_batch_answer_that_left_the_land_out_gets_the_land_turn_in_a_later_live_run():
+    # paid test 2026-10-23: BAT160A and TPS70345's 10-23 batch answers were reused from the cache, so the land turn
+    # (asked only when a batch was collected) never ran for them
+    import copy, tempfile
+    from tests import test_holds_misses_1022 as HM, test_crosscheck as TC, test_datasheet as TD, \
+        test_datasheet_batch as TB, test_ds_route as TR
+    pdf = TR.pdf_lines([["TESTPART 3 A buck converter", "VQFN-16 3x3 mm"], HM.POINTER, HM.LAND_PAGE])
+    sent = []
+    api = TC.API(lambda k, m, b: sent.append(b) or TR.on_page(TD._complete(_with_land(HM.odd_ep()))))
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = TR.reader(d, {"https://a/ds.pdf": pdf})
+        job = rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], None)
+        first = TD.message(TR.on_page(TD._complete(copy.deepcopy(HM.odd_ep()))))
+        rd.results.put(job["key"], {"key": job["key"], "part": "TESTPART", "url": "https://a/ds.pdf",
+                                    "model": job["model"], "page_offset": job["offset"], "via": "batch msgbatch_1",
+                                    "message": first})
+        res = rd.cached(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], None))
+        assert len(sent) == 1 and "page 3" in json.dumps(sent[0]["messages"][-1]["content"]), len(sent)
+        assert res["spec"]["land"]["pad_length"] == 0.8
+        assert rd.cached(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], None)) and len(sent) == 1   # once
