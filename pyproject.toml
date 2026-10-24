@@ -11,8 +11,11 @@ license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "oliver browne" }]
 requires-python = ">=3.10"
-dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile", "pypdf[crypto]", "tomli>=1.1; python_version < '3.11'"]   # olefile: the release check,
+dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile", "pypdf[crypto]", "pypdfium2",
+                "tomli>=1.1; python_version < '3.11'"]   # olefile: the release check,
                                        # kicad-export, dedupe and project BOMs read .SchLib/.PcbLib/.SchDoc back;
+                                       # pypdfium2 (Apache-2.0/BSD-3): renders datasheet pages, so [datasheet]
+                                       # zoom_drawings works on every install (the 10-23 benchmark venv had no renderer);
                                        # pypdf: the datasheet reader sends only the pages it needs (a 1976-page PDF fails whole);
                                        # [crypto]: makers' AES-encrypted PDFs with no open password (AQY282GS) read as blank without it
 keywords = [
