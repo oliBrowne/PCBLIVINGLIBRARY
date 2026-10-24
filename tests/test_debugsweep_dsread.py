@@ -378,8 +378,8 @@ def test_ds2_21_sot223_pitch_2_30_is_a_standard_pitch():
     assert DR.assess(res)[0] == "ok", DR.assess(res)
     review = []                                       # a pitch nothing uses is still questioned
     D.self_check({"pitch": 2.2}, {"pins": []}, review)
-    assert review == ["self-check: pitch 2.2 mm is not a standard pitch (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, "
-                      "1.0, 1.1, 1.25, 1.27 ...): unit or reading error?"], review
+    assert review == ["self-check: pitch 2.2 mm is not a standard pitch (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.75, 0.8, "
+                      "0.95, 1.0, 1.1, 1.25 ...): unit or reading error?"], review
 
 
 # ---- DS2-22: a max_cost_usd the person set to 10 (the value docs/api-keys.md shows) was taken for the default cap

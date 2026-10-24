@@ -18,6 +18,7 @@ TOOL = "web_search_20260209"        # dynamic filtering: Opus 5.5 / 5 / 4.8 / 4.
 TOOL_BASIC = "web_search_20250305"  # every other model
 SEARCH_USD = 0.01                   # $10 per 1,000 searches, on top of the tokens
 MAX_USES = 3                        # searches per part
+NONE_DAYS = 30                      # a package-drawing search that found nothing is not repeated for this long
 MAX_TURNS = 3                       # pause_turn continuations
 MAX_TOKENS = 4096                   # a turn's max_tokens: the most output it is billed for
 # input / output tokens one part's search may use, for the cost cap: the search results the model reads are most of
@@ -52,15 +53,33 @@ obsolete, the last manufacturer datasheet is fine.
 The PDF must cover this part's package drawing. Answer with one line of JSON and nothing after it:
 {{"urls": ["<best direct PDF link>", "<second choice>", ...]}}"""
 
+# the part's datasheet holds no drawing of its package (outline_docs.drawing_missing): the drawing is often a document
+# of its own (benchmark 2026-10-23: Altera / Lattice / Microchip package information documents, Neutrik product
+# drawings and PCB layouts, onsemi case outlines, Maxim 21-xxxx outlines)
+PACKAGE_PROMPT = """Find the package outline drawing PDF for the electronic part {mpn}{maker}{package}.
+
+Its datasheet has no drawing of this package{refs}. Makers publish the drawing as a document of its own: a package
+information or packaging specification document, a case outline, a mechanical or product drawing, or a PCB layout
+drawing (connectors). I need direct links to a PDF that gives this package's dimensions (body, pitch, leads, balls or
+pins and holes) and, when the maker publishes one, its recommended PCB land pattern. Prefer the manufacturer's own site;
+a major distributor's copy is the next best. Never give a datasheet aggregator or mirror site.
+
+Answer with one line of JSON and nothing after it:
+{{"urls": ["<best direct PDF link>", "<second choice>", ...]}}"""
+
 
 def tool_type(model):
     from . import datasheet as D
     return TOOL if D.base_model(model) in NEW_TOOL_MODELS else TOOL_BASIC
 
 
-def request_body(mpn, model, maker=None, package=None, max_uses=MAX_USES):
-    text = PROMPT.format(mpn=mpn, maker=f" made by {maker}" if maker else "",
-                         package=f" (package {package})" if package else "")
+def request_body(mpn, model, maker=None, package=None, max_uses=MAX_USES, kind="datasheet", refs=()):
+    """kind: "datasheet" (the part's datasheet) or "package" (its package drawing, PACKAGE_PROMPT; refs: the
+    document numbers the datasheet gives for it)."""
+    said = f"; it names the document {', '.join(refs)} for it" if refs else ""
+    text = (PACKAGE_PROMPT if kind == "package" else PROMPT).format(
+        mpn=mpn, maker=f" made by {maker}" if maker else "", package=f" (package {package})" if package else "",
+        refs=said)
     from . import datasheet as D
     levels = D.EFFORT_LEVELS.get(D.base_model(model))   # (Haiku 4.5, Sonnet 4.5 reject output_config.effort)
     body = {"model": model, "max_tokens": MAX_TOKENS}
@@ -136,12 +155,12 @@ def add_usage(total, u):
 
 
 def search(client, mpn, model, maker=None, package=None, max_uses=MAX_USES, headers=None, extra=None,
-           may_continue=None):
+           may_continue=None, kind="datasheet", refs=()):
     """One search conversation (continued on pause_turn while may_continue(turns) says the cost cap allows another
     turn). extra: more request fields (fallbacks), with their beta in headers. A request that fails ends it: the turns
     answered before it are kept, so what they cost is still counted. -> (links, usage summed over the turns, the
     answered turns' messages, the error or None)"""
-    body = dict(request_body(mpn, model, maker, package, max_uses), **(extra or {}))
+    body = dict(request_body(mpn, model, maker, package, max_uses, kind, refs), **(extra or {}))
     usage, turns = {}, []
     for _ in range(MAX_TURNS):
         if turns and may_continue and not may_continue(turns):
@@ -243,3 +262,22 @@ class Found:
 
     def drop(self, part):
         self.put(part, None)
+
+    @staticmethod
+    def none(digest, today=None):
+        """The entry for a package-drawing search that found nothing for the datasheet with this sha256 (kept
+        NONE_DAYS, so a held part re-run does not pay for the same empty search again)."""
+        import datetime
+        return {"none": digest, "at": (today or datetime.date.today()).isoformat()}
+
+    @staticmethod
+    def none_for(entry, digest, today=None):
+        """Is entry a recent "found nothing" for this datasheet (same sha256, under NONE_DAYS old)?"""
+        import datetime
+        if not isinstance(entry, dict) or not digest or entry.get("none") != digest:
+            return False
+        try:
+            at = datetime.date.fromisoformat(str(entry.get("at")))
+        except ValueError:
+            return False
+        return ((today or datetime.date.today()) - at).days < NONE_DAYS
