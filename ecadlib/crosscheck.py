@@ -45,7 +45,8 @@ TOL = {"pitch": (0.01, 0.0), "body_length": (0.10, 0.03), "body_width": (0.10, 0
        "ep_length": (0.10, 0.05), "ep_width": (0.10, 0.05)}
 LABEL = {"pin_count": "pin count", "pitch": "pitch", "body_length": "body length", "body_width": "body width",
          "lead_span": "lead span", "ep_length": "exposed pad length", "ep_width": "exposed pad width",
-         "has_ep": "exposed pad", "package_type": "package type", "pins": "pin numbers", "pin_names": "pin names"}
+         "has_ep": "exposed pad", "package_type": "package type", "pins": "pin numbers", "pin_names": "pin names",
+         "pin_positions": "pins on each side"}
 
 
 class Held(Exception):
@@ -103,6 +104,7 @@ def critical(spec):
     out["unread_as"] = {t: bool(D.body_unread(dict(spec, package_type=t))) for t in DRAWN}
     out["land_axes"] = land_axes(spec)
     out["table_fits"] = table_fits(spec)
+    out["sides"] = sides(spec)
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
         nlr = spec.get("pins_left_right", n // 4)
@@ -141,6 +143,37 @@ def table_fits(spec):
     # each pad's nearest neighbour is the next pad along its row, one pitch away (a pad on a row of its own fails)
     near = [min(math.hypot(p["x"] - q["x"], p["y"] - q["y"]) for q in rest if q is not p) for p in rest]
     return all(abs(d - pitch[0]) <= 0.05 for d in near)
+
+
+def sides(spec):
+    """The pin numbers along each side of the body, in order: from a read's pin_positions (grouped by side, sorted by
+    offset) or a second read's pin_rows. -> [tuple of numbers] or None."""
+    pos = spec.get("pin_positions")
+    if isinstance(pos, list) and pos:
+        by = {}
+        for p in pos:
+            if isinstance(p, dict) and p.get("number") is not None and _num(p.get("offset")):
+                by.setdefault(str(p.get("side")), []).append((p["offset"], str(p["number"])))
+        out = [tuple(n for _, n in sorted(v)) for _, v in sorted(by.items())]
+        return out or None
+    rows = spec.get("pin_rows")
+    if isinstance(rows, list):
+        out = [tuple(str(n) for n in r.get("pins") or []) for r in rows if isinstance(r, dict)]
+        return [r for r in out if r] or None
+    return None
+
+
+def _sides_alike(a, b):
+    """Two sides lists over the pins both place -> (agree, shown a, shown b), or None when fewer than two are shared.
+    Free of the drawing's frame: which pins share a side and their order along it, either way round."""
+    common = {n for r in a for n in r} & {n for r in b for n in r}
+    if len(common) < 2:
+        return None
+    keep = lambda rows: [r for r in (tuple(n for n in r if n in common) for r in rows) if r]
+    a, b = keep(a), keep(b)
+    canon = lambda rows: sorted(min(r, r[::-1]) for r in rows)
+    show = lambda rows: " | ".join(" ".join(r) for r in canon(rows))
+    return canon(a) == canon(b), show(a), show(b)
 
 
 def land_axes(spec):
@@ -383,6 +416,12 @@ def compare(first, second, kind="read"):
             for d in rec["disagreed"]:
                 if d["field"] in pair:
                     d["note"] = "the same with length and width swapped, but the pads would not turn with it"
+    if kind == "read" and first.get("sides"):
+        alike = _sides_alike(first["sides"], second["sides"]) if second.get("sides") else None
+        if alike:
+            put("pin_positions", *alike)
+        else:
+            rec["not_compared"].append("pin_positions")
     dims = [f for f in rec["compared"] if f in DIMS]
     _type_only(rec, first, second if kind == "read" else None)
     rec["status"] = "disagreed" if rec["disagreed"] else "agreed" if rec["compared"] and (dims or kind == "table") \
@@ -471,11 +510,16 @@ Find the mechanical package drawing (and its dimension table) for the requested 
 - every pin number with its name as printed (one entry per pin number; the exposed pad is pin_count + 1).
 Do not convert units, compute, round or fill in values from memory or JEDEC norms. If a value cannot be read with confidence, set it to null and name it in unresolved."""
 
+# asked only when the first read placed the pins itself (pin_positions), so every other check keeps its cached answer
+SYSTEM_ROWS = """
+
+Also give pin_rows: for each side of the body that has terminals, the pin numbers along that side in the order they sit, as the package drawing or pin configuration figure shows them. Take this from the figure itself, not from the package name or a common pinout of a similar package; a tab or exposed pad is not a row."""
+
 
 CHECK_DIMS = ("pitch", "body_length", "body_width", "lead_span", "exposed_pad.length", "exposed_pad.width")
 
 
-def output_schema():
+def output_schema(positions=False):
     """No nullable fields (the API takes at most 16 union-typed ones per schema): dimensions as named records with
     min / nom / max as printed text ("" = blank), pin_count 0 when the datasheet does not give it."""
     from . import datasheet as D
@@ -490,13 +534,22 @@ def output_schema():
                            "description": "each of these the drawing gives, once; leave out the others (exposed_pad.*: "
                                           "the exposed / thermal pad, if there is one)"},
                   "unresolved": {"type": "array", "items": {"type": "string"}}})
+    if positions:
+        row = D._obj({"pins": {"type": "array", "items": {"type": "string"},
+                               "description": "pin numbers along this side, in order"}})
+        pkg = dict(pkg, properties=dict(pkg["properties"], pin_rows={"type": "array", "items": row}),
+                   required=[*pkg["required"], "pin_rows"])
     pin = D._obj({"num": {"type": "string"}, "name": {"type": "string"}})
     return D._obj({"package": pkg, "pins": {"type": "array", "items": pin},
                    "embedded_instructions": {"type": "array", "items": {"type": "string"}}})
 
 
-def version():
-    return hashlib.sha256((json.dumps(output_schema(), sort_keys=True) + SYSTEM).encode()).hexdigest()[:12]
+def system(positions=False):
+    return SYSTEM + (SYSTEM_ROWS if positions else "")
+
+
+def version(positions=False):
+    return hashlib.sha256((json.dumps(output_schema(positions), sort_keys=True) + system(positions)).encode()).hexdigest()[:12]
 
 
 def task_text(part, package=None):
@@ -504,16 +557,16 @@ def task_text(part, package=None):
             "Return the critical package numbers and the pin numbers with their names.")
 
 
-def build_request(source, part, package, model, effort, fallback=True):
+def build_request(source, part, package, model, effort, fallback=True, positions=False):
     """A Messages-shaped request for the second read (any provider: ecadlib.llm adapts it like the first read)."""
     from . import datasheet as D
     kind, val = source
     src = ({"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(val).decode()}
            if kind == "base64" else {"type": "url", "url": D.api_url(val)})
-    body = {"model": model, "max_tokens": CHECK_MAX_TOKENS, "system": [{"type": "text", "text": SYSTEM}],
+    body = {"model": model, "max_tokens": CHECK_MAX_TOKENS, "system": [{"type": "text", "text": system(positions)}],
             "messages": [{"role": "user", "content": [{"type": "document", "source": src},
                                                       {"type": "text", "text": task_text(part, package)}]}],
-            "output_config": D.output_config(model, effort, output_schema())}
+            "output_config": D.output_config(model, effort, output_schema(positions))}
     headers = {"content-type": "application/json", "anthropic-version": D.API_VERSION}
     if fallback and model in D.FALLBACK_MODELS:
         body["fallbacks"] = "default"
@@ -550,7 +603,8 @@ def parse(msg):
                 else:
                     pkg[d["name"]] = raw
     spec = {"name": pkg.get("name"), "package_type": pkg.get("package_type"),
-            "pin_count": pkg.get("pin_count") if isinstance(pkg.get("pin_count"), int) else None}
+            "pin_count": pkg.get("pin_count") if isinstance(pkg.get("pin_count"), int) else None,
+            "pin_rows": pkg.get("pin_rows")}
 
     def mm(raw):
         if not isinstance(raw, dict) or raw.get("unit") not in D.TO_MM:
@@ -615,10 +669,11 @@ def second_read(reader, job, first, first_pins, model):
     rec = {"source": "second read", "against": f"second read ({cm})", "model": cm}
     try:
         source, order, note = _source(job)
-        headers, body = build_request(source, job["part"], job.get("package"), cm, reader.effort)
+        positions = bool(first.get("sides"))
+        headers, body = build_request(source, job["part"], job.get("package"), cm, reader.effort, positions=positions)
         src_hash = hashlib.sha256(source[1] if source[0] == "base64" else ("url" + source[1]).encode()).hexdigest()
         key = "check-" + D.ResultCache.key(src_hash, cm, job["part"], job.get("package"), order or [0, None],
-                                           f"{reader.effort}|check:{version()}")
+                                           f"{reader.effort}|check:{version(positions)}")
         msg, via = reader.check_message(job, cm, headers, body, key, len(order) if order else None)
         second, pins, instr = parse(msg)
     except Unavailable as e:
@@ -648,7 +703,8 @@ def run(reader, job, res, model):
     first_pins = [(p["num"], p["name"]) for p in res["symbol"].get("pins") or []]
     checks = [against_table(first, n, where) for where, n in standard_matches(job.get("package"), res["spec"].get("name"))]
     strong = [c for c in checks if len(c["compared"]) >= 2]
-    if mode == "always" or not strong:
+    # a table has the package's common numbering, not the maker's: a read that placed its pins is always read again
+    if mode == "always" or not strong or first.get("sides"):
         checks.append(second_read(reader, job, first, first_pins, model))
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
