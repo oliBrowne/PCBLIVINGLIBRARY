@@ -160,6 +160,13 @@ def failure_type(row, mine, spec):
     failed = {k for k, v in f.items() if not v["ok"] and k not in S.INFO_ONLY}
     if failed <= {"symbol_pins", "symbol_names"}:            # SM6T100A (10-19): the PDF never reached the model
         return "no_pdf" if any(NO_DATASHEET.search(str(t)) for t in row.get("tried") or []) else "symbol"
+    # the footprint is the maker's own land and only the symbol differs besides (MC33063MNTXG, blank-17 run
+    # 2026-10-24: onsemi's 488AF soldering footprint followed, pin names spelled out "Switch Collector" vs "SwC"):
+    # a symbol miss, not a misread dimension. The courtyard must agree: body evidence is not in the row
+    sym = {"symbol_pins", "symbol_names"}
+    if failed & sym and "courtyard" not in failed and S.only_maker_land(
+            {k: v for k, v in f.items() if k not in sym}, row.get("maker_land")):
+        return "symbol"
     pa, pb = (f.get("pitch") or {}).get("ours"), (f.get("pitch") or {}).get("ref")
     if "pitch" in failed and pa and pb and any(abs(pa / pb - r) < 0.03 * r for r in (25.4, 1 / 25.4, 39.37, 1 / 39.37)):
         return "wrong_unit"
@@ -173,6 +180,53 @@ def failure_type(row, mine, spec):
     if (spec or {}).get("pad_table") and failed & {"pads", "pin1"}:
         return "misread_table"
     return "misread_dimension"
+
+
+def _spaced(s):
+    return re.sub(r"\s+", " ", str(s or "")).strip().upper()
+
+
+def _abbreviates(short, long):
+    """KiCad's short name spells the start of our words in order ("SwC" -> "SWITCH COLLECTOR", "DC" -> "DRIVER
+    COLLECTOR"), so a printed name can't stand in for the name of another pin ("SwE" is not "SWITCH COLLECTOR")."""
+    parts, words = [t.upper() for t in re.findall(r"[A-Z][a-z]*|[a-z]+|\d+", str(short or ""))], long.split()
+    if not parts or not words or not words[0].startswith(parts[0]):
+        return False
+    i = 1
+    for t in parts[1:]:
+        while i < len(words) and not words[i].startswith(t):
+            i += 1
+        if i == len(words):
+            return False
+        i += 1
+    return True
+
+
+def printed_names(sc, mine_pins, ref_pins, text, tol=None):
+    """Pin names as the datasheet prints them count as right (Oliver 2026-10-24, MC33063MNTXG: "Switch Collector"
+    where KiCad has "SwC"): a name of ours that differs from KiCad's and is printed in the datasheet's text (two
+    letters or more, whole words) stands in for KiCad's on that pin, and the names are scored again. The pin numbers
+    must already agree, and each name must be tied to its pin: printed right after the pin's number, or KiCad's name
+    abbreviates it, so two printed names swapped between pins still fail. -> True when symbol_names is right that way."""
+    f = sc["fields"].get("symbol_names")
+    if not f or f["ok"] or not text or not ref_pins or not mine_pins or not sc["fields"].get("symbol_pins", {}).get("ok"):
+        return False
+    words = " " + re.sub(r"[^A-Z0-9]+", " ", _spaced(text)) + " "
+    ours = {str(n): v for n, v in mine_pins}
+    fixed, used = dict((str(n), v) for n, v in ref_pins), []
+    for n, v in fixed.items():
+        o = re.sub(r"[^A-Z0-9]+", " ", _spaced(ours.get(n))).strip()
+        if (o and len(re.sub(r"[^A-Z]", "", o)) >= 2 and S.norm_name(o) != S.norm_name(v) and f" {o} " in words
+                and (f" {n} {o} " in words or _abbreviates(v, o))):
+            fixed[n] = ours[n]
+            used.append(n)
+    if not used or not S.score_symbol(mine_pins, list(fixed.items()), tol).get("symbol_names", {"ok": False})["ok"]:
+        return False
+    sc["fields"]["symbol_names"] = dict(f, ok=True, error="", printed=used,
+                                        note=f"the datasheet's own pin names on {len(used)} pins")
+    sc["pass"] = S.verdict(sc["fields"])
+    sc["errors"] = [x for x in sc["errors"] if x.split(":")[0] != "symbol_names"]
+    return True
 
 
 def apply_errata(sc, mine_pins, errata, ref_pins=None, tol=None):
@@ -326,6 +380,9 @@ class EvalReader(D.Reader):
         self.used.setdefault(part, {"estimate": job["estimate"]})
         pv = job.get("prov") or {}                     # the PDF read: pinned by its SHA-256 (<set>.pins.json)
         self.used[part]["datasheet"] = {k: pv.get(k) for k in ("url", "sha256", "bytes", "pages", "sent_as", "via", "local") if pv.get(k)}
+        if job.get("data") and "text" not in self.used[part]:    # the PDF's own words: its pin names (printed_names)
+            from .. import ds_route as DR
+            self.used[part]["text"] = "\n".join(DR.page_texts(job["data"]) or [])
         return job
 
     def cached(self, job):
@@ -724,6 +781,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         ref = reference_numbers(c, erratas, data["references"])
         sc = S.score(mine, ref, sym_pins, c.get("pins"), tol)
         errata = apply_errata(sc, sym_pins, erratas.get(c["mpn"]), c.get("pins"), tol)
+        printed_names(sc, sym_pins, c.get("pins"), (reader.used.get(c["mpn"]) or {}).get("text"), tol)
         tin, tout, cost, how = _cost(reader.used.get(c["mpn"]), reader.model, not reader.estimate_only)
         src = ((it.get("source") or {}).get("footprint") or "none").split(":")[0]
         used = reader.used.get(c["mpn"]) or {}

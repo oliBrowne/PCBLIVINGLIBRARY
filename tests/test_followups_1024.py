@@ -72,3 +72,68 @@ def test_a_folder_total_keeps_the_saved_per_run_cap():
     assert R.per_run_cap({"datasheet": {"max_cost_usd": 10}}) is None          # the default: the total replaces it
     with tempfile.TemporaryDirectory() as d:
         assert R.total_cap(d, 20, per_run=R.per_run_cap(saved), log=lambda *a: None) == 2
+
+
+def test_a_maker_land_with_only_the_symbol_names_off_is_a_symbol_miss():
+    # MC33063MNTXG (blank-17 run 2026-10-24): onsemi's 488AF soldering footprint followed (pads 0.63 x 0.35 at
+    # +-1.835, thermal land 2.21 x 2.39), KiCad's DFN-8 land differs; the names spelled out ("Switch Collector")
+    ok = lambda **k: dict(ok=True, **k)
+    fields = {"layers": ok(), "pad_count": ok(ours=9, ref=9), "origin": ok(), "pin1": ok(), "pitch": ok(ours=0.8, ref=0.8),
+              "pads": {"ok": False, "bad_pads": [str(i) for i in range(1, 10)], "worst": {"pos": 0.165, "size": 1.39}},
+              "courtyard": ok(), "symbol_pins": ok(), "symbol_names": {"ok": False}}
+    ml = {"followed": True, "pads": [str(i) for i in range(1, 9)], "ep": ["9"], "ep_land": ["9"]}
+    row = {"pass": False, "source": "datasheet", "fields": fields, "maker_land": ml, "kicad_differs_maker_land": False}
+    assert R.failure_type(row, None, None) == "symbol"
+    # the land not followed: still a misread
+    assert R.failure_type(dict(row, maker_land=dict(ml, followed=False)), None, None) == "misread_dimension"
+    # the courtyard off too: the body can't be checked from the row, so not excused
+    f2 = dict(fields, courtyard={"ok": False})
+    assert R.failure_type(dict(row, fields=f2), None, None) == "misread_dimension"
+
+
+_KICAD_33063 = [("1", "SwC"), ("2", "SwE"), ("3", "TC"), ("4", "GND"), ("5", "Vfb"), ("6", "Vcc"), ("7", "Ipk"), ("8", "DC")]
+_OURS_33063 = [("1", "Switch Collector"), ("2", "Switch Emitter"), ("3", "Timing Capacitor"), ("4", "GND"),
+               ("5", "Comparator Inverting Input"), ("6", "VCC"), ("7", "Ipk Sense"), ("8", "Driver Collector")]
+_TEXT_33063 = ("PIN FUNCTION DESCRIPTION\n1 Switch\nCollector  Internal switch transistor collector.\n2 Switch Emitter\n"
+               "3 Timing Capacitor\n4 GND Ground\n5 Comparator Inverting Input\n6 VCC Logic supply\n"
+               "7 Ipk Sense  Peak current sense input\n8 Driver Collector")
+
+
+def _sc(ours, ref):
+    from ecadlib.eval import score as S
+    return S.score(None, None, ours, ref)
+
+
+def test_pin_names_printed_in_the_datasheet_count_as_right():
+    # MC33063MNTXG, onsemi: the datasheet spells the names out where KiCad abbreviates them (Oliver 2026-10-24)
+    sc = _sc(_OURS_33063, _KICAD_33063)
+    assert not sc["fields"]["symbol_names"]["ok"]
+    assert R.printed_names(sc, _OURS_33063, _KICAD_33063, _TEXT_33063)
+    f = sc["fields"]["symbol_names"]
+    assert f["ok"] and "datasheet's own pin names" in f["note"] and "1" in f["printed"] and "4" not in f["printed"]
+    assert not any(e.startswith("symbol_names") for e in sc["errors"])
+
+
+def test_pin_names_not_in_the_datasheet_still_fail():
+    sc = _sc(_OURS_33063, _KICAD_33063)
+    assert not R.printed_names(sc, _OURS_33063, _KICAD_33063, "MC33063 1.5 A step-up/down converter")
+    assert not R.printed_names(sc, _OURS_33063, _KICAD_33063, None)
+    assert not sc["fields"]["symbol_names"]["ok"]
+
+
+def test_a_printed_name_on_the_wrong_pin_still_fails():
+    # both names are printed, but ours swaps them between pins 1 and 2: the text puts "1 Switch Collector" and
+    # KiCad's SwC does not abbreviate "Switch Emitter", so the swap is not credited
+    ours = [("1", "Switch Emitter"), ("2", "Switch Collector")] + _OURS_33063[2:]
+    sc = _sc(ours, _KICAD_33063)
+    assert not R.printed_names(sc, ours, _KICAD_33063, _TEXT_33063)
+    assert not sc["fields"]["symbol_names"]["ok"]
+
+
+def test_a_printed_name_ties_to_its_pin_by_number_or_by_abbreviation():
+    assert R._abbreviates("SwC", "SWITCH COLLECTOR") and R._abbreviates("Ipk", "IPK SENSE")
+    assert R._abbreviates("DC", "DRIVER COLLECTOR") and not R._abbreviates("SwE", "SWITCH COLLECTOR")
+    # Vfb is no abbreviation of "Comparator Inverting Input": that pin needs "5 Comparator Inverting Input" printed
+    sc = _sc(_OURS_33063, _KICAD_33063)
+    R.printed_names(sc, _OURS_33063, _KICAD_33063, _TEXT_33063.replace("5 Comparator", "Comparator"))
+    assert "5" not in sc["fields"]["symbol_names"].get("printed", [])
