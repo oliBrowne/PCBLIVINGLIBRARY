@@ -53,3 +53,15 @@ def test_the_scorer_counts_a_tab_on_the_makers_tab_land_as_the_makers_land():
     off = {"pads": leads + [["4", 3.15, 0.0, 2.15, 3.3, 0.0]], "courtyard": mine["courtyard"]}   # an IPC tab
     assert "4" not in S.maker_land(off, s)["pads"]
     assert "4" not in S.maker_land(mine, sot223())["pads"]   # no tab land read: the tab is no maker's pad
+
+
+def test_a_tab_land_with_its_own_centre_scores_as_the_makers_land():
+    # Greptile #181: the part's centre is not the pads' box midpoint when the tab sits at its own tab_center
+    from ecadlib.eval import score as S
+    s = sot223(tab_length=3.3, tab_width=1.5, tab_center=2.5)
+    leads = [[str(n), -3.15, y, 2.0, 1.2, 0.0] for n, y in ((1, -2.3), (2, 0.0), (3, 2.3))]
+    mine = {"pads": leads + [["4", 2.5, 0.0, 3.3, 1.5, 0.0]], "courtyard": [-4.4, -3.6, 4.4, 3.6]}
+    ml = S.maker_land(mine, s)
+    assert ml["followed"] and "4" in ml["pads"], ml
+    shifted = {"pads": leads + [["4", 2.9, 0.0, 3.3, 1.5, 0.0]], "courtyard": mine["courtyard"]}
+    assert "4" not in S.maker_land(shifted, s)["pads"]

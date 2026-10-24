@@ -326,6 +326,13 @@ def maker_land(mine, spec, tol=None):
     near = lambda a, b, k: abs(a - b) <= t[k] + 1e-9
     tab = (spec.get("tab") or {}) if isinstance(spec.get("tab"), dict) else {}
     tl = [land.get(k) for k in F.TAB_LAND] if tab and all(isinstance(land.get(k), (int, float)) for k in F.TAB_LAND) else None
+    tp = [p for p in pads if tl and str(p[0]) == str(tab.get("number"))]
+    if tp and lead:                                   # the part's centre from the land, not the pads' box: the leads at
+        t_ = max(tp, key=lambda p: p[3] * p[4])       # pad_center one side, the tab at its own tab_center the other
+        xl = [p[1] for p in pads if p is not t_]
+        if xl and (max(xl) < t_[1] or min(xl) > t_[1]):
+            sg = 1 if t_[1] > xl[0] else -1
+            cx = (sum(xl) / len(xl) + sg * pc + t_[1] - sg * tl[2]) / 2
 
     def on_tab_land(p):                               # the tab on the maker's tab land (SOT-223, DPAK)
         return bool(tl) and str(p[0]) == str(tab.get("number")) and near(p[3], tl[0], "size") and \
