@@ -38,7 +38,7 @@ FAMILY = {  # package family words -> a canonical family (SOIC-8 / SO8 / SOP-8 a
     "PBGA": "BGA", "CABGA": "BGA", "FCBGA": "BGA", "UBGA": "BGA",
     "UDFN": "SON", "USOIC": "SO", "UCSP": "CSP",                               # "µDFN" (the µ reads as u)
     "WLCSP": "CSP", "CSP": "CSP", "WCSP": "CSP", "DSBGA": "CSP", "DIP": "DIP", "PDIP": "DIP",
-    "SIP": "SIP", "LGA": "LGA"}
+    "SIP": "SIP", "LGA": "LGA", "TDFN": "SON", "TQFN": "QFN"}                     # Maxim's TDFN-12, TQFN-20
 NEEDS_NUM = {"SO", "SC", "TO", "DO", "SOT", "SOD", "SIP", "SMA", "SMB", "SMC"}   # too common as plain words
 _FAM_RX = re.compile(r"(?<![A-Z0-9])(" + "|".join(sorted(FAMILY, key=len, reverse=True)) + r")(\s?-\s?|\s)?(\d{1,3})?(?:\s?-\s?(\d{1,3}))?(?![0-9])")
 _PKG_WORDS = (r"MICRO|FINELINE|FINE|PITCH|PLASTIC|CERAMIC|MOLDED|THIN|VERY|SHRINK|SMALL|OUTLINE|QUAD|DUAL|FLAT|"

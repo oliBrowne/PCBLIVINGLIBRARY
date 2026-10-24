@@ -115,6 +115,25 @@ OVERLINE = dict.fromkeys(map(ord, "\u0305\u0304"))     # a combining overline / 
 
 
 NC_RX = re.compile(r"^(NC|DNC|N/C)$")                   # norm_name() of a no-connect pin's name
+# one pin, two spellings (norm_name): the plain ground (a maker's VSS is KiCad's GND, ENS210; a GND exposed pad KiCad's
+# GNDPAD, LTC4060EDHC; AGND, PGND, DGND ... are nets of their own and are not in it), and a regulator's input and output
+# (AP1117's VIN / VOUT, KiCad's VI / VO); unswapped() keeps them apart where a symbol swaps two of them
+PLAIN_GROUND = {"GND", "VSS", "GNDPAD"}
+SPELLINGS = (PLAIN_GROUND, {"VIN", "VI"}, {"VOUT", "VO"})
+
+
+def same_name(ours, ref, groups=SPELLINGS):
+    """Two norm_name() pin names for the same pin. groups: the SPELLINGS that count as one name here (unswapped)."""
+    return ours == ref or any(ours in g and ref in g for g in groups)
+
+
+def unswapped(pairs):
+    """The SPELLINGS groups a symbol does not swap: [(ours, KiCad's)] per pin, norm_name()d. Two spellings of one group
+    each on the other's pin (IR4301: KiCad's GND on pin 2 and VSS on pin 7, ours VSS on 2 and GND on 7) are two
+    connections swapped, not one name spelled two ways; one of ours on two of KiCad's (LTC4060EDHC: GND on 16 and on
+    the pad 17, KiCad's GND and GNDPAD) is one net."""
+    moved = {(a, b) for a, b in pairs if a != b}
+    return tuple(g for g in SPELLINGS if not any(a in g and b in g and (b, a) in moved for a, b in moved))
 
 
 def norm_name(s):
@@ -249,7 +268,8 @@ def score_symbol(mine_pins, ref_pins, tol=None):
                              **({"ep_not_in_kicad": ep} if ep else {}))}
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
-        same = [n for n, s in named.items() if norm_name(a.get(n)) == s]
+        groups = unswapped([(norm_name(a.get(n)), s) for n, s in named.items()])
+        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, groups)]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
         moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1   # a name KiCad has on another pin:
