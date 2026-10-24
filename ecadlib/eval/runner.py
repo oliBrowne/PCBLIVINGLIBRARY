@@ -611,10 +611,27 @@ def summarize(rows):
             "fields": {k: {"ok": a, "of": b} for k, (a, b) in sorted(fields.items())}}
 
 
+def per_run_cap(rules, given=None):
+    """The per-run cap a folder total must stay under too: --max-cost-usd, else a [datasheet] max_cost_usd the rules
+    file sets (not the $10 default, which a total replaces), else None."""
+    if given is not None:
+        return given
+    return (rules.get("datasheet") or {}).get("max_cost_usd") if D.cap_chosen(rules) else None
+
+
 def total_cap(lib, total, per_run=None, log=print):
     """The per-run cap left under a folder total: total - what <lib>/datasheet/cost.jsonl already holds (and no more
     than per_run when that is set too). Raises ValueError when nothing is left, so nothing is sent."""
     from .. import ai_cost as AC
+    try:                                              # a batch sent and not yet collected is billed but not in the
+        st = json.loads((Path(lib) / "datasheet" / "batch_state.json").read_text(encoding="utf-8"))   # ledger yet
+    except (OSError, ValueError):
+        st = {}
+    open_ = [b.get("id") for b in st.get("batches") or [] if not b.get("collected")]
+    if open_:
+        raise ValueError(f"--max-total-usd: batch {', '.join(map(str, open_))} was sent and not collected yet, so its "
+                         "cost is not in cost.jsonl; nothing sent. Collect it first (the same command with "
+                         "--max-cost-usd 0.01 waits for it and sends nothing new), then resume")
     got = AC.spent(lib)
     left = round(float(total) - got["usd"], 4)
     if got["unpriced"]:
@@ -658,7 +675,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         if repeat > 1 and not (replay or record):     # each repeat folder keeps its own ledger: not one total
             raise ValueError("--max-total-usd with --repeat: the repeats spend in their own folders; give "
                              "--max-cost-usd per run instead")
-        max_cost_usd = total_cap(lib, max_total_usd, max_cost_usd, log)
+        max_cost_usd = total_cap(lib, max_total_usd, per_run_cap(rules, max_cost_usd), log)
     if max_cost_usd is not None:                      # the run's spending cap ([datasheet] max_cost_usd, default $10)
         rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)},
                      _set=[*(rules.get("_set") or []), "datasheet.max_cost_usd"])     # a cap you set, 10 too

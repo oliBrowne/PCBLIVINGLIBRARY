@@ -52,3 +52,23 @@ def test_a_pin_named_by_its_own_number_agrees_with_any_name():
     assert CC.compare_pins([("1", "Pin_1"), ("2", "Pin_2")], [("1", "GND"), ("2", "VCC")])   # a real name differs
     # a real disagreement still holds
     assert CC.compare_pins([("1", "GND"), ("2", "VCC")], [("1", "VCC"), ("2", "GND")])
+
+
+def test_a_folder_total_waits_for_a_batch_sent_and_not_collected():
+    # its cost is billed but not in cost.jsonl yet: the rest of the total can't be known (Greptile on #180)
+    with tempfile.TemporaryDirectory() as d:
+        _ledger(d, 1.0)
+        (Path(d) / "datasheet" / "batch_state.json").write_text(json.dumps({"batches": [
+            {"id": "msgbatch_old", "collected": True, "requests": {}},
+            {"id": "msgbatch_open", "collected": False, "requests": {}}]}))
+        why = _raises(lambda: R.total_cap(d, 6, log=lambda *a: None))
+        assert "msgbatch_open" in why and "msgbatch_old" not in why and "nothing sent" in why
+
+
+def test_a_folder_total_keeps_the_saved_per_run_cap():
+    # [datasheet] max_cost_usd = 2 in the rules and --max-total-usd 20: the run still stops at $2 (Greptile on #180)
+    saved = {"datasheet": {"max_cost_usd": 2}, "_set": ["datasheet.max_cost_usd"]}
+    assert R.per_run_cap(saved) == 2 and R.per_run_cap(saved, 5) == 5
+    assert R.per_run_cap({"datasheet": {"max_cost_usd": 10}}) is None          # the default: the total replaces it
+    with tempfile.TemporaryDirectory() as d:
+        assert R.total_cap(d, 20, per_run=R.per_run_cap(saved), log=lambda *a: None) == 2
