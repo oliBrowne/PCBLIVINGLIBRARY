@@ -105,6 +105,150 @@
     "why": "Wolfspeed C3D02065E datasheet (Rev. 7, Nov 2024) p6 Recommended Solder Pad Layout: tab 5.60 x 5.85, lead pads 2X 1.30 x 2.00 at 2X 2.27 from the centre line, 2X 2.50 from the tab; p5 TO 252-2L top view and pin table: pin 1 CATHODE (left lead), 2 ANODE (right lead), 3 CATHODE (tab). KiCad's TO-252-2_TabPin1 works its pads out from the package (3.5 x 2.0 leads, 7 x 7 tab) and numbers the tab 1; the maker's land is the truth (Oliver 2026-10-21). The datasheet draws no courtyard.",
     "checked": "2026-10-23"
    }
+  },
+  "FDMT800100DC": {
+   "reference": {
+    "footprint": "Maker:onsemi_507AR_TDFNW8_Recommended_Land_Pattern",
+    "why": "onsemi FDMT800100DC/D p8, CASE 507AR (98AON95711G, issue C) RECOMMENDED LAND PATTERN: pads 1-4 1.25 x 1.27 at 2.00 pitch, 1.50 gap to the 7.00 x 5.50 drain pad, drain tabs 8-5 1.25 wide reaching 1.15 above it (6.65), 9.42 overall; pin 8 above pin 1. Pad 9 is the drain pad. KiCad's PQFN_8x8 is drawn from the FDMT80080DC sheet and merges each net into one pad (3 pads: G 1.13 x 1.1, S 0.48 x 5.1, D 6.33 x 7.1), so ours can never match it pad by pad; the maker's land is the truth (Oliver 2026-10-21). The datasheet draws no courtyard.",
+    "checked": "2026-10-24"
+   },
+   "symbol_pins": {
+    "ours": [
+     [
+      "1",
+      "G"
+     ],
+     [
+      "2",
+      "S"
+     ],
+     [
+      "3",
+      "S"
+     ],
+     [
+      "4",
+      "S"
+     ],
+     [
+      "5",
+      "D"
+     ],
+     [
+      "6",
+      "D"
+     ],
+     [
+      "7",
+      "D"
+     ],
+     [
+      "8",
+      "D"
+     ],
+     [
+      "9",
+      "D"
+     ]
+    ],
+    "why": "onsemi FDMT800100DC/D (Rev. 2, Nov 2022) p1 Electrical Connection: pin 1 G, pins 2-4 S, pins 5-8 D, and the bottom drain pad D (unnumbered on the sheet; numbered 9, after the leads, as every exposed pad here). KiCad's Transistor_FET:FDMT800100DC has 3 pins (1 G, 2 S, 3 D) for its merged-pad PQFN_8x8.",
+    "checked": "2026-10-24"
+   },
+   "symbol_names": {
+    "ours": [
+     [
+      "1",
+      "G"
+     ],
+     [
+      "2",
+      "S"
+     ],
+     [
+      "3",
+      "S"
+     ],
+     [
+      "4",
+      "S"
+     ],
+     [
+      "5",
+      "D"
+     ],
+     [
+      "6",
+      "D"
+     ],
+     [
+      "7",
+      "D"
+     ],
+     [
+      "8",
+      "D"
+     ],
+     [
+      "9",
+      "D"
+     ]
+    ],
+    "why": "onsemi FDMT800100DC/D (Rev. 2, Nov 2022) p1 Electrical Connection: pin 1 G, pins 2-4 S, pins 5-8 D, and the bottom drain pad D (unnumbered on the sheet; numbered 9, after the leads, as every exposed pad here). KiCad's Transistor_FET:FDMT800100DC has 3 pins (1 G, 2 S, 3 D) for its merged-pad PQFN_8x8.",
+    "checked": "2026-10-24"
+   }
+  },
+  "BD33FC0FP": {
+   "reference": {
+    "renumber": {
+     "2": "4"
+    },
+    "why": "ROHM p3 Figure 5 (above): the fin is GND and the middle lead is a cut N.C. with no land. KiCad's TO-252-2 numbers the fin pad 2, so its pad 2 is scored as our fin 4.",
+    "checked": "2026-10-24"
+   },
+   "symbol_pins": {
+    "ours": [
+     [
+      "1",
+      "Vcc"
+     ],
+     [
+      "2",
+      "N.C."
+     ],
+     [
+      "3",
+      "Vo"
+     ],
+     [
+      "4",
+      "GND"
+     ]
+    ],
+    "why": "ROHM BDxxFC0 series datasheet (TSZ02201-0G2G0A600040-1-2, Rev.007) p3 Figure 5, Pin Description (Without Enable) TO252-3: 1 Vcc, 2 N.C. (not connected inside the IC, leave open), 3 Vo, FIN GND. The fin has no number on the sheet; ours numbers it 4, after the leads. KiCad's Regulator_Linear:BD33FC0FP numbers the fin 2 (1 VCC, 2 GND, 3 VO), the TO-252-2 convention, and drops the cut N.C. lead. Same copper on the same nets either way.",
+    "checked": "2026-10-24"
+   },
+   "symbol_names": {
+    "ours": [
+     [
+      "1",
+      "Vcc"
+     ],
+     [
+      "2",
+      "N.C."
+     ],
+     [
+      "3",
+      "Vo"
+     ],
+     [
+      "4",
+      "GND"
+     ]
+    ],
+    "why": "ROHM BDxxFC0 series datasheet (TSZ02201-0G2G0A600040-1-2, Rev.007) p3 Figure 5, Pin Description (Without Enable) TO252-3: 1 Vcc, 2 N.C. (not connected inside the IC, leave open), 3 Vo, FIN GND. The fin has no number on the sheet; ours numbers it 4, after the leads. KiCad's Regulator_Linear:BD33FC0FP numbers the fin 2 (1 VCC, 2 GND, 3 VO), the TO-252-2 convention, and drops the cut N.C. lead. Same copper on the same nets either way.",
+    "checked": "2026-10-24"
+   }
   }
  }
 }

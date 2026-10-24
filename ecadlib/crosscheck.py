@@ -33,7 +33,7 @@ review items; auto mode does not add a paid second read for it (cross_check = "a
 Held is raised: nothing is written to the library, both values go to the review (never averaged, never one picked).
 A check that could not be made (refusal, unparseable answer, nothing to compare) is recorded as "unchecked" and added
 to the part's review items; it does not hold the part."""
-import base64, hashlib, json, re
+import base64, hashlib, json, math, re
 
 from .eval.score import norm_name as norm_pin_name
 
@@ -102,11 +102,45 @@ def critical(spec):
     # whether this read is held for no body (body_unread) under each drawn type: a type word that flips it is no word only
     out["unread_as"] = {t: bool(D.body_unread(dict(spec, package_type=t))) for t in DRAWN}
     out["land_axes"] = land_axes(spec)
+    out["table_fits"] = table_fits(spec)
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
         nlr = spec.get("pins_left_right", n // 4)
         out["rows"] = (nlr, spec.get("pins_top_bottom", (n - 2 * nlr) // 2))
     return out
+
+
+def table_fits(spec):
+    """Does a custom read's pad table (the maker's recommended land copied pad by pad) fit the read's own package
+    numbers, so that another source's numbers that agree with those check the table too? Only for a package with an
+    exposed pad: a pad for every pin (the thermal pad numbered or not), each pad's nearest neighbour one pitch away
+    (+-0.05: the next pad of its row), and a thermal pad (the largest) no smaller than the exposed pad either way round (-0.05) and no
+    more than 2 mm larger (FDMT800100DC 2026-10-23: onsemi 507AR, 8 pads at 2.0 and a 7.0 x 5.5 drain pad for the
+    6.9 x 5.34 exposed pad). False otherwise."""
+    from . import footprint_adv as FA
+    pitch, n, ep = _val(spec.get("pitch")), spec.get("pin_count"), spec.get("exposed_pad")
+    if spec.get("package_type") != "custom" or not spec.get("pad_table") or not pitch or not isinstance(n, int) \
+            or not isinstance(ep, dict):
+        return False
+    el, ew = _val(ep.get("length")), _val(ep.get("width"))
+    if el is None or ew is None:
+        return False
+    try:
+        pads = [p for p in FA.table_layout(spec)[0] if p["kind"] == "smd" and p["num"]]
+    except (KeyError, TypeError, ValueError):
+        return False
+    if len(pads) < 3:
+        return False
+    big = max(pads, key=lambda p: p["w"] * p["h"])
+    rest = [p for p in pads if p is not big]
+    if len({p["num"] for p in pads}) not in (n, n + 1) or len({p["num"] for p in rest}) != len(rest):
+        return False
+    a, b = sorted((big["w"], big["h"])), sorted((el[0], ew[0]))
+    if not all(x - 0.05 <= y <= x + 2.0 for x, y in zip(b, a)):
+        return False
+    # each pad's nearest neighbour is the next pad along its row, one pitch away (a pad on a row of its own fails)
+    near = [min(math.hypot(p["x"] - q["x"], p["y"] - q["y"]) for q in rest if q is not p) for p in rest]
+    return all(abs(d - pitch[0]) <= 0.05 for d in near)
 
 
 def land_axes(spec):
@@ -247,7 +281,10 @@ def _turn(first, second, table):
 DRAWN = ("custom", "connector")     # one builder (footprint_adv._table): the pads the read lists, as listed
 
 
-def _label_only(first, second):
+TABLE_CHECKED_BY = ("pin_count", "pitch", "ep_length", "ep_width")   # what table_fits checks the table against
+
+
+def _label_only(first, second, agreed=()):
     """A package type the build does not stand on: custom and connector place the pads the read lists the same way,
     so the second read's word changes nothing built (TC2030), and nor does a second read's pin_header for a read's own
     pad table with its body (AM26LS31CN). Every other pair still holds: a read's pin_header vs connector (a header is
@@ -257,6 +294,11 @@ def _label_only(first, second):
     # a read's pad table with its body, called a pin header by the other source (AM26LS31CN DIP-16, default run
     # 2026-10-22): the pads and the outline are built as the read lists them; the header builder is never used
     if a in DRAWN and b == "pin_header" and u and not u.get(a):
+        return True
+    # the maker's land copied as a table that fits the numbers the other read agrees on, called a QFN or gullwing
+    # there (FDMT800100DC, zoom run 2026-10-23): the table is built, and its pitch, pads and thermal pad were checked
+    # against the read's numbers, which the other read must confirm (one that gives no pitch or pad confirms nothing)
+    if a == "custom" and b in ("qfn", "gullwing") and first.get("table_fits") and set(TABLE_CHECKED_BY) <= set(agreed):
         return True
     # ...unless the type decides a hold: a housed connector read "custom" with no body would build pads-hugging
     return a in DRAWN and b in DRAWN and u.get(a) == u.get(b)
@@ -269,7 +311,7 @@ def _type_only(rec, first=None, second=None):
     d = rec["disagreed"]
     if d and d[0]["field"] == "package_type":
         d[0].pop("note", None)
-        if first is not None and _label_only(first, second) and any(f in DIMS or f == "pin_count" for f in rec["agreed"]):
+        if first is not None and _label_only(first, second, rec["agreed"]) and any(f in DIMS or f == "pin_count" for f in rec["agreed"]):
             x = d.pop(0)
             rec["agreed"].append("package_type")
             rec.setdefault("tie_breaks", []).append(
