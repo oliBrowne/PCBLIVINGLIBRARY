@@ -160,6 +160,13 @@ def failure_type(row, mine, spec):
     failed = {k for k, v in f.items() if not v["ok"] and k not in S.INFO_ONLY}
     if failed <= {"symbol_pins", "symbol_names"}:            # SM6T100A (10-19): the PDF never reached the model
         return "no_pdf" if any(NO_DATASHEET.search(str(t)) for t in row.get("tried") or []) else "symbol"
+    # the footprint is the maker's own land and only the symbol differs besides (MC33063MNTXG, blank-17 run
+    # 2026-10-24: onsemi's 488AF soldering footprint followed, pin names spelled out "Switch Collector" vs "SwC"):
+    # a symbol miss, not a misread dimension. The courtyard must agree: body evidence is not in the row
+    sym = {"symbol_pins", "symbol_names"}
+    if failed & sym and "courtyard" not in failed and S.only_maker_land(
+            {k: v for k, v in f.items() if k not in sym}, row.get("maker_land")):
+        return "symbol"
     pa, pb = (f.get("pitch") or {}).get("ours"), (f.get("pitch") or {}).get("ref")
     if "pitch" in failed and pa and pb and any(abs(pa / pb - r) < 0.03 * r for r in (25.4, 1 / 25.4, 39.37, 1 / 39.37)):
         return "wrong_unit"
