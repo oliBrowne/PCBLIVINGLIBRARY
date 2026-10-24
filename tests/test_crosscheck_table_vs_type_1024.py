@@ -72,3 +72,12 @@ def test_no_exposed_pad_to_check_the_table_by_still_holds():
 def test_the_other_way_round_still_holds():
     # the build stands on the first read: a gullwing / qfn first read built by its own builder, a table second
     assert read(qfn(), fdmt())["status"] == "disagreed"
+
+
+def test_a_second_read_that_does_not_confirm_the_pitch_or_pad_still_holds():
+    # Greptile #178: the table is checked against the first read's pitch and exposed pad, so the second read must
+    # give and agree on them; matching body and pin count alone confirm nothing the table stands on
+    for drop in ("pitch", "exposed_pad"):
+        second = qfn()
+        second.pop(drop)
+        assert read(fdmt(), second)["status"] == "disagreed", drop

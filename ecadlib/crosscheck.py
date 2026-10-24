@@ -281,7 +281,10 @@ def _turn(first, second, table):
 DRAWN = ("custom", "connector")     # one builder (footprint_adv._table): the pads the read lists, as listed
 
 
-def _label_only(first, second):
+TABLE_CHECKED_BY = ("pin_count", "pitch", "ep_length", "ep_width")   # what table_fits checks the table against
+
+
+def _label_only(first, second, agreed=()):
     """A package type the build does not stand on: custom and connector place the pads the read lists the same way,
     so the second read's word changes nothing built (TC2030), and nor does a second read's pin_header for a read's own
     pad table with its body (AM26LS31CN). Every other pair still holds: a read's pin_header vs connector (a header is
@@ -294,7 +297,8 @@ def _label_only(first, second):
         return True
     # the maker's land copied as a table that fits the numbers the other read agrees on, called a QFN or gullwing
     # there (FDMT800100DC, zoom run 2026-10-23): the table is built, and its pitch, pads and thermal pad were checked
-    if a == "custom" and b in ("qfn", "gullwing") and first.get("table_fits"):
+    # against the read's numbers, which the other read must confirm (one that gives no pitch or pad confirms nothing)
+    if a == "custom" and b in ("qfn", "gullwing") and first.get("table_fits") and set(TABLE_CHECKED_BY) <= set(agreed):
         return True
     # ...unless the type decides a hold: a housed connector read "custom" with no body would build pads-hugging
     return a in DRAWN and b in DRAWN and u.get(a) == u.get(b)
@@ -307,7 +311,7 @@ def _type_only(rec, first=None, second=None):
     d = rec["disagreed"]
     if d and d[0]["field"] == "package_type":
         d[0].pop("note", None)
-        if first is not None and _label_only(first, second) and any(f in DIMS or f == "pin_count" for f in rec["agreed"]):
+        if first is not None and _label_only(first, second, rec["agreed"]) and any(f in DIMS or f == "pin_count" for f in rec["agreed"]):
             x = d.pop(0)
             rec["agreed"].append("package_type")
             rec.setdefault("tie_breaks", []).append(
