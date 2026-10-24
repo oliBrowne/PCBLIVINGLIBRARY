@@ -1203,7 +1203,9 @@ def no_footprint(spec, error):
         return f"no footprint: the datasheet read left {what}" + (
             f" (unresolved in the read: {', '.join(unres)})" if unres else " (and did not list it as unresolved)")
     return (f"no footprint: the datasheet read left {', '.join(miss)} blank, which the footprint needs"
-            + (f" (unresolved in the read: {', '.join(unres)})" if unres else ""))
+            + (f" (unresolved in the read: {', '.join(unres)})" if unres else "")
+            + (ipc_hole_hint(spec, [m for m in miss if not re.match(r"\s*(drill|holes?)\b", m, re.I)])
+               if drill_unread(spec) else ""))
 
 
 def joined_to_pad(spec, pins):
@@ -1462,14 +1464,57 @@ def standard_dip_holes(spec):
     return out
 
 
+IPC_HOLE_B = 0.20                          # IPC-2222 level B: hole = largest lead dimension + 0.20 mm (A 0.25, C 0.15)
+
+
+def ipc_hole(spec):
+    """The IPC-2222 level B hole for a through-hole part's leads -> mm (rounded up to 0.05), or None when the read
+    gave no lead size. From terminal_width's max: the lead diameter, or a flat lead's width (its diagonal is larger,
+    so the hold line says to check a flat lead). KTY83 0.55 mm wire -> 0.75; GBU4A 1.27 mm pin -> 1.5 (diagonal of
+    1.27 x 0.66: 1.65)."""
+    big = _lead_max(spec)
+    return round(math.ceil(round((big + IPC_HOLE_B) / 0.05, 6)) * 0.05, 2) if big else None
+
+
+def _lead_max(spec):
+    """terminal_width's largest value (a one-sided "0.55 max" too), or None when it is blank or not a lead's size."""
+    w = spec.get("terminal_width")
+    if isinstance(w, dict):
+        w = [w.get(k) for k in ("min", "nom", "max")] + [(w.get("nom") or 0) + (w.get("tol") or 0)]
+    big = max((v for v in (w if isinstance(w, list) else [w]) if isinstance(v, (int, float))), default=None)
+    return big if big and 0 < big <= 5 else None
+
+
+def ipc_hole_hint(spec, rest=()):
+    """The suggestion a hole hold carries: the IPC-2222 hole and the command that confirms it, or "" without a lead
+    size. A person who checks it confirms with `ecadlib fp-edit ... hole` (fp_edit), and the part builds with it,
+    unless `rest` (other blanks: KTY83's bend spacing, GBU4A's pin positions) still needs the drawing."""
+    h = ipc_hole(spec)
+    if not h:
+        return ""
+    lead = _lead_max(spec)
+    then = (f"; the hole alone does not build it, {', '.join(rest)} is blank too" if rest else
+            " and the part builds with it")
+    return (f". Suggested hole: {h:g} mm (IPC-2222 level B: the {lead:g} mm lead + {IPC_HOLE_B:g} mm; for a flat or "
+            f"square lead use its diagonal). If it is right, confirm it with `ecadlib fp-edit PLAN --part PART hole "
+            f"{h:g}`{then}")
+
+
+def drill_unread(spec):
+    """True when the read lists the part's hole (drill / hole / land / pad table) as not found and printed no drill."""
+    return not spec.get("drill") and any(HOLES_UNREAD.match(str(u)) for u in spec.get("unresolved") or [])
+
+
 def tht_holes_unread(spec):
     """The hold line for a through-hole pad table whose holes the datasheet does not print and that is no plain DIP
     (standard_dip_holes builds those with KiCad's DIP holes): the hole and pad sizes would be the model's guess
-    (KBU4A: 1.5 mm holes, 2.2 mm pads, an assumed 5.08 mm lead spacing). None otherwise."""
+    (KBU4A: 1.5 mm holes, 2.2 mm pads, an assumed 5.08 mm lead spacing). It suggests the IPC-2222 hole (ipc_hole),
+    which a person confirms with fp-edit (Oliver 2026-10-23: hold, suggest IPC-2222, release once confirmed).
+    None otherwise."""
     if not holes_unread(spec) or standard_dip_holes(spec):
         return None
     return ("no footprint: the datasheet prints no hole size for these through-hole pins, so the hole and pad sizes in "
-            "the read are a guess; check the maker's recommended hole on the drawing")
+            "the read are a guess; check the maker's recommended hole on the drawing" + ipc_hole_hint(spec))
 
 
 def body_on_holes(spec):
@@ -1678,7 +1723,7 @@ def check_pins(spec, ext, review):
 
 
 # ---------------------------------------------------------------- self-check: the extraction against itself and family norms
-STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.8, 0.95, 1.0, 1.1, 1.25, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.3, 2.5, 2.54,
+STD_PITCH = (0.3, 0.35, 0.4, 0.5, 0.635, 0.65, 0.75, 0.8, 0.95, 1.0, 1.1, 1.25, 1.27, 1.5, 1.7, 1.778, 1.9, 2.0, 2.29, 2.3, 2.5, 2.54,
              3.0, 3.5, 3.81, 3.96, 5.0, 5.08)
 FAMILY_CODES = re.compile(r"(T?SOT|SSOT|SuperSOT|SOD|TO|DO|SC|SMA|SMB|SMC|D?PAK|DO-?\d+)\d*", re.I)   # first number is the outline, not pins
 # package_type -> (pitch mm range or None, longest body side mm range, pin_count range). A family the schema gains
@@ -2007,6 +2052,31 @@ def _depop_positions(spec, ext, review=None):
     return pos, places, sorted(set(range(1, places + 1)) - set(ints))
 
 
+def grid_from_balls(spec, ext, review):
+    """A BGA read that left rows / cols blank while its pin table names every ball (CY14U256LA-BA, live benchmark
+    2026-10-23: TFBGA-48 A1..H6, the read wrote "6 x 8 ball grid" in its notes but left both fields null) -> rows and
+    cols from the ball names, with a review line. Only when the names (JEDEC rows) fill the whole grid: a table with
+    balls left out may be leaving out NC balls or a depopulated area, and which ones isn't known, so that stays blank.
+    A row or column count the read gave is never changed."""
+    if spec.get("package_type") != "bga" or spec.get("rows") and spec.get("cols"):
+        return
+    from . import ds_route as DR, footprint_adv as FA
+    names = {str(p.get("num") or "").strip().upper() for p in ext.get("pins") or []}
+    idx = [FA.ball_index(x) for x in names]
+    if not names or None in idx:
+        return
+    rows, cols = max(i for i, _ in idx) + 1, max(j for _, j in idx) + 1
+    if len(set(idx)) != rows * cols or spec.get("rows") not in (None, rows) or spec.get("cols") not in (None, cols):
+        return
+    spec["rows"], spec["cols"] = rows, cols
+    if spec.get("unresolved"):
+        spec["unresolved"] = [u for u in spec["unresolved"] if DR.unresolved_field(u) not in ("rows", "cols")]
+        if not spec["unresolved"]:
+            del spec["unresolved"]
+    review.append(f"rows / cols were left blank: {rows} x {cols} from the pin table's ball names "
+                  f"({FA.row_name(0)}1..{FA.row_name(rows - 1)}{cols}, every ball named); check against the drawing")
+
+
 INJECTION = "document contains instruction-like text (ignored)"
 
 
@@ -2060,6 +2130,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             spec["pin_count"] = n
             review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     two_sided(spec, review)
+    grid_from_balls(spec, ext, review)
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):
@@ -3469,19 +3540,32 @@ class Reader:
             if got:
                 return got
             found.drop(part)                          # it gave its PDF once and no longer does: search again
+        for url in self._search_links(part, package, attempts, maker) or ():
+            got = self._fetch_found(url, part, attempts)
+            if got:
+                found.put(part, url)
+                return got
+        return None, None
+
+    def _search_links(self, part, package, attempts, maker=None, kind="datasheet", refs=()):
+        """One web search (ds_search.search, kind "datasheet" or "package"), held under [datasheet] max_cost_usd and
+        written to cost.jsonl -> the links ranked (the maker's copy, then a distributor's, then a mirror's), or None
+        when no search was made or it failed with no links; the misses in attempts."""
+        from . import ds_search as WS
         model = self.cfg.get("web_search_model") or WS.DEFAULT_MODEL
         uses = self.cfg.get("web_search_max_uses")
         uses = WS.MAX_USES if uses is None or str(uses).strip() == "" else int(uses)
+        where = "web search" if kind == "datasheet" else "web search (package drawing)"
         if uses < 1:                                  # 0: no search may be made
-            attempts.append({"url": "", "where": "web search", "error": f"not searched: [datasheet] web_search_max_uses "
+            attempts.append({"url": "", "where": where, "error": f"not searched: [datasheet] web_search_max_uses "
                              f"= {uses}"})
-            return None, None
+            return None
         fallback = model in FALLBACK_MODELS           # a classifier decline is re-run on another model, as for a read
         est, cap = WS.estimate(model, uses, fallback), float(self.cfg.get("max_cost_usd") or 0)
         if cap and (est is None or self.committed_usd + est > cap):
-            attempts.append({"url": "", "where": "web search", "error": f"not searched: about ${est or 0:.2f} more "
+            attempts.append({"url": "", "where": where, "error": f"not searched: about ${est or 0:.2f} more "
                              f"would pass [datasheet] max_cost_usd = {cap:g}"})
-            return None, None
+            return None
         headers, extra = ({"anthropic-beta": FALLBACK_BETA}, {"fallbacks": "default"}) if fallback else ({}, {})
 
         def may_continue(turns):                      # a continuation resends what was read: only while it fits the cap
@@ -3490,30 +3574,87 @@ class Reader:
         try:
             client = self.client(model)
         except DatasheetError as e:                   # (--offline, no key: nothing was sent)
-            attempts.append({"url": "", "where": "web search", "error": f"search failed: {e}"})
-            return None, None
+            attempts.append({"url": "", "where": where, "error": f"search failed: {e}"})
+            return None
         urls, usage, turns, err = WS.search(client, part, model, maker=maker, package=package, max_uses=uses,
-                                            headers=headers, extra=extra, may_continue=may_continue)
+                                            headers=headers, extra=extra, may_continue=may_continue, kind=kind,
+                                            refs=refs)
         how = "usage" if WS.usd(model, turns) is not None and not err else "estimate"
         usd = WS.usd(model, turns, unknown=est or 0.0)   # each turn with no usage (or no price) holds its worst case
         if err:                                       # the failed request may still have been billed: hold its worst case
             usd += est or 0.0
         self.committed_usd += usd
         self.ledger.add({"part": part, "name": part, "model": model,
-                         "model_served": (turns[-1] if turns else {}).get("model"), "via": "web search",
+                         "model_served": (turns[-1] if turns else {}).get("model"), "via": where,
                          "input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0),
                          "web_searches": usage.get("web_search_requests", 0), "usd": round(usd, 6), "how": how,
                          "verdict": f"search failed: {err}" if err else f"{len(urls)} links"})
         if err and not urls:
-            attempts.append({"url": "", "where": "web search", "error": f"search failed: {err}"})
-        elif not urls:
-            attempts.append({"url": "", "where": "web search", "error": "the search found no PDF link"})
-        for url in WS.rank(urls, maker):             # the maker's copy, then a distributor's, then a mirror's
-            got = self._fetch_found(url, part, attempts)
-            if got:
-                found.put(part, url)
-                return got
-        return None, None
+            attempts.append({"url": "", "where": where, "error": f"search failed: {err}"})
+            return None
+        if not urls:
+            attempts.append({"url": "", "where": where, "error": "the search found no PDF link"})
+        return WS.rank(urls, maker)
+
+    def _package_search(self, data, texts, part, package, prov, attempts, maker=None, codes=()):
+        """[datasheet] web_search, for a datasheet with no drawing of the part's package (outline_docs.drawing_missing:
+        a product sheet with photos only, a family sheet whose package drawings are a document of their own): one
+        search for the package drawing (ds_search PACKAGE_PROMPT), the first PDF found that is about this part or its
+        package (outline_docs.names_it) appended to the datasheet like an outline document -> (bytes, prov), or None
+        when no search was made. A link found before is used again without a search (<out>/datasheet/web_search.json,
+        "<part> package drawing"). What could not be got is said in prov["outline_missing"], the misses in attempts."""
+        from . import ds_route as DR, ds_search as WS, outline_docs as OD
+        own = DR.page_scores(texts, part, package)[1]
+        found, key, where = WS.Found(self.dir), f"{part} package drawing", "web search (package drawing)"
+        saved, n0 = found.get(key), len(attempts)
+        got = None
+
+        def take(url):
+            try:
+                b, meta = self.store.fetch(url, where, part=part, handoff=False, public=True)
+            except DatasheetError as e:
+                attempts.append({"url": url, "where": where, "error": str(e)})
+                return None
+            if hashlib.sha256(b).hexdigest() == prov.get("sha256"):
+                attempts.append({"url": url, "where": where, "error": "the datasheet itself"})
+                return None
+            if not OD.names_it(DR.page_texts(b), part, codes, own, meta.get("url") or url):
+                attempts.append({"url": url, "where": where,
+                                 "error": f"the PDF at {meta.get('url') or url} names neither {part} nor its package"})
+                return None
+            return b, meta.get("url") or url
+
+        def missing(why):
+            return data, dict(prov, outline_missing=list(prov.get("outline_missing") or []) + [
+                f"no package drawing: the datasheet has none of this package and {why}"])
+        if WS.Found.none_for(saved, prov.get("sha256")):   # searched for this datasheet before, nothing found: not again
+            return missing(f"a web search on {saved['at']} found no PDF of it (delete \"{key}\" from "
+                           "web_search.json to search again)")
+        if isinstance(saved, str):
+            got = take(saved)
+            if not got:
+                found.drop(key)
+        if not got:
+            urls = self._search_links(part, package, attempts, maker, kind="package", refs=list(codes))
+            if urls is None:                          # no search was made, or it failed: nothing is remembered
+                return None
+            for url in urls:
+                got = take(url)
+                if got:
+                    found.put(key, url)
+                    break
+            else:
+                found.put(key, WS.Found.none(prov.get("sha256")))
+        if not got:
+            mine = [a for a in attempts[n0:] if a["where"] == where]
+            return missing("a web search found no PDF of it" + (f" ({mine[-1]['error'][:160]})" if mine else ""))
+        merged = OD.append(data, [got[0]])
+        if merged is None:
+            return missing(f"the PDF found ({got[1]}) could not be appended")
+        first = (pdf_pages(data) or 0) + 1
+        return merged, dict(prov, sha256=hashlib.sha256(merged).hexdigest(), pages=pdf_pages(merged),
+                            outline=list(prov.get("outline") or []) + [{"code": "web search", "from": got[1],
+                                                                        "first_page": first}])
 
     def _fetch_found(self, url, part, attempts):
         """A link a web search gave -> (data, prov) or None (the miss in attempts). Never a private address: the link
@@ -3605,9 +3746,9 @@ class Reader:
             got = self._outline_docs(data, texts, part, package, prov) if texts else None
             if got:                                   # the package drawing is a separate document: appended
                 data, prov = got
-                if prov.get("outline"):
-                    src_hash, n = prov["sha256"], pdf_pages(data)
-                    texts = self._page_texts(data, src_hash)
+            if got and prov.get("outline"):
+                src_hash, n = prov["sha256"], pdf_pages(data)
+                texts = self._page_texts(data, src_hash)
             facts = DR.ordering_facts(texts, part, data) if texts else None
             if not pages and self.page_budget and n and n > self.page_budget:
                 if texts:
@@ -3818,6 +3959,10 @@ class Reader:
                                                 "usage": (rec.get("message") or {}).get("usage") or rec.get("usage")}]
             nxt = self.router.next_step(job["rung"], job["level"], len(job["levels"]), kind, len(done))
             best = job["route"].get("best")           # [rank, rung, level, answer no.] of the best answer so far
+            more = self._package_retry(job, res, done) if nxt is None and "message" in rec else None
+            if more is not None:                      # the read left the footprint's dimensions blank and the
+                job = more                            # datasheet has no drawing of the package: read again with it
+                continue
             if nxt is None:
                 if best and tuple(best[0]) > rank:    # CY14U256LA-BA: the whole-PDF read came back with no pins and no
                     job = self._at(job, best[1], best[2])  # grid ("x"), after a 5-page read that had them: keep that one
@@ -3831,6 +3976,56 @@ class Reader:
                 best = [list(rank), job["rung"], job["level"], len(done)]
             job = self._at(dict(job, route=dict(job["route"], attempts=done, best=best),
                                 earlier_keys=job.get("earlier_keys", []) + [job["key"]]), *nxt)   # (Reader.answered)
+
+    def _package_retry(self, job, res, done):
+        """The route ended on an answer that leaves a dimension the footprint needs blank (build_blockers, or a
+        connector / pad table with no body: body_unread), and the datasheet's text shows no drawing of the part's
+        package (outline_docs.drawing_missing): with [datasheet] web_search, the package drawing is searched for
+        (_package_search) and the route goes on, at the same model, with the drawing's pages appended -> that step,
+        or None. Only after such a read, so a part read right from its datasheet never pays for a search (benchmark
+        2026-10-23: ten parts read right had vector drawings the text check alone took for no drawing). Once per part;
+        nothing found is said in the review."""
+        if job.get("package_doc") is not None or job.get("data") is None or job.get("pages") or \
+                not self.cfg.get("web_search") or self.estimate_only:
+            return None
+        spec = (res or {}).get("spec") or {}
+        try:
+            blank = build_blockers(spec) or body_unread(spec)
+        except Exception:                             # an answer too broken to say: not a blank dimension
+            blank = None
+        if not blank:
+            return None
+        from . import ds_route as DR, outline_docs as OD
+        part, package, data = job["part"], job["package"], job["data"]
+        texts = self._page_texts(data, job["src_hash"])
+        if not texts or not OD.drawing_missing(texts, part, package):
+            return None
+        attempts = list(job["base_prov"].get("attempts") or [])
+        codes = [c for c, _, _ in OD.refs(texts, part, package)]
+        got = self._package_search(data, texts, part, package, job["base_prov"], attempts, job.get("maker"), codes)
+        if not got:                                   # no search could be made (cap, no key): the answer stands
+            job["package_doc"] = False
+            return None
+        data, prov = got
+        prov = dict(prov, attempts=attempts)
+        if not prov.get("outline"):                   # nothing found: the answer stands, the review says so
+            job["package_doc"] = False
+            job["prov"] = dict(job["prov"], outline_missing=prov.get("outline_missing") or [])
+            job["base_prov"] = prov
+            return None
+        src_hash, n = prov["sha256"], pdf_pages(data)
+        texts = self._page_texts(data, src_hash)
+        lv, why = [None], {}
+        if self.page_budget and n and n > self.page_budget and texts:
+            lv, why = DR.levels(texts, self.page_budget, part, package, n, self._page_marks(data, src_hash))
+        sent = sorted({p for L in lv if isinstance(L, list) for p in L}) or (list(range(1, n + 1)) if n and n <= 40 else [])
+        base = dict(job, data=data, src_hash=src_hash, levels=lv, n_pages=n, base_prov=prov,
+                    facts=DR.ordering_facts(texts, part, data) if texts else None,
+                    tables=DR.dim_tables(data, sent, texts) if texts and sent else None,
+                    package_doc=prov["outline"][-1]["from"], earlier_keys=job.get("earlier_keys", []) + [job["key"]],
+                    route=dict(job["route"], picked=why, attempts=done, best=None,
+                               package_doc=prov["outline"][-1]["from"]))
+        return self._at(base, job["rung"], 0)
 
     def _result(self, job, rec):
         ext = parse_message(rec["message"])
@@ -3856,7 +4051,8 @@ class Reader:
             res["needs_review"].append(f"the package drawing came from {o['code']} ({o['from']}), appended from page "
                                        f"{o['first_page']}: check it is this part's package")
         for m in job["prov"].get("outline_missing") or ():
-            res["needs_review"].append(f"the datasheet has no drawing of this package, only its document number: {m}")
+            res["needs_review"].append(m if m.startswith("no package drawing") else
+                                       f"the datasheet has no drawing of this package, only its document number: {m}")
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)

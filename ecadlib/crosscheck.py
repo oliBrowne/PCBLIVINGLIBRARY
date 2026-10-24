@@ -101,11 +101,43 @@ def critical(spec):
     out["tab_repeats_lead"] = bool(tab) and str(tab.get("number")) in {str(p.get("number")) for p in D._listed(spec)}
     # whether this read is held for no body (body_unread) under each drawn type: a type word that flips it is no word only
     out["unread_as"] = {t: bool(D.body_unread(dict(spec, package_type=t))) for t in DRAWN}
+    out["land_axes"] = land_axes(spec)
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
         nlr = spec.get("pins_left_right", n // 4)
         out["rows"] = (nlr, spec.get("pins_top_bottom", (n - 2 * nlr) // 2))
     return out
+
+
+def land_axes(spec):
+    """Does the read's own land (the maker's recommended pattern) fix which way its body and exposed pad run? Only for a
+    DFN (qfn, pins on two sides): footprint_gen lays the rows at +-pad_center across body_length and the exposed pad's
+    length across the rows (ep_across). True when every fact the land gives agrees with the read's axes and at least
+    one could tell them apart: rows nearer the read's body length than its width (a body that is not square), and the
+    land's ep_across x ep_along equal to the read's exposed pad length x width (a pad that is not square). Then a second
+    read with the same sizes the other way round printed D x E in the other order (LTC4060EDHC: DFN 5 x 3 printed,
+    read 3 x 5 with the maker's land; ENS210: 2 x 2 body, EP 0.7 x 1.6 read and land, 1.6 x 0.7 printed). An oblong
+    exposed pad needs the land's own ep_across x ep_along: rows that fix the body say nothing of the pad's way."""
+    from . import footprint_gen as FG
+    land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
+    if spec.get("package_type") != "qfn" or not _num(land.get("pad_center")) or not spec.get("pin_count"):
+        return False
+    try:
+        if FG.rows(spec)[1] != 0:
+            return False
+    except (KeyError, TypeError):
+        return False
+    facts, body, ep = [], (_val(spec.get("body_length")), _val(spec.get("body_width"))), spec.get("exposed_pad")
+    if None not in body and abs(body[0][0] - body[1][0]) > 0.2:
+        pc = float(land["pad_center"])
+        facts.append(abs(pc - body[0][0] / 2) < abs(pc - body[1][0] / 2))
+    ea, eg = land.get("ep_across"), land.get("ep_along")
+    el, ew = (_val(ep.get("length")), _val(ep.get("width"))) if isinstance(ep, dict) else (None, None)
+    if isinstance(ep, dict) and _num(ea) and _num(eg) and abs(float(ea) - float(eg)) > 0.2:
+        facts.append(el is not None and ew is not None and abs(float(ea) - el[0]) <= 0.05 and abs(float(eg) - ew[0]) <= 0.05)
+    elif el is not None and ew is not None and abs(el[0] - ew[0]) > 0.2:
+        return False                                  # an oblong pad the land does not size: the rows can't say its way
+    return bool(facts) and all(facts)
 
 
 LETTER = {"A": "ANODE", "K": "CATHODE", "C": "COLLECTOR", "E": "EMITTER", "B": "BASE", "G": "GATE", "D": "DRAIN",
@@ -207,7 +239,8 @@ def _turn(first, second, table):
     else:
         # a qfn body and pad that both turn still hold: LTC2942-1 (DFN-6 2 x 3 read, 3 x 2 printed) released that way
         # was built with its axes swapped (free re-score of the 2026-10-21 run)
-        ok = first.get("package_type") in TURN_FREE and body == {1}
+        # unless the read's own land (the maker's pattern) fixes its axes: the second read printed D x E the other way
+        ok = first.get("package_type") in TURN_FREE and body == {1} or bool(first.get("land_axes"))
     return [w for w, t in (("body", body), ("exposed pad", ep)) if t == {1}] if ok else []
 
 
@@ -299,6 +332,10 @@ def compare(first, second, kind="read"):
         put(k, _close(k, a, b, table), a, b)
     if turned:
         rec["turned"] = turned
+        if not table and first.get("land_axes") and not (first.get("package_type") in TURN_FREE and turned == ["body"]):
+            rec.setdefault("tie_breaks", []).append(
+                f"{' and '.join(turned)} given with length and width the other way round by the second read; the "
+                "read's own land pattern (rows and exposed pad) runs the read's way, so the pads are built as read")
     for w, pair in PAIRS:
         if w not in turned and 1 in (_turns(first, second, *pair, table) or ()):
             for d in rec["disagreed"]:
@@ -573,7 +610,7 @@ def run(reader, job, res, model):
         checks.append(second_read(reader, job, first, first_pins, model))
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
-    standard = _settle_turn(checks)
+    standard = _settle_turn(checks) or _settle_tab(checks, res["spec"], first_pins)
     st = [c["status"] for c in checks]
     ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong and not _self(c)]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
@@ -613,6 +650,54 @@ def _settle_turn(checks):
         c["disagreed"], c["status"], c["settled"] = [], "agreed", "standard table"
         return name
     return None
+
+
+ONLY_HERE = re.compile(r"only here: (.+)$")
+
+
+def _settle_tab(checks, spec, pins=None):
+    """A power package with a tab whose read names exactly one checked tab land (stdparts.identify_tab: the drawing's
+    family, the tab's number, every lead at its place, the body length), where the other source differs only in how it
+    counts the tab: one pin more or less (PSMN5R2-60YL: 5 with the tab, 4 without), the tab given as an exposed pad,
+    or the tab under a number of its own that is no pad of the land (IRFS4115: tab 4 DRAIN in the second read, 2 in the
+    first and in KiCad's TO-263-2; IPS6011RPBF: 6 Vcc), and gullwing against custom (the land is a pad table). The land is the table's, so how the tab is counted moves no copper; the part is
+    built from it, not held, and the review says so. A difference in a name, a lead number the land has, or any size
+    still holds. -> the table name, or None."""
+    if not any(c["status"] == "disagreed" for c in checks):
+        return None
+    from . import stdparts as S
+    name, how = S.identify_tab(spec, pins)
+    if not name:
+        return None
+    pads = {str(p.get("number")) for p in S.packages()[name]["pad_table"]["pads"] if p.get("number")}
+
+    def counting(d):
+        f = d["field"]
+        if f == "has_ep":
+            return True
+        if f == "package_type":                       # the tab land is a pad table: gullwing or custom builds the same
+            return {d["first"], d["second"]} <= {"gullwing", "custom"}
+        if f == "pin_count":
+            try:
+                return abs(int(d["first"]) - int(d["second"])) == 1
+            except (TypeError, ValueError):
+                return False
+        if f == "pins" and not d.get("note"):
+            extra = [n.strip() for side in (d["first"], d["second"]) for m in [ONLY_HERE.search(str(side))] if m
+                     for n in m.group(1).split(",")]
+            return len(extra) == 1 and extra[0] not in pads
+        return f in ("body_length", "body_width") and SWAPPED in (d.get("note") or "")
+    bad = [c for c in checks if c["status"] == "disagreed"]
+    if not all(c["disagreed"] and all(counting(d) for d in c["disagreed"]) for c in bad):
+        return None
+    for c in bad:
+        moved = "; ".join(f"{LABEL.get(d['field'], d['field'])} {d['first']} vs {d['second']}" for d in c["disagreed"])
+        c.setdefault("tie_breaks", []).append(
+            f"{moved}: only how the tab is counted differs, and the read names the checked tab land {name} ({how}), "
+            "so the footprint is built from it")
+        c["agreed"] += [d["field"] for d in c["disagreed"]]
+        c["disagreed"], c["status"], c["settled"] = [], "agreed", "standard table"
+    return name
 
 
 def _self(c):

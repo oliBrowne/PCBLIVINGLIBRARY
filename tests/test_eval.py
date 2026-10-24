@@ -125,7 +125,7 @@ def test_thermal_vias_are_not_pads():
 def test_symbol_pins_and_names():
     ref = [("1", "~{RESET}"), ("2", "VDD"), ("3", "GND"), ("4", "PA0"), ("5", "PA1")]
     assert S.score_symbol([("1", "R\\E\\S\\E\\T\\"), ("2", "VDD"), ("3", "GND"), ("4", "PA0"), ("5", "PA1")], ref)["symbol_names"]["ok"]
-    r = S.score_symbol([("1", "RESET"), ("2", "VCC"), ("3", "VSS"), ("4", "PB0"), ("5", "PA1")], ref)
+    r = S.score_symbol([("1", "RESET"), ("2", "VCC"), ("3", "AGND"), ("4", "PB0"), ("5", "PA1")], ref)
     assert r["symbol_pins"]["ok"] and not r["symbol_names"]["ok"] and r["symbol_names"]["matched"] == 2
     r = S.score_symbol([("1", "A"), ("2", "B")], ref)
     assert not r["symbol_pins"]["ok"] and "missing ['3', '4', '5']" in r["symbol_pins"]["error"]

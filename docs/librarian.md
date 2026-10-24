@@ -247,6 +247,36 @@ web_search_max_uses = 3    # searches per part
   cap let it try for $1.47: it often answered from memory without searching, and those were its misses. So the search
   runs on Haiku unless `web_search_model` names another model.
 
+**A through-hole part with no printed hole.** Some datasheets give the leads but never the hole: NXP's KTY83
+(an axial glass sensor) and Vishay's GBU4A (a bridge with four flat pins) print no hole, pad or footprint in any of
+their documents. A plain DIP gets KiCad's DIP hole. Any other part is held, because the hole would be a guess. The hold
+suggests the IPC-2222 level B hole: the largest lead size plus 0.20 mm, rounded up to 0.05 mm (KTY83's 0.55 mm wire
+gives 0.75 mm). For a flat or square lead, use its diagonal. If the suggestion is right, a person confirms it with
+`ecadlib fp-edit PLAN --part PART hole`, or gives another size with `hole 1.7`. Every through-hole pin then gets that
+hole and KiCad's pad around it, the edit is noted with who made it, and the part builds on the next librarian run.
+When other values are blank too (KTY83 has no bend spacing), the hold says the hole alone does not build it.
+
+**The package drawing, when the datasheet has none.** Some datasheets have no drawing of the part's package at all. Neutrik's
+product sheets have only photos and spec tables. Altera, Lattice and Microchip family sheets keep their BGA drawings in
+a separate package-information document. An onsemi revision dropped a package. On the 2026-10-23 live benchmark these
+were 12 of the 17 parts held for a blank dimension. With `web_search = true`, such a part gets a second search, for its
+package drawing: a package-information document, a case outline, a product drawing or a PCB layout.
+
+- It runs only after a read that left a dimension the footprint needs blank, so a part read right from its datasheet
+  never pays for a search. The PDF's text must also show no drawing of this package: no dimension table for it, no
+  short page captioned as its drawing, and no image-only page after the first (that page may be the drawing). A PDF
+  with no text layer is never searched for. When a drawing is found, the part is read again with it, on the same
+  model.
+- A PDF the search finds is kept only if it names the part, a document number the datasheet gives for it, or the
+  part's package with its pin count (FBGA-484, not just "BGA"). Its pages go after the datasheet's, like an outline
+  document's. The review says where the drawing came from, and that it must be checked against the part's package.
+- The search costs the same as a datasheet search. It is written to `cost.jsonl` as "web search (package drawing)".
+  The link it finds is kept in `web_search.json` as "<part> package drawing". A search that found nothing is kept
+  there too, for 30 days and for that datasheet only, so re-running a held part doesn't pay for the same empty
+  search again. Delete the entry to search sooner.
+- If nothing is found, the first read stands and the review says no package drawing was found. The part is still
+  held for the blank dimension.
+
 ## Updates never break a library: `migrate.py`, `library.lock.json` and `ecadlib rebuild`
 
 **Versioned files.** Everything ecadlib writes and reads back later has a schema version, one integer per kind of file
