@@ -36,14 +36,16 @@ def h(o):
 # changed (checked with the earlier schema: the earlier hashes).
 # 2026-10-22: land's pad_length / pad_width / pad_center are optional (a land page that sizes only the thermal land);
 # nothing else changed (checked with the earlier schema: the earlier hashes).
-GOLDEN = {"build_sync": "86907b27c88f819b6bf33b753b97a30791bb278dd522cc33bf753437b4d7c744",
-          "build_batch": "23519f8caf5fbe08b00219ad3645cd24f66a62434b050b1ef3531cecea2f8e07",
-          "build_url_haiku": "b28a138bc37d4306d8cd00d4b52d448a126f93005bc37a1bc8df068a16a5933c",
-          "reader_sync_calls": ["7805482007d67a90fd0229196bca51dd8eb5e30c96176b7af7b9bf83a47f1e38",
-                                "ad84af88bfd21b77a2add08aa3e5fd8b7c5541c26d41c2b5e637d0e0bb40dd1a"],
+# 2026-10-24: land gains tab_length / tab_width / tab_center, the tab's own land pad (SOT-223, DPAK); nothing else
+# changed (checked with the earlier schema: the earlier hashes).
+GOLDEN = {"build_sync": "3d1e2c1bf37e09bf38528f43a7b0a307a70b7197bdb8de37497bd6236a715877",
+          "build_batch": "f4c452182f81cfcf0c14ffad3b8c7627b2c401831200bf48524b5dd9537f38dd",
+          "build_url_haiku": "51b842a71dd3bdce5eb9116dc592961661dd7cf0d1cc6858575a20957567e580",
+          "reader_sync_calls": ["fa37111a63d9da2d92211bfc5c07e1723a84de8c0e0c44f805219f6525c453aa",
+                                "53efc86467213bb7f49bc64072f6ce8d45f8b5018a49186fd0fe074dc419c6c5"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["6b0ff1a3ac83acaa3581bbee588500917dd4e2dbc9e5d4cd01b417d6cf7d9f40",
-                          "7642d0cb92dd447fe71f3cd2f3079e5ef8872ef0b442e401d352ff86d26580b5"]}
+          "batch_posts": ["7c0d1f56435dba30fa8a03ac78790cabd406b97dc4a3e5ce0260d37b3a892ec7",
+                          "0de54dfea41410101d2c7b0b7ea2479acd70e9d3ac2ea5201b421c57471a0d93"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 

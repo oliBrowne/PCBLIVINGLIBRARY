@@ -351,8 +351,12 @@ def thermal_land_small(spec):
             "(check land.ep_across / ep_along against the land page)")
 
 
+TAB_LAND = ("tab_length", "tab_width", "tab_center")
+
+
 def _apply_land(spec, pads):
-    """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab keeps its IPC size). A pin 1
+    """Replace the IPC-computed signal pads with the datasheet's recommended land (the tab too when the land sizes it:
+    tab_length / tab_width / tab_center, else it keeps its IPC size). A pin 1
     the land draws another size (pin1_length / pin1_width) keeps the row's outer end and its lead's centre line."""
     land = spec["land"]
     lcy = land.get("pad_center_y", land["pad_center"])
@@ -365,7 +369,9 @@ def _apply_land(spec, pads):
             l1 = land.get("pin1_length") or ll
             lc, cy = lc + (ll - l1) / 2, cy + (ll - l1) / 2
             ll, lw = l1, land.get("pin1_width") or lw
-        if i >= n_sig:
+        if i >= n_sig and all(land.get(k) for k in TAB_LAND):     # the tab from the maker's tab land
+            out.append((num, math.copysign(land["tab_center"], x), y, land["tab_length"], land["tab_width"]))
+        elif i >= n_sig:
             out.append((num, x, y, w, h))
         elif lr[i]:                                           # left/right row: length runs along X
             out.append((num, math.copysign(lc, x), y, ll, lw))
