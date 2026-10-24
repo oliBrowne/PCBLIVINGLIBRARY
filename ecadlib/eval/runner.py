@@ -611,10 +611,44 @@ def summarize(rows):
             "fields": {k: {"ok": a, "of": b} for k, (a, b) in sorted(fields.items())}}
 
 
+def per_run_cap(rules, given=None):
+    """The per-run cap a folder total must stay under too: --max-cost-usd, else a [datasheet] max_cost_usd the rules
+    file sets (not the $10 default, which a total replaces), else None."""
+    if given is not None:
+        return given
+    return (rules.get("datasheet") or {}).get("max_cost_usd") if D.cap_chosen(rules) else None
+
+
+def total_cap(lib, total, per_run=None, log=print):
+    """The per-run cap left under a folder total: total - what <lib>/datasheet/cost.jsonl already holds (and no more
+    than per_run when that is set too). Raises ValueError when nothing is left, so nothing is sent."""
+    from .. import ai_cost as AC
+    try:                                              # a batch sent and not yet collected is billed but not in the
+        st = json.loads((Path(lib) / "datasheet" / "batch_state.json").read_text(encoding="utf-8"))   # ledger yet
+    except (OSError, ValueError):
+        st = {}
+    open_ = [b.get("id") for b in st.get("batches") or [] if not b.get("collected")]
+    if open_:
+        raise ValueError(f"--max-total-usd: batch {', '.join(map(str, open_))} was sent and not collected yet, so its "
+                         "cost is not in cost.jsonl; nothing sent. Collect it first (the same command with "
+                         "--max-cost-usd 0.01 waits for it and sends nothing new), then resume")
+    got = AC.spent(lib)
+    left = round(float(total) - got["usd"], 4)
+    if got["unpriced"]:
+        raise ValueError(f"--max-total-usd: {got['unpriced']} line(s) of {AC.ledger(lib)} have no price, so what this "
+                         "folder spent is unknown; nothing sent")
+    if left <= 0:
+        raise ValueError(f"--max-total-usd {total:g}: this folder has already spent ${got['usd']:.2f}; nothing sent")
+    cap = min(left, float(per_run)) if per_run else left
+    log(f"  cap: ${got['usd']:.2f} already spent in this folder of ${float(total):g} total, so this run may spend "
+        f"up to ${cap:.2f}")
+    return cap
+
+
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
         tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1, batch=False,
-        cached_only=False, pins=None, max_cost_usd=None, datasheets=None):
+        cached_only=False, pins=None, max_cost_usd=None, datasheets=None, max_total_usd=None):
     """repeat: run the same cases again (into <out>/repeat-2 ...) and report how many parts gave the same files
     (summary["consistency"]): from the recorded answers when there are any (--record / --replay: the code must be
     deterministic), else live again (the model's own consistency; this pays again).
@@ -623,7 +657,10 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     batch: the datasheet reads go out as one Message Batch (half price; the run waits for it).
     cached_only: re-score a live run's out folder with nothing sent: its cached answers, and the answers of its
     collected batches downloaded again (free), are read by this code; a part that needs another read is reported.
-    datasheets: a folder of PDFs downloaded by hand, read before any link ([datasheet] folder)."""
+    datasheets: a folder of PDFs downloaded by hand, read before any link ([datasheet] folder).
+    max_total_usd: a cap for this out folder over all its runs: what its cost ledger already holds counts against it,
+    so a run resumed in the same folder sends at most the rest (max_cost_usd alone is per run: the 2026-10-24
+    blank-17 run resumed under a $6 cap meant as the total and spent $4.64 on top of $1.98)."""
     data = load_set(set_name)
     cases = select(data["cases"], families, ids, limit)
     if not cases:
@@ -634,6 +671,11 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     rules = RU.resolve(rules, out)
     # a benchmark never waits on a person's browser: a refused link stays refused unless a way that needs no one works
     rules = dict(rules, datasheet={**rules.get("datasheet", {}), "handoff": "off"})
+    if max_total_usd is not None:
+        if repeat > 1 and not (replay or record):     # each repeat folder keeps its own ledger: not one total
+            raise ValueError("--max-total-usd with --repeat: the repeats spend in their own folders; give "
+                             "--max-cost-usd per run instead")
+        max_cost_usd = total_cap(lib, max_total_usd, per_run_cap(rules, max_cost_usd), log)
     if max_cost_usd is not None:                      # the run's spending cap ([datasheet] max_cost_usd, default $10)
         rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)},
                      _set=[*(rules.get("_set") or []), "datasheet.max_cost_usd"])     # a cap you set, 10 too
