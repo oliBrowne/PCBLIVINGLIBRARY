@@ -324,8 +324,24 @@ def maker_land(mine, spec, tol=None):
     cx, cy = _centre(pads)
     ep = [p for p in pads if p[0] in ep_numbers(mine)]
     near = lambda a, b, k: abs(a - b) <= t[k] + 1e-9
+    tab = (spec.get("tab") or {}) if isinstance(spec.get("tab"), dict) else {}
+    tl = [land.get(k) for k in F.TAB_LAND] if tab and all(isinstance(land.get(k), (int, float)) for k in F.TAB_LAND) else None
+    tp = [p for p in pads if tl and str(p[0]) == str(tab.get("number"))]
+    if tp and lead:                                   # the part's centre from the land, not the pads' box: the leads at
+        t_ = max(tp, key=lambda p: p[3] * p[4])       # pad_center one side, the tab at its own tab_center the other
+        xl = [p[1] for p in pads if p is not t_]
+        if xl and (max(xl) < t_[1] or min(xl) > t_[1]):
+            sg = 1 if t_[1] > xl[0] else -1
+            cx = (sum(xl) / len(xl) + sg * pc + t_[1] - sg * tl[2]) / 2
+
+    def on_tab_land(p):                               # the tab on the maker's tab land (SOT-223, DPAK)
+        return bool(tl) and str(p[0]) == str(tab.get("number")) and near(p[3], tl[0], "size") and \
+            near(p[4], tl[1], "size") and near(abs(p[1] - cx), tl[2], "pos")
+
     def fits(p):
         x, y = abs(p[1] - cx), abs(p[2] - cy)
+        if on_tab_land(p):
+            return True
         l, w, c, cyy = pl, pw, pc, pcy
         if str(p[0]) == "1" and (land.get("pin1_length") or land.get("pin1_width")):   # pin 1 drawn another size
             l1 = land.get("pin1_length") or pl                                        # (its outer end with the row's)
@@ -339,6 +355,7 @@ def maker_land(mine, spec, tol=None):
         return {"followed": bool(used) and not small, "pads": [], "ep": [p[0] for p in ep],
                 "ep_land": [] if small else used, "thermal_only": True, **({"implausible": small} if small else {})}
     used = [p[0] for p in rest if fits(p)]
+    tab_used = [p[0] for p in ep if on_tab_land(p)]   # a tab big enough to pass for an exposed pad
     # the land is the model's own reading, so "followed" alone cannot tell it from a misread: it must at least solder
     # the leads it read (reach the toe, start inside the shortest foot, be no narrower than the lead)
     rng = lambda k: [v for v in ((spec.get(k) or {}).get(x) for x in ("min", "nom", "max")) if isinstance(v, (int, float))] \
@@ -360,7 +377,7 @@ def maker_land(mine, spec, tol=None):
     # width; taller than wide, its height; both kinds, a quad package: either way round. Not the pads' extent: a long
     # TSSOP's rows reach further along y than the rows sit apart, TPS70345 PWP 3.575 vs 2.9)
     ep_used = _ep_land(ep, rest, ea, eb, cx, cy, near) if thermal and not F.thermal_land_small(spec) else []
-    return {"followed": bool(rest) and len(used) == len(rest) and sane, "pads": used, "ep": [p[0] for p in ep],
+    return {"followed": bool(rest) and len(used) == len(rest) and sane, "pads": used + tab_used, "ep": [p[0] for p in ep],
             "ep_land": ep_used,
             **({} if sane else {"implausible": "the land does not cover the leads read from the same drawing"})}
 

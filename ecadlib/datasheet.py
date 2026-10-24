@@ -1301,6 +1301,9 @@ def land_unread(spec, pages):
             "return it, so the IPC pads would differ from the maker's land; read the land from that page")
 
 
+FG_TAB_LAND = ("tab_length", "tab_width", "tab_center")      # footprint_gen.TAB_LAND
+
+
 def tab_land_unread(spec):
     """The hold line when the maker's recommended land was read for the leads of a tab package (SOT-223, DPAK) but the
     builder can size only those: footprint_gen._apply_land keeps the tab's IPC size, so the footprint would be half the
@@ -1309,7 +1312,8 @@ def tab_land_unread(spec):
     both leads matched the maker, both tabs were built off). None otherwise."""
     land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
     if not spec.get("tab") or spec.get("pad_table") or \
-            not all(isinstance(land.get(k), (int, float)) for k in ("pad_length", "pad_width", "pad_center")):
+            not all(isinstance(land.get(k), (int, float)) for k in ("pad_length", "pad_width", "pad_center")) or \
+            all(isinstance(land.get(k), (int, float)) and land[k] > 0 for k in FG_TAB_LAND):   # the tab's land too
         return None
     return ("no footprint: the datasheet's recommended land was read for the leads but this builder can't take the "
             "tab's land from it, so the tab pad would be an IPC size beside the maker's lead pads; check the tab's land "

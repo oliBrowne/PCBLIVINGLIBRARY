@@ -1022,7 +1022,7 @@
     "land": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. pad_length, pad_width and pad_center (all three) replace the IPC-7351B pads for the signal pins (a tab keeps its own size; an exposed pad takes ep_across x ep_along when given, else the package's exposed_pad). A land page that sizes only the thermal land (the signal pads not dimensioned) is still the maker's: give just its ep_across / ep_along (and ep_mask_*), and the signal pads come from IPC-7351B. pad_center = distance from the part centre to each pad centre: half the centre-to-centre distance across the rows (a datasheet's C / 2).",
+      "description": "The manufacturer's recommended land pattern, when the datasheet gives one. pad_length, pad_width and pad_center (all three) replace the IPC-7351B pads for the signal pins (a tab keeps its IPC size unless tab_length, tab_width and tab_center give its land pad; an exposed pad takes ep_across x ep_along when given, else the package's exposed_pad). A land page that sizes only the thermal land (the signal pads not dimensioned) is still the maker's: give just its ep_across / ep_along (and ep_mask_*), and the signal pads come from IPC-7351B. pad_center = distance from the part centre to each pad centre: half the centre-to-centre distance across the rows (a datasheet's C / 2).",
       "properties": {
         "pad_length": {
           "type": "number",
@@ -1070,6 +1070,21 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "Pin 1's pad width (along the row) when the land draws it wider or narrower than the others (SOT-143: pin 1 1.0 vs 0.6). Leave out when pin 1 is like the others."
+        },
+        "tab_length": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "gullwing with a tab (SOT-223, DPAK): the tab's pad on the recommended land, measured across the rows (Nexperia SOT223: 1.2 x 3.6 tab land, length 1.2). Give tab_length, tab_width and tab_center together when the land dimensions the tab's pad; leave all three out when it does not."
+        },
+        "tab_width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "The tab's land pad measured along the row (Nexperia SOT223: 3.6)."
+        },
+        "tab_center": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Distance from the part centre to the tab's land pad centre, across the rows (the leads' pad_center when the land lines both rows up)."
         }
       }
     }
