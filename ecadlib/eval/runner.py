@@ -646,6 +646,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
     if datasheets:
         rules = dict(rules, datasheet={**rules.get("datasheet", {}), "folder": str(datasheets)})
+    if (rules.get("datasheet") or {}).get("zoom_drawings") and not replay and D.no_zoom():
+        raise ValueError(D.no_zoom() + "; a benchmark run with zoom on would score reads made without them")
     sources = list(sources) if sources else [s for s in rules["sources"]["order"] if s != "kicad"]
     if "kicad" in sources:
         log("  note: `kicad` is the ground truth of this set; parts it resolves are scored against themselves")
