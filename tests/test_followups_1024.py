@@ -3,8 +3,6 @@ cross-check's label-only disagreements, and the maker's land credited without a 
 import json, tempfile
 from pathlib import Path
 
-import pytest
-
 from ecadlib.eval import runner as R
 
 
@@ -14,23 +12,29 @@ def _ledger(lib, *usd):
     (d / "cost.jsonl").write_text("".join(json.dumps({"part": "X", "model": "m", "usd": u}) + "\n" for u in usd))
 
 
+def _raises(f):
+    try:
+        f()
+    except ValueError as e:
+        return str(e)
+    raise AssertionError("no ValueError")
+
+
 def test_a_folder_total_counts_what_the_folder_already_spent():
     # resumed under a $6 cap meant as the total: $1.98 already spent, so this run may send $4.02 at most
     with tempfile.TemporaryDirectory() as d:
         _ledger(d, 1.40, 0.58)
         said = []
-        assert R.total_cap(d, 6, log=said.append) == pytest.approx(4.02)
+        assert abs(R.total_cap(d, 6, log=said.append) - 4.02) < 1e-9
         assert "$1.98 already spent" in said[0]
         assert R.total_cap(d, 6, per_run=2, log=said.append) == 2          # the smaller of the two
-        with pytest.raises(ValueError, match="already spent"):
-            R.total_cap(d, 1.98, log=said.append)
+        assert "already spent" in _raises(lambda: R.total_cap(d, 1.98, log=said.append))
 
 
 def test_a_folder_total_with_unpriced_spend_sends_nothing():
     with tempfile.TemporaryDirectory() as d:
         _ledger(d, 1.0, None)
-        with pytest.raises(ValueError, match="no price"):
-            R.total_cap(d, 6, log=lambda *a: None)
+        assert "no price" in _raises(lambda: R.total_cap(d, 6, log=lambda *a: None))
 
 
 def test_a_fresh_folder_has_the_whole_total():
