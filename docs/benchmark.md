@@ -168,7 +168,9 @@ ecadlib eval publish bench/run -o docs/benchmark-results.md   # the results page
 
 The run needs an Anthropic API key (`ecadlib keys`); `[datasheet] max_cost_usd` caps what one run may spend
 ($10 by default; the 110-part batch runs cost $18.73 and $23.19, so pass `--max-cost-usd 35`; `--yes` does not lift it), and the estimate is shown before anything is sent. `report.md` and `report.json`
-in the out folder have every part's result, the reason for each miss, and the cost. Any model works: `--model`, or
+in the out folder have every part's result, the reason for each miss, and the cost. `--max-cost-usd` is per run: a
+run resumed in the same out folder may spend it again. For a cap over all the folder's runs, pass `--max-total-usd N`:
+what the folder's `cost.jsonl` already holds counts against it, and nothing is sent when it is used up. Any model works: `--model`, or
 `--provider` and `--base-url` for another provider.
 
 Each run records, per part: the datasheet it read (URL, SHA-256, pages sent), the reader's prompt version (a hash of

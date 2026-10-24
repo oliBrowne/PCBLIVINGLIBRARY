@@ -432,6 +432,11 @@ def compare(first, second, kind="read"):
 NO_PIN = re.compile(r"^\s*(?:missing|removed|omitted|absent|not present|no pin|depopulated|cut)\b(?!.*\bconnect)", re.I)
 
 
+def numbered(num, name):
+    """A pin name that is only its own number: "Pin_1", "PIN 1", "P1", "#1", "1" for pin 1."""
+    return bool(re.fullmatch(rf"\s*(?:PIN|P|#)?[\s_#.-]*0*{re.escape(str(num).lstrip('0') or '0')}\s*", str(name or ""), re.I))
+
+
 def compare_pins(a, b, ep=()):
     """a, b: [(num, name)] from two reads -> list of disagreements (pin numbers, names). ep: the pad numbers that can
     only be the exposed pad (both reads have one, and the number is past the leads both count): one read may number
@@ -454,7 +459,11 @@ def compare_pins(a, b, ep=()):
             out[-1]["note"] = f"the read marks {', '.join(sorted(set(gone) & set(only_a), key=key)[:12])} as no pin, " \
                               "but the symbol still has a pin there"
     na, nb = {str(n): s for n, s in a}, {str(n): s for n, s in b}
-    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not names_agree(na[n], nb[n])
+    # two names that are each only the pin's own number ("Pin_1" vs "1", "P1") say the same: no name (SM13B-GHS-TB,
+    # blank-17 run 2026-10-24, held a header whose package, pitch and body agreed). Against a real name ("NC") it
+    # still differs
+    same = lambda n: numbered(n, na[n]) and numbered(n, nb[n])
+    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not same(n) and not names_agree(na[n], nb[n])
             and not (n in ep and (ep_named(na[n]) or ep_named(nb[n])))]
     if diff:
         out.append({"field": "pin_names", "first": "; ".join(f"{n} {na[n]}" for n in diff[:12]),
