@@ -711,8 +711,10 @@ def run(reader, job, res, model):
     standard = _settle_turn(checks) or _settle_tab(checks, res["spec"], first_pins)
     st = [c["status"] for c in checks]
     ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong and not _self(c)]
+    if first.get("sides"):                  # only a second read that compared the pins on each side checks them
+        ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", [])]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
-        else "self-checked" if any(c["status"] == "agreed" for c in strong) else "unchecked"
+        else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) else "unchecked"
     out = {"mode": mode, "status": status, "checks": checks}
     if standard:
         out["standard"] = standard

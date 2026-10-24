@@ -112,3 +112,21 @@ def test_a_standard_table_alone_does_not_settle_where_the_pins_sit():
     out = CC.run(rd, {"url": "https://a/ds.pdf", "part": "AH1806-W", "package": "SOT-23"},
                  {"spec": spec, "symbol": {"pins": []}}, "claude-opus-5-5")
     assert rd.bodies and out["status"] == "disagreed", out
+
+
+class NoAnswer(Reader):
+    def check_message(self, job, model, headers, body, key, pages=None):
+        self.bodies.append((key, body))
+        raise CC.Unavailable("no answer: no key for the second read")
+
+
+def test_placed_pins_with_no_second_read_are_unchecked_even_when_a_table_agrees():
+    # Greptile #179: a strong table match must not mark the maker's pin order checked when the second read is missing
+    spec = dict(sot(SOT23), lead_span={"nom": 2.4}, body_length={"nom": 2.9}, body_width={"nom": 1.3})
+    job = {"url": "https://a/ds.pdf", "part": "AH1806-W", "package": "SOT-23"}
+    out = CC.run(NoAnswer(None), job, {"spec": spec, "symbol": {"pins": []}}, "claude-opus-5-5")
+    assert out["status"] == "unchecked", out
+    ans = {"package": {"name": "SC59", "package_type": "gullwing", "pin_count": 3, "dims": [], "unresolved": [],
+                       "pin_rows": []}, "pins": [], "embedded_instructions": []}
+    out = CC.run(Reader(ans), job, {"spec": spec, "symbol": {"pins": []}}, "claude-opus-5-5")
+    assert out["status"] == "unchecked", out             # an answer with no rows confirms nothing about them either
