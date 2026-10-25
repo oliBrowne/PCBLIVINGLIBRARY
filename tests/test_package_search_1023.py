@@ -136,7 +136,8 @@ def test_nothing_found_is_said_and_the_read_stands():
 
 # ---------------------------------------------------------------- Greptile on #175
 def test_a_drawing_of_another_size_of_the_family_is_not_taken():
-    assert OD.names_it(["FBGA-484 package outline, DIM MIN MAX"], "M2GL090T-FG484", own={"BGA484"})
+    # (2026-10-25: the part number's own package code FG484 must be printed too, test_package_docs_1025)
+    assert OD.names_it(["FG484 (FBGA-484) package outline, DIM MIN MAX"], "M2GL090T-FG484", own={"BGA484"})
     assert not OD.names_it(["BGA package outline: FBGA-256, DIM MIN MAX"], "M2GL090T-FG484", own={"BGA484"})
     assert not OD.names_it(["Ball grid array packages: general handling notes"], "M2GL090T-FG484", own={"BGA484"})
 

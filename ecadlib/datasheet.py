@@ -2683,14 +2683,15 @@ def _numeric_core(main, key):
     return end - (n - 2) if i and n >= 4 else end
 
 
-def mentions_part(texts, mpn, short=False):
+def mentions_part(texts, mpn, short=False, whole=False):
     """Does the text of a PDF's first pages name the part? True: the MPN, or a prefix of it that keeps its whole
     numeric core (AD5274BRM -> AD5274 in "AD5272/AD5274"; LTC4060EDHC -> LTC4060, never LTC40, which LTC4054 has;
     STM32F103C8T6 -> STM32F103, never STM32, which STM32L476 has), its series name as a word of its own (SM6T for
     SM6T100A), a family name with x for any one character (C8051F32x, TPS2660x, SNx4HC595, STM32F103x8) or a range
     that holds it (MAX22201-MAX22207). False: none of these. None: it can't be told (no text layer, a scanned PDF, a
     text layer in a font that does not read, no part number), never a rejection. short: a few words (a running header), not a page:
-    no minimum length of text."""
+    no minimum length of text. whole: the whole MPN only, never a shorter prefix of it (a package document found by
+    search: "S13B" of S13B-EH is in every JST series' S13B-xx part, "KBU4" of KBU4A in a tray table)."""
     main = re.split(r"[#/]", str(mpn or "").strip().upper())[0]                         # #PBF, /NOPB tails off
     key = re.sub(r"[^A-Z0-9]", "", main)
     core = _numeric_core(main, key)
@@ -2701,8 +2702,10 @@ def mentions_part(texts, mpn, short=False):
     if sum(ord(c) < 32 and c not in "\t\n\r" for c in raw) > 0.05 * len(raw):
         return None                                   # a text layer that does not read (JST: every character 31 low)
     n = max(4, core)
-    if any(key[:i] in flat for i in range(len(key), n - 1, -1)):
+    if any(key[:i] in flat for i in range(len(key), len(key) - 1 if whole else n - 1, -1)):
         return True
+    if whole:
+        return False
     series = re.match(r"\d*[A-Z]*\d+[A-Z]+", key)     # SM6T100A -> SM6T: only as a word, never inside SM6T200A
     if series and 4 <= series.end() < n and series.group() in {re.sub(r"[^A-Z0-9]", "", w) for w in raw.split()}:
         return True
@@ -2733,7 +2736,24 @@ OTHER_DOC = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\b
 POINTER = re.compile(r"\b(?:available|see|refer|visit|download|for\s+more|included)\b", re.I)   # a banner or link, not a title
 
 
-def not_a_datasheet(texts):
+LONG_DOC = 4      # a package document found by search with this many pages of text must show a drawing of the package
+                  # (outline_docs.drawing_missing); a drawing of one or two pages may be all lines and a title block
+
+
+NOTICE = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|\bPCN\b|\bnotification\s+of\b|"
+                    r"\bdeclaration\s+letter\b|\bend[- ]of[- ]life\b|\blast[- ]time\s+buy\b", re.I)
+
+
+def a_notice(texts):
+    """The reason when a PDF opens as a notice or a letter (NOTICE: a change, discontinuation or end-of-life notice), else
+    None: never a package document, though it names the part and its package (live benchmark 2026-10-23: the package
+    search found change notices for M2GL090T-FG484 and IR4301). An application note or user guide is not one here:
+    it can hold the drawing or the land (IR4301's land is in AN-1170)."""
+    why = not_a_datasheet(texts, NOTICE)
+    return why and why.replace("not a datasheet", "a notice, not a package drawing")
+
+
+def not_a_datasheet(texts, rx=OTHER_DOC):
     """The reason when a PDF's first page opens as another kind of document (a heading in its first 400 characters: a
     change or discontinuation notice, a letter, a development board's sheet, a user guide or application note), else
     None. A heading is a line that starts with the phrase, or a short line (60 characters or less) that holds it; a
@@ -2743,7 +2763,7 @@ def not_a_datasheet(texts):
     first = (list(texts or []) or [""])[0] or ""
     for line in first[:400].splitlines():
         line = line.strip()
-        m = OTHER_DOC.search(line)
+        m = rx.search(line)
         if m and len(line) <= 90 and (m.start() == 0 or len(line) <= 60) and not POINTER.search(line):
             return f"the PDF opens as \"{m.group()}\", not a datasheet"
     return None
@@ -3655,7 +3675,18 @@ class Reader:
             if hashlib.sha256(b).hexdigest() == prov.get("sha256"):
                 attempts.append({"url": url, "where": where, "error": "the datasheet itself"})
                 return None
-            if not OD.names_it(DR.page_texts(b), part, codes, own, meta.get("url") or url):
+            pages = DR.page_texts(b)
+            notice = a_notice(pages)
+            if notice:                                # a change notice names the part and its package (M2GL090T)
+                attempts.append({"url": url, "where": where, "error": notice})
+                return None
+            if sum(bool((t or "").strip()) for t in pages or ()) >= LONG_DOC and OD.drawing_missing(pages, part, package) \
+                    and not any(r["land"] and not r["other"] for r in DR.page_scores(pages, part, package)[0]):
+                attempts.append({"url": url, "where": where, "error": f"the PDF at {meta.get('url') or url} has "
+                                 f"{len(pages)} pages and no drawing of the package"})
+                return None                           # a pin description or packing document (M2GL090T, KBU4A); a
+                                                      # land pattern page keeps it (IR4301's land is in AN-1170)
+            if not OD.names_it(pages, part, codes, own, meta.get("url") or url):
                 attempts.append({"url": url, "where": where,
                                  "error": f"the PDF at {meta.get('url') or url} names neither {part} nor its package"})
                 return None
