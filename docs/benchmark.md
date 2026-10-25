@@ -50,6 +50,9 @@ where the misses are.
 * **The set.** `ecadlib/eval/sets/kicad-v1.json`: 331 real parts, each a KiCad symbol whose footprint is in KiCad's
   official library, with the maker's datasheet link KiCad gives. The benchmark takes 10 parts from each of 11
   package families (110): bga, chip, connector, diode, power, qfn, qfp, soic, sot, tht, tssop.
+  On 2026-10-25 AUIPS6011R was replaced by BTS6143D, an Infineon high-side switch on the same KiCad TO-252-4
+  footprint: AUIPS6011R is discontinued and Infineon has pulled its datasheet, so no read could score it, and
+  BTS6143D is in production with a KiCad link that downloads. Scores before that date count AUIPS6011R.
 * **The pipeline.** The same librarian a BOM run uses, with KiCad's library switched off as a source (it is the
   answer key). A part is built from the standard-package table when its package is a standard one, else from the
   datasheet: the PDF goes to Claude, the answer is checked, and the footprint generator builds the land.

@@ -65,7 +65,7 @@
    "standard",
    "datasheet"
   ],
-  "updated": "2026-10-17"
+  "updated": "2026-10-25"
  },
  "overall": {
   "cases": 331,
@@ -192,11 +192,11 @@
   "diode-PMEG6030EP",
   "diode-SM6T100A",
   "diode-STTH212S",
-  "power-AUIPS6011R",
   "power-AUIPS7081S",
   "power-BD33FC0FP",
   "power-BSC026N08NS5",
   "power-BTS50010-1TAD",
+  "power-BTS6143D",
   "power-BUK7M10-40EX",
   "power-C3D02065E",
   "power-C3D08060G",
