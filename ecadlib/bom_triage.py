@@ -251,6 +251,29 @@ def apply_columns(mapping, headers, columns):
     return mapping
 
 
+class NotABom(ValueError):
+    """The file given as a BOM is not one (a plan.json, a file with no BOM header): expected bad input, so the CLI
+    prints this line and its hint and exits 2 (cliutil.friendly), not an 'internal error'."""
+    plain_error = True
+
+    def __init__(self, msg, hint="give the BOM: a CSV / TSV / XLSX with a header row, a .kicad_sch or an Altium .PrjPcb"):
+        super().__init__(msg)
+        self.hint = hint
+
+
+def _json_not_bom(p):
+    """A .json given as a BOM: say what it is (an ecadlib library plan names the commands that take one)."""
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = None
+    if isinstance(data, list) and data and all(isinstance(i, dict) and "name" in i and "status" in i for i in data):
+        return NotABom(f"{p}: this is a library plan (plan.json), not a BOM",
+                       "this command takes the BOM the plan was made from; the plan itself goes to `ecadlib altium365 "
+                       "push`, `release-check`, `kicad-export`, `dblib-sync` or `altium-pkg`")
+    return NotABom(f"{p}: a .json file is not a BOM")
+
+
 def read_bom(path, columns=None, rules=None, root=None):
     """columns: the rules' [bom] columns ({field: header}), applied over the fuzzy header match. rules: for an Altium
     project, the house parameter names to read the MPN / manufacturer from (default: ecadlib.toml found from the project).
@@ -272,6 +295,8 @@ def read_bom(path, columns=None, rules=None, root=None):
             return _BI().read_kicad_sch(sch, columns, root)
         raise ValueError(f"{p}: a KiCad {p.suffix} file is not a BOM and {sch.name} is not next to it; "
                          "give the project's .kicad_sch (or a BOM export)")
+    if p.suffix.lower() == ".json":
+        raise _json_not_bom(p)
     widths = []                                                   # a CSV's cells per row, before padding
     raw = _read_excel(p, columns, widths) if p.suffix.lower() in (".xlsx", ".xlsm", ".xls") else _read_csv(p, widths)
     text_src = bool(raw.attrs.get("text"))
@@ -287,8 +312,10 @@ def read_bom(path, columns=None, rules=None, root=None):
     df.columns = headers
     mapping = apply_columns(map_headers(headers), headers, columns)
     if not {"designator", "mpn", "value"} & mapping.keys():
-        raise ValueError(f"{p}: no BOM header found in the first {HEADER_ROWS} rows "
-                         "(need a Designator, MPN or Value/Comment column)")
+        raise NotABom(f"{p}: no BOM header found in the first {HEADER_ROWS} rows "
+                      "(need a Designator, MPN or Value/Comment column)",
+                      "name a column MPN (or Manufacturer Part Number), Designator or Value; or map your headers in "
+                      'ecadlib.toml, e.g. [bom.columns] mpn = "Part No"')
     _warn_unmatched_columns(p, headers, columns)
     col = {f: headers.index(h) for f, h in mapping.items()}       # by position: a BOM may repeat a header (a 2nd 'MPN')
     alt = _alternate_mpns(headers, col)                          # Altium 'Manufacturer Part Number 2' (+ its maker)
