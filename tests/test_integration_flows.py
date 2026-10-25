@@ -237,4 +237,5 @@ def test_a_plan_or_an_all_held_plan_gets_a_clear_message():
         assert "internal error" not in out and "Traceback" not in out, out
     p = E.ecadlib(w, "altium-pkg", "lib/plan.json", "--out", "pkg", env=env, check=False)
     assert p.returncode == 2 and f"all {len(plan)} part(s) are held by the release check" in p.stderr, p.stderr
-    assert "ecadlib review lib/plan.json" in p.stderr and "run the librarian" not in p.stderr, p.stderr
+    review = f"ecadlib review {Path('lib/plan.json')}"          # the path as the OS writes it: lib\plan.json on Windows
+    assert review in p.stderr and "run the librarian" not in p.stderr, p.stderr
