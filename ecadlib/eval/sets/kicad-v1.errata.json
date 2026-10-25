@@ -270,7 +270,7 @@
       "EP"
      ]
     ],
-    "why": "onsemi MC34063A-D.PDF (MC34063A, MC33063A, NCV33063A) pin connection figures: 1 Switch Collector, 2 Switch Emitter, 3 Timing Capacitor, 4 GND, 5 Comparator Inverting Input, 6 VCC, 7 Ipk Sense, 8 Driver Collector; the DFN-8 (MN suffix) adds the EP flag. The figure prints the pin numbers as one block and the names as another, so the text never ties a name to its number (runner.printed_names cannot credit them). KiCad's Regulator_Switching:MC33063MNTXG abbreviates them as 5 Vfb, 6 Vin, 7 Ipk, 9 PAD.",
+    "why": "onsemi MC34063A-D.PDF (MC34063A, MC33063A, NCV33063A) p2 pin connection figures: 1 Switch Collector, 2 Switch Emitter, 3 Timing Capacitor, 4 GND, 5 Comparator Inverting Input, 6 VCC, 7 Ipk Sense, 8 Driver Collector; the DFN-8 (MN suffix) figure on p2 adds the EP FLAG. The figure prints the pin numbers as one block and the names as another, so the text never ties a name to its number (runner.printed_names cannot credit them). KiCad's Regulator_Switching:MC33063MNTXG abbreviates them as 5 Vfb, 6 Vin, 7 Ipk, 9 PAD.",
     "checked": "2026-10-25"
    }
   }
