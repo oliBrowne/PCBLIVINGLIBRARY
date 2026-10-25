@@ -29,6 +29,13 @@ def test_a_name_not_among_them_or_swapped_still_fails():
     assert not S.one_of("VOUT1", "GND/HS") and not S.one_of("RESET", "/RESET")
 
 
+def test_one_name_spelled_with_a_slash_is_not_two():
+    # Greptile #184: BQ24004's five N/C pins read as "C" must not pass
+    assert not S.one_of("C", "N/C") and not S.one_of("N", "N/C") and not S.one_of("I", "I/O")
+    ref = ["N/C"] * 5 + ["IN", "OUT", "GND", "EN", "FB"]
+    assert not names(["C"] * 5 + ref[5:], ref)["ok"]
+
+
 def test_exposed_pad_spellings_agree():
     assert names(["IN", "OUT", "GND", "EP"], ["IN", "OUT", "GND", "PAD"])["ok"]
     assert names(["IN", "OUT", "GND", "EPAD"], ["IN", "OUT", "GND", "EP"])["ok"]

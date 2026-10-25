@@ -191,10 +191,14 @@ SUPPLY_RX = re.compile(r"^(?:[ADP]?VDD\w*|[ADP]?VCC\w*|VBAT\w*|V\+)$")
 
 def one_of(ours, ref):
     """KiCad's name lists the pin's several names joined by "/" and ours is one of them (TPS70345's exposed pad: ours
-    GND, KiCad's GND/HS; VSENSE1/FB1 read as FB1). A leading "/" is an active-low bar, not a second name."""
+    GND, KiCad's GND/HS; VSENSE1/FB1 read as FB1). A leading "/" is an active-low bar, not a second name. One
+    name spelled with a slash is not two (Greptile #184: N/C is no-connect, not N or C; I/O is not I or O): each
+    part must be a name of two letters or more."""
+    if NC_RX.match(norm_name(ref)):
+        return False
     parts = [norm_name(x) for x in str(ref or "").split("/") if x.strip()]
     o = norm_name(ours)
-    return bool(o) and len(parts) > 1 and o in parts
+    return bool(o) and len(parts) > 1 and all(len(x) > 1 for x in parts) and o in parts
 
 
 def rail(name):
