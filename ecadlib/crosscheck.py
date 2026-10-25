@@ -771,14 +771,23 @@ def _settle_tab(checks, spec, pins=None):
     or the tab under a number of its own that is no pad of the land (IRFS4115: tab 4 DRAIN in the second read, 2 in the
     first and in KiCad's TO-263-2; IPS6011RPBF: 6 Vcc), and gullwing against custom (the land is a pad table). The land is the table's, so how the tab is counted moves no copper; the part is
     built from it, not held, and the review says so. A difference in a name, a lead number the land has, or any size
-    still holds. -> the table name, or None."""
+    still holds. A read that gives the maker's whole land, the leads' and the tab's (land.tab_*, footprint_gen.
+    TAB_LAND), is built from that land, so the same counting differences move no copper there either (C3D02065E,
+    benchmark 2026-10-25: Wolfspeed numbers the DPAK tab 3 on the cathode's net, which no checked tab land does; the
+    second read called it custom with 2 pins, and the read's own land matched Wolfspeed's). -> the table name, or None
+    (also when the read's own land settles it)."""
     if not any(c["status"] == "disagreed" for c in checks):
         return None
     from . import stdparts as S
     name, how = S.identify_tab(spec, pins)
-    if not name:
+    if name:
+        pads = {str(p.get("number")) for p in S.packages()[name]["pad_table"]["pads"] if p.get("number")}
+    elif own_tab_land(spec):
+        pads = {str(p.get("number")) for p in spec.get("pin_positions") or [] if isinstance(p, dict)}
+        pads.add(str(spec["tab"].get("number")))
+        how = "the read gives the maker's land for the leads and the tab"
+    else:
         return None
-    pads = {str(p.get("number")) for p in S.packages()[name]["pad_table"]["pads"] if p.get("number")}
 
     def counting(d):
         f = d["field"]
@@ -802,11 +811,21 @@ def _settle_tab(checks, spec, pins=None):
     for c in bad:
         moved = "; ".join(f"{LABEL.get(d['field'], d['field'])} {d['first']} vs {d['second']}" for d in c["disagreed"])
         c.setdefault("tie_breaks", []).append(
-            f"{moved}: only how the tab is counted differs, and the read names the checked tab land {name} ({how}), "
-            "so the footprint is built from it")
+            f"{moved}: only how the tab is counted differs, and " + (
+                f"the read names the checked tab land {name} ({how}), so the footprint is built from it" if name else
+                f"{how}, so the footprint is built from that land"))
         c["agreed"] += [d["field"] for d in c["disagreed"]]
-        c["disagreed"], c["status"], c["settled"] = [], "agreed", "standard table"
+        c["disagreed"], c["status"], c["settled"] = [], "agreed", "standard table" if name else "maker land"
     return name
+
+
+def own_tab_land(spec):
+    """True when a tab package's read carries the maker's land for its leads and its tab, every size a number > 0, and
+    places its leads: footprint_gen builds that land as read, whatever number the tab carries."""
+    land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
+    keys = ("pad_length", "pad_width", "pad_center", "tab_length", "tab_width", "tab_center")
+    return bool(isinstance(spec.get("tab"), dict) and spec["tab"].get("number") is not None and spec.get("pin_positions")
+                and not spec.get("pad_table") and all(isinstance(land.get(k), (int, float)) and land[k] > 0 for k in keys))
 
 
 def _self(c):

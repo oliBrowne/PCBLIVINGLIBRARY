@@ -76,6 +76,8 @@ ALIASES = {
     "TO220": "TO-220-3_Vertical", "TO2203": "TO-220-3_Vertical", "TO220AB": "TO-220-3_Vertical",
     "TO92": "TO-92_Inline", "TO923": "TO-92_Inline", "TO92A": None,
     "SC82AB": "SC-82AB",                          # 4 leads, 2 x 2.1 mm body (SOT-343 is a different land)
+    "SC74": "SC-74-6_1.55x2.9mm_P0.95mm", "SC746": "SC-74-6_1.55x2.9mm_P0.95mm",   # JEITA SC-74 = Nexperia SOT457
+    "SOT457": "SC-74-6_1.55x2.9mm_P0.95mm",
 }
 DIODE_ALIASES = {
     "SOD123": "D_SOD-123", "SOD123F": "D_SOD-123F", "SOD323": "D_SOD-323", "SC76": "D_SOD-323", "SC90": "D_SOD-323",
