@@ -249,6 +249,30 @@
     "why": "ROHM BDxxFC0 series datasheet (TSZ02201-0G2G0A600040-1-2, Rev.007) p3 Figure 5, Pin Description (Without Enable) TO252-3: 1 Vcc, 2 N.C. (not connected inside the IC, leave open), 3 Vo, FIN GND. The fin has no number on the sheet; ours numbers it 4, after the leads. KiCad's Regulator_Linear:BD33FC0FP numbers the fin 2 (1 VCC, 2 GND, 3 VO), the TO-252-2 convention, and drops the cut N.C. lead. Same copper on the same nets either way.",
     "checked": "2026-10-24"
    }
+  },
+  "MC33063MNTXG": {
+   "symbol_names": {
+    "ours": [
+     [
+      "5",
+      "Comparator Inverting Input"
+     ],
+     [
+      "6",
+      "VCC"
+     ],
+     [
+      "7",
+      "Ipk Sense"
+     ],
+     [
+      "9",
+      "EP"
+     ]
+    ],
+    "why": "onsemi MC34063A-D.PDF (MC34063A, MC33063A, NCV33063A) p2 pin connection figures: 1 Switch Collector, 2 Switch Emitter, 3 Timing Capacitor, 4 GND, 5 Comparator Inverting Input, 6 VCC, 7 Ipk Sense, 8 Driver Collector; the DFN-8 (MN suffix) figure on p2 adds the EP FLAG. The figure prints the pin numbers as one block and the names as another, so the text never ties a name to its number (runner.printed_names cannot credit them). KiCad's Regulator_Switching:MC33063MNTXG abbreviates them as 5 Vfb, 6 Vin, 7 Ipk, 9 PAD.",
+    "checked": "2026-10-25"
+   }
   }
  }
 }
