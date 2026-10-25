@@ -248,3 +248,19 @@ def test_ux3_ui_dblib_export_uses_the_plan(tmp_path):
     r = ws.export_dblib("uploads/demo/demo_bom.csv")
     assert r["from_plan"] and r["held"] == ["AMS1117-3.3", "CH340C", "AO3401A"] and r["written"] == 4, r
     assert any(f.endswith(".DbLib") for f in r["files"]), r
+
+
+def test_ux18b_two_missing_fields_name_both_columns():
+    """A part held for no datasheet link and an empty Description: the hint names both columns (was: "add a no datasheet
+    link; fields: Description column to the BOM")."""
+    from ecadlib.firstrun import blockers
+    rows = [{"part": f"R{i}", "status": "held", "why": "fields: no datasheet link; fields: Description is empty", "tried": ""}
+            for i in range(3)]
+    rows += [{"part": "U1", "status": "held", "why": "files: no symbol model (.SchLib); fields: no datasheet link", "tried": ""}]
+    got = blockers(rows)
+    assert len(got) == 1, got
+    msg, fix = got[0]
+    assert msg.startswith("3 parts are held only because of 'no datasheet link; Description is empty' (R0, R1, R2)"), msg
+    assert fix == ("add Datasheet and Description columns to the BOM, or take Datasheet and Description out of "
+                   "[parameters] required in ecadlib.toml"), fix
+    assert "no datasheet link;" not in fix, fix

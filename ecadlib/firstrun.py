@@ -375,17 +375,20 @@ def blockers(rows, rules=None, offline=False):
             if "--offline: datasheet not read" in step:
                 off.append(r["part"])
     out = []
-    only = {}                                  # parts held for one missing field and nothing else (a BOM column short)
+    only = {}                                  # parts held for missing fields and nothing else (BOM columns short)
     for r in rows:
-        m = re.fullmatch(r"fields: (no datasheet link|(.+) is empty)", str(r.get("why") or ""))
-        if r.get("status") == "held" and m:
-            only.setdefault(m.group(1), []).append(r["part"])
-    for what, parts in sorted(only.items()):
+        reasons = [x.strip() for x in str(r.get("why") or "").split(";") if x.strip()]
+        found = [re.fullmatch(r"(?:fields: )?(no datasheet link|([^;]+?) is empty)", x) for x in reasons]
+        if r.get("status") == "held" and reasons and reasons[0].startswith("fields: ") and all(found):
+            cols = tuple(dict.fromkeys("Datasheet" if m.group(1) == "no datasheet link" else m.group(2) for m in found))
+            only.setdefault((cols, "; ".join(m.group(1) for m in found)), []).append(r["part"])
+    for (cols, what), parts in sorted(only.items()):
         if len(parts) >= 3:
-            col = "Datasheet" if what == "no datasheet link" else what[:-len(" is empty")]
+            col = " and ".join(cols)
             out.append((f"{len(parts)} parts are held only because of '{what}' ({', '.join(parts[:3])}"
                         f"{' ...' if len(parts) > 3 else ''})",
-                        f"add a {col} column to the BOM, or take {col} out of [parameters] required in ecadlib.toml"))
+                        f"add {f'{col} columns' if len(cols) > 1 else f'a {col} column'} to the BOM, or take {col} out of "
+                        f"[parameters] required in ecadlib.toml"))
     for src, (parts, why) in sorted(net.items()):
         if offline:
             out.append((f"{src}: not in the download cache for {len(parts)} part(s) (--offline)",

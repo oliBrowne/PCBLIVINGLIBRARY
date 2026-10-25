@@ -12,8 +12,12 @@ read from <plan dir>/a365_state.json when present):
              (/TR, -TR, T&R, -REEL7, #TRPBF, (LF)(SN), NXP ',115', ...) and then all punctuation. Suffixes without a
              separator (TI's ...RGTR vs ...RGTT) are NOT stripped by default; add patterns in the config.
   footprint  identical footprint geometry under different footprint names: pads (number, position, effective size,
-             drilled or not) to 0.01 mm and the courtyard box to 0.05 mm; .PcbLib and .kicad_mod hash alike
-             (KiCad's y axis is flipped). Same name with different geometry is reported as a conflict.
+             drilled or not) to 0.01 mm, the courtyard box to 0.05 mm, and whether the silkscreen / fab drawing marks
+             an orientation (a polarity or pin-1 mark: the drawing is not the same turned 180 degrees about the
+             pads); .PcbLib and .kicad_mod hash alike (KiCad's y axis is flipped). Same name with different geometry
+             is reported as a conflict. Footprints with the same geometry are still kept apart when the parts using
+             them are of different kinds (their plan folders: an inductor is never put on an LED's footprint, a
+             resistor never on a capacitor's 3D body) or their 3D bodies differ in height by more than 0.05 mm.
   symbol     identical symbol pinout under different symbol names: designator prefix plus (pin number, pin name)
              for every pin. Symbols with fewer than symbol_min_pins (default 3) pins are not compared: every
              resistor and capacitor would match.
@@ -117,6 +121,58 @@ def _box(xs, ys):
     return [round(_q(v, 0.05), 2) for v in (min(xs), min(ys), max(xs), max(ys))] if xs else None
 
 
+MARK_TOL = 0.03                                     # mm: two drawing points this close are the same point
+
+
+def _oriented(marks, pads):
+    """True when the drawing marks a direction: the silkscreen / fab primitives (each a list of points in mm) are not
+    the same set when turned 180 degrees about the pads' centre. A resistor's two silk lines and its fab box turn into
+    themselves; an LED's cathode bar, a diode's band or an IC's pin-1 bevel do not. Format-free, so a .PcbLib and
+    the .kicad_mod it came from agree (a rectangle is 4 tracks in one and an fp_rect in the other: both turn alike)."""
+    if not marks or not pads:
+        return False
+    cx = sum(p[1] for p in pads) / len(pads)
+    cy = sum(p[2] for p in pads) / len(pads)
+    norm = lambda pts: sorted((round(x, 3), round(y, 3)) for x, y in pts)
+    prims = [(kind, norm(pts)) for kind, pts in marks]
+    left = [(kind, norm([(2 * cx - x, 2 * cy - y) for x, y in pts])) for kind, pts in marks]
+    close = lambda a, b: len(a) == len(b) and all(abs(p[0] - q[0]) <= MARK_TOL and abs(p[1] - q[1]) <= MARK_TOL
+                                                  for p, q in zip(a, b))
+    for kind, pts in prims:
+        hit = next((i for i, (k, q) in enumerate(left) if k == kind and close(pts, q)), None)
+        if hit is None:
+            return True
+        left.pop(hit)
+    return False
+
+
+def _arc_pts(cx, cy, r, a0, a1):
+    """Centre and end points of an arc (degrees, counter-clockwise); a full circle is its centre."""
+    if abs((a1 - a0) % 360) < 1e-6:
+        return [(cx, cy)]
+    return [(cx, cy)] + [(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a))) for a in (a0, a1)]
+
+
+def _mark_layer(layer, courtyard):
+    """Silkscreen and mechanical (fab / assembly) layers of a .PcbLib, not the courtyard."""
+    return layer != courtyard and (layer in (AL.TOP_OVERLAY, AL.BOTTOM_OVERLAY) or 57 <= layer <= 72 or layer > AL.MULTI)
+
+
+def body_height(fp):
+    """Highest 3D body of a .PcbLib footprint in mm (its OVERALLHEIGHT), else its HEIGHT parameter, else None."""
+    hs = []
+    for r in fp["records"]:
+        if r["type"] == "body":
+            m = re.search(r"OVERALLHEIGHT=([-\d.]+)mil", r.get("params") or "")
+            if m and float(m.group(1)) > 0:
+                hs.append(float(m.group(1)) * 0.0254)
+    if not hs:
+        m = re.fullmatch(r"([-\d.]+)mil", str((fp.get("params") or {}).get("HEIGHT") or ""))
+        if m and float(m.group(1)) > 0:
+            hs.append(float(m.group(1)) * 0.0254)
+    return round(max(hs), 3) if hs else None
+
+
 def fp_geometry_pcblib(fp, courtyard=AL.MECH15):
     """courtyard: the layer id the library rules draw courtyards on; Mechanical 15 (ecadlib's own) when nothing is there."""
     recs = [r for r in fp["records"] if r["type"] == "pad"]
@@ -138,7 +194,21 @@ def fp_geometry_pcblib(fp, courtyard=AL.MECH15):
         elif r["type"] in ("region", "fill"):
             pts = r.get("pts") or [(r["x1"], r["y1"]), (r["x2"], r["y2"])]
             xs += [AL.to_mm(p[0]) for p in pts]; ys += [AL.to_mm(p[1]) for p in pts]
-    return {"pads": sorted(pads), "courtyard": _box(xs, ys), "kinds": sorted(kinds)}
+    marks = []
+    for r in fp["records"]:
+        if r["type"] not in shapes or not _mark_layer(r["layer"], courtyard):
+            continue
+        mm = AL.to_mm
+        if r["type"] == "track":
+            marks.append(("line", [(mm(r["x1"]), mm(r["y1"])), (mm(r["x2"]), mm(r["y2"]))]))
+        elif r["type"] == "arc":
+            marks.append(("arc", _arc_pts(mm(r["cx"]), mm(r["cy"]), mm(r["r"]), r["a0"], r["a1"])))
+        elif r["type"] == "fill":
+            x1, y1, x2, y2 = mm(r["x1"]), mm(r["y1"]), mm(r["x2"]), mm(r["y2"])
+            marks.append(("area", [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]))
+        elif r.get("pts"):
+            marks.append(("area", [(mm(p[0]), mm(p[1])) for p in r["pts"]]))
+    return {"pads": sorted(pads), "courtyard": _box(xs, ys), "kinds": sorted(kinds), "oriented": _oriented(marks, pads)}
 
 
 def fp_geometry_kicad(text):
@@ -157,13 +227,59 @@ def fp_geometry_kicad(text):
         kinds.append(_pad_kind(p[1], _KICAD_SHAPE.get(p[3], "other"), nums[0] if nums else 0.0,
                                nums[1] if "oval" in dr and len(nums) > 1 else 0.0))
     cy = sexpr.courtyard_bbox(t)
-    return {"pads": sorted(pads), "courtyard": _box([cy[0], cy[2]], [-cy[3], -cy[1]]) if cy else None, "kinds": sorted(kinds)}
+    return {"pads": sorted(pads), "courtyard": _box([cy[0], cy[2]], [-cy[3], -cy[1]]) if cy else None, "kinds": sorted(kinds),
+            "oriented": _oriented(_kicad_marks(t), pads)}
+
+
+def _kicad_marks(t):
+    """The silkscreen and fab primitives of a .kicad_mod as (kind, [points in mm, y up]), as _oriented takes them;
+    the kinds match fp_geometry_pcblib's for the same drawing (a rectangle as 4 lines, a filled polygon as an area)."""
+    out = []
+    pt = lambda g, k: (float(sexpr.first(g, k)[1]), -float(sexpr.first(g, k)[2])) if sexpr.first(g, k) else None
+    for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
+        for g in sexpr.find(t, kind):
+            if (sexpr.first(g, "layer") or [None, None])[1] not in ("F.SilkS", "B.SilkS", "F.Fab", "B.Fab"):
+                continue
+            if kind == "fp_line" and pt(g, "start") and pt(g, "end"):
+                out.append(("line", [pt(g, "start"), pt(g, "end")]))
+            elif kind == "fp_rect" and pt(g, "start") and pt(g, "end"):
+                (x1, y1), (x2, y2) = pt(g, "start"), pt(g, "end")
+                fill = (sexpr.first(g, "fill") or [None, None])[1] in ("solid", "yes")
+                if fill:
+                    out.append(("area", [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]))
+                else:
+                    out += [("line", [a, b]) for a, b in (((x1, y1), (x2, y1)), ((x2, y1), (x2, y2)), ((x2, y2), (x1, y2)),
+                                                           ((x1, y2), (x1, y1)))]
+            elif kind == "fp_poly":
+                xy = [(float(p[1]), -float(p[2])) for p in sexpr.find(sexpr.first(g, "pts") or [], "xy")]
+                if xy:
+                    out.append(("area", xy))
+            elif kind == "fp_circle" and pt(g, "center"):
+                out.append(("arc", [pt(g, "center")]))
+            elif kind == "fp_arc" and pt(g, "start") and pt(g, "end"):
+                if pt(g, "mid"):                       # KiCad 6+: start, mid, end on the arc -> its centre
+                    (ax, ay), (bx, by), (ex, ey) = pt(g, "start"), pt(g, "mid"), pt(g, "end")
+                    d = 2 * (ax * (by - ey) + bx * (ey - ay) + ex * (ay - by))
+                    if abs(d) < 1e-12:
+                        out.append(("line", [pt(g, "start"), pt(g, "end")]))
+                        continue
+                    ux = ((ax * ax + ay * ay) * (by - ey) + (bx * bx + by * by) * (ey - ay) + (ex * ex + ey * ey) * (ay - by)) / d
+                    uy = ((ax * ax + ay * ay) * (ex - bx) + (bx * bx + by * by) * (ax - ex) + (ex * ex + ey * ey) * (bx - ax)) / d
+                    out.append(("arc", [(ux, uy), (ax, ay), (ex, ey)]))
+                else:                                  # KiCad 5: start = centre, end = first point, angle
+                    (cx, cy), (ex, ey) = pt(g, "start"), pt(g, "end")
+                    a = -float((sexpr.first(g, "angle") or [None, 0])[1])      # y flipped: the sweep turns the other way
+                    r, a0 = math.hypot(ex - cx, ey - cy), math.degrees(math.atan2(ey - cy, ex - cx))
+                    out.append(("arc", _arc_pts(cx, cy, r, a0, a0 + a)))
+    return out
 
 
 def fp_hash(geom):
     if not geom or not geom["pads"]:
         return None
-    return _digest([list(p) for p in geom["pads"]] + [geom["courtyard"]] + [list(k) for k in geom.get("kinds", [])])
+    # "oriented" only when set: footprints without a direction mark keep the hash they had before it was compared
+    return _digest([list(p) for p in geom["pads"]] + [geom["courtyard"]] + [list(k) for k in geom.get("kinds", [])]
+                   + (["oriented"] if geom.get("oriented") else []))
 
 
 def _pin_name(s):
@@ -217,13 +333,15 @@ class Collector:
         return self._cache[key]
 
     def _fp_from_file(self, f, ref=None):
-        """[(ref, hash)] for a .PcbLib (one per footprint) or .kicad_mod."""
+        """[(ref, hash, 3D height or None)] for a .PcbLib (one per footprint) or .kicad_mod (no height: its model is a
+        separate file)."""
         f = Path(f)
         if f.suffix.lower() == ".kicad_mod":
             g = self._read(f, lambda p: fp_geometry_kicad(Path(p).read_text(encoding="utf-8")))
-            return [(ref or f.stem, fp_hash(g))] if g else []
+            return [(ref or f.stem, fp_hash(g), None)] if g else []
         fps = self._read(f, AL.read_pcblib) or []
-        return [(fp["name"], fp_hash(fp_geometry_pcblib(fp, self.cfg.get("courtyard", AL.MECH15)))) for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
+        return [(fp["name"], fp_hash(fp_geometry_pcblib(fp, self.cfg.get("courtyard", AL.MECH15))), body_height(fp))
+                for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
 
     def _sym_from_file(self, f, ref=None):
         r = self._read(Path(f), AL.read_schlib)
@@ -254,9 +372,12 @@ class Collector:
                 self._seen_files.add(str(f.resolve()))
                 got = self._fp_from_file(f, m.get("ref")) if kind == "footprint" else self._sym_from_file(f, m.get("ref"))
                 for g in got[:1]:
-                    self._add_model(kind, m.get("ref") or g[0], f, "plan", g[1], it["name"], it, *(g[2:]))
+                    if kind == "footprint":
+                        self._add_model(kind, m.get("ref") or g[0], f, "plan", g[1], it["name"], it, height=g[2])
+                    else:
+                        self._add_model(kind, m.get("ref") or g[0], f, "plan", g[1], it["name"], it, *(g[2:]))
 
-    def _add_model(self, kind, ref, f, origin, h, used_by=None, item=None, pins=None):
+    def _add_model(self, kind, ref, f, origin, h, used_by=None, item=None, pins=None, height=None):
         lst = self.footprints if kind == "footprint" else self.symbols
         src = ((item or {}).get("source") or {}).get(kind) or ""
         e = next((x for x in lst if x["ref"] == ref and x["hash"] == h and x["origin"] == origin and str(x["file"]) == str(f)), None)
@@ -265,9 +386,13 @@ class Collector:
                  "kicad_mod": ((item or {}).get("footprint") or {}).get("kicad_mod") if kind == "footprint" else None}
             if pins is not None:
                 e["pins"] = pins
+            if kind == "footprint":
+                e["height"], e["part_kinds"] = height, []
             lst.append(e)
         if used_by:
             e["used_by"].append(used_by)
+        if kind == "footprint" and (item or {}).get("folder") and item["folder"] not in e["part_kinds"]:
+            e["part_kinds"].append(item["folder"])      # what the parts on it are: Components/Diodes, .../Inductors
 
     def add_lib(self, path):
         p = Path(path)
@@ -277,8 +402,8 @@ class Collector:
             if str(f.resolve()) in self._seen_files:
                 continue
             if suf in (".pcblib", ".kicad_mod"):
-                for ref, h in self._fp_from_file(f):
-                    self._add_model("footprint", ref, f, "library", h)
+                for ref, h, height in self._fp_from_file(f):
+                    self._add_model("footprint", ref, f, "library", h, height=height)
             elif suf == ".schlib":
                 for ref, h, n in self._sym_from_file(f):
                     self._add_model("symbol", ref, f, "library", h, pins=n)
@@ -356,6 +481,31 @@ def _score_model(m, keep):
             -len(m["ref"]), m["ref"])
 
 
+HEIGHT_TOL = 0.05                                   # mm: 3D bodies closer than this are the same height
+
+
+def _fits(a, b):
+    """Two footprints with the same pads may be one: their parts are of one kind (a plan folder in common, or one of
+    them used by no plan part) and their 3D bodies are as high (or one has no height)."""
+    ka, kb = set(a.get("part_kinds") or ()), set(b.get("part_kinds") or ())
+    if ka and kb and not ka & kb:
+        return False
+    ha, hb = a.get("height"), b.get("height")
+    return ha is None or hb is None or abs(ha - hb) <= HEIGHT_TOL
+
+
+def _compatible(members):
+    """Split one geometry group (best member first) into groups whose members all fit each other (_fits)."""
+    parts = []
+    for m in members:
+        home = next((p for p in parts if all(_fits(m, o) for o in p)), None)
+        if home is None:
+            parts.append([m])
+        else:
+            home.append(m)
+    return parts
+
+
 def find_groups(col, keep=(), ignore=()):
     """-> list of {kind, key, keeper, members, conflict}. members: dicts with `name` (part / ref)."""
     keep, ignore, groups = set(keep), set(ignore), []
@@ -385,6 +535,9 @@ def find_groups(col, keep=(), ignore=()):
             for m in ms:                                      # merge same-ref entries (plan + library copy)
                 r = rep.setdefault(m["ref"], {**m, "used_by": [], "files": []})
                 r["used_by"] += m["used_by"]
+                if kind == "footprint":
+                    r["part_kinds"] = list(dict.fromkeys((r.get("part_kinds") or []) + (m.get("part_kinds") or [])))
+                    r["height"] = r.get("height") if r.get("height") is not None else m.get("height")
                 if m["origin"] == "library":                  # an existing library copy: its file is the one to keep
                     r["origin"] = "library"
                     r["files"].insert(0, m["file"])
@@ -395,7 +548,9 @@ def find_groups(col, keep=(), ignore=()):
             members = sorted(rep.values(), key=lambda m: _score_model(m, keep), reverse=True)
             for m in members:
                 m["name"] = m["ref"]
-            groups.append({"kind": kind, "key": h, "keeper": members[0]["ref"], "members": members})
+            for n, part in enumerate(_compatible(members) if kind == "footprint" else [members]):
+                if len(part) > 1:
+                    groups.append({"kind": kind, "key": h if not n else f"{h}:{n}", "keeper": part[0]["ref"], "members": part})
         for ref, hs in sorted(refs.items()):
             if len(hs - {None}) > 1:
                 ver = {}                                      # one member per distinct geometry / pinout

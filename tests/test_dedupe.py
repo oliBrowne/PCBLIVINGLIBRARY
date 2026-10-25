@@ -203,18 +203,62 @@ def test_a365_state_and_cli():
 
 
 def test_merge_survives_librarian_rerun():
-    """A footprint merged onto its keeper stays merged when the librarian runs again (was: reverted, merged_from lost)."""
+    """A footprint merged onto its keeper stays merged when the librarian runs again (was: reverted, merged_from lost).
+    The keeper is the same footprint in an existing library under the library's own name. The fixture's LED_0603 is
+    R_0603's drawing renamed: the resistor is merged, the LED (another kind of part) keeps its own footprint."""
     from tests import test_librarian as TL
     with tempfile.TemporaryDirectory() as d:
         TL.run(d, sources=["kicad"])
         out = Path(d) / "out"
-        r = DD.run(out / "plan.json", do_merge=True, log=lambda *a: None)
-        assert any(m["parts"] == "LED-RED-0603" and m["to"] == "R_0603_1608Metric" for m in r["mapping"]), r["mapping"]
+        lib = Path(d) / "house"
+        lib.mkdir()
+        fp, _ = K.convert_footprint((out / "models" / "KiCad" / "R_0603_1608Metric.kicad_mod").read_text(encoding="utf-8"),
+                                    "HOUSE_R_0603")
+        AL.write_pcblib(lib / "HOUSE_R_0603.PcbLib", [fp])
+        r = DD.run(out / "plan.json", libs=[lib], do_merge=True, log=lambda *a: None)
+        assert [(m["parts"], m["to"]) for m in r["mapping"] if m["kind"] == "footprint"] == [("RES-0603-10k", "HOUSE_R_0603")], \
+            r["mapping"]
         items, _ = TL.run(d, sources=["kicad"])
+        res = items["RES-0603-10k"]
+        assert res["footprint"]["ref"] == "HOUSE_R_0603", res["footprint"]
+        assert res["merged_from"]["footprint"]["ref"] == "R_0603_1608Metric"
         led = items["LED-RED-0603"]
-        assert led["footprint"]["ref"] == "R_0603_1608Metric" and led["footprint"]["file"] == "models/PcbLib/R_0603_1608Metric.PcbLib", led["footprint"]
-        assert led["merged_from"]["footprint"]["ref"] == "LED_0603_1608Metric"
-        assert items["RES-0603-10k"]["footprint"]["ref"] == "R_0603_1608Metric" and not items["RES-0603-10k"].get("merged_from")
+        assert led["footprint"]["ref"] == "LED_0603_1608Metric" and not led.get("merged_from"), led
+
+
+def test_led_and_resistor_footprints_with_the_same_pads_stay_apart():
+    """An LED_0603 with KiCad's cathode mark and R_0603 have the same pads and courtyard. The mark makes the drawing
+    turn into another one at 180 degrees, so it is a different footprint (was: the LED was merged onto R_0603, losing
+    its polarity mark, or an inductor onto LED_0603, taking the mark and the LED's 3D body). The .PcbLib and the
+    .kicad_mod agree; without a mark, parts of different kinds (plan folders) or 3D heights are still kept apart."""
+    from tests import test_librarian as TL
+    with tempfile.TemporaryDirectory() as d:
+        TL.run(d, sources=["kicad"])
+        out = Path(d) / "out"
+        r_text = (out / "models" / "KiCad" / "R_0603_1608Metric.kicad_mod").read_text(encoding="utf-8")
+        led_text = r_text.replace("R_0603_1608Metric", "LED_0603_1608Metric").replace(
+            '  (fp_rect (start -1.46', '  (fp_line (start -1.3 -0.6) (end -1.3 0.6) (stroke (width 0.12) (type solid)) '
+            '(layer "F.SilkS"))\n  (fp_rect (start -1.46', 1)
+        assert led_text.count("fp_line") == r_text.count("fp_line") + 1
+        g = {}
+        for n, text in (("LED", led_text), ("R", r_text)):
+            fp, _ = K.convert_footprint(text, n)
+            AL.write_pcblib(Path(d, f"{n}.PcbLib"), [fp])
+            gk, gp = DD.fp_geometry_kicad(text), DD.fp_geometry_pcblib(AL.read_pcblib(Path(d, f"{n}.PcbLib"))[0])
+            assert gk["oriented"] == gp["oriented"] and DD.fp_hash(gk) == DD.fp_hash(gp), n
+            g[n] = gk
+        assert g["LED"]["oriented"] and not g["R"]["oriented"] and g["LED"]["pads"] == g["R"]["pads"]
+        assert DD.fp_hash(g["LED"]) != DD.fp_hash(g["R"])
+        # the fixture's LED is R_0603's drawing (no mark): its part is a diode, the other a resistor -> not merged
+        r = DD.run(out / "plan.json", log=lambda *a: None)
+        assert not [x for x in r["groups"] if x["kind"] == "footprint"], [(x["keeper"], [m["name"] for m in x["members"]])
+                                                                         for x in r["groups"]]
+    a = {"part_kinds": ["Components/Inductors"], "height": 0.8}
+    assert not DD._fits(a, {"part_kinds": ["Components/Diodes"], "height": 0.8})        # another kind of part
+    assert not DD._fits(a, {"part_kinds": ["Components/Inductors"], "height": 0.6})     # another 3D body
+    assert DD._fits(a, {"part_kinds": [], "height": None}) and DD._fits(a, {"part_kinds": ["Components/Inductors"], "height": 0.82})
+    parts = DD._compatible([{"ref": "C", **a}, {"ref": "L", **a}, {"ref": "D", "part_kinds": ["Components/Diodes"], "height": 0.8}])
+    assert [[m["ref"] for m in p] for p in parts] == [["C", "L"], ["D"]]
 
 
 def test_house_courtyard_layer_hashes_like_kicad_mod():

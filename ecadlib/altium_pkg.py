@@ -437,6 +437,15 @@ def check_folder(out, libpkg, dblibs):
     return probs, facts
 
 
+class NothingReleased(ValueError):
+    """A plan whose parts are all held: expected, so the CLI prints this line and its hint (cliutil.friendly), exit 2."""
+    plain_error = True
+
+    def __init__(self, msg, hint):
+        super().__init__(msg)
+        self.hint = hint
+
+
 def check_name(name):
     """The package name goes into file names the install scripts open: it must fit cp1252 (see script_bytes)."""
     try:
@@ -513,6 +522,12 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
         raise FileNotFoundError(f"{src}: no such plan.json or folder")
     models = sorted((p for p in files if p.suffix.lower() in MODEL_EXT and p.resolve().is_relative_to(out.resolve())),
                     key=lambda p: (MODEL_EXT[p.suffix.lower()] != "SchLib", win_rel(p, out).lower()))
+    if not models and src.is_file():
+        held = [r["name"] for r in res["results"] if r["action"] == "held"]
+        if held:                               # the librarian ran: nothing passed the release check yet
+            raise NothingReleased(f"{src}: nothing to package: all {len(held)} part(s) are held by the release check "
+                                  f"({', '.join(held[:3])}{' ...' if len(held) > 3 else ''})",
+                                  f"go through them with `ecadlib review {src}`, then package again")
     if not models:
         raise ValueError(f"no .SchLib or .PcbLib under {src}: run the librarian (or `ecadlib altium-lib`) first")
     docs = [win_rel(p, out) for p in models]
@@ -575,7 +590,7 @@ def main(argv=None):
         rep = build(a.src, a.out, a.name, a.win_dir, a.rules, native=not a.no_native_build, plan=a.plan,
                     unchecked=a.unchecked)
     except (OSError, ValueError) as e:
-        print(f"ecadlib altium-pkg: {e}", file=sys.stderr)
+        print(f"ecadlib altium-pkg: {e}" + (f"\n  hint: {e.hint}" if getattr(e, "hint", "") else ""), file=sys.stderr)
         return 2
     if a.json:
         print(json.dumps(rep, indent=2))
