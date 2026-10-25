@@ -582,7 +582,8 @@ class Run:
         if not res.found:
             st["tried"].append(f"easyeda {lcsc}: no component")
             return
-        if mpn and res.mpn and norm_mpn(res.mpn) != norm_mpn(mpn):
+        bare = norm_mpn(mpn) == norm_mpn(lcsc)      # the dialog's "type an LCSC number": the number is the MPN too
+        if mpn and res.mpn and not bare and norm_mpn(res.mpn) != norm_mpn(mpn):
             st["tried"].append(f"easyeda {lcsc}: is {res.mpn}, BOM says {mpn}; not used")
             st["review"].append(f"LCSC {lcsc} is {res.mpn}, not {mpn}: fix the BOM's LCSC number")
             return

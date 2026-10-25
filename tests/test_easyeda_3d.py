@@ -99,6 +99,14 @@ def test_through_hole_model_keeps_its_pins_below_the_board():
     assert info["bbox"][2] == -3.0 and info["height"] == 8.5, info
 
 
+def test_through_hole_z_is_where_the_pins_end():
+    """AD26 2026-10-25, B-2100S02P-A110 (C124375): EasyEDA's z = -3 mm is the pins' depth. The STEP already has its
+    pins at -3 and housing at 0, so it must not move down again (it sat 3 mm into the board, height 5.5 not 8.5)."""
+    for zmin in (-3.0, 0.0):                                         # pins already below the board, or a model drawn from 0
+        _, info = E3.place(step(-1, -1, zmin, 1, 1, zmin + 11.5), ref(through_hole=True, z=-3.0))
+        assert [round(v, 4) for v in info["bbox"][2::3]] == [-3.0, 8.5] and info["height"] == 8.5, (zmin, info)
+
+
 def test_place_only_moves_3d_points():
     text = ("ISO-10303-21;\nDATA;\n#1=CARTESIAN_POINT('',(1.,2.,3.));\n#2=CARTESIAN_POINT('',(5.,6.));\n"
             "#3=DIRECTION('',(1.,0.,0.));\n#4=CARTESIAN_POINT('it''s',(3.,4.,5.));\nENDSEC;\nEND-ISO-10303-21;\n")
@@ -159,6 +167,22 @@ def test_lcsc_crystal_without_its_model_has_a_height_note_not_a_hold():
         assert any(E3.STEP_URL.format("0f1e2d3c4b5a69788796a5b4c3d2e1f0") == u for u in http.calls)
         assert not any(h.startswith("height:") for h in it["hold_reasons"]), it["hold_reasons"]
         assert "height: no 3D height (no 3D body and no HEIGHT)" in it["release_check"]["warnings"], it["release_check"]
+
+
+def test_a_bare_lcsc_number_as_the_mpn_uses_easyeda():
+    """AD26 2026-10-25: the Altium dialog's "type an LCSC number" puts C9002 in as both the MPN and the LCSC number.
+    EasyEDA's own MPN (X322512MSB4SI) is not a different part then: it was refused, held with no symbol or footprint."""
+    bom = TL.BOM.split("\n")[0] + "\nY1,1,,,,C9002,C9002,,\n"
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = TL.run(d, Http({"C9002": crystal()}), bom=bom)
+        it = next(iter(items.values()))
+        assert it["source"]["footprint"] == "easyeda:C9002" and it["source"]["symbol"] == "easyeda:C9002", it["source"]
+        assert not any("not used" in t for t in it["librarian"]["tried"]), it["librarian"]["tried"]
+    bom = TL.BOM.split("\n")[0] + "\nY1,1,,,,X322512MSB4SJ,C9002,,\n"      # a real MPN that differs is still refused
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = TL.run(d, Http({"C9002": crystal()}), bom=bom)
+        it = next(iter(items.values()))
+        assert any("BOM says X322512MSB4SJ; not used" in t for t in it["librarian"]["tried"]), it["librarian"]["tried"]
 
 
 def test_lcsc_crystal_with_its_model_is_not_held_for_height():
