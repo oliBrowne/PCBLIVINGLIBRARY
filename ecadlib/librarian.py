@@ -850,6 +850,11 @@ class Run:
         st["review"].extend(other)
         st["verify"].extend(other)                    # its own hold reason: a person confirms this PDF is this part's
         got = []
+
+        def need_pins():                              # EPM240F100: the handbook has no pinout; checked before anything
+            if not st["symbol"] and not (res.get("symbol") or {}).get("pins"):   # is written, after the footprint's holds
+                raise D.DatasheetError("no symbol: the datasheet read gives no pin list for this part (the PDF may leave "
+                                       "the pinout to a separate document), so it is held rather than built without its pins")
         std = self.standard_land(res["spec"], res["sidecar"].get("package_from_pdf")) if not st["footprint"] else None
         settled = (res.get("cross_check") or {}).get("standard")
         if settled and not st["footprint"]:           # the read gave this table package's sizes the other way round
@@ -889,6 +894,7 @@ class Run:
             text, _ = SP.build(pkg, RU.density_for(sp, self.rules))
             hs = res["spec"].get("height_max") and "datasheet height_max" or sp.get("height_max") and "standard package table"
             h = F.dim((res["spec"] if hs == "datasheet height_max" else sp)["height_max"])[2] if hs else None   # this part's own height first
+            need_pins()
             self.put_fp(st, text, fp_name, f"standard:{SP.kicad_ref(pkg)}", None, h, hs or "", sp)
             got.append(f"footprint {SP.kicad_ref(pkg)} (identified from the read)")
             st["review"].append(f"standard land: the datasheet read identified {pkg} ({found}); {why}, so the checked standard "
@@ -905,8 +911,10 @@ class Run:
                     raise
                 raise D.DatasheetError(f"no footprint: the datasheet read left {', '.join(unres)} unresolved ({e})") from e
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
+            need_pins()
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
             got.append("footprint")
+        need_pins()
         if not st["symbol"]:
             from . import house_style as HS              # active-low pins in your library's notation ([style])
             sym, renamed = HS.adapt_symbol(res["symbol"], HS.active(self.rules, self.out))
