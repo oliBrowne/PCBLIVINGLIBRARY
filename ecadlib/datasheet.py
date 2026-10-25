@@ -1283,6 +1283,32 @@ def thermal_land_missing(spec, maker=None, url=None):
     return None
 
 
+def thermal_land_body_sized(spec):
+    """The hold line when the land's thermal pad read is as large as the body where lead pads sit: across the rows (and
+    along them too in a quad package, pads on all four sides), copper that size would reach the lead pads, so it is the
+    body's outline read in its place (benchmark 2026-10-25: OPA569DWP SO-20 PowerPAD land read 7.59 x 12.95, the
+    body's E1 / D maximum, under a 7.4-7.6 x 12.6-13.0 body; TI's land is 6.045 x 12.09). Along the rows of a two-row
+    package no pad is in the way, so a land longer than the body builds (TLC5951DAP: TI's 5.2 x 12.5 under a 12.4-12.6
+    body). The axes are footprint_gen's: across is X, body_width (E1) for a gullwing, body_length for a QFN / QFP.
+    None otherwise."""
+    land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
+    a, b, t = land.get("ep_across"), land.get("ep_along"), spec.get("package_type")
+    if t not in ("gullwing", "qfp", "qfn") or not all(isinstance(v, (int, float)) and v > 0 for v in (a, b)):
+        return None
+    from . import footprint_gen as F
+    try:
+        bl, bw = F.dim(spec["body_length"])[0], F.dim(spec["body_width"])[0]
+        quad = t != "gullwing" and F.rows(spec)[1] > 0
+    except (KeyError, TypeError, ValueError):
+        return None
+    bx, by = (bw, bl) if t == "gullwing" else (bl, bw)
+    if a >= bx or (quad and b >= by):
+        return (f"no footprint: the thermal land read ({a:g} across x {b:g} along the rows) is as large as the body "
+                f"({bx:g} x {by:g} mm at its smallest) where the lead pads sit, so it would reach them; it looks like "
+                "the body outline, so read the thermal land's copper from the land pattern page")
+    return None
+
+
 IPC_LAND = ("chip", "molded", "gullwing", "qfp", "qfn")      # builders that size the pads by IPC-7351B when no land is read
 LAND_KEYS = ("pad_length", "pad_width", "pad_center", "ep_across", "ep_along")
 

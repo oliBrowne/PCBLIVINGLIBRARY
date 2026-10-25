@@ -61,7 +61,8 @@ CATS = {
                        r"thermal (?:pad areas?|lands?)\b(?=[\s\S]{0,80}?\d\s*(?:mm|mils?)?\s*[x×]\s*\d)|"   # PowerPAD lands in
                        # prose, with a size ("Thermal Land 299 mils x 510 mils", OPA569DWP p19), not layout advice
                        r"recommended (footprint|land|pcb|solder|pad)|(suggested|recommended) pad layout|"
-                       r"soldering footprint|solder lands|\bfootprint\b|pad layout|soldering pad|焊盘", re.I),
+                       r"soldering footprint|solder lands|\bfootprint\b|pad layout|soldering pad|焊盘|"
+                       r"recommended\s+(?:pcb\s+)?mounting\s+pads?", re.I),   # Panasonic (AQY282GS)
     "pinout": re.compile(r"pin (configurations?|functions?|descriptions?|assignments?|definitions?)|pinning information|"
                          r"\bpinouts?\b|terminal functions?|\(top view\)|top view|引脚", re.I),
     "ordering": re.compile(r"ordering information|order(ing)? code|orderable|package option addendum|device comparison|"
@@ -825,7 +826,8 @@ def pick_pages(texts, budget, part=None, package=None, marks=None, first=None):
 # "Footprint information for reflow soldering", LT "RECOMMENDED SOLDER PAD LAYOUT", Microchip "RECOMMENDED LAND PATTERN"
 LAND_PRINTED = re.compile(r"land pattern|recommended\s+(?:soldering\s+|pcb\s+)?(?:footprint|lands?|solder(?:ing)?\s+pad)|"
                           r"(?:suggested|recommended)\s+pad\s+layout|soldering\s+footprint|"
-                          r"footprint\s+(?:information\s+)?for\s+(?:reflow|wave)|solder\s+lands", re.I)
+                          r"footprint\s+(?:information\s+)?for\s+(?:reflow|wave)|solder\s+lands|"
+                          r"recommended\s+(?:pcb\s+)?mounting\s+pads?", re.I)   # Panasonic (AQY282GS)
 # a sentence that sends the reader elsewhere for the land ("For the land pattern, see the Mechanical ... section")
 LAND_POINTER = re.compile(r"\b(?:see|refer(?:s|red)?\s+to|shown\s+in|described\s+in|given\s+in|available\s+(?:in|at|on)|"
                           r"go\s+to|visit|download)\b", re.I)

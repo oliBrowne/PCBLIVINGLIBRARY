@@ -145,6 +145,45 @@ def norm_name(s):
     return WORDS.get(s, s)                            # a pin spelled out ("Enable") is the same pin as KiCad's "EN"
 
 
+def _abbrev(word, short):
+    """short is word cut down: its first letter, then letters of it in order (HS for HEATSINK, SW for SWITCH)."""
+    if not short or not word or short[0] != word[0]:
+        return False
+    it = iter(word)
+    return all(c in it for c in short)
+
+
+def _from_words(words, short):
+    """short built from every word in order, each giving a prefix or its trailing digits (SwC from Switch Collector,
+    C2 from collector TR2, TC from Timing Capacitor)."""
+    if not words:
+        return not short
+    w, rest = words[0], words[1:]
+    digits = re.search(r"\d+$", w)
+    cuts = [w[:i] for i in range(len(w), 0, -1)] + ([digits.group()] if digits else [])
+    return any(short.startswith(c) and _from_words(rest, short[len(c):]) for c in cuts)
+
+
+def short_form(ours, ref):
+    """KiCad's name a short form of the maker's spelled-out one that our symbol carries (MC33063 "Switch Collector" /
+    SwC, TPS70345 "GND/HEATSINK" / GND/HS, AP1117 "Adj (GND)" / GND, BCV61 "collector TR2" / C2). Never the same
+    length: a name of the same size is another name, not a short form of it."""
+    raw, r = str(ours or "").upper(), norm_name(ref)
+    if not raw or not r or (rail(r) and rail(r) != rail(norm_name(raw)) and "(" not in raw and ";" not in raw):
+        return False                                  # VSS is ground: letters of VSENSE in order are no short form
+    parts = [x.strip() for x in re.split(r"[();]", raw) if x.strip()]
+    if len(parts) > 1:                                # "Adj (GND)": the name the datasheet gives in brackets; BCV61
+        return any(norm_name(x) == r or short_form(x, ref) for x in parts)   # "collector TR2; base TR1 and TR2"
+    if len(norm_name(raw)) <= len(r):
+        return False
+    rt, ot = re.split(r"[/]", str(ref).upper()), re.split(r"[/]", raw)
+    if len(rt) > 1 and len(rt) == len(ot):            # GND/HS: part by part
+        return all(norm_name(x) == norm_name(y) or short_form(x, y) for x, y in zip(ot, rt))
+    words = [w for w in re.split(r"[\s_-]+", raw) if w]
+    one = norm_name(raw)                              # one word: letters from across it (HS), not just its start (IN is
+    return _from_words(words, r) if len(words) > 1 else _abbrev(one, r) and not one.startswith(r)   # not INHIBIT)
+
+
 GROUND_RX = re.compile(r"^(?:[ADPS]?GND\w*|[ADP]?VSS\w*|VEE\w*|0V|V-)$")
 SUPPLY_RX = re.compile(r"^(?:[ADP]?VDD\w*|[ADP]?VCC\w*|VBAT\w*|V\+)$")
 
@@ -269,7 +308,7 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
         groups = unswapped([(norm_name(a.get(n)), s) for n, s in named.items()])
-        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, groups)]
+        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, groups) or short_form(a.get(n), b[n])]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
         moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1   # a name KiCad has on another pin:
