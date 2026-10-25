@@ -416,14 +416,17 @@ def maker_land(mine, spec, tol=None):
     # the toes at the span the builder uses: lead_span, or for a no-lead quad / dual (QFN, DFN: no lead_span) the
     # body's edge, body_length for the left / right rows and lead_span_y or body_width for the top / bottom ones
     quad = spec.get("package_type") in ("qfn", "qfp")
-    span = rng("lead_span") or (rng("body_length") if quad else [])
-    span_y = (rng("lead_span_y") or span) if spec.get("lead_span") else rng("body_width") if quad else []
+    # a tab package (TO-263, TO-252) has no tip-to-tip span: its L runs from the tab's edge to the lead tips, so only
+    # the pads' width is checked (footprint_gen.land_short: C3D08060G, benchmark 2026-10-24)
+    tab = isinstance(spec.get("tab"), dict) and bool(spec["tab"])
+    span = [] if tab else rng("lead_span") or (rng("body_length") if quad else [])
+    span_y = [] if tab else (rng("lead_span_y") or span) if spec.get("lead_span") else rng("body_width") if quad else []
     T, b = rng("terminal_length"), rng("terminal_width")
-    covers = lambda l, w, c, s=span: c + l / 2 >= min(s) / 2 - t["pos"] and c - l / 2 <= max(s) / 2 - min(T) + t["pos"] \
-        and w >= min(b) - 1e-9
+    covers = lambda l, w, c, s=span: (not s or c + l / 2 >= min(s) / 2 - t["pos"]
+                                      and c - l / 2 <= max(s) / 2 - min(T) + t["pos"]) and w >= min(b) - 1e-9
     l1 = land.get("pin1_length") or pl                # a pin 1 of its own size must solder its lead too
     tb = quad and _top_bottom(spec) and span_y        # top / bottom rows (a DFN has none)
-    sane = not (span and T and b) or (covers(pl, pw, pc) and covers(l1, land.get("pin1_width") or pw, pc + (pl - l1) / 2)
+    sane = not ((span or tab) and T and b) or (covers(pl, pw, pc) and covers(l1, land.get("pin1_width") or pw, pc + (pl - l1) / 2)
                                       and (not tb or covers(pl, pw, pcy, span_y)))
     # the maker's thermal land, when the land gives one: centred on the pads, ep_across running across the pad rows
     # (the lead pads' long side runs across the rows: pads wider than tall are rows at +-x, so across is the pad's

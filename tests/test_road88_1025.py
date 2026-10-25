@@ -40,3 +40,18 @@ def test_the_exposed_pad_numbered_after_the_pins_is_not_one_pin_too_many():
     assert _count_errors(_fdmt(ep_w=1.25, ep_h=1.2)) != []            # a ninth pad the size of a pin is a pin
     assert _count_errors(_fdmt(ep_w=1.25, ep_h=1.2, role="thermal")) == []   # said to be the thermal pad
     assert _count_errors(_fdmt(n=7)) != []                            # two too many is still wrong
+
+
+def test_the_scorer_credits_the_same_tab_package_land():
+    # Greptile on #189: eval.score.maker_land held the same land to L / 2 as well
+    from ecadlib.eval import score as S
+    tab = {"number": "3", "side": "R", "width": {"min": 7.535, "max": 8.425}, "length": {"min": 6.48, "max": 6.88}}
+    mine = {"pads": [["1", -4.8825, -2.54, 3.56, 1.54, 0.0], ["2", -4.8825, 2.54, 3.56, 1.54, 0.0],
+                     ["3", 4.8825, 0.0, 8.89, 10.69, 0.0]], "courtyard": []}
+    ml = S.maker_land(mine, _to263(tab=tab))
+    assert ml["followed"] and "implausible" not in ml, ml
+    assert S.maker_land(mine, _to263())["followed"] is False                 # no tab read: L is a lead span
+    narrow = _to263(tab=tab)
+    narrow["land"] = dict(narrow["land"], pad_width=0.5)
+    thin = dict(mine, pads=[[n, x, y, w, 0.5 if n != "3" else h, r] for n, x, y, w, h, r in mine["pads"]])
+    assert "implausible" in S.maker_land(thin, narrow)                       # narrower than the lead: still caught
