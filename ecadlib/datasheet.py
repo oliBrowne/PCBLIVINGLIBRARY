@@ -1167,7 +1167,13 @@ def to_spec(pkg, part, datasheet, model, offset, review):
     if pages:
         spec["source"]["page"] = max(set(pages), key=pages.count)
     t = spec["package_type"]
-    base = ([] if t in NO_BODY else ["body_length", "body_width"]) + (["terminal_length"] if t in LINEAR_TYPES else [])
+    foot = t in LINEAR_TYPES and not F.land_sizes_leads(spec)
+    base = ([] if t in NO_BODY else ["body_length", "body_width"]) + (["terminal_length"] if foot else [])
+    if t in LINEAR_TYPES and not foot and spec.get("terminal_length") is None:
+        if any(re.match(r"\s*terminal_length\b", str(u)) for u in unres):
+            unres = [u for u in unres if not re.match(r"\s*terminal_length\b", str(u))]
+            review.append("terminal_length: not read, and not needed: the maker's land sizes the pads (check the land "
+                          "against the drawing)")
     for k in base + NEED.get(t, []):
         if not any(x in spec or x in unres for x in k.split("|")):
             unres.append(k.replace("|", " or "))
@@ -1181,7 +1187,8 @@ def build_blockers(spec):
     courtyard_excess are never among them): what a hold must name, whatever the read listed as unresolved."""
     t = spec.get("package_type")
     keys = [] if t in NO_BODY else ["body_length", "body_width"]
-    keys += ["terminal_length|inner_span"] if t in ("chip", "molded") else ["terminal_length"] if t in LINEAR_TYPES else []
+    keys += ["terminal_length|inner_span"] if t in ("chip", "molded") else \
+        ["terminal_length"] if t in LINEAR_TYPES and not F.land_sizes_leads(spec) else []
     need = list(NEED.get(t, []))
     if t in ("gullwing", "qfp", "qfn") and not spec.get("pin_positions"):
         need.insert(0, "pin_count")

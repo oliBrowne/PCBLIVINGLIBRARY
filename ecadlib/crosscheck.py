@@ -780,8 +780,10 @@ def _settle_tab(checks, spec, pins=None):
         return None
     from . import stdparts as S
     name, how = S.identify_tab(spec, pins)
-    if name:
-        pads = {str(p.get("number")) for p in S.packages()[name]["pad_table"]["pads"] if p.get("number")}
+    if name:                                          # a cut lead's number on the tab: the read's (tab_renumber)
+        ren = S.tab_renumber(spec, name, pins)
+        pads = {ren.get(str(p["number"]), str(p["number"])) for p in S.packages()[name]["pad_table"]["pads"]
+                if p.get("number")}
     elif own_tab_land(spec):
         pads = {str(p.get("number")) for p in spec.get("pin_positions") or [] if isinstance(p, dict)}
         pads.add(str(spec["tab"].get("number")))

@@ -192,7 +192,9 @@ def _two_terminal(spec, fil):
 
 
 def _gullwing(spec, fil):
-    T, bw, span = dim(spec["terminal_length"]), dim(spec["terminal_width"]), dim(spec["lead_span"])
+    bw, span = dim(spec["terminal_width"]), dim(spec["lead_span"])
+    T = dim(spec["terminal_length"]) if spec.get("terminal_length") is not None or not land_sizes_leads(spec) \
+        else dim(_land_foot(spec, span))
     ep = spec.get("exposed_pad")
     min_gap = (dim(ep["length"])[1] if ep else 0) + 2 * MIN_EP_CLEAR    # KiCad: G >= EP + 0.4, so >= 0.4 without EP
     r = ipc_land(span, T, bw, fil, min_gap=min_gap)
@@ -207,7 +209,7 @@ def _gullwing(spec, fil):
     rep = {"Z": r["Z"], "G": r["G"], "X": X, "X_unclamped": r["X"]}
     tab = spec.get("tab")
     if tab:                                                   # SOT-223 / DPAK style wide tab on one side
-        tr = ipc_land(span, dim(tab.get("length") or spec["terminal_length"]), dim(tab["width"]), fil, min_gap=min_gap)
+        tr = ipc_land(span, dim(tab["length"]) if tab.get("length") else T, dim(tab["width"]), fil, min_gap=min_gap)
         sgn = -1 if tab.get("side", "R") == "L" else 1
         pads.append((str(tab["number"]), sgn * tr["pad_ctr"], tab.get("offset", 0.0), tr["pad_len"], tr["X"]))
         rep["tab"] = {"Z": tr["Z"], "G": tr["G"], "X": tr["X"]}
@@ -331,6 +333,22 @@ def lead_land(spec):
     land = spec.get("land") or {}
     return isinstance(land, dict) and all(isinstance(land.get(k), (int, float)) and not isinstance(land.get(k), bool)
                                           for k in ("pad_length", "pad_width", "pad_center"))
+
+
+def land_sizes_leads(spec):
+    """A gullwing read whose maker's land sizes every pad it builds: the leads' (lead_land) and a tab's, by its own
+    length or the land's tab_*. Its foot length (terminal_length) then only feeds the IPC land the maker's replaces,
+    so it may be left blank (LTV-352T, benchmark 2026-10-25: Lite-On prints the land, not the foot)."""
+    tab, land = spec.get("tab"), spec.get("land") or {}
+    return spec.get("package_type") == "gullwing" and lead_land(spec) and (
+        not tab or isinstance(tab, dict) and (bool(tab.get("length")) or all(land.get(k) for k in TAB_LAND)))
+
+
+def _land_foot(spec, span):
+    """The foot an IPC land stands in with under the maker's land (land_sizes_leads): the stretch of the lead tip the
+    land's pad covers, at least 0.1 mm and at most the pad. Its pads are replaced, so it only keeps the IPC sum whole."""
+    land = spec["land"]
+    return min(max(span[1] / 2 - (land["pad_center"] - land["pad_length"] / 2), 0.1), land["pad_length"])
 
 
 def thermal_land_small(spec):
