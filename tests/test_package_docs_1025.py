@@ -110,3 +110,49 @@ def test_a_long_application_note_with_the_land_pattern_is_kept():
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
         res = P._read(P._reader(d, cl, files, web_search=True))
         assert res["sidecar"]["route"].get("package_doc") == AN, res["sidecar"]["pdf"]["attempts"]
+
+
+def test_a_heading_set_in_spaced_type_still_captions_the_drawing():
+    # LTV-352T (live benchmark 2026-10-24): Lite-On's page 2 is "OUTLINE  DIMENSIONS" with two spaces, under a
+    # running header, the drawing itself vector art; IR4301's "Package Details" page is an image under its caption
+    from ecadlib import ds_route as DR, outline_docs as OD
+    head = " LITE-ON TECHNOLOGY  CORPORATION\n \nProperty  of  LITE-ON Only \n \n"
+    body = [head + f"Section {i}: absolute maximum ratings and electrical characteristics of the photocoupler, "
+            "forward current, collector-emitter voltage, isolation voltage, operating temperature. " * 4
+            for i in range(7)]
+    page = head + "OUTLINE  DIMENSIONS \nLTV-352T : \n \n \n*1.  2-digit date code. \n"
+    rows = DR.page_scores(body[:1] + [page] + body[1:], "LTV-352T", "SO-4")[0]
+    assert rows[1]["drawing"] and not any(r["drawing"] for r in rows[:1] + rows[2:])
+    assert not OD.drawing_missing(body[:1] + [page] + body[1:], "LTV-352T", "SO-4")
+    assert OD.drawing_missing(body, "LTV-352T", "SO-4")             # without that page there is none
+    details = " \nIR43x1 \n \n 14 www.irf.com  (c) 2013 International Rectifier \n \n \nPackage Details  \n \n \n "
+    assert not OD.drawing_missing(body + [details], "IR4301", "PQFN-22-15-4EP")
+
+
+def test_a_long_package_information_document_of_this_package_is_kept():
+    # KTY83 (2026-10-25): NXP's SOD68 package information, 4 pages of text, captioned "Package information" and
+    # "Package outline" for this package; its dimensions are vector art with a table no min/max pattern sees
+    from tests import test_datasheet_batch as TB
+    INFO = "https://maker.example/docs/package-information/SOD68.pdf"
+    hdr = "SOD68\nhermetically sealed glass package; axial leaded; 2 leads\n"
+    legal = ("All information provided in this document is subject to legal disclaimers, and the maker reserves "
+             "the right to change it without notice. Terms of sale apply. ") * 3
+    info = [[hdr + "Package information\n1. Package summary\nTerminal position code A (axial)\n"
+             "Package type descriptive code DO-34\nPackage type industry code DO-34", legal],
+            [hdr + "2. Package outline\nOutline version SOD68, European projection", legal],
+            [hdr + "3. Soldering\nWave soldering profile and handling", legal],
+            [hdr + "4. Legal information", legal]]
+    cl, api = Client(_answer([INFO])), P._reads()
+    files = {P.DS: pdf_lines(P.product_sheet()), INFO: pdf_lines(info)}
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = P._reader(d, cl, files, web_search=True)
+        res = rd.read_now(rd.job("NC3XYZ-1", [(P.DS, "BOM")], "DO-34", maker="Neutrik"))
+        assert res["sidecar"]["route"].get("package_doc") == INFO, res["sidecar"]["pdf"]["attempts"]
+    # the same pages with the outline of ANOTHER package only are still no drawing of this one
+    other = [[p[0].replace("SOD68", "SOD80").replace("DO-34", "DO-213AC"), p[1]] for p in info]
+    cl, api = Client(_answer([INFO])), P._reads()
+    files = {P.DS: pdf_lines(P.product_sheet()), INFO: pdf_lines(other)}
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = P._reader(d, cl, files, web_search=True)
+        res = rd.read_now(rd.job("NC3XYZ-1", [(P.DS, "BOM")], "DO-34", maker="Neutrik"))
+        assert res["sidecar"]["route"].get("package_doc") is None
