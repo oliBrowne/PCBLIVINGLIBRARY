@@ -54,7 +54,7 @@ CONTINUED = re.compile(r"\bcontinued\b|\(cont(?:\.|inued)?\)", re.I)
 THREE_PIN = {"SOT23", "SOT323", "SOT523", "SOT416", "SOT346", "SC59", "SC70", "SC75", "SC89", "TO92", "SOT89"}
 OUTLINE_FAMS = {"SOT", "SOD", "SC", "TO", "DO", "TO252", "TO263"}             # first number names the outline, not pins
 CATS = {
-    "drawing": re.compile(r"package (outline|drawing|dimensions?|information)|outline dimensions?|dimensions shown in|mechanical (data|drawing|"
+    "drawing": re.compile(r"package (outline|drawing|dimensions?|information|details)|outline dimensions?|dimensions shown in|mechanical (data|drawing|"
                           r"dimensions?)|physical dimensions?|shape (&|and) dimensions|case outline|packaging information|"
                           r"dimensions\s*(-|in)\s*(mm|millimet)|chip resistor outlines|package profile|外形尺寸|封装尺寸", re.I),
     "land": re.compile(r"land pattern|board layout|etch and via\s+pattern|"
@@ -69,6 +69,7 @@ CATS = {
                            r"ordering|part number|订购|订货", re.I)}
 TABLE = {"drawing": re.compile(r"\b(min\.?|minimum)\b[\s\S]{0,80}\b(max\.?|maximum)\b", re.I),
          "pinout": re.compile(r"\bpin\s*(no\.?|number|#)|\bno\.\s+name\b|\bname\s+(type|i/o)\b|pin name", re.I)}
+_SPACES = re.compile(r"[ \t\u00a0]{2,}")
 CAPTION = re.compile(r"package\s+(?:name|outline|drawing|dimensions?)|\boutline\b", re.I)
 DSBGA_BOX = re.compile(r"\bD\s*:\s*Max\s*=[\s\S]{0,160}?\bE\s*:\s*Max\s*=[\s\S]{0,160}?\d\.\d+\s*mm,?\s*Min\s*=", re.I)
                                                       # "D: Max = \nE: Max = \n3.036 mm, Min = \n..." (the values may follow)
@@ -635,7 +636,8 @@ def page_scores(texts, part=None, package=None, marks=None):
     boiler = None
     for i, raw in enumerate(texts):
         t = norm_text(raw)
-        s = {c: min(2, len(rx.findall(t))) * (3 if c != "ordering" else 2) for c, rx in CATS.items()}
+        one = _SPACES.sub(" ", t)                     # "OUTLINE  DIMENSIONS": a heading set in spaced type (LTV-352T)
+        s = {c: min(2, len(rx.findall(one))) * (3 if c != "ordering" else 2) for c, rx in CATS.items()}
         for c, rx in TABLE.items():
             if rx.search(t) and (c != "drawing" or (DIM_SYMS.search(t) and re.search(r"\bmm\b|millimet|\binch", t, re.I))):
                 s[c] += 2                             # a dimension table: min/max with A1/D1/E1/b/e and a length unit
