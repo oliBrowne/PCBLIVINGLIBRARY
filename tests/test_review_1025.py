@@ -45,3 +45,41 @@ def test_a_name_on_several_pins_with_its_bank_whole_passes():
     assert D.bank_slips(pins) == []
     pins = [{"num": str(i), "name": f"IO{i}"} for i in range(1, 9)] + [{"num": "9", "name": "IO3"}]   # IO3 twice, no gap
     assert D.bank_slips(pins) == []
+
+
+K555 = [("1", "GND"), ("2", "TR"), ("3", "Q"), ("4", "R"), ("5", "CV"), ("6", "THR"), ("7", "DIS"), ("8", "VCC")]
+
+
+def test_a_short_form_never_credits_another_function_or_a_rail():
+    for ours, ref in (("THRESHOLD", "TR"), ("PROG", "PG"), ("RESET", "RT"), ("SENSE", "SS"), ("Input 12", "I1"),
+                      ("Source 12", "S1"), ("Gate 21", "G2"), ("GND", "GD"), ("PGND", "PD"), ("VBAT", "VT")):
+        assert not S.short_form(ours, ref), (ours, ref)
+    assert not (S.short_form("GND (VCC)", "VCC") and S.short_form("GND (VCC)", "GND"))
+    assert not S.one_of("NC", "FB/NC") and not S.one_of("DNC", "DNC/VCC")
+    swapped = [("1", "GND"), ("2", "THRESHOLD"), ("3", "Q"), ("4", "R"), ("5", "CV"), ("6", "TRIGGER"), ("7", "DIS"),
+               ("8", "VCC")]
+    assert not S.score_symbol(swapped, K555)["symbol_names"]["ok"]
+    ref = [("1", "GD"), ("2", "VCC"), ("3", "IN"), ("4", "GND"), ("5", "OUT")]
+    mine = [("1", "GND"), ("2", "VCC"), ("3", "IN"), ("4", "GND"), ("5", "OUT")]
+    assert S.score_symbol(mine, ref)["symbol_names"]["matched"] == 4          # our GND on the gate drive pin GD
+
+
+def _settle(first, second, first_pins, pins):
+    from ecadlib import crosscheck as CC
+    c = CC.against_read(CC.critical(first), CC.critical(second), first_pins, pins)
+    c.update(source="second read", against="second read (m)")
+    CC._settle_tab([c], first, first_pins)
+    return c
+
+
+def test_the_reads_own_tab_land_never_sets_aside_a_lead_it_may_have_missed():
+    from tests.test_stdparts_tab_package_1023 import C3D02065E as C3D, C3D02065E_PINS as PINS
+    drop = lambda d: {k: v for k, v in d.items() if v is not None}
+    # one terminal more at another pitch and no pin list from the second read: a lead the first read may have missed
+    assert _settle(C3D, drop(dict(C3D, pin_count=4, pitch=1.14)), PINS, [])["status"] == "disagreed"
+    # the first read's symbol has no tab pin: the tab pad would have no net
+    assert _settle(C3D, drop(dict(C3D, package_type="custom", pin_count=2, tab=None)), PINS[:2], PINS)["status"] == \
+        "disagreed"
+    # the maker's land with the tab counted apart by the second read still settles (C3D02065E)
+    assert _settle(C3D, drop(dict(C3D, package_type="custom", pin_count=2, tab=None)), PINS, PINS[:2])["status"] == \
+        "agreed"
