@@ -1709,6 +1709,9 @@ def sanity(spec, review):
 
 
 BANK_NAME = re.compile(r"^([A-Z]+?)_?(\d{1,3})$")
+# supply, ground and reserved names repeat on many pins and skip numbers (an FPGA's VCCO_0 on 20 balls, no VCCO_2):
+# never a bank of channels
+NOT_A_BANK = re.compile(r"^(?:V|AV|DV|PV)|GND|^(?:NC|DNC|NU|RSVD|RES|RESERVED|TP)$")
 
 
 def bank_slips(pins):
@@ -1720,7 +1723,7 @@ def bank_slips(pins):
     bank = defaultdict(list)                          # prefix -> [(number, pin)]
     for p in pins:
         m = BANK_NAME.match(re.sub(r"[\s~{}]", "", str(p.get("name") or "")).upper())
-        if m:
+        if m and not NOT_A_BANK.search(m.group(1)):
             bank[m.group(1)].append((int(m.group(2)), str(p["num"])))
     out = []
     for pre, got in sorted(bank.items()):

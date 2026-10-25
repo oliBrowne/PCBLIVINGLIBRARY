@@ -83,3 +83,10 @@ def test_the_reads_own_tab_land_never_sets_aside_a_lead_it_may_have_missed():
     # the maker's land with the tab counted apart by the second read still settles (C3D02065E)
     assert _settle(C3D, drop(dict(C3D, package_type="custom", pin_count=2, tab=None)), PINS, PINS[:2])["status"] == \
         "agreed"
+
+
+def test_supply_and_ground_names_are_no_bank():
+    from ecadlib import datasheet as D
+    pins = [{"num": f"A{i}", "name": n} for i, n in enumerate(
+        ["VCCO_0", "VCCO_0", "VCCO_1", "VCCO_3", "GND1", "GND1", "GND3", "GND4", "NC", "NC"])]
+    assert D.bank_slips(pins) == []
