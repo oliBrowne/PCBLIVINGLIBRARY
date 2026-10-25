@@ -95,3 +95,18 @@ def test_a_long_document_with_no_drawing_of_the_package_is_skipped():
         assert res["sidecar"]["route"]["package_doc"] == P.DWG
         miss = [a for a in res["sidecar"]["pdf"]["attempts"] if a["url"] == LONG]
         assert miss and "no drawing of the package" in miss[0]["error"], miss
+
+
+def test_a_long_application_note_with_the_land_pattern_is_kept():
+    # Greptile on #186: a long note that shows the recommended land pattern and no package dimension table
+    # (IR4301's land is in AN-1170) is a document worth appending
+    from tests import test_datasheet_batch as TB
+    AN = "https://maker.example/docs/an-land.pdf"
+    note = [["Application Note: board mounting of the NC3XYZ-1", "Handling, reflow profile and cleaning"]] + \
+           [[f"Section {i}: solder joint reliability and inspection", "Thermal cycling results for the series"]
+            for i in range(3)] + [["NC3XYZ-1 recommended land pattern", "Pad 1.30 x 0.80, pitch 5.08, hole 1.3"]]
+    cl, api = Client(_answer([AN])), P._reads(blank_on=2)
+    files = {P.DS: pdf_lines(P.product_sheet()), AN: pdf_lines(note)}
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        res = P._read(P._reader(d, cl, files, web_search=True))
+        assert res["sidecar"]["route"].get("package_doc") == AN, res["sidecar"]["pdf"]["attempts"]

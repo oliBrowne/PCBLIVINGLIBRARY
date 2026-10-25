@@ -3673,10 +3673,12 @@ class Reader:
             if notice:                                # a change notice names the part and its package (M2GL090T)
                 attempts.append({"url": url, "where": where, "error": notice})
                 return None
-            if sum(bool((t or "").strip()) for t in pages or ()) >= LONG_DOC and OD.drawing_missing(pages, part, package):
+            if sum(bool((t or "").strip()) for t in pages or ()) >= LONG_DOC and OD.drawing_missing(pages, part, package) \
+                    and not any(r["land"] and not r["other"] for r in DR.page_scores(pages, part, package)[0]):
                 attempts.append({"url": url, "where": where, "error": f"the PDF at {meta.get('url') or url} has "
                                  f"{len(pages)} pages and no drawing of the package"})
-                return None                           # a pin description or packing document (M2GL090T, KBU4A)
+                return None                           # a pin description or packing document (M2GL090T, KBU4A); a
+                                                      # land pattern page keeps it (IR4301's land is in AN-1170)
             if not OD.names_it(pages, part, codes, own, meta.get("url") or url):
                 attempts.append({"url": url, "where": where,
                                  "error": f"the PDF at {meta.get('url') or url} names neither {part} nor its package"})
