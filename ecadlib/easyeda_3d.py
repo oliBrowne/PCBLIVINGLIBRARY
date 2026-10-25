@@ -10,8 +10,9 @@ place() moves the model so it sits on the footprint the way Altium and KiCad rea
   * c_rotation is applied first (x, then y, then z, about the model's own origin);
   * its x/y bounding box is centred on c_origin, taken relative to the footprint origin (head x/y) with y flipped
     (EasyEDA's canvas is y down, a STEP model y up);
-  * z: an SMD part rests on the board (lowest point at z = the outline's z); a through-hole part keeps the model's own
-    z (its pins go below the board), plus z.
+  * z: the model's lowest point goes to the outline's z. An SMD part has z = 0 and rests on the board; a through-hole
+    part's z is negative, its pins' depth below the board (a 2.54 mm header: z = -3 mm, pins -3 mm, housing 0 to 2.5
+    mm). A through-hole part with z = 0 keeps the model's own z: EasyEDA gave no pin depth to place it by.
 Only 3D CARTESIAN_POINTs move and only 3D DIRECTIONs turn: a rigid move, so radii, lengths and the file's units stay
 as they are, and 2D points (curves in a face's parameter space) are left alone.
 
@@ -154,7 +155,8 @@ def place(text, ref):
     lo, hi = [min(p[i] for p in pts) for i in range(3)], [max(p[i] for p in pts) for i in range(3)]
     tx = ref["origin"][0] / k - (lo[0] + hi[0]) / 2
     ty = ref["origin"][1] / k - (lo[1] + hi[1]) / 2
-    tz = ref.get("z", 0) / k - (0 if ref.get("through_hole") else lo[2])
+    z = ref.get("z", 0) or 0
+    tz = 0.0 if ref.get("through_hole") and not z else z / k - lo[2]      # AD26 2026-10-25: z is where the bottom goes
     move = (tx, ty, tz)
 
     def sub(m):
