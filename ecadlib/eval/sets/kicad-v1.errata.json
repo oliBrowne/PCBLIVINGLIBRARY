@@ -273,6 +273,22 @@
     "why": "onsemi MC34063A-D.PDF (MC34063A, MC33063A, NCV33063A) p2 pin connection figures: 1 Switch Collector, 2 Switch Emitter, 3 Timing Capacitor, 4 GND, 5 Comparator Inverting Input, 6 VCC, 7 Ipk Sense, 8 Driver Collector; the DFN-8 (MN suffix) figure on p2 adds the EP FLAG. The figure prints the pin numbers as one block and the names as another, so the text never ties a name to its number (runner.printed_names cannot credit them). KiCad's Regulator_Switching:MC33063MNTXG abbreviates them as 5 Vfb, 6 Vin, 7 Ipk, 9 PAD.",
     "checked": "2026-10-25"
    }
+  },
+  "IP4234CZ6": {
+   "symbol_names": {
+    "ours": [
+     [
+      "2",
+      "GND"
+     ],
+     [
+      "5",
+      "VCC"
+     ]
+    ],
+    "why": "Nexperia IP4234CZ6.pdf (Product data sheet Rev. 3.0, 31 January 2018) p2 Table 1 Pinning has no symbol column: pin 2 'ground', pin 5 'supply voltage', pins 1/3 and 4/6 'ESD protection I/O channel 1/2'. Ours names pins 2 and 5 GND and VCC, the usual symbols for those descriptions (the sheet's own test conditions use GND and VCC); KiCad's Power_Protection:IP4234CZ6 names them VN and VP. Both are short forms of the same printed descriptions.",
+    "checked": "2026-10-25"
+   }
   }
  }
 }
