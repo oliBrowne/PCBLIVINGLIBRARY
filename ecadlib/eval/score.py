@@ -117,9 +117,10 @@ OVERLINE = dict.fromkeys(map(ord, "\u0305\u0304"))     # a combining overline / 
 NC_RX = re.compile(r"^(NC|DNC|N/C)$")                   # norm_name() of a no-connect pin's name
 # one pin, two spellings (norm_name): the plain ground (a maker's VSS is KiCad's GND, ENS210; a GND exposed pad KiCad's
 # GNDPAD, LTC4060EDHC; AGND, PGND, DGND ... are nets of their own and are not in it), and a regulator's input and output
-# (AP1117's VIN / VOUT, KiCad's VI / VO); unswapped() keeps them apart where a symbol swaps two of them
+# (AP1117's VIN / VOUT, KiCad's VI / VO), and the exposed pad with no net in its name (MC33063MNTXG: ours EP, KiCad's
+# PAD); unswapped() keeps them apart where a symbol swaps two of them
 PLAIN_GROUND = {"GND", "VSS", "GNDPAD"}
-SPELLINGS = (PLAIN_GROUND, {"VIN", "VI"}, {"VOUT", "VO"})
+SPELLINGS = (PLAIN_GROUND, {"VIN", "VI"}, {"VOUT", "VO"}, {"PAD", "EP", "EPAD", "EXPOSEDPAD", "THERMALPAD"})
 
 
 def same_name(ours, ref, groups=SPELLINGS):
@@ -186,6 +187,14 @@ def short_form(ours, ref):
 
 GROUND_RX = re.compile(r"^(?:[ADPS]?GND\w*|[ADP]?VSS\w*|VEE\w*|0V|V-)$")
 SUPPLY_RX = re.compile(r"^(?:[ADP]?VDD\w*|[ADP]?VCC\w*|VBAT\w*|V\+)$")
+
+
+def one_of(ours, ref):
+    """KiCad's name lists the pin's several names joined by "/" and ours is one of them (TPS70345's exposed pad: ours
+    GND, KiCad's GND/HS; VSENSE1/FB1 read as FB1). A leading "/" is an active-low bar, not a second name."""
+    parts = [norm_name(x) for x in str(ref or "").split("/") if x.strip()]
+    o = norm_name(ours)
+    return bool(o) and len(parts) > 1 and o in parts
 
 
 def rail(name):
@@ -308,7 +317,8 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     named = {n: norm_name(s) for n, s in b.items() if norm_name(s) and not re.fullmatch(r"PIN\d+", norm_name(s))}
     if named:
         groups = unswapped([(norm_name(a.get(n)), s) for n, s in named.items()])
-        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, groups) or short_form(a.get(n), b[n])]
+        same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, groups) or short_form(a.get(n), b[n])
+                or one_of(a.get(n), b[n])]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
         moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1   # a name KiCad has on another pin:
