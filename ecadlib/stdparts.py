@@ -6,10 +6,10 @@ part kinds whose pinout is standard, the symbol) offline and deterministically. 
     ecadlib stdparts bench [--kicad DIR] [--fixture F] every table entry against KiCad's official footprint
     ecadlib stdparts coverage BOM [BOM ...]            how many BOM lines this source resolves (no network)
 
-Footprints come only from package_specs/standard.json.gz: 618 packages, each with its KiCad name and library. Their
+Footprints come only from package_specs/standard.json.gz: 623 packages, each with its KiCad name and library. Their
 dimensions are the KiCad footprint generator's size definitions (JEDEC / IPC-SM-782 / manufacturer package drawings,
 built here with footprint_gen's IPC-7351B equations) or, for the packages KiCad draws by hand (SOD, SMA/SMB/SMC, MELF,
-SOT-223, SOT-89, SC-82AB, DO-41, DO-201AD, DPAK/D2PAK, TO-220, TO-92), the published recommended land as a pad table. Every entry was built and
+SOT-223, SOT-89, SC-82AB, DO-34, DO-35, DO-41, DO-201AD, DPAK/D2PAK, TO-220, TO-92), the published recommended land as a pad table. Every entry was built and
 compared with kicad-footprints (pads and courtyard within footprint_bench tolerances) before it went into the table;
 `bench` repeats that check.
 
@@ -22,7 +22,7 @@ Footprint property; then the description and value; then the MPN):
                        Panasonic ERJ-, Vishay CRCW/TNPW, Stackpole RMCF, Bourns CR, KOA RK73, Uni-Royal). Two different
                        sizes from two places (footprint 0603, MPN GRM21 = 0805) is a conflict: nothing is built.
   named packages       SOT-23/-5/-6, SOT-323/353/363, SOT-523, SOT-89, SOD-123(F)/323(F)/523/923/128, SMA/SMB/SMC/SMF
-                       (DO-214), MicroMELF/MiniMELF/MELF, DO-41/DO-201AD (axial), SC-82AB, DPAK/D2PAK (TO-252/263), TO-220 (vertical), TO-92 (inline), and
+                       (DO-214), MicroMELF/MiniMELF/MELF, DO-34/DO-35/DO-41/DO-201AD (axial), SC-82AB, DPAK/D2PAK (TO-252/263), TO-220 (vertical), TO-92 (inline), and
                        SOIC/SO/TSSOP/MSOP/SSOP/QSOP/QFN/DFN/SON/QFP families from the name (pins, body, pitch, exposed pad,
                        KiCad or LCSC style "QFN-32_L5.0-W5.0-P0.50-EP3.5"). The name must give the body: a bare
                        family name (SOIC-8, SO-14, TSSOP-20, SOIC-16W) never resolves, because several bodies share it;
@@ -88,6 +88,10 @@ DIODE_ALIASES = {
     "DO41": "D_DO-41_SOD81_P10.16mm_Horizontal", "DO204AL": "D_DO-41_SOD81_P10.16mm_Horizontal",
     "SOD81": "D_DO-41_SOD81_P10.16mm_Horizontal",       # axial, laid flat with KiCad's 10.16 mm lead bend
     "DO201AD": "D_DO-201AD_P15.24mm_Horizontal", "DO201": "D_DO-201AD_P15.24mm_Horizontal",   # 15.24 mm bend
+    "DO34": "D_DO-34_SOD68_P7.62mm_Horizontal", "DO204AG": "D_DO-34_SOD68_P7.62mm_Horizontal",   # axial glass, laid
+    "SOD68": "D_DO-34_SOD68_P7.62mm_Horizontal",        # flat with KiCad's 7.62 mm bend (KTY83 2026-10-25: NXP prints
+    "DO35": "D_DO-35_SOD27_P7.62mm_Horizontal", "DO204AH": "D_DO-35_SOD27_P7.62mm_Horizontal",   # no hole or bend)
+    "SOD27": "D_DO-35_SOD27_P7.62mm_Horizontal",
     "MICROMELF": "D_MicroMELF",
 }
 AMBIGUOUS = {"SOT233": "KiCad's SOT-23-3 is the 1.6 mm MO-178 body; distributors use SOT-23-3 for TO-236 SOT-23",
@@ -111,6 +115,8 @@ FREE_RE = re.compile(r"(?<![A-Z0-9])(?P<fam>" + "|".join(sorted(FAMILIES, key=le
 POWER_PKG = re.compile(r"Power ?PAK|PowerDI|PowerSO|PowerFLAT|LFPAK|DirectFET|PQFN|\bSO-?8FL|\bWDFN\d|TSDSON|SuperSO|TOLL|\bPDFN", re.I)
 MIL_BODY = {"150": 3.9, "208": 5.3, "209": 5.3, "300": 7.5}
 NO_GO = re.compile(r"\b(horizontal|lying|right[- ]angle|bent)\b", re.I)
+STANDING = re.compile(r"\b(vertical|standing|upright)\b", re.I)      # an axial part on end: not the laid-flat land
+BEND = re.compile(r"(?<![\d.])P?(\d{1,2}(?:\.\d{1,2})?)\s?mm\b|(?<![A-Z0-9])P(\d{1,2}(?:\.\d{1,2})?)(?![\d.])", re.I)
 EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A-Z])|PowerPAD", re.I)
 # KiCad land variants (bigger hand-solder pads, vias in the exposed pad, other mask / pull-back): never the plain land
 LAND_VARIANT = re.compile(r"(?<![A-Za-z])(Hand[_ -]?Solder(?:ing)?|ThermalVias|PullBack|TopTented|Mask\d[\d.]*x[\d.]+mm)(?![A-Za-z])", re.I)
@@ -644,6 +650,19 @@ def identify_tab(read, pins=None):
     return fits[0], f"{label} -> {fits[0]}"
 
 
+def _other_bend(text, name):
+    """Why an axial table land (laid flat at KiCad's bend, 'D_DO-41_SOD81_P10.16mm_Horizontal') is not the one the
+    text names: it says the part stands up, or names another lead bend pitch. None when it fits."""
+    if STANDING.search(text):
+        return f"mounted {STANDING.search(text).group(0).lower()}: the table land is laid flat at one lead bend"
+    pitch = float(re.search(r"_P([\d.]+)mm_", name).group(1))
+    for m in BEND.finditer(text):
+        v = float(m.group(1) or m.group(2))
+        if abs(v - pitch) > 0.01:
+            return f"a {v:g} mm lead bend: the table land is laid flat at the {pitch:g} mm bend"
+    return None
+
+
 BARE_FAMILY = {"SOT23", "TO220", "TO220AB", "TO263", "TO252", "DPAK", "D2PAK", "TO92"}   # in a description: often the family
 
 
@@ -669,6 +688,8 @@ def named_package(text, diode=False, weak=False, kind=None):
             return None, f"{m.group(0).strip()}: a diode package name on a part that is not a diode"
         if name and name.startswith(("TO-220", "TO-92")) and NO_GO.search(str(text)):
             return None, f"{m.group(0).strip()}: horizontal mounting is not the standard footprint"
+        if name and name.endswith("_Horizontal") and _other_bend(str(text), name):
+            return None, f"{m.group(0).strip()}: {_other_bend(str(text), name)}"
         if name and EP_WORD.search(str(text)):         # 'SOT-23-5-EP': the table's package has no exposed pad
             return None, f"{m.group(0).strip()} with an exposed pad: not the standard package (no pad under the body)"
         if name and name in packages():

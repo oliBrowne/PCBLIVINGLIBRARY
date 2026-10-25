@@ -165,7 +165,7 @@ python3 -m tests.test_stdparts
 ```
 
 The librarian's `standard` source (default order `kicad, easyeda, standard, datasheet`) builds parts whose package is
-fully set by standard data, with no API call. Footprints come only from `package_specs/standard.json.gz`: 618 KiCad
+fully set by standard data, with no API call. Footprints come only from `package_specs/standard.json.gz`: 623 KiCad
 generic packages (510 gullwing / no-lead from the KiCad footprint generator's JEDEC size files, built with
 `footprint_gen`'s IPC-7351B equations; 74 R/C/L/D/LED/fuse chips; 31 hand-drawn ones such as SOD-123, SMA/SMB/SMC,
 MELF, SOT-223, SOT-89, DPAK/D2PAK, TO-220 vertical, TO-92 inline, stored as KiCad's recommended land as a pad table).
