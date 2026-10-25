@@ -2726,7 +2726,20 @@ OTHER_DOC = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\b
 POINTER = re.compile(r"\b(?:available|see|refer|visit|download|for\s+more|included)\b", re.I)   # a banner or link, not a title
 
 
-def not_a_datasheet(texts):
+NOTICE = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|\bPCN\b|\bnotification\s+of\b|"
+                    r"\bdeclaration\s+letter\b|\bend[- ]of[- ]life\b|\blast[- ]time\s+buy\b", re.I)
+
+
+def a_notice(texts):
+    """The reason when a PDF opens as a notice or a letter (NOTICE: a change, discontinuation or end-of-life notice), else
+    None: never a package document, though it names the part and its package (live benchmark 2026-10-23: the package
+    search found change notices for M2GL090T-FG484 and IR4301). An application note or user guide is not one here:
+    it can hold the drawing or the land (IR4301's land is in AN-1170)."""
+    why = not_a_datasheet(texts, NOTICE)
+    return why and why.replace("not a datasheet", "a notice, not a package drawing")
+
+
+def not_a_datasheet(texts, rx=OTHER_DOC):
     """The reason when a PDF's first page opens as another kind of document (a heading in its first 400 characters: a
     change or discontinuation notice, a letter, a development board's sheet, a user guide or application note), else
     None. A heading is a line that starts with the phrase, or a short line (60 characters or less) that holds it; a
@@ -2736,7 +2749,7 @@ def not_a_datasheet(texts):
     first = (list(texts or []) or [""])[0] or ""
     for line in first[:400].splitlines():
         line = line.strip()
-        m = OTHER_DOC.search(line)
+        m = rx.search(line)
         if m and len(line) <= 90 and (m.start() == 0 or len(line) <= 60) and not POINTER.search(line):
             return f"the PDF opens as \"{m.group()}\", not a datasheet"
     return None
@@ -3648,7 +3661,12 @@ class Reader:
             if hashlib.sha256(b).hexdigest() == prov.get("sha256"):
                 attempts.append({"url": url, "where": where, "error": "the datasheet itself"})
                 return None
-            if not OD.names_it(DR.page_texts(b), part, codes, own, meta.get("url") or url):
+            pages = DR.page_texts(b)
+            notice = a_notice(pages)
+            if notice:                                # a change notice names the part and its package (M2GL090T)
+                attempts.append({"url": url, "where": where, "error": notice})
+                return None
+            if not OD.names_it(pages, part, codes, own, meta.get("url") or url):
                 attempts.append({"url": url, "where": where,
                                  "error": f"the PDF at {meta.get('url') or url} names neither {part} nor its package"})
                 return None

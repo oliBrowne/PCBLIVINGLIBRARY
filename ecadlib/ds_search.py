@@ -62,7 +62,8 @@ Its datasheet has no drawing of this package{refs}. Makers publish the drawing a
 information or packaging specification document, a case outline, a mechanical or product drawing, or a PCB layout
 drawing (connectors). I need direct links to a PDF that gives this package's dimensions (body, pitch, leads, balls or
 pins and holes) and, when the maker publishes one, its recommended PCB land pattern. Prefer the manufacturer's own site;
-a major distributor's copy is the next best. Never give a datasheet aggregator or mirror site.
+a major distributor's copy is the next best. Never give a datasheet aggregator or mirror site, and never a product
+change notice or discontinuation notice: those name the package but hold no drawing.
 
 Answer with one line of JSON and nothing after it:
 {{"urls": ["<best direct PDF link>", "<second choice>", ...]}}"""
