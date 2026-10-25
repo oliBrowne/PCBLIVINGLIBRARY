@@ -147,8 +147,9 @@ def norm_name(s):
 
 
 def _abbrev(word, short):
-    """short is word cut down: its first letter, then letters of it in order (HS for HEATSINK, SW for SWITCH)."""
-    if not short or not word or short[0] != word[0]:
+    """short is word cut down: its first letter, then letters of it in order (HS for HEATSINK, SW for SWITCH). The
+    numbers stay whole: A3 is no short form of AIN13, nor I1 of IN10 (another pin of the same bank)."""
+    if not short or not word or short[0] != word[0] or re.findall(r"\d+", short) != re.findall(r"\d+", word):
         return False
     it = iter(word)
     return all(c in it for c in short)
@@ -160,29 +161,37 @@ def _from_words(words, short):
     if not words:
         return not short
     w, rest = words[0], words[1:]
-    digits = re.search(r"\d+$", w)
-    cuts = [w[:i] for i in range(len(w), 0, -1)] + ([digits.group()] if digits else [])
+    digits = re.search(r"\d+$", w)                   # a number stays whole: "Input 12" is no I1, "Gate 21" no G2
+    stem, num = (w[:digits.start()], digits.group()) if digits else (w, "")
+    cuts = [stem[:i] + num for i in range(len(stem), 0 if not num else -1, -1)]
     return any(short.startswith(c) and _from_words(rest, short[len(c):]) for c in cuts)
 
 
-def short_form(ours, ref):
+def short_form(ours, ref, _part=False):
     """KiCad's name a short form of the maker's spelled-out one that our symbol carries (MC33063 "Switch Collector" /
     SwC, TPS70345 "GND/HEATSINK" / GND/HS, AP1117 "Adj (GND)" / GND, BCV61 "collector TR2" / C2). Never the same
     length: a name of the same size is another name, not a short form of it."""
     raw, r = str(ours or "").upper(), norm_name(ref)
-    if not raw or not r or (rail(r) and rail(r) != rail(norm_name(raw)) and "(" not in raw and ";" not in raw):
-        return False                                  # VSS is ground: letters of VSENSE in order are no short form
+    if not raw or not r:
+        return False
     parts = [x.strip() for x in re.split(r"[();]", raw) if x.strip()]
     if len(parts) > 1:                                # "Adj (GND)": the name the datasheet gives in brackets; BCV61
-        return any(norm_name(x) == r or short_form(x, ref) for x in parts)   # "collector TR2; base TR1 and TR2"
-    if len(norm_name(raw)) <= len(r):
-        return False
+        if len({rail(norm_name(x)) for x in parts} - {None}) > 1:   # "collector TR2; base TR1 and TR2". Ground and
+            return False                              # supply in one name ("GND (VCC)") is no one pin's name
+        return any(norm_name(x) == r or short_form(x, ref, _part=True) for x in parts)
+    if rail(r) != rail(norm_name(raw)):               # VSS is ground: letters of VSENSE in order are no short form, nor
+        return False                                  # is our GND one of KiCad's gate drive GD (either side a rail)
+    if len(norm_name(raw)) <= len(r) or re.findall(r"\d+", raw) != re.findall(r"\d+", str(ref).upper()):
+        return False                                  # the numbers stay whole (AIN13 is no A3)
     rt, ot = re.split(r"[/]", str(ref).upper()), re.split(r"[/]", raw)
-    if len(rt) > 1 and len(rt) == len(ot):            # GND/HS: part by part
-        return all(norm_name(x) == norm_name(y) or short_form(x, y) for x, y in zip(ot, rt))
+    if len(rt) > 1 and len(rt) == len(ot):            # GND/HS: part by part, each anchored by the others
+        return all(norm_name(x) == norm_name(y) or short_form(x, y, _part=True) for x, y in zip(ot, rt))
     words = [w for w in re.split(r"[\s_-]+", raw) if w]
     one = norm_name(raw)                              # one word: letters from across it (HS), not just its start (IN is
-    return _from_words(words, r) if len(words) > 1 else _abbrev(one, r) and not one.startswith(r)   # not INHIBIT)
+    if len(words) > 1:                                # not INHIBIT). Standing alone a two-letter cut of one word is too
+        return _from_words(words, r)                  # loose (THRESHOLD / TR, RESET / RT, SENSE / SS, PROG / PG): it
+    return (_part or len(r) > 2 or any(c.isdigit() for c in r)) and _abbrev(one, r) and not one.startswith(r)   # counts
+    # beside a name that agrees, or with its number (AIN3 / A3)
 
 
 GROUND_RX = re.compile(r"^(?:[ADPS]?GND\w*|[ADP]?VSS\w*|VEE\w*|0V|V-)$")
@@ -194,10 +203,10 @@ def one_of(ours, ref):
     GND, KiCad's GND/HS; VSENSE1/FB1 read as FB1). A leading "/" is an active-low bar, not a second name. One
     name spelled with a slash is not two (Greptile #184: N/C is no-connect, not N or C; I/O is not I or O): each
     part must be a name of two letters or more."""
-    if NC_RX.match(norm_name(ref)):
+    o = norm_name(ours)
+    if NC_RX.match(norm_name(ref)) or NC_RX.match(o):  # ours NC on KiCad's FB/NC: a pin left open that may be live
         return False
     parts = [norm_name(x) for x in str(ref or "").split("/") if x.strip()]
-    o = norm_name(ours)
     return bool(o) and len(parts) > 1 and all(len(x) > 1 for x in parts) and o in parts
 
 

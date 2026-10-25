@@ -1708,6 +1708,34 @@ def sanity(spec, review):
     review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
 
 
+BANK_NAME = re.compile(r"^([A-Z]+?)_?(\d{1,3})$")
+
+
+def bank_slips(pins):
+    """A numbered bank (AIN0..AIN15, IN1..IN8) where one name sits on two pins and the bank misses a number in its run:
+    the read put a channel on another channel's pin (AIN13 on pin 5, where the table has AIN4), which builds a symbol
+    wired to the wrong channel. A name on several pins with no gap in its bank (LX1 on pins 2 and 3 of a dual buck) is
+    the maker's and passes. -> "symbol:" lines (a failed read: it is read again or held, never built)."""
+    from collections import defaultdict
+    bank = defaultdict(list)                          # prefix -> [(number, pin)]
+    for p in pins:
+        m = BANK_NAME.match(re.sub(r"[\s~{}]", "", str(p.get("name") or "")).upper())
+        if m:
+            bank[m.group(1)].append((int(m.group(2)), str(p["num"])))
+    out = []
+    for pre, got in sorted(bank.items()):
+        nums = [k for k, _ in got]
+        if len(set(nums)) < 3:                        # too few to call it a bank
+            continue
+        dup = sorted({k for k in nums if nums.count(k) > 1})
+        gap = sorted(set(range(min(nums), max(nums) + 1)) - set(nums))
+        if dup and gap:
+            on = "; ".join(f"{pre}{k} on pins {', '.join(n for j, n in got if j == k)}" for k in dup)
+            out.append(f"symbol: {on}, and the {pre} bank has no {', '.join(f'{pre}{k}' for k in gap)}: a channel "
+                       "read onto another channel's pin (check the pin table)")
+    return out
+
+
 def check_pins(spec, ext, review):
     n, pins, rows = spec.get("pin_count"), ext["pins"], ext["pin_table"]["rows"]
     nums = [p["num"] for p in pins]
@@ -1717,6 +1745,7 @@ def check_pins(spec, ext, review):
     for p in pins:
         if not p["name"].strip() or len(p["name"]) > 40 or not p["name"].isprintable():
             review.append(f"symbol: pin {p['num']} has an unusable name {p['name'][:50]!r}")
+    review.extend(bank_slips(pins))
     if spec.get("package_type") == "bga" and spec.get("rows") and spec.get("cols"):
         try:                                          # the balls footprint_gen will make (rows/cols, depopulated, ball_map)
             from . import footprint_adv as FA

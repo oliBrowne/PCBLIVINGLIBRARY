@@ -791,26 +791,31 @@ def _settle_tab(checks, spec, pins=None):
     else:
         return None
 
-    def counting(d):
+    def counting(d, c):
         f = d["field"]
         if f == "has_ep":
             return True
         if f == "package_type":                       # the tab land is a pad table: gullwing or custom builds the same
             return {d["first"], d["second"]} <= {"gullwing", "custom"}
-        if f == "pin_count":
+        if f == "pin_count":                          # the read's own land: no table vouches for the leads, so one
+            if not name and "pins" not in c.get("compared", ()):   # pin more is the tab only where the pin lists
+                return False                          # were compared (else a lead the read missed would build)
             try:
                 return abs(int(d["first"]) - int(d["second"])) == 1
             except (TypeError, ValueError):
                 return False
         if f == "pins" and not d.get("note"):
-            extra = [n.strip() for side in (d["first"], d["second"]) for m in [ONLY_HERE.search(str(side))] if m
-                     for n in m.group(1).split(",")]
-            # a table land has no pad for the tab's own number; the read's own land has one for every lead and the
-            # tab, so only the tab's number may be the one pin a source leaves out (any other is a lead in doubt)
-            return len(extra) == 1 and (extra[0] not in pads if name else extra[0] == str(spec["tab"].get("number")))
+            if name:
+                extra = [n.strip() for side in (d["first"], d["second"]) for m in [ONLY_HERE.search(str(side))] if m
+                         for n in m.group(1).split(",")]
+                return len(extra) == 1 and extra[0] not in pads   # a table land has no pad for the tab's own number
+            # the read's own land has a pad for every lead and the tab: only the tab may be the one pin the second
+            # source leaves out, and the read's symbol must have it (else the tab pad would have no pin and no net)
+            ours = [n.strip() for m in [ONLY_HERE.search(str(d["first"]))] if m for n in m.group(1).split(",")]
+            return ours == [str(spec["tab"].get("number"))] and not ONLY_HERE.search(str(d["second"]))
         return f in ("body_length", "body_width") and SWAPPED in (d.get("note") or "")
     bad = [c for c in checks if c["status"] == "disagreed"]
-    if not all(c["disagreed"] and all(counting(d) for d in c["disagreed"]) for c in bad):
+    if not all(c["disagreed"] and all(counting(d, c) for d in c["disagreed"]) for c in bad):
         return None
     for c in bad:
         moved = "; ".join(f"{LABEL.get(d['field'], d['field'])} {d['first']} vs {d['second']}" for d in c["disagreed"])

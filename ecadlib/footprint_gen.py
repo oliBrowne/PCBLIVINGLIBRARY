@@ -312,14 +312,18 @@ def land_short(spec):
     pads = [("pin 1 pad", l1, w1, pc + (pl - l1) / 2, sx)] if (l1, w1) != (pl, pw) else []
     pads += [("row pads" if ntb else "pads", pl, pw, pc, sx)] + ([("top/bottom row pads", pl, pw, pcy, sy)] if ntb else [])
     out, tol = [], 0.05                               # eval.score TOL["pos"]
+    bare = not T and land_sizes_leads(spec)           # a gullwing built from the maker's land with no foot read: the tip
+                                                      # still bounds its pads (a misread land would otherwise build)
     for what, l, w, c, span in pads:
         why = []
         if b and w < b[0] - 1e-9:
             why.append(f"{w:g} mm wide, narrower than terminal_width min {b[0]:g}")
-        if span and T and c + l / 2 < span[0] / 2 - tol:
+        if span and (T or bare) and c + l / 2 < span[0] / 2 - tol:
             why.append(f"outer end at {c + l / 2:g} mm, short of the lead tip at {span[0] / 2:g}")
         if span and T and c - l / 2 > span[2] / 2 - T[0] + tol:
             why.append(f"inner end at {c - l / 2:g} mm, past the shortest foot's heel at {span[2] / 2 - T[0]:g}")
+        elif span and bare and c - l / 2 > span[2] / 2 - tol:
+            why.append(f"inner end at {c - l / 2:g} mm, past the lead tip at {span[2] / 2:g}, so no lead is under it")
         if why:
             out.append(f"land pattern: the {what} ({l:g} x {w:g} mm at {c:g}) would not solder the lead read from the "
                        f"same drawing: {'; '.join(why)} (check land pad_length / pad_width / pad_center"
