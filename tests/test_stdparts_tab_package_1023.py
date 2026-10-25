@@ -268,3 +268,54 @@ def test_the_lfpak_lands_match_kicads():
         ref = refs[f"Package_TO_SOT_SMD:{n}"]
         res = S.score_footprint(mine, ref)
         assert res["pads"]["ok"] and res["courtyard"]["ok"], (n, res)
+
+
+# ---------------------------------------------------------------- the read's own tab land (benchmark 2026-10-25)
+C3D02065E = {"name": "TO-252-2", "package_type": "gullwing", "pin_count": 3,
+             "body_length": {"min": 6.35, "max": 6.73}, "body_width": {"min": 5.867, "max": 6.248},
+             "lead_span": {"min": 9.652, "max": 10.414}, "terminal_length": {"min": 1.245, "max": 1.445},
+             "terminal_width": {"min": 0.64, "max": 0.88}, "height_max": 2.388, "polarized": True,
+             "pin_positions": [{"number": 1, "side": "L", "offset": -2.27}, {"number": 2, "side": "L", "offset": 2.27}],
+             "tab": {"number": 3, "side": "R", "offset": 0, "width": {"min": 5.004, "max": 5.6}},
+             "land": {"pad_length": 2.0, "pad_width": 1.3, "pad_center": 3.2125,
+                      "tab_length": 5.85, "tab_width": 5.6, "tab_center": 3.2125}}
+C3D02065E_PINS = [("1", "CATHODE"), ("2", "ANODE"), ("3", "CATHODE")]
+
+
+def test_a_read_with_the_makers_lead_and_tab_land_settles_how_the_tab_is_counted():
+    # Wolfspeed numbers the tab 3 (no checked tab land does); the second read calls it custom with 2 pins
+    second = _second(C3D02065E, package_type="custom", pin_count=2, tab=None, lead_span=None)
+    name, c = _settle(C3D02065E, second, C3D02065E_PINS, C3D02065E_PINS)
+    assert name is None and c["status"] == "agreed" and c["settled"] == "maker land", c
+    assert "maker's land for the leads and the tab" in c["tie_breaks"][-1]
+
+
+def test_without_the_whole_tab_land_or_with_another_difference_it_still_holds():
+    second = _second(C3D02065E, package_type="custom", pin_count=2, tab=None, lead_span=None)
+    for land in ({"pad_length": 2.0, "pad_width": 1.3, "pad_center": 3.2125}, None,
+                 dict(C3D02065E["land"], tab_width=0)):
+        s = dict(C3D02065E, land=land)
+        name, c = _settle(s, second, C3D02065E_PINS, C3D02065E_PINS)
+        assert c["status"] == "disagreed", (land, c)
+    name, c = _settle(C3D02065E, dict(second, pitch=2.0, body_length={"min": 9.0, "max": 9.5}),
+                      C3D02065E_PINS, C3D02065E_PINS)
+    assert c["status"] == "disagreed", c
+    name, c = _settle(C3D02065E, second, C3D02065E_PINS, [("1", "ANODE"), ("2", "CATHODE"), ("3", "CATHODE")])  # swapped
+    assert c["status"] == "disagreed", c
+
+
+def test_the_reads_own_land_never_settles_an_exposed_pad_or_a_lead_in_doubt():
+    # Greptile #185: the read's land builds what the read gives, so an exposed pad only the first read has, or a pin
+    # number other than the tab's that one source leaves out, would change copper: still held
+    ep = {"length": {"min": 4.0, "max": 4.4}, "width": {"min": 3.0, "max": 3.4}}
+    first = dict(C3D02065E, exposed_pad=ep)
+    name, c = _settle(first, _second(C3D02065E, package_type="custom", pin_count=2, tab=None, lead_span=None),
+                      C3D02065E_PINS, C3D02065E_PINS)
+    assert c["status"] == "disagreed", c
+    name, c = _settle(C3D02065E, _second(C3D02065E, package_type="custom", tab=None, lead_span=None),
+                      C3D02065E_PINS, C3D02065E_PINS + [("4", "NC")])
+    assert c["status"] == "disagreed", c
+    # the second read calling the tab an exposed pad still settles
+    name, c = _settle(C3D02065E, _second(C3D02065E, tab=None, exposed_pad=ep, pin_count=2), C3D02065E_PINS,
+                      C3D02065E_PINS[:2])
+    assert c["status"] == "agreed" and c["settled"] == "maker land", c
