@@ -803,7 +803,9 @@ def _settle_tab(checks, spec, pins=None):
         if f == "pins" and not d.get("note"):
             extra = [n.strip() for side in (d["first"], d["second"]) for m in [ONLY_HERE.search(str(side))] if m
                      for n in m.group(1).split(",")]
-            return len(extra) == 1 and extra[0] not in pads
+            # a table land has no pad for the tab's own number; the read's own land has one for every lead and the
+            # tab, so only the tab's number may be the one pin a source leaves out (any other is a lead in doubt)
+            return len(extra) == 1 and (extra[0] not in pads if name else extra[0] == str(spec["tab"].get("number")))
         return f in ("body_length", "body_width") and SWAPPED in (d.get("note") or "")
     bad = [c for c in checks if c["status"] == "disagreed"]
     if not all(c["disagreed"] and all(counting(d) for d in c["disagreed"]) for c in bad):
@@ -821,11 +823,13 @@ def _settle_tab(checks, spec, pins=None):
 
 def own_tab_land(spec):
     """True when a tab package's read carries the maker's land for its leads and its tab, every size a number > 0, and
-    places its leads: footprint_gen builds that land as read, whatever number the tab carries."""
+    places its leads: footprint_gen builds that land as read, whatever number the tab carries. A read that also gives
+    an exposed pad would build it beside the tab (copper the counting set-aside cannot vouch for), so it is not one."""
     land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
     keys = ("pad_length", "pad_width", "pad_center", "tab_length", "tab_width", "tab_center")
     return bool(isinstance(spec.get("tab"), dict) and spec["tab"].get("number") is not None and spec.get("pin_positions")
-                and not spec.get("pad_table") and all(isinstance(land.get(k), (int, float)) and land[k] > 0 for k in keys))
+                and not spec.get("pad_table") and not spec.get("exposed_pad")
+                and all(isinstance(land.get(k), (int, float)) and land[k] > 0 for k in keys))
 
 
 def _self(c):

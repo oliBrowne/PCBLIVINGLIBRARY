@@ -302,3 +302,20 @@ def test_without_the_whole_tab_land_or_with_another_difference_it_still_holds():
     assert c["status"] == "disagreed", c
     name, c = _settle(C3D02065E, second, C3D02065E_PINS, [("1", "ANODE"), ("2", "CATHODE"), ("3", "CATHODE")])  # swapped
     assert c["status"] == "disagreed", c
+
+
+def test_the_reads_own_land_never_settles_an_exposed_pad_or_a_lead_in_doubt():
+    # Greptile #185: the read's land builds what the read gives, so an exposed pad only the first read has, or a pin
+    # number other than the tab's that one source leaves out, would change copper: still held
+    ep = {"length": {"min": 4.0, "max": 4.4}, "width": {"min": 3.0, "max": 3.4}}
+    first = dict(C3D02065E, exposed_pad=ep)
+    name, c = _settle(first, _second(C3D02065E, package_type="custom", pin_count=2, tab=None, lead_span=None),
+                      C3D02065E_PINS, C3D02065E_PINS)
+    assert c["status"] == "disagreed", c
+    name, c = _settle(C3D02065E, _second(C3D02065E, package_type="custom", tab=None, lead_span=None),
+                      C3D02065E_PINS, C3D02065E_PINS + [("4", "NC")])
+    assert c["status"] == "disagreed", c
+    # the second read calling the tab an exposed pad still settles
+    name, c = _settle(C3D02065E, _second(C3D02065E, tab=None, exposed_pad=ep, pin_count=2), C3D02065E_PINS,
+                      C3D02065E_PINS[:2])
+    assert c["status"] == "agreed" and c["settled"] == "maker land", c
