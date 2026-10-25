@@ -169,8 +169,8 @@ def short_form(ours, ref):
     SwC, TPS70345 "GND/HEATSINK" / GND/HS, AP1117 "Adj (GND)" / GND, BCV61 "collector TR2" / C2). Never the same
     length: a name of the same size is another name, not a short form of it."""
     raw, r = str(ours or "").upper(), norm_name(ref)
-    if not raw or not r:
-        return False
+    if not raw or not r or (rail(r) and rail(r) != rail(norm_name(raw)) and "(" not in raw and ";" not in raw):
+        return False                                  # VSS is ground: letters of VSENSE in order are no short form
     parts = [x.strip() for x in re.split(r"[();]", raw) if x.strip()]
     if len(parts) > 1:                                # "Adj (GND)": the name the datasheet gives in brackets; BCV61
         return any(norm_name(x) == r or short_form(x, ref) for x in parts)   # "collector TR2; base TR1 and TR2"

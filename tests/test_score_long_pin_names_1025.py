@@ -26,3 +26,10 @@ def test_another_name_or_a_swap_still_fails():
     assert not names(["INHIBIT", "IN", "OUT"], ["NC", "IN", "OUT"])["ok"]
     assert not names(["INHIBIT", "VCC", "OUT"], ["IN", "VCC", "OUT"])["ok"]            # a start is no short form
     assert not names(["Switch Emitter", "Switch Collector", "TC"], ["SwC", "SwE", "TC"])["ok"]   # swapped long names
+
+
+def test_letters_of_another_pin_in_order_are_no_short_form():
+    # Greptile #183: VSS sits in VSENSE's letters, but voltage sense is not ground
+    assert not S.short_form("VSENSE", "VSS")
+    assert not names(["VSENSE", "VDD", "OUT"], ["VSS", "VDD", "OUT"])["ok"]
+    assert not S.short_form("VCCSENSE", "VCC") and not S.short_form("VOUTSENSE", "VSS")

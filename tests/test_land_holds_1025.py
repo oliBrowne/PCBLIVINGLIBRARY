@@ -29,12 +29,29 @@ def so20(ep_across, ep_along):
 def test_a_thermal_land_as_large_as_the_body_is_held():
     line = D.thermal_land_body_sized(so20(7.59, 12.95))
     assert line and line.startswith("no footprint:") and "7.59" in line and "body" in line, line
-    assert D.thermal_land_body_sized(so20(12.95, 7.59))            # either way round
+    assert D.thermal_land_body_sized(so20(12.95, 7.59))            # read the other way round: across is the body length
     assert D.thermal_land_body_sized(dict(so20(6.0, 13.0), package_type="qfn"))
 
 
 def test_a_thermal_land_inside_the_body_builds():
     assert D.thermal_land_body_sized(so20(6.045, 12.09)) is None    # KiCad's (TI's) SO-20 PowerPAD land
+    # Greptile #183: along the rows of a two-row package no lead pad is in the way: TLC5951DAP's TI land 5.2 x 12.5
+    # under a 12.4-12.6 mm HTSSOP-38 body builds
+    tlc = dict(so20(5.2, 12.5), pin_count=38, pitch=0.65, body_width={"min": 6.0, "max": 6.2},
+               body_length={"min": 12.4, "max": 12.6})
+    assert D.thermal_land_body_sized(tlc) is None
+    # a quad package has pads on all four sides, so either axis as large as the body is held
+    assert D.thermal_land_body_sized(dict(tlc, package_type="qfp", body_width={"min": 12.4, "max": 12.6}, land={
+        "ep_across": 5.2, "ep_along": 12.5}))
     assert D.thermal_land_body_sized(so20(None, None)) is None
     assert D.thermal_land_body_sized({k: v for k, v in so20(7.59, 12.95).items() if k != "body_width"}) is None
     assert D.thermal_land_body_sized(dict(so20(7.59, 12.95), land=None)) is None
+
+
+def test_a_mounting_pad_page_is_picked_for_the_read():
+    # Greptile #183: the land page has to reach the read, not only be known once it was sent
+    texts = ["AQY282GS PhotoMOS relay SOP 4-pin", "Absolute maximum ratings 60 V 0.5 A", "Electrical characteristics",
+             "Package outline dimensions (Unit: mm) 4.4 2.54 6.8", "Switching time 0.5 ms 0.2 ms",
+             "Reference data 25 C 85 C", "\n".join(MOUNTING), "Packing format tape 12 mm"]
+    got, why = DR.pick_pages(texts, 3, "AQY282GS", "SOP-4")
+    assert 7 in got, (got, why)

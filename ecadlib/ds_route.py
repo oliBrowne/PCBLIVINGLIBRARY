@@ -61,7 +61,8 @@ CATS = {
                        r"thermal (?:pad areas?|lands?)\b(?=[\s\S]{0,80}?\d\s*(?:mm|mils?)?\s*[x×]\s*\d)|"   # PowerPAD lands in
                        # prose, with a size ("Thermal Land 299 mils x 510 mils", OPA569DWP p19), not layout advice
                        r"recommended (footprint|land|pcb|solder|pad)|(suggested|recommended) pad layout|"
-                       r"soldering footprint|solder lands|\bfootprint\b|pad layout|soldering pad|焊盘", re.I),
+                       r"soldering footprint|solder lands|\bfootprint\b|pad layout|soldering pad|焊盘|"
+                       r"recommended\s+(?:pcb\s+)?mounting\s+pads?", re.I),   # Panasonic (AQY282GS)
     "pinout": re.compile(r"pin (configurations?|functions?|descriptions?|assignments?|definitions?)|pinning information|"
                          r"\bpinouts?\b|terminal functions?|\(top view\)|top view|引脚", re.I),
     "ordering": re.compile(r"ordering information|order(ing)? code|orderable|package option addendum|device comparison|"
