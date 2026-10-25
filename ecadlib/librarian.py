@@ -890,9 +890,14 @@ class Run:
                 std = (pkg, found, f"the datasheet prints its own land (page {pages}) but the read did not return it")
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
-            sp = SP.spec(pkg)
+            ren = SP.tab_renumber(res["spec"], pkg, [(q["num"], q["name"]) for q in (res.get("symbol") or {}).get("pins") or []])
+            sp = SP.spec_renumbered(pkg, ren)
             res = drop_joined_tab(res, sp, st)
-            text, _ = SP.build(pkg, RU.density_for(sp, self.rules))
+            text, _ = SP.build_renumbered(pkg, ren, RU.density_for(sp, self.rules))
+            if ren:                                   # a cut N.C. lead's number on the table's tab (BD33FC0FP)
+                (old, new), = ren.items()
+                st["review"].append(f"tab: the datasheet numbers the tab {new}, and lead {old} is cut (N.C.); the land "
+                                    f"numbers the tab {old}, so it was numbered {new} (check the pin table)")
             hs = res["spec"].get("height_max") and "datasheet height_max" or sp.get("height_max") and "standard package table"
             h = F.dim((res["spec"] if hs == "datasheet height_max" else sp)["height_max"])[2] if hs else None   # this part's own height first
             need_pins()

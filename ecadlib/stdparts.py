@@ -545,6 +545,45 @@ def tab_joins(read, pins):
     return same[0] if len(same) == 1 else None
 
 
+CUT_NC = re.compile(r"^(?:n\.?\s*c\.?|n/c|no\s*connect(?:ion)?)$", re.I)
+
+
+def _cut_lead(read, pins, t, ys):
+    """The table land's tab number t is a lead the read's part has cut: the read places no lead t, its pin table lists
+    t as N.C. and the tab under a number of its own with a net, which is no pad of the land (BD33FC0FP: ROHM TO252-3
+    "2 N.C.", FIN GND numbered 4; KiCad's TO-252-2 numbers the tab 2). The land is the same copper, the tab under the
+    read's number."""
+    tab = read.get("tab") if isinstance(read.get("tab"), dict) else {}
+    leads = {str(p.get("number")) for p in read.get("pin_positions") or [] if isinstance(p, dict)}
+    names = {str(n): str(s or "").strip() for n, s in pins or []}
+    no = str(tab.get("number"))
+    return bool(tab) and t != no and t not in ys and t not in leads and no not in ys and no not in leads \
+        and bool(CUT_NC.match(names.get(t, "-"))) and bool(names.get(no)) and not CUT_NC.match(names[no])
+
+
+def tab_renumber(read, name, pins=None):
+    """{the land's tab number: the read's} when the checked tab land `name` numbers the tab as a lead the read's part
+    has cut (_cut_lead), else {}."""
+    e = _tab_entry(name) if name in packages() else None
+    if not e or not isinstance(read.get("tab"), dict):
+        return {}
+    return {e[0]: str(read["tab"]["number"])} if _cut_lead(read, pins, e[0], e[1]) else {}
+
+
+def spec_renumbered(name, renumber):
+    """spec(name) with its pads renumbered ({old: new}, tab_renumber)."""
+    s = spec(name)
+    for p in (s.get("pad_table") or {}).get("pads") or []:
+        if str(p.get("number")) in renumber:
+            p["number"] = renumber[str(p["number"])]
+    return s
+
+
+def build_renumbered(name, renumber, density=None):
+    """build(name) with its pads renumbered ({old: new}, tab_renumber)."""
+    return F.build(spec_renumbered(name, renumber), density) if renumber else build(name, density)
+
+
 def identify_tab(read, pins=None):
     """A datasheet read of a power package with a tab (DPAK / D2PAK / SOT-223 / LFPAK: gullwing with a tab and pin_positions)
     -> (table name, how) when exactly one of the table's hand-drawn tab lands fits it, else (None, why). It fits when
@@ -554,7 +593,9 @@ def identify_tab(read, pins=None):
     only allowed when it carries the tab's number and the name counts it (TO-252-5_TabPin3: five leads by its name,
     the read gives 1 2 4 5 and tab 3). The builder's tab is the exposed tab only (IPC from the lead span); a tab land
     runs under the body, so the checked land of the package the read names is the footprint. pins (the read's pin
-    table): a tab numbered on its own but on one lead's net may take that lead's number (tab_joins)."""
+    table): a tab numbered on its own but on one lead's net may take that lead's number (tab_joins); a tab numbered
+    past a cut N.C. lead fits the land that numbers the tab as that lead, built with the read's number (_cut_lead,
+    tab_renumber)."""
     if read.get("package_type") != "gullwing" or not isinstance(read.get("tab"), dict):
         return None, "not a gullwing read with a tab"
     said = " ".join(str(read.get(k) or "") for k in ("name", "description", "drawing")).upper()
@@ -582,7 +623,9 @@ def identify_tab(read, pins=None):
             continue
         t, ys, length = e
         n_leads = counted if counted is not None else len(leads)
-        if t not in (tab_no, join) or len(ys) != n_leads or not set(leads) <= set(ys) or set(ys) - set(leads) - {t}:
+        cut = t not in (tab_no, join) and _cut_lead(read, pins, t, ys)
+        counts = {n_leads, n_leads - 1} if cut and counted is not None else {n_leads}   # TO252-3: ROHM counts the cut lead
+        if t not in (tab_no, join) and not cut or len(ys) not in counts or not set(leads) <= set(ys) or set(ys) - set(leads) - {t}:
             continue
         if any(abs(leads[n] - ys[n]) > TAB_POS_TOL for n in leads):
             continue
@@ -593,8 +636,11 @@ def identify_tab(read, pins=None):
     if len(fits) != 1:
         return None, f"{label}: {'no' if not fits else 'more than one'} checked tab land fits" + \
             (f" ({', '.join(sorted(fits))})" if fits else "")
-    if _tab_entry(fits[0])[0] != tab_no:
+    t = _tab_entry(fits[0])[0]
+    if t == join and t != tab_no:
         label += f" (on lead {join}'s net, so numbered {join})"
+    elif t != tab_no:
+        label += f" (the land's tab {t} is the cut lead {t}, N.C. in the pin table: the tab is numbered {tab_no})"
     return fits[0], f"{label} -> {fits[0]}"
 
 
