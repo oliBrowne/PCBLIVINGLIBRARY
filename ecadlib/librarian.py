@@ -899,6 +899,10 @@ class Run:
                 (old, new), = ren.items()
                 st["review"].append(f"tab: the datasheet numbers the tab {new}, and lead {old} is cut (N.C.); the land "
                                     f"numbers the tab {old}, so it was numbered {new} (check the pin table)")
+                sym = res.get("symbol") or {}             # the cut lead has no pad: its N.C. pin leaves the symbol, as
+                if not st["symbol"] and any(str(q["num"]) == old for q in sym.get("pins") or []):   # KiCad's does
+                    res = dict(res, symbol=dict(sym, pins=[q for q in sym["pins"] if str(q["num"]) != old]))
+                    st["review"].append(f"symbol: pin {old} (N.C., the cut lead) left out: it has no lead and no pad")
             hs = res["spec"].get("height_max") and "datasheet height_max" or sp.get("height_max") and "standard package table"
             h = F.dim((res["spec"] if hs == "datasheet height_max" else sp)["height_max"])[2] if hs else None   # this part's own height first
             need_pins()

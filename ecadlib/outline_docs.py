@@ -83,13 +83,18 @@ def mpn_package_code(part, own=()):
     EPM1270M256 -> M256, M2GL090T-FG484 -> FG484, ICE40HX8K-BG121 -> BG121; else None (GBU4A, LM358DR). A package
     document found by search must print it: a family and count alone matched a 1.0 mm FineLine BGA-256 for the 0.5 mm
     Micro FineLine M256, and a generic BGA layout note for BG121 (live benchmark 2026-10-24)."""
-    counts = {m.group() for t in own or () for m in [re.search(r"\d+$", t)] if m}
-    for seg in reversed(re.split(r"[-_/#\s]+", str(part or "").strip().upper())):
-        m = re.search(r"(?<![A-Z])([A-Z]{1,3})(\d{2,4})$|(?<=\d)([A-Z]{1,3})(\d{2,4})$", seg)
-        if m:
-            letters, num = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
-            if num.lstrip("0") in counts:
-                return letters + num
+    counts = {m.group() for t in own or () for m in [re.search(r"\d+$", t)] if m
+              and re.sub(r"\d+$", "", t) not in DR.OUTLINE_FAMS}   # SOT23's 23 names the outline, not 23 pins
+    segs = [x for x in re.split(r"[-_/#\s]+", str(part or "").strip().upper()) if x]
+    for i, seg in reversed(list(enumerate(segs))):
+        # a segment of its own after the part number (M2GL090T-FG484), or a code after the part's own letters and
+        # number (EPM1270 | M256). A number that only follows digits is the part number itself: 74HC14 is the
+        # 14th 74HC logic part, AT24C08 an 8-kbit EEPROM, whatever their pin counts. The count is the number as
+        # printed: "08" is no 8
+        m = re.fullmatch(r"([A-Z]{1,3})(\d{2,4})", seg) if i else \
+            re.fullmatch(r"[A-Z]+\d+([A-Z]{1,3})(\d{2,4})", seg)
+        if m and m.group(2) in counts:
+            return m.group(1) + m.group(2)
     return None
 
 

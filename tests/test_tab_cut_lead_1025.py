@@ -89,3 +89,26 @@ def test_the_librarian_builds_the_checked_land_with_the_tab_under_the_datasheets
     assert (a.get("footprint") or {}).get("file") and a["source"]["footprint"] == "standard:Package_TO_SOT_SMD:TO-252-2", \
         (a.get("source"), a["librarian"]["tried"])
     assert any("numbers the tab 4, and lead 2 is cut" in r for r in a["librarian"]["review"]), a["librarian"]["review"]
+
+
+def test_the_cut_leads_nc_pin_leaves_the_symbol_so_the_part_is_not_held_for_a_padless_pin():
+    from tests import test_ds_route as TR, test_holds_misses_1022 as HM
+    pdf = TR.pdf_lines([["TESTPART 1 A LDO regulator", "TO252-3"], ["Package outline", "TO252-3"]])
+    a, _ = HM.read_through_librarian(_bd33_extraction(), pdf)
+    assert a["source"]["footprint"] == "standard:Package_TO_SOT_SMD:TO-252-2"
+    assert not any(str(h).startswith("pins: symbol pins without a pad") for h in a.get("hold_reasons") or []), \
+        a.get("hold_reasons")
+    assert any("pin 2 (N.C., the cut lead) left out" in r for r in a["librarian"]["review"]), a["librarian"]["review"]
+
+
+def test_the_scorer_moves_kicads_pin_with_its_renumbered_pad():
+    from ecadlib.eval import runner as R, score as S
+    case = {"mpn": "BD33FC0FP", "pins": [["1", "VCC"], ["2", "GND"], ["3", "VO"]]}
+    errata = {"BD33FC0FP": {"reference": {"renumber": {"2": "4"}}}}
+    ref = R.reference_pins(case, errata)
+    assert ref == [["1", "VCC"], ["4", "GND"], ["3", "VO"]]
+    sc = S.score_symbol([("1", "Vcc"), ("3", "Vo"), ("4", "GND")], ref)
+    assert sc["symbol_pins"]["ok"] and sc["symbol_names"]["ok"], sc
+    swap = {"X": {"reference": {"renumber": {"2": "3", "3": "2"}}}}    # a swap among KiCad's numbers moves pads only
+    assert R.reference_pins({"mpn": "X", "pins": [["1", "A"], ["2", "B"], ["3", "C"]]}, swap) == \
+        [["1", "A"], ["2", "B"], ["3", "C"]]

@@ -202,51 +202,7 @@
     "renumber": {
      "2": "4"
     },
-    "why": "ROHM p3 Figure 5 (above): the fin is GND and the middle lead is a cut N.C. with no land. KiCad's TO-252-2 numbers the fin pad 2, so its pad 2 is scored as our fin 4.",
-    "checked": "2026-10-24"
-   },
-   "symbol_pins": {
-    "ours": [
-     [
-      "1",
-      "Vcc"
-     ],
-     [
-      "2",
-      "N.C."
-     ],
-     [
-      "3",
-      "Vo"
-     ],
-     [
-      "4",
-      "GND"
-     ]
-    ],
-    "why": "ROHM BDxxFC0 series datasheet (TSZ02201-0G2G0A600040-1-2, Rev.007) p3 Figure 5, Pin Description (Without Enable) TO252-3: 1 Vcc, 2 N.C. (not connected inside the IC, leave open), 3 Vo, FIN GND. The fin has no number on the sheet; ours numbers it 4, after the leads. KiCad's Regulator_Linear:BD33FC0FP numbers the fin 2 (1 VCC, 2 GND, 3 VO), the TO-252-2 convention, and drops the cut N.C. lead. Same copper on the same nets either way.",
-    "checked": "2026-10-24"
-   },
-   "symbol_names": {
-    "ours": [
-     [
-      "1",
-      "Vcc"
-     ],
-     [
-      "2",
-      "N.C."
-     ],
-     [
-      "3",
-      "Vo"
-     ],
-     [
-      "4",
-      "GND"
-     ]
-    ],
-    "why": "ROHM BDxxFC0 series datasheet (TSZ02201-0G2G0A600040-1-2, Rev.007) p3 Figure 5, Pin Description (Without Enable) TO252-3: 1 Vcc, 2 N.C. (not connected inside the IC, leave open), 3 Vo, FIN GND. The fin has no number on the sheet; ours numbers it 4, after the leads. KiCad's Regulator_Linear:BD33FC0FP numbers the fin 2 (1 VCC, 2 GND, 3 VO), the TO-252-2 convention, and drops the cut N.C. lead. Same copper on the same nets either way.",
+    "why": "ROHM p3 Figure 5 (above): the fin is GND and the middle lead is a cut N.C. with no land. KiCad's TO-252-2 numbers the fin pad 2, so its pad 2 is scored as our fin 4. The scorer moves KiCad's symbol pin 2 (GND) with its pad to our 4 (runner.reference_pins); ours leaves the cut N.C. pin 2 out, as KiCad's symbol does.",
     "checked": "2026-10-24"
    }
   },

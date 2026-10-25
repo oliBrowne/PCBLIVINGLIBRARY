@@ -299,6 +299,10 @@ CODES = {
                                "tab {lead}, so the tab pad was numbered {tab}, as the datasheet does.",
                                "Check in the datasheet's pin table that pin {lead} is N.C. and the tab is pin {tab}.",
                                [r"tab: the datasheet numbers the tab (?P<tab>\S+), and lead (?P<lead>\S+) is cut"]),
+    "datasheet.tab_cut_pin": ("Pin {pin} of the datasheet's pin table is N.C. on a cut lead, which has no pad on the land, so "
+                              "it was left out of the symbol, as KiCad's symbol does.",
+                              "Check in the datasheet that pin {pin} is a cut lead and not connected.",
+                              [r"symbol: pin (?P<pin>\S+) \(N\.C\., the cut lead\) left out"]),
     "datasheet.dip_holes": ("The datasheet prints no hole size for this DIP, so KiCad's DIP hole and pad (0.8 mm / 1.6 mm) "
                             "were used in place of the sizes the read chose.",
                             "Check the maker's recommended hole if the leads are unusually wide.",

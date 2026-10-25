@@ -2736,8 +2736,11 @@ def mentions_part(texts, mpn, short=False, whole=False):
     n = max(4, core)
     if any(key[:i] in flat for i in range(len(key), len(key) - 1 if whole else n - 1, -1)):
         return True
-    if whole:
-        return False
+    if whole:   # the ordering form's plating or reel tail is not the part: a document prints S13B-EH for
+        # S13B-EH(LF)(SN) and XC6206P332MR for XC6206P332MR-G. A series letter never goes: S13B-EH stays apart from S13B-XH
+        base = re.sub(r"-(?:G|T|TR|R|RL|LF|PBF|E\d|T\d|R\d)$", "", re.sub(r"(?:\([A-Z0-9]{1,4}\))+$", "", main))
+        b = re.sub(r"[^A-Z0-9]", "", base)
+        return b != key and len(b) >= n and b in flat
     series = re.match(r"\d*[A-Z]*\d+[A-Z]+", key)     # SM6T100A -> SM6T: only as a word, never inside SM6T200A
     if series and 4 <= series.end() < n and series.group() in {re.sub(r"[^A-Z0-9]", "", w) for w in raw.split()}:
         return True
@@ -2760,9 +2763,13 @@ def mentions_part(texts, mpn, short=False, whole=False):
     return False
 
 
-OTHER_DOC = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|\bPCN\b|\bnotification\s+of\b|"
+# a status banner on a datasheet ("END OF LIFE", "Last Time Buy: 2027-03-31") or a drawing's title-block field
+# ("PCN 2019-114") is no notice's title: an end-of-life notice says so ("End of Life Notification")
+PCN = r"\bPCN\b(?!\s*[-#:]?\s*[\d-]+\s*$)"
+EOL = r"\b(?:end[- ]of[- ]life|last[- ]time\s+buy)\s+(?:notice|notification|announcement|letter)\b"
+OTHER_DOC = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|" + PCN + r"|\bnotification\s+of\b|"
                        r"\bdeclaration\s+letter\b|\b(?:development|evaluation|demo)\s+(?:board|kit)\b|"
-                       r"\buser'?s?\s+(?:guide|manual)\b|\bapplication\s+note\b|\bend[- ]of[- ]life\b", re.I)
+                       r"\buser'?s?\s+(?:guide|manual)\b|\bapplication\s+note\b|" + EOL, re.I)
 
 
 POINTER = re.compile(r"\b(?:available|see|refer|visit|download|for\s+more|included)\b", re.I)   # a banner or link, not a title
@@ -2772,8 +2779,8 @@ LONG_DOC = 4      # a package document found by search with this many pages of t
                   # (outline_docs.drawing_missing); a drawing of one or two pages may be all lines and a title block
 
 
-NOTICE = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|\bPCN\b|\bnotification\s+of\b|"
-                    r"\bdeclaration\s+letter\b|\bend[- ]of[- ]life\b|\blast[- ]time\s+buy\b", re.I)
+NOTICE = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|" + PCN +
+                    r"|\bnotification\s+of\b|\bdeclaration\s+letter\b|" + EOL, re.I)
 
 
 def a_notice(texts):
