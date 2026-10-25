@@ -51,3 +51,47 @@ def test_only_notices_found_leaves_the_part_without_a_drawing():
 def test_the_package_prompt_says_a_notice_is_not_wanted():
     text = WS.request_body("NC3XYZ-1", "claude-haiku-5-5", kind="package")["messages"][0]["content"]
     assert "change notice" in text
+
+
+# ---------------------------------------------------------------- the 8 wrong documents of the 2026-10-24 run
+def test_a_prefix_of_the_part_number_does_not_name_it_in_a_package_document():
+    from ecadlib import outline_docs as OD
+    # JST's XH catalog has S13B-XH-A-1, not S13B-EH; Vishay's tray table has "KBU4, 6, 8", not KBU4A
+    assert not OD.names_it(["XH CONNECTOR 2.5 mm pitch, crimp style. S13B-XH-A-1 side entry, 13 circuits"] * 2, "S13B-EH")
+    assert not OD.names_it(["Packaging information. KBU4, 6, 8 anti-static PVC tray 12.2 x 6.1, 20 pcs per tray"] * 2,
+                           "KBU4A")
+    assert OD.names_it(["EH CONNECTOR 2.5 mm pitch. S13B-EH side entry type, 13 circuits, PCB layout"] * 2, "S13B-EH")
+    # the datasheet check itself still takes a prefix that keeps the numeric core (LTC4060 of LTC4060EDHC)
+    from ecadlib import datasheet as D
+    assert D.mentions_part(["LTC4060 standalone linear NiMH/NiCd fast battery charger, full text of a page here"],
+                           "LTC4060EDHC")
+    assert not D.mentions_part(["LTC4060 standalone linear NiMH/NiCd fast battery charger, full text of a page here"],
+                               "LTC4060EDHC", whole=True)
+
+
+def test_the_package_code_in_the_part_number_must_be_printed():
+    from ecadlib import outline_docs as OD
+    fineline = ["256-Pin FineLine BGA package outline, DIM MIN MAX, ball pitch 1.00 mm, BGA-256"]
+    assert not OD.names_it(fineline, "EPM1270M256", own={"BGA", "BGA256"})
+    assert OD.names_it(["M256 Micro FineLine BGA-256 package outline, 0.5 mm pitch, DIM MIN MAX"], "EPM1270M256",
+                       own={"BGA", "BGA256"})
+    assert not OD.names_it(["PCB layout recommendations for BGA packages: 64, 81, 100, 121, 144 ball BGA-121"],
+                           "ICE40HX8K-BG121", own={"BGA121"})
+    assert OD.mpn_package_code("M2GL090T-FG484", {"BGA484"}) == "FG484"
+    assert OD.mpn_package_code("GBU4A", {"DIP275"}) is None and OD.mpn_package_code("LM358DR", {"SOIC8"}) is None
+    # a part number with no package code keeps the family and count match (GBU4A took Vishay's GBU case outline)
+    assert OD.names_it(["GBU25H08 GBU case outline, DIM MIN MAX, DIP-275"], "GBU4A", own={"DIP275"})
+
+
+def test_a_long_document_with_no_drawing_of_the_package_is_skipped():
+    from tests import test_datasheet_batch as TB
+    LONG = "https://maker.example/docs/pin-descriptions.pdf"
+    pins = [[f"NC3XYZ-1 pin descriptions, part {i}", "User I/O banks, supply pins and configuration pins",
+             "Each I/O can be configured as input, output or bidirectional"] for i in range(5)]
+    cl, api = Client(_answer([LONG, P.DWG])), P._reads()
+    files = {P.DS: pdf_lines(P.product_sheet()), LONG: pdf_lines(pins), P.DWG: pdf_lines(P.drawing_sheet())}
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        res = P._read(P._reader(d, cl, files, web_search=True))
+        assert res["sidecar"]["route"]["package_doc"] == P.DWG
+        miss = [a for a in res["sidecar"]["pdf"]["attempts"] if a["url"] == LONG]
+        assert miss and "no drawing of the package" in miss[0]["error"], miss

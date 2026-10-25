@@ -64,16 +64,33 @@ def names_it(texts, part, codes=(), own=(), url=""):
     the document numbers the datasheet gives, or this part's package (a package information document lists packages,
     not parts). A PDF whose text can't be read counts only when its link names the part (a drawing PDF named for it)."""
     from . import datasheet as D
-    said = D.mentions_part(texts, part)
+    said = D.mentions_part(texts, part, whole=True)
     if said:
         return True
     flat = re.sub(r"[^A-Z0-9]", "", " ".join(t or "" for t in texts).upper())
     if any(re.sub(r"[^A-Z0-9]", "", c.upper()) in flat for c in codes if c):
         return True
-    if _same_package(own, set().union(*(DR.package_tokens(DR.norm_text(t or "")) for t in texts))):
+    code = mpn_package_code(part, own)                # EPM1270M256's M256: a 256-ball FineLine BGA is not it
+    if (not code or code in flat) and _same_package(own, set().union(*(DR.package_tokens(DR.norm_text(t or ""))
+                                                                       for t in texts))):
         return True
     key = re.sub(r"[^A-Z0-9]", "", str(part or "").upper())
     return said is None and len(key) >= 4 and key in re.sub(r"[^A-Z0-9]", "", str(url).upper())
+
+
+def mpn_package_code(part, own=()):
+    """The package code an MPN ends in, when its number is this part's pin or ball count (own: BGA256 and so on):
+    EPM1270M256 -> M256, M2GL090T-FG484 -> FG484, ICE40HX8K-BG121 -> BG121; else None (GBU4A, LM358DR). A package
+    document found by search must print it: a family and count alone matched a 1.0 mm FineLine BGA-256 for the 0.5 mm
+    Micro FineLine M256, and a generic BGA layout note for BG121 (live benchmark 2026-10-24)."""
+    counts = {m.group() for t in own or () for m in [re.search(r"\d+$", t)] if m}
+    for seg in reversed(re.split(r"[-_/#\s]+", str(part or "").strip().upper())):
+        m = re.search(r"(?<![A-Z])([A-Z]{1,3})(\d{2,4})$|(?<=\d)([A-Z]{1,3})(\d{2,4})$", seg)
+        if m:
+            letters, num = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+            if num.lstrip("0") in counts:
+                return letters + num
+    return None
 
 
 def _same_package(own, toks):
