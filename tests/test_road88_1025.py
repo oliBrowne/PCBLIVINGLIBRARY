@@ -12,13 +12,20 @@ def _to263(**extra):
                  "land": {"pad_length": 3.56, "pad_width": 1.54, "pad_center": 4.8825}}, **extra)
 
 
+LEADS = [{"number": "1", "side": "L", "offset": -2.54}, {"number": "2", "side": "L", "offset": 2.54}]
+
+
 def test_a_tab_package_land_is_not_held_to_a_tip_to_tip_span():
     tab = {"number": "3", "side": "R", "width": {"min": 7.535, "max": 8.425}, "length": {"min": 6.48, "max": 6.88}}
-    assert FG.land_short(_to263(tab=tab)) == []
+    assert FG.land_short(_to263(tab=tab, pin_positions=LEADS)) == []
+    # a tab with leads on both sides (or none placed) keeps the tip check: L is then a lead span
+    both = LEADS[:1] + [dict(LEADS[1], side="R")]
+    assert any("short of the lead tip" in x for x in FG.land_short(_to263(tab=tab, pin_positions=both)))
+    assert any("short of the lead tip" in x for x in FG.land_short(_to263(tab=tab)))
     # with no tab read, L is a lead span and the short pads are still caught
     assert any("short of the lead tip" in x for x in FG.land_short(_to263()))
     # a pad narrower than the lead is caught on a tab package too
-    narrow = _to263(tab=tab)
+    narrow = _to263(tab=tab, pin_positions=LEADS)
     narrow["land"] = dict(narrow["land"], pad_width=0.5)
     assert any("narrower than terminal_width" in x for x in FG.land_short(narrow))
 
@@ -48,10 +55,10 @@ def test_the_scorer_credits_the_same_tab_package_land():
     tab = {"number": "3", "side": "R", "width": {"min": 7.535, "max": 8.425}, "length": {"min": 6.48, "max": 6.88}}
     mine = {"pads": [["1", -4.8825, -2.54, 3.56, 1.54, 0.0], ["2", -4.8825, 2.54, 3.56, 1.54, 0.0],
                      ["3", 4.8825, 0.0, 8.89, 10.69, 0.0]], "courtyard": []}
-    ml = S.maker_land(mine, _to263(tab=tab))
+    ml = S.maker_land(mine, _to263(tab=tab, pin_positions=LEADS))
     assert ml["followed"] and "implausible" not in ml, ml
     assert S.maker_land(mine, _to263())["followed"] is False                 # no tab read: L is a lead span
-    narrow = _to263(tab=tab)
+    narrow = _to263(tab=tab, pin_positions=LEADS)
     narrow["land"] = dict(narrow["land"], pad_width=0.5)
     thin = dict(mine, pads=[[n, x, y, w, 0.5 if n != "3" else h, r] for n, x, y, w, h, r in mine["pads"]])
     assert "implausible" in S.maker_land(thin, narrow)                       # narrower than the lead: still caught

@@ -418,7 +418,8 @@ def maker_land(mine, spec, tol=None):
     quad = spec.get("package_type") in ("qfn", "qfp")
     # a tab package (TO-263, TO-252) has no tip-to-tip span: its L runs from the tab's edge to the lead tips, so only
     # the pads' width is checked (footprint_gen.land_short: C3D08060G, benchmark 2026-10-24)
-    tab = isinstance(spec.get("tab"), dict) and bool(spec["tab"])
+    from .. import footprint_gen as FG
+    tab = FG.one_sided_tab(spec)
     span = [] if tab else rng("lead_span") or (rng("body_length") if quad else [])
     span_y = [] if tab else (rng("lead_span_y") or span) if spec.get("lead_span") else rng("body_width") if quad else []
     T, b = rng("terminal_length"), rng("terminal_width")

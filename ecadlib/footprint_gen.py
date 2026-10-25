@@ -288,6 +288,16 @@ def _left_right(spec, pads):
     return [side[i] if i < len(side) else True for i in range(len(pads))]
 
 
+def one_sided_tab(spec):
+    """A tab package with every lead on the one side across from its tab (TO-263, TO-252, SOT-223: tab R, leads L, as
+    the read places them): its drawing's L runs from the tab's edge to the lead tips, not tip to tip."""
+    tab, pos = spec.get("tab"), spec.get("pin_positions")
+    if not isinstance(tab, dict) or not isinstance(pos, list) or not pos:
+        return False
+    sides = {p.get("side") for p in pos if isinstance(p, dict)}
+    return len(sides) == 1 and None not in sides and sides != {tab.get("side", "R")}
+
+
 def land_short(spec):
     """What of the maker's land (spec["land"]) would not solder the leads read from the same drawing, as _apply_land
     lays it: a pad (pin 1's own size included) narrower than terminal_width min, short of the lead tip (lead_span, or
@@ -303,7 +313,7 @@ def land_short(spec):
         # a tab package (TO-263, TO-252: leads on one side, the tab on the other) has no tip-to-tip span to halve: its
         # drawing's L runs from the tab's edge to the lead tips (C3D08060G, Wolfspeed TO-263-2, benchmark 2026-10-24:
         # the maker's land was refused against a "lead tip" at L / 2), so only the pad widths are checked there
-        tab = isinstance(spec.get("tab"), dict) and spec["tab"]
+        tab = one_sided_tab(spec)
         sx = None if tab else dim(spec["lead_span"]) if spec.get("lead_span") else \
             dim(spec["body_length"]) if t == "qfn" and spec.get("body_length") else None
         sy = None if tab else dim(spec.get("lead_span_y") or spec["lead_span"]) if spec.get("lead_span") else \
