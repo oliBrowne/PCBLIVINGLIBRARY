@@ -105,10 +105,13 @@ def test_the_scorer_moves_kicads_pin_with_its_renumbered_pad():
     from ecadlib.eval import runner as R, score as S
     case = {"mpn": "BD33FC0FP", "pins": [["1", "VCC"], ["2", "GND"], ["3", "VO"]]}
     errata = {"BD33FC0FP": {"reference": {"renumber": {"2": "4"}}}}
-    ref = R.reference_pins(case, errata)
+    ours = [("1", "Vcc"), ("3", "Vo"), ("4", "GND")]
+    ref = R.reference_pins(case, errata, ours)
     assert ref == [["1", "VCC"], ["4", "GND"], ["3", "VO"]]
-    sc = S.score_symbol([("1", "Vcc"), ("3", "Vo"), ("4", "GND")], ref)
+    sc = S.score_symbol(ours, ref)
     assert sc["symbol_pins"]["ok"] and sc["symbol_names"]["ok"], sc
+    kicads = [("1", "VCC"), ("2", "GND"), ("3", "VO")]               # a symbol numbered as KiCad's (the replay gate)
+    assert R.reference_pins(case, errata, kicads) == case["pins"]
     swap = {"X": {"reference": {"renumber": {"2": "3", "3": "2"}}}}    # a swap among KiCad's numbers moves pads only
-    assert R.reference_pins({"mpn": "X", "pins": [["1", "A"], ["2", "B"], ["3", "C"]]}, swap) == \
-        [["1", "A"], ["2", "B"], ["3", "C"]]
+    pins = [["1", "A"], ["2", "B"], ["3", "C"]]
+    assert R.reference_pins({"mpn": "X", "pins": pins}, swap, pins) == pins

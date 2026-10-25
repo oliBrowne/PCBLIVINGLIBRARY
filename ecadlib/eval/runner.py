@@ -279,18 +279,21 @@ def reference_numbers(case, errata, refs):
     return dict(ref, pads=[[m.get(str(p[0]), p[0])] + list(p[1:]) for p in ref["pads"]])
 
 
-def reference_pins(case, errata):
+def reference_pins(case, errata, mine=None):
     """The case's symbol pins as scored: KiCad's, with a pin moved to the number its pad is renumbered to where that
     number is a pin of KiCad's own symbol nowhere else ("reference": {"renumber": {"2": "4"}}: BD33FC0FP, whose fin
     ROHM numbers 4 after the cut N.C. lead 2, KiCad's TO-252-2 numbers 2). The pad and its pin are one connection, so
-    they move together. A swap among KiCad's own numbers (AH1806-W 2 <-> 3) moves the pads only: the symbol's names
-    there are checked by the case's symbol erratum."""
+    they move together, but only where our symbol numbers it so too (it has the new number and not the old one: a
+    symbol numbered as KiCad's, the replay gate's, is scored as it is). A swap among KiCad's own numbers (AH1806-W
+    2 <-> 3) moves the pads only: the symbol's names there are checked by the case's symbol erratum."""
     pins = case.get("pins")
     m = ((errata.get(case["mpn"]) or {}).get("reference") or {}).get("renumber")
     if not m or not pins:
         return pins
     have = {str(n) for n, _ in pins}
-    move = {str(a): str(b) for a, b in m.items() if str(a) in have and str(b) not in have}
+    ours = {str(n) for n, _ in mine or []}
+    move = {str(a): str(b) for a, b in m.items() if str(a) in have and str(b) not in have
+            and str(b) in ours and str(a) not in ours}
     return [[move.get(str(n), str(n)), s] for n, s in pins] if move else pins
 
 
@@ -794,7 +797,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         sym_pins = _symbol_pins(lib / sf) if sf and (lib / sf).exists() else None
         ref_fp = reference_for(c, erratas)
         ref = reference_numbers(c, erratas, data["references"])
-        ref_pins = reference_pins(c, erratas)
+        ref_pins = reference_pins(c, erratas, sym_pins)
         sc = S.score(mine, ref, sym_pins, ref_pins, tol)
         errata = apply_errata(sc, sym_pins, erratas.get(c["mpn"]), ref_pins, tol)
         printed_names(sc, sym_pins, ref_pins, (reader.used.get(c["mpn"]) or {}).get("text"), tol)
