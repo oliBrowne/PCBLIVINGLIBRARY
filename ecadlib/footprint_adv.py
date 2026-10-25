@@ -574,6 +574,15 @@ def check_pad_table(spec, pads=None):
     pins = [p for p in pads if p["role"] in PIN_ROLES]
     nums = [p["num"] for p in pins]
     distinct = sorted(set(nums), key=lambda s: (len(s), s))
+    # the exposed pad numbered pin_count + 1, as the read is asked to number it (datasheet prompt), is not one pin too
+    # many: FDMT800100DC, benchmark 2026-10-24, pins 1-8 and the drain pad 9 of onsemi's recommended land
+    cnt = spec.get("pin_count")
+    ep = str(cnt + 1) if isinstance(cnt, int) and not isinstance(cnt, bool) else None
+    big = lambda q: abs((q.get("w") or 0) * (q.get("h") or 0))
+    areas = sorted(big(q) for q in pins)
+    if ep in distinct and len(distinct) == cnt + 1 and all(
+            q["role"] == "thermal" or areas and big(q) > 2 * areas[len(areas) // 2] for q in pins if q["num"] == ep):
+        distinct = [d for d in distinct if d != ep]
     if spec.get("pin_count") and len(distinct) != spec["pin_count"]:
         add("error", "count", f"pin_count is {spec['pin_count']} but the table has {len(distinct)} numbered pins "
                               f"(mounting pads, shield tabs and holes not counted)")

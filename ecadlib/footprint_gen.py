@@ -300,8 +300,13 @@ def land_short(spec):
         return []
     try:
         T, b = (dim(spec[k]) if spec.get(k) else None for k in ("terminal_length", "terminal_width"))
-        sx = dim(spec["lead_span"]) if spec.get("lead_span") else dim(spec["body_length"]) if t == "qfn" and spec.get("body_length") else None
-        sy = dim(spec.get("lead_span_y") or spec["lead_span"]) if spec.get("lead_span") else \
+        # a tab package (TO-263, TO-252: leads on one side, the tab on the other) has no tip-to-tip span to halve: its
+        # drawing's L runs from the tab's edge to the lead tips (C3D08060G, Wolfspeed TO-263-2, benchmark 2026-10-24:
+        # the maker's land was refused against a "lead tip" at L / 2), so only the pad widths are checked there
+        tab = isinstance(spec.get("tab"), dict) and spec["tab"]
+        sx = None if tab else dim(spec["lead_span"]) if spec.get("lead_span") else \
+            dim(spec["body_length"]) if t == "qfn" and spec.get("body_length") else None
+        sy = None if tab else dim(spec.get("lead_span_y") or spec["lead_span"]) if spec.get("lead_span") else \
             dim(spec["body_width"]) if t == "qfn" and spec.get("body_width") else None
         ntb = rows(spec)[1] if t != "gullwing" and isinstance(spec.get("pin_count"), int) else 0
     except (KeyError, TypeError, ValueError):         # a malformed dimension: sanity() / the schema check say what
