@@ -841,10 +841,15 @@ def test_the_browser_stops_its_own_copy_while_the_page_fetches_the_pdf():
             r = b.get(base + path)
             assert r[0] == 200 and r[1] == BIG, (path, r[0], r[4])
             t0 = time.monotonic()
-            while len(srv.sent) < 2 and time.monotonic() - t0 < 10:
+            nav = full = []
+            while not (nav and full) and time.monotonic() - t0 < 10:
                 time.sleep(0.1)
-            nav = [n for mode, n in srv.sent if mode == "navigate"]
-            assert len(srv.sent) == 2 and nav and nav[0] < len(BIG), (path, srv.sent)  # one full copy, not two
+                nav = [n for mode, n in srv.sent if mode == "navigate"]
+                full = [n for _, n in srv.sent if n == len(BIG)]
+            # one full copy, not two: the browser's own copy is stopped early. Chrome on a loaded Windows runner may
+            # also start a request it drops after the first piece ([cors 65536, navigate 262144, cors <all>], CI
+            # 2026-10-25); a request stopped early is not a second copy
+            assert len(full) == 1 and nav and nav[0] < len(BIG), (path, srv.sent)
     finally:
         b.close()
         srv.shutdown()
