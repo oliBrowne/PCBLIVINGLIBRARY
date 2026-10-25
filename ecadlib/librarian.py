@@ -869,7 +869,8 @@ class Run:
         if not st["footprint"]:                       # before any land choice: a table land never replaces these holds
             maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
             joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
-                D.thermal_land_missing(res["spec"], maker, url) or D.body_unread(res["spec"]) or \
+                D.thermal_land_missing(res["spec"], maker, url) or D.thermal_land_body_sized(res["spec"]) or \
+                D.body_unread(res["spec"]) or \
                 (None if std else D.tab_land_unread(res["spec"])) or D.tht_holes_unread(res["spec"]) or \
                 D.body_on_holes(res["spec"])                  # (a checked standard land carries its own tab land)
             if joined:                                # leads merged with the pad, a TI thermal land not read or too

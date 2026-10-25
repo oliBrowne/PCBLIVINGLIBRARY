@@ -1283,6 +1283,27 @@ def thermal_land_missing(spec, maker=None, url=None):
     return None
 
 
+def thermal_land_body_sized(spec):
+    """The hold line when the land's thermal pad read is as large as the body on either axis: copper that size would
+    reach the lead pads, so it is the body's outline read in its place (benchmark 2026-10-25: OPA569DWP SO-20 PowerPAD
+    land read 7.59 x 12.95, the body's E1 / D maximum, under a 7.4-7.6 x 12.6-13.0 body; TI's land is 6.045 x 12.09).
+    Compared shortest with shortest, so a land read the other way round is held too. None otherwise."""
+    land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
+    a, b = land.get("ep_across"), land.get("ep_along")
+    if not all(isinstance(v, (int, float)) and v > 0 for v in (a, b)):
+        return None
+    from . import footprint_gen as F
+    try:
+        body = sorted(F.dim(spec[k])[0] for k in ("body_width", "body_length"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if any(x >= m for x, m in zip(sorted((a, b)), body)):
+        return (f"no footprint: the thermal land read ({a:g} x {b:g} mm) is as large as the body ({body[0]:g} x "
+                f"{body[1]:g} mm at its smallest), so it would reach the lead pads; it looks like the body outline, so "
+                "read the thermal land's copper from the land pattern page")
+    return None
+
+
 IPC_LAND = ("chip", "molded", "gullwing", "qfp", "qfn")      # builders that size the pads by IPC-7351B when no land is read
 LAND_KEYS = ("pad_length", "pad_width", "pad_center", "ep_across", "ep_along")
 
