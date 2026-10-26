@@ -133,14 +133,20 @@ class KiCadLibrary:
                 # and two x slots take a decimal point between them: 1.5KExxA is 1.5KE6.8A, SMAJxxA SMAJ5.0A (R-FX10-3)
                 flat = re.sub(r"(?<=[0-9x])\.(?=[0-9x])", "\x00", name)
                 flat = re.sub(r"[^A-Za-z0-9\x00]", "", flat)
+                rx = "".join(r"\.?[A-Z0-9]" if c == "x" and i and flat[i - 1] == "x" else
+                             "[A-Z0-9]" if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
+                             for i, c in enumerate(flat))
                 # an x may also stand for nothing: Microchip's MCP6L01x-xOT is MCP6L01-E/OT and MCP6L01T-E/OT (the
                 # x a blank or T), so MCP6L01R-E/OT fits MCP6L01Rx-xOT with that x blank. Then more than one name can
-                # fit; find_symbol takes the one with the most literal characters (R-SY-1)
-                rx = "".join(r"\.?[A-Z0-9]?" if c == "x" and i and flat[i - 1] == "x" else
-                             "[A-Z0-9]?" if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
-                             for i, c in enumerate(flat))
+                # fit; find_symbol takes the one with the most literal characters (R-SY-1). Only where an ordering
+                # letter goes: next to a '-' or '/' of the MPN (marked '|', see _marked) or at its end. A blank in
+                # the middle of the name makes another part: VTL5C2 (single Vactrol) is not VTL5Cx2, the dual (R-FX20-1)
+                blank = r"(?:[A-Z0-9]|(?=\|)|(?<=\|))"
+                bx = r"\|?".join(r"\.?" + blank if c == "x" and i and flat[i - 1] == "x" else
+                                 blank if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
+                                 for i, c in enumerate(flat)) + r"\|?"
                 lit = sum(c not in "x\x00" for c in flat)
-                self._wild.append((re.compile(rx), [f"{l}:{name}" for l in libs], lit))
+                self._wild.append((re.compile(rx), [f"{l}:{name}" for l in libs], lit, re.compile(bx)))
         self._fpn = [(norm_mpn(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items()]
 
     def _load(self, f):
@@ -203,7 +209,7 @@ class KiCadLibrary:
         if nm in self._norm:
             ref, more = self._pick(self._norm[nm])
             return ref, "exact name" + more
-        fits = self._wild_fits(nm)
+        fits = self._wild_fits(nm, mpn)
         if fits:
             best = max(lit for lit, _ in fits)
             ref, more = self._pick([r for lit, refs in fits if lit == best for r in refs])
@@ -217,8 +223,22 @@ class KiCadLibrary:
                 return ref, f"name + ordering suffix '{str(mpn)[raw[k]:]}' (check the variant)" + more
         return None, None
 
-    def _wild_fits(self, nm):
-        return [(w[2] if len(w) > 2 else 0, w[1]) for w in self._wild if w[0].fullmatch(nm)]
+    @staticmethod
+    def _marked(mpn, nm):
+        """nm with '|' where the MPN had a '-' or '/' between two of its characters, and at its end: the places an
+        x of a KiCad name may stand for nothing (an ordering letter left out). Without a raw MPN (or when the
+        characters do not line up) only the end is marked."""
+        s = str(mpn or "")
+        raw = [i for i, c in enumerate(s) if c.isalnum() or (c == "." and s[i - 1:i].isdigit() and s[i + 1:i + 2].isdigit())]
+        if mpn is None or len(raw) != len(nm):
+            return nm + "|"
+        return "".join(("|" if k and set(s[raw[k - 1] + 1:raw[k]]) & set("-/") else "") + c
+                       for k, c in enumerate(nm)) + "|"
+
+    def _wild_fits(self, nm, mpn=None):
+        sp = self._marked(mpn, nm)
+        return [(w[2] if len(w) > 2 else 0, w[1]) for w in self._wild
+                if w[0].fullmatch(nm) or (len(w) > 3 and w[3].fullmatch(sp))]
 
     def wild_alternates(self, mpn, ref):
         """The other KiCad x-wildcard names (one ref each) the MPN fits besides ref's: an x may be a blank, so
@@ -226,7 +246,7 @@ class KiCadLibrary:
         librarian compares their pinouts with ref's and holds the part when one differs (R-SY-1)."""
         name = str(ref).split(":")[-1]
         out = {}
-        for _, refs in self._wild_fits(norm_mpn(mpn)):
+        for _, refs in self._wild_fits(norm_mpn(mpn), mpn):
             n = refs[0].split(":")[-1]
             if n != name:
                 out.setdefault(n, sorted(refs)[0])
