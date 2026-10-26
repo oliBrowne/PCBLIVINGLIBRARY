@@ -184,6 +184,8 @@ def test_kicad_step_download_no_longer_means_a_box():
         for text in (LGA, LGA.replace("Bosch_LGA-8_2.5x2.5mm_P0.65mm_ClockwisePinNumbering", "D_SMA")):
             notes = []
             fp, t = K.convert_footprint(text, None, "test", notes, "")
+            if t[1] == "D_SMA":                 # an SMA's two pads (the LGA's eight would leave the SMA leads off them)
+                fp["pads"] = [dict(fp["pads"][0], designator=d, x=x, y=0.0, w=2.5, h=1.7) for d, x in (("1", -2.0), ("2", 2.0))]
             K.add_body(fp, t, object(), None, False, notes, gen_step=True)
             assert any(b.get("step") for b in fp["bodies"]), (t[1], notes)
             assert any("generated STEP" in n and "0.93 mm (KiCad STEP model)" in n for n in notes), notes

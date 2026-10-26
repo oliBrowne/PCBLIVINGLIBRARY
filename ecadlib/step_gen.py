@@ -646,6 +646,9 @@ def spec_from_name(name):
     m = re.match(r"(SOIC|SO|SOP|SSOP|TSSOP|MSOP|VSSOP|HTSSOP|TSOP|QSOP)-(\d+)(?:-1EP)?_([\d.]+)x([\d.]+)mm_P([\d.]+)mm", name)
     if m:
         n, E1, D, e = int(m.group(2)), float(m.group(3)), float(m.group(4)), float(m.group(5))
+        row = (n // 2 - 1) * e                  # pin row length: KiCad writes a few (SO-20_12.8x7.5mm) as length x width
+        if row > D + 0.1 and row <= E1:
+            E1, D = D, E1
         return {"name": name, "package_type": "gullwing", "pin_count": n, "pitch": e, "lead_span": _d(GW_SPAN.get(E1, E1 + 2.0)),
                 "body_width": _d(E1), "body_length": _d(D), "terminal_width": _d(round(min(0.42, 0.33 * e), 3)),
                 "terminal_length": _d(0.8 if e >= 1.0 else 0.6)}
@@ -824,11 +827,12 @@ def _on_pad(cx, cy, p, slack=0.6):
     return abs(cx - p["x"]) <= w / 2 + slack and abs(cy - p["y"]) <= h / 2 + slack
 
 
-def fit_rotation(spec, pads):
+def fit_rotation(spec, pads, checked=False):
     """Rotation (0 / 90 / 180 / 270) that puts each lead of the model on the footprint pad with the same number, or None.
     A footprint name does not fix the orientation: EasyEDA draws the same SOT-23-3_L2.9-W1.3-... with the pin rows
     along x (C2002) or along y (C8545). The spec's own rotation is kept while its leads sit on their pads; another one
-    is returned only when all of its leads sit on their pads (and the spec's do not); None when no rotation fits."""
+    is returned only when all of its leads sit on their pads (and the spec's do not); None when no rotation fits.
+    checked: NO_FIT (not None) when the leads are numbered like the pads and none of the four rotations fits."""
     t = spec.get("package_type")
     if t not in BUILDERS or not pads:
         return None
@@ -843,8 +847,10 @@ def fit_rotation(spec, pads):
     leads = []
     for sol in solids:
         m = re.fullmatch(r"(?:pin|terminal) (\S+)", sol.name)
-        if m:
-            xs, ys = [v[0] for v in sol.verts], [v[1] for v in sol.verts]
+        if m:                                   # the lead's foot (its lowest face) is what lands on the pad / in the hole:
+            z0 = min(v[2] for v in sol.verts)   # a long axial lead's bounding box centre is half way to the body
+            foot = [v for v in sol.verts if v[2] <= z0 + 1e-6]
+            xs, ys = [v[0] for v in foot], [v[1] for v in foot]
             leads.append((m.group(1), (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2))
     if len(leads) < 2 or any(n not in by_num for n, _, _ in leads):
         return None
@@ -853,7 +859,36 @@ def fit_rotation(spec, pads):
     own = int(spec.get("rotation") or 0) % 360
     if fits(own):
         return own
-    return next((r for r in (0, 90, 180, 270) if r != own and fits(r)), None)
+    return next((r for r in (0, 90, 180, 270) if r != own and fits(r)), NO_FIT if checked else None)
+
+
+NO_FIT = "no fit"
+
+
+def _quad_sides_from_pads(spec, pads):
+    """A quad spec read from a name gives n/4 pins a side; a rectangular body (QFN-28_3x6, LQFP-128_14x20) has more on
+    its long sides. The footprint's numbered pads 1..n say how many each side has (left and right alike, top and
+    bottom alike, pin 1 on the left as KiCad draws them); the spec is returned unchanged when they do not."""
+    if spec.get("package_type") not in ("qfn", "qfp") or spec.get("terminals") or "pins_left_right" in spec:
+        return spec
+    n, Bx, By = spec.get("pin_count"), _n(spec, "body_length"), _n(spec, "body_width")
+    if not (n and Bx and By):
+        return spec
+    num = {}
+    for p in pads:
+        d = str(p.get("designator") or "")
+        if d.isdigit() and 1 <= int(d) <= n:
+            num.setdefault(d, p)
+    if len(num) != n:
+        return spec
+    side = {}
+    for d, p in num.items():
+        x, y = p["x"], p["y"]
+        side[d] = ("R" if x > 0 else "L") if abs(x) / Bx >= abs(y) / By else ("T" if y > 0 else "B")
+    c = {k: sum(1 for v in side.values() if v == k) for k in "LRTB"}
+    if c["L"] != c["R"] or c["T"] != c["B"] or side["1"] != "L" or not c["L"] or (c["L"], c["T"]) == (n // 4, n // 4):
+        return spec
+    return dict(spec, pins_left_right=c["L"], pins_top_bottom=c["T"])
 
 
 def _lga_fit(spec, pads):
@@ -888,7 +923,11 @@ def generate(src, height=None, name=None, pads=None):
     if pads and spec.get("lga"):
         spec = _lga_fit(spec, pads)
     elif pads:
-        rot = fit_rotation(spec, pads)
+        spec = _quad_sides_from_pads(spec, pads)
+        rot = fit_rotation(spec, pads, checked=True)
+        if rot == NO_FIT:                           # a model with its leads off the pads is worse than the plain body
+            raise ValueError(f"{spec.get('name', src)}: the model's leads sit on the footprint's pads in no rotation "
+                             "(package name read another way than the footprint is drawn)")
         if rot is not None and rot != int(spec.get("rotation") or 0) % 360:
             spec = dict(spec, rotation=rot)
     try:
@@ -901,6 +940,8 @@ def generate(src, height=None, name=None, pads=None):
     if rep["errors"]:
         raise ValueError(f"{info['name']}: generated STEP failed its own check: {rep['errors'][:3]}")
     info.update(bbox=rep["bbox"], volume=rep["volume"], bytes=len(text), rotation=int(spec.get("rotation") or 0) % 360)
+    if pads and not spec.get("lga"):
+        info["leads_on_pads"] = rot is not None           # True: every lead checked on its pad; False: not checkable
     return text, info
 
 
