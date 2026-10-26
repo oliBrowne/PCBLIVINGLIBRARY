@@ -50,6 +50,22 @@ def test_rmn5_dash_values_reach_run_job(monkeypatch):
     assert KM.main(argv[2:]) == 0 and got["ai"]["bom"] == "-x.csv" and got["ai"]["part"] == "-P1", got
 
 
+
+# ---- R-MN-6: altium-menu build refuses a non-ASCII --command (the menu reads command= in the ANSI code page)
+@lite
+def test_rmn6_non_ascii_command_is_refused(tmp_path):
+    from ecadlib import altium_menu as AM
+    cmd = '"C:\\Users\\José\\venv\\Scripts\\python.exe" -m ecadlib'
+    try:
+        AM.build(tmp_path / "m", command=cmd, win_dir="D:\\ecadlib-menu")
+        raise AssertionError("built")
+    except ValueError as e:
+        assert "--command" in str(e) and "ASCII" in str(e), e
+    assert not (tmp_path / "m" / AM.INI).exists()
+    AM.build(tmp_path / "m2", command='"C:\\venv\\Scripts\\python.exe" -m ecadlib', win_dir="D:\\ecadlib-menu")
+    assert b'command="C:\\venv\\Scripts\\python.exe" -m ecadlib' in (tmp_path / "m2" / AM.INI).read_bytes()
+
+
 if __name__ == "__main__":
     fails = 0
     for k, f in list(globals().items()):

@@ -531,6 +531,10 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
     for k, v in (("--workspace", workspace), ("--library", library), ("--command", command)):
         if v and re.search(r"[\x00-\x1f]", str(v)):    # a line break would start another key in ecadlib_menu.ini
             raise ValueError(f"{k} {str(v)!r}: a line break or control character cannot go into {INI}")
+    if command and not str(command).isascii():   # the menu reads command= with TIniFile (ANSI code page, no UTF-8)
+        raise ValueError(f"--command {command!r}: the Altium menu reads it in the Windows ANSI code page, so it must "
+                         f"be plain ASCII; use the folder's short (8.3) name (dir /x) or a Python installed under an "
+                         f"ASCII path without spaces")
     out.mkdir(parents=True, exist_ok=True)
     derived = win_dir is None and os.name == "nt"
     if derived:
