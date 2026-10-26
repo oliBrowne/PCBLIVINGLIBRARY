@@ -23,7 +23,9 @@ outputs never move.
 Power pins sharing a name (VDD x5) may be stacked (rules [symbols] stack_power, default 'none'): 'stack' puts them on one spot, one
 pin showing its name and number and the rest drawn on top of it with name and number hidden (Altium joins pins at
 one point; the KiCad export writes the rest as hidden passive pins, KLC S4.3); 'hide' makes the rest hidden pins
-tied to the net by name (Altium HiddenNetName, KiCad hidden power_in); 'none' draws every pin.
+tied to the net by name (Altium HiddenNetName, KiCad hidden power_in), for supply inputs and grounds only (an output
+or exposed pad hidden on a net named VOUT / EP would join every part's on the board: those are stacked as 'stack'
+does); 'none' draws every pin.
 
 Above [symbols] split_pins pins the part becomes a multi-part symbol: part A holds the power and ground pins, the
 other parts the signal blocks in order, at most unit_pins pins each (a port is never split across parts unless it
@@ -286,8 +288,24 @@ def _blocks(pins, s):
                 slots.append([p])
                 keys.append(k)
         blocks.append({"group": g, "label": f"P{sub}" if sub and sub.isalpha() and len(sub) == 1 else sub or g,
-                       "side": sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)}})
+                       "side": sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)},
+                       "hide": {id(sl) for sl in slots if _hideable(g, sl)}})
     return blocks
+
+
+DRIVES = ("power_out", "output", "open_collector", "open_emitter", "tristate", "hiz")
+
+
+def _hideable(group, slot):
+    """stack_power = "hide" ties hidden pins to a net by their name, design-wide: only a supply input or a ground may
+    be hidden so. Two regulators' VOUT tabs (power_out) or two parts' EP pins on a net "VOUT" / "EP" would join
+    rails; they stay stacked and shown (R-SY-5)."""
+    ts = [str(p.get("type") or "").lower() for p in slot]
+    if any(t in DRIVES for t in ts):
+        return False
+    if group == "analog":                     # AVDD / VREF+ in, but VREF_OUT / VREFBUF drive
+        return all(t in ("power", "power_in") for t in ts)
+    return group in ("power", "ground")
 
 
 def _npins(blocks):
@@ -408,6 +426,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
     for u in units:
         sd = u["sides"]
         nets = {k: v for bl in sd.values() for b in bl for k, v in b.get("nets", {}).items()}
+        hide = {k for bl in sd.values() for b in bl for k in b.get("hide", ())}
         left, right, top, bot = _rows(sd["left"]), _rows(sd["right"]), _rows(sd["top"]), _rows(sd["bottom"])
         tail = [b for b in sd["left"] if b["side"] == "bottom"]          # power_side "left": ground at the bottom
         if tail and len(right) > len(left):                                  # of the left side, not mid-way down (also
@@ -442,7 +461,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
             for j, p in enumerate(sl):
                 q = dict(p)
                 if j:
-                    if s["stack_power"] == "hide":
+                    if s["stack_power"] == "hide" and id(sl) in hide:
                         q.update(hidden=True, net=q.get("net") or nets.get(id(sl)) or stack_key(p.get("name", "")))
                     else:
                         q.update(show_name=False, show_num=False)

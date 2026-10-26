@@ -168,3 +168,19 @@ def test_bank_supplies_are_not_stacked_as_one_rail():
     assert len({keys["VIO_1"], keys["VIO_2"]}) == 2 and keys["VDD_1"] == keys["VDD_2"] == "VDD" and keys["VSS_0"] == "VSS", keys
     k2 = SL.stack_keys(["VDD_1", "VDD_1", "VDD_2"])                  # a name used twice: _1 / _2 are not instances
     assert k2["VDD_1"] != k2["VDD_2"], k2
+
+
+# --- R-SY-5: stack_power = hide hides supply inputs and grounds only, never an output or an exposed pad ------------
+
+def test_hide_never_ties_an_output_or_exposed_pad_to_a_net_by_name():
+    from ecadlib import symbol_layout as SL
+    rules = {"symbols": {"stack_power": "hide"}}
+    pins = [{"num": "1", "name": "GND", "type": "ground"}, {"num": "2", "name": "VOUT", "type": "power_out"},
+            {"num": "3", "name": "VIN", "type": "power"}, {"num": "4", "name": "VOUT", "type": "power_out"},
+            {"num": "5", "name": "EP", "type": "passive"}, {"num": "6", "name": "EP", "type": "passive"},
+            {"num": "7", "name": "VIN", "type": "power"}, {"num": "8", "name": "GND", "type": "ground"}]
+    sym = SL.build("AMS1117-3.3", pins, rules=rules)
+    hidden = {pr[1]["num"]: pr[1].get("net") for pr in sym["prims"] if pr[0] == "pin" and pr[1].get("hidden")}
+    assert set(hidden) == {"7", "8"}, hidden                         # the second VIN and GND: supply in and ground
+    stacked = {pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin" and pr[1].get("show_name") is False}
+    assert {"4", "6"} <= stacked, stacked                            # VOUT / EP still drawn on one spot, not hidden
