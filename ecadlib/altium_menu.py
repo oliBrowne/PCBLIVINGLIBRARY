@@ -528,6 +528,9 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
     Windows, the Python running this (default_command()); elsewhere empty (the runner then searches PATH / py / python)."""
     out = Path(out)
     command = command or default_command()
+    for k, v in (("--workspace", workspace), ("--library", library), ("--command", command)):
+        if v and re.search(r"[\x00-\x1f]", str(v)):    # a line break would start another key in ecadlib_menu.ini
+            raise ValueError(f"{k} {str(v)!r}: a line break or control character cannot go into {INI}")
     out.mkdir(parents=True, exist_ok=True)
     derived = win_dir is None and os.name == "nt"
     if derived:

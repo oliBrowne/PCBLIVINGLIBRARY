@@ -87,6 +87,22 @@ def test_menu_config_that_does_not_exist_is_an_error_not_defaults():
             raise AssertionError("a missing ecadlib_menu.ini gave defaults")
 
 
+def test_menu_build_refuses_a_line_break_that_would_add_ini_keys():
+    """build(workspace="D:/ws\\r\\nlibrary=D:/other") wrote a second library= line: Python's reader takes the last
+    one, Windows' profile API (the script) the first, so the two sides disagreed on the library folder."""
+    import tempfile
+    from ecadlib import altium_menu as AM
+    with tempfile.TemporaryDirectory() as t:
+        for kw in ({"workspace": "D:/ws\r\nlibrary=D:/other"}, {"library": "L\nport=1"}, {"command": "py -m ecadlib\nhidden=0"}):
+            try:
+                AM.build(Path(t) / "menu", **kw)
+            except ValueError as e:
+                assert "line break" in str(e)
+            else:
+                raise AssertionError(kw)
+            assert not (Path(t) / "menu" / AM.INI).exists()
+
+
 class Workspace(FakeA365):
     """A closer Nexar mock: components found by name whatever the case (pick_named), symbol / footprint items that
     can be released once (a second release of the same item name fails as duplicate, as live), linked by name."""
