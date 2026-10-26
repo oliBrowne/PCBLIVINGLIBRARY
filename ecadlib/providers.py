@@ -234,9 +234,8 @@ def parse_jlcpcb(r, mpn, res, code="", maker=""):
     try:
         from .kicad_index import norm_mpn
         items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
-        exact = [i for i in items if isinstance(i, dict) and (
-            str(i.get("componentCode") or "").strip().upper() == code.upper() if code else
-            norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn))]
+        exact = [i for i in items if (str(i.get("componentCode") or "").strip().upper() == code.upper() if code else
+                                      norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn))]
     except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
         res.error = f"unparseable: {e}"
         return res
