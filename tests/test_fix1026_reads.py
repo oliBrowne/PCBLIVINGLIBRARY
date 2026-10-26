@@ -372,7 +372,8 @@ def test_2_false_hold_sweep_cases_are_not_held():
               "terminal_width": mm(0.5, 0.6)}, rev)
     assert not any("span 3.30 mm > body_width" in r for r in rev), rev       # MicroCrystal C7 SON-8
     small = "exposed_pad.width: 0.275 mm is implausibly small for an exposed pad (unit mislabelled?)"
-    assert DR.hold_reasons({"needs_review": [small]}) == []                   # a 1 x 1 DFN's real pad
+    body = {"body_length": mm(0.95, 1.05), "body_width": mm(0.95, 1.05)}
+    assert DR.hold_reasons({"needs_review": [small], "spec": body}) == []      # a 1 x 1 DFN's real pad
     slip = "exposed_pad.width: 0.057 mm is implausibly small for an exposed pad (unit mislabelled?)"
     assert DR.hold_reasons({"needs_review": [slip]}) == [slip]                # an inch value labelled mm
 
@@ -461,6 +462,18 @@ def test_fx2_3_a_qfp_or_quad_qfn_pad_too_big_as_read_is_not_excused_by_fitting_t
               "body_length": mm(3.9, 4.1), "body_width": mm(4.9, 5.1), "terminal_length": mm(0.3, 0.5),
               "terminal_width": mm(0.2, 0.3), "exposed_pad": {"length": mm(3.9, 4.0), "width": mm(1.9, 2.1)}}, rev)
     assert any(r.startswith("exposed_pad.length") for r in rev), rev           # quad QFN: not excused either
+
+
+def test_fx2_4_an_inch_slip_on_a_big_exposed_pad_is_held():
+    """QFN-48 7x7 with the pad read 0.203 "mm" (5.15 mm in inches): over 0.2 mm, so the soft band let it build a
+    0.2 mm thermal pad. Soft only when the pad is also a plausible share of the body (a 1 x 1 DFN's 0.275 is 27 %)."""
+    from ecadlib import ds_route as DR
+    line = lambda v: f"exposed_pad.width: {v} mm is implausibly small for an exposed pad (unit mislabelled?)"
+    spec = lambda side: {"spec": {"package_type": "qfn", "body_length": {"min": side - 0.05, "nom": side, "max": side + 0.05},
+                                  "body_width": {"min": side - 0.05, "nom": side, "max": side + 0.05}}}
+    assert DR.hold_reasons(dict(spec(7.0), needs_review=[line(0.203)])) == [line(0.203)]
+    assert DR.hold_reasons(dict(spec(7.0), needs_review=[line(0.24)])) == [line(0.24)]
+    assert DR.hold_reasons(dict(spec(1.0), needs_review=[line(0.275)])) == []
 
 
 if __name__ == "__main__":

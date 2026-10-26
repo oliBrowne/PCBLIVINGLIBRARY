@@ -989,14 +989,21 @@ SOFT_FAILED = re.compile(r"^(schema:|self-check:|footprint_gen\.build failed|alt
 SYMBOL_FAILED = re.compile(r"^symbol:", re.I)
 
 
-# an exposed pad narrower than a lead but not under 0.2 mm: a unit slip makes it far smaller (0.057 "mm" for 1.45),
-# while a 1 x 1 mm DFN's real pad can be 0.275 mm beside 0.3 mm leads. Still a failed read, not a hold.
+# an exposed pad narrower than a lead, but not under 0.2 mm and a plausible share of the body (15 % of its shorter
+# side): a 1 x 1 mm DFN's real pad can be 0.275 mm beside 0.3 mm leads (27 %); a unit slip makes it far smaller, 0.057
+# "mm" for 1.45, or 0.203 "mm" for a 7 x 7 QFN's 5.15 mm pad (3 %). Still a failed read, not a hold.
 _EP_SMALL = re.compile(r"^exposed_pad\.\w+: ([\d.]+) mm is implausibly small for an exposed pad")
 
 
-def _soft(line):
+def _soft(line, spec=None):
+    if SOFT_FAILED.match(line):
+        return True
     m = _EP_SMALL.match(line)
-    return bool(SOFT_FAILED.match(line)) or bool(m and float(m.group(1)) >= 0.2)
+    if not m or float(m.group(1)) < 0.2:
+        return False
+    from .datasheet import _dim
+    sides = [d[1] for d in (_dim((spec or {}).get(k)) for k in ("body_length", "body_width")) if d and d[1]]
+    return bool(sides) and float(m.group(1)) >= 0.15 * min(sides)
 
 
 def hold_reasons(res, fp_needed=True):
@@ -1005,7 +1012,7 @@ def hold_reasons(res, fp_needed=True):
     kind, why = assess(res)
     if kind != "failed":
         return []
-    hard = [w for w in why if not _soft(w)]
+    hard = [w for w in why if not _soft(w, res.get("spec"))]
     return hard if fp_needed is not False else [w for w in hard if SYMBOL_FAILED.match(w)]
 
 
