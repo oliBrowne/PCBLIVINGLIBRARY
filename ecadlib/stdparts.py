@@ -1030,6 +1030,25 @@ def symbol_text(key, mpn=""):
 
 
 # ---------------------------------------------------------------- one part
+# another diode named, or the LED word naming what the part is for ('for LED', 'LED driver', 'LED backlight boost')
+_OTHER_DIODE = re.compile(r"schottky|zener|\bTVS\b|transient|rectifier|\bESD\b|varactor|varicap|switching diode|"
+                          r"signal diode|photo ?diode|suppressor", re.I)
+_LED_USE = re.compile(r"\b(?:for|in|of|to|drives?|driving|protects?|protecting)\s+(?:an?\s+|the\s+)?LEDs?\b|"
+                      r"\bLEDs?[\s-]+(?:driver|backlight|string|strip|lighting|boost|dimm\w*|protect\w*|surge)", re.I)
+
+
+def says_led(description):
+    """The description says the part is an LED: an 'LED' word that does not name what another diode is for. Another
+    diode named before the LED word is the part ('Schottky ..., LED backlight boost'); named after it, it is a
+    feature of the LED ('LED white, ESD protection 8 kV')."""
+    d = str(description or "")
+    led = re.search(r"\bLED\b", d, re.I)
+    if not led:
+        return False
+    other = _OTHER_DIODE.search(d)
+    return not (other and other.start() < led.start()) and not _LED_USE.search(d)
+
+
 def part_kind(category, footprint="", description="", designator=""):
     """R C CP L LED D F Q U or None from the plan folder's last segment, the footprint and the description."""
     cat = str(category or "").split("/")[-1]
@@ -1041,7 +1060,7 @@ def part_kind(category, footprint="", description="", designator=""):
     if cat == "Inductors":
         return "L"
     if cat == "Diodes":
-        return "LED" if fp.startswith("LED_") or re.search(r"\bLED\b", d, re.I) else "D"
+        return "LED" if fp.startswith("LED_") or says_led(d) else "D"
     if re.search(r"\bfuse\b|polyfuse|PTC", d, re.I) and re.match(r"^F\d", str(designator or "")):
         return "F"
     return {"Transistors": "Q", "ICs": "U"}.get(cat)

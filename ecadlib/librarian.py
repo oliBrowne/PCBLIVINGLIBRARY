@@ -288,6 +288,7 @@ def passive_pins(sym):
 
 
 def passive_kind(item):
+    from . import stdparts as SP
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
     if cat == "Resistors":
         return "R"
@@ -295,7 +296,7 @@ def passive_kind(item):
         return "CP" if fp.startswith("CP_") else "C"
     if cat == "Inductors":
         return "L"
-    if cat == "Diodes" and (fp.startswith("LED_") or re.search(r"\bLED\b", item.get("description") or "", re.I)):
+    if cat == "Diodes" and (fp.startswith("LED_") or SP.says_led(item.get("description"))):
         return "LED"
     return None
 

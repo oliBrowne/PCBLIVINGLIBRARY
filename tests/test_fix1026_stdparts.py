@@ -248,3 +248,29 @@ def test_metric_word_keeps_the_readings_that_were_right():
                     ("Chip resistor 0603 (1.6 x 0.8 mm)", "0603"), ("RES 10K 0603 1.6mm x 0.8mm", "0603"),
                     ("0603 (inch)", "0603"), ("0402 [1005 Metric]", "0402")):
         assert S.chip_size(t) == want, (t, S.chip_size(t))
+
+
+# --- R-SP-7: an LED word makes a part an LED only when the description says it is one ----------------------------
+
+NOT_LEDS = ("Schottky diode 40V 1A, LED backlight boost", "Zener 5.1V for LED string protection",
+            "Rectifier 1A for LED driver", "TVS, LED lighting surge", "ESD protection diode for LED strip")
+LEDS = ("LED red 0603", "Green LED, 525nm", "LED SMD 0805 white", "Red LED diffused", "LED, blue, 470 nm",
+        "LED white 3W, ESD protection 8 kV", "LED array, 4 red", "LED lamp 5 mm", "LED current 20 mA red")
+
+
+def test_led_word_in_another_diodes_description_is_not_an_led():
+    from ecadlib import stdparts as S
+    for d in NOT_LEDS:
+        assert S.part_kind("Components/Diodes", "SOD-123", d) == "D", d
+    for d in LEDS:
+        assert S.part_kind("Components/Diodes", "", d) == "LED", d
+    assert S.part_kind("Components/Diodes", "LED_0603_1608Metric", "Schottky") == "LED"     # the footprint says so
+
+
+def test_librarian_passive_kind_agrees():
+    from ecadlib import librarian as L
+    item = lambda d: {"folder": "Components/Diodes", "footprint": {"ref": "SOD-123"}, "description": d}
+    for d in NOT_LEDS:
+        assert L.passive_kind(item(d)) is None, d
+    for d in LEDS:
+        assert L.passive_kind(item(d)) == "LED", d
