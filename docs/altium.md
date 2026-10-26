@@ -96,7 +96,9 @@ first live sign-in needs a real Nexar app.
 ## `altium_export.py`: Altium Database Library
 
 ```
-python3 -m ecadlib.altium_export examples/sample_bom.csv --triage out/triage_sample_bom.csv -o out/altium [--win-dir C:\ecadlib\altium]
+python3 -m ecadlib.altium_export examples/sample_bom.csv --triage out/triage_sample_bom.csv -o out/altium --draft [--win-dir C:\ecadlib\altium]
+# from a librarian plan (no --draft): only the parts that pass the release check, via dblib-sync
+python3 -m ecadlib.altium_export out/lib/plan.json -o out/altium
 ```
 
 This writes one table per category (Capacitors, Connectors, Crystals, Diodes, ICs, Resistors, Transistors) to `parts.sqlite`, and the same tables as sheets to `parts.xlsx`. It also writes two `.DbLib` files.

@@ -136,7 +136,7 @@ def test_unreadable_bom_is_a_message_not_a_traceback():
         bad = _write("bom.csv", "Pos;Bezeichner;Wert\n1;R1;10k\n", d)
         header_only = _write("empty.csv", "Designator,Value,MPN\n", d)
         for argv in (["triage", str(bad), "-o", f"{d}/t", "--offline", "--cache", f"{d}/c"],
-                     ["dblib", str(bad), "-o", f"{d}/x"], ["dblib", str(header_only), "-o", f"{d}/y"],
+                     ["dblib", str(bad), "-o", f"{d}/x", "--draft"], ["dblib", str(header_only), "-o", f"{d}/y", "--draft"],
                      ["librarian", str(bad), "-o", f"{d}/l", "--offline", "--cache", f"{d}/c"]):
             rc, text = _cli(*argv)
             assert rc == 2 and "Traceback" not in text and ("BOM" in text or "header" in text), (argv, rc, text)
@@ -234,7 +234,7 @@ def test_dblib_xlsx_keeps_altium_parameter_references_as_text():
     with tempfile.TemporaryDirectory() as d:
         bom = _write("bom.csv", "Designator,Qty,Value,Footprint,MPN\nR1,1,10k,R_0603_1608Metric,RC0603FR-0710KL\n"
                                 "X1,1,,,=HYPERLINK(\"http://x\")\n", d)
-        rc, text = _cli("dblib", str(bom), "-o", f"{d}/out")
+        rc, text = _cli("dblib", str(bom), "-o", f"{d}/out", "--draft")
         assert rc in (0, None), text
         wb = openpyxl.load_workbook(f"{d}/out/parts.xlsx")
         cells = [c for ws in wb for row in ws.iter_rows() for c in row]
@@ -275,7 +275,7 @@ def test_reports_neutralise_spreadsheet_formulas():
                 ["release-check", f"{out}/lib/plan.json", "-o", f"{out}/rc"],
                 ["dedupe", f"{out}/lib/plan.json", "-o", f"{out}/dd", "--bom", str(bom)],
                 ["dblib-sync", f"{out}/lib/plan.json", "--to", f"{out}/dbs"],
-                ["dblib", str(bom), "-o", f"{out}/dblib"],
+                ["dblib", str(bom), "-o", f"{out}/dblib", "--draft"],
                 ["where-used", "--projects", d, "-o", f"{out}/wu"]]
         for argv in runs:
             rc, text = _cli(*argv)

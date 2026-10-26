@@ -472,7 +472,7 @@ def test_altium_export_excel_dblib_is_relative():
     from ecadlib import altium_export as AE
     d = _tmp()
     with mock.patch("sys.stdout", io.StringIO()):
-        assert not AE.main([str(ROOT / "examples" / "sample_bom.csv"), "-o", str(d)])
+        assert not AE.main([str(ROOT / "examples" / "sample_bom.csv"), "-o", str(d), "--draft"])
     db = (d / "ecadlib_excel.DbLib").read_text()
     assert "LibraryDatabaseType=Microsoft Excel" in db and "LibraryDatabasePath=parts.xlsx" in db and "DatabasePathRelative=1" in db
     assert "DatabasePathRelative=0" in (d / "ecadlib_sqlite.DbLib").read_text()     # ODBC string: no relative form

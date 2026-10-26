@@ -47,7 +47,7 @@ EXAMPLES = {
     "footprint-bench": ["ecadlib footprint-bench --offline", "ecadlib footprint-bench --json bench.json"],
     "eval": ["ecadlib eval sets", "ecadlib eval run --set kicad-v1 --limit 5 --offline", "ecadlib eval compare runA.json runB.json",
              "ecadlib eval gate", "ecadlib eval golden --update"],
-    "dblib": ["ecadlib dblib my_bom.csv -o out/altium"],
+    "dblib": ["ecadlib dblib out/lib/plan.json -o out/altium", "ecadlib dblib my_bom.csv -o out/altium --draft"],
     "altium-lib": ["ecadlib altium-lib pcblib specs/SOIC-8_3.9x4.9mm_P1.27mm.json -o out/altium", "ecadlib altium-lib dump x.PcbLib"],
     "altium365": ["ecadlib altium365 plan my_bom.csv -o out/a365/plan.json", "ecadlib altium365 push out/a365/plan.json --workspace https://acme.365.altium.com --dry-run"],
     "dblib-sync": ["ecadlib dblib-sync out/library/plan.json --to //server/libs/Components --dry-run"],

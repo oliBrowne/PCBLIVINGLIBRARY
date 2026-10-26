@@ -442,7 +442,7 @@ class Workspace:
                     "written": len(act("added")) + len(act("updated")) + len(act("up_to_date"))}
         tri = self._triage_csv(bom_path)
         out = self.root / "altium"
-        argv = [str(bom_path), "-o", str(out)] + (["--triage", str(tri)] if tri.exists() else [])
+        argv = [str(bom_path), "-o", str(out), "--draft"] + (["--triage", str(tri)] if tri.exists() else [])
         rf = self.rules_in_use()
         argv += ["--rules", str(rf)] if rf else []
         if altium_export.main(argv):

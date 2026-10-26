@@ -7,7 +7,8 @@ the parts *database* Altium reads through a .DbLib file (OLE DB / ODBC):
     out/altium/parts.xlsx        same tables as sheets (Excel via the ACE OLE DB provider; tables are 'Sheet$')
     out/altium/ecadlib_sqlite.DbLib, ecadlib_excel.DbLib   INI files pointing Altium at the above
 
-    python -m ecadlib.altium_export examples/sample_bom.csv -o out/altium [--triage out/triage_sample_bom.csv]
+    python -m ecadlib.altium_export examples/sample_bom.csv -o out/altium --draft [--triage out/triage_sample_bom.csv]
+    python -m ecadlib.altium_export out/lib/plan.json -o out/altium   # release-checked parts only (dblib-sync)
 
 Column names use Altium's reserved DbLib names ([Library Ref], [Library Path], [Footprint Ref],
 [Footprint Path], [Description]) plus parameters (Part Number = key, Value, Comment, Manufacturer,
@@ -296,14 +297,31 @@ def dblib_text(conn_str, tables, left_quote="[", right_quote="]", excel=False, c
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Write an Altium DbLib (SQLite + XLSX) from a BOM")
-    ap.add_argument("bom")
+    ap = argparse.ArgumentParser(description="Write an Altium DbLib from a librarian plan.json: only the parts that pass "
+                                             "the release check go in (dblib-sync), the others are listed with the reason. "
+                                             "From a BOM only with --draft: an unchecked table skeleton.")
+    ap.add_argument("bom", help="plan.json from `ecadlib librarian` (a BOM needs --draft)")
     ap.add_argument("-o", "--out", default="out/altium")
+    ap.add_argument("--draft", action="store_true",
+                    help="from a BOM: write a row for every BOM line, release-checked or not (Library Path / Footprint "
+                         "Path name files this command does not write)")
+    ap.add_argument("--name", default="ecadlib", help="from a plan: base name of the .DbLib, .xlsx and .csv")
     ap.add_argument("--triage", help="triage CSV from bom_triage (to pick up resolved local footprints)")
-    ap.add_argument("--win-dir", default=r"C:\ecadlib\altium", help="Windows folder the DB will live in (for the connection string)")
+    ap.add_argument("--win-dir", default=WIN_DIR, help="Windows folder the DB will live in (for the connection string)")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml in the output folder, the current folder or a parent)")
     a = ap.parse_args(argv)
 
+    if _is_plan(a.bom):                       # the release gate, as every other export route: dblib-sync ships only
+        from . import altium_dblib_sync as DS  # the parts that pass the check now and lists the others with the reason
+        return DS.main([a.bom, "--to", a.out, "--name", a.name] + (["--win-dir", a.win_dir] if a.win_dir != WIN_DIR else [])
+                       + (["--rules", a.rules] if a.rules else []))
+    if not a.draft:
+        print(f"ecadlib dblib: {a.bom} is a BOM, and no BOM line has been through the release check, so nothing was "
+              "written (the rows would name .SchLib / .PcbLib files that are not built).\n"
+              f"  hint: `ecadlib librarian {a.bom} -o out/lib` builds and checks the parts, then "
+              "`ecadlib dblib out/lib/plan.json -o OUT` writes the DbLib with the parts that pass.\n"
+              "  --draft writes the old unchecked table skeleton (every BOM line) anyway.", file=sys.stderr)
+        return 2
     from . import rules as RU
     rules = RU.load(a.rules, start=a.out)
     try:
@@ -345,6 +363,25 @@ def main(argv=None):
     for n_, df in tables.items():
         print(f"{n_:<12} {len(df):>2} parts  e.g. {df.iloc[0]['Part Number']} -> {df.iloc[0]['Footprint Ref']}")
     print(f"wrote {db}, {out/'parts.xlsx'}, {out/'ecadlib_sqlite.DbLib'}, {out/'ecadlib_excel.DbLib'}")
+    print("draft: no part in it was release-checked, and its Library Path / Footprint Path name files this command "
+          "does not write")
+
+
+WIN_DIR = r"C:\ecadlib\altium"
+
+
+def _is_plan(path):
+    """A librarian / altium365 plan.json (a JSON list of parts), not a BOM."""
+    import json
+    p = Path(path)
+    try:
+        with open(p, "rb") as f:
+            head = f.read(64).lstrip(b"\xef\xbb\xbf \t\r\n")
+        if not head.startswith(b"["):
+            return False
+        return isinstance(json.loads(p.read_text(encoding="utf-8-sig")), list)
+    except (OSError, ValueError):
+        return False
 
 
 if __name__ == "__main__":

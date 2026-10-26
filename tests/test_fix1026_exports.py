@@ -120,3 +120,54 @@ def test_pulled_part_check_leaves_out_only_the_field_rules():
         assert RC.publish_problems(it, d, writes_files=True)[0].startswith("files: symbol file missing")
         none = dict(it, symbol={"ref": "P1", "file": None}, footprint={"ref": "X", "file": None})   # pulled, no files
         assert RC.publish_problems(none, d, writes_files=True)[0].startswith("files: no symbol model")
+
+
+# ------------------------------------------------------------------ item 2 (I05): CLI `ecadlib dblib` is gated
+def _cli(*argv):
+    import contextlib, io
+    from ecadlib import cli
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        try:
+            rc = cli.main(list(argv))
+        except SystemExit as e:
+            rc = e.code if isinstance(e.code, int) else (1 if e.code else 0)
+            buf.write(str(e.code or ""))
+    return rc, buf.getvalue()
+
+
+@lite
+def test_cli_dblib_from_a_bom_writes_no_unchecked_rows(tmp_path, monkeypatch):
+    """`ecadlib dblib BOM` wrote a DbLib row for every BOM line, held parts too, pointing at .SchLib/.PcbLib files it
+    never wrote, while the MCP export (the plan through dblib-sync) left held parts out. A BOM has no checked parts:
+    refused, unless --draft asks for the old unchecked table skeleton."""
+    monkeypatch.setenv("ECADLIB_CONFIG", "")
+    monkeypatch.chdir(tmp_path)
+    bom = tmp_path / "bom.csv"
+    bom.write_text("Designator,Qty,Value,Footprint,MPN\nR1,1,10k,R_0603_1608Metric,RC0603FR-0710KL\n", encoding="utf-8")
+    rc, text = _cli("dblib", str(bom), "-o", str(tmp_path / "out"))
+    assert rc == 2 and "release check" in text and "librarian" in text and "--draft" in text, (rc, text)
+    assert not (tmp_path / "out").exists() or not any((tmp_path / "out").iterdir())
+    rc, text = _cli("dblib", str(bom), "-o", str(tmp_path / "draft"), "--draft")
+    assert rc in (0, None) and (tmp_path / "draft" / "ecadlib_excel.DbLib").is_file(), text
+    assert "draft" in text.lower(), text
+
+
+@lite
+def test_cli_dblib_from_a_plan_ships_only_parts_that_pass_the_release_check(tmp_path, monkeypatch):
+    import json
+    from tests.test_release_check import make
+    monkeypatch.setenv("ECADLIB_CONFIG", "")
+    monkeypatch.chdir(tmp_path)
+    ok = make(tmp_path, name="OKPART", fp_name="SOIC-8_ok")
+    bad = make(tmp_path, name="BADPART", fp_name="SOIC-8_bad")
+    bad["description"] = ""                                # plan says ready, the check now says no
+    held = make(tmp_path, name="HELDPART", fp_name="SOIC-8_held")
+    held.update(status="held", hold_reasons=["fields: no datasheet link"])
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps([ok, bad, held]))
+    rc, text = _cli("dblib", str(plan), "-o", str(tmp_path / "out"))
+    assert rc in (0, None), text
+    csvs = "".join(p.read_text(encoding="utf-8") for p in (tmp_path / "out").glob("*.csv"))
+    assert "OKPART" in csvs and "BADPART" not in csvs and "HELDPART" not in csvs, csvs
+    assert "BADPART" in text and "description is empty" in text and "HELDPART" in text, text

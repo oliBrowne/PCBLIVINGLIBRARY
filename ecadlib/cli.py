@@ -17,7 +17,7 @@
     ecadlib fp-edit   PLAN --part P show|rename OLD=NEW|same-net A,B|hole [MM]|undo   fix a held part's pad table by hand
     ecadlib footprint-bench [--offline]           compare generated footprints with KiCad's official ones, pad by pad
     ecadlib eval      run|compare|sets|show ...   accuracy test set: run the pipeline on known parts, pass rate and cost
-    ecadlib dblib     BOM -o out/altium           Altium DbLib (SQLite + XLSX + .DbLib)
+    ecadlib dblib     plan.json -o out/altium     Altium DbLib, release-checked parts only (BOM: --draft)
     ecadlib altium-lib pcblib|schlib|dump ...     write/read Altium .PcbLib/.SchLib files
     ecadlib altium-native write|compare DIR       let Altium build the .PcbLib/.SchLib files itself; compare the result
     ecadlib altium365 plan|workspaces|push ...    Altium 365 release via Nexar
