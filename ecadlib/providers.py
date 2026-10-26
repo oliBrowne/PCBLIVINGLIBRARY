@@ -258,14 +258,14 @@ class EasyEDA(Provider):
 
 def lcsc_number(raw):
     """The LCSC number in a cell: 'C2040', 'LCSC C2040', or a product link's own number ('..._C1663.html', '.../C2040'),
-    not a C0G / C1 in the link's slug before it. '' when there is none."""
+    not a C0G / C1 in the link's slug before it. '' when there is none, or two different ones in free text."""
     up = str(raw or "").strip().upper()
     for pat in (r"(?:LCSC\W*)?(C\d{1,9})", r".*_(C\d{1,9})\.HTML?(?:[?#].*)?", r".*/(C\d{1,9})(?:\.HTML?)?/?(?:[?#].*)?"):
         m = re.fullmatch(pat, up)
         if m:
             return m.group(1)
-    found = re.findall(r"(?<![A-Z0-9])(C\d{1,9})(?![0-9])", up)
-    return found[-1] if found else ""
+    found = set(re.findall(r"(?<![A-Z0-9])(C\d{1,9})(?![0-9A-Z])", up))     # a whole word: not the C0 of a C0G
+    return found.pop() if len(found) == 1 else ""                         # two different numbers: neither
 
 
 def parse_easyeda(data, res):

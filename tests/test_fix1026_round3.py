@@ -127,3 +127,13 @@ def test_maker_names_lost_by_the_fix_round_match_again_and_teco_is_not_te():
                  ("Catalyst Semiconductor", "onsemi"), ("Integrated Device Technology", "Renesas Electronics"),
                  ("Integrated Device Technology Inc", "IDT")):
         assert S(a, b) and S(b, a), (a, b)
+
+
+# ---------------------------------------------------------------- R-FX-5: an LCSC number in free text
+def test_lcsc_number_skips_c0g_and_gives_none_for_two_different_numbers():
+    from ecadlib.providers import lcsc_number as N
+    for cell, want in (("C1663 C0G", "C1663"), ("C0G C1663", "C1663"), ("100nF C0G 50V, LCSC: C1663", "C1663"),
+                       ("C2040, C1234", ""), ("C2040 / C2040", "C2040"), ("C2040", "C2040"), ("LCSC C2040", "C2040"),
+                       ("https://www.lcsc.com/product-detail/C0G-Capacitors_C1663.html", "C1663"),
+                       ("https://jlcpcb.com/partdetail/C2040", "C2040"), ("C0G", ""), ("C1206X7R", "")):
+        assert N(cell) == want, (cell, N(cell), want)
