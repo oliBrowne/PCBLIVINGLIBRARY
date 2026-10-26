@@ -330,3 +330,18 @@ def test_ds2_39_pkg_check_reads_the_rows_of_a_dblib_with_a_non_ascii_name(tmp_pa
     probs, facts = P.check_folder(out, rep["libpkg"], rep["dblibs"])
     assert facts["dblib_rows"] == 2, facts
     assert probs == ["Bibliothèque.DbLib: RES-0603-10k Footprint Path PcbLib\\MISSING.PcbLib does not exist"], probs
+
+
+@lite
+def test_no_altium_settings_folder_is_said_before_altium_is_running(tmp_path):
+    """PC test run 2026-10-26 (Altium open): with no settings folder the menu bar cannot go in anyway, so that is the
+    refusal, not "close Altium first" (test_ds2_36 failed on any Windows machine with Altium running)."""
+    from unittest import mock
+    from ecadlib import altium_menu as AM
+    with mock.patch.object(AM, "check_win_dir", lambda w: "D:\\ecadlib menu"), \
+            mock.patch.object(AM, "altium_user_folders", lambda *a: []):
+        try:
+            AM.install_menu_bar(str(tmp_path), running=lambda: True)
+            raise AssertionError("must refuse")
+        except ValueError as e:
+            assert "no Altium Designer settings folder" in str(e), e
