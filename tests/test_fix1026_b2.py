@@ -139,3 +139,36 @@ def test_librarian_holds_a_to263_line_on_the_symbols_to252_land(tmp_path):
     rows = T.triage([{"designator": "U1", "qty": "1", "value": "LM1117", "footprint": "TO-263", "mpn": "LM1117DT"}],
                     KiCadIndex([lib]), [], None)
     assert "TO-252" not in str(rows[0].get("local_footprint") or ""), rows[0]
+
+
+# --- R-B2-5: Altium's IPC-7351 land names are read (family, pitch, body, pins) before comparing --------------------
+
+def test_ipc7351_names_compare_with_kicad_names():
+    from ecadlib.altium_export import lands_differ
+    for a, b in (("QFP50P900X900X160-48N", "Package_QFP:LQFP-48_7x7mm_P0.5mm"),
+                 ("QFP50P900X900X160-48N", "48-LQFP"),
+                 ("SOIC127P600X175-8N", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"), ("SOIC127P600X175-8N", "SOIC-8"),
+                 ("SOT95P280X145-5N", "Package_TO_SOT_SMD:SOT-23-5"), ("SOT95P237X112-3N", "Package_TO_SOT_SMD:SOT-23"),
+                 ("QFN50P300X300X100-17N", "Package_DFN_QFN:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm"),
+                 ("QFP50P1200X1200X160-64N", "LQFP-64_10x10mm_P0.5mm")):
+        assert not lands_differ(a, b) and not lands_differ(b, a), (a, b)
+    for a, b in (("QFP80P900X900X120-32N", "LQFP-48_7x7mm_P0.5mm"),            # 32 pins at 0.8 mm
+                 ("QFP50P900X900X160-48N", "LQFP-48_7x7mm_P0.5mm_ThermalVias"),
+                 ("QFP50P900X900X120-49N", "LQFP-48_7x7mm_P0.5mm"),             # 49th pin: an exposed pad
+                 ("SOIC127P600X175-8N", "SOIC-8_5.23x5.23mm_P1.27mm"),         # 6.0 mm span: the 3.9 mm body
+                 ("SOIC127P1030X265-16N", "SOIC-16_3.9x9.9mm_P1.27mm"),        # 10.3 mm span: the 7.5 mm body
+                 ("SOT95P280X145-5N", "SOT-23-6"), ("SOT95P237X112-3N", "SOT-23-5"),
+                 ("QFN50P300X300X100-17N", "QFN-16-1EP_4x4mm_P0.65mm_EP2.1x2.1mm"),
+                 ("QFN50P300X300X100-17N", "SOIC-16_3.9x9.9mm_P1.27mm")):
+        assert lands_differ(a, b) and lands_differ(b, a), (a, b)
+
+
+@lite
+def test_stm32_from_an_altium_bom_with_an_ipc_name_is_not_held_for_its_land(tmp_path):
+    for k, fp in enumerate(("QFP50P900X900X160-48N", "48-LQFP", "LQFP-48")):      # R-FX10-2 stays ready too
+        (tmp_path / str(k)).mkdir()
+        items = _run(tmp_path / str(k), HDR + f"U2,1,STM32F103C8T6,{fp},STMicroelectronics,STM32F103C8T6,MCU,"
+                     "https://example.com/s.pdf\n", ["kicad", "standard"])
+        it = next(iter(items.values()))
+        assert it["source"]["footprint"].endswith("LQFP-48_7x7mm_P0.5mm"), (fp, it["source"])
+        assert it["status"] == "ready", (fp, it["status"], _holds(it))

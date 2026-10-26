@@ -116,10 +116,44 @@ def _safe_name(s, notes):
         return lib_name(safe)
 
 
+IPC_IC = re.compile(r"^(SOIC|QFP|QFN|SON|DFN|SOT)(\d{2,3})P(\d{3,4})X(\d{3,4})(?:X(\d{2,4}))?(?:X\d{2,4})?-(\d{1,3})[NLM]?$",
+                    re.I)
+
+
+def _ipc_land(name):
+    """An IPC-7351 IC land name (Altium's footprint wizard) written the way the free-text reader takes it: family,
+    pitch, pins and body ('QFP50P900X900X160-48N' -> 'QFP-48 7x7mm P0.5mm', the 9 mm lead span less the leads;
+    'SOIC127P600X175-8N' -> 'SOIC-8 (3.9mm Width) P1.27mm' from its 6 mm span; 'QFN50P300X300X100-17N' ->
+    'QFN-16-1EP 3x3mm P0.5mm', the odd pin its thermal pad; 'SOT95P280X145-5N' -> 'SOT-23-5'). Other names: None."""
+    m = IPC_IC.match(name)
+    if not m:
+        return None
+    fam, pitch, d1, d2, d3, pins = m.group(1).upper(), int(m.group(2)) / 100, int(m.group(3)) / 100, \
+        int(m.group(4)) / 100, m.group(5), int(m.group(6))
+    if fam == "SOT":                            # SOT{pitch}P{span}X{height}-{pins}
+        if abs(pitch - 0.95) > 0.01 or pins not in (3, 5, 6):
+            return None
+        return ("TSOT-23" if d2 <= 1.1 else "SOT-23") + ("" if pins == 3 else f"-{pins}")
+    ep = "-1EP" if pins % 2 else ""             # IPC counts the thermal pad as a pin
+    pins -= pins % 2
+    if fam == "QFP":                            # QFP{pitch}P{span}X{span}X{height}-{pins}: body = span less 2 mm
+        body = f" {d1 - 2:g}x{d2 - 2:g}mm"
+    elif fam == "SOIC":                         # SOIC{pitch}P{span}X{height}-{pins}: JEDEC body for the span
+        w = next((w for span, w in ((6.0, 3.9), (7.9, 5.3), (10.3, 7.5)) if abs(d1 - span) <= 0.25), None)
+        body = f" ({w if w else round(d1 - 2.1, 2)}mm Width)"
+    else:                                       # QFN / SON / DFN{pitch}P{body}X{body}X{height}-{pins}
+        if not d3:
+            return None
+        body = f" {d1:g}x{d2:g}mm"
+    return f"{fam}-{pins}{ep}{body} P{pitch:g}mm"
+
+
 def _land_canon(name):
     """A footprint field as the package it names: a known alias as its land ('DO-214AC' -> 'D_SMA', 'TO-236' ->
-    'SOT-23'), a distributor's pins-first name the family's way ('48-LQFP' -> 'LQFP-48', '8-SOIC'), ST's 'SO8N'."""
+    'SOT-23'), a distributor's pins-first name the family's way ('48-LQFP' -> 'LQFP-48', '8-SOIC'), ST's 'SO8N', an
+    IPC-7351 name (_ipc_land, R-B2-5)."""
     from . import stdparts as SP
+    name = _ipc_land(name) or name
     key = SP._norm(name)
     hit = SP.ALIASES.get(key) or SP.DIODE_ALIASES.get(key)
     if hit and key not in SP.AMBIGUOUS:
@@ -175,6 +209,7 @@ def _family_width(attrs):
     return ws.pop() if len(ws) == 1 else None
 
 
+QFN_LANDS = {"QFN", "VQFN", "WQFN", "UQFN", "TQFN", "HVQFN"}
 # stdparts' power packages and distributors' 'Power' + leadless names ('8-PowerTDFN', 'PowerVSON-8')
 POWER_LAND = re.compile(r"(?<![A-Za-z])Power[A-Z]*(?:DFN|SON|SOIC|SO|SSO|QFN)", re.I)
 
@@ -206,8 +241,9 @@ def lands_differ(a, b):
         if SP.NAME_RE.match(ca) and SP.NAME_RE.match(cb):
             return True                         # two KiCad names of one family: two lands
         if (ia["fam"], ia["pins"]) != (ib["fam"], ib["pins"]) and not (
-                ia["pins"] == ib["pins"] and {ia["fam"], ib["fam"]} & {"QFP"} and {ia["fam"], ib["fam"]} <= SP.QUAD_LEADED):
-            return True
+                ia["pins"] == ib["pins"] and ({ia["fam"], ib["fam"]} & {"QFP"} and {ia["fam"], ib["fam"]} <= SP.QUAD_LEADED
+                                              or {ia["fam"], ib["fam"]} <= QFN_LANDS)):
+            return True                         # QFP is any quad flat pack; VQFN / WQFN the QFN land, lower
         wa, wb = ia["width"] or _family_width(ia), ib["width"] or _family_width(ib)
         if wa is None or wb is None or abs(wa - wb) > 0.15:
             return True                         # 5.3 mm is not 3.9 mm; a bare name of a family of several widths
