@@ -1661,7 +1661,7 @@ def _listed(spec):
     return [p for p in pos if isinstance(p, dict)] if isinstance(pos, list) else []
 
 
-def sanity(spec, review):
+def sanity(spec, review, evidence=""):
     spec = F.qfp_frame(spec)[0]                       # a QFP's body in footprint_gen's frame, however the read named it
     t, n, e = spec.get("package_type"), spec.get("pin_count"), spec.get("pitch")
     g = lambda k: _dim(spec.get(k))
@@ -1724,7 +1724,7 @@ def sanity(spec, review):
         review.append(f"ball_diameter {ball[1]:g} mm on a {near:g} mm pitch: the balls would touch, which is implausible "
                       "(the pitch read as the ball, or the ball's unit?)")
     if t == "gullwing":
-        review.extend(_listed_layout(spec))
+        review.extend(_listed_layout(spec, evidence))
     ep = spec.get("exposed_pad") or {}
     eps, bodies = [_dim(ep.get(d)) for d in ("length", "width")], [g(k) for k in ("body_length", "body_width")]
     # a pad that fits the body turned is not too big: footprint_gen turns it to fit (orient_ep; SOIC-8-1EP's
@@ -1792,13 +1792,15 @@ def _feet_outside(spec):
 REVERSE_PINNED = re.compile(r"revers\w*[- ]?pin|\bSOT-?\d+R\b", re.I)   # "reverse pinning", SOT-143R (not "reverse current")
 
 
-def _listed_layout(spec):
+def _listed_layout(spec, evidence=""):
     """A gull-wing read that places its pads (pin_positions) against what every such package has: pin 1 at the top of
     the left row or the bottom of the right one, numbered counter-clockwise seen from the top (down the left side, up
     the right: KiCad's SOT-23, SOT-223, TO-252); pads whole pitches apart along a side; the leads centred on the body;
     a tab no longer than the body and on it. Offsets given "+ up" or read from the bottom view mirror the footprint,
     and the cross-check, which compares the pins along each side seen any way round, cannot tell (pins 1 and 2 of a
-    SOT-23 swapped). -> review lines (a failed read: read again or held)."""
+    SOT-23 swapped). evidence: the BOM's package and the MPN, the only words a reverse-pinned exemption trusts (the
+    model's own name and description can echo the failure text, or a family sheet's "BF998; BF998R").
+    -> review lines (a failed read: read again or held)."""
     out, e = [], spec.get("pitch")
     pos = [p for p in _listed(spec) if isinstance(p.get("offset"), (int, float)) and not isinstance(p.get("offset"), bool)
            and p.get("side") in ("L", "R")]
@@ -1812,7 +1814,7 @@ def _listed_layout(spec):
     if way and set(way.values()) == {-1}:
         where = "; ".join(f"side {sd} pins {', '.join(str(n) for n, _ in rows[sd])} at {', '.join(f'{o:g}' for _, o in rows[sd])}"
                           for sd in way)
-        if REVERSE_PINNED.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
+        if REVERSE_PINNED.search(str(evidence or "")):
             out.append(f"pin_positions: pins numbered clockwise seen from the top ({where}), as a reverse-pinned package "
                        "is: check pin 1 and the order against the drawing's top view")
         else:
@@ -2363,10 +2365,11 @@ def basic_span(spec, review):
                           "taken for the land; check the drawing's lead tip tolerance")
 
 
-def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, facts=None, tables=None):
+def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, facts=None, tables=None, package=None):
     """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass.
     n_sent: how many pages were sent when offset is an int (--pages A-B), so citations past them are caught too.
-    facts / tables: the ordering table and dimension tables read in code (ds_route), checked against the read."""
+    facts / tables: the ordering table and dimension tables read in code (ds_route), checked against the read.
+    package: the BOM's footprint / package for the part (never the model's words): evidence a check may trust."""
     review = [f"{INJECTION}: {q[:200]!r}" for q in ext["embedded_instructions"]]
     n = len(offset) if isinstance(offset, list) else n_sent   # auto page selection: page k sent is offset[k - 1]
     if n:
@@ -2402,7 +2405,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             review.append("same_net from the pin table (pads whose pins share a name may overlap): "
                           + "; ".join(",".join(g) for g in nets))
     ok = schema_check(spec, review)
-    sanity(spec, review)
+    sanity(spec, review, f"{package or ''} {part or ''}")
     check_pins(spec, ext, review)
     info = self_check(spec, ext, review)
     if spec.get("pad_table"):
@@ -4299,7 +4302,7 @@ class Reader:
         try:
             ext = parse_message(rec["message"])
             res = process(ext, job["part"], job["url"], rec.get("model") or job["model"], job["offset"], rec["message"],
-                          facts=job.get("facts"), tables=job.get("tables"))
+                          facts=job.get("facts"), tables=job.get("tables"), package=job.get("package"))
         except DatasheetError as e:
             return "failed", [str(e)], None
         kind, why = DR.assess(res)
@@ -4394,7 +4397,7 @@ class Reader:
         # the job's pages, as _judge reads them: its cache key holds them, while a record's page_offset can be 0 (a batch
         # answer collected by a run without this part, from a state file with no 'sent', or adopted after a lost create)
         res = process(ext, job["part"], job["url"], rec.get("model") or self.model, job["offset"], rec["message"],
-                      facts=job.get("facts"), tables=job.get("tables"))
+                      facts=job.get("facts"), tables=job.get("tables"), package=job.get("package"))
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
@@ -5632,7 +5635,7 @@ def main(argv=None):
                 cache.put(ck, {"key": ck, "part": a.part, "url": a.pdf, "model": a.model, "page_offset": offset, "via": "sync",
                                "at": datetime.datetime.now().isoformat(timespec="seconds"), "message": msg})
         n_sent = pdf_pages(source[1]) if pages and not a.from_response and source[0] == "base64" else None
-        res = process(ext, a.part, a.pdf, a.model, offset, msg, n_sent)
+        res = process(ext, a.part, a.pdf, a.model, offset, msg, n_sent, package=a.package)
         if not a.from_response:                       # as every Reader read: the "ai" record, then hold_on_doubt
             res["sidecar"]["ai"] = LR.provenance(inf, msg, None, isinstance(offset, list))
             try:

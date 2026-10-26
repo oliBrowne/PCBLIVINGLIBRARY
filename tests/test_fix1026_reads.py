@@ -96,7 +96,7 @@ def test_1_visual_check_refuses_an_unpriced_model_without_a_yes(tmp_path, monkey
 
 
 # ---------------------------------------------------------------- R-FP-1..3: datasheet read checks (second review of #196)
-def _wire_read(name, dims, pins, other, ptype="gullwing", desc=None):
+def _wire_read(name, dims, pins, other, ptype="gullwing", desc=None, package=None):
     """A synthetic model answer through process() and assess() (footprint-scripts/rw.py of the review)."""
     import json
     from ecadlib import ds_route as DR
@@ -108,7 +108,7 @@ def _wire_read(name, dims, pins, other, ptype="gullwing", desc=None):
             "pins": [{"num": n, "name": nm, "type": "passive", "side": "left", "page": 3} for n, nm in pins],
             "symbol_description": "x", "notes": [], "embedded_instructions": []}
     res = D.process(D.parse_message({"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(wire)}]}),
-                    "XPART", "ds.pdf")
+                    "XPART", "ds.pdf", package=package)
     return DR.assess(res), res["needs_review"]
 
 
@@ -155,14 +155,32 @@ SOT143_PINS = [("1", "S"), ("2", "D"), ("3", "G2"), ("4", "G1")]
 
 def test_rfp2_a_reverse_pinned_part_named_so_passes_with_a_note_for_the_person():
     """NXP SOT143R (BF998R): numbered clockwise seen from the top by design. The counter-clockwise rule failed it and
-    told the model as fact that pins run counter-clockwise: a model that complied built it mirrored."""
+    told the model as fact that pins run counter-clockwise: a model that complied built it mirrored. The evidence is
+    the BOM's package (R-FX2-2: never the model's own name or description, which it can echo)."""
     rev_pos = [dict(p, side="R" if p["side"] == "L" else "L") for p in SOT143_POS]
     assert _wire_read("SOT-143", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": SOT143_POS})[0] == ("ok", [])
-    for name, desc in (("SOT-143R", None), ("SOT143R", None), ("SOT-143", "SOT-143 reverse pinning (BF998R)")):
-        (kind, why), rev = _wire_read(name, SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": rev_pos}, desc=desc)
-        assert kind == "ok", (name, why)
+    for pkg in ("SOT-143R", "Package_TO_SOT_SMD:SOT-143R", "SOT143R"):
+        (kind, why), rev = _wire_read("SOT-143", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": rev_pos},
+                                      package=pkg)
+        assert kind == "ok", (pkg, why)
         assert any("clockwise" in r and "reverse" in r for r in rev), rev       # the person checks it
         assert not any("numbered counter-clockwise seen from the top" in r for r in rev), rev
+
+
+def test_fx2_2_the_models_own_words_never_exempt_a_clockwise_read():
+    """A mirrored SOT-23 passed by saying "reverse pinning" (the failure text suggests the phrase; family datasheets
+    print "BF998; BF998R"): only the BOM's package counts."""
+    sot23 = {"body_length": (2.8, 2.9, 3.0), "body_width": (1.2, 1.3, 1.4), "lead_span": (2.1, 2.4, 2.64),
+             "pitch": ("", 0.95, ""), "terminal_length": (0.3, 0.4, 0.5), "terminal_width": (0.3, 0.4, 0.5),
+             "height_max": ("", "", 1.1)}
+    mir = [{"number": "1", "side": "L", "offset": 0.95}, {"number": "2", "side": "L", "offset": -0.95},
+           {"number": "3", "side": "R", "offset": 0.0}]
+    pins = [("1", "G"), ("2", "S"), ("3", "D")]
+    for name, desc in (("SOT-23", "SOT-23 (reverse pinning)"), ("SOT-23", "the BFxxxR version has reverse pinning"),
+                       ("SOT-23R", None), ("SOT-23", "Reverse-pinned variant also available"), ("SOT-23", "reverse pin-out")):
+        (kind, why), _ = _wire_read(name, sot23, pins, {"pin_count": 3, "pin_positions": mir}, desc=desc,
+                                    package="SOT-23")
+        assert kind == "failed" and any("mirrored" in w for w in why), (name, desc, why)
 
 
 def test_rfp2_clockwise_without_a_reverse_name_fails_without_telling_the_model_it_is_impossible():
