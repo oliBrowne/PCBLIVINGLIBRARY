@@ -128,3 +128,71 @@ def test_arc_courtyard_box_is_the_arc():
     t5 = sexpr.parse('(module "T" (fp_arc (start 0 0) (end 1 0) (angle 90) (layer F.CrtYd) (width 0.05)))')
     bb = FC._bbox(FC._graphics(t5, "F.CrtYd")[0])     # quarter circle (1, 0) -> (0, 1), clockwise on screen
     assert abs(bb[0]) < 0.01 and abs(bb[1]) < 0.01 and abs(bb[2] - 1) < 0.01 and abs(bb[3] - 1) < 0.01, bb
+
+
+# ---------------------------------------------------------------- R-BR-2: custom pads measured as KiCad draws them
+def _custom(pad1, p2, size2="0.5 0.5"):
+    return f'''(footprint "T" (layer "F.Cu")
+  (fp_rect (start -4 -4) (end 4 4) (stroke (width 0.05)) (fill none) (layer "F.CrtYd"))
+  {pad1}
+  (pad "2" smd rect (at {p2}) (size {size2}) (layers "F.Cu" "F.Paste" "F.Mask"))
+)'''
+
+
+_ROT = '''(pad "1" smd custom (at 0 0 {a}) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask")
+    (options (clearance outline) (anchor rect))
+    (primitives (gr_poly (pts (xy 0 -0.25) (xy 3 -0.25) (xy 3 0.25) (xy 0 0.25)) (width 0) (fill yes))))'''
+
+
+def _cu_errors(text):
+    from ecadlib import footprint_check as FC
+    return [i for i in FC.check(text) if i[0] == "error" and i[1] == "copper"]
+
+
+def test_rotated_custom_pad_copper_is_turned_with_the_pad():
+    # turned 90 degrees, the copper runs along -y (x stays -0.25..0.25)
+    assert _cu_errors(_custom(_ROT.format(a=90), "0 -2")), "a pad on the turned copper is no overlap"
+    # 1.0 mm clear of the real copper: was "pads 1 and 2 overlap by 0.375 mm", a hard (false) error
+    assert not _cu_errors(_custom(_ROT.format(a=90), "1.5 0")), _cu_errors(_custom(_ROT.format(a=90), "1.5 0"))
+    # 180 and 270 degrees, and an odd angle
+    assert _cu_errors(_custom(_ROT.format(a=180), "-2 0")) and not _cu_errors(_custom(_ROT.format(a=180), "2 0"))
+    assert _cu_errors(_custom(_ROT.format(a=270), "0 2")) and not _cu_errors(_custom(_ROT.format(a=270), "0 -1.5"))
+    c = 2 / math.sqrt(2)                                          # 45 degrees: the copper runs to (2.1, -2.1)
+    assert _cu_errors(_custom(_ROT.format(a=45), f"{c:.3f} {-c:.3f}"))
+    assert not _cu_errors(_custom(_ROT.format(a=45), f"{c:.3f} {c:.3f}")), _cu_errors(_custom(_ROT.format(a=45), f"{c:.3f} {c:.3f}"))
+
+
+def test_rotated_custom_pad_box():
+    from ecadlib import footprint_check as FC, sexpr
+    p = FC._pad_rects(sexpr.parse(_custom(_ROT.format(a=90), "3 3")))[0]
+    assert abs(p["x"]) < 1e-6 and abs(p["y"] + 1.375) < 1e-6 and abs(p["w"] - 0.5) < 1e-6 and abs(p["h"] - 3.25) < 1e-6, p
+
+
+def test_custom_pad_circle_line_arc_and_stroke_are_copper():
+    circle = '''(pad "1" smd custom (at 0 0) (size 0.3 0.3) (layers "F.Cu" "F.Paste" "F.Mask")
+    (options (clearance outline) (anchor circle))
+    (primitives (gr_circle (center 0 0) (end 1 0) (width 0) (fill yes))))'''
+    assert _cu_errors(_custom(circle, "0.7 0", "0.3 0.3")), "pad 2 inside the circle's copper"
+    assert not _cu_errors(_custom(circle, "1.6 0", "0.3 0.3"))
+    line = '''(pad "1" smd custom (at 0 0) (size 0.3 0.3) (layers "F.Cu" "F.Paste" "F.Mask")
+    (options (clearance outline) (anchor rect))
+    (primitives (gr_line (start 0 0) (end 2 0) (width 0.6))))'''
+    assert _cu_errors(_custom(line, "2 0.4", "0.3 0.3")), "the line's 0.3 mm half width reaches pad 2"
+    assert not _cu_errors(_custom(line, "2 0.9", "0.3 0.3"))
+    stroked = '''(pad "1" smd custom (at 0 0) (size 0.3 0.3) (layers "F.Cu" "F.Paste" "F.Mask")
+    (options (clearance outline) (anchor rect))
+    (primitives (gr_poly (pts (xy -1 -1) (xy 1 -1) (xy 1 1) (xy -1 1)) (width 0.4) (fill yes))))'''
+    assert _cu_errors(_custom(stroked, "1.3 0", "0.3 0.3")), "the polygon's stroke reaches 1.2 mm"
+    assert not _cu_errors(_custom(stroked, "1.6 0", "0.3 0.3"))
+    arc = '''(pad "1" smd custom (at 0 0) (size 0.3 0.3) (layers "F.Cu" "F.Paste" "F.Mask")
+    (options (clearance outline) (anchor rect))
+    (primitives (gr_arc (start 1 0) (mid 0 -1) (end -1 0) (width 0.2))))'''
+    assert _cu_errors(_custom(arc, "0 -1", "0.3 0.3")), "pad 2 on the arc's copper"
+    assert not _cu_errors(_custom(arc, "0 1.4", "0.3 0.3"))
+
+
+def test_custom_pad_silk_measured_to_the_real_copper():
+    from ecadlib import footprint_check as FC
+    t = _custom(_ROT.format(a=90), "3 3").replace(
+        '(pad "2"', '(fp_line (start -1 -2) (end 1 -2) (stroke (width 0.12)) (layer "F.SilkS"))\n  (pad "2"')
+    assert any(i[1] == "silk" and i[0] == "error" for i in FC.check(t)), FC.check(t)
