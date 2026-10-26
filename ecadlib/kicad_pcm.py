@@ -104,8 +104,9 @@ def reuse_identifier(out, lib):
 
 # ---------------------------------------------------------------- file transforms
 def footprint_text(text, lib, var, cid, kicad):
-    """kicad_export's footprint -> PCM install paths (and KiCad 7 syntax for --kicad 7)."""
-    text = re.sub(r'\(model "\$\{KIPRJMOD\}/' + re.escape(lib) + r'\.3dshapes/',
+    """kicad_export's footprint -> PCM install paths (and KiCad 7 syntax for --kicad 7). A model path written from a
+    project folder above the library (${KIPRJMOD}/ecadlib/<lib>.3dshapes, the KiCad window's library) too."""
+    text = re.sub(r'\(model "\$\{KIPRJMOD\}/(?:[^"]*/)?' + re.escape(lib) + r'\.3dshapes/',
                   f'(model "${{{var}}}/3dmodels/{cid}/{lib}.3dshapes/', text)
     return footprint_kicad7(text) if int(kicad) < 8 else text
 

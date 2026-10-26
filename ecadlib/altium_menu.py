@@ -1039,12 +1039,14 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
 
 def publish_kicad(ws, bom_rel, library, name="ecadlib"):
     """The plan's parts -> <library>/<name>.kicad_sym, .pretty, .3dshapes (kicad_export). One plan makes the whole
-    library, so the KiCad menu keeps every part in one list (MENU_BOM). "footprints" maps part -> footprint name."""
+    library, so the KiCad menu keeps every part in one list (MENU_BOM). "footprints" maps part -> footprint name.
+    The KiCad menu builds the library into <project>/ecadlib/ (kicad_menu.config), so the footprints' 3D model paths
+    are written from the project folder, the library's parent (KiCad's KIPRJMOD)."""
     from . import kicad_export as KX
     from .httpcache import CachedHTTP
     _, plan_f, _ = ws._plan(bom_rel)
     rep = KX.export(plan_f, library, name, http=CachedHTTP(ws.root / "http_cache", offline=ws.offline, timeout=60),
-                    rules=ws.rules_in_use(), log=lambda *a, **k: None)
+                    rules=ws.rules_in_use(), log=lambda *a, **k: None, project=Path(library).parent)
     return {"target": "kicad", "install": [], "problems": rep["errors"], "library": str(library),
             "held": {s["part"]: s["why"] for s in rep["skipped"] if s.get("recheck")},
             "footprints": {p["part"]: p.get("footprint") or "" for p in rep["parts"]}}

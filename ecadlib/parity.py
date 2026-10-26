@@ -882,8 +882,11 @@ class KiCadLib:
 
     def model_ok(self, path):
         p = str(path)
-        if "${KIPRJMOD}" in p:
-            return (self.dir / p.replace("${KIPRJMOD}/", "").replace("${KIPRJMOD}", "")).is_file()
+        if "${KIPRJMOD}" in p:                   # the export folder, or a project folder above it (kicad-export
+            if (self.dir / p.replace("${KIPRJMOD}/", "").replace("${KIPRJMOD}", "")).is_file():   # --project)
+                return True
+            m = re.search(r"(?:^|/)(" + re.escape(self.name) + r"\.3dshapes/[^/]+)$", p)
+            return bool(m) and (self.dir / m.group(1)).is_file()
         return Path(p).is_file()
 
 
