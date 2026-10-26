@@ -20,8 +20,9 @@ right*. This page measures the whole thing, reading included: how often ecadlib 
 **How it was measured.** The answers are the datasheet reads of a live run on 2026-10-25 (Claude Opus 5.5, zoom on,
 sources `standard,datasheet`, cap $30), which scored 77/110 and cost $25.46, plus targeted paid re-reads of AQY282GS
 ($0.11) and 2ED21824S06J ($0.23, from Infineon's PDF downloaded by hand). Those saved answers were then re-scored for
-free (`--cached-only`, nothing sent) on Oliver's PC with the code of PR #194: 87/110. The later merges (#195 and
-the #196 bug hunt) were checked after every round with a free cached re-score in the cloud, which did not change.
+free (`--cached-only`, nothing sent) on the maintainer's Windows PC with the code of PR #194: 87/110. The later
+merges (#195 and the #196 bug hunt) were checked after every round with a free cached re-score in the cloud, which
+did not change.
 
 **What moved it from 77 to 87.** General product fixes after the run (the cross-check and land rules, the DO-34
 axial table entry, fewer false holds), two paid re-reads, and fairer grading: five parts where KiCad's reference
@@ -102,7 +103,7 @@ where the misses are.
   of KiCad's (centre) and 0.10 mm (size), the pitch, pad numbers, pin 1 and courtyard agree, and the symbol has
   KiCad's pins with at least 80 % of the names. The origin is reported but does not fail a part (KiCad puts THT
   origins on pin 1). Thermal vias are not compared.
-* **Right by the datasheet.** The maker's datasheet is the truth and KiCad's library the fallback (Oliver,
+* **Right by the datasheet.** The maker's datasheet is the truth and KiCad's library the fallback (project rule since
   2026-10-21). KiCad works most lands out from the package dimensions (IPC-7351B) and sizes some courtyards from a
   nominal body per pin count (every DIP-16 is 20.32 mm long). So a part that misses KiCad only where it follows the
   datasheet counts as right, and the report lists each one under "Right by the datasheet":

@@ -174,7 +174,8 @@ Everything else lives in [docs/](docs/README.md):
 * [Working on ecadlib](docs/development.md): tests, the accuracy gate and releases
 
 Where it's going: [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) and [ROADMAP.md](ROADMAP.md). Changes are in
-[CHANGELOG.md](CHANGELOG.md).
+[CHANGELOG.md](CHANGELOG.md). Bug reports and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md)
+(and [SECURITY.md](SECURITY.md) for anything private).
 
 ## Credits
 

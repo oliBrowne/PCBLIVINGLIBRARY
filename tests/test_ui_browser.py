@@ -73,7 +73,7 @@ def test_parts_endpoint_says_why_with_both_values_and_cost():
             assert st == 200, r
             assert r["counts"] == {"parts": 14, "ready": 5, "held": 9, "waiting": 0, "cross_check_disagreed": 1, "cross_check_pins_unchecked": 0,
                                    "parity_mismatch": 1, "changes_held": 0}, r["counts"]
-            assert r["cost"]["usd"] == 0.111 and r["cost"]["models"] == ["claude-sonnet-4-5"] and r["cost"]["answers"] == 2
+            assert r["cost"]["usd"] == 0.111 and r["cost"]["models"] == ["claude-sonnet-5-5"] and r["cost"]["answers"] == 2
             by = {p["part"]: p for p in r["parts"]}
             tps = by["TPS62133RGTR"]
             assert tps["status_label"] == "held" and tps["reasons"][0]["code"] == "crosscheck.disagree", tps["reasons"]
@@ -82,7 +82,7 @@ def test_parts_endpoint_says_why_with_both_values_and_cost():
             assert [(x["label"], x["first"], x["second"], x["page"]) for x in rows] == [
                 ("pin pitch", "0.65 mm", "0.5 mm", 34), ("body width", "3 mm", "3.1 mm", 34)], rows
             assert tps["datasheet"] == {"url": "https://www.lcsc.com/datasheet/C73973.pdf", "page": 34}
-            assert tps["cost"] == {"usd": 0.111, "models": ["claude-sonnet-4-5"], "answers": 2}
+            assert tps["cost"] == {"usd": 0.111, "models": ["claude-sonnet-5-5"], "answers": 2}
             stm = by["STM32F103C8T6"]
             assert stm["parity"]["result"] == "mismatch" and stm["parity"]["rows"] == [
                 {"what": "pad 1 size", "kicad": "0.3 x 1.5 mm", "altium": "0.3 x 1.45 mm"}], stm["parity"]
