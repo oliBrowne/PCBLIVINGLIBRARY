@@ -88,3 +88,38 @@ def test_fx12_5_turned_pad_shape():
     p = [q for q in FC._pad_rects(sexpr.parse(_diamond_ep("3 3"))) if q["num"] == "5"][0]
     assert p["polys"] and abs(FC._pt_pad(0.354, 0.0, p)) < 0.002 and 0.16 < FC._pt_pad(0.3, 0.3, p) < 0.18, p
     assert abs(p["w"] - 0.707) < 0.002 and abs(p["h"] - 0.707) < 0.002, p      # the box is still the turned box
+
+
+# ---------------------------------------------------------------- R-FX12-3: a KiCad pin type beats a signed-supply name
+def _sides(pins):
+    from ecadlib import symbol_layout as SL
+    return {p["name"]: p["side"] for p in SL.arrange_pins([{"num": n, "name": nm, "type": t} for n, nm, t in pins])}
+
+
+def test_fx12_3_typed_signal_pins_named_like_supplies_keep_their_type():
+    """Before: ZXCT1009F's Vs+ / Vs- (typed input: the sense inputs) went top / bottom, and MAX232's VS+ / VS- (typed
+    power_out: the charge pump's outputs) too."""
+    s = _sides([("1", "Vs-", "input"), ("2", "Vs+", "input"), ("3", "Iout", "output")])
+    assert s["Vs+"] == "left" and s["Vs-"] == "left", s
+    s = _sides([("2", "VS+", "power_out"), ("6", "VS-", "power_out"), ("16", "VCC", "power_in"), ("15", "GND", "power_in"),
+                ("11", "T1IN", "input"), ("14", "T1OUT", "output")])
+    assert s["VS+"] == "right" and s["VS-"] == "right" and s["VCC"] == "top" and s["GND"] == "bottom", s
+
+
+def test_fx12_3_signed_supplies_still_top_and_bottom_when_power_passive_or_untyped():
+    for t in ("power_in", "power", "passive", "", "unspecified"):
+        s = _sides([("1", "+VS", t), ("2", "-VS", t), ("3", "VCC+", t), ("4", "-5V", t), ("5", "IN+", "input"),
+                    ("6", "OUT", "output")])
+        assert s["+VS"] == "top" and s["VCC+"] == "top" and s["-VS"] == "bottom" and s["-5V"] == "bottom", (t, s)
+
+
+def test_fx12_3_counter_carry_and_borrow_outputs_go_right():
+    """74LS192 (untyped, EasyEDA): ~{CO} / ~{BO} were 'other' (left, or right only to square the symbol); TC / RCO
+    (74HC161) likewise. They are outputs: the right side, whatever else the symbol holds."""
+    from ecadlib import symbol_layout as SL
+    for n in ("~{CO}", "~{BO}", "CO", "BO", "TC", "~{TC}", "RCO", "~{RCO}"):
+        assert SL.classify({"num": "12", "name": n, "type": ""}) == "other_out", n
+        assert SL.classify({"num": "12", "name": n, "type": "input"}) == "other_in", n     # a type still says it
+    s = _sides([("1", "A", ""), ("2", "B", ""), ("3", "C", ""), ("4", "D", ""), ("5", "UP", ""), ("6", "DOWN", ""),
+                ("12", "~{CO}", ""), ("13", "~{BO}", ""), ("8", "GND", ""), ("16", "VCC", "")])
+    assert s["~{CO}"] == "right" and s["~{BO}"] == "right", s

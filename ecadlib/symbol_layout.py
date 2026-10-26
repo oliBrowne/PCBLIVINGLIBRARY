@@ -60,14 +60,12 @@ _R = lambda s: re.compile(r"^(?:" + s + r")$")
 RX = [  # (group, regex on the primary name, upper case, overbar / active-low markers removed); first match wins
     ("nc", _R(r"N\.?C\.?\d*|DNC|DNU|NU|RESERVED\d*|RSVD\d*|NOT ?CONNECTED")),
     ("ep", _R(r"EP|E?PAD|EXPOSED[ _]?PAD|THERMAL[ _]?PAD|TAB|SLUG")),
-    ("ground", _R(r"[ADPSE]?GND[A-Z0-9_]*|GND[ADPS]?|VSS[A-Z0-9_]*|V?REF-|VREFN|VREF_?N|VEE|V-|0V|AVSS|DVSS|PVSS|"
-                  r"-V(?:S|CC|DD|EE|SS)?\d*|V(?:S|CC|DD|EE|SS)\d*-|-\d+V\d*|VNEG\d*")),   # a negative supply: the bottom
+    ("ground", _R(r"[ADPSE]?GND[A-Z0-9_]*|GND[ADPS]?|VSS[A-Z0-9_]*|V?REF-|VREFN|VREF_?N|VEE|V-|0V|AVSS|DVSS|PVSS")),
     ("analog", _R(r"VDDA[A-Z0-9_]*|AVDD[A-Z0-9_]*|AVCC|VCCA|V?REF\+?|VREFP|VREF_?P|VREF_?OUT|VREFBUF")),
     ("power_out", _R(r"V?OUT|VO|VREG[A-Z0-9_]*|VCAP[A-Z0-9_]*|VDDCORE_?OUT|\d+V\d*_?OUT|V\d+V?\d*_?OUT|LDO_?OUT|VCORE|DECOUPLE")),
     ("usb", _R(r"USB[A-Z0-9_+\-]*|D[PM]\d?|D[+\-]|UD[+\-PM]|VBUS|USB_?ID|OTG[A-Z0-9_]*|CC[12]")),
     ("power", _R(r"VDD[A-Z0-9_]*|VCC[A-Z0-9_]*|VBAT[A-Z0-9_]*|VIN\d*|VS|V\+|VPP|VIO|VM|VSYS|DVDD|IOVDD|DVCC|PVDD|PVIN|"
-                 r"V\d+V\d*|\d+V\d*|VBACKUP|VDDIO\d*|VBATT|BAT|VLOGIC|VL|"
-                 r"\+V(?:S|CC|DD|IN|POS)?\d*|V(?:S|CC|DD)\d*\+|\+\d+V\d*|VPOS\d*")),          # +VS, VCC+, +5V, +3V3
+                 r"V\d+V\d*|\d+V\d*|VBACKUP|VDDIO\d*|VBATT|BAT|VLOGIC|VL")),
     ("reset", _R(r"N?RST[A-Z0-9_]*|N?RESET[A-Z0-9_]*|MCLR|N?MCLR|EN|CHIP_?EN|CHIP_?PU|N?CE|BOOT\d*|BOOT_?SEL\d*|PDR_?ON|"
                  r"MODE\d*|TEST\d*|TST|N?WAKE[A-Z0-9_]*|PWR_?EN|N?SLEEP|N?SHDN|SHUTDOWN|N?STBY|N?PD|PWRDN|N?PWRDWN|N?SUSPEND|NMI")),
     ("clock", _R(r"OSC[A-Z0-9_]*|XTAL[A-Z0-9_]*|XI|XO|XIN|XOUT|X[12]|CLK_?IN|CLK_?OUT|CLKO?|MCO\d*|EXT_?CLK|XT[IO]|"
@@ -84,12 +82,18 @@ RX = [  # (group, regex on the primary name, upper case, overbar / active-low ma
     ("adc", _R(r"ADC[A-Z0-9_]*|AIN\d*|AN\d+|DAC[A-Z0-9_]*|AOUT\d*|SENSOR_?V[PN]|SENSOR[A-Z0-9_]*|VP|VN|AIN[PN]\d*")),
     # direction from the name, for the small analog / power / logic parts whose pins have no better group
     ("other_out", _R(r"OUT[A-Z0-9_+\-]*|[A-Z0-9]+_?OUT[A-Z0-9]*|N?Q\d*'?|Q_?N|Q[A-H]'?|\d+Q'?|\d+Y|Y\d+|DIS|DISCH[A-Z]*|N?PG|N?PGOOD|P_?GOOD|PWR_?(GD|GOOD|OK)|"
-                    r"N?FLT|N?FAULT|N?FLAG|N?ALERT|N?INT\d*|N?IRQ\d*|RDY|N?READY|BUSY|DONE|STAT\d*|LED[A-Z0-9_]*|SW\d*|LX\d*|"
+                    r"N?CO|N?BO|N?TC|N?RCO|N?FLT|N?FAULT|N?FLAG|N?ALERT|N?INT\d*|N?IRQ\d*|RDY|N?READY|BUSY|DONE|STAT\d*|LED[A-Z0-9_]*|SW\d*|LX\d*|"
                     r"BST|BOOST|PH|DRV[A-Z0-9_]*|GATE[A-Z0-9_]*|[HL]O|[HL]G|ALARM|TRIP")),
     ("other_in", _R(r"IN\d*|IN[+\-PNAB]\d*|[+\-]IN[A-Z0-9]*|IN_?[PN]\d*|[A-Z0-9]+_IN|\d+IN[+\-]?|IN[A-Z]?\d*[+\-]|TRIG[A-Z]*|TRG|TR|THR[A-Z]*|CV|CONT[A-Z]*|"
                    r"CTRL[A-Z0-9_]*|CTL|FB\d*|VFB|ADJ|SET|SENSE[A-Z0-9_+\-]*|SNS[A-Z0-9_+\-]*|CS[+\-]|SS|SS_?TR|ILIM|ISET|RT|"
                    r"RT_?CLK|COMP|DIR|STEP|PWM[A-Z0-9_]*|[HL]I|D|J|K|S|R|C?LR|PRE|IREF|RSET|RLIM|SEL\d*|A\d?|B\d?")),
 ]
+# signed supplies (+VS, VCC+, +5V, +3V3 on top; -VS, VS-, -5V, VNEG at the bottom), only for a pin whose type is a
+# supply's or says nothing: a typed signal named so keeps its type (ZXCT1009F Vs+ / Vs-, sense inputs; MAX232 VS+ /
+# VS-, the charge pump's power_out)
+SIGNED = {"ground": _R(r"-V(?:S|CC|DD|EE|SS)?\d*|V(?:S|CC|DD|EE|SS)\d*-|-\d+V\d*|VNEG\d*"),
+          "power": _R(r"\+V(?:S|CC|DD|IN|POS)?\d*|V(?:S|CC|DD)\d*\+|\+\d+V\d*|VPOS\d*")}
+SIGNED_TYPES = ("", "unspecified", "passive", "power", "power_in")
 PORT_RX = [re.compile(r"^P([A-Z])(\d{1,2})$"), re.compile(r"^P(\d{1,2})[._](\d{1,2})$"), re.compile(r"^PIO(\d)_(\d{1,2})$"),
            re.compile(r"^(GPIO|IO|GP)(\d{1,3})$"), re.compile(r"^R(\d)(\d)$")]
 
@@ -145,8 +149,9 @@ def classify(pin):
     full = primary(pin.get("name", "")).upper()   # the name before an active-low '_N' / '_B' / '_L' came off: a rule
     hit = next((g for g, rx in RX if g not in ("other_in", "other_out") and rx.match(full) and not rx.match(k)),
                None) if full != k else None       # written for that very spelling wins (VREF_N, the negative
+    signed = t in SIGNED_TYPES
     for g, rx in RX:                              # reference: ground, not VREF)
-        if (g == hit) if hit else rx.match(k):
+        if (g == hit) if hit else (rx.match(k) or (signed and g in SIGNED and SIGNED[g].match(k))):
             if g == "usb" and k == "VBUS" and t in ("power", "power_in"):
                 return "power"
             if g in ("other_in", "other_out") and t in DIRECTED:     # a name only hints the direction: the type says it
