@@ -360,3 +360,23 @@ def test_a_shifted_row_is_held_not_built_from_its_shifted_cells(tmp_path):
         else:
             assert it["status"] == "held" and "unquoted comma" in _holds(it), (name, it["status"], _holds(it))
 
+
+# --- R-BF-8: a decimal-comma join never swallows a rating ('100,50V' is 100 and a 50 V description) ----------------
+
+def _read(tmp, text):
+    from ecadlib.bom_triage import read_bom
+    p = Path(tmp) / "b.csv"
+    p.write_text(text, encoding="utf-8")
+    with contextlib.redirect_stderr(io.StringIO()):
+        return read_bom(str(p))[0]
+
+
+@lite
+def test_value_join_keeps_value_units_and_leaves_ratings(tmp_path):
+    lines = _read(tmp_path, "Designator,Qty,Value,Description,Footprint,Manufacturer,MPN,Datasheet\n"
+                            "C1,1,100,50V, X7R,C_0603_1608Metric,Samsung,CL10B101KB8NNNC,https://example.com/c.pdf\n"
+                            "R1,1,4,7k,Resistor,R_0603_1608Metric,Yageo,RC0603FR-074K7L,https://example.com/r.pdf\n"
+                            "C2,1,4,7uF,Capacitor,C_0603_1608Metric,Samsung,CL10A475KO8NNNC,https://example.com/c.pdf\n")
+    v = {ln["designator"]: ln.get("value") for ln in lines}
+    assert v["C1"] not in ("100,50V", "100.5", "100,50"), v
+    assert v["R1"] == "4,7k" and v["C2"] == "4,7uF", v

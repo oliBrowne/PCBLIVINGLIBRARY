@@ -457,7 +457,8 @@ def read_bom(path, columns=None, rules=None, root=None):
         if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
-                    and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])
+                    and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's
+                    # own unit only: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8)
                     and _fraction_fits(cells, vj, col, nxt)):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
                 note.append(f"value {cells[vj]} was split by an unquoted {'' if two_readings(cells[vj]) else 'decimal '}"
