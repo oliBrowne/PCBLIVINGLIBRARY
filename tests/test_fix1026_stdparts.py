@@ -536,3 +536,46 @@ def test_librarian_gives_a_crystal_with_another_model_its_own_file(tmp_path):
     assert got["XTAL_A"][0] != got["XTAL_B"][0], got
     assert abs(got["XTAL_B"][1] - 1.8) < 0.05 and abs(got["XTAL_A"][1] - 0.6) < 0.05, got
     assert got["XTAL_C"][0] == got["XTAL_A"][0], got      # as high: shared as before
+
+
+# --- R-CV-3: untyped pins (EasyEDA) follow the house pin-side rule by their names ----------------------------------
+
+def _sides(names, typ="unspecified"):
+    from ecadlib import symbol_layout as SL
+    pins = [{"num": str(i + 1), "name": n, "type": typ} for i, n in enumerate(names)]
+    got = SL.arrange_pins(pins)
+    assert sorted(p["num"] for p in got) == sorted(p["num"] for p in pins)            # every pin, numbers kept
+    assert all(dict(p)["name"] == names[int(p["num"]) - 1] for p in got)
+    by = {}
+    for p in got:
+        by.setdefault(p["side"], set()).add(p["name"])
+    return by
+
+
+def test_symbol_layout_shift_register_outputs_go_right():
+    by = _sides(["QB", "QC", "QD", "QE", "QF", "QG", "QH", "GND", "QH'", "~{SRCLR}", "SRCLK", "RCLK", "~{OE}", "SER",
+                 "QA", "VCC"])
+    assert by["right"] == {"QA", "QB", "QC", "QD", "QE", "QF", "QG", "QH", "QH'"}, by
+    assert {"SER", "SRCLK", "RCLK"} <= by["left"] and by["top"] == {"VCC"} and by["bottom"] == {"GND"}, by
+
+
+def test_symbol_layout_signed_supplies_go_top_and_bottom():
+    by = _sides(["-IN", "RG", "RG", "+IN", "-VS", "REF", "OUT", "+VS"])
+    assert "+VS" in by["top"] and by["bottom"] == {"-VS"} and {"-IN", "+IN"} <= by["left"] and "OUT" in by["right"], by
+    by = _sides(["-IN", "RG", "RG", "+IN", "-VS", "REF", "OUT", "+VS"], "power_in")   # typed power: -VS still at the bottom
+    assert "-VS" in by["bottom"], by
+
+
+def test_symbol_layout_name_classes():
+    from ecadlib import symbol_layout as SL
+    c = lambda n: SL.SIDES[SL.classify({"name": n, "type": "unspecified", "num": "1"})]
+    for n in ("+VS", "VS+", "+V", "VCC+", "+5V", "+3V3", "V+", "3V3", "VCC"):
+        assert c(n) == "top", n
+    for n in ("-VS", "VS-", "-V", "-5V", "VNEG", "V-", "VEE", "GND"):
+        assert c(n) == "bottom", n
+    for n in ("1Y", "2Y", "Y0", "QA", "QB", "QH'", "1Q", "OUTA", "Q"):
+        assert c(n) == "right", n
+    for n in ("1IN-", "1IN+", "IN1-", "INA+", "INA-", "-INA", "IN+", "SER"):
+        assert c(n) == "left", n
+    for n in ("-IN", "+IN", "VREF-", "VIN"):          # unchanged neighbours
+        assert c(n) == {"-IN": "left", "+IN": "left", "VREF-": "bottom", "VIN": "top"}[n], n
