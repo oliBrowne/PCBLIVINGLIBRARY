@@ -63,6 +63,25 @@ def test_gate01_pad_tuple_equal_iff_same_copper_property():
         assert (t1 == t2) == same, ((w1, h1, a1), (w2, h2, a2), t1, t2)
 
 
+def test_gate06_slot_width_and_direction_count():
+    """(drill oval 1.6 1.0) hashed as a round 1.6 mm hole (the 1.0 slot width was lost to max()), and a slot along x
+    and one along y on a round pad hashed alike; the PcbLib of the same footprint hashed differently from its .kicad_mod."""
+    from tests.test_fp_hash_drill_shape import HDR
+
+    def v(rot, dr):
+        return HDR.replace("(at 0 -1.27)", f"(at 0 -1.27 {rot})").replace("(at 0 1.27)", f"(at 0 1.27 {rot})") \
+                  .replace("(drill 1.0)", f"(drill {dr})")
+    h = {}
+    for rot in (0, 90, 180, 45, 135):
+        for dr in ("oval 1.0 1.6", "oval 1.6 1.0", "1.6"):
+            h[rot, dr] = _hk(v(rot, dr))
+            assert h[rot, dr] == _hp(v(rot, dr)), (rot, dr)        # .kicad_mod and PcbLib agree
+    assert h[0, "oval 1.6 1.0"] != h[0, "1.6"]                     # a slot is not a round hole
+    assert h[0, "oval 1.0 1.6"] != h[0, "oval 1.6 1.0"]            # across vs along
+    assert h[45, "oval 1.0 1.6"] != h[135, "oval 1.0 1.6"]
+    assert h[0, "oval 1.0 1.6"] == h[90, "oval 1.6 1.0"] == h[180, "oval 1.0 1.6"]   # the same hole, turned
+
+
 def _mouser(part, listings):
     data = {"Errors": [], "SearchResults": {"Parts": [
         {"ManufacturerPartNumber": part["mpn"], "Manufacturer": m, "LifecycleStatus": st, "AvailabilityInStock": "5"}

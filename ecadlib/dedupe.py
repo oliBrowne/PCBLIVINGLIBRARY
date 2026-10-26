@@ -116,11 +116,18 @@ _ALTIUM_SHAPE = {1: "round", 2: "rect", 9: "roundrect"}                 # altium
 _KICAD_SHAPE = {"circle": "round", "oval": "round", "rect": "rect", "roundrect": "roundrect"}
 
 
-def _pad_kind(num, shape, drill=0.0, slot=0.0):
+def _pad_kind(num, shape, drill=0.0, slot=0.0, axis=0.0):
     """What the pad tuple leaves out but a board can't do without: the pad shape and the hole (diameter, or a slot's
-    width and length). Two footprints with the same pads but a 0.8 vs 1.0 mm drill are not the same footprint."""
-    d = sorted((round(_q(drill), 2), round(_q(max(slot, drill)), 2))) if drill else [0, 0]
-    return (str(num), shape, *d)
+    width and length, and for a slot the direction its long side runs on the board, degrees mod 180). Two footprints
+    with the same pads but a 0.8 vs 1.0 mm drill, or a slot across instead of along, are not the same footprint.
+    slot: the slot's other size (KiCad's (drill oval W H) gives W as drill and H as slot, either may be the longer)."""
+    if not drill:
+        return (str(num), shape, 0, 0)
+    d = sorted((round(_q(drill), 2), round(_q(slot or drill), 2)))
+    if d[0] == d[1]:
+        return (str(num), shape, *d)
+    a = round(float(axis), 0) % 180.0
+    return (str(num), shape, *d, a + 0.0)
 
 
 def _box(xs, ys):
@@ -185,7 +192,8 @@ def fp_geometry_pcblib(fp, courtyard=AL.MECH15):
     pads = [_pad_tuple(r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), AL.to_mm(r["w"]), AL.to_mm(r["h"]), r["rot"], r["hole"] > 0)
             for r in recs]
     kinds = [_pad_kind(r["designator"], _ALTIUM_SHAPE.get(r.get("shape"), "other"), AL.to_mm(r["hole"]),
-                       AL.to_mm(r.get("slot") or 0) if r.get("hole_shape") == 2 else 0.0) for r in recs]
+                       AL.to_mm(r.get("slot") or 0) if r.get("hole_shape") == 2 else 0.0,
+                       float(r.get("rot") or 0) + float(r.get("hole_rot") or 0)) for r in recs]   # slot runs at pad + hole rot
     xs, ys = [], []
     shapes = ("track", "arc", "region", "fill")
     if not any(r["layer"] == courtyard for r in fp["records"] if r["type"] in shapes):
@@ -230,8 +238,9 @@ def fp_geometry_kicad(text):
         pads.append(_pad_tuple(p[1], float(at[1]), -float(at[2]), w, h, rot, p[2] in ("thru_hole", "np_thru_hole")))
         dr = [x for x in (sexpr.first(p, "drill") or ["drill"])[1:] if not isinstance(x, list)]
         nums = [float(x) for x in dr if x != "oval"]
+        oval = "oval" in dr and len(nums) > 1
         kinds.append(_pad_kind(p[1], _KICAD_SHAPE.get(p[3], "other"), nums[0] if nums else 0.0,
-                               nums[1] if "oval" in dr and len(nums) > 1 else 0.0))
+                               nums[1] if oval else 0.0, rot + (90.0 if oval and nums[1] > nums[0] else 0.0)))
     cy = sexpr.courtyard_bbox(t)
     return {"pads": sorted(pads), "courtyard": _box([cy[0], cy[2]], [-cy[3], -cy[1]]) if cy else None, "kinds": sorted(kinds),
             "oriented": _oriented(_kicad_marks(t), pads)}
