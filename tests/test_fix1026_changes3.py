@@ -3,7 +3,7 @@ recipe beside it (R-FX3-1); a release re-checks the recipe and 3D models it copi
 ship the released recipe, not one saved after the gate (R-FX3-3); a reject by someone no longer in the sign-off
 policy can be lifted (R-FX3-4).
 Offline.  python3 -m pytest -q tests/test_fix1026_changes3.py   (or python -m tests.run_all test_fix1026_changes3)"""
-import contextlib, copy, io, json
+import contextlib, copy, io, json, os
 from pathlib import Path
 
 from tests.fixtures_lite import lite
@@ -40,10 +40,13 @@ def test_fix3_rfx31_style_apply_does_not_release_an_edited_recipe_beside_a_resav
     """ride3.py style: the .PcbLib re-saved (other bytes, same footprint), PAD 1 moved in its recipe, then a style
     apply's cosmetic change. The released revision must not take the edited recipe: it is put back (kept in the blob
     store with an `overwritten` line), and the r2 that style apply records has the released recipe."""
+    _rfx31(*_demo())
+
+
+def _rfx31(w, lib):
     from ecadlib import change_gate as CG
-    w, lib = _demo()
     plan = lib / "plan.json"
-    released = _recipe(lib).read_text(encoding="utf-8")
+    released = _recipe(lib).read_bytes()                       # bytes: on Windows the recipe has "\r\n"
     pl = lib / "models/PcbLib/C_0402_1005Metric.PcbLib"
     pl.write_bytes(pl.read_bytes() + b"\0" * 512)
     edited, new = _moved_pad(lib)
@@ -57,8 +60,8 @@ def test_fix3_rfx31_style_apply_does_not_release_an_edited_recipe_beside_a_resav
     g.restyle(items, after)
     g.close()
     assert new not in _head_recipe(lib), "the edited recipe was released by style apply"
-    assert _head_recipe(lib) == released
-    assert _recipe(lib).read_text(encoding="utf-8") == released
+    assert _head_recipe(lib).encode("utf-8") == released
+    assert _recipe(lib).read_bytes() == released
     ev = [e for e in _ledger(lib) if e.get("part") == CAP]
     assert any(e["event"] == "overwritten" and e.get("writer") == "style-apply" for e in ev), ev
 
@@ -89,10 +92,13 @@ def test_fix3_rfx32_a_recipe_saved_while_a_release_is_recorded_is_not_released(t
     """repro_side_snapshot_race.py: a description-only (pass) change is being released; the recipe is saved with PAD 1
     moved between the side-file check and the copy into the blob store. The released revision must not carry the
     edited recipe: the release is classified again and the released recipe goes back first."""
+    _rfx32(*_demo(), monkeypatch)
+
+
+def _rfx32(w, lib, monkeypatch):
     from ecadlib import change_gate as CG, ledger as LG
-    w, lib = _demo()
     plan = lib / "plan.json"
-    released = _recipe(lib).read_text(encoding="utf-8")
+    released = _recipe(lib).read_bytes()                       # bytes: on Windows the recipe has "\r\n"
     edited, new = _moved_pad(lib)
     items = json.loads(plan.read_text(encoding="utf-8"))
     cap = next(i for i in items if i["name"] == CAP)
@@ -112,8 +118,64 @@ def test_fix3_rfx32_a_recipe_saved_while_a_release_is_recorded_is_not_released(t
     head = LG.Ledger(lib).head(CAP)
     assert head["revision"] == 2 and "(restyled)" in (head["item"].get("description") or ""), head
     assert new not in _head_recipe(lib), "the recipe saved during the release was recorded as released"
-    assert _head_recipe(lib) == released
-    assert _recipe(lib).read_text(encoding="utf-8") == released     # put back, the edit kept in the blob store
+    assert _head_recipe(lib).encode("utf-8") == released
+    assert _recipe(lib).read_bytes() == released               # put back, the edit kept in the blob store
+
+
+# ------------------------------------------------------------------ Windows newlines (CI on Windows)
+_WIN = {}
+
+
+def _windows_text(monkeypatch=None):
+    """Path.write_text as on Windows: text mode writes "\r\n" for each "\n" (unless newline= is given). Returns the
+    folder of a sitecustomize.py that does the same in a child ecadlib process."""
+    import pathlib, tempfile
+    if "site" not in _WIN:
+        d = Path(tempfile.mkdtemp(prefix="ecadlib-wintext-"))
+        (d / "sitecustomize.py").write_text(
+            "import pathlib\n_w = pathlib.Path.write_text\n"
+            "def write_text(self, data, encoding=None, errors=None, newline=None):\n"
+            "    return _w(self, data, encoding=encoding, errors=errors, newline='\\r\\n' if newline is None else newline)\n"
+            "pathlib.Path.write_text = write_text\n", encoding="utf-8")
+        _WIN["site"] = d
+    if monkeypatch is not None:
+        real = pathlib.Path.write_text
+
+        def write_text(self, data, encoding=None, errors=None, newline=None):
+            return real(self, data, encoding=encoding, errors=errors, newline="\r\n" if newline is None else newline)
+        monkeypatch.setattr(pathlib.Path, "write_text", write_text)
+    return _WIN["site"]
+
+
+def _demo_windows():
+    """A fresh copy of the demo built by an ecadlib whose text files have Windows line ends (recipes with \r\n)."""
+    import shutil, subprocess, sys, tempfile
+    from tests.test_fix1026_changes2 import REPO
+    if "demo" not in _WIN:
+        d = Path(tempfile.mkdtemp(prefix="ecadlib-windemo-"))
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "ECADLIB_")) and k != "NEXAR_TOKEN"}
+        env.update(ECADLIB_HOME=str(d / "home"), NO_COLOR="1", ECADLIB_USER="Tester <tester@example.com>",
+                   PYTHONPATH=os.pathsep.join([str(_windows_text()), str(REPO), env.get("PYTHONPATH", "")]))
+        r = subprocess.run([sys.executable, "-m", "ecadlib", "demo", "-o", "ws"], cwd=d, env=env, capture_output=True,
+                           text=True, timeout=300)
+        assert r.returncode == 0, r.stdout + r.stderr
+        _WIN["demo"] = d
+    w = Path(tempfile.mkdtemp(prefix="ecadlib-win-"))
+    shutil.copytree(_WIN["demo"] / "ws", w / "ws")
+    lib = w / "ws/librarian/demo_bom_demo"
+    assert b"\r\n" in _recipe(lib).read_bytes()           # the simulation took: the recipes have Windows line ends
+    return w, lib
+
+
+@lite
+def test_fix3_rfx31_rfx32_with_windows_line_ends(tmp_path, monkeypatch):
+    """Windows CI failed the two tests above (the released recipe compared as text read back with "\n" against the
+    blob store's bytes with "\r\n"). The same steps on a library whose text files have Windows line ends, written
+    the Windows way here too."""
+    w, lib = _demo_windows()
+    _windows_text(monkeypatch)
+    _rfx31(w, lib)
+    _rfx32(*_demo_windows(), monkeypatch)
 
 
 # ------------------------------------------------------------------ R-FX3-3
