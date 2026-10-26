@@ -182,6 +182,12 @@ def save(ws_root, b):
 
 
 def restart(ws):
+    if not isinstance(ws, (str, Path)) or len(str(ws)) > 500 or "\0" in str(ws) \
+            or not Path(str(ws).strip()).expanduser().is_absolute():
+        raise ValueError("give the workspace as a full path, e.g. " + str(UC.default_workspace()))
+    ws = Path(str(ws).strip()).expanduser()
+    if not ws.is_dir():                         # save() makes it: a folder that is not there is a typo, not a move
+        raise ValueError(f"workspace folder not found: {ws}; save the setup first")
     if RESTART is None:
         raise ValueError(f"restart ecadlib with: ecadlib ui --workspace \"{ws}\"")
     RESTART(str(ws))

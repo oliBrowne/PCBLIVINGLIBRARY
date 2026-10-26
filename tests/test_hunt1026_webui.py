@@ -164,3 +164,24 @@ def test_webui_07_host_check_on_port_80_takes_the_browsers_host_without_a_port(t
     assert ok(80, "localhost") and ok(80, "127.0.0.1") and ok(80, "localhost:80") and ok(8765, "127.0.0.1:8765")
     assert not ok(8765, "localhost") and not ok(80, "evil.example") and not ok(80, "evil.example:80") \
         and not ok(8765, "127.0.0.1:80") and not ok(80, None)
+
+
+@lite
+def test_webui_08_setup_restart_moves_only_to_a_real_workspace_folder(tmp_path, monkeypatch):
+    """/api/setup/restart handed any JSON value to the desktop app's restart: {"workspace": 5} or "my ws" moved the
+    server to a new folder "5" / "my ws" under whatever the current folder was (Workspace() makes it)."""
+    from ecadlib import easy_setup as ES
+    moved = []
+    monkeypatch.setattr(ES, "RESTART", moved.append)
+    good = tmp_path / "new ws"
+    good.mkdir()
+    for bad in (5, ["x"], {"a": 1}, "relative ws", "\0x", str(tmp_path / "missing"), "x" * 600):
+        try:
+            ES.POST_ROUTES["/api/setup/restart"](tmp_path, {"workspace": bad})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"restarted in {bad!r}")
+    assert moved == []
+    assert ES.POST_ROUTES["/api/setup/restart"](tmp_path, {"workspace": str(good)})["restarting"] and moved == [str(good)]
+    assert ES.POST_ROUTES["/api/setup/restart"](tmp_path, {})["restarting"] and moved[-1] == str(tmp_path)
