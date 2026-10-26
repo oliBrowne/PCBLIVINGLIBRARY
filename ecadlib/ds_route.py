@@ -1028,7 +1028,14 @@ def hold_reasons(res, fp_needed=True):
     if kind == "ok":
         return []
     hard = hard_failures(why, res.get("spec"))
+    if kind == "incomplete":       # a pad-table numbering error never becomes copper (footprint_adv.table_geometry
+        hard = [w for w in hard if not PAD_TABLE_NUMBERING.match(w)]   # refuses it): the librarian holds it, with fp-edit's fix
     return hard if fp_needed is not False else [w for w in hard if SYMBOL_FAILED.match(w)]
+
+
+# check_pad_table's numbering errors (datasheet.py writes them "pad_table: ..."): no pin 1, a pad listed twice, a count
+# that is not pin_count. Geometry errors (overlaps, units) still hold the read.
+PAD_TABLE_NUMBERING = re.compile(r"^pad_table: (no pad numbered 1|pad \S+ is listed twice|pin_count is )")
 
 
 # unresolved fields the footprint never reads (package_schema.json: height_max is "used for 3D/descr only"): a review

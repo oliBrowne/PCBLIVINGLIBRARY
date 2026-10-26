@@ -26,6 +26,21 @@ def test_rrt1_a_hard_failure_is_held_even_when_a_field_is_also_unresolved():
     assert DR.hold_reasons(res, fp_needed=False) == []
 
 
+def test_rrt1_an_incomplete_pad_table_error_is_left_to_the_librarians_fp_edit_hold():
+    """A pad-table error never becomes copper (footprint_adv.table_geometry refuses it), and the librarian holds the
+    part with fp-edit's fix (padtable.no_pin1). Holding the read first replaced that with 'files: no symbol model'
+    (NSJ12HF-1). A failed read still holds for it, and an overlap (geometry) beside it still holds."""
+    pt = "pad_table: no pad numbered 1 (or A1)"
+    res = {"needs_review": [pt], "spec": {"unresolved": ["lead_span (not printed)"], "pad_table": {"pads": []}}}
+    assert DR.assess(res)[0] == "incomplete"
+    assert DR.hold_reasons(res) == []
+    res2 = {"needs_review": [pt, OVERLAP], "spec": {"unresolved": ["lead_span (not printed)"]}}
+    assert DR.hold_reasons(res2) == [OVERLAP]                                 # geometry still holds
+    res3 = {"needs_review": [pt], "spec": {}}
+    if DR.assess(res3)[0] == "failed":
+        assert DR.hold_reasons(res3) == [pt]
+
+
 def test_rrt1_an_incomplete_answer_with_a_hard_failure_ranks_below_a_plain_incomplete_one():
     """The route keeps its best answer: an incomplete one that also fails a hard check ranks with the failed ones,
     below an incomplete answer that fails nothing."""
