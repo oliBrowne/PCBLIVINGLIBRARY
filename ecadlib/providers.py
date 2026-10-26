@@ -15,7 +15,7 @@ against the live sites every week):
   * EasyEDA      - GET component JSON by LCSC number; the only free source of ready symbol / footprint / 3D data
 Stubs (document auth, raise NotConfigured without keys): SnapMagic, SamacSys (no self-serve public API).
 All response bodies are untrusted: parsed as JSON only, fields read defensively."""
-import json, os, re
+import json, os, re, unicodedata
 from dataclasses import dataclass, field
 from . import userconfig as UC
 
@@ -43,33 +43,59 @@ def clean_maker(name):
     return short or name
 
 
-_MAKER_FILL = {"inc", "corp", "corporation", "co", "ltd", "llc", "gmbh", "ag", "sa", "bv", "nv", "plc", "group", "usa",
-               "semiconductor", "semiconductors", "semi", "electronics", "electronic", "technology", "technologies",
-               "international", "components", "devices", "the", "and", "of", "incorporated", "limited", "company"}
+# words that say what kind of company it is, not which one ("Rohm Semiconductor" is Rohm, "Vishay Intertechnology" Vishay)
+_MAKER_WORDS = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "LTD", "LIMITED", "LLC", "GMBH", "AG",
+                "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE", "GROUP", "HOLDINGS", "INTERNATIONAL",
+                "SEMICONDUCTOR", "SEMICONDUCTORS", "SEMI", "ELECTRONICS", "ELECTRONIC", "ELECTRIC", "TECHNOLOGY",
+                "TECHNOLOGIES", "TECH", "INDUSTRIES", "INDUSTRIAL", "DEVICES", "COMPONENTS", "PRODUCTS", "SYSTEMS",
+                "MICROELECTRONICS", "INTEGRATED", "INTERTECHNOLOGY", "DIVISION"}
+# the short names makers go by -> the words of their full name (after _MAKER_WORDS are dropped)
+_MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON": "ON", "ONSEMI": "ON",
+                "ST": "ST", "STM": "ST", "ADI": "ANALOG", "MPS": "MONOLITHICPOWER", "AOS": "ALPHAOMEGA", "NXP": "NXP", "PHILIPS": "NXP",
+                "FAIRCHILD": "ON", "IR": "INFINEON", "RECTIFIER": "INFINEON", "CYPRESS": "INFINEON",
+                "MICROCHIPTECHNOLOGY": "MICROCHIP", "ATMEL": "MICROCHIP", "DIODESINC": "DIODES", "DIODES": "DIODES",
+                "RENESAS": "RENESAS", "IDT": "RENESAS", "INTERSIL": "RENESAS"}
+
+
+def _maker_words(name):
+    """A maker name's own words (upper case, accents folded, a Chinese alias in brackets and company-kind words left
+    out)."""
+    name = clean_maker(name or "") if isinstance(name, str) else ""
+    name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()       # Würth -> Wurth
+    words = re.findall(r"[A-Z0-9]+", re.sub(r"[-'&.]", "", name.upper()))
+    return [w for w in words if w not in _MAKER_WORDS] or words
+
+
+def maker_key(name):
+    """A maker's name reduced to which company it is: letters and digits of its words, company-kind words left out,
+    a Chinese alias in brackets dropped, short names mapped (TI -> Texas Instruments, onsemi / ON Semiconductor -> ON,
+    STMicroelectronics -> ST). '' when nothing is left."""
+    kept = _maker_words(name)
+    if kept[:2] == ["TEXAS", "INSTRUMENTS"]:
+        return "TEXASINSTRUMENTS"
+    if kept and kept[0].startswith("STMICRO"):
+        return "ST"
+    if kept and kept[0] == "VISHAY":              # Vishay Dale / Siliconix / Intertechnology / Sprague: one maker
+        return "VISHAY"
+    joined = "".join(kept)
+    return _MAKER_ALIAS.get(joined, joined)          # the whole name only: "ON Shore Technology" is not onsemi
 
 
 def same_maker(a, b):
-    """Do two maker names (a BOM's, a source's) name the same maker? Lenient: a shared word ('Diodes Incorporated' /
-    'DIODES(美台)'), one run together starting the other ('ST' / 'STMicroelectronics', 'Lite-On' / 'LITEON',
-    'onsemi' / 'ON Semiconductor'), or one the initials of the other ('TI' / 'Texas Instruments', 'ADI' / 'Analog
-    Devices Inc.'). False when either is empty."""
-    import unicodedata
-
-    def words(s):
-        s = unicodedata.normalize("NFKD", clean_maker(s)).encode("ascii", "ignore").decode().lower()
-        return re.findall(r"[a-z0-9]+", s.replace("&", " "))
-    wa, wb = words(a), words(b)
-    if not wa or not wb:
+    """Do two maker names name the same company? Equal keys; one key starting the other when the shorter has at
+    least 4 letters ("Vishay" / "Vishay Siliconix", "Murata" / "Murata Manufacturing"); or a one-word name of 3+
+    letters that is the other's first word ("MDD" / "MDD Microdiode"). Never a substring elsewhere: "ON" is not in
+    "Monolithic", "TI" is not "Tiger", "ON" is not "ON Shore Technology"."""
+    ka, kb = maker_key(a), maker_key(b)
+    if not ka or not kb:
         return False
-    ka, kb = [w for w in wa if w not in _MAKER_FILL] or wa, [w for w in wb if w not in _MAKER_FILL] or wb
-    if {w for w in ka if len(w) >= 3} & {w for w in kb if len(w) >= 3}:
+    if ka == kb:
         return True
-    ja, jb = "".join(ka), "".join(kb)
-    if len(min(ja, jb, key=len)) >= 2 and (ja.startswith(jb) or jb.startswith(ja)):
+    short, long_ = sorted((ka, kb), key=len)
+    if len(short) >= 4 and long_.startswith(short):
         return True
-    ini = lambda ws: "".join(w[0] for w in ws)
-    return (len(wa) == 1 and len(wa[0]) >= 2 and wa[0] in (ini(wb), ini(kb))) or \
-        (len(wb) == 1 and len(wb[0]) >= 2 and wb[0] in (ini(wa), ini(ka)))
+    wa, wb = _maker_words(a), _maker_words(b)
+    return any(len(x) == 1 and len(x[0]) >= 3 and y and y[0] == x[0] for x, y in ((wa, wb), (wb, wa)))
 
 
 def describe(text="", category="", package=""):

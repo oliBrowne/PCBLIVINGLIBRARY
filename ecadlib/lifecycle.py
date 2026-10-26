@@ -17,7 +17,7 @@ unknown), 2 bad input or a failed Altium 365 update, 3 no source answered for an
 
 Response shapes: each provider's `shapes` says what is confirmed from public docs and what is assumed.
 None of these hosts was reachable from the sandbox this was written in; parsers are tested against mocks."""
-import argparse, csv, json, os, re, sqlite3, sys, unicodedata
+import argparse, csv, json, os, re, sqlite3, sys
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -69,47 +69,7 @@ class LifecycleResult:
     error: str = ""
 
 
-# words that say what kind of company it is, not which one ("Rohm Semiconductor" is Rohm, "Vishay Intertechnology" Vishay)
-_MAKER_WORDS = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "LTD", "LIMITED", "LLC", "GMBH", "AG",
-                "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE", "GROUP", "HOLDINGS", "INTERNATIONAL",
-                "SEMICONDUCTOR", "SEMICONDUCTORS", "SEMI", "ELECTRONICS", "ELECTRONIC", "ELECTRIC", "TECHNOLOGY",
-                "TECHNOLOGIES", "TECH", "INDUSTRIES", "INDUSTRIAL", "DEVICES", "COMPONENTS", "PRODUCTS", "SYSTEMS",
-                "MICROELECTRONICS", "INTEGRATED", "INTERTECHNOLOGY", "DIVISION"}
-# the short names makers go by -> the words of their full name (after _MAKER_WORDS are dropped)
-_MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON": "ON", "ONSEMI": "ON",
-                "ST": "ST", "STM": "ST", "ADI": "ANALOG", "MPS": "MONOLITHICPOWER", "AOS": "ALPHAOMEGA", "NXP": "NXP", "PHILIPS": "NXP",
-                "FAIRCHILD": "ON", "IR": "INFINEON", "RECTIFIER": "INFINEON", "CYPRESS": "INFINEON",
-                "MICROCHIPTECHNOLOGY": "MICROCHIP", "ATMEL": "MICROCHIP", "DIODESINC": "DIODES", "DIODES": "DIODES",
-                "RENESAS": "RENESAS", "IDT": "RENESAS", "INTERSIL": "RENESAS"}
-
-
-def maker_key(name):
-    """A maker's name reduced to which company it is: letters and digits of its words, company-kind words left out,
-    a Chinese alias in brackets dropped, short names mapped (TI -> Texas Instruments, onsemi / ON Semiconductor -> ON,
-    STMicroelectronics -> ST). '' when nothing is left."""
-    name = P.clean_maker(name or "") if isinstance(name, str) else ""
-    name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()       # Würth -> Wurth
-    words = re.findall(r"[A-Z0-9]+", re.sub(r"[-'&.]", "", name.upper()))
-    if words[:2] == ["TEXAS", "INSTRUMENTS"]:
-        return "TEXASINSTRUMENTS"
-    if words and words[0].startswith("STMICRO"):
-        return "ST"
-    kept = [w for w in words if w not in _MAKER_WORDS] or words
-    joined = "".join(kept)
-    return _MAKER_ALIAS.get(joined, joined)          # the whole name only: "ON Shore Technology" is not onsemi
-
-
-def same_maker(a, b):
-    """Do two maker names name the same company? Equal keys, or one key starting the other when the shorter has at
-    least 4 letters ("Vishay" / "Vishay Siliconix", "Murata" / "Murata Manufacturing"). Never a substring elsewhere:
-    "ON" is not in "Monolithic", "TI" is not "Tiger"."""
-    ka, kb = maker_key(a), maker_key(b)
-    if not ka or not kb:
-        return False
-    if ka == kb:
-        return True
-    short, long_ = sorted((ka, kb), key=len)
-    return len(short) >= 4 and long_.startswith(short)
+maker_key, same_maker = P.maker_key, P.same_maker      # which company a maker name names (providers)
 
 
 def _pick(items, part, mpn_of, mfr_of):

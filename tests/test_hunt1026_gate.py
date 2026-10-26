@@ -134,9 +134,11 @@ def test_gate02_digikey_other_makers_part_is_not_this_part():
 def test_gate02_maker_names():
     same = [("TI", "Texas Instruments"), ("Burr-Brown", "Texas Instruments"), ("onsemi", "ON Semiconductor"),
             ("Vishay", "Vishay Siliconix"), ("Rohm", "ROHM Semiconductor"), ("Würth Elektronik", "Wurth Elektronik"),
-            ("Diodes Inc.", "Diodes Incorporated"), ("ADI", "Analog Devices Inc."), ("ST", "STMicroelectronics")]
+            ("Diodes Inc.", "Diodes Incorporated"), ("ADI", "Analog Devices Inc."), ("ST", "STMicroelectronics"),
+            ("Vishay Dale", "Vishay Intertech"), ("MDD", "MDD Microdiode")]
     differ = [("ON", "Monolithic Power Systems"), ("ON", "STMicroelectronics"), ("ON", "ON Shore Technology"),
-              ("TI", "Tiger"), ("TI", "STMicroelectronics"), ("Nexperia", "NXP"), ("", ""), ("", "TI")]
+              ("TI", "Tiger"), ("TI", "STMicroelectronics"), ("Nexperia", "NXP"), ("", ""), ("", "TI"),
+              ("ST", "Stackpole Electronics"), ("ON", "ON Shore Technology"), ("Micro Commercial", "Microchip")]
     for a, b in same:
         assert L.same_maker(a, b) and L.same_maker(b, a), (a, b)
     for a, b in differ:

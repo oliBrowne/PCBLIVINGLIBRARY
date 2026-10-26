@@ -202,12 +202,13 @@ def test_official_source_pick_prefers_the_boms_maker_by_name_not_by_letters():
     from ecadlib import lifecycle as L
     items = [{"mpn": "LM2903D", "m": "Texas Instruments"}, {"mpn": "LM2903D", "m": "STMicroelectronics"},
              {"mpn": "LM2903D", "m": "onsemi"}]
-    pick = lambda maker: L._pick(items, {"mpn": "LM2903D", "manufacturer": maker}, lambda x: x["mpn"], lambda x: x["m"])["m"]
+    pick = lambda maker: (L._pick(items, {"mpn": "LM2903D", "manufacturer": maker}, lambda x: x["mpn"], lambda x: x["m"])
+                          or {}).get("m")
     assert pick("ST") == "STMicroelectronics"
     assert pick("ON Semiconductor") == "onsemi"
     assert pick("ON") == "onsemi"
     assert pick("TI") == "Texas Instruments"
-    assert pick("Nobody") == "Texas Instruments"                 # no maker agrees: the first exact match, as before
+    assert pick("Nobody") is None          # no listing by the BOM's maker and several others: none of theirs (gate-02)
     assert pick("") == "Texas Instruments"
 
 
