@@ -84,7 +84,7 @@ RX = [  # (group, regex on the primary name, upper case, overbar / active-low ma
     ("adc", _R(r"ADC[A-Z0-9_]*|AIN\d*|AN\d+|DAC[A-Z0-9_]*|AOUT\d*|SENSOR_?V[PN]|SENSOR[A-Z0-9_]*|VP|VN|AIN[PN]\d*")),
     # direction from the name, for the small analog / power / logic parts whose pins have no better group
     ("other_out", _R(r"OUT[A-Z0-9_+\-]*|[A-Z0-9]+_?OUT[A-Z0-9]*|N?Q\d*'?|Q_?N|Q[A-H]'?|\d+Q'?|\d+Y|Y\d+|DIS|DISCH[A-Z]*|N?PG|N?PGOOD|P_?GOOD|PWR_?(GD|GOOD|OK)|"
-                    r"N?CO|N?BO|N?TC|N?RCO|N?FLT|N?FAULT|N?FLAG|N?ALERT|N?INT\d*|N?IRQ\d*|RDY|N?READY|BUSY|DONE|STAT\d*|LED[A-Z0-9_]*|SW\d*|LX\d*|"
+                    r"N?FLT|N?FAULT|N?FLAG|N?ALERT|N?INT\d*|N?IRQ\d*|RDY|N?READY|BUSY|DONE|STAT\d*|LED[A-Z0-9_]*|SW\d*|LX\d*|"
                     r"BST|BOOST|PH|DRV[A-Z0-9_]*|GATE[A-Z0-9_]*|[HL]O|[HL]G|ALARM|TRIP")),
     ("other_in", _R(r"IN\d*|IN[+\-PNAB]\d*|[+\-]IN[A-Z0-9]*|IN_?[PN]\d*|[A-Z0-9]+_IN|\d+IN[+\-]?|IN[A-Z]?\d*[+\-]|TRIG[A-Z]*|TRG|TR|THR[A-Z]*|CV|CONT[A-Z]*|"
                    r"CTRL[A-Z0-9_]*|CTL|FB\d*|VFB|ADJ|SET|SENSE[A-Z0-9_+\-]*|SNS[A-Z0-9_+\-]*|CS[+\-]|SS|SS_?TR|ILIM|ISET|RT|"
@@ -96,6 +96,10 @@ RX = [  # (group, regex on the primary name, upper case, overbar / active-low ma
 SIGNED = {"ground": _R(r"-V(?:S|CC|DD|EE|SS)?\d*|V(?:S|CC|DD|EE|SS)\d*-|-\d+V\d*|VNEG\d*"),
           "power": _R(r"\+V(?:S|CC|DD|IN|POS)?\d*|V(?:S|CC|DD)\d*\+|\+\d+V\d*|VPOS\d*")}
 SIGNED_TYPES = ("", "unspecified", "passive", "power", "power_in")
+# a counter's carry / borrow / terminal count outputs (74LS192 ~{CO} / ~{BO}, 74HC161 TC / RCO): outputs only when the
+# pin is untyped (an output-typed one is one anyway). NTC is a thermistor input (LT3652, LTC4054), and a passive TC is
+# a timing capacitor (MC33063): neither is a counter output (R-FX17-6)
+COUNTER_OUT = _R(r"N?CO|N?BO|TC|N?RCO")
 PORT_RX = [re.compile(r"^P([A-Z])(\d{1,2})$"), re.compile(r"^P(\d{1,2})[._](\d{1,2})$"), re.compile(r"^PIO(\d)_(\d{1,2})$"),
            re.compile(r"^(GPIO|IO|GP)(\d{1,3})$"), re.compile(r"^R(\d)(\d)$")]
 
@@ -161,6 +165,8 @@ def classify(pin):
             return g
     if num in ("EP", "PAD", "EPAD", "TAB"):
         return "ep"
+    if t in ("", "unspecified") and COUNTER_OUT.match(k):
+        return "other_out"
     if t == "ground":
         return "ground"
     if t in ("power", "power_in"):

@@ -109,3 +109,21 @@ def test_fx17_5_a_merged_ledger_refuses_only_that_part_and_names_the_way_out():
     assert LG.Ledger(lib).head(KT)["revision"] == 2
     out, _g = _publish(lib)
     assert out[KT] is None, out
+
+
+# ---------------------------------------------------------------- R-FX17-6: TC / CO / BO / RCO only on output or untyped pins
+def test_fx17_6_ntc_and_passive_tc_pins_are_not_counter_outputs():
+    """Before (b5f7183): N?TC made a charger's NTC thermistor input (LT3652, LTC4054...) an output, and the name rule
+    beat a passive type (MC33063's timing capacitor TC, typed passive), so both moved right. The counter output names
+    (CO, BO, TC, RCO) now count for untyped or output pins only, and NTC is no TC."""
+    from ecadlib import symbol_layout as SL
+    for t in ("passive", "input", ""):
+        assert SL.classify({"num": "1", "name": "NTC", "type": t}) != "other_out", t
+    assert SL.classify({"num": "3", "name": "TC", "type": "passive"}) != "other_out"
+    for t in ("passive", "power_in"):
+        for n in ("CO", "BO", "RCO", "~{TC}"):
+            assert SL.classify({"num": "12", "name": n, "type": t}) != "other_out", (n, t)
+    for n in ("~{CO}", "~{BO}", "CO", "BO", "TC", "~{TC}", "RCO", "~{RCO}"):   # 74LS192 / 74HC161: still outputs
+        for t in ("", "unspecified", "output"):
+            assert SL.classify({"num": "12", "name": n, "type": t}) == "other_out", (n, t)
+        assert SL.classify({"num": "12", "name": n, "type": "input"}) == "other_in", n
