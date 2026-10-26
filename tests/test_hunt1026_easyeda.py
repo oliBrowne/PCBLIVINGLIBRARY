@@ -258,6 +258,28 @@ def test_step_in_centimetres_or_metres_is_placed_at_its_real_size():
         assert abs(info["height"] - 0.8) < 1e-6 and abs(info["bbox"][3] - 1.0) < 1e-6, (prefix, info)
 
 
+def _index(fps):
+    from ecadlib.kicad_index import KiCadIndex
+    idx = KiCadIndex([])
+    idx.footprints = {k: {"path": "", "has_3d": False} for k in fps}
+    return idx
+
+
+def test_footprint_by_package_never_guesses_between_lands_of_one_body():
+    # a BOM line saying only "SOIC-8" / "QFN-16 3x3mm" took the first indexed footprint of that body (the file system's
+    # order), an exposed-pad land or another EP size included; the librarian builds it ("local:", no verify hold), and
+    # two EP sizes have the same pad numbers, so nothing later catches it
+    soic = ["lib:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm", "lib:SOIC-8_3.9x4.9mm_P1.27mm"]
+    for fps in (soic, soic[::-1]):
+        idx = _index(fps)
+        assert idx.find_footprint_for_package("SOIC8", "U", hint="SOIC-8 op amp") == "lib:SOIC-8_3.9x4.9mm_P1.27mm"
+        assert idx.find_footprint_for_package("SOIC8", "U", hint="SOIC-8 with exposed pad") == soic[0]
+    qfn = ["lib:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm", "lib:QFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm"]
+    for fps in (qfn, qfn[::-1]):
+        assert _index(fps).find_footprint_for_package("QFN16", "U", hint="QFN-16 3x3mm") is None
+    assert _index(qfn[:1]).find_footprint_for_package("QFN16", "U", hint="QFN-16 3x3mm") == qfn[0]   # only one: as before
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

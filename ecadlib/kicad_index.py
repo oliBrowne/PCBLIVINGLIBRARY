@@ -11,6 +11,8 @@ SI = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "μ": 1e-6, "m": 1e-3, "": 1
       "k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9}
 PKG_RE = re.compile(r"(?<![0-9])(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)(?![0-9])|"
                     r"(?<![A-Z0-9])(SOT-?23(?:-\d)?|SOT-?223|SOIC-?\d+|SOP-?\d+|TSSOP-?\d+|QFN-?\d+|VQFN-?\d+|LQFP-?\d+|SMA|SMB|SOD-?\d+)(?![A-Z0-9])", re.I)
+EP_NAME = re.compile(r"-\d*EP(?=[_-]|$)|_EP\d", re.I)              # KiCad's exposed-pad lands: QFN-16-1EP_..._EP1.7x1.7mm
+EP_HINT = re.compile(r"\bE?PAD\b|-\d*EP\b|\bEP\b|exposed|thermal ?pad|power ?pad|heat ?sink ?pad", re.I)
 BODY_RE = re.compile(r"(?<![0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x\d+(?:\.\d+)?)?mm", re.I)
 
 
@@ -196,4 +198,9 @@ class KiCadIndex:
             hits = [k for k in hits if bodies[k] in (want, None)]
         elif len({b for b in bodies.values() if b}) > 1:
             return None                           # several body sizes and nothing to choose by: ambiguous
+        if len(hits) > 1:                         # one body, several lands (with / without an exposed pad, EP sizes):
+            ep = bool(EP_HINT.search(str(hint or "")))       # the one the line's words name, never the first indexed
+            hits = [k for k in hits if bool(EP_NAME.search(k.split(":")[-1])) == ep]
+            if len(hits) > 1:
+                return None
         return hits[0] if hits else None
