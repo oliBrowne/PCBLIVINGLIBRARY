@@ -29,7 +29,9 @@ Classes, most severe first (default policy in brackets, see change_gate.POLICY):
 
 Tolerances: a length change within TOL["noise"] (parity's position tolerance, 1 um) is no change; SIZE_MINOR is the
 pad-size band that counts as minor (max(50 um, 10 % of that side), the 50 um floor no more than 10 % of the pad's
-pitch to its nearest neighbour: a fine-pitch gap is too small for it); 3D origin within TOL["model"] (10 um)."""
+pitch to its nearest neighbour: a fine-pitch gap is too small for it), and a size change in the band that leaves less
+than GAP_KEEP (80 %) of the copper gap to any other pad, an exposed pad's gap to its leads too, or closes it, is major;
+3D origin within TOL["model"] (10 um)."""
 import json, re
 from collections import Counter
 
@@ -607,7 +609,58 @@ def _pitch(p, pads):
     return min(d) ** 0.5 if d else None
 
 
-def _pad(a, b, out, origin=None, pads=None):
+GAP_KEEP = 0.80          # a pad size change that leaves less than this share of a copper gap to another pad is major
+
+
+def _copper_box(p):
+    """A pad's copper as an axis-aligned box (x0, y0, x1, y1), or None (no copper, no size). A pad turned by an angle
+    that is no quarter turn takes the box around it (more copper: the gap it gives is never too wide)."""
+    if p.get("side") == "NPTH" or p.get("w") is None or p.get("h") is None:
+        return None
+    import math
+    w, h, r = p["w"], p["h"], math.radians(p.get("rot") or 0.0)
+    c, s = abs(math.cos(r)), abs(math.sin(r))
+    bw, bh = w * c + h * s, w * s + h * c
+    x, y = p.get("x") or 0.0, p.get("y") or 0.0
+    ox, oy = (p.get("offset") or (0, 0))[:2]
+    x, y = x + (ox or 0.0), y + (oy or 0.0)
+    return (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2)
+
+
+def _box_gap(a, b):
+    """Copper gap between two boxes (negative or 0: they touch or overlap)."""
+    gx, gy = max(a[0], b[0]) - min(a[2], b[2]), max(a[1], b[1]) - min(a[3], b[3])
+    if gx <= 0 and gy <= 0:
+        return max(gx, gy)
+    return (max(gx, 0) ** 2 + max(gy, 0) ** 2) ** 0.5
+
+
+def _share_copper(p, q):
+    sides = {p.get("side"), q.get("side")}
+    return "NPTH" not in sides and (len(sides) == 1 or not sides <= {"F", "B"})
+
+
+def _gap_cut(a, b, peers):
+    """A pad a -> b whose new size cuts the copper gap to another pad (an exposed pad to its leads too) below GAP_KEEP
+    of what it was, or closes it -> (other pad, old gap, new gap), else None (R-G2-2)."""
+    ba, bb = _copper_box(a), _copper_box(b)
+    if not ba or not bb:
+        return None
+    for qa, qb in peers or ():
+        if qa is a or not (_share_copper(a, qa) and _share_copper(b, qb)):
+            continue
+        qba, qbb = _copper_box(qa), _copper_box(qb)
+        if not qba or not qbb:
+            continue
+        g0, g1 = _box_gap(ba, qba), _box_gap(bb, qbb)
+        if g1 >= g0 - TOL["noise"]:
+            continue
+        if g1 <= TOL["noise"] or g1 < GAP_KEEP * g0:
+            return qb, g0, g1
+    return None
+
+
+def _pad(a, b, out, origin=None, pads=None, peers=None):
     what = f"pad {a['num'] or '(unnumbered)'}"
     dx, dy = (b["x"] or 0) - (a["x"] or 0), (b["y"] or 0) - (a["y"] or 0)
     if origin:
@@ -642,8 +695,11 @@ def _pad(a, b, out, origin=None, pads=None):
     if _ne(a["w"], b["w"], TOL["noise"]) or _ne(a["h"], b["h"], TOL["noise"]):
         pitch = _pitch(a, pads)                       # (only for a pad whose size changed: n pads, not n^2)
         minor = _size_minor(a["w"], b["w"], pitch) and _size_minor(a["h"], b["h"], pitch)
-        _chg(out, "geometry-minor" if minor else "geometry-major", "footprint", what, [a["w"], a["h"]], [b["w"], b["h"]],
-             f"{what} size {_f(a['w'])} x {_f(a['h'])} -> {_f(b['w'])} x {_f(b['h'])} mm")
+        cut = _gap_cut(a, b, peers) if minor else None
+        gap = (f" (the copper gap to pad {cut[0]['num'] or '(unnumbered)'} {_f(round(cut[1], 4))} -> "
+               f"{_f(round(cut[2], 4))} mm)" if cut else "")
+        _chg(out, "geometry-minor" if minor and not cut else "geometry-major", "footprint", what, [a["w"], a["h"]],
+             [b["w"], b["h"]], f"{what} size {_f(a['w'])} x {_f(a['h'])} -> {_f(b['w'])} x {_f(b['h'])} mm{gap}")
     for k, label in (("paste", "solder paste"), ("mask", "solder mask opening")):
         if a.get(k) is not None and b.get(k) is not None and bool(a[k]) != bool(b[k]):
             _chg(out, "geometry-major", "footprint", what, a[k], b[k], f"{what} {'has' if b[k] else 'lost'} its {label}")
@@ -735,7 +791,7 @@ def _footprint(o, n, out):
         else:
             origin = None
         for a, b in pairs:
-            _pad(a, b, sub, origin, po)
+            _pad(a, b, sub, origin, po, pairs)
             if a["side"] in ("F", "B") and b["side"] in ("F", "B") and not a.get("paste") and not b.get("paste") and \
                     _pasted(a, fo.get("windows")) and not _pasted(b, fn.get("windows")):
                 _chg(sub, "geometry-major", "footprint", f"pad {a['num'] or '(unnumbered)'}", True, False,

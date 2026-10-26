@@ -77,3 +77,50 @@ def test_gate2_rg21_the_writers_own_rebuild_still_releases():
     assert LG.Ledger(lib).head(CAP)["revision"] == 2, rows
     assert _recipe(lib).read_bytes() == mine
     assert not [e for e in _ledger(lib) if e.get("event") == "overwritten"]
+
+
+# ------------------------------------------------------------------ R-G2-2
+def _kfp(pads):
+    from ecadlib import fingerprint as F
+    body = "".join(f'(pad "{n}" smd rect (at {x:.3f} {y:.3f}) (size {w} {h}) (layers "F.Cu" "F.Paste" "F.Mask"))\n'
+                   for n, x, y, w, h in pads)
+    return F.build("T", None, *F.kicad_footprint(f'(footprint "T" (version 20240108) (generator x) (layer "F.Cu")\n{body})'),
+                   tool="kicad")
+
+
+def _row(w, pitch, h=1.0, n=4):
+    return _kfp([(i + 1, pitch * i, 0, w, h) for i in range(n)])
+
+
+def _qfn16(ep):
+    pads, n = [], 1
+    for side in range(4):
+        for i in range(4):
+            t = -0.75 + 0.5 * i
+            x, y, w, h = {0: (-1.45, t, 0.8, 0.25), 1: (t, 1.45, 0.25, 0.8), 2: (1.45, -t, 0.8, 0.25),
+                          3: (-t, -1.45, 0.25, 0.8)}[side]
+            pads.append((n, x, y, w, h))
+            n += 1
+    return _kfp(pads + [(17, 0, 0, ep, ep)])
+
+
+def test_gate2_rg22_a_pad_gap_cut_below_its_margin_is_a_major_change():
+    """g1_gap_rel.py / g1b_ep_grow.py: within the 10 % size band, but the copper gap to the next pad is cut (1.0 ->
+    1.09 mm pads on 1.1 mm pitch: gap 0.10 -> 0.01), closed (0.6 -> 0.66 on 0.65: overlap), or an exposed pad grows into
+    the leads (QFN-16 EP 1.70 -> 1.86: lead gap 0.225 -> 0.145). Each is geometry-major (held), not minor (released)."""
+    from ecadlib import change_diff as CD
+    assert CD.worst(CD.diff(_row(1.0, 1.1), _row(1.09, 1.1))) == "geometry-major"
+    assert CD.worst(CD.diff(_row(0.6, 0.65, 0.6), _row(0.66, 0.65, 0.6))) == "geometry-major"
+    ch = CD.diff(_qfn16(1.70), _qfn16(1.86))
+    assert CD.worst(ch) == "geometry-major", ch
+    assert any("gap" in c["text"] for c in ch), [c["text"] for c in ch]
+
+
+def test_gate2_rg22_a_small_size_change_that_keeps_the_gap_stays_minor():
+    """No false hold: pads trimmed or grown a little with the gap to every neighbour kept within its margin."""
+    from ecadlib import change_diff as CD
+    assert CD.worst(CD.diff(_row(0.60, 1.27), _row(0.65, 1.27))) == "geometry-minor"     # gap 0.67 -> 0.62
+    assert CD.worst(CD.diff(_row(0.20, 0.4), _row(0.21, 0.4))) == "geometry-minor"       # gap 0.20 -> 0.19
+    assert CD.worst(CD.diff(_row(1.0, 1.1), _row(0.95, 1.1))) == "geometry-minor"        # smaller: the gap grows
+    assert CD.worst(CD.diff(_qfn16(1.70), _qfn16(1.72))) == "geometry-minor"             # EP gap 0.225 -> 0.215
+    assert CD.worst(CD.diff(_row(1.0, 1.1, h=1.0), _row(1.0, 1.1, h=1.08))) == "geometry-minor"  # along the row
