@@ -75,7 +75,7 @@ def rows(plan, lib="ecadlib", include_held=False, rules=None):
         from . import release_check as RC, rules as RU      # runs it): a part that fails it is held, not a library part
         checked = RU.resolve(rules, base)
         for it in items:
-            why = RC.publish_problems(it, base, checked) if isinstance(it, dict) and it.get("name") \
+            why = RC.publish_problems(it, base, checked, writes_files=True) if isinstance(it, dict) and it.get("name") \
                 and it.get("status", "ready") in LIBRARY_STATUS else []
             if why:
                 it.update(status="held", hold_reasons=why, release_check=dict(it.get("release_check") or {}, result="held"))

@@ -58,7 +58,7 @@ def part_rows(plan, lib, include_held=False, rules=None):
         if status not in ("ready", "existing") and not (include_held and status == "held"):
             skipped.append({"part": it["name"], "why": f"{status}: " + "; ".join(it.get("hold_reasons", []))})
             continue
-        why = [] if status == "held" else RC.publish_problems(it, plan.parent, rules)   # checked again, as kicad-export
+        why = [] if status == "held" else RC.publish_problems(it, plan.parent, rules, writes_files=True)   # checked again, as kicad-export
         if why and not include_held:                                                  # does: `ready` is not enough
             skipped.append({"part": it["name"], "why": "held: " + "; ".join(why)})
             continue

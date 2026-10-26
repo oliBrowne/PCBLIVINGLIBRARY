@@ -1085,7 +1085,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                                              "fix": f"ecadlib approve {plan} status"}]})
             held.append((it, ["waiting for sign-off"]))
             continue
-        why = [] if status == "held" else RC.publish_problems(it, plan_dir, rules)   # checked again: `ready` is not
+        why = [] if status == "held" else RC.publish_problems(it, plan_dir, rules, writes_files=True)   # checked again: `ready` is not
         if why and not include_held:                                                  # taken on trust
             from . import messages as M
             rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(why), "recheck": why,

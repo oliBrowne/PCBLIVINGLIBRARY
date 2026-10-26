@@ -403,17 +403,27 @@ def check_item(item, base=".", rules=None):
     return fails, warns, info
 
 
-def publish_problems(item, base=".", rules=None):
+PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what its workspace released (no datasheet here)
+
+
+def publish_problems(item, base=".", rules=None, writes_files=False):
     """Why a publisher (altium365 push, dblib-sync / altium-pkg, kicad-export) must not send this part's files: the
     release check run again now, on the files as they are, less the failures the item's --allow covers. [] = it may
     go. A plan's `status` alone is never enough: `altium365 plan --models`, a triage plan or a hand edit can say
     `ready` for a part nothing checked, and a file can change after its check. rules: loaded (RU.resolve) once by
-    the caller. Parts `ecadlib a365 pull` brought in (already released there) are not checked, as in apply."""
+    the caller. Parts `ecadlib a365 pull` brought in (already released there) are not checked by the Altium 365 push,
+    as in apply: it sends them no files. writes_files=True (kicad-export, kicad-dblib, export-parts: routes that put
+    the part's own files in a library) checks them too: their files must be there and pass every check that applies.
+    The field rules (PULLED_NOT_CHECKED: datasheet link, Description, required parameters) do not: the workspace
+    released those fields and ecadlib holds no datasheet for the part."""
     st = item.get("status", "ready")
     if item.get("a365") and st == "deleted_in_workspace":
         return ["status: deleted in the Altium 365 workspace: not published again"]
     if item.get("a365") and st == "existing":
-        return []
+        if not writes_files:
+            return []
+        fails, _, _ = check_item(item, base, rules)
+        return [f"{r}: {m}" for r, m in fails if r not in PULLED_NOT_CHECKED]
     if st not in PUBLISHABLE:                  # a status no writer gives a releasable part ('draft', 'Ready', 'duplicate')
         if st == "duplicate":
             return [f"duplicate of {item.get('duplicate_of') or '?'} (dedupe)"]
