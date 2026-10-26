@@ -46,6 +46,7 @@ EXAMPLES = {
     "footprint.courtyard_small": "footprint: courtyard: courtyard does not enclose every pad and the body outline",
     "footprint.pad_outside": "footprint: courtyard: pad 7 sticks out of the courtyard outline",
     "footprint.courtyard_open": "footprint: courtyard: courtyard is not a closed outline",
+    "footprint.not_a_number": "footprint: geometry: pad 3 has a position or size that is not a number (nan / inf)",
     "footprint.other": "footprint: fab: something new",
     "height.missing": "height: no 3D height (no 3D body and no HEIGHT)",
     "height.out_of_range": "height: 3D height 2.10 mm outside 0.8-1.45 mm for ^SOT-23",
