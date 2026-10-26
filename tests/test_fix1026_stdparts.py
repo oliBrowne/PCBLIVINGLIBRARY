@@ -250,6 +250,18 @@ def test_metric_word_keeps_the_readings_that_were_right():
         assert S.chip_size(t) == want, (t, S.chip_size(t))
 
 
+def test_metric_word_dimensions_and_the_code_it_belongs_to():
+    """R-FX5-6: body dimensions that fit the imperial reading decide; a metric word before another code is that
+    code's; a loose 'mm' or a 'metric' past other values is not a marker for the code."""
+    from ecadlib import stdparts as S
+    for t in ("0603 [mm] 1.6x0.8", "0603 [Metric 1608]", "0603 size, metric 1608", "0603 SMD; L x W (mm): 1.6 x 0.8",
+              "RES 10k 0603 dimensions (mm) 1.6x0.8", "10k 0603 1% 100mW metric thick film", "0603 Metric 1608",
+              "R 0603 metric 1608"):
+        assert S.chip_size(t) == "0603", (t, S.chip_size(t))
+    for t in ("CAP 100nF 0603, mm", "mm 0603"):                 # unclear: refused, not a guess either way
+        assert str(S.chip_size(t)).startswith("conflict"), (t, S.chip_size(t))
+
+
 # --- R-SP-7: an LED word makes a part an LED only when the description says it is one ----------------------------
 
 NOT_LEDS = ("Schottky diode 40V 1A, LED backlight boost", "Zener 5.1V for LED string protection",

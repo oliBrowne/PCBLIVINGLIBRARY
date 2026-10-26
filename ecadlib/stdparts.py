@@ -229,6 +229,21 @@ def _in_part_number(t, a, b):
     return False
 
 
+# nominal chip body length x width (mm) per imperial size: explicit dimensions in a text decide a size code's reading
+CHIP_DIMS = {"01005": (0.4, 0.2), "0201": (0.6, 0.3), "0402": (1.0, 0.5), "0603": (1.6, 0.8), "0805": (2.0, 1.25),
+             "1206": (3.2, 1.6), "1210": (3.2, 2.5), "1812": (4.5, 3.2), "2010": (5.0, 2.5), "2512": (6.3, 3.2)}
+
+
+def _chip_dims(t):
+    """The imperial size whose body 'L x W' in mm the text gives ('1.6x0.8', '(1.60mm x 0.80mm)'), or None."""
+    for m in re.finditer(r"(?<![\d.])(\d+\.\d+|\d)\s*(?:mm)?\s*[xX×*]\s*(\d+\.\d+|\d)(?![\d.])", t):
+        a, b = sorted((float(m.group(1)), float(m.group(2))), reverse=True)
+        hit = [s for s, (l, w) in CHIP_DIMS.items() if abs(a - l) <= 0.12 and abs(b - w) <= 0.12]
+        if len(hit) == 1:
+            return hit[0]
+    return None
+
+
 def chip_size(text, strict=False):
     """Imperial size code from a footprint / description text, or None. Bare 4-digit codes are imperial (the
     industry default); metric needs a marker (1608Metric, 1608M, '0603 (1608)' gives both and they must agree).
@@ -241,28 +256,40 @@ def chip_size(text, strict=False):
     if m and m.group(1) in METRIC:
         found.add(METRIC[m.group(1)])
     for m in re.finditer(r"(?<![0-9])(\d{4,5})\s*(?:_?Metric|M)(?![A-Za-z0-9])", t, re.I):
+        if re.match(r"[\s:,(\[]*\d{4,5}(?![0-9.])", t[m.end():]):
+            continue                                                # '0603 Metric 1608': the word is 1608's
         if m.group(1) in METRIC:
             found.add(METRIC[m.group(1)])
             glued |= bool(re.match(r"-\d", t[m.end():]))           # 'Metric-6': a 6-pad part on that size
-    # a metric / mm word next to the code, not glued to it: '0603 (metric)', 'Metric 0603', 'mm: 0603', '0603 [mm]'
-    near, words = set(), []
-    for m in re.finditer(r"(?<![0-9A-Za-z.])(\d{4,5})[\s(\[:,]*(?:size|code)?[\s(\[:,]*(metric|mm)(?![A-Za-z])|"
-                         r"(?<![A-Za-z])(metric|mm)(?:\s*(?:size|code))?[\s:)\],-]*(\d{4,5})(?![0-9.])", t, re.I):
-        w = m.start(3) if m.group(3) else m.start(2)
-        if re.search(r"\d\s*$", t[:w]) and (m.group(2) or m.group(3)).lower() == "mm" and m.group(3):
-            continue                                                # '1.6 mm 0603': a dimension, not a marker
-        code = m.group(1) or m.group(4)
+    # a metric / mm word next to the code, not glued to it: '0603 (metric)', 'Metric 0603', 'mm: 0603', '0603 [mm]'.
+    # 'mm' counts only in brackets or before a colon ('0603, mm' and 'mm 0603' are unclear); a word between two codes
+    # belongs to the one after it ('0603 [Metric 1608]', '0603 size, metric 1608': 1608 is the metric code); body
+    # dimensions in the text ('1.6x0.8') that fit the imperial reading decide for it
+    dims = _chip_dims(t)
+    after = {m.start(1): m for m in re.finditer(
+        r"(?<![A-Za-z])(metric|mm)(?:\s*(?:size|code))?[\s:)\],-]*(\d{4,5})(?![0-9.])", t, re.I)
+        if m.group(1).lower() == "metric" or re.match(r"mm\s*:", m.group(0), re.I)}
+    before = [m for m in re.finditer(r"(?<![0-9A-Za-z.])(\d{4,5})[\s(\[:,]*(?:size|code)?[\s(\[:,]*(metric|mm)(?![A-Za-z])",
+                                     t, re.I)
+              if m.start(2) not in after and (m.group(2).lower() == "metric" or (
+                  re.search(r"[(\[]\s*$", t[:m.start(2)]) and re.match(r"mm\s*[)\]]", t[m.start(2):], re.I)))]
+    near, marks = set(), set()
+    for code, at, span in [(m.group(1), m.start(1), m.span(2)) for m in before] + \
+            [(m.group(2), m.start(2), m.span(1)) for m in after.values()]:
+        marks.add(span)
+        if code == dims:                                            # '0603 [mm] 1.6x0.8': the body says imperial
+            continue
         found.add(METRIC[code] if code in METRIC else f"conflict:{code} metric?")
-        near.add(m.start(1) if m.group(1) else m.start(4))
-        words.append((m.start(2), m.end(2)) if m.group(2) else (m.start(3), m.end(3)))
-    for m in re.finditer(r"(?<![A-Za-z])(metric|mm)(?![A-Za-z])", t, re.I):    # a marker the code does not touch
-        if (m.start(), m.end()) not in words and not re.search(r"(?:\d|_)\s*$", t[:m.start()]):
-            words.append(None)                  # unclear: a bare code below is not read as imperial
+        near.add(at)
+    free = [m.span() for m in re.finditer(r"(?<![A-Za-z])(metric|mm)(?![A-Za-z])", t, re.I)     # a marker no code
+            if m.span() not in marks and not re.search(r"(?:\d|_)\s*$", t[:m.start()])]   # takes, not a dimension
     for m in re.finditer(rf"(?<![0-9.])(\d{{4,5}})(?![0-9.])(?!\s*(?:_?Metric|M\b|mm|mil|{_UNIT_LETTER}|nF|pF|uF|µF|Ω|ohm|%))", t, re.I):
         code = m.group(1)
         if m.start(1) in near:
             continue
-        if code in IMPERIAL and None in words and not _in_part_number(t, m.start(), m.end()):
+        # unclear: a free marker with no value between it and the code ('10k 0603 1% 100mW metric': not its marker)
+        unclear = [w for w in free if not re.search(r"\d", t[min(m.end(), w[1]):max(m.start(), w[0])])]
+        if code in IMPERIAL and unclear and code != dims and not _in_part_number(t, m.start(), m.end()):
             found.add(f"conflict:{code} imperial or metric?")
             continue
         if code in IMPERIAL and not re.search(r"(?:RES|CAP|IND|LED|DIO|FUS)C$", t[:m.start()], re.I):
