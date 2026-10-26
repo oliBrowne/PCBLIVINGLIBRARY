@@ -205,9 +205,33 @@ def _fields_differ(key, a, b):
 
 
 def prior_names(items):
-    """{plan item name: its MPN} of an existing plan, for to_rows(prior=...)."""
-    return {i["name"]: next((str(p.get("value") or "") for p in i.get("parameters") or []
-                             if p.get("name") == "Manufacturer Part Number"), "") for i in items or [] if i.get("name")}
+    """{plan item name: {mpn, manufacturer, value, folder, land}} of an existing plan, for to_rows(prior=...)."""
+    def par(i, name):
+        return next((str(p.get("value") or "") for p in i.get("parameters") or []
+                     if isinstance(p, dict) and p.get("name") == name), "")
+    out = {}
+    for i in items or []:
+        if isinstance(i, dict) and i.get("name"):
+            fp = i.get("footprint") if isinstance(i.get("footprint"), dict) else {}
+            out[i["name"]] = {"mpn": par(i, "Manufacturer Part Number"), "manufacturer": par(i, "Manufacturer"),
+                              "value": par(i, "Value"), "folder": str(i.get("folder") or ""),
+                              "land": str(fp.get("kicad") or fp.get("ref") or "")}
+    return out
+
+
+def _respelt(prior, key, value, maker, folder, land):
+    """The released name of this MPN when this line is that part with its value written another way (R-FL-4: 10k ->
+    10K0, 100nF -> 0.1uF): same MPN, maker, folder and land, a value that reads the same but is typed otherwise.
+    A value that changed, or another maker or land, names another part: None (the naming rules as before)."""
+    hits = [n for n, p in prior.items() if key and norm_mpn(p.get("mpn") or "") == key
+            and str(p.get("value") or "").strip() and str(p.get("value")).strip() != str(value).strip()
+            and not _fields_differ("Value", p.get("value"), value)
+            and parse_value(str(p.get("value")), True)[0] is not None
+            and str(p.get("manufacturer") or "").strip().casefold() == str(maker or "").strip().casefold()
+            and (not p.get("folder") or str(p["folder"]).rstrip("/").split("/")[-1].casefold()
+                 == str(folder).rstrip("/").split("/")[-1].casefold())
+            and not lands_differ(p.get("land"), land)]
+    return hits[0] if len(hits) == 1 else None
 
 
 def to_rows(lines, triage=None, rules=None, prior=None):
@@ -231,7 +255,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
     # a name already in the plan stays with its part (SYS-1): when the part released under it is still in the BOM, a
     # line added above it with another MPN takes the suffixed name instead
     present = {norm_mpn("" if placeholder_mpn(ln.get("mpn", "")) else ln.get("mpn", "")) for ln in lines}
-    reserved = {n: norm_mpn(m) for n, m in (prior or {}).items() if norm_mpn(m) in present}
+    prior = {n: (p if isinstance(p, dict) else {"mpn": str(p or "")}) for n, p in (prior or {}).items()}
+    reserved = {n: norm_mpn(p["mpn"]) for n, p in prior.items() if norm_mpn(p["mpn"]) in present}
     for i, ln in enumerate(lines, 1):
         bad = []
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
@@ -272,7 +297,11 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         key = norm_mpn(mpn)                     # one part however the MPN is typed: case, dashes (TPS62133-RGTR)
         if key and key in canon:
             pn = canon[key]
-        else:                                   # no MPN: the footprint tells two parts apart unless the name has the
+        else:
+            was = _respelt(prior, key, value, ln.get("manufacturer", ""),
+                           RU.folder_for(cat, rules) if rules is not None else cat, fp_ref) if key and prior else None
+            if was and was != pn and _safe_name(was, []) == was:
+                pn = was                        # the released name stays with its part (R-FL-4)                                   # no MPN: the footprint tells two parts apart unless the name has the
             ident = key or ("" if pkg and pkg in pn else fp_ref)              # package (RES-0603-10k) already
             # Altium part numbers ignore case: names are compared folded, and a name spelt another way is another
             # part (RES-2512-10m is 10 mOhm, RES-2512-10M 10 MOhm), never one name in two cases (R-FX10-7, R-BF-9)

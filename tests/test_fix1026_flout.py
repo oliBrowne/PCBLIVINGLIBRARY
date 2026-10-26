@@ -115,3 +115,50 @@ def test_export_parts_does_not_keep_a_row_written_while_held_or_never_released(t
     assert PE.main([str(plan), "-o", str(out), "--include-held"]) == 0
     assert PE.previous_rows(out)["PART2"]["Status"] == "held"
     assert sorted(r["Part ID"] for r in PE.rows(plan, previous=PE.previous_rows(out))) == ["PART1"]
+
+
+# ---------------------------------------------------------------- R-FL-4: a value written another way keeps the name
+def _bom(*rows):
+    return [dict(zip(("designator", "value", "footprint", "manufacturer", "mpn", "description"), r)) for r in rows]
+
+
+R10K = ("R1,R2", "10k", "R_0603_1608Metric", "Yageo", "RC0603FR-0710KL", "Resistor 10k 1% 0603")
+C100N = ("C1", "100nF", "C_0603_1608Metric", "Murata", "GRM188R71C104KA01D", "Capacitor 100nF X7R 0603")
+
+
+def _plan_names(lines, prior_items=None):
+    from ecadlib import altium365 as A, altium_export as AX
+    items = A.plan(lines, prior=AX.prior_names(prior_items) if prior_items is not None else None)
+    return {i["name"]: next((p["value"] for p in i["parameters"] if p["name"] == "Manufacturer Part Number"), "")
+            for i in items}, items
+
+
+def test_a_value_written_another_way_in_a_new_bom_keeps_the_released_name():
+    first, items = _plan_names(_bom(R10K, C100N))
+    assert sorted(first) == ["CAP-0603-100nF", "RES-0603-10k"], first
+    again, _ = _plan_names(_bom(("R1,R2", "10K0") + R10K[2:], ("C1", "0.1uF") + C100N[2:]), items)
+    assert again == first, again                          # same MPN, maker and land: the released names stay
+    for v in ("10.0k", "10K", "10000"):                   # 10K: never a name that differs only in case either
+        respelt, _ = _plan_names(_bom(("R1,R2", v) + R10K[2:]), items)
+        assert respelt == {"RES-0603-10k": "RC0603FR-0710KL"}, (v, respelt)
+
+
+def test_a_real_change_or_another_part_still_follows_the_naming_rules():
+    _, items = _plan_names(_bom(R10K))
+    other_value, _ = _plan_names(_bom(("R1,R2", "1k") + R10K[2:]), items)          # the value itself changed
+    assert other_value == {"RES-0603-1k": "RC0603FR-0710KL"}, other_value
+    other_land, _ = _plan_names(_bom(("R1,R2", "10K0", "R_0402_1005Metric") + R10K[3:]), items)
+    assert other_land == {"RES-0402-10K0": "RC0603FR-0710KL"}, other_land
+    other_maker, _ = _plan_names(_bom(("R1,R2", "10K0", "R_0603_1608Metric", "Vishay") + R10K[4:]), items)
+    assert other_maker == {"RES-0603-10K0": "RC0603FR-0710KL"}, other_maker
+    same, _ = _plan_names(_bom(R10K), items)                                        # unchanged: as before
+    assert same == {"RES-0603-10k": "RC0603FR-0710KL"}, same
+
+
+def test_a_respelt_line_never_takes_a_name_another_line_of_the_bom_holds():
+    """The released RES-0603-10k is respelt 10K0 while a new MPN-less 10k 0603 line comes first: the released part
+    keeps its name and the new line takes the suffixed one (SYS-1), never two parts under one name."""
+    _, items = _plan_names(_bom(R10K))
+    got, _ = _plan_names(_bom(("R7", "10k", "R_0603_1608Metric", "", "", "Resistor 10k 0603"),
+                              ("R1,R2", "10K0") + R10K[2:]), items)
+    assert got.get("RES-0603-10k") == "RC0603FR-0710KL" and len(got) == 2, got
