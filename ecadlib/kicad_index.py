@@ -15,7 +15,7 @@ EP_NAME = re.compile(r"-\d*EP(?=[_-]|$)|_EP\d", re.I)              # KiCad's exp
 EP_HINT = re.compile(r"\bEPAD\b|-\d*EP\b|\bEP\b|exposed|thermal ?pad|power ?pad|heat ?sink ?pad", re.I)   # not 'pad'
                                                                     # alone ('touch pad controller')
 # KiCad's copies of one land: a hand-solder land (longer pads), thermal vias in the exposed pad, castellated pads
-LAND_VARIANT = re.compile(r"(?:_Pad\d+(?:\.\d+)?x\d+(?:\.\d+)?mm)?_HandSolder$|_ThermalVias$|_Castellated$", re.I)
+LAND_VARIANT = re.compile(r"(?:_Pad\d+(?:\.\d+)?x\d+(?:\.\d+)?mm)?_Hand[_-]?Solder(?:ing)?$|_ThermalVias$|_Castellated$", re.I)
 NO_LEAD = re.compile(r"QFN|DFN|SON|MLF|MLP|LGA", re.I)            # leadless: an exposed pad is common and BOM text rarely
                                                                   # says so
 

@@ -137,3 +137,18 @@ def test_lcsc_number_skips_c0g_and_gives_none_for_two_different_numbers():
                        ("https://www.lcsc.com/product-detail/C0G-Capacitors_C1663.html", "C1663"),
                        ("https://jlcpcb.com/partdetail/C2040", "C2040"), ("C0G", ""), ("C1206X7R", "")):
         assert N(cell) == want, (cell, N(cell), want)
+
+
+# ---------------------------------------------------------------- R-FX-6: KiCad's _Handsoldering land copies
+def test_a_handsoldering_copy_of_a_land_is_no_second_choice():
+    from ecadlib.kicad_index import KiCadIndex, plain_land
+    for name, plain in (("SOT-23_Handsoldering", "SOT-23"), ("SOT-23-5_HandSoldering", "SOT-23-5"),
+                        ("D_SMA_Handsoldering", "D_SMA"), ("R_0603_1608Metric_Pad0.98x0.95mm_HandSolder",
+                                                           "R_0603_1608Metric")):
+        assert plain_land(name) == plain, name
+    for pkg, cls, fps in (("SOT23", "U", ["Package_TO_SOT_SMD:SOT-23", "Package_TO_SOT_SMD:SOT-23_Handsoldering"]),
+                          ("SOT235", "U", ["Package_TO_SOT_SMD:SOT-23-5", "Package_TO_SOT_SMD:SOT-23-5_HandSoldering"])):
+        for order in (fps, fps[::-1]):
+            idx = KiCadIndex([])
+            idx.footprints = {k: {"path": "", "has_3d": True} for k in order}
+            assert idx.find_footprint_for_package(pkg, cls, hint=pkg) == fps[0], (pkg, order)
