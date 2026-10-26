@@ -272,7 +272,9 @@ TOOLS = [
      "description": "Write the workspace's ecadlib.toml (the `toml` from propose_rules, possibly edited with the user). Only "
                     "after the user has agreed to the proposal. If a different file exists nothing is written and the diff "
                     "comes back (needs_confirm): show it and call again with overwrite true only when the user says to "
-                    "replace it (the old file is kept as ecadlib.toml.bak).",
+                    "replace it (the old file is kept as ecadlib.toml.bak). Release gates ([altium365], [release], [change], "
+                    "parameters required (may only grow), datasheet cross_check off, agent.proof fail_on) and where "
+                    "requests / keys go or the spending limits are refused: the user edits those themselves.",
      "inputSchema": {"type": "object", "required": ["toml"],
                      "properties": {"toml": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}}},
     {"name": "learn_house_style",
@@ -978,13 +980,83 @@ def _check_endpoints(ws, text):
             v = v[part]
         return _fp(v)
     changed = sorted(k for k in set(old) | set(new) if old.get(k, default(k)) != new.get(k, default(k)))
+    mine = ws.rules_file()
+    keep = ("" if f == mine else f". save_rules writes {ws._label(mine)}, which would replace "
+                                 f"{ws._label(f)} for this workspace, so keep its values of those settings")
     if changed:
-        mine = ws.rules_file()
         raise ValueError(f"save_rules cannot change {', '.join(changed)} (where requests and your API keys / tokens "
                          "go, or the spending limits): "
-                         f"ask the user to edit {ws._label(f)} themselves"
-                         + ("" if f == mine else f". save_rules writes {ws._label(mine)}, which would replace "
-                                                 f"{ws._label(f)} for this workspace, so keep its values of those settings"))
+                         f"ask the user to edit {ws._label(f)} themselves" + keep)
+    try:
+        old = _gates(f.read_text(encoding="utf-8-sig"), f.name) if f.is_file() else {}
+    except RulesError:
+        old = {}
+    new = _gates(text if isinstance(text, str) else "", mine.name)
+    loosened = sorted(k for k in set(old) | set(new) if _loosens(k, _gate_default(k) if k not in old else old[k],
+                                                                    _gate_default(k) if k not in new else new[k]))
+    if loosened:
+        raise ValueError(f"save_rules cannot change {', '.join(loosened)}: these are release gates (the Altium 365 "
+                         "workspace a real push may go to, the sign-off policy, change control, the release check, "
+                         "the required parameters, the datasheet cross-check). A person must change them, in "
+                         f"{ws._label(f)} or on the rules page of the ecadlib web UI; a model over MCP may not" + keep)
+
+
+GATE_SECTIONS = ("altium365", "release", "change")      # every setting under these is a release gate
+GATE_WHOLE = {"release.approvals",                      # a table compared as one value (sign-off policy)
+              "parameters.required", "datasheet.cross_check", "agent.proof.fail_on"}
+
+
+def _gates(text, name="ecadlib.toml"):
+    """{dotted key: value} of every release-gate setting in a rules text: [altium365] (the workspace a real push is
+    allowed to), [release] (sign-off policy, parity, height), [change] (change control), the required parameters,
+    the datasheet cross-check and the visual check's fail_on. A text that does not parse raises RulesError."""
+    from .rules import parse_text
+    data = parse_text(text, name) if text else {}
+    out = {}
+
+    def walk(v, at):
+        for k, x in v.items():
+            key = f"{at}.{k}" if at else str(k)
+            if key in GATE_WHOLE or (key.split(".")[0] in GATE_SECTIONS and not isinstance(x, dict)):
+                out[key] = x
+            elif isinstance(x, dict):
+                walk(x, key)
+    if isinstance(data, dict):
+        walk(data, "")
+    return out
+
+
+def _gate_default(k):
+    from .rules import DEFAULTS
+    v = DEFAULTS
+    for part in k.split("."):
+        if not isinstance(v, dict) or part not in v:
+            return None
+        v = v[part]
+    return v
+
+
+def _canon(x):
+    """A gate value, comparable: 2 and 2.0, and a table's key order, do not count."""
+    if isinstance(x, dict):
+        return {str(k): _canon(v) for k, v in sorted(x.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(x, list):
+        return [_canon(v) for v in x]
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        return float(x)
+    return x
+
+
+def _loosens(k, old, new):
+    """True when save_rules may not make this change of a gate setting. The required parameters may only grow and the
+    cross-check may change between its checking modes; anything else is refused when it changes at all."""
+    if k == "parameters.required":
+        names = lambda v: {str(x).strip().lower() for x in (v if isinstance(v, list) else [v] if v else [])}
+        return bool(names(old) - names(new))
+    if k == "datasheet.cross_check":
+        off = lambda v: str(v or "auto").strip().lower() == "off"
+        return off(new) and not off(old)
+    return json.dumps(_canon(old), sort_keys=True, default=str) != json.dumps(_canon(new), sort_keys=True, default=str)
 
 
 # ------------------------------------------------------------------ answers
