@@ -576,8 +576,9 @@ class Workspace:
 
     def release_check(self, bom, allow=(), unallow=(), user=None):
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
-        failures (allow) or taking that back (unallow). user, when given, is recorded as the person who gave the
-        allow (approvals' no_self_approval uses it). Never touches the network.
+        failures (allow) or taking that back (unallow). user is recorded as the person who gave the allow
+        (approvals' no_self_approval uses it); with no user it is this computer's user (approvals.identity, as the CLI
+        records it), never nobody. Never touches the network.
         While another run holds the library lock (a librarian run, a publisher), the decision is recorded in
         plan.json at once under plan.lock only: that run keeps decisions recorded meanwhile (librarian DECISIONS,
         save_plan), and the release itself goes into the ledger when a writer next settles the library (the run's
@@ -618,13 +619,13 @@ class Workspace:
         if unknown:
             raise ValueError(f"not parts of this plan: {', '.join(sorted(unknown))}")
         rows = RC.apply(items, out, list(allow), list(unallow), who="ecadlib ui/mcp", rules=self.rules())
-        user = user.strip() if isinstance(user, str) else ""
-        if allow and user:
-            from .approvals import post_check, stamp_allow
+        if allow:                                          # always a person, so no_self_approval can see who released it:
+            from .approvals import identity, post_check, stamp_allow
+            user = identity(user if isinstance(user, str) else None, cwd=out)   # no name given -> this machine's user, as the CLI
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
         if allow and record:                               # change control: revision 1 of what was released
-            RC.record_releases(items, out, list(allow), user or None)
+            RC.record_releases(items, out, list(allow), user)
         write_text_atomic(plan_f, json.dumps(items, indent=2))
         if allow or unallow:
             from . import timing
