@@ -169,8 +169,9 @@ def test_gate2_rg23_a_ledger_cut_back_at_a_line_boundary_fails_closed():
                if json.loads(l).get("event") == "release")
     led.write_text("".join(rows[:cut]), encoding="utf-8")
     plan_before = (lib / "plan.json").read_bytes()
-    why = _refused(lambda: _publish(lib))
-    assert "r2" in why, why
+    out, _g = _publish(lib)                      # R-FX17-5: refused for that part alone (it was the whole library)
+    assert str(out[KT]).startswith("refused:") and "r2" in out[KT], out
+    assert "r2" in _refused(lambda: LG.Ledger(lib).head(KT))
     assert (lib / "plan.json").read_bytes() == plan_before          # r1 was not put back
     assert led.read_text(encoding="utf-8") == "".join(rows[:cut])   # nothing recorded
 
@@ -206,7 +207,8 @@ def test_gate2_rg23_a_ledger_merged_from_two_branches_fails_closed():
         why = _refused(lambda: LG.Ledger(lib).head(KT))
         assert "r2" in why, why
         n = len(_ledger(lib))
-        _refused(lambda: _publish(lib))
+        out, _g = _publish(lib)                  # R-FX17-5: that part alone is refused, nothing is recorded
+        assert str(out[KT]).startswith("refused:") and "r2" in out[KT], out
         assert len(_ledger(lib)) == n
         try:
             CC.revert(lib / "plan.json", f"{KT}@1", who=ANN, comment="back")

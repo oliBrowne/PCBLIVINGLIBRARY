@@ -1205,13 +1205,27 @@ def publish_guard(plan, items, target, rules=None, user=None, log=None, base=Non
                        if held else ""), file=sys.stderr)
     g = Guard(folder, "hand-edit", rules=rules, user=user, log=log, base=base or folder)
     try:                                       # under the library lock: parallel publishers settle one at a time
-        g.finish(items)
+        g.hold_lock()
+        # a part whose release history cannot be trusted (a ledger merged from two branches, cut back) is refused on
+        # its own: it is left out of this run (not settled, not published) and the rest of the library goes (R-FX17-5).
+        # Only a part with release lines, where head() would refuse: one whose lines are all gone is a lost history
+        # (begin / baseline refuse it, with `part adopt` as the way out)
+        damaged = {it["name"]: why for it in items if g.ledger.releases(it["name"])
+                   for why in [g.ledger.trouble(it["name"])] if why}
+        work = [it for it in items if it["name"] not in damaged]
+        g.finish(work)
         if save and plan.suffix.lower() == ".json" and json.dumps(items, sort_keys=True, default=str) != before:
             write_plan(plan, items, rules=rules)
         out = {}
         for it in items:
+            if it["name"] in damaged:
+                out[it["name"]] = f"refused: {damaged[it['name']]}"
+                log(f"  change refuse {it['name']:<28} its ledger history is damaged, so it is not published: "
+                    f"{damaged[it['name']]}")
+                continue
             head = g.ledger.head(it["name"])
             out[it["name"]] = None if head else ("not released yet" + (f" (status {it.get('status')})" if it.get("status") else ""))
+        items[:] = work                        # what the publisher goes on with
     finally:
         g.close()
     return out, g

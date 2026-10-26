@@ -140,9 +140,12 @@ def cmd_status(a):
         print(f"{folder}: no ledger yet; parts are recorded the first time they pass the release check")
         return 0
     print(f"{len(lg.parts())} released parts in {lg.path}")
+    damaged = {p: why for p in lg.parts() for why in [lg.trouble(p)] if why}
+    for p, why in damaged.items():         # a merged / cut ledger: publishers leave the part out until mended (R-FX17-5)
+        print(f"  {p:<28} refused (publishing, approving and reverting it): {why}")
     if not props:
         print("no held changes")
-        return 0
+        return 2 if damaged else 0
     print(f"{len(props)} held change(s) waiting for a person (approvers needed: {pol['approvers']}):")
     for p in props:
         rej = f"  (rejected before by {p['rejected'].get('by')})" if p.get("rejected") else ""
@@ -271,7 +274,8 @@ def cmd_history(a):
                 print(f"      {c['class']:<15} {c['text']}")
     why = lg.trouble(a.part)
     if why:                                    # a cut or merged ledger: said, so nobody picks a revision from it
-        print(f"  WARNING: {why}; publishing, approving and reverting {a.part} are refused until it is mended")
+        print(f"  WARNING: {why}; publishing, approving and reverting {a.part} are refused until it is mended "
+              f"(the rest of the library publishes)")
         return 2
     return 0
 

@@ -77,3 +77,35 @@ def test_fx17_4_same_number_or_touching_pads_are_no_gap_cut():
     apart = lambda w: _kfp([("1", -3, 0, 0.5, 0.3), ("2", 3, 0, 0.5, 0.3), ("3", 0, 0, w, 1.0), ("4", 1.05, 0, 1.0, 1.0)])
     ch = CD.diff(apart(1.0), apart(1.08))
     assert CD.worst(ch) == "geometry-major" and any("gap to pad 4" in c["text"] for c in ch), ch
+
+
+# ---------------------------------------------------------------- R-FX17-5: a merged ledger refuses only its parts
+def test_fx17_5_a_merged_ledger_refuses_only_that_part_and_names_the_way_out():
+    """Before (ddb01cd): after a two-branch merge in which both released r2 of KT-0603R, Ledger.head() raised in every
+    publisher, so the whole library was refused (kicad-export: 0 parts); following the hint (one release line per
+    revision) still failed on branch B's .ecadlib/marks file, which nothing named; `part status` said "no held changes".
+    Now the publisher refuses KT-0603R alone, the message names the marks file to delete, `part status` lists it, and
+    deleting that file (the ledger keeping branch A's r2) mends it."""
+    import contextlib, io, json
+    from ecadlib import change_cli as CC, ledger as LG
+    from tests.test_fix1026_gate2 import KT, _demo, _ledger, _publish, _two_branches
+    for keep_both in (True, False):
+        w, lib = _demo()
+        _two_branches(lib, keep_both)
+        n, plan_before = len(_ledger(lib)), (lib / "plan.json").read_bytes()
+        out, _g = _publish(lib)
+        assert out[KT] and "r2" in out[KT] and ".ecadlib/marks/" in out[KT], out
+        assert not any(str(v).startswith("refused") for k, v in out.items() if k != KT), out   # the rest goes
+        assert len(_ledger(lib)) == n and (lib / "plan.json").read_bytes() == plan_before
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = CC.main(["status", str(lib / "plan.json")])
+        assert rc and KT in buf.getvalue() and ".ecadlib/marks/" in buf.getvalue(), buf.getvalue()
+    # keep_both=False: the ledger kept branch A's r2; the hint names branch B's mark, and deleting it mends the part
+    why = LG.Ledger(lib).trouble(KT)
+    stray = [m for m in (lib / ".ecadlib/marks").iterdir() if m.name in why]
+    assert len(stray) == 1 and stray[0].name.startswith(f"{KT}@r2@"), (why, stray)
+    stray[0].unlink()
+    assert LG.Ledger(lib).head(KT)["revision"] == 2
+    out, _g = _publish(lib)
+    assert out[KT] is None, out

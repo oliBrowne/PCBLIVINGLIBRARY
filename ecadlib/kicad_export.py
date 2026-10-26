@@ -1084,13 +1084,21 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         CG.claim_output(out, f"kicad-export:{lib}", plan_dir, take_over, what=f"the KiCad library {lib}")
     except CG.OutputTaken as e:
         raise PlanError(str(e)) from None
-    CG.publish_guard(plan, items, "kicad", rules=rules, log=log)   # first; a held change exports the released revision
+    guarded, _g = CG.publish_guard(plan, items, "kicad", rules=rules, log=log)   # first; a held change exports the
+    refused = {k: v for k, v in guarded.items() if str(v or "").startswith("refused:")}   # released revision
     items = sorted(items, key=lambda i: ksym(i["name"]))
     pretty, shapes = out / f"{lib}.pretty", out / f"{lib}.3dshapes"
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "parts": [], "skipped": [], "footprints": {}, "models": {}, "errors": [], "kicad_content": False}
     rep.update(warnings=[], written={}, change_control=True, kept=[])   # made with a ledger (a lost one fails closed)
+    rep["refused"] = sorted(refused)            # a part whose ledger history is damaged: left out (R-FX17-5)
+    for k in rep["refused"]:
+        why = refused[k][len("refused: "):]
+        rep["skipped"].append({"part": k, "why": f"held: change control: {why}",
+                               "says": [{"code": "ledger_damaged", "text": f"Its release history is damaged: {why}",
+                                         "fix": f"ecadlib part history {plan} {k}"}]})
+        rep["warnings"].append(f"{k}: not exported, its ledger history is damaged ({why}); the rest of the library is")
     kpins = {}                                 # part -> KiCad-only pin details of a reused symbol (publish line)
     report = out / "kicad_export.json"
     try:                                      # what the last export wrote (and its sha256): edited by hand since?
@@ -1546,9 +1554,9 @@ def main(argv=None):
     # exit 1 also while a change is held: the library on disk is not what was exported, a person has to look
     if a.json:
         print(json.dumps(rep, default=str))
-        return 1 if rep["errors"] or rep.get("held_changes") else 0
+        return 1 if rep["errors"] or rep.get("held_changes") or rep.get("refused") else 0
     print_result(rep, Path(a.out), a.plan)
-    return 1 if rep["errors"] or rep.get("held_changes") else 0
+    return 1 if rep["errors"] or rep.get("held_changes") or rep.get("refused") else 0
 
 
 if __name__ == "__main__":

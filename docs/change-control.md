@@ -171,6 +171,22 @@ stops with a message.
 
 A broken ledger line stops every writer with the line number. Put the line back from git and run again.
 
+**A ledger merged from two branches.** If two branches each released the same revision of a part (both made r2 of
+KT-0603R) and git merged them, the ledger holds both r2 lines, or only one branch's while `.ecadlib/marks/` (one empty
+file per release, `<part>@r<N>@<digest>`, merged by git like any file) still holds both marks. Which r2 is released is
+then not known, so that part alone is refused: publishers (kicad-export, DbLib sync, Altium 365 push, export-parts)
+leave it out and say why ("change refuse PART ..."; kicad-export lists it as skipped and exits 1), approving and
+reverting it are refused, and `ecadlib part status` and `ecadlib part history` name it. The rest of the library
+publishes as usual. To mend it, decide which r2 is the one you want, then:
+
+1. keep that one release line of r2 in `library.ledger.jsonl` and delete the other branch's (or keep the file as it is
+   when it already holds only the one you want), and
+2. delete the other branch's mark, `.ecadlib/marks/<part>@r2@<digest>`: the message names the files, and the one to
+   delete is the one whose digest is not on the line you kept.
+
+Then run again (`ecadlib part history ws/library PART` shows no warning once it is mended). Restoring
+`library.ledger.jsonl` and `.ecadlib/` from one branch with git does the same.
+
 If the ledger was deleted, emptied or lost a part's lines, while something else shows the part was released before,
 ecadlib does not take the files on disk as revision 1. These signs count: `.ecadlib/blobs`, `library.usage.json`, other
 ledger lines, `ecadlib_schema.json` saying the library keeps a ledger, files that differ from what `library.lock.json`

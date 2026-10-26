@@ -361,8 +361,11 @@ f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
         for e in rel:
             r = e.get("revision")
             if isinstance(r, int) and seen and r <= seen[-1]:
+                two = sorted(f"{STORE}/marks/{safe_name(part)}@r{r}@{d}" for rr, d in self.marks(part) if rr == r)
                 return (f"{LEDGER} records r{r} of {part} " + ("twice" if r in seen else f"after r{seen[-1]}") +
-                        " (a ledger merged from two branches, or lines copied back)")
+                        " (a ledger merged from two branches, or lines copied back); to mend it keep the one release "
+                        f"line of r{r} you want in {LEDGER}, delete the other, and delete the other line's mark "
+                        f"(one of {', '.join(two) or 'none'}, named by its digest)")
             if isinstance(r, int):
                 seen.append(r)
         top = seen[-1] if seen else 0
@@ -380,7 +383,9 @@ f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
                         f"older copy, or a merge dropped those lines)")
             if head is not None and r == top:
                 return (f"{STORE}/marks says another r{r} of {part} was released than the one {LEDGER} holds (a ledger "
-                        f"merged from two branches kept only one side)")
+                        f"merged from two branches kept only one side); if the r{r} line {LEDGER} holds is the one you "
+                        f"want, delete {STORE}/marks/{safe_name(part)}@r{r}@{d} (the other branch's mark), else restore "
+                        f"that branch's r{r} line")
         return None
 
     def _mend_tail(self):
@@ -431,8 +436,10 @@ f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
             if why:                            # which revision is released is not known: nothing is taken as it
                 raise LedgerError(f"{self.folder}: {why}; nothing was changed",
                                   f"restore {LEDGER} and {STORE}/ from git as one (`git log -- {LEDGER}` in the library "
-                                  f"folder shows where lines were lost or doubled), keep one release line per revision, "
-                                  f"then run again; `ecadlib part history` lists the part's lines")
+                                  f"folder shows where lines were lost or doubled), or mend it as the message says (one "
+                                  f"release line per revision, the other branch's {STORE}/marks file deleted), then run "
+                                  f"again; `ecadlib part history` lists the part's lines; see docs/change-control.md, "
+                                  f"\"When the ledger is damaged\"")
         return r[-1] if r else None
 
     def revision(self, part, rev):
