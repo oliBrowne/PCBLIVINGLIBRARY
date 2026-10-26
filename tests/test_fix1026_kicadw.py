@@ -155,6 +155,60 @@ def test_rkw3_chain_types_follow_the_pin_map():
     assert L.kicad_chain_types(chain, {"2": "4"}) == {"4": "power_out"}
 
 
+# ---- R-KW-4: altium_model honours the body's own placement (MODEL.2D.X / Y, MODEL.3D.ROTZ)
+def _placed_lib(d, repl):
+    from ecadlib import step_gen as SG, stdparts as SP
+    text, _ = SP.build("SOIC-8_3.9x4.9mm_P1.27mm")
+    fp, _ = K.convert_footprint(text, "SOIC8")
+    step, _ = SG.generate("SOIC-8_3.9x4.9mm_P1.27mm")
+    fp["bodies"] = [{"pts": [(-2, -2.5), (2, -2.5), (2, 2.5), (-2, 2.5)], "height": 1.75,
+                     "step": {"name": "soic8.step", "data": step.encode(), "rot": (0.0, 0.0, 0.0)}}]
+    orig = AL.body_params
+
+    def placed(*a, **k):
+        s = orig(*a, **k)
+        for old, new in repl:
+            s = s.replace(old, new)
+        return s
+    with mock.patch.object(AL, "body_params", placed):
+        return AL.write_pcblib(d / "a.PcbLib", [fp])
+
+
+def _node(n, key):
+    return [float(v) for v in sexpr.first(sexpr.first(n, key), "xyz")[1:]]
+
+
+@lite
+def test_rkw4_body_offset_and_rotation_are_honoured(tmp_path):
+    lib = _placed_lib(tmp_path, [("MODEL.2D.X=0mil", "MODEL.2D.X=50mil"), ("MODEL.2D.Y=0mil", "MODEL.2D.Y=100mil"),
+                                 ("MODEL.3D.ROTZ=0.000", "MODEL.3D.ROTZ=90.000")])
+    notes = []
+    got = X.altium_model(lib, "SOIC8", "lib", tmp_path / "lib.3dshapes", {}, notes)
+    assert got, notes
+    n = got[0][0]
+    off, rot = _node(n, "offset"), _node(n, "rotate")
+    assert abs(off[0] - 1.27) < 1e-6 and abs(off[1] + 2.54) < 1e-6 and abs(off[2]) < 1e-6, off   # y down in KiCad
+    assert rot == [0.0, 0.0, -90.0], rot          # KiCad turns a model by the negated angle (kicad_import.step_extent)
+
+
+@lite
+def test_rkw4_unplaced_body_unchanged(tmp_path):
+    lib = _placed_lib(tmp_path, [])
+    got = X.altium_model(lib, "SOIC8", "lib", tmp_path / "lib.3dshapes", {}, [])
+    n = got[0][0]
+    assert _node(n, "offset") == [0.0, 0.0, 0.0] and _node(n, "rotate") == [0.0, 0.0, 0.0], n
+
+
+@lite
+def test_rkw4_body_tilted_or_2d_rotated_is_not_written(tmp_path):
+    for repl in ([("MODEL.3D.ROTX=0.000", "MODEL.3D.ROTX=90.000")], [("MODEL.2D.ROTATION=0.000", "MODEL.2D.ROTATION=45.000")]):
+        d = tmp_path / str(len(list(tmp_path.iterdir())))
+        d.mkdir()
+        notes = []
+        got = X.altium_model(_placed_lib(d, repl), "SOIC8", "lib", d / "lib.3dshapes", {}, notes)
+        assert got is None and any("rotated in Altium" in n for n in notes), (repl, got, notes)
+
+
 if __name__ == "__main__":
     fails = 0
     for k, f in list(globals().items()):

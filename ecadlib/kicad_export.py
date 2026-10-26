@@ -933,7 +933,10 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None, 
     a multi-footprint .PcbLib), the STEP embedded in the .PcbLib that the body names (MODELID), else a STEP extruded
     from the body (outline, standoff and height), written to <lib>.3dshapes/ (write(path, bytes); default a plain
     write). -> ([(model ...) node, ...], [(file name, how), ...]) or None. Altium and KiCad then both have the part's
-    3D model (ecadlib.parity checks it). at: the model folder as the footprint names it (models_at)."""
+    3D model (ecadlib.parity checks it). An embedded STEP is placed as the body places it in Altium (MODEL.2D.X / Y,
+    MODEL.3D.ROTZ, MODEL.3D.DZ; the library's model record when the body has none): KiCad's offset (y down) and its
+    z rotation (KiCad turns a model by the negated angle, as kicad_import.step_extent); one tilted (ROTX / ROTY) or
+    turned in 2D is not written, with a note. at: the model folder as the footprint names it (models_at)."""
     from . import step_gen as SG
     at = at or models_at(lib)
     fps = AL.read_pcblib(pcblib)
@@ -955,11 +958,16 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None, 
         if emb is not None and str(bp.get("MODELID", "")) not in done:   # embedded STEP: the same file, unchanged
             done.add(str(bp.get("MODELID", "")))
             mp, data = emb
-            rot = [float(mp.get(key, 0) or 0) for key in ("ROTX", "ROTY", "ROTZ")]
-            if any(abs(v) > 1e-9 for v in rot):
+            # the body's own placement (what Altium shows), else the library model record's
+            num = lambda v: float(re.sub(r"[^0-9eE+.\-]", "", str(v)) or 0)
+            rot = [num(bp[f"MODEL.3D.{key}"]) if str(bp.get(f"MODEL.3D.{key}") or "").strip() else num(mp.get(key, 0) or 0)
+                   for key in ("ROTX", "ROTY", "ROTZ")]
+            if abs(rot[0]) > 1e-9 or abs(rot[1]) > 1e-9 or abs(num(bp.get("MODEL.2D.ROTATION") or 0)) > 1e-9:
                 K._note(notes, f"3D: the embedded STEP {mp.get('NAME')} is rotated in Altium; not written for KiCad")
                 continue
-            dz = AL.to_mm(int(float(mp.get("DZ", 0) or 0)))
+            dz = RC._mil(bp["MODEL.3D.DZ"]) if RC._mil(bp.get("MODEL.3D.DZ")) is not None else \
+                AL.to_mm(int(float(mp.get("DZ", 0) or 0)))
+            off, rz = (mil("MODEL.2D.X"), -mil("MODEL.2D.Y"), dz), -rot[2]
             how = f"embedded STEP {mp.get('NAME', '')} from the .PcbLib"
         elif emb is not None:
             continue
@@ -969,14 +977,14 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None, 
             if len(pts) < 3 or hi - lo <= 0:
                 continue
             data = SG.write_step([SG.prism(pts, hi - lo, (0, 0, lo), name="body")], base, "ecadlib: the Altium 3D body as a STEP").encode("ascii")
-            dz, how = 0.0, f"extruded body ({hi:.2f} mm) from the .PcbLib as a STEP"
+            off, rz, how = (0.0, 0.0, 0.0), 0.0, f"extruded body ({hi:.2f} mm) from the .PcbLib as a STEP"
         shapes.mkdir(parents=True, exist_ok=True)
         if write is not None:
             write(shapes / fn, data)
         elif not (shapes / fn).is_file() or (shapes / fn).read_bytes() != data:
             (shapes / fn).write_bytes(data)
-        nodes.append(["model", Q(f"{at}/{fn}"), ["offset", ["xyz", "0", "0", _num(dz)]],
-                      ["scale", ["xyz", "1", "1", "1"]], ["rotate", ["xyz", "0", "0", "0"]]])
+        nodes.append(["model", Q(f"{at}/{fn}"), ["offset", ["xyz"] + [_num(v) for v in off]],
+                      ["scale", ["xyz", "1", "1", "1"]], ["rotate", ["xyz", "0", "0", _num(rz)]]])
         files.append((fn, how))
     return (nodes, files) if nodes else None
 
