@@ -157,6 +157,35 @@ def test_plain_xlsx_reader_leaves_out_phonetic_readings(tmp_path):
     assert BI.xlsx_sheets(f) == {"BOM": [["品名", "", ""], ["抵抗", "RC0603", "コンデンサ"]]}
 
 
+# ---------------------------------------------------------------- bommcp-07: MCP altium_menu command
+@lite
+def test_mcp_altium_menu_takes_only_a_way_to_run_ecadlib_as_its_command(tmp_path):
+    # the menu's runner executes command= on the Altium PC (`%ECADLIB% altium-menu run-job JOB` in cmd.exe): an agent
+    # could plant 'calc.exe & rem' there, or a line break that rewrites another setting (workspace= outside the
+    # workspace), and the person's next click on the menu ran it
+    from ecadlib.app import Workspace
+    from ecadlib import mcp_server as M, altium_menu as AM
+    ws = Workspace(str(tmp_path / "ws"), offline=True)
+    ws.mcp_options = M.Options(wait=30, confine=True)
+    ini = ws.root / "altium_menu" / AM.INI
+
+    def call(cmd):
+        r = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "altium_menu", "arguments": {"command": cmd}}})
+        return r["result"]["isError"], r["result"]["content"][0]["text"]
+    for bad in ("calc.exe & rem", "ecadlib\r\nworkspace=C:\\Users\\x\\other", 'cmd /c "evil"', "powershell -c x",
+                '"C:\\Temp\\evil.exe"', '"C:\\Python\\python.exe" -c "import os"', "ecadlib | x", "py -3 -m ecadlib %X%"):
+        err, text = call(bad)
+        assert err and "command" in text and "ecadlib_menu.ini" in text, (bad, text)
+        assert not ini.exists(), bad
+    for good in ("ecadlib", "py -3 -m ecadlib", "py -3.13 -m ecadlib", "python -m ecadlib",
+                 '"C:\\Users\\Ann Lee\\venv\\Scripts\\python.exe" -m ecadlib', '"C:\\Program Files (x86)\\ecadlib\\ecadlib.exe"'):
+        err, text = call(good)
+        assert not err, (good, text)
+        assert AM.load_command(ini) == good, (good, AM.load_command(ini))
+        ini.unlink()
+
+
 # ---------------------------------------------------------------- bommcp-04..06: JSON-RPC over stdio and HTTP
 def _ws(tmp_path):
     from ecadlib.app import Workspace

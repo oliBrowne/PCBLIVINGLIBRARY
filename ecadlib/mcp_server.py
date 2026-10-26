@@ -424,9 +424,41 @@ TOOLS = [
      "inputSchema": {"type": "object",
                      "properties": {"win_dir": {"type": "string", "description": "Windows folder of altium_menu/ on the Altium PC"},
                                     "name": {"type": "string", "description": "library name"},
-                                    "command": {"type": "string", "description": "how to run ecadlib there (default: find it)"},
+                                    "command": {"type": "string", "description": "how to run ecadlib there (default: find it): "
+                                                "ecadlib, py -3 -m ecadlib or \"C:\\...\\python.exe\" -m ecadlib"},
                                     "port": {"type": "integer", "default": 8765}}}},
 ]
+
+
+_MENU_EXE = re.compile(r'(?:ecadlib|python3?|py)(?:\.exe)?|"[A-Za-z]:\\[^"&|<>^%!\r\n\x00-\x1f]*\\'
+                       r'(?:python3?w?|py|ecadlib)\.exe"', re.I)
+_MENU_ARGS = re.compile(r"(?:\s+-3(?:\.\d{1,2})?)?\s+-m\s+ecadlib|", re.I)
+
+
+def _menu_command(ws, cmd):
+    """altium_menu's command over MCP: the Altium menu's runner executes it on the Altium PC (cmd.exe), so an agent
+    gives only a way to run ecadlib (ecadlib, py -3 -m ecadlib, python -m ecadlib, or a quoted python.exe / ecadlib.exe
+    path with -m ecadlib), never another program, shell characters (& | < > ^ %) or a line break (which would rewrite
+    another setting of the .ini). A person sets anything else themselves. '' = the default (found on that PC)."""
+    import os
+    from pathlib import Path
+    cmd = str(cmd or "").strip()
+    if not cmd:
+        return ""
+    m = _MENU_EXE.match(cmd)
+    ok = bool(m) and bool(_MENU_ARGS.fullmatch(cmd[m.end():]))
+    if ok and m.group(0).startswith('"') and m.group(0).lower().endswith(('python.exe"', 'pythonw.exe"', 'python3.exe"',
+                                                                              'python3w.exe"')):
+        ok = bool(cmd[m.end():].strip())                 # python.exe itself needs -m ecadlib
+    if ok and m.group(0).startswith('"') and os.name == "nt":
+        p = Path(m.group(0).strip('"')).resolve()
+        ok = not (p == ws.root or ws.root in p.parents)  # not a program uploaded into the workspace
+    if not ok:
+        raise ValueError(f"command {cmd[:80]!r}: give only how to run ecadlib on the Altium PC: ecadlib, py -3 -m ecadlib, "
+                         'python -m ecadlib or "C:\\...\\python.exe" -m ecadlib (empty: found there). The menu runs it '
+                         "with cmd.exe, so another program or shell characters are for the person to set: command= in "
+                         "altium_menu/ecadlib_menu.ini, or `ecadlib altium-menu build --command`")
+    return cmd
 
 
 def call_tool(ws, name, args, progress=None):
@@ -584,8 +616,8 @@ def call_tool(ws, name, args, progress=None):
             return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", args.get("driver") or None,
                                   args.get("include_held") is True)
         if name == "altium_menu":
-            return ws.altium_menu(args.get("win_dir") or None, args.get("name") or "ecadlib", args.get("command") or "",
-                                  args.get("port") or 8765)
+            return ws.altium_menu(args.get("win_dir") or None, args.get("name") or "ecadlib",
+                                  _menu_command(ws, args.get("command") or ""), args.get("port") or 8765)
         if name == "parity":
             return ws.parity(args["bom"], args.get("kicad") is True, args.get("name") or "ecadlib")
         if name == "tool_packages":
