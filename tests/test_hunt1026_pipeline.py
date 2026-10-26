@@ -129,6 +129,20 @@ def test_pads_and_pins_that_differ_fail_the_read():
     _held(e, "symbol:", "4")
 
 
+# ---- pipeline-07: an exposed pad in inches labelled mm (0.057 "mm" for 1.45 mm) built a speck of a thermal pad when
+# the package name gives no EP size to compare with
+def test_an_exposed_pad_narrower_than_a_lead_is_held():
+    for v, unit, ok in ((0.057, "mm", False), (0.2, "mm", False), (0.057, "in", True), (0.4, "mm", True)):
+        e = copy.deepcopy(TD.GOOD)
+        e["package"]["name"] = "VQFN-16-1EP_3x3mm_P0.5mm"
+        for k in ("length", "width"):
+            e["package"]["exposed_pad"][k].update(nom=v, unit=unit)
+        if ok:
+            assert _verdict(e, "TESTPART")[0] == ("ok", []), (v, unit, _verdict(e, "TESTPART"))
+        else:
+            _held(e, "exposed_pad", "implausibly small", part="TESTPART")
+
+
 # ---- pipeline-06: a BGA ball as big as its pitch (the pitch read as the ball) built a land on balls that would touch
 def test_a_ball_as_big_as_the_pitch_is_held():
     def bga(ball):

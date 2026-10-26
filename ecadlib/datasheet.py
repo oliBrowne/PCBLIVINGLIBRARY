@@ -1696,6 +1696,9 @@ def sanity(spec, review):
         v, body = _dim(ep.get(d)), g(k)
         if v and body and v[1] >= body[0]:
             review.append(f"exposed_pad.{d} {v[1]} >= {k} min {body[0]}")
+        small = max(0.2, b[1] if b else 0)            # an inch value labelled mm (0.057 "mm" for 1.45 mm): narrower
+        if v and 0 < v[1] < small:                    # than a lead (the smallest real ones: 0.4 mm beside 0.2 leads)
+            review.append(f"exposed_pad.{d}: {v[1]:g} mm is implausibly small for an exposed pad (unit mislabelled?)")
     land, outer = spec.get("land") or {}, g("lead_span") or g("body_width")
     lc, ll = land.get("pad_center"), land.get("pad_length")
     if isinstance(lc, (int, float)) and isinstance(ll, (int, float)) and outer and lc > outer[2] / 2 + ll:
