@@ -66,6 +66,35 @@ def test_rmn6_non_ascii_command_is_refused(tmp_path):
     assert b'command="C:\\venv\\Scripts\\python.exe" -m ecadlib' in (tmp_path / "m2" / AM.INI).read_bytes()
 
 
+
+# ---- R-MN-1: kicad-pcm on a kicad-export --include-held folder refuses the held parts unless --include-held
+@lite
+def test_rmn1_pcm_refuses_held_parts_of_an_include_held_export(tmp_path):
+    import zipfile
+    from ecadlib import kicad_export as X, kicad_pcm as KP
+    from tests import test_kicad_export as TKX
+    plan, items, http = TKX._plan(tmp_path, api_key="sk-test")
+    held = [n for n, i in items.items() if i["status"] == "held"]
+    assert held
+    out = tmp_path / "kx"
+    X.export(plan, out, "lib", include_held=True, http=http, log=lambda *a: None)
+    try:
+        KP.build(out, tmp_path / "pcm", log=lambda *a: None)
+        raise AssertionError("packaged held parts")
+    except ValueError as e:
+        assert "held" in str(e) and held[0] in str(e) and "--include-held" in str(e), e
+    assert not list((tmp_path / "pcm").glob("*.zip")) if (tmp_path / "pcm").exists() else True
+    rep = KP.build(out, tmp_path / "pcm", log=lambda *a: None, include_held=True)
+    assert any("held" in p and held[0] in p for p in rep["problems"]), rep["problems"]
+    with zipfile.ZipFile(rep["zip"]) as z:
+        notice = z.read("NOTICE.txt").decode()
+    assert "HELD" in notice and held[0] in notice, notice
+    clean = tmp_path / "kx2"                                   # a plain export: no held part, nothing said
+    X.export(plan, clean, "lib", http=http, log=lambda *a: None)
+    rep = KP.build(clean, tmp_path / "pcm2", log=lambda *a: None)
+    assert not any("held" in p for p in rep["problems"]), rep["problems"]
+
+
 if __name__ == "__main__":
     fails = 0
     for k, f in list(globals().items()):

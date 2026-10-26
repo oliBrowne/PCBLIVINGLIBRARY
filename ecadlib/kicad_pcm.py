@@ -388,6 +388,17 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
     out = Path(out)
     exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked)
     unchecked = bool(unchecked and Path(src).is_dir() and xrep is None)
+    # parts kicad-export wrote while held (its --include-held): never packaged unless asked for, and then said
+    held = sorted({str(p.get("part")) for p in (xrep or {}).get("parts") or []
+                   if isinstance(p, dict) and p.get("held") and (p.get("symbol") or p.get("footprint"))})
+    if held and not include_held:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+        raise ValueError(f"{src}: not packaged: kicad-export wrote {len(held)} held part(s) into it with --include-held "
+                         f"({', '.join(held[:8])}{' ...' if len(held) > 8 else ''}); export it again without "
+                         f"--include-held, or pass kicad-pcm --include-held to package the held parts anyway")
+    held_note = (f"HELD PARTS: packaged with --include-held: {', '.join(held)} did not pass the release check (or "
+                 f"wait for sign-off); check them before use.") if held else ""
     try:
         identifier = identifier or reuse_identifier(out, lib) or default_identifier(lib)
         if not ID_RE.match(identifier):
@@ -398,6 +409,8 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
             files["NOTICE.txt"] = notice.read_bytes()               # root files are not installed; kept in the zip
         if unchecked:
             files["NOTICE.txt"] = files.get("NOTICE.txt", b"") + (UNCHECKED_NOTE + "\n").encode("utf-8")
+        if held_note:
+            files["NOTICE.txt"] = files.get("NOTICE.txt", b"") + (held_note + "\n").encode("utf-8")
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -433,6 +446,8 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
         raise ValueError(f"version {version!r} must be major[.minor[.patch]], e.g. 1.2.0")
     meta = meta_for(version)
     problems, how = check_metadata(meta, schema)
+    if held_note:
+        problems.append(f"held parts packaged (--include-held): {', '.join(held)}; NOTICE.txt says so")
     files["metadata.json"] = (json.dumps(meta, indent=2) + "\n").encode()
     data = zip_bytes(files)
     out.mkdir(parents=True, exist_ok=True)
@@ -612,7 +627,8 @@ def main(argv=None):
     ap.add_argument("--description")
     ap.add_argument("--homepage")
     ap.add_argument("--base-url", help="https URL the folder will be served from: also write repository.json + packages.json")
-    ap.add_argument("--include-held", action="store_true", help="with a plan: also package held parts")
+    ap.add_argument("--include-held", action="store_true", help="also package held parts (a plan's, or those a kicad-export "
+                    "--include-held folder holds); the package's NOTICE.txt and the problems say so")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--offline", action="store_true", help="with a plan: use the HTTP cache only")
     ap.add_argument("--schema", help="KiCad's pcm.v1.schema.json to validate against (default: the one KiCad installs)")
