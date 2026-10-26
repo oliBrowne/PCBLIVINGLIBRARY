@@ -196,6 +196,29 @@ def test_ru5_lcsc_part_change_makes_the_sign_off_stale():
     assert A.content_hash(it) == A.content_hash(c)          # the removed assembly check's own fields stay unsigned
 
 
+# ------------------------------------------------------------------ R-RU-6: costs follow the page budget rules
+@lite
+def test_ru6_costs_use_the_rules_page_budget_and_proof_pages(tmp_path):
+    import contextlib, io
+    from ecadlib import costs as C, rules as RU
+    base = C.jobs("claude-opus-5-5", rules=RU.load({}))
+    big = C.jobs("claude-opus-5-5", rules=RU.load({"datasheet": {"page_budget": 40}, "agent": {"proof": {"max_pages": 20}}}))
+    assert big["read"] > base["read"] and big["check"] > base["check"]
+    assert C.jobs("claude-opus-5-5")["read"] == base["read"]               # the defaults when no rules are given
+    whole = C.jobs("claude-opus-5-5", rules=RU.load({"datasheet": {"page_budget": 0}}))
+    assert whole["read"] > base["read"]                                     # 0: the whole PDF, priced as a long one
+    (tmp_path / "none.toml").write_text("", encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        C.main(["--model", "claude-opus-5-5", "--rules", str(tmp_path / "none.toml")])
+    assert "6 datasheet pages" in buf.getvalue(), buf.getvalue()
+    (tmp_path / "r.toml").write_text("[datasheet]\npage_budget = 0\n", encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        C.main(["--model", "claude-opus-5-5", "--rules", str(tmp_path / "r.toml")])
+    assert "whole PDF" in buf.getvalue(), buf.getvalue()
+
+
 def _main():
     import sys
     n = 0
