@@ -356,3 +356,43 @@ def test_kicad5_polygon_is_written_filled():
     f, _ = K.convert_footprint('(module X (layer F.Cu) (pad 1 smd rect (at 0 0) (size 1 1) (layers F.Cu)) '
                                '(fp_poly (pts (xy -1 2) (xy 1 2) (xy 0 3)) (layer F.Cu) (width 0.15)))', "X", notes=[])
     assert len(f["regions"]) == 1, f["regions"]
+
+
+# --- R-FX5-3: a hash recorded before R-SP-4 still matches the same footprint -------------------------------------
+
+def _rec(h, kmod="models/KiCad/QFN-16.kicad_mod", **kw):
+    return {"file": "models/PcbLib/QFN-16.PcbLib", "kicad_mod": kmod, "name": "QFN-16", "hash": h, "source": "datasheet",
+            "by": "PARTA", **kw}
+
+
+@lite
+def test_fp_share_old_hash_without_its_file_still_shares(tmp_path):
+    """A released part's record from before the upgrade (no hash_v, its .kicad_mod not here): the same footprint
+    shares it again instead of getting a new name (a new ref = re-approval of a released part)."""
+    from ecadlib import fp_share as FS
+    old = FS.digest(EP_WINDOWS, 1)
+    assert old != FS.digest(EP_WINDOWS)                        # the case: the digest changed for this footprint
+    written = {str(tmp_path / "models/PcbLib/QFN-16.PcbLib"): _rec(old)}
+    got = FS.pick(written, tmp_path / "models", "QFN-16", EP_WINDOWS, "datasheet", "PARTB", tmp_path, {})
+    assert got[0] == "QFN-16" and got[2] is not None, got
+
+
+@lite
+def test_fp_share_old_hash_is_recomputed_from_its_file(tmp_path):
+    """With its .kicad_mod there, an old record is compared by today's digest: paste differences still split."""
+    from ecadlib import fp_share as FS
+    (tmp_path / "models/KiCad").mkdir(parents=True)
+    (tmp_path / "models/KiCad/QFN-16.kicad_mod").write_text(EP_FULL)
+    written = {str(tmp_path / "models/PcbLib/QFN-16.PcbLib"): _rec(FS.digest(EP_FULL, 1))}
+    assert FS.pick(written, tmp_path / "models", "QFN-16", EP_FULL, "datasheet", "PARTB", tmp_path, {})[2] is not None
+    got = FS.pick(written, tmp_path / "models", "QFN-16", EP_WINDOWS, "datasheet", "PARTB", tmp_path, {})
+    assert got[0] != "QFN-16", got
+
+
+@lite
+def test_librarian_records_the_hash_version(tmp_path):
+    from ecadlib import fp_share as FS, librarian as L
+    r = L.Run(tmp_path, None, None, [], [])
+    st = {"name": "P1", "symbol": None, "footprint": None}
+    r.put_fp(st, EP_WINDOWS, "QFN-16", "datasheet")
+    assert st["footprint"]["hash_v"] == FS.HASH_V and st["footprint"]["hash"] == FS.digest(EP_WINDOWS)

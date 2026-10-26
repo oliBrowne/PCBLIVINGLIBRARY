@@ -25,14 +25,20 @@ from pathlib import Path
 from . import altium_lib as AL, sexpr
 
 
-def digest(text):
+# the digest's version, recorded with each hash ("hash_v"): 1 = dedupe's pad hash only; 2 = plus extra() (R-SP-4).
+# A record from before (no hash_v) is compared by recomputing from its own .kicad_mod, else with version 1 of the
+# new part's digest, so an upgrade never splits a footprint from the released part that shares it.
+HASH_V = 2
+
+
+def digest(text, version=HASH_V):
     """Geometry hash of a .kicad_mod: dedupe's footprint hash (pads, shapes, holes, courtyard), plus what that leaves
     out but the board gets (extra(): custom-pad copper, paste / mask windows, the copper side, copper graphics); a
-    text hash when it has no pads."""
+    text hash when it has no pads. version 1: without extra(), as hashes recorded before HASH_V 2."""
     from . import dedupe as DD
     try:
         h = DD.fp_hash(DD.fp_geometry_kicad(text))
-        more = extra(text) if h else []
+        more = extra(text) if h and version >= 2 else []
         if more:                               # only then: a plain footprint keeps the hash workspaces recorded
             h = DD._digest([h] + more)
     except Exception:                          # unparsable: only an identical file is "the same"
@@ -127,14 +133,17 @@ def base_of(rec):
 
 
 def hash_of(rec, out, cache):
-    """A footprint record's geometry hash: recorded, else from its .kicad_mod (workspaces from before this check)."""
-    if rec.get("hash"):
-        return rec["hash"]
+    """A footprint record's geometry hash -> (hash, version): recorded at this HASH_V; else from its .kicad_mod
+    (workspaces from before this check, or a hash of an older version); else the older recorded hash, version 1."""
+    if rec.get("hash") and int(rec.get("hash_v") or 1) >= HASH_V:
+        return rec["hash"], HASH_V
     k = rec.get("kicad_mod") or ""
     if k not in cache:
         p = Path(out) / k if k else None
         cache[k] = digest(p.read_text(encoding="utf-8")) if p and p.is_file() else None
-    return cache[k]
+    if cache[k] or not rec.get("hash"):
+        return cache[k], HASH_V
+    return rec["hash"], int(rec.get("hash_v") or 1)
 
 
 def unchecked_share(rec):
@@ -149,10 +158,14 @@ def lib_name(source):
     return src.rsplit(":", 1)[-1].lower() if src.startswith(("kicad:", "standard:")) else ""
 
 
-def same_fp(rec, h, source, out, cache):
-    """A footprint record holds the same footprint: same pads, and the same library footprint when both name one."""
+def same_fp(rec, h, source, out, cache, text=None):
+    """A footprint record holds the same footprint: same pads, and the same library footprint when both name one.
+    h: the new footprint's digest; text: its .kicad_mod, for a record hashed by an older digest version."""
     a, b = lib_name(rec.get("source")), lib_name(source)
-    return hash_of(rec, out, cache) == h and (not a or not b or a == b)
+    rh, v = hash_of(rec, out, cache)
+    if v != HASH_V and text is not None:
+        h = digest(text, v)
+    return rh == h and (not a or not b or a == b)
 
 
 def pick(written, models, name, text, source, part, out, cache):
@@ -161,7 +174,7 @@ def pick(written, models, name, text, source, part, out, cache):
     fold = lambda s: AL.file_stem(s).casefold()  # Windows / macOS file systems ignore case: SOIC-8 and soic-8 are one file
     for rec in written.values():               # same pads under a name already made for this BOM name: share it
         f = str(rec.get("file") or "")
-        if f.endswith(".PcbLib") and fold(base_of(rec)) == fold(name) and same_fp(rec, h, source, out, cache):
+        if f.endswith(".PcbLib") and fold(base_of(rec)) == fold(name) and same_fp(rec, h, source, out, cache, text):
             return rec.get("name") or Path(f).stem, str(Path(out) / f), rec, h
     taken = {str(p).casefold(): (p, rec) for p, rec in written.items()}
     cands = candidates(name, real, part)
@@ -170,7 +183,7 @@ def pick(written, models, name, text, source, part, out, cache):
         have, rec = taken.get(pcb.casefold(), (pcb, None))
         if rec is None:                        # nobody in this run has it (a file left from an earlier run of
             return c, pcb, None, h             # this part, or of a part no longer in the BOM, is rewritten)
-        if same_fp(rec, h, source, out, cache):   # its file under its name (the case it was written in)
+        if same_fp(rec, h, source, out, cache, text):   # its file under its name (the case it was written in)
             return rec.get("name") or c, have, rec, h
     c = cands[-1]                              # <name>_<part> is this part's own: rewrite it
     return c, str(Path(models) / "PcbLib" / f"{AL.file_stem(c)}.PcbLib"), None, h

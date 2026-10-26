@@ -396,7 +396,7 @@ class Run:
         if same is not None:                    # (its own file from an earlier run, kept for a skipped part: not shared)
             st["footprint"] = {**{k: v for k, v in same.items() if k not in ("renamed_from", "chosen")},
                                "notes": _own_notes(same) if same.get("by") == st["name"] else
-                               [f"shared with {same['by']}"], "name": name, "hash": h, **renamed}
+                               [f"shared with {same['by']}"], "name": name, "hash": h, "hash_v": FS.HASH_V, **renamed}
             _hold_lost_copper(st, name, same.get("notes") or [])
             self._relink(st, bom_name, name)
             return
@@ -425,7 +425,7 @@ class Run:
         kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
-                           "name": name, "hash": h, **renamed,
+                           "name": name, "hash": h, "hash_v": FS.HASH_V, **renamed,
                            **({"model": {"source": f"easyeda:{model['ref']['uuid']}", "url": model["ref"]["url"],
                                          "title": model["ref"]["title"], "credit": EC.CREDIT}} if model else {})}
         self.written[str(pcb)] = st["footprint"]
