@@ -522,6 +522,42 @@ def test_fx2_6_the_one_part_cli_holds_a_read_failing_a_hold_worthy_check():
             assert (Path(d) / "TESTPART.response.json").exists()          # the paid answer kept
 
 
+
+# ---------------------------------------------------------------- fixes6.md (third review): rectangular QFP reads
+RECT_QFPS = (QFP52,                                   # truths of the review's brute2 (footprint_gen's frame)
+             {"name": "QFP-100_14x20mm_P0.65mm", "n": 100, "e": 0.65, "bl": 14, "bw": 20, "ls": 17.2, "lsy": 23.2,
+              "nlr": 30, "ntb": 20, "b": 0.3},
+             {"name": "LQFP-128_14x20mm_P0.5mm", "n": 128, "e": 0.5, "bl": 14, "bw": 20, "ls": 16, "lsy": 22, "nlr": 38,
+              "ntb": 26},
+             {"name": "QFP-40_10x12mm_P0.8mm", "n": 40, "e": 0.8, "bl": 10, "bw": 12, "ls": 12, "lsy": 14, "nlr": 11,
+              "ntb": 9, "b": 0.35},
+             {"name": "QFP-80_12x14mm_P0.5mm", "n": 80, "e": 0.5, "bl": 12, "bw": 14, "ls": 14, "lsy": 16, "nlr": 22,
+              "ntb": 18},
+             {"name": "EQFP-64-1EP_10x14mm_P0.65mm", "n": 64, "e": 0.65, "bl": 10, "bw": 14, "ls": 12, "lsy": 16,
+              "nlr": 19, "ntb": 13, "epl": 6, "epw": 10, "b": 0.3},
+             {"name": "TQFP-80-1EP_12x14mm_P0.5mm", "n": 80, "e": 0.5, "bl": 12, "bw": 14, "ls": 14, "lsy": 16,
+              "nlr": 22, "ntb": 18, "epl": 6, "epw": 8})
+
+
+def _never_wrong(t, bad, why):
+    right = _qfp_read(t)[2]
+    kind, hold, got = _qfp_read(bad)
+    assert got in ("refused", right) or (kind == "failed" and hold), (t["name"], why, kind, hold)
+
+
+def test_f6_h1_a_rectangular_qfp_read_with_no_row_split_or_an_equal_one_never_builds_wrong():
+    """Before: QFP-52 12x14 with the row split blank (or 13/13) built 26/26 pads for a 28/24 part, assess ok. Square
+    QFPs read with no split (every real read of 2026-10-23 left it blank) still build."""
+    for t in RECT_QFPS:
+        assert _qfp_read(t)[0] == "ok", t["name"]
+        _never_wrong(t, dict(t, nlr=None, ntb=None), "rows dropped")
+        _never_wrong(t, dict(t, nlr=t["n"] // 4, ntb=t["n"] // 4), "rows equal")
+        _never_wrong(t, dict(t, ntb=None), "pins_top_bottom only from the pin count")   # derived: still right
+    sq = {"name": "LQFP-48_7x7mm_P0.5mm", "n": 48, "e": 0.5, "bl": 7, "bw": 7, "ls": 9, "lsy": None, "nlr": None,
+          "ntb": None}
+    assert _qfp_read(sq)[0] == "ok"
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
