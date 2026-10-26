@@ -133,10 +133,11 @@ def test_lost_first_release_then_approved_change_goes_up_as_a_new_revision():
     assert _push_lib(plan, lib, nx, ws, rules)["AO3401A"]["action"] == "up_to_date"
 
 
-def test_component_made_by_hand_in_the_workspace_is_released_from_the_head_not_recorded_as_published():
-    """A component made by hand (or by an older ecadlib, or a release whose answer was lost) and no publish line: the
-    push does not take it as up to date / a parameter update and record a publish it never made; it releases the
-    head revision's files as a new revision of that component."""
+def test_component_made_by_hand_in_the_workspace_is_held_not_recorded_as_published():
+    """A component made by hand (or by an older ecadlib, or another plan folder) and no publish line: the push does
+    not take it as up to date / a parameter update and record a publish it never made. Its models are read back
+    (R-FX11-1, review of #196): this one's do not read as this part's drawing, so the part is held and nothing is
+    sent (it was released over as a new revision, which put this library's drawing on someone else's component)."""
     from ecadlib import ledger as LG, rules as RU
     from tests.test_change_control import FakeA365, demo, item, items_of
     plan, lib = demo()
@@ -149,10 +150,10 @@ def test_component_made_by_hand_in_the_workspace_is_released_from_the_head_not_r
                            "details": {"parameters": [{"name": p["name"], "value": p["value"]}
                                                       for p in it["parameters"]]}}
     res = _push_lib(plan, lib, nx, ws, rules)["AO3401A"]
-    assert res["action"] == "new_revision", res
-    assert [c for c in nx.calls if c[0] == "release" and c[1] == "AO3401A"], nx.calls
-    assert len(nx.comps["AO3401A"]["revisions"]) == 2
-    assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["revision"] == 1
+    assert res["action"] == "skip" and "released elsewhere" in res["detail"], res
+    assert not [c for c in nx.calls if c[0] in ("release", "update_params") and c[1] == "AO3401A"], nx.calls
+    assert len(nx.comps["AO3401A"]["revisions"]) == 1
+    assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}") is None
 
 
 # ---------------------------------------------------------------- R-AM-3: pick_named and parts named like a revision

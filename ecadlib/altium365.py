@@ -68,6 +68,11 @@ Q_MODEL_DATA = {k: """query ($ws: String!, $prefix: String!) {
   desLibrary(workspaceUrl: $ws) { %s(first: 50, where: {name: {startsWith: $prefix}}) { nodes { id name releasedAt folder { path } dataDownloadUrl } } }
 }""" % k for k in ("symbols", "footprints")}
 
+# the symbol / footprint files a component's current revision links (a component this library never published:
+# R-FX11-1)
+Q_COMPONENT_MODELS = """query ($id: ID!) { desComponentById(id: $id) { details { symbols { name dataDownloadUrl }
+  footprints { name dataDownloadUrl } } } }"""
+
 # folders by parent: componentReleaseFolder is one child folder name (a "/" in it fails with AddALU_FoldersInvalid
 # folder HRID), so a nested component folder is released as componentParentFolderId + leaf name
 # live schema 2026-10: a folder has a node id (base64) and a folderId (GUID); desCreateFolder takes the parent's
@@ -243,6 +248,11 @@ class Nexar:
         if not n.get("dataDownloadUrl"):
             raise NexarError(f"{kind[:-1]} {item_name!r} has no download URL")
         return self.download(n["dataDownloadUrl"])
+
+    def component_models(self, cid):
+        """{"symbols": [bytes], "footprints": [bytes]}: the files of the models component cid's revision links."""
+        d = ((self.gql(Q_COMPONENT_MODELS, {"id": cid}).get("desComponentById") or {}).get("details") or {})
+        return {k: [self.download(n["dataDownloadUrl"]) for n in d.get(k) or []] for k in ("symbols", "footprints")}
 
     def _model_node(self, ws, kind, item_name, folder, queries):
         import re
@@ -593,6 +603,57 @@ def item_model_digest(it, kind, folder):
     return FP.digest(fp.get("symbol")) if kind == "symbols" else FP.digest([fp.get("footprint"), fp.get("model")])
 
 
+def component_digests(client, node, it):
+    """{"symbols": digest, "footprints": digest} of the drawings workspace component `node` links now (read back:
+    client.component_models), as model_digest gives them. Raises ValueError when they can't be read or there is not
+    exactly one of each."""
+    got = client.component_models(node["id"])
+    out = {}
+    for kind, half in (("symbols", "symbol"), ("footprints", "footprint")):
+        files = (got or {}).get(kind) or []
+        if len(files) != 1:
+            raise ValueError(f"it links {len(files)} {kind}")
+        out[kind] = model_file_digest(files[0], kind, (it.get(half) or {}).get("ref"))
+    return out
+
+
+def note_sent(lg, part, target, head):
+    """A `push_sent` ledger line before a release goes to the workspace: if its answer is lost (no publish line), the
+    next push knows this library sent that revision there (released_elsewhere: "own"), and tells it from a component
+    another plan folder released."""
+    if lg is not None and head and not any(
+            e.get("event") in ("push_sent", "publish") and e.get("revision") == head.get("revision")
+            and str(e.get("target") or "").startswith("altium365:")
+            and ws_target(str(e["target"])[len("altium365:"):]) == target for e in lg.history(part)):
+        lg.append({"event": "push_sent", "part": part, "target": target, "revision": head.get("revision"),
+                   "digest": head.get("digest")})
+
+
+def released_elsewhere(client, node, it, lg, target=None):
+    """A component in the workspace this library never published there (R-AM-2 / R-FX11-1): what it holds, read back.
+    -> "head": the drawings of this part's released revision (another plan folder released the same part, or this
+    library's release answer was lost): nothing to send. "own": the drawings of an earlier revision of this part in
+    this library (a lost answer, then a change approved): a new revision goes up. Raises _Held otherwise: another
+    plan folder (or a person) released it with another drawing, which this library's change control never saw."""
+    try:
+        have = component_digests(client, node, it)
+    except (ValueError, NexarError, OSError) as e:
+        why = f"its symbol / footprint could not be read back to compare ({e})"
+    else:
+        head = lg.head(it["name"])
+        if head and {k: model_digest(lg, head, k) for k in ("symbols", "footprints")} == have:
+            return "head"
+        norm = lambda t: ws_target(t[len("altium365:"):]) if str(t or "").startswith("altium365:") else t
+        sent = [lg.revision(it["name"], e.get("revision")) for e in lg.history(it["name"])
+                if e.get("event") == "push_sent" and e.get("revision") is not None and norm(e.get("target")) == norm(target)]
+        if any(r and {k: model_digest(lg, r, k) for k in ("symbols", "footprints")} == have for r in sent):
+            return "own"                       # this library sent that revision there (its answer was lost)
+        why = "it holds another drawing than this part's"
+    raise _Held([f"{it['name']} is in the workspace, released elsewhere (another plan folder's push, or made in "
+                 f"Altium), and {why}: nothing was sent, so that component is not changed without its own sign-off. "
+                 "Give this part another name in this plan, or push this plan to a workspace of its own"])
+
+
 def released_model(lg, target, kind, name):
     """(digest, part, revision) of the drawing the workspace item `name` holds, from the ledger: a symbol / footprint
     item is released once (a second release of the name fails as duplicate), so it is the drawing of the first push to
@@ -781,16 +842,24 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         try:
             existing = None if dry_run else client.find(ws, it["name"])
             mode, halves, head, pub = change_mode(lg, it, target) if lg else ("params", set(), None, None)
-            if existing and head and not pub:  # in the workspace, never published there from this library (made by
-                mode = "revision"              # hand, an older ecadlib, a release whose answer was lost): what it
-                halves = unpublished_halves(lg, target, sent_models, it, head)   # holds is unknown, so the head goes
-                res["unpublished"] = (f"{it['name']} is in the workspace but this library has no record of publishing "
-                                      f"it there: released again from ledger revision r{head['revision']}")
+            if existing and head and not pub:  # in the workspace, never published there from this library (another
+                # plan folder, made by hand, an older ecadlib, a release whose answer was lost): read back what it holds
+                seen = released_elsewhere(client, existing, it, lg, target) if it.get("status") == "ready" and not why else None
+                if seen == "head":             # this part's drawings already: linked, its first publish is recorded
+                    res["adopted"] = (f"{it['name']} was already in the workspace with this part's drawings (released "
+                                      "elsewhere): no new revision")
+                else:
+                    mode = "revision"          # an earlier revision of this library's: the head goes up
+                    halves = unpublished_halves(lg, target, sent_models, it, head)
+                    res["unpublished"] = (f"{it['name']} is in the workspace but this library has no record of "
+                                          f"publishing it there: released again from ledger revision r{head['revision']}")
             if (existing or (dry_run and lg and _published(lg, it["name"], target))) and mode == "revision":
                 if why:
                     recheck(res, why)
                 else:
                     digests = {k: model_digest(lg, head, k) for k in ("symbols", "footprints")}
+                    if not dry_run:
+                        note_sent(lg, it["name"], target, head)
                     res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves,
                                              head["revision"], dry_run, note, transition, digests))
                     sent_models.update({k: (d, it["name"], head["revision"]) for k, d in (res.get("models") or {}).items()})
@@ -886,6 +955,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     res["detail"] = {"mutation": "desReleaseComponent", "input": inp,
                                      **({"parent_folder": parent} if parent else {})}
                 else:
+                    note_sent(lg, it["name"], target, head)
                     try:
                         client.release(inp)
                     except NexarError as e:    # the schema does not say which folder id the parent takes: try the GUID
@@ -916,7 +986,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         # an in-place result (up_to_date / update_parameters) proves nothing about the drawings: it is recorded only
         # over an earlier publish line of that part (never the first publish of a part already in the workspace)
         ok = {r["name"] for r in results if r["action"] in ("release", "new_revision") or (
-            r["action"] in PUSHED and _published(lg, r["name"], target))}
+            r["action"] in PUSHED and (_published(lg, r["name"], target) or r.get("adopted")))}
         def detail(i):                         # the action, and the workspace revision it left (project check)
             r = next((r for r in results if r["name"] == i["name"]), {})
             d = r.get("detail")

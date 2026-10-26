@@ -607,6 +607,17 @@ class FakeA365:
     def model_data(self, ws, kind, name, folder):
         return self.models[kind].get(name)
 
+    def component_models(self, cid):
+        c = self.component(cid) or {}
+        inp = (c.get("revisions") or [{}])[-1]
+        out = {}
+        for kind, key, link in (("symbols", "symbolItemName", "symbol"), ("footprints", "footprintItemName", "footprints")):
+            ln = inp.get(link)
+            ln = (ln[0] if isinstance(ln, list) else ln) or {}
+            name = inp.get(key) or str(ln.get("id") or "").split(":", 1)[-1]
+            out[kind] = [self.models[kind][name]] if name in self.models[kind] else []
+        return out
+
     def folder_id(self, ws, path):
         return f"folder:{path}"
 

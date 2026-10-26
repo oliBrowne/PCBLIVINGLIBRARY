@@ -238,3 +238,63 @@ def test_a365_model_data_reads_the_item_through_its_download_url():
         pass
     else:
         raise AssertionError("junk read as a footprint")
+
+
+# ---------------------------------------------------------------- R-FX11-1: a component another plan folder released
+def _two_plans(change_b=False):
+    """Plan folders A and B (two BOMs), both with RES-0603-10k; change_b: B's Resistor symbol is another drawing
+    (approved in B: its head revision). -> (planA, libA, planB, libB)"""
+    from ecadlib import change_cli as CC, change_gate as CG
+    from tests.test_change_control import ANN, demo, gate, item, items_of, write_symbol
+    pa, la = demo()
+    pb, lb = demo()
+    if change_b:
+        items = items_of(pb)
+        g = gate(lb)
+        write_symbol(lb, item(items, "RES-0603-10k"), [("1", "A", "passive"), ("2", "B", "passive")])
+        g.settle(items)
+        CG.write_plan(pb, items)
+        CC.approve(pb, ["RES-0603-10k", "RES-0603-4.7k"], who=ANN)
+    return pa, la, pb, lb
+
+
+@lite
+def test_a365_component_another_plan_released_with_another_drawing_is_held():
+    """Two BOMs both have RES-0603-10k; B's drawing differs. B's first push found the component, saw no publish line
+    in B's ledger and released a new revision of A's released component with B's drawing, no hold. Now the
+    component's models are read back: another drawing than any revision of B's holds the part, nothing is sent."""
+    from ecadlib import altium365 as A, ledger as LG, rules as RU
+    from tests.test_hunt1026_altpub import Workspace, _push
+    pa, la, pb, lb = _two_plans(change_b=True)
+    nx, ws = Workspace(), "https://t.365.altium.com"
+    only = lambda p: [i for i in json.loads(Path(p).read_text()) if i["name"] == "RES-0603-10k"]
+    assert _push(A, pa, la, nx, ws, RU.load(None, start=la), items=only(pa))["RES-0603-10k"]["action"] == "release"
+    nx.calls.clear()
+    res = _push(A, pb, lb, nx, ws, RU.load(None, start=lb), items=only(pb))["RES-0603-10k"]
+    assert res["action"] == "skip" and "another drawing" in res["detail"], res
+    assert len(nx.comps["RES-0603-10k"]["revisions"]) == 1
+    assert not [c for c in nx.calls if c[0] in ("release", "upload", "update_params")], nx.calls
+    assert LG.Ledger(lb).published("RES-0603-10k", A.ws_target(ws)) is None
+
+
+@lite
+def test_a365_component_another_plan_released_with_the_same_drawing_is_linked_not_revised():
+    """Identical drawings: B's push made a needless new revision and duplicate -r1 model items (a third plan then
+    failed every run on the duplicate). Now it is this part already: no new revision, B records the publish, and
+    a third plan does the same."""
+    from ecadlib import altium365 as A, ledger as LG, rules as RU
+    from tests.test_change_control import demo
+    from tests.test_hunt1026_altpub import Workspace, _push
+    pa, la, pb, lb = _two_plans()
+    pc, lc = demo()
+    nx, ws = Workspace(), "https://t.365.altium.com"
+    only = lambda p: [i for i in json.loads(Path(p).read_text()) if i["name"] == "RES-0603-10k"]
+    assert _push(A, pa, la, nx, ws, RU.load(None, start=la), items=only(pa))["RES-0603-10k"]["action"] == "release"
+    for p, l in ((pb, lb), (pc, lc), (pc, lc)):
+        nx.calls.clear()
+        res = _push(A, p, l, nx, ws, RU.load(None, start=l), items=only(p))["RES-0603-10k"]
+        assert res["action"] in ("up_to_date", "update_parameters"), res
+        assert not [c for c in nx.calls if c[0] in ("release", "upload")], nx.calls
+        assert LG.Ledger(l).published("RES-0603-10k", A.ws_target(ws)) is not None
+    assert len(nx.comps["RES-0603-10k"]["revisions"]) == 1
+    assert not [k for k in nx.wmodels if k[1].endswith("-r1")], nx.wmodels
