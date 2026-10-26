@@ -577,8 +577,8 @@ class Workspace:
     def release_check(self, bom, allow=(), unallow=(), user=None):
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
         failures (allow) or taking that back (unallow). user is recorded as the person who gave the allow
-        (approvals' no_self_approval uses it); with no user it is this computer's user (approvals.identity, as the CLI
-        records it), never nobody. Never touches the network.
+        (approvals' no_self_approval uses it): an allow needs it (refused without, as an approval is), never taken from
+        this computer's identity, which on a shared computer is not who clicked. Never touches the network.
         While another run holds the library lock (a librarian run, a publisher), the decision is recorded in
         plan.json at once under plan.lock only: that run keeps decisions recorded meanwhile (librarian DECISIONS,
         save_plan), and the release itself goes into the ledger when a writer next settles the library (the run's
@@ -608,6 +608,13 @@ class Workspace:
 
     def _release_check(self, bom, allow=(), unallow=(), user=None, record=True):
         from . import release_check as RC
+        user = user.strip() if isinstance(user, str) else ""
+        if allow:                                          # as _approve_part: never this machine's git identity, which on a
+            if not user:                                   # shared computer names someone else than who clicked
+                raise ValueError("say who you are: type your name to release a part anyway (user is required, e.g. "
+                                 "\"Ann Lee <ann@example.com>\"); it is recorded so that person cannot also approve it")
+            if len(user) > 200 or any(c in user for c in "\r\n\0"):
+                raise ValueError("user must be one line of at most 200 characters")
         bom_path = self._bom_path(bom)
         out = self._librarian_dir(bom_path)
         plan_f = out / "plan.json"
@@ -619,9 +626,8 @@ class Workspace:
         if unknown:
             raise ValueError(f"not parts of this plan: {', '.join(sorted(unknown))}")
         rows = RC.apply(items, out, list(allow), list(unallow), who="ecadlib ui/mcp", rules=self.rules())
-        if allow:                                          # always a person, so no_self_approval can see who released it:
-            from .approvals import identity, post_check, stamp_allow
-            user = identity(user if isinstance(user, str) else None, cwd=out)   # no name given -> this machine's user, as the CLI
+        if allow:                                          # the person who released it, so no_self_approval can see them
+            from .approvals import post_check, stamp_allow
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
         if allow and record:                               # change control: revision 1 of what was released

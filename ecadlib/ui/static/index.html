@@ -1208,8 +1208,10 @@ function undoPending(part) { const d = pending.get(part); if (d && d.toast) { co
 window.addEventListener("pagehide", () => pending.forEach(d => { if (d.toast) { d.toast.close(); } }));
 // release anyway: recorded at once; Undo takes it back (Hold it again)
 async function release(part, allow) {
+  const who = allow ? signer(popen ? $("#perr") : $("#liberr"), "Type your name in \u201cYour name\u201d first: releasing a part anyway is recorded under your name, so someone else signs it off. There is no login, so nothing fills it in for you.") : $("#signer").value.trim();
+  if (allow && !who) return;
   try {
-    const rc = await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: $("#signer").value.trim() || null });
+    const rc = await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: who });
     if (rc.pending) toast(`${part}: ${rc.pending}.`);
     await loadParts(); loadStatus().catch(() => {});
     const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code)), st = p && effective(p);
@@ -1315,9 +1317,9 @@ const store = { get(k) { try { return localStorage.getItem(k) || ""; } catch (e)
 $("#signer").value = store.get("ecadlib.signer"); $("#signrole").value = store.get("ecadlib.role");
 $("#signer").addEventListener("change", e => store.set("ecadlib.signer", e.target.value.trim()));
 $("#signrole").addEventListener("change", e => store.set("ecadlib.role", e.target.value.trim()));
-function signer() {
+function signer(box, msg) {
   const who = $("#signer").value.trim();
-  if (!who) { banner($("#approut"), "Type your name first: it is recorded with your decision. There is no login, so nothing fills it in for you."); $("#signer").focus(); }
+  if (!who) { banner(box || $("#approut"), msg || "Type your name first: it is recorded with your decision. There is no login, so nothing fills it in for you."); $("#signer").focus(); }
   return who;
 }
 async function decide(part, decision, btn) {

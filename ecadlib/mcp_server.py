@@ -102,7 +102,8 @@ TOOLS = [
     {"name": "release_check",
      "description": "Re-run the release check on the librarian's plan for a BOM. allow releases the named parts despite "
                     "their current failures (only when the user has looked and agreed; it is recorded in the plan); "
-                    "unallow takes that back. user names the person giving the allow (recorded for sign-off). Held "
+                    "unallow takes that back. user is the person giving the allow, required with allow (recorded for "
+                    "sign-off; ask the user who they are and pass their own answer, never invent a name). Held "
                     "parts are never pushed to Altium 365.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"},

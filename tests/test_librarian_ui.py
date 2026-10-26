@@ -43,12 +43,12 @@ def test_workspace_librarian_and_release_check():
         assert seen[0] == (0, 14) and seen[-1][0] == 14, seen[-3:]
         assert {"librarian/sample_bom/review.md", "librarian/sample_bom/plan.json"} <= set(r["reports"]), r["reports"]
         held = next(x["part"] for x in r["review"] if x["status"] == "held")
-        r2 = ws.release_check(bom, allow=[held])
+        r2 = ws.release_check(bom, allow=[held], user="Ann Lee")
         assert next(x for x in r2["review"] if x["part"] == held)["allowed"] is True
         r3 = ws.release_check(bom, unallow=[held])
         assert next(x for x in r3["review"] if x["part"] == held)["allowed"] is False
         try:
-            ws.release_check(bom, allow=["NOT-A-PART"])
+            ws.release_check(bom, allow=["NOT-A-PART"], user="Ann Lee")
             raise AssertionError("unknown part accepted")
         except ValueError as e:
             assert "NOT-A-PART" in str(e)
@@ -75,9 +75,9 @@ def test_ui_librarian_endpoints():
             res = wait_job(call, j["job"])
             assert res["state"] == "done" and res["result"]["parts"] == 14, res
             held = next(x["part"] for x in res["result"]["review"] if x["status"] == "held")
-            st, r = call("POST", "/api/release-check", {"bom": bom, "allow": [held]})
+            st, r = call("POST", "/api/release-check", {"bom": bom, "allow": [held], "user": "Ann Lee"})
             assert st == 200 and any(x["allowed"] for x in r["review"]), r
-            assert call("POST", "/api/release-check", {"bom": bom, "allow": held})[0] == 400     # must be a list
+            assert call("POST", "/api/release-check", {"bom": bom, "allow": held, "user": "Ann Lee"})[0] == 400     # must be a list
             st, e = call("POST", "/api/librarian/run", {"bom": bom, "sources": ["nope"]})
             res = wait_job(call, e["job"])
             assert res["state"] == "error" and "unknown sources" in res["error"], res
