@@ -135,7 +135,10 @@ class CachedHTTP:
         A 2xx answer whose body is an error (error_body) is neither stored nor served from an older cache entry."""
         f = self.dir / f"{self._key(method, key_url(url), body, headers)}.json"
         d = None
-        bad = lambda st, text: 200 <= st < 300 and (error_body(text) or page_not_data(url, text))
+        # a 404 is kept too (a part that is not there stays not there), unless it is an HTML page answering a data
+        # URL: a proxy / captive portal's block page, not the origin's own "not found"
+        bad = lambda st, text: (200 <= st < 300 and (error_body(text) or page_not_data(url, text))) or \
+            (st == 404 and page_not_data(url, text))
         if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))

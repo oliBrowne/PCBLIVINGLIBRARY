@@ -53,6 +53,37 @@ def test_with_no_code_in_the_part_number_a_drawing_naming_another_package_code_i
     assert OD.names_it(["SOIC-14 package outline D0014A. 14 pins, DIM MIN MAX, SO-14"], "74HC14", own={"SO14"})
 
 
+# ---------------------------------------------------------------- R-CF-3: no cached "not found" from a proxy's page
+class _R:
+    def __init__(self, status, text):
+        self.status_code, self.text, self.ok = status, text, 200 <= status < 300
+
+
+@lite
+def test_an_html_404_for_a_data_url_is_not_cached_but_a_real_404_is(tmp_path, monkeypatch):
+    from ecadlib import httpcache as H
+    h = H.CachedHTTP(tmp_path / "c", min_interval=0)
+    page = "<!DOCTYPE html><html><body>Blocked by proxy policy</body></html>"
+    api = "https://api.digikey.com/products/v4/search/LM358DR/productdetails"
+    monkeypatch.setattr(h.s, "request", lambda *a, **k: _R(404, page))
+    assert h.get(api).status == 404
+    monkeypatch.setattr(h.s, "request", lambda *a, **k: _R(200, '{"Product": {"ManufacturerProductNumber": "LM358DR"}}'))
+    r = h.get(api)
+    assert not r.from_cache and r.status == 200, (r.from_cache, r.status)       # asked again, on a working network
+    # the origin's own 404 for data (JSON), or a 404 web page for a web page, is still cached
+    for url, text in (("https://api.digikey.com/products/v4/search/NOPART/productdetails", '{"detail": "Not Found"}'),
+                      ("https://www.ti.com/product/NOPART", page)):
+        monkeypatch.setattr(h.s, "request", lambda *a, **k: _R(404, text))
+        h.get(url)
+        assert h.get(url).from_cache, url
+    # an older cache entry holding such a page is not served either
+    H.CachedHTTP.__init__(h, tmp_path / "c", min_interval=0, offline=True)
+    f = tmp_path / "c" / f"{h._key('GET', H.key_url(api), None)}.json"
+    f.write_text('{"url": "%s", "status": 404, "text": "%s"}' % (api, page), encoding="utf-8")
+    r = h.get(api)
+    assert not r.from_cache and r.status == 0, (r.from_cache, r.status)
+
+
 # ---------------------------------------------------------------- R-CF-2: the browser takes only the link's own PDF
 _PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 _HTML = (b"<!doctype html><html><body><h1>LM358DR</h1><a href='/lit/ds/lm358.pdf'>Datasheet</a>"
