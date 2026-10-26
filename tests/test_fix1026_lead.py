@@ -72,3 +72,19 @@ def test_ledger_proposed_file_is_never_a_windows_device_name():
         assert stem.upper() not in ("AUX", "CON", "NUL", "COM1", "LPT9"), (part, LG.safe_name(part))
     assert LG.safe_name("AUX") != LG.safe_name("AUX_")
     assert LG.safe_name("R1") == "R1"
+
+
+@lite
+def test_an_upload_cannot_be_a_program(tmp_path):
+    # R-ST-6: "Z:\ws\UPLOAD~1\...\ecadlib.exe" or "uploads.\" got past a string check on a non-Windows server; the
+    # root fix is that no program is ever stored in the workspace's uploads
+    from ecadlib.app import Workspace
+    ws = Workspace(str(tmp_path / "ws"), offline=True)
+    for name in ("ecadlib.exe", "python.EXE", "run.bat", "x.cmd", "a.ps1", "setup.msi", "evil.exe.", "evil.exe "):
+        try:
+            ws.save_upload(name, b"MZ")
+            raise AssertionError(name)
+        except ValueError as e:
+            assert "not a BOM" in str(e), (name, e)
+    assert not list((ws.root / "uploads").rglob("*.*")) if (ws.root / "uploads").exists() else True
+    assert ws.save_upload("bom.csv", b"Ref,MPN\nR1,X\n").endswith("bom.csv")

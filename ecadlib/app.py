@@ -193,6 +193,10 @@ class Workspace:
         name = self.safe_name(filename)
         if WIN_DEVICE.fullmatch(name):                # con.csv, NUL.xlsx: a device on Windows (the BOM would be lost)
             name = "_" + name
+        # only BOMs belong here: a program stored here could be named as the Altium menu's command (MCP altium_menu)
+        if re.search(r"\.(?:exe|com|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|msi|msp|dll|scr|cpl|lnk|hta|pif|reg)[ .]*$",
+                     name, re.I):
+            raise ValueError(f"{filename}: a program or script is not a BOM (upload a .csv, .xlsx or .txt file)")
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
         for _ in range(20):
             d = self.root / "uploads" / f"{stamp}-{secrets.token_hex(3)}"
