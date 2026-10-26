@@ -1067,13 +1067,20 @@ def symbol_text(key, mpn=""):
 # ---------------------------------------------------------------- one part
 # another diode named, or the LED word naming what the part is for ('for LED', 'LED driver', 'LED backlight boost')
 _OTHER_DIODE = re.compile(r"schottky|zener|\bTVS\b|transient|rectifier|\bESD\b|varactor|varicap|switching diode|"
-                          r"signal diode|photo ?diode|suppressor|\bdiode\b", re.I)
+                          r"signal diode|photo ?diode|suppressor|protector|\bshunt\b|\bdiode\b", re.I)
+# a diode / device type named before the LED's clause ('Zener diode for LED protection, white LED string'): it is
+# the part unless the LED is its own clause's head noun (R-FX9-4)
+_NAMED_OTHER = re.compile(r"schottky|zener|\bTVS\b|transient|rectifier|\bESD\b|varactor|varicap|photo ?diode|"
+                          r"suppressor|protector|\bshunt\b", re.I)
+_LED_HEAD = {"smd", "smt", "tht", "chip", "indicator", "lamp", "emitter", "emitting", "diode", "light", "package", "pcb",
+             "through", "surface", "side", "top", "right", "reverse"}
 # a word that only an LED has next to it: its colour, wavelength, size or package
 _LED_LOOK = re.compile(r"\b(?:red|green|blue|white|yellow|amber|orange|pink|purple|violet|cyan|RGBW?|warm|cool|"
                        r"neutral|IR|infrared|UV|ultraviolet|bi-?colou?r|dual[ -]colou?r|super ?flux)\b|"
                        r"\d{3,4}\s?nm\b|(?<![\d.])\d(?:\.\d)?\s?mm\b|\b(?:3528|5050|2835|3014|5630|5730|PLCC-?\d?)\b", re.I)
 _LED_FOR = re.compile(r"\b(?:for|in|of|to|with|drives?|driving|protects?|protecting)\b[^,;()]*$", re.I)
-_LED_USE = re.compile(r"^[\s-]*(?:driver|backlight\w*|string|strip|lighting|boost|dimm\w*|protect\w*|surge|bias|supply)\b",
+_LED_USE = re.compile(r"^[\s-]*(?:driver|backlight\w*|string|strip|lighting|boost|dimm\w*|protect\w*|surge|bias|supply|"
+                      r"shunt|bypass)\b",
                       re.I)
 
 
@@ -1090,6 +1097,10 @@ def says_led(description):
         ends = [k for k in (d.find(c, m.end()) for c in ",;()") if k >= 0]
         pre, post = d[a:m.start()], d[m.end():min(ends) if ends else len(d)]
         if _LED_FOR.search(pre):
+            continue
+        nxt = re.match(r"[\s-]*([A-Za-z]+)", post)
+        head = not nxt or nxt.group(1).lower() in _LED_HEAD or bool(_LED_LOOK.fullmatch(nxt.group(1)))
+        if not head and _NAMED_OTHER.search(d[:a]):      # 'Zener ..., white LED string': the Zener's use
             continue
         if _LED_LOOK.search(pre + " " + post):
             return True

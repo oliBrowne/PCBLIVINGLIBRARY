@@ -667,6 +667,18 @@ def test_parity_large_footprint_lost_narrow_bridge_is_an_error(tmp_path):
     assert any("F.Cu copper" in m for m in _errors(P.footprint_pair(t, _pcblib(tmp_path, t, lambda f: f.update(regions=[])))))
 
 
+# --- R-FX9-4: a protection diode named before the LED words is not an LED ----------------------------------------
+
+def test_says_led_named_other_diode_wins_unless_the_led_is_the_head_noun():
+    from ecadlib import stdparts as S
+    for d in ("Zener diode for LED protection, white LED string", "Zener 3.3V (LED shunt)", "Open LED protector",
+              "LED shunt protector 0603", "TVS diode, LED protection, 0603", "Schottky diode, LED backlight driver, white"):
+        assert S.part_kind("Diodes", "", d) == "D", d
+    for d in ("Red Zener-protected LED", "Zener-protected white LED", "LED, white", "ESD protected LED, white",
+              "LED backlight white 3528", "Status LED (green), protects nothing", "IR LED 940nm"):
+        assert S.part_kind("Diodes", "", d) == "LED", d
+
+
 # --- R-FX9-2: a stroked custom-pad polygon is written with KiCad's round corners -----------------------------------
 
 _STROKED = '''(footprint "JSTLIKE" (version 20221018) (layer "F.Cu")
