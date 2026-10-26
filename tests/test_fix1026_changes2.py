@@ -151,3 +151,57 @@ def test_fix2_rrc2_kicad_export_ships_the_released_footprint_not_an_edit_saved_m
     shipped = (w / "kx" / "ecadlib.pretty" / "C_0402_1005Metric.kicad_mod").read_text(encoding="utf-8")
     assert "(size 0.40 0.62)" not in shipped, "the hand edit saved during the export was shipped"
     assert any("changed while" in x for x in rep["warnings"]), rep["warnings"]
+
+
+# ------------------------------------------------------------------ R-RC-4: CLI decisions wait briefly for plan.lock
+@lite
+def test_fix2_rrc4_cli_approve_waits_for_a_short_plan_write_instead_of_refusing(tmp_path, monkeypatch):
+    """`ecadlib approve PLAN reject` refused at once ("decide again in a minute") whenever another command held
+    plan.lock, even for the fraction of a second a plan write takes: under load most decisions were refused. It now
+    waits a few seconds (bounded: a holder that never lets go still gets a refusal, no hang)."""
+    from ecadlib import approvals as AP
+    from ecadlib.fsutil import plan_lock
+    from tests.ui_fixture import build
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        ws, bom = build(tmp_path / "ws")
+    plan = ws.root / "librarian" / "sample_bom" / "plan.json"
+    held, done = threading.Event(), threading.Event()
+
+    def writer():                                    # another command's short plan write (1 s)
+        with plan_lock(ws.root, wait=True):
+            held.set()
+            time.sleep(1.0)
+        done.set()
+    t = threading.Thread(target=writer, daemon=True)
+    t.start()
+    assert held.wait(10)
+    t0 = time.time()
+    with contextlib.redirect_stdout(io.StringIO()):
+        AP.main([str(plan), "reject", "--part", "CAP-0402-100nF", "--user", ANN, "-m", "wrong dielectric"])
+    assert time.time() - t0 < 20
+    assert [a["decision"] for a in _items(plan)["CAP-0402-100nF"].get("approvals") or []] == ["reject"]
+    t.join(10)
+    monkeypatch.setattr(AP, "DECISION_WAIT", 0.5)    # a holder that never lets go: refused after the bounded wait
+    stop = threading.Event()
+
+    def stuck():
+        with plan_lock(ws.root, wait=True):
+            held.set()
+            stop.wait(20)
+    held.clear()
+    t2 = threading.Thread(target=stuck, daemon=True)
+    t2.start()
+    assert held.wait(10)
+    try:
+        t0 = time.time()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                AP.main([str(plan), "approve", "--part", "CAP-0402-100nF", "--user", ANN])
+            raise AssertionError("not refused")
+        except SystemExit as e:
+            assert "decide again" in str(e.code), e.code
+        assert time.time() - t0 < 10
+    finally:
+        stop.set()
+        t2.join(10)

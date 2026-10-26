@@ -409,6 +409,9 @@ def status_rows(items, policy, base="."):
     return out
 
 
+DECISION_WAIT = 30                                     # seconds `ecadlib approve` waits for plan.lock (short writes)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Approve or reject plan items before altium365 push releases them")
     ap.add_argument("plan")
@@ -423,8 +426,8 @@ def main(argv=None):
     ws = plan_workspace(a.plan) if a.action != "status" else None
     if ws is None:
         return _run(a)
-    from .fsutil import plan_lock                      # the web UI may be recording into this plan
-    with plan_lock(ws, wait=False) as free:
+    from .fsutil import plan_lock                      # the web UI may be recording into this plan: plan.lock is held
+    with plan_lock(ws, wait=True, timeout=DECISION_WAIT) as free:   # only for short writes, so wait a little
         if not free:
             sys.exit("another ecadlib command is changing this plan right now; decide again in a minute")
         return _run(a)
