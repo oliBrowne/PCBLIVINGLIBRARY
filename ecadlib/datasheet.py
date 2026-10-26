@@ -1718,6 +1718,7 @@ def sanity(spec, review, evidence=""):
     if t == "gullwing" and ls and bw and ls[0] <= bw[2]:
         review.append(f"lead_span min {ls[0]} <= body_width max {bw[2]}")
     review.extend(_feet_outside(spec))
+    review.extend(_qfp_rows(spec))
     ball, py = g("ball_diameter"), spec.get("pitch_y")
     near = min(x for x in (e, py, 99) if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0)
     if t == "bga" and ball and near < 99 and ball[1] >= 0.9 * near:      # (real balls: 0.3 at 0.5, 0.75 at 1.27 mm)
@@ -1792,6 +1793,28 @@ def _feet_outside(spec):
 
 
 REVERSE_PINNED = re.compile(r"revers\w*[- ]?pin|\bSOT-?\d+R\b", re.I)   # "reverse pinning", SOT-143R (not "reverse current")
+
+
+def _qfp_rows(spec):
+    """A rectangular QFP (in footprint_gen's frame: qfp_frame) whose read can't be built right: the side with more pins
+    along the shorter body side (the left/right rows run along body_width), or one lead_span only, which builds all
+    four rows at it. A square QFP has one span and no long side. -> review lines (a failed read)."""
+    if spec.get("package_type") != "qfp":
+        return []
+    L, W = _dim(spec.get("body_length")), _dim(spec.get("body_width"))
+    if not (L and W) or abs(L[1] - W[1]) <= max(0.3, 0.05 * min(L[1], W[1])):
+        return []
+    out = []
+    nlr, ntb = spec.get("pins_left_right"), spec.get("pins_top_bottom")
+    if isinstance(nlr, int) and isinstance(ntb, int) and nlr != ntb and (nlr > ntb) != (W[1] > L[1]):
+        out.append(f"pins_left_right {nlr} and pins_top_bottom {ntb} put more pins along the shorter side of the "
+                   f"{L[1]:g} x {W[1]:g} mm body (the left/right rows run along body_width): the rows or the body are "
+                   "read the other way round, which is implausible (check them against the drawing)")
+    if spec.get("lead_span") is not None and spec.get("lead_span_y") is None:
+        out.append(f"lead_span_y missing: a rectangular {L[1]:g} x {W[1]:g} mm QFP has a different span across each "
+                   "pair of sides, and one lead_span would build all four rows at it, which is implausible (give "
+                   "lead_span_y, the span across the top and bottom rows)")
+    return out
 
 
 def _listed_layout(spec, evidence=""):

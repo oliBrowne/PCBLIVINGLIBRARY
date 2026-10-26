@@ -476,6 +476,26 @@ def test_fx2_4_an_inch_slip_on_a_big_exposed_pad_is_held():
     assert DR.hold_reasons(dict(spec(1.0), needs_review=[line(0.275)])) == []
 
 
+
+def test_fx2_7_a_rectangular_qfp_with_rows_against_the_body_or_one_span_never_builds_wrong():
+    """Every tree built these wrong: rows swapped on a rectangular QFP (more pins along the shorter side), body and
+    spans swapped with the rows as drawn, or only the long span read (no lead_span_y: all four rows at it)."""
+    for t in (QFP52, {"name": "QFP-48_12x14mm_P0.8mm", "n": 48, "e": 0.8, "bl": 12, "bw": 14, "ls": 14, "lsy": 16,
+                      "nlr": 13, "ntb": 11, "b": 0.35},
+              {"name": "QFP-40_10x12mm_P0.8mm", "n": 40, "e": 0.8, "bl": 10, "bw": 12, "ls": 12, "lsy": 14, "nlr": 11,
+               "ntb": 9, "b": 0.35}):
+        kind, _, right = _qfp_read(t)
+        assert kind == "ok" and right != "refused", t["name"]
+        for bad in (dict(t, nlr=t["ntb"], ntb=t["nlr"]),
+                    dict(t, bl=t["bw"], bw=t["bl"], ls=t["lsy"], lsy=t["ls"]),
+                    dict(t, ls=t["lsy"], lsy=None)):
+            kind, hold, got = _qfp_read(bad)
+            assert got in ("refused", right) or (kind == "failed" and hold), (t["name"], bad, kind)
+    sq = {"name": "QFP-44_10x10mm_P0.8mm", "n": 44, "e": 0.8, "bl": 10, "bw": 10, "ls": 12, "lsy": None, "nlr": 11,
+          "ntb": 11, "b": 0.35}
+    assert _qfp_read(sq)[0] == "ok"                       # square: one span is the drawing's
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
