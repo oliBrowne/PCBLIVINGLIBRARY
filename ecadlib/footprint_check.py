@@ -53,8 +53,43 @@ def _f(v):
     return float(v)
 
 
-def _graphics(tree, layer):
-    """Segments (x1, y1, x2, y2, width) on a layer, from fp_line / fp_rect / fp_poly / fp_circle bounding boxes."""
+ARC_TOL = 0.002                                      # mm a sampled arc's chords may lie inside the real arc
+
+
+def _arc_points(g):
+    """The points along an arc node (fp_arc / gr_arc), in file coordinates: KiCad 6+ (start) (mid) (end), or KiCad 5
+    (start = centre) (end = arc start) (angle, degrees, clockwise on screen: y points down). Sampled so no chord lies
+    more than ARC_TOL inside the arc; a straight "arc" (start, mid, end in a line) is its two ends."""
+    s, e, m = sexpr.first(g, "start"), sexpr.first(g, "end"), sexpr.first(g, "mid")
+    if m:
+        (x1, y1), (xm, ym), (x2, y2) = ((_f(n[1]), _f(n[2])) for n in (s, m, e))
+        d = 2 * (x1 * (ym - y2) + xm * (y2 - y1) + x2 * (y1 - ym))
+        if abs(d) < 1e-12:
+            return [(x1, y1), (x2, y2)]
+        cx = ((x1 * x1 + y1 * y1) * (ym - y2) + (xm * xm + ym * ym) * (y2 - y1) + (x2 * x2 + y2 * y2) * (y1 - ym)) / d
+        cy = ((x1 * x1 + y1 * y1) * (x2 - xm) + (xm * xm + ym * ym) * (x1 - x2) + (x2 * x2 + y2 * y2) * (xm - x1)) / d
+        a0, am, a2 = (math.atan2(y - cy, x - cx) for x, y in ((x1, y1), (xm, ym), (x2, y2)))
+        span = (a2 - a0) % (2 * math.pi)
+        if (am - a0) % (2 * math.pi) > span:         # the mid point is the other way round
+            span -= 2 * math.pi
+        r = math.hypot(x1 - cx, y1 - cy)
+    else:
+        ang = sexpr.first(g, "angle")
+        if not ang:
+            return [(_f(s[1]), _f(s[2])), (_f(e[1]), _f(e[2]))]
+        cx, cy = _f(s[1]), _f(s[2])
+        r = math.hypot(_f(e[1]) - cx, _f(e[2]) - cy)
+        a0, span = math.atan2(_f(e[2]) - cy, _f(e[1]) - cx), math.radians(_f(ang[1]))
+    if not (math.isfinite(r) and math.isfinite(span)):
+        return [(_f(s[1]), _f(s[2])), (_f(e[1]), _f(e[2]))]
+    step = 2 * math.acos(max(-1.0, 1 - ARC_TOL / r)) if r > ARC_TOL else math.pi / 2
+    n = min(720, max(2, math.ceil(abs(span) / step)))
+    return [(cx + r * math.cos(a0 + span * i / n), cy + r * math.sin(a0 + span * i / n)) for i in range(n + 1)]
+
+
+def _graphics(tree, layer, raw_arcs=False):
+    """Segments (x1, y1, x2, y2, width) on a layer, from fp_line / fp_rect / fp_poly / fp_circle bounding boxes and
+    sampled fp_arcs. raw_arcs: an arc as the points written in the file (start, mid, end), for the grid rule."""
     segs, polys = [], []
     for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
         for g in sexpr.find(tree, kind):
@@ -74,9 +109,10 @@ def _graphics(tree, layer):
                 segs += [(cx + r * math.cos(a), cy + r * math.sin(a), cx + r * math.cos(b), cy + r * math.sin(b), w)
                          for a, b in ((i * math.pi / 8, (i + 1) * math.pi / 8) for i in range(16))]
                 continue
-            if kind == "fp_arc":
+            if kind == "fp_arc":                         # the real arc, sampled (not a line or two chords)
                 m = sexpr.first(g, "mid")
-                pts = [(_f(s[1]), _f(s[2]))] + ([(_f(m[1]), _f(m[2]))] if m else []) + [(_f(e[1]), _f(e[2]))]
+                pts = ([(_f(s[1]), _f(s[2]))] + ([(_f(m[1]), _f(m[2]))] if m else []) + [(_f(e[1]), _f(e[2]))]
+                       if raw_arcs else _arc_points(g))
                 segs += [(*a, *b, w) for a, b in zip(pts, pts[1:])]
                 continue
             x1, y1, x2, y2 = _f(s[1]), _f(s[2]), _f(e[1]), _f(e[2])
@@ -456,7 +492,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
             add("error", "courtyard", "courtyard is not a closed outline")
         if any(abs(s[4] - 0.05) > EPS for s in crt if s[4]):
             add("warning", "courtyard", "courtyard line width is not 0.05 mm")
-        if any(abs(v * 100 - round(v * 100)) > 1e-3 for s in crt for v in s[:4]):
+        if any(abs(v * 100 - round(v * 100)) > 1e-3 for s in _graphics(tree, "F.CrtYd", raw_arcs=True)[0] for v in s[:4]):
             add("warning", "courtyard", "courtyard corners are not on the 0.01 mm grid")
 
     # ---- exposed-pad paste

@@ -83,3 +83,48 @@ def test_nexar_signin_times_out_naming_the_wrong_state():
         assert "state" in str(e), e
     else:
         raise AssertionError("a forged state was accepted")
+
+
+# ---------------------------------------------------------------- R-BR-4: silk arcs measured along the real arc
+_ARC_BASE = '''(module "T" (layer F.Cu)
+  (fp_line (start -2 -2) (end 2 -2) (layer F.CrtYd) (width 0.05))
+  (fp_line (start 2 -2) (end 2 2) (layer F.CrtYd) (width 0.05))
+  (fp_line (start 2 2) (end -2 2) (layer F.CrtYd) (width 0.05))
+  (fp_line (start -2 2) (end -2 -2) (layer F.CrtYd) (width 0.05))
+  (fp_line (start -1.5 -1.5) (end 1.5 -1.5) (layer F.Fab) (width 0.1))
+  %s
+  (pad 1 smd rect (at %s) (size 0.4 0.4) (layers F.Cu F.Paste F.Mask))
+  (pad 2 smd rect (at 0 1.8) (size 0.4 0.4) (layers F.Cu F.Paste F.Mask))
+)'''
+
+
+def _silk(arc, pad1):
+    from ecadlib import footprint_check as FC
+    return [i for i in FC.check(_ARC_BASE % (arc, pad1)) if i[1] == "silk" and "width" not in i[2]]
+
+
+def test_kicad5_silk_arc_over_a_pad_is_found():
+    # KiCad 5: (start centre) (end arc start) (angle): a half circle r = 1 from (1, 0) through (0, 1) to (-1, 0)
+    # (clockwise on screen, y down); pad 1 at (0, 1) sits on it. Was read as a line from the centre to (1, 0).
+    k5 = "(fp_arc (start 0 0) (end 1 0) (angle 180) (layer F.SilkS) (width 0.12))"
+    assert any(i[0] == "error" for i in _silk(k5, "0 1")), _silk(k5, "0 1")
+    # the other half (through (0, -1)) is 0.8 mm clear of a pad at (0, 1) less its half size: no finding
+    k5b = "(fp_arc (start 0 0) (end 1 0) (angle -180) (layer F.SilkS) (width 0.12))"
+    assert not _silk(k5b, "0 1"), _silk(k5b, "0 1")
+
+
+def test_kicad6_silk_arc_is_not_two_chords():
+    # a half circle r = 1 through (0, -1): pad 1 at 45 degrees on the arc. The chords start-mid-end lie 0.29 mm inside.
+    a = "(fp_arc (start 1 0) (mid 0 -1) (end -1 0) (layer F.SilkS) (width 0.1))"
+    c = math.cos(math.pi / 4)
+    assert any(i[0] == "error" for i in _silk(a, f"{c + 0.1:.3f} {-c - 0.1:.3f}")), _silk(a, f"{c + 0.1:.3f} {-c - 0.1:.3f}")
+
+
+def test_arc_courtyard_box_is_the_arc():
+    from ecadlib import footprint_check as FC, sexpr
+    t = sexpr.parse('(footprint "T" (fp_arc (start 1 0) (mid 0 -1) (end -1 0) (stroke (width 0.05)) (layer "F.CrtYd")))')
+    bb = FC._bbox(FC._graphics(t, "F.CrtYd")[0])
+    assert abs(bb[1] + 1) < 0.01 and abs(bb[0] + 1) < 1e-9 and abs(bb[2] - 1) < 1e-9, bb
+    t5 = sexpr.parse('(module "T" (fp_arc (start 0 0) (end 1 0) (angle 90) (layer F.CrtYd) (width 0.05)))')
+    bb = FC._bbox(FC._graphics(t5, "F.CrtYd")[0])     # quarter circle (1, 0) -> (0, 1), clockwise on screen
+    assert abs(bb[0]) < 0.01 and abs(bb[1]) < 0.01 and abs(bb[2] - 1) < 0.01 and abs(bb[3] - 1) < 0.01, bb
