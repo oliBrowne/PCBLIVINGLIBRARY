@@ -201,7 +201,7 @@ def test_release_anyway_toast_reads_the_new_status():
     """Release anyway on a part held for a missing symbol toasted "Released ... it goes to Altium with the next push"
     while the release check kept it held (a missing file cannot be overridden)."""
     fn = PAGE[PAGE.index("async function release("):PAGE.index("async function partClick")]
-    assert 'effective(p) === "held"' in fn and "stays held" in fn, fn
+    assert "st = p && effective(p)" in fn and 'st === "held"' in fn and "stays held" in fn, fn
     assert fn.index("stays held") < fn.index("goes to Altium with the next push"), fn
 
 

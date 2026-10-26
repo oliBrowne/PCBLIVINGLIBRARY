@@ -1,6 +1,6 @@
 """2026-10-26 fixes for review round 4, web UI (R-UI-1, R-UI-2). Offline.
 Run:  python3 -m pytest -q tests/test_fix1026_ui.py   (or python -m tests.run_all)"""
-import contextlib, json
+import contextlib, json, re
 from pathlib import Path
 
 from tests.fixtures_lite import lite
@@ -82,3 +82,15 @@ def test_fix_ui_04_named_release_keeps_the_typed_name(monkeypatch):
         it = next(i for i in json.loads(plan.read_text()) if i["name"] == "USBC-FAKE")
         assert it["allow"]["user"] == "Ann Lee", it["allow"]
 
+
+def test_fix_ui_05_release_anyway_toast_follows_the_real_status():
+    """R-UI-2: the toast after Release anyway said "goes to Altium with the next push" for a part awaiting sign-off."""
+    page = (ROOT / "ecadlib" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    body = page[page.index("async function release(part, allow)"):]
+    body = body[:body.index("\n}\n")]
+    assert re.search(r'=== "awaiting_approval"', body), "no awaiting_approval branch in release()"
+    i_aw, i_push = body.index('"awaiting_approval"'), body.index("goes to Altium with the next push")
+    assert i_aw < i_push, "the awaiting_approval branch must come before the ready text"
+    branch = body[i_aw:i_push]
+    assert "sign-off" in branch and "missing" in branch, branch
+    assert 'st === "ready"' in body[:i_push], "the next-push text is only for a part that is ready"

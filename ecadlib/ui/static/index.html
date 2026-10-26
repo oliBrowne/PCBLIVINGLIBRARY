@@ -1212,10 +1212,16 @@ async function release(part, allow) {
     const rc = await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: $("#signer").value.trim() || null });
     if (rc.pending) toast(`${part}: ${rc.pending}.`);
     await loadParts(); loadStatus().catch(() => {});
-    const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code));
-    if (allow && p && effective(p) === "held")       // a missing or damaged file cannot be released anyway: say so
-      toast(`${part} stays held: ${hard ? hard.text : (p.reasons[0] || {}).text || "the release check still holds it."} Release anyway cannot override that, so it does not go to Altium.`, { action: "Undo", onAction: () => release(part, false) });
-    else if (allow) toast(`Released ${part} anyway: it goes to Altium with the next push.`, { action: "Undo", onAction: () => release(part, false) });
+    const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code)), st = p && effective(p);
+    const undo = { action: "Undo", onAction: () => release(part, false) };
+    if (allow && st === "held")                      // a missing or damaged file cannot be released anyway: say so
+      toast(`${part} stays held: ${hard ? hard.text : (p.reasons[0] || {}).text || "the release check still holds it."} Release anyway cannot override that, so it does not go to Altium.`, undo);
+    else if (allow && st === "awaiting_approval") {  // the approvals policy still wants a sign-off: it is not pushed yet
+      const missing = ((p.approval || {}).missing || []).join("; ") || "an approval";
+      toast(`Released ${part} anyway: it now waits for sign-off, ${missing}. It goes to Altium once it is approved.`, undo);
+    }
+    else if (allow && st === "ready") toast(`Released ${part} anyway: it goes to Altium with the next push.`, undo);
+    else if (allow) toast(`Released ${part} anyway: it is ${WORD[st] || st || "not in the list"} now.`, undo);
     else toast(`${part} is held again.`);
   } catch (err) { banner(popen ? $("#perr") : $("#liberr"), err.message); }
 }
