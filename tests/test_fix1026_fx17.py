@@ -61,3 +61,19 @@ def test_fx17_3_distributor_aliases_name_the_same_land():
               ("PowerPAK SO-8", "PowerPAK_SO-8_Dual"), ("SOT-363-6", "SOT-23-6"), ("DPAK-3", "TO-252-2_TabPin1"))
     for a, b in differ:
         assert A.lands_differ(a, b) and A.lands_differ(b, a), (a, b)
+
+
+# ---------------------------------------------------------------- R-FX17-4: gap cut only between two pads that were apart
+def test_fx17_4_same_number_or_touching_pads_are_no_gap_cut():
+    """Before (5545275): a pad growing 0.02 mm next to a pad of its own number (a segmented exposed pad, a dual-pitch
+    CP_Radial's two pad 1s) or a pad it already touched counted as a gap cut, so the edit was geometry-major (26 of
+    1,482 KiCad footprints). Those peers are skipped; a real cut between two separate pads is still major."""
+    from ecadlib import change_diff as CD
+    from tests.test_fix1026_gate2 import _kfp
+    seg = lambda w: _kfp([("1", -3, 0, 0.5, 0.3), ("2", 3, 0, 0.5, 0.3), ("3", 0, 0, w, 1.0), ("3", 1.05, 0, 1.0, 1.0)])
+    assert CD.worst(CD.diff(seg(1.0), seg(1.02))) == "geometry-minor"
+    touch = lambda w: _kfp([("1", 0, 0, w, 1.0), ("2", 0.9, 0, 1.0, 1.0), ("3", 5, 0, 1, 1)])
+    assert CD.worst(CD.diff(touch(1.0), touch(1.02))) == "geometry-minor"
+    apart = lambda w: _kfp([("1", -3, 0, 0.5, 0.3), ("2", 3, 0, 0.5, 0.3), ("3", 0, 0, w, 1.0), ("4", 1.05, 0, 1.0, 1.0)])
+    ch = CD.diff(apart(1.0), apart(1.08))
+    assert CD.worst(ch) == "geometry-major" and any("gap to pad 4" in c["text"] for c in ch), ch

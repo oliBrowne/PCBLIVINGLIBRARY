@@ -642,18 +642,22 @@ def _share_copper(p, q):
 
 def _gap_cut(a, b, peers):
     """A pad a -> b whose new size cuts the copper gap to another pad (an exposed pad to its leads too) below GAP_KEEP
-    of what it was, or closes it -> (other pad, old gap, new gap), else None (R-G2-2)."""
+    of what it was, or closes it -> (other pad, old gap, new gap), else None (R-G2-2). A pad of its own number (a
+    segmented exposed pad, a dual-pitch THT pad pair) is one net, and a pad it already touched has no gap to cut: neither
+    counts (R-FX17-4)."""
     ba, bb = _copper_box(a), _copper_box(b)
     if not ba or not bb:
         return None
     for qa, qb in peers or ():
         if qa is a or not (_share_copper(a, qa) and _share_copper(b, qb)):
             continue
+        if a.get("num") and str(qa.get("num")) == str(a["num"]):
+            continue
         qba, qbb = _copper_box(qa), _copper_box(qb)
         if not qba or not qbb:
             continue
         g0, g1 = _box_gap(ba, qba), _box_gap(bb, qbb)
-        if g1 >= g0 - TOL["noise"]:
+        if g0 <= 0 or g1 >= g0 - TOL["noise"]:
             continue
         if g1 <= TOL["noise"] or g1 < GAP_KEEP * g0:
             return qb, g0, g1
