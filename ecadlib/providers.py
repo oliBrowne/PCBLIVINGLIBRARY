@@ -102,6 +102,10 @@ _ALIAS_WORDS = {"TEXASINSTRUMENTS": ["TEXAS", "INSTRUMENTS"], "TECONNECTIVITY": 
                 "ALPHAOMEGA": ["ALPHA", "OMEGA"], "SILICONLABORATORIES": ["SILICON", "LABORATORIES"],
                 "SAMSUNGELECTROMECHANICS": ["SAMSUNG", "ELECTROMECHANICS"], "GLOBALCONNECTOR": ["GLOBAL", "CONNECTOR"],
                 "CIRRUSLOGIC": ["CIRRUS", "LOGIC"], "CENTRALSEMICONDUCTOR": ["CENTRAL", "SEMICONDUCTOR"]}
+# a company's other makers under its own brand, named on their own (distributors list both): the whole key only, so
+# "Wurth" is Würth Elektronik and Würth Electronics Midcom, never any "Wurth <anything>" (Würth Industrie, a fastener
+# trader), and "Catalyst Lighting" is no Catalyst Semiconductor (onsemi)
+_MAKER_GROUP = {"WURTHELEKTRONIK": {"WURTHMIDCOM"}}
 # Nexperia (NXP's Standard Products until 2017) is its own company now, with its own lifecycles and datasheets for the
 # discretes and logic NXP once sold: an NXP line is not matched to a Nexperia listing (nor Philips / Freescale to it).
 
@@ -179,11 +183,11 @@ def same_maker(a, b):
             words, split = _ALIAS_WORDS.get(long_, [long_]), []          # own words, so "Teco" is no "TE"
         if any("".join(ws[:i]) == short for ws in (words, split) for i in range(1, len(ws) + 1)):
             return True
+    if kb in _MAKER_GROUP.get(ka, ()) or ka in _MAKER_GROUP.get(kb, ()):   # Würth Elektronik / Würth Electronics Midcom
+        return True
     wa, wb = _maker_words(a), _maker_words(b)
-    raw = lambda n: "".join(_key_words(n))       # the key before an alias: "Wurth" is WURTH, "Würth ... Midcom" WURTHMIDCOM
-    return any(len(x) == 1 and len(x[0]) >= 3 and x[0] not in _MAKER_GENERIC and y and y[0] == x[0]
-               and (ky.startswith(kx) or (_MAKER_ALIAS.get(raw(n)) == kx != raw(n) and raw(m).startswith(raw(n))))
-               for x, y, kx, ky, n, m in ((wa, wb, ka, kb, a, b), (wb, wa, kb, ka, b, a)))   # not "Vishay" / VPG
+    return any(len(x) == 1 and len(x[0]) >= 3 and x[0] not in _MAKER_GENERIC and y and y[0] == x[0] and ky.startswith(kx)
+               for x, y, kx, ky in ((wa, wb, ka, kb), (wb, wa, kb, ka)))   # not "Vishay" / VPG
 
 
 def describe(text="", category="", package=""):

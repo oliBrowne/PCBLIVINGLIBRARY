@@ -125,6 +125,20 @@ def test_the_same_size_code_twice_reads_as_that_code_in_its_column(tmp_path):
     assert not held.get("footprint") and "two size codes" in held["bom_note"], held
 
 
+# ---------------------------------------------------------------- R-FX4-6: "Wurth" is the Würth companies, not any Wurth
+def test_wurth_matches_only_the_wurth_electronics_companies():
+    from ecadlib.providers import same_maker as S
+    for a, b in (("Wurth", "Würth Elektronik"), ("Wurth", "Wurth Midcom"), ("Wurth", "Würth Electronics Midcom"),
+                 ("Würth", "Würth Elektronik eiSos GmbH & Co. KG"), ("WE", "Würth Elektronik"),
+                 ("Würth Elektronik", "Würth Electronics Midcom"), ("WE", "Würth Electronics Midcom"),
+                 ("Wurth Electronics Inc", "Wurth Midcom Inc"), ("Catalyst", "onsemi"), ("Dialog", "Renesas")):
+        assert S(a, b) and S(b, a), (a, b)
+    for a, b in (("Wurth", "Wurth Industrie"), ("Wurth", "Würth Industrie Service"), ("Würth", "Wurth Lighting"),
+                 ("Catalyst", "Catalyst Lighting"), ("Pericom", "Pericom Tools"),
+                 ("Würth Elektronik", "Wurth Industrie")):
+        assert not S(a, b) and not S(b, a), (a, b)
+
+
 # ---------------------------------------------------------------- Altium project fixtures (R-FX4-1, R-FX4-4)
 def _blk(s):
     import struct
