@@ -75,12 +75,37 @@ def _size_code(cell):
     return m.group(1) if m else ""
 
 
+_UNIT_WORDS = re.compile(r"\b(?:metric|imperial|imp|inch(?:es)?|in|mm|mil|eia|us)\b\.?", re.I)
+
+
+def _pair_size(cell, header):
+    """A cell holding two chip size codes and nothing else ('0603/0201', '0603 (1608)', '0201 (0603 metric)') -> the
+    (footprint text, [note]) it stands for, or None when the cell is not two codes. The codes must be one size in
+    both systems (METRIC_TO_IMPERIAL[a] == b, either order): then it is the inch one, whatever the header says (the
+    first code is not always the header's first system). Two codes that are no such pair are not used: held."""
+    from .kicad_index import METRIC_TO_IMPERIAL
+    bare = _UNIT_WORDS.sub(" ", str(cell))
+    m = re.fullmatch(r"[\s(]*(\d{4,5})[\s)]*[/,;|(\s-]+[\s(]*(\d{4,5})[\s)]*", bare)
+    if not m:
+        return None
+    a, b = m.groups()
+    if METRIC_TO_IMPERIAL.get(a) == b:
+        return b, []
+    if METRIC_TO_IMPERIAL.get(b) == a:
+        return a, []
+    return "", [f"footprint '{cell}' from the column '{header}' holds two size codes that are not one size in metric "
+                "and inch: not used (give the inch size, or the footprint name)"]
+
+
 def metric_size(cell, header):
     """A footprint cell from a millimetre column ('Case Code (mm)') -> (footprint text, [note]). A bare chip size code
     is metric there: '1608' -> '0603', '0603' -> '0201' (read as an inch code it was the wrong part). A bare code
     that is no metric chip size ('1206') cannot be told apart, so it is not used: the part is held for its footprint
     rather than built on a guess. Anything else ('SOT-23-5', 'R_0603_1608Metric') is kept."""
     from .kicad_index import METRIC_TO_IMPERIAL
+    pair = _pair_size(cell, header)
+    if pair is not None:
+        return pair
     m = re.fullmatch(r"\s*(\d{4})\s*(?:mm)?\s*", str(cell))
     if not m:
         return cell, []
@@ -112,6 +137,9 @@ def mixed_size(cell, header):
     from .kicad_index import METRIC_TO_IMPERIAL
     if re.fullmatch(r"\s*\d{4}\s*mm\s*", str(cell)):                # '1608 mm', '0603mm': the cell says metric
         return metric_size(cell, header)
+    pair = _pair_size(cell, header)                               # '0603/0201', '0603 (1608)': the inch one of a pair
+    if pair is not None:
+        return pair
     code = _size_code(cell)
     if not code:
         return cell, []
@@ -451,6 +479,9 @@ def read_bom(path, columns=None, rules=None, root=None):
             note += extra
         elif mixed_fp and d.get("footprint"):                    # an 0603 there is an 0603 or an 0201: held
             d["footprint"], extra = mixed_size(d["footprint"], headers[col["footprint"]])
+            note += extra
+        elif d.get("footprint") and _pair_size(d["footprint"], "") is not None:   # '0603/0201' in any column
+            d["footprint"], extra = _pair_size(d["footprint"], headers[col["footprint"]])
             note += extra
         if not any(d.values()):
             continue

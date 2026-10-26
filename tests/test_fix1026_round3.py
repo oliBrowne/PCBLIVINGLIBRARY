@@ -44,3 +44,36 @@ def test_the_metadata_address_is_refused_even_where_private_addresses_are_allowe
     monkeypatch.setattr(D, "_resolve", _fake_resolve)
     assert D.unsafe_download("http://v6meta.example.org/latest/meta-data/", public=False)
     assert D.unsafe_download("http://[fd00:ec2::254]/latest/meta-data/", public=False)
+
+
+# ---------------------------------------------------------------- R-FX-2: a cell holding both size codes
+def _read_fp(f, header, cells):
+    from ecadlib import bom_triage as T
+    text = f'Designator,Qty,MPN,Manufacturer,"{header}"\n' + "".join(f'R{i},1,RC{i},Yageo,"{c}"\n'
+                                                                     for i, c in enumerate(cells))
+    f.write_bytes(text.encode("utf-8"))
+    with contextlib.redirect_stderr(io.StringIO()):
+        lines, _ = T.read_bom(f)
+    return {l["designator"]: l for l in lines}
+
+
+@lite
+def test_a_cell_with_a_metric_and_an_inch_code_gives_the_inch_one_of_the_pair(tmp_path):
+    from ecadlib.kicad_index import package_of
+    cells = {"0603/0201": "0201", "0201/0603": "0201", "0603 (0201)": "0201", "1608/0603": "0603",
+             "0603 (1608)": "0603", "1608 (0603)": "0603", "0603 1608": "0603", "0201 (0603 metric)": "0201",
+             "01005/0402": "01005", "3216 / 1206": "1206"}
+    for hdr in ("Case (Metric / Imp.)", "Case (Imperial/Metric)", "Case Code (mm)", "Package"):
+        by = _read_fp(tmp_path / "b.csv", hdr, list(cells))
+        for i, (cell, want) in enumerate(cells.items()):
+            assert package_of(by[f"R{i}"].get("footprint") or "") == want, (hdr, cell, by[f"R{i}"])
+
+
+@lite
+def test_two_codes_that_are_no_metric_inch_pair_are_held(tmp_path):
+    for hdr in ("Case (Metric / Imp.)", "Package", "Case Code (mm)"):
+        by = _read_fp(tmp_path / "b.csv", hdr, ["0603/0805", "0402 (0603)", "R_0603_1608Metric", "SOT-23-5"])
+        for d in ("R0", "R1"):
+            assert not by[d].get("footprint") and "two size codes" in by[d].get("bom_note", ""), (hdr, by[d])
+        assert by["R2"]["footprint"] == "R_0603_1608Metric", by["R2"]               # a footprint name is kept
+        assert by["R3"]["footprint"] == "SOT-23-5", by["R3"]
