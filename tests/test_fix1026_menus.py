@@ -95,6 +95,45 @@ def test_rmn1_pcm_refuses_held_parts_of_an_include_held_export(tmp_path):
     assert not any("held" in p for p in rep["problems"]), rep["problems"]
 
 
+
+# ---- R-MN-3: check-bom counts a part as in the library only when the library has it (folder: its DbLib table;
+# Altium 365: a push recorded in the ledger), never because some plan has it ready
+def _checkbom_ws(d):
+    ws, lib = d / "ws", d / "lib"
+    lib.mkdir()
+    pl = ws / "librarian" / "other_bom"
+    pl.mkdir(parents=True)
+    (pl / "plan.json").write_text(json.dumps([{"name": "LM358DR", "status": "ready",
+                                               "parameters": [{"name": "Manufacturer Part Number", "value": "LM358DR"}]}]))
+    bom = d / "bom.csv"
+    bom.write_text("Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #\nU1,1,LM358,SOIC-8,TI,LM358DR\n")
+    return {"workspace": ws, "library": lib, "name": "ecadlib", "port": 8765, "offline": True}, bom, pl
+
+
+@lite
+def test_rmn3_folder_library_counts_only_its_dblib_table(tmp_path):
+    from ecadlib import altium_menu as AM
+    cfg, bom, _ = _checkbom_ws(tmp_path)
+    res = AM.check_bom(cfg, bom, opener=False)
+    assert res["missing"] == 1 and res["offer_fill"] == "1", res
+    (cfg["library"] / "ecadlib.csv").write_text("Table,Part Number,Manufacturer Part Number\nICs,LM358DR,LM358DR\n")
+    res = AM.check_bom(cfg, bom, opener=False)
+    assert res["missing"] == 0 and res["offer_fill"] == "0", res
+
+
+@lite
+def test_rmn3_a365_counts_only_pushed_parts(tmp_path, monkeypatch):
+    from ecadlib import altium_menu as AM, altium365 as A365, ledger as LG
+    cfg, bom, pl = _checkbom_ws(tmp_path)
+    url = "https://acme.365.altium.com"
+    monkeypatch.setattr(AM, "_a365_url", lambda ws: url)
+    res = AM.check_bom(cfg, bom, opener=False)
+    assert res["missing"] == 1, res                          # ready, but never pushed (held at the push)
+    LG.Ledger(pl).append({"event": "publish", "part": "LM358DR", "target": A365.ws_target(url), "revision": 1})
+    res = AM.check_bom(cfg, bom, opener=False)
+    assert res["missing"] == 0 and res["offer_fill"] == "0", res
+
+
 if __name__ == "__main__":
     fails = 0
     for k, f in list(globals().items()):

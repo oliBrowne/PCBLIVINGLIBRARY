@@ -1346,7 +1346,8 @@ def not_found(triage_csv, mpn, item):
 
 
 def _library_mpns(cfg, ws):
-    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item.
+    """MPNs already in the library: the DbLib parts table (any 'part number' column); with Altium 365, also the workspace's
+    own components (pulled) and the parts a push sent there (the ledger's publish lines), never a plan item only ready.
     KiCad (cfg tool kicad): the part number properties of the library's .kicad_sym files, which travel with the
     project (the workspace may not, and a deleted library has nothing in it)."""
     have = set()
@@ -1365,12 +1366,26 @@ def _library_mpns(cfg, ws):
                 have |= {str(v).strip().upper() for k, v in row.items() if k and "part number" in k.lower() and v}
         except (OSError, UnicodeDecodeError, csv.Error):
             continue
-    for plan in sorted((ws.root / "librarian").glob("*/plan.json")) + [ws.root / "altium365" / "workspace_plan.json"]:
+    url = _a365_url(ws)
+    if not url:              # a folder library: only what its DbLib table holds (a ready plan item may never have been
+        return have          # put there: held at the altium-pkg re-check, another BOM's plan not synced)
+    from . import altium365 as A365, ledger as LG
+    target = A365.ws_target(url)
+    try:                     # Altium 365: the workspace's own components (pulled), and the parts a push sent there
+        items = json.loads((ws.root / "altium365" / "workspace_plan.json").read_text(encoding="utf-8"))
+        have |= {_mpn_of(i).strip().upper() for i in items if isinstance(i, dict) and i.get("status") == "existing" and _mpn_of(i)}
+    except (OSError, ValueError, AttributeError):
+        pass
+    for plan in sorted((ws.root / "librarian").glob("*/plan.json")):
         try:
             items = json.loads(plan.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            lg = LG.Ledger(plan.parent)
+            if not lg.exists():
+                continue
+            have |= {_mpn_of(i).strip().upper() for i in items if isinstance(i, dict) and _mpn_of(i)
+                     and lg.published(i.get("name"), target)}
+        except (OSError, ValueError, AttributeError):
             continue
-        have |= {_mpn_of(i).strip().upper() for i in items if i.get("status") in ("ready", "existing") and _mpn_of(i)}
     return have
 
 
