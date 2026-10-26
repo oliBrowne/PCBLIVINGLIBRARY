@@ -64,6 +64,36 @@ def test_pad_outline_of_another_size_is_ignored():
     assert _rot(pad) == 45
 
 
+def _live(lcsc):
+    import json
+    from pathlib import Path
+    return json.loads((Path(__file__).parent / "fixtures" / "easyeda_live" / f"{lcsc}.json").read_text(encoding="utf-8"))
+
+
+def _xy(pad):
+    at = sexpr.first(pad, "at")
+    return float(at[1]), float(at[2])
+
+
+def test_footprint_without_head_origin_is_centred_on_its_pads():
+    # a head with no x / y put the origin at the canvas' 0, 0: every pad a metre away (4000 x 0.254 mm), unnoticed
+    # by footprint_check; the pads' centre is the origin instead, and the notes say so
+    import copy
+    from ecadlib import easyeda_3d as E3
+    ds = copy.deepcopy(_live("C5423")["result"]["packageDetail"]["dataStr"])
+    good = _pads(EC.footprint_to_kicad(ds, "T", []))
+    ref = E3.model_ref(ds)
+    del ds["head"]["x"], ds["head"]["y"]
+    notes = []
+    bad = _pads(EC.footprint_to_kicad(ds, "T", notes))
+    assert any("no origin" in n for n in notes), notes
+    for k, p in good.items():
+        (x0, y0), (x1, y1) = _xy(p), _xy(bad[k])
+        assert abs(x0 - x1) < 0.01 and abs(y0 - y1) < 0.01, (k, _xy(p), _xy(bad[k]))
+    r2 = E3.model_ref(ds)                        # the 3D model is placed from the same origin
+    assert all(abs(a - b) < 0.01 for a, b in zip(ref["origin"], r2["origin"])), (ref["origin"], r2["origin"])
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

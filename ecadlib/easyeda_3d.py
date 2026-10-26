@@ -42,8 +42,8 @@ def model_ref(data):
     (rx, ry, rz), size (w, h) mm or None, through_hole} or None when the footprint names no 3D model."""
     if not isinstance(data, dict):
         return None
-    head = data.get("head") or {}
-    ox, oy = _f(head.get("x")), _f(head.get("y"))
+    from .easyeda_convert import origin
+    ox, oy = origin(data)                     # the footprint's own origin, as easyeda_convert placed the pads
     shapes = [s for s in data.get("shape") or [] if isinstance(s, str)]
     th = any(s.startswith("PAD~") and _f((s.split("~") + [""] * 10)[9]) > 0 for s in shapes)
     for s in shapes:

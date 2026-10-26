@@ -85,11 +85,34 @@ def _grid(v, up):
 
 
 # ---------------------------------------------------------------- footprint
+def origin(data, notes=None):
+    """The footprint's origin on EasyEDA's canvas (head x / y, 10 mil units). A head without a usable x / y (a changed
+    format, damaged data) would leave the origin at the canvas' 0, 0, a metre from the pads: the centre of the pads
+    is taken instead, and the notes say so."""
+    head = (data.get("head") if isinstance(data, dict) else None) or {}
+    ox, oy = _f(head.get("x"), None), _f(head.get("y"), None)
+    if ox is not None and oy is not None:
+        return ox, oy
+    xs, ys = [], []
+    for s in (data.get("shape") or []) if isinstance(data, dict) else []:
+        f = s.split("~") + [""] * 4 if isinstance(s, str) and s.startswith(("PAD~", "HOLE~")) else None
+        if f:
+            i = 2 if f[0] == "PAD" else 1
+            x, y = _f(f[i], None), _f(f[i + 1], None)
+            if x is not None and y is not None:
+                xs.append(x), ys.append(y)
+    cx = (min(xs) + max(xs)) / 2 if xs else 0.0
+    cy = (min(ys) + max(ys)) / 2 if ys else 0.0
+    if notes is not None:
+        notes.append("EasyEDA footprint has no origin (head x / y): the centre of its pads is the origin")
+    return (cx if ox is None else ox), (cy if oy is None else oy)
+
+
 def footprint_to_kicad(data, name=None, notes=None):
     """packageDetail.dataStr ({head, shape}) -> .kicad_mod text (KiCad 7 format)."""
     notes = [] if notes is None else notes
     head = data.get("head") or {}
-    ox, oy = _f(head.get("x")), _f(head.get("y"))
+    ox, oy = origin(data, notes)
     name = name or (head.get("c_para") or {}).get("package") or "EasyEDA"
     X, Y = (lambda x: (_f(x) - ox) * U), (lambda y: (_f(y) - oy) * U)
     pads, lines, circles, arcs, dropped, extent, copper = [], [], [], [], {}, [], []
