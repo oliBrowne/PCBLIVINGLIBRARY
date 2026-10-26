@@ -6,7 +6,8 @@ For each held part: the reason in plain words and its fix (ecadlib.messages), th
 symbol or footprint is missing or the pins and pads disagree - the best candidates (ecadlib.resolve). Then one
 question:
 
-    1-N  use that candidate (converted, written into the plan, the part re-checked)
+    1-N  use that candidate (converted, written into the plan, the part re-checked; a guessed pin map is shown
+         and used only when you answer yes)
     a    release anyway (like `ecadlib release-check --allow PART`; recorded with your name)
     d    open the datasheet in the browser
     s    skip to the next part         q  stop here
@@ -111,10 +112,17 @@ def show_part(t, item, plan, cands, src=None):
             unit = "pins" if kind == "symbol" else "pads"
             fit = (t.status("ready", "fits") if c["match"] else t.status("skipped", "not compared") if c["match"] is None
                    else t.status("held", "pins and pads differ"))
+            if c.get("pin_map"):                    # a guess from resolve.compare: shown, applied only on a yes
+                fit += f"  (guessed pin map {map_text(c['pin_map'])})"
             rows.append([f"{len(numbered)}", c["id"], f"{c['count'] if c['count'] is not None else '?'} {unit}", fit
                          + ("  (current)" if c.get("current") else "")])
         t.table(rows, indent=6, right=(0,))
     return numbered
+
+
+def map_text(pin_map):
+    """{"6": "5"} -> "6->5" (symbol pin -> pad)."""
+    return ", ".join(f"{k}->{v}" for k, v in pin_map.items())
 
 
 def a_offline(src):
@@ -232,9 +240,20 @@ def review_plan(plan, a, t, inp, interactive):
             if ans.isdigit() and 1 <= int(ans) <= len(numbered):
                 kind, c = numbered[int(ans) - 1]
                 from .approvals import cli_plan_lock
+                pin_map = None
+                if c.get("pin_map"):                # a guessed map is the person's call, never applied unasked
+                    try:
+                        yes = inp(f"    The pins and pads differ. Use the guessed pin map {map_text(c['pin_map'])} "
+                                  f"(symbol pin -> pad)? Check it on the datasheet. [y/N]\n    > ").strip().lower()
+                    except EOFError:
+                        yes = ""
+                    if yes in ("y", "yes"):
+                        pin_map = dict(c["pin_map"])
+                    else:
+                        t.write("    No pin map: the part stays held until pins and pads agree.")
                 try:
                     with cli_plan_lock(plan), TM.waiting(f"{c['id']} (fetch and convert)", t.err):
-                        r = R.choose(plan, name, kind, c["id"], src=src, pin_map=c.get("pin_map") or None, user=a.user)
+                        r = R.choose(plan, name, kind, c["id"], src=src, pin_map=pin_map, user=a.user)
                 except Exception as e:
                     text, fix = M.friendly_error(e)
                     t.note(text, fix)
