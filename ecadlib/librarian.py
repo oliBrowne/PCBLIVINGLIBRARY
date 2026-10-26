@@ -359,8 +359,7 @@ def _own_land(names, plain):
         n = SP._strip_lib(t).strip()
         if not n or n == plain:
             continue
-        if n in SP.kicad_names() or SP.NOT_CHIP.search(n) or SP.LAND_VARIANT.search(n) or \
-                (SP.MAKER_LAND.match(n) and SP.chip_size(n, strict=True)):
+        if n in SP.kicad_names() or SP.own_land_name(n):    # a maker land with no chip code read too (R-FX10-1)
             return n
     return None
 

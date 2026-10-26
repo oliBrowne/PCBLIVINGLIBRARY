@@ -131,6 +131,18 @@ NOT_CHIP = re.compile(r"(?<![A-Za-z])(RGB|arrays?|reverse[ _-]?mount|mouse[ _-]?
 # a land named KiCad's way after a maker or series (L_Wuerth_WE-PD-Typ-LS_1210, R_Shunt_..): its own land, whatever
 # chip code it ends in; 'R_0603', 'RES_0603', 'R_SMD_0603' name the size
 MAKER_LAND = re.compile(r"^(?:R|C|CP|L|LED|D|FB|Fuse)_(?!(?:SMD|Chip|Small)_)[A-Za-z][^_]*_")
+# a KiCad chip name with more after its metric code ('L_0603_1608Metric_Kelvin', '.._1608Metric_typo'): a land KiCad
+# names otherwise (the hand-solder / castellated variants) or one it does not have, never the plain chip
+CHIP_SUFFIX = re.compile(r"^(?:R|C|CP|L|LED|D|FB|Fuse)_\d{4,5}_\d{4,5}Metric_.", re.I)
+
+
+def own_land_name(text):
+    """A footprint field that names a land of its own rather than a bare chip size, whatever chip code it carries
+    (R-FX10-1): a maker's / series land named KiCad's way (L_Bourns_SRR1210, R_Shnt_Vishay_WSK2512, even misspelt), a
+    multi-pad or other part (NOT_CHIP), a land variant, or a KiCad chip name with a suffix. Not in the index, such a
+    land is held, never built as the chip its code names."""
+    n = _strip_lib(text).strip()
+    return bool(n and (MAKER_LAND.match(n) or CHIP_SUFFIX.match(n) or NOT_CHIP.search(n) or LAND_VARIANT.search(n)))
 # a diode package name (SMA, SMB ...) in an RF connector's or a variant's name: not the diode land
 NOT_DIODE = re.compile(r"(?<![A-Za-z])(jack|plug|edge[ _-]?mount|coax\w*|connector|receptacle|vertical|horizontal|"
                        r"modified|bulkhead)(?![a-z])", re.I)
@@ -874,8 +886,10 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
             if w:
                 return None, f"{_strip_lib(t).strip()}: names a {w.group(0).lower()}, not a two-pad chip land"
             n = _strip_lib(t).strip()                     # 'L_Wuerth_WE-PD-Typ-LS_1210': a maker's own land named
-            if MAKER_LAND.match(n) and chip_size(t, strict=True):     # KiCad's way (a 12x12 mm inductor), not
-                return None, f"{n}: names a maker's own land, not the {chip_size(t, strict=True)} chip"   # the chip
+            if MAKER_LAND.match(n) or CHIP_SUFFIX.match(n):     # KiCad's way (a 12x12 mm inductor), with or without
+                size = str(chip_size(t, strict=True) or chip_size(t) or "")   # a chip code it reads (R-FX10-1), not the chip
+                size = "" if size.startswith("conflict") else " " + size if size else ""
+                return None, f"{n}: names a maker's own land, not the{size} chip"
         for t in texts + weak:
             s = chip_size(t, strict=t in texts)
             if s:
