@@ -682,7 +682,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     if not name:
                         found.append(None)
                     elif dry_run:
-                        found.append(f"<id of {name}>" if key in released or known.get(kind) else None)
+                        found.append(f"<id of {name}>" if key in released else None)
                     else:
                         found.append(client.find_model(ws, kind, name, f"{models_root}/{sub}"))
                 # a shared symbol / footprint is linked by name: when the workspace's item holds another drawing than
@@ -690,7 +690,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                 stale = [f"the workspace's {kind[:-1]} {name!r} is another drawing than this part's (it went up with "
                          f"{known[kind][1]} r{known[kind][2]}): linking it would release this part with the old one"
                          for kind, name, f in zip(("symbols", "footprints"), names, found)
-                         if f and known.get(kind) and digests.get(kind) and known[kind][0] != digests[kind]]
+                         if (f or dry_run) and known.get(kind) and digests.get(kind) and known[kind][0] != digests[kind]]
                 if stale:
                     raise _Held(stale)
                 files = [] if found[0] else [it["symbol"]["file"]], [] if found[1] else [it["footprint"]["file"]]
