@@ -251,13 +251,20 @@ class Ledger:
         if self._lines is None:
             self._lines = []
             if self.path.is_file():
-                for n, raw in enumerate(self.path.read_text(encoding="utf-8").splitlines(), 1):
+                text = self.path.read_bytes()          # bytes: a write cut inside a UTF-8 character still reads
+                rows = text.splitlines()
+                for n, raw in enumerate(rows, 1):
                     if not raw.strip():
                         continue
                     try:
-                        e = json.loads(raw)
+                        e = json.loads(raw.decode("utf-8"))
+                        if not isinstance(e, dict):
+                            raise ValueError(f"a JSON {type(e).__name__}, not a ledger entry")
                     except ValueError as ex:
-                        raise LedgerError(f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
+                        if n == len(rows) and not text.endswith((b"\n", b"\r")):
+                            continue           # a write cut short (killed, disk full): it never happened; append()
+                        raise LedgerError(     # sets its bytes aside before the next line
+f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
                                           f"the ledger is append-only: put that line back as it was (`git diff {LEDGER}` "
                                           f"in the library folder shows it), then run again") from None
                     if int(e.get("schema_version") or 1) > SCHEMA_VERSION:
@@ -280,6 +287,8 @@ class Ledger:
         e = {"schema_version": SCHEMA_VERSION, "at": now(), **entry}
         self.folder.mkdir(parents=True, exist_ok=True)
         first = not self.path.is_file()
+        if not first:
+            self._mend_tail()
         with open(self.path, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(e, sort_keys=True, ensure_ascii=False) + "\n")
         if first:                              # the folder's stamp lists the ledger from the start (ecadlib.migrate)
@@ -288,6 +297,41 @@ class Ledger:
         if self._lines is not None:
             self._lines.append(e)
         return e
+
+    def _mend_tail(self):
+        """Before a line is appended: a ledger that does not end in a newline would glue the new line onto its last
+        one (a broken line: every command on the library stops). A complete last line (an editor dropped the final
+        newline) gets its newline; a cut one (a write killed half way, which lines() never counted) is moved to
+        .ecadlib/torn-<time>.jsonl, so its bytes are kept, and cut off."""
+        with open(self.path, "rb+") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            if not size:
+                return
+            f.seek(size - 1)
+            if f.read(1) in (b"\n", b"\r"):
+                return
+            back = min(size, 1 << 20)
+            while True:                        # the start of the last line
+                f.seek(size - back)
+                chunk = f.read(back)
+                i = max(chunk.rfind(b"\n"), chunk.rfind(b"\r"))
+                if i >= 0 or back == size:
+                    break
+                back = min(size, back * 2)
+            start = size - back + i + 1
+            tail = chunk[i + 1:]
+            try:
+                ok = isinstance(json.loads(tail.decode("utf-8")), dict)
+            except ValueError:
+                ok = False
+            if ok:
+                f.seek(size)
+                f.write(b"\n")
+                return
+            self.store.mkdir(parents=True, exist_ok=True)
+            (self.store / f"torn-{now().replace(':', '')}-{os.getpid()}.jsonl").write_bytes(tail)
+            f.truncate(start)
 
     def history(self, part):
         return [e for e in self.lines() if e.get("part") == part]

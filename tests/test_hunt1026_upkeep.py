@@ -107,3 +107,76 @@ def test_upkeep02_rebuild_check_covers_recipes_and_3d_models():
     assert r.returncode == 1, r.stdout + r.stderr
     drifted = {x["file"] for x in rep["rows"] if x["result"] == "DRIFT"}
     assert {R_RECIPE, R_STEP} <= drifted, drifted
+
+
+# ------------------------------------------------------------------ upkeep-03: a ledger write cut short
+def _ledger_lib(d):
+    from ecadlib import ledger as LG
+    lib = Path(d)
+    lg = LG.Ledger(lib)
+    lg.append({"event": "release", "part": "A", "revision": 1, "digest": "a1"})
+    lg.append({"event": "release", "part": "A", "revision": 2, "digest": "a2"})
+    return lib, lib / LG.LEDGER
+
+
+def test_upkeep03_a_torn_last_ledger_line_is_set_aside_not_a_dead_library():
+    from ecadlib import ledger as LG
+    with tempfile.TemporaryDirectory() as d:
+        lib, p = _ledger_lib(d)
+        with open(p, "a", encoding="utf-8") as f:            # killed while writing revision 3
+            f.write('{"event": "release", "part": "A", "revisi')
+        lg = LG.Ledger(lib)
+        assert lg.head("A")["revision"] == 2                 # the cut line never counted
+        lg.append({"event": "release", "part": "A", "revision": 3, "digest": "a3"})
+        lines = p.read_text(encoding="utf-8").splitlines()
+        assert [json.loads(x)["revision"] for x in lines] == [1, 2, 3], lines
+        assert LG.Ledger(lib).head("A")["revision"] == 3
+        torn = list((lib / LG.STORE).rglob("*torn*"))
+        assert torn and b'"revisi' in torn[0].read_bytes(), torn       # its bytes are kept
+
+
+def test_upkeep03_a_ledger_without_a_final_newline_gets_one_before_the_next_line():
+    from ecadlib import ledger as LG
+    with tempfile.TemporaryDirectory() as d:
+        lib, p = _ledger_lib(d)
+        p.write_bytes(p.read_bytes().rstrip(b"\n"))        # an editor that drops the final newline
+        LG.Ledger(lib).append({"event": "release", "part": "A", "revision": 3, "digest": "a3"})
+        assert [e["revision"] for e in LG.Ledger(lib).releases("A")] == [1, 2, 3]
+
+
+def test_upkeep03_unicode_line_separators_in_a_reason_keep_the_ledger_readable():
+    """ensure_ascii=False writes U+2028, U+0085 and \\x1c as they are; str.splitlines() split a line there."""
+    from ecadlib import ledger as LG
+    with tempfile.TemporaryDirectory() as d:
+        lib, p = _ledger_lib(d)
+        why = "pad 3 moved\x85to the datasheet's\x1cposition, Bibliothèque"
+        LG.Ledger(lib).append({"event": "release", "part": "A", "revision": 3, "digest": "a3", "reason": why})
+        assert LG.Ledger(lib).head("A")["reason"] == why
+
+
+def test_upkeep03_a_torn_line_cut_inside_a_utf8_character():
+    from ecadlib import ledger as LG
+    with tempfile.TemporaryDirectory() as d:
+        lib, p = _ledger_lib(d)
+        with open(p, "ab") as f:
+            f.write('{"event": "release", "part": "A", "by": "Ann Mü'.encode("utf-8")[:-1])
+        assert LG.Ledger(lib).head("A")["revision"] == 2
+
+
+def test_upkeep03_a_broken_line_in_the_middle_still_stops():
+    from ecadlib import ledger as LG
+    with tempfile.TemporaryDirectory() as d:
+        lib, p = _ledger_lib(d)
+        lines = p.read_text(encoding="utf-8").splitlines()
+        p.write_text(lines[0][:30] + "\n" + lines[1] + "\n", encoding="utf-8")
+        try:
+            LG.Ledger(lib).lines()
+            raise AssertionError("a broken line inside the ledger must stop")
+        except LG.LedgerError as e:
+            assert ":1: a broken ledger line" in str(e)
+        p.write_text("[1, 2]\n" + lines[1] + "\n", encoding="utf-8")   # JSON, but not a ledger line
+        try:
+            LG.Ledger(lib).lines()
+            raise AssertionError("a line that is not an object must stop")
+        except LG.LedgerError as e:
+            assert ":1:" in str(e)
