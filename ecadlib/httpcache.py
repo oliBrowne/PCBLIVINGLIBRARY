@@ -49,6 +49,7 @@ def error_body(text):
 
 _HTML = re.compile(r"\s*(?:<!doctype\s+html|<html[\s>])", re.I)
 DATA_EXT = {"json", "kicad_mod", "kicad_sym", "lib", "dcm", "csv", "txt", "xml", "step", "stp", "wrl", "gz"}
+DATA_HOSTS = {"modules.easyeda.com"}          # data only, at paths with no extension (easyeda_3d.STEP_URL: /<key>/<uuid>)
 
 
 def page_not_data(url, text):
@@ -59,7 +60,7 @@ def page_not_data(url, text):
     u = urlparse(url)
     last = u.path.rsplit("/", 1)[-1]
     ext = last.rpartition(".")[2].lower() if "." in last else ""
-    return (u.netloc.lower().startswith("api.") or "/api/" in u.path + "/" or u.path.endswith("/graphql")
+    return (u.netloc.lower().startswith("api.") or u.netloc.lower() in DATA_HOSTS or "/api/" in u.path + "/" or u.path.endswith("/graphql")
             or "/-/raw/" in u.path or ext in DATA_EXT)
 
 

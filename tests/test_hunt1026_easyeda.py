@@ -128,6 +128,15 @@ def test_real_symbols_keep_plain_pins():
         assert {str(p[2]) for p in _all_pins(t)} == {"line"}, lcsc
 
 
+def test_html_page_answering_the_3d_model_url_is_not_cached():
+    # EasyEDA's STEP host serves /<key>/<uuid> (no extension): a captive portal / proxy page answering it with 200 was
+    # cached for the TTL, so every run that week made its own model although the network was back
+    from ecadlib import easyeda_3d as E3, httpcache as HC
+    url = E3.STEP_URL.format("0123456789abcdef0123456789abcdef")
+    assert HC.page_not_data(url, "<!DOCTYPE html><html><body>Sign in to the Wi-Fi</body></html>")
+    assert not HC.page_not_data(url, "ISO-10303-21;\nHEADER;")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
