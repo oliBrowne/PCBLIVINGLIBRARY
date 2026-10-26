@@ -408,14 +408,24 @@ def publish_problems(item, base=".", rules=None):
     go. A plan's `status` alone is never enough: `altium365 plan --models`, a triage plan or a hand edit can say
     `ready` for a part nothing checked, and a file can change after its check. rules: loaded (RU.resolve) once by
     the caller. Parts `ecadlib a365 pull` brought in (already released there) are not checked, as in apply."""
-    if item.get("a365") and item.get("status") in ("existing", "deleted_in_workspace"):
+    st = item.get("status", "ready")
+    if item.get("a365") and st == "deleted_in_workspace":
+        return ["status: deleted in the Altium 365 workspace: not published again"]
+    if item.get("a365") and st == "existing":
         return []
+    if st not in PUBLISHABLE:                  # a status no writer gives a releasable part ('draft', 'Ready', 'duplicate')
+        if st == "duplicate":
+            return [f"duplicate of {item.get('duplicate_of') or '?'} (dedupe)"]
+        return [f"status: {st!r} is not ready: run ecadlib release-check on the plan"]
     fails, _, _ = check_item(item, base, rules)
     covered = set((item.get("allow") or {}).get("failures", []))
     return [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
 
 
-CHANGE_HOLD = "change control:"              # a held change no release check or --allow clears (`ecadlib part approve`)
+PUBLISHABLE = ("ready", "existing")           # change_gate.RELEASED_STATUSES: what a publisher may send (re-checked)
+
+
+CHANGE_HOLD = "change control:"            # a held change no release check or --allow clears (`ecadlib part approve`)
 
 
 def change_hold(it, base=".", ledger=None):

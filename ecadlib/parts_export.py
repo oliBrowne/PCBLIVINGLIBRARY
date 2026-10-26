@@ -76,7 +76,7 @@ def rows(plan, lib="ecadlib", include_held=False, rules=None):
         checked = RU.resolve(rules, base)
         for it in items:
             why = RC.publish_problems(it, base, checked) if isinstance(it, dict) and it.get("name") \
-                and it.get("status", "ready") == "ready" else []
+                and it.get("status", "ready") in LIBRARY_STATUS else []
             if why:
                 it.update(status="held", hold_reasons=why, release_check=dict(it.get("release_check") or {}, result="held"))
     keep = [it for it in items if isinstance(it, dict) and it.get("name")

@@ -172,6 +172,53 @@ def test_gate04_release_check_mutation_property():
                 assert any(x.startswith("height: ") for x in w), (sorted(ms), w)
 
 
+def test_gate05_publish_problems_by_status():
+    from ecadlib import release_check as RC
+    from tests.test_release_check import make
+    with tempfile.TemporaryDirectory() as d:
+        it = make(d)
+        for st in ("ready", "existing"):
+            assert RC.publish_problems(dict(it, status=st), d) == [], st
+        no_status = dict(it); no_status.pop("status")
+        assert RC.publish_problems(no_status, d) == []                     # no status reads as ready everywhere
+        from ecadlib import altium365 as A                                  # push: was KeyError 'status' (an error row)
+        assert A.push([no_status], None, "https://ws", dry_run=True, folder=Path(d))[0]["action"] == "release"
+        for st in ("draft", "Ready", "READY", "Held", "", None, "released", "approved"):
+            why = RC.publish_problems(dict(it, status=st), d)
+            assert why and why[0].startswith("status: "), (st, why)
+        assert RC.publish_problems(dict(it, status="duplicate", duplicate_of="K1"), d) == ["duplicate of K1 (dedupe)"]
+        gone = dict(it, status="deleted_in_workspace", a365={"id": "x"})
+        assert RC.publish_problems(gone, d)[0].startswith("status: deleted in the Altium 365 workspace")
+        assert RC.publish_problems(dict(it, status="existing", a365={"id": "x"}), d) == []   # released there: as before
+
+
+def test_gate05_every_route_ships_only_released_statuses():
+    """kicad-export took every status but held / awaiting_approval (a 'draft', a 'Ready' typo, a duplicate and a part
+    deleted in the workspace went out), and export-parts listed a broken 'existing' part without checking it."""
+    import json
+    from ecadlib import kicad_dblib as KD, kicad_export as KX, parts_export as PE
+    from tests.test_release_check import make
+    statuses = ["ready", "draft", "Ready", "duplicate", "deleted_in_workspace", "existing", "existing"]
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        items = []
+        for i, st in enumerate(statuses):
+            it = make(d, name=f"P{i}", fp_name=f"SOIC-8_v{i}")
+            it["status"] = st
+            if st == "duplicate":
+                it["duplicate_of"] = "P0"
+            if st == "deleted_in_workspace":
+                it["a365"] = {"id": "x"}
+            items.append(it)
+        items[6]["description"] = ""                       # P6: 'existing' but fails the check
+        (d / "plan.json").write_text(json.dumps(items))
+        quiet = lambda *a, **k: None
+        assert sorted(p["part"] for p in KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)["parts"]) == ["P0", "P5"]
+        tables, _ = KD.part_rows(d / "plan.json", "mylib")
+        assert sorted(r["Part ID"] for rs in tables.values() for r in rs) == ["P0", "P5"]
+        assert sorted(r["Part ID"] for r in PE.rows(d / "plan.json")) == ["P0", "P5"]
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
