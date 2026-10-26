@@ -48,7 +48,15 @@ _MAKER_WORDS = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "
                 "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE", "GROUP", "HOLDINGS", "INTERNATIONAL",
                 "SEMICONDUCTOR", "SEMICONDUCTORS", "SEMI", "ELECTRONICS", "ELECTRONIC", "ELECTRIC", "TECHNOLOGY",
                 "TECHNOLOGIES", "TECH", "INDUSTRIES", "INDUSTRIAL", "DEVICES", "COMPONENTS", "PRODUCTS", "SYSTEMS",
-                "MICROELECTRONICS", "INTEGRATED", "INTERTECHNOLOGY", "DIVISION", "DIV", "MANUFACTURING", "MFG"}
+                "MICROELECTRONICS", "INTEGRATED", "INTERTECHNOLOGY", "DIVISION", "DIV", "MANUFACTURING", "MFG",
+                "ELEC", "ELECT", "ELECTR", "ELECTRON",       # DigiKey's short forms: "Shenzhen Sunlord Elec"
+                "AND"}                                       # "Alpha and Omega" is "Alpha & Omega"
+# a city or province before a Chinese / Taiwanese maker's own name ("Shenzhen Sunlord", "Yangzhou Yangjie Elec Tech"):
+# dropped when a name follows it
+_MAKER_PLACE = {"SHENZHEN", "YANGZHOU", "SHANGHAI", "DONGGUAN", "JIANGSU", "GUANGDONG", "GUANGZHOU", "BEIJING",
+                "HANGZHOU", "SUZHOU", "WUXI", "XIAMEN", "NINGBO", "ZHEJIANG", "FUJIAN", "CHANGZHOU", "NANJING",
+                "CHENGDU", "WUHAN", "TIANJIN", "FOSHAN", "ZHUHAI", "HUIZHOU", "ZHONGSHAN", "SHANDONG", "ANHUI", "HUNAN",
+                "HUBEI", "SICHUAN", "TAIWAN", "TAIPEI", "HSINCHU", "KAOHSIUNG", "HONGKONG"}
 # where a distributor's sales arm is, after the maker's own name ("NXP USA Inc.", "Murata Electronics North America",
 # "GigaDevice Semiconductor (HK) Limited"): not which company it is
 _MAKER_REGION = {"USA", "US", "AMERICA", "AMERICAS", "NORTH", "EUROPE", "ASIA", "PACIFIC", "JAPAN", "CHINA", "HK",
@@ -71,7 +79,8 @@ _MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON":
                 "SILICONSTORAGE": "MICROCHIP",                                   # Silicon Storage Technology
                 "AVAGO": "BROADCOM", "SPANSION": "INFINEON", "ZETEX": "DIODES", "EXAR": "MAXLINEAR",
                 "XILINX": "AMD", "ADVANCEDMICRO": "AMD", "ALTERA": "INTEL",
-                "SAMESKY": "CUI", "SEIKOEPSON": "EPSON", "NANJINGQINHENG": "WCH", "JIANGSUQINHENG": "WCH",
+                "SAMESKY": "CUI", "SEIKOEPSON": "EPSON", "QINHENG": "WCH", "SEMCO": "SAMSUNGELECTROMECHANICS",
+                "GCT": "GLOBALCONNECTOR", "HDSC": "HUADA",
                 "TE": "TECONNECTIVITY", "TYCO": "TECONNECTIVITY", "AMP": "TECONNECTIVITY",
                 "WE": "WURTHELEKTRONIK", "WURTH": "WURTHELEKTRONIK", "GD": "GIGADEVICE",
                 "EPCOS": "TDK", "IXYS": "LITTELFUSE", "SILICONIX": "VISHAY", "FCI": "AMPHENOL", "AMSOSRAM": "OSRAM",
@@ -95,6 +104,8 @@ def _maker_words(name):
     name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()       # Würth -> Wurth
     words = re.findall(r"[A-Z0-9]+", re.sub(r"[-'&.]", "", name.upper()))
     kept = [w for w in words if w not in _MAKER_WORDS] or words
+    if len(kept) > 1 and kept[0] in _MAKER_PLACE:  # "Shenzhen Sunlord", "Yangzhou Yangjie": the city is not the company
+        kept = kept[1:]
     return kept[:1] + [w for w in kept[1:] if w not in _MAKER_REGION]
 
 
@@ -136,8 +147,12 @@ def same_maker(a, b):
     or "Analog Devices" / "Analog Power"); or a one-word name of 3+
     letters that is the other's first word ("MDD" / "MDD Microdiode"). Never a substring elsewhere: "ON" is not in
     "Monolithic", "TI" is not "Tiger", "ON" is not "ON Shore Technology"."""
-    for x, y in ((a, b), (b, a)):              # DigiKey's "Analog Devices Inc./Maxim Integrated": either name
-        if isinstance(x, str) and "/" in x and any(same_maker(part, y) for part in x.split("/") if part.strip()):
+    for x, y in ((a, b), (b, a)):              # DigiKey's "Analog Devices Inc./Maxim Integrated", "EPCOS - TDK
+        if not isinstance(x, str):             # Electronics", "Amphenol ICC (FCI)": either name
+            continue
+        parts = [p for p in re.split(r"/|\s+-\s+|[()（）]", x) if p.strip()]
+        if len(parts) > 1 and any(same_maker(p, y) for p in parts
+                                  if not set(_maker_words_all(p)) <= _MAKER_REGION | _MAKER_PLACE | _MAKER_WORDS):
             return True
     ka, kb = maker_key(a), maker_key(b)
     if not ka or not kb:

@@ -240,3 +240,22 @@ def test_a_mm_column_holding_inch_only_codes_does_not_convert_its_0603(tmp_path)
     by = {l["designator"]: l for l in lines}
     assert by["C1"]["footprint"] == "0201" and by["R1"]["footprint"] == "0603", by
 
+
+# ---------------------------------------------------------------- R-E2E-2: distributor maker-name forms
+SAME_E2E = [("TDK", "EPCOS - TDK Electronics"), ("EPCOS", "EPCOS - TDK Electronics"), ("Sunlord", "Shenzhen Sunlord Elec"),
+            ("Yangjie", "Yangzhou Yangjie Elec Tech"), ("Sunlord", "Shenzhen Sunlord Electronics Co., Ltd."),
+            ("TDK", "TDK Electronics (EPCOS)"), ("Fuman", "Shenzhen Fuman Electronics"),
+            ("Amphenol", "Amphenol ICC (FCI)"), ("FCI", "Amphenol ICC (FCI)"), ("SEMCO", "Samsung Electro-Mechanics"),
+            ("Alpha & Omega Semiconductor", "Alpha and Omega Semiconductor Inc."), ("GCT", "Global Connector Technology"),
+            ("HDSC", "Huada Semiconductor"), ("Hubei KENTO Elec", "KENTO")]
+NOT_SAME_E2E = [("Shenzhen Fuman", "Shenzhen Kaifa"), ("Jiangsu Changjiang", "Jiangsu Yangjie"), ("Shenzhen", "Sunlord"),
+                ("ST", "Stackpole Electronics"), ("TI", "Analog Devices Inc."),
+                ("TDK", "TDK-Lambda - Power Supplies"), ("Micron", "Micronas - Shenzhen"), ("Taiwan Semiconductor", "TSMC")]
+
+
+def test_distributor_maker_forms_match_and_negatives_hold():
+    from ecadlib.providers import same_maker as S
+    for a, b in SAME_E2E:
+        assert S(a, b) and S(b, a), (a, b)
+    for a, b in NOT_SAME_E2E + NOT_SAME:
+        assert not S(a, b) and not S(b, a), (a, b)
