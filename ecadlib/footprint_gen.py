@@ -420,6 +420,7 @@ def _apply_land(spec, pads):
 def sanity(spec):
     """Catch the usual datasheet-reading mistakes before they turn into a plausible-looking but wrong footprint.
     Returns a list of plain-language problems (empty when the numbers hang together)."""
+    spec = qfp_frame(spec)[0]                         # a QFP's body in build()'s frame, however the read named it
     errs, t = [], spec["package_type"]
     nom = lambda k: dim(spec[k])[1] if spec.get(k) is not None else None
     for k in ("body_length", "body_width", "lead_span", "terminal_length", "terminal_width", "inner_span", "pitch"):
@@ -510,6 +511,30 @@ def sanity(spec):
     return errs
 
 
+def qfp_frame(spec):
+    """(spec, notes): a QFP read with body_length / body_width the other way round from build()'s frame (lead_span
+    crosses body_length, on X; lead_span_y, or lead_span when square, crosses body_width) turned to it. JEDEC labels
+    give that read (LQFP-128 14x20: body_length D1 = 20, body_width E1 = 14, lead_span E = 16, lead_span_y D = 22).
+    The pads come from the spans and the row counts, so only the body (and its exposed pad) turns; only when the
+    read's own spans clear the turned bodies and not the bodies as read. Every QFP check and the build use this frame."""
+    if spec.get("package_type") != "qfp" or not all(spec.get(k) is not None for k in ("body_length", "body_width", "lead_span")):
+        return spec, []
+    try:
+        L, W, sx = dim(spec["body_length"])[1], dim(spec["body_width"])[1], dim(spec["lead_span"])[1]
+        sy = dim(spec.get("lead_span_y") or spec["lead_span"])[1]
+        fits = lambda bx, by: sx >= bx + 0.1 and sy >= by + 0.1
+        if fits(L, W) or not fits(W, L):
+            return spec, []
+    except (TypeError, KeyError, ValueError):         # a malformed number: sanity() says what is wrong
+        return spec, []
+    ep = spec.get("exposed_pad")
+    out = dict(spec, body_length=spec["body_width"], body_width=spec["body_length"])
+    if isinstance(ep, dict) and ep.get("length") is not None and ep.get("width") is not None:
+        out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
+    return out, [f"body read the other way round (lead_span {round(sx, 3)} crosses the {round(W, 3)} mm side): "
+                 f"body_length {round(W, 3)} on X, body_width {round(L, 3)} on Y"]
+
+
 def orient_ep(spec):
     """(spec, notes): the spec with its exposed pad the way build() lays it. Each turn needs the read's own numbers to
     rule the other way out, never a reference footprint; the cross-check compares what is built (crosscheck.critical).
@@ -585,7 +610,9 @@ def build(spec, density=None):
     if spec["package_type"] in ADVANCED:
         from . import footprint_adv
         return footprint_adv.build(spec, density)
+    spec, framed = qfp_frame(spec)
     spec, turned = orient_ep(spec)
+    turned = framed + turned
     problems = sanity(spec)
     if problems:
         raise ValueError("the package numbers don't add up: " + "; ".join(problems))

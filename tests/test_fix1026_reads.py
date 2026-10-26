@@ -252,6 +252,44 @@ def test_2_eval_names_the_hold():
     assert R.failure_type(row, None, None) == "held_failed_read"
 
 
+
+# ---------------------------------------------------------------- R-PR-3: one QFP frame for every check and the build
+def _lqfp128(bl, bw, ls, lsy):
+    import copy
+    from tests import test_datasheet as TD
+    dim = lambda lbl, lo, nom, hi: {"label": lbl, "min": lo, "nom": nom, "max": hi, "unit": "mm", "page": 5,
+                                    "figure": "LQFP128"}
+    e = copy.deepcopy(TD.GOOD)
+    e["package"].update(name="LQFP-128_14x20mm_P0.5mm", description="LQFP-128 14x20", package_type="qfp", pin_count=128,
+                        pitch=dim("e", None, 0.5, None), body_length=dim(*bl), body_width=dim(*bw), lead_span=dim(*ls),
+                        lead_span_y=dim(*lsy), terminal_length=dim("L", 0.45, 0.6, 0.75),
+                        terminal_width=dim("b", 0.17, 0.22, 0.27), exposed_pad=None, pins_left_right=38,
+                        pins_top_bottom=26, drawing="MS-026 BHB")
+    e["pins"] = [{"num": str(i), "name": f"P{i}", "type": "passive", "side": "left", "page": 3} for i in range(1, 129)]
+    e["pin_table"]["rows"] = 128
+    return e
+
+
+def test_rpr3_a_rectangular_qfp_read_either_way_round_passes_and_builds_the_same_pads():
+    """LQFP-128 14x20 read by its JEDEC labels (body_length D1 = 20, body_width E1 = 14, lead_span E = 16,
+    lead_span_y D = 22): footprint_gen refused it ("lead_span 16 is not bigger than body_length 20 ... swapped?"),
+    while the other frame failed _feet_outside. Both are the same part: the spans place the pads."""
+    import re
+    from ecadlib import ds_route as DR, footprint_gen as F
+    D1, E1, E, Dy = ("D1", 19.9, 20, 20.1), ("E1", 13.9, 14, 14.1), ("E", 15.8, 16, 16.2), ("D", 21.8, 22, 22.2)
+    built = []
+    for e in (_lqfp128(D1, E1, E, Dy), _lqfp128(E1, D1, E, Dy)):   # JEDEC labels; footprint_gen's frame (X first)
+        res = D.process(e, "TESTPART", "ds.pdf")
+        assert DR.assess(res) == ("ok", []), DR.assess(res)
+        txt, rep = F.build(res["spec"])
+        pads = re.findall(r'\(pad "(\d+)" smd \w+ \(at ([-\d.]+) ([-\d.]+)', txt)
+        assert len(pads) == 128 and pads[0][1:] == ("-7.675", "-9.25"), pads[0]
+        built.append(re.sub(r"\(tstamp [^)]*\)|\(uuid [^)]*\)", "", txt))
+    assert built[0] == built[1]                       # the same footprint, body outline included
+    bad = _lqfp128(D1, E1, ("E", 13.8, 14.0, 14.2), Dy)   # E read as E1: the X span fits neither body
+    assert DR.assess(D.process(bad, "TESTPART", "ds.pdf"))[0] == "failed"
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

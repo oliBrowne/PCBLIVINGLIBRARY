@@ -1662,6 +1662,7 @@ def _listed(spec):
 
 
 def sanity(spec, review):
+    spec = F.qfp_frame(spec)[0]                       # a QFP's body in footprint_gen's frame, however the read named it
     t, n, e = spec.get("package_type"), spec.get("pin_count"), spec.get("pitch")
     g = lambda k: _dim(spec.get(k))
     for k in DIMS:                                    # unit plausibility after conversion
@@ -1765,6 +1766,7 @@ def _feet_outside(spec):
     if spec.get("package_type") not in ("gullwing", "qfp") or spec.get("lead_type") in ("molded", "melf") or \
             J_LEAD.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
         return []
+    spec = F.qfp_frame(spec)[0]
     L = _dim(spec.get("terminal_length"))
     out = []
     # the span across the body side it crosses, in footprint_gen's frame: a gull-wing's lead_span crosses body_width;
