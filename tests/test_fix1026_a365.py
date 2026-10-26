@@ -205,3 +205,46 @@ def test_push_does_not_write_parameters_onto_a_revision_looking_component_with_n
     r = A.push([it], c, "https://x.365.altium.com", folder=tempfile.mkdtemp())[0]
     assert not [x for x in c.calls if x[0] == "update_params"], c.calls
     assert r["action"] == "skip" and "SS34-13" in r["detail"], r
+
+
+# ---------------------------------------------------------------- R-AM-4: parameter updates only for publishable parts
+def test_push_sends_no_parameter_update_for_a_part_that_is_not_publishable():
+    """draft / needs_review / a typo'd "Ready" / needs_altium_models: the dry run says skipped (it never reads the
+    workspace); the real push must not rewrite the workspace component's parameters either."""
+    import tempfile
+    from ecadlib import altium365 as A
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def release_defs(self, ws):
+            return {}
+
+        def find(self, ws, name):
+            return {"id": "C1", "name": name, "revision": {"revisionId": "R1"},
+                    "details": {"parameters": [{"name": "Manufacturer Part Number", "value": name},
+                                               {"name": "Manufacturer", "value": "TI"},
+                                               {"name": "Voltage", "value": "50V"}]}}
+
+        def update_params(self, cid, params, note, replace=False):
+            self.calls.append(("update_params", cid, params))
+            return cid
+
+        def release(self, inp):
+            self.calls.append(("release", inp))
+    d = tempfile.mkdtemp()
+    for st in ("draft", "needs_review", "Ready", "needs_altium_models", "awaiting_approval", "ready"):
+        it = {"name": "LM358DR", "folder": "Components/ICs", "description": "dual op amp", "comment": "LM358",
+              "parameters": [{"name": "Manufacturer Part Number", "value": "LM358DR"},
+                             {"name": "Manufacturer", "value": "TI"}, {"name": "Voltage", "value": "25V"}],
+              "symbol": {"ref": "LM358", "file": None}, "footprint": {"ref": "SOIC-8", "file": None}, "status": st}
+        c = Fake()
+        real = A.push([dict(it)], c, "https://x.365.altium.com", folder=d)[0]
+        dry = A.push([dict(it)], None, "https://x.365.altium.com", dry_run=True, folder=d)[0]
+        if st == "ready":                      # a ready part's parameters are kept up to date, as before
+            assert real["action"] == "update_parameters", (st, real)
+            continue
+        assert not c.calls, (st, c.calls)
+        assert real["action"] == "skip" == dry["action"], (st, real, dry)
+        assert st.replace("_", " ") in real["detail"].replace("_", " "), (st, real)

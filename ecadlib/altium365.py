@@ -718,6 +718,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves,
                                              head["revision"], dry_run, note, transition, digests))
                     sent_models.update({k: (d, it["name"], head["revision"]) for k, d in (res.get("models") or {}).items()})
+            elif existing and it.get("status", "ready") not in RC.PUBLISHABLE:   # draft, needs_review, a typo: no
+                recheck(res, why or [f"status: {it.get('status')!r} is not ready"])   # parameter update (as the dry run)
             elif existing and not pub and _maybe_other(existing, it["name"], rules):
                 res["action"], res["detail"] = "skip", (
                     f"the workspace has {existing.get('name')}, which may be a revision of {it['name']} or another "

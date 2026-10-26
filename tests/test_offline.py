@@ -116,7 +116,9 @@ def test_altium365_plan_and_push():
         assert {"name": "Supplier Part Number 1", "value": "C84681"} in by["CH340C"]["parameters"]
         fake = FakeNexar({res["name"]: "cmp-1"})
         out = {r["name"]: r for r in A.push(items, fake, "https://ws")}
-        assert out["CH340C"]["action"] == "release" and out[res["name"]]["action"] == "update_parameters", out
+        # R-AM-4: a part with no models (needs_altium_models, never release-checked) gets no parameter update either
+        assert out["CH340C"]["action"] == "release" and out[res["name"]]["action"] == "skip", out
+        assert not [c for c in fake.calls if c[0] == "update"], fake.calls
         rel = next(c[1] for c in fake.calls if c[0] == "release")
         assert rel["symbolFiles"] == [{"fileId": "id-CH340C.SchLib", "relativePath": "Released\\CH340C.SchLib"}], rel
         assert rel["componentRevisionNamingSchemeNodeId"] == "cs" and rel["symbolLifeCycleDefinitionNodeId"] == "sl"

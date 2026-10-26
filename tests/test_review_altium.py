@@ -74,8 +74,8 @@ ITEM = {"name": "X", "folder": "Components/ICs", "description": "", "comment": "
 
 
 def test_update_payload_errors_are_errors():
-    out = A.push([ITEM], A.Nexar("t", UpdateFails()), "https://ws")
-    assert out[0]["action"] == "error" and "denied" in out[0]["detail"], out
+    out = A.push([dict(ITEM, status="ready")], A.Nexar("t", UpdateFails()), "https://ws")   # R-AM-4: only a
+    assert out[0]["action"] == "error" and "denied" in out[0]["detail"], out             # publishable part is updated
 
 
 def test_push_exits_nonzero_when_a_part_fails():
