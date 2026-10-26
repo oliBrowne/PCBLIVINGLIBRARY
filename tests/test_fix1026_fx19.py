@@ -232,3 +232,53 @@ def test_a_datasheet_with_a_rohs_or_reach_compliant_banner_is_still_taken():
     for first in ("LM358DR\nRoHS Compliant\nDual Operational Amplifier", "LM358DR Dual Op Amp\nREACH compliant, "
                   "halogen free\nFeatures", "LM358DR\nRoHS and REACH compliant\nPin Configuration"):
         assert D.not_a_datasheet([first]) is None, first
+
+
+# ---------------------------------------------------------------- R-FX19-3: eval --base-url never takes [ai]'s key along
+def _env19():
+    keep = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY")}
+    keep.update({"AI_KEY": "sk-ai-gw1", "PROXY_KEY": "sk-proxy", "OPENAI_API_KEY": "sk-openai", "ECADLIB_NO_STORED_KEYS": "1"})
+    return mock.patch.dict(os.environ, keep, clear=True)
+
+
+def _rules19(ai, ds=None, proof=None):
+    from ecadlib import rules as RU
+    r = copy.deepcopy(RU.DEFAULTS)
+    r["ai"] = dict(r.get("ai") or {}, **ai)
+    r["datasheet"].update(ds or {})
+    r["agent"]["proof"].update(proof or {})
+    return r
+
+
+def _ep(rules, section="datasheet"):
+    from ecadlib import llm as LL
+    ep = LL.endpoint(rules, section)
+    return ep["base_url"], ep["key_env"], LL.key_for(ep)
+
+
+def test_eval_base_url_alone_never_sends_the_ai_key_to_another_server():
+    from ecadlib.eval.runner import ai_overrides
+    G1, G2 = "https://gw1.example.com/v1", "https://gw2.example.net/v1"
+    with _env19():
+        r = _rules19({"provider": "openai-compatible", "base_url": G1, "model": "m", "api_key_env": "AI_KEY"})
+        for kw in ({"base_url": G2}, {"provider": "openai-compatible", "base_url": G2}):
+            base, env, key = _ep(ai_overrides(r, **kw))
+            assert base == G2 and env != "AI_KEY" and key != "sk-ai-gw1", (kw, base, env)
+        # a corporate proxy's key never goes to api.openai.com
+        r = _rules19({"provider": "openai", "base_url": "https://proxy.corp/v1", "model": "m", "api_key_env": "PROXY_KEY"})
+        base, env, key = _ep(ai_overrides(r, base_url="https://api.openai.com/v1"))
+        assert base == "https://api.openai.com/v1" and env != "PROXY_KEY" and key != "sk-proxy", (base, env)
+
+
+def test_eval_overrides_keep_the_ai_key_on_its_own_server():
+    from ecadlib.eval.runner import ai_overrides
+    G1 = "https://gw1.example.com/v1"
+    with _env19():
+        r = _rules19({"provider": "openai-compatible", "base_url": G1, "model": "m", "api_key_env": "AI_KEY"})
+        for kw in ({"base_url": G1 + "/"}, {"base_url": "https://GW1.example.com/v1"}, {"assist": "off"},
+                   {"provider": "openai-compatible", "model": "m2"}):
+            base, env, key = _ep(ai_overrides(r, **kw))
+            assert env == "AI_KEY" and key == "sk-ai-gw1", (kw, base, env)
+        # --api-key-env always wins
+        base, env, key = _ep(ai_overrides(r, base_url="https://gw2.example.net/v1", api_key_env="PROXY_KEY"))
+        assert env == "PROXY_KEY", env

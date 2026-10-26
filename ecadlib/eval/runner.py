@@ -774,7 +774,8 @@ def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=N
     api_key_env unless given again: they belong to the old provider, and its key went to the new one (R-LE-1).
     [datasheet] api_key_env likewise is kept only when [datasheet] still talks to the same server (the same resolved
     provider and base_url, a preset's default included): another provider (Anthropic too) or another gateway of the
-    same provider never gets it (R-FX13-1, R-FX16-1). --api-key-env always wins over it."""
+    same provider never gets it (R-FX13-1, R-FX16-1). [ai] api_key_env too: --base-url alone moves [ai] to another
+    server of the same provider, which never gets it (R-FX19-3). --api-key-env always wins over them."""
     over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
                               ("api_key_env", api_key_env)) if v}
     if not (over or (model and provider)):
@@ -791,6 +792,7 @@ def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=N
             if k not in over:
                 ai[k] = ""
     old_server = LL.server_of(rules, "datasheet")     # where [datasheet]'s key name was meant to go
+    old_ai = LL.server_of(rules, "ai")                # where [ai]'s key name was meant to go
     ds_key = ds.get("api_key_env")
     if api_key_env:                                   # --api-key-env wins over [datasheet]'s key name (R-FX13-1)
         ds_key = api_key_env
@@ -800,6 +802,9 @@ def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=N
     if ds_key and not api_key_env and not LL.same_server(old_server, LL.server_of(rules, "datasheet")):
         # [datasheet]'s key belongs to its old server: never sent to another provider or gateway (R-FX16-1)
         rules = dict(rules, datasheet={**rules["datasheet"], "api_key_env": ""})
+    if rules["ai"].get("api_key_env") and not api_key_env and not LL.same_server(old_ai, LL.server_of(rules, "ai")):
+        # so is [ai]'s: --base-url alone (same provider) moves [ai] to another server too (R-FX19-3)
+        rules = dict(rules, ai={**rules["ai"], "api_key_env": ""})
     RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
     return rules
 
