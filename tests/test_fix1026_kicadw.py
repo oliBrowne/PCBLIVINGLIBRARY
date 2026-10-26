@@ -1,5 +1,5 @@
 """Fixes for the 2026-10-26 PR #196 review, KiCad writers (R-KW-1..4 in reviews/2026-10-26_review_196/kicadw.md)."""
-import json, re, sqlite3, sys, types
+import json, re, sqlite3, sys, tempfile, types
 from contextlib import closing
 from pathlib import Path
 from unittest import mock
@@ -88,7 +88,7 @@ def test_rkw2_publish_kicad_passes_the_project_folder():
     def fake(plan, library, name, **kw):
         got.update(kw, library=library)
         return {"errors": [], "skipped": [], "parts": []}
-    ws = types.SimpleNamespace(_plan=lambda b: (None, Path("p/plan.json"), None), root=Path("/nonexistent/ws"),
+    ws = types.SimpleNamespace(_plan=lambda b: (None, Path("p/plan.json"), None), root=Path(tempfile.mkdtemp()) / "ws",
                                offline=True, rules_in_use=lambda: {})
     with mock.patch.object(KX, "export", fake):
         AM.publish_kicad(ws, "bom.csv", Path("/x/board/ecadlib"), "ecadlib")
