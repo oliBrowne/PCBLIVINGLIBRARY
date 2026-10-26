@@ -92,3 +92,24 @@ def test_webui_04_settings_and_keys_written_from_two_requests_at_once_keep_both(
         s = UC.load_settings()
         assert set(names) <= set(UC.stored_names()), (rnd, UC.stored_names())
         assert all(n in s and n in s["installed"] for n in names), (rnd, s)
+
+
+@lite
+def test_webui_05_one_damaged_triage_report_does_not_hide_the_others(tmp_path):
+    """triage_history skips a damaged report (its own docstring), but a report whose JSON is valid with the wrong shape
+    (a list, rows not a list) raised TypeError / AttributeError: Past BOM checks showed nothing at all."""
+    from ecadlib.app import Workspace
+    ws = Workspace(tmp_path / "ws", [], providers=[], offline=True)
+    up = ws.save_upload("a.csv", b"Designator,Qty,Value,MPN\nR1,1,10k,X\n")
+    with contextlib.redirect_stdout(io.StringIO()):
+        good = ws.triage(up)["id"]
+    for i, text in enumerate(("[1, 2]", '{"rows": 5}', '{"rows": [], "counts": [1]}', '"x"', '{"rows": [1], "counts": {}}')):
+        (ws.root / "reports" / f"triage_bad{i}.json").write_text(text, encoding="utf-8")
+        assert [t["id"] for t in ws.triage_history()["triages"]] == [good], text
+        try:
+            ws.triage_result(f"bad{i}")
+        except ValueError as e:
+            assert "damaged" in str(e), e
+        else:
+            raise AssertionError(f"triage_result read {text}")
+    assert ws.triage_result(good)["rows"]

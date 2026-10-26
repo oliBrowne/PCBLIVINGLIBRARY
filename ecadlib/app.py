@@ -259,7 +259,7 @@ class Workspace:
         for tid, (j, c) in self._triage_files().items():
             try:
                 if j:
-                    d = json.loads(j.read_text(encoding="utf-8"))
+                    d = self._triage_json(j)
                     it = {k: d.get(k) for k in ("bom", "name", "finished", "user", "counts")}
                     it["lines"] = len(d.get("rows") or [])
                     it["reports"] = d.get("reports") or []
@@ -280,6 +280,15 @@ class Workspace:
         items.sort(key=lambda x: x[:2], reverse=True)                # same second: the file written last first
         return {"triages": [x[2] for x in items[:limit]], "total": len(items)}
 
+    @staticmethod
+    def _triage_json(f):
+        """A saved triage (reports/triage_<id>.json) in the shape triage() writes, else ValueError (damaged)."""
+        d = json.loads(f.read_text(encoding="utf-8"))
+        if not (isinstance(d, dict) and isinstance(d.get("rows"), list) and all(isinstance(r, dict) for r in d["rows"])
+                and isinstance(d.get("counts") or {}, dict)):
+            raise ValueError(f"{f.name} is damaged: not a saved triage")
+        return d
+
     def triage_result(self, tid):
         """One finished triage by its id (from triage_history), in the shape triage() returns. Read-only: the id
         is only matched against the reports that exist, never turned into a path."""
@@ -288,7 +297,7 @@ class Workspace:
             raise KeyError(f"no triage {tid!r} in this workspace")
         j, c = f
         if j:
-            d = json.loads(j.read_text(encoding="utf-8"))
+            d = self._triage_json(j)
             d["id"] = tid
             return d
         rows = pd.read_csv(c, dtype=str).fillna("").to_dict("records")
