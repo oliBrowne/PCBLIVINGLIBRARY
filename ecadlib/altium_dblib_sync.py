@@ -522,6 +522,70 @@ def _copy_recipe(to, src, dst):
     return [p.relative_to(to).as_posix() for p in paths]
 
 
+def _same_as_head(lg, head, it, kind, path, base):
+    """Library file `path` holds the part's symbol / footprint and 3D model as its ledger head fingerprinted them (the
+    change gate's own test of a re-save: other bytes, the same content)."""
+    from . import fingerprint as FP
+    try:
+        old = lg.fingerprint(head) or {}
+        probe = json.loads(json.dumps(it, default=str))
+        probe[kind] = dict(probe.get(kind) or {}, file=str(path))
+        new = FP.of_item(probe, base)
+    except Exception:
+        return False
+    keys = ("symbol",) if kind == "symbol" else ("footprint", "model")
+    return bool(old) and all(old.get(k) == new.get(k) for k in keys)
+
+
+def _released_source(lg, it, src, kind, stage, base, staged):
+    """The library file (with its recipe and the STEP files it names) to copy for a released part, as its ledger head
+    has them. publish_guard settled the library, but an editor saving afterwards takes no lock: what was saved since
+    must not be shipped as the released revision. The bytes checked here are staged (in `stage`) and copied from
+    there, so nothing saved later reaches the copy either. -> (path to copy from, note or None)"""
+    head = lg.head(it["name"]) if it.get("status") != "held" else None
+    rec = next((r for r in ((head or {}).get("files") or {}).values()
+                if (Path(r["path"]) if Path(r["path"]).is_absolute() else base / r["path"]).resolve() == src.resolve()),
+               None)
+    if rec is None:
+        return src, None
+    key = f"{src.resolve()}\0{rec['sha256']}\0{it['name']}"
+    if key in staged:
+        return staged[key]
+    import hashlib
+    from . import ledger as LG
+    d = Path(stage) / hashlib.sha256(key.encode()).hexdigest()[:16]
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / src.name
+    data = src.read_bytes()
+    f.write_bytes(data)
+    moved = []
+    if LG.sha_bytes(data) != rec["sha256"] and not _same_as_head(lg, head, it, kind, f, base):
+        f.write_bytes(lg.get_bytes(rec["sha256"]))
+        moved.append(src.name)
+
+    def released(on, sha):
+        """on's bytes when they are the released ones (sha), else the blob store's copy (noted)."""
+        b = on.read_bytes() if on.is_file() else None
+        if sha is None or (b is not None and LG.sha_bytes(b) == sha):
+            return b
+        moved.append(on.name)
+        return lg.get_bytes(sha)
+    side, rp = src.with_name(src.name + AN.EXT), f.with_name(f.name + AN.EXT)
+    rb = released(side, rec.get("ecadbuild"))
+    if rb is not None:
+        rp.write_bytes(rb)
+    steps = rec.get("steps") or {}
+    for s in LG.step_files(f):                # the STEP files the (released) recipe names
+        sb = released(src.parent / s, steps.get(s))
+        if sb is not None:
+            (d / s).parent.mkdir(parents=True, exist_ok=True)
+            (d / s).write_bytes(sb)
+    note = (f"{', '.join(moved)} changed while this ran (an edit saved meanwhile): the released revision "
+            f"r{head.get('revision')} was copied, the edit is settled by the next ecadlib run") if moved else None
+    staged[key] = (f, note)
+    return f, note
+
+
 def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=None, svn_url=None,
          dry_run=False, base=None, runner=run_cmd, which=shutil.which, rules=None, overwrite_edits=False):
     """Bring <target_dir> in line with the plan. plan: a plan.json path, or its items (model paths absolute or
@@ -538,13 +602,15 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     if dry_run:
         return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
                      overwrite_edits)
+    import tempfile
     from . import change_gate as CG
-    with CG.publishing(lib_dir):
+    with CG.publishing(lib_dir), tempfile.TemporaryDirectory(prefix="ecadlib-dblib-") as stage:
         return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
-                     overwrite_edits)
+                     overwrite_edits, stage=stage)
 
 
-def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules, overwrite_edits):
+def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules, overwrite_edits,
+          stage=None):
     items = load_plan(plan) if isinstance(plan, (str, Path)) else plan
     base = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
     to = Path(target_dir)
@@ -594,6 +660,11 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     folded = {}                                         # rel.casefold() -> rel: Windows shares ignore case
     sheets = sheet_names(items, tables)
     seen = {}
+    staged = {}                                         # released sources checked against the ledger (stage)
+    lg = None
+    if stage is not None:
+        from . import ledger as LG
+        lg = LG.Ledger(CG.lib_folder(plan if isinstance(plan, (str, Path)) else base))
 
     def find(pn, t):
         rows = tables.get(t, ([], []))[1]
@@ -643,6 +714,14 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             if not src.exists():
                 problems.append(f"{k} file missing: {src}")
                 continue
+            if lg is not None:                              # the released revision's bytes, not an edit saved since
+                try:
+                    src, moved = _released_source(lg, it, src, k, stage, base, staged)
+                except OSError as e:                        # no released copy to send: the edit is not sent either
+                    problems.append(f"{rel}: changed while this ran and the released copy is missing ({e})")
+                    continue
+                if moved and moved not in notes:
+                    notes.append(moved)
             data = src.read_bytes()
             if rel in copied:
                 if copied[rel] != data:

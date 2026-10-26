@@ -114,3 +114,43 @@ def test_fix3_rfx32_a_recipe_saved_while_a_release_is_recorded_is_not_released(t
     assert new not in _head_recipe(lib), "the recipe saved during the release was recorded as released"
     assert _head_recipe(lib) == released
     assert _recipe(lib).read_text(encoding="utf-8") == released     # put back, the edit kept in the blob store
+
+
+# ------------------------------------------------------------------ R-FX3-3
+@lite
+def test_fix3_rfx33_dblib_sync_ships_the_released_recipe_and_pcblib_not_an_edit_saved_after_the_gate(tmp_path,
+                                                                                                    monkeypatch):
+    """repro_altium_midrun_edit.py dblib-sync: after publish_guard settled the library (and after dblib-sync's own
+    release check of the part), PAD 1 is moved in the recipe and in the .PcbLib. dblib-sync must copy the released
+    revision's .PcbLib, recipe and STEP files (from the ledger's blob store), with a note, never the edit."""
+    import hashlib
+    from ecadlib import altium_dblib_sync as DS, altium_lib as AL, ledger as LG, stdparts as SP
+    w, lib = _demo()
+    plan = lib / "plan.json"
+    pcb = lib / "models/PcbLib/C_0402_1005Metric.PcbLib"
+    edited, new = _moved_pad(lib)
+    conv = AL.footprint_from_kicad(SP.build("C_0402_1005Metric")[0])
+    conv["pads"][0]["x"] -= 0.3
+    real, done = DS.RC.publish_problems, []
+
+    def check(it, *a, **k):
+        r = real(it, *a, **k)
+        if it.get("name") == CAP and not done:                    # the person saves now
+            done.append(1)
+            AL.write_pcblib(pcb, [conv])                          # (it writes a recipe too: the edited one after)
+            _recipe(lib).write_text(edited, encoding="utf-8")
+        return r
+    monkeypatch.setattr(DS.RC, "publish_problems", check)
+    out = w / "out"
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        res = DS.sync(plan, out, "dblib", "ecadlib")
+    head = LG.Ledger(lib).head(CAP)
+    shipped = list(out.rglob("C_0402_1005Metric.PcbLib"))
+    assert shipped and all(hashlib.sha256(p.read_bytes()).hexdigest() == head["files"]["footprint"]["sha256"]
+                           for p in shipped)
+    recs = list(out.rglob("C_0402_1005Metric.PcbLib.ecadbuild"))
+    assert recs and not any(new in p.read_text(encoding="utf-8") for p in recs)
+    assert done and _recipe(lib).read_text(encoding="utf-8") == edited   # the edit is left for the next writer
+    row = next(r for r in res["results"] if r.get("name") == CAP)
+    assert row["action"] in ("added", "updated", "up_to_date"), row
+    assert "changed while" in row["detail"], row
