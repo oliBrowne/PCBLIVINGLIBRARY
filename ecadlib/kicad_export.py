@@ -1121,6 +1121,8 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         if kmod:
             data = released_bytes(it, kmod)
             return data.decode("utf-8"), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
+        return (footprint_from_pcblib(plan_dir / it["footprint"]["file"], fpn, fnotes, pick=it["footprint"].get("ref"),
+                                      rules=rules), f"{it['footprint']['file']} converted back")
 
     from . import ledger as LG
     ledger = LG.Ledger(plan_dir)
@@ -1153,8 +1155,6 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             return a == b or kicad_footprint(a.decode("utf-8")) == kicad_footprint(b.decode("utf-8"))
         except Exception:
             return False
-        return (footprint_from_pcblib(plan_dir / it["footprint"]["file"], fpn, fnotes, pick=it["footprint"].get("ref"),
-                                      rules=rules), f"{it['footprint']['file']} converted back")
     for it in items:
         status = it.get("status", "ready")
         if status == "held" and not include_held:
