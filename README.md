@@ -154,7 +154,7 @@ What has been measured so far:
 
 | What | Result | What it tells you |
 |---|---|---|
-| **Reading real datasheets** (the number that matters) | 30 of 110 real parts built fully right (27 %) | Live benchmark of 2026-10-18 with Claude Opus 5.5. That is why anything in doubt is held, not released. Method, every miss and newer runs: [docs/benchmark.md](docs/benchmark.md). |
+| **Reading real datasheets** (the number that matters) | 87 of 110 real parts built fully right (79 %), 0 built wrong | Claude Opus 5.5's live datasheet reads of 2026-10-25 plus two targeted re-reads, re-scored free on the code of PR #194. The 23 misses were held or left unread, never built. The code was tuned on these same parts, so a fresh set is the real test. Method, every miss and earlier runs: [docs/benchmark.md](docs/benchmark.md). |
 | Footprint generator (replay check) | 328 / 331 on every pull request | Given a correct package description, the generator draws the right pads. It does not test datasheet reading. |
 | Altium Designer 26 | Tried | The generated libraries, the ecadlib menu and parts released to Altium 365. Older Altium versions are untested. |
 
