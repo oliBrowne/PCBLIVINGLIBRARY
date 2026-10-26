@@ -2,7 +2,7 @@
     @lite
     def test_x(tmp_path, monkeypatch): ...
 The wrapper takes no arguments, so pytest and tests.run_all both call it as is."""
-import inspect, os, tempfile
+import inspect, os, shutil, stat, tempfile
 from pathlib import Path
 
 _MISSING = object()
@@ -37,14 +37,71 @@ def lite(fn):
 
     def run():
         mp = MonkeyPatch()
-        with tempfile.TemporaryDirectory() as d:
-            got = {"tmp_path": Path(d), "monkeypatch": mp}
-            try:
-                return fn(**{n: got[n] for n in names})
-            finally:
-                mp.undo()
+        _SCOPES.append([])
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                got = {"tmp_path": Path(d), "monkeypatch": mp}
+                try:
+                    return fn(**{n: got[n] for n in names})
+                finally:
+                    mp.undo()
+        finally:
+            _close(_SCOPES.pop())
     run.__name__, run.__doc__, run.__module__ = fn.__name__, fn.__doc__, fn.__module__
     return run
+
+
+# ---------------------------------------------------------------- temp folders a test removes (R-G2-8)
+_SCOPES = []            # one list per running test (lite / cleans): the scratch folders it made
+
+
+def rmtree(path):
+    """shutil.rmtree that also removes read-only files (Windows refuses them) and never raises."""
+    for d, _, files in os.walk(path):
+        for f in files:
+            try:
+                os.chmod(os.path.join(d, f), stat.S_IREAD | stat.S_IWRITE)
+            except OSError:
+                pass
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _close(dirs):
+    for d in dirs:
+        rmtree(d)
+
+
+def scratch(prefix="ecadlib-test-", keep=False):
+    """A new temp folder (Path), removed when the running test ends (one run by `lite` or `cleans`). keep=True, or
+    outside a test: removed with the run's temp root when the run ends (tests/__init__.py), for a folder made once and
+    shared by later tests (a cached demo library)."""
+    d = Path(tempfile.mkdtemp(prefix=prefix))
+    if _SCOPES and not keep:
+        _SCOPES[-1].append(d)
+    return d
+
+
+def cleans(fn):
+    """fn (a test taking no arguments), removing the scratch folders it made when it ends, passed or failed."""
+    if getattr(fn, "_cleans", False):
+        return fn
+
+    def run():
+        _SCOPES.append([])
+        try:
+            return fn()
+        finally:
+            _close(_SCOPES.pop())
+    run.__name__, run.__doc__, run.__module__, run._cleans = fn.__name__, fn.__doc__, fn.__module__, True
+    return run
+
+
+def clean_all(ns):
+    """Wrap every test function a module defines (no arguments) with `cleans`: clean_all(globals()) at its end."""
+    for name, fn in list(ns.items()):
+        if (name.startswith("test_") and inspect.isfunction(fn) and fn.__module__ == ns.get("__name__")
+                and not inspect.signature(fn).parameters):
+            ns[name] = cleans(fn)
 
 
 def released_anyway(items, base=".", who="--allow"):
