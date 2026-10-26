@@ -1860,10 +1860,14 @@ def _qfp_rows(spec):
 
 
 def _qfn_rows(spec):
-    """A rectangular quad QFN whose row split leaves the end margins of its sides more than two pitches apart. QFN rows
-    are not centred as a QFP's are: KiCad's rectangular quad QFNs differ by up to two pitches (WQFN-42 3.5x9 17/4,
-    WQFN-28 3.5x5.5 10/4, QFN-16 1.8x2.6 4/4), and a pin moved to the other side moves them two pitches, so only a
-    split further off than that is caught (QFN-38 5x7, 12/7, read 10/9 or 13/6). -> review lines (a failed read)."""
+    """A rectangular quad QFN whose row split leaves the end margins of its sides (each side's rows against the body
+    side they run along: left / right along body_width, top / bottom along body_length) too far apart. QFN rows are
+    not centred as a QFP's are: KiCad's rectangular quad QFNs differ by up to 2.25 pitches (UQFN-10 1.3x1.8 2/3 at
+    0.4: 0.9 mm; WQFN-42 3.5x9 17/4, QFN-16 1.8x2.6 4/4: two), so the allowance is 2.25 pitches and 0.1 mm (tiny
+    bodies round their margins). A split further off is caught (QFN-38 5x7, 12/7, read 10/9 or 13/6: three pitches).
+    One pin on the wrong side moves the margins exactly two pitches, so a split one pin off a part whose margins
+    match (QFN-24 4x5 7/5 read 6/6 or 8/4) looks like a real part's and is not caught here: only the pins on each
+    side read from the pin diagram could tell. -> review lines (a failed read)."""
     nlr, e = spec.get("pins_left_right"), spec.get("pitch")
     if spec.get("package_type") != "qfn" or not isinstance(nlr, int) or isinstance(nlr, bool) or \
             not isinstance(spec.get("pin_count"), int) or not isinstance(e, (int, float)) or e <= 0:
@@ -1874,8 +1878,9 @@ def _qfn_rows(spec):
     nlr, ntb = F.rows(spec)
     if not (isinstance(ntb, int) and ntb > 0 and nlr > 0):            # a DFN: one pair of rows, no margins to compare
         return []
-    off = (W[1] - L[1]) - (nlr - ntb) * e
-    if abs(off) <= 2.15 * e:
+    m_lr, m_tb = (W[1] - (nlr - 1) * e) / 2, (L[1] - (ntb - 1) * e) / 2   # each side: its end pins to the corners
+    off = 2 * (m_lr - m_tb)
+    if abs(off) <= 2.25 * e + 0.1 + 1e-9:
         return []
     return [f"pins_left_right {nlr} and pins_top_bottom {ntb} at pitch {e:g} leave end margins {abs(off):.3g} mm apart "
             f"on the {L[1]:g} x {W[1]:g} mm body (real rows: within two pitches), which is implausible (a pin counted on "

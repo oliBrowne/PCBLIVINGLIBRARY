@@ -176,3 +176,42 @@ def test_fx12_4_eval_fingerprint_sees_the_step_bytes(tmp_path, monkeypatch):
     c = _two_model_lib(tmp_path / "c.PcbLib", STEP_SMALL, STEP_BIG)
     assert R.file_fingerprint(a) != R.file_fingerprint(b)
     assert R.file_fingerprint(a) == R.file_fingerprint(c)
+
+
+# ---------------------------------------------------------------- R-FX12-2: QFN end margins with an absolute slack
+def _qfn_read(n, body, T, b, e, ep, nlr, ntb):
+    """A rectangular QFN answer read right or wrong (the review's qfn_truth.py) -> (assess kind, why)."""
+    import copy
+    from ecadlib import datasheet as D, ds_route as DR
+    from tests import test_datasheet as TD
+    from tests.test_fix1026_reads import _qdim
+    x = copy.deepcopy(TD.GOOD)
+    x["package"].update(name=f"QFN-{n}" + ("-1EP" if ep else ""), description="X", package_type="qfn", pin_count=n, pitch=_qdim("e", e, 0),
+                        body_length=_qdim("D", body[0]), body_width=_qdim("E", body[1]), terminal_length=_qdim("L", T, 0.05),
+                        terminal_width=_qdim("b", b, 0.05), lead_span=None, pins_left_right=nlr, pins_top_bottom=ntb,
+                        exposed_pad={"length": _qdim("D2", ep[0], 0.05), "width": _qdim("E2", ep[1], 0.05)} if ep else None)
+    x["pins"] = [{"num": str(i), "name": f"P{i}", "type": "passive", "side": "left", "page": 3}
+                 for i in range(1, n + (2 if ep else 1))]
+    x["pin_table"]["rows"] = n
+    return DR.assess(D.process(x, "T", "ds.pdf"))
+
+
+def test_fx12_2_small_rectangular_qfn_read_right_is_not_held():
+    """Before: KiCad's UQFN-10_1.3x1.8mm_P0.4mm (2 / 3) leaves end margins 0.9 mm = 2.25 pitches apart: over the
+    2.15-pitch rule, so the right read failed. A tenth of a millimetre absolute slack (as tiny bodies round their
+    margins) and the measured 2.25 pitches keep it."""
+    for body, T, b, e, nlr, ntb in (((1.3, 1.8), 0.35, 0.18, 0.4, 2, 3), ((1.6, 2.1), 0.4, 0.25, 0.5, 2, 3)):
+        kind, why = _qfn_read(10, body, T, b, e, None, nlr, ntb)
+        assert not any("end margins" in w for w in why), (body, why)
+
+
+def test_fx12_2_split_far_off_still_fails_and_real_parts_pass():
+    q38 = (38, (5, 7), 0.4, 0.25, 0.5, (3.15, 5.15))
+    assert _qfn_read(*q38, 12, 7)[0] == "ok"
+    for nlr, ntb in ((10, 9), (13, 6)):                 # 3 pitches off
+        kind, why = _qfn_read(*q38, nlr, ntb)
+        assert kind == "failed" and any("end margins" in w for w in why), (nlr, ntb, why)
+    for args in ((42, (3.5, 9), 0.4, 0.25, 0.5, (2.05, 7.55), 17, 4), (28, (3.5, 5.5), 0.4, 0.25, 0.5, (2.05, 4.05), 10, 4),
+                 (16, (1.8, 2.6), 0.3, 0.2, 0.4, (0.7, 1.5), 4, 4), (24, (4, 5), 0.4, 0.25, 0.5, (2.65, 3.65), 7, 5),
+                 (20, (2.5, 4.5), 0.4, 0.25, 0.5, (1.0, 2.9), 8, 2), (42, (5, 6), 0.4, 0.2, 0.4, (3.7, 4.7), 12, 9)):
+        assert not any("end margins" in w for w in _qfn_read(*args)[1]), args
