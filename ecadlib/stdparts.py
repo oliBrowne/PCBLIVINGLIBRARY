@@ -272,8 +272,13 @@ def _mpn_rules():
            "PA8": "1206"}
     koa = {"1H": "0201", "1E": "0402", "1J": "0603", "2A": "0805", "2B": "1206", "2E": "1210", "2H": "2010", "3A": "2512"}
     imp = "(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)"
+    # Samsung RC series: RC<metric size><tolerance><resistance digits> (RC0603F103CS is a 0201)
+    src = {"0402": "01005", "0603": "0201", "1005": "0402", "1608": "0603", "2012": "0805", "3216": "1206", "3225": "1210",
+           "5025": "2010", "6432": "2512"}
     return [
-        (re.compile(r"^(?:RC|RT|RL|AC|AF|AT|PE|PT|RV)" + imp + r"[A-Z]"), "R", None),           # Yageo resistors
+        (re.compile(r"^RC(0402|0603|1005|1608|2012|3216|3225|5025|6432)[BDFGJK]\d"), "R", src),     # Samsung resistors
+        # Yageo resistors: <series><imperial size><tolerance><packing letter>... (RC0603FR-07, RT0603BRD07)
+        (re.compile(r"^(?:RC|RT|RL|AC|AF|AT|PE|PT|RV)" + imp + r"[A-Z][A-Z]"), "R", None),
         (re.compile(r"^CC" + imp + r"[A-Z]{2}"), "C", None),                                     # Yageo MLCC
         (re.compile(r"^(?:GRM|GCM|GJM|GCJ|GRT|GCQ|GQM|GMA)(\d\d)"), "C", m3),                   # Murata MLCC
         (re.compile(r"^(?:LQG|LQM|LQW|LQP)(\d\d)"), "L", m3), (re.compile(r"^BLM(\d\d)"), "L", m3),   # Murata L, beads

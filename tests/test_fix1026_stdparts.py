@@ -107,3 +107,19 @@ def test_library_prefixed_to92_is_kicads_own_land():
     assert S.resolve(["Package_TO_SOT_THT:TO-92"], "Q", "2N3904", "")["footprint"] is None
     assert S.footprint_for(["Package_TO_SOT_THT:TO-92"], None)[0] is None
     assert S.footprint_for(["TO-92"], None)[0] == "TO-92_Inline"
+
+
+# --- R-SP-3: maker MPN size rules apply to their own maker's series only -----------------------------------------
+
+def test_samsung_rc_resistor_size_is_metric_not_yageo_imperial():
+    """Samsung RC0603F103CS is the RC series 0201 (0603 metric); the Yageo rule read it as an imperial 0603."""
+    from ecadlib import stdparts as S
+    assert S.mpn_size("RC0603F103CS") == ("R", "0201")
+    assert S.mpn_size("RC1005F103CS") == ("R", "0402")
+    assert S.mpn_size("RC1608J102CS") == ("R", "0603")
+    assert S.mpn_size("RC3216F1001CS") == ("R", "1206")
+    assert S.resolve([""], "R", "RC0603F103CS")["footprint"] == "R_0201_0603Metric"
+    # Yageo keeps its imperial codes, every series form
+    for mpn, size in (("RC0603FR-0710KL", "0603"), ("RC0402JR-071KL", "0402"), ("RT0603BRD0710KL", "0603"),
+                      ("AC0805FR-0710KL", "0805"), ("RL1206FR-070R1L", "1206"), ("AF0402FR-0710KL", "0402")):
+        assert S.mpn_size(mpn) == ("R", size), mpn
