@@ -157,3 +157,27 @@ def test_rrt2_the_read_review_and_the_librarian_record_say_the_pin_names_are_unc
     from ecadlib import librarian as L
     assert L.cross_check_state(rec) == {"status": "agreed", "summary": CC.summary_line(rec), "pins": "unchecked"}
     assert "pins" not in L.cross_check_state(dict(rec, pins="agreed"))
+
+
+# ---------------------------------------------------------------- R-RT-4
+@lite
+def test_rrt4_a_symbol_gone_from_its_library_is_held_as_a_footprint_gone_is(tmp_path):
+    """project check: a symbol renamed away in a library that is there passed (exit 0) while the same for a footprint
+    held. An update cannot find either, so both hold."""
+    from pathlib import Path
+    from ecadlib import project_check as PJ
+    from tests.test_project_check import make_project
+    pro = make_project(tmp_path)
+    lib = Path(tmp_path) / "lib"
+    t = (lib / "TSym.kicad_sym").read_text()
+    (lib / "TSym.kicad_sym").write_text(t.replace('(symbol "QN"', '(symbol "QN_RENAMED"'))
+    res = PJ.check_kicad(pro, use_global=False)
+    sym = [r for r in res["rows"] if r["kind"] == "symbol"]
+    assert sym and sym[0]["state"] == "not in library" and sym[0]["action"] == "hold", sym
+    assert res["held"] >= 1
+    assert PJ.main(["check", str(pro), "--no-global", "-o", str(Path(tmp_path) / "o" / "r")]) != 0
+    # a library that is not on this computer is not 'gone': no hold, as for footprints
+    (lib / "TSym.kicad_sym").unlink()
+    res = PJ.check_kicad(pro, use_global=False)
+    sym = [r for r in res["rows"] if r["kind"] == "symbol"]
+    assert sym[0]["state"] == "not in library" and sym[0]["action"] != "hold", sym

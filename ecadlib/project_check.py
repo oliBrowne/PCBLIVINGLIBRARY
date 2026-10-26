@@ -379,8 +379,11 @@ def check_kicad(path, libs=(), rules=None, use_global=True):
                 rows.append(_row("symbol", u["lib_id"], u["refs"], state="unreadable", why="no cached copy in the schematic"))
                 continue
             chain, why = L.symbol(u["lib_id"])
-            if chain is None:
-                rows.append(_row("symbol", u["lib_id"], u["refs"], state="not in library", why=why))
+            if chain is None:                  # gone from a library that is there (or its parent is): held, as a
+                nick = u["lib_id"].partition(":")[0]   # footprint gone the same way is (review R-RT-4)
+                gone = why.endswith(f"is no longer in library {nick}") or why.endswith(f"which is not in library {nick}")
+                rows.append(_row("symbol", u["lib_id"], u["refs"], state="not in library", why=why,
+                                 action="hold" if gone else None))
                 continue
             try:
                 ch = CD.diff(symbol_fp(u["node"], name), symbol_fp(chain, name))
