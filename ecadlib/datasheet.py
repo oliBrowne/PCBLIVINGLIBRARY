@@ -5670,6 +5670,14 @@ def main(argv=None):
                 f = Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
                 f.write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n", encoding="utf-8")
                 raise DatasheetError(f"{e} (the answer is saved in {f})")
+        held = read_hold(res)                         # as the librarian: a read that can build wrong is not written
+        if held:
+            f = Path(a.from_response) if a.from_response else \
+                Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
+            if not a.from_response:
+                Path(a.out).mkdir(parents=True, exist_ok=True)
+                f.write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n", encoding="utf-8")
+            raise DatasheetError(f"{held} (nothing written; the answer is saved in {f}; read the drawing yourself)")
     except DatasheetError as e:
         sys.exit(f"error: {e}")
     paths = write(res, a.out)

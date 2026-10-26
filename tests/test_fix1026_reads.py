@@ -246,7 +246,7 @@ def test_2_a_last_answer_failing_a_layout_check_is_held_before_anything_is_writt
     assert it.get("footprint", {}).get("kicad_mod") or it["footprint"].get("file"), it.get("footprint")
 
 
-def test_2_a_read_failing_only_a_soft_check_is_still_built(tmp_path, monkeypatch):
+def test_2_a_read_failing_only_a_soft_check_is_still_built():
     """LT3652IDD (benchmark 2026-10-23): a real 0.45 mm pitch fails self-check's standard-pitch list; it was built
     right and counted right. Holding it would lose a right part, so self-check lines never hold."""
     from ecadlib import ds_route as DR
@@ -494,6 +494,32 @@ def test_fx2_7_a_rectangular_qfp_with_rows_against_the_body_or_one_span_never_bu
     sq = {"name": "QFP-44_10x10mm_P0.8mm", "n": 44, "e": 0.8, "bl": 10, "bw": 10, "ls": 12, "lsy": None, "nlr": 11,
           "ntb": 11, "b": 0.35}
     assert _qfp_read(sq)[0] == "ok"                       # square: one span is the drawing's
+
+
+
+def test_fx2_6_the_one_part_cli_holds_a_read_failing_a_hold_worthy_check():
+    """Before: `ecadlib datasheet PDF --part X` wrote the footprint of a read whose leads touch (needs_review only);
+    the librarian held the same read. Now it is held as there, the paid answer kept for --from-response."""
+    import copy
+    import os
+    import tempfile
+    from pathlib import Path
+    from unittest import mock
+    from tests import test_datasheet as TD
+    ext = copy.deepcopy(TD.GOOD)
+    ext["package"]["terminal_width"].update(min=0.45, nom=0.5, max=0.55)   # leads as wide as the pitch: they touch
+    with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}), \
+            mock.patch.object(D.requests, "post", TD.fake_post(TD.message(ext))):
+        f = Path(d) / "ds.pdf"
+        f.write_bytes(TD.PDF)
+        for extra in ([], ["--from-response", str(Path(d) / "TESTPART.response.json")]):
+            try:
+                D.main([str(f), "--part", "TESTPART", "-o", d] + extra)
+                raise AssertionError(f"written {extra}")
+            except SystemExit as e:
+                assert D.HELD_FAILED in str(e.code) and "leads would touch" in str(e.code), e.code
+            assert not list(Path(d).glob("*.kicad_mod")) and not (Path(d) / "TESTPART.json").exists()
+            assert (Path(d) / "TESTPART.response.json").exists()          # the paid answer kept
 
 
 if __name__ == "__main__":
