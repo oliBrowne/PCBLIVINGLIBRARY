@@ -199,3 +199,24 @@ def test_a_leadless_line_naming_no_pad_is_held_when_both_lands_exist():
     soic = ["lib:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm", "lib:SOIC-8_3.9x4.9mm_P1.27mm"]
     assert _index(soic).find_footprint_for_package("SOIC8", "U", hint="SOIC-8 touch pad controller") == soic[1]
     assert _index(soic).find_footprint_for_package("SOIC8", "U", hint="SOIC-8 EPAD") == soic[0]
+
+
+# ---------------------------------------------------------------- R-SRC-6: the LCSC number in a product link
+def test_easyeda_takes_the_lcsc_number_of_a_product_link_not_a_c0g_slug():
+    from ecadlib import providers as P
+
+    class Http:
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url, headers=None):
+            self.urls.append(url)
+            return type("R", (), {"ok": False, "error": "offline", "status": 0})()
+
+    for cell, want in (("https://www.lcsc.com/product-detail/Multilayer-Ceramic-Capacitors-MLCC-SMD-SMT_Samsung-Electro-"
+                        "Mechanics-CL10C101JB8NNNC-C0G-100pF-50V_C1663.html", "C1663"),
+                       ("https://www.lcsc.com/product-detail/C0G-capacitor/C2040", "C2040"),
+                       ("C2040", "C2040"), ("LCSC C2040", "C2040"), ("c25804", "C25804")):
+        h = Http()
+        P.EasyEDA(h).lookup({"lcsc": cell})
+        assert h.urls and f"/products/{want}/" in h.urls[0], (cell, h.urls)

@@ -210,8 +210,7 @@ class EasyEDA(Provider):
 
     def lookup(self, line):
         raw = str(line.get("lcsc") or "").strip()
-        m = re.search(r"(?<![A-Z0-9])(C\d{1,9})(?![0-9])", raw.upper())   # 'C2040', 'LCSC C2040', a product link:
-        lcsc = m.group(1) if m else ""                                    # the number only goes in the URL
+        lcsc = lcsc_number(raw)                                           # the number only goes in the URL
         if not lcsc:
             return SourceResult(self.name, found=None, error=f"{raw[:30]!r} is not an LCSC number" if raw else "no LCSC number")
         url = self.URL.format(lcsc)
@@ -225,6 +224,18 @@ class EasyEDA(Provider):
         except (ValueError, AttributeError, TypeError) as e:
             res.error = f"unparseable response: {e}"
             return res
+
+
+def lcsc_number(raw):
+    """The LCSC number in a cell: 'C2040', 'LCSC C2040', or a product link's own number ('..._C1663.html', '.../C2040'),
+    not a C0G / C1 in the link's slug before it. '' when there is none."""
+    up = str(raw or "").strip().upper()
+    for pat in (r"(?:LCSC\W*)?(C\d{1,9})", r".*_(C\d{1,9})\.HTML?(?:[?#].*)?", r".*/(C\d{1,9})(?:\.HTML?)?/?(?:[?#].*)?"):
+        m = re.fullmatch(pat, up)
+        if m:
+            return m.group(1)
+    found = re.findall(r"(?<![A-Z0-9])(C\d{1,9})(?![0-9])", up)
+    return found[-1] if found else ""
 
 
 def parse_easyeda(data, res):
