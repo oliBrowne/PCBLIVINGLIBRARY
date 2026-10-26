@@ -950,12 +950,15 @@ def shared_designators(lines):
         if not ln.get("dnp"):
             for r in ref_keys(ln.get("designator", "")):
                 where.setdefault(r, []).append(i)
-    out = {}
+    out, more = {}, set()
     for r, ns in sorted(where.items()):
         for i in ns if len(set(ns)) > 1 else ():
-            others = ", ".join(str(n) for n in ns if n != i)
-            out.setdefault(i, []).append(f"{r} is also on line {others}")
-    return {i: "designator on two lines: " + "; ".join(v[:5]) + (" ..." if len(v) > 5 else "") for i, v in out.items()}
+            if len(out.setdefault(i, [])) >= 5:          # a note names 5: building the rest made many lines sharing
+                more.add(i)                              # a range quadratic (200 x 'R1-R9999': 45 s)
+                continue
+            others = [str(n) for n in ns if n != i]
+            out[i].append(f"{r} is also on line {', '.join(others[:20])}{' ...' if len(others) > 20 else ''}")
+    return {i: "designator on two lines: " + "; ".join(v) + (" ..." if i in more else "") for i, v in out.items()}
 
 
 def triage(lines, index, provs, http, shared=None):

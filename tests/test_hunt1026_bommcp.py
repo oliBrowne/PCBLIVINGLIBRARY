@@ -51,6 +51,19 @@ def test_ref_keys_reads_ranges_as_count_refs_does():
     assert set(T.shared_designators(lines)) == {1, 2, 3, 4}, T.shared_designators(lines)
 
 
+def test_shared_designators_stays_fast_when_many_lines_share_a_range():
+    # each line's note keeps only 5 designators, but every one of them was built, each listing every other line:
+    # 200 lines of 'R1-R9999' took ~45 s (an uploaded BOM held the web UI / MCP server that long)
+    import time
+    t = time.time()
+    out = T.shared_designators([{"designator": "R1-R9999", "mpn": "X"}] * 200)
+    assert time.time() - t < 5, time.time() - t
+    assert len(out) == 200 and out[1].startswith("designator on two lines: R1 is also on line 2, 3,"), out[1][:120]
+    assert out[1].endswith(" ...") and out[1].count(";") == 4, out[1][-200:]
+    small = T.shared_designators([{"designator": "R1, R2"}, {"designator": "R2"}, {"designator": "R2", "dnp": True}])
+    assert small == {1: "designator on two lines: R2 is also on line 2", 2: "designator on two lines: R2 is also on line 1"}
+
+
 @lite
 def test_workspace_triage_says_a_designator_is_on_two_lines_as_the_cli_does(tmp_path, monkeypatch):
     # the web UI / MCP triage_bom ran triage() one line at a time, so no line ever saw the others and the CLI's
