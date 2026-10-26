@@ -1719,6 +1719,7 @@ def sanity(spec, review, evidence=""):
         review.append(f"lead_span min {ls[0]} <= body_width max {bw[2]}")
     review.extend(_feet_outside(spec))
     review.extend(_qfp_rows(spec))
+    review.extend(_qfn_rows(spec))
     ball, py = g("ball_diameter"), spec.get("pitch_y")
     near = min(x for x in (e, py, 99) if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0)
     if t == "bga" and ball and near < 99 and ball[1] >= 0.9 * near:      # (real balls: 0.3 at 0.5, 0.75 at 1.27 mm)
@@ -1854,6 +1855,29 @@ def _qfp_rows(spec):
         out.append(f"exposed_pad {el[1]:g} x {ew[1]:g} mm runs across the {L[1]:g} x {W[1]:g} mm body (a pad runs with "
                    "the body's long side), which is implausible (check exposed_pad length and width against the body's)")
     return out
+
+
+def _qfn_rows(spec):
+    """A rectangular quad QFN whose row split leaves the end margins of its sides more than two pitches apart. QFN rows
+    are not centred as a QFP's are: KiCad's rectangular quad QFNs differ by up to two pitches (WQFN-42 3.5x9 17/4,
+    WQFN-28 3.5x5.5 10/4, QFN-16 1.8x2.6 4/4), and a pin moved to the other side moves them two pitches, so only a
+    split further off than that is caught (QFN-38 5x7, 12/7, read 10/9 or 13/6). -> review lines (a failed read)."""
+    nlr, e = spec.get("pins_left_right"), spec.get("pitch")
+    if spec.get("package_type") != "qfn" or not isinstance(nlr, int) or isinstance(nlr, bool) or \
+            not isinstance(spec.get("pin_count"), int) or not isinstance(e, (int, float)) or e <= 0:
+        return []
+    L, W = _dim(spec.get("body_length")), _dim(spec.get("body_width"))
+    if not (L and W) or abs(L[1] - W[1]) <= max(0.3, 0.05 * min(L[1], W[1])):
+        return []
+    nlr, ntb = F.rows(spec)
+    if not (isinstance(ntb, int) and ntb > 0 and nlr > 0):            # a DFN: one pair of rows, no margins to compare
+        return []
+    off = (W[1] - L[1]) - (nlr - ntb) * e
+    if abs(off) <= 2.15 * e:
+        return []
+    return [f"pins_left_right {nlr} and pins_top_bottom {ntb} at pitch {e:g} leave end margins {abs(off):.3g} mm apart "
+            f"on the {L[1]:g} x {W[1]:g} mm body (real rows: within two pitches), which is implausible (a pin counted on "
+            "the wrong side? check the pins on each side against the pin diagram)"]
 
 
 def _listed_layout(spec, evidence=""):

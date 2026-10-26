@@ -635,6 +635,25 @@ def test_f6_l3_an_exposed_pad_across_a_rectangular_qfp_never_builds_wrong():
             _never_wrong(t, dict(t, epl=t["epw"], epw=t["epl"]), "EP swapped")
 
 
+
+def test_fx8_1_a_rectangular_quad_qfn_row_split_far_off_the_body_fails():
+    """Before: the end-margin rule ran on QFPs only: QFN-38-1EP 5x7 (12/7) read 10/9 or 13/6 built wrong, assess ok.
+    Real QFN rows are not centred as QFP rows are: KiCad's rectangular quad QFNs leave end margins up to two pitches
+    apart (WQFN-42 3.5x9 17/4, WQFN-28 3.5x5.5 10/4, QFN-16 1.8x2.6 4/4), and one pin moved moves them two pitches,
+    so only a split more than two pitches off is refused (6/6 for a 4x5 QFN-24's 7/5 is not caught)."""
+    q38 = ("qfn", 38, (5, 7), None, 0.4, 0.25, 0.5, (3.15, 5.15))
+    assert _ep_read(*q38, 12, 7)[0] == "ok"
+    for nlr, ntb in ((10, 9), (13, 6)):
+        kind, why = _ep_read(*q38, nlr, ntb)
+        assert kind == "failed" and any("end margins" in w for w in why), (nlr, ntb, why)
+    for nm, n, body, T, ep, nlr, ntb in (                 # real KiCad lands, the widest margin differences
+            ("WQFN-42", 42, (3.5, 9), 0.4, (2.05, 7.55), 17, 4), ("WQFN-28", 28, (3.5, 5.5), 0.4, (2.05, 4.05), 10, 4),
+            ("QFN-16", 16, (1.8, 2.6), 0.3, (0.7, 1.5), 4, 4), ("QFN-24", 24, (4, 5), 0.4, (2.65, 3.65), 7, 5)):
+        e = 0.4 if nm == "QFN-16" else 0.5
+        kind, why = _ep_read("qfn", n, body, None, T, 0.2, e, ep, nlr, ntb)
+        assert not any("end margins" in w for w in why), (nm, why)
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
