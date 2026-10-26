@@ -520,7 +520,7 @@ def check_item(item, base=".", rules=None):
 PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what its workspace released (no datasheet here)
 
 
-def publish_problems(item, base=".", rules=None, writes_files=False):
+def publish_problems(item, base=".", rules=None, writes_files=False, policy=None):
     """Why a publisher (altium365 push, dblib-sync / altium-pkg, kicad-export) must not send this part's files: the
     release check run again now, on the files as they are, less the failures the item's --allow covers. [] = it may
     go. A plan's `status` alone is never enough: `altium365 plan --models`, a triage plan or a hand edit can say
@@ -546,7 +546,8 @@ def publish_problems(item, base=".", rules=None, writes_files=False):
     covered = set((item.get("allow") or {}).get("failures", []))
     out = [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
     from .approvals import push_block          # sign-off, checked again on the files as they are now, for every
-    block = push_block(item, None, base)       # route (kicad-export, dblib-sync, ...), not only the Altium 365 push
+    block = push_block(item, policy, base)     # route (kicad-export, dblib-sync, ...), not only the Altium 365 push;
+                                               # policy: the caller's explicit policy ({} = none), as push_block
     return out + ([f"sign-off: {block}"] if block else [])
 
 

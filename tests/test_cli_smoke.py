@@ -90,7 +90,8 @@ CASES = [
     (["notify", "show", "--rules", "{in}/ecadlib.toml"], (0,)),
     (["kicad-dblib", "{out}/lib/plan.json", "-o", "{out}/kicad", "--name", "ecadlib"], (0,)),
     (["export-parts", "{out}/lib/plan.json", "--format", "xlsx", "-o", "{out}/parts.xlsx"], (0,)),
-    (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm"], (0,)),
+    (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm"], (1, 2)),   # refused: kicad-export above wrote held parts
+    (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm", "--include-held"], (0, 1)),   # 1: held parts are a problem
     (["altium-pkg", "{out}/lib/plan.json", "--out", "{out}/altium_pkg"], (0, 1, 2)),   # 2: no ready part has models
     (["altium-menu", "build", "--out", "{out}/altium_menu", "--win-dir", "D:\\ecadlib menu"], (0,)),
     (["kicad-menu", "run-job", "{out}/kmenu/ecadlib-work/jobs/j", "--action", "open", "--project", "{out}/kmenu/b.kicad_pcb",

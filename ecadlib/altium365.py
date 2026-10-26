@@ -691,7 +691,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     # sign-off is checked on the item as it was approved (ecadlib's parameter names: the content hash covers them)
     blocks = [push_block(i, policy) for i in items]
     checked = RU.resolve(rules, folder or ".")
-    rechecks = [RC.publish_problems(i, folder or ".", checked) for i in items]
+    rechecks = [RC.publish_problems(i, folder or ".", checked, policy=policy) for i in items]
     items = [house_item(i, rules) for i in items]
     if isinstance(client, Nexar):              # find reads the MPN under the house name too (pick_named)
         client.rules = rules
