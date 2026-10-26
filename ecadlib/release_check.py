@@ -70,13 +70,26 @@ def chip_size_problem(item):
     fp = item.get("footprint") or {}
     names = [src.split(":")[-1]] if src else [str(fp.get("kicad") or ""), str(fp.get("ref") or "")]
     for n in names:                   # any chip land name: R_0402_1005Metric, a local R0402 / CAP_0402 / RESC1005X40N
-        code = SP.chip_size(n, strict=True)                                                  # (R-B2-3)
+        code = _land_size(n)
         if code:
             if code != size:
                 return (f"chip size: MPN {mpn} is a {size} {kind or 'part'} but the footprint is {n} ({code}): "
                         "the BOM's footprint and its part number name two sizes; fix the BOM line")
             return None
     return None
+
+
+def _land_size(name):
+    """The imperial chip size a land name gives, or None. KiCad's IMP_METMetric names (C_2220_5650Metric,
+    L_1206_3216Metric_Pad1.22x1.90mm_HandSolder) name their imperial size first; KiCad's own metric codes are not
+    always the table's (5650 for 2220, 5664 for 2225) and a pad size can read as a body, so stdparts.chip_size answers
+    'conflict:...' for them. A conflict is no size read (R-FX17-2), never a size to compare."""
+    from . import stdparts as SP
+    m = re.match(r"[A-Za-z]+_(\d{4,5})_(\d{4,5})Metric(?![0-9A-Za-z])", name or "")
+    if m and m.group(1) in SP.IMPERIAL and SP.METRIC.get(m.group(2), m.group(1)) == m.group(1):
+        return m.group(1)
+    code = SP.chip_size(name, strict=True)                                                   # (R-B2-3)
+    return None if not code or "conflict:" in code else code
 
 
 def height_range(fp_name):
