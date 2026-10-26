@@ -1487,8 +1487,9 @@ class Workspace:
         if fmt not in ("csv", "json", "xlsx"):
             raise ValueError(f"format must be csv, json or xlsx, not {str(fmt)[:20]!r}")
         bom_path, plan_f, _ = self._plan(bom)
-        rows = PE.rows(plan_f, name, include_held, rules=self.rules_in_use())
-        out = PE.write(rows, self.root / "reports" / f"parts_{self._key(bom_path)}.{fmt}", fmt)
+        out = self.root / "reports" / f"parts_{self._key(bom_path)}.{fmt}"
+        rows = PE.rows(plan_f, name, include_held, rules=self.rules_in_use(), previous=PE.previous_rows(out, fmt))
+        out = PE.write(rows, out, fmt)
         return {"file": self.rel(out), "parts": len(rows), "columns": PE.COLUMNS}
 
     def kicad_dblib(self, bom, name="ecadlib", driver=None, include_held=False):

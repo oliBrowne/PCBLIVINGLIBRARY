@@ -286,11 +286,16 @@ def check_export_folder(src, lib, rep):
 UNCHECKED_NOTE = "NOT CHECKED: packaged with --unchecked from a KiCad folder ecadlib did not export. Its symbols and footprints were not compared with any released revision of an ecadlib library."
 
 
-def _source(src, name, include_held, http, offline, cache, log, unchecked=False):
+EXPORT_DIR = ".kicad-export"     # in --out: where a plan is exported before it is packaged (kept between builds)
+
+
+def _source(src, name, include_held, http, offline, cache, log, unchecked=False, out=None):
     """(export folder, library name, that library's kicad_export record or None, temp dir to clean up or None). unchecked: a folder
     with no kicad_export.json (not written by ecadlib) is packaged without the change-control check; a folder
     kicad-export wrote is always checked. name: the library to package (None: a folder's only library; a plan's is
-    exported as 'ecadlib')."""
+    exported as 'ecadlib'). A plan is exported into `out`/EXPORT_DIR, kept from one build to the next (R-FL-3): a
+    released part held again keeps the version the last package shipped, as kicad-export, kicad-dblib, dblib-sync
+    and the A365 push keep it, so a PCM update never removes it from users' KiCad (out None: a temporary folder)."""
     from . import kicad_export as X
     src = Path(src)
     if src.is_dir():
@@ -326,9 +331,11 @@ def _source(src, name, include_held, http, offline, cache, log, unchecked=False)
     if not src.is_file():
         raise FileNotFoundError(f"{src}: no such plan.json or kicad-export folder")
     from .httpcache import CachedHTTP
-    tmp = Path(tempfile.mkdtemp(prefix="ecadlib-pcm-"))
-    rep = X.export(src, tmp, name or "ecadlib", include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60), log=log)
-    return tmp, rep["library"], rep, tmp
+    tmp = None if out is not None else Path(tempfile.mkdtemp(prefix="ecadlib-pcm-"))
+    exp = Path(out) / EXPORT_DIR if out is not None else tmp
+    exp.mkdir(parents=True, exist_ok=True)
+    rep = X.export(src, exp, name or "ecadlib", include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60), log=log)
+    return exp, rep["library"], rep, tmp
 
 
 def stage(exp, lib, identifier, prefix, kicad):
@@ -386,7 +393,7 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
         raise ValueError(f"--license {license_!r} is not on KiCad's PCM list" + (f" (did you mean {near[0]}?)" if near else
                          "; use one of KiCad's, e.g. CC-BY-SA-4.0, MIT, CC0-1.0, open-source or unrestricted"))
     out = Path(out)
-    exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked)
+    exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked, out=out)
     unchecked = bool(unchecked and Path(src).is_dir() and xrep is None)
     # parts kicad-export wrote while held (its --include-held): never packaged unless asked for, and then said
     held = sorted({str(p.get("part")) for p in (xrep or {}).get("parts") or []

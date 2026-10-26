@@ -229,7 +229,9 @@ symbols' Footprint fields say `PCM_<lib>:<footprint>` and the footprints' models
 change the same day takes the version after the last one (2026.10.17 after 2026.10.16), as KiCad offers only a newer
 version as an update (so a `--pkg-version` that is not newer, 1.2 after 1.2.0 included, is refused for a changed
 library). The last one is this package's newest in `--out` (its zips there, `packages.json`, `kicad_pcm.json`), so
-packages sharing a folder keep their own versions. With
+packages sharing a folder keep their own versions. A plan is exported into `--out`/.kicad-export first and that
+folder is kept, so a released part held again keeps the version the last package shipped (as kicad-export keeps it)
+instead of an update removing it from users' KiCad; it need not be served with the repository. With
 `--base-url` it also writes `repository.json` and `packages.json` (sha256, sizes) for Manage Repositories; KiCad only
 fetches repositories over http(s) (`kicad_curl_easy.cpp`), so a `file://` URL is refused.
 `--plugin` writes a PCM *plugin* package: an **ecadlib** button in the PCB editor's top toolbar (and Tools > External
