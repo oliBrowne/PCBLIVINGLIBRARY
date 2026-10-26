@@ -95,6 +95,11 @@ EXAMPLES = {
     "librarian.lcsc_mismatch": "LCSC C123 is BSS84, not BSS138: fix the BOM's LCSC number",
     "librarian.footprint_guess": "footprint SOT-23 chosen by name: compare with the datasheet land pattern",
     "librarian.symbol_match": "symbol Q_NMOS_GSD matched by the BOM's value",
+    "librarian.bom_vs_symbol_footprint": "footprint: the BOM names QFN-48-1EP_7x7mm but the symbol's Footprint property is "
+                                         "LQFP-48_7x7mm: check which package the part has",
+    "librarian.variant_alternate": "variant alternate part MCP6002T-I/MS: footprint SOIC-8_3.9x4.9mm is the base part's (an "
+                                   "Altium variant names no footprint for its alternate): check MCP6002T-I/MS comes in "
+                                   "that package, or give the alternate its own footprint",
     "librarian.easyeda": "EasyEDA C8734 conversion: check pads and pins against the datasheet (native converter, format assumed)",
     "librarian.family_pinout": "symbol pinout AMS1117 from the AMS1117-3.3 family table (ecadlib.stdparts): check pins 1-3 against the datasheet",
     "librarian.value_two_ways": "verify: value 4,700pF reads two ways: 4.7pF or 4700pF; write it without the comma",
@@ -306,7 +311,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 15, "datasheet.py": 7,
+    "librarian.py": 18, "datasheet.py": 7,
 }
 
 

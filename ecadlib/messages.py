@@ -196,6 +196,10 @@ CODES = {
     "footprint.not_a_number": ("The footprint has a position or size that is not a number (nan / inf).",
                                "Read the land pattern again from the datasheet, or pick another footprint.",
                                [r"is not a number \(nan / inf\)"]),
+    "librarian.bom_vs_symbol_footprint": ("The BOM names the footprint {bom}, but the symbol's Footprint property says {sym}.",
+                                          "Check which package the part comes in, and fix the BOM or pick the right footprint.",
+                                          [r"^(?:verify: )?footprint: the BOM names (?P<bom>\S+) but the symbol's Footprint "
+                                           r"property is (?P<sym>\S+): check which package"]),
     "footprint.other": ("The footprint check found a problem: {detail}.",
                         "Compare the footprint with the datasheet, then fix it or release anyway.",
                         [r"^footprint: (?P<detail>.+)"]),
@@ -327,6 +331,10 @@ CODES = {
     "librarian.symbol_match": ("The symbol {sym} was matched by {how}.",
                                "Check its pin names and numbers against the datasheet, then release it anyway if they match.",
                                [r"^(?:verify: )?symbol (?P<sym>\S+) matched by (?P<how>.+)"]),
+    "librarian.variant_alternate": ("{mpn} is a variant's alternate part and has the base part's footprint {fp}.",
+                                    "Check that {mpn} comes in that package, or give the alternate its own footprint.",
+                                    [r"^(?:verify: )?variant alternate part (?P<mpn>\S+): footprint (?P<fp>\S+) is the "
+                                     r"base part's"]),
     "librarian.easyeda": ("The footprint and symbol were converted from EasyEDA ({lcsc}).",
                           "Check the pads and pins against the datasheet, then release it anyway if they match.",
                           [r"EasyEDA (?P<lcsc>\S+) conversion"]),

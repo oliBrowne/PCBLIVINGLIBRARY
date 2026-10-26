@@ -225,7 +225,7 @@ def test_push_sends_no_parameter_update_for_a_part_that_is_not_publishable():
             return {"id": "C1", "name": name, "revision": {"revisionId": "R1"},
                     "details": {"parameters": [{"name": "Manufacturer Part Number", "value": name},
                                                {"name": "Manufacturer", "value": "TI"},
-                                               {"name": "Voltage", "value": "50V"}]}}
+                                               {"name": "Notes", "value": "old note"}]}}
 
         def update_params(self, cid, params, note, replace=False):
             self.calls.append(("update_params", cid, params))
@@ -237,7 +237,7 @@ def test_push_sends_no_parameter_update_for_a_part_that_is_not_publishable():
     for st in ("draft", "needs_review", "Ready", "needs_altium_models", "awaiting_approval", "ready"):
         it = {"name": "LM358DR", "folder": "Components/ICs", "description": "dual op amp", "comment": "LM358",
               "parameters": [{"name": "Manufacturer Part Number", "value": "LM358DR"},
-                             {"name": "Manufacturer", "value": "TI"}, {"name": "Voltage", "value": "25V"}],
+                             {"name": "Manufacturer", "value": "TI"}, {"name": "Notes", "value": "new note"}],
               "symbol": {"ref": "LM358", "file": None}, "footprint": {"ref": "SOIC-8", "file": None}, "status": st}
         c = Fake()
         real = A.push([dict(it)], c, "https://x.365.altium.com", folder=d)[0]

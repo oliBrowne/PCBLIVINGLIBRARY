@@ -189,7 +189,7 @@ def test_kicad_pcm_quiet_keeps_the_license_warning(tmp_path):
     shutil.copytree(_demo(), tmp_path / "ws")
     plan = tmp_path / "ws/librarian/demo_bom_demo/plan.json"
     items = json.loads(plan.read_text(encoding="utf-8"))
-    items[0]["source"]["footprint"] = "kicad:Resistor_SMD:R_0603_1608Metric"        # some KiCad library content
+    items[0]["source"]["footprint"] = "kicad:Capacitor_SMD:C_0402_1005Metric"     # some KiCad library content
     plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
     old = TM.VERBOSITY
     try:
