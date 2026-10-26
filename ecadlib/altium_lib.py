@@ -762,8 +762,9 @@ def ic_symbol(name, pins, description="", designator="U?", footprint=None, comme
     bad = [p.get("num") for p in pins if p.get("side", "left") not in ORIENT]
     if bad:
         raise ValueError(f"{name}: pins {bad} have a side other than {list(ORIENT)}")
+    from . import symbol_layout as SL
+    pins = [dict(p, type=SL._ptype(p.get("type"))) for p in pins]   # 'Open Drain', 'Input': ETYPE keys (pin_rec)
     if layout is not False:
-        from . import symbol_layout as SL
         if layout or SL.wants_layout(pins, rules):
             return SL.build(name, pins, description, designator, footprint, comment, rules)
     side = {s: [p for p in pins if p.get("side", "left") == s] for s in ORIENT}

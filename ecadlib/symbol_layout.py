@@ -140,8 +140,11 @@ def classify(pin):
         return "nc"
     if port_of(pin.get("name", "")):
         return "ports"
-    for g, rx in RX:
-        if rx.match(k):
+    full = primary(pin.get("name", "")).upper()   # the name before an active-low '_N' / '_B' / '_L' came off: a rule
+    hit = next((g for g, rx in RX if g not in ("other_in", "other_out") and rx.match(full) and not rx.match(k)),
+               None) if full != k else None       # written for that very spelling wins (VREF_N, the negative
+    for g, rx in RX:                              # reference: ground, not VREF)
+        if (g == hit) if hit else rx.match(k):
             if g == "usb" and k == "VBUS" and t in ("power", "power_in"):
                 return "power"
             if g in ("other_in", "other_out") and t in DIRECTED:     # a name only hints the direction: the type says it
@@ -372,6 +375,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
     bad = [p.get("num") for p in pins if not str(p.get("num", "")).strip()]
     if bad:
         raise ValueError(f"{name}: {len(bad)} pins have no number")
+    pins = [dict(p, type=_ptype(p.get("type"))) for p in pins]      # 'Open Drain', 'Input' (a JSON pin list): ETYPE keys
     s = settings(rules)
     g, L = s["grid"] // 10, s["pin_length"] // 10
     units = arrange(pins, rules, split)
@@ -675,11 +679,15 @@ def svg(sym, scale=2.0):
 ETYPE_NAME = {0: "input", 1: "io", 2: "output", 3: "open_collector", 4: "passive", 5: "tristate", 6: "open_emitter", 7: "power"}
 TYPE_ALIASES = {"i": "input", "in": "input", "o": "output", "out": "output", "bidirectional": "io", "i/o": "io", "inout": "io",
                 "pwr": "power", "power_input": "power_in", "power_output": "power_out", "gnd": "ground", "tri_state": "tristate",
-                "unspecified": "passive", "free": "passive", "no_connect": "nc", "": "passive", "p": "power", "analog": "passive"}
+                "unspecified": "passive", "free": "passive", "no_connect": "nc", "": "passive", "p": "power", "analog": "passive",
+                "open_drain": "open_collector", "opendrain": "open_collector", "od": "open_collector", "oc": "open_collector",
+                "hi_z": "hiz", "high_z": "hiz"}
 
 
 def _ptype(t):
-    t = str(t or "").strip().lower().replace(" ", "_")
+    """A pin type as a CSV, a JSON pin list, a datasheet or KiCad spells it ('Open Drain', 'tri-state', 'Input',
+    'bidirectional') -> an altium_lib.ETYPE key; one it does not know is passive."""
+    t = re.sub(r"[\s-]+", "_", str(t or "").strip().lower())
     t = TYPE_ALIASES.get(t, t)
     return t if t in AL.ETYPE else "passive"
 
