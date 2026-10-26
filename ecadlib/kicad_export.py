@@ -439,18 +439,24 @@ def kicad_pin_details(sym):
     return {n: {"name": p["name"], "ktype": p["ktype"], "alt": p["alt"]} for n, p in sorted(fp["pins"].items())}
 
 
-def kicad_baseline_differs(item, plan_dir, details):
-    """KiCad-only pin details of a fetched symbol against those an earlier KiCad publish of the same released
-    revision shipped -> [{class, text}] (electrical); [] when they match or no earlier publish recorded them."""
+def kicad_baseline(item, plan_dir):
+    """The KiCad-only pin details ({number: {name, ktype, alt}}) the first KiCad publish of the part's released
+    revision shipped (the ledger's publish line), or None."""
     from . import ledger as LG
     lg = LG.Ledger(plan_dir)
     head = lg.head(item["name"]) if lg.exists() else None
     if not head:
-        return []
-    base = next((e["detail"]["ksym"] for e in reversed(lg.history(item["name"]))
+        return None
+    return next((e["detail"]["ksym"] for e in reversed(lg.history(item["name"]))
                  if e.get("event") == "publish" and str(e.get("target") or "").startswith("kicad")
                  and e.get("revision") == head["revision"] and isinstance(e.get("detail"), dict)
                  and e["detail"].get("ksym")), None)
+
+
+def kicad_baseline_differs(item, plan_dir, details):
+    """KiCad-only pin details of a fetched symbol against those an earlier KiCad publish of the same released
+    revision shipped -> [{class, text}] (electrical); [] when they match or no earlier publish recorded them."""
+    base = kicad_baseline(item, plan_dir)
     if base is None:
         return []
     out = []
@@ -588,8 +594,16 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
     if not f or not (plan_dir / f).exists():
         raise FileNotFoundError("no symbol: " + "; ".join(why or ["no source and no .SchLib"]))
     sym = symbol_from_schlib(plan_dir / f, name, notes, pick=item["symbol"].get("ref"))
-    if not src.startswith(("kicad:", "local:")):     # a curated KiCad symbol keeps the types its .SchLib gives
-        restore_types(sym, item["symbol"].get("kicad_types"), notes)
+    own = item["symbol"].get("kicad_types")
+    if not src.startswith(("kicad:", "local:")):
+        restore_types(sym, own, notes)
+    else:            # a curated KiCad symbol read back (offline, no cache, or its source changed since the release):
+        if not own:  # the power_out / no_connect types its source gave, as the librarian recorded them (else as the
+            try:     # KiCad publish of this revision shipped them), never guessed by pin name
+                own = {n: d.get("ktype") for n, d in (kicad_baseline(item, plan_dir) or {}).items() if isinstance(d, dict)}
+            except (OSError, ValueError, KeyError, TypeError):
+                own = None
+        restore_types(sym, own, notes, guess=False)
     if src.startswith("standard:Regulator_Linear_"):   # Altium has one Power type: a standard regulator's VO is power_out
         from . import stdparts as SP                     # in ecadlib's own symbol and in KiCad's (ERC needs a rail driver)
         try:

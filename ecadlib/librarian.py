@@ -473,7 +473,8 @@ class Run:
             notes.append(f"pin text overlaps ({'; '.join(clash[:3])}); not a plain IC box, so kept as drawn: check it")
         elif stacked:
             notes.append(f"pins {', '.join(stacked[:3])} share one pin end; not a plain IC box, so kept as drawn: check it")
-        self.put_sym(st, sym, source, notes)
+        self.put_sym(st, sym, source, notes,
+                     kicad_types=kicad_chain_types(chain) if source.startswith(("kicad:", "local:")) else None)
 
     # ---- per part
     def resolve(self, item, ln, row, keep=None):
@@ -978,6 +979,21 @@ class Run:
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                             "see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+
+
+def kicad_chain_types(chain, pin_map=None):
+    """{pin number: KiCad type} of a KiCad symbol's (extends chain's) pins whose type an Altium .SchLib cannot hold
+    (power_out, no_connect): recorded with the plan's symbol, so a KiCad export that reads the .SchLib back (the source
+    not reachable, or changed since the release) puts them back. pin_map: the conversion's {KiCad number: plan number}."""
+    out = {}
+    for s in chain or []:
+        for u in sexpr.find(s, "symbol"):
+            for p in sexpr.find(u, "pin"):
+                num = sexpr.first(p, "number")
+                if num and len(p) > 1 and str(p[1]) in ("power_out", "no_connect"):
+                    n = str(num[1]).strip('"')
+                    out[str((pin_map or {}).get(n, n))] = str(p[1])
+    return out
 
 
 def kicad_only_types(pins):

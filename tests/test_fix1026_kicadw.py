@@ -102,6 +102,59 @@ def test_rkw2_pcm_rewrites_a_prefixed_model_path():
     assert '(model "${KICAD8_3RD_PARTY}/3dmodels/com_x/ecadlib.3dshapes/X.step"' in out, out
 
 
+# ---- R-KW-3: a KiCad-sourced symbol read back from its .SchLib keeps power_out / no_connect
+def _ams1117_read_back(d, kicad_types):
+    chain, _ = K.load_symbol(f"{FIX / 'Regulator_Linear_AMS1117.kicad_sym'}:AMS1117-3.3", None, keep_quotes=True)
+    (d / "models" / "SchLib").mkdir(parents=True)
+    AL.write_schlib(d / "models" / "SchLib" / "AMS1117.SchLib", [K.convert_symbol(chain, "AMS1117-3.3")])
+    item = {"name": "AMS1117-3.3", "source": {"symbol": "kicad:Regulator_Linear:AMS1117-3.3"},
+            "symbol": {"file": "models/SchLib/AMS1117.SchLib", "ref": "AMS1117-3.3"}, "footprint": {}}
+    if kicad_types is not None:
+        item["symbol"]["kicad_types"] = kicad_types
+    sym, how = X.load_symbol(item, d, httpcache.CachedHTTP(d / "cache", offline=True), [], "AMS1117-3.3", [])
+    assert "read back" in how, how
+    return {str(sexpr.first(p, "number")[1]): p[1] for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin")}
+
+
+@lite
+def test_rkw3_librarian_records_kicad_types_of_a_kicad_symbol(tmp_path):
+    from ecadlib import librarian as L
+    chain, _ = K.load_symbol(f"{FIX / 'Regulator_Linear_AMS1117.kicad_sym'}:AMS1117-3.3", None)
+    r = L.Run(tmp_path, None, None, [], [])
+    st = {"name": "AMS1117-3.3", "symbol": None, "footprint": None}
+    r.put_kicad_sym(st, chain, "AMS1117-3.3", None, "kicad:Regulator_Linear:AMS1117-3.3")
+    assert st["symbol"].get("kicad_types") == {"2": "power_out"}, st["symbol"]
+
+
+@lite
+def test_rkw3_kicad_symbol_read_back_restores_recorded_types(tmp_path):
+    got = _ams1117_read_back(tmp_path, {"2": "power_out"})
+    assert got["2"] == "power_out", got
+    assert got["1"] == "power_in", got                      # GND keeps its type
+
+
+@lite
+def test_rkw3_kicad_symbol_read_back_is_not_guessed_by_name(tmp_path):
+    got = _ams1117_read_back(tmp_path, None)               # a curated KiCad symbol: no name guessing without a record
+    assert got["2"] == "power_in", got
+
+
+@lite
+def test_rkw3_plan_without_record_uses_the_kicad_publish_baseline(tmp_path):
+    base = {"1": {"name": "GND", "ktype": "power_in", "alt": []}, "2": {"name": "VO", "ktype": "power_out", "alt": []},
+            "3": {"name": "VI", "ktype": "power_in", "alt": []}}
+    with mock.patch.object(X, "kicad_baseline", lambda item, plan_dir: base):   # a plan from before the record
+        got = _ams1117_read_back(tmp_path, None)
+    assert got == {"1": "power_in", "2": "power_out", "3": "power_in"}, got
+
+
+def test_rkw3_chain_types_follow_the_pin_map():
+    from ecadlib import librarian as L
+    chain, _ = K.load_symbol(f"{FIX / 'Regulator_Linear_AMS1117.kicad_sym'}:AMS1117-3.3", None)
+    assert L.kicad_chain_types(chain) == {"2": "power_out"}
+    assert L.kicad_chain_types(chain, {"2": "4"}) == {"4": "power_out"}
+
+
 if __name__ == "__main__":
     fails = 0
     for k, f in list(globals().items()):

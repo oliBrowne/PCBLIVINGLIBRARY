@@ -449,7 +449,8 @@ def _write(item, kind, cid, src, base, pin_map=None, others=None):
                                L.kicad_params(mpn, shared, cid.startswith("kicad:")), pin_map, notes)
         if pin_map:
             notes.append("pin map " + ", ".join(f"{a}->{b}" for a, b in pin_map.items()))
-        r.put_sym(st, sym, cid, notes)
+        r.put_sym(st, sym, cid, notes,      # a KiCad symbol's power_out / no_connect, for the KiCad export's read-back
+                  kicad_types=L.kicad_chain_types(got, pin_map) if cid.startswith(("kicad:", "local:")) else None)
     rec = dict(st[kind], chosen=True)
     if kind == "footprint" and item["footprint"].get("bom_ref"):     # a name fp_share gave: re-runs keep it as the ref
         rec["renamed_from"] = item["footprint"]["bom_ref"]

@@ -62,7 +62,7 @@ def _tips(sym):
 def _put(text, name, rules=None):
     """Librarian.put_kicad_sym on a KiCad symbol (as src_kicad calls it) -> (symbol written, notes)."""
     st, got = {"name": name}, {}
-    me = SimpleNamespace(rules=rules, put_sym=lambda st, sym, src, notes: got.update(sym=sym, notes=notes))
+    me = SimpleNamespace(rules=rules, put_sym=lambda st, sym, src, notes, kicad_types=None: got.update(sym=sym, notes=notes))
     L.Run.put_kicad_sym(me, st, [K._find_symbol(sexpr.parse(text), name)], name, None, f"kicad:Test:{name}")
     return got["sym"], got["notes"]
 
