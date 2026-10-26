@@ -63,3 +63,32 @@ def test_printed_ground_on_kicads_nc_pin_is_credited_when_ground_stays_on_its_pi
     assert not R.printed_names(sc, ours, ref, "SOT-223: 1 GND 2 VOUT 3 VIN. TO-92: 1 GND 2 VIN 3 VOUT.")
 
 
+# ---------------------------------------------------------------- R-CE-1: spelled-out names swapped
+MC = [("1", "SwC"), ("2", "SwE"), ("3", "TC"), ("4", "GND"), ("5", "CII"), ("6", "VCC"), ("7", "Ipk"), ("8", "DC")]
+
+
+def test_spelled_out_names_swapped_and_printed_in_another_package_are_not_credited():
+    mine = [("1", "Switch Emitter"), ("2", "Switch Collector"), ("3", "Timing Capacitor"), ("4", "GND"),
+            ("5", "Comparator Inverting Input"), ("6", "VCC"), ("7", "Ipk Sense"), ("8", "Driver Collector")]
+    text = ("SOIC-8: 1 Switch Collector 2 Switch Emitter 3 Timing Capacitor 4 GND 5 Comparator Inverting Input 6 VCC "
+            "7 Ipk Sense 8 Driver Collector. DFN-8: 1 Switch Emitter 2 Switch Collector 3 Timing Capacitor")
+    sc = _sc(mine, MC)
+    assert not R.printed_names(sc, mine, MC, text), sc["fields"]["symbol_names"]
+    assert not sc["fields"]["symbol_names"]["ok"]
+    # unswapped, the same names are still credited
+    good = [("1", "Switch Collector"), ("2", "Switch Emitter")] + mine[2:]
+    sc = _sc(good, MC)
+    R.printed_names(sc, good, MC, text)
+    assert sc["fields"]["symbol_names"]["ok"], sc["fields"]["symbol_names"]
+
+
+def test_spelled_out_swap_fails_the_scorer_on_a_big_symbol():
+    # 18 of 20 names agree (over the 0.8 bar): the swap itself must fail it
+    ref = MC[:4] + [(str(i), f"P{i}") for i in range(5, 21)]
+    mine = [("1", "Switch Emitter"), ("2", "Switch Collector")] + ref[2:]
+    f = S.score_symbol(mine, ref)["symbol_names"]
+    assert not f["ok"] and f["moved"] == 2, f
+    mine = [("1", "Switch Collector"), ("2", "Switch Emitter")] + ref[2:]
+    assert S.score_symbol(mine, ref)["symbol_names"]["ok"]
+
+

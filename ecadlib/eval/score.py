@@ -344,7 +344,7 @@ def score_symbol(mine_pins, ref_pins, tol=None):
         # R-CE-1 2026-10-26), or supply <-> ground: a short
         def elsewhere(n, gone=False):
             o = a.get(n)
-            return bool(norm_name(o)) and any(m != n and once[k] == 1 and same_name(norm_name(o), k)
+            return bool(norm_name(o)) and any(m != n and once[k] == 1 and (same_name(norm_name(o), k) or short_form(o, b[m]))
                                               and not (gone and m in same) for m, k in named.items())
         # on KiCad's exposed pad or no-connect pin a maker's name is moved only when it left its own pin (ours GND on
         # KiCad's EP / PAD / NC with GND still on KiCad's GND pin is one net on one more pin, A4950K, TXB0104RGY: the

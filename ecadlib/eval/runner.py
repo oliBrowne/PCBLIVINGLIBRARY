@@ -220,7 +220,8 @@ def printed_names(sc, mine_pins, ref_pins, text, tol=None):
 
     def is_name(x, k):                                # ours x is KiCad's name k: a spelling, short form or abbreviation
         return bool(S.norm_name(k)) and bool(S.norm_name(x)) and (
-            S.same_name(S.norm_name(x), S.norm_name(k)))
+            S.same_name(S.norm_name(x), S.norm_name(k)) or S.short_form(x, k)
+            or len(spelt(x).split()) > 1 and _abbreviates(k, spelt(x)))
     for n, v in fixed.items():
         o = spelt(ours.get(n))
         # a spelling of a name, never another pin's name: one KiCad has on another pin, in its spelling or spelled out
