@@ -307,14 +307,15 @@ def evaluate(item, policy, base=".", h=None):
     valid, stale, rejected, ignored, rejects, counted = [], [], [], [], [], []
     self_user = _allow_user(item)
     users = (policy or {}).get("users") or {}
-    for k, r in latest.items():
+    own = lambda r: r.get("key") or user_key(r["who"])   # who may sign: the record's own key, not the person it was
+    for k, r in latest.items():                          # filed under (a bare name filed under Ann's e-mail is not Ann)
         if r["decision"] == "reject":          # a "no" holds until that person approves, whatever changed since (a
             rejects.append(k)                  # restyle, a revert, a re-run lifts none)
         elif not same(r.get("hash")):
             stale.append(r["who"])
         elif policy and policy["no_self_approval"] and self_user and (k == user_key(self_user) or same_person(r["who"], self_user)):
             ignored.append(f"{r['who']}: released it with --allow")
-        elif users and (k not in users or (r.get("role") and r["role"] not in users[k])):
+        elif users and (own(r) not in users or (r.get("role") and r["role"] not in users[own(r)])):
             ignored.append(f"{r['who']}: not authorised" + (f" as {r['role']}" if r.get("role") else ""))
         else:
             valid.append(r)
@@ -396,9 +397,11 @@ def now():
 
 
 def _takes_back(item, who):
-    """who's latest decision on the item is a reject (so an approve now takes it back)."""
+    """who's latest decision on the item is a reject (so an approve now takes it back). The same key only (the e-mail,
+    else the folded name): another spelling ('Ann Lee' for 'Ann Lee <ann@x.com>') is not let past the policy's users
+    as a take-back."""
     k = user_key(who)
-    mine = [r for r in item.get("approvals") or [] if (r.get("key") or user_key(r["who"])) == k or same_person(r["who"], who)]
+    mine = [r for r in item.get("approvals") or [] if (r.get("key") or user_key(r["who"])) == k]
     return bool(mine) and mine[-1]["decision"] == "reject"
 
 

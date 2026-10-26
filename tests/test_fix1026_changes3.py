@@ -289,3 +289,28 @@ def test_fix4_kicad_export_ships_nothing_when_the_released_copy_is_missing():
     rep, out, _ = _kx_with_midrun_edit(move)
     assert not (out / "ecadlib.pretty/C_0402_1005Metric.kicad_mod").exists()
     assert any("C_0402_1005Metric" in e and "released copy is missing" in e for e in rep["errors"]), rep["errors"]
+
+
+# ------------------------------------------------------------------ R-FX7-1 (fixes7.md)
+@lite
+def test_fix7_rfx71_a_name_spelling_the_policy_refuses_is_no_sign_off_after_a_reject(tmp_path, monkeypatch):
+    """abuse_reject.py A1: users {ann@, bob@}. Ann <ann@example.com> rejects; an approve by a bare "Ann Lee" (refused
+    without the reject) must not be recorded as her take-back, and nothing it left may count as a sign-off. Ann's own
+    take-back still works, and a record whose own key is not a listed user never counts."""
+    from ecadlib import approvals as AP
+    d = str(tmp_path)
+    pol = AP.normalize_policy({"required": 1, "users": {"ann@example.com": ["qa"], "bob@example.com": ["qa"]}})
+    it = _part()
+    AP.decide(it, "reject", ANN, comment="wrong", base=d, policy=pol)
+    assert not _try(it, "approve", "Ann Lee", d, pol)
+    assert not AP.evaluate(it, pol, d)["met"]
+    it2 = _part()                                                     # a record written by an older ecadlib
+    AP.decide(it2, "reject", ANN, comment="wrong", base=d, policy=pol)
+    it2["approvals"].append(dict(it2["approvals"][0], who="Ann Lee", key="ann lee", decision="approve", comment="",
+                                 hash=AP.content_hash(it2, d)))
+    ev = AP.evaluate(it2, pol, d)
+    assert not ev["met"] and ev["approved_by"] == [], ev
+    it3 = _part()
+    AP.decide(it3, "reject", ANN, comment="wrong", base=d, policy=pol)
+    assert _try(it3, "approve", ANN, d, pol)                          # her own take-back: recorded, and she is listed
+    assert AP.evaluate(it3, pol, d)["met"]
