@@ -880,8 +880,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     claims = me = None
     forgotten = []
     if lg is not None:                         # which plan folders pushed each part to this workspace
-        me = CG.plan_id(folder, create=not dry_run) or "?this"
         claims = CG.Claims(CG.publishers_file(folder), CG.publishers_file(folder).parent, section=target)
+        me = claims.me(folder, create=not dry_run) or "?this"
         if forget_missing:
             gone = sorted({p for v in claims.claims.values() for p in v
                            if not claims.is_me(p, me, folder) and claims.folder(p) is None})

@@ -649,10 +649,12 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     # plan folder that is gone (stale: forget_missing drops its claim)
     from . import ledger as LG
     pf = CG.lib_folder(base)
-    me = CG.plan_id(pf, create=not dry_run) or CG.project_key(to, pf)
     writers = state.get("writers") or {}
     plans = {k: dict(v) for k, v in (writers.get("plans") or {}).items() if isinstance(v, dict)}
     here = lambda p: Path(p) if Path(p).is_absolute() else to / p
+    me = CG.plan_id(pf, create=not dry_run)            # (a second live folder with this id: a copy, R-FX18-1)
+    seen = [here(h) for h in [(plans.get(me) or {}).get("path")] if h] if me else []
+    me = (CG.target_plan_id(pf, seen, create=not dry_run) if me else None) or CG.project_key(to, pf)
 
     def same_folder(a, b):
         try:

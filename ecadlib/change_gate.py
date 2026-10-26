@@ -1483,23 +1483,40 @@ def _read_plan_id(folder):
     return (d.get("id"), d.get("folder")) if isinstance(d, dict) and is_plan_id(d.get("id")) else (None, None)
 
 
-def plan_id(folder, create=True):
+def plan_id(folder, create=True, renew=False):
     """The plan folder's own id (R-FX15-2): how a shared publish target (a DbLib folder, an Altium 365 workspace, a
     KiCad output folder) records which plan folder released what. It is made once and kept in the plan folder, so the
     plan stays itself when its folder is renamed, the target is moved, or it is reached by another path (a clone, a
     Windows share on another drive). A copy of a plan folder whose original is still where the id was made gets an id
-    of its own (two folders, two plans). create=False: None when the folder has none yet."""
+    of its own (two folders, two plans). The folder recorded with the id follows the plan when it moves (the recorded
+    one is gone, or holds another plan): a copy made after a rename is still told from its original (R-FX18-1).
+    create=False: None when the folder has none yet, and nothing is written. renew: a new id (target_plan_id: the
+    folder is a copy of a plan a target saw elsewhere)."""
     import uuid
     folder = Path(folder)
     pid, made_in = _read_plan_id(folder)
-    if pid and made_in:
+    moved = False
+    if pid and made_in and not renew:
         try:
             orig = Path(made_in)
-            copied = (orig.is_dir() and not os.path.samefile(orig, folder) and _read_plan_id(orig)[0] == pid)
+            if not orig.is_dir():                # the plan folder was renamed or moved (or reached from elsewhere)
+                moved = True
+            elif not os.path.samefile(orig, folder):
+                if _read_plan_id(orig)[0] == pid:    # its original is still there: this is a copy
+                    pid = None
+                else:                            # another plan (or none) at the old place now: this one moved
+                    moved = True
         except OSError:
-            copied = False
-        if copied:
-            pid = None
+            pass
+    if renew:
+        pid = None
+    if pid and moved and create:
+        try:
+            from .fsutil import write_text_atomic
+            write_text_atomic(folder / LG.STORE / PLAN_ID,
+                              json.dumps({"id": pid, "folder": str(folder.resolve())}, indent=1) + "\n")
+        except OSError:                          # a read-only plan folder: still this plan
+            pass
     if pid or not create:
         return pid
     pid = f"plan-{uuid.uuid4().hex}"
@@ -1507,6 +1524,25 @@ def plan_id(folder, create=True):
     (folder / LG.STORE).mkdir(parents=True, exist_ok=True)
     write_text_atomic(folder / LG.STORE / PLAN_ID,
                       json.dumps({"id": pid, "folder": str(folder.resolve())}, indent=1) + "\n")
+    return pid
+
+
+def target_plan_id(folder, seen_at, create=True):
+    """plan_id(folder) as a shared target sees it: when the target last saw that id at another folder that is still
+    there and still holds it, two live folders hold one id (renamed and copied before either published here): this
+    one, arriving from elsewhere, is the copy and gets an id of its own (written unless create=False: a dry run uses
+    one for this run only), so its changes wait for the original's sign-off (R-FX18-1). seen_at: the places the
+    target recorded for the id ([Path])."""
+    import uuid
+    pid = plan_id(folder, create)
+    if not pid:
+        return pid
+    for p in seen_at:
+        try:
+            if plan_at(p, pid) is not None and not os.path.samefile(p, folder):
+                return plan_id(folder, renew=True) if create else f"plan-{uuid.uuid4().hex}"
+        except OSError:
+            continue
     return pid
 
 
@@ -1564,6 +1600,17 @@ class Claims:
 
     def _here(self, hint):
         return Path(hint) if Path(hint).is_absolute() else self.rel_to / hint
+
+    def places(self, pid):
+        """Where plan pid was last seen ([Path]), for target_plan_id."""
+        hint = (self.plans.get(pid) or {}).get("path")
+        return [self._here(hint)] if hint else []
+
+    def me(self, plan_folder, create=True):
+        """This plan folder's id here (target_plan_id): a second live folder with the id the claims last saw
+        elsewhere is a copy, with an id of its own."""
+        pid = plan_id(plan_folder, create)
+        return target_plan_id(plan_folder, self.places(pid), create) if pid else pid
 
     def label(self, pid):
         return (self.plans.get(pid) or {}).get("path") or pid
@@ -1636,7 +1683,7 @@ def claim_output(out, key, plan_folder, take_over=False, what="the library", che
     this was recorded is taken by its next writer."""
     out = Path(out)
     c = Claims(out / OWNER, out)
-    me = plan_id(plan_folder)
+    me = c.me(plan_folder)
     live, gone = {}, []
     for k in check or [key]:
         lv, gn = c.others(k, me, plan_folder)
