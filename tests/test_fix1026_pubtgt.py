@@ -348,6 +348,23 @@ def _drop_3d(lib, it):
 
 
 @lite
+def test_dedupe_merge_holds_a_3d_body_change_of_a_released_part():
+    """`dedupe --merge` pointed released parts at the keeper's file, whose 3D body differs: that went out as a
+    geometry-minor `warn` with nobody's sign-off. A merge's 3D change of a released part now waits for approval; the
+    same change from another writer keeps the policy's warn."""
+    from ecadlib import change_gate as CG
+    from tests.test_change_control import demo, item, items_of
+    for writer, want in (("dedupe-merge", "hold"), ("librarian", "warn")):
+        plan, lib = demo()
+        items = items_of(plan)
+        g = CG.Guard(lib, writer)
+        g.begin(items)
+        _drop_3d(lib, item(items, "RES-0603-10k"))
+        rows = {r["part"]: r for r in g.settle(items)}
+        assert rows["RES-0603-10k"]["action"] == want, (writer, rows["RES-0603-10k"])
+
+
+@lite
 def test_a365_new_revision_links_an_item_that_already_holds_its_drawing():
     """An approved change points RES-0603-10k at a footprint item the workspace already holds with exactly that
     drawing (a dedupe merge onto the keeper's land): the new revision linked nothing and released a second item

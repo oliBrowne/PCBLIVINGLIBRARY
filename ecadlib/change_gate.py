@@ -694,6 +694,10 @@ class Guard:
             if not changes:                         # recipe or STEP beside a .PcbLib that is still the released one
                 self._mark_unchanged(it, head)
                 continue
+            if self.writer == "dedupe-merge":   # a merge onto the keeper's file swaps its 3D body too: a released
+                for c in changes:               # part's body does not change with nobody's sign-off (R-FL-5)
+                    if c.get("area") == "model":
+                        c["least"] = "hold"
             dec = decide(changes, self.policy, self.mode)
             rej = self.ledger.rejected(it["name"], new["hashes"]["digest"], new) if dec["action"] == "hold" else None
             todo[it["name"]] = {"item": it, "head": head, "fp": new, "changes": changes, "dec": dec, "rejected": rej}

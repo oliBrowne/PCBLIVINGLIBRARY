@@ -84,6 +84,8 @@ def _merged_onto_company(tmp_path):
     pins = lambda n: [{"num": str(p), "name": f"P{p}", "type": "io", "side": "left"} for p in range(1, n + 1)]
     AL.write_schlib(lib / "Company.SchLib", [AL.ic_symbol("QUAD_HOUSE", pins(14)), AL.ic_symbol("PART_HOUSE", pins(8))])
     DD.run(plan, libs=[lib], do_merge=True, kinds=("footprint", "symbol"), log=lambda *a, **k: None)
+    from tests.test_dedupe import _sign_off     # the merge swaps the released part's 3D body: signed off (R-FL-5)
+    _sign_off(plan)
     return plan
 
 

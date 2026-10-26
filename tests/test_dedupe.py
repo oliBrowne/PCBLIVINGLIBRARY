@@ -123,6 +123,16 @@ def test_groups_keeper_and_report():
         assert [x for x in r["groups"] if x["kind"] == "footprint"][0]["keeper"] == "SO8_COPY"
 
 
+def _sign_off(plan):
+    """A merge that changes a released part's 3D body (the keeper's file has another, or none) is held for sign-off
+    (R-FL-5, review of #196): a person approves the held merges. -> the parts approved."""
+    from ecadlib import change_cli as CC
+    held = [i["name"] for i in json.loads(Path(plan).read_text()) if (i.get("change") or {}).get("state") == "held"]
+    if held:
+        CC.approve(plan, held, who="Ann Lee <ann@example.com>")
+    return held
+
+
 def test_merge_rewrites_plan_never_library():
     with tempfile.TemporaryDirectory() as d:
         plan, lib = _setup(d)
@@ -131,6 +141,7 @@ def test_merge_rewrites_plan_never_library():
         bom.write_text("Designator,Comment,LibRef,Footprint,Manufacturer Part Number\nU1,PART1,PART1-TR,SO8_COPY,PART1/TR\n"
                        "U2,PART2,PART2,Lib:SO8_COPY,PART2\n")
         r = _quiet(DD.run, plan, [lib], do_merge=True, kinds=("mpn", "footprint"), bom=bom)
+        assert _sign_off(plan)
         items = {i["name"]: i for i in json.loads(plan.read_text())}
         assert Path(str(plan) + ".pre-dedupe").exists()
         assert items["PART1-TR"]["status"] == "duplicate" and items["PART1-TR"]["duplicate_of"] == "PART1"
@@ -165,6 +176,7 @@ def test_merge_keeper_files_and_conflicts():
     with tempfile.TemporaryDirectory() as d:
         plan, lib = _setup(d)
         r = _quiet(DD.run, plan, do_merge=True, kinds=("footprint",))     # keeper is the plan's own SOIC-8 footprint
+        _sign_off(plan)
         it = {i["name"]: i for i in json.loads(plan.read_text())}["PART1-TR"]
         assert it["footprint"] == {"ref": "SOIC-8_3.9x4.9mm_P1.27mm", "file": "models/PcbLib/SOIC-8_3.9x4.9mm_P1.27mm.PcbLib",
                                    "kicad_mod": "models/KiCad/SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod"}
@@ -216,6 +228,7 @@ def test_merge_survives_librarian_rerun():
                                     "HOUSE_R_0603")
         AL.write_pcblib(lib / "HOUSE_R_0603.PcbLib", [fp])
         r = DD.run(out / "plan.json", libs=[lib], do_merge=True, log=lambda *a: None)
+        _sign_off(out / "plan.json")
         assert [(m["parts"], m["to"]) for m in r["mapping"] if m["kind"] == "footprint"] == [("RES-0603-10k", "HOUSE_R_0603")], \
             r["mapping"]
         items, _ = TL.run(d, sources=["kicad"])
