@@ -203,10 +203,10 @@ def _built_by_recipe(f):
     try:
         probs = AN.compare_one(f, rp)
         if f.suffix.lower() == ".pcblib":      # the STEP files it names: the 3D models the .PcbLib holds
-            held = {b for fp in AL.read_pcblib(f) for m in (fp.get("models") or []) for b in m
-                    if isinstance(b, (bytes, bytearray))}
+            held = {LG.sha_bytes(bytes(b)) for fp in AL.read_pcblib(f) for m in (fp.get("models") or []) for b in m
+                    if isinstance(b, (bytes, bytearray))}    # (a STEP file is text: CRLF alone is the same model)
             probs += [f"{s} is not a 3D model {f.name} holds" for s in LG.step_files(f)
-                      if (f.parent / s).is_file() and (f.parent / s).read_bytes() not in held]
+                      if (f.parent / s).is_file() and not LG.eol_shas((f.parent / s).read_bytes()) & held]
     except Exception as e:                     # an unreadable recipe or library: not shown to build it
         probs = [f"{rp.name} cannot be compared with {f.name} ({type(e).__name__}: {e})"]
     return probs

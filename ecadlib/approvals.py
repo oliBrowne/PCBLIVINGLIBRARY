@@ -238,19 +238,30 @@ def _resolve(base, p):
 HASH_VERSION = 2                                   # 2: also the .kicad_mod the KiCad publishers ship ("v2:" + hex)
 
 
-def content_hash(item, base=".", version=HASH_VERSION):
+def content_hash(item, base=".", version=HASH_VERSION, eol="lf"):
     """sha256 over the released model files' bytes and the item's key fields. Paths do not count, contents do.
     version 1 (a plain hex string, every approval written before 2026-10-26): the .SchLib and .PcbLib only; version 2
     ("v2:<hex>"): also the footprint's .kicad_mod (ledger.item_files), which kicad-export / kicad-dblib / kicad-pcm
-    ship. A stored hash is compared with the hash of its own version (hash_matches), as fingerprint schemas are."""
+    ship. A stored hash is compared with the hash of its own version (hash_matches), as fingerprint schemas are.
+    eol: text files (a .kicad_mod, a KiCad symbol file) are hashed with LF line ends ("lf", the default: a CRLF
+    checkout by Git for Windows is no change, R-G2-4), with CRLF ("crlf") or as their bytes are ("raw": hashes stored
+    before line ends were normalised, from a CRLF checkout, still match while the files are unchanged)."""
+    from .ledger import eol_forms
+
+    def digest(f):
+        b = f.read_bytes()
+        forms = eol_forms(b)
+        b = forms[0] if eol == "raw" or len(forms) == 1 else forms[1] if eol == "lf" else forms[2]
+        return hashlib.sha256(b).digest()
+
     h = hashlib.sha256(b"ecadlib-approval-v1\0" if version == 1 else b"ecadlib-approval-v2\0")
     for kind in ("symbol", "footprint"):
         f = _resolve(base, (item.get(kind) or {}).get("file"))
         h.update(f"{kind}:{(item.get(kind) or {}).get('ref') or ''}\0".encode())
-        h.update(hashlib.sha256(f.read_bytes()).digest() if f and f.is_file() else b"missing")
+        h.update(digest(f) if f and f.is_file() else b"missing")
     if version >= 2:
         f = _kicad_mod_file(item, base)
-        h.update(b"kicad_mod\0" + (hashlib.sha256(f.read_bytes()).digest() if f and f.is_file() else b"none"))
+        h.update(b"kicad_mod\0" + (digest(f) if f and f.is_file() else b"none"))
     fields = {k: item.get(k) or "" for k in KEY_FIELDS}
     fields["parameters"] = sorted((p["name"], str(p["value"])) for p in item.get("parameters") or []
                                   if p["name"] not in DERIVED_PARAMS)
@@ -281,11 +292,13 @@ def hash_matches(stored, item, base=".", current=None, _old=None):
     if not stored:
         return False
     if str(stored).startswith("v2:"):
-        return stored == (current or content_hash(item, base))
+        if stored == (current or content_hash(item, base)):
+            return True
+        return any(stored == content_hash(item, base, eol=e) for e in ("raw", "crlf"))   # line ends only (R-G2-4)
     cache = _old if _old is not None else {}
     if 1 not in cache:
-        cache[1] = content_hash(item, base, version=1)
-    return stored == cache[1]
+        cache[1] = {content_hash(item, base, version=1, eol=e) for e in ("raw", "lf", "crlf")}
+    return stored in cache[1]
 
 
 def matches_upgrading(holder, key, item, base=".", current=None, _old=None):

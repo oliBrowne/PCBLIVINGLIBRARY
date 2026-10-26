@@ -159,6 +159,26 @@ def sha_bytes(b):
     return hashlib.sha256(b).hexdigest()
 
 
+def is_text(b):
+    """Bytes git would check out with converted line ends (core.autocrlf): no NUL byte. .kicad_mod, .ecadbuild and STEP
+    files are text; a .SchLib / .PcbLib (OLE) is not."""
+    return b"\0" not in b[:65536]
+
+
+def eol_forms(b):
+    """The forms of file bytes that differ only in line ends: (raw, LF, CRLF) for text, (raw,) otherwise. A library
+    checked out by Git for Windows with core.autocrlf has CRLF where ecadlib wrote LF; that alone is no edit (R-G2-4)."""
+    if not is_text(b) or b"\r" not in b and b"\n" not in b:
+        return (b,)
+    lf = b.replace(b"\r\n", b"\n")
+    return (b, lf, lf.replace(b"\n", b"\r\n"))
+
+
+def eol_shas(b):
+    """sha256 of every eol_forms of b."""
+    return {sha_bytes(x) for x in eol_forms(b)}
+
+
 def safe_name(part):
     s = portable_stem(re.sub(r"[^A-Za-z0-9._+-]", "_", str(part))[:120] or "_")   # AUX.json is a Windows device
     return s if s == str(part) else f"{s}-{sha_bytes(str(part).encode())[:8]}"
@@ -230,13 +250,13 @@ def side_drift(rec, path):
     out = {}
     if (rec or {}).get("ecadbuild"):
         side = p.with_name(p.name + ".ecadbuild")
-        if not side.is_file() or sha_bytes(side.read_bytes()) != rec["ecadbuild"]:
+        if not side.is_file() or rec["ecadbuild"] not in eol_shas(side.read_bytes()):   # CRLF alone: no edit
             out[str(side)] = rec["ecadbuild"]
     for s, h in ((rec or {}).get("steps") or {}).items():
         if ".." in s.replace("\\", "/").split("/") or Path(s).is_absolute():
             continue
         f = p.parent / s
-        if not f.is_file() or sha_bytes(f.read_bytes()) != h:
+        if not f.is_file() or h not in eol_shas(f.read_bytes()):
             out[str(f)] = h
     return out
 

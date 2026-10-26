@@ -225,3 +225,52 @@ def test_gate2_rg23_a_normal_history_and_a_revert_still_work():
     assert LG.Ledger(lib).head(KT)["revision"] == 3
     _describe(lib, "r4")
     assert LG.Ledger(lib).head(KT)["revision"] == 4
+
+
+# ------------------------------------------------------------------ R-G2-4
+def _crlf(b):
+    return b.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+
+
+@lite
+def test_gate2_rg24_crlf_line_ends_alone_keep_a_sign_off(tmp_path):
+    """g3_crlf.py: Git for Windows (core.autocrlf) checks the library out with CRLF. The .kicad_mod's content is the
+    same, so a sign-off made with LF line ends still matches, and one made on a CRLF checkout still matches on LF. A
+    real edit still makes it stale."""
+    from ecadlib import approvals as AP
+    km = tmp_path / "R.kicad_mod"
+    lf = b'(footprint "R"\n  (pad "1" smd rect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu"))\n)\n'
+    km.write_bytes(lf)
+    it = {"name": "R1", "description": "r", "parameters": [], "symbol": {"ref": "R", "file": None},
+          "footprint": {"ref": "R", "file": None, "kicad_mod": "R.kicad_mod"}}
+    h = AP.content_hash(it, tmp_path)
+    km.write_bytes(_crlf(lf))
+    assert AP.hash_matches(h, it, tmp_path), "CRLF alone made the sign-off stale"
+    h_crlf = AP.content_hash(it, tmp_path)
+    km.write_bytes(lf)
+    assert AP.hash_matches(h_crlf, it, tmp_path)
+    old_crlf_hash = "v2:" + __import__("hashlib").sha256(b"x").hexdigest()      # (any other hash: no match)
+    assert not AP.hash_matches(old_crlf_hash, it, tmp_path)
+    km.write_bytes(lf.replace(b"0.95", b"0.99"))
+    assert not AP.hash_matches(h, it, tmp_path) and not AP.hash_matches(h_crlf, it, tmp_path)
+
+
+@lite
+def test_gate2_rg24_crlf_line_ends_alone_are_no_recipe_or_step_edit(tmp_path):
+    """ledger.side_drift: the recipe (and a STEP file, which is text too) checked out with CRLF, or recorded on a CRLF
+    checkout and now LF, is the released one; a real edit is still drift."""
+    from ecadlib import ledger as LG
+    pl = tmp_path / "X.PcbLib"
+    pl.write_bytes(b"\xd0\xcf\x11\xe0 binary")
+    rp = tmp_path / "X.PcbLib.ecadbuild"
+    st = tmp_path / "ecadlib_3d/X_0/X.step"
+    st.parent.mkdir(parents=True)
+    recipe = b"ECADBUILD\t1\nFOOTPRINT\tX\nPAD\t1\t0\t0\n"
+    step = b"ISO-10303-21;\nHEADER;\nENDSEC;\n"
+    for disk, stored in ((_crlf, lambda b: b), (lambda b: b, _crlf)):
+        rp.write_bytes(disk(recipe))
+        st.write_bytes(disk(step))
+        rec = {"ecadbuild": LG.sha_bytes(stored(recipe)), "steps": {"ecadlib_3d/X_0/X.step": LG.sha_bytes(stored(step))}}
+        assert LG.side_drift(rec, pl) == {}, LG.side_drift(rec, pl)
+    rp.write_bytes(_crlf(recipe.replace(b"PAD\t1\t0", b"PAD\t1\t9")))
+    assert str(rp) in LG.side_drift(rec, pl)
