@@ -368,6 +368,14 @@ def xlsx_hidden(path):
     return out
 
 
+def _rich_text(si):
+    """The text of a shared / inline string (<si> or <is>): its <t>, or its rich-text runs' <r><t>. Not the phonetic
+    readings (<rPh><t>: the furigana Japanese Excel keeps beside the text)."""
+    if si is None:
+        return ""
+    return "".join(t.text or "" for t in si.findall("m:t", NS) + si.findall("m:r/m:t", NS))   # one or the other
+
+
 def _cell_rc(ref):
     """'C12' -> (11, 2), zero-based (row, column)."""
     m = re.fullmatch(r"\$?([A-Z]{1,3})\$?(\d+)", ref.strip().upper())
@@ -430,7 +438,7 @@ def xlsx_sheets(path, uncached=None):
         shared = []
         if "xl/sharedStrings.xml" in names:
             for si in xml("xl/sharedStrings.xml").findall("m:si", NS):
-                shared.append("".join(t.text or "" for t in si.iter(f"{{{NS['m']}}}t")))
+                shared.append(_rich_text(si))
         rels = {}
         if "xl/_rels/workbook.xml.rels" in names:
             for r in xml("xl/_rels/workbook.xml.rels").findall("rel:Relationship", NS):
@@ -458,7 +466,7 @@ def xlsx_sheets(path, uncached=None):
                     if t == "s" and v is not None:
                         text = shared[int(v)] if int(v) < len(shared) else ""
                     elif t == "inlineStr":
-                        text = "".join(x.text or "" for x in c.iter(f"{{{NS['m']}}}t"))
+                        text = _rich_text(c.find("m:is", NS))
                     elif t == "b":
                         text = "TRUE" if v == "1" else "FALSE"
                     elif t in ("str", "e"):

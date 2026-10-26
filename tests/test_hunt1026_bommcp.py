@@ -133,6 +133,30 @@ def _read_xlsx(f):
         return T.read_bom(f)
 
 
+@lite
+def test_plain_xlsx_reader_leaves_out_phonetic_readings(tmp_path):
+    # Japanese Excel stores a cell's furigana (<rPh>) next to its text in sharedStrings / inline strings; the
+    # standard-library reader (no openpyxl) joined every <t> and read '抵抗' as '抵抗テイコウ'
+    import zipfile
+    from ecadlib import bom_inputs as BI
+    m = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    f = tmp_path / "jp.xlsx"
+    with zipfile.ZipFile(f, "w") as z:
+        z.writestr("xl/workbook.xml", f'<workbook {m} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/'
+                                      'relationships"><sheets><sheet name="BOM" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        z.writestr("xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
+                                                 'relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
+                                                 '</Relationships>')
+        z.writestr("xl/sharedStrings.xml", f'<sst {m}><si><t>品名</t></si><si><t>抵抗</t><rPh sb="0" eb="2"><t>テイコウ'
+                                           '</t></rPh><phoneticPr fontId="1"/></si><si><r><t>RC06</t></r><r><t>03</t></r>'
+                                           '<rPh sb="0" eb="1"><t>アール</t></rPh></si></sst>')
+        z.writestr("xl/worksheets/sheet1.xml", f'<worksheet {m}><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row>'
+                                               '<row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2" t="s"><v>2</v></c>'
+                                               '<c r="C2" t="inlineStr"><is><t>コンデンサ</t><rPh sb="0" eb="1"><t>X</t>'
+                                               '</rPh></is></c></row></sheetData></worksheet>')
+    assert BI.xlsx_sheets(f) == {"BOM": [["品名", "", ""], ["抵抗", "RC0603", "コンデンサ"]]}
+
+
 # ---------------------------------------------------------------- bommcp-04..06: JSON-RPC over stdio and HTTP
 def _ws(tmp_path):
     from ecadlib.app import Workspace
