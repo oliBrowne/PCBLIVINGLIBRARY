@@ -771,19 +771,32 @@ def total_cap(lib, total, per_run=None, log=print):
 def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=None, model=None):
     """rules with eval's --provider / --base-url / --assist / --api-key-env / --model put into [ai] (and [datasheet]'s
     own provider settings cleared, so [ai] decides). A --provider other than [ai]'s drops [ai]'s base_url and
-    api_key_env unless given again: they belong to the old provider, and its key went to the new one (R-LE-1)."""
+    api_key_env unless given again: they belong to the old provider, and its key went to the new one (R-LE-1).
+    [datasheet] api_key_env likewise is dropped when its provider is not the new one (Anthropic too), and
+    --api-key-env always wins over it (R-FX13-1)."""
     over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
                               ("api_key_env", api_key_env)) if v}
     if not (over or (model and provider)):
         return rules
     ai = dict(rules.get("ai", {}))
-    if provider and str(provider).strip().lower() != str(ai.get("provider") or "anthropic").strip().lower():
+    ds = dict(rules.get("datasheet", {}))
+
+    def _p(p):
+        return str(p or "anthropic").strip().lower()
+
+    new = _p(provider) if provider else None
+    if new and new != _p(ai.get("provider")):
         for k in ("base_url", "api_key_env"):
             if k not in over:
                 ai[k] = ""
+    ds_key = ds.get("api_key_env")
+    if api_key_env:                                   # --api-key-env wins over [datasheet]'s key name (R-FX13-1)
+        ds_key = api_key_env
+    elif new and new != _p(ds.get("provider") or rules.get("ai", {}).get("provider")):
+        ds_key = ""                                   # [datasheet]'s key belongs to its old provider: never sent to the new one
     rules = dict(rules, ai={**ai, **over, **({"model": model} if model else {})},
-                 datasheet={**rules.get("datasheet", {}), **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
-                            **({"api_key_env": ""} if provider and provider != "anthropic" else {})})
+                 datasheet={**ds, **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
+                            **({"api_key_env": ds_key} if "api_key_env" in ds or api_key_env else {})})
     RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
     return rules
 
