@@ -311,3 +311,23 @@ def test_http_chunked_body_is_read_not_taken_for_the_next_request(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+@lite
+def test_xlsx_merged_part_over_a_wrapped_designator_list_stays_one_line(tmp_path, monkeypatch):
+    # review I1: Qty 6 only in the top row, the part merged over two rows whose designators wrap (R1-R3 / R4-R6). The
+    # fill copied the MPN down, so the second row was no longer a designator-only continuation: two lines, a false qty
+    # mismatch. A row with no Qty under a top row counting more parts than its designators continues that list.
+    f = _merged_book(tmp_path / "w.xlsx", [["Qty", "Designator", "Value", "Manufacturer", "MPN"],
+                                          [6, "R1, R2, R3", "10k", "Yageo", "RC0603FR-0710KL"],
+                                          [None, "R4, R5, R6", None, None, None],
+                                          [1, "C1", "100n", "Murata", "GRM188R71H104KA93D"]],
+                     ["C2:C3", "D2:D3", "E2:E3"])
+    for plain in (False, True):
+        if plain:
+            def no_openpyxl(*a, **k):
+                raise ImportError("Missing optional dependency 'openpyxl'")
+            monkeypatch.setattr(T.pd, "read_excel", no_openpyxl)
+        lines, _ = _read_xlsx(f)
+        got = [(l.get("qty"), l["designator"], l.get("mpn")) for l in lines]
+        assert got == [("6", "R1, R2, R3, R4, R5, R6", "RC0603FR-0710KL"), ("1", "C1", "GRM188R71H104KA93D")], (plain, got)

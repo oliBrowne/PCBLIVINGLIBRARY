@@ -558,6 +558,14 @@ def _fill_merged(df, full, kept, spans, h, columns=None):
     qj = head.index(fmap["qty"]) if "qty" in fmap else None
     grouped = {r for r0, c0, r1, c1 in spans if c0 == qj == c1 for r in range(r0 + 1, r1 + 1)}   # rows under a
     n = 0                                                        # merged Qty: one line's designators, joined by read_bom
+    dj = head.index(fmap["designator"]) if "designator" in fmap else None
+    if qj is not None and dj is not None:      # Qty only in the top row and more parts than its designators: the rows
+        for r0, c0, r1, c1 in spans:           # below with no Qty continue its designator list (read_bom joins them)
+            if c0 != c1 or r1 <= r0 or r0 not in pos:
+                continue
+            q = re.match(r"\s*(\d+)", str(df.iat[pos[r0], qj]))
+            if q and count_refs(str(df.iat[pos[r0], dj])) < int(q.group(1)):
+                grouped |= {r for r in range(r0 + 1, r1 + 1) if r in pos and not str(df.iat[pos[r], qj]).strip()}
     for r0, c0, r1, c1 in spans:
         if c0 != c1 or r1 <= r0 or r0 not in pos or pos[r0] <= h or c0 in skip or c0 >= df.shape[1]:
             continue
