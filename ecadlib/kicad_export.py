@@ -457,6 +457,48 @@ def kicad_baseline_differs(item, plan_dir, details):
     return out
 
 
+POWER_OUT_NAME = re.compile(r"^(?:V?OUT\d*|VO\d*|VREG[A-Z0-9_]*|VDDCORE_?OUT|\d+V\d*_?OUT|V\d+V?\d*_?OUT|LDO_?OUT\d*)$")
+SWITCH_CONTACT = {"NO", "COM", "NO1", "NO2", "COM1", "COM2", "NC1", "NC2"}   # a relay / switch: its NC is a contact
+
+
+def restore_types(sym, own=None, notes=None, guess=True):
+    """Put back on a symbol read back from a .SchLib the KiCad pin types Altium cannot hold: Altium has one Power type
+    (a regulator's output comes back power_in, and KiCad ERC finds its rail undriven) and no NC type (an NC pin comes
+    back passive). own: {pin number: 'power_out' | 'no_connect'} the source gave (the datasheet read, recorded with the
+    plan's symbol: librarian.kicad_only_types). Without it, by name: a visible power pin named as a regulator output
+    (symbol_layout's power_out names, less VCAP / VCORE / DECOUPLE, which are decoupled inputs) is power_out, and a
+    visible passive pin named NC / DNC (symbol_layout's nc names) is no_connect, unless the part is a relay or switch,
+    whose NC is the normally closed contact. Only a power_in pin becomes power_out and only a passive one no_connect,
+    so a pin the source gave another type keeps it. Hidden pins are left alone. guess=False: own only, no names."""
+    from . import symbol_layout as SL
+    pins = [p for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin")]
+    num = lambda p: str(sexpr.first(p, "number")[1]).strip('"')
+    nm = lambda p: str(sexpr.first(p, "name")[1]).strip('"')
+    if own or not guess:
+        want = {str(k): v for k, v in (own or {}).items() if v in ("power_out", "no_connect")}
+    else:
+        names = {SL._key(nm(p)) for p in pins}
+        ref = next((str(q[2]).strip('"') for q in sexpr.find(sym, "property") if str(q[1]).strip('"') == "Reference"), "")
+        switch = bool(names & SWITCH_CONTACT) or ref.upper().rstrip("?0123456789") in ("K", "S", "SW", "RLY")
+        want = {}
+        for p in pins:
+            k = SL._key(nm(p))
+            if p[1] == "power_in" and POWER_OUT_NAME.match(k):
+                want[num(p)] = "power_out"
+            elif p[1] == "passive" and not switch and SL.classify({"name": nm(p), "num": num(p)}) == "nc":
+                want[num(p)] = "no_connect"
+    done = []
+    for p in pins:
+        t = want.get(num(p))
+        if "hide" not in p and (t == "power_out" and p[1] == "power_in" or t == "no_connect" and p[1] == "passive"):
+            p[1] = t
+            done.append(num(p))
+    if done and notes is not None:
+        K._note(notes, "power_out / no_connect pin types put back (Altium has one Power type and no NC type)"
+                + ("" if own else ", by pin name"))
+    return done
+
+
 def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=None, kpins=None):
     """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA IC
     symbol (a plain box, [symbols] layout_pins) is read back from the SchLib, which the librarian wrote with its pins
@@ -537,6 +579,8 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
     if not f or not (plan_dir / f).exists():
         raise FileNotFoundError("no symbol: " + "; ".join(why or ["no source and no .SchLib"]))
     sym = symbol_from_schlib(plan_dir / f, name, notes, pick=item["symbol"].get("ref"))
+    if not src.startswith(("kicad:", "local:")):     # a curated KiCad symbol keeps the types its .SchLib gives
+        restore_types(sym, item["symbol"].get("kicad_types"), notes)
     if src.startswith("standard:Regulator_Linear_"):   # Altium has one Power type: a standard regulator's VO is power_out
         from . import stdparts as SP                     # in ecadlib's own symbol and in KiCad's (ERC needs a rail driver)
         try:

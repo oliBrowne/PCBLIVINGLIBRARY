@@ -429,7 +429,9 @@ class Run:
         AL.write_schlib(path, [sym])
         rec.setdefault("notes", []).append(f"footprint link {name} (the BOM's {bom_name} is another footprint)")
 
-    def put_sym(self, st, sym, source, notes=()):
+    def put_sym(self, st, sym, source, notes=(), kicad_types=None):
+        """kicad_types: {pin number: KiCad type} the .SchLib cannot hold (kicad_only_types), kept with the plan's
+        symbol so the KiCad export puts them back."""
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
         if st.get("kind") in SHARED_KINDS:      # one Resistor / Capacitor / Inductor symbol for every value and size,
             sym = shared_symbol(sym)            # whichever source drew it: no footprint, no one part's MPN
@@ -449,6 +451,8 @@ class Run:
         AL.write_schlib(path, [sym])
         self.syms[str(path)] = sym
         st["symbol"] = {"source": source, "file": self.rel(path), "notes": list(notes), "by": st["name"]}
+        if kicad_types:
+            st["symbol"]["kicad_types"] = dict(kicad_types)
         self.written[str(path)] = st["symbol"]
 
     def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
@@ -946,7 +950,7 @@ class Run:
             if renamed:
                 notes.append("house style pin names: " + ", ".join(renamed[:6]) + (" ..." if len(renamed) > 6 else ""))
             self.put_sym(st, AL.symbol_from_json(dict(sym, name=sym_name, footprint=fp_name), self.rules), f"datasheet:{url}",
-                         notes)
+                         notes, kicad_types=kicad_only_types(sym["pins"]))
             got.append("symbol")
         rt = res["sidecar"].get("route") or {}
         n_ans = len(rt.get("attempts") or [])
@@ -963,6 +967,15 @@ class Run:
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                             "see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+
+
+def kicad_only_types(pins):
+    """{pin number: KiCad type} for the pins whose type an Altium .SchLib cannot hold: power_out (Altium has one Power
+    type) and no_connect (Altium has none, an NC pin is Passive there). The KiCad export puts them back on the read-back
+    symbol, so ERC sees the rail a regulator's output drives."""
+    k = {"power_out": "power_out", "nc": "no_connect"}
+    return {str(q["num"]): k[t] for q in pins or [] if q.get("num") not in (None, "")
+            for t in [SL._ptype(q.get("type"))] if t in k}
 
 
 def pad_table_problems(spec):
@@ -1066,6 +1079,11 @@ def apply_state(item, st, ln):
     for k in ("symbol", "footprint"):
         if st.get(k):
             item[k]["file"] = st[k]["file"]
+            if k == "symbol":                          # the pin types Altium cannot hold (power_out, no_connect)
+                if st[k].get("kicad_types"):
+                    item[k]["kicad_types"] = dict(st[k]["kicad_types"])
+                else:
+                    item[k].pop("kicad_types", None)
             if k == "footprint":
                 item[k]["kicad_mod"] = st[k].get("kicad_mod")
                 if st[k].get("model"):                 # where its 3D model came from (EasyEDA's STEP, with the credit)
