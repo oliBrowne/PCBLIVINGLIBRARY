@@ -269,6 +269,10 @@ def cmd_history(a):
         if ev in LG.RELEASES and e.get("changes") and (a.verbose or TM.VERBOSITY > 0):
             for c in e["changes"]:
                 print(f"      {c['class']:<15} {c['text']}")
+    why = lg.trouble(a.part)
+    if why:                                    # a cut or merged ledger: said, so nobody picks a revision from it
+        print(f"  WARNING: {why}; publishing, approving and reverting {a.part} are refused until it is mended")
+        return 2
     return 0
 
 

@@ -399,6 +399,9 @@ class Guard:
             used = []
         if used:
             return f"{LG.USAGE} records revision r{used[0][1]} in use by {used[0][0]}"
+        marks = lg.marks(part)
+        if marks:
+            return f"{LG.STORE}/marks records r{max(marks)[0]} of it as released"
         prop = lg.proposal(part)
         if prop and prop.get("base") is not None:
             return f"a held change to its revision r{prop['base']} waits in {LG.STORE}/proposed"
@@ -503,6 +506,7 @@ class Guard:
         except (OSError, ValueError, TypeError):
             pass
         seen += [int(p["base"]) for p in self.ledger.proposals() if p.get("part") == part and isinstance(p.get("base"), int)]
+        seen += [r for r, _ in self.ledger.marks(part)]
         held = {e["digest"] for e in hist if e.get("digest") and e.get("event") not in ("publish", "retired", "release")}
         held |= {p.get("digest") for p in self.ledger.proposals() if p.get("part") == part}
         seen.append(len({f["hashes"].get("digest") for _, _, f in self.ledger.stored_fingerprints(part)} - held))

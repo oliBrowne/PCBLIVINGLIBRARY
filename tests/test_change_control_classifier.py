@@ -30,6 +30,7 @@ def _age_ledger(lib):
             e["fingerprint"], e["digest"] = lg.put_json(fp), fp["hashes"]["digest"]
         out.append(json.dumps(e, sort_keys=True, ensure_ascii=False))
     lg.path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    __import__("shutil").rmtree(lg.store / "marks", ignore_errors=True)   # an older ecadlib kept no marks (R-G2-3)
 
 
 def test_library_released_by_an_older_ecadlib_shows_no_change_and_a_real_change_still_holds():

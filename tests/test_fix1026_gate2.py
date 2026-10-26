@@ -124,3 +124,104 @@ def test_gate2_rg22_a_small_size_change_that_keeps_the_gap_stays_minor():
     assert CD.worst(CD.diff(_row(1.0, 1.1), _row(0.95, 1.1))) == "geometry-minor"        # smaller: the gap grows
     assert CD.worst(CD.diff(_qfn16(1.70), _qfn16(1.72))) == "geometry-minor"             # EP gap 0.225 -> 0.215
     assert CD.worst(CD.diff(_row(1.0, 1.1, h=1.0), _row(1.0, 1.1, h=1.08))) == "geometry-minor"  # along the row
+
+
+# ------------------------------------------------------------------ R-G2-3
+KT = "KT-0603R"
+
+
+def _publish(lib):
+    from ecadlib import change_gate as CG
+    plan = lib / "plan.json"
+    with contextlib.redirect_stderr(io.StringIO()):
+        return CG.publish_guard(plan, json.loads(plan.read_text(encoding="utf-8")), "kicad", log=lambda *a, **k: None)
+
+
+def _describe(lib, tag):
+    """A cosmetic edit of KT-0603R's description, released (pass) by the next publisher's settle."""
+    plan = lib / "plan.json"
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    it = next(i for i in items if i["name"] == KT)
+    it["description"] = (it.get("description") or "") + f" ({tag})"
+    plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    _publish(lib)
+
+
+def _refused(fn):
+    from ecadlib import ledger as LG
+    try:
+        fn()
+    except LG.LedgerError as e:
+        return str(e)
+    raise AssertionError("not refused")
+
+
+def test_gate2_rg23_a_ledger_cut_back_at_a_line_boundary_fails_closed():
+    """g2_trunc.py: r2 released, then the ledger is an older copy (the lines from the r2 release on are gone). The next
+    publisher must not take the files on disk (r2) as a hand edit of r1 and put r1 back: it refuses, nothing changes."""
+    from ecadlib import ledger as LG
+    w, lib = _demo()
+    _describe(lib, "r2")
+    assert LG.Ledger(lib).head(KT)["revision"] == 2
+    led = lib / "library.ledger.jsonl"
+    rows = led.read_text(encoding="utf-8").splitlines(keepends=True)
+    cut = next(i for i, l in enumerate(rows) if json.loads(l).get("part") == KT and json.loads(l)["revision"] == 2
+               if json.loads(l).get("event") == "release")
+    led.write_text("".join(rows[:cut]), encoding="utf-8")
+    plan_before = (lib / "plan.json").read_bytes()
+    why = _refused(lambda: _publish(lib))
+    assert "r2" in why, why
+    assert (lib / "plan.json").read_bytes() == plan_before          # r1 was not put back
+    assert led.read_text(encoding="utf-8") == "".join(rows[:cut])   # nothing recorded
+
+
+def _two_branches(lib, keep_both):
+    """Branch A and branch B each release r2 of KT-0603R from the same base; git merges .ecadlib/ (new files from both
+    sides) and the ledger (both appended blocks, or only A's)."""
+    led, plan, marks = lib / "library.ledger.jsonl", lib / "plan.json", lib / ".ecadlib/marks"
+    base, plan0 = led.read_text(encoding="utf-8"), plan.read_text(encoding="utf-8")
+    m0 = set(marks.iterdir()) if marks.is_dir() else set()
+    _describe(lib, "A")
+    a_lines, a_plan = led.read_text(encoding="utf-8")[len(base):], plan.read_text(encoding="utf-8")
+    a_marks = set(marks.iterdir()) - m0
+    for f in a_marks:                                          # branch B does not have branch A's files
+        f.rename(lib / f.name)
+    led.write_text(base, encoding="utf-8")
+    plan.write_text(plan0, encoding="utf-8")
+    _describe(lib, "B")
+    b_lines = led.read_text(encoding="utf-8")[len(base):]
+    for f in a_marks:
+        (lib / f.name).rename(f)
+    led.write_text(base + a_lines + (b_lines if keep_both else ""), encoding="utf-8")   # the merge
+    plan.write_text(a_plan, encoding="utf-8")
+
+
+def test_gate2_rg23_a_ledger_merged_from_two_branches_fails_closed():
+    """g2b_merge.py: two branches each released r2 of a part; the merged ledger holds both r2 lines (or only branch A's,
+    while the blob store keeps branch B's release). The head is not taken from either: publish and revert refuse."""
+    from ecadlib import change_cli as CC, ledger as LG
+    for keep_both in (True, False):
+        w, lib = _demo()
+        _two_branches(lib, keep_both)
+        why = _refused(lambda: LG.Ledger(lib).head(KT))
+        assert "r2" in why, why
+        n = len(_ledger(lib))
+        _refused(lambda: _publish(lib))
+        assert len(_ledger(lib)) == n
+        try:
+            CC.revert(lib / "plan.json", f"{KT}@1", who=ANN, comment="back")
+            raise AssertionError("reverted on a merged ledger")
+        except (LG.LedgerError, Exception) as e:
+            assert "r2" in str(e) or isinstance(e, LG.LedgerError), e
+        assert len(_ledger(lib)) == n
+
+
+def test_gate2_rg23_a_normal_history_and_a_revert_still_work():
+    """No false alarm: r1 -> r2 -> revert to r1 (r3) -> r4 reads and publishes as before."""
+    from ecadlib import change_cli as CC, ledger as LG
+    w, lib = _demo()
+    _describe(lib, "r2")
+    CC.revert(lib / "plan.json", f"{KT}@1", who=ANN, comment="back")
+    assert LG.Ledger(lib).head(KT)["revision"] == 3
+    _describe(lib, "r4")
+    assert LG.Ledger(lib).head(KT)["revision"] == 4

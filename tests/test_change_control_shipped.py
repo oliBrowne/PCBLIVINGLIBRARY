@@ -107,6 +107,8 @@ def _age_ledger(lib):
             e.update({k: fp["hashes"][k] for k in ("eid", "gid", "mid", "cid")})
         out.append(json.dumps(e, sort_keys=True, ensure_ascii=False))
     lg.path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    import shutil                              # ... which kept no release marks either (R-G2-3)
+    shutil.rmtree(lg.store / "marks", ignore_errors=True)
 
 
 def test_library_released_before_the_kicad_mod_was_fingerprinted_shows_no_change_until_it_changes():

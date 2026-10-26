@@ -112,6 +112,7 @@ def _aged_release(lib, schema):
             e.update(fp["hashes"])
             e["fingerprint"] = lg.put_json(fp)
     lg.path.write_text("".join(json.dumps(e) + "\n" for e in lines), encoding="utf-8")
+    __import__("shutil").rmtree(lg.store / "marks", ignore_errors=True)   # an older ecadlib kept no marks (R-G2-3)
     return it
 
 

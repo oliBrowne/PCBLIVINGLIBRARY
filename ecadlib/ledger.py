@@ -3,6 +3,8 @@
     <library>/library.ledger.jsonl        one JSON line per event, git-friendly (sorted keys, never rewritten)
     <library>/.ecadlib/blobs/ab/<sha256>  the exact bytes of every released file and fingerprint (content-addressed)
     <library>/.ecadlib/proposed/<part>.json   a held change: the proposed version waiting for approval
+    <library>/.ecadlib/marks/<part>@r<N>@<digest>   one empty file per recorded release / revert: a ledger cut back
+                                          or merged from two branches is told by them (fail closed, Ledger.trouble)
     <library>/library.usage.json          which projects / BOMs use which part revision (ecadlib project scan)
 
 The library folder is the folder of the plan.json (the librarian's -o, an altium365 plan's folder), or of a
@@ -279,6 +281,7 @@ f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
         """Read the file again on the next lines() (another run may have appended since: done under the lock)."""
         self._lines = None
         self.__dict__.pop("_stored_fps", None)
+        self.__dict__.pop("_marks", None)
 
     def exists(self):
         return self.path.is_file()
@@ -296,7 +299,69 @@ f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
             MG.write_stamp(self.folder, ["ledger"])
         if self._lines is not None:
             self._lines.append(e)
+        if e.get("event") in RELEASES and e.get("part") and isinstance(e.get("revision"), int):
+            self._mark(e)
         return e
+
+    # ------------------------------------------------------------ marks: a cut or merged ledger fails closed (R-G2-3)
+    def _mark(self, e):
+        """After a release / revert line: an empty file .ecadlib/marks/<part>@r<N>@<digest>. A ledger restored from an
+        older copy, or merged from two branches, loses or doubles lines; these files (merged by git like any others)
+        still say which revisions were recorded."""
+        d = self.store / "marks"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{safe_name(e['part'])}@r{e['revision']}@{str(e.get('digest') or '-')[:16]}").touch()
+        except OSError:
+            pass
+        self.__dict__.pop("_marks", None)
+
+    def marks(self, part):
+        """The releases .ecadlib/marks says were recorded for `part` -> {(revision, digest prefix)}."""
+        if "_marks" not in self.__dict__:
+            found = {}
+            d = self.store / "marks"
+            try:
+                names = os.listdir(d) if d.is_dir() else []
+            except OSError:
+                names = []
+            for n in names:
+                bits = n.rsplit("@", 2)
+                if len(bits) == 3 and bits[1][:1] == "r" and bits[1][1:].isdigit():
+                    found.setdefault(bits[0], set()).add((int(bits[1][1:]), bits[2]))
+            self._marks = found
+        return self._marks.get(safe_name(part), set())
+
+    def trouble(self, part):
+        """Why `part`'s release history cannot be trusted, or None: a revision recorded twice or after a later one (a
+        ledger merged from two branches), a line whose base is above the head, or a release .ecadlib/marks records that
+        is above the head or another version of it (the ledger was cut back to an older copy, or a merge kept only
+        one branch's lines)."""
+        rel, seen = self.releases(part), []
+        for e in rel:
+            r = e.get("revision")
+            if isinstance(r, int) and seen and r <= seen[-1]:
+                return (f"{LEDGER} records r{r} of {part} " + ("twice" if r in seen else f"after r{seen[-1]}") +
+                        " (a ledger merged from two branches, or lines copied back)")
+            if isinstance(r, int):
+                seen.append(r)
+        top = seen[-1] if seen else 0
+        for e in self.history(part):
+            b = e.get("base")
+            if isinstance(b, int) and b > top:
+                return f"a {e.get('event')} line of {part} in {LEDGER} is based on r{b}, above its head r{top}"
+        head = rel[-1] if rel else None
+        mine = {(e.get("revision"), str(e.get("digest") or "-")[:16]) for e in rel}
+        for r, d in sorted(self.marks(part)):
+            if (r, d) in mine:
+                continue
+            if r > top:
+                return (f"{STORE}/marks says r{r} of {part} was released, but {LEDGER} ends at r{top} (the ledger is an "
+                        f"older copy, or a merge dropped those lines)")
+            if head is not None and r == top:
+                return (f"{STORE}/marks says another r{r} of {part} was released than the one {LEDGER} holds (a ledger "
+                        f"merged from two branches kept only one side)")
+        return None
 
     def _mend_tail(self):
         """Before a line is appended: a ledger that does not end in a newline would glue the new line onto its last
@@ -341,6 +406,13 @@ f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
 
     def head(self, part):
         r = self.releases(part)
+        if r:
+            why = self.trouble(part)
+            if why:                            # which revision is released is not known: nothing is taken as it
+                raise LedgerError(f"{self.folder}: {why}; nothing was changed",
+                                  f"restore {LEDGER} and {STORE}/ from git as one (`git log -- {LEDGER}` in the library "
+                                  f"folder shows where lines were lost or doubled), keep one release line per revision, "
+                                  f"then run again; `ecadlib part history` lists the part's lines")
         return r[-1] if r else None
 
     def revision(self, part, rev):
