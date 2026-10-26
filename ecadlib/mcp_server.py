@@ -613,8 +613,12 @@ def call_tool(ws, name, args, progress=None):
         if name == "export_parts":
             return ws.export_parts(args["bom"], args.get("format") or "csv", args.get("include_held") is True)
         if name == "kicad_dblib":
-            return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", args.get("driver") or None,
-                                  args.get("include_held") is True)
+            driver = args.get("driver") or None
+            if driver and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,79}", driver):
+                raise ValueError(f"driver {driver[:80]!r}: give an ODBC driver's name, e.g. SQLite3 ODBC Driver or SQLite3 "
+                                 "(it goes into the .kicad_dbl's connection string: no path, braces or ';'); a driver "
+                                 "library path is for the person to set with `ecadlib kicad-dblib --driver`")
+            return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", driver, args.get("include_held") is True)
         if name == "altium_menu":
             return ws.altium_menu(args.get("win_dir") or None, args.get("name") or "ecadlib",
                                   _menu_command(ws, args.get("command") or ""), args.get("port") or 8765)

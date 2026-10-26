@@ -186,6 +186,27 @@ def test_mcp_altium_menu_takes_only_a_way_to_run_ecadlib_as_its_command(tmp_path
         ini.unlink()
 
 
+@lite
+def test_mcp_kicad_dblib_driver_is_a_plain_odbc_driver_name(tmp_path):
+    # driver goes into the .kicad_dbl as Driver={...};Database=${CWD}/x.sqlite. An agent's '/tmp/x.so' is a library
+    # unixODBC loads into KiCad when the person opens the database library, and a '}' rewrote the connection string
+    from ecadlib.app import Workspace
+    from ecadlib import mcp_server as M
+    ws = Workspace(str(tmp_path / "ws"), offline=True)
+    ws.mcp_options = M.Options(wait=30)
+    seen = []
+    ws.kicad_dblib = lambda bom, name, driver, held: seen.append(driver) or {"ok": True}
+    for bad in ("/tmp/evil.so", "C:\\evil\\x.dll", "SQLite3};Database=/etc/x;X={", "SQLite3;Trusted=yes", "a\nb"):
+        r = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "kicad_dblib", "arguments": {"bom": "b.csv", "driver": bad}}})
+        assert r["result"]["isError"] and "driver" in r["result"]["content"][0]["text"], (bad, r)
+    for good in ("SQLite3 ODBC Driver", "SQLite3", "SQLite ODBC Driver (x64)"):
+        r = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "kicad_dblib", "arguments": {"bom": "b.csv", "driver": good}}})
+        assert not r["result"]["isError"], (good, r)
+    assert seen == ["SQLite3 ODBC Driver", "SQLite3", "SQLite ODBC Driver (x64)"], seen
+
+
 # ---------------------------------------------------------------- bommcp-04..06: JSON-RPC over stdio and HTTP
 def _ws(tmp_path):
     from ecadlib.app import Workspace
