@@ -165,6 +165,26 @@ def test_ru3_upper_case_export_keeps_both_resistors():
     assert sorted(zip(df["Part Number"], df["Value"])) == [("RES-0603-10M", "10M"), ("RES-0603-10m", "10m")]
 
 
+# ------------------------------------------------------------------ R-RU-4: house parameter names are checked
+def test_ru4_parameter_names_onto_a_key_column_or_another_name_are_refused():
+    from ecadlib import rules as RU
+    bad = ({"Manufacturer Part Number": "Part Number"}, {"Manufacturer Part Number": "Library Ref"},
+           {"Manufacturer": "description"}, {"Manufacturer Part Number": "PN", "Supplier Part Number 1": "PN"},
+           {"Manufacturer Part Number": "PN", "Supplier Part Number 1": "pn"}, {"Manufacturer": "Value"},
+           {"Manufacturer": "Supplier 1", "Supplier 1": "Vendor"}, {"Part Number": "Our PN"},
+           {"Manufacturer Part Number": " "})
+    for names in bad:
+        try:
+            RU.load({"parameters": {"names": names}})
+        except RU.RulesError as e:
+            assert "parameters.names" in str(e), (names, e)
+        else:
+            raise AssertionError(f"accepted {names}")
+    ok = RU.load({"parameters": {"names": {"Manufacturer Part Number": "Mfr PN", "Manufacturer": "Mfr",
+                                           "Supplier Part Number 1": "LCSC #", "Value": "Value"}}})
+    assert ok["parameters"]["names"]["Manufacturer Part Number"] == "Mfr PN"
+
+
 def _main():
     import sys
     n = 0

@@ -304,6 +304,31 @@ REMOVED_KEYS = {("release", "eagle"), ("release", "easyeda"),
 REMOVED_SECTIONS = {"sim", "hub", "assembly"}          # cut on 2026-10-19: an old file with them loads, they are ignored
 
 
+def _check_param_names(where, names):
+    """[parameters.names]: each house name is its own column. Never a key column ecadlib writes itself (Part Number,
+    Library Ref ...: the DbLib key or the symbol link would hold the MPN), never another parameter's name, and never
+    the house name of two parameters (both would be pushed, one read back as the other)."""
+    keys = {k.casefold() for k in KEY_COLUMNS}
+    others = {str(k).casefold() for k in CANONICAL_PARAMS} | {str(k).casefold() for k in names}
+    seen = {}
+    for k, v in names.items():
+        h = str(v).strip()
+        key = f"parameters.names.{k}"
+        if str(k).casefold() in keys:
+            _err(where, key, f"renames the key column {k!r}, which ecadlib writes itself; remove it")
+        if not h:
+            _err(where, key, "is empty: give the house name of this parameter, or remove the line")
+        if h.casefold() in keys:
+            _err(where, key, f"= {v!r}: {h!r} is a key column ecadlib writes itself (the part name, symbol or footprint "
+                             "link); give this parameter a name of its own")
+        if h.casefold() != str(k).casefold() and h.casefold() in others:
+            _err(where, key, f"= {v!r}: {h!r} is another parameter ecadlib writes; give this one a name of its own")
+        if h.casefold() in seen:
+            _err(where, key, f"= {v!r}: {seen[h.casefold()]!r} has that house name too; two parameters cannot share one "
+                             "column")
+        seen[h.casefold()] = k
+
+
 def validate(raw, where="ecadlib.toml"):
     """Raise RulesError naming the first bad key; returns raw unchanged when it is fine."""
     if not isinstance(raw, dict):
@@ -374,6 +399,7 @@ def validate(raw, where="ecadlib.toml"):
     for k, ok in (("case", ("keep", "upper", "lower")), ("value_style", VALUE_STYLES)):
         if k in n and n[k] not in ok:
             _err(where, f"naming.{k}", f"= {n[k]!r}: must be one of {', '.join(ok)}")
+    _check_param_names(where, (raw.get("parameters") or {}).get("names") or {})
     fp = raw.get("footprint", {})
     if "density" in fp and str(fp["density"]).upper() not in ("L", "N", "M", "A", "B", "C"):
         _err(where, "footprint.density", f"= {fp['density']!r}: must be L, N or M (IPC-7351 least / nominal / most)")
