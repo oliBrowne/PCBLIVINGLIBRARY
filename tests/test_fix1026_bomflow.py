@@ -235,3 +235,71 @@ def test_package_guess_never_drops_or_changes_an_exposed_pad(tmp_path):
         "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm"
     ix = _index(tmp_path / "c", ["Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.3mm"])
     assert ix.find_footprint_for_package("SOIC8", "U", hint="SOIC-8_3.9x4.9mm_P1.27mm") is None   # no EP added either
+
+
+# --- R-BF-5: the BOM's footprint beats the symbol's Footprint property; when they disagree the part is held ----------
+
+QFN48 = "Package_DFN_QFN:QFN-48-1EP_7x7mm_P0.5mm_EP5.6x5.6mm"
+
+
+@lite
+def test_kicad_builds_the_boms_land_and_holds_when_the_symbol_names_another(tmp_path):
+    items = _run(tmp_path, HDR + "U2,1,STM32F103C8T6,QFN-48-1EP_7x7mm_P0.5mm_EP5.6x5.6mm,STMicroelectronics,STM32F103C8T6,"
+                 "MCU,https://example.com/s.pdf\n", ["kicad", "standard"], extra_fp=[(QFN48, None)])
+    it = next(iter(items.values()))
+    assert it["source"]["footprint"] == "kicad:" + QFN48, it["source"]
+    assert it["status"] == "held" and "LQFP-48" in _holds(it) and "QFN-48" in _holds(it), (it["status"], _holds(it))
+
+
+@lite
+def test_kicad_does_not_hold_when_the_bom_and_symbol_name_one_land(tmp_path):
+    items = _run(tmp_path, HDR + "U2,1,STM32F103C8T6,LQFP-48_7x7mm_P0.5mm,STMicroelectronics,STM32F103C8T6,"
+                 "MCU,https://example.com/s.pdf\n", ["kicad", "standard"])
+    it = next(iter(items.values()))
+    assert it["source"]["footprint"] == "kicad:Package_QFP:LQFP-48_7x7mm_P0.5mm", it["source"]
+    assert "symbol" not in _holds(it).lower() or "Footprint" not in _holds(it), _holds(it)
+
+
+@lite
+def test_a_local_symbols_footprint_does_not_replace_the_boms_ep_land(tmp_path):
+    items = _run(tmp_path, HDR + "U1,1,LM358,SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.3mm,TI,LM358DDAR,Dual op amp,"
+                 "https://example.com/t.pdf\n", ["kicad", "standard"], [KICAD_FIXTURE])
+    it = next(iter(items.values()))
+    assert not str(it["source"]["footprint"] or "").endswith("SOIC-8_3.9x4.9mm_P1.27mm"), it["source"]
+    assert it["status"] == "held", it["status"]
+
+
+SOIC8EP = "SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.3mm"
+
+
+def _local_lib(tmp):
+    """A local library: LM2904 whose Footprint property is plain SOIC-8, and both SOIC-8 lands."""
+    from ecadlib import stdparts as SP
+    lib = Path(tmp) / "mylib"
+    (lib / "Package_SO.pretty").mkdir(parents=True)
+    for n in ("SOIC-8_3.9x4.9mm_P1.27mm", SOIC8EP):
+        (lib / "Package_SO.pretty" / f"{n}.kicad_mod").write_text(SP.build(n)[0], encoding="utf-8")
+    sym = (KICAD_FIXTURE / "kicad-symbols" / "Amplifier_Operational.kicad_symdir" / "LM2904.kicad_sym").read_text(
+        encoding="utf-8").replace('(property "Footprint" ""', '(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"', 1)
+    (lib / "LM2904.kicad_sym").write_text(sym, encoding="utf-8")
+    return lib
+
+
+@lite
+def test_triage_takes_the_boms_local_land_over_the_symbols(tmp_path):
+    from ecadlib import bom_triage as T
+    from ecadlib.kicad_index import KiCadIndex
+    ix = KiCadIndex([_local_lib(tmp_path)])
+    rows = T.triage([{"designator": "U1", "qty": "1", "value": "LM2904", "footprint": SOIC8EP, "mpn": "LM2904"}], ix, [], None)
+    assert rows[0]["local_footprint"].split(" ")[0] == "Package_SO:" + SOIC8EP, rows[0]
+    rows = T.triage([{"designator": "U1", "qty": "1", "value": "LM2904", "footprint": "", "mpn": "LM2904"}], ix, [], None)
+    assert rows[0]["local_footprint"].split(" ")[0] == "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", rows[0]   # BOM silent
+
+
+@lite
+def test_librarian_builds_the_boms_local_land_and_holds_the_symbols_other_one(tmp_path):
+    items = _run(tmp_path, HDR + f"U1,1,LM2904,{SOIC8EP},TI,LM2904,Dual op amp,https://example.com/t.pdf\n",
+                 ["standard"], [_local_lib(tmp_path)])
+    it = next(iter(items.values()))
+    assert it["source"]["footprint"] == "local:Package_SO:" + SOIC8EP, it["source"]
+    assert it["status"] == "held" and "Footprint property" in _holds(it), _holds(it)

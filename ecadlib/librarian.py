@@ -36,7 +36,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import __version__
-from . import (altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_3d as E3, easyeda_convert as EC,
+from . import (altium365 as A365, altium_export as AX, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_3d as E3, easyeda_convert as EC,
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
@@ -545,6 +545,10 @@ class Run:
             except Exception as e:            # one bad source or part must not stop the run
                 msg = cost_hint(str(e)) if s == "datasheet" else str(e)
                 st["tried"].append(f"{s}: failed ({type(e).__name__}: {msg}{_where(e)})")
+        bom_fp = str(ln.get("footprint") or "").strip()
+        if st.get("hint_fp") and bom_fp and AX.lands_differ(st["hint_fp"], bom_fp):    # R-BF-5: the BOM's land is
+            st["verify"].append(f"footprint: the BOM names {bom_fp} but the symbol's Footprint property is "   # built;
+                                f"{st['hint_fp']}: check which package the part has")    # the symbol says another
         lc = (row.get("lcsc") or "").split(" ")[0]
         if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
@@ -619,7 +623,8 @@ class Run:
         if st["footprint"]:
             return
         bom_fp = ln.get("footprint", "")
-        for cand, why in ((fp_ref, fp_how), (lib.footprint(st["hint_fp"]), "symbol's Footprint property"), (lib.footprint(bom_fp), "BOM footprint name"),
+        for cand, why in ((fp_ref, fp_how), (lib.footprint(bom_fp), "BOM footprint name"),     # the BOM's land first (R-BF-5)
+                          (lib.footprint(st["hint_fp"]), "symbol's Footprint property"),
                           (None if kind else lib.footprint_by_mpn(mpn), "footprint named after the MPN"),
                           (lib.footprint_by_prefix(bom_fp.split(":")[-1]), f"shortest KiCad name starting with '{bom_fp}'")):
             if cand:

@@ -1103,11 +1103,12 @@ def triage(lines, index, provs, http, shared=None):
             sym, how = index.match(pn, ln.get("lcsc", ""), ln.get("value", ""), pkg, ref_class=cls.group(0) if cls else "")
             if sym:
                 break
-        fp_key = None
-        if sym:
-            fp_key, _ = index.footprint(sym.props.get("Footprint", ""))
-        if not fp_key:
-            fp_key, _ = index.footprint(ln.get("footprint", ""))
+        fp_key, _ = index.footprint(ln.get("footprint", ""))    # the BOM's land first (R-BF-5), then the symbol's
+        sym_fp = str(sym.props.get("Footprint", "") or "") if sym else ""                 # unless the BOM names another
+        if not fp_key and sym_fp:
+            from .altium_export import lands_differ
+            if not lands_differ(sym_fp, ln.get("footprint", "")):
+                fp_key, _ = index.footprint(sym_fp)
         gen_fp = None if fp_key else index.find_footprint_for_package(
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
