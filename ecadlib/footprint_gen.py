@@ -449,11 +449,22 @@ def sanity(spec):
                         f"(offsets run from -{round(lim, 3)} to +{round(lim, 3)}): check the drawing")
     if t in ("chip", "molded") and T and not spec.get("inner_span") and 2 * dim(spec["terminal_length"])[0] >= dim(spec["body_length"])[2]:
         errs.append(f"terminal_length {T} is half the body length or more: it should be one end-cap/foot, not the whole part")
-    if t in ("gullwing", "qfp"):
+    if t == "gullwing":
         span = nom("lead_span")
         if span is not None and span < W + 0.1:                     # leads must stick out past the plastic
             errs.append(f"lead_span {span} is not bigger than body_width {round(W, 3)}: lead_span is the tip-to-tip size "
                         "across the leads (E), body_width the plastic (E1); are they swapped?")
+        if span is not None and T and T >= span / 2:
+            errs.append(f"terminal_length {T} is half the lead span or more")
+    if t == "qfp":                                  # each span across the body side it crosses (_qfn: X is body_length)
+        for k, side, sk in (("lead_span", L, "body_length"), ("lead_span_y" if spec.get("lead_span_y") else "lead_span", W, "body_width")):
+            span = nom(k)
+            if span is not None and side is not None and span < side + 0.1:
+                errs.append(f"{k} {span} is not bigger than {sk} {round(side, 3)}: {k} is the tip-to-tip size across the "
+                            f"leads, {sk} the plastic it crosses; are they swapped?"
+                            + (" (a rectangular QFP gives its top/bottom span as lead_span_y)" if sk == "body_width"
+                               and k == "lead_span" else ""))
+        span = nom("lead_span")
         if span is not None and T and T >= span / 2:
             errs.append(f"terminal_length {T} is half the lead span or more")
     n = spec.get("pin_count")

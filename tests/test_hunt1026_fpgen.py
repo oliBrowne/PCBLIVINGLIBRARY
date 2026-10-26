@@ -213,6 +213,19 @@ def test_fpgen11_quad_rows_measured_against_their_own_side():
     _refused(q, "7 pins", "body_length")
 
 
+# fpgen-12: a rectangular QFP (LQFP-128 14 x 20 mm) was refused: sanity compared its lead_span (the X span, across
+# body_length) with body_width, the gull-wing rule, and called them swapped. Each span now goes against its own side
+def test_fpgen12_rectangular_qfp_spans_against_their_own_side():
+    s = {"name": "LQFP-128_14x20mm_P0.5mm", "package_type": "qfp", "pin_count": 128, "pitch": 0.5, "pins_left_right": 38,
+         "pins_top_bottom": 26, "body_length": {"nom": 14}, "body_width": {"nom": 20}, "lead_span": {"nom": 16},
+         "lead_span_y": {"nom": 22}, "terminal_length": {"min": 0.45, "max": 0.75}, "terminal_width": {"min": 0.17, "max": 0.27}}
+    txt, rep = FG.build(s)
+    assert not [c for c in rep["checks"] if c["level"] == "error"]
+    assert rep["courtyard"][0] < rep["courtyard"][1]                             # 16 across, 22 down
+    _refused(dict(s, lead_span={"nom": 13.5}), "lead_span", "body_length")        # tips inside the plastic: refused
+    _refused(dict(s, lead_span_y={"nom": 19.5}), "lead_span_y", "body_width")
+
+
 # fpgen-08: a ball grid read wholly in mils (pitch 31.5, ball 15.7, body 394) built a 394 mm BGA with no warning (and
 # slowly); the parametric families refuse anything over 60 mm as mils, the ball grid did not
 def test_fpgen08_bga_in_mils_is_refused():
