@@ -48,24 +48,46 @@ _MAKER_WORDS = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "
                 "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE", "GROUP", "HOLDINGS", "INTERNATIONAL",
                 "SEMICONDUCTOR", "SEMICONDUCTORS", "SEMI", "ELECTRONICS", "ELECTRONIC", "ELECTRIC", "TECHNOLOGY",
                 "TECHNOLOGIES", "TECH", "INDUSTRIES", "INDUSTRIAL", "DEVICES", "COMPONENTS", "PRODUCTS", "SYSTEMS",
-                "MICROELECTRONICS", "INTEGRATED", "INTERTECHNOLOGY", "DIVISION"}
-# the short names makers go by -> the words of their full name (after _MAKER_WORDS are dropped)
+                "MICROELECTRONICS", "INTEGRATED", "INTERTECHNOLOGY", "DIVISION", "DIV", "MANUFACTURING", "MFG"}
+# where a distributor's sales arm is, after the maker's own name ("NXP USA Inc.", "Murata Electronics North America",
+# "GigaDevice Semiconductor (HK) Limited"): not which company it is
+_MAKER_REGION = {"USA", "US", "AMERICA", "AMERICAS", "NORTH", "EUROPE", "ASIA", "PACIFIC", "JAPAN", "CHINA", "HK",
+                 "GLOBAL", "UNLIMITED"}
+# the short names makers go by, and the old names of makers bought by another (their parts are sold under the new
+# name now), -> the words of the company's full name (after _MAKER_WORDS are dropped). One table: both ways.
 _MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON": "ON", "ONSEMI": "ON",
                 "ST": "ST", "STM": "ST", "ADI": "ANALOG", "MPS": "MONOLITHICPOWER", "AOS": "ALPHAOMEGA", "NXP": "NXP", "PHILIPS": "NXP",
                 "FAIRCHILD": "ON", "IR": "INFINEON", "RECTIFIER": "INFINEON", "CYPRESS": "INFINEON",
                 "MICROCHIPTECHNOLOGY": "MICROCHIP", "ATMEL": "MICROCHIP", "DIODESINC": "DIODES", "DIODES": "DIODES",
                 "RENESAS": "RENESAS", "IDT": "RENESAS", "INTERSIL": "RENESAS",
                 "LTC": "ANALOG", "MAXIM": "ANALOG", "HITTITE": "ANALOG",   # now Analog Devices
-                "KYOCERAAVX": "AVX", "KYOCERA": "AVX", "SILICONLABS": "SILICONLABORATORIES", "SILABS": "SILICONLABORATORIES"}
+                "KYOCERAAVX": "AVX", "KYOCERA": "AVX", "SILICONLABS": "SILICONLABORATORIES", "SILABS": "SILICONLABORATORIES",
+                # acquisitions: the old maker's name on a BOM, the buyer's at the distributor (and the other way)
+                "FREESCALE": "NXP",                                              # 2015 (Nexperia is not NXP: below)
+                "NATIONAL": "TEXASINSTRUMENTS", "NATSEMI": "TEXASINSTRUMENTS",   # National Semiconductor, 2011
+                "LT": "ANALOG", "DALLAS": "ANALOG",                              # Linear Technology; Dallas -> Maxim
+                "MICREL": "MICROCHIP", "MICROSEMI": "MICROCHIP", "ACTEL": "MICROCHIP", "SUPERTEX": "MICROCHIP",
+                "SMSC": "MICROCHIP", "STANDARDMICROSYSTEMS": "MICROCHIP", "SST": "MICROCHIP",
+                "SILICONSTORAGE": "MICROCHIP",                                   # Silicon Storage Technology
+                "AVAGO": "BROADCOM", "SPANSION": "INFINEON", "ZETEX": "DIODES", "EXAR": "MAXLINEAR",
+                "XILINX": "AMD", "ADVANCEDMICRO": "AMD", "ALTERA": "INTEL",
+                "SAMESKY": "CUI", "SEIKOEPSON": "EPSON", "NANJINGQINHENG": "WCH", "JIANGSUQINHENG": "WCH",
+                "TE": "TECONNECTIVITY", "TYCO": "TECONNECTIVITY", "AMP": "TECONNECTIVITY",
+                "WE": "WURTHELEKTRONIK", "WURTH": "WURTHELEKTRONIK", "GD": "GIGADEVICE",
+                "EPCOS": "TDK", "IXYS": "LITTELFUSE", "SILICONIX": "VISHAY", "FCI": "AMPHENOL", "AMSOSRAM": "OSRAM",
+                "ELPIDA": "MICRON", "NUMONYX": "MICRON", "WOLFSON": "CIRRUSLOGIC"}
+# Nexperia (NXP's Standard Products until 2017) is its own company now, with its own lifecycles and datasheets for the
+# discretes and logic NXP once sold: an NXP line is not matched to a Nexperia listing (nor Philips / Freescale to it).
 
 
 def _maker_words(name):
-    """A maker name's own words (upper case, accents folded, a Chinese alias in brackets and company-kind words left
-    out)."""
+    """A maker name's own words (upper case, accents folded, a Chinese alias in brackets, company-kind words and a
+    sales region after the name left out)."""
     name = clean_maker(name or "") if isinstance(name, str) else ""
     name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()       # Würth -> Wurth
     words = re.findall(r"[A-Z0-9]+", re.sub(r"[-'&.]", "", name.upper()))
-    return [w for w in words if w not in _MAKER_WORDS] or words
+    kept = [w for w in words if w not in _MAKER_WORDS] or words
+    return kept[:1] + [w for w in kept[1:] if w not in _MAKER_REGION]
 
 
 def _maker_words_all(name):
@@ -75,14 +97,14 @@ def _maker_words_all(name):
 
 def maker_key(name):
     """A maker's name reduced to which company it is: letters and digits of its words, company-kind words left out,
-    a Chinese alias in brackets dropped, short names mapped (TI -> Texas Instruments, onsemi / ON Semiconductor -> ON,
-    STMicroelectronics -> ST). '' when nothing is left."""
+    a Chinese alias in brackets dropped, short and old names mapped (TI -> Texas Instruments, onsemi / ON
+    Semiconductor -> ON, STMicroelectronics -> ST, Freescale -> NXP). '' when nothing is left."""
     kept = _maker_words(name)
     if kept[:2] == ["TEXAS", "INSTRUMENTS"]:
         return "TEXASINSTRUMENTS"
-    if kept[:1] == ["LINEAR"] and "TECHNOLOGY" in _maker_words_all(name):   # Linear Technology (not Linear Integrated
-        return "ANALOG"                                                  # Systems): Analog Devices now
-    if kept and kept[0].startswith("STMICRO"):
+    if kept[:1] == ["LINEAR"] and {"TECHNOLOGY", "TECH"} & set(_maker_words_all(name)):   # Linear Technology (not
+        return "ANALOG"                                                  # Linear Integrated Systems): Analog Devices now
+    if "".join(kept).startswith("STMICRO"):                              # STMicroelectronics, ST Micro
         return "ST"
     if kept and kept[0] == "VISHAY":              # Vishay Dale / Siliconix / Intertechnology / Sprague: one maker
         return "VISHAY"

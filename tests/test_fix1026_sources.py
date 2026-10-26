@@ -74,3 +74,48 @@ def test_unsafe_download_refuses_every_numeric_form_of_a_local_address(monkeypat
     for url in ("http://10.1.2.3/ds/x.pdf", "http://192.168.1.20/x.pdf", "https://www.ti.com/lit/ds/symlink/lm358.pdf",
                 "http://93.184.216.34/x.pdf", "https://cdn.0x10c.example/x.pdf", "https://1password.example/x.pdf"):
         assert D.unsafe_download(url, public=False) is None, url
+
+
+# ---------------------------------------------------------------- R-SRC-3: acquired / legacy maker names
+ACQUIRED = [("Freescale", "NXP USA Inc."), ("Freescale Semiconductor", "NXP Semiconductors"),
+            ("National Semiconductor", "Texas Instruments"), ("Linear Tech", "Analog Devices Inc."),
+            ("Linear Technology", "Analog Devices Inc."), ("LT", "Analog Devices"), ("Maxim", "Analog Devices Inc."),
+            ("Dallas Semiconductor", "Analog Devices Inc."), ("Micrel", "Microchip Technology"),
+            ("Atmel", "Microchip Technology"), ("Microsemi", "Microchip Technology"),
+            ("Silicon Storage Technology", "Microchip Technology"), ("Avago", "Broadcom Limited"),
+            ("Avago Technologies", "Broadcom"), ("International Rectifier", "Infineon Technologies"),
+            ("Fairchild", "onsemi"), ("Fairchild Semiconductor", "ON Semiconductor"), ("Intersil", "Renesas Electronics America Inc"),
+            ("Cypress", "Infineon Technologies"), ("Spansion", "Infineon Technologies"), ("Zetex", "Diodes Incorporated"),
+            ("Exar", "MaxLinear, Inc."), ("Xilinx", "AMD"), ("Altera", "Intel"), ("Same Sky", "CUI Devices"),
+            ("Seiko Epson", "EPSON"), ("Nanjing Qinheng", "WCH"), ("TE", "TE Connectivity AMP Connectors"),
+            ("Tyco Electronics", "TE Connectivity"), ("WE", "Würth Elektronik"), ("GD", "GigaDevice Semiconductor (HK) Limited"),
+            ("Epcos", "TDK Corporation"), ("IXYS", "Littelfuse Inc."), ("ST Micro", "STMicroelectronics"),
+            ("Murata Manufacturing", "Murata Electronics North America"), ("Siliconix", "Vishay Siliconix")]
+NOT_SAME = [("ST", "Stackpole Electronics"), ("TI", "Analog Devices Inc."), ("NXP", "Nexperia"), ("Nexperia", "NXP USA Inc."),
+            ("Freescale", "Nexperia"), ("National Semiconductor", "Analog Devices"), ("Avago", "Microchip"),
+            ("Linear Integrated Systems", "Analog Devices Inc."),
+            ("Microchip", "Micro Commercial Co"), ("TE", "Texas Instruments"), ("WE", "Winbond Electronics"),
+            ("GD", "Good-Ark"), ("Exar", "Microchip")]
+
+
+def test_acquired_makers_match_both_ways_and_others_do_not():
+    from ecadlib.providers import same_maker as S
+    for a, b in ACQUIRED:
+        assert S(a, b) and S(b, a), (a, b)
+    for a, b in NOT_SAME:
+        assert not S(a, b) and not S(b, a), (a, b)
+
+
+def test_digikey_lifecycle_finds_a_part_listed_under_its_makers_new_name():
+    from ecadlib import lifecycle as L
+    for mpn, bom, dk in (("MC9S08QG8CPBE", "Freescale", "NXP USA Inc."), ("LM317T", "National Semiconductor", "Texas Instruments"),
+                         ("LT1763CS8", "Linear Tech", "Analog Devices Inc."), ("MIC5205", "Micrel", "Microchip Technology"),
+                         ("S25FL", "Spansion", "Infineon Technologies"), ("ACPL", "Avago", "Broadcom Limited"),
+                         ("XR21V1410", "Exar", "MaxLinear, Inc."), ("CH340G", "Nanjing Qinheng", "WCH")):
+        d = {"Product": {"ManufacturerProductNumber": mpn, "Manufacturer": {"Name": dk}, "ProductStatus": {"Status": "Obsolete"}}}
+        r = L.parse_digikey(d, {"mpn": mpn, "manufacturer": bom}, L.LifecycleResult("digikey", mpn=mpn))
+        assert r.found and r.status == "obsolete", (bom, dk, r)
+    d = {"Product": {"ManufacturerProductNumber": "LM358", "Manufacturer": {"Name": "Analog Devices Inc."},
+                     "ProductStatus": {"Status": "Obsolete"}}}
+    r = L.parse_digikey(d, {"mpn": "LM358", "manufacturer": "TI"}, L.LifecycleResult("digikey", mpn="LM358"))
+    assert r.found is False, r
