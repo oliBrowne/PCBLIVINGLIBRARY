@@ -93,11 +93,12 @@ def _pad_rects(pads):
     out = []
     for r in pads:
         w, h = AL.to_mm(r["w"]), AL.to_mm(r["h"])
-        if round(r["rot"]) % 180 == 90:
+        rot = round(float(r["rot"] or 0), 1) % 180.0   # 89.99999 / 180.00001 from a double are 90 / 180, not odd
+        if abs(rot - 90.0) < 0.05:                     # angles: the overlap test below skipped such pads entirely
             w, h = h, w
         rad = min(w, h) / 2 * (1.0 if r["shape"] == AL.SHAPE["round"] else
                                 (r["corner"] or 0) / 100 if r["shape"] == AL.SHAPE["roundrect"] else 0.0)
-        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, r["rot"] % 90 != 0, rad))
+        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, min(rot % 90.0, 90.0 - rot % 90.0) > 0.05, rad))
     return out
 
 

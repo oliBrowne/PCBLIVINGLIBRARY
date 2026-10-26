@@ -82,6 +82,22 @@ def test_gate06_slot_width_and_direction_count():
     assert h[0, "oval 1.0 1.6"] == h[90, "oval 1.6 1.0"] == h[180, "oval 1.0 1.6"]   # the same hole, turned
 
 
+def test_gate07_pcblib_overlap_check_survives_rotation_noise():
+    """Without a .kicad_mod the overlap check runs on the PcbLib; a pad rotation of 89.99999 or 180.00001 (a double
+    read back) counted as an odd angle and the pad was left out of the check, so overlapping pads passed."""
+    from ecadlib import release_check as RC
+    from tests.test_release_check import SOIC, make
+    bad = SOIC.replace('(pad "2" smd roundrect (at -2.4725 -0.635)', '(pad "2" smd roundrect (at -2.4725 -1.7)')
+    with tempfile.TemporaryDirectory() as d:
+        it = make(d, kmod=bad, keep_kmod=False)
+        fp = AL.read_pcblib(Path(d, it["footprint"]["file"]))[0]
+        for rot in (0.0, 180.00001, 359.99999):
+            for r in fp["records"]:
+                if r["type"] == "pad":
+                    r["rot"] = rot
+            assert "pads 1 and 2 overlap" in RC._pcblib_minimal(fp)[0], rot
+
+
 def _mouser(part, listings):
     data = {"Errors": [], "SearchResults": {"Parts": [
         {"ManufacturerPartNumber": part["mpn"], "Manufacturer": m, "LifecycleStatus": st, "AvailabilityInStock": "5"}
