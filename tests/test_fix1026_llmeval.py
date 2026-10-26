@@ -187,3 +187,27 @@ def test_cached_only_takes_only_the_runs_own_models_answers(tmp_path):
     fake_s = types.SimpleNamespace(results=rc, _judge=judge, model="claude-sonnet-5-5",
                                    router=types.SimpleNamespace(ladder=["claude-sonnet-5-5"]))
     assert R.EvalReader._saved_answer(fake_s, dict(job, model="claude-sonnet-5-5")) is None
+
+
+# ---------------------------------------------------------------- R-LE-5: a missing --baseline is not a pass
+@lite
+def test_gate_refuses_a_missing_baseline_file_unless_asked_to_create_it(tmp_path, monkeypatch):
+    import contextlib, io, json
+    from ecadlib.eval import gate as G
+    rep = _rep([_row("a", "qfn", True, "standard"), _row("b", "qfn", False, "none")])
+    monkeypatch.setattr(G, "run", lambda *a, **k: rep)
+    typo = tmp_path / "typo.json"
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        rc = G.main(["--baseline", str(typo)])
+    assert rc != 0 and not typo.exists() and "--update" in err.getvalue(), (rc, err.getvalue())
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert G.main(["--baseline", str(typo), "--update"]) == 0
+    assert json.loads(typo.read_text())["overall"]["pass"] == 1
+    with contextlib.redirect_stdout(io.StringIO()):         # it exists now: an ordinary check
+        assert G.main(["--baseline", str(typo)]) == 0
+    # the default baseline of a new set is still created the first time
+    monkeypatch.setattr(G, "baseline_path", lambda s: tmp_path / "baselines" / f"{s}.json")
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert G.main(["--set", "newset"]) == 0
+    assert (tmp_path / "baselines" / "newset.json").exists()

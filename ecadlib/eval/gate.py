@@ -318,11 +318,16 @@ def main(argv=None):
         p = make_replay(a.set, a.replay)
         print(f"replay pack: {p} ({load_replay(p)['meta']['answers']} answers)")
         return 0
+    bp = Path(a.baseline or baseline_path(a.set))
+    if a.baseline and not a.update and not bp.exists():
+        # a mistyped --baseline wrote a new baseline from this run and passed (R-LE-5): creating one is asked for
+        print(f"ecadlib eval gate: baseline {bp} does not exist; check the path, or add --update to create it from "
+              "this run", file=sys.stderr)
+        return 2
     t0 = time.time()
     from .. import term as TM
     with TM.working(f"the {a.set} accuracy set (offline)"):
         rep = run(a.set, a.out, a.replay)
-    bp = Path(a.baseline or baseline_path(a.set))
     if a.update or not bp.exists():
         bp.parent.mkdir(parents=True, exist_ok=True)
         bp.write_text(json.dumps(baseline(rep), indent=1, sort_keys=True) + "\n", encoding="utf-8")
