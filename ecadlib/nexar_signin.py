@@ -111,9 +111,11 @@ def _save(tok, now=None, refresh=None):
 
 
 def wait_for_code(redirect, state, timeout=300, ready=None):
-    """Listen on the redirect address (this computer only) until the browser comes back; returns the code."""
+    """Listen on the redirect address (this computer only) until the browser comes back with this sign-in's state;
+    returns the code. A request with another state (or none: any web page open in the browser can fetch
+    localhost) gets a 400 and is otherwise ignored, so it cannot end the wait before Nexar's real redirect."""
     host, port, path = parse_redirect(redirect)
-    got, done = {}, threading.Event()
+    got, done, stray = {}, threading.Event(), []
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -121,8 +123,13 @@ def wait_for_code(redirect, state, timeout=300, ready=None):
             if u.path != path:
                 self.send_error(404)
                 return
+            q = dict(urllib.parse.parse_qsl(u.query))
+            if q.get("state") != state:
+                stray.append(1)
+                self.send_error(400, "not this sign-in")
+                return
             if not done.is_set():
-                got.update(urllib.parse.parse_qsl(u.query))
+                got.update(q)
                 done.set()
             ok = "code" in got and got.get("state") == state
             body = ("<h2>ecadlib is signed in to Altium 365.</h2><p>You can close this tab.</p>" if ok else
@@ -154,6 +161,9 @@ def wait_for_code(redirect, state, timeout=300, ready=None):
         if ready:
             ready()
         if not done.wait(timeout):
+            if stray:
+                raise SigninError(f"no answer for this sign-in in {timeout} s: the browser came back only with the "
+                                  "wrong state (not this sign-in): nothing was stored; run `ecadlib nexar signin` again")
             raise SigninError(f"no answer from the browser in {timeout} s: run `ecadlib nexar signin` again")
     finally:
         for s in servers:

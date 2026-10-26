@@ -32,3 +32,54 @@ def test_status_names_a_plan_with_wrong_typed_fields(tmp_path):
     assert any("librarian/bad/plan.json" in p for p in s["problems"]), s["problems"]
     assert [p["plan"] for p in s["plans"]] == ["librarian/good/plan.json"]
     assert s["totals"]["ready"] == 1 and "librarian/bad/plan.json" in WS.render(s)
+
+
+# ---------------------------------------------------------------- R-BR-5: a stray local request does not end sign-in
+def _free_port():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def test_nexar_signin_ignores_requests_with_the_wrong_state():
+    import threading, urllib.error, urllib.request
+    from ecadlib import nexar_signin as N
+    redirect = f"http://127.0.0.1:{_free_port()}/login"
+    direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))     # localhost only, no network
+    codes = []
+
+    def browser():
+        def go():
+            for q in ("code=junk&state=attacker", "x=1", "error=access_denied&state=other", "code=REAL&state=GOOD"):
+                try:
+                    codes.append(direct.open(f"{redirect}?{q}", timeout=5).status)
+                except urllib.error.HTTPError as e:
+                    codes.append(e.code)
+        threading.Thread(target=go, daemon=True).start()
+    # was: SigninError (the first request, a hostile page's, was taken and the real redirect refused)
+    assert N.wait_for_code(redirect, "GOOD", timeout=10, ready=browser) == "REAL"
+    assert codes[:3] == [400, 400, 400], codes
+
+
+def test_nexar_signin_times_out_naming_the_wrong_state():
+    import threading, urllib.error, urllib.request
+    from ecadlib import nexar_signin as N
+    redirect = f"http://127.0.0.1:{_free_port()}/login"
+    direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def browser():
+        def go():
+            try:
+                direct.open(f"{redirect}?code=x&state=forged", timeout=5).read()
+            except urllib.error.HTTPError:
+                pass
+        threading.Thread(target=go, daemon=True).start()
+    try:
+        N.wait_for_code(redirect, "GOOD", timeout=1.5, ready=browser)
+    except N.SigninError as e:
+        assert "state" in str(e), e
+    else:
+        raise AssertionError("a forged state was accepted")
