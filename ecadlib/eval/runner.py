@@ -214,8 +214,15 @@ def printed_names(sc, mine_pins, ref_pins, text, tol=None):
     words = " " + re.sub(r"[^A-Z0-9]+", " ", _spaced(text)) + " "
     ours = {str(n): v for n, v in mine_pins}
     fixed, used = dict((str(n), v) for n, v in ref_pins), []
+    kicad = [(str(n), S.norm_name(v)) for n, v in ref_pins]
     for n, v in fixed.items():
         o = re.sub(r"[^A-Z0-9]+", " ", _spaced(ours.get(n))).strip()
+        # a spelling of a name, never another pin's name: one KiCad has on another pin (ours VIN / VOUT swapped, as the
+        # datasheet's other package prints them) or ground on a supply pin is a wrong connection (hunt 2026-10-26)
+        on = S.norm_name(ours.get(n))
+        if any(m != n and k and S.same_name(on, k) for m, k in kicad) or \
+                {S.rail(on), S.rail(S.norm_name(v))} == {"gnd", "supply"}:
+            continue
         if (o and len(re.sub(r"[^A-Z]", "", o)) >= 2 and S.norm_name(o) != S.norm_name(v) and f" {o} " in words
                 and (f" {n} {o} " in words or _abbreviates(v, o))):
             fixed[n] = ours[n]

@@ -334,8 +334,11 @@ def score_symbol(mine_pins, ref_pins, tol=None):
                 or one_of(a.get(n), b[n])]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
-        moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1   # a name KiCad has on another pin:
-                 or rail(named[n]) and rail(norm_name(a.get(n))) not in (None, rail(named[n]))]  # supply <-> ground: a short
+        # a name KiCad has on one other pin, as KiCad spells it or as another spelling of it (ours VIN / VOUT on KiCad's
+        # VO / VI pins: input and output swapped, hunt 2026-10-26), or supply <-> ground: a short
+        elsewhere = lambda o: bool(o) and any(c == 1 and same_name(o, k) for k, c in once.items())
+        moved = [n for n in set(named) - set(same) if elsewhere(norm_name(a.get(n)))
+                 or rail(named[n]) and rail(norm_name(a.get(n))) not in (None, rail(named[n]))]
         out["symbol_names"] = _f(len(same) >= t["names"] * len(named) and not moved,       # swapped pins, not naming noise
                                  f"{len(same)}/{len(named)} pin names agree"
                                  + (f" ({len(moved)} on the wrong pin)" if moved else "") + "; " + "; ".join(diff[:4]),
