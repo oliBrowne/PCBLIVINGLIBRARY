@@ -51,3 +51,95 @@ def test_with_no_code_in_the_part_number_a_drawing_naming_another_package_code_i
                            "XQ7Z100-1I", own={"BGA256"})
     # a family's own names are no other maker's code (SOIC-14 for an SO14, FBGA-256 for a BGA256)
     assert OD.names_it(["SOIC-14 package outline D0014A. 14 pins, DIM MIN MAX, SO-14"], "74HC14", own={"SO14"})
+
+
+# ---------------------------------------------------------------- R-CF-2: the browser takes only the link's own PDF
+_PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+_HTML = (b"<!doctype html><html><body><h1>LM358DR</h1><a href='/lit/ds/lm358.pdf'>Datasheet</a>"
+         b"<iframe src='/rohs/declaration.pdf'></iframe></body></html>")
+
+
+class _Req:
+    def __init__(self, nav):
+        self.nav = nav
+
+    def is_navigation_request(self):
+        return self.nav
+
+
+class _Resp:
+    def __init__(self, url, ctype, body, nav, frame, size=None):
+        self.url, self.status, self.request, self.frame, self._b = url, 200, _Req(nav), frame, body
+        self.headers = {"content-type": ctype, **({"content-length": str(size)} if size else {})}
+        self.read = False
+
+    def body(self):
+        self.read = True
+        return self._b
+
+
+class _Page:
+    main_frame, sub = object(), object()
+
+    def __init__(self, responses):
+        self.cbs, self.url, self.responses = {}, "about:blank", responses
+
+    def on(self, ev, cb):
+        self.cbs.setdefault(ev, []).append(cb)
+
+    def goto(self, url, **k):
+        if url == "about:blank":
+            return
+        self.url = url
+        for r in self.responses(self):
+            for cb in self.cbs.get("response", []):
+                cb(r)
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def content(self):
+        return _HTML.decode()
+
+    def close(self):
+        pass
+
+
+def _browser_get(responses, fetched=None):
+    from ecadlib import pdf_fetch as PF
+
+    class Ctx:
+        def new_page(self):
+            return _Page(responses)
+    b = PF.Browser.__new__(PF.Browser)
+    b.timeout, b.settle, b.challenge_s = 1, 0, 0
+    b._start = lambda s: None
+    b._fetch_in_page = lambda page, url: (fetched.append(url), (0, None, "", url, "capped"))[1]
+    s = PF._State()
+    s.ctx, s.warm = Ctx(), {"www.example-maker.com"}
+    return b._get("https://www.example-maker.com/product/LM358DR", s)
+
+
+def test_the_browser_never_returns_a_pdf_the_page_embedded_as_the_links_answer():
+    url = "https://www.example-maker.com/product/LM358DR"
+    st, data, ctype, final, err = _browser_get(lambda p: [
+        _Resp(url, "text/html", _HTML, True, p.main_frame),
+        _Resp("https://www.example-maker.com/rohs/declaration.pdf", "application/pdf", _PDF, False, p.sub)])[:5]
+    assert data == _HTML and "html" in ctype and not err, (st, ctype, final, err)   # the page: pdf_link chooses
+    # the link that is the PDF itself (the main frame's navigation) is still taken
+    pdf = "https://www.example-maker.com/lit/ds/lm358.pdf"
+    st, data, ctype, final, err = _browser_get(lambda p: [_Resp(pdf, "application/pdf", _PDF, True, p.main_frame)])[:5]
+    assert data == _PDF and final == pdf and not err, (final, err)
+
+
+def test_the_browser_does_not_read_an_oversized_pdf_body():
+    from ecadlib.datasheet import MAX_DOWNLOAD
+    big = _Resp("https://www.example-maker.com/lit/ds/lm358.pdf", "application/pdf", _PDF, True, None,
+                size=MAX_DOWNLOAD + 1)
+    fetched = []
+
+    def responses(p):
+        big.frame = p.main_frame
+        return [big]
+    st, data, ctype, final, err = _browser_get(responses, fetched)[:5]
+    assert not big.read and fetched == [big.url] and data is None, (big.read, fetched, err)   # the capped fetch

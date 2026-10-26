@@ -408,7 +408,7 @@ class Browser:
         self._start(s)
         if s.why:
             return 0, None, "", url, s.why
-        from .datasheet import is_pdf
+        from .datasheet import MAX_DOWNLOAD, is_pdf
         try:
             page = s.ctx.new_page()
         except Exception:                             # the driver or the browser died between calls: start again
@@ -422,10 +422,12 @@ class Browser:
 
         def on_response(r):
             try:
-                if "pdf" in (r.headers or {}).get("content-type", "").lower():
-                    pdfs.append(r)
                 if r.request.is_navigation_request() and r.frame == page.main_frame:
                     nav["last"] = r                   # the page's own document, after any redirect or reload
+                    # only the link's own answer: a PDF the page embeds (an iframe / object / preload of a RoHS
+                    # declaration or a PCN) is not it; the page goes back as HTML and pdf_link chooses among its links
+                    if "pdf" in (r.headers or {}).get("content-type", "").lower():
+                        pdfs.append(r)
             except Exception:
                 pass
 
@@ -455,11 +457,20 @@ class Browser:
                     if nav_err:                       # it never finished loading: its body may never come
                         target = r.url
                         break
+                    try:                              # too big to hold: the capped fetch says so (MAX_DOWNLOAD)
+                        size = int((r.headers or {}).get("content-length") or 0)
+                    except ValueError:
+                        size = 0
+                    if size > MAX_DOWNLOAD:
+                        target = r.url
+                        break
                     try:
                         body = r.body()
                     except PWError:                   # its body went to a download
                         target = r.url
                         break
+                    if len(body or b"") > MAX_DOWNLOAD:   # no length sent: refused once read, as a download is
+                        return 0, None, "", url, f"larger than {MAX_DOWNLOAD >> 20} MB"
                     if is_pdf(body):
                         return r.status, body, r.headers.get("content-type", ""), r.url, None
                     target = r.url                    # Chrome's PDF viewer hands back its own page instead
