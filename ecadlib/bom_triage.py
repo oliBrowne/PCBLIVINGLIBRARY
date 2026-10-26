@@ -89,6 +89,8 @@ def _pair_size(cell, header):
     if not m:
         return None
     a, b = m.groups()
+    if a == b:                                        # one code written twice: not two (_one_code reads it)
+        return None
     if METRIC_TO_IMPERIAL.get(a) == b:
         return b, []
     if METRIC_TO_IMPERIAL.get(b) == a:
@@ -97,12 +99,20 @@ def _pair_size(cell, header):
                 "and inch: not used (give the inch size, or the footprint name)"]
 
 
+def _one_code(cell):
+    """'0603 0603', '0805/0805', '1608 (1608)': one size code written twice -> that code, read as a single code is in
+    its column; any other cell unchanged."""
+    m = re.fullmatch(r"[\s(]*(\d{4,5})[\s)]*[/,;|(\s-]+[\s(]*(\d{4,5})[\s)]*", str(cell))
+    return m.group(1) if m and m.group(1) == m.group(2) else cell
+
+
 def metric_size(cell, header):
     """A footprint cell from a millimetre column ('Case Code (mm)') -> (footprint text, [note]). A bare chip size code
     is metric there: '1608' -> '0603', '0603' -> '0201' (read as an inch code it was the wrong part). A bare code
     that is no metric chip size ('1206') cannot be told apart, so it is not used: the part is held for its footprint
     rather than built on a guess. Anything else ('SOT-23-5', 'R_0603_1608Metric') is kept."""
     from .kicad_index import METRIC_TO_IMPERIAL
+    cell = _one_code(cell)
     pair = _pair_size(cell, header)
     if pair is not None:
         return pair
@@ -135,6 +145,7 @@ def mixed_size(cell, header):
     is a size in both ('0603': an inch 0603 or the metric code of an 0201; '0402') cannot be told apart, so it is not
     used and the part is held for its footprint rather than built on a guess. Anything else is kept."""
     from .kicad_index import METRIC_TO_IMPERIAL
+    cell = _one_code(cell)
     if re.fullmatch(r"\s*\d{4}\s*mm\s*", str(cell)):                # '1608 mm', '0603mm': the cell says metric
         return metric_size(cell, header)
     pair = _pair_size(cell, header)                               # '0603/0201', '0603 (1608)': the inch one of a pair
@@ -469,6 +480,8 @@ def read_bom(path, columns=None, rules=None, root=None):
         for f in ("mpn", "lcsc"):
             if d.get(f):
                 d[f] = clean_part_number(d[f])
+        if d.get("footprint"):                                   # '0603 0603': the one code
+            d["footprint"] = _one_code(d["footprint"])
         if metric_fp and mm_inch and _size_code(d.get("footprint", "")) in ("0402", "0603"):
             note.append(f"footprint '{d['footprint']}' from the column '{headers[col['footprint']]}': the column mixes "
                         f"inch and mm codes ({', '.join(mm_inch)} is no metric size), so {d['footprint']} may be an "

@@ -100,6 +100,31 @@ def test_the_browser_route_check_looks_each_host_up_once(monkeypatch):
     assert r.did == "abort"
 
 
+# ---------------------------------------------------------------- R-FX4-5: one size code written twice
+def _read_fp(f, header, cells):
+    from ecadlib import bom_triage as T
+    text = f'Designator,Qty,MPN,Manufacturer,"{header}"\n' + "".join(f'R{i},1,RC{i}X,Yageo,"{c}"\n'
+                                                                     for i, c in enumerate(cells))
+    f.write_bytes(text.encode("utf-8"))
+    with contextlib.redirect_stderr(io.StringIO()):
+        lines, _ = T.read_bom(f)
+    return [l for l in sorted(lines, key=lambda l: int(l["designator"][1:]))]
+
+
+@lite
+def test_the_same_size_code_twice_reads_as_that_code_in_its_column(tmp_path):
+    cells = ["0603 0603", "0201 0201", "0805/0805", "1608 (1608)", "0402/0603", "0603, 0805", "0603/0201", "0603"]
+    want = {"Package": ["0603", "0201", "0805", "1608", "", "", "0201", "0603"],
+            "Footprint": ["0603", "0201", "0805", "1608", "", "", "0201", "0603"],
+            "Case Code (mm)": ["0201", "", "", "0603", "", "", "0201", "0201"],     # read as the single code is there
+            "Case (Metric / Imp.)": ["", "0201", "0805", "0603", "", "", "0201", ""]}
+    for hdr, exp in want.items():
+        got = [l.get("footprint", "") for l in _read_fp(tmp_path / "b.csv", hdr, cells)]
+        assert got == exp, (hdr, got)
+    held = _read_fp(tmp_path / "b.csv", "Package", ["0402/0603"])[0]   # a true two-size cell stays held
+    assert not held.get("footprint") and "two size codes" in held["bom_note"], held
+
+
 # ---------------------------------------------------------------- Altium project fixtures (R-FX4-1, R-FX4-4)
 def _blk(s):
     import struct
