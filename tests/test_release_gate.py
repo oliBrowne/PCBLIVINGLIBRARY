@@ -169,6 +169,23 @@ def _one_emptied(d):
     return d / "plan.json"
 
 
+def _one_emptied_released(d):
+    """_one_emptied, with the emptied PART2 recorded as its released revision (as a version released before a stricter
+    rule was, or by an older ecadlib that released pass / warn changes without the release check). Since the fix
+    a field edit that fails the check is held for approval instead (tests/test_fix1026_changes.py), and the released
+    version is put back: these tests are about a released head that fails the check now."""
+    from ecadlib import change_gate as CG, fingerprint as FP
+    plan = _one_emptied(d)
+    items = json.loads(plan.read_text())
+    g = CG.Guard(d, "librarian")
+    g.hold_lock()
+    try:
+        g._release(items[1], FP.of_item(items[1], d), [], {"action": "pass", "why": []})
+    finally:
+        g.close()
+    return plan
+
+
 def test_kicad_dblib_export_parts_and_plugins_recheck_ready_parts():
     from ecadlib import kicad_dblib as KD, parts_export as PE, plugins as PL
     from tests.test_change_control_round4 import _EP
@@ -202,7 +219,7 @@ def test_kicad_export_keeps_a_released_part_it_now_holds():
         assert [p["part"] for p in KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)["parts"]] == ["PART1", "PART2"]
         sym, fp = d / "kicad" / "mylib.kicad_sym", d / "kicad" / "mylib.pretty" / "SOIC-8_other.kicad_mod"
         exported = (sym.read_text(), fp.read_text())
-        _one_emptied(d)
+        _one_emptied_released(d)
         rep = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
         assert [p["part"] for p in rep["parts"]] == ["PART1"] and rep["skipped"][0]["recheck"], rep["skipped"]
         assert (sym.read_text(), fp.read_text()) == exported            # the symbol and footprint stay as exported
@@ -241,7 +258,7 @@ def test_kicad_dblib_keeps_the_row_of_a_part_kicad_export_kept():
                 return {r[0]: r[1] for t in rep["tables"] for r in
                         con.execute(f'SELECT "Part ID", "Description" FROM {KD._ident(t)}').fetchall()}
         assert described() == {"PART1": "Test part", "PART2": "Test part"}
-        _one_emptied(d)
+        _one_emptied_released(d)
         rep = KD.build(d / "plan.json", d / "k", "mylib", export=True, log=quiet)
         assert described() == {"PART1": "Test part", "PART2": "Test part"} and rep["skipped"] == [], rep
         assert "PART2: held (fields: Description is empty); the row exported before stays in mylib.sqlite until it " \
@@ -283,7 +300,7 @@ def test_kicad_export_does_not_take_in_a_hand_edit_as_the_kept_version():
         RC.apply([ok, two], d)
         (d / "plan.json").write_text(json.dumps([ok, two]))
         KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
-        _one_emptied(d)
+        _one_emptied_released(d)
         sym = d / "kicad" / "mylib.kicad_sym"
         sym.write_text(sym.read_text().replace('(property "Value" "PART2"', '(property "Value" "PART2-EDITED"', 1))
         rep = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
@@ -310,7 +327,7 @@ def test_kicad_export_keeps_a_hand_put_3d_file_the_users():
         step.parent.mkdir(parents=True)
         step.write_bytes(b"ISO-10303-21; the user's own STEP file\n")
         KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
-        _one_emptied(d)
+        _one_emptied_released(d)
         rep = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
         assert rep["kept"] and "mylib.3dshapes/MYPKG.step" not in rep["written"], rep["written"]
         (d / "plan.json").write_text(json.dumps([ok]))                 # PART2 leaves the plan

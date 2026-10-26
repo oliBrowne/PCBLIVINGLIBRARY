@@ -593,6 +593,7 @@ class Guard:
             dec = decide(changes, self.policy, self.mode)
             rej = self.ledger.rejected(it["name"], new["hashes"]["digest"], new) if dec["action"] == "hold" else None
             todo[it["name"]] = {"item": it, "head": head, "fp": new, "changes": changes, "dec": dec, "rejected": rej}
+        self._check_releases([t for t in todo.values() if t["dec"]["action"] != "hold"])
         held_files = {}
         for name, t in todo.items():
             if t["dec"]["action"] == "hold":
@@ -668,12 +669,33 @@ class Guard:
 
     def _release_check(self, todo):
         """The release check on copies of these items as the writer left them -> "" when all pass, else the reasons."""
+        return "; ".join(f"{n}: {', '.join(i.get('hold_reasons') or [])}" for n, i in self._probe(todo).items()
+                         if i.get("status") == "held")
+
+    def _probe(self, todo):
+        """The release check on copies of these items ({item: ...} rows) as the writer left them -> {name: checked copy}.
+        kicad_import parts (_manifest) have no plan fields to check and are left out."""
         from . import release_check as RC
         probe = [json.loads(json.dumps(t["item"], default=str)) for t in todo if not t["item"].get("_manifest")]
-        if not probe:
-            return ""
-        RC.apply(probe, self.base, rules=self.rules, change_holds=False)
-        return "; ".join(f"{i['name']}: {', '.join(i.get('hold_reasons') or [])}" for i in probe if i.get("status") == "held")
+        if probe:
+            RC.apply(probe, self.base, rules=self.rules, change_holds=False)
+        return {i["name"]: i for i in probe}
+
+    def _check_releases(self, todo):
+        """A pass / warn change is released only when the changed version passes the release check, as `ecadlib part
+        approve` requires: one that fails it (a .kicad_mod edited without its .PcbLib fails parity) would be a ledger
+        head no publisher ships. It is held for approval instead (approving it runs the check again, with the hint).
+        Not in observe mode: the workspace released that version itself."""
+        if self.mode == "observe" or not todo:
+            return
+        got = self._probe(todo)
+        for t in todo:
+            chk = got.get(t["item"]["name"])
+            if not chk or chk.get("status") != "held":
+                continue
+            why = f"fails the release check ({', '.join(chk.get('hold_reasons') or []) or 'held'})"
+            t["dec"] = dict(t["dec"], action="hold", why=[why] + list(t["dec"].get("why") or []))
+            t["rejected"] = self.ledger.rejected(t["item"]["name"], t["fp"]["hashes"]["digest"], t["fp"])
 
     @_locked_step
     def restyle(self, before, after):
@@ -726,6 +748,14 @@ class Guard:
         self._refuse_lost(lost)
         rows, heads = [], None
         names = {i["name"] for i in items}
+        if self.mode != "observe":             # the status in plan.json is not proof (a hand-set "ready"): only a part
+            got = self._probe([{"item": it} for it, why in todo if not why])   # that passes the release check now
+            for it, why in todo:                                                # gets its revision 1
+                chk = got.get(it["name"])
+                if chk and chk.get("status") == "held":     # plan.json is left as it is (a publisher checks again)
+                    self.log(f"  change skip  {it['name']:<28} not released: fails the release check "
+                             f"({', '.join(chk.get('hold_reasons') or [])})")
+            todo = [(it, why) for it, why in todo if why or (got.get(it["name"]) or {}).get("status") != "held"]
         for it, why in todo:
             fp = FP.of_item(it, self.base)
             if fp.get("notes"):                # an unreadable file is no released revision to keep

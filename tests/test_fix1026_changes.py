@@ -1,0 +1,125 @@
+"""2026-10-26 fixes "changes": (1) a pass / warn change and a first release (baseline) are recorded only when the version
+passes the release check, as `ecadlib part approve` requires; (2) web UI actions made while a librarian run holds the
+library lock are never lost and never hang (decisions recorded at once, file rewrites queued until the lock frees).
+Offline.  python3 -m pytest -q tests/test_fix1026_changes.py   (or python -m tests.run_all test_fix1026_changes)"""
+import contextlib, io, json, os, shutil, subprocess, sys, tempfile, threading, time
+from pathlib import Path
+
+from tests.fixtures_lite import lite
+
+REPO = Path(__file__).resolve().parents[1]
+_DEMO = {}
+
+
+def _run(cwd, *args):
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("ANTHROPIC_", "ECADLIB_")) and k not in ("NEXAR_TOKEN",)}
+    env.update(ECADLIB_HOME=str(Path(cwd) / "home"), NO_COLOR="1", ECADLIB_USER="Tester <tester@example.com>",
+               PYTHONPATH=os.pathsep.join([str(REPO), env.get("PYTHONPATH", "")]))
+    return subprocess.run([sys.executable, "-m", "ecadlib", *map(str, args)], cwd=cwd, env=env, capture_output=True,
+                          text=True, timeout=300)
+
+
+def _demo():
+    """A fresh copy of the offline demo workspace -> (work dir, library folder)."""
+    if "dir" not in _DEMO:
+        d = Path(tempfile.mkdtemp(prefix="ecadlib-fix-demo-"))
+        r = _run(d, "demo", "-o", "ws")
+        assert r.returncode == 0, r.stdout + r.stderr
+        _DEMO["dir"] = d
+    w = Path(tempfile.mkdtemp(prefix="ecadlib-fix-"))
+    shutil.copytree(_DEMO["dir"] / "ws", w / "ws")
+    return w, w / "ws/librarian/demo_bom_demo"
+
+
+def _ledger(lib):
+    return [json.loads(x) for x in (lib / "library.ledger.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+
+
+def _items(plan):
+    return {i["name"]: i for i in json.loads(Path(plan).read_text(encoding="utf-8"))}
+
+
+RES = ("RES-0603-10k", "RES-0603-4.7k")
+
+
+# ------------------------------------------------------------------ 1: pass / warn releases run the release check
+def test_fix_changes_1a_a_warn_change_that_fails_parity_is_held_not_released():
+    """upkeep Q2: a geometry-minor hand edit of the shared R_0603 .kicad_mod (pad 0.8 -> 0.82 mm) was recorded as r2
+    (warn) for both resistors; parity then failed (KiCad 0.82, Altium 0.8) and every publisher dropped both released
+    parts. Now the edit is held for approval and the released r1 keeps shipping."""
+    w, lib = _demo()
+    k = lib / "models/KiCad/R_0603_1608Metric.kicad_mod"
+    released = k.read_bytes()
+    t = k.read_text(encoding="utf-8")
+    assert "(size 0.8 0.95)" in t
+    k.write_text(t.replace("(size 0.8 0.95)", "(size 0.82 0.95)"), encoding="utf-8")
+    n = len(_ledger(lib))
+    r = _run(w, "kicad-export", lib / "plan.json", "--out", "kx")
+    assert r.returncode == 1 and "a change is held for approval" in r.stdout, r.stdout + r.stderr   # 1: held changes
+    new = _ledger(lib)[n:]
+    assert not [e for e in new if e["event"] == "release" and e.get("part") in RES], [(e["event"], e.get("part")) for e in new]
+    assert {e.get("part") for e in new if e["event"] == "hold"} >= set(RES), [(e["event"], e.get("part")) for e in new]
+    assert k.read_bytes() == released                      # the released file is back on disk
+    items = _items(lib / "plan.json")
+    for p in RES:
+        assert (items[p].get("change") or {}).get("state") == "held", items[p].get("change")
+        assert items[p]["status"] == "ready", (p, items[p]["status"], items[p].get("hold_reasons"))
+    prop = json.loads((lib / ".ecadlib/proposed" / f"{RES[0]}.json").read_text(encoding="utf-8"))
+    assert any("release check" in w_ for w_ in prop.get("why") or []), prop.get("why")
+    assert "skipped  RES-0603" not in r.stdout + r.stderr, r.stdout
+    pub = [e.get("part") for e in _ledger(lib)[n:] if e["event"] == "publish"]
+    assert set(RES) <= set(pub), pub                        # both released parts still go out
+    r = _run(w, "altium-pkg", lib / "plan.json", "--out", "apkg")
+    assert "4 added" in r.stdout, r.stdout + r.stderr
+
+
+def test_fix_changes_1b_a_warn_change_that_passes_the_check_is_still_released():
+    """No false hold: a cosmetic-only / warn edit that passes the release check is recorded as before."""
+    w, lib = _demo()
+    k = lib / "models/KiCad/R_0603_1608Metric.kicad_mod"
+    t = k.read_text(encoding="utf-8")
+    assert "(thickness 0.06)" in t
+    k.write_text(t.replace("(size 0.4 0.4) (thickness 0.06)", "(size 0.5 0.5) (thickness 0.07)", 1), encoding="utf-8")
+    n = len(_ledger(lib))
+    r = _run(w, "kicad-export", lib / "plan.json", "--out", "kx")
+    assert r.returncode == 0, r.stdout + r.stderr
+    new = _ledger(lib)[n:]
+    rel = {e.get("part") for e in new if e["event"] == "release"}
+    assert set(RES) <= rel, [(e["event"], e.get("part"), e.get("decision")) for e in new]
+    assert not [e for e in new if e["event"] == "hold"], [(e["event"], e.get("part")) for e in new]
+
+
+def test_fix_changes_1c_baseline_runs_the_release_check_not_the_plan_status():
+    """upkeep Q1: a held part whose status was set to "ready" by hand got `release r1 baseline` from the first
+    publisher. Baseline now runs the release check, so it stays unreleased."""
+    w, lib = _demo()
+    plan = lib / "plan.json"
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    for i in items:
+        if i["name"] in ("AO3401A", "CH340C"):
+            assert i["status"] == "held"
+            i["status"] = "ready"
+    plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    n = len(_ledger(lib))
+    r = _run(w, "kicad-export", plan, "--out", "kx")
+    assert r.returncode == 0, r.stdout + r.stderr
+    new = _ledger(lib)[n:]
+    assert not [e for e in new if e["event"] == "release"], [(e["event"], e.get("part"), e.get("decision")) for e in new]
+    assert "skipped  CH340C" in r.stdout and "skipped  AO3401A" in r.stdout, r.stdout     # and nothing shipped
+
+
+@lite
+def test_fix_changes_1d_baseline_still_records_a_part_that_passes(tmp_path, monkeypatch):
+    """A part that passes the release check still gets its revision 1 (no false hold from the new check)."""
+    from ecadlib import change_gate as CG
+    from tests.ui_fixture import build
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        ws, bom = build(tmp_path / "ws")
+    plan = ws.root / "librarian" / "sample_bom" / "plan.json"
+    ready = [n for n, i in _items(plan).items() if i["status"] == "ready"]
+    assert ready
+    from ecadlib import ledger as LG
+    heads = {n: LG.Ledger(plan.parent).head(n) for n in ready}
+    assert all(heads.values()), heads                    # the librarian's own baseline recorded them
+
