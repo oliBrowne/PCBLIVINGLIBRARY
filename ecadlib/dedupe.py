@@ -101,9 +101,15 @@ def _digest(obj):
 
 
 def _pad_tuple(num, x, y, w, h, rot, hole):
-    if round(rot) % 180 == 90:
-        w, h = h, w
-    return (str(num), round(_q(x), 2), round(_q(y), 2), round(_q(w), 2), round(_q(h), 2), round(rot % 90, 1), bool(hole))
+    """A pad turned 180 degrees is the same pad, and one turned 90 is the same pad with width and height swapped, so
+    the rotation is folded into [0, 90) and w/h swap for every angle in [90, 180) (not only 90 itself): a 1x2 pad at
+    135 degrees is a 2x1 pad at 45, and is NOT the 1x2 pad at 45 (its long side runs the other diagonal). The angle is
+    rounded to 0.1 degree first so 359.99999 is 0 and 89.99999 is 90."""
+    r = round(float(rot), 1) % 180.0
+    if r >= 90.0:
+        w, h, r = h, w, r - 90.0
+    r = round(r, 1) % 90.0
+    return (str(num), round(_q(x), 2), round(_q(y), 2), round(_q(w), 2), round(_q(h), 2), round(r, 1) + 0.0, bool(hole))
 
 
 _ALTIUM_SHAPE = {1: "round", 2: "rect", 9: "roundrect"}                 # altium_lib.SHAPE; octagonal etc.: other
