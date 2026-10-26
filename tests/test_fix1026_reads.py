@@ -144,6 +144,46 @@ def test_rfp3_a_j_lead_part_named_by_its_jedec_outline_is_not_checked_as_gull_wi
     assert D._feet_outside(dict(plcc, name="LQFP-28", description="")) != []    # a gull-wing QFP is still checked
 
 
+
+SOT143 = {"body_length": (2.8, 2.9, 3.0), "body_width": (1.2, 1.3, 1.4), "lead_span": (2.1, 2.3, 2.5),
+          "pitch": ("", 1.9, ""), "terminal_length": (0.15, 0.3, 0.45), "terminal_width": (0.38, 0.43, 0.48),
+          "height_max": ("", "", 1.1)}
+SOT143_POS = [{"number": "1", "side": "L", "offset": -0.75}, {"number": "2", "side": "L", "offset": 0.95},
+              {"number": "3", "side": "R", "offset": 0.95}, {"number": "4", "side": "R", "offset": -0.95}]
+SOT143_PINS = [("1", "S"), ("2", "D"), ("3", "G2"), ("4", "G1")]
+
+
+def test_rfp2_a_reverse_pinned_part_named_so_passes_with_a_note_for_the_person():
+    """NXP SOT143R (BF998R): numbered clockwise seen from the top by design. The counter-clockwise rule failed it and
+    told the model as fact that pins run counter-clockwise: a model that complied built it mirrored."""
+    rev_pos = [dict(p, side="R" if p["side"] == "L" else "L") for p in SOT143_POS]
+    assert _wire_read("SOT-143", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": SOT143_POS})[0] == ("ok", [])
+    for name, desc in (("SOT-143R", None), ("SOT143R", None), ("SOT-143", "SOT-143 reverse pinning (BF998R)")):
+        (kind, why), rev = _wire_read(name, SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": rev_pos}, desc=desc)
+        assert kind == "ok", (name, why)
+        assert any("clockwise" in r and "reverse" in r for r in rev), rev       # the person checks it
+        assert not any("numbered counter-clockwise seen from the top" in r for r in rev), rev
+
+
+def test_rfp2_clockwise_without_a_reverse_name_fails_without_telling_the_model_it_is_impossible():
+    rev_pos = [dict(p, side="R" if p["side"] == "L" else "L") for p in SOT143_POS]
+    (kind, why), rev = _wire_read("SOT-143", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": rev_pos})
+    assert kind == "failed", why
+    line = next(r for r in why if r.startswith("pin_positions"))
+    assert "mirrored" in line and "reverse" in line, line                        # either is possible: the drawing says
+    assert "pins are numbered counter-clockwise seen from the top" not in line, line
+    (kind, why), _ = _wire_read("SOT-143", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": rev_pos},
+                                desc="SOT-143 with reverse current protection")    # not a reverse-pinning marker
+    assert kind == "failed", why
+
+
+def test_rfp2_one_side_clockwise_the_other_counter_clockwise_still_fails():
+    mixed = [dict(p) for p in SOT143_POS]
+    mixed[2]["offset"], mixed[3]["offset"] = -0.95, 0.95                          # R side now runs down: mixed
+    (kind, why), rev = _wire_read("SOT-143R", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": mixed})
+    assert kind == "failed" and any("mirrored" in r for r in why), why
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

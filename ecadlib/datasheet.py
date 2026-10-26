@@ -1783,6 +1783,9 @@ def _feet_outside(spec):
     return out
 
 
+REVERSE_PINNED = re.compile(r"revers\w*[- ]?pin|\bSOT-?\d+R\b", re.I)   # "reverse pinning", SOT-143R (not "reverse current")
+
+
 def _listed_layout(spec):
     """A gull-wing read that places its pads (pin_positions) against what every such package has: pin 1 at the top of
     the left row or the bottom of the right one, numbered counter-clockwise seen from the top (down the left side, up
@@ -1794,9 +1797,28 @@ def _listed_layout(spec):
     pos = [p for p in _listed(spec) if isinstance(p.get("offset"), (int, float)) and not isinstance(p.get("offset"), bool)
            and p.get("side") in ("L", "R")]
     num = lambda p: int(p["number"]) if str(p.get("number")).isdecimal() else None
+    rows = {sd: sorted((num(p), p["offset"]) for p in pos if p["side"] == sd and num(p) is not None) for sd in "LR"}
+    # each side with 2+ pins: counter-clockwise (+1), clockwise (-1) or neither (0). Reverse-pinned packages (NXP
+    # SOT143R, the BF998R family) are numbered clockwise by design, so a part clockwise on every side is not told it
+    # is impossible: named so, it is built with a note for the person; otherwise the read fails with both causes named
+    way = {sd: (1 if all(b[1] > a[1] for a, b in zip(r, r[1:])) else -1 if all(b[1] < a[1] for a, b in zip(r, r[1:]))
+                else 0) * (1 if sd == "L" else -1) for sd, r in rows.items() if len(r) >= 2}
+    if way and set(way.values()) == {-1}:
+        where = "; ".join(f"side {sd} pins {', '.join(str(n) for n, _ in rows[sd])} at {', '.join(f'{o:g}' for _, o in rows[sd])}"
+                          for sd in way)
+        if REVERSE_PINNED.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
+            out.append(f"pin_positions: pins numbered clockwise seen from the top ({where}), as a reverse-pinned package "
+                       "is: check pin 1 and the order against the drawing's top view")
+        else:
+            out.append(f"pin_positions: pins run clockwise seen from the top on every side ({where}; offset + is down). "
+                       "Either the read is mirrored (offsets given + up, or read from the bottom view), which is "
+                       "implausible, or the package is reverse-pinned (e.g. SOT-143R): if the drawing's top view numbers "
+                       "them clockwise, say \"reverse pinning\" in the description and keep the offsets; else give them as "
+                       "seen from the top")
+        way = {}
     for side, sign in (("L", 1), ("R", -1)):
-        row = sorted((num(p), p["offset"]) for p in pos if p["side"] == side and num(p) is not None)
-        if any((b[1] - a[1]) * sign <= 0 for a, b in zip(row, row[1:])):
+        row = rows[side]
+        if way and any((b[1] - a[1]) * sign <= 0 for a, b in zip(row, row[1:])):
             out.append(f"pin_positions: pins {', '.join(str(n) for n, _ in row)} on side {side} run "
                        f"{'up' if sign > 0 else 'down'} it (offsets {', '.join(f'{o:g}' for _, o in row)}): pins are "
                        f"numbered counter-clockwise seen from the top (down the left side, up the right; offset + is "
