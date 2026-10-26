@@ -167,9 +167,16 @@ class OpenAICompatClient:
                 with waiting(f"the model at {shown} (model call)"):
                     r = post(url, **_no_redirects(post, dict(headers=h, json=chat, timeout=self.timeout)))
             except requests.RequestException as e:
-                err = APIError(f"{shown}: request failed: {type(e).__name__}: {redact(e, self.key)[:200]}", retryable=True)
                 from .. import datasheet as D
-                err.maybe_billed = not D.not_sent(e)         # the cost cap keeps its hold
+                from . import is_local
+                billed = not D.not_sent(e)                   # a read timeout / a cut-off answer: the server may have run it
+                # sent again only when that cannot pay twice: no connection was made, or a server on your own network
+                # with no price of its own ($0); the cost cap held one request's worst case, not five
+                again = not billed or (is_local(self.base) and not self.profile.get("price_set"))
+                err = APIError(f"{shown}: request failed: {type(e).__name__}: {redact(e, self.key)[:200]}"
+                               + ("" if again else " (the request may have reached the server and been billed, so it "
+                                  "is not sent again; run again to retry)"), retryable=again)
+                err.maybe_billed = billed                    # the cost cap keeps its hold
                 rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
             else:
                 try:

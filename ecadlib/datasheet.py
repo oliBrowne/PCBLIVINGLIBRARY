@@ -184,6 +184,11 @@ def settings(rules=None):
     return {**SETTINGS, **{k: v for k, v in (got or {}).items() if k in SETTINGS and v not in (None, "")}}
 
 
+def _usd_arg(s):
+    from .ai_cost import usd_arg                      # nan / inf / negative refused (a nan cap held nothing)
+    return usd_arg(s)
+
+
 def cap_chosen(rules=None):
     """The rules file itself sets [datasheet] max_cost_usd (rules.load records the keys it set): a cap of 10 there is
     the person's, not the default one, though both read 10 once merged over the defaults."""
@@ -883,6 +888,31 @@ def build_request(source, part, package=None, pages=None, model=MODEL, effort="h
 ZOOM_PX = 2240            # a close-up's width: 0.55 of a Letter / A4 page at 2240 px wide is ~4560 visual tokens, under the 4784
 ZOOM_PAGES = 3            # cap of the newer models (2576 px long edge), so it is sent as rendered, not downscaled
 ZOOM_BANDS = ((0.0, 0.55), (0.45, 1.0))              # top and bottom half, overlapping so no dimension is cut in two
+IMG_TOKENS = 4784         # the most one image costs (high-resolution tier: visual_check.IMG_TOKENS_MAX)
+
+
+def rough_extra_tokens(body, prompt=1500):
+    """Input tokens a rough (pages x PAGE_TOKENS + prompt) estimate leaves out of this request: its images (the zoom
+    close-ups, up to ZOOM_PAGES x 2 of them) at IMG_TOKENS each, and text beyond the `prompt` tokens (a feedback turn
+    carries the first answer and the checks' errors). Without them the hold under max_cost_usd could be lower than
+    what the request is billed."""
+    imgs, chars = 0, 0
+    sysm = body.get("system")
+    chars += len(sysm) if isinstance(sysm, str) else sum(len(str(b.get("text") or "")) for b in sysm or []
+                                                          if isinstance(b, dict))
+    for m in body.get("messages") or []:
+        c = m.get("content") if isinstance(m, dict) else None
+        if isinstance(c, str):
+            chars += len(c)
+            continue
+        for b in c if isinstance(c, list) else []:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "image":
+                imgs += 1
+            elif b.get("type") in ("text", "thinking"):
+                chars += len(str(b.get("text") or b.get("thinking") or ""))
+    return imgs * IMG_TOKENS + max(0, chars // 3 - prompt)
 
 
 def no_zoom():
@@ -3766,7 +3796,12 @@ class Reader:
                              f"= {uses}"})
             return None
         fallback = model in FALLBACK_MODELS           # a classifier decline is re-run on another model, as for a read
-        est, cap = WS.estimate(model, uses, fallback), float(self.cfg.get("max_cost_usd") or 0)
+        try:
+            cap = self._cap()
+        except DatasheetError as e:
+            attempts.append({"url": "", "where": where, "error": f"not searched: {e}"})
+            return None
+        est = WS.estimate(model, uses, fallback)
         if cap and (est is None or self.committed_usd + est > cap):
             attempts.append({"url": "", "where": where, "error": f"not searched: about ${est or 0:.2f} more "
                              f"would pass [datasheet] max_cost_usd = {cap:g}"})
@@ -4611,7 +4646,7 @@ class Reader:
             except DatasheetError:                    # estimate would otherwise price its first request as unknown
                 pass                                  # a setup that does not resolve is reported where it is sent
             pin, pout = price_of(model) or (None, None)
-            tin, unknown = None, False
+            tin, unknown, extra = None, False, 0
             if self.key and self.count_tokens and self._plain(model):
                 try:
                     api = self.info(model)["ep"]["model"]          # 'claude:x' (a named endpoint) -> 'x', as a batch sends it
@@ -4626,10 +4661,13 @@ class Reader:
                 unknown = not pages and j["prov"].get("sent_as") != "base64"   # sent as a URL, never counted: size unknown
                 pages = pages or URL_PAGES
                 tin, how = pages * PAGE_TOKENS + 1500, f"rough: {pages} pages x {PAGE_TOKENS}"
+                extra = rough_extra_tokens(j["body"])         # close-up images, a feedback turn's first answer
+                if extra:
+                    tin, how = tin + extra, how + f" + {extra:,} for images / more text"
             schema = len(json.dumps(output_schema())) // 4     # the output format (not in count_tokens): rough
             tin += schema
             # DS-37: the worst case of a PDF of unknown size is the request's page limit, not the typical URL_PAGES
-            tmax = page_limit(model) * PAGE_TOKENS + 1500 + schema if unknown else tin
+            tmax = page_limit(model) * PAGE_TOKENS + 1500 + schema + extra if unknown else tin
             if unknown:
                 how += f" (size unknown: worst case priced at the {page_limit(model)}-page request limit)"
             from .ds_route import prices
@@ -4688,11 +4726,20 @@ class Reader:
 
     def set_cap(self, usd):
         """--max-cost-usd N: a cap the person set, even when it is the default's 10."""
-        self.cfg["max_cost_usd"], self.cap_set = usd, True
+        from .ai_cost import cap_usd                  # ValueError for nan / inf / negative: never a cap that holds nothing
+        self.cfg["max_cost_usd"], self.cap_set = cap_usd(usd, "--max-cost-usd"), True
+
+    def _cap(self):
+        """[datasheet] max_cost_usd as a float (0 = no cap); DatasheetError for one that would hold nothing (nan)."""
+        from .ai_cost import cap_usd
+        try:
+            return cap_usd(self.cfg.get("max_cost_usd"), "[datasheet] max_cost_usd")
+        except ValueError as e:
+            raise DatasheetError(f"{e}; nothing sent") from None
 
     def _guard_cost(self, jobs):
         """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
-        cap = float(self.cfg.get("max_cost_usd") or 0)
+        cap = self._cap()
         if not cap or not jobs:                       # --yes does not lift the cap: a scripted run keeps its ceiling
             return
         default = cap == DEFAULT_MAX_COST_USD and not self.cap_set     # not one the person set (to 10 as well)
@@ -5241,7 +5288,7 @@ def batch_main(argv, estimate=False):
     ap.add_argument("--estimate", action="store_true", help="rough token count (pages) and cost; send nothing")
     ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
                     "[datasheet] max_cost_usd cap still holds)")
-    ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
+    ap.add_argument("--max-cost-usd", type=_usd_arg, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
                     f"{DEFAULT_MAX_COST_USD:g}; 0 = no cap)")
     ap.add_argument("--model")
     ap.add_argument("--effort", choices=EFFORTS)
@@ -5361,7 +5408,7 @@ def main(argv=None):
     ap.add_argument("--rules", help="library rules file ([datasheet] max_cost_usd; default: searched from -o upwards)")
     ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
                     "[datasheet] max_cost_usd cap still holds)")
-    ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
+    ap.add_argument("--max-cost-usd", type=_usd_arg, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
                     f"{DEFAULT_MAX_COST_USD:g}; 0 = no cap)")
     ap.add_argument("-o", "--out", default="out/datasheet")
     a = ap.parse_args(argv)

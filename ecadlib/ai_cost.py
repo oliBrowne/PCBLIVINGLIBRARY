@@ -23,6 +23,29 @@ CHECK_TYPICAL_OUT = 1000           # a cross-check answer: the critical numbers 
 TOLERANCE = 0.005                  # an estimate may come back half a cent higher than the one the person approved
 
 
+def cap_usd(v, what="max_cost_usd"):
+    """A spending cap as a float (0 = no cap), or ValueError: nan / inf / negative / not a number. A nan cap made
+    every `spent + next > cap` test False, so it held nothing; inf is not "no cap" either (0 is)."""
+    try:
+        if isinstance(v, bool):
+            raise ValueError
+        f = float(v or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"{what} = {v!r} is not a number of dollars") from None
+    if not math.isfinite(f) or f < 0:
+        raise ValueError(f"{what} = {v!r}: a spending cap is a number of 0 or more (0 = no cap; not nan or inf)")
+    return f
+
+
+def usd_arg(s):
+    """argparse type for --max-cost-usd / --max-total-usd (cap_usd's rule)."""
+    import argparse
+    try:
+        return cap_usd(s, "the cap")
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
 def limit(rules=None):
     """(USD, setting name) above which the dialogs ask a second time."""
     from . import datasheet as D

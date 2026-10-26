@@ -698,6 +698,8 @@ def total_cap(lib, total, per_run=None, log=print):
     """The per-run cap left under a folder total: total - what <lib>/datasheet/cost.jsonl already holds (and no more
     than per_run when that is set too). Raises ValueError when nothing is left, so nothing is sent."""
     from .. import ai_cost as AC
+    total = AC.cap_usd(total, "--max-total-usd")      # nan would leave a nan cap: one that holds nothing
+    per_run = AC.cap_usd(per_run, "--max-cost-usd") if per_run is not None else None
     try:                                              # a batch sent and not yet collected is billed but not in the
         st = json.loads((Path(lib) / "datasheet" / "batch_state.json").read_text(encoding="utf-8"))   # ledger yet
     except (OSError, ValueError):
