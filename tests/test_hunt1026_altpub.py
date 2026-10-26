@@ -103,6 +103,51 @@ def test_menu_build_refuses_a_line_break_that_would_add_ini_keys():
             assert not (Path(t) / "menu" / AM.INI).exists()
 
 
+class _MenuWS:
+    """What altium_menu.publish / _part_result use of app.Workspace, with an Altium 365 push that answers `results`."""
+    def __init__(self, root, items, results):
+        self.root, self.items, self.results = Path(root), items, results
+
+    def rules(self):
+        return {"altium365": {"workspace": "https://t.365.altium.com"}}
+
+    def _plan(self, rel):
+        return self.root / "bom.csv", self.root / "plan.json", self.items
+
+    def _librarian_dir(self, bom):
+        return self.root / "lib"
+
+    def altium365_push(self, bom, url, dry_run=True):
+        (self.root / "r.json").write_text("[]")
+        return {"results": self.results, "report": "r.json"}
+
+
+def _menu_part(results, name="PART-A"):
+    import tempfile
+    from ecadlib import altium_menu as AM
+    item_ = {"name": name, "status": "ready", "hold_reasons": [], "source": {}, "parameters": []}
+    with tempfile.TemporaryDirectory() as t:
+        ws = _MenuWS(t, [item_], results)
+        return AM._part_result({"library": Path(t) / "lib", "name": "ecadlib"}, ws, "bom.csv", "bom.csv", name,
+                               AM.Progress(None))
+
+
+def test_menu_does_not_say_released_for_a_part_the_push_skipped():
+    """A ready part the Altium 365 push skipped (a sign-off the policy still wants, an identity change it refuses)
+    was reported "ready ... released to Altium 365" in the menu dialog: only `error` and release-check holds counted."""
+    for detail in ("sign-off: needs 2 approvals (has 1)", f"identity change (Manufacturer Part Number: A -> B) not applied"):
+        res = _menu_part([{"name": "PART-A", "action": "skip", "detail": detail}])
+        assert res["status"] == "error" and "not published" in res["message"] and detail in res["message"], res
+
+
+def test_menu_part_released_is_not_failed_by_another_parts_error():
+    """parts.csv holds every part added from the menu: another part's failed push made this one's dialog say
+    "built but not published" with the other part's error."""
+    res = _menu_part([{"name": "OTHER", "action": "error", "detail": "NexarError: boom"},
+                      {"name": "PART-A", "action": "release", "detail": ""}])
+    assert res["status"] == "ready" and "released to Altium 365" in res["message"], res
+
+
 class Workspace(FakeA365):
     """A closer Nexar mock: components found by name whatever the case (pick_named), symbol / footprint items that
     can be released once (a second release of the same item name fails as duplicate, as live), linked by name."""

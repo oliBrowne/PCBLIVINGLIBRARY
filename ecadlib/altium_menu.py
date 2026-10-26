@@ -1012,12 +1012,18 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
         except ValueError as e:
             return {"target": "a365", "install": [], "problems": [str(e)], "workspace": url,
                     "fix": "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again" if "NEXAR_TOKEN" in str(e) else ""}
+        from .altium365 import PUSHED as _PUSHED
+        PUSHED = _PUSHED + ("released", "create", "created", "update", "updated")    # (older names, as counted before)
         acts = [r.get("action") for r in res["results"]]
+        ready = {i.get("name") for i in ws._plan(bom_rel)[2] if i.get("status") == "ready"}
         return {"target": "a365", "install": [], "problems": [f"{r['name']}: {r.get('detail')}" for r in res["results"]
                                                               if r.get("action") == "error"],
-                "held": {r["name"]: r.get("detail") for r in res["results"] if r.get("recheck")},
-                "workspace": url, "released": sum(a in ("release", "released", "create", "created", "update", "updated")
-                                                 for a in acts), "report": str(ws.root / res["report"])}
+                # every part the push did not put in the workspace (a release-check hold, a sign-off the policy still
+                # wants, an identity change it refuses): a ready part among them is not "released"
+                "held": {r["name"]: r.get("detail") or r.get("action") for r in res["results"]
+                         if r.get("action") not in PUSHED and r.get("action") != "error" and (r["name"] in ready or r.get("recheck"))},
+                "actions": {r["name"]: r.get("action") for r in res["results"]},
+                "workspace": url, "released": sum(a in PUSHED for a in acts), "report": str(ws.root / res["report"])}
     bom_path, plan_f, items = ws._plan(bom_rel)
     if not any(i.get("status") == "ready" for i in items) and not any(Path(library).glob("*.DbLib")):
         return {"target": "folder", "install": [], "problems": [], "library": str(library)}
@@ -1148,8 +1154,13 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
             res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
-        if pub.get("problems") or nm in (pub.get("held") or {}):
-            why = f"{nm}: {pub['held'][nm]}" if nm in (pub.get("held") or {}) else pub["problems"][0]
+        probs = pub.get("problems") or []
+        if pub.get("target") == "a365" and "actions" in pub:    # one result per part: only this part's counts for it
+            probs = [p for p in probs if p.startswith(f"{nm}: ")]
+            if nm not in pub["actions"] and not probs:
+                probs = [f"{nm}: the Altium 365 push has no result for it"]
+        if probs or nm in (pub.get("held") or {}):
+            why = f"{nm}: {pub['held'][nm]}" if nm in (pub.get("held") or {}) else probs[0]
             res.update(status="error", message=f"{mpn} was built ({nm}) but not published: {why}",
                        fix=pub.get("fix") or "run `ecadlib altium-pkg` or `ecadlib altium365 push` by hand to see more")
     elif st == "awaiting_approval":
