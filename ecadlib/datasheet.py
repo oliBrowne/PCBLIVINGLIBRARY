@@ -3559,9 +3559,13 @@ class PdfStore:
                 try:
                     pdf, meta = self._fetch(link, where, follow=False, part=part, handoff=handoff, _page=url,
                                             public=public)
-                    return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
                 except DatasheetError as e:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
+                from . import ds_route as DR           # the page's PDF can be its change notice or a letter (R-FX16-2)
+                other = not_a_datasheet(DR.page_texts(pdf, 1))
+                if other:
+                    raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {link}: {other}")
+                return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
             from .pdf_fetch import gone_page
             if gone_page(url, status, data, final):
                 raise DatasheetError(f"{url}: the link is gone: it now goes to {final} (a home page, a search or a "
@@ -3662,17 +3666,18 @@ def pdf_link(html, base, docs=False, part=None):
     refresh = _refresh_url(text)
     links = [m.group(1) for m in re.finditer(r"""href\s*=\s*["']\s*([^"'#]+?\.pdf(?:\?[^"'#]*)?)\s*(?:#[^"']*)?["']""",
                                              text, re.I)]
-    # a viewer page showing its PDF in an iframe / embed / object with no link to it (R-FX13-6): its src / data,
-    # when it names a .pdf or the tag says application/pdf
-    for m in re.finditer(r"<(?:iframe|embed|object)\b[^>]*>", text, re.I):
-        a = re.search(r"""\b(?:src|data)\s*=\s*["']\s*([^"'#]+?)\s*(?:#[^"']*)?["']""", m.group(), re.I)
-        if a and (re.search(r"\.pdf(?:\?|$)", a.group(1), re.I) or re.search(r"application/pdf", m.group(), re.I)):
-            links.append(a.group(1))
     if refresh:
         links.insert(0, refresh)
     if docs and not links:
         links = [m.group(1) for m in re.finditer(r"""href\s*=\s*["']\s*([^"'#]+?)\s*(?:#[^"']*)?["']""", text, re.I)
                  if DOC_LINK.search(H_.unescape(m.group(1)))]
+    # a viewer page showing its PDF in an iframe / embed / object with no link to it (R-FX13-6): its src / data,
+    # when it names a .pdf or the tag says application/pdf. Only when the page has no other link: a product page
+    # can embed its RoHS certificate or a change notice beside the datasheet's link (R-FX16-2)
+    for m in re.finditer(r"<(?:iframe|embed|object)\b[^>]*>", text, re.I) if not links else ():
+        a = re.search(r"""\b(?:src|data)\s*=\s*["']\s*([^"'#]+?)\s*(?:#[^"']*)?["']""", m.group(), re.I)
+        if a and (re.search(r"\.pdf(?:\?|$)", a.group(1), re.I) or re.search(r"application/pdf", m.group(), re.I)):
+            links.append(a.group(1))
     links = [urljoin(base, H_.unescape(u).strip()) for u in links]
     links = [u for u in links if urlparse(u).scheme.lower() in ("http", "https")]   # no file:, data:
     if not links:

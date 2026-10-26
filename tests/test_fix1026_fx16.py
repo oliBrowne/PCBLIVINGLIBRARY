@@ -110,3 +110,55 @@ def test_proof_on_the_datasheet_server_keeps_its_key():
         assert _proof(r)[1] == "sk-gw1-secret"
         r = _rules({"datasheet": {"provider": "openai-compatible", "base_url": GW1, "model": "m", "api_key_env": "GW1_KEY"}})
         assert _proof(r) == (GW1, "sk-gw1-secret")
+
+
+# ---------------------------------------------------------------- R-FX16-2: an embedded PDF never beats the datasheet link
+_B = "https://www.maker.com/product/LM358DR"
+
+
+def _link(body, docs=True):
+    from ecadlib import datasheet as D
+    return D.pdf_link(f"<html><body>{body}</body></html>", _B, docs=docs, part="LM358DR")
+
+
+def test_pdf_link_prefers_the_datasheet_href_or_doc_link_over_an_embedded_pdf():
+    # a datasheet href on another host + an iframe RoHS file named for the part: the datasheet
+    assert _link("<a href='https://www.ti.com/lit/lm358.pdf'>Datasheet</a><iframe src='/rohs/LM358DR_RoHS.pdf'></iframe>") \
+        == "https://www.ti.com/lit/lm358.pdf"
+    assert _link("<a href='https://www.ti.com/lit/lm358.pdf'>Datasheet</a><iframe src='/rohs/LM358DR_RoHS.pdf'></iframe>",
+                 docs=False) == "https://www.ti.com/lit/lm358.pdf"
+    # a document-download link (no .pdf) + an embedded certificate or change notice: the document link
+    got = _link("<a href='/dgdl/Infineon-IRF540N-DataSheet-v01_01-EN?fileId=5546d'>Datasheet</a>"
+                "<iframe src='/compliance/rohs-cert.pdf'></iframe>")
+    assert "/dgdl/" in got, got
+    assert _link("<a href='/getfile?docid=ds-lm358'>Datasheet</a><embed src='/pcn/PCN-2026-04.pdf' type='application/pdf'>") \
+        == "https://www.maker.com/getfile?docid=ds-lm358"
+    # a viewer page with nothing else still gives its embedded PDF (R-FX13-6)
+    assert _link("<iframe src='https://cdn.maker.com/docs/LM358-datasheet.pdf#page=1'></iframe>") == \
+        "https://cdn.maker.com/docs/LM358-datasheet.pdf"
+    assert _link("<object data='/getdoc?id=123' type='application/pdf'></object>", docs=False) == \
+        "https://www.maker.com/getdoc?id=123"
+
+
+def test_a_page_whose_pdf_opens_as_a_change_notice_is_not_the_datasheet():
+    import tempfile
+    from ecadlib import datasheet as D
+    from tests import test_datasheet_batch as TB
+    from tests.test_datasheet_downloads import Scripted
+    pcn = TB.pdf_with(["Product Change Notification\nPCN-2026-04 LM358DR assembly site change. Affected: LM358DR "
+                       "SOIC-8, LM358DGKR. Features low power, wide supply range, RoHS compliant parts."])
+    good = TB.pdf_with(["LM358DR dual operational amplifier. Features low power, wide supply range.", "Pin Functions"])
+    page = b"<html><body><embed src='/pcn/PCN-2026-04.pdf' type='application/pdf'></body></html>"
+    with tempfile.TemporaryDirectory() as d:
+        http = Scripted({_B: [(200, page, {})], "https://www.maker.com/pcn/PCN-2026-04.pdf": [pcn]})
+        try:
+            got = D.PdfStore(d, http, sleep=lambda s: None).fetch(_B, "BOM", part="LM358DR", mpn="LM358DR")
+        except D.DatasheetError as e:
+            assert "not a datasheet" in str(e), e
+        else:
+            raise AssertionError(f"a change notice was taken for the datasheet: {got[1]}")
+    with tempfile.TemporaryDirectory() as d:                     # a real datasheet behind the page is still taken
+        page = b"<html><body><a href='/ds/lm358.pdf'>Datasheet</a></body></html>"
+        http = Scripted({_B: [(200, page, {})], "https://www.maker.com/ds/lm358.pdf": [good]})
+        data, meta = D.PdfStore(d, http, sleep=lambda s: None).fetch(_B, "BOM", part="LM358DR", mpn="LM358DR")
+        assert data == good and meta["page_url"] == _B, meta
