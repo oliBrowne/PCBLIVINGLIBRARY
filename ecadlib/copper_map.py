@@ -67,8 +67,9 @@ def bbox(polys):
     return (min(xs), min(ys), max(xs), max(ys)) if xs else None
 
 
-def raster(polys, frame, step):
-    """Cells (i, j) whose centre is inside any polygon (even-odd per polygon). frame: (x0, y0)."""
+def raster(polys, frame, step, clip=None):
+    """Cells (i, j) whose centre is inside any polygon (even-odd per polygon). frame: (x0, y0). clip: (i0, j0, i1,
+    j1), only the cells in that range (inclusive)."""
     x0, y0 = frame
     cells = set()
     for poly in polys:
@@ -76,6 +77,8 @@ def raster(polys, frame, step):
             continue
         ys = [y for _, y in poly]
         j0, j1 = int(math.floor((min(ys) - y0) / step)), int(math.ceil((max(ys) - y0) / step))
+        if clip:
+            j0, j1 = max(j0, clip[1]), min(j1, clip[3])
         edges = list(zip(poly, poly[1:] + poly[:1]))
         for j in range(j0, j1 + 1):
             yc = y0 + (j + 0.5) * step
@@ -83,8 +86,71 @@ def raster(polys, frame, step):
                         if (ya <= yc < yb) or (yb <= yc < ya))
             for a, b in zip(xs[::2], xs[1::2]):
                 i0, i1 = int(math.ceil((a - x0) / step - 0.5)), int(math.floor((b - x0) / step - 0.5))
+                if clip:
+                    i0, i1 = max(i0, clip[0]), min(i1, clip[2])
                 cells.update((i, j) for i in range(i0, i1 + 1))
     return cells
+
+
+def inside(poly, x, y):
+    """Point in polygon (even-odd)."""
+    n, hit = len(poly), False
+    for (xa, ya), (xb, yb) in zip(poly, poly[1:] + poly[:1]):
+        if (ya <= y < yb) or (yb <= y < ya):
+            if x < xa + (y - ya) * (xb - xa) / (yb - ya):
+                hit = not hit
+    return hit
+
+
+def _lone(mine, other, reach, only=None):
+    """Cells of mine with no cell of other within reach (only: just those cells)."""
+    return [c for c in mine - other if (only is None or c in only) and not any(
+        (c[0] + di, c[1] + dj) in other for di in range(-reach, reach + 1) for dj in range(-reach, reach + 1))]
+
+
+TILE = 100                                  # cells per side of a tile in the fine pass
+
+
+def _fine_lone(kp, ap, frame, step, reach):
+    """The fine pass for a footprint too large to raster whole at tol / 3 (R-FX9-3): a polygon drawn the same on
+    both sides cannot make a difference, so only the boxes of the other polygons are looked at, in tiles of TILE
+    cells; a tile no polygon edge comes near is one colour on each side (its centre tells), every other tile is
+    rastered with a margin of reach cells. -> (kicad-only cells, altium-only cells)."""
+    key = lambda p: tuple((round(x, 3), round(y, 3)) for x, y in p)
+    kk, ka = {key(p) for p in kp}, {key(p) for p in ap}
+    odd = [p for p in kp if key(p) not in ka] + [p for p in ap if key(p) not in kk]
+    if not odd:
+        return [], []
+    x0, y0 = frame
+    idx = lambda v, o: int(math.floor((v - o) / step))
+    tiles = set()
+    for p in odd:
+        b = bbox([p])
+        for ti in range(idx(b[0], x0) // TILE, idx(b[2], x0) // TILE + 1):
+            for tj in range(idx(b[1], y0) // TILE, idx(b[3], y0) // TILE + 1):
+                tiles.add((ti, tj))
+    sides = [[(p, bbox([p])) for p in ps if len(p) >= 3] for ps in (kp, ap)]
+    out = ([], [])
+    for ti, tj in sorted(tiles):
+        inner = (ti * TILE, tj * TILE, ti * TILE + TILE - 1, tj * TILE + TILE - 1)
+        clip = (inner[0] - reach, inner[1] - reach, inner[2] + reach, inner[3] + reach)
+        box = (x0 + clip[0] * step, y0 + clip[1] * step, x0 + (clip[2] + 1) * step, y0 + (clip[3] + 1) * step)
+        near = [[p for p, b in ps if b[0] <= box[2] and b[2] >= box[0] and b[1] <= box[3] and b[3] >= box[1]] for ps in sides]
+        if not near[0] and not near[1]:
+            continue
+        cut = any(min(xa, xb) <= box[2] and max(xa, xb) >= box[0] and min(ya, yb) <= box[3] and max(ya, yb) >= box[1]
+                  for ps in near for p in ps for (xa, ya), (xb, yb) in zip(p, p[1:] + p[:1]))
+        if not cut:                           # one colour on each side over the tile and its margin
+            cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+            cov = [any(inside(p, cx, cy) for p in ps) for ps in near]
+            if cov[0] != cov[1]:
+                out[0 if cov[0] else 1].extend((i, j) for i in range(inner[0], inner[2] + 1) for j in range(inner[1], inner[3] + 1))
+            continue
+        k, a = raster(near[0], frame, step, clip), raster(near[1], frame, step, clip)
+        only = {(i, j) for i in range(inner[0], inner[2] + 1) for j in range(inner[1], inner[3] + 1)}
+        out[0].extend(_lone(k, a, reach, only))
+        out[1].extend(_lone(a, k, reach, only))
+    return out
 
 
 def compare(k_layers, a_layers, tol=0.03, max_cells=360000, soft=()):
@@ -97,17 +163,19 @@ def compare(k_layers, a_layers, tol=0.03, max_cells=360000, soft=()):
     if not box:
         return []
     span = max(box[2] - box[0], box[3] - box[1], 1e-3)
-    step = max(tol / 3, span / math.sqrt(max_cells))
+    fine = tol / 3
+    whole = span / math.sqrt(max_cells) <= fine   # small enough to raster whole at tol / 3; else the fine pass
+    step = fine
     frame = (box[0] - 2 * tol, box[1] - 2 * tol)
     reach = max(1, int(math.ceil(tol / step)))
     out = []
     for layer in sorted(set(k_layers) | set(a_layers)):
-        k, a = raster(k_layers.get(layer, []), frame, step), raster(a_layers.get(layer, []), frame, step)
-        extra = []
-        for mine, other in ((k, a), (a, k)):
-            lone = [c for c in mine - other if not any((c[0] + di, c[1] + dj) in other
-                                                        for di in range(-reach, reach + 1) for dj in range(-reach, reach + 1))]
-            extra.append(lone)
+        kp, ap = k_layers.get(layer, []), a_layers.get(layer, [])
+        if whole:
+            k, a = raster(kp, frame, step), raster(ap, frame, step)
+            extra = [_lone(k, a, reach), _lone(a, k, reach)]
+        else:
+            extra = list(_fine_lone(kp, ap, frame, step, reach))
         out += _entries(layer, extra, frame, step, [b for l, b in soft if l == layer])
     return out
 

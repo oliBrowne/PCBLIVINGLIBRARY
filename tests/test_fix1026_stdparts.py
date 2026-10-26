@@ -635,6 +635,38 @@ def test_kicad_import_holds_a_footprint_whose_copper_is_dropped(tmp_path):
     assert K.lost_copper_hold("NT", ["graphics on unmapped layers dropped: Dwgs.User x2"]) is None
 
 
+# --- R-FX9-3: the copper map keeps tol / 3 resolution on large footprints --------------------------------------
+
+def _far(d):
+    return (f' (pad "8" smd rect (at -{d} {d / 2}) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask"))'
+            f' (pad "9" smd rect (at {d} -{d / 2}) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask"))')
+
+
+def test_copper_map_large_footprint_still_sees_small_shifts_and_bridges():
+    from ecadlib import copper_map as CM
+    sq = lambda x, y, w, h: [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+    pads = [sq(-100, -50, 0.8, 0.8), sq(100, 50, 0.8, 0.8), sq(-1.4, -0.4, 0.8, 0.8), sq(0.6, -0.4, 0.8, 0.8)]
+    bridge = sq(-0.6, -0.05, 1.2, 0.1)
+    free = sq(-0.5, -2, 1, 0.5)
+    assert CM.compare({"F": pads + [bridge, free]}, {"F": pads + [bridge, free]}) == []
+    assert CM.compare({"F": pads + [bridge, free]}, {"F": pads + [free]})                  # lost 1.2 x 0.1 bridge
+    moved = sq(-0.4, -2, 1, 0.5)                                                         # 0.1 mm shift
+    assert CM.compare({"F": pads + [bridge, free]}, {"F": pads + [bridge, moved]})
+    big = sq(-30, 5, 60, 40)                                                             # a large plane, same on both
+    assert CM.compare({"F": pads + [big]}, {"F": pads + [list(reversed(big))]}) == []
+    assert CM.compare({"F": pads + [big]}, {"F": pads + [sq(-30, 5, 60, 39.9)]})          # 0.1 mm short
+
+
+@lite
+def test_parity_large_footprint_lost_narrow_bridge_is_an_error(tmp_path):
+    from ecadlib import parity as P
+    bridge = ' (fp_poly (pts (xy -0.6 -0.025) (xy 0.6 -0.025) (xy 0.6 0.025) (xy -0.6 0.025)) (stroke (width 0) ' \
+             '(type solid)) (fill solid) (layer "F.Cu"))'
+    t = _fp(_far(60), bridge)
+    assert _errors(P.footprint_pair(t, _pcblib(tmp_path, t))) == []
+    assert any("F.Cu copper" in m for m in _errors(P.footprint_pair(t, _pcblib(tmp_path, t, lambda f: f.update(regions=[])))))
+
+
 # --- R-FX9-2: a stroked custom-pad polygon is written with KiCad's round corners -----------------------------------
 
 _STROKED = '''(footprint "JSTLIKE" (version 20221018) (layer "F.Cu")
