@@ -1002,6 +1002,11 @@ def _bga(spec, density):
     F = _F()
     rows, cols, e = spec["rows"], spec["cols"], spec["pitch"]
     ey = spec.get("pitch_y") or e
+    big = [f"{k} {v:g}" for k, v in (("pitch", e), ("pitch_y", ey)) if v > 5] + \
+        [f"{k} {_dim(spec[k])[2]:g}" for k in ("body_length", "body_width", "ball_diameter", "land_diameter")
+         if spec.get(k) and _dim(spec[k])[2] > 60]
+    if big:                                               # footprint_gen.sanity's 60 mm; no ball pitch is over 5 mm
+        raise ValueError(f"{', '.join(big)} mm: that looks like mils or 0.01 mm units; the spec is in millimetres")
     balls = bga_balls(spec)
     if spec.get("pin_count") and spec["pin_count"] != len(balls):
         raise ValueError(f"pin_count is {spec['pin_count']} but the {rows} x {cols} grid minus depopulated balls leaves "

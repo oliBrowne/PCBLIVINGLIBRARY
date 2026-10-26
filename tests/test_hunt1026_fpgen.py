@@ -178,3 +178,16 @@ def test_fpgen07_inches_typed_as_mm_are_refused():
     # a real fine-pitch mm table is not taken for inches (0.2 mm WLCSP-size pads, 0.4 mm apart)
     fine = [{"number": str(i + 1), "x": round(i * 0.4, 3), "y": 0, "w": 0.2, "h": 0.6} for i in range(4)]
     FG.build(conn("mm", fine, pitch=0.4))
+
+
+# fpgen-08: a ball grid read wholly in mils (pitch 31.5, ball 15.7, body 394) built a 394 mm BGA with no warning (and
+# slowly); the parametric families refuse anything over 60 mm as mils, the ball grid did not
+def test_fpgen08_bga_in_mils_is_refused():
+    mm = {"name": "BGA-16", "package_type": "bga", "rows": 4, "cols": 4, "pitch": 0.8, "ball_diameter": {"nom": 0.4},
+          "body_length": {"nom": 4}, "body_width": {"nom": 4}}
+    FG.build(mm)
+    mil = dict(mm, pitch=31.5, ball_diameter={"nom": 15.75}, body_length={"nom": 157.5}, body_width={"nom": 157.5})
+    _refused(mil, "mils")
+    big = dict(mm, rows=8, cols=8, pitch=1.27, ball_diameter={"nom": 0.75}, body_length={"nom": 52.5},
+               body_width={"nom": 52.5})                     # the biggest real bodies (52.5 mm FPGAs) still build
+    assert len(FG.build(big)[1]["pads"]) == 64

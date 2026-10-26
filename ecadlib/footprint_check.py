@@ -276,8 +276,17 @@ def check(text, allow_duplicate_pads=None, same_net=None):
         if p["w"] <= EPS or p["h"] <= EPS:
             add("error", "copper", f"pad {p['num'] or '(unnumbered)'} has no copper: size {p['w']:g} x {p['h']:g} mm")
     close = {}                                       # (level, gap) -> [(a, b)]: one finding per distinct gap
+    # only pairs whose boxes come within MIN_WEB along x can have a finding (rounding and polygons only widen the
+    # gap): a sweep finds them, so a 2500-ball grid is not 3 million pair checks (9 s); the pairs keep their order
+    near, live = {i: [] for i in range(len(cu))}, []
+    for k in sorted(range(len(cu)), key=lambda k: cu[k]["x"] - cu[k]["w"] / 2):
+        left = cu[k]["x"] - cu[k]["w"] / 2
+        live = [j for j in live if cu[j]["x"] + cu[j]["w"] / 2 > left - MIN_WEB]
+        for j in live:
+            near[min(j, k)].append(max(j, k))
+        live.append(k)
     for i, a in enumerate(cu):
-        for b in cu[i + 1:]:
+        for b in (cu[j] for j in sorted(near[i])):
             if a["num"] and a["num"] == b["num"]:
                 continue                             # same net (e.g. SOT-223 pin 2 + tab): no web needed
             if not _share_copper(a, b):
