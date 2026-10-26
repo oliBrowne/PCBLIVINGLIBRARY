@@ -489,18 +489,19 @@ def restore_types(sym, own=None, notes=None, guess=True):
     pins = [p for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin")]
     num = lambda p: str(sexpr.first(p, "number")[1]).strip('"')
     nm = lambda p: str(sexpr.first(p, "name")[1]).strip('"')
-    if own or not guess:
-        want = {str(k): v for k, v in (own or {}).items() if v in ("power_out", "no_connect")}
-    else:
+    want = {str(k): v for k, v in (own or {}).items() if v in ("power_out", "no_connect")}
+    given = set(want)
+    # the source's own types decide; an NC pin it typed (own = {4: no_connect}) says nothing about the outputs, so
+    # the regulator-output guess by name still runs unless the source named a power_out pin itself (R-SY-6)
+    if guess and "power_out" not in want.values():
         names = {SL._key(nm(p)) for p in pins}
         ref = next((str(q[2]).strip('"') for q in sexpr.find(sym, "property") if str(q[1]).strip('"') == "Reference"), "")
         switch = bool(names & SWITCH_CONTACT) or ref.upper().rstrip("?0123456789") in ("K", "S", "SW", "RLY")
-        want = {}
         for p in pins:
             k = SL._key(nm(p))
             if p[1] == "power_in" and POWER_OUT_NAME.match(k):
-                want[num(p)] = "power_out"
-            elif p[1] == "passive" and not switch and SL.classify({"name": nm(p), "num": num(p)}) == "nc":
+                want.setdefault(num(p), "power_out")
+            elif not own and p[1] == "passive" and not switch and SL.classify({"name": nm(p), "num": num(p)}) == "nc":
                 want[num(p)] = "no_connect"
     done = []
     for p in pins:
@@ -510,7 +511,7 @@ def restore_types(sym, own=None, notes=None, guess=True):
             done.append(num(p))
     if done and notes is not None:
         K._note(notes, "power_out / no_connect pin types put back (Altium has one Power type and no NC type)"
-                + ("" if own else ", by pin name"))
+                + ("" if set(done) <= given else ", by pin name"))
     return done
 
 

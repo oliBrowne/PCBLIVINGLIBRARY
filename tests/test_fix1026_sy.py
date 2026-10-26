@@ -184,3 +184,27 @@ def test_hide_never_ties_an_output_or_exposed_pad_to_a_net_by_name():
     assert set(hidden) == {"7", "8"}, hidden                         # the second VIN and GND: supply in and ground
     stacked = {pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin" and pr[1].get("show_name") is False}
     assert {"4", "6"} <= stacked, stacked                            # VOUT / EP still drawn on one spot, not hidden
+
+
+# --- R-SY-6: an NC pin the read typed "nc" does not stop the regulator-output guess (AP2112K VOUT power_out) -------
+
+def _vout_types(tmp_path, nc_type, vout_type="power"):
+    from ecadlib import altium_lib as AL, kicad_export as X, librarian as L, sexpr
+    pins = [{"num": "1", "name": "VIN", "type": "power", "side": "left"}, {"num": "2", "name": "GND", "type": "ground", "side": "left"},
+            {"num": "3", "name": "EN", "type": "input", "side": "left"}, {"num": "4", "name": "NC", "type": nc_type, "side": "right"},
+            {"num": "5", "name": "VOUT", "type": vout_type, "side": "right"}]
+    own = L.kicad_only_types(pins)
+    f = tmp_path / f"{nc_type}_{vout_type}.SchLib"
+    AL.write_schlib(f, [AL.symbol_from_json({"name": "AP2112K-3.3", "pins": pins, "footprint": "SOT-23-5"})])
+    sym = X.symbol_from_schlib(f, "AP2112K-3.3", [])
+    X.restore_types(sym, own, [])
+    return {str(sexpr.first(p, "number")[1]).strip('"'): p[1] for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin")}
+
+
+@lite
+def test_a_recorded_nc_type_does_not_stop_the_regulator_output_guess(tmp_path):
+    for nc in ("nc", "passive"):
+        got = _vout_types(tmp_path, nc)
+        assert got["5"] == "power_out" and got["1"] == "power_in" and got["4"] == "no_connect", (nc, got)
+    got = _vout_types(tmp_path, "nc", "power_out")                  # the read's own power_out still decides
+    assert got["5"] == "power_out" and got["1"] == "power_in", got
