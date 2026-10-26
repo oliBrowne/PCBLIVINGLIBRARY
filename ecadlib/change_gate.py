@@ -581,12 +581,14 @@ class Guard:
             new = FP.of_item(it, self.base)
             if new["hashes"]["digest"] == head.get("digest"):
                 self._mark_unchanged(it, head)
+                self._settle_sides(it, head)
                 continue
             old = self.ledger.fingerprint(head)
             changes = CD.diff(old, new) if old else [{"class": "electrical", "area": "ledger", "what": "fingerprint",
                                                        "old": None, "new": None, "text": "the released fingerprint is missing"}]
             if not changes:
                 self._mark_unchanged(it, head)
+                self._settle_sides(it, head)
                 continue
             dec = decide(changes, self.policy, self.mode)
             rej = self.ledger.rejected(it["name"], new["hashes"]["digest"], new) if dec["action"] == "hold" else None
@@ -635,6 +637,34 @@ class Guard:
         for r in rows:
             self.log(f"  change {r['action']:<5} {r['part']:<28} {r['summary']}")
         return rows
+
+    def _settle_sides(self, it, head):
+        """A released part whose .SchLib / .PcbLib is byte for byte the head's, but whose build recipe or 3D model
+        beside it is not (an edit outside ecadlib): Altium's own rebuild would ship that edit, and no fingerprint sees
+        it. The released bytes go back; the edited ones are kept in the blob store with an `overwritten` line."""
+        files = head.get("files") or {}
+        drift = {}
+        for r in files.values():
+            f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
+            if f.is_file() and LG.sha_bytes(f.read_bytes()) == r.get("sha256"):
+                drift.update(LG.side_drift(r, f))
+        if not drift:
+            return
+        kept = {}
+        for p in sorted(drift):
+            f = Path(p)
+            if f.is_file():
+                rel = os.path.relpath(f, self.base).replace(os.sep, "/")
+                kept[rel] = {"path": rel, "sha256": self.ledger.put_bytes(f.read_bytes())}
+        names = ", ".join(sorted({Path(p).name for p in drift}))
+        self.ledger.restore_files(files, self.base)
+        self.ledger.append({"event": "overwritten", "part": it["name"], "by": self.who(), "writer": self.writer,
+                            "base": head.get("revision"), "digest": head.get("digest"), "files": kept,
+                            "reason": f"{names} differed from released revision r{head.get('revision')} (edited outside "
+                                      f"ecadlib; Altium's own rebuild makes the library from it): the released bytes "
+                                      f"were put back"})
+        self.log(f"  change fixed {it['name']:<28} {names} differed from the released revision "
+                 f"r{head.get('revision')}: put back (the edit is kept: ecadlib part history)")
 
     def _release_check(self, todo):
         """The release check on copies of these items as the writer left them -> "" when all pass, else the reasons."""

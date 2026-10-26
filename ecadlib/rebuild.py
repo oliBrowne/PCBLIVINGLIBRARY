@@ -403,6 +403,46 @@ def compare(old, new):
     return rows
 
 
+def _same_file(a, b):
+    a, b = Path(a), Path(b)
+    if not a.is_file() or not b.is_file():
+        return a.is_file() == b.is_file()
+    return file_sha(a) == file_sha(b) or norm_sha(a) == norm_sha(b)
+
+
+def disk_rows(lock, lib_dir, rebuilt, rows):
+    """The library's files as they are on disk against the rebuilt copy: compare() checks the lock against the rebuild,
+    so a file changed after the lock was written (a hand edit of a .kicad_mod, a STEP model put in by hand) was
+    "byte-identical". Also the Altium build recipe (<file>.ecadbuild) and the 3D models it names, which Altium's own
+    rebuild makes the shipped library from. -> DRIFT rows for files not already reported."""
+    from .ledger import step_files
+    lib_dir, rebuilt = Path(lib_dir), Path(rebuilt)
+    seen = {r["file"] for r in rows if r["result"] == "DRIFT"}
+    out = []
+    for name, p in sorted(lock["parts"].items()):
+        for k in ("symbol", "footprint"):
+            h = p.get(k) or {}
+            if not h.get("file") or h.get("chosen"):
+                continue
+            rels = [h["file"], (h.get("kicad_mod") or {}).get("file")]
+            # the recipe and 3D models of a library that drifted already say nothing new (they drift with it)
+            if Path(h["file"]).suffix.lower() in (".schlib", ".pcblib") and h["file"] not in seen:
+                rels.append(h["file"] + ".ecadbuild")
+                lp = Path(h["file"])
+                steps = set(step_files(lib_dir / lp)) | set(step_files(rebuilt / lp))
+                rels += [(lp.parent / s).as_posix() for s in sorted(steps)]
+            for rel in rels:
+                if not rel or rel in seen or Path(rel).is_absolute():
+                    continue
+                seen.add(rel)
+                if not _same_file(lib_dir / rel, rebuilt / rel):
+                    where = ("missing in the library" if not (lib_dir / rel).is_file() else
+                             "not made by the rebuild" if not (rebuilt / rel).is_file() else
+                             "the library's file differs from the rebuild (changed after it was built: a hand edit?)")
+                    out.append({"part": name, "file": rel, "result": "DRIFT", "detail": where})
+    return out
+
+
 class KeepError(ValueError):
     """--check --keep DIR would put the rebuilt copy on, inside or around the library or one of the lock's inputs, or
     replace a folder an earlier --check --keep did not make (the CLI exits 2, no traceback)."""
@@ -463,6 +503,7 @@ def check(lib_dir, keep=None, log=print):
         (dst / LOCK).write_text(json.dumps(lk), encoding="utf-8")
         new, inputs = rebuild(dst, dst, log=log, clean=True)
         rows = compare(old, new)
+        rows += disk_rows(old, lib_dir, dst, rows)
     finally:
         if not keep:
             shutil.rmtree(tmp, ignore_errors=True)

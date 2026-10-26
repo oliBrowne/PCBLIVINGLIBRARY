@@ -359,6 +359,11 @@ def check_released(src, plan, rules=None):
     bad = []
     for f in sorted(p for p in src.rglob("*") if p.is_file() and p.suffix.lower() in MODEL_EXT):
         for it, half, head in by_name.get(f.name.lower(), []):
+            rec = (head.get("files") or {}).get(half) or {}
+            if f.with_name(f.name + ".ecadbuild").is_file():   # Altium's own rebuild makes the library from these
+                for side in sorted(LG.side_drift(rec, f)):
+                    bad.append(f"{Path(side).relative_to(src).as_posix()}: {it['name']} r{head['revision']} differs "
+                               f"from the released build recipe / 3D model")
             mine = Path(it[half]["file"]) if Path(it[half]["file"]).is_absolute() else lib / it[half]["file"]
             if mine.resolve() == f or (mine.is_file() and mine.read_bytes() == f.read_bytes()):
                 continue

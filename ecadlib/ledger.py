@@ -218,6 +218,27 @@ def step_files(lib_path):
         return []
 
 
+def side_drift(rec, path):
+    """The Altium build recipe (<file>.ecadbuild) and the 3D models it names beside `path` that differ from those a
+    snapshot record (a ledger head's files entry) stored -> {path on disk: stored sha256}. Altium's own rebuild
+    (altium_native, altium-pkg's RebuildWithAltium) makes the shipped library from these files, but the fingerprint
+    reads the .SchLib / .PcbLib only, so an edit of them alone is a change no fingerprint shows. A missing file
+    counts as different; a record that stored no recipe (or no STEP files) has nothing to compare."""
+    p = Path(path)
+    out = {}
+    if (rec or {}).get("ecadbuild"):
+        side = p.with_name(p.name + ".ecadbuild")
+        if not side.is_file() or sha_bytes(side.read_bytes()) != rec["ecadbuild"]:
+            out[str(side)] = rec["ecadbuild"]
+    for s, h in ((rec or {}).get("steps") or {}).items():
+        if ".." in s.replace("\\", "/").split("/") or Path(s).is_absolute():
+            continue
+        f = p.parent / s
+        if not f.is_file() or sha_bytes(f.read_bytes()) != h:
+            out[str(f)] = h
+    return out
+
+
 class Ledger:
     def __init__(self, folder):
         self.folder = Path(folder)
