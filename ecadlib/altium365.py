@@ -93,7 +93,13 @@ def pick_named(nodes, name):
     nodes = nodes or []
     exact = next((n for n in nodes if (n.get("name") or "").lower() == name.lower()), None)
     rev = re.compile(re.escape(name) + r"-(\d+|[A-Z]\.\d+)", re.I)     # a revision ("-1", "-A.1"), not "LM358-N"
-    return exact or next((n for n in nodes if rev.fullmatch(n.get("name") or "")), None)
+
+    def other_part(n):                         # "BAT54-04" is a part of its own, not revision 04 of BAT54: its MPN
+        par = {str(p.get("name") or "").lower(): str(p.get("value") or "").strip()     # says so when it has one
+               for p in ((n.get("details") or {}).get("parameters") or []) if isinstance(p, dict)}
+        mpn = next((par[k.lower()] for k in MPN_NAMES if par.get(k.lower())), "")
+        return bool(mpn) and mpn.lower() == (n.get("name") or "").lower() and mpn.lower() != name.lower()
+    return exact or next((n for n in nodes if rev.fullmatch(n.get("name") or "") and not other_part(n)), None)
 
 
 def token_hint(token, now=None):

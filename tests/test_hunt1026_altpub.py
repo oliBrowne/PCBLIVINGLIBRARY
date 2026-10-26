@@ -148,6 +148,17 @@ def test_menu_part_released_is_not_failed_by_another_parts_error():
     assert res["status"] == "ready" and "released to Altium 365" in res["message"], res
 
 
+def test_pick_named_does_not_take_a_part_named_like_a_revision():
+    """BAT54-04 (a dual diode of its own) looks like revision 04 of BAT54: when Nexar's name filter returns it for
+    BAT54, its MPN says it is another part, so BAT54 is released, not BAT54-04's parameters updated with BAT54's."""
+    from ecadlib import altium365 as A
+    mk = lambda n, mpn=None: {"id": n, "name": n, "details": {"parameters": [{"name": "Manufacturer Part Number", "value": mpn}] if mpn else []}}
+    assert A.pick_named([mk("BAT54-04", "BAT54-04")], "BAT54") is None
+    assert A.pick_named([mk("BAT54-1", "BAT54")], "BAT54")["id"] == "BAT54-1"          # our revision 1
+    assert A.pick_named([mk("BAT54-1")], "BAT54")["id"] == "BAT54-1"                   # no MPN: as before
+    assert A.pick_named([mk("bat54", "BAT54")], "BAT54")["id"] == "bat54"
+
+
 class Workspace(FakeA365):
     """A closer Nexar mock: components found by name whatever the case (pick_named), symbol / footprint items that
     can be released once (a second release of the same item name fails as duplicate, as live), linked by name."""
