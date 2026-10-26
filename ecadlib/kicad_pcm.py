@@ -78,7 +78,16 @@ def third_party_var(kicad):
 
 
 def default_identifier(lib):
-    return "local.ecadlib." + (re.sub(r"[^-a-zA-Z0-9]+", "-", lib).strip("-") or "library")
+    """local.ecadlib.<lib>: accents folded (Bibliothèque -> Bibliotheque). A name with letters that do not fold to ASCII
+    (部品, Ω) also gets a short hash of the name, so two such libraries never share one identifier (KiCad treats one
+    identifier as one package: installing the second replaced the first). ASCII names keep their identifier."""
+    import unicodedata
+    lib = str(lib)
+    folded = unicodedata.normalize("NFKD", lib).encode("ascii", "ignore").decode("ascii")
+    stem = re.sub(r"[^-a-zA-Z0-9]+", "-", folded).strip("-")
+    if any(not unicodedata.normalize("NFKD", c)[:1].isascii() for c in lib if not c.isascii()):
+        stem = f"{stem}-{hashlib.sha256(lib.encode('utf-8')).hexdigest()[:8]}".strip("-")
+    return "local.ecadlib." + (stem[:80].strip("-") or "library")
 
 
 # ---------------------------------------------------------------- file transforms

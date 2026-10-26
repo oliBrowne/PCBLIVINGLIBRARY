@@ -130,6 +130,18 @@ def test_upkeep04_upkeep_reports_a_hand_edit_of_a_released_part_no_writer_has_se
     assert _run(w, *args).returncode == 0                  # reported once
 
 
+# ------------------------------------------------------------------ upkeep-05: PCM identifiers of non-ASCII libraries
+def test_upkeep05_pcm_default_identifier_keeps_non_ascii_libraries_apart():
+    from ecadlib import kicad_pcm as KP
+    assert KP.default_identifier("my lib") == "local.ecadlib.my-lib"            # ASCII names: as before
+    assert KP.default_identifier("ecadlib") == "local.ecadlib.ecadlib"
+    assert KP.default_identifier("Bibliothèque") == "local.ecadlib.Bibliotheque"
+    ids = [KP.default_identifier(n) for n in ("部品", "抵抗", "ünï", "n", "Ω-parts", "-parts", "電源 IC", "IC")]
+    assert len(set(ids)) == len(ids), ids                 # one KiCad package each: the same id replaces the other
+    for i in ids:
+        assert KP.ID_RE.match(i), i
+
+
 # ------------------------------------------------------------------ upkeep-03: a ledger write cut short
 def _ledger_lib(d):
     from ecadlib import ledger as LG
