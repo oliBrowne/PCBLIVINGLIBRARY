@@ -18,7 +18,7 @@ compare: pass rate and cost per family side by side, and the cases that flipped 
 import csv, datetime, hashlib, json, re, time
 from pathlib import Path
 
-from .. import altium_lib as AL, datasheet as D, footprint_bench as FB, librarian as L, rules as RU
+from .. import altium_lib as AL, datasheet as D, footprint_bench as FB, librarian as L, llm as LL, rules as RU
 from . import score as S
 
 SETS = Path(__file__).with_name("sets")
@@ -772,8 +772,9 @@ def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=N
     """rules with eval's --provider / --base-url / --assist / --api-key-env / --model put into [ai] (and [datasheet]'s
     own provider settings cleared, so [ai] decides). A --provider other than [ai]'s drops [ai]'s base_url and
     api_key_env unless given again: they belong to the old provider, and its key went to the new one (R-LE-1).
-    [datasheet] api_key_env likewise is dropped when its provider is not the new one (Anthropic too), and
-    --api-key-env always wins over it (R-FX13-1)."""
+    [datasheet] api_key_env likewise is kept only when [datasheet] still talks to the same server (the same resolved
+    provider and base_url, a preset's default included): another provider (Anthropic too) or another gateway of the
+    same provider never gets it (R-FX13-1, R-FX16-1). --api-key-env always wins over it."""
     over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
                               ("api_key_env", api_key_env)) if v}
     if not (over or (model and provider)):
@@ -789,14 +790,16 @@ def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=N
         for k in ("base_url", "api_key_env"):
             if k not in over:
                 ai[k] = ""
+    old_server = LL.server_of(rules, "datasheet")     # where [datasheet]'s key name was meant to go
     ds_key = ds.get("api_key_env")
     if api_key_env:                                   # --api-key-env wins over [datasheet]'s key name (R-FX13-1)
         ds_key = api_key_env
-    elif new and new != _p(ds.get("provider") or rules.get("ai", {}).get("provider")):
-        ds_key = ""                                   # [datasheet]'s key belongs to its old provider: never sent to the new one
     rules = dict(rules, ai={**ai, **over, **({"model": model} if model else {})},
                  datasheet={**ds, **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
                             **({"api_key_env": ds_key} if "api_key_env" in ds or api_key_env else {})})
+    if ds_key and not api_key_env and not LL.same_server(old_server, LL.server_of(rules, "datasheet")):
+        # [datasheet]'s key belongs to its old server: never sent to another provider or gateway (R-FX16-1)
+        rules = dict(rules, datasheet={**rules["datasheet"], "api_key_env": ""})
     RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
     return rules
 

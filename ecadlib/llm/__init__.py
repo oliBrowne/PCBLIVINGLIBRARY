@@ -105,6 +105,16 @@ def split_ref(ref, rules=None):
     return None, ref
 
 
+def same_server(a, b):
+    """True when two resolved endpoints ({provider, base_url}, as endpoint() returns) are the same server: the same
+    provider and the same base_url (trailing "/" and case aside). A key name set for one is sent only to the same
+    one (R-FX16-1, R-FX16-3); None (an endpoint that does not resolve) is never the same."""
+    if not a or not b:
+        return False
+    return a["provider"] == b["provider"] and \
+        (a.get("base_url") or "").rstrip("/").lower() == (b.get("base_url") or "").rstrip("/").lower()
+
+
 def _same_endpoint(ai, provider, base):
     """True when a section resolved to (provider, base) talks to [ai]'s own provider, so [ai] api_key_env is its key:
     the same provider and, for openai-compatible, the same server."""
@@ -117,7 +127,15 @@ def _same_endpoint(ai, provider, base):
     if provider == "anthropic":
         return True
     ai_base = ai["base_url"] or (PRESETS[ai_preset][0] if ai_preset else "")
-    return (ai_base or "").rstrip("/").lower() == (base or "").rstrip("/").lower()
+    return same_server({"provider": provider, "base_url": ai_base}, {"provider": provider, "base_url": base})
+
+
+def server_of(rules, section="datasheet"):
+    """The resolved {provider, base_url} of a section (whatever its model), or None when it does not resolve."""
+    try:
+        return endpoint(rules, section, model="-")
+    except AIConfigError:
+        return None
 
 
 def endpoint(rules=None, section="datasheet", model=None):
