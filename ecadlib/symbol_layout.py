@@ -172,21 +172,38 @@ def _natural(s):
     return [int(x) if x.isdecimal() else x for x in re.split(r"(\d+)", str(s))]
 
 
+# an FPGA's per-bank I/O supply: VCCIO_0..3 / VCCO_0..3 are one rail per bank (3.3 V on one, 1.8 V on another), so
+# the number after the stem names the bank, never an instance of one supply (R-SY-4)
+BANK_SUPPLY = re.compile(r"VCCIO|VCCO|VDDIO|VDDO|VIO")
+
+
 def stack_key(name):
     """Pins whose names give the same key may be one net: 'VDD_1', 'VDD_2', 'VDD' -> 'VDD'. Only an index after a
-    separator is dropped: 'VDD1' / 'VDD2' (an isolator's two sides) and 'VDD18' / 'VDD33' are different supplies."""
-    return re.sub(r"[_\-]\d+$", "", _key(name)) or _key(name)
+    separator is dropped: 'VDD1' / 'VDD2' (an isolator's two sides) and 'VDD18' / 'VDD33' are different supplies, and
+    a bank supply's (VCCIO_0, VCCO_2) never."""
+    k = _key(name)
+    m = re.fullmatch(r"(.+?)[_\-]\d+", k)
+    return k if m and BANK_SUPPLY.fullmatch(m.group(1)) else (re.sub(r"[_\-]\d+$", "", k) or k)
 
 
 def stack_keys(names):
-    """name -> stacking key for the power pins of one group. 'VDD_1'..'VDD_5' (instance numbers 1..n or 0..n-1) share
-    the key 'VDD'; 'VDD_18' + 'VDD_33' are not instance numbers and keep their own names (never stacked together)."""
-    idx = {}
+    """name -> stacking key for the power pins of one group. 'VDD_1'..'VDD_5' (instance numbers 1..n or 0..n-1, each
+    name once) share the key 'VDD'; 'VDD_18' + 'VDD_33' are not instance numbers and keep their own names (never
+    stacked together), nor are a bank supply's (VCCIO_0 x2, VCCIO_1 x2: two banks, two rails) (R-SY-4)."""
+    idx, seen, twice = {}, set(), set()
     for n in names:
-        m = re.fullmatch(r"(.+?)[_\-](\d+)", _key(n))
+        k = _key(n)
+        (twice if k in seen else seen).add(k)
+        m = re.fullmatch(r"(.+?)[_\-](\d+)", k)
         if m:
-            idx.setdefault(m.group(1), set()).add(int(m.group(2)))
-    ok = {st for st, ix in idx.items() if ix in (set(range(1, len(ix) + 1)), set(range(len(ix))))}
+            idx.setdefault(m.group(1), []).append((int(m.group(2)), k))
+    ok = set()
+    for st, got in idx.items():
+        ix = {i for i, _ in got}
+        if BANK_SUPPLY.fullmatch(st) or any(k in twice for _, k in got):
+            continue
+        if ix in (set(range(1, len(ix) + 1)), set(range(len(ix)))):
+            ok.add(st)
     out = {}
     for n in names:
         m = re.fullmatch(r"(.+?)[_\-](\d+)", _key(n))

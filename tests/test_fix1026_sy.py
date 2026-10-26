@@ -135,3 +135,36 @@ def test_stacked_pins_of_one_net_on_one_number_are_not_held(tmp_path):
     assert not any("different signals" in m for _, m in f), f
     f, _, _ = RC.check_item(_dup_item(tmp_path / "b", _EE), tmp_path / "b")
     assert f == [], f
+
+
+# --- R-SY-4: per-bank supplies VCCIO_0..3 / VCCO_0..3 are separate rails, never stacked together ------------------
+
+def _stacked(pins, mode):
+    """{lead pin number: names of the pins stacked on it} for [symbols] stack_power = mode."""
+    from ecadlib import symbol_layout as SL
+    by = {}
+    for p in SL.arrange_pins(pins, {"symbols": {"stack_power": mode}}):
+        by.setdefault(p.get("stacked_on") or p["num"], set()).add(p["name"])
+    return by
+
+
+def test_bank_supplies_are_not_stacked_as_one_rail():
+    from ecadlib import symbol_layout as SL
+    n = iter(range(1, 100))
+    pins = [{"num": str(next(n)), "name": nm, "type": "power_in"} for nm in
+            ("VCCIO_0", "VCCIO_0", "VCCIO_1", "VCCIO_1", "VCCIO_2", "VCCIO_3", "VCCO_0", "VCCO_1", "VCCO_2",
+             "VDD_1", "VDD_2", "VDD_3", "GND", "GND")]
+    pins += [{"num": str(next(n)), "name": f"IO{i}", "type": "io"} for i in range(6)]
+    for mode in ("stack", "hide"):
+        got = _stacked(pins, mode)
+        for names in got.values():
+            banks = {x for x in names if x.startswith("VCC")}
+            assert len(banks) <= 1, (mode, names)
+        assert {"VCCIO_0"} in got.values() and any(v == {"VDD_1", "VDD_2", "VDD_3"} for v in got.values()), (mode, got)
+        assert sum(1 for p in SL.arrange_pins(pins, {"symbols": {"stack_power": mode}})
+                   if p.get("stacked_on") and p["name"] == "VCCIO_0") == 1, mode   # one bank's two pins: one rail
+    keys = SL.stack_keys(["VCCIO_0", "VCCIO_1", "VDDIO_1", "VDDIO_2", "VIO_1", "VIO_2", "VDD_1", "VDD_2", "VSS_0", "VSS_1"])
+    assert len({keys["VCCIO_0"], keys["VCCIO_1"]}) == 2 and len({keys["VDDIO_1"], keys["VDDIO_2"]}) == 2, keys
+    assert len({keys["VIO_1"], keys["VIO_2"]}) == 2 and keys["VDD_1"] == keys["VDD_2"] == "VDD" and keys["VSS_0"] == "VSS", keys
+    k2 = SL.stack_keys(["VDD_1", "VDD_1", "VDD_2"])                  # a name used twice: _1 / _2 are not instances
+    assert k2["VDD_1"] != k2["VDD_2"], k2
