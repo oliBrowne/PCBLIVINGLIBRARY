@@ -182,6 +182,19 @@ def test_table_fits_the_width_and_wraps_the_last_column():
     assert narrow[0].rstrip() == "  " + "x" * 20 + "  " + "y" * 10 and narrow[1].startswith("      some")
 
 
+def test_a_long_path_is_never_cut_in_two_when_a_line_wraps():
+    """textwrap's default cuts a word longer than the width: a library path in doctor's table came out in two pieces on
+    a narrow terminal, so it could not be copied (and test_firstrun failed under a long TMPDIR)."""
+    path = "/home/someone/" + "a" * 70 + "/libs"
+    for w in (60, 30):
+        t = TM.Term(io.StringIO(), styled=False, width=w)
+        lines = t.table_lines([["OK", "lib", path + " (no library files at the top)"]])
+        assert any(path in l for l in lines), lines
+        buf = io.StringIO()
+        TM.Term(buf, styled=False, width=w).wrap("see " + path + " for the files")
+        assert path in buf.getvalue(), buf.getvalue()
+
+
 def test_progress_live_on_a_terminal_plain_lines_when_piped():
     tty = TTY()
     t = TM.Term(tty, styled=True, width=80)
