@@ -109,6 +109,27 @@ def test_upkeep02_rebuild_check_covers_recipes_and_3d_models():
     assert {R_RECIPE, R_STEP} <= drifted, drifted
 
 
+# ------------------------------------------------------------------ upkeep-04: upkeep missed an unsettled hand edit
+def test_upkeep04_upkeep_reports_a_hand_edit_of_a_released_part_no_writer_has_settled():
+    w, lib = _demo()
+    args = ("upkeep", lib / "plan.json", "--checks", "changes", "--state", "st", "-o", "up")
+    assert _run(w, *args).returncode == 0
+    plan_before = (lib / "plan.json").read_bytes()
+    k = lib / "models/KiCad/R_0603_1608Metric.kicad_mod"
+    edited = k.read_text(encoding="utf-8").replace("(size 0.8 0.95)", "(size 1.8 0.95)", 1)
+    k.write_text(edited, encoding="utf-8")
+    _edit_side_files(lib)
+    r = _run(w, *args)
+    assert r.returncode == 1, r.stdout + r.stderr
+    rep = json.loads((w / "up.json").read_text(encoding="utf-8"))
+    got = {(c["kind"], c["item"]) for s in rep["checks"] for c in s["changes"]}
+    assert ("edited, not settled", "RES-0603-10k") in got and ("edited, not settled", "RES-0603-4.7k") in got, got
+    det = " ".join(c["detail"] for s in rep["checks"] for c in s["changes"])
+    assert "0.8 x 0.95 -> 1.8 x 0.95" in det and "R_0603_1608Metric.PcbLib.ecadbuild" in det, det
+    assert k.read_text(encoding="utf-8") == edited and (lib / "plan.json").read_bytes() == plan_before   # reports only
+    assert _run(w, *args).returncode == 0                  # reported once
+
+
 # ------------------------------------------------------------------ upkeep-03: a ledger write cut short
 def _ledger_lib(d):
     from ecadlib import ledger as LG
