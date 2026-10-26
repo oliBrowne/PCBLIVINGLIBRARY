@@ -174,12 +174,14 @@ def test_mcp_altium_menu_takes_only_a_way_to_run_ecadlib_as_its_command(tmp_path
                           "params": {"name": "altium_menu", "arguments": {"command": cmd}}})
         return r["result"]["isError"], r["result"]["content"][0]["text"]
     for bad in ("calc.exe & rem", "ecadlib\r\nworkspace=C:\\Users\\x\\other", 'cmd /c "evil"', "powershell -c x",
-                '"C:\\Temp\\evil.exe"', '"C:\\Python\\python.exe" -c "import os"', "ecadlib | x", "py -3 -m ecadlib %X%"):
+                '"C:\\Temp\\evil.exe"', '"C:\\Python\\python.exe" -c "import os"', "C:\\venv\\python.exe",
+                "C:\\x\\ecadlib.exe & calc", "ecadlib | x", "py -3 -m ecadlib %X%"):
         err, text = call(bad)
         assert err and "command" in text and "ecadlib_menu.ini" in text, (bad, text)
         assert not ini.exists(), bad
     for good in ("ecadlib", "py -3 -m ecadlib", "py -3.13 -m ecadlib", "python -m ecadlib",
-                 '"C:\\Users\\Ann Lee\\venv\\Scripts\\python.exe" -m ecadlib', '"C:\\Program Files (x86)\\ecadlib\\ecadlib.exe"'):
+                 '"C:\\Users\\Ann Lee\\venv\\Scripts\\python.exe" -m ecadlib', '"C:\\Program Files (x86)\\ecadlib\\ecadlib.exe"',
+                 "C:\\ecadlib-rel\\venv\\Scripts\\ecadlib.exe", "C:\\venv\\Scripts\\python.exe -m ecadlib"):
         err, text = call(good)
         assert not err, (good, text)
         assert AM.load_command(ini) == good, (good, AM.load_command(ini))

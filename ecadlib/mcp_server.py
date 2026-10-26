@@ -431,7 +431,8 @@ TOOLS = [
 
 
 _MENU_EXE = re.compile(r'(?:ecadlib|python3?|py)(?:\.exe)?|"[A-Za-z]:\\[^"&|<>^%!\r\n\x00-\x1f]*\\'
-                       r'(?:python3?w?|py|ecadlib)\.exe"', re.I)
+                       r'(?:python3?w?|py|ecadlib)\.exe"|[A-Za-z]:\\[^\s"&|<>^%!\x00-\x1f]*\\'
+                       r'(?:python3?w?|py|ecadlib)\.exe', re.I)     # a path with no space needs no quotes
 _MENU_ARGS = re.compile(r"(?:\s+-3(?:\.\d{1,2})?)?\s+-m\s+ecadlib|", re.I)
 
 
@@ -447,10 +448,10 @@ def _menu_command(ws, cmd):
         return ""
     m = _MENU_EXE.match(cmd)
     ok = bool(m) and bool(_MENU_ARGS.fullmatch(cmd[m.end():]))
-    if ok and m.group(0).startswith('"') and m.group(0).lower().endswith(('python.exe"', 'pythonw.exe"', 'python3.exe"',
-                                                                              'python3w.exe"')):
+    exe = m.group(0).strip('"').lower() if m else ""
+    if ok and ":" in exe and exe.endswith(("python.exe", "pythonw.exe", "python3.exe", "python3w.exe")):
         ok = bool(cmd[m.end():].strip())                 # python.exe itself needs -m ecadlib
-    if ok and m.group(0).startswith('"') and os.name == "nt":
+    if ok and ":" in exe and os.name == "nt":
         p = Path(m.group(0).strip('"')).resolve()
         ok = not (p == ws.root or ws.root in p.parents)  # not a program uploaded into the workspace
     if not ok:
