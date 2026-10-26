@@ -104,9 +104,10 @@ def mpn_package_codes(part, own=()):
     - in the first segment, a code after the part's own letters and number (EPM1270 | M256, 10M08SC | M153): which of
       the letters before the count are the code's is not known (10M08SC + M153), so each ending of them (up to 3) is
       a form, the shortest first. A number that only follows digits is the part number itself: 74HC14 is the 14th
-      74HC logic part, and so is it after a maker's prefix (SN74HC14N, MC74HC14ADR2G). A code with an ordering tail in
-      the first segment is read for a ball / land grid only (MSP430G2553IPW20R is no W20). The count is the number as
-      printed: AT24C08's "08" is no 8."""
+      74HC logic part, and so is it after a maker's prefix (SN74HC14N, MC74HC14ADR2G). A code in the first segment is
+      read for a ball / land grid only, with an ordering tail after it or not (MSP430G2553IPW20R and MSP430G2553IPW20
+      are no W20, LPC1768FBD100 no D100: a leaded package's family and count are enough, R-FX16-4). The count is the
+      number as printed: AT24C08's "08" is no 8."""
     counts = _counts(own)
     if not counts:
         return []
@@ -122,8 +123,8 @@ def mpn_package_codes(part, own=()):
             before = seg[:m.start()]
             if re.search(r"(?:^|[A-Z])[57]4$", before):      # SN74HC14N, MC74HC14ADR2G: a 74 logic part number
                 continue
-            if m.end() < len(seg) and not grid:           # a code with an ordering tail: ball / land grids only
-                continue                                  # (MSP430G2553IPW20R: TI's PW + pin count, R-FX13-5)
+            if not grid:                                  # ball / land grids only (MSP430G2553IPW20(R): TI's PW +
+                continue                                  # pin count, R-FX13-5, R-FX16-4)
             if m.group(2) in counts and re.search(r"[A-Z]\d", before):
                 run = m.group(1)[-3:]
                 return [run[-k:] + m.group(2) for k in range(1, len(run) + 1)]
@@ -159,15 +160,20 @@ def foreign_codes(texts, part, own=()):
     """other_codes that clearly name another maker's package, for a part number with no package code of its own:
     only for a ball / land grid (BGA, LGA, CSP), where one count comes in many pitches and bodies, and only a code
     whose letters the part number does not carry (Intel's F256 for EP4CE22F17C8N's F17, ADI's CC-14 for ADXL345BCCZ
-    are the part's own maker's). A leaded package's family and count are enough: ADI RW-20, LTC G48, TI R-PDSO-G14
+    are the part's own maker's). One letter is the part's only right before a one- or two-digit number in it (Intel's
+    F + body size: F17, BF14), never a letter before the device number (TMS320F28377's F: another maker's F337 is not
+    its ZWT, R-FX16-4). A leaded package's family and count are enough: ADI RW-20, LTC G48, TI R-PDSO-G14
     name the right SOIC / SSOP (R-FX13-4)."""
     if not any(re.sub(r"\d+$", "", t) in ARRAYS for t in own or ()):
         return set()
     texts = [JEDEC.sub(" ", DR.norm_text(t or "").upper()) for t in texts]
-    runs = re.findall(r"[A-Z]+", str(part or "").upper())
+    up = str(part or "").upper()
+    runs = re.findall(r"[A-Z]+", up)
     def ours(code):
         letters = re.sub(r"\d+$", "", code)
-        return any(r == letters or (len(letters) > 1 and letters in r) for r in runs)
+        if len(letters) == 1:
+            return bool(re.search(rf"{letters}\d{{1,2}}(?!\d)", up))
+        return any(letters in r for r in runs)
     return {c for c in other_codes(texts, own) if not ours(c)}
 
 

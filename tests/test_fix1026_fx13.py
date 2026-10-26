@@ -178,13 +178,15 @@ def test_logic_part_numbers_carry_no_package_code_and_codes_match_whole_tokens()
                            ("SN74LVC14APWR", "TSSOP14", "TSSOP-14 PW0014A package"),
                            ("MSP430G2553IPW20R", "TSSOP20", "PW (R-PDSO-G20) TSSOP-20 package PW0020A")):
         assert _taken(mpn, own, text), (mpn, text)
-    # a code is printed as a whole token: "17 x 17 mm 256-ball" holds no M256, "lead 100" no FBD100
+    # a code is printed as a whole token: "17 x 17 mm 256-ball" holds no M256
     for mpn, own, text in (("EPM1270M256C5N", "BGA256", "FineLine BGA-256 package, body 17 x 17 mm 256-ball"),
-                           ("EPM1270M256", "BGA256", "FineLine BGA-256 package, 17 x 17 mm, pitch 1.0 mm 256 balls"),
-                           ("LPC1768FBD100", "QFP100", "LQFP-100 package of another maker: 14 x 14 mm, lead 100, 0.5 mm pitch")):
+                           ("EPM1270M256", "BGA256", "FineLine BGA-256 package, 17 x 17 mm, pitch 1.0 mm 256 balls")):
         assert not _taken(mpn, own, text), (mpn, text)
     assert _taken("EPM1270M256C5N", "BGA256", "M256 Micro FineLine BGA-256 package outline, 0.5 mm pitch")
     assert _taken("LPC1768FBD100", "QFP100", "LQFP100 package FBD100, 14 x 14 mm, SOT407-1")
+    # a leaded package's code that ends the first segment is not required (R-FX16-4): NXP's own LQFP100 drawing
+    # (SOT407-1) never prints FBD100, so the family and count decide, as for every leaded part
+    assert _taken("LPC1768FBD100", "QFP100", "LQFP-100 package: 14 x 14 mm, lead 100, 0.5 mm pitch")
 
 
 # ---------------------------------------------------------------- R-FX13-6: a viewer page's embedded PDF

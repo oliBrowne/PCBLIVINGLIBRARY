@@ -185,3 +185,37 @@ def test_a_portal_404_page_for_the_easyeda_model_host_is_not_cached(tmp_path, mo
     u = "https://gitlab.com/kicad/libraries/kicad-symbols/-/raw/master/Device.kicad_sym"
     h.get(u)
     assert h.get(u).from_cache
+
+
+# ---------------------------------------------------------------- R-FX16-4: package codes that end the first segment
+def _named(mpn, own, text):
+    from ecadlib import ds_route as DR, outline_docs as OD
+    return OD.names_it([text], mpn, (), DR.package_tokens(DR.norm_text(own)), "")
+
+
+def test_a_leaded_package_code_ending_the_part_number_does_not_refuse_the_makers_own_drawing():
+    for mpn, own, doc in [
+            ("MSP430G2553IPW20", "TSSOP20", "PW (R-PDSO-G20) PLASTIC SMALL OUTLINE TSSOP-20"),
+            ("MSP430G2553IN20", "DIP20", "N (R-PDIP-T20) PLASTIC DUAL-IN-LINE PACKAGE DIP-20"),
+            ("MSP430G2553IPW28", "TSSOP28", "PW0028A TSSOP - 1.2 mm max height TSSOP-28"),
+            ("LPC1768FBD100", "QFP100", "LQFP100: plastic low profile quad flat package; 100 leads; body 14 x 14 x 1.4 mm "
+                                        "SOT407-1 QFP-100"),
+            ("LPC1114FBD48/302", "QFP48", "LQFP48: plastic low profile quad flat package; 48 leads; SOT313-2 QFP-48"),
+            ("LPC824M201JHI33", "QFN33", "HVQFN33: plastic thermal enhanced very thin quad flat package; no leads; "
+                                        "33 terminals SOT617-11 QFN-33"),
+            ("PIC32MZ2048EFH144-I/PH", "QFP144", "144-Lead Thin Quad Flatpack (PH) 16x16 mm C04-155 QFP-144")]:
+        assert _named(mpn, own, doc), mpn
+    # a grid's code in the part number is still required: the 0.5 mm Micro FineLine M256 is no 1.0 mm FineLine 256
+    assert not _named("EPM1270M256C5N", "BGA256", "F256 FineLine BGA (FBGA) package outline, 17 x 17 mm body, 1.0 mm "
+                                                  "ball pitch, 256 balls BGA-256")
+    assert _named("EPM1270M256C5N", "BGA256", "M256 Micro FineLine BGA (MBGA) 11 x 11 mm 0.5 mm pitch 256 balls BGA-256")
+
+
+def test_a_one_letter_code_is_the_parts_own_only_before_its_body_size():
+    # Intel's F169 for EP4CGX15BF14C8N (F + body size 14 mm) is the maker's own
+    assert _named("EP4CGX15BF14C8N", "BGA169", "F169 FineLine BGA 14 x 14 mm 1.0 mm BGA-169")
+    assert _named("EP4CE22F17C8N", "BGA256", "F256 FineLine BGA (FBGA) package outline, 17 x 17 mm body BGA-256")
+    assert not _named("EP4CGX15BF14C8N", "BGA169", "U169 Ultra FineLine BGA 11 x 11 mm BGA-169")
+    # TMS320F28377's F is the device's (Flash), not a package letter: another maker's F337 is not its ZWT
+    assert not _named("TMS320F28377DZWTT", "BGA337", "F337 FineLine BGA 0.8 mm (other maker) BGA-337")
+    assert _named("TMS320F28377DZWTT", "BGA337", "ZWT (S-PBGA-N337) PLASTIC BALL GRID ARRAY 16 x 16 mm 0.8 mm BGA-337")

@@ -18,7 +18,10 @@ def test_the_package_codes_that_are_codes_stay():
     assert OD.mpn_package_code("EPM1270M256", {"BGA256"}) == "M256"
     assert OD.mpn_package_code("M2GL090T-FG484", {"BGA484"}) == "FG484"
     assert OD.mpn_package_code("ICE40HX8K-BG121", {"BGA121"}) == "BG121"
-    assert OD.mpn_package_code("EPM240T100", {"QFP100"}) == "T100"
+    # a leaded package's code in the first segment is not required, with an ordering tail (EPM240T100C5N) or
+    # without (R-FX16-4: MSP430G2553IPW20, LPC1768FBD100 refused the maker's own drawings)
+    assert OD.mpn_package_code("EPM240T100", {"QFP100"}) is None
+    assert OD.mpn_package_code("EPM240T100C5N", {"QFP100"}) is None
 
 
 def test_an_ordering_forms_plating_or_reel_tail_is_not_the_part():
