@@ -209,6 +209,9 @@ _UNIT_LETTER = r"[VWR]\b|K(?:\b|Ω|ohm)"      # '1206 V', '1210 K', '1210 kΩ': 
 CHIP_WORD = {"R", "C", "L", "D", "F", "LED", "CP", "RES", "CAP", "IND", "FUSE", "SMD", "SMT", "RC", "CC", "CR", "MLCC", "CHIP", "EIA"}
 
 
+# a dash then a value after the code ('RES-0603-10k', 'C0805-10uF', 'R0603-4R7', '0603-1%'): the part's value, not a
+# part number's suffix ('FV1206-1', '0603-2Pin')
+_VALUE_AFTER = re.compile(r"-\d+(?:[.,]\d+)?\s*(?:[kKMR]\d*|[pnuµ]F|[nuµm]H|%|V|W|ohm|Ω)(?![A-Za-z])")
 _CHIP_GLUE = re.compile(r"(?:" + "|".join(sorted(CHIP_WORD, key=len, reverse=True)) + r")-?", re.I)
 
 
@@ -220,7 +223,8 @@ def _in_part_number(t, a, b):
     glue = re.search(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-?$", before)
     if glue and not _CHIP_GLUE.fullmatch(glue.group(0)):
         return True
-    if re.match(r"-\d", after) or re.match(r"[A-Za-z]", after) and not re.match(r"M(?:etric)?(?![A-Za-z])", after, re.I):
+    if re.match(r"-\d", after) and not _VALUE_AFTER.match(after) or \
+            re.match(r"[A-Za-z]", after) and not re.match(r"M(?:etric)?(?![A-Za-z])", after, re.I):
         return True
     return False
 

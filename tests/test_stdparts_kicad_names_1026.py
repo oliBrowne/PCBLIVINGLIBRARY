@@ -67,3 +67,15 @@ def test_free_text_footprint_fields_with_a_part_numbers_size_or_a_multi_pad_word
     assert SP.chip_size("SRR1210A, 1210") == "1210" and SP.chip_size("SRR1210A, 1210", strict=True) is None
     assert fp("SMA", "D") == "D_SMA" and fp("DO-214AC", "D") == "D_SMA" and fp("LED 0805", "LED") == "LED_0805_2012Metric"
     assert fp("0603 jumper", "R") == "R_0603_1608Metric"                # a 0 ohm link is a two-pad chip
+
+
+def test_a_value_after_the_size_code_is_no_part_number():
+    """Self-review of #195: 'RES-0603-10k', 'C0805-10uF' (LCSC/JLC-style names) give the code then the value; a dash
+    and a value is not a part number's suffix ('FV1206-1', '0603-2Pin' still are)."""
+    for text, kind, want in (("RES-0603-10k", "R", "R_0603_1608Metric"), ("CAP-0402-100nF", "C", "C_0402_1005Metric"),
+                             ("0603-1%", "R", "R_0603_1608Metric"), ("R0603-10K", "R", "R_0603_1608Metric"),
+                             ("C0805-10uF", "C", "C_0805_2012Metric"), ("R0603-4R7", "R", "R_0603_1608Metric"),
+                             ("L0805-2.2uH", "L", "L_0805_2012Metric"), ("C0603-0.1uF", "C", "C_0603_1608Metric")):
+        assert fp(text, kind) == want, (text, SP.resolve([text], kind, ""))
+    for text in ("FV1206-1", "0603-2Pin", "0805-12"):
+        assert SP.chip_size(text) is None, text
