@@ -158,6 +158,35 @@ def test_an_infinite_integer_argument_is_a_tool_error_not_an_internal_error(tmp_
 
 
 @lite
+def test_a_json_rpc_batch_gets_one_answer_per_request_over_stdio_and_http(tmp_path):
+    # MCP 2025-03-26 (which this server still negotiates) says a server MUST accept JSON-RPC batches; a batch got a
+    # single 'invalid request' with id null, so the client never heard back about any of its requests
+    import http.client
+    from ecadlib import mcp_server as M, mcp_http as H
+    ws = _ws(tmp_path)
+    batch = [{"jsonrpc": "2.0", "id": 1, "method": "ping"}, {"jsonrpc": "2.0", "method": "notifications/initialized"},
+             {"jsonrpc": "2.0", "id": "b", "method": "no/such"}]
+    want = [{"jsonrpc": "2.0", "id": 1, "result": {}},
+            {"jsonrpc": "2.0", "id": "b", "error": {"code": -32601, "message": "method not found: no/such"}}]
+    out = io.BytesIO()
+    M.serve(ws, io.BytesIO((json.dumps(batch) + "\n[]\n" + json.dumps(batch[1:2]) + "\n").encode()), out)
+    got = [json.loads(x) for x in out.getvalue().splitlines()]
+    assert got[0] == want, got                              # a batch of notifications only: no answer at all
+    assert got[1:] == [{"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}], got
+    srv, url = H.serve_in_thread(ws, token="t0k")
+    try:
+        for body, status, answer in ((batch, 200, want), (batch[1:2], 202, None)):
+            c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=30)
+            c.request("POST", "/mcp", body=json.dumps(body), headers={"Authorization": "Bearer t0k"})
+            r = c.getresponse()
+            data = r.read()
+            assert r.status == status and (answer is None or json.loads(data) == answer), (r.status, data)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@lite
 def test_http_body_with_a_byte_order_mark_is_read_as_stdio_reads_it(tmp_path):
     import http.client
     from ecadlib import mcp_http as H

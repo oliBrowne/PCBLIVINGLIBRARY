@@ -181,13 +181,7 @@ def make_server(ws, host="127.0.0.1", port=8766, path="/mcp", token=None, origin
                 msg = json.loads(raw.decode("utf-8-sig", errors="replace")) if raw.strip() else None
             except (ValueError, RecursionError):
                 return self._send(400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
-            try:
-                resp = M.handle(ws, msg)
-            except Exception as e:                          # a bug in one request: report it and keep serving
-                import traceback
-                traceback.print_exc(file=sys.stderr)
-                mid = msg.get("id") if isinstance(msg, dict) and isinstance(msg.get("id"), (str, int)) else None
-                resp = {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
+            resp = M.respond(ws, msg)                       # one message or a batch; a bug is an error response
             if resp is None:                                # a notification or a response from the client
                 return self._send(202)
             headers = {}

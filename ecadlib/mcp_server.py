@@ -1130,7 +1130,24 @@ def handle(ws, msg, notify=None):
     return {"jsonrpc": "2.0", "id": mid, "result": result}
 
 
-def _encode(resp):                                        # a lone surrogate (an undecodable file name) -> its \\u escape
+def respond(ws, msg, notify=None):
+    """The answer to one decoded JSON-RPC message, or to a batch (a list: MCP 2025-03-26, which this server still
+    negotiates, says a server must accept them): a response dict, a list of them, or None when nothing is owed (a
+    notification, or a batch of only notifications). A bug in one request is an internal-error response, never the
+    end of the server."""
+    def one(m):
+        try:
+            return handle(ws, m, notify)
+        except Exception as e:                          # a bug or odd input in one request: report and go on
+            traceback.print_exc(file=sys.stderr)
+            mid = m.get("id") if isinstance(m, dict) and isinstance(m.get("id"), (str, int)) else None
+            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
+    if isinstance(msg, list) and msg:
+        return [r for r in map(one, msg) if r is not None] or None
+    return one(msg)                                     # [] and anything else: handle() says 'invalid request'
+
+
+def _encode(resp):                                      # a lone surrogate (an undecodable file name) -> its \\u escape
     return json.dumps(resp, ensure_ascii=False).encode("utf-8", "backslashreplace")
 
 
@@ -1213,12 +1230,7 @@ def serve(ws, inp, out):
         except (ValueError, RecursionError):                # bad JSON, or nested deeper than Python can parse
             resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
         else:
-            try:
-                resp = handle(ws, msg, send)
-            except Exception as e:                          # a bug or odd input in one request: report and go on
-                traceback.print_exc(file=sys.stderr)
-                mid = msg.get("id") if isinstance(msg, dict) and isinstance(msg.get("id"), (str, int)) else None
-                resp = {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
+            resp = respond(ws, msg, send)                   # one message or a batch
         if resp is not None:
             send(resp)
 
