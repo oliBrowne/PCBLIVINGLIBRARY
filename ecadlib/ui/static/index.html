@@ -1036,6 +1036,7 @@ function renderParts() {
   const sum = { ready: c.ready, held: c.held, awaiting_approval: c.waiting, parts: c.parts };
   const r9 = [];
   if (c.cross_check_disagreed) r9.push(`<span class="pill s-warn">cross-check: ${c.cross_check_disagreed} disagree</span>`);
+  if (c.cross_check_pins_unchecked) r9.push(`<span class="pill s-off">pin names not cross-checked: ${c.cross_check_pins_unchecked}</span>`);
   if (c.changes_held) r9.push(`<span class="pill s-warn">updates to released parts held: ${c.changes_held}</span>`);
   if (c.parity_mismatch) r9.push(`<span class="pill s-warn">KiCad / Altium: ${c.parity_mismatch} differ</span>`);
   else if (parts.parts.some(p => p.parity.result === "match")) r9.push(`<span class="pill s-ok">KiCad / Altium: all compared parts match</span>`);
@@ -1058,7 +1059,12 @@ function card(p) {
   const tags = [];
   if (p.allowed) tags.push('<span class="pill s-info">released anyway</span>');
   if (p.change) tags.push(`<span class="pill s-warn">update held (r${esc(p.change.base)})</span>`);
-  if (p.cross_check) tags.push(`<span class="pill ${p.cross_check.status === "disagreed" ? "s-warn" : p.cross_check.status === "agreed" ? "s-ok" : "s-off"}">cross-check: ${esc(p.cross_check.status === "disagreed" ? "disagrees" : p.cross_check.status)}</span>`);
+  if (p.cross_check) {
+    const pinsOpen = p.cross_check.pins === "unchecked";   // the package agreed, the pin names were never compared
+    const cls = p.cross_check.status === "disagreed" ? "s-warn" : p.cross_check.status === "agreed" && !pinsOpen ? "s-ok" : "s-off";
+    const word = p.cross_check.status === "disagreed" ? "disagrees" : p.cross_check.status === "agreed" && pinsOpen ? "package agreed, pins unchecked" : p.cross_check.status;
+    tags.push(`<span class="pill ${cls}">cross-check: ${esc(word)}</span>`);
+  }
   if (p.parity.result) tags.push(`<span class="pill ${p.parity.result === "match" ? "s-ok" : "s-warn"}">KiCad / Altium ${p.parity.result === "match" ? "match" : "differ"}</span>`);
   if (p.cost) tags.push(`<span class="pill s-off">${usd(p.cost.usd)}${p.cost.models.length ? " · " + esc(p.cost.models[0]) : ""}</span>`);
   if (p.approval && p.approval.approved_by && p.approval.approved_by.length) tags.push(`<span class="pill s-ok">approved by ${esc(p.approval.approved_by.join(", "))}</span>`);

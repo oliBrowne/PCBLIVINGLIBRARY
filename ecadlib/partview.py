@@ -65,6 +65,10 @@ def cross_check(rec, sidecar=None):
             rows.append({"field": f, "label": FIELD.get(f, m.group("label")), "first": m.group("first"),
                          "second": m.group("second"), "against": against, "second_is": m.group("src"), "page": page(f)})
     out = {"status": st, "label": label, "rows": rows, "summary": rec.get("summary") or ""}
+    if rec.get("pins") == "unchecked":           # the package agreed, the symbol's pin names were never compared (R-RT-2)
+        out["pins"] = "unchecked"
+        if st == "agreed":
+            out["label"] = "package agrees with a second source; pin names not compared"
     if st == "disagreed" and rows:
         r = rows[0]
         text, fix = M.held("crosscheck.disagree", field=r["label"], first=r["first"], second=r["second"],
@@ -233,6 +237,8 @@ def cards(out, items, pictures=True):
               "held": sum(p["status"] == "held" for p in parts),
               "waiting": sum(p["status"] == "awaiting_approval" for p in parts),
               "cross_check_disagreed": sum(bool(p["cross_check"]) and p["cross_check"]["status"] == "disagreed" for p in parts),
+              "cross_check_pins_unchecked": sum(bool(p["cross_check"]) and p["cross_check"].get("pins") == "unchecked"
+                                                for p in parts),
               "parity_mismatch": sum(p["parity"]["result"] == "mismatch" for p in parts),
               "changes_held": sum(bool(p["change"]) for p in parts)}
     return {"parts": parts, "counts": counts,

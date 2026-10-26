@@ -71,7 +71,7 @@ def test_parts_endpoint_says_why_with_both_values_and_cost():
         try:
             st, r = call("GET", "/api/parts?bom=" + bom)
             assert st == 200, r
-            assert r["counts"] == {"parts": 14, "ready": 5, "held": 9, "waiting": 0, "cross_check_disagreed": 1,
+            assert r["counts"] == {"parts": 14, "ready": 5, "held": 9, "waiting": 0, "cross_check_disagreed": 1, "cross_check_pins_unchecked": 0,
                                    "parity_mismatch": 1, "changes_held": 0}, r["counts"]
             assert r["cost"]["usd"] == 0.111 and r["cost"]["models"] == ["claude-sonnet-4-5"] and r["cost"]["answers"] == 2
             by = {p["part"]: p for p in r["parts"]}
