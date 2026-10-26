@@ -90,6 +90,20 @@ def metric_size(cell, header):
                 "(give the inch size, e.g. 0603, or the footprint name)"]
 
 
+def _inch_only_codes(df, j):
+    """The bare size codes in column j that are inch sizes and no metric one ('1206', '0805'), sorted: in a column
+    labelled mm they say the column is not (only) metric, so its 0603 / 0402 cannot be read as metric."""
+    from .kicad_index import METRIC_TO_IMPERIAL
+    inch = set(METRIC_TO_IMPERIAL.values()) - set(METRIC_TO_IMPERIAL)
+    found = set()
+    for _, row in df.iterrows():
+        if j < len(row):
+            m = re.fullmatch(r"\s*(\d{4,5})\s*(?:mm)?\s*", str(row.iloc[j]))
+            if m and m.group(1) in inch:
+                found.add(m.group(1))
+    return sorted(found)
+
+
 def mixed_size(cell, header):
     """A footprint cell from a column naming both systems ('Case (Metric / Imp.)') -> (footprint text, [note]). A code
     that is a size in one system only is read in that one ('1608' is the metric 0603, '0805' an inch 0805); one that
@@ -393,6 +407,7 @@ def read_bom(path, columns=None, rules=None, root=None):
     suppliers = _supplier_pairs(headers)
     metric_fp = "footprint" in col and metric_header(_hnorm(headers[col["footprint"]]))
     mixed_fp = "footprint" in col and mixed_header(_hnorm(headers[col["footprint"]]))   # 'Case (Metric / Imp.)'
+    mm_inch = metric_fp and _inch_only_codes(df, col["footprint"])   # a 'Package (mm)' column holding 1206 / 0805
     nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
                                                                   # after Value holds in the rows that fit the header
     lines, skipped = [], 0
@@ -426,7 +441,12 @@ def read_bom(path, columns=None, rules=None, root=None):
         for f in ("mpn", "lcsc"):
             if d.get(f):
                 d[f] = clean_part_number(d[f])
-        if metric_fp and d.get("footprint"):                     # 'Case Code (mm)': 1608 is an 0603, 0603 an 0201
+        if metric_fp and mm_inch and _size_code(d.get("footprint", "")) in ("0402", "0603"):
+            note.append(f"footprint '{d['footprint']}' from the column '{headers[col['footprint']]}': the column mixes "
+                        f"inch and mm codes ({', '.join(mm_inch)} is no metric size), so {d['footprint']} may be an "
+                        "inch or a metric code: not used (give the inch size in an inch column, or the footprint name)")
+            d["footprint"] = ""
+        elif metric_fp and d.get("footprint"):                   # 'Case Code (mm)': 1608 is an 0603, 0603 an 0201
             d["footprint"], extra = metric_size(d["footprint"], headers[col["footprint"]])
             note += extra
         elif mixed_fp and d.get("footprint"):                    # an 0603 there is an 0603 or an 0201: held

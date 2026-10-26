@@ -220,3 +220,23 @@ def test_easyeda_takes_the_lcsc_number_of_a_product_link_not_a_c0g_slug():
         h = Http()
         P.EasyEDA(h).lookup({"lcsc": cell})
         assert h.urls and f"/products/{want}/" in h.urls[0], (cell, h.urls)
+
+
+# ---------------------------------------------------------------- R-E2E-1: a "(mm)" column that holds inch codes
+@lite
+def test_a_mm_column_holding_inch_only_codes_does_not_convert_its_0603(tmp_path):
+    # 'Package (mm)' with 0603, 1206, 0805: 1206 and 0805 are no metric sizes, so the column is in inches (or mixed);
+    # its 0603 was still read as metric and built ready on an 0201 land with no note
+    lines, _ = _read(tmp_path / "mixcol.csv", "Designator,Quantity,Manufacturer,MPN,Package (mm),Value\n"
+                                              "R1,1,Acme,XR-10K-A,0603,10k\nR4,1,Acme,XR-1K,1206,1k\n"
+                                              "R5,1,Acme,XR-2K,0805,2k\nR6,1,Acme,XR-3K,0402,3k\nC1,1,Acme,XC-1,1608,1n\n")
+    by = {l["designator"]: l for l in lines}
+    for ref in ("R1", "R6"):
+        assert by[ref].get("footprint", "") not in ("0201", "01005"), by[ref]
+        assert not by[ref].get("footprint") and "mixes inch and mm" in by[ref].get("bom_note", ""), by[ref]
+    assert by["C1"]["footprint"] == "0603", by["C1"]            # 1608 is metric in any column: still an 0603
+    # a consistent mm column still converts (bommcp-01)
+    lines, _ = _read(tmp_path / "mm.csv", "Designator,Qty,MPN,Case Code (mm)\nC1,1,XYZ,0603\nR1,1,XYZ2,1608\n")
+    by = {l["designator"]: l for l in lines}
+    assert by["C1"]["footprint"] == "0201" and by["R1"]["footprint"] == "0603", by
+

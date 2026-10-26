@@ -22,8 +22,12 @@ def test_metric_case_code_column_is_not_read_as_an_imperial_size(tmp_path):
                                           "R2,1,1k,Acme,XYZRES1K,1206\nU1,1,LDO,Acme,XYZLDO,SOT-23-5\n")
     from ecadlib.kicad_index import package_of
     by = {l["designator"]: l for l in lines}
-    assert package_of(by["C1"].get("footprint")) == "0201", by["C1"]
+    # R-E2E-1: the 1206 below says the column is not all metric, so its 0603 (inch 0603 or metric 0201) is held
+    assert not by["C1"].get("footprint") and "mixes inch and mm" in by["C1"].get("bom_note", ""), by["C1"]
     assert package_of(by["R1"].get("footprint")) == "0603", by["R1"]
+    lines, m = _read(tmp_path / "mm2.csv", "Designator,Qty,Value,Manufacturer,MPN,Case Code (mm)\n"
+                                           "C1,1,100nF,Acme,XYZCAP100N,0603\nR1,1,10k,Acme,XYZRES10K,1608\n")
+    assert package_of(lines[0].get("footprint")) == "0201", lines[0]     # a consistent mm column: 0603 is an 0201
     # 1206 is no metric chip code: which size it is cannot be told, so it is not used (the part is held, not guessed)
     assert not by["R2"].get("footprint") and "mm" in by["R2"].get("bom_note", ""), by["R2"]
     assert by["U1"]["footprint"] == "SOT-23-5", by["U1"]                  # a package name is not a size code
