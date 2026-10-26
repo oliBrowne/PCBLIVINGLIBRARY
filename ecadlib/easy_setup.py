@@ -249,10 +249,10 @@ def check_key(b, get=None):
 
 # ------------------------------------------------------------------ add to Altium / KiCad
 def _record_install(kind, value):
-    s = UC.load_settings()
-    inst = dict(s.get("installed") or {})
-    inst[kind] = value
-    UC.save_settings({"installed": inst})
+    with UC._WRITE:                             # Add to Altium and Add to KiCad at once: both are kept
+        inst = dict(UC.load_settings().get("installed") or {})
+        inst[kind] = value
+        UC.save_settings({"installed": inst})
 
 
 def install_altium_menu(ws_root):

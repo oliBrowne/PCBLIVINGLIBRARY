@@ -19,13 +19,15 @@ UI or written anywhere else.
 
 apply_env() puts KiCad's bin folder on PATH when kicad-cli is not found there but a KiCad install is (the
 Windows installer of KiCad does not add it to PATH)."""
-import argparse, base64, getpass, json, os, re, sys, tempfile
+import argparse, base64, getpass, json, os, re, sys, tempfile, threading
 from pathlib import Path
 
 SETTINGS, KEYS = "settings.json", "keys.json"
 NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 MAX_KEY = 4096
 NO_STORED = "ECADLIB_NO_STORED_KEYS"          # set (the eval gate, golden builds): stored keys are not read
+_WRITE = threading.RLock()                    # read-modify-write of settings.json / keys.json: the web UI's request
+                                              # threads (a key saved while setup is saved) never drop each other's change
 
 
 def config_dir(environ=None):
@@ -119,9 +121,10 @@ def load_settings(environ=None):
 
 def save_settings(changes, environ=None):
     """Merge `changes` into settings.json; returns the new settings."""
-    s = _read_for_write(config_dir(environ) / SETTINGS)
-    s.update(changes)
-    _write_private(config_dir(environ) / SETTINGS, json.dumps(s, indent=2) + "\n")
+    with _WRITE:
+        s = _read_for_write(config_dir(environ) / SETTINGS)
+        s.update(changes)
+        _write_private(config_dir(environ) / SETTINGS, json.dumps(s, indent=2) + "\n")
     return s
 
 
@@ -181,18 +184,20 @@ def set_key(name, value, environ=None):
     if len(value) > MAX_KEY or any(c in value for c in "\r\n\0"):
         raise ValueError("that does not look like an API key (too long, or more than one line)")
     f = config_dir(environ) / KEYS
-    keys = _read_for_write(f)
-    keys[name] = _encode(value)
-    _write_private(f, json.dumps(keys, indent=2) + "\n")
+    with _WRITE:
+        keys = _read_for_write(f)
+        keys[name] = _encode(value)
+        _write_private(f, json.dumps(keys, indent=2) + "\n")
     _CACHE.clear()                                    # a same-size rewrite inside one clock tick keeps the old stamp
 
 
 def remove_key(name, environ=None):
     f = config_dir(environ) / KEYS
-    keys = _read_json(f)
-    if keys.pop(check_name(name), None) is None:
-        return False
-    _write_private(f, json.dumps(keys, indent=2) + "\n")
+    with _WRITE:
+        keys = _read_json(f)
+        if keys.pop(check_name(name), None) is None:
+            return False
+        _write_private(f, json.dumps(keys, indent=2) + "\n")
     _CACHE.clear()
     return True
 

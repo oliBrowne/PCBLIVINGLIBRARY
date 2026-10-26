@@ -71,3 +71,24 @@ def test_webui_03_uploads_never_take_a_windows_device_name(tmp_path):
         assert Path(n).suffix.lower() == Path(name).suffix.lower(), (n, name)     # the reader still picks by the suffix
     for n in ("console.csv", "bom_con.csv", "com10.csv", "nullable.csv"):          # not devices: kept
         assert ws.save_upload(n, data).endswith("/" + n), n
+
+
+@lite
+def test_webui_04_settings_and_keys_written_from_two_requests_at_once_keep_both(tmp_path, monkeypatch):
+    """settings.json / keys.json are read, changed and written back. The web UI serves each request in its own thread,
+    so a key saved while the setup page saves (or Add to Altium and Add to KiCad at once) lost one of the changes."""
+    import threading
+    from ecadlib import easy_setup as ES, userconfig as UC
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    for rnd in range(6):
+        names = [f"K{rnd}_{i}" for i in range(6)]
+        jobs = [threading.Thread(target=UC.set_key, args=(n, "v" + n)) for n in names]
+        jobs += [threading.Thread(target=UC.save_settings, args=({n: 1},)) for n in names]
+        jobs += [threading.Thread(target=ES._record_install, args=(n, "x")) for n in names]
+        for t in jobs:
+            t.start()
+        for t in jobs:
+            t.join()
+        s = UC.load_settings()
+        assert set(names) <= set(UC.stored_names()), (rnd, UC.stored_names())
+        assert all(n in s and n in s["installed"] for n in names), (rnd, s)
