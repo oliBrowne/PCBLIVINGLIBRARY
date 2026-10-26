@@ -1467,6 +1467,96 @@ def project_key(folder, path):
     return Path(rel).as_posix()
 
 
+PLAN_ID = "plan_id.json"                       # <plan folder>/.ecadlib/plan_id.json: {"id", "folder"}
+
+
+def is_plan_id(w):
+    import re
+    return bool(re.fullmatch(r"plan-[0-9a-f]{32}", str(w or "")))
+
+
+def _read_plan_id(folder):
+    try:
+        d = json.loads((Path(folder) / LG.STORE / PLAN_ID).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    return (d.get("id"), d.get("folder")) if isinstance(d, dict) and is_plan_id(d.get("id")) else (None, None)
+
+
+def plan_id(folder, create=True):
+    """The plan folder's own id (R-FX15-2): how a shared publish target (a DbLib folder, an Altium 365 workspace, a
+    KiCad output folder) records which plan folder released what. It is made once and kept in the plan folder, so the
+    plan stays itself when its folder is renamed, the target is moved, or it is reached by another path (a clone, a
+    Windows share on another drive). A copy of a plan folder whose original is still where the id was made gets an id
+    of its own (two folders, two plans). create=False: None when the folder has none yet."""
+    import uuid
+    folder = Path(folder)
+    pid, made_in = _read_plan_id(folder)
+    if pid and made_in:
+        try:
+            orig = Path(made_in)
+            copied = (orig.is_dir() and not os.path.samefile(orig, folder) and _read_plan_id(orig)[0] == pid)
+        except OSError:
+            copied = False
+        if copied:
+            pid = None
+    if pid or not create:
+        return pid
+    pid = f"plan-{uuid.uuid4().hex}"
+    from .fsutil import write_text_atomic
+    (folder / LG.STORE).mkdir(parents=True, exist_ok=True)
+    write_text_atomic(folder / LG.STORE / PLAN_ID,
+                      json.dumps({"id": pid, "folder": str(folder.resolve())}, indent=1) + "\n")
+    return pid
+
+
+def plan_at(path, pid=None):
+    """The plan folder at `path` when it is there (and is plan `pid`, when given), else None: a writer of a shared
+    target whose folder is gone (deleted, or renamed / moved and not synced since) is stale."""
+    try:
+        f = Path(path)
+        if not f.is_dir():
+            return None
+        if pid and is_plan_id(pid):
+            return f if _read_plan_id(f)[0] == pid else None
+        return f if (LG.Ledger(f).exists() or (f / "plan.json").is_file()) else None
+    except OSError:
+        return None
+
+
+def heads_agree(lg_a, head_a, lg_b, head_b, kinds=("symbols", "footprints"), identity=False):
+    """Two plan folders released the same drawings (kinds: "symbols" / "footprints", as altium365.model_digest compares
+    them) and, with identity, the same MPN, manufacturer and value: a shared target may carry one plan's release for
+    the other's. False when either head or fingerprint is missing."""
+    from .altium365 import model_digest
+    if not (lg_a and head_a and lg_b and head_b):
+        return False
+    for k in kinds:
+        a, b = model_digest(lg_a, head_a, k), model_digest(lg_b, head_b, k)
+        if not a or a != b:
+            return False
+    if identity:
+        ia, ib = (lg_a.fingerprint(head_a) or {}).get("identity"), (lg_b.fingerprint(head_b) or {}).get("identity")
+        key = lambda i: (str(i.get("mpn") or "").casefold(), str(i.get("manufacturer") or "").casefold(),
+                         i.get("value_num"), str(i.get("value_unit") or ""))
+        if not (ia and ib and key(ia) == key(ib)):
+            return False
+    return True
+
+
+def head_of(lg, part):
+    """The ledger head of `part` (case-folded match when the spelling differs), or None; None for a ledger that can't
+    tell (LedgerError)."""
+    try:
+        h = lg.head(part)
+        if h is None:
+            other = next((p for p in lg.parts() if p.casefold() == str(part).casefold()), None)
+            h = lg.head(other) if other else None
+        return h
+    except (LG.LedgerError, OSError, ValueError):
+        return None
+
+
 def record_bom_usage(folder, bom, items):
     """The librarian's BOM is a user of every part it lists, at the revision released now."""
     lg = LG.Ledger(folder)

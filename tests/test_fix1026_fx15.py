@@ -68,3 +68,118 @@ def test_dblib_own_plan_still_repoints_its_row_and_other_plan_still_edits_fields
     out = S.sync(_plan(tmp_path / "B", [it]), lib)
     assert _acts(out)["RES-0603-10k"] == "updated", out["results"]
     assert _rows(lib)["RES-0603-10k"]["Description"] == "another description"
+
+
+# ---------------------------------------------------------------- R-FX15-2: a plan is its id, not its path
+BIG = {"terminal_length": {"min": 0.3, "max": 0.6}}
+
+
+def _signed_off(root):
+    """Change control signs a land change off at once under root (as an approved change: `part approve`)."""
+    (root / "ecadlib.toml").write_text('[change]\ngeometry_major = "warn"\ngeometry_minor = "warn"\n')
+
+
+def _new_land(d):
+    """Plan folder d's R_0603 land changes (bigger terminals): the next sync settles it as a new ledger revision."""
+    from ecadlib import altium_lib as AL
+    spec = json.loads((ROOT / "ecadlib/package_specs/R_0603_1608Metric.json").read_text())
+    spec.update(BIG)
+    AL.write_pcblib(d / "models/PcbLib/R_0603_1608Metric.PcbLib", [AL.footprint_from_spec(spec)[0]])
+
+
+def _pads(lib):
+    from ecadlib import altium_lib as AL
+    return [(r["w"], r["h"]) for c in AL.read_pcblib(lib / "PcbLib/R_0603_1608Metric.PcbLib") for r in c["records"]
+            if r.get("type") == "pad"]
+
+
+@lite
+def test_dblib_renamed_plan_folder_and_moved_library_are_still_the_same_plan(tmp_path):
+    """Writers were keyed by the plan path relative to the library: after the plan folder was renamed (or the library
+    moved) its own approved land change was an error naming its old path ("another plan folder ... ../A"), and
+    --prune / --overwrite-edits could not clear it. The plan is its id: the change goes through, one writer."""
+    from ecadlib import altium_dblib_sync as S
+    _signed_off(tmp_path)
+    lib = tmp_path / "dblib"
+    S.sync(_plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")]), lib)
+    before = _pads(lib)
+    shutil.move(tmp_path / "A", tmp_path / "A2")
+    _new_land(tmp_path / "A2")
+    out = S.sync(tmp_path / "A2/plan.json", lib)
+    assert _acts(out)["RES-0603-10k"] == "updated", out["results"]
+    assert _pads(lib) != before
+    st = json.loads((lib / "ecadlib_sync.json").read_text())
+    assert len(st["writers"]["rows"]["RES-0603-10k"]) == 1 and list(st["writers"]["plans"].values()) == [{"path": "../A2"}], st
+    # the library folder moved: the same plan still
+    (tmp_path / "shared").mkdir()
+    shutil.move(lib, tmp_path / "shared/dblib")
+    lib = tmp_path / "shared/dblib"
+    from ecadlib import altium_lib as AL
+    spec = json.loads((ROOT / "ecadlib/package_specs/R_0603_1608Metric.json").read_text())
+    AL.write_pcblib(tmp_path / "A2/models/PcbLib/R_0603_1608Metric.PcbLib", [AL.footprint_from_spec(spec)[0]])
+    out = S.sync(tmp_path / "A2/plan.json", lib)
+    assert _acts(out)["RES-0603-10k"] == "updated", out["results"]
+    assert _pads(lib) == before
+
+
+@lite
+def test_dblib_same_part_approved_in_two_plans_is_not_held_by_each_other(tmp_path):
+    """The same part in two BOMs (two plan folders, one DbLib): the land change approved in both left each sync held
+    by the other forever. A plan whose released head is this drawing agrees; one that has not signed it off holds."""
+    from ecadlib import altium_dblib_sync as S
+    _signed_off(tmp_path)
+    lib = tmp_path / "dblib"
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    b = _plan_folder(tmp_path / "B", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    S.sync(a, lib)
+    assert _acts(S.sync(b, lib))["RES-0603-10k"] == "up_to_date"
+    before = _pads(lib)
+    _new_land(tmp_path / "A")                          # A alone signed the change off: B's released part stays
+    res = next(r for r in S.sync(a, lib)["results"] if r["name"] == "RES-0603-10k")
+    assert res["action"] == "error" and "another plan" in res["detail"], res
+    assert _pads(lib) == before
+    _new_land(tmp_path / "B")                          # now B too
+    assert _acts(S.sync(b, lib))["RES-0603-10k"] == "updated"
+    assert _pads(lib) != before
+    assert _acts(S.sync(a, lib))["RES-0603-10k"] in ("up_to_date", "updated")
+
+
+@lite
+def test_dblib_writer_whose_plan_folder_is_gone_is_named_stale_and_can_be_forgotten(tmp_path):
+    """A plan folder that synced here was deleted: the other plan's change was held naming it as if it were there,
+    with --prune of that (gone) plan as the way out. It is named as gone, and --forget-missing-plans clears it."""
+    from ecadlib import altium_dblib_sync as S
+    _signed_off(tmp_path)
+    lib = tmp_path / "dblib"
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    S.sync(a, lib)
+    S.sync(_plan_folder(tmp_path / "B", [_res("RES-0603-10k", "RC0603FR-0710KL")]), lib)
+    shutil.rmtree(tmp_path / "B")
+    _new_land(tmp_path / "A")
+    res = next(r for r in S.sync(a, lib)["results"] if r["name"] == "RES-0603-10k")
+    assert res["action"] == "error" and "../B is not there any more" in res["detail"], res
+    assert "--forget-missing-plans" in res["detail"], res
+    out = S.sync(a, lib, forget_missing=True)
+    assert _acts(out)["RES-0603-10k"] == "updated", out["results"]
+    assert any(r["action"] == "forgotten" and r["name"] == "../B" for r in out["results"]), out["results"]
+    st = json.loads((lib / "ecadlib_sync.json").read_text())
+    assert list(st["writers"]["plans"].values()) == [{"path": "../A"}], st
+
+
+@lite
+def test_dblib_state_keyed_by_plan_path_is_read_as_plan_ids(tmp_path):
+    """A state an ecadlib before plan ids wrote (writers by plan path): this plan's own path is this plan, so its
+    approved change goes through; another plan's path that is there still holds."""
+    from ecadlib import altium_dblib_sync as S
+    _signed_off(tmp_path)
+    lib = tmp_path / "dblib"
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    S.sync(a, lib)
+    st = json.loads((lib / "ecadlib_sync.json").read_text())
+    st["writers"] = {"rows": {"RES-0603-10k": ["../A"]},
+                     "files": {k: dict(v, plan="../A") for k, v in st["writers"]["files"].items()}}
+    (lib / "ecadlib_sync.json").write_text(json.dumps(st))
+    _new_land(tmp_path / "A")
+    assert _acts(S.sync(a, lib))["RES-0603-10k"] == "updated"
+    st = json.loads((lib / "ecadlib_sync.json").read_text())
+    assert all(w.startswith("plan-") for w in st["writers"]["rows"]["RES-0603-10k"]), st
