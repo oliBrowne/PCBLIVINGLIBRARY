@@ -605,6 +605,14 @@ def call_tool(ws, name, args, progress=None):
             return ws.example_specs()
         if name == "propose_rules":
             r = ws.propose_rules(args.get("paths") or None, args.get("a365") or None, args.get("choices") or None)
+            keep = _required_kept(ws, r)     # save_rules may not drop a required parameter: the proposal keeps them
+            if keep:
+                r = ws.propose_rules(args.get("paths") or None, args.get("a365") or None,
+                                     {**(args.get("choices") or {}), "parameters.required": keep[0]})
+                r.setdefault("warnings", []).append(
+                    f"parameters.required: kept {', '.join(keep[1])} (required by the rules in force, though the "
+                    "library does not fill it on most parts): save_rules over MCP may only add required "
+                    "parameters; a person can drop one in ecadlib.toml or on the rules page of the web UI")
             if not args.get("full"):
                 for st in r["settings"]:
                     st["evidence"] = st["evidence"][:3]
@@ -992,6 +1000,10 @@ def _check_endpoints(ws, text):
     except RulesError:
         old = {}
     new = _gates(text if isinstance(text, str) else "", mine.name)
+    for g, t, n in ((old, f.read_text(encoding="utf-8-sig") if f.is_file() else "", f.name),
+                    (new, text if isinstance(text, str) else "", mine.name)):
+        if "parameters.required" in g:           # each list in its own file's house names: compared as ecadlib's
+            g["parameters.required"] = _canon_required(g["parameters.required"], _param_names(t, n))
     loosened = sorted(k for k in set(old) | set(new) if _loosens(k, _gate_default(k) if k not in old else old[k],
                                                                     _gate_default(k) if k not in new else new[k]))
     if loosened:
@@ -1023,6 +1035,55 @@ def _gates(text, name="ecadlib.toml"):
                 walk(x, key)
     if isinstance(data, dict):
         walk(data, "")
+    return out
+
+
+def _required_kept(ws, proposal):
+    """([required list the proposal should write], [names added]) when the proposed parameters.required leaves out a
+    parameter the rules in force require (save_rules would refuse it), else None. Added names are written in the
+    proposal's house names."""
+    from .rules import RulesError, param_name
+    raw = proposal.get("rules") or {}
+    req = (raw.get("parameters") or {}).get("required") if isinstance(raw.get("parameters"), dict) else None
+    if not isinstance(req, list):
+        return None
+    f = ws.rules_in_use() or ws.rules_file()
+    try:
+        text = f.read_text(encoding="utf-8-sig") if f.is_file() else ""
+        cur = _gates(text, f.name).get("parameters.required", _gate_default("parameters.required"))
+    except (OSError, RulesError):
+        return None
+    names = (raw.get("parameters") or {}).get("names") or {}
+    have = {x.strip().lower() for x in _canon_required(req, names)}
+    missing = [c for c in _canon_required(cur, _param_names(text, f.name)) if c.strip().lower() not in have]
+    if not missing:
+        return None
+    add = [param_name(c, {"parameters": {"names": names}}) for c in missing]
+    return [*req, *add], add
+
+
+def _param_names(text, name="ecadlib.toml"):
+    """The [parameters] names table of a rules text ({ecadlib name: house name}); {} when it has none or is damaged."""
+    from .rules import RulesError, parse_text
+    try:
+        data = parse_text(text, name) if text else {}
+    except RulesError:
+        return {}
+    names = (data.get("parameters") or {}).get("names") if isinstance(data, dict) else None
+    return names if isinstance(names, dict) else {}
+
+
+def _canon_required(v, names):
+    """parameters.required in ecadlib's names: "MPN" under "Manufacturer Part Number" = "MPN" is the MPN the release
+    check asks for (release_check reads each required name through canonical_param). "Datasheet" and "Description"
+    are read by the release check before any renaming (the datasheet link, the item's description), whatever the names
+    table says; ComponentLink2URL is the datasheet link."""
+    from .rules import canonical_param
+    out = []
+    for x in (v if isinstance(v, list) else [v] if v else []):
+        x = str(x)
+        c = x if x.strip() in ("Datasheet", "Description") else canonical_param(x, {"parameters": {"names": names}})
+        out.append("Datasheet" if c.strip().lower() == "componentlink2url" else c)
     return out
 
 
