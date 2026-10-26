@@ -224,6 +224,26 @@ def test_fingerprint_of_stacked_pads_does_not_depend_on_file_order():
     assert CD.diff(f1, f2) == []
 
 
+def test_fingerprint_of_repeated_pin_number_does_not_depend_on_file_order():
+    # a number drawn twice in one unit (two GND pins "4"): the pin table's "first copy" was the file's first, so the
+    # same symbol with the copies swapped had another cid and digest
+    import random
+    from ecadlib import fingerprint as FP, kicad_import as K
+    pin = lambda t, x, y, a, nm, n: (f'(pin {t} line (at {x} {y} {a}) (length 2.54) (name "{nm}" (effects (font (size 1.27 1.27)))) '
+                                     f'(number "{n}" (effects (font (size 1.27 1.27)))))')
+    pins = [pin("power_in", 0, 5.08, 270, "VCC", 8), pin("power_in", 0, -5.08, 90, "GND", 4),
+            pin("input", -7.62, 2.54, 0, "IN", 1), pin("power_in", 2.54, -5.08, 90, "GND", 4)]
+
+    def fp(ps):
+        t = '(kicad_symbol_lib (symbol "X" (property "Reference" "U" (at 0 0 0)) (symbol "X_1_1" ' + " ".join(ps) + ")))"
+        return FP.hashes(FP.of_kicad([K._find_symbol(sexpr.parse(t), "X")]))
+    want, rnd = fp(pins), random.Random(7)
+    for _ in range(12):
+        ps = pins[:]
+        rnd.shuffle(ps)
+        assert fp(ps) == want
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

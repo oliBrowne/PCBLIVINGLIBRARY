@@ -604,9 +604,8 @@ def _pin_table(found, n_units):
         out.setdefault(num, []).append(rec)
     table = {}
     for num, recs in out.items():
-        first = min(recs, key=lambda r: r.get("style") or 1)
         inst = sorted(recs, key=lambda r: (r.get("style") or 1, r.get("unit") or 0, json.dumps(r, sort_keys=True, default=str)))
-        table[num] = dict(first, inst=inst)
+        table[num] = dict(inst[0], inst=inst)       # the first copy by that order, never by the file's (cid, digest)
     return table
 
 
