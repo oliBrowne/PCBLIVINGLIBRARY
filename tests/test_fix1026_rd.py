@@ -423,3 +423,13 @@ def test_fx14_2_a_copper_dimension_far_off_its_table_is_a_hard_failure():
     review, hard = _table_review(body_length=_tdim("D", 3.6, 3.8, 4.0))  # a gull-wing's body places no pad
     assert len(review) == 1 and hard == [], review
 
+
+# ---------------------------------------------------------------- R-FX14-5: a metric-marked code against its body
+def test_fx14_5_a_metric_code_whose_body_is_another_size_is_a_conflict():
+    """Before: '0402 [mm] 1.6x0.8' built R_01005 (the body is a 0603), '0603 [mm] 1.0x0.5' R_0201 (a 0402)."""
+    from ecadlib import stdparts as SP
+    for text in ("0402 [mm] 1.6x0.8", "0603 [mm] 1.0x0.5"):
+        assert str(SP.chip_size(text)).startswith("conflict:"), (text, SP.chip_size(text))
+    for text, size in (("0603 [mm] 1.6x0.8", "0603"), ("1608 [mm] 1.6x0.8", "0603"), ("0402 (metric) 0.4x0.2", "01005"),
+                       ("0402 [mm]", "01005"), ("RES 0603 1.6x0.8mm", "0603")):
+        assert SP.chip_size(text) == size, (text, SP.chip_size(text))

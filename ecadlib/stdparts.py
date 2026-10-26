@@ -321,6 +321,10 @@ def chip_size(text, strict=False):
         marks.add(span)
         if code == dims:                                            # '0603 [mm] 1.6x0.8': the body says imperial
             continue
+        if dims and code in METRIC and METRIC[code] != dims:        # '0402 [mm] 1.6x0.8': the body is neither
+            found.add(f"conflict:{code} metric, body {dims}")       # reading of the code (R-FX14-5): held
+            near.add(at)
+            continue
         found.add(METRIC[code] if code in METRIC else f"conflict:{code} metric?")
         near.add(at)
     free = [m.span() for m in re.finditer(r"(?<![A-Za-z])(metric|mm)(?![A-Za-z])", t, re.I)     # a marker no code
