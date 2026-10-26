@@ -98,3 +98,35 @@ def test_proof_on_the_datasheet_provider_by_default_keeps_its_key_name():
         # no [ai] provider: [datasheet] defaults to anthropic, so an anthropic proof keeps a Claude key name
         r3 = _rules({"datasheet": {"api_key_env": "CLAUDE_KEY"}, "agent": {"proof": {"provider": "anthropic"}}})
         assert LL.endpoint(r3, "proof")["key_env"] == "CLAUDE_KEY"
+
+
+# ---------------------------------------------------------------- R-FX13-3: GitLab's own 404 page for a raw file is cached
+class _R:
+    def __init__(self, status, text):
+        self.status_code, self.text, self.ok = status, text, 200 <= status < 300
+
+
+_GL404 = "<!DOCTYPE html>\n<html class=\"gl-light\" lang=\"en\"><head><title>Not Found · GitLab</title></head><body>404</body></html>"
+
+
+@lite
+def test_gitlab_404_page_for_a_missing_kicad_file_is_cached_and_read_offline(tmp_path, monkeypatch):
+    from ecadlib import httpcache as H, kicad_import as K
+    n = []
+    h = H.CachedHTTP(tmp_path / "c", min_interval=0)
+    monkeypatch.setattr(h.s, "request", lambda *a, **k: n.append(1) or _R(404, _GL404))
+    path = "Package_SO.pretty/SOIC-8_Nope.kicad_mod"
+    assert K.fetch(h, "kicad-footprints", path) is None
+    assert K.fetch(h, "kicad-footprints", path) is None
+    assert len(n) == 1, f"{len(n)} requests: the origin's 404 was not cached"
+    for u in ("https://gitlab.com/kicad/libraries/kicad-symbols/-/raw/master/Device.kicad_sym",
+              "https://example.com/models/X.step"):
+        h.get(u)
+        assert h.get(u).from_cache, u
+    off = H.CachedHTTP(tmp_path / "c", min_interval=0, offline=True)
+    assert K.fetch(off, "kicad-footprints", path) is None              # offline: the cached "not there", no raise
+    # an API (JSON) URL keeps the proxy-page protection
+    api = "https://api.digikey.com/products/v4/search/LM358DR/productdetails"
+    h.get(api)
+    assert not h.get(api).from_cache
+    assert not h.get("https://example.com/api/v1/parts.json").from_cache
