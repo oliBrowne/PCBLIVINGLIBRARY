@@ -244,6 +244,20 @@ def test_fingerprint_of_repeated_pin_number_does_not_depend_on_file_order():
         assert fp(ps) == want
 
 
+def test_step_in_centimetres_or_metres_is_placed_at_its_real_size():
+    # only MILLI and $ (metres) were read; a centimetre file was taken as mm, its height one tenth of the real one
+    from ecadlib import easyeda_3d as E3, step_gen as SG
+    mm = SG.write_step([SG.box(-1, -1, 0, 1, 1, 0.8, "body")], "t")
+    unit = "( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )"
+    assert unit in mm
+    ref = {"origin": (0.0, 0.0), "z": 0.0, "rotation": (0, 0, 0), "through_hole": False}
+    for prefix, k in ((".CENTI.", 10.0), ("$", 1000.0), (".MILLI.", 1.0)):
+        scaled = SG.write_step([SG.box(-1 / k, -1 / k, 0, 1 / k, 1 / k, 0.8 / k, "body")], "t")
+        text = scaled.replace(unit, f"( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT({prefix},.METRE.) )")
+        _, info = E3.place(text, ref)
+        assert abs(info["height"] - 0.8) < 1e-6 and abs(info["bbox"][3] - 1.0) < 1e-6, (prefix, info)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

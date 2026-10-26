@@ -85,9 +85,9 @@ def _unit(text):
     if re.search(r"CONVERSION_BASED_UNIT\s*\(\s*'INCH'", text, re.I):
         return 25.4
     m = re.search(r"SI_UNIT\s*\(\s*(\.\w+\.|\$)\s*,\s*\.METRE\.\s*\)", text)
-    if m and m.group(1) == "$":
-        return 1000.0
-    return 1.0
+    if not m:
+        return 1.0
+    return {"$": 1000.0, ".CENTI.": 10.0, ".DECI.": 100.0, ".MICRO.": 0.001}.get(m.group(1).upper(), 1.0)
 
 
 def _rotate(p, rot):
