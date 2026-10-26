@@ -45,7 +45,7 @@ def test_fp_share_needs_the_same_library_footprint(tmp_path):
 def test_project_json_stdout_is_only_json(tmp_path, monkeypatch):
     from ecadlib import altium_project as AP
     prj = {"name": "B", "sheets": [], "components": [], "variants": [], "warnings": []}
-    monkeypatch.setattr(AP, "load_project", lambda p: prj)
+    monkeypatch.setattr(AP, "load_project", lambda p, rules=None: prj)
     monkeypatch.setattr(AP, "bom_groups", lambda p, v: [{"qty": 1}])
     monkeypatch.setattr(AP, "write_bom_csv", lambda g, out, v: out)
     o, e = io.StringIO(), io.StringIO()

@@ -903,7 +903,7 @@ class Workspace:
         reports/project_<name>.csv, which triage/librarian also accept, as does the project file itself."""
         from . import altium_project as AP
         p = self._bom_path(project)
-        prj = AP.load_project(p)
+        prj = AP.load_project(p, self.rules())        # house parameter names ([parameters] names) for base and variant
         groups = AP.bom_groups(prj, variant)
         variants = [v["name"] for v in prj["variants"]]
         out = AP.write_bom_csv(groups, self.root / "reports" / f"project_{self._key(p)}{'_' + self.safe_name(variant) if variant else ''}.csv", variants)

@@ -562,7 +562,7 @@ def load_project(path, rules=None, root=None):
         warnings.append(f"no Manufacturer Part Number parameter on {len(by_comment)} component(s) "
                         f"({', '.join(by_comment[:8])}{' ...' if len(by_comment) > 8 else ''}): their Comment is used as the MPN")
     return {"name": proj["name"], "path": proj["path"], "components": comps, "variants": proj["variants"],
-            "parameters": proj["parameters"], "warnings": list(dict.fromkeys(warnings)),
+            "parameters": proj["parameters"], "warnings": list(dict.fromkeys(warnings)), "rules": rules,
             "bomdocs": [str(b) for b in bomdocs], "sheets": [str(s) for s in proj["schdocs"]]}
 
 
@@ -737,11 +737,13 @@ def _group_key(c):
     return "LIB:" + "|".join(x.upper() for x in (c["libref"], c["value"], c["footprint"]))
 
 
-def bom_groups(project, variant=None):
-    """Grouped BOM lines (fitted ones, then one DNP line per not-fitted group) with per-variant quantities."""
+def bom_groups(project, variant=None, rules=None):
+    """Grouped BOM lines (fitted ones, then one DNP line per not-fitted group) with per-variant quantities. rules (or
+    the rules load_project read with) give the house parameter names a variant's parameter change is read by."""
+    rules = rules if rules is not None else project.get("rules")
     comps = [c for c in project["components"] if c["in_bom"]]
-    base = apply_variant(comps, variant_of(project, variant))
-    per_var = {v["name"]: {c["designator"]: c["fitted"] for c in apply_variant(comps, v)} for v in project["variants"]}
+    base = apply_variant(comps, variant_of(project, variant), rules)
+    per_var = {v["name"]: {c["designator"]: c["fitted"] for c in apply_variant(comps, v, rules)} for v in project["variants"]}
     groups = {}
     for c in base:
         g = groups.setdefault((_group_key(c), c["fitted"]), {"comps": [], "fitted": c["fitted"]})
@@ -781,7 +783,7 @@ def bom_lines(path, variant=None, rules=None, root=None):
     for w in prj["warnings"]:
         print(f"  warning: {w}", file=sys.stderr)
     lines = []
-    for g in bom_groups(prj, variant):
+    for g in bom_groups(prj, variant, rules):
         ln = {f: g[f] for f in LINE_FIELDS if g.get(f)}
         ln["designator"], ln["qty"] = g["designator"], g["qty"] if not g["dnp"] else str(g["count"])
         ln["dnp"] = g["dnp"]
@@ -899,7 +901,7 @@ def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, r
                          "components": len(prj["components"])})
         warnings += [f"{prj['name']}: {w}" for w in prj["warnings"]]
         comps = [c for c in prj["components"] if c["in_bom"]]
-        fits = {v["name"]: {c["designator"]: c["fitted"] for c in apply_variant(comps, v)} for v in prj["variants"]}
+        fits = {v["name"]: {c["designator"]: c["fitted"] for c in apply_variant(comps, v, rules)} for v in prj["variants"]}
         for c in comps:
             key = _group_key(c)
             e = parts.setdefault(key, {"key": key, "mpn": c["mpn"], "manufacturer": c["manufacturer"], "design_item_ids": set(),
@@ -1094,7 +1096,7 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the grouped BOM as JSON")
     a = ap.parse_args(argv)
     try:
-        prj = load_project(a.project)
+        prj = load_project(a.project, RU.resolve(None, Path(a.project).parent) if RU else None)
         groups = bom_groups(prj, a.variant)
     except (ValueError, FileNotFoundError) as e:
         print(f"ecadlib project: {e}", file=sys.stderr)

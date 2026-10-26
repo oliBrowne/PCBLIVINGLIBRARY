@@ -70,6 +70,19 @@ def test_comment_variation_moves_a_comment_mpn(tmp_path):
     assert not _lines(prj, "V2")[0].get("mpn")
 
 @lite
+def test_variant_on_house_named_mpn_parameter(tmp_path):
+    """R-AW-3: rules [parameters] names map Manufacturer Part Number -> MfrPN; a variant that changes MfrPN must change
+    the variant's MPN (apply_variant used the built-in names only)."""
+    from ecadlib import rules as RU
+    rules = RU.load({"parameters": {"names": {"Manufacturer Part Number": "MfrPN", "Manufacturer": "Maker"}}})
+    sch = {"MfrPN": "LM358DR", "Maker": "TI"}
+    prj = _project(tmp_path, params=[("MfrPN", "LM358BIDR"), ("Maker", "Texas Instruments")], sch=sch)
+    assert _lines(prj, None, rules)[0]["mpn"] == "LM358DR"
+    ln = _lines(prj, "V2", rules)[0]
+    assert ln["mpn"] == "LM358BIDR" and ln["manufacturer"] == "Texas Instruments", ln
+
+
+@lite
 def test_where_used_writes_utf8_on_a_narrow_locale(tmp_path, monkeypatch):
     """R-AW-4: the .md / .json were written in the locale encoding: 'RES 10kΩ' crashed on cp1252 after the CSVs."""
     from ecadlib import altium_project as AP
