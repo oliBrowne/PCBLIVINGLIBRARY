@@ -45,8 +45,11 @@ def test_library_path_matches_altium_lib_layout():
 def test_export_closes_sqlite():
     with warnings.catch_warnings(record=True) as w, tempfile.TemporaryDirectory() as d:
         warnings.simplefilter("always")
-        X.main(["examples/sample_bom.csv", "-o", d]); gc.collect()
+        # the draft path opens sqlite (a BOM without --draft is refused before it does: round 3, R-FX-10)
+        rc = X.main(["examples/sample_bom.csv", "-o", d, "--draft"]); gc.collect()
+        wrote = sorted(p.name for p in Path(d).glob("*.sqlite"))
         leaks = [str(x.message) for x in w if issubclass(x.category, ResourceWarning) and "sqlite" in str(x.message)]
+    assert not rc and wrote, (rc, wrote)
     assert not leaks, leaks
 
 
