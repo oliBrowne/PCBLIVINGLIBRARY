@@ -6,7 +6,9 @@ a 5.3 mm body; `QFN-16` at 0.5 and 0.65 mm pitch). Before this module the second
 part's file. Now a part shares a file only when the footprints are the same: the same pads, pad shapes, holes and
 courtyard (the geometry hash `ecadlib dedupe` uses), and, when both came from a KiCad or standard footprint, the same
 footprint name: KiCad's L_0603 and LED_0603 (C_0201 and LED_0201) have the same pads, but an inductor released on
-the LED's polarity mark and 3D body is wrong, and the LED's symbol is chosen by its footprint. Otherwise it gets its own name, tried in this order:
+the LED's polarity mark and 3D body is wrong, and the LED's symbol is chosen by its footprint; and, when the part
+brings its own 3D body (an EasyEDA model, a datasheet height), a body as high (dedupe.HEIGHT_TOL): two crystals on one
+land with 0.6 and 1.8 mm bodies get a file each (R-CV-2). Otherwise it gets its own name, tried in this order:
 
   1. the real package name of its footprint (the KiCad / standard / EasyEDA footprint name), when it starts with
      the BOM name, else <BOM name>_<real name>; e.g. SOIC-14 -> SOIC-14_5.3x10.2mm_P1.27mm
@@ -158,23 +160,54 @@ def lib_name(source):
     return src.rsplit(":", 1)[-1].lower() if src.startswith(("kicad:", "standard:")) else ""
 
 
-def same_fp(rec, h, source, out, cache, text=None):
-    """A footprint record holds the same footprint: same pads, and the same library footprint when both name one.
-    h: the new footprint's digest; text: its .kicad_mod, for a record hashed by an older digest version."""
+def height_of(rec, out, cache):
+    """A footprint record's 3D body height in mm: recorded ("height"), else read from its .PcbLib (records written
+    before heights were recorded), else None (no body, or the file is gone)."""
+    if "height" in rec:
+        return rec["height"]
+    f = str(rec.get("file") or "")
+    key = ("height", f)
+    if key not in cache:
+        cache[key] = None
+        p = Path(out) / f if f else None
+        if p and p.is_file():
+            from . import dedupe as DD
+            try:
+                cache[key] = max((x for x in (DD.body_height(fp) for fp in AL.read_pcblib(p)) if x), default=None)
+            except Exception:
+                pass
+    return cache[key]
+
+
+def same_body(rec, height, out, cache):
+    """The record's 3D body is as high as the new part's (dedupe.HEIGHT_TOL), or one of them is unknown."""
+    from . import dedupe as DD
+    if height is None:
+        return True
+    rh = height_of(rec, out, cache)
+    return rh is None or abs(float(rh) - float(height)) <= DD.HEIGHT_TOL
+
+
+def same_fp(rec, h, source, out, cache, text=None, height=None):
+    """A footprint record holds the same footprint: same pads, the same library footprint when both name one, and a
+    3D body as high (height: the new part's own body height, from its own model or a part-specific height; None:
+    the part takes the footprint's body). h: the new footprint's digest; text: its .kicad_mod, for a record hashed
+    by an older digest version."""
     a, b = lib_name(rec.get("source")), lib_name(source)
     rh, v = hash_of(rec, out, cache)
     if v != HASH_V and text is not None:
         h = digest(text, v)
-    return rh == h and (not a or not b or a == b)
+    return rh == h and (not a or not b or a == b) and same_body(rec, height, out, cache)
 
 
-def pick(written, models, name, text, source, part, out, cache):
-    """-> (name, path, record to share or None). written: {PcbLib path: footprint record} of this run."""
+def pick(written, models, name, text, source, part, out, cache, height=None):
+    """-> (name, path, record to share or None). written: {PcbLib path: footprint record} of this run.
+    height: the part's own 3D body height (mm), when it has one; a footprint with another body is not shared."""
     h, real = digest(text), real_name(text, source)
     fold = lambda s: AL.file_stem(s).casefold()  # Windows / macOS file systems ignore case: SOIC-8 and soic-8 are one file
     for rec in written.values():               # same pads under a name already made for this BOM name: share it
         f = str(rec.get("file") or "")
-        if f.endswith(".PcbLib") and fold(base_of(rec)) == fold(name) and same_fp(rec, h, source, out, cache, text):
+        if f.endswith(".PcbLib") and fold(base_of(rec)) == fold(name) and same_fp(rec, h, source, out, cache, text, height):
             return rec.get("name") or Path(f).stem, str(Path(out) / f), rec, h
     taken = {str(p).casefold(): (p, rec) for p, rec in written.items()}
     cands = candidates(name, real, part)
@@ -183,7 +216,7 @@ def pick(written, models, name, text, source, part, out, cache):
         have, rec = taken.get(pcb.casefold(), (pcb, None))
         if rec is None:                        # nobody in this run has it (a file left from an earlier run of
             return c, pcb, None, h             # this part, or of a part no longer in the BOM, is rewritten)
-        if same_fp(rec, h, source, out, cache, text):   # its file under its name (the case it was written in)
+        if same_fp(rec, h, source, out, cache, text, height):   # its file under its name (the case it was written in)
             return rec.get("name") or c, have, rec, h
     c = cands[-1]                              # <name>_<part> is this part's own: rewrite it
     return c, str(Path(models) / "PcbLib" / f"{AL.file_stem(c)}.PcbLib"), None, h

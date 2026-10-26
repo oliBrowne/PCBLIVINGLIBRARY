@@ -413,7 +413,9 @@ class Run:
         """One file per footprint, shared only by parts whose pads are the same (ecadlib/fp_share.py).
         model: a downloaded 3D model already placed on the footprint (easyeda_model), the part's body and height."""
         bom_name = name
-        name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes)
+        own_h = model["info"].get("height") if model else height    # the part's own body: shared only with one as high
+        name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes,
+                                     own_h)
         renamed = {"renamed_from": bom_name} if name != bom_name else {}
         if same is not None:                    # (its own file from an earlier run, kept for a skipped part: not shared)
             st["footprint"] = {**{k: v for k, v in same.items() if k not in ("renamed_from", "chosen")},
@@ -423,7 +425,11 @@ class Run:
             self._relink(st, bom_name, name)
             return
         pcb, stem = Path(pcb), AL.file_stem(name)
-        notes = [f"named {name}: footprint {bom_name} is another part's, with other pads"] if renamed else []
+        body = renamed and own_h is not None and any(       # same pads, but another 3D body (R-CV-2)
+            FS.base_of(r).casefold() == bom_name.casefold() and FS.same_fp(r, h, source, self.out, self.hashes, text)
+            for r in self.written.values())
+        notes = [f"named {name}: footprint {bom_name} is another part's, with "
+                 + (f"another 3D body (this part's is {own_h} mm high)" if body else "other pads")] if renamed else []
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes,
                                     K.KICAD_LICENSE if source.startswith("kicad:") else "")
         _hold_lost_copper(st, name, notes)
@@ -447,7 +453,7 @@ class Run:
         kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
-                           "name": name, "hash": h, "hash_v": FS.HASH_V, **renamed,
+                           "name": name, "hash": h, "hash_v": FS.HASH_V, "height": fp.get("height_mm") or None, **renamed,
                            **({"model": {"source": f"easyeda:{model['ref']['uuid']}", "url": model["ref"]["url"],
                                          "title": model["ref"]["title"], "credit": EC.CREDIT}} if model else {})}
         self.written[str(pcb)] = st["footprint"]

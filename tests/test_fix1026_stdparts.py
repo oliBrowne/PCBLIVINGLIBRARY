@@ -484,3 +484,55 @@ def test_dedupe_key_of_a_plain_footprint_is_unchanged():
     with tempfile.TemporaryDirectory() as d:
         AL.write_pcblib(Path(d) / "a.PcbLib", [K.convert_footprint(plain, "X", "", [])[0]])
         assert DD.fp_key_pcblib(AL.read_pcblib(Path(d) / "a.PcbLib")[0]) == old
+
+
+# --- R-CV-2: a part with its own 3D body shares a footprint file only with one as high ----------------------------
+
+@lite
+def test_fp_share_pick_splits_another_body_height(tmp_path):
+    from ecadlib import fp_share as FS
+    written = {str(tmp_path / "models/PcbLib/QFN-16.PcbLib"): _rec(FS.digest(EP_FULL), hash_v=FS.HASH_V, height=0.6)}
+    pick = lambda h: FS.pick(written, tmp_path / "models", "QFN-16", EP_FULL, "datasheet", "PARTB", tmp_path, {}, h)
+    assert pick(None)[2] is not None                  # no own body: takes the footprint's
+    assert pick(0.63)[2] is not None                  # within dedupe.HEIGHT_TOL
+    got = pick(1.8)
+    assert got[2] is None and got[0] != "QFN-16", got
+
+
+@lite
+def test_fp_share_old_record_height_is_read_from_its_pcblib(tmp_path):
+    """A record written before heights were recorded: its .PcbLib's body says how high it is."""
+    from ecadlib import altium_lib as AL, fp_share as FS, kicad_import as K
+    f, _ = K.convert_footprint(EP_FULL, "QFN-16", notes=[])
+    f["bodies"].append({"pts": [(-2, -2), (2, -2), (2, 2), (-2, 2)], "height": 0.9})
+    (tmp_path / "models/PcbLib").mkdir(parents=True)
+    AL.write_pcblib(tmp_path / "models/PcbLib/QFN-16.PcbLib", [f])
+    written = {str(tmp_path / "models/PcbLib/QFN-16.PcbLib"): _rec(FS.digest(EP_FULL), hash_v=FS.HASH_V)}
+    pick = lambda h: FS.pick(written, tmp_path / "models", "QFN-16", EP_FULL, "datasheet", "PARTB", tmp_path, {}, h)
+    assert pick(0.9)[2] is not None
+    assert pick(1.8)[2] is None
+
+
+@lite
+def test_librarian_gives_a_crystal_with_another_model_its_own_file(tmp_path):
+    """Two EasyEDA crystals on one land with 0.6 and 1.8 mm models: the second got the first's file and body."""
+    from ecadlib import altium_lib as AL, dedupe as DD, easyeda_3d as E3, easyeda_convert as EC, fp_tidy as FT
+    from ecadlib import librarian as L, step_gen as SG
+    r = json.loads((Path(__file__).parent / "fixtures/easyeda_live/C9002.json").read_text())["result"]
+    ds = r["packageDetail"]["dataStr"]
+    ref = E3.model_ref(ds)
+    run = L.Run(tmp_path, None, None, [], [])
+    got = {}
+    for part, h in (("XTAL_A", 0.6), ("XTAL_B", 1.8), ("XTAL_C", 0.6)):
+        text, _ = SG.generate({"name": "X", "package_type": "chip", "pin_count": 2, "body_length": {"nom": 3.2},
+                               "body_width": {"nom": 2.5}, "terminal_length": {"nom": 0.5}}, height=h)
+        placed, info = E3.place(text, ref)
+        m = {"text": placed, "info": info, "ref": dict(ref, uuid=ref["uuid"][:-1] + part[-1])}
+        st = {"name": part, "symbol": None, "footprint": None, "review": [], "tried": [], "verify": []}
+        kmod = FT.tidy(EC.footprint_to_kicad(ds, "CRYSTAL-SMD_4P-L3.2-W2.5-BL", []), [])
+        run.put_fp(st, kmod, "CRYSTAL-SMD_4P-L3.2-W2.5-BL", "easyeda:C9002", None, model=m)
+        fp = st["footprint"]
+        got[part] = (fp["file"], DD.body_height(AL.read_pcblib(tmp_path / fp["file"])[0]))
+    assert got["XTAL_A"][0] != got["XTAL_B"][0], got
+    assert abs(got["XTAL_B"][1] - 1.8) < 0.05 and abs(got["XTAL_A"][1] - 0.6) < 0.05, got
+    assert got["XTAL_C"][0] == got["XTAL_A"][0], got      # as high: shared as before
