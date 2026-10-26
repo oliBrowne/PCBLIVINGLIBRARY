@@ -148,3 +148,19 @@ def test_offline_family_height_is_labelled_a_package_default():
     assert any("package default" in x and "verify" in x for x in notes), notes
     fp, notes = _offline_kicad_body("SOP-20_7.5x12.8mm_P1.27mm")       # in the table: its height and its label
     assert any("2.65 mm (standard table height_max)" in x for x in notes), notes
+
+
+# ---------------------------------------------------------------- R-3D-4
+def test_qsop_gets_a_body_offline():
+    """QSOP (JEDEC MO-137, 1.75 max) had no height anywhere: no 3D body offline. Now a package-default height."""
+    from ecadlib import kicad_import as K, release_check as RC
+    n = "QSOP-16_3.9x4.9mm_P0.635mm"
+    s = SG.spec_from_name(n)
+    assert SG.height_source(s) == (1.75, SG.PACKAGE_DEFAULT)
+    lo, hi, fam = RC.height_range(n)
+    assert fam and lo <= 1.75 <= hi
+    fp = {"name": n, "pads": _dual(16, 0.635, 2.7, 1.5, 0.4), "bodies": [], "tracks": [], "regions": [], "arcs": []}
+    notes = []
+    K.add_body(fp, ("x", n), None, None, False, notes, gen_step=True)
+    assert fp["height_mm"] == 1.75 and any(b.get("step") for b in fp["bodies"]), notes
+    assert any("package default" in x for x in notes), notes
