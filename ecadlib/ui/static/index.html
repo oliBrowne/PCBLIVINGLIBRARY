@@ -701,7 +701,7 @@ function render() {
     return `<tr><td>${r.line}</td><td>${esc(r.designator)}</td><td><code>${esc(r.mpn) || "–"}</code><div class="muted">${esc(r.manufacturer)}</div></td>
       <td>${esc(r.package)}<div class="muted">${esc(r.value)}</div></td><td><span class="pill ${cls}">${esc(lab)}</span></td>
       <td><div>${esc(r.local_symbol) || "<span class=muted>–</span>"}</div><div class="muted mono">${esc(r.local_footprint)}</div></td>
-      <td>${r.src ? esc(r.src) + ": " : ""}${src}</td><td class="notes">${esc(r.notes)}</td><td>${act}</td></tr>`;
+      <td>${r.src ? esc(r.src) + ": " : ""}${esc(src)}</td><td class="notes">${esc(r.notes)}</td><td>${act}</td></tr>`;
   }).join("") || `<tr><td colspan="9" class="muted">No lines match.</td></tr>`;
   const todo = t.rows.filter(r => !String(r.status).startsWith("in_library") && !String(r.status).startsWith("dnp")).length;
   if (!t.bom) nextStep($("#tnext"), "This is a saved result. Its BOM file is no longer in the workspace, so upload the BOM again to work on it.", null, "s-warn");
