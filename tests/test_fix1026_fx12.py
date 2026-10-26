@@ -48,3 +48,43 @@ def test_fx12_1_oval_hole_measured_along_its_slot():
     """A 1.2 x 0.5 mm slot: the ring 0.5 mm from its centre is inside the slot's ends (x +-0.6)."""
     got = _hole_findings(_ring_fp(RING, hole="1.2 0.5").replace("(drill 1.2)", "(drill oval 1.2 0.5)"))
     assert got and got[0][0] == "error", got
+
+
+# ---------------------------------------------------------------- R-FX12-5: a pad at an odd angle is its turned shape
+def _diamond_ep(p1, size1="0.2 0.2", ep_shape="rect", extra=""):
+    """UDFN-4-1EP_1x1mm / OnSemi XDFN4-1EP style: the exposed pad turned 45 degrees between corner pads."""
+    return f'''(footprint "T" (layer "F.Cu")
+  (fp_rect (start -1 -1) (end 1 1) (stroke (width 0.05)) (fill none) (layer "F.CrtYd"))
+  (pad "1" smd rect (at {p1}) (size {size1}) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "5" smd {ep_shape} (at 0 0 45) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask"){extra})
+)'''
+
+
+def _copper(text):
+    from ecadlib import footprint_check as FC
+    return [i for i in FC.check(text) if i[1] == "copper" and "pad" in i[2]]
+
+
+def test_fx12_5_pad_beside_a_turned_pad_is_no_overlap():
+    """Before: the 45 degree pad was its bounding box (+-0.354 mm): 'pads 1 and 5 overlap', a hard, false error.
+    Its real edge (x + y = 0.354) is 0.10 mm from pad 1's corner (0.25, 0.25)."""
+    got = _copper(_diamond_ep("0.35 0.35"))
+    assert not any(i[0] == "error" for i in got), got
+    assert any("0.10" in i[2] for i in got), got                       # still below the solder-mask web: a warning
+
+
+def test_fx12_5_turned_pad_overlap_still_caught():
+    got = _copper(_diamond_ep("0.2 0.2"))
+    assert any(i[0] == "error" and "overlap" in i[2] for i in got), got
+    # roundrect and a turned circle: a circle is round at any angle (its box is no bigger)
+    rr = _diamond_ep("0.35 0.35", ep_shape="roundrect", extra=" (roundrect_rratio 0.25)")
+    assert not any(i[0] == "error" for i in _copper(rr)), _copper(rr)
+    circ = _diamond_ep("0.45 0", ep_shape="circle")                   # circle r 0.25, pad 1 from x 0.35: 0.10 mm
+    assert not any(i[0] == "error" for i in _copper(circ)), _copper(circ)
+
+
+def test_fx12_5_turned_pad_shape():
+    from ecadlib import footprint_check as FC, sexpr
+    p = [q for q in FC._pad_rects(sexpr.parse(_diamond_ep("3 3"))) if q["num"] == "5"][0]
+    assert p["polys"] and abs(FC._pt_pad(0.354, 0.0, p)) < 0.002 and 0.16 < FC._pt_pad(0.3, 0.3, p) < 0.18, p
+    assert abs(p["w"] - 0.707) < 0.002 and abs(p["h"] - 0.707) < 0.002, p      # the box is still the turned box

@@ -137,6 +137,19 @@ def _circle(cx, cy, r, n=48):
     return [(cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n)) for i in range(n)]
 
 
+def _rounded_rect(w, h, rad, n=8):
+    """A w x h rectangle centred on the origin with corners rounded by rad (n segments each), as a polygon."""
+    rad = max(0.0, min(rad, w / 2, h / 2))
+    if rad <= 0:
+        return [(-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)]
+    out = []
+    for cx, cy, a0 in ((w / 2 - rad, -h / 2 + rad, -90), (w / 2 - rad, h / 2 - rad, 0),
+                       (-w / 2 + rad, h / 2 - rad, 90), (-w / 2 + rad, -h / 2 + rad, 180)):
+        out += [(cx + rad * math.cos(math.radians(a0 + 90 * i / n)), cy + rad * math.sin(math.radians(a0 + 90 * i / n)))
+                for i in range(n + 1)]
+    return out
+
+
 def _custom_polys(p, w, h):
     """A KiCad custom pad's copper in its own frame (y down, not turned): the anchor and every primitive as polygons.
     Filled gr_poly / gr_rect / gr_circle are their area; strokes (gr_line, gr_arc, gr_curve, outlines and the
@@ -198,9 +211,14 @@ def _pad_rects(tree):
             ys = [v for q in polys for _, v in q]
             x, y = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
             w, h = max(xs) - min(xs), max(ys) - min(ys)
-        odd_angle = abs(rot / 90 - round(rot / 90)) > 1e-6 and polys is None
-        if odd_angle:                                # any other angle: use the rotated pad's bounding box
-            c, s_ = abs(math.cos(math.radians(rot))), abs(math.sin(math.radians(rot)))
+        odd_angle = abs(rot / 90 - round(rot / 90)) > 1e-6 and polys is None and shape0 != "circle"
+        if odd_angle:                                # any other angle: the turned shape as a polygon (UDFN-4 1x1's 45
+            c, s_ = math.cos(math.radians(rot)), math.sin(math.radians(rot))    # degree pad), its box for the sweep
+            rr = sexpr.first(p, "roundrect_rratio")
+            rad = (min(w, h) / 2 if shape0 == "oval" else
+                   _f(rr[1]) * min(w, h) if shape0 == "roundrect" and rr else 0.0)
+            polys = [[(x + u * c + v * s_, y - u * s_ + v * c) for u, v in _rounded_rect(w, h, rad)]]
+            c, s_ = abs(c), abs(s_)
             w, h = w * c + h * s_, w * s_ + h * c
         elif round(rot / 90) % 2 and polys is None:
             w, h = h, w
