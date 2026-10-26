@@ -306,6 +306,10 @@ CODES = {
                               "it was left out of the symbol, as KiCad's symbol does.",
                               "Check in the datasheet that pin {pin} is a cut lead and not connected.",
                               [r"symbol: pin (?P<pin>\S+) \(N\.C\., the cut lead\) left out"]),
+    "symbol.unknown_pin_type": ("The datasheet gives pin types ecadlib does not know ({pins}), so those pins were drawn as "
+                                "passive, which KiCad's ERC and Altium's checks treat as anything goes.",
+                                "Set each listed pin's electrical type in the symbol (input, output, power ...) from the datasheet.",
+                                [r"symbol: pin type not known, drawn passive: (?P<pins>.+)"]),
     "datasheet.dip_holes": ("The datasheet prints no hole size for this DIP, so KiCad's DIP hole and pad (0.8 mm / 1.6 mm) "
                             "were used in place of the sizes the read chose.",
                             "Check the maker's recommended hole if the leads are unusually wide.",

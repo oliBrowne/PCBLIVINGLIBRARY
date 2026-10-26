@@ -20,7 +20,7 @@ def test_ds2_01_mpnless_passives_10x_apart_are_not_one_part(tmp_path):
     names = sorted(i["name"] for i in json.loads(plan.read_text(encoding="utf-8")))
     assert names == ["CAP-0603-2.2u", "CAP-0603-22u", "RES-0603-4.7k", "RES-0603-47k"], names
     with contextlib.redirect_stdout(io.StringIO()):
-        assert X.main([str(bom), "-o", str(tmp_path / "dbl")]) in (0, None)
+        assert X.main([str(bom), "--draft", "-o", str(tmp_path / "dbl")]) in (0, None)
     (tmp_path / "lib" / "a365_state.json").write_text(json.dumps(
         {n: {"revision": "r1", "lifecycle": None, "symbols": [], "footprints": []} for n in names}))
     r = DD.run(plan, libs=[tmp_path / "dbl"], do_merge=True, kinds=("mpn",), log=lambda *a, **k: None)
@@ -46,7 +46,7 @@ def test_ds2_01_part_named_by_its_part_number_keeps_its_mpn_key(tmp_path):
     r = DD.run(plan, kinds=("mpn",), log=lambda *a, **k: None)
     assert _mpn_groups(r) == [("LM358DR", [("LM358DR", "plan"), ("LM358DR/TR", "plan")])], _mpn_groups(r)
     with contextlib.redirect_stdout(io.StringIO()):
-        assert X.main([str(bom), "-o", str(tmp_path / "dbl")]) in (0, None)
+        assert X.main([str(bom), "--draft", "-o", str(tmp_path / "dbl")]) in (0, None)
     r = DD.run(plan, libs=[tmp_path / "dbl"], kinds=("mpn",), log=lambda *a, **k: None)
     assert _mpn_groups(r) == [("LM358DR", [("LM358DR", "dblib"), ("LM358DR/TR", "dblib")])], _mpn_groups(r)
 

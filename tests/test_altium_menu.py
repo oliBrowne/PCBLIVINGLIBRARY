@@ -631,14 +631,20 @@ def test_publish_reports_a_part_the_publisher_held_again():
     for it in items:
         it["description"] = ""                                   # after the check
     plan_f.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    # a released part: the edit that fails the check is held for approval and the released revision (r1, with its
+    # Description) is what both publishers ship (change control runs the release check on a pass / warn change)
+    from ecadlib import ledger as LG
     for tool, lib in (("altium", cfg["library"]), ("kicad", str(Path(cfg["library"]).parent / "kicad lib"))):
         pub = AM.publish(ws, rel, lib, cfg["name"], tool=tool)
-        assert pub["held"] == {"CAP-0402-100nF": "held: fields: Description is empty"}, (tool, pub)
-        with mock.patch.object(AM, "publish", lambda *a, **k: pub):          # fill: the same hold, in its message
-            r = AM._fill_result(cfg, ws, rel, {"parts": 1, "ready": 1, "held": 0, "awaiting_approval": 0,
-                                               "duplicates": 0}, AM.Progress())
-        assert r["status"] == "error" and "Not published: CAP-0402-100nF: held: fields: Description is empty" in \
-            r["message"], (tool, r)
+        assert not pub["problems"] and not pub["held"], (tool, pub)
+    events = [(e.get("event"), e.get("part"), e.get("revision")) for e in LG.Ledger(plan_f.parent).lines()]
+    assert ("hold", "CAP-0402-100nF", None) in events and ("release", "CAP-0402-100nF", 2) not in events, events
+    pub = {"target": "folder", "install": [], "problems": [], "held": {"CAP-0402-100nF": "held: fields: Description is empty"}}
+    with mock.patch.object(AM, "publish", lambda *a, **k: pub):          # fill: a publisher's hold, in its message
+        r = AM._fill_result(cfg, ws, rel, {"parts": 1, "ready": 1, "held": 0, "awaiting_approval": 0,
+                                           "duplicates": 0}, AM.Progress())
+    assert r["status"] == "error" and "Not published: CAP-0402-100nF: held: fields: Description is empty" in \
+        r["message"], r
 
 
 def test_open_queue_starts_reuses_and_refuses():

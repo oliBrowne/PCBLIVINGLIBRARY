@@ -273,6 +273,7 @@ def test_workspace_plan_rewrites_take_the_plan_lock():
     from ecadlib.app import Workspace
     with tempfile.TemporaryDirectory() as d:
         ws = Workspace(Path(d) / "ws")
+        ws.PLAN_LOCK_WAIT = 0.3                  # a plan write waits this long for plan.lock, then is refused
         bom = ws.root / "uploads" / "b.csv"
         bom.write_text("Designator,Value,MPN\nU1,X,P1\n", encoding="utf-8")
         _, plan = _agent_ws(d)
