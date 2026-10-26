@@ -471,6 +471,17 @@ def compare_pins(a, b, ep=()):
     return out
 
 
+def names_compared(a, b):
+    """True when both reads name most of the pins they share (a name that is only the pin's own number is no name):
+    only then do their pin names say anything. A second read that leaves the names empty (AQY282GS, TC2030 in the
+    2026-10-23 cache) compared none, so it never agrees on them (review R-RT-3)."""
+    b = [(n, s) for n, s in b if not NO_PIN.search(str(s or ""))]
+    na, nb = {str(n): str(s or "").strip() for n, s in a}, {str(n): str(s or "").strip() for n, s in b}
+    shared = set(na) & set(nb)
+    named = [n for n in shared if na[n] and nb[n] and not (numbered(n, na[n]) and numbered(n, nb[n]))]
+    return bool(shared) and 2 * len(named) > len(shared)
+
+
 def ep_numbers(first, second, first_pins, pins):
     """The pad number past the leads, when both reads have an exposed pad and at most one such number appears across
     both (more is no exposed pad but pins one read left out; 13 in one read and 14 in the other is a numbering
@@ -659,8 +670,12 @@ def against_read(first, second, first_pins, pins):
     c = compare(first, second, "read")
     if first_pins and pins:
         extra = compare_pins(first_pins, pins, ep_numbers(first, second, first_pins, pins))
-        c["compared"] += ["pins", "pin_names"]
-        c["agreed"] += [f for f in ("pins", "pin_names") if f not in {d["field"] for d in extra}]
+        fields = ["pins", "pin_names"]
+        if "pin_names" not in {d["field"] for d in extra} and not names_compared(first_pins, pins):
+            fields = ["pins"]                         # empty names on one side: not compared, never agreed (R-RT-3)
+            c["not_compared"].append("pin_names")
+        c["compared"] += fields
+        c["agreed"] += [f for f in fields if f not in {d["field"] for d in extra}]
         c["disagreed"] += extra
         _type_only(c)
         if c["disagreed"]:

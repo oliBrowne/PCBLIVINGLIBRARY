@@ -60,3 +60,25 @@ def test_rrt1_the_route_keeps_the_plain_incomplete_answer_over_one_with_overlapp
            "route": {"attempts": []}}
     out = rd._walk(job)
     assert out["final"] is True and out["key"] == "k1", out
+
+
+# ---------------------------------------------------------------- R-RT-3
+def test_rrt3_a_second_read_that_names_no_pin_does_not_agree_on_pin_names():
+    """AQY282GS's cached second read gave all four names empty: the LED anode / cathode swap was built 'agreed'.
+    Empty names mean the names were not compared, never that they agreed."""
+    from ecadlib import crosscheck as CC
+    spec = CC.critical({"package_type": "gullwing", "pin_count": 4, "pitch": 2.54})
+    read = [("1", "LED_K"), ("2", "LED_A"), ("3", "OUT"), ("4", "OUT")]
+    blank = [("1", ""), ("2", ""), ("3", ""), ("4", "")]
+    rec = CC.against_read(spec, dict(spec), read, blank)
+    assert "pin_names" not in rec["agreed"] and "pin_names" in rec["not_compared"], rec
+    assert "pins" in rec["agreed"]
+    # one name of four on the second read is still not a comparison of the names
+    rec = CC.against_read(spec, dict(spec), read, [("1", "LED_K"), ("2", ""), ("3", ""), ("4", "")])
+    assert "pin_names" not in rec["agreed"] and "pin_names" in rec["not_compared"], rec
+    # names on both sides: compared and agreed as before
+    rec = CC.against_read(spec, dict(spec), read, list(read))
+    assert "pin_names" in rec["agreed"] and "pin_names" not in rec["not_compared"], rec
+    # a real difference among the few named pins is still a disagreement
+    rec = CC.against_read(spec, dict(spec), read, [("1", "LED_A"), ("2", ""), ("3", ""), ("4", "")])
+    assert rec["status"] == "disagreed" and any(d["field"] == "pin_names" for d in rec["disagreed"]), rec
