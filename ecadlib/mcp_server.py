@@ -1009,13 +1009,16 @@ def _check_endpoints(ws, text):
     if loosened:
         raise ValueError(f"save_rules cannot change {', '.join(loosened)}: these are release gates (the Altium 365 "
                          "workspace a real push may go to, the sign-off policy, change control, the release check, "
-                         "the required parameters, the datasheet cross-check). A person must change them, in "
-                         f"{ws._label(f)} or on the rules page of the ecadlib web UI; a model over MCP may not" + keep)
+                         "the required parameters, the datasheet cross-check, the pin-1 names, the courtyard layer). A "
+                         f"person must change them, in {ws._label(f)} or on the rules page of the ecadlib web UI; a "
+                         "model over MCP may only make them stricter" + keep)
 
 
 GATE_SECTIONS = ("altium365", "release", "change")      # every setting under these is a release gate
 GATE_WHOLE = {"release.approvals",                      # a table compared as one value (sign-off policy)
-              "parameters.required", "datasheet.cross_check", "agent.proof.fail_on"}
+              "parameters.required", "datasheet.cross_check", "agent.proof.fail_on",
+              "footprint.pin1", "layers.courtyard"}     # the pin-1 and courtyard checks of the release check
+STRICT = {"off": 0, "pass": 0, "warn": 1, "hold": 2}   # [release] parity / height, [change] classes: one-way stricter
 
 
 def _gates(text, name="ecadlib.toml"):
@@ -1108,15 +1111,57 @@ def _canon(x):
     return x
 
 
+def _listed(v, fold=True):
+    return {(str(x).strip().lower() if fold else str(x).strip()) for x in (v if isinstance(v, list) else [v] if v else [])}
+
+
+def _approvals_loosen(old, new):
+    """True when the [release.approvals] policy `new` lets through something `old` held: fewer approvals, a role or a
+    signer's role less, more signers, self-approval allowed, only --allow parts, other parts, a reject that no longer
+    holds. Any policy is at least as strict as none; a policy that does not parse is refused."""
+    from .approvals import normalize_policy
+    try:
+        o = normalize_policy(dict(old), "old") if isinstance(old, dict) and old else None
+        n = normalize_policy(dict(new), "new") if isinstance(new, dict) and new else None
+    except (ValueError, TypeError):
+        return True
+    none = lambda p: p is None or (p["required"] == 0 and not p["roles"])
+    if none(o):
+        return False
+    if none(n):
+        return True
+    if n["required"] < o["required"] or not set(o["roles"]) <= set(n["roles"]):
+        return True
+    if o["users"] and (not n["users"] or any(u not in o["users"] or not set(r) <= set(o["users"][u])
+                                             for u, r in n["users"].items())):
+        return True
+    if (o["no_self_approval"] and not n["no_self_approval"]) or (o["reject_blocks"] and not n["reject_blocks"]):
+        return True
+    if o["applies_to"] == "all" and n["applies_to"] != "all":
+        return True
+    return bool(n["parts"]) and n["parts"] != o["parts"]      # every part, or the same patterns
+
+
 def _loosens(k, old, new):
-    """True when save_rules may not make this change of a gate setting. The required parameters may only grow and the
-    cross-check may change between its checking modes; anything else is refused when it changes at all."""
+    """True when save_rules may not make this change of a gate setting. A change that only makes a gate stricter
+    saves: more required parameters, fewer accepted pin-1 names, warn -> hold ([release] parity / height, [change]
+    classes), more change approvers, a stricter sign-off policy (_approvals_loosen); the cross-check may change between
+    its checking modes. Anything else is refused when it changes at all (the Altium 365 workspace, the courtyard
+    layer, change.a365_transition, agent.proof.fail_on)."""
     if k == "parameters.required":
-        names = lambda v: {str(x).strip().lower() for x in (v if isinstance(v, list) else [v] if v else [])}
-        return bool(names(old) - names(new))
+        return bool(_listed(old) - _listed(new))
+    if k == "footprint.pin1":                  # pin names: "a1" is not "A1"
+        return bool(_listed(new, fold=False) - _listed(old, fold=False))
     if k == "datasheet.cross_check":
         off = lambda v: str(v or "auto").strip().lower() == "off"
         return off(new) and not off(old)
+    if k == "release.approvals":
+        return _approvals_loosen(old or {}, new or {})
+    if k.split(".")[0] in ("release", "change") and isinstance(old, str) and isinstance(new, str) and \
+            old.strip().lower() in STRICT and new.strip().lower() in STRICT:
+        return STRICT[new.strip().lower()] < STRICT[old.strip().lower()]
+    if k == "change.approvers" and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (old, new)):
+        return new < old
     return json.dumps(_canon(old), sort_keys=True, default=str) != json.dumps(_canon(new), sort_keys=True, default=str)
 
 

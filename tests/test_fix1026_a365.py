@@ -45,7 +45,8 @@ def test_save_rules_over_mcp_cannot_change_release_gates(tmp_path):
             ("change warn", GATED.replace('electrical = "hold"', 'electrical = "warn"')),
             ("change class added", GATED + 'geometry_major = "warn"\n'),
             ("parity off", GATED.replace('parity = "hold"', 'parity = "off"')),
-            ("height", GATED.replace('parity = "hold"', 'parity = "hold"\nheight = "hold"')),
+            ("approvals fewer", GATED.replace("required = 2", "required = 1")),   # height warn -> hold is stricter:
+            ("pin1 widened", GATED + '[footprint]\npin1 = ["1", "A1", "2"]\n'),     # it saves (R-FX11-5)
             ("required narrowed", GATED + '[parameters]\nrequired = ["Manufacturer"]\n'),
             ("cross-check off", GATED + '[datasheet]\ncross_check = "off"\n')):
         err, txt = _save(ws, text)

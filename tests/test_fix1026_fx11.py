@@ -152,6 +152,60 @@ def test_fx11_4_unreadable_policy_holds(tmp_path):
     assert any(w.startswith("sign-off:") and "approvals.json" in w for w in why), why
 
 
+# ---- R-FX11-5: [footprint] pin1 and [layers] courtyard are gates over MCP; a one-way tightening of a gate saves
+@lite
+def test_fx11_5_pin1_and_courtyard_cannot_be_loosened(tmp_path):
+    for label, text in (("pin1 accepts any name", '[footprint]\npin1 = ["1", "A1", "2", "3"]\n'),
+                        ("courtyard on the silkscreen", '[layers]\ncourtyard = "TopOverlay"\n')):
+        root = tmp_path / label.replace(" ", "_")
+        root.mkdir()
+        r = _save(_mcp_ws(root), text)
+        assert r.startswith("REFUSED") and "save_rules cannot change" in r, (label, r)
+    root = tmp_path / "fewer_pin1"
+    root.mkdir()
+    assert _save(_mcp_ws(root), '[footprint]\npin1 = ["1"]\n') == "saved"        # fewer names: stricter
+
+
+@lite
+def test_fx11_5_tightening_saves_loosening_is_refused(tmp_path):
+    start = ('[release]\nparity = "warn"\nheight = "warn"\n[release.approvals]\nrequired = 1\nroles = ["librarian"]\n'
+             '[change]\ngeometry_minor = "warn"\napprovers = 1\n')
+    tighter = {
+        "height warn->hold": start.replace('height = "warn"', 'height = "hold"'),
+        "parity warn->hold": start.replace('parity = "warn"', 'parity = "hold"'),
+        "approvals 1->2": start.replace("required = 1", "required = 2"),
+        "approvals one more role": start.replace('["librarian"]', '["librarian", "hardware"]'),
+        "change warn->hold": start.replace('geometry_minor = "warn"', 'geometry_minor = "hold"'),
+        "change approvers 1->2": start.replace("approvers = 1", "approvers = 2"),
+    }
+    looser = {
+        "parity warn->off": start.replace('parity = "warn"', 'parity = "off"'),
+        "approvals 1->0": start.replace("required = 1", "required = 0"),
+        "approvals role dropped": start.replace('["librarian"]', "[]"),
+        "approvals removed": start.replace('[release.approvals]\nrequired = 1\nroles = ["librarian"]\n', ""),
+        "approvals only --allow parts": start.replace("required = 1", 'required = 1\napplies_to = "allowed"'),
+        "change warn->pass": start.replace('geometry_minor = "warn"', 'geometry_minor = "pass"'),
+        "change approvers 1->... removed": start.replace("approvers = 1\n", 'electrical = "warn"\n'),
+    }
+    for i, (label, text) in enumerate([*tighter.items(), *looser.items()]):
+        root = tmp_path / f"c{i}"
+        root.mkdir()
+        r = _save(_mcp_ws(root, start), text)
+        if label in tighter:
+            assert r == "saved", (label, r)
+        else:
+            assert r.startswith("REFUSED") and "save_rules cannot change" in r, (label, r)
+    for i, (label, text) in enumerate((("no policy -> 2", '[release.approvals]\nrequired = 2\n'),
+                                       ("height default warn -> hold", '[release]\nheight = "hold"\n'))):
+        root = tmp_path / f"fresh{i}"
+        root.mkdir()
+        assert _save(_mcp_ws(root), text) == "saved", label
+    root = tmp_path / "fresh_ws"
+    root.mkdir()
+    r = _save(_mcp_ws(root), '[altium365]\nworkspace = "https://mine.365.altium.com"\n')
+    assert r.startswith("REFUSED"), r                # where a real push goes is not a tightening: a person sets it
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
