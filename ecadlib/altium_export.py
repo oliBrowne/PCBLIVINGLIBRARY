@@ -274,12 +274,16 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             pn = canon[key]
         else:                                   # no MPN: the footprint tells two parts apart unless the name has the
             ident = key or ("" if pkg and pkg in pn else fp_ref)              # package (RES-0603-10k) already
-            if pn in reserved and pn not in seen and key != reserved[pn]:
-                seen[pn] = None                 # held for the part released under this name, further down the BOM
-            if pn in reserved and seen.get(pn) is None and key == reserved[pn]:
-                seen[pn] = ident
-            if seen.setdefault(pn, ident) != ident:   # same synthetic PN, different part (100nF 16V vs 50V; a 10k
+            # Altium part numbers ignore case: names are compared folded, and a name spelt another way is another
+            # part (RES-2512-10m is 10 mOhm, RES-2512-10M 10 MOhm), never one name in two cases (R-FX10-7, R-BF-9)
+            ident, fold = (ident, "" if key else pn), pn.casefold()
+            if pn in reserved and fold not in seen and key != reserved[pn]:
+                seen[fold] = None               # held for the part released under this name, further down the BOM
+            if pn in reserved and seen.get(fold) is None and key == reserved[pn]:
+                seen[fold] = ident
+            if seen.setdefault(fold, ident) != ident:   # same synthetic PN, different part (100nF 16V vs 50V; a 10k
                 pn = f"{pn}-{name_mpn or fp_ref}".replace(" ", "")              # SMD and a 10k axial): keep both
+                seen.setdefault(pn.casefold(), ident)
             if key:
                 canon[key] = pn
         pn = _safe_name(pn, bad)

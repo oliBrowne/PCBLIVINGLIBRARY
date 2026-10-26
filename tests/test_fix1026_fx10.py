@@ -170,3 +170,18 @@ def test_a_passive_alternate_of_another_size_or_kind_or_land_is_still_held():
                       ("R_0603_1608Metric", "ACME-10K-X")):              # no size in the MPN: nothing confirms it
         v, r = L.alternate_footprint({"altium_mpn_source": "Alternate", "mpn": mpn, "footprint": land}, fp)
         assert v and not r, (land, mpn, v, r)
+
+
+# --- R-FX10-7 / R-BF-9: two parts never get names that differ only by case (10m / 10M) ------------------------------
+
+def test_milli_and_mega_parts_get_names_apart_in_any_case():
+    from ecadlib import altium_export as AX, rules as RU
+    lines = [{"designator": "R1", "value": "10m", "footprint": "R_2512_6332Metric", "description": "Shunt 10 milliohm"},
+             {"designator": "R2", "value": "10M", "footprint": "R_2512_6332Metric", "description": "Resistor 10 megaohm"},
+             {"designator": "R3", "value": "2.2m", "footprint": "R_0603_1608Metric", "description": "Shunt"},
+             {"designator": "R4", "value": "2.2M", "footprint": "R_0603_1608Metric", "description": "Resistor"},
+             {"designator": "R5", "value": "10M", "footprint": "R_2512_6332Metric", "description": "Resistor 10 megaohm"}]
+    for rules in (None, RU.load({"naming": {"case": "upper"}}), RU.load({"naming": {"case": "lower"}})):
+        names = [n for df in AX.to_rows(lines, rules=rules).values() for n in df["Part Number"]]
+        assert len(names) == 4, (rules and rules["naming"]["case"], names)       # R5 is R2's part
+        assert len({n.casefold() for n in names}) == 4, (rules and rules["naming"]["case"], names)

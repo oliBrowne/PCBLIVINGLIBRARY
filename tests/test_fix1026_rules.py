@@ -162,7 +162,8 @@ def test_ru3_upper_case_export_keeps_both_resistors():
               "qty": "1"}]
     with contextlib.redirect_stderr(io.StringIO()):
         df = AE.to_rows(lines, None, RU.load({"naming": {"case": "upper"}}))["Resistors"]
-    assert sorted(zip(df["Part Number"], df["Value"])) == [("RES-0603-10M", "10M"), ("RES-0603-10m", "10m")]
+    # R-FX10-7 / R-BF-9: Altium part numbers ignore case, so the second is not 'RES-0603-10M' beside 'RES-0603-10m'
+    assert sorted(zip(df["Part Number"], df["Value"])) == [("RES-0603-10M-R_0603_1608Metric", "10M"), ("RES-0603-10m", "10m")]
 
 
 # ------------------------------------------------------------------ R-RU-4: house parameter names are checked
