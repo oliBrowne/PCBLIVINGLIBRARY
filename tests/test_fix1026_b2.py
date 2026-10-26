@@ -107,3 +107,35 @@ def test_librarian_holds_a_208_mil_flash_on_the_symbols_150_mil_land(tmp_path):
     assert len(items) == 3, list(items)
     for it in items.values():
         assert it["status"] != "ready", (it["name"], it["source"], _holds(it))
+
+
+# --- R-B2-2: two names no rule reads are one land only when they are one name ---------------------------------------
+
+def test_two_unread_package_names_differ_unless_they_are_one_name():
+    from ecadlib.altium_export import lands_differ
+    for a, b in (("TO-263", "Package_TO_SOT_SMD:TO-252-2"), ("D2PAK", "DPAK"), ("TO-247", "TO-220-3_Vertical"),
+                 ("TO-220", "TO-220F-3_Vertical"), ("SOT-563", "Package_TO_SOT_SMD:SOT-363_SC-70-6"),
+                 ("SC-89", "SOT-523"), ("Crystal_SMD_3225-4Pin_3.2x2.5mm", "Crystal_SMD_2520-4Pin_2.5x2.0mm"),
+                 ("USB-C", "Micro-USB"), ("JST PH 2-pin", "JST XH 2-pin"), ("LED 3mm", "LED 5mm"),
+                 ("TO-220-3_Vertical", "TO-220-3_Horizontal_TabDown")):
+        assert lands_differ(a, b) and lands_differ(b, a), (a, b)
+    for a, b in (("TO-263", "TO263"), ("SOT-563", "sot563"), ("Package_TO_SOT_SMD:SOT-23", "SOT23"),
+                 ("Resistor_SMD:R_0603_1608Metric", "0603"), ("Diode_SMD:D_SMA", "DO-214AC")):
+        assert not lands_differ(a, b) and not lands_differ(b, a), (a, b)
+
+
+@lite
+def test_librarian_holds_a_to263_line_on_the_symbols_to252_land(tmp_path):
+    from ecadlib import bom_triage as T
+    from ecadlib.kicad_index import KiCadIndex
+    lib = Path(tmp_path) / "mylib"
+    (lib / "mylib.pretty").mkdir(parents=True)
+    (lib / "mylib.pretty" / "TO-252-2.kicad_mod").write_text(
+        '(footprint "TO-252-2" (layer "F.Cu") (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")))\n', encoding="utf-8")
+    sym = (Path(__file__).parent / "fixtures" / "e2e" / "kicad" / "kicad-symbols" / "Amplifier_Operational.kicad_symdir"
+           / "LM2904.kicad_sym").read_text(encoding="utf-8")
+    sym = sym.replace("LM2904", "LM1117DT").replace('(property "Footprint" ""', '(property "Footprint" "mylib:TO-252-2"', 1)
+    (lib / "LM1117DT.kicad_sym").write_text(sym, encoding="utf-8")
+    rows = T.triage([{"designator": "U1", "qty": "1", "value": "LM1117", "footprint": "TO-263", "mpn": "LM1117DT"}],
+                    KiCadIndex([lib]), [], None)
+    assert "TO-252" not in str(rows[0].get("local_footprint") or ""), rows[0]

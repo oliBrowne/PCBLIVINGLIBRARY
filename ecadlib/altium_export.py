@@ -221,8 +221,11 @@ def lands_differ(a, b):
         if ia["epsize"] and ib["epsize"] and any(abs(x - y) > 0.05 for x, y in zip(ia["epsize"], ib["epsize"])):
             return True
         return False
-    if package_of(ca) != package_of(cb):
+    pa = package_of(ca)
+    if pa != package_of(cb):
         return True
+    if pa is None:                              # no rule reads either name (TO-263 / TO-252, SOT-563 / SOT-363): one
+        return SP._norm(ca) != SP._norm(cb)     # land only when they are one name ('TO-263' / 'TO263'), R-B2-2
     if bool(EP_NAME.search(ca) or EP_HINT.search(ca)) != bool(EP_NAME.search(cb) or EP_HINT.search(cb)):
         return True
     return "_" in ca and "_" in cb              # two full land names of one package: two lands ('_HandSolder')
