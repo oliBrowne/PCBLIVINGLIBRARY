@@ -313,7 +313,7 @@ def kicad_footprint(text):
             hw = _f(sw[1]) / 2 if sw else 0.0
             b = _bbox(q)
             if b:
-                out["copper"].append((b[0] - hw, b[1] - hw, b[2] + hw, b[3] + hw))
+                out["copper"].append((b[0] - hw, b[1] - hw, b[2] + hw, b[3] + hw, (sexpr.first(g, "layer") or [None, "F"])[1][0]))
     pts = []
     for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
         for g in sexpr.find(t, kind):
@@ -436,7 +436,7 @@ def altium_footprint(fp, courtyard=AL.MECH15):
             q = [_a2k(px, py) for px, py in r["pts"]] if t == "region" else [_a2k(r["x1"], r["y1"]), _a2k(r["x2"], r["y2"])]
             hw = _mm(r.get("w") or 0) / 2 if t == "track" else 0.0
             b = _bbox(q)
-            out["copper"].append((b[0] - hw, b[1] - hw, b[2] + hw, b[3] + hw))
+            out["copper"].append((b[0] - hw, b[1] - hw, b[2] + hw, b[3] + hw, "F" if layer == AL.TOP else "B"))
         if t == "fill" and layer in win_layers:
             a, b = _a2k(r["x1"], r["y1"]), _a2k(r["x2"], r["y2"])
             out["windows"].append((win_layers[layer], _bbox([a, b])))
@@ -614,6 +614,35 @@ def copper_extent(fp):
     return _bbox(pts)
 
 
+def _overlap(a, b, tol=1e-3):
+    return a[0] <= b[2] + tol and b[0] <= a[2] + tol and a[1] <= b[3] + tol and b[1] <= a[3] + tol
+
+
+def _pad_copper(fp):
+    """-> ({id(pad): (box of the pad with the footprint copper touching it, touched?)}, [free copper graphics]).
+    A graphic touches a pad on its layer (a through-hole pad is on both) when the boxes meet; a graphic touching a
+    graphic that touches the pad counts too."""
+    boxes = {}
+    for p in fp["pads"]:
+        if p.get("side") in ("F", "B", "THT"):
+            pts = _rot_pts(p["x"], p["y"], p["w"], p["h"], p["rot"])
+            o = p.get("outline")
+            boxes[id(p)] = [_bbox(pts + ([(o[0], o[1]), (o[2], o[3])] if o else [])), False,
+                            {"F", "B"} if p["side"] == "THT" else {p["side"]}]
+    free = [tuple(c) if len(c) > 4 else (*c[:4], "F") for c in fp.get("copper") or []]
+    moved = True
+    while moved:
+        moved = False
+        for c in list(free):
+            hit = [b for b in boxes.values() if c[4] in b[2] and _overlap(b[0], c)]
+            for b in hit:
+                b[0], b[1] = _bbox([b[0][:2], b[0][2:], c[:2], c[2:4]]), True
+            if hit:
+                free.remove(c)
+                moved = True
+    return {k: (v[0], v[1]) for k, v in boxes.items()}, free
+
+
 def compare_footprints(k, a, export=False, model_ok=None):
     """Canonical KiCad and Altium footprints -> diffs. export: the KiCad side is a kicad-export library, so its 3D
     model must be there (model_ok: whether each (model ...) path resolves to a file)."""
@@ -629,15 +658,30 @@ def compare_footprints(k, a, export=False, model_ok=None):
         _d(out, "error", f"pad {p['num'] or '(unnumbered)'}", "missing", "present", "missing", f"at {_fmt((p['x'], p['y']))}")
     for p in aonly:
         _d(out, "error", f"pad {p['num'] or '(unnumbered)'}", "missing", "missing", "present", f"at {_fmt((p['x'], p['y']))}")
+    uk, fk = _pad_copper(k)
+    ua, fa = _pad_copper(a)
     for kp, ap in pairs:
-        compare_pad(kp, ap, out)
-    if k.get("copper") or a.get("copper"):    # footprint copper next to / under pads: Altium regions belong to no pad
-        ke, ae = copper_extent(k), copper_extent(a)
-        same = ke and ae and all(abs(p - q) <= TOL["outline"] for p, q in zip(ke, ae))
-        for d in out:
+        diffs = []
+        compare_pad(kp, ap, diffs)
+        # footprint copper touching a pad (Altium regions belong to no pad; a KiCad pad drawn as pad + polygon): the
+        # pad's shape may differ while its copper, the pad with what touches it, is the same. Per pad, never the
+        # whole footprint's extent (copper elsewhere says nothing about this pad).
+        bk, ba = uk.get(id(kp)), ua.get(id(ap))
+        same = bk and ba and (bk[1] or ba[1]) and all(abs(p - q) <= TOL["outline"] for p, q in zip(bk[0], ba[0]))
+        for d in diffs:
             if same and d["level"] == "error" and d["field"] in ("shape", "custom outline", "custom anchor"):
                 d["level"] = "warn"
-                d["msg"] += " (pad or footprint copper: the copper itself is the same, extent " + _fmt(ke) + ")"
+                d["msg"] += " (the pad with the copper touching it: the copper itself is the same, extent " + _fmt(bk[0]) + ")"
+        out += diffs
+    left = list(fa)                           # footprint copper touching no pad: each graphic, on its layer
+    for b in fk:
+        hit = [c for c in left if c[4] == b[4] and all(abs(p - q) <= TOL["outline"] for p, q in zip(b[:4], c[:4]))]
+        if hit:
+            left.remove(hit[0])
+        else:
+            _d(out, "error", f"{b[4]}.Cu copper", "graphic", tuple(round(v, 3) for v in b[:4]), "missing", "x0, y0, x1, y1 mm")
+    for c in left:
+        _d(out, "error", f"{c[4]}.Cu copper", "graphic", "missing", tuple(round(v, 3) for v in c[:4]), "x0, y0, x1, y1 mm")
     kw = sorted((w, tuple(round(v, 3) for v in b)) for w, b in k["windows"] if b)
     aw = sorted((w, tuple(round(v, 3) for v in b)) for w, b in a["windows"] if b)
     if len(kw) != len(aw):

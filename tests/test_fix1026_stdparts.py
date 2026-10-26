@@ -169,3 +169,60 @@ def test_fp_share_pick_gives_a_part_with_other_paste_its_own_file(tmp_path):
                "name": "QFN-16", "hash": FS.digest(EP_FULL), "source": "datasheet", "by": "PARTA"}}
     got = FS.pick(written, tmp_path / "models", "QFN-16", EP_WINDOWS, "datasheet", "PARTB", tmp_path, {})
     assert got[0] != "QFN-16", got
+
+
+# --- R-SP-5: parity compares copper per pad and footprint copper graphics with their layer ------------------------
+
+def _pcblib(tmp_path, text, edit=None):
+    from ecadlib import kicad_import as K, altium_lib as AL
+    f, _ = K.convert_footprint(text, "X", notes=[])
+    if edit:
+        edit(f)
+    p = tmp_path / "X.PcbLib"
+    AL.write_pcblib(p, [f])
+    return AL.read_pcblib(p)[0]
+
+
+_CU_RECT = '  (fp_rect (start 1.2 -1) (end 1.6 1) (stroke (width 0) (type solid)) (fill solid) (layer "F.Cu"))'
+_EP_CUSTOM = ('  (pad "5" smd custom (at 0 0) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask") (options (clearance outline) '
+              '(anchor rect)) (primitives (gr_poly (pts (xy -0.9 -0.15) (xy 0.9 -0.15) (xy 0.9 0.15) (xy -0.9 0.15)) '
+              '(width 0) (fill yes))))')
+_EP_PLAIN = '  (pad "5" smd rect (at 0 0) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask"))'
+
+
+@lite
+def test_parity_lost_custom_pad_shape_is_an_error_even_with_footprint_copper_elsewhere(tmp_path):
+    """A footprint copper rect away from the pad used to make the whole-copper box 'the same' and the lost custom
+    shape a warning (warnings do not hold)."""
+    from ecadlib import parity as P
+    diffs = P.footprint_pair(_qfn(_EP_CUSTOM, _CU_RECT), _pcblib(tmp_path, _qfn(_EP_PLAIN, _CU_RECT)))
+    errs = [d["msg"] for d in diffs if d["level"] == "error"]
+    assert any("pad 5" in m and "shape" in m for m in errs), diffs
+
+
+@lite
+def test_parity_compares_footprint_copper_graphics_with_their_layer(tmp_path):
+    from ecadlib import parity as P
+    tht = ('(footprint "X" (layer "F.Cu")\n'
+           '  (fp_rect (start -2 -2) (end 2 2) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))\n'
+           '  (pad "1" thru_hole circle (at -1 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask"))\n'
+           '  (pad "2" thru_hole circle (at 1 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask"))\n'
+           '  {cu})')
+    front = '(fp_poly (pts (xy -1 1.0) (xy 1 1.0) (xy 1 1.6) (xy -1 1.6)) (stroke (width 0) (type solid)) (fill solid) (layer "F.Cu"))'
+    back = '(fp_rect (start -0.5 -1.8) (end 0.5 -1.2) (stroke (width 0) (type solid)) (fill solid) (layer "B.Cu"))'
+    same = P.footprint_pair(tht.format(cu=front), _pcblib(tmp_path, tht.format(cu=front)))
+    assert not [d for d in same if d["level"] == "error"], same
+    lost = P.footprint_pair(tht.format(cu=front), _pcblib(tmp_path, tht.format(cu=front), lambda f: f.update(regions=[])))
+    assert [d for d in lost if d["level"] == "error"], lost
+    bcu = P.footprint_pair(tht.format(cu=front + " " + back), _pcblib(tmp_path, tht.format(cu=front + " " + back)))
+    assert [d for d in bcu if d["level"] == "error" and "copper" in d["what"]], bcu      # B.Cu dropped by the converter
+
+
+@lite
+def test_parity_still_softens_a_pad_whose_copper_is_drawn_as_pad_plus_graphic(tmp_path):
+    """A plain pad plus a footprint copper polygon touching it is the same copper as one custom pad: a warning."""
+    from ecadlib import parity as P
+    cu = '  (fp_poly (pts (xy 0.25 -0.15) (xy 0.9 -0.15) (xy 0.9 0.15) (xy 0.25 0.15)) (stroke (width 0) (type solid)) (fill solid) (layer "F.Cu"))'
+    cust = _EP_CUSTOM.replace("(xy -0.9 -0.15)", "(xy 0 -0.15)").replace("(xy -0.9 0.15)", "(xy 0 0.15)")
+    diffs = P.footprint_pair(_qfn(_EP_PLAIN, cu), _pcblib(tmp_path, _qfn(cust)))
+    assert not [d for d in diffs if d["level"] == "error"], diffs
