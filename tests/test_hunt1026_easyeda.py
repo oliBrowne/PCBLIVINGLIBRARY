@@ -298,6 +298,24 @@ def test_a_price_written_as_text_does_not_lose_the_part():
     assert res.lcsc == "C7950" and res.manufacturer == "Texas Instruments", res
 
 
+def test_easyeda_lookup_puts_only_the_lcsc_number_in_its_url():
+    # the BOM's LCSC cell went into the URL as written: 'LCSC: C7593' or a product link asked EasyEDA for a path that
+    # is no part ('.../products/LCSC: C7593/components'), and '../' walked to another endpoint
+    from ecadlib import providers as P
+    seen = []
+
+    class H:
+        def get(self, url, **kw):
+            seen.append(url)
+            return _R(_live("C7593"))
+    for cell in ("C7593", "c7593", "LCSC: C7593", "https://www.lcsc.com/product-detail/C7593.html", " C7593 "):
+        res = P.EasyEDA(H()).lookup({"lcsc": cell})
+        assert res.found and seen[-1] == P.EasyEDA.URL.format("C7593"), (cell, seen[-1], res)
+    n = len(seen)
+    res = P.EasyEDA(H()).lookup({"lcsc": "../../users/me"})
+    assert len(seen) == n and res.found is None and "not an LCSC number" in res.error, res
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

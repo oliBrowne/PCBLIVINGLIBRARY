@@ -125,9 +125,11 @@ class EasyEDA(Provider):
     HEADERS = {"Accept": "application/json, text/javascript, */*; q=0.01", "Referer": "https://easyeda.com/"}
 
     def lookup(self, line):
-        lcsc = (line.get("lcsc") or "").strip().upper()
+        raw = str(line.get("lcsc") or "").strip()
+        m = re.search(r"(?<![A-Z0-9])(C\d{1,9})(?![0-9])", raw.upper())   # 'C2040', 'LCSC C2040', a product link:
+        lcsc = m.group(1) if m else ""                                    # the number only goes in the URL
         if not lcsc:
-            return SourceResult(self.name, found=None, error="no LCSC number")
+            return SourceResult(self.name, found=None, error=f"{raw[:30]!r} is not an LCSC number" if raw else "no LCSC number")
         url = self.URL.format(lcsc)
         r = self.http.get(url, headers=self.HEADERS)
         res = SourceResult(self.name, lcsc=lcsc, url=f"https://www.lcsc.com/product-detail/{lcsc}.html")
