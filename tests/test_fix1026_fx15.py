@@ -323,3 +323,55 @@ def test_kicad_dblib_pcm_and_altium_pkg_refuse_another_plans_output(tmp_path):
     _refused(lambda: AP.build(tmp_path / "B/models", tmp_path / "pkg", "lib", plan=b, log=_quiet))
     assert (tmp_path / "pkg/PcbLib/R_0603_1608Metric.PcbLib").read_bytes() == land
     assert CG.OWNER in {p.name for p in (tmp_path / "pkg").iterdir()}
+
+
+# ---------------------------------------------------------------- R-FX15-5: model item names never doubled
+class _Taken:
+    """A workspace where NAME, NAME-r3 and NAME-r3-2 .. -9 are taken (items this library has no record of, which do
+    not read back as this drawing); every release answers duplicate. Records the item names each release tried."""
+    def __init__(self, name, upto=9):
+        self.taken = {name, f"{name}-r3"} | {f"{name}-r3-{k}" for k in range(2, upto + 1)}
+        self.tried = []
+
+    def find_model(self, ws, kind, name, folder):
+        return f"{kind}:{name}" if name in self.taken else None
+
+    def model_data(self, ws, kind, name, folder):
+        return b"not a library"
+
+    def release(self, inp):
+        from ecadlib import altium365 as A
+        self.tried.append(inp.get("footprintItemName"))
+        raise A.NexarError(f"AddALU_ItemsDuplicate item HRID {inp.get('footprintItemName')}")
+
+    def find(self, ws, name):
+        return {"id": "C1", "revision": {"revisionId": "R1"}}
+
+    def folder_id(self, ws, path):
+        return f"folder:{path}"
+
+
+@lite
+def test_a365_place_model_never_names_a_taken_item_and_never_doubles_the_revision(tmp_path):
+    """With NAME, NAME-r<rev> and NAME-r<rev>-2..9 taken, place_model returned NAME-r<rev> (taken), and the duplicate
+    answer renamed it NAME-r<rev>-r<rev>. The first free name is chosen, the same on every run; a duplicate answer
+    for a name place_model chose is an error, never a doubled name."""
+    from ecadlib import altium365 as A
+    nx = _Taken("R_0603_1608Metric")
+    pick = lambda: A.place_model(nx, WS, None, A.ws_target(WS), {}, "footprints", "R_0603_1608Metric",
+                                 "Components/Models/Footprints", "R_0603_1608Metric", "want", 3)
+    assert pick() == ("send", "R_0603_1608Metric-r3-10") == pick()
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    it = json.loads(a.read_text())[0]
+    for k in ("symbol", "footprint"):
+        it[k]["file"] = str(tmp_path / "A" / it[k]["file"])
+    try:                                               # (push() reports the duplicate answer as the part's error)
+        res = A.push_revision(it, nx, WS, {}, lambda p: "file", "Components/Models", {"id": "C1"}, {"footprint"}, 3,
+                              digests={"footprints": "want"}, target=A.ws_target(WS))
+    except A.NexarError as e:
+        res = {"action": "error", "detail": str(e)}
+    assert res["action"] == "error" and nx.tried == ["R_0603_1608Metric-r3-10"], (res, nx.tried)
+    full = _Taken("R_0603_1608Metric", upto=99)        # every name taken: nothing is sent
+    got = A.place_model(full, WS, None, A.ws_target(WS), {}, "footprints", "R_0603_1608Metric",
+                        "Components/Models/Footprints", "R_0603_1608Metric", "want", 3)
+    assert got[0] == "full", got

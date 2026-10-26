@@ -711,7 +711,8 @@ def place_model(client, ws, lg, target, sent_models, kind, name, folder, ref, wa
     ledger or this run says so: another part's new revision put it in NAME-r<rev>, a dedupe merge points at the
     keeper's item), else ("send", item) for the first free name of NAME, NAME-r<rev>, NAME-r<rev>-2 ... An item of
     one of those names that this library has no record of is read back and linked when it holds this drawing, else
-    skipped. ("send", NAME) when the drawing is not known (no fingerprint): as before."""
+    skipped. ("send", NAME) when the drawing is not known (no fingerprint): as before. ("full", text) when NAME-r<rev>-99
+    is taken too: nothing is sent (a name already taken is never offered, R-FX15-5)."""
     if not want or not name:
         return ("send", name)
     known = lambda n: sent_models.get(f"{kind}:{n.lower()}") or (released_model(lg, target, kind, n) if lg else None)
@@ -722,7 +723,7 @@ def place_model(client, ws, lg, target, sent_models, kind, name, folder, ref, wa
             fid = client.find_model(ws, kind, n, folder)
             if fid:
                 return ("link", fid, n)
-    for n in [name, f"{name}-r{rev}"] + [f"{name}-r{rev}-{k}" for k in range(2, 10)]:
+    for n in [name, f"{name}-r{rev}"] + [f"{name}-r{rev}-{k}" for k in range(2, 100)]:
         fid = client.find_model(ws, kind, n, folder)
         if not fid:
             return ("send", n)
@@ -733,7 +734,8 @@ def place_model(client, ws, lg, target, sent_models, kind, name, folder, ref, wa
                 return ("link", fid, n)
         except (ValueError, NexarError, OSError):
             pass
-    return ("send", f"{name}-r{rev}")         # (the release's duplicate answer says so)
+    return ("full", f"every {kind[:-1]} item name {name}, {name}-r{rev} and {name}-r{rev}-2 .. -99 is taken by another "
+                    "drawing: nothing was sent")
 
 
 def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, dry_run=False, note="ecadlib sync",
@@ -759,6 +761,8 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
             continue
         got = place_model(client, ws, lg, target, sent_models or {}, kind, name, f"{models_root}/{sub}",
                           it[half]["ref"], (digests or {}).get(kind), rev)
+        if got[0] == "full":
+            return {"action": "error", "detail": got[1]}
         if got[0] == "link":
             found[i], linked[half] = got[1], got[2]
         elif got[1] != name:
@@ -788,7 +792,8 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
             raise
         renamed = dict(inp)                    # a model item of that name exists: the new model gets its own item
         for half, key in (("symbol", "symbolItemName"), ("footprint", "footprintItemName")):
-            if half in halves and renamed.get(key):
+            # a name place_model chose (NAME-r<rev>...) was free when it looked: never renamed again (no -r<rev>-r<rev>)
+            if half in halves and renamed.get(key) and half not in send_as:
                 renamed[key] = f"{renamed[key]}-r{rev}"
         if renamed == inp:
             raise
