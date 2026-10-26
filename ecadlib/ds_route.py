@@ -989,13 +989,23 @@ SOFT_FAILED = re.compile(r"^(schema:|self-check:|footprint_gen\.build failed|alt
 SYMBOL_FAILED = re.compile(r"^symbol:", re.I)
 
 
+# an exposed pad narrower than a lead but not under 0.2 mm: a unit slip makes it far smaller (0.057 "mm" for 1.45),
+# while a 1 x 1 mm DFN's real pad can be 0.275 mm beside 0.3 mm leads. Still a failed read, not a hold.
+_EP_SMALL = re.compile(r"^exposed_pad\.\w+: ([\d.]+) mm is implausibly small for an exposed pad")
+
+
+def _soft(line):
+    m = _EP_SMALL.match(line)
+    return bool(SOFT_FAILED.match(line)) or bool(m and float(m.group(1)) >= 0.2)
+
+
 def hold_reasons(res, fp_needed=True):
     """The failed checks to hold a route's last answer for, or [] (ok, incomplete, or only checks that can't make the
     part wrong). fp_needed=False (the footprint comes from another source): only the symbol's checks count."""
     kind, why = assess(res)
     if kind != "failed":
         return []
-    hard = [w for w in why if not SOFT_FAILED.match(w)]
+    hard = [w for w in why if not _soft(w)]
     return hard if fp_needed is not False else [w for w in hard if SYMBOL_FAILED.match(w)]
 
 

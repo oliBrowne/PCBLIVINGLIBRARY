@@ -328,6 +328,34 @@ def test_rpr4_an_exposed_pad_numbered_after_gap_numbered_leads_is_read_and_built
     assert kind != "ok", why
 
 
+
+def test_2_false_hold_sweep_cases_are_not_held():
+    """The second review's false-hold sweep (1,601 correct specs): three checks that failed right parts would have
+    held them under the failed-read hold. A pad that fits the body turned (footprint_gen turns it), a row exactly as
+    long as the body (float noise), and a real tiny DFN pad are not held."""
+    from ecadlib import ds_route as DR
+    mm = lambda a, b, c=None: {"min": a, "nom": c if c is not None else round((a + b) / 2, 4), "max": b}
+    rev = []
+    D.sanity({"package_type": "gullwing", "pin_count": 8, "pitch": 1.27, "body_length": mm(4.8, 5.0),
+              "body_width": mm(3.8, 4.0), "lead_span": mm(5.8, 6.2), "terminal_length": mm(0.4, 1.27),
+              "terminal_width": mm(0.31, 0.51), "exposed_pad": {"length": mm(2.31, 2.51), "width": mm(3.71, 3.91)}}, rev)
+    assert not any(r.startswith("exposed_pad.") for r in rev), rev            # SOIC-8-1EP 2.41 x 3.81
+    rev = []
+    D.sanity({"package_type": "gullwing", "pin_count": 8, "pitch": 1.27, "body_length": mm(4.8, 5.0),
+              "body_width": mm(3.8, 4.0), "lead_span": mm(5.8, 6.2), "terminal_length": mm(0.4, 1.27),
+              "terminal_width": mm(0.31, 0.51), "exposed_pad": {"length": mm(4.9, 5.1), "width": mm(3.71, 3.91)}}, rev)
+    assert any(r.startswith("exposed_pad.length") for r in rev), rev          # too big either way: still failed
+    rev = []
+    D.sanity({"package_type": "qfn", "pin_count": 8, "pitch": 0.9, "pins_left_right": 4, "pins_top_bottom": 0,
+              "body_length": mm(1.4, 1.6), "body_width": mm(3.1, 3.3), "terminal_length": mm(0.3, 0.5),
+              "terminal_width": mm(0.5, 0.6)}, rev)
+    assert not any("span 3.30 mm > body_width" in r for r in rev), rev       # MicroCrystal C7 SON-8
+    small = "exposed_pad.width: 0.275 mm is implausibly small for an exposed pad (unit mislabelled?)"
+    assert DR.hold_reasons({"needs_review": [small]}) == []                   # a 1 x 1 DFN's real pad
+    slip = "exposed_pad.width: 0.057 mm is implausibly small for an exposed pad (unit mislabelled?)"
+    assert DR.hold_reasons({"needs_review": [slip]}) == [slip]                # an inch value labelled mm
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

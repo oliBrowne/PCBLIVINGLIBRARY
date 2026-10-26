@@ -1710,7 +1710,7 @@ def sanity(spec, review):
             if not side or per < 2:
                 continue
             span = (per - 1) * e + (b[2] if b else 0)
-            if span > side[2]:
+            if span > side[2] + 1e-6:                    # (3 x 0.9 + 0.6 is 3.3000000000000003, not over 3.3)
                 review.append(f"{label}: {per} pins at pitch {e} span {span:.2f} mm > {k} max {side[2]} mm")
             elif per * e < low * side[1]:                 # dual-row parts fill the body side; QFN rows can be short
                 review.append(f"{label}: {per} pins x pitch {e} = {per * e:.2f} mm, under {low:.0%} of {k} {side[1]} mm")
@@ -1726,9 +1726,13 @@ def sanity(spec, review):
     if t == "gullwing":
         review.extend(_listed_layout(spec))
     ep = spec.get("exposed_pad") or {}
+    eps, bodies = [_dim(ep.get(d)) for d in ("length", "width")], [g(k) for k in ("body_length", "body_width")]
+    # a pad that fits the body turned is not too big: footprint_gen turns it to fit (orient_ep; SOIC-8-1EP's
+    # 2.41 x 3.81 pad in a 4.9 x 3.9 body, read along the other axes)
+    turned_fits = all(eps) and all(bodies) and eps[0][1] < bodies[1][0] and eps[1][1] < bodies[0][0]
     for d, k in (("length", "body_length"), ("width", "body_width")):
         v, body = _dim(ep.get(d)), g(k)
-        if v and body and v[1] >= body[0]:
+        if v and body and v[1] >= body[0] and not turned_fits:
             review.append(f"exposed_pad.{d} {v[1]} >= {k} min {body[0]}")
         small = max(0.2, b[1] if b else 0)            # an inch value labelled mm (0.057 "mm" for 1.45 mm): narrower
         if v and 0 < v[1] < small:                    # than a lead (the smallest real ones: 0.4 mm beside 0.2 leads)
