@@ -287,6 +287,7 @@ def write_review_files(items, out, bom="", details=(), fallbacks=()):
         details = ["### Settings that fell back to a default", ""] + [f"- {f}" for f in fallbacks] + [""] + list(details)
     doc["details"] = [M.clean(x) for x in details]
     out = Path(out)
-    (out / "review.md").write_text(to_md(doc), encoding="utf-8")
-    (out / "review.html").write_text(to_html(doc), encoding="utf-8")
+    from .fsutil import write_text_atomic          # the web UI may be showing the page while a run rewrites it
+    write_text_atomic(out / "review.md", to_md(doc))
+    write_text_atomic(out / "review.html", to_html(doc))
     return doc

@@ -84,11 +84,19 @@ def debug_wanted(argv, environ=None):
 def friendly(e):
     """(one-line message, hint, exit code) for an exception, or None when it is not one we expected (a bug)."""
     name = getattr(e, "filename", None)
+    held = False
+    if name and getattr(e, "filename2", None):      # os.replace(temp, target) of fsutil's crash-safe writes: the
+        from .fsutil import atomic_tmp              # target is the file the person knows (and has open in Altium)
+        if atomic_tmp(name):
+            name, held = e.filename2, True
     if getattr(type(e), "plain_error", False):    # change control / ledger refusals: their own words and hint
         return (str(e), getattr(e, "hint", "") or "see the docs", 2)
     if isinstance(e, FileNotFoundError):
         return (f"file not found: {name or e}", f"check the path (relative paths start at {os.getcwd()})", 2)
     if isinstance(e, PermissionError):
+        if held or os.name == "nt":                 # Windows refuses to replace a file another program has open
+            return (f"permission denied: {name or e}", "close the file where it is open (Altium, KiCad, Excel, an "
+                    "editor) and run again; else check its permissions or pick another output folder", 2)
         return (f"permission denied: {name or e}", "check the file's owner and permissions, or pick another output folder", 2)
     if isinstance(e, IsADirectoryError):
         return (f"expected a file but got a folder: {name or e}", "name the file inside that folder", 2)

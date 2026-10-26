@@ -94,8 +94,9 @@ class KiCadLibrary:
         f = Path(cache_file)
         retry = f.with_name(f.name + ".retry.json")
         wait = self._backoff(retry, now()) if not refresh else None
-        if f.exists() and not refresh and (getattr(http, "offline", False) or now() - f.stat().st_mtime < max_age):
-            self._load(f)
+        if f.exists() and not refresh and (getattr(http, "offline", False) or now() - f.stat().st_mtime < max_age) \
+                and self._load(f):
+            pass
         elif wait:
             self.error = wait
             if f.exists():                     # a stale index beats none
@@ -105,7 +106,9 @@ class KiCadLibrary:
                 self.symbols = self._crawl("kicad-symbols", ".kicad_symdir", ".kicad_sym")
                 self.footprints = self._crawl("kicad-footprints", ".pretty", ".kicad_mod")
                 f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_text(json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols, "footprints": self.footprints}), encoding="utf-8")
+                from .fsutil import write_text_atomic   # a crash mid-write (or a second run reading it) never sees half
+                write_text_atomic(f, json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols,
+                                                 "footprints": self.footprints}))
                 retry.unlink(missing_ok=True)
             except IOError as e:
                 self.error = str(e)
@@ -128,8 +131,17 @@ class KiCadLibrary:
         self._fpn = [(norm_mpn(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items()]
 
     def _load(self, f):
-        d = json.loads(f.read_text(encoding="utf-8"))
-        self.symbols, self.footprints = d["symbols"], d["footprints"]
+        """The cached index -> True; one that does not read (cut short by a crash) -> False, so it is built again
+        instead of stopping every run until it is 30 days old."""
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            sy, fp = d["symbols"], d["footprints"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        if not isinstance(sy, dict) or not isinstance(fp, dict):
+            return False
+        self.symbols, self.footprints = sy, fp
+        return True
 
     @staticmethod
     def _backoff(retry, t):

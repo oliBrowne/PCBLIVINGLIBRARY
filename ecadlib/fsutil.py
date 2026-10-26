@@ -55,9 +55,20 @@ def replace(src, dst):
             time.sleep(delay)
 
 
+def _tmp_for(path):
+    """The temp file next to `path`: .NAME.<pid>.<thread>.tmp, with a long NAME cut (and a hash of the whole name
+    added) so the temp name stays within the 255 characters a file system allows when the target's own name does."""
+    path = Path(path)
+    name = path.name
+    if len(name) > 150:
+        import hashlib
+        name = f"{name[:100]}~{hashlib.sha1(name.encode('utf-8', 'surrogatepass')).hexdigest()[:8]}"
+    return path.with_name(f".{name}.{os.getpid()}.{threading.get_ident()}.tmp")
+
+
 def write_text_atomic(path, text):
     path = Path(path)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp = _tmp_for(path)
     try:
         with open(tmp, "w", encoding="utf-8", newline="") as f:
             f.write(text)
@@ -76,7 +87,7 @@ def write_text_atomic(path, text):
 def write_bytes_atomic(path, data):
     """write_text_atomic for binary files (.PcbLib / .SchLib): a crash mid-write leaves the old file whole."""
     path = Path(path)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp = _tmp_for(path)
     try:
         with open(tmp, "wb") as f:
             f.write(data)

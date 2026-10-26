@@ -130,3 +130,59 @@ def test_kicad_names_are_nfc():
     nfc = "Bürklin_1x02"
     nfd = unicodedata.normalize("NFD", nfc)
     assert nfc != nfd and KX.kname(nfc) == KX.kname(nfd) == nfc
+
+
+# ---------------------------------------------------------------- a library file another program holds open
+def test_friendly_names_the_target_not_the_temp_file():
+    """fsutil.write_*_atomic replaces the target with os.replace; on Windows, with the .SchLib open in Altium, that
+    fails with PermissionError whose filename is the temp file ('.LM358.SchLib.4242.1.tmp'): the one-line error named
+    a file the person has never seen and said to check its permissions."""
+    from ecadlib import cliutil
+    dst = "/w/models/SchLib/LM358.SchLib"
+    e = PermissionError(13, "Access is denied", "/w/models/SchLib/.LM358.SchLib.4242.1.tmp", None, dst)
+    msg, hint, code = cliutil.friendly(e)
+    assert dst in msg and ".tmp" not in msg, msg
+    assert "open" in hint and code == 2, hint
+
+
+@lite
+def test_atomic_write_of_a_long_file_name(tmp_path):
+    """The temp file is '.<name>.<pid>.<thread>.tmp': for a name the file system takes (up to 255 characters) the temp
+    name was ~30 characters longer and the write failed with 'File name too long'."""
+    from ecadlib import fsutil
+    f = tmp_path / ("P" * 240 + ".SchLib")
+    fsutil.write_text_atomic(f, "x")
+    fsutil.write_bytes_atomic(f, b"y")
+    assert f.read_bytes() == b"y" and [p.name for p in tmp_path.iterdir()] == [f.name]
+    assert fsutil.atomic_tmp(fsutil._tmp_for(f))                # still recognised as ecadlib's temp file
+
+
+# ---------------------------------------------------------------- caches a crash can cut short
+@lite
+def test_kicad_index_cut_short_is_built_again(tmp_path, monkeypatch):
+    """A librarian run killed while writing the KiCad name index left half a JSON file: every later run (the file is
+    'fresh' for 30 days) stopped with a JSONDecodeError traceback."""
+    from ecadlib.librarian import KiCadLibrary
+    f = tmp_path / "kicad_library_index.json"
+    f.write_text('{"built": "2026-10-26", "symbols": {"Device": ["R"', encoding="utf-8")
+
+    class Offline:                            # httpcache's offline client: no cached page -> not ok
+        offline = True
+
+        def get(self, url, timeout=None):
+            return type("R", (), {"ok": False, "error": "offline: not in the cache", "status": 0})()
+    k = KiCadLibrary(Offline(), f)
+    assert k.symbols == {} and k.footprints == {}             # no crash; offline: nothing to build it from
+
+    calls = []
+
+    def crawl(self, repo, dsuf, fsuf):
+        calls.append(repo)
+        return {"R": ["Device"]} if repo == "kicad-symbols" else {"R_0603_1608Metric": ["Resistor_SMD"]}
+
+    class Online:
+        offline = False
+    monkeypatch.setattr(KiCadLibrary, "_crawl", crawl)
+    k = KiCadLibrary(Online(), f)
+    assert calls == ["kicad-symbols", "kicad-footprints"] and k.symbols == {"R": ["Device"]}
+    assert json.loads(f.read_text(encoding="utf-8"))["symbols"] == {"R": ["Device"]}   # rebuilt whole
