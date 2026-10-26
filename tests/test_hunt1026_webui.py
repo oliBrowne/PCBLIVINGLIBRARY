@@ -217,3 +217,32 @@ def test_webui_09_a_reject_recorded_during_a_librarian_run_is_not_undone_by_it(t
     assert items[rejected]["status"] != "ready", items[rejected]["status"]
     assert [a["decision"] for a in items[rejected].get("approvals") or []] == ["reject"], items[rejected].get("approvals")
     assert [a["decision"] for a in items[approved].get("approvals") or []] == ["approve"], items[approved].get("approvals")
+
+
+@lite
+def test_webui_10_a_reject_recorded_during_the_datasheet_reads_is_not_undone(tmp_path, monkeypatch):
+    """The same for the AI datasheet step (the web UI's "Read with AI", `ecadlib datasheet batch plan.json`): fill_plan
+    read the plan, waited for the reads (a Message Batch can take an hour) and wrote its copy back."""
+    import json
+    from types import SimpleNamespace
+    from ecadlib import datasheet as D
+    from ecadlib.app import Workspace
+    from tests.ui_fixture import build
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        ws, bom = build(tmp_path / "ws")
+    plan = ws.root / "librarian" / "sample_bom" / "plan.json"
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    rejected = next(i["name"] for i in items if i["status"] == "ready")
+    assert any(i["status"] == "held" for i in items)
+    ui = Workspace(ws.root, [], providers=["digikey"], offline=True)
+    said = []
+
+    def log(msg):                                      # while the reads come back, part by part
+        if not said:
+            said.append(ui.approve_part(bom, rejected, "reject", "Ann Lee", comment="wrong pinout")["decision"])
+    reader = SimpleNamespace(http=None, key=None)      # no model here: every read fails, which is fine for this
+    D.fill_plan(plan, reader, ws.rules(), log=log)
+    assert said, "fill_plan never got to a part"
+    it = next(i for i in json.loads(plan.read_text(encoding="utf-8")) if i["name"] == rejected)
+    assert it["status"] != "ready" and [a["decision"] for a in it.get("approvals") or []] == ["reject"], it

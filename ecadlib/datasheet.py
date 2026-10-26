@@ -5108,10 +5108,12 @@ def fill_plan(plan, reader, rules=None, log=print, parts=None):
         state[it["name"]] = st
         log(f"  {'done ' if L._done(st, out) else 'open '}{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
     write_text_atomic(state_f, json.dumps(state, indent=2))
-    gate.settle(items)
-    checks = RC.apply(items, out, rules=rules)
-    gate.baseline(items)
-    write_text_atomic(plan_f, json.dumps(items, indent=2))
+    with L._decisions_lock(plan_f):                    # a reject / approval recorded while the reads ran (the web UI,
+        L.keep_decisions(items, plan_f)                # `ecadlib approve`) is kept, not overwritten with the old copy
+        gate.settle(items)
+        checks = RC.apply(items, out, rules=rules)
+        gate.baseline(items)
+        write_text_atomic(plan_f, json.dumps(items, indent=2))
     RC.write_report(checks, out / "release_check", plan_f)
     L.write_review(L.review_rows(items), out, str(plan_f))
     return items

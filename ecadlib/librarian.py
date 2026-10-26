@@ -1396,6 +1396,19 @@ def _fresh_decisions(old, plan_f):
     return out
 
 
+def keep_decisions(items, plan_f):
+    """In place: each plan item's decisions as plan.json has them now (a step that read the plan long ago, such as a
+    datasheet batch, must not write back the old ones). Call under _decisions_lock(plan_f)."""
+    by = {i["name"]: i for i in items}
+    for n, fresh in _fresh_decisions(dict(by), plan_f).items():
+        it = by[n]
+        for k in DECISIONS:
+            if k in fresh:
+                it[k] = fresh[k]
+            else:
+                it.pop(k, None)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="BOM -> library: triage, fill missing symbols/footprints, Altium models, plan, release check")
     ap.add_argument("bom")
