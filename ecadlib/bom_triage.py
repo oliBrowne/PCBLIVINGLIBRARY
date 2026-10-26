@@ -50,12 +50,29 @@ HIDDEN_HEADER = "<hidden>"     # a column the workbook hides, in a CSV copy of i
 
 
 METRIC_HEADER = re.compile(r"\b(mm|metric|millimet(er|re)s?)\b")   # on a normalised header: 'Case Code (mm)'
+IMPERIAL_HEADER = re.compile(r"\b(imperial|imp|inch|inches|in|eia|mil|mils|us|ansi)\b")   # 'Case (Metric / Imp.)'
 
 
 def metric_header(nh):
     """A normalised header that says its case codes are metric ('Case Code (mm)'), not one naming both systems ('Case
-    (Imperial/Metric)', 'Size inch / mm'), whose bare 0603 is as likely the inch code."""
-    return bool(METRIC_HEADER.search(nh)) and not re.search(r"\b(imperial|inch|inches|in|eia|mil|mils)\b", nh)
+    (Imperial/Metric)', 'Case (Metric / Imp.)', 'Size inch / mm'), whose bare 0603 is as likely the inch code."""
+    return bool(METRIC_HEADER.search(nh)) and not IMPERIAL_HEADER.search(_in_mm(nh))
+
+
+def mixed_header(nh):
+    """A normalised header naming both systems ('Case (Metric / Imp.)', 'Package (Imp/Metric)', 'Footprint (Inch/MM)'):
+    a bare size code under it may be either."""
+    return bool(METRIC_HEADER.search(nh)) and bool(IMPERIAL_HEADER.search(_in_mm(nh)))
+
+
+def _in_mm(nh):
+    """'size in mm': that 'in' is a preposition, not inches."""
+    return re.sub(r"\bin (?=mm\b|metric\b|millimet)", "", nh)
+
+
+def _size_code(cell):
+    m = re.fullmatch(r"\s*(\d{4,5})\s*", str(cell))
+    return m.group(1) if m else ""
 
 
 def metric_size(cell, header):
@@ -71,6 +88,27 @@ def metric_size(cell, header):
         return METRIC_TO_IMPERIAL[m.group(1)], []
     return "", [f"footprint '{cell}' from the millimetre column '{header}' is no metric chip size: not used "
                 "(give the inch size, e.g. 0603, or the footprint name)"]
+
+
+def mixed_size(cell, header):
+    """A footprint cell from a column naming both systems ('Case (Metric / Imp.)') -> (footprint text, [note]). A code
+    that is a size in one system only is read in that one ('1608' is the metric 0603, '0805' an inch 0805); one that
+    is a size in both ('0603': an inch 0603 or the metric code of an 0201; '0402') cannot be told apart, so it is not
+    used and the part is held for its footprint rather than built on a guess. Anything else is kept."""
+    from .kicad_index import METRIC_TO_IMPERIAL
+    if re.fullmatch(r"\s*\d{4}\s*mm\s*", str(cell)):                # '1608 mm', '0603mm': the cell says metric
+        return metric_size(cell, header)
+    code = _size_code(cell)
+    if not code:
+        return cell, []
+    imperial = set(METRIC_TO_IMPERIAL.values())
+    if code in METRIC_TO_IMPERIAL and code in imperial:
+        return "", [f"footprint '{cell}' from the column '{header}' (metric and inch) is an inch {code} or the metric "
+                    f"code of an {METRIC_TO_IMPERIAL[code]}: not used (write 0603/1608 style, the inch size in an inch "
+                    "column, or the footprint name)"]
+    if code in METRIC_TO_IMPERIAL:
+        return METRIC_TO_IMPERIAL[code], []
+    return cell, []
 
 
 def map_headers(headers, threshold=0.72):
@@ -116,7 +154,7 @@ def map_headers(headers, threshold=0.72):
                 best *= 0.5                                              # 'Internal PN' is a house number
             if f == "footprint" and re.search(r"\b(qty|quantity|count|pcs|size|weight)\b", nh):
                 best *= 0.5                                              # 'Package Qty' is a reel size
-            if f == "footprint" and metric_header(nh):
+            if f == "footprint" and (metric_header(nh) or mixed_header(nh)):
                 best *= 0.95                                             # 'Case Code (mm)' 0603 is an 0201: the
                                                                          # inch column wins when both are there
             if f != "lcsc" and re.search(r"\b(lcsc|jlc|jlcpcb)\b", nh):
@@ -354,6 +392,7 @@ def read_bom(path, columns=None, rules=None, root=None):
                                                                   # saves an unnamed notes column as 'Footprint,'
     suppliers = _supplier_pairs(headers)
     metric_fp = "footprint" in col and metric_header(_hnorm(headers[col["footprint"]]))
+    mixed_fp = "footprint" in col and mixed_header(_hnorm(headers[col["footprint"]]))   # 'Case (Metric / Imp.)'
     nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
                                                                   # after Value holds in the rows that fit the header
     lines, skipped = [], 0
@@ -389,6 +428,9 @@ def read_bom(path, columns=None, rules=None, root=None):
                 d[f] = clean_part_number(d[f])
         if metric_fp and d.get("footprint"):                     # 'Case Code (mm)': 1608 is an 0603, 0603 an 0201
             d["footprint"], extra = metric_size(d["footprint"], headers[col["footprint"]])
+            note += extra
+        elif mixed_fp and d.get("footprint"):                    # an 0603 there is an 0603 or an 0201: held
+            d["footprint"], extra = mixed_size(d["footprint"], headers[col["footprint"]])
             note += extra
         if not any(d.values()):
             continue
