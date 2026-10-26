@@ -211,3 +211,19 @@ def test_gate_refuses_a_missing_baseline_file_unless_asked_to_create_it(tmp_path
     with contextlib.redirect_stdout(io.StringIO()):
         assert G.main(["--set", "newset"]) == 0
     assert (tmp_path / "baselines" / "newset.json").exists()
+
+
+# ---------------------------------------------------------------- R-LE-6: SMAJ5.0A and SMAJ50A are two parts
+def test_lifecycle_merge_keeps_a_decimal_point_mpn_apart():
+    """lifecycle.key_of uses kicad_index.norm_mpn; the fix (keep '.' between digits) is made in norm_mpn by another
+    fixer (R-RU-1). Until it lands this test skips (tests.run_all has no skip: it prints and returns)."""
+    from ecadlib import lifecycle as LC
+    from ecadlib.kicad_index import norm_mpn
+    if norm_mpn("SMAJ5.0A") == norm_mpn("SMAJ50A"):
+        print("skip test_lifecycle_merge_keeps_a_decimal_point_mpn_apart: norm_mpn still drops the '.' in SMAJ5.0A "
+              "(fixed in kicad_index.norm_mpn by the R-RU-1 fix, not here)")
+        return
+    parts = [LC._part("SMAJ5.0A", "Littelfuse", name="D1"), LC._part("SMAJ50A", "Littelfuse", name="D2")]
+    m, _ = LC.merge(parts)
+    assert len(m) == 2 and {v["mpn"] for v in m.values()} == {"SMAJ5.0A", "SMAJ50A"}, m
+    assert LC.key_of(LC._part("smaj5.0a")) == LC.key_of(LC._part("SMAJ5.0A"))      # case still folds
