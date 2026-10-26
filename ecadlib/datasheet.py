@@ -1800,8 +1800,9 @@ def _feet_outside(spec):
     return out
 
 
-REVERSE_PINNED = re.compile(r"revers\w*[- ]?pin|(?<![A-Za-z0-9])SOT-?\d+-?R(?![A-Za-z0-9])", re.I)   # "reverse
-# pinning", SOT-143R, SOT-143R_Nexperia, SOT-143-R (not "reverse current", SOT-23-Reel)
+# "reverse pinning", SOT-143R, SOT-23R, SOT-143R_Nexperia; a dashed "-R" only for the 4-lead families sold reverse-
+# pinned (SOT-143-R, SOT-343-R): elsewhere it is a reel (SOT23-R, SOT-363-R). Not "reverse current", SOT-23-Reel
+REVERSE_PINNED = re.compile(r"revers\w*[- ]?pin|(?<![A-Za-z0-9])SOT-?(?:\d+R|[13]43-R)(?![A-Za-z0-9])", re.I)
 
 
 def _qfp_rows(spec):

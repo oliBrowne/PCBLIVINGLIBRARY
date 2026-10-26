@@ -666,6 +666,20 @@ def test_fx8_2_a_near_square_exposed_pad_across_a_rectangular_qfp_is_not_held():
     assert kind == "failed" and hold, kind
 
 
+
+def test_fx8_3_a_reel_dash_r_is_not_reverse_pinned_evidence():
+    """Before: the M1 regex took any "SOT<n>-R", so a reel suffix (SOT23-R, SOT-363-R, sot-89-r) let a mirrored read
+    build with a note. The dashed form counts only for the 4-lead families sold reverse-pinned (SOT-143-R,
+    SOT-343-R); an R right after the digits (SOT-23R, SOT143R) still counts for any."""
+    rev_pos = [dict(p, side="R" if p["side"] == "L" else "L") for p in SOT143_POS]
+    read = lambda pkg: _wire_read("SOT-143", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": rev_pos},
+                                  package=pkg)[0][0]
+    for pkg in ("SOT23-R", "SOT-363-R", "sot-89-r", "SOT-23-R"):
+        assert read(pkg) == "failed", pkg
+    for pkg in ("SOT-143-R", "SOT-343-R", "SOT-23R", "SOT143R_N", "SOT343R"):
+        assert read(pkg) == "ok", pkg
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
