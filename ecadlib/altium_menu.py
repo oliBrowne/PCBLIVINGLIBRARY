@@ -921,7 +921,12 @@ def load_config(ini_path):
     """Settings from ecadlib_menu.ini with paths resolved against its folder."""
     ini_path = Path(ini_path)
     base = ini_path.parent
-    sec = read_ini(ini_path)["ecadlib"] if ini_path.is_file() else {}
+    if not ini_path.is_file():                 # not the built-in defaults: they put parts in <that folder>/workspace
+        raise ValueError(f"{ini_path}: no such menu settings file (`ecadlib altium-menu build` writes {INI})")
+    cp = read_ini(ini_path)
+    if not cp.has_section("ecadlib"):
+        raise ValueError(f"{ini_path}: no [ecadlib] section (is this the menu's {INI}?)")
+    sec = cp["ecadlib"]
     get = lambda k, d="": (sec.get(k, d) or d).strip()
     def path(v, rel_to):
         if Path(v).is_absolute() or PureWindowsPath(v).is_absolute():
@@ -1618,7 +1623,11 @@ def run_job(job, opener=None):
     job = Path(job)
     try:
         req = dict(read_ini(job / "request.ini")["request"])
-        cfg = load_config(req.get("config") or job.parent.parent / INI)
+        named = Path(req["config"]) if req.get("config") else None
+        # TIniFile writes request.ini in the ANSI code page: a folder name it cannot hold comes back with '?', and
+        # the job is in <menu folder>\jobs\<id> anyway
+        cfg = load_config(named if named and named.is_file() or not (job.parent.parent / INI).is_file()
+                          else job.parent.parent / INI)
         res = run_action(cfg, req.get("action", ""), req, opener=opener, progress=Progress(job))
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = _error(e)

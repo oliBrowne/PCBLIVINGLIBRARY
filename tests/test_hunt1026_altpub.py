@@ -54,6 +54,39 @@ def test_dblib_sync_case_only_rename_updates_the_row_not_a_second_one():
         assert {r["name"]: r["action"] for r in out["results"]} == {"res-0603-10k": "updated"}, out["results"]
 
 
+def test_menu_job_whose_config_path_lost_characters_uses_the_menu_folders_ini():
+    """TIniFile writes request.ini in the ANSI code page: a menu folder named with characters that code page lacks
+    comes back with '?' in config=. The job then ran on built-in defaults (a `workspace` folder next to a path that
+    does not exist) instead of the ecadlib_menu.ini two folders up, which is the one the script used."""
+    from ecadlib import altium_menu as AM
+    from tests.test_altium_menu import _job, _setup
+    menu, cfg = _setup()
+    job = _job(menu, {"action": "nothing"})
+    req = (job / "request.ini").read_text(encoding="cp1252").replace(str(menu), str(menu.parent / "men?"))
+    (job / "request.ini").write_text(req, encoding="cp1252")
+    seen = {}
+    real = AM.run_action
+    AM.run_action = lambda c, *a, **k: seen.setdefault("cfg", c) and {"status": "ok"}
+    try:
+        AM.run_job(job)
+    finally:
+        AM.run_action = real
+    assert seen["cfg"]["workspace"] == cfg["workspace"], seen
+
+
+def test_menu_config_that_does_not_exist_is_an_error_not_defaults():
+    """`altium-menu add-part --config typo.ini` put parts into <typo folder>/workspace without a word."""
+    from ecadlib import altium_menu as AM
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        try:
+            AM.load_config(Path(t) / "nope" / AM.INI)
+        except ValueError as e:
+            assert "nope" in str(e)
+        else:
+            raise AssertionError("a missing ecadlib_menu.ini gave defaults")
+
+
 class Workspace(FakeA365):
     """A closer Nexar mock: components found by name whatever the case (pick_named), symbol / footprint items that
     can be released once (a second release of the same item name fails as duplicate, as live), linked by name."""
