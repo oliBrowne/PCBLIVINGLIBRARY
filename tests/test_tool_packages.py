@@ -347,9 +347,9 @@ def test_action_plugin_helpers():
     assert not any(p.show_toolbar_button for p in fake.registered[1:])
     d = _tmp()
     c = mod.job_command(["ecadlib"], "J", "add-part", "b.kicad_pcb", " LM358DR ", "TI")
-    assert c == ["ecadlib", "kicad-menu", "run-job", "J", "--action", "add-part", "--project", "b.kicad_pcb",
-                 "--mpn", "LM358DR", "--manufacturer", "TI"], c
-    assert mod.job_command(["e"], "J", "check-bom", "b.kicad_pcb")[-2:] == ["--project", "b.kicad_pcb"]
+    assert c == ["ecadlib", "kicad-menu", "run-job", "J", "--action=add-part", "--project=b.kicad_pcb",
+                 "--mpn=LM358DR", "--manufacturer=TI"], c          # --option=value: a value may start with '-' (R-MN-5)
+    assert mod.job_command(["e"], "J", "check-bom", "b.kicad_pcb")[-1:] == ["--project=b.kicad_pcb"]
     for bad in ("", "a;rm -rf /", "x" * 200, "--help"):
         try:
             mod.job_command(["ecadlib"], "J", "add-part", "b", bad)

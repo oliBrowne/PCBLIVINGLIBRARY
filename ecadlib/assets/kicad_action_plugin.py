@@ -80,13 +80,15 @@ def job_command(cmd, job, action, project, mpn="", manufacturer="", path="", **a
     price_unknown_ok yeses (ai-read, after the window showed the cost and the person said yes)."""
     if action == "add-part" and not MPN_RE.match(mpn.strip()):
         raise ValueError(f"not a part number: {mpn!r}")
-    c = cmd + ["kicad-menu", "run-job", job, "--action", action, "--project", project]
+    # every value as --option=value: a value the person typed may start with '-' ("-TI"), which argparse would take
+    # for an option when it is a separate argument
+    c = cmd + ["kicad-menu", "run-job", job, "--action=" + action, "--project=" + project]
     for k, v in (("--mpn", mpn.strip()), ("--manufacturer", manufacturer.strip()), ("--path", path)):
         if v:
-            c += [k, v]
+            c.append(f"{k}={v}")
     for k, flag in AI_ARGS:
         if ai.get(k):
-            c += [flag, str(ai[k])]
+            c.append(f"{flag}={ai[k]}")
     for k in ("over_limit_ok", "price_unknown_ok"):
         if ai.get(k) == "1":
             c.append("--" + k.replace("_", "-"))

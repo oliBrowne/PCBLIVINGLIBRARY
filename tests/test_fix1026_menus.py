@@ -29,6 +29,27 @@ def test_rmn4_kept_part_with_empty_footprint_rebuilds(tmp_path):
         assert con.execute('SELECT "Part ID", "Symbol", "Footprint" FROM "Parts"').fetchall() == [("LOGO1", "lib:LOGO1", "")]
 
 
+
+# ---- R-MN-5: user text starting with '-' (Manufacturer "-TI") reaches run-job intact (was an argparse exit 2)
+@lite
+def test_rmn5_dash_values_reach_run_job(monkeypatch):
+    from ecadlib import kicad_menu as KM
+    from tests.test_tool_packages import _plugin_module
+    mod, _ = _plugin_module()
+    got = {}
+    monkeypatch.setattr(KM, "run_job", lambda job, action, project, mpn, manufacturer, path, offline=False, ai=None:
+                        got.update(job=job, project=project, mpn=mpn, manufacturer=manufacturer, path=path, ai=ai)
+                        or {"status": "ok"})
+    for maker in ("TI", "-TI", "--", "-"):
+        argv = mod.job_command(["ecadlib"], "/j/job", "add-part", "-b.kicad_pcb", mpn="LM358DR", manufacturer=maker)
+        assert KM.main(argv[2:]) == 0, argv
+        assert got["manufacturer"] == maker and got["project"] == "-b.kicad_pcb" and got["mpn"] == "LM358DR", (maker, got)
+    argv = mod.job_command(["ecadlib"], "/j/job", "open", "b.kicad_pcb", path="-r.html")
+    assert KM.main(argv[2:]) == 0 and got["path"] == "-r.html", got
+    argv = mod.job_command(["ecadlib"], "/j/job", "ai-read", "b.kicad_pcb", bom="-x.csv", part="-P1", approved_usd="0.4")
+    assert KM.main(argv[2:]) == 0 and got["ai"]["bom"] == "-x.csv" and got["ai"]["part"] == "-P1", got
+
+
 if __name__ == "__main__":
     fails = 0
     for k, f in list(globals().items()):
