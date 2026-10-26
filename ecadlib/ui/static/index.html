@@ -821,6 +821,7 @@ $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), as
   await loadInfo();
   return `${r.footprints.length} footprint(s) as .PcbLib${r.footprints.length ? ": " + esc(r.footprints.join(", ")) : ""}. Symbols: ${esc(r.symbols.join(", ") || "none")}.` +
     (r.skipped.length ? `<div class="muted">Not converted: ${esc(r.skipped.join("; "))}</div>` : "") +
+    ((r.notes || []).length ? `<div class="muted">Check: ${esc(r.notes.join("; "))}</div>` : "") +
     `<div class="muted">Files are in the <span class="mono">altium_models</span> folder of the workspace.</div>` +
     (r.footprints.length ? "" : `<div class="next s-warn"><span>No footprint was converted: none of this BOM's footprints is in your KiCad libraries. Step 2 (Fill the library) finds and builds them.</span></div>`);
 }));

@@ -367,15 +367,17 @@ class Workspace:
 
     def build_altium_models(self, bom):
         """Write the Altium files an Altium 365 release needs, for every BOM line that has a footprint:
-        footprints already in the KiCad libraries are converted to .PcbLib, and generic Resistor/Capacitor
-        symbols are written as .SchLib. IC symbols are not generated here."""
-        from . import altium_lib
+        footprints already in the KiCad libraries are converted to .PcbLib (kicad_import's converter and 3D body, as
+        the librarian and `ecadlib kicad-import` do: a height and a body from the package tables, offline), and generic
+        Resistor/Capacitor symbols are written as .SchLib. IC symbols are not generated here. notes: per footprint,
+        what to check (no 3D height known, approximations)."""
+        from . import altium_lib, kicad_import as K
         bom_path = self._bom_path(bom)
         tri = self._triage_frame(bom_path)
         if tri is None:
             self.triage(bom)
             tri = self._triage_frame(bom_path)
-        index, done, skipped, layers = self._index(), [], [], RU.layers(self.rules())
+        index, done, skipped, layers, notes = self._index(), [], [], RU.layers(self.rules()), []
         for key in dict.fromkeys(k.split(" ")[0] for k in tri["local_footprint"] if k):
             ref = key.split(":")[-1]
             out = self.models / "PcbLib" / f"{ref}.PcbLib"
@@ -387,15 +389,22 @@ class Workspace:
                 skipped.append(f"{ref}: not found in indexed libraries")
                 continue
             try:
-                altium_lib.write_pcblib(out, [altium_lib.footprint_from_kicad(Path(hit["path"]).read_text(encoding="utf-8"))], layers)
+                said = []
+                fp, t = K.convert_footprint(Path(hit["path"]).read_text(encoding="utf-8"), None, "", said)
+                try:
+                    K.add_body(fp, t, None, None, False, said, gen_step=True)
+                except ValueError as e:              # no height known: the footprint is still right, the body is not
+                    said.append(f"no 3D body: {e}")  # there; say so instead of a silent HEIGHT 0
+                altium_lib.write_pcblib(out, [fp], layers)
                 done.append(ref)
+                notes += [f"{ref}: {n}" for n in said if "no 3D body" in n or "verify" in n]
             except Exception as e:
                 skipped.append(f"{ref}: {e}")
         for name, make in (("Resistor", altium_lib.resistor_symbol), ("Capacitor", altium_lib.capacitor_symbol)):
             out = self.models / "SchLib" / f"{name}.SchLib"
             if not out.exists():
                 altium_lib.write_schlib(out, [make()])
-        return {"footprints": done, "skipped": skipped,
+        return {"footprints": done, "skipped": skipped, "notes": notes,
                 "symbols": sorted(p.stem for p in (self.models / "SchLib").glob("*.SchLib"))}
 
     def export_dblib(self, bom):
