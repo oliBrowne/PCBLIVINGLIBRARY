@@ -98,3 +98,54 @@ def test_the_browser_route_check_looks_each_host_up_once(monkeypatch):
     r = _Route("file:///etc/passwd")                  # not a host's verdict: the URL's own scheme still refused
     check(r)
     assert r.did == "abort"
+
+
+# ---------------------------------------------------------------- Altium project fixtures (R-FX4-1, R-FX4-4)
+def _blk(s):
+    import struct
+    b = s.encode("cp1252") + b"\0"
+    return struct.pack("<I", len(b)) + b
+
+
+def _project(d, params, variation="", footprint="SOIC-8_3.9x4.9mm_P1.27mm"):
+    from ecadlib import cfb
+    recs = ["|HEADER=Protel for Windows - Schematic Capture Binary File Version 5.0|WEIGHT=4",
+            "|RECORD=1|LIBREFERENCE=OPAMP|DESIGNITEMID=OPAMP|UNIQUEID=ABCDEFGH|CURRENTPARTID=1|PARTCOUNT=2",
+            "|RECORD=34|OWNERINDEX=0|TEXT=U1|NAME=Designator"]
+    recs += [f"|RECORD=41|OWNERINDEX=0|TEXT={v}|NAME={k}" for k, v in params.items()]
+    n = len(recs) - 1
+    recs += ["|RECORD=44|OWNERINDEX=0", f"|RECORD=45|OWNERINDEX={n}|MODELNAME={footprint}|MODELTYPE=PCBLIB|ISCURRENT=T"]
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "Sheet1.SchDoc").write_bytes(cfb.to_bytes({"FileHeader": b"".join(_blk(r) for r in recs)}))
+    vs = [variation] if variation else []
+    (d / "B.PrjPcb").write_text("[Design]\r\n[Document1]\r\nDocumentPath=Sheet1.SchDoc\r\n[ProjectVariant1]\r\n"
+                                f"Description=V2\r\nVariationCount={len(vs)}\r\n" +
+                                "".join(f"Variation{i}={v}\r\n" for i, v in enumerate(vs, 1)) +
+                                "ParamVariationCount=0\r\n", encoding="utf-8")
+    return d / "B.PrjPcb"
+
+
+_HOUSE = '[parameters.names]\n"Manufacturer Part Number" = "MfrPN"\n"Manufacturer" = "Maker"\n'
+
+
+# ---------------------------------------------------------------- R-FX4-4: where-used reads with the workspace's rules
+@lite
+def test_where_used_reads_house_named_mpn_parameters(tmp_path):
+    import json
+    from ecadlib import altium_project as AP
+    prj_dir = tmp_path / "proj"
+    _project(prj_dir, {"MfrPN": "LM358DR", "Maker": "TI"})
+    (tmp_path / "ecadlib.toml").write_text(_HOUSE, encoding="utf-8")
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        rc = AP.where_used_main(["--projects", str(prj_dir), "-o", str(tmp_path / "wu")])
+    assert not rc
+    res = json.loads((tmp_path / "wu.json").read_text(encoding="utf-8"))
+    mpns = [p.get("mpn") for p in (res["parts"].values() if isinstance(res["parts"], dict) else res["parts"])]
+    assert mpns == ["LM358DR"], mpns
+    # the UI / MCP: the workspace's own ecadlib.toml
+    from ecadlib.app import Workspace
+    ws = Workspace(tmp_path / "ws", offline=True)
+    (tmp_path / "ws" / "ecadlib.toml").write_text(_HOUSE, encoding="utf-8")
+    _project(tmp_path / "ws" / "p2", {"MfrPN": "LM358DR", "Maker": "TI"})
+    out = ws.where_used([str(tmp_path / "ws" / "p2")])
+    assert [r.get("mpn") for r in out["rows"]] == ["LM358DR"], out["rows"]

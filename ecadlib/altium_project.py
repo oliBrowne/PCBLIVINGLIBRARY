@@ -1144,7 +1144,9 @@ def where_used_main(argv=None):
     ap.add_argument("-o", "--out", default="out/where_used", help="report stem (.md, .csv, _flags.csv, .json)")
     a = ap.parse_args(argv)
     try:
-        res = where_used(a.projects, a.part, a.plan, a.lib, a.a365, a.lifecycle)
+        first = Path(a.projects[0])                   # the rules beside (or above) the projects: house parameter names
+        rules = RU.resolve(None, first if first.is_dir() else first.parent) if RU else None
+        res = where_used(a.projects, a.part, a.plan, a.lib, a.a365, a.lifecycle, rules=rules)
     except (ValueError, FileNotFoundError) as e:
         print(f"ecadlib where-used: {e}", file=sys.stderr)
         return 2

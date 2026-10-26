@@ -929,7 +929,7 @@ class Workspace:
         if plan and not plans[0].is_file():
             raise ValueError(f"plan not found: {plan} is not a plan.json file")
         libs = [str(self.models)] if self.models.exists() else []
-        res = AP.where_used(dirs, part, plans[0] if plans else None, libs)
+        res = AP.where_used(dirs, part, plans[0] if plans else None, libs, rules=self.rules())
         files = AP.write_where_used(res, self.root / "reports" / "where_used")
         rows = AP.where_used_rows(res)
         return {"projects": res["projects"], "flags": res["flags"], "rows": rows, "warnings": res["warnings"],
