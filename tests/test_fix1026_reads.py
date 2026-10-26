@@ -568,6 +568,40 @@ def test_f6_h2_a_span_copied_into_both_spans_of_a_rectangular_qfp_never_builds_w
         assert _qfp_read(dict(t, ls=t["ls"] + 0.1))[0] == "ok", t["name"]        # a span read 0.1 mm off: still fine
 
 
+
+def _ep_read(ptype, n, body, ls, T, b, e, ep, nlr=None, ntb=None):
+    """A synthetic exposed-pad answer (the review's epturn2.py) -> assess verdict."""
+    import copy
+    from ecadlib import ds_route as DR
+    from tests import test_datasheet as TD
+    x = copy.deepcopy(TD.GOOD)
+    x["package"].update(name=f"{ptype}-{n}-1EP", description="X", package_type=ptype, pin_count=n, pitch=_qdim("e", e, 0),
+                        body_length=_qdim("D", body[0]), body_width=_qdim("E", body[1]), terminal_length=_qdim("L", T),
+                        terminal_width=_qdim("b", b, 0.05), lead_span=_qdim("H", ls, 0.2) if ls else None,
+                        exposed_pad={"length": _qdim("D2", ep[0], 0.05), "width": _qdim("E2", ep[1], 0.05)})
+    if nlr is not None:
+        x["package"].update(pins_left_right=nlr, pins_top_bottom=ntb)
+    x["pins"] = [{"num": str(i), "name": f"P{i}", "type": "passive", "side": "left", "page": 3} for i in range(1, n + 2)]
+    x["pin_table"]["rows"] = n
+    return DR.assess(D.process(x, "T", "ds.pdf"))
+
+
+def test_f6_m3_an_exposed_pad_is_judged_as_it_is_built():
+    """Before (a regression from main): DFN-8 3x2 with a 1.2 x 1.98 pad was excused as "fits turned", but orient_ep
+    keeps it as read (it fits between the rows), so a 1.98 mm pad was built in a 2.0 mm body."""
+    dfn = ("qfn", 8, (3, 2), None, 0.35, 0.25, 0.5)
+    kind, why = _ep_read(*dfn, (1.2, 1.98), 4, 0)
+    assert kind == "failed" and any("exposed_pad.width 1.98" in w for w in why), why
+    assert _ep_read(*dfn, (1.2, 1.5), 4, 0)[0] == "ok"
+    assert _ep_read(*dfn, (1.98, 1.2), 4, 0)[0] == "ok"
+    # LT3652IDD (benchmark 2026-10-21): DFN-12 3x3, 2.38 x 1.65 pad across the rows: orient_ep turns it, it fits
+    assert _ep_read("qfn", 12, (3, 3), None, 0.4, 0.25, 0.5, (2.38, 1.65), 6, 0)[0] == "ok"
+    soic = ("gullwing", 8, (4.9, 3.9), 6.0, 0.8, 0.41, 1.27)
+    assert _ep_read(*soic, (2.41, 3.81))[0] == "ok"       # SOIC-8-1EP read along the other axes: built to fit
+    assert _ep_read(*soic, (2.41, 4.0))[0] == "ok"
+    assert _ep_read(*soic, (4.88, 2.41))[0] == "failed"   # turned to run with the body: 4.88 in a 4.8 mm min body
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

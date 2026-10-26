@@ -1728,14 +1728,21 @@ def sanity(spec, review, evidence=""):
         review.extend(_listed_layout(spec, evidence))
     ep = spec.get("exposed_pad") or {}
     eps, bodies = [_dim(ep.get(d)) for d in ("length", "width")], [g(k) for k in ("body_length", "body_width")]
-    # a pad that fits the body turned is not too big: footprint_gen turns it to fit (orient_ep; SOIC-8-1EP's
-    # 2.41 x 3.81 pad in a 4.9 x 3.9 body, read along the other axes)
-    turns = t == "gullwing" or (t == "qfn" and isinstance(n, int) and F.rows(spec)[1] == 0)   # only these turn (a
-    turned_fits = turns and all(eps) and all(bodies) and \
-        eps[0][1] < bodies[1][0] and eps[1][1] < bodies[0][0]                   # QFP's, a quad QFN's pad: never)
+    # judged as footprint_gen builds it (orient_ep turns a gull-wing pad to run with the body and a DFN pad only to
+    # clear its rows; the pad's length lies on X, a gull-wing's body_width): a pad read along the other axes that is
+    # built to fit is not too big (SOIC-8-1EP's 2.41 x 3.81 pad in a 4.9 x 3.9 body), one built as read is
+    # (DFN-8 3x2: a 1.2 x 1.98 pad fits between the rows, so it stays, 1.98 mm in a 2.0 mm body)
+    built_fits = False
+    if all(eps) and all(bodies) and isinstance(n, int):
+        try:
+            bep = F.orient_ep(spec)[0]["exposed_pad"]
+            bx, by = (bodies[1], bodies[0]) if t == "gullwing" else (bodies[0], bodies[1])
+            built_fits = F.dim(bep["length"])[1] < bx[0] and F.dim(bep["width"])[1] < by[0]
+        except (TypeError, KeyError, ValueError):
+            pass
     for d, k in (("length", "body_length"), ("width", "body_width")):
         v, body = _dim(ep.get(d)), g(k)
-        if v and body and v[1] >= body[0] and not turned_fits:
+        if v and body and v[1] >= body[0] and not built_fits:
             review.append(f"exposed_pad.{d} {v[1]} >= {k} min {body[0]}")
         small = max(0.2, b[1] if b else 0)            # an inch value labelled mm (0.057 "mm" for 1.45 mm): narrower
         if v and 0 < v[1] < small:                    # than a lead (the smallest real ones: 0.4 mm beside 0.2 leads)
