@@ -241,3 +241,43 @@ def test_rd3_mm_table_labelled_mil_is_an_error_not_a_warning():
     for t in (DIP8, SO8_LAND, SOT23_LAND):
         errs = [m for m in FA.check_pad_table(relabel(t, "mil")) if m["level"] == "error" and m["rule"] == "units"]
         assert errs, (t["name"], FA.check_pad_table(relabel(t, "mil")))
+
+
+# ---------------------------------------------------------------- R-RD-4: a DFN's rows read the other way round
+def qfn(name, n, e, Dx, Ey, b, L, nlr, ntb, ep):
+    return dict(name=name, package_type="qfn", pin_count=n, pitch=e, body_length=Dx, body_width=Ey, terminal_width=b,
+                terminal_length=L, pins_left_right=nlr, pins_top_bottom=ntb, exposed_pad={"length": ep[0], "width": ep[1]})
+
+
+WSON6 = qfn("WSON-6-1EP_2x2mm_P0.65mm_EP1x1.6mm", 6, 0.65, (1.9, 2.0, 2.1), (1.9, 2.0, 2.1), (0.25, 0.3, 0.35),
+            (0.2, 0.3, 0.4), 3, 0, ((0.9, 1.0, 1.1), (1.5, 1.6, 1.7)))
+DFN8 = qfn("DFN-8-1EP_3x3mm_P0.65mm_EP1.65x2.4mm", 8, 0.65, (2.9, 3.0, 3.1), (2.9, 3.0, 3.1), (0.25, 0.3, 0.35),
+           (0.3, 0.4, 0.5), 4, 0, ((1.55, 1.65, 1.75), (2.3, 2.4, 2.5)))
+VQFN16 = qfn("VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm", 16, 0.5, (2.9, 3.0, 3.1), (2.9, 3.0, 3.1), (0.18, 0.24, 0.3),
+             (0.3, 0.4, 0.5), 4, 4, ((1.61, 1.68, 1.75), (1.61, 1.68, 1.75)))
+
+
+def test_rd4_true_dfn_and_qfn_reads_build():
+    for t in (WSON6, DFN8, VQFN16):
+        res = assert_ok(t)
+        F.build(res["spec"])
+
+
+def test_rd4_dfn_rows_read_top_bottom_is_not_built_outside_the_body():
+    """Before: WSON-6 read with pins_left_right 0 / pins_top_bottom 3 and the EP as read built its pads 1.00-1.38 mm
+    from the centre of a 2 mm body (the EP heel clamp moved them out silently), assess ok."""
+    for t in (WSON6, DFN8):
+        m = dict(t, pins_left_right=0, pins_top_bottom=t["pin_count"] // 2)
+        res, kind, why, hold = verdict(m)
+        assert kind != "ok", why
+        try:
+            F.build(res["spec"])
+            raise AssertionError(f"{t['name']}: built with its rows turned")
+        except ValueError as e:
+            assert "no room on the terminals" in str(e), e
+    m = dict(DFN8, pins_left_right=2, pins_top_bottom=2)           # a DFN read as a 2/2 quad
+    try:
+        F.build(read(m)["spec"])
+        raise AssertionError("a DFN read as a quad was built")
+    except ValueError as e:
+        assert "no room on the terminals" in str(e), e

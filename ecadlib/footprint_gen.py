@@ -237,6 +237,17 @@ def _qfn(spec, fil):
     gy = dim(ep["width"])[1] + 2 * MIN_EP_CLEAR if ep else None
     rx = ipc_land(span_x, T, bw, fil, min_gap=gx)             # left/right pads
     ry = ipc_land(span_y, T, bw, fil, min_gap=gy)             # top/bottom pads
+    # a QFN / DFN heel pulled back to clear the EP must still land on the terminals: a DFN read with its two rows on
+    # top/bottom (review 196 R-RD-4, WSON-6) had the clamp move its pads silently out past the body edge
+    for cnt, r, side, g, k in ((nlr, rx, body_x, gx, "length"), (ntb, ry, body_y, gy, "width")):
+        if spec["package_type"] == "qfn" and cnt and g is not None and r["G"] >= g - 1e-9 and \
+                r["G"] / 2 > side[1] / 2 - T[0] / 2:
+            raise ValueError(
+                f"the exposed pad ({k} {dim(ep[k])[1]:g} mm) leaves the {'left/right' if r is rx else 'top/bottom'} pads "
+                f"no room on the terminals: {MIN_EP_CLEAR:g} mm clear of it they start {r['G'] / 2:g} mm from the centre, "
+                f"past the terminals' inner ends at the {side[1]:g} mm body's edge, which is implausible: the rows "
+                "(pins_left_right / pins_top_bottom) or the exposed pad are read the other way round (check them "
+                "against the drawing)")
     X = min(rx["X"], rdn(e - MIN_PAD_GAP))
     pads, k = [], 1
     for i in range(nlr):                                      # left, top->bottom
