@@ -65,7 +65,7 @@ ecadlib's key store): the Components panel then shows them after a refresh. Held
 Never run inside Altium here: the script is written from Altium's scripting references (TR0120 DelphiScript,
 TR0124 Server Process, TR0135 System, TR0136 Integrated Library, TR0140 Workspace Manager; 2008 PDFs kept in
 github.com/Altium-Designer-addons/scripting-reference) and public scripts; see ALTIUM_API for each call it uses."""
-import argparse, configparser, csv, datetime, html, io, json, os, re, subprocess, sys, time, zipfile
+import argparse, configparser, csv, datetime, hashlib, html, io, json, os, re, subprocess, sys, time, zipfile
 from pathlib import Path, PureWindowsPath
 
 from . import __version__, altium_native as AN
@@ -1239,13 +1239,27 @@ def releasable(it):
     return out
 
 
+RELEASE_SHOWN = 8           # hold reasons the dialog's Release anyway lists (ecadlib_dialog.pas AskRelease)
+
+
+def release_key(it):
+    """What the dialog's Release anyway was shown: a digest of the part's hold reasons, sent back with the release so
+    reasons that came up since (release_part re-reads the plan) are never released unseen."""
+    return hashlib.sha256("\n".join(sorted(str(r) for r in it.get("hold_reasons") or [])).encode("utf-8")).hexdigest()[:16]
+
+
 def offer_release(res, it, bom, mpn=""):
-    """result.ini keys for the dialog's Release anyway: the part, its BOM and why it is held (release_why1..4), so
+    """result.ini keys for the dialog's Release anyway: the part, its BOM and why it is held (release_why1..N, every
+    reason up to RELEASE_SHOWN; release_more: how many more there are, which the dialog says and which a release
+    from the dialog then refuses), release_count and release_key (what was shown, sent back with the release), so
     the dialog can show the reasons before it asks for a reason of its own. Nothing is released here."""
     whys = releasable(it)
     if whys:
         res.update(offer_release="1", release_bom=bom, release_mpn=mpn, release_part=it["name"],
-                   **{f"release_why{i}": w for i, w in enumerate(whys[:4], 1)})
+                   release_count=str(len(whys)), release_key=release_key(it),
+                   **{f"release_why{i}": w for i, w in enumerate(whys[:RELEASE_SHOWN], 1)})
+        if len(whys) > RELEASE_SHOWN:
+            res["release_more"] = str(len(whys) - RELEASE_SHOWN)
     return res
 
 
@@ -1277,6 +1291,15 @@ def release_part(cfg, req, progress=None):
             return {"status": "error", "message": f"{name} cannot be released anyway: "
                     + "; ".join(it.get("hold_reasons") or ["a file is missing or a change waits for approval"]) + ".",
                     "fix": f"Fix it in the review queue ({_queue_hint(cfg)})."}
+        if str(req.get("release_key") or "") != release_key(it):   # what is released must be what the dialog showed
+            return {"status": "error", "message": f"{name} was not released: why it is held changed since the dialog "
+                    f"showed it (or the dialog sent no list of what it showed).",
+                    "fix": f"Add {mpn} again to see every reason now, or release it from the review queue "
+                           f"({_queue_hint(cfg)})."}
+        if len(releasable(it)) > RELEASE_SHOWN:          # the dialog listed only the first RELEASE_SHOWN reasons
+            return {"status": "error", "message": f"{name} was not released: it is held for {len(releasable(it))} "
+                    f"reasons and the dialog shows {RELEASE_SHOWN}.",
+                    "fix": f"Release it from the review queue ({_queue_hint(cfg)}), which shows every reason."}
         progress.step(0, 0, f"releasing {name}")
         who = A.identity(req.get("user") or None, cwd=plan.parent)
         RV.release_anyway(plan, name, who, reason=reason)

@@ -401,9 +401,11 @@ Begin
     Phase := 'confirm_release';
     Second := 'back_release';
     S := Answer(Job, 'release_part') + ' is held because:';
-    For i := 1 To 4 Do
+    For i := 1 To 8 Do
         If Answer(Job, 'release_why' + IntToStr(i)) <> '' Then
             S := S + #13#10 + '- ' + Answer(Job, 'release_why' + IntToStr(i));
+    If Answer(Job, 'release_more') <> '' Then
+        S := S + #13#10 + '- and ' + Answer(Job, 'release_more') + ' more: release it from the review queue, which shows them all';
     S := S + #13#10 + 'Release anyway puts it into the library as it is. ecadlib keeps your name and your reason with it.';
     EcadlibDialog.Note.Caption := S;
     EcadlibDialog.Note.Font.Color := $009C9C9C;
@@ -431,6 +433,7 @@ Begin
     Ask(Job, 'bom', Answer(Prev, 'release_bom'));
     Ask(Job, 'mpn', Answer(Prev, 'release_mpn'));
     Ask(Job, 'part', Answer(Prev, 'release_part'));
+    Ask(Job, 'release_key', Answer(Prev, 'release_key'));
     Ask(Job, 'reason', Why);
     Run('release');
 End;

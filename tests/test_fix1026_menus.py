@@ -134,6 +134,91 @@ def test_rmn3_a365_counts_only_pushed_parts(tmp_path, monkeypatch):
     assert res["missing"] == 0 and res["offer_fill"] == "0", res
 
 
+
+# ---- R-MN-2: the Altium dialog's Release anyway releases only the reasons it showed
+def test_rmn2_offer_lists_every_reason_with_a_key(monkeypatch=None):
+    from ecadlib import altium_menu as AM
+    reasons = ["fields: Description is empty", "pins: pads without a symbol pin: 9",
+               "footprint: silkscreen shape covers pad 3", "footprint: no courtyard",
+               "footprint: pads 1 and 2 overlap by 0.12 mm", "footprint: pad 4 sticks out of the courtyard"]
+    it = {"name": "PART1", "status": "held", "hold_reasons": reasons}
+    whys = AM.releasable(it)
+    res = AM.offer_release({}, it, "uploads/altium-menu/parts.csv", "PART1")
+    shown = [res[f"release_why{i}"] for i in range(1, len(whys) + 1)]
+    assert shown == whys and len(whys) == 6, (whys, res)                     # all six, not the first four
+    assert res["release_count"] == "6" and res["release_key"] == AM.release_key(it), res
+    other = AM.offer_release({}, dict(it, hold_reasons=reasons + ["footprint: no 3D body"]), "b", "PART1")
+    assert other["release_key"] != res["release_key"]
+
+
+@lite
+def test_rmn2_too_many_reasons_say_more_and_are_not_released(monkeypatch):
+    from ecadlib import altium_menu as AM
+    many = [f"reason {i}" for i in range(AM.RELEASE_SHOWN + 3)]
+    monkeypatch.setattr(AM, "releasable", lambda it: list(many))
+    res = AM.offer_release({}, {"name": "P", "hold_reasons": many}, "b", "P")
+    assert f"release_why{AM.RELEASE_SHOWN}" in res and f"release_why{AM.RELEASE_SHOWN + 1}" not in res, res
+    assert res["release_more"] == "3" and res["release_count"] == str(len(many)), res
+
+
+def _held_plan_release(extra_reason=None, key="right", before=None):
+    from ecadlib import altium_menu as AM
+    from tests import test_altium_menu as TM, test_altium_release_anyway as TR
+    menu, cfg = TM._setup()
+    with TR._held_check(TR.HEIGHT):
+        held = TR._held(menu)
+        plan = next(cfg["workspace"].glob("librarian/*/plan.json"))
+        if extra_reason:                                # a reason that came up after the dialog showed the others
+            items = json.loads(plan.read_text(encoding="utf-8"))
+            for i in items:
+                if i["name"] == held["release_part"]:
+                    i["hold_reasons"].append(extra_reason)
+            plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
+        req = {"action": "release", "bom": held["release_bom"], "mpn": TR.MPN, "part": held["release_part"],
+               "reason": "checked", **({"release_key": held["release_key"]} if key == "right" else
+                                       {"release_key": key} if key else {})}
+        if before:
+            before(AM)
+        return AM.run_job(TM._job(menu, req)), plan, held
+
+
+def test_rmn2_release_with_the_shown_key_releases():
+    r, plan, held = _held_plan_release()
+    assert r["status"] == "ready", r
+
+
+def test_rmn2_new_reason_since_the_dialog_is_not_released():
+    r, plan, held = _held_plan_release(extra_reason="footprint: pads 1 and 2 overlap by 0.12 mm")
+    assert r["status"] == "error" and "changed" in r["message"], r
+    it = next(i for i in json.loads(plan.read_text(encoding="utf-8")) if i["name"] == held["release_part"])
+    assert it["status"] == "held", it.get("status")
+
+
+def test_rmn2_more_reasons_than_shown_are_not_released():
+    from unittest import mock
+    many = [f"reason {i}" for i in range(12)]
+    with mock.patch("ecadlib.altium_menu.releasable", lambda it: list(many)):
+        r, plan, held = _held_plan_release()
+    assert r["status"] == "error" and "review queue" in r["fix"], r
+
+
+def test_rmn2_release_without_a_key_is_refused():
+    for key in (None, "0000"):
+        r, plan, held = _held_plan_release(key=key)
+        assert r["status"] == "error", (key, r)
+
+
+def test_rmn2_dialog_shows_all_reasons_and_sends_the_key_back():
+    import re
+    from ecadlib import altium_forms as AF, altium_menu as AM
+    pas = AF.dialog_pas_text()
+    ask = re.search(r"(?ms)^Procedure AskRelease\b.*?^End;", pas).group(0)
+    start = re.search(r"(?ms)^Procedure StartRelease\b.*?^End;", pas).group(0)
+    assert f"For i := 1 To {AM.RELEASE_SHOWN} Do" in ask and "release_more" in ask, ask
+    assert "Ask(Job, 'release_key', Answer(Prev, 'release_key'))" in start, start
+    assert pas.isascii()
+
+
 if __name__ == "__main__":
     fails = 0
     for k, f in list(globals().items()):
