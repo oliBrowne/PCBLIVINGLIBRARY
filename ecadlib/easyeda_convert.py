@@ -102,6 +102,11 @@ def footprint_to_kicad(data, name=None, notes=None):
         if kind == "PAD":
             shape, cx, cy, w, h, layer, num, hole_r = f[1], X(f[2]), Y(f[3]), _f(f[4]) * U, _f(f[5]) * U, f[6], f[8], _f(f[9]) * U
             rot, hole_len = _f(f[11]) % 360, _f(f[13]) * U
+            seen = _outline_rot(shape, _nums(f[10]), _f(f[2]), _f(f[3]), _f(f[4]), _f(f[5]))
+            if seen is not None and _turn_off(seen, rot, 90 if abs(w - h) < 1e-6 else 180) > 0.5:
+                notes.append(f"pad {num}: rotation {_n(rot)} deg does not match the pad's own outline ({_n(seen)} deg); "
+                             f"the outline is used")
+                rot = seen
             poly = None
             if shape == "POLYGON":
                 pts = _nums(f[10])
@@ -217,6 +222,42 @@ def footprint_to_kicad(data, name=None, notes=None):
                f'(end {_n(crt[2])} {_n(crt[3])}) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))')
     notes.append("courtyard drawn by ecadlib: pads and fab outline + 0.25 mm (EasyEDA has no courtyard layer)")
     return "\n".join(out + pads) + "\n)\n"
+
+
+def _turn_off(a, b, period):
+    d = (a - b) % period
+    return min(d, period - d)
+
+
+def _outline_rot(shape, v, cx, cy, w, h):
+    """The KiCad rotation (degrees, counter-clockwise on screen) of a RECT / OVAL pad as its own points field draws
+    it, else None. EasyEDA writes each pad's outline in canvas units beside (cx, cy, w, h, rotation): a RECT's four
+    corners in order, an OVAL's long axis (two end points). The outline is what EasyEDA shows, so a rotation that
+    disagrees with it (a 45 degree pad turned the other way) is not trusted. None when the points are not that
+    outline (another size or centre, not a rectangle, or no points)."""
+    tol = max(0.02, 0.01 * max(w, h))
+    if shape == "RECT" and len(v) >= 8:
+        p = list(zip(v[0:8:2], v[1:8:2]))
+        e1, e2 = (p[1][0] - p[0][0], p[1][1] - p[0][1]), (p[2][0] - p[1][0], p[2][1] - p[1][1])
+        l1, l2 = math.hypot(*e1), math.hypot(*e2)
+        mx, my = sum(q[0] for q in p) / 4, sum(q[1] for q in p) / 4
+        if (min(l1, l2) < 1e-9 or abs(e1[0] * e2[0] + e1[1] * e2[1]) > 0.01 * l1 * l2
+                or math.hypot(mx - cx, my - cy) > tol):
+            return None
+        if abs(l1 - w) <= tol and abs(l2 - h) <= tol:
+            e = e1
+        elif abs(l2 - w) <= tol and abs(l1 - h) <= tol:
+            e = e2
+        else:
+            return None
+        return round(math.degrees(math.atan2(-e[1], e[0])) % 360, 3)
+    if shape == "OVAL" and len(v) == 4 and abs(w - h) > tol:
+        a = (v[2] - v[0], v[3] - v[1])
+        mx, my = (v[0] + v[2]) / 2, (v[1] + v[3]) / 2
+        if abs(math.hypot(*a) - abs(w - h)) > tol or math.hypot(mx - cx, my - cy) > tol:
+            return None
+        return round((math.degrees(math.atan2(-a[1], a[0])) - (0 if w > h else 90)) % 360, 3)
+    return None
 
 
 def _polygon(pts):
