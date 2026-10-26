@@ -200,6 +200,8 @@ def _canon_pads(pads):
              "mask_margin": qmm(p.get("mask_margin")) if p.get("mask_margin") else None,
              "outline": qbox(p.get("outline")) if p["shape"] == "custom" else None,
              "cu": p.get("cu"), **{k: p.get(k) for k in PAD_TOOL_KEYS}}
+        if p["rot"] is not None and q["rot"] == 0.0 and float(p["rot"]) % 90.0 > 45.0:   # 89.9996 deg rounds to 90,
+            q["w"], q["h"] = q["h"], q["w"]                                           # a quarter turn: w and h swap
         if q["side"] == "NPTH":                # Altium's NPTH pad is the hole: size, shape and mask follow the drill
             q.update(w=None, h=None, rot=0.0, shape="hole", corner=0, mask=None, mask_margin=None, cu=None, cu_in=None)
         if q["shape"] == "round" and q["w"] == q["h"]:

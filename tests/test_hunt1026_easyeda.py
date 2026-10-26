@@ -316,6 +316,16 @@ def test_easyeda_lookup_puts_only_the_lcsc_number_in_its_url():
     assert len(seen) == n and res.found is None and "not an LCSC number" in res.error, res
 
 
+def test_fingerprint_pad_a_hair_short_of_a_quarter_turn_is_the_turned_pad():
+    # (w, h) at 89.9996 deg rounds to rotation 0 but kept w and h: another fingerprint than the same pad written as
+    # (h, w) at 0 (a tool's float rounding is enough for a "pad size changed" hold)
+    from ecadlib import fingerprint as FP
+    pad = lambda w, h, rot: {"num": "1", "x": 0, "y": 0, "w": w, "h": h, "rot": rot, "shape": "rect", "side": "top"}
+    assert FP._canon_pads([pad(1.0, 2.0, 89.9996)]) == FP._canon_pads([pad(2.0, 1.0, 0.0)])
+    assert FP._canon_pads([pad(1.0, 2.0, 0.0004)]) == FP._canon_pads([pad(1.0, 2.0, 0.0)])
+    assert FP._canon_pads([pad(1.0, 2.0, 45.0)]) != FP._canon_pads([pad(2.0, 1.0, 45.0)])
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
