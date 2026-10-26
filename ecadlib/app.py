@@ -209,14 +209,15 @@ class Workspace:
             f.write(data)
         return self.rel(p)
 
-    def triage(self, bom, progress=None, lock=None, user=None):
+    def triage(self, bom, progress=None, lock=None, user=None, offline=None):
         """Triage a BOM (workspace-relative or absolute path). Writes reports/triage_<stem>.{md,csv,json}; the
         .json is the whole result plus when and by whom (user), which triage_history lists and opens again.
         progress(done, total, label) is called before each line, for UIs that show a progress bar.
         lock, if given, is held only while the reports are written: the lookups are network-bound and
-        must not block other workspace actions."""
+        must not block other workspace actions. offline: True looks nothing up online (the cache only) whatever the
+        workspace's setting (the bundled sample, which promises no network)."""
         bom_path = self._bom_path(bom)
-        http = CachedHTTP(self.root / "http_cache", min_interval=1.0, offline=self.offline)
+        http = CachedHTTP(self.root / "http_cache", min_interval=1.0, offline=self.offline if offline is None else offline)
         provs = [c(http) for c in self._provider_classes()]
         lines, mapping = self._read_bom(bom_path)
         index = self._index()
@@ -474,14 +475,16 @@ class Workspace:
     def _librarian_dir(self, bom_path):
         return self.root / "librarian" / self._key(bom_path)
 
-    def librarian_run(self, bom, sources=None, allow=(), refresh=None, progress=None, ai=True):
+    def librarian_run(self, bom, sources=None, allow=(), refresh=None, progress=None, ai=True, offline=None):
         """BOM -> library in one go (ecadlib.librarian): triage, fill every missing symbol and footprint from
         the KiCad libraries, EasyEDA or the datasheet, write Altium models and the plan, run the release check.
         refresh: None resumes (finished parts are skipped), [] redoes everything, [names] redoes those.
         ai=False (the Altium dialog, the KiCad window, the web UI): no paid model call; parts only a datasheet read
         can finish are priced instead, and the summary's "ai" is that quote (ecadlib.ai_cost) or None. The person
-        then says yes and ai_read() reads them."""
+        then says yes and ai_read() reads them. offline: True looks nothing up online whatever the workspace's
+        setting (the bundled sample in the web UI, as `ecadlib demo`)."""
         from . import librarian as L
+        offline = self.offline if offline is None else offline
         bom_path = self._bom_path(bom)
         lines, _ = self._read_bom(bom_path)               # same friendly error as triage for unreadable files
         out = self._librarian_dir(bom_path)
@@ -495,9 +498,9 @@ class Workspace:
         if progress:
             progress(0, len(lines), "looking up parts")
         provs = self._librarian_providers()
-        reader = None if ai else self._datasheet_reader(out, batch=False, estimate=True)
+        reader = None if ai else self._datasheet_reader(out, batch=False, estimate=True, offline=offline)
         items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out,
-                      list(sources) if sources else None, refresh, False, list(allow), self.offline,
+                      list(sources) if sources else None, refresh, False, list(allow), offline,
                       self.root / "http_cache", 0.5, provs, log=note, rules=self.rules(), reader=reader)
         r = self._librarian_summary(bom_path, items, log)
         if not ai:
@@ -867,10 +870,11 @@ class Workspace:
         return {"projects": res["projects"], "flags": res["flags"], "rows": rows, "warnings": res["warnings"],
                 "library": [self.rel(p) if self._is_inside(p) else str(p) for p in plans[:1]] + [self.rel(l) for l in libs],
                 "reports": [self.rel(f) for f in files.values()]}
-    def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False):
+    def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False, offline=None):
         from . import datasheet as D
         rd = D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
-                      http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None,
+                      http=CachedHTTP(self.root / "http_cache", offline=self.offline if offline is None else offline,
+                                      timeout=60), log=lambda *a: None,
                       handoff=False)          # the web UI, MCP and the menus: no terminal to tell what to save where
         rd.count_tokens = False     # quotes send nothing before the click: rough; the send-time cap check counts the same way
         return rd

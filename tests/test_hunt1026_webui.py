@@ -113,3 +113,36 @@ def test_webui_05_one_damaged_triage_report_does_not_hide_the_others(tmp_path):
         else:
             raise AssertionError(f"triage_result read {text}")
     assert ws.triage_result(good)["rows"]
+
+
+@lite
+def test_webui_06_the_ui_sample_bom_looks_nothing_up_online(tmp_path, monkeypatch):
+    """The web UI's "Try it with a sample BOM" says "Offline, no API key" and `ecadlib demo` is offline, but the UI ran
+    the demo's triage and librarian with the workspace's own setting: on a normal (not --offline) workspace every
+    sample part was looked up on easyeda.com."""
+    import socket
+    from ecadlib.app import Workspace
+    from tests.test_ui import serve, wait_job
+    tried = []
+
+    def blocked(host, *a, **k):
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            tried.append(host)
+            raise socket.gaierror("network blocked in this test")
+        return real(host, *a, **k)
+    real = socket.getaddrinfo
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    for v in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.setenv(v, "")
+    ws = Workspace(tmp_path / "ws", [])                    # what `ecadlib ui` and the desktop app make: not --offline
+    srv, call = serve(ws)
+    try:
+        st, j = call("POST", "/api/demo", "{}")
+        assert st == 200, j
+        r = wait_job(call, j["job"], 120)
+        assert r["state"] == "done" and r["result"]["parts"] == 7, r.get("error")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert tried == [], sorted(set(tried))

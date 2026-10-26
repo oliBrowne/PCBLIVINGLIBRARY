@@ -568,9 +568,10 @@ def make_handler(ws: Workspace):
         @staticmethod
         def _demo(bom, progress=None):
             """Triage, then fill the library from the built-in standard parts only (no network, no API key)."""
-            t = ws.triage(bom, _line_lines(progress, "Checking the BOM"), lock=write_lock)
+            t = ws.triage(bom, _line_lines(progress, "Checking the BOM"), lock=write_lock, offline=True)   # as `ecadlib demo`
             progress.line("__triage", state="done", text=f"BOM checked: {len(t['rows'])} lines")
-            r = _final_lines(progress, ws.librarian_run(bom, ["standard"], (), None, _part_lines(progress), ai=False))
+            r = _final_lines(progress, ws.librarian_run(bom, ["standard"], (), None, _part_lines(progress), ai=False,
+                                                        offline=True))
             return dict(r, triage=t)
 
         @staticmethod
