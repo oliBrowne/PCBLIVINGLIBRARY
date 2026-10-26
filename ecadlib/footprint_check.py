@@ -249,6 +249,19 @@ def _pt_pad(px, py, r):
     return max(math.hypot(dx, dy) - rad, 0)
 
 
+def _hole_gap(h, p):
+    """Copper gap from a (round or slotted) NPTH to a pad. A polygon pad (custom) is measured from the hole itself,
+    not its bounding box: a copper ring round the hole (Knowles LGA-5, Molex Nano-Fit) has a box that covers the
+    hole. The hole is its centre line (along its long side) grown by its radius."""
+    rad = min(h["w"], h["h"]) / 2
+    if not p.get("polys"):
+        return _rect_gap(dict(h, r=rad), p)
+    half = abs(h["w"] - h["h"]) / 2
+    ux, uy = (1.0, 0.0) if h["w"] >= h["h"] else (0.0, 1.0)
+    n = max(1, int(2 * half / 0.01))
+    return min(_pt_pad(h["x"] + ux * t, h["y"] + uy * t, p) for t in (-half + 2 * half * i / n for i in range(n + 1))) - rad
+
+
 def _depth(x, y, q):
     """How far a point inside a pad's copper is from its edge (0 when it is not inside)."""
     if q.get("polys"):
@@ -415,7 +428,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
         add(lvl, "copper", who + (f" (< {HARD_WEB} mm)" if lvl == "error" else
                                   f": below a {MIN_WEB} mm solder-mask web, check the fab's minimum"))
     for h in holes:                                  # NPTH: copper must keep clear of the hole
-        near = [(_rect_gap(dict(h, r=min(h["w"], h["h"]) / 2), p), p["num"]) for p in cu]
+        near = [(_hole_gap(h, p), p["num"]) for p in cu]
         if near and min(near)[0] < MIN_WEB - EPS:
             d, n = min(near)
             add("error" if d < 0 else "warning", "copper", f"pad {n} is {max(d, 0):.3f} mm from the hole at "
