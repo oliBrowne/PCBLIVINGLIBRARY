@@ -1321,42 +1321,44 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     if todo:
         save_state()                           # a stop while the summary is logged keeps them too
-    for it in items:
-        apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
-        for k in ("allow", "approvals", "duplicate_of"):     # decisions people made survive re-runs
-            if old.get(it["name"], {}).get(k):
-                it[k] = old[it["name"]][k]
-        prev = old.get(it["name"]) or {}
-        for k, was in (prev.get("merged_from") or {}).items():   # `ecadlib dedupe --merge` pointed this half at a keeper
-            if k in ("symbol", "footprint") and it[k].get("ref") == was.get("ref") and (prev.get(k) or {}).get("file") \
-                    and RC._path(out, prev[k]["file"]).exists():
-                it[k] = dict(prev[k])
-                it.setdefault("merged_from", {})[k] = was
-        log(f"  {'skip ' if state[it['name']].get('skipped') else 'done ' if _done(state[it['name']], out) else 'open '}"
-            f"{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
-    state = {k: v for k, v in state.items() if k in {i["name"] for i in items}}
-    for n in set(allow) - set(state):
-        log(f"  --allow {n}: not a part in this plan (names are the plan's Part Numbers)")
-    write_text_atomic(state_f, json.dumps(state, indent=2))
-    from . import house_style as HS                 # new parts in your house style (house_style.json, [style] apply)
-    prof = HS.active(rules, out)
-    if prof:
-        styled = HS.adapt_items(items, prof, rules)
-        if styled:
-            log(f"  style {len(styled)} part(s) written in your house style (descriptions, value formats)")
-    gate.settle(items)                         # held changes put the released files and fields back first
-    t_check = time.time()
-    TI.record(out, "build", t_build, t_check, parts=len(todo))
-    checks = RC.apply(items, out, allow, rules=rules)
-    if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
-        from .approvals import identity, post_check, stamp_allow
-        stamp_allow(items, allow, identity(user, cwd=out))
-        post_check(items, out, checks)
-    gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger (a new
-                                               # part with a released part's MPN is compared with it first)
-    gate.retire([n for n in old if n not in {i["name"] for i in items}], f"no longer in the plan ({Path(bom).name})")
-    CG.record_bom_usage(out, bom, items)
-    write_text_atomic(plan_f, json.dumps(items, indent=2))
+    with _decisions_lock(plan_f):              # decisions people recorded while this run looked parts up (the web UI,
+        old = _fresh_decisions(old, plan_f)    # `ecadlib approve`) are kept, not overwritten with the run's old copy
+        for it in items:
+            apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
+            for k in DECISIONS:                                  # decisions people made survive re-runs
+                if old.get(it["name"], {}).get(k):
+                    it[k] = old[it["name"]][k]
+            prev = old.get(it["name"]) or {}
+            for k, was in (prev.get("merged_from") or {}).items():   # `ecadlib dedupe --merge` pointed this half at a keeper
+                if k in ("symbol", "footprint") and it[k].get("ref") == was.get("ref") and (prev.get(k) or {}).get("file") \
+                        and RC._path(out, prev[k]["file"]).exists():
+                    it[k] = dict(prev[k])
+                    it.setdefault("merged_from", {})[k] = was
+            log(f"  {'skip ' if state[it['name']].get('skipped') else 'done ' if _done(state[it['name']], out) else 'open '}"
+                f"{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
+        state = {k: v for k, v in state.items() if k in {i["name"] for i in items}}
+        for n in set(allow) - set(state):
+            log(f"  --allow {n}: not a part in this plan (names are the plan's Part Numbers)")
+        write_text_atomic(state_f, json.dumps(state, indent=2))
+        from . import house_style as HS                 # new parts in your house style (house_style.json, [style] apply)
+        prof = HS.active(rules, out)
+        if prof:
+            styled = HS.adapt_items(items, prof, rules)
+            if styled:
+                log(f"  style {len(styled)} part(s) written in your house style (descriptions, value formats)")
+        gate.settle(items)                         # held changes put the released files and fields back first
+        t_check = time.time()
+        TI.record(out, "build", t_build, t_check, parts=len(todo))
+        checks = RC.apply(items, out, allow, rules=rules)
+        if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
+            from .approvals import identity, post_check, stamp_allow
+            stamp_allow(items, allow, identity(user, cwd=out))
+            post_check(items, out, checks)
+        gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger (a new
+                                                   # part with a released part's MPN is compared with it first)
+        gate.retire([n for n in old if n not in {i["name"] for i in items}], f"no longer in the plan ({Path(bom).name})")
+        CG.record_bom_usage(out, bom, items)
+        write_text_atomic(plan_f, json.dumps(items, indent=2))
     write_notice(out, items)
     rec.close()
     MG.write_stamp(out, ["plan", "librarian_state"])
@@ -1365,6 +1367,33 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     write_review(review_rows(items), out, bom, items)
     TI.record(out, "release_check", t_check, held=sum(i.get("status") == "held" for i in items))
     return items
+
+
+DECISIONS = ("allow", "approvals", "duplicate_of")    # what people decide on a plan item: a re-run keeps it
+
+
+def _decisions_lock(plan_f):
+    """The workspace's plan lock (<ws>/plan.lock, which every decision recorder takes) while the run settles and
+    writes its plan, for a plan in a workspace (<ws>/librarian/<name>/plan.json); else no lock."""
+    import contextlib
+    from .approvals import plan_workspace
+    from .fsutil import plan_lock
+    ws = plan_workspace(plan_f)
+    return plan_lock(ws, wait=True) if ws is not None else contextlib.nullcontext()
+
+
+def _fresh_decisions(old, plan_f):
+    """old (the plan as the run started, by name) with each part's decisions as plan.json has them now: a reject,
+    approval, release-anyway or hold-again recorded during the run wins over the copy read at its start."""
+    try:
+        now = {i["name"]: i for i in json.loads(plan_f.read_text(encoding="utf-8"))}
+    except (OSError, ValueError, TypeError, KeyError):
+        return old
+    out = dict(old)
+    for n, it in now.items():
+        if n in out and isinstance(it, dict):
+            out[n] = {**{k: v for k, v in out[n].items() if k not in DECISIONS}, **{k: it[k] for k in DECISIONS if k in it}}
+    return out
 
 
 def main(argv=None):

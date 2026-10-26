@@ -185,3 +185,35 @@ def test_webui_08_setup_restart_moves_only_to_a_real_workspace_folder(tmp_path, 
     assert moved == []
     assert ES.POST_ROUTES["/api/setup/restart"](tmp_path, {"workspace": str(good)})["restarting"] and moved == [str(good)]
     assert ES.POST_ROUTES["/api/setup/restart"](tmp_path, {})["restarting"] and moved[-1] == str(tmp_path)
+
+
+@lite
+def test_webui_09_a_reject_recorded_during_a_librarian_run_is_not_undone_by_it(tmp_path, monkeypatch):
+    """A librarian run (`ecadlib librarian`, the MCP tool, the web UI's Fill) read plan.json's decisions when it
+    started and wrote its plan back at the end. A reject (or approval, or "release anyway") recorded meanwhile from
+    another front end (the web UI's Approvals, `ecadlib approve`) took the plan lock and was written, then silently
+    overwritten: the rejected part came back "ready", ready for the next Altium 365 push, while the audit log says
+    rejected."""
+    import json
+    from ecadlib.app import Workspace
+    from tests.ui_fixture import build
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        ws, bom = build(tmp_path / "ws")
+    plan = ws.root / "librarian" / "sample_bom" / "plan.json"
+    ready = [i["name"] for i in json.loads(plan.read_text(encoding="utf-8")) if i["status"] == "ready"]
+    rejected, approved = ready[0], ready[1]
+    ui = Workspace(ws.root, [], providers=["digikey"], offline=True)          # another process in real life
+    said = []
+
+    def progress(n, total, label):                       # while the run looks its parts up
+        if not said and str(label).startswith("["):
+            said.append(ui.approve_part(bom, rejected, "reject", "Ann Lee", comment="wrong pinout")["decision"])
+            said.append(ui.approve_part(bom, approved, "approve", "Ann Lee")["decision"])
+    with contextlib.redirect_stdout(io.StringIO()):
+        ws.librarian_run(bom, sources=["kicad", "standard"], progress=progress, ai=False)
+    assert len(said) == 2, "the run never looked a part up"
+    items = {i["name"]: i for i in json.loads(plan.read_text(encoding="utf-8"))}
+    assert items[rejected]["status"] != "ready", items[rejected]["status"]
+    assert [a["decision"] for a in items[rejected].get("approvals") or []] == ["reject"], items[rejected].get("approvals")
+    assert [a["decision"] for a in items[approved].get("approvals") or []] == ["approve"], items[approved].get("approvals")
