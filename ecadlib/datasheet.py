@@ -1209,12 +1209,21 @@ def to_spec(pkg, part, datasheet, model, offset, review):
                           "against the drawing)")
     molded = ["terminal_width"] if t == "molded" and not F.lead_land(spec) else []   # else the pads are as wide as
     # the body (review 196 R-RD-1); the maker's land, when read, sizes them instead
-    for k in base + NEED.get(t, []) + molded:
+    need = [k for k in NEED.get(t, []) if not (k == "pitch" and one_lead_per_side(spec))]   # SOD-123: no pitch (R-RD-8)
+    for k in base + need + molded:
         if not any(x in spec or x in unres for x in k.split("|")):
             unres.append(k.replace("|", " or "))
     if unres:
         spec["unresolved"] = sorted(set(unres))
     return spec, prov
+
+
+def one_lead_per_side(spec):
+    """A gull-wing whose listed leads are one on each side or fewer (SOD-123, SOD-323: two leads facing each other):
+    it has no pitch to read, and two pins is its count."""
+    pos = _listed(spec)
+    return spec.get("package_type") == "gullwing" and bool(pos) and \
+        all(sum(1 for p in pos if p.get("side") == sd) <= 1 for sd in {p.get("side") for p in pos})
 
 
 def build_blockers(spec):
@@ -2300,7 +2309,7 @@ def self_check(spec, ext, review):
         add(f"pitch {e} mm is outside the usual {prange[0]}-{prange[1]} mm for {t}")
     if side is not None and not brange[0] <= side <= brange[1]:
         add(f"body {side} mm is outside the usual {brange[0]}-{brange[1]} mm for {t}")
-    if n is not None and not nrange[0] <= n <= nrange[1]:
+    if n is not None and not nrange[0] <= n <= nrange[1] and not (n == 2 and one_lead_per_side(spec)):
         add(f"pin_count {n} is outside the usual {nrange[0]}-{nrange[1]} for {t}")
     info.append(f"checked against {t} norms: pitch {prange or '-'}, body {brange}, pins {nrange}")
     return info

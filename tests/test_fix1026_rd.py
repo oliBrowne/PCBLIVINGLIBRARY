@@ -358,3 +358,27 @@ def test_rd7_sot23_offsets_halved_is_held():
     assert_ok(SOT23)
     assert_ok(dict(SOT23, pitch=1.9))                 # e1 read as the pitch: the same land, still fine
     assert_held(dict(SOT23, pin_positions=[dict(p, offset=p["offset"] / 2) for p in POS23]), "pin_positions", "40%")
+
+
+# ---------------------------------------------------------------- R-RD-8: two-lead gull-wings (SOD-123 / SOD-323)
+def sod(name, D_, E1, E, b, L):
+    return dict(name=name, package_type="gullwing", pin_count=2, pitch=None, body_length=D_, body_width=E1, lead_span=E,
+                terminal_width=b, terminal_length=L, polarized=True,
+                pin_positions=[{"number": "1", "side": "L", "offset": 0.0}, {"number": "2", "side": "R", "offset": 0.0}])
+
+
+SOD123 = sod("D_SOD-123", (1.4, 1.6, 1.8), (2.55, 2.7, 2.85), (3.56, 3.71, 3.86), (0.51, 0.61, 0.71), (0.25, 0.4, 0.55))
+SOD323 = sod("D_SOD-323", (1.15, 1.25, 1.35), (1.6, 1.7, 1.8), (2.3, 2.5, 2.7), (0.25, 0.32, 0.4), (0.2, 0.3, 0.4))
+
+
+def test_rd8_correct_sod_reads_are_ok_not_incomplete():
+    """Before: 'unresolved: pitch' and 'pin_count 2 outside 3-100' made right SOD-123 / SOD-323 reads incomplete
+    (a reread, an escalation)."""
+    for t in (SOD123, SOD323):
+        res = assert_ok(t)
+        assert "pitch" not in (res["spec"].get("unresolved") or []), res["spec"].get("unresolved")
+
+
+def test_rd8_a_listed_row_still_needs_its_pitch():
+    res = read(dict(SOT23, pitch=None))
+    assert "pitch" in (res["spec"].get("unresolved") or []), res["spec"].get("unresolved")
