@@ -280,6 +280,24 @@ def test_footprint_by_package_never_guesses_between_lands_of_one_body():
     assert _index(qfn[:1]).find_footprint_for_package("QFN16", "U", hint="QFN-16 3x3mm") == qfn[0]   # only one: as before
 
 
+def test_a_price_written_as_text_does_not_lose_the_part():
+    # prices are not used any more (only the LCSC offer's SKU is), yet a DigiKey UnitPrice "$0.52" or a Nexar price
+    # "N/A" raised ValueError and the whole answer became "unparseable response": maker, datasheet and LCSC number lost
+    from ecadlib import part_lookup as S, providers as P
+    prod = {"ManufacturerProductNumber": "LM358DR", "Manufacturer": {"Name": "Texas Instruments"}, "ProductStatus": "Active",
+            "DatasheetUrl": "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+            "ProductVariations": [{"DigiKeyProductNumber": "296-1", "PackageType": {"Name": "Cut Tape"},
+                                   "StandardPricing": [{"BreakQuantity": 1, "UnitPrice": "$0.52"}]}, "odd"]}
+    info = S.digikey_info(prod, "digikey", "USD")
+    assert info.manufacturer == "Texas Instruments" and info.datasheet.endswith("lm358.pdf")
+    assert info.offers[0].breaks == [(1, 0.52)] and info.lifecycle == "active", info
+    part = {"mpn": "LM358DR", "manufacturer": {"name": "Texas Instruments"},
+            "sellers": [{"company": {"name": "LCSC"}, "offers": [{"sku": "C7950", "prices": [
+                {"quantity": 1, "price": "N/A", "currency": "USD"}, {"quantity": 10, "price": "0.1", "currency": "USD"}]}]}]}
+    res = P.from_part_info(S.nexar_info(part, "nexar", "USD"), P.SourceResult("nexar"))
+    assert res.lcsc == "C7950" and res.manufacturer == "Texas Instruments", res
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
