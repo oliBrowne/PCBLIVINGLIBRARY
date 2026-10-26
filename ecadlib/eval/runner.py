@@ -215,13 +215,21 @@ def printed_names(sc, mine_pins, ref_pins, text, tol=None):
     words = " " + re.sub(r"[^A-Z0-9]+", " ", _spaced(text)) + " "
     ours = {str(n): v for n, v in mine_pins}
     fixed, used = dict((str(n), v) for n, v in ref_pins), []
-    kicad = [(str(n), S.norm_name(v)) for n, v in ref_pins]
+    kicad = [(str(n), v) for n, v in ref_pins]
+    spelt = lambda x: re.sub(r"[^A-Z0-9]+", " ", _spaced(x)).strip()
+
+    def is_name(x, k):                                # ours x is KiCad's name k: a spelling, short form or abbreviation
+        return bool(S.norm_name(k)) and bool(S.norm_name(x)) and (
+            S.same_name(S.norm_name(x), S.norm_name(k)))
     for n, v in fixed.items():
-        o = re.sub(r"[^A-Z0-9]+", " ", _spaced(ours.get(n))).strip()
-        # a spelling of a name, never another pin's name: one KiCad has on another pin (ours VIN / VOUT swapped, as the
-        # datasheet's other package prints them) or ground on a supply pin is a wrong connection (hunt 2026-10-26)
+        o = spelt(ours.get(n))
+        # a spelling of a name, never another pin's name: one KiCad has on another pin, in its spelling or spelled out
+        # (ours VIN / VOUT or "Switch Emitter" / "Switch Collector" swapped, as the datasheet's other package prints
+        # them) and that our symbol no longer has on that pin, is a swap; the same name on one more pin (the maker's
+        # GND on KiCad's EP / NC, GND still on KiCad's GND pin) is not. Ground on a supply pin is a wrong connection
+        # (hunt 2026-10-26, review R-CE-1 / R-CE-2)
         on = S.norm_name(ours.get(n))
-        if any(m != n and k and S.same_name(on, k) for m, k in kicad) or \
+        if any(m != n and is_name(ours.get(n), k) and not is_name(ours.get(m), k) for m, k in kicad) or \
                 {S.rail(on), S.rail(S.norm_name(v))} == {"gnd", "supply"}:
             continue
         if (o and len(re.sub(r"[^A-Z]", "", o)) >= 2 and S.norm_name(o) != S.norm_name(v) and f" {o} " in words
