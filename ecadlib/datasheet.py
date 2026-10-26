@@ -4425,13 +4425,15 @@ class Reader:
     def _walk(self, job):
         """Replay the cached answers of a part's route from this step: -> the step to send next, or the step whose
         cached answer is the one to keep (final=True). Never more than [datasheet] max_attempts answers."""
+        from . import ds_route as DR
         while True:
             rec = self.results.get(job["key"])
             if rec is None:
                 return job
             kind, why, res = self._judge(job, rec)
             gaps = len(((res or {}).get("spec") or {}).get("unresolved") or []) + len(why)
-            rank = ({"ok": 2, "incomplete": 1}.get(kind, 0), -gaps) if "message" in rec else (-1, 0)
+            eff = DR.effective_kind(kind, why, (res or {}).get("spec"))   # incomplete + a hard failure: as failed
+            rank = ({"ok": 2, "incomplete": 1}.get(eff, 0), -gaps) if "message" in rec else (-1, 0)
             done = job["route"]["attempts"] + [{"model": job["model"], "pages": len(job["offset"]) if isinstance(job["offset"], list)
                                                 else "all", "verdict": kind, "why": why[:4], "via": rec.get("via"),
                                                 "served": (rec.get("message") or {}).get("model"),

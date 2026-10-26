@@ -1006,13 +1006,28 @@ def _soft(line, spec=None):
     return bool(sides) and float(m.group(1)) >= 0.15 * min(sides)
 
 
+def hard_failures(why, spec=None):
+    """The lines of assess()'s reasons that can make the part wrong: failed checks that are not soft, whatever the
+    verdict. An 'incomplete' answer (a field left unresolved) keeps its failed lines after the incomplete ones, and
+    those still count (review R-RT-1: overlapping pads plus one unresolved field was never held)."""
+    return [w for w in why if not str(w).startswith("unresolved: ") and not INCOMPLETE.search(w)
+            and FAILED.search(w) and not _soft(w, spec)]
+
+
+def effective_kind(kind, why, spec=None):
+    """assess()'s verdict for ranking a route's answers: an incomplete answer that also fails a hard check ranks with
+    the failed ones, below an incomplete answer that fails nothing (Reader._walk, llm.run._better)."""
+    return "failed" if kind == "incomplete" and hard_failures(why, spec) else kind
+
+
 def hold_reasons(res, fp_needed=True):
-    """The failed checks to hold a route's last answer for, or [] (ok, incomplete, or only checks that can't make the
-    part wrong). fp_needed=False (the footprint comes from another source): only the symbol's checks count."""
+    """The failed checks to hold a route's last answer for, or [] (ok, or only checks that can't make the part wrong).
+    An incomplete answer is held for its hard failed checks too. fp_needed=False (the footprint comes from another
+    source): only the symbol's checks count."""
     kind, why = assess(res)
-    if kind != "failed":
+    if kind == "ok":
         return []
-    hard = [w for w in why if not _soft(w, res.get("spec"))]
+    hard = hard_failures(why, res.get("spec"))
     return hard if fp_needed is not False else [w for w in hard if SYMBOL_FAILED.match(w)]
 
 

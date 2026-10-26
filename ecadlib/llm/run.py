@@ -47,6 +47,8 @@ def _synth(ext, usage, model, served=None):
 
 
 def _better(k1, w1, k2, w2):
+    from ..ds_route import effective_kind             # an incomplete answer with a hard failure ranks as failed (R-RT-1)
+    k1, k2 = effective_kind(k1, w1), effective_kind(k2, w2)
     return R.rank(k2) < R.rank(k1) or (R.rank(k2) == R.rank(k1) and len(w2) <= len(w1))
 
 
