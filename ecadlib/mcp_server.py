@@ -430,27 +430,32 @@ TOOLS = [
 ]
 
 
-_MENU_EXE = re.compile(r'(?:ecadlib|python3?|py)(?:\.exe)?|"[A-Za-z]:\\[^"&|<>^%!\r\n\x00-\x1f]*\\'
-                       r'(?:python3?w?|py|ecadlib)\.exe"|[A-Za-z]:\\[^\s"&|<>^%!\x00-\x1f]*\\'
-                       r'(?:python3?w?|py|ecadlib)\.exe', re.I)     # a path with no space needs no quotes
+_EXE_NAME = r"(?:python(?:3(?:\.\d{1,2})?)?w?|py|ecadlib)"
+_MENU_EXE = re.compile(rf'{_EXE_NAME}(?:\.exe)?'                                   # on PATH: ecadlib, py, python3.11
+                       rf'|"[A-Za-z]:[\\/][^"%!^\r\n\x00-\x1f]*[\\/]{_EXE_NAME}\.exe"'   # quoted: & ( , ; = are literal there
+                       rf'|[A-Za-z]:\\(?:[A-Za-z0-9_.+-]+\\)*{_EXE_NAME}\.exe(?=\s|$)', re.I)  # unquoted: plain names only
 _MENU_ARGS = re.compile(r"(?:\s+-3(?:\.\d{1,2})?)?\s+-m\s+ecadlib|", re.I)
 
 
 def _menu_command(ws, cmd):
     """altium_menu's command over MCP: the Altium menu's runner executes it on the Altium PC (cmd.exe), so an agent
-    gives only a way to run ecadlib (ecadlib, py -3 -m ecadlib, python -m ecadlib, or a quoted python.exe / ecadlib.exe
-    path with -m ecadlib), never another program, shell characters (& | < > ^ %) or a line break (which would rewrite
-    another setting of the .ini). A person sets anything else themselves. '' = the default (found on that PC)."""
+    gives only a way to run ecadlib (ecadlib, py -3 -m ecadlib, python -m ecadlib, or a python.exe / ecadlib.exe path
+    with -m ecadlib), never another program, shell characters (& | < > ^ % and, outside quotes, the cmd delimiters
+    , ; = ( ) or a line break (which would rewrite another setting of the .ini). A path outside quotes may hold only
+    letters, digits and _ . + -; a network (UNC) path or a program uploaded into the workspace is refused. A person
+    sets anything else themselves. '' = the default (found on that PC)."""
     import os
     from pathlib import Path
     cmd = str(cmd or "").strip()
     if not cmd:
         return ""
     m = _MENU_EXE.match(cmd)
-    ok = bool(m) and bool(_MENU_ARGS.fullmatch(cmd[m.end():]))
-    exe = m.group(0).strip('"').lower() if m else ""
-    if ok and re.sub(r"\.exe$", "", exe.rsplit("\\", 1)[-1]) != "ecadlib":
-        ok = bool(cmd[m.end():].strip())                 # python / py / python.exe itself needs -m ecadlib
+    rest = cmd[m.end():] if m else ""
+    exe = m.group(0).strip('"').replace("/", "\\").lower() if m else ""
+    is_ecadlib = re.sub(r"\.exe$", "", exe.rsplit("\\", 1)[-1]) == "ecadlib"
+    ok = bool(m) and bool(_MENU_ARGS.fullmatch(rest)) and (is_ecadlib != bool(rest.strip()))
+    if ok and "\\uploads\\" in exe:
+        ok = False                                       # what upload_bom stores, on any OS the workspace is shared from
     if ok and ":" in exe and os.name == "nt":
         p = Path(m.group(0).strip('"')).resolve()
         ok = not (p == ws.root or ws.root in p.parents)  # not a program uploaded into the workspace
@@ -460,6 +465,18 @@ def _menu_command(ws, cmd):
                          "with cmd.exe, so another program or shell characters are for the person to set: command= in "
                          "altium_menu/ecadlib_menu.ini, or `ecadlib altium-menu build --command`")
     return cmd
+
+
+def _menu_win_dir(win_dir):
+    """altium_menu's win_dir over MCP: the ready-made menu runs a DelphiScript project from there, so only a local
+    drive folder (D:\\ecadlib-menu); a network (UNC) share is for the person to set with `ecadlib altium-menu`."""
+    if not win_dir:
+        return None
+    w = str(win_dir)
+    if not re.match(r"[A-Za-z]:[\\/]", w) or "\\\\" in w.replace("/", "\\")[2:] or ".." in re.split(r"[\\/]", w):
+        raise ValueError(f"win_dir {w[:80]!r}: give a folder on a local drive of the Altium PC (D:\\ecadlib-menu); a network "
+                         "share is for the person to set with `ecadlib altium-menu build --win-dir`")
+    return w
 
 
 def call_tool(ws, name, args, progress=None):
@@ -621,7 +638,7 @@ def call_tool(ws, name, args, progress=None):
                                  "library path is for the person to set with `ecadlib kicad-dblib --driver`")
             return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", driver, args.get("include_held") is True)
         if name == "altium_menu":
-            return ws.altium_menu(args.get("win_dir") or None, args.get("name") or "ecadlib",
+            return ws.altium_menu(_menu_win_dir(args.get("win_dir")), args.get("name") or "ecadlib",
                                   _menu_command(ws, args.get("command") or ""), args.get("port") or 8765)
         if name == "parity":
             return ws.parity(args["bom"], args.get("kicad") is True, args.get("name") or "ecadlib")

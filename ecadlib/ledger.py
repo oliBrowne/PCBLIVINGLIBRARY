@@ -32,7 +32,7 @@ POSIX, msvcrt on Windows), so the OS frees it when the holder dies: a crashed ru
 import contextlib, copy, datetime, hashlib, json, os, re, tempfile, threading, time
 from pathlib import Path
 
-from .fsutil import write_text_atomic
+from .fsutil import portable_stem, write_text_atomic
 
 LEDGER = "library.ledger.jsonl"
 USAGE = "library.usage.json"
@@ -158,7 +158,7 @@ def sha_bytes(b):
 
 
 def safe_name(part):
-    s = re.sub(r"[^A-Za-z0-9._+-]", "_", str(part))[:120] or "_"
+    s = portable_stem(re.sub(r"[^A-Za-z0-9._+-]", "_", str(part))[:120] or "_")   # AUX.json is a Windows device
     return s if s == str(part) else f"{s}-{sha_bytes(str(part).encode())[:8]}"
 
 
