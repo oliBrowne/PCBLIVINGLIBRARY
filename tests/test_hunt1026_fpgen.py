@@ -180,6 +180,26 @@ def test_fpgen07_inches_typed_as_mm_are_refused():
     FG.build(conn("mm", fine, pitch=0.4))
 
 
+# fpgen-10: fp-edit rename onto a number another pad keeps (T=1 R=1, or T=R) joined two pins into one net with no word:
+# a table with no pin_count has nothing to count, and two pads "1" at different places pass check_pad_table. Joining
+# pads is same-net's job; such a rename is skipped with a note, and a swap (1=2 2=1) still works
+def test_fpgen10_fp_edit_rename_never_merges_two_pins():
+    from ecadlib import fp_edit as FE
+    pads = [{"number": n, "x": 2.5 * i, "y": 0, "w": 1, "h": 2} for i, n in enumerate(("T", "R", "S"))]
+    res = {"spec": {"name": "J", "package_type": "custom", "pad_table": {"unit": "mm", "pads": pads}},
+           "symbol": {"pins": [{"num": "T", "name": "TIP"}, {"num": "R", "name": "RING"}, {"num": "S", "name": "SLEEVE"}]}}
+    nums = lambda out: ([p["number"] for p in out["spec"]["pad_table"]["pads"]], [p["num"] for p in out["symbol"]["pins"]])
+    out, notes = FE.apply({"rename": {"T": "1", "R": "1"}}, res)
+    assert len(set(nums(out)[0])) == 3 and nums(out)[0] == nums(out)[1], (nums(out), notes)
+    assert any("skipped" in n and "same-net" in n for n in notes), notes
+    out, notes = FE.apply({"rename": {"T": "R"}}, res)
+    assert nums(out) == (["T", "R", "S"], ["T", "R", "S"]), notes
+    out, notes = FE.apply({"rename": {"T": "1", "S": "T"}}, res)       # T is free once renamed: a chain is fine
+    assert nums(out) == (["1", "R", "T"], ["1", "R", "T"]), notes
+    out, _ = FE.apply({"rename": {"T": "R", "R": "T"}}, res)           # a swap
+    assert nums(out) == (["R", "T", "S"], ["R", "T", "S"])
+
+
 # fpgen-08: a ball grid read wholly in mils (pitch 31.5, ball 15.7, body 394) built a 394 mm BGA with no warning (and
 # slowly); the parametric families refuse anything over 60 mm as mils, the ball grid did not
 def test_fpgen08_bga_in_mils_is_refused():
