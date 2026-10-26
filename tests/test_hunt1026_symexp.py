@@ -1,6 +1,7 @@
 """Regression tests for the 2026-10-26 symbol / export bug hunt (symexp-*): symbol_layout, altium_lib, kicad_export,
 kicad_import, sexpr. Plain functions (tests.run_all, no pytest)."""
-import json, random, warnings
+import io, json
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from ecadlib import altium_lib as AL, kicad_export as X, rules as RU, sexpr, symbol_layout as SL
@@ -22,7 +23,8 @@ def test_symexp01_json_pin_types_are_normalised(tmp_path, monkeypatch):
     src.write_text(json.dumps(pins), encoding="utf-8")
     out = tmp_path / "p.SchLib"
     monkeypatch.chdir(tmp_path)
-    assert SL.main([str(src), "-o", str(out)]) == 0
+    with redirect_stdout(io.StringIO()):
+        assert SL.main([str(src), "-o", str(out)]) == 0
     _, syms = AL.read_schlib(out)
     et = {r["num"]: r["etype"] for r in syms[0]["records"] if r.get("RECORD") == "2"}
     assert et == {"1": AL.ETYPE["power"], "2": AL.ETYPE["open_collector"], "3": AL.ETYPE["ground"],
