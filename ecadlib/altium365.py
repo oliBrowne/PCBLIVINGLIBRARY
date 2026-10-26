@@ -431,6 +431,22 @@ IDENTITY_REFUSED = ("not applied in place: a released workspace component keeps 
                     "new component revision")
 
 
+def ws_target(ws):
+    """The ledger's publish target for workspace URL ws: one workspace is one target however its URL is typed (host
+    case, a trailing slash, spaces), so a change published under one spelling is not taken as never published under
+    another (which made an approved symbol change an in-place `up_to_date`, then recorded as published)."""
+    from urllib.parse import urlsplit, urlunsplit
+    u = urlsplit(str(ws or "").strip())
+    return "altium365:" + urlunsplit((u.scheme.lower(), u.netloc.lower(), u.path.rstrip("/"), u.query, "")).rstrip("/")
+
+
+def _published(lg, part, target):
+    """The last publish line of part to workspace `target` (ws_target), also one written under another URL spelling."""
+    norm = lambda t: ws_target(t[len("altium365:"):]) if str(t or "").startswith("altium365:") else t
+    return next((e for e in reversed(lg.history(part))
+                 if e.get("event") == "publish" and norm(e.get("target")) == norm(target)), None)
+
+
 def change_mode(lg, it, target):
     """What a push of an existing component must do under change control: "revision" when the released revision
     (ledger head) changed the symbol, footprint or 3D model since the revision last published to `target` (a new
@@ -438,7 +454,7 @@ def change_mode(lg, it, target):
     head, published revision)"""
     from . import fingerprint as FP
     head = lg.head(it["name"]) if lg else None
-    pub = lg.published(it["name"], target) if lg else None
+    pub = _published(lg, it["name"], target) if lg else None
     old = lg.revision(it["name"], pub["revision"]) if head and pub and pub.get("revision") != head.get("revision") else None
     if not old or all(old.get(k) == head.get(k) for k in ("eid", "gid", "mid")):
         return "params", set(), head, pub
@@ -541,7 +557,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     results, uploaded, released = [], {}, set()   # one upload per file per run; (kind, name) released this run
     from . import ledger as LG
     lg = LG.Ledger(folder) if folder and LG.Ledger(folder).exists() else None
-    target = f"altium365:{ws.rstrip('/')}"
+    target = ws_target(ws)
     transition = ((rules or {}).get("change") or {}).get("a365_transition") or None
     def upload(p):
         if p not in uploaded:
@@ -566,7 +582,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         try:
             existing = None if dry_run else client.find(ws, it["name"])
             mode, halves, head, _ = change_mode(lg, it, target) if lg else ("params", set(), None, None)
-            if (existing or (dry_run and lg and lg.published(it["name"], target))) and mode == "revision":
+            if (existing or (dry_run and lg and _published(lg, it["name"], target))) and mode == "revision":
                 if why:
                     recheck(res, why)
                 else:
