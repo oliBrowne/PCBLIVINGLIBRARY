@@ -267,6 +267,17 @@ def test_led_word_in_another_diodes_description_is_not_an_led():
     assert S.part_kind("Components/Diodes", "LED_0603_1608Metric", "Schottky") == "LED"     # the footprint says so
 
 
+def test_led_as_the_head_noun_or_with_its_colour_is_an_led():
+    """R-FX5-5: R-SP-7 made real LEDs diodes ('Zener-protected white LED' got the D_Zener symbol)."""
+    from ecadlib import stdparts as S
+    for d in ("Zener-protected white LED", "ESD protected LED, white", "TVS protected LED", "LED backlight white 3528",
+              "Side view LED backlight, white", "LED lighting 3W white", "LED dimming white 2835", "LED string white",
+              "LED protect", "Status LED (green), protects nothing", "Infrared emitting diode (IR LED)"):
+        assert S.part_kind("Components/Diodes", "", d) == "LED", d
+    for d in ("TVS for 5050 LED strip", "LED driver diode", "Photodiode with LED", "Schottky diode for LED driver"):
+        assert S.part_kind("Components/Diodes", "", d) == "D", d
+
+
 def test_librarian_passive_kind_agrees():
     from ecadlib import librarian as L
     item = lambda d: {"folder": "Components/Diodes", "footprint": {"ref": "SOD-123"}, "description": d}

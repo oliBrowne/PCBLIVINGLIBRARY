@@ -1032,21 +1032,36 @@ def symbol_text(key, mpn=""):
 # ---------------------------------------------------------------- one part
 # another diode named, or the LED word naming what the part is for ('for LED', 'LED driver', 'LED backlight boost')
 _OTHER_DIODE = re.compile(r"schottky|zener|\bTVS\b|transient|rectifier|\bESD\b|varactor|varicap|switching diode|"
-                          r"signal diode|photo ?diode|suppressor", re.I)
-_LED_USE = re.compile(r"\b(?:for|in|of|to|drives?|driving|protects?|protecting)\s+(?:an?\s+|the\s+)?LEDs?\b|"
-                      r"\bLEDs?[\s-]+(?:driver|backlight|string|strip|lighting|boost|dimm\w*|protect\w*|surge)", re.I)
+                          r"signal diode|photo ?diode|suppressor|\bdiode\b", re.I)
+# a word that only an LED has next to it: its colour, wavelength, size or package
+_LED_LOOK = re.compile(r"\b(?:red|green|blue|white|yellow|amber|orange|pink|purple|violet|cyan|RGBW?|warm|cool|"
+                       r"neutral|IR|infrared|UV|ultraviolet|bi-?colou?r|dual[ -]colou?r|super ?flux)\b|"
+                       r"\d{3,4}\s?nm\b|(?<![\d.])\d(?:\.\d)?\s?mm\b|\b(?:3528|5050|2835|3014|5630|5730|PLCC-?\d?)\b", re.I)
+_LED_FOR = re.compile(r"\b(?:for|in|of|to|with|drives?|driving|protects?|protecting)\b[^,;()]*$", re.I)
+_LED_USE = re.compile(r"^[\s-]*(?:driver|backlight\w*|string|strip|lighting|boost|dimm\w*|protect\w*|surge|bias|supply)\b",
+                      re.I)
 
 
 def says_led(description):
-    """The description says the part is an LED: an 'LED' word that does not name what another diode is for. Another
-    diode named before the LED word is the part ('Schottky ..., LED backlight boost'); named after it, it is a
-    feature of the LED ('LED white, ESD protection 8 kV')."""
+    """The description says the part is an LED. Each LED word is read in its clause (up to a comma, semicolon or
+    bracket): after 'for / in / with / drives ...' it names what the part is for ('Zener for LED string', 'TVS for
+    5050 LED strip'): not this part. A colour, wavelength, size or LED package in the clause ('Zener-protected white
+    LED', 'LED backlight white 3528') makes it the part. 'LED driver / backlight / lighting ...' with another diode
+    named ('Schottky ..., LED backlight boost', 'LED driver diode') is that diode's use; else the LED is the head
+    noun ('ESD protected LED', 'LED protect', 'Status LED')."""
     d = str(description or "")
-    led = re.search(r"\bLED\b", d, re.I)
-    if not led:
-        return False
-    other = _OTHER_DIODE.search(d)
-    return not (other and other.start() < led.start()) and not _LED_USE.search(d)
+    for m in re.finditer(r"\bLEDs?\b", d, re.I):
+        a = max(d.rfind(c, 0, m.start()) for c in ",;()") + 1
+        ends = [k for k in (d.find(c, m.end()) for c in ",;()") if k >= 0]
+        pre, post = d[a:m.start()], d[m.end():min(ends) if ends else len(d)]
+        if _LED_FOR.search(pre):
+            continue
+        if _LED_LOOK.search(pre + " " + post):
+            return True
+        if _LED_USE.search(post) and _OTHER_DIODE.search(d):
+            continue
+        return True
+    return False
 
 
 def part_kind(category, footprint="", description="", designator=""):
