@@ -182,7 +182,7 @@ def _draw_ao(pins):
 def test_a_library_released_with_schema_3_shows_no_change_and_a_new_stack_still_holds():
     """SCHEMA 4 (pin ends, stacks): a library released by the previous ecadlib shows no change after the upgrade (old
     heads are fingerprinted again from their files); stacking D on S after it is held."""
-    assert FP.SCHEMA == 4
+    assert FP.SCHEMA >= 4
     plan, lib = demo()
     _age_to_3(lib)
     n = len(LG.Ledger(lib).lines())

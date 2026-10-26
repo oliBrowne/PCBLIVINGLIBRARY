@@ -88,3 +88,40 @@ def test_an_upload_cannot_be_a_program(tmp_path):
             assert "not a BOM" in str(e), (name, e)
     assert not list((ws.root / "uploads").rglob("*.*")) if (ws.root / "uploads").exists() else True
     assert ws.save_upload("bom.csv", b"Ref,MPN\nR1,X\n").endswith("bom.csv")
+
+
+def _aged_release(lib, schema):
+    """A part released, then its stored fingerprint rewritten as an older ecadlib computed it: pads read back at
+    89.9996 deg kept their w x h the other way round (fingerprint SCHEMA 4)."""
+    import json
+    from ecadlib import change_gate as CG, ledger as LG, release_check as RC
+    from tests.test_release_check import make
+    it = make(lib, name="PART1", fp_name="SOIC-8_X", keep_kmod=False)
+    it["footprint"].pop("kicad_mod", None)
+    RC.apply([it], lib)
+    g = CG.Guard(lib, "librarian"); g.begin([it]); g.settle([it]); RC.apply([it], lib); g.baseline([it])
+    lg = LG.Ledger(lib)
+    lines = [json.loads(x) for x in lg.path.read_text(encoding="utf-8").splitlines()]
+    for e in lines:
+        if e.get("fingerprint"):
+            fp = lg.get_json(e["fingerprint"])
+            fp["schema"] = schema
+            for p in fp["footprint"]["pads"]:
+                p["w"], p["h"], p["rot"] = p["h"], p["w"], 90.0
+            fp["hashes"] = {k: "0" * 64 for k in fp["hashes"]}       # what that canonical form hashed to
+            e.update(fp["hashes"])
+            e["fingerprint"] = lg.put_json(fp)
+    lg.path.write_text("".join(json.dumps(e) + "\n" for e in lines), encoding="utf-8")
+    return it
+
+
+@lite
+def test_a_part_released_by_the_previous_fingerprint_schema_shows_no_change(tmp_path):
+    # R-CL-1: the canonical form changed (89.9996 deg pads, stacked pad order, pin table instance) with SCHEMA kept at
+    # 4, so every such released part came back held as "pad size changed" with nothing changed on disk
+    from ecadlib import change_gate as CG, fingerprint as FP
+    assert FP.SCHEMA >= 5
+    lib = tmp_path / "lib"; lib.mkdir()
+    it = _aged_release(lib, 4)
+    g = CG.Guard(lib, "librarian"); g.begin([it])
+    assert g.settle([it]) == []

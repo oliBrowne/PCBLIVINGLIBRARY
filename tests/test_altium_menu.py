@@ -849,3 +849,20 @@ def test_ai_offer_keeps_the_review_queue():
     assert "Second := 'after_ai'" in offer and "NextHint" in offer and "Buttons(Answer(Job, 'ai_button'), 'Not now'" in offer
     back = pas[pas.index("Else If Second = 'after_ai' Then"):pas.index("Else If Second = 'log' Then")]
     assert "Second := 'queue'" in back and "Buttons('Done', 'Open review queue', False)" in back and "NextHint" in back
+
+
+def test_fill_counts_only_the_parts_the_a365_push_released():
+    """R-CL-3: Fill / Check BOM said "released to Altium 365" for every ready part, held ones too (altpub-03 fixed
+    only the single-part result)."""
+    menu, cfg = _setup()
+    ws, rel = AM._workspace(cfg), "uploads/altium-menu/parts.csv"
+    pub = {"target": "a365", "install": [], "problems": [], "held": {"P2": "held: fields: Description is empty"},
+           "actions": {"P1": "released", "P2": "skip"}, "released": 1, "workspace": "https://acme.365.altium.com"}
+    with mock.patch.object(AM, "publish", lambda *a, **k: pub):
+        r = AM._fill_result(cfg, ws, rel, {"parts": 2, "ready": 2, "held": 0, "awaiting_approval": 0,
+                                           "duplicates": 0}, AM.Progress())
+    assert "(1 released to Altium 365" in r["message"], r["message"]
+    rows = [r[f"row{i}"] for i in range(1, r["rows"] + 1)]
+    assert any(x.startswith("released to Altium 365|1") for x in rows), rows
+    assert any(x.startswith("P2|ready but not released") for x in rows), rows
+    assert r["status"] == "error", r

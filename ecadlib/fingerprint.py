@@ -49,8 +49,9 @@ from pathlib import Path
 
 from . import altium_lib as AL, parity as PA, sexpr
 
-SCHEMA = 4                                    # 3: a hidden pin's net as written (case and spelling); 4: pin ends
-#                                               and the pins that share one ("stacks")
+SCHEMA = 5                                    # 3: a hidden pin's net as written (case and spelling); 4: pin ends
+#                                               and the pins that share one ("stacks"); 5: a pad at 89.9996 deg is
+#                                               at 90, stacked pads in content order, a pin table's first instance
 ETYPE_NAME = {0: "input", 1: "io", 2: "output", 3: "open_collector", 4: "passive", 5: "hiz", 6: "open_emitter", 7: "power"}
 MPN_KEYS = ("manufacturer part number", "manufacturer part number 1", "mpn", "mfr part number", "manufacturer_part_number",
             "manufacturerpartnumber", "manufacturer part #", "mfr. part number", "mfr part #", "mfr. #", "mpn1", "mfr_pn",

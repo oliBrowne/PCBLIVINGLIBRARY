@@ -1463,7 +1463,9 @@ def _fill_result(cfg, ws, bom, s, progress, ai_cost=None):
     where = ("released to Altium 365: refresh the Components panel" if pub.get("target") == "a365"
              else f"in the {cfg['name']} KiCad library" if pub.get("target") == "kicad"
              else f"in the {cfg['name']} database library")
-    msg = f"{s['parts']} parts: {s['ready']} ready" + (f" ({where})" if s["ready"] else "")
+    put = pub["released"] if pub.get("target") == "a365" and "released" in pub else s["ready"]   # a held push is not released
+    msg = f"{s['parts']} parts: {s['ready']} ready" + (f" ({put} {where})" if s["ready"] and put != s["ready"]
+                                                         else f" ({where})" if s["ready"] else "")
     msg += "".join(f", {n} {label}" for n, label in ((s["held"], "held"), (s["awaiting_approval"], "waiting for sign-off"),
                                                        (s["duplicates"], "duplicates")) if n)
     problems = (pub.get("problems") or []) + [f"{n}: {w}" for n, w in (pub.get("held") or {}).items()]
@@ -1475,7 +1477,8 @@ def _fill_result(cfg, ws, bom, s, progress, ai_cost=None):
         res["fix"] = pub.get("fix") or "run `ecadlib altium-pkg` / `ecadlib altium365 push` by hand to see more"
     elif s["held"] or s["awaiting_approval"]:
         res["fix"] = f"Open the review queue ({_queue_hint(cfg)}): it says why each part is held and what to pick."
-    shown = [row_text("ready, in your library" if pub.get("target") != "a365" else "released to Altium 365", s["ready"], s["ready"] > 0)]
+    shown = [row_text("ready, in your library" if pub.get("target") != "a365" else "released to Altium 365", put, put > 0)]
+    shown += [row_text(n, f"ready but not released: {w}") for n, w in list((pub.get("held") or {}).items())[:3]]
     shown += [row_text(label, n) for n, label in ((s["held"], "held for a person"), (s["awaiting_approval"], "waiting for sign-off"),
                                                    (s["duplicates"], "already in the library")) if n]
     held = [r for r in s.get("review", []) if r.get("status") == "held"]
