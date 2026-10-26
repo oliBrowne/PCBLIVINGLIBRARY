@@ -18,7 +18,8 @@ approvals are only recorded. Keys (all optional):
                     policy a current reject holds the item too; only approvals need a policy to be required
 Each decision is stored in the item's `approvals` list: who, key, when, role, decision, comment and `hash`, a sha256
 over the item's .SchLib/.PcbLib bytes and its key fields (name, folder, description, comment, parameters, cleared,
-symbol/footprint refs). Any later change to them makes the approval stale; it then no longer counts. The parameters
+symbol/footprint refs). Any later change to them makes an approval stale; it then no longer counts. A reject keeps
+holding whatever changed since, until that person approves (a restyle, a revert or a re-run never lifts it). The parameters
 the JLCPCB assembly check wrote until it was removed (Assembly *, LCSC Part) do not count, so a plan built while it
 existed keeps its sign-offs. The latest
 decision per person counts. Every decision (and every refused one) is appended to approvals_audit.jsonl next to
@@ -263,10 +264,11 @@ def evaluate(item, policy, base=".", h=None):
     self_user = _allow_user(item)
     users = (policy or {}).get("users") or {}
     for k, r in latest.items():
-        if r.get("hash") != h:
+        if r["decision"] == "reject":          # a "no" holds until that person approves, whatever changed since (a
+            rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else "")   # restyle, a revert,
+                            + ("; the part changed since" if r.get("hash") != h else ""))         # a re-run lifts none)
+        elif r.get("hash") != h:
             stale.append(r["who"])
-        elif r["decision"] == "reject":
-            rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else ""))
         elif policy and policy["no_self_approval"] and self_user and (k == user_key(self_user) or same_person(r["who"], self_user)):
             ignored.append(f"{r['who']}: released it with --allow")
         elif users and (k not in users or (r.get("role") and r["role"] not in users[k])):
