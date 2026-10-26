@@ -472,10 +472,15 @@ def sanity(spec):
                         "set pins_left_right / pins_top_bottom")
     if t in ("gullwing", "qfp", "qfn") and spec.get("pitch") and spec.get("pin_count") and not spec.get("pin_positions"):
         n = spec["pin_count"]
-        per = n // 2 if t == "gullwing" else spec.get("pins_left_right", n // 4)
-        row = (per - 1) * spec["pitch"]
-        if per > 1 and row >= (L if t == "gullwing" else max(L, W)):
-            errs.append(f"{per} pins at {spec['pitch']} mm pitch need {row:.2f} mm, more than the {L} mm body: check pitch and pin_count")
+        # each row against the body side it runs along: QFN / QFP left and right rows down body_width (Y), top and
+        # bottom rows along body_length (X); a DFN read with the two swapped put its pads out past the terminals
+        sides = [(n // 2, L, None)] if t == "gullwing" else [(rows(spec)[0], W, "body_width"), (rows(spec)[1], L, "body_length")]
+        for per, side, key in sides:
+            row = (per - 1) * spec["pitch"]
+            if per > 1 and side is not None and row >= side:
+                errs.append(f"{per} pins at {spec['pitch']} mm pitch need {row:.2f} mm, more than the {side} mm body"
+                            + (f" ({key}, the side that row runs along): check pitch, pin_count and body_length / "
+                               "body_width" if key else ": check pitch and pin_count"))
         tw = spec.get("terminal_width")
         if tw and dim(tw)[0] >= spec["pitch"]:
             errs.append(f"terminal_width {dim(tw)[0]} is not smaller than the {spec['pitch']} mm pitch")

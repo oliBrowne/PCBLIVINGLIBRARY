@@ -200,6 +200,19 @@ def test_fpgen10_fp_edit_rename_never_merges_two_pins():
     assert nums(out) == (["R", "T", "S"], ["R", "T", "S"])
 
 
+# fpgen-11: footprint_gen.sanity measured a QFN / DFN row against the longer body side, not the side it runs along: a
+# DFN-12 read with body_length / body_width swapped (6 pins down a 2 mm side) built its pads 0.5 mm out past the
+# terminals, the end pads past the body, with no word (the datasheet read's own sanity measures each row's side)
+def test_fpgen11_quad_rows_measured_against_their_own_side():
+    s = {"name": "DFN-12", "package_type": "qfn", "pin_count": 12, "pitch": 0.5, "pins_left_right": 6, "pins_top_bottom": 0,
+         "body_length": {"nom": 3}, "body_width": {"nom": 2}, "terminal_length": {"nom": 0.4}, "terminal_width": {"nom": 0.25}}
+    _refused(s, "6 pins", "body_width")
+    FG.build(dict(s, body_length={"nom": 2}, body_width={"nom": 3}))       # the same part read the right way round
+    q = dict(copy.deepcopy(QFN16), pin_count=20, pins_left_right=3, pins_top_bottom=7,
+             body_length={"nom": 3}, body_width={"nom": 5})                # 7 pins along a 3 mm side
+    _refused(q, "7 pins", "body_length")
+
+
 # fpgen-08: a ball grid read wholly in mils (pitch 31.5, ball 15.7, body 394) built a 394 mm BGA with no warning (and
 # slowly); the parametric families refuse anything over 60 mm as mils, the ball grid did not
 def test_fpgen08_bga_in_mils_is_refused():
