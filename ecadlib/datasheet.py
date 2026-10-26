@@ -1799,7 +1799,8 @@ def _feet_outside(spec):
     return out
 
 
-REVERSE_PINNED = re.compile(r"revers\w*[- ]?pin|\bSOT-?\d+R\b", re.I)   # "reverse pinning", SOT-143R (not "reverse current")
+REVERSE_PINNED = re.compile(r"revers\w*[- ]?pin|(?<![A-Za-z0-9])SOT-?\d+-?R(?![A-Za-z0-9])", re.I)   # "reverse
+# pinning", SOT-143R, SOT-143R_Nexperia, SOT-143-R (not "reverse current", SOT-23-Reel)
 
 
 def _qfp_rows(spec):
