@@ -274,7 +274,9 @@ the change is matched on what its stored fingerprint recorded.
   each component (ecadlib writes no parameter for it, as parameters reach schematics). The record is kept in the
   project (`ecadlib_publishers.json` beside `ecadlib.toml`) and on this computer (`ecadlib_publishers.json` in the
   ecadlib settings folder), so plan folders of one project, or of several projects pushed from one computer, wait for
-  each other. Plan folders of different projects pushed from different computers do not: a push that adopts a
+  each other. A plan folder of another project that is not at its recorded path any more (the project moved or
+  renamed, a drive not mounted) is still on record: its components are held "not found from here" until it is pushed
+  once from where it is now, or dropped with `--forget-missing-plans`. Plan folders of different projects pushed from different computers do not: a push that adopts a
   component no record names says so ("Neither this project nor this computer has a record ..."). Push the plan
   folders that share a workspace from one project or one computer.
 - **Upgrading ecadlib**: a revision fingerprinted by an older ecadlib is fingerprinted again from its saved files, so

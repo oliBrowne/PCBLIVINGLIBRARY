@@ -2,7 +2,7 @@
 Plain functions: python -m tests.run_all test_fix1026_a365. Altium 365 / Nexar is always a fake here."""
 import json
 
-from tests.fixtures_lite import lite
+from tests.fixtures_lite import fresh_home, lite
 
 
 # ---------------------------------------------------------------- R-AM-1: save_rules over MCP and the release gates
@@ -98,6 +98,7 @@ def _push_lib(plan, lib, nx, ws, rules, dry=False):
     return {r["name"]: r for r in A.push(items, nx, ws, dry_run=dry, rules=rules, folder=lib)}
 
 
+@fresh_home
 def test_lost_first_release_then_approved_change_goes_up_as_a_new_revision():
     """The first release reached the workspace but its answer was lost (no publish line). After an approved symbol
     change the next push must send the approved revision (it was `up_to_date`, sent nothing and recorded r2 as

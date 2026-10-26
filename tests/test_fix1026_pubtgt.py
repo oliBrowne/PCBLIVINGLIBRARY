@@ -4,7 +4,7 @@ released. Plain functions: python -m tests.run_all test_fix1026_pubtgt. Altium 3
 import json
 from pathlib import Path
 
-from tests.fixtures_lite import lite
+from tests.fixtures_lite import fresh_home, lite
 
 ROOT = Path(__file__).parent.parent
 
@@ -365,6 +365,7 @@ def test_dedupe_merge_holds_a_3d_body_change_of_a_released_part():
 
 
 @lite
+@fresh_home
 def test_a365_new_revision_links_an_item_that_already_holds_its_drawing():
     """An approved change points RES-0603-10k at a footprint item the workspace already holds with exactly that
     drawing (a dedupe merge onto the keeper's land): the new revision linked nothing and released a second item
@@ -394,6 +395,7 @@ def test_a365_new_revision_links_an_item_that_already_holds_its_drawing():
 
 # ---------------------------------------------------------------- R-FL-6 (R-PUB-4): two sharers of a changed model
 @lite
+@fresh_home
 def test_a365_second_sharer_of_a_changed_model_links_the_first_ones_new_item():
     """Both resistors share the Resistor symbol; an approved change of it releases both again. The first one's new
     revision puts the drawing in Resistor-r2 (the name Resistor is taken); the second tried Resistor-r2 again, got a

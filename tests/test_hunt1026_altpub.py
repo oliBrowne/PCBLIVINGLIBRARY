@@ -224,6 +224,7 @@ class Workspace(FakeA365):
         return cid
 
 
+@fresh_home
 def test_new_part_does_not_link_a_shared_model_older_than_its_own():
     """RES-0603-10k is in the workspace; the shared Resistor symbol then changes (approved for both resistors). 10k
     goes up as a new revision whose symbol is released as a new item (Resistor-r2: the item name is taken). The new

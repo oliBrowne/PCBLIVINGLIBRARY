@@ -1712,10 +1712,12 @@ class Claims:
 class SharedClaims(Claims):
     """Claims on a target with no state of its own (an Altium 365 workspace) kept in two files: the project's
     (publishers_file: shared with the project, a clone or another computer sees it) and this computer's
-    (computer_publishers_file: plan folders of other projects that push to the same workspace, R-FX18-3). The
-    computer's file adds only plans whose folder is there now (a project deleted long ago holds nothing), and is never
-    copied into the project's. Plan folders on another computer, in another project, are in neither: see
-    known_publishers (a component adopted from one is told so)."""
+    (computer_publishers_file: plan folders of other projects that push to the same workspace, R-FX18-3). A plan in
+    the computer's file whose folder is not at its recorded path (the project moved or renamed, a drive not mounted)
+    is brought in as gone: its components are held, named with the advice to push it once from where it is now, and it
+    is dropped only by --forget-missing-plans (R-FX20-2). The computer's file is never copied into the project's. Plan
+    folders on another computer, in another project, are in neither: see known_publishers (a component adopted from
+    one is told so)."""
 
     def __init__(self, path, rel_to, section=None, computer=None):
         super().__init__(path, rel_to, section)
@@ -1724,13 +1726,12 @@ class SharedClaims(Claims):
         if self.computer is None:
             return
         for pid, rec in self.computer.plans.items():
-            if found_at(rec, self.computer.rel_to, pid) is None:
-                continue
+            there = found_at(rec, self.computer.rel_to, pid) is not None
             mine = self.plans.get(pid)
             if mine is None:
                 self.plans[pid] = {"abs": rec.get("abs")}
                 self.borrowed.add(pid)
-            elif found_at(mine, self.rel_to, pid) is None:
+            elif there and found_at(mine, self.rel_to, pid) is None:
                 mine["abs"] = rec.get("abs")
             for k, v in self.computer.claims.items():
                 if pid in v and pid not in self.claims.get(k, []):
@@ -1756,10 +1757,12 @@ class SharedClaims(Claims):
         if self.computer is None:
             return
         live = {}
-        for pid, rec in self.plans.items():          # this computer's file: the plans that are there, by full path
-            f = found_at(rec, self.rel_to, pid) or found_at(rec, self.computer.rel_to, pid)
-            if f is not None:
+        for pid, rec in self.plans.items():          # this computer's file: the plans by full path; one not found
+            f = found_at(rec, self.rel_to, pid) or found_at(rec, self.computer.rel_to, pid)   # keeps its record
+            if f is not None:                                                                   # until forgotten
                 live[pid] = {"abs": Path(f).resolve().as_posix()}
+            elif pid in self.computer.plans:
+                live[pid] = self.computer.plans[pid]
         self.computer.claims = {k: [p for p in v if p in live] for k, v in self.claims.items()}
         self.computer.claims = {k: v for k, v in self.computer.claims.items() if v}
         self.computer.plans = {p: r for p, r in live.items() if any(p in v for v in self.computer.claims.values())}
