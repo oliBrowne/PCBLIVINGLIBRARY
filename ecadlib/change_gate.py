@@ -581,14 +581,14 @@ class Guard:
             new = FP.of_item(it, self.base)
             if new["hashes"]["digest"] == head.get("digest"):
                 self._mark_unchanged(it, head)
-                self._settle_sides(it, head)
+                self._settle_sides(it, head, new)
                 continue
             old = self.ledger.fingerprint(head)
             changes = CD.diff(old, new) if old else [{"class": "electrical", "area": "ledger", "what": "fingerprint",
                                                        "old": None, "new": None, "text": "the released fingerprint is missing"}]
-            if not changes:
+            self._settle_sides(it, head, new, old)  # also before a pass / warn release: it must not snapshot an edited
+            if not changes:                         # recipe or STEP beside a .PcbLib that is still the released one
                 self._mark_unchanged(it, head)
-                self._settle_sides(it, head)
                 continue
             dec = decide(changes, self.policy, self.mode)
             rej = self.ledger.rejected(it["name"], new["hashes"]["digest"], new) if dec["action"] == "hold" else None
@@ -639,15 +639,27 @@ class Guard:
             self.log(f"  change {r['action']:<5} {r['part']:<28} {r['summary']}")
         return rows
 
-    def _settle_sides(self, it, head):
-        """A released part whose .SchLib / .PcbLib is byte for byte the head's, but whose build recipe or 3D model
-        beside it is not (an edit outside ecadlib): Altium's own rebuild would ship that edit, and no fingerprint sees
-        it. The released bytes go back; the edited ones are kept in the blob store with an `overwritten` line."""
+    def _settle_sides(self, it, head, new=None, old=None):
+        """A released part whose .SchLib / .PcbLib is still the head's, but whose build recipe or 3D model beside it is
+        not (an edit outside ecadlib): Altium's own rebuild would ship that edit, and no fingerprint sees it. The
+        released side files go back; the edited ones are kept in the blob store with an `overwritten` line.
+        "Still the head's": the same bytes, or (for a publisher's settle, writer hand-edit, which builds nothing) the
+        same symbol / footprint and 3D model in the fingerprint `new` as in the head's `old`, so a re-saved .PcbLib
+        (other bytes, same content) does not hide an edited recipe. A writer that rebuilt the file writes its recipe
+        anew, so only the same bytes count there."""
         files = head.get("files") or {}
         drift = {}
-        for r in files.values():
+        for kind, r in files.items():
             f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
-            if f.is_file() and LG.sha_bytes(f.read_bytes()) == r.get("sha256"):
+            if not f.is_file():
+                continue
+            same = LG.sha_bytes(f.read_bytes()) == r.get("sha256")
+            if not same and new is not None and self.writer == "hand-edit" and kind in ("symbol", "footprint"):
+                if old is None:
+                    old = self.ledger.fingerprint(head) or {}
+                keys = ("symbol",) if kind == "symbol" else ("footprint", "model")
+                same = bool(old) and all(old.get(k) == new.get(k) for k in keys)
+            if same:
                 drift.update(LG.side_drift(r, f))
         if not drift:
             return
@@ -658,7 +670,12 @@ class Guard:
                 rel = os.path.relpath(f, self.base).replace(os.sep, "/")
                 kept[rel] = {"path": rel, "sha256": self.ledger.put_bytes(f.read_bytes())}
         names = ", ".join(sorted({Path(p).name for p in drift}))
-        self.ledger.restore_files(files, self.base)
+        for p, sha in drift.items():           # only the side files: the library files may carry a change that settles
+            f = Path(p)
+            f.parent.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_name(f.name + f".{os.getpid()}.tmp")
+            tmp.write_bytes(self.ledger.get_bytes(sha))
+            os.replace(tmp, f)
         self.ledger.append({"event": "overwritten", "part": it["name"], "by": self.who(), "writer": self.writer,
                             "base": head.get("revision"), "digest": head.get("digest"), "files": kept,
                             "reason": f"{names} differed from released revision r{head.get('revision')} (edited outside "

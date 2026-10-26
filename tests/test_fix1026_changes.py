@@ -123,3 +123,65 @@ def test_fix_changes_1d_baseline_still_records_a_part_that_passes(tmp_path, monk
     heads = {n: LG.Ledger(plan.parent).head(n) for n in ready}
     assert all(heads.values()), heads                    # the librarian's own baseline recorded them
 
+
+# ------------------------------------------------------------------ R-PUB-1 / R-PUB-2: edited recipe / STEP beside a released part
+C_RECIPE = "models/PcbLib/C_0402_1005Metric.PcbLib.ecadbuild"
+
+
+def _move_pad1(lib):
+    """Move pad 1 in CAP-0402-100nF's Altium build recipe (unshared footprint) -> (released bytes, edited pad line)."""
+    rp = lib / C_RECIPE
+    released = rp.read_bytes()
+    t = rp.read_text(encoding="utf-8")
+    p1 = next(x for x in t.splitlines() if x.startswith("PAD\t1\t"))
+    f = p1.split("\t")
+    f[2] = str(int(f[2]) - 300000)
+    new = "\t".join(f)
+    rp.write_text(t.replace(p1, new, 1), encoding="utf-8")
+    return released, new
+
+
+def test_fix_changes_rpub1_a_field_change_does_not_carry_an_edited_recipe_out():
+    """R-PUB-1: the side-file check ran only for parts that were otherwise unchanged. A description edit (pass) plus a
+    moved pad in the .ecadbuild recorded r2 with the edited recipe, and altium-pkg shipped the moved pad."""
+    w, lib = _demo()
+    released, new = _move_pad1(lib)
+    plan = json.loads((lib / "plan.json").read_text(encoding="utf-8"))
+    it = next(i for i in plan if i["name"] == "CAP-0402-100nF")
+    it["description"] = (it.get("description") or "") + " (edited)"
+    (lib / "plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+    r = _run(w, "altium-pkg", lib / "plan.json", "--out", "apkg")
+    assert new not in (w / "apkg/ecadlib_build.txt").read_text(encoding="utf-8"), r.stdout + r.stderr
+    assert (lib / C_RECIPE).read_bytes() == released
+    ov = [e for e in _ledger(lib) if e["event"] == "overwritten" and e.get("part") == "CAP-0402-100nF"]
+    assert ov, [(e["event"], e.get("part")) for e in _ledger(lib)]
+    rel = [e for e in _ledger(lib) if e["event"] == "release" and e.get("part") == "CAP-0402-100nF"]
+    assert rel[-1]["revision"] == 2 and rel[-1]["files"]["footprint"]["ecadbuild"] == __import__("hashlib").sha256(released).hexdigest()
+
+
+def test_fix_changes_rpub2_a_resaved_pcblib_does_not_hide_an_edited_recipe():
+    """R-PUB-2: the side files were compared only when the .PcbLib's bytes were the head's. Re-saved (same content,
+    other bytes) with a moved pad in its .ecadbuild, altium-pkg shipped the moved pad."""
+    w, lib = _demo()
+    pl = lib / "models/PcbLib/C_0402_1005Metric.PcbLib"
+    pl.write_bytes(pl.read_bytes() + b"\0" * 512)
+    released, new = _move_pad1(lib)
+    r = _run(w, "altium-pkg", lib / "plan.json", "--out", "apkg")
+    assert new not in (w / "apkg/ecadlib_build.txt").read_text(encoding="utf-8"), r.stdout + r.stderr
+    assert (lib / C_RECIPE).read_bytes() == released
+    assert [e for e in _ledger(lib) if e["event"] == "overwritten" and e.get("part") == "CAP-0402-100nF"]
+
+
+def test_fix_changes_rpub_no_false_fix_after_librarian_refresh():
+    """No `overwritten` line from the side check after a librarian --refresh and a publisher (nothing was edited)."""
+    w, lib = _demo()
+    n = len(_ledger(lib))
+    out = ""
+    for how in (("librarian", "ws/uploads/demo/demo_bom.csv", "-o", lib, "--offline", "--sources", "standard", "--refresh"),
+                ("rebuild", lib), ("altium-pkg", lib / "plan.json", "--out", "apkg"), ("kicad-export", lib / "plan.json",
+                                                                                     "--out", "kx")):
+        r = _run(w, *how)
+        out += r.stdout + r.stderr
+    assert "Traceback" not in out, out
+    assert not [e for e in _ledger(lib)[n:] if e["event"] in ("overwritten", "hold")], out
+
