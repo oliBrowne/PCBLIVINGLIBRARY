@@ -1291,9 +1291,16 @@ def release_part(cfg, req, progress=None):
             return {"status": "error", "message": f"{name} cannot be released anyway: "
                     + "; ".join(it.get("hold_reasons") or ["a file is missing or a change waits for approval"]) + ".",
                     "fix": f"Fix it in the review queue ({_queue_hint(cfg)})."}
+        if not str(req.get("release_key") or "").strip():   # a dialog from a menu built by an older ecadlib: it does
+            return {"status": "error", "message": f"{name} was not released: the ecadlib menu in Altium is older "
+                    "than this ecadlib. Its dialog does not say which hold reasons it showed you, so Release anyway "
+                    "from it cannot be checked against why the part is held now.",   # not send what it showed
+                    "fix": "Rebuild the menu: run `ecadlib altium-menu build` again with the same --out folder, then "
+                           "in Altium reopen the ecadlib script project (or restart Altium) and add the part again. "
+                           f"Or release it from the review queue ({_queue_hint(cfg)})."}
         if str(req.get("release_key") or "") != release_key(it):   # what is released must be what the dialog showed
             return {"status": "error", "message": f"{name} was not released: why it is held changed since the dialog "
-                    f"showed it (or the dialog sent no list of what it showed).",
+                    f"showed it.",
                     "fix": f"Add {mpn} again to see every reason now, or release it from the review queue "
                            f"({_queue_hint(cfg)})."}
         if len(releasable(it)) > RELEASE_SHOWN:          # the dialog listed only the first RELEASE_SHOWN reasons

@@ -206,6 +206,19 @@ def test_fx11_5_tightening_saves_loosening_is_refused(tmp_path):
     assert r.startswith("REFUSED"), r                # where a real push goes is not a tightening: a person sets it
 
 
+# ---- R-FX11-6: a dialog from an older menu sends no release_key: the refusal says to rebuild the menu
+def test_fx11_6_old_menu_without_release_key_is_told_to_rebuild():
+    from tests.test_fix1026_menus import _held_plan_release
+    r, plan, held = _held_plan_release(key=None)
+    assert r["status"] == "error", r
+    text = r["message"] + " " + r["fix"]
+    assert "older" in text and "ecadlib altium-menu build" in text, r
+    it = next(i for i in json.loads(plan.read_text(encoding="utf-8")) if i["name"] == held["release_part"])
+    assert it["status"] == "held", it.get("status")
+    r, plan, held = _held_plan_release(key="0000")          # a key that is not what the part shows now: as before
+    assert r["status"] == "error" and "changed" in r["message"] and "altium-menu build" not in r["fix"], r
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
