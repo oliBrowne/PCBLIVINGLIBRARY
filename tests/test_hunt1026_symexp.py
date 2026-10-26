@@ -75,3 +75,17 @@ def test_symexp03_kicad_library_footprint_keeps_circles_bottom_pads_offsets(tmp_
     o = {p["designator"]: p for p in AL.footprint_from_kicad(text)["pads"]}
     assert abs(o["1"]["x"] - 1) < 1e-9 and abs(o["1"]["y"] - (-2 + 0.3)) < 1e-9, o["1"]   # copper: (at) + offset
     assert (o["2"]["x"], o["2"]["y"]) == (-1.0, -2.0)                     # turned 90 deg counter-clockwise (y up here)
+
+
+# symexp-04: export-parts gave a part the KiCad id of another part's symbol / footprint when two names map to one
+# KiCad name ('A/B' and 'A_B' are both lib:A_B; footprints 'SOT-23' and 'sot-23' one file on Windows / macOS);
+# kicad-export writes only the first of each (and reports the second), kicad-dblib leaves the second out
+def test_symexp04_parts_export_no_borrowed_kicad_ids():
+    from ecadlib import parts_export as PE
+    items = [{"name": "A_B", "status": "ready", "symbol": {"file": "x.SchLib"}, "footprint": {"ref": "SOT-23", "file": "a.PcbLib"}},
+             {"name": "A/B", "status": "ready", "symbol": {"file": "y.SchLib"}, "footprint": {"ref": "SOT 23", "file": "b.PcbLib"}},
+             {"name": "C", "status": "ready", "symbol": {"file": "z.SchLib"}, "footprint": {"ref": "sot-23", "file": "c.PcbLib"}},
+             {"name": "D", "status": "ready", "symbol": {"file": "d.SchLib"}, "footprint": {"ref": "SOT-23", "file": "a.PcbLib"}}]
+    got = {r["Part ID"]: (r["KiCad Symbol"], r["KiCad Footprint"]) for r in PE.rows(items)}
+    assert got == {"A_B": ("ecadlib:A_B", "ecadlib:SOT-23"), "A/B": ("", "ecadlib:SOT_23"), "C": ("ecadlib:C", ""),
+                   "D": ("ecadlib:D", "ecadlib:SOT-23")}, got          # one footprint shared by two parts: fine

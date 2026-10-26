@@ -82,6 +82,13 @@ def rows(plan, lib="ecadlib", include_held=False, rules=None):
     keep = [it for it in items if isinstance(it, dict) and it.get("name")
             and (it.get("status", "ready") in LIBRARY_STATUS or (include_held and it.get("status") == "held"))]
     sign = _signoff(keep, base) if not isinstance(plan, list) else {}
+    from .kicad_export import kname
+    sym_by, fp_by = {}, {}                     # KiCad names as kicad-export hands them out (items in kname order, the
+    for it in sorted(keep, key=lambda i: kname(i["name"])):         # first wins): two part names with one KiCad name
+        sym_by.setdefault(kname(it["name"]), it["name"])            # ('A/B', 'A_B') or two footprints whose file names
+        ref = (it.get("footprint") or {}).get("ref") if isinstance(it.get("footprint"), dict) else None   # differ only
+        if ref:                                                      # in case: the second has no KiCad id, never the
+            fp_by.setdefault(kname(ref).casefold(), ref)             # other part's
     out = []
     for it in sorted(keep, key=lambda i: str(i["name"])):
         par = {str(p.get("name")): str(p.get("value", "")) for p in it.get("parameters") or []
@@ -90,6 +97,10 @@ def rows(plan, lib="ecadlib", include_held=False, rules=None):
         folder = str(it.get("folder") or "")
         sym, fp = it.get("symbol") or {}, it.get("footprint") or {}
         ks, kf = kicad_ids(it, libname(lib))   # the library name kicad-export / kicad-dblib give it ("My Lib" -> My_Lib)
+        if sym_by.get(kname(it["name"])) != it["name"]:
+            ks = ""
+        if kf and fp_by.get(kname(fp["ref"]).casefold()) != fp["ref"]:
+            kf = ""
         rc = it.get("release_check") or {}
         r.update({"Part ID": str(it["name"]), "Status": str(it.get("status", "ready")),
                   "Category": folder.rstrip("/").split("/")[-1] if folder else "", "Folder": folder,
