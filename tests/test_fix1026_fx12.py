@@ -123,3 +123,56 @@ def test_fx12_3_counter_carry_and_borrow_outputs_go_right():
     s = _sides([("1", "A", ""), ("2", "B", ""), ("3", "C", ""), ("4", "D", ""), ("5", "UP", ""), ("6", "DOWN", ""),
                 ("12", "~{CO}", ""), ("13", "~{BO}", ""), ("8", "GND", ""), ("16", "VCC", "")])
     assert s["~{CO}"] == "right" and s["~{BO}"] == "right", s
+
+
+# ---------------------------------------------------------------- R-FX12-4: only the used embedded model is unpacked
+def _two_model_lib(path, small=b"", big=b""):
+    """A .PcbLib with footprints SMALL and BIG, each with its own embedded STEP."""
+    from ecadlib import altium_lib as AL, kicad_import as K, stdparts as SP
+    text, _ = SP.build("SOIC-8_3.9x4.9mm_P1.27mm")
+    fps = []
+    for name, data in (("SMALL", small), ("BIG", big)):
+        fp, _ = K.convert_footprint(text, name)
+        fp["bodies"] = [{"pts": [(-2, -2.5), (2, -2.5), (2, 2.5), (-2, 2.5)], "height": 1.75,
+                         "step": {"name": f"{name.lower()}.step", "data": data, "rot": (0.0, 0.0, 0.0)}}]
+        fps.append(fp)
+    AL.write_pcblib(path, fps)
+    return path
+
+
+STEP_SMALL = b"ISO-10303-21;\n" + b"#1=CARTESIAN_POINT('',(0.,0.,0.));\n" * 20 + b"END-ISO-10303-21;\n"
+STEP_BIG = b"ISO-10303-21;\n" + b"".join(b"#%d=CARTESIAN_POINT('',(%d.,0.,0.));\n" % (i, i) for i in range(400))
+
+
+@lite
+def test_fx12_4_another_footprints_big_model_does_not_break_the_export(tmp_path, monkeypatch):
+    """Before: altium_model unpacked every model of the library to find its own, so another footprint's model over
+    MODEL_CAP (a 70 MB STEP; here the cap is lowered) refused the export of SMALL's 1 kB one."""
+    from ecadlib import altium_lib as AL, kicad_export as X
+    lib = _two_model_lib(tmp_path / "two.PcbLib", STEP_SMALL, STEP_BIG)
+    monkeypatch.setattr(AL, "MODEL_CAP", len(STEP_SMALL) + 100)            # SMALL fits, BIG does not
+    written = {}
+    got = X.altium_model(lib, "SMALL", "lib", tmp_path / "lib.3dshapes", {}, [], pick="SMALL",
+                         write=lambda p, b: written.__setitem__(p.name, b))
+    assert got and written == {"SMALL.step": STEP_SMALL}, (got, list(written))
+    try:                                                                    # BIG itself is still refused
+        X.altium_model(lib, "BIG", "lib", tmp_path / "lib.3dshapes", {}, [], pick="BIG", write=lambda p, b: None)
+    except ValueError as e:
+        assert "MB" in str(e), e
+    else:
+        raise AssertionError("BIG's model was unpacked past the cap")
+
+
+@lite
+def test_fx12_4_eval_fingerprint_sees_the_step_bytes(tmp_path, monkeypatch):
+    """Before: the fingerprint wrote the lazy model list by its names only, so two libraries whose STEPs differ (and
+    whose model records do not: a file with no or a stale CHECKSUM) fingerprinted the same (eval consistency could
+    not see a changed 3D model)."""
+    from ecadlib import altium_lib as AL
+    from ecadlib.eval import runner as R
+    monkeypatch.setattr(AL, "step_checksum", lambda data: 0)
+    a = _two_model_lib(tmp_path / "a.PcbLib", STEP_SMALL, STEP_BIG)
+    b = _two_model_lib(tmp_path / "b.PcbLib", STEP_SMALL.replace(b"0.,0.,0.", b"1.,0.,0."), STEP_BIG)
+    c = _two_model_lib(tmp_path / "c.PcbLib", STEP_SMALL, STEP_BIG)
+    assert R.file_fingerprint(a) != R.file_fingerprint(b)
+    assert R.file_fingerprint(a) == R.file_fingerprint(c)

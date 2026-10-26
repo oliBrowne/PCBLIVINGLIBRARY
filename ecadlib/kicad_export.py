@@ -947,7 +947,10 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None, 
         return None
     fp = _pick(fps, pick, pcblib, "footprint")
     lib_models = fps[0].get("models") or []          # read_pcblib puts the library's embedded models on entry 0
-    by_id = {str(mp.get("ID", "")): (mp, data) for mp, data in lib_models}
+    # by the model records only: a model is unpacked (and refused past MODEL_CAP) when this footprint uses it, so
+    # another footprint's 70 MB STEP does not stop this one's export
+    head = lib_models.packed if hasattr(lib_models, "packed") else lambda i: lib_models[i]
+    by_id = {str(head(i)[0].get("ID", "")): i for i in range(len(lib_models))}
     bodies = [r for r in fp["records"] if r["type"] == "body"]
     nodes, files, done = [], [], set()
     for k, body in enumerate(bodies):
@@ -961,10 +964,10 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None, 
             continue
         emb = by_id.get(str(bp.get("MODELID", "")))
         if emb is None and len(lib_models) == 1 and len(fps) == 1:
-            emb = lib_models[0]                       # one footprint, one model (no matching id): it is this one's
+            emb = 0                                   # one footprint, one model (no matching id): it is this one's
         if emb is not None and str(bp.get("MODELID", "")) not in done:   # embedded STEP: the same file, unchanged
             done.add(str(bp.get("MODELID", "")))
-            mp, data = emb
+            mp, data = lib_models[emb]
             # the body's own placement (what Altium shows), else the library model record's
             num = lambda v: float(re.sub(r"[^0-9eE+.\-]", "", str(v)) or 0)
             rot = [num(bp[f"MODEL.3D.{key}"]) if str(bp.get(f"MODEL.3D.{key}") or "").strip() else num(mp.get(key, 0) or 0)

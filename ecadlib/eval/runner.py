@@ -931,8 +931,9 @@ def file_fingerprint(path):
     (altium_lib), so the write time in the Altium file header does not count as a different answer."""
     p = Path(path)
     try:
-        if p.suffix.lower() == ".pcblib":
-            data = json.dumps(AL.read_pcblib(p), sort_keys=True, default=str).encode()
+        if p.suffix.lower() == ".pcblib":            # the embedded STEPs too (Models unpack only when asked)
+            data = json.dumps(AL.read_pcblib(p), sort_keys=True,
+                              default=lambda o: list(o) if isinstance(o, AL.Models) else str(o)).encode()
         elif p.suffix.lower() == ".schlib":
             data = json.dumps(AL.read_schlib(p), sort_keys=True, default=str).encode()
         else:
