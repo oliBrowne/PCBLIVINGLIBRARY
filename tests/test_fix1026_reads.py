@@ -95,6 +95,44 @@ def test_1_visual_check_refuses_an_unpriced_model_without_a_yes(tmp_path, monkey
     assert "max_cost_usd = 5" in VC.unpriced_refusal("acme-pro-2", 5.0, yes=True)   # a cap set can't be held
 
 
+# ---------------------------------------------------------------- R-FP-1..3: datasheet read checks (second review of #196)
+def _wire_read(name, dims, pins, other, ptype="gullwing", desc=None):
+    """A synthetic model answer through process() and assess() (footprint-scripts/rw.py of the review)."""
+    import json
+    from ecadlib import ds_route as DR
+    d = lambda nm, v: {"name": nm, "label": nm[:2], "min": str(v[0]), "nom": str(v[1]), "max": str(v[2]), "unit": "mm",
+                       "page": 9, "figure": name}
+    wire = {"package": {"name": name, "description": desc or name, "package_type": ptype, "drawing": name, "unresolved": [],
+                        "dims": [d(k, v) for k, v in dims.items()], "other_json": json.dumps(other)},
+            "pin_table": {"page": 3, "figure": "Pin functions", "rows": len(pins)},
+            "pins": [{"num": n, "name": nm, "type": "passive", "side": "left", "page": 3} for n, nm in pins],
+            "symbol_description": "x", "notes": [], "embedded_instructions": []}
+    res = D.process(D.parse_message({"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(wire)}]}),
+                    "XPART", "ds.pdf")
+    return DR.assess(res), res["needs_review"]
+
+
+QFP_14X20 = {"body_length": (13.9, 14.0, 14.1), "body_width": (19.9, 20.0, 20.1), "lead_span": (16.95, 17.2, 17.45),
+             "lead_span_y": (22.95, 23.2, 23.45), "pitch": ("", 0.65, ""), "terminal_length": (0.73, 0.88, 1.03),
+             "terminal_width": (0.22, 0.3, 0.38), "height_max": ("", "", 3.4)}
+
+
+def test_rfp1_a_rectangular_qfp_read_right_passes_the_feet_check():
+    """JEDEC PQFP-100 14x20: lead_span crosses body_length (footprint_gen's frame); _feet_outside paired it with
+    body_width and failed every correct rectangular QFP."""
+    from ecadlib import footprint_gen as F
+    other = {"pin_count": 100, "pins_left_right": 30, "pins_top_bottom": 20}
+    (kind, why), rev = _wire_read("PQFP-100_14x20mm_P0.65mm", QFP_14X20, [(str(i), f"P{i}") for i in range(1, 101)],
+                                  other, ptype="qfp")
+    assert not any("does not fit outside the body" in r for r in rev), rev
+    spec = {"package_type": "qfp", **{k: {"min": v[0], "nom": v[1], "max": v[2]} for k, v in QFP_14X20.items()
+                                      if k not in ("pitch", "height_max")}}
+    assert D._feet_outside(spec) == [] and F.sanity(dict(spec, name="Q", pin_count=100, pins_left_right=30,
+                                                         pins_top_bottom=20, pitch=0.65)) == []
+    bad = dict(spec, lead_span={"min": 14.0, "nom": 14.2, "max": 14.4})    # X span read close to the 14 mm body
+    assert any("lead_span max 14.4 - body_length min 13.9" in r for r in D._feet_outside(bad)), D._feet_outside(bad)
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

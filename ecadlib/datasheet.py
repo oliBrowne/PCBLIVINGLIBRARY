@@ -1766,7 +1766,11 @@ def _feet_outside(spec):
         return []
     L = _dim(spec.get("terminal_length"))
     out = []
-    for span_k, body_k in (("lead_span", "body_width"), ("lead_span_y", "body_length")):
+    # the span across the body side it crosses, in footprint_gen's frame: a gull-wing's lead_span crosses body_width;
+    # a QFP's lead_span crosses body_length (X) and lead_span_y (lead_span when square) body_width, as fpgen-12 checks
+    pairs = (("lead_span", "body_width"),) if spec["package_type"] == "gullwing" else \
+        (("lead_span", "body_length"), ("lead_span_y" if spec.get("lead_span_y") else "lead_span", "body_width"))
+    for span_k, body_k in pairs:
         span, body = _dim(spec.get(span_k)), _dim(spec.get(body_k))
         if not (L and span and body) or L[0] <= 0:
             continue
