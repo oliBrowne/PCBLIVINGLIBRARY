@@ -165,3 +165,23 @@ def test_the_package_code_with_a_two_digit_speed_grade_or_four_letters_is_read()
     for mpn, own, code in (("XC9572XL-10VQG64C", "QFP64", "VQG64"), ("XCZU3EG-1SBVA484E", "BGA484", "SBVA484")):
         assert OD.mpn_package_code(mpn, DR.package_tokens(own)) == code, (mpn, OD.mpn_package_code(mpn, DR.package_tokens(own)))
 
+
+# ---------------------------------------------------------------- R-FX13-5: logic part numbers, whole-token codes
+def test_logic_part_numbers_carry_no_package_code_and_codes_match_whole_tokens():
+    from ecadlib import ds_route as DR, outline_docs as OD
+    for mpn, own in (("SN74HC14N", "DIP14"), ("SN74HC14DR", "SO14"), ("SN74HC14PWR", "TSSOP14"), ("CD74HC14E", "DIP14"),
+                     ("MC74HC14ADR2G", "SO14"), ("SN74LVC14APWR", "TSSOP14"), ("MSP430G2553IPW20R", "TSSOP20")):
+        got = OD.mpn_package_code(mpn, DR.package_tokens(own))
+        assert got is None, (mpn, got)
+    for mpn, own, text in (("SN74HC14DR", "SO14", "SOIC-14 D0014A package"), ("SN74HC14N", "DIP14", "PDIP-14 N0014A package"),
+                           ("CD74HC14E", "DIP14", "PDIP-14 N0014A package"), ("MC74HC14ADR2G", "SO14", "SOIC-14 CASE 751A-03"),
+                           ("SN74LVC14APWR", "TSSOP14", "TSSOP-14 PW0014A package"),
+                           ("MSP430G2553IPW20R", "TSSOP20", "PW (R-PDSO-G20) TSSOP-20 package PW0020A")):
+        assert _taken(mpn, own, text), (mpn, text)
+    # a code is printed as a whole token: "17 x 17 mm 256-ball" holds no M256, "lead 100" no FBD100
+    for mpn, own, text in (("EPM1270M256C5N", "BGA256", "FineLine BGA-256 package, body 17 x 17 mm 256-ball"),
+                           ("EPM1270M256", "BGA256", "FineLine BGA-256 package, 17 x 17 mm, pitch 1.0 mm 256 balls"),
+                           ("LPC1768FBD100", "QFP100", "LQFP-100 package of another maker: 14 x 14 mm, lead 100, 0.5 mm pitch")):
+        assert not _taken(mpn, own, text), (mpn, text)
+    assert _taken("EPM1270M256C5N", "BGA256", "M256 Micro FineLine BGA-256 package outline, 0.5 mm pitch")
+    assert _taken("LPC1768FBD100", "QFP100", "LQFP100 package FBD100, 14 x 14 mm, SOT407-1")

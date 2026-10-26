@@ -73,11 +73,21 @@ def names_it(texts, part, codes=(), own=(), url=""):
     codes = mpn_package_codes(part, own)              # EPM1270M256's M256: a 256-ball FineLine BGA is not it
     # no code in the MPN: a ball grid drawing that prints another maker's code for this count (FTG256) is another
     # package (pitch, body). A maker's own outline codes (ADI RW-20, LTC G48, Intel F256 for an F17 part) are not
-    printed = any(c in flat for c in codes) if codes else not foreign_codes(texts, part, own)
+    # the code as a whole token of the text, longest form first: "17 x 17 mm 256-ball" holds no M256 (R-FX13-5)
+    up = " ".join(DR.norm_text(t or "") for t in texts).upper()
+    printed = any(_token(c).search(up) for c in sorted(codes, key=len, reverse=True)) if codes \
+        else not foreign_codes(texts, part, own)
     if printed and _same_package(own, set().union(*(DR.package_tokens(DR.norm_text(t or "")) for t in texts))):
         return True
     key = re.sub(r"[^A-Z0-9]", "", str(part or "").upper())
     return said is None and len(key) >= 4 and key in re.sub(r"[^A-Z0-9]", "", str(url).upper())
+
+
+def _token(code):
+    """A package code as a whole token (FG484, FG-484), never inside another word or number (MM256, LEAD100)."""
+    m = re.fullmatch(r"([A-Z]+)(\d+)", code)
+    body = f"{m.group(1)}-?{m.group(2)}" if m else re.escape(code)
+    return re.compile(rf"(?<![A-Z0-9]){body}(?!\d)")
 
 
 def _counts(own):
@@ -94,7 +104,9 @@ def mpn_package_codes(part, own=()):
     - in the first segment, a code after the part's own letters and number (EPM1270 | M256, 10M08SC | M153): which of
       the letters before the count are the code's is not known (10M08SC + M153), so each ending of them (up to 3) is
       a form, the shortest first. A number that only follows digits is the part number itself: 74HC14 is the 14th
-      74HC logic part. The count is the number as printed: AT24C08's "08" is no 8."""
+      74HC logic part, and so is it after a maker's prefix (SN74HC14N, MC74HC14ADR2G). A code with an ordering tail in
+      the first segment is read for a ball / land grid only (MSP430G2553IPW20R is no W20). The count is the number as
+      printed: AT24C08's "08" is no 8."""
     counts = _counts(own)
     if not counts:
         return []
@@ -105,8 +117,14 @@ def mpn_package_codes(part, own=()):
             if m and m.group(2) in counts:
                 return [m.group(1) + m.group(2)]
             continue
+        grid = any(re.sub(r"\d+$", "", t) in ARRAYS for t in own or ())
         for m in re.finditer(r"([A-Z]+)(\d{2,4})(?!\d)", seg):
-            if m.group(2) in counts and re.search(r"[A-Z]\d", seg[:m.start()]):
+            before = seg[:m.start()]
+            if re.search(r"(?:^|[A-Z])[57]4$", before):      # SN74HC14N, MC74HC14ADR2G: a 74 logic part number
+                continue
+            if m.end() < len(seg) and not grid:           # a code with an ordering tail: ball / land grids only
+                continue                                  # (MSP430G2553IPW20R: TI's PW + pin count, R-FX13-5)
+            if m.group(2) in counts and re.search(r"[A-Z]\d", before):
                 run = m.group(1)[-3:]
                 return [run[-k:] + m.group(2) for k in range(1, len(run) + 1)]
     return []
