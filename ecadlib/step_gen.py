@@ -370,7 +370,8 @@ def pin_header(spec, H=None):
     hb, top, a = {2.54: (2.5, 8.5, 0.64), 2.0: (2.0, 6.0, 0.5), 1.27: (1.5, 4.0, 0.4)}.get(round(p, 2), (p, 3 * p, 0.25 * p))
     pins = [(c * p, -r * p) for r in range(rows) for c in range(cols)]
     holes = [rect(a / 2, a / 2, x, y)[::-1] for x, y in pins]
-    bl, bw = _n(spec, "body_length") or cols * p, _n(spec, "body_width") or rows * p    # the spec body (= F.Fab)
+    from .footprint_adv import header_body
+    bl, bw, _ = header_body(dict(spec, cols=cols))                                     # the body F.Fab draws
     cx, cy = (cols - 1) * p / 2, -(rows - 1) * p / 2                                   # centred on the pin field
     outline = [(cx - bl / 2, cy - bw / 2), (cx + bl / 2, cy - bw / 2), (cx + bl / 2, cy + bw / 2), (cx - bl / 2, cy + bw / 2)]
     out = [prism(outline, hb, holes=holes, name="body", color=COL["body"])]

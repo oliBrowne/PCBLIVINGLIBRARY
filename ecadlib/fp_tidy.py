@@ -300,7 +300,8 @@ def tidy(text, notes=None):
         silk = [q for it in tree if isinstance(it, list) and it and it[0] in ("fp_line", "fp_circle", "fp_poly", "fp_arc", "fp_rect")
                 and _layer(it) == "F.SilkS" for q in _pts(it)]
         reach = max(pin1["w"], pin1["h"]) / 2 + 1.0
-        others = [p for p in pads if p is not pin1]
+        # a pad stacked on pin 1 (USB-C B12 on A1) is never farther from a mark than pin 1 is: it is not another pad
+        others = [p for p in pads if p is not pin1 and math.hypot(p["x"] - pin1["x"], p["y"] - pin1["y"]) > 1e-6]
         mx, my = (copper[0] + copper[2]) / 2, (copper[1] + copper[3]) / 2
         twin = lambda q: any(abs(2 * mx - q[0] - s[0]) < 0.05 and abs(2 * my - q[1] - s[1]) < 0.05 for s in silk)
         near1 = [q for q in silk if math.hypot(q[0] - pin1["x"], q[1] - pin1["y"]) <= reach and not twin(q)   # a symmetric

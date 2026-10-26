@@ -1039,6 +1039,19 @@ def _bga(spec, density):
     return txt, rep, pads
 
 
+def header_body(spec):
+    """(size along x, size along y, note or None) of a pin header's body, as _header draws it and step_gen models it:
+    body_length x body_width (default cols x rows pitches), its long side running with the pin rows (down y), as
+    table_layout lays a connector's. A datasheet gives a 1 x 10 header's body as 25.4 x 2.54 whatever the schema's x
+    says; drawn as read, the body crossed the pins and the courtyard became a 26 mm cross."""
+    cols, rows, e = spec.get("cols", 1), spec["rows"], spec["pitch"]
+    bl = _dim(spec["body_length"])[1] if spec.get("body_length") else cols * e
+    bw = _dim(spec["body_width"])[1] if spec.get("body_width") else rows * e
+    if (rows > cols and bl > bw) or (cols > rows and bw > bl):
+        return bw, bl, f"body {bl:g} x {bw:g} mm turned to run with the {cols} x {rows} pin rows"
+    return bl, bw, None
+
+
 def _header(spec, density):
     cols, rows, e = spec.get("cols", 1), spec["rows"], spec["pitch"]
     if cols not in (1, 2):
@@ -1087,10 +1100,11 @@ def _header(spec, density):
         if spec.get("lead_span"):
             ls = _dim(spec["lead_span"])[1] / 2
             extra.append((-ls, -(rows - 1) * e / 2 - lw / 2, ls, (rows - 1) * e / 2 + lw / 2))
-    bl = _dim(spec["body_length"])[1] if spec.get("body_length") else cols * e if spec.get("mount", "tht") == "tht" else cols * e
-    bw = _dim(spec["body_width"])[1] if spec.get("body_width") else rows * e
+    bl, bw, turned = header_body(spec)
     body = (_r4(cx - bl / 2), _r4(cy - bw / 2), _r4(cx + bl / 2), _r4(cy + bw / 2))
     rep = {"name": spec["name"], "type": "pin_header", "density": density, "ipc_family": family}
+    if turned:
+        rep["notes"] = [turned]
     rep["descr"] = (f"{spec.get('description', spec['name'])} | {cols}x{rows} pins, pitch {e:g} mm"
                     + (f", drill {pads[0]['drill'][0]:g} mm, pad {pads[0]['w']:g} mm" if pads[0].get("drill") else
                        f", pads {pads[0]['w']:g}x{pads[0]['h']:g} mm"))

@@ -16,6 +16,7 @@ fab limits; each finding is (level, rule, message) with level "error" or "warnin
   pin 1     a pad numbered "1" (or "A1" for BGAs and lettered connector rows) exists; for multi-row parts it is the top-left-most pad (KLC F6.x
             orientation) and the numbers run counter-clockwise from it; pad numbers are unique except for deliberate duplicates (a SOT-223 tab)
   paste     an exposed pad's paste windows cover 50-90 % of its copper
+  geometry  every pad position / size and outline coordinate is a number (no nan / inf, which KiCad cannot load)
   bga       ball grids (pads named A1, B2, ... on a regular grid): A1 is the top-left ball and marked on the silk
             (a filled mark or a gap near the A1 corner) and on the fab layer (a chamfered corner); every ball on
             the pitch grid; land diameter 35-65 % of the pitch (outside that: weak joints or no room to escape);
@@ -259,6 +260,16 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     MOUNT = mount_rx(nums)                           # noqa: N806 (H<n> is a ball row in a grid, a mounting hole otherwise)
     groups = [set(map(str, g)) for g in same_net or []]
     numset = set(nums)
+
+    # ---- numbers: a nan / inf coordinate passes every comparison below (all False) and KiCad cannot load the file
+    odd = [p["num"] or "(unnumbered)" for p in pads if not all(math.isfinite(v) for v in (p["x"], p["y"], p["w"], p["h"]))]
+    if odd:
+        add("error", "geometry", f"pad {odd[0]} has a position or size that is not a number (nan / inf)")
+    for layer in ("F.CrtYd", "F.Fab", "F.SilkS"):
+        if any(not math.isfinite(v) for s in _graphics(tree, layer)[0] for v in s):
+            add("error", "geometry", f"a {layer} outline has a coordinate that is not a number (nan / inf)")
+    if issues:
+        return issues                                # the other rules cannot measure it (some would raise)
 
     # ---- copper
     for p in cu:                                     # zero-area copper: nothing to solder (size typed as 0, or a lost unit)

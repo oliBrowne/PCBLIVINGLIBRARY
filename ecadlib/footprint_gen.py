@@ -431,6 +431,10 @@ def sanity(spec):
             errs.append(f"{k}: min {lo} is bigger than max {hi}")
         if hi > 60:
             errs.append(f"{k} = {hi}: that looks like mils or 0.01 mm units; the spec is in millimetres")
+    ep = spec.get("exposed_pad")
+    if ep and min(dim(ep["length"])[1], dim(ep["width"])[1]) < 0.1:    # as build() refuses a signal pad under 0.1 mm
+        errs.append(f"the exposed pad is {dim(ep['length'])[1]:g} x {dim(ep['width'])[1]:g} mm: too small to be a pad "
+                    "(check its length/width)")
     if errs:
         return errs
     L, W, T = nom("body_length"), nom("body_width"), nom("terminal_length")
@@ -543,8 +547,25 @@ def ep_mask(land, ew, eh):
                     "the whole land is open (check the land page)")
 
 
+def non_finite(v, path=""):
+    """The first NaN / infinite number anywhere in a spec, as (path, value), else None. json.loads takes NaN and
+    Infinity, and the schema's minimum lets NaN through (NaN < 0 is False), so they reach the builders, where every
+    comparison with NaN is False: a "nan" coordinate was written and footprint_check passed it."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return path or "value", v
+    items = v.items() if isinstance(v, dict) else enumerate(v) if isinstance(v, list) else ()
+    for k, x in items:
+        hit = non_finite(x, f"{path}.{k}" if path and isinstance(k, str) else f"{path}[{k}]" if path else str(k))
+        if hit:
+            return hit
+    return None
+
+
 def build(spec, density=None):
     """Return (kicad_mod_text, report_dict)."""
+    bad = non_finite(spec)
+    if bad:
+        raise ValueError(f"the package numbers don't add up: {bad[0]} is {bad[1]}, not a number (check the drawing)")
     if spec["package_type"] in ADVANCED:
         from . import footprint_adv
         return footprint_adv.build(spec, density)
@@ -596,7 +617,14 @@ def build(spec, density=None):
         if land.get("ep_across") and land.get("ep_along"):   # the maker's thermal land (TI PowerPAD: 3.4 x 5 around a
             ew, eh = land["ep_across"], land["ep_along"]      # 3 x 3 exposed pad), as KiCad draws it
             rep["ep_land"] = "datasheet"
-        epnum = str(ep.get("number") or (spec.get("pin_count") or len(pads)) + 1)   # pin_positions specs may omit pin_count
+        given = ep.get("number") not in (None, "")                                    # (an EP read as pin 0 stays 0)
+        epnum = str(ep["number"] if given else (spec.get("pin_count") or len(pads)) + 1)  # pin_positions may omit pin_count
+        if not given and epnum in {p[0] for p in pads}:
+            # leads numbered with gaps (SOIC-14-16: 14 leads numbered up to 16) or a tab numbered pin_count + 1: the
+            # default would put the thermal pad on a lead's net. The datasheet numbers it: the read must say how
+            raise ValueError(f"the exposed pad's default number {epnum} (pin_count + 1) is already a lead's number "
+                             f"(pads {', '.join(sorted({p[0] for p in pads}, key=lambda s: (len(s), s)))}): give "
+                             "exposed_pad.number as the datasheet numbers the thermal pad")
         lr = _left_right(spec, pads)                                                  # gullwing: all pads are L/R
         gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p, s in zip(pads, lr) if s]         # left/right rows vs EP
         gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]    # qfn top/bottom rows vs EP

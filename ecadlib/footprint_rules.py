@@ -1005,6 +1005,15 @@ def connect_rules(s, symbol_pins, add):
         if p1 in ANODE and p2 in CATHODE:
             add("error", "pinmap", f"the symbol puts the anode on pin 1 but {name.split('_')[0]} footprints put the cathode "
                                    "on pad 1 (the marked end): the part would be placed backwards")
+    elif len(pins) == 2 and {"1", "2"} <= set(pins) and not re.match(r"^CP_", name) and \
+            "polarized" in str((sexpr.first(s["tree"], "tags") or [None, ""])[1]).split():
+        # a footprint ecadlib drew with its polarity mark on pad 1 (footprint_gen: the cathode bracket, tags
+        # "polarized") under any name: a datasheet read's SOD-123F is not named D_. Anode / cathode only: "+" on the
+        # marked pad is right for a tantalum and wrong for an LED, so +/- says nothing here
+        p1, p2 = pins["1"].strip().lower(), pins["2"].strip().lower()
+        if p1 in ("a", "anode") and p2 in ("k", "c", "cathode", "kathode"):
+            add("error", "pinmap", "the symbol puts the anode on pin 1 but this footprint marks pad 1 as the cathode "
+                                   "(its polarity mark): the part would be placed backwards")
     if re.match(r"^CP_", name) and len(pins) == 2 and {"1", "2"} <= set(pins):
         p1 = pins["1"].strip().lower()
         if p1 in ("-", "neg", "n", "minus", "k", "cathode"):
