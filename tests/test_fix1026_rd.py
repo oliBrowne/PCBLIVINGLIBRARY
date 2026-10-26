@@ -133,3 +133,51 @@ def test_rd1_melf_end_cap_narrower_than_the_body_is_held():
     """Before: a MELF read with a land-sized terminal_width (a third of the diameter) built 0.9 mm off."""
     assert_ok(dict(MELF, terminal_width=MELF["body_width"]))
     assert_held(dict(MELF, terminal_width=sc(MELF["body_width"], 0.33)), "terminal_width", "MELF")
+
+
+# ---------------------------------------------------------------- R-RD-2: gull-wing foot length
+def gw(name, n, e, D_, E1, E, b, L, **kw):
+    return dict(name=name, package_type="gullwing", pin_count=n, pitch=e, body_length=D_, body_width=E1,
+                lead_span=E, terminal_width=b, terminal_length=L, **kw)
+
+
+SOIC8 = gw("SOIC-8_3.9x4.9mm_P1.27mm", 8, 1.27, (4.8, 4.9, 5.0), (3.8, 3.9, 4.0), (5.8, 6.0, 6.2), (0.31, 0.41, 0.51),
+           (0.4, 0.835, 1.27))
+TSSOP14 = gw("TSSOP-14_4.4x5mm_P0.65mm", 14, 0.65, (4.9, 5.0, 5.1), (4.3, 4.4, 4.5), (6.2, 6.4, 6.6), (0.19, 0.245, 0.3),
+             (0.45, 0.6, 0.75))
+SSOP28 = gw("SSOP-28_5.3x10.2mm_P0.65mm", 28, 0.65, (9.9, 10.2, 10.5), (5.0, 5.3, 5.6), (7.4, 7.8, 8.2), (0.22, 0.3, 0.38),
+            (0.55, 0.75, 0.95))
+MSOP8 = gw("MSOP-8_3x3mm_P0.65mm", 8, 0.65, (2.9, 3.0, 3.1), (2.9, 3.0, 3.1), (4.75, 4.9, 5.05), (0.25, 0.315, 0.38),
+           (0.4, 0.55, 0.7))
+POS89 = [{"number": "1", "side": "L", "offset": -1.5}, {"number": "2", "side": "L", "offset": 0.0},
+         {"number": "3", "side": "L", "offset": 1.5}]
+SOT89 = gw("SOT-89-3", 3, 1.5, (4.4, 4.5, 4.6), (2.4, 2.5, 2.6), (3.94, 4.095, 4.25), (0.36, 0.42, 0.48), (0.8, 0.95, 1.1),
+           pin_positions=POS89, tab={"number": "2", "side": "R", "offset": 0.0, "width": (1.62, 1.725, 1.83), "length": None})
+
+
+def test_rd2_true_gullwing_reads_pass():
+    for t in (SOIC8, TSSOP14, SSOP28, MSOP8):
+        assert_ok(t)
+
+
+def test_rd2_foot_in_inches_at_the_0_050_boundary_is_held():
+    """Before: SOIC-8 L 0.0157-0.050 'mm' passed (0.05 is not < 0.05); pads 0.95 long, 1.0 mm out."""
+    assert_held(dict(SOIC8, terminal_length=sc(SOIC8["terminal_length"], 1 / 25.4)), "terminal_length")
+
+
+def test_rd2_foot_too_long_for_the_room_outside_the_body_is_held():
+    """Before: TSSOP-14 L x 2.54 (1.14-1.91) passed: only L min (1.14) was checked against the room outside the body."""
+    for t in (TSSOP14, SOIC8, SSOP28, MSOP8):
+        assert_held(dict(t, terminal_length=sc(t["terminal_length"], 2.54)), "terminal_length nom")
+
+
+def test_rd2_j_leads_stay_exempt():
+    soj = gw("SOJ-24_7.62x15.875mm_P1.27mm", 24, 1.27, (15.7, 15.875, 16.05), (7.49, 7.62, 7.75), (8.38, 8.51, 8.64),
+             (0.38, 0.46, 0.54), (1.1, 1.3, 1.5))
+    res, kind, why, hold = verdict(soj)
+    assert not any("terminal_length nom" in w for w in why), why
+
+
+def test_rd2_leads_on_one_side_keep_the_whole_room():
+    """SOT-89: three leads on one side, the tab under the other: its 0.95 mm foot is not two feet in the room."""
+    assert_ok(SOT89)

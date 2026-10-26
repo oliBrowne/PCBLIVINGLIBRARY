@@ -1812,7 +1812,7 @@ J_LEAD = re.compile(r"SOJ|PLCC|J[- ]?(?:lead|bend)|chip carrier|"            # b
 
 def _feet_outside(spec):
     """A gull-wing foot (terminal_length L) lies outside the plastic, so the span across the leads leaves room for two
-    of them beyond the body: lead_span max - body_width min >= 2 x L min, in every tolerance combination. A read that
+    of them beyond the body: lead_span max - body_width min >= 2 x L min, in every tolerance combination, and >= 2 x L nom. A read that
     breaks it (E read close to E1, L or the body misread, a span in the wrong unit) builds its pads under the body.
     Inward (molded), MELF and J leads (SOJ, PLCC: the standard table has them as gull-wings) lie under the body and
     are left out."""
@@ -1822,6 +1822,10 @@ def _feet_outside(spec):
     spec = F.qfp_frame(spec)[0]
     L = _dim(spec.get("terminal_length"))
     out = []
+    # leads listed on one side only (SOT-89: three leads on one side, the tab under the other) put the whole of the
+    # room on that side: only L min is checked there
+    sides = {p.get("side") for p in _listed(spec)}
+    two_sided = not sides or {"L", "R"} <= sides
     # the span across the body side it crosses, in footprint_gen's frame: a gull-wing's lead_span crosses body_width;
     # a QFP's lead_span crosses body_length (X) and lead_span_y (lead_span when square) body_width, as fpgen-12 checks
     pairs = (("lead_span", "body_width"),) if spec["package_type"] == "gullwing" else \
@@ -1835,6 +1839,11 @@ def _feet_outside(spec):
             out.append(f"terminal_length min {L[0]:g} mm does not fit outside the body: {span_k} max {span[2]:g} - "
                        f"{body_k} min {body[0]:g} leaves {room / 2:.3g} mm per side for the foot, which is implausible "
                        f"(check {span_k}, {body_k} and terminal_length against the drawing)")
+        elif room < 2 * L[1] - 0.01 and two_sided:   # the nominal foot too (review 196 R-RD-2: L x 2.54 on a TSSOP-14,
+            out.append(f"terminal_length nom {L[1]:g} mm does not fit outside the body: {span_k} max {span[2]:g} - "
+                       f"{body_k} min {body[0]:g} leaves {room / 2:.3g} mm per side for the foot, which is implausible "
+                       f"(the lead length or a value in 0.1 in read as the foot? check terminal_length against the "
+                       "drawing)")                # 1.14-1.91 with a 0.45 min, only the min was checked)
     return out
 
 
