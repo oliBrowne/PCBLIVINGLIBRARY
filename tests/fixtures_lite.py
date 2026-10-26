@@ -51,6 +51,28 @@ def lite(fn):
     return run
 
 
+def fresh_home(fn):
+    """Run the test with its own ecadlib settings folder (ECADLIB_HOME): this computer's Altium 365 publishers file
+    (change_gate.computer_publishers_file, R-FX18-3) lives there, and another test's plan folders, alive until the run
+    ends, would otherwise claim the same workspace components. Goes under @lite; keeps the test's signature."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(*a, **k):
+        old = os.environ.get("ECADLIB_HOME")
+        d = tempfile.mkdtemp(prefix="ecadlib-home-")
+        os.environ["ECADLIB_HOME"] = d
+        try:
+            return fn(*a, **k)
+        finally:
+            if old is None:
+                os.environ.pop("ECADLIB_HOME", None)
+            else:
+                os.environ["ECADLIB_HOME"] = old
+            rmtree(d)
+    return run
+
+
 # ---------------------------------------------------------------- temp folders a test removes (R-G2-8)
 _SCOPES = []            # one list per running test (lite / cleans): the scratch folders it made
 

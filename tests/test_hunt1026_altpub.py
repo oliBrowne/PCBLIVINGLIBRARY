@@ -13,8 +13,10 @@ def _push(A, plan, lib, nx, ws, rules, items=None, dry=False):
             if i[k].get("file"):
                 i[k]["file"] = str(lib / i[k]["file"])
     return {r["name"]: r for r in A.push(items, nx, ws, dry_run=dry, rules=rules, folder=lib)}
+from tests.fixtures_lite import fresh_home
 
 
+@fresh_home
 def test_workspace_url_spelling_does_not_lose_an_approved_revision():
     """The same workspace typed with another host case or a trailing slash is the same publish target: an approved
     symbol change still goes up as a new revision (it was an in-place `up_to_date`, and the ledger then recorded the

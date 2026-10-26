@@ -5,7 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
-from tests.fixtures_lite import lite
+from tests.fixtures_lite import lite, fresh_home
 from tests.test_fix1026_pubtgt import _acts, _plan_folder, _res
 from tests.test_fix1026_fx15 import _new_land, _pads, _signed_off
 
@@ -166,6 +166,7 @@ def _two_projects(tmp_path):
 
 
 @lite
+@fresh_home
 def test_a365_component_shared_by_plans_of_two_projects_waits_for_both(tmp_path):
     """F4: plan folders in two projects (each its own ecadlib.toml) push to one workspace; B adopts A's component.
     ecadlib_publishers.json is per project, so A's approval alone made a new revision of the component B's boards use.

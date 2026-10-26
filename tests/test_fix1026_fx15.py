@@ -6,7 +6,7 @@ import json
 import shutil
 from pathlib import Path
 
-from tests.fixtures_lite import lite
+from tests.fixtures_lite import lite, fresh_home
 from tests.test_fix1026_pubtgt import ROOT, _acts, _plan_folder, _res, _rows
 
 
@@ -206,6 +206,7 @@ WS = "https://test.365.altium.com"
 
 
 @lite
+@fresh_home
 def test_a365_change_of_a_component_another_plan_pushed_waits_for_its_sign_off(tmp_path):
     """Two plan folders push RES-0603-10k (B's push adopts A's component). A's approval alone made a new revision of
     the component B's boards use (B never signed it off), and B's later approval made a needless second one. The same
@@ -234,6 +235,7 @@ def test_a365_change_of_a_component_another_plan_pushed_waits_for_its_sign_off(t
 
 
 @lite
+@fresh_home
 def test_a365_one_plan_still_makes_its_revision_and_a_gone_plan_can_be_forgotten(tmp_path):
     """No false hold: a part only this plan pushed gets its new revision at once. A plan folder that pushed it and is
     gone is named stale; --forget-missing-plans clears it."""
