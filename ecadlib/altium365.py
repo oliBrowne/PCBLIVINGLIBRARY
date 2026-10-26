@@ -651,6 +651,26 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
     return {"action": "new_revision", "detail": detail, "models": models}
 
 
+def _upload_released(client, lg, it, p, folder):
+    """Upload library file p of part `it` as its released revision has it (change_gate.released_bytes): the push
+    checked the files before its uploads, and an editor saving meanwhile takes no lock, so an edit saved since is not
+    uploaded (the head's own copy from the blob store goes up; the next writer settles the edit). A staged copy, under
+    the file's own name, is what is read and sent."""
+    import tempfile
+    from . import change_gate as CG
+    if lg is None:
+        return client.upload(p)
+    try:
+        data, _ = CG.released_bytes(lg, it, Path(p), Path(folder))
+    except FileNotFoundError:
+        raise ValueError(f"{Path(p).name} changed since the release check and the released copy is missing: nothing "
+                         f"was sent") from None
+    with tempfile.TemporaryDirectory(prefix="ecadlib-a365-") as d:
+        f = Path(d) / Path(p).name
+        f.write_bytes(data)
+        return client.upload(str(f))
+
+
 def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rules=None, folder=None):
     """Release new parts, update parameters of parts already in the workspace.
     dry_run: no uploads or mutations; records the requests that would be sent.
@@ -684,8 +704,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     transition = ((rules or {}).get("change") or {}).get("a365_transition") or None
     def upload(p):
         if p not in uploaded:
-            uploaded[p] = "<fileId>" if dry_run else client.upload(p)
-        return uploaded[p]
+            uploaded[p] = "<fileId>" if dry_run else _upload_released(client, lg, it, p, folder)
+        return uploaded[p]                     # (`it`: the part being pushed when this is called)
     def recheck(res, why):                     # the release check, run again here, holds it back
         res.update(action="skip", detail="held: " + "; ".join(why), recheck=why)
     for it, block, why in zip(items, blocks, rechecks):

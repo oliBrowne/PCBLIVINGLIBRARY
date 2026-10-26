@@ -314,3 +314,59 @@ def test_fix7_rfx71_a_name_spelling_the_policy_refuses_is_no_sign_off_after_a_re
     AP.decide(it3, "reject", ANN, comment="wrong", base=d, policy=pol)
     assert _try(it3, "approve", ANN, d, pol)                          # her own take-back: recorded, and she is listed
     assert AP.evaluate(it3, pol, d)["met"]
+
+
+# ------------------------------------------------------------------ R-FX7-2
+def _a365_midrun(drop_blob=False):
+    """a365_midrun2.py: RES-0603-10k's .PcbLib gets PAD 1 moved 0.3 mm after publish_guard and the push's own release
+    check, before the upload. -> (push results, {uploaded file name: sha256}, head of RES-0603-10k)"""
+    import hashlib, time
+    from ecadlib import altium365 as A, altium_lib as AL, change_gate as CG, ledger as LG, rules as RU, stdparts as SP
+    from tests.test_change_control import FakeA365, demo
+    plan, lib = demo()
+    items = json.loads(Path(plan).read_text(encoding="utf-8"))
+    it = next(i for i in items if i["name"] == "RES-0603-10k")
+    pcb = (lib / it["footprint"]["file"]).resolve()
+    sent = {}
+
+    class F(FakeA365):
+        def find_model(self, ws, kind, name, folder):
+            return None
+
+        def release_defs(self, ws):                                  # after the push's own release check
+            conv = AL.footprint_from_kicad(SP.build(pcb.stem)[0])
+            conv["pads"][0]["x"] -= 0.3
+            AL.write_pcblib(pcb, [conv])                             # the person saves now
+            if drop_blob:
+                lg = LG.Ledger(lib)
+                lg._blob(lg.head("RES-0603-10k")["files"]["footprint"]["sha256"]).unlink()
+            return super().release_defs(ws)
+
+        def upload(self, p):
+            sent[Path(p).name] = hashlib.sha256(Path(p).read_bytes()).hexdigest()
+            return super().upload(p)
+    rules = RU.load(None, start=lib)
+    rules["folders"]["root"] = "T"
+    with contextlib.redirect_stderr(io.StringIO()), CG.publishing(Path(plan).parent):
+        CG.publish_guard(Path(plan), items, "altium365", rules=rules)
+        for i in items:
+            for k in ("symbol", "footprint"):
+                if i[k].get("file"):
+                    i[k]["file"] = str((Path(plan).parent / i[k]["file"]).resolve())
+        t0 = time.time()
+        res = A.push(items, F(), "https://test.365.altium.com", rules=rules, folder=lib)
+        A.record_push(Path(plan).parent, t0, res)
+    return res, sent, LG.Ledger(lib).head("RES-0603-10k"), pcb.name
+
+
+def test_fix7_rfx72_a365_push_uploads_the_released_pcblib_not_an_edit_saved_meanwhile():
+    res, sent, head, name = _a365_midrun()
+    row = next(r for r in res if r["name"] == "RES-0603-10k")
+    assert row["action"] == "release", row
+    assert sent.get(name) == head["files"]["footprint"]["sha256"], "the edited .PcbLib was uploaded"
+
+
+def test_fix7_rfx72_a365_push_sends_nothing_when_the_released_copy_is_missing():
+    res, sent, head, name = _a365_midrun(drop_blob=True)
+    row = next(r for r in res if r["name"] == "RES-0603-10k")
+    assert row["action"] == "error" and "released copy is missing" in str(row["detail"]), row
