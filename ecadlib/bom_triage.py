@@ -12,7 +12,7 @@ import pandas as pd
 from . import providers as P, sheetsafe as SS
 from .fsutil import report_file
 from .httpcache import CachedHTTP
-from .kicad_index import KiCadIndex, package_of, parse_value, two_readings
+from .kicad_index import KiCadIndex, norm_mpn, package_of, parse_value, two_readings
 
 FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctuation -> space)
     "mpn": ["mpn", "manufacturer part number", "mfr part number", "mfr part", "mfg part number", "mfr pn",
@@ -1099,8 +1099,18 @@ def triage(lines, index, provs, http, shared=None):
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), *pns)
         cls = re.match(r"[A-Z]+", ln.get("designator", "").upper())
         sym = how = None
+        own = "" if placeholder_mpn(ln.get("mpn")) else str(ln.get("mpn") or "").strip()
+        skipped = None
         for pn in pns or [""]:
             sym, how = index.match(pn, ln.get("lcsc", ""), ln.get("value", ""), pkg, ref_class=cls.group(0) if cls else "")
+            if sym and own and pn != own and how == "mpn":   # R-BF-6: matched on the Comment / Value / LibRef, not
+                fam = norm_mpn(own).startswith(norm_mpn(pn))                 # on the MPN the line has
+                if not fam:                                 # 'LM358' with MPN OPA171AIDR: another part, not used
+                    skipped = skipped or f"local symbol {sym.lib}:{sym.name} matches the Comment/Value {pn}, but the " \
+                                         f"MPN is {own}: not used"
+                    sym = how = None
+                    continue
+                how = f"Comment/Value {pn}; MPN {own} is a variant of it: check"   # a suggestion: held (librarian)
             if sym:
                 break
         fp_key, _ = index.footprint(ln.get("footprint", ""))    # the BOM's land first (R-BF-5), then the symbol's
@@ -1113,6 +1123,8 @@ def triage(lines, index, provs, http, shared=None):
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         sheets = []                                    # every datasheet link every source gave, in source order
+        if skipped:
+            notes.append(skipped)
         if pns and not ln.get("mpn"):
             work["mpn"] = pns[0]                               # let providers search by the Comment/LibRef part number
             notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")

@@ -303,3 +303,37 @@ def test_librarian_builds_the_boms_local_land_and_holds_the_symbols_other_one(tm
     it = next(iter(items.values()))
     assert it["source"]["footprint"] == "local:Package_SO:" + SOIC8EP, it["source"]
     assert it["status"] == "held" and "Footprint property" in _holds(it), _holds(it)
+
+
+# --- R-BF-6: a local symbol is matched on the MPN; a Comment / Value naming another part is not the part -----------
+
+K2 = ("Designator,Qty,Comment,Footprint,Manufacturer,Manufacturer Part Number,Description,Datasheet\n"
+      'U1,1,LM358,SOIC-8_3.9x4.9mm_P1.27mm,Texas Instruments,OPA171AIDR,"Single op amp, 36V",https://example.com/o.pdf\n')
+
+
+@lite
+def test_comment_naming_another_part_does_not_pick_the_local_symbol(tmp_path):
+    items = _run(tmp_path, K2, ["standard"], [KICAD_FIXTURE])
+    it = next(iter(items.values()))
+    assert not str(it["source"]["symbol"] or "").startswith("local:LM358"), it["source"]
+    assert it["status"] == "held", it["status"]
+
+
+@lite
+def test_comment_that_is_the_mpns_family_is_a_suggestion_that_holds(tmp_path):
+    from ecadlib import bom_triage as T
+    from ecadlib.kicad_index import KiCadIndex
+    ix = KiCadIndex([KICAD_FIXTURE])
+    row = T.triage([{"designator": "U1", "qty": "1", "value": "LM2904", "footprint": "SOIC-8_3.9x4.9mm_P1.27mm",
+                     "mpn": "OPA171AIDR"}], ix, [], None)[0]
+    assert not row["local_symbol"], row
+    row = T.triage([{"designator": "U1", "qty": "1", "value": "LM2904", "footprint": "SOIC-8_3.9x4.9mm_P1.27mm",
+                     "mpn": "LM2904DR"}], ix, [], None)[0]
+    assert row["local_symbol"].startswith("LM2904:LM2904") and "check" in row["local_symbol"], row
+    row = T.triage([{"designator": "U1", "qty": "1", "value": "LM2904", "footprint": "SOIC-8_3.9x4.9mm_P1.27mm",
+                     "mpn": "LM2904"}], ix, [], None)[0]
+    assert row["local_symbol"] == "LM2904:LM2904 (mpn)", row
+    items = _run(tmp_path, HDR + "U1,1,LM2904,SOIC-8_3.9x4.9mm_P1.27mm,TI,LM2904DR,Dual op amp,https://example.com/t.pdf\n",
+                 ["standard"], [KICAD_FIXTURE])
+    it = next(iter(items.values()))
+    assert it["status"] == "held" and "LM2904" in _holds(it), (it["status"], _holds(it))

@@ -565,6 +565,9 @@ class Run:
                 chain, _ = K.load_symbol(f"{f}:{name}", None)
                 st["hint_fp"] = K._props(chain).get("Footprint", "")
                 self.put_kicad_sym(st, chain, sym_name, fp_name, f"local:{ls}")
+                how = re.search(r"\((.*)\)\s*$", row.get("local_symbol") or "")
+                if how and "check" in how.group(1):      # matched on the Comment / Value, the MPN a variant (R-BF-6)
+                    st["verify"].append(f"symbol {ls} matched by {how.group(1)}")
         if lf and lf in self.index.footprints and not st["footprint"]:
             text = Path(self.index.footprints[lf]["path"]).read_text(encoding="utf-8")
             spec = SPECS / f"{lf.split(':')[-1]}.json"
