@@ -29,7 +29,8 @@ from . import altium_lib as AL, sexpr
 
 # the digest's version, recorded with each hash ("hash_v"): 1 = dedupe's pad hash only; 2 = plus extra() (R-SP-4).
 # A record from before (no hash_v) is compared by recomputing from its own .kicad_mod, else with version 1 of the
-# new part's digest, so an upgrade never splits a footprint from the released part that shares it.
+# new part's digest, so an upgrade never splits a plain footprint from the released part that shares it; a footprint
+# with what version 1 cannot see (extra(): paste, custom copper, side) does not share on a version-1 hash (R-FX9-6).
 HASH_V = 2
 
 
@@ -196,6 +197,8 @@ def same_fp(rec, h, source, out, cache, text=None, height=None):
     a, b = lib_name(rec.get("source")), lib_name(source)
     rh, v = hash_of(rec, out, cache)
     if v != HASH_V and text is not None:
+        if extra(text):                        # an old pad-only hash cannot tell paste / custom copper apart: a
+            return False                       # footprint with them never shares on it (R-FX9-6)
         h = digest(text, v)
     return rh == h and (not a or not b or a == b) and same_body(rec, height, out, cache)
 

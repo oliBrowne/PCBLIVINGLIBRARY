@@ -404,14 +404,20 @@ def _rec(h, kmod="models/KiCad/QFN-16.kicad_mod", **kw):
 
 @lite
 def test_fp_share_old_hash_without_its_file_still_shares(tmp_path):
-    """A released part's record from before the upgrade (no hash_v, its .kicad_mod not here): the same footprint
-    shares it again instead of getting a new name (a new ref = re-approval of a released part)."""
+    """A released part's record from before the upgrade (no hash_v, its .kicad_mod not here): the same plain
+    footprint shares it again instead of getting a new name (a new ref = re-approval of a released part). R-FX9-6
+    (updated): a footprint with paste windows / custom copper does not share on that pad-only hash, since a
+    different one (other paste, a bridged solder jumper) has the same version-1 hash."""
     from ecadlib import fp_share as FS
-    old = FS.digest(EP_WINDOWS, 1)
-    assert old != FS.digest(EP_WINDOWS)                        # the case: the digest changed for this footprint
-    written = {str(tmp_path / "models/PcbLib/QFN-16.PcbLib"): _rec(old)}
-    got = FS.pick(written, tmp_path / "models", "QFN-16", EP_WINDOWS, "datasheet", "PARTB", tmp_path, {})
+    written = {str(tmp_path / "models/PcbLib/QFN-16.PcbLib"): _rec(FS.digest(EP_FULL, 1))}
+    got = FS.pick(written, tmp_path / "models", "QFN-16", EP_FULL, "easyeda:C1", "PARTB", tmp_path, {})
     assert got[0] == "QFN-16" and got[2] is not None, got
+    old = FS.digest(EP_WINDOWS, 1)
+    assert old != FS.digest(EP_WINDOWS) and old == FS.digest(EP_FULL, 1)      # v1-equal, v2-different
+    written = {str(tmp_path / "models/PcbLib/QFN-16.PcbLib"): _rec(old)}
+    for src in ("easyeda:C1", "datasheet"):
+        got = FS.pick(written, tmp_path / "models", "QFN-16", EP_WINDOWS, src, "PARTB", tmp_path, {})
+        assert got[2] is None and got[0] != "QFN-16", got
 
 
 @lite
