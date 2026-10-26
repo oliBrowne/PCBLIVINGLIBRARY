@@ -133,10 +133,14 @@ class KiCadLibrary:
                 # and two x slots take a decimal point between them: 1.5KExxA is 1.5KE6.8A, SMAJxxA SMAJ5.0A (R-FX10-3)
                 flat = re.sub(r"(?<=[0-9x])\.(?=[0-9x])", "\x00", name)
                 flat = re.sub(r"[^A-Za-z0-9\x00]", "", flat)
-                rx = "".join(r"\.?[A-Z0-9]" if c == "x" and i and flat[i - 1] == "x" else
-                             "[A-Z0-9]" if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
+                # an x may also stand for nothing: Microchip's MCP6L01x-xOT is MCP6L01-E/OT and MCP6L01T-E/OT (the
+                # x a blank or T), so MCP6L01R-E/OT fits MCP6L01Rx-xOT with that x blank. Then more than one name can
+                # fit; find_symbol takes the one with the most literal characters (R-SY-1)
+                rx = "".join(r"\.?[A-Z0-9]?" if c == "x" and i and flat[i - 1] == "x" else
+                             "[A-Z0-9]?" if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
                              for i, c in enumerate(flat))
-                self._wild.append((re.compile(rx), [f"{l}:{name}" for l in libs]))
+                lit = sum(c not in "x\x00" for c in flat)
+                self._wild.append((re.compile(rx), [f"{l}:{name}" for l in libs], lit))
         self._fpn = [(norm_mpn(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items()]
 
     def _load(self, f):
@@ -199,9 +203,10 @@ class KiCadLibrary:
         if nm in self._norm:
             ref, more = self._pick(self._norm[nm])
             return ref, "exact name" + more
-        hits = [r for rx, refs in self._wild if rx.fullmatch(nm) for r in refs]
-        if hits:
-            ref, more = self._pick(hits)
+        fits = self._wild_fits(nm)
+        if fits:
+            best = max(lit for lit, _ in fits)
+            ref, more = self._pick([r for lit, refs in fits if lit == best for r in refs])
             return ref, "name with KiCad x wildcards" + more
         raw = [i for i, c in enumerate(str(mpn)) if c.isalnum() or     # positions of the normalised characters (a
                (c == "." and str(mpn)[i - 1:i].isdigit() and str(mpn)[i + 1:i + 2].isdigit())]   # kept decimal point)
@@ -211,6 +216,21 @@ class KiCadLibrary:
                 ref, more = self._pick(self._norm[nm[:k]])
                 return ref, f"name + ordering suffix '{str(mpn)[raw[k]:]}' (check the variant)" + more
         return None, None
+
+    def _wild_fits(self, nm):
+        return [(w[2] if len(w) > 2 else 0, w[1]) for w in self._wild if w[0].fullmatch(nm)]
+
+    def wild_alternates(self, mpn, ref):
+        """The other KiCad x-wildcard names (one ref each) the MPN fits besides ref's: an x may be a blank, so
+        MCP6L01R-E/OT fits MCP6L01Rx-xOT and MCP6L01x-xOT (x = R), whose supplies are the other way round. The
+        librarian compares their pinouts with ref's and holds the part when one differs (R-SY-1)."""
+        name = str(ref).split(":")[-1]
+        out = {}
+        for _, refs in self._wild_fits(norm_mpn(mpn)):
+            n = refs[0].split(":")[-1]
+            if n != name:
+                out.setdefault(n, sorted(refs)[0])
+        return sorted(out.values())
 
     def generic_connector(self, value):
         for n in (value, f"{value}_Odd_Even"):
@@ -583,6 +603,29 @@ class Run:
             st["tried"].append(f"local library: symbol {'from ' + ls if st['symbol'] else 'not used' if ls else 'none'}, "
                                f"footprint {'from ' + lf if st['footprint'] else 'none'}")
 
+    def _wild_other_pinout(self, lib, mpn, sym_ref, chain):
+        """Another x-wildcard name the MPN fits whose pin number -> name map differs from sym_ref's (MCP6L01x-xOT
+        against MCP6L01Rx-xOT: V+ and V- swapped), or one that cannot be read to compare; None when every one matches
+        (R-SY-1)."""
+        alts = lib.wild_alternates(mpn, sym_ref) if hasattr(lib, "wild_alternates") else []
+        if not alts:
+            return None
+        def pinout(ch):
+            sym = K.convert_symbol(ch, "x", None, [], None, [])
+            return sorted((str(p[1].get("num")), str(p[1].get("name"))) for p in sym["prims"] if p[0] == "pin")
+        try:
+            mine = pinout(chain)
+        except Exception:
+            return alts[0]
+        for alt in alts:
+            try:
+                theirs = pinout(K.load_symbol(alt, self.http)[0])
+            except Exception:                      # not readable: it cannot be shown to agree
+                return alt
+            if theirs != mine:
+                return alt
+        return None
+
     def src_kicad(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         lib = self.kicad()
         if not lib.symbols:
@@ -627,6 +670,11 @@ class Run:
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
             if "check" in how:                     # a near name: a person checks it before it is released
                 st["verify"].append(f"symbol {sym_ref} matched by {how}")
+            elif own and "x wildcards" in how:
+                other = self._wild_other_pinout(lib, mpn, sym_ref, chain)
+                if other:
+                    st["verify"].append(f"symbol {sym_ref} matched by {how}, but the MPN also fits {other}, whose "
+                                        f"pinout differs (check the variant)")
         elif not st["symbol"]:
             st["tried"].append(f"kicad: no symbol named like {mpn or '(no MPN)'}")
         if st["footprint"]:

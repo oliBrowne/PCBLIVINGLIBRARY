@@ -311,7 +311,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 18, "datasheet.py": 7,
+    "librarian.py": 19, "datasheet.py": 7,
 }
 
 
