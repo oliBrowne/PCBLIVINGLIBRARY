@@ -13,6 +13,8 @@ Rules, per plan item:
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
             A PcbLib with no .Designator on the Top / Bottom Overlay (no reference on silk) is a warning.
+            A chip land (R_0402_1005Metric ...) of another size than the MPN encodes (RC0603FR-07: 0603,
+            stdparts.mpn_size) fails: the BOM's footprint and its part number name two sizes.
   height    a 3D height is present and inside the plausible range for the package family (HEIGHTS); a note to check
             (a warning) unless `[release] height = "hold"`, since a height never changes the circuit
   fields    Manufacturer, Manufacturer Part Number, a datasheet link and Description are filled in
@@ -50,6 +52,32 @@ GENERIC_HEIGHT = (0.05, 30.0)
 MECH_PAD = re.compile(r"(MP|MH|SH|MTG|MOUNT|MECH|NPTH|H)\d*", re.I)
 REQUIRED = ["Manufacturer", "Manufacturer Part Number"]
 UNFIXABLE = ("files",)                         # rules --allow cannot override
+
+
+CHIP_LAND = re.compile(r"^(?:R|C|CP|L|LED|D|FB|Fuse)_(\d{4,5})_(\d{4,5})Metric(?:_|$)")
+
+
+def chip_size_problem(item):
+    """R-BF-1: the built chip land's size vs the size the MPN encodes (stdparts.mpn_size) -> a message, or None.
+    The land is the one the footprint source names (standard / kicad / local: ...R_0402_1005Metric); a land read from
+    the part's own datasheet or EasyEDA page has no size in its name and is not compared."""
+    from . import stdparts as SP
+    par = {p.get("name"): p.get("value", "") for p in item.get("parameters") or [] if isinstance(p, dict)}
+    mpn = str(par.get("Manufacturer Part Number") or "")
+    kind, size = SP.mpn_size(mpn)
+    if not size:
+        return None
+    src = str((item.get("source") or {}).get("footprint") or "")
+    fp = item.get("footprint") or {}
+    names = [src.split(":")[-1]] if src else [str(fp.get("kicad") or ""), str(fp.get("ref") or "")]
+    for n in names:
+        m = CHIP_LAND.match(n)
+        if m:
+            if m.group(1) != size:
+                return (f"chip size: MPN {mpn} is a {size} {kind or 'part'} but the footprint is {n} ({m.group(1)}): "
+                        "the BOM's footprint and its part number name two sizes; fix the BOM line")
+            return None
+    return None
 
 
 def height_range(fp_name):
@@ -416,6 +444,9 @@ def check_item(item, base=".", rules=None):
             add("footprint", m)
         warns += [f"{m} (same pin name: stacked on purpose)" for m in mw]
         warns.append("no .kicad_mod: only overlap, courtyard and pin 1 checked (on the PcbLib)")
+    chip = chip_size_problem(item)
+    if chip:
+        add("footprint", chip)
     if fps:                                    # silkscreen text as Altium shows it: size, over pads, over the body
         for lvl, msg in FR.pcblib_text_issues(fps[0]):
             hard = lvl == "error" and not kicad_lib
