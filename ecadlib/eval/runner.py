@@ -95,13 +95,14 @@ def publish(report, out, title=None):
     m, s = rep["meta"], rep["summary"]
     o, pm = s["overall"], (s.get("pad_match") or {}).get("built") or {}
     ds = o.get("right", o["pass"]) - o["pass"]
-    hl = s.get("headline") or {}
+    hl, oc = s.get("headline") or {}, s.get("outcome")
     head = (f"{m['model']}, {o['cases']} real parts: {o.get('right', o['pass'])} right ({_pct(o.get('right_rate', o['rate']))})"
             + (f", {o['pass']} of them matching KiCad exactly and {ds} the datasheet where KiCad differs" if ds else "")
             + (f"; of KiCad's matches {hl['from_datasheet']} read from a datasheet, {hl['from_standard']} from the "
                "standard-package table" if hl.get("right") else "")
             + (f", pad match {_pct(pm['rate'])} over {pm['parts']} footprints built" if pm.get("of") else "")
             + (f", {_usd(o['usd_per_part'])} per part" if o.get("usd") else "")
+            + (f"; built wrong {len(oc['built_wrong'])}, not built {len(oc['not_built'])}" if oc else "")
             + (f". {o['cases'] - o['pass'] - ds} failures, by type: " + ", ".join(f"{k} {len(v)}" for k, v in s["failures"].items()
                                                                                if k not in DATASHEET_RIGHT)
                if s.get("failures") else "") + ".")
@@ -680,7 +681,15 @@ def summarize(rows):
             "datasheet_built": sum(r["source"] == "datasheet" for r in rows),
             "unchecked_passes": sum(r.get("cross_check") == "unchecked" for r in right)}
     head["other"] = head["right"] - head["from_datasheet"] - head["from_standard"]
+    # every part not right is either built wrong (a footprint was made and it, or the symbol, differs: Oliver's rule is
+    # that this must be 0) or not built (held, no datasheet, not read): a held part is the safe outcome, not a wrong one
+    miss = [r for r in rows if not r["pass"] and not datasheet_right(r) and not not_run(r)]
+    outcome = {"right": sum(r["pass"] or datasheet_right(r) for r in rows),
+               "built_wrong": sorted(r["id"] for r in miss if r["source"] != "none"),
+               "not_built": sorted(r["id"] for r in miss if r["source"] == "none"),
+               "not_run": sum(not_run(r) for r in rows), "cases": len(rows)}
     return {"cross_check": dict(sorted(cc.items())), "overall": agg(rows), "maker_land": maker, "pad_match": pm, "headline": head,
+            "outcome": outcome,
             "failures": dict(sorted(fails.items(), key=lambda kv: -len(kv[1]))), "datasheet_pins": dict(sorted(pins.items())),
             "answer_prompt_versions": pv,
             "errata": {r["id"]: r["errata"] for r in rows if r.get("errata")},
@@ -921,10 +930,13 @@ def report_md(rep):
         cost = f"the AI reads would cost about {_usd(o['usd'])} ({_usd(o['usd_per_part'])} per part; estimate, nothing billed)."
     else:
         right = o.get("right", o["pass"])
+        built = sum(r["source"] != "none" for r in bad)   # a held part is not a wrong one: built wrong must be 0
         head = (f"**Right: {right}/{o['cases']} ({_pct(o.get('right_rate', o['rate']))})**"
                 + (f": {o['pass']} match KiCad exactly and {len(dsr)} match the datasheet where KiCad differs (see "
                    "\"Right by the datasheet\")" if dsr else "") + ". " + pad
-                + (f"{len(bad)} {'part was' if len(bad) == 1 else 'parts were'} wrong: see \"Wrong parts\" below." if bad else "Every part was right."))
+                + (f"**Built wrong: {built}**; {len(bad) - built} not built (held, no datasheet or not read). "
+                   f"{len(bad)} {'part is' if len(bad) == 1 else 'parts are'} not right: see \"Wrong parts\" below."
+                   if bad else "Every part was right."))
         cost = f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part."
     hl = s.get("headline") or {}
     if hl.get("right"):

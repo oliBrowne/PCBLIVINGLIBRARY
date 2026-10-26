@@ -148,7 +148,9 @@ def main(argv=None):
         o = rep["summary"]["overall"]
         print("\n".join(R.report_md(rep).splitlines()[2:6]))
         nr = (rep["summary"].get("not_run") or {}).get("cases", 0)
-        print(f"report: {a.out}/report.md ({o['pass']}/{o['cases']} pass)" if not nr else
+        oc = rep["summary"].get("outcome") or {}        # the headline counts right (KiCad or the datasheet), not pass
+        print(f"report: {a.out}/report.md ({o.get('right', o['pass'])}/{o['cases']} right, {o['pass']} matching KiCad; "
+              f"built wrong {len(oc.get('built_wrong') or [])})" if not nr else
               f"report: {a.out}/report.md ({nr} not run: no API key; {rep['summary']['ran']['pass']}/"
               f"{rep['summary']['ran']['cases']} of the rest pass)")
     return 0

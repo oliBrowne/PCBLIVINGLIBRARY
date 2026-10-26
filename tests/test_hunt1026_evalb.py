@@ -139,3 +139,21 @@ def test_footprint_tolerances_and_wrong_lands():
     assert not S.score(tab, ref)["pass"]
     sw = copy.deepcopy(ref); sw["pads"][1][0], sw["pads"][2][0] = "3", "2"
     assert not S.score(sw, ref)["pass"]
+
+
+# ---------------------------------------------------------------- report: built wrong apart from held
+def test_the_report_counts_built_wrong_apart_from_parts_not_built():
+    # the 10-23 live report said "46 parts were wrong" where 11 were built wrong and 35 held / not built: a held part
+    # is the safe outcome (built wrong must be 0), so the two are counted apart in report.json and report.md
+    row = lambda i, ok, src, **k: {"id": i, "family": "qfn", "mpn": i, "pass": ok, "source": src, "fields": {},
+                                   "usd": None, "tokens_in": 0, "tokens_out": 0, "tried": [], "errors": ["x: y"], **k}
+    rows = [row("a", True, "standard"), row("b", False, "datasheet", kicad_differs_maker_land=True),
+            row("c", False, "datasheet"), row("d", False, "standard"), row("e", False, "none"),
+            row("f", False, "none", tried=["datasheet: failed (DatasheetError: no datasheet link gave a PDF: x)"])]
+    s = R.summarize(rows)
+    assert s["outcome"] == {"right": 2, "built_wrong": ["c", "d"], "not_built": ["e", "f"], "not_run": 0, "cases": 6}, s
+    assert s["outcome"]["right"] == s["overall"]["right"]
+    md = R.report_md({"meta": {"set": "mini", "set_version": 1, "model": "m", "sources": ["standard", "datasheet"],
+                               "mode": "live", "cases": 6, "wall_s": 1, "wall_s_per_part": 0.2}, "summary": s, "cases": rows})
+    head = md.split("\n")[2]
+    assert "Right: 2/6" in head and "Built wrong: 2" in head and "2 not built" in head and "4 parts are not right" in head, head
