@@ -3197,9 +3197,17 @@ def mentions_part(texts, mpn, short=False, whole=False):
 # ("PCN 2019-114") is no notice's title: an end-of-life notice says so ("End of Life Notification")
 PCN = r"\bPCN\b(?!\s*[-#:]?\s*[\d-]+\s*$)"
 EOL = r"\b(?:end[- ]of[- ]life|last[- ]time\s+buy)\s+(?:notice|notification|announcement|letter)\b"
+# a compliance document a product page embeds or links beside the datasheet (R-FX19-2): it names the part and its
+# package, never its pins or drawing. A datasheet's "RoHS compliant" / "REACH compliant" banner is no such heading
+COMPLIANCE = (r"\bRoHS\s+(?:compliance\s+)?(?:certificate|declaration|statement)\b|"
+              r"\bcertificate\s+of\s+(?:compliance|conformity|conformance|analysis)\b|"
+              r"\b(?:EU\s+)?declaration\s+of\s+(?:conformity|conformance|compliance)\b|"
+              r"\b(?:full\s+)?material\s+(?:declaration|composition\s+(?:declaration|report)|content\s+declaration)\b|"
+              r"\bREACH\s+(?:SVHC\s+)?(?:compliance\s+)?(?:certificate|declaration|statement)\b|"
+              r"\bconflict\s+minerals?\s+(?:declaration|report|statement)\b")
 OTHER_DOC = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|" + PCN + r"|\bnotification\s+of\b|"
                        r"\bdeclaration\s+letter\b|\b(?:development|evaluation|demo)\s+(?:board|kit)\b|"
-                       r"\buser'?s?\s+(?:guide|manual)\b|\bapplication\s+note\b|" + EOL, re.I)
+                       r"\buser'?s?\s+(?:guide|manual)\b|\bapplication\s+note\b|" + EOL + "|" + COMPLIANCE, re.I)
 
 
 POINTER = re.compile(r"\b(?:available|see|refer|visit|download|for\s+more|included)\b", re.I)   # a banner or link, not a title

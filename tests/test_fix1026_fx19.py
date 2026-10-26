@@ -192,3 +192,43 @@ def test_a_second_read_of_web_searched_pages_is_self_checked_not_agreed():
     assert plain["status"] == "agreed", plain
     assert web["status"] == "self-checked", web
     assert "self-checked only" in CC.summary_line(web) and DWG in CC.summary_line(web), CC.summary_line(web)
+
+
+# ---------------------------------------------------------------- R-FX19-2: a compliance document is not the datasheet
+PAGE = "https://www.maker.com/product/LM358DR"
+COMPLIANCE_DOCS = {
+    "rohs": "RoHS Certificate of Compliance\nTexas Instruments certifies that LM358DR SOIC-8 complies with Directive "
+            "2011/65/EU. Lead (Pb) < 1000 ppm.",
+    "material": "Material Declaration\nProduct: LM358DR Package: SOIC (D) 8 pins. Total weight 76 mg. Substances: Cu, Sn.",
+    "reach": "REACH Compliance Statement\nLM358DR: no SVHC above 0.1% w/w.",
+    "conformity": "Declaration of Conformity\nLM358DR operational amplifier"}
+
+
+def _page_fetch(body, pdf):
+    import tempfile
+    from ecadlib import datasheet as D
+    from tests.test_datasheet_downloads import Scripted
+    with tempfile.TemporaryDirectory() as d:
+        http = Scripted({PAGE: [(200, f"<html><body>{body}</body></html>".encode(), {})],
+                         "https://www.maker.com/x/doc.pdf": [pdf]})
+        try:
+            D.PdfStore(d, http, sleep=lambda s: None).fetch(PAGE, "BOM", part="LM358DR", mpn="LM358DR")
+            return "taken"
+        except D.DatasheetError as e:
+            return str(e)
+
+
+def test_an_embedded_or_linked_compliance_document_is_not_taken_as_the_datasheet():
+    from tests import test_datasheet_batch as TB
+    for body in ("<iframe src='/x/doc.pdf'></iframe>",
+                 "<a href='/document/datasheet/LM358'>Datasheet</a><iframe src='/x/doc.pdf'></iframe>"):
+        for k, txt in COMPLIANCE_DOCS.items():
+            got = _page_fetch(body, TB.pdf_with([txt, "page 2"]))
+            assert got != "taken" and "not a datasheet" in got, (body, k, got)
+
+
+def test_a_datasheet_with_a_rohs_or_reach_compliant_banner_is_still_taken():
+    from ecadlib import datasheet as D
+    for first in ("LM358DR\nRoHS Compliant\nDual Operational Amplifier", "LM358DR Dual Op Amp\nREACH compliant, "
+                  "halogen free\nFeatures", "LM358DR\nRoHS and REACH compliant\nPin Configuration"):
+        assert D.not_a_datasheet([first]) is None, first
