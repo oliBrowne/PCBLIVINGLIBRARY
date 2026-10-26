@@ -534,7 +534,9 @@ def qfp_frame(spec):
         ep = spec.get("exposed_pad")
         out = dict(spec, body_length=spec["body_width"], body_width=spec["body_length"])
         if isinstance(ep, dict) and ep.get("length") is not None and ep.get("width") is not None:
-            out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
+            el, ew = dim(ep["length"])[1], dim(ep["width"])[1]   # a pad runs with the body's long side (Y here, after
+            if (el > ew) != (W > L) and el != ew:               # the turn), whichever way round the read gave it
+                out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
     except (TypeError, KeyError, ValueError):         # a malformed number: sanity() says what is wrong
         return spec, []
     return out, [f"body read the other way round (lead_span {round(sx, 3)} crosses the {round(W, 3)} mm side): "

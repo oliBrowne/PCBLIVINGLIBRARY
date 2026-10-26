@@ -417,6 +417,17 @@ def test_fx2_1_spans_swapped_on_a_rectangular_qfp_never_build_wrong():
         assert got in ("refused", right), t["name"]
 
 
+def test_fx2_5_a_turned_qfp_body_lays_its_exposed_pad_along_the_long_side():
+    """EQFP-100 14x20 with its body read the other way round but the exposed pad as drawn (6 x 12): the turn also
+    turned the pad (12 x 6). Turned with the body, the pad runs with the body's long side, however it was read."""
+    t = {"name": "EQFP-100-1EP_14x20mm_P0.65mm", "n": 100, "e": 0.65, "bl": 14, "bw": 20, "ls": 17.2, "lsy": 23.2,
+         "nlr": 30, "ntb": 20, "b": 0.3, "epl": 6, "epw": 12}
+    right = _qfp_read(t)[2]
+    assert right != "refused"
+    for bad in (dict(t, bl=20, bw=14), dict(t, bl=20, bw=14, epl=12, epw=6)):
+        assert _qfp_read(bad)[2] == right, bad
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
