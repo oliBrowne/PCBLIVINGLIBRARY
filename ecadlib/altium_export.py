@@ -130,6 +130,19 @@ def lands_differ(a, b):
     return "_" in a and "_" in b                # two full land names of one package: two lands ('_HandSolder')
 
 
+def _fields_differ(key, a, b):
+    """Two lines' Value / MPN / supplier number that name two things: 10k vs 1k, SMAJ5.0A vs SMAJ50A. One thing written
+    two ways is not ('100nF' / '0.1uF', 'TPS62133RGTR' / 'tps62133-rgtr', 'C1525' / ' C1525'). An empty one says nothing."""
+    a, b = str(a or "").strip(), str(b or "").strip()
+    if not a or not b:
+        return False
+    if key == "Value":
+        va, vb = parse_value(a, True), parse_value(b, True)
+        if va[0] is not None and vb[0] is not None and not two_readings(a) and not two_readings(b):
+            return abs(va[0] - vb[0]) > 1e-9 * max(abs(va[0]), abs(vb[0])) or bool(va[1] and vb[1] and va[1] != vb[1])
+    return re.sub(r"[\s-]", "", a).casefold() != re.sub(r"[\s-]", "", b).casefold()
+
+
 def prior_names(items):
     """{plan item name: its MPN} of an existing plan, for to_rows(prior=...)."""
     return {i["name"]: next((str(p.get("value") or "") for p in i.get("parameters") or []
@@ -253,6 +266,16 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                     f"BOM lines {kdes} and {des} are one part {pn} on two footprints "
                     f"({kfp or keep['Footprint Ref']!r} vs {ln.get('footprint', '') or row['Footprint Ref']!r}): "
                     "give the lines their own MPNs or one footprint")
+            other = [d for d, k in ((f"Value {keep['Value']!r} vs {row['Value']!r}", "Value"),
+                                    (f"Manufacturer Part Number {keep['Manufacturer Part Number']!r} vs "
+                                     f"{row['Manufacturer Part Number']!r}", "Manufacturer Part Number"),
+                                    (f"Supplier Part Number 1 {keep['Supplier Part Number 1']!r} vs "
+                                     f"{row['Supplier Part Number 1']!r}", "Supplier Part Number 1"))
+                     if _fields_differ(k, keep[k], row[k])]
+            if other:                           # one part released with one line's value / MPN / order number for
+                holds.setdefault(pn, []).append(                  # lines that name two (R-BF-3): held, not a note
+                    f"BOM lines {kdes} and {des} are one part {pn} but differ ({'; '.join(other)}): "
+                    "fix the BOM so the lines agree, or give them their own MPNs")
     notes = {k: list(dict.fromkeys(v)) for k, v in notes.items() if v}
     for v in notes.values():
         for n in v:

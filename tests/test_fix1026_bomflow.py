@@ -123,3 +123,47 @@ def test_librarian_holds_one_mpn_on_an_0603_and_an_0402_line(tmp_path):
     it = next(iter(items.values()))
     assert it["status"] == "held", (it["name"], it["status"])
     assert "R_0603_1608Metric" in _holds(it) and "R_0402_1005Metric" in _holds(it), _holds(it)
+
+
+# --- R-BF-3: BOM lines that are one part but differ in what is built hold the part (not only a note) ----------------
+
+def _rows(lines):
+    from ecadlib import altium_export as AX
+    with contextlib.redirect_stderr(io.StringIO()):
+        res = AX.to_rows(lines)
+    holds = {}
+    for df in res.values():
+        holds.update(df.attrs.get("holds") or {})
+    return res, holds
+
+
+def test_two_values_on_one_mpn_hold():
+    _, holds = _rows([{"designator": "R1", "value": "10k", "footprint": "R_0603_1608Metric", "mpn": "RC0603FR-0710KL"},
+                      {"designator": "R2", "value": "1k", "footprint": "R_0603_1608Metric", "mpn": "RC0603FR-0710KL"}])
+    assert any("'10k' vs '1k'" in h for v in holds.values() for h in v), holds
+
+
+def test_two_mpns_merged_into_one_part_hold():
+    """SMAJ5.0A and SMAJ50A are two diodes: merged into one part (norm_mpn drops the dot), the part is held."""
+    res, holds = _rows([{"designator": "D1", "value": "SMAJ5.0A", "footprint": "D_SMA", "mpn": "SMAJ5.0A"},
+                        {"designator": "D2", "value": "SMAJ50A", "footprint": "D_SMA", "mpn": "SMAJ50A"}])
+    names = [n for df in res.values() for n in df["Part Number"]]
+    assert len(names) == 2 or any("SMAJ50A" in h for v in holds.values() for h in v), (names, holds)
+
+
+def test_one_part_written_two_ways_does_not_hold():
+    _, holds = _rows([{"designator": "C1", "value": "100nF", "footprint": "0603", "mpn": "GRM188R71C104KA01D",
+                       "manufacturer": "Murata"},
+                      {"designator": "C2", "value": "0.1uF", "footprint": "C_0603_1608Metric", "mpn": "GRM188R71C104KA01D",
+                       "manufacturer": "Murata Electronics"},
+                      {"designator": "U1", "value": "TPS62133", "footprint": "", "mpn": "TPS62133RGTR"},
+                      {"designator": "U2", "value": "TPS62133", "footprint": "", "mpn": "tps62133-rgtr"}])
+    assert not holds, holds
+
+
+@lite
+def test_librarian_holds_two_values_on_one_mpn(tmp_path):
+    items = _run(tmp_path, HDR + "R1,1,10k,R_0603_1608Metric,Yageo,RC0603FR-0710KL,Resistor 10k,https://example.com/a.pdf\n"
+                 "R2,1,1k,R_0603_1608Metric,Yageo,RC0603FR-0710KL,Resistor,https://example.com/a.pdf\n", ["standard"])
+    it = next(iter(items.values()))
+    assert it["status"] == "held" and "'1k'" in _holds(it), (it["status"], _holds(it))
