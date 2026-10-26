@@ -949,6 +949,10 @@ class Run:
                 if SL.wants_layout(sym["pins"], self.rules) else []
             if renamed:
                 notes.append("house style pin names: " + ", ".join(renamed[:6]) + (" ..." if len(renamed) > 6 else ""))
+            odd = SL.unknown_types_line(sym["pins"])
+            if odd:                                      # drawn passive: never silently
+                st["review"].append(f"symbol: {odd}")
+                notes.append(odd)
             self.put_sym(st, AL.symbol_from_json(dict(sym, name=sym_name, footprint=fp_name), self.rules), f"datasheet:{url}",
                          notes, kicad_types=kicad_only_types(sym["pins"]))
             got.append("symbol")

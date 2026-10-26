@@ -692,6 +692,26 @@ def _ptype(t):
     return t if t in AL.ETYPE else "passive"
 
 
+def unknown_types(pins):
+    """[(pin number, type as given)] for the pins whose type is no pin type _ptype knows ('ouptut'): they are drawn
+    passive, which is never silent (the CLI prints them, the librarian lists them for review)."""
+    norm = lambda t: TYPE_ALIASES.get(re.sub(r"[\s-]+", "_", str(t or "").strip().lower()),
+                                      re.sub(r"[\s-]+", "_", str(t or "").strip().lower()))
+    given = lambda p: p.get("type_given") or p.get("type")       # a CSV row's own spelling (pins_from_csv)
+    return [(str(p.get("num")), str(given(p))) for p in pins or []
+            if given(p) not in (None, "") and norm(given(p)) not in AL.ETYPE]
+
+
+def unknown_types_line(pins):
+    """unknown_types as one line, or None."""
+    bad = unknown_types(pins)
+    if not bad:
+        return None
+    return (f"pin type not known, drawn passive: " + ", ".join(f"pin {n} {t!r}" for n, t in bad[:8])
+            + (" ..." if len(bad) > 8 else "") + " (input, output, io, passive, power_in, power_out, open_collector, "
+            "tristate or nc); check the type")
+
+
 class PinListError(ValueError):
     """A pin list that cannot make a symbol (no pins, a pin without a number): one plain line for the CLI."""
     plain_error = True
@@ -716,7 +736,10 @@ def pins_from_csv(path):
             if name or any(str(v or "").strip() for k, v in r.items() if k):
                 raise PinListError(f"{Path(path).name} line {i}: pin {name or '(no name)'} has no pin number")
             continue
-        p = {"num": num, "name": name or num, "type": _ptype(pick(r, "type", "electrical", "electrical type", "etype", "dir"))}
+        raw = pick(r, "type", "electrical", "electrical type", "etype", "dir")
+        p = {"num": num, "name": name or num, "type": _ptype(raw)}
+        if unknown_types([{"num": num, "type": raw}]):
+            p["type_given"] = raw                       # drawn passive: said by unknown_types_line
         grp = pick(r, "group")
         if grp:
             p["group"] = grp
@@ -835,6 +858,9 @@ def main(argv=None):
         print(f"  preview -> {a.preview}")
     for pr in probs:
         print(f"  problem: {pr}")
+    odd = unknown_types_line(pins)
+    if odd:                                              # never silent (it was a crash before symexp-01)
+        print(f"  warning: {odd}")
     return 1 if probs else 0
 
 

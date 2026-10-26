@@ -160,3 +160,28 @@ def test_rpub7_symbol_ids_keep_device_names(tmp_path):
     sym, _ = X.load_symbol(item, tmp_path, None, [], X.ksym("CON"), rep_notes)
     assert str(sym[1]).strip('"') == "CON", sym[1]
 
+# R-PUB-8: an unknown pin type ('ouptut') still builds (passive, as KiCad's unspecified would not help), but is never
+# silent: the symbol writer says which pins it changed
+@lite
+def test_rpub8_unknown_pin_type_is_reported(tmp_path, monkeypatch):
+    import io, json
+    from contextlib import redirect_stdout, redirect_stderr
+    from ecadlib import symbol_layout as SL
+    assert SL.unknown_types([{"num": "1", "name": "A", "type": "ouptut"}, {"num": "2", "name": "B", "type": "Open Drain"},
+                             {"num": "3", "name": "C"}]) == [("1", "ouptut")]
+    src = tmp_path / "p.json"
+    src.write_text(json.dumps([{"num": "1", "name": "VCC", "type": "power"}, {"num": "2", "name": "Y", "type": "ouptut"}]),
+                   encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        SL.main([str(src), "-o", str(tmp_path / "p.SchLib")])
+    said = out.getvalue() + err.getvalue()
+    assert "ouptut" in said and "pin 2" in said, said
+    (tmp_path / "p.csv").write_text("num,name,type\n1,VCC,power\n2,Y,ouptut\n3,Z,Open Drain\n", encoding="utf-8")
+    pins = SL.pins_from_csv(tmp_path / "p.csv")
+    assert pins[1]["type"] == "passive" and SL.unknown_types(pins) == [("2", "ouptut")], pins
+    out = io.StringIO()
+    with redirect_stdout(out):
+        SL.main([str(tmp_path / "p.csv"), "-o", str(tmp_path / "q.SchLib")])
+    assert "pin 2 'ouptut'" in out.getvalue() and "Open Drain" not in out.getvalue(), out.getvalue()
