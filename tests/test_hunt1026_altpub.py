@@ -36,6 +36,24 @@ def test_workspace_url_spelling_does_not_lose_an_approved_revision():
     assert len(nx.comps["AO3401A"]["revisions"]) == 2
 
 
+def test_dblib_sync_case_only_rename_updates_the_row_not_a_second_one():
+    """Altium Part Numbers ignore case (ACE compares text without case): a part renamed SS34 -> ss34 in the plan is
+    the same row. It was added as a second row while the old one stayed (not_in_plan, kept), so Altium had two rows
+    for one Part Number and could place the stale one."""
+    import tempfile
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_dblib_sync import _item, _models, _plan
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        _models(d)
+        S.sync(_plan(d, [_item("RES-0603-10K", "Resistors", "Resistor", "R_0603_1608Metric", Value="10k")]), d / "lib")
+        out = S.sync(_plan(d, [_item("res-0603-10k", "Resistors", "Resistor", "R_0603_1608Metric", Value="10k")]),
+                     d / "lib", prune=False)
+        rows = [r for _, (_, rs) in S.read_tables(d / "lib" / "ecadlib.xlsx").items() for r in rs]
+        assert [r["Part Number"] for r in rows] == ["res-0603-10k"], (rows, out["results"])
+        assert {r["name"]: r["action"] for r in out["results"]} == {"res-0603-10k": "updated"}, out["results"]
+
+
 class Workspace(FakeA365):
     """A closer Nexar mock: components found by name whatever the case (pick_named), symbol / footprint items that
     can be released once (a second release of the same item name fails as duplicate, as live), linked by name."""

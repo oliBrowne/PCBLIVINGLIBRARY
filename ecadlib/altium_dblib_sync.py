@@ -578,10 +578,18 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         hdr, rs = tables.setdefault(t, ([], []))
         hdr += [c for c in h if c not in hdr]
         rs += [dict(r) for r in rows]
+    # Altium Part Numbers ignore case (ACE compares text without it): a row is found, and a duplicate told, by the
+    # case-folded Part Number, so a part renamed SS34 -> ss34 updates its row instead of adding a second one
+    _pk = lambda pn: str(pn or "").casefold()
+    managed = lambda pn: _pk(pn) in {_pk(m) for m in managed_rows}
+
+    def own(pn):                                        # the row is ecadlib's, under the plan's spelling only
+        managed_rows.difference_update({m for m in managed_rows if _pk(m) == _pk(pn)})
+        managed_rows.add(pn)
     where = {}
     for t, (_, rows) in tables.items():                 # the first row of a Part Number is its row (EXP-79: the rest
         for r in rows:                                  # are reported as duplicates below)
-            where.setdefault(r.get("Part Number"), t)
+            where.setdefault(_pk(r.get("Part Number")), t)
     results, written, removed, copied, failed, prune_steps = [], [], [], {}, {}, set()
     folded = {}                                         # rel.casefold() -> rel: Windows shares ignore case
     sheets = sheet_names(items, tables)
@@ -589,7 +597,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
 
     def find(pn, t):
         rows = tables.get(t, ([], []))[1]
-        return next((r for r in rows if r.get("Part Number") == pn), None)
+        return next((r for r in rows if _pk(r.get("Part Number")) == _pk(pn)), None)
 
     for it in items:
         t0 = sheets.get(id(it)) or table_of(it)             # Excel sheet names ignore case: Passives = passives
@@ -597,8 +605,8 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         results.append(res)
         if it.get("status") == "held":
             res["action"], res["detail"] = "held", "; ".join(it.get("hold_reasons") or ["release check"])
-            if it["name"] in where:
-                res["table"] = where[it["name"]]
+            if _pk(it["name"]) in where:
+                res["table"] = where[_pk(it["name"])]
             continue
         if it.get("status") != "ready":
             res["action"], res["detail"] = "skipped", it.get("status") or "not ready"
@@ -610,8 +618,8 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         why = RC.publish_problems(it, base, rules)          # the release check again, on the files copied now
         if why:
             res["action"], res["detail"], res["recheck"] = "held", "; ".join(why), why
-            if it["name"] in where:
-                res["table"] = where[it["name"]]
+            if _pk(it["name"]) in where:
+                res["table"] = where[_pk(it["name"])]
             continue
         if _CTRL.search(it["name"]):
             res["action"], res["detail"] = "error", "the part name has a control character (a line break or tab copied " \
@@ -702,15 +710,15 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             res["action"], res["detail"] = "error", "; ".join(problems + notes)
             continue
         want, t = plan_row(it, rules), res["table"]
-        old_t = where.get(it["name"])
+        old_t = where.get(_pk(it["name"]))
         cur = find(it["name"], old_t) if old_t else None
         if cur is None:
             hdr, rows = tables.setdefault(t, (list(want), []))
             hdr += [c for c in want if c not in hdr]
             rows.append(want)
-            where[it["name"]] = t
+            where[_pk(it["name"])] = t
             res["action"], res["detail"] = "added", "; ".join(notes)
-            managed_rows.add(it["name"])
+            own(it["name"])
             continue
         new = dict(cur)
         for c in (param_name(c, rules) for c in it.get("cleared", [])):
@@ -725,7 +733,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             hdr, rows = tables.setdefault(t, (list(want), []))
             hdr += [c for c in new if c not in hdr]
             rows.append(new)
-            where[it["name"]] = t
+            where[_pk(it["name"])] = t
             notes.insert(0, f"moved from {old_t}")
         elif changed:
             hdr, rows = tables[t]
@@ -736,32 +744,32 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         # a library kept as changed in Altium is a note, not an update: nothing was written for it
         res["action"] = "updated" if any(not n.endswith(AN.EDITED_NOTE) for n in notes) else "up_to_date"
         res["detail"] = "; ".join(notes)
-        managed_rows.add(it["name"])
+        own(it["name"])
 
     # rows and model files the plan no longer has
-    plan_names = {it["name"] for it in items}
+    plan_names = {_pk(it["name"]) for it in items}
     for t, (_, rows) in tables.items():
         for r in list(rows):
             pn = r.get("Part Number", "")
-            if pn in plan_names:
-                cur = find(pn, where[pn]) if pn in where else None
+            if _pk(pn) in plan_names:
+                cur = find(pn, where[_pk(pn)]) if _pk(pn) in where else None
                 if cur is None or r is cur:
                     continue
                 res = {"name": pn, "action": "duplicate", "table": t, "kind": "row",     # a copy-paste in Excel: Altium
-                       "detail": f"a second row for this Part Number (ecadlib keeps the one in {where[pn]} up to date)"}
-                if prune and pn in managed_rows:                                     # lists the part twice
+                       "detail": f"a second row for this Part Number (ecadlib keeps the one in {where[_pk(pn)]} up to date)"}
+                if prune and managed(pn):                                     # lists the part twice
                     rows.remove(r)
                     res["action"] = "removed"
                 else:
-                    res["detail"] += "; kept" + (" (--prune deletes it)" if pn in managed_rows else "")
+                    res["detail"] += "; kept" + (" (--prune deletes it)" if managed(pn) else "")
                 results.append(res)
                 continue
             res = {"name": pn, "action": "not_in_plan", "detail": "", "table": t, "kind": "row"}
-            if pn not in managed_rows:
+            if not managed(pn):
                 res["detail"] = "not written by ecadlib: kept"
             elif prune:
                 rows.remove(r)
-                managed_rows.discard(pn)
+                managed_rows.difference_update({m for m in managed_rows if _pk(m) == _pk(pn)})
                 res["action"] = "removed"
             else:
                 res["detail"] = "kept (--prune deletes it)"
