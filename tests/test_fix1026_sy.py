@@ -103,3 +103,35 @@ def test_the_librarian_records_the_pad_tables_own_unnumbered_mounting_pads():
     assert explicit_mount_pads({"pad_table": t}) == 1
     assert explicit_mount_pads({"pad_table": dict(t, default_pad={"role": "mount"})}) == 2
     assert explicit_mount_pads({}) == 0 and explicit_mount_pads(None) == 0
+
+
+# --- R-SY-3: one pin number carrying two signals (pin 7 SDA and WP) is held by the release check ---------------------
+
+def _dup_item(d, pins):
+    from pathlib import Path
+    from ecadlib import altium_lib as AL
+    from tests.test_release_check import make
+    it = make(d)
+    sym = AL.ic_symbol("PART1", [{"num": n, "name": nm, "type": "io", "side": "left"} for n, nm in pins],
+                       footprint="SOIC-8_3.9x4.9mm_P1.27mm")
+    AL.write_schlib(Path(d) / it["symbol"]["file"], [sym])
+    return it
+
+
+_EE = [("1", "A0"), ("2", "A1"), ("3", "A2"), ("4", "VSS"), ("5", "SDA"), ("6", "SCL"), ("7", "WP"), ("8", "VCC")]
+
+
+@lite
+def test_one_pin_number_with_two_signals_is_held(tmp_path):
+    from ecadlib import release_check as RC
+    f, _, _ = RC.check_item(_dup_item(tmp_path / "a", _EE + [("7", "SDA")]), tmp_path / "a")
+    assert any(r == "pins" and "pin number 7" in m and "SDA" in m and "WP" in m for r, m in f), f
+
+
+@lite
+def test_stacked_pins_of_one_net_on_one_number_are_not_held(tmp_path):
+    from ecadlib import release_check as RC
+    f, _, _ = RC.check_item(_dup_item(tmp_path / "a", _EE + [("4", "VSS_2"), ("8", "VCC")]), tmp_path / "a")
+    assert not any("different signals" in m for _, m in f), f
+    f, _, _ = RC.check_item(_dup_item(tmp_path / "b", _EE), tmp_path / "b")
+    assert f == [], f

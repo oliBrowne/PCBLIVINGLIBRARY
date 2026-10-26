@@ -469,6 +469,19 @@ def relayout(sym, rules=None, split=None):
 
 
 # ------------------------------------------------------------------ checks
+def shared_numbers(pins):
+    """One number is one pad: two signals on it short on the board. pins: [{num, name}] -> ['pin number 7 is used by 2
+    different signals: WP, SDA']; pins of one stack (VSS, VSS_2) on a number are one signal. Also the release check's
+    (R-SY-3)."""
+    names = {}
+    for p in pins:
+        ns = names.setdefault(str(p.get("num")), [])
+        if all(stack_key(n) != stack_key(p.get("name") or "") for n in ns):
+            ns.append(p.get("name") or "")
+    return [f"pin number {n} is used by {len(ns)} different signals: {', '.join(map(plain, ns))}"
+            for n, ns in names.items() if len(ns) > 1]
+
+
 def check(sym, grid=100):
     """Problems in a laid-out symbol: pins off the grid, two different pins at one spot (other than stacked power
     pins with the same name), a pin whose end or line lies on another pin's line, pin lines crossing, pin text that
@@ -489,12 +502,8 @@ def check(sym, grid=100):
             probs.append(f"pins {at[key]['num']} and {p['num']} overlap at ({x}, {y}) in part {u}")
         at.setdefault(key, p)
         segs.append((u, p, (x, y), (ex, ey)))
-        ns = names.setdefault(p["num"], [])
-        if all(stack_key(n) != stack_key(p["name"]) for n in ns):
-            ns.append(p["name"])
-    for n, ns in names.items():                         # one number is one pad: two signals on it short on the board
-        if len(ns) > 1:
-            probs.append(f"pin number {n} is used by {len(ns)} different signals: {', '.join(map(plain, ns))}")
+        names.setdefault(p["num"], []).append(p["name"])
+    probs += shared_numbers([{"num": n, "name": nm} for n, ns in names.items() for nm in ns])
     # a pin whose end or body lies on another pin's line, or two pin lines crossing (stacked pins share one line: fine)
     on = lambda q, a, b: min(a[0], b[0]) <= q[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= q[1] <= max(a[1], b[1]) and \
         (b[0] - a[0]) * (q[1] - a[1]) == (b[1] - a[1]) * (q[0] - a[0])

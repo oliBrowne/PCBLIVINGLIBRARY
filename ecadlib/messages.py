@@ -130,6 +130,10 @@ CODES = {
     "pins.pad_without_pin": ("Footprint {pads_have} no pin on the symbol.",
                              "Pick a symbol that has those pins, or a footprint that matches; mounting pads are fine.",
                              [r"^pins: pads without a symbol pin: (?P<pads>.+)"]),
+    "pins.shared_number": ("Symbol pin number {n} carries {k} different signals ({names}), so they would be joined "
+                           "on one pad.",
+                           "Check the pin table: give each signal its own pin number, then fill the library again.",
+                           [r"^pins: pin number (?P<n>\S+) is used by (?P<k>\d+) different signals: (?P<names>.+)"]),
     "pins.unnumbered_pad": ("The footprint built by ecadlib has {n} copper pad(s) with no number, so they are on no net "
                             "(a thermal pad the datasheet prints as '-' would not reach GND).",
                             "Give the pad the number of the pin it belongs to (the pin table names the thermal pad's net), or mark it role "

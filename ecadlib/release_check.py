@@ -366,6 +366,10 @@ def check_item(item, base=".", rules=None):
         pads = [r for r in fps[0]["records"] if r["type"] == "pad"]
         if not pins:
             add("pins", "symbol has no pins")
+        from . import symbol_layout as SL          # pin 7 = SDA and WP: two nets on one pad (R-SY-3)
+        for msg in SL.shared_numbers([{"num": r["num"], "name": r.get("name", "")} for s in syms for r in s["records"]
+                                      if r.get("RECORD") == "2"]):
+            add("pins", msg)
         if not pads:
             add("pins", "footprint has no pads")
         grid = FC.mount_rx([p["designator"] for p in pads]) is FC.MOUNT_GRID     # BGA: H1, H2 .. are balls, not holes

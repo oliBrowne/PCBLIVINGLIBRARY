@@ -28,6 +28,7 @@ EXAMPLES = {
     "pins.no_pads": "pins: footprint has no pads",
     "pins.pin_without_pad": "pins: symbol pins without a pad: 5-8",
     "pins.pad_without_pin": "pins: pads without a symbol pin: 9",
+    "pins.shared_number": "pins: pin number 7 is used by 2 different signals: WP, SDA",
     "pins.unnumbered_pad": "pins: 1 unnumbered copper pad(s) on no net (a thermal / exposed pad needs its pin's number; a mounting pad role mount in the pad table)",
     "padtable.no_pin1": "files: datasheet pad table: no pad numbered 1 (or A1) - pads named G, R1, S1, T1",
     "padtable.overlap": "files: datasheet pad table: pads 27 (pads[30]) and 28 (pads[34]) overlap: check their x/y (list same-net pads in same_net)",
