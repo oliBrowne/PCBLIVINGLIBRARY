@@ -102,18 +102,29 @@ def datasheet_url(item):
     return params.get("Datasheet") or params.get("datasheet") or None
 
 
-def _sidecar(out, name):
+def _sidecar(out, name, mpn=""):
+    """The part's <part>.extraction.json, named as datasheet.write names it: the datasheet read's part (the MPN, else
+    the plan name) made file-safe, or that plus a hash when a part whose name differs only in punctuation ('A/B' vs
+    'A_B') had the file first. A sidecar that says it is another part's ("part") is never shown as this one's."""
     d = Path(out) / "datasheet"
     if not d.is_dir():
         return None
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)
-    for f in (d / f"{name}.extraction.json", d / f"{safe}.extraction.json"):
+    import hashlib
+    own = [p for p in dict.fromkeys((str(mpn or "").strip(), name)) if p]
+    stems = []
+    for p in own:
+        safe = re.sub(r"[^A-Za-z0-9_.+-]", "_", p)          # datasheet.write's `safe`
+        stems += [p, safe, f"{safe}-{hashlib.sha1(p.encode()).hexdigest()[:6]}"]
+    for stem in dict.fromkeys(stems):
+        f = d / f"{stem}.extraction.json"
         try:
-            if f.is_file() and f.resolve().parent == d.resolve():
-                v = json.loads(f.read_text(encoding="utf-8"))
-                return v if isinstance(v, dict) else None
+            if not f.is_file() or f.resolve().parent != d.resolve():
+                continue
+            v = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return None
+            continue
+        if isinstance(v, dict) and ("part" not in v or v["part"] in own):
+            return v
     return None
 
 
@@ -169,7 +180,9 @@ def cards(out, items, pictures=True):
     parts = []
     for it in items:
         name, st = it["name"], it.get("status") or ""
-        sc = _sidecar(out, name) if it.get("cross_check") else None
+        mpn = next((p.get("value") for p in it.get("parameters") or []
+                    if isinstance(p, dict) and p.get("name") == "Manufacturer Part Number"), "")
+        sc = _sidecar(out, name, mpn) if it.get("cross_check") else None
         cc = cross_check(it.get("cross_check"), sc)
         reasons = []
         for h in it.get("hold_reasons") or []:

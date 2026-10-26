@@ -204,6 +204,20 @@ def toml_module():
     return tomllib
 
 
+def read_file(f):
+    """A rules file's text. TOML is UTF-8; a file PowerShell 5 wrote (`ecadlib init > ecadlib.toml`: UTF-16 with a
+    BOM) reads too. Any other encoding (Notepad's "ANSI") is a RulesError naming the file, not a traceback."""
+    f = Path(f)
+    data = f.read_bytes()
+    try:
+        if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            return data.decode("utf-16")
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise RulesError(f"{f}: not UTF-8 text (byte {e.start}: {data[e.start:e.start + 1]!r}); save it as UTF-8 "
+                         "(Notepad: Save as, Encoding UTF-8)") from None
+
+
 def parse_text(text, name="ecadlib.toml"):
     if isinstance(text, str):
         text = text.lstrip("﻿")          # "UTF-8 with BOM" (Notepad, PowerShell 5, Visual Studio): fine
@@ -244,7 +258,7 @@ def load(path=None, start="."):
             raise RulesError(f"rules file {path} not found")
         if not f:
             return dict(copy.deepcopy(DEFAULTS), _file="")
-        raw, where = parse_text(f.read_text(encoding="utf-8"), f.name), str(f)
+        raw, where = parse_text(read_file(f), f.name), str(f)
     if isinstance(raw, dict) and "schema_version" in raw:      # ecadlib/migrate.py: a file from a newer ecadlib is refused
         from . import migrate as MG
         try:
