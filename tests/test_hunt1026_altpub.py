@@ -204,9 +204,18 @@ class Workspace(FakeA365):
             if inp.get(files) and (kind, (inp.get(key) or "").lower()) in self.models:
                 raise A.NexarError("AddALU_ItemsDuplicate: Duplicate ID is not allowed")
         super().release(inp)
+        self.comps[inp["componentItemName"]]["details"] = {"parameters": [dict(p) for p in inp["parameters"]]}
         for kind, key, files in halves:
             if inp.get(files):
                 self.models[(kind, inp[key].lower())] = (f"{kind}:{inp[key]}", [f["fileId"] for f in inp[files]])
+
+    def update_params(self, cid, params, note, replace=False):     # a new revision, as live (it takes a release note)
+        super().update_params(cid, params, note, replace)
+        c = next(c for c in self.comps.values() if c["id"] == cid)
+        c["revisions"].append({"parameters": params})
+        c["revision"] = {"revisionId": f"R{len(c['revisions'])}"}
+        c["details"] = {"parameters": [dict(p) for p in params]}
+        return cid
 
 
 def test_new_part_does_not_link_a_shared_model_older_than_its_own():
@@ -234,6 +243,22 @@ def test_new_part_does_not_link_a_shared_model_older_than_its_own():
     pub = LG.Ledger(lib).published("RES-0603-4.7k", A.ws_target(ws))
     assert r47["action"] in A.PUSHED or not pub, (r47, pub)
     assert r47["action"] == "skip" and "'Resistor' is another drawing" in r47["detail"], r47
+
+
+def test_parameter_update_reports_the_revision_it_left():
+    """desUpdateComponentRevisionParameters takes a release note and makes a new revision: the push reported (and
+    the ledger kept, for `project check`) the revision from before the update."""
+    from ecadlib import altium365 as A, rules as RU
+    plan, lib = demo()
+    nx, ws = Workspace(), "https://t.365.altium.com"
+    rules = RU.load(None, start=lib)
+    only = lambda: [i for i in items_of(plan) if i["name"] == "AO3401A"]
+    assert _push(A, plan, lib, nx, ws, rules, items=only())["AO3401A"]["a365_revision"] == "R1"
+    pars = nx.comps["AO3401A"]["details"]["parameters"]       # one dropped in the workspace: the push puts it back
+    drop = next(p for p in pars if not any(w in p["name"] for w in ("Manufacturer", "MPN", "Part Number", "Value")))
+    nx.comps["AO3401A"]["details"]["parameters"] = [p for p in pars if p is not drop]
+    res = _push(A, plan, lib, nx, ws, rules, items=only())["AO3401A"]
+    assert res["action"] == "update_parameters" and res["a365_revision"] == "R2", res
 
 
 def test_shared_model_of_the_same_drawing_is_still_linked_and_idempotent():

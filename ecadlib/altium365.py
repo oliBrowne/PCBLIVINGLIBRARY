@@ -658,6 +658,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                 else:                          # full replace: a merge, so parameters added in Altium 365 are kept
                     res["action"] = "update_parameters"
                     res["detail"] = client.update_params(existing["id"], new, note, replace=True)
+                    try:                       # the revision the update left (it takes a release note: a new one),
+                        res["a365_revision"] = _rev_id(client.find(ws, it["name"])) or res["a365_revision"]
+                    except Exception as e:     # for `ecadlib project check`; best effort, as after a release
+                        from . import fallbacks as FB
+                        FB.note(f"{it['name']}: parameters updated, but the Altium 365 revision id did not read back", e)
             elif it.get("status", "ready") != "ready":
                 res["action"], res["detail"] = "skip", "needs_altium_models (no .SchLib/.PcbLib)"
             elif why:
