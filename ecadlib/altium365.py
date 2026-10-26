@@ -524,6 +524,25 @@ def released_model(lg, target, kind, name):
     return hit if hit and hit[0] else None
 
 
+def matching_model(lg, target, sent_models, kind, name, digest):
+    """(item name, (digest, part, revision)) of the workspace item NAME-r<n> that holds drawing `digest`, as
+    push_revision names a changed shared symbol / footprint when NAME is taken: from this push (sent_models) or the
+    ledger's publish records (released_model). The newest such item first; None when none holds this drawing."""
+    import re
+    pre = f"{kind}:{name.lower()}-r"
+    keys = set(k for k in sent_models if k.startswith(pre))
+    if lg:
+        released_model(lg, target, kind, name)                  # builds the ledger's index for this target
+        keys |= {k for k in (lg.__dict__.get("_a365_models") or {}).get(target, {}) if k.startswith(pre)}
+    revs = sorted((int(k[len(pre):]) for k in keys if re.fullmatch(r"\d+", k[len(pre):])), reverse=True)
+    for n in revs:
+        alt = f"{name}-r{n}"
+        hit = sent_models.get(f"{pre}{n}") or released_model(lg, target, kind, alt)
+        if hit and hit[0] == digest:
+            return alt, hit
+    return None
+
+
 def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, dry_run=False, note="ecadlib sync",
                   transition=None, digests=None):
     """A new revision of a component already in the workspace, for a change control approved (#105): the changed
@@ -686,7 +705,16 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     else:
                         found.append(client.find_model(ws, kind, name, f"{models_root}/{sub}"))
                 # a shared symbol / footprint is linked by name: when the workspace's item holds another drawing than
-                # this part's (it changed since it went up, and the new one went under another name) the part is held
+                # this part's (it changed since it went up), the item that does hold it (NAME-r<n>, released by a new
+                # revision of another part) is linked instead; with none, the part is held
+                names = list(names)
+                for i, (kind, sub) in enumerate((("symbols", "Symbols"), ("footprints", "Footprints"))):
+                    if not ((found[i] or dry_run) and known.get(kind) and digests.get(kind) and known[kind][0] != digests[kind]):
+                        continue
+                    alt = matching_model(lg, target, sent_models, kind, names[i], digests[kind])
+                    fid = alt and (f"<id of {alt[0]}>" if dry_run else client.find_model(ws, kind, alt[0], f"{models_root}/{sub}"))
+                    if fid:
+                        names[i], found[i], known[kind] = alt[0], fid, alt[1]
                 stale = [f"the workspace's {kind[:-1]} {name!r} is another drawing than this part's (it went up with "
                          f"{known[kind][1]} r{known[kind][2]}): linking it would release this part with the old one"
                          for kind, name, f in zip(("symbols", "footprints"), names, found)

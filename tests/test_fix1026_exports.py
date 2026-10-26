@@ -171,3 +171,50 @@ def test_cli_dblib_from_a_plan_ships_only_parts_that_pass_the_release_check(tmp_
     csvs = "".join(p.read_text(encoding="utf-8") for p in (tmp_path / "out").glob("*.csv"))
     assert "OKPART" in csvs and "BADPART" not in csvs and "HELDPART" not in csvs, csvs
     assert "BADPART" in text and "description is empty" in text and "HELDPART" in text, text
+
+
+# ------------------------------------------------------------------ R-PUB-3: a changed shared model links NAME-r<n>
+def _shared_symbol_changed():
+    """RES-0603-10k released; the shared Resistor symbol then changed and approved for both resistors."""
+    from ecadlib import altium365 as A, change_cli as CC, change_gate as CG, rules as RU
+    from tests.test_change_control import ANN, demo, gate, item, items_of, write_symbol
+    from tests.test_hunt1026_altpub import Workspace, _push
+    plan, lib = demo()
+    nx, ws = Workspace(), "https://t.365.altium.com"
+    rules = RU.load(None, start=lib)
+    pick = lambda n: [i for i in items_of(plan) if i["name"] == n]
+    assert _push(A, plan, lib, nx, ws, rules, items=pick("RES-0603-10k"))["RES-0603-10k"]["action"] == "release"
+    items = items_of(plan)
+    g = gate(lib)
+    write_symbol(lib, item(items, "RES-0603-10k"), [("1", "A", "passive"), ("2", "B", "passive")])
+    g.settle(items)
+    CG.write_plan(plan, items)
+    CC.approve(plan, ["RES-0603-10k", "RES-0603-4.7k"], who=ANN)
+    push = lambda only=None, dry=False: _push(A, plan, lib, nx, ws, rules, items=pick(only) if only else None, dry=dry)
+    return push, nx, lib, ws
+
+
+def test_new_part_links_the_workspace_item_that_holds_its_drawing():
+    """After the shared Resistor symbol change is approved and RES-0603-10k goes up as a new revision (its symbol
+    released as Resistor-r2, `Resistor` being taken), the new RES-0603-4.7k was held on every push ("symbol 'Resistor'
+    is another drawing") with no way out, though Resistor-r2 holds exactly its drawing. It links Resistor-r2 now."""
+    from ecadlib import altium365 as A, ledger as LG
+    push, nx, lib, ws = _shared_symbol_changed()
+    res = push()
+    assert res["RES-0603-10k"]["action"] == "new_revision", res["RES-0603-10k"]
+    r47 = res["RES-0603-4.7k"]
+    assert r47["action"] == "release", r47
+    sent = nx.comps["RES-0603-4.7k"]["revisions"][-1]
+    assert sent["symbol"] == {"id": "symbols:Resistor-r2"} and not sent["symbolFiles"], sent
+    assert LG.Ledger(lib).published("RES-0603-4.7k", A.ws_target(ws))
+    again = push()
+    assert again["RES-0603-4.7k"]["action"] == "up_to_date", again["RES-0603-4.7k"]
+
+
+def test_new_part_finds_the_matching_item_from_the_ledger_on_a_later_push():
+    push, nx, lib, ws = _shared_symbol_changed()
+    assert push("RES-0603-10k")["RES-0603-10k"]["action"] == "new_revision"
+    assert push("RES-0603-4.7k", dry=True)["RES-0603-4.7k"]["action"] == "release"
+    r47 = push("RES-0603-4.7k")["RES-0603-4.7k"]
+    assert r47["action"] == "release", r47
+    assert nx.comps["RES-0603-4.7k"]["revisions"][-1]["symbol"] == {"id": "symbols:Resistor-r2"}

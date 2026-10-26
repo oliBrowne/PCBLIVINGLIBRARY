@@ -242,7 +242,8 @@ def test_new_part_does_not_link_a_shared_model_older_than_its_own():
     assert not (r47["action"] == "release" and sent[-1].get("symbol") == {"id": "symbols:Resistor"}), (r47, sent[-1])
     pub = LG.Ledger(lib).published("RES-0603-4.7k", A.ws_target(ws))
     assert r47["action"] in A.PUSHED or not pub, (r47, pub)
-    assert r47["action"] == "skip" and "'Resistor' is another drawing" in r47["detail"], r47
+    # review of #196 (R-PUB-3): it links Resistor-r2, the item 10k's new revision put its drawing in, not held forever
+    assert r47["action"] == "release" and sent[-1].get("symbol") == {"id": "symbols:Resistor-r2"}, (r47, sent[-1])
 
 
 def test_parameter_update_reports_the_revision_it_left():
