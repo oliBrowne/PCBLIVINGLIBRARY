@@ -344,3 +344,17 @@ def test_rd6_header_mount_flipped_against_its_name_is_held():
     assert_held(dict(HDR_SMD, mount="tht"), "mount: tht")
     assert_held(dict(HDR_SMD, mount=None), "mount: tht")
     assert_held(dict(HDR_THT, name="Samtec_TSW", description="through-hole terminal strip", mount="smd"), "mount: smd")
+
+
+# ---------------------------------------------------------------- R-RD-7: SOT-23 leads at half their offsets
+POS23 = [{"number": "1", "side": "L", "offset": -0.95}, {"number": "2", "side": "L", "offset": 0.95},
+         {"number": "3", "side": "R", "offset": 0.0}]
+SOT23 = gw("SOT-23", 3, 0.95, (2.8, 2.9, 3.04), (1.2, 1.3, 1.4), (2.1, 2.37, 2.64), (0.3, 0.4, 0.5), (0.4, 0.5, 0.6),
+           pin_positions=POS23)
+
+
+def test_rd7_sot23_offsets_halved_is_held():
+    """Before: SOT-23 leads read at +-0.475 (one pitch apart, so 'whole pitches') passed; pads 0.48 mm off."""
+    assert_ok(SOT23)
+    assert_ok(dict(SOT23, pitch=1.9))                 # e1 read as the pitch: the same land, still fine
+    assert_held(dict(SOT23, pin_positions=[dict(p, offset=p["offset"] / 2) for p in POS23]), "pin_positions", "40%")

@@ -2014,6 +2014,13 @@ def _listed_layout(spec, evidence=""):
                    f"{(max(offs) + min(offs)) / 2:g} mm off the body's centre (offsets are from the centre; implausible "
                    "layout)")
     tab, body = spec.get("tab"), _dim(spec.get("body_length"))
+    # three or more leads bunched in the middle of the body: offsets read at half their size (SOT-23's +-0.95 read
+    # +-0.475, one pitch apart, review 196 R-RD-7). Real listed-lead packages spread theirs over half the body length
+    # or more (SOT-23 66 %, SOT-223 71 %, TO-263-3 50 %). One row beside a tab: sanity's row-fill rule asks already
+    if len(offs) >= 3 and {p["side"] for p in pos} == {"L", "R"} and body and body[1] > 0 and \
+            max(offs) - min(offs) < 0.4 * body[1]:
+        out.append(f"pin_positions: the {len(offs)} leads run from {min(offs):g} to {max(offs):g} mm, under 40% of the "
+                   f"{body[1]:g} mm body length, which is implausible (offsets halved, or given from the middle lead?)")
     w = _dim(tab.get("width")) if isinstance(tab, dict) else None
     if w and body:
         o = tab.get("offset") if isinstance(tab.get("offset"), (int, float)) and not isinstance(tab.get("offset"), bool) else 0
