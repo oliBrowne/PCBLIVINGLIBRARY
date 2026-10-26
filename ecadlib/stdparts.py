@@ -28,6 +28,10 @@ Footprint property; then the description and value; then the MPN):
                        family name (SOIC-8, SO-14, TSSOP-20, SOIC-16W) never resolves, because several bodies share it;
                        write e.g. "SOIC-8 3.9x4.9mm" or "SO-8 150mil". MSOP-8 (3x3 mm, 0.65 mm, JEDEC MO-187-AA) is the
                        one exception. SOIC/SO without a pitch is 1.27 mm; QFP without "EP" has no exposed pad.
+  another KiCad land  a KiCad footprint name the table does not hold (package_specs/kicad_footprint_names.txt.gz:
+                       'R_Array_Convex_4x0603', 'TO-92_Wide', 'SO-8_3.9x4.9mm_P1.27mm') builds nothing, and so does a
+                       footprint field whose size code sits inside a part number ('SRR1210A', '43045-1210') or that
+                       names a multi-pad part ('LED RGB 1210'): its land is not the table's for that size or package.
   ambiguous -> nothing: a name that fits two different footprints (QFN-16 without a body size, LQFP-64 without body and
                        pitch, "SOT-23-3", which KiCad uses for the 1.6 mm MO-178 body and distributors for TO-236,
                        bare "SOT-223" / TSOT-23 / SC-70 / SC-75 / SOT-26 (tab numbering or body differ by vendor),
@@ -52,6 +56,7 @@ from pathlib import Path
 from . import footprint_gen as F
 
 TABLE = Path(__file__).with_name("package_specs") / "standard.json.gz"
+KICAD_NAMES = Path(__file__).with_name("package_specs") / "kicad_footprint_names.txt.gz"   # every kicad-footprints name
 IMPERIAL = ("01005", "0201", "0402", "0603", "0805", "1008", "1206", "1210", "1806", "1812", "1825", "2010", "2220",
             "2225", "2512", "2816", "2920", "3640", "4020")
 METRIC = {"0402": "01005", "0603": "0201", "1005": "0402", "1608": "0603", "2012": "0805", "2520": "1008", "3216": "1206",
@@ -114,12 +119,20 @@ FREE_RE = re.compile(r"(?<![A-Z0-9])(?P<fam>" + "|".join(sorted(FAMILIES, key=le
                      r")[-_ ]?(?P<pins>\d{1,3})(?P<w>W)?(?:-(?P<ep>\d)EP)?(?![0-9A-Z])", re.I)
 POWER_PKG = re.compile(r"Power ?PAK|PowerDI|PowerSO|PowerFLAT|LFPAK|DirectFET|PQFN|\bSO-?8FL|\bWDFN\d|TSDSON|SuperSO|TOLL|\bPDFN", re.I)
 MIL_BODY = {"150": 3.9, "208": 5.3, "209": 5.3, "300": 7.5}
-NO_GO = re.compile(r"\b(horizontal|lying|right[- ]angle|bent)\b", re.I)
-STANDING = re.compile(r"\b(vertical|standing|upright)\b", re.I)      # an axial part on end: not the laid-flat land
+# words between underscores count too ('TO-220-3_Horizontal_TabDown': \b sees no edge at '_')
+NO_GO = re.compile(r"(?<![A-Za-z])(horizontal|lying|right[- ]angle|bent)(?![a-z])", re.I)
+NO_GO_TO92 = re.compile(r"(?<![A-Za-z])(wide|stagger\w*)(?![a-z])|(?<![A-Za-z0-9])W\d+(?:\.\d+)?mm", re.I)   # not inline 1.27 mm
+STANDING = re.compile(r"(?<![A-Za-z])(vertical|standing|upright)(?![a-z])", re.I)   # an axial part on end: not laid flat
 BEND = re.compile(r"(?<![\d.])P?(\d{1,2}(?:\.\d{1,2})?)\s?mm\b|(?<![A-Z0-9])P(\d{1,2}(?:\.\d{1,2})?)(?![\d.])", re.I)
 EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A-Z])|PowerPAD", re.I)
+# words in a footprint field that name a part with more pads, or another land, on a chip size code
+NOT_CHIP = re.compile(r"(?<![A-Za-z])(RGB|arrays?|reverse[ _-]?mount|mouse[ _-]?bite|shunt|kelvin|common[ _-]?mode|"
+                      r"choke|crystal|balun|filter|transformer|speaker|buzzer|connector|jack|header|modified)(?![a-z])", re.I)
+# a diode package name (SMA, SMB ...) in an RF connector's or a variant's name: not the diode land
+NOT_DIODE = re.compile(r"(?<![A-Za-z])(jack|plug|edge[ _-]?mount|coax\w*|connector|receptacle|vertical|horizontal|"
+                       r"modified|bulkhead)(?![a-z])", re.I)
 # KiCad land variants (bigger hand-solder pads, vias in the exposed pad, other mask / pull-back): never the plain land
-LAND_VARIANT = re.compile(r"(?<![A-Za-z])(Hand[_ -]?Solder(?:ing)?|ThermalVias|PullBack|TopTented|Mask\d[\d.]*x[\d.]+mm)(?![A-Za-z])", re.I)
+LAND_VARIANT = re.compile(r"(?<![A-Za-z])(Hand[_ -]?Solder(?:ing)?|ThermalVias|PullBack|TopTented|(?:\d+x)?Mask\d[\d.]*x[\d.]+(?:mm)?)(?![A-Za-z])", re.I)
 
 
 # ---------------------------------------------------------------- the table
@@ -131,6 +144,18 @@ def table():
 
 def packages():
     return table()["packages"]
+
+
+@functools.lru_cache(maxsize=1)
+def kicad_names():
+    """Every footprint name in kicad-footprints (package_specs/kicad_footprint_names.txt.gz, names only) -> {name:
+    library}. A text that is one of them names that footprint's own land (footprint_for). Empty when the file is
+    missing."""
+    try:
+        with gzip.open(KICAD_NAMES, "rt", encoding="utf-8") as f:
+            return dict(reversed(ln.strip().split(":", 1)) for ln in f if ":" in ln and not ln.startswith("#"))
+    except OSError:
+        return {}
 
 
 def spec(name):
@@ -181,21 +206,49 @@ def _strip_lib(s):
 _UNIT_LETTER = r"[VWR]\b|K(?:\b|Ω|ohm)"      # '1206 V', '1210 K', '1210 kΩ': a value; not '0603 Resistor', '0805 Vishay'
 
 
-def chip_size(text):
+CHIP_WORD = {"R", "C", "L", "D", "F", "LED", "CP", "RES", "CAP", "IND", "FUSE", "SMD", "SMT", "RC", "CC", "CR", "MLCC", "CHIP", "EIA"}
+
+
+_CHIP_GLUE = re.compile(r"(?:" + "|".join(sorted(CHIP_WORD, key=len, reverse=True)) + r")-?", re.I)
+
+
+def _in_part_number(t, a, b):
+    """A size code at t[a:b] that is part of a part number or an array, not a chip size: glued to letters other than
+    a chip word ('SRR1210A', 'XxL4020', 'CMR-1206S', '0603USB', 'MAPI-2010', 'ASPIAIG-F4020'), to other digits by a
+    dash ('43045-1210', 'FV1206-1', '0603-2Pin'), or a count of chips ('4x0603')."""
+    before, after = t[:a], t[b:]
+    glue = re.search(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-?$", before)
+    if glue and not _CHIP_GLUE.fullmatch(glue.group(0)):
+        return True
+    if re.match(r"-\d", after) or re.match(r"[A-Za-z]", after) and not re.match(r"M(?:etric)?(?![A-Za-z])", after, re.I):
+        return True
+    return False
+
+
+def chip_size(text, strict=False):
     """Imperial size code from a footprint / description text, or None. Bare 4-digit codes are imperial (the
-    industry default); metric needs a marker (1608Metric, 1608M, '0603 (1608)' gives both and they must agree)."""
+    industry default); metric needs a marker (1608Metric, 1608M, '0603 (1608)' gives both and they must agree).
+    A code inside a part number is no size (_in_part_number). strict (a footprint field): such a code anywhere in the
+    text means the text names that part's own land, so no size at all ('L_Coilcraft_0805HQ_2012Metric',
+    'R_Shunt_Vishay_WSK2512_6332Metric', 'Anaren_0805_2012Metric-6'); a description keeps its other codes."""
     t = str(text or "")
-    found = set()
+    found, glued = set(), False
     m = re.search(r"(?:RES|CAP|IND|LED|DIO|FUS)C(\d{4})X\d+", t, re.I)       # IPC-7351 names: RESC1608X55N
     if m and m.group(1) in METRIC:
         found.add(METRIC[m.group(1)])
     for m in re.finditer(r"(?<![0-9])(\d{4,5})\s*(?:_?Metric|M)(?![A-Za-z0-9])", t, re.I):
         if m.group(1) in METRIC:
             found.add(METRIC[m.group(1)])
+            glued |= bool(re.match(r"-\d", t[m.end():]))           # 'Metric-6': a 6-pad part on that size
     for m in re.finditer(rf"(?<![0-9.])(\d{{4,5}})(?![0-9.])(?!\s*(?:_?Metric|M\b|mm|mil|{_UNIT_LETTER}|nF|pF|uF|µF|Ω|ohm|%))", t, re.I):
         code = m.group(1)
         if code in IMPERIAL and not re.search(r"(?:RES|CAP|IND|LED|DIO|FUS)C$", t[:m.start()], re.I):
-            found.add(code)
+            if _in_part_number(t, m.start(), m.end()):
+                glued = True
+            else:
+                found.add(code)
+    if strict and glued:
+        return None
     # a bare metric-only code next to an imperial one ('0603 (1005)', '0402 / 1608') must agree with it; alone it
     # is not read (bare codes are imperial), so it can only turn a size into a conflict, never pick one
     bare_metric = {METRIC[m.group(1)] for m in re.finditer(
@@ -686,8 +739,13 @@ def named_package(text, diode=False, weak=False, kind=None):
             return None, f"{m.group(0).strip()}: ambiguous"
         if key in DIODE_ALIASES and not diode and key not in ALIASES:
             return None, f"{m.group(0).strip()}: a diode package name on a part that is not a diode"
+        if key in DIODE_ALIASES and key not in ALIASES and not DIODE_ALIASES[key].endswith("_Horizontal") and \
+                NOT_DIODE.search(str(text)):                       # (axial names: _other_bend below)
+            return None, f"{m.group(0).strip()}: {NOT_DIODE.search(str(text)).group(0).lower()} in the name: not the diode package"
         if name and name.startswith(("TO-220", "TO-92")) and NO_GO.search(str(text)):
             return None, f"{m.group(0).strip()}: horizontal mounting is not the standard footprint"
+        if name and name.startswith("TO-92") and NO_GO_TO92.search(str(text)):
+            return None, f"{m.group(0).strip()}: a wide or staggered lead form is not the standard 1.27 mm inline footprint"
         if name and name.endswith("_Horizontal") and _other_bend(str(text), name):
             return None, f"{m.group(0).strip()}: {_other_bend(str(text), name)}"
         if name and EP_WORD.search(str(text)):         # 'SOT-23-5-EP': the table's package has no exposed pad
@@ -716,10 +774,19 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
         v = LAND_VARIANT.search(t)                        # a land the table does not have; the plain one has other pads
         if v:
             return None, f"{_strip_lib(t).strip()}: the {v.group(1)} land variant is not in the standard table"
+    for t in texts:                                       # another KiCad footprint ('R_Array_Convex_4x0603', 'TO-92_Wide',
+        n = _strip_lib(t).strip()                         # 'SO-8_3.9x4.9mm_P1.27mm'): its own land, not the chip size
+        if n in kicad_names() and n not in pk and _norm(n) not in ALIASES and _norm(n) not in DIODE_ALIASES:
+            return None, (f"{n}: KiCad's {kicad_names()[n]}:{n} is not in the checked standard table (its land is not "
+                          "the table's land for the size or package in its name)")   # (bare 'TO-92' is the package)
     if kind in CHIP_PREFIX:                              # chip passives: size from the texts, then the MPN
         sizes = {}
+        for t in texts:                                   # a footprint field naming a multi-pad part or another
+            w = NOT_CHIP.search(t)                        # land on a chip size ('LED_RGB_1210', '4x0603 array')
+            if w:
+                return None, f"{_strip_lib(t).strip()}: names a {w.group(0).lower()}, not a two-pad chip land"
         for t in texts + weak:
-            s = chip_size(t)
+            s = chip_size(t, strict=t in texts)
             if s:
                 sizes.setdefault(s, t)
         mk, ms = mpn_size(mpn)

@@ -364,13 +364,13 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
             raise ValueError(f"{menu_dir}: not a Windows folder, and no Windows folder recorded for this menu: run "
                              f"`ecadlib altium-menu build --out {menu_dir} --win-dir D:\\ecadlib-menu` first (the "
                              "folder Altium will read it from), or give --out as that Windows folder") from None
+    folders = [Path(f) for f in folders] if folders else altium_user_folders()
+    if not folders:                      # first: with no settings folder, a running Altium is not the problem
+        raise ValueError("no Altium Designer settings folder found (%APPDATA%\\Altium\\Altium Designer {...}): start "
+                         "Altium once, close it, then run this again")
     if running():
         raise ValueError("Altium Designer is running: close it first (it rewrites its menu file when it closes), "
                          "then run this again")
-    folders = [Path(f) for f in folders] if folders else altium_user_folders()
-    if not folders:
-        raise ValueError("no Altium Designer settings folder found (%APPDATA%\\Altium\\Altium Designer {...}): start "
-                         "Altium once, close it, then run this again")
     stamp = (now or datetime.datetime.now()).strftime("%Y%m%d-%H%M%S")
     done, backups = [], []
     for f in folders:
