@@ -1063,15 +1063,35 @@ class Workspace:
 
     def altium365_push(self, bom, workspace_url, dry_run=True):
         """Release ready parts and update parameters of existing ones; parts the release check held are left
-        alone. dry_run (the default) sends nothing and returns the requests that would be made."""
-        if not workspace_url and not dry_run:
-            raise ValueError("choose an Altium 365 workspace first")
+        alone. dry_run (the default) sends nothing and returns the requests that would be made. A real push goes only
+        to the workspace the rules name ([altium365] workspace), as the CLI and the menu do; no URL means that one."""
+        workspace_url = self._a365_push_target(workspace_url, dry_run)
         import contextlib
         from . import change_gate as CG
         lib_plan = self._librarian_dir(self._bom_path(bom)) / "plan.json"
         # a real push of a librarian library holds the library lock from the settle step to the record (change control)
         with contextlib.nullcontext() if dry_run or not lib_plan.is_file() else CG.publishing(lib_plan.parent):
             return self._altium365_push(bom, workspace_url, dry_run, lib_plan)
+
+    def _a365_push_target(self, workspace_url, dry_run):
+        """The workspace URL a push goes to. A real push (it creates components) is refused when the rules name no
+        Altium 365 workspace, or name another one than workspace_url (compared as altium365.ws_target: host case and a
+        trailing slash do not count). A dry run sends nothing and may name any workspace."""
+        from .altium365 import ws_target
+        conf = str((self.rules().get("altium365") or {}).get("workspace") or "").strip()
+        url = str(workspace_url or "").strip() or conf
+        if dry_run:
+            return url
+        where = self._label(self.rules_in_use() or self.rules_file())
+        if not conf:
+            raise ValueError("no Altium 365 workspace is configured, so nothing was pushed: a real push goes only to the "
+                             f"workspace named in the rules. Add it to {where}:\n[altium365]\nworkspace = \"{url or 'https://<you>.365.altium.com'}\"\n"
+                             "(`ecadlib altium365 workspaces` lists the workspaces your token can see). A dry run needs no setting.")
+        if ws_target(url) != ws_target(conf):
+            raise ValueError(f"{url} is not the Altium 365 workspace this library publishes to ({conf}, [altium365] "
+                             f"workspace in {where}), so nothing was pushed. To publish there, change [altium365] "
+                             "workspace in the rules first. A dry run to any workspace is still allowed.")
+        return url
 
     def _altium365_push(self, bom, workspace_url, dry_run, lib_plan):
         from . import altium365 as A

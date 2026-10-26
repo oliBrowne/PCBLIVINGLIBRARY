@@ -203,9 +203,11 @@ TOOLS = [
     {"name": "altium365_push",
      "description": "Release the ready parts of a BOM into an Altium 365 workspace and update parameters of parts already "
                     "there. dry_run defaults to true and only returns the requests. A real push (dry_run false) changes "
-                    "the user's workspace: only do it when the user has explicitly asked for that push. Needs NEXAR_TOKEN.",
+                    "the user's workspace: only do it when the user has explicitly asked for that push. A real push goes only to "
+                    "the workspace the rules name ([altium365] workspace; no workspace given = that one) and is refused "
+                    "for any other or when none is configured. Needs NEXAR_TOKEN.",
      "inputSchema": {"type": "object", "required": ["bom"],
-                     "properties": {"bom": {"type": "string"}, "workspace": {"type": "string", "description": "workspace URL"},
+                     "properties": {"bom": {"type": "string"}, "workspace": {"type": "string", "description": "workspace URL (a real push: the configured one)"},
                                     "dry_run": {"type": "boolean", "default": True}}}},
     {"name": "upkeep_run",
      "description": "Run the library upkeep checks for a BOM (its librarian plan when there is one): lifecycle (NRND/EOL, "
