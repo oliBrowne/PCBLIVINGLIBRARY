@@ -705,8 +705,39 @@ def matching_model(lg, target, sent_models, kind, name, digest):
     return None
 
 
+def place_model(client, ws, lg, target, sent_models, kind, name, folder, ref, want, rev):
+    """Where a changed symbol / footprint of a new component revision goes (R-FL-5, R-FL-6 / R-PUB-4), decided before
+    anything is sent, the same way on every run: ("link", id, item) for an item that already holds this drawing (the
+    ledger or this run says so: another part's new revision put it in NAME-r<rev>, a dedupe merge points at the
+    keeper's item), else ("send", item) for the first free name of NAME, NAME-r<rev>, NAME-r<rev>-2 ... An item of
+    one of those names that this library has no record of is read back and linked when it holds this drawing, else
+    skipped. ("send", NAME) when the drawing is not known (no fingerprint): as before."""
+    if not want or not name:
+        return ("send", name)
+    known = lambda n: sent_models.get(f"{kind}:{n.lower()}") or (released_model(lg, target, kind, n) if lg else None)
+    alt = matching_model(lg, target, sent_models, kind, name, want) if lg else None
+    for n in [name] + ([alt[0]] if alt else []):
+        k = known(n)
+        if k and k[0] == want:
+            fid = client.find_model(ws, kind, n, folder)
+            if fid:
+                return ("link", fid, n)
+    for n in [name, f"{name}-r{rev}"] + [f"{name}-r{rev}-{k}" for k in range(2, 10)]:
+        fid = client.find_model(ws, kind, n, folder)
+        if not fid:
+            return ("send", n)
+        if known(n):                           # this library's item, with another drawing
+            continue
+        try:
+            if model_file_digest(client.model_data(ws, kind, n, folder), kind, ref) == want:
+                return ("link", fid, n)
+        except (ValueError, NexarError, OSError):
+            pass
+    return ("send", f"{name}-r{rev}")         # (the release's duplicate answer says so)
+
+
 def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, dry_run=False, note="ecadlib sync",
-                  transition=None, digests=None):
+                  transition=None, digests=None, lg=None, target=None, sent_models=None):
     """A new revision of a component already in the workspace, for a change control approved (#105): the changed
     symbol / footprint are released as new models (under their item name, or NAME-r<rev> when the workspace refuses a
     second item of that name), the unchanged one is linked, and desReleaseComponent releases the component item
@@ -721,6 +752,17 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
             found.append(None)
         else:
             found.append(f"<id of {name}>" if dry_run else client.find_model(ws, kind, name, f"{models_root}/{sub}"))
+    send_as, linked = {}, {}
+    for i, (kind, name, sub, half) in enumerate(zip(("symbols", "footprints"), names, ("Symbols", "Footprints"),
+                                                    ("symbol", "footprint"))):
+        if dry_run or half not in halves or not name:
+            continue
+        got = place_model(client, ws, lg, target, sent_models or {}, kind, name, f"{models_root}/{sub}",
+                          it[half]["ref"], (digests or {}).get(kind), rev)
+        if got[0] == "link":
+            found[i], linked[half] = got[1], got[2]
+        elif got[1] != name:
+            send_as[half] = got[1]
     files = [] if found[0] else [it["symbol"]["file"]], [] if found[1] else [it["footprint"]["file"]]
     bad = readback_problems({k: it[k] for k, g in zip(("symbol", "footprint"), files) if g})
     if bad:                                    # the file to send holds another part's model: nothing goes up
@@ -729,8 +771,14 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
     parent, _ = split_folder(it["folder"])
     pid = (f"<id of {parent}>" if dry_run else client.folder_id(ws, parent)) if parent else None
     inp = release_input(it, ws, defs, ids, models_root, pid, tuple(found))
+    for half, n in send_as.items():
+        inp["symbolItemName" if half == "symbol" else "footprintItemName"] = n
     detail = {"mutation": "desReleaseComponent", "new_revision_of": before or "<current revision>",
               "changed": sorted(halves), "ledger_revision": rev}
+    if send_as:
+        detail["model_item_names"] = [inp.get("symbolItemName"), inp.get("footprintItemName")]
+    if linked:
+        detail["linked"] = linked
     if dry_run:
         return {"action": "new_revision", "detail": dict(detail, input=inp)}
     try:
@@ -861,7 +909,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     if not dry_run:
                         note_sent(lg, it["name"], target, head)
                     res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves,
-                                             head["revision"], dry_run, note, transition, digests))
+                                             head["revision"], dry_run, note, transition, digests, lg, target,
+                                             sent_models))
                     sent_models.update({k: (d, it["name"], head["revision"]) for k, d in (res.get("models") or {}).items()})
             elif existing and it.get("status", "ready") not in RC.PUBLISHABLE:   # draft, needs_review, a typo: no
                 recheck(res, why or [f"status: {it.get('status')!r} is not ready"])   # parameter update (as the dry run)

@@ -335,3 +335,71 @@ def test_a365_cli_explains_a_new_revision(tmp_path, monkeypatch):
     line = next(l for l in text.splitlines() if "AO3401A" in l)
     assert "new_revision" in line, text
     assert "new component revision" in text and "ledger revision r2" in text and "symbol" in text, text
+
+
+# ---------------------------------------------------------------- R-FL-5: dedupe --merge on released parts
+def _drop_3d(lib, it):
+    """The part's .PcbLib rebuilt with the same land and no embedded 3D body (as a merge onto the keeper's file can
+    swap the body): the only change is the 3D model (geometry-minor)."""
+    from ecadlib import altium_lib as AL
+    spec = json.loads((ROOT / "ecadlib/package_specs/R_0603_1608Metric.json").read_text())
+    spec["height_max"] = 0.9
+    AL.write_pcblib(lib / it["footprint"]["file"], [AL.footprint_from_spec(spec)[0]])
+
+
+@lite
+def test_a365_new_revision_links_an_item_that_already_holds_its_drawing():
+    """An approved change points RES-0603-10k at a footprint item the workspace already holds with exactly that
+    drawing (a dedupe merge onto the keeper's land): the new revision linked nothing and released a second item
+    NAME-r2 with the same bytes. It now links the item that holds the drawing."""
+    from ecadlib import altium365 as A, change_cli as CC, change_gate as CG, rules as RU
+    from tests.test_change_control import ANN, demo, gate, item, items_of
+    from tests.test_hunt1026_altpub import Workspace, _push
+    plan, lib = demo()
+    nx, ws = Workspace(), "https://t.365.altium.com"
+    rules = RU.load(None, start=lib)
+    first = _push(A, plan, lib, nx, ws, rules)
+    assert first["CAP-0402-100nF"]["action"] == "release" and first["RES-0603-10k"]["action"] == "release"
+    items = items_of(plan)
+    g = gate(lib)
+    r, c = item(items, "RES-0603-10k"), item(items, "CAP-0402-100nF")
+    r["footprint"] = dict(c["footprint"])                   # the merge: the keeper's file and ref
+    g.settle(items)
+    CG.write_plan(plan, items)
+    CC.approve(plan, ["RES-0603-10k"], who=ANN)
+    nx.calls.clear()
+    res = _push(A, plan, lib, nx, ws, rules)["RES-0603-10k"]
+    assert res["action"] == "new_revision", res
+    rev = nx.comps["RES-0603-10k"]["revisions"][-1]
+    assert rev.get("footprints") == [{"id": "footprints:C_0402_1005Metric"}] and not rev.get("footprintFiles"), rev
+    assert not [k for k in nx.wmodels if k[1].endswith("-r2")], nx.wmodels
+
+
+# ---------------------------------------------------------------- R-FL-6 (R-PUB-4): two sharers of a changed model
+@lite
+def test_a365_second_sharer_of_a_changed_model_links_the_first_ones_new_item():
+    """Both resistors share the Resistor symbol; an approved change of it releases both again. The first one's new
+    revision puts the drawing in Resistor-r2 (the name Resistor is taken); the second tried Resistor-r2 again, got a
+    duplicate and errored on every push while the workspace kept the old symbol. It now links Resistor-r2, and the
+    next push is up to date."""
+    from ecadlib import altium365 as A, change_cli as CC, change_gate as CG, ledger as LG, rules as RU
+    from tests.test_change_control import ANN, demo, gate, item, items_of, write_symbol
+    from tests.test_hunt1026_altpub import Workspace, _push
+    plan, lib = demo()
+    nx, ws = Workspace(), "https://t.365.altium.com"
+    rules = RU.load(None, start=lib)
+    _push(A, plan, lib, nx, ws, rules)
+    items = items_of(plan)
+    g = gate(lib)
+    write_symbol(lib, item(items, "RES-0603-10k"), [("1", "A", "passive"), ("2", "B", "passive")])
+    g.settle(items)
+    CG.write_plan(plan, items)
+    CC.approve(plan, ["RES-0603-10k", "RES-0603-4.7k"], who=ANN)
+    res = _push(A, plan, lib, nx, ws, rules)
+    for n in ("RES-0603-10k", "RES-0603-4.7k"):
+        assert res[n]["action"] == "new_revision", res[n]
+        assert nx.comps[n]["revisions"][-1].get("symbol") == {"id": "symbols:Resistor-r2"} or \
+            nx.comps[n]["revisions"][-1].get("symbolItemName") == "Resistor-r2", nx.comps[n]["revisions"][-1]
+        assert LG.Ledger(lib).published(n, A.ws_target(ws))["revision"] == 2
+    again = _push(A, plan, lib, nx, ws, rules)
+    assert again["RES-0603-4.7k"]["action"] == "up_to_date", again["RES-0603-4.7k"]
