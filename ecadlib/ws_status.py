@@ -153,11 +153,19 @@ def status(root):
                 problems.append(f"{rel(pf)}: not a plan (expected a list of parts)")
             continue
         st = [i.get("status") for i in items if isinstance(i, dict)]
-        row = {"plan": rel(pf), "parts": len(st), **{("duplicates" if k == "duplicate" else k): st.count(k) for k in COUNTS},
-               "updated": _iso(pf.stat().st_mtime), "timing": TI.last_run(pf.parent, problems),
-               "review": review_stats(items, pf.parent)}
+        try:                                   # a part with a wrong-typed field ("approvals": 5, "name": [..]) is a
+            n = len(problems)                  # damaged file: named and not counted, never a traceback
+            row = {"plan": rel(pf), "parts": len(st), **{("duplicates" if k == "duplicate" else k): st.count(k) for k in COUNTS},
+                   "updated": _iso(pf.stat().st_mtime), "timing": TI.last_run(pf.parent, problems),
+                   "review": review_stats(items, pf.parent)}
+            ch = [i["name"] for i in items if isinstance(i, dict) and (i.get("change") or {}).get("state") == "held"]
+            if not all(isinstance(c, str) for c in ch):
+                raise TypeError("a held change's part name is not text")
+        except (TypeError, AttributeError, KeyError, ValueError) as e:
+            del problems[n:]
+            problems.append(f"{rel(pf)}: damaged (a part has a field of the wrong type: {type(e).__name__}): not counted")
+            continue
         out["plans"].append(row)
-        ch = [i["name"] for i in items if isinstance(i, dict) and (i.get("change") or {}).get("state") == "held"]
         if ch:                                 # change control: a change to a released part waits for a person
             out["changes_held"].append({"plan": rel(pf), "parts": ch})
         for k in out["totals"]:
