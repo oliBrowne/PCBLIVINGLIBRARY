@@ -274,3 +274,36 @@ def test_gate2_rg24_crlf_line_ends_alone_are_no_recipe_or_step_edit(tmp_path):
         assert LG.side_drift(rec, pl) == {}, LG.side_drift(rec, pl)
     rp.write_bytes(_crlf(recipe.replace(b"PAD\t1\t0", b"PAD\t1\t9")))
     assert str(rp) in LG.side_drift(rec, pl)
+
+
+# ------------------------------------------------------------------ R-G2-5
+def _body_lib(tmp_path, rot=(0.0, 0.0, 0.0), dz=0.0):
+    from ecadlib import altium_lib as AL, stdparts as SP
+    fp = AL.footprint_from_kicad(SP.build("C_0402_1005Metric")[0])
+    step = b"ISO-10303-21;\nHEADER;\nFILE_NAME('C.step');\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n"
+    fp["bodies"] = [{"pts": [(-0.5, -0.25), (0.5, -0.25), (0.5, 0.25), (-0.5, 0.25)], "height": 0.5,
+                     "step": {"name": "C.step", "data": step, "rot": rot, "dz": dz}}]
+    pl = tmp_path / "C.PcbLib"
+    AL.write_pcblib(pl, [fp])
+    return pl, Path(str(pl) + ".ecadbuild")
+
+
+@lite
+def test_gate2_rg25_a_recipe_body_turned_or_lifted_does_not_build_the_pcblib(tmp_path):
+    """g6_recipe_track.py rot: the recipe's STEP body turned 90 degrees about x and lifted 1 mm (fields 5-8, which
+    Altium's rebuild applies: M.SetState(rx, ry, rz, dz)) no longer builds the .PcbLib; unchanged it does, and a body
+    the .PcbLib itself holds turned matches a recipe that says so."""
+    from ecadlib import altium_native as AN
+    pl, rp = _body_lib(tmp_path)
+    assert AN.compare_one(pl, rp) == []
+    t = rp.read_text(encoding="utf-8")
+    b = next(l for l in t.splitlines() if l.startswith("BODY\t"))
+    for i, v in ((5, "90000"), (8, "393701")):
+        f = b.split("\t")
+        f[i] = v
+        rp.write_text(t.replace(b, "\t".join(f), 1), encoding="utf-8")
+        assert AN.compare_one(pl, rp), f"recipe BODY field {i} -> {v} was taken as building the .PcbLib"
+    d = tmp_path / "turned"
+    d.mkdir()
+    pl2, rp2 = _body_lib(d, rot=(90.0, 0.0, 0.0), dz=1.0)
+    assert AN.compare_one(pl2, rp2) == []

@@ -637,8 +637,22 @@ def _pcb_prims(recipe_lines):
         elif k == "TEXT":
             out.append(("text", n(7), (f[1], n(2), n(3), n(4), n(5), int(f[6]) / 1000)))
         elif k == "BODY":
-            out.append(("body", n(1), (_model_file(f[4]), n(2), n(3), [(n(10 + 2 * i), n(11 + 2 * i)) for i in range(n(9))])))
+            place = (int(f[5]) / 1000, int(f[6]) / 1000, int(f[7]) / 1000, n(8))     # rx ry rz (deg), dz
+            out.append(("body", n(1), (_model_file(f[4]), n(2), n(3), [(n(10 + 2 * i), n(11 + 2 * i)) for i in range(n(9))],
+                                       place)))
     return out
+
+
+def _model_place(pr):
+    """A body record's 3D model rotation and lift -> (rx, ry, rz in degrees, dz in internal units); absent = 0."""
+    def num(k, f):
+        v = f(pr.get(k)) if pr.get(k) not in (None, "") else 0
+        try:
+            return float(v) if v is not None else 0.0
+        except ValueError:
+            return 0.0
+    return (num("MODEL.3D.ROTX", float), num("MODEL.3D.ROTY", float), num("MODEL.3D.ROTZ", float),
+            num("MODEL.3D.DZ", _mil_units))
 
 
 def _file_prims(records):
@@ -665,7 +679,7 @@ def _file_prims(records):
             pr = AL.parse_params(r.get("params", ""))
             model = _model_file(pr.get("MODEL.NAME")) if pr.get("MODEL.EMBED", "").upper() == "TRUE" else ""
             out.append(("body", r["layer"], (model, _mil_units(pr.get("OVERALLHEIGHT")), _mil_units(pr.get("STANDOFFHEIGHT")),
-                                             [(round(x), round(y)) for x, y in r["pts"]])))
+                                             [(round(x), round(y)) for x, y in r["pts"]], _model_place(pr))))
         else:
             out.append((t, r["layer"], None))
     return out
@@ -679,7 +693,8 @@ def _angle_same(a, b):
 def _prim_same(kind, a, b, tol):
     """A recipe primitive a and one of the file's, b (same kind and layer), are the same as far as Altium keeps it:
     track ends in either order, an arc's angles modulo 360, a region's / body's outline from any corner and in either
-    direction. Text box sizes are Altium's own and not compared; a STEP body's height comes from its model."""
+    direction. Text box sizes are Altium's own and not compared; a STEP body's height comes from its model (the
+    rebuild's SetState_FromModel), its rotation and lift from the recipe."""
     close = lambda u, v: abs(u - v) <= tol
     if b is None:
         return False
@@ -702,6 +717,10 @@ def _prim_same(kind, a, b, tol):
             return False
         if not a[0] and not (b[1] is not None and close(a[1], b[1]) and b[2] is not None and close(a[2], b[2])):
             return False                             # an extruded body: its heights are the recipe's
+        if a[0] and len(a) > 4 and len(b) > 4:       # a STEP model: turned and lifted as the recipe says (Altium's
+            pa, pb = a[4], b[4]                      # rebuild applies them: M.SetState(rx, ry, rz, dz), R-G2-5)
+            if not (all(_angle_same(u, v) for u, v in zip(pa[:3], pb[:3])) and close(pa[3], pb[3])):
+                return False
         return _ring_same(a[3], b[3], tol)
     return False
 
