@@ -1209,6 +1209,12 @@ def alternate_footprint(ln, st):
     if want and own == want:
         return None, (f"{ALTERNATE} {mpn}: the base part's footprint {fp} kept: {mpn}'s datasheet read names the same "
                       "package")
+    mk, ms = SP.mpn_size(ln.get("mpn"))                # a passive whose part number codes its chip size (RC0603FR..,
+    if ms and not SP.own_land_name(fp):                # GRM155..): that size and kind on a plain chip land (R-FX10-5)
+        m = re.match(r"^(R|C|L)_(\d{4,5})_\d{4,5}Metric$", want or "")
+        kind, size = (m.group(1), m.group(2)) if m else (st.get("kind"), SP.chip_size(fp, strict=True))
+        if size == ms and kind == mk:
+            return None, f"{ALTERNATE} {mpn}: the base part's footprint {fp} kept: {mpn} codes the same {ms} {mk} chip"
     return (f"{ALTERNATE} {mpn}: footprint {fp} is the base part's (an Altium variant names no footprint for its "
             "alternate)" + (f", and {mpn}'s datasheet read names {own}" if own else "") +
             f": check {mpn} comes in that package, or give the alternate its own footprint"), None

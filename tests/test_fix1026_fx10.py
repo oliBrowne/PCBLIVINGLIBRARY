@@ -143,3 +143,30 @@ def test_a_rating_after_a_whole_value_is_still_a_shifted_row(tmp_path):
                             "R1,1,10,5W, wirewound,R_2512,Vishay,WSR51R000FEA\n")
     for ln in lines:
         assert ln.get("bom_hold") and "," not in str(ln.get("value")), ln
+
+
+# --- R-FX10-5: a passive alternate whose MPN codes the inherited chip size keeps the land ---------------------------
+
+def test_a_passive_alternate_of_the_inherited_chip_size_is_not_held():
+    from ecadlib import librarian as L
+    fp = {"footprint": {"source": "kicad:Resistor_SMD:R_0603_1608Metric", "file": "x"}, "kind": "R"}
+    for land, mpn in (("R_0603_1608Metric", "RC0603FR-0710KL"), ("Resistor_SMD:R_0603_1608Metric", "ERJ-3EKF1002V"),
+                      ("0603", "CRCW060310K0FKEA")):
+        v, r = L.alternate_footprint({"altium_mpn_source": "Alternate", "mpn": mpn, "footprint": land}, fp)
+        assert not v and r and "0603" in r, (land, mpn, v, r)
+    cap = {"footprint": {"source": "kicad:Capacitor_SMD:C_0402_1005Metric", "file": "x"}, "kind": "C"}
+    v, r = L.alternate_footprint({"altium_mpn_source": "Alternate", "mpn": "GRM155R71C104KA88D",
+                                  "footprint": "C_0402_1005Metric"}, cap)
+    assert not v and r, (v, r)
+
+
+def test_a_passive_alternate_of_another_size_or_kind_or_land_is_still_held():
+    from ecadlib import librarian as L
+    fp = {"footprint": {"source": "kicad:Resistor_SMD:R_0603_1608Metric", "file": "x"}, "kind": "R"}
+    for land, mpn in (("R_0603_1608Metric", "RC0402FR-0710KL"),          # another size
+                      ("R_0603_1608Metric", "GRM188R71H104KA93D"),       # a capacitor's MPN on a resistor land
+                      ("R_0603_1608Metric_Pad0.98x0.95mm_HandSolder", "RC0603FR-0710KL"),   # another land
+                      ("R_Array_Convex_4x0603", "RC0603FR-0710KL"),
+                      ("R_0603_1608Metric", "ACME-10K-X")):              # no size in the MPN: nothing confirms it
+        v, r = L.alternate_footprint({"altium_mpn_source": "Alternate", "mpn": mpn, "footprint": land}, fp)
+        assert v and not r, (land, mpn, v, r)
