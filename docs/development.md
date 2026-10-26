@@ -8,52 +8,40 @@ On this page:
 * [End-to-end tests and the test pack (`tests/test_e2e.py`, `ecadlib testpack`)](#end-to-end-tests-and-the-test-pack-teststest_e2epy-ecadlib-testpack)
 * [`eval`: accuracy test set and scorer (`ecadlib/eval/`)](#eval-accuracy-test-set-and-scorer-ecadlibeval)
 * [Releases](#releases)
-* [Exact commands run (in `/mnt/project-files/ecad-librarian`)](#exact-commands-run-in-mntproject-filesecad-librarian)
-* [Next steps](#next-steps)
+* [How the sample outputs in `out/` were made](#how-the-sample-outputs-in-out-were-made)
 
 Tests: `python3 -m tests.test_ui` covers the workspace, web server, MCP server and CLI. `python3 -m tests.test_offline` covers the core modules. `python3 -m tests.test_footprints` checks generated footprints by part type against KiCad's library and the KLC rules.
 
 Requirements: Python 3.10 or later (tested on 3.11 and 3.13) with `requests`, `pandas`, `openpyxl`, `jsonschema`, `olefile`, `pypdf` and `pypdfium2` (and `tomli` on Python 3.10), which pip installs. `pypdf` and `pillow` are optional extras. `easyeda2kicad` was installed only so its source could be read for the endpoints; nothing imports it at runtime.
 
 ```
-ecad-librarian/
-├── README.md
-├── ecadlib/
-│   ├── footprint_gen.py      # IPC-7351B generator -> .kicad_mod  (+ `compare` vs a reference footprint)
-│   ├── footprint_adv.py      # BGA/LGA/CSP, pin headers, connectors, odd shapes (pad_table from the datasheet drawing)
-│   ├── footprint_bench.py    # pad-by-pad comparison with KiCad's official footprints
-│   ├── package_schema.json   # JSON Schema: the datasheet-dimension contract an LLM fills
-│   ├── bom_triage.py         # BOM CSV/XLSX -> triage report (.md + .csv)
-│   ├── providers.py          # Provider interface: EasyEDA, JLCPCB search, + DigiKey/Mouser/Nexar/SnapMagic/SamacSys stubs
-│   ├── kicad_index.py        # scans .kicad_sym / *.pretty for MPN / LCSC / value+package matches
-│   ├── altium_export.py      # Altium DbLib: parts.sqlite + parts.xlsx + two .DbLib files
-│   ├── app.py                # Workspace: the shared actions behind the UI, MCP server and CLI
-│   ├── ui/                   # local web UI (python -m ecadlib.ui), one static page, stdlib server
-│   ├── mcp_server.py         # MCP server over stdio (python -m ecadlib.mcp_server)
-│   ├── altium365.py          # Altium 365 workspace: release plan + push via the Nexar Design API
+PCBLIVINGLIBRARY/
+├── ecadlib/                  # the package (one module per job; the main ones below)
+│   ├── cli.py                # `ecadlib <command>`: every command is registered here
+│   ├── app.py                # Workspace: the shared actions behind the web UI, MCP server and CLI
+│   ├── bom_triage.py         # BOM CSV/XLSX -> triage report (.md + .csv); bom_inputs.py reads the formats
+│   ├── librarian.py          # BOM -> library plan: reuse, KiCad libraries, EasyEDA, standard parts, datasheet reader
+│   ├── release_check.py      # the release check every part passes before it is published
+│   ├── datasheet.py          # the datasheet reader (any model through ecadlib/llm/), crosscheck.py its second read
+│   ├── footprint_gen.py      # IPC-7351B generator -> .kicad_mod; footprint_adv.py: BGA, connectors, pad tables
+│   ├── stdparts.py           # the standard package table (package_specs/)
+│   ├── altium_lib.py         # pure-Python .PcbLib/.SchLib writer and reader (cfb.py: the OLE2 container)
+│   ├── altium365.py          # Altium 365 release plan + push through the Nexar Design API
 │   ├── altium_dblib_sync.py  # Altium without 365: the same plan -> .DbLib / .SVNDbLib library folder
-│   ├── altium_lib.py         # pure-Python .PcbLib/.SchLib writer (+ minimal reader, `dump`)
-│   ├── kicad_export.py       # librarian plan -> .kicad_sym + .pretty + .3dshapes + lib tables
-│   ├── cfb.py                # Compound File Binary (OLE2) v3 writer used by altium_lib
-│   ├── assets/pcblib_template.json.gz   # Library header + FileVersionInfo from an Altium-saved file (see NOTICE)
-│   ├── httpcache.py          # disk cache + per-host rate limit around requests
-│   ├── part_lookup.py        # part identification through Nexar, DigiKey and Mouser (+ JLCPCB search)
-│   ├── upkeep.py             # weekly lifecycle/upstream/A365/change checks, only new changes, one GitHub issue or PR
-│   └── sexpr.py              # tiny KiCad S-expression reader (+ quote-keeping writer)
-├── examples/
-│   ├── sample_bom.csv        # 14 lines, LCSC numbers checked against lcsc.com (see below)
-│   ├── packages/*.json       # 9 package specs (0402/0603/0805/1206, SOIC-8/16, QFN-32, VQFN-16)
-│   ├── symbols/*.json        # symbol pin lists: CH340C, TPS62133RGTR (both UNVERIFIED), Resistor, Capacitor
-│   └── kicad_lib/ecadlib_demo.kicad_sym   # 5-symbol "local library" for the triage demo
-├── tests/test_offline.py     # offline self-tests (header mapping, values, IPC math, provider parsing)
-└── out/
-    ├── footprints/ecadlib.pretty/*.kicad_mod   # 9 generated footprints
-    ├── footprints/gen_log.txt, compare_vs_kicad_official.txt
-    ├── triage_sample_bom.{md,csv}                       # live run (sources blocked, see below)
-    ├── triage_sample_bom_stub_providers_only.{md,csv}   # shows the needs_footprint_generation bucket
-    ├── altium/{parts.sqlite, parts.xlsx, ecadlib_sqlite.DbLib, ecadlib_excel.DbLib}
-    ├── altium_models/{PcbLib/*.PcbLib (9), SchLib/*.SchLib (4)}   # written by altium_lib.py
-    └── altium365/{plan.json, push_dry_run.json}
+│   ├── altium_menu.py        # the ecadlib menu inside Altium (kicad_menu.py: the KiCad plugin)
+│   ├── kicad_export.py       # plan -> .kicad_sym + .pretty + .3dshapes + lib tables
+│   ├── change_gate.py        # change control for released parts
+│   ├── providers.py          # part sources: EasyEDA, JLCPCB search, DigiKey/Mouser/Nexar (SnapMagic/SamacSys stubs)
+│   ├── mcp_server.py         # MCP server (stdio; mcp_http.py for HTTP)
+│   ├── ui/                   # local web UI, one static page and a stdlib server
+│   ├── eval/                 # accuracy set, scorer, replay gate and golden snapshots
+│   └── package_specs/        # standard package specs (JSON) and the KiCad footprint name list
+├── examples/                 # sample BOMs, symbol pin lists, a small KiCad library, plugin and workflow examples
+├── tests/                    # `python -m tests.run_all` (no pytest needed); fixtures in tests/fixtures/
+├── docs/                     # these pages; scripts/ui_screenshots.js retakes the web UI pictures
+├── installer/windows/        # builds the Windows setup .exe
+├── site/                     # the landing page (pcblivinglibrary.vercel.app)
+└── out/                      # sample outputs, used by tests and docs (see out/README.md); do not regenerate
 ```
 
 ## Robustness tests: real-world BOMs, fuzzers, CLI smoke
@@ -235,7 +223,9 @@ PyPI publishing uses [trusted publishing](https://docs.pypi.org/trusted-publishe
 
 If the `ecadlib` name is taken on PyPI, change `name` in `pyproject.toml` and the publisher entry to match.
 
-## Exact commands run (in `/mnt/project-files/ecad-librarian`)
+## How the sample outputs in `out/` were made
+
+These ran once, in 2026-10, from the repository root; tests read the results, so they stay as committed.
 
 ```
 python3 -m pip install easyeda2kicad                       # 1.0.1, used only to read its endpoint code
@@ -256,14 +246,4 @@ python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace https://ex
 
 The HTTP cache (`out/http_cache/`) and `__pycache__` were deleted after the runs. They are recreated on the next run.
 
-## Next steps
-
-* Rerun triage from a network that can reach easyeda.com and jlcpcb.com, and confirm the EasyEDA JSON paths against real payloads.
-* Load the generated footprints in KiCad and run `kicad-cli fp upgrade` plus DRC.
-* Add dual-flat no-lead (DFN/SON) and QFP/SOT families.
-* Open `out/altium_models/*` in Altium Designer (and run its library validation) before the first real release. Then release one part to a test Altium 365 workspace.
-* Verify the CH340C and TPS62133RGTR pinouts against their datasheets (both match KiCad's official symbols by pin number).
-* Run the datasheet reader with a real API key on a known part (TPS62133RGTR) and compare with the hand-written spec.
-* Pick symbols for TYPE-C-31-M-12 and X322512MSB4SI and a footprint for FTSH-105, then rerun the librarian.
-* Run the lifecycle watcher and part lookup with real Nexar/DigiKey/Mouser credentials and confirm the response shapes (lifecycle fields, spec attribute names).
-* Add an `easyeda2kicad` conversion step for the `available_easyeda` bucket.
+Open work is in the [roadmap](../ROADMAP.md) and the [issues](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues).

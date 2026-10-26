@@ -43,12 +43,12 @@ def round9(out):
     d = Path(out) / "datasheet"
     d.mkdir(exist_ok=True)
     (d / "TPS62133RGTR.extraction.json").write_text(json.dumps({
-        "part": "TPS62133RGTR", "datasheet": "https://www.lcsc.com/datasheet/C73973.pdf", "model": "claude-sonnet-4-5",
+        "part": "TPS62133RGTR", "datasheet": "https://www.lcsc.com/datasheet/C73973.pdf", "model": "claude-sonnet-5-5",
         "dimensions": {"pitch": {"page": 34}, "body_width": {"page": 34}}}), encoding="utf-8")
     (d / "cost.jsonl").write_text("".join(json.dumps(r) + "\n" for r in (
-        {"name": "TPS62133RGTR", "model": "claude-sonnet-4-5", "input_tokens": 18000, "output_tokens": 1200, "usd": 0.072,
+        {"name": "TPS62133RGTR", "model": "claude-sonnet-5-5", "input_tokens": 18000, "output_tokens": 1200, "usd": 0.072,
          "how": "usage"},
-        {"name": "TPS62133RGTR", "model": "claude-sonnet-4-5", "input_tokens": 9000, "output_tokens": 800, "usd": 0.039,
+        {"name": "TPS62133RGTR", "model": "claude-sonnet-5-5", "input_tokens": 9000, "output_tokens": 800, "usd": 0.039,
          "how": "usage", "purpose": "cross_check"})), encoding="utf-8")
 
 

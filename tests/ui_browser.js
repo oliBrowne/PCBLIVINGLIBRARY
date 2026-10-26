@@ -49,7 +49,7 @@ async function local(browser, width) {
     check("parts shown as cards" + w, await p.locator("#plist .pcard").count() === 14, await p.locator("#plist .pcard").count());
     check("cards have footprint pictures" + w, await p.locator("#plist .thumb svg").count() >= 6, await p.locator("#plist .thumb svg").count());
     const r9 = await text(p, "#libout .r9");
-    check("round-9 info: cross-check, KiCad/Altium, cost, model" + w, /cross-check: 1 disagree/.test(r9) && /KiCad \/ Altium: 1 differ/.test(r9) && /\$0\.111/.test(r9) && /claude-sonnet-4-5/.test(r9), r9);
+    check("round-9 info: cross-check, KiCad/Altium, cost, model" + w, /cross-check: 1 disagree/.test(r9) && /KiCad \/ Altium: 1 differ/.test(r9) && /\$0\.111/.test(r9) && /claude-sonnet-5-5/.test(r9), r9);
     await p.fill("#pq", "TPS");
     check("search filters parts" + w, await p.locator("#plist .pcard").count() === 2, await p.locator("#plist .pcard").count());
     await p.fill("#pq", "");
