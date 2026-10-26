@@ -288,6 +288,19 @@ def hash_matches(stored, item, base=".", current=None, _old=None):
     return stored == cache[1]
 
 
+def matches_upgrading(holder, key, item, base=".", current=None, _old=None):
+    """hash_matches(holder[key], ...); a version-1 hash that matches is replaced by the item's hash now (version 2), so
+    from then on the sign-off (or the release check's snapshot) also covers the .kicad_mod: a later edit of it makes
+    the record stale, instead of a pre-upgrade approval passing every .kicad_mod for ever. The files the version-1
+    hash covered are unchanged, and the .kicad_mod is taken as it is at this first match."""
+    stored = holder.get(key)
+    if not hash_matches(stored, item, base, current, _old):
+        return False
+    if not str(stored).startswith("v2:"):
+        holder[key] = current or content_hash(item, base)
+    return True
+
+
 # ---------------------------------------------------------------- evaluation
 def _allow_user(item):
     a = item.get("allow") or {}
@@ -298,6 +311,9 @@ def evaluate(item, policy, base=".", h=None):
     """-> {required, met, hash, approved_by, missing, stale, rejected_by, ignored}."""
     h = h or content_hash(item, base)
     old = {}                                       # version-1 hash, worked out once when an old record needs it
+    for r in item.get("approvals") or []:          # version-1 records that match become version 2 (matches_upgrading)
+        if isinstance(r, dict) and r.get("hash") and not str(r["hash"]).startswith("v2:"):
+            matches_upgrading(r, "hash", item, base, h, old)
     same = lambda stored: hash_matches(stored, item, base, h, old)
     latest, pos = {}, {}
     for i, r in enumerate(item.get("approvals") or []):   # one person, however they spelled their name (same_person)
@@ -383,7 +399,7 @@ def push_block(item, policy=None, base="."):
             return "rejected: " + "; ".join(ev["missing"])
         return "awaiting approval" if item.get("status") == "awaiting_approval" else None
     ev = evaluate(item, pol, base)
-    if snap.get("checked_hash") and not hash_matches(snap["checked_hash"], item, base, ev["hash"]) and \
+    if snap.get("checked_hash") and not matches_upgrading(snap, "checked_hash", item, base, ev["hash"]) and \
             item.get("status") != "held":
         return "changed since the release check: run release-check again"
     if ev["required"] and not ev["met"]:
@@ -446,7 +462,7 @@ def refresh_status(item, policy, base="."):
         return item["status"]
     snap = item.setdefault("approval", {"policy": policy, "checked_hash": None})
     snap.update({"policy": policy, **{k: ev[k] for k in ("required", "met", "approved_by", "missing", "stale")}})
-    changed = snap.get("checked_hash") is not None and not hash_matches(snap["checked_hash"], item, base, ev["hash"])
+    changed = snap.get("checked_hash") is not None and not matches_upgrading(snap, "checked_hash", item, base, ev["hash"])
     if changed:
         snap["missing"] = snap["missing"] + ["changed since the release check: run release-check again"]
     item["status"] = "ready" if (not ev["required"] or ev["met"]) and not changed else "awaiting_approval"

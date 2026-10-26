@@ -74,6 +74,53 @@ def test_fx11_2_propose_then_save_over_mcp(tmp_path):
             assert any("Datasheet" in w and "kept" in w for w in d["warnings"]), d["warnings"]
 
 
+# ---- R-FX11-3: an approval recorded with a version-1 hash is upgraded on its first match, so it covers the .kicad_mod
+def _v1_approved(d):
+    from ecadlib import approvals as AP, release_check as RC
+    from tests.test_release_check import make
+    it = make(d)
+    (d / "approvals.json").write_text(json.dumps({"required": 1}))
+    RC.apply([it], d)
+    pol = AP.load_policy(d)
+    AP.decide(it, "approve", "Ann Lee <ann@example.com>", base=d, policy=pol)
+    AP.refresh_status(it, pol, d)
+    old = AP.content_hash(it, d, version=1)          # as an ecadlib before the .kicad_mod was hashed stored them
+    for r in it["approvals"]:
+        r["hash"] = old
+    it["approval"]["checked_hash"] = old
+    return it, pol
+
+
+def _edit_pads(d, it):
+    from tests.test_release_check import SOIC
+    (d / it["footprint"]["kicad_mod"]).write_text(SOIC.replace("(size 1.965 0.58)", "(size 1.965 0.30)"))
+
+
+@lite
+def test_fx11_3_v1_approval_upgraded_then_kicad_mod_edit_is_stale(tmp_path):
+    from ecadlib import approvals as AP
+    it, pol = _v1_approved(tmp_path)
+    ev = AP.evaluate(it, pol, tmp_path)
+    assert ev["met"], ev                                     # the old sign-off still counts on the files it covered
+    assert all(str(r["hash"]).startswith("v2:") for r in it["approvals"]), it["approvals"]
+    _edit_pads(tmp_path, it)
+    ev = AP.evaluate(it, pol, tmp_path)
+    assert not ev["met"] and ev["stale"], ev                 # and now an edit of the .kicad_mod makes it stale
+    assert AP.push_block(it, pol, tmp_path), "edited .kicad_mod published on a pre-upgrade sign-off"
+
+
+@lite
+def test_fx11_3_v1_release_check_snapshot_upgraded(tmp_path):
+    from ecadlib import approvals as AP
+    it, pol = _v1_approved(tmp_path)
+    assert AP.push_block(it, pol, tmp_path) is None
+    assert str(it["approval"]["checked_hash"]).startswith("v2:"), it["approval"]
+    for r in it["approvals"]:                                # a fresh v2 approval: only the snapshot is old
+        r["hash"] = AP.content_hash(it, tmp_path)
+    _edit_pads(tmp_path, it)
+    assert "changed since the release check" in (AP.push_block(it, pol, tmp_path) or ""), AP.push_block(it, pol, tmp_path)
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
