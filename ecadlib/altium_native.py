@@ -60,6 +60,26 @@ from pathlib import Path
 from . import altium_lib as AL
 
 EXT = ".ecadbuild"
+
+# Who is told when ecadlib itself writes a library file and its recipe (change_gate.Guard: a writer's own rewrite is
+# told apart from an edit saved meanwhile by another program, which nobody announces). Weak: a dropped guard goes.
+import weakref
+_LISTENERS = weakref.WeakSet()
+
+
+def listen(obj):
+    """obj.wrote_library(path) is called after each library file ecadlib writes with its recipe (and STEP files)."""
+    _LISTENERS.add(obj)
+
+
+def note_written(lib_path):
+    """ecadlib wrote library file lib_path and its recipe now: tell the listeners (write_recipe calls it; a writer
+    that puts a library file and its recipe in place by other means calls it too)."""
+    for obj in list(_LISTENERS):
+        try:
+            obj.wrote_library(Path(lib_path))
+        except Exception:
+            pass
 STATE_EXT = ".ecadstate"                # {"source": sha256 of ecadlib's bytes, "built": sha256 of Altium's build}
 BUILD, PROJECT, UNIT, REPORT = "ecadlib_build.txt", "ecadlib_build.PrjScr", "ecadlib_build.pas", "ecadlib_build_report.txt"
 # The DelphiScript units ecadlib installs into Altium are real .pas files here (package data), not Python strings, so
@@ -209,6 +229,7 @@ def write_recipe(lib_path, kind, items):
                     sp.parent.mkdir(parents=True, exist_ok=True)
                     if not (sp.is_file() and sp.read_bytes() == data):
                         sp.write_bytes(data)
+    note_written(lib_path)
     return rp
 
 

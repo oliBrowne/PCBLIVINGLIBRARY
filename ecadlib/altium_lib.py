@@ -1009,6 +1009,7 @@ def relink_schlib(path, old, new):
         text = rp.read_text(encoding="utf-8")
         rp.write_text("\n".join(f"FOOTPRINTLINK\t{new}" if ln == f"FOOTPRINTLINK\t{old}" else ln
                                 for ln in text.split("\n")), encoding="utf-8")
+    AN.note_written(path)
     return True
 
 

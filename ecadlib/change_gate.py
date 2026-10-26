@@ -298,8 +298,8 @@ class Guard:
         self.adopt_revision = {}               # part -> the revision an adopted part gets (never one it had before)
         self.pre = {}                          # path -> bytes on disk at begin() that are the released part
         self.pre_steps = {}                    # PcbLib path -> {STEP path: bytes} of a head recorded without its STEPs
-        self.found = {}                        # path -> sha256 at begin() of a released part's .SchLib / .PcbLib
         self.sides_seen = {}                   # library file path -> its recipe / STEP shas as _settle_sides left them
+        self.written = {}                      # library file path -> (sha, recipe / STEP shas) as this writer wrote them
         self._lock = None
         self._begun = False                    # begin() ran: what the writer found on disk was checked there
         self._was_empty = None                 # the ledger had no line when this guard first looked
@@ -342,6 +342,8 @@ class Guard:
         blob store, the usage index or other ledger lines show it was released) is never adopted: LedgerError."""
         self.hold_lock()
         self._begun = True
+        from . import altium_native as AN      # the library files this writer writes from here (R-G2-1)
+        AN.listen(self)
         if items is None:
             items = read_plan(self.folder)
         n, lost = 0, []
@@ -365,7 +367,6 @@ class Guard:
                 n += 1
             elif head:
                 self._keep_bytes(it, head)
-                self._note_found(head)
         self._refuse_lost(lost)
         if n:
             self.log(f"  change control: {n} released part(s) recorded as revision 1 (they were released before the ledger)")
@@ -603,20 +604,25 @@ class Guard:
                     self.pre_steps[p] = {str(f.parent / s): (f.parent / s).read_bytes() for s in LG.step_files(f)
                                          if (f.parent / s).is_file()}
 
-    def _note_found(self, head):
-        """Remember the bytes of the head's library files as begin() found them: settle tells by them which files this
-        writer rewrote (_settle_sides)."""
-        for r in (head.get("files") or {}).values():
-            f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
-            if f.is_file():
-                self.found.setdefault(str(f.resolve()), LG.sha_bytes(f.read_bytes()))
+    def wrote_library(self, f):
+        """altium_native.note_written: ecadlib wrote library file f and its recipe now. Only while this guard's writer
+        works (between begin() and its settle) is that the writer's own write."""
+        if not self._begun or self.writer == "hand-edit":
+            return
+        f = Path(f)
+        try:
+            self.written[str(f.resolve())] = (LG.sha_bytes(f.read_bytes()), _sides_now(f))
+        except OSError:
+            pass
 
     def _rewrote(self, f, sha):
-        """This writer rewrote file f (now sha) since begin(): it wrote its recipe and 3D models anew with it."""
+        """This writer rewrote file f (now sha) since begin(): it wrote f and its recipe and 3D models itself, and they
+        are still the bytes it wrote. Bytes that only differ from begin()'s are no sign: an edit saved meanwhile by
+        another program (Altium, an editor) is not announced and is checked like a hand edit (R-G2-1)."""
         if self.writer == "hand-edit" or not self._begun:
             return False
-        was = self.found.get(str(Path(f).resolve()))
-        return was is not None and was != sha
+        mine = self.written.get(str(Path(f).resolve()))
+        return mine is not None and mine[0] == sha and mine[1] == _sides_now(f)
 
     def _is_head(self, fp, head):
         """fp is the released revision: the same digest as the head's, or (a head an older ecadlib fingerprinted) as

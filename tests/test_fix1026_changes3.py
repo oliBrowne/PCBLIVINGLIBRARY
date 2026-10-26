@@ -80,6 +80,8 @@ def test_fix3_rfx31_a_writer_that_rebuilt_the_file_keeps_its_own_recipe():
     rp = _recipe(lib)
     mine = rp.read_text(encoding="utf-8") + "\n"               # ... and its recipe, written anew
     rp.write_text(mine, encoding="utf-8")
+    from ecadlib import altium_native as AN                    # a writer's own write is announced (R-G2-1): bytes
+    AN.note_written(pl)                                        # that only changed since begin() are no sign
     g.settle(items)
     g.close()
     assert not [e for e in _ledger(lib) if e.get("event") == "overwritten"], _ledger(lib)
