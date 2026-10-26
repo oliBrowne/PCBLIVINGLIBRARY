@@ -70,32 +70,65 @@ def names_it(texts, part, codes=(), own=(), url=""):
     flat = re.sub(r"[^A-Z0-9]", "", " ".join(t or "" for t in texts).upper())
     if any(re.sub(r"[^A-Z0-9]", "", c.upper()) in flat for c in codes if c):
         return True
-    code = mpn_package_code(part, own)                # EPM1270M256's M256: a 256-ball FineLine BGA is not it
-    if (not code or code in flat) and _same_package(own, set().union(*(DR.package_tokens(DR.norm_text(t or ""))
-                                                                       for t in texts))):
+    codes = mpn_package_codes(part, own)              # EPM1270M256's M256: a 256-ball FineLine BGA is not it
+    # no code in the MPN: a drawing that prints another code for this count (FTG256) is another maker's package
+    printed = any(c in flat for c in codes) if codes else not other_codes(texts, own)
+    if printed and _same_package(own, set().union(*(DR.package_tokens(DR.norm_text(t or "")) for t in texts))):
         return True
     key = re.sub(r"[^A-Z0-9]", "", str(part or "").upper())
     return said is None and len(key) >= 4 and key in re.sub(r"[^A-Z0-9]", "", str(url).upper())
 
 
-def mpn_package_code(part, own=()):
-    """The package code an MPN ends in, when its number is this part's pin or ball count (own: BGA256 and so on):
-    EPM1270M256 -> M256, M2GL090T-FG484 -> FG484, ICE40HX8K-BG121 -> BG121; else None (GBU4A, LM358DR). A package
-    document found by search must print it: a family and count alone matched a 1.0 mm FineLine BGA-256 for the 0.5 mm
-    Micro FineLine M256, and a generic BGA layout note for BG121 (live benchmark 2026-10-24)."""
-    counts = {m.group() for t in own or () for m in [re.search(r"\d+$", t)] if m
-              and re.sub(r"\d+$", "", t) not in DR.OUTLINE_FAMS}   # SOT23's 23 names the outline, not 23 pins
+def _counts(own):
+    return {m.group() for t in own or () for m in [re.search(r"\d+$", t)] if m
+            and re.sub(r"\d+$", "", t) not in DR.OUTLINE_FAMS}   # SOT23's 23 names the outline, not 23 pins
+
+
+def mpn_package_codes(part, own=()):
+    """Every form of the package code in an MPN whose number is this part's pin or ball count (own: BGA256 ...), the
+    first the one mpn_package_code gives; [] when there is none. The code may carry an ordering tail after it (speed
+    grade, temperature, lead-free, packing: EPM1270M256C5N, ICE40HX8K-BG121TR, LCMXO2-1200HC-4MG132C).
+    - a later segment that starts with the code, after a speed-grade digit at most: BG121TR -> BG121, 4MG132C -> MG132;
+    - in the first segment, a code after the part's own letters and number (EPM1270 | M256, 10M08SC | M153): which of
+      the letters before the count are the code's is not known (10M08SC + M153), so each ending of them (up to 3) is
+      a form, the shortest first. A number that only follows digits is the part number itself: 74HC14 is the 14th
+      74HC logic part. The count is the number as printed: AT24C08's "08" is no 8."""
+    counts = _counts(own)
+    if not counts:
+        return []
     segs = [x for x in re.split(r"[-_/#\s]+", str(part or "").strip().upper()) if x]
     for i, seg in reversed(list(enumerate(segs))):
-        # a segment of its own after the part number (M2GL090T-FG484), or a code after the part's own letters and
-        # number (EPM1270 | M256). A number that only follows digits is the part number itself: 74HC14 is the
-        # 14th 74HC logic part, AT24C08 an 8-kbit EEPROM, whatever their pin counts. The count is the number as
-        # printed: "08" is no 8
-        m = re.fullmatch(r"([A-Z]{1,3})(\d{2,4})", seg) if i else \
-            re.fullmatch(r"[A-Z]+\d+([A-Z]{1,3})(\d{2,4})", seg)
-        if m and m.group(2) in counts:
-            return m.group(1) + m.group(2)
-    return None
+        if i:
+            m = re.match(r"\d?([A-Z]{1,3})(\d{2,4})(?!\d)", seg)
+            if m and m.group(2) in counts:
+                return [m.group(1) + m.group(2)]
+            continue
+        for m in re.finditer(r"([A-Z]+)(\d{2,4})(?!\d)", seg):
+            if m.group(2) in counts and re.search(r"[A-Z]\d", seg[:m.start()]):
+                run = m.group(1)[-3:]
+                return [run[-k:] + m.group(2) for k in range(1, len(run) + 1)]
+    return []
+
+
+def mpn_package_code(part, own=()):
+    """The package code in an MPN, when its number is this part's pin or ball count (own: BGA256 and so on):
+    EPM1270M256C5N -> M256, M2GL090T-FG484 -> FG484, ICE40HX8K-BG121TR -> BG121; else None (GBU4A, LM358DR). A package
+    document found by search must print it: a family and count alone matched a 1.0 mm FineLine BGA-256 for the 0.5 mm
+    Micro FineLine M256, and a generic BGA layout note for BG121 (live benchmark 2026-10-24). mpn_package_codes."""
+    codes = mpn_package_codes(part, own)
+    return codes[0] if codes else None
+
+
+def other_codes(texts, own=()):
+    """Package codes a document prints for this part's count that name no package family ds_route knows (FTG256,
+    FG256, M256 for a BGA256): another maker's own package code, which a part with no code of its own can't be told
+    apart from. A family's own names (BGA-256, FBGA256, SOIC-14 for SO14) are not one."""
+    counts = _counts(own)
+    if not counts:
+        return set()
+    up = " ".join(DR.norm_text(t or "") for t in texts).upper()
+    return {m.group(1) + m.group(2) for m in re.finditer(r"(?<![A-Z0-9])([A-Z]{1,6})-?(\d{2,4})(?![0-9])", up)
+            if m.group(2) in counts and not DR.package_tokens(m.group(1) + m.group(2))}
 
 
 def _same_package(own, toks):
