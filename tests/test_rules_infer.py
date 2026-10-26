@@ -213,7 +213,12 @@ def test_workspace_follows_the_rules_file_its_tools_find():
             rel = ws.save_upload("bom.csv", (Path(cwd) / "examples" / "sample_bom.csv").read_bytes())
             assert ws.rules()["parameters"]["names"] == {"Manufacturer Part Number": "MPN"}
             assert ws.info()["rules"].endswith("ecadlib.toml") and ws.rules_info()["exists"]
-            quiet(ws.export_dblib, rel)
+            # the UI's DbLib export needs the librarian's plan now (round 3, R-FX-3); the draft writer, given the rules
+            # file the workspace finds, still names its columns by it
+            from ecadlib import altium_export as AX
+            rf = ws.rules_in_use()
+            assert rf and not quiet(AX.main, [str(ws.root / rel), "-o", str(ws.root / "altium"), "--draft",
+                                              "--rules", str(rf)])
             con = sqlite3.connect(ws.root / "altium" / "parts.sqlite")
             t = con.execute("select name from sqlite_master").fetchone()[0]
             assert "MPN" in [c[1] for c in con.execute(f'pragma table_info("{t}")')]

@@ -390,7 +390,7 @@ details summary { cursor: pointer; color: var(--muted); }
     <div class="grid3" style="margin-top:10px">
       <div class="box">
         <h3>Database library (DbLib)</h3>
-        <p class="muted small">After step 2: a .DbLib, its Excel table (.xlsx, also as .csv) and the ready parts' .SchLib / .PcbLib, in altium/&lt;BOM&gt;/; held parts stay out. Open the .DbLib in Altium Designer (it needs the Access database engine). Before step 2: a draft from the BOM check (SQLite and Excel tables, no symbols or footprints yet).</p>
+        <p class="muted small">After step 2: a .DbLib, its Excel table (.xlsx, also as .csv) and the ready parts' .SchLib / .PcbLib, in altium/&lt;BOM&gt;/; held parts stay out. Open the .DbLib in Altium Designer (it needs the Access database engine). Before step 2 nothing is written: no part is built or checked yet.</p>
         <button id="dblib">Export DbLib</button>
         <div class="out" id="dblibout"></div>
       </div>
@@ -810,11 +810,9 @@ async function action(btn, out, fn) {
 }
 $("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), async () => {
   const r = await api("/api/export/dblib", { bom: current.bom });
-  if (r.from_plan) return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span>: ` + r.files.map(fileLink).join(" · ") +
+  return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span>: ` + r.files.map(fileLink).join(" · ") +
     (r.held.length ? `<div class="muted">Held, left out until a person decides: ${esc(r.held.join(", "))}</div>` : "") +
     `<div class="next s-info"><span>Next: copy the whole folder (with its SchLib and PcbLib folders) next to your Altium libraries and open the .DbLib in Altium Designer. The Excel workbook needs the Access database engine.</span></div>`;
-  return "Written (draft, from the triage only: run Fill the library first to build symbols and footprints): " + r.files.map(fileLink).join(" · ") +
-    `<div class="next s-info"><span>Next: copy these files next to your Altium libraries and open a .DbLib in Altium Designer. The SQLite one needs the SQLite3 ODBC driver; the Excel one needs the Access database engine.</span></div>`;
 }));
 $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
   const r = await api("/api/altium/models", { bom: current.bom });

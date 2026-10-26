@@ -33,7 +33,7 @@ That gives you a single `ecadlib` command (`python -m ecadlib` works too). There
        ![Sign-off and duplicates](ui-signoff.png)
    * **Make a footprint:** click **Generate…** on a missing part. It picks a matching example package when one exists. Enter the datasheet dimensions, preview the IPC-7351B land pattern, and approve it. Approving writes a KiCad `.kicad_mod` and an Altium `.PcbLib`, and asks before replacing an existing footprint. The BOM is then re-checked automatically.
    * **Send to Altium:** there are three options.
-     * **Export DbLib** writes, once step 2 has run, the plan's ready parts as a `.DbLib` with its Excel table (`.xlsx`, also as `.csv`) and their `.SchLib` / `.PcbLib` into `altium/<BOM>/` (held parts stay out, as in `ecadlib dblib-sync`); before step 2, a draft from the BOM check (`parts.sqlite`, `parts.xlsx` and two `.DbLib` files, no symbols or footprints).
+     * **Export DbLib** writes, once step 2 has run, the plan's ready parts as a `.DbLib` with its Excel table (`.xlsx`, also as `.csv`) and their `.SchLib` / `.PcbLib` into `altium/<BOM>/` (held parts stay out, as in `ecadlib dblib-sync`); before step 2 it writes nothing and says to run Fill the library first (the unchecked draft is only on the command line, `ecadlib dblib BOM --draft`).
      * **Build .PcbLib / .SchLib** converts the BOM's footprints and writes generic R/C symbols.
      * **Altium 365** plans a release with a ready / needs-symbol / needs-footprint status per part. **Dry run** shows the exact requests without sending anything. **Push** is enabled only when `NEXAR_TOKEN` is set and a workspace is picked, and it asks for confirmation first.
 

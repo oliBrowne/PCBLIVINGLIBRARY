@@ -77,3 +77,31 @@ def test_two_codes_that_are_no_metric_inch_pair_are_held(tmp_path):
             assert not by[d].get("footprint") and "two size codes" in by[d].get("bom_note", ""), (hdr, by[d])
         assert by["R2"]["footprint"] == "R_0603_1608Metric", by["R2"]               # a footprint name is kept
         assert by["R3"]["footprint"] == "SOT-23-5", by["R3"]
+
+
+# ---------------------------------------------------------------- R-FX-3: no unchecked draft DbLib from the UI / MCP
+@lite
+def test_the_ui_and_mcp_dblib_export_refuse_a_bom_the_librarian_has_not_run_for(tmp_path):
+    import json
+    from pathlib import Path
+    from ecadlib import mcp_server as M
+    from ecadlib.app import Workspace
+    ws = Workspace(tmp_path / "ws", ["examples/kicad_lib"], providers=["digikey"], offline=True)
+    rel = ws.save_upload("bom.csv", Path("examples/sample_bom.csv").read_bytes())
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            ws.export_dblib(rel)
+        raise AssertionError("an unchecked draft DbLib was written")
+    except ValueError as e:
+        assert "librarian" in str(e).lower() and "Fill the library" in str(e), e
+    alt = ws.root / "altium"
+    assert not alt.exists() or not any(p.suffix in (".DbLib", ".sqlite", ".xlsx") for p in alt.rglob("*")), \
+        list(alt.rglob("*"))
+    r = M.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "export_altium_dblib", "arguments": {"bom": rel}}})
+    res = r["result"]
+    assert res.get("isError") and "librarian" in res["content"][0]["text"].lower(), r
+    tool = next(t for t in M.TOOLS if t["name"] == "export_altium_dblib")
+    assert "librarian" in tool["description"].lower(), tool
+    page = Path("ecadlib/ui/static/index.html").read_text(encoding="utf-8")
+    assert "Written (draft" not in page                                    # the UI has no draft branch any more

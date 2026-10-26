@@ -73,7 +73,8 @@ def test_workspace_flow():
         finally:
             if env:
                 os.environ["NEXAR_TOKEN"] = env
-        assert any(f.endswith(".DbLib") for f in quiet(ws.export_dblib, rel)["files"])
+        # no librarian plan for this BOM: no unchecked draft DbLib from the UI (round 3, R-FX-3)
+        expect(ValueError, ws.export_dblib, rel, contains="librarian")
         info = ws.info()
         assert "R_0603_1608Metric" in info["altium_models"]["PcbLib"] and rel in info["boms"]
 
@@ -172,8 +173,8 @@ def test_ui_server():
             st, e = call("POST", "/api/altium365/push", {"bom": bom, "workspace": "https://w", "dry_run": False})
             assert st == 400 and ("NEXAR_TOKEN" in e["error"] or os.environ.get("NEXAR_TOKEN")), e
             (Path(d) / "ecadlib.toml").unlink()
-            st, r = call("POST", "/api/export/dblib", {"bom": bom})
-            assert st == 200 and r["files"], r
+            st, e = call("POST", "/api/export/dblib", {"bom": bom})     # no librarian plan: refused, nothing written
+            assert st == 400 and "librarian" in e["error"], e
             assert call("GET", "/api/job?id=nope")[0] == 404
         finally:
             srv.shutdown()

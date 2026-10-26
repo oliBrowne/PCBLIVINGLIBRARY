@@ -78,7 +78,10 @@ TOOLS = [
                                     "stack": {"type": "string", "enum": ["stack", "hide", "none"]},
                                     "save": {"type": "boolean"}, "overwrite": {"type": "boolean"}}}},
     {"name": "export_altium_dblib",
-     "description": "Write an Altium DbLib (SQLite + XLSX + .DbLib files) for a BOM into the workspace altium/ folder.",
+     "description": "Write the Altium DbLib (.DbLib + table) for a BOM into the workspace altium/<BOM>/ folder, from the "
+                    "librarian's plan: only release-checked ready parts, their .SchLib/.PcbLib copied beside it; held "
+                    "parts are listed in `held`. Refused for a BOM librarian_run has not run for (nothing is built or "
+                    "checked yet): run librarian_run first.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "librarian_run",
      "description": "BOM to library in one go: triage the BOM, fill every missing symbol and footprint (official KiCad "
