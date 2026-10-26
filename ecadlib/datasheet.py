@@ -3001,6 +3001,19 @@ def _resolve(host):
         return []
 
 
+def _numeric_ipv4(host):
+    """The dotted IPv4 address a numeric host stands for, as the resolver / HTTP stack reads it ('2852039166',
+    '0xa9fea9fe', '127.1', '0177.0.0.1', '0' and '127.0.0.1.' are all addresses to it), or '' for a name."""
+    import socket
+    h = host.rstrip(".")
+    if not h or not re.fullmatch(r"(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+)){0,3}", h, re.I):
+        return ""
+    try:
+        return socket.inet_ntoa(socket.inet_aton(h))
+    except (OSError, ValueError):
+        return ""
+
+
 def _private(ip):
     """A private network's address (10.x, 172.16/12, 192.168.x, CGNAT 100.64/10, fc00::/7 ...): not the internet's."""
     import ipaddress
@@ -3029,8 +3042,12 @@ def unsafe_download(url, public=False):
         return "no host"
     if _NO_FETCH_HOSTS.fullmatch(host):
         return f"{host} is this machine or a cloud metadata service"
+    numeric = _numeric_ipv4(host)
+    if numeric and numeric != host:
+        return (f"{host} is the address {numeric} written in another form (the HTTP stack reads it so): "
+                "only a dotted address or a name is downloaded")
     try:
-        ips = [ipaddress.ip_address(host)]
+        ips = [ipaddress.ip_address(numeric or host)]
     except ValueError:
         if not public or re.search(r"\.(example|test|invalid)\.?$", host, re.I):
             return None

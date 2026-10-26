@@ -56,3 +56,21 @@ def test_an_inch_column_wins_over_a_mixed_one(tmp_path):
         lines, m = _read(tmp_path / "b.csv", f"Designator,Qty,MPN,{hdr}\nR1,1,RC0603FR-0710KL,{row}\n")
         assert m["footprint"] == "Case Code (in)", (hdr, m)
         assert lines[0]["footprint"] == "0603", (hdr, lines)
+
+
+# ---------------------------------------------------------------- R-SRC-2: numeric IPv4 forms in a datasheet link
+@lite
+def test_unsafe_download_refuses_every_numeric_form_of_a_local_address(monkeypatch):
+    from ecadlib import datasheet as D
+    monkeypatch.setattr(D, "_resolve", lambda host: (_ for _ in ()).throw(AssertionError(f"looked up {host}")))
+    for host in ("2852039166", "0xa9fea9fe", "0XA9.0XFE.0XA9.0XFE", "127.1", "0177.0.0.1", "0", "0x7f000001",
+                 "127.0.0.1.", "169.254.169.254", "0251.0376.0251.0376", "017700000001", "10.1", "0x0a.1"):
+        for public in (False, True):
+            assert D.unsafe_download(f"http://{host}/x.pdf", public=public), (host, public)
+    # a redirect to one is refused too (each hop is checked with the same rule)
+    assert D.redirect_refused("https://ds.example.com/a.pdf", "http://2852039166/latest/meta-data/", public=False)
+    assert D.redirect_refused("https://ds.example.com/a.pdf", "http://127.1:8080/", public=False)
+    # a BOM link to a datasheet server on your own network, written as a dotted quad, stays allowed; public sites too
+    for url in ("http://10.1.2.3/ds/x.pdf", "http://192.168.1.20/x.pdf", "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+                "http://93.184.216.34/x.pdf", "https://cdn.0x10c.example/x.pdf", "https://1password.example/x.pdf"):
+        assert D.unsafe_download(url, public=False) is None, url
