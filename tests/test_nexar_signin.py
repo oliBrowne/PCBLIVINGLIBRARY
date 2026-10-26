@@ -48,7 +48,9 @@ def _browser(code="CODE1", state=None, error=None):
     def open_url(url):
         q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
         seen.update(q)
-        back = {"error": error} if error else {"code": code, "state": state or q["state"]}
+        # Nexar sends the state back with an error too (RFC 6749 4.1.2.1); a request without this sign-in's state is
+        # ignored (any open web page can fetch localhost), so the fake browser sends it as the real one does
+        back = {"error": error, "state": q["state"]} if error else {"code": code, "state": state or q["state"]}
 
         def go():
             direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))     # localhost: never a proxy
@@ -99,7 +101,8 @@ def test_signin_rejects_wrong_state(tmp_path, monkeypatch):
     open_url, _ = _browser(state="forged")
     try:
         with redirect_stdout(io.StringIO()):
-            NS.signin("my-app", "s3cret", open_browser=open_url, redirect=_free_redirect(), post=idp, timeout=20)
+            # a wrong state no longer ends the wait (R-BR-5): it is ignored until the timeout, which names it
+            NS.signin("my-app", "s3cret", open_browser=open_url, redirect=_free_redirect(), post=idp, timeout=2)
     except NS.SigninError as e:
         assert "state" in str(e)
     else:

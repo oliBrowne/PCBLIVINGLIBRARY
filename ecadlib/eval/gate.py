@@ -282,15 +282,24 @@ def check(rep, base, tol=0.01, subset=False):
         elif not c["pass"]:
             why = "; ".join(c["errors"][:3]) if c["source"] != "none" else "unresolved: " + "; ".join(c["tried"][-2:])
             problems.append(f"{i}: passed in the baseline, now fails ({c['source']}): {why}")
+    # Oliver's rule: built wrong must be 0. A case that was held (failing in the baseline too) and now has a footprint
+    # built that is wrong is worse than before, though no pass rate moved (R-LE-2): any built-wrong case fails the gate
+    wrong = (rep["summary"].get("outcome") or {}).get("built_wrong") or []
+    named = {p.split(":", 1)[0] for p in problems}
+    for i in wrong:
+        if i in named:                                # already a failure: a baseline pass that now fails
+            continue
+        c = by.get(i) or {}
+        problems.append(f"{i}: built wrong ({c.get('source', '?')}): " + "; ".join((c.get("errors") or [])[:3]))
     was = set(base["passing"])
-    fixed = sorted(c["id"] for c in rep["cases"] if c["pass"] and c["id"] not in was)
+    fixed =sorted(c["id"] for c in rep["cases"] if c["pass"] and c["id"] not in was)
     o, bo = rep["summary"]["overall"], base["overall"]
     head = f"eval gate {rep['meta']['set']}: {o['pass']}/{o['cases']} pass (baseline {bo['pass']}/{bo['cases']}), " \
            f"{rep['meta']['wall_s']} s, network requests {rep['meta'].get('network_requests', '?')}"
     text = [head] + lines
     if fixed:
         text.append(f"newly passing ({len(fixed)}; `ecadlib eval gate --update` locks them in): " + ", ".join(fixed))
-    text += ([f"FAIL ({len(problems)}):"] + [f"  {p}" for p in problems]) if problems else ["OK: no family dropped, no passing case broke"]
+    text += ([f"FAIL ({len(problems)}):"] + [f"  {p}" for p in problems]) if problems else ["OK: no family dropped, no passing case broke, nothing built wrong"]
     return {"ok": not problems, "problems": problems, "fixed": fixed, "text": "\n".join(text)}
 
 
@@ -309,11 +318,16 @@ def main(argv=None):
         p = make_replay(a.set, a.replay)
         print(f"replay pack: {p} ({load_replay(p)['meta']['answers']} answers)")
         return 0
+    bp = Path(a.baseline or baseline_path(a.set))
+    if a.baseline and not a.update and not bp.exists():
+        # a mistyped --baseline wrote a new baseline from this run and passed (R-LE-5): creating one is asked for
+        print(f"ecadlib eval gate: baseline {bp} does not exist; check the path, or add --update to create it from "
+              "this run", file=sys.stderr)
+        return 2
     t0 = time.time()
     from .. import term as TM
     with TM.working(f"the {a.set} accuracy set (offline)"):
         rep = run(a.set, a.out, a.replay)
-    bp = Path(a.baseline or baseline_path(a.set))
     if a.update or not bp.exists():
         bp.parent.mkdir(parents=True, exist_ok=True)
         bp.write_text(json.dumps(baseline(rep), indent=1, sort_keys=True) + "\n", encoding="utf-8")

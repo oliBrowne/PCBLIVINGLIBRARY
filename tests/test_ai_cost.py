@@ -151,7 +151,7 @@ def test_altium_and_kicad_dialogs_offer_the_ai_step_with_its_cost():
     mod, _ = _plugin_module()                                      # the KiCad window's command line for the AI step
     c = mod.job_command(["ecadlib"], "J", "ai-read", "b.kicad_pcb", "LM358DR", bom="uploads/x.csv", part="LM358DR",
                         approved_usd="0.42", over_limit_ok="1", price_unknown_ok="")
-    assert c[-7:] == ["--bom", "uploads/x.csv", "--part", "LM358DR", "--approved-usd", "0.42", "--over-limit-ok"], c
+    assert c[-4:] == ["--bom=uploads/x.csv", "--part=LM358DR", "--approved-usd=0.42", "--over-limit-ok"], c
     assert "--price-unknown-ok" not in c and "ai-read" in KM.ACTIONS and "ai-read" in AM.ACTIONS
     with mock.patch.object(AM, "ai_read", lambda cfg, req, progress=None: {"status": "ok", "req": req}) as _:
         got = KM.run_action({}, "ai-read", "b.kicad_pcb", "LM358DR", ai={"bom": "x.csv", "approved_usd": "0.42"})

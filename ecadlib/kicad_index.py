@@ -11,16 +11,37 @@ SI = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "μ": 1e-6, "m": 1e-3, "": 1
       "k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9}
 PKG_RE = re.compile(r"(?<![0-9])(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)(?![0-9])|"
                     r"(?<![A-Z0-9])(SOT-?23(?:-\d)?|SOT-?223|SOIC-?\d+|SOP-?\d+|TSSOP-?\d+|QFN-?\d+|VQFN-?\d+|LQFP-?\d+|SMA|SMB|SOD-?\d+)(?![A-Z0-9])", re.I)
+EP_NAME = re.compile(r"-\d*EP(?=[_-]|$)|_EP\d", re.I)              # KiCad's exposed-pad lands: QFN-16-1EP_..._EP1.7x1.7mm
+EP_HINT = re.compile(r"\bEPAD\b|-\d*EP\b|\bEP\b|exposed|thermal ?pad|power ?pad|heat ?sink ?pad", re.I)   # not 'pad'
+                                                                    # alone ('touch pad controller')
+# KiCad's copies of one land: a hand-solder land (longer pads), thermal vias in the exposed pad, castellated pads
+LAND_VARIANT = re.compile(r"(?:_Pad\d+(?:\.\d+)?x\d+(?:\.\d+)?mm)?_Hand[_-]?Solder(?:ing)?$|_ThermalVias$|_Castellated$", re.I)
+NO_LEAD = re.compile(r"QFN|DFN|SON|MLF|MLP|LGA", re.I)            # leadless: an exposed pad is common and BOM text rarely
+                                                                  # says so
+
+
+def plain_land(name):
+    """A footprint name without KiCad's variant suffix: R_0603_1608Metric_Pad0.98x0.95mm_HandSolder -> R_0603_1608Metric."""
+    while LAND_VARIANT.search(name):
+        name = LAND_VARIANT.sub("", name)
+    return name
 BODY_RE = re.compile(r"(?<![0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x\d+(?:\.\d+)?)?mm", re.I)
 
 
-def norm_mpn(s):
+DECIMAL_POINT = re.compile(r"(?<=\d)\.(?=\d)")
+
+
+def norm_mpn(s, dots=True):
     """An MPN without case and punctuation, for comparing: 'LM358-DR' == 'lm358dr'. The micro sign is U (µA741CN ==
     UA741CN), fullwidth / accented letters fold to ASCII; a letter that has no ASCII form is kept, never dropped
-    (µA741CN must not become A741CN, another part)."""
+    (µA741CN must not become A741CN, another part). A decimal point between two digits is kept: SMAJ5.0A (a 5 V TVS)
+    is not SMAJ50A (a 50 V one), 1.5KE6.8A is not 1.5KE68A. dots=False drops it too, for reading a file name or a
+    text one character at a time (datasheet file names), never for deciding two MPNs are one part."""
     s = unicodedata.normalize("NFKD", str(s or "")).replace("µ", "U").replace("μ", "U")\
         .replace("Μ", "U")                                      # micro sign / mu ('µ'.upper() is a capital mu)
     s = "".join(c for c in s if not unicodedata.combining(c)).upper()
+    if dots and "." in s:
+        return ".".join(norm_mpn(t, False) for t in DECIMAL_POINT.split(s))
     if not s.isascii():
         return re.sub(r"[\W_]", "", s)
     return re.sub(r"[^A-Z0-9]", "", s)
@@ -90,6 +111,29 @@ def package_of(*texts):
         if m:
             return (m.group(1) or m.group(2)).upper().replace("-", "")
     return None
+
+
+EP_SIZE = re.compile(r"EP(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)", re.I)
+EP_FAMILY = re.compile(r"(?<![A-Za-z])(H(?:TSSOP|VSSOP|SOP|SOIC|MSOP|LQFP|TQFP)|PowerPAD|PowerSO)", re.I)   # always a pad
+
+
+def _same_ep(hits, hint):
+    """The package guesses whose exposed pad is the one the line names (R-BF-4): the line says EP -> lands with one,
+    of its size when it gives one (EP1.7x1.7 is not EP1.45x1.45); a leaded line that says none -> lands without one
+    (SOIC-8 is not SOIC-8-1EP). A leadless line that says nothing keeps both (most QFNs have a pad; the caller decides)."""
+    ep = bool(EP_HINT.search(hint) or EP_NAME.search(hint) or EP_FAMILY.search(hint))
+    size = EP_SIZE.search(hint)
+    out = []
+    for k in hits:
+        name = k.split(":")[-1]
+        has = bool(EP_NAME.search(name))
+        if ep and not has or not ep and has and not NO_LEAD.search(name):
+            continue
+        s = EP_SIZE.search(name)
+        if size and s and {float(size.group(1)), float(size.group(2))} != {float(s.group(1)), float(s.group(2))}:
+            continue
+        out.append(k)
+    return out
 
 
 def _body(text):
@@ -184,16 +228,32 @@ class KiCadIndex:
         if not package:
             return None
         pref, hits = self.CLASS_PREFIX.get(ref_class), []
+        array = re.search(r"array|network|\b\d+ ?x ?\d{4}\b", str(hint or ""), re.I)
         for k in self.footprints:
             name = k.split(":")[-1]
             if package_of(name) == package and (pref is None or name.startswith(pref)):
                 if pref is None and re.match(r"(R|C|L|D|LED)_", name):
                     continue                      # don't hand a passive footprint to an IC/connector
+                if "_Array_" in name and not array:
+                    continue                      # R_Array_Convex_4x0603 is four resistors, asked for by name only
                 hits.append(k)
-        bodies = {k: _body(k) for k in hits}
+        names = {k.split(":")[-1] for k in hits}
+        hits = [k for k in hits if plain_land(k.split(":")[-1]) == k.split(":")[-1]
+                or plain_land(k.split(":")[-1]) not in names]   # the hand-solder / thermal-vias copy of a land that
+                                                                # is there too is no second choice: the plain one
+        bodies = {k: _body(plain_land(k)) for k in hits}
         want = _body(hint)
         if want:                                  # body size known: it must agree (QFN-32 4x4 is not 5x5)
             hits = [k for k in hits if bodies[k] in (want, None)]
         elif len({b for b in bodies.values() if b}) > 1:
             return None                           # several body sizes and nothing to choose by: ambiguous
+        hits = _same_ep(hits, str(hint or ""))   # R-BF-4: a guess never drops, adds or resizes an exposed pad
+        if len(hits) > 1:                         # one body, several lands (with / without an exposed pad, EP sizes):
+            ep = bool(EP_HINT.search(str(hint or "")))       # the one the line's words name, never the first indexed
+            has = {bool(EP_NAME.search(k.split(":")[-1])) for k in hits}
+            if not ep and has == {True, False} and any(NO_LEAD.search(k.split(":")[-1]) for k in hits):
+                return None                       # 'QFN-16 3x3mm' saying nothing of a pad: most have one, some not
+            hits = [k for k in hits if bool(EP_NAME.search(k.split(":")[-1])) == ep]
+            if len(hits) > 1:
+                return None
         return hits[0] if hits else None

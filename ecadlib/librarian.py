@@ -36,7 +36,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import __version__
-from . import (altium365 as A365, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_3d as E3, easyeda_convert as EC,
+from . import (altium365 as A365, altium_export as AX, altium_lib as AL, bom_triage as T, datasheet as D, easyeda_3d as E3, easyeda_convert as EC,
                footprint_gen as F, fp_share as FS, kicad_import as K, providers as P, release_check as RC, rules as RU, sexpr)
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
@@ -94,8 +94,9 @@ class KiCadLibrary:
         f = Path(cache_file)
         retry = f.with_name(f.name + ".retry.json")
         wait = self._backoff(retry, now()) if not refresh else None
-        if f.exists() and not refresh and (getattr(http, "offline", False) or now() - f.stat().st_mtime < max_age):
-            self._load(f)
+        if f.exists() and not refresh and (getattr(http, "offline", False) or now() - f.stat().st_mtime < max_age) \
+                and self._load(f):
+            pass
         elif wait:
             self.error = wait
             if f.exists():                     # a stale index beats none
@@ -105,7 +106,9 @@ class KiCadLibrary:
                 self.symbols = self._crawl("kicad-symbols", ".kicad_symdir", ".kicad_sym")
                 self.footprints = self._crawl("kicad-footprints", ".pretty", ".kicad_mod")
                 f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_text(json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols, "footprints": self.footprints}), encoding="utf-8")
+                from .fsutil import write_text_atomic   # a crash mid-write (or a second run reading it) never sees half
+                write_text_atomic(f, json.dumps({"built": time.strftime("%Y-%m-%d"), "symbols": self.symbols,
+                                                 "footprints": self.footprints}))
                 retry.unlink(missing_ok=True)
             except IOError as e:
                 self.error = str(e)
@@ -119,17 +122,45 @@ class KiCadLibrary:
                         pass
                 if f.exists():                 # a stale index beats none
                     self._load(f)
+        self._build_norm()
+
+    def _build_norm(self):
         self._norm, self._wild, self._fpn = {}, [], []
         for name, libs in self.symbols.items():
             self._norm.setdefault(norm_mpn(name), []).extend(f"{l}:{name}" for l in libs)
             if re.search(r"(?<![0-9])x|x(?![0-9])", name) and re.search(r"[A-Z0-9]x", name) and not any(l.startswith("Connector") for l in libs):
-                rx = "".join("[A-Z0-9]" if c == "x" else re.escape(c.upper()) for c in re.sub(r"[^A-Za-z0-9]", "", name))
-                self._wild.append((re.compile(rx), [f"{l}:{name}" for l in libs]))
+                # a '.' between digits (or x wildcards) is kept by norm_mpn on the MPN side: 'LM1117-x.x' -> optional,
+                # and two x slots take a decimal point between them: 1.5KExxA is 1.5KE6.8A, SMAJxxA SMAJ5.0A (R-FX10-3)
+                flat = re.sub(r"(?<=[0-9x])\.(?=[0-9x])", "\x00", name)
+                flat = re.sub(r"[^A-Za-z0-9\x00]", "", flat)
+                rx = "".join(r"\.?[A-Z0-9]" if c == "x" and i and flat[i - 1] == "x" else
+                             "[A-Z0-9]" if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
+                             for i, c in enumerate(flat))
+                # an x may also stand for nothing: Microchip's MCP6L01x-xOT is MCP6L01-E/OT and MCP6L01T-E/OT (the
+                # x a blank or T), so MCP6L01R-E/OT fits MCP6L01Rx-xOT with that x blank. Then more than one name can
+                # fit; find_symbol takes the one with the most literal characters (R-SY-1). Only where an ordering
+                # letter goes: next to a '-' or '/' of the MPN (marked '|', see _marked) or at its end. A blank in
+                # the middle of the name makes another part: VTL5C2 (single Vactrol) is not VTL5Cx2, the dual (R-FX20-1)
+                blank = r"(?:[A-Z0-9]|(?=\|)|(?<=\|))"
+                bx = r"\|?".join(r"\.?" + blank if c == "x" and i and flat[i - 1] == "x" else
+                                 blank if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
+                                 for i, c in enumerate(flat)) + r"\|?"
+                lit = sum(c not in "x\x00" for c in flat)
+                self._wild.append((re.compile(rx), [f"{l}:{name}" for l in libs], lit, re.compile(bx)))
         self._fpn = [(norm_mpn(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items()]
 
     def _load(self, f):
-        d = json.loads(f.read_text(encoding="utf-8"))
-        self.symbols, self.footprints = d["symbols"], d["footprints"]
+        """The cached index -> True; one that does not read (cut short by a crash) -> False, so it is built again
+        instead of stopping every run until it is 30 days old."""
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            sy, fp = d["symbols"], d["footprints"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        if not isinstance(sy, dict) or not isinstance(fp, dict):
+            return False
+        self.symbols, self.footprints = sy, fp
+        return True
 
     @staticmethod
     def _backoff(retry, t):
@@ -178,17 +209,48 @@ class KiCadLibrary:
         if nm in self._norm:
             ref, more = self._pick(self._norm[nm])
             return ref, "exact name" + more
-        hits = [r for rx, refs in self._wild if rx.fullmatch(nm) for r in refs]
-        if hits:
-            ref, more = self._pick(hits)
+        fits = self._wild_fits(nm, mpn)
+        if fits:
+            best = max(lit for lit, _ in fits)
+            ref, more = self._pick([r for lit, refs in fits if lit == best for r in refs])
             return ref, "name with KiCad x wildcards" + more
-        raw = [i for i, c in enumerate(str(mpn)) if c.isalnum()]     # positions of the normalised characters
+        raw = [i for i, c in enumerate(str(mpn)) if c.isalnum() or     # positions of the normalised characters (a
+               (c == "." and str(mpn)[i - 1:i].isdigit() and str(mpn)[i + 1:i + 2].isdigit())]   # kept decimal point)
         for k in range(len(nm) - 1, max(5, int(len(nm) * 0.6)) - 1, -1):
             sep = raw[k] > raw[k - 1] + 1                             # a '-', '/', '(' ... right before the suffix
             if nm[:k] in self._norm and (len(nm) - k <= 2 or (sep and len(nm) - k <= 6)):
                 ref, more = self._pick(self._norm[nm[:k]])
                 return ref, f"name + ordering suffix '{str(mpn)[raw[k]:]}' (check the variant)" + more
         return None, None
+
+    @staticmethod
+    def _marked(mpn, nm):
+        """nm with '|' where the MPN had a '-' or '/' between two of its characters, and at its end: the places an
+        x of a KiCad name may stand for nothing (an ordering letter left out). Without a raw MPN (or when the
+        characters do not line up) only the end is marked."""
+        s = str(mpn or "")
+        raw = [i for i, c in enumerate(s) if c.isalnum() or (c == "." and s[i - 1:i].isdigit() and s[i + 1:i + 2].isdigit())]
+        if mpn is None or len(raw) != len(nm):
+            return nm + "|"
+        return "".join(("|" if k and set(s[raw[k - 1] + 1:raw[k]]) & set("-/") else "") + c
+                       for k, c in enumerate(nm)) + "|"
+
+    def _wild_fits(self, nm, mpn=None):
+        sp = self._marked(mpn, nm)
+        return [(w[2] if len(w) > 2 else 0, w[1]) for w in self._wild
+                if w[0].fullmatch(nm) or (len(w) > 3 and w[3].fullmatch(sp))]
+
+    def wild_alternates(self, mpn, ref):
+        """The other KiCad x-wildcard names (one ref each) the MPN fits besides ref's: an x may be a blank, so
+        MCP6L01R-E/OT fits MCP6L01Rx-xOT and MCP6L01x-xOT (x = R), whose supplies are the other way round. The
+        librarian compares their pinouts with ref's and holds the part when one differs (R-SY-1)."""
+        name = str(ref).split(":")[-1]
+        out = {}
+        for _, refs in self._wild_fits(norm_mpn(mpn), mpn):
+            n = refs[0].split(":")[-1]
+            if n != name:
+                out.setdefault(n, sorted(refs)[0])
+        return sorted(out.values())
 
     def generic_connector(self, value):
         for n in (value, f"{value}_Odd_Even"):
@@ -275,7 +337,16 @@ def passive_pins(sym):
     return dict(sym, prims=prims)
 
 
+def _hold_lost_copper(st, name, notes):
+    """kicad_import dropped copper it has no Altium layer for (B.Cu graphics, inner copper): the .PcbLib lacks copper
+    the KiCad footprint has, so the part is held for a person (a net tie's bottom bridge, an antenna's ground)."""
+    held = K.lost_copper_hold(name, notes)
+    if held:
+        st.setdefault("verify", []).append(held)
+
+
 def passive_kind(item):
+    from . import stdparts as SP
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
     if cat == "Resistors":
         return "R"
@@ -283,7 +354,7 @@ def passive_kind(item):
         return "CP" if fp.startswith("CP_") else "C"
     if cat == "Inductors":
         return "L"
-    if cat == "Diodes" and (fp.startswith("LED_") or re.search(r"\bLED\b", item.get("description") or "", re.I)):
+    if cat == "Diodes" and (fp.startswith("LED_") or SP.says_led(item.get("description"))):
         return "LED"
     return None
 
@@ -320,6 +391,20 @@ def _line_for(item, lines, rows):
             if score is None or s > score:
                 best, score = (ln, row), s
     return best
+
+
+def _own_land(names, plain):
+    """The first footprint field that names a land of its own rather than the chip size `plain` (R_0603_1608Metric):
+    a KiCad footprint name (R_Array_Convex_4x0603, L_Bourns_SRR1210A, a hand-solder variant), an array / shunt / RGB
+    name, or a maker's land named KiCad's way (L_Wuerth_WE-PD-Typ-LS_1210). -> that name, or None."""
+    from . import stdparts as SP
+    for t in names:
+        n = SP._strip_lib(t).strip()
+        if not n or n == plain:
+            continue
+        if n in SP.kicad_names() or SP.own_land_name(n):    # a maker land with no chip code read too (R-FX10-1)
+            return n
+    return None
 
 
 def _own_notes(rec):
@@ -368,18 +453,26 @@ class Run:
         """One file per footprint, shared only by parts whose pads are the same (ecadlib/fp_share.py).
         model: a downloaded 3D model already placed on the footprint (easyeda_model), the part's body and height."""
         bom_name = name
-        name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes)
+        own_h = model["info"].get("height") if model else height    # the part's own body: shared only with one as high
+        name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes,
+                                     own_h)
         renamed = {"renamed_from": bom_name} if name != bom_name else {}
         if same is not None:                    # (its own file from an earlier run, kept for a skipped part: not shared)
             st["footprint"] = {**{k: v for k, v in same.items() if k not in ("renamed_from", "chosen")},
                                "notes": _own_notes(same) if same.get("by") == st["name"] else
-                               [f"shared with {same['by']}"], "name": name, "hash": h, **renamed}
+                               [f"shared with {same['by']}"], "name": name, "hash": h, "hash_v": FS.HASH_V, **renamed}
+            _hold_lost_copper(st, name, same.get("notes") or [])
             self._relink(st, bom_name, name)
             return
         pcb, stem = Path(pcb), AL.file_stem(name)
-        notes = [f"named {name}: footprint {bom_name} is another part's, with other pads"] if renamed else []
+        body = renamed and own_h is not None and any(       # same pads, but another 3D body (R-CV-2)
+            FS.base_of(r).casefold() == bom_name.casefold() and FS.same_fp(r, h, source, self.out, self.hashes, text)
+            for r in self.written.values())
+        notes = [f"named {name}: footprint {bom_name} is another part's, with "
+                 + (f"another 3D body (this part's is {own_h} mm high)" if body else "other pads")] if renamed else []
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes,
                                     K.KICAD_LICENSE if source.startswith("kicad:") else "")
+        _hold_lost_copper(st, name, notes)
         if model:                               # the source's own 3D model: its shape and height beat any table
             E3.add_body(fp, model["text"], model["info"], model["ref"], notes, embed=self.gen_step)
             warn = E3.checks(model["info"], model["ref"], fp["pads"])
@@ -400,7 +493,8 @@ class Run:
         kmod.write_text(text, encoding="utf-8", newline="\n")
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
-                           "name": name, "hash": h, **renamed,
+                           "name": name, "hash": h, "hash_v": FS.HASH_V, "height": fp.get("height_mm") or None, **renamed,
+                           **({"mount_pads": explicit_mount_pads(spec)} if explicit_mount_pads(spec) else {}),
                            **({"model": {"source": f"easyeda:{model['ref']['uuid']}", "url": model["ref"]["url"],
                                          "title": model["ref"]["title"], "credit": EC.CREDIT}} if model else {})}
         self.written[str(pcb)] = st["footprint"]
@@ -417,7 +511,9 @@ class Run:
         AL.write_schlib(path, [sym])
         rec.setdefault("notes", []).append(f"footprint link {name} (the BOM's {bom_name} is another footprint)")
 
-    def put_sym(self, st, sym, source, notes=()):
+    def put_sym(self, st, sym, source, notes=(), kicad_types=None):
+        """kicad_types: {pin number: KiCad type} the .SchLib cannot hold (kicad_only_types), kept with the plan's
+        symbol so the KiCad export puts them back."""
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
         if st.get("kind") in SHARED_KINDS:      # one Resistor / Capacitor / Inductor symbol for every value and size,
             sym = shared_symbol(sym)            # whichever source drew it: no footprint, no one part's MPN
@@ -437,6 +533,8 @@ class Run:
         AL.write_schlib(path, [sym])
         self.syms[str(path)] = sym
         st["symbol"] = {"source": source, "file": self.rel(path), "notes": list(notes), "by": st["name"]}
+        if kicad_types:
+            st["symbol"]["kicad_types"] = dict(kicad_types)
         self.written[str(path)] = st["symbol"]
 
     def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
@@ -456,7 +554,8 @@ class Run:
             notes.append(f"pin text overlaps ({'; '.join(clash[:3])}); not a plain IC box, so kept as drawn: check it")
         elif stacked:
             notes.append(f"pins {', '.join(stacked[:3])} share one pin end; not a plain IC box, so kept as drawn: check it")
-        self.put_sym(st, sym, source, notes)
+        self.put_sym(st, sym, source, notes,
+                     kicad_types=kicad_chain_types(chain) if source.startswith(("kicad:", "local:")) else None)
 
     # ---- per part
     def resolve(self, item, ln, row, keep=None):
@@ -468,6 +567,8 @@ class Run:
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
+        if ln.get("altium_mpn_source") == "Alternate" and ln.get("footprint"):   # alternate_footprint: the land
+            st["alternate"] = True                     # is the base part's until the alternate's own read says so
         both = two_readings(ln.get("value"))
         if both:                                             # '4,700pF': 4.7 pF or 4.7 nF, so a person says which
             st["verify"].append(f"value {ln['value'].strip()} reads two ways: {both[0]} or {both[1]}; write it without the comma")
@@ -491,6 +592,10 @@ class Run:
             except Exception as e:            # one bad source or part must not stop the run
                 msg = cost_hint(str(e)) if s == "datasheet" else str(e)
                 st["tried"].append(f"{s}: failed ({type(e).__name__}: {msg}{_where(e)})")
+        bom_fp = str(ln.get("footprint") or "").strip()
+        if st.get("hint_fp") and bom_fp and AX.lands_differ(st["hint_fp"], bom_fp):    # R-BF-5: the BOM's land is
+            st["verify"].append(f"footprint: the BOM names {bom_fp} but the symbol's Footprint property is "   # built;
+                                f"{st['hint_fp']}: check which package the part has")    # the symbol says another
         lc = (row.get("lcsc") or "").split(" ")[0]
         if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
@@ -507,6 +612,9 @@ class Run:
                 chain, _ = K.load_symbol(f"{f}:{name}", None)
                 st["hint_fp"] = K._props(chain).get("Footprint", "")
                 self.put_kicad_sym(st, chain, sym_name, fp_name, f"local:{ls}")
+                how = re.search(r"\((.*)\)\s*$", row.get("local_symbol") or "")
+                if how and "check" in how.group(1):      # matched on the Comment / Value, the MPN a variant (R-BF-6)
+                    st["verify"].append(f"symbol {ls} matched by {how.group(1)}")
         if lf and lf in self.index.footprints and not st["footprint"]:
             text = Path(self.index.footprints[lf]["path"]).read_text(encoding="utf-8")
             spec = SPECS / f"{lf.split(':')[-1]}.json"
@@ -515,6 +623,29 @@ class Run:
         if ls or lf:
             st["tried"].append(f"local library: symbol {'from ' + ls if st['symbol'] else 'not used' if ls else 'none'}, "
                                f"footprint {'from ' + lf if st['footprint'] else 'none'}")
+
+    def _wild_other_pinout(self, lib, mpn, sym_ref, chain):
+        """Another x-wildcard name the MPN fits whose pin number -> name map differs from sym_ref's (MCP6L01x-xOT
+        against MCP6L01Rx-xOT: V+ and V- swapped), or one that cannot be read to compare; None when every one matches
+        (R-SY-1)."""
+        alts = lib.wild_alternates(mpn, sym_ref) if hasattr(lib, "wild_alternates") else []
+        if not alts:
+            return None
+        def pinout(ch):
+            sym = K.convert_symbol(ch, "x", None, [], None, [])
+            return sorted((str(p[1].get("num")), str(p[1].get("name"))) for p in sym["prims"] if p[0] == "pin")
+        try:
+            mine = pinout(chain)
+        except Exception:
+            return alts[0]
+        for alt in alts:
+            try:
+                theirs = pinout(K.load_symbol(alt, self.http)[0])
+            except Exception:                      # not readable: it cannot be shown to agree
+                return alt
+            if theirs != mine:
+                return alt
+        return None
 
     def src_kicad(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         lib = self.kicad()
@@ -528,8 +659,18 @@ class Run:
             if kind == "R" and RU.resistor_style(self.rules) == "us" and "Device" in lib.symbols.get("R_US", ()):
                 sym_ref = "Device:R_US"                # [symbols] resistor = "us": the zigzag symbol
             pkg = package_of(item["footprint"].get("kicad") or fp_name, item.get("description"))
-            if PASSIVE[kind][1] and pkg in IMP2MET:
-                fp_ref, fp_how = lib.footprint(PASSIVE[kind][1].format(pkg, IMP2MET[pkg])), f"by package {pkg}"
+            names = [ln.get("footprint", ""), item["footprint"].get("kicad") or fp_name]
+            named = next((lib.footprint(n) for n in names if lib.footprint(n)), None)
+            if named:                              # the land the BOM names, as named (R-BF-4): L_Bourns_SRR1210A is
+                fp_ref, fp_how = named, "BOM footprint name"            # not L_1210, R_Array_.. not a 2-pad R_0603
+            elif PASSIVE[kind][1] and pkg in IMP2MET:
+                guess = PASSIVE[kind][1].format(pkg, IMP2MET[pkg])
+                own = _own_land(names, guess.split(":")[-1])
+                if own:                            # a land of its own the index does not have: no package guess
+                    st["tried"].append(f"kicad: the BOM names the land {own}, not in the KiCad index; "
+                                       f"not guessed as {guess.split(':')[-1]} by package")
+                else:
+                    fp_ref, fp_how = lib.footprint(guess), f"by package {pkg}"
         elif not st["symbol"]:
             sym_ref, how = lib.find_symbol(mpn)
             own = bool(sym_ref)                        # this part's own symbol, not a generic one
@@ -550,12 +691,18 @@ class Run:
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
             if "check" in how:                     # a near name: a person checks it before it is released
                 st["verify"].append(f"symbol {sym_ref} matched by {how}")
+            elif own and "x wildcards" in how:
+                other = self._wild_other_pinout(lib, mpn, sym_ref, chain)
+                if other:
+                    st["verify"].append(f"symbol {sym_ref} matched by {how}, but the MPN also fits {other}, whose "
+                                        f"pinout differs (check the variant)")
         elif not st["symbol"]:
             st["tried"].append(f"kicad: no symbol named like {mpn or '(no MPN)'}")
         if st["footprint"]:
             return
         bom_fp = ln.get("footprint", "")
-        for cand, why in ((fp_ref, fp_how), (lib.footprint(st["hint_fp"]), "symbol's Footprint property"), (lib.footprint(bom_fp), "BOM footprint name"),
+        for cand, why in ((fp_ref, fp_how), (lib.footprint(bom_fp), "BOM footprint name"),     # the BOM's land first (R-BF-5)
+                          (lib.footprint(st["hint_fp"]), "symbol's Footprint property"),
                           (None if kind else lib.footprint_by_mpn(mpn), "footprint named after the MPN"),
                           (lib.footprint_by_prefix(bom_fp.split(":")[-1]), f"shortest KiCad name starting with '{bom_fp}'")):
             if cand:
@@ -847,6 +994,12 @@ class Run:
             st["tried"].extend(edited)
             st["review"].extend(edited)
         from . import stdparts as SP
+        if st.get("alternate"):                       # a variant's alternate: the package its own datasheet names
+            try:
+                known = list(res["sidecar"].get("package_from_pdf") or [])
+                st["alt_read_package"] = SP.identify(res["spec"], known[0] if len(known) == 1 else None)[0]
+            except Exception:                         # a read stdparts cannot judge names nothing
+                st["alt_read_package"] = None
         other = [r for r in res["needs_review"] if r.startswith("datasheet from your folder:")]   # another file's PDF
         st["review"].extend(other)
         st["verify"].extend(other)                    # its own hold reason: a person confirms this PDF is this part's
@@ -867,6 +1020,11 @@ class Run:
             if tab:
                 std = (tab, found, "a tab land runs under the body, where the IPC tab built from the read covers only "
                        "the exposed tab, and the datasheet gives no land of its own")
+        # (a person's fp-edit settles the footprint's holds, below; the symbol's is judged on the edited read: a pad
+        # rename that fixes the pin numbers lifts it, a pad-table edit that leaves the channels wrong does not)
+        held = None if st["symbol"] else D.read_hold(res, False)
+        if held:                                      # the read's symbol still fails a check that wires it wrong
+            raise D.DatasheetError(held)
         if not st["footprint"]:                       # before any land choice: a table land never replaces these holds
             maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
             joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
@@ -907,10 +1065,14 @@ class Run:
             h = F.dim((res["spec"] if hs == "datasheet height_max" else sp)["height_max"])[2] if hs else None   # this part's own height first
             need_pins()
             self.put_fp(st, text, fp_name, f"standard:{SP.kicad_ref(pkg)}", None, h, hs or "", sp)
+            st["alt_own_land"] = bool(st.get("alternate"))   # from the alternate's own read, not the base part's name
             got.append(f"footprint {SP.kicad_ref(pkg)} (identified from the read)")
             st["review"].append(f"standard land: the datasheet read identified {pkg} ({found}); {why}, so the checked standard "
                                 f"land was used. Check the package code on the drawing is this one")
         elif not st["footprint"]:
+            held = None if edited else D.read_hold(res)   # built from the read's own numbers: after every rescue (no
+            if held:                                  # checked land, no settle), a read that still fails a check
+                raise D.DatasheetError(held)          # that can build it wrong is held, nothing written
             st["review"].extend(pad_table_problems(res["spec"]))
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
@@ -924,6 +1086,7 @@ class Run:
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
             need_pins()
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
+            st["alt_own_land"] = bool(st.get("alternate"))
             got.append("footprint")
         need_pins()
         if not st["symbol"]:
@@ -933,8 +1096,12 @@ class Run:
                 if SL.wants_layout(sym["pins"], self.rules) else []
             if renamed:
                 notes.append("house style pin names: " + ", ".join(renamed[:6]) + (" ..." if len(renamed) > 6 else ""))
+            odd = SL.unknown_types_line(sym["pins"])
+            if odd:                                      # drawn passive: never silently
+                st["review"].append(f"symbol: {odd}")
+                notes.append(odd)
             self.put_sym(st, AL.symbol_from_json(dict(sym, name=sym_name, footprint=fp_name), self.rules), f"datasheet:{url}",
-                         notes)
+                         notes, kicad_types=kicad_only_types(sym["pins"]))
             got.append("symbol")
         rt = res["sidecar"].get("route") or {}
         n_ans = len(rt.get("attempts") or [])
@@ -944,13 +1111,47 @@ class Run:
                               if rt.get("model") else ""))
         cc = res.get("cross_check")
         if cc:
-            st["cross_check"] = {"status": cc["status"], "summary": CC.summary_line(cc)}
+            st["cross_check"] = cross_check_state(cc)
             st["tried"].append(f"cross-check ({cc['mode']}): {cc['status']}: {CC.summary_line(cc)}")
         if url:                                       # (a PDF from the [datasheet] folder of a line with no link has none)
             st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                             "see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+
+
+def cross_check_state(cc):
+    """The part's cross-check record in the plan: status and summary, and pins: unchecked when no second source
+    compared the symbol's pin names (crosscheck.pins_status, review R-RT-2)."""
+    from . import crosscheck as CC
+    out = {"status": cc["status"], "summary": CC.summary_line(cc)}
+    if cc.get("pins") == "unchecked":
+        out["pins"] = "unchecked"
+    return out
+
+
+def kicad_chain_types(chain, pin_map=None):
+    """{pin number: KiCad type} of a KiCad symbol's (extends chain's) pins whose type an Altium .SchLib cannot hold
+    (power_out, no_connect): recorded with the plan's symbol, so a KiCad export that reads the .SchLib back (the source
+    not reachable, or changed since the release) puts them back. pin_map: the conversion's {KiCad number: plan number}."""
+    out = {}
+    for s in chain or []:
+        for u in sexpr.find(s, "symbol"):
+            for p in sexpr.find(u, "pin"):
+                num = sexpr.first(p, "number")
+                if num and len(p) > 1 and str(p[1]) in ("power_out", "no_connect"):
+                    n = str(num[1]).strip('"')
+                    out[str((pin_map or {}).get(n, n))] = str(p[1])
+    return out
+
+
+def kicad_only_types(pins):
+    """{pin number: KiCad type} for the pins whose type an Altium .SchLib cannot hold: power_out (Altium has one Power
+    type) and no_connect (Altium has none, an NC pin is Passive there). The KiCad export puts them back on the read-back
+    symbol, so ERC sees the rail a regulator's output drives."""
+    k = {"power_out": "power_out", "nc": "no_connect"}
+    return {str(q["num"]): k[t] for q in pins or [] if q.get("num") not in (None, "")
+            for t in [SL._ptype(q.get("type"))] if t in k}
 
 
 def pad_table_problems(spec):
@@ -1049,13 +1250,75 @@ def write_notice(out, items):
     return f
 
 
+ALTERNATE = "variant alternate part"
+
+
+def alternate_footprint(ln, st):
+    """A project variant's alternate part (Kind=2, altium_project.apply_variant) keeps the base part's footprint:
+    Altium's variation names no footprint for the alternate, and alternates usually share the land. When it does
+    not (LM358DR SOIC-8 -> MCP6002T-I/MS, an MSOP), the part would be built on the wrong land, so the line is held
+    for a person unless the alternate's own data confirms the land: its footprint was built from its own datasheet
+    read, a person chose it (`ecadlib resolve`), or its datasheet read names the same checked package as the
+    inherited footprint (stdparts.identify == stdparts.footprint_for). -> (verify line, review line); (None, None)
+    for any other line."""
+    from . import stdparts as SP
+    fp = str(ln.get("footprint") or "").strip()
+    if ln.get("altium_mpn_source") != "Alternate" or not fp:
+        return None, None
+    mpn, rec = ln.get("mpn") or "(no part number)", st.get("footprint") or {}
+    if rec.get("chosen"):
+        return None, f"{ALTERNATE} {mpn}: footprint chosen by a person"
+    if st.get("alt_own_land") and str(rec.get("source") or "").startswith(("datasheet:", "standard:")):
+        return None, f"{ALTERNATE} {mpn}: footprint built from its own datasheet read, not the base part's {fp}"
+    try:
+        want = SP.footprint_for([fp])[0]
+    except Exception:
+        want = None
+    own = st.get("alt_read_package")
+    if want and own == want:
+        return None, (f"{ALTERNATE} {mpn}: the base part's footprint {fp} kept: {mpn}'s datasheet read names the same "
+                      "package")
+    mk, ms = SP.mpn_size(ln.get("mpn"))                # a passive whose part number codes its chip size (RC0603FR..,
+    if ms and not SP.own_land_name(fp):                # GRM155..): that size and kind on a plain chip land (R-FX10-5)
+        m = re.match(r"^(R|C|L)_(\d{4,5})_\d{4,5}Metric$", want or "")
+        kind, size = (m.group(1), m.group(2)) if m else (st.get("kind"), SP.chip_size(fp, strict=True))
+        if size == ms and kind == mk:
+            return None, f"{ALTERNATE} {mpn}: the base part's footprint {fp} kept: {mpn} codes the same {ms} {mk} chip"
+    return (f"{ALTERNATE} {mpn}: footprint {fp} is the base part's (an Altium variant names no footprint for its "
+            "alternate)" + (f", and {mpn}'s datasheet read names {own}" if own else "") +
+            f": check {mpn} comes in that package, or give the alternate its own footprint"), None
+
+
+def explicit_mount_pads(spec):
+    """How many unnumbered copper pads the read's pad table itself calls mounting / shield pads (role mount or
+    shield, on the row or default_pad): the release check holds any other unnumbered copper pad (R-SY-2)."""
+    t = (spec or {}).get("pad_table") or {}
+    base = t.get("default_pad") or {}
+    n = 0
+    for p in t.get("pads") or []:
+        q = dict(base, **{k: v for k, v in p.items() if v is not None})
+        if str(q.get("number") if q.get("number") is not None else "").strip() == "" and q.get("type") != "npth" \
+                and q.get("role") in ("mount", "shield"):
+            n += 1
+    return n
+
+
 def apply_state(item, st, ln):
     """Copy a part's state into its plan item: model files, sources, filled-in fields, what was tried."""
     for k in ("symbol", "footprint"):
         if st.get(k):
             item[k]["file"] = st[k]["file"]
+            if k == "symbol":                          # the pin types Altium cannot hold (power_out, no_connect)
+                if st[k].get("kicad_types"):
+                    item[k]["kicad_types"] = dict(st[k]["kicad_types"])
+                else:
+                    item[k].pop("kicad_types", None)
             if k == "footprint":
                 item[k]["kicad_mod"] = st[k].get("kicad_mod")
+                if st[k].get("mount_pads"):            # the pad table's own unnumbered mounting pads (R-SY-2)
+                    item[k]["mount_pads"] = st[k]["mount_pads"]
+                else:
+                    item[k].pop("mount_pads", None)
                 if st[k].get("model"):                 # where its 3D model came from (EasyEDA's STEP, with the credit)
                     item[k]["model"] = st[k]["model"]
                 else:
@@ -1095,12 +1358,16 @@ def apply_state(item, st, ln):
             item["description"], fields["Description"] = desc, "the BOM line's value and package"
     item["field_sources"] = fields
     item["verify"] = list(st.get("verify", []))
+    alt_hold, alt_note = alternate_footprint(ln or {}, st)
+    if alt_hold:
+        item["verify"].append(alt_hold)
     if st.get("cross_check"):                     # ecadlib.crosscheck: agreed / disagreed (held) / unchecked / skipped
         item["cross_check"] = dict(st["cross_check"])
     else:
         item.pop("cross_check", None)
     item["librarian"] = {"tried": st.get("tried", []),
-                         "review": list(dict.fromkeys(st.get("review", []) + item.get("bom_notes", []))),
+                         "review": list(dict.fromkeys(st.get("review", []) + item.get("bom_notes", []) +
+                                                      ([alt_note] if alt_note else []))),
                          "notes": [n for k in ("symbol", "footprint") for n in (st.get(k) or {}).get("notes", [])]}
 
 
@@ -1321,42 +1588,46 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     if todo:
         save_state()                           # a stop while the summary is logged keeps them too
-    for it in items:
-        apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
-        for k in ("allow", "approvals", "duplicate_of"):     # decisions people made survive re-runs
-            if old.get(it["name"], {}).get(k):
-                it[k] = old[it["name"]][k]
-        prev = old.get(it["name"]) or {}
-        for k, was in (prev.get("merged_from") or {}).items():   # `ecadlib dedupe --merge` pointed this half at a keeper
-            if k in ("symbol", "footprint") and it[k].get("ref") == was.get("ref") and (prev.get(k) or {}).get("file") \
-                    and RC._path(out, prev[k]["file"]).exists():
-                it[k] = dict(prev[k])
-                it.setdefault("merged_from", {})[k] = was
-        log(f"  {'skip ' if state[it['name']].get('skipped') else 'done ' if _done(state[it['name']], out) else 'open '}"
-            f"{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
-    state = {k: v for k, v in state.items() if k in {i["name"] for i in items}}
-    for n in set(allow) - set(state):
-        log(f"  --allow {n}: not a part in this plan (names are the plan's Part Numbers)")
-    write_text_atomic(state_f, json.dumps(state, indent=2))
-    from . import house_style as HS                 # new parts in your house style (house_style.json, [style] apply)
-    prof = HS.active(rules, out)
-    if prof:
-        styled = HS.adapt_items(items, prof, rules)
-        if styled:
-            log(f"  style {len(styled)} part(s) written in your house style (descriptions, value formats)")
-    gate.settle(items)                         # held changes put the released files and fields back first
-    t_check = time.time()
-    TI.record(out, "build", t_build, t_check, parts=len(todo))
-    checks = RC.apply(items, out, allow, rules=rules)
-    if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
-        from .approvals import identity, post_check, stamp_allow
-        stamp_allow(items, allow, identity(user, cwd=out))
-        post_check(items, out, checks)
-    gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger (a new
-                                               # part with a released part's MPN is compared with it first)
-    gate.retire([n for n in old if n not in {i["name"] for i in items}], f"no longer in the plan ({Path(bom).name})")
-    CG.record_bom_usage(out, bom, items)
-    write_text_atomic(plan_f, json.dumps(items, indent=2))
+    from . import ledger as LG                 # the library lock across the whole block, then plan.lock (fsutil's order):
+    with LG.locked(out), _decisions_lock(plan_f):   # the gate steps below let go of their own hold between settle and baseline
+        # decisions people recorded while this run looked parts up (the web UI,
+        old = _fresh_decisions(old, plan_f)    # `ecadlib approve`) are kept, not overwritten with the run's old copy
+        for it in items:
+            apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])
+            for k in DECISIONS:                                  # decisions people made survive re-runs
+                if old.get(it["name"], {}).get(k):
+                    it[k] = old[it["name"]][k]
+            prev = old.get(it["name"]) or {}
+            for k, was in (prev.get("merged_from") or {}).items():   # `ecadlib dedupe --merge` pointed this half at a keeper
+                if k in ("symbol", "footprint") and it[k].get("ref") == was.get("ref") and (prev.get(k) or {}).get("file") \
+                        and RC._path(out, prev[k]["file"]).exists():
+                    it[k] = dict(prev[k])
+                    it.setdefault("merged_from", {})[k] = was
+            log(f"  {'skip ' if state[it['name']].get('skipped') else 'done ' if _done(state[it['name']], out) else 'open '}"
+                f"{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
+        state = {k: v for k, v in state.items() if k in {i["name"] for i in items}}
+        for n in set(allow) - set(state):
+            log(f"  --allow {n}: not a part in this plan (names are the plan's Part Numbers)")
+        write_text_atomic(state_f, json.dumps(state, indent=2))
+        from . import house_style as HS                 # new parts in your house style (house_style.json, [style] apply)
+        prof = HS.active(rules, out)
+        if prof:
+            styled = HS.adapt_items(items, prof, rules)
+            if styled:
+                log(f"  style {len(styled)} part(s) written in your house style (descriptions, value formats)")
+        gate.settle(items)                         # held changes put the released files and fields back first
+        t_check = time.time()
+        TI.record(out, "build", t_build, t_check, parts=len(todo))
+        checks = RC.apply(items, out, allow, rules=rules)
+        if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
+            from .approvals import identity, post_check, stamp_allow
+            stamp_allow(items, allow, identity(user, cwd=out))
+            post_check(items, out, checks)
+        gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger (a new
+                                                   # part with a released part's MPN is compared with it first)
+        gate.retire([n for n in old if n not in {i["name"] for i in items}], f"no longer in the plan ({Path(bom).name})")
+        CG.record_bom_usage(out, bom, items)
+        write_text_atomic(plan_f, json.dumps(items, indent=2))
     write_notice(out, items)
     rec.close()
     MG.write_stamp(out, ["plan", "librarian_state"])
@@ -1365,6 +1636,68 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     write_review(review_rows(items), out, bom, items)
     TI.record(out, "release_check", t_check, held=sum(i.get("status") == "held" for i in items))
     return items
+
+
+DECISIONS = ("allow", "approvals", "duplicate_of")    # what people decide on a plan item: a re-run keeps it
+
+
+def _decisions_lock(plan_f):
+    """The workspace's plan lock (<ws>/plan.lock, which every decision recorder takes) while the run settles and
+    writes its plan, for a plan in a workspace (<ws>/librarian/<name>/plan.json); else no lock."""
+    import contextlib
+    from .approvals import plan_workspace
+    from .fsutil import plan_lock
+    ws = plan_workspace(plan_f)
+    return plan_lock(ws, wait=True) if ws is not None else contextlib.nullcontext()
+
+
+def _fresh_decisions(old, plan_f):
+    """old (the plan as the run started, by name) with each part's decisions as plan.json has them now: a reject,
+    approval, release-anyway or hold-again recorded during the run wins over the copy read at its start."""
+    try:
+        now = {i["name"]: i for i in json.loads(plan_f.read_text(encoding="utf-8"))}
+    except (OSError, ValueError, TypeError, KeyError):
+        return old
+    out = dict(old)
+    for n, it in now.items():
+        if n in out and isinstance(it, dict):
+            out[n] = {**{k: v for k, v in out[n].items() if k not in DECISIONS}, **{k: it[k] for k in DECISIONS if k in it}}
+    return out
+
+
+def keep_decisions(items, plan_f):
+    """In place: each plan item's decisions as plan.json has them now (a step that read the plan long ago, such as a
+    datasheet batch, must not write back the old ones). Call under _decisions_lock(plan_f). -> the items whose
+    decisions changed."""
+    by = {i["name"]: i for i in items if isinstance(i, dict) and i.get("name")}
+    changed = []
+    for n, fresh in _fresh_decisions(dict(by), plan_f).items():
+        it = by[n]
+        was = {k: it.get(k) for k in DECISIONS}
+        for k in DECISIONS:
+            if k in fresh:
+                it[k] = fresh[k]
+            else:
+                it.pop(k, None)
+        if was != {k: it.get(k) for k in DECISIONS}:
+            changed.append(it)
+    return changed
+
+
+def save_plan(plan_f, items, rules=None, keep=None):
+    """Write a librarian plan that a step read earlier (change control's `ecadlib part approve`, a publisher's settle,
+    `ecadlib style apply`) while other front ends may record decisions into it (the web UI's Approvals, `ecadlib
+    approve`, release anyway): under the plan lock, each part's decisions are taken as plan.json has them now, and a
+    part whose decisions changed meanwhile gets the release check again, so a reject recorded meanwhile leaves it
+    not ready. keep(item): which items go into the file (default all). Written atomically."""
+    from . import release_check as RC
+    plan_f = Path(plan_f)
+    with _decisions_lock(plan_f):
+        changed = keep_decisions(items, plan_f)
+        if changed:
+            RC.apply(changed, plan_f.parent, rules=rules)
+        write_text_atomic(plan_f, json.dumps([i for i in items if keep is None or keep(i)], indent=2))
+    return changed
 
 
 def main(argv=None):

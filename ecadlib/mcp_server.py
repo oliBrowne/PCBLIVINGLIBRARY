@@ -78,7 +78,10 @@ TOOLS = [
                                     "stack": {"type": "string", "enum": ["stack", "hide", "none"]},
                                     "save": {"type": "boolean"}, "overwrite": {"type": "boolean"}}}},
     {"name": "export_altium_dblib",
-     "description": "Write an Altium DbLib (SQLite + XLSX + .DbLib files) for a BOM into the workspace altium/ folder.",
+     "description": "Write the Altium DbLib (.DbLib + table) for a BOM into the workspace altium/<BOM>/ folder, from the "
+                    "librarian's plan: only release-checked ready parts, their .SchLib/.PcbLib copied beside it; held "
+                    "parts are listed in `held`. Refused for a BOM librarian_run has not run for (nothing is built or "
+                    "checked yet): run librarian_run first.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "librarian_run",
      "description": "BOM to library in one go: triage the BOM, fill every missing symbol and footprint (official KiCad "
@@ -99,7 +102,8 @@ TOOLS = [
     {"name": "release_check",
      "description": "Re-run the release check on the librarian's plan for a BOM. allow releases the named parts despite "
                     "their current failures (only when the user has looked and agreed; it is recorded in the plan); "
-                    "unallow takes that back. user names the person giving the allow (recorded for sign-off). Held "
+                    "unallow takes that back. user is the person giving the allow, required with allow (recorded for "
+                    "sign-off; ask the user who they are and pass their own answer, never invent a name). Held "
                     "parts are never pushed to Altium 365.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"},
@@ -203,9 +207,11 @@ TOOLS = [
     {"name": "altium365_push",
      "description": "Release the ready parts of a BOM into an Altium 365 workspace and update parameters of parts already "
                     "there. dry_run defaults to true and only returns the requests. A real push (dry_run false) changes "
-                    "the user's workspace: only do it when the user has explicitly asked for that push. Needs NEXAR_TOKEN.",
+                    "the user's workspace: only do it when the user has explicitly asked for that push. A real push goes only to "
+                    "the workspace the rules name ([altium365] workspace; no workspace given = that one) and is refused "
+                    "for any other or when none is configured. Needs NEXAR_TOKEN.",
      "inputSchema": {"type": "object", "required": ["bom"],
-                     "properties": {"bom": {"type": "string"}, "workspace": {"type": "string", "description": "workspace URL"},
+                     "properties": {"bom": {"type": "string"}, "workspace": {"type": "string", "description": "workspace URL (a real push: the configured one)"},
                                     "dry_run": {"type": "boolean", "default": True}}}},
     {"name": "upkeep_run",
      "description": "Run the library upkeep checks for a BOM (its librarian plan when there is one): lifecycle (NRND/EOL, "
@@ -266,7 +272,9 @@ TOOLS = [
      "description": "Write the workspace's ecadlib.toml (the `toml` from propose_rules, possibly edited with the user). Only "
                     "after the user has agreed to the proposal. If a different file exists nothing is written and the diff "
                     "comes back (needs_confirm): show it and call again with overwrite true only when the user says to "
-                    "replace it (the old file is kept as ecadlib.toml.bak).",
+                    "replace it (the old file is kept as ecadlib.toml.bak). Release gates ([altium365], [release], [change], "
+                    "parameters required (may only grow), datasheet cross_check off, agent.proof fail_on) and where "
+                    "requests / keys go or the spending limits are refused: the user edits those themselves.",
      "inputSchema": {"type": "object", "required": ["toml"],
                      "properties": {"toml": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}}},
     {"name": "learn_house_style",
@@ -424,9 +432,59 @@ TOOLS = [
      "inputSchema": {"type": "object",
                      "properties": {"win_dir": {"type": "string", "description": "Windows folder of altium_menu/ on the Altium PC"},
                                     "name": {"type": "string", "description": "library name"},
-                                    "command": {"type": "string", "description": "how to run ecadlib there (default: find it)"},
+                                    "command": {"type": "string", "description": "how to run ecadlib there (default: find it): "
+                                                "ecadlib, py -3 -m ecadlib or \"C:\\...\\python.exe\" -m ecadlib"},
                                     "port": {"type": "integer", "default": 8765}}}},
 ]
+
+
+_EXE_NAME = r"(?:python(?:3(?:\.\d{1,2})?)?w?|py|ecadlib)"
+_MENU_EXE = re.compile(rf'{_EXE_NAME}(?:\.exe)?'                                   # on PATH: ecadlib, py, python3.11
+                       rf'|"[A-Za-z]:[\\/][^"%!^\r\n\x00-\x1f]*[\\/]{_EXE_NAME}\.exe"'   # quoted: & ( , ; = are literal there
+                       rf'|[A-Za-z]:\\(?:[A-Za-z0-9_.+-]+\\)*{_EXE_NAME}\.exe(?=\s|$)', re.I)  # unquoted: plain names only
+_MENU_ARGS = re.compile(r"(?:\s+-3(?:\.\d{1,2})?)?\s+-m\s+ecadlib|", re.I)
+
+
+def _menu_command(ws, cmd):
+    """altium_menu's command over MCP: the Altium menu's runner executes it on the Altium PC (cmd.exe), so an agent
+    gives only a way to run ecadlib (ecadlib, py -3 -m ecadlib, python -m ecadlib, or a python.exe / ecadlib.exe path
+    with -m ecadlib), never another program, shell characters (& | < > ^ % and, outside quotes, the cmd delimiters
+    , ; = ( ) or a line break (which would rewrite another setting of the .ini). A path outside quotes may hold only
+    letters, digits and _ . + -; a network (UNC) path or a program uploaded into the workspace is refused. A person
+    sets anything else themselves. '' = the default (found on that PC)."""
+    import os
+    from pathlib import Path
+    cmd = str(cmd or "").strip()
+    if not cmd:
+        return ""
+    m = _MENU_EXE.match(cmd)
+    rest = cmd[m.end():] if m else ""
+    exe = m.group(0).strip('"').replace("/", "\\").lower() if m else ""
+    is_ecadlib = re.sub(r"\.exe$", "", exe.rsplit("\\", 1)[-1]) == "ecadlib"
+    ok = bool(m) and bool(_MENU_ARGS.fullmatch(rest)) and (is_ecadlib != bool(rest.strip()))
+    if ok and "\\uploads\\" in exe:
+        ok = False                                       # what upload_bom stores, on any OS the workspace is shared from
+    if ok and ":" in exe and os.name == "nt":
+        p = Path(m.group(0).strip('"')).resolve()
+        ok = not (p == ws.root or ws.root in p.parents)  # not a program uploaded into the workspace
+    if not ok:
+        raise ValueError(f"command {cmd[:80]!r}: give only how to run ecadlib on the Altium PC: ecadlib, py -3 -m ecadlib, "
+                         'python -m ecadlib or "C:\\...\\python.exe" -m ecadlib (empty: found there). The menu runs it '
+                         "with cmd.exe, so another program or shell characters are for the person to set: command= in "
+                         "altium_menu/ecadlib_menu.ini, or `ecadlib altium-menu build --command`")
+    return cmd
+
+
+def _menu_win_dir(win_dir):
+    """altium_menu's win_dir over MCP: the ready-made menu runs a DelphiScript project from there, so only a local
+    drive folder (D:\\ecadlib-menu); a network (UNC) share is for the person to set with `ecadlib altium-menu`."""
+    if not win_dir:
+        return None
+    w = str(win_dir)
+    if not re.match(r"[A-Za-z]:[\\/]", w) or "\\\\" in w.replace("/", "\\")[2:] or ".." in re.split(r"[\\/]", w):
+        raise ValueError(f"win_dir {w[:80]!r}: give a folder on a local drive of the Altium PC (D:\\ecadlib-menu); a network "
+                         "share is for the person to set with `ecadlib altium-menu build --win-dir`")
+    return w
 
 
 def call_tool(ws, name, args, progress=None):
@@ -547,6 +605,14 @@ def call_tool(ws, name, args, progress=None):
             return ws.example_specs()
         if name == "propose_rules":
             r = ws.propose_rules(args.get("paths") or None, args.get("a365") or None, args.get("choices") or None)
+            keep = _required_kept(ws, r)     # save_rules may not drop a required parameter: the proposal keeps them
+            if keep:
+                r = ws.propose_rules(args.get("paths") or None, args.get("a365") or None,
+                                     {**(args.get("choices") or {}), "parameters.required": keep[0]})
+                r.setdefault("warnings", []).append(
+                    f"parameters.required: kept {', '.join(keep[1])} (required by the rules in force, though the "
+                    "library does not fill it on most parts): save_rules over MCP may only add required "
+                    "parameters; a person can drop one in ecadlib.toml or on the rules page of the web UI")
             if not args.get("full"):
                 for st in r["settings"]:
                     st["evidence"] = st["evidence"][:3]
@@ -581,11 +647,15 @@ def call_tool(ws, name, args, progress=None):
         if name == "export_parts":
             return ws.export_parts(args["bom"], args.get("format") or "csv", args.get("include_held") is True)
         if name == "kicad_dblib":
-            return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", args.get("driver") or None,
-                                  args.get("include_held") is True)
+            driver = args.get("driver") or None
+            if driver and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,79}", driver):
+                raise ValueError(f"driver {driver[:80]!r}: give an ODBC driver's name, e.g. SQLite3 ODBC Driver or SQLite3 "
+                                 "(it goes into the .kicad_dbl's connection string: no path, braces or ';'); a driver "
+                                 "library path is for the person to set with `ecadlib kicad-dblib --driver`")
+            return ws.kicad_dblib(args["bom"], args.get("name") or "ecadlib", driver, args.get("include_held") is True)
         if name == "altium_menu":
-            return ws.altium_menu(args.get("win_dir") or None, args.get("name") or "ecadlib", args.get("command") or "",
-                                  args.get("port") or 8765)
+            return ws.altium_menu(_menu_win_dir(args.get("win_dir")), args.get("name") or "ecadlib",
+                                  _menu_command(ws, args.get("command") or ""), args.get("port") or 8765)
         if name == "parity":
             return ws.parity(args["bom"], args.get("kicad") is True, args.get("name") or "ecadlib")
         if name == "tool_packages":
@@ -734,8 +804,8 @@ def _normalize(tool, args):
                     out[k] = int(f) if typ == "integer" and f == int(f) else f
             except ValueError:
                 pass
-        elif typ == "integer" and isinstance(v, float) and v == int(v):
-            out[k] = int(v)
+        elif typ == "integer" and isinstance(v, float) and math.isfinite(v) and v == int(v):
+            out[k] = int(v)                            # 1e999 (json reads it as inf) stays a float: the schema refuses it
         elif typ == "string" and isinstance(v, (int, float)) and not isinstance(v, bool):
             out[k] = str(v)
         elif typ == "object" and isinstance(v, str):
@@ -918,13 +988,181 @@ def _check_endpoints(ws, text):
             v = v[part]
         return _fp(v)
     changed = sorted(k for k in set(old) | set(new) if old.get(k, default(k)) != new.get(k, default(k)))
+    mine = ws.rules_file()
+    keep = ("" if f == mine else f". save_rules writes {ws._label(mine)}, which would replace "
+                                 f"{ws._label(f)} for this workspace, so keep its values of those settings")
     if changed:
-        mine = ws.rules_file()
         raise ValueError(f"save_rules cannot change {', '.join(changed)} (where requests and your API keys / tokens "
                          "go, or the spending limits): "
-                         f"ask the user to edit {ws._label(f)} themselves"
-                         + ("" if f == mine else f". save_rules writes {ws._label(mine)}, which would replace "
-                                                 f"{ws._label(f)} for this workspace, so keep its values of those settings"))
+                         f"ask the user to edit {ws._label(f)} themselves" + keep)
+    try:
+        old = _gates(f.read_text(encoding="utf-8-sig"), f.name) if f.is_file() else {}
+    except RulesError:
+        old = {}
+    new = _gates(text if isinstance(text, str) else "", mine.name)
+    for g, t, n in ((old, f.read_text(encoding="utf-8-sig") if f.is_file() else "", f.name),
+                    (new, text if isinstance(text, str) else "", mine.name)):
+        if "parameters.required" in g:           # each list in its own file's house names: compared as ecadlib's
+            g["parameters.required"] = _canon_required(g["parameters.required"], _param_names(t, n))
+    loosened = sorted(k for k in set(old) | set(new) if _loosens(k, _gate_default(k) if k not in old else old[k],
+                                                                    _gate_default(k) if k not in new else new[k]))
+    if loosened:
+        raise ValueError(f"save_rules cannot change {', '.join(loosened)}: these are release gates (the Altium 365 "
+                         "workspace a real push may go to, the sign-off policy, change control, the release check, "
+                         "the required parameters, the datasheet cross-check, the pin-1 names, the courtyard layer). A "
+                         f"person must change them, in {ws._label(f)} or on the rules page of the ecadlib web UI; a "
+                         "model over MCP may only make them stricter" + keep)
+
+
+GATE_SECTIONS = ("altium365", "release", "change")      # every setting under these is a release gate
+GATE_WHOLE = {"release.approvals",                      # a table compared as one value (sign-off policy)
+              "parameters.required", "datasheet.cross_check", "agent.proof.fail_on",
+              "footprint.pin1", "layers.courtyard"}     # the pin-1 and courtyard checks of the release check
+STRICT = {"off": 0, "pass": 0, "warn": 1, "hold": 2}   # [release] parity / height, [change] classes: one-way stricter
+
+
+def _gates(text, name="ecadlib.toml"):
+    """{dotted key: value} of every release-gate setting in a rules text: [altium365] (the workspace a real push is
+    allowed to), [release] (sign-off policy, parity, height), [change] (change control), the required parameters,
+    the datasheet cross-check and the visual check's fail_on. A text that does not parse raises RulesError."""
+    from .rules import parse_text
+    data = parse_text(text, name) if text else {}
+    out = {}
+
+    def walk(v, at):
+        for k, x in v.items():
+            key = f"{at}.{k}" if at else str(k)
+            if key in GATE_WHOLE or (key.split(".")[0] in GATE_SECTIONS and not isinstance(x, dict)):
+                out[key] = x
+            elif isinstance(x, dict):
+                walk(x, key)
+    if isinstance(data, dict):
+        walk(data, "")
+    return out
+
+
+def _required_kept(ws, proposal):
+    """([required list the proposal should write], [names added]) when the proposed parameters.required leaves out a
+    parameter the rules in force require (save_rules would refuse it), else None. Added names are written in the
+    proposal's house names."""
+    from .rules import RulesError, param_name
+    raw = proposal.get("rules") or {}
+    req = (raw.get("parameters") or {}).get("required") if isinstance(raw.get("parameters"), dict) else None
+    if not isinstance(req, list):
+        return None
+    f = ws.rules_in_use() or ws.rules_file()
+    try:
+        text = f.read_text(encoding="utf-8-sig") if f.is_file() else ""
+        cur = _gates(text, f.name).get("parameters.required", _gate_default("parameters.required"))
+    except (OSError, RulesError):
+        return None
+    names = (raw.get("parameters") or {}).get("names") or {}
+    have = {x.strip().lower() for x in _canon_required(req, names)}
+    missing = [c for c in _canon_required(cur, _param_names(text, f.name)) if c.strip().lower() not in have]
+    if not missing:
+        return None
+    add = [param_name(c, {"parameters": {"names": names}}) for c in missing]
+    return [*req, *add], add
+
+
+def _param_names(text, name="ecadlib.toml"):
+    """The [parameters] names table of a rules text ({ecadlib name: house name}); {} when it has none or is damaged."""
+    from .rules import RulesError, parse_text
+    try:
+        data = parse_text(text, name) if text else {}
+    except RulesError:
+        return {}
+    names = (data.get("parameters") or {}).get("names") if isinstance(data, dict) else None
+    return names if isinstance(names, dict) else {}
+
+
+def _canon_required(v, names):
+    """parameters.required in ecadlib's names: "MPN" under "Manufacturer Part Number" = "MPN" is the MPN the release
+    check asks for (release_check reads each required name through canonical_param). "Datasheet" and "Description"
+    are read by the release check before any renaming (the datasheet link, the item's description), whatever the names
+    table says; ComponentLink2URL is the datasheet link."""
+    from .rules import canonical_param
+    out = []
+    for x in (v if isinstance(v, list) else [v] if v else []):
+        x = str(x)
+        c = x if x.strip() in ("Datasheet", "Description") else canonical_param(x, {"parameters": {"names": names}})
+        out.append("Datasheet" if c.strip().lower() == "componentlink2url" else c)
+    return out
+
+
+def _gate_default(k):
+    from .rules import DEFAULTS
+    v = DEFAULTS
+    for part in k.split("."):
+        if not isinstance(v, dict) or part not in v:
+            return None
+        v = v[part]
+    return v
+
+
+def _canon(x):
+    """A gate value, comparable: 2 and 2.0, and a table's key order, do not count."""
+    if isinstance(x, dict):
+        return {str(k): _canon(v) for k, v in sorted(x.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(x, list):
+        return [_canon(v) for v in x]
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        return float(x)
+    return x
+
+
+def _listed(v, fold=True):
+    return {(str(x).strip().lower() if fold else str(x).strip()) for x in (v if isinstance(v, list) else [v] if v else [])}
+
+
+def _approvals_loosen(old, new):
+    """True when the [release.approvals] policy `new` lets through something `old` held: fewer approvals, a role or a
+    signer's role less, more signers, self-approval allowed, only --allow parts, other parts, a reject that no longer
+    holds. Any policy is at least as strict as none; a policy that does not parse is refused."""
+    from .approvals import normalize_policy
+    try:
+        o = normalize_policy(dict(old), "old") if isinstance(old, dict) and old else None
+        n = normalize_policy(dict(new), "new") if isinstance(new, dict) and new else None
+    except (ValueError, TypeError):
+        return True
+    none = lambda p: p is None or (p["required"] == 0 and not p["roles"])
+    if none(o):
+        return False
+    if none(n):
+        return True
+    if n["required"] < o["required"] or not set(o["roles"]) <= set(n["roles"]):
+        return True
+    if o["users"] and (not n["users"] or any(u not in o["users"] or not set(r) <= set(o["users"][u])
+                                             for u, r in n["users"].items())):
+        return True
+    if (o["no_self_approval"] and not n["no_self_approval"]) or (o["reject_blocks"] and not n["reject_blocks"]):
+        return True
+    if o["applies_to"] == "all" and n["applies_to"] != "all":
+        return True
+    return bool(n["parts"]) and n["parts"] != o["parts"]      # every part, or the same patterns
+
+
+def _loosens(k, old, new):
+    """True when save_rules may not make this change of a gate setting. A change that only makes a gate stricter
+    saves: more required parameters, fewer accepted pin-1 names, warn -> hold ([release] parity / height, [change]
+    classes), more change approvers, a stricter sign-off policy (_approvals_loosen); the cross-check may change between
+    its checking modes. Anything else is refused when it changes at all (the Altium 365 workspace, the courtyard
+    layer, change.a365_transition, agent.proof.fail_on)."""
+    if k == "parameters.required":
+        return bool(_listed(old) - _listed(new))
+    if k == "footprint.pin1":                  # pin names: "a1" is not "A1"
+        return bool(_listed(new, fold=False) - _listed(old, fold=False))
+    if k == "datasheet.cross_check":
+        off = lambda v: str(v or "auto").strip().lower() == "off"
+        return off(new) and not off(old)
+    if k == "release.approvals":
+        return _approvals_loosen(old or {}, new or {})
+    if k.split(".")[0] in ("release", "change") and isinstance(old, str) and isinstance(new, str) and \
+            old.strip().lower() in STRICT and new.strip().lower() in STRICT:
+        return STRICT[new.strip().lower()] < STRICT[old.strip().lower()]
+    if k == "change.approvers" and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (old, new)):
+        return new < old
+    return json.dumps(_canon(old), sort_keys=True, default=str) != json.dumps(_canon(new), sort_keys=True, default=str)
 
 
 # ------------------------------------------------------------------ answers
@@ -1130,7 +1368,24 @@ def handle(ws, msg, notify=None):
     return {"jsonrpc": "2.0", "id": mid, "result": result}
 
 
-def _encode(resp):                                        # a lone surrogate (an undecodable file name) -> its \\u escape
+def respond(ws, msg, notify=None):
+    """The answer to one decoded JSON-RPC message, or to a batch (a list: MCP 2025-03-26, which this server still
+    negotiates, says a server must accept them): a response dict, a list of them, or None when nothing is owed (a
+    notification, or a batch of only notifications). A bug in one request is an internal-error response, never the
+    end of the server."""
+    def one(m):
+        try:
+            return handle(ws, m, notify)
+        except Exception as e:                          # a bug or odd input in one request: report and go on
+            traceback.print_exc(file=sys.stderr)
+            mid = m.get("id") if isinstance(m, dict) and isinstance(m.get("id"), (str, int)) else None
+            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
+    if isinstance(msg, list) and msg:
+        return [r for r in map(one, msg) if r is not None] or None
+    return one(msg)                                     # [] and anything else: handle() says 'invalid request'
+
+
+def _encode(resp):                                      # a lone surrogate (an undecodable file name) -> its \\u escape
     return json.dumps(resp, ensure_ascii=False).encode("utf-8", "backslashreplace")
 
 
@@ -1213,12 +1468,7 @@ def serve(ws, inp, out):
         except (ValueError, RecursionError):                # bad JSON, or nested deeper than Python can parse
             resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
         else:
-            try:
-                resp = handle(ws, msg, send)
-            except Exception as e:                          # a bug or odd input in one request: report and go on
-                traceback.print_exc(file=sys.stderr)
-                mid = msg.get("id") if isinstance(msg, dict) and isinstance(msg.get("id"), (str, int)) else None
-                resp = {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
+            resp = respond(ws, msg, send)                   # one message or a batch
         if resp is not None:
             send(resp)
 

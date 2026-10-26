@@ -10,13 +10,14 @@ from pathlib import Path
 from unittest import mock
 
 from ecadlib import altium_lib as AL, altium_pkg as AP, footprint_gen as F, kicad_export as X, kicad_pcm as KP, sexpr
+from tests.fixtures_lite import clean_all, scratch
 
 ROOT = Path(__file__).parent.parent
 _PLAN = {}
 
 
-def _tmp():
-    return Path(tempfile.mkdtemp(prefix="ecadlib-pkg-"))
+def _tmp(keep=False):
+    return scratch("ecadlib-pkg-", keep)
 
 
 def _plan(base=None):
@@ -24,7 +25,7 @@ def _plan(base=None):
     it; None: a new temp folder): (plan.json, http)."""
     if "dir" not in _PLAN:
         from tests import test_kicad_export as TX
-        d = _tmp()
+        d = _tmp(keep=True)                    # shared by the run
         plan, _, http = TX._plan(d)
         _PLAN.update(dir=plan.parent, http=http)
     d = (Path(base) if base else _tmp()) / "plan"
@@ -347,9 +348,9 @@ def test_action_plugin_helpers():
     assert not any(p.show_toolbar_button for p in fake.registered[1:])
     d = _tmp()
     c = mod.job_command(["ecadlib"], "J", "add-part", "b.kicad_pcb", " LM358DR ", "TI")
-    assert c == ["ecadlib", "kicad-menu", "run-job", "J", "--action", "add-part", "--project", "b.kicad_pcb",
-                 "--mpn", "LM358DR", "--manufacturer", "TI"], c
-    assert mod.job_command(["e"], "J", "check-bom", "b.kicad_pcb")[-2:] == ["--project", "b.kicad_pcb"]
+    assert c == ["ecadlib", "kicad-menu", "run-job", "J", "--action=add-part", "--project=b.kicad_pcb",
+                 "--mpn=LM358DR", "--manufacturer=TI"], c          # --option=value: a value may start with '-' (R-MN-5)
+    assert mod.job_command(["e"], "J", "check-bom", "b.kicad_pcb")[-1:] == ["--project=b.kicad_pcb"]
     for bad in ("", "a;rm -rf /", "x" * 200, "--help"):
         try:
             mod.job_command(["ecadlib"], "J", "add-part", "b", bad)
@@ -472,7 +473,7 @@ def test_altium_export_excel_dblib_is_relative():
     from ecadlib import altium_export as AE
     d = _tmp()
     with mock.patch("sys.stdout", io.StringIO()):
-        assert not AE.main([str(ROOT / "examples" / "sample_bom.csv"), "-o", str(d)])
+        assert not AE.main([str(ROOT / "examples" / "sample_bom.csv"), "-o", str(d), "--draft"])
     db = (d / "ecadlib_excel.DbLib").read_text()
     assert "LibraryDatabaseType=Microsoft Excel" in db and "LibraryDatabasePath=parts.xlsx" in db and "DatabasePathRelative=1" in db
     assert "DatabasePathRelative=0" in (d / "ecadlib_sqlite.DbLib").read_text()     # ODBC string: no relative form
@@ -551,3 +552,6 @@ if __name__ == "__main__":
         if k.startswith("test_"):
             v()
             print("ok", k)
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

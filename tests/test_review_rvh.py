@@ -273,6 +273,7 @@ def test_workspace_plan_rewrites_take_the_plan_lock():
     from ecadlib.app import Workspace
     with tempfile.TemporaryDirectory() as d:
         ws = Workspace(Path(d) / "ws")
+        ws.PLAN_LOCK_WAIT = 0.3                  # a plan write waits this long for plan.lock, then is refused
         bom = ws.root / "uploads" / "b.csv"
         bom.write_text("Designator,Value,MPN\nU1,X,P1\n", encoding="utf-8")
         _, plan = _agent_ws(d)
@@ -288,7 +289,7 @@ def test_workspace_plan_rewrites_take_the_plan_lock():
         t = threading.Thread(target=other)
         t.start()
         held.wait(10)
-        for call in (lambda: ws.release_check("uploads/b.csv", allow=["P1"]), lambda: ws.find_duplicates("uploads/b.csv", merge=True),
+        for call in (lambda: ws.release_check("uploads/b.csv", allow=["P1"], user="Ann Lee"), lambda: ws.find_duplicates("uploads/b.csv", merge=True),
                      lambda: ws.choose_part("uploads/b.csv", "P1", "footprint", "spec:SOT-23")):
             try:
                 call()
@@ -297,7 +298,7 @@ def test_workspace_plan_rewrites_take_the_plan_lock():
                 assert "another ecadlib command" in str(e), e
         assert "allow" not in json.loads((out / "plan.json").read_text(encoding="utf-8"))[0]
         release.set(); t.join(10)
-        r = ws.release_check("uploads/b.csv", allow=["P1"])
+        r = ws.release_check("uploads/b.csv", allow=["P1"], user="Ann Lee")
         assert r["parts"] == 1 and json.loads((out / "plan.json").read_text(encoding="utf-8"))[0]["allow"]
         r = ws.choose_part("uploads/b.csv", "P1", "footprint", "spec:SOT-23")    # holds the lock, re-checks inside it
         assert r["chosen"]["source"] == "spec:SOT-23", r["chosen"]

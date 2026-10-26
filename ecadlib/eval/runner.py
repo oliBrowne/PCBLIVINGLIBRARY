@@ -18,7 +18,7 @@ compare: pass rate and cost per family side by side, and the cases that flipped 
 import csv, datetime, hashlib, json, re, time
 from pathlib import Path
 
-from .. import altium_lib as AL, datasheet as D, footprint_bench as FB, librarian as L, rules as RU
+from .. import altium_lib as AL, datasheet as D, footprint_bench as FB, librarian as L, llm as LL, rules as RU
 from . import score as S
 
 SETS = Path(__file__).with_name("sets")
@@ -95,13 +95,14 @@ def publish(report, out, title=None):
     m, s = rep["meta"], rep["summary"]
     o, pm = s["overall"], (s.get("pad_match") or {}).get("built") or {}
     ds = o.get("right", o["pass"]) - o["pass"]
-    hl = s.get("headline") or {}
+    hl, oc = s.get("headline") or {}, s.get("outcome")
     head = (f"{m['model']}, {o['cases']} real parts: {o.get('right', o['pass'])} right ({_pct(o.get('right_rate', o['rate']))})"
             + (f", {o['pass']} of them matching KiCad exactly and {ds} the datasheet where KiCad differs" if ds else "")
             + (f"; of KiCad's matches {hl['from_datasheet']} read from a datasheet, {hl['from_standard']} from the "
                "standard-package table" if hl.get("right") else "")
             + (f", pad match {_pct(pm['rate'])} over {pm['parts']} footprints built" if pm.get("of") else "")
             + (f", {_usd(o['usd_per_part'])} per part" if o.get("usd") else "")
+            + (f"; built wrong {len(oc['built_wrong'])}, not built {len(oc['not_built'])}" if oc else "")
             + (f". {o['cases'] - o['pass'] - ds} failures, by type: " + ", ".join(f"{k} {len(v)}" for k, v in s["failures"].items()
                                                                                if k not in DATASHEET_RIGHT)
                if s.get("failures") else "") + ".")
@@ -122,6 +123,7 @@ FAILURE_TYPES = {
     "no_key": "not run: no API key, so the AI datasheet read was never sent (not a wrong answer)",
     "blank_dimension": "the read left a needed dimension blank: held, nothing built",
     "held_cross_check": "held: the cross-check's second read disagreed",
+    "held_failed_read": "held: the last read still failed a check that could build it wrong",
     "no_footprint": "no footprint for another reason (see tried)",
     "wrong_unit": "a unit mistake (mil / inch read as mm, or the reverse)",
     "wrong_variant": "the wrong package or variant (pin count or pitch differs)",
@@ -147,6 +149,8 @@ def failure_type(row, mine, spec):
             return "no_pdf"
         if row.get("cross_check") == "disagreed" or "cross-check disagrees" in tried:
             return "held_cross_check"
+        if "held: the last read still fails its checks" in tried:
+            return "held_failed_read"
         if re.search(r"unresolved|left .* blank|no footprint: the datasheet read left", tried):
             return "blank_dimension"
         if re.search(r"not sent \(--cached-only|waiting for your OK|needs datasheet reader", tried):
@@ -214,8 +218,24 @@ def printed_names(sc, mine_pins, ref_pins, text, tol=None):
     words = " " + re.sub(r"[^A-Z0-9]+", " ", _spaced(text)) + " "
     ours = {str(n): v for n, v in mine_pins}
     fixed, used = dict((str(n), v) for n, v in ref_pins), []
+    kicad = [(str(n), v) for n, v in ref_pins]
+    spelt = lambda x: re.sub(r"[^A-Z0-9]+", " ", _spaced(x)).strip()
+
+    def is_name(x, k):                                # ours x is KiCad's name k: a spelling, short form or abbreviation
+        return bool(S.norm_name(k)) and bool(S.norm_name(x)) and (
+            S.same_name(S.norm_name(x), S.norm_name(k)) or S.short_form(x, k)
+            or len(spelt(x).split()) > 1 and _abbreviates(k, spelt(x)))
     for n, v in fixed.items():
-        o = re.sub(r"[^A-Z0-9]+", " ", _spaced(ours.get(n))).strip()
+        o = spelt(ours.get(n))
+        # a spelling of a name, never another pin's name: one KiCad has on another pin, in its spelling or spelled out
+        # (ours VIN / VOUT or "Switch Emitter" / "Switch Collector" swapped, as the datasheet's other package prints
+        # them) and that our symbol no longer has on that pin, is a swap; the same name on one more pin (the maker's
+        # GND on KiCad's EP / NC, GND still on KiCad's GND pin) is not. Ground on a supply pin is a wrong connection
+        # (hunt 2026-10-26, review R-CE-1 / R-CE-2)
+        on = S.norm_name(ours.get(n))
+        if any(m != n and is_name(ours.get(n), k) and not is_name(ours.get(m), k) for m, k in kicad) or \
+                {S.rail(on), S.rail(S.norm_name(v))} == {"gnd", "supply"}:
+            continue
         if (o and len(re.sub(r"[^A-Z]", "", o)) >= 2 and S.norm_name(o) != S.norm_name(v) and f" {o} " in words
                 and (f" {n} {o} " in words or _abbreviates(v, o))):
             fixed[n] = ours[n]
@@ -345,6 +365,17 @@ def _safe(s):
 
 
 
+def _model_token(m):
+    """A model name as a ResultCache key spells it."""
+    return re.sub(r"[^A-Za-z0-9.-]", "_", str(m or ""))
+
+
+def _rec_model(rec):
+    """The model a saved answer was asked of: its record, else its key (<pdf>-<model>-<schema>-<request>)."""
+    k = str(rec.get("key") or "")
+    return rec.get("model") or (k[17:].rsplit("-", 2)[0] if k.count("-") >= 3 else "")
+
+
 def saved_prov(prov, offset):
     """The PDF record of a saved answer scored in place of a step never sent: its own pages, not the pages this run's
     picker would send. TLC5951DAP's 10-21 answer read pages 4,5,15,39,49,50; stamped with today's pick (4,5,39,49-51) its
@@ -466,13 +497,18 @@ class EvalReader(D.Reader):
         rec = self._saved_answer(j)
         if rec is None:
             raise D.DatasheetError("not sent (--cached-only: saved answers only); a live run reads it")
-        self.used.setdefault(j["part"], {"estimate": j.get("estimate")})["via"] = "cached (another step of its route)"
+        self.used.setdefault(j["part"], {"estimate": j.get("estimate")})["via"] = \
+            f"cached (another step of its route, {_rec_model(rec) or '?'})"
         off = rec.get("page_offset", j["offset"])
         return self._result(dict(j, final=True, offset=off, prov=saved_prov(j.get("prov"), off)), rec)
 
     def _saved_answer(self, job):
         """The part's saved answer for the same datasheet (any step of its route) that does best: ok first, then one
-        that reads, then the latest. None when there is none."""
+        that reads, then the latest. None when there is none. Only answers of this run's models (the job's, the run's
+        and its ladder's): another model's answer for the same PDF was scored under this model's name (R-LE-4)."""
+        router = getattr(self, "router", None)
+        mine = {_model_token(m) for m in [job.get("model"), getattr(self, "model", None),
+                                          *(getattr(router, "ladder", None) or [])] if m}
         best = None
         for f in sorted(self.results.dir.glob(f"{job['key'][:16]}-*.json")):
             try:
@@ -480,6 +516,8 @@ class EvalReader(D.Reader):
             except (OSError, ValueError):
                 continue
             if rec.get("part") != job["part"] or "message" not in rec or rec.get("purpose"):
+                continue
+            if _model_token(_rec_model(rec) or f.stem[17:].rsplit("-", 2)[0]) not in mine:
                 continue
             try:
                 kind = self._judge(dict(job, offset=rec.get("page_offset", job["offset"])), rec)[0] if "rung" in job else "ok"
@@ -673,7 +711,15 @@ def summarize(rows):
             "datasheet_built": sum(r["source"] == "datasheet" for r in rows),
             "unchecked_passes": sum(r.get("cross_check") == "unchecked" for r in right)}
     head["other"] = head["right"] - head["from_datasheet"] - head["from_standard"]
+    # every part not right is either built wrong (a footprint was made and it, or the symbol, differs: Oliver's rule is
+    # that this must be 0) or not built (held, no datasheet, not read): a held part is the safe outcome, not a wrong one
+    miss = [r for r in rows if not r["pass"] and not datasheet_right(r) and not not_run(r)]
+    outcome = {"right": sum(r["pass"] or datasheet_right(r) for r in rows),
+               "built_wrong": sorted(r["id"] for r in miss if r["source"] != "none"),
+               "not_built": sorted(r["id"] for r in miss if r["source"] == "none"),
+               "not_run": sum(not_run(r) for r in rows), "cases": len(rows)}
     return {"cross_check": dict(sorted(cc.items())), "overall": agg(rows), "maker_land": maker, "pad_match": pm, "headline": head,
+            "outcome": outcome,
             "failures": dict(sorted(fails.items(), key=lambda kv: -len(kv[1]))), "datasheet_pins": dict(sorted(pins.items())),
             "answer_prompt_versions": pv,
             "errata": {r["id"]: r["errata"] for r in rows if r.get("errata")},
@@ -698,6 +744,8 @@ def total_cap(lib, total, per_run=None, log=print):
     """The per-run cap left under a folder total: total - what <lib>/datasheet/cost.jsonl already holds (and no more
     than per_run when that is set too). Raises ValueError when nothing is left, so nothing is sent."""
     from .. import ai_cost as AC
+    total = AC.cap_usd(total, "--max-total-usd")      # nan would leave a nan cap: one that holds nothing
+    per_run = AC.cap_usd(per_run, "--max-cost-usd") if per_run is not None else None
     try:                                              # a batch sent and not yet collected is billed but not in the
         st = json.loads((Path(lib) / "datasheet" / "batch_state.json").read_text(encoding="utf-8"))   # ledger yet
     except (OSError, ValueError):
@@ -718,6 +766,47 @@ def total_cap(lib, total, per_run=None, log=print):
     log(f"  cap: ${got['usd']:.2f} already spent in this folder of ${float(total):g} total, so this run may spend "
         f"up to ${cap:.2f}")
     return cap
+
+
+def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=None, model=None):
+    """rules with eval's --provider / --base-url / --assist / --api-key-env / --model put into [ai] (and [datasheet]'s
+    own provider settings cleared, so [ai] decides). A --provider other than [ai]'s drops [ai]'s base_url and
+    api_key_env unless given again: they belong to the old provider, and its key went to the new one (R-LE-1).
+    [datasheet] api_key_env likewise is kept only when [datasheet] still talks to the same server (the same resolved
+    provider and base_url, a preset's default included): another provider (Anthropic too) or another gateway of the
+    same provider never gets it (R-FX13-1, R-FX16-1). [ai] api_key_env too: --base-url alone moves [ai] to another
+    server of the same provider, which never gets it (R-FX19-3). --api-key-env always wins over them."""
+    over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
+                              ("api_key_env", api_key_env)) if v}
+    if not (over or (model and provider)):
+        return rules
+    ai = dict(rules.get("ai", {}))
+    ds = dict(rules.get("datasheet", {}))
+
+    def _p(p):
+        return str(p or "anthropic").strip().lower()
+
+    new = _p(provider) if provider else None
+    if new and new != _p(ai.get("provider")):
+        for k in ("base_url", "api_key_env"):
+            if k not in over:
+                ai[k] = ""
+    old_server = LL.server_of(rules, "datasheet")     # where [datasheet]'s key name was meant to go
+    old_ai = LL.server_of(rules, "ai")                # where [ai]'s key name was meant to go
+    ds_key = ds.get("api_key_env")
+    if api_key_env:                                   # --api-key-env wins over [datasheet]'s key name (R-FX13-1)
+        ds_key = api_key_env
+    rules = dict(rules, ai={**ai, **over, **({"model": model} if model else {})},
+                 datasheet={**ds, **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
+                            **({"api_key_env": ds_key} if "api_key_env" in ds or api_key_env else {})})
+    if ds_key and not api_key_env and not LL.same_server(old_server, LL.server_of(rules, "datasheet")):
+        # [datasheet]'s key belongs to its old server: never sent to another provider or gateway (R-FX16-1)
+        rules = dict(rules, datasheet={**rules["datasheet"], "api_key_env": ""})
+    if rules["ai"].get("api_key_env") and not api_key_env and not LL.same_server(old_ai, LL.server_of(rules, "ai")):
+        # so is [ai]'s: --base-url alone (same provider) moves [ai] to another server too (R-FX19-3)
+        rules = dict(rules, ai={**rules["ai"], "api_key_env": ""})
+    RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
+    return rules
 
 
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
@@ -754,13 +843,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     if max_cost_usd is not None:                      # the run's spending cap ([datasheet] max_cost_usd, default $10)
         rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)},
                      _set=[*(rules.get("_set") or []), "datasheet.max_cost_usd"])     # a cap you set, 10 too
-    over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
-                              ("api_key_env", api_key_env)) if v}
-    if over or (model and provider):
-        rules = dict(rules, ai={**rules.get("ai", {}), **over, **({"model": model} if model else {})},
-                     datasheet={**rules.get("datasheet", {}), **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
-                                **({"api_key_env": ""} if provider and provider != "anthropic" else {})})
-        RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
+    rules = ai_overrides(rules, provider=provider, base_url=base_url, assist=assist, api_key_env=api_key_env,
+                         model=model)
     if datasheets:
         rules = dict(rules, datasheet={**rules.get("datasheet", {}), "folder": str(datasheets)})
     if (rules.get("datasheet") or {}).get("zoom_drawings") and not replay and D.no_zoom():
@@ -855,8 +939,9 @@ def file_fingerprint(path):
     (altium_lib), so the write time in the Altium file header does not count as a different answer."""
     p = Path(path)
     try:
-        if p.suffix.lower() == ".pcblib":
-            data = json.dumps(AL.read_pcblib(p), sort_keys=True, default=str).encode()
+        if p.suffix.lower() == ".pcblib":            # the embedded STEPs too (Models unpack only when asked)
+            data = json.dumps(AL.read_pcblib(p), sort_keys=True,
+                              default=lambda o: list(o) if isinstance(o, AL.Models) else str(o)).encode()
         elif p.suffix.lower() == ".schlib":
             data = json.dumps(AL.read_schlib(p), sort_keys=True, default=str).encode()
         else:
@@ -912,10 +997,13 @@ def report_md(rep):
         cost = f"the AI reads would cost about {_usd(o['usd'])} ({_usd(o['usd_per_part'])} per part; estimate, nothing billed)."
     else:
         right = o.get("right", o["pass"])
+        built = sum(r["source"] != "none" for r in bad)   # a held part is not a wrong one: built wrong must be 0
         head = (f"**Right: {right}/{o['cases']} ({_pct(o.get('right_rate', o['rate']))})**"
                 + (f": {o['pass']} match KiCad exactly and {len(dsr)} match the datasheet where KiCad differs (see "
                    "\"Right by the datasheet\")" if dsr else "") + ". " + pad
-                + (f"{len(bad)} {'part was' if len(bad) == 1 else 'parts were'} wrong: see \"Wrong parts\" below." if bad else "Every part was right."))
+                + (f"**Built wrong: {built}**; {len(bad) - built} not built (held, no datasheet or not read). "
+                   f"{len(bad)} {'part is' if len(bad) == 1 else 'parts are'} not right: see \"Wrong parts\" below."
+                   if bad else "Every part was right."))
         cost = f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part."
     hl = s.get("headline") or {}
     if hl.get("right"):
@@ -1010,19 +1098,23 @@ def compare(a, b):
     fams = {}
     lines = [f"A: {a} ({A['meta']['model']}{' via ' + A['meta']['provider'] if A['meta'].get('provider') else ''}, {A['meta']['mode']}, {A['meta']['cases']} cases)",
              f"B: {b} ({B['meta']['model']}{' via ' + B['meta']['provider'] if B['meta'].get('provider') else ''}, {B['meta']['mode']}, {B['meta']['cases']} cases)", "",
-             f"{'family':<12} {'pass A':>9} {'pass B':>9} {'diff':>8} {'$/part A':>10} {'$/part B':>10}"]
+             f"{'family':<12} {'right A':>9} {'right B':>9} {'diff':>8} {'$/part A':>10} {'$/part B':>10}"]
     for k in sorted(set(fa) | set(fb)) + ["overall"]:
         x = A["summary"]["overall"] if k == "overall" else fa.get(k)
         y = B["summary"]["overall"] if k == "overall" else fb.get(k)
         fams[k] = (x, y)
-        ra, rb = (x or {}).get("rate"), (y or {}).get("rate")
+        rt = lambda f: (f or {}).get("right_rate", (f or {}).get("rate"))    # right, as the headline counts it
+        ra, rb = rt(x), rt(y)
         d = f"{100 * (rb - ra):+.1f}" if ra is not None and rb is not None else "-"
         lines.append(f"{k:<12} {_pct(ra):>9} {_pct(rb):>9} {d:>8} {_usd((x or {}).get('usd_per_part')):>10} "
                      f"{_usd((y or {}).get('usd_per_part')):>10}")
     ca, cb = {r["id"]: r for r in A["cases"]}, {r["id"]: r for r in B["cases"]}
     both = [i for i in ca if i in cb]
-    flipped = {"fixed": [i for i in both if not ca[i]["pass"] and cb[i]["pass"]],
-               "broken": [i for i in both if ca[i]["pass"] and not cb[i]["pass"]],
+    # flips of right (KiCad's match or the datasheet's), as the headline counts: a part right by the maker's land in A
+    # and built wrong in B is a part broken, and one that moves between KiCad's match and the datasheet's is not
+    ok = lambda r: bool(r["pass"] or datasheet_right(r))
+    flipped = {"fixed": [i for i in both if not ok(ca[i]) and ok(cb[i])],
+               "broken": [i for i in both if ok(ca[i]) and not ok(cb[i])],
                "only_in_a": [i for i in ca if i not in cb], "only_in_b": [i for i in cb if i not in ca]}
     lines += ["", f"fail -> pass ({len(flipped['fixed'])}): " + ", ".join(flipped["fixed"]),
               f"pass -> fail ({len(flipped['broken'])}): " + "; ".join(f"{i} [{'; '.join(cb[i]['errors'][:2])}]" for i in flipped["broken"])]

@@ -331,8 +331,8 @@ def test_pad_table_consistency_checks():
     assert lv(problems(pin_count=5), "count") == {"error"}
     mm_as_mil = dict(good, arrays=[dict(good["arrays"][0], dx=98.4, drill=37.4)])
     assert any("mils" in p["message"] for p in problems(mm_as_mil) if p["level"] == "error")
-    in_mil = dict(good, unit="mil")                            # 2.5 and 0.95 "mil": really mm
-    assert lv(problems(in_mil), "units") == {"warning"}
+    in_mil = dict(good, unit="mil")                            # 2.5 and 0.95 "mil": really mm (an error since
+    assert lv(problems(in_mil), "units") == {"error"}          # review 196 R-RD-3: it built 0.02 mm holes)
     misread = dict(good, arrays=[], pads=[{"number": str(i + 1), "x": x, "y": 0, "type": "tht", "drill": 0.95}
                                           for i, x in enumerate((0, 2.5, 4.95, 7.5))])
     ps = problems(misread)

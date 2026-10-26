@@ -529,6 +529,16 @@ def tht_pad_size(pads, pitch=None):
             p["shape"] = "roundrect"
 
 
+def _body_nom(v):
+    """A body dimension's nominal in mm (dim dict or number), or None."""
+    try:
+        from .footprint_gen import dim
+        d = dim(v) if isinstance(v, dict) else (v, v, v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        return d[1] if d and d[1] and d[1] > 0 else None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------- consistency checks on a table
 def check_pad_table(spec, pads=None):
     """Consistency checks on a pad table (mm, KiCad frame). Returns [{level, rule, message}]."""
@@ -568,7 +578,55 @@ def check_pad_table(spec, pads=None):
         what = f"no two pads closer than {gap:g} (pads up to {big:g})"
     if raw and unit == "mm" and what:
         add("error", "units", f"pad_table {what} with unit mm: that looks like mils (set unit to mil)")
-    if raw and unit == "mil" and sizes and max(sizes) < 4:
+    # and inches typed as mm: everything 25.4 times too small (a 5.08 mm 2-pin connector became 0.2 mm across). The
+    # closest pads the spec's pitch in inches, or no pad or hole 0.15 mm in its larger size (the smallest lands, WLCSP
+    # and 008004, are 0.2 mm or so)
+    tiny = max((max(abs(p.get(k) or 0) for k in ("w", "h", "d", "drill")) for p in raw if not p.get("polygon")), default=None)
+    inch = None
+    if gap and num(sp) and sp > 0 and abs(gap * UNIT["in"] - sp) <= 0.03 * sp:
+        inch = f"the closest pads {gap:g} apart, the spec's {sp:g} mm pitch in inches,"
+    elif tiny is not None and 0 < tiny < 0.15 and not any(p.get("polygon") for p in raw):
+        inch = f"no pad or hole bigger than {tiny:g}"
+    if raw and unit == "mm" and inch and not what:
+        add("error", "units", f"pad_table {inch} with unit mm: that looks like inches (set unit to in)")
+    # any other unit label: the same size checks on the values converted to mm (review 196 R-RD-3: a DIP-8 table in mm
+    # labelled "in" built 40.6 mm pads 193 mm apart; one labelled "mil" 0.04 mm pads)
+    f = UNIT.get(unit)
+    wrong = None
+    if raw and unit != "mm" and f:
+        if big * f > 60:
+            wrong = f"pad / hole sizes up to {big * f:g} mm"
+        elif span * f > 200:
+            wrong = f"pads spread over {span * f:g} mm"
+        elif gap and gap * f > 10 and span * f > 60 and big > 0.25 * gap:
+            wrong = f"no two pads closer than {gap * f:g} mm (pads up to {big * f:g} mm)"
+        elif tiny is not None and 0 < tiny * f < 0.15 and not any(p.get("polygon") for p in raw):
+            wrong = f"no pad or hole bigger than {tiny * f:.3g} mm"
+        if wrong:
+            add("error", "units", f"pad_table {wrong} with unit {unit}: that is implausible for a land; is the table "
+                                  "in another unit (mm)?")
+    # every unit label: the closest pads a whole number of the spec's pitches apart (SOT-23: two) in the unit the table
+    # gives, or in none; fitting only in another unit is the unit mislabelled
+    if raw and f and gap and num(sp) and sp > 0 and not wrong and not (unit == "mm" and (what or inch)):
+        fits = lambda g: any(abs(gap * g - k * sp) <= 0.03 * k * sp for k in (1, 2, 3, 4))
+        other = [u for u, g in UNIT.items() if u != unit and fits(g)]
+        if not fits(f) and other:
+            wrong = other[0]
+            add("error", "units", f"pad_table the closest pads {gap:g} {unit} apart ({gap * f:g} mm) are no whole "
+                                  f"number of the spec's {sp:g} mm pitch, and are in {other[0]}: is the table in "
+                                  f"{other[0]} (set unit to {other[0]})?")
+    # the table's extent in mm against the read's own body (a separate number, its unit read on its own): 25.4 times
+    # too big is far past any lead or holder beyond its body (DO-35 on a 25.4 mm pitch: 7 x its 4 mm body)
+    bodies = [_body_nom(spec.get(k)) for k in ("body_length", "body_width")]
+    cu_pads = [q for q in pads if q.get("kind") != "np_thru_hole"]
+    if raw and cu_pads and all(bodies) and not wrong and not (unit == "mm" and (what or inch)):
+        boxes = [pad_bbox(q) for q in cu_pads]
+        ext = max(max(b[2] for b in boxes) - min(b[0] for b in boxes), max(b[3] for b in boxes) - min(b[1] for b in boxes))
+        if ext > 30 and ext > 10 * max(bodies):
+            wrong = "extent"
+            add("error", "units", f"pad_table pads spread over {ext:g} mm for a {bodies[0]:g} x {bodies[1]:g} mm body: "
+                                  f"that is implausible; is the table's unit ({unit}) right?")
+    if raw and unit == "mil" and sizes and max(sizes) < 4 and not wrong:
         add("warning", "units", f"pad_table unit is mil but no pad or hole is bigger than {max(sizes):g} mil "
                                 f"({max(sizes) * 0.0254:.3f} mm): is the table in mm?")
     pins = [p for p in pads if p["role"] in PIN_ROLES]
@@ -991,6 +1049,11 @@ def _bga(spec, density):
     F = _F()
     rows, cols, e = spec["rows"], spec["cols"], spec["pitch"]
     ey = spec.get("pitch_y") or e
+    big = [f"{k} {v:g}" for k, v in (("pitch", e), ("pitch_y", ey)) if v > 5] + \
+        [f"{k} {_dim(spec[k])[2]:g}" for k in ("body_length", "body_width", "ball_diameter", "land_diameter")
+         if spec.get(k) and _dim(spec[k])[2] > 60]
+    if big:                                               # footprint_gen.sanity's 60 mm; no ball pitch is over 5 mm
+        raise ValueError(f"{', '.join(big)} mm: that looks like mils or 0.01 mm units; the spec is in millimetres")
     balls = bga_balls(spec)
     if spec.get("pin_count") and spec["pin_count"] != len(balls):
         raise ValueError(f"pin_count is {spec['pin_count']} but the {rows} x {cols} grid minus depopulated balls leaves "
@@ -1037,6 +1100,19 @@ def _bga(spec, density):
             rep.setdefault("notes", []).append(n)
     txt = _emit(spec, pads, body, rep, spec.get("courtyard_excess", BGA_EXCESS[density]), corner_mark=mark, courtyard_union=False)
     return txt, rep, pads
+
+
+def header_body(spec):
+    """(size along x, size along y, note or None) of a pin header's body, as _header draws it and step_gen models it:
+    body_length x body_width (default cols x rows pitches), its long side running with the pin rows (down y), as
+    table_layout lays a connector's. A datasheet gives a 1 x 10 header's body as 25.4 x 2.54 whatever the schema's x
+    says; drawn as read, the body crossed the pins and the courtyard became a 26 mm cross."""
+    cols, rows, e = spec.get("cols", 1), spec["rows"], spec["pitch"]
+    bl = _dim(spec["body_length"])[1] if spec.get("body_length") else cols * e
+    bw = _dim(spec["body_width"])[1] if spec.get("body_width") else rows * e
+    if (rows > cols and bl > bw) or (cols > rows and bw > bl):
+        return bw, bl, f"body {bl:g} x {bw:g} mm turned to run with the {cols} x {rows} pin rows"
+    return bl, bw, None
 
 
 def _header(spec, density):
@@ -1087,10 +1163,11 @@ def _header(spec, density):
         if spec.get("lead_span"):
             ls = _dim(spec["lead_span"])[1] / 2
             extra.append((-ls, -(rows - 1) * e / 2 - lw / 2, ls, (rows - 1) * e / 2 + lw / 2))
-    bl = _dim(spec["body_length"])[1] if spec.get("body_length") else cols * e if spec.get("mount", "tht") == "tht" else cols * e
-    bw = _dim(spec["body_width"])[1] if spec.get("body_width") else rows * e
+    bl, bw, turned = header_body(spec)
     body = (_r4(cx - bl / 2), _r4(cy - bw / 2), _r4(cx + bl / 2), _r4(cy + bw / 2))
     rep = {"name": spec["name"], "type": "pin_header", "density": density, "ipc_family": family}
+    if turned:
+        rep["notes"] = [turned]
     rep["descr"] = (f"{spec.get('description', spec['name'])} | {cols}x{rows} pins, pitch {e:g} mm"
                     + (f", drill {pads[0]['drill'][0]:g} mm, pad {pads[0]['w']:g} mm" if pads[0].get("drill") else
                        f", pads {pads[0]['w']:g}x{pads[0]['h']:g} mm"))

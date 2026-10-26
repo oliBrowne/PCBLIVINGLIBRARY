@@ -140,9 +140,12 @@ def cmd_status(a):
         print(f"{folder}: no ledger yet; parts are recorded the first time they pass the release check")
         return 0
     print(f"{len(lg.parts())} released parts in {lg.path}")
+    damaged = {p: why for p in lg.parts() for why in [lg.trouble(p)] if why}
+    for p, why in damaged.items():         # a merged / cut ledger: publishers leave the part out until mended (R-FX17-5)
+        print(f"  {p:<28} refused (publishing, approving and reverting it): {why}")
     if not props:
         print("no held changes")
-        return 0
+        return 2 if damaged else 0
     print(f"{len(props)} held change(s) waiting for a person (approvers needed: {pol['approvers']}):")
     for p in props:
         rej = f"  (rejected before by {p['rejected'].get('by')})" if p.get("rejected") else ""
@@ -269,6 +272,11 @@ def cmd_history(a):
         if ev in LG.RELEASES and e.get("changes") and (a.verbose or TM.VERBOSITY > 0):
             for c in e["changes"]:
                 print(f"      {c['class']:<15} {c['text']}")
+    why = lg.trouble(a.part)
+    if why:                                    # a cut or merged ledger: said, so nobody picks a revision from it
+        print(f"  WARNING: {why}; publishing, approving and reverting {a.part} are refused until it is mended "
+              f"(the rest of the library publishes)")
+        return 2
     return 0
 
 
@@ -325,6 +333,17 @@ def approve(plan, parts, who=None, comment="", role=None, digests=None):
         return _approve(plan, parts, who, comment, role, digests)
 
 
+def _may_decide(folder, who, what="approve"):
+    """The sign-off policy (approvals.json / [release.approvals]) lists users: only they may approve, reject, revert or
+    adopt a part's release (R-G2-7: a revert is a release too)."""
+    from . import approvals as AP
+    sign = AP.load_policy(folder)
+    users = (sign or {}).get("users") or {}
+    if users and AP.user_key(who) not in users:
+        raise CG.ChangeError(f"{who} is not in the sign-off policy's users ({AP.policy_source(folder, sign)}): only "
+                             f"they may {what}")
+
+
 def _approve(plan, parts, who, comment, role, digests):
     from . import approvals as AP
     plan, items = _load(plan)
@@ -337,10 +356,7 @@ def _approve(plan, parts, who, comment, role, digests):
     pol = CG.policy(None, folder)
     who = who or AP.identity(None, cwd=folder)
     key = AP.user_key(who)
-    sign = AP.load_policy(folder)
-    users = (sign or {}).get("users") or {}
-    if users and key not in users:
-        raise CG.ChangeError(f"{who} is not in the sign-off policy's users ({AP.policy_source(folder, sign)})")
+    _may_decide(folder, who, "approve")
     groups, seen = [], set()
     for p in parts:
         if p in seen:
@@ -486,7 +502,11 @@ def _put_proposed(plan, items, group, lg, who=""):
     checked = [i for i in sel if not i.get("_manifest")]   # kicad_import parts have no plan fields to check
     RC.apply(checked, folder, change_holds=False)     # the version being approved
     bad = [i for i in checked if i.get("status") == "held"]
-    reasons = "; ".join(f"{i['name']}: {', '.join(i.get('hold_reasons') or [])}" for i in bad)
+    unmatched = {i["name"]: CG.recipe_unmatched(i, heads.get(i["name"]), folder) for i in sel}
+    bad += [i for i in sel if unmatched[i["name"]] and i not in bad]   # its recipe would ship something else
+    reasons = "; ".join(f"{i['name']}: {', '.join((i.get('hold_reasons') if i.get('status') == 'held' else []) or [])}"
+                        + ("; " if i.get("status") == "held" and unmatched[i["name"]] else "")
+                        + "; ".join(unmatched[i["name"]]) for i in bad)
     if bad:                                    # the approved version fails the release check: put the released one back
         for p in group:
             h = heads[p["part"]]
@@ -562,6 +582,7 @@ def _reject(plan, parts, who, comment):
     plan, items = _load(plan)
     lg = LG.Ledger(plan.parent)
     who = who or AP.identity(None, cwd=plan.parent)
+    _may_decide(plan.parent, who, "reject")
     out, seen = [], set()
     for part in parts:
         for prop in _group(lg, part):
@@ -604,6 +625,7 @@ def _revert(plan, spec, who, comment):
         raise CG.ChangeError(f"{part}: revision {target['revision']} is what is released now (r{head['revision']})")
     it = _item(items, part)
     who = who or AP.identity(None, cwd=folder)
+    _may_decide(folder, who, "revert")
     pol = CG.policy(None, folder)
     old_fp = lg.fingerprint(head)
     backup = _step_backup([target.get("files")], folder)
@@ -705,6 +727,7 @@ def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=Fals
         from . import approvals as AP
         plan, items = _load(plan)
         who = who or AP.identity(None, cwd=plan.parent)
+        _may_decide(plan.parent, who, "adopt")
         g = CG.Guard(plan.parent, "adopt", user=who)
         lost = [i["name"] for i in items if CG.released(i) and not g.ledger.head(i["name"]) and g.lost_history(i["name"], i)]
         names = lost if all_lost else list(parts)

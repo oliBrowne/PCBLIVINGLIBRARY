@@ -49,6 +49,7 @@ def error_body(text):
 
 _HTML = re.compile(r"\s*(?:<!doctype\s+html|<html[\s>])", re.I)
 DATA_EXT = {"json", "kicad_mod", "kicad_sym", "lib", "dcm", "csv", "txt", "xml", "step", "stp", "wrl", "gz"}
+DATA_HOSTS = {"modules.easyeda.com"}          # data only, at paths with no extension (easyeda_3d.STEP_URL: /<key>/<uuid>)
 
 
 def page_not_data(url, text):
@@ -59,8 +60,19 @@ def page_not_data(url, text):
     u = urlparse(url)
     last = u.path.rsplit("/", 1)[-1]
     ext = last.rpartition(".")[2].lower() if "." in last else ""
-    return (u.netloc.lower().startswith("api.") or "/api/" in u.path + "/" or u.path.endswith("/graphql")
+    return (u.netloc.lower().startswith("api.") or u.netloc.lower() in DATA_HOSTS or "/api/" in u.path + "/" or u.path.endswith("/graphql")
             or "/-/raw/" in u.path or ext in DATA_EXT)
+
+
+def api_url(url):
+    """An API (JSON) endpoint: api.<host>, /api/, /graphql or a .json file. An HTML 404 there is a proxy or captive
+    portal's page, never the API's own answer. A raw library file (GitLab /-/raw/, .kicad_mod, .step) is not one: its
+    host answers a missing file with its own HTML 404 page, a real "not there" that is cached (R-FX13-3).
+    A DATA_HOSTS host (EasyEDA's model host) serves only data too: an HTML 404 there is a portal's (R-FX16-5)."""
+    u = urlparse(url)
+    host, path = u.netloc.lower(), u.path.lower()
+    return host.startswith("api.") or host in DATA_HOSTS or "/api/" in path + "/" or path.endswith("/graphql") \
+        or path.endswith(".json")
 
 
 # A download that may work on a later try: a timeout, a dropped or reset connection (not a TLS or proxy refusal,
@@ -134,7 +146,11 @@ class CachedHTTP:
         A 2xx answer whose body is an error (error_body) is neither stored nor served from an older cache entry."""
         f = self.dir / f"{self._key(method, key_url(url), body, headers)}.json"
         d = None
-        bad = lambda st, text: 200 <= st < 300 and (error_body(text) or page_not_data(url, text))
+        # a 404 is kept too (a part that is not there stays not there), unless it is an HTML page answering an API
+        # URL: a proxy / captive portal's block page, not the API's own "not found". A raw file's host (GitLab) sends
+        # its own HTML 404 page: that one is cached (R-FX13-3)
+        bad = lambda st, text: (200 <= st < 300 and (error_body(text) or page_not_data(url, text))) or \
+            (st == 404 and api_url(url) and page_not_data(url, text))
         if cache and f.exists() and (self.offline or time.time() - f.stat().st_mtime < self.ttl):   # offline: stale beats nothing
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))

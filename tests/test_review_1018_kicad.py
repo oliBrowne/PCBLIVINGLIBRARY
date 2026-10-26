@@ -1,25 +1,26 @@
 """Regression tests for the 2026-10-18 review of the KiCad output path (kicad_export, kicad_dblib, kicad_pcm).
 Run:  python3 -m tests.test_review_1018_kicad"""
-import json, math, shutil, sqlite3, tempfile
+import json, math, shutil, sqlite3
 from pathlib import Path
 from unittest import mock
 
 from ecadlib import altium_lib as AL, kicad_dblib as KD, kicad_export as X, kicad_pcm as KP, sexpr
+from tests.fixtures_lite import clean_all, scratch
 
 ROOT = Path(__file__).parent.parent
 GOLDEN = ROOT / "tests" / "fixtures" / "kicad_golden"
 _PLAN = {}
 
 
-def _tmp():
-    return Path(tempfile.mkdtemp(prefix="ecadlib-1018-kicad-"))
+def _tmp(keep=False):
+    return scratch("ecadlib-1018-kicad-", keep)
 
 
 def _plan():
     """tests.test_kicad_export's librarian run (made once), copied per test: (plan.json, http)."""
     if "dir" not in _PLAN:
         from tests import test_kicad_export as TX
-        plan, _, http = TX._plan(_tmp())
+        plan, _, http = TX._plan(_tmp(keep=True))     # shared by the run
         _PLAN.update(dir=plan.parent, http=http)
     d = _tmp() / "plan"
     shutil.copytree(_PLAN["dir"], d)
@@ -193,3 +194,6 @@ def test_reexport_keeps_or_reports_hand_edits():
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_review_1018_kicad"]))
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

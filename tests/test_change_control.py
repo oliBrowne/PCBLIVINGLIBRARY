@@ -5,12 +5,12 @@ footprint going 0603 -> 0402 and back; a SOT-23 symbol remapped GSD -> SGD), see
 never hold; pin <-> pad permutations, pin renames and pad moves always hold), cross-tool identity (the same part read
 from KiCad and from Altium has the same eid / gid), the gate in every writer (an AST check), and an Altium 365 mock
 (approved = a new component revision, held = nothing new sent)."""
-import ast, copy, json, random, shutil, subprocess, sys, tempfile
+import ast, copy, json, random, shutil, subprocess, sys
 from pathlib import Path
 
 from ecadlib import altium_lib as AL, change_cli as CC, change_diff as CD, change_gate as CG, fingerprint as FP
 from ecadlib import kicad_import as K, ledger as LG, sexpr, stdparts as SP
-from tests.fixtures_lite import demo_released
+from tests.fixtures_lite import clean_all, demo_released, scratch
 
 ROOT = Path(__file__).resolve().parent.parent
 FIX = ROOT / "tests" / "fixtures" / "change_control"
@@ -23,9 +23,9 @@ _DEMO = {}
 def demo():
     """A copy of the offline demo library (built once per run): its plan, its folder."""
     if "dir" not in _DEMO:
-        d = Path(tempfile.mkdtemp(prefix="ecadlib-cc-demo-"))
+        d = scratch("ecadlib-cc-demo-", keep=True)          # shared by the run
         _DEMO["dir"] = demo_released(d, cwd=ROOT)       # the pinouts signed off: every part but CH340C released
-    d = Path(tempfile.mkdtemp(prefix="ecadlib-cc-")) / "demo"
+    d = scratch("ecadlib-cc-") / "demo"
     shutil.copytree(_DEMO["dir"].parent.parent, d)          # the whole demo: the lock's BOM path stays valid
     lib = d / "librarian" / "demo_bom_demo"
     return lib / "plan.json", lib
@@ -516,7 +516,7 @@ def test_property_pin_pad_permutations_renames_and_pad_moves_always_hold():
 def test_same_part_from_kicad_and_altium_has_the_same_identity():
     """Every golden KiCad footprint and the fixture symbols, read from KiCad and from the Altium files ecadlib converts
     them to: the same gid (footprints) and eid (symbols)."""
-    d = Path(tempfile.mkdtemp(prefix="ecadlib-cc-x-"))
+    d = scratch("ecadlib-cc-x-")
     for f in sorted(GOLDEN.glob("*.kicad_mod")):
         text = f.read_text(encoding="utf-8")
         land, art, model = FP.kicad_footprint(text)
@@ -580,15 +580,19 @@ def test_every_library_writer_is_gated_or_exempt():
 
 # ---------------------------------------------------------------- Altium 365
 class FakeA365:
-    """Nexar mock: components with revisions; desReleaseComponent of an existing item makes its next revision."""
+    """Nexar mock: components with revisions; desReleaseComponent of an existing item makes its next revision. Symbol
+    and footprint items are the ones released (with their file's bytes, model_data): a second release of an item name
+    fails as a duplicate, as live."""
     def __init__(self):
         self.comps, self.calls, self.n = {}, [], 0
+        self.models, self.blobs = {"symbols": {}, "footprints": {}}, {}
 
     def release_defs(self, ws):
         return {"componentLifeCycle": {"id": "LC1"}}
 
     def upload(self, p):
         self.calls.append(("upload", Path(p).name))
+        self.blobs[f"file:{Path(p).name}"] = Path(p).read_bytes()
         return f"file:{Path(p).name}"
 
     def find(self, ws, name):
@@ -598,12 +602,35 @@ class FakeA365:
         return next((c for c in self.comps.values() if c["id"] == cid), None)
 
     def find_model(self, ws, kind, name, folder):
-        return f"{kind}:{name}"
+        return f"{kind}:{name}" if name in self.models[kind] else None
+
+    def model_data(self, ws, kind, name, folder):
+        return self.models[kind].get(name)
+
+    def component_models(self, cid):
+        c = self.component(cid) or {}
+        inp = (c.get("revisions") or [{}])[-1]
+        out = {}
+        for kind, key, link in (("symbols", "symbolItemName", "symbol"), ("footprints", "footprintItemName", "footprints")):
+            ln = inp.get(link)
+            ln = (ln[0] if isinstance(ln, list) else ln) or {}
+            name = inp.get(key) or str(ln.get("id") or "").split(":", 1)[-1]
+            out[kind] = [self.models[kind][name]] if name in self.models[kind] else []
+        return out
 
     def folder_id(self, ws, path):
         return f"folder:{path}"
 
     def release(self, inp):
+        from ecadlib import altium365 as A
+        new = {}
+        for kind, key, fk in (("symbols", "symbolItemName", "symbolFiles"), ("footprints", "footprintItemName", "footprintFiles")):
+            if inp.get(fk):
+                if inp.get(key) in self.models[kind]:
+                    raise A.NexarError(f"AddALU_ItemsDuplicate item HRID {inp[key]}")
+                new[kind] = (inp[key], self.blobs.get(inp[fk][0]["fileId"]))
+        for kind, (name, data) in new.items():
+            self.models[kind][name] = data
         self.calls.append(("release", inp["componentItemName"], bool(inp["symbolFiles"]), bool(inp["footprintFiles"])))
         self.n += 1
         c = self.comps.setdefault(inp["componentItemName"], {"id": f"C{self.n}", "name": inp["componentItemName"],
@@ -640,7 +667,8 @@ def test_a365_approved_change_is_a_new_revision_and_held_sends_nothing():
     first = push()
     assert first["AO3401A"]["action"] == "release" and nx.comps["AO3401A"]["revision"]["revisionId"] == "R1"
     assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["revision"] == 1
-    assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["detail"] == {"action": "release", "a365_revision": "R1"}
+    d = LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["detail"]
+    assert {k: d[k] for k in ("action", "a365_revision")} == {"action": "release", "a365_revision": "R1"}, d
     # a held change: the plan still has the released revision, so nothing new goes up
     items = items_of(plan)
     g = gate(lib)
@@ -709,3 +737,6 @@ def test_a365_new_queries_match_the_nexar_schema():
     schema = build_schema((ROOT / "tests" / "nexar" / "schema.graphql").read_text(), assume_valid_sdl=True)
     for q in (A.Q_TRANSITIONS, A.M_LIFECYCLE):
         assert not validate(schema, parse(q)), q
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

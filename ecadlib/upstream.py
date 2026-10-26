@@ -577,7 +577,8 @@ def main(argv=None):
         print(f"check-a365: {type(e).__name__}: {e}", file=sys.stderr); return 2
     if a.state:
         Path(a.state).parent.mkdir(parents=True, exist_ok=True)
-        Path(a.state).write_text(json.dumps(new_state, indent=1), encoding="utf-8")
+        from .fsutil import write_text_atomic
+        write_text_atomic(Path(a.state), json.dumps(new_state, indent=1))
     write_report(rows, a.out, "Altium 365 drift", A365_COLS, [f"Plan `{a.plan}` vs `{a.workspace}`, checked {now}."])
     for r in rows:
         print(f"  {r['status']:<11} {r['name']:<28} {r['field']:<24} plan={r['plan']!r} workspace={r['workspace']!r}")

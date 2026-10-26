@@ -455,10 +455,18 @@ def _step(client, model, prof, p, system, blocks, task, schema, rec, max_tokens)
             "output_config": output_config(model, None, schema)}
     usage, err, val = {}, None, None
     for attempt in (1, 2):
-        msg = client.messages(body, {})
+        try:
+            msg = client.messages(body, {})
+        except DatasheetError as e:                   # this step's first attempt was billed: its usage goes along
+            e.usage = add_usage(usage, getattr(e, "usage", None))
+            rec["usage"] = usage
+            raise
         usage = add_usage(usage, msg.get("usage"))
-        if msg.get("stop_reason") == "refusal":
-            raise DatasheetError(f"model declined ({rec['step']} step)")
+        if msg.get("stop_reason") == "refusal":       # a refusal is billed too
+            rec["usage"] = usage
+            e = DatasheetError(f"model declined ({rec['step']} step)")
+            e.usage = usage
+            raise e
         try:
             val, fixes, err = repair(text_of(msg), schema)
         except ValueError as e:
@@ -495,7 +503,10 @@ def run_steps(client, body, prof, p, part, package, notes):
     except DatasheetError as e:                       # what the steps so far cost goes with the error
         e.usage = add_usage(*[s.get("usage") for s in steps], getattr(e, "usage", None))
         e.steps = steps
-        raise
+        from ..datasheet import APIError
+        if isinstance(e, APIError) and any(e.usage.values()):
+            e.maybe_billed = True                     # earlier calls of this read were paid for: the cost cap keeps
+        raise                                         # its hold (and the ledger records it), never gives it back
 
 
 def _run_steps(client, body, prof, p, part, package, notes, model, pdf, n, mt, steps):

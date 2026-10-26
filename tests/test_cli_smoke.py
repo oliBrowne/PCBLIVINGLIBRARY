@@ -48,7 +48,7 @@ CASES = [
       "--json", "{out}/bench.json"], (0, 1)),
     (["eval", "run", "--limit", "3", "--offline", "--cache", "{out}/cache", "-o", "{out}/eval"], (0,)),
     (["eval", "sets"], (0,)),
-    (["dblib", "{in}/bom.csv", "-o", "{out}/dblib"], (0,)),
+    (["dblib", "{in}/bom.csv", "-o", "{out}/dblib", "--draft"], (0,)),
     (["altium-lib", "pcblib", "{pkg}/package_specs/R_0603_1608Metric.json", "-o", "{out}/al"], (0,)),
     (["altium-lib", "dump", "{out}/al/R_0603_1608Metric.PcbLib"], (0,)),
     (["altium-native", "write", "{out}/al"], (0,)),
@@ -90,7 +90,8 @@ CASES = [
     (["notify", "show", "--rules", "{in}/ecadlib.toml"], (0,)),
     (["kicad-dblib", "{out}/lib/plan.json", "-o", "{out}/kicad", "--name", "ecadlib"], (0,)),
     (["export-parts", "{out}/lib/plan.json", "--format", "xlsx", "-o", "{out}/parts.xlsx"], (0,)),
-    (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm"], (0,)),
+    (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm"], (1, 2)),   # refused: kicad-export above wrote held parts
+    (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm", "--include-held"], (0, 1)),   # 1: held parts are a problem
     (["altium-pkg", "{out}/lib/plan.json", "--out", "{out}/altium_pkg"], (0, 1, 2)),   # 2: no ready part has models
     (["altium-menu", "build", "--out", "{out}/altium_menu", "--win-dir", "D:\\ecadlib menu"], (0,)),
     (["kicad-menu", "run-job", "{out}/kmenu/ecadlib-work/jobs/j", "--action", "open", "--project", "{out}/kmenu/b.kicad_pcb",

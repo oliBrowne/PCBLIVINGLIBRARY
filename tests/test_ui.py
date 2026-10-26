@@ -64,11 +64,17 @@ def test_workspace_flow():
         assert {x["action"] for x in dry["results"]} == {"release", "skip"} and (Path(d) / dry["report"]).exists()
         env = os.environ.pop("NEXAR_TOKEN", None)
         try:
+            # a real push goes only to the configured workspace ([altium365] workspace): none configured -> refused
+            expect(ValueError, ws.altium365_push, rel, "https://ws", False, contains="[altium365]")
+            (Path(d) / "ecadlib.toml").write_text('[altium365]\nworkspace = "https://ws"\n', encoding="utf-8")
+            expect(ValueError, ws.altium365_push, rel, "https://other", False, contains="not the Altium 365 workspace")
             expect(ValueError, ws.altium365_push, rel, "https://ws", False, contains="NEXAR_TOKEN")
+            (Path(d) / "ecadlib.toml").unlink()
         finally:
             if env:
                 os.environ["NEXAR_TOKEN"] = env
-        assert any(f.endswith(".DbLib") for f in quiet(ws.export_dblib, rel)["files"])
+        # no librarian plan for this BOM: no unchecked draft DbLib from the UI (round 3, R-FX-3)
+        expect(ValueError, ws.export_dblib, rel, contains="librarian")
         info = ws.info()
         assert "R_0603_1608Metric" in info["altium_models"]["PcbLib"] and rel in info["boms"]
 
@@ -162,9 +168,13 @@ def test_ui_server():
                 st, e = call("POST", "/api/altium365/push", {"bom": bom, "workspace": bad})
                 assert st == 400 and e["error"].startswith("workspace must be"), e
             st, e = call("POST", "/api/altium365/push", {"bom": bom, "workspace": "https://w", "dry_run": False})
+            assert st == 400 and "[altium365]" in e["error"], e        # no workspace configured: a real push refused
+            (Path(d) / "ecadlib.toml").write_text('[altium365]\nworkspace = "https://w"\n', encoding="utf-8")
+            st, e = call("POST", "/api/altium365/push", {"bom": bom, "workspace": "https://w", "dry_run": False})
             assert st == 400 and ("NEXAR_TOKEN" in e["error"] or os.environ.get("NEXAR_TOKEN")), e
-            st, r = call("POST", "/api/export/dblib", {"bom": bom})
-            assert st == 200 and r["files"], r
+            (Path(d) / "ecadlib.toml").unlink()
+            st, e = call("POST", "/api/export/dblib", {"bom": bom})     # no librarian plan: refused, nothing written
+            assert st == 400 and "librarian" in e["error"], e
             assert call("GET", "/api/job?id=nope")[0] == 404
         finally:
             srv.shutdown()

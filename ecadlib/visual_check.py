@@ -27,12 +27,11 @@ matching. No key -> "skipped" (images are still written). Answers are cached by 
 schema + model + effort) under <workspace>/agent/proof_cache/, so a re-run costs nothing.
 
 Settings: [agent.proof] in the rules (model, effort, api_key_env, max_cost_usd, fail_on, max_pages, dpi); empty
-model / effort / api_key_env fall back to [datasheet]."""
+model / effort fall back to [datasheet]; the key is the proof endpoint's (llm.endpoint(rules, "proof"))."""
 import argparse, base64, functools, hashlib, io, json, math, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 from . import datasheet as D, sexpr
-from . import userconfig as UC
 
 FONT_FILES = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf",
               "/Library/Fonts/Arial.ttf", "C:/Windows/Fonts/arial.ttf")
@@ -113,15 +112,19 @@ def _natural(s):
 
 
 def _settings(rules=None):
-    """[agent.proof] over PROOF_DEFAULTS; empty model / effort / api_key_env come from [datasheet]."""
+    """[agent.proof] over PROOF_DEFAULTS; empty model / effort come from [datasheet]. api_key_env is the proof
+    endpoint's key name (llm.endpoint(rules, "proof")): [datasheet]'s only when the proof talks to the same provider,
+    never another provider's key name sent to Claude (R-FX13-2)."""
     ds = D.settings(rules)
     got = ((rules or {}).get("agent") or {}).get("proof") if isinstance(rules, dict) else None
     s = dict(PROOF_DEFAULTS, **{k: v for k, v in (got or {}).items() if k in PROOF_DEFAULTS and v not in (None, "")})
-    for k in ("model", "effort", "api_key_env"):
+    for k in ("model", "effort"):
         s[k] = s[k] or ds[k]
+    s["api_key_env"] = s["api_key_env"] or "ANTHROPIC_API_KEY"     # until the endpoint below names it
     try:                                              # [ai] / [agent.proof] provider and model (ecadlib.llm)
         from . import llm as LL
-        s["model"] = LL.endpoint(rules if isinstance(rules, dict) else None, "proof", s["model"] if (got or {}).get("model") else None)["ref"]
+        ep = LL.endpoint(rules if isinstance(rules, dict) else None, "proof", s["model"] if (got or {}).get("model") else None)
+        s["model"], s["api_key_env"] = ep["ref"], ep["key_env"] or s["api_key_env"]
     except Exception as e:                            # never a silent switch to another (billed) model
         from . import fallbacks as FB
         FB.note("[agent.proof] / [ai] model setting did not resolve", e, instead=f"model {s['model']!r}")
@@ -1386,7 +1389,22 @@ def _get_pdf(ds, workspace):
     return p
 
 
-def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, key=None, render_only=False, say=None):
+def unpriced_refusal(model, cap, yes=False):
+    """Why a model with no known price is not sent, or None when it may be: a cap set can't be held; with no cap
+    ([agent.proof] max_cost_usd = 0, the default) it is sent only when the person said yes to an unknown price
+    (llm.price() prices a local endpoint at $0, so "no price" means a remote model, most likely a paid one)."""
+    how = (f"set its price in ecadlib.toml ([ai.profiles.\"{model}\"] price_in = ... and price_out = ..., $ per "
+           "million tokens)")
+    if cap:
+        return f"no price known for {model}: can't hold [agent.proof] max_cost_usd = {cap:g}; nothing sent. To send it, {how}"
+    if yes:
+        return None
+    return (f"no price known for {model}, so its cost can't be shown or checked; nothing sent. To send it, {how}, or "
+            "pass --yes (the app: confirm reading without a cost estimate)")
+
+
+def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, key=None, render_only=False, say=None,
+          yes=False):
     """Render ours + the datasheet pages, ask Claude once, check the answer strictly. Returns a Proof dict
     (see the module docstring and AGENT_CONTRACT). Never raises for a missing key / datasheet: those are verdicts."""
     from . import rules as RU
@@ -1450,6 +1468,9 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
     except Exception as e:
         if not rec:
             return _proof("skipped", f"model setup: {e}", **base)
+    if inf and est["usd_max"] is None:          # the model is registered now: a local endpoint is priced at $0
+        est = estimate(body)
+        base["estimate"] = est
     small_pass = lambda v, p: v == "pass" and p.get("tier") == "small" and "hold_on_doubt" in p["rails"]
     if rec:
         v, score, reason, findings, _ = parse_verdict(rec["message"], required, cfg["fail_on"])
@@ -1469,9 +1490,8 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
                                     model=inf["ep"]["model"])
     if client is None:
         try:
-            from . import llm as LL               # [ai] api_key_env counts, as for the datasheet reader
-            k = key or (LL.key_for(inf["ep"]) if inf else None) or UC.secret(cfg["api_key_env"]) \
-                or UC.secret("ANTHROPIC_API_KEY")
+            from . import llm as LL               # the proof endpoint's key only (R-FX13-2); key_for falls back to
+            k = key or (LL.key_for(inf["ep"]) if inf else None)     # ANTHROPIC_API_KEY, never [datasheet]'s other key
         except Exception:
             k = None
         if not k:
@@ -1479,9 +1499,8 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
                                      "(the pictures are written for a person to compare)", **base)
         client = D.Client(k, log_file=out_dir / "api_log.jsonl", say=say)
     cap = float(cfg.get("max_cost_usd") or 0)
-    if cap and est["usd_max"] is None:
-        return _proof("skipped", f"no price known for {model}: can't hold [agent.proof] max_cost_usd = {cap}; nothing sent",
-                      **base)
+    if est["usd_max"] is None and unpriced_refusal(model, cap, yes):
+        return _proof("skipped", unpriced_refusal(model, cap, yes), **base)
     if cap and est["usd_max"] > cap:
         return _proof("skipped", f"estimated up to ${est['usd_max']:.2f}, over [agent.proof] max_cost_usd = {cap}; nothing sent",
                       **base)
@@ -1560,6 +1579,7 @@ def main(argv=None):
     ap.add_argument("--render-only", action="store_true", help="write the pictures, send nothing")
     ap.add_argument("--model"); ap.add_argument("--effort", choices=D.EFFORTS)
     ap.add_argument("--rules")
+    ap.add_argument("--yes", action="store_true", help="send even when the model's price is unknown (no cost check)")
     a = ap.parse_args(argv)
     from . import rules as RU
     try:
@@ -1586,7 +1606,8 @@ def main(argv=None):
         print(f"error: {a.target}: no such file (pass --workspace to look a part name up)", file=sys.stderr)
         return 2
     try:
-        pr = prove(item, a.workspace, rules, out_dir=a.out, render_only=a.render_only, say=lambda m: print(m, file=sys.stderr))
+        pr = prove(item, a.workspace, rules, out_dir=a.out, render_only=a.render_only, say=lambda m: print(m, file=sys.stderr),
+                   yes=a.yes)
     except (VisualCheckError, D.DatasheetError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

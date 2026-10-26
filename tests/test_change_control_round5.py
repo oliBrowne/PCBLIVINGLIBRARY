@@ -6,6 +6,7 @@ from unittest import mock
 
 from ecadlib import altium_lib as AL, change_diff as CD, change_gate as CG, fingerprint as FP, ledger as LG, sexpr
 from tests.test_change_control import demo, gate, item, items_of
+from tests.fixtures_lite import clean_all, scratch
 
 
 def texts(ch):
@@ -18,7 +19,7 @@ def _altium(pins, d=None):
     s = {"name": "REG", "description": "reg", "designator": "U?", "comment": "*", "footprint": None,
          "prims": [("rect", 0, 0, 40, -50)] + [("pin", {"num": n, "name": nm, "type": t}, side, x, y, L)
                                                for n, nm, t, side, x, y, L in pins], "label_at": ((0, 2), (0, -58))}
-    d = Path(d or tempfile.mkdtemp(prefix="ecadlib-r5-"))
+    d = Path(d or scratch("ecadlib-r5-"))
     f = d / "REG.SchLib"
     AL.write_schlib(f, [s])
     return FP.of_item({"name": "REG", "symbol": {"ref": "REG", "file": str(f)}, "parameters": []}, d), f
@@ -171,6 +172,7 @@ def _age_to_3(lib):
             e["fingerprint"], e["digest"] = lg.put_json(fp), fp["hashes"]["digest"]
         out.append(json.dumps(e, sort_keys=True, ensure_ascii=False))
     lg.path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    __import__("shutil").rmtree(lg.store / "marks", ignore_errors=True)   # an older ecadlib kept no marks
 
 
 def _draw_ao(pins):
@@ -182,7 +184,7 @@ def _draw_ao(pins):
 def test_a_library_released_with_schema_3_shows_no_change_and_a_new_stack_still_holds():
     """SCHEMA 4 (pin ends, stacks): a library released by the previous ecadlib shows no change after the upgrade (old
     heads are fingerprinted again from their files); stacking D on S after it is held."""
-    assert FP.SCHEMA == 4
+    assert FP.SCHEMA >= 4
     plan, lib = demo()
     _age_to_3(lib)
     n = len(LG.Ledger(lib).lines())
@@ -279,3 +281,6 @@ def test_kicad_export_reuses_a_source_drawn_differently_but_not_one_that_joins_p
         assert ch and all(c.get("drawing") for c in ch if c["class"] != "cosmetic"), [(c["text"], c.get("drawing")) for c in ch]
     ch = CD.diff(base, _altium(_moved(REG, "13", y=-10))[0])
     assert any(c["class"] == "electrical" and not c.get("drawing") for c in ch), ch
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

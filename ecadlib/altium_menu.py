@@ -65,7 +65,7 @@ ecadlib's key store): the Components panel then shows them after a refresh. Held
 Never run inside Altium here: the script is written from Altium's scripting references (TR0120 DelphiScript,
 TR0124 Server Process, TR0135 System, TR0136 Integrated Library, TR0140 Workspace Manager; 2008 PDFs kept in
 github.com/Altium-Designer-addons/scripting-reference) and public scripts; see ALTIUM_API for each call it uses."""
-import argparse, configparser, csv, datetime, html, io, json, os, re, subprocess, sys, time, zipfile
+import argparse, configparser, csv, datetime, hashlib, html, io, json, os, re, subprocess, sys, time, zipfile
 from pathlib import Path, PureWindowsPath
 
 from . import __version__, altium_native as AN
@@ -528,6 +528,13 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
     Windows, the Python running this (default_command()); elsewhere empty (the runner then searches PATH / py / python)."""
     out = Path(out)
     command = command or default_command()
+    for k, v in (("--workspace", workspace), ("--library", library), ("--command", command)):
+        if v and re.search(r"[\x00-\x1f]", str(v)):    # a line break would start another key in ecadlib_menu.ini
+            raise ValueError(f"{k} {str(v)!r}: a line break or control character cannot go into {INI}")
+    if command and not str(command).isascii():   # the menu reads command= with TIniFile (ANSI code page, no UTF-8)
+        raise ValueError(f"--command {command!r}: the Altium menu reads it in the Windows ANSI code page, so it must "
+                         f"be plain ASCII; use the folder's short (8.3) name (dir /x) or a Python installed under an "
+                         f"ASCII path without spaces")
     out.mkdir(parents=True, exist_ok=True)
     derived = win_dir is None and os.name == "nt"
     if derived:
@@ -921,7 +928,12 @@ def load_config(ini_path):
     """Settings from ecadlib_menu.ini with paths resolved against its folder."""
     ini_path = Path(ini_path)
     base = ini_path.parent
-    sec = read_ini(ini_path)["ecadlib"] if ini_path.is_file() else {}
+    if not ini_path.is_file():                 # not the built-in defaults: they put parts in <that folder>/workspace
+        raise ValueError(f"{ini_path}: no such menu settings file (`ecadlib altium-menu build` writes {INI})")
+    cp = read_ini(ini_path)
+    if not cp.has_section("ecadlib"):
+        raise ValueError(f"{ini_path}: no [ecadlib] section (is this the menu's {INI}?)")
+    sec = cp["ecadlib"]
     get = lambda k, d="": (sec.get(k, d) or d).strip()
     def path(v, rel_to):
         if Path(v).is_absolute() or PureWindowsPath(v).is_absolute():
@@ -1004,12 +1016,19 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
         except ValueError as e:
             return {"target": "a365", "install": [], "problems": [str(e)], "workspace": url,
                     "fix": "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again" if "NEXAR_TOKEN" in str(e) else ""}
-        acts = [r.get("action") for r in res["results"]]
+        from .altium365 import PUSHED as _PUSHED
+        PUSHED = _PUSHED + ("released", "create", "created", "update", "updated")    # (older names, as counted before)
+        ready = {i.get("name") for i in ws._plan(bom_rel)[2] if i.get("status") == "ready"}
+        put = {r["name"] for r in res["results"] if r.get("action") in PUSHED and r["name"] in ready}   # this BOM's
+        # ready parts now in the workspace (another part's parameter update or an up-to-date one is not counted)
         return {"target": "a365", "install": [], "problems": [f"{r['name']}: {r.get('detail')}" for r in res["results"]
                                                               if r.get("action") == "error"],
-                "held": {r["name"]: r.get("detail") for r in res["results"] if r.get("recheck")},
-                "workspace": url, "released": sum(a in ("release", "released", "create", "created", "update", "updated")
-                                                 for a in acts), "report": str(ws.root / res["report"])}
+                # every part the push did not put in the workspace (a release-check hold, a sign-off the policy still
+                # wants, an identity change it refuses): a ready part among them is not "released"
+                "held": {r["name"]: r.get("detail") or r.get("action") for r in res["results"]
+                         if r.get("action") not in PUSHED and r.get("action") != "error" and (r["name"] in ready or r.get("recheck"))},
+                "actions": {r["name"]: r.get("action") for r in res["results"]},
+                "workspace": url, "released": len(put), "report": str(ws.root / res["report"])}
     bom_path, plan_f, items = ws._plan(bom_rel)
     if not any(i.get("status") == "ready" for i in items) and not any(Path(library).glob("*.DbLib")):
         return {"target": "folder", "install": [], "problems": [], "library": str(library)}
@@ -1024,12 +1043,14 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
 
 def publish_kicad(ws, bom_rel, library, name="ecadlib"):
     """The plan's parts -> <library>/<name>.kicad_sym, .pretty, .3dshapes (kicad_export). One plan makes the whole
-    library, so the KiCad menu keeps every part in one list (MENU_BOM). "footprints" maps part -> footprint name."""
+    library, so the KiCad menu keeps every part in one list (MENU_BOM). "footprints" maps part -> footprint name.
+    The KiCad menu builds the library into <project>/ecadlib/ (kicad_menu.config), so the footprints' 3D model paths
+    are written from the project folder, the library's parent (KiCad's KIPRJMOD)."""
     from . import kicad_export as KX
     from .httpcache import CachedHTTP
     _, plan_f, _ = ws._plan(bom_rel)
     rep = KX.export(plan_f, library, name, http=CachedHTTP(ws.root / "http_cache", offline=ws.offline, timeout=60),
-                    rules=ws.rules_in_use(), log=lambda *a, **k: None)
+                    rules=ws.rules_in_use(), log=lambda *a, **k: None, project=Path(library).parent)
     return {"target": "kicad", "install": [], "problems": rep["errors"], "library": str(library),
             "held": {s["part"]: s["why"] for s in rep["skipped"] if s.get("recheck")},
             "footprints": {p["part"]: p.get("footprint") or "" for p in rep["parts"]}}
@@ -1140,8 +1161,15 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
             res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
-        if pub.get("problems") or nm in (pub.get("held") or {}):
-            why = f"{nm}: {pub['held'][nm]}" if nm in (pub.get("held") or {}) else pub["problems"][0]
+        # the list holds every part added from the menu: another part's problem ("OTHER: ...") is not this one's
+        others = {str(i.get("name")) for i in items if i.get("name") and i.get("name") != nm}
+        probs = [p for p in pub.get("problems") or [] if not any(str(p).startswith(f"{o}: ") for o in others)]
+        if pub.get("target") == "a365" and "actions" in pub:    # one result per part: only this part's counts for it
+            probs = [p for p in probs if p.startswith(f"{nm}: ")]
+            if nm not in pub["actions"] and not probs:
+                probs = [f"{nm}: the Altium 365 push has no result for it"]
+        if probs or nm in (pub.get("held") or {}):
+            why = f"{nm}: {pub['held'][nm]}" if nm in (pub.get("held") or {}) else probs[0]
             res.update(status="error", message=f"{mpn} was built ({nm}) but not published: {why}",
                        fix=pub.get("fix") or "run `ecadlib altium-pkg` or `ecadlib altium365 push` by hand to see more")
     elif st == "awaiting_approval":
@@ -1211,13 +1239,27 @@ def releasable(it):
     return out
 
 
+RELEASE_SHOWN = 8           # hold reasons the dialog's Release anyway lists (ecadlib_dialog.pas AskRelease)
+
+
+def release_key(it):
+    """What the dialog's Release anyway was shown: a digest of the part's hold reasons, sent back with the release so
+    reasons that came up since (release_part re-reads the plan) are never released unseen."""
+    return hashlib.sha256("\n".join(sorted(str(r) for r in it.get("hold_reasons") or [])).encode("utf-8")).hexdigest()[:16]
+
+
 def offer_release(res, it, bom, mpn=""):
-    """result.ini keys for the dialog's Release anyway: the part, its BOM and why it is held (release_why1..4), so
+    """result.ini keys for the dialog's Release anyway: the part, its BOM and why it is held (release_why1..N, every
+    reason up to RELEASE_SHOWN; release_more: how many more there are, which the dialog says and which a release
+    from the dialog then refuses), release_count and release_key (what was shown, sent back with the release), so
     the dialog can show the reasons before it asks for a reason of its own. Nothing is released here."""
     whys = releasable(it)
     if whys:
         res.update(offer_release="1", release_bom=bom, release_mpn=mpn, release_part=it["name"],
-                   **{f"release_why{i}": w for i, w in enumerate(whys[:4], 1)})
+                   release_count=str(len(whys)), release_key=release_key(it),
+                   **{f"release_why{i}": w for i, w in enumerate(whys[:RELEASE_SHOWN], 1)})
+        if len(whys) > RELEASE_SHOWN:
+            res["release_more"] = str(len(whys) - RELEASE_SHOWN)
     return res
 
 
@@ -1249,6 +1291,22 @@ def release_part(cfg, req, progress=None):
             return {"status": "error", "message": f"{name} cannot be released anyway: "
                     + "; ".join(it.get("hold_reasons") or ["a file is missing or a change waits for approval"]) + ".",
                     "fix": f"Fix it in the review queue ({_queue_hint(cfg)})."}
+        if not str(req.get("release_key") or "").strip():   # a dialog from a menu built by an older ecadlib: it does
+            return {"status": "error", "message": f"{name} was not released: the ecadlib menu in Altium is older "
+                    "than this ecadlib. Its dialog does not say which hold reasons it showed you, so Release anyway "
+                    "from it cannot be checked against why the part is held now.",   # not send what it showed
+                    "fix": "Rebuild the menu: run `ecadlib altium-menu build` again with the same --out folder, then "
+                           "in Altium reopen the ecadlib script project (or restart Altium) and add the part again. "
+                           f"Or release it from the review queue ({_queue_hint(cfg)})."}
+        if str(req.get("release_key") or "") != release_key(it):   # what is released must be what the dialog showed
+            return {"status": "error", "message": f"{name} was not released: why it is held changed since the dialog "
+                    f"showed it.",
+                    "fix": f"Add {mpn} again to see every reason now, or release it from the review queue "
+                           f"({_queue_hint(cfg)})."}
+        if len(releasable(it)) > RELEASE_SHOWN:          # the dialog listed only the first RELEASE_SHOWN reasons
+            return {"status": "error", "message": f"{name} was not released: it is held for {len(releasable(it))} "
+                    f"reasons and the dialog shows {RELEASE_SHOWN}.",
+                    "fix": f"Release it from the review queue ({_queue_hint(cfg)}), which shows every reason."}
         progress.step(0, 0, f"releasing {name}")
         who = A.identity(req.get("user") or None, cwd=plan.parent)
         RV.release_anyway(plan, name, who, reason=reason)
@@ -1318,7 +1376,8 @@ def not_found(triage_csv, mpn, item):
 
 
 def _library_mpns(cfg, ws):
-    """MPNs already in the library: the DbLib parts table (any 'part number' column) and every ready / pulled plan item.
+    """MPNs already in the library: the DbLib parts table (any 'part number' column); with Altium 365, also the workspace's
+    own components (pulled) and the parts a push sent there (the ledger's publish lines), never a plan item only ready.
     KiCad (cfg tool kicad): the part number properties of the library's .kicad_sym files, which travel with the
     project (the workspace may not, and a deleted library has nothing in it)."""
     have = set()
@@ -1337,12 +1396,26 @@ def _library_mpns(cfg, ws):
                 have |= {str(v).strip().upper() for k, v in row.items() if k and "part number" in k.lower() and v}
         except (OSError, UnicodeDecodeError, csv.Error):
             continue
-    for plan in sorted((ws.root / "librarian").glob("*/plan.json")) + [ws.root / "altium365" / "workspace_plan.json"]:
+    url = _a365_url(ws)
+    if not url:              # a folder library: only what its DbLib table holds (a ready plan item may never have been
+        return have          # put there: held at the altium-pkg re-check, another BOM's plan not synced)
+    from . import altium365 as A365, ledger as LG
+    target = A365.ws_target(url)
+    try:                     # Altium 365: the workspace's own components (pulled), and the parts a push sent there
+        items = json.loads((ws.root / "altium365" / "workspace_plan.json").read_text(encoding="utf-8"))
+        have |= {_mpn_of(i).strip().upper() for i in items if isinstance(i, dict) and i.get("status") == "existing" and _mpn_of(i)}
+    except (OSError, ValueError, AttributeError):
+        pass
+    for plan in sorted((ws.root / "librarian").glob("*/plan.json")):
         try:
             items = json.loads(plan.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            lg = LG.Ledger(plan.parent)
+            if not lg.exists():
+                continue
+            have |= {_mpn_of(i).strip().upper() for i in items if isinstance(i, dict) and _mpn_of(i)
+                     and lg.published(i.get("name"), target)}
+        except (OSError, ValueError, AttributeError):
             continue
-        have |= {_mpn_of(i).strip().upper() for i in items if i.get("status") in ("ready", "existing") and _mpn_of(i)}
     return have
 
 
@@ -1442,7 +1515,9 @@ def _fill_result(cfg, ws, bom, s, progress, ai_cost=None):
     where = ("released to Altium 365: refresh the Components panel" if pub.get("target") == "a365"
              else f"in the {cfg['name']} KiCad library" if pub.get("target") == "kicad"
              else f"in the {cfg['name']} database library")
-    msg = f"{s['parts']} parts: {s['ready']} ready" + (f" ({where})" if s["ready"] else "")
+    put = pub["released"] if pub.get("target") == "a365" and "released" in pub else s["ready"]   # a held push is not released
+    msg = f"{s['parts']} parts: {s['ready']} ready" + (f" ({put} {where})" if s["ready"] and put != s["ready"]
+                                                         else f" ({where})" if s["ready"] else "")
     msg += "".join(f", {n} {label}" for n, label in ((s["held"], "held"), (s["awaiting_approval"], "waiting for sign-off"),
                                                        (s["duplicates"], "duplicates")) if n)
     problems = (pub.get("problems") or []) + [f"{n}: {w}" for n, w in (pub.get("held") or {}).items()]
@@ -1454,7 +1529,8 @@ def _fill_result(cfg, ws, bom, s, progress, ai_cost=None):
         res["fix"] = pub.get("fix") or "run `ecadlib altium-pkg` / `ecadlib altium365 push` by hand to see more"
     elif s["held"] or s["awaiting_approval"]:
         res["fix"] = f"Open the review queue ({_queue_hint(cfg)}): it says why each part is held and what to pick."
-    shown = [row_text("ready, in your library" if pub.get("target") != "a365" else "released to Altium 365", s["ready"], s["ready"] > 0)]
+    shown = [row_text("ready, in your library" if pub.get("target") != "a365" else "released to Altium 365", put, put > 0)]
+    shown += [row_text(n, f"ready but not released: {w}") for n, w in list((pub.get("held") or {}).items())[:3]]
     shown += [row_text(label, n) for n, label in ((s["held"], "held for a person"), (s["awaiting_approval"], "waiting for sign-off"),
                                                    (s["duplicates"], "already in the library")) if n]
     held = [r for r in s.get("review", []) if r.get("status") == "held"]
@@ -1618,7 +1694,11 @@ def run_job(job, opener=None):
     job = Path(job)
     try:
         req = dict(read_ini(job / "request.ini")["request"])
-        cfg = load_config(req.get("config") or job.parent.parent / INI)
+        named = Path(req["config"]) if req.get("config") else None
+        # TIniFile writes request.ini in the ANSI code page: a folder name it cannot hold comes back with '?', and
+        # the job is in <menu folder>\jobs\<id> anyway
+        cfg = load_config(named if named and named.is_file() or not (job.parent.parent / INI).is_file()
+                          else job.parent.parent / INI)
         res = run_action(cfg, req.get("action", ""), req, opener=opener, progress=Progress(job))
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = _error(e)

@@ -153,7 +153,8 @@ def read_schdoc(path, rules=None):
     import olefile
     path = Path(path)
     warnings = []
-    with olefile.OleFileIO(str(path)) as o:
+    from .altium_lib import ole_open
+    with ole_open(path) as o:                 # (a stream bigger than the file is refused, not followed round a loop)
         if not o.exists("FileHeader"):
             raise ValueError(f"{path.name}: no FileHeader stream; not an Altium schematic")
         recs = _records(o.openstream("FileHeader").read())
@@ -192,8 +193,6 @@ def read_schdoc(path, rules=None):
                         impls.append(m)
         cur = next((m for m in impls if m.get("ISCURRENT", "").upper() == "T"), impls[0] if impls else None)
         kind = next((_int(r[k], 0) for k in ("COMPONENTKINDVERSION3", "COMPONENTKINDVERSION2", "COMPONENTKIND") if k in r), 0)
-        comment = _resolve(params.get("Comment", ""), params)
-        mpn = _mpn_of(params, _param_names("Manufacturer Part Number", MPN_PARAMS, rules))
         did = r.get("DESIGNITEMID", "").strip()
         comps.append({
             "sheet": path.name, "designator": des, "libref": r.get("LIBREFERENCE", ""), "design_item_id": did,
@@ -201,12 +200,8 @@ def read_schdoc(path, rules=None):
             "database_table": r.get("DATABASETABLENAME", ""), "unique_id": r.get("UNIQUEID", ""),
             "current_part": _int(r.get("CURRENTPARTID"), 1), "part_count": max(_int(r.get("PARTCOUNT"), 2) - 1, 1),
             "description": r.get("COMPONENTDESCRIPTION", ""), "kind": kind, "in_bom": kind not in NO_BOM_KINDS,
-            "comment": comment, "value": _ci(params, VALUE_PARAMS) or comment,
             "footprint": (cur or {}).get("MODELNAME", ""), "footprints": [m.get("MODELNAME", "") for m in impls],
-            "mpn": mpn, "manufacturer": _ci(params, _param_names("Manufacturer", MFR_PARAMS, rules)),
-            "lcsc": _ci(params, LCSC_PARAMS), "datasheet": _datasheet(params),
-            "supplier": _ci(params, ["Supplier 1", "Supplier"]), "supplier_pn": _ci(params, ["Supplier Part Number 1", "Supplier Part Number"]),
-            "lifecycle": _ci(params, LIFECYCLE_PARAMS),
+            **_derive(params, rules),
             "vault_guid": r.get("VAULTGUID", ""), "item_guid": r.get("ITEMGUID", ""), "revision_guid": r.get("REVISIONGUID", ""),
             "symbol_item_guid": r.get("SYMBOLITEMGUID", ""), "symbol_revision_guid": r.get("SYMBOLREVISIONGUID", ""),
             "params": params,
@@ -218,8 +213,29 @@ def read_schdoc(path, rules=None):
     return {"path": str(path), "header": header, "components": comps, "warnings": warnings, "sheet_symbols": symbols}
 
 
-def _datasheet(params):
-    d = _ci(params, DATASHEET_PARAMS)
+# the component fields that come from its parameters: (field, canonical ecadlib parameter name, built-in names)
+DERIVED = (("mpn", "Manufacturer Part Number", MPN_PARAMS), ("manufacturer", "Manufacturer", MFR_PARAMS),
+           ("lcsc", "LCSC", LCSC_PARAMS), ("datasheet", "Datasheet", DATASHEET_PARAMS),
+           ("supplier", "Supplier 1", ["Supplier 1", "Supplier"]),
+           ("supplier_pn", "Supplier Part Number 1", ["Supplier Part Number 1", "Supplier Part Number"]),
+           ("lifecycle", "Lifecycle Status", LIFECYCLE_PARAMS), ("value", "Value", VALUE_PARAMS))
+DERIVED_FIELDS = ("comment",) + tuple(f for f, _, _ in DERIVED)
+
+
+def _derive(params, rules=None):
+    """Parameters -> every field derived from them (MPN, maker, LCSC, datasheet, supplier, supplier PN, lifecycle,
+    value, comment), with the house parameter names from rules ([parameters] names) first. read_schdoc and
+    apply_variant both use it, so a variant's parameter change re-derives the same fields the same way."""
+    names = {f: _param_names(canon, defaults, rules) for f, canon, defaults in DERIVED}
+    comment = _resolve(params.get("Comment", ""), params)
+    return {"comment": comment, "mpn": _mpn_of(params, names["mpn"]), "manufacturer": _ci(params, names["manufacturer"]),
+            "lcsc": _ci(params, names["lcsc"]), "datasheet": _datasheet(params, names["datasheet"]),
+            "supplier": _ci(params, names["supplier"]), "supplier_pn": _ci(params, names["supplier_pn"]),
+            "lifecycle": _ci(params, names["lifecycle"]), "value": _ci(params, names["value"]) or comment}
+
+
+def _datasheet(params, names=DATASHEET_PARAMS):
+    d = _ci(params, names)
     if d:
         return d
     for k, v in params.items():                       # ComponentLink<N>Description=Datasheet + ComponentLink<N>URL
@@ -547,7 +563,7 @@ def load_project(path, rules=None, root=None):
         warnings.append(f"no Manufacturer Part Number parameter on {len(by_comment)} component(s) "
                         f"({', '.join(by_comment[:8])}{' ...' if len(by_comment) > 8 else ''}): their Comment is used as the MPN")
     return {"name": proj["name"], "path": proj["path"], "components": comps, "variants": proj["variants"],
-            "parameters": proj["parameters"], "warnings": list(dict.fromkeys(warnings)),
+            "parameters": proj["parameters"], "warnings": list(dict.fromkeys(warnings)), "rules": rules,
             "bomdocs": [str(b) for b in bomdocs], "sheets": [str(s) for s in proj["schdocs"]]}
 
 
@@ -667,7 +683,7 @@ def variant_of(project, name):
     return v
 
 
-def apply_variant(comps, variant):
+def apply_variant(comps, variant, rules=None):
     """-> copies of comps with 'fitted' and variant overrides (alternate part, parameter values)."""
     out = []
     for c in comps:
@@ -688,21 +704,32 @@ def apply_variant(comps, variant):
                     # the alternate's Design Item ID, whatever order the keys come in (not its symbol's LibReference)
                     alt = pick(r"designitemid") or pick(r"libreference|libref") or hit.get("AlternatePart", "")
                     c["variant_note"] = f"alternate part {alt}".strip()
-                    if alt and not alt.startswith("="):
-                        c.update(design_item_id=alt, mpn=alt if c["mpn_source"] in ("DesignItemId", "") else c["mpn"],
-                                 libref=pick(r"libreference") or c["libref"])
+                    alt = "" if alt.startswith("=") else alt
+                    # another part: nothing the base part's parameters / ActiveBOM gave is kept (its MPN, maker, LCSC,
+                    # supplier, datasheet, value, LibRef, GUIDs). The MPN is the alternate's Design Item ID when that
+                    # reads as a part number (or is a DbLib key); otherwise none, and the line holds.
+                    dblib = c["mpn_source"] == "DesignItemId" or c["source_library"].lower().endswith((".dblib", ".svndblib"))
+                    mpn = alt if alt and not _is_vault_id(alt) and (dblib or looks_like_mpn(alt)) else ""
+                    c.update({f: "" for f in DERIVED_FIELDS + ("description", "item_guid", "revision_guid", "vault_guid")})
+                    c.update(design_item_id=alt, mpn=mpn, mpn_source="Alternate", comment=alt, value=alt, alternates=[],
+                             libref=pick(r"libreference") or "", alternate=alt)
             params = dict(c["params"])
             for pv in variant["param_variations"]:
                 if (pv["unique_id"] and pv["unique_id"].rsplit("\\", 1)[-1] in uids and (not c.get("channel") or pv["designator"] in ("", c["designator"]))) or (not pv["unique_id"] and pv["designator"] == c["designator"]):
                     params[pv["name"]] = pv["value"]
             if params != c["params"]:
-                changed = {k for k in params if params[k] != c["params"].get(k)}
+                # every field the varied parameters change is re-derived (maker, LCSC, supplier PN ... with the MPN);
+                # a field they leave alone keeps what the base part has (an ActiveBOM / DbLib MPN included)
+                was, now = _derive(c["params"], rules), _derive(params, rules)
                 c["params"] = params
-                mpn = _mpn_of({k: params[k] for k in changed}, MPN_PARAMS)
-                c["comment"] = _resolve(params.get("Comment", c["comment"]), params)
-                c["value"] = _ci(params, VALUE_PARAMS) or c["comment"]
-                if mpn:
-                    c["mpn"] = mpn
+                for f in DERIVED_FIELDS:
+                    if now[f] != was[f]:
+                        c[f] = now[f]
+                        if f == "mpn":
+                            c["mpn_source"] = "parameter" if now[f] else ""
+                if c.get("mpn_source") == "Comment" and now["comment"] != was["comment"]:   # the MPN was the Comment
+                    c["mpn"] = c["comment"].strip() if looks_like_mpn(c["comment"]) else ""
+                    c["mpn_source"] = "Comment" if c["mpn"] else ""
                 c["variant_note"] = (c["variant_note"] + "; parameters changed").strip("; ")
         out.append(c)
     return out
@@ -712,16 +739,20 @@ def _group_key(c):
     from .dedupe import mpn_key
     if c["mpn"]:
         return "MPN:" + mpn_key(c["mpn"])
+    if c.get("mpn_source") == "Alternate":            # a variant's alternate with no part number: never with the base part
+        return "ALT:" + (c["design_item_id"] or "?" + c["designator"]).upper()
     if c["design_item_id"]:
         return "ID:" + c["design_item_id"].upper()
     return "LIB:" + "|".join(x.upper() for x in (c["libref"], c["value"], c["footprint"]))
 
 
-def bom_groups(project, variant=None):
-    """Grouped BOM lines (fitted ones, then one DNP line per not-fitted group) with per-variant quantities."""
+def bom_groups(project, variant=None, rules=None):
+    """Grouped BOM lines (fitted ones, then one DNP line per not-fitted group) with per-variant quantities. rules (or
+    the rules load_project read with) give the house parameter names a variant's parameter change is read by."""
+    rules = rules if rules is not None else project.get("rules")
     comps = [c for c in project["components"] if c["in_bom"]]
-    base = apply_variant(comps, variant_of(project, variant))
-    per_var = {v["name"]: {c["designator"]: c["fitted"] for c in apply_variant(comps, v)} for v in project["variants"]}
+    base = apply_variant(comps, variant_of(project, variant), rules)
+    per_var = {v["name"]: {c["designator"]: c["fitted"] for c in apply_variant(comps, v, rules)} for v in project["variants"]}
     groups = {}
     for c in base:
         g = groups.setdefault((_group_key(c), c["fitted"]), {"comps": [], "fitted": c["fitted"]})
@@ -761,7 +792,7 @@ def bom_lines(path, variant=None, rules=None, root=None):
     for w in prj["warnings"]:
         print(f"  warning: {w}", file=sys.stderr)
     lines = []
-    for g in bom_groups(prj, variant):
+    for g in bom_groups(prj, variant, rules):
         ln = {f: g[f] for f in LINE_FIELDS if g.get(f)}
         ln["designator"], ln["qty"] = g["designator"], g["qty"] if not g["dnp"] else str(g["count"])
         ln["dnp"] = g["dnp"]
@@ -770,6 +801,15 @@ def bom_lines(path, variant=None, rules=None, root=None):
                 ln[f"altium_{k}"] = g[k]
         if g.get("mpn_source") == "Comment":
             ln["altium_mpn_source"] = "Comment"
+        elif g.get("mpn_source") == "Alternate":
+            alt = g.get("design_item_id") or "(not named)"
+            ln["altium_mpn_source"] = "Alternate"
+            ln["bom_note"] = (f"variant alternate part {alt}: MPN taken from its Design Item ID; check it" if g.get("mpn") else
+                              f"variant alternate part {alt}: no part number for it (the base part's MPN and maker "
+                              "are not used); set the alternate's MPN parameter in the variant")
+            if g.get("footprint"):                    # kept (alternates usually share the land); the librarian holds
+                ln["bom_note"] += (f"; footprint {g['footprint']} is the base part's (the variant names none for the "   # it
+                                   "alternate): held until the alternate's datasheet confirms that package")   # (librarian.alternate_footprint)
         lines.append(ln)
     if not lines:
         raise ValueError(f"{Path(path).name}: no components found in the project's schematics")
@@ -838,7 +878,7 @@ def load_library(plan=None, libs=(), a365=None, log=None):
     from . import dedupe as DD
     col = DD.Collector(DD.load_config(None, Path(plan).parent if plan else None), log or (lambda *a, **k: None))
     if plan:
-        col.add_plan(json.loads(Path(plan).read_text()), Path(plan).parent)
+        col.add_plan(json.loads(Path(plan).read_text(encoding="utf-8")), Path(plan).parent)
         a365 = a365 or (Path(plan).parent / "a365_state.json" if (Path(plan).parent / "a365_state.json").exists() else None)
     for lib in libs:
         if not Path(lib).exists():             # else every project part would read "missing from library"
@@ -847,7 +887,7 @@ def load_library(plan=None, libs=(), a365=None, log=None):
     guids = {}
     if a365:
         col.add_a365(a365)
-        data = json.loads(Path(a365).read_text())     # any GUIDs the state carries map back to the component name
+        data = json.loads(Path(a365).read_text(encoding="utf-8"))     # any GUIDs the state carries map back to the component name
         for name, snap in (data.items() if isinstance(data, dict) else ((n.get("name"), n) for n in data)):
             for g in re.findall(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}", json.dumps(snap)):
                 guids[g.upper()] = name
@@ -859,8 +899,9 @@ def load_lifecycle(path):
         return {}
     if not Path(path).exists():                # a typo would skip the NRND / EOL check silently
         raise FileNotFoundError(f"--lifecycle {path}: not found")
-    data = json.loads(Path(path).read_text())
-    return {k: v for k, v in (data.get("parts") or {}).items()}
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    from .lifecycle import rekey
+    return rekey(data.get("parts") or {})          # a state keyed before decimal points were kept reads as now
 
 
 def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, rules=None, log=None):
@@ -879,7 +920,7 @@ def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, r
                          "components": len(prj["components"])})
         warnings += [f"{prj['name']}: {w}" for w in prj["warnings"]]
         comps = [c for c in prj["components"] if c["in_bom"]]
-        fits = {v["name"]: {c["designator"]: c["fitted"] for c in apply_variant(comps, v)} for v in prj["variants"]}
+        fits = {v["name"]: {c["designator"]: c["fitted"] for c in apply_variant(comps, v, rules)} for v in prj["variants"]}
         for c in comps:
             key = _group_key(c)
             e = parts.setdefault(key, {"key": key, "mpn": c["mpn"], "manufacturer": c["manufacturer"], "design_item_ids": set(),
@@ -972,7 +1013,7 @@ def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, r
     lc = load_lifecycle(lifecycle or (dflt if dflt and dflt.exists() else None))
     plan_lc = {}
     if plan:
-        for it in json.loads(Path(plan).read_text()):
+        for it in json.loads(Path(plan).read_text(encoding="utf-8")):
             st = it.get("lifecycle")
             st = st.get("status") if isinstance(st, dict) else st
             if st:
@@ -1053,9 +1094,9 @@ def write_where_used(res, stem):
                   f"{r['qty']} | {r['designators'][:60]} | {r['not_fitted'] or '-'} |")
     if res["warnings"]:
         md += ["", "## Warnings", ""] + [f"- {w}" for w in res["warnings"]]
-    stem.with_suffix(".md").write_text("\n".join(md) + "\n")
+    stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     js = {"projects": res["projects"], "flags": res["flags"], "warnings": res["warnings"], "parts": res["parts"]}
-    stem.with_suffix(".json").write_text(json.dumps(js, indent=1, default=list))
+    stem.with_suffix(".json").write_text(json.dumps(js, indent=1, default=list), encoding="utf-8")
     return {"md": stem.with_suffix(".md"), "csv": stem.with_suffix(".csv"), "flags": stem.with_name(stem.name + "_flags.csv"),
             "json": stem.with_suffix(".json")}
 
@@ -1074,7 +1115,7 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the grouped BOM as JSON")
     a = ap.parse_args(argv)
     try:
-        prj = load_project(a.project)
+        prj = load_project(a.project, RU.resolve(None, Path(a.project).parent) if RU else None)
         groups = bom_groups(prj, a.variant)
     except (ValueError, FileNotFoundError) as e:
         print(f"ecadlib project: {e}", file=sys.stderr)
@@ -1107,7 +1148,9 @@ def where_used_main(argv=None):
     ap.add_argument("-o", "--out", default="out/where_used", help="report stem (.md, .csv, _flags.csv, .json)")
     a = ap.parse_args(argv)
     try:
-        res = where_used(a.projects, a.part, a.plan, a.lib, a.a365, a.lifecycle)
+        first = Path(a.projects[0])                   # the rules beside (or above) the projects: house parameter names
+        rules = RU.resolve(None, first if first.is_dir() else first.parent) if RU else None
+        res = where_used(a.projects, a.part, a.plan, a.lib, a.a365, a.lifecycle, rules=rules)
     except (ValueError, FileNotFoundError) as e:
         print(f"ecadlib where-used: {e}", file=sys.stderr)
         return 2

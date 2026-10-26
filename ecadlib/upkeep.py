@@ -14,7 +14,8 @@ Checks (each runs in-process; a check whose credentials are missing is skipped w
              (not renamed/deleted: those need a person) so a PR carries the real library diff.
   a365       upstream.check_a365 against an Altium 365 workspace (NEXAR_TOKEN and --workspace, or [altium365] workspace
              in the rules). New: a drift row (missing, parameter, folder, symbol/footprint, revision) not reported before.
-  changes    change control (#105), on a plan's library folder: changes to released parts held for approval, projects in
+  changes    change control (#105), on a plan's library folder: changes to released parts held for approval, released
+             parts edited on disk that no ecadlib writer has settled yet (files, fields, build recipes, 3D models), projects in
              the usage index (`ecadlib project scan`) that use an older revision than the released one, and KiCad
              projects there whose parts differ from the library in a way the [change] policy holds
              (`ecadlib project check`). Reports only; it never applies a change.
@@ -323,7 +324,7 @@ def check_a365(src, state_dir, ctx, cfg, now, workspace=None, rules=None):
 
 
 # ------------------------------------------------------------------ change control: held changes and project drift
-def check_changes(src, state_dir, ctx, cfg, now):
+def check_changes(src, state_dir, ctx, cfg, now, rules=None):
     from . import change_diff as CD, change_gate as CG, ledger as LG
     sec = _section("changes")
     if src.kind != "plan":
@@ -347,6 +348,28 @@ def check_changes(src, state_dir, ctx, cfg, now):
         report(_fp("held", p["part"], p.get("digest")), "held for approval", p["part"], f"r{p.get('base')}",
                "proposed by " + str(p.get("writer") or "?"), CD.summary(p.get("changes") or []) +
                f" (ecadlib part show {src.path} {p['part']})")
+    # released parts edited on disk that no writer has settled yet (read only: nothing is held or put back here)
+    items = [i for i in CG.read_plan(folder) if isinstance(i, dict) and i.get("name")]
+    unsettled = CG.preview_unsettled(folder, json.loads(json.dumps(items)), rules=rules)
+    for part, summary in sorted(unsettled.items()):
+        report(_fp("unsettled", part, summary), "edited, not settled", part, f"r{lg.head(part)['revision']}",
+               "held at the next ecadlib write", summary)
+    edited_sides = set()
+    for it in items:
+        head = lg.head(it["name"])
+        if not head:
+            continue
+        sides = {}
+        for r in (head.get("files") or {}).values():
+            f = Path(r["path"]) if Path(r["path"]).is_absolute() else folder / r["path"]
+            if f.is_file() and LG.sha_bytes(f.read_bytes()) == r.get("sha256"):
+                sides.update(LG.side_drift(r, f))
+        if sides:
+            edited_sides.add(it["name"])
+            names = ", ".join(sorted({Path(p).name for p in sides}))
+            report(_fp("unsettled-side", it["name"], *sorted(sides)), "edited, not settled", it["name"],
+                   f"r{head['revision']}", "the released file is put back at the next ecadlib write",
+                   f"{names} differ from the released revision (Altium's own rebuild makes the library from them)")
     behind = 0
     for proj, row in sorted(LG.load_usage(folder)["projects"].items()):
         for part, rec in sorted((row.get("parts") or {}).items()):
@@ -371,6 +394,11 @@ def check_changes(src, state_dir, ctx, cfg, now):
                            f"{proj}: {r['id']}", ", ".join(r["refs"][:8]), r["worst"], r["summary"])
     sec["resolved"] = [_change("resolved", "", "", "", f"{n} item(s) from earlier runs no longer seen")] \
         if (n := len(set(old["seen"]) - set(seen))) else []
+    edited = sorted(set(unsettled) | edited_sides)
+    if edited:                                 # found on disk, not settled: every run says so until a writer settles it
+        sec.update(status="attention", reason=f"{len(edited)} released part(s) edited, not settled: "
+                                              f"{', '.join(edited[:8])}{' ...' if len(edited) > 8 else ''} (held or put "
+                                              f"back at the next ecadlib write)")
     sec["notes"].append(f"{len(held)} change(s) held for approval; {behind} project part(s) on an older revision")
     sec["_state"] = {"changes_state.json": {"version": 1, "updated": now, "seen": seen}}
     return sec
@@ -404,7 +432,7 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
             elif name == "upstream":
                 sec = check_upstream(src, state_dir, ctx, cfg, now, apply)
             elif name == "changes":
-                sec = check_changes(src, state_dir, ctx, cfg, now)
+                sec = check_changes(src, state_dir, ctx, cfg, now, rules)
             else:
                 sec = check_a365(src, state_dir, ctx, cfg, now, workspace, rules)
         except Exception as e:                       # one broken check never hides the others
@@ -425,11 +453,12 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
 
 
 def save_state(rep, state_dir):
-    """Write each check's new state (only checks that ran cleanly; an errored check keeps its old state)."""
+    """Write each check's new state (only checks that ran cleanly, "attention" included: what they found was
+    reported; an errored check keeps its old state)."""
     d = Path(state_dir)
     d.mkdir(parents=True, exist_ok=True)
     for s in rep.get("checks") or []:
-        if s.get("status") == "ok" and s.get("_state"):
+        if s.get("status") in ("ok", "attention") and s.get("_state"):
             for f, data in s["_state"].items():
                 tmp = d / (f + ".tmp")
                 tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")

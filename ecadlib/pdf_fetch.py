@@ -164,15 +164,19 @@ class Impersonate:
         if self._s is None:
             self._s = cr.Session(impersonate="chrome")
         try:
-            at, public = url, public_only()           # a web search's link: each redirect checked before it is followed
-            for _ in range(10):
-                r = self._s.get(at, timeout=self.timeout, allow_redirects=not public, stream=True,
+            # each redirect checked before it is followed (datasheet.redirect_refused): a web search's link only to
+            # public sites, a BOM link never to this machine or a link-local / cloud-metadata address
+            at, public = url, public_only()
+            for hop in range(11):
+                r = self._s.get(at, timeout=self.timeout, allow_redirects=False, stream=True,
                                 headers={"Referer": origin(at)})
-                where = public and 300 <= r.status_code < 400 and r.headers.get("location")
+                where = 300 <= r.status_code < 400 and r.headers.get("location")
                 if not where:
                     break
                 r.close()
-                why = redirect_refused(at, where)
+                if hop == 10:
+                    return 0, None, "", url, "too many redirects (10)"
+                why = redirect_refused(at, where, public)
                 if why:
                     return 0, None, "", url, why
                 from urllib.parse import urljoin
@@ -287,6 +291,38 @@ class _State:
         self.warm, self.public = set(), getattr(self, "public", False)   # (kept when a dead browser is started again)
 
 
+ROUTE_VERDICT_S = 300                                  # how long the browser keeps one host's verdict
+
+
+def route_check(s, clock=time.monotonic):
+    """The browser's request handler: every request of a page (its scripts, images, frames) is checked by
+    datasheet.unsafe_download, which looks the host name up. A page makes dozens of requests to one host, so the
+    verdict is kept per (scheme, host, public) for ROUTE_VERDICT_S: one blocking lookup per host, not per request.
+    It changes nothing the check could catch: the lookup here was never the one the browser makes (DNS rebinding is
+    out of its reach either way), and the rest of the check reads only the scheme and the host."""
+    from urllib.parse import urlsplit
+    from . import datasheet as D
+    seen = {}
+
+    def check(route):
+        url = route.request.url
+        try:
+            u = urlsplit(url)
+            key = (u.scheme.lower(), (u.hostname or "").lower(), bool(s.public))
+        except ValueError:
+            key = None
+        hit = seen.get(key) if key and key[1] else None
+        now = clock()
+        if hit and now - hit[1] < ROUTE_VERDICT_S:
+            bad = hit[0]
+        else:
+            bad = bool(D.unsafe_download(url, s.public))
+            if key and key[1]:
+                seen[key] = (bad, now)
+        route.abort() if bad else route.continue_()
+    return check
+
+
 class Browser:
     """A headless browser for the whole run (one per process: shared()), started on first use and closed at exit.
     Every call runs on one worker thread of its own; a call that overruns (a site that stops sending) is given up,
@@ -362,9 +398,7 @@ class Browser:
             s.ctx = s.browser.new_context(accept_downloads=False, user_agent=ua, locale="en-US",
                                           viewport={"width": 1366, "height": 768})
             if not self.allow_local:
-                from . import datasheet as D
-                s.ctx.route("**/*", lambda route: route.abort() if D.unsafe_download(route.request.url, s.public)
-                            else route.continue_())
+                s.ctx.route("**/*", route_check(s))
         except Exception as e:                        # the driver cannot run (a broken install, a frozen build)
             self._close(s)
             s.why = f"could not start a browser ({type(e).__name__}: {str(e).splitlines()[0][:120] if str(e) else ''})"
@@ -374,7 +408,7 @@ class Browser:
         self._start(s)
         if s.why:
             return 0, None, "", url, s.why
-        from .datasheet import is_pdf
+        from .datasheet import MAX_DOWNLOAD, is_pdf
         try:
             page = s.ctx.new_page()
         except Exception:                             # the driver or the browser died between calls: start again
@@ -388,10 +422,12 @@ class Browser:
 
         def on_response(r):
             try:
-                if "pdf" in (r.headers or {}).get("content-type", "").lower():
-                    pdfs.append(r)
                 if r.request.is_navigation_request() and r.frame == page.main_frame:
                     nav["last"] = r                   # the page's own document, after any redirect or reload
+                    # only the link's own answer: a PDF the page embeds (an iframe / object / preload of a RoHS
+                    # declaration or a PCN) is not it; the page goes back as HTML and pdf_link chooses among its links
+                    if "pdf" in (r.headers or {}).get("content-type", "").lower():
+                        pdfs.append(r)
             except Exception:
                 pass
 
@@ -421,11 +457,20 @@ class Browser:
                     if nav_err:                       # it never finished loading: its body may never come
                         target = r.url
                         break
+                    try:                              # too big to hold: the capped fetch says so (MAX_DOWNLOAD)
+                        size = int((r.headers or {}).get("content-length") or 0)
+                    except ValueError:
+                        size = 0
+                    if size > MAX_DOWNLOAD:
+                        target = r.url
+                        break
                     try:
                         body = r.body()
                     except PWError:                   # its body went to a download
                         target = r.url
                         break
+                    if len(body or b"") > MAX_DOWNLOAD:   # no length sent: refused once read, as a download is
+                        return 0, None, "", url, f"larger than {MAX_DOWNLOAD >> 20} MB"
                     if is_pdf(body):
                         return r.status, body, r.headers.get("content-type", ""), r.url, None
                     target = r.url                    # Chrome's PDF viewer hands back its own page instead

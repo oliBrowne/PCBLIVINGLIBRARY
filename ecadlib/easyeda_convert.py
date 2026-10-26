@@ -85,11 +85,34 @@ def _grid(v, up):
 
 
 # ---------------------------------------------------------------- footprint
+def origin(data, notes=None):
+    """The footprint's origin on EasyEDA's canvas (head x / y, 10 mil units). A head without a usable x / y (a changed
+    format, damaged data) would leave the origin at the canvas' 0, 0, a metre from the pads: the centre of the pads
+    is taken instead, and the notes say so."""
+    head = (data.get("head") if isinstance(data, dict) else None) or {}
+    ox, oy = _f(head.get("x"), None), _f(head.get("y"), None)
+    if ox is not None and oy is not None:
+        return ox, oy
+    xs, ys = [], []
+    for s in (data.get("shape") or []) if isinstance(data, dict) else []:
+        f = s.split("~") + [""] * 4 if isinstance(s, str) and s.startswith(("PAD~", "HOLE~")) else None
+        if f:
+            i = 2 if f[0] == "PAD" else 1
+            x, y = _f(f[i], None), _f(f[i + 1], None)
+            if x is not None and y is not None:
+                xs.append(x), ys.append(y)
+    cx = (min(xs) + max(xs)) / 2 if xs else 0.0
+    cy = (min(ys) + max(ys)) / 2 if ys else 0.0
+    if notes is not None:
+        notes.append("EasyEDA footprint has no origin (head x / y): the centre of its pads is the origin")
+    return (cx if ox is None else ox), (cy if oy is None else oy)
+
+
 def footprint_to_kicad(data, name=None, notes=None):
     """packageDetail.dataStr ({head, shape}) -> .kicad_mod text (KiCad 7 format)."""
     notes = [] if notes is None else notes
     head = data.get("head") or {}
-    ox, oy = _f(head.get("x")), _f(head.get("y"))
+    ox, oy = origin(data, notes)
     name = name or (head.get("c_para") or {}).get("package") or "EasyEDA"
     X, Y = (lambda x: (_f(x) - ox) * U), (lambda y: (_f(y) - oy) * U)
     pads, lines, circles, arcs, dropped, extent, copper = [], [], [], [], {}, [], []
@@ -102,6 +125,11 @@ def footprint_to_kicad(data, name=None, notes=None):
         if kind == "PAD":
             shape, cx, cy, w, h, layer, num, hole_r = f[1], X(f[2]), Y(f[3]), _f(f[4]) * U, _f(f[5]) * U, f[6], f[8], _f(f[9]) * U
             rot, hole_len = _f(f[11]) % 360, _f(f[13]) * U
+            seen = _outline_rot(shape, _nums(f[10]), _f(f[2]), _f(f[3]), _f(f[4]), _f(f[5]))
+            if seen is not None and _turn_off(seen, rot, 90 if abs(w - h) < 1e-6 else 180) > 0.5:
+                notes.append(f"pad {num}: rotation {_n(rot)} deg does not match the pad's own outline ({_n(seen)} deg); "
+                             f"the outline is used")
+                rot = seen
             poly = None
             if shape == "POLYGON":
                 pts = _nums(f[10])
@@ -217,6 +245,42 @@ def footprint_to_kicad(data, name=None, notes=None):
                f'(end {_n(crt[2])} {_n(crt[3])}) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))')
     notes.append("courtyard drawn by ecadlib: pads and fab outline + 0.25 mm (EasyEDA has no courtyard layer)")
     return "\n".join(out + pads) + "\n)\n"
+
+
+def _turn_off(a, b, period):
+    d = (a - b) % period
+    return min(d, period - d)
+
+
+def _outline_rot(shape, v, cx, cy, w, h):
+    """The KiCad rotation (degrees, counter-clockwise on screen) of a RECT / OVAL pad as its own points field draws
+    it, else None. EasyEDA writes each pad's outline in canvas units beside (cx, cy, w, h, rotation): a RECT's four
+    corners in order, an OVAL's long axis (two end points). The outline is what EasyEDA shows, so a rotation that
+    disagrees with it (a 45 degree pad turned the other way) is not trusted. None when the points are not that
+    outline (another size or centre, not a rectangle, or no points)."""
+    tol = max(0.02, 0.01 * max(w, h))
+    if shape == "RECT" and len(v) >= 8:
+        p = list(zip(v[0:8:2], v[1:8:2]))
+        e1, e2 = (p[1][0] - p[0][0], p[1][1] - p[0][1]), (p[2][0] - p[1][0], p[2][1] - p[1][1])
+        l1, l2 = math.hypot(*e1), math.hypot(*e2)
+        mx, my = sum(q[0] for q in p) / 4, sum(q[1] for q in p) / 4
+        if (min(l1, l2) < 1e-9 or abs(e1[0] * e2[0] + e1[1] * e2[1]) > 0.01 * l1 * l2
+                or math.hypot(mx - cx, my - cy) > tol):
+            return None
+        if abs(l1 - w) <= tol and abs(l2 - h) <= tol:
+            e = e1
+        elif abs(l2 - w) <= tol and abs(l1 - h) <= tol:
+            e = e2
+        else:
+            return None
+        return round(math.degrees(math.atan2(-e[1], e[0])) % 360, 3)
+    if shape == "OVAL" and len(v) == 4 and abs(w - h) > tol:
+        a = (v[2] - v[0], v[3] - v[1])
+        mx, my = (v[0] + v[2]) / 2, (v[1] + v[3]) / 2
+        if abs(math.hypot(*a) - abs(w - h)) > tol or math.hypot(mx - cx, my - cy) > tol:
+            return None
+        return round((math.degrees(math.atan2(-a[1], a[0])) - (0 if w > h else 90)) % 360, 3)
+    return None
 
 
 def _polygon(pts):
@@ -444,7 +508,10 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
                 notes.append(f"pin {num}: slanted pin path ({raw % 360:.0f} deg) drawn at {ang} deg")
             length = (abs(dx) if ang in (0, 180) else abs(dy)) * U or 2.54
             x, y = P(cx, cy)
-            pins.append(f'      (pin {PIN_TYPE.get(st[2], "unspecified")} line (at {x} {y} {ang}) (length {_n(length)})'
+            # the inversion circle ("^^1~x~y" after the name / number) and the clock mark ("^^1~path"), shown or not
+            dot, clk = (len(seg) > k and seg[k][0].strip() == "1" for k in (5, 6))
+            shape = "inverted_clock" if dot and clk else "inverted" if dot else "clock" if clk else "line"
+            pins.append(f'      (pin {PIN_TYPE.get(st[2], "unspecified")} {shape} (at {x} {y} {ang}) (length {_n(length)})'
                         f' (name {_q(nm or "~")} (effects (font (size 1.27 1.27)))) (number {_q(num)} (effects (font (size 1.27 1.27)))))')
         elif kind == "R":
             f = s.split("~") + [""] * 8

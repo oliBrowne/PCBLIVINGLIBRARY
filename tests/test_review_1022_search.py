@@ -303,7 +303,7 @@ def test_a_bom_links_redirect_to_your_own_network_is_still_followed(tmp_path, mo
     srv, hits = _redirect_server("/next.pdf")
     try:
         url = f"http://127.0.0.1:{srv.server_port}/ds.pdf"
-        assert D.redirect_hooks() == {}                                    # not a search's link: no check at all
+        assert D.redirect_refused(url, "http://10.0.0.5/ds.pdf", public=False) is None   # your network: allowed
         st = D.PdfStore(tmp_path, None, offline=False)
         try:
             st.fetch(url, "BOM", handoff=False)

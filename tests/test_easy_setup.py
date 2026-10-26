@@ -1,17 +1,18 @@
 """The no-terminal setup: stored keys (ecadlib.userconfig), finding Altium / KiCad (ecadlib.detect), the setup page's
 logic and routes (ecadlib.easy_setup, ui/server.py), the desktop app (ecadlib.launcher) and the quieter doctor.
 Offline: key checks use a fake HTTP get. Run:  python3 -m tests.test_easy_setup"""
-import contextlib, http.client, importlib.util, io, json, os, stat, sys, tempfile, threading, time, types
+import contextlib, http.client, importlib.util, io, json, os, stat, sys, threading, time, types
 from pathlib import Path
 from unittest import mock
 
 from ecadlib import detect as DT, doctor as DR, easy_setup as ES, launcher as LA, userconfig as UC
 from ecadlib.app import Workspace
 from ecadlib.ui import server as S
+from tests.fixtures_lite import clean_all, scratch
 
 
 def _tmp():
-    return Path(tempfile.mkdtemp(prefix="ecadlib-setup-"))
+    return scratch("ecadlib-setup-")
 
 
 @contextlib.contextmanager
@@ -357,3 +358,6 @@ def test_doctor_on_a_fresh_install_warns_only_about_what_matters():
 if __name__ == "__main__":
     from tests.run_all import main
     sys.exit(main(["test_easy_setup"]))
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

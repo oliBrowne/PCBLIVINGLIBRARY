@@ -204,34 +204,43 @@ def usd(model, turns, unknown=None):
     return round(total, 6)
 
 
-def _price(model, fallback):
-    """(input, output) USD per MTok; fallback: the higher of the model's own and datasheet.FALLBACK_PRICE."""
-    from . import datasheet as D
-    p = D.price_of(model)
+def _price(model, fallback, tokens=0):
+    """(input, output) USD per MTok at a prompt of `tokens` (the long-prompt tier: Haiku 5.5, the default search model,
+    costs 5x over 100K input tokens); fallback: the higher of that and datasheet.FALLBACK_PRICE."""
+    from . import datasheet as D, ds_route as DR
+    p = DR.prices(model, tokens)
     if p and fallback:
         p = (max(p[0], D.FALLBACK_PRICE[0]), max(p[1], D.FALLBACK_PRICE[1]))
     return p
 
 
+def est_input(max_uses=MAX_USES):
+    """The input tokens one search request is held at: EST_TOKENS for up to MAX_USES searches, more for more (each
+    search's results are read as input; [datasheet] web_search_max_uses goes up to 10)."""
+    return int(EST_TOKENS[0] * max(1.0, (max_uses or 0) / MAX_USES))
+
+
 def estimate(model, max_uses=MAX_USES, fallback=False):
     """The most one part's search may cost, for the cost cap. fallback: a declined request may be re-run on another
     model, priced at the higher of the model's own and datasheet.FALLBACK_PRICE (as a read's worst case is)."""
-    p = _price(model, fallback)
+    tin = est_input(max_uses)
+    p = _price(model, fallback, tin)
     if not p:
         return None
-    return (EST_TOKENS[0] * p[0] + EST_TOKENS[1] * p[1]) / 1e6 + SEARCH_USD * max_uses
+    return (tin * p[0] + EST_TOKENS[1] * p[1]) / 1e6 + SEARCH_USD * max_uses
 
 
 def next_turn(model, turns, max_uses=MAX_USES, fallback=False):
     """The most a pause_turn continuation after `turns` may cost: it resends the conversation (every search result
-    read so far), so its input is at least what the turns read and wrote, plus EST_TOKENS more (a turn with no usage
-    counts as EST_TOKENS). Priced as estimate() is; None with no known price."""
-    p = _price(model, fallback)
+    read so far), so its input is at least what the turns read and wrote, plus est_input more (a turn with no usage
+    counts as est_input + EST_TOKENS output). Priced as estimate() is; None with no known price."""
+    more = est_input(max_uses)
+    sent = sum(sum(add_usage({}, m.get("usage")).get(k, 0) for k in TOKENS) if _known(m) else more + EST_TOKENS[1]
+               for m in turns)
+    p = _price(model, fallback, sent + more)
     if not p:
         return None
-    sent = sum(sum(add_usage({}, m.get("usage")).get(k, 0) for k in TOKENS) if _known(m) else sum(EST_TOKENS)
-               for m in turns)
-    return ((sent + EST_TOKENS[0]) * p[0] + EST_TOKENS[1] * p[1]) / 1e6 + SEARCH_USD * max_uses
+    return ((sent + more) * p[0] + EST_TOKENS[1] * p[1]) / 1e6 + SEARCH_USD * max_uses
 
 
 class Found:

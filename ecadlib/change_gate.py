@@ -116,6 +116,15 @@ class ChangeError(Exception):
             self.hint = hint
 
 
+class FilesMoved(ChangeError):
+    """A part's files changed on disk between being classified (fingerprinted) and being recorded (snapshot): nothing
+    was recorded; the writer classifies them again (settle) or leaves the part to the next writer."""
+
+    def __init__(self, part):
+        super().__init__(f"{part}: its files changed while the release was being recorded (an edit saved meanwhile); "
+                         f"nothing was recorded", "run the command again: the files are classified as they are now")
+
+
 # ---------------------------------------------------------------- policy
 def policy(rules=None, start="."):
     from . import rules as RU
@@ -169,6 +178,69 @@ def decide(changes, pol, mode="gate"):
         action = "warn" if any(c["class"] != "cosmetic" for c in changes) else "pass"
         why.insert(0, "released in the workspace: recorded, not held")
     return {"action": action, "why": why, "by_class": by}
+
+
+def _sides_now(f):
+    """The recipe and STEP files beside library file f on disk, as Ledger.snapshot_files copies them ->
+    {"ecadbuild": sha or None, "steps": {name: sha}}."""
+    f = Path(f)
+    side = f.with_name(f.name + ".ecadbuild")
+    if not side.is_file():
+        return {"ecadbuild": None, "steps": {}}
+    return {"ecadbuild": LG.sha_bytes(side.read_bytes()),
+            "steps": {s: LG.sha_bytes((f.parent / s).read_bytes()) for s in LG.step_files(f) if (f.parent / s).is_file()}}
+
+
+def _built_by_recipe(f):
+    """Problems between library file f and the build recipe beside it (<f>.ecadbuild, and the STEP files it names):
+    Altium's own rebuild (altium_native, altium-pkg) makes the shipped library from the recipe, so a recipe that does
+    not build f would ship something else than f. [] without a recipe."""
+    from . import altium_lib as AL, altium_native as AN
+    f = Path(f)
+    rp = f.with_name(f.name + AN.EXT)
+    if not rp.is_file():
+        return []
+    try:
+        probs = AN.compare_one(f, rp)
+        if f.suffix.lower() == ".pcblib":      # the STEP files it names: the 3D models the .PcbLib holds
+            held = {LG.sha_bytes(bytes(b)) for fp in AL.read_pcblib(f) for m in (fp.get("models") or []) for b in m
+                    if isinstance(b, (bytes, bytearray))}    # (a STEP file is text: CRLF alone is the same model)
+            probs += [f"{s} is not a 3D model {f.name} holds" for s in LG.step_files(f)
+                      if (f.parent / s).is_file() and not LG.eol_shas((f.parent / s).read_bytes()) & held]
+    except Exception as e:                     # an unreadable recipe or library: not shown to build it
+        probs = [f"{rp.name} cannot be compared with {f.name} ({type(e).__name__}: {e})"]
+    return probs
+
+
+def recipe_unmatched(item, head, base, rewrote=None):
+    """A changed .SchLib / .PcbLib whose build recipe or 3D models changed too, while the recipe no longer builds that
+    file -> [reason] (else []). The fingerprint reads the library file only, so a minor edit there (silkscreen: pass
+    or warn) beside a moved pad in the recipe would be released, and Altium's rebuild ships the recipe's pad. Every
+    ecadlib write of a library file writes its matching recipe; a writer that rewrote the file itself since begin()
+    (rewrote(f, sha)) wrote its recipe with it. A library file still the head's bytes is _settle_sides' business."""
+    out = []
+    if not head:
+        return out
+    recs = {(Path(r["path"]) if Path(r["path"]).is_absolute() else Path(base) / r["path"]).resolve(): r
+            for k, r in (head.get("files") or {}).items() if k in ("symbol", "footprint")}
+    for kind in ("symbol", "footprint"):
+        rel = (item.get(kind) or {}).get("file")
+        if not rel:
+            continue
+        f = Path(rel) if Path(rel).is_absolute() else Path(base) / rel
+        r = recs.get(f.resolve()) if f.is_file() else None
+        if r is None:
+            continue
+        sha = LG.sha_bytes(f.read_bytes())
+        if sha == r.get("sha256") or (rewrote and rewrote(f, sha)) or not LG.side_drift(r, f):
+            continue
+        probs = _built_by_recipe(f)
+        if probs:
+            more = f" and {len(probs) - 1} more" if len(probs) > 1 else ""
+            out.append(f"the build recipe beside {f.name} changed and does not build it ({probs[0]}{more}): Altium's "
+                       f"rebuild would ship the recipe, not the file (edit both with ecadlib fp-edit, or put the "
+                       f"recipe back)")
+    return out
 
 
 def released(item):
@@ -226,6 +298,8 @@ class Guard:
         self.adopt_revision = {}               # part -> the revision an adopted part gets (never one it had before)
         self.pre = {}                          # path -> bytes on disk at begin() that are the released part
         self.pre_steps = {}                    # PcbLib path -> {STEP path: bytes} of a head recorded without its STEPs
+        self.sides_seen = {}                   # library file path -> its recipe / STEP shas as _settle_sides left them
+        self.written = {}                      # library file path -> (sha, recipe / STEP shas) as this writer wrote them
         self._lock = None
         self._begun = False                    # begin() ran: what the writer found on disk was checked there
         self._was_empty = None                 # the ledger had no line when this guard first looked
@@ -268,6 +342,8 @@ class Guard:
         blob store, the usage index or other ledger lines show it was released) is never adopted: LedgerError."""
         self.hold_lock()
         self._begun = True
+        from . import altium_native as AN      # the library files this writer writes from here (R-G2-1)
+        AN.listen(self)
         if items is None:
             items = read_plan(self.folder)
         n, lost = 0, []
@@ -281,10 +357,13 @@ class Guard:
                 fp = FP.of_item(it, self.base)
                 if fp.get("notes"):            # an unreadable file is no released revision to keep
                     continue
-                self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
-                              {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
-                              reason=self.adopt.get(it["name"]) or "adopted: released before change control recorded it",
-                              by=self.who() if why else None, min_rev=self.adopt_revision.get(it["name"]) if why else None)
+                try:
+                    self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
+                                  {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
+                                  reason=self.adopt.get(it["name"]) or "adopted: released before change control recorded it",
+                                  by=self.who() if why else None, min_rev=self.adopt_revision.get(it["name"]) if why else None)
+                except FilesMoved:             # edited while it was recorded: adopted by the next writer
+                    continue
                 n += 1
             elif head:
                 self._keep_bytes(it, head)
@@ -320,6 +399,9 @@ class Guard:
             used = []
         if used:
             return f"{LG.USAGE} records revision r{used[0][1]} in use by {used[0][0]}"
+        marks = lg.marks(part)
+        if marks:
+            return f"{LG.STORE}/marks records r{max(marks)[0]} of it as released"
         prop = lg.proposal(part)
         if prop and prop.get("base") is not None:
             return f"a held change to its revision r{prop['base']} waits in {LG.STORE}/proposed"
@@ -424,6 +506,7 @@ class Guard:
         except (OSError, ValueError, TypeError):
             pass
         seen += [int(p["base"]) for p in self.ledger.proposals() if p.get("part") == part and isinstance(p.get("base"), int)]
+        seen += [r for r, _ in self.ledger.marks(part)]
         held = {e["digest"] for e in hist if e.get("digest") and e.get("event") not in ("publish", "retired", "release")}
         held |= {p.get("digest") for p in self.ledger.proposals() if p.get("part") == part}
         seen.append(len({f["hashes"].get("digest") for _, _, f in self.ledger.stored_fingerprints(part)} - held))
@@ -525,6 +608,26 @@ class Guard:
                     self.pre_steps[p] = {str(f.parent / s): (f.parent / s).read_bytes() for s in LG.step_files(f)
                                          if (f.parent / s).is_file()}
 
+    def wrote_library(self, f):
+        """altium_native.note_written: ecadlib wrote library file f and its recipe now. Only while this guard's writer
+        works (between begin() and its settle) is that the writer's own write."""
+        if not self._begun or self.writer == "hand-edit":
+            return
+        f = Path(f)
+        try:
+            self.written[str(f.resolve())] = (LG.sha_bytes(f.read_bytes()), _sides_now(f))
+        except OSError:
+            pass
+
+    def _rewrote(self, f, sha):
+        """This writer rewrote file f (now sha) since begin(): it wrote f and its recipe and 3D models itself, and they
+        are still the bytes it wrote. Bytes that only differ from begin()'s are no sign: an edit saved meanwhile by
+        another program (Altium, an editor) is not announced and is checked like a hand edit (R-G2-1)."""
+        if self.writer == "hand-edit" or not self._begun:
+            return False
+        mine = self.written.get(str(Path(f).resolve()))
+        return mine is not None and mine[0] == sha and mine[1] == _sides_now(f)
+
     def _is_head(self, fp, head):
         """fp is the released revision: the same digest as the head's, or (a head an older ecadlib fingerprinted) as
         the head's snapshot fingerprinted again now."""
@@ -573,7 +676,18 @@ class Guard:
     @_locked_step
     def settle(self, items):
         """Compare every released part with its ledger head and apply the policy. -> report rows."""
+        rows = self._settle(items)
+        self.report += rows
+        for r in rows:
+            self.log(f"  change {r['action']:<5} {r['part']:<28} {r['summary']}")
+        return rows
+
+    MOVED_TRIES = 3
+
+    def _settle(self, items, tries=0):
         rows, todo = [], {}
+        if not tries:                          # what this settle's _settle_sides leaves is what its releases copy
+            self.sides_seen = {}
         for it in items:
             head = self.ledger.head(it["name"])
             if not head:
@@ -581,16 +695,30 @@ class Guard:
             new = FP.of_item(it, self.base)
             if new["hashes"]["digest"] == head.get("digest"):
                 self._mark_unchanged(it, head)
+                self._settle_sides(it, head, new)
                 continue
             old = self.ledger.fingerprint(head)
             changes = CD.diff(old, new) if old else [{"class": "electrical", "area": "ledger", "what": "fingerprint",
                                                        "old": None, "new": None, "text": "the released fingerprint is missing"}]
-            if not changes:
+            self._settle_sides(it, head, new, old)  # also before a pass / warn release: it must not snapshot an edited
+            if not changes:                         # recipe or STEP beside a .PcbLib that is still the released one
                 self._mark_unchanged(it, head)
                 continue
+            if self.writer == "dedupe-merge":   # a merge onto the keeper's file swaps its 3D body too: a released
+                for c in changes:               # part's body does not change with nobody's sign-off (R-FL-5)
+                    if c.get("area") == "model":
+                        c["least"] = "hold"
             dec = decide(changes, self.policy, self.mode)
             rej = self.ledger.rejected(it["name"], new["hashes"]["digest"], new) if dec["action"] == "hold" else None
             todo[it["name"]] = {"item": it, "head": head, "fp": new, "changes": changes, "dec": dec, "rejected": rej}
+        for t in todo.values():                # a recipe edited beside an edited library file: not released
+            if t["dec"]["action"] == "hold" or self.mode == "observe":
+                continue
+            why = recipe_unmatched(t["item"], t["head"], self.base, rewrote=self._rewrote)
+            if why:
+                t["dec"] = dict(t["dec"], action="hold", why=why + list(t["dec"].get("why") or []))
+                t["rejected"] = self.ledger.rejected(t["item"]["name"], t["fp"]["hashes"]["digest"], t["fp"])
+        self._check_releases([t for t in todo.values() if t["dec"]["action"] != "hold"])
         held_files = {}
         for name, t in todo.items():
             if t["dec"]["action"] == "hold":
@@ -625,25 +753,104 @@ class Guard:
         for t in held:                         # then the held files go back, before anything is released
             rows.append(self._hold(t))
         for name, t in todo.items():
-            if t["dec"]["action"] != "hold":
-                rows.append(self._release(t["item"], t["fp"], t["changes"], t["dec"], base=t["head"]))
-            elif t.get("approved"):
-                rows.append(self._release(t["item"], t["fp"], t["changes"], dict(t["dec"], action="pass"), base=t["head"],
-                                          decision="approved", approved_by=[self.chosen_by], by=self.chosen_by,
-                                          reason=f"chosen by {self.chosen_by}"))
-        self.report += rows
-        for r in rows:
-            self.log(f"  change {r['action']:<5} {r['part']:<28} {r['summary']}")
+            try:
+                if t["dec"]["action"] != "hold":
+                    rows.append(self._release(t["item"], t["fp"], t["changes"], t["dec"], base=t["head"]))
+                elif t.get("approved"):
+                    rows.append(self._release(t["item"], t["fp"], t["changes"], dict(t["dec"], action="pass"),
+                                              base=t["head"], decision="approved", approved_by=[self.chosen_by],
+                                              by=self.chosen_by, reason=f"chosen by {self.chosen_by}"))
+            except FilesMoved:                 # an edit saved while it was recorded: classify the files again
+                if tries + 1 < self.MOVED_TRIES:
+                    rows += self._settle([t["item"]], tries + 1)
+                else:                          # nothing recorded: the next writer settles what is on disk then
+                    self.log(f"  change skip  {name:<28} its files kept changing while being recorded; not recorded now")
         return rows
+
+    def _settle_sides(self, it, head, new=None, old=None):
+        """A released part whose .SchLib / .PcbLib is still the head's, but whose build recipe or 3D model beside it is
+        not (an edit outside ecadlib): Altium's own rebuild would ship that edit, and no fingerprint sees it. The
+        released side files go back; the edited ones are kept in the blob store with an `overwritten` line.
+        "Still the head's": the same bytes, or the same symbol / footprint and 3D model in the fingerprint `new` as in
+        the head's `old`, so a re-saved .PcbLib (other bytes, same content) does not hide an edited recipe. Only a file
+        this writer rewrote itself since begin() (librarian, resolve: it wrote its recipe anew) needs the same bytes;
+        a writer that rebuilt nothing there (a publisher's settle, style apply, approve) never takes an edited recipe
+        beside a re-saved file as released."""
+        files = head.get("files") or {}
+        drift = {}
+        try:
+            return self._settle_sides_of(it, head, files, drift, new, old)
+        finally:                               # what a release of this part must copy (_snapshot_as)
+            for r in files.values():
+                f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
+                self.sides_seen[str(f.resolve())] = _sides_now(f)
+
+    def _settle_sides_of(self, it, head, files, drift, new, old):
+        for kind, r in files.items():
+            f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
+            if not f.is_file():
+                continue
+            sha = LG.sha_bytes(f.read_bytes())
+            same = sha == r.get("sha256")
+            if not same and new is not None and kind in ("symbol", "footprint") and not self._rewrote(f, sha):
+                if old is None:
+                    old = self.ledger.fingerprint(head) or {}
+                keys = ("symbol",) if kind == "symbol" else ("footprint", "model")
+                same = bool(old) and all(old.get(k) == new.get(k) for k in keys)
+            if same:
+                drift.update(LG.side_drift(r, f))
+        if not drift:
+            return
+        kept = {}
+        for p in sorted(drift):
+            f = Path(p)
+            if f.is_file():
+                rel = os.path.relpath(f, self.base).replace(os.sep, "/")
+                kept[rel] = {"path": rel, "sha256": self.ledger.put_bytes(f.read_bytes())}
+        names = ", ".join(sorted({Path(p).name for p in drift}))
+        for p, sha in drift.items():           # only the side files: the library files may carry a change that settles
+            f = Path(p)
+            f.parent.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_name(f.name + f".{os.getpid()}.tmp")
+            tmp.write_bytes(self.ledger.get_bytes(sha))
+            os.replace(tmp, f)
+        self.ledger.append({"event": "overwritten", "part": it["name"], "by": self.who(), "writer": self.writer,
+                            "base": head.get("revision"), "digest": head.get("digest"), "files": kept,
+                            "reason": f"{names} differed from released revision r{head.get('revision')} (edited outside "
+                                      f"ecadlib; Altium's own rebuild makes the library from it): the released bytes "
+                                      f"were put back"})
+        self.log(f"  change fixed {it['name']:<28} {names} differed from the released revision "
+                 f"r{head.get('revision')}: put back (the edit is kept: ecadlib part history)")
 
     def _release_check(self, todo):
         """The release check on copies of these items as the writer left them -> "" when all pass, else the reasons."""
+        return "; ".join(f"{n}: {', '.join(i.get('hold_reasons') or [])}" for n, i in self._probe(todo).items()
+                         if i.get("status") == "held")
+
+    def _probe(self, todo):
+        """The release check on copies of these items ({item: ...} rows) as the writer left them -> {name: checked copy}.
+        kicad_import parts (_manifest) have no plan fields to check and are left out."""
         from . import release_check as RC
         probe = [json.loads(json.dumps(t["item"], default=str)) for t in todo if not t["item"].get("_manifest")]
-        if not probe:
-            return ""
-        RC.apply(probe, self.base, rules=self.rules, change_holds=False)
-        return "; ".join(f"{i['name']}: {', '.join(i.get('hold_reasons') or [])}" for i in probe if i.get("status") == "held")
+        if probe:
+            RC.apply(probe, self.base, rules=self.rules, change_holds=False)
+        return {i["name"]: i for i in probe}
+
+    def _check_releases(self, todo):
+        """A pass / warn change is released only when the changed version passes the release check, as `ecadlib part
+        approve` requires: one that fails it (a .kicad_mod edited without its .PcbLib fails parity) would be a ledger
+        head no publisher ships. It is held for approval instead (approving it runs the check again, with the hint).
+        Not in observe mode: the workspace released that version itself."""
+        if self.mode == "observe" or not todo:
+            return
+        got = self._probe(todo)
+        for t in todo:
+            chk = got.get(t["item"]["name"])
+            if not chk or chk.get("status") != "held":
+                continue
+            why = f"fails the release check ({', '.join(chk.get('hold_reasons') or []) or 'held'})"
+            t["dec"] = dict(t["dec"], action="hold", why=[why] + list(t["dec"].get("why") or []))
+            t["rejected"] = self.ledger.rejected(t["item"]["name"], t["fp"]["hashes"]["digest"], t["fp"])
 
     @_locked_step
     def restyle(self, before, after):
@@ -696,6 +903,14 @@ class Guard:
         self._refuse_lost(lost)
         rows, heads = [], None
         names = {i["name"] for i in items}
+        if self.mode != "observe":             # the status in plan.json is not proof (a hand-set "ready"): only a part
+            got = self._probe([{"item": it} for it, why in todo if not why])   # that passes the release check now
+            for it, why in todo:                                                # gets its revision 1
+                chk = got.get(it["name"])
+                if chk and chk.get("status") == "held":     # plan.json is left as it is (a publisher checks again)
+                    self.log(f"  change skip  {it['name']:<28} not released: fails the release check "
+                             f"({', '.join(chk.get('hold_reasons') or [])})")
+            todo = [(it, why) for it, why in todo if why or (got.get(it["name"]) or {}).get("status") != "held"]
         for it, why in todo:
             fp = FP.of_item(it, self.base)
             if fp.get("notes"):                # an unreadable file is no released revision to keep
@@ -710,10 +925,14 @@ class Guard:
                 if row:
                     rows.append(row)
                     continue
-            rows.append(self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
-                                      {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
-                                      reason=self.adopt.get(it["name"]) or "first release", by=self.who() if why else None,
-                                      min_rev=self.adopt_revision.get(it["name"]) if why else None))
+            try:
+                rows.append(self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
+                                          {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
+                                          reason=self.adopt.get(it["name"]) or "first release",
+                                          by=self.who() if why else None,
+                                          min_rev=self.adopt_revision.get(it["name"]) if why else None))
+            except FilesMoved:                 # edited while it was recorded: its revision 1 comes with the next writer
+                self.log(f"  change skip  {it['name']:<28} its files changed while being recorded; not released now")
         self.report += rows
         for r in rows:
             if r["action"] == "hold":
@@ -797,13 +1016,14 @@ class Guard:
 
     def _release(self, it, fp, changes, dec, base=None, decision=None, reason="", approved_by=None, event="release", by=None,
                  min_rev=None):
+        files = self._snapshot_as(it, fp)
         prev = self.ledger.head(it["name"])
         rev = max((prev or {}).get("revision", 0) + 1, int(min_rev or 0))   # min_rev: an adopted part's next number
         entry = {"event": event, "part": it["name"], "revision": rev, "base": (prev or {}).get("revision"),
                  "writer": self.writer, "by": by or self.who(), "decision": decision or ("warn" if dec["action"] == "warn" else
                                                                                             "observed" if self.mode == "observe" else "pass"),
                  **{k: fp["hashes"][k] for k in ("eid", "gid", "mid", "cid", "digest")},
-                 "fingerprint": self.ledger.put_json(fp), "files": self.ledger.snapshot_files(it, self.base),
+                 "fingerprint": self.ledger.put_json(fp), "files": files,
                  "item": LG.content_of(it), "changes": [{"class": c["class"], "text": c["text"]} for c in changes],
                  "classes": CD.counts(changes), "source": dict(it.get("source") or {}, ecadlib=__version__),
                  **({"approved_by": approved_by} if approved_by else {}), **({"reason": reason} if reason else {}),
@@ -824,6 +1044,24 @@ class Guard:
             it.pop("change", None)
         return {"part": it["name"], "action": "baseline" if entry["decision"] == "baseline" else dec["action"],
                 "revision": rev, "summary": CD.summary(changes) if changes else reason or "released", "changes": entry["changes"]}
+
+    def _snapshot_as(self, it, fp):
+        """The item's files into the blob store, checked to be the files `fp` was taken from: fingerprinted again after
+        the copy, and the files on disk still the copied bytes. An edit saved in between (a person's editor, another
+        tool: no lock) raises FilesMoved, so a revision is never recorded with another file's change classes."""
+        files = self.ledger.snapshot_files(it, self.base)
+        again = FP.of_item(it, self.base)
+        if again["hashes"]["digest"] != fp["hashes"]["digest"]:
+            raise FilesMoved(it["name"])
+        for r in files.values():
+            f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
+            if not f.is_file() or LG.sha_bytes(f.read_bytes()) != r["sha256"]:
+                raise FilesMoved(it["name"])
+            copied = {"ecadbuild": r.get("ecadbuild"), "steps": r.get("steps") or {}}
+            seen = self.sides_seen.get(str(f.resolve()))
+            if _sides_now(f) != copied or (seen is not None and seen != copied):
+                raise FilesMoved(it["name"])   # the recipe / a 3D model is not the one checked (or copied)
+        return files
 
     def _propose(self, t):
         """Save the held version as the part's proposal (its files go to the blob store) -> the proposal."""
@@ -942,9 +1180,13 @@ def read_plan(folder):
         return []
 
 
-def write_plan(plan, items):
-    from .fsutil import write_text_atomic
-    write_text_atomic(Path(plan), json.dumps([i for i in items if not i.get("_manifest")], indent=2))
+def write_plan(plan, items, rules=None):
+    """Write plan.json from items a change-control step read earlier (it holds the library lock, not the plan lock, while
+    it works): the web UI's Approvals or `ecadlib approve` may have recorded a decision meanwhile. Under the plan lock
+    (taken second: the lock order in fsutil) those decisions are kept and such a part's status re-checked
+    (librarian.save_plan). The kicad_import parts library_items adds (_manifest) stay out."""
+    from .librarian import save_plan
+    save_plan(Path(plan), items, rules=rules, keep=lambda i: not i.get("_manifest"))
 
 
 def publish_guard(plan, items, target, rules=None, user=None, log=None, base=None, save=True):
@@ -963,13 +1205,27 @@ def publish_guard(plan, items, target, rules=None, user=None, log=None, base=Non
                        if held else ""), file=sys.stderr)
     g = Guard(folder, "hand-edit", rules=rules, user=user, log=log, base=base or folder)
     try:                                       # under the library lock: parallel publishers settle one at a time
-        g.finish(items)
+        g.hold_lock()
+        # a part whose release history cannot be trusted (a ledger merged from two branches, cut back) is refused on
+        # its own: it is left out of this run (not settled, not published) and the rest of the library goes (R-FX17-5).
+        # Only a part with release lines, where head() would refuse: one whose lines are all gone is a lost history
+        # (begin / baseline refuse it, with `part adopt` as the way out)
+        damaged = {it["name"]: why for it in items if g.ledger.releases(it["name"])
+                   for why in [g.ledger.trouble(it["name"])] if why}
+        work = [it for it in items if it["name"] not in damaged]
+        g.finish(work)
         if save and plan.suffix.lower() == ".json" and json.dumps(items, sort_keys=True, default=str) != before:
-            write_plan(plan, items)
+            write_plan(plan, items, rules=rules)
         out = {}
         for it in items:
+            if it["name"] in damaged:
+                out[it["name"]] = f"refused: {damaged[it['name']]}"
+                log(f"  change refuse {it['name']:<28} its ledger history is damaged, so it is not published: "
+                    f"{damaged[it['name']]}")
+                continue
             head = g.ledger.head(it["name"])
             out[it["name"]] = None if head else ("not released yet" + (f" (status {it.get('status')})" if it.get("status") else ""))
+        items[:] = work                        # what the publisher goes on with
     finally:
         g.close()
     return out, g
@@ -1017,6 +1273,53 @@ def settled_plan(plan, target, rules=None, log=None):
         raise ValueError(f"{plan}: not a librarian plan (expected a list of parts, each with a name)")
     publish_guard(plan, items, target, rules=rules, log=log)
     return items
+
+
+def same_content(lg, head, item, path, data, base):
+    """Bytes `data` of the part's library file `path` hold what its ledger head released, in other bytes (a re-save):
+    a .kicad_mod with the same footprint and 3D model; a .SchLib / .PcbLib whose symbol, or footprint and 3D model,
+    fingerprint as the head's (the test _settle_sides uses)."""
+    import tempfile
+    path = Path(path)
+    try:
+        if path.suffix.lower() == ".kicad_mod":
+            kept = lg.get_bytes(next(r["sha256"] for r in (head.get("files") or {}).values()
+                                     if (Path(r["path"]) if Path(r["path"]).is_absolute() else Path(base) / r["path"]).resolve()
+                                     == path.resolve()))
+            return FP.kicad_footprint(kept.decode("utf-8")) == FP.kicad_footprint(data.decode("utf-8"))
+        kind = {".schlib": "symbol", ".pcblib": "footprint"}.get(path.suffix.lower())
+        if not kind:
+            return False
+        old = lg.fingerprint(head) or {}
+        with tempfile.TemporaryDirectory(prefix="ecadlib-same-") as d:
+            f = Path(d) / path.name
+            f.write_bytes(data)
+            probe = json.loads(json.dumps(item, default=str))
+            probe[kind] = dict(probe.get(kind) or {}, file=str(f))
+            new = FP.of_item(probe, base)
+    except Exception:
+        return False
+    keys = ("symbol",) if kind == "symbol" else ("footprint", "model")
+    return bool(old) and all(old.get(k) == new.get(k) for k in keys)
+
+
+def released_bytes(lg, item, path, base, data=None):
+    """What a publisher ships of a released part's library file `path`: publish_guard settled the library (a held edit
+    was put back), but an editor saving afterwards takes no lock. -> (bytes, head): the bytes on disk (data, when
+    the caller read them already) and None when they are the head's or a re-save of them (same_content); else the
+    head's own copy from the blob store and the head, so the caller warns that an edit saved meanwhile was not
+    shipped (the next writer settles it). Raises FileNotFoundError when that copy is missing (nothing to ship: the
+    edit is not shipped either). A held part, or a file the head does not record, is shipped as it is."""
+    path = Path(path)
+    data = path.read_bytes() if data is None else data
+    head = lg.head(item["name"]) if item.get("status") != "held" else None
+    for r in ((head or {}).get("files") or {}).values():
+        p = Path(r["path"]) if Path(r["path"]).is_absolute() else Path(base) / r["path"]
+        if p.resolve() == path.resolve() and LG.sha_bytes(data) != r.get("sha256"):
+            if same_content(lg, head, item, path, data, base):
+                return data, None
+            return lg.get_bytes(r["sha256"]), head
+    return data, None
 
 
 def publishing(folder):
@@ -1176,6 +1479,377 @@ def project_key(folder, path):
     except ValueError:                         # another drive on Windows
         return p.as_posix()
     return Path(rel).as_posix()
+
+
+PLAN_ID = "plan_id.json"                       # <plan folder>/.ecadlib/plan_id.json: {"id", "folder"}
+
+
+def is_plan_id(w):
+    import re
+    return bool(re.fullmatch(r"plan-[0-9a-f]{32}", str(w or "")))
+
+
+def _read_plan_id(folder):
+    try:
+        d = json.loads((Path(folder) / LG.STORE / PLAN_ID).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    return (d.get("id"), d.get("folder")) if isinstance(d, dict) and is_plan_id(d.get("id")) else (None, None)
+
+
+def plan_id(folder, create=True, renew=False):
+    """The plan folder's own id (R-FX15-2): how a shared publish target (a DbLib folder, an Altium 365 workspace, a
+    KiCad output folder) records which plan folder released what. It is made once and kept in the plan folder, so the
+    plan stays itself when its folder is renamed, the target is moved, or it is reached by another path (a clone, a
+    Windows share on another drive). A copy of a plan folder whose original is still where the id was made gets an id
+    of its own (two folders, two plans). The folder recorded with the id follows the plan when it moves (the recorded
+    one is gone, or holds another plan): a copy made after a rename is still told from its original (R-FX18-1).
+    create=False: None when the folder has none yet, and nothing is written. renew: a new id (target_plan_id: the
+    folder is a copy of a plan a target saw elsewhere)."""
+    import uuid
+    folder = Path(folder)
+    pid, made_in = _read_plan_id(folder)
+    moved = False
+    if pid and made_in and not renew:
+        try:
+            orig = Path(made_in)
+            if not orig.is_dir():                # the plan folder was renamed or moved (or reached from elsewhere)
+                moved = True
+            elif not os.path.samefile(orig, folder):
+                if _read_plan_id(orig)[0] == pid:    # its original is still there: this is a copy
+                    pid = None
+                else:                            # another plan (or none) at the old place now: this one moved
+                    moved = True
+        except OSError:
+            pass
+    if renew:
+        pid = None
+    if pid and moved and create:
+        try:
+            from .fsutil import write_text_atomic
+            write_text_atomic(folder / LG.STORE / PLAN_ID,
+                              json.dumps({"id": pid, "folder": str(folder.resolve())}, indent=1) + "\n")
+        except OSError:                          # a read-only plan folder: still this plan
+            pass
+    if pid or not create:
+        return pid
+    pid = f"plan-{uuid.uuid4().hex}"
+    from .fsutil import write_text_atomic
+    (folder / LG.STORE).mkdir(parents=True, exist_ok=True)
+    write_text_atomic(folder / LG.STORE / PLAN_ID,
+                      json.dumps({"id": pid, "folder": str(folder.resolve())}, indent=1) + "\n")
+    return pid
+
+
+def target_plan_id(folder, seen_at, create=True):
+    """plan_id(folder) as a shared target sees it: when the target last saw that id at another folder that is still
+    there and still holds it, two live folders hold one id (renamed and copied before either published here): this
+    one, arriving from elsewhere, is the copy and gets an id of its own (written unless create=False: a dry run uses
+    one for this run only), so its changes wait for the original's sign-off (R-FX18-1). seen_at: the places the
+    target recorded for the id ([Path])."""
+    import uuid
+    pid = plan_id(folder, create)
+    if not pid:
+        return pid
+    for p in seen_at:
+        try:
+            if plan_at(p, pid) is not None and not os.path.samefile(p, folder):
+                return plan_id(folder, renew=True) if create else f"plan-{uuid.uuid4().hex}"
+        except OSError:
+            continue
+    return pid
+
+
+def plan_at(path, pid=None):
+    """The plan folder at `path` when it is there (and is plan `pid`, when given), else None: a writer of a shared
+    target whose folder is gone (deleted, or renamed / moved and not synced since) is stale."""
+    try:
+        f = Path(path)
+        if not f.is_dir():
+            return None
+        if pid and is_plan_id(pid):
+            return f if _read_plan_id(f)[0] == pid else None
+        return f if (LG.Ledger(f).exists() or (f / "plan.json").is_file()) else None
+    except OSError:
+        return None
+
+
+def heads_agree(lg_a, head_a, lg_b, head_b, kinds=("symbols", "footprints"), identity=False):
+    """Two plan folders released the same drawings (kinds: "symbols" / "footprints", as altium365.model_digest compares
+    them) and, with identity, the same MPN, manufacturer and value: a shared target may carry one plan's release for
+    the other's. False when either head or fingerprint is missing."""
+    from .altium365 import model_digest
+    if not (lg_a and head_a and lg_b and head_b):
+        return False
+    for k in kinds:
+        a, b = model_digest(lg_a, head_a, k), model_digest(lg_b, head_b, k)
+        if not a or a != b:
+            return False
+    if identity:
+        ia, ib = (lg_a.fingerprint(head_a) or {}).get("identity"), (lg_b.fingerprint(head_b) or {}).get("identity")
+        key = lambda i: (str(i.get("mpn") or "").casefold(), str(i.get("manufacturer") or "").casefold(),
+                         i.get("value_num"), str(i.get("value_unit") or ""))
+        if not (ia and ib and key(ia) == key(ib)):
+            return False
+    return True
+
+
+def seen_at(plan_folder, rel_to):
+    """Where a shared target records a plan folder was last seen: {"path": relative to the target (the same when the
+    target and the plans are cloned or shared together), "abs": the resolved path (the same when the target moves
+    alone, R-FX18-2)}."""
+    return {"path": project_key(rel_to, plan_folder), "abs": Path(plan_folder).resolve().as_posix()}
+
+
+def seen_places(rec, rel_to):
+    """The places a target's record {"path", "abs"} names ([Path], the relative one first)."""
+    out = []
+    for h in ((rec or {}).get("path"), (rec or {}).get("abs")):
+        if h and isinstance(h, str):
+            p = Path(h) if Path(h).is_absolute() else Path(rel_to) / h
+            if p not in out:
+                out.append(p)
+    return out
+
+
+def found_at(rec, rel_to, pid):
+    """The plan folder `pid` at one of the places rec names, or None: a plan is gone only when no recorded place
+    holds it (the target, or the plan folders, may have moved since)."""
+    for p in seen_places(rec, rel_to):
+        f = plan_at(p, pid)
+        if f is not None:
+            return f
+    return None
+
+
+def was_here(rec, rel_to, plan_folder, pid):
+    """rec names plan_folder itself, which no longer holds plan `pid` (made again, or copied with what it published)."""
+    for p in seen_places(rec, rel_to):
+        try:
+            if os.path.samefile(p, plan_folder) and plan_at(p, pid) is None:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+class Claims:
+    """Which plan folders (CG.plan_id) released what into a target shared by several, kept in a JSON file: {"claims":
+    {key: [plan id]}, "plans": {plan id: {"path": where it was last seen, relative to `rel_to`, "abs": and resolved}}}. A target with no
+    state of its own (an Altium 365 workspace) keeps it next to the plan folders (publishers_file); an output folder
+    keeps it inside. A claim of a plan whose folder is gone is stale: it is named, and forget() drops it."""
+
+    def __init__(self, path, rel_to, section=None):
+        self.path, self.rel_to, self.section = Path(path), Path(rel_to), section
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8")) if self.path.is_file() else {}
+        except (OSError, ValueError):
+            raw = {}
+        self.raw = raw if isinstance(raw, dict) else {}
+        d = self.raw.get(section) if section else self.raw
+        d = d if isinstance(d, dict) else {}
+        self.claims = {k: list(v) for k, v in (d.get("claims") or {}).items() if isinstance(v, list)}
+        self.plans = {k: dict(v) for k, v in (d.get("plans") or {}).items() if isinstance(v, dict)}
+
+    def places(self, pid):
+        """Where plan pid was last seen ([Path]), for target_plan_id."""
+        return seen_places(self.plans.get(pid), self.rel_to)
+
+    def me(self, plan_folder, create=True):
+        """This plan folder's id here (target_plan_id): a second live folder with the id the claims last saw
+        elsewhere is a copy, with an id of its own."""
+        pid = plan_id(plan_folder, create)
+        return target_plan_id(plan_folder, self.places(pid), create) if pid else pid
+
+    def label(self, pid):
+        return (self.plans.get(pid) or {}).get("path") or pid
+
+    def folder(self, pid):
+        return found_at(self.plans.get(pid), self.rel_to, pid)
+
+    def is_me(self, pid, me, plan_folder=None):
+        """pid is this plan: its id, or a claim last seen at this very folder that no longer holds that id (the folder
+        was made again, or copied with what it published: a copy's own id, CG.plan_id)."""
+        if pid == me:
+            return True
+        return plan_folder is not None and was_here(self.plans.get(pid), self.rel_to, plan_folder, pid)
+
+    def others(self, key, me, plan_folder=None):
+        """(the other plans' folders that claim key {id: folder}, [ids of those whose folder is gone])."""
+        live, gone = {}, []
+        for pid in self.claims.get(key) or []:
+            if self.is_me(pid, me, plan_folder):
+                continue
+            f = self.folder(pid)
+            if f is None:
+                gone.append(pid)
+            else:
+                live[pid] = f
+        return live, gone
+
+    def claim(self, keys, me, plan_folder):
+        for k in keys:
+            if me not in self.claims.setdefault(k, []):
+                self.claims[k].append(me)
+        self.plans[me] = seen_at(plan_folder, self.rel_to)
+
+    def forget(self, pids):
+        for k in list(self.claims):
+            self.claims[k] = [p for p in self.claims[k] if p not in pids]
+            if not self.claims[k]:
+                del self.claims[k]
+        for p in pids:
+            self.plans.pop(p, None)
+
+    def save(self):
+        from .fsutil import write_text_atomic
+        d = {"claims": dict(sorted(self.claims.items())), "plans": dict(sorted(self.plans.items()))}
+        raw = dict(self.raw, **{self.section: d}) if self.section else d
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(self.path, json.dumps(raw, indent=1, sort_keys=True) + "\n")
+
+
+class SharedClaims(Claims):
+    """Claims on a target with no state of its own (an Altium 365 workspace) kept in two files: the project's
+    (publishers_file: shared with the project, a clone or another computer sees it) and this computer's
+    (computer_publishers_file: plan folders of other projects that push to the same workspace, R-FX18-3). A plan in
+    the computer's file whose folder is not at its recorded path (the project moved or renamed, a drive not mounted)
+    is brought in as gone: its components are held, named with the advice to push it once from where it is now, and it
+    is dropped only by --forget-missing-plans (R-FX20-2). The computer's file is never copied into the project's. Plan
+    folders on another computer, in another project, are in neither: see known_publishers (a component adopted from
+    one is told so)."""
+
+    def __init__(self, path, rel_to, section=None, computer=None):
+        super().__init__(path, rel_to, section)
+        self.borrowed = set()
+        self.computer = Claims(computer, Path(computer).parent, section) if computer else None
+        if self.computer is None:
+            return
+        for pid, rec in self.computer.plans.items():
+            there = found_at(rec, self.computer.rel_to, pid) is not None
+            mine = self.plans.get(pid)
+            if mine is None:
+                self.plans[pid] = {"abs": rec.get("abs")}
+                self.borrowed.add(pid)
+            elif there and found_at(mine, self.rel_to, pid) is None:
+                mine["abs"] = rec.get("abs")
+            for k, v in self.computer.claims.items():
+                if pid in v and pid not in self.claims.get(k, []):
+                    self.claims.setdefault(k, []).append(pid)
+
+    def label(self, pid):
+        rec = self.plans.get(pid) or {}
+        return rec.get("path") or rec.get("abs") or pid
+
+    def claim(self, keys, me, plan_folder):
+        super().claim(keys, me, plan_folder)
+        self.borrowed.discard(me)
+
+    def save(self):
+        merged = (self.claims, self.plans)
+        try:
+            own = {k: [p for p in v if p not in self.borrowed] for k, v in self.claims.items()}
+            self.claims = {k: v for k, v in own.items() if v}
+            self.plans = {p: v for p, v in self.plans.items() if p not in self.borrowed}
+            super().save()
+        finally:
+            self.claims, self.plans = merged
+        if self.computer is None:
+            return
+        live = {}
+        for pid, rec in self.plans.items():          # this computer's file: the plans by full path; one not found
+            f = found_at(rec, self.rel_to, pid) or found_at(rec, self.computer.rel_to, pid)   # keeps its record
+            if f is not None:                                                                   # until forgotten
+                live[pid] = {"abs": Path(f).resolve().as_posix()}
+            elif pid in self.computer.plans:
+                live[pid] = self.computer.plans[pid]
+        self.computer.claims = {k: [p for p in v if p in live] for k, v in self.claims.items()}
+        self.computer.claims = {k: v for k, v in self.computer.claims.items() if v}
+        self.computer.plans = {p: r for p, r in live.items() if any(p in v for v in self.computer.claims.values())}
+        try:
+            self.computer.save()
+        except OSError:                              # (a read-only settings folder: the project's file still holds)
+            pass
+
+
+def computer_publishers_file():
+    """This computer's record of which plan folders pushed what to each Altium 365 workspace (all projects): in the
+    ecadlib settings folder (userconfig.config_dir)."""
+    from .userconfig import config_dir
+    return config_dir() / "ecadlib_publishers.json"
+
+
+OWNER = ".ecadlib_owner.json"                 # in an output folder: which plan folder wrote each library there
+
+
+class OutputTaken(ValueError):
+    """Another plan folder's library is in the output folder: not overwritten (R-FX15-4)."""
+
+
+def claim_output(out, key, plan_folder, take_over=False, what="the library", check=None, shared=False, flag="--take-over"):
+    """Before a publisher writes library `key` (kicad-export:<lib>, kicad-pcm:<package id>, ...) into output folder
+    `out` from plan_folder: another plan folder that wrote it there (or, check: any of those keys) keeps it, as one plan's
+    export replaces the whole library and the other plan's released parts would change or go without its sign-off
+    (R-FX15-4). Raises OutputTaken naming it (and whether its folder is gone), unless take_over. Then records this plan
+    as its writer (shared: as one of several, for a target that keeps each plan's rows apart). A folder written before
+    this was recorded is taken by its next writer."""
+    out = Path(out)
+    c = Claims(out / OWNER, out)
+    me = c.me(plan_folder)
+    live, gone = {}, []
+    for k in check or [key]:
+        lv, gn = c.others(k, me, plan_folder)
+        live.update(lv)
+        gone += [g for g in gn if g not in gone]
+    if (live or gone) and not take_over:
+        named = [c.label(p) for p in sorted(live)] + [c.label(p) for p in gone]
+        why = (f"{out}: {what} there was written from another plan folder ({', '.join(named)}): not overwritten, as "
+               "this plan's parts would replace that plan's (its released parts would change or go without its "
+               f"sign-off). Write this plan into another folder (or under another --name), or pass {flag} to make "
+               "this plan folder its writer")
+        if gone:
+            why += (f" ({', '.join(c.label(p) for p in gone)} is not found from here, at its path from this folder "
+                    f"or its full path: if that plan folder or this folder was moved, run that plan once from where it is now; {flag} only "
+                    "if that plan folder no longer exists)")
+        raise OutputTaken(why)
+    before = json.dumps([c.claims, c.plans], sort_keys=True)
+    for k in set(check or []) | {key}:        # (a claim of this folder under the id it had before: this plan's)
+        c.claims[k] = sorted({me if c.is_me(p, me, plan_folder) else p for p in c.claims.get(k, [])})
+    if take_over:
+        for k in check or [key]:
+            c.claims[k] = [p for p in c.claims.get(k, []) if p == me]
+    c.claims[key] = sorted(set(c.claims.get(key, [])) | {me}) if shared else [me]
+    c.claims = {k: v for k, v in c.claims.items() if v}
+    c.plans[me] = seen_at(plan_folder, out)
+    c.plans = {p: v for p, v in c.plans.items() if any(p in v2 for v2 in c.claims.values())}
+    if json.dumps([c.claims, c.plans], sort_keys=True) != before:
+        c.save()
+    return me
+
+
+def publishers_file(plan_folder):
+    """Where plan folders that share a target with no state of its own (an Altium 365 workspace) record what each
+    released there: ecadlib_publishers.json beside the ecadlib.toml found from the plan folder upward (the project the
+    plan folders belong to), else in the plan folder's parent (plan folders side by side)."""
+    from .rules import FILES
+    f = Path(plan_folder).resolve()
+    for d in [f, *f.parents]:
+        if any((d / n).is_file() for n in FILES):
+            return (d if d != f else f.parent) / "ecadlib_publishers.json"
+    return f.parent / "ecadlib_publishers.json"
+
+
+def head_of(lg, part):
+    """The ledger head of `part` (case-folded match when the spelling differs), or None; None for a ledger that can't
+    tell (LedgerError)."""
+    try:
+        h = lg.head(part)
+        if h is None:
+            other = next((p for p in lg.parts() if p.casefold() == str(part).casefold()), None)
+            h = lg.head(other) if other else None
+        return h
+    except (LG.LedgerError, OSError, ValueError):
+        return None
 
 
 def record_bom_usage(folder, bom, items):

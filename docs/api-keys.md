@@ -72,6 +72,10 @@ max_cost_usd = 10       # a hard cap per run (default $10; 0 = no cap): the comm
                         # even with --yes; --max-cost-usd N changes it for one run. A cap you set also makes the dialogs ask twice
 ```
 
+A remote model whose price ecadlib does not know is not sent from the command line: no cap can be checked for it.
+Set its price (`[ai.profiles."<model>"] price_in` and `price_out`, $ per million tokens) so the cap holds, or pass
+`--yes` to send it without a cost check. A local server (Ollama, LM Studio ...) is priced at $0 and is not stopped.
+
 On the command line, `ecadlib datasheet estimate PLAN` prints the same estimate and sends nothing, and
 `ecadlib costs` shows what each job costs on each model. The MCP server keeps its `datasheet_estimate` and
 `datasheet_batch` tools: `datasheet_batch` needs the amount you approved of `datasheet_estimate`'s quote

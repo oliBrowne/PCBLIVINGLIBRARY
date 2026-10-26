@@ -7,7 +7,8 @@ the parts *database* Altium reads through a .DbLib file (OLE DB / ODBC):
     out/altium/parts.xlsx        same tables as sheets (Excel via the ACE OLE DB provider; tables are 'Sheet$')
     out/altium/ecadlib_sqlite.DbLib, ecadlib_excel.DbLib   INI files pointing Altium at the above
 
-    python -m ecadlib.altium_export examples/sample_bom.csv -o out/altium [--triage out/triage_sample_bom.csv]
+    python -m ecadlib.altium_export examples/sample_bom.csv -o out/altium --draft [--triage out/triage_sample_bom.csv]
+    python -m ecadlib.altium_export out/lib/plan.json -o out/altium   # release-checked parts only (dblib-sync)
 
 Column names use Altium's reserved DbLib names ([Library Ref], [Library Path], [Footprint Ref],
 [Footprint Path], [Description]) plus parameters (Part Number = key, Value, Comment, Manufacturer,
@@ -115,10 +116,233 @@ def _safe_name(s, notes):
         return lib_name(safe)
 
 
+IPC_IC = re.compile(r"^(SOIC|QFP|QFN|SON|DFN|SOT)(\d{2,3})P(\d{3,4})X(\d{3,4})(?:X(\d{2,4}))?(?:X\d{2,4})?-(\d{1,3})[NLM]?$",
+                    re.I)
+
+
+def _ipc_land(name):
+    """An IPC-7351 IC land name (Altium's footprint wizard) written the way the free-text reader takes it: family,
+    pitch, pins and body ('QFP50P900X900X160-48N' -> 'QFP-48 7x7mm P0.5mm', the 9 mm lead span less the leads;
+    'SOIC127P600X175-8N' -> 'SOIC-8 (3.9mm Width) P1.27mm' from its 6 mm span; 'QFN50P300X300X100-17N' ->
+    'QFN-16-1EP 3x3mm P0.5mm', the odd pin its thermal pad; 'SOT95P280X145-5N' -> 'SOT-23-5'). Other names: None."""
+    m = IPC_IC.match(name)
+    if not m:
+        return None
+    fam, pitch, d1, d2, d3, pins = m.group(1).upper(), int(m.group(2)) / 100, int(m.group(3)) / 100, \
+        int(m.group(4)) / 100, m.group(5), int(m.group(6))
+    if fam == "SOT":                            # SOT{pitch}P{span}X{height}-{pins}
+        if abs(pitch - 0.95) > 0.01 or pins not in (3, 5, 6):
+            return None
+        return ("TSOT-23" if d2 <= 1.1 else "SOT-23") + ("" if pins == 3 else f"-{pins}")
+    ep = "-1EP" if pins % 2 else ""             # IPC counts the thermal pad as a pin
+    pins -= pins % 2
+    if fam == "QFP":                            # QFP{pitch}P{span}X{span}X{height}-{pins}: body = span less 2 mm
+        body = f" {d1 - 2:g}x{d2 - 2:g}mm"
+    elif fam == "SOIC":                         # SOIC{pitch}P{span}X{height}-{pins}: JEDEC body for the span
+        w = next((w for span, w in ((6.0, 3.9), (7.9, 5.3), (10.3, 7.5)) if abs(d1 - span) <= 0.25), None)
+        body = f" ({w if w else round(d1 - 2.1, 2)}mm Width)"
+    else:                                       # QFN / SON / DFN{pitch}P{body}X{body}X{height}-{pins}
+        if not d3:
+            return None
+        body = f" {d1:g}x{d2:g}mm"
+    return f"{fam}-{pins}{ep}{body} P{pitch:g}mm"
+
+
+def _land_canon(name):
+    """A footprint field as the package it names: a known alias as its land ('DO-214AC' -> 'D_SMA', 'TO-236' ->
+    'SOT-23'), a distributor's pins-first name the family's way ('48-LQFP' -> 'LQFP-48', '8-SOIC'), ST's 'SO8N', an
+    IPC-7351 name (_ipc_land, R-B2-5)."""
+    from . import stdparts as SP
+    name = _ipc_land(name) or name
+    key = SP._norm(name)
+    hit = SP.ALIASES.get(key) or SP.DIODE_ALIASES.get(key)
+    if hit and key not in SP.AMBIGUOUS:
+        return hit
+    fams = "|".join(sorted(SP.FAMILIES, key=len, reverse=True))
+    name = re.sub(rf"^(\d{{1,3}})[-_ ]?({fams})(?![A-Za-z0-9])", r"\2-\1", name, flags=re.I)
+    return re.sub(r"^(SO-?\d{1,2})N(?![A-Za-z0-9])", r"\1", name, flags=re.I)
+
+
+def _ic_land(name):
+    """IC family attributes of a land name (stdparts' free-text reading), the family written one way: SO / SOP-8/14/16
+    are JEDEC SOIC unless a body says otherwise, a bare 'QFP' is any QFP of the count. -> dict or None."""
+    from . import stdparts as SP
+    a = SP._free_attrs(name)
+    if not a:
+        return None
+    if a["fam"] == "SO" or a["fam"] == "SOP" and a["pins"] in (8, 14, 16):
+        a["fam"] = "SOIC"
+    a["leadless"] = a["fam"] in SP.NO_LEAD
+    a["width"] = _body_width(name, a)
+    return a
+
+
+def _body_width(name, attrs):
+    """The body width (mm) a land name states, or None: a distributor's '(0.209", 5.30mm Width)', '208 mil', EasyEDA's
+    'L5.0-W4.0', or the first figure of a KiCad-style 'W x L' body ('TSSOP-8_4.4x3mm' is 4.4 wide, 3 long)."""
+    t = str(name or "")
+    m = re.search(r"(\d+(?:\.\d+)?)\s*mm\s*Width", t, re.I)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"(?<![\d.])(0?\.\d{2,3})\s*(?:\"|''|in\b|inch)", t, re.I)
+    if m:
+        return round(float(m.group(1)) * 25.4, 2)
+    if attrs.get("body_w"):
+        return attrs["body_w"]
+    m = re.search(r"(?<![A-Z])L\d+(?:\.\d+)?-W(\d+(?:\.\d+)?)", t)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[xX\u00d7*]\s*\d+(?:\.\d+)?", t)
+    return float(m.group(1)) if m else None
+
+
+def _family_width(attrs):
+    """The one body width a body-less IC name can mean: JEDEC's 3.9 mm SOIC (7.5 mm for SOIC-W), else the width when
+    every KiCad package of that family and pin count has the same one ('LQFP-48' is 7 mm; 'QFN-20' is 3, 3.5, 4 or
+    5 mm: None, the name does not say which land)."""
+    from . import stdparts as SP
+    if attrs["fam"] == "SOIC":
+        return 7.5 if attrs["w"] else 3.9
+    fams = SP.QUAD_LEADED if attrs["fam"] == "QFP" else {attrs["fam"]}
+    ws = {float(SP.NAME_RE.match(n).group("a")) for g, n in SP._generic()
+          if g["fam"] in fams and g["pins"] == attrs["pins"] and g["w"] == attrs["w"]}
+    return ws.pop() if len(ws) == 1 else None
+
+
+# packages of one pin count that distributors suffix with it anyway (Mouser 'SOT-363-6'): the suffix says nothing
+_FIXED_COUNT = {"SOT-363": 6, "SOT-353": 5, "SOT-323": 3, "SOT-563": 6, "SOT-666": 6, "SC-70": 3}
+_DIP_ROW = {"0.300": 7.62, "7.62": 7.62, "0.400": 10.16, "10.16": 10.16, "0.600": 15.24, "15.24": 15.24}
+
+
+def _distributor_alias(name):
+    """A distributor's spelling of a land as KiCad's, or the name unchanged (R-FX17-3): DigiKey's 'TO-252-3, DPak
+    (2 Leads + Tab), SC-63' and Mouser's 'DPAK-3' (terminals counted with the tab) are TO-252-2, 'D2PAK-3' TO-263-2;
+    LCSC's 'TO-252-2(DPAK)' drops its bracketed alias; 'SOT-363-6' drops a count its package always has; '8-DIP
+    (0.300", 7.62mm)' is DIP-8_W7.62mm; 'SOIC-Wide-16' is SOIC-16W."""
+    t = str(name or "").strip()
+    m = re.search(r"\((\d+)\s*Leads?\s*\+\s*Tab\)", t, re.I)
+    fam = "TO-263" if re.search(r"D2\s*PAK|TO-?263", t, re.I) else "TO-252" if re.search(r"(?<![0-9A-Z])DPAK|TO-?252", t, re.I) else None
+    if m and fam:
+        return f"{fam}-{m.group(1)}"
+    m = re.fullmatch(r"D(2)?PAK-?3", t, re.I)
+    if m:
+        return "TO-263-2" if m.group(1) else "TO-252-2"
+    m = re.fullmatch(r"(\d{1,2})-P?DIP\s*\(\s*([\d.]+)\s*(?:\"|in)?\s*,\s*([\d.]+)\s*mm\s*\)", t, re.I) or \
+        re.fullmatch(r"P?DIP-?(\d{1,2})\s*\(\s*([\d.]+)\s*(?:\"|in)?\s*,\s*([\d.]+)\s*mm\s*\)", t, re.I)
+    if m and _DIP_ROW.get(m.group(2)) and _DIP_ROW.get(m.group(2)) == _DIP_ROW.get(m.group(3)):
+        return f"DIP-{m.group(1)}_W{_DIP_ROW[m.group(2)]:.2f}mm"
+    m = re.fullmatch(r"SOIC-?W(?:ide)?-?(\d{1,2})", t, re.I)
+    if m:
+        return f"SOIC-{m.group(1)}W"
+    m = re.fullmatch(r"(.*?[A-Za-z0-9])\s*\(\s*[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*\s*\)", t)
+    if m:                                       # 'TO-252-2(DPAK)': the name, its alias in brackets
+        t = m.group(1)
+    m = re.fullmatch(r"(SOT-?\d{3}|SC-?70)-(\d)", t, re.I)
+    if m and _FIXED_COUNT.get(re.sub(r"^(SOT|SC)-?", r"\1-", m.group(1).upper())) == int(m.group(2)):
+        return m.group(1)
+    return t
+
+
+QFN_LANDS = {"QFN", "VQFN", "WQFN", "UQFN", "TQFN", "HVQFN"}
+# stdparts' power packages and distributors' 'Power' + leadless names ('8-PowerTDFN', 'PowerVSON-8')
+POWER_LAND = re.compile(r"(?<![A-Za-z])Power[A-Z]*(?:DFN|SON|SOIC|SO|SSO|QFN)", re.I)
+
+
+def lands_differ(a, b):
+    """Two BOM footprint fields that name two lands (R_0603_1608Metric vs R_0402_1005Metric, SOIC-8 vs SOIC-8-1EP_..),
+    not one land written two ways ('0603' vs 'Resistor_SMD:R_0603_1608Metric'; R-FX10-2: 'LQFP-48_7x7mm' vs '48-LQFP'
+    or 'QFP-48', 'SOIC-8_3.9x4.9mm' vs 'SO-8' / '8-SOIC' / EasyEDA's 'SOIC-8_L5.0-W4.0-P1.27..', 'D_SMA' vs 'DO-214AC').
+    IC packages compare by family, pin count, wide body, exposed pad, and body and pitch where both give them. An empty
+    field says nothing."""
+    from .kicad_index import EP_FAMILY, EP_HINT, EP_NAME, LAND_VARIANT
+    from . import stdparts as SP
+    a, b = (str(x or "").split(":")[-1].strip() for x in (a, b))
+    if not a or not b or a.casefold() == b.casefold():
+        return False
+    if bool(LAND_VARIANT.search(a) or SP.LAND_VARIANT.search(a)) != bool(LAND_VARIANT.search(b) or SP.LAND_VARIANT.search(b)):
+        return True                             # the hand-solder / thermal-via copy of a land is another land
+    ca, cb = _land_canon(_distributor_alias(a)), _land_canon(_distributor_alias(b))
+    if ca.casefold() == cb.casefold():
+        return False
+    if any(SP.POWER_PKG.search(x) or POWER_LAND.search(x) for x in (a, b)):   # PowerPAK SO-8, LFPAK56: not the SOIC
+        one = lambda n: re.sub(r"SINGLE$", "", SP._norm(n))          # 'PowerPAK SO-8' is KiCad's _Single, not _Dual
+        return one(ca) != one(cb)
+
+    def ep(n, attrs):
+        return bool(EP_NAME.search(n) or EP_HINT.search(n) or EP_FAMILY.search(n) or (attrs or {}).get("ep"))
+
+    ia, ib = _ic_land(ca), _ic_land(cb)
+    if ia and ib:
+        if SP.NAME_RE.match(ca) and SP.NAME_RE.match(cb):
+            return True                         # two KiCad names of one family: two lands
+        if (ia["fam"], ia["pins"]) != (ib["fam"], ib["pins"]) and not (
+                ia["pins"] == ib["pins"] and ({ia["fam"], ib["fam"]} & {"QFP"} and {ia["fam"], ib["fam"]} <= SP.QUAD_LEADED
+                                              or {ia["fam"], ib["fam"]} <= QFN_LANDS)):
+            return True                         # QFP is any quad flat pack; VQFN / WQFN the QFN land, lower
+        wa, wb = ia["width"] or _family_width(ia), ib["width"] or _family_width(ib)
+        if wa is None or wb is None or abs(wa - wb) > 0.15:
+            return True                         # 5.3 mm is not 3.9 mm; a bare name of a family of several widths
+        ea, eb = ep(ca, ia), ep(cb, ib)
+        if ea != eb and not (ib if ea else ia)["leadless"]:
+            return True                         # a bare leadless name ('QFN-20') does not say there is no pad
+        if ia["body"] and ib["body"] and any(abs(x - y) > 0.15 for x, y in zip(ia["body"], ib["body"])):
+            return True
+        if ia["pitch"] and ib["pitch"] and abs(ia["pitch"] - ib["pitch"]) > 0.01:
+            return True
+        if ia["epsize"] and ib["epsize"] and any(abs(x - y) > 0.05 for x, y in zip(ia["epsize"], ib["epsize"])):
+            return True
+        return False
+    pa = package_of(ca)
+    if pa != package_of(cb):
+        return True
+    if pa is None:                              # no rule reads either name (TO-263 / TO-252, SOT-563 / SOT-363): one
+        return SP._norm(ca) != SP._norm(cb)     # land only when they are one name ('TO-263' / 'TO263'), R-B2-2
+    if bool(EP_NAME.search(ca) or EP_HINT.search(ca)) != bool(EP_NAME.search(cb) or EP_HINT.search(cb)):
+        return True
+    return "_" in ca and "_" in cb              # two full land names of one package: two lands ('_HandSolder')
+
+
+def _fields_differ(key, a, b):
+    """Two lines' Value / MPN / supplier number that name two things: 10k vs 1k, SMAJ5.0A vs SMAJ50A. One thing written
+    two ways is not ('100nF' / '0.1uF', 'TPS62133RGTR' / 'tps62133-rgtr', 'C1525' / ' C1525'). An empty one says nothing."""
+    a, b = str(a or "").strip(), str(b or "").strip()
+    if not a or not b:
+        return False
+    if key == "Value":
+        va, vb = parse_value(a, True), parse_value(b, True)
+        if va[0] is not None and vb[0] is not None and not two_readings(a) and not two_readings(b):
+            return abs(va[0] - vb[0]) > 1e-9 * max(abs(va[0]), abs(vb[0])) or bool(va[1] and vb[1] and va[1] != vb[1])
+    return re.sub(r"[\s-]", "", a).casefold() != re.sub(r"[\s-]", "", b).casefold()
+
+
 def prior_names(items):
-    """{plan item name: its MPN} of an existing plan, for to_rows(prior=...)."""
-    return {i["name"]: next((str(p.get("value") or "") for p in i.get("parameters") or []
-                             if p.get("name") == "Manufacturer Part Number"), "") for i in items or [] if i.get("name")}
+    """{plan item name: {mpn, manufacturer, value, folder, land}} of an existing plan, for to_rows(prior=...)."""
+    def par(i, name):
+        return next((str(p.get("value") or "") for p in i.get("parameters") or []
+                     if isinstance(p, dict) and p.get("name") == name), "")
+    out = {}
+    for i in items or []:
+        if isinstance(i, dict) and i.get("name"):
+            fp = i.get("footprint") if isinstance(i.get("footprint"), dict) else {}
+            out[i["name"]] = {"mpn": par(i, "Manufacturer Part Number"), "manufacturer": par(i, "Manufacturer"),
+                              "value": par(i, "Value"), "folder": str(i.get("folder") or ""),
+                              "land": str(fp.get("kicad") or fp.get("ref") or "")}
+    return out
+
+
+def _respelt(prior, key, value, maker, folder, land):
+    """The released name of this MPN when this line is that part with its value written another way (R-FL-4: 10k ->
+    10K0, 100nF -> 0.1uF): same MPN, maker, folder and land, a value that reads the same but is typed otherwise.
+    A value that changed, or another maker or land, names another part: None (the naming rules as before)."""
+    hits = [n for n, p in prior.items() if key and norm_mpn(p.get("mpn") or "") == key
+            and str(p.get("value") or "").strip() and str(p.get("value")).strip() != str(value).strip()
+            and not _fields_differ("Value", p.get("value"), value)
+            and parse_value(str(p.get("value")), True)[0] is not None
+            and str(p.get("manufacturer") or "").strip().casefold() == str(maker or "").strip().casefold()
+            and (not p.get("folder") or str(p["folder"]).rstrip("/").split("/")[-1].casefold()
+                 == str(folder).rstrip("/").split("/")[-1].casefold())
+            and not lands_differ(p.get("land"), land)]
+    return hits[0] if len(hits) == 1 else None
 
 
 def to_rows(lines, triage=None, rules=None, prior=None):
@@ -128,17 +352,24 @@ def to_rows(lines, triage=None, rules=None, prior=None):
     (held by the release check). prior: {part name: MPN} already in the plan (prior_names), so names stay with parts."""
     from . import rules as RU
     custom = rules is not None and not RU.is_default(rules, "naming")
-    tri = {}
+    tri, by_line = {}, {}
     if triage is not None:
         for _, t in triage.iterrows():
             if str(t["mpn"]):                  # an empty MPN would hand one row's footprint to every MPN-less line
                 tri[str(t["mpn"])] = t
+            try:                               # each BOM line's own row (R-BF-2): one MPN on an 0603 and an 0402
+                by_line[int(str(t.get("line", "")).strip())] = t    # line must not take the last row's land
+            except ValueError:
+                pass
+    holds = {}
     out, seen, renamed, same_value, canon, first, notes, unstorable = {}, {}, {}, {}, {}, {}, {}, {}
     # a name already in the plan stays with its part (SYS-1): when the part released under it is still in the BOM, a
     # line added above it with another MPN takes the suffixed name instead
     present = {norm_mpn("" if placeholder_mpn(ln.get("mpn", "")) else ln.get("mpn", "")) for ln in lines}
-    reserved = {n: norm_mpn(m) for n, m in (prior or {}).items() if norm_mpn(m) in present}
-    for ln in lines:
+    prior = {n: (p if isinstance(p, dict) else {"mpn": str(p or "")}) for n, p in (prior or {}).items()}
+    # keyed folded, as Altium compares part numbers: a new 'RES-0603-10K' must not take a released 'RES-0603-10k' (R-B2-4)
+    reserved = {n.casefold(): (n, norm_mpn(p["mpn"])) for n, p in prior.items() if norm_mpn(p["mpn"]) in present}
+    for i, ln in enumerate(lines, 1):
         bad = []
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
@@ -146,7 +377,9 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         if placeholder_mpn(mpn):               # 'N/A' / '-' names no part: two such lines are two parts, not one
             mpn = ""
         fp = ln.get("footprint", "")
-        t = tri.get(mpn)
+        t = by_line.get(i)
+        if t is None or not mpn or str(t["mpn"]) != mpn:
+            t = tri.get(mpn)
         ref, kind = (prefix.group(0) if prefix else "U"), None
         if cat in ("ICs", "Misc"):              # U? / no designator: what the part is, if the source or footprint says
             got = t if t is not None else {}
@@ -176,14 +409,23 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         key = norm_mpn(mpn)                     # one part however the MPN is typed: case, dashes (TPS62133-RGTR)
         if key and key in canon:
             pn = canon[key]
-        else:                                   # no MPN: the footprint tells two parts apart unless the name has the
+        else:
+            was = _respelt(prior, key, value, ln.get("manufacturer", ""),
+                           RU.folder_for(cat, rules) if rules is not None else cat, fp_ref) if key and prior else None
+            if was and was != pn and _safe_name(was, []) == was:
+                pn = was                        # the released name stays with its part (R-FL-4)                                   # no MPN: the footprint tells two parts apart unless the name has the
             ident = key or ("" if pkg and pkg in pn else fp_ref)              # package (RES-0603-10k) already
-            if pn in reserved and pn not in seen and key != reserved[pn]:
-                seen[pn] = None                 # held for the part released under this name, further down the BOM
-            if pn in reserved and seen.get(pn) is None and key == reserved[pn]:
-                seen[pn] = ident
-            if seen.setdefault(pn, ident) != ident:   # same synthetic PN, different part (100nF 16V vs 50V; a 10k
+            # Altium part numbers ignore case: names are compared folded, and a name spelt another way is another
+            # part (RES-2512-10m is 10 mOhm, RES-2512-10M 10 MOhm), never one name in two cases (R-FX10-7, R-BF-9)
+            ident, fold = (ident, "" if key else pn), pn.casefold()
+            held = reserved.get(fold)
+            if held and fold not in seen and key != held[1]:
+                seen[fold] = None               # held for the part released under this name, further down the BOM
+            if held and seen.get(fold) is None and key == held[1]:
+                seen[fold], pn = ident, held[0]     # the released part keeps its name as released
+            if seen.setdefault(fold, ident) != ident:   # same synthetic PN, different part (100nF 16V vs 50V; a 10k
                 pn = f"{pn}-{name_mpn or fp_ref}".replace(" ", "")              # SMD and a 10k axial): keep both
+                seen.setdefault(pn.casefold(), ident)
             if key:
                 canon[key] = pn
         pn = _safe_name(pn, bad)
@@ -213,16 +455,36 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         })
         row, des = out[cat][-1], ln.get("designator", "") or "?"
         notes.setdefault(pn, []).extend(bad)
+        if ln.get("bom_hold"):                  # a row read_bom could not read as the header says (shifted cells)
+            holds.setdefault(pn, []).append(f"BOM line {des}: {ln['bom_hold']}")
         if pn not in first:
-            first[pn] = (row, des)
+            first[pn] = (row, des, ln.get("footprint", ""))
         else:                                   # a second BOM line for this part: the first one wins, say what differs
-            keep, kdes = first[pn]
+            keep, kdes, kfp = first[pn]
             diff = [f"{k} {keep[k]!r} vs {row[k]!r}" for k in ("Footprint Ref", "Manufacturer", "Value",
                                                                  "Manufacturer Part Number", "Supplier Part Number 1")
                     if str(keep[k]).strip() and str(row[k]).strip() and keep[k] != row[k]]
+            land = lands_differ(kfp, ln.get("footprint", "")) or lands_differ(keep["Footprint Ref"], row["Footprint Ref"])
+            if land and not any(d.startswith("Footprint Ref") for d in diff):
+                diff.insert(0, f"Footprint {kfp!r} vs {ln.get('footprint', '')!r}")
             if diff:
                 notes[pn].append(f"BOM lines {kdes} and {des} are one part {pn} but differ ({'; '.join(diff)}): "
                                  f"using {kdes}; check the BOM")
+            if land:                            # one part built on one land for lines that name two: held (R-BF-2)
+                holds.setdefault(pn, []).append(
+                    f"BOM lines {kdes} and {des} are one part {pn} on two footprints "
+                    f"({kfp or keep['Footprint Ref']!r} vs {ln.get('footprint', '') or row['Footprint Ref']!r}): "
+                    "give the lines their own MPNs or one footprint")
+            other = [d for d, k in ((f"Value {keep['Value']!r} vs {row['Value']!r}", "Value"),
+                                    (f"Manufacturer Part Number {keep['Manufacturer Part Number']!r} vs "
+                                     f"{row['Manufacturer Part Number']!r}", "Manufacturer Part Number"),
+                                    (f"Supplier Part Number 1 {keep['Supplier Part Number 1']!r} vs "
+                                     f"{row['Supplier Part Number 1']!r}", "Supplier Part Number 1"))
+                     if _fields_differ(k, keep[k], row[k])]
+            if other:                           # one part released with one line's value / MPN / order number for
+                holds.setdefault(pn, []).append(                  # lines that name two (R-BF-3): held, not a note
+                    f"BOM lines {kdes} and {des} are one part {pn} but differ ({'; '.join(other)}): "
+                    "fix the BOM so the lines agree, or give them their own MPNs")
     notes = {k: list(dict.fromkeys(v)) for k, v in notes.items() if v}
     for v in notes.values():
         for n in v:
@@ -233,6 +495,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         df.attrs["kicad_fp"] = renamed
         df.attrs["unstorable"] = unstorable
         df.attrs["notes"] = notes               # {Part Number: [BOM conflicts, renamed characters]}
+        df.attrs["holds"] = {k: list(dict.fromkeys(v)) for k, v in holds.items()}   # {Part Number: [BOM conflicts
+        # that hold the part]}: altium365.plan -> item bom_holds -> release check
     return res
 
 
@@ -296,14 +560,31 @@ def dblib_text(conn_str, tables, left_quote="[", right_quote="]", excel=False, c
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Write an Altium DbLib (SQLite + XLSX) from a BOM")
-    ap.add_argument("bom")
+    ap = argparse.ArgumentParser(description="Write an Altium DbLib from a librarian plan.json: only the parts that pass "
+                                             "the release check go in (dblib-sync), the others are listed with the reason. "
+                                             "From a BOM only with --draft: an unchecked table skeleton.")
+    ap.add_argument("bom", help="plan.json from `ecadlib librarian` (a BOM needs --draft)")
     ap.add_argument("-o", "--out", default="out/altium")
+    ap.add_argument("--draft", action="store_true",
+                    help="from a BOM: write a row for every BOM line, release-checked or not (Library Path / Footprint "
+                         "Path name files this command does not write)")
+    ap.add_argument("--name", default="ecadlib", help="from a plan: base name of the .DbLib, .xlsx and .csv")
     ap.add_argument("--triage", help="triage CSV from bom_triage (to pick up resolved local footprints)")
-    ap.add_argument("--win-dir", default=r"C:\ecadlib\altium", help="Windows folder the DB will live in (for the connection string)")
+    ap.add_argument("--win-dir", default=WIN_DIR, help="Windows folder the DB will live in (for the connection string)")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml in the output folder, the current folder or a parent)")
     a = ap.parse_args(argv)
 
+    if _is_plan(a.bom):                       # the release gate, as every other export route: dblib-sync ships only
+        from . import altium_dblib_sync as DS  # the parts that pass the check now and lists the others with the reason
+        return DS.main([a.bom, "--to", a.out, "--name", a.name] + (["--win-dir", a.win_dir] if a.win_dir != WIN_DIR else [])
+                       + (["--rules", a.rules] if a.rules else []))
+    if not a.draft:
+        print(f"ecadlib dblib: {a.bom} is a BOM, and no BOM line has been through the release check, so nothing was "
+              "written (the rows would name .SchLib / .PcbLib files that are not built).\n"
+              f"  hint: `ecadlib librarian {a.bom} -o out/lib` builds and checks the parts, then "
+              "`ecadlib dblib out/lib/plan.json -o OUT` writes the DbLib with the parts that pass.\n"
+              "  --draft writes the old unchecked table skeleton (every BOM line) anyway.", file=sys.stderr)
+        return 2
     from . import rules as RU
     rules = RU.load(a.rules, start=a.out)
     try:
@@ -345,6 +626,25 @@ def main(argv=None):
     for n_, df in tables.items():
         print(f"{n_:<12} {len(df):>2} parts  e.g. {df.iloc[0]['Part Number']} -> {df.iloc[0]['Footprint Ref']}")
     print(f"wrote {db}, {out/'parts.xlsx'}, {out/'ecadlib_sqlite.DbLib'}, {out/'ecadlib_excel.DbLib'}")
+    print("draft: no part in it was release-checked, and its Library Path / Footprint Path name files this command "
+          "does not write")
+
+
+WIN_DIR = r"C:\ecadlib\altium"
+
+
+def _is_plan(path):
+    """A librarian / altium365 plan.json (a JSON list of parts), not a BOM."""
+    import json
+    p = Path(path)
+    try:
+        with open(p, "rb") as f:
+            head = f.read(64).lstrip(b"\xef\xbb\xbf \t\r\n")
+        if not head.startswith(b"["):
+            return False
+        return isinstance(json.loads(p.read_text(encoding="utf-8-sig")), list)
+    except (OSError, ValueError):
+        return False
 
 
 if __name__ == "__main__":

@@ -62,6 +62,17 @@ Q_MODELS = {k: """query ($ws: String!, $prefix: String!) {
   desLibrary(workspaceUrl: $ws) { %s(first: 50, where: {name: {startsWith: $prefix}}) { nodes { id name releasedAt folder { path } } } }
 }""" % k for k in ("symbols", "footprints")}
 
+# the same, with each revision's data download URL: an item this library has no record of is read back and compared
+# before a part is released linking it (Q_MODELS stays the lean lookup)
+Q_MODEL_DATA = {k: """query ($ws: String!, $prefix: String!) {
+  desLibrary(workspaceUrl: $ws) { %s(first: 50, where: {name: {startsWith: $prefix}}) { nodes { id name releasedAt folder { path } dataDownloadUrl } } }
+}""" % k for k in ("symbols", "footprints")}
+
+# the symbol / footprint files a component's current revision links (a component this library never published:
+# R-FX11-1)
+Q_COMPONENT_MODELS = """query ($id: ID!) { desComponentById(id: $id) { details { symbols { name dataDownloadUrl }
+  footprints { name dataDownloadUrl } } } }"""
+
 # folders by parent: componentReleaseFolder is one child folder name (a "/" in it fails with AddALU_FoldersInvalid
 # folder HRID), so a nested component folder is released as componentParentFolderId + leaf name
 # live schema 2026-10: a folder has a node id (base64) and a folderId (GUID); desCreateFolder takes the parent's
@@ -83,17 +94,46 @@ M_UPDATE_PARAMS = """mutation ($input: DesUpdateComponentRevisionParametersInput
 }"""
 
 
-def pick_named(nodes, name):
+REVISION = r"-([1-9]\d*|[A-Z]\.(0|[1-9]\d*))"     # the revision labels Altium's naming schemes give: 1, 2, 12 / A.1
+
+
+def node_mpn(node, rules=None):
+    """The MPN a workspace component node carries ("" when none): under ecadlib's names, the rules' house name
+    ([parameters.names]) or a usual MPN parameter name (MfrPN, Mfr. Part #, Manufacturer Part No)."""
+    import re
+    from .rules import param_name
+    par = {str(p.get("name") or "").strip().lower(): str(p.get("value") or "").strip()
+           for p in ((node.get("details") or {}).get("parameters") or []) if isinstance(p, dict)}
+    for k in ((param_name("Manufacturer Part Number", rules),) if rules else ()) + MPN_NAMES:
+        if par.get(k.lower()):
+            return par[k.lower()]
+    return next((v for k, v in par.items() if v and re.fullmatch(
+        r"(mfr|mfg|manufacturer|manuf)\.?[ _]*(part)?[ _]*(no\.?|number|num|#|pn|p/n)|mpn\d*", k)), "")
+
+
+def pick_named(nodes, name, rules=None):
     """The node that is item `name` ("SS34" or its revision "SS34-1"), or None. Live 2026-10-18: the
     `name: {eq: "AMS1117-3.3"}` filter also returns Altium's sample part CMP-017-000002-1 (it matches more than
-    the item name), so a hit is only a match when its own name is the item's."""
+    the item name), so a hit is only a match when its own name is the item's. A revision is only a label Altium's
+    naming schemes give ("-1", "-12", "-A.1"): "BAT54-04" is no revision. A node whose MPN (under ecadlib's, the
+    rules' house or a usual MPN parameter name), or else any parameter, names the node itself and not `name` is
+    another part (BAV99-7 with MfrPN = BAV99-7)."""
     import re
     if not name:
         return None
     nodes = nodes or []
     exact = next((n for n in nodes if (n.get("name") or "").lower() == name.lower()), None)
-    rev = re.compile(re.escape(name) + r"-(\d+|[A-Z]\.\d+)", re.I)     # a revision ("-1", "-A.1"), not "LM358-N"
-    return exact or next((n for n in nodes if rev.fullmatch(n.get("name") or "")), None)
+    rev = re.compile(re.escape(name) + REVISION, re.I)
+
+    def other_part(n):
+        own = (n.get("name") or "").lower()
+        mpn = node_mpn(n, rules).lower()
+        if mpn:
+            return mpn == own and mpn != name.lower()
+        vals = {str(p.get("value") or "").strip().lower()
+                for p in ((n.get("details") or {}).get("parameters") or []) if isinstance(p, dict)}
+        return own in vals and name.lower() not in vals
+    return exact or next((n for n in nodes if rev.fullmatch(n.get("name") or "") and not other_part(n)), None)
 
 
 def token_hint(token, now=None):
@@ -169,7 +209,7 @@ class Nexar:
 
     def find(self, ws, name):
         conn = self.gql(Q_FIND, {"ws": ws, "name": name})["desLibrary"]["components"] or {}
-        return pick_named(conn.get("nodes"), name)
+        return pick_named(conn.get("nodes"), name, getattr(self, "rules", None))
 
     def component(self, cid):
         return self.gql(Q_BY_ID, {"id": cid})["desComponentById"]
@@ -196,9 +236,28 @@ class Nexar:
         """Node id of the newest revision of symbol / footprint item_name in folder ("a/b"), or None.
         kind: "symbols" or "footprints". A same-named item in another folder is an error: item names are unique in
         the workspace, so releasing it again would fail, and linking someone else's model is not ours to decide."""
+        n = self._model_node(ws, kind, item_name, folder, Q_MODELS)
+        return n["id"] if n else None
+
+    def model_data(self, ws, kind, item_name, folder):
+        """The file the newest revision of symbol / footprint item_name in folder holds (its dataDownloadUrl), as
+        bytes: a .SchLib / .PcbLib, or a zip holding one (model_file_digest reads either). None: no such item."""
+        n = self._model_node(ws, kind, item_name, folder, Q_MODEL_DATA)
+        if not n:
+            return None
+        if not n.get("dataDownloadUrl"):
+            raise NexarError(f"{kind[:-1]} {item_name!r} has no download URL")
+        return self.download(n["dataDownloadUrl"])
+
+    def component_models(self, cid):
+        """{"symbols": [bytes], "footprints": [bytes]}: the files of the models component cid's revision links."""
+        d = ((self.gql(Q_COMPONENT_MODELS, {"id": cid}).get("desComponentById") or {}).get("details") or {})
+        return {k: [self.download(n["dataDownloadUrl"]) for n in d.get(k) or []] for k in ("symbols", "footprints")}
+
+    def _model_node(self, ws, kind, item_name, folder, queries):
         import re
         rev = re.compile(re.escape(item_name) + r"-[^-]+$", re.I)          # "Capacitor-1", not "Capacitor-SYM-1"
-        conn = self.gql(Q_MODELS[kind], {"ws": ws, "prefix": item_name + "-"})["desLibrary"][kind] or {}
+        conn = self.gql(queries[kind], {"ws": ws, "prefix": item_name + "-"})["desLibrary"][kind] or {}
         nodes = [n for n in conn.get("nodes") or [] if rev.match(n.get("name") or "")]
         if not nodes:
             return None
@@ -208,7 +267,7 @@ class Nexar:
             where = sorted({(n.get("folder") or {}).get("path") or "?" for n in nodes})
             raise NexarError(f"{kind[:-1]} {item_name!r} already exists in {', '.join(where)}, not in {folder}: "
                              "rename it in the plan or release under that folder")
-        return max(here, key=lambda n: n.get("releasedAt") or "")["id"]
+        return max(here, key=lambda n: n.get("releasedAt") or "")
 
     def _read_folders(self, ws):
         self._folders = [{"id": f["id"], "guid": f.get("folderId"), "name": f["name"], "parent": (f.get("parent") or {}).get("id")}
@@ -305,6 +364,8 @@ def plan(lines, triage=None, models=None, root=None, rules=None, prior=None):
             })
             if df.attrs.get("notes", {}).get(row["Part Number"]):    # BOM lines that disagree, renamed characters
                 items[-1]["bom_notes"] = list(df.attrs["notes"][row["Part Number"]])
+            if df.attrs.get("holds", {}).get(row["Part Number"]):    # lines that disagree on what is built: held
+                items[-1]["bom_holds"] = list(df.attrs["holds"][row["Part Number"]])
             why = df.attrs.get("unstorable", {}).get(row["Part Number"])
             if why:                            # a name Altium can't store: this part is held, the others go on
                 items[-1]["name_problems"] = [why]
@@ -431,6 +492,22 @@ IDENTITY_REFUSED = ("not applied in place: a released workspace component keeps 
                     "new component revision")
 
 
+def ws_target(ws):
+    """The ledger's publish target for workspace URL ws: one workspace is one target however its URL is typed (host
+    case, a trailing slash, spaces), so a change published under one spelling is not taken as never published under
+    another (which made an approved symbol change an in-place `up_to_date`, then recorded as published)."""
+    from urllib.parse import urlsplit, urlunsplit
+    u = urlsplit(str(ws or "").strip())
+    return "altium365:" + urlunsplit((u.scheme.lower(), u.netloc.lower(), u.path.rstrip("/"), u.query, "")).rstrip("/")
+
+
+def _published(lg, part, target):
+    """The last publish line of part to workspace `target` (ws_target), also one written under another URL spelling."""
+    norm = lambda t: ws_target(t[len("altium365:"):]) if str(t or "").startswith("altium365:") else t
+    return next((e for e in reversed(lg.history(part))
+                 if e.get("event") == "publish" and norm(e.get("target")) == norm(target)), None)
+
+
 def change_mode(lg, it, target):
     """What a push of an existing component must do under change control: "revision" when the released revision
     (ledger head) changed the symbol, footprint or 3D model since the revision last published to `target` (a new
@@ -438,7 +515,7 @@ def change_mode(lg, it, target):
     head, published revision)"""
     from . import fingerprint as FP
     head = lg.head(it["name"]) if lg else None
-    pub = lg.published(it["name"], target) if lg else None
+    pub = _published(lg, it["name"], target) if lg else None
     old = lg.revision(it["name"], pub["revision"]) if head and pub and pub.get("revision") != head.get("revision") else None
     if not old or all(old.get(k) == head.get(k) for k in ("eid", "gid", "mid")):
         return "params", set(), head, pub
@@ -453,12 +530,216 @@ def change_mode(lg, it, target):
     return "revision", halves, head, pub
 
 
+def _maybe_other(node, name, rules=None):
+    """True when workspace node `node` was matched to item `name` only by a revision-looking name (SS34-13 for SS34)
+    and carries no MPN to confirm it: it may be another part."""
+    own = str(node.get("name") or "")
+    return bool(own) and own.lower() != str(name).lower() and not node_mpn(node, rules)
+
+
+def unpublished_halves(lg, target, sent_models, it, head):
+    """The halves ({"symbol", "footprint"}) a new revision of a component this library never published to `target`
+    must send: all but one whose workspace item the ledger knows holds the head's drawing (a shared symbol released
+    with another part), which is linked."""
+    out = set()
+    for kind, half, name in zip(("symbols", "footprints"), ("symbol", "footprint"), model_item_names(it)):
+        want = model_digest(lg, head, kind)
+        have = name and (sent_models.get(f"{kind}:{name.lower()}") or released_model(lg, target, kind, name))
+        if not (want and have and have[0] == want):
+            out.add(half)
+    return out
+
+
 def _dup(e):
     return "duplicate" in str(e).lower()
 
 
+class _Held(Exception):
+    """A part push holds back before anything is sent; args[0]: the reasons."""
+
+
+def model_digest(lg, entry, kind):
+    """Fingerprint digest of a ledger revision's symbol ("symbols") or footprint + 3D model ("footprints"), or None."""
+    from . import fingerprint as FP
+    fp = lg.fingerprint(entry) if lg and entry else None
+    if not fp:
+        return None
+    return FP.digest(fp.get("symbol")) if kind == "symbols" else FP.digest([fp.get("footprint"), fp.get("model")])
+
+
+def model_file_digest(data, kind, ref):
+    """Fingerprint digest of the drawing in a workspace item's file (bytes: a .SchLib / .PcbLib, or a zip holding one),
+    as model_digest gives it for a ledger revision whose symbol / footprint ref is `ref`: the symbol, or the land with
+    its art and 3D model. A file holding one entry is read whatever that entry is called. Raises ValueError when the
+    file does not read."""
+    import io, tempfile, zipfile
+    from . import altium_lib as AL, fingerprint as FP
+    ext = ".SchLib" if kind == "symbols" else ".PcbLib"
+    if data and zipfile.is_zipfile(io.BytesIO(data)):
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            inner = [n for n in z.namelist() if n.lower().endswith(ext.lower())]
+            if not inner:
+                raise ValueError(f"the download holds no {ext} ({', '.join(z.namelist()[:5]) or 'empty'})")
+            data = z.read(inner[0])
+    with tempfile.TemporaryDirectory(prefix="ecadlib-a365-item-") as d:
+        f = Path(d) / f"item{ext}"
+        f.write_bytes(data or b"")
+        try:
+            entries = AL.read_schlib(f)[1] if kind == "symbols" else AL.read_pcblib(f)
+            e = entries[0] if len(entries) == 1 else FP._pick_named(entries, ref, kind[:-1])
+        except Exception as ex:                # not an Altium library, or not one this reads: no match
+            raise ValueError(f"{type(ex).__name__}: {ex}") from None
+    if kind == "symbols":
+        sym, _ = FP.altium_symbol(e)
+        return FP.digest(dict(sym, name=ref) if ref else sym)
+    land, art, model = FP.altium_footprint(e)
+    return FP.digest([dict(land, art=art, name=ref) if ref else dict(land, art=art), model])
+
+
+def item_model_digest(it, kind, folder):
+    """model_digest of the part's own files (no ledger revision: a plan without change control)."""
+    from . import fingerprint as FP
+    fp = FP.of_item(it, folder or ".")
+    return FP.digest(fp.get("symbol")) if kind == "symbols" else FP.digest([fp.get("footprint"), fp.get("model")])
+
+
+def component_digests(client, node, it):
+    """{"symbols": digest, "footprints": digest} of the drawings workspace component `node` links now (read back:
+    client.component_models), as model_digest gives them. Raises ValueError when they can't be read or there is not
+    exactly one of each."""
+    got = client.component_models(node["id"])
+    out = {}
+    for kind, half in (("symbols", "symbol"), ("footprints", "footprint")):
+        files = (got or {}).get(kind) or []
+        if len(files) != 1:
+            raise ValueError(f"it links {len(files)} {kind}")
+        out[kind] = model_file_digest(files[0], kind, (it.get(half) or {}).get("ref"))
+    return out
+
+
+def note_sent(lg, part, target, head):
+    """A `push_sent` ledger line before a release goes to the workspace: if its answer is lost (no publish line), the
+    next push knows this library sent that revision there (released_elsewhere: "own"), and tells it from a component
+    another plan folder released."""
+    if lg is not None and head and not any(
+            e.get("event") in ("push_sent", "publish") and e.get("revision") == head.get("revision")
+            and str(e.get("target") or "").startswith("altium365:")
+            and ws_target(str(e["target"])[len("altium365:"):]) == target for e in lg.history(part)):
+        lg.append({"event": "push_sent", "part": part, "target": target, "revision": head.get("revision"),
+                   "digest": head.get("digest")})
+
+
+def released_elsewhere(client, node, it, lg, target=None):
+    """A component in the workspace this library never published there (R-AM-2 / R-FX11-1): what it holds, read back.
+    -> "head": the drawings of this part's released revision (another plan folder released the same part, or this
+    library's release answer was lost): nothing to send. "own": the drawings of an earlier revision of this part in
+    this library (a lost answer, then a change approved): a new revision goes up. Raises _Held otherwise: another
+    plan folder (or a person) released it with another drawing, which this library's change control never saw."""
+    try:
+        have = component_digests(client, node, it)
+    except (ValueError, NexarError, OSError) as e:
+        why = f"its symbol / footprint could not be read back to compare ({e})"
+    else:
+        head = lg.head(it["name"])
+        if head and {k: model_digest(lg, head, k) for k in ("symbols", "footprints")} == have:
+            return "head"
+        norm = lambda t: ws_target(t[len("altium365:"):]) if str(t or "").startswith("altium365:") else t
+        sent = [lg.revision(it["name"], e.get("revision")) for e in lg.history(it["name"])
+                if e.get("event") == "push_sent" and e.get("revision") is not None and norm(e.get("target")) == norm(target)]
+        if any(r and {k: model_digest(lg, r, k) for k in ("symbols", "footprints")} == have for r in sent):
+            return "own"                       # this library sent that revision there (its answer was lost)
+        why = "it holds another drawing than this part's"
+    raise _Held([f"{it['name']} is in the workspace, released elsewhere (another plan folder's push, or made in "
+                 f"Altium), and {why}: nothing was sent, so that component is not changed without its own sign-off. "
+                 "Give this part another name in this plan, or push this plan to a workspace of its own"])
+
+
+def released_model(lg, target, kind, name):
+    """(digest, part, revision) of the drawing the workspace item `name` holds, from the ledger: a symbol / footprint
+    item is released once (a second release of the name fails as duplicate), so it is the drawing of the first push to
+    this workspace that sent it (`models` in its detail) or, for a ledger written before that was recorded, the first
+    `release` whose part names that item. None: the ledger does not know (released outside ecadlib)."""
+    from .ledger import RELEASES as LG_RELEASES
+    if not lg:
+        return None
+    cache = lg.__dict__.setdefault("_a365_models", {})
+    if target not in cache:                    # one pass over the ledger per push: "kind:name" -> first that sent it
+        norm = lambda t: ws_target(t[len("altium365:"):]) if str(t or "").startswith("altium365:") else t
+        revs = {(e.get("part"), e.get("revision")): e for e in lg.lines() if e.get("event") in LG_RELEASES}
+        idx = cache[target] = {}
+        for e in lg.lines():
+            if e.get("event") != "publish" or norm(e.get("target")) != ws_target(target[len("altium365:"):]):
+                continue
+            d = e.get("detail") or {}
+            for k, dg in (d.get("models") or {}).items():    # fingerprinted again from its revision when there:
+                rv = revs.get((e.get("part"), e.get("revision")))      # a newer fingerprint schema compares like for like
+                idx.setdefault(k, (rv or dg, e.get("part"), e.get("revision")))
+            rev = revs.get((e.get("part"), e.get("revision"))) if d.get("action") == "release" and not d.get("models") else None
+            item = (rev or {}).get("item")
+            if isinstance(item, dict) and all(isinstance(item.get(h), dict) for h in ("symbol", "footprint")):
+                for k, n in zip(("symbols", "footprints"), model_item_names(item)):
+                    if n:
+                        idx.setdefault(f"{k}:{n.lower()}", (rev, e.get("part"), e.get("revision")))
+    hit = cache[target].get(f"{kind}:{name.lower()}")
+    if hit and isinstance(hit[0], dict):       # the drawing of the revision it published
+        hit = cache[target][f"{kind}:{name.lower()}"] = (model_digest(lg, hit[0], kind), hit[1], hit[2])
+    return hit if hit and hit[0] else None
+
+
+def matching_model(lg, target, sent_models, kind, name, digest):
+    """(item name, (digest, part, revision)) of the workspace item NAME-r<n> that holds drawing `digest`, as
+    push_revision names a changed shared symbol / footprint when NAME is taken: from this push (sent_models) or the
+    ledger's publish records (released_model). The newest such item first; None when none holds this drawing."""
+    import re
+    pre = f"{kind}:{name.lower()}-r"
+    keys = set(k for k in sent_models if k.startswith(pre))
+    if lg:
+        released_model(lg, target, kind, name)                  # builds the ledger's index for this target
+        keys |= {k for k in (lg.__dict__.get("_a365_models") or {}).get(target, {}) if k.startswith(pre)}
+    revs = sorted((int(k[len(pre):]) for k in keys if re.fullmatch(r"\d+", k[len(pre):])), reverse=True)
+    for n in revs:
+        alt = f"{name}-r{n}"
+        hit = sent_models.get(f"{pre}{n}") or released_model(lg, target, kind, alt)
+        if hit and hit[0] == digest:
+            return alt, hit
+    return None
+
+
+def place_model(client, ws, lg, target, sent_models, kind, name, folder, ref, want, rev):
+    """Where a changed symbol / footprint of a new component revision goes (R-FL-5, R-FL-6 / R-PUB-4), decided before
+    anything is sent, the same way on every run: ("link", id, item) for an item that already holds this drawing (the
+    ledger or this run says so: another part's new revision put it in NAME-r<rev>, a dedupe merge points at the
+    keeper's item), else ("send", item) for the first free name of NAME, NAME-r<rev>, NAME-r<rev>-2 ... An item of
+    one of those names that this library has no record of is read back and linked when it holds this drawing, else
+    skipped. ("send", NAME) when the drawing is not known (no fingerprint): as before. ("full", text) when NAME-r<rev>-99
+    is taken too: nothing is sent (a name already taken is never offered, R-FX15-5)."""
+    if not want or not name:
+        return ("send", name)
+    known = lambda n: sent_models.get(f"{kind}:{n.lower()}") or (released_model(lg, target, kind, n) if lg else None)
+    alt = matching_model(lg, target, sent_models, kind, name, want) if lg else None
+    for n in [name] + ([alt[0]] if alt else []):
+        k = known(n)
+        if k and k[0] == want:
+            fid = client.find_model(ws, kind, n, folder)
+            if fid:
+                return ("link", fid, n)
+    for n in [name, f"{name}-r{rev}"] + [f"{name}-r{rev}-{k}" for k in range(2, 100)]:
+        fid = client.find_model(ws, kind, n, folder)
+        if not fid:
+            return ("send", n)
+        if known(n):                           # this library's item, with another drawing
+            continue
+        try:
+            if model_file_digest(client.model_data(ws, kind, n, folder), kind, ref) == want:
+                return ("link", fid, n)
+        except (ValueError, NexarError, OSError):
+            pass
+    return ("full", f"every {kind[:-1]} item name {name}, {name}-r{rev} and {name}-r{rev}-2 .. -99 is taken by another "
+                    "drawing: nothing was sent")
+
+
 def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, dry_run=False, note="ecadlib sync",
-                  transition=None):
+                  transition=None, digests=None, lg=None, target=None, sent_models=None):
     """A new revision of a component already in the workspace, for a change control approved (#105): the changed
     symbol / footprint are released as new models (under their item name, or NAME-r<rev> when the workspace refuses a
     second item of that name), the unchanged one is linked, and desReleaseComponent releases the component item
@@ -473,6 +754,19 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
             found.append(None)
         else:
             found.append(f"<id of {name}>" if dry_run else client.find_model(ws, kind, name, f"{models_root}/{sub}"))
+    send_as, linked = {}, {}
+    for i, (kind, name, sub, half) in enumerate(zip(("symbols", "footprints"), names, ("Symbols", "Footprints"),
+                                                    ("symbol", "footprint"))):
+        if dry_run or half not in halves or not name:
+            continue
+        got = place_model(client, ws, lg, target, sent_models or {}, kind, name, f"{models_root}/{sub}",
+                          it[half]["ref"], (digests or {}).get(kind), rev)
+        if got[0] == "full":
+            return {"action": "error", "detail": got[1]}
+        if got[0] == "link":
+            found[i], linked[half] = got[1], got[2]
+        elif got[1] != name:
+            send_as[half] = got[1]
     files = [] if found[0] else [it["symbol"]["file"]], [] if found[1] else [it["footprint"]["file"]]
     bad = readback_problems({k: it[k] for k, g in zip(("symbol", "footprint"), files) if g})
     if bad:                                    # the file to send holds another part's model: nothing goes up
@@ -481,8 +775,14 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
     parent, _ = split_folder(it["folder"])
     pid = (f"<id of {parent}>" if dry_run else client.folder_id(ws, parent)) if parent else None
     inp = release_input(it, ws, defs, ids, models_root, pid, tuple(found))
+    for half, n in send_as.items():
+        inp["symbolItemName" if half == "symbol" else "footprintItemName"] = n
     detail = {"mutation": "desReleaseComponent", "new_revision_of": before or "<current revision>",
               "changed": sorted(halves), "ledger_revision": rev}
+    if send_as:
+        detail["model_item_names"] = [inp.get("symbolItemName"), inp.get("footprintItemName")]
+    if linked:
+        detail["linked"] = linked
     if dry_run:
         return {"action": "new_revision", "detail": dict(detail, input=inp)}
     try:
@@ -492,7 +792,8 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
             raise
         renamed = dict(inp)                    # a model item of that name exists: the new model gets its own item
         for half, key in (("symbol", "symbolItemName"), ("footprint", "footprintItemName")):
-            if half in halves and renamed.get(key):
+            # a name place_model chose (NAME-r<rev>...) was free when it looked: never renamed again (no -r<rev>-r<rev>)
+            if half in halves and renamed.get(key) and half not in send_as:
                 renamed[key] = f"{renamed[key]}-r{rev}"
         if renamed == inp:
             raise
@@ -502,7 +803,12 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
             return {"action": "error", "detail": f"Altium 365 made no new revision of {it['name']} ({e2}); the released "
                                                  f"revision {before} is unchanged in the workspace"}
         detail["model_item_names"] = [renamed.get("symbolItemName"), renamed.get("footprintItemName")]
+        inp = renamed
     after = client.find(ws, it["name"]) or {}
+    # the drawings this release put in the workspace, by item name (released_model: a later new part links them)
+    models = {f"{kind}:{inp[key].lower()}": (digests or {}).get(kind)
+              for kind, key, files in (("symbols", "symbolItemName", "symbolFiles"), ("footprints", "footprintItemName", "footprintFiles"))
+              if inp.get(files) and inp.get(key) and (digests or {}).get(kind)}
     if not _rev_id(after) or _rev_id(after) == before:
         return {"action": "error", "detail": f"Altium 365 accepted the release but {it['name']} is still at revision "
                                              f"{before}: no new revision was made; nothing else was sent"}
@@ -512,10 +818,31 @@ def push_revision(it, client, ws, defs, upload, models_root, node, halves, rev, 
             detail["transition"] = client.transition(ws, defs, after["id"], transition, note)
         except NexarError as e:
             detail["transition_error"] = str(e)
-    return {"action": "new_revision", "detail": detail}
+    return {"action": "new_revision", "detail": detail, "models": models}
 
 
-def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rules=None, folder=None):
+def _upload_released(client, lg, it, p, folder):
+    """Upload library file p of part `it` as its released revision has it (change_gate.released_bytes): the push
+    checked the files before its uploads, and an editor saving meanwhile takes no lock, so an edit saved since is not
+    uploaded (the head's own copy from the blob store goes up; the next writer settles the edit). A staged copy, under
+    the file's own name, is what is read and sent."""
+    import tempfile
+    from . import change_gate as CG
+    if lg is None:
+        return client.upload(p)
+    try:
+        data, _ = CG.released_bytes(lg, it, Path(p), Path(folder))
+    except FileNotFoundError:
+        raise ValueError(f"{Path(p).name} changed since the release check and the released copy is missing: nothing "
+                         f"was sent") from None
+    with tempfile.TemporaryDirectory(prefix="ecadlib-a365-") as d:
+        f = Path(d) / Path(p).name
+        f.write_bytes(data)
+        return client.upload(str(f))
+
+
+def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rules=None, folder=None,
+         forget_missing=False):
     """Release new parts, update parameters of parts already in the workspace.
     dry_run: no uploads or mutations; records the requests that would be sent.
     policy: the plan's approval policy (approvals.load_policy); None uses the one release_check stored per item.
@@ -525,7 +852,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     component revision (push_revision), a held change sends nothing new, and every push is recorded.
     Files go up only for parts that pass the release check run here, on the files as they are
     (release_check.publish_problems): the plan's `ready` is not taken on trust. A parameter update of a part
-    already in the workspace sends no files and is not re-checked; a `held` part gets nothing."""
+    already in the workspace sends no files and is not re-checked; a `held` part gets nothing.
+    Several plan folders may push the same part (R-FX15-3, as dblib-sync's rows): which ones did is kept beside them
+    (change_gate.publishers_file). A new revision of a component another plan folder released waits until that plan's
+    released revision is the same drawings (it signed the change off too); a component that already holds this
+    revision's drawings gets no second revision. forget_missing: drop the claim of a plan folder that is gone."""
     from . import release_check as RC, rules as RU
     from .approvals import push_block
     from .rules import house_item
@@ -535,18 +866,68 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     # sign-off is checked on the item as it was approved (ecadlib's parameter names: the content hash covers them)
     blocks = [push_block(i, policy) for i in items]
     checked = RU.resolve(rules, folder or ".")
-    rechecks = [RC.publish_problems(i, folder or ".", checked) for i in items]
+    rechecks = [RC.publish_problems(i, folder or ".", checked, policy=policy) for i in items]
     items = [house_item(i, rules) for i in items]
+    if isinstance(client, Nexar):              # find reads the MPN under the house name too (pick_named)
+        client.rules = rules
     defs = {} if dry_run else client.release_defs(ws)
     results, uploaded, released = [], {}, set()   # one upload per file per run; (kind, name) released this run
+    sent_models = {}                           # "kind:name" -> (digest, part, revision) released this run
     from . import ledger as LG
     lg = LG.Ledger(folder) if folder and LG.Ledger(folder).exists() else None
-    target = f"altium365:{ws.rstrip('/')}"
+    target = ws_target(ws)
+    from . import change_gate as CG
+    claims = me = None
+    forgotten = []
+    if lg is not None:                         # which plan folders pushed each part to this workspace
+        claims = CG.SharedClaims(CG.publishers_file(folder), CG.publishers_file(folder).parent, section=target,
+                                 computer=CG.computer_publishers_file())
+        me = claims.me(folder, create=not dry_run) or "?this"
+        if forget_missing:
+            gone = sorted({p for v in claims.claims.values() for p in v
+                           if not claims.is_me(p, me, folder) and claims.folder(p) is None})
+            forgotten = [claims.label(p) for p in gone]
+            claims.forget(gone)
+
+    def cross_plan(it, head):
+        """Another plan folder pushed this component here and has not released this drawing: no new revision (its
+        boards use that component; it has not signed the change off). _Held names it; a gone one is named stale."""
+        if claims is None:
+            return
+        live, gone = claims.others(str(it["name"]).casefold(), me, folder)
+        bad = []
+        for p, f in sorted(live.items()):
+            lw = LG.Ledger(f)
+            if not (lw.exists() and CG.heads_agree(lg, head, lw, CG.head_of(lw, it["name"]))):
+                bad.append(claims.label(p))
+        if not (bad or gone):
+            return
+        why = (f"{it['name']} in this workspace was also pushed from another plan folder "
+               f"({', '.join(bad + [claims.label(p) for p in gone])}), whose released revision is another drawing: no "
+               "new revision was made, so the component its boards use is not changed without its sign-off. Approve "
+               "the change there too (then either push makes the revision), or give this part another name in this plan")
+        if gone:
+            why += (f"; {', '.join(claims.label(p) for p in gone)} is not found from here, at its path from "
+                    f"{claims.path.name} or its full path: if that plan folder (or the project) was renamed or moved, "
+                    "push that plan once from where it is now; only if it no longer exists, push this plan with --forget-missing-plans")
+        raise _Held([why])
+    def unknown_publisher(it):
+        """Adopting a component no plan folder on record pushed (another computer's project, an ecadlib before these
+        records, made in Altium): its later changes cannot wait for this plan's sign-off. Said, not held."""
+        if claims is None:
+            return ""
+        live, gone = claims.others(str(it["name"]).casefold(), me, folder)
+        if live or gone:
+            return ""
+        return (". Neither this project nor this computer has a record of the plan folder that pushed it (another "
+                "computer's or another project's, or made in Altium): a later change of it there is not held for "
+                "this plan's sign-off. Push the plan folders that share a workspace from one project (one "
+                "ecadlib.toml) or one computer")
     transition = ((rules or {}).get("change") or {}).get("a365_transition") or None
     def upload(p):
         if p not in uploaded:
-            uploaded[p] = "<fileId>" if dry_run else client.upload(p)
-        return uploaded[p]
+            uploaded[p] = "<fileId>" if dry_run else _upload_released(client, lg, it, p, folder)
+        return uploaded[p]                     # (`it`: the part being pushed when this is called)
     def recheck(res, why):                     # the release check, run again here, holds it back
         res.update(action="skip", detail="held: " + "; ".join(why), recheck=why)
     for it, block, why in zip(items, blocks, rechecks):
@@ -565,13 +946,50 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                              "(ecadlib part show)")
         try:
             existing = None if dry_run else client.find(ws, it["name"])
-            mode, halves, head, _ = change_mode(lg, it, target) if lg else ("params", set(), None, None)
-            if (existing or (dry_run and lg and lg.published(it["name"], target))) and mode == "revision":
+            mode, halves, head, pub = change_mode(lg, it, target) if lg else ("params", set(), None, None)
+            if existing and head and not pub:  # in the workspace, never published there from this library (another
+                # plan folder, made by hand, an older ecadlib, a release whose answer was lost): read back what it holds
+                seen = released_elsewhere(client, existing, it, lg, target) if it.get("status") == "ready" and not why else None
+                if seen == "head":             # this part's drawings already: linked, its first publish is recorded
+                    res["adopted"] = (f"{it['name']} was already in the workspace with this part's drawings (released "
+                                      "elsewhere): no new revision" + unknown_publisher(it))
+                    mode = "params"
+                else:
+                    mode = "revision"          # an earlier revision of this library's: the head goes up
+                    halves = unpublished_halves(lg, target, sent_models, it, head)
+                    res["unpublished"] = (f"{it['name']} is in the workspace but this library has no record of "
+                                          f"publishing it there: released again from ledger revision r{head['revision']}")
+            if existing and mode == "revision" and not why and it.get("status") == "ready":
+                want = {k: model_digest(lg, head, k) for k in ("symbols", "footprints")}
+                try:                           # the component holds this revision's drawings already (another plan
+                    have = component_digests(client, existing, it)     # folder's push made it): no second revision
+                except (ValueError, NexarError, OSError):
+                    have = None
+                if have and all(want.values()) and have == want:
+                    mode = "params"
+                    res["adopted"] = (f"{it['name']} already holds the drawings of ledger revision r{head['revision']} "
+                                      f"(workspace revision {_rev_id(existing)}, pushed from another plan folder): no "
+                                      "new revision" + unknown_publisher(it))
+                else:
+                    cross_plan(it, head)
+            if (existing or (dry_run and lg and _published(lg, it["name"], target))) and mode == "revision":
                 if why:
                     recheck(res, why)
                 else:
+                    digests = {k: model_digest(lg, head, k) for k in ("symbols", "footprints")}
+                    if not dry_run:
+                        note_sent(lg, it["name"], target, head)
                     res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves,
-                                             head["revision"], dry_run, note, transition))
+                                             head["revision"], dry_run, note, transition, digests, lg, target,
+                                             sent_models))
+                    sent_models.update({k: (d, it["name"], head["revision"]) for k, d in (res.get("models") or {}).items()})
+            elif existing and it.get("status", "ready") not in RC.PUBLISHABLE:   # draft, needs_review, a typo: no
+                recheck(res, why or [f"status: {it.get('status')!r} is not ready"])   # parameter update (as the dry run)
+            elif existing and not pub and _maybe_other(existing, it["name"], rules):
+                res["action"], res["detail"] = "skip", (
+                    f"the workspace has {existing.get('name')}, which may be a revision of {it['name']} or another "
+                    "part (no MPN parameter says which), and this library never published it there: nothing was "
+                    "changed. Add its MPN parameter in Altium 365, or rename one of them")
             elif existing:
                 new = merged_params(existing, it, rules)
                 res["a365_revision"] = _rev_id(existing)
@@ -583,7 +1001,12 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                 else:                          # full replace: a merge, so parameters added in Altium 365 are kept
                     res["action"] = "update_parameters"
                     res["detail"] = client.update_params(existing["id"], new, note, replace=True)
-            elif it["status"] != "ready":
+                    try:                       # the revision the update left (it takes a release note: a new one),
+                        res["a365_revision"] = _rev_id(client.find(ws, it["name"])) or res["a365_revision"]
+                    except Exception as e:     # for `ecadlib project check`; best effort, as after a release
+                        from . import fallbacks as FB
+                        FB.note(f"{it['name']}: parameters updated, but the Altium 365 revision id did not read back", e)
+            elif it.get("status", "ready") != "ready":
                 res["action"], res["detail"] = "skip", "needs_altium_models (no .SchLib/.PcbLib)"
             elif why:
                 recheck(res, why)
@@ -593,15 +1016,54 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                 # a symbol / footprint shared by several parts (Capacitor, R_0603) is released with the first and
                 # linked by the others: releasing it again fails with AddALU_ItemsDuplicate item HRID
                 names = model_item_names(it)
-                found = []
+                digests = {k: model_digest(lg, head, k) for k in ("symbols", "footprints")} if lg and head else {}
+                found, known = [], {}
                 for kind, name, sub in zip(("symbols", "footprints"), names, ("Symbols", "Footprints")):
                     key = (kind, (name or "").lower())
+                    if name and lg:            # the drawing that item holds, when the ledger knows it
+                        known[kind] = sent_models.get(f"{kind}:{name.lower()}") or released_model(lg, target, kind, name)
                     if not name:
                         found.append(None)
                     elif dry_run:
                         found.append(f"<id of {name}>" if key in released else None)
                     else:
                         found.append(client.find_model(ws, kind, name, f"{models_root}/{sub}"))
+                # an item of that name this library has no record of releasing (another plan folder pushed it to this
+                # workspace, or someone made it in Altium) is linked only when it holds this part's drawing: it is
+                # read back and fingerprinted; another drawing, or a file that does not read back, holds the part
+                for i, (kind, sub) in enumerate((("symbols", "Symbols"), ("footprints", "Footprints"))):
+                    if dry_run or not found[i] or known.get(kind) or (kind, names[i].lower()) in released:
+                        continue                   # (released by an earlier part of this run: this plan's own)
+                    ref = it["symbol" if kind == "symbols" else "footprint"]["ref"]
+                    want = digests.get(kind) or item_model_digest(it, kind, folder)
+                    try:
+                        have = model_file_digest(client.model_data(ws, kind, names[i], f"{models_root}/{sub}"), kind, ref)
+                        why = None if have == want else "it holds another drawing than this part's"
+                    except (ValueError, NexarError, OSError) as e:
+                        why = f"it could not be read back to compare ({e})"
+                    if why:
+                        raise _Held([f"the workspace already has a {kind[:-1]} {names[i]!r} this library never released "
+                                     f"(another plan folder's push, or made in Altium) and {why}: linking it would "
+                                     f"release this part with a {kind[:-1]} its release check never saw. Give this "
+                                     f"part's {kind[:-1]} another name, or push this plan to a workspace of its own"])
+                    known[kind] = (have, "the workspace's item", "?")
+                # a shared symbol / footprint is linked by name: when the workspace's item holds another drawing than
+                # this part's (it changed since it went up), the item that does hold it (NAME-r<n>, released by a new
+                # revision of another part) is linked instead; with none, the part is held
+                names = list(names)
+                for i, (kind, sub) in enumerate((("symbols", "Symbols"), ("footprints", "Footprints"))):
+                    if not ((found[i] or dry_run) and known.get(kind) and digests.get(kind) and known[kind][0] != digests[kind]):
+                        continue
+                    alt = matching_model(lg, target, sent_models, kind, names[i], digests[kind])
+                    fid = alt and (f"<id of {alt[0]}>" if dry_run else client.find_model(ws, kind, alt[0], f"{models_root}/{sub}"))
+                    if fid:
+                        names[i], found[i], known[kind] = alt[0], fid, alt[1]
+                stale = [f"the workspace's {kind[:-1]} {name!r} is another drawing than this part's (it went up with "
+                         f"{known[kind][1]} r{known[kind][2]}): linking it would release this part with the old one"
+                         for kind, name, f in zip(("symbols", "footprints"), names, found)
+                         if (f or dry_run) and known.get(kind) and digests.get(kind) and known[kind][0] != digests[kind]]
+                if stale:
+                    raise _Held(stale)
                 files = [] if found[0] else [it["symbol"]["file"]], [] if found[1] else [it["footprint"]["file"]]
                 ids = tuple([(Path(p).name, upload(p)) for p in group] for group in files)
                 parent, _ = split_folder(it["folder"])
@@ -613,6 +1075,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     res["detail"] = {"mutation": "desReleaseComponent", "input": inp,
                                      **({"parent_folder": parent} if parent else {})}
                 else:
+                    note_sent(lg, it["name"], target, head)
                     try:
                         client.release(inp)
                     except NexarError as e:    # the schema does not say which folder id the parent takes: try the GUID
@@ -626,6 +1089,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                         from . import fallbacks as FB
                         FB.note(f"{it['name']}: released, but its new Altium 365 revision id did not read back", e)
                 released.update((k, (n or "").lower()) for k, n in zip(("symbols", "footprints"), names) if n)
+                res["models"] = {f"{k}:{n.lower()}": digests[k] for k, n, g in zip(("symbols", "footprints"), names, files)
+                                 if n and g and digests.get(k)}       # the drawings it put there (released_model)
+                sent_models.update({k: (d, it["name"], head["revision"]) for k, d in res["models"].items()})
+        except _Held as e:                     # nothing was sent for this part
+            recheck(res, e.args[0])
         except Exception as e:                 # keep going; report per part
             res["action"], res["detail"] = "error", f"{type(e).__name__}: {e}"
         sim = (it.get("sim_model") or {}).get("attached", {}).get("altium")
@@ -635,17 +1103,47 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         results.append(res)
     if lg and not dry_run:                     # what went up, per part, at which ledger revision
         from . import change_gate as CG
-        ok = {r["name"] for r in results if r["action"] in PUSHED}
+        # an in-place result (up_to_date / update_parameters) proves nothing about the drawings: it is recorded only
+        # over an earlier publish line of that part (never the first publish of a part already in the workspace)
+        ok = {r["name"] for r in results if r["action"] in ("release", "new_revision") or (
+            r["action"] in PUSHED and (_published(lg, r["name"], target) or r.get("adopted")))}
         def detail(i):                         # the action, and the workspace revision it left (project check)
             r = next((r for r in results if r["name"] == i["name"]), {})
             d = r.get("detail")
             rid = r.get("a365_revision") or (d.get("revision") if isinstance(d, dict) else None)
-            return {"action": r.get("action", ""), **({"a365_revision": rid} if rid else {})}
+            return {"action": r.get("action", ""), **({"a365_revision": rid} if rid else {}),
+                    **({"models": r["models"]} if r.get("models") else {})}
         CG.record_publish(folder, items, target, ok=lambda i: i["name"] in ok, detail=detail)
+        if claims is not None:                 # this plan folder pushed them here (shared with other plan folders)
+            before = json.dumps([claims.claims, claims.plans], sort_keys=True)
+            claims.claim(sorted({str(n).casefold() for n in ok}), me, folder)
+            if json.dumps([claims.claims, claims.plans], sort_keys=True) != before or forgotten:
+                claims.save()
+    for label in forgotten:
+        results.append({"name": label, "action": "forgotten",
+                        "detail": "that plan folder is gone (--forget-missing-plans): its claim on the parts it pushed "
+                                  "here was dropped"})
     return results
 
 
 PUSHED = ("release", "update_parameters", "up_to_date", "new_revision")
+
+
+def explain(r):
+    """Plain lines under a push result for the terminal (the report has the detail): what a new revision is, and why
+    a component already in the workspace was released again or linked as it is."""
+    out = []
+    d = r.get("detail") if isinstance(r.get("detail"), dict) else {}
+    if r.get("action") == "new_revision":
+        ch = " and ".join(d.get("changed") or []) or "model"
+        out.append(f"new component revision{' ' + d['revision'] if d.get('revision') else ''} with the changed {ch} of "
+                   f"ledger revision r{d.get('ledger_revision')}"
+                   + (f" (released as new items {', '.join(n for n in d['model_item_names'] if n)}: the names were "
+                      "taken)" if d.get("model_item_names") else ""))
+    for k in ("unpublished", "adopted", "change"):
+        if r.get(k):
+            out.append(str(r[k]))
+    return out
 
 
 def main(argv=None):
@@ -666,6 +1164,9 @@ def main(argv=None):
     u.add_argument("--dry-run", action="store_true", help="no network; write the requests that would be sent")
     u.add_argument("-o", "--out", default="out/altium365/push_report.json")
     u.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
+    u.add_argument("--forget-missing-plans", action="store_true",
+                   help="another plan folder that pushed the same parts to this workspace is gone (deleted, not "
+                        "renamed): drop its claim, so this plan's approved changes make new revisions")
     a = ap.parse_args(argv)
     from . import rules as RU
 
@@ -684,7 +1185,10 @@ def main(argv=None):
                         i[k]["file"] = os.path.relpath(i[k]["file"], out.parent.resolve()).replace(os.sep, "/")
                     except ValueError:         # another drive on Windows: keep it absolute
                         i[k]["file"] = Path(i[k]["file"]).resolve().as_posix()
-        out.write_text(json.dumps(items, indent=2))
+        from .approvals import cli_plan_lock    # a workspace plan: the web UI may be recording into it right now
+        from .fsutil import write_text_atomic
+        with cli_plan_lock(out):
+            write_text_atomic(out, json.dumps(items, indent=2))
         ready = sum(i["status"] == "ready" for i in items)
         print(f"{len(items)} components planned, {ready} with models, {len(items) - ready} need Altium models -> {out}")
         if ready:                              # `ready` = the files are there; push checks them before it releases
@@ -737,7 +1241,7 @@ def main(argv=None):
                         i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
             t0 = time.time()
             results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
-                           rules=rules, folder=Path(a.plan).parent)
+                           rules=rules, folder=Path(a.plan).parent, forget_missing=a.forget_missing_plans)
             if not a.dry_run:
                 record_push(Path(a.plan).parent, t0, results)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work
@@ -747,6 +1251,8 @@ def main(argv=None):
     out.write_text(json.dumps(results, indent=2))
     for r in results:
         print(f"  {r['action']:<18} {r['name']}")
+        for why in explain(r):
+            print(f"  {'':<18}   {why}")
     print(f"report -> {out}")
     if a.dry_run:                              # no network: what the workspace already holds was not looked up
         print("dry run: the workspace was not read, so a part shown as `release` may already be there (the real push "

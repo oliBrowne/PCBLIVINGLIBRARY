@@ -390,7 +390,7 @@ details summary { cursor: pointer; color: var(--muted); }
     <div class="grid3" style="margin-top:10px">
       <div class="box">
         <h3>Database library (DbLib)</h3>
-        <p class="muted small">After step 2: a .DbLib, its Excel table (.xlsx, also as .csv) and the ready parts' .SchLib / .PcbLib, in altium/&lt;BOM&gt;/; held parts stay out. Open the .DbLib in Altium Designer (it needs the Access database engine). Before step 2: a draft from the BOM check (SQLite and Excel tables, no symbols or footprints yet).</p>
+        <p class="muted small">After step 2: a .DbLib, its Excel table (.xlsx, also as .csv) and the ready parts' .SchLib / .PcbLib, in altium/&lt;BOM&gt;/; held parts stay out. Open the .DbLib in Altium Designer (it needs the Access database engine). Before step 2 nothing is written: no part is built or checked yet.</p>
         <button id="dblib">Export DbLib</button>
         <div class="out" id="dblibout"></div>
       </div>
@@ -701,7 +701,7 @@ function render() {
     return `<tr><td>${r.line}</td><td>${esc(r.designator)}</td><td><code>${esc(r.mpn) || "–"}</code><div class="muted">${esc(r.manufacturer)}</div></td>
       <td>${esc(r.package)}<div class="muted">${esc(r.value)}</div></td><td><span class="pill ${cls}">${esc(lab)}</span></td>
       <td><div>${esc(r.local_symbol) || "<span class=muted>–</span>"}</div><div class="muted mono">${esc(r.local_footprint)}</div></td>
-      <td>${r.src ? esc(r.src) + ": " : ""}${src}</td><td class="notes">${esc(r.notes)}</td><td>${act}</td></tr>`;
+      <td>${r.src ? esc(r.src) + ": " : ""}${esc(src)}</td><td class="notes">${esc(r.notes)}</td><td>${act}</td></tr>`;
   }).join("") || `<tr><td colspan="9" class="muted">No lines match.</td></tr>`;
   const todo = t.rows.filter(r => !String(r.status).startsWith("in_library") && !String(r.status).startsWith("dnp")).length;
   if (!t.bom) nextStep($("#tnext"), "This is a saved result. Its BOM file is no longer in the workspace, so upload the BOM again to work on it.", null, "s-warn");
@@ -810,17 +810,16 @@ async function action(btn, out, fn) {
 }
 $("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), async () => {
   const r = await api("/api/export/dblib", { bom: current.bom });
-  if (r.from_plan) return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span>: ` + r.files.map(fileLink).join(" · ") +
+  return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span>: ` + r.files.map(fileLink).join(" · ") +
     (r.held.length ? `<div class="muted">Held, left out until a person decides: ${esc(r.held.join(", "))}</div>` : "") +
     `<div class="next s-info"><span>Next: copy the whole folder (with its SchLib and PcbLib folders) next to your Altium libraries and open the .DbLib in Altium Designer. The Excel workbook needs the Access database engine.</span></div>`;
-  return "Written (draft, from the triage only: run Fill the library first to build symbols and footprints): " + r.files.map(fileLink).join(" · ") +
-    `<div class="next s-info"><span>Next: copy these files next to your Altium libraries and open a .DbLib in Altium Designer. The SQLite one needs the SQLite3 ODBC driver; the Excel one needs the Access database engine.</span></div>`;
 }));
 $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
   const r = await api("/api/altium/models", { bom: current.bom });
   await loadInfo();
   return `${r.footprints.length} footprint(s) as .PcbLib${r.footprints.length ? ": " + esc(r.footprints.join(", ")) : ""}. Symbols: ${esc(r.symbols.join(", ") || "none")}.` +
     (r.skipped.length ? `<div class="muted">Not converted: ${esc(r.skipped.join("; "))}</div>` : "") +
+    ((r.notes || []).length ? `<div class="muted">Check: ${esc(r.notes.join("; "))}</div>` : "") +
     `<div class="muted">Files are in the <span class="mono">altium_models</span> folder of the workspace.</div>` +
     (r.footprints.length ? "" : `<div class="next s-warn"><span>No footprint was converted: none of this BOM's footprints is in your KiCad libraries. Step 2 (Fill the library) finds and builds them.</span></div>`);
 }));
@@ -828,11 +827,23 @@ let planned = null;
 $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async () => {
   planned = await api("/api/altium365/plan", { bom: current.bom });
   $("#dry").disabled = false; $("#dry").title = "";
+  let wsNote = "";
   if (info.altium365.token) {
     try {
       const w = await api("/api/altium365/workspaces", {});
-      $("#wsurl").innerHTML = w.workspaces.map(x => `<option value="${esc(x.url)}">${esc(x.name)}</option>`).join("");
-      $("#wsurl").hidden = false; $("#push").disabled = !w.workspaces.length || !planned.ready; disabledWhy();
+      // a real push goes only to the workspace the rules name ([altium365] workspace): preselected; picking another
+      // one is for a dry run, and Push says why it is off instead of failing after the confirm dialog
+      $("#wsurl").innerHTML = w.workspaces.map(x => `<option value="${esc(x.url)}" data-configured="${x.configured ? 1 : ""}"${x.configured ? " selected" : ""}>${esc(x.name)}${x.configured ? " (this library's)" : " (dry run only)"}</option>`).join("");
+      $("#wsurl").hidden = false;
+      const pushable = () => {
+        const o = $("#wsurl").selectedOptions[0];
+        $("#push").disabled = !o || !o.dataset.configured || !planned.ready; disabledWhy();
+        if (!w.configured) $("#push").title = `No Altium 365 workspace is set for this library: add [altium365] workspace = "<its URL>" to ${w.rules} to push (a dry run needs none)`;
+        else if (o && !o.dataset.configured) $("#push").title = `A push goes only to this library's workspace (${w.configured}, [altium365] in ${w.rules}); pick it, or dry-run this one`;
+      };
+      $("#wsurl").onchange = pushable;
+      if (!w.workspaces.some(x => x.configured)) wsNote = `<div class="banner s-warn"><span>${esc(w.configured ? `This library's Altium 365 workspace (${w.configured}) is not one your token can see, so Push is off.` : `No Altium 365 workspace is set for this library ([altium365] workspace in ${w.rules}), so Push is off; Dry run works.`)}</span></div>`;
+      pushable();
     } catch (err) { banner($("#planout"), "Couldn't list Altium 365 workspaces: " + err.message); }
   }
   const why = i => i.status === "held" ? "held: " + ((i.hold_reasons || [])[0] || "failed the release check") :
@@ -840,7 +851,7 @@ $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async 
     i.status === "duplicate" ? "duplicate of " + (i.duplicate_of || "?") :
     !i.symbol.file && !i.footprint.file ? "needs symbol and footprint" : !i.symbol.file ? `needs symbol ${i.symbol.ref}.SchLib` : `needs footprint ${i.footprint.ref}.PcbLib`;
   const notReady = planned.total - planned.ready;
-  return `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}` +
+  return wsNote + `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}` +
     `<div class="next s-info"><span>Next: <i>Dry run</i> lists what would be sent, without sending anything.${notReady ? ` The ${notReady} part(s) not ready are skipped; step 2 shows why.` : ""}</span></div>` + `
     <table style="margin-top:6px"><tbody>${planned.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.folder)}</div></td>
     <td>${i.status === "ready" ? '<span class="pill s-ok">ready</span>' : `<span class="pill s-warn">${esc(why(i))}</span>`}</td></tr>`).join("")}</tbody></table>`;
@@ -871,6 +882,19 @@ function jobLines(ul, lines) {
   const atEnd = ul.scrollTop + ul.clientHeight >= ul.scrollHeight - 4;
   ul.innerHTML = lines.map(l => `<li class="${esc(l.state)}"><span class="dot" aria-hidden="true"></span><span>${esc(l.text || l.name)}</span></li>`).join("");
   if (atEnd) ul.scrollTop = ul.scrollHeight;
+}
+// a change that rewrites library files while another run (a librarian run) holds the library: the server queues it as a
+// job and applies it when that run ends; wait for it here, the rest of the page keeps working
+async function applied(r, what) {
+  if (!r || !r.queued) return r;
+  toast(`${what}: ${r.waiting}; it is applied as soon as that run ends.`, { ms: 8000 });
+  for (;;) {
+    await sleep(800);
+    const j = await api("/api/job?id=" + encodeURIComponent(r.job));
+    if (j.state === "done") return j.result;
+    if (j.state === "error") throw new Error(j.error);
+    if (j.state === "cancelled") throw new Error("Stopped: it was not applied.");
+  }
 }
 async function pollJob(id, view) {
   view.stop.disabled = false; view.stop.textContent = "Stop";
@@ -1012,6 +1036,7 @@ function renderParts() {
   const sum = { ready: c.ready, held: c.held, awaiting_approval: c.waiting, parts: c.parts };
   const r9 = [];
   if (c.cross_check_disagreed) r9.push(`<span class="pill s-warn">cross-check: ${c.cross_check_disagreed} disagree</span>`);
+  if (c.cross_check_pins_unchecked) r9.push(`<span class="pill s-off">pin names not cross-checked: ${c.cross_check_pins_unchecked}</span>`);
   if (c.changes_held) r9.push(`<span class="pill s-warn">updates to released parts held: ${c.changes_held}</span>`);
   if (c.parity_mismatch) r9.push(`<span class="pill s-warn">KiCad / Altium: ${c.parity_mismatch} differ</span>`);
   else if (parts.parts.some(p => p.parity.result === "match")) r9.push(`<span class="pill s-ok">KiCad / Altium: all compared parts match</span>`);
@@ -1034,7 +1059,12 @@ function card(p) {
   const tags = [];
   if (p.allowed) tags.push('<span class="pill s-info">released anyway</span>');
   if (p.change) tags.push(`<span class="pill s-warn">update held (r${esc(p.change.base)})</span>`);
-  if (p.cross_check) tags.push(`<span class="pill ${p.cross_check.status === "disagreed" ? "s-warn" : p.cross_check.status === "agreed" ? "s-ok" : "s-off"}">cross-check: ${esc(p.cross_check.status === "disagreed" ? "disagrees" : p.cross_check.status)}</span>`);
+  if (p.cross_check) {
+    const pinsOpen = p.cross_check.pins === "unchecked";   // the package agreed, the pin names were never compared
+    const cls = p.cross_check.status === "disagreed" ? "s-warn" : p.cross_check.status === "agreed" && !pinsOpen ? "s-ok" : "s-off";
+    const word = p.cross_check.status === "disagreed" ? "disagrees" : p.cross_check.status === "agreed" && pinsOpen ? "package agreed, pins unchecked" : p.cross_check.status;
+    tags.push(`<span class="pill ${cls}">cross-check: ${esc(word)}</span>`);
+  }
   if (p.parity.result) tags.push(`<span class="pill ${p.parity.result === "match" ? "s-ok" : "s-warn"}">KiCad / Altium ${p.parity.result === "match" ? "match" : "differ"}</span>`);
   if (p.cost) tags.push(`<span class="pill s-off">${usd(p.cost.usd)}${p.cost.models.length ? " · " + esc(p.cost.models[0]) : ""}</span>`);
   if (p.approval && p.approval.approved_by && p.approval.approved_by.length) tags.push(`<span class="pill s-ok">approved by ${esc(p.approval.approved_by.join(", "))}</span>`);
@@ -1132,7 +1162,7 @@ async function changeDecide(part, decision, digest) {
   const role = $("#signrole").value.trim() || null;
   try {
     // the digest of the change shown on this page: a change proposed again since is refused, never approved unseen
-    const r = await api("/api/change/decide", { bom: current.bom, part, decision, user: who, role, comment, digest });
+    const r = await applied(await api("/api/change/decide", { bom: current.bom, part, decision, user: who, role, comment, digest }), part);
     const res = r.results.find(x => x.part === part) || r.results[0] || {};
     toast(decision === "reject" ? `${part}: update rejected, the released part is kept.`
       : res.result === "approval recorded" ? `${part}: approval recorded (${res.approvals} of ${res.needed}).` : `${part}: update approved${res.revision ? `, now revision ${res.revision}` : ""}.`);
@@ -1144,7 +1174,7 @@ async function revertTo(part, revision) {
   const comment = prompt(`Release revision ${revision} of ${part} again? It becomes a new revision. Why:`, "");
   if (comment === null) return;
   try {
-    const r = await api("/api/change/revert", { bom: current.bom, part, revision, user: who, comment });
+    const r = await applied(await api("/api/change/revert", { bom: current.bom, part, revision, user: who, comment }), part);
     const res = r.results.find(x => x.part === part) || {};
     toast(`${part}: revision ${revision} released again as revision ${res.revision}.`);
     await loadParts(); const p = findPart(part); if (p && popen === part) showPanel(p, false);
@@ -1184,13 +1214,22 @@ function undoPending(part) { const d = pending.get(part); if (d && d.toast) { co
 window.addEventListener("pagehide", () => pending.forEach(d => { if (d.toast) { d.toast.close(); } }));
 // release anyway: recorded at once; Undo takes it back (Hold it again)
 async function release(part, allow) {
+  const who = allow ? signer(popen ? $("#perr") : $("#liberr"), "Type your name in \u201cYour name\u201d first: releasing a part anyway is recorded under your name, so someone else signs it off. There is no login, so nothing fills it in for you.") : $("#signer").value.trim();
+  if (allow && !who) return;
   try {
-    await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: $("#signer").value.trim() || null });
+    const rc = await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: who });
+    if (rc.pending) toast(`${part}: ${rc.pending}.`);
     await loadParts(); loadStatus().catch(() => {});
-    const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code));
-    if (allow && p && effective(p) === "held")       // a missing or damaged file cannot be released anyway: say so
-      toast(`${part} stays held: ${hard ? hard.text : (p.reasons[0] || {}).text || "the release check still holds it."} Release anyway cannot override that, so it does not go to Altium.`, { action: "Undo", onAction: () => release(part, false) });
-    else if (allow) toast(`Released ${part} anyway: it goes to Altium with the next push.`, { action: "Undo", onAction: () => release(part, false) });
+    const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code)), st = p && effective(p);
+    const undo = { action: "Undo", onAction: () => release(part, false) };
+    if (allow && st === "held")                      // a missing or damaged file cannot be released anyway: say so
+      toast(`${part} stays held: ${hard ? hard.text : (p.reasons[0] || {}).text || "the release check still holds it."} Release anyway cannot override that, so it does not go to Altium.`, undo);
+    else if (allow && st === "awaiting_approval") {  // the approvals policy still wants a sign-off: it is not pushed yet
+      const missing = ((p.approval || {}).missing || []).join("; ") || "an approval";
+      toast(`Released ${part} anyway: it now waits for sign-off, ${missing}. It goes to Altium once it is approved.`, undo);
+    }
+    else if (allow && st === "ready") toast(`Released ${part} anyway: it goes to Altium with the next push.`, undo);
+    else if (allow) toast(`Released ${part} anyway: it is ${WORD[st] || st || "not in the list"} now.`, undo);
     else toast(`${part} is held again.`);
   } catch (err) { banner(popen ? $("#perr") : $("#liberr"), err.message); }
 }
@@ -1272,7 +1311,7 @@ $("#picklist").addEventListener("click", async e => {
   const pin_map = c.pin_map && use && use.checked ? c.pin_map : null;
   e.target.disabled = true; banner($("#pickerr"), "");
   try {
-    const r = await api("/api/resolve/choose", { bom: current.bom, part: picking, kind, id: c.id, pin_map });
+    const r = await applied(await api("/api/resolve/choose", { bom: current.bom, part: picking, kind, id: c.id, pin_map }), picking);
     showLibrarian(r); pickdlg.close();
     toast(`${r.chosen.name}: ${kind} ← ${c.id}; now ${r.chosen.status}` + (r.chosen.hold_reasons.length ? ` (${r.chosen.hold_reasons[0]})` : ""));
   } catch (err) { banner($("#pickerr"), err.message); e.target.disabled = false; }
@@ -1284,9 +1323,9 @@ const store = { get(k) { try { return localStorage.getItem(k) || ""; } catch (e)
 $("#signer").value = store.get("ecadlib.signer"); $("#signrole").value = store.get("ecadlib.role");
 $("#signer").addEventListener("change", e => store.set("ecadlib.signer", e.target.value.trim()));
 $("#signrole").addEventListener("change", e => store.set("ecadlib.role", e.target.value.trim()));
-function signer() {
+function signer(box, msg) {
   const who = $("#signer").value.trim();
-  if (!who) { banner($("#approut"), "Type your name first: it is recorded with your decision. There is no login, so nothing fills it in for you."); $("#signer").focus(); }
+  if (!who) { banner(box || $("#approut"), msg || "Type your name first: it is recorded with your decision. There is no login, so nothing fills it in for you."); $("#signer").focus(); }
   return who;
 }
 async function decide(part, decision, btn) {
@@ -1321,7 +1360,7 @@ function showDupes(r) {
 $("#dedupe").addEventListener("click", e => action(e.target, $("#dedupeout"), async () => showDupes(await api("/api/dedupe", { bom: current.bom }))));
 $("#dedupeout").addEventListener("click", e => {
   if (e.target.id !== "dedupemerge" || !confirm("Point the duplicate parts, footprints and symbols in the plan at their keepers? Duplicate parts are then skipped by the Altium 365 push, and approvals of changed parts go stale.")) return;
-  action(e.target, $("#dedupeout"), async () => { const r = await api("/api/dedupe", { bom: current.bom, merge: true }); showLibrarian(r.summary); return showDupes(r); });
+  action(e.target, $("#dedupeout"), async () => { const r = await applied(await api("/api/dedupe", { bom: current.bom, merge: true }), "Merge"); showLibrarian(r.summary); return showDupes(r); });
 });
 
 // ---- footprint dialog

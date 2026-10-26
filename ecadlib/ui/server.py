@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from ..app import Workspace
+from ..app import WAITING, LibraryBusy, Workspace
 from .. import easy_setup as ES
 
 STATIC = Path(__file__).with_name("static")
@@ -19,6 +19,9 @@ MAX_UPLOAD = 20 * 1024 * 1024
 MAX_JSON = 2 * 1024 * 1024                 # JSON bodies: no 20 MB parse
 EXPECTED = (ValueError, KeyError, FileExistsError, json.JSONDecodeError, PermissionError)   # user errors: no traceback
 LOCAL_HEADERS = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
+# Actions that rewrite library files under change control: while another run holds the library lock they are queued
+# as a job that waits for it (Handler._or_queue). Decisions (sign-off, release anyway) are recorded at once instead.
+QUEUED = {"/api/resolve/choose", "/api/change/decide", "/api/change/revert", "/api/dedupe"}
 
 
 class Cancelled(Exception):
@@ -221,6 +224,20 @@ def local_who():
     return _LOCAL_WHO[0]
 
 
+def _no_constant(c):
+    """json.loads takes NaN / Infinity, which JSON itself does not: refused (a 400), never handed to int() / float()."""
+    raise ValueError(f"{c} is not a number JSON allows")
+
+
+def _list_of_str(v, what):
+    """None, or a list of names (librarian sources, parts to look up again) from a JSON body."""
+    if v is None:
+        return None
+    if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
+        raise ValueError(f"{what} must be a list of names")
+    return v
+
+
 def _strs(v, what):
     """A list of path strings from a JSON body (scan sources: any folder the person types, read for names only)."""
     if v is None:
@@ -259,7 +276,8 @@ def make_handler(ws: Workspace):
             """Refuse DNS-rebinding requests: the Host header must name this server's own loopback address."""
             port = self.server.server_address[1]
             names = {"127.0.0.1", "localhost", "[::1]", self.server.server_address[0]}
-            return self.headers.get("Host") in {f"{h}:{port}" for h in names}
+            ok = {f"{h}:{port}" for h in names} | (names if port == 80 else set())   # browsers leave out :80
+            return self.headers.get("Host") in ok
 
         def _origin_ok(self):
             """Stop other sites driving the API: an Origin, when sent, must be this server."""
@@ -324,7 +342,7 @@ def make_handler(ws: Workspace):
 
         def _json(self):
             try:
-                b = json.loads(self._body(MAX_JSON) or b"{}")
+                b = json.loads(self._body(MAX_JSON) or b"{}", parse_constant=_no_constant)
             except RecursionError:
                 raise ValueError("the JSON body is nested too deeply") from None
             if not isinstance(b, dict):
@@ -448,8 +466,8 @@ def make_handler(ws: Workspace):
             if u.path == "/api/librarian/run":                    # long, network-bound: a background job
                 b = self._json()
                 bom = self._bom(b)
-                refresh = [] if b.get("refresh") is True else (b.get("refresh") or None)
-                return self._send(200, jobs.start(self._librarian, bom, b.get("sources"), refresh, label=bom,
+                refresh = [] if b.get("refresh") is True else _list_of_str(b.get("refresh") or None, "refresh")
+                return self._send(200, jobs.start(self._librarian, bom, _list_of_str(b.get("sources"), "sources"), refresh, label=bom,
                                                   key=self._plan_key(bom)))
             if u.path == "/api/ai/quote":                         # downloads datasheets (cached) to price them: a job
                 bom = self._bom(self._json())
@@ -490,19 +508,19 @@ def make_handler(ws: Workspace):
                 "/api/export/dblib": lambda b: ws.export_dblib(self._bom(b, True)),
                 "/api/altium/models": lambda b: ws.build_altium_models(self._bom(b, True)),
                 "/api/altium365/plan": lambda b: ws.altium365_plan(self._bom(b, True)),
-                "/api/release-check": lambda b: ws.release_check(self._bom(b, True), _names(b.get("allow")), _names(b.get("unallow")),
+                "/api/release-check": lambda b: ws.release_check(self._bom(b), _names(b.get("allow")), _names(b.get("unallow")),
                                                                  _str(b.get("user"), "user", True)),
                 "/api/resolve/held": lambda b: ws.held_parts(self._bom(b)),
-                "/api/resolve/choose": lambda b: ws.choose_part(self._bom(b, True), _str(b.get("part"), "part"), b.get("kind"),
+                "/api/resolve/choose": lambda b: ws.choose_part(self._bom(b), _str(b.get("part"), "part"), b.get("kind"),
                                                                 _str(b.get("id"), "id"), b.get("pin_map") or None,
                                                                 self._who(b)),
                 "/api/approvals/status": lambda b: ws.approval_status(self._bom(b)),
                 "/api/approvals/decide": self._decide,
                 "/api/change/history": lambda b: ws.part_history(self._bom(b), _str(b.get("part"), "part")),
                 "/api/change/decide": self._change_decide,
-                "/api/change/revert": lambda b: ws.revert_part(self._bom(b, True), _str(b.get("part"), "part"), b.get("revision"),
+                "/api/change/revert": lambda b: ws.revert_part(self._bom(b), _str(b.get("part"), "part"), b.get("revision"),
                                                                _str(b.get("user"), "user"), _str(b.get("comment"), "comment", True)),
-                "/api/dedupe": lambda b: ws.find_duplicates(self._bom(b, True), b.get("merge") is True),
+                "/api/dedupe": lambda b: ws.find_duplicates(self._bom(b), b.get("merge") is True),
                 "/api/rules/save": lambda b: ws.save_rules(_str(b.get("text"), "text"), b.get("overwrite") is True),
                 "/api/style/direction": lambda b: ws.style_direction(_str(b.get("text"), "text", True) or None,
                                                                      b.get("clear") is True),
@@ -512,9 +530,46 @@ def make_handler(ws: Workspace):
             }
             if u.path in actions:
                 b = self._json()
+                if u.path in QUEUED:
+                    return self._send(200, self._or_queue(lambda: actions[u.path](b), self._bom(b)))
                 with write_lock:
                     return self._send(200, actions[u.path](b))
             return self._send(404, {"error": "not found"})
+
+        def _or_queue(self, fn, bom):
+            """Run fn now; while another run holds the library lock (a librarian run here or from the command line,
+            a publisher), queue it instead: a job that waits for the lock and then applies it, reported like any job.
+            The person's action is never refused or lost for that, and no request waits for the run. While this
+            server's own librarian job runs on the plan, it is queued at once (that run may not hold the lock yet)."""
+            key = self._plan_key(bom)
+            queue = lambda folder: dict(jobs.start(self._when_free, fn, folder, key, label=WAITING), queued=True,
+                                        waiting=WAITING)
+            if jobs.running(key):
+                return queue(ws._librarian_dir(ws._bom_path(bom)))
+            try:
+                with write_lock:
+                    return fn()
+            except LibraryBusy as e:
+                return queue(e.folder)
+
+        @staticmethod
+        def _when_free(fn, folder, key, progress=None):
+            from .. import ledger as LG
+            while True:
+                progress(0, 0, WAITING)                       # (raises Cancelled once Stop was pressed)
+                if jobs.running(key):                         # this server's librarian job on the plan
+                    time.sleep(0.25)
+                    continue
+                try:
+                    LG.unlock(LG.lock(folder, wait=1))       # the run let go of the library
+                except LG.LedgerError:
+                    continue
+                try:
+                    with write_lock:
+                        progress(0, 0, "applying it now")
+                        return fn()
+                except LibraryBusy:                           # taken again in between: wait on
+                    continue
 
         def _who(self, b):
             """Who did it: the name typed in the page, else this computer's user (git config / login name)."""
@@ -522,12 +577,12 @@ def make_handler(ws: Workspace):
             return typed.strip()[:120] or local_who()
 
         def _change_decide(self, b):
-            return ws.decide_change(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"),
+            return ws.decide_change(self._bom(b), _str(b.get("part"), "part"), b.get("decision"),
                                     _str(b.get("user"), "user"), _str(b.get("comment"), "comment", True),
                                     _str(b.get("role"), "role", True), _str(b.get("digest"), "digest", True))
 
         def _decide(self, b):
-            return ws.approve_part(self._bom(b, True), _str(b.get("part"), "part"), b.get("decision"),
+            return ws.approve_part(self._bom(b), _str(b.get("part"), "part"), b.get("decision"),
                                    _str(b.get("user"), "user"), _str(b.get("role"), "role", True),
                                    _str(b.get("comment"), "comment", True))
 
@@ -554,9 +609,10 @@ def make_handler(ws: Workspace):
         @staticmethod
         def _demo(bom, progress=None):
             """Triage, then fill the library from the built-in standard parts only (no network, no API key)."""
-            t = ws.triage(bom, _line_lines(progress, "Checking the BOM"), lock=write_lock)
+            t = ws.triage(bom, _line_lines(progress, "Checking the BOM"), lock=write_lock, offline=True)   # as `ecadlib demo`
             progress.line("__triage", state="done", text=f"BOM checked: {len(t['rows'])} lines")
-            r = _final_lines(progress, ws.librarian_run(bom, ["standard"], (), None, _part_lines(progress), ai=False))
+            r = _final_lines(progress, ws.librarian_run(bom, ["standard"], (), None, _part_lines(progress), ai=False,
+                                                        offline=True))
             return dict(r, triage=t)
 
         @staticmethod

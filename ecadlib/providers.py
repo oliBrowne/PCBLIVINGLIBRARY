@@ -15,7 +15,7 @@ against the live sites every week):
   * EasyEDA      - GET component JSON by LCSC number; the only free source of ready symbol / footprint / 3D data
 Stubs (document auth, raise NotConfigured without keys): SnapMagic, SamacSys (no self-serve public API).
 All response bodies are untrusted: parsed as JSON only, fields read defensively."""
-import json, os, re
+import json, os, re, unicodedata
 from dataclasses import dataclass, field
 from . import userconfig as UC
 
@@ -41,6 +41,153 @@ def clean_maker(name):
     name = clean_text(name, 120)
     short = re.sub(rf"\s*[(（][^()（）]*[{CJK}][^()（）]*[)）]\s*$", "", name).strip()
     return short or name
+
+
+# words that say what kind of company it is, not which one ("Rohm Semiconductor" is Rohm, "Vishay Intertechnology" Vishay)
+_MAKER_WORDS = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "LTD", "LIMITED", "LLC", "GMBH", "AG",
+                "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE", "GROUP", "HOLDINGS", "INTERNATIONAL",
+                "SEMICONDUCTOR", "SEMICONDUCTORS", "SEMI", "ELECTRONICS", "ELECTRONIC", "ELECTRIC", "TECHNOLOGY",
+                "TECHNOLOGIES", "TECH", "INDUSTRIES", "INDUSTRIAL", "DEVICES", "COMPONENTS", "PRODUCTS", "SYSTEMS",
+                "MICROELECTRONICS", "INTEGRATED", "INTERTECHNOLOGY", "DIVISION", "DIV", "MANUFACTURING", "MFG",
+                "ELEC", "ELECT", "ELECTR", "ELECTRON",       # DigiKey's short forms: "Shenzhen Sunlord Elec"
+                "AND"}                                       # "Alpha and Omega" is "Alpha & Omega"
+# a city or province before a Chinese / Taiwanese maker's own name ("Shenzhen Sunlord", "Yangzhou Yangjie Elec Tech"):
+# dropped when a name follows it
+_MAKER_PLACE = {"SHENZHEN", "YANGZHOU", "SHANGHAI", "DONGGUAN", "JIANGSU", "GUANGDONG", "GUANGZHOU", "BEIJING",
+                "HANGZHOU", "SUZHOU", "WUXI", "XIAMEN", "NINGBO", "ZHEJIANG", "FUJIAN", "CHANGZHOU", "NANJING",
+                "CHENGDU", "WUHAN", "TIANJIN", "FOSHAN", "ZHUHAI", "HUIZHOU", "ZHONGSHAN", "SHANDONG", "ANHUI", "HUNAN",
+                "HUBEI", "SICHUAN", "TAIWAN", "TAIPEI", "HSINCHU", "KAOHSIUNG", "HONGKONG"}
+# where a distributor's sales arm is, after the maker's own name ("NXP USA Inc.", "Murata Electronics North America",
+# "GigaDevice Semiconductor (HK) Limited"): not which company it is
+_MAKER_REGION = {"USA", "US", "AMERICA", "AMERICAS", "NORTH", "EUROPE", "ASIA", "PACIFIC", "JAPAN", "CHINA", "HK",
+                 "GLOBAL", "UNLIMITED"}
+# the short names makers go by, and the old names of makers bought by another (their parts are sold under the new
+# name now), -> the words of the company's full name (after _MAKER_WORDS are dropped). One table: both ways.
+_MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON": "ON", "ONSEMI": "ON",
+                "ST": "ST", "STM": "ST", "ADI": "ANALOG", "MPS": "MONOLITHICPOWER", "AOS": "ALPHAOMEGA", "NXP": "NXP", "PHILIPS": "NXP",
+                "FAIRCHILD": "ON", "IR": "INFINEON", "RECTIFIER": "INFINEON", "CYPRESS": "INFINEON",
+                "MICROCHIPTECHNOLOGY": "MICROCHIP", "ATMEL": "MICROCHIP", "DIODESINC": "DIODES", "DIODES": "DIODES",
+                "RENESAS": "RENESAS", "IDT": "RENESAS", "INTERSIL": "RENESAS",
+                "LTC": "ANALOG", "MAXIM": "ANALOG", "HITTITE": "ANALOG",   # now Analog Devices
+                "KYOCERAAVX": "AVX", "KYOCERA": "AVX", "SILICONLABS": "SILICONLABORATORIES", "SILABS": "SILICONLABORATORIES",
+                # acquisitions: the old maker's name on a BOM, the buyer's at the distributor (and the other way)
+                "FREESCALE": "NXP",                                              # 2015 (Nexperia is not NXP: below)
+                "NATIONAL": "TEXASINSTRUMENTS", "NATSEMI": "TEXASINSTRUMENTS",   # National Semiconductor, 2011
+                "LT": "ANALOG", "DALLAS": "ANALOG",                              # Linear Technology; Dallas -> Maxim
+                "MICREL": "MICROCHIP", "MICROSEMI": "MICROCHIP", "ACTEL": "MICROCHIP", "SUPERTEX": "MICROCHIP",
+                "SMSC": "MICROCHIP", "STANDARDMICROSYSTEMS": "MICROCHIP", "SST": "MICROCHIP",
+                "SILICONSTORAGE": "MICROCHIP",                                   # Silicon Storage Technology
+                "AVAGO": "BROADCOM", "SPANSION": "INFINEON", "ZETEX": "DIODES", "EXAR": "MAXLINEAR",
+                "XILINX": "AMD", "ADVANCEDMICRO": "AMD", "ALTERA": "INTEL",
+                "SAMESKY": "CUI", "SEIKOEPSON": "EPSON", "QINHENG": "WCH", "SEMCO": "SAMSUNGELECTROMECHANICS",
+                "GCT": "GLOBALCONNECTOR", "HDSC": "HUADA",
+                "TE": "TECONNECTIVITY", "TYCO": "TECONNECTIVITY", "AMP": "TECONNECTIVITY",
+                "WE": "WURTHELEKTRONIK", "WURTH": "WURTHELEKTRONIK", "GD": "GIGADEVICE",
+                "EPCOS": "TDK", "IXYS": "LITTELFUSE", "SILICONIX": "VISHAY", "FCI": "AMPHENOL", "AMSOSRAM": "OSRAM",
+                "ELPIDA": "MICRON", "NUMONYX": "MICRON", "WOLFSON": "CIRRUSLOGIC"}
+# a first word many companies share ("Analog Devices" / "Analog Power", "General Electric" / "General Semiconductor"):
+# alone it names no company, so a name that is only it keeps its company-kind words, and no other name matches it by
+# starting with it
+_MAKER_GENERIC = {"ANALOG", "GENERAL", "AMERICAN", "NATIONAL", "MICRO", "SILICON", "POWER", "LINEAR", "DIGITAL",
+                  "ADVANCED", "UNITED", "CENTRAL", "STANDARD", "UNIVERSAL", "PRECISION", "APPLIED", "SMART", "NEW"}
+_MAKER_LEGAL = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "LTD", "LIMITED", "LLC", "GMBH", "AG",
+                "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE"}
+_MAKER_ALIAS.update({"ANALOGDEVICES": "ANALOG", "NATIONALSEMICONDUCTOR": "TEXASINSTRUMENTS",
+                     "CENTRAL": "CENTRALSEMICONDUCTOR", "TEXAS": "TEXASINSTRUMENTS",    # "Central" alone on a BOM
+                     "PERICOM": "DIODES", "DIALOG": "RENESAS", "SIPEX": "MAXLINEAR", "CATALYST": "ON"})   # bought
+# the words of a company name an alias maps to, where it has several: where a shorter name may end in it ("Texas" /
+# "TI"), and where not ("Teco" is no "TE" = TE Connectivity)
+_ALIAS_WORDS = {"TEXASINSTRUMENTS": ["TEXAS", "INSTRUMENTS"], "TECONNECTIVITY": ["TE", "CONNECTIVITY"],
+                "WURTHELEKTRONIK": ["WURTH", "ELEKTRONIK"], "MONOLITHICPOWER": ["MONOLITHIC", "POWER"],
+                "ALPHAOMEGA": ["ALPHA", "OMEGA"], "SILICONLABORATORIES": ["SILICON", "LABORATORIES"],
+                "SAMSUNGELECTROMECHANICS": ["SAMSUNG", "ELECTROMECHANICS"], "GLOBALCONNECTOR": ["GLOBAL", "CONNECTOR"],
+                "CIRRUSLOGIC": ["CIRRUS", "LOGIC"], "CENTRALSEMICONDUCTOR": ["CENTRAL", "SEMICONDUCTOR"]}
+# a company's other makers under its own brand, named on their own (distributors list both): the whole key only, so
+# "Wurth" is Würth Elektronik and Würth Electronics Midcom, never any "Wurth <anything>" (Würth Industrie, a fastener
+# trader), and "Catalyst Lighting" is no Catalyst Semiconductor (onsemi)
+_MAKER_GROUP = {"WURTHELEKTRONIK": {"WURTHMIDCOM"}}
+# Nexperia (NXP's Standard Products until 2017) is its own company now, with its own lifecycles and datasheets for the
+# discretes and logic NXP once sold: an NXP line is not matched to a Nexperia listing (nor Philips / Freescale to it).
+
+
+def _maker_words(name):
+    """A maker name's own words (upper case, accents folded, a Chinese alias in brackets, company-kind words and a
+    sales region after the name left out)."""
+    name = clean_maker(name or "") if isinstance(name, str) else ""
+    name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()       # Würth -> Wurth
+    words = re.findall(r"[A-Z0-9]+", re.sub(r"[-'&.]", "", name.upper()))
+    kept = [w for w in words if w not in _MAKER_WORDS] or words
+    if len(kept) > 1 and kept[0] in _MAKER_PLACE:  # "Shenzhen Sunlord", "Yangzhou Yangjie": the city is not the company
+        kept = kept[1:]
+    return kept[:1] + [w for w in kept[1:] if w not in _MAKER_REGION]
+
+
+def _maker_words_all(name):
+    name = clean_maker(name or "") if isinstance(name, str) else ""
+    return re.findall(r"[A-Z0-9]+", unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().upper())
+
+
+def _key_words(name):
+    """The words a maker's key is made of: _maker_words, or for a name that is only a shared first word ('Analog
+    Devices', 'General Semiconductor') its words but the legal form and a sales region."""
+    kept = _maker_words(name)
+    if len(kept) == 1 and kept[0] in _MAKER_GENERIC:
+        words = [w for w in _maker_words_all(name) if w not in _MAKER_LEGAL]
+        kept = (words[:1] + [w for w in words[1:] if w not in _MAKER_REGION]) or kept
+    return kept
+
+
+def maker_key(name):
+    """A maker's name reduced to which company it is: letters and digits of its words, company-kind words left out,
+    a Chinese alias in brackets dropped, short and old names mapped (TI -> Texas Instruments, onsemi / ON
+    Semiconductor -> ON, STMicroelectronics -> ST, Freescale -> NXP). '' when nothing is left."""
+    kept = _maker_words(name)
+    if kept[:2] == ["TEXAS", "INSTRUMENTS"]:
+        return "TEXASINSTRUMENTS"
+    if kept[:1] == ["LINEAR"] and {"TECHNOLOGY", "TECH"} & set(_maker_words_all(name)):   # Linear Technology (not
+        return "ANALOG"                                                  # Linear Integrated Systems): Analog Devices now
+    if "".join(kept).startswith("STMICRO"):                              # STMicroelectronics, ST Micro
+        return "ST"
+    if _maker_words_all(name)[:2] == ["INTEGRATED", "DEVICE"]:            # Integrated Device Technology (IDT), not
+        return "RENESAS"                                                 # "Device Engineering": Renesas since 2019
+    if kept and kept[0] == "VISHAY":              # Vishay Dale / Siliconix / Intertechnology / Sprague: one maker
+        return "VPG" if "PRECISION" in kept else "VISHAY"    # Vishay Precision Group: its own company since 2010
+    joined = "".join(_key_words(name))
+    return _MAKER_ALIAS.get(joined, joined)          # the whole name only: "ON Shore Technology" is not onsemi
+
+
+def same_maker(a, b):
+    """Do two maker names name the same company? Equal keys; one key starting the other at a word's end when the shorter
+    has at least 4 letters and is no shared first word ("Murata" / "Murata Power Solutions", not "Micron" / "Micronas"
+    or "Analog Devices" / "Analog Power"); or a one-word name of 3+
+    letters that is the other's first word ("MDD" / "MDD Microdiode"). Never a substring elsewhere: "ON" is not in
+    "Monolithic", "TI" is not "Tiger", "ON" is not "ON Shore Technology"."""
+    for x, y in ((a, b), (b, a)):              # DigiKey's "Analog Devices Inc./Maxim Integrated", "EPCOS - TDK
+        if not isinstance(x, str):             # Electronics", "Amphenol ICC (FCI)": either name
+            continue
+        parts = [p for p in re.split(r"/|\s+-\s+|[()（）]", x) if p.strip()]
+        if len(parts) > 1 and any(same_maker(p, y) for p in parts
+                                  if not set(_maker_words_all(p)) <= _MAKER_REGION | _MAKER_PLACE | _MAKER_WORDS):
+            return True
+    ka, kb = maker_key(a), maker_key(b)
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    (short, _), (long_, ln) = sorted(((ka, a), (kb, b)), key=lambda t: len(t[0]))
+    if len(short) >= 4 and short not in _MAKER_GENERIC and long_.startswith(short):
+        words = _key_words(ln)                   # at a word's end: "Murata" / "Murata Power Solutions", not "Micron" /
+        split = [w for w in re.findall(r"[A-Z0-9]+", re.sub(r"['.]", "", unicodedata.normalize("NFKD", clean_maker(ln))
+                 .encode("ascii", "ignore").decode().upper())) if w not in _MAKER_WORDS]      # "Micronas"; "Wakefield-Vette"
+        if "".join(words) != long_:              # the long key is an alias's company ("TE" -> TECONNECTIVITY): its
+            words, split = _ALIAS_WORDS.get(long_, [long_]), []          # own words, so "Teco" is no "TE"
+        if any("".join(ws[:i]) == short for ws in (words, split) for i in range(1, len(ws) + 1)):
+            return True
+    if kb in _MAKER_GROUP.get(ka, ()) or ka in _MAKER_GROUP.get(kb, ()):   # Würth Elektronik / Würth Electronics Midcom
+        return True
+    wa, wb = _maker_words(a), _maker_words(b)
+    return any(len(x) == 1 and len(x[0]) >= 3 and x[0] not in _MAKER_GENERIC and y and y[0] == x[0] and ky.startswith(kx)
+               for x, y, kx, ky in ((wa, wb, ka, kb), (wb, wa, kb, ka)))   # not "Vishay" / VPG
 
 
 def describe(text="", category="", package=""):
@@ -96,9 +243,10 @@ class EasyEDA(Provider):
     HEADERS = {"Accept": "application/json, text/javascript, */*; q=0.01", "Referer": "https://easyeda.com/"}
 
     def lookup(self, line):
-        lcsc = (line.get("lcsc") or "").strip().upper()
+        raw = str(line.get("lcsc") or "").strip()
+        lcsc = lcsc_number(raw)                                           # the number only goes in the URL
         if not lcsc:
-            return SourceResult(self.name, found=None, error="no LCSC number")
+            return SourceResult(self.name, found=None, error=f"{raw[:30]!r} is not an LCSC number" if raw else "no LCSC number")
         url = self.URL.format(lcsc)
         r = self.http.get(url, headers=self.HEADERS)
         res = SourceResult(self.name, lcsc=lcsc, url=f"https://www.lcsc.com/product-detail/{lcsc}.html")
@@ -110,6 +258,18 @@ class EasyEDA(Provider):
         except (ValueError, AttributeError, TypeError) as e:
             res.error = f"unparseable response: {e}"
             return res
+
+
+def lcsc_number(raw):
+    """The LCSC number in a cell: 'C2040', 'LCSC C2040', or a product link's own number ('..._C1663.html', '.../C2040'),
+    not a C0G / C1 in the link's slug before it. '' when there is none, or two different ones in free text."""
+    up = str(raw or "").strip().upper()
+    for pat in (r"(?:LCSC\W*)?(C\d{1,9})", r".*_(C\d{1,9})\.HTML?(?:[?#].*)?", r".*/(C\d{1,9})(?:\.HTML?)?/?(?:[?#].*)?"):
+        m = re.fullmatch(pat, up)
+        if m:
+            return m.group(1)
+    found = set(re.findall(r"(?<![A-Z0-9])(C\d{1,9})(?![0-9A-Z])", up))     # a whole word: not the C0 of a C0G
+    return found.pop() if len(found) == 1 else ""                         # two different numbers: neither
 
 
 def parse_easyeda(data, res):
@@ -185,7 +345,7 @@ class JLCPCBSearch(Provider):
         if not r.ok:
             res.error = r.error or f"HTTP {r.status}"
             return res
-        return parse_jlcpcb(r, mpn, res)
+        return parse_jlcpcb(r, mpn, res, maker=line.get("manufacturer") or "")
 
     def lookup_lcsc(self, lcsc):
         """The part with this LCSC number (a search for the number; only that exact code counts): its LCSC
@@ -198,9 +358,10 @@ class JLCPCBSearch(Provider):
         return parse_jlcpcb(r, "", res, code=lcsc)
 
 
-def parse_jlcpcb(r, mpn, res, code=""):
+def parse_jlcpcb(r, mpn, res, code="", maker=""):
     """One JLCPCB search answer -> res (exact MPN match only, or with code the part with that LCSC number; the field
-    paths easyeda2kicad reads)."""
+    paths easyeda2kicad reads). maker: the BOM's manufacturer; of several exact matches (clones sell under the same
+    MPN, in other packages too) the one by that maker is taken, not the first listed."""
     try:
         from .kicad_index import norm_mpn
         items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
@@ -209,7 +370,7 @@ def parse_jlcpcb(r, mpn, res, code=""):
     except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
         res.error = f"unparseable: {e}"
         return res
-    best = (exact or [None])[0]
+    best = next((i for i in exact if maker and same_maker(maker, i.get("componentBrandEn"))), (exact or [None])[0])
     code = str((best or {}).get("componentCode") or "").strip().upper()
     if best and not re.fullmatch(r"C\d{1,9}", code):   # untrusted: only a real LCSC number goes on (into EasyEDA's URL)
         res.error = f"unparseable: componentCode {code[:20]!r} is not an LCSC number"

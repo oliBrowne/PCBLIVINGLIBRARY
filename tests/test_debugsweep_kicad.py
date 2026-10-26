@@ -401,6 +401,13 @@ def test_ds2_45_kept_part_that_leaves_the_plan_is_reported_removed(tmp_path):
         KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
         two["description"] = ""                           # now held: kept as exported before
         (d / "plan.json").write_text(json.dumps([ok, two]))
+        from ecadlib import change_gate as CG, fingerprint as FP
+        g = CG.Guard(d, "librarian")                      # recorded as the released head (as before a stricter rule;
+        g.hold_lock()                                     # a field edit failing the check is held now, not released)
+        try:
+            g._release(two, FP.of_item(two, d), [], {"action": "pass", "why": []})
+        finally:
+            g.close()
         rep = KX.export(d / "plan.json", d / "kicad", "mylib", log=quiet)
         assert [k["part"] for k in rep["kept"]] == ["PART2"], rep["kept"]
         if form == "legacy":                              # a kicad_export.json from before per-library records

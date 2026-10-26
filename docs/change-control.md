@@ -171,6 +171,22 @@ stops with a message.
 
 A broken ledger line stops every writer with the line number. Put the line back from git and run again.
 
+**A ledger merged from two branches.** If two branches each released the same revision of a part (both made r2 of
+KT-0603R) and git merged them, the ledger holds both r2 lines, or only one branch's while `.ecadlib/marks/` (one empty
+file per release, `<part>@r<N>@<digest>`, merged by git like any file) still holds both marks. Which r2 is released is
+then not known, so that part alone is refused: publishers (kicad-export, DbLib sync, Altium 365 push, export-parts)
+leave it out and say why ("change refuse PART ..."; kicad-export lists it as skipped and exits 1), approving and
+reverting it are refused, and `ecadlib part status` and `ecadlib part history` name it. The rest of the library
+publishes as usual. To mend it, decide which r2 is the one you want, then:
+
+1. keep that one release line of r2 in `library.ledger.jsonl` and delete the other branch's (or keep the file as it is
+   when it already holds only the one you want), and
+2. delete the other branch's mark, `.ecadlib/marks/<part>@r2@<digest>`: the message names the files, and the one to
+   delete is the one whose digest is not on the line you kept.
+
+Then run again (`ecadlib part history ws/library PART` shows no warning once it is mended). Restoring
+`library.ledger.jsonl` and `.ecadlib/` from one branch with git does the same.
+
 If the ledger was deleted, emptied or lost a part's lines, while something else shows the part was released before,
 ecadlib does not take the files on disk as revision 1. These signs count: `.ecadlib/blobs`, `library.usage.json`, other
 ledger lines, `ecadlib_schema.json` saying the library keeps a ledger, files that differ from what `library.lock.json`
@@ -247,6 +263,22 @@ the change is matched on what its stored fingerprint recorded.
 - **Previews**: the web UI and MCP Altium 365 plan and `altium365 push --dry-run` write nothing, so they do not settle
   a hand edit. A released part whose files or fields were edited in a way the policy holds is shown held, with "an
   edit not yet settled" as its reason; the released revision is what a real push sends.
+- **Targets shared by several plan folders** (one DbLib folder, one KiCad output folder, one Altium 365 workspace):
+  change control is per plan folder, so one plan never changes a part another plan released there until that plan
+  has released the same drawing. Each plan folder has an id in `.ecadlib/plan_id.json`: a renamed or moved plan
+  folder is still the same plan, and a copy of one is another plan. A target keeps where each plan was last seen both
+  relative to it and as a full path, so moving the target or the plan folders does not make a plan look gone. A plan
+  is named "not found from here" only when neither path finds it; run that plan once from where it is now, and use
+  `--forget-missing-plans` (or `--take-over`) only for a plan folder that no longer exists.
+- **Altium 365 workspaces shared across projects**: a workspace has no record of its own of which plan folder pushed
+  each component (ecadlib writes no parameter for it, as parameters reach schematics). The record is kept in the
+  project (`ecadlib_publishers.json` beside `ecadlib.toml`) and on this computer (`ecadlib_publishers.json` in the
+  ecadlib settings folder), so plan folders of one project, or of several projects pushed from one computer, wait for
+  each other. A plan folder of another project that is not at its recorded path any more (the project moved or
+  renamed, a drive not mounted) is still on record: its components are held "not found from here" until it is pushed
+  once from where it is now, or dropped with `--forget-missing-plans`. Plan folders of different projects pushed from different computers do not: a push that adopts a
+  component no record names says so ("Neither this project nor this computer has a record ..."). Push the plan
+  folders that share a workspace from one project or one computer.
 - **Upgrading ecadlib**: a revision fingerprinted by an older ecadlib is fingerprinted again from its saved files, so
   an upgrade that reads more detail does not show every released part as changed.
 

@@ -14,6 +14,7 @@ See ecadlib/eval/runner.py (run, modes), score.py (fields, tolerances) and build
 import argparse, json, sys
 
 from . import runner as R, score as S
+from .. import ai_cost as AC
 
 
 def _list(s):
@@ -53,9 +54,9 @@ def main(argv=None):
                                                          "answers can take minutes to hours)")
     r.add_argument("--cached-only", action="store_true", help="re-score this out folder with nothing sent: its cached "
                    "answers, and the answers of its collected batches downloaded again (free), read by this code")
-    r.add_argument("--max-cost-usd", type=float, help="spending cap for this run (default [datasheet] max_cost_usd, "
+    r.add_argument("--max-cost-usd", type=AC.usd_arg, help="spending cap for this run (default [datasheet] max_cost_usd, "
                    "10; 0 = no cap)")
-    r.add_argument("--max-total-usd", type=float, help="spending cap for this out folder over all its runs: what its "
+    r.add_argument("--max-total-usd", type=AC.usd_arg, help="spending cap for this out folder over all its runs: what its "
                    "cost.jsonl already holds counts against it, so a resumed run sends at most the rest")
     r.add_argument("--offline", action="store_true", help="HTTP cache only")
     r.add_argument("--cache", default="out/http_cache")
@@ -147,7 +148,9 @@ def main(argv=None):
         o = rep["summary"]["overall"]
         print("\n".join(R.report_md(rep).splitlines()[2:6]))
         nr = (rep["summary"].get("not_run") or {}).get("cases", 0)
-        print(f"report: {a.out}/report.md ({o['pass']}/{o['cases']} pass)" if not nr else
+        oc = rep["summary"].get("outcome") or {}        # the headline counts right (KiCad or the datasheet), not pass
+        print(f"report: {a.out}/report.md ({o.get('right', o['pass'])}/{o['cases']} right, {o['pass']} matching KiCad; "
+              f"built wrong {len(oc.get('built_wrong') or [])})" if not nr else
               f"report: {a.out}/report.md ({nr} not run: no API key; {rep['summary']['ran']['pass']}/"
               f"{rep['summary']['ran']['cases']} of the rest pass)")
     return 0

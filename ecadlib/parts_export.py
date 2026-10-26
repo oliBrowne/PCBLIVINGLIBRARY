@@ -29,12 +29,12 @@ LIBRARY_STATUS = ("ready", "existing")
 
 
 def kicad_ids(item, lib):
-    from .kicad_export import kname
+    from .kicad_export import kname, ksym
     fp = (item.get("footprint") or {})
     fp = fp if isinstance(fp, dict) else {}
     has_fp = fp.get("ref") and (fp.get("file") or fp.get("kicad_mod"))
     has_sym = (item.get("source") or {}).get("symbol") or (item.get("symbol") or {}).get("file")
-    return (f"{lib}:{kname(item['name'])}" if has_sym else "", f"{lib}:{kname(fp['ref'])}" if has_fp else "")
+    return (f"{lib}:{ksym(item['name'])}" if has_sym else "", f"{lib}:{kname(fp['ref'])}" if has_fp else "")
 
 
 def _signoff(items, base):
@@ -59,9 +59,44 @@ def _signoff(items, base):
     return out
 
 
-def rows(plan, lib="ecadlib", include_held=False, rules=None):
+def previous_rows(path, fmt=None):
+    """{Part ID: row with COLUMNS} of a parts table this module wrote before (json, csv or xlsx); {} when there is
+    none or it does not read as one."""
+    path = Path(path)
+    fmt = fmt or path.suffix.lower().lstrip(".")
+    try:
+        if not path.is_file():
+            return {}
+        if fmt == "json":
+            data = json.loads(path.read_text(encoding="utf-8"))
+            rs = data.get("parts") if isinstance(data, dict) and data.get("format") == "ecadlib-parts" else None
+        elif fmt == "csv":
+            import csv
+            with open(path, newline="", encoding="utf-8-sig") as f:
+                rs = [{k: SS.unquote(v) for k, v in r.items()} for r in csv.DictReader(f)]
+        elif fmt == "xlsx":
+            from openpyxl import load_workbook
+            wb = load_workbook(path, read_only=True)
+            try:
+                vals = list(wb["Parts"].values) if "Parts" in wb.sheetnames else []
+            finally:
+                wb.close()
+            head = [str(c) for c in vals[0]] if vals else []
+            rs = [{k: SS.unquote("" if v is None else str(v)) for k, v in zip(head, r)} for r in vals[1:]]
+        else:
+            return {}
+    except Exception:                          # a damaged or foreign file: nothing to keep from it
+        return {}
+    return {str(r["Part ID"]): {c: r.get(c, "") if r.get(c) is not None else "" for c in COLUMNS}
+            for r in rs or [] if isinstance(r, dict) and r.get("Part ID")}
+
+
+def rows(plan, lib="ecadlib", include_held=False, rules=None, previous=None, warn=None):
     """Plan items -> [row dict with exactly COLUMNS], sorted by Part ID. plan: path to plan.json or a list of items.
-    rules: the library rules file the release check runs with (default: ecadlib.toml found from the plan)."""
+    rules: the library rules file the release check runs with (default: ecadlib.toml found from the plan).
+    previous: {Part ID: row} of the table written before (previous_rows): a released part held again (or whose change
+    waits for sign-off) keeps the row exported before until it passes the check again (R-FL-3), as kicad-export,
+    kicad-dblib, dblib-sync and the A365 push keep it; warn: where that is said (default stderr)."""
     from .kicad_export import libname
     base = Path(plan).parent if not isinstance(plan, list) else Path(".")
     items = json.loads(Path(plan).read_text(encoding="utf-8")) if not isinstance(plan, list) else plan
@@ -75,13 +110,20 @@ def rows(plan, lib="ecadlib", include_held=False, rules=None):
         from . import release_check as RC, rules as RU      # runs it): a part that fails it is held, not a library part
         checked = RU.resolve(rules, base)
         for it in items:
-            why = RC.publish_problems(it, base, checked) if isinstance(it, dict) and it.get("name") \
-                and it.get("status", "ready") == "ready" else []
+            why = RC.publish_problems(it, base, checked, writes_files=True) if isinstance(it, dict) and it.get("name") \
+                and it.get("status", "ready") in LIBRARY_STATUS else []
             if why:
                 it.update(status="held", hold_reasons=why, release_check=dict(it.get("release_check") or {}, result="held"))
     keep = [it for it in items if isinstance(it, dict) and it.get("name")
             and (it.get("status", "ready") in LIBRARY_STATUS or (include_held and it.get("status") == "held"))]
     sign = _signoff(keep, base) if not isinstance(plan, list) else {}
+    from .kicad_export import kname, ksym
+    sym_by, fp_by = {}, {}                     # KiCad names as kicad-export hands them out (items in kname order, the
+    for it in sorted(keep, key=lambda i: ksym(i["name"])):         # first wins): two part names with one KiCad name
+        sym_by.setdefault(ksym(it["name"]), it["name"])            # ('A/B', 'A_B') or two footprints whose file names
+        ref = (it.get("footprint") or {}).get("ref") if isinstance(it.get("footprint"), dict) else None   # differ only
+        if ref:                                                      # in case: the second has no KiCad id, never the
+            fp_by.setdefault(kname(ref).casefold(), ref)             # other part's
     out = []
     for it in sorted(keep, key=lambda i: str(i["name"])):
         par = {str(p.get("name")): str(p.get("value", "")) for p in it.get("parameters") or []
@@ -90,6 +132,10 @@ def rows(plan, lib="ecadlib", include_held=False, rules=None):
         folder = str(it.get("folder") or "")
         sym, fp = it.get("symbol") or {}, it.get("footprint") or {}
         ks, kf = kicad_ids(it, libname(lib))   # the library name kicad-export / kicad-dblib give it ("My Lib" -> My_Lib)
+        if sym_by.get(ksym(it["name"])) != it["name"]:
+            ks = ""
+        if kf and fp_by.get(kname(fp["ref"]).casefold()) != fp["ref"]:
+            kf = ""
         rc = it.get("release_check") or {}
         r.update({"Part ID": str(it["name"]), "Status": str(it.get("status", "ready")),
                   "Category": folder.rstrip("/").split("/")[-1] if folder else "", "Folder": folder,
@@ -110,7 +156,38 @@ def rows(plan, lib="ecadlib", include_held=False, rules=None):
                 other[k] = par[k]
         r["Other Parameters"] = other
         out.append(r)
+    if previous and not include_held and not isinstance(plan, list):
+        out = _keep_previous(out, items, previous, base, warn or (lambda m: print(f"  warning: {m}", file=sys.stderr)))
     return out
+
+
+def _keep_previous(out, items, previous, base, warn):
+    """The rows exported before of parts held now that have a released revision in the ledger (kicad-export's rule:
+    one exported while held with --include-held, or never released, is not kept)."""
+    from . import ledger as LG
+    lg = LG.Ledger(base)
+    if not lg.exists():
+        return out
+    have = {r["Part ID"] for r in out}
+    ks = {r["KiCad Symbol"] for r in out if r["KiCad Symbol"]}
+    for it in items:
+        if not isinstance(it, dict) or not it.get("name") or it["name"] in have \
+                or it.get("status") not in ("held", "awaiting_approval"):
+            continue
+        r = previous.get(str(it["name"]))
+        head = lg.head(it["name"]) if r and r.get("Status") in LIBRARY_STATUS else None
+        if not head:
+            continue
+        r = dict(r)
+        if r["KiCad Symbol"] in ks:                # a part written now has that KiCad name: it is that part's
+            r["KiCad Symbol"] = ""
+        why = "; ".join(it.get("hold_reasons") or []) or ("waiting for sign-off" if it.get("status") == "awaiting_approval"
+                                                           else "release check")
+        warn(f"{it['name']}: held ({why}); the row exported before (released revision r{head.get('revision')}) stays "
+             f"in the table until it passes the check again")
+        out.append(r)
+        have.add(r["Part ID"])
+    return sorted(out, key=lambda r: str(r["Part ID"]))
 
 
 def _flat(r):
@@ -165,7 +242,7 @@ def main(argv=None):
     fmt = a.format or (Path(a.out).suffix.lower().lstrip(".") if a.out and Path(a.out).suffix.lower() in (".csv", ".json", ".xlsx") else "csv")
     out = Path(a.out) if a.out else Path(a.plan).parent / f"parts.{fmt}"
     try:
-        rs = rows(a.plan, a.name, a.include_held, a.rules)
+        rs = rows(a.plan, a.name, a.include_held, a.rules, previous=previous_rows(out, fmt))
     except (OSError, ValueError) as e:
         print(f"cannot read plan: {e}", file=sys.stderr)
         return 2

@@ -24,6 +24,7 @@ from . import datasheet as D
 SHARE = 0.2              # lines of a typical BOM that need a datasheet (the bundled sample: 3 of 14 held without one)
 BOM_LINES, LIBRARY_PARTS = 50, 500
 PROOF_OUT = 3000
+WHOLE_PDF_PAGES = 40     # [datasheet] page_budget = 0 sends the whole PDF: priced as a 40-page datasheet (an assumption)
 # The sheet: (label, model id, provider). Local models are free whatever they are.
 SHEET = [
     ("Claude Fable 5.1", "claude-fable-5-1", "anthropic"),
@@ -52,8 +53,18 @@ HEAD = {"model": "Model", "id": "Model id", "tier": "Tier", "usd_in": "$ in / MT
         "lib500_check_all": "Visual check on all 500"}
 
 
+def pages_of(rules=None):
+    """(datasheet pages per read, datasheet pages per visual check) from [datasheet] page_budget and [agent.proof]
+    max_pages, the defaults without rules; page_budget 0 (the whole PDF) counts as WHOLE_PDF_PAGES."""
+    from . import visual_check as V
+    r = rules if isinstance(rules, dict) else {}
+    pb = (r.get("datasheet") or {}).get("page_budget", D.SETTINGS["page_budget"])
+    mp = ((r.get("agent") or {}).get("proof") or {}).get("max_pages") or V.PROOF_DEFAULTS["max_pages"]
+    return (WHOLE_PDF_PAGES if pb == 0 else pb or D.SETTINGS["page_budget"]), mp
+
+
 def read_tokens(page_budget=None):
-    """(input, output) tokens of one datasheet read at the default page budget."""
+    """(input, output) tokens of one datasheet read at page_budget pages (default: the built-in page budget)."""
     pages = page_budget or D.SETTINGS["page_budget"]
     return pages * D.PAGE_TOKENS + 1500 + len(json.dumps(D.wire_schema())) // 4, D.OUT_TOKENS
 
@@ -91,8 +102,9 @@ def jobs(model, provider="anthropic", rules=None, share=SHARE, vision=None):
     if not pr:
         return dict(row, **{k: None for k in COLS if k not in row})
     pin, pout = pr
-    rin, rout = read_tokens()
-    cin, cout = check_tokens()
+    pages, proof_pages = pages_of(rules)
+    rin, rout = read_tokens(pages)
+    cin, cout = check_tokens(proof_pages)
     read = (rin * (D.CACHE_WRITE if claude else 1.0) * pin + rout * pout) / 1e6
     batch = (rin * pin + rout * pout) / 1e6 * D.BATCH_DISCOUNT if claude else None   # Message Batches: Claude only
     sees = prof.get("vision", True) if vision is None else vision
@@ -116,9 +128,10 @@ def money(v):
     return f"${v:,.4f}" if v < 0.01 else f"${v:,.3f}" if v < 1 else f"${v:,.2f}"
 
 
-def markdown(rows, share=SHARE):
-    rin, rout = read_tokens()
-    cin, cout = check_tokens()
+def markdown(rows, share=SHARE, rules=None):
+    pages, proof_pages = pages_of(rules)
+    rin, rout = read_tokens(pages)
+    cin, cout = check_tokens(proof_pages)
     cols = ["model", "usd_in", "usd_out", "read", "read_batch", "check", "bom50", "bom50_checked", "lib500",
             "lib500_batch", "lib500_check_all"]
     out = ["| " + " | ".join(HEAD[c] for c in cols) + " |", "|" + "---|" * len(cols)]
@@ -141,7 +154,7 @@ def write_csv(rows, path):
             w.writerow(["" if r.get(c) is None else (round(r[c], 4) if isinstance(r[c], float) else r[c]) for c in COLS])
 
 
-def write_xlsx(rows, path, share=SHARE):
+def write_xlsx(rows, path, share=SHARE, rules=None):
     from openpyxl import Workbook
     from openpyxl.styles import Font
     wb = Workbook()
@@ -157,7 +170,7 @@ def write_xlsx(rows, path, share=SHARE):
             c.number_format = '"$"#,##0.000'
     for i, c in enumerate(COLS, 1):
         ws.column_dimensions[ws.cell(1, i).column_letter].width = 30 if c == "model" else 16
-    _, (rin, rout, cin, cout, nb, nl) = markdown(rows, share)
+    _, (rin, rout, cin, cout, nb, nl) = markdown(rows, share, rules)
     n = wb.create_sheet("How it is estimated")
     for line in [
             "Estimates, not a bill: request sizes from the code, list prices checked 2026-10-16.",
@@ -224,11 +237,11 @@ docs/costs.md`.
 """
 
 
-def doc(rows, share=SHARE):
-    from . import visual_check as V
-    table, (rin, rout, cin, cout, nb, nl) = markdown(rows, share)
+def doc(rows, share=SHARE, rules=None):
+    table, (rin, rout, cin, cout, nb, nl) = markdown(rows, share, rules)
+    pages, proof_pages = pages_of(rules)
     return DOC.format(table=table, rin=rin, rout=rout, cin=cin, cout=cout, nb=nb, nl=nl, share=share,
-                      pages=D.SETTINGS["page_budget"], imgs=V.PROOF_DEFAULTS["max_pages"] + 2)
+                      pages=pages, imgs=proof_pages + 2)
 
 
 def main(argv=None):
@@ -256,11 +269,11 @@ def main(argv=None):
             prov = next((p for _, m, p in SHEET if m == ep["model"]), "openai-compatible")   # not priced as Claude
         rows = [dict(jobs(ep["model"], prov, rules, a.share), model=ep["model"])]
     if a.md:
-        open(a.md, "w", encoding="utf-8").write(doc(rows, a.share))
+        open(a.md, "w", encoding="utf-8").write(doc(rows, a.share, rules))
     if a.csv:
         write_csv(rows, a.csv)
     if a.xlsx:
-        write_xlsx(rows, a.xlsx, a.share)
+        write_xlsx(rows, a.xlsx, a.share, rules)
     if a.json:
         print(json.dumps(rows, indent=1))
     elif not (a.md or a.csv or a.xlsx):
@@ -270,10 +283,15 @@ def main(argv=None):
                 print(f"no price known for {r['id']}: set [ai.profiles.\"{r['id']}\"] price_in / price_out in ecadlib.toml")
                 return 1
             print(f"{r['id']}: ${r['usd_in']:g} in / ${r['usd_out']:g} out per million tokens (estimates)")
+            pb, mp = pages_of(rules)
+            whole = isinstance(rules, dict) and (rules.get("datasheet") or {}).get("page_budget") == 0
+            print(f"  read: {pb} datasheet pages" + (" (page_budget = 0 sends the whole PDF: priced as a "
+                                                       f"{WHOLE_PDF_PAGES}-page one)" if whole else "")
+                  + f"; visual check: {mp} datasheet pages + 2 drawings")
             for c in COLS[5:]:
                 print(f"  {HEAD[c]:<26} {money(r[c])}")
         else:
-            print(markdown(rows, a.share)[0])
+            print(markdown(rows, a.share, rules)[0])
         print("Estimates from request sizes, not a bill. `ecadlib datasheet estimate BOM` counts a real BOM.")
     return 0
 

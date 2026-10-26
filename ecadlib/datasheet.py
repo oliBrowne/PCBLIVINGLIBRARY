@@ -184,6 +184,11 @@ def settings(rules=None):
     return {**SETTINGS, **{k: v for k, v in (got or {}).items() if k in SETTINGS and v not in (None, "")}}
 
 
+def _usd_arg(s):
+    from .ai_cost import usd_arg                      # nan / inf / negative refused (a nan cap held nothing)
+    return usd_arg(s)
+
+
 def cap_chosen(rules=None):
     """The rules file itself sets [datasheet] max_cost_usd (rules.load records the keys it set): a cap of 10 there is
     the person's, not the default one, though both read 10 once merged over the defaults."""
@@ -403,6 +408,9 @@ class Client:
                                st in (retry_on or RETRY_STATUS) or (retry_on is None and r.status_code >= 500), rid)
                 rec["error"] = f"{etype}: {emsg}"[:300]
                 retry_after = hdr.get("retry-after")
+                if paid and r.status_code == 200 and not (isinstance(payload, dict) and payload.get("type") == "error"):
+                    err.maybe_billed, err.retryable = True, False   # a 200 whose body did not read (cut off, a proxy's
+                    # page): the generation ran and is billed; the cost cap keeps its hold and it is not sent again
             self._log(rec)
             if not err.retryable or attempt == self.retries:
                 if err.retryable and attempt:
@@ -883,6 +891,31 @@ def build_request(source, part, package=None, pages=None, model=MODEL, effort="h
 ZOOM_PX = 2240            # a close-up's width: 0.55 of a Letter / A4 page at 2240 px wide is ~4560 visual tokens, under the 4784
 ZOOM_PAGES = 3            # cap of the newer models (2576 px long edge), so it is sent as rendered, not downscaled
 ZOOM_BANDS = ((0.0, 0.55), (0.45, 1.0))              # top and bottom half, overlapping so no dimension is cut in two
+IMG_TOKENS = 4784         # the most one image costs (high-resolution tier: visual_check.IMG_TOKENS_MAX)
+
+
+def rough_extra_tokens(body, prompt=1500):
+    """Input tokens a rough (pages x PAGE_TOKENS + prompt) estimate leaves out of this request: its images (the zoom
+    close-ups, up to ZOOM_PAGES x 2 of them) at IMG_TOKENS each, and text beyond the `prompt` tokens (a feedback turn
+    carries the first answer and the checks' errors). Without them the hold under max_cost_usd could be lower than
+    what the request is billed."""
+    imgs, chars = 0, 0
+    sysm = body.get("system")
+    chars += len(sysm) if isinstance(sysm, str) else sum(len(str(b.get("text") or "")) for b in sysm or []
+                                                          if isinstance(b, dict))
+    for m in body.get("messages") or []:
+        c = m.get("content") if isinstance(m, dict) else None
+        if isinstance(c, str):
+            chars += len(c)
+            continue
+        for b in c if isinstance(c, list) else []:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "image":
+                imgs += 1
+            elif b.get("type") in ("text", "thinking"):
+                chars += len(str(b.get("text") or b.get("thinking") or ""))
+    return imgs * IMG_TOKENS + max(0, chars // 3 - prompt)
 
 
 def no_zoom():
@@ -1174,12 +1207,23 @@ def to_spec(pkg, part, datasheet, model, offset, review):
             unres = [u for u in unres if not re.match(r"\s*terminal_length\b", str(u))]
             review.append("terminal_length: not read, and not needed: the maker's land sizes the pads (check the land "
                           "against the drawing)")
-    for k in base + NEED.get(t, []):
+    molded = ["terminal_width"] if t == "molded" and not F.lead_land(spec) else []   # else the pads are as wide as
+    # the body (review 196 R-RD-1); the maker's land, when read, sizes them instead
+    need = [k for k in NEED.get(t, []) if not (k == "pitch" and one_lead_per_side(spec))]   # SOD-123: no pitch (R-RD-8)
+    for k in base + need + molded:
         if not any(x in spec or x in unres for x in k.split("|")):
             unres.append(k.replace("|", " or "))
     if unres:
         spec["unresolved"] = sorted(set(unres))
     return spec, prov
+
+
+def one_lead_per_side(spec):
+    """A gull-wing whose listed leads are one on each side or fewer (SOD-123, SOD-323: two leads facing each other):
+    it has no pitch to read, and two pins is its count."""
+    pos = _listed(spec)
+    return spec.get("package_type") == "gullwing" and bool(pos) and \
+        all(sum(1 for p in pos if p.get("side") == sd) <= 1 for sd in {p.get("side") for p in pos})
 
 
 def build_blockers(spec):
@@ -1628,7 +1672,8 @@ def _listed(spec):
     return [p for p in pos if isinstance(p, dict)] if isinstance(pos, list) else []
 
 
-def sanity(spec, review):
+def sanity(spec, review, evidence=""):
+    spec = F.qfp_frame(spec)[0]                       # a QFP's body in footprint_gen's frame, however the read named it
     t, n, e = spec.get("package_type"), spec.get("pin_count"), spec.get("pitch")
     g = lambda k: _dim(spec.get(k))
     for k in DIMS:                                    # unit plausibility after conversion
@@ -1643,9 +1688,12 @@ def sanity(spec, review):
         if any(not math.isfinite(x) or x < 0 for x in vals) or (vals and max(vals) <= 0 and k != "courtyard_excess"):
             review.append(f"{k}: {v} mm is implausible (a size must be a number above 0)")
     for k in ("terminal_length", "terminal_width", "ball_diameter", "land_diameter", "drill"):
-        d = g(k)                                      # smaller than any real lead: a mil value labelled mm, or mil -> mm twice
-        if d and 0 < d[2] < 0.05:
+        d = g(k)                                      # smaller than any real lead: a mil value labelled mm, or mil -> mm twice;
+        low = 0.1 if k.startswith("terminal_") else 0.05   # a foot or lead in inches at the 0.050 boundary (SMA's
+        if d and 0 < d[2] < low:                      # 0.030-0.060 "mm"; no real foot or lead is under 0.1 mm at its max)
             review.append(f"{k}: {d[2]} mm is implausibly small (unit mislabelled?)")
+    review.extend(_two_terminal_terms(spec))
+    review.extend(_header_mount(spec))
     h, hi = spec.get("height_max"), 60 if t in NO_BODY else 25
     if isinstance(h, (int, float)) and not isinstance(h, bool) and 0 < h and not 0.1 <= h <= hi:
         review.append(f"height_max: {h} mm is implausible (0.1-{hi} mm expected; unit mislabelled?)")
@@ -1676,18 +1724,44 @@ def sanity(spec, review):
             if not side or per < 2:
                 continue
             span = (per - 1) * e + (b[2] if b else 0)
-            if span > side[2]:
+            if span > side[2] + 1e-6:                    # (3 x 0.9 + 0.6 is 3.3000000000000003, not over 3.3)
                 review.append(f"{label}: {per} pins at pitch {e} span {span:.2f} mm > {k} max {side[2]} mm")
             elif per * e < low * side[1]:                 # dual-row parts fill the body side; QFN rows can be short
                 review.append(f"{label}: {per} pins x pitch {e} = {per * e:.2f} mm, under {low:.0%} of {k} {side[1]} mm")
     ls, bw = g("lead_span"), g("body_width")
     if t == "gullwing" and ls and bw and ls[0] <= bw[2]:
         review.append(f"lead_span min {ls[0]} <= body_width max {bw[2]}")
+    review.extend(_feet_outside(spec))
+    review.extend(_qfp_rows(spec))
+    review.extend(_qfn_rows(spec))
+    ball, py = g("ball_diameter"), spec.get("pitch_y")
+    near = min(x for x in (e, py, 99) if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0)
+    if t == "bga" and ball and near < 99 and ball[1] >= 0.9 * near:      # (real balls: 0.3 at 0.5, 0.75 at 1.27 mm)
+        review.append(f"ball_diameter {ball[1]:g} mm on a {near:g} mm pitch: the balls would touch, which is implausible "
+                      "(the pitch read as the ball, or the ball's unit?)")
+    if t == "gullwing":
+        review.extend(_listed_layout(spec, evidence))
     ep = spec.get("exposed_pad") or {}
+    eps, bodies = [_dim(ep.get(d)) for d in ("length", "width")], [g(k) for k in ("body_length", "body_width")]
+    # judged as footprint_gen builds it (orient_ep turns a gull-wing pad to run with the body and a DFN pad only to
+    # clear its rows; the pad's length lies on X, a gull-wing's body_width): a pad read along the other axes that is
+    # built to fit is not too big (SOIC-8-1EP's 2.41 x 3.81 pad in a 4.9 x 3.9 body), one built as read is
+    # (DFN-8 3x2: a 1.2 x 1.98 pad fits between the rows, so it stays, 1.98 mm in a 2.0 mm body)
+    built_fits = False
+    if all(eps) and all(bodies) and isinstance(n, int):
+        try:
+            bep = F.orient_ep(spec)[0]["exposed_pad"]
+            bx, by = (bodies[1], bodies[0]) if t == "gullwing" else (bodies[0], bodies[1])
+            built_fits = F.dim(bep["length"])[1] < bx[0] and F.dim(bep["width"])[1] < by[0]
+        except (TypeError, KeyError, ValueError):
+            pass
     for d, k in (("length", "body_length"), ("width", "body_width")):
         v, body = _dim(ep.get(d)), g(k)
-        if v and body and v[1] >= body[0]:
+        if v and body and v[1] >= body[0] and not built_fits:
             review.append(f"exposed_pad.{d} {v[1]} >= {k} min {body[0]}")
+        small = max(0.2, b[1] if b else 0)            # an inch value labelled mm (0.057 "mm" for 1.45 mm): narrower
+        if v and 0 < v[1] < small:                    # than a lead (the smallest real ones: 0.4 mm beside 0.2 leads)
+            review.append(f"exposed_pad.{d}: {v[1]:g} mm is implausibly small for an exposed pad (unit mislabelled?)")
     land, outer = spec.get("land") or {}, g("lead_span") or g("body_width")
     lc, ll = land.get("pad_center"), land.get("pad_length")
     if isinstance(lc, (int, float)) and isinstance(ll, (int, float)) and outer and lc > outer[2] / 2 + ll:
@@ -1706,6 +1780,324 @@ def sanity(spec, review):
     if small:
         review.append(f"land pattern: {small}")
     review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
+
+
+SAYS_SMD = re.compile(r"(?<![A-Za-z0-9])(?:SMD|SMT)(?![A-Za-z0-9])|surface[ -]?mount", re.I)
+SAYS_THT = re.compile(r"(?<![A-Za-z0-9])(?:THT|THD)(?![A-Za-z0-9])|through[ -]?hole", re.I)
+KICAD_HEADER = re.compile(r"^Pin(?:Header|Socket)_\d+x\d+_P[\d.]+mm_", re.I)
+
+
+def _header_mount(spec):
+    """A pin header whose mount contradicts its own name or description (review 196 R-RD-6): mount smd on a header
+    named or described through-hole (a KiCad PinHeader / PinSocket name without _SMD is through-hole), or mount tht
+    (or none: the default) on one that says SMD, built the other pad kind under that name. -> review lines."""
+    if spec.get("package_type") != "pin_header":
+        return []
+    name, text = str(spec.get("name") or ""), f"{spec.get('name') or ''} {spec.get('description') or ''}"
+    mount = spec.get("mount") or "tht"
+    smd, tht = bool(SAYS_SMD.search(text)), bool(SAYS_THT.search(text)) or bool(KICAD_HEADER.match(name)) and \
+        not SAYS_SMD.search(name)
+    if mount == "tht" and smd and not tht:
+        return [f"mount: tht, but the header's name / description says SMD ({name}), which is implausible: check the "
+                "drawing (SMD pads, or pins through the board?) and set mount"]
+    if mount == "smd" and tht and not smd:
+        return [f"mount: smd, but the header's name / description says through-hole ({name}), which is implausible: "
+                "check the drawing (pins through the board, or SMD pads?) and set mount"]
+    return []
+
+
+def _two_terminal_terms(spec):
+    """A chip / molded part's terminals against its body (review 196 R-RD-1): a terminal in inches (SMC's terminal_width
+    0.108-0.125 "mm"), wider than the body, or an inner_span as long as the body builds pads off the part with nothing
+    else to catch it. Bounds no real part breaks (KiCad's 74 chip sizes, JEDEC DO-214, EIA tantalum cases, MELF): the
+    terminal_length max at least 5 % of the body length, terminal_width max at least 20 % of the body width and its nom
+    no more than 1.1 x the body's, the inner_span max under the body length min. A molded part's terminal_width is
+    needed: left blank, the pads would be built as wide as the body; a MELF's end caps are about its diameter.
+    -> review lines (a failed read)."""
+    if spec.get("package_type") not in ("chip", "molded"):
+        return []
+    g = lambda k: _dim(spec.get(k))
+    L, W, T, b, S = g("body_length"), g("body_width"), g("terminal_length"), g("terminal_width"), g("inner_span")
+    out = []
+    if T and L and 0 < T[2] < 0.05 * L[1]:
+        out.append(f"terminal_length max {T[2]:g} mm is under 5% of the {L[1]:g} mm body_length, which is implausible "
+                   "for a terminal (unit mislabelled, inches read as mm?)")
+    if b and W and 0 < b[2] < 0.2 * W[1]:
+        out.append(f"terminal_width max {b[2]:g} mm is under 20% of the {W[1]:g} mm body_width, which is implausible "
+                   "for a terminal (unit mislabelled, inches read as mm?)")
+    if b and W and spec.get("lead_type") == "melf" and b[2] < 0.6 * W[1]:   # a MELF's end caps are its diameter
+        out.append(f"terminal_width max {b[2]:g} mm is under 60% of the {W[1]:g} mm body diameter, which is implausible "
+                   "for a MELF's end caps (they are as wide as the body; a land width read as the terminal?)")
+    if b and W and (b[0] > W[2] + 1e-6 or b[1] > 1.1 * W[1]):
+        out.append(f"terminal_width {b[0]:g}-{b[2]:g} mm is wider than the {W[0]:g}-{W[2]:g} mm body_width, which is "
+                   "implausible (terminal_width is one terminal's width across the part; check it and body_width)")
+    if S and L and S[2] >= L[0] - 1e-6:
+        out.append(f"inner_span max {S[2]:g} mm is not shorter than body_length min {L[0]:g} mm, which is implausible "
+                   "(inner_span is the gap between the two terminals, inside the body)")
+    if spec.get("package_type") == "molded" and spec.get("terminal_width") is None and not F.lead_land(spec):
+        out.append("terminal_width: not read for a molded part; its pads would be built as wide as the body, which is "
+                   "implausible for molded terminals (read the terminal width from the drawing)")
+    return out
+
+
+J_LEAD = re.compile(r"SOJ|PLCC|J[- ]?(?:lead|bend)|chip carrier|"            # by name, or by the JEDEC outline:
+                    r"\bM[OS]-?(?:047|016|018|027|065)\b", re.I)   # PLCC MO-047 / MS-016 / MS-018, SOJ
+
+
+def _feet_outside(spec):
+    """A gull-wing foot (terminal_length L) lies outside the plastic, so the span across the leads leaves room for two
+    of them beyond the body: lead_span max - body_width min >= 2 x L min, in every tolerance combination, and >= 2 x L nom. A read that
+    breaks it (E read close to E1, L or the body misread, a span in the wrong unit) builds its pads under the body.
+    Inward (molded), MELF and J leads (SOJ, PLCC: the standard table has them as gull-wings) lie under the body and
+    are left out."""
+    if spec.get("package_type") not in ("gullwing", "qfp") or spec.get("lead_type") in ("molded", "melf") or \
+            J_LEAD.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
+        return []
+    spec = F.qfp_frame(spec)[0]
+    L = _dim(spec.get("terminal_length"))
+    out = []
+    # leads listed on one side only (SOT-89: three leads on one side, the tab under the other) put the whole of the
+    # room on that side: only L min is checked there
+    sides = {p.get("side") for p in _listed(spec)}
+    two_sided = not sides or {"L", "R"} <= sides
+    # the span across the body side it crosses, in footprint_gen's frame: a gull-wing's lead_span crosses body_width;
+    # a QFP's lead_span crosses body_length (X) and lead_span_y (lead_span when square) body_width, as fpgen-12 checks
+    pairs = (("lead_span", "body_width"),) if spec["package_type"] == "gullwing" else \
+        (("lead_span", "body_length"), ("lead_span_y" if spec.get("lead_span_y") else "lead_span", "body_width"))
+    for span_k, body_k in pairs:
+        span, body = _dim(spec.get(span_k)), _dim(spec.get(body_k))
+        if not (L and span and body) or L[0] <= 0:
+            continue
+        room = span[2] - body[0]
+        if room < 2 * L[0] - 0.01:
+            out.append(f"terminal_length min {L[0]:g} mm does not fit outside the body: {span_k} max {span[2]:g} - "
+                       f"{body_k} min {body[0]:g} leaves {room / 2:.3g} mm per side for the foot, which is implausible "
+                       f"(check {span_k}, {body_k} and terminal_length against the drawing)")
+        elif room < 2 * L[1] - 0.01 and two_sided:   # the nominal foot too (review 196 R-RD-2: L x 2.54 on a TSSOP-14,
+            out.append(f"terminal_length nom {L[1]:g} mm does not fit outside the body: {span_k} max {span[2]:g} - "
+                       f"{body_k} min {body[0]:g} leaves {room / 2:.3g} mm per side for the foot, which is implausible "
+                       f"(the lead length or a value in 0.1 in read as the foot? check terminal_length against the "
+                       "drawing)")                # 1.14-1.91 with a 0.45 min, only the min was checked)
+    return out
+
+
+# "reverse pinning", SOT-143R, SOT-23R, SOT-143R_Nexperia; a dashed "-R" only for the 4-lead families sold reverse-
+# pinned (SOT-143-R, SOT-343-R): elsewhere it is a reel (SOT23-R, SOT-363-R). Not "reverse current", SOT-23-Reel
+REVERSE_PINNED = re.compile(r"revers\w*[- ]?pin|(?<![A-Za-z0-9])SOT-?(?:\d+R|[13]43-R)(?![A-Za-z0-9])", re.I)
+
+
+def _qfp_rows(spec):
+    """A rectangular QFP (in footprint_gen's frame: qfp_frame) whose read can't be built right: the side with more pins
+    along the shorter body side (the left/right rows run along body_width), or one lead_span only, which builds all
+    four rows at it. A square QFP has one span and no long side. -> review lines (a failed read)."""
+    if spec.get("package_type") != "qfp":
+        return []
+    L, W = _dim(spec.get("body_length")), _dim(spec.get("body_width"))
+    if not (L and W) or abs(L[1] - W[1]) <= max(0.3, 0.05 * min(L[1], W[1])):
+        return []
+    out = []
+    nlr, ntb = spec.get("pins_left_right"), spec.get("pins_top_bottom")
+    if isinstance(nlr, int) and isinstance(ntb, int) and nlr != ntb and (nlr > ntb) != (W[1] > L[1]):
+        out.append(f"pins_left_right {nlr} and pins_top_bottom {ntb} put more pins along the shorter side of the "
+                   f"{L[1]:g} x {W[1]:g} mm body (the left/right rows run along body_width): the rows or the body are "
+                   "read the other way round, which is implausible (check them against the drawing)")
+    e = spec.get("pitch")
+    if not isinstance(nlr, int) or isinstance(nlr, bool):
+        out.append(f"pins_left_right missing: a rectangular {L[1]:g} x {W[1]:g} mm QFP has more pins along its longer "
+                   "side, and with no row split every side would get a quarter of the pins, which is implausible "
+                   "(give pins_left_right and pins_top_bottom, the pins on each side)")
+    elif isinstance(spec.get("pin_count"), int) and isinstance(e, (int, float)) and e > 0 and not out:
+        nlr, ntb = F.rows(spec)
+        # real rows leave about the same margin at each end of every side (QFP-52 12x14: 14/12 pins leave 3.6 and 3.2
+        # mm; QFP-100 14x20, 30/20 at 0.65: 1.15 and 1.65), within a pitch; an equal split on a rectangular body
+        # leaves them a body difference apart, a split one pin off two pitches more
+        off = (W[1] - L[1]) - (nlr - ntb) * e
+        if abs(off) > 1.15 * e and nlr == ntb:
+            out.append(f"pins_left_right {nlr} and pins_top_bottom {ntb}: equal rows on a rectangular {L[1]:g} x "
+                       f"{W[1]:g} mm QFP leave a margin {abs(W[1] - L[1]):g} mm longer on one side than the other, "
+                       "which is implausible (give the pins on each side as the drawing or the pin diagram shows)")
+        elif abs(off) > 1.15 * e:
+            out.append(f"pins_left_right {nlr} and pins_top_bottom {ntb} at pitch {e:g} leave end margins {abs(off):.3g} "
+                       f"mm apart on the {L[1]:g} x {W[1]:g} mm body (real rows: within a pitch), which is implausible "
+                       "(a pin counted on the wrong side? check the pins on each side against the pin diagram)")
+    if spec.get("lead_span") is not None and spec.get("lead_span_y") is None:
+        out.append(f"lead_span_y missing: a rectangular {L[1]:g} x {W[1]:g} mm QFP has a different span across each "
+                   "pair of sides, and one lead_span would build all four rows at it, which is implausible (give "
+                   "lead_span_y, the span across the top and bottom rows)")
+    sx, sy = _dim(spec.get("lead_span")), _dim(spec.get("lead_span_y"))
+    if sx and sy:                                     # the feet are as long on every side: the spans differ as the
+        want, got = W[1] - L[1], sy[1] - sx[1]         # body sides do (a span copied into both: 0 apart, rows 1 mm out)
+        if abs(got - want) > max(0.3, 0.25 * abs(want)):
+            out.append(f"lead_span {sx[1]:g} and lead_span_y {sy[1]:g} differ by {got:.3g} mm but the {L[1]:g} x "
+                       f"{W[1]:g} mm body sides differ by {want:.3g} mm: the feet would be longer on one pair of "
+                       "sides, which is implausible (check both spans against the drawing)")
+    ep = spec.get("exposed_pad") or {}
+    el, ew = _dim(ep.get("length")), _dim(ep.get("width"))
+    # length on X, as body_length; only a pad at least 10 % longer one way has a long side (8.1 x 8 has none)
+    if el and ew and max(el[1], ew[1]) >= 1.1 * min(el[1], ew[1]) and (el[1] > ew[1]) != (L[1] > W[1]):
+        out.append(f"exposed_pad {el[1]:g} x {ew[1]:g} mm runs across the {L[1]:g} x {W[1]:g} mm body (a pad runs with "
+                   "the body's long side), which is implausible (check exposed_pad length and width against the body's)")
+    return out
+
+
+def _qfn_rows(spec):
+    """A rectangular quad QFN whose row split leaves the end margins of its sides (each side's rows against the body
+    side they run along: left / right along body_width, top / bottom along body_length) too far apart. QFN rows are
+    not centred as a QFP's are: KiCad's rectangular quad QFNs differ by up to 2.25 pitches (UQFN-10 1.3x1.8 2/3 at
+    0.4: 0.9 mm; WQFN-42 3.5x9 17/4, QFN-16 1.8x2.6 4/4: two), so the allowance is 2.25 pitches and 0.1 mm (tiny
+    bodies round their margins), the 0.1 mm at most a fifth of a pitch so it stays under 2.5 pitches (QFN-24 3x4 P0.4
+    7/5 read 6/6 is 2.5 off). A split further off is caught (QFN-38 5x7, 12/7, read 10/9 or 13/6: three pitches).
+    One pin on the wrong side moves the margins exactly two pitches, so a split one pin off a part whose margins
+    match (QFN-24 4x5 7/5 read 6/6 or 8/4) looks like a real part's and is not caught here: only the pins on each
+    side read from the pin diagram could tell. -> review lines (a failed read)."""
+    nlr, e = spec.get("pins_left_right"), spec.get("pitch")
+    if spec.get("package_type") != "qfn" or not isinstance(nlr, int) or isinstance(nlr, bool) or \
+            not isinstance(spec.get("pin_count"), int) or not isinstance(e, (int, float)) or e <= 0:
+        return []
+    L, W = _dim(spec.get("body_length")), _dim(spec.get("body_width"))
+    if not (L and W) or abs(L[1] - W[1]) <= max(0.3, 0.05 * min(L[1], W[1])):
+        return []
+    nlr, ntb = F.rows(spec)
+    if not (isinstance(ntb, int) and ntb > 0 and nlr > 0):            # a DFN: one pair of rows, no margins to compare
+        return []
+    m_lr, m_tb = (W[1] - (nlr - 1) * e) / 2, (L[1] - (ntb - 1) * e) / 2   # each side: its end pins to the corners
+    off = 2 * (m_lr - m_tb)
+    # strictly under 2.5 pitches: at 0.4 mm a flat 0.1 mm made it exactly 2.5, the offset of a split one pin off a part
+    # whose margins are half a pitch apart (QFN-24 3x4 7/5 read 6/6), so the slack is at most a fifth of a pitch
+    if abs(off) < 2.25 * e + min(0.1, 0.2 * e) - 1e-9:
+        return []
+    return [f"pins_left_right {nlr} and pins_top_bottom {ntb} at pitch {e:g} leave end margins {abs(off):.3g} mm apart "
+            f"on the {L[1]:g} x {W[1]:g} mm body (real rows: within two pitches), which is implausible (a pin counted on "
+            "the wrong side? check the pins on each side against the pin diagram)"]
+
+
+def _listed_layout(spec, evidence=""):
+    """A gull-wing read that places its pads (pin_positions) against what every such package has: pin 1 at the top of
+    the left row or the bottom of the right one, numbered counter-clockwise seen from the top (down the left side, up
+    the right: KiCad's SOT-23, SOT-223, TO-252); pads whole pitches apart along a side; the leads centred on the body;
+    a tab no longer than the body and on it. Offsets given "+ up" or read from the bottom view mirror the footprint,
+    and the cross-check, which compares the pins along each side seen any way round, cannot tell (pins 1 and 2 of a
+    SOT-23 swapped). evidence: the BOM's package and the MPN, the only words a reverse-pinned exemption trusts (the
+    model's own name and description can echo the failure text, or a family sheet's "BF998; BF998R").
+    -> review lines (a failed read: read again or held)."""
+    out, e = [], spec.get("pitch")
+    pos = [p for p in _listed(spec) if isinstance(p.get("offset"), (int, float)) and not isinstance(p.get("offset"), bool)
+           and p.get("side") in ("L", "R")]
+    num = lambda p: int(p["number"]) if str(p.get("number")).isdecimal() else None
+    rows = {sd: sorted((num(p), p["offset"]) for p in pos if p["side"] == sd and num(p) is not None) for sd in "LR"}
+    # each side with 2+ pins: counter-clockwise (+1), clockwise (-1) or neither (0). Reverse-pinned packages (NXP
+    # SOT143R, the BF998R family) are numbered clockwise by design, so a part clockwise on every side is not told it
+    # is impossible: named so, it is built with a note for the person; otherwise the read fails with both causes named
+    way = {sd: (1 if all(b[1] > a[1] for a, b in zip(r, r[1:])) else -1 if all(b[1] < a[1] for a, b in zip(r, r[1:]))
+                else 0) * (1 if sd == "L" else -1) for sd, r in rows.items() if len(r) >= 2}
+    if way and set(way.values()) == {-1}:
+        where = "; ".join(f"side {sd} pins {', '.join(str(n) for n, _ in rows[sd])} at {', '.join(f'{o:g}' for _, o in rows[sd])}"
+                          for sd in way)
+        if REVERSE_PINNED.search(str(evidence or "")):
+            out.append(f"pin_positions: pins numbered clockwise seen from the top ({where}), as a reverse-pinned package "
+                       "is: check pin 1 and the order against the drawing's top view")
+        else:
+            out.append(f"pin_positions: pins run clockwise seen from the top on every side ({where}; offset + is down). "
+                       "Either the read is mirrored (offsets given + up, or read from the bottom view), which is "
+                       "implausible, or the package is reverse-pinned (e.g. SOT-143R): if the drawing's top view numbers "
+                       "them clockwise, say \"reverse pinning\" in the description and keep the offsets; else give them as "
+                       "seen from the top")
+        way = {}
+    for side, sign in (("L", 1), ("R", -1)):
+        row = rows[side]
+        if way and any((b[1] - a[1]) * sign <= 0 for a, b in zip(row, row[1:])):
+            out.append(f"pin_positions: pins {', '.join(str(n) for n, _ in row)} on side {side} run "
+                       f"{'up' if sign > 0 else 'down'} it (offsets {', '.join(f'{o:g}' for _, o in row)}): pins are "
+                       f"numbered counter-clockwise seen from the top (down the left side, up the right; offset + is "
+                       "down), so the footprint would be mirrored: implausible (check the drawing's top view)")
+        offs = sorted(o for p in pos if p["side"] == side for o in [p["offset"]])
+        if isinstance(e, (int, float)) and e > 0:         # (SOT-143's wide pin 1 sits 1.7 from pin 2 at e = 1.9)
+            off = [b - a for a, b in zip(offs, offs[1:]) if abs((b - a) / e - round((b - a) / e)) > 0.15
+                   or round((b - a) / e) < 1]
+            if off:
+                out.append(f"pin_positions: pads on side {side} at {', '.join(f'{o:g}' for o in offs)} mm are not whole "
+                           f"pitches ({e:g} mm) apart: the pitch or the offsets are misread (implausible layout)")
+    offs = [p["offset"] for p in pos]
+    if len(offs) >= 2 and isinstance(e, (int, float)) and e > 0 and abs(max(offs) + min(offs)) / 2 > 0.25 * e + 0.01:
+        out.append(f"pin_positions: the leads run from {min(offs):g} to {max(offs):g} mm, centred "
+                   f"{(max(offs) + min(offs)) / 2:g} mm off the body's centre (offsets are from the centre; implausible "
+                   "layout)")
+    tab, body = spec.get("tab"), _dim(spec.get("body_length"))
+    # three or more leads bunched in the middle of the body: offsets read at half their size (SOT-23's +-0.95 read
+    # +-0.475, one pitch apart, review 196 R-RD-7). Real listed-lead packages spread theirs over half the body length
+    # or more (SOT-23 66 %, SOT-223 71 %, TO-263-3 50 %). One row beside a tab: sanity's row-fill rule asks already
+    if len(offs) >= 3 and {p["side"] for p in pos} == {"L", "R"} and body and body[1] > 0 and \
+            max(offs) - min(offs) < 0.4 * body[1]:
+        out.append(f"pin_positions: the {len(offs)} leads run from {min(offs):g} to {max(offs):g} mm, under 40% of the "
+                   f"{body[1]:g} mm body length, which is implausible (offsets halved, or given from the middle lead?)")
+    w = _dim(tab.get("width")) if isinstance(tab, dict) else None
+    if w and body:
+        o = tab.get("offset") if isinstance(tab.get("offset"), (int, float)) and not isinstance(tab.get("offset"), bool) else 0
+        if w[0] > body[2] + 0.05:
+            out.append(f"tab: width min {w[0]:g} mm is wider than the body (body_length max {body[2]:g} mm): implausible")
+        elif abs(o) + w[0] / 2 > body[2] / 2 + 0.05:
+            out.append(f"tab: at offset {o:g} mm, {w[0]:g} mm wide, it runs past the end of the {body[2]:g} mm body: "
+                       "implausible")
+    out.extend(_tab_fits(spec, pos))
+    return out
+
+
+def _tab_fits(spec, pos):
+    """A gull-wing tab (SOT-89, SOT-223, DPAK) against its leads (review 196 R-RD-5): its width or length in inches
+    (SOT-89's 1.62-1.83 read 0.064-0.072), no wider than a lead (the lead's b read as the tab), on the leads' own side
+    on top of a lead, or off the body's centre by a pitch: each built a wrong tab pad with nothing else to catch it.
+    Every such package has its tab centred on the side away from the leads. -> review lines (a failed read)."""
+    tab = spec.get("tab")
+    if not isinstance(tab, dict):
+        return []
+    out = []
+    w, tl, b, body = (_dim(tab.get("width")), _dim(tab.get("length")), _dim(spec.get("terminal_width")),
+                      _dim(spec.get("body_length")))
+    for k, d in (("width", w), ("length", tl)):
+        if d and 0 < d[2] < 0.1:
+            out.append(f"tab: {k} max {d[2]:g} mm is implausibly small for a tab (unit mislabelled?)")
+    if w and b and 0.1 <= w[2] <= b[2]:
+        out.append(f"tab: width max {w[2]:g} mm is no wider than a lead (terminal_width max {b[2]:g} mm), which is "
+                   "implausible for a tab (a lead's width read as the tab's?)")
+    o = tab.get("offset") if isinstance(tab.get("offset"), (int, float)) and not isinstance(tab.get("offset"), bool) else 0
+    side = tab.get("side", "R")
+    half = (w[1] if w else 0) / 2 + (b[1] if b else 0) / 2
+    under = [str(p.get("number")) for p in pos if p["side"] == side and abs(p["offset"] - o) < half]
+    if under:
+        out.append(f"tab: on side {side}, the leads' own side, at offset {o:g} mm it lies on lead(s) {', '.join(under)}, "
+                   "which is implausible: a tab is on the side away from the leads (check the tab's side)")
+    if body and abs(o) > 0.25 * body[1]:
+        out.append(f"tab: offset {o:g} mm puts it off the centre of the {body[1]:g} mm body, which is implausible: a "
+                   "tab is centred on its side (offsets are from the body's centre)")
+    return out
+
+
+def pads_vs_pins(rep, pins):
+    """The pads footprint_gen.build made (rep["pads"]) against the symbol's pin numbers, as the release check compares
+    them: a symbol pin with no pad, or a numbered pad (not a mounting / shield pad) with no pin. check_pins compares the
+    pins with 1..N; this catches what that leaves to the layout: a pin_positions number repeated or not in the pin
+    table, a tab numbered with a number the table does not have, a pad table numbered apart from the pins. Such a read
+    passed and was built, and only the release check found it. -> "symbol:" lines (a failed read)."""
+    from . import footprint_check as FC
+    pads = [p for p in rep.get("pads") or [] if isinstance(p, dict)]
+    if not pads:
+        return []
+    if rep.get("ep_num") is not None:                 # footprint_gen's exposed pad is drawn apart from rep["pads"]
+        pads.append({"num": str(rep["ep_num"])})
+    nums = {str(p.get("num") or "") for p in pads}
+    mount = FC.mount_rx(nums)
+    numbered = {str(p["num"]) for p in pads if p.get("num") not in (None, "") and p.get("role", "pin") in ("pin", "thermal")
+                and p.get("kind") != "np_thru_hole" and not mount.fullmatch(str(p["num"]))}
+    have = {str(q.get("num")) for q in pins or []}
+    key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)
+    out = []
+    if have - nums:
+        out.append(f"symbol: pins with no pad on the footprint {sorted(have - nums, key=key)[:20]} (the footprint's "
+                   f"pads are {', '.join(sorted(nums - {''}, key=key)[:20])})")
+    if numbered - have:
+        out.append(f"symbol: footprint pads with no pin {sorted(numbered - have, key=key)[:20]} (check the pad numbers "
+                   "against the pin table)")
+    return out
 
 
 BANK_NAME = re.compile(r"^([A-Z]+?)_?(\d{1,3})$")
@@ -1737,6 +2129,24 @@ def bank_slips(pins):
             out.append(f"symbol: {on}, and the {pre} bank has no {', '.join(f'{pre}{k}' for k in gap)}: a channel "
                        "read onto another channel's pin (check the pin table)")
     return out
+
+
+def ep_number(spec, ext, review):
+    """An exposed pad numbered after gap-numbered leads (SOIC-14-16 + EP: leads 1-12, 15, 16, the thermal pad 17): the
+    default pin_count + 1 is a lead's number, and no read schema carries exposed_pad.number, so the number is taken
+    from the read's own pin table: the one number past the highest listed lead, when it is there and pin_count + 1
+    is a lead. Set on the spec (footprint_gen numbers the pad with it), with a line for the person."""
+    ep, n = spec.get("exposed_pad"), spec.get("pin_count")
+    if not isinstance(ep, dict) or ep.get("number") not in (None, "") or not isinstance(n, int) or spec.get("tab"):
+        return
+    leads = {str(p.get("number")) for p in _listed(spec)}
+    if len(leads) != n or str(n + 1) not in leads or not all(x.isdecimal() for x in leads):
+        return
+    nxt = str(max(int(x) for x in leads) + 1)
+    if nxt in {str(p.get("num")) for p in ext.get("pins") or []}:
+        spec["exposed_pad"] = dict(ep, number=nxt)
+        review.append(f"exposed_pad: numbered {nxt} from the pin table (the leads are {', '.join(sorted(leads, key=int))},"
+                      f" so pin_count + 1 = {n + 1} is a lead); check the thermal pad's number on the drawing")
 
 
 def check_pins(spec, ext, review):
@@ -1781,8 +2191,11 @@ def check_pins(spec, ext, review):
     if rows != n:
         review.append(f"pin count: drawing says {n}, pin table has {rows}")
     listed = {str(p.get("number")) for p in _listed(spec)}          # a depopulated row: its pads' own numbers
-    want = listed if len(listed) == n and not spec.get("exposed_pad") and not spec.get("tab") else \
-        {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if spec.get("exposed_pad") else set())
+    ep = spec.get("exposed_pad")
+    epn = str(ep["number"]) if isinstance(ep, dict) and ep.get("number") not in (None, "") else None
+    want = listed if len(listed) == n and not ep and not spec.get("tab") else \
+        listed | {epn} if epn and len(listed) == n and not spec.get("tab") else \
+        {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if ep else set())
     key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)
     miss, extra = sorted(want - set(nums), key=key), sorted(set(nums) - want, key=key)
     if miss:
@@ -1896,7 +2309,7 @@ def self_check(spec, ext, review):
         add(f"pitch {e} mm is outside the usual {prange[0]}-{prange[1]} mm for {t}")
     if side is not None and not brange[0] <= side <= brange[1]:
         add(f"body {side} mm is outside the usual {brange[0]}-{brange[1]} mm for {t}")
-    if n is not None and not nrange[0] <= n <= nrange[1]:
+    if n is not None and not nrange[0] <= n <= nrange[1] and not (n == 2 and one_lead_per_side(spec)):
         add(f"pin_count {n} is outside the usual {nrange[0]}-{nrange[1]} for {t}")
     info.append(f"checked against {t} norms: pitch {prange or '-'}, body {brange}, pins {nrange}")
     return info
@@ -1933,24 +2346,36 @@ def table_check(pkg, tables, offset, review):
         row = hit["rows"][lab]
         tol = 0.006 if k_mm == 1.0 else 0.03          # an inch column is rounded differently from the mm one
         mine = {x: d.get(x) * k_mm for x in ("min", "nom", "max") if isinstance(d.get(x), (int, float))}
+        gross = lambda m, v: abs(m - v) > max(0.05, 0.1 * abs(v))   # not a rounding: another value (pitch x 2)
         if row["span"]:
             v = next(row[x] for x in ("min", "nom", "max") if row[x] is not None)
             off = [f"{x} {m:g}" for x, m in mine.items()] if mine and not any(abs(m - v) <= tol for m in mine.values()) else []
+            big = bool(off) and all(gross(m, v) for m in mine.values())
             off = [f"{', '.join(off)} mm, the table says {v:g} mm"] if off else []
             fill = []
         else:
             off = [f"{x} {mine[x]:g}, table {row[x]:g}" for x in mine if row[x] is not None and abs(mine[x] - row[x]) > tol]
+            big = any(gross(mine[x], row[x]) for x in mine if row[x] is not None)
             off = [f"{'; '.join(off)} mm"] if off else []
             fill = [x for x in ("min", "nom", "max") if x not in mine and row[x] is not None] if k_mm == 1.0 else []
         if mine or fill:
-            found.setdefault(id(hit), (hit, []))[1].append((k, lab, d, row, off, fill))
+            found.setdefault(id(hit), (hit, []))[1].append((k, lab, d, row, off, fill, big))
+    # the dimensions the pads are sized or placed from: a gross disagreement with the code-read table fails the read;
+    # the body only where it places the pads (chip / molded ends, QFN toes), the height never
+    copper = {"pitch", "pitch_y", "lead_span", "lead_span_y", "terminal_length", "terminal_width", "inner_span",
+              "ball_diameter", "land_diameter", "drill", "exposed_pad.length", "exposed_pad.width"}
+    if pkg.get("package_type") in ("chip", "molded", "qfn"):
+        copper |= {"body_length", "body_width"}
     for t, rows in found.values():
         bad = sum(1 for r in rows if r[4])
         if bad >= 2 and bad * 2 > len(rows):          # most of it disagrees: not this package's table
             continue
         where = f"the dimension table on p{t['page']} (read in code)"
-        for k, lab, d, row, off, fill in rows:
-            if off:
+        for k, lab, d, row, off, fill, big in rows:
+            if off and big and k in copper:           # review 196 R-FX14-2: AH1806-W's pitch read 1.9 for the
+                review.append(f"{k} ({lab}) differs from {where}: {off[0]}: the read and the drawing's own table "
+                              "disagree on a dimension the pads are built from, which is implausible: check the read")
+            elif off:                                 # table's 0.95 was only a review line, and built 2.4 mm off
                 review.append(f"{k} ({lab}) differs from {where}: {off[0]}: check the read")
             elif fill:
                 for x in fill:
@@ -2169,10 +2594,11 @@ def basic_span(spec, review):
                           "taken for the land; check the drawing's lead tip tolerance")
 
 
-def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, facts=None, tables=None):
+def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, facts=None, tables=None, package=None):
     """Extraction -> {spec, symbol, sidecar, needs_review}. Never alters a value to make a check pass.
     n_sent: how many pages were sent when offset is an int (--pages A-B), so citations past them are caught too.
-    facts / tables: the ordering table and dimension tables read in code (ds_route), checked against the read."""
+    facts / tables: the ordering table and dimension tables read in code (ds_route), checked against the read.
+    package: the BOM's footprint / package for the part (never the model's words): evidence a check may trust."""
     review = [f"{INJECTION}: {q[:200]!r}" for q in ext["embedded_instructions"]]
     n = len(offset) if isinstance(offset, list) else n_sent   # auto page selection: page k sent is offset[k - 1]
     if n:
@@ -2200,6 +2626,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     two_sided(spec, review)
     grid_from_balls(spec, ext, review)
+    ep_number(spec, ext, review)
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):
@@ -2207,7 +2634,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             review.append("same_net from the pin table (pads whose pins share a name may overlap): "
                           + "; ".join(",".join(g) for g in nets))
     ok = schema_check(spec, review)
-    sanity(spec, review)
+    sanity(spec, review, f"{package or ''} {part or ''}")
     check_pins(spec, ext, review)
     info = self_check(spec, ext, review)
     if spec.get("pad_table"):
@@ -2225,6 +2652,8 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             txt, rep = F.build(spec)
             from . import sexpr
             sexpr.parse(txt)
+            if not any(r.startswith(("symbol: pins missing", "symbol: pins not on the footprint")) for r in review):
+                review.extend(pads_vs_pins(rep, ext["pins"]))   # (check_pins already said it when it did)
             if rep.get("warning"):
                 review.append(f"footprint_gen: {rep['warning']}")
             if F.lead_land(spec):                     # the maker's land pattern becomes copper as given: check it now,
@@ -2372,9 +2801,9 @@ def write(res, outdir):
     if own.exists() or isinstance(other, dict) and "package_type" in other and other != json.loads(json.dumps(res["spec"])):
         spec_f = d / f"{spec_stem}.{part}.json"       # kept apart: ecadlib fp-edit reads this part's own
     paths = {"spec": spec_f, **paths}
-    for k in ("spec", "symbol", "sidecar"):
-        paths[k].write_text(json.dumps(res[k], indent=2) + "\n", encoding="utf-8")
-    paths["report"].write_text(report(res), encoding="utf-8")
+    for k in ("spec", "symbol", "sidecar"):          # read back by fp-edit, partview and the web UI: never half written
+        write_text_atomic(paths[k], json.dumps(res[k], indent=2) + "\n")
+    write_text_atomic(paths["report"], report(res))
     return paths
 
 
@@ -2496,8 +2925,9 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
 
 def _mpn_key(s):
     """A part number or file name as part numbers are compared everywhere (kicad_index.norm_mpn): no case or
-    punctuation, µ as U, accented and full-width letters plain, any other letter kept (К561ТМ2, 蜂鸣器)."""
-    return norm_mpn(s)
+    punctuation, µ as U, accented and full-width letters plain, any other letter kept (К561ТМ2, 蜂鸣器). Read one
+    character at a time, so a decimal point drops out too (norm_mpn dots=False)."""
+    return norm_mpn(s, dots=False)
 
 
 # CJK, kana and hangul: in a file name after the part number, words (TP4056中文资料.pdf), as symbols are (NE555™.pdf)
@@ -2767,9 +3197,17 @@ def mentions_part(texts, mpn, short=False, whole=False):
 # ("PCN 2019-114") is no notice's title: an end-of-life notice says so ("End of Life Notification")
 PCN = r"\bPCN\b(?!\s*[-#:]?\s*[\d-]+\s*$)"
 EOL = r"\b(?:end[- ]of[- ]life|last[- ]time\s+buy)\s+(?:notice|notification|announcement|letter)\b"
+# a compliance document a product page embeds or links beside the datasheet (R-FX19-2): it names the part and its
+# package, never its pins or drawing. A datasheet's "RoHS compliant" / "REACH compliant" banner is no such heading
+COMPLIANCE = (r"\bRoHS\s+(?:compliance\s+)?(?:certificate|declaration|statement)\b|"
+              r"\bcertificate\s+of\s+(?:compliance|conformity|conformance|analysis)\b|"
+              r"\b(?:EU\s+)?declaration\s+of\s+(?:conformity|conformance|compliance)\b|"
+              r"\b(?:full\s+)?material\s+(?:declaration|composition\s+(?:declaration|report)|content\s+declaration)\b|"
+              r"\bREACH\s+(?:SVHC\s+)?(?:compliance\s+)?(?:certificate|declaration|statement)\b|"
+              r"\bconflict\s+minerals?\s+(?:declaration|report|statement)\b")
 OTHER_DOC = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|" + PCN + r"|\bnotification\s+of\b|"
                        r"\bdeclaration\s+letter\b|\b(?:development|evaluation|demo)\s+(?:board|kit)\b|"
-                       r"\buser'?s?\s+(?:guide|manual)\b|\bapplication\s+note\b|" + EOL, re.I)
+                       r"\buser'?s?\s+(?:guide|manual)\b|\bapplication\s+note\b|" + EOL + "|" + COMPLIANCE, re.I)
 
 
 POINTER = re.compile(r"\b(?:available|see|refer|visit|download|for\s+more|included)\b", re.I)   # a banner or link, not a title
@@ -2781,6 +3219,28 @@ LONG_DOC = 4      # a package document found by search with this many pages of t
 
 NOTICE = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|" + PCN +
                     r"|\bnotification\s+of\b|\bdeclaration\s+letter\b|" + EOL, re.I)
+# never a datasheet, whoever calls it one: a notice, a letter, a compliance document. A user guide or manual, a board's
+# sheet or an application note is refused only when nothing calls it the datasheet: a module's maker can publish
+# only a "User Manual" (RAK3172) and link it as the datasheet. One rule for every route (R-FX19-4): the BOM's own
+# datasheet link and a product page's link labelled "Datasheet" call it so; any other link of a page (an embed, a
+# document-download link, an unlabelled .pdf) does not
+NEVER_DATASHEET = re.compile(NOTICE.pattern + "|" + COMPLIANCE, re.I)
+
+
+def labelled_datasheet(html, link, base):
+    """Does a product page label its link to `link` (absolute) "Datasheet" (the anchor's text, title or aria-label)?"""
+    import html as H_
+    from urllib.parse import urljoin
+    text = html.decode("utf-8", "replace") if isinstance(html, bytes) else str(html or "")
+    for m in re.finditer(r"<a\b([^>]*)>(.*?)</a\s*>", text, re.I | re.S):
+        h = re.search(r"""\bhref\s*=\s*["']\s*([^"'#]+?)\s*(?:#[^"']*)?["']""", m.group(1), re.I)
+        if not h or urljoin(base, H_.unescape(h.group(1)).strip()) != link:
+            continue
+        attrs = " ".join(re.findall(r"""\b(?:title|aria-label)\s*=\s*["']([^"']*)["']""", m.group(1), re.I))
+        label = H_.unescape(re.sub(r"<[^>]+>", " ", m.group(2)) + " " + attrs)
+        if re.search(r"\bdata\s?-?\s?sheet\b", label, re.I):
+            return True
+    return False
 
 
 def a_notice(texts):
@@ -2850,13 +3310,32 @@ _NO_FETCH_HOSTS = re.compile(r"(localhost|.*\.localhost|metadata|metadata\.googl
                              re.I)
 
 
+# Cloud metadata services outside link-local: AWS's IPv6 one (a unique-local address, which a BOM link may otherwise
+# name), Alibaba's (CGNAT range) and Azure's wire server (a public address).
+_METADATA_IPS = frozenset(__import__("ipaddress").ip_address(a) for a in ("fd00:ec2::254", "100.100.100.200",
+                                                                          "168.63.129.16"))
+
+
 def _resolve(host):
-    """The addresses a host name resolves to ([] when it does not): for unsafe_download(public=True)."""
+    """The addresses a host name resolves to ([] when it does not): for unsafe_download."""
     import socket
     try:
         return [a[4][0] for a in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)]
     except (OSError, UnicodeError, ValueError):
         return []
+
+
+def _numeric_ipv4(host):
+    """The dotted IPv4 address a numeric host stands for, as the resolver / HTTP stack reads it ('2852039166',
+    '0xa9fea9fe', '127.1', '0177.0.0.1', '0' and '127.0.0.1.' are all addresses to it), or '' for a name."""
+    import socket
+    h = host.rstrip(".")
+    if not h or not re.fullmatch(r"(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+)){0,3}", h, re.I):
+        return ""
+    try:
+        return socket.inet_ntoa(socket.inet_aton(h))
+    except (OSError, ValueError):
+        return ""
 
 
 def _private(ip):
@@ -2867,13 +3346,36 @@ def _private(ip):
     return ip.is_private or (ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"))
 
 
+def _nat64_ipv4(ip):
+    """The IPv4 addresses a NAT64 address stands for, or []: on an IPv6-only network (DNS64: hotspots, some corporate
+    and campus Wi-Fi) every IPv4-only host name resolves to one, and Python calls the prefix reserved. The well-known
+    prefix 64:ff9b::/96 carries the address in its last 32 bits (RFC 6052 allows only /96 there). The local-use
+    64:ff9b:1::/48 (RFC 8215) may be split at /48, /56, /64 or /96, and the network's choice is not known here: every
+    such reading is returned, the /96 one first (the usual one), so a dangerous address in any of them is refused."""
+    import ipaddress
+    if ip.version != 6:
+        return []
+    n = int(ip)
+    if ip in ipaddress.ip_network("64:ff9b::/96"):
+        return [ipaddress.IPv4Address(n & 0xFFFFFFFF)]
+    if ip not in ipaddress.ip_network("64:ff9b:1::/48"):
+        return []
+    b = n.to_bytes(16, "big")                         # RFC 6052 2.2: byte 8 (bits 64-71) is never used
+    return [ipaddress.IPv4Address(bytes(x)) for x in (b[12:16], b[6:8] + b[9:11], b[7:8] + b[9:12], b[9:13])]
+
+
 def unsafe_download(url, public=False):
     """Why a datasheet link must not be downloaded, or None: only http(s), and never this machine (loopback), a
     link-local address (cloud metadata at 169.254.169.254) or another non-routable address. A datasheet link comes
     from a BOM or a web page someone else wrote, and the bytes are stored and sent to the model; a datasheet server
-    on your own network (10.x, 192.168.x) stays allowed. Literal addresses and well-known names only (no DNS lookup).
-    public: a link a web search gave (no person chose it): a private network's address is refused too, and so is a
-    name that resolves to any such address (names under .example / .test / .invalid are not looked up)."""
+    on your own network (10.x, 192.168.x) stays allowed. A host name is looked up and refused when any address it
+    resolves to is one of those (169.254.169.254.nip.io, localtest.me ...); names under .example / .test / .invalid
+    are not looked up. public: a link a web search gave (no person chose it): a private network's address is refused
+    too.
+    Limits (the best a check before the request can do): the lookup here is not the one the HTTP stack makes when it
+    connects, so a name whose answer changes between the two (DNS rebinding) is not caught; and behind an HTTP proxy
+    (HTTPS_PROXY) the proxy resolves the name itself, from its own network, so the answer here is only a guess at
+    where it goes (a name that does not resolve here is let through to the proxy)."""
     import ipaddress
     from urllib.parse import urlsplit
     try:
@@ -2887,10 +3389,14 @@ def unsafe_download(url, public=False):
         return "no host"
     if _NO_FETCH_HOSTS.fullmatch(host):
         return f"{host} is this machine or a cloud metadata service"
+    numeric = _numeric_ipv4(host)
+    if numeric and numeric != host:
+        return (f"{host} is the address {numeric} written in another form (the HTTP stack reads it so): "
+                "only a dotted address or a name is downloaded")
     try:
-        ips = [ipaddress.ip_address(host)]
+        ips = [ipaddress.ip_address(numeric or host)]
     except ValueError:
-        if not public or re.search(r"\.(example|test|invalid)\.?$", host, re.I):
+        if re.search(r"\.(example|test|invalid)\.?$", host, re.I):
             return None
         ips = []
         for a in _resolve(host):
@@ -2898,11 +3404,18 @@ def unsafe_download(url, public=False):
                 ips.append(ipaddress.ip_address(a.split("%")[0]))
             except ValueError:
                 continue
-    for ip in ips:
-        ip = getattr(ip, "ipv4_mapped", None) or ip
+    unwrapped = []
+    for ip in ips:                                    # ::ffff:a.b.c.d and NAT64: the IPv4 address it reaches
+        nat = _nat64_ipv4(ip)
+        # (a local-use prefix's other readings: only an address refused for itself; zero padding reads 0.0.0.0)
+        unwrapped += [(a, k == 0) for k, a in enumerate(nat) if k == 0 or a != ipaddress.IPv4Address(0)] if nat else \
+            [(getattr(ip, "ipv4_mapped", None) or ip, True)]
+    for ip, main in unwrapped:
         if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved:
             return f"{host} is this machine, a link-local or a reserved address"
-        if public and _private(ip):
+        if ip in _METADATA_IPS:
+            return f"{host} is a cloud metadata service's address"
+        if public and main and _private(ip):
             return f"{host} is a private network's address (a web search's link: only public sites)"
     return None
 
@@ -3161,6 +3674,10 @@ class PdfStore:
         data, meta = self._fetch(url, where, follow, part, handoff, _page, public)
         if mpn:
             from . import ds_route as DR
+            if not meta.get("page_url"):              # a direct link is refused as a notice or certificate, as a
+                other = not_a_datasheet(DR.page_texts(data, 1), NEVER_DATASHEET)   # page's link is (R-FX19-4)
+                if other:
+                    raise DatasheetError(f"the PDF at {meta.get('url') or url}: {other}")
             said = mentions_part(DR.page_texts(data, MENTION_PAGES), mpn)
             if said is False and (meta.get("pages") or pdf_pages(data) or 0) > MENTION_BIG:
                 said = mentions_part(DR.page_texts(data, MENTION_DEEP), mpn)
@@ -3179,11 +3696,11 @@ class PdfStore:
                 meta = None
             if isinstance(meta, dict) and hashlib.sha256(data).hexdigest() == meta.get("sha256") and pdf_complete(data):
                 return data, dict(meta, where=where or meta.get("where"), from_cache=True)
+        if self.offline:                              # first: the safety check below looks the host name up (DNS)
+            raise DatasheetError(f"{url}: offline and not downloaded before")
         why = unsafe_download(url, public)            # a BOM cell or a page's link to this machine / cloud metadata
         if why:
             raise DatasheetError(f"{url}: not downloaded ({why})")
-        if self.offline:
-            raise DatasheetError(f"{url}: offline and not downloaded before")
         n, was = len(self.refusals), public_only()
         _PUBLIC.on = public                           # every way checks each redirect of a web search's link
         try:
@@ -3210,9 +3727,14 @@ class PdfStore:
                 try:
                     pdf, meta = self._fetch(link, where, follow=False, part=part, handoff=handoff, _page=url,
                                             public=public)
-                    return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
                 except DatasheetError as e:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
+                from . import ds_route as DR           # the page's PDF can be its change notice or a letter (R-FX16-2)
+                other = not_a_datasheet(DR.page_texts(pdf, 1), NEVER_DATASHEET if labelled_datasheet(
+                    data, link, final or url) else OTHER_DOC)   # a "Datasheet" link to a user manual (R-FX19-4)
+                if other:
+                    raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {link}: {other}")
+                return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
             from .pdf_fetch import gone_page
             if gone_page(url, status, data, final):
                 raise DatasheetError(f"{url}: the link is gone: it now goes to {final} (a home page, a search or a "
@@ -3244,22 +3766,25 @@ def public_only():
     return getattr(_PUBLIC, "on", False)
 
 
-def redirect_refused(base, location):
-    """Why a redirect from base to location must not be followed for a web search's link, or None."""
+def redirect_refused(base, location, public=True):
+    """Why a redirect from base to location must not be followed, or None: unsafe_download's rule for the link being
+    downloaded (public: a web search's link, every redirect public too; else a BOM link's, never this machine or a
+    link-local / cloud-metadata address, your own network allowed)."""
     from urllib.parse import urljoin
     nxt = urljoin(base, location or "")
-    why = unsafe_download(nxt, public=True)
+    why = unsafe_download(nxt, public=public)
     return f"redirected to {nxt}, not followed ({why})" if why else None
 
 
 def redirect_hooks():
-    """requests hooks for a web search's link: a redirect to an address unsafe_download(public=True) refuses stops
-    before it is requested (the response hook runs on each hop, before requests follows it). {} for any other link."""
-    if not public_only():
-        return {}
+    """requests hooks: a redirect to an address unsafe_download refuses stops before it is requested (the response
+    hook runs on each hop, before requests follows it). A web search's link (public_only) is held to public sites; a
+    BOM link's redirect is never followed to this machine or a link-local address (cloud metadata), as the link itself
+    would not be: checking only the final URL left the request already made."""
+    public = public_only()
 
     def check(r, **_):
-        why = r.is_redirect and redirect_refused(r.url, r.headers.get("location"))
+        why = r.is_redirect and redirect_refused(r.url, r.headers.get("location"), public)
         if why:
             r.close()
             raise DatasheetError(why)
@@ -3298,7 +3823,8 @@ def _names_part(link, part):
 
 
 def pdf_link(html, base, docs=False, part=None):
-    """The datasheet PDF an HTML product page links to (an href ending .pdf, or a meta refresh), absolute, read as a
+    """The datasheet PDF an HTML product page links to (an href ending .pdf, a meta refresh, or a PDF shown in an
+    iframe / embed / object), absolute, read as a
     browser reads it: entities decoded (&amp;), white space inside the quotes and a #page= fragment dropped. A link
     named for the part (part: its MPN), then one whose name says datasheet, then one on the page's own site, is
     preferred. None when there is none.
@@ -3314,6 +3840,13 @@ def pdf_link(html, base, docs=False, part=None):
     if docs and not links:
         links = [m.group(1) for m in re.finditer(r"""href\s*=\s*["']\s*([^"'#]+?)\s*(?:#[^"']*)?["']""", text, re.I)
                  if DOC_LINK.search(H_.unescape(m.group(1)))]
+    # a viewer page showing its PDF in an iframe / embed / object with no link to it (R-FX13-6): its src / data,
+    # when it names a .pdf or the tag says application/pdf. Only when the page has no other link: a product page
+    # can embed its RoHS certificate or a change notice beside the datasheet's link (R-FX16-2)
+    for m in re.finditer(r"<(?:iframe|embed|object)\b[^>]*>", text, re.I) if not links else ():
+        a = re.search(r"""\b(?:src|data)\s*=\s*["']\s*([^"'#]+?)\s*(?:#[^"']*)?["']""", m.group(), re.I)
+        if a and (re.search(r"\.pdf(?:\?|$)", a.group(1), re.I) or re.search(r"application/pdf", m.group(), re.I)):
+            links.append(a.group(1))
     links = [urljoin(base, H_.unescape(u).strip()) for u in links]
     links = [u for u in links if urlparse(u).scheme.lower() in ("http", "https")]   # no file:, data:
     if not links:
@@ -3504,6 +4037,48 @@ def _create_in_flight(m):
 BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than|doesn't mention|the link is gone"
 
 
+HELD_FAILED = "held: the last read still fails its checks, so nothing was built (fix the read or read the datasheet yourself)"
+
+
+def read_hold(res, fp_from_read=True):
+    """The hold line for a route's last answer that still fails a check that can build the part wrong
+    (ds_route.hold_reasons), or None. The librarian asks it after every rescue the route has (the cross-check's settle,
+    a checked standard land the read identified): fp_from_read=False when the footprint does not come from the read's
+    own numbers, so only the symbol's checks count."""
+    from . import ds_route as DR
+    hold = DR.hold_reasons(res, fp_from_read)
+    return f"{HELD_FAILED}: {'; '.join(hold[:3])[:400]}" if hold else None
+
+
+def cross_check_review(cc):
+    """Review lines for a cross-check that accepted the package but compared no pin names (a standard table match,
+    or a symbol-only read in auto): the symbol's names are the read's alone (review R-RT-2). An unchecked or
+    self-checked record already says so in its summary line."""
+    from . import crosscheck as CC
+    if not cc or cc.get("pins") != "unchecked" or cc.get("status") not in ("agreed", "skipped"):
+        return []
+    return [f"cross-check: {CC.PINS_UNCHECKED}; check the symbol's pin names against the datasheet's pin table"]
+
+
+def searched_body(job, res):
+    """A read built on a package drawing found by web search whose body or pitch is not the one the part's own
+    datasheet prints is not written: the drawing is another maker's package of the same family and pin count
+    (LPC1768FBD100's 14 x 14 mm SOT407-1 read from a 14 x 20 mm QFP100, R-FX19-1)."""
+    from . import crosscheck as CC, outline_docs as OD
+    for o in (job.get("prov") or {}).get("outline") or ():
+        if o.get("code") != "web search" or not OD.has_facts(o.get("body")):
+            continue
+        try:
+            crit = CC.critical(res.get("spec") or {})
+        except Exception:                             # a read too broken to measure: the other checks hold it
+            return
+        why = OD.read_mismatch(crit, o["body"])
+        if why:
+            raise DatasheetError(f"held: the package drawing found by web search ({o.get('from')}) is not this part's "
+                                 f"package: {why}; nothing was written (put the maker's drawing of this package in "
+                                 "the [datasheet] folder, or check the part number)")
+
+
 def hold_on_doubt(inf, model, res):
     """A guided model's answer that still fails datasheet's checks is not written (the hold_on_doubt rail)."""
     from . import ds_route as DR
@@ -3657,7 +4232,12 @@ class Reader:
                              f"= {uses}"})
             return None
         fallback = model in FALLBACK_MODELS           # a classifier decline is re-run on another model, as for a read
-        est, cap = WS.estimate(model, uses, fallback), float(self.cfg.get("max_cost_usd") or 0)
+        try:
+            cap = self._cap()
+        except DatasheetError as e:
+            attempts.append({"url": "", "where": where, "error": f"not searched: {e}"})
+            return None
+        est = WS.estimate(model, uses, fallback)
         if cap and (est is None or self.committed_usd + est > cap):
             attempts.append({"url": "", "where": where, "error": f"not searched: about ${est or 0:.2f} more "
                              f"would pass [datasheet] max_cost_usd = {cap:g}"})
@@ -3677,7 +4257,11 @@ class Reader:
                                             refs=refs)
         how = "usage" if WS.usd(model, turns) is not None and not err else "estimate"
         usd = WS.usd(model, turns, unknown=est or 0.0)   # each turn with no usage (or no price) holds its worst case
-        if err:                                       # the failed request may still have been billed: hold its worst case
+        # the failed request may still have been billed (a timeout, a body cut off): hold its worst case. An HTTP error
+        # response (4xx / 5xx, Client.request: no maybe_billed) or a request never sent is not billed, as _release
+        # reads it (review R-CE-4)
+        billed = getattr(err, "maybe_billed", None) if err else False
+        if err and (billed if billed is not None else getattr(err, "status", None) is None):
             usd += est or 0.0
         self.committed_usd += usd
         self.ledger.add({"part": part, "name": part, "model": model,
@@ -3701,6 +4285,7 @@ class Reader:
         "<part> package drawing"). What could not be got is said in prov["outline_missing"], the misses in attempts."""
         from . import ds_route as DR, ds_search as WS, outline_docs as OD
         own = DR.page_scores(texts, part, package)[1]
+        body = OD.printed_body(texts, part, own)      # what the datasheet prints of this package's body (R-FX19-1)
         found, key, where = WS.Found(self.dir), f"{part} package drawing", "web search (package drawing)"
         saved, n0 = found.get(key), len(attempts)
         got = None
@@ -3731,6 +4316,23 @@ class Reader:
             if not OD.names_it(pages, part, codes, own, meta.get("url") or url):
                 attempts.append({"url": url, "where": where,
                                  "error": f"the PDF at {meta.get('url') or url} names neither {part} nor its package"})
+                return None
+            # a family and a pin count are not a package (QFP100: 14 x 14 / 0.5 or 14 x 20 / 0.65): what the
+            # datasheet prints of the body must be what the drawing prints, and with nothing printed to compare, only
+            # a drawing that names the part, its own code or an outline whose name is its body (DO-34) is taken (R-FX19-1)
+            found = OD.printed_body(pages, part, own)
+            why = OD.body_mismatch(found, body)
+            if why:
+                attempts.append({"url": url, "where": where, "error": f"the PDF at {meta.get('url') or url} is "
+                                 f"another body of this package: {why}"})
+                return None
+            flat = re.sub(r"[^A-Z0-9]", "", " ".join(t or "" for t in pages).upper())
+            if not OD.has_facts(body) and not (OD.outline_named(own) or mentions_part(pages, part, whole=True) or
+                                               OD.mpn_package_codes(part, own) or any(
+                    re.sub(r"[^A-Z0-9]", "", c.upper()) in flat for c in codes if c)):
+                attempts.append({"url": url, "where": where, "error": f"the PDF at {meta.get('url') or url} names "
+                                 f"{part}'s package family and count only, and the datasheet prints no body size, "
+                                 "pitch or outline code to tie it to this part's body"})
                 return None
             return b, meta.get("url") or url
 
@@ -3764,7 +4366,7 @@ class Reader:
         first = (pdf_pages(data) or 0) + 1
         return merged, dict(prov, sha256=hashlib.sha256(merged).hexdigest(), pages=pdf_pages(merged),
                             outline=list(prov.get("outline") or []) + [{"code": "web search", "from": got[1],
-                                                                        "first_page": first}])
+                                                                        "first_page": first, "body": body}])
 
     def _fetch_found(self, url, part, attempts):
         """A link a web search gave -> (data, prov) or None (the miss in attempts). Never a private address: the link
@@ -4047,7 +4649,7 @@ class Reader:
         try:
             ext = parse_message(rec["message"])
             res = process(ext, job["part"], job["url"], rec.get("model") or job["model"], job["offset"], rec["message"],
-                          facts=job.get("facts"), tables=job.get("tables"))
+                          facts=job.get("facts"), tables=job.get("tables"), package=job.get("package"))
         except DatasheetError as e:
             return "failed", [str(e)], None
         kind, why = DR.assess(res)
@@ -4056,13 +4658,15 @@ class Reader:
     def _walk(self, job):
         """Replay the cached answers of a part's route from this step: -> the step to send next, or the step whose
         cached answer is the one to keep (final=True). Never more than [datasheet] max_attempts answers."""
+        from . import ds_route as DR
         while True:
             rec = self.results.get(job["key"])
             if rec is None:
                 return job
             kind, why, res = self._judge(job, rec)
             gaps = len(((res or {}).get("spec") or {}).get("unresolved") or []) + len(why)
-            rank = ({"ok": 2, "incomplete": 1}.get(kind, 0), -gaps) if "message" in rec else (-1, 0)
+            eff = DR.effective_kind(kind, why, (res or {}).get("spec"))   # incomplete + a hard failure: as failed
+            rank = ({"ok": 2, "incomplete": 1}.get(eff, 0), -gaps) if "message" in rec else (-1, 0)
             done = job["route"]["attempts"] + [{"model": job["model"], "pages": len(job["offset"]) if isinstance(job["offset"], list)
                                                 else "all", "verdict": kind, "why": why[:4], "via": rec.get("via"),
                                                 "served": (rec.get("message") or {}).get("model"),
@@ -4142,7 +4746,7 @@ class Reader:
         # the job's pages, as _judge reads them: its cache key holds them, while a record's page_offset can be 0 (a batch
         # answer collected by a run without this part, from a state file with no 'sent', or adopted after a lost create)
         res = process(ext, job["part"], job["url"], rec.get("model") or self.model, job["offset"], rec["message"],
-                      facts=job.get("facts"), tables=job.get("tables"))
+                      facts=job.get("facts"), tables=job.get("tables"), package=job.get("package"))
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
@@ -4166,12 +4770,15 @@ class Reader:
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)
+        searched_body(job, res)
         from . import crosscheck as CC                # an independent second source before the footprint is accepted
         cc = CC.run(self, job, res, rec.get("model") or job.get("model") or self.model)
         if cc:
             res["sidecar"]["cross_check"] = res["cross_check"] = cc
             if cc["status"] in ("unchecked", "self-checked"):
                 res["needs_review"].append(f"cross-check: {CC.summary_line(cc)}")
+            else:
+                res["needs_review"] += cross_check_review(cc)
             res["needs_review"] += [f"cross-check agreed once a difference was set aside: {t}; check it on the drawing"
                                     for c in cc.get("checks") or [] for t in c.get("tie_breaks") or []]
             res["needs_review"] += [f"{INJECTION} (cross-check read): {q[:200]!r}" for c in cc.get("checks") or []
@@ -4210,6 +4817,8 @@ class Reader:
         except DatasheetError as e:
             if not getattr(e, "maybe_billed", False):
                 self._release(key)                    # no answer, nothing billed: the hold is given back
+            else:
+                self._maybe_billed(job, key, model, e, "cross_check")
             if isinstance(e, APIError):
                 raise                                 # no answer came back: the part is retried next run
             raise CC.Unavailable(str(e)[:200])
@@ -4283,7 +4892,11 @@ class Reader:
                 return None
             wider = "more pages" if nx[1] != job["level"] else ""
             return ", ".join(x for x in (self.router.ladder[nx[0]] if nx[0] != job["rung"] else "", wider) if x)
-        self._settle(job["key"], model, msg, via)
+        kept = self._settle(job["key"], model, msg, via)
+        if kept:                                      # the maybe-billed redo: a ledger line at its worst case, as for
+            self._holds[job["key"]] = [kept]          # any request that may have been billed (taken over by the line)
+            self._maybe_billed(job, job["key"], model, ((msg.get("ecadlib") or {}).get("feedback") or {}).get("after"),
+                               "feedback")
         try:
             if error is not None:
                 raise error
@@ -4328,6 +4941,8 @@ class Reader:
                 if msg is None:                       # no answer came back (API error): nothing to record
                     if not getattr(e, "maybe_billed", False):
                         self._release(job["key"])
+                    else:
+                        self._maybe_billed(job, job["key"], job.get("model") or self.model, e)
                     nxt = self._next_link(job, e)     # the API could not fetch the link: the next one, if any
                     if nxt is None:
                         raise
@@ -4433,6 +5048,8 @@ class Reader:
         except DatasheetError as e:
             if not getattr(e, "maybe_billed", False):
                 self._release(job["key"])
+            else:
+                self._maybe_billed(job, job["key"], model, e, "feedback")
             raise
         if msg2 is not None:                          # its own cost, at synchronous rates
             self._settle(job["key"], model, msg2, "sync")
@@ -4502,7 +5119,7 @@ class Reader:
             except DatasheetError:                    # estimate would otherwise price its first request as unknown
                 pass                                  # a setup that does not resolve is reported where it is sent
             pin, pout = price_of(model) or (None, None)
-            tin, unknown = None, False
+            tin, unknown, extra = None, False, 0
             if self.key and self.count_tokens and self._plain(model):
                 try:
                     api = self.info(model)["ep"]["model"]          # 'claude:x' (a named endpoint) -> 'x', as a batch sends it
@@ -4517,10 +5134,13 @@ class Reader:
                 unknown = not pages and j["prov"].get("sent_as") != "base64"   # sent as a URL, never counted: size unknown
                 pages = pages or URL_PAGES
                 tin, how = pages * PAGE_TOKENS + 1500, f"rough: {pages} pages x {PAGE_TOKENS}"
+                extra = rough_extra_tokens(j["body"])         # close-up images, a feedback turn's first answer
+                if extra:
+                    tin, how = tin + extra, how + f" + {extra:,} for images / more text"
             schema = len(json.dumps(output_schema())) // 4     # the output format (not in count_tokens): rough
             tin += schema
             # DS-37: the worst case of a PDF of unknown size is the request's page limit, not the typical URL_PAGES
-            tmax = page_limit(model) * PAGE_TOKENS + 1500 + schema if unknown else tin
+            tmax = page_limit(model) * PAGE_TOKENS + 1500 + schema + extra if unknown else tin
             if unknown:
                 how += f" (size unknown: worst case priced at the {page_limit(model)}-page request limit)"
             from .ds_route import prices
@@ -4579,11 +5199,20 @@ class Reader:
 
     def set_cap(self, usd):
         """--max-cost-usd N: a cap the person set, even when it is the default's 10."""
-        self.cfg["max_cost_usd"], self.cap_set = usd, True
+        from .ai_cost import cap_usd                  # ValueError for nan / inf / negative: never a cap that holds nothing
+        self.cfg["max_cost_usd"], self.cap_set = cap_usd(usd, "--max-cost-usd"), True
+
+    def _cap(self):
+        """[datasheet] max_cost_usd as a float (0 = no cap); DatasheetError for one that would hold nothing (nan)."""
+        from .ai_cost import cap_usd
+        try:
+            return cap_usd(self.cfg.get("max_cost_usd"), "[datasheet] max_cost_usd")
+        except ValueError as e:
+            raise DatasheetError(f"{e}; nothing sent") from None
 
     def _guard_cost(self, jobs):
         """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
-        cap = float(self.cfg.get("max_cost_usd") or 0)
+        cap = self._cap()
         if not cap or not jobs:                       # --yes does not lift the cap: a scripted run keeps its ceiling
             return
         default = cap == DEFAULT_MAX_COST_USD and not self.cap_set     # not one the person set (to 10 as well)
@@ -4596,16 +5225,17 @@ class Reader:
         else:
             est = self.estimate(jobs)
         if est["usd_max"] is None:
-            if self.yes:                              # a model with no known price (a local one): sent as approved
+            if self.yes:                              # a model with no known price, sent as the person said (--yes)
                 return
-            if default:                               # only the default cap: a local model is not stopped by it
-                if not getattr(self, "_said_unpriced", False):
-                    self._said_unpriced = True
-                    self.say(f"  datasheet: no price known for {', '.join(est['models']) or self.model}, so the default "
-                             f"${cap:g} cap can't be checked; sending (set [datasheet] max_cost_usd to hold it)")
-                return
-            raise DatasheetError(f"no price known for {', '.join(est['models']) or self.model}: can't hold [datasheet] max_cost_usd = {cap}; "
-                                 "pass --yes to send anyway")
+            # llm.price() prices a local endpoint at $0, so "no price" means a remote model, most likely a paid one:
+            # never sent on a guess, not even under the default cap (it can't be checked)
+            names = ', '.join(est['models']) or self.model
+            first = next(iter(est['models'] or ()), self.model)
+            what = (f"the default ${cap:g} cap can't be checked" if default
+                    else f"can't hold [datasheet] max_cost_usd = {cap:g}")
+            raise DatasheetError(f"no price known for {names}: {what}; nothing sent. To send it, set the model's "
+                                 f"price in ecadlib.toml ([ai.profiles.\"{first}\"] price_in = ... and price_out = ..., "
+                                 "$ per million tokens) so the cap holds, or pass --yes to send it without a cost check")
         unk = [r for r in est["rows"] if r.get("size_unknown")]
         if unk and self.committed_usd + est["usd_max"] > cap:     # DS-37: never a silent 30-page guess
             what = (f"the size of the PDF of {', '.join(r['part'] for r in unk)} is unknown (sent as a URL, not counted "
@@ -4642,7 +5272,14 @@ class Reader:
                            batch=str(via or "").startswith("batch"))                  # the cost ledger prices it
         if usd is None:                               # no price, or no usage block: the real cost is unknown
             return
-        self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)) + usd)
+        holds = self._holds.pop(key)
+        # a feedback redo that failed with no answer but may have been billed (llm.run: a timeout on the redo) is not
+        # in the usage block: its own hold, the last one taken (the feedback guard's), stays and is returned so the
+        # caller books it in cost.jsonl as maybe billed (review R-CE-3)
+        fb = ((msg or {}).get("ecadlib") or {}).get("feedback") or {}
+        kept = holds[-1] if fb.get("maybe_billed") and len(holds) > 1 else 0.0
+        self.committed_usd = max(0.0, self.committed_usd - sum(holds) + usd + kept)
+        return kept
 
     def _release(self, key, e=None):
         """A request that got no answer and is not billed (an HTTP error response, no connection made, or a batch
@@ -4654,6 +5291,21 @@ class Reader:
                 return
         if self._holds.get(key):
             self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)))
+
+    def _maybe_billed(self, job, key, model, e, purpose=None):
+        """A request with no answer that the API may still have run and billed (a read timeout, a response cut off):
+        its hold stays for this run, and cost.jsonl gets a line at that worst case, so a run resumed under
+        --max-total-usd (eval) counts it instead of $0. The hold is taken over by the line: never counted twice."""
+        held = self._holds.pop(key, None)
+        if not held:
+            return
+        rec = {"part": job.get("part"), "name": job.get("name") or job.get("part"), "model": model, "model_served": None,
+               "via": "sync", "pages_sent": self._pages_sent(job), "pages_total": job.get("n_pages"),
+               "input_tokens": 0, "output_tokens": 0, "usd": round(sum(held), 6), "how": "maybe billed",
+               "verdict": "error", "error": str(e)[:300]}
+        if purpose:
+            rec["purpose"] = purpose
+        self.ledger.add(rec)
 
     # --- batch
     def _state(self):
@@ -5108,10 +5760,13 @@ def fill_plan(plan, reader, rules=None, log=print, parts=None):
         state[it["name"]] = st
         log(f"  {'done ' if L._done(st, out) else 'open '}{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
     write_text_atomic(state_f, json.dumps(state, indent=2))
-    gate.settle(items)
-    checks = RC.apply(items, out, rules=rules)
-    gate.baseline(items)
-    write_text_atomic(plan_f, json.dumps(items, indent=2))
+    from . import ledger as LG                         # library lock first and across settle..baseline, then plan.lock
+    with LG.locked(out), L._decisions_lock(plan_f):    # a reject / approval recorded while the reads ran (the web UI,
+        L.keep_decisions(items, plan_f)                # `ecadlib approve`) is kept, not overwritten with the old copy
+        gate.settle(items)
+        checks = RC.apply(items, out, rules=rules)
+        gate.baseline(items)
+        write_text_atomic(plan_f, json.dumps(items, indent=2))
     RC.write_report(checks, out / "release_check", plan_f)
     L.write_review(L.review_rows(items), out, str(plan_f))
     return items
@@ -5130,7 +5785,7 @@ def batch_main(argv, estimate=False):
     ap.add_argument("--estimate", action="store_true", help="rough token count (pages) and cost; send nothing")
     ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
                     "[datasheet] max_cost_usd cap still holds)")
-    ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
+    ap.add_argument("--max-cost-usd", type=_usd_arg, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
                     f"{DEFAULT_MAX_COST_USD:g}; 0 = no cap)")
     ap.add_argument("--model")
     ap.add_argument("--effort", choices=EFFORTS)
@@ -5250,7 +5905,7 @@ def main(argv=None):
     ap.add_argument("--rules", help="library rules file ([datasheet] max_cost_usd; default: searched from -o upwards)")
     ap.add_argument("--yes", action="store_true", help="no questions (a model with no known price is sent; the "
                     "[datasheet] max_cost_usd cap still holds)")
-    ap.add_argument("--max-cost-usd", type=float, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
+    ap.add_argument("--max-cost-usd", type=_usd_arg, help=f"spending cap for this run (default [datasheet] max_cost_usd, "
                     f"{DEFAULT_MAX_COST_USD:g}; 0 = no cap)")
     ap.add_argument("-o", "--out", default="out/datasheet")
     a = ap.parse_args(argv)
@@ -5332,7 +5987,7 @@ def main(argv=None):
                 cache.put(ck, {"key": ck, "part": a.part, "url": a.pdf, "model": a.model, "page_offset": offset, "via": "sync",
                                "at": datetime.datetime.now().isoformat(timespec="seconds"), "message": msg})
         n_sent = pdf_pages(source[1]) if pages and not a.from_response and source[0] == "base64" else None
-        res = process(ext, a.part, a.pdf, a.model, offset, msg, n_sent)
+        res = process(ext, a.part, a.pdf, a.model, offset, msg, n_sent, package=a.package)
         if not a.from_response:                       # as every Reader read: the "ai" record, then hold_on_doubt
             res["sidecar"]["ai"] = LR.provenance(inf, msg, None, isinstance(offset, list))
             try:
@@ -5342,6 +5997,14 @@ def main(argv=None):
                 f = Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
                 f.write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n", encoding="utf-8")
                 raise DatasheetError(f"{e} (the answer is saved in {f})")
+        held = read_hold(res)                         # as the librarian: a read that can build wrong is not written
+        if held:
+            f = Path(a.from_response) if a.from_response else \
+                Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
+            if not a.from_response:
+                Path(a.out).mkdir(parents=True, exist_ok=True)
+                f.write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n", encoding="utf-8")
+            raise DatasheetError(f"{held} (nothing written; the answer is saved in {f}; read the drawing yourself)")
     except DatasheetError as e:
         sys.exit(f"error: {e}")
     paths = write(res, a.out)

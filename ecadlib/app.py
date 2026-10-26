@@ -29,7 +29,18 @@ STATUS_ORDER = ["needs_footprint_generation", "unverified (source unreachable)",
 
 
 UPLOAD_DIR = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")      # the folder save_upload makes for each upload
+WIN_DEVICE = re.compile(r"(?i)(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?")   # Windows device names, any suffix
 STYLE_OFFLINE = "--offline: the model is not asked to write the house style guide; run without --offline to have it write it"
+WAITING = "waiting for the librarian run to finish"
+
+
+class LibraryBusy(ValueError):
+    """Another run (a librarian run, a publisher, a CLI change-control step) holds this library's lock. A request that
+    must rewrite library files waits for it as a job (the web UI queues it: ui.server); folder: the plan folder."""
+
+    def __init__(self, msg, folder):
+        super().__init__(msg)
+        self.folder = Path(folder)
 
 
 class Workspace:
@@ -190,6 +201,12 @@ class Workspace:
         if not data:
             raise ValueError(f"{filename} is empty")
         name = self.safe_name(filename)
+        if WIN_DEVICE.fullmatch(name):                # con.csv, NUL.xlsx: a device on Windows (the BOM would be lost)
+            name = "_" + name
+        # only BOMs belong here: a program stored here could be named as the Altium menu's command (MCP altium_menu)
+        if re.search(r"\.(?:exe|com|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|msi|msp|dll|scr|cpl|lnk|hta|pif|reg)[ .]*$",
+                     name, re.I):
+            raise ValueError(f"{filename}: a program or script is not a BOM (upload a .csv, .xlsx or .txt file)")
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
         for _ in range(20):
             d = self.root / "uploads" / f"{stamp}-{secrets.token_hex(3)}"
@@ -206,22 +223,23 @@ class Workspace:
             f.write(data)
         return self.rel(p)
 
-    def triage(self, bom, progress=None, lock=None, user=None):
+    def triage(self, bom, progress=None, lock=None, user=None, offline=None):
         """Triage a BOM (workspace-relative or absolute path). Writes reports/triage_<stem>.{md,csv,json}; the
         .json is the whole result plus when and by whom (user), which triage_history lists and opens again.
         progress(done, total, label) is called before each line, for UIs that show a progress bar.
         lock, if given, is held only while the reports are written: the lookups are network-bound and
-        must not block other workspace actions."""
+        must not block other workspace actions. offline: True looks nothing up online (the cache only) whatever the
+        workspace's setting (the bundled sample, which promises no network)."""
         bom_path = self._bom_path(bom)
-        http = CachedHTTP(self.root / "http_cache", min_interval=1.0, offline=self.offline)
+        http = CachedHTTP(self.root / "http_cache", min_interval=1.0, offline=self.offline if offline is None else offline)
         provs = [c(http) for c in self._provider_classes()]
         lines, mapping = self._read_bom(bom_path)
         index = self._index()
-        rows = []
+        rows, dup = [], T.shared_designators(lines)  # R3 on two lines: only the whole BOM can say
         for i, ln in enumerate(lines, 1):            # one line at a time so long lookups can report progress
             if progress:
                 progress(i - 1, len(lines), ln.get("mpn") or ln.get("value") or ln.get("designator", ""))
-            r = T.triage([ln], index, provs, http)[0]
+            r = T.triage([ln], index, provs, http, shared={1: dup[i]} if i in dup else {})[0]
             r["line"] = i
             rows.append(r)
         if progress:
@@ -256,7 +274,7 @@ class Workspace:
         for tid, (j, c) in self._triage_files().items():
             try:
                 if j:
-                    d = json.loads(j.read_text(encoding="utf-8"))
+                    d = self._triage_json(j)
                     it = {k: d.get(k) for k in ("bom", "name", "finished", "user", "counts")}
                     it["lines"] = len(d.get("rows") or [])
                     it["reports"] = d.get("reports") or []
@@ -277,6 +295,15 @@ class Workspace:
         items.sort(key=lambda x: x[:2], reverse=True)                # same second: the file written last first
         return {"triages": [x[2] for x in items[:limit]], "total": len(items)}
 
+    @staticmethod
+    def _triage_json(f):
+        """A saved triage (reports/triage_<id>.json) in the shape triage() writes, else ValueError (damaged)."""
+        d = json.loads(f.read_text(encoding="utf-8"))
+        if not (isinstance(d, dict) and isinstance(d.get("rows"), list) and all(isinstance(r, dict) for r in d["rows"])
+                and isinstance(d.get("counts") or {}, dict)):
+            raise ValueError(f"{f.name} is damaged: not a saved triage")
+        return d
+
     def triage_result(self, tid):
         """One finished triage by its id (from triage_history), in the shape triage() returns. Read-only: the id
         is only matched against the reports that exist, never turned into a path."""
@@ -285,7 +312,7 @@ class Workspace:
             raise KeyError(f"no triage {tid!r} in this workspace")
         j, c = f
         if j:
-            d = json.loads(j.read_text(encoding="utf-8"))
+            d = self._triage_json(j)
             d["id"] = tid
             return d
         rows = pd.read_csv(c, dtype=str).fillna("").to_dict("records")
@@ -367,15 +394,17 @@ class Workspace:
 
     def build_altium_models(self, bom):
         """Write the Altium files an Altium 365 release needs, for every BOM line that has a footprint:
-        footprints already in the KiCad libraries are converted to .PcbLib, and generic Resistor/Capacitor
-        symbols are written as .SchLib. IC symbols are not generated here."""
-        from . import altium_lib
+        footprints already in the KiCad libraries are converted to .PcbLib (kicad_import's converter and 3D body, as
+        the librarian and `ecadlib kicad-import` do: a height and a body from the package tables, offline), and generic
+        Resistor/Capacitor symbols are written as .SchLib. IC symbols are not generated here. notes: per footprint,
+        what to check (no 3D height known, approximations)."""
+        from . import altium_lib, kicad_import as K
         bom_path = self._bom_path(bom)
         tri = self._triage_frame(bom_path)
         if tri is None:
             self.triage(bom)
             tri = self._triage_frame(bom_path)
-        index, done, skipped, layers = self._index(), [], [], RU.layers(self.rules())
+        index, done, skipped, layers, notes = self._index(), [], [], RU.layers(self.rules()), []
         for key in dict.fromkeys(k.split(" ")[0] for k in tri["local_footprint"] if k):
             ref = key.split(":")[-1]
             out = self.models / "PcbLib" / f"{ref}.PcbLib"
@@ -387,41 +416,47 @@ class Workspace:
                 skipped.append(f"{ref}: not found in indexed libraries")
                 continue
             try:
-                altium_lib.write_pcblib(out, [altium_lib.footprint_from_kicad(Path(hit["path"]).read_text(encoding="utf-8"))], layers)
+                said = []
+                fp, t = K.convert_footprint(Path(hit["path"]).read_text(encoding="utf-8"), None, "", said)
+                held = K.lost_copper_hold(ref, said)
+                if held:                             # held, not written: the .PcbLib would lack copper (R-FX9-1)
+                    skipped.append(held)
+                    continue
+                try:
+                    K.add_body(fp, t, None, None, False, said, gen_step=True)
+                except ValueError as e:              # no height known: the footprint is still right, the body is not
+                    said.append(f"no 3D body: {e}")  # there; say so instead of a silent HEIGHT 0
+                altium_lib.write_pcblib(out, [fp], layers)
                 done.append(ref)
+                notes += [f"{ref}: {n}" for n in said if "no 3D body" in n or "verify" in n]
             except Exception as e:
                 skipped.append(f"{ref}: {e}")
         for name, make in (("Resistor", altium_lib.resistor_symbol), ("Capacitor", altium_lib.capacitor_symbol)):
             out = self.models / "SchLib" / f"{name}.SchLib"
             if not out.exists():
                 altium_lib.write_schlib(out, [make()])
-        return {"footprints": done, "skipped": skipped,
+        return {"footprints": done, "skipped": skipped, "notes": notes,
                 "symbols": sorted(p.stem for p in (self.models / "SchLib").glob("*.SchLib"))}
 
     def export_dblib(self, bom):
-        """Write the Altium DbLib for a BOM. When the librarian has run for it: its plan through dblib-sync, into
-        altium/<BOM>/ (ready parts only, their .SchLib/.PcbLib copied beside the DbLib). Else a draft from the latest
-        triage (SQLite + XLSX + .DbLib, no symbols or footprints built yet)."""
-        from . import altium_export
+        """Write the Altium DbLib for a BOM from the librarian's plan through dblib-sync, into altium/<BOM>/ (ready
+        parts only, their .SchLib/.PcbLib copied beside the DbLib), as `ecadlib dblib` does. A BOM the librarian has
+        not run for is refused: its rows would name .SchLib / .PcbLib files that are not built and no part in it was
+        release-checked (the CLI writes that unchecked draft only with --draft, a person's explicit choice)."""
         bom_path = self._bom_path(bom)
         self._read_bom(bom_path)                      # same friendly error as triage for unreadable files
         plan = self._librarian_dir(bom_path) / "plan.json"
-        if plan.is_file():                            # held parts stay out, as in `ecadlib dblib-sync`
-            from . import altium_dblib_sync as DS
-            to = self.root / "altium" / self._key(bom_path)
-            rep = DS.sync(plan, to)
-            act = lambda a: [r["name"] for r in rep["results"] if r.get("action") == a and r.get("kind", "part") == "part"]
-            return {"files": [self.rel(p) for p in sorted(to.iterdir()) if p.is_file()], "folder": self.rel(to),
-                    "from_plan": True, "held": act("held"),
-                    "written": len(act("added")) + len(act("updated")) + len(act("up_to_date"))}
-        tri = self._triage_csv(bom_path)
-        out = self.root / "altium"
-        argv = [str(bom_path), "-o", str(out)] + (["--triage", str(tri)] if tri.exists() else [])
-        rf = self.rules_in_use()
-        argv += ["--rules", str(rf)] if rf else []
-        if altium_export.main(argv):
-            raise ValueError(f"couldn't write the DbLib for {bom_path.name}: no part lines in it")
-        return {"files": [self.rel(p) for p in sorted(out.iterdir()) if p.is_file()]}
+        if not plan.is_file():
+            raise ValueError(f"no DbLib written for {bom_path.name}: the librarian has not run for it, so no part is "
+                             "built or release-checked. Run the librarian first (Fill the library in the web UI, "
+                             "librarian_run in MCP, `ecadlib librarian` on the command line), then export the DbLib.")
+        from . import altium_dblib_sync as DS         # held parts stay out, as in `ecadlib dblib-sync`
+        to = self.root / "altium" / self._key(bom_path)
+        rep = DS.sync(plan, to)
+        act = lambda a: [r["name"] for r in rep["results"] if r.get("action") == a and r.get("kind", "part") == "part"]
+        return {"files": [self.rel(p) for p in sorted(to.iterdir()) if p.is_file()], "folder": self.rel(to),
+                "from_plan": True, "held": act("held"),
+                "written": len(act("added")) + len(act("updated")) + len(act("up_to_date"))}
 
     def altium365_plan(self, bom):
         """One workspace component per part. When the librarian has run for this BOM its plan is used, with the
@@ -444,7 +479,8 @@ class Workspace:
         else:
             items = A.plan(lines, self._triage_frame(bom_path), self.models, rules=self.rules())
             out = self.root / "altium365" / f"plan_{self._key(bom_path)}.json"
-            out.write_text(json.dumps(items, indent=2), encoding="utf-8")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            write_text_atomic(out, json.dumps(items, indent=2))
             src = "triage"
         ready = sum(i["status"] == "ready" for i in items)
         return {"items": items, "ready": ready, "total": len(items), "plan": self.rel(out), "source": src}
@@ -453,14 +489,16 @@ class Workspace:
     def _librarian_dir(self, bom_path):
         return self.root / "librarian" / self._key(bom_path)
 
-    def librarian_run(self, bom, sources=None, allow=(), refresh=None, progress=None, ai=True):
+    def librarian_run(self, bom, sources=None, allow=(), refresh=None, progress=None, ai=True, offline=None):
         """BOM -> library in one go (ecadlib.librarian): triage, fill every missing symbol and footprint from
         the KiCad libraries, EasyEDA or the datasheet, write Altium models and the plan, run the release check.
         refresh: None resumes (finished parts are skipped), [] redoes everything, [names] redoes those.
         ai=False (the Altium dialog, the KiCad window, the web UI): no paid model call; parts only a datasheet read
         can finish are priced instead, and the summary's "ai" is that quote (ecadlib.ai_cost) or None. The person
-        then says yes and ai_read() reads them."""
+        then says yes and ai_read() reads them. offline: True looks nothing up online whatever the workspace's
+        setting (the bundled sample in the web UI, as `ecadlib demo`)."""
         from . import librarian as L
+        offline = self.offline if offline is None else offline
         bom_path = self._bom_path(bom)
         lines, _ = self._read_bom(bom_path)               # same friendly error as triage for unreadable files
         out = self._librarian_dir(bom_path)
@@ -474,9 +512,9 @@ class Workspace:
         if progress:
             progress(0, len(lines), "looking up parts")
         provs = self._librarian_providers()
-        reader = None if ai else self._datasheet_reader(out, batch=False, estimate=True)
+        reader = None if ai else self._datasheet_reader(out, batch=False, estimate=True, offline=offline)
         items = L.run(str(bom_path), self.libs + [str(self.root / "footprints")], out,
-                      list(sources) if sources else None, refresh, False, list(allow), self.offline,
+                      list(sources) if sources else None, refresh, False, list(allow), offline,
                       self.root / "http_cache", 0.5, provs, log=note, rules=self.rules(), reader=reader)
         r = self._librarian_summary(bom_path, items, log)
         if not ai:
@@ -542,13 +580,45 @@ class Workspace:
 
     def release_check(self, bom, allow=(), unallow=(), user=None):
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
-        failures (allow) or taking that back (unallow). user, when given, is recorded as the person who gave the
-        allow (approvals' no_self_approval uses it). Never touches the network."""
-        with self._plan_lock():
-            return self._release_check(bom, allow, unallow, user)
+        failures (allow) or taking that back (unallow). user is recorded as the person who gave the allow
+        (approvals' no_self_approval uses it): an allow needs it (refused without, as an approval is), never taken from
+        this computer's identity, which on a shared computer is not who clicked. Never touches the network.
+        While another run holds the library lock (a librarian run, a publisher), the decision is recorded in
+        plan.json at once under plan.lock only: that run keeps decisions recorded meanwhile (librarian DECISIONS,
+        save_plan), and the release itself goes into the ledger when a writer next settles the library (the run's
+        own baseline) -> the summary then says so in `pending`."""
+        try:
+            with self._plan_lock(bom):
+                return self._release_check(bom, allow, unallow, user)
+        except LibraryBusy:
+            pass
+        with self._decision_lock():
+            out = self._release_check(bom, allow, unallow, user, record=False)
+        out["pending"] = (f"recorded; another run is changing this library right now, so the release is recorded in "
+                          f"the change ledger when it finishes")
+        return out
 
-    def _release_check(self, bom, allow=(), unallow=(), user=None):
+    PLAN_LOCK_WAIT = 30                                # seconds a decision waits for plan.lock (held only briefly)
+
+    @contextlib.contextmanager
+    def _decision_lock(self):
+        """plan.lock alone, for a decision (approve / reject, release anyway) that is only recorded into plan.json. It
+        never needs the library lock, so it is never waited out by a librarian run: only by another short plan write."""
+        from .fsutil import plan_lock
+        with plan_lock(self.root, wait=True, timeout=self.PLAN_LOCK_WAIT) as free:
+            if not free:
+                raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
+            yield
+
+    def _release_check(self, bom, allow=(), unallow=(), user=None, record=True):
         from . import release_check as RC
+        user = user.strip() if isinstance(user, str) else ""
+        if allow:                                          # as _approve_part: never this machine's git identity, which on a
+            if not user:                                   # shared computer names someone else than who clicked
+                raise ValueError("say who you are: type your name to release a part anyway (user is required, e.g. "
+                                 "\"Ann Lee <ann@example.com>\"); it is recorded so that person cannot also approve it")
+            if len(user) > 200 or any(c in user for c in "\r\n\0"):
+                raise ValueError("user must be one line of at most 200 characters")
         bom_path = self._bom_path(bom)
         out = self._librarian_dir(bom_path)
         plan_f = out / "plan.json"
@@ -560,13 +630,12 @@ class Workspace:
         if unknown:
             raise ValueError(f"not parts of this plan: {', '.join(sorted(unknown))}")
         rows = RC.apply(items, out, list(allow), list(unallow), who="ecadlib ui/mcp", rules=self.rules())
-        user = user.strip() if isinstance(user, str) else ""
-        if allow and user:
+        if allow:                                          # the person who released it, so no_self_approval can see them
             from .approvals import post_check, stamp_allow
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
-        if allow:                                          # change control: revision 1 of what was released
-            RC.record_releases(items, out, list(allow), user or None)
+        if allow and record:                               # change control: revision 1 of what was released
+            RC.record_releases(items, out, list(allow), user)
         write_text_atomic(plan_f, json.dumps(items, indent=2))
         if allow or unallow:
             from . import timing
@@ -576,16 +645,41 @@ class Workspace:
         L.write_review(L.review_rows(items), out, str(bom_path))
         return self._librarian_summary(bom_path, items, [])
 
+    LIBRARY_LOCK_WAIT = 2                              # seconds a UI request waits for a library another run is changing
+                                                       # (then: a decision is recorded at once, a file rewrite is queued)
+
     @contextlib.contextmanager
-    def _plan_lock(self):
-        """<workspace>/plan.lock around a plan rewrite (not re-entrant: locked methods call the unlocked _bodies): while
-        another ecadlib command rewrites the plan, a change written now would be overwritten by its copy, so it is
-        refused instead."""
+    def _plan_lock(self, bom=None, folder=None):
+        """<workspace>/plan.lock around a plan rewrite (locked methods call the unlocked _bodies): while another ecadlib
+        command rewrites the plan, a change written now would be overwritten by its copy, so it is refused instead.
+        bom / folder: the rewrite goes on to change-control steps (release anyway, resolve, dedupe merge, restyle, part
+        approve), so that plan's library lock is taken first (the lock order in fsutil); a run holding it (a librarian
+        run, a publisher) raises LibraryBusy after a few seconds instead of a wait with plan.lock held: the caller
+        records a decision without it (release_check) or the web UI queues the request until the lock is free."""
         from .fsutil import plan_lock
-        with plan_lock(self.root, wait=False) as free:
-            if not free:
-                raise ValueError("another ecadlib command is changing this plan right now; try again in a minute")
+        if folder is None and bom is not None:
+            folder = self._librarian_dir(self._bom_path(bom))
+        with self._library_lock(folder):
+            with plan_lock(self.root, wait=True, timeout=self.PLAN_LOCK_WAIT) as free:
+                if not free:
+                    raise ValueError("another ecadlib command is changing this plan right now; try again in a minute")
+                yield
+
+    @contextlib.contextmanager
+    def _library_lock(self, folder):
+        from . import ledger as LG
+        if folder is None or not (Path(folder) / "plan.json").is_file():
             yield
+            return
+        try:
+            key = LG.lock(folder, wait=self.LIBRARY_LOCK_WAIT)
+        except LG.LedgerError:
+            raise LibraryBusy("another ecadlib command is changing this library right now; try again in a minute",
+                              folder) from None
+        try:
+            yield
+        finally:
+            LG.unlock(key)
 
     def _librarian_summary(self, bom_path, items, log):
         from . import librarian as L, reports as RP
@@ -677,7 +771,7 @@ class Workspace:
         the librarian's models folder, then re-run the release check and rewrite the review / release-check reports.
         pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`. approve=False: the
         choice is not an approval of a change to a released part (resolve.choose), which is then held."""
-        with self._plan_lock():
+        with self._plan_lock(bom):
             return self._choose_part(bom, part, kind, candidate_id, pin_map, user, approve)
 
     def _choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None, approve=True):
@@ -716,11 +810,10 @@ class Workspace:
     def approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp", aliases=()):
         """Record an approve / reject (see _approve_part). Holds <workspace>/plan.lock while it rewrites the plan: while
         another ecadlib command rewrites it, the decision is refused ("decide again in a minute") instead of being
-        overwritten when that command saves its copy."""
-        from .fsutil import plan_lock
-        with plan_lock(self.root, wait=False) as free:
-            if not free:
-                raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
+        overwritten when that command saves its copy. plan.lock is held only for short plan writes (a librarian run
+        holds it for its final write, not while it looks parts up, and keeps decisions recorded meanwhile): the
+        decision waits for it a few seconds rather than being refused."""
+        with self._decision_lock():
             return self._approve_part(bom, part, decision, user, role, comment, via)
 
     def _approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp"):
@@ -765,7 +858,7 @@ class Workspace:
         """Duplicate parts (same MPN), footprints (same geometry) and symbols (same pinout) across the librarian plan
         and the workspace's altium_models/ and footprints/. merge=True points duplicates at their keeper in the plan
         (library files are never changed; plan.json.pre-dedupe keeps the old plan) and re-runs the release check."""
-        with self._plan_lock() if merge else contextlib.nullcontext():
+        with self._plan_lock(bom) if merge else contextlib.nullcontext():
             return self._find_duplicates(bom, merge)
 
     def _find_duplicates(self, bom, merge=False):
@@ -821,7 +914,7 @@ class Workspace:
         reports/project_<name>.csv, which triage/librarian also accept, as does the project file itself."""
         from . import altium_project as AP
         p = self._bom_path(project)
-        prj = AP.load_project(p)
+        prj = AP.load_project(p, self.rules())        # house parameter names ([parameters] names) for base and variant
         groups = AP.bom_groups(prj, variant)
         variants = [v["name"] for v in prj["variants"]]
         out = AP.write_bom_csv(groups, self.root / "reports" / f"project_{self._key(p)}{'_' + self.safe_name(variant) if variant else ''}.csv", variants)
@@ -840,16 +933,17 @@ class Workspace:
         if plan and not plans[0].is_file():
             raise ValueError(f"plan not found: {plan} is not a plan.json file")
         libs = [str(self.models)] if self.models.exists() else []
-        res = AP.where_used(dirs, part, plans[0] if plans else None, libs)
+        res = AP.where_used(dirs, part, plans[0] if plans else None, libs, rules=self.rules())
         files = AP.write_where_used(res, self.root / "reports" / "where_used")
         rows = AP.where_used_rows(res)
         return {"projects": res["projects"], "flags": res["flags"], "rows": rows, "warnings": res["warnings"],
                 "library": [self.rel(p) if self._is_inside(p) else str(p) for p in plans[:1]] + [self.rel(l) for l in libs],
                 "reports": [self.rel(f) for f in files.values()]}
-    def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False):
+    def _datasheet_reader(self, out, batch=True, wait=False, estimate=False, yes=False, offline=None):
         from . import datasheet as D
         rd = D.Reader(out, self.root / "http_cache", rules=self.rules(), batch=batch, wait=wait, estimate=estimate, yes=yes,
-                      http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60), log=lambda *a: None,
+                      http=CachedHTTP(self.root / "http_cache", offline=self.offline if offline is None else offline,
+                                      timeout=60), log=lambda *a: None,
                       handoff=False)          # the web UI, MCP and the menus: no terminal to tell what to save where
         rd.count_tokens = False     # quotes send nothing before the click: rough; the send-time cap check counts the same way
         return rd
@@ -917,16 +1011,22 @@ class Workspace:
         """Which datasheet parts of the librarian plan were cross-checked against a second source (ecadlib.crosscheck)
         and how: agreed, disagreed (held, both values in the review), unchecked or skipped. Sends nothing."""
         import json
-        from . import crosscheck as CC
+        from . import crosscheck as CC, partview as PV
         out = self._librarian_dir(self._bom_path(bom))
         plan_f = out / "plan.json"
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        parts = [{"part": it["name"], "status": it.get("status"), "cross_check": it["cross_check"]["status"],
-                  "summary": it["cross_check"].get("summary", "")}
-                 for it in json.loads(plan_f.read_text(encoding="utf-8")) if it.get("cross_check")]
+        parts = []
+        for it in json.loads(plan_f.read_text(encoding="utf-8")):
+            if not it.get("cross_check"):
+                continue
+            shown = PV.cross_check(it["cross_check"]) or {}         # (the part panel's label and pins, R-FX18-5)
+            parts.append({"part": it["name"], "status": it.get("status"), "cross_check": it["cross_check"]["status"],
+                          "label": shown.get("label", ""), "summary": it["cross_check"].get("summary", ""),
+                          **({"pins": shown["pins"]} if shown.get("pins") else {})})
         counts = {s: sum(p["cross_check"] == s for p in parts) for s in ("agreed", "disagreed", "unchecked", "skipped")}
-        return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}
+        counts["pins_unchecked"] = sum(p.get("pins") == "unchecked" for p in parts)   # (of those agreed: pin names
+        return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}             # no second source compared)
 
     def library_parts(self, bom, pictures=True):
         """The librarian plan of a BOM as cards (ecadlib.partview): status in plain words, held reasons with a next
@@ -963,16 +1063,13 @@ class Workspace:
         approve / reject`). An approval names the digest of the held change the person was shown (the part card's
         change.digest); a change proposed again since is refused. Holds the plan lock like approve_part."""
         from . import change_cli as CC, change_gate as CG
-        from .fsutil import plan_lock
         if decision not in ("approve", "reject"):
             raise ValueError("decision must be approve or reject")
         if decision == "approve" and not str(digest or "").strip():
             raise ValueError("digest is required: the digest of the held change shown to you (reload the part to see it)")
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
-        with plan_lock(self.root, wait=False) as free:
-            if not free:
-                raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
+        with self._plan_lock(folder=plan_f.parent):    # the library lock, then plan.lock (CC writes under both)
             try:
                 res = (CC.approve(plan_f, [part], user, comment or "", role, {part: str(digest)}) if decision == "approve"
                        else CC.reject(plan_f, [part], user, comment or ""))
@@ -983,16 +1080,13 @@ class Workspace:
     def revert_part(self, bom, part, revision, user, comment=""):
         """Release an older revision of a part again, as a new revision (`ecadlib part revert PART@REV`)."""
         from . import change_cli as CC, change_gate as CG
-        from .fsutil import plan_lock
         try:
             revision = int(revision)
         except (TypeError, ValueError):
             raise ValueError("revision must be a number") from None
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
-        with plan_lock(self.root, wait=False) as free:
-            if not free:
-                raise ValueError("another ecadlib command is changing this plan right now; try again in a minute")
+        with self._plan_lock(folder=plan_f.parent):
             try:
                 res = CC.revert(plan_f, f"{part}@{revision}", user, comment or "")
             except CG.ChangeError as e:
@@ -1012,20 +1106,45 @@ class Workspace:
         return self.rel(dest)
 
     def altium365_workspaces(self):
+        """The workspaces the token sees, each marked `configured` when it is the one the rules name ([altium365]
+        workspace): the only one a real push goes to. `configured` at the top: that URL, or "" when none is set."""
         from . import altium365 as A
-        return {"workspaces": A.Nexar(_nexar_token()).workspaces()}
+        conf = str((self.rules().get("altium365") or {}).get("workspace") or "").strip()
+        got = [dict(w, configured=bool(conf) and A.ws_target(w.get("url")) == A.ws_target(conf))
+               for w in A.Nexar(_nexar_token()).workspaces()]
+        return {"workspaces": got, "configured": conf, "rules": self._label(self.rules_in_use() or self.rules_file())}
 
     def altium365_push(self, bom, workspace_url, dry_run=True):
         """Release ready parts and update parameters of existing ones; parts the release check held are left
-        alone. dry_run (the default) sends nothing and returns the requests that would be made."""
-        if not workspace_url and not dry_run:
-            raise ValueError("choose an Altium 365 workspace first")
+        alone. dry_run (the default) sends nothing and returns the requests that would be made. A real push goes only
+        to the workspace the rules name ([altium365] workspace), as the CLI and the menu do; no URL means that one."""
+        workspace_url = self._a365_push_target(workspace_url, dry_run)
         import contextlib
         from . import change_gate as CG
         lib_plan = self._librarian_dir(self._bom_path(bom)) / "plan.json"
         # a real push of a librarian library holds the library lock from the settle step to the record (change control)
         with contextlib.nullcontext() if dry_run or not lib_plan.is_file() else CG.publishing(lib_plan.parent):
             return self._altium365_push(bom, workspace_url, dry_run, lib_plan)
+
+    def _a365_push_target(self, workspace_url, dry_run):
+        """The workspace URL a push goes to. A real push (it creates components) is refused when the rules name no
+        Altium 365 workspace, or name another one than workspace_url (compared as altium365.ws_target: host case and a
+        trailing slash do not count). A dry run sends nothing and may name any workspace."""
+        from .altium365 import ws_target
+        conf = str((self.rules().get("altium365") or {}).get("workspace") or "").strip()
+        url = str(workspace_url or "").strip() or conf
+        if dry_run:
+            return url
+        where = self._label(self.rules_in_use() or self.rules_file())
+        if not conf:
+            raise ValueError("no Altium 365 workspace is configured, so nothing was pushed: a real push goes only to the "
+                             f"workspace named in the rules. Add it to {where}:\n[altium365]\nworkspace = \"{url or 'https://<you>.365.altium.com'}\"\n"
+                             "(`ecadlib altium365 workspaces` lists the workspaces your token can see). A dry run needs no setting.")
+        if ws_target(url) != ws_target(conf):
+            raise ValueError(f"{url} is not the Altium 365 workspace this library publishes to ({conf}, [altium365] "
+                             f"workspace in {where}), so nothing was pushed. To publish there, change [altium365] "
+                             "workspace in the rules first. A dry run to any workspace is still allowed.")
+        return url
 
     def _altium365_push(self, bom, workspace_url, dry_run, lib_plan):
         from . import altium365 as A
@@ -1247,41 +1366,30 @@ class Workspace:
         (restyle_quote); with the amount the person approved, the model is asked (dry run or not)."""
         from . import house_style as HS
         prof = self._style_or_raise()
-        with self._plan_lock():
-            _, plan_f, items = self._plan(bom)
-            only = {part} if part else None
-            done = HS.adapt_items(items, prof, self.rules(), only)
-            rejected = []
-            quote = None
-            if ai:
-                from . import ai_cost as AC
-                if self.offline:
-                    raise ValueError("--offline: the model is not asked; run without --offline to reword with it")
-                quote = self.restyle_quote(items, prof, model, only)
-                if approved_usd is None and not (price_unknown_ok and not quote["price_known"]):
-                    return {"changes": done, "rejected": [], "written": False, "plan": self.rel(plan_f), "ai": quote,
-                            "text": "the model was not asked: approve the quote (approved_usd) to have it reword the parts"}
-                if not quote["key_set"]:
-                    raise ValueError(quote["text"])
-                AC.approve(quote, approved_usd, over_limit_ok, price_unknown_ok)
-                more, rejected = HS.adapt_with_model(items, prof, self.rules(), model, only=only)
-                for k, v in more.items():
-                    done.setdefault(k, []).extend(v)
-            if done and not dry_run:              # change control (#105): a restyle may only change cosmetics
-                from . import change_gate as CG
-                before = json.loads(plan_f.read_text(encoding="utf-8"))
-                gate = CG.Guard(plan_f.parent, "style-apply", rules=self.rules())
-                gate.begin(before)
-                for r in gate.restyle(before, items):
-                    if r["action"] in ("refused", "hold"):
-                        done.pop(r["part"], None)
-                        rejected.append(f"{r['part']}: {r['summary']}")
-            if done and not dry_run:
-                bak = plan_f.with_name(plan_f.name + ".style.bak")
-                if not bak.exists():
-                    bak.write_text(plan_f.read_text(encoding="utf-8"), encoding="utf-8")
-                from .fsutil import write_text_atomic
-                write_text_atomic(plan_f, json.dumps(items, indent=2))
+        import copy
+        _, plan_f, items = self._plan(bom)
+        start = copy.deepcopy(items)
+        only = {part} if part else None
+        done = HS.adapt_items(items, prof, self.rules(), only)
+        rejected = []
+        quote = None
+        if ai:
+            from . import ai_cost as AC
+            if self.offline:
+                raise ValueError("--offline: the model is not asked; run without --offline to reword with it")
+            quote = self.restyle_quote(items, prof, model, only)
+            if approved_usd is None and not (price_unknown_ok and not quote["price_known"]):
+                return {"changes": done, "rejected": [], "written": False, "plan": self.rel(plan_f), "ai": quote,
+                        "text": "the model was not asked: approve the quote (approved_usd) to have it reword the parts"}
+            if not quote["key_set"]:
+                raise ValueError(quote["text"])
+            AC.approve(quote, approved_usd, over_limit_ok, price_unknown_ok)
+            more, rejected = HS.adapt_with_model(items, prof, self.rules(), model, only=only)
+            for k, v in more.items():
+                done.setdefault(k, []).extend(v)
+        if done and not dry_run:                  # the plan as it is now, its decisions kept; change control (#105)
+            with self._plan_lock(bom):            # (the model call above holds no lock: decisions go on meanwhile)
+                HS.write_restyled(plan_f, start, items, done, rejected, self.rules(), held_hint=False)
         r = {"changes": done, "rejected": rejected, "written": bool(done) and not dry_run, "plan": self.rel(plan_f)}
         if quote:
             r["ai"] = quote
@@ -1368,13 +1476,13 @@ class Workspace:
                                           "`ecadlib keys set`.", "")
             pr["ai"] = q
         if not render_only and q is not None:     # a paid call: only for the amount the person approved
-            cap, _ = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+            cap, unknown_ok = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
             import copy
             rules = copy.deepcopy(rules)
             pc = rules.setdefault("agent", {}).setdefault("proof", {})
             own = float(pc.get("max_cost_usd") or 0)      # the person's own [agent.proof] cap still holds
             pc["max_cost_usd"] = min(cap, own) if cap and own else cap or own
-            pr = dict(VC.prove(item, self.root, rules, client=client, out_dir=out, render_only=False), ai=q)
+            pr = dict(VC.prove(item, self.root, rules, client=client, out_dir=out, render_only=False, yes=unknown_ok), ai=q)
         pr["proof_file"] = self.rel(VC.write_proof(pr, out / "proof.json"))
         pr["images"] = {k: [self.rel(f) for f in v] for k, v in pr["images"].items()}
         return pr
@@ -1385,8 +1493,9 @@ class Workspace:
         if fmt not in ("csv", "json", "xlsx"):
             raise ValueError(f"format must be csv, json or xlsx, not {str(fmt)[:20]!r}")
         bom_path, plan_f, _ = self._plan(bom)
-        rows = PE.rows(plan_f, name, include_held, rules=self.rules_in_use())
-        out = PE.write(rows, self.root / "reports" / f"parts_{self._key(bom_path)}.{fmt}", fmt)
+        out = self.root / "reports" / f"parts_{self._key(bom_path)}.{fmt}"
+        rows = PE.rows(plan_f, name, include_held, rules=self.rules_in_use(), previous=PE.previous_rows(out, fmt))
+        out = PE.write(rows, out, fmt)
         return {"file": self.rel(out), "parts": len(rows), "columns": PE.COLUMNS}
 
     def kicad_dblib(self, bom, name="ecadlib", driver=None, include_held=False):

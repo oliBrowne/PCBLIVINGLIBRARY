@@ -326,9 +326,11 @@ def test_ds2_24_a_tab_that_repeats_a_lead_number_needs_pin_positions():
     ext = copy.deepcopy(_sot223("2.30")["sidecar"]["extraction"])
     ext["package"]["pin_positions"][1]["side"] = "R"   # lead 2 read on the tab's side: it builds, under tab 4
     res = D.process(ext, "AMS1117-3.3", "ds.pdf")
-    assert DR.assess(res) == ("failed", ["footprint_gen.build failed: the pads would short: pads 2 and 4 overlap by "
-                                         "2.025 mm (check pitch, pin_count and terminal_length against the drawing)"]), \
+    kind, why = DR.assess(res)                         # (review 196 R-RD-5: the tab on a lead is its own failed check)
+    assert kind == "failed" and why[-1] == ("footprint_gen.build failed: the pads would short: pads 2 and 4 overlap by "
+                                            "2.025 mm (check pitch, pin_count and terminal_length against the drawing)"), \
         (DR.assess(res), res["needs_review"])
+    assert any(w.startswith("tab: on side R, the leads' own side") and "lead(s) 2" in w for w in why), why
 
 
 # ---- DS2-24 (review): the second read is asked for "terminals" (SOT-223 is commonly a 4-terminal part), so it may count
@@ -410,8 +412,12 @@ def test_ds2_22_a_cap_set_to_ten_holds_like_any_cap_you_set(tmp_path, monkeypatc
                          "prov": {"pages": 40, "sent_as": "base64"}}])
         return rules
 
-    rules = guard("unset.toml")                       # no cap in the file: the default one can't stop it, said aloud
-    assert "the default $10 cap can't be checked" in said[0] and AC.limit(rules) == (1.0, "ask_above_usd"), said
+    try:                                              # no cap in the file: the default one can't be checked, so a
+        guard("unset.toml")                           # remote model with no price is not sent (fix 2026-10-26)
+        raise AssertionError("an unpriced remote model was sent under the default cap")
+    except D.DatasheetError as e:
+        assert "the default $10 cap can't be checked" in str(e) and "nothing sent" in str(e), e
+    assert AC.limit(RU.load(str(tmp_path / "unset.toml"))) == (1.0, "ask_above_usd")
     try:
         guard("set.toml")
         raise AssertionError("max_cost_usd = 10 in the file did not hold an unpriced model")

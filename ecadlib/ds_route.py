@@ -10,7 +10,8 @@ Used by datasheet.Reader (and so by the librarian, `ecadlib datasheet batch` and
   pin count and page count.
 * assess / next_step: after an answer, datasheet's own checks (schema_check, sanity, check_pins, self_check, the
   page citations) say ok / incomplete / failed. Incomplete widens the pages first; failed moves to the next model;
-  the top of the ladder with every page is the last try, and its answer is kept with its review items.
+  the top of the ladder with every page is the last try, and its answer is kept with its review items, unless it
+  still fails a check that can build the part wrong (hold_reasons): then it is held and nothing is built.
 * usage_usd / Ledger: USD per attempt from the API usage block (or an estimate), appended to
   <out>/datasheet/cost.jsonl; summarize() feeds the librarian review, `ecadlib status` and the estimate.
 
@@ -970,6 +971,71 @@ INCOMPLETE = re.compile(r"no value printed|no nominal value printed|cited page\(
 FAILED = re.compile(r"^(schema:|self-check:|symbol:|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
                     r"pad_table:(?! copied as the model gave it)|land pattern:)|min <= nom <= max violated|implausib|leads would touch| span \d|pins per side|is odd for a "
                     r"dual-row|lead_span min|^exposed_pad\.\w+ [\d.]+ >=|under \d+% of", re.I)
+
+
+# A failed check that can leave the part built wrong: a dimension, pin layout, pad table or land that contradicts
+# itself or the pins. The last answer of a route that still fails one is held before anything is built
+# (hold_reasons). Not these, which can fail a read that is right and build nothing wrong from it:
+#   schema: / footprint_gen.build failed / altium_lib...failed: the read can't be built, so no footprint comes from it
+#     (the standard table may still give the land: KTY83, benchmark 2026-10-23);
+#   self-check: the read against its own package name and the family's usual range (LT3652IDD's real 0.45 mm pitch,
+#     benchmark 2026-10-23, was built right and counted right);
+#   symbol: the pins against the pads and the pin count: right parts fail them (a TO-252's cut middle lead with the
+#     tab numbered 4, a BGA's unconnected balls left out of the pin table, a pin with no usable name: eval gate
+#     answers scored right), and the release check holds them for a person anyway. Only a channel put on another
+#     channel's pin (the numbered-bank check) is held here: it builds a symbol wired to the wrong channel.
+SOFT_FAILED = re.compile(r"^(schema:|self-check:|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
+                         r"symbol:(?!.* bank has no ))", re.I)
+SYMBOL_FAILED = re.compile(r"^symbol:", re.I)
+
+
+# an exposed pad narrower than a lead, but not under 0.2 mm and a plausible share of the body (15 % of its shorter
+# side): a 1 x 1 mm DFN's real pad can be 0.275 mm beside 0.3 mm leads (27 %); a unit slip makes it far smaller, 0.057
+# "mm" for 1.45, or 0.203 "mm" for a 7 x 7 QFN's 5.15 mm pad (3 %). Still a failed read, not a hold.
+_EP_SMALL = re.compile(r"^exposed_pad\.\w+: ([\d.]+) mm is implausibly small for an exposed pad")
+
+
+def _soft(line, spec=None):
+    if SOFT_FAILED.match(line):
+        return True
+    m = _EP_SMALL.match(line)
+    if not m or float(m.group(1)) < 0.2:
+        return False
+    from .datasheet import _dim
+    sides = [d[1] for d in (_dim((spec or {}).get(k)) for k in ("body_length", "body_width")) if d and d[1]]
+    return bool(sides) and float(m.group(1)) >= 0.15 * min(sides)
+
+
+def hard_failures(why, spec=None):
+    """The lines of assess()'s reasons that can make the part wrong: failed checks that are not soft, whatever the
+    verdict. An 'incomplete' answer (a field left unresolved) keeps its failed lines after the incomplete ones, and
+    those still count (review R-RT-1: overlapping pads plus one unresolved field was never held)."""
+    return [w for w in why if not str(w).startswith("unresolved: ") and not INCOMPLETE.search(w)
+            and FAILED.search(w) and not _soft(w, spec)]
+
+
+def effective_kind(kind, why, spec=None):
+    """assess()'s verdict for ranking a route's answers: an incomplete answer that also fails a hard check ranks with
+    the failed ones, below an incomplete answer that fails nothing (Reader._walk, llm.run._better)."""
+    return "failed" if kind == "incomplete" and hard_failures(why, spec) else kind
+
+
+def hold_reasons(res, fp_needed=True):
+    """The failed checks to hold a route's last answer for, or [] (ok, or only checks that can't make the part wrong).
+    An incomplete answer is held for its hard failed checks too. fp_needed=False (the footprint comes from another
+    source): only the symbol's checks count."""
+    kind, why = assess(res)
+    if kind == "ok":
+        return []
+    hard = hard_failures(why, res.get("spec"))
+    if kind == "incomplete":       # a pad-table numbering error never becomes copper (footprint_adv.table_geometry
+        hard = [w for w in hard if not PAD_TABLE_NUMBERING.match(w)]   # refuses it): the librarian holds it, with fp-edit's fix
+    return hard if fp_needed is not False else [w for w in hard if SYMBOL_FAILED.match(w)]
+
+
+# check_pad_table's numbering errors (datasheet.py writes them "pad_table: ..."): no pin 1, a pad listed twice, a count
+# that is not pin_count. Geometry errors (overlaps, units) still hold the read.
+PAD_TABLE_NUMBERING = re.compile(r"^pad_table: (no pad numbered 1|pad \S+ is listed twice|pin_count is )")
 
 
 # unresolved fields the footprint never reads (package_schema.json: height_max is "used for 3D/descr only"): a review

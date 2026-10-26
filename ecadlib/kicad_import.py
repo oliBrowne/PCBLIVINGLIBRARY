@@ -267,7 +267,7 @@ def _convert_footprint(text, name=None, source="", notes=None, license_=""):
                 continue
             _graphic(fp, kind, g, layer, notes)
     if skipped:
-        notes.append("graphics on unmapped layers dropped: " + ", ".join(f"{k} x{v}" for k, v in sorted(skipped.items(), key=str)))
+        notes.append(LOST_NOTE + ", ".join(f"{k} x{v}" for k, v in sorted(skipped.items(), key=str)))
     _zones(fp, t, notes)
     fp["texts"] = AL.texts_from_kicad(t)
     if fp["texts"]:
@@ -279,6 +279,22 @@ def _convert_footprint(text, name=None, source="", notes=None, license_=""):
         if n:
             notes.append(f"{n} {'user ' if k == 'fp_text' else ''}{k} not converted")
     return fp, t
+
+
+LOST_NOTE = "graphics on unmapped layers dropped: "
+
+
+def lost_copper(notes):
+    """The copper graphics convert_footprint dropped (B.Cu, inner copper: no Altium layer for them) -> ["B.Cu x2", ...]."""
+    return [x for n in notes if str(n).startswith(LOST_NOTE) for x in str(n)[len(LOST_NOTE):].split(", ") if ".Cu" in x]
+
+
+def lost_copper_hold(name, notes):
+    """The hold for a footprint whose .PcbLib lacks copper the KiCad footprint has (a net tie's bottom bridge, an
+    antenna's ground), for every caller of convert_footprint; None when nothing was dropped (R-FX9-1)."""
+    lost = lost_copper(notes)
+    return (f"footprint {name}: copper not written to the .PcbLib ({', '.join(lost)}); draw it in Altium or choose "
+            "another footprint") if lost else None
 
 
 def _offset(pts, d):
@@ -301,12 +317,14 @@ def _offset(pts, d):
 
 
 def _custom_shapes(p, x, y, rot, edges=True):
-    """Filled primitives of a KiCad custom pad -> ([polygons], [tracks (x1, y1, x2, y2, w)]) in footprint mm, y up;
-    None when a primitive can't be drawn exactly (curves, arcs, unfilled outlines)."""
+    """Filled primitives of a KiCad custom pad -> ([polygons], [tracks (x1, y1, x2, y2, w)], [copper polygons]) in
+    footprint mm, y up; None when a primitive can't be drawn exactly (curves, arcs, unfilled outlines). A stroked
+    primitive: polygons are grown by half the stroke (mitred: the mask / paste windows); the copper polygons are the
+    outline itself, and its round-ended edge tracks give the stroke with KiCad's round corners (R-FX9-2)."""
     def tf(px, py):                           # pad frame (KiCad, y down) -> footprint, y up
         dx, dy = _rot(px, -py, rot)
         return x + dx, y + dy
-    polys, tracks = [], []
+    polys, tracks, cu = [], [], []
     for g in (sexpr.first(p, "primitives") or [])[1:]:
         w = _width(g)
         filled = _filled(g) or (sexpr.first(g, "fill") is None and g[0] == "gr_poly")
@@ -325,9 +343,10 @@ def _custom_shapes(p, x, y, rot, edges=True):
         else:
             return None
         polys.append(_offset(pts, w / 2) if w else pts)
-        if w and edges:                       # stroke around the outline: exact edges, mitred corners
+        if w and edges:                       # stroke around the outline: round-ended tracks on the edges
             tracks += [(*a, *b, w) for a, b in zip(pts, pts[1:] + pts[:1])]
-    return polys, tracks
+        cu.append(pts if w and edges else polys[-1])
+    return polys, tracks, cu
 
 
 def inherit_margins(t):
@@ -352,7 +371,7 @@ def _custom_regions(fp, pad, shapes, kind, layers, p, notes=None):
     """Regions for a custom pad's shape: copper on the pad's copper layers, solder mask grown by the pad's mask margin
     (0 when KiCad has none, as the anchor pad's manual expansion), paste by its paste margin. Altium gives primitives
     that touch a pad in a footprint the pad's net on the board."""
-    polys, tracks = shapes
+    polys, tracks, cu_polys = shapes
     lay = set(layers)
     cu = [AL.TOP, AL.BOTTOM] if kind != "smd" and lay & {"*.Cu", "F&B.Cu"} else \
         [l for n, l in (("F.Cu", AL.TOP), ("B.Cu", AL.BOTTOM)) if n in lay]
@@ -360,7 +379,7 @@ def _custom_regions(fp, pad, shapes, kind, layers, p, notes=None):
     paste = [l for n, l in (("F", AL.TOP_PASTE), ("B", AL.BOTTOM_PASTE)) if lay & {f"{n}.Paste", "*.Paste"}]
     mm_, pm = _mask_margin(p) or 0.0, sexpr.first(p, "solder_paste_margin")
     for layer in cu:
-        fp["regions"] += [(pts, layer) for pts in polys]
+        fp["regions"] += [(pts, layer) for pts in cu_polys]
         fp["tracks"] += [(*t, layer) for t in tracks]
     for layer in mask:
         fp["regions"] += [(_offset(pts, mm_), layer) for pts in polys]
@@ -398,7 +417,7 @@ def _pad(fp, p, notes):
     custom = _custom_shapes(p, x, y, rot, edges=not window) if shape == "custom" else None
     if custom and window:
         anchor = (sexpr.first(sexpr.first(p, "options") or [], "anchor") or [None, "circle"])[1]
-        polys, tracks = custom                # a window with a custom shape: anchor + each primitive, on each layer
+        polys, tracks, _ = custom             # a window with a custom shape: anchor + each primitive, on each layer
         shapes = [_round_pts(x, y, w, h, rot) if anchor != "rect" else _rect_pts(x, y, w, h, rot)] + polys + [
             _rect_pts((x1 + x2) / 2, (y1 + y2) / 2, math.hypot(x2 - x1, y2 - y1) + tw, tw, math.degrees(math.atan2(y2 - y1, x2 - x1)))
             for x1, y1, x2, y2, tw in tracks]
@@ -567,7 +586,8 @@ def _graphic(fp, kind, g, layer, notes=None):
     else:
         (x1, y1), (x2, y2) = _xy(sexpr.first(g, "start")), _xy(sexpr.first(g, "end"))
         pts = [(x1, y1), (x2, y2)] if kind == "fp_line" else [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-    if kind != "fp_line" and _filled(g):
+    # a KiCad 5 polygon has no fill token and is always filled (KiCad 6+ writes (fill ...) on every fp_poly)
+    if kind != "fp_line" and (_filled(g) or kind == "fp_poly" and not sexpr.first(g, "fill")):
         fp["regions"].append((pts, layer))
         if w:                                 # stroke around the filled shape
             fp["tracks"] += [(a[0], a[1], b[0], b[1], w, layer) for a, b in zip(pts, pts[1:] + pts[:1])]
@@ -654,7 +674,8 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=Fal
             notes.append(f"3D: no generated STEP ({e})")
         else:
             x0, y0, _, x1, y1, z1 = info["bbox"]
-            h, src = round(z1, 4), "step_gen table" if generic or not src else src     # through-hole: the pin tops
+            gsrc = info.get("height_src") if info.get("height_src") in ("standard table height_max", step_gen.PACKAGE_DEFAULT) else "step_gen table"
+            h, src = round(z1, 4), gsrc if generic or not src else src     # through-hole: the pin tops
             fp["bodies"].append({"pts": [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "height": h,
                                  "step": {"name": f"{AL.file_stem(fp['name'])}.step", "data": data.encode("ascii"), "rot": (0.0, 0.0, 0.0)}})
             notes.append(f"3D: generated STEP ({info['family']} model from {'the package spec' if spec else 'package_specs / the footprint name'}"
@@ -877,6 +898,9 @@ def import_part(spec, out, http, step=False, write=True, gen_step=True, layers=N
         text, src = load_footprint(spec["footprint"], http)
         fp, t = convert_footprint(text, spec.get("footprint_as"), src, rep["notes"],
                                   KICAD_LICENSE if src.startswith("KiCad ") else "")
+        held = lost_copper_hold(fp["name"], rep["notes"])
+        if held:                              # held: no .PcbLib that lacks copper (R-FX9-1)
+            raise ValueError(held)
         add_body(fp, t, http, spec.get("height_mm"), step, rep["notes"], gen_step=gen_step)
         rep["pcblib"] = str(AL.write_pcblib(Path(out) / "PcbLib" / f"{AL.file_stem(fp['name'])}.PcbLib", [fp], layers)) if write else None
         rep["pads"] = len(fp["pads"])

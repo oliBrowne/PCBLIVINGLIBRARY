@@ -50,10 +50,10 @@ def test_sot89_middle_pad_is_lead_plus_tab_not_one_block():
     the lead pad as narrow as pins 1 and 3 (0.6 mm gap along the lead, 0.25 mm at the tab's corner)."""
     text = stdparts.build("SOT-89-3")[0]
     pads = {p["num"]: p for p in FC._pad_rects(sexpr.parse(text))}
-    assert pads["2"]["poly"], pads["2"]
+    assert pads["2"]["polys"], pads["2"]          # (footprint_check keeps a custom pad's copper as polygons)
     gap = min(FC._poly_gap(pads["2"], pads[n]) for n in ("1", "3"))
     assert gap >= 0.25, gap                     # KiCad's own corner gap; 0.18 before
-    xs = [x for x, _ in pads["2"]["poly"]]
+    xs = [x for q in pads["2"]["polys"] for x, _ in q]
     assert abs(min(xs) + 2.6) < 0.01 and abs(max(xs) - 2.0) < 0.01, xs        # still runs from the lead to the tab
 
 

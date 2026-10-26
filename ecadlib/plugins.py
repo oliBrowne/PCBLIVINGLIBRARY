@@ -193,8 +193,10 @@ def run_exporter(name, plan, out_dir, rules=None, eps=None):
     with CG.publishing(Path(plan).parent):
         items = CG.settled_plan(plan, f"plugin:{name}", rules=rules)
         items = [it for it in items if not RC.change_hold(it, Path(plan).parent)]
-        for it in items:                       # the release check again, on the files as they are: `ready` is not enough
-            why = RC.publish_problems(it, Path(plan).parent, rules) if it.get("status", "ready") == "ready" else []
+        for it in items:                       # the release check again, on the files as they are, as on every route:
+            # `ready` / `existing` (pulled parts too: the plugin writes their files) are re-checked, and any other
+            # status ('draft', a 'Ready' typo, a duplicate) reaches the plugin held with publish_problems' reason
+            why = RC.publish_problems(it, Path(plan).parent, rules, writes_files=True) if it.get("status") != "held" else []
             if why:
                 it["status"], it["hold_reasons"] = "held", why
         return _call(name, fn, items, out_dir, rules)

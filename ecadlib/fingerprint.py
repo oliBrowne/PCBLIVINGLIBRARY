@@ -49,8 +49,10 @@ from pathlib import Path
 
 from . import altium_lib as AL, parity as PA, sexpr
 
-SCHEMA = 4                                    # 3: a hidden pin's net as written (case and spelling); 4: pin ends
-#                                               and the pins that share one ("stacks")
+SCHEMA = 6                                    # 3: a hidden pin's net as written (case and spelling); 4: pin ends
+#                                               and the pins that share one ("stacks"); 5: a pad at 89.9996 deg is
+#                                               at 90, stacked pads in content order, a pin table's first instance;
+#                                               6: a KiCad pad's own paste ratio, clearance and thermal settings
 ETYPE_NAME = {0: "input", 1: "io", 2: "output", 3: "open_collector", 4: "passive", 5: "hiz", 6: "open_emitter", 7: "power"}
 MPN_KEYS = ("manufacturer part number", "manufacturer part number 1", "mpn", "mfr part number", "manufacturer_part_number",
             "manufacturerpartnumber", "manufacturer part #", "mfr. part number", "mfr part #", "mfr. #", "mpn1", "mfr_pn",
@@ -200,19 +202,26 @@ def _canon_pads(pads):
              "mask_margin": qmm(p.get("mask_margin")) if p.get("mask_margin") else None,
              "outline": qbox(p.get("outline")) if p["shape"] == "custom" else None,
              "cu": p.get("cu"), **{k: p.get(k) for k in PAD_TOOL_KEYS}}
+        if p["rot"] is not None and q["rot"] == 0.0 and float(p["rot"]) % 90.0 > 45.0:   # 89.9996 deg rounds to 90,
+            q["w"], q["h"] = q["h"], q["w"]                                           # a quarter turn: w and h swap
         if q["side"] == "NPTH":                # Altium's NPTH pad is the hole: size, shape and mask follow the drill
             q.update(w=None, h=None, rot=0.0, shape="hole", corner=0, mask=None, mask_margin=None, cu=None, cu_in=None)
         if q["shape"] == "round" and q["w"] == q["h"]:
             q["rot"] = 0.0
         out.append(q)
-    return sorted(out, key=lambda q: (q["num"], q["x"] or 0, q["y"] or 0))
+    # pads that share a number and a centre (a pad shape built of stacked pads) in a fixed order whatever the file's:
+    # the rest of the pad decides, so the same pads written in another order are the same fingerprint
+    return sorted(out, key=lambda q: (q["num"], q["x"] or 0, q["y"] or 0, json.dumps(q, sort_keys=True, default=str)))
 
 
 # per-pad details one tool has and the other has not (kept out of gid, compared within one tool):
 # cu_in  KiCad copper on the inner layers (*.Cu) or only outside (F&B.Cu); zone  KiCad zone_connect (-1 = the
 # footprint's); pintype / pinfunc  KiCad's pad pin type and function; prop  KiCad fabrication property (heatsink,
-# fiducial, testpoint ...); prim  a digest of a custom pad's copper shape ("k:" KiCad primitives, "a:" Altium regions)
-PAD_TOOL_KEYS = ("cu_in", "zone", "pintype", "pinfunc", "prop", "prim")
+# fiducial, testpoint ...); prim  a digest of a custom pad's copper shape ("k:" KiCad primitives, "a:" Altium regions);
+# kset  a KiCad pad's own settings beyond its margins (paste ratio, clearance, thermal bridges: _K_PAD_SETTINGS)
+PAD_TOOL_KEYS = ("cu_in", "zone", "pintype", "pinfunc", "prop", "prim", "kset")
+_K_PAD_SETTINGS = ("solder_paste_margin_ratio", "solder_paste_ratio", "clearance", "thermal_bridge_width",
+                   "thermal_width", "thermal_gap", "thermal_bridge_angle")
 
 
 def _k_cu(kind, layers):
@@ -257,7 +266,15 @@ def _kicad_pad_extras(t):
         cu, cu_in = _k_cu(kind, layers)
         zc, prop = sexpr.first(p, "zone_connect"), sexpr.first(p, "property")
         pt, pf = sexpr.first(p, "pintype"), sexpr.first(p, "pinfunction")
-        out.append({"cu": cu, "cu_in": cu_in, "zone": int(float(zc[1])) if zc else -1,
+        kset = {}
+        for k in _K_PAD_SETTINGS:
+            n = sexpr.first(p, k)
+            if n and len(n) > 1:
+                try:
+                    kset[k] = round(float(n[1]), 6)
+                except ValueError:
+                    kset[k] = str(n[1])
+        out.append({"cu": cu, "cu_in": cu_in, "zone": int(float(zc[1])) if zc else -1, "kset": kset,
                     "pintype": str(pt[1]) if pt else "", "pinfunc": str(pf[1]) if pf else "",
                     "prop": str(prop[1]) if prop and len(prop) > 1 else "",
                     "prim": _k_prim(p, rot) if shape == "custom" else None})
@@ -602,9 +619,8 @@ def _pin_table(found, n_units):
         out.setdefault(num, []).append(rec)
     table = {}
     for num, recs in out.items():
-        first = min(recs, key=lambda r: r.get("style") or 1)
         inst = sorted(recs, key=lambda r: (r.get("style") or 1, r.get("unit") or 0, json.dumps(r, sort_keys=True, default=str)))
-        table[num] = dict(first, inst=inst)
+        table[num] = dict(inst[0], inst=inst)       # the first copy by that order, never by the file's (cid, digest)
     return table
 
 

@@ -78,13 +78,35 @@ def third_party_var(kicad):
 
 
 def default_identifier(lib):
-    return "local.ecadlib." + (re.sub(r"[^-a-zA-Z0-9]+", "-", lib).strip("-") or "library")
+    """local.ecadlib.<lib>: accents folded (Bibliothèque -> Bibliotheque). A name with letters that do not fold to ASCII
+    (部品, Ω) also gets a short hash of the name, so two such libraries never share one identifier (KiCad treats one
+    identifier as one package: installing the second replaced the first). ASCII names keep their identifier. A name
+    too long for KiCad's 100 characters is cut and gets the hash too, after the cut, so two long names never meet."""
+    import unicodedata
+    lib = str(lib)
+    folded = unicodedata.normalize("NFKD", lib).encode("ascii", "ignore").decode("ascii")
+    stem = re.sub(r"[^-a-zA-Z0-9]+", "-", folded).strip("-")
+    room = 100 - len("local.ecadlib.")
+    tag = hashlib.sha256(lib.encode("utf-8")).hexdigest()[:8]
+    if any(not unicodedata.normalize("NFKD", c)[:1].isascii() for c in lib if not c.isascii()) or len(stem) > room:
+        stem = f"{stem[:room - len(tag) - 1].strip('-')}-{tag}".strip("-")
+    return "local.ecadlib." + (stem or "library")
+
+
+def reuse_identifier(out, lib):
+    """The identifier the package of library `lib` was built with before in `out` (its kicad_pcm.json), or None. A
+    rebuild keeps it, so a change of default_identifier (or a name an earlier ecadlib spelled otherwise) never makes
+    KiCad install a second package with the 3D model paths moved."""
+    old = _read(Path(out) / "kicad_pcm.json")
+    ident = old.get("identifier")
+    return ident if old.get("library") == str(lib) and isinstance(ident, str) and ID_RE.match(ident) else None
 
 
 # ---------------------------------------------------------------- file transforms
 def footprint_text(text, lib, var, cid, kicad):
-    """kicad_export's footprint -> PCM install paths (and KiCad 7 syntax for --kicad 7)."""
-    text = re.sub(r'\(model "\$\{KIPRJMOD\}/' + re.escape(lib) + r'\.3dshapes/',
+    """kicad_export's footprint -> PCM install paths (and KiCad 7 syntax for --kicad 7). A model path written from a
+    project folder above the library (${KIPRJMOD}/ecadlib/<lib>.3dshapes, the KiCad window's library) too."""
+    text = re.sub(r'\(model "\$\{KIPRJMOD\}/(?:[^"]*/)?' + re.escape(lib) + r'\.3dshapes/',
                   f'(model "${{{var}}}/3dmodels/{cid}/{lib}.3dshapes/', text)
     return footprint_kicad7(text) if int(kicad) < 8 else text
 
@@ -229,8 +251,8 @@ def check_metadata(m, schema_path=None, definition="Package"):
 # ---------------------------------------------------------------- package
 def check_export_folder(src, lib, rep):
     """Change control (#105): a kicad-export folder is packaged only as kicad-export wrote it. kicad_export.json lists
-    every file the export wrote with its sha256 (taken from the released revisions); a symbol library or footprint
-    edited, replaced or added by hand since is refused, so a package never carries a change no one approved. A 3D
+    every file the export wrote with its sha256 (taken from the released revisions); a symbol library, footprint or
+    SPICE file (<lib>.sim/, which the symbols' Sim.Library points at) edited, replaced or added by hand since is refused, so a package never carries a change no one approved. A 3D
     model the export did not write stays the user's file (kicad-export keeps those too). CRLF line ends (a git checkout
     with core.autocrlf) are not an edit, as for kicad-export. Raises ValueError."""
     from .kicad_export import _same
@@ -243,6 +265,7 @@ def check_export_folder(src, lib, rep):
     written = rep.get("written") or {}
     files = ([src / f"{lib}.kicad_sym"] if (src / f"{lib}.kicad_sym").is_file() else []) + \
         sorted((src / f"{lib}.pretty").glob("*.kicad_mod")) + \
+        sorted(f for f in (src / f"{lib}.sim").glob("*") if f.is_file()) + \
         sorted(f for f in (src / f"{lib}.3dshapes").glob("*") if f.is_file() and f"{lib}.3dshapes/{f.name}" in written)
     bad = []
     for f in files:
@@ -263,11 +286,42 @@ def check_export_folder(src, lib, rep):
 UNCHECKED_NOTE = "NOT CHECKED: packaged with --unchecked from a KiCad folder ecadlib did not export. Its symbols and footprints were not compared with any released revision of an ecadlib library."
 
 
-def _source(src, name, include_held, http, offline, cache, log, unchecked=False):
+EXPORT_DIR = ".kicad-export"     # in --out: where a plan is exported before it is packaged (kept between builds)
+
+
+def staging_dir(out, src, name, identifier):
+    """Where a plan is exported before it is packaged: <out>/.kicad-export-<identifier> for a package named with
+    --identifier (two plans building their own packages into one --out under one --name each have theirs, R-FX18-4),
+    else <out>/.kicad-export. A package's own folder starts as a copy of the .kicad-export an earlier ecadlib kept for
+    it (the same plan's, or the package built there last), so a released part held again keeps what it shipped."""
+    out = Path(out)
+    legacy = out / EXPORT_DIR
+    if not identifier:
+        return legacy
+    keyed = out / f"{EXPORT_DIR}-{identifier}"
+    if not keyed.exists() and legacy.is_dir():
+        from . import change_gate as CG, kicad_export as X
+        lib = X.libname(name or "ecadlib")
+        plan_folder = Path(src).parent
+        c = CG.Claims(legacy / CG.OWNER, legacy)
+        key = f"kicad-export:{lib}"
+        mine = CG.plan_id(plan_folder, create=False)
+        claimed = c.claims.get(key) or []
+        ours = (claimed and all(c.is_me(p, mine, plan_folder) for p in claimed)) or \
+            (not claimed and reuse_identifier(out, lib) == identifier)
+        if ours:
+            shutil.copytree(legacy, keyed)
+    return keyed
+
+
+def _source(src, name, include_held, http, offline, cache, log, unchecked=False, out=None, take_over=False,
+            identifier=None):
     """(export folder, library name, that library's kicad_export record or None, temp dir to clean up or None). unchecked: a folder
     with no kicad_export.json (not written by ecadlib) is packaged without the change-control check; a folder
     kicad-export wrote is always checked. name: the library to package (None: a folder's only library; a plan's is
-    exported as 'ecadlib')."""
+    exported as 'ecadlib'). A plan is exported into `out`/EXPORT_DIR, kept from one build to the next (R-FL-3): a
+    released part held again keeps the version the last package shipped, as kicad-export, kicad-dblib, dblib-sync
+    and the A365 push keep it, so a PCM update never removes it from users' KiCad (out None: a temporary folder)."""
     from . import kicad_export as X
     src = Path(src)
     if src.is_dir():
@@ -303,9 +357,12 @@ def _source(src, name, include_held, http, offline, cache, log, unchecked=False)
     if not src.is_file():
         raise FileNotFoundError(f"{src}: no such plan.json or kicad-export folder")
     from .httpcache import CachedHTTP
-    tmp = Path(tempfile.mkdtemp(prefix="ecadlib-pcm-"))
-    rep = X.export(src, tmp, name or "ecadlib", include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60), log=log)
-    return tmp, rep["library"], rep, tmp
+    tmp = None if out is not None else Path(tempfile.mkdtemp(prefix="ecadlib-pcm-"))
+    exp = staging_dir(out, src, name, identifier) if out is not None else tmp
+    exp.mkdir(parents=True, exist_ok=True)
+    rep = X.export(src, exp, name or "ecadlib", include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60),
+                   log=log, take_over=take_over)
+    return exp, rep["library"], rep, tmp
 
 
 def stage(exp, lib, identifier, prefix, kicad):
@@ -348,7 +405,8 @@ def content_hash(files):
 
 def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_="CC-BY-SA-4.0",
           author="ecadlib user", description=None, homepage=None, base_url=None, include_held=False, http=None,
-          offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False, warn=None):
+          offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False, warn=None,
+          take_over=False):
     """Build the PCM package from a plan.json or a kicad-export folder into `out`; returns the report dict.
     name: with a plan, the library name to export it as (None: 'ecadlib'); with a folder, the library to package
     (None: the folder's only one). unchecked: package a KiCad folder ecadlib did not export (no kicad_export.json) as it is; the package's NOTICE.txt
@@ -363,18 +421,39 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
         raise ValueError(f"--license {license_!r} is not on KiCad's PCM list" + (f" (did you mean {near[0]}?)" if near else
                          "; use one of KiCad's, e.g. CC-BY-SA-4.0, MIT, CC0-1.0, open-source or unrestricted"))
     out = Path(out)
-    exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked)
+    exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked, out=out,
+                                  take_over=take_over, identifier=identifier)
     unchecked = bool(unchecked and Path(src).is_dir() and xrep is None)
+    # parts kicad-export wrote while held (its --include-held): never packaged unless asked for, and then said
+    held = sorted({str(p.get("part")) for p in (xrep or {}).get("parts") or []
+                   if isinstance(p, dict) and p.get("held") and (p.get("symbol") or p.get("footprint"))})
+    if held and not include_held:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+        raise ValueError(f"{src}: not packaged: kicad-export wrote {len(held)} held part(s) into it with --include-held "
+                         f"({', '.join(held[:8])}{' ...' if len(held) > 8 else ''}); export it again without "
+                         f"--include-held, or pass kicad-pcm --include-held to package the held parts anyway")
+    held_note = (f"HELD PARTS: packaged with --include-held: {', '.join(held)} did not pass the release check (or "
+                 f"wait for sign-off); check them before use.") if held else ""
     try:
-        identifier = identifier or default_identifier(lib)
+        identifier = identifier or reuse_identifier(out, lib) or default_identifier(lib)
         if not ID_RE.match(identifier):
             raise ValueError(f"identifier {identifier!r}: letters, digits, '-' and '.', starting with a letter (KiCad's PCM rule)")
+        # one plan folder's package per id and folder (R-FX15-4): a new version from another plan would hold only its
+        # parts, and KiCad's update would replace the first plan's library for its users
+        from . import change_gate as CG
+        owner = Path(src).parent if Path(src).is_file() else \
+            Path(str((xrep or {}).get("plan"))).parent if (xrep or {}).get("plan") else None
+        if owner is not None and owner.is_dir():
+            CG.claim_output(out, f"kicad-pcm:{identifier}", owner, take_over, what=f"the package {identifier}")
         files = stage(exp, lib, identifier, prefix, kicad)
         notice = exp / "NOTICE.txt"
         if notice.is_file():
             files["NOTICE.txt"] = notice.read_bytes()               # root files are not installed; kept in the zip
         if unchecked:
             files["NOTICE.txt"] = files.get("NOTICE.txt", b"") + (UNCHECKED_NOTE + "\n").encode("utf-8")
+        if held_note:
+            files["NOTICE.txt"] = files.get("NOTICE.txt", b"") + (held_note + "\n").encode("utf-8")
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -410,6 +489,8 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
         raise ValueError(f"version {version!r} must be major[.minor[.patch]], e.g. 1.2.0")
     meta = meta_for(version)
     problems, how = check_metadata(meta, schema)
+    if held_note:
+        problems.append(f"held parts packaged (--include-held): {', '.join(held)}; NOTICE.txt says so")
     files["metadata.json"] = (json.dumps(meta, indent=2) + "\n").encode()
     data = zip_bytes(files)
     out.mkdir(parents=True, exist_ok=True)
@@ -589,12 +670,15 @@ def main(argv=None):
     ap.add_argument("--description")
     ap.add_argument("--homepage")
     ap.add_argument("--base-url", help="https URL the folder will be served from: also write repository.json + packages.json")
-    ap.add_argument("--include-held", action="store_true", help="with a plan: also package held parts")
+    ap.add_argument("--include-held", action="store_true", help="also package held parts (a plan's, or those a kicad-export "
+                    "--include-held folder holds); the package's NOTICE.txt and the problems say so")
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--offline", action="store_true", help="with a plan: use the HTTP cache only")
     ap.add_argument("--schema", help="KiCad's pcm.v1.schema.json to validate against (default: the one KiCad installs)")
     ap.add_argument("--unchecked", action="store_true", help="package a KiCad folder ecadlib did not export (no "
                     "kicad_export.json) without checking it against an ecadlib library; the package says so")
+    ap.add_argument("--take-over", action="store_true", help="build the package although another plan folder built "
+                    "it (the same package id) into --out: its library is replaced by this plan's for every user")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     a = ap.parse_args(argv)
     if a.plugin:
@@ -612,7 +696,7 @@ def main(argv=None):
     try:
         rep = build(a.src, a.out, a.name, a.identifier, a.pkg_version, a.kicad, a.prefix, a.license, a.author,
                     a.description, a.homepage, a.base_url, a.include_held, offline=a.offline, cache=a.cache,
-                    schema=a.schema, log=say, unchecked=a.unchecked, warn=log)
+                    schema=a.schema, log=say, unchecked=a.unchecked, warn=log, take_over=a.take_over)
     except (OSError, ValueError) as e:
         print(f"ecadlib kicad-pcm: {e}", file=sys.stderr)
         return 2

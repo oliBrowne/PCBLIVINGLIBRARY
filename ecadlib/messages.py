@@ -130,6 +130,15 @@ CODES = {
     "pins.pad_without_pin": ("Footprint {pads_have} no pin on the symbol.",
                              "Pick a symbol that has those pins, or a footprint that matches; mounting pads are fine.",
                              [r"^pins: pads without a symbol pin: (?P<pads>.+)"]),
+    "pins.shared_number": ("Symbol pin number {n} carries {k} different signals ({names}), so they would be joined "
+                           "on one pad.",
+                           "Check the pin table: give each signal its own pin number, then fill the library again.",
+                           [r"^pins: pin number (?P<n>\S+) is used by (?P<k>\d+) different signals: (?P<names>.+)"]),
+    "pins.unnumbered_pad": ("The footprint built by ecadlib has {n} copper pad(s) with no number, so they are on no net "
+                            "(a thermal pad the datasheet prints as '-' would not reach GND).",
+                            "Give the pad the number of the pin it belongs to (the pin table names the thermal pad's net), or mark it role "
+                            "mount in the pad table if it is only a mounting pad.",
+                            [r"^pins: (?P<n>\d+) unnumbered copper pad"]),
     # the datasheet's pad table failed footprint_adv.check_pad_table, so no footprint was built (librarian, release check)
     "padtable.no_pin1": ("The footprint read from the datasheet has no pad numbered 1 or A1[ (its pads are {pads})], so "
                          "nothing says which pad is pin 1.",
@@ -193,6 +202,13 @@ CODES = {
     "footprint.courtyard_open": ("The courtyard outline is not closed.",
                                  "Close the courtyard outline, or pick another footprint.",
                                  [r"courtyard is not a closed outline"]),
+    "footprint.not_a_number": ("The footprint has a position or size that is not a number (nan / inf).",
+                               "Read the land pattern again from the datasheet, or pick another footprint.",
+                               [r"is not a number \(nan / inf\)"]),
+    "librarian.bom_vs_symbol_footprint": ("The BOM names the footprint {bom}, but the symbol's Footprint property says {sym}.",
+                                          "Check which package the part comes in, and fix the BOM or pick the right footprint.",
+                                          [r"^(?:verify: )?footprint: the BOM names (?P<bom>\S+) but the symbol's Footprint "
+                                           r"property is (?P<sym>\S+): check which package"]),
     "footprint.other": ("The footprint check found a problem: {detail}.",
                         "Compare the footprint with the datasheet, then fix it or release anyway.",
                         [r"^footprint: (?P<detail>.+)"]),
@@ -303,6 +319,10 @@ CODES = {
                               "it was left out of the symbol, as KiCad's symbol does.",
                               "Check in the datasheet that pin {pin} is a cut lead and not connected.",
                               [r"symbol: pin (?P<pin>\S+) \(N\.C\., the cut lead\) left out"]),
+    "symbol.unknown_pin_type": ("The datasheet gives pin types ecadlib does not know ({pins}), so those pins were drawn as "
+                                "passive, which KiCad's ERC and Altium's checks treat as anything goes.",
+                                "Set each listed pin's electrical type in the symbol (input, output, power ...) from the datasheet.",
+                                [r"symbol: pin type not known, drawn passive: (?P<pins>.+)"]),
     "datasheet.dip_holes": ("The datasheet prints no hole size for this DIP, so KiCad's DIP hole and pad (0.8 mm / 1.6 mm) "
                             "were used in place of the sizes the read chose.",
                             "Check the maker's recommended hole if the leads are unusually wide.",
@@ -320,6 +340,10 @@ CODES = {
     "librarian.symbol_match": ("The symbol {sym} was matched by {how}.",
                                "Check its pin names and numbers against the datasheet, then release it anyway if they match.",
                                [r"^(?:verify: )?symbol (?P<sym>\S+) matched by (?P<how>.+)"]),
+    "librarian.variant_alternate": ("{mpn} is a variant's alternate part and has the base part's footprint {fp}.",
+                                    "Check that {mpn} comes in that package, or give the alternate its own footprint.",
+                                    [r"^(?:verify: )?variant alternate part (?P<mpn>\S+): footprint (?P<fp>\S+) is the "
+                                     r"base part's"]),
     "librarian.easyeda": ("The footprint and symbol were converted from EasyEDA ({lcsc}).",
                           "Check the pads and pins against the datasheet, then release it anyway if they match.",
                           [r"EasyEDA (?P<lcsc>\S+) conversion"]),

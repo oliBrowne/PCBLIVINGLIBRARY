@@ -123,6 +123,11 @@ PLAIN_GROUND = {"GND", "VSS", "GNDPAD"}
 SPELLINGS = (PLAIN_GROUND, {"VIN", "VI"}, {"VOUT", "VO"}, {"PAD", "EP", "EPAD", "EXPOSEDPAD", "THERMALPAD"})
 
 
+def pad_or_nc(name):
+    """A norm_name() pin name KiCad gives an exposed pad (EP, PAD ...) or a no-connect pin (NC, DNC)."""
+    return bool(name) and (name in SPELLINGS[-1] or bool(NC_RX.match(name)))
+
+
 def same_name(ours, ref, groups=SPELLINGS):
     """Two norm_name() pin names for the same pin. groups: the SPELLINGS that count as one name here (unswapped)."""
     return ours == ref or any(ours in g and ref in g for g in groups)
@@ -334,8 +339,18 @@ def score_symbol(mine_pins, ref_pins, tol=None):
                 or one_of(a.get(n), b[n])]
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
-        moved = [n for n in set(named) - set(same) if once.get(norm_name(a.get(n))) == 1   # a name KiCad has on another pin:
-                 or rail(named[n]) and rail(norm_name(a.get(n))) not in (None, rail(named[n]))]  # supply <-> ground: a short
+        # a name KiCad has on one other pin, as KiCad spells it, another spelling of it or spelled out (ours VIN / VOUT
+        # on KiCad's VO / VI pins, "Switch Emitter" / "Switch Collector" on its SwC / SwE pins: swapped, hunt and review
+        # R-CE-1 2026-10-26), or supply <-> ground: a short
+        def elsewhere(n, gone=False):
+            o = a.get(n)
+            return bool(norm_name(o)) and any(m != n and once[k] == 1 and (same_name(norm_name(o), k) or short_form(o, b[m]))
+                                              and not (gone and m in same) for m, k in named.items())
+        # on KiCad's exposed pad or no-connect pin a maker's name is moved only when it left its own pin (ours GND on
+        # KiCad's EP / PAD / NC with GND still on KiCad's GND pin is one net on one more pin, A4950K, TXB0104RGY: the
+        # maker's ground pad; the GND pin taken off its pin is a swap). Review R-CE-2 2026-10-26
+        moved = [n for n in set(named) - set(same) if elsewhere(n, gone=pad_or_nc(named[n]))
+                 or rail(named[n]) and rail(norm_name(a.get(n))) not in (None, rail(named[n]))]
         out["symbol_names"] = _f(len(same) >= t["names"] * len(named) and not moved,       # swapped pins, not naming noise
                                  f"{len(same)}/{len(named)} pin names agree"
                                  + (f" ({len(moved)} on the wrong pin)" if moved else "") + "; " + "; ".join(diff[:4]),

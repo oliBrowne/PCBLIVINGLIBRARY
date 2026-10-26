@@ -237,6 +237,17 @@ def _qfn(spec, fil):
     gy = dim(ep["width"])[1] + 2 * MIN_EP_CLEAR if ep else None
     rx = ipc_land(span_x, T, bw, fil, min_gap=gx)             # left/right pads
     ry = ipc_land(span_y, T, bw, fil, min_gap=gy)             # top/bottom pads
+    # a QFN / DFN heel pulled back to clear the EP must still land on the terminals: a DFN read with its two rows on
+    # top/bottom (review 196 R-RD-4, WSON-6) had the clamp move its pads silently out past the body edge
+    for cnt, r, side, g, k in ((nlr, rx, body_x, gx, "length"), (ntb, ry, body_y, gy, "width")):
+        if spec["package_type"] == "qfn" and cnt and g is not None and r["G"] >= g - 1e-9 and \
+                r["G"] / 2 > side[1] / 2 - T[0] / 2:
+            raise ValueError(
+                f"the exposed pad ({k} {dim(ep[k])[1]:g} mm) leaves the {'left/right' if r is rx else 'top/bottom'} pads "
+                f"no room on the terminals: {MIN_EP_CLEAR:g} mm clear of it they start {r['G'] / 2:g} mm from the centre, "
+                f"past the terminals' inner ends at the {side[1]:g} mm body's edge, which is implausible: the rows "
+                "(pins_left_right / pins_top_bottom) or the exposed pad are read the other way round (check them "
+                "against the drawing)")
     X = min(rx["X"], rdn(e - MIN_PAD_GAP))
     pads, k = [], 1
     for i in range(nlr):                                      # left, top->bottom
@@ -420,6 +431,7 @@ def _apply_land(spec, pads):
 def sanity(spec):
     """Catch the usual datasheet-reading mistakes before they turn into a plausible-looking but wrong footprint.
     Returns a list of plain-language problems (empty when the numbers hang together)."""
+    spec = qfp_frame(spec)[0]                         # a QFP's body in build()'s frame, however the read named it
     errs, t = [], spec["package_type"]
     nom = lambda k: dim(spec[k])[1] if spec.get(k) is not None else None
     for k in ("body_length", "body_width", "lead_span", "terminal_length", "terminal_width", "inner_span", "pitch"):
@@ -431,6 +443,10 @@ def sanity(spec):
             errs.append(f"{k}: min {lo} is bigger than max {hi}")
         if hi > 60:
             errs.append(f"{k} = {hi}: that looks like mils or 0.01 mm units; the spec is in millimetres")
+    ep = spec.get("exposed_pad")
+    if ep and min(dim(ep["length"])[1], dim(ep["width"])[1]) < 0.1:    # as build() refuses a signal pad under 0.1 mm
+        errs.append(f"the exposed pad is {dim(ep['length'])[1]:g} x {dim(ep['width'])[1]:g} mm: too small to be a pad "
+                    "(check its length/width)")
     if errs:
         return errs
     L, W, T = nom("body_length"), nom("body_width"), nom("terminal_length")
@@ -445,11 +461,22 @@ def sanity(spec):
                         f"(offsets run from -{round(lim, 3)} to +{round(lim, 3)}): check the drawing")
     if t in ("chip", "molded") and T and not spec.get("inner_span") and 2 * dim(spec["terminal_length"])[0] >= dim(spec["body_length"])[2]:
         errs.append(f"terminal_length {T} is half the body length or more: it should be one end-cap/foot, not the whole part")
-    if t in ("gullwing", "qfp"):
+    if t == "gullwing":
         span = nom("lead_span")
         if span is not None and span < W + 0.1:                     # leads must stick out past the plastic
             errs.append(f"lead_span {span} is not bigger than body_width {round(W, 3)}: lead_span is the tip-to-tip size "
                         "across the leads (E), body_width the plastic (E1); are they swapped?")
+        if span is not None and T and T >= span / 2:
+            errs.append(f"terminal_length {T} is half the lead span or more")
+    if t == "qfp":                                  # each span across the body side it crosses (_qfn: X is body_length)
+        for k, side, sk in (("lead_span", L, "body_length"), ("lead_span_y" if spec.get("lead_span_y") else "lead_span", W, "body_width")):
+            span = nom(k)
+            if span is not None and side is not None and span < side + 0.1:
+                errs.append(f"{k} {span} is not bigger than {sk} {round(side, 3)}: {k} is the tip-to-tip size across the "
+                            f"leads, {sk} the plastic it crosses; are they swapped?"
+                            + (" (a rectangular QFP gives its top/bottom span as lead_span_y)" if sk == "body_width"
+                               and k == "lead_span" else ""))
+        span = nom("lead_span")
         if span is not None and T and T >= span / 2:
             errs.append(f"terminal_length {T} is half the lead span or more")
     n = spec.get("pin_count")
@@ -468,10 +495,15 @@ def sanity(spec):
                         "set pins_left_right / pins_top_bottom")
     if t in ("gullwing", "qfp", "qfn") and spec.get("pitch") and spec.get("pin_count") and not spec.get("pin_positions"):
         n = spec["pin_count"]
-        per = n // 2 if t == "gullwing" else spec.get("pins_left_right", n // 4)
-        row = (per - 1) * spec["pitch"]
-        if per > 1 and row >= (L if t == "gullwing" else max(L, W)):
-            errs.append(f"{per} pins at {spec['pitch']} mm pitch need {row:.2f} mm, more than the {L} mm body: check pitch and pin_count")
+        # each row against the body side it runs along: QFN / QFP left and right rows down body_width (Y), top and
+        # bottom rows along body_length (X); a DFN read with the two swapped put its pads out past the terminals
+        sides = [(n // 2, L, None)] if t == "gullwing" else [(rows(spec)[0], W, "body_width"), (rows(spec)[1], L, "body_length")]
+        for per, side, key in sides:
+            row = (per - 1) * spec["pitch"]
+            if per > 1 and side is not None and row >= side:
+                errs.append(f"{per} pins at {spec['pitch']} mm pitch need {row:.2f} mm, more than the {side} mm body"
+                            + (f" ({key}, the side that row runs along): check pitch, pin_count and body_length / "
+                               "body_width" if key else ": check pitch and pin_count"))
         tw = spec.get("terminal_width")
         if tw and dim(tw)[0] >= spec["pitch"]:
             errs.append(f"terminal_width {dim(tw)[0]} is not smaller than the {spec['pitch']} mm pitch")
@@ -488,6 +520,38 @@ def sanity(spec):
                 tb and dim(ep["width"])[1] + 2 * tmin > dim(spec["body_width"])[2]):
             errs.append("the exposed pad would overlap the terminals: check its size against the body and terminal_length")
     return errs
+
+
+def qfp_frame(spec):
+    """(spec, notes): a QFP read with body_length / body_width the other way round from build()'s frame (lead_span
+    crosses body_length, on X; lead_span_y, or lead_span when square, crosses body_width) turned to it. JEDEC labels
+    give that read (LQFP-128 14x20: body_length D1 = 20, body_width E1 = 14, lead_span E = 16, lead_span_y D = 22).
+    The pads come from the spans and the row counts, so only the body (and its exposed pad) turns; only when the
+    read's own spans clear the turned bodies and not the bodies as read. Every QFP check and the build use this frame."""
+    if spec.get("package_type") != "qfp" or not all(spec.get(k) is not None for k in ("body_length", "body_width", "lead_span")):
+        return spec, []
+    try:
+        L, W, sx = dim(spec["body_length"])[1], dim(spec["body_width"])[1], dim(spec["lead_span"])[1]
+        sy = dim(spec.get("lead_span_y") or spec["lead_span"])[1]
+        fits = lambda bx, by: sx >= bx + 0.1 and sy >= by + 0.1
+        if fits(L, W) or not fits(W, L):
+            return spec, []
+        # the spans alone can be the read's mistake (lead_span and lead_span_y swapped: QFP-52 12x14 built every toe
+        # 1 mm off): the rows must agree. The left/right rows run along body_width, so after the turn the side with
+        # more pins is the longer one; with no row split, or equal rows, nothing says which way: not turned
+        nlr, ntb = spec.get("pins_left_right"), spec.get("pins_top_bottom")
+        if not (isinstance(nlr, int) and isinstance(ntb, int)) or nlr == ntb or (nlr > ntb) != (L > W):
+            return spec, []
+        ep = spec.get("exposed_pad")
+        out = dict(spec, body_length=spec["body_width"], body_width=spec["body_length"])
+        if isinstance(ep, dict) and ep.get("length") is not None and ep.get("width") is not None:
+            el, ew = dim(ep["length"])[1], dim(ep["width"])[1]   # a pad runs with the body's long side (Y here, after
+            if (el > ew) != (W > L) and el != ew:               # the turn), whichever way round the read gave it
+                out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
+    except (TypeError, KeyError, ValueError):         # a malformed number: sanity() says what is wrong
+        return spec, []
+    return out, [f"body read the other way round (lead_span {round(sx, 3)} crosses the {round(W, 3)} mm side): "
+                 f"body_length {round(W, 3)} on X, body_width {round(L, 3)} on Y"]
 
 
 def orient_ep(spec):
@@ -543,12 +607,31 @@ def ep_mask(land, ew, eh):
                     "the whole land is open (check the land page)")
 
 
+def non_finite(v, path=""):
+    """The first NaN / infinite number anywhere in a spec, as (path, value), else None. json.loads takes NaN and
+    Infinity, and the schema's minimum lets NaN through (NaN < 0 is False), so they reach the builders, where every
+    comparison with NaN is False: a "nan" coordinate was written and footprint_check passed it."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return path or "value", v
+    items = v.items() if isinstance(v, dict) else enumerate(v) if isinstance(v, list) else ()
+    for k, x in items:
+        hit = non_finite(x, f"{path}.{k}" if path and isinstance(k, str) else f"{path}[{k}]" if path else str(k))
+        if hit:
+            return hit
+    return None
+
+
 def build(spec, density=None):
     """Return (kicad_mod_text, report_dict)."""
+    bad = non_finite(spec)
+    if bad:
+        raise ValueError(f"the package numbers don't add up: {bad[0]} is {bad[1]}, not a number (check the drawing)")
     if spec["package_type"] in ADVANCED:
         from . import footprint_adv
         return footprint_adv.build(spec, density)
+    spec, framed = qfp_frame(spec)
     spec, turned = orient_ep(spec)
+    turned = framed + turned
     problems = sanity(spec)
     if problems:
         raise ValueError("the package numbers don't add up: " + "; ".join(problems))
@@ -596,7 +679,14 @@ def build(spec, density=None):
         if land.get("ep_across") and land.get("ep_along"):   # the maker's thermal land (TI PowerPAD: 3.4 x 5 around a
             ew, eh = land["ep_across"], land["ep_along"]      # 3 x 3 exposed pad), as KiCad draws it
             rep["ep_land"] = "datasheet"
-        epnum = str(ep.get("number") or (spec.get("pin_count") or len(pads)) + 1)   # pin_positions specs may omit pin_count
+        given = ep.get("number") not in (None, "")                                    # (an EP read as pin 0 stays 0)
+        epnum = str(ep["number"] if given else (spec.get("pin_count") or len(pads)) + 1)  # pin_positions may omit pin_count
+        if not given and epnum in {p[0] for p in pads}:
+            # leads numbered with gaps (SOIC-14-16: 14 leads numbered up to 16) or a tab numbered pin_count + 1: the
+            # default would put the thermal pad on a lead's net. The datasheet numbers it: the read must say how
+            raise ValueError(f"the exposed pad's default number {epnum} (pin_count + 1) is already a lead's number "
+                             f"(pads {', '.join(sorted({p[0] for p in pads}, key=lambda s: (len(s), s)))}): give "
+                             "exposed_pad.number as the datasheet numbers the thermal pad")
         lr = _left_right(spec, pads)                                                  # gullwing: all pads are L/R
         gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p, s in zip(pads, lr) if s]         # left/right rows vs EP
         gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]    # qfn top/bottom rows vs EP

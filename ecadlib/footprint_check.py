@@ -16,6 +16,7 @@ fab limits; each finding is (level, rule, message) with level "error" or "warnin
   pin 1     a pad numbered "1" (or "A1" for BGAs and lettered connector rows) exists; for multi-row parts it is the top-left-most pad (KLC F6.x
             orientation) and the numbers run counter-clockwise from it; pad numbers are unique except for deliberate duplicates (a SOT-223 tab)
   paste     an exposed pad's paste windows cover 50-90 % of its copper
+  geometry  every pad position / size and outline coordinate is a number (no nan / inf, which KiCad cannot load)
   bga       ball grids (pads named A1, B2, ... on a regular grid): A1 is the top-left ball and marked on the silk
             (a filled mark or a gap near the A1 corner) and on the fab layer (a chamfered corner); every ball on
             the pitch grid; land diameter 35-65 % of the pitch (outside that: weak joints or no room to escape);
@@ -52,8 +53,43 @@ def _f(v):
     return float(v)
 
 
-def _graphics(tree, layer):
-    """Segments (x1, y1, x2, y2, width) on a layer, from fp_line / fp_rect / fp_poly / fp_circle bounding boxes."""
+ARC_TOL = 0.002                                      # mm a sampled arc's chords may lie inside the real arc
+
+
+def _arc_points(g):
+    """The points along an arc node (fp_arc / gr_arc), in file coordinates: KiCad 6+ (start) (mid) (end), or KiCad 5
+    (start = centre) (end = arc start) (angle, degrees, clockwise on screen: y points down). Sampled so no chord lies
+    more than ARC_TOL inside the arc; a straight "arc" (start, mid, end in a line) is its two ends."""
+    s, e, m = sexpr.first(g, "start"), sexpr.first(g, "end"), sexpr.first(g, "mid")
+    if m:
+        (x1, y1), (xm, ym), (x2, y2) = ((_f(n[1]), _f(n[2])) for n in (s, m, e))
+        d = 2 * (x1 * (ym - y2) + xm * (y2 - y1) + x2 * (y1 - ym))
+        if abs(d) < 1e-12:
+            return [(x1, y1), (x2, y2)]
+        cx = ((x1 * x1 + y1 * y1) * (ym - y2) + (xm * xm + ym * ym) * (y2 - y1) + (x2 * x2 + y2 * y2) * (y1 - ym)) / d
+        cy = ((x1 * x1 + y1 * y1) * (x2 - xm) + (xm * xm + ym * ym) * (x1 - x2) + (x2 * x2 + y2 * y2) * (xm - x1)) / d
+        a0, am, a2 = (math.atan2(y - cy, x - cx) for x, y in ((x1, y1), (xm, ym), (x2, y2)))
+        span = (a2 - a0) % (2 * math.pi)
+        if (am - a0) % (2 * math.pi) > span:         # the mid point is the other way round
+            span -= 2 * math.pi
+        r = math.hypot(x1 - cx, y1 - cy)
+    else:
+        ang = sexpr.first(g, "angle")
+        if not ang:
+            return [(_f(s[1]), _f(s[2])), (_f(e[1]), _f(e[2]))]
+        cx, cy = _f(s[1]), _f(s[2])
+        r = math.hypot(_f(e[1]) - cx, _f(e[2]) - cy)
+        a0, span = math.atan2(_f(e[2]) - cy, _f(e[1]) - cx), math.radians(_f(ang[1]))
+    if not (math.isfinite(r) and math.isfinite(span)):
+        return [(_f(s[1]), _f(s[2])), (_f(e[1]), _f(e[2]))]
+    step = 2 * math.acos(max(-1.0, 1 - ARC_TOL / r)) if r > ARC_TOL else math.pi / 2
+    n = min(720, max(2, math.ceil(abs(span) / step)))
+    return [(cx + r * math.cos(a0 + span * i / n), cy + r * math.sin(a0 + span * i / n)) for i in range(n + 1)]
+
+
+def _graphics(tree, layer, raw_arcs=False):
+    """Segments (x1, y1, x2, y2, width) on a layer, from fp_line / fp_rect / fp_poly / fp_circle bounding boxes and
+    sampled fp_arcs. raw_arcs: an arc as the points written in the file (start, mid, end), for the grid rule."""
     segs, polys = [], []
     for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
         for g in sexpr.find(tree, kind):
@@ -73,9 +109,10 @@ def _graphics(tree, layer):
                 segs += [(cx + r * math.cos(a), cy + r * math.sin(a), cx + r * math.cos(b), cy + r * math.sin(b), w)
                          for a, b in ((i * math.pi / 8, (i + 1) * math.pi / 8) for i in range(16))]
                 continue
-            if kind == "fp_arc":
+            if kind == "fp_arc":                         # the real arc, sampled (not a line or two chords)
                 m = sexpr.first(g, "mid")
-                pts = [(_f(s[1]), _f(s[2]))] + ([(_f(m[1]), _f(m[2]))] if m else []) + [(_f(e[1]), _f(e[2]))]
+                pts = ([(_f(s[1]), _f(s[2]))] + ([(_f(m[1]), _f(m[2]))] if m else []) + [(_f(e[1]), _f(e[2]))]
+                       if raw_arcs else _arc_points(g))
                 segs += [(*a, *b, w) for a, b in zip(pts, pts[1:])]
                 continue
             x1, y1, x2, y2 = _f(s[1]), _f(s[2]), _f(e[1]), _f(e[2])
@@ -87,6 +124,77 @@ def _graphics(tree, layer):
     return segs, polys
 
 
+def _capsule(a, b, hw, n=8):
+    """The copper of a line from a to b, hw its half width (round ends): a polygon."""
+    ang = math.atan2(b[1] - a[1], b[0] - a[0]) if a != b else 0.0
+    pts = [(b[0] + hw * math.cos(ang - math.pi / 2 + math.pi * i / n), b[1] + hw * math.sin(ang - math.pi / 2 + math.pi * i / n))
+           for i in range(n + 1)]
+    return pts + [(a[0] + hw * math.cos(ang + math.pi / 2 + math.pi * i / n), a[1] + hw * math.sin(ang + math.pi / 2 + math.pi * i / n))
+                  for i in range(n + 1)]
+
+
+def _circle(cx, cy, r, n=48):
+    return [(cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n)) for i in range(n)]
+
+
+def _rounded_rect(w, h, rad, n=8):
+    """A w x h rectangle centred on the origin with corners rounded by rad (n segments each), as a polygon."""
+    rad = max(0.0, min(rad, w / 2, h / 2))
+    if rad <= 0:
+        return [(-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)]
+    out = []
+    for cx, cy, a0 in ((w / 2 - rad, -h / 2 + rad, -90), (w / 2 - rad, h / 2 - rad, 0),
+                       (-w / 2 + rad, h / 2 - rad, 90), (-w / 2 + rad, -h / 2 + rad, 180)):
+        out += [(cx + rad * math.cos(math.radians(a0 + 90 * i / n)), cy + rad * math.sin(math.radians(a0 + 90 * i / n)))
+                for i in range(n + 1)]
+    return out
+
+
+def _custom_polys(p, w, h):
+    """A KiCad custom pad's copper in its own frame (y down, not turned): the anchor and every primitive as polygons.
+    Filled gr_poly / gr_rect / gr_circle are their area; strokes (gr_line, gr_arc, gr_curve, outlines and the
+    edges of a stroked shape) are round-ended bands of the stroke width."""
+    anchor = (sexpr.first(sexpr.first(p, "options") or [], "anchor") or [None, "rect"])[1]
+    polys = [_circle(0.0, 0.0, w / 2) if anchor == "circle" else [(-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)]]
+    xy = lambda n: (_f(n[1]), _f(n[2]))
+    for g in (sexpr.first(p, "primitives") or [])[1:]:
+        if not isinstance(g, list) or not g:
+            continue
+        hw = _f((sexpr.first(g, "width") or sexpr.first(sexpr.first(g, "stroke") or [], "width") or [None, 0])[1]) / 2
+        fill = sexpr.first(g, "fill")
+        filled = fill[1] in ("yes", "solid") if fill and len(fill) > 1 else hw == 0 or g[0] == "gr_poly"
+        band = lambda pts, closed: [_capsule(a, b, hw) for a, b in zip(pts, pts[1:] + (pts[:1] if closed else []))] if hw > 0 else []
+        kind = g[0]
+        if kind in ("gr_poly", "gr_rect"):
+            if kind == "gr_poly":
+                pts = [xy(n) for n in sexpr.find(sexpr.first(g, "pts") or [], "xy")]
+            else:
+                (x1, y1), (x2, y2) = xy(sexpr.first(g, "start")), xy(sexpr.first(g, "end"))
+                pts = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+            if filled and len(pts) >= 3:
+                polys.append(pts)
+            polys += band(pts, True)
+        elif kind == "gr_circle":
+            c, e = xy(sexpr.first(g, "center") or sexpr.first(g, "start")), xy(sexpr.first(g, "end"))
+            r = math.hypot(e[0] - c[0], e[1] - c[1])
+            if filled:
+                polys.append(_circle(c[0], c[1], r + hw))
+            elif hw > 0:
+                ring = _circle(c[0], c[1], r)
+                polys += band(ring, True)
+        elif kind == "gr_line":
+            polys += band([xy(sexpr.first(g, "start")), xy(sexpr.first(g, "end"))], False)
+        elif kind == "gr_arc":
+            polys += band(_arc_points(g), False)
+        elif kind == "gr_curve":
+            c = [xy(n) for n in sexpr.find(sexpr.first(g, "pts") or [], "xy")]
+            if len(c) == 4:
+                pts = [tuple((1 - t) ** 3 * c[0][k] + 3 * (1 - t) ** 2 * t * c[1][k] + 3 * (1 - t) * t * t * c[2][k] + t ** 3 * c[3][k]
+                             for k in (0, 1)) for t in (i / 32 for i in range(33))]
+                polys += band(pts, False)
+    return [q for q in polys if len(q) >= 3]
+
+
 def _pad_rects(tree):
     out = []
     for p in sexpr.find(tree, "pad"):
@@ -94,22 +202,25 @@ def _pad_rects(tree):
         x, y, w, h = _f(at[1]), _f(at[2]), _f(size[1]), _f(size[2])
         rot = _f(at[3]) if len(at) > 3 else 0.0
         shape0 = p[3] if len(p) > 3 else "rect"
-        poly = None
-        if shape0 == "custom":                       # anchor + primitives: bounding box, and the polygon for exact gaps
-            xs, ys = [-w / 2, w / 2], [-h / 2, h / 2]
-            prims = [g for g in (sexpr.first(p, "primitives") or [])[1:] if isinstance(g, list)]
-            for g in prims:
-                for xy in sexpr.find(sexpr.first(g, "pts") or [], "xy"):
-                    xs.append(_f(xy[1])); ys.append(_f(xy[2]))
-            if len(prims) == 1 and prims[0][0] == "gr_poly" and not rot:
-                poly = [(x + _f(xy[1]), y + _f(xy[2])) for xy in sexpr.find(sexpr.first(prims[0], "pts"), "xy")]
-            x, y = x + (min(xs) + max(xs)) / 2, y + (min(ys) + max(ys)) / 2
+        polys = None
+        if shape0 == "custom":                       # anchor + primitives: the copper as polygons, turned with the pad
+            c, s_ = math.cos(math.radians(rot)), math.sin(math.radians(rot))
+            turn = lambda u, v: (x + u * c + v * s_, y - u * s_ + v * c)      # KiCad's pad angle (y points down)
+            polys = [[turn(u, v) for u, v in q] for q in _custom_polys(p, w, h)]
+            xs = [u for q in polys for u, _ in q]
+            ys = [v for q in polys for _, v in q]
+            x, y = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
             w, h = max(xs) - min(xs), max(ys) - min(ys)
-        odd_angle = abs(rot / 90 - round(rot / 90)) > 1e-6
-        if odd_angle:                                # any other angle: use the rotated pad's bounding box
-            c, s_ = abs(math.cos(math.radians(rot))), abs(math.sin(math.radians(rot)))
+        odd_angle = abs(rot / 90 - round(rot / 90)) > 1e-6 and polys is None and shape0 != "circle"
+        if odd_angle:                                # any other angle: the turned shape as a polygon (UDFN-4 1x1's 45
+            c, s_ = math.cos(math.radians(rot)), math.sin(math.radians(rot))    # degree pad), its box for the sweep
+            rr = sexpr.first(p, "roundrect_rratio")
+            rad = (min(w, h) / 2 if shape0 == "oval" else
+                   _f(rr[1]) * min(w, h) if shape0 == "roundrect" and rr else 0.0)
+            polys = [[(x + u * c + v * s_, y - u * s_ + v * c) for u, v in _rounded_rect(w, h, rad)]]
+            c, s_ = abs(c), abs(s_)
             w, h = w * c + h * s_, w * s_ + h * c
-        elif round(rot / 90) % 2:
+        elif round(rot / 90) % 2 and polys is None:
             w, h = h, w
         layers = (sexpr.first(p, "layers") or ["layers"])[1:]
         shape = p[3] if len(p) > 3 else "rect"
@@ -119,7 +230,7 @@ def _pad_rects(tree):
         if odd_angle:
             r = 0.0                                  # the bounding box has square corners
         drill = sexpr.first(p, "drill")
-        out.append({"num": p[1], "x": x, "y": y, "w": w, "h": h, "r": r, "layers": layers, "rot": rot, "kind": p[2], "poly": poly,
+        out.append({"num": p[1], "x": x, "y": y, "w": w, "h": h, "r": r, "layers": layers, "rot": rot, "kind": p[2], "polys": polys,
                     "shape": shape, "drill": drill is not None,
                     "copper": any(l.endswith(".Cu") for l in layers) and p[2] != "np_thru_hole",
                     "hole": p[2] == "np_thru_hole", "paste": any("Paste" in l for l in layers)})
@@ -144,37 +255,59 @@ def _pt_seg(px, py, a, b):
 
 
 def _pt_pad(px, py, r):
-    """Distance from a point to a pad's copper (0 inside); polygon pads exactly, others as rounded rectangles."""
-    if r.get("poly"):
-        if _point_in_poly(px, py, r["poly"]):
+    """Distance from a point to a pad's copper (0 inside); custom pads exactly (their polygons), others as rounded
+    rectangles."""
+    if r.get("polys"):
+        if any(_point_in_poly(px, py, q) for q in r["polys"]):
             return 0.0
-        return min(_pt_seg(px, py, a, b) for a, b in zip(r["poly"], r["poly"][1:] + r["poly"][:1]))
+        return min(_pt_seg(px, py, a, b) for q in r["polys"] for a, b in zip(q, q[1:] + q[:1]))
     rad = r.get("r", 0.0)
     dx = max(abs(px - r["x"]) - (r["w"] / 2 - rad), 0)
     dy = max(abs(py - r["y"]) - (r["h"] / 2 - rad), 0)
     return max(math.hypot(dx, dy) - rad, 0)
 
 
+def _hole_gap(h, p):
+    """Copper gap from a (round or slotted) NPTH to a pad. A polygon pad (custom) is measured from the hole itself,
+    not its bounding box: a copper ring round the hole (Knowles LGA-5, Molex Nano-Fit) has a box that covers the
+    hole. The hole is its centre line (along its long side) grown by its radius."""
+    rad = min(h["w"], h["h"]) / 2
+    if not p.get("polys"):
+        return _rect_gap(dict(h, r=rad), p)
+    half = abs(h["w"] - h["h"]) / 2
+    ux, uy = (1.0, 0.0) if h["w"] >= h["h"] else (0.0, 1.0)
+    n = max(1, int(2 * half / 0.01))
+    return min(_pt_pad(h["x"] + ux * t, h["y"] + uy * t, p) for t in (-half + 2 * half * i / n for i in range(n + 1))) - rad
+
+
+def _depth(x, y, q):
+    """How far a point inside a pad's copper is from its edge (0 when it is not inside)."""
+    if q.get("polys"):
+        return max((min(_pt_seg(x, y, a, b) for a, b in zip(o, o[1:] + o[:1])) for o in q["polys"] if _point_in_poly(x, y, o)),
+                   default=0.0)
+    return max(min(q["w"] / 2 - abs(x - q["x"]), q["h"] / 2 - abs(y - q["y"])), 0.0)
+
+
 def _poly_gap(a, b):
-    """Copper gap when a polygon pad is involved: sample each outline against the other (negative = overlap)."""
-    def outline(p):
-        if p.get("poly"):
-            return p["poly"]
-        return [(p["x"] - p["w"] / 2, p["y"] - p["h"] / 2), (p["x"] + p["w"] / 2, p["y"] - p["h"] / 2),
-                (p["x"] + p["w"] / 2, p["y"] + p["h"] / 2), (p["x"] - p["w"] / 2, p["y"] + p["h"] / 2)]
-    best = 1e9
+    """Copper gap when a custom (polygon) pad is involved: sample each outline against the other (negative = overlap,
+    by how deep the deepest sampled point lies in the other pad)."""
+    def outlines(p):
+        if p.get("polys"):
+            return p["polys"]
+        return [[(p["x"] - p["w"] / 2, p["y"] - p["h"] / 2), (p["x"] + p["w"] / 2, p["y"] - p["h"] / 2),
+                 (p["x"] + p["w"] / 2, p["y"] + p["h"] / 2), (p["x"] - p["w"] / 2, p["y"] + p["h"] / 2)]]
+    best, deep = 1e9, None
     for p, q in ((a, b), (b, a)):
-        pts = outline(p)
-        for u, v in zip(pts, pts[1:] + pts[:1]):
-            n = max(2, int(math.hypot(v[0] - u[0], v[1] - u[1]) / 0.01))
-            for i in range(n + 1):
-                x, y = u[0] + (v[0] - u[0]) * i / n, u[1] + (v[1] - u[1]) * i / n
-                d = _pt_pad(x, y, q)
-                if d == 0.0 and (not q.get("poly") or _point_in_poly(x, y, q["poly"])) and \
-                        (q.get("poly") or (abs(x - q["x"]) < q["w"] / 2 - EPS and abs(y - q["y"]) < q["h"] / 2 - EPS)):
-                    return -1.0
-                best = min(best, d)
-    return best
+        for pts in outlines(p):
+            for u, v in zip(pts, pts[1:] + pts[:1]):
+                n = max(2, int(math.hypot(v[0] - u[0], v[1] - u[1]) / 0.01))
+                for i in range(n + 1):
+                    x, y = u[0] + (v[0] - u[0]) * i / n, u[1] + (v[1] - u[1]) * i / n
+                    d = _pt_pad(x, y, q)
+                    if d == 0.0 and (q.get("polys") or (abs(x - q["x"]) < q["w"] / 2 - EPS and abs(y - q["y"]) < q["h"] / 2 - EPS)):
+                        deep = max(deep or 0.0, _depth(x, y, q))
+                    best = min(best, d)
+    return -max(deep, 2 * EPS) if deep is not None else best
 
 
 def _seg_rect_dist(seg, r):
@@ -185,7 +318,7 @@ def _seg_rect_dist(seg, r):
     for i in range(n + 1):
         t = i / n
         px, py = x1 + (x2 - x1) * t, y1 + (y2 - y1) * t
-        if r.get("poly"):
+        if r.get("polys"):
             best = min(best, _pt_pad(px, py, r))
             continue
         rad = r.get("r", 0.0)
@@ -260,20 +393,39 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     groups = [set(map(str, g)) for g in same_net or []]
     numset = set(nums)
 
+    # ---- numbers: a nan / inf coordinate passes every comparison below (all False) and KiCad cannot load the file
+    odd = [p["num"] or "(unnumbered)" for p in pads if not all(math.isfinite(v) for v in (p["x"], p["y"], p["w"], p["h"]))]
+    if odd:
+        add("error", "geometry", f"pad {odd[0]} has a position or size that is not a number (nan / inf)")
+    for layer in ("F.CrtYd", "F.Fab", "F.SilkS"):
+        if any(not math.isfinite(v) for s in _graphics(tree, layer)[0] for v in s):
+            add("error", "geometry", f"a {layer} outline has a coordinate that is not a number (nan / inf)")
+    if issues:
+        return issues                                # the other rules cannot measure it (some would raise)
+
     # ---- copper
     for p in cu:                                     # zero-area copper: nothing to solder (size typed as 0, or a lost unit)
         if p["w"] <= EPS or p["h"] <= EPS:
             add("error", "copper", f"pad {p['num'] or '(unnumbered)'} has no copper: size {p['w']:g} x {p['h']:g} mm")
     close = {}                                       # (level, gap) -> [(a, b)]: one finding per distinct gap
+    # only pairs whose boxes come within MIN_WEB along x can have a finding (rounding and polygons only widen the
+    # gap): a sweep finds them, so a 2500-ball grid is not 3 million pair checks (9 s); the pairs keep their order
+    near, live = {i: [] for i in range(len(cu))}, []
+    for k in sorted(range(len(cu)), key=lambda k: cu[k]["x"] - cu[k]["w"] / 2):
+        left = cu[k]["x"] - cu[k]["w"] / 2
+        live = [j for j in live if cu[j]["x"] + cu[j]["w"] / 2 > left - MIN_WEB]
+        for j in live:
+            near[min(j, k)].append(max(j, k))
+        live.append(k)
     for i, a in enumerate(cu):
-        for b in cu[i + 1:]:
+        for b in (cu[j] for j in sorted(near[i])):
             if a["num"] and a["num"] == b["num"]:
                 continue                             # same net (e.g. SOT-223 pin 2 + tab): no web needed
             if not _share_copper(a, b):
                 continue                             # F.Cu lead vs a B.Cu heat spreader: different layers
             tied = any({a["num"], b["num"]} <= g for g in groups) or _usb_c_stack(a["num"], b["num"], numset)
             g = _rect_gap(a, b)
-            if g < MIN_WEB - EPS and (a.get("poly") or b.get("poly")):
+            if g < MIN_WEB - EPS and (a.get("polys") or b.get("polys")):
                 g = _poly_gap(a, b)                  # the bounding box is not the copper: measure the polygon
             if g < -EPS:
                 if tied:
@@ -294,7 +446,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
         add(lvl, "copper", who + (f" (< {HARD_WEB} mm)" if lvl == "error" else
                                   f": below a {MIN_WEB} mm solder-mask web, check the fab's minimum"))
     for h in holes:                                  # NPTH: copper must keep clear of the hole
-        near = [(_rect_gap(dict(h, r=min(h["w"], h["h"]) / 2), p), p["num"]) for p in cu]
+        near = [(_hole_gap(h, p), p["num"]) for p in cu]
         if near and min(near)[0] < MIN_WEB - EPS:
             d, n = min(near)
             add("error" if d < 0 else "warning", "copper", f"pad {n} is {max(d, 0):.3f} mm from the hole at "
@@ -436,7 +588,7 @@ def check(text, allow_duplicate_pads=None, same_net=None):
             add("error", "courtyard", "courtyard is not a closed outline")
         if any(abs(s[4] - 0.05) > EPS for s in crt if s[4]):
             add("warning", "courtyard", "courtyard line width is not 0.05 mm")
-        if any(abs(v * 100 - round(v * 100)) > 1e-3 for s in crt for v in s[:4]):
+        if any(abs(v * 100 - round(v * 100)) > 1e-3 for s in _graphics(tree, "F.CrtYd", raw_arcs=True)[0] for v in s[:4]):
             add("warning", "courtyard", "courtyard corners are not on the 0.01 mm grid")
 
     # ---- exposed-pad paste
@@ -459,6 +611,85 @@ def check(text, allow_duplicate_pads=None, same_net=None):
                 add("warning", "paste", f"exposed pad {p['num']} paste covers {cov:.0%} of its "
                     f"{'mask opening' if area != p['w'] * p['h'] else 'copper'} (typical 50-80%)")
     return issues
+
+
+def ep_on_lead(text):
+    """Pad numbers an exposed pad shares with a lead: a large pad near the middle of the leads (not a tab at one edge)
+    with the number of a lead-sized pad that does not touch it. check() lets a large pad repeat a number (an exposed
+    pad given its GND lead's number on purpose, SOT-223's tab and pin 2), so the release check judges these with the
+    symbol's pin names. -> sorted numbers."""
+    tree = sexpr.parse(text) if isinstance(text, str) else text
+    cu = [p for p in _pad_rects(tree) if p["copper"] and p["num"]]
+    if len(cu) < 3:
+        return []
+    areas = sorted(p["w"] * p["h"] for p in cu)
+    typical = areas[len(areas) // 2]
+    big = [p for p in cu if p["w"] * p["h"] > 3 * typical]
+    leads = [p for p in cu if p["w"] * p["h"] <= 3 * typical]
+    if not big or len(leads) < 2:
+        return []
+    x0, x1 = min(p["x"] for p in leads), max(p["x"] for p in leads)
+    y0, y1 = min(p["y"] for p in leads), max(p["y"] for p in leads)
+    inside = lambda p: x0 + EPS < p["x"] < x1 - EPS and y0 + EPS < p["y"] < y1 - EPS   # between rows of leads (a
+    #                                                  single row's tab, TO-252 / TO-263 / SOT-223, never is)
+    out = set()
+    for e in big:
+        if not inside(e):
+            continue                                 # a tab past the leads (SOT-223, DPAK): numbered as a lead by design
+        for p in leads:
+            if p["num"] == e["num"] and _rect_gap(p, e) > EPS:
+                out.add(e["num"])
+    return sorted(out)
+
+
+def perimeter_order(text):
+    """How a perimeter part's pads are numbered against KiCad's rule (pin 1 top-left, counter-clockwise seen from the
+    top), for the release check's numbering hold. -> None when the rule does not apply: fewer than 4 numbered leads,
+    a single row, 2-row zig-zag (connector) numbering, lettered or BGA numbers, or leads of more than one size besides
+    one longer pin-1 lead (a module, relay or power part whose datasheet numbers the pads where they fall). Else
+    {"order": the lead numbers
+    counter-clockwise from the top-left lead, "want": the numbers in order, "shift": how far round pin 1 sits from
+    the top-left (0: there), "misplaced": [(number that belongs there, number there)] at the best rotation}.
+    Exposed pads and tabs are left out, as check's numbering rule leaves them out."""
+    tree = sexpr.parse(text) if isinstance(text, str) else text
+    cu = [p for p in _pad_rects(tree) if p["copper"] and p["num"]]
+    rx = mount_rx([p["num"] for p in cu])
+    sig = [p for p in cu if not rx.fullmatch(p["num"])]
+    if not sig or not all(str(p["num"]).isdecimal() for p in sig):
+        return None
+    areas = sorted(p["w"] * p["h"] for p in sig)
+    typical = areas[len(areas) // 2]
+    uniq = {}
+    for p in sig:
+        if p["w"] * p["h"] <= 3 * typical:
+            uniq.setdefault(p["num"], p)
+    leads = list(uniq.values())
+    want = sorted(uniq, key=int)
+    if len(want) < 4 or _zigzag(want, uniq):
+        return None
+    size = lambda p: tuple(sorted((round(p["w"], 2), round(p["h"], 2))))
+    cx, cy = sum(p["x"] for p in leads) / len(leads), sum(p["y"] for p in leads) / len(leads)
+    far = sorted(math.hypot(p["x"] - cx, p["y"] - cy) for p in leads)
+    leads = [p for p in leads if math.hypot(p["x"] - cx, p["y"] - cy) >= far[len(far) // 2] / 2]   # a small centre pad
+    want = sorted((p["num"] for p in leads), key=int)                                       # is no lead
+    if len(want) < 4:
+        return None
+    sizes = [size(p) for p in leads]
+    if len(leads) - max(sizes.count(s) for s in sizes) > 1:      # one odd lead allowed: a longer pin-1 marker lead
+        return None
+    mx, my = sum(p["x"] for p in leads) / len(leads), sum(p["y"] for p in leads) / len(leads)
+    if len({round(p["x"], 3) for p in leads}) == 1 or len({round(p["y"], 3) for p in leads}) == 1:
+        return None
+    left = min(p["x"] for p in leads)
+    top = min(p["y"] for p in leads if abs(p["x"] - left) < EPS)
+    start = math.atan2(top - my, left - mx)
+    ang = lambda p: (start - math.atan2(p["y"] - my, p["x"] - mx)) % (2 * math.pi)   # y down: counter-clockwise
+    order = [p["num"] for p in sorted(leads, key=lambda p: (round(ang(p), 6), p["y"]))]
+    n = len(want)
+    best = min(range(n), key=lambda s: (sum(order[(i + s) % n] != want[i] for i in range(n)), s))
+    rot = [order[(i + best) % n] for i in range(n)]
+    return {"order": order, "want": want, "shift": best,
+            "misplaced": [(w, g) for w, g in zip(want, rot) if w != g]}
 
 
 def _zigzag(order, uniq):

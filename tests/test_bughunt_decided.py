@@ -47,7 +47,7 @@ def test_mcp2_visual_check_quotes_first_and_holds_the_call_to_the_approval():
         fp.write_text("(footprint X)")
         seen = []
 
-        def prove(item, root, rules, client=None, out_dir=None, render_only=False):
+        def prove(item, root, rules, client=None, out_dir=None, render_only=False, yes=False):
             seen.append((render_only, rules["agent"]["proof"]["max_cost_usd"]))
             return {"verdict": "skipped" if render_only else "pass", "images": {}, "model": "claude-opus-5-5",
                     "estimate": {"input_tokens": 9000, "usd": 0.05, "usd_max": 0.3}}

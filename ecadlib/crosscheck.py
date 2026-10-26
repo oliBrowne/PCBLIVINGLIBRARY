@@ -471,6 +471,17 @@ def compare_pins(a, b, ep=()):
     return out
 
 
+def names_compared(a, b):
+    """True when both reads name most of the pins they share (a name that is only the pin's own number is no name):
+    only then do their pin names say anything. A second read that leaves the names empty (AQY282GS, TC2030 in the
+    2026-10-23 cache) compared none, so it never agrees on them (review R-RT-3)."""
+    b = [(n, s) for n, s in b if not NO_PIN.search(str(s or ""))]
+    na, nb = {str(n): str(s or "").strip() for n, s in a}, {str(n): str(s or "").strip() for n, s in b}
+    shared = set(na) & set(nb)
+    named = [n for n in shared if na[n] and nb[n] and not (numbered(n, na[n]) and numbered(n, nb[n]))]
+    return bool(shared) and 2 * len(named) > len(shared)
+
+
 def ep_numbers(first, second, first_pins, pins):
     """The pad number past the leads, when both reads have an exposed pad and at most one such number appears across
     both (more is no exposed pad but pins one read left out; 13 in one read and 14 in the other is a numbering
@@ -659,8 +670,12 @@ def against_read(first, second, first_pins, pins):
     c = compare(first, second, "read")
     if first_pins and pins:
         extra = compare_pins(first_pins, pins, ep_numbers(first, second, first_pins, pins))
-        c["compared"] += ["pins", "pin_names"]
-        c["agreed"] += [f for f in ("pins", "pin_names") if f not in {d["field"] for d in extra}]
+        fields = ["pins", "pin_names"]
+        if "pin_names" not in {d["field"] for d in extra} and not names_compared(first_pins, pins):
+            fields = ["pins"]                         # empty names on one side: not compared, never agreed (R-RT-3)
+            c["not_compared"].append("pin_names")
+        c["compared"] += fields
+        c["agreed"] += [f for f in fields if f not in {d["field"] for d in extra}]
         c["disagreed"] += extra
         _type_only(c)
         if c["disagreed"]:
@@ -700,34 +715,93 @@ def mode_of(cfg):
     return m if m in MODES else "auto"
 
 
+def held_anyway(reader, job, res):
+    """The hard-failing checks (ds_route.hold_reasons) of a read the librarian is sure to hold, or None. A read that
+    fails one is held only after every rescue (librarian.put_datasheet: the cross-check's table settle, a checked
+    standard land or tab land the read identifies, a person's fp-edit), so it counts only when none of them can
+    apply: no standard table names its package (the caller's check), stdparts identifies no package or tab from it,
+    and no fp-edit is saved for the part. Then a second read cannot change the outcome."""
+    from . import ds_route as DR, stdparts as SP
+    hold = DR.hold_reasons(res, job.get("fp_needed"))
+    if not hold:
+        return None
+    spec, pins = res.get("spec") or {}, (res.get("symbol") or {}).get("pins") or []
+    known = list((res.get("sidecar") or {}).get("package_from_pdf") or [])
+    try:
+        if SP.identify(spec, known[0] if len(known) == 1 else None)[0] or \
+                SP.identify_tab(spec, [(q.get("num"), q.get("name")) for q in pins])[0]:
+            return None
+    except Exception:                                 # a read stdparts cannot judge: not sure, so it is checked
+        return None
+    try:
+        from . import fp_edit as FE
+        if FE.for_part(FE.load(reader.out), job.get("name"), job.get("part")):
+            return None
+    except Exception:
+        return None
+    return "; ".join(hold[:3])
+
+
 def run(reader, job, res, model):
     """Cross-check the read `res` (datasheet.process()) of `job` -> record or None (off). The caller holds the part
     when record["status"] == "disagreed"."""
     mode = mode_of(reader.cfg)
     if mode == "off":
         return None
+    first_pins = [(p["num"], p["name"]) for p in ((res.get("symbol") or {}).get("pins") or [])]
     if mode == "auto" and job.get("fp_needed") is False:
-        return {"mode": mode, "status": "skipped", "why": "the footprint comes from another source", "checks": []}
+        out = {"mode": mode, "status": "skipped", "why": "the footprint comes from another source", "checks": []}
+        if first_pins:                                # the symbol is still the read's own: its names are unchecked
+            out["pins"] = "unchecked"
+        return out
     first = critical(res["spec"])
-    first_pins = [(p["num"], p["name"]) for p in res["symbol"].get("pins") or []]
     checks = [against_table(first, n, where) for where, n in standard_matches(job.get("package"), res["spec"].get("name"))]
     strong = [c for c in checks if len(c["compared"]) >= 2]
+    held = None if checks else held_anyway(reader, job, res)
+    if held:                                          # the librarian holds it whatever a second read says: not paid for
+        return {"mode": mode, "status": "skipped", "why": f"the read is held ({held[:200]}); nothing can stand in for "
+                "it, so no second read was made", "checks": []}
     # a table has the package's common numbering, not the maker's: a read that placed its pins is always read again
     if mode == "always" or not strong or first.get("sides"):
         checks.append(second_read(reader, job, first, first_pins, model))
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
     standard = _settle_turn(checks) or _settle_tab(checks, res["spec"], first_pins)
+    # a second read of a package drawing found by web search reads the same pages again: it cannot tell whether that
+    # drawing is this part's package, so it is no independent source (R-FX19-1)
+    web = [o.get("from") for o in (job.get("prov") or {}).get("outline") or () if o.get("code") == "web search"]
+    if web:
+        for c in checks:
+            if c.get("source") == "second read":
+                c["same_pages"] = f"web search ({web[-1]})"
     st = [c["status"] for c in checks]
-    ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong and not _self(c)]
+    ok = [c["status"] for c in checks if (c.get("source") != "standard table" or c in strong and not _self(c))
+          and not c.get("same_pages")]
     if first.get("sides"):                  # only a second read that compared the pins on each side checks them
-        ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", [])]
+        ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", []) and not c.get("same_pages")]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
-        else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) else "unchecked"
+        else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) or \
+        any(c["status"] == "agreed" and c.get("same_pages") for c in checks) else "unchecked"
     out = {"mode": mode, "status": status, "checks": checks}
+    if first_pins:
+        out["pins"] = pins_status(checks)
     if standard:
         out["standard"] = standard
     return out
+
+
+def pins_status(checks):
+    """agreed | disagreed | unchecked for the symbol's pin names. Only a second read that named the pins compares
+    them: a standard table compares the package's dimensions, never its pin names, so a part accepted on the table
+    alone (or a symbol-only read, which auto does not read again) has its pin names unchecked, whatever the status of
+    the package says (review R-RT-2). No second read is added for them here: that is a paid read."""
+    reads = [c for c in checks if c.get("source") == "second read"]
+    if any(d["field"] in ("pins", "pin_names") for c in reads for d in c.get("disagreed") or []):
+        return "disagreed"
+    return "agreed" if any("pin_names" in (c.get("agreed") or []) for c in reads) else "unchecked"
+
+
+PINS_UNCHECKED = "pin names not compared with any second source (only the package was checked)"
 
 
 SWAPPED = "the same with length and width swapped"
@@ -848,14 +922,19 @@ def summary_line(rec):
     """One line for review lists: what was compared with what, and every value on both sides."""
     if not rec:
         return "not cross-checked"
+    tail = f"; {PINS_UNCHECKED}" if rec.get("pins") == "unchecked" else ""
     if rec["status"] == "skipped":
-        return f"not cross-checked ({rec.get('why')})"
+        return f"not cross-checked ({rec.get('why')})" + tail
     parts = []
     for c in rec.get("checks") or []:
         if c["status"] == "disagreed":
             parts.append(f"{c['against']}: " + "; ".join(f"{LABEL.get(d['field'], d['field'])} read {d['first']}, "
                                                          f"{'table' if c['source'] == 'standard table' else 'second read'} "
                                                          f"{shown(d)}" for d in c["disagreed"]))
+        elif c["status"] == "agreed" and c.get("same_pages"):
+            parts.append(f"self-checked only: {c['against']} of the same pages, whose package drawing came from "
+                         f"{c['same_pages']}, agrees ({', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}); "
+                         "no independent second source")
         elif c["status"] == "agreed" and _self(c):
             parts.append(f"self-checked only: {c['against']}, chosen by the read's own package name, fits the read "
                          f"({', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}); no independent second source")
@@ -864,7 +943,7 @@ def summary_line(rec):
                          + "".join(f"; set aside: {t}" for t in c.get("tie_breaks") or []))
         else:
             parts.append(f"{c['against']}: not checked ({c.get('why') or 'nothing to compare'})")
-    return "; ".join(parts)
+    return "; ".join(parts) + tail
 
 
 def report_md(rec):
@@ -874,13 +953,17 @@ def report_md(rec):
     word = {"agreed": "agreed", "disagreed": "disagreed, the part is held", "unchecked": "could not be made",
             "self-checked": "self-checked only (no independent second source)", "skipped": "not needed"}.get(rec["status"], rec["status"])
     out = ["", f"## Cross-check: {word}", "", f"Setting: [datasheet] cross_check = {rec['mode']}", ""]
+    pins = ["", f"Symbol pin names: {PINS_UNCHECKED}. **Check them against the datasheet's pin table.**"] \
+        if rec.get("pins") == "unchecked" else []
     if rec["status"] == "skipped":
-        return out + [rec.get("why") or ""]
+        return out + [rec.get("why") or ""] + pins
     for c in rec.get("checks") or []:
         out.append(f"* **{c['against']}** ({c['source']}{', ' + c['via'] if c.get('via') and c['source'] == 'standard table' else ''}"
                    f"{', ' + c['pages'] if c.get('pages') else ''}): "
                    + ("self-checked (the entry was chosen by this read, so it is not independent)"
-                      if c["status"] == "agreed" and _self(c) else c["status"])
+                      if c["status"] == "agreed" and _self(c) else
+                      f"self-checked (the same pages again, the package drawing from {c['same_pages']})"
+                      if c["status"] == "agreed" and c.get("same_pages") else c["status"])
                    + (f" - {c['why']}" if c.get("why") else ""))
         if c.get("disagreed"):
             out += ["", "| field | this read | other source |", "|---|---|---|"]
@@ -889,7 +972,11 @@ def report_md(rec):
         if c.get("agreed"):
             out.append(f"  agreed: {', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}")
         out += [f"  set aside: {t}" for t in c.get("tie_breaks") or []]
-    if rec["status"] == "self-checked":
+    out += pins
+    if rec["status"] == "self-checked" and any(c.get("same_pages") for c in rec.get("checks") or []):
+        out += ["", "**Next:** the package drawing came from web search and the second read saw the same pages, so "
+                "nothing independent confirmed it is this part's package. Compare it with the maker's own drawing."]
+    elif rec["status"] == "self-checked":
         out += ["", "**Next:** the BOM names no package the standard table knows, so nothing independent confirmed this "
                 "read. Compare the drawing by hand, put the package in the BOM, or set [datasheet] cross_check = \"always\"."]
     if rec["status"] == "disagreed":

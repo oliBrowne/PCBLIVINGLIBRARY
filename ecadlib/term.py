@@ -100,6 +100,12 @@ def term_width(stream, environ=None):
     return None
 
 
+def _wrap(text, width):
+    """textwrap.wrap that never cuts a word (a path, a URL, an MPN) in two: a long one gets a line of its own, wider
+    than the terminal, and stays whole to copy."""
+    return textwrap.wrap(text, width, break_long_words=False, break_on_hyphens=False)
+
+
 class Term:
     """Writes to one stream. styled / width / verbosity: None = detect (see wants_style, term_width, VERBOSITY)."""
 
@@ -223,13 +229,13 @@ class Term:
             elif avail is None or visible_len(last) <= avail:
                 out.append(head + last)
             elif wrap_under:
-                parts = textwrap.wrap(_ANSI.sub("", last), avail) or [""]
+                parts = _wrap(_ANSI.sub("", last), avail) or [""]
                 out.append(head + parts[0])
                 out += [" " * lead_w + p for p in parts[1:]]
             else:                                   # very narrow: the last column on its own lines below
                 out.append(head.rstrip())
                 w = max(20, (self.width or 80) - indent - 4)
-                out += [pad + "    " + p for p in textwrap.wrap(_ANSI.sub("", last), w)]
+                out += [pad + "    " + p for p in _wrap(_ANSI.sub("", last), w)]
         return out
 
     def wrap(self, text, indent=2, level=0):
@@ -237,7 +243,7 @@ class Term:
         if self.verbosity < level:
             return
         w = (self.width or 10 ** 6) - indent
-        for p in textwrap.wrap(str(text), max(20, w)) or [""]:
+        for p in _wrap(str(text), max(20, w)) or [""]:
             self.write(" " * indent + p)
 
     # ------------------------------------------------------------ the end of a command

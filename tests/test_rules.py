@@ -240,7 +240,7 @@ def test_tools_use_house_names_at_the_boundaries():
     # DbLib export with house names and 3 supplier slots
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "ecadlib.toml").write_text(HOUSE.replace("required = [", "supplier_slots = 3\nrequired = ["))
-        quiet(X.main, [str(SAMPLE), "-o", str(Path(d) / "alt"), "--rules", str(Path(d) / "ecadlib.toml")])
+        quiet(X.main, [str(SAMPLE), "--draft", "-o", str(Path(d) / "alt"), "--rules", str(Path(d) / "ecadlib.toml")])
         xl = pd.read_excel(Path(d) / "alt" / "parts.xlsx", sheet_name=None, dtype=str)
         cols = list(next(iter(xl.values())).columns)
         assert "MPN" in cols and "Supplier 3" in cols and "Manufacturer Part Number" not in cols, cols

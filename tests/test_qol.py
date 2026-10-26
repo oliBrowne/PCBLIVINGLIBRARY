@@ -258,7 +258,7 @@ def test_doctor_end_to_end_exit_codes_and_writes_nothing():
         assert sorted(p.relative_to(d) for p in Path(d).rglob("*")) == before        # the probe file is gone
         os.environ["ECADLIB_LIB"] = str(Path(d, "gone"))
         rc, out, _ = _run(["doctor", "--workspace", str(ws)])
-        assert rc == 1 and "FAIL  lib" in out and "gone: not found" in out
+        assert rc == 1 and "FAIL  lib" in out and "gone: not found" in " ".join(out.split())   # a long temp path gets its own line
         Path(ws, "ecadlib.toml").write_text("[agent]\nlibs = [\"nolib\"]\n[[agent.watch.sources]]\ntype = \"bom_file\"\nref = \"x.csv\"\n")
         rep = DR.run(str(ws), [str(lib)])                # the parked agent's keys still load and are not checked
         by = {c["check"]: c for c in rep["checks"]}

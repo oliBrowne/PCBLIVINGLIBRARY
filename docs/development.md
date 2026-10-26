@@ -246,7 +246,7 @@ python3 -m tests.test_offline                               # 11/11 ok (incl. Al
 python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/triage_sample_bom
 python3 -m ecadlib.bom_triage examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints \
         --providers digikey,mouser,nexar,snapmagic,samacsys -o out/triage_sample_bom_stub_providers_only
-python3 -m ecadlib.altium_export examples/sample_bom.csv --triage out/triage_sample_bom.csv -o out/altium
+python3 -m ecadlib.altium_export examples/sample_bom.csv --triage out/triage_sample_bom.csv -o out/altium --draft   # unchecked skeleton; a plan.json ships only release-checked parts
 export SOURCE_DATE_EPOCH=1791936000                         # reproducible PcbLib dates
 python3 -m ecadlib.altium_lib pcblib ecadlib/package_specs/*.json -o out/altium_models/PcbLib
 python3 -m ecadlib.altium_lib schlib examples/symbols/*.json -o out/altium_models/SchLib

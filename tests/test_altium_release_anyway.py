@@ -56,7 +56,8 @@ def test_release_needs_a_reason_and_then_releases_and_publishes():
     menu, cfg = TM._setup()
     with _held_check(HEIGHT):
         held = _held(menu)
-        req = {"action": "release", "bom": held["release_bom"], "mpn": MPN, "part": held["release_part"]}
+        req = {"action": "release", "bom": held["release_bom"], "mpn": MPN, "part": held["release_part"],
+               "release_key": held["release_key"]}                    # what the dialog showed (R-MN-2)
         r = AM.run_job(TM._job(menu, dict(req, reason="   ")))
         assert r["status"] == "error" and "needs a reason" in r["message"], r
         r = AM.run_job(TM._job(menu, dict(req, reason="height checked on the datasheet: 0.5 mm", user="Oliver <o@x>")))
@@ -76,7 +77,8 @@ def test_release_of_a_part_already_released_just_publishes():
     menu, cfg = TM._setup()
     with _held_check(HEIGHT):
         held = _held(menu)
-        req = {"action": "release", "bom": held["release_bom"], "mpn": MPN, "part": held["release_part"], "reason": "ok"}
+        req = {"action": "release", "bom": held["release_bom"], "mpn": MPN, "part": held["release_part"], "reason": "ok",
+               "release_key": held["release_key"]}
         assert AM.run_job(TM._job(menu, req))["status"] == "ready"
         r = AM.run_job(TM._job(menu, req))                          # twice (the queue did it meanwhile): no new release
     assert r["status"] == "ready" and not r["message"].startswith("Released anyway"), r

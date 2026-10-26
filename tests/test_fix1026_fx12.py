@@ -1,0 +1,217 @@
+"""Fixes 2026-10-26 (fixes12 review: R-FX12-1..5). Offline: no key, no network, no model.
+    python3 -m tests.run_all test_fix1026_fx12"""
+import math
+
+from tests.fixtures_lite import lite
+
+
+def _hole_findings(text):
+    from ecadlib import footprint_check as FC
+    return [i for i in FC.check(text) if "from the hole" in i[2]]
+
+
+# ---------------------------------------------------------------- R-FX12-1: NPTH clearance to a custom pad's real copper
+def _ring_fp(ring, hole="0.5 0.5", other=""):
+    """An NPTH at the origin and custom pad 5 whose copper rings it (Knowles LGA-5 / Molex Nano-Fit style)."""
+    return f'''(footprint "T" (layer "F.Cu")
+  (fp_rect (start -3 -3) (end 3 3) (stroke (width 0.05)) (fill none) (layer "F.CrtYd"))
+  (pad "" np_thru_hole circle (at 0 0) (size {hole}) (drill {hole.split()[0]}) (layers "*.Cu" "*.Mask"))
+  (pad "5" smd custom (at 0.75 0) (size 0.2 0.2) (layers "F.Cu" "F.Paste" "F.Mask")
+    (options (clearance outline) (anchor circle))
+    (primitives {ring}))
+  {other}
+)'''
+
+
+RING = "(gr_circle (center -0.75 0) (end -0.15 0) (width 0.2))"      # copper from r 0.5 to 0.7 round the hole
+
+
+def test_fx12_1_ring_round_the_hole_is_measured_from_the_hole():
+    """Before: the ring's bounding box covers the hole: 'pad 5 is 0.000 mm from the hole' (a hard, false error)."""
+    got = _hole_findings(_ring_fp(RING))               # real gap: 0.5 - 0.25 = 0.25 mm
+    assert not got, got
+
+
+def test_fx12_1_ring_too_close_and_copper_over_the_hole_still_caught():
+    near = _ring_fp("(gr_circle (center -0.75 0) (end -0.45 0) (width 0.2))")   # copper from r 0.2: in the hole
+    got = _hole_findings(near)
+    assert got and got[0][0] == "error", got
+    tight = _ring_fp("(gr_circle (center -0.75 0) (end -0.38 0) (width 0.1))")   # copper from r 0.32: 0.07 mm
+    got = _hole_findings(tight)
+    assert got and got[0][0] == "warning" and 0.06 < float(got[0][2].split(" is ")[1].split()[0]) < 0.08, got
+    disc = _ring_fp("(gr_circle (center -0.75 0) (end -0.15 0) (width 0) (fill yes))")   # a filled disc over the hole
+    got = _hole_findings(disc)
+    assert got and got[0][0] == "error", got
+
+
+def test_fx12_1_oval_hole_measured_along_its_slot():
+    """A 1.2 x 0.5 mm slot: the ring 0.5 mm from its centre is inside the slot's ends (x +-0.6)."""
+    got = _hole_findings(_ring_fp(RING, hole="1.2 0.5").replace("(drill 1.2)", "(drill oval 1.2 0.5)"))
+    assert got and got[0][0] == "error", got
+
+
+# ---------------------------------------------------------------- R-FX12-5: a pad at an odd angle is its turned shape
+def _diamond_ep(p1, size1="0.2 0.2", ep_shape="rect", extra=""):
+    """UDFN-4-1EP_1x1mm / OnSemi XDFN4-1EP style: the exposed pad turned 45 degrees between corner pads."""
+    return f'''(footprint "T" (layer "F.Cu")
+  (fp_rect (start -1 -1) (end 1 1) (stroke (width 0.05)) (fill none) (layer "F.CrtYd"))
+  (pad "1" smd rect (at {p1}) (size {size1}) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "5" smd {ep_shape} (at 0 0 45) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask"){extra})
+)'''
+
+
+def _copper(text):
+    from ecadlib import footprint_check as FC
+    return [i for i in FC.check(text) if i[1] == "copper" and "pad" in i[2]]
+
+
+def test_fx12_5_pad_beside_a_turned_pad_is_no_overlap():
+    """Before: the 45 degree pad was its bounding box (+-0.354 mm): 'pads 1 and 5 overlap', a hard, false error.
+    Its real edge (x + y = 0.354) is 0.10 mm from pad 1's corner (0.25, 0.25)."""
+    got = _copper(_diamond_ep("0.35 0.35"))
+    assert not any(i[0] == "error" for i in got), got
+    assert any("0.10" in i[2] for i in got), got                       # still below the solder-mask web: a warning
+
+
+def test_fx12_5_turned_pad_overlap_still_caught():
+    got = _copper(_diamond_ep("0.2 0.2"))
+    assert any(i[0] == "error" and "overlap" in i[2] for i in got), got
+    # roundrect and a turned circle: a circle is round at any angle (its box is no bigger)
+    rr = _diamond_ep("0.35 0.35", ep_shape="roundrect", extra=" (roundrect_rratio 0.25)")
+    assert not any(i[0] == "error" for i in _copper(rr)), _copper(rr)
+    circ = _diamond_ep("0.45 0", ep_shape="circle")                   # circle r 0.25, pad 1 from x 0.35: 0.10 mm
+    assert not any(i[0] == "error" for i in _copper(circ)), _copper(circ)
+
+
+def test_fx12_5_turned_pad_shape():
+    from ecadlib import footprint_check as FC, sexpr
+    p = [q for q in FC._pad_rects(sexpr.parse(_diamond_ep("3 3"))) if q["num"] == "5"][0]
+    assert p["polys"] and abs(FC._pt_pad(0.354, 0.0, p)) < 0.002 and 0.16 < FC._pt_pad(0.3, 0.3, p) < 0.18, p
+    assert abs(p["w"] - 0.707) < 0.002 and abs(p["h"] - 0.707) < 0.002, p      # the box is still the turned box
+
+
+# ---------------------------------------------------------------- R-FX12-3: a KiCad pin type beats a signed-supply name
+def _sides(pins):
+    from ecadlib import symbol_layout as SL
+    return {p["name"]: p["side"] for p in SL.arrange_pins([{"num": n, "name": nm, "type": t} for n, nm, t in pins])}
+
+
+def test_fx12_3_typed_signal_pins_named_like_supplies_keep_their_type():
+    """Before: ZXCT1009F's Vs+ / Vs- (typed input: the sense inputs) went top / bottom, and MAX232's VS+ / VS- (typed
+    power_out: the charge pump's outputs) too."""
+    s = _sides([("1", "Vs-", "input"), ("2", "Vs+", "input"), ("3", "Iout", "output")])
+    assert s["Vs+"] == "left" and s["Vs-"] == "left", s
+    s = _sides([("2", "VS+", "power_out"), ("6", "VS-", "power_out"), ("16", "VCC", "power_in"), ("15", "GND", "power_in"),
+                ("11", "T1IN", "input"), ("14", "T1OUT", "output")])
+    assert s["VS+"] == "right" and s["VS-"] == "right" and s["VCC"] == "top" and s["GND"] == "bottom", s
+
+
+def test_fx12_3_signed_supplies_still_top_and_bottom_when_power_passive_or_untyped():
+    for t in ("power_in", "power", "passive", "", "unspecified"):
+        s = _sides([("1", "+VS", t), ("2", "-VS", t), ("3", "VCC+", t), ("4", "-5V", t), ("5", "IN+", "input"),
+                    ("6", "OUT", "output")])
+        assert s["+VS"] == "top" and s["VCC+"] == "top" and s["-VS"] == "bottom" and s["-5V"] == "bottom", (t, s)
+
+
+def test_fx12_3_counter_carry_and_borrow_outputs_go_right():
+    """74LS192 (untyped, EasyEDA): ~{CO} / ~{BO} were 'other' (left, or right only to square the symbol); TC / RCO
+    (74HC161) likewise. They are outputs: the right side, whatever else the symbol holds."""
+    from ecadlib import symbol_layout as SL
+    for n in ("~{CO}", "~{BO}", "CO", "BO", "TC", "~{TC}", "RCO", "~{RCO}"):
+        assert SL.classify({"num": "12", "name": n, "type": ""}) == "other_out", n
+        assert SL.classify({"num": "12", "name": n, "type": "input"}) == "other_in", n     # a type still says it
+    s = _sides([("1", "A", ""), ("2", "B", ""), ("3", "C", ""), ("4", "D", ""), ("5", "UP", ""), ("6", "DOWN", ""),
+                ("12", "~{CO}", ""), ("13", "~{BO}", ""), ("8", "GND", ""), ("16", "VCC", "")])
+    assert s["~{CO}"] == "right" and s["~{BO}"] == "right", s
+
+
+# ---------------------------------------------------------------- R-FX12-4: only the used embedded model is unpacked
+def _two_model_lib(path, small=b"", big=b""):
+    """A .PcbLib with footprints SMALL and BIG, each with its own embedded STEP."""
+    from ecadlib import altium_lib as AL, kicad_import as K, stdparts as SP
+    text, _ = SP.build("SOIC-8_3.9x4.9mm_P1.27mm")
+    fps = []
+    for name, data in (("SMALL", small), ("BIG", big)):
+        fp, _ = K.convert_footprint(text, name)
+        fp["bodies"] = [{"pts": [(-2, -2.5), (2, -2.5), (2, 2.5), (-2, 2.5)], "height": 1.75,
+                         "step": {"name": f"{name.lower()}.step", "data": data, "rot": (0.0, 0.0, 0.0)}}]
+        fps.append(fp)
+    AL.write_pcblib(path, fps)
+    return path
+
+
+STEP_SMALL = b"ISO-10303-21;\n" + b"#1=CARTESIAN_POINT('',(0.,0.,0.));\n" * 20 + b"END-ISO-10303-21;\n"
+STEP_BIG = b"ISO-10303-21;\n" + b"".join(b"#%d=CARTESIAN_POINT('',(%d.,0.,0.));\n" % (i, i) for i in range(400))
+
+
+@lite
+def test_fx12_4_another_footprints_big_model_does_not_break_the_export(tmp_path, monkeypatch):
+    """Before: altium_model unpacked every model of the library to find its own, so another footprint's model over
+    MODEL_CAP (a 70 MB STEP; here the cap is lowered) refused the export of SMALL's 1 kB one."""
+    from ecadlib import altium_lib as AL, kicad_export as X
+    lib = _two_model_lib(tmp_path / "two.PcbLib", STEP_SMALL, STEP_BIG)
+    monkeypatch.setattr(AL, "MODEL_CAP", len(STEP_SMALL) + 100)            # SMALL fits, BIG does not
+    written = {}
+    got = X.altium_model(lib, "SMALL", "lib", tmp_path / "lib.3dshapes", {}, [], pick="SMALL",
+                         write=lambda p, b: written.__setitem__(p.name, b))
+    assert got and written == {"SMALL.step": STEP_SMALL}, (got, list(written))
+    try:                                                                    # BIG itself is still refused
+        X.altium_model(lib, "BIG", "lib", tmp_path / "lib.3dshapes", {}, [], pick="BIG", write=lambda p, b: None)
+    except ValueError as e:
+        assert "MB" in str(e), e
+    else:
+        raise AssertionError("BIG's model was unpacked past the cap")
+
+
+@lite
+def test_fx12_4_eval_fingerprint_sees_the_step_bytes(tmp_path, monkeypatch):
+    """Before: the fingerprint wrote the lazy model list by its names only, so two libraries whose STEPs differ (and
+    whose model records do not: a file with no or a stale CHECKSUM) fingerprinted the same (eval consistency could
+    not see a changed 3D model)."""
+    from ecadlib import altium_lib as AL
+    from ecadlib.eval import runner as R
+    monkeypatch.setattr(AL, "step_checksum", lambda data: 0)
+    a = _two_model_lib(tmp_path / "a.PcbLib", STEP_SMALL, STEP_BIG)
+    b = _two_model_lib(tmp_path / "b.PcbLib", STEP_SMALL.replace(b"0.,0.,0.", b"1.,0.,0."), STEP_BIG)
+    c = _two_model_lib(tmp_path / "c.PcbLib", STEP_SMALL, STEP_BIG)
+    assert R.file_fingerprint(a) != R.file_fingerprint(b)
+    assert R.file_fingerprint(a) == R.file_fingerprint(c)
+
+
+# ---------------------------------------------------------------- R-FX12-2: QFN end margins with an absolute slack
+def _qfn_read(n, body, T, b, e, ep, nlr, ntb):
+    """A rectangular QFN answer read right or wrong (the review's qfn_truth.py) -> (assess kind, why)."""
+    import copy
+    from ecadlib import datasheet as D, ds_route as DR
+    from tests import test_datasheet as TD
+    from tests.test_fix1026_reads import _qdim
+    x = copy.deepcopy(TD.GOOD)
+    x["package"].update(name=f"QFN-{n}" + ("-1EP" if ep else ""), description="X", package_type="qfn", pin_count=n, pitch=_qdim("e", e, 0),
+                        body_length=_qdim("D", body[0]), body_width=_qdim("E", body[1]), terminal_length=_qdim("L", T, 0.05),
+                        terminal_width=_qdim("b", b, 0.05), lead_span=None, pins_left_right=nlr, pins_top_bottom=ntb,
+                        exposed_pad={"length": _qdim("D2", ep[0], 0.05), "width": _qdim("E2", ep[1], 0.05)} if ep else None)
+    x["pins"] = [{"num": str(i), "name": f"P{i}", "type": "passive", "side": "left", "page": 3}
+                 for i in range(1, n + (2 if ep else 1))]
+    x["pin_table"]["rows"] = n
+    return DR.assess(D.process(x, "T", "ds.pdf"))
+
+
+def test_fx12_2_small_rectangular_qfn_read_right_is_not_held():
+    """Before: KiCad's UQFN-10_1.3x1.8mm_P0.4mm (2 / 3) leaves end margins 0.9 mm = 2.25 pitches apart: over the
+    2.15-pitch rule, so the right read failed. A tenth of a millimetre absolute slack (as tiny bodies round their
+    margins) and the measured 2.25 pitches keep it."""
+    for body, T, b, e, nlr, ntb in (((1.3, 1.8), 0.35, 0.18, 0.4, 2, 3), ((1.6, 2.1), 0.4, 0.25, 0.5, 2, 3)):
+        kind, why = _qfn_read(10, body, T, b, e, None, nlr, ntb)
+        assert not any("end margins" in w for w in why), (body, why)
+
+
+def test_fx12_2_split_far_off_still_fails_and_real_parts_pass():
+    q38 = (38, (5, 7), 0.4, 0.25, 0.5, (3.15, 5.15))
+    assert _qfn_read(*q38, 12, 7)[0] == "ok"
+    for nlr, ntb in ((10, 9), (13, 6)):                 # 3 pitches off
+        kind, why = _qfn_read(*q38, nlr, ntb)
+        assert kind == "failed" and any("end margins" in w for w in why), (nlr, ntb, why)
+    for args in ((42, (3.5, 9), 0.4, 0.25, 0.5, (2.05, 7.55), 17, 4), (28, (3.5, 5.5), 0.4, 0.25, 0.5, (2.05, 4.05), 10, 4),
+                 (16, (1.8, 2.6), 0.3, 0.2, 0.4, (0.7, 1.5), 4, 4), (24, (4, 5), 0.4, 0.25, 0.5, (2.65, 3.65), 7, 5),
+                 (20, (2.5, 4.5), 0.4, 0.25, 0.5, (1.0, 2.9), 8, 2), (42, (5, 6), 0.4, 0.2, 0.4, (3.7, 4.7), 12, 9)):
+        assert not any("end margins" in w for w in _qfn_read(*args)[1]), args

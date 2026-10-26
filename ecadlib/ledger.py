@@ -3,6 +3,8 @@
     <library>/library.ledger.jsonl        one JSON line per event, git-friendly (sorted keys, never rewritten)
     <library>/.ecadlib/blobs/ab/<sha256>  the exact bytes of every released file and fingerprint (content-addressed)
     <library>/.ecadlib/proposed/<part>.json   a held change: the proposed version waiting for approval
+    <library>/.ecadlib/marks/<part>@r<N>@<digest>   one empty file per recorded release / revert: a ledger cut back
+                                          or merged from two branches is told by them (fail closed, Ledger.trouble)
     <library>/library.usage.json          which projects / BOMs use which part revision (ecadlib project scan)
 
 The library folder is the folder of the plan.json (the librarian's -o, an altium365 plan's folder), or of a
@@ -32,7 +34,7 @@ POSIX, msvcrt on Windows), so the OS frees it when the holder dies: a crashed ru
 import contextlib, copy, datetime, hashlib, json, os, re, tempfile, threading, time
 from pathlib import Path
 
-from .fsutil import write_text_atomic
+from .fsutil import portable_stem, write_text_atomic
 
 LEDGER = "library.ledger.jsonl"
 USAGE = "library.usage.json"
@@ -157,8 +159,28 @@ def sha_bytes(b):
     return hashlib.sha256(b).hexdigest()
 
 
+def is_text(b):
+    """Bytes git would check out with converted line ends (core.autocrlf): no NUL byte. .kicad_mod, .ecadbuild and STEP
+    files are text; a .SchLib / .PcbLib (OLE) is not."""
+    return b"\0" not in b[:65536]
+
+
+def eol_forms(b):
+    """The forms of file bytes that differ only in line ends: (raw, LF, CRLF) for text, (raw,) otherwise. A library
+    checked out by Git for Windows with core.autocrlf has CRLF where ecadlib wrote LF; that alone is no edit (R-G2-4)."""
+    if not is_text(b) or b"\r" not in b and b"\n" not in b:
+        return (b,)
+    lf = b.replace(b"\r\n", b"\n")
+    return (b, lf, lf.replace(b"\n", b"\r\n"))
+
+
+def eol_shas(b):
+    """sha256 of every eol_forms of b."""
+    return {sha_bytes(x) for x in eol_forms(b)}
+
+
 def safe_name(part):
-    s = re.sub(r"[^A-Za-z0-9._+-]", "_", str(part))[:120] or "_"
+    s = portable_stem(re.sub(r"[^A-Za-z0-9._+-]", "_", str(part))[:120] or "_")   # AUX.json is a Windows device
     return s if s == str(part) else f"{s}-{sha_bytes(str(part).encode())[:8]}"
 
 
@@ -218,6 +240,27 @@ def step_files(lib_path):
         return []
 
 
+def side_drift(rec, path):
+    """The Altium build recipe (<file>.ecadbuild) and the 3D models it names beside `path` that differ from those a
+    snapshot record (a ledger head's files entry) stored -> {path on disk: stored sha256}. Altium's own rebuild
+    (altium_native, altium-pkg's RebuildWithAltium) makes the shipped library from these files, but the fingerprint
+    reads the .SchLib / .PcbLib only, so an edit of them alone is a change no fingerprint shows. A missing file
+    counts as different; a record that stored no recipe (or no STEP files) has nothing to compare."""
+    p = Path(path)
+    out = {}
+    if (rec or {}).get("ecadbuild"):
+        side = p.with_name(p.name + ".ecadbuild")
+        if not side.is_file() or rec["ecadbuild"] not in eol_shas(side.read_bytes()):   # CRLF alone: no edit
+            out[str(side)] = rec["ecadbuild"]
+    for s, h in ((rec or {}).get("steps") or {}).items():
+        if ".." in s.replace("\\", "/").split("/") or Path(s).is_absolute():
+            continue
+        f = p.parent / s
+        if not f.is_file() or h not in eol_shas(f.read_bytes()):
+            out[str(f)] = h
+    return out
+
+
 class Ledger:
     def __init__(self, folder):
         self.folder = Path(folder)
@@ -230,13 +273,20 @@ class Ledger:
         if self._lines is None:
             self._lines = []
             if self.path.is_file():
-                for n, raw in enumerate(self.path.read_text(encoding="utf-8").splitlines(), 1):
+                text = self.path.read_bytes()          # bytes: a write cut inside a UTF-8 character still reads
+                rows = text.splitlines()
+                for n, raw in enumerate(rows, 1):
                     if not raw.strip():
                         continue
                     try:
-                        e = json.loads(raw)
+                        e = json.loads(raw.decode("utf-8"))
+                        if not isinstance(e, dict):
+                            raise ValueError(f"a JSON {type(e).__name__}, not a ledger entry")
                     except ValueError as ex:
-                        raise LedgerError(f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
+                        if n == len(rows) and not text.endswith((b"\n", b"\r")):
+                            continue           # a write cut short (killed, disk full): it never happened; append()
+                        raise LedgerError(     # sets its bytes aside before the next line
+f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
                                           f"the ledger is append-only: put that line back as it was (`git diff {LEDGER}` "
                                           f"in the library folder shows it), then run again") from None
                     if int(e.get("schema_version") or 1) > SCHEMA_VERSION:
@@ -251,6 +301,7 @@ class Ledger:
         """Read the file again on the next lines() (another run may have appended since: done under the lock)."""
         self._lines = None
         self.__dict__.pop("_stored_fps", None)
+        self.__dict__.pop("_marks", None)
 
     def exists(self):
         return self.path.is_file()
@@ -259,6 +310,8 @@ class Ledger:
         e = {"schema_version": SCHEMA_VERSION, "at": now(), **entry}
         self.folder.mkdir(parents=True, exist_ok=True)
         first = not self.path.is_file()
+        if not first:
+            self._mend_tail()
         with open(self.path, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(e, sort_keys=True, ensure_ascii=False) + "\n")
         if first:                              # the folder's stamp lists the ledger from the start (ecadlib.migrate)
@@ -266,7 +319,109 @@ class Ledger:
             MG.write_stamp(self.folder, ["ledger"])
         if self._lines is not None:
             self._lines.append(e)
+        if e.get("event") in RELEASES and e.get("part") and isinstance(e.get("revision"), int):
+            self._mark(e)
         return e
+
+    # ------------------------------------------------------------ marks: a cut or merged ledger fails closed (R-G2-3)
+    def _mark(self, e):
+        """After a release / revert line: an empty file .ecadlib/marks/<part>@r<N>@<digest>. A ledger restored from an
+        older copy, or merged from two branches, loses or doubles lines; these files (merged by git like any others)
+        still say which revisions were recorded."""
+        d = self.store / "marks"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{safe_name(e['part'])}@r{e['revision']}@{str(e.get('digest') or '-')[:16]}").touch()
+        except OSError:
+            pass
+        self.__dict__.pop("_marks", None)
+
+    def marks(self, part):
+        """The releases .ecadlib/marks says were recorded for `part` -> {(revision, digest prefix)}."""
+        if "_marks" not in self.__dict__:
+            found = {}
+            d = self.store / "marks"
+            try:
+                names = os.listdir(d) if d.is_dir() else []
+            except OSError:
+                names = []
+            for n in names:
+                bits = n.rsplit("@", 2)
+                if len(bits) == 3 and bits[1][:1] == "r" and bits[1][1:].isdigit():
+                    found.setdefault(bits[0], set()).add((int(bits[1][1:]), bits[2]))
+            self._marks = found
+        return self._marks.get(safe_name(part), set())
+
+    def trouble(self, part):
+        """Why `part`'s release history cannot be trusted, or None: a revision recorded twice or after a later one (a
+        ledger merged from two branches), a line whose base is above the head, or a release .ecadlib/marks records that
+        is above the head or another version of it (the ledger was cut back to an older copy, or a merge kept only
+        one branch's lines)."""
+        rel, seen = self.releases(part), []
+        for e in rel:
+            r = e.get("revision")
+            if isinstance(r, int) and seen and r <= seen[-1]:
+                two = sorted(f"{STORE}/marks/{safe_name(part)}@r{r}@{d}" for rr, d in self.marks(part) if rr == r)
+                return (f"{LEDGER} records r{r} of {part} " + ("twice" if r in seen else f"after r{seen[-1]}") +
+                        " (a ledger merged from two branches, or lines copied back); to mend it keep the one release "
+                        f"line of r{r} you want in {LEDGER}, delete the other, and delete the other line's mark "
+                        f"(one of {', '.join(two) or 'none'}, named by its digest)")
+            if isinstance(r, int):
+                seen.append(r)
+        top = seen[-1] if seen else 0
+        for e in self.history(part):
+            b = e.get("base")
+            if isinstance(b, int) and b > top:
+                return f"a {e.get('event')} line of {part} in {LEDGER} is based on r{b}, above its head r{top}"
+        head = rel[-1] if rel else None
+        mine = {(e.get("revision"), str(e.get("digest") or "-")[:16]) for e in rel}
+        for r, d in sorted(self.marks(part)):
+            if (r, d) in mine:
+                continue
+            if r > top:
+                return (f"{STORE}/marks says r{r} of {part} was released, but {LEDGER} ends at r{top} (the ledger is an "
+                        f"older copy, or a merge dropped those lines)")
+            if head is not None and r == top:
+                return (f"{STORE}/marks says another r{r} of {part} was released than the one {LEDGER} holds (a ledger "
+                        f"merged from two branches kept only one side); if the r{r} line {LEDGER} holds is the one you "
+                        f"want, delete {STORE}/marks/{safe_name(part)}@r{r}@{d} (the other branch's mark), else restore "
+                        f"that branch's r{r} line")
+        return None
+
+    def _mend_tail(self):
+        """Before a line is appended: a ledger that does not end in a newline would glue the new line onto its last
+        one (a broken line: every command on the library stops). A complete last line (an editor dropped the final
+        newline) gets its newline; a cut one (a write killed half way, which lines() never counted) is moved to
+        .ecadlib/torn-<time>.jsonl, so its bytes are kept, and cut off."""
+        with open(self.path, "rb+") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            if not size:
+                return
+            f.seek(size - 1)
+            if f.read(1) in (b"\n", b"\r"):
+                return
+            back = min(size, 1 << 20)
+            while True:                        # the start of the last line
+                f.seek(size - back)
+                chunk = f.read(back)
+                i = max(chunk.rfind(b"\n"), chunk.rfind(b"\r"))
+                if i >= 0 or back == size:
+                    break
+                back = min(size, back * 2)
+            start = size - back + i + 1
+            tail = chunk[i + 1:]
+            try:
+                ok = isinstance(json.loads(tail.decode("utf-8")), dict)
+            except ValueError:
+                ok = False
+            if ok:
+                f.seek(size)
+                f.write(b"\n")
+                return
+            self.store.mkdir(parents=True, exist_ok=True)
+            (self.store / f"torn-{now().replace(':', '')}-{os.getpid()}.jsonl").write_bytes(tail)
+            f.truncate(start)
 
     def history(self, part):
         return [e for e in self.lines() if e.get("part") == part]
@@ -276,6 +431,15 @@ class Ledger:
 
     def head(self, part):
         r = self.releases(part)
+        if r:
+            why = self.trouble(part)
+            if why:                            # which revision is released is not known: nothing is taken as it
+                raise LedgerError(f"{self.folder}: {why}; nothing was changed",
+                                  f"restore {LEDGER} and {STORE}/ from git as one (`git log -- {LEDGER}` in the library "
+                                  f"folder shows where lines were lost or doubled), or mend it as the message says (one "
+                                  f"release line per revision, the other branch's {STORE}/marks file deleted), then run "
+                                  f"again; `ecadlib part history` lists the part's lines; see docs/change-control.md, "
+                                  f"\"When the ledger is damaged\"")
         return r[-1] if r else None
 
     def revision(self, part, rev):

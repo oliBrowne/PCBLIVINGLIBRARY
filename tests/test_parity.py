@@ -342,8 +342,8 @@ def test_footprint_copper_next_to_a_pad_is_not_a_pad_mismatch():
     with tempfile.TemporaryDirectory() as d:
         _, _, diffs, _ = _roundtrip(text, d)
         assert not _errors(diffs) and any("the copper itself is the same" in x["msg"] for x in diffs), diffs
-        k = P.kicad_footprint(text)
-        k["copper"] = [(-0.5, -0.25, 0.9, 0.25)]       # different copper: still an error
+        k = P.kicad_footprint(text.replace("(xy 0.5 -0.25) (xy 0.5 0.25)", "(xy 0.9 -0.25) (xy 0.9 0.25)"))
+        # different copper: still an error (the copper map, not the graphics' boxes, is compared since R-FX5-1)
         assert _errors(P.compare_footprints(k, P.altium_footprint(_write(d, K.convert_footprint(text, "T", "t")[0]))))
 
 

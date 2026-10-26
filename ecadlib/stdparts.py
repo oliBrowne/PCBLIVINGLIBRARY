@@ -128,6 +128,21 @@ EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A
 # words in a footprint field that name a part with more pads, or another land, on a chip size code
 NOT_CHIP = re.compile(r"(?<![A-Za-z])(RGB|arrays?|reverse[ _-]?mount|mouse[ _-]?bite|shunt|kelvin|common[ _-]?mode|"
                       r"choke|crystal|balun|filter|transformer|speaker|buzzer|connector|jack|header|modified)(?![a-z])", re.I)
+# a land named KiCad's way after a maker or series (L_Wuerth_WE-PD-Typ-LS_1210, R_Shunt_..): its own land, whatever
+# chip code it ends in; 'R_0603', 'RES_0603', 'R_SMD_0603' name the size
+MAKER_LAND = re.compile(r"^(?:R|C|CP|L|LED|D|FB|Fuse)_(?!(?:SMD|Chip|Small)_)[A-Za-z][^_]*_")
+# a KiCad chip name with more after its metric code ('L_0603_1608Metric_Kelvin', '.._1608Metric_typo'): a land KiCad
+# names otherwise (the hand-solder / castellated variants) or one it does not have, never the plain chip
+CHIP_SUFFIX = re.compile(r"^(?:R|C|CP|L|LED|D|FB|Fuse)_\d{4,5}_\d{4,5}Metric_.", re.I)
+
+
+def own_land_name(text):
+    """A footprint field that names a land of its own rather than a bare chip size, whatever chip code it carries
+    (R-FX10-1): a maker's / series land named KiCad's way (L_Bourns_SRR1210, R_Shnt_Vishay_WSK2512, even misspelt), a
+    multi-pad or other part (NOT_CHIP), a land variant, or a KiCad chip name with a suffix. Not in the index, such a
+    land is held, never built as the chip its code names."""
+    n = _strip_lib(text).strip()
+    return bool(n and (MAKER_LAND.match(n) or CHIP_SUFFIX.match(n) or NOT_CHIP.search(n) or LAND_VARIANT.search(n)))
 # a diode package name (SMA, SMB ...) in an RF connector's or a variant's name: not the diode land
 NOT_DIODE = re.compile(r"(?<![A-Za-z])(jack|plug|edge[ _-]?mount|coax\w*|connector|receptacle|vertical|horizontal|"
                        r"modified|bulkhead)(?![a-z])", re.I)
@@ -229,6 +244,21 @@ def _in_part_number(t, a, b):
     return False
 
 
+# nominal chip body length x width (mm) per imperial size: explicit dimensions in a text decide a size code's reading
+CHIP_DIMS = {"01005": (0.4, 0.2), "0201": (0.6, 0.3), "0402": (1.0, 0.5), "0603": (1.6, 0.8), "0805": (2.0, 1.25),
+             "1206": (3.2, 1.6), "1210": (3.2, 2.5), "1812": (4.5, 3.2), "2010": (5.0, 2.5), "2512": (6.3, 3.2)}
+
+
+def _chip_dims(t):
+    """The imperial size whose body 'L x W' in mm the text gives ('1.6x0.8', '(1.60mm x 0.80mm)'), or None."""
+    for m in re.finditer(r"(?<![\d.])(\d+\.\d+|\d)\s*(?:mm)?\s*[xX×*]\s*(\d+\.\d+|\d)(?![\d.])", t):
+        a, b = sorted((float(m.group(1)), float(m.group(2))), reverse=True)
+        hit = [s for s, (l, w) in CHIP_DIMS.items() if abs(a - l) <= 0.12 and abs(b - w) <= 0.12]
+        if len(hit) == 1:
+            return hit[0]
+    return None
+
+
 def chip_size(text, strict=False):
     """Imperial size code from a footprint / description text, or None. Bare 4-digit codes are imperial (the
     industry default); metric needs a marker (1608Metric, 1608M, '0603 (1608)' gives both and they must agree).
@@ -241,11 +271,76 @@ def chip_size(text, strict=False):
     if m and m.group(1) in METRIC:
         found.add(METRIC[m.group(1)])
     for m in re.finditer(r"(?<![0-9])(\d{4,5})\s*(?:_?Metric|M)(?![A-Za-z0-9])", t, re.I):
+        if re.match(r"[\s:,(\[-]*\d{4,5}(?![0-9.])", t[m.end():]):
+            continue                                                # '0603 Metric 1608': read below
         if m.group(1) in METRIC:
             found.add(METRIC[m.group(1)])
+            if _chip_dims(t) and _chip_dims(t) != METRIC[m.group(1)]:     # '0603 Metric (1.6 x 0.8 mm)': the body
+                found.add(f"conflict:{m.group(1)} metric, body {_chip_dims(t)}")   # disagrees: held
             glued |= bool(re.match(r"-\d", t[m.end():]))           # 'Metric-6': a 6-pad part on that size
-    for m in re.finditer(rf"(?<![0-9.])(\d{{4,5}})(?![0-9.])(?!\s*(?:_?Metric|M\b|mm|mil|{_UNIT_LETTER}|nF|pF|uF|µF|Ω|ohm|%))", t, re.I):
+    # a metric / mm word next to the code, not glued to it: '0603 (metric)', 'Metric 0603', 'mm: 0603', '0603 [mm]'.
+    # 'mm' counts only in brackets or before a colon ('0603, mm' and 'mm 0603' are unclear); a word between two codes
+    # belongs to the one after it ('0603 [Metric 1608]', '0603 size, metric 1608': 1608 is the metric code); body
+    # dimensions in the text ('1.6x0.8') that fit the imperial reading decide for it
+    dims = _chip_dims(t)
+    # an imperial / inch word names its code imperial ('1608 Metric - 0603 Imperial', 'Imperial 0603'): the word right
+    # after a code is that code's, else the code right after it takes it (R-FX9-5)
+    imp = {}
+    for w in re.finditer(r"(?<![A-Za-z])(imperial|inch(?:es)?|EIA)(?![A-Za-z])", t, re.I):
+        b = re.search(r"(?<![0-9A-Za-z.])(\d{4,5})[\s(\[:,-]*$", t[:w.start()])
+        a = re.match(r"[\s:)\],-]*(\d{4,5})(?![0-9.])", t[w.end():])
+        if b and not (a and (re.match(r"\s*:", t[w.end():]) or b.group(1) not in IMPERIAL)):   # 'Imperial: 0603'
+            imp[b.start(1)] = b.group(1)
+        elif a:
+            imp[w.end() + a.start(1)] = a.group(1)
+    for at, code in imp.items():
+        found.add(code if code in IMPERIAL else f"conflict:{code} imperial?")
+
+    def owner_is_before(m):
+        """A metric word between two codes ('1608 Metric, 0603'): it is the code before's when the code after is
+        named imperial, or the code before is the only one that can only be metric; else the code after's."""
+        b = re.search(r"(?<![0-9A-Za-z.])(\d{4,5})(?:\s*(?:size|code))?[\s(\[:,-]*$", t[:m.start(1)])
+        if not b or b.start(1) in imp:
+            return False
+        if m.start(2) in imp:
+            return True
+        only = lambda c: c in METRIC and c not in IMPERIAL
+        return only(b.group(1)) and not only(m.group(2))
+    after = {m.start(1): m for m in re.finditer(
+        r"(?<![A-Za-z])(metric|mm)(?:\s*(?:size|code))?[\s:)\],-]*(\d{4,5})(?![0-9.])", t, re.I)
+        if (m.group(1).lower() == "metric" or re.match(r"mm\s*:", m.group(0), re.I)) and m.start(2) not in imp
+        and not owner_is_before(m)}
+    given = {m.start(1) for m in after.values()}                  # metric words a later code took
+    before = [m for m in re.finditer(r"(?<![0-9A-Za-z.])(\d{4,5})[\s(\[:,]*(?:size|code)?[\s(\[:,]*(metric|mm)(?![A-Za-z])",
+                                     t, re.I)
+              if m.start(2) not in after and (m.group(2).lower() == "metric" or (
+                  re.search(r"[(\[]\s*$", t[:m.start(2)]) and re.match(r"mm\s*[)\]]", t[m.start(2):], re.I)))]
+    near, marks = set(), set()
+    for code, at, span in [(m.group(1), m.start(1), m.span(2)) for m in before] + \
+            [(m.group(2), m.start(2), m.span(1)) for m in after.values()]:
+        marks.add(span)
+        if code == dims:                                            # '0603 [mm] 1.6x0.8': the body says imperial
+            continue
+        if dims and code in METRIC and METRIC[code] != dims:        # '0402 [mm] 1.6x0.8': the body is neither
+            found.add(f"conflict:{code} metric, body {dims}")       # reading of the code (R-FX14-5): held
+            near.add(at)
+            continue
+        found.add(METRIC[code] if code in METRIC else f"conflict:{code} metric?")
+        near.add(at)
+    free = [m.span() for m in re.finditer(r"(?<![A-Za-z])(metric|mm)(?![A-Za-z])", t, re.I)     # a marker no code
+            if m.span() not in marks and not re.search(r"(?:\d|_)\s*$", t[:m.start()])]   # takes, not a dimension
+    for m in re.finditer(rf"(?<![0-9.])(\d{{4,5}})(?![0-9.])(?!\s*(?:mil|{_UNIT_LETTER}|nF|pF|uF|µF|Ω|ohm|%))", t, re.I):
         code = m.group(1)
+        if m.start(1) in near or m.start(1) in imp:
+            continue
+        w = re.match(r"\s*(?:_?(Metric)|M\b|mm)", t[m.end():], re.I)
+        if w and not (w.group(1) and m.end() + w.start(1) in given):
+            continue                                                # its own metric marker (read above)
+        # unclear: a free marker with no value between it and the code ('10k 0603 1% 100mW metric': not its marker)
+        unclear = [w for w in free if not re.search(r"\d", t[min(m.end(), w[1]):max(m.start(), w[0])])]
+        if code in IMPERIAL and unclear and code != dims and not _in_part_number(t, m.start(), m.end()):
+            found.add(f"conflict:{code} imperial or metric?")
+            continue
         if code in IMPERIAL and not re.search(r"(?:RES|CAP|IND|LED|DIO|FUS)C$", t[:m.start()], re.I):
             if _in_part_number(t, m.start(), m.end()):
                 glued = True
@@ -272,8 +367,13 @@ def _mpn_rules():
            "PA8": "1206"}
     koa = {"1H": "0201", "1E": "0402", "1J": "0603", "2A": "0805", "2B": "1206", "2E": "1210", "2H": "2010", "3A": "2512"}
     imp = "(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)"
+    # Samsung RC series: RC<metric size><tolerance><resistance digits> (RC0603F103CS is a 0201)
+    src = {"0402": "01005", "0603": "0201", "1005": "0402", "1608": "0603", "2012": "0805", "3216": "1206", "3225": "1210",
+           "5025": "2010", "6432": "2512"}
     return [
-        (re.compile(r"^(?:RC|RT|RL|AC|AF|AT|PE|PT|RV)" + imp + r"[A-Z]"), "R", None),           # Yageo resistors
+        (re.compile(r"^RC(0402|0603|1005|1608|2012|3216|3225|5025|6432)[BDFGJK]\d"), "R", src),     # Samsung resistors
+        # Yageo resistors: <series><imperial size><tolerance><packing letter>... (RC0603FR-07, RT0603BRD07)
+        (re.compile(r"^(?:RC|RT|RL|AC|AF|AT|PE|PT|RV)" + imp + r"[A-Z][A-Z]"), "R", None),
         (re.compile(r"^CC" + imp + r"[A-Z]{2}"), "C", None),                                     # Yageo MLCC
         (re.compile(r"^(?:GRM|GCM|GJM|GCJ|GRT|GCQ|GQM|GMA)(\d\d)"), "C", m3),                   # Murata MLCC
         (re.compile(r"^(?:LQG|LQM|LQW|LQP)(\d\d)"), "L", m3), (re.compile(r"^BLM(\d\d)"), "L", m3),   # Murata L, beads
@@ -564,9 +664,11 @@ def identify(read, known=None):
 
 # power packages with a tab that KiCad draws by hand (the table's pad tables): the drawing's family name (or Nexperia's
 # SOT outline code) -> table prefix
-TAB_FAMILY = re.compile(r"(?<![A-Z0-9])(TO-?252|DPAK|TO-?263|D2PAK|SOT-?223|TO-?261|LFPAK-?56|LFPAK-?33|SOT-?669|SOT-?1210)"
+TAB_FAMILY = re.compile(r"(?<![A-Z0-9])(TO-?252|D-?PAK|SOT-?428|TO-?263|D[2\u00b2]-?PAK|DDPAK|SOT-?404|SOT-?223|TO-?261|"
+                        r"LFPAK-?56|LFPAK-?33|SOT-?669|SOT-?1210)"
                         r"(?:[-_ ]?(\d)(?!\d))?")
-TAB_PREFIX = {"TO252": "TO-252", "DPAK": "TO-252", "TO263": "TO-263", "D2PAK": "TO-263", "SOT223": "SOT-223",
+TAB_PREFIX = {"TO252": "TO-252", "DPAK": "TO-252", "SOT428": "TO-252", "TO263": "TO-263", "D2PAK": "TO-263",
+              "DDPAK": "TO-263", "SOT404": "TO-263", "SOT223": "SOT-223",
               "TO261": "SOT-223", "LFPAK56": "LFPAK56", "SOT669": "LFPAK56", "LFPAK33": "LFPAK33", "SOT1210": "LFPAK33"}
 TAB_POS_TOL = 0.06          # a lead's place along the row: TO-252's 2.28 mm is printed 2.3 (e1) on many drawings
 TAB_BODY_TOL = 0.3          # the table's body length (KiCad's fab outline) against the read's min..max
@@ -665,7 +767,7 @@ def identify_tab(read, pins=None):
     m = TAB_FAMILY.search(said)
     if not m:
         return None, "the read's package name is no DPAK / D2PAK / SOT-223 family"
-    prefix, counted = TAB_PREFIX[_norm(m.group(1))], int(m.group(2)) if m.group(2) else None
+    prefix, counted = TAB_PREFIX[_norm(m.group(1).replace("\u00b2", "2"))], int(m.group(2)) if m.group(2) else None
     pos = read.get("pin_positions") or []
     try:
         tab_no = str(read["tab"]["number"])
@@ -780,7 +882,7 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
             return None, f"{_strip_lib(t).strip()}: the {v.group(1)} land variant is not in the standard table"
     for t in texts:                                       # another KiCad footprint ('R_Array_Convex_4x0603', 'TO-92_Wide',
         n = _strip_lib(t).strip()                         # 'SO-8_3.9x4.9mm_P1.27mm'): its own land, not the chip size
-        if n in kicad_names() and n not in pk and _norm(n) not in ALIASES and _norm(n) not in DIODE_ALIASES:
+        if n in kicad_names() and n not in pk and (_kicad_own(t) or _norm(n) not in ALIASES and _norm(n) not in DIODE_ALIASES):
             return None, (f"{n}: KiCad's {kicad_names()[n]}:{n} is not in the checked standard table (its land is not "
                           "the table's land for the size or package in its name)")   # (bare 'TO-92' is the package)
     if kind in CHIP_PREFIX:                              # chip passives: size from the texts, then the MPN
@@ -789,6 +891,11 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
             w = NOT_CHIP.search(t)                        # land on a chip size ('LED_RGB_1210', '4x0603 array')
             if w:
                 return None, f"{_strip_lib(t).strip()}: names a {w.group(0).lower()}, not a two-pad chip land"
+            n = _strip_lib(t).strip()                     # 'L_Wuerth_WE-PD-Typ-LS_1210': a maker's own land named
+            if MAKER_LAND.match(n) or CHIP_SUFFIX.match(n):     # KiCad's way (a 12x12 mm inductor), with or without
+                size = str(chip_size(t, strict=True) or chip_size(t) or "")   # a chip code it reads (R-FX10-1), not the chip
+                size = "" if size.startswith("conflict") else " " + size if size else ""
+                return None, f"{n}: names a maker's own land, not the{size} chip"
         for t in texts + weak:
             s = chip_size(t, strict=t in texts)
             if s:
@@ -930,8 +1037,12 @@ FAMILY = [
     (r"^LM317T", ("TO-220-3_Vertical",), ("REG", "317")),
     (r"^(L|LM|MC|UA|KA)?78L\d\d", ("TO-92_Inline", "SOT-89-3"), ("REG", "78L")),
 ]
-FAMILY_PKG = {"SOT-23": r"\bSOT-?23(?![-\d])", "TO-92_Inline": r"\bTO-?92(?![-\dLS])", "SOT-223-3_TabPin2": r"\bSOT-?223\b|\bTO-?261",
-              "TO-220-3_Vertical": r"\bTO-?220(?:AB|-3)?(?![-\dF])", "SOT-89-3": r"\bSOT-?89(?:-3)?(?![-\d])"}
+# anchored at the token end: 'SOT-23W', 'TO-92Mini-2', 'TO-92_Wide', 'SOT-223-5' are other lands, not the family's
+# (lead-count suffixes of the family's own land: SOT-223-3L, TO-220AB-3, SOT-23_3L, TO-261-4; TO-92A / TO-92AP are
+# makers' names for the inline TO-92)
+FAMILY_PKG = {"SOT-23": r"\bSOT-?23(?:_3L?)?(?:_TR)?(?![-\w])", "TO-92_Inline": r"\bTO-?92(?:AP?)?(?![-\w])",
+              "SOT-223-3_TabPin2": r"\bSOT-?223(?:-[34]L?)?(?![-\w])|\bTO-?261(?:AA)?(?:-[34])?(?![-\w])",
+              "TO-220-3_Vertical": r"\bTO-?220(?:AB)?(?:-3L?)?(?![-\w])", "SOT-89-3": r"\bSOT-?89(?:-3L?)?(?![-\w])"}
 PNP_RE = re.compile(r"^(2N3906|2N2907|2N4403|2N5401|BC3[2]7|BC55[6-9]|BC560)")
 
 
@@ -1004,6 +1115,51 @@ def symbol_text(key, mpn=""):
 
 
 # ---------------------------------------------------------------- one part
+# another diode named, or the LED word naming what the part is for ('for LED', 'LED driver', 'LED backlight boost')
+_OTHER_DIODE = re.compile(r"schottky|zener|\bTVS\b|transient|rectifier|\bESD\b|varactor|varicap|switching diode|"
+                          r"signal diode|photo ?diode|suppressor|protector|\bshunt\b|\bdiode\b", re.I)
+# a diode / device type named before the LED's clause ('Zener diode for LED protection, white LED string'): it is
+# the part unless the LED is its own clause's head noun (R-FX9-4)
+_NAMED_OTHER = re.compile(r"schottky|zener|\bTVS\b|transient|rectifier|\bESD\b|varactor|varicap|photo ?diode|"
+                          r"suppressor|protector|\bshunt\b", re.I)
+_LED_HEAD = {"smd", "smt", "tht", "chip", "indicator", "lamp", "emitter", "emitting", "diode", "light", "package", "pcb",
+             "through", "surface", "side", "top", "right", "reverse"}
+# a word that only an LED has next to it: its colour, wavelength, size or package
+_LED_LOOK = re.compile(r"\b(?:red|green|blue|white|yellow|amber|orange|pink|purple|violet|cyan|RGBW?|warm|cool|"
+                       r"neutral|IR|infrared|UV|ultraviolet|bi-?colou?r|dual[ -]colou?r|super ?flux)\b|"
+                       r"\d{3,4}\s?nm\b|(?<![\d.])\d(?:\.\d)?\s?mm\b|\b(?:3528|5050|2835|3014|5630|5730|PLCC-?\d?)\b", re.I)
+_LED_FOR = re.compile(r"\b(?:for|in|of|to|with|drives?|driving|protects?|protecting)\b[^,;()]*$", re.I)
+_LED_USE = re.compile(r"^[\s-]*(?:driver|backlight\w*|string|strip|lighting|boost|dimm\w*|protect\w*|surge|bias|supply|"
+                      r"shunt|bypass)\b",
+                      re.I)
+
+
+def says_led(description):
+    """The description says the part is an LED. Each LED word is read in its clause (up to a comma, semicolon or
+    bracket): after 'for / in / with / drives ...' it names what the part is for ('Zener for LED string', 'TVS for
+    5050 LED strip'): not this part. A colour, wavelength, size or LED package in the clause ('Zener-protected white
+    LED', 'LED backlight white 3528') makes it the part. 'LED driver / backlight / lighting ...' with another diode
+    named ('Schottky ..., LED backlight boost', 'LED driver diode') is that diode's use; else the LED is the head
+    noun ('ESD protected LED', 'LED protect', 'Status LED')."""
+    d = str(description or "")
+    for m in re.finditer(r"\bLEDs?\b", d, re.I):
+        a = max(d.rfind(c, 0, m.start()) for c in ",;()") + 1
+        ends = [k for k in (d.find(c, m.end()) for c in ",;()") if k >= 0]
+        pre, post = d[a:m.start()], d[m.end():min(ends) if ends else len(d)]
+        if _LED_FOR.search(pre):
+            continue
+        nxt = re.match(r"[\s-]*([A-Za-z]+)", post)
+        head = not nxt or nxt.group(1).lower() in _LED_HEAD or bool(_LED_LOOK.fullmatch(nxt.group(1)))
+        if not head and _NAMED_OTHER.search(d[:a]):      # 'Zener ..., white LED string': the Zener's use
+            continue
+        if _LED_LOOK.search(pre + " " + post):
+            return True
+        if _LED_USE.search(post) and _OTHER_DIODE.search(d):
+            continue
+        return True
+    return False
+
+
 def part_kind(category, footprint="", description="", designator=""):
     """R C CP L LED D F Q U or None from the plan folder's last segment, the footprint and the description."""
     cat = str(category or "").split("/")[-1]
@@ -1015,7 +1171,7 @@ def part_kind(category, footprint="", description="", designator=""):
     if cat == "Inductors":
         return "L"
     if cat == "Diodes":
-        return "LED" if fp.startswith("LED_") or re.search(r"\bLED\b", d, re.I) else "D"
+        return "LED" if fp.startswith("LED_") or says_led(d) else "D"
     if re.search(r"\bfuse\b|polyfuse|PTC", d, re.I) and re.match(r"^F\d", str(designator or "")):
         return "F"
     return {"Transistors": "Q", "ICs": "U"}.get(cat)
@@ -1024,6 +1180,23 @@ def part_kind(category, footprint="", description="", designator=""):
 # polarized capacitors (tantalum, polymer, aluminium) by MPN: their case is not a chip-capacitor land and pin 1 is +
 POLAR_CAP = re.compile(r"^(T49[1-9]|T5[2-9]\d|TAJ|TPS[A-Z]|TPM|TRJ|TCJ|TCM|TCN|TCQ|TLJ|TPC|NOJ|NOS|F9[1-8]|293D|593D|298D|"
                        r"T8[36]|TR3|TP3|EEE|EEV|EEH|EEF|EEU|ECA|\d+TP[A-Z]|\d+SVP|\d+SEP|UWT|UWX|UUD|UUX|UCD|PCJ|PCF|PLV)")
+
+
+def _kicad_own(t):
+    """The KiCad footprint a text names as such, or None: an exact KiCad name, except a bare package name that is
+    also the package's common name ('SOT-223', 'TO-92': the package, the part decides the land); with a library
+    prefix ('Package_TO_SOT_THT:TO-92') it is KiCad's own footprint."""
+    n = _strip_lib(t).strip()
+    if n not in kicad_names():
+        return None
+    if n == str(t).strip() and (_norm(n) in ALIASES or _norm(n) in DIODE_ALIASES or _norm(n) in AMBIGUOUS):
+        return None
+    return n
+
+
+def _names_other_land(texts, name):
+    """A text names a KiCad footprint other than the table land `name` (the family fallback must not override it)."""
+    return any(_kicad_own(t) not in (None, name) for t in texts if str(t or "").strip())
 
 
 def resolve(texts, kind=None, mpn="", description=""):
@@ -1044,7 +1217,8 @@ def resolve(texts, kind=None, mpn="", description=""):
         said = " ".join(map(str, texts)) + " " + str(description)
         hit = [p for p in fam if re.search(FAMILY_PKG[p], said, re.I)]
         if len(hit) == 1 and not POWER_PKG.search(said) and not NO_GO.search(said) and not LAND_VARIANT.search(said) \
-                and not EP_WORD.search(said):
+                and not EP_WORD.search(said) and not any(NOT_CHIP.search(str(x or "")) for x in texts) \
+                and not (hit[0].startswith("TO-92") and NO_GO_TO92.search(said)) and not _names_other_land(texts, hit[0]):
             name, how = hit[0], f"{mpn}: its family comes in {hit[0]} (named as {re.search(FAMILY_PKG[hit[0]], said, re.I).group(0)})"
     sym, sym_how = symbol_kind(kind, mpn, name, description) if (name or kind in ("R", "C", "CP", "L", "LED")) else (None, "no standard package")
     return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name) if name else None, "symbol": sym, "sym_how": sym_how}

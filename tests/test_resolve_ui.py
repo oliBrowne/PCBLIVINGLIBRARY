@@ -121,6 +121,8 @@ def test_workspace_dedupe():
         assert "duplicate_of" not in plan.read_text()                              # no merge: plan untouched
         m = ws.find_duplicates(bom, merge=True)
         assert m["merged"] and m["summary"]["duplicates"] == 1, m["summary"]
+        from tests.test_dedupe import _sign_off   # the merge swaps the released part's 3D body: signed off (R-FL-5)
+        _sign_off(plan)
         after = {i["name"]: i for i in json.loads(plan.read_text())}
         dupname = next(n for n in ("USBC-FAKE", "USBC-FAKE-TR") if after[n].get("duplicate_of"))
         assert after[dupname]["status"] == "duplicate" and (plan.parent / "plan.json.pre-dedupe").exists()

@@ -204,6 +204,20 @@ def toml_module():
     return tomllib
 
 
+def read_file(f):
+    """A rules file's text. TOML is UTF-8; a file PowerShell 5 wrote (`ecadlib init > ecadlib.toml`: UTF-16 with a
+    BOM) reads too. Any other encoding (Notepad's "ANSI") is a RulesError naming the file, not a traceback."""
+    f = Path(f)
+    data = f.read_bytes()
+    try:
+        if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            return data.decode("utf-16")
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise RulesError(f"{f}: not UTF-8 text (byte {e.start}: {data[e.start:e.start + 1]!r}); save it as UTF-8 "
+                         "(Notepad: Save as, Encoding UTF-8)") from None
+
+
 def parse_text(text, name="ecadlib.toml"):
     if isinstance(text, str):
         text = text.lstrip("﻿")          # "UTF-8 with BOM" (Notepad, PowerShell 5, Visual Studio): fine
@@ -244,7 +258,7 @@ def load(path=None, start="."):
             raise RulesError(f"rules file {path} not found")
         if not f:
             return dict(copy.deepcopy(DEFAULTS), _file="")
-        raw, where = parse_text(f.read_text(encoding="utf-8"), f.name), str(f)
+        raw, where = parse_text(read_file(f), f.name), str(f)
     if isinstance(raw, dict) and "schema_version" in raw:      # ecadlib/migrate.py: a file from a newer ecadlib is refused
         from . import migrate as MG
         try:
@@ -288,6 +302,31 @@ REMOVED_KEYS = {("release", "eagle"), ("release", "easyeda"),
                                          "base_branch", "pictures_path", "batch_size", "auto_push", "upkeep_schedule",
                                          "datasheet_batch", "manufacturer_aliases"))}
 REMOVED_SECTIONS = {"sim", "hub", "assembly"}          # cut on 2026-10-19: an old file with them loads, they are ignored
+
+
+def _check_param_names(where, names):
+    """[parameters.names]: each house name is its own column. Never a key column ecadlib writes itself (Part Number,
+    Library Ref ...: the DbLib key or the symbol link would hold the MPN), never another parameter's name, and never
+    the house name of two parameters (both would be pushed, one read back as the other)."""
+    keys = {k.casefold() for k in KEY_COLUMNS}
+    others = {str(k).casefold() for k in CANONICAL_PARAMS} | {str(k).casefold() for k in names}
+    seen = {}
+    for k, v in names.items():
+        h = str(v).strip()
+        key = f"parameters.names.{k}"
+        if str(k).casefold() in keys:
+            _err(where, key, f"renames the key column {k!r}, which ecadlib writes itself; remove it")
+        if not h:
+            _err(where, key, "is empty: give the house name of this parameter, or remove the line")
+        if h.casefold() in keys:
+            _err(where, key, f"= {v!r}: {h!r} is a key column ecadlib writes itself (the part name, symbol or footprint "
+                             "link); give this parameter a name of its own")
+        if h.casefold() != str(k).casefold() and h.casefold() in others:
+            _err(where, key, f"= {v!r}: {h!r} is another parameter ecadlib writes; give this one a name of its own")
+        if h.casefold() in seen:
+            _err(where, key, f"= {v!r}: {seen[h.casefold()]!r} has that house name too; two parameters cannot share one "
+                             "column")
+        seen[h.casefold()] = k
 
 
 def validate(raw, where="ecadlib.toml"):
@@ -360,6 +399,7 @@ def validate(raw, where="ecadlib.toml"):
     for k, ok in (("case", ("keep", "upper", "lower")), ("value_style", VALUE_STYLES)):
         if k in n and n[k] not in ok:
             _err(where, f"naming.{k}", f"= {n[k]!r}: must be one of {', '.join(ok)}")
+    _check_param_names(where, (raw.get("parameters") or {}).get("names") or {})
     fp = raw.get("footprint", {})
     if "density" in fp and str(fp["density"]).upper() not in ("L", "N", "M", "A", "B", "C"):
         _err(where, "footprint.density", f"= {fp['density']!r}: must be L, N or M (IPC-7351 least / nominal / most)")
@@ -730,18 +770,34 @@ def template_for(cat, rules, ref=""):
     return by.get(cat) or by.get(ref) or (n["passive"] if cat in PASSIVES else n["component"])
 
 
+_VALUE_MARK = "\x01\x02"                   # stands for the value while the rest of a name changes case
+
+
+def _fold(s, case):
+    return s.upper() if case == "upper" else s.lower() if case == "lower" else s
+
+
+def _fold_value(v, case):
+    """A value token in another case, except an m / M right after a digit: milli and mega are two values (10m is
+    10 mOhm, 10M 10 MOhm), so naming case never turns one into the other."""
+    return "".join(c if c in "mM" and i and v[i - 1].isdigit() else _fold(c, case) for i, c in enumerate(v))
+
+
 def component_name(item_or_fields, rules, cat=None):
     """Part name per the rules. item_or_fields: a fields dict from line_fields (or a BOM line plus cat)."""
     f = item_or_fields if "cat3" in item_or_fields else line_fields(item_or_fields, cat or "Misc", "", rules)
     cat = f.get("category") or cat or "Misc"
+    case = (rules or DEFAULTS)["naming"]["case"]
+    value = str(f.get("value") or "")
+    if case in ("upper", "lower") and value:
+        f = dict(f, value=_VALUE_MARK)         # the value keeps its milli / mega letter (_fold_value)
     t = template_for(cat, rules, f.get("ref", ""))
     name = render(t, f)
     if ("{value}" in t and not f.get("value")) or ("{mpn}" in t and not f.get("mpn")):
         name = ""                              # the template's key field is missing: named like any other part
     if not name:
         name = render((rules or DEFAULTS)["naming"]["component"], f) or f.get("mpn") or f.get("value") or ""
-    case = (rules or DEFAULTS)["naming"]["case"]
-    return name.upper() if case == "upper" else name.lower() if case == "lower" else name
+    return _fold(name, case).replace(_VALUE_MARK, _fold_value(value, case))
 
 
 def symbol_name(fields, rules):

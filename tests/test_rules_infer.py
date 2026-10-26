@@ -174,10 +174,12 @@ def test_workspace_ui_and_mcp_setup():
         res = call("propose_rules", {"paths": [str(paths[0])]})["result"]
         out = json.loads(res["content"][0]["text"])
         assert not res["isError"] and out["toml"] and "rules" not in out and all(len(s["evidence"]) <= 3 for s in out["settings"])
-        res = json.loads(call("save_rules", {"toml": out["toml"].replace("Mechanical1\"", "Mechanical4\"")})["result"]["content"][0]["text"])
+        moved = call("save_rules", {"toml": out["toml"].replace("Mechanical1\"", "Mechanical4\""), "overwrite": True})["result"]
+        assert moved["isError"] and "layers.courtyard" in moved["content"][0]["text"]   # a release gate (R-FX11-5)
+        res = json.loads(call("save_rules", {"toml": out["toml"].replace("Mechanical2\"", "Mechanical4\"")})["result"]["content"][0]["text"])
         assert res["needs_confirm"] and not res["saved"]
-        res = json.loads(call("save_rules", {"toml": out["toml"].replace("Mechanical1\"", "Mechanical4\""), "overwrite": True})["result"]["content"][0]["text"])
-        assert res["saved"] and res["backup"] == "ecadlib.toml.bak" and ws.rules()["layers"]["courtyard"] == "Mechanical4"
+        res = json.loads(call("save_rules", {"toml": out["toml"].replace("Mechanical2\"", "Mechanical4\""), "overwrite": True})["result"]["content"][0]["text"])
+        assert res["saved"] and res["backup"] == "ecadlib.toml.bak" and ws.rules()["layers"]["assembly"] == "Mechanical4"
         assert call("save_rules", {})["result"]["isError"]
         # web UI: Setup card, propose as a job, save with confirmation
         srv, http = serve(ws)
@@ -185,10 +187,10 @@ def test_workspace_ui_and_mcp_setup():
             st, page = http("GET", "/")
             assert b'id="rulesscan"' in page and b"/api/rules/propose" in page and b"/api/rules/save" in page
             st, info = http("GET", "/api/rules")
-            assert st == 200 and info["exists"] and info["rules"]["layers"]["courtyard"] == "Mechanical4"
+            assert st == 200 and info["exists"] and info["rules"]["layers"]["assembly"] == "Mechanical4"
             st, j = http("POST", "/api/rules/propose", {"paths": [str(paths[0])], "choices": {}})
             res = wait_job(http, j["job"])
-            assert res["state"] == "done" and res["result"]["settings"] and "Mechanical1" in res["result"]["diff"], res.get("error")
+            assert res["state"] == "done" and res["result"]["settings"] and "Mechanical2" in res["result"]["diff"], res.get("error")
             st, r = http("POST", "/api/rules/save", {"text": res["result"]["toml"]})
             assert st == 200 and r["needs_confirm"]
             st, r = http("POST", "/api/rules/save", {"text": res["result"]["toml"], "overwrite": True})
@@ -213,7 +215,12 @@ def test_workspace_follows_the_rules_file_its_tools_find():
             rel = ws.save_upload("bom.csv", (Path(cwd) / "examples" / "sample_bom.csv").read_bytes())
             assert ws.rules()["parameters"]["names"] == {"Manufacturer Part Number": "MPN"}
             assert ws.info()["rules"].endswith("ecadlib.toml") and ws.rules_info()["exists"]
-            quiet(ws.export_dblib, rel)
+            # the UI's DbLib export needs the librarian's plan now (round 3, R-FX-3); the draft writer, given the rules
+            # file the workspace finds, still names its columns by it
+            from ecadlib import altium_export as AX
+            rf = ws.rules_in_use()
+            assert rf and not quiet(AX.main, [str(ws.root / rel), "-o", str(ws.root / "altium"), "--draft",
+                                              "--rules", str(rf)])
             con = sqlite3.connect(ws.root / "altium" / "parts.sqlite")
             t = con.execute("select name from sqlite_master").fetchone()[0]
             assert "MPN" in [c[1] for c in con.execute(f'pragma table_info("{t}")')]

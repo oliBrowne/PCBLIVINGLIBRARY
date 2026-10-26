@@ -72,7 +72,7 @@ def _name_mpn(name, value):
 
 
 def mpn_key(s, cfg=None):
-    """'LM1117MPX-3.3/NOPB/TR' -> 'LM1117MPX33NOPB'; '' for an empty MPN or a placeholder ('N/A', 'TBD'): parts whose
+    """'LM1117MPX-3.3/NOPB/TR' -> 'LM1117MPX3.3NOPB'; '' for an empty MPN or a placeholder ('N/A', 'TBD'): parts whose
     MPN cell says N/A are not one part."""
     from .bom_triage import placeholder_mpn
     if placeholder_mpn(s):
@@ -101,20 +101,33 @@ def _digest(obj):
 
 
 def _pad_tuple(num, x, y, w, h, rot, hole):
-    if round(rot) % 180 == 90:
-        w, h = h, w
-    return (str(num), round(_q(x), 2), round(_q(y), 2), round(_q(w), 2), round(_q(h), 2), round(rot % 90, 1), bool(hole))
+    """A pad turned 180 degrees is the same pad, and one turned 90 is the same pad with width and height swapped, so
+    the rotation is folded into [0, 90) and w/h swap for every angle in [90, 180) (not only 90 itself): a 1x2 pad at
+    135 degrees is a 2x1 pad at 45, and is NOT the 1x2 pad at 45 (its long side runs the other diagonal). The angle is
+    rounded to 0.1 degree first so 359.99999 is 0 and 89.99999 is 90."""
+    r = round(float(rot), 1) % 180.0
+    if r >= 90.0:
+        w, h, r = h, w, r - 90.0
+    r = round(r, 1) % 90.0
+    return (str(num), round(_q(x), 2), round(_q(y), 2), round(_q(w), 2), round(_q(h), 2), round(r, 1) + 0.0, bool(hole))
 
 
 _ALTIUM_SHAPE = {1: "round", 2: "rect", 9: "roundrect"}                 # altium_lib.SHAPE; octagonal etc.: other
 _KICAD_SHAPE = {"circle": "round", "oval": "round", "rect": "rect", "roundrect": "roundrect"}
 
 
-def _pad_kind(num, shape, drill=0.0, slot=0.0):
+def _pad_kind(num, shape, drill=0.0, slot=0.0, axis=0.0):
     """What the pad tuple leaves out but a board can't do without: the pad shape and the hole (diameter, or a slot's
-    width and length). Two footprints with the same pads but a 0.8 vs 1.0 mm drill are not the same footprint."""
-    d = sorted((round(_q(drill), 2), round(_q(max(slot, drill)), 2))) if drill else [0, 0]
-    return (str(num), shape, *d)
+    width and length, and for a slot the direction its long side runs on the board, degrees mod 180). Two footprints
+    with the same pads but a 0.8 vs 1.0 mm drill, or a slot across instead of along, are not the same footprint.
+    slot: the slot's other size (KiCad's (drill oval W H) gives W as drill and H as slot, either may be the longer)."""
+    if not drill:
+        return (str(num), shape, 0, 0)
+    d = sorted((round(_q(drill), 2), round(_q(slot or drill), 2)))
+    if d[0] == d[1]:
+        return (str(num), shape, *d)
+    a = round(float(axis), 0) % 180.0
+    return (str(num), shape, *d, a + 0.0)
 
 
 def _box(xs, ys):
@@ -179,7 +192,8 @@ def fp_geometry_pcblib(fp, courtyard=AL.MECH15):
     pads = [_pad_tuple(r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), AL.to_mm(r["w"]), AL.to_mm(r["h"]), r["rot"], r["hole"] > 0)
             for r in recs]
     kinds = [_pad_kind(r["designator"], _ALTIUM_SHAPE.get(r.get("shape"), "other"), AL.to_mm(r["hole"]),
-                       AL.to_mm(r.get("slot") or 0) if r.get("hole_shape") == 2 else 0.0) for r in recs]
+                       AL.to_mm(r.get("slot") or 0) if r.get("hole_shape") == 2 else 0.0,
+                       float(r.get("rot") or 0) + float(r.get("hole_rot") or 0)) for r in recs]   # slot runs at pad + hole rot
     xs, ys = [], []
     shapes = ("track", "arc", "region", "fill")
     if not any(r["layer"] == courtyard for r in fp["records"] if r["type"] in shapes):
@@ -224,8 +238,9 @@ def fp_geometry_kicad(text):
         pads.append(_pad_tuple(p[1], float(at[1]), -float(at[2]), w, h, rot, p[2] in ("thru_hole", "np_thru_hole")))
         dr = [x for x in (sexpr.first(p, "drill") or ["drill"])[1:] if not isinstance(x, list)]
         nums = [float(x) for x in dr if x != "oval"]
+        oval = "oval" in dr and len(nums) > 1
         kinds.append(_pad_kind(p[1], _KICAD_SHAPE.get(p[3], "other"), nums[0] if nums else 0.0,
-                               nums[1] if "oval" in dr and len(nums) > 1 else 0.0))
+                               nums[1] if oval else 0.0, rot + (90.0 if oval and nums[1] > nums[0] else 0.0)))
     cy = sexpr.courtyard_bbox(t)
     return {"pads": sorted(pads), "courtyard": _box([cy[0], cy[2]], [-cy[3], -cy[1]]) if cy else None, "kinds": sorted(kinds),
             "oriented": _oriented(_kicad_marks(t), pads)}
@@ -272,6 +287,57 @@ def _kicad_marks(t):
                     r, a0 = math.hypot(ex - cx, ey - cy), math.degrees(math.atan2(ey - cy, ex - cx))
                     out.append(("arc", _arc_pts(cx, cy, r, a0, a0 + a)))
     return out
+
+
+_CU_PASTE_MASK = (AL.TOP, AL.BOTTOM, AL.TOP_PASTE, AL.BOTTOM_PASTE, AL.TOP_SOLDER, AL.BOTTOM_SOLDER)
+
+
+def fp_extra_pcblib(fp):
+    """What fp_hash leaves out of a .PcbLib footprint but a board gets (the .PcbLib side of fp_share.extra): copper,
+    paste and mask regions / fills / tracks / arcs (custom-pad shapes, paste windows, copper graphics), pads on the
+    bottom, SMD pads with paste or mask closed or with a set expansion. Sorted; empty for a plain footprint."""
+    q = lambda v: round(_q(AL.to_mm(v)), 2)
+    out = []
+    for r in fp["records"]:
+        t, lay = r["type"], r.get("layer")
+        if t == "pad":
+            n = str(r["designator"])
+            if lay == AL.BOTTOM:
+                out.append(["side", n, "B"])
+            if lay in (AL.TOP, AL.BOTTOM):
+                half = max(r["w"], r["h"]) // 2
+                for what, mode, v in (("paste", r.get("paste_mode"), r.get("paste")), ("mask", r.get("mask_mode"), r.get("mask"))):
+                    if mode == 2 and v is not None and v <= -half:
+                        out.append(["closed", n, what])
+                    elif mode == 2 and v:
+                        out.append(["margin", n, what, q(v)])
+            continue
+        if lay not in _CU_PASTE_MASK:
+            continue
+        if t == "region" and r.get("pts"):
+            out.append(["region", lay, [[q(x), q(y)] for x, y in r["pts"]]])
+        elif t == "fill":
+            out.append(["fill", lay, [q(r[k]) for k in ("x1", "y1", "x2", "y2")]])
+        elif t == "track":
+            out.append(["track", lay, [q(r[k]) for k in ("x1", "y1", "x2", "y2", "w")]])
+        elif t == "arc":
+            out.append(["arc", lay, [q(r[k]) for k in ("cx", "cy", "r", "w")] + [round(r["a0"], 1), round(r["a1"], 1)]])
+    return sorted(out, key=repr)
+
+
+def fp_key_pcblib(fp, courtyard=AL.MECH15):
+    """dedupe's merge key of a .PcbLib footprint: fp_hash, folded with fp_extra_pcblib when there is any (a plain
+    footprint keeps the hash it had, and the same key as its .kicad_mod)."""
+    h = fp_hash(fp_geometry_pcblib(fp, courtyard))
+    extra = fp_extra_pcblib(fp) if h else []
+    return _digest([h, "pcblib"] + extra) if extra else h
+
+
+def fp_key_kicad(text):
+    """dedupe's merge key of a .kicad_mod: fp_share.digest (fp_hash plus custom copper, paste / mask and side), or None
+    for a footprint without pads."""
+    from . import fp_share as FS
+    return FS.digest(text) if fp_hash(fp_geometry_kicad(text)) else None
 
 
 def fp_hash(geom):
@@ -337,10 +403,10 @@ class Collector:
         separate file)."""
         f = Path(f)
         if f.suffix.lower() == ".kicad_mod":
-            g = self._read(f, lambda p: fp_geometry_kicad(Path(p).read_text(encoding="utf-8")))
-            return [(ref or f.stem, fp_hash(g), None)] if g else []
+            got = self._read(f, lambda p: [fp_key_kicad(Path(p).read_text(encoding="utf-8"))])   # None: unreadable
+            return [(ref or f.stem, got[0], None)] if got else []
         fps = self._read(f, AL.read_pcblib) or []
-        return [(fp["name"], fp_hash(fp_geometry_pcblib(fp, self.cfg.get("courtyard", AL.MECH15))), body_height(fp))
+        return [(fp["name"], fp_key_pcblib(fp, self.cfg.get("courtyard", AL.MECH15)), body_height(fp))
                 for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
 
     def _sym_from_file(self, f, ref=None):
@@ -569,6 +635,15 @@ def _rel(f, base):
         return Path(f).resolve().as_posix()
 
 
+def _same_kicad(a, b):
+    """Two .kicad_mod files hold the same footprint by fp_share.digest; True when either is missing (nothing more to
+    compare than the group's key)."""
+    from . import fp_share as FS
+    if not (a.is_file() and b.is_file()):
+        return True
+    return FS.digest(a.read_text(encoding="utf-8")) == FS.digest(b.read_text(encoding="utf-8"))
+
+
 def merge(items, groups, base, kinds=("mpn", "footprint", "symbol"), who="ecadlib dedupe"):
     """Rewrite plan references to each group's keeper. Returns the mapping rows {kind, from, to, file, parts}."""
     by = {i["name"]: i for i in items}
@@ -603,6 +678,11 @@ def merge(items, groups, base, kinds=("mpn", "footprint", "symbol"), who="ecadli
             for name in m["used_by"]:
                 it = by.get(name)
                 if not it or (it.get(kind) or {}).get("ref") != m["ref"]:
+                    continue
+                if kind == "footprint" and kmod and not _same_kicad(Path(base) / kmod, Path(base) / str(it[kind].get("kicad_mod") or "")):
+                    mapping.append({"kind": kind, "from": m["ref"], "to": keeper["ref"], "file": "", "parts": "",
+                                    "note": f"{name}: its .kicad_mod differs from the keeper's (custom copper, paste / "
+                                            "mask or side, fp_share.digest): not changed"})
                     continue
                 old = dict(it[kind])
                 new = {"ref": keeper["ref"], "file": _rel(kfile, base)}

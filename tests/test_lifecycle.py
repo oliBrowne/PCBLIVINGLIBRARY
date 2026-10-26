@@ -261,7 +261,7 @@ def test_parts_from_each_input():
     assert by["STM32F103C8T6"]["lcsc"] == "C8734" and by["STM32F103C8T6"]["manufacturer"] == "STMicroelectronics"
     assert by["0603WAF1002T5E"]["name"] == "RES-0603-10k" and by["FTSH-105-01-L-DV-K"]["lcsc"] == ""
     with tempfile.TemporaryDirectory() as d:
-        X.main(["examples/sample_bom.csv", "-o", d])
+        X.main(["examples/sample_bom.csv", "--draft", "-o", d])
         db = L.parts_from_dblib(f"{d}/parts.sqlite")
         assert {p["mpn"] for p in db} == set(by), {p["mpn"] for p in db} ^ set(by)
         assert any(p["sources"] == ["dblib:ICs"] for p in db)

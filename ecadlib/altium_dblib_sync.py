@@ -522,29 +522,80 @@ def _copy_recipe(to, src, dst):
     return [p.relative_to(to).as_posix() for p in paths]
 
 
+def _released_source(lg, it, src, kind, stage, base, staged):
+    """The library file (with its recipe and the STEP files it names) to copy for a released part, as its ledger head
+    has them. publish_guard settled the library, but an editor saving afterwards takes no lock: what was saved since
+    must not be shipped as the released revision. The bytes checked here are staged (in `stage`) and copied from
+    there, so nothing saved later reaches the copy either. -> (path to copy from, note or None)"""
+    head = lg.head(it["name"]) if it.get("status") != "held" else None
+    rec = next((r for r in ((head or {}).get("files") or {}).values()
+                if (Path(r["path"]) if Path(r["path"]).is_absolute() else base / r["path"]).resolve() == src.resolve()),
+               None)
+    if rec is None:
+        return src, None
+    key = f"{src.resolve()}\0{rec['sha256']}\0{it['name']}"
+    if key in staged:
+        return staged[key]
+    import hashlib
+    from . import ledger as LG
+    d = Path(stage) / hashlib.sha256(key.encode()).hexdigest()[:16]
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / src.name
+    from . import change_gate as CG
+    data, was = CG.released_bytes(lg, it, src, base)
+    f.write_bytes(data)
+    moved = [src.name] if was else []
+
+    def released(on, sha):
+        """on's bytes when they are the released ones (sha), else the blob store's copy (noted)."""
+        b = on.read_bytes() if on.is_file() else None
+        if sha is None or (b is not None and LG.sha_bytes(b) == sha):
+            return b
+        moved.append(on.name)
+        return lg.get_bytes(sha)
+    side, rp = src.with_name(src.name + AN.EXT), f.with_name(f.name + AN.EXT)
+    rb = released(side, rec.get("ecadbuild"))
+    if rb is not None:
+        rp.write_bytes(rb)
+    steps = rec.get("steps") or {}
+    for s in LG.step_files(f):                # the STEP files the (released) recipe names
+        sb = released(src.parent / s, steps.get(s))
+        if sb is not None:
+            (d / s).parent.mkdir(parents=True, exist_ok=True)
+            (d / s).write_bytes(sb)
+    note = (f"{', '.join(moved)} changed while this ran (an edit saved meanwhile): the released revision "
+            f"r{head.get('revision')} was copied, the edit is settled by the next ecadlib run") if moved else None
+    staged[key] = (f, note)
+    return f, note
+
+
 def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=None, svn_url=None,
-         dry_run=False, base=None, runner=run_cmd, which=shutil.which, rules=None, overwrite_edits=False):
+         dry_run=False, base=None, runner=run_cmd, which=shutil.which, rules=None, overwrite_edits=False,
+         forget_missing=False):
     """Bring <target_dir> in line with the plan. plan: a plan.json path, or its items (model paths absolute or
     relative to `base`). Returns {"results": [...], "written": [...], "removed": [...], "dblib": path, ...};
     results are {"name", "action", "detail", "table"} with action added/updated/up_to_date/held/skipped/error,
     and not_in_plan/removed for rows (kind "row") and model files (kind "file") the plan no longer has; a pruned
     footprint's STEP files (ecadlib_3d/..., written by ecadlib) are results with kind "3d".
     A model file changed in Altium since ecadlib's copy was built there is left as it is (a note says so) unless
-    overwrite_edits (ecadlib.altium_native, <file>.ecadstate). A real sync holds the library lock throughout
+    overwrite_edits (ecadlib.altium_native, <file>.ecadstate). forget_missing: drop the claim of a plan folder that
+    released rows here and is gone (its rows are kept, as the library's own). A real sync holds the library lock throughout
     (change control: the model files copied are the settled ones)."""
     if mode not in EXT:
         raise ValueError(f"mode must be one of {sorted(EXT)}")
     lib_dir = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
     if dry_run:
         return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
-                     overwrite_edits)
+                     overwrite_edits, forget_missing=forget_missing)
+    import tempfile
     from . import change_gate as CG
-    with CG.publishing(lib_dir):
+    with CG.publishing(lib_dir), tempfile.TemporaryDirectory(prefix="ecadlib-dblib-") as stage:
         return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
-                     overwrite_edits)
+                     overwrite_edits, stage=stage, forget_missing=forget_missing)
 
 
-def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules, overwrite_edits):
+def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules, overwrite_edits,
+          stage=None, forget_missing=False):
     items = load_plan(plan) if isinstance(plan, (str, Path)) else plan
     base = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
     to = Path(target_dir)
@@ -578,18 +629,205 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         hdr, rs = tables.setdefault(t, ([], []))
         hdr += [c for c in h if c not in hdr]
         rs += [dict(r) for r in rows]
+    # Altium Part Numbers ignore case (ACE compares text without it): a row is found, and a duplicate told, by the
+    # case-folded Part Number, so a part renamed SS34 -> ss34 updates its row instead of adding a second one
+    _pk = lambda pn: str(pn or "").casefold()
+    managed = lambda pn: _pk(pn) in {_pk(m) for m in managed_rows}
+
+    def own(pn):                                        # the row is ecadlib's, under the plan's spelling only
+        managed_rows.difference_update({m for m in managed_rows if _pk(m) == _pk(pn)})
+        managed_rows.add(pn)
+        for k in [k for k in row_writers if _pk(k) == _pk(pn) and k != pn]:
+            row_writers.setdefault(pn, []).extend(row_writers.pop(k))
+        row_writers[pn] = sorted(set(row_writers.get(pn, [])) | {me})
+    # change control is per plan folder, but one library folder can take the parts of several (one plan folder per
+    # BOM): which plan folders wrote each row (`writers` in the state; a row this plan's ledger records as published
+    # here, for a state written before), so one plan never changes a model file or a row's identity another plan
+    # released, and --prune only removes this plan's rows. A plan is its id (CG.plan_id, R-FX15-2), not its path: a
+    # renamed plan folder or a moved library folder is still the same plan; `plans` keeps where each was last seen
+    # (relative to the library folder), to read its ledger (a plan whose head is this release agrees) and to tell a
+    # plan folder that is gone (stale: forget_missing drops its claim)
+    from . import ledger as LG
+    pf = CG.lib_folder(base)
+    writers = state.get("writers") or {}
+    plans = {k: dict(v) for k, v in (writers.get("plans") or {}).items() if isinstance(v, dict)}
+    here = lambda p: Path(p) if Path(p).is_absolute() else to / p
+    me = CG.plan_id(pf, create=not dry_run)            # (a second live folder with this id: a copy, R-FX18-1)
+    seen = CG.seen_places(plans.get(me), to) if me else []
+    me = (CG.target_plan_id(pf, seen, create=not dry_run) if me else None) or CG.project_key(to, pf)
+
+    def same_folder(a, b):
+        try:
+            return os.path.samefile(a, b)
+        except OSError:
+            return False
+
+    def norm_writer(w):                                 # a plan folder's path (an ecadlib before plan ids): its id
+        w = str(w)
+        if CG.is_plan_id(w) or w == "?":
+            return w
+        if same_folder(here(w), pf):
+            return me
+        other = CG.plan_id(here(w), create=False) if CG.plan_at(here(w)) else None
+        plans.setdefault(other or w, {"path": w})
+        return other or w
+    # a plan folder made again where it was (deleted and run again, its .ecadlib/ lost), or copied with the library
+    # it syncs into (the copy gets an id of its own), is the plan recorded there, as before plan ids: a writer last
+    # seen at this folder's own place, which no longer holds that id
+    again = {w for w, v in plans.items() if CG.is_plan_id(w) and CG.was_here(v, to, pf, w)}
+    norm = lambda w: me if w in again else norm_writer(w)
+    row_writers = {k: sorted({norm(x) for x in (v if isinstance(v, list) else [v])})
+                   for k, v in (writers.get("rows") or {}).items()}
+    file_writers = {k: dict(v, plan=norm(v.get("plan"))) if isinstance(v, dict) and v.get("plan") else v
+                    for k, v in (writers.get("files") or {}).items()}
+    plans[me] = CG.seen_at(pf, to)                      # (relative and absolute: either may move, R-FX18-2)
+    own_lg = LG.Ledger(pf)
+    own_lg = own_lg if own_lg.exists() else None
+    pub_target = f"{mode}:{CG.project_key(base, to)}"
+    mine = {_pk(it.get("name")) for it in items}
+
+    def folder_of(w):
+        """Where plan w is now, or None: its folder is gone (or holds another plan)."""
+        return CG.found_at(plans.get(w), to, w) if w != "?" else None
+    gone = sorted(w for w in {p for v in row_writers.values() for p in v} | {v.get("plan") for v in file_writers.values()
+                                                                             if isinstance(v, dict)}
+                  if w and w not in (me, "?") and folder_of(w) is None)
+    if forget_missing and gone:                         # the person says those plans are no more: their rows are kept
+        for k in list(row_writers):                     # as rows of the library's own (not ecadlib's to change or prune)
+            left = [p for p in row_writers[k] if p not in gone]
+            if not left:
+                managed_rows.difference_update({m for m in managed_rows if _pk(m) == _pk(k)})
+                del row_writers[k]
+            else:
+                row_writers[k] = left
+        for k, v in list(file_writers.items()):
+            if isinstance(v, dict) and v.get("plan") in gone:
+                file_writers[k] = dict(v, plan=me)
+        forgotten = [(plans.get(w) or {}).get("path") or w for w in gone]
+        for w in gone:
+            plans.pop(w, None)
+        gone = []
+    else:
+        forgotten = []
+
+    def writers_of(pn):
+        w = {p for k, v in row_writers.items() if _pk(k) == _pk(pn) for p in v}
+        if not w and managed(pn) and own_lg is not None and own_lg.published(pn, pub_target):
+            w = {me}
+        return w
+
+    def other_plans(pn):
+        """The other plan folders that released row pn here (["?"]: a row ecadlib wrote, plan not recorded); [] when
+        the row is only this plan's, or not ecadlib's (a row made by hand is the person's own)."""
+        if not managed(pn):
+            return []
+        w = writers_of(pn)
+        if not w:
+            return [] if _pk(pn) in mine else ["?"]
+        return sorted(w - {me})
+
+    def disagree(pn, own, kinds=("symbols", "footprints"), identity=False):
+        """other_plans(pn) less the plans whose ledger head of pn is this plan's release `own` (its head of the item
+        being synced): the same drawings (kinds) and, with identity, the same part. A plan that can't be read agrees
+        with nothing."""
+        out = []
+        for w in other_plans(pn):
+            f = folder_of(w)
+            lw = LG.Ledger(f) if f is not None else None
+            if not (lw is not None and lw.exists() and own_lg is not None and own and CG.heads_agree(
+                    own_lg, own, lw, CG.head_of(lw, pn), kinds, identity)):
+                out.append(w)
+        return out
+    users = {}                                          # model file -> Part Numbers of the rows that use it
+    for t, (_, rows) in tables.items():
+        for r in rows:
+            for _, d, w in KINDS:
+                try:
+                    if r.get(f"{w} Ref"):
+                        users.setdefault(f"{d}/{AL.file_stem(r[f'{w} Ref'])}.{d}", []).append(r.get("Part Number", ""))
+                except (ValueError, TypeError, AttributeError):
+                    pass
+
+    def plans_text(ps):
+        named = [(plans.get(p) or {}).get("path") or p for p in ps if p != "?"]
+        stale = [(plans.get(p) or {}).get("path") or p for p in ps if p in gone]
+        text = ", ".join(named) if named else "a plan folder not recorded"
+        if stale:                                       # its folder is gone: say so, and how to clear its claim
+            text += (f"; {', '.join(stale)} is not found from here, at its path from this library folder or its "
+                     "full path: if that plan folder or this library folder was renamed or moved, run that plan's "
+                     "dblib-sync once from where it is now; only if it no longer exists, run this dblib-sync with --forget-missing-plans")
+        return text
     where = {}
     for t, (_, rows) in tables.items():                 # the first row of a Part Number is its row (EXP-79: the rest
         for r in rows:                                  # are reported as duplicates below)
-            where.setdefault(r.get("Part Number"), t)
+            where.setdefault(_pk(r.get("Part Number")), t)
     results, written, removed, copied, failed, prune_steps = [], [], [], {}, {}, set()
+    for w in forgotten:
+        results.append({"name": w, "action": "forgotten", "table": "", "kind": "plan",
+                        "detail": "that plan folder is gone (--forget-missing-plans): its claim was dropped; the rows "
+                                  "it alone released are kept as the library's own"})
     folded = {}                                         # rel.casefold() -> rel: Windows shares ignore case
     sheets = sheet_names(items, tables)
     seen = {}
+    staged = {}                                         # released sources checked against the ledger (stage)
+    lg = None
+    if stage is not None:
+        from . import ledger as LG
+        lg = LG.Ledger(CG.lib_folder(plan if isinstance(plan, (str, Path)) else base))
 
     def find(pn, t):
         rows = tables.get(t, ([], []))[1]
-        return next((r for r in rows if r.get("Part Number") == pn), None)
+        return next((r for r in rows if _pk(r.get("Part Number")) == _pk(pn)), None)
+
+    def row_update(cur, it, want):
+        """The row `cur` as the plan item writes it, and the columns that change."""
+        new = dict(cur)
+        for c in (param_name(c, rules) for c in it.get("cleared", [])):
+            if c in new:
+                new[c] = ""
+        for c in [c for c in new if c not in KEY_COLUMNS and param_name(c, rules) != c and param_name(c, rules) in want]:
+            new[c] = ""                                     # ecadlib's own name of a field the house name now carries:
+        new.update(want)                                    # never a second, stale value of it
+        return new, [c for c in new if str(new.get(c, "")) != str(cur.get(c, ""))]
+
+    def cross_plan_hold(it):
+        """Why the plan item may not change its row, which another plan folder released into this library (R-FL-1,
+        R-FX15-1): that plan's part stays the part it is (no identity change in place, as A365 refuses) on the symbol
+        and land it released (no Ref / Path change to another drawing). Checked before any file is written. None: free."""
+        old_t = where.get(_pk(it["name"]))
+        cur = find(it["name"], old_t) if old_t else None
+        if cur is None:
+            return None
+        new, changed = row_update(cur, it, plan_row(it, rules))
+        pn = cur.get("Part Number") or it["name"]
+        if not changed or not other_plans(pn):
+            return None
+        mine_head = CG.head_of(own_lg, it["name"]) if own_lg is not None else None
+        from .altium365 import identity_change          # the part it is (A365 refuses the same, in place)
+        ident = identity_change({"details": {"parameters": [{"name": k, "value": v} for k, v in cur.items()]}},
+                                [{"name": k, "value": v} for k, v in new.items()], rules)
+        theirs = disagree(pn, mine_head, kinds=(), identity=True) if ident else []
+        if ident and theirs:
+            return (f"identity change ({'; '.join(ident)}): the row {cur.get('Part Number')} was released into this "
+                    f"library from another plan folder ({plans_text(theirs)}), so it is not made another part in "
+                    "place. Give this part another name in this plan, or sync this plan into a library folder of its own")
+        moved = []
+        for k, d, w in KINDS:
+            if f"{w} Ref" not in changed and f"{w} Path" not in changed:
+                continue
+            src = Path(it[k]["file"])
+            src = src if src.is_absolute() else base / src
+            old_f = to / str(cur.get(f"{w} Path") or "").replace("\\", "/")
+            was = _drawing(old_f, d, cur.get(f"{w} Ref")) if cur.get(f"{w} Path") and old_f.is_file() else None
+            if was is None or was != _drawing(src, d, it[k]["ref"]):
+                moved.append(f"{w} {cur.get(f'{w} Ref') or '(none)'} -> {new.get(f'{w} Ref')}")
+        theirs = disagree(pn, mine_head) if moved else []     # a plan whose head is this release agrees
+        if moved and theirs:
+            return (f"model change ({'; '.join(moved)}): the row {cur.get('Part Number')} was released into this library "
+                    f"from another plan folder ({plans_text(theirs)}) on its own symbol and land, and this plan's is "
+                    "another drawing: not changed without that plan's sign-off. Give this part another name in this "
+                    "plan, or sync this plan into a library folder of its own")
+        return None
 
     for it in items:
         t0 = sheets.get(id(it)) or table_of(it)             # Excel sheet names ignore case: Passives = passives
@@ -597,8 +835,8 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         results.append(res)
         if it.get("status") == "held":
             res["action"], res["detail"] = "held", "; ".join(it.get("hold_reasons") or ["release check"])
-            if it["name"] in where:
-                res["table"] = where[it["name"]]
+            if _pk(it["name"]) in where:
+                res["table"] = where[_pk(it["name"])]
             continue
         if it.get("status") != "ready":
             res["action"], res["detail"] = "skipped", it.get("status") or "not ready"
@@ -610,8 +848,8 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         why = RC.publish_problems(it, base, rules)          # the release check again, on the files copied now
         if why:
             res["action"], res["detail"], res["recheck"] = "held", "; ".join(why), why
-            if it["name"] in where:
-                res["table"] = where[it["name"]]
+            if _pk(it["name"]) in where:
+                res["table"] = where[_pk(it["name"])]
             continue
         if _CTRL.search(it["name"]):
             res["action"], res["detail"] = "error", "the part name has a control character (a line break or tab copied " \
@@ -622,6 +860,12 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             res["detail"] = f"duplicate part name in the plan (also {seen[it['name'].casefold()]!r}): rename one of them"
             continue
         seen[it["name"].casefold()] = it["name"]
+        why = cross_plan_hold(it)                           # before any file is written for it
+        if why:
+            res["action"], res["detail"] = "held", why
+            if _pk(it["name"]) in where:
+                res["table"] = where[_pk(it["name"])]
+            continue
         notes, problems = [], []
         for k, d, w in KINDS:                               # model files first: a bad file must not reach the table
             src, ref = it[k]["file"], it[k]["ref"]
@@ -635,6 +879,14 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             if not src.exists():
                 problems.append(f"{k} file missing: {src}")
                 continue
+            if lg is not None:                              # the released revision's bytes, not an edit saved since
+                try:
+                    src, moved = _released_source(lg, it, src, k, stage, base, staged)
+                except OSError as e:                        # no released copy to send: the edit is not sent either
+                    problems.append(f"{rel}: changed while this ran and the released copy is missing ({e})")
+                    continue
+                if moved and moved not in notes:
+                    notes.append(moved)
             data = src.read_bytes()
             if rel in copied:
                 if copied[rel] != data:
@@ -652,6 +904,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                         written += _copy_recipe(to, src, dst)     # copied them): ecadlib's file
                         managed_files.update(_steps(to, rel))
                         managed_files.add(rel)
+                        file_writers.setdefault(rel, {"plan": me, "sha256": _sha256(data)})
                     continue
                 act = AN.replace_action(data, dst, overwrite_edits, save=not dry_run)
                 if act == "keep":                               # Altium's build of these same bytes: leave it
@@ -668,6 +921,26 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                                     "(rename the part's model, or --overwrite-edits replaces it)")
                     failed[rel] = problems[-1]
                     continue
+                mine_head = CG.head_of(own_lg, it["name"]) if own_lg is not None else None
+                kind = ("symbols",) if d == "SchLib" else ("footprints",)
+                shared = [pn for pn in users.get(rel, ()) if other_plans(pn)] if dst.exists() else []
+                if shared and _drawing(dst, d, ref) is not None and _drawing(dst, d, ref) == _drawing(src, d, ref):
+                    managed_files.add(rel)                      # the same drawing (a rebuild's other bytes): theirs
+                    continue                                    # stays as it is (no rewrite back and forth)
+                clash = {pn: disagree(pn, mine_head, kind) for pn in shared}
+                clash = {pn: v for pn, v in clash.items() if v}     # (a plan whose head is this drawing agrees)
+                if clash:                                       # another plan's released parts use the file here
+                    wrote = (file_writers.get(rel) or {}).get("plan")
+                    wrote = (plans.get(wrote) or {}).get("path") or wrote if wrote != me else None
+                    problems.append(
+                        f"{rel} is also the {w.lower()} of {', '.join(sorted(clash))}, which another plan folder "
+                        f"released into this library ({plans_text(sorted({p for v in clash.values() for p in v}))}"
+                        f"{'; the file was last written from ' + wrote if wrote else ''}), and this "
+                        "part's file is different: not replaced, as that would change their land or symbol without "
+                        "their sign-off. Give this part's model another name, sync each plan folder into a library "
+                        "folder of its own, or (if that plan no longer has them) run its dblib-sync with --prune")
+                    failed[rel] = problems[-1]
+                    continue
                 notes.append(f"{rel} {'updated' if dst.exists() else 'added'}")
                 if not dry_run:
                     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -681,6 +954,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                         notes.pop()
                         continue
                     os.replace(tmp, dst)
+                    file_writers[rel] = {"plan": me, "sha256": _sha256(data)}
                     # what Altium rebuilds the file from (ecadlib.altium_native): svn needs it too
                     written += _copy_recipe(to, src, dst)
                     managed_files.update(_steps(to, rel))       # its STEP files are ecadlib's too: --prune removes them
@@ -702,30 +976,23 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             res["action"], res["detail"] = "error", "; ".join(problems + notes)
             continue
         want, t = plan_row(it, rules), res["table"]
-        old_t = where.get(it["name"])
+        old_t = where.get(_pk(it["name"]))
         cur = find(it["name"], old_t) if old_t else None
         if cur is None:
             hdr, rows = tables.setdefault(t, (list(want), []))
             hdr += [c for c in want if c not in hdr]
             rows.append(want)
-            where[it["name"]] = t
+            where[_pk(it["name"])] = t
             res["action"], res["detail"] = "added", "; ".join(notes)
-            managed_rows.add(it["name"])
+            own(it["name"])
             continue
-        new = dict(cur)
-        for c in (param_name(c, rules) for c in it.get("cleared", [])):
-            if c in new:
-                new[c] = ""
-        for c in [c for c in new if c not in KEY_COLUMNS and param_name(c, rules) != c and param_name(c, rules) in want]:
-            new[c] = ""                                     # ecadlib's own name of a field the house name now carries:
-        new.update(want)                                    # never a second, stale value of it
-        changed = [c for c in new if str(new.get(c, "")) != str(cur.get(c, ""))]
+        new, changed = row_update(cur, it, want)
         if old_t != t:                                      # category changed: move the row
             tables[old_t][1].remove(cur)
             hdr, rows = tables.setdefault(t, (list(want), []))
             hdr += [c for c in new if c not in hdr]
             rows.append(new)
-            where[it["name"]] = t
+            where[_pk(it["name"])] = t
             notes.insert(0, f"moved from {old_t}")
         elif changed:
             hdr, rows = tables[t]
@@ -736,33 +1003,43 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         # a library kept as changed in Altium is a note, not an update: nothing was written for it
         res["action"] = "updated" if any(not n.endswith(AN.EDITED_NOTE) for n in notes) else "up_to_date"
         res["detail"] = "; ".join(notes)
-        managed_rows.add(it["name"])
+        own(it["name"])
 
     # rows and model files the plan no longer has
-    plan_names = {it["name"] for it in items}
+    plan_names = {_pk(it["name"]) for it in items}
     for t, (_, rows) in tables.items():
         for r in list(rows):
             pn = r.get("Part Number", "")
-            if pn in plan_names:
-                cur = find(pn, where[pn]) if pn in where else None
+            if _pk(pn) in plan_names:
+                cur = find(pn, where[_pk(pn)]) if _pk(pn) in where else None
                 if cur is None or r is cur:
                     continue
                 res = {"name": pn, "action": "duplicate", "table": t, "kind": "row",     # a copy-paste in Excel: Altium
-                       "detail": f"a second row for this Part Number (ecadlib keeps the one in {where[pn]} up to date)"}
-                if prune and pn in managed_rows:                                     # lists the part twice
+                       "detail": f"a second row for this Part Number (ecadlib keeps the one in {where[_pk(pn)]} up to date)"}
+                if prune and managed(pn):                                     # lists the part twice
                     rows.remove(r)
                     res["action"] = "removed"
                 else:
-                    res["detail"] += "; kept" + (" (--prune deletes it)" if pn in managed_rows else "")
+                    res["detail"] += "; kept" + (" (--prune deletes it)" if managed(pn) else "")
                 results.append(res)
                 continue
             res = {"name": pn, "action": "not_in_plan", "detail": "", "table": t, "kind": "row"}
-            if pn not in managed_rows:
+            if not managed(pn):
                 res["detail"] = "not written by ecadlib: kept"
+            elif prune and writers_of(pn) - {me}:          # another plan folder's part too: its own sync prunes it
+                for k in [k for k in row_writers if _pk(k) == _pk(pn)]:
+                    row_writers[k] = [p for p in row_writers[k] if p != me]
+                res["detail"] = (f"released here from another plan folder ({plans_text(sorted(writers_of(pn) - {me}))}): "
+                                 "kept (that plan's dblib-sync --prune removes it)")
             elif prune:
                 rows.remove(r)
-                managed_rows.discard(pn)
+                managed_rows.difference_update({m for m in managed_rows if _pk(m) == _pk(pn)})
+                for k in [k for k in row_writers if _pk(k) == _pk(pn)]:
+                    del row_writers[k]
                 res["action"] = "removed"
+            elif writers_of(pn) - {me}:
+                res["detail"] = (f"released here from another plan folder ({plans_text(sorted(writers_of(pn) - {me}))}): "
+                                 "kept")
             else:
                 res["detail"] = "kept (--prune deletes it)"
             results.append(res)
@@ -888,13 +1165,39 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         if write_notice(to, items) and nf.read_bytes() != before:
             written.append(nf.name)
     st = {"rows": sorted(managed_rows), "files": sorted(managed_files)}
-    if st != {"rows": sorted(state.get("rows", [])), "files": sorted(state.get("files", []))}:
+    # which plan folder wrote each row and model file (and the file's sha256): an older ecadlib ignores this key
+    wr = {"rows": {k: v for k, v in sorted(row_writers.items()) if v and managed(k)},
+          "files": {k: v for k, v in sorted(file_writers.items()) if k in managed_files}}
+    named = {p for v in wr["rows"].values() for p in v} | {v.get("plan") for v in wr["files"].values() if isinstance(v, dict)}
+    wr["plans"] = {k: v for k, v in sorted(plans.items()) if k in named}
+    if wr["rows"] or wr["files"]:
+        st["writers"] = wr
+    if st != {"rows": sorted(state.get("rows", [])), "files": sorted(state.get("files", [])),
+              **({"writers": state["writers"]} if state.get("writers") else {})}:
         put(STATE, json.dumps(st, indent=1) + "\n")
     out["svn_url"] = url
     if not dry_run:
         done = {r["name"] for r in results if r.get("action") in ("added", "updated", "up_to_date")}
         CG.record_publish(base, items, f"{mode}:{CG.project_key(base, to)}", ok=lambda it: it["name"] in done)
     return out
+
+
+def _drawing(path, d, ref):
+    """Fingerprint digest of the drawing `ref` in library file path (d: "SchLib" / "PcbLib"): the symbol, or the land,
+    its art and 3D model. Two builds of one drawing differ in their bytes (OLE timestamps), not here. None: unreadable."""
+    from . import fingerprint as FP
+    try:
+        if d == "PcbLib":
+            return FP.digest(list(FP.pcblib(path, ref)))
+        _, entries = AL.read_schlib(path)
+        return FP.digest(FP.altium_symbol(FP._pick_named(entries, ref, "symbol"))[0])
+    except Exception:                                   # unreadable or another entry: not the same drawing
+        return None
+
+
+def _sha256(data):
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
 
 
 def summary(out):
@@ -918,13 +1221,16 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
     ap.add_argument("--overwrite-edits", action="store_true",
                     help="replace library files someone changed in Altium since ecadlib's copy was built there")
+    ap.add_argument("--forget-missing-plans", action="store_true",
+                    help="another plan folder that synced into --to is gone (deleted, not renamed): drop its claim on its "
+                         "rows and model files, so this plan may change them (its rows are kept)")
     ap.add_argument("-o", "--out", help="write the JSON report here")
     ap.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
     a = ap.parse_args(argv)
 
     try:
         out = sync(a.plan, a.to, "svndblib" if a.svn else "dblib", a.name, a.prune, a.win_dir, a.svn_url, a.dry_run,
-                   rules=a.rules, overwrite_edits=a.overwrite_edits)
+                   rules=a.rules, overwrite_edits=a.overwrite_edits, forget_missing=a.forget_missing_plans)
     except ValueError as e:                        # a wrong --name, a library folder that isn't ecadlib's kind
         from .cliutil import refuse
         sys.exit(refuse("dblib-sync", e, "check the plan and --to / --name (`ecadlib dblib-sync -h`)"))
@@ -962,7 +1268,8 @@ def main(argv=None):
               ([(f"ecadlib review {a.plan}", "the held parts")] if any(r["action"] == "held" for r in out["results"]) else []))
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(a.out).write_text(json.dumps(out, indent=2))
+        from .fsutil import write_text_atomic
+        write_text_atomic(Path(a.out), json.dumps(out, indent=2))
     errors = sum(r["action"] == "error" for r in out["results"])
     if errors or (out.get("svn") or {}).get("error"):
         sys.exit(f"{errors} part(s) failed" + (f"; svn: {out['svn']['error']}" if (out.get("svn") or {}).get("error") else ""))

@@ -446,6 +446,9 @@ def test_cli17_part_history_lists_changes_with_the_global_verbose_flag():
 
         def history(self, part):
             return lines
+
+        def trouble(self, part):                          # a whole history (R-G2-3)
+            return None
     old = TM.VERBOSITY
     try:
         TM.VERBOSITY = 1

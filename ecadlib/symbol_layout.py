@@ -23,7 +23,9 @@ outputs never move.
 Power pins sharing a name (VDD x5) may be stacked (rules [symbols] stack_power, default 'none'): 'stack' puts them on one spot, one
 pin showing its name and number and the rest drawn on top of it with name and number hidden (Altium joins pins at
 one point; the KiCad export writes the rest as hidden passive pins, KLC S4.3); 'hide' makes the rest hidden pins
-tied to the net by name (Altium HiddenNetName, KiCad hidden power_in); 'none' draws every pin.
+tied to the net by name (Altium HiddenNetName, KiCad hidden power_in), for supply inputs and grounds only (an output
+or exposed pad hidden on a net named VOUT / EP would join every part's on the board: those are stacked as 'stack'
+does); 'none' draws every pin.
 
 Above [symbols] split_pins pins the part becomes a multi-part symbol: part A holds the power and ground pins, the
 other parts the signal blocks in order, at most unit_pins pins each (a port is never split across parts unless it
@@ -81,13 +83,23 @@ RX = [  # (group, regex on the primary name, upper case, overbar / active-low ma
     ("eth", _R(r"ETH[A-Z0-9_]*|R?G?MII[A-Z0-9_]*|MDIO|MDC|T[XD][PN+\-]|R[XD][PN+\-]|TXP|TXN|RXP|RXN|PHY[A-Z0-9_]*")),
     ("adc", _R(r"ADC[A-Z0-9_]*|AIN\d*|AN\d+|DAC[A-Z0-9_]*|AOUT\d*|SENSOR_?V[PN]|SENSOR[A-Z0-9_]*|VP|VN|AIN[PN]\d*")),
     # direction from the name, for the small analog / power / logic parts whose pins have no better group
-    ("other_out", _R(r"OUT[A-Z0-9_+\-]*|[A-Z0-9]+_?OUT[A-Z0-9]*|N?Q\d*|Q_?[NB]|DIS|DISCH[A-Z]*|N?PG|N?PGOOD|P_?GOOD|PWR_?(GD|GOOD|OK)|"
+    ("other_out", _R(r"OUT[A-Z0-9_+\-]*|[A-Z0-9]+_?OUT[A-Z0-9]*|N?Q\d*'?|Q_?N|Q[A-H]'?|\d+Q'?|\d+Y|Y\d+|DIS|DISCH[A-Z]*|N?PG|N?PGOOD|P_?GOOD|PWR_?(GD|GOOD|OK)|"
                     r"N?FLT|N?FAULT|N?FLAG|N?ALERT|N?INT\d*|N?IRQ\d*|RDY|N?READY|BUSY|DONE|STAT\d*|LED[A-Z0-9_]*|SW\d*|LX\d*|"
                     r"BST|BOOST|PH|DRV[A-Z0-9_]*|GATE[A-Z0-9_]*|[HL]O|[HL]G|ALARM|TRIP")),
-    ("other_in", _R(r"IN\d*|IN[+\-PNAB]\d*|[+\-]IN[A-Z0-9]*|IN_?[PN]\d*|[A-Z0-9]+_IN|TRIG[A-Z]*|TRG|TR|THR[A-Z]*|CV|CONT[A-Z]*|"
+    ("other_in", _R(r"IN\d*|IN[+\-PNAB]\d*|[+\-]IN[A-Z0-9]*|IN_?[PN]\d*|[A-Z0-9]+_IN|\d+IN[+\-]?|IN[A-Z]?\d*[+\-]|TRIG[A-Z]*|TRG|TR|THR[A-Z]*|CV|CONT[A-Z]*|"
                    r"CTRL[A-Z0-9_]*|CTL|FB\d*|VFB|ADJ|SET|SENSE[A-Z0-9_+\-]*|SNS[A-Z0-9_+\-]*|CS[+\-]|SS|SS_?TR|ILIM|ISET|RT|"
                    r"RT_?CLK|COMP|DIR|STEP|PWM[A-Z0-9_]*|[HL]I|D|J|K|S|R|C?LR|PRE|IREF|RSET|RLIM|SEL\d*|A\d?|B\d?")),
 ]
+# signed supplies (+VS, VCC+, +5V, +3V3 on top; -VS, VS-, -5V, VNEG at the bottom), only for a pin whose type is a
+# supply's or says nothing: a typed signal named so keeps its type (ZXCT1009F Vs+ / Vs-, sense inputs; MAX232 VS+ /
+# VS-, the charge pump's power_out)
+SIGNED = {"ground": _R(r"-V(?:S|CC|DD|EE|SS)?\d*|V(?:S|CC|DD|EE|SS)\d*-|-\d+V\d*|VNEG\d*"),
+          "power": _R(r"\+V(?:S|CC|DD|IN|POS)?\d*|V(?:S|CC|DD)\d*\+|\+\d+V\d*|VPOS\d*")}
+SIGNED_TYPES = ("", "unspecified", "passive", "power", "power_in")
+# a counter's carry / borrow / terminal count outputs (74LS192 ~{CO} / ~{BO}, 74HC161 TC / RCO): outputs only when the
+# pin is untyped (an output-typed one is one anyway). NTC is a thermistor input (LT3652, LTC4054), and a passive TC is
+# a timing capacitor (MC33063): neither is a counter output (R-FX17-6)
+COUNTER_OUT = _R(r"N?CO|N?BO|TC|N?RCO")
 PORT_RX = [re.compile(r"^P([A-Z])(\d{1,2})$"), re.compile(r"^P(\d{1,2})[._](\d{1,2})$"), re.compile(r"^PIO(\d)_(\d{1,2})$"),
            re.compile(r"^(GPIO|IO|GP)(\d{1,3})$"), re.compile(r"^R(\d)(\d)$")]
 
@@ -140,8 +152,12 @@ def classify(pin):
         return "nc"
     if port_of(pin.get("name", "")):
         return "ports"
-    for g, rx in RX:
-        if rx.match(k):
+    full = primary(pin.get("name", "")).upper()   # the name before an active-low '_N' / '_B' / '_L' came off: a rule
+    hit = next((g for g, rx in RX if g not in ("other_in", "other_out") and rx.match(full) and not rx.match(k)),
+               None) if full != k else None       # written for that very spelling wins (VREF_N, the negative
+    signed = t in SIGNED_TYPES
+    for g, rx in RX:                              # reference: ground, not VREF)
+        if (g == hit) if hit else (rx.match(k) or (signed and g in SIGNED and SIGNED[g].match(k))):
             if g == "usb" and k == "VBUS" and t in ("power", "power_in"):
                 return "power"
             if g in ("other_in", "other_out") and t in DIRECTED:     # a name only hints the direction: the type says it
@@ -149,6 +165,8 @@ def classify(pin):
             return g
     if num in ("EP", "PAD", "EPAD", "TAB"):
         return "ep"
+    if t in ("", "unspecified") and COUNTER_OUT.match(k):
+        return "other_out"
     if t == "ground":
         return "ground"
     if t in ("power", "power_in"):
@@ -162,21 +180,38 @@ def _natural(s):
     return [int(x) if x.isdecimal() else x for x in re.split(r"(\d+)", str(s))]
 
 
+# an FPGA's per-bank I/O supply: VCCIO_0..3 / VCCO_0..3 are one rail per bank (3.3 V on one, 1.8 V on another), so
+# the number after the stem names the bank, never an instance of one supply (R-SY-4)
+BANK_SUPPLY = re.compile(r"VCCIO|VCCO|VDDIO|VDDO|VIO")
+
+
 def stack_key(name):
     """Pins whose names give the same key may be one net: 'VDD_1', 'VDD_2', 'VDD' -> 'VDD'. Only an index after a
-    separator is dropped: 'VDD1' / 'VDD2' (an isolator's two sides) and 'VDD18' / 'VDD33' are different supplies."""
-    return re.sub(r"[_\-]\d+$", "", _key(name)) or _key(name)
+    separator is dropped: 'VDD1' / 'VDD2' (an isolator's two sides) and 'VDD18' / 'VDD33' are different supplies, and
+    a bank supply's (VCCIO_0, VCCO_2) never."""
+    k = _key(name)
+    m = re.fullmatch(r"(.+?)[_\-]\d+", k)
+    return k if m and BANK_SUPPLY.fullmatch(m.group(1)) else (re.sub(r"[_\-]\d+$", "", k) or k)
 
 
 def stack_keys(names):
-    """name -> stacking key for the power pins of one group. 'VDD_1'..'VDD_5' (instance numbers 1..n or 0..n-1) share
-    the key 'VDD'; 'VDD_18' + 'VDD_33' are not instance numbers and keep their own names (never stacked together)."""
-    idx = {}
+    """name -> stacking key for the power pins of one group. 'VDD_1'..'VDD_5' (instance numbers 1..n or 0..n-1, each
+    name once) share the key 'VDD'; 'VDD_18' + 'VDD_33' are not instance numbers and keep their own names (never
+    stacked together), nor are a bank supply's (VCCIO_0 x2, VCCIO_1 x2: two banks, two rails) (R-SY-4)."""
+    idx, seen, twice = {}, set(), set()
     for n in names:
-        m = re.fullmatch(r"(.+?)[_\-](\d+)", _key(n))
+        k = _key(n)
+        (twice if k in seen else seen).add(k)
+        m = re.fullmatch(r"(.+?)[_\-](\d+)", k)
         if m:
-            idx.setdefault(m.group(1), set()).add(int(m.group(2)))
-    ok = {st for st, ix in idx.items() if ix in (set(range(1, len(ix) + 1)), set(range(len(ix))))}
+            idx.setdefault(m.group(1), []).append((int(m.group(2)), k))
+    ok = set()
+    for st, got in idx.items():
+        ix = {i for i, _ in got}
+        if BANK_SUPPLY.fullmatch(st) or any(k in twice for _, k in got):
+            continue
+        if ix in (set(range(1, len(ix) + 1)), set(range(len(ix)))):
+            ok.add(st)
     out = {}
     for n in names:
         m = re.fullmatch(r"(.+?)[_\-](\d+)", _key(n))
@@ -259,8 +294,24 @@ def _blocks(pins, s):
                 slots.append([p])
                 keys.append(k)
         blocks.append({"group": g, "label": f"P{sub}" if sub and sub.isalpha() and len(sub) == 1 else sub or g,
-                       "side": sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)}})
+                       "side": sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)},
+                       "hide": {id(sl) for sl in slots if _hideable(g, sl)}})
     return blocks
+
+
+DRIVES = ("power_out", "output", "open_collector", "open_emitter", "tristate", "hiz")
+
+
+def _hideable(group, slot):
+    """stack_power = "hide" ties hidden pins to a net by their name, design-wide: only a supply input or a ground may
+    be hidden so. Two regulators' VOUT tabs (power_out) or two parts' EP pins on a net "VOUT" / "EP" would join
+    rails; they stay stacked and shown (R-SY-5)."""
+    ts = [str(p.get("type") or "").lower() for p in slot]
+    if any(t in DRIVES for t in ts):
+        return False
+    if group == "analog":                     # AVDD / VREF+ in, but VREF_OUT / VREFBUF drive
+        return all(t in ("power", "power_in") for t in ts)
+    return group in ("power", "ground")
 
 
 def _npins(blocks):
@@ -372,6 +423,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
     bad = [p.get("num") for p in pins if not str(p.get("num", "")).strip()]
     if bad:
         raise ValueError(f"{name}: {len(bad)} pins have no number")
+    pins = [dict(p, type=_ptype(p.get("type"))) for p in pins]      # 'Open Drain', 'Input' (a JSON pin list): ETYPE keys
     s = settings(rules)
     g, L = s["grid"] // 10, s["pin_length"] // 10
     units = arrange(pins, rules, split)
@@ -380,6 +432,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
     for u in units:
         sd = u["sides"]
         nets = {k: v for bl in sd.values() for b in bl for k, v in b.get("nets", {}).items()}
+        hide = {k for bl in sd.values() for b in bl for k in b.get("hide", ())}
         left, right, top, bot = _rows(sd["left"]), _rows(sd["right"]), _rows(sd["top"]), _rows(sd["bottom"])
         tail = [b for b in sd["left"] if b["side"] == "bottom"]          # power_side "left": ground at the bottom
         if tail and len(right) > len(left):                                  # of the left side, not mid-way down (also
@@ -414,7 +467,7 @@ def build(name, pins, description="", designator="U?", footprint=None, comment="
             for j, p in enumerate(sl):
                 q = dict(p)
                 if j:
-                    if s["stack_power"] == "hide":
+                    if s["stack_power"] == "hide" and id(sl) in hide:
                         q.update(hidden=True, net=q.get("net") or nets.get(id(sl)) or stack_key(p.get("name", "")))
                     else:
                         q.update(show_name=False, show_num=False)
@@ -458,6 +511,19 @@ def relayout(sym, rules=None, split=None):
 
 
 # ------------------------------------------------------------------ checks
+def shared_numbers(pins):
+    """One number is one pad: two signals on it short on the board. pins: [{num, name}] -> ['pin number 7 is used by 2
+    different signals: WP, SDA']; pins of one stack (VSS, VSS_2) on a number are one signal. Also the release check's
+    (R-SY-3)."""
+    names = {}
+    for p in pins:
+        ns = names.setdefault(str(p.get("num")), [])
+        if all(stack_key(n) != stack_key(p.get("name") or "") for n in ns):
+            ns.append(p.get("name") or "")
+    return [f"pin number {n} is used by {len(ns)} different signals: {', '.join(map(plain, ns))}"
+            for n, ns in names.items() if len(ns) > 1]
+
+
 def check(sym, grid=100):
     """Problems in a laid-out symbol: pins off the grid, two different pins at one spot (other than stacked power
     pins with the same name), a pin whose end or line lies on another pin's line, pin lines crossing, pin text that
@@ -478,12 +544,8 @@ def check(sym, grid=100):
             probs.append(f"pins {at[key]['num']} and {p['num']} overlap at ({x}, {y}) in part {u}")
         at.setdefault(key, p)
         segs.append((u, p, (x, y), (ex, ey)))
-        ns = names.setdefault(p["num"], [])
-        if all(stack_key(n) != stack_key(p["name"]) for n in ns):
-            ns.append(p["name"])
-    for n, ns in names.items():                         # one number is one pad: two signals on it short on the board
-        if len(ns) > 1:
-            probs.append(f"pin number {n} is used by {len(ns)} different signals: {', '.join(map(plain, ns))}")
+        names.setdefault(p["num"], []).append(p["name"])
+    probs += shared_numbers([{"num": n, "name": nm} for n, ns in names.items() for nm in ns])
     # a pin whose end or body lies on another pin's line, or two pin lines crossing (stacked pins share one line: fine)
     on = lambda q, a, b: min(a[0], b[0]) <= q[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= q[1] <= max(a[1], b[1]) and \
         (b[0] - a[0]) * (q[1] - a[1]) == (b[1] - a[1]) * (q[0] - a[0])
@@ -675,13 +737,37 @@ def svg(sym, scale=2.0):
 ETYPE_NAME = {0: "input", 1: "io", 2: "output", 3: "open_collector", 4: "passive", 5: "tristate", 6: "open_emitter", 7: "power"}
 TYPE_ALIASES = {"i": "input", "in": "input", "o": "output", "out": "output", "bidirectional": "io", "i/o": "io", "inout": "io",
                 "pwr": "power", "power_input": "power_in", "power_output": "power_out", "gnd": "ground", "tri_state": "tristate",
-                "unspecified": "passive", "free": "passive", "no_connect": "nc", "": "passive", "p": "power", "analog": "passive"}
+                "unspecified": "passive", "free": "passive", "no_connect": "nc", "": "passive", "p": "power", "analog": "passive",
+                "open_drain": "open_collector", "opendrain": "open_collector", "od": "open_collector", "oc": "open_collector",
+                "hi_z": "hiz", "high_z": "hiz"}
 
 
 def _ptype(t):
-    t = str(t or "").strip().lower().replace(" ", "_")
+    """A pin type as a CSV, a JSON pin list, a datasheet or KiCad spells it ('Open Drain', 'tri-state', 'Input',
+    'bidirectional') -> an altium_lib.ETYPE key; one it does not know is passive."""
+    t = re.sub(r"[\s-]+", "_", str(t or "").strip().lower())
     t = TYPE_ALIASES.get(t, t)
     return t if t in AL.ETYPE else "passive"
+
+
+def unknown_types(pins):
+    """[(pin number, type as given)] for the pins whose type is no pin type _ptype knows ('ouptut'): they are drawn
+    passive, which is never silent (the CLI prints them, the librarian lists them for review)."""
+    norm = lambda t: TYPE_ALIASES.get(re.sub(r"[\s-]+", "_", str(t or "").strip().lower()),
+                                      re.sub(r"[\s-]+", "_", str(t or "").strip().lower()))
+    given = lambda p: p.get("type_given") or p.get("type")       # a CSV row's own spelling (pins_from_csv)
+    return [(str(p.get("num")), str(given(p))) for p in pins or []
+            if given(p) not in (None, "") and norm(given(p)) not in AL.ETYPE]
+
+
+def unknown_types_line(pins):
+    """unknown_types as one line, or None."""
+    bad = unknown_types(pins)
+    if not bad:
+        return None
+    return (f"pin type not known, drawn passive: " + ", ".join(f"pin {n} {t!r}" for n, t in bad[:8])
+            + (" ..." if len(bad) > 8 else "") + " (input, output, io, passive, power_in, power_out, open_collector, "
+            "tristate or nc); check the type")
 
 
 class PinListError(ValueError):
@@ -708,7 +794,10 @@ def pins_from_csv(path):
             if name or any(str(v or "").strip() for k, v in r.items() if k):
                 raise PinListError(f"{Path(path).name} line {i}: pin {name or '(no name)'} has no pin number")
             continue
-        p = {"num": num, "name": name or num, "type": _ptype(pick(r, "type", "electrical", "electrical type", "etype", "dir"))}
+        raw = pick(r, "type", "electrical", "electrical type", "etype", "dir")
+        p = {"num": num, "name": name or num, "type": _ptype(raw)}
+        if unknown_types([{"num": num, "type": raw}]):
+            p["type_given"] = raw                       # drawn passive: said by unknown_types_line
         grp = pick(r, "group")
         if grp:
             p["group"] = grp
@@ -815,17 +904,10 @@ def main(argv=None):
     if a.kicad:
         from . import kicad_export as X, sexpr
         notes = []
-        ks = X.symbol_from_schlib(out, X.kname(name), notes)
+        ks = X.symbol_from_schlib(out, X.ksym(name), notes)
         own = {str(p["num"]): {"power_out": "power_out", "nc": "no_connect"}.get(_ptype(p.get("type"))) for p in pins}
-        stack = [ks]
-        while stack:                                     # Altium has no power_out / nc: put the source's type back
-            t = stack.pop()
-            if isinstance(t, list) and t and t[0] == "pin":
-                num = next((str(c[1]) for c in t if isinstance(c, list) and c and c[0] == "number"), None)
-                if own.get(num) and t[1] in ("power_in", "passive"):
-                    t[1] = own[num]
-            elif isinstance(t, list):
-                stack.extend(t)
+        X.restore_types(ks, {k: v for k, v in own.items() if v}, guess=False)   # Altium has no power_out / nc: the
+        #                                                  source's types back (never guessed from names: the list says)
         tree = ["kicad_symbol_lib", ["version", X.SYM_VERSION], ["generator", sexpr.Q("ecadlib")], ["generator_version", sexpr.Q("8.0")], ks]
         Path(a.kicad).write_text(sexpr.dumps(tree), encoding="utf-8", newline="\n")
         print(f"  KiCad symbol -> {a.kicad}")
@@ -834,6 +916,9 @@ def main(argv=None):
         print(f"  preview -> {a.preview}")
     for pr in probs:
         print(f"  problem: {pr}")
+    odd = unknown_types_line(pins)
+    if odd:                                              # never silent (it was a crash before symexp-01)
+        print(f"  warning: {odd}")
     return 1 if probs else 0
 
 

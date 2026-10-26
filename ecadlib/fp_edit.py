@@ -92,6 +92,14 @@ def apply(edit, res):
         if gone and t:                                    # renaming only the symbol pin would cross pin and pad
             notes.append("rename skipped, no such pad: " + ", ".join(f"{k} -> {ren[k]}" for k in gone))
             ren = {k: v for k, v in ren.items() if k in have}
+        lands = {}                                        # new number -> the pads that would carry it
+        for n in have:
+            lands.setdefault(ren.get(n, n), []).append(n)
+        clash = sorted(k for k in ren if len(lands.get(ren[k], [])) > 1) if t else []
+        if clash:                                         # two pins on one number: one net, a short nobody asked for
+            notes.append("rename skipped, the new number is another pad's: " + ", ".join(f"{k} -> {ren[k]}" for k in clash)
+                         + " (to put pads on one net, use same-net)")
+            ren = {k: v for k, v in ren.items() if k not in clash}
         for p in t.get("pads") or []:
             if str(p.get("number")) in ren:
                 p["number"] = ren[str(p["number"])]

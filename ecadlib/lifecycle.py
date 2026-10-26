@@ -67,13 +67,31 @@ class LifecycleResult:
     url: str = ""
     note: str = ""
     error: str = ""
+    inferred: bool = False             # status read from a blank field, not stated by the source (never written back)
+
+
+maker_key, same_maker = P.maker_key, P.same_maker      # which company a maker name names (providers)
 
 
 def _pick(items, part, mpn_of, mfr_of):
-    """Exact (normalised) MPN match; prefer one whose manufacturer agrees with the part's."""
+    """Exact (normalised) MPN match; prefer one whose manufacturer is the part's (same_maker). When the part names a
+    maker, no listing is by that maker, and the listings name more than one other maker, nothing is picked: the same
+    MPN from two other makers says nothing about this maker's part (LM358 from TI, onsemi and ST have their own
+    lifecycles), so the source reports "not found" rather than another maker's status."""
     exact = [i for i in items if isinstance(i, dict) and norm_mpn(mpn_of(i)) == norm_mpn(part["mpn"])]
-    want = norm_mpn(part.get("manufacturer"))[:6]
-    return next((i for i in exact if want and want in norm_mpn(mfr_of(i))), exact[0] if exact else None)
+    if not exact:
+        return None
+    want = part.get("manufacturer") or ""
+    if not maker_key(want):
+        return exact[0]
+    hit = next((i for i in exact if same_maker(want, mfr_of(i))), None)
+    if hit is not None:
+        return hit
+    others = []                                  # by company, not by name: "TE Connectivity" and "TE Connectivity AMP
+    for m in (mfr_of(i) for i in exact):         # Connectors" are one other maker
+        if maker_key(m) and not any(same_maker(m, o) for o in others):
+            others.append(m)
+    return exact[0] if len(others) <= 1 else None
 
 
 def _http_error(res, r):
@@ -176,6 +194,10 @@ def parse_digikey(data, part, res):
     if norm_mpn(p.get("ManufacturerProductNumber")) != norm_mpn(part["mpn"]):
         res.found, res.note = False, f"best match {p.get('ManufacturerProductNumber')!r} is not this MPN"
         return res
+    maker = (p.get("Manufacturer") or {}).get("Name", "") if isinstance(p.get("Manufacturer"), dict) else ""
+    if maker_key(part.get("manufacturer")) and maker_key(maker) and not same_maker(part.get("manufacturer"), maker):
+        res.found, res.note = False, f"DigiKey's {p.get('ManufacturerProductNumber')!r} is by {maker}, not {part['manufacturer']}"
+        return res
     res.found = True
     words = [(p.get("ProductStatus") or {}).get("Status") or ""]
     if p.get("EndOfLife"):
@@ -234,7 +256,7 @@ def parse_mouser(data, part, res):
         res.raw = best.get("LifecycleStatus") or ""
         res.status = normalise(res.raw) if res.raw else "active"
         if not res.raw:
-            res.note = "no LifecycleStatus: read as active"
+            res.note, res.inferred = "no LifecycleStatus: read as active", True
         res.stock = _int(best.get("AvailabilityInStock"))
         if res.stock is None and re.search(r"in stock", str(best.get("Availability")), re.I):
             res.stock = _int(best.get("Availability"))
@@ -407,12 +429,22 @@ def check_parts(parts, provs):
     return out, sorted(unconfigured)
 
 
+def _other_maker(part, r):
+    """The listing a result read is by another maker than the part's (both named)."""
+    return bool(maker_key(part.get("manufacturer")) and maker_key(r.manufacturer)
+                and not same_maker(part.get("manufacturer"), r.manufacturer))
+
+
 def combine(part, results):
-    """Worst known status across sources (most conservative); highest stock any source reports."""
+    """Worst known status across sources (most conservative); highest stock any source reports. firm_status: the same
+    over the statuses a source stated for this maker's part, the only ones written back to Altium 365 (R-LE-3: a
+    Mouser listing by another maker with a blank status wrote Active over a released Obsolete part)."""
     known = [r for r in results if r.status != "unknown"]
+    firm = [r for r in known if not r.inferred and not _other_maker(part, r)]
     stocks = [r.stock for r in results if r.stock is not None]
     return {**{f: part[f] for f in ("mpn", "manufacturer", "lcsc", "name", "sources", "component_id", "a365_value")},
             "status": max(known, key=lambda r: SEVERITY[r.status]).status if known else "unknown",
+            "firm_status": max(firm, key=lambda r: SEVERITY[r.status]).status if firm else "unknown",
             "stock": max(stocks) if stocks else None,
             "raw": "; ".join(f"{r.provider}: {r.raw or '-'}" + (f" (stock {r.stock})" if r.stock is not None else "")
                              for r in results if r.found),
@@ -443,11 +475,24 @@ def risky(cur):
     return SEVERITY.get(cur["status"], 0) > 0 or cur["stock"] == 0
 
 
+def rekey(parts):
+    """A state written before an MPN's decimal point was kept in its key (SMAJ5.0A stored as SMAJ50A) read under the
+    key key_of gives it now, from the MPN the entry carries; every other key as it is."""
+    out = {}
+    for k, v in (parts or {}).items():
+        mpn = v.get("mpn") if isinstance(v, dict) else ""
+        out[norm_mpn(mpn) if mpn and k == norm_mpn(mpn, dots=False) else k] = v
+    return out
+
+
 def load_state(path):
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        st = json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"version": 1, "updated": None, "parts": {}}
+    if isinstance(st, dict) and isinstance(st.get("parts"), dict):
+        st["parts"] = rekey(st["parts"])
+    return st
 
 
 def diff(state, current):
@@ -493,13 +538,23 @@ def exit_code(rows, strict=False):
 # ------------------------------------------------------------------ Altium 365 write-back
 def a365_updates(rows, client, ws, apply=False, param="Lifecycle", note="ecadlib lifecycle watch"):
     """Set `param` on released components whose value differs from the checked status (unknown is never written).
-    Without a client (dry-run, no token) the component id is a placeholder and the current value is not known."""
+    Without a client (dry-run, no token) the component id is a placeholder and the current value is not known.
+    Only a status a source stated for this maker's part is written (firm_status: not one read from a blank field, not
+    another maker's listing), and never one less severe than the value already there: lowering is for a person."""
     out = []
     for r in rows:
         if r["status"] == "unknown" or not r["name"]:
             continue
+        firm = r.get("firm_status", r["status"])
         want, cid, cur = LABEL[r["status"]], r.get("component_id"), r.get("a365_value")
         rec = {"name": r["name"], "mpn": r["mpn"], "value": want, "action": "", "detail": ""}
+        if firm == "unknown":
+            rec["action"] = "skip"
+            rec["detail"] = (f"{want} is not stated for this maker's part (a blank status or another maker's "
+                             "listing): not written")
+            out.append(rec)
+            continue
+        want = rec["value"] = LABEL[firm]
         try:
             cur_params = None
             if client:                           # fetch the current revision: a replace must carry every parameter
@@ -515,6 +570,12 @@ def a365_updates(rows, client, ws, apply=False, param="Lifecycle", note="ecadlib
                 cid, cur = node["id"], cur_params.get(param)
             if cur == want:
                 rec["action"] = "unchanged"
+                out.append(rec)
+                continue
+            have = normalise(cur) if cur else "unknown"
+            if have != "unknown" and SEVERITY[have] > SEVERITY[firm]:
+                rec["action"] = "skip"
+                rec["detail"] = f"would lower {cur} to {want}: never done automatically; change it by hand if right"
                 out.append(rec)
                 continue
             # replaceExisting=false *adds* a second Lifecycle parameter, so send the full merged set with true

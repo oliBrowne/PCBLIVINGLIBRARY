@@ -42,8 +42,8 @@ def model_ref(data):
     (rx, ry, rz), size (w, h) mm or None, through_hole} or None when the footprint names no 3D model."""
     if not isinstance(data, dict):
         return None
-    head = data.get("head") or {}
-    ox, oy = _f(head.get("x")), _f(head.get("y"))
+    from .easyeda_convert import origin
+    ox, oy = origin(data)                     # the footprint's own origin, as easyeda_convert placed the pads
     shapes = [s for s in data.get("shape") or [] if isinstance(s, str)]
     th = any(s.startswith("PAD~") and _f((s.split("~") + [""] * 10)[9]) > 0 for s in shapes)
     for s in shapes:
@@ -85,9 +85,9 @@ def _unit(text):
     if re.search(r"CONVERSION_BASED_UNIT\s*\(\s*'INCH'", text, re.I):
         return 25.4
     m = re.search(r"SI_UNIT\s*\(\s*(\.\w+\.|\$)\s*,\s*\.METRE\.\s*\)", text)
-    if m and m.group(1) == "$":
-        return 1000.0
-    return 1.0
+    if not m:
+        return 1.0
+    return {"$": 1000.0, ".CENTI.": 10.0, ".DECI.": 100.0, ".MICRO.": 0.001}.get(m.group(1).upper(), 1.0)
 
 
 def _rotate(p, rot):

@@ -18,7 +18,11 @@ approvals are only recorded. Keys (all optional):
                     policy a current reject holds the item too; only approvals need a policy to be required
 Each decision is stored in the item's `approvals` list: who, key, when, role, decision, comment and `hash`, a sha256
 over the item's .SchLib/.PcbLib bytes and its key fields (name, folder, description, comment, parameters, cleared,
-symbol/footprint refs). Any later change to them makes the approval stale; it then no longer counts. The parameters
+symbol/footprint refs). Any later change to them makes an approval stale; it then no longer counts. A reject keeps
+holding whatever changed since, until that person approves (a restyle, a revert or a re-run never lifts it). That approve
+is always recorded, even when the person may not sign (no longer in users, or released it with --allow): it takes the
+reject back without counting as a sign-off. A reject by someone no longer in the policy's users is also lifted by an
+approve that counts, recorded after it. The parameters
 the JLCPCB assembly check wrote until it was removed (Assembly *, LCSC Part) do not count, so a plan built while it
 existed keeps its sign-offs. The latest
 decision per person counts. Every decision (and every refused one) is appended to approvals_audit.jsonl next to
@@ -224,25 +228,90 @@ def applies(item, policy):
 
 
 # ---------------------------------------------------------------- content hash
-DERIVED_PARAMS = frozenset(("Assembly Profile", "LCSC Part", "Assembly Rotation", "Assembly Offset", "Assembly Check",
-                            "Assembly Evidence"))          # the removed assembly check's PARAMS: not signed
+DERIVED_PARAMS = frozenset(("Assembly Profile", "Assembly Rotation", "Assembly Offset", "Assembly Check",
+                            "Assembly Evidence"))          # the removed assembly check's PARAMS: not signed. Its
+# "LCSC Part" is signed: release_check and altium_project read it as the part's supplier number (what JLCPCB fits)
 def _resolve(base, p):
     return None if not p else Path(p) if Path(p).is_absolute() else Path(base) / p
 
 
-def content_hash(item, base="."):
-    """sha256 over the released model files' bytes and the item's key fields. Paths do not count, contents do."""
-    h = hashlib.sha256(b"ecadlib-approval-v1\0")
+HASH_VERSION = 2                                   # 2: also the .kicad_mod the KiCad publishers ship ("v2:" + hex)
+
+
+def content_hash(item, base=".", version=HASH_VERSION, eol="lf"):
+    """sha256 over the released model files' bytes and the item's key fields. Paths do not count, contents do.
+    version 1 (a plain hex string, every approval written before 2026-10-26): the .SchLib and .PcbLib only; version 2
+    ("v2:<hex>"): also the footprint's .kicad_mod (ledger.item_files), which kicad-export / kicad-dblib / kicad-pcm
+    ship. A stored hash is compared with the hash of its own version (hash_matches), as fingerprint schemas are.
+    eol: text files (a .kicad_mod, a KiCad symbol file) are hashed with LF line ends ("lf", the default: a CRLF
+    checkout by Git for Windows is no change, R-G2-4), with CRLF ("crlf") or as their bytes are ("raw": hashes stored
+    before line ends were normalised, from a CRLF checkout, still match while the files are unchanged)."""
+    from .ledger import eol_forms
+
+    def digest(f):
+        b = f.read_bytes()
+        forms = eol_forms(b)
+        b = forms[0] if eol == "raw" or len(forms) == 1 else forms[1] if eol == "lf" else forms[2]
+        return hashlib.sha256(b).digest()
+
+    h = hashlib.sha256(b"ecadlib-approval-v1\0" if version == 1 else b"ecadlib-approval-v2\0")
     for kind in ("symbol", "footprint"):
         f = _resolve(base, (item.get(kind) or {}).get("file"))
         h.update(f"{kind}:{(item.get(kind) or {}).get('ref') or ''}\0".encode())
-        h.update(hashlib.sha256(f.read_bytes()).digest() if f and f.is_file() else b"missing")
+        h.update(digest(f) if f and f.is_file() else b"missing")
+    if version >= 2:
+        f = _kicad_mod_file(item, base)
+        h.update(b"kicad_mod\0" + (digest(f) if f and f.is_file() else b"none"))
     fields = {k: item.get(k) or "" for k in KEY_FIELDS}
     fields["parameters"] = sorted((p["name"], str(p["value"])) for p in item.get("parameters") or []
                                   if p["name"] not in DERIVED_PARAMS)
     fields["cleared"] = sorted(item.get("cleared") or [])
     h.update(json.dumps(fields, sort_keys=True).encode())
-    return h.hexdigest()
+    return h.hexdigest() if version == 1 else f"v{version}:{h.hexdigest()}"
+
+
+def _kicad_mod_file(item, base="."):
+    """The footprint's .kicad_mod (ledger.item_files), or None. Its path is relative to the plan's folder; a publisher
+    that made the .SchLib / .PcbLib paths absolute (the UI / MCP push) leaves it relative, so it is also looked for
+    from the folders above the .PcbLib, nearest first."""
+    from .ledger import item_files
+    rel = item_files(item).get("kicad_mod")
+    f = _resolve(base, rel)
+    if not f or f.is_file() or Path(rel).is_absolute():
+        return f
+    fp = (item.get("footprint") or {}).get("file")
+    if fp and Path(fp).is_absolute():
+        return next((a / rel for a in Path(fp).parents if (a / rel).is_file()), f)
+    return f
+
+
+def hash_matches(stored, item, base=".", current=None, _old=None):
+    """True when a stored content hash (an approval's, the release check's snapshot) is the item's now, compared in
+    the stored hash's own version: an approval recorded before the .kicad_mod was hashed stays valid as long as the
+    files it covered are unchanged. current: the item's hash now (content_hash); _old: a dict caching version 1."""
+    if not stored:
+        return False
+    if str(stored).startswith("v2:"):
+        if stored == (current or content_hash(item, base)):
+            return True
+        return any(stored == content_hash(item, base, eol=e) for e in ("raw", "crlf"))   # line ends only (R-G2-4)
+    cache = _old if _old is not None else {}
+    if 1 not in cache:
+        cache[1] = {content_hash(item, base, version=1, eol=e) for e in ("raw", "lf", "crlf")}
+    return stored in cache[1]
+
+
+def matches_upgrading(holder, key, item, base=".", current=None, _old=None):
+    """hash_matches(holder[key], ...); a version-1 hash that matches is replaced by the item's hash now (version 2), so
+    from then on the sign-off (or the release check's snapshot) also covers the .kicad_mod: a later edit of it makes
+    the record stale, instead of a pre-upgrade approval passing every .kicad_mod for ever. The files the version-1
+    hash covered are unchanged, and the .kicad_mod is taken as it is at this first match."""
+    stored = holder.get(key)
+    if not hash_matches(stored, item, base, current, _old):
+        return False
+    if not str(stored).startswith("v2:"):
+        holder[key] = current or content_hash(item, base)
+    return True
 
 
 # ---------------------------------------------------------------- evaluation
@@ -254,25 +323,42 @@ def _allow_user(item):
 def evaluate(item, policy, base=".", h=None):
     """-> {required, met, hash, approved_by, missing, stale, rejected_by, ignored}."""
     h = h or content_hash(item, base)
-    latest = {}
-    for r in item.get("approvals") or []:          # one person, however they spelled their name (same_person)
+    old = {}                                       # version-1 hash, worked out once when an old record needs it
+    for r in item.get("approvals") or []:          # version-1 records that match become version 2 (matches_upgrading)
+        if isinstance(r, dict) and r.get("hash") and not str(r["hash"]).startswith("v2:"):
+            matches_upgrading(r, "hash", item, base, h, old)
+    same = lambda stored: hash_matches(stored, item, base, h, old)
+    latest, pos = {}, {}
+    for i, r in enumerate(item.get("approvals") or []):   # one person, however they spelled their name (same_person)
         k = r.get("key") or user_key(r["who"])
         k = next((x for x, y in latest.items() if x == k or same_person(y["who"], r["who"])), k)
-        latest[k] = r
-    valid, stale, rejected, ignored = [], [], [], []
+        latest[k], pos[k] = r, i
+    valid, stale, rejected, ignored, rejects, counted = [], [], [], [], [], []
     self_user = _allow_user(item)
     users = (policy or {}).get("users") or {}
-    for k, r in latest.items():
-        if r.get("hash") != h:
+    own = lambda r: r.get("key") or user_key(r["who"])   # who may sign: the record's own key, not the person it was
+    for k, r in latest.items():                          # filed under (a bare name filed under Ann's e-mail is not Ann)
+        if r["decision"] == "reject":          # a "no" holds until that person approves, whatever changed since (a
+            rejects.append(k)                  # restyle, a revert, a re-run lifts none)
+        elif not same(r.get("hash")):
             stale.append(r["who"])
-        elif r["decision"] == "reject":
-            rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else ""))
         elif policy and policy["no_self_approval"] and self_user and (k == user_key(self_user) or same_person(r["who"], self_user)):
             ignored.append(f"{r['who']}: released it with --allow")
-        elif users and (k not in users or (r.get("role") and r["role"] not in users[k])):
+        elif users and (own(r) not in users or (r.get("role") and r["role"] not in users[own(r)])):
             ignored.append(f"{r['who']}: not authorised" + (f" as {r['role']}" if r.get("role") else ""))
         else:
             valid.append(r)
+            counted.append(k)
+    for k in rejects:
+        r = latest[k]
+        gone = bool(users) and k not in users  # the rejecter is no longer one of the policy's signers: an approve
+        by = next((latest[v]["who"] for v in counted if pos[v] > pos[k]), None) if gone else None   # that counts,
+        if by:                                 # recorded after the reject, lifts it (else nobody could)
+            ignored.append(f"{r['who']}: rejected it, but is no longer in the policy's users; {by} approved after")
+            continue
+        rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else "")
+                        + ("; the part changed since" if not same(r.get("hash")) else "")
+                        + ("; no longer in the policy's users: an approve by a current one lifts it" if gone else ""))
     need = applies(item, policy)
     missing = []
     if need:
@@ -326,7 +412,8 @@ def push_block(item, policy=None, base="."):
             return "rejected: " + "; ".join(ev["missing"])
         return "awaiting approval" if item.get("status") == "awaiting_approval" else None
     ev = evaluate(item, pol, base)
-    if snap.get("checked_hash") and snap["checked_hash"] != ev["hash"] and item.get("status") != "held":
+    if snap.get("checked_hash") and not matches_upgrading(snap, "checked_hash", item, base, ev["hash"]) and \
+            item.get("status") != "held":
         return "changed since the release check: run release-check again"
     if ev["required"] and not ev["met"]:
         return "awaiting approval: " + "; ".join(ev["missing"])
@@ -338,6 +425,15 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _takes_back(item, who):
+    """who's latest decision on the item is a reject (so an approve now takes it back). The same key only (the e-mail,
+    else the folded name): another spelling ('Ann Lee' for 'Ann Lee <ann@x.com>') is not let past the policy's users
+    as a take-back."""
+    k = user_key(who)
+    mine = [r for r in item.get("approvals") or [] if (r.get("key") or user_key(r["who"])) == k]
+    return bool(mine) and mine[-1]["decision"] == "reject"
+
+
 def decide(item, decision, who, role=None, comment="", base=".", policy=None):
     """Validate and append one approval record; returns it. Raises Refused when the policy forbids it."""
     if decision not in ("approve", "reject"):
@@ -345,20 +441,21 @@ def decide(item, decision, who, role=None, comment="", base=".", policy=None):
     k = user_key(who)
     if decision == "reject" and not (comment or "").strip():
         raise Refused("a reject needs a comment (-m) saying what is wrong")
-    if policy:
-        users = policy["users"]
+    back = decision == "approve" and _takes_back(item, who)   # the person's own reject, taken back: always recorded
+    if policy:                                                 # (it lifts their "no"; evaluate decides whether it
+        users = policy["users"]                                # also counts as a sign-off)
         if users:
-            if k not in users:
+            if k not in users and not back:
                 raise Refused(f"{who} is not in the policy's users")
-            if role and role not in users[k]:
+            if role and role not in users.get(k, [role]):
                 raise Refused(f"{who} may sign as {', '.join(users[k])}, not {role}")
-            if not role and len(users[k]) == 1:
+            if not role and len(users.get(k, [])) == 1:
                 role = users[k][0]
-        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and (
+        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and not back and (
                 user_key(_allow_user(item)) == k or same_person(_allow_user(item), who)):
             raise Refused(f"{who} released {item['name']} with --allow and cannot approve it (no_self_approval)")
     rec = {"who": who, "key": k, "when": now(), "role": role or "", "decision": decision,
-           "comment": comment or "", "hash": content_hash(item, base)}
+           "comment": comment or "", "hash": content_hash(item, base), **({"takes_back": "reject"} if back else {})}
     item.setdefault("approvals", []).append(rec)
     return rec
 
@@ -373,12 +470,12 @@ def refresh_status(item, policy, base="."):
         snap = item.get("approval") or {}
         if snap and not snap.get("policy"):
             item.pop("approval", None)
-            if snap.get("checked_hash") in (None, ev["hash"]):
+            if snap.get("checked_hash") is None or hash_matches(snap["checked_hash"], item, base, ev["hash"]):
                 item["status"] = "ready"           # it waited only for the reject that is now taken back
         return item["status"]
     snap = item.setdefault("approval", {"policy": policy, "checked_hash": None})
     snap.update({"policy": policy, **{k: ev[k] for k in ("required", "met", "approved_by", "missing", "stale")}})
-    changed = snap.get("checked_hash") not in (None, ev["hash"])
+    changed = snap.get("checked_hash") is not None and not matches_upgrading(snap, "checked_hash", item, base, ev["hash"])
     if changed:
         snap["missing"] = snap["missing"] + ["changed since the release check: run release-check again"]
     item["status"] = "ready" if (not ev["required"] or ev["met"]) and not changed else "awaiting_approval"
@@ -407,6 +504,9 @@ def status_rows(items, policy, base="."):
     return out
 
 
+DECISION_WAIT = 30                                     # seconds `ecadlib approve` waits for plan.lock (short writes)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Approve or reject plan items before altium365 push releases them")
     ap.add_argument("plan")
@@ -421,8 +521,8 @@ def main(argv=None):
     ws = plan_workspace(a.plan) if a.action != "status" else None
     if ws is None:
         return _run(a)
-    from .fsutil import plan_lock                      # the web UI may be recording into this plan
-    with plan_lock(ws, wait=False) as free:
+    from .fsutil import plan_lock                      # the web UI may be recording into this plan: plan.lock is held
+    with plan_lock(ws, wait=True, timeout=DECISION_WAIT) as free:   # only for short writes, so wait a little
         if not free:
             sys.exit("another ecadlib command is changing this plan right now; decide again in a minute")
         return _run(a)
@@ -437,19 +537,23 @@ def plan_workspace(plan):
 @contextlib.contextmanager
 def cli_plan_lock(plan):
     """For CLI commands that rewrite a workspace plan (<ws>/librarian/<name>/plan.json): wait while the web UI records
-    into it, so neither write is lost. Other plans: no lock."""
+    into it, so neither write is lost. Other plans: no lock. The plan's library lock is taken first (the lock order
+    in fsutil): these commands go on to change-control steps (resolve, release anyway, dedupe merge) that take it, and
+    a plan.lock holder never waits for the library lock."""
     ws = plan_workspace(plan)
     if ws is None:
         yield
         return
+    from . import ledger as LG
     from .fsutil import plan_lock
-    with plan_lock(ws, wait=False) as free:
-        if free:
+    with LG.locked(Path(plan).resolve().parent):
+        with plan_lock(ws, wait=False) as free:
+            if free:
+                yield
+                return
+        print("another ecadlib command is changing this plan; waiting for it to finish ...", file=sys.stderr)
+        with plan_lock(ws, wait=True):
             yield
-            return
-    print("another ecadlib command is changing this plan; waiting for it to finish ...", file=sys.stderr)
-    with plan_lock(ws, wait=True):
-        yield
 
 
 def _run(a):

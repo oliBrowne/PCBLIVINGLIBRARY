@@ -334,9 +334,10 @@ def scan(root, max_depth=6):
                     continue
                 try:
                     v, made = _key_version(f)
-                except ValueError as e:
+                except (ValueError, OSError) as e:      # OSError: held open by another program (Windows), no access
                     rows.append({"path": str(f), "kind": k, "version": None, "current": kd.current, "made_by": "",
-                                 "state": "error", "error": str(e)})
+                                 "state": "error", "error": str(e) if isinstance(e, ValueError)
+                                 else f"unreadable ({e.strerror or e})"})
                     continue
                 add(f, k, v, made)
     return rows
@@ -360,9 +361,9 @@ def _damaged_json(f):
 
 def _key_version(f):
     f = Path(f)
-    text = f.read_text(encoding="utf-8-sig")
     if f.suffix == ".toml":
-        from .rules import toml_module
+        from .rules import read_file, toml_module
+        text = read_file(f)                    # UTF-8, or UTF-16 as rules.load reads it; else a ValueError (RulesError)
         tomllib = toml_module()
         if tomllib is None:                    # Python 3.10 without tomli: a plain look at the top-level key
             import re
@@ -373,6 +374,7 @@ def _key_version(f):
         except Exception as e:
             raise ValueError(f"not valid TOML ({e})") from None
     else:
+        text = f.read_text(encoding="utf-8-sig")
         try:
             d = json.loads(text or "{}")
         except ValueError as e:

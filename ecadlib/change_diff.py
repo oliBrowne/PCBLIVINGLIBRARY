@@ -6,7 +6,8 @@
 
 Classes, most severe first (default policy in brackets, see change_gate.POLICY):
   identity        MPN or manufacturer changed; the value as a number changed (10k -> 1k), its unit (100nF -> 100nH)
-                  or what follows it (100nF 50V -> 100nF 6.3V); a second MPN / manufacturer field names another part [hold]
+                  or what follows it (100nF 50V -> 100nF 6.3V); a second MPN / manufacturer field names another part;
+                  a rating field (Voltage, Tolerance, Power, Current, Dielectric ...) states another quantity   [hold]
   electrical      a pin's name (as a signal) or type changed, pins swapped names, a pin or pad added or removed,
                   pads renumbered, a pin lost its pad, a pin became hidden, its hidden net, it moved to another unit,
                   the number of units, alternate pin functions; for every copy of a pin number; pins that now share
@@ -27,7 +28,10 @@ Classes, most severe first (default policy in brackets, see change_gate.POLICY):
                   another way (RESET# -> ~{RESET}), the value written another way (100nF -> 100n), other fields                                                                                  [pass]
 
 Tolerances: a length change within TOL["noise"] (parity's position tolerance, 1 um) is no change; SIZE_MINOR is the
-pad-size band that counts as minor (max(50 um, 10 % of that side)); 3D origin within TOL["model"] (10 um)."""
+pad-size band that counts as minor (max(50 um, 10 % of that side), the 50 um floor no more than 10 % of the pad's
+pitch to its nearest neighbour: a fine-pitch gap is too small for it), and a size change in the band that leaves less
+than GAP_KEEP (80 %) of the copper gap to any other pad, an exposed pad's gap to its leads too, or closes it, is major;
+3D origin within TOL["model"] (10 um)."""
 import json, re
 from collections import Counter
 
@@ -78,6 +82,44 @@ def _few(xs, n=8):
 DIELECTRICS = {"X5R", "X6S", "X7R", "X7S", "X7T", "X8R", "Y5V", "Z5U", "C0G", "COG", "NP0", "NPO", "U2J"}
 PACKAGE_SIZES = {"01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512", "1005", "1608",
                  "2012", "3216", "3225", "4532", "6332"}
+# a parameter that states a rating: its value is an electrical fact, compared as parsed quantities (16V == 16 V)
+RATING_RE = re.compile(r"(?i)\s*((rated |max(imum)? |working |operating )?(voltage|current|power|tolerance)( rating)?|"
+                       r"dielectric|temp(erature)?\.? ?co(efficient)?|tempco|tcr|"
+                       r"v(dc|ac|rms|r|rwm|br|z|f|ce|ds|gs)|i(f|r|c|d|sat|rms)|p(d|tot))(\s*\(.*\))?\s*")
+_SI = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "μ": 1e-6, "m": 1e-3, "": 1.0, "k": 1e3, "K": 1e3, "M": 1e6,
+       "G": 1e9}
+_QTY = re.compile(r"(?<![A-Za-z0-9.,])(±|\+/-|[+-]|−)?\s*(\d+(?:[.,]\d+)?)(?:\s*/\s*(\d+))?\s*([pnuµμmkKMG]?)\s*"
+                  r"(V|A|W|%|F|H|Hz|Ω|[Oo]hms?|ppm|°C)(?:\s*(?:DC|AC|dc|ac|rms|RMS|max|min))?(?![A-Za-z])")
+_DIEL_SAME = {"COG": "C0G", "NP0": "C0G", "NPO": "C0G"}
+
+
+def electrical_facts(text):
+    """The rated quantities a text states, each as (value in base units, unit), and its dielectrics: '16 VDC' ==
+    '16V', '±1 %' == '1%', '1/4W' == '250mW', 'X7R'; another number or unit is another fact. -> frozenset"""
+    out = set()
+    for m in _QTY.finditer(str(text or "")):
+        sign, num, den, pre, unit = m.groups()
+        v = float(num.replace(",", ".")) / (int(den) if den and int(den) else 1) * _SI[pre]
+        unit = "R" if unit in ("Ω",) or unit.lower().startswith("ohm") else unit
+        if unit == "°C" and sign in ("-", "−"):
+            v = -v
+        out.add((float(f"{v:.6g}"), unit))
+    for w in re.findall(r"[A-Za-z0-9]+", str(text or "").upper()):
+        if w in DIELECTRICS:
+            out.add((_DIEL_SAME.get(w, w), "dielectric"))
+    return frozenset(out)
+
+
+def same_rating(a, b):
+    """Two texts of one rating field state the same quantities: compared parsed when both state any ('16V' ==
+    '16 VDC', '1%' != '±10%'), else by their numbers ('16' == '16V', '16' != '100V')."""
+    fa, fb = electrical_facts(a), electrical_facts(b)
+    if fa and fb:
+        return fa == fb
+    num = lambda s: {float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", str(s or ""))}
+    return num(a) == num(b) and {x for x in fa | fb if x[1] == "dielectric"} <= (fa & fb)
+
+
 KIND_UNIT = (("resistor", "R"), ("capacitor", "F"), ("inductor", "H"), ("ferrite", "H"), ("crystal", "Hz"),
              ("oscillator", "Hz"), ("resonator", "Hz"), ("zener", "V"), ("fuse", "A"))
 
@@ -246,6 +288,9 @@ def _fields(o, n, out):
         if cls == "cosmetic" and filled and norm_mpn(a) != norm_mpn(b) and SECOND_SOURCE_RE.fullmatch(kl):
             cls = "identity"                   # Manufacturer Part Number 2: another part that may be fitted
             txt += " (a second source)"
+        if cls == "cosmetic" and a is not None and b is not None and RATING_RE.fullmatch(kl) and not same_rating(a, b):
+            cls = "identity"                   # a rating (16V -> 100V, 1% -> 10%, X7R -> X5R) is another part
+            txt += " (another rating)"
         _chg(out, cls, "fields", k, a, b, txt)
 
 
@@ -547,13 +592,79 @@ def _renumbered(po, pn):
     return moves or None
 
 
-def _size_minor(a, b):
+def _size_minor(a, b, pitch=None):
+    """A pad side change within the minor band. pitch: the centre distance to the pad's nearest neighbour; the 50 um
+    floor is at most 10 % of it, so 0.20 -> 0.25 mm pads on 0.4 mm pitch (the gap 0.20 -> 0.15) is major (R-RT-5)."""
     if a is None or b is None:
         return a == b
-    return abs(a - b) <= max(SIZE_MINOR["abs"], SIZE_MINOR["rel"] * max(abs(a), abs(b)))
+    floor = SIZE_MINOR["abs"] if not pitch else min(SIZE_MINOR["abs"], SIZE_MINOR["rel"] * pitch)
+    return abs(a - b) <= max(floor, SIZE_MINOR["rel"] * max(abs(a), abs(b)))
 
 
-def _pad(a, b, out, origin=None):
+def _pitch(p, pads):
+    """The centre distance from pad p to its nearest other pad on the same side, or None (a lone pad)."""
+    d = [((q["x"] or 0) - (p["x"] or 0)) ** 2 + ((q["y"] or 0) - (p["y"] or 0)) ** 2 for q in pads or ()
+         if q is not p and q.get("side") == p.get("side")]
+    d = [x for x in d if x > TOL["noise"] ** 2]
+    return min(d) ** 0.5 if d else None
+
+
+GAP_KEEP = 0.80          # a pad size change that leaves less than this share of a copper gap to another pad is major
+
+
+def _copper_box(p):
+    """A pad's copper as an axis-aligned box (x0, y0, x1, y1), or None (no copper, no size). A pad turned by an angle
+    that is no quarter turn takes the box around it (more copper: the gap it gives is never too wide)."""
+    if p.get("side") == "NPTH" or p.get("w") is None or p.get("h") is None:
+        return None
+    import math
+    w, h, r = p["w"], p["h"], math.radians(p.get("rot") or 0.0)
+    c, s = abs(math.cos(r)), abs(math.sin(r))
+    bw, bh = w * c + h * s, w * s + h * c
+    x, y = p.get("x") or 0.0, p.get("y") or 0.0
+    ox, oy = (p.get("offset") or (0, 0))[:2]
+    x, y = x + (ox or 0.0), y + (oy or 0.0)
+    return (x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2)
+
+
+def _box_gap(a, b):
+    """Copper gap between two boxes (negative or 0: they touch or overlap)."""
+    gx, gy = max(a[0], b[0]) - min(a[2], b[2]), max(a[1], b[1]) - min(a[3], b[3])
+    if gx <= 0 and gy <= 0:
+        return max(gx, gy)
+    return (max(gx, 0) ** 2 + max(gy, 0) ** 2) ** 0.5
+
+
+def _share_copper(p, q):
+    sides = {p.get("side"), q.get("side")}
+    return "NPTH" not in sides and (len(sides) == 1 or not sides <= {"F", "B"})
+
+
+def _gap_cut(a, b, peers):
+    """A pad a -> b whose new size cuts the copper gap to another pad (an exposed pad to its leads too) below GAP_KEEP
+    of what it was, or closes it -> (other pad, old gap, new gap), else None (R-G2-2). A pad of its own number (a
+    segmented exposed pad, a dual-pitch THT pad pair) is one net, and a pad it already touched has no gap to cut: neither
+    counts (R-FX17-4)."""
+    ba, bb = _copper_box(a), _copper_box(b)
+    if not ba or not bb:
+        return None
+    for qa, qb in peers or ():
+        if qa is a or not (_share_copper(a, qa) and _share_copper(b, qb)):
+            continue
+        if a.get("num") and str(qa.get("num")) == str(a["num"]):
+            continue
+        qba, qbb = _copper_box(qa), _copper_box(qb)
+        if not qba or not qbb:
+            continue
+        g0, g1 = _box_gap(ba, qba), _box_gap(bb, qbb)
+        if g0 <= 0 or g1 >= g0 - TOL["noise"]:
+            continue
+        if g1 <= TOL["noise"] or g1 < GAP_KEEP * g0:
+            return qb, g0, g1
+    return None
+
+
+def _pad(a, b, out, origin=None, pads=None, peers=None):
     what = f"pad {a['num'] or '(unnumbered)'}"
     dx, dy = (b["x"] or 0) - (a["x"] or 0), (b["y"] or 0) - (a["y"] or 0)
     if origin:
@@ -586,9 +697,13 @@ def _pad(a, b, out, origin=None):
     if PA._angle_diff(a["rot"] or 0, b["rot"] or 0, 90.0) > TOL["angle"]:
         _chg(out, "geometry-major", "footprint", what, a["rot"], b["rot"], f"{what} rotated {_f(a['rot'])} -> {_f(b['rot'])} degrees")
     if _ne(a["w"], b["w"], TOL["noise"]) or _ne(a["h"], b["h"], TOL["noise"]):
-        minor = _size_minor(a["w"], b["w"]) and _size_minor(a["h"], b["h"])
-        _chg(out, "geometry-minor" if minor else "geometry-major", "footprint", what, [a["w"], a["h"]], [b["w"], b["h"]],
-             f"{what} size {_f(a['w'])} x {_f(a['h'])} -> {_f(b['w'])} x {_f(b['h'])} mm")
+        pitch = _pitch(a, pads)                       # (only for a pad whose size changed: n pads, not n^2)
+        minor = _size_minor(a["w"], b["w"], pitch) and _size_minor(a["h"], b["h"], pitch)
+        cut = _gap_cut(a, b, peers) if minor else None
+        gap = (f" (the copper gap to pad {cut[0]['num'] or '(unnumbered)'} {_f(round(cut[1], 4))} -> "
+               f"{_f(round(cut[2], 4))} mm)" if cut else "")
+        _chg(out, "geometry-minor" if minor and not cut else "geometry-major", "footprint", what, [a["w"], a["h"]],
+             [b["w"], b["h"]], f"{what} size {_f(a['w'])} x {_f(a['h'])} -> {_f(b['w'])} x {_f(b['h'])} mm{gap}")
     for k, label in (("paste", "solder paste"), ("mask", "solder mask opening")):
         if a.get(k) is not None and b.get(k) is not None and bool(a[k]) != bool(b[k]):
             _chg(out, "geometry-major", "footprint", what, a[k], b[k], f"{what} {'has' if b[k] else 'lost'} its {label}")
@@ -617,6 +732,9 @@ def _pad_more(a, b, out, what):
     if za is not None and zb is not None and za != zb:
         _chg(out, "geometry-major", "footprint", what, za, zb,
              f"{what} zone connection {_ZONE.get(za, za)} -> {_ZONE.get(zb, zb)}")
+    ka, kb = a.get("kset"), b.get("kset")
+    if ka is not None and kb is not None and ka != kb:
+        _pad_settings(ka, kb, out, what)
     for k, label in (("pinfunc", "pin function"), ("pintype", "pin type")):
         if a.get(k) and b.get(k) and a[k] != b[k]:      # boards fill these in from the symbol, libraries mostly do not
             _chg(out, "geometry-minor", "footprint", what, a[k], b[k], f"{what} {label} {a[k]} -> {b[k]}")
@@ -626,6 +744,32 @@ def _pad_more(a, b, out, what):
 
 
 _ZONE = {-1: "as the footprint", 0: "none", 1: "thermal relief", 2: "solid", 3: "thermal relief (THT only)"}
+_PAD_SET_LABEL = {"solder_paste_margin_ratio": "solder paste ratio", "solder_paste_ratio": "solder paste ratio",
+                  "clearance": "clearance", "thermal_bridge_width": "thermal bridge width", "thermal_width":
+                  "thermal bridge width", "thermal_gap": "thermal relief gap", "thermal_bridge_angle": "thermal bridge angle"}
+
+
+def _pad_settings(ka, kb, out, what):
+    """A KiCad pad's own settings (R-G2-6). Less solder paste (the ratio down by more than 0.1 of the pad), a smaller
+    clearance, thinner thermal bridges or a smaller relief gap is geometry-major (the board is soldered or cleared
+    worse); the rest, and a setting added or dropped back to the footprint's, at least geometry-minor."""
+    def num(v):
+        return v if isinstance(v, (int, float)) else None
+    for k in sorted(set(ka) | set(kb)):
+        u, v = ka.get(k), kb.get(k)
+        if u == v:
+            continue
+        label = _PAD_SET_LABEL.get(k, k.replace("_", " "))
+        nu, nv = num(u), num(v)
+        if k in ("solder_paste_margin_ratio", "solder_paste_ratio"):
+            major = (nu or 0.0) - (nv if nv is not None else 0.0) > 0.1 + 1e-9
+        elif k in ("clearance", "thermal_bridge_width", "thermal_width", "thermal_gap"):
+            major = nv is not None and (nu is None or nv < nu - TOL["noise"])
+        else:
+            major = False
+        inherit = "(the footprint's)"
+        _chg(out, "geometry-major" if major else "geometry-minor", "footprint", what, u, v,
+             f"{what} {label} {inherit if u is None else _f(u)} -> {inherit if v is None else _f(v)}")
 
 
 def _layers(cu):
@@ -680,7 +824,7 @@ def _footprint(o, n, out):
         else:
             origin = None
         for a, b in pairs:
-            _pad(a, b, sub, origin)
+            _pad(a, b, sub, origin, po, pairs)
             if a["side"] in ("F", "B") and b["side"] in ("F", "B") and not a.get("paste") and not b.get("paste") and \
                     _pasted(a, fo.get("windows")) and not _pasted(b, fn.get("windows")):
                 _chg(sub, "geometry-major", "footprint", f"pad {a['num'] or '(unnumbered)'}", True, False,

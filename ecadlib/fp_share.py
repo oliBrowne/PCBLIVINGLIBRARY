@@ -6,7 +6,9 @@ a 5.3 mm body; `QFN-16` at 0.5 and 0.65 mm pitch). Before this module the second
 part's file. Now a part shares a file only when the footprints are the same: the same pads, pad shapes, holes and
 courtyard (the geometry hash `ecadlib dedupe` uses), and, when both came from a KiCad or standard footprint, the same
 footprint name: KiCad's L_0603 and LED_0603 (C_0201 and LED_0201) have the same pads, but an inductor released on
-the LED's polarity mark and 3D body is wrong, and the LED's symbol is chosen by its footprint. Otherwise it gets its own name, tried in this order:
+the LED's polarity mark and 3D body is wrong, and the LED's symbol is chosen by its footprint; and, when the part
+brings its own 3D body (an EasyEDA model, a datasheet height), a body as high (dedupe.HEIGHT_TOL): two crystals on one
+land with 0.6 and 1.8 mm bodies get a file each (R-CV-2). Otherwise it gets its own name, tried in this order:
 
   1. the real package name of its footprint (the KiCad / standard / EasyEDA footprint name), when it starts with
      the BOM name, else <BOM name>_<real name>; e.g. SOIC-14 -> SOIC-14_5.3x10.2mm_P1.27mm
@@ -25,14 +27,86 @@ from pathlib import Path
 from . import altium_lib as AL, sexpr
 
 
-def digest(text):
-    """Geometry hash of a .kicad_mod: dedupe's footprint hash (pads, shapes, holes, courtyard); a text hash when it has no pads."""
+# the digest's version, recorded with each hash ("hash_v"): 1 = dedupe's pad hash only; 2 = plus extra() (R-SP-4).
+# A record from before (no hash_v) is compared by recomputing from its own .kicad_mod, else with version 1 of the
+# new part's digest, so an upgrade never splits a plain footprint from the released part that shares it; a footprint
+# with what version 1 cannot see (extra(): paste, custom copper, side) does not share on a version-1 hash (R-FX9-6).
+HASH_V = 2
+
+
+def digest(text, version=HASH_V):
+    """Geometry hash of a .kicad_mod: dedupe's footprint hash (pads, shapes, holes, courtyard), plus what that leaves
+    out but the board gets (extra(): custom-pad copper, paste / mask windows, the copper side, copper graphics); a
+    text hash when it has no pads. version 1: without extra(), as hashes recorded before HASH_V 2."""
     from . import dedupe as DD
     try:
         h = DD.fp_hash(DD.fp_geometry_kicad(text))
+        more = extra(text) if h and version >= 2 else []
+        if more:                               # only then: a plain footprint keeps the hash workspaces recorded
+            h = DD._digest([h] + more)
     except Exception:                          # unparsable: only an identical file is "the same"
         h = None
     return h or "text:" + hashlib.sha256(str(text).encode()).hexdigest()[:16]
+
+
+_PRIM_PTS = ("start", "end", "center", "mid")
+
+
+def _shape_key(g):
+    """A graphic (pad primitive or fp_* item) as a sortable list: its kind, layer, points (0.01 mm), width, fill."""
+    from . import dedupe as DD
+    q = lambda v: round(DD._q(float(v)), 2)
+    pts = [[k, q(c[1]), q(c[2])] for k in _PRIM_PTS for c in [sexpr.first(g, k)] if c and len(c) > 2]
+    pts += [[q(p[1]), q(p[2])] for p in sexpr.find(sexpr.first(g, "pts") or [], "xy")]
+    w = sexpr.first(g, "width") or (sexpr.first(sexpr.first(g, "stroke") or [], "width"))
+    fill = sexpr.first(g, "fill")
+    return [str(g[0]), str((sexpr.first(g, "layer") or [None, ""])[1]), pts, q(w[1]) if w else 0,
+            str(fill[1]) if fill and len(fill) > 1 else ""]
+
+
+def extra(text):
+    """What dedupe's pad hash leaves out of a .kicad_mod but a board gets: a custom pad's copper primitives, a copper
+    pad without the usual paste / mask opening (or with paste / mask margins), paste- or mask-only apertures, a pad
+    on the bottom copper, and copper / paste / mask graphics. Sorted; empty for a plain footprint."""
+    from . import dedupe as DD
+    t = sexpr.parse(text)
+    out = []
+    num = lambda v: round(float(v), 4)
+    for k in ("solder_paste_margin", "solder_paste_margin_ratio", "solder_paste_ratio", "solder_mask_margin"):
+        v = sexpr.first(t, k)
+        if v and len(v) > 1 and float(v[1]):
+            out.append(["fp", k, num(v[1])])
+    for p in sexpr.find(t, "pad"):
+        if len(p) < 4 or p[2] == "np_thru_hole":
+            continue
+        layers = [str(x) for x in (sexpr.first(p, "layers") or ["layers"])[1:]]
+        cu = [x for x in layers if x.endswith(".Cu")]
+        paste = any(x.endswith(".Paste") for x in layers)
+        mask = any(x.endswith(".Mask") for x in layers)
+        if not cu:                             # a paste- or mask-only aperture: a window the pad hash drops
+            at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
+            w, h = float(size[1]), float(size[2] if len(size) > 2 else size[1])
+            out.append(["aperture", sorted(layers), str(p[3]),
+                        list(DD._pad_tuple("", float(at[1]), -float(at[2]), w, h, float(at[3]) if len(at) > 3 else 0.0, False))])
+            continue
+        n = str(p[1])
+        if p[2] == "smd" and cu != ["F.Cu"]:
+            out.append(["side", n, sorted(cu)])
+        if (paste, mask) != (p[2] == "smd", True):
+            out.append(["openings", n, paste, mask])
+        for k in ("solder_paste_margin", "solder_paste_margin_ratio", "solder_mask_margin"):
+            v = sexpr.first(p, k)
+            if v and len(v) > 1 and float(v[1]):
+                out.append(["margin", n, k, num(v[1])])
+        if p[3] == "custom":
+            prims = sexpr.first(p, "primitives") or []
+            out.append(["custom", n, sorted(_shape_key(g) for g in prims[1:] if isinstance(g, list))])
+    for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
+        for g in sexpr.find(t, kind):
+            lay = str((sexpr.first(g, "layer") or [None, ""])[1])
+            if lay.endswith((".Cu", ".Paste", ".Mask")):
+                out.append(["graphic", _shape_key(g)])
+    return sorted(out, key=lambda e: repr(e))
 
 
 def real_name(text, source=""):
@@ -62,14 +136,17 @@ def base_of(rec):
 
 
 def hash_of(rec, out, cache):
-    """A footprint record's geometry hash: recorded, else from its .kicad_mod (workspaces from before this check)."""
-    if rec.get("hash"):
-        return rec["hash"]
+    """A footprint record's geometry hash -> (hash, version): recorded at this HASH_V; else from its .kicad_mod
+    (workspaces from before this check, or a hash of an older version); else the older recorded hash, version 1."""
+    if rec.get("hash") and int(rec.get("hash_v") or 1) >= HASH_V:
+        return rec["hash"], HASH_V
     k = rec.get("kicad_mod") or ""
     if k not in cache:
         p = Path(out) / k if k else None
         cache[k] = digest(p.read_text(encoding="utf-8")) if p and p.is_file() else None
-    return cache[k]
+    if cache[k] or not rec.get("hash"):
+        return cache[k], HASH_V
+    return rec["hash"], int(rec.get("hash_v") or 1)
 
 
 def unchecked_share(rec):
@@ -84,19 +161,56 @@ def lib_name(source):
     return src.rsplit(":", 1)[-1].lower() if src.startswith(("kicad:", "standard:")) else ""
 
 
-def same_fp(rec, h, source, out, cache):
-    """A footprint record holds the same footprint: same pads, and the same library footprint when both name one."""
+def height_of(rec, out, cache):
+    """A footprint record's 3D body height in mm: recorded ("height"), else read from its .PcbLib (records written
+    before heights were recorded), else None (no body, or the file is gone)."""
+    if "height" in rec:
+        return rec["height"]
+    f = str(rec.get("file") or "")
+    key = ("height", f)
+    if key not in cache:
+        cache[key] = None
+        p = Path(out) / f if f else None
+        if p and p.is_file():
+            from . import dedupe as DD
+            try:
+                cache[key] = max((x for x in (DD.body_height(fp) for fp in AL.read_pcblib(p)) if x), default=None)
+            except Exception:
+                pass
+    return cache[key]
+
+
+def same_body(rec, height, out, cache):
+    """The record's 3D body is as high as the new part's (dedupe.HEIGHT_TOL), or one of them is unknown."""
+    from . import dedupe as DD
+    if height is None:
+        return True
+    rh = height_of(rec, out, cache)
+    return rh is None or abs(float(rh) - float(height)) <= DD.HEIGHT_TOL
+
+
+def same_fp(rec, h, source, out, cache, text=None, height=None):
+    """A footprint record holds the same footprint: same pads, the same library footprint when both name one, and a
+    3D body as high (height: the new part's own body height, from its own model or a part-specific height; None:
+    the part takes the footprint's body). h: the new footprint's digest; text: its .kicad_mod, for a record hashed
+    by an older digest version."""
     a, b = lib_name(rec.get("source")), lib_name(source)
-    return hash_of(rec, out, cache) == h and (not a or not b or a == b)
+    rh, v = hash_of(rec, out, cache)
+    if v != HASH_V and text is not None:
+        if extra(text):                        # an old pad-only hash cannot tell paste / custom copper apart: a
+            return False                       # footprint with them never shares on it (R-FX9-6)
+        h = digest(text, v)
+    return rh == h and (not a or not b or a == b) and same_body(rec, height, out, cache)
 
 
-def pick(written, models, name, text, source, part, out, cache):
-    """-> (name, path, record to share or None). written: {PcbLib path: footprint record} of this run."""
+def pick(written, models, name, text, source, part, out, cache, height=None):
+    """-> (name, path, record to share or None). written: {PcbLib path: footprint record} of this run.
+    height: the part's own 3D body height (mm), when it has one; a footprint with another body is not shared."""
     h, real = digest(text), real_name(text, source)
     fold = lambda s: AL.file_stem(s).casefold()  # Windows / macOS file systems ignore case: SOIC-8 and soic-8 are one file
     for rec in written.values():               # same pads under a name already made for this BOM name: share it
         f = str(rec.get("file") or "")
-        if f.endswith(".PcbLib") and fold(base_of(rec)) == fold(name) and same_fp(rec, h, source, out, cache):
+        if f.endswith(".PcbLib") and fold(base_of(rec)) == fold(name) and same_fp(rec, h, source, out, cache, text, height):
             return rec.get("name") or Path(f).stem, str(Path(out) / f), rec, h
     taken = {str(p).casefold(): (p, rec) for p, rec in written.items()}
     cands = candidates(name, real, part)
@@ -105,7 +219,7 @@ def pick(written, models, name, text, source, part, out, cache):
         have, rec = taken.get(pcb.casefold(), (pcb, None))
         if rec is None:                        # nobody in this run has it (a file left from an earlier run of
             return c, pcb, None, h             # this part, or of a part no longer in the BOM, is rewritten)
-        if same_fp(rec, h, source, out, cache):   # its file under its name (the case it was written in)
+        if same_fp(rec, h, source, out, cache, text, height):   # its file under its name (the case it was written in)
             return rec.get("name") or c, have, rec, h
     c = cands[-1]                              # <name>_<part> is this part's own: rewrite it
     return c, str(Path(models) / "PcbLib" / f"{AL.file_stem(c)}.PcbLib"), None, h

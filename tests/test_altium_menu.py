@@ -2,11 +2,12 @@
 documented calls, the command lines survive spaces and Windows separators, and every action the menu runs works end to
 end offline through the same files the script exchanges (request.ini -> run-job -> result.ini).
 python3 -m tests.test_altium_menu.   Nothing here runs Altium, cmd.exe or wscript (none exist on this machine)."""
-import configparser, contextlib, csv, io, json, os, re, socket, subprocess, sys, tempfile, zipfile
+import configparser, contextlib, csv, io, json, os, re, socket, subprocess, sys, zipfile
 from pathlib import Path
 from unittest import mock
 
 from ecadlib import altium_forms as AF, altium_menu as AM, altium_native as AN
+from tests.fixtures_lite import clean_all, scratch
 
 ROOT = Path(__file__).parent.parent
 RULES = ('[sources]\norder = ["standard"]\n\n[parameters]\n'
@@ -16,7 +17,7 @@ CAP = {"mpn": "CL05B104KO5NNNC", "manufacturer": "Samsung Electro-Mechanics", "v
 
 
 def _tmp(name="ecadlib menu "):
-    return Path(tempfile.mkdtemp(prefix=name))                  # a space in every path
+    return scratch(name)                  # a space in every path
 
 
 def _quiet(fn, *a, **k):
@@ -354,10 +355,11 @@ def test_dialog_form_matches_its_unit_and_the_results():
     assert any("Gone is not declared" in p for p in AM.project_problems(broken))
     read = set(re.findall(r"Answer\(Job, '(\w+)'\)", files[AF.DIALOG_UNIT]))
     assert read == {"status", "install", "build", "big", "report", "warnings", "offer_fill", "fix", "offer_queue",
-                    "offer_ai", "ai_text", "ai_button", "ai_cost_text", "offer_release", "release_part"}, read
+                    "offer_ai", "ai_text", "ai_button", "ai_cost_text", "offer_release", "release_part",
+                    "release_more"}, read                     # R-MN-2: "and N more" when the dialog cannot list them all
     asked = set(re.findall(r"Answer\(Prev, '(\w+)'\)", files[AF.DIALOG_UNIT]))       # the AI step's next job
     assert asked == {"ai_over", "ai_confirm", "ai_bom", "ai_mpn", "ai_part", "ai_approve", "ai_unknown",
-                     "release_part", "release_bom", "release_mpn"}, asked                   # and Release anyway's
+                     "release_part", "release_bom", "release_mpn", "release_key"}, asked    # and Release anyway's
     assert "ReadString('progress', 'text'" in files[AF.DIALOG_UNIT] and "'row' + IntToStr(i)" in files[AF.DIALOG_UNIT]
     # the menu entries open the dialog, unless dialogs=0 asks for Altium's plain message boxes
     assert "OpenDialog('add', '', '')" in files[AM.UNIT] and "OpenDialog('bom', PrjPath, '')" in files[AM.UNIT]
@@ -631,14 +633,20 @@ def test_publish_reports_a_part_the_publisher_held_again():
     for it in items:
         it["description"] = ""                                   # after the check
     plan_f.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    # a released part: the edit that fails the check is held for approval and the released revision (r1, with its
+    # Description) is what both publishers ship (change control runs the release check on a pass / warn change)
+    from ecadlib import ledger as LG
     for tool, lib in (("altium", cfg["library"]), ("kicad", str(Path(cfg["library"]).parent / "kicad lib"))):
         pub = AM.publish(ws, rel, lib, cfg["name"], tool=tool)
-        assert pub["held"] == {"CAP-0402-100nF": "held: fields: Description is empty"}, (tool, pub)
-        with mock.patch.object(AM, "publish", lambda *a, **k: pub):          # fill: the same hold, in its message
-            r = AM._fill_result(cfg, ws, rel, {"parts": 1, "ready": 1, "held": 0, "awaiting_approval": 0,
-                                               "duplicates": 0}, AM.Progress())
-        assert r["status"] == "error" and "Not published: CAP-0402-100nF: held: fields: Description is empty" in \
-            r["message"], (tool, r)
+        assert not pub["problems"] and not pub["held"], (tool, pub)
+    events = [(e.get("event"), e.get("part"), e.get("revision")) for e in LG.Ledger(plan_f.parent).lines()]
+    assert ("hold", "CAP-0402-100nF", None) in events and ("release", "CAP-0402-100nF", 2) not in events, events
+    pub = {"target": "folder", "install": [], "problems": [], "held": {"CAP-0402-100nF": "held: fields: Description is empty"}}
+    with mock.patch.object(AM, "publish", lambda *a, **k: pub):          # fill: a publisher's hold, in its message
+        r = AM._fill_result(cfg, ws, rel, {"parts": 1, "ready": 1, "held": 0, "awaiting_approval": 0,
+                                           "duplicates": 0}, AM.Progress())
+    assert r["status"] == "error" and "Not published: CAP-0402-100nF: held: fields: Description is empty" in \
+        r["message"], r
 
 
 def test_open_queue_starts_reuses_and_refuses():
@@ -849,3 +857,23 @@ def test_ai_offer_keeps_the_review_queue():
     assert "Second := 'after_ai'" in offer and "NextHint" in offer and "Buttons(Answer(Job, 'ai_button'), 'Not now'" in offer
     back = pas[pas.index("Else If Second = 'after_ai' Then"):pas.index("Else If Second = 'log' Then")]
     assert "Second := 'queue'" in back and "Buttons('Done', 'Open review queue', False)" in back and "NextHint" in back
+
+
+def test_fill_counts_only_the_parts_the_a365_push_released():
+    """R-CL-3: Fill / Check BOM said "released to Altium 365" for every ready part, held ones too (altpub-03 fixed
+    only the single-part result)."""
+    menu, cfg = _setup()
+    ws, rel = AM._workspace(cfg), "uploads/altium-menu/parts.csv"
+    pub = {"target": "a365", "install": [], "problems": [], "held": {"P2": "held: fields: Description is empty"},
+           "actions": {"P1": "released", "P2": "skip"}, "released": 1, "workspace": "https://acme.365.altium.com"}
+    with mock.patch.object(AM, "publish", lambda *a, **k: pub):
+        r = AM._fill_result(cfg, ws, rel, {"parts": 2, "ready": 2, "held": 0, "awaiting_approval": 0,
+                                           "duplicates": 0}, AM.Progress())
+    assert "(1 released to Altium 365" in r["message"], r["message"]
+    rows = [r[f"row{i}"] for i in range(1, r["rows"] + 1)]
+    assert any(x.startswith("released to Altium 365|1") for x in rows), rows
+    assert any(x.startswith("P2|ready but not released") for x in rows), rows
+    assert r["status"] == "error", r
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

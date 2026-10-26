@@ -13,6 +13,8 @@ Rules, per plan item:
             findings are reported as warnings). Without a .kicad_mod the same three are checked on the PcbLib.
             Overlapping pads whose symbol pins share a name (USB-C A1/B12 = GND) are stacked on purpose: a warning.
             A PcbLib with no .Designator on the Top / Bottom Overlay (no reference on silk) is a warning.
+            A chip land (R_0402_1005Metric ...) of another size than the MPN encodes (RC0603FR-07: 0603,
+            stdparts.mpn_size) fails: the BOM's footprint and its part number name two sizes.
   height    a 3D height is present and inside the plausible range for the package family (HEIGHTS); a note to check
             (a warning) unless `[release] height = "hold"`, since a height never changes the circuit
   fields    Manufacturer, Manufacturer Part Number, a datasheet link and Description are filled in
@@ -40,7 +42,9 @@ HEIGHTS = [
     (r"(^|[_-])(1210|1812|2010|2512)(?!\d)", 0.4, 3.0), (r"^CP_EIA", 0.8, 3.5),
     (r"^SOT-223", 1.4, 1.95), (r"^SOT-23", 0.8, 1.45), (r"^SOT-89", 1.3, 1.7), (r"^SOT-?(323|363|353|563|666)", 0.45, 1.1),
     (r"^(D_)?SOD-?(123|323|523|923)", 0.4, 1.4), (r"^(D_)?(SMA|SMB|SMC)\b", 1.9, 2.7),
-    (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 0.75, 1.25), (r"^SSOP", 1.2, 2.05), (r"^(SOIC|SOP|SO-)", 1.2, 1.85),
+    (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 0.75, 1.25), (r"^SSOP", 1.2, 2.05), (r"^QSOP", 1.35, 1.75),
+    (r"^(SOIC|SOP|SO)-\d+W?_((?:[5-9]|1\d)(?:\.\d+)?x|L[\d.]+-W(?:[5-9]|1\d))|^SOIC-\d+W", 1.2, 3.1),   # body 5 mm+ wide (MS-013 2.65)
+    (r"^(SOIC|SOP|SO-)", 1.2, 1.85),
     (r"(QFN|DFN|[^S]SON|^SON|WSON|USON)", 0.3, 1.05), (r"^LQFP", 1.35, 1.7), (r"^TQFP", 1.0, 1.25), (r"QFP", 1.0, 4.1),
     (r"BGA", 0.4, 2.6), (r"^Crystal_SMD_(1612|2016|2520|3225|5032)", 0.35, 1.4), (r"^Crystal_SMD_HC49", 3.0, 5.0),
     (r"^USB_C_Receptacle", 2.0, 3.6), (r"^JST_SH", 1.8, 3.5), (r"^PinHeader_.*P1\.27mm", 2.0, 9.0),
@@ -52,11 +56,70 @@ REQUIRED = ["Manufacturer", "Manufacturer Part Number"]
 UNFIXABLE = ("files",)                         # rules --allow cannot override
 
 
+def chip_size_problem(item):
+    """R-BF-1: the built chip land's size vs the size the MPN encodes (stdparts.mpn_size) -> a message, or None.
+    The land is the one the footprint source names (standard / kicad / local: ...R_0402_1005Metric); a land read from
+    the part's own datasheet or EasyEDA page has no size in its name and is not compared."""
+    from . import stdparts as SP
+    par = {p.get("name"): p.get("value", "") for p in item.get("parameters") or [] if isinstance(p, dict)}
+    mpn = str(par.get("Manufacturer Part Number") or "")
+    kind, size = SP.mpn_size(mpn)
+    if not size:
+        return None
+    src = str((item.get("source") or {}).get("footprint") or "")
+    if src.split(":")[0] in ("datasheet", "easyeda"):     # the part's own land: a URL / an LCSC number, no size
+        return None
+    fp = item.get("footprint") or {}
+    names = [src.split(":")[-1]] if src else [str(fp.get("kicad") or ""), str(fp.get("ref") or "")]
+    for n in names:                   # any chip land name: R_0402_1005Metric, a local R0402 / CAP_0402 / RESC1005X40N
+        code = _land_size(n)
+        if code:
+            if code != size:
+                return (f"chip size: MPN {mpn} is a {size} {kind or 'part'} but the footprint is {n} ({code}): "
+                        "the BOM's footprint and its part number name two sizes; fix the BOM line")
+            return None
+    return None
+
+
+def _land_size(name):
+    """The imperial chip size a land name gives, or None. KiCad's IMP_METMetric names (C_2220_5650Metric,
+    L_1206_3216Metric_Pad1.22x1.90mm_HandSolder) name their imperial size first; KiCad's own metric codes are not
+    always the table's (5650 for 2220, 5664 for 2225) and a pad size can read as a body, so stdparts.chip_size answers
+    'conflict:...' for them. A conflict is no size read (R-FX17-2), never a size to compare."""
+    from . import stdparts as SP
+    m = re.match(r"[A-Za-z]+_(\d{4,5})_(\d{4,5})Metric(?![0-9A-Za-z])", name or "")
+    if m and m.group(1) in SP.IMPERIAL and SP.METRIC.get(m.group(2), m.group(1)) == m.group(1):
+        return m.group(1)
+    code = SP.chip_size(name, strict=True)                                                   # (R-B2-3)
+    return None if not code or "conflict:" in code else code
+
+
 def height_range(fp_name):
-    for rx, lo, hi in HEIGHTS:
-        if re.search(rx, fp_name or "", re.I):
-            return lo, hi, rx
-    return (*GENERIC_HEIGHT, None)
+    """(lo, hi, family regex or None) for a footprint name. A standard-table package's own height_max (the height its
+    body is built at) always sits inside the band: the family band is widened to it, never narrowed."""
+    lo, hi, fam = next(((lo, hi, rx) for rx, lo, hi in HEIGHTS if re.search(rx, fp_name or "", re.I)), (*GENERIC_HEIGHT, None))
+    std = _table_height(fp_name)
+    return (min(lo, std), max(hi, std), fam) if std else (lo, hi, fam)
+
+
+def _table_height(fp_name):
+    """The standard table's height_max (mm, the largest value) for a footprint name (`Lib:` prefix and a land variant
+    such as _ThermalVias allowed), or None."""
+    from . import stdparts as SP
+    from .footprint_gen import dim
+    name = str(fp_name or "").split(":")[-1]
+    try:
+        pk = SP.packages()
+    except (OSError, ValueError, KeyError):
+        return None
+    rec = pk.get(name) or pk.get(re.sub(r"_+$", "", SP.LAND_VARIANT.sub("", name).replace("__", "_")))
+    hm = (rec or {}).get("height_max")
+    if not hm:
+        return None
+    try:
+        return float(dim(hm)[2]) if isinstance(hm, dict) else float(hm)
+    except (TypeError, ValueError, KeyError, IndexError):
+        return None
 
 
 def _package_height(item, fp_name):
@@ -93,11 +156,12 @@ def _pad_rects(pads):
     out = []
     for r in pads:
         w, h = AL.to_mm(r["w"]), AL.to_mm(r["h"])
-        if round(r["rot"]) % 180 == 90:
+        rot = round(float(r["rot"] or 0), 1) % 180.0   # 89.99999 / 180.00001 from a double are 90 / 180, not odd
+        if abs(rot - 90.0) < 0.05:                     # angles: the overlap test below skipped such pads entirely
             w, h = h, w
         rad = min(w, h) / 2 * (1.0 if r["shape"] == AL.SHAPE["round"] else
                                 (r["corner"] or 0) / 100 if r["shape"] == AL.SHAPE["roundrect"] else 0.0)
-        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, r["rot"] % 90 != 0, rad))
+        out.append((r["designator"], AL.to_mm(r["x"]), AL.to_mm(r["y"]), w, h, min(rot % 90.0, 90.0 - rot % 90.0) > 0.05, rad))
     return out
 
 
@@ -135,6 +199,16 @@ def _pcblib_minimal(fp, pin_names=None, courtyard=AL.MECH15, pin1=None):
 
 def _has_pin1(nums, pin1=None):
     return bool(set(pin1 or ("1", "A1")) & set(nums))
+
+
+EMPTY_VALUE = re.compile(r"~|-+|\?+|n/?a|none|null|tbd|tba|tbc", re.I)
+
+
+def _filled(v):
+    """A required field holds a value: not blank and not a stand-in for none (KiCad's "~" for no datasheet, "N/A",
+    "TBD", "-"), which a BOM-only plan (`altium365 plan`) or a hand edit carries over as it is."""
+    v = str(v if v is not None else "").strip()
+    return bool(v) and not EMPTY_VALUE.fullmatch(v)
 
 
 _LCSC_FIELDS = {"lcsc", "lcsc part", "lcsc part number", "lcsc part #", "lcsc#", "jlcpcb part", "jlcpcb part #"}
@@ -204,6 +278,78 @@ def clear_doubts(entry, src, halves):
     return dropped
 
 
+NUMBERING_WARN = re.compile(r"numbering doubles back|is not the top-left pad")
+GENERATED_FP = ("datasheet:", "standard:")   # ecadlib's own generator (a datasheet read, pad table, standard family)
+
+
+def numbering_hold(text, src, pin_names):
+    """fpgen D1: footprint_check warns when pads are numbered out of KiCad's order (pin 1 top-left, counter-clockwise).
+    In a KiCad library footprint, a module, relay or power part that is legitimately numbered where the datasheet's pads
+    fall, so it stays a warning there. A footprint ecadlib generated (a package family, a datasheet's pads or pad table)
+    with one or two pairs of leads swapped (SOIC-8 pads 1 and 2) builds a part whose pins land on the wrong pads: held,
+    unless the swapped pins are interchangeable (the same pin name, as GND / GND, VDD_1 / VDD_2, or both not
+    connected), when the swap cannot change the circuit. -> the hold message, or None. Not checked: leads of mixed
+    sizes, 2-row zig-zag numbering, single rows (footprint_check.perimeter_order), and more than two pairs out of place
+    (numbered where they fall, not a swap)."""
+    if not str(src or "").startswith(GENERATED_FP) or not pin_names:
+        return None
+    po = FC.perimeter_order(text)
+    if not po or not po["misplaced"]:
+        return None                            # in order (perhaps turned round: the circuit is the same)
+    got = dict(po["misplaced"])
+    pairs = sorted({tuple(sorted((w, g), key=int)) for w, g in got.items() if got.get(g) == w}, key=lambda p: int(p[0]))
+    if len(pairs) * 2 != len(got) or len(pairs) > 2:
+        return None
+    from . import symbol_layout as SL
+
+    def key(n):
+        nm = pin_names.get(n)
+        if nm in (None, ""):
+            return ("pin", n)                  # no pin of that number: never interchangeable
+        return "NC" if SL.classify({"name": nm, "num": n}) == "nc" else SL.stack_key(nm)
+    bad = [(a, b) for a, b in pairs if key(a) != key(b)]
+    if not bad:
+        return None
+    return "; ".join(f"pads {a} and {b} are swapped (pin {a} {pin_names.get(a) or '?'} sits where pin {b} "
+                     f"{pin_names.get(b) or '?'} belongs, counting counter-clockwise from pin 1)" for a, b in bad) + \
+        ": the generated footprint would put these pins on the wrong pads; check the pad numbers on the datasheet drawing"
+
+
+EP_NET = re.compile(r"(?i)^(E?PAD|EP|EPAD|EXP(OSED)?[ _]?PAD|THERMAL([ _]?PAD)?|TAB|SLUG|DAP|PGND\d*|AGND\d*|DGND\d*|GND\w*|"
+                    r"VSS\w*|VEE|0V)$")
+
+
+# a symbol pin that is the exposed pad itself ('EP', 'PAD', 'Exposed Pad', 'EP (V-)', 'PowerPAD'), not a lead also
+# tied to it ('GND/EP' starts with its lead's name)
+EP_PIN = re.compile(r"(?i)^(EPAD\d*|EP\d*|PAD|EXP(OSED)?[ _]?PAD|THERMAL[ _]?PAD|POWER[ _]?PAD|SLUG|DAP)(\W.*)?$")   # not PAD1 (a touch pad)
+
+
+def ep_lead_holds(text, pin_names):
+    """R-CL-2: an exposed pad numbered as a lead it does not touch (footprint_check.ep_on_lead) joins the thermal pad to
+    that lead's net. A datasheet read told to number the pad pin_count + 1 does this on a part whose leads are numbered
+    past pin_count (cut leads). Fine when the lead's pin is the pad's net (GND, VSS, EP, PAD, thermal: the maker's
+    "EP = pin 4 GND"), held otherwise. Not for KiCad library lands (their numbering is curated). -> hold messages."""
+    from . import symbol_layout as SL
+    out = []
+    for n in FC.ep_on_lead(text):
+        nm = str(pin_names.get(n) or "")
+        # the symbol gives the pad a pin of its own (EP / PAD / Exposed Pad, another number): the pad is that pin's
+        # net, so a number shared with lead n is wrong whatever lead n is (a GND lead included)
+        own = [(str(k), str(v)) for k, v in pin_names.items()
+               if str(k) != str(n) and EP_PIN.match(SL.plain(str(v or "")).strip())]
+        if own:
+            out.append(f"the exposed pad is numbered {n}, the number of lead {n} ({nm or 'no pin'}), which it does not "
+                       f"touch, while the symbol gives the pad its own pin {own[0][0]} ({own[0][1]}): number the pad "
+                       f"{own[0][0]} as the datasheet does")
+            continue
+        if nm and (EP_NET.match(SL.plain(nm).strip()) or SL.classify({"name": nm, "num": n}) in ("ground", "ep")):
+            continue
+        out.append(f"the exposed pad is numbered {n}, the number of lead {n} ({nm or 'no pin'}), which it does not "
+                   f"touch: the thermal pad would join that pin's net. Check the pad number on the datasheet (give the "
+                   f"exposed pad its own number, or the GND pin's it is tied to)")
+    return out
+
+
 def check_item(item, base=".", rules=None):
     """-> (failures [(rule, message)], warnings [str], info {height, ...}). rules (ecadlib.rules): required fields,
     accepted pin-1 names and the courtyard layer; None = ecadlib's own."""
@@ -256,6 +402,10 @@ def check_item(item, base=".", rules=None):
         pads = [r for r in fps[0]["records"] if r["type"] == "pad"]
         if not pins:
             add("pins", "symbol has no pins")
+        from . import symbol_layout as SL          # pin 7 = SDA and WP: two nets on one pad (R-SY-3)
+        for msg in SL.shared_numbers([{"num": r["num"], "name": r.get("name", "")} for s in syms for r in s["records"]
+                                      if r.get("RECORD") == "2"]):
+            add("pins", msg)
         if not pads:
             add("pins", "footprint has no pads")
         grid = FC.mount_rx([p["designator"] for p in pads]) is FC.MOUNT_GRID     # BGA: H1, H2 .. are balls, not holes
@@ -268,6 +418,18 @@ def check_item(item, base=".", rules=None):
             add("pins", f"pads without a symbol pin: {FC._ranges(numbered - pins)}")
         if mech - {""}:
             warns.append(f"mechanical pads without a pin (allowed): {FC._ranges(mech - {''})}")
+        # an unnumbered copper pad of ecadlib's own build (a pad table's row with no number: TI prints the PowerPAD
+        # as '-') is on no net: a thermal pad left off GND. Held unless the pad table named it a mounting pad
+        # (role mount, recorded by the librarian as footprint.mount_pads); the KiCad library's are curated (R-SY-2)
+        bare = [p for p in pads if not p["designator"] and not (p["hole"] and not p["plated"])]
+        if bare and str((item.get("source") or {}).get("footprint") or "").startswith(GENERATED_FP):
+            try:
+                ok = int(item["footprint"].get("mount_pads") or 0)
+            except (TypeError, ValueError):
+                ok = 0
+            if len(bare) > ok:
+                add("pins", f"{len(bare) - ok} unnumbered copper pad(s) on no net (a thermal / exposed pad needs its "
+                            f"pin's number; a mounting pad role mount in the pad table)")
         links = {r["MODELNAME"] for s in syms for r in s["records"] if r.get("RECORD") == "45" and r.get("MODELNAME")
                  and str(r.get("MODELTYPE") or "PCBLIB").upper() == "PCBLIB"}
         names = {fp["name"] for fp in fps} | ({AL.lib_name(item["footprint"]["ref"])} if item["footprint"].get("ref") else set())
@@ -297,7 +459,16 @@ def check_item(item, base=".", rules=None):
         except Exception as e:                 # checker crash: fall back to the PcbLib minimum below
             issues, nums, kmod = [], set(), None
             warns.append(f"footprint_check failed on {info.pop('kicad_mod')} ({type(e).__name__}: {e})")
+        numbering = numbering_hold(text, src, pin_names) if text is not None and syms and any(
+            r == "pin1" and NUMBERING_WARN.search(m) for _, r, m in issues) else None
+        if numbering:                          # a swapped pair the generator / pad table numbered: held (fpgen D1)
+            add("footprint", f"pin1: {numbering}")
+        if text is not None and syms and not src.startswith(("kicad:", "local:")):
+            for msg in ep_lead_holds(text, pin_names):     # R-CL-2: the thermal pad on a signal lead's number
+                add("footprint", f"pin1: {msg}")
         for lvl, rule, msg in issues:
+            if numbering and rule == "pin1" and NUMBERING_WARN.search(msg):
+                continue                       # said by the hold above
             if rule == "pin1" and msg == "no pad numbered 1" and _has_pin1(nums, pin1):
                 continue                       # A1 counts as pin 1 (connectors, BGAs)
             if rule == "copper" and "overlap" in msg and _same_net(msg, pin_names):
@@ -324,6 +495,9 @@ def check_item(item, base=".", rules=None):
             add("footprint", m)
         warns += [f"{m} (same pin name: stacked on purpose)" for m in mw]
         warns.append("no .kicad_mod: only overlap, courtyard and pin 1 checked (on the PcbLib)")
+    chip = chip_size_problem(item)
+    if chip:
+        add("footprint", chip)
     if fps:                                    # silkscreen text as Altium shows it: size, over pads, over the body
         for lvl, msg in FR.pcblib_text_issues(fps[0]):
             hard = lvl == "error" and not kicad_lib
@@ -375,7 +549,7 @@ def check_item(item, base=".", rules=None):
     par = {p["name"]: p.get("value", "") for p in item["parameters"]}
     for k in rules["parameters"]["required"]:         # default: REQUIRED, then the datasheet link and Description
         if k == "Datasheet":
-            if not any(str(par.get(x, "")).strip() for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):
+            if not any(_filled(par.get(x)) for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):
                 add("fields", "no datasheet link")
         elif k == "Description":
             if not str(item.get("description") or "").strip():
@@ -383,29 +557,60 @@ def check_item(item, base=".", rules=None):
             elif str((item.get("field_sources") or {}).get("Description", "")).startswith("written by ecadlib"):
                 warns.append(f"Description \"{item['description']}\" was written by ecadlib from the category and "
                              "package (no source had one): check it")
-        elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip() and not _supplier_number(par, k, rules):
+        elif not _filled(par.get(RU.canonical_param(k, rules), par.get(k, ""))) and not _supplier_number(par, k, rules):
             add("fields", f"{k} is empty")
     for v in doubts(item):
         add("verify", v)
     for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
         add("fields", v)
+    for v in item.get("bom_holds") or []:             # altium365.plan: BOM lines of this part that disagree on what is
+        add("verify", v)                              # built (two footprints, two values): a person fixes the BOM
     return fails, warns, info
 
 
-def publish_problems(item, base=".", rules=None):
+PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what its workspace released (no datasheet here)
+
+
+def publish_problems(item, base=".", rules=None, writes_files=False, policy=None):
     """Why a publisher (altium365 push, dblib-sync / altium-pkg, kicad-export) must not send this part's files: the
     release check run again now, on the files as they are, less the failures the item's --allow covers. [] = it may
     go. A plan's `status` alone is never enough: `altium365 plan --models`, a triage plan or a hand edit can say
     `ready` for a part nothing checked, and a file can change after its check. rules: loaded (RU.resolve) once by
-    the caller. Parts `ecadlib a365 pull` brought in (already released there) are not checked, as in apply."""
-    if item.get("a365") and item.get("status") in ("existing", "deleted_in_workspace"):
-        return []
+    the caller. Parts `ecadlib a365 pull` brought in (already released there) are not checked by the Altium 365 push,
+    as in apply: it sends them no files. writes_files=True (kicad-export, kicad-dblib, export-parts: routes that put
+    the part's own files in a library) checks them too: their files must be there and pass every check that applies.
+    The field rules (PULLED_NOT_CHECKED: datasheet link, Description, required parameters) do not: the workspace
+    released those fields and ecadlib holds no datasheet for the part."""
+    st = item.get("status", "ready")
+    if item.get("a365") and st == "deleted_in_workspace":
+        return ["status: deleted in the Altium 365 workspace: not published again"]
+    if item.get("a365") and st == "existing":
+        if not writes_files:
+            return []
+        fails, _, _ = check_item(item, base, rules)
+        return [f"{r}: {m}" for r, m in fails if r not in PULLED_NOT_CHECKED]
+    if st not in PUBLISHABLE:                  # a status no writer gives a releasable part ('draft', 'Ready', 'duplicate')
+        if st == "duplicate":
+            return [f"duplicate of {item.get('duplicate_of') or '?'} (dedupe)"]
+        return [f"status: {st!r} is not ready: run ecadlib release-check on the plan"]
     fails, _, _ = check_item(item, base, rules)
     covered = set((item.get("allow") or {}).get("failures", []))
-    return [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
+    out = [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
+    from .approvals import load_policy, policy_file, push_block   # sign-off, checked again on the files as they
+    if policy is None:                         # are now, for every route (kicad-export, dblib-sync, ...), not only the
+        try:                                   # Altium 365 push. policy: the caller's explicit policy ({} = none), as
+            policy = load_policy(base)         # push_block; None = the policy in force now (approvals.json beside the
+        except Exception as e:                 # plan, else [release.approvals]), as the Altium 365 push loads it: one
+            where = policy_file(base) or "ecadlib.toml [release.approvals]"   # added after the release check
+            return out + [f"sign-off: the approval policy {where} cannot be read ({e}): fix it, then publish again"]
+    block = push_block(item, policy, base)     # holds here too. No policy now: the release check's snapshot decides
+    return out + ([f"sign-off: {block}"] if block else [])
 
 
-CHANGE_HOLD = "change control:"              # a held change no release check or --allow clears (`ecadlib part approve`)
+PUBLISHABLE = ("ready", "existing")           # change_gate.RELEASED_STATUSES: what a publisher may send (re-checked)
+
+
+CHANGE_HOLD = "change control:"            # a held change no release check or --allow clears (`ecadlib part approve`)
 
 
 def change_hold(it, base=".", ledger=None):

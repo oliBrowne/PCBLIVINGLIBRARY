@@ -28,6 +28,8 @@ EXAMPLES = {
     "pins.no_pads": "pins: footprint has no pads",
     "pins.pin_without_pad": "pins: symbol pins without a pad: 5-8",
     "pins.pad_without_pin": "pins: pads without a symbol pin: 9",
+    "pins.shared_number": "pins: pin number 7 is used by 2 different signals: WP, SDA",
+    "pins.unnumbered_pad": "pins: 1 unnumbered copper pad(s) on no net (a thermal / exposed pad needs its pin's number; a mounting pad role mount in the pad table)",
     "padtable.no_pin1": "files: datasheet pad table: no pad numbered 1 (or A1) - pads named G, R1, S1, T1",
     "padtable.overlap": "files: datasheet pad table: pads 27 (pads[30]) and 28 (pads[34]) overlap: check their x/y (list same-net pads in same_net)",
     "padtable.duplicate": "files: datasheet pad table: pad 17 is listed twice at the same place",
@@ -46,6 +48,7 @@ EXAMPLES = {
     "footprint.courtyard_small": "footprint: courtyard: courtyard does not enclose every pad and the body outline",
     "footprint.pad_outside": "footprint: courtyard: pad 7 sticks out of the courtyard outline",
     "footprint.courtyard_open": "footprint: courtyard: courtyard is not a closed outline",
+    "footprint.not_a_number": "footprint: geometry: pad 3 has a position or size that is not a number (nan / inf)",
     "footprint.other": "footprint: fab: something new",
     "height.missing": "height: no 3D height (no 3D body and no HEIGHT)",
     "height.out_of_range": "height: 3D height 2.10 mm outside 0.8-1.45 mm for ^SOT-23",
@@ -89,10 +92,16 @@ EXAMPLES = {
     "datasheet.tab_cut_lead": "tab: the datasheet numbers the tab 4, and lead 2 is cut (N.C.); the land numbers the tab 2, "
                               "so it was numbered 4 (check the pin table)",
     "datasheet.tab_cut_pin": "symbol: pin 2 (N.C., the cut lead) left out: it has no lead and no pad",
+    "symbol.unknown_pin_type": "symbol: pin type not known, drawn passive: pin 3 'analog'",
     "datasheet.failed": "datasheet reader: failed (HTTP 500)",
     "librarian.lcsc_mismatch": "LCSC C123 is BSS84, not BSS138: fix the BOM's LCSC number",
     "librarian.footprint_guess": "footprint SOT-23 chosen by name: compare with the datasheet land pattern",
     "librarian.symbol_match": "symbol Q_NMOS_GSD matched by the BOM's value",
+    "librarian.bom_vs_symbol_footprint": "footprint: the BOM names QFN-48-1EP_7x7mm but the symbol's Footprint property is "
+                                         "LQFP-48_7x7mm: check which package the part has",
+    "librarian.variant_alternate": "variant alternate part MCP6002T-I/MS: footprint SOIC-8_3.9x4.9mm is the base part's (an "
+                                   "Altium variant names no footprint for its alternate): check MCP6002T-I/MS comes in "
+                                   "that package, or give the alternate its own footprint",
     "librarian.easyeda": "EasyEDA C8734 conversion: check pads and pins against the datasheet (native converter, format assumed)",
     "librarian.family_pinout": "symbol pinout AMS1117 from the AMS1117-3.3 family table (ecadlib.stdparts): check pins 1-3 against the datasheet",
     "librarian.value_two_ways": "verify: value 4,700pF reads two ways: 4.7pF or 4700pF; write it without the comma",
@@ -304,7 +313,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 14, "datasheet.py": 7,
+    "librarian.py": 19, "datasheet.py": 7,
 }
 
 

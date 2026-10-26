@@ -228,9 +228,9 @@ def nexar_info(part, provider, currency):
                 if q is None:
                     continue
                 native = str(pp.get("currency") or "").upper() == currency.upper()
-                price = pp.get("price") if native else pp.get("convertedPrice")
-                if price is not None and (q not in byq or native):
-                    byq[q] = float(price)
+                price = money(pp.get("price") if native else pp.get("convertedPrice"))   # 'N/A' is no price, not
+                if price is not None and (q not in byq or native):                     # a lost part
+                    byq[q] = price
             info.offers.append(Offer(provider, name, o.get("sku") or "", _int(o.get("inventoryLevel")),
                                      _int(o.get("moq")) or 1, _int(o.get("orderMultiple")) or 1, sorted(byq.items()),
                                      currency.upper(), _int(o.get("factoryLeadDays")) or info.lead_days,
@@ -303,7 +303,8 @@ def digikey_info(prod, provider, currency):
     desc = prod.get("Description")
     desc = (desc.get("ProductDescription") or desc.get("DetailedDescription") or "") if isinstance(desc, dict) else str(desc or "")
     m = prod.get("Manufacturer")
-    words = [(prod.get("ProductStatus") or {}).get("Status") or ""] + (["End of Life"] if prod.get("EndOfLife") else []) \
+    st = prod.get("ProductStatus")
+    words = [str((st.get("Status") if isinstance(st, dict) else st) or "")] +(["End of Life"] if prod.get("EndOfLife") else []) \
         + (["Discontinued at Digi-Key"] if prod.get("Discontinued") else [])
     known = [s for s in map(L.normalise, [w for w in words if w]) if s != "unknown"]
     lead = _int(prod.get("ManufacturerLeadWeeks"))
@@ -316,6 +317,8 @@ def digikey_info(prod, provider, currency):
     info.specs = specs_from_pairs([(x.get("ParameterText"), x.get("ValueText")) for x in prod.get("Parameters") or []
                                    if isinstance(x, dict)])
     for v in prod.get("ProductVariations") or []:
+        if not isinstance(v, dict):                # an offer of an odd shape is no offer, not a lost part
+            continue
         pkg = (v.get("PackageType") or {}).get("Name") or ""
         if "digi-reel" in pkg.lower():
             continue
@@ -323,8 +326,8 @@ def digikey_info(prod, provider, currency):
                                  _int(v.get("QuantityAvailableforPackageType")) if v.get("QuantityAvailableforPackageType") is not None
                                  else _int(prod.get("QuantityAvailable")),
                                  _int(v.get("MinimumOrderQuantity")) or 1, 1,
-                                 sorted((_int(b.get("BreakQuantity")), float(b["UnitPrice"])) for b in v.get("StandardPricing") or []
-                                        if isinstance(b, dict) and b.get("UnitPrice") is not None and _int(b.get("BreakQuantity"))),
+                                 sorted((_int(b.get("BreakQuantity")), money(b.get("UnitPrice"))) for b in v.get("StandardPricing") or []
+                                        if isinstance(b, dict) and money(b.get("UnitPrice")) is not None and _int(b.get("BreakQuantity"))),
                                  str(currency).upper(), info.lead_days, pkg, info.url, True))
     return info
 

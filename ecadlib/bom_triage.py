@@ -12,7 +12,7 @@ import pandas as pd
 from . import providers as P, sheetsafe as SS
 from .fsutil import report_file
 from .httpcache import CachedHTTP
-from .kicad_index import KiCadIndex, package_of, parse_value, two_readings
+from .kicad_index import KiCadIndex, norm_mpn, package_of, parse_value, two_readings
 
 FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctuation -> space)
     "mpn": ["mpn", "manufacturer part number", "mfr part number", "mfr part", "mfg part number", "mfr pn",
@@ -47,6 +47,121 @@ def _hnorm(h):
 
 HIDDEN_HEADER = "<hidden>"     # a column the workbook hides, in a CSV copy of it (dedupe --bom): map_headers skips a header
                                # with '<' and the other header rules match whole headers, so it is never read as live
+
+
+METRIC_HEADER = re.compile(r"\b(mm|metric|millimet(er|re)s?)\b")   # on a normalised header: 'Case Code (mm)'
+IMPERIAL_HEADER = re.compile(r"\b(imperial|imp|inch|inches|in|eia|mil|mils|us|ansi)\b")   # 'Case (Metric / Imp.)'
+
+
+def metric_header(nh):
+    """A normalised header that says its case codes are metric ('Case Code (mm)'), not one naming both systems ('Case
+    (Imperial/Metric)', 'Case (Metric / Imp.)', 'Size inch / mm'), whose bare 0603 is as likely the inch code."""
+    return bool(METRIC_HEADER.search(nh)) and not IMPERIAL_HEADER.search(_in_mm(nh))
+
+
+def mixed_header(nh):
+    """A normalised header naming both systems ('Case (Metric / Imp.)', 'Package (Imp/Metric)', 'Footprint (Inch/MM)'):
+    a bare size code under it may be either."""
+    return bool(METRIC_HEADER.search(nh)) and bool(IMPERIAL_HEADER.search(_in_mm(nh)))
+
+
+def _in_mm(nh):
+    """'size in mm': that 'in' is a preposition, not inches."""
+    return re.sub(r"\bin (?=mm\b|metric\b|millimet)", "", nh)
+
+
+def _size_code(cell):
+    m = re.fullmatch(r"\s*(\d{4,5})\s*", str(cell))
+    return m.group(1) if m else ""
+
+
+_UNIT_WORDS = re.compile(r"\b(?:metric|imperial|imp|inch(?:es)?|in|mm|mil|eia|us)\b\.?", re.I)
+
+
+def _pair_size(cell, header):
+    """A cell holding two chip size codes and nothing else ('0603/0201', '0603 (1608)', '0201 (0603 metric)') -> the
+    (footprint text, [note]) it stands for, or None when the cell is not two codes. The codes must be one size in
+    both systems (METRIC_TO_IMPERIAL[a] == b, either order): then it is the inch one, whatever the header says (the
+    first code is not always the header's first system). Two codes that are no such pair are not used: held."""
+    from .kicad_index import METRIC_TO_IMPERIAL
+    bare = _UNIT_WORDS.sub(" ", str(cell))
+    m = re.fullmatch(r"[\s(]*(\d{4,5})[\s)]*[/,;|(\s-]+[\s(]*(\d{4,5})[\s)]*", bare)
+    if not m:
+        return None
+    a, b = m.groups()
+    if a == b:                                        # one code written twice: not two (_one_code reads it)
+        return None
+    if METRIC_TO_IMPERIAL.get(a) == b:
+        return b, []
+    if METRIC_TO_IMPERIAL.get(b) == a:
+        return a, []
+    return "", [f"footprint '{cell}' from the column '{header}' holds two size codes that are not one size in metric "
+                "and inch: not used (give the inch size, or the footprint name)"]
+
+
+def _one_code(cell):
+    """'0603 0603', '0805/0805', '1608 (1608)': one size code written twice -> that code, read as a single code is in
+    its column; any other cell unchanged."""
+    m = re.fullmatch(r"[\s(]*(\d{4,5})[\s)]*[/,;|(\s-]+[\s(]*(\d{4,5})[\s)]*", str(cell))
+    return m.group(1) if m and m.group(1) == m.group(2) else cell
+
+
+def metric_size(cell, header):
+    """A footprint cell from a millimetre column ('Case Code (mm)') -> (footprint text, [note]). A bare chip size code
+    is metric there: '1608' -> '0603', '0603' -> '0201' (read as an inch code it was the wrong part). A bare code
+    that is no metric chip size ('1206') cannot be told apart, so it is not used: the part is held for its footprint
+    rather than built on a guess. Anything else ('SOT-23-5', 'R_0603_1608Metric') is kept."""
+    from .kicad_index import METRIC_TO_IMPERIAL
+    cell = _one_code(cell)
+    pair = _pair_size(cell, header)
+    if pair is not None:
+        return pair
+    m = re.fullmatch(r"\s*(\d{4})\s*(?:mm)?\s*", str(cell))
+    if not m:
+        return cell, []
+    if m.group(1) in METRIC_TO_IMPERIAL:
+        return METRIC_TO_IMPERIAL[m.group(1)], []
+    return "", [f"footprint '{cell}' from the millimetre column '{header}' is no metric chip size: not used "
+                "(give the inch size, e.g. 0603, or the footprint name)"]
+
+
+def _inch_only_codes(df, j):
+    """The bare size codes in column j that are inch sizes and no metric one ('1206', '0805'), sorted: in a column
+    labelled mm they say the column is not (only) metric, so its 0603 / 0402 cannot be read as metric."""
+    from .kicad_index import METRIC_TO_IMPERIAL
+    inch = set(METRIC_TO_IMPERIAL.values()) - set(METRIC_TO_IMPERIAL)
+    found = set()
+    for _, row in df.iterrows():
+        if j < len(row):
+            m = re.fullmatch(r"\s*(\d{4,5})\s*(?:mm)?\s*", str(row.iloc[j]))
+            if m and m.group(1) in inch:
+                found.add(m.group(1))
+    return sorted(found)
+
+
+def mixed_size(cell, header):
+    """A footprint cell from a column naming both systems ('Case (Metric / Imp.)') -> (footprint text, [note]). A code
+    that is a size in one system only is read in that one ('1608' is the metric 0603, '0805' an inch 0805); one that
+    is a size in both ('0603': an inch 0603 or the metric code of an 0201; '0402') cannot be told apart, so it is not
+    used and the part is held for its footprint rather than built on a guess. Anything else is kept."""
+    from .kicad_index import METRIC_TO_IMPERIAL
+    cell = _one_code(cell)
+    if re.fullmatch(r"\s*\d{4}\s*mm\s*", str(cell)):                # '1608 mm', '0603mm': the cell says metric
+        return metric_size(cell, header)
+    pair = _pair_size(cell, header)                               # '0603/0201', '0603 (1608)': the inch one of a pair
+    if pair is not None:
+        return pair
+    code = _size_code(cell)
+    if not code:
+        return cell, []
+    imperial = set(METRIC_TO_IMPERIAL.values())
+    if code in METRIC_TO_IMPERIAL and code in imperial:
+        return "", [f"footprint '{cell}' from the column '{header}' (metric and inch) is an inch {code} or the metric "
+                    f"code of an {METRIC_TO_IMPERIAL[code]}: not used (write 0603/1608 style, the inch size in an inch "
+                    "column, or the footprint name)"]
+    if code in METRIC_TO_IMPERIAL:
+        return METRIC_TO_IMPERIAL[code], []
+    return cell, []
 
 
 def map_headers(headers, threshold=0.72):
@@ -92,6 +207,9 @@ def map_headers(headers, threshold=0.72):
                 best *= 0.5                                              # 'Internal PN' is a house number
             if f == "footprint" and re.search(r"\b(qty|quantity|count|pcs|size|weight)\b", nh):
                 best *= 0.5                                              # 'Package Qty' is a reel size
+            if f == "footprint" and (metric_header(nh) or mixed_header(nh)):
+                best *= 0.95                                             # 'Case Code (mm)' 0603 is an 0201: the
+                                                                         # inch column wins when both are there
             if f != "lcsc" and re.search(r"\b(lcsc|jlc|jlcpcb)\b", nh):
                 best *= 0.5                                              # 'LCSC Part Number' is not the MPN
             if f == "lcsc" and not re.search(r"\b(lcsc|jlc|jlcpcb)", nh):
@@ -326,7 +444,10 @@ def read_bom(path, columns=None, rules=None, root=None):
     hwidth = max(widths[hdr_row:hdr_row + (2 if two else 1)]) if widths else 0   # the header row's own cells: Excel
                                                                   # saves an unnamed notes column as 'Footprint,'
     suppliers = _supplier_pairs(headers)
-    nxt = _column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
+    metric_fp = "footprint" in col and metric_header(_hnorm(headers[col["footprint"]]))
+    mixed_fp = "footprint" in col and mixed_header(_hnorm(headers[col["footprint"]]))   # 'Case (Metric / Imp.)'
+    mm_inch = metric_fp and _inch_only_codes(df, col["footprint"])   # a 'Package (mm)' column holding 1206 / 0805
+    nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
                                                                   # after Value holds in the rows that fit the header
     lines, skipped = [], 0
     for idx, row in df.iterrows():
@@ -336,7 +457,9 @@ def read_bom(path, columns=None, rules=None, root=None):
         if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
-                    and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?[A-Za-zΩ%]*", cells[vj + 1])
+                    and (re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's
+                         # own unit: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8);
+                         or _rated_value(cells[vj], cells[vj + 1]))     # a zener's '3,3V', a fuse's '1,5A' (R-FX10-4)
                     and _fraction_fits(cells, vj, col, nxt)):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
                 note.append(f"value {cells[vj]} was split by an unquoted {'' if two_readings(cells[vj]) else 'decimal '}"
@@ -359,11 +482,30 @@ def read_bom(path, columns=None, rules=None, root=None):
         for f in ("mpn", "lcsc"):
             if d.get(f):
                 d[f] = clean_part_number(d[f])
+        if d.get("footprint"):                                   # '0603 0603': the one code
+            d["footprint"] = _one_code(d["footprint"])
+        if metric_fp and mm_inch and _size_code(d.get("footprint", "")) in ("0402", "0603"):
+            note.append(f"footprint '{d['footprint']}' from the column '{headers[col['footprint']]}': the column mixes "
+                        f"inch and mm codes ({', '.join(mm_inch)} is no metric size), so {d['footprint']} may be an "
+                        "inch or a metric code: not used (give the inch size in an inch column, or the footprint name)")
+            d["footprint"] = ""
+        elif metric_fp and d.get("footprint"):                   # 'Case Code (mm)': 1608 is an 0603, 0603 an 0201
+            d["footprint"], extra = metric_size(d["footprint"], headers[col["footprint"]])
+            note += extra
+        elif mixed_fp and d.get("footprint"):                    # an 0603 there is an 0603 or an 0201: held
+            d["footprint"], extra = mixed_size(d["footprint"], headers[col["footprint"]])
+            note += extra
+        elif d.get("footprint") and _pair_size(d["footprint"], "") is not None:   # '0603/0201' in any column
+            d["footprint"], extra = _pair_size(d["footprint"], headers[col["footprint"]])
+            note += extra
         if not any(d.values()):
             continue
         if shifted:
             for f in ("mpn", "footprint", "lcsc", "manufacturer", "libref", "datasheet"):
                 d.pop(f, None)
+            d["bom_hold"] = (f"row {idx + 1} has {n} cells but the header has {hlen} (an unquoted comma?): its cells "   # R-BF-7: the
+                             "after the comma are in the wrong columns; quote the cell or fix the row")  # value / description
+                                                              # left are shifted too: held, never built from them
         if all(_norm(cells[j]) == _norm(headers[j]) for j in col.values()):
             continue                                              # the header again (BOMs pasted together, page breaks)
         if suppliers and not d.get("lcsc"):                       # Altium: Supplier 1 = LCSC, Supplier Part Number 1
@@ -394,7 +536,7 @@ def read_bom(path, columns=None, rules=None, root=None):
         q = re.fullmatch(r"(\d+),000", d.get("qty", "")) if decimal_comma else None
         if q and count_refs(d.get("designator", "")) == int(q.group(1)):   # a ';' (decimal-comma) CSV: '1,000' on one
             d["qty"] = q.group(1)                                        # designator is 1,000 = 1 piece
-        if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp", "fitted", "bom_note")):
+        if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp", "fitted", "bom_note", "bom_hold")):
             continue                                                     # 'Total;;;12' footer / a bare sum, not a part
         if _not_a_part(d):                                               # 'Resistors' heading, 'Notes: ...' row
             skipped += 1
@@ -433,6 +575,14 @@ def _column_shapes(df, j, hlen):
     if j >= df.shape[1]:
         return set()
     return {_shape(r[j]) for r in df.to_numpy() if not any(str(c).strip() for c in r[hlen:])}
+
+
+def _rated_value(whole, frac):
+    """'3' | '3V', '0' | '25W': a value in volts, amps or watts split at its decimal comma (a zener's 3,3V, a fuse's
+    1,5A, a resistor's 0,5W), not a whole value then a rating column ('100' | '50V', '10' | '16V', '1' | '16V'): one
+    digit before the comma and one after it, or 0 before it (0,25W, 0,125W)."""
+    return bool(re.fullmatch(r"\d", whole) and re.fullmatch(r"\d\s*[mkK]?[VvAW]", frac) or
+                whole == "0" and re.fullmatch(r"\d{1,3}\s*[mkK]?[VvAW]", frac))
 
 
 def _fraction_fits(cells, vj, col, shapes=()):
@@ -489,7 +639,7 @@ def _same_classes(new, prev):
 def _not_a_part(d):
     """A section heading ('Resistors') or a note row ('Notes: all parts RoHS'): one cell, no designator digits, no
     part number shape."""
-    filled = [(f, v) for f, v in d.items() if v and f not in ("dnp", "fitted", "bom_note")]
+    filled = [(f, v) for f, v in d.items() if v and f not in ("dnp", "fitted", "bom_note", "bom_hold")]
     if len(filled) != 1:
         return False
     f, v = filled[0]
@@ -519,6 +669,44 @@ def _two_row_header(top, sub, columns=None):
     return out if score(out) > score(list(top)) else None
 
 
+def _fill_merged(df, full, kept, spans, h, columns=None):
+    """Cells merged down over data rows (one column, several rows: a part's value / maker / MPN over the rows of its
+    designators) hold their text in the top cell only: it is copied into the rows below, in df and full alike. Not in
+    the Qty column nor into the rows under a merged Qty (a merged count is the group's: its rows continue one
+    designator list, which read_bom joins), not in the designator column,
+    never for a merge across columns (a Description over the MPN column is no part number), and not above or in the
+    header row h. kept: the sheet row (0 = row 1) of each frame row. Returns the number of cells filled."""
+    pos = {r: k for k, r in enumerate(kept)}
+    head = [str(x).strip() for x in df.iloc[h]]
+    fmap = apply_columns(map_headers(head), head, columns)
+    skip = {head.index(fmap[f]) for f in ("qty", "designator") if f in fmap}
+    qj = head.index(fmap["qty"]) if "qty" in fmap else None
+    grouped = {r for r0, c0, r1, c1 in spans if c0 == qj == c1 for r in range(r0 + 1, r1 + 1)}   # rows under a
+    n = 0                                                        # merged Qty: one line's designators, joined by read_bom
+    dj = head.index(fmap["designator"]) if "designator" in fmap else None
+    if qj is not None and dj is not None:      # Qty only in the top row and more parts than its designators: the rows
+        for r0, c0, r1, c1 in spans:           # below with no Qty continue its designator list (read_bom joins them)
+            if c0 != c1 or r1 <= r0 or r0 not in pos:
+                continue
+            q = re.match(r"\s*(\d+)", str(df.iat[pos[r0], qj]))
+            if q and count_refs(str(df.iat[pos[r0], dj])) < int(q.group(1)):
+                grouped |= {r for r in range(r0 + 1, r1 + 1) if r in pos and not str(df.iat[pos[r], qj]).strip()}
+    for r0, c0, r1, c1 in spans:
+        if c0 != c1 or r1 <= r0 or r0 not in pos or pos[r0] <= h or c0 in skip or c0 >= df.shape[1]:
+            continue
+        v, vf = df.iat[pos[r0], c0], full.iat[pos[r0], c0]
+        for r in range(r0 + 1, r1 + 1):
+            k = pos.get(r)
+            if k is None or r in grouped:
+                continue
+            if str(v).strip() and not str(df.iat[k, c0]).strip():
+                df.iat[k, c0] = v
+                n += 1
+            if str(vf).strip() and not str(full.iat[k, c0]).strip():
+                full.iat[k, c0] = vf
+    return n
+
+
 def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
     """[(sheet name, frame, uncached formula cells)] -> the BOM frame. Hidden sheets and hidden columns are left out (an old BOM kept hidden);
     blank rows are dropped (title blocks); the sheet with the best header wins, then the one with more rows; sheets
@@ -530,12 +718,17 @@ def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
         hidden = _BI().xlsx_hidden(p)
     except Exception:                                    # not an .xlsx zip (old .xls): nothing is known to be hidden
         hidden = {}
+    try:
+        merged = _BI().xlsx_merged(p)
+    except Exception:                                    # as for hidden: nothing is known to be merged
+        merged = {}
     frames = []
     unc = {}
     for name, df, u in sheets:
         unc[name] = u
         if name in hidden and hidden[name] is None:
             continue
+        sparse = bool(df.attrs.get("sparse"))            # its rows are not the sheet's rows
         df = df.copy()
         pos = {c: k for k, c in enumerate(df.columns)}  # sheet column (0 = A) -> frame column: a sparse frame leaves
         hid = {pos[j] for j in hidden.get(name) or () if j in pos}   # out empty ones
@@ -545,13 +738,16 @@ def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
             df.iloc[:, j] = ""
         df = df.fillna("")
         rows = df.astype(str).apply(lambda c: c.str.strip()).ne("").any(axis=1)
-        frames.append((name, df[rows].reset_index(drop=True), full[rows].reset_index(drop=True), hid))
+        kept = [] if sparse else [int(r) for r in df.index[rows]]   # frame row -> sheet row (0 = row 1)
+        frames.append((name, df[rows].reset_index(drop=True), full[rows].reset_index(drop=True), hid, kept))
     if not frames:
         return pd.DataFrame()
-    info = []
-    for name, df, full, hid in frames:
-        score = _header_score(df, columns)
+    info, filled = [], {}
+    for name, df, full, hid, kept in frames:
         h = header_row(df, columns) if len(df) else 0
+        if kept and merged.get(name):
+            filled[name] = _fill_merged(df, full, kept, merged[name], h, columns)
+        score = _header_score(df, columns)
         head = tuple(_norm(x) for x in df.iloc[h]) if len(df) else ()
         info.append((score, len(df) - h - 1, name, full if keep_hidden else df, h, head, hid))
     best = max(info, key=lambda t: (t[0], t[1]))
@@ -568,6 +764,10 @@ def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
     if other:
         print(f"  note: {Path(p).name}: read sheet {best[2]!r}; sheet(s) {', '.join(map(repr, other))} also look like "
               "a BOM and were not read", file=sys.stderr)
+    n = sum(filled.get(t[2], 0) for t in [best] + same)
+    if n:
+        print(f"  note: {Path(p).name}: {n} cell(s) merged down over several rows were read into each of those rows "
+              "(one part on several rows)", file=sys.stderr)
     if keep_hidden:
         out.attrs["hidden_cols"] = sorted(set().union(*(t[6] for t in [best] + same)))
     return out
@@ -699,8 +899,10 @@ def _sparse_frames(p):
         cells = {k: _xl_text(c.value).strip() for k, c in getattr(ws, "_cells", {}).items() if c.value is not None}
         cells = {k: v for k, v in cells.items() if v}
         rows, cols = _compact(cells, f"{p}: sheet {ws.title!r}") if cells else ([], [])
-        out.append((ws.title, pd.DataFrame(rows, columns=cols, dtype=object)))   # labelled by sheet column, as
-    return out                                                                   # _bom_sheet hides by it
+        df = pd.DataFrame(rows, columns=cols, dtype=object)   # labelled by sheet column, as _bom_sheet hides by it;
+        df.attrs["sparse"] = True                              # its rows are not the sheet's (no merged-cell fill)
+        out.append((ws.title, df))
+    return out
 
 
 def _uncached_formulas(p):
@@ -831,22 +1033,32 @@ def part_numbers(ln):
     return [c for c in dict.fromkeys(c.strip() for c in out) if c and not is_vault_id(c)]
 
 
-def count_refs(s):
-    """'R1, R2, R5-R8' -> 6 (ranges like R5-R8, R5-8 or 'R5 - R8' count every designator). Units of one multi-unit
-    part ('U1A, U1B', Altium's suffixed designators) count once, as does a designator listed twice."""
-    s = re.sub(r"(?<=[0-9A-Za-z])\s*([-\u2013\u2014~\uff5e:]|\.\.|\s(?i:to)\s)\s*(?=[A-Za-z]*\d)", "-",
-               s.strip())                                        # 'R1 – R4', 'C1~C4', 'R1..R4', 'R1 to R4' -> 'R1-R4'
-    seen, extra = set(), 0
+def _ref_spans(s):
+    """A designator list -> (PREFIX, low, high) per designator or range, or (None, TOKEN, None) for an Altium channel
+    designator (R1_CH1, R1_A). 'R1 – R4', 'C1~C4', 'R1..R4', 'R1 to R4', 'R1:R4' and a reversed 'R5-R1' are ranges;
+    units of one part (U1A, U1B) are U1. Shared by count_refs and ref_keys, so the Qty check and the designator-on-
+    two-lines check read a list the same way."""
+    s = re.sub(r"(?<=[0-9A-Za-z])\s*([-–—~～:]|\.\.|\s(?i:to)\s)\s*(?=[A-Za-z]*\d)", "-",
+               str(s or "").strip())                             # 'R1 – R4', 'C1~C4', 'R1..R4', 'R1 to R4' -> 'R1-R4'
     for tok in re.split(r"[,;/&+\s]+", s):
         m = re.fullmatch(r"([A-Za-z]+)(\d+)[A-Za-z]?(?:-(?:\1)?(\d+)[A-Za-z]?)?", tok)
         if not m:
             if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9_.]*", tok):   # Altium channel designators (R1_CH1, R1_A): one each
-                seen.add(("", tok.upper()))
+                yield None, tok.upper(), None
             continue
-        pre, lo = m.group(1).upper(), int(m.group(2))
+        lo = int(m.group(2))
         hi = int(m.group(3)) if m.group(3) else lo
-        lo, hi = min(lo, hi), max(lo, hi)                        # 'R5-R1' is R1..R5
-        if hi - lo > 100000:                     # absurd range: count it, don't enumerate it
+        yield m.group(1).upper(), min(lo, hi), max(lo, hi)       # 'R5-R1' is R1..R5
+
+
+def count_refs(s):
+    """'R1, R2, R5-R8' -> 6 (ranges like R5-R8, R5-8 or 'R5 - R8' count every designator). Units of one multi-unit
+    part ('U1A, U1B', Altium's suffixed designators) count once, as does a designator listed twice."""
+    seen, extra = set(), 0
+    for pre, lo, hi in _ref_spans(s):
+        if pre is None:
+            seen.add(("", lo))
+        elif hi - lo > 100000:                   # absurd range: count it, don't enumerate it
             extra += hi - lo + 1
         else:
             seen.update((pre, k) for k in range(lo, hi + 1))
@@ -855,18 +1067,12 @@ def count_refs(s):
 
 def ref_keys(s, limit=10000):
     """'R1, R2, R5-R8' -> {'R1', 'R2', 'R5', ..., 'R8'} (units U1A / U1B are U1); an absurd range is left out."""
-    s = re.sub(r"(?<=[0-9A-Za-z])\s*[-–—~～]\s*(?=[A-Za-z]*\d)", "-", str(s or "").strip())
     out = set()
-    for tok in re.split(r"[,;\s]+", s):
-        m = re.fullmatch(r"([A-Za-z]+)(\d+)[A-Za-z]?(?:-(?:\1)?(\d+)[A-Za-z]?)?", tok)
-        if not m:
-            if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9_.]*", tok):
-                out.add(tok.upper())
-            continue
-        lo = int(m.group(2))
-        hi = int(m.group(3)) if m.group(3) and int(m.group(3)) >= lo else lo
-        if hi - lo <= limit:
-            out.update(f"{m.group(1).upper()}{k}" for k in range(lo, hi + 1))
+    for pre, lo, hi in _ref_spans(s):
+        if pre is None:
+            out.add(lo)
+        elif hi - lo <= limit:
+            out.update(f"{pre}{k}" for k in range(lo, hi + 1))
     return out
 
 
@@ -877,17 +1083,23 @@ def shared_designators(lines):
         if not ln.get("dnp"):
             for r in ref_keys(ln.get("designator", "")):
                 where.setdefault(r, []).append(i)
-    out = {}
+    out, more = {}, set()
     for r, ns in sorted(where.items()):
         for i in ns if len(set(ns)) > 1 else ():
-            others = ", ".join(str(n) for n in ns if n != i)
-            out.setdefault(i, []).append(f"{r} is also on line {others}")
-    return {i: "designator on two lines: " + "; ".join(v[:5]) + (" ..." if len(v) > 5 else "") for i, v in out.items()}
+            if len(out.setdefault(i, [])) >= 5:          # a note names 5: building the rest made many lines sharing
+                more.add(i)                              # a range quadratic (200 x 'R1-R9999': 45 s)
+                continue
+            others = [str(n) for n in ns if n != i]
+            out[i].append(f"{r} is also on line {', '.join(others[:20])}{' ...' if len(others) > 20 else ''}")
+    return {i: "designator on two lines: " + "; ".join(v) + (" ..." if i in more else "") for i, v in out.items()}
 
 
-def triage(lines, index, provs, http):
+def triage(lines, index, provs, http, shared=None):
+    """shared: {line number in `lines` (1-based): designator-on-two-lines note}, for a caller that triages a BOM a line
+    at a time (the web UI and MCP report progress per line) and so must work them out on the whole BOM; None = from
+    `lines`."""
     rows = []
-    dup = shared_designators(lines)
+    dup = shared_designators(lines) if shared is None else shared
     for i, ln in enumerate(lines, 1):
         if ln.get("dnp"):
             rows.append({"line": i, "designator": ln.get("designator", ""), "qty": ln.get("qty", ""),
@@ -900,19 +1112,32 @@ def triage(lines, index, provs, http):
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), *pns)
         cls = re.match(r"[A-Z]+", ln.get("designator", "").upper())
         sym = how = None
+        own = "" if placeholder_mpn(ln.get("mpn")) else str(ln.get("mpn") or "").strip()
+        skipped = None
         for pn in pns or [""]:
             sym, how = index.match(pn, ln.get("lcsc", ""), ln.get("value", ""), pkg, ref_class=cls.group(0) if cls else "")
+            if sym and own and pn != own and how == "mpn":   # R-BF-6: matched on the Comment / Value / LibRef, not
+                fam = norm_mpn(own).startswith(norm_mpn(pn))                 # on the MPN the line has
+                if not fam:                                 # 'LM358' with MPN OPA171AIDR: another part, not used
+                    skipped = skipped or f"local symbol {sym.lib}:{sym.name} matches the Comment/Value {pn}, but the " \
+                                         f"MPN is {own}: not used"
+                    sym = how = None
+                    continue
+                how = f"Comment/Value {pn}; MPN {own} is a variant of it: check"   # a suggestion: held (librarian)
             if sym:
                 break
-        fp_key = None
-        if sym:
-            fp_key, _ = index.footprint(sym.props.get("Footprint", ""))
-        if not fp_key:
-            fp_key, _ = index.footprint(ln.get("footprint", ""))
+        fp_key, _ = index.footprint(ln.get("footprint", ""))    # the BOM's land first (R-BF-5), then the symbol's
+        sym_fp = str(sym.props.get("Footprint", "") or "") if sym else ""                 # unless the BOM names another
+        if not fp_key and sym_fp:
+            from .altium_export import lands_differ
+            if not lands_differ(sym_fp, ln.get("footprint", "")):
+                fp_key, _ = index.footprint(sym_fp)
         gen_fp = None if fp_key else index.find_footprint_for_package(
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         sheets = []                                    # every datasheet link every source gave, in source order
+        if skipped:
+            notes.append(skipped)
         if pns and not ln.get("mpn"):
             work["mpn"] = pns[0]                               # let providers search by the Comment/LibRef part number
             notes.append(f"part number taken from {'Comment/value' if pns[0] == ln.get('value', '').strip() else 'LibRef'}: {pns[0]}")
@@ -1024,7 +1249,8 @@ def triage(lines, index, provs, http):
 
 
 def _n(s):
-    return re.sub(r"[^A-Z0-9]", "", s.upper())
+    from .kicad_index import norm_mpn      # as every MPN is compared: SMAJ5.0A is not SMAJ50A (the '.' is kept)
+    return norm_mpn(s)
 
 
 def _yn(v):

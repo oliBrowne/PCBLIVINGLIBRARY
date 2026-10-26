@@ -8,7 +8,9 @@ Writes into DIR:
                      Reference, Value, Footprint "<lib>:<footprint>", Datasheet, Description, then Manufacturer, MPN,
                      the supplier part numbers (LCSC = C1525) and the plan's other parameters
   <lib>.pretty/      one .kicad_mod per footprint, renamed to the plan's footprint name
-  <lib>.3dshapes/    the STEP models the footprints point at (${KIPRJMOD}/<lib>.3dshapes/X.step)
+  <lib>.3dshapes/    the STEP models the footprints point at (${KIPRJMOD}/<lib>.3dshapes/X.step; with --project, or
+                     a project given before for DIR, the path from that KiCad project's folder: the KiCad window's
+                     <project>/ecadlib/ -> ${KIPRJMOD}/ecadlib/<lib>.3dshapes/X.step)
   <lib>.sim/         SPICE model files of parts with an attached simulation model (`ecadlib sim-models --attach`);
                      their symbols carry Sim.Device / Sim.Library "<lib>.sim/<file>" / Sim.Name / Sim.Pins / Sim.Params
   sym-lib-table, fp-lib-table   the library's row (uri ${KIPRJMOD}/...) added or replaced; other rows are kept, so
@@ -39,7 +41,7 @@ pins and footprint pads are compared. Exit code 1 when a check fails.
 
 KiCad's libraries are CC-BY-SA 4.0 (with a design-use exception): exports holding KiCad content get a NOTICE.txt
 and must not be committed here (out/kicad/ is in .gitignore)."""
-import argparse, copy, hashlib, json, math, re, struct, sys, time
+import argparse, copy, hashlib, json, math, os, re, struct, sys, time
 from pathlib import Path
 
 from . import altium_lib as AL, easyeda_convert as EC, footprint_check as FC, fsutil, kicad_import as K, providers as P, \
@@ -58,8 +60,18 @@ KICAD_NOTICE = ("Parts of this library come from the KiCad libraries (https://gi
 
 
 def kname(s):
-    """A symbol or footprint name KiCad accepts in a lib id and as a file name."""
-    return re.sub(r'[\s:/\\<>"|?*\x00-\x1f]', "_", str(s)).strip("._") or "_"
+    """A footprint or library name KiCad accepts in a lib id and as a file name: NFC (macOS file systems take NFC and
+    NFD spellings for one file name) and no Windows device name (AUX -> AUX_: fsutil.portable_stem)."""
+    from .fsutil import portable_stem
+    return portable_stem(ksym(s))
+
+
+def ksym(s):
+    """A symbol name KiCad accepts in a lib id: kname without the device-name rule. A symbol lives inside the
+    .kicad_sym, never as a file of its own, so a part named CON or AUX keeps the lib id it was released with
+    (footprint and library names are file names: kname)."""
+    import unicodedata
+    return re.sub(r'[\s:/\\<>"|?*\x00-\x1f]', "_", unicodedata.normalize("NFC", str(s))).strip("._") or "_"
 
 
 def libname(s):
@@ -427,18 +439,24 @@ def kicad_pin_details(sym):
     return {n: {"name": p["name"], "ktype": p["ktype"], "alt": p["alt"]} for n, p in sorted(fp["pins"].items())}
 
 
-def kicad_baseline_differs(item, plan_dir, details):
-    """KiCad-only pin details of a fetched symbol against those an earlier KiCad publish of the same released
-    revision shipped -> [{class, text}] (electrical); [] when they match or no earlier publish recorded them."""
+def kicad_baseline(item, plan_dir):
+    """The KiCad-only pin details ({number: {name, ktype, alt}}) the first KiCad publish of the part's released
+    revision shipped (the ledger's publish line), or None."""
     from . import ledger as LG
     lg = LG.Ledger(plan_dir)
     head = lg.head(item["name"]) if lg.exists() else None
     if not head:
-        return []
-    base = next((e["detail"]["ksym"] for e in reversed(lg.history(item["name"]))
+        return None
+    return next((e["detail"]["ksym"] for e in reversed(lg.history(item["name"]))
                  if e.get("event") == "publish" and str(e.get("target") or "").startswith("kicad")
                  and e.get("revision") == head["revision"] and isinstance(e.get("detail"), dict)
                  and e["detail"].get("ksym")), None)
+
+
+def kicad_baseline_differs(item, plan_dir, details):
+    """KiCad-only pin details of a fetched symbol against those an earlier KiCad publish of the same released
+    revision shipped -> [{class, text}] (electrical); [] when they match or no earlier publish recorded them."""
+    base = kicad_baseline(item, plan_dir)
     if base is None:
         return []
     out = []
@@ -454,7 +472,50 @@ def kicad_baseline_differs(item, plan_dir, details):
     return out
 
 
-def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=None, kpins=None):
+POWER_OUT_NAME = re.compile(r"^(?:V?OUT\d*|VO\d*|VREG[A-Z0-9_]*|VDDCORE_?OUT|\d+V\d*_?OUT|V\d+V?\d*_?OUT|LDO_?OUT\d*)$")
+SWITCH_CONTACT = {"NO", "COM", "NO1", "NO2", "COM1", "COM2", "NC1", "NC2"}   # a relay / switch: its NC is a contact
+
+
+def restore_types(sym, own=None, notes=None, guess=True):
+    """Put back on a symbol read back from a .SchLib the KiCad pin types Altium cannot hold: Altium has one Power type
+    (a regulator's output comes back power_in, and KiCad ERC finds its rail undriven) and no NC type (an NC pin comes
+    back passive). own: {pin number: 'power_out' | 'no_connect'} the source gave (the datasheet read, recorded with the
+    plan's symbol: librarian.kicad_only_types). Without it, by name: a visible power pin named as a regulator output
+    (symbol_layout's power_out names, less VCAP / VCORE / DECOUPLE, which are decoupled inputs) is power_out, and a
+    visible passive pin named NC / DNC (symbol_layout's nc names) is no_connect, unless the part is a relay or switch,
+    whose NC is the normally closed contact. Only a power_in pin becomes power_out and only a passive one no_connect,
+    so a pin the source gave another type keeps it. Hidden pins are left alone. guess=False: own only, no names."""
+    from . import symbol_layout as SL
+    pins = [p for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin")]
+    num = lambda p: str(sexpr.first(p, "number")[1]).strip('"')
+    nm = lambda p: str(sexpr.first(p, "name")[1]).strip('"')
+    want = {str(k): v for k, v in (own or {}).items() if v in ("power_out", "no_connect")}
+    given = set(want)
+    # the source's own types decide; an NC pin it typed (own = {4: no_connect}) says nothing about the outputs, so
+    # the regulator-output guess by name still runs unless the source named a power_out pin itself (R-SY-6)
+    if guess and "power_out" not in want.values():
+        names = {SL._key(nm(p)) for p in pins}
+        ref = next((str(q[2]).strip('"') for q in sexpr.find(sym, "property") if str(q[1]).strip('"') == "Reference"), "")
+        switch = bool(names & SWITCH_CONTACT) or ref.upper().rstrip("?0123456789") in ("K", "S", "SW", "RLY")
+        for p in pins:
+            k = SL._key(nm(p))
+            if p[1] == "power_in" and POWER_OUT_NAME.match(k):
+                want.setdefault(num(p), "power_out")
+            elif not own and p[1] == "passive" and not switch and SL.classify({"name": nm(p), "num": num(p)}) == "nc":
+                want[num(p)] = "no_connect"
+    done = []
+    for p in pins:
+        t = want.get(num(p))
+        if "hide" not in p and (t == "power_out" and p[1] == "power_in" or t == "no_connect" and p[1] == "passive"):
+            p[1] = t
+            done.append(num(p))
+    if done and notes is not None:
+        K._note(notes, "power_out / no_connect pin types put back (Altium has one Power type and no NC type)"
+                + ("" if set(done) <= given else ", by pin name"))
+    return done
+
+
+def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=None, kpins=None, schlib=None):
     """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA IC
     symbol (a plain box, [symbols] layout_pins) is read back from the SchLib, which the librarian wrote with its pins
     grouped (ecadlib.symbol_layout), so both libraries show the same symbol. A reused symbol must be the released
@@ -533,7 +594,18 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
     f = item["symbol"].get("file")
     if not f or not (plan_dir / f).exists():
         raise FileNotFoundError("no symbol: " + "; ".join(why or ["no source and no .SchLib"]))
-    sym = symbol_from_schlib(plan_dir / f, name, notes, pick=item["symbol"].get("ref"))
+    sym = symbol_from_schlib(schlib or plan_dir / f, name,   # schlib: the released copy staged by the export
+                              notes, pick=item["symbol"].get("ref"))
+    own = item["symbol"].get("kicad_types")
+    if not src.startswith(("kicad:", "local:")):
+        restore_types(sym, own, notes)
+    else:            # a curated KiCad symbol read back (offline, no cache, or its source changed since the release):
+        if not own:  # the power_out / no_connect types its source gave, as the librarian recorded them (else as the
+            try:     # KiCad publish of this revision shipped them), never guessed by pin name
+                own = {n: d.get("ktype") for n, d in (kicad_baseline(item, plan_dir) or {}).items() if isinstance(d, dict)}
+            except (OSError, ValueError, KeyError, TypeError):
+                own = None
+        restore_types(sym, own, notes, guess=False)
     if src.startswith("standard:Regulator_Linear_"):   # Altium has one Power type: a standard regulator's VO is power_out
         from . import stdparts as SP                     # in ecadlib's own symbol and in KiCad's (ERC needs a rail driver)
         try:
@@ -808,9 +880,25 @@ def footprint_from_pcblib(path, name, notes, pick=None, rules=None):
     return "\n".join(head + out + pads) + "\n)\n"
 
 
-def footprint_tree(text, name, lib, notes):
-    """.kicad_mod text -> tree renamed to `name`, KiCad 8 syntax, model paths -> ${KIPRJMOD}/<lib>.3dshapes.
-    Returns (tree, [(model url path in kicad-packages3D, file name)])."""
+def models_at(lib, out=None, project=None):
+    """The folder a footprint's (model ...) path names for the library's <lib>.3dshapes/, as KiCad resolves it from
+    the project that uses the library (KIPRJMOD = that project's folder): ${KIPRJMOD}/<lib>.3dshapes when the library
+    is written into the project folder itself (or no project is known), ${KIPRJMOD}/<path>/<lib>.3dshapes when it is
+    written elsewhere (the KiCad window's <project>/ecadlib/), the absolute folder when no relative path reaches it
+    (another drive)."""
+    if project is None:
+        return f"${{KIPRJMOD}}/{lib}.3dshapes"
+    try:
+        rel = Path(os.path.relpath(Path(out).resolve(), Path(project).resolve())).as_posix()
+    except ValueError:
+        return (Path(out).resolve() / f"{lib}.3dshapes").as_posix()
+    return f"${{KIPRJMOD}}/{lib}.3dshapes" if rel == "." else f"${{KIPRJMOD}}/{rel}/{lib}.3dshapes"
+
+
+def footprint_tree(text, name, lib, notes, at=None):
+    """.kicad_mod text -> tree renamed to `name`, KiCad 8 syntax, model paths -> ${KIPRJMOD}/<lib>.3dshapes (at: the
+    folder models_at gives instead). Returns (tree, [(model url path in kicad-packages3D, file name)])."""
+    at = at or models_at(lib)
     t = sexpr.parse(text, keep_quotes=True)
     old = str(t[1])
     t[1] = Q(name)
@@ -824,7 +912,7 @@ def footprint_tree(text, name, lib, notes):
     for mdl in sexpr.find(t, "model"):
         src = K.model_url_path(str(mdl[1]))
         fn = Path(src).name if src else Path(str(mdl[1]).replace("\\", "/")).with_suffix(".step").name
-        mdl[1] = Q(f"${{KIPRJMOD}}/{lib}.3dshapes/{fn}")
+        mdl[1] = Q(f"{at}/{fn}")
         models.append((src, fn))
     return t, models
 
@@ -842,19 +930,28 @@ def _local_model(src3d, fn, libs):
                  if p.is_file() and p.stem.casefold() == stem and p.suffix.lower() in (".step", ".stp")), None)
 
 
-def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None):
+def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None, at=None):
     """The 3D models of a footprint that has no KiCad (model ...): for each 3D body of the footprint (pick: its name in
     a multi-footprint .PcbLib), the STEP embedded in the .PcbLib that the body names (MODELID), else a STEP extruded
     from the body (outline, standoff and height), written to <lib>.3dshapes/ (write(path, bytes); default a plain
     write). -> ([(model ...) node, ...], [(file name, how), ...]) or None. Altium and KiCad then both have the part's
-    3D model (ecadlib.parity checks it)."""
+    3D model (ecadlib.parity checks it). An embedded STEP is placed as the body places it in Altium (MODEL.2D.X / Y,
+    MODEL.3D.ROTZ, MODEL.3D.DZ; the library's model record when the body has none), as KiCad's own Altium importer
+    does: offset (X, +Y, DZ) in the model's y-up frame, rotation z = -ROTZ (KiCad turns a model by the negated angle).
+    One tilted (ROTX / ROTY) or turned in 2D is not written, nor a body projected to the bottom side
+    (BODYPROJECTION = 1, which a top-side KiCad model would show on the wrong side), each with a note.
+    at: the model folder as the footprint names it (models_at)."""
     from . import step_gen as SG
+    at = at or models_at(lib)
     fps = AL.read_pcblib(pcblib)
     if not fps:
         return None
     fp = _pick(fps, pick, pcblib, "footprint")
     lib_models = fps[0].get("models") or []          # read_pcblib puts the library's embedded models on entry 0
-    by_id = {str(mp.get("ID", "")): (mp, data) for mp, data in lib_models}
+    # by the model records only: a model is unpacked (and refused past MODEL_CAP) when this footprint uses it, so
+    # another footprint's 70 MB STEP does not stop this one's export
+    head = lib_models.packed if hasattr(lib_models, "packed") else lambda i: lib_models[i]
+    by_id = {str(head(i)[0].get("ID", "")): i for i in range(len(lib_models))}
     bodies = [r for r in fp["records"] if r["type"] == "body"]
     nodes, files, done = [], [], set()
     for k, body in enumerate(bodies):
@@ -862,17 +959,26 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None):
         mil = lambda key: RC._mil(bp.get(key)) or 0.0
         base = fpn if k == 0 else f"{fpn}_{k + 1}"
         fn = f"{base}.step" if f"{base}.step" not in taken else f"{base}_ecadlib.step"
+        if str(bp.get("BODYPROJECTION") or "0").strip() not in ("0", ""):
+            K._note(notes, f"3D: body {k + 1} is on the bottom side in Altium (BODYPROJECTION {bp.get('BODYPROJECTION')}); "
+                           f"not written for KiCad")
+            continue
         emb = by_id.get(str(bp.get("MODELID", "")))
         if emb is None and len(lib_models) == 1 and len(fps) == 1:
-            emb = lib_models[0]                       # one footprint, one model (no matching id): it is this one's
+            emb = 0                                   # one footprint, one model (no matching id): it is this one's
         if emb is not None and str(bp.get("MODELID", "")) not in done:   # embedded STEP: the same file, unchanged
             done.add(str(bp.get("MODELID", "")))
-            mp, data = emb
-            rot = [float(mp.get(key, 0) or 0) for key in ("ROTX", "ROTY", "ROTZ")]
-            if any(abs(v) > 1e-9 for v in rot):
+            mp, data = lib_models[emb]
+            # the body's own placement (what Altium shows), else the library model record's
+            num = lambda v: float(re.sub(r"[^0-9eE+.\-]", "", str(v)) or 0)
+            rot = [num(bp[f"MODEL.3D.{key}"]) if str(bp.get(f"MODEL.3D.{key}") or "").strip() else num(mp.get(key, 0) or 0)
+                   for key in ("ROTX", "ROTY", "ROTZ")]
+            if abs(rot[0]) > 1e-9 or abs(rot[1]) > 1e-9 or abs(num(bp.get("MODEL.2D.ROTATION") or 0)) > 1e-9:
                 K._note(notes, f"3D: the embedded STEP {mp.get('NAME')} is rotated in Altium; not written for KiCad")
                 continue
-            dz = AL.to_mm(int(float(mp.get("DZ", 0) or 0)))
+            dz = RC._mil(bp["MODEL.3D.DZ"]) if RC._mil(bp.get("MODEL.3D.DZ")) is not None else \
+                AL.to_mm(int(float(mp.get("DZ", 0) or 0)))
+            off, rz = (mil("MODEL.2D.X"), mil("MODEL.2D.Y"), dz), -rot[2]   # KiCad's importer: y = +MODEL.2D.Y
             how = f"embedded STEP {mp.get('NAME', '')} from the .PcbLib"
         elif emb is not None:
             continue
@@ -882,14 +988,14 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None):
             if len(pts) < 3 or hi - lo <= 0:
                 continue
             data = SG.write_step([SG.prism(pts, hi - lo, (0, 0, lo), name="body")], base, "ecadlib: the Altium 3D body as a STEP").encode("ascii")
-            dz, how = 0.0, f"extruded body ({hi:.2f} mm) from the .PcbLib as a STEP"
+            off, rz, how = (0.0, 0.0, 0.0), 0.0, f"extruded body ({hi:.2f} mm) from the .PcbLib as a STEP"
         shapes.mkdir(parents=True, exist_ok=True)
         if write is not None:
             write(shapes / fn, data)
         elif not (shapes / fn).is_file() or (shapes / fn).read_bytes() != data:
             (shapes / fn).write_bytes(data)
-        nodes.append(["model", Q(f"${{KIPRJMOD}}/{lib}.3dshapes/{fn}"), ["offset", ["xyz", "0", "0", _num(dz)]],
-                      ["scale", ["xyz", "1", "1", "1"]], ["rotate", ["xyz", "0", "0", "0"]]])
+        nodes.append(["model", Q(f"{at}/{fn}"), ["offset", ["xyz"] + [_num(v) for v in off]],
+                      ["scale", ["xyz", "1", "1", "1"]], ["rotate", ["xyz", "0", "0", _num(rz)]]])
         files.append((fn, how))
     return (nodes, files) if nodes else None
 
@@ -929,7 +1035,8 @@ def _lib_record(rep):
                        "footprint": p.get("footprint"), "held": bool(p.get("held"))}
                       for p in rep.get("parts") or [] if isinstance(p, dict)],
             "footprints": sorted(rep.get("footprints") or {}),
-            "kept": [dict(p) for p in rep.get("kept") or [] if isinstance(p, dict)]}
+            "kept": [dict(p) for p in rep.get("kept") or [] if isinstance(p, dict)],
+            "models_at": rep.get("models_at") or models_at(rep.get("library") or "")}
 
 
 def footprint_failures(item, plan_dir, kmod):
@@ -944,16 +1051,22 @@ def _pins(sym):
 
 
 # ---------------------------------------------------------------- driver
-def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None):
+def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, take_over=False):
     """Write the KiCad library for plan.json into `out`; returns the report dict (also kicad_export.json).
     rules: library rules (dict or path); None = the ecadlib.toml found from the plan's folder, if any.
-    The library lock is held for the whole export (change control: the files read are the settled ones)."""
+    project: the KiCad project folder that uses the library (KIPRJMOD), when `out` is not that folder itself (the
+    KiCad window's <project>/ecadlib/): the 3D model paths are written from there (models_at). None: the folder an
+    earlier export into `out` was given, else `out` is taken as the project folder.
+    The library lock is held for the whole export (change control: the files read are the settled ones).
+    take_over: write library `name` into `out` although another plan folder wrote it there (else PlanError)."""
+    import tempfile
     from . import change_gate as CG
-    with CG.publishing(Path(plan).parent):
-        return _export(plan, out, name, include_held, libs, http, log, rules)
+    with CG.publishing(Path(plan).parent), tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as stage:
+        return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage, take_over=take_over)
 
 
-def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None):
+def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, stage=None,
+            take_over=False):
     plan, out = Path(plan), Path(out)
     plan_dir, lib = plan.parent, libname(name)
     from .rules import resolve
@@ -967,13 +1080,25 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         raise PlanError(f"{plan} has no parts: exporting it would empty the library {lib} in {out}; nothing written "
                         f"(delete {lib}.kicad_sym and {lib}.pretty/ by hand if that is what you want)")
     from . import change_gate as CG          # change control (#105): a hand edit since the last writer is settled
-    CG.publish_guard(plan, items, "kicad", rules=rules, log=log)   # first; a held change exports the released revision
-    items = sorted(items, key=lambda i: kname(i["name"]))
+    try:                                      # one plan folder's library per name and folder (R-FX15-4)
+        CG.claim_output(out, f"kicad-export:{lib}", plan_dir, take_over, what=f"the KiCad library {lib}")
+    except CG.OutputTaken as e:
+        raise PlanError(str(e)) from None
+    guarded, _g = CG.publish_guard(plan, items, "kicad", rules=rules, log=log)   # first; a held change exports the
+    refused = {k: v for k, v in guarded.items() if str(v or "").startswith("refused:")}   # released revision
+    items = sorted(items, key=lambda i: ksym(i["name"]))
     pretty, shapes = out / f"{lib}.pretty", out / f"{lib}.3dshapes"
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "parts": [], "skipped": [], "footprints": {}, "models": {}, "errors": [], "kicad_content": False}
     rep.update(warnings=[], written={}, change_control=True, kept=[])   # made with a ledger (a lost one fails closed)
+    rep["refused"] = sorted(refused)            # a part whose ledger history is damaged: left out (R-FX17-5)
+    for k in rep["refused"]:
+        why = refused[k][len("refused: "):]
+        rep["skipped"].append({"part": k, "why": f"held: change control: {why}",
+                               "says": [{"code": "ledger_damaged", "text": f"Its release history is damaged: {why}",
+                                         "fix": f"ecadlib part history {plan} {k}"}]})
+        rep["warnings"].append(f"{k}: not exported, its ledger history is damaged ({why}); the rest of the library is")
     kpins = {}                                 # part -> KiCad-only pin details of a reused symbol (publish line)
     report = out / "kicad_export.json"
     try:                                      # what the last export wrote (and its sha256): edited by hand since?
@@ -992,6 +1117,10 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     owned = set(prev_hash) if "written" in mine else (
         {f"{lib}.kicad_sym"} | {f"{lib}.pretty/{k}.kicad_mod" for k in mine.get("footprints") or {}}
         | {f"{lib}.3dshapes/{k}" for k, v in (mine.get("models") or {}).items() if v}) if mine else set()
+    was_at = mine.get("models_at")              # where an earlier export (given the project) put the model paths
+    at = models_at(lib, out, project) if project is not None else \
+        was_at if isinstance(was_at, str) and was_at.endswith(f"/{lib}.3dshapes") else models_at(lib)
+    rep["models_at"] = at
 
     def _hand_edited(path, rel):
         """A file this export replaces or removes that changed since the last export: copied aside and reported."""
@@ -1049,7 +1178,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         if f is not None and f.is_file() and fpn not in fps:
             fps[fpn] = {"from": "kept from the last export", "by": it["name"], "notes": [], "check": "held", "failures": []}
             rep["written"][rel] = prev_hash.get(rel) or _sha(f)
-            for fn in re.findall(r'\(model "\$\{KIPRJMOD\}/' + re.escape(lib) + r'\.3dshapes/([^"]+)"', f.read_text(encoding="utf-8")):
+            for fn in re.findall(r'\(model "[^"]*?' + re.escape(f"{lib}.3dshapes/") + r'([^"/]+)"', f.read_text(encoding="utf-8")):
                 if (shapes / fn).is_file():            # a STEP put there by hand stays the user's file
                     rep["models"].setdefault(fn, "kept from the last export" if f"{lib}.3dshapes/{fn}" in owned
                                              else f"{lib}.3dshapes/{fn} (existing file kept)")
@@ -1065,9 +1194,43 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         """The footprint's .kicad_mod text (its own, or its .PcbLib entry converted back) and where it came from."""
         kmod = RC._kicad_mod(it, plan_dir, RC._path(plan_dir, it["footprint"].get("file")))
         if kmod:
-            return kmod.read_text(encoding="utf-8"), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
-        return (footprint_from_pcblib(plan_dir / it["footprint"]["file"], fpn, fnotes, pick=it["footprint"].get("ref"),
-                                      rules=rules), f"{it['footprint']['file']} converted back")
+            data = released_bytes(it, kmod)
+            return data.decode("utf-8"), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
+        return (footprint_from_pcblib(released_path(it, plan_dir / it["footprint"]["file"]), fpn, fnotes,
+                                      pick=it["footprint"].get("ref"), rules=rules),
+                f"{it['footprint']['file']} converted back")
+
+    from . import ledger as LG
+    ledger = LG.Ledger(plan_dir)
+
+    def released_bytes(it, path):
+        """The file's bytes as the released revision has them (change_gate.released_bytes): an edit saved while this
+        export ran is not exported; the head's own copy from the blob store goes out, with a warning."""
+        data = path.read_bytes()
+        try:
+            data, head = CG.released_bytes(ledger, it, path, plan_dir, data=data)
+        except FileNotFoundError:              # no copy to send: the edit is not shipped either
+            raise ValueError(f"{path.name} changed while the export ran and the released copy is missing")
+        if head:
+            msg = (f"{it['name']}: {path.name} changed while the export ran (an edit saved meanwhile); the released "
+                   f"revision r{head['revision']} was exported, the edit is settled by the next ecadlib run")
+            if msg not in rep["warnings"]:
+                rep["warnings"].append(msg)
+        return data
+
+    staged = {}
+
+    def released_path(it, path):
+        """A .SchLib / .PcbLib to read for a released part: its released_bytes, staged in a temporary folder under its
+        own name, so what is read is what was checked (an edit saved later reaches neither)."""
+        key = (str(Path(path).resolve()), it["name"])
+        if key not in staged:
+            import hashlib
+            d = Path(stage) / hashlib.sha256("\0".join(key).encode()).hexdigest()[:16]
+            d.mkdir(parents=True, exist_ok=True)
+            (d / Path(path).name).write_bytes(released_bytes(it, Path(path)))
+            staged[key] = d / Path(path).name
+        return staged[key]
     for it in items:
         status = it.get("status", "ready")
         if status == "held" and not include_held:
@@ -1082,14 +1245,14 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                                              "fix": f"ecadlib approve {plan} status"}]})
             held.append((it, ["waiting for sign-off"]))
             continue
-        why = [] if status == "held" else RC.publish_problems(it, plan_dir, rules)   # checked again: `ready` is not
+        why = [] if status == "held" else RC.publish_problems(it, plan_dir, rules, writes_files=True)   # checked again: `ready` is not
         if why and not include_held:                                                  # taken on trust
             from . import messages as M
             rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(why), "recheck": why,
                                    "says": [{k: e[k] for k in ("code", "text", "fix")} for e in M.explain_all(why)]})
             held.append((it, why))
             continue
-        sname, notes = kname(it["name"]), []
+        sname, notes = ksym(it["name"]), []
         if str((it.get("source") or {}).get("symbol") or "").startswith("easyeda:") and not P.unofficial_allowed(rules):
             notes.append("EasyEDA not fetched again ([providers] unofficial = false): the symbol is read back from the SchLib")
             it = dict(it, source=dict(it["source"], symbol=""))
@@ -1123,7 +1286,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             try:
                 text, how = fp_source(it, fpn, fnotes)
                 fp_src[fpn] = text
-                tree, models = footprint_tree(text, fpn, lib, fnotes)
+                tree, models = footprint_tree(text, fpn, lib, fnotes, at)
                 sexpr.parse(sexpr.dumps(tree) + "\n")
                 mnodes = list(sexpr.find(tree, "model"))
                 for k, (src3d, fn0) in enumerate(models):
@@ -1139,7 +1302,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                     if fn != fn0:
                         models[k] = (src3d, fn)
                         if k < len(mnodes):
-                            mnodes[k][1] = Q(f"${{KIPRJMOD}}/{lib}.3dshapes/{fn}")
+                            mnodes[k][1] = Q(f"{at}/{fn}")
                     if fn in rep["models"]:
                         continue
                     model_src[fn] = ident
@@ -1161,6 +1324,8 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                         rep["models"][fn] = None
                         fnotes.append(f"STEP {fn} not available offline: put it in {lib}.3dshapes/")
                 pcb = RC._path(plan_dir, it["footprint"].get("file"))
+                if pcb and pcb.is_file():          # its 3D models: from the released .PcbLib too
+                    pcb = released_path(it, pcb)
                 got = None
                 if models and not any(rep["models"].get(fn) for _, fn in models) and pcb and pcb.is_file():
                     # no KiCad STEP to be had (e.g. a ${KIPRJMOD} path of a library not under --lib): the .PcbLib's
@@ -1168,7 +1333,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                     for _, fn in models:              # the KiCad model's own file name stays free for the real
                         rep["models"].pop(fn, None)   # model (put there by hand, or fetched by a later online export)
                     got = altium_model(pcb, fpn, lib, shapes, {**rep["models"], **model_src, **{fn: True for _, fn in models}},
-                                       fnotes, pick=fref, write=put)
+                                       fnotes, pick=fref, write=put, at=at)
                     if got:
                         tree[:] = [x for x in tree if not (isinstance(x, list) and x and str(x[0]) == "model")]
                         fnotes[:] = [n for n in fnotes if "not available offline" not in n]
@@ -1178,7 +1343,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                         for _, fn in models:
                             rep["models"][fn] = None
                 elif not models and pcb and pcb.is_file():
-                    got = altium_model(pcb, fpn, lib, shapes, {**rep["models"], **model_src}, fnotes, pick=fref, write=put)
+                    got = altium_model(pcb, fpn, lib, shapes, {**rep["models"], **model_src}, fnotes, pick=fref, write=put, at=at)
                 if got:                       # no KiCad model: the Altium one, so both libraries have the part in 3D
                     tree.extend(got[0])
                     for fn, h in got[1]:
@@ -1206,7 +1371,11 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             rep["parts"].append(row)
             continue
         try:
-            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"], kpins=kpins)
+            sf = it["symbol"].get("file")
+            sch = (released_path(it, plan_dir / sf) if sf and str(sf).lower().endswith(".schlib")
+                   and (plan_dir / sf).is_file() else None)
+            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"], kpins=kpins,
+                                   schlib=sch)
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             fields = plan_fields(it, lib, row["footprint"], props, rules)
@@ -1369,19 +1538,25 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     ap.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
     ap.add_argument("--json", action="store_true", help="print the export report as JSON instead of the log")
+    ap.add_argument("--project", help="the KiCad project folder that uses the library, when -o is not that folder: the "
+                                      "3D model paths are written from it (${KIPRJMOD}/<path to -o>/<lib>.3dshapes); "
+                                      "remembered for later exports into -o")
+    ap.add_argument("--take-over", action="store_true", help="write the library although another plan folder wrote "
+                    "it into -o (its parts are replaced by this plan's)")
     a = ap.parse_args(argv)
     try:
         rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60),
-                     rules=a.rules, log=(lambda *x, **k: None) if a.json else print)
+                     rules=a.rules, log=(lambda *x, **k: None) if a.json else print, project=a.project,
+                     take_over=a.take_over)
     except PlanError as e:
         print(f"ecadlib kicad-export: {e}", file=sys.stderr)
         return 2
     # exit 1 also while a change is held: the library on disk is not what was exported, a person has to look
     if a.json:
         print(json.dumps(rep, default=str))
-        return 1 if rep["errors"] or rep.get("held_changes") else 0
+        return 1 if rep["errors"] or rep.get("held_changes") or rep.get("refused") else 0
     print_result(rep, Path(a.out), a.plan)
-    return 1 if rep["errors"] or rep.get("held_changes") else 0
+    return 1 if rep["errors"] or rep.get("held_changes") or rep.get("refused") else 0
 
 
 if __name__ == "__main__":
