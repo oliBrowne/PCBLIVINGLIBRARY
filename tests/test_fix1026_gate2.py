@@ -351,3 +351,28 @@ def test_gate2_rg26_paste_cut_on_a_released_kicad_mod_is_held_not_published():
     _publish(lib)
     assert LG.Ledger(lib).head(KT)["revision"] == 1 and LG.Ledger(lib).proposal(KT), _ledger(lib)[-3:]
     assert km.read_bytes() == released
+
+
+# ------------------------------------------------------------------ R-G2-7
+def test_gate2_rg27_revert_reject_and_adopt_check_the_policys_users():
+    """g5_revert_users.py: with the sign-off policy's users = {Ann}, `part approve` refused Mallory but `part revert` let
+    her release r1 again over Ann's approved r2. revert, reject and adopt now refuse anyone not in the users, as
+    approve does; Ann still may."""
+    from ecadlib import change_cli as CC, change_gate as CG, ledger as LG
+    mal = "Mallory <mal@example.com>"
+    w, lib = _demo()
+    _describe(lib, "r2")
+    (lib / "approvals.json").write_text(json.dumps({"required": 1, "users": {"ann@example.com": ["librarian"]}}),
+                                        encoding="utf-8")
+    n = len(_ledger(lib))
+    for fn in (lambda: CC.revert(lib / "plan.json", f"{KT}@1", who=mal, comment="back"),
+               lambda: CC.reject(lib / "plan.json", [KT], who=mal, comment="no"),
+               lambda: CC.adopt(lib / "plan.json", [KT], who=mal, comment="checked")):
+        try:
+            fn()
+            raise AssertionError("not refused")
+        except CG.ChangeError as e:
+            assert "users" in str(e), e
+    assert len(_ledger(lib)) == n and LG.Ledger(lib).head(KT)["revision"] == 2
+    CC.revert(lib / "plan.json", f"{KT}@1", who=ANN, comment="back")
+    assert LG.Ledger(lib).head(KT)["revision"] == 3

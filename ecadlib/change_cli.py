@@ -329,6 +329,17 @@ def approve(plan, parts, who=None, comment="", role=None, digests=None):
         return _approve(plan, parts, who, comment, role, digests)
 
 
+def _may_decide(folder, who, what="approve"):
+    """The sign-off policy (approvals.json / [release.approvals]) lists users: only they may approve, reject, revert or
+    adopt a part's release (R-G2-7: a revert is a release too)."""
+    from . import approvals as AP
+    sign = AP.load_policy(folder)
+    users = (sign or {}).get("users") or {}
+    if users and AP.user_key(who) not in users:
+        raise CG.ChangeError(f"{who} is not in the sign-off policy's users ({AP.policy_source(folder, sign)}): only "
+                             f"they may {what}")
+
+
 def _approve(plan, parts, who, comment, role, digests):
     from . import approvals as AP
     plan, items = _load(plan)
@@ -341,10 +352,7 @@ def _approve(plan, parts, who, comment, role, digests):
     pol = CG.policy(None, folder)
     who = who or AP.identity(None, cwd=folder)
     key = AP.user_key(who)
-    sign = AP.load_policy(folder)
-    users = (sign or {}).get("users") or {}
-    if users and key not in users:
-        raise CG.ChangeError(f"{who} is not in the sign-off policy's users ({AP.policy_source(folder, sign)})")
+    _may_decide(folder, who, "approve")
     groups, seen = [], set()
     for p in parts:
         if p in seen:
@@ -570,6 +578,7 @@ def _reject(plan, parts, who, comment):
     plan, items = _load(plan)
     lg = LG.Ledger(plan.parent)
     who = who or AP.identity(None, cwd=plan.parent)
+    _may_decide(plan.parent, who, "reject")
     out, seen = [], set()
     for part in parts:
         for prop in _group(lg, part):
@@ -612,6 +621,7 @@ def _revert(plan, spec, who, comment):
         raise CG.ChangeError(f"{part}: revision {target['revision']} is what is released now (r{head['revision']})")
     it = _item(items, part)
     who = who or AP.identity(None, cwd=folder)
+    _may_decide(folder, who, "revert")
     pol = CG.policy(None, folder)
     old_fp = lg.fingerprint(head)
     backup = _step_backup([target.get("files")], folder)
@@ -713,6 +723,7 @@ def adopt(plan, parts, who=None, comment="", all_lost=False, accept_changes=Fals
         from . import approvals as AP
         plan, items = _load(plan)
         who = who or AP.identity(None, cwd=plan.parent)
+        _may_decide(plan.parent, who, "adopt")
         g = CG.Guard(plan.parent, "adopt", user=who)
         lost = [i["name"] for i in items if CG.released(i) and not g.ledger.head(i["name"]) and g.lost_history(i["name"], i)]
         names = lost if all_lost else list(parts)
