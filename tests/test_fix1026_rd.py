@@ -281,3 +281,42 @@ def test_rd4_dfn_rows_read_top_bottom_is_not_built_outside_the_body():
         raise AssertionError("a DFN read as a quad was built")
     except ValueError as e:
         assert "no room on the terminals" in str(e), e
+
+
+# ---------------------------------------------------------------- R-RD-5: tab plausibility, TAB_FAMILY names
+POS223 = [{"number": "1", "side": "L", "offset": -2.3}, {"number": "2", "side": "L", "offset": 0.0},
+          {"number": "3", "side": "L", "offset": 2.3}]
+SOT223 = gw("SOT-223-3_TabPin4", 4, 2.3, (6.3, 6.5, 6.7), (3.3, 3.5, 3.7), (6.7, 7.0, 7.3), (0.6, 0.745, 0.89),
+            (0.75, 0.875, 1.0), pin_positions=POS223, _pins=["1", "2", "3", "4"],
+            tab={"number": "4", "side": "R", "offset": 0.0, "width": (2.9, 3.04, 3.18), "length": None})
+DPAK_POS = [{"number": "1", "side": "L", "offset": -2.29}, {"number": "3", "side": "L", "offset": 2.29}]
+DPAK = gw("TO-252-2", 3, 2.29, (6.35, 6.54, 6.73), (5.97, 6.1, 6.22), (9.4, 9.9, 10.41), (0.63, 0.76, 0.89),
+          (0.9, 1.2, 1.5), pin_positions=DPAK_POS, _pins=["1", "2", "3"],
+          tab={"number": "2", "side": "R", "offset": 0.0, "width": (4.95, 5.2, 5.46), "length": (0.89, 1.08, 1.27)})
+
+
+def test_rd5_true_tab_reads_pass():
+    for t in (SOT89, SOT223, DPAK):
+        assert_ok(t)
+
+
+def test_rd5_sot89_tab_mistakes_are_held():
+    """Before: each passed and built a wrong tab pad (0.25 wide; on lead 2; 1.5 mm off)."""
+    tb = SOT89["tab"]
+    assert_held(dict(SOT89, tab=dict(tb, width=sc(tb["width"], 1 / 25.4))), "tab", "width")
+    assert_held(dict(SOT89, tab=dict(tb, width=SOT89["terminal_width"])), "tab", "no wider than a lead")
+    assert_held(dict(SOT89, tab=dict(tb, side="L")), "tab", "leads' own side")
+    assert_held(dict(SOT89, tab=dict(tb, offset=SOT89["pitch"])), "tab", "off the centre")
+
+
+def test_rd5_dpak_by_its_other_names_gets_the_checked_tab_land():
+    """Before: only TO-252 / DPAK named the checked land; SOT-428 (NXP's DPAK), D-PAK built the read's own tab."""
+    from ecadlib import stdparts as SP
+    for name in ("TO-252-2", "SOT-428", "D-PAK", "DPAK"):
+        res = assert_ok(dict(DPAK, name=name))
+        pins = [(q["num"], q["name"]) for q in (res.get("symbol") or {}).get("pins") or []]
+        got, how = SP.identify_tab(res["spec"], pins)
+        assert got and got.startswith("TO-252"), (name, got, how)
+    for said, fam in (("D²PAK", "TO-263"), ("DDPAK", "TO-263"), ("SOT-404", "TO-263"), ("SOT428", "TO-252")):
+        m = SP.TAB_FAMILY.search(said.upper())
+        assert m and SP.TAB_PREFIX[SP._norm(m.group(1).replace("²", "2"))] == fam, said

@@ -326,9 +326,11 @@ def test_ds2_24_a_tab_that_repeats_a_lead_number_needs_pin_positions():
     ext = copy.deepcopy(_sot223("2.30")["sidecar"]["extraction"])
     ext["package"]["pin_positions"][1]["side"] = "R"   # lead 2 read on the tab's side: it builds, under tab 4
     res = D.process(ext, "AMS1117-3.3", "ds.pdf")
-    assert DR.assess(res) == ("failed", ["footprint_gen.build failed: the pads would short: pads 2 and 4 overlap by "
-                                         "2.025 mm (check pitch, pin_count and terminal_length against the drawing)"]), \
+    kind, why = DR.assess(res)                         # (review 196 R-RD-5: the tab on a lead is its own failed check)
+    assert kind == "failed" and why[-1] == ("footprint_gen.build failed: the pads would short: pads 2 and 4 overlap by "
+                                            "2.025 mm (check pitch, pin_count and terminal_length against the drawing)"), \
         (DR.assess(res), res["needs_review"])
+    assert any(w.startswith("tab: on side R, the leads' own side") and "lead(s) 2" in w for w in why), why
 
 
 # ---- DS2-24 (review): the second read is asked for "terminals" (SOT-223 is commonly a 4-terminal part), so it may count

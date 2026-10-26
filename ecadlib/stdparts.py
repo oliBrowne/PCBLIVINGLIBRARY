@@ -660,9 +660,11 @@ def identify(read, known=None):
 
 # power packages with a tab that KiCad draws by hand (the table's pad tables): the drawing's family name (or Nexperia's
 # SOT outline code) -> table prefix
-TAB_FAMILY = re.compile(r"(?<![A-Z0-9])(TO-?252|DPAK|TO-?263|D2PAK|SOT-?223|TO-?261|LFPAK-?56|LFPAK-?33|SOT-?669|SOT-?1210)"
+TAB_FAMILY = re.compile(r"(?<![A-Z0-9])(TO-?252|D-?PAK|SOT-?428|TO-?263|D[2\u00b2]-?PAK|DDPAK|SOT-?404|SOT-?223|TO-?261|"
+                        r"LFPAK-?56|LFPAK-?33|SOT-?669|SOT-?1210)"
                         r"(?:[-_ ]?(\d)(?!\d))?")
-TAB_PREFIX = {"TO252": "TO-252", "DPAK": "TO-252", "TO263": "TO-263", "D2PAK": "TO-263", "SOT223": "SOT-223",
+TAB_PREFIX = {"TO252": "TO-252", "DPAK": "TO-252", "SOT428": "TO-252", "TO263": "TO-263", "D2PAK": "TO-263",
+              "DDPAK": "TO-263", "SOT404": "TO-263", "SOT223": "SOT-223",
               "TO261": "SOT-223", "LFPAK56": "LFPAK56", "SOT669": "LFPAK56", "LFPAK33": "LFPAK33", "SOT1210": "LFPAK33"}
 TAB_POS_TOL = 0.06          # a lead's place along the row: TO-252's 2.28 mm is printed 2.3 (e1) on many drawings
 TAB_BODY_TOL = 0.3          # the table's body length (KiCad's fab outline) against the read's min..max
@@ -761,7 +763,7 @@ def identify_tab(read, pins=None):
     m = TAB_FAMILY.search(said)
     if not m:
         return None, "the read's package name is no DPAK / D2PAK / SOT-223 family"
-    prefix, counted = TAB_PREFIX[_norm(m.group(1))], int(m.group(2)) if m.group(2) else None
+    prefix, counted = TAB_PREFIX[_norm(m.group(1).replace("\u00b2", "2"))], int(m.group(2)) if m.group(2) else None
     pos = read.get("pin_positions") or []
     try:
         tab_no = str(read["tab"]["number"])

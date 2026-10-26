@@ -1997,6 +1997,37 @@ def _listed_layout(spec, evidence=""):
         elif abs(o) + w[0] / 2 > body[2] / 2 + 0.05:
             out.append(f"tab: at offset {o:g} mm, {w[0]:g} mm wide, it runs past the end of the {body[2]:g} mm body: "
                        "implausible")
+    out.extend(_tab_fits(spec, pos))
+    return out
+
+
+def _tab_fits(spec, pos):
+    """A gull-wing tab (SOT-89, SOT-223, DPAK) against its leads (review 196 R-RD-5): its width or length in inches
+    (SOT-89's 1.62-1.83 read 0.064-0.072), no wider than a lead (the lead's b read as the tab), on the leads' own side
+    on top of a lead, or off the body's centre by a pitch: each built a wrong tab pad with nothing else to catch it.
+    Every such package has its tab centred on the side away from the leads. -> review lines (a failed read)."""
+    tab = spec.get("tab")
+    if not isinstance(tab, dict):
+        return []
+    out = []
+    w, tl, b, body = (_dim(tab.get("width")), _dim(tab.get("length")), _dim(spec.get("terminal_width")),
+                      _dim(spec.get("body_length")))
+    for k, d in (("width", w), ("length", tl)):
+        if d and 0 < d[2] < 0.1:
+            out.append(f"tab: {k} max {d[2]:g} mm is implausibly small for a tab (unit mislabelled?)")
+    if w and b and 0.1 <= w[2] <= b[2]:
+        out.append(f"tab: width max {w[2]:g} mm is no wider than a lead (terminal_width max {b[2]:g} mm), which is "
+                   "implausible for a tab (a lead's width read as the tab's?)")
+    o = tab.get("offset") if isinstance(tab.get("offset"), (int, float)) and not isinstance(tab.get("offset"), bool) else 0
+    side = tab.get("side", "R")
+    half = (w[1] if w else 0) / 2 + (b[1] if b else 0) / 2
+    under = [str(p.get("number")) for p in pos if p["side"] == side and abs(p["offset"] - o) < half]
+    if under:
+        out.append(f"tab: on side {side}, the leads' own side, at offset {o:g} mm it lies on lead(s) {', '.join(under)}, "
+                   "which is implausible: a tab is on the side away from the leads (check the tab's side)")
+    if body and abs(o) > 0.25 * body[1]:
+        out.append(f"tab: offset {o:g} mm puts it off the centre of the {body[1]:g} mm body, which is implausible: a "
+                   "tab is centred on its side (offsets are from the body's centre)")
     return out
 
 
