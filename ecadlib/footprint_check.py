@@ -481,6 +481,35 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     return issues
 
 
+def ep_on_lead(text):
+    """Pad numbers an exposed pad shares with a lead: a large pad near the middle of the leads (not a tab at one edge)
+    with the number of a lead-sized pad that does not touch it. check() lets a large pad repeat a number (an exposed
+    pad given its GND lead's number on purpose, SOT-223's tab and pin 2), so the release check judges these with the
+    symbol's pin names. -> sorted numbers."""
+    tree = sexpr.parse(text) if isinstance(text, str) else text
+    cu = [p for p in _pad_rects(tree) if p["copper"] and p["num"]]
+    if len(cu) < 3:
+        return []
+    areas = sorted(p["w"] * p["h"] for p in cu)
+    typical = areas[len(areas) // 2]
+    big = [p for p in cu if p["w"] * p["h"] > 3 * typical]
+    leads = [p for p in cu if p["w"] * p["h"] <= 3 * typical]
+    if not big or len(leads) < 2:
+        return []
+    x0, x1 = min(p["x"] for p in leads), max(p["x"] for p in leads)
+    y0, y1 = min(p["y"] for p in leads), max(p["y"] for p in leads)
+    inside = lambda p: x0 + EPS < p["x"] < x1 - EPS and y0 + EPS < p["y"] < y1 - EPS   # between rows of leads (a
+    #                                                  single row's tab, TO-252 / TO-263 / SOT-223, never is)
+    out = set()
+    for e in big:
+        if not inside(e):
+            continue                                 # a tab past the leads (SOT-223, DPAK): numbered as a lead by design
+        for p in leads:
+            if p["num"] == e["num"] and _rect_gap(p, e) > EPS:
+                out.add(e["num"])
+    return sorted(out)
+
+
 def perimeter_order(text):
     """How a perimeter part's pads are numbered against KiCad's rule (pin 1 top-left, counter-clockwise seen from the
     top), for the release check's numbering hold. -> None when the rule does not apply: fewer than 4 numbered leads,

@@ -252,6 +252,27 @@ def numbering_hold(text, src, pin_names):
         ": the generated footprint would put these pins on the wrong pads; check the pad numbers on the datasheet drawing"
 
 
+EP_NET = re.compile(r"(?i)^(E?PAD|EP|EPAD|EXP(OSED)?[ _]?PAD|THERMAL([ _]?PAD)?|TAB|SLUG|DAP|PGND\d*|AGND\d*|DGND\d*|GND\w*|"
+                    r"VSS\w*|VEE|0V)$")
+
+
+def ep_lead_holds(text, pin_names):
+    """R-CL-2: an exposed pad numbered as a lead it does not touch (footprint_check.ep_on_lead) joins the thermal pad to
+    that lead's net. A datasheet read told to number the pad pin_count + 1 does this on a part whose leads are numbered
+    past pin_count (cut leads). Fine when the lead's pin is the pad's net (GND, VSS, EP, PAD, thermal: the maker's
+    "EP = pin 4 GND"), held otherwise. Not for KiCad library lands (their numbering is curated). -> hold messages."""
+    from . import symbol_layout as SL
+    out = []
+    for n in FC.ep_on_lead(text):
+        nm = str(pin_names.get(n) or "")
+        if nm and (EP_NET.match(SL.plain(nm).strip()) or SL.classify({"name": nm, "num": n}) in ("ground", "ep")):
+            continue
+        out.append(f"the exposed pad is numbered {n}, the number of lead {n} ({nm or 'no pin'}), which it does not "
+                   f"touch: the thermal pad would join that pin's net. Check the pad number on the datasheet (give the "
+                   f"exposed pad its own number, or the GND pin's it is tied to)")
+    return out
+
+
 def check_item(item, base=".", rules=None):
     """-> (failures [(rule, message)], warnings [str], info {height, ...}). rules (ecadlib.rules): required fields,
     accepted pin-1 names and the courtyard layer; None = ecadlib's own."""
@@ -349,6 +370,9 @@ def check_item(item, base=".", rules=None):
             r == "pin1" and NUMBERING_WARN.search(m) for _, r, m in issues) else None
         if numbering:                          # a swapped pair the generator / pad table numbered: held (fpgen D1)
             add("footprint", f"pin1: {numbering}")
+        if text is not None and syms and not src.startswith(("kicad:", "local:")):
+            for msg in ep_lead_holds(text, pin_names):     # R-CL-2: the thermal pad on a signal lead's number
+                add("footprint", f"pin1: {msg}")
         for lvl, rule, msg in issues:
             if numbering and rule == "pin1" and NUMBERING_WARN.search(msg):
                 continue                       # said by the hold above

@@ -185,3 +185,32 @@ def test_rpub8_unknown_pin_type_is_reported(tmp_path, monkeypatch):
     with redirect_stdout(out):
         SL.main([str(tmp_path / "p.csv"), "-o", str(tmp_path / "q.SchLib")])
     assert "pin 2 'ouptut'" in out.getvalue() and "Open Drain" not in out.getvalue(), out.getvalue()
+
+
+# R-CL-2: a read that numbers the exposed pad pin_count + 1 (as the prompt says) on a part whose leads run past
+# pin_count gives the thermal pad a signal lead's number: held, unless that lead's pin is the pad's net (GND, EP)
+def _ep_item(tmp_path, ep, names, source="datasheet:https://example.com/x.pdf"):
+    from ecadlib import footprint_gen as FG, release_check as RC
+    from tests.test_hunt1026_fpgen import _gapped_soic
+    from tests.test_release_check import make
+    kmod, _ = FG.build(_gapped_soic(ep_number=ep))
+    nums = [n for n in range(1, 17) if n not in (13, 14)]
+    it = make(tmp_path, kmod=kmod, pins=nums, source=source, fp_name="SOIC-14-16-1EP_3.9x9.9mm_P1.27mm")
+    sym = AL.ic_symbol("PART1", [{"num": str(n), "name": names.get(n, f"P{n}"), "type": "io", "side": "left"} for n in nums],
+                       footprint="SOIC-14-16-1EP_3.9x9.9mm_P1.27mm")
+    AL.write_schlib(Path(tmp_path) / it["symbol"]["file"], [sym])
+    f, w, _ = RC.check_item(it, tmp_path)
+    return [f"{r}: {m}" for r, m in f], w
+
+
+@lite
+def test_rcl2_exposed_pad_on_a_lead_number_holds(tmp_path):
+    f, w = _ep_item(tmp_path / "a", "15", {15: "SDA"})
+    assert any("exposed pad" in m and "15" in m and "SDA" in m for m in f), (f, w)
+    f, w = _ep_item(tmp_path / "b", "15", {15: "GND"})            # EP = pin 15 GND: shared on purpose
+    assert not any("exposed pad" in m for m in f), f
+    f, w = _ep_item(tmp_path / "c", "17", {})                     # its own number: no hold (pads without a pin aside)
+    assert not any("exposed pad" in m for m in f), f
+    f, w = _ep_item(tmp_path / "d", "15", {15: "SDA"}, source="kicad:Package_SO:X")   # a curated KiCad land: not judged
+    assert not any("exposed pad" in m for m in f), f
+
