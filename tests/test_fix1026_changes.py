@@ -212,3 +212,221 @@ def test_fix_changes_rpub5_an_existing_package_keeps_its_identifier():
         assert KP.reuse_identifier(out, "Other") is None             # another library's record: not reused
         (out / "kicad_pcm.json").write_text("{garbled", encoding="utf-8")
         assert KP.reuse_identifier(out, lib) is None
+
+
+# ------------------------------------------------------------------ 2: web UI actions during a librarian run
+ANN = "Ann Lee <ann@example.com>"
+
+
+class _BusyLibrary:
+    """The ui_fixture workspace served over HTTP, with a real librarian run (POST /api/librarian/run, every part redone)
+    stopped at its first part look-up: it holds the plan's library lock until release() (as a long online run does)."""
+
+    def __init__(self, tmp_path, monkeypatch):
+        from ecadlib import librarian as L
+        from tests.test_ui import serve
+        from tests.ui_fixture import build
+        monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("ECADLIB_LOCK_WAIT", "60")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.ws, self.bom = build(tmp_path / "ws")
+        self.plan = self.ws.root / "librarian" / "sample_bom" / "plan.json"
+        self.started, self.go = threading.Event(), threading.Event()
+        real = L.Run.resolve
+        me = self
+
+        def resolve(self_, *a, **k):
+            me.started.set()
+            me.go.wait(60)
+            return real(self_, *a, **k)
+        monkeypatch.setattr(L.Run, "resolve", resolve)
+        self.srv, self.call = serve(self.ws)
+
+    def start(self):
+        st, j = self.call("POST", "/api/librarian/run", {"bom": self.bom, "refresh": True})
+        assert st == 200, j
+        self.run_job = j["job"]
+        assert self.started.wait(30), "the librarian run did not start"
+        from ecadlib import ledger as LG
+        got = None
+        try:                                          # it holds the library lock now
+            got = LG.lock(self.plan.parent, wait=0.2)
+        except LG.LedgerError:
+            pass
+        if got is not None:
+            LG.unlock(got)
+            raise AssertionError("the librarian run does not hold the library lock")
+
+    def timed(self, method, path, body, limit=15):
+        t0 = time.time()
+        st, j = self.call(method, path, body)
+        took = time.time() - t0
+        assert took < limit, f"{path} took {took:.1f} s while the librarian ran (the UI must not hang)"
+        return st, j
+
+    def release(self):
+        from tests.test_ui import wait_job
+        self.go.set()
+        j = wait_job(self.call, self.run_job, timeout=120)
+        assert j["state"] == "done", j
+        return j
+
+    def close(self):
+        self.go.set()
+        self.srv.RequestHandlerClass.job_runner.wait(30)
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+def _plan_items(plan):
+    return {i["name"]: i for i in json.loads(Path(plan).read_text(encoding="utf-8"))}
+
+
+@lite
+def test_fix_changes_2a_release_anyway_during_a_librarian_run_is_recorded_at_once_and_kept(tmp_path, monkeypatch):
+    """Release anyway while a librarian run holds the library lock: answered at once (no 5 s refusal, no 600 s wait),
+    recorded in plan.json, and the run's own plan write keeps it (the part ends ready, released in the ledger)."""
+    b = _BusyLibrary(tmp_path, monkeypatch)
+    try:
+        b.start()
+        st, j = b.timed("POST", "/api/release-check", {"bom": b.bom, "allow": ["AO3401A"], "user": ANN})
+        assert st == 200, j
+        assert _plan_items(b.plan)["AO3401A"].get("allow"), "the release anyway was not recorded"
+        assert j.get("pending"), j                    # it says the release is recorded when the run finishes
+        b.release()
+        it = _plan_items(b.plan)["AO3401A"]
+        assert it.get("allow") and it["status"] == "ready", (it.get("allow"), it["status"], it.get("hold_reasons"))
+        from ecadlib import ledger as LG
+        assert LG.Ledger(b.plan.parent).head("AO3401A"), "no released revision after the run"
+    finally:
+        b.close()
+
+
+@lite
+def test_fix_changes_2b_sign_off_reject_during_a_librarian_run_is_kept(tmp_path, monkeypatch):
+    b = _BusyLibrary(tmp_path, monkeypatch)
+    try:
+        b.start()
+        st, j = b.timed("POST", "/api/approvals/decide", {"bom": b.bom, "part": "CAP-0402-100nF", "decision": "reject",
+                                                          "user": ANN, "comment": "wrong dielectric"})
+        assert st == 200, j
+        b.release()
+        it = _plan_items(b.plan)["CAP-0402-100nF"]
+        assert [a["decision"] for a in it.get("approvals") or []] == ["reject"], it.get("approvals")
+        assert it["status"] != "ready", it["status"]
+    finally:
+        b.close()
+
+
+@lite
+def test_fix_changes_2c_revert_during_a_librarian_run_is_queued_and_applied_when_it_ends(tmp_path, monkeypatch):
+    """A revert (rewrites library files) made while the run holds the library lock is accepted as a job that waits
+    for the run, says so, and is applied once the run ends: not refused, not lost, no hang."""
+    from ecadlib import change_gate as CG, ledger as LG
+    from tests.test_ui import wait_job
+    b = _BusyLibrary(tmp_path, monkeypatch)
+    try:
+        items = json.loads(b.plan.read_text(encoding="utf-8"))
+        cap = next(i for i in items if i["name"] == "CAP-0402-100nF")
+        cap["description"] = (cap.get("description") or "") + " (edited)"
+        b.plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
+        with contextlib.redirect_stderr(io.StringIO()):
+            CG.publish_guard(b.plan, items, "kicad")          # r2 of CAP-0402-100nF
+        assert LG.Ledger(b.plan.parent).head("CAP-0402-100nF")["revision"] == 2
+        b.start()
+        # the run builds CAP-0402-100nF from the BOM again (its description back: r3); the queued revert to r2 is
+        # applied after it, as r4
+        st, j = b.timed("POST", "/api/change/revert", {"bom": b.bom, "part": "CAP-0402-100nF", "revision": 2,
+                                                       "user": ANN, "comment": "back to the edited r2"})
+        assert st == 200 and j.get("queued") and j.get("job"), j
+        assert "waiting for the librarian run to finish" in j.get("waiting", ""), j
+        time.sleep(1.0)
+        st, q = b.call("GET", f"/api/job?id={j['job']}")
+        assert q["state"] == "running" and "waiting for the librarian run" in q["label"], q   # still waiting
+        b.release()
+        done = wait_job(b.call, j["job"], timeout=60)
+        assert done["state"] == "done", (done["state"], done.get("error"))
+        ev = [e for e in LG.Ledger(b.plan.parent).history("CAP-0402-100nF") if e.get("event") == "revert"]
+        assert ev, [e.get("event") for e in LG.Ledger(b.plan.parent).history("CAP-0402-100nF")]
+        assert _plan_items(b.plan)["CAP-0402-100nF"]["description"].endswith("(edited)")
+    finally:
+        b.close()
+
+
+@lite
+def test_fix_changes_2d_a_queued_action_that_fails_reports_its_error(tmp_path, monkeypatch):
+    """The queued job reports a refusal (here: no such revision) like any other UI job, once the run ends."""
+    from tests.test_ui import wait_job
+    b = _BusyLibrary(tmp_path, monkeypatch)
+    try:
+        b.start()
+        st, j = b.timed("POST", "/api/change/revert", {"bom": b.bom, "part": "CAP-0402-100nF", "revision": 9,
+                                                       "user": ANN, "comment": "x"})
+        assert st == 200 and j.get("queued"), j
+        b.release()
+        done = wait_job(b.call, j["job"], timeout=60)
+        assert done["state"] == "error" and done["error"], done
+    finally:
+        b.close()
+
+
+@lite
+def test_fix_changes_2e_a_command_line_run_holding_the_lock_queues_and_keeps_ui_actions(tmp_path, monkeypatch):
+    """A fake command-line writer (another process in real life: no UI job) holds the library lock, then writes its old
+    copy of plan.json through librarian.save_plan, as change control's writers do. Meanwhile the UI records a release
+    anyway (kept by that write) and a revert (queued, applied once the lock is free). Nothing deadlocks."""
+    from ecadlib import change_gate as CG, ledger as LG, librarian as L
+    from tests.test_ui import serve, wait_job
+    from tests.ui_fixture import build
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ECADLIB_LOCK_WAIT", "60")
+    with contextlib.redirect_stdout(io.StringIO()):
+        ws, bom = build(tmp_path / "ws")
+    plan = ws.root / "librarian" / "sample_bom" / "plan.json"
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    cap = next(i for i in items if i["name"] == "CAP-0402-100nF")
+    cap["description"] = (cap.get("description") or "") + " (edited)"
+    plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    with contextlib.redirect_stderr(io.StringIO()):
+        CG.publish_guard(plan, items, "kicad")                # r2
+    holding, go, errors = threading.Event(), threading.Event(), []
+
+    def writer():
+        try:
+            with LG.locked(plan.parent):
+                old = json.loads(plan.read_text(encoding="utf-8"))
+                holding.set()
+                go.wait(30)
+                L.save_plan(plan, old)                       # its old copy: decisions recorded meanwhile are kept
+        except Exception as e:                               # pragma: no cover - reported below
+            errors.append(e)
+    t = threading.Thread(target=writer, daemon=True)
+    t.start()
+    assert holding.wait(10)
+    srv, call = serve(ws)
+    try:
+        t0 = time.time()
+        st, j = call("POST", "/api/release-check", {"bom": bom, "allow": ["AO3401A"], "user": ANN})
+        assert st == 200 and j.get("pending"), (st, j)
+        st, q = call("POST", "/api/change/revert", {"bom": bom, "part": "CAP-0402-100nF", "revision": 1, "user": ANN,
+                                                    "comment": "back"})
+        assert st == 200 and q.get("queued") and WAITING_TEXT in q["waiting"], (st, q)
+        assert time.time() - t0 < 15, "the UI waited for the writer"
+        time.sleep(0.5)
+        assert call("GET", f"/api/job?id={q['job']}")[1]["state"] == "running"
+        go.set()
+        t.join(20)
+        assert not t.is_alive() and not errors, errors
+        assert _plan_items(plan)["AO3401A"].get("allow"), "the writer's plan write dropped the release anyway"
+        done = wait_job(call, q["job"], timeout=30)
+        assert done["state"] == "done", (done["state"], done.get("error"))
+        assert LG.Ledger(plan.parent).head("CAP-0402-100nF")["revision"] == 3
+        assert [e for e in LG.Ledger(plan.parent).history("CAP-0402-100nF") if e.get("event") == "revert"]
+    finally:
+        go.set()
+        srv.RequestHandlerClass.job_runner.wait(30)
+        srv.shutdown()
+        srv.server_close()
+
+
+WAITING_TEXT = "waiting for the librarian run to finish"

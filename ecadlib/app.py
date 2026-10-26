@@ -31,6 +31,16 @@ STATUS_ORDER = ["needs_footprint_generation", "unverified (source unreachable)",
 UPLOAD_DIR = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")      # the folder save_upload makes for each upload
 WIN_DEVICE = re.compile(r"(?i)(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?")   # Windows device names, any suffix
 STYLE_OFFLINE = "--offline: the model is not asked to write the house style guide; run without --offline to have it write it"
+WAITING = "waiting for the librarian run to finish"
+
+
+class LibraryBusy(ValueError):
+    """Another run (a librarian run, a publisher, a CLI change-control step) holds this library's lock. A request that
+    must rewrite library files waits for it as a job (the web UI queues it: ui.server); folder: the plan folder."""
+
+    def __init__(self, msg, folder):
+        super().__init__(msg)
+        self.folder = Path(folder)
 
 
 class Workspace:
@@ -572,11 +582,35 @@ class Workspace:
     def release_check(self, bom, allow=(), unallow=(), user=None):
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
         failures (allow) or taking that back (unallow). user, when given, is recorded as the person who gave the
-        allow (approvals' no_self_approval uses it). Never touches the network."""
-        with self._plan_lock(bom):
-            return self._release_check(bom, allow, unallow, user)
+        allow (approvals' no_self_approval uses it). Never touches the network.
+        While another run holds the library lock (a librarian run, a publisher), the decision is recorded in
+        plan.json at once under plan.lock only: that run keeps decisions recorded meanwhile (librarian DECISIONS,
+        save_plan), and the release itself goes into the ledger when a writer next settles the library (the run's
+        own baseline) -> the summary then says so in `pending`."""
+        try:
+            with self._plan_lock(bom):
+                return self._release_check(bom, allow, unallow, user)
+        except LibraryBusy:
+            pass
+        with self._decision_lock():
+            out = self._release_check(bom, allow, unallow, user, record=False)
+        out["pending"] = (f"recorded; another run is changing this library right now, so the release is recorded in "
+                          f"the change ledger when it finishes")
+        return out
 
-    def _release_check(self, bom, allow=(), unallow=(), user=None):
+    PLAN_LOCK_WAIT = 30                                # seconds a decision waits for plan.lock (held only briefly)
+
+    @contextlib.contextmanager
+    def _decision_lock(self):
+        """plan.lock alone, for a decision (approve / reject, release anyway) that is only recorded into plan.json. It
+        never needs the library lock, so it is never waited out by a librarian run: only by another short plan write."""
+        from .fsutil import plan_lock
+        with plan_lock(self.root, wait=True, timeout=self.PLAN_LOCK_WAIT) as free:
+            if not free:
+                raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
+            yield
+
+    def _release_check(self, bom, allow=(), unallow=(), user=None, record=True):
         from . import release_check as RC
         bom_path = self._bom_path(bom)
         out = self._librarian_dir(bom_path)
@@ -594,7 +628,7 @@ class Workspace:
             from .approvals import post_check, stamp_allow
             stamp_allow(items, list(allow), user)
             post_check(items, out, rows)
-        if allow:                                          # change control: revision 1 of what was released
+        if allow and record:                               # change control: revision 1 of what was released
             RC.record_releases(items, out, list(allow), user or None)
         write_text_atomic(plan_f, json.dumps(items, indent=2))
         if allow or unallow:
@@ -605,7 +639,8 @@ class Workspace:
         L.write_review(L.review_rows(items), out, str(bom_path))
         return self._librarian_summary(bom_path, items, [])
 
-    LIBRARY_LOCK_WAIT = 5                              # seconds a UI request waits for a library another run is changing
+    LIBRARY_LOCK_WAIT = 2                              # seconds a UI request waits for a library another run is changing
+                                                       # (then: a decision is recorded at once, a file rewrite is queued)
 
     @contextlib.contextmanager
     def _plan_lock(self, bom=None, folder=None):
@@ -613,12 +648,13 @@ class Workspace:
         command rewrites the plan, a change written now would be overwritten by its copy, so it is refused instead.
         bom / folder: the rewrite goes on to change-control steps (release anyway, resolve, dedupe merge, restyle, part
         approve), so that plan's library lock is taken first (the lock order in fsutil); a run holding it (a librarian
-        run, a publisher) refuses the request after a few seconds instead of a wait with plan.lock held."""
+        run, a publisher) raises LibraryBusy after a few seconds instead of a wait with plan.lock held: the caller
+        records a decision without it (release_check) or the web UI queues the request until the lock is free."""
         from .fsutil import plan_lock
         if folder is None and bom is not None:
             folder = self._librarian_dir(self._bom_path(bom))
         with self._library_lock(folder):
-            with plan_lock(self.root, wait=False) as free:
+            with plan_lock(self.root, wait=True, timeout=self.PLAN_LOCK_WAIT) as free:
                 if not free:
                     raise ValueError("another ecadlib command is changing this plan right now; try again in a minute")
                 yield
@@ -632,7 +668,8 @@ class Workspace:
         try:
             key = LG.lock(folder, wait=self.LIBRARY_LOCK_WAIT)
         except LG.LedgerError:
-            raise ValueError("another ecadlib command is changing this library right now; try again in a minute") from None
+            raise LibraryBusy("another ecadlib command is changing this library right now; try again in a minute",
+                              folder) from None
         try:
             yield
         finally:
@@ -767,11 +804,10 @@ class Workspace:
     def approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp", aliases=()):
         """Record an approve / reject (see _approve_part). Holds <workspace>/plan.lock while it rewrites the plan: while
         another ecadlib command rewrites it, the decision is refused ("decide again in a minute") instead of being
-        overwritten when that command saves its copy."""
-        from .fsutil import plan_lock
-        with plan_lock(self.root, wait=False) as free:
-            if not free:
-                raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
+        overwritten when that command saves its copy. plan.lock is held only for short plan writes (a librarian run
+        holds it for its final write, not while it looks parts up, and keeps decisions recorded meanwhile): the
+        decision waits for it a few seconds rather than being refused."""
+        with self._decision_lock():
             return self._approve_part(bom, part, decision, user, role, comment, via)
 
     def _approve_part(self, bom, part, decision, user, role=None, comment="", via="ecadlib ui/mcp"):

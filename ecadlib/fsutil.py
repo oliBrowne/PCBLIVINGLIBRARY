@@ -131,12 +131,13 @@ _HELD = threading.local()                # plan.lock folders this thread holds (
 # needs both takes the library lock before plan.lock (approvals.cli_plan_lock, Workspace._plan_lock with a folder),
 # so a librarian run (library lock, then plan.lock) and a web UI / CLI decision can never wait for each other.
 @contextlib.contextmanager
-def plan_lock(workspace_root, wait=True):
+def plan_lock(workspace_root, wait=True, timeout=None):
     """<workspace>/plan.lock: every path that records into a plan (the web UI's Approvals page / approve_part, change
     decisions, `ecadlib approve`) takes it while it rewrites plan.json, so two of them never overwrite each other.
-    wait=False yields False at once when another thread or process holds it. Re-entrant in one thread (an inner plan
-    write under an outer lock does not wait for itself); other threads and processes are kept out. Released by the
-    OS if the holder dies. See the lock order above."""
+    wait=False yields False at once when another thread or process holds it; timeout (seconds, with wait) yields False
+    once that long has passed (plan.lock is held only for a short read-merge-write, so a few seconds is plenty).
+    Re-entrant in one thread (an inner plan write under an outer lock does not wait for itself); other threads and
+    processes are kept out. Released by the OS if the holder dies. See the lock order above."""
     d = Path(workspace_root).resolve()
     held = _HELD.__dict__.setdefault("dirs", set())
     if d in held:
@@ -145,16 +146,24 @@ def plan_lock(workspace_root, wait=True):
     d.mkdir(parents=True, exist_ok=True)
     f = open(d / "plan.lock", "a+b")
     msvcrt = None
+    deadline = None if not wait or timeout is None else time.monotonic() + max(0.0, float(timeout))
     try:
         try:
-            try:
-                import fcntl
-                fcntl.flock(f, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
-            except ImportError:                                 # Windows
-                import msvcrt
-                _win_lock(msvcrt, f, wait)
+            while True:
+                try:
+                    try:
+                        import fcntl
+                        fcntl.flock(f, fcntl.LOCK_EX | (0 if wait and deadline is None else fcntl.LOCK_NB))
+                    except ImportError:                         # Windows
+                        import msvcrt
+                        _win_lock(msvcrt, f, wait and deadline is None)
+                    break
+                except OSError:
+                    if deadline is None or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
         except OSError:
-            if wait:
+            if wait and deadline is None:
                 raise
             got = False
         else:

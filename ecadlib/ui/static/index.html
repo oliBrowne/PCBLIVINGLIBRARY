@@ -873,6 +873,19 @@ function jobLines(ul, lines) {
   ul.innerHTML = lines.map(l => `<li class="${esc(l.state)}"><span class="dot" aria-hidden="true"></span><span>${esc(l.text || l.name)}</span></li>`).join("");
   if (atEnd) ul.scrollTop = ul.scrollHeight;
 }
+// a change that rewrites library files while another run (a librarian run) holds the library: the server queues it as a
+// job and applies it when that run ends; wait for it here, the rest of the page keeps working
+async function applied(r, what) {
+  if (!r || !r.queued) return r;
+  toast(`${what}: ${r.waiting}; it is applied as soon as that run ends.`, { ms: 8000 });
+  for (;;) {
+    await sleep(800);
+    const j = await api("/api/job?id=" + encodeURIComponent(r.job));
+    if (j.state === "done") return j.result;
+    if (j.state === "error") throw new Error(j.error);
+    if (j.state === "cancelled") throw new Error("Stopped: it was not applied.");
+  }
+}
 async function pollJob(id, view) {
   view.stop.disabled = false; view.stop.textContent = "Stop";
   view.stop.onclick = async () => {
@@ -1133,7 +1146,7 @@ async function changeDecide(part, decision, digest) {
   const role = $("#signrole").value.trim() || null;
   try {
     // the digest of the change shown on this page: a change proposed again since is refused, never approved unseen
-    const r = await api("/api/change/decide", { bom: current.bom, part, decision, user: who, role, comment, digest });
+    const r = await applied(await api("/api/change/decide", { bom: current.bom, part, decision, user: who, role, comment, digest }), part);
     const res = r.results.find(x => x.part === part) || r.results[0] || {};
     toast(decision === "reject" ? `${part}: update rejected, the released part is kept.`
       : res.result === "approval recorded" ? `${part}: approval recorded (${res.approvals} of ${res.needed}).` : `${part}: update approved${res.revision ? `, now revision ${res.revision}` : ""}.`);
@@ -1145,7 +1158,7 @@ async function revertTo(part, revision) {
   const comment = prompt(`Release revision ${revision} of ${part} again? It becomes a new revision. Why:`, "");
   if (comment === null) return;
   try {
-    const r = await api("/api/change/revert", { bom: current.bom, part, revision, user: who, comment });
+    const r = await applied(await api("/api/change/revert", { bom: current.bom, part, revision, user: who, comment }), part);
     const res = r.results.find(x => x.part === part) || {};
     toast(`${part}: revision ${revision} released again as revision ${res.revision}.`);
     await loadParts(); const p = findPart(part); if (p && popen === part) showPanel(p, false);
@@ -1186,7 +1199,8 @@ window.addEventListener("pagehide", () => pending.forEach(d => { if (d.toast) { 
 // release anyway: recorded at once; Undo takes it back (Hold it again)
 async function release(part, allow) {
   try {
-    await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: $("#signer").value.trim() || null });
+    const rc = await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: $("#signer").value.trim() || null });
+    if (rc.pending) toast(`${part}: ${rc.pending}.`);
     await loadParts(); loadStatus().catch(() => {});
     const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code));
     if (allow && p && effective(p) === "held")       // a missing or damaged file cannot be released anyway: say so
@@ -1273,7 +1287,7 @@ $("#picklist").addEventListener("click", async e => {
   const pin_map = c.pin_map && use && use.checked ? c.pin_map : null;
   e.target.disabled = true; banner($("#pickerr"), "");
   try {
-    const r = await api("/api/resolve/choose", { bom: current.bom, part: picking, kind, id: c.id, pin_map });
+    const r = await applied(await api("/api/resolve/choose", { bom: current.bom, part: picking, kind, id: c.id, pin_map }), picking);
     showLibrarian(r); pickdlg.close();
     toast(`${r.chosen.name}: ${kind} ← ${c.id}; now ${r.chosen.status}` + (r.chosen.hold_reasons.length ? ` (${r.chosen.hold_reasons[0]})` : ""));
   } catch (err) { banner($("#pickerr"), err.message); e.target.disabled = false; }
@@ -1322,7 +1336,7 @@ function showDupes(r) {
 $("#dedupe").addEventListener("click", e => action(e.target, $("#dedupeout"), async () => showDupes(await api("/api/dedupe", { bom: current.bom }))));
 $("#dedupeout").addEventListener("click", e => {
   if (e.target.id !== "dedupemerge" || !confirm("Point the duplicate parts, footprints and symbols in the plan at their keepers? Duplicate parts are then skipped by the Altium 365 push, and approvals of changed parts go stale.")) return;
-  action(e.target, $("#dedupeout"), async () => { const r = await api("/api/dedupe", { bom: current.bom, merge: true }); showLibrarian(r.summary); return showDupes(r); });
+  action(e.target, $("#dedupeout"), async () => { const r = await applied(await api("/api/dedupe", { bom: current.bom, merge: true }), "Merge"); showLibrarian(r.summary); return showDupes(r); });
 });
 
 // ---- footprint dialog
