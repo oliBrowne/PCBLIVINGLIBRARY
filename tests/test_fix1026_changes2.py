@@ -5,7 +5,7 @@ Offline.  python3 -m pytest -q tests/test_fix1026_changes2.py   (or python -m te
 import contextlib, io, json, os, shutil, subprocess, sys, tempfile, threading, time
 from pathlib import Path
 
-from tests.fixtures_lite import lite
+from tests.fixtures_lite import clean_all, lite, scratch
 
 REPO = Path(__file__).resolve().parents[1]
 _DEMO = {}
@@ -23,11 +23,11 @@ def _run(cwd, *args):
 def _demo():
     """A fresh copy of the offline demo workspace -> (work dir, library folder)."""
     if "dir" not in _DEMO:
-        d = Path(tempfile.mkdtemp(prefix="ecadlib-fix2-demo-"))
+        d = scratch("ecadlib-fix2-demo-", keep=True)          # shared by the run
         r = _run(d, "demo", "-o", "ws")
         assert r.returncode == 0, r.stdout + r.stderr
         _DEMO["dir"] = d
-    w = Path(tempfile.mkdtemp(prefix="ecadlib-fix2-"))
+    w = scratch("ecadlib-fix2-")
     shutil.copytree(_DEMO["dir"] / "ws", w / "ws")
     return w, w / "ws/librarian/demo_bom_demo"
 
@@ -205,3 +205,6 @@ def test_fix2_rrc4_cli_approve_waits_for_a_short_plan_write_instead_of_refusing(
     finally:
         stop.set()
         t2.join(10)
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

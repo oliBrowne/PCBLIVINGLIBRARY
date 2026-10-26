@@ -2,11 +2,12 @@
 documented calls, the command lines survive spaces and Windows separators, and every action the menu runs works end to
 end offline through the same files the script exchanges (request.ini -> run-job -> result.ini).
 python3 -m tests.test_altium_menu.   Nothing here runs Altium, cmd.exe or wscript (none exist on this machine)."""
-import configparser, contextlib, csv, io, json, os, re, socket, subprocess, sys, tempfile, zipfile
+import configparser, contextlib, csv, io, json, os, re, socket, subprocess, sys, zipfile
 from pathlib import Path
 from unittest import mock
 
 from ecadlib import altium_forms as AF, altium_menu as AM, altium_native as AN
+from tests.fixtures_lite import clean_all, scratch
 
 ROOT = Path(__file__).parent.parent
 RULES = ('[sources]\norder = ["standard"]\n\n[parameters]\n'
@@ -16,7 +17,7 @@ CAP = {"mpn": "CL05B104KO5NNNC", "manufacturer": "Samsung Electro-Mechanics", "v
 
 
 def _tmp(name="ecadlib menu "):
-    return Path(tempfile.mkdtemp(prefix=name))                  # a space in every path
+    return scratch(name)                  # a space in every path
 
 
 def _quiet(fn, *a, **k):
@@ -873,3 +874,6 @@ def test_fill_counts_only_the_parts_the_a365_push_released():
     assert any(x.startswith("released to Altium 365|1") for x in rows), rows
     assert any(x.startswith("P2|ready but not released") for x in rows), rows
     assert r["status"] == "error", r
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

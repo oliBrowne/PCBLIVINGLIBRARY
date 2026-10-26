@@ -1,9 +1,10 @@
 """The ecadlib window in KiCad's PCB editor (ecadlib/kicad_menu.py + assets/kicad_action_plugin.py): what the window
 runs, offline on the KiCad schematic fixture: check the BOM, fill the library, add a part (footprint to place)."""
-import json, shutil, struct, tempfile, zlib
+import json, shutil, struct, zlib
 from pathlib import Path
 
 from ecadlib import altium_menu as AM, kicad_menu as KM
+from tests.fixtures_lite import clean_all, scratch
 
 FIX = Path(__file__).parent / "fixtures" / "kicad_sch"
 PARTS = """Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description,Datasheet
@@ -13,7 +14,7 @@ PARTS = """Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Num
 
 
 def _project():
-    d = Path(tempfile.mkdtemp(prefix="ecadlib-kmenu-"))
+    d = scratch("ecadlib-kmenu-")
     shutil.copytree(FIX, d, dirs_exist_ok=True)
     (d / "board.kicad_pcb").write_text("(kicad_pcb)")
     bom = d / KM.WORK / AM.MENU_BOM
@@ -77,7 +78,7 @@ def test_open_only_reports_and_errors_are_one_line():
 
 
 def test_old_plugin_list_is_adopted():
-    d = Path(tempfile.mkdtemp(prefix="ecadlib-kmenu-"))
+    d = scratch("ecadlib-kmenu-")
     (d / KM.WORK).mkdir()
     (d / KM.WORK / "parts.csv").write_text("Designator,Qty,Value,Mfr. Part #\nP1,1,LM358DR,LM358DR\n")
     assert KM.adopt_old_list(KM.config(d)) == 1 and "LM358DR" in (d / KM.WORK / AM.MENU_BOM).read_text()
@@ -100,3 +101,6 @@ def test_cli_check_bom_for_the_schematic_editor():
     with contextlib.redirect_stdout(out):
         assert KM.main(["check-bom", str(d / "board.kicad_sch"), "out.csv", "--no-open", "--json"]) == 0
     assert json.loads(out.getvalue())["lines"] == 5
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

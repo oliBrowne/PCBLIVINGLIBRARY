@@ -3,6 +3,7 @@ Nothing live: the offline demo library, built once per run.
     python3 -m tests.run_all test_hunt1026_upkeep"""
 import hashlib, json, os, shutil, subprocess, sys, tempfile
 from pathlib import Path
+from tests.fixtures_lite import clean_all, scratch
 
 REPO = Path(__file__).resolve().parents[1]
 _DEMO = {}
@@ -19,11 +20,11 @@ def _run(cwd, *args):
 def _demo():
     """A fresh copy of the offline demo workspace -> (work dir, library folder)."""
     if "dir" not in _DEMO:
-        d = Path(tempfile.mkdtemp(prefix="ecadlib-hunt-demo-"))
+        d = scratch("ecadlib-hunt-demo-", keep=True)          # shared by the run
         r = _run(d, "demo", "-o", "ws")
         assert r.returncode == 0, r.stdout + r.stderr
         _DEMO["dir"] = d
-    w = Path(tempfile.mkdtemp(prefix="ecadlib-hunt-"))
+    w = scratch("ecadlib-hunt-")
     shutil.copytree(_DEMO["dir"] / "ws", w / "ws")
     return w, w / "ws/librarian/demo_bom_demo"
 
@@ -226,3 +227,6 @@ def test_upkeep03_a_broken_line_in_the_middle_still_stops():
             raise AssertionError("a line that is not an object must stop")
         except LG.LedgerError as e:
             assert ":1:" in str(e)
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

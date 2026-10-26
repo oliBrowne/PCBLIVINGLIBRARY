@@ -10,13 +10,14 @@ from pathlib import Path
 from unittest import mock
 
 from ecadlib import altium_lib as AL, altium_pkg as AP, footprint_gen as F, kicad_export as X, kicad_pcm as KP, sexpr
+from tests.fixtures_lite import clean_all, scratch
 
 ROOT = Path(__file__).parent.parent
 _PLAN = {}
 
 
-def _tmp():
-    return Path(tempfile.mkdtemp(prefix="ecadlib-pkg-"))
+def _tmp(keep=False):
+    return scratch("ecadlib-pkg-", keep)
 
 
 def _plan(base=None):
@@ -24,7 +25,7 @@ def _plan(base=None):
     it; None: a new temp folder): (plan.json, http)."""
     if "dir" not in _PLAN:
         from tests import test_kicad_export as TX
-        d = _tmp()
+        d = _tmp(keep=True)                    # shared by the run
         plan, _, http = TX._plan(d)
         _PLAN.update(dir=plan.parent, http=http)
     d = (Path(base) if base else _tmp()) / "plan"
@@ -551,3 +552,6 @@ if __name__ == "__main__":
         if k.startswith("test_"):
             v()
             print("ok", k)
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

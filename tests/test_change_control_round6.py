@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ecadlib import altium_lib as AL, change_diff as CD, change_gate as CG, fingerprint as FP, sexpr
 from tests.test_change_control_round5 import _altium
+from tests.fixtures_lite import clean_all, scratch
 
 
 def texts(ch):
@@ -103,7 +104,7 @@ def test_hidden_pins_named_alike_on_two_nets_are_not_one_net():
         s = {"name": "Q", "description": "q", "designator": "U?", "comment": "*", "footprint": None,
              "prims": [("rect", 0, 0, 40, -40)] + [("pin", q, side, x, y, 30) for q, side, x, y in pins],
              "label_at": ((0, 2), (0, -48))}
-        d = Path(tempfile.mkdtemp(prefix="ecadlib-r6-"))
+        d = scratch("ecadlib-r6-")
         AL.write_schlib(d / "Q.SchLib", [s])
         return FP.of_item({"name": "Q", "symbol": {"ref": "Q", "file": str(d / "Q.SchLib")}, "parameters": []}, d)
     apart = fp(base + [p("4", "AGND", 10), p("5", "DGND", 30)])
@@ -116,3 +117,6 @@ def test_hidden_pins_named_alike_on_two_nets_are_not_one_net():
     same = fp(base + [p("4", "GND", 10), p("5", "GND", 10)])        # one net: a split is the house-rules warn
     ch = CD.diff(same, fp(base + [p("4", "GND", 10), p("5", "GND", 30)]))
     assert CD.worst(ch) == "geometry-minor", texts(ch)
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

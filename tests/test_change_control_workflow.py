@@ -3,7 +3,7 @@
 ledger failing closed, the Altium project check reading pulled revisions, and a renamed part carrying a released MPN.
 
 Each test is a regression for a finding of the #105 tester / critic review (ids in the docstrings)."""
-import contextlib, io, json, subprocess, sys, tempfile, threading
+import contextlib, io, json, subprocess, sys, threading
 from pathlib import Path
 from unittest import mock
 
@@ -11,6 +11,7 @@ from ecadlib import altium_lib as AL, change_cli as CC, change_gate as CG, cliut
 from ecadlib import ledger as LG, project_check as PJ, stdparts as SP
 from ecadlib.approvals import same_person
 from tests.test_change_control import ANN, BOB, ROOT, demo, item, items_of, write_symbol
+from tests.fixtures_lite import clean_all, scratch
 
 SGD = [("1", "S", "passive"), ("2", "G", "input"), ("3", "D", "passive")]
 DSG = [("1", "D", "passive"), ("2", "S", "input"), ("3", "G", "passive")]
@@ -199,7 +200,7 @@ def test_a_chosen_footprint_that_fails_the_release_check_is_not_released():
             (lib / "ecadlib.toml").write_text("[change]\napprovers = 2\n", encoding="utf-8")
         _strip_steps(lib)
         before = _model_files(lib)
-        src = R.Sources(cache=Path(tempfile.mkdtemp()), offline=True)
+        src = R.Sources(cache=scratch(), offline=True)
         res = R.choose(plan, "AO3401A", "footprint", "spec:SOT-23-5", src=src, user=ANN)
         lg = LG.Ledger(lib)
         assert lg.head("AO3401A")["revision"] == 1, (approvers, res["change"])
@@ -218,7 +219,7 @@ def test_a_chosen_footprint_that_fails_the_release_check_is_not_released():
 
 # ---------------------------------------------------------------- M3: the library lock
 def test_the_library_lock_is_reentrant_and_keeps_other_threads_out():
-    d = Path(tempfile.mkdtemp())
+    d = scratch()
     got = {}
     with LG.locked(d):
         with LG.locked(d):                     # the same thread again: fine
@@ -421,7 +422,7 @@ def test_altium_check_reads_pulled_revisions_and_fails_on_unlisted_changes():
 # ---------------------------------------------------------------- L2: a board without a schematic
 def test_project_scan_reads_a_board_without_a_schematic():
     plan, lib = demo()
-    proj = Path(tempfile.mkdtemp()) / "board"
+    proj = scratch() / "board"
     proj.mkdir()
     (proj / "board.kicad_pro").write_text("{}", encoding="utf-8")
     (proj / "board.kicad_pcb").write_text(
@@ -438,3 +439,6 @@ def test_project_scan_reads_a_board_without_a_schematic():
 if __name__ == "__main__":
     from tests.run_all import main
     sys.exit(main(["test_change_control_workflow"]))
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

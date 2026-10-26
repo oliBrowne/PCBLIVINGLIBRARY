@@ -11,6 +11,7 @@ from unittest import mock
 import pandas as pd
 
 from ecadlib import bom_inputs as BI, bom_triage as T, cli, kicad_dblib as KD, parts_export as PE, rules as RU, sexpr
+from tests.fixtures_lite import clean_all, scratch
 
 FIX = Path(__file__).parent / "fixtures"
 SCH = FIX / "kicad_sch"
@@ -33,8 +34,8 @@ EXPECTED = [
 ]
 
 
-def _tmp():
-    return Path(tempfile.mkdtemp(prefix="ecadlib_io_"))
+def _tmp(keep=False):
+    return scratch("ecadlib_io_", keep)
 
 
 # ------------------------------------------------------------------ KiCad schematic / netlist inputs
@@ -240,7 +241,7 @@ def _plan():
     """A real librarian plan (tests.test_kicad_export's fake-library run), made once and copied per test."""
     if "dir" not in _PLAN:
         from tests import test_kicad_export as TX
-        d = _tmp()
+        d = _tmp(keep=True)                    # shared by the run
         plan, items, http = TX._plan(d)
         _PLAN.update(dir=plan.parent, http=http)
     d = _tmp() / "plan"
@@ -362,3 +363,6 @@ if __name__ == "__main__":
         if k.startswith("test_"):
             v()
             print("ok", k)
+
+
+clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends
