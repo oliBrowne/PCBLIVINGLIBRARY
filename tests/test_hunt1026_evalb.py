@@ -3,6 +3,7 @@ python3 -m tests.run_all test_hunt1026_evalb"""
 import copy, random
 
 from ecadlib.eval import runner as R, score as S
+from tests.fixtures_lite import lite
 
 
 # ---------------------------------------------------------------- symbol: swapped pins spelled another way
@@ -157,3 +158,20 @@ def test_the_report_counts_built_wrong_apart_from_parts_not_built():
                                "mode": "live", "cases": 6, "wall_s": 1, "wall_s_per_part": 0.2}, "summary": s, "cases": rows})
     head = md.split("\n")[2]
     assert "Right: 2/6" in head and "Built wrong: 2" in head and "2 not built" in head and "4 parts are not right" in head, head
+
+
+@lite
+def test_compare_flips_on_right_not_only_on_kicads_match(tmp_path, monkeypatch):
+    # a part right by the maker's land in run A and built wrong in run B is broken (it was not listed: both runs
+    # "fail" KiCad's match); one that moves from KiCad's match to the datasheet's is not broken
+    import json
+    row = lambda i, ok, **k: {"id": i, "family": "qfn", "mpn": i, "pass": ok, "source": "datasheet", "fields": {},
+                              "usd": None, "tokens_in": 0, "tokens_out": 0, "tried": [], "errors": ["pads: off"], **k}
+    a = [row("m", False, kicad_differs_maker_land=True), row("k", True), row("w", False)]
+    b = [row("m", False), row("k", False, kicad_differs_body=True), row("w", False, kicad_differs_maker_land=True)]
+    for name, rows in (("a", a), ("b", b)):
+        rep = {"meta": {"model": "x", "mode": "replay", "cases": 3}, "summary": R.summarize(rows), "cases": rows}
+        (tmp_path / f"{name}.json").write_text(json.dumps(rep))
+    cmp = R.compare(tmp_path / "a.json", tmp_path / "b.json")
+    assert cmp["flipped"]["broken"] == ["m"] and cmp["flipped"]["fixed"] == ["w"], cmp["flipped"]
+    assert cmp["families"]["overall"][0]["right_rate"] == cmp["families"]["overall"][1]["right_rate"]

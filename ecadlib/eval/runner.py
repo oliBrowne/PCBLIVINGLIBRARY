@@ -1031,19 +1031,23 @@ def compare(a, b):
     fams = {}
     lines = [f"A: {a} ({A['meta']['model']}{' via ' + A['meta']['provider'] if A['meta'].get('provider') else ''}, {A['meta']['mode']}, {A['meta']['cases']} cases)",
              f"B: {b} ({B['meta']['model']}{' via ' + B['meta']['provider'] if B['meta'].get('provider') else ''}, {B['meta']['mode']}, {B['meta']['cases']} cases)", "",
-             f"{'family':<12} {'pass A':>9} {'pass B':>9} {'diff':>8} {'$/part A':>10} {'$/part B':>10}"]
+             f"{'family':<12} {'right A':>9} {'right B':>9} {'diff':>8} {'$/part A':>10} {'$/part B':>10}"]
     for k in sorted(set(fa) | set(fb)) + ["overall"]:
         x = A["summary"]["overall"] if k == "overall" else fa.get(k)
         y = B["summary"]["overall"] if k == "overall" else fb.get(k)
         fams[k] = (x, y)
-        ra, rb = (x or {}).get("rate"), (y or {}).get("rate")
+        rt = lambda f: (f or {}).get("right_rate", (f or {}).get("rate"))    # right, as the headline counts it
+        ra, rb = rt(x), rt(y)
         d = f"{100 * (rb - ra):+.1f}" if ra is not None and rb is not None else "-"
         lines.append(f"{k:<12} {_pct(ra):>9} {_pct(rb):>9} {d:>8} {_usd((x or {}).get('usd_per_part')):>10} "
                      f"{_usd((y or {}).get('usd_per_part')):>10}")
     ca, cb = {r["id"]: r for r in A["cases"]}, {r["id"]: r for r in B["cases"]}
     both = [i for i in ca if i in cb]
-    flipped = {"fixed": [i for i in both if not ca[i]["pass"] and cb[i]["pass"]],
-               "broken": [i for i in both if ca[i]["pass"] and not cb[i]["pass"]],
+    # flips of right (KiCad's match or the datasheet's), as the headline counts: a part right by the maker's land in A
+    # and built wrong in B is a part broken, and one that moves between KiCad's match and the datasheet's is not
+    ok = lambda r: bool(r["pass"] or datasheet_right(r))
+    flipped = {"fixed": [i for i in both if not ok(ca[i]) and ok(cb[i])],
+               "broken": [i for i in both if ok(ca[i]) and not ok(cb[i])],
                "only_in_a": [i for i in ca if i not in cb], "only_in_b": [i for i in cb if i not in ca]}
     lines += ["", f"fail -> pass ({len(flipped['fixed'])}): " + ", ".join(flipped["fixed"]),
               f"pass -> fail ({len(flipped['broken'])}): " + "; ".join(f"{i} [{'; '.join(cb[i]['errors'][:2])}]" for i in flipped["broken"])]
