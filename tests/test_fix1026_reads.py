@@ -604,7 +604,7 @@ def test_f6_m3_an_exposed_pad_is_judged_as_it_is_built():
 
 
 def test_f6_m1_a_reverse_pinned_footprint_name_with_a_suffix_is_evidence():
-    """Before: \bSOT-?\d+R\b missed "SOT-143R_Nexperia", "SOT143R_N", "SOT-143-R" (no word break before "_"), so a
+    r"""Before: \bSOT-?\d+R\b missed "SOT-143R_Nexperia", "SOT143R_N", "SOT-143-R" (no word break before "_"), so a
     genuine BF998R read was held. A longer word ("SOT-23-Reel", "SOT-143RF") still is not evidence."""
     rev_pos = [dict(p, side="R" if p["side"] == "L" else "L") for p in SOT143_POS]
     read = lambda pkg: _wire_read("SOT-143", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": rev_pos},
