@@ -282,3 +282,45 @@ def test_eval_overrides_keep_the_ai_key_on_its_own_server():
         # --api-key-env always wins
         base, env, key = _ep(ai_overrides(r, base_url="https://gw2.example.net/v1", api_key_env="PROXY_KEY"))
         assert env == "PROXY_KEY", env
+
+
+# ---------------------------------------------------------------- R-FX19-4: one rule for a page's link and a direct link
+RAK = "https://www.maker.com/product/RAK3172"
+RAK_PDF = "https://www.maker.com/docs/RAK3172.pdf"
+
+
+def _rak(url, page_body, first_lines):
+    import tempfile
+    from ecadlib import datasheet as D
+    from tests import test_datasheet_batch as TB
+    from tests.test_datasheet_downloads import Scripted
+    pdf = TB.pdf_with(first_lines)
+    with tempfile.TemporaryDirectory() as d:
+        http = Scripted({RAK: [(200, f"<html><body>{page_body}</body></html>".encode(), {})], RAK_PDF: [pdf]})
+        try:
+            D.PdfStore(d, http, sleep=lambda s: None).fetch(url, "BOM", part="RAK3172", mpn="RAK3172")
+            return "taken"
+        except D.DatasheetError as e:
+            return str(e)
+
+
+def test_a_user_manual_the_source_calls_the_datasheet_is_taken_on_every_route():
+    manual = ["RAK3172 WisDuo LoRaWAN Module User Manual", "Pin Definition", "Electrical Characteristics"]
+    for how, url, body in (("page link labelled Datasheet", RAK, "<a href='/docs/RAK3172.pdf'>Datasheet</a>"),
+                           ("labelled by its title", RAK, "<a href='/docs/RAK3172.pdf' title='RAK3172 Datasheet'>"
+                                                         "<img src='pdf.png'></a>"),
+                           ("direct BOM link", RAK_PDF, "")):
+        assert _rak(url, body, manual) == "taken", (how, _rak(url, body, manual))
+    # a page link nothing calls the datasheet still is not taken when it opens as a manual (R-FX16-2)
+    got = _rak(RAK, "<a href='/docs/RAK3172.pdf'>Download</a>", manual)
+    assert "User Manual" in got and "not a datasheet" in got, got
+
+
+def test_a_notice_or_certificate_is_refused_on_every_route():
+    for first in (["Product Change Notification", "PCN-2026-04 RAK3172 assembly site change"],
+                  ["RoHS Certificate of Compliance", "RAK3172 complies with Directive 2011/65/EU"],
+                  ["Declaration of Conformity", "RAK3172 LoRaWAN module"]):
+        for how, url, body in (("page link labelled Datasheet", RAK, "<a href='/docs/RAK3172.pdf'>Datasheet</a>"),
+                               ("direct BOM link", RAK_PDF, "")):
+            got = _rak(url, body, first)
+            assert got != "taken" and "not a datasheet" in got, (how, first[0], got)

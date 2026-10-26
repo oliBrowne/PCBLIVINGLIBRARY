@@ -3219,6 +3219,28 @@ LONG_DOC = 4      # a package document found by search with this many pages of t
 
 NOTICE = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|" + PCN +
                     r"|\bnotification\s+of\b|\bdeclaration\s+letter\b|" + EOL, re.I)
+# never a datasheet, whoever calls it one: a notice, a letter, a compliance document. A user guide or manual, a board's
+# sheet or an application note is refused only when nothing calls it the datasheet: a module's maker can publish
+# only a "User Manual" (RAK3172) and link it as the datasheet. One rule for every route (R-FX19-4): the BOM's own
+# datasheet link and a product page's link labelled "Datasheet" call it so; any other link of a page (an embed, a
+# document-download link, an unlabelled .pdf) does not
+NEVER_DATASHEET = re.compile(NOTICE.pattern + "|" + COMPLIANCE, re.I)
+
+
+def labelled_datasheet(html, link, base):
+    """Does a product page label its link to `link` (absolute) "Datasheet" (the anchor's text, title or aria-label)?"""
+    import html as H_
+    from urllib.parse import urljoin
+    text = html.decode("utf-8", "replace") if isinstance(html, bytes) else str(html or "")
+    for m in re.finditer(r"<a\b([^>]*)>(.*?)</a\s*>", text, re.I | re.S):
+        h = re.search(r"""\bhref\s*=\s*["']\s*([^"'#]+?)\s*(?:#[^"']*)?["']""", m.group(1), re.I)
+        if not h or urljoin(base, H_.unescape(h.group(1)).strip()) != link:
+            continue
+        attrs = " ".join(re.findall(r"""\b(?:title|aria-label)\s*=\s*["']([^"']*)["']""", m.group(1), re.I))
+        label = H_.unescape(re.sub(r"<[^>]+>", " ", m.group(2)) + " " + attrs)
+        if re.search(r"\bdata\s?-?\s?sheet\b", label, re.I):
+            return True
+    return False
 
 
 def a_notice(texts):
@@ -3652,6 +3674,10 @@ class PdfStore:
         data, meta = self._fetch(url, where, follow, part, handoff, _page, public)
         if mpn:
             from . import ds_route as DR
+            if not meta.get("page_url"):              # a direct link is refused as a notice or certificate, as a
+                other = not_a_datasheet(DR.page_texts(data, 1), NEVER_DATASHEET)   # page's link is (R-FX19-4)
+                if other:
+                    raise DatasheetError(f"the PDF at {meta.get('url') or url}: {other}")
             said = mentions_part(DR.page_texts(data, MENTION_PAGES), mpn)
             if said is False and (meta.get("pages") or pdf_pages(data) or 0) > MENTION_BIG:
                 said = mentions_part(DR.page_texts(data, MENTION_DEEP), mpn)
@@ -3704,7 +3730,8 @@ class PdfStore:
                 except DatasheetError as e:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {e}")
                 from . import ds_route as DR           # the page's PDF can be its change notice or a letter (R-FX16-2)
-                other = not_a_datasheet(DR.page_texts(pdf, 1))
+                other = not_a_datasheet(DR.page_texts(pdf, 1), NEVER_DATASHEET if labelled_datasheet(
+                    data, link, final or url) else OTHER_DOC)   # a "Datasheet" link to a user manual (R-FX19-4)
                 if other:
                     raise DatasheetError(f"{url}: not a PDF (an HTML page); its PDF link {link}: {other}")
                 return pdf, dict(meta, page_url=url, **({"page_via": way} if way != "plain" else {}))
