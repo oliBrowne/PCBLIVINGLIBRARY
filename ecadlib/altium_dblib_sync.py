@@ -635,6 +635,51 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     def own(pn):                                        # the row is ecadlib's, under the plan's spelling only
         managed_rows.difference_update({m for m in managed_rows if _pk(m) == _pk(pn)})
         managed_rows.add(pn)
+        for k in [k for k in row_writers if _pk(k) == _pk(pn) and k != pn]:
+            row_writers.setdefault(pn, []).extend(row_writers.pop(k))
+        row_writers[pn] = sorted(set(row_writers.get(pn, [])) | {me})
+    # change control is per plan folder, but one library folder can take the parts of several (one plan folder per
+    # BOM): which plan folders wrote each row (`writers` in the state; a row this plan's ledger records as published
+    # here, for a state written before), so one plan never changes a model file or a row's identity another plan
+    # released, and --prune only removes this plan's rows
+    me = CG.project_key(to, base)                      # this plan folder, relative to the library folder
+    writers = state.get("writers") or {}
+    row_writers = {k: sorted(v) if isinstance(v, list) else [v] for k, v in (writers.get("rows") or {}).items()}
+    file_writers = dict(writers.get("files") or {})
+    from . import ledger as LG
+    own_lg = LG.Ledger(CG.lib_folder(base))
+    own_lg = own_lg if own_lg.exists() else None
+    pub_target = f"{mode}:{CG.project_key(base, to)}"
+    mine = {_pk(it.get("name")) for it in items}
+
+    def writers_of(pn):
+        w = {p for k, v in row_writers.items() if _pk(k) == _pk(pn) for p in v}
+        if not w and managed(pn) and own_lg is not None and own_lg.published(pn, pub_target):
+            w = {me}
+        return w
+
+    def other_plans(pn):
+        """The other plan folders that released row pn here (["?"]: a row ecadlib wrote, plan not recorded); [] when
+        the row is only this plan's, or not ecadlib's (a row made by hand is the person's own)."""
+        if not managed(pn):
+            return []
+        w = writers_of(pn)
+        if not w:
+            return [] if _pk(pn) in mine else ["?"]
+        return sorted(w - {me})
+    users = {}                                          # model file -> Part Numbers of the rows that use it
+    for t, (_, rows) in tables.items():
+        for r in rows:
+            for _, d, w in KINDS:
+                try:
+                    if r.get(f"{w} Ref"):
+                        users.setdefault(f"{d}/{AL.file_stem(r[f'{w} Ref'])}.{d}", []).append(r.get("Part Number", ""))
+                except (ValueError, TypeError, AttributeError):
+                    pass
+
+    def plans_text(ps):
+        named = [p for p in ps if p != "?"]
+        return ", ".join(named) if named else "a plan folder not recorded"
     where = {}
     for t, (_, rows) in tables.items():                 # the first row of a Part Number is its row (EXP-79: the rest
         for r in rows:                                  # are reported as duplicates below)
@@ -722,6 +767,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                         written += _copy_recipe(to, src, dst)     # copied them): ecadlib's file
                         managed_files.update(_steps(to, rel))
                         managed_files.add(rel)
+                        file_writers.setdefault(rel, {"plan": me, "sha256": _sha256(data)})
                     continue
                 act = AN.replace_action(data, dst, overwrite_edits, save=not dry_run)
                 if act == "keep":                               # Altium's build of these same bytes: leave it
@@ -738,6 +784,21 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                                     "(rename the part's model, or --overwrite-edits replaces it)")
                     failed[rel] = problems[-1]
                     continue
+                clash = {pn: other_plans(pn) for pn in users.get(rel, ()) if other_plans(pn)} if dst.exists() else {}
+                if clash and _drawing(dst, d, ref) is not None and _drawing(dst, d, ref) == _drawing(src, d, ref):
+                    managed_files.add(rel)                      # the same drawing (a rebuild's other bytes): theirs
+                    continue                                    # stays as it is
+                if clash:                                       # another plan's released parts use the file here
+                    wrote = (file_writers.get(rel) or {}).get("plan")
+                    problems.append(
+                        f"{rel} is also the {w.lower()} of {', '.join(sorted(clash))}, which another plan folder "
+                        f"released into this library ({plans_text(sorted({p for v in clash.values() for p in v}))}"
+                        f"{'; the file was last written from ' + wrote if wrote and wrote != me else ''}), and this "
+                        "part's file is different: not replaced, as that would change their land or symbol without "
+                        "their sign-off. Give this part's model another name, sync each plan folder into a library "
+                        "folder of its own, or (if that plan no longer has them) run its dblib-sync with --prune")
+                    failed[rel] = problems[-1]
+                    continue
                 notes.append(f"{rel} {'updated' if dst.exists() else 'added'}")
                 if not dry_run:
                     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -751,6 +812,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
                         notes.pop()
                         continue
                     os.replace(tmp, dst)
+                    file_writers[rel] = {"plan": me, "sha256": _sha256(data)}
                     # what Altium rebuilds the file from (ecadlib.altium_native): svn needs it too
                     written += _copy_recipe(to, src, dst)
                     managed_files.update(_steps(to, rel))       # its STEP files are ecadlib's too: --prune removes them
@@ -790,6 +852,18 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             new[c] = ""                                     # ecadlib's own name of a field the house name now carries:
         new.update(want)                                    # never a second, stale value of it
         changed = [c for c in new if str(new.get(c, "")) != str(cur.get(c, ""))]
+        theirs = other_plans(cur.get("Part Number") or it["name"]) if changed else []
+        if theirs:                                          # another plan folder released this row: its part stays
+            from .altium365 import identity_change          # the part it is (A365 refuses the same, in place)
+            ident = identity_change({"details": {"parameters": [{"name": k, "value": v} for k, v in cur.items()]}},
+                                    [{"name": k, "value": v} for k, v in new.items()], rules)
+            if ident:
+                res["action"] = "held"
+                res["detail"] = (f"identity change ({'; '.join(ident)}): the row {cur.get('Part Number')} was released "
+                                 f"into this library from another plan folder ({plans_text(theirs)}), so it is not "
+                                 "made another part in place. Give this part another name in this plan, or sync this "
+                                 "plan into a library folder of its own")
+                continue
         if old_t != t:                                      # category changed: move the row
             tables[old_t][1].remove(cur)
             hdr, rows = tables.setdefault(t, (list(want), []))
@@ -829,10 +903,20 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             res = {"name": pn, "action": "not_in_plan", "detail": "", "table": t, "kind": "row"}
             if not managed(pn):
                 res["detail"] = "not written by ecadlib: kept"
+            elif prune and writers_of(pn) - {me}:          # another plan folder's part too: its own sync prunes it
+                for k in [k for k in row_writers if _pk(k) == _pk(pn)]:
+                    row_writers[k] = [p for p in row_writers[k] if p != me]
+                res["detail"] = (f"released here from another plan folder ({plans_text(sorted(writers_of(pn) - {me}))}): "
+                                 "kept (that plan's dblib-sync --prune removes it)")
             elif prune:
                 rows.remove(r)
                 managed_rows.difference_update({m for m in managed_rows if _pk(m) == _pk(pn)})
+                for k in [k for k in row_writers if _pk(k) == _pk(pn)]:
+                    del row_writers[k]
                 res["action"] = "removed"
+            elif writers_of(pn) - {me}:
+                res["detail"] = (f"released here from another plan folder ({plans_text(sorted(writers_of(pn) - {me}))}): "
+                                 "kept")
             else:
                 res["detail"] = "kept (--prune deletes it)"
             results.append(res)
@@ -958,13 +1042,37 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         if write_notice(to, items) and nf.read_bytes() != before:
             written.append(nf.name)
     st = {"rows": sorted(managed_rows), "files": sorted(managed_files)}
-    if st != {"rows": sorted(state.get("rows", [])), "files": sorted(state.get("files", []))}:
+    # which plan folder wrote each row and model file (and the file's sha256): an older ecadlib ignores this key
+    wr = {"rows": {k: v for k, v in sorted(row_writers.items()) if v and managed(k)},
+          "files": {k: v for k, v in sorted(file_writers.items()) if k in managed_files}}
+    if wr["rows"] or wr["files"]:
+        st["writers"] = wr
+    if st != {"rows": sorted(state.get("rows", [])), "files": sorted(state.get("files", [])),
+              **({"writers": state["writers"]} if state.get("writers") else {})}:
         put(STATE, json.dumps(st, indent=1) + "\n")
     out["svn_url"] = url
     if not dry_run:
         done = {r["name"] for r in results if r.get("action") in ("added", "updated", "up_to_date")}
         CG.record_publish(base, items, f"{mode}:{CG.project_key(base, to)}", ok=lambda it: it["name"] in done)
     return out
+
+
+def _drawing(path, d, ref):
+    """Fingerprint digest of the drawing `ref` in library file path (d: "SchLib" / "PcbLib"): the symbol, or the land,
+    its art and 3D model. Two builds of one drawing differ in their bytes (OLE timestamps), not here. None: unreadable."""
+    from . import fingerprint as FP
+    try:
+        if d == "PcbLib":
+            return FP.digest(list(FP.pcblib(path, ref)))
+        _, entries = AL.read_schlib(path)
+        return FP.digest(FP.altium_symbol(FP._pick_named(entries, ref, "symbol"))[0])
+    except Exception:                                   # unreadable or another entry: not the same drawing
+        return None
+
+
+def _sha256(data):
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
 
 
 def summary(out):
