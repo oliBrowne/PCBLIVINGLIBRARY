@@ -26,3 +26,32 @@ def test_webui_01_altium_models_carry_a_height_and_a_3d_body(tmp_path):
         assert float(str(fp["params"]["HEIGHT"]).replace("mil", "")) > 0, (name, fp["params"])
         assert any(rec["type"] == "body" for rec in fp["records"]), (name, [rec["type"] for rec in fp["records"]])
 
+
+@lite
+def test_webui_02_bad_json_field_types_are_400s_not_crashed_jobs(tmp_path):
+    """sources / refresh of /api/librarian/run went into the job unchecked (true -> TypeError in the job, "Something
+    went wrong"); a JSON Infinity (Python's json reads it) crashed int() in a job with OverflowError."""
+    import json
+    from ecadlib.app import Workspace
+    from tests.test_ui import serve, wait_job
+    ws = Workspace(tmp_path / "ws", [], providers=[], offline=True)
+    bom = ws.save_upload("bom.csv", b"Designator,Qty,Value,MPN\nR1,1,10k,RC0603FR-0710KL\n")
+    srv, call = serve(ws)
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            for body in ({"bom": bom, "sources": True}, {"bom": bom, "sources": "standard"}, {"bom": bom, "sources": [5]},
+                         {"bom": bom, "refresh": 5}, {"bom": bom, "refresh": "R1"}, {"bom": bom, "refresh": [None]}):
+                st, j = call("POST", "/api/librarian/run", json.dumps(body))
+                assert st == 400 and "job" not in j, (body, st, j)
+            for path, raw in (("/api/resolve/candidates", '{"bom": "%s", "part": "R1", "limit": Infinity}' % bom),
+                              ("/api/ai/read", '{"bom": "%s", "approved_usd": NaN}' % bom),
+                              ("/api/footprint/preview", '{"spec": {"name": "X", "body_length": Infinity}}')):
+                st, j = call("POST", path, raw)
+                assert st == 400 and "job" not in j and "JSON allows" in j["error"], (path, st, j)
+            st, j = call("POST", "/api/librarian/run", json.dumps({"bom": bom, "sources": ["standard"], "refresh": True}))
+            assert st == 200 and wait_job(call, j["job"])["state"] == "done", j
+            st, j = call("POST", "/api/librarian/run", json.dumps({"bom": bom, "sources": None, "refresh": ["R1"]}))
+            assert st == 200 and wait_job(call, j["job"])["state"] == "done", j
+    finally:
+        srv.shutdown()
+        srv.server_close()

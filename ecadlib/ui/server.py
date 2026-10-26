@@ -221,6 +221,20 @@ def local_who():
     return _LOCAL_WHO[0]
 
 
+def _no_constant(c):
+    """json.loads takes NaN / Infinity, which JSON itself does not: refused (a 400), never handed to int() / float()."""
+    raise ValueError(f"{c} is not a number JSON allows")
+
+
+def _list_of_str(v, what):
+    """None, or a list of names (librarian sources, parts to look up again) from a JSON body."""
+    if v is None:
+        return None
+    if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
+        raise ValueError(f"{what} must be a list of names")
+    return v
+
+
 def _strs(v, what):
     """A list of path strings from a JSON body (scan sources: any folder the person types, read for names only)."""
     if v is None:
@@ -324,7 +338,7 @@ def make_handler(ws: Workspace):
 
         def _json(self):
             try:
-                b = json.loads(self._body(MAX_JSON) or b"{}")
+                b = json.loads(self._body(MAX_JSON) or b"{}", parse_constant=_no_constant)
             except RecursionError:
                 raise ValueError("the JSON body is nested too deeply") from None
             if not isinstance(b, dict):
@@ -448,8 +462,8 @@ def make_handler(ws: Workspace):
             if u.path == "/api/librarian/run":                    # long, network-bound: a background job
                 b = self._json()
                 bom = self._bom(b)
-                refresh = [] if b.get("refresh") is True else (b.get("refresh") or None)
-                return self._send(200, jobs.start(self._librarian, bom, b.get("sources"), refresh, label=bom,
+                refresh = [] if b.get("refresh") is True else _list_of_str(b.get("refresh") or None, "refresh")
+                return self._send(200, jobs.start(self._librarian, bom, _list_of_str(b.get("sources"), "sources"), refresh, label=bom,
                                                   key=self._plan_key(bom)))
             if u.path == "/api/ai/quote":                         # downloads datasheets (cached) to price them: a job
                 bom = self._bom(self._json())
