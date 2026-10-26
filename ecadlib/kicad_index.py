@@ -113,6 +113,29 @@ def package_of(*texts):
     return None
 
 
+EP_SIZE = re.compile(r"EP(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)", re.I)
+EP_FAMILY = re.compile(r"(?<![A-Za-z])(H(?:TSSOP|VSSOP|SOP|SOIC|MSOP|LQFP|TQFP)|PowerPAD|PowerSO)", re.I)   # always a pad
+
+
+def _same_ep(hits, hint):
+    """The package guesses whose exposed pad is the one the line names (R-BF-4): the line says EP -> lands with one,
+    of its size when it gives one (EP1.7x1.7 is not EP1.45x1.45); a leaded line that says none -> lands without one
+    (SOIC-8 is not SOIC-8-1EP). A leadless line that says nothing keeps both (most QFNs have a pad; the caller decides)."""
+    ep = bool(EP_HINT.search(hint) or EP_NAME.search(hint) or EP_FAMILY.search(hint))
+    size = EP_SIZE.search(hint)
+    out = []
+    for k in hits:
+        name = k.split(":")[-1]
+        has = bool(EP_NAME.search(name))
+        if ep and not has or not ep and has and not NO_LEAD.search(name):
+            continue
+        s = EP_SIZE.search(name)
+        if size and s and {float(size.group(1)), float(size.group(2))} != {float(s.group(1)), float(s.group(2))}:
+            continue
+        out.append(k)
+    return out
+
+
 def _body(text):
     m = BODY_RE.search(str(text or ""))
     return tuple(sorted((float(m.group(1)), float(m.group(2))))) if m else None
@@ -224,6 +247,7 @@ class KiCadIndex:
             hits = [k for k in hits if bodies[k] in (want, None)]
         elif len({b for b in bodies.values() if b}) > 1:
             return None                           # several body sizes and nothing to choose by: ambiguous
+        hits = _same_ep(hits, str(hint or ""))   # R-BF-4: a guess never drops, adds or resizes an exposed pad
         if len(hits) > 1:                         # one body, several lands (with / without an exposed pad, EP sizes):
             ep = bool(EP_HINT.search(str(hint or "")))       # the one the line's words name, never the first indexed
             has = {bool(EP_NAME.search(k.split(":")[-1])) for k in hits}

@@ -352,6 +352,21 @@ def _line_for(item, lines, rows):
     return best
 
 
+def _own_land(names, plain):
+    """The first footprint field that names a land of its own rather than the chip size `plain` (R_0603_1608Metric):
+    a KiCad footprint name (R_Array_Convex_4x0603, L_Bourns_SRR1210A, a hand-solder variant), an array / shunt / RGB
+    name, or a maker's land named KiCad's way (L_Wuerth_WE-PD-Typ-LS_1210). -> that name, or None."""
+    from . import stdparts as SP
+    for t in names:
+        n = SP._strip_lib(t).strip()
+        if not n or n == plain:
+            continue
+        if n in SP.kicad_names() or SP.NOT_CHIP.search(n) or SP.LAND_VARIANT.search(n) or \
+                (SP.MAKER_LAND.match(n) and SP.chip_size(n, strict=True)):
+            return n
+    return None
+
+
 def _own_notes(rec):
     """A file record's notes without the "shared with" note a sharing part's copy of it carries."""
     return [n for n in rec.get("notes") or [] if not str(n).startswith("shared with ")]
@@ -567,8 +582,18 @@ class Run:
             if kind == "R" and RU.resistor_style(self.rules) == "us" and "Device" in lib.symbols.get("R_US", ()):
                 sym_ref = "Device:R_US"                # [symbols] resistor = "us": the zigzag symbol
             pkg = package_of(item["footprint"].get("kicad") or fp_name, item.get("description"))
-            if PASSIVE[kind][1] and pkg in IMP2MET:
-                fp_ref, fp_how = lib.footprint(PASSIVE[kind][1].format(pkg, IMP2MET[pkg])), f"by package {pkg}"
+            names = [ln.get("footprint", ""), item["footprint"].get("kicad") or fp_name]
+            named = next((lib.footprint(n) for n in names if lib.footprint(n)), None)
+            if named:                              # the land the BOM names, as named (R-BF-4): L_Bourns_SRR1210A is
+                fp_ref, fp_how = named, "BOM footprint name"            # not L_1210, R_Array_.. not a 2-pad R_0603
+            elif PASSIVE[kind][1] and pkg in IMP2MET:
+                guess = PASSIVE[kind][1].format(pkg, IMP2MET[pkg])
+                own = _own_land(names, guess.split(":")[-1])
+                if own:                            # a land of its own the index does not have: no package guess
+                    st["tried"].append(f"kicad: the BOM names the land {own}, not in the KiCad index; "
+                                       f"not guessed as {guess.split(':')[-1]} by package")
+                else:
+                    fp_ref, fp_how = lib.footprint(guess), f"by package {pkg}"
         elif not st["symbol"]:
             sym_ref, how = lib.find_symbol(mpn)
             own = bool(sym_ref)                        # this part's own symbol, not a generic one

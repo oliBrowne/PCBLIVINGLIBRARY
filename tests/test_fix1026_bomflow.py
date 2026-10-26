@@ -167,3 +167,71 @@ def test_librarian_holds_two_values_on_one_mpn(tmp_path):
                  "R2,1,1k,R_0603_1608Metric,Yageo,RC0603FR-0710KL,Resistor,https://example.com/a.pdf\n", ["standard"])
     it = next(iter(items.values()))
     assert it["status"] == "held" and "'1k'" in _holds(it), (it["status"], _holds(it))
+
+
+# --- R-BF-4: the land the BOM names is built as named (or the part is held); a package guess never drops an EP -------
+
+SRR = """(footprint "L_Bourns_SRR1210A" (version 20240108) (generator "pcbnew") (layer "F.Cu")
+  (attr smd)
+  (fp_line (start -6.1 -6.1) (end 6.1 -6.1) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+  (fp_rect (start -6.5 -6.5) (end 6.5 6.5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+  (pad "1" smd roundrect (at -4.85 0) (size 2.9 5.4) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.086))
+  (pad "2" smd roundrect (at 4.85 0) (size 2.9 5.4) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.086))
+)
+"""
+
+
+def _l_symbol():
+    r = (KICAD_FIXTURE / "kicad-symbols" / "Device.kicad_symdir" / "R.kicad_sym").read_text(encoding="utf-8")
+    for a, b in (('(symbol "R"', '(symbol "L"'), ('"R_0_1"', '"L_0_1"'), ('"R_1_1"', '"L_1_1"'),
+                 ('(property "Reference" "R"', '(property "Reference" "L"'), ('(property "Value" "R"', '(property "Value" "L"')):
+        r = r.replace(a, b)
+    return r
+
+
+@lite
+def test_kicad_builds_the_named_bourns_land_not_the_1210_chip(tmp_path):
+    items = _run(tmp_path, HDR + "L1,1,10uH,Inductor_SMD:L_Bourns_SRR1210A,Bourns,SRR1210A-100M,Power inductor 10uH,"
+                 "https://example.com/b.pdf\n", ["kicad", "standard"],
+                 extra_fp=[("Inductor_SMD:L_1210_3225Metric", None), ("Inductor_SMD:L_Bourns_SRR1210A", SRR)],
+                 extra_sym=[("Device:L", _l_symbol())])
+    it = next(iter(items.values()))
+    assert it["source"]["footprint"] == "kicad:Inductor_SMD:L_Bourns_SRR1210A", it["source"]
+    assert it["footprint"]["ref"] == "L_Bourns_SRR1210A", it["footprint"]
+
+
+@lite
+def test_a_named_kicad_array_or_maker_land_is_never_built_as_a_plain_chip(tmp_path):
+    items = _run(tmp_path, HDR + "RN1,1,10k,R_Array_Convex_4x0603,Yageo,YC164-JR-0710KL,Resistor array 4x10k,"
+                 "https://example.com/w.pdf\n"
+                 "L1,1,10uH,L_Wuerth_WE-PD-Typ-LS_1210,Wurth,7447779110,Power inductor 10uH 12x12mm,"
+                 "https://example.com/w.pdf\n", ["kicad", "standard"], [KICAD_FIXTURE],
+                 extra_fp=[("Inductor_SMD:L_1210_3225Metric", None)])
+    for it in items.values():
+        fp = str(it["source"]["footprint"] or "")
+        assert not fp.endswith(("R_0603_1608Metric", "L_1210_3225Metric")), (it["name"], fp)
+        assert it["status"] == "held", (it["name"], it["status"])
+
+
+def _index(tmp, names):
+    from ecadlib.kicad_index import KiCadIndex
+    for ref in names:
+        lib, name = ref.split(":")
+        d = Path(tmp) / f"{lib}.pretty"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{name}.kicad_mod").write_text(f'(footprint "{name}")\n', encoding="utf-8")
+    return KiCadIndex([tmp])
+
+
+@lite
+def test_package_guess_never_drops_or_changes_an_exposed_pad(tmp_path):
+    ix = _index(tmp_path / "a", ["Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"])
+    assert ix.find_footprint_for_package("SOIC8", "U", hint="SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.3mm") is None
+    assert ix.find_footprint_for_package("SOIC8", "U", hint="SOIC-8_3.9x4.9mm_P1.27mm") == \
+        "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+    ix = _index(tmp_path / "b", ["Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm"])
+    assert ix.find_footprint_for_package("QFN16", "U", hint="QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm") is None
+    assert ix.find_footprint_for_package("QFN16", "U", hint="QFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm") == \
+        "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm"
+    ix = _index(tmp_path / "c", ["Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.3mm"])
+    assert ix.find_footprint_for_package("SOIC8", "U", hint="SOIC-8_3.9x4.9mm_P1.27mm") is None   # no EP added either

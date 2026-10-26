@@ -128,6 +128,9 @@ EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A
 # words in a footprint field that name a part with more pads, or another land, on a chip size code
 NOT_CHIP = re.compile(r"(?<![A-Za-z])(RGB|arrays?|reverse[ _-]?mount|mouse[ _-]?bite|shunt|kelvin|common[ _-]?mode|"
                       r"choke|crystal|balun|filter|transformer|speaker|buzzer|connector|jack|header|modified)(?![a-z])", re.I)
+# a land named KiCad's way after a maker or series (L_Wuerth_WE-PD-Typ-LS_1210, R_Shunt_..): its own land, whatever
+# chip code it ends in; 'R_0603', 'RES_0603', 'R_SMD_0603' name the size
+MAKER_LAND = re.compile(r"^(?:R|C|CP|L|LED|D|FB|Fuse)_(?!(?:SMD|Chip|Small)_)[A-Za-z][^_]*_")
 # a diode package name (SMA, SMB ...) in an RF connector's or a variant's name: not the diode land
 NOT_DIODE = re.compile(r"(?<![A-Za-z])(jack|plug|edge[ _-]?mount|coax\w*|connector|receptacle|vertical|horizontal|"
                        r"modified|bulkhead)(?![a-z])", re.I)
@@ -840,6 +843,9 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
             w = NOT_CHIP.search(t)                        # land on a chip size ('LED_RGB_1210', '4x0603 array')
             if w:
                 return None, f"{_strip_lib(t).strip()}: names a {w.group(0).lower()}, not a two-pad chip land"
+            n = _strip_lib(t).strip()                     # 'L_Wuerth_WE-PD-Typ-LS_1210': a maker's own land named
+            if MAKER_LAND.match(n) and chip_size(t, strict=True):     # KiCad's way (a 12x12 mm inductor), not
+                return None, f"{n}: names a maker's own land, not the {chip_size(t, strict=True)} chip"   # the chip
         for t in texts + weak:
             s = chip_size(t, strict=t in texts)
             if s:
