@@ -154,3 +154,63 @@ def test_fix3_rfx33_dblib_sync_ships_the_released_recipe_and_pcblib_not_an_edit_
     row = next(r for r in res["results"] if r.get("name") == CAP)
     assert row["action"] in ("added", "updated", "up_to_date"), row
     assert "changed while" in row["detail"], row
+
+
+# ------------------------------------------------------------------ R-FX3-4
+def _part():
+    return {"name": "P1", "status": "ready", "description": "Resistor 10k", "parameters": [],
+            "symbol": {"ref": "R", "file": None}, "footprint": {"ref": "R_0603", "file": None}}
+
+
+def _try(it, dec, who, d, pol, c=""):
+    from ecadlib import approvals as AP
+    try:
+        AP.decide(it, dec, who, comment=c, base=d, policy=pol)
+        return True
+    except AP.Refused:
+        return False
+
+
+@lite
+def test_fix3_rfx34_a_reject_by_someone_who_left_the_policy_can_be_lifted(tmp_path, monkeypatch):
+    """repro_stuck_reject.py A: Ann rejects, then the policy's users become {bob} and the part is restyled. Bob's
+    approve, recorded after her reject, lifts it; or Ann takes her own reject back (recorded, not counted as a
+    sign-off). Before either, the reject still holds."""
+    from ecadlib import approvals as AP
+    d = str(tmp_path)
+    pol = AP.normalize_policy({"required": 1, "users": {"bob@example.com": ["librarian"]}})
+    it = _part()
+    AP.decide(it, "reject", ANN, comment="wrong pin 9", base=d)
+    it["description"] += " (fixed)"
+    assert not AP.evaluate(it, pol, d)["met"]                        # still held until someone acts
+    assert _try(it, "approve", BOB, d, pol)                          # a current approver lifts it
+    ev = AP.evaluate(it, pol, d)
+    assert ev["met"] and ev["approved_by"] == [BOB], ev
+    it2 = _part()                                                    # or Ann takes her own reject back
+    AP.decide(it2, "reject", ANN, comment="wrong pin 9", base=d)
+    assert _try(it2, "approve", ANN, d, pol)
+    ev2 = AP.evaluate(it2, pol, d)
+    assert not ev2["rejected_by"] and ev2["approved_by"] == [] and not ev2["met"], ev2   # not a sign-off
+    assert not _try(_part(), "approve", ANN, d, pol)                 # without a reject to take back: still refused
+    it3 = _part()                                                    # an approve recorded before the reject does not
+    AP.decide(it3, "approve", BOB, base=d, policy=pol)               # lift it
+    AP.decide(it3, "reject", ANN, comment="wrong pin 9", base=d)
+    assert not AP.evaluate(it3, pol, d)["met"]
+
+
+@lite
+def test_fix3_rfx34_a_rejecter_who_released_it_anyway_can_take_the_reject_back(tmp_path, monkeypatch):
+    """repro_stuck_reject.py B: with no_self_approval, Ann rejected, then released it anyway (--allow). Her approve takes
+    the reject back (it is not counted as a sign-off), and Bob's approve then signs it off."""
+    from ecadlib import approvals as AP
+    d = str(tmp_path)
+    pol = AP.normalize_policy({"required": 1})
+    it = _part()
+    AP.decide(it, "reject", ANN, comment="pads too small", base=d)
+    it["allow"] = {"user": ANN, "reason": "release anyway"}
+    assert _try(it, "approve", ANN, d, pol)
+    ev = AP.evaluate(it, pol, d)
+    assert not ev["rejected_by"] and not ev["met"] and ev["approved_by"] == [], ev
+    assert _try(it, "approve", BOB, d, pol)
+    assert AP.evaluate(it, pol, d)["met"]
+    assert not _try(it, "approve", ANN, d, pol)                      # nothing left to take back: refused as before

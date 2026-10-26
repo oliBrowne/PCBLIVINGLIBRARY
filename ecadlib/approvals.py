@@ -19,7 +19,10 @@ approvals are only recorded. Keys (all optional):
 Each decision is stored in the item's `approvals` list: who, key, when, role, decision, comment and `hash`, a sha256
 over the item's .SchLib/.PcbLib bytes and its key fields (name, folder, description, comment, parameters, cleared,
 symbol/footprint refs). Any later change to them makes an approval stale; it then no longer counts. A reject keeps
-holding whatever changed since, until that person approves (a restyle, a revert or a re-run never lifts it). The parameters
+holding whatever changed since, until that person approves (a restyle, a revert or a re-run never lifts it). That approve
+is always recorded, even when the person may not sign (no longer in users, or released it with --allow): it takes the
+reject back without counting as a sign-off. A reject by someone no longer in the policy's users is also lifted by an
+approve that counts, recorded after it. The parameters
 the JLCPCB assembly check wrote until it was removed (Assembly *, LCSC Part) do not count, so a plan built while it
 existed keeps its sign-offs. The latest
 decision per person counts. Every decision (and every refused one) is appended to approvals_audit.jsonl next to
@@ -255,18 +258,17 @@ def _allow_user(item):
 def evaluate(item, policy, base=".", h=None):
     """-> {required, met, hash, approved_by, missing, stale, rejected_by, ignored}."""
     h = h or content_hash(item, base)
-    latest = {}
-    for r in item.get("approvals") or []:          # one person, however they spelled their name (same_person)
+    latest, pos = {}, {}
+    for i, r in enumerate(item.get("approvals") or []):   # one person, however they spelled their name (same_person)
         k = r.get("key") or user_key(r["who"])
         k = next((x for x, y in latest.items() if x == k or same_person(y["who"], r["who"])), k)
-        latest[k] = r
-    valid, stale, rejected, ignored = [], [], [], []
+        latest[k], pos[k] = r, i
+    valid, stale, rejected, ignored, rejects, counted = [], [], [], [], [], []
     self_user = _allow_user(item)
     users = (policy or {}).get("users") or {}
     for k, r in latest.items():
         if r["decision"] == "reject":          # a "no" holds until that person approves, whatever changed since (a
-            rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else "")   # restyle, a revert,
-                            + ("; the part changed since" if r.get("hash") != h else ""))         # a re-run lifts none)
+            rejects.append(k)                  # restyle, a revert, a re-run lifts none)
         elif r.get("hash") != h:
             stale.append(r["who"])
         elif policy and policy["no_self_approval"] and self_user and (k == user_key(self_user) or same_person(r["who"], self_user)):
@@ -275,6 +277,17 @@ def evaluate(item, policy, base=".", h=None):
             ignored.append(f"{r['who']}: not authorised" + (f" as {r['role']}" if r.get("role") else ""))
         else:
             valid.append(r)
+            counted.append(k)
+    for k in rejects:
+        r = latest[k]
+        gone = bool(users) and k not in users  # the rejecter is no longer one of the policy's signers: an approve
+        by = next((latest[v]["who"] for v in counted if pos[v] > pos[k]), None) if gone else None   # that counts,
+        if by:                                 # recorded after the reject, lifts it (else nobody could)
+            ignored.append(f"{r['who']}: rejected it, but is no longer in the policy's users; {by} approved after")
+            continue
+        rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else "")
+                        + ("; the part changed since" if r.get("hash") != h else "")
+                        + ("; no longer in the policy's users: an approve by a current one lifts it" if gone else ""))
     need = applies(item, policy)
     missing = []
     if need:
@@ -340,6 +353,13 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _takes_back(item, who):
+    """who's latest decision on the item is a reject (so an approve now takes it back)."""
+    k = user_key(who)
+    mine = [r for r in item.get("approvals") or [] if (r.get("key") or user_key(r["who"])) == k or same_person(r["who"], who)]
+    return bool(mine) and mine[-1]["decision"] == "reject"
+
+
 def decide(item, decision, who, role=None, comment="", base=".", policy=None):
     """Validate and append one approval record; returns it. Raises Refused when the policy forbids it."""
     if decision not in ("approve", "reject"):
@@ -347,20 +367,21 @@ def decide(item, decision, who, role=None, comment="", base=".", policy=None):
     k = user_key(who)
     if decision == "reject" and not (comment or "").strip():
         raise Refused("a reject needs a comment (-m) saying what is wrong")
-    if policy:
-        users = policy["users"]
+    back = decision == "approve" and _takes_back(item, who)   # the person's own reject, taken back: always recorded
+    if policy:                                                 # (it lifts their "no"; evaluate decides whether it
+        users = policy["users"]                                # also counts as a sign-off)
         if users:
-            if k not in users:
+            if k not in users and not back:
                 raise Refused(f"{who} is not in the policy's users")
-            if role and role not in users[k]:
+            if role and role not in users.get(k, [role]):
                 raise Refused(f"{who} may sign as {', '.join(users[k])}, not {role}")
-            if not role and len(users[k]) == 1:
+            if not role and len(users.get(k, [])) == 1:
                 role = users[k][0]
-        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and (
+        if decision == "approve" and policy["no_self_approval"] and _allow_user(item) and not back and (
                 user_key(_allow_user(item)) == k or same_person(_allow_user(item), who)):
             raise Refused(f"{who} released {item['name']} with --allow and cannot approve it (no_self_approval)")
     rec = {"who": who, "key": k, "when": now(), "role": role or "", "decision": decision,
-           "comment": comment or "", "hash": content_hash(item, base)}
+           "comment": comment or "", "hash": content_hash(item, base), **({"takes_back": "reject"} if back else {})}
     item.setdefault("approvals", []).append(rec)
     return rec
 
