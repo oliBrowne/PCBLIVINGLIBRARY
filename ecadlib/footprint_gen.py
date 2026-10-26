@@ -525,12 +525,18 @@ def qfp_frame(spec):
         fits = lambda bx, by: sx >= bx + 0.1 and sy >= by + 0.1
         if fits(L, W) or not fits(W, L):
             return spec, []
+        # the spans alone can be the read's mistake (lead_span and lead_span_y swapped: QFP-52 12x14 built every toe
+        # 1 mm off): the rows must agree. The left/right rows run along body_width, so after the turn the side with
+        # more pins is the longer one; with no row split, or equal rows, nothing says which way: not turned
+        nlr, ntb = spec.get("pins_left_right"), spec.get("pins_top_bottom")
+        if not (isinstance(nlr, int) and isinstance(ntb, int)) or nlr == ntb or (nlr > ntb) != (L > W):
+            return spec, []
+        ep = spec.get("exposed_pad")
+        out = dict(spec, body_length=spec["body_width"], body_width=spec["body_length"])
+        if isinstance(ep, dict) and ep.get("length") is not None and ep.get("width") is not None:
+            out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
     except (TypeError, KeyError, ValueError):         # a malformed number: sanity() says what is wrong
         return spec, []
-    ep = spec.get("exposed_pad")
-    out = dict(spec, body_length=spec["body_width"], body_width=spec["body_length"])
-    if isinstance(ep, dict) and ep.get("length") is not None and ep.get("width") is not None:
-        out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
     return out, [f"body read the other way round (lead_span {round(sx, 3)} crosses the {round(W, 3)} mm side): "
                  f"body_length {round(W, 3)} on X, body_width {round(L, 3)} on Y"]
 

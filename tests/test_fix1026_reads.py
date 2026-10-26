@@ -359,6 +359,64 @@ def test_2_false_hold_sweep_cases_are_not_held():
     assert DR.hold_reasons({"needs_review": [slip]}) == [slip]                # an inch value labelled mm
 
 
+
+# ---------------------------------------------------------------- fixes2 (re-review): QFP reads (fixes2-scripts/qfpbrute.py)
+def _qdim(lbl, nom, tol=0.1):
+    return {"label": lbl, "min": round(nom - tol, 3), "nom": nom, "max": round(nom + tol, 3), "unit": "mm", "page": 5,
+            "figure": "QFP"}
+
+
+def _qfp_read(c):
+    """A synthetic QFP answer from a case {name, n, e, bl, bw, ls, lsy, nlr, ntb, b, epl, epw} -> (assess, hold, pads
+    or "refused")."""
+    import copy, re
+    from ecadlib import ds_route as DR, footprint_gen as F
+    from tests import test_datasheet as TD
+    e = copy.deepcopy(TD.GOOD)
+    n = c["n"]
+    e["package"].update(name=c["name"], description=c["name"], package_type="qfp", pin_count=n, pitch=_qdim("e", c["e"]),
+                        body_length=_qdim("D1", c["bl"]), body_width=_qdim("E1", c["bw"]), lead_span=_qdim("D", c["ls"], 0.2),
+                        lead_span_y=_qdim("E", c["lsy"], 0.2) if c.get("lsy") else None,
+                        terminal_length=_qdim("L", 0.6, 0.15), terminal_width=_qdim("b", c.get("b", 0.22), 0.05),
+                        exposed_pad={"length": _qdim("D2", c["epl"]), "width": _qdim("E2", c["epw"])} if c.get("epl") else None,
+                        pins_left_right=c.get("nlr"), pins_top_bottom=c.get("ntb"), drawing="X", height_max=_qdim("A", 1.5))
+    e["pins"] = [{"num": str(i), "name": f"P{i}", "type": "passive", "side": "left", "page": 3} for i in range(1, n + 1)]
+    if c.get("epl"):
+        e["pins"].append({"num": str(n + 1), "name": "EP", "type": "power", "side": "left", "page": 3})
+    e["pin_table"]["rows"] = n
+    res = D.process(e, "TESTPART", "ds.pdf")
+    try:
+        txt, _ = F.build(res["spec"])
+        pads = sorted((m[0], round(float(m[1]), 3), round(float(m[2]), 3), round(float(m[3]), 3), round(float(m[4]), 3))
+                      for m in re.findall(r'\(pad "(\d+)" smd \w+ \(at ([-\d.]+) ([-\d.]+)[^)]*\) \(size ([\d.]+) ([\d.]+)', txt))
+    except Exception:
+        pads = "refused"
+    return DR.assess(res)[0], DR.hold_reasons(res), pads
+
+
+QFP52 = {"name": "QFP-52_12x14mm_P0.8mm", "n": 52, "e": 0.8, "bl": 12, "bw": 14, "ls": 14, "lsy": 16, "nlr": 14, "ntb": 12,
+         "b": 0.35}
+
+
+def test_fx2_1_spans_swapped_on_a_rectangular_qfp_never_build_wrong():
+    """QFP-52 12x14 read with lead_span / lead_span_y swapped (body and rows right): qfp_frame turned the body to fit
+    the wrong spans and built every toe 1 mm off. The body turns only when the pin rows agree."""
+    kind, _, truth = _qfp_read(QFP52)
+    assert kind == "ok" and truth != "refused"
+    kind, hold, pads = _qfp_read(dict(QFP52, ls=16, lsy=14))
+    assert pads == "refused" or pads == truth, (kind, hold)
+    assert kind != "ok", kind
+    turned = _qfp_read(dict(QFP52, bl=14, bw=12))                 # the body read by its JEDEC labels: still turned
+    assert turned[0] == "ok" and turned[2] == truth, turned[:2]
+    for t in ({"name": "QFP-48_12x14mm_P0.8mm", "n": 48, "e": 0.8, "bl": 12, "bw": 14, "ls": 14, "lsy": 16, "nlr": 13,
+               "ntb": 11, "b": 0.35},
+              {"name": "QFP-40_10x12mm_P0.8mm", "n": 40, "e": 0.8, "bl": 10, "bw": 12, "ls": 12, "lsy": 14, "nlr": 11,
+               "ntb": 9, "b": 0.35}):
+        right = _qfp_read(t)[2]
+        got = _qfp_read(dict(t, ls=t["lsy"], lsy=t["ls"]))[2]
+        assert got in ("refused", right), t["name"]
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
