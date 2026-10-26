@@ -103,3 +103,53 @@ def test_output_owner_and_a365_claims_tell_a_copy_of_a_renamed_plan(tmp_path):
     r = _a365_push(tmp_path / "C/plan.json", nx)["RES-0603-10k"]
     assert r["action"] == "skip" and "another plan folder" in r["detail"] and "A2" in r["detail"], r
     assert len(nx.comps["RES-0603-10k"]["revisions"]) == 1
+
+
+# ---------------------------------------------------------------- R-FX18-2: the target moves, its plans are still there
+@lite
+def test_dblib_moved_library_never_calls_a_live_plan_gone(tmp_path):
+    """F2: A and B share a DbLib; the DbLib folder moves (dblib -> shared/dblib) and B approves a new land. B was held
+    saying live A "is not there any more ... --forget-missing-plans", and following that shipped B's land on A's
+    released row unsigned. Where each plan was seen is kept absolute too: A is found, named as another plan, and
+    --forget-missing-plans does not drop it."""
+    from ecadlib import altium_dblib_sync as S
+    _signed_off(tmp_path)
+    lib = tmp_path / "dblib"
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    b = _plan_folder(tmp_path / "B", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    S.sync(a, lib)
+    S.sync(b, lib)
+    (tmp_path / "shared").mkdir()
+    shutil.move(lib, tmp_path / "shared/dblib")
+    lib = tmp_path / "shared/dblib"
+    before = _pads(lib)
+    _new_land(tmp_path / "B")
+    res = next(r for r in S.sync(b, lib)["results"] if r["name"] == "RES-0603-10k")
+    assert res["action"] == "error" and "another plan" in res["detail"], res
+    assert "--forget-missing-plans" not in res["detail"] and "not found" not in res["detail"], res
+    out = S.sync(b, lib, forget_missing=True)
+    assert not any(r["action"] == "forgotten" for r in out["results"]), out["results"]
+    assert _acts(out)["RES-0603-10k"] == "error", out["results"]
+    assert _pads(lib) == before
+    st = json.loads((lib / "ecadlib_sync.json").read_text())
+    assert {Path(v["abs"]) for v in st["writers"]["plans"].values()} == {(tmp_path / "A").resolve(), (tmp_path / "B").resolve()}, st
+    assert _acts(S.sync(a, lib))["RES-0603-10k"] == "up_to_date"     # A from where it is: the same plan, still
+
+
+@lite
+def test_moved_output_folder_never_calls_its_live_writer_gone(tmp_path):
+    """.ecadlib_owner.json kept the writer relative to -o: after -o moved, B's refusal said A "is not there any more:
+    --take-over if that plan no longer exists" while A was live. A is found and named; no take-over advice for it."""
+    from ecadlib import kicad_export as X
+    from tests.test_fix1026_fx15 import _quiet
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    b = _plan_folder(tmp_path / "B", [_res("RES-0603-1k", "RC0603FR-071KL")])
+    X.export(a, tmp_path / "kicad", "lib", log=_quiet)
+    (tmp_path / "shared").mkdir()
+    shutil.move(tmp_path / "kicad", tmp_path / "shared/kicad")
+    try:
+        X.export(b, tmp_path / "shared/kicad", "lib", log=_quiet)
+        raise AssertionError("B wrote over A's library")
+    except X.PlanError as e:
+        assert "another plan folder" in str(e) and "no longer exists" not in str(e) and "not found" not in str(e), e
+    X.export(a, tmp_path / "shared/kicad", "lib", log=_quiet)          # A itself: fine

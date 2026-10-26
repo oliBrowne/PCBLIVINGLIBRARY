@@ -109,7 +109,7 @@ def test_dblib_renamed_plan_folder_and_moved_library_are_still_the_same_plan(tmp
     assert _acts(out)["RES-0603-10k"] == "updated", out["results"]
     assert _pads(lib) != before
     st = json.loads((lib / "ecadlib_sync.json").read_text())
-    assert len(st["writers"]["rows"]["RES-0603-10k"]) == 1 and list(st["writers"]["plans"].values()) == [{"path": "../A2"}], st
+    assert len(st["writers"]["rows"]["RES-0603-10k"]) == 1 and [v["path"] for v in st["writers"]["plans"].values()] == ["../A2"], st
     # the library folder moved: the same plan still
     (tmp_path / "shared").mkdir()
     shutil.move(lib, tmp_path / "shared/dblib")
@@ -157,13 +157,13 @@ def test_dblib_writer_whose_plan_folder_is_gone_is_named_stale_and_can_be_forgot
     shutil.rmtree(tmp_path / "B")
     _new_land(tmp_path / "A")
     res = next(r for r in S.sync(a, lib)["results"] if r["name"] == "RES-0603-10k")
-    assert res["action"] == "error" and "../B is not there any more" in res["detail"], res
+    assert res["action"] == "error" and "../B is not found from here" in res["detail"], res
     assert "--forget-missing-plans" in res["detail"], res
     out = S.sync(a, lib, forget_missing=True)
     assert _acts(out)["RES-0603-10k"] == "updated", out["results"]
     assert any(r["action"] == "forgotten" and r["name"] == "../B" for r in out["results"]), out["results"]
     st = json.loads((lib / "ecadlib_sync.json").read_text())
-    assert list(st["writers"]["plans"].values()) == [{"path": "../A"}], st
+    assert [v["path"] for v in st["writers"]["plans"].values()] == ["../A"], st
 
 
 @lite
@@ -251,7 +251,7 @@ def test_a365_one_plan_still_makes_its_revision_and_a_gone_plan_can_be_forgotten
     spec = json.loads((ROOT / "ecadlib/package_specs/R_0603_1608Metric.json").read_text())
     AL.write_pcblib(tmp_path / "A/models/PcbLib/R_0603_1608Metric.PcbLib", [AL.footprint_from_spec(spec)[0]])
     r = _a365_push(a, nx)["RES-0603-10k"]
-    assert r["action"] == "skip" and "not there any more" in r["detail"] and "--forget-missing-plans" in r["detail"], r
+    assert r["action"] == "skip" and "not found from here" in r["detail"] and "--forget-missing-plans" in r["detail"], r
     out = _a365_push(a, nx, forget_missing=True)
     assert out["RES-0603-10k"]["action"] == "new_revision", out
     assert out["B"]["action"] == "forgotten"

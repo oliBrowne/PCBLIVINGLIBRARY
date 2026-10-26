@@ -906,9 +906,9 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                "new revision was made, so the component its boards use is not changed without its sign-off. Approve "
                "the change there too (then either push makes the revision), or give this part another name in this plan")
         if gone:
-            why += (f"; {', '.join(claims.label(p) for p in gone)} is not there any more: if that plan folder was renamed "
-                    "or moved, push it once from where it is now; if it no longer exists, push this plan with "
-                    "--forget-missing-plans")
+            why += (f"; {', '.join(claims.label(p) for p in gone)} is not found from here, at its path from "
+                    f"{claims.path.name} or its full path: if that plan folder (or the project) was renamed or moved, "
+                    "push that plan once from where it is now; only if it no longer exists, push this plan with --forget-missing-plans")
         raise _Held([why])
     transition = ((rules or {}).get("change") or {}).get("a365_transition") or None
     def upload(p):

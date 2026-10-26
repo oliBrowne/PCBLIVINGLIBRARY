@@ -653,7 +653,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     plans = {k: dict(v) for k, v in (writers.get("plans") or {}).items() if isinstance(v, dict)}
     here = lambda p: Path(p) if Path(p).is_absolute() else to / p
     me = CG.plan_id(pf, create=not dry_run)            # (a second live folder with this id: a copy, R-FX18-1)
-    seen = [here(h) for h in [(plans.get(me) or {}).get("path")] if h] if me else []
+    seen = CG.seen_places(plans.get(me), to) if me else []
     me = (CG.target_plan_id(pf, seen, create=not dry_run) if me else None) or CG.project_key(to, pf)
 
     def same_folder(a, b):
@@ -674,14 +674,13 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     # a plan folder made again where it was (deleted and run again, its .ecadlib/ lost), or copied with the library
     # it syncs into (the copy gets an id of its own), is the plan recorded there, as before plan ids: a writer last
     # seen at this folder's own place, which no longer holds that id
-    again = {w for w, v in plans.items() if CG.is_plan_id(w) and v.get("path")
-             and same_folder(here(v["path"]), pf) and CG.plan_at(here(v["path"]), w) is None}
+    again = {w for w, v in plans.items() if CG.is_plan_id(w) and CG.was_here(v, to, pf, w)}
     norm = lambda w: me if w in again else norm_writer(w)
     row_writers = {k: sorted({norm(x) for x in (v if isinstance(v, list) else [v])})
                    for k, v in (writers.get("rows") or {}).items()}
     file_writers = {k: dict(v, plan=norm(v.get("plan"))) if isinstance(v, dict) and v.get("plan") else v
                     for k, v in (writers.get("files") or {}).items()}
-    plans[me] = {"path": CG.project_key(to, pf)}
+    plans[me] = CG.seen_at(pf, to)                      # (relative and absolute: either may move, R-FX18-2)
     own_lg = LG.Ledger(pf)
     own_lg = own_lg if own_lg.exists() else None
     pub_target = f"{mode}:{CG.project_key(base, to)}"
@@ -689,8 +688,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
 
     def folder_of(w):
         """Where plan w is now, or None: its folder is gone (or holds another plan)."""
-        hint = (plans.get(w) or {}).get("path")
-        return CG.plan_at(here(hint), w) if hint and w != "?" else None
+        return CG.found_at(plans.get(w), to, w) if w != "?" else None
     gone = sorted(w for w in {p for v in row_writers.values() for p in v} | {v.get("plan") for v in file_writers.values()
                                                                              if isinstance(v, dict)}
                   if w and w not in (me, "?") and folder_of(w) is None)
@@ -755,9 +753,9 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         stale = [(plans.get(p) or {}).get("path") or p for p in ps if p in gone]
         text = ", ".join(named) if named else "a plan folder not recorded"
         if stale:                                       # its folder is gone: say so, and how to clear its claim
-            text += (f"; {', '.join(stale)} is not there any more: if that plan folder was renamed or moved, run its "
-                     "dblib-sync once from where it is now; if it no longer exists, run this dblib-sync with "
-                     "--forget-missing-plans")
+            text += (f"; {', '.join(stale)} is not found from here, at its path from this library folder or its "
+                     "full path: if that plan folder or this library folder was renamed or moved, run that plan's "
+                     "dblib-sync once from where it is now; only if it no longer exists, run this dblib-sync with --forget-missing-plans")
         return text
     where = {}
     for t, (_, rows) in tables.items():                 # the first row of a Part Number is its row (EXP-79: the rest

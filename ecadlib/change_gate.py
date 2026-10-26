@@ -1580,9 +1580,48 @@ def heads_agree(lg_a, head_a, lg_b, head_b, kinds=("symbols", "footprints"), ide
     return True
 
 
+def seen_at(plan_folder, rel_to):
+    """Where a shared target records a plan folder was last seen: {"path": relative to the target (the same when the
+    target and the plans are cloned or shared together), "abs": the resolved path (the same when the target moves
+    alone, R-FX18-2)}."""
+    return {"path": project_key(rel_to, plan_folder), "abs": Path(plan_folder).resolve().as_posix()}
+
+
+def seen_places(rec, rel_to):
+    """The places a target's record {"path", "abs"} names ([Path], the relative one first)."""
+    out = []
+    for h in ((rec or {}).get("path"), (rec or {}).get("abs")):
+        if h and isinstance(h, str):
+            p = Path(h) if Path(h).is_absolute() else Path(rel_to) / h
+            if p not in out:
+                out.append(p)
+    return out
+
+
+def found_at(rec, rel_to, pid):
+    """The plan folder `pid` at one of the places rec names, or None: a plan is gone only when no recorded place
+    holds it (the target, or the plan folders, may have moved since)."""
+    for p in seen_places(rec, rel_to):
+        f = plan_at(p, pid)
+        if f is not None:
+            return f
+    return None
+
+
+def was_here(rec, rel_to, plan_folder, pid):
+    """rec names plan_folder itself, which no longer holds plan `pid` (made again, or copied with what it published)."""
+    for p in seen_places(rec, rel_to):
+        try:
+            if os.path.samefile(p, plan_folder) and plan_at(p, pid) is None:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 class Claims:
     """Which plan folders (CG.plan_id) released what into a target shared by several, kept in a JSON file: {"claims":
-    {key: [plan id]}, "plans": {plan id: {"path": where it was last seen, relative to `rel_to`}}}. A target with no
+    {key: [plan id]}, "plans": {plan id: {"path": where it was last seen, relative to `rel_to`, "abs": and resolved}}}. A target with no
     state of its own (an Altium 365 workspace) keeps it next to the plan folders (publishers_file); an output folder
     keeps it inside. A claim of a plan whose folder is gone is stale: it is named, and forget() drops it."""
 
@@ -1598,13 +1637,9 @@ class Claims:
         self.claims = {k: list(v) for k, v in (d.get("claims") or {}).items() if isinstance(v, list)}
         self.plans = {k: dict(v) for k, v in (d.get("plans") or {}).items() if isinstance(v, dict)}
 
-    def _here(self, hint):
-        return Path(hint) if Path(hint).is_absolute() else self.rel_to / hint
-
     def places(self, pid):
         """Where plan pid was last seen ([Path]), for target_plan_id."""
-        hint = (self.plans.get(pid) or {}).get("path")
-        return [self._here(hint)] if hint else []
+        return seen_places(self.plans.get(pid), self.rel_to)
 
     def me(self, plan_folder, create=True):
         """This plan folder's id here (target_plan_id): a second live folder with the id the claims last saw
@@ -1616,21 +1651,14 @@ class Claims:
         return (self.plans.get(pid) or {}).get("path") or pid
 
     def folder(self, pid):
-        hint = (self.plans.get(pid) or {}).get("path")
-        return plan_at(self._here(hint), pid) if hint else None
+        return found_at(self.plans.get(pid), self.rel_to, pid)
 
     def is_me(self, pid, me, plan_folder=None):
         """pid is this plan: its id, or a claim last seen at this very folder that no longer holds that id (the folder
         was made again, or copied with what it published: a copy's own id, CG.plan_id)."""
         if pid == me:
             return True
-        hint = (self.plans.get(pid) or {}).get("path")
-        if not (hint and plan_folder is not None):
-            return False
-        try:
-            return os.path.samefile(self._here(hint), plan_folder) and plan_at(self._here(hint), pid) is None
-        except OSError:
-            return False
+        return plan_folder is not None and was_here(self.plans.get(pid), self.rel_to, plan_folder, pid)
 
     def others(self, key, me, plan_folder=None):
         """(the other plans' folders that claim key {id: folder}, [ids of those whose folder is gone])."""
@@ -1649,7 +1677,7 @@ class Claims:
         for k in keys:
             if me not in self.claims.setdefault(k, []):
                 self.claims[k].append(me)
-        self.plans[me] = {"path": project_key(self.rel_to, plan_folder)}
+        self.plans[me] = seen_at(plan_folder, self.rel_to)
 
     def forget(self, pids):
         for k in list(self.claims):
@@ -1696,7 +1724,9 @@ def claim_output(out, key, plan_folder, take_over=False, what="the library", che
                f"sign-off). Write this plan into another folder (or under another --name), or pass {flag} to make "
                "this plan folder its writer")
         if gone:
-            why += f" ({', '.join(c.label(p) for p in gone)} is not there any more: {flag} if that plan no longer exists)"
+            why += (f" ({', '.join(c.label(p) for p in gone)} is not found from here, at its path from this folder "
+                    f"or its full path: if that plan folder or this folder was moved, run that plan once from where it is now; {flag} only "
+                    "if that plan folder no longer exists)")
         raise OutputTaken(why)
     before = json.dumps([c.claims, c.plans], sort_keys=True)
     for k in set(check or []) | {key}:        # (a claim of this folder under the id it had before: this plan's)
@@ -1706,7 +1736,7 @@ def claim_output(out, key, plan_folder, take_over=False, what="the library", che
             c.claims[k] = [p for p in c.claims.get(k, []) if p == me]
     c.claims[key] = sorted(set(c.claims.get(key, [])) | {me}) if shared else [me]
     c.claims = {k: v for k, v in c.claims.items() if v}
-    c.plans[me] = {"path": project_key(out, plan_folder)}
+    c.plans[me] = seen_at(plan_folder, out)
     c.plans = {p: v for p, v in c.plans.items() if any(p in v2 for v2 in c.claims.values())}
     if json.dumps([c.claims, c.plans], sort_keys=True) != before:
         c.save()
