@@ -71,6 +71,8 @@ def test_unsafe_download_refuses_every_numeric_form_of_a_local_address(monkeypat
     assert D.redirect_refused("https://ds.example.com/a.pdf", "http://2852039166/latest/meta-data/", public=False)
     assert D.redirect_refused("https://ds.example.com/a.pdf", "http://127.1:8080/", public=False)
     # a BOM link to a datasheet server on your own network, written as a dotted quad, stays allowed; public sites too
+    # (a BOM link's host name is looked up since round 3, R-FX-1: here it resolves to nothing)
+    monkeypatch.setattr(D, "_resolve", lambda host: [])
     for url in ("http://10.1.2.3/ds/x.pdf", "http://192.168.1.20/x.pdf", "https://www.ti.com/lit/ds/symlink/lm358.pdf",
                 "http://93.184.216.34/x.pdf", "https://cdn.0x10c.example/x.pdf", "https://1password.example/x.pdf"):
         assert D.unsafe_download(url, public=False) is None, url

@@ -3047,8 +3047,14 @@ _NO_FETCH_HOSTS = re.compile(r"(localhost|.*\.localhost|metadata|metadata\.googl
                              re.I)
 
 
+# Cloud metadata services outside link-local: AWS's IPv6 one (a unique-local address, which a BOM link may otherwise
+# name), Alibaba's (CGNAT range) and Azure's wire server (a public address).
+_METADATA_IPS = frozenset(__import__("ipaddress").ip_address(a) for a in ("fd00:ec2::254", "100.100.100.200",
+                                                                          "168.63.129.16"))
+
+
 def _resolve(host):
-    """The addresses a host name resolves to ([] when it does not): for unsafe_download(public=True)."""
+    """The addresses a host name resolves to ([] when it does not): for unsafe_download."""
     import socket
     try:
         return [a[4][0] for a in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)]
@@ -3081,9 +3087,14 @@ def unsafe_download(url, public=False):
     """Why a datasheet link must not be downloaded, or None: only http(s), and never this machine (loopback), a
     link-local address (cloud metadata at 169.254.169.254) or another non-routable address. A datasheet link comes
     from a BOM or a web page someone else wrote, and the bytes are stored and sent to the model; a datasheet server
-    on your own network (10.x, 192.168.x) stays allowed. Literal addresses and well-known names only (no DNS lookup).
-    public: a link a web search gave (no person chose it): a private network's address is refused too, and so is a
-    name that resolves to any such address (names under .example / .test / .invalid are not looked up)."""
+    on your own network (10.x, 192.168.x) stays allowed. A host name is looked up and refused when any address it
+    resolves to is one of those (169.254.169.254.nip.io, localtest.me ...); names under .example / .test / .invalid
+    are not looked up. public: a link a web search gave (no person chose it): a private network's address is refused
+    too.
+    Limits (the best a check before the request can do): the lookup here is not the one the HTTP stack makes when it
+    connects, so a name whose answer changes between the two (DNS rebinding) is not caught; and behind an HTTP proxy
+    (HTTPS_PROXY) the proxy resolves the name itself, from its own network, so the answer here is only a guess at
+    where it goes (a name that does not resolve here is let through to the proxy)."""
     import ipaddress
     from urllib.parse import urlsplit
     try:
@@ -3104,7 +3115,7 @@ def unsafe_download(url, public=False):
     try:
         ips = [ipaddress.ip_address(numeric or host)]
     except ValueError:
-        if not public or re.search(r"\.(example|test|invalid)\.?$", host, re.I):
+        if re.search(r"\.(example|test|invalid)\.?$", host, re.I):
             return None
         ips = []
         for a in _resolve(host):
@@ -3116,6 +3127,8 @@ def unsafe_download(url, public=False):
         ip = getattr(ip, "ipv4_mapped", None) or ip
         if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved:
             return f"{host} is this machine, a link-local or a reserved address"
+        if ip in _METADATA_IPS:
+            return f"{host} is a cloud metadata service's address"
         if public and _private(ip):
             return f"{host} is a private network's address (a web search's link: only public sites)"
     return None
