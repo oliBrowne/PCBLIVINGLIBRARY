@@ -1207,7 +1207,9 @@ def to_spec(pkg, part, datasheet, model, offset, review):
             unres = [u for u in unres if not re.match(r"\s*terminal_length\b", str(u))]
             review.append("terminal_length: not read, and not needed: the maker's land sizes the pads (check the land "
                           "against the drawing)")
-    for k in base + NEED.get(t, []):
+    molded = ["terminal_width"] if t == "molded" and not F.lead_land(spec) else []   # else the pads are as wide as
+    # the body (review 196 R-RD-1); the maker's land, when read, sizes them instead
+    for k in base + NEED.get(t, []) + molded:
         if not any(x in spec or x in unres for x in k.split("|")):
             unres.append(k.replace("|", " or "))
     if unres:
@@ -1677,9 +1679,11 @@ def sanity(spec, review, evidence=""):
         if any(not math.isfinite(x) or x < 0 for x in vals) or (vals and max(vals) <= 0 and k != "courtyard_excess"):
             review.append(f"{k}: {v} mm is implausible (a size must be a number above 0)")
     for k in ("terminal_length", "terminal_width", "ball_diameter", "land_diameter", "drill"):
-        d = g(k)                                      # smaller than any real lead: a mil value labelled mm, or mil -> mm twice
-        if d and 0 < d[2] < 0.05:
+        d = g(k)                                      # smaller than any real lead: a mil value labelled mm, or mil -> mm twice;
+        low = 0.1 if k.startswith("terminal_") else 0.05   # a foot or lead in inches at the 0.050 boundary (SMA's
+        if d and 0 < d[2] < low:                      # 0.030-0.060 "mm"; no real foot or lead is under 0.1 mm at its max)
             review.append(f"{k}: {d[2]} mm is implausibly small (unit mislabelled?)")
+    review.extend(_two_terminal_terms(spec))
     h, hi = spec.get("height_max"), 60 if t in NO_BODY else 25
     if isinstance(h, (int, float)) and not isinstance(h, bool) and 0 < h and not 0.1 <= h <= hi:
         review.append(f"height_max: {h} mm is implausible (0.1-{hi} mm expected; unit mislabelled?)")
@@ -1766,6 +1770,40 @@ def sanity(spec, review, evidence=""):
     if small:
         review.append(f"land pattern: {small}")
     review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
+
+
+def _two_terminal_terms(spec):
+    """A chip / molded part's terminals against its body (review 196 R-RD-1): a terminal in inches (SMC's terminal_width
+    0.108-0.125 "mm"), wider than the body, or an inner_span as long as the body builds pads off the part with nothing
+    else to catch it. Bounds no real part breaks (KiCad's 74 chip sizes, JEDEC DO-214, EIA tantalum cases, MELF): the
+    terminal_length max at least 5 % of the body length, terminal_width max at least 20 % of the body width and its nom
+    no more than 1.1 x the body's, the inner_span max under the body length min. A molded part's terminal_width is
+    needed: left blank, the pads would be built as wide as the body; a MELF's end caps are about its diameter.
+    -> review lines (a failed read)."""
+    if spec.get("package_type") not in ("chip", "molded"):
+        return []
+    g = lambda k: _dim(spec.get(k))
+    L, W, T, b, S = g("body_length"), g("body_width"), g("terminal_length"), g("terminal_width"), g("inner_span")
+    out = []
+    if T and L and 0 < T[2] < 0.05 * L[1]:
+        out.append(f"terminal_length max {T[2]:g} mm is under 5% of the {L[1]:g} mm body_length, which is implausible "
+                   "for a terminal (unit mislabelled, inches read as mm?)")
+    if b and W and 0 < b[2] < 0.2 * W[1]:
+        out.append(f"terminal_width max {b[2]:g} mm is under 20% of the {W[1]:g} mm body_width, which is implausible "
+                   "for a terminal (unit mislabelled, inches read as mm?)")
+    if b and W and spec.get("lead_type") == "melf" and b[2] < 0.6 * W[1]:   # a MELF's end caps are its diameter
+        out.append(f"terminal_width max {b[2]:g} mm is under 60% of the {W[1]:g} mm body diameter, which is implausible "
+                   "for a MELF's end caps (they are as wide as the body; a land width read as the terminal?)")
+    if b and W and (b[0] > W[2] + 1e-6 or b[1] > 1.1 * W[1]):
+        out.append(f"terminal_width {b[0]:g}-{b[2]:g} mm is wider than the {W[0]:g}-{W[2]:g} mm body_width, which is "
+                   "implausible (terminal_width is one terminal's width across the part; check it and body_width)")
+    if S and L and S[2] >= L[0] - 1e-6:
+        out.append(f"inner_span max {S[2]:g} mm is not shorter than body_length min {L[0]:g} mm, which is implausible "
+                   "(inner_span is the gap between the two terminals, inside the body)")
+    if spec.get("package_type") == "molded" and spec.get("terminal_width") is None and not F.lead_land(spec):
+        out.append("terminal_width: not read for a molded part; its pads would be built as wide as the body, which is "
+                   "implausible for molded terminals (read the terminal width from the drawing)")
+    return out
 
 
 J_LEAD = re.compile(r"SOJ|PLCC|J[- ]?(?:lead|bend)|chip carrier|"            # by name, or by the JEDEC outline:
