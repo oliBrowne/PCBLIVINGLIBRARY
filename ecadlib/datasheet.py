@@ -1683,6 +1683,9 @@ def sanity(spec, review):
     ls, bw = g("lead_span"), g("body_width")
     if t == "gullwing" and ls and bw and ls[0] <= bw[2]:
         review.append(f"lead_span min {ls[0]} <= body_width max {bw[2]}")
+    review.extend(_feet_outside(spec))
+    if t == "gullwing":
+        review.extend(_listed_layout(spec))
     ep = spec.get("exposed_pad") or {}
     for d, k in (("length", "body_length"), ("width", "body_width")):
         v, body = _dim(ep.get(d)), g(k)
@@ -1706,6 +1709,102 @@ def sanity(spec, review):
     if small:
         review.append(f"land pattern: {small}")
     review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
+
+
+J_LEAD = re.compile(r"SOJ|PLCC|J[- ]?lead", re.I)
+
+
+def _feet_outside(spec):
+    """A gull-wing foot (terminal_length L) lies outside the plastic, so the span across the leads leaves room for two
+    of them beyond the body: lead_span max - body_width min >= 2 x L min, in every tolerance combination. A read that
+    breaks it (E read close to E1, L or the body misread, a span in the wrong unit) builds its pads under the body.
+    Inward (molded), MELF and J leads (SOJ, PLCC: the standard table has them as gull-wings) lie under the body and
+    are left out."""
+    if spec.get("package_type") not in ("gullwing", "qfp") or spec.get("lead_type") in ("molded", "melf") or \
+            J_LEAD.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
+        return []
+    L = _dim(spec.get("terminal_length"))
+    out = []
+    for span_k, body_k in (("lead_span", "body_width"), ("lead_span_y", "body_length")):
+        span, body = _dim(spec.get(span_k)), _dim(spec.get(body_k))
+        if not (L and span and body) or L[0] <= 0:
+            continue
+        room = span[2] - body[0]
+        if room < 2 * L[0] - 0.01:
+            out.append(f"terminal_length min {L[0]:g} mm does not fit outside the body: {span_k} max {span[2]:g} - "
+                       f"{body_k} min {body[0]:g} leaves {room / 2:.3g} mm per side for the foot, which is implausible "
+                       f"(check {span_k}, {body_k} and terminal_length against the drawing)")
+    return out
+
+
+def _listed_layout(spec):
+    """A gull-wing read that places its pads (pin_positions) against what every such package has: pin 1 at the top of
+    the left row or the bottom of the right one, numbered counter-clockwise seen from the top (down the left side, up
+    the right: KiCad's SOT-23, SOT-223, TO-252); pads whole pitches apart along a side; the leads centred on the body;
+    a tab no longer than the body and on it. Offsets given "+ up" or read from the bottom view mirror the footprint,
+    and the cross-check, which compares the pins along each side seen any way round, cannot tell (pins 1 and 2 of a
+    SOT-23 swapped). -> review lines (a failed read: read again or held)."""
+    out, e = [], spec.get("pitch")
+    pos = [p for p in _listed(spec) if isinstance(p.get("offset"), (int, float)) and not isinstance(p.get("offset"), bool)
+           and p.get("side") in ("L", "R")]
+    num = lambda p: int(p["number"]) if str(p.get("number")).isdecimal() else None
+    for side, sign in (("L", 1), ("R", -1)):
+        row = sorted((num(p), p["offset"]) for p in pos if p["side"] == side and num(p) is not None)
+        if any((b[1] - a[1]) * sign <= 0 for a, b in zip(row, row[1:])):
+            out.append(f"pin_positions: pins {', '.join(str(n) for n, _ in row)} on side {side} run "
+                       f"{'up' if sign > 0 else 'down'} it (offsets {', '.join(f'{o:g}' for _, o in row)}): pins are "
+                       f"numbered counter-clockwise seen from the top (down the left side, up the right; offset + is "
+                       "down), so the footprint would be mirrored: implausible (check the drawing's top view)")
+        offs = sorted(o for p in pos if p["side"] == side for o in [p["offset"]])
+        if isinstance(e, (int, float)) and e > 0:         # (SOT-143's wide pin 1 sits 1.7 from pin 2 at e = 1.9)
+            off = [b - a for a, b in zip(offs, offs[1:]) if abs((b - a) / e - round((b - a) / e)) > 0.15
+                   or round((b - a) / e) < 1]
+            if off:
+                out.append(f"pin_positions: pads on side {side} at {', '.join(f'{o:g}' for o in offs)} mm are not whole "
+                           f"pitches ({e:g} mm) apart: the pitch or the offsets are misread (implausible layout)")
+    offs = [p["offset"] for p in pos]
+    if len(offs) >= 2 and isinstance(e, (int, float)) and e > 0 and abs(max(offs) + min(offs)) / 2 > 0.25 * e + 0.01:
+        out.append(f"pin_positions: the leads run from {min(offs):g} to {max(offs):g} mm, centred "
+                   f"{(max(offs) + min(offs)) / 2:g} mm off the body's centre (offsets are from the centre; implausible "
+                   "layout)")
+    tab, body = spec.get("tab"), _dim(spec.get("body_length"))
+    w = _dim(tab.get("width")) if isinstance(tab, dict) else None
+    if w and body:
+        o = tab.get("offset") if isinstance(tab.get("offset"), (int, float)) and not isinstance(tab.get("offset"), bool) else 0
+        if w[0] > body[2] + 0.05:
+            out.append(f"tab: width min {w[0]:g} mm is wider than the body (body_length max {body[2]:g} mm): implausible")
+        elif abs(o) + w[0] / 2 > body[2] / 2 + 0.05:
+            out.append(f"tab: at offset {o:g} mm, {w[0]:g} mm wide, it runs past the end of the {body[2]:g} mm body: "
+                       "implausible")
+    return out
+
+
+def pads_vs_pins(rep, pins):
+    """The pads footprint_gen.build made (rep["pads"]) against the symbol's pin numbers, as the release check compares
+    them: a symbol pin with no pad, or a numbered pad (not a mounting / shield pad) with no pin. check_pins compares the
+    pins with 1..N; this catches what that leaves to the layout: a pin_positions number repeated or not in the pin
+    table, a tab numbered with a number the table does not have, a pad table numbered apart from the pins. Such a read
+    passed and was built, and only the release check found it. -> "symbol:" lines (a failed read)."""
+    from . import footprint_check as FC
+    pads = [p for p in rep.get("pads") or [] if isinstance(p, dict)]
+    if not pads:
+        return []
+    if rep.get("ep_num") is not None:                 # footprint_gen's exposed pad is drawn apart from rep["pads"]
+        pads.append({"num": str(rep["ep_num"])})
+    nums = {str(p.get("num") or "") for p in pads}
+    mount = FC.mount_rx(nums)
+    numbered = {str(p["num"]) for p in pads if p.get("num") not in (None, "") and p.get("role", "pin") in ("pin", "thermal")
+                and p.get("kind") != "np_thru_hole" and not mount.fullmatch(str(p["num"]))}
+    have = {str(q.get("num")) for q in pins or []}
+    key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)
+    out = []
+    if have - nums:
+        out.append(f"symbol: pins with no pad on the footprint {sorted(have - nums, key=key)[:20]} (the footprint's "
+                   f"pads are {', '.join(sorted(nums - {''}, key=key)[:20])})")
+    if numbered - have:
+        out.append(f"symbol: footprint pads with no pin {sorted(numbered - have, key=key)[:20]} (check the pad numbers "
+                   "against the pin table)")
+    return out
 
 
 BANK_NAME = re.compile(r"^([A-Z]+?)_?(\d{1,3})$")
@@ -2225,6 +2324,8 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             txt, rep = F.build(spec)
             from . import sexpr
             sexpr.parse(txt)
+            if not any(r.startswith(("symbol: pins missing", "symbol: pins not on the footprint")) for r in review):
+                review.extend(pads_vs_pins(rep, ext["pins"]))   # (check_pins already said it when it did)
             if rep.get("warning"):
                 review.append(f"footprint_gen: {rep['warning']}")
             if F.lead_land(spec):                     # the maker's land pattern becomes copper as given: check it now,
