@@ -1823,14 +1823,20 @@ def _qfp_rows(spec):
         out.append(f"pins_left_right missing: a rectangular {L[1]:g} x {W[1]:g} mm QFP has more pins along its longer "
                    "side, and with no row split every side would get a quarter of the pins, which is implausible "
                    "(give pins_left_right and pins_top_bottom, the pins on each side)")
-    elif isinstance(n := spec.get("pin_count"), int) and isinstance(e, (int, float)) and e > 0:
+    elif isinstance(spec.get("pin_count"), int) and isinstance(e, (int, float)) and e > 0 and not out:
         nlr, ntb = F.rows(spec)
         # real rows leave about the same margin at each end of every side (QFP-52 12x14: 14/12 pins leave 3.6 and 3.2
-        # mm), within a pitch; an equal split on a rectangular body leaves them a body difference apart
-        if nlr == ntb and abs((W[1] - L[1]) - (nlr - ntb) * e) > 1.15 * e:
+        # mm; QFP-100 14x20, 30/20 at 0.65: 1.15 and 1.65), within a pitch; an equal split on a rectangular body
+        # leaves them a body difference apart, a split one pin off two pitches more
+        off = (W[1] - L[1]) - (nlr - ntb) * e
+        if abs(off) > 1.15 * e and nlr == ntb:
             out.append(f"pins_left_right {nlr} and pins_top_bottom {ntb}: equal rows on a rectangular {L[1]:g} x "
                        f"{W[1]:g} mm QFP leave a margin {abs(W[1] - L[1]):g} mm longer on one side than the other, "
                        "which is implausible (give the pins on each side as the drawing or the pin diagram shows)")
+        elif abs(off) > 1.15 * e:
+            out.append(f"pins_left_right {nlr} and pins_top_bottom {ntb} at pitch {e:g} leave end margins {abs(off):.3g} "
+                       f"mm apart on the {L[1]:g} x {W[1]:g} mm body (real rows: within a pitch), which is implausible "
+                       "(a pin counted on the wrong side? check the pins on each side against the pin diagram)")
     if spec.get("lead_span") is not None and spec.get("lead_span_y") is None:
         out.append(f"lead_span_y missing: a rectangular {L[1]:g} x {W[1]:g} mm QFP has a different span across each "
                    "pair of sides, and one lead_span would build all four rows at it, which is implausible (give "

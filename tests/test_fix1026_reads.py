@@ -615,6 +615,16 @@ def test_f6_m1_a_reverse_pinned_footprint_name_with_a_suffix_is_evidence():
         assert read(pkg) == "failed", pkg
 
 
+
+def test_f6_l1_a_row_split_off_by_one_never_builds_wrong():
+    """Before: QFP-52 12x14 read 15/11 (true 14/12) built, assess ok. One pin moved between sides moves the end
+    margins two pitches apart; real rows keep them within a pitch (QFP-100 14x20, 30/20 at 0.65: 0.5 mm)."""
+    for t in RECT_QFPS:
+        assert _qfp_read(t)[0] == "ok", t["name"]
+        _never_wrong(t, dict(t, nlr=t["nlr"] + 1, ntb=t["ntb"] - 1), "+1/-1")
+        _never_wrong(t, dict(t, nlr=t["nlr"] - 1, ntb=t["ntb"] + 1), "-1/+1")
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
