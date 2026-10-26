@@ -136,7 +136,9 @@ def _old_rows(path, parts):
                 cur = con.execute(f"SELECT * FROM {_ident(t)}")
                 cols = [c[0] for c in cur.description]
                 for vals in cur.fetchall():
-                    row = {c: v for c, v in zip(cols, vals) if v not in (None, "")}
+                    row = {c: v for c, v in zip(cols, vals) if v not in (None, "") or c in ("Symbol", "Footprint")}
+                    row.update({c: row.get(c) or "" for c in ("Symbol", "Footprint") if c in row})   # a symbol-only
+                    # part's empty Footprint stays a column of its row (the rebuild reads both)
                     if row.get("Part ID") in parts:
                         out[row["Part ID"]] = (t, row)
     except sqlite3.Error:
@@ -300,7 +302,7 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
         fps = set((xr.get("footprints") or {}))
         for t, rows in list(tables.items()):
             for r in list(rows):
-                sname = r["Symbol"].split(":", 1)[1]
+                sname = (r.get("Symbol") or ":").split(":", 1)[-1]
                 if owner.get(sname, r["Part ID"]) != r["Part ID"]:   # two part names, one KiCad name: the symbol is
                     rows.remove(r)                                    # the other part's (kicad-export reported it)
                     skipped.append({"part": r["Part ID"], "why": f"symbol {r['Symbol']} is part {owner[sname]}'s "
@@ -308,7 +310,7 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
                     continue
                 if sname not in syms:
                     rep["warnings"].append(f"{r['Part ID']}: symbol {r['Symbol']} is not in {lib}.kicad_sym")
-                fpn = r["Footprint"].split(":", 1)[1] if r["Footprint"] else None
+                fpn = r["Footprint"].split(":", 1)[1] if r.get("Footprint") else None
                 if fpn and r["Part ID"] in own_fp and own_fp[r["Part ID"]] != fpn and fpn in fps:
                     rep["warnings"].append(f"{r['Part ID']}: footprint {r['Footprint']} is another part's (same KiCad "
                                            "name); left empty")
