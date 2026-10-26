@@ -133,6 +133,17 @@ def test_rfp1_a_rectangular_qfp_read_right_passes_the_feet_check():
     assert any("lead_span max 14.4 - body_length min 13.9" in r for r in D._feet_outside(bad)), D._feet_outside(bad)
 
 
+
+def test_rfp3_a_j_lead_part_named_by_its_jedec_outline_is_not_checked_as_gull_wing():
+    plcc = {"package_type": "qfp", "name": "MO-047-28", "description": "28-pin plastic chip carrier",
+            "terminal_length": {"min": 0.8, "nom": 1.0, "max": 1.2}, "lead_span": {"min": 12.2, "nom": 12.4, "max": 12.6},
+            "body_length": {"min": 11.4, "nom": 11.5, "max": 11.6}, "body_width": {"min": 11.4, "nom": 11.5, "max": 11.6}}
+    assert D._feet_outside(plcc) == [], D._feet_outside(plcc)
+    for name in ("MS-016-AB", "SOJ-26", "PLCC-44", "J-bend 20"):
+        assert D._feet_outside(dict(plcc, name=name, description="")) == [], name
+    assert D._feet_outside(dict(plcc, name="LQFP-28", description="")) != []    # a gull-wing QFP is still checked
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

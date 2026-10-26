@@ -1752,7 +1752,8 @@ def sanity(spec, review):
     review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
 
 
-J_LEAD = re.compile(r"SOJ|PLCC|J[- ]?lead", re.I)
+J_LEAD = re.compile(r"SOJ|PLCC|J[- ]?(?:lead|bend)|chip carrier|"            # by name, or by the JEDEC outline:
+                    r"\bM[OS]-?(?:047|016|018|027|065)\b", re.I)   # PLCC MO-047 / MS-016 / MS-018, SOJ
 
 
 def _feet_outside(spec):
