@@ -21,7 +21,7 @@ def test_webui_01_altium_models_carry_a_height_and_a_3d_body(tmp_path):
     with contextlib.redirect_stdout(io.StringIO()):
         r = ws.build_altium_models(up)
     assert set(r["footprints"]) == {"R_0603_1608Metric", "SOIC-8_3.9x4.9mm_P1.27mm"}, r
-    for name, h in (("R_0603_1608Metric", 0.9), ("SOIC-8_3.9x4.9mm_P1.27mm", 1.75)):
+    for name in ("R_0603_1608Metric", "SOIC-8_3.9x4.9mm_P1.27mm"):
         fp = AL.read_pcblib(ws.models / "PcbLib" / f"{name}.PcbLib")[0]
         assert float(str(fp["params"]["HEIGHT"]).replace("mil", "")) > 0, (name, fp["params"])
         assert any(rec["type"] == "body" for rec in fp["records"]), (name, [rec["type"] for rec in fp["records"]])
@@ -138,9 +138,10 @@ def test_webui_06_the_ui_sample_bom_looks_nothing_up_online(tmp_path, monkeypatc
     ws = Workspace(tmp_path / "ws", [])                    # what `ecadlib ui` and the desktop app make: not --offline
     srv, call = serve(ws)
     try:
-        st, j = call("POST", "/api/demo", "{}")
-        assert st == 200, j
-        r = wait_job(call, j["job"], 120)
+        with contextlib.redirect_stderr(io.StringIO()):
+            st, j = call("POST", "/api/demo", "{}")
+            assert st == 200, j
+            r = wait_job(call, j["job"], 120)
         assert r["state"] == "done" and r["result"]["parts"] == 7, r.get("error")
     finally:
         srv.shutdown()
