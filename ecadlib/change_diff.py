@@ -728,6 +728,9 @@ def _pad_more(a, b, out, what):
     if za is not None and zb is not None and za != zb:
         _chg(out, "geometry-major", "footprint", what, za, zb,
              f"{what} zone connection {_ZONE.get(za, za)} -> {_ZONE.get(zb, zb)}")
+    ka, kb = a.get("kset"), b.get("kset")
+    if ka is not None and kb is not None and ka != kb:
+        _pad_settings(ka, kb, out, what)
     for k, label in (("pinfunc", "pin function"), ("pintype", "pin type")):
         if a.get(k) and b.get(k) and a[k] != b[k]:      # boards fill these in from the symbol, libraries mostly do not
             _chg(out, "geometry-minor", "footprint", what, a[k], b[k], f"{what} {label} {a[k]} -> {b[k]}")
@@ -737,6 +740,32 @@ def _pad_more(a, b, out, what):
 
 
 _ZONE = {-1: "as the footprint", 0: "none", 1: "thermal relief", 2: "solid", 3: "thermal relief (THT only)"}
+_PAD_SET_LABEL = {"solder_paste_margin_ratio": "solder paste ratio", "solder_paste_ratio": "solder paste ratio",
+                  "clearance": "clearance", "thermal_bridge_width": "thermal bridge width", "thermal_width":
+                  "thermal bridge width", "thermal_gap": "thermal relief gap", "thermal_bridge_angle": "thermal bridge angle"}
+
+
+def _pad_settings(ka, kb, out, what):
+    """A KiCad pad's own settings (R-G2-6). Less solder paste (the ratio down by more than 0.1 of the pad), a smaller
+    clearance, thinner thermal bridges or a smaller relief gap is geometry-major (the board is soldered or cleared
+    worse); the rest, and a setting added or dropped back to the footprint's, at least geometry-minor."""
+    def num(v):
+        return v if isinstance(v, (int, float)) else None
+    for k in sorted(set(ka) | set(kb)):
+        u, v = ka.get(k), kb.get(k)
+        if u == v:
+            continue
+        label = _PAD_SET_LABEL.get(k, k.replace("_", " "))
+        nu, nv = num(u), num(v)
+        if k in ("solder_paste_margin_ratio", "solder_paste_ratio"):
+            major = (nu or 0.0) - (nv if nv is not None else 0.0) > 0.1 + 1e-9
+        elif k in ("clearance", "thermal_bridge_width", "thermal_width", "thermal_gap"):
+            major = nv is not None and (nu is None or nv < nu - TOL["noise"])
+        else:
+            major = False
+        inherit = "(the footprint's)"
+        _chg(out, "geometry-major" if major else "geometry-minor", "footprint", what, u, v,
+             f"{what} {label} {inherit if u is None else _f(u)} -> {inherit if v is None else _f(v)}")
 
 
 def _layers(cu):

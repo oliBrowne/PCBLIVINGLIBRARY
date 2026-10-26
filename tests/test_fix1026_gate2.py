@@ -307,3 +307,47 @@ def test_gate2_rg25_a_recipe_body_turned_or_lifted_does_not_build_the_pcblib(tmp
     d.mkdir()
     pl2, rp2 = _body_lib(d, rot=(90.0, 0.0, 0.0), dz=1.0)
     assert AN.compare_one(pl2, rp2) == []
+
+
+# ------------------------------------------------------------------ R-G2-6
+_KMOD = ('(footprint "T" (version 20240108) (generator x) (layer "F.Cu")\n'
+         '(pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25){0})\n'
+         '(pad "2" smd roundrect (at 0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25){0})\n)')
+
+
+def _kfp_with(extra=""):
+    from ecadlib import fingerprint as F
+    return F.build("T", None, *F.kicad_footprint(_KMOD.format(extra)), tool="kicad")
+
+
+def test_gate2_rg26_pad_level_paste_ratio_clearance_and_thermal_are_fingerprinted():
+    """g8_kmod_fp.py / g8b: a pad's own solder_paste_margin_ratio (paste cut to 10 %), clearance and thermal bridge
+    width in a .kicad_mod were not in the fingerprint: no change found, kicad-export shipped the edit as r1. Now each
+    is a change; cutting the paste or the clearance, or thinning the thermal bridges, is geometry-major."""
+    from ecadlib import change_diff as CD
+    base = _kfp_with()
+    for extra in (" (solder_paste_margin_ratio -0.9)", " (clearance 0.01)", " (thermal_bridge_width 0.01)",
+                  " (thermal_gap 0.01)"):
+        new = _kfp_with(extra)
+        assert new["hashes"]["digest"] != base["hashes"]["digest"], extra
+        ch = CD.diff(base, new)
+        assert CD.worst(ch) == "geometry-major", (extra, ch)
+    assert CD.worst(CD.diff(base, _kfp_with(" (solder_paste_margin_ratio -0.05)"))) == "geometry-minor"
+    assert CD.diff(_kfp_with(" (clearance 0.2)"), _kfp_with(" (clearance 0.2)")) == []
+
+
+def test_gate2_rg26_paste_cut_on_a_released_kicad_mod_is_held_not_published():
+    """g8b_kmod_e2e.py: KT-0603R's .kicad_mod gets (solder_paste_margin_ratio -0.9) on both pads; the publisher's settle
+    holds it (the released .kicad_mod goes back) instead of publishing it as r1."""
+    from ecadlib import ledger as LG
+    w, lib = _demo()
+    items = {i["name"]: i for i in json.loads((lib / "plan.json").read_text(encoding="utf-8"))}
+    km = lib / items[KT]["footprint"]["kicad_mod"]
+    released = km.read_bytes()
+    t = km.read_text(encoding="utf-8")
+    assert "(roundrect_rratio 0.25))" in t
+    km.write_text(t.replace("(roundrect_rratio 0.25))", "(roundrect_rratio 0.25) (solder_paste_margin_ratio -0.9))"),
+                  encoding="utf-8")
+    _publish(lib)
+    assert LG.Ledger(lib).head(KT)["revision"] == 1 and LG.Ledger(lib).proposal(KT), _ledger(lib)[-3:]
+    assert km.read_bytes() == released

@@ -49,9 +49,10 @@ from pathlib import Path
 
 from . import altium_lib as AL, parity as PA, sexpr
 
-SCHEMA = 5                                    # 3: a hidden pin's net as written (case and spelling); 4: pin ends
+SCHEMA = 6                                    # 3: a hidden pin's net as written (case and spelling); 4: pin ends
 #                                               and the pins that share one ("stacks"); 5: a pad at 89.9996 deg is
-#                                               at 90, stacked pads in content order, a pin table's first instance
+#                                               at 90, stacked pads in content order, a pin table's first instance;
+#                                               6: a KiCad pad's own paste ratio, clearance and thermal settings
 ETYPE_NAME = {0: "input", 1: "io", 2: "output", 3: "open_collector", 4: "passive", 5: "hiz", 6: "open_emitter", 7: "power"}
 MPN_KEYS = ("manufacturer part number", "manufacturer part number 1", "mpn", "mfr part number", "manufacturer_part_number",
             "manufacturerpartnumber", "manufacturer part #", "mfr. part number", "mfr part #", "mfr. #", "mpn1", "mfr_pn",
@@ -216,8 +217,11 @@ def _canon_pads(pads):
 # per-pad details one tool has and the other has not (kept out of gid, compared within one tool):
 # cu_in  KiCad copper on the inner layers (*.Cu) or only outside (F&B.Cu); zone  KiCad zone_connect (-1 = the
 # footprint's); pintype / pinfunc  KiCad's pad pin type and function; prop  KiCad fabrication property (heatsink,
-# fiducial, testpoint ...); prim  a digest of a custom pad's copper shape ("k:" KiCad primitives, "a:" Altium regions)
-PAD_TOOL_KEYS = ("cu_in", "zone", "pintype", "pinfunc", "prop", "prim")
+# fiducial, testpoint ...); prim  a digest of a custom pad's copper shape ("k:" KiCad primitives, "a:" Altium regions);
+# kset  a KiCad pad's own settings beyond its margins (paste ratio, clearance, thermal bridges: _K_PAD_SETTINGS)
+PAD_TOOL_KEYS = ("cu_in", "zone", "pintype", "pinfunc", "prop", "prim", "kset")
+_K_PAD_SETTINGS = ("solder_paste_margin_ratio", "solder_paste_ratio", "clearance", "thermal_bridge_width",
+                   "thermal_width", "thermal_gap", "thermal_bridge_angle")
 
 
 def _k_cu(kind, layers):
@@ -262,7 +266,15 @@ def _kicad_pad_extras(t):
         cu, cu_in = _k_cu(kind, layers)
         zc, prop = sexpr.first(p, "zone_connect"), sexpr.first(p, "property")
         pt, pf = sexpr.first(p, "pintype"), sexpr.first(p, "pinfunction")
-        out.append({"cu": cu, "cu_in": cu_in, "zone": int(float(zc[1])) if zc else -1,
+        kset = {}
+        for k in _K_PAD_SETTINGS:
+            n = sexpr.first(p, k)
+            if n and len(n) > 1:
+                try:
+                    kset[k] = round(float(n[1]), 6)
+                except ValueError:
+                    kset[k] = str(n[1])
+        out.append({"cu": cu, "cu_in": cu_in, "zone": int(float(zc[1])) if zc else -1, "kset": kset,
                     "pintype": str(pt[1]) if pt else "", "pinfunc": str(pf[1]) if pf else "",
                     "prop": str(prop[1]) if prop and len(prop) > 1 else "",
                     "prim": _k_prim(p, rot) if shape == "custom" else None})
