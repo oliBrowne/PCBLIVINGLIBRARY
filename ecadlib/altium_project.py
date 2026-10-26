@@ -896,7 +896,8 @@ def load_lifecycle(path):
     if not Path(path).exists():                # a typo would skip the NRND / EOL check silently
         raise FileNotFoundError(f"--lifecycle {path}: not found")
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    return {k: v for k, v in (data.get("parts") or {}).items()}
+    from .lifecycle import rekey
+    return rekey(data.get("parts") or {})          # a state keyed before decimal points were kept reads as now
 
 
 def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, rules=None, log=None):

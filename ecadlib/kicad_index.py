@@ -28,13 +28,20 @@ def plain_land(name):
 BODY_RE = re.compile(r"(?<![0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x\d+(?:\.\d+)?)?mm", re.I)
 
 
-def norm_mpn(s):
+DECIMAL_POINT = re.compile(r"(?<=\d)\.(?=\d)")
+
+
+def norm_mpn(s, dots=True):
     """An MPN without case and punctuation, for comparing: 'LM358-DR' == 'lm358dr'. The micro sign is U (µA741CN ==
     UA741CN), fullwidth / accented letters fold to ASCII; a letter that has no ASCII form is kept, never dropped
-    (µA741CN must not become A741CN, another part)."""
+    (µA741CN must not become A741CN, another part). A decimal point between two digits is kept: SMAJ5.0A (a 5 V TVS)
+    is not SMAJ50A (a 50 V one), 1.5KE6.8A is not 1.5KE68A. dots=False drops it too, for reading a file name or a
+    text one character at a time (datasheet file names), never for deciding two MPNs are one part."""
     s = unicodedata.normalize("NFKD", str(s or "")).replace("µ", "U").replace("μ", "U")\
         .replace("Μ", "U")                                      # micro sign / mu ('µ'.upper() is a capital mu)
     s = "".join(c for c in s if not unicodedata.combining(c)).upper()
+    if dots and "." in s:
+        return ".".join(norm_mpn(t, False) for t in DECIMAL_POINT.split(s))
     if not s.isascii():
         return re.sub(r"[\W_]", "", s)
     return re.sub(r"[^A-Z0-9]", "", s)

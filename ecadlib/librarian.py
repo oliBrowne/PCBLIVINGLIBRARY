@@ -122,11 +122,17 @@ class KiCadLibrary:
                         pass
                 if f.exists():                 # a stale index beats none
                     self._load(f)
+        self._build_norm()
+
+    def _build_norm(self):
         self._norm, self._wild, self._fpn = {}, [], []
         for name, libs in self.symbols.items():
             self._norm.setdefault(norm_mpn(name), []).extend(f"{l}:{name}" for l in libs)
             if re.search(r"(?<![0-9])x|x(?![0-9])", name) and re.search(r"[A-Z0-9]x", name) and not any(l.startswith("Connector") for l in libs):
-                rx = "".join("[A-Z0-9]" if c == "x" else re.escape(c.upper()) for c in re.sub(r"[^A-Za-z0-9]", "", name))
+                # a '.' between digits (or x wildcards) is kept by norm_mpn on the MPN side: 'LM1117-x.x' -> optional
+                flat = re.sub(r"(?<=[0-9x])\.(?=[0-9x])", "\x00", name)
+                rx = "".join("[A-Z0-9]" if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
+                             for c in re.sub(r"[^A-Za-z0-9\x00]", "", flat))
                 self._wild.append((re.compile(rx), [f"{l}:{name}" for l in libs]))
         self._fpn = [(norm_mpn(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items()]
 
@@ -194,7 +200,8 @@ class KiCadLibrary:
         if hits:
             ref, more = self._pick(hits)
             return ref, "name with KiCad x wildcards" + more
-        raw = [i for i, c in enumerate(str(mpn)) if c.isalnum()]     # positions of the normalised characters
+        raw = [i for i, c in enumerate(str(mpn)) if c.isalnum() or     # positions of the normalised characters (a
+               (c == "." and str(mpn)[i - 1:i].isdigit() and str(mpn)[i + 1:i + 2].isdigit())]   # kept decimal point)
         for k in range(len(nm) - 1, max(5, int(len(nm) * 0.6)) - 1, -1):
             sep = raw[k] > raw[k - 1] + 1                             # a '-', '/', '(' ... right before the suffix
             if nm[:k] in self._norm and (len(nm) - k <= 2 or (sep and len(nm) - k <= 6)):

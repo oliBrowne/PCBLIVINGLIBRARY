@@ -2760,8 +2760,9 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
 
 def _mpn_key(s):
     """A part number or file name as part numbers are compared everywhere (kicad_index.norm_mpn): no case or
-    punctuation, µ as U, accented and full-width letters plain, any other letter kept (К561ТМ2, 蜂鸣器)."""
-    return norm_mpn(s)
+    punctuation, µ as U, accented and full-width letters plain, any other letter kept (К561ТМ2, 蜂鸣器). Read one
+    character at a time, so a decimal point drops out too (norm_mpn dots=False)."""
+    return norm_mpn(s, dots=False)
 
 
 # CJK, kana and hangul: in a file name after the part number, words (TP4056中文资料.pdf), as symbols are (NE555™.pdf)

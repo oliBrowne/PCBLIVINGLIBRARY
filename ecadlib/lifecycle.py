@@ -464,11 +464,24 @@ def risky(cur):
     return SEVERITY.get(cur["status"], 0) > 0 or cur["stock"] == 0
 
 
+def rekey(parts):
+    """A state written before an MPN's decimal point was kept in its key (SMAJ5.0A stored as SMAJ50A) read under the
+    key key_of gives it now, from the MPN the entry carries; every other key as it is."""
+    out = {}
+    for k, v in (parts or {}).items():
+        mpn = v.get("mpn") if isinstance(v, dict) else ""
+        out[norm_mpn(mpn) if mpn and k == norm_mpn(mpn, dots=False) else k] = v
+    return out
+
+
 def load_state(path):
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        st = json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"version": 1, "updated": None, "parts": {}}
+    if isinstance(st, dict) and isinstance(st.get("parts"), dict):
+        st["parts"] = rekey(st["parts"])
+    return st
 
 
 def diff(state, current):

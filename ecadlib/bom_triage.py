@@ -1210,7 +1210,8 @@ def triage(lines, index, provs, http, shared=None):
 
 
 def _n(s):
-    return re.sub(r"[^A-Z0-9]", "", s.upper())
+    from .kicad_index import norm_mpn      # as every MPN is compared: SMAJ5.0A is not SMAJ50A (the '.' is kept)
+    return norm_mpn(s)
 
 
 def _yn(v):

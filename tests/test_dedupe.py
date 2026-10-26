@@ -19,7 +19,7 @@ def _quiet(fn, *a, **k):
 
 def test_mpn_key_packaging_suffixes():
     k = DD.mpn_key
-    assert k("LM1117MPX-3.3/TR") == k("LM1117MPX-3.3") == "LM1117MPX33"
+    assert k("LM1117MPX-3.3/TR") == k("LM1117MPX-3.3") == "LM1117MPX3.3"   # the decimal point is kept (R-RU-1)
     assert k("AD8605ARTZ-REEL7") == k("AD8605ARTZ-R7") == k("AD8605ARTZ") == "AD8605ARTZ"
     assert k("LT1763CS8#TRPBF") == k("LT1763CS8#PBF") == k("LT1763CS8")
     assert k("IRLML6344TRPBF") == k("IRLML6344PBF") == k("IRLML6344")
