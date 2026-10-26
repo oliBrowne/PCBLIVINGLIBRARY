@@ -76,6 +76,14 @@ _MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON":
                 "WE": "WURTHELEKTRONIK", "WURTH": "WURTHELEKTRONIK", "GD": "GIGADEVICE",
                 "EPCOS": "TDK", "IXYS": "LITTELFUSE", "SILICONIX": "VISHAY", "FCI": "AMPHENOL", "AMSOSRAM": "OSRAM",
                 "ELPIDA": "MICRON", "NUMONYX": "MICRON", "WOLFSON": "CIRRUSLOGIC"}
+# a first word many companies share ("Analog Devices" / "Analog Power", "General Electric" / "General Semiconductor"):
+# alone it names no company, so a name that is only it keeps its company-kind words, and no other name matches it by
+# starting with it
+_MAKER_GENERIC = {"ANALOG", "GENERAL", "AMERICAN", "NATIONAL", "MICRO", "SILICON", "POWER", "LINEAR", "DIGITAL",
+                  "ADVANCED", "UNITED", "CENTRAL", "STANDARD", "UNIVERSAL", "PRECISION", "APPLIED", "SMART", "NEW"}
+_MAKER_LEGAL = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "LTD", "LIMITED", "LLC", "GMBH", "AG",
+                "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE"}
+_MAKER_ALIAS.update({"ANALOGDEVICES": "ANALOG", "NATIONALSEMICONDUCTOR": "TEXASINSTRUMENTS"})
 # Nexperia (NXP's Standard Products until 2017) is its own company now, with its own lifecycles and datasheets for the
 # discretes and logic NXP once sold: an NXP line is not matched to a Nexperia listing (nor Philips / Freescale to it).
 
@@ -95,6 +103,16 @@ def _maker_words_all(name):
     return re.findall(r"[A-Z0-9]+", unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().upper())
 
 
+def _key_words(name):
+    """The words a maker's key is made of: _maker_words, or for a name that is only a shared first word ('Analog
+    Devices', 'General Semiconductor') its words but the legal form and a sales region."""
+    kept = _maker_words(name)
+    if len(kept) == 1 and kept[0] in _MAKER_GENERIC:
+        words = [w for w in _maker_words_all(name) if w not in _MAKER_LEGAL]
+        kept = (words[:1] + [w for w in words[1:] if w not in _MAKER_REGION]) or kept
+    return kept
+
+
 def maker_key(name):
     """A maker's name reduced to which company it is: letters and digits of its words, company-kind words left out,
     a Chinese alias in brackets dropped, short and old names mapped (TI -> Texas Instruments, onsemi / ON
@@ -107,14 +125,15 @@ def maker_key(name):
     if "".join(kept).startswith("STMICRO"):                              # STMicroelectronics, ST Micro
         return "ST"
     if kept and kept[0] == "VISHAY":              # Vishay Dale / Siliconix / Intertechnology / Sprague: one maker
-        return "VISHAY"
-    joined = "".join(kept)
+        return "VPG" if "PRECISION" in kept else "VISHAY"    # Vishay Precision Group: its own company since 2010
+    joined = "".join(_key_words(name))
     return _MAKER_ALIAS.get(joined, joined)          # the whole name only: "ON Shore Technology" is not onsemi
 
 
 def same_maker(a, b):
-    """Do two maker names name the same company? Equal keys; one key starting the other when the shorter has at
-    least 4 letters ("Vishay" / "Vishay Siliconix", "Murata" / "Murata Manufacturing"); or a one-word name of 3+
+    """Do two maker names name the same company? Equal keys; one key starting the other at a word's end when the shorter
+    has at least 4 letters and is no shared first word ("Murata" / "Murata Power Solutions", not "Micron" / "Micronas"
+    or "Analog Devices" / "Analog Power"); or a one-word name of 3+
     letters that is the other's first word ("MDD" / "MDD Microdiode"). Never a substring elsewhere: "ON" is not in
     "Monolithic", "TI" is not "Tiger", "ON" is not "ON Shore Technology"."""
     for x, y in ((a, b), (b, a)):              # DigiKey's "Analog Devices Inc./Maxim Integrated": either name
@@ -125,11 +144,16 @@ def same_maker(a, b):
         return False
     if ka == kb:
         return True
-    short, long_ = sorted((ka, kb), key=len)
-    if len(short) >= 4 and long_.startswith(short):
-        return True
+    (short, _), (long_, ln) = sorted(((ka, a), (kb, b)), key=lambda t: len(t[0]))
+    if len(short) >= 4 and short not in _MAKER_GENERIC and long_.startswith(short):
+        words = _key_words(ln)                   # at a word's end: "Murata" / "Murata Power Solutions", not "Micron" /
+        split = [w for w in re.findall(r"[A-Z0-9]+", re.sub(r"['.]", "", unicodedata.normalize("NFKD", clean_maker(ln))
+                 .encode("ascii", "ignore").decode().upper())) if w not in _MAKER_WORDS]      # "Micronas"; "Wakefield-Vette"
+        if "".join(words) != long_ or any("".join(ws[:i]) == short for ws in (words, split) for i in range(1, len(ws) + 1)):
+            return True
     wa, wb = _maker_words(a), _maker_words(b)
-    return any(len(x) == 1 and len(x[0]) >= 3 and y and y[0] == x[0] for x, y in ((wa, wb), (wb, wa)))
+    return any(len(x) == 1 and len(x[0]) >= 3 and x[0] not in _MAKER_GENERIC and y and y[0] == x[0] and ky.startswith(kx)
+               for x, y, kx, ky in ((wa, wb, ka, kb), (wb, wa, kb, ka)))     # not "Vishay" / Vishay Precision (VPG)
 
 
 def describe(text="", category="", package=""):

@@ -86,7 +86,10 @@ def _pick(items, part, mpn_of, mfr_of):
     hit = next((i for i in exact if same_maker(want, mfr_of(i))), None)
     if hit is not None:
         return hit
-    others = {maker_key(mfr_of(i)) for i in exact} - {""}
+    others = []                                  # by company, not by name: "TE Connectivity" and "TE Connectivity AMP
+    for m in (mfr_of(i) for i in exact):         # Connectors" are one other maker
+        if maker_key(m) and not any(same_maker(m, o) for o in others):
+            others.append(m)
     return exact[0] if len(others) <= 1 else None
 
 

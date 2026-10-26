@@ -119,3 +119,28 @@ def test_digikey_lifecycle_finds_a_part_listed_under_its_makers_new_name():
                      "ProductStatus": {"Status": "Obsolete"}}}
     r = L.parse_digikey(d, {"mpn": "LM358", "manufacturer": "TI"}, L.LifecycleResult("digikey", mpn="LM358"))
     assert r.found is False, r
+
+
+# ---------------------------------------------------------------- R-SRC-5: _pick counts other makers by company
+def test_a_name_that_only_starts_like_another_is_not_that_maker():
+    from ecadlib.providers import same_maker as S
+    for a, b in (("Analog Devices", "Analog Power"), ("Analog Devices", "Analogix Semiconductor"), ("ADI", "Analog Power"),
+                 ("Micron", "Micronas"), ("General Electric", "General Semiconductor"), ("Vishay", "Vishay Precision Group"),
+                 ("Vishay Dale", "VPG"), ("HUAXIN", "HUAXINAN"), ("American", "American Technical Ceramics"),
+                 ("Linear Tech", "Linear Integrated Systems"), ("AMS", "ams OSRAM")):
+        assert not S(a, b) and not S(b, a), (a, b)
+    for a, b in (("Analog Devices", "Analog Devices Global"), ("Murata", "Murata Power Solutions"),
+                 ("TE Connectivity", "TE Connectivity AMP Connectors"), ("Vishay", "Vishay Siliconix"), ("Würth", "Würth Elektronik"),
+                 ("MDD", "MDD Microdiode"), ("Silicon Labs", "Silicon Laboratories Inc"), ("Analog Devices", "ADI"),
+                 ("Linear Technology", "ADI"), ("Samsung", "Samsung Electro-Mechanics"), ("Wakefield", "Wakefield-Vette"),
+                 ("OSRAM", "ams OSRAM"), ("OSRAM Opto Semiconductors", "ams-OSRAM USA INC.")):
+        assert S(a, b) and S(b, a), (a, b)
+
+
+def test_pick_counts_other_makers_by_company_not_by_name():
+    from ecadlib import lifecycle as L
+    items = [{"mpn": "X1", "m": "TE Connectivity"}, {"mpn": "X1", "m": "TE Connectivity AMP Connectors"}]
+    got = L._pick(items, {"mpn": "X1", "manufacturer": "Foo Corp"}, lambda i: i["mpn"], lambda i: i["m"])
+    assert got is items[0], got                              # one other company under two names: as one maker
+    items = [{"mpn": "X1", "m": "Texas Instruments"}, {"mpn": "X1", "m": "STMicroelectronics"}]
+    assert L._pick(items, {"mpn": "X1", "manufacturer": "Foo Corp"}, lambda i: i["mpn"], lambda i: i["m"]) is None
