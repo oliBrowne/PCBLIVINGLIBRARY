@@ -161,3 +161,20 @@ def test_fpgen_property_generated_families():
         span = FG.dim(s["lead_span"])
         assert abs(p1["x"]) + p1["w"] / 2 >= span[0] / 2 - 1e-6                      # the land reaches the lead tip
     assert built == 60
+
+
+# fpgen-07: a pad table in inches typed as unit mm (the mirror of mils typed as mm, which check_pad_table refuses) built
+# a footprint 25.4 times too small with no warning: two 0.08 x 0.12 mm pads 0.2 mm apart inside an 8 x 5 mm body
+def test_fpgen07_inches_typed_as_mm_are_refused():
+    def conn(unit, pads, pitch=5.08):
+        s = {"name": "C", "package_type": "connector", "pin_count": len(pads), "pitch": pitch,
+             "body_length": {"nom": 8}, "body_width": {"nom": 5}, "pad_table": {"unit": unit, "pads": pads}}
+        return s if pitch else {k: v for k, v in s.items() if k != "pitch"}
+    two = [{"number": "1", "x": -0.1, "y": 0, "w": 0.08, "h": 0.12}, {"number": "2", "x": 0.1, "y": 0, "w": 0.08, "h": 0.12}]
+    _refused(conn("mm", two), "inches")
+    txt, rep = FG.build(conn("in", two))                         # the same table with its unit: 5.08 mm apart
+    assert {round(p["x"], 3) for p in rep["pads"]} == {-2.54, 2.54}
+    _refused(conn("mm", two, pitch=None), "inches")             # no pitch to compare: no real pad is that small
+    # a real fine-pitch mm table is not taken for inches (0.2 mm WLCSP-size pads, 0.4 mm apart)
+    fine = [{"number": str(i + 1), "x": round(i * 0.4, 3), "y": 0, "w": 0.2, "h": 0.6} for i in range(4)]
+    FG.build(conn("mm", fine, pitch=0.4))

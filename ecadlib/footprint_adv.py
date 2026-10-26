@@ -568,6 +568,17 @@ def check_pad_table(spec, pads=None):
         what = f"no two pads closer than {gap:g} (pads up to {big:g})"
     if raw and unit == "mm" and what:
         add("error", "units", f"pad_table {what} with unit mm: that looks like mils (set unit to mil)")
+    # and inches typed as mm: everything 25.4 times too small (a 5.08 mm 2-pin connector became 0.2 mm across). The
+    # closest pads the spec's pitch in inches, or no pad or hole 0.15 mm in its larger size (the smallest lands, WLCSP
+    # and 008004, are 0.2 mm or so)
+    tiny = max((max(abs(p.get(k) or 0) for k in ("w", "h", "d", "drill")) for p in raw if not p.get("polygon")), default=None)
+    inch = None
+    if gap and num(sp) and sp > 0 and abs(gap * UNIT["in"] - sp) <= 0.03 * sp:
+        inch = f"the closest pads {gap:g} apart, the spec's {sp:g} mm pitch in inches,"
+    elif tiny is not None and 0 < tiny < 0.15 and not any(p.get("polygon") for p in raw):
+        inch = f"no pad or hole bigger than {tiny:g}"
+    if raw and unit == "mm" and inch and not what:
+        add("error", "units", f"pad_table {inch} with unit mm: that looks like inches (set unit to in)")
     if raw and unit == "mil" and sizes and max(sizes) < 4:
         add("warning", "units", f"pad_table unit is mil but no pad or hole is bigger than {max(sizes):g} mil "
                                 f"({max(sizes) * 0.0254:.3f} mm): is the table in mm?")
