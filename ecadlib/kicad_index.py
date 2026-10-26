@@ -13,6 +13,15 @@ PKG_RE = re.compile(r"(?<![0-9])(01005|0201|0402|0603|0805|1206|1210|1812|2010|2
                     r"(?<![A-Z0-9])(SOT-?23(?:-\d)?|SOT-?223|SOIC-?\d+|SOP-?\d+|TSSOP-?\d+|QFN-?\d+|VQFN-?\d+|LQFP-?\d+|SMA|SMB|SOD-?\d+)(?![A-Z0-9])", re.I)
 EP_NAME = re.compile(r"-\d*EP(?=[_-]|$)|_EP\d", re.I)              # KiCad's exposed-pad lands: QFN-16-1EP_..._EP1.7x1.7mm
 EP_HINT = re.compile(r"\bE?PAD\b|-\d*EP\b|\bEP\b|exposed|thermal ?pad|power ?pad|heat ?sink ?pad", re.I)
+# KiCad's copies of one land: a hand-solder land (longer pads), thermal vias in the exposed pad, castellated pads
+LAND_VARIANT = re.compile(r"(?:_Pad\d+(?:\.\d+)?x\d+(?:\.\d+)?mm)?_HandSolder$|_ThermalVias$|_Castellated$", re.I)
+
+
+def plain_land(name):
+    """A footprint name without KiCad's variant suffix: R_0603_1608Metric_Pad0.98x0.95mm_HandSolder -> R_0603_1608Metric."""
+    while LAND_VARIANT.search(name):
+        name = LAND_VARIANT.sub("", name)
+    return name
 BODY_RE = re.compile(r"(?<![0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x\d+(?:\.\d+)?)?mm", re.I)
 
 
@@ -186,13 +195,20 @@ class KiCadIndex:
         if not package:
             return None
         pref, hits = self.CLASS_PREFIX.get(ref_class), []
+        array = re.search(r"array|network|\b\d+ ?x ?\d{4}\b", str(hint or ""), re.I)
         for k in self.footprints:
             name = k.split(":")[-1]
             if package_of(name) == package and (pref is None or name.startswith(pref)):
                 if pref is None and re.match(r"(R|C|L|D|LED)_", name):
                     continue                      # don't hand a passive footprint to an IC/connector
+                if "_Array_" in name and not array:
+                    continue                      # R_Array_Convex_4x0603 is four resistors, asked for by name only
                 hits.append(k)
-        bodies = {k: _body(k) for k in hits}
+        names = {k.split(":")[-1] for k in hits}
+        hits = [k for k in hits if plain_land(k.split(":")[-1]) == k.split(":")[-1]
+                or plain_land(k.split(":")[-1]) not in names]   # the hand-solder / thermal-vias copy of a land that
+                                                                # is there too is no second choice: the plain one
+        bodies = {k: _body(plain_land(k)) for k in hits}
         want = _body(hint)
         if want:                                  # body size known: it must agree (QFN-32 4x4 is not 5x5)
             hits = [k for k in hits if bodies[k] in (want, None)]

@@ -144,3 +144,43 @@ def test_pick_counts_other_makers_by_company_not_by_name():
     assert got is items[0], got                              # one other company under two names: as one maker
     items = [{"mpn": "X1", "m": "Texas Instruments"}, {"mpn": "X1", "m": "STMicroelectronics"}]
     assert L._pick(items, {"mpn": "X1", "manufacturer": "Foo Corp"}, lambda i: i["mpn"], lambda i: i["m"]) is None
+
+
+# ---------------------------------------------------------------- R-SRC-4: KiCad land choice
+def _index(fps):
+    from ecadlib.kicad_index import KiCadIndex
+    idx = KiCadIndex([])
+    idx.footprints = {k: {"path": "", "has_3d": True} for k in fps}
+    return idx
+
+
+STOCK = ["Resistor_SMD:R_0603_1608Metric", "Resistor_SMD:R_0603_1608Metric_Pad0.98x0.95mm_HandSolder",
+         "Resistor_SMD:R_Array_Concave_2x0603", "Resistor_SMD:R_Array_Concave_4x0603", "Resistor_SMD:R_Array_Convex_4x0603",
+         "Capacitor_SMD:C_0603_1608Metric", "Capacitor_SMD:C_0603_1608Metric_Pad1.08x0.95mm_HandSolder",
+         "Inductor_SMD:L_0603_1608Metric", "Inductor_SMD:L_0603_1608Metric_Pad1.05x0.95mm_HandSolder",
+         "LED_SMD:LED_0603_1608Metric", "LED_SMD:LED_0603_1608Metric_Pad1.05x0.95mm_HandSolder",
+         "LED_SMD:LED_0603_1608Metric_Castellated",
+         "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm",
+         "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias"]
+
+
+def test_a_hand_solder_variant_is_no_ambiguity():
+    for fps in (STOCK, STOCK[::-1]):
+        idx = _index(fps)
+        assert idx.find_footprint_for_package("0603", "R", hint="0603 ") == "Resistor_SMD:R_0603_1608Metric"
+        assert idx.find_footprint_for_package("0603", "C", hint="0603 CAP CER 100NF") == "Capacitor_SMD:C_0603_1608Metric"
+        assert idx.find_footprint_for_package("0603", "L", hint="0603") == "Inductor_SMD:L_0603_1608Metric"
+        assert idx.find_footprint_for_package("0603", "LED", hint="0603 green") == "LED_SMD:LED_0603_1608Metric"
+        # a thermal-vias copy of one exposed-pad land is the same land
+        assert idx.find_footprint_for_package("QFN16", "U", hint="QFN-16 3x3mm exposed pad") == \
+            "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm"
+    # only the hand-solder land indexed: it is the one
+    only = ["Resistor_SMD:R_0603_1608Metric_Pad0.98x0.95mm_HandSolder"]
+    assert _index(only).find_footprint_for_package("0603", "R", hint="0603") == only[0]
+    # a resistor array is asked for by name, never handed to a plain 0603 resistor
+    assert _index(STOCK).find_footprint_for_package("0603", "R", hint="0603 RES ARRAY 4x 10k") is None
+
+
+def test_real_land_ambiguity_still_holds():
+    qfn = ["lib:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm", "lib:QFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm"]
+    assert _index(qfn).find_footprint_for_package("QFN16", "U", hint="QFN-16 3x3mm exposed pad") is None
