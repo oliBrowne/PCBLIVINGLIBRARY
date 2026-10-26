@@ -228,7 +228,7 @@ def test_menu_goes_straight_into_altiums_menu_file():
     (alt / "DXP.RCS").write_bytes(theirs.encode("latin-1"))
     assert AM.altium_user_folders(d / "Roaming") == [alt]
     try:
-        AM.install_menu_bar("D:\\ecadlib menu", running=lambda: True)
+        AM.install_menu_bar("D:\\ecadlib menu", [alt], running=lambda: True)
         raise AssertionError("must refuse while Altium runs")
     except ValueError as e:
         assert "close it first" in str(e)
