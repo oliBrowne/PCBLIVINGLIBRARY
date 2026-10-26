@@ -10,7 +10,8 @@ Used by datasheet.Reader (and so by the librarian, `ecadlib datasheet batch` and
   pin count and page count.
 * assess / next_step: after an answer, datasheet's own checks (schema_check, sanity, check_pins, self_check, the
   page citations) say ok / incomplete / failed. Incomplete widens the pages first; failed moves to the next model;
-  the top of the ladder with every page is the last try, and its answer is kept with its review items.
+  the top of the ladder with every page is the last try, and its answer is kept with its review items, unless it
+  still fails a check that can build the part wrong (hold_reasons): then it is held and nothing is built.
 * usage_usd / Ledger: USD per attempt from the API usage block (or an estimate), appended to
   <out>/datasheet/cost.jsonl; summarize() feeds the librarian review, `ecadlib status` and the estimate.
 
@@ -970,6 +971,32 @@ INCOMPLETE = re.compile(r"no value printed|no nominal value printed|cited page\(
 FAILED = re.compile(r"^(schema:|self-check:|symbol:|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
                     r"pad_table:(?! copied as the model gave it)|land pattern:)|min <= nom <= max violated|implausib|leads would touch| span \d|pins per side|is odd for a "
                     r"dual-row|lead_span min|^exposed_pad\.\w+ [\d.]+ >=|under \d+% of", re.I)
+
+
+# A failed check that can leave the part built wrong: a dimension, pin layout, pad table or land that contradicts
+# itself or the pins. The last answer of a route that still fails one is held before anything is built
+# (hold_reasons). Not these, which can fail a read that is right and build nothing wrong from it:
+#   schema: / footprint_gen.build failed / altium_lib...failed: the read can't be built, so no footprint comes from it
+#     (the standard table may still give the land: KTY83, benchmark 2026-10-23);
+#   self-check: the read against its own package name and the family's usual range (LT3652IDD's real 0.45 mm pitch,
+#     benchmark 2026-10-23, was built right and counted right);
+#   symbol: the pins against the pads and the pin count: right parts fail them (a TO-252's cut middle lead with the
+#     tab numbered 4, a BGA's unconnected balls left out of the pin table, a pin with no usable name: eval gate
+#     answers scored right), and the release check holds them for a person anyway. Only a channel put on another
+#     channel's pin (the numbered-bank check) is held here: it builds a symbol wired to the wrong channel.
+SOFT_FAILED = re.compile(r"^(schema:|self-check:|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
+                         r"symbol:(?!.* bank has no ))", re.I)
+SYMBOL_FAILED = re.compile(r"^symbol:", re.I)
+
+
+def hold_reasons(res, fp_needed=True):
+    """The failed checks to hold a route's last answer for, or [] (ok, incomplete, or only checks that can't make the
+    part wrong). fp_needed=False (the footprint comes from another source): only the symbol's checks count."""
+    kind, why = assess(res)
+    if kind != "failed":
+        return []
+    hard = [w for w in why if not SOFT_FAILED.match(w)]
+    return hard if fp_needed is not False else [w for w in hard if SYMBOL_FAILED.match(w)]
 
 
 # unresolved fields the footprint never reads (package_schema.json: height_max is "used for 3D/descr only"): a review

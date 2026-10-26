@@ -189,6 +189,7 @@ Every failed part gets one failure type:
 | not_read | not read in this run (`--cached-only`, or waiting for the cost OK) |
 | blank_dimension | the read left a needed dimension blank: held, nothing built |
 | held_cross_check | held: the cross-check's second read disagreed |
+| held_failed_read | held: the last read still failed a check that could build it wrong |
 | no_footprint | no footprint for another reason |
 | wrong_unit | a unit mistake (mil or inch read as mm, or the reverse) |
 | wrong_variant | the wrong package or variant (pin count or pitch differs) |

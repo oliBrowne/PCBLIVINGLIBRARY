@@ -184,6 +184,74 @@ def test_rfp2_one_side_clockwise_the_other_counter_clockwise_still_fails():
     assert kind == "failed" and any("mirrored" in r for r in why), why
 
 
+
+# ---------------------------------------------------------------- item 2: a read that still fails at the end is held
+def _msg(name, dims, pins, other, ptype="gullwing"):
+    import json
+    d = lambda nm, v: {"name": nm, "label": nm[:2], "min": str(v[0]), "nom": str(v[1]), "max": str(v[2]), "unit": "mm",
+                       "page": 9, "figure": name}
+    wire = {"package": {"name": name, "description": name, "package_type": ptype, "drawing": name, "unresolved": [],
+                        "dims": [d(k, v) for k, v in dims.items()], "other_json": json.dumps(other)},
+            "pin_table": {"page": 3, "figure": "Pin functions", "rows": len(pins)},
+            "pins": [{"num": n, "name": nm, "type": "passive", "side": "left", "page": 3} for n, nm in pins],
+            "symbol_description": "x", "notes": [], "embedded_instructions": []}
+    return {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(wire)}], "model": "claude-opus-5-5"}
+
+
+def _final(tmp_path, msg, fp_needed=None):
+    rd = D.Reader(tmp_path / "out", tmp_path / "cache", rules={"datasheet": {"cross_check": "off"}}, log=None)
+    job = {"part": "XPART", "url": "ds.pdf", "offset": 0, "prov": {"sent_as": "base64"}, "model": "claude-opus-5-5",
+           "fp_needed": fp_needed, "key": "k"}
+    return rd._result(job, {"message": msg, "model": "claude-opus-5-5", "via": "sync"})
+
+
+MIXED = [dict(p) for p in SOT143_POS]
+MIXED[2]["offset"], MIXED[3]["offset"] = -0.95, 0.95                             # R side runs down: a mirrored side
+
+
+@lite
+def test_2_a_last_answer_failing_a_layout_check_is_held_before_anything_is_written(tmp_path, monkeypatch):
+    """Before: built with its review items (the eval counted it built: built wrong if it was wrong), held only later
+    by the release check's verify."""
+    msg = _msg("SOT-143", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": MIXED})
+    try:
+        _final(tmp_path, msg)
+        raise AssertionError("a read that still fails its layout check was built")
+    except D.DatasheetError as e:
+        assert str(e).startswith(D.HELD_FAILED) and "pin_positions" in str(e), e
+    assert not (tmp_path / "out" / "datasheet").exists() or not list((tmp_path / "out" / "datasheet").glob("*.json"))
+    res = _final(tmp_path, msg, fp_needed=False)      # the footprint comes from elsewhere: its layout can't make it wrong
+    assert res["spec"]["name"] == "SOT-143"
+
+
+@lite
+def test_2_a_read_failing_only_a_soft_check_is_still_built(tmp_path, monkeypatch):
+    """LT3652IDD (benchmark 2026-10-23): a real 0.45 mm pitch fails self-check's standard-pitch list; it was built
+    right and counted right. Holding it would lose a right part, so self-check lines never hold."""
+    from ecadlib import ds_route as DR
+    dims = dict(SOT143, pitch=("", 1.85, ""))
+    pos = [dict(p, offset=o) for p, o in zip(SOT143_POS, (-0.925, 0.925, 0.925, -0.925))]
+    msg = _msg("SOT-143", dims, SOT143_PINS, {"pin_count": 4, "pin_positions": pos})
+    res = _final(tmp_path, msg)
+    kind, why = DR.assess(res)
+    assert kind == "failed" and all(w.startswith("self-check:") for w in why), why
+    assert DR.hold_reasons(res) == []
+    assert DR.hold_reasons({"needs_review": ["schema: (root): 'pad_table' is a required property"]}) == []   # KTY83
+    assert DR.hold_reasons({"needs_review": ["terminal_width max 0.6 >= pitch 0.5: leads would touch"]}) != []
+    bank = "symbol: AIN13 on pins 5, 18, and the AIN bank has no AIN4: a channel read onto another channel's pin (check the pin table)"
+    assert DR.hold_reasons({"needs_review": [bank]}, fp_needed=False) == [bank]     # wired to the wrong channel
+    for soft in ("symbol: pins with no pad on the footprint ['2'] (the footprint's pads are 1, 3, 4)",   # TO-252-2
+                 "symbol: footprint pads with no pin ['B10'] (check the pad numbers against the pin table)",   # NC ball
+                 "symbol: pin 1 has an unusable name ''"):
+        assert DR.hold_reasons({"needs_review": [soft]}) == [], soft             # eval gate answers scored right
+
+
+def test_2_eval_names_the_hold():
+    from ecadlib.eval import runner as R
+    row = {"pass": False, "source": "none", "tried": [f"datasheet reader: failed ({D.HELD_FAILED}: pin_positions ...)"]}
+    assert R.failure_type(row, None, None) == "held_failed_read"
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

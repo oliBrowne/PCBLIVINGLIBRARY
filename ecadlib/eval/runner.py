@@ -123,6 +123,7 @@ FAILURE_TYPES = {
     "no_key": "not run: no API key, so the AI datasheet read was never sent (not a wrong answer)",
     "blank_dimension": "the read left a needed dimension blank: held, nothing built",
     "held_cross_check": "held: the cross-check's second read disagreed",
+    "held_failed_read": "held: the last read still failed a check that could build it wrong",
     "no_footprint": "no footprint for another reason (see tried)",
     "wrong_unit": "a unit mistake (mil / inch read as mm, or the reverse)",
     "wrong_variant": "the wrong package or variant (pin count or pitch differs)",
@@ -148,6 +149,8 @@ def failure_type(row, mine, spec):
             return "no_pdf"
         if row.get("cross_check") == "disagreed" or "cross-check disagrees" in tried:
             return "held_cross_check"
+        if "held: the last read still fails its checks" in tried:
+            return "held_failed_read"
         if re.search(r"unresolved|left .* blank|no footprint: the datasheet read left", tried):
             return "blank_dimension"
         if re.search(r"not sent \(--cached-only|waiting for your OK|needs datasheet reader", tried):
