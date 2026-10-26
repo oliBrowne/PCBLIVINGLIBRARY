@@ -453,21 +453,24 @@ def round_rect(x, y, w, h, r, steps=16):
 
 
 def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
-    """Convert a .kicad_mod (as written by footprint_gen) into the writer's footprint dict (mm, y up).
+    """Convert a .kicad_mod (as written by footprint_gen, or a KiCad library footprint: app.build_altium_models) into the
+    writer's footprint dict (mm, y up).
     SMD pads are converted here; through-hole and NPTH pads (round, square, slots), custom (polygon) pads and keep-out
     zones go through kicad_import's converter. notes: list that collects what could not be carried over exactly."""
     from . import kicad_import as K
     notes = [] if notes is None else notes
     t = K.inherit_margins(sexpr.parse(text))             # footprint-level mask / paste margins apply to every pad
     fp = {"name": t[1], "description": clean(description if description is not None else (sexpr.first(t, "descr") or ["", ""])[1]),
-          "height_mm": height_mm, "pads": [], "tracks": [], "fills": [], "regions": [], "texts": texts_from_kicad(t)}
+          "height_mm": height_mm, "pads": [], "tracks": [], "fills": [], "regions": [], "arcs": [], "texts": texts_from_kicad(t)}
     for p in sexpr.find(t, "pad"):
         at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
         x, y, w, h = float(at[1]), -float(at[2]), float(size[1]), float(size[2])
         rot = float(at[3]) if len(at) > 3 else 0.0
         layers = (sexpr.first(p, "layers") or ["layers"])[1:]
-        if p[2] != "smd" or p[3] == "custom":
-            K._pad(fp, p, notes); continue
+        off = sexpr.first(sexpr.first(p, "drill") or [], "offset")
+        if p[2] != "smd" or p[3] == "custom" or any(str(l).startswith("B.") for l in layers) \
+                or (off and any(float(v) for v in off[1:3])):
+            K._pad(fp, p, notes); continue    # (a KiCad library footprint: bottom pads, copper offset from the anchor)
         if "F.Cu" not in layers:              # paste-only aperture (EP window) -> Top Paste fill or region; mask-only
             if layers not in (["F.Paste"], ["F.Mask"]) or rot:   # (a mask-defined thermal land's opening) -> Top Solder
                 raise ValueError(f"{fp['name']}: unsupported non-copper pad on {layers}")
@@ -497,10 +500,13 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
         if p[3] not in SHAPE:
             raise ValueError(f"{fp['name']}: pad shape {p[3]} not supported")
         fp["pads"].append(pad)
-    for kind in ("fp_line", "fp_rect", "fp_poly"):
+    for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
         for g in sexpr.find(t, kind):
             layer = KICAD_LAYER.get((sexpr.first(g, "layer") or [None, None])[1])
             if layer is None:
+                continue
+            if kind in ("fp_circle", "fp_arc"):    # a round part's courtyard, a pin-1 arc (KiCad library footprints)
+                K._graphic(fp, kind, g, layer, notes)
                 continue
             w = float((sexpr.first(sexpr.first(g, "stroke") or [], "width") or [None, 0.1])[1])
             if kind == "fp_poly":

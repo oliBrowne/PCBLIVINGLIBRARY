@@ -50,3 +50,28 @@ def test_symexp02_vref_n_is_ground():
     sym = SL.build("ADC", [{"num": "1", "name": "VREF_P", "type": "power"}, {"num": "2", "name": "VREF_N", "type": "passive"},
                            {"num": "3", "name": "AIN0", "type": "input"}, {"num": "4", "name": "DOUT", "type": "output"}])
     assert _pins(sym)["2"][2] == "bottom" and SL.check(sym) == []
+
+
+# symexp-03: altium_lib.footprint_from_kicad (app.build_altium_models / the MCP tool convert KiCad library footprints
+# with it) dropped every fp_circle / fp_arc (a radial part's courtyard circle, the pin-1 arc), refused a bottom-side
+# pad as "non-copper" (thermal-via QFNs) and put an SMD pad with a (drill (offset ..)) at its anchor instead of where
+# KiCad draws its copper; they now go through kicad_import's converter, as the librarian's footprints do
+GOLDEN = Path(__file__).parent / "fixtures" / "kicad_golden"
+
+
+@lite
+def test_symexp03_kicad_library_footprint_keeps_circles_bottom_pads_offsets(tmp_path, monkeypatch):
+    fp = AL.footprint_from_kicad((GOLDEN / "CP_Radial_D5.0mm_P2.00mm.kicad_mod").read_text(encoding="utf-8"))
+    crt = [a for a in fp.get("arcs", []) if a[6] == AL.MECH15]
+    assert len(crt) == 1 and abs(crt[0][2] - 2.75) < 1e-6, fp.get("arcs")          # courtyard circle r = 3.75 - 1
+    AL.write_pcblib(tmp_path / "cp.PcbLib", [fp])
+    back = X.footprint_from_pcblib(tmp_path / "cp.PcbLib", "CP", [])
+    assert sexpr.courtyard_bbox(sexpr.parse(back)) is not None
+    q = AL.footprint_from_kicad((GOLDEN / "QFN-24-1EP_4x4mm_P0.5mm_EP2.6x2.6mm_ThermalVias.kicad_mod").read_text(encoding="utf-8"))
+    assert any(p["designator"] == "25" and p.get("layer") == AL.BOTTOM for p in q["pads"])
+    text = ('(footprint "OFF" (layer "F.Cu") (attr smd)\n'
+            '(pad "1" smd rect (at 1 2 90) (size 1 0.5) (drill 0 (offset 0.3 0)) (layers "F.Cu" "F.Paste" "F.Mask"))\n'
+            '(pad "2" smd rect (at -1 2) (size 1 0.5) (layers "F.Cu" "F.Paste" "F.Mask")))')
+    o = {p["designator"]: p for p in AL.footprint_from_kicad(text)["pads"]}
+    assert abs(o["1"]["x"] - 1) < 1e-9 and abs(o["1"]["y"] - (-2 + 0.3)) < 1e-9, o["1"]   # copper: (at) + offset
+    assert (o["2"]["x"], o["2"]["y"]) == (-1.0, -2.0)                     # turned 90 deg counter-clockwise (y up here)
