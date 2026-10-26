@@ -6,7 +6,8 @@
 
 Classes, most severe first (default policy in brackets, see change_gate.POLICY):
   identity        MPN or manufacturer changed; the value as a number changed (10k -> 1k), its unit (100nF -> 100nH)
-                  or what follows it (100nF 50V -> 100nF 6.3V); a second MPN / manufacturer field names another part [hold]
+                  or what follows it (100nF 50V -> 100nF 6.3V); a second MPN / manufacturer field names another part;
+                  a rating field (Voltage, Tolerance, Power, Current, Dielectric ...) states another quantity   [hold]
   electrical      a pin's name (as a signal) or type changed, pins swapped names, a pin or pad added or removed,
                   pads renumbered, a pin lost its pad, a pin became hidden, its hidden net, it moved to another unit,
                   the number of units, alternate pin functions; for every copy of a pin number; pins that now share
@@ -78,6 +79,44 @@ def _few(xs, n=8):
 DIELECTRICS = {"X5R", "X6S", "X7R", "X7S", "X7T", "X8R", "Y5V", "Z5U", "C0G", "COG", "NP0", "NPO", "U2J"}
 PACKAGE_SIZES = {"01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512", "1005", "1608",
                  "2012", "3216", "3225", "4532", "6332"}
+# a parameter that states a rating: its value is an electrical fact, compared as parsed quantities (16V == 16 V)
+RATING_RE = re.compile(r"(?i)\s*((rated |max(imum)? |working |operating )?(voltage|current|power|tolerance)( rating)?|"
+                       r"dielectric|temp(erature)?\.? ?co(efficient)?|tempco|tcr|"
+                       r"v(dc|ac|rms|r|rwm|br|z|f|ce|ds|gs)|i(f|r|c|d|sat|rms)|p(d|tot))(\s*\(.*\))?\s*")
+_SI = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "μ": 1e-6, "m": 1e-3, "": 1.0, "k": 1e3, "K": 1e3, "M": 1e6,
+       "G": 1e9}
+_QTY = re.compile(r"(?<![A-Za-z0-9.,])(±|\+/-|[+-]|−)?\s*(\d+(?:[.,]\d+)?)(?:\s*/\s*(\d+))?\s*([pnuµμmkKMG]?)\s*"
+                  r"(V|A|W|%|F|H|Hz|Ω|[Oo]hms?|ppm|°C)(?:\s*(?:DC|AC|dc|ac|rms|RMS|max|min))?(?![A-Za-z])")
+_DIEL_SAME = {"COG": "C0G", "NP0": "C0G", "NPO": "C0G"}
+
+
+def electrical_facts(text):
+    """The rated quantities a text states, each as (value in base units, unit), and its dielectrics: '16 VDC' ==
+    '16V', '±1 %' == '1%', '1/4W' == '250mW', 'X7R'; another number or unit is another fact. -> frozenset"""
+    out = set()
+    for m in _QTY.finditer(str(text or "")):
+        sign, num, den, pre, unit = m.groups()
+        v = float(num.replace(",", ".")) / (int(den) if den and int(den) else 1) * _SI[pre]
+        unit = "R" if unit in ("Ω",) or unit.lower().startswith("ohm") else unit
+        if unit == "°C" and sign in ("-", "−"):
+            v = -v
+        out.add((float(f"{v:.6g}"), unit))
+    for w in re.findall(r"[A-Za-z0-9]+", str(text or "").upper()):
+        if w in DIELECTRICS:
+            out.add((_DIEL_SAME.get(w, w), "dielectric"))
+    return frozenset(out)
+
+
+def same_rating(a, b):
+    """Two texts of one rating field state the same quantities: compared parsed when both state any ('16V' ==
+    '16 VDC', '1%' != '±10%'), else by their numbers ('16' == '16V', '16' != '100V')."""
+    fa, fb = electrical_facts(a), electrical_facts(b)
+    if fa and fb:
+        return fa == fb
+    num = lambda s: {float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", str(s or ""))}
+    return num(a) == num(b) and {x for x in fa | fb if x[1] == "dielectric"} <= (fa & fb)
+
+
 KIND_UNIT = (("resistor", "R"), ("capacitor", "F"), ("inductor", "H"), ("ferrite", "H"), ("crystal", "Hz"),
              ("oscillator", "Hz"), ("resonator", "Hz"), ("zener", "V"), ("fuse", "A"))
 
@@ -246,6 +285,9 @@ def _fields(o, n, out):
         if cls == "cosmetic" and filled and norm_mpn(a) != norm_mpn(b) and SECOND_SOURCE_RE.fullmatch(kl):
             cls = "identity"                   # Manufacturer Part Number 2: another part that may be fitted
             txt += " (a second source)"
+        if cls == "cosmetic" and a is not None and b is not None and RATING_RE.fullmatch(kl) and not same_rating(a, b):
+            cls = "identity"                   # a rating (16V -> 100V, 1% -> 10%, X7R -> X5R) is another part
+            txt += " (another rating)"
         _chg(out, cls, "fields", k, a, b, txt)
 
 

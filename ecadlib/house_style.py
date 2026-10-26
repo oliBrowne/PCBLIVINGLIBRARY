@@ -782,7 +782,14 @@ def adapt_with_model(items, prof, rules=None, model=None, send=None, only=None, 
 
 
 def _checked_changes(it, ans, rejected):
+    """A model's rewording of one part -> the changes that only reword. Every number must already be in the part's
+    record; a rated quantity (16V, 1%, 1/4W, X7R) in the description or comment must be one the record states with
+    that unit, and a parameter's new value must state the same quantities as its old value (16V may become 16 VDC,
+    never 100 V because 100nF is in the record)."""
+    from .change_diff import electrical_facts, same_rating
     facts, ch = _facts(it), []
+    stated = electrical_facts(" ".join([it.get("name") or "", it.get("description") or "", it.get("comment") or ""] +
+                                       [str(p.get("value", "")) for p in it.get("parameters") or []]))
 
     def ok(field, was, now):
         now = re.sub(r"\s+", " ", str(now or "")).strip()
@@ -791,6 +798,13 @@ def _checked_changes(it, ans, rejected):
         new = _new_numbers(facts, now)
         if new:
             rejected.append(f"{it['name']} {field}: {now!r} adds {', '.join(new)} (not in the part's record)")
+            return None
+        if field.startswith("parameters.") and not same_rating(was, now):
+            rejected.append(f"{it['name']} {field}: {now!r} states another value than {was!r}")
+            return None
+        other = sorted(f"{v:g}{u}" if isinstance(v, float) else v for v, u in electrical_facts(now) - stated)
+        if not field.startswith("parameters.") and other:
+            rejected.append(f"{it['name']} {field}: {now!r} states {', '.join(other)} (not in the part's record)")
             return None
         if len(now) > 255:
             rejected.append(f"{it['name']} {field}: longer than 255 characters")

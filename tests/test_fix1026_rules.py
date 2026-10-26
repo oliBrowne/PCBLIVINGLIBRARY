@@ -88,6 +88,54 @@ def test_ru1_librarian_finds_a_dotted_kicad_symbol_and_its_ordering_suffix():
     assert idx.find_symbol("SMAJ50A")[0] is None
     assert idx.find_symbol("LM358")[0] == "Amplifier:LMx58"
 
+# ------------------------------------------------------------------ R-RU-2: a restyle never changes a rating
+def test_ru2_model_restyle_cannot_change_voltage_or_tolerance():
+    import tempfile
+    from pathlib import Path
+    from ecadlib import house_style as H
+    from tests.test_house_style import FakeModel, _rules, altium_house, plan_items
+    with tempfile.TemporaryDirectory() as td:
+        prof = H.learn([altium_house(Path(td) / "lib")])
+        prof["_file"] = str(Path(td) / "house_style.json")
+        items = plan_items()
+        ans = {"parts": [{"name": "CAP-0402-100nF", "description": "CAP 100N 100V X7R 0402", "comment": "=Value",
+                          "parameters": [{"name": "Voltage", "value": "100 V"}]},
+                         {"name": "RES-0603-10k", "description": "RES 10K ±10% 0603", "comment": "=Value",
+                          "parameters": [{"name": "Tolerance", "value": "±10%"}]}]}
+        done, rejected = H.adapt_with_model(items, prof, _rules("claude-opus-5-5"), send=FakeModel([ans]))
+        by = {i["name"]: i for i in items}
+        prm = lambda n: {p["name"]: p["value"] for p in by[n]["parameters"]}
+        assert prm("CAP-0402-100nF")["Voltage"] == "16V" and prm("RES-0603-10k")["Tolerance"] == "1%", rejected
+        assert by["CAP-0402-100nF"]["description"] == "Capacitor 100nF 16V X7R 0402"
+        assert by["RES-0603-10k"]["description"] == "Resistor 10k 1% 0603"
+        assert len(rejected) >= 4, rejected
+        # the same facts written another way still go through
+        items = plan_items()
+        ans = {"parts": [{"name": "CAP-0402-100nF", "description": "CAP 100nF 16 V X7R 0402", "comment": "=Value",
+                          "parameters": [{"name": "Voltage", "value": "16 VDC"}]},
+                         {"name": "RES-0603-10k", "description": "RES 10K ±1% 0603", "comment": "=Value",
+                          "parameters": [{"name": "Tolerance", "value": "±1 %"}]}]}
+        done, rejected = H.adapt_with_model(items, prof, _rules("claude-opus-5-5"), send=FakeModel([ans]))
+        by = {i["name"]: i for i in items}
+        assert {p["name"]: p["value"] for p in by["CAP-0402-100nF"]["parameters"]}["Voltage"] == "16 VDC", rejected
+        assert {p["name"]: p["value"] for p in by["RES-0603-10k"]["parameters"]}["Tolerance"] == "±1 %", rejected
+        assert by["CAP-0402-100nF"]["description"] == "CAP 100nF 16 V X7R 0402", rejected
+        assert by["RES-0603-10k"]["description"] == "RES 10K ±1% 0603", rejected
+
+
+def test_ru2_change_control_classes_a_rating_change_as_identity():
+    from ecadlib import change_diff as CD, fingerprint as FP
+    base = {"Manufacturer Part Number": "CL05B104KO5NNNC", "Manufacturer": "Samsung", "Voltage": "16V",
+            "Tolerance": "10%", "Dielectric": "X7R"}
+    a = FP.build("", params=base)
+    for k, v in (("Voltage", "100 V"), ("Tolerance", "±1%"), ("Dielectric", "X5R")):
+        b = FP.build("", params=dict(base, **{k: v}))
+        assert CD.worst(CD.diff(a, b)) == "identity", (k, v, CD.diff(a, b))
+    for k, v in (("Voltage", "16 V"), ("Tolerance", "±10 %"), ("Dielectric", "x7r")):
+        b = FP.build("", params=dict(base, **{k: v}))
+        assert CD.worst(CD.diff(a, b)) == "cosmetic", (k, v, CD.diff(a, b))
+
+
 def _main():
     import sys
     n = 0
