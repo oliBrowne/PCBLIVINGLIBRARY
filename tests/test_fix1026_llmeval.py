@@ -98,3 +98,57 @@ def test_gate_fails_when_a_held_failing_case_becomes_built_wrong():
     res = G.check(wrong, base)
     assert not res["ok"] and any("built wrong" in p and "b" in p for p in res["problems"]), res
     assert not G.check(wrong, base, subset=True)["ok"]
+
+
+# ---------------------------------------------------------------- R-LE-3: lifecycle write-back never weakens A365
+class _A365:
+    def __init__(self, value, maker="Texas Instruments"):
+        self.value, self.maker, self.sent = value, maker, []
+
+    def gql(self, q, v):
+        return {"desLibrary": {"components": {"nodes": [{"id": "cid1", "name": v["name"], "isManaged": True,
+                "details": {"parameters": [{"name": "Lifecycle", "value": self.value},
+                                           {"name": "Manufacturer", "value": self.maker}]}}]}}}
+
+    def update_params(self, cid, params, note, replace):
+        self.sent.append(params)
+        return "ok"
+
+
+def _mouser_rows(status, maker, a365_value):
+    from ecadlib import lifecycle as LC
+    part = LC._part("MC1458P", "Texas Instruments", name="MC1458P", source="a365", component_id="cid1",
+                    a365_value=a365_value)
+    data = {"Errors": [], "SearchResults": {"Parts": [
+        {"ManufacturerPartNumber": "MC1458P", "Manufacturer": maker, "LifecycleStatus": status,
+         "AvailabilityInStock": "1200", "ProductDetailUrl": "u"}]}}
+    r = LC.parse_mouser(data, part, LC.LifecycleResult("mouser", mpn="MC1458P"))
+    return LC.diff({"parts": {}}, {"MC1458P": LC.combine(part, [r])})
+
+
+def test_a365_writeback_does_not_take_a_blank_status_from_another_maker():
+    from ecadlib import lifecycle as LC
+    c = _A365("Obsolete")
+    up = LC.a365_updates(_mouser_rows("", "Shenzhen Foo Semi", "Obsolete"), c, "ws", apply=True)
+    assert c.sent == [] and up[0]["action"] == "skip", up
+    c = _A365("")                                       # nothing there yet: still no status made up from a blank
+    up = LC.a365_updates(_mouser_rows("", "Texas Instruments", ""), c, "ws", apply=True)
+    assert c.sent == [] and up[0]["action"] == "skip", up
+    c = _A365("")                                       # another maker's stated status is not this part's either
+    up = LC.a365_updates(_mouser_rows("Obsolete", "Shenzhen Foo Semi", ""), c, "ws", apply=True)
+    assert c.sent == [] and up[0]["action"] == "skip", up
+
+
+def test_a365_writeback_never_lowers_severity():
+    from ecadlib import lifecycle as LC
+    c = _A365("Obsolete")
+    up = LC.a365_updates(_mouser_rows("Active", "Texas Instruments", "Obsolete"), c, "ws", apply=True)
+    assert c.sent == [] and up[0]["action"] == "skip" and "lower" in up[0]["detail"], up
+    up = LC.a365_updates(_mouser_rows("Active", "Texas Instruments", "Obsolete"), None, "ws")   # dry run too
+    assert up[0]["action"] == "skip", up
+    c = _A365("Active")                                 # a firm, stricter status still goes up
+    up = LC.a365_updates(_mouser_rows("Obsolete", "Texas Instruments", "Active"), c, "ws", apply=True)
+    assert up[0]["action"] == "updated" and {"name": "Lifecycle", "value": "Obsolete"} in c.sent[0], (up, c.sent)
+    c = _A365("")                                       # an empty value is filled from a firm status
+    up = LC.a365_updates(_mouser_rows("Active", "Texas Instruments", ""), c, "ws", apply=True)
+    assert up[0]["action"] == "updated", up

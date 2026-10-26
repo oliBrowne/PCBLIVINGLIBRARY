@@ -67,6 +67,7 @@ class LifecycleResult:
     url: str = ""
     note: str = ""
     error: str = ""
+    inferred: bool = False             # status read from a blank field, not stated by the source (never written back)
 
 
 maker_key, same_maker = P.maker_key, P.same_maker      # which company a maker name names (providers)
@@ -255,7 +256,7 @@ def parse_mouser(data, part, res):
         res.raw = best.get("LifecycleStatus") or ""
         res.status = normalise(res.raw) if res.raw else "active"
         if not res.raw:
-            res.note = "no LifecycleStatus: read as active"
+            res.note, res.inferred = "no LifecycleStatus: read as active", True
         res.stock = _int(best.get("AvailabilityInStock"))
         if res.stock is None and re.search(r"in stock", str(best.get("Availability")), re.I):
             res.stock = _int(best.get("Availability"))
@@ -428,12 +429,22 @@ def check_parts(parts, provs):
     return out, sorted(unconfigured)
 
 
+def _other_maker(part, r):
+    """The listing a result read is by another maker than the part's (both named)."""
+    return bool(maker_key(part.get("manufacturer")) and maker_key(r.manufacturer)
+                and not same_maker(part.get("manufacturer"), r.manufacturer))
+
+
 def combine(part, results):
-    """Worst known status across sources (most conservative); highest stock any source reports."""
+    """Worst known status across sources (most conservative); highest stock any source reports. firm_status: the same
+    over the statuses a source stated for this maker's part, the only ones written back to Altium 365 (R-LE-3: a
+    Mouser listing by another maker with a blank status wrote Active over a released Obsolete part)."""
     known = [r for r in results if r.status != "unknown"]
+    firm = [r for r in known if not r.inferred and not _other_maker(part, r)]
     stocks = [r.stock for r in results if r.stock is not None]
     return {**{f: part[f] for f in ("mpn", "manufacturer", "lcsc", "name", "sources", "component_id", "a365_value")},
             "status": max(known, key=lambda r: SEVERITY[r.status]).status if known else "unknown",
+            "firm_status": max(firm, key=lambda r: SEVERITY[r.status]).status if firm else "unknown",
             "stock": max(stocks) if stocks else None,
             "raw": "; ".join(f"{r.provider}: {r.raw or '-'}" + (f" (stock {r.stock})" if r.stock is not None else "")
                              for r in results if r.found),
@@ -527,13 +538,23 @@ def exit_code(rows, strict=False):
 # ------------------------------------------------------------------ Altium 365 write-back
 def a365_updates(rows, client, ws, apply=False, param="Lifecycle", note="ecadlib lifecycle watch"):
     """Set `param` on released components whose value differs from the checked status (unknown is never written).
-    Without a client (dry-run, no token) the component id is a placeholder and the current value is not known."""
+    Without a client (dry-run, no token) the component id is a placeholder and the current value is not known.
+    Only a status a source stated for this maker's part is written (firm_status: not one read from a blank field, not
+    another maker's listing), and never one less severe than the value already there: lowering is for a person."""
     out = []
     for r in rows:
         if r["status"] == "unknown" or not r["name"]:
             continue
+        firm = r.get("firm_status", r["status"])
         want, cid, cur = LABEL[r["status"]], r.get("component_id"), r.get("a365_value")
         rec = {"name": r["name"], "mpn": r["mpn"], "value": want, "action": "", "detail": ""}
+        if firm == "unknown":
+            rec["action"] = "skip"
+            rec["detail"] = (f"{want} is not stated for this maker's part (a blank status or another maker's "
+                             "listing): not written")
+            out.append(rec)
+            continue
+        want = rec["value"] = LABEL[firm]
         try:
             cur_params = None
             if client:                           # fetch the current revision: a replace must carry every parameter
@@ -549,6 +570,12 @@ def a365_updates(rows, client, ws, apply=False, param="Lifecycle", note="ecadlib
                 cid, cur = node["id"], cur_params.get(param)
             if cur == want:
                 rec["action"] = "unchanged"
+                out.append(rec)
+                continue
+            have = normalise(cur) if cur else "unknown"
+            if have != "unknown" and SEVERITY[have] > SEVERITY[firm]:
+                rec["action"] = "skip"
+                rec["detail"] = f"would lower {cur} to {want}: never done automatically; change it by hand if right"
                 out.append(rec)
                 continue
             # replaceExisting=false *adds* a second Lifecycle parameter, so send the full merged set with true
