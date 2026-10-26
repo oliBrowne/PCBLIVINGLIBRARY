@@ -522,21 +522,6 @@ def _copy_recipe(to, src, dst):
     return [p.relative_to(to).as_posix() for p in paths]
 
 
-def _same_as_head(lg, head, it, kind, path, base):
-    """Library file `path` holds the part's symbol / footprint and 3D model as its ledger head fingerprinted them (the
-    change gate's own test of a re-save: other bytes, the same content)."""
-    from . import fingerprint as FP
-    try:
-        old = lg.fingerprint(head) or {}
-        probe = json.loads(json.dumps(it, default=str))
-        probe[kind] = dict(probe.get(kind) or {}, file=str(path))
-        new = FP.of_item(probe, base)
-    except Exception:
-        return False
-    keys = ("symbol",) if kind == "symbol" else ("footprint", "model")
-    return bool(old) and all(old.get(k) == new.get(k) for k in keys)
-
-
 def _released_source(lg, it, src, kind, stage, base, staged):
     """The library file (with its recipe and the STEP files it names) to copy for a released part, as its ledger head
     has them. publish_guard settled the library, but an editor saving afterwards takes no lock: what was saved since
@@ -556,12 +541,10 @@ def _released_source(lg, it, src, kind, stage, base, staged):
     d = Path(stage) / hashlib.sha256(key.encode()).hexdigest()[:16]
     d.mkdir(parents=True, exist_ok=True)
     f = d / src.name
-    data = src.read_bytes()
+    from . import change_gate as CG
+    data, was = CG.released_bytes(lg, it, src, base)
     f.write_bytes(data)
-    moved = []
-    if LG.sha_bytes(data) != rec["sha256"] and not _same_as_head(lg, head, it, kind, f, base):
-        f.write_bytes(lg.get_bytes(rec["sha256"]))
-        moved.append(src.name)
+    moved = [src.name] if was else []
 
     def released(on, sha):
         """on's bytes when they are the released ones (sha), else the blob store's copy (noted)."""

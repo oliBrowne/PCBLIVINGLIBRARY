@@ -214,3 +214,78 @@ def test_fix3_rfx34_a_rejecter_who_released_it_anyway_can_take_the_reject_back(t
     assert _try(it, "approve", BOB, d, pol)
     assert AP.evaluate(it, pol, d)["met"]
     assert not _try(it, "approve", ANN, d, pol)                      # nothing left to take back: refused as before
+
+
+# ------------------------------------------------------------------ follow-up: kicad-export's .PcbLib / .SchLib reads
+def _kx_with_midrun_edit(edit, pcblib_only=True):
+    """kicad-export of a fresh demo; `edit(lib)` runs right after the export's own release check of CAP (an editor
+    saving then takes no lock). pcblib_only: the footprint is converted back from the .PcbLib (no .kicad_mod found).
+    -> (report, out folder, lib folder)"""
+    from ecadlib import kicad_export as X, release_check as RC
+    w, lib = _demo()
+    real_pp, real_km, done = RC.publish_problems, RC._kicad_mod, []
+
+    def check(it, *a, **k):
+        r = real_pp(it, *a, **k)
+        if it.get("name") == CAP and not done:
+            done.append(1)
+            if edit:
+                edit(lib)
+            if pcblib_only:
+                RC._kicad_mod = lambda *a, **k: None
+        return r
+    RC.publish_problems = check
+    try:
+        rep = X.export(lib / "plan.json", w / "kx", "ecadlib", log=lambda *a, **k: None)
+    finally:
+        RC.publish_problems, RC._kicad_mod = real_pp, real_km
+    assert done
+    return rep, w / "kx", lib
+
+
+def test_fix4_kicad_export_converts_the_released_pcblib_not_an_edit_saved_meanwhile():
+    """fp_source's converted-back path (footprint_from_pcblib) and the 3D model read: PAD 1 is moved in the .PcbLib
+    after the export checked the part. The released footprint is exported (as without the edit), with a warning."""
+    from ecadlib import altium_lib as AL, stdparts as SP
+
+    def move(lib):
+        conv = AL.footprint_from_kicad(SP.build("C_0402_1005Metric")[0])
+        conv["pads"][0]["x"] -= 0.3
+        AL.write_pcblib(lib / "models/PcbLib/C_0402_1005Metric.PcbLib", [conv])
+    ref, rout, _ = _kx_with_midrun_edit(None)
+    rep, out, _ = _kx_with_midrun_edit(move)
+    assert "converted back" in rep["footprints"]["C_0402_1005Metric"]["from"], rep["footprints"]["C_0402_1005Metric"]
+    got = (out / "ecadlib.pretty/C_0402_1005Metric.kicad_mod").read_text(encoding="utf-8")
+    assert got == (rout / "ecadlib.pretty/C_0402_1005Metric.kicad_mod").read_text(encoding="utf-8")
+    assert any("C_0402_1005Metric.PcbLib changed while the export ran" in w for w in rep["warnings"]), rep["warnings"]
+
+
+def test_fix4_kicad_export_reads_back_the_released_schlib_not_an_edit_saved_meanwhile():
+    """load_symbol's .SchLib read-back: pin 2 of the capacitor renamed (an electrical edit) after the export checked
+    the part. The released symbol is exported, with a warning."""
+    from ecadlib import altium_lib as AL
+
+    def pin(lib):
+        it = next(i for i in json.loads((lib / "plan.json").read_text(encoding="utf-8")) if i["name"] == CAP)
+        sym = AL.capacitor_symbol(name=it["symbol"]["ref"])
+        sym["prims"][3] = ("pin", {"num": "2", "name": "VBAD", "type": "input"}, "right", 3, 0, 27, False)
+        AL.write_schlib(lib / it["symbol"]["file"], [sym])
+    rep, out, _ = _kx_with_midrun_edit(pin, pcblib_only=False)
+    assert "VBAD" not in (out / "ecadlib.kicad_sym").read_text(encoding="utf-8")
+    assert any("Capacitor.SchLib changed while the export ran" in w for w in rep["warnings"]), rep["warnings"]
+
+
+def test_fix4_kicad_export_ships_nothing_when_the_released_copy_is_missing():
+    """The .PcbLib changed meanwhile and the ledger's copy of it is gone: an error for that footprint, the edit is not
+    exported."""
+    from ecadlib import altium_lib as AL, ledger as LG, stdparts as SP
+
+    def move(lib):
+        lg = LG.Ledger(lib)
+        lg._blob(lg.head(CAP)["files"]["footprint"]["sha256"]).unlink()
+        conv = AL.footprint_from_kicad(SP.build("C_0402_1005Metric")[0])
+        conv["pads"][0]["x"] -= 0.3
+        AL.write_pcblib(lib / "models/PcbLib/C_0402_1005Metric.PcbLib", [conv])
+    rep, out, _ = _kx_with_midrun_edit(move)
+    assert not (out / "ecadlib.pretty/C_0402_1005Metric.kicad_mod").exists()
+    assert any("C_0402_1005Metric" in e and "released copy is missing" in e for e in rep["errors"]), rep["errors"]

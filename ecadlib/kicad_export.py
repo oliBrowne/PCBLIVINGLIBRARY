@@ -514,7 +514,7 @@ def restore_types(sym, own=None, notes=None, guess=True):
     return done
 
 
-def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=None, kpins=None):
+def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=None, kpins=None, schlib=None):
     """-> (KiCad symbol tree, how). Reuses KiCad / EasyEDA sources; else reads the SchLib back. An EasyEDA IC
     symbol (a plain box, [symbols] layout_pins) is read back from the SchLib, which the librarian wrote with its pins
     grouped (ecadlib.symbol_layout), so both libraries show the same symbol. A reused symbol must be the released
@@ -593,7 +593,8 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
     f = item["symbol"].get("file")
     if not f or not (plan_dir / f).exists():
         raise FileNotFoundError("no symbol: " + "; ".join(why or ["no source and no .SchLib"]))
-    sym = symbol_from_schlib(plan_dir / f, name, notes, pick=item["symbol"].get("ref"))
+    sym = symbol_from_schlib(schlib or plan_dir / f, name,   # schlib: the released copy staged by the export
+                              notes, pick=item["symbol"].get("ref"))
     own = item["symbol"].get("kicad_types")
     if not src.startswith(("kicad:", "local:")):
         restore_types(sym, own, notes)
@@ -1053,12 +1054,13 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     KiCad window's <project>/ecadlib/): the 3D model paths are written from there (models_at). None: the folder an
     earlier export into `out` was given, else `out` is taken as the project folder.
     The library lock is held for the whole export (change control: the files read are the settled ones)."""
+    import tempfile
     from . import change_gate as CG
-    with CG.publishing(Path(plan).parent):
-        return _export(plan, out, name, include_held, libs, http, log, rules, project)
+    with CG.publishing(Path(plan).parent), tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as stage:
+        return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage)
 
 
-def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None):
+def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, stage=None):
     plan, out = Path(plan), Path(out)
     plan_dir, lib = plan.parent, libname(name)
     from .rules import resolve
@@ -1176,40 +1178,41 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         if kmod:
             data = released_bytes(it, kmod)
             return data.decode("utf-8"), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
-        return (footprint_from_pcblib(plan_dir / it["footprint"]["file"], fpn, fnotes, pick=it["footprint"].get("ref"),
-                                      rules=rules), f"{it['footprint']['file']} converted back")
+        return (footprint_from_pcblib(released_path(it, plan_dir / it["footprint"]["file"]), fpn, fnotes,
+                                      pick=it["footprint"].get("ref"), rules=rules),
+                f"{it['footprint']['file']} converted back")
 
     from . import ledger as LG
     ledger = LG.Ledger(plan_dir)
 
     def released_bytes(it, path):
-        """The file's bytes as the released revision has them. publish_guard settled the library (a held edit put
-        back), but an editor saving now takes no lock: bytes that are not the head's are an edit saved while this
-        export ran, so the head's own copy from the blob store goes out instead (the next writer settles the edit)."""
+        """The file's bytes as the released revision has them (change_gate.released_bytes): an edit saved while this
+        export ran is not exported; the head's own copy from the blob store goes out, with a warning."""
         data = path.read_bytes()
-        head = ledger.head(it["name"]) if it.get("status") != "held" else None
-        for r in ((head or {}).get("files") or {}).values():
-            p = Path(r["path"]) if Path(r["path"]).is_absolute() else plan_dir / r["path"]
-            if p.resolve() == path.resolve() and LG.sha_bytes(data) != r.get("sha256"):
-                try:
-                    kept = ledger.get_bytes(r["sha256"])
-                except Exception:              # no copy to send: the edit is not shipped either
-                    raise ValueError(f"{path.name} changed while the export ran and the released copy is missing")
-                if FP_same(kept, data):        # the same content, other bytes (a re-save): nothing to say
-                    return data
-                rep["warnings"].append(f"{it['name']}: {path.name} changed while the export ran (an edit saved "
-                                       f"meanwhile); the released revision r{head['revision']} was exported, the "
-                                       f"edit is settled by the next ecadlib run")
-                return kept
+        try:
+            data, head = CG.released_bytes(ledger, it, path, plan_dir, data=data)
+        except FileNotFoundError:              # no copy to send: the edit is not shipped either
+            raise ValueError(f"{path.name} changed while the export ran and the released copy is missing")
+        if head:
+            msg = (f"{it['name']}: {path.name} changed while the export ran (an edit saved meanwhile); the released "
+                   f"revision r{head['revision']} was exported, the edit is settled by the next ecadlib run")
+            if msg not in rep["warnings"]:
+                rep["warnings"].append(msg)
         return data
 
-    def FP_same(a, b):
-        """Two .kicad_mod files that fingerprint the same (pads, art, 3D model): one is a re-save of the other."""
-        from .fingerprint import kicad_footprint
-        try:
-            return a == b or kicad_footprint(a.decode("utf-8")) == kicad_footprint(b.decode("utf-8"))
-        except Exception:
-            return False
+    staged = {}
+
+    def released_path(it, path):
+        """A .SchLib / .PcbLib to read for a released part: its released_bytes, staged in a temporary folder under its
+        own name, so what is read is what was checked (an edit saved later reaches neither)."""
+        key = (str(Path(path).resolve()), it["name"])
+        if key not in staged:
+            import hashlib
+            d = Path(stage) / hashlib.sha256("\0".join(key).encode()).hexdigest()[:16]
+            d.mkdir(parents=True, exist_ok=True)
+            (d / Path(path).name).write_bytes(released_bytes(it, Path(path)))
+            staged[key] = d / Path(path).name
+        return staged[key]
     for it in items:
         status = it.get("status", "ready")
         if status == "held" and not include_held:
@@ -1303,6 +1306,8 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                         rep["models"][fn] = None
                         fnotes.append(f"STEP {fn} not available offline: put it in {lib}.3dshapes/")
                 pcb = RC._path(plan_dir, it["footprint"].get("file"))
+                if pcb and pcb.is_file():          # its 3D models: from the released .PcbLib too
+                    pcb = released_path(it, pcb)
                 got = None
                 if models and not any(rep["models"].get(fn) for _, fn in models) and pcb and pcb.is_file():
                     # no KiCad STEP to be had (e.g. a ${KIPRJMOD} path of a library not under --lib): the .PcbLib's
@@ -1348,7 +1353,11 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             rep["parts"].append(row)
             continue
         try:
-            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"], kpins=kpins)
+            sf = it["symbol"].get("file")
+            sch = (released_path(it, plan_dir / sf) if sf and str(sf).lower().endswith(".schlib")
+                   and (plan_dir / sf).is_file() else None)
+            sym, how = load_symbol(it, plan_dir, http, libs, sname, notes, rules, warnings=rep["warnings"], kpins=kpins,
+                                   schlib=sch)
             sym = sym_kicad8(sym)
             props = {str(p[1]): str(p[2]) for p in sexpr.find(sym, "property")}
             fields = plan_fields(it, lib, row["footprint"], props, rules)

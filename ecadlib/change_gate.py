@@ -1188,6 +1188,53 @@ def settled_plan(plan, target, rules=None, log=None):
     return items
 
 
+def same_content(lg, head, item, path, data, base):
+    """Bytes `data` of the part's library file `path` hold what its ledger head released, in other bytes (a re-save):
+    a .kicad_mod with the same footprint and 3D model; a .SchLib / .PcbLib whose symbol, or footprint and 3D model,
+    fingerprint as the head's (the test _settle_sides uses)."""
+    import tempfile
+    path = Path(path)
+    try:
+        if path.suffix.lower() == ".kicad_mod":
+            kept = lg.get_bytes(next(r["sha256"] for r in (head.get("files") or {}).values()
+                                     if (Path(r["path"]) if Path(r["path"]).is_absolute() else Path(base) / r["path"]).resolve()
+                                     == path.resolve()))
+            return FP.kicad_footprint(kept.decode("utf-8")) == FP.kicad_footprint(data.decode("utf-8"))
+        kind = {".schlib": "symbol", ".pcblib": "footprint"}.get(path.suffix.lower())
+        if not kind:
+            return False
+        old = lg.fingerprint(head) or {}
+        with tempfile.TemporaryDirectory(prefix="ecadlib-same-") as d:
+            f = Path(d) / path.name
+            f.write_bytes(data)
+            probe = json.loads(json.dumps(item, default=str))
+            probe[kind] = dict(probe.get(kind) or {}, file=str(f))
+            new = FP.of_item(probe, base)
+    except Exception:
+        return False
+    keys = ("symbol",) if kind == "symbol" else ("footprint", "model")
+    return bool(old) and all(old.get(k) == new.get(k) for k in keys)
+
+
+def released_bytes(lg, item, path, base, data=None):
+    """What a publisher ships of a released part's library file `path`: publish_guard settled the library (a held edit
+    was put back), but an editor saving afterwards takes no lock. -> (bytes, head): the bytes on disk (data, when
+    the caller read them already) and None when they are the head's or a re-save of them (same_content); else the
+    head's own copy from the blob store and the head, so the caller warns that an edit saved meanwhile was not
+    shipped (the next writer settles it). Raises FileNotFoundError when that copy is missing (nothing to ship: the
+    edit is not shipped either). A held part, or a file the head does not record, is shipped as it is."""
+    path = Path(path)
+    data = path.read_bytes() if data is None else data
+    head = lg.head(item["name"]) if item.get("status") != "held" else None
+    for r in ((head or {}).get("files") or {}).values():
+        p = Path(r["path"]) if Path(r["path"]).is_absolute() else Path(base) / r["path"]
+        if p.resolve() == path.resolve() and LG.sha_bytes(data) != r.get("sha256"):
+            if same_content(lg, head, item, path, data, base):
+                return data, None
+            return lg.get_bytes(r["sha256"]), head
+    return data, None
+
+
 def publishing(folder):
     """The library lock for one publisher run (a context manager). A publisher holds it from publish_guard through
     reading or copying the part files to record_publish, so another writer's change can never be shipped (and
