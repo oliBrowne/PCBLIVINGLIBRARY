@@ -116,6 +116,15 @@ class ChangeError(Exception):
             self.hint = hint
 
 
+class FilesMoved(ChangeError):
+    """A part's files changed on disk between being classified (fingerprinted) and being recorded (snapshot): nothing
+    was recorded; the writer classifies them again (settle) or leaves the part to the next writer."""
+
+    def __init__(self, part):
+        super().__init__(f"{part}: its files changed while the release was being recorded (an edit saved meanwhile); "
+                         f"nothing was recorded", "run the command again: the files are classified as they are now")
+
+
 # ---------------------------------------------------------------- policy
 def policy(rules=None, start="."):
     from . import rules as RU
@@ -281,10 +290,13 @@ class Guard:
                 fp = FP.of_item(it, self.base)
                 if fp.get("notes"):            # an unreadable file is no released revision to keep
                     continue
-                self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
-                              {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
-                              reason=self.adopt.get(it["name"]) or "adopted: released before change control recorded it",
-                              by=self.who() if why else None, min_rev=self.adopt_revision.get(it["name"]) if why else None)
+                try:
+                    self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
+                                  {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
+                                  reason=self.adopt.get(it["name"]) or "adopted: released before change control recorded it",
+                                  by=self.who() if why else None, min_rev=self.adopt_revision.get(it["name"]) if why else None)
+                except FilesMoved:             # edited while it was recorded: adopted by the next writer
+                    continue
                 n += 1
             elif head:
                 self._keep_bytes(it, head)
@@ -573,6 +585,15 @@ class Guard:
     @_locked_step
     def settle(self, items):
         """Compare every released part with its ledger head and apply the policy. -> report rows."""
+        rows = self._settle(items)
+        self.report += rows
+        for r in rows:
+            self.log(f"  change {r['action']:<5} {r['part']:<28} {r['summary']}")
+        return rows
+
+    MOVED_TRIES = 3
+
+    def _settle(self, items, tries=0):
         rows, todo = [], {}
         for it in items:
             head = self.ledger.head(it["name"])
@@ -628,15 +649,18 @@ class Guard:
         for t in held:                         # then the held files go back, before anything is released
             rows.append(self._hold(t))
         for name, t in todo.items():
-            if t["dec"]["action"] != "hold":
-                rows.append(self._release(t["item"], t["fp"], t["changes"], t["dec"], base=t["head"]))
-            elif t.get("approved"):
-                rows.append(self._release(t["item"], t["fp"], t["changes"], dict(t["dec"], action="pass"), base=t["head"],
-                                          decision="approved", approved_by=[self.chosen_by], by=self.chosen_by,
-                                          reason=f"chosen by {self.chosen_by}"))
-        self.report += rows
-        for r in rows:
-            self.log(f"  change {r['action']:<5} {r['part']:<28} {r['summary']}")
+            try:
+                if t["dec"]["action"] != "hold":
+                    rows.append(self._release(t["item"], t["fp"], t["changes"], t["dec"], base=t["head"]))
+                elif t.get("approved"):
+                    rows.append(self._release(t["item"], t["fp"], t["changes"], dict(t["dec"], action="pass"),
+                                              base=t["head"], decision="approved", approved_by=[self.chosen_by],
+                                              by=self.chosen_by, reason=f"chosen by {self.chosen_by}"))
+            except FilesMoved:                 # an edit saved while it was recorded: classify the files again
+                if tries + 1 < self.MOVED_TRIES:
+                    rows += self._settle([t["item"]], tries + 1)
+                else:                          # nothing recorded: the next writer settles what is on disk then
+                    self.log(f"  change skip  {name:<28} its files kept changing while being recorded; not recorded now")
         return rows
 
     def _settle_sides(self, it, head, new=None, old=None):
@@ -787,10 +811,14 @@ class Guard:
                 if row:
                     rows.append(row)
                     continue
-            rows.append(self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
-                                      {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
-                                      reason=self.adopt.get(it["name"]) or "first release", by=self.who() if why else None,
-                                      min_rev=self.adopt_revision.get(it["name"]) if why else None))
+            try:
+                rows.append(self._release(it, fp, self.adopt_changes.get(it["name"], []) if why else [],
+                                          {"action": "pass", "why": []}, decision="adopted" if why else "baseline",
+                                          reason=self.adopt.get(it["name"]) or "first release",
+                                          by=self.who() if why else None,
+                                          min_rev=self.adopt_revision.get(it["name"]) if why else None))
+            except FilesMoved:                 # edited while it was recorded: its revision 1 comes with the next writer
+                self.log(f"  change skip  {it['name']:<28} its files changed while being recorded; not released now")
         self.report += rows
         for r in rows:
             if r["action"] == "hold":
@@ -874,13 +902,14 @@ class Guard:
 
     def _release(self, it, fp, changes, dec, base=None, decision=None, reason="", approved_by=None, event="release", by=None,
                  min_rev=None):
+        files = self._snapshot_as(it, fp)
         prev = self.ledger.head(it["name"])
         rev = max((prev or {}).get("revision", 0) + 1, int(min_rev or 0))   # min_rev: an adopted part's next number
         entry = {"event": event, "part": it["name"], "revision": rev, "base": (prev or {}).get("revision"),
                  "writer": self.writer, "by": by or self.who(), "decision": decision or ("warn" if dec["action"] == "warn" else
                                                                                             "observed" if self.mode == "observe" else "pass"),
                  **{k: fp["hashes"][k] for k in ("eid", "gid", "mid", "cid", "digest")},
-                 "fingerprint": self.ledger.put_json(fp), "files": self.ledger.snapshot_files(it, self.base),
+                 "fingerprint": self.ledger.put_json(fp), "files": files,
                  "item": LG.content_of(it), "changes": [{"class": c["class"], "text": c["text"]} for c in changes],
                  "classes": CD.counts(changes), "source": dict(it.get("source") or {}, ecadlib=__version__),
                  **({"approved_by": approved_by} if approved_by else {}), **({"reason": reason} if reason else {}),
@@ -901,6 +930,20 @@ class Guard:
             it.pop("change", None)
         return {"part": it["name"], "action": "baseline" if entry["decision"] == "baseline" else dec["action"],
                 "revision": rev, "summary": CD.summary(changes) if changes else reason or "released", "changes": entry["changes"]}
+
+    def _snapshot_as(self, it, fp):
+        """The item's files into the blob store, checked to be the files `fp` was taken from: fingerprinted again after
+        the copy, and the files on disk still the copied bytes. An edit saved in between (a person's editor, another
+        tool: no lock) raises FilesMoved, so a revision is never recorded with another file's change classes."""
+        files = self.ledger.snapshot_files(it, self.base)
+        again = FP.of_item(it, self.base)
+        if again["hashes"]["digest"] != fp["hashes"]["digest"]:
+            raise FilesMoved(it["name"])
+        for r in files.values():
+            f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
+            if not f.is_file() or LG.sha_bytes(f.read_bytes()) != r["sha256"]:
+                raise FilesMoved(it["name"])
+        return files
 
     def _propose(self, t):
         """Save the held version as the part's proposal (its files go to the blob store) -> the proposal."""

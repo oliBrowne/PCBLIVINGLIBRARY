@@ -81,3 +81,45 @@ def test_fix2_rrc3_cli_reject_survives_a_content_change_and_kicad_export():
     r = _run(w, "kicad-export", plan, "--out", "kx")
     sym = (w / "kx" / "ecadlib.kicad_sym").read_text(encoding="utf-8")
     assert '"RES-0603-10k"' not in sym, r.stdout
+
+
+# ------------------------------------------------------------------ R-RC-1: fingerprint and files from the same bytes
+@lite
+def test_fix2_rrc1_an_edit_saved_while_a_release_is_recorded_is_not_released_unclassified(tmp_path, monkeypatch):
+    """A cosmetic change of CAP-0402-100nF (its description) is released by a publisher's settle; between the
+    fingerprint (classified cosmetic) and the file snapshot, a hand edit makes its pads 0.98 mm (geometry major, held
+    by policy). That file was recorded as the released revision with classes {cosmetic: 1}. Now the release sees the
+    files moved, classifies them again and holds the pad edit; the released .kicad_mod stays the original."""
+    import hashlib, re
+    from ecadlib import change_gate as CG, ledger as LG
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    w, lib = _demo()
+    plan = lib / "plan.json"
+    f = lib / "models" / "KiCad" / "C_0402_1005Metric.kicad_mod"
+    orig = f.read_text(encoding="utf-8")
+    edit = re.sub(r"\(size [\d.]+ 0\.62\)", "(size 0.98 0.62)", orig)
+    assert edit != orig
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    cap = next(i for i in items if i["name"] == "CAP-0402-100nF")
+    cap["description"] = (cap.get("description") or "") + " (restyled)"
+    plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    real, done = LG.Ledger.snapshot_files, []
+
+    def snapshot_files(self, item, base=None):
+        if item.get("name") == "CAP-0402-100nF" and not done:      # the person saves their edit right now
+            done.append(1)
+            f.write_text(edit, encoding="utf-8")
+        return real(self, item, base)
+    monkeypatch.setattr(LG.Ledger, "snapshot_files", snapshot_files)
+    with contextlib.redirect_stderr(io.StringIO()):
+        CG.publish_guard(plan, items, "kicad")
+    assert done, "the snapshot was never taken"
+    edit_sha = hashlib.sha256(edit.encode("utf-8")).hexdigest()
+    for e in _ledger(lib):
+        km = ((e.get("files") or {}).get("kicad_mod") or {}).get("sha256")
+        if e.get("event") == "release" and e.get("part") == "CAP-0402-100nF" and km == edit_sha:
+            assert any(c.startswith("geometry") for c in e.get("classes") or {}), \
+                f"the 0.98 mm pads were released as {e.get('classes')} (unclassified)"
+    head = LG.Ledger(lib).head("CAP-0402-100nF")
+    assert head["files"]["kicad_mod"]["sha256"] != edit_sha, head.get("classes")
+
