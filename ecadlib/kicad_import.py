@@ -301,12 +301,14 @@ def _offset(pts, d):
 
 
 def _custom_shapes(p, x, y, rot, edges=True):
-    """Filled primitives of a KiCad custom pad -> ([polygons], [tracks (x1, y1, x2, y2, w)]) in footprint mm, y up;
-    None when a primitive can't be drawn exactly (curves, arcs, unfilled outlines)."""
+    """Filled primitives of a KiCad custom pad -> ([polygons], [tracks (x1, y1, x2, y2, w)], [copper polygons]) in
+    footprint mm, y up; None when a primitive can't be drawn exactly (curves, arcs, unfilled outlines). A stroked
+    primitive: polygons are grown by half the stroke (mitred: the mask / paste windows); the copper polygons are the
+    outline itself, and its round-ended edge tracks give the stroke with KiCad's round corners (R-FX9-2)."""
     def tf(px, py):                           # pad frame (KiCad, y down) -> footprint, y up
         dx, dy = _rot(px, -py, rot)
         return x + dx, y + dy
-    polys, tracks = [], []
+    polys, tracks, cu = [], [], []
     for g in (sexpr.first(p, "primitives") or [])[1:]:
         w = _width(g)
         filled = _filled(g) or (sexpr.first(g, "fill") is None and g[0] == "gr_poly")
@@ -325,9 +327,10 @@ def _custom_shapes(p, x, y, rot, edges=True):
         else:
             return None
         polys.append(_offset(pts, w / 2) if w else pts)
-        if w and edges:                       # stroke around the outline: exact edges, mitred corners
+        if w and edges:                       # stroke around the outline: round-ended tracks on the edges
             tracks += [(*a, *b, w) for a, b in zip(pts, pts[1:] + pts[:1])]
-    return polys, tracks
+        cu.append(pts if w and edges else polys[-1])
+    return polys, tracks, cu
 
 
 def inherit_margins(t):
@@ -352,7 +355,7 @@ def _custom_regions(fp, pad, shapes, kind, layers, p, notes=None):
     """Regions for a custom pad's shape: copper on the pad's copper layers, solder mask grown by the pad's mask margin
     (0 when KiCad has none, as the anchor pad's manual expansion), paste by its paste margin. Altium gives primitives
     that touch a pad in a footprint the pad's net on the board."""
-    polys, tracks = shapes
+    polys, tracks, cu_polys = shapes
     lay = set(layers)
     cu = [AL.TOP, AL.BOTTOM] if kind != "smd" and lay & {"*.Cu", "F&B.Cu"} else \
         [l for n, l in (("F.Cu", AL.TOP), ("B.Cu", AL.BOTTOM)) if n in lay]
@@ -360,7 +363,7 @@ def _custom_regions(fp, pad, shapes, kind, layers, p, notes=None):
     paste = [l for n, l in (("F", AL.TOP_PASTE), ("B", AL.BOTTOM_PASTE)) if lay & {f"{n}.Paste", "*.Paste"}]
     mm_, pm = _mask_margin(p) or 0.0, sexpr.first(p, "solder_paste_margin")
     for layer in cu:
-        fp["regions"] += [(pts, layer) for pts in polys]
+        fp["regions"] += [(pts, layer) for pts in cu_polys]
         fp["tracks"] += [(*t, layer) for t in tracks]
     for layer in mask:
         fp["regions"] += [(_offset(pts, mm_), layer) for pts in polys]
@@ -398,7 +401,7 @@ def _pad(fp, p, notes):
     custom = _custom_shapes(p, x, y, rot, edges=not window) if shape == "custom" else None
     if custom and window:
         anchor = (sexpr.first(sexpr.first(p, "options") or [], "anchor") or [None, "circle"])[1]
-        polys, tracks = custom                # a window with a custom shape: anchor + each primitive, on each layer
+        polys, tracks, _ = custom             # a window with a custom shape: anchor + each primitive, on each layer
         shapes = [_round_pts(x, y, w, h, rot) if anchor != "rect" else _rect_pts(x, y, w, h, rot)] + polys + [
             _rect_pts((x1 + x2) / 2, (y1 + y2) / 2, math.hypot(x2 - x1, y2 - y1) + tw, tw, math.degrees(math.atan2(y2 - y1, x2 - x1)))
             for x1, y1, x2, y2, tw in tracks]

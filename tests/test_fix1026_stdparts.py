@@ -579,3 +579,32 @@ def test_symbol_layout_name_classes():
         assert c(n) == "left", n
     for n in ("-IN", "+IN", "VREF-", "VIN"):          # unchanged neighbours
         assert c(n) == {"-IN": "left", "+IN": "left", "VREF-": "bottom", "VIN": "top"}[n], n
+
+
+# --- R-FX9-2: a stroked custom-pad polygon is written with KiCad's round corners -----------------------------------
+
+_STROKED = '''(footprint "JSTLIKE" (version 20221018) (layer "F.Cu")
+ (fp_rect (start -3 -3) (end 3 3) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+ (pad "1" smd custom (at -1 0) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask")
+  (options (clearance outline) (anchor rect))
+  (primitives (gr_poly (pts (xy -0.25 -1.2) (xy 0.25 -1.2) (xy 0.25 1.2) (xy -0.25 1.2)) (width 0.5) (fill yes))))
+ (pad "2" smd rect (at 1 0) (size 1 2.4) (layers "F.Cu" "F.Paste" "F.Mask")))'''
+
+
+def _errors(diffs):
+    return [d["msg"] for d in diffs if d["level"] == "error" and "3D" not in d["msg"]]
+
+
+@lite
+def test_parity_stroked_custom_pad_polygon_is_not_held(tmp_path):
+    """JST ZE / Molex Nano-Fit: a gr_poly with a 0.5 mm stroke was written grown with square corners (+0.013 mm2
+    of copper KiCad does not have) and held."""
+    from ecadlib import parity as P
+    assert _errors(P.footprint_pair(_STROKED, _pcblib(tmp_path, _STROKED))) == []
+
+
+@lite
+def test_parity_stroked_custom_pad_still_catches_a_lost_stroke(tmp_path):
+    from ecadlib import parity as P
+    drop = lambda f: f.update(tracks=[])
+    assert any("copper" in m for m in _errors(P.footprint_pair(_STROKED, _pcblib(tmp_path, _STROKED, drop))))
