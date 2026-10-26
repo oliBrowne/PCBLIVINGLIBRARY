@@ -3844,7 +3844,11 @@ class Reader:
                                             refs=refs)
         how = "usage" if WS.usd(model, turns) is not None and not err else "estimate"
         usd = WS.usd(model, turns, unknown=est or 0.0)   # each turn with no usage (or no price) holds its worst case
-        if err:                                       # the failed request may still have been billed: hold its worst case
+        # the failed request may still have been billed (a timeout, a body cut off): hold its worst case. An HTTP error
+        # response (4xx / 5xx, Client.request: no maybe_billed) or a request never sent is not billed, as _release
+        # reads it (review R-CE-4)
+        billed = getattr(err, "maybe_billed", None) if err else False
+        if err and (billed if billed is not None else getattr(err, "status", None) is None):
             usd += est or 0.0
         self.committed_usd += usd
         self.ledger.add({"part": part, "name": part, "model": model,

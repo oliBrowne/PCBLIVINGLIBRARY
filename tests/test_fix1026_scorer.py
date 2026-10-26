@@ -145,3 +145,38 @@ def test_a_maybe_billed_redo_is_marked_and_keeps_its_hold():
         assert abs(rd.committed_usd - usd) < 1e-9, rd.committed_usd
 
 
+# ---------------------------------------------------------------- R-CE-4: a web search 4xx is not billed
+def test_a_web_search_http_error_is_not_booked_as_billed():
+    from tests.test_ds_search import _reader, _fails, DEAD
+    from ecadlib import ds_search as WS
+
+    class Err:
+        def __init__(self, e):
+            self.e, self.sent = e, []
+
+        def messages(self, body, headers=None):
+            self.sent.append(body)
+            raise self.e
+    est = WS.estimate("claude-opus-5-5", WS.MAX_USES, fallback=True)
+    for e, billed in ((D.APIError("API HTTP 401: authentication_error", 401, "authentication_error"), False),
+                      (D.APIError("API HTTP 400: invalid_request_error", 400, "invalid_request_error"), False),
+                      (D.APIError("API HTTP 500: api_error", 500, "api_error", True), False),
+                      (D.DatasheetError("timed out"), True)):
+        if isinstance(e, D.APIError) and e.status is None:
+            e.maybe_billed = True
+        with tempfile.TemporaryDirectory() as d:
+            rd = _reader(d, Err(e), web_search=True)
+            assert "search failed" in _fails(rd)
+            want = est if billed else 0.0
+            assert abs(rd.committed_usd - want) < 1e-9, (e, rd.committed_usd)
+            led = [json.loads(x) for x in open(Path(d) / "out" / "datasheet" / "cost.jsonl")]
+            assert [round(x["usd"], 6) for x in led if x["via"] == "web search"] == [round(want, 6)], led
+    # a timeout the Client marks maybe billed: held
+    e = D.APIError("API request failed: ReadTimeout")
+    e.maybe_billed = True
+    with tempfile.TemporaryDirectory() as d:
+        rd = _reader(d, Err(e), web_search=True)
+        _fails(rd)
+        assert abs(rd.committed_usd - est) < 1e-9
+
+
