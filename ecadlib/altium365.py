@@ -836,7 +836,8 @@ def _upload_released(client, lg, it, p, folder):
         return client.upload(str(f))
 
 
-def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rules=None, folder=None):
+def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rules=None, folder=None,
+         forget_missing=False):
     """Release new parts, update parameters of parts already in the workspace.
     dry_run: no uploads or mutations; records the requests that would be sent.
     policy: the plan's approval policy (approvals.load_policy); None uses the one release_check stored per item.
@@ -846,7 +847,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     component revision (push_revision), a held change sends nothing new, and every push is recorded.
     Files go up only for parts that pass the release check run here, on the files as they are
     (release_check.publish_problems): the plan's `ready` is not taken on trust. A parameter update of a part
-    already in the workspace sends no files and is not re-checked; a `held` part gets nothing."""
+    already in the workspace sends no files and is not re-checked; a `held` part gets nothing.
+    Several plan folders may push the same part (R-FX15-3, as dblib-sync's rows): which ones did is kept beside them
+    (change_gate.publishers_file). A new revision of a component another plan folder released waits until that plan's
+    released revision is the same drawings (it signed the change off too); a component that already holds this
+    revision's drawings gets no second revision. forget_missing: drop the claim of a plan folder that is gone."""
     from . import release_check as RC, rules as RU
     from .approvals import push_block
     from .rules import house_item
@@ -866,6 +871,39 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     from . import ledger as LG
     lg = LG.Ledger(folder) if folder and LG.Ledger(folder).exists() else None
     target = ws_target(ws)
+    from . import change_gate as CG
+    claims = me = None
+    forgotten = []
+    if lg is not None:                         # which plan folders pushed each part to this workspace
+        me = CG.plan_id(folder, create=not dry_run) or "?this"
+        claims = CG.Claims(CG.publishers_file(folder), CG.publishers_file(folder).parent, section=target)
+        if forget_missing:
+            gone = sorted({p for v in claims.claims.values() for p in v if p != me and claims.folder(p) is None})
+            forgotten = [claims.label(p) for p in gone]
+            claims.forget(gone)
+
+    def cross_plan(it, head):
+        """Another plan folder pushed this component here and has not released this drawing: no new revision (its
+        boards use that component; it has not signed the change off). _Held names it; a gone one is named stale."""
+        if claims is None:
+            return
+        live, gone = claims.others(str(it["name"]).casefold(), me)
+        bad = []
+        for p, f in sorted(live.items()):
+            lw = LG.Ledger(f)
+            if not (lw.exists() and CG.heads_agree(lg, head, lw, CG.head_of(lw, it["name"]))):
+                bad.append(claims.label(p))
+        if not (bad or gone):
+            return
+        why = (f"{it['name']} in this workspace was also pushed from another plan folder "
+               f"({', '.join(bad + [claims.label(p) for p in gone])}), whose released revision is another drawing: no "
+               "new revision was made, so the component its boards use is not changed without its sign-off. Approve "
+               "the change there too (then either push makes the revision), or give this part another name in this plan")
+        if gone:
+            why += (f"; {', '.join(claims.label(p) for p in gone)} is not there any more: if that plan folder was renamed "
+                    "or moved, push it once from where it is now; if it no longer exists, push this plan with "
+                    "--forget-missing-plans")
+        raise _Held([why])
     transition = ((rules or {}).get("change") or {}).get("a365_transition") or None
     def upload(p):
         if p not in uploaded:
@@ -896,11 +934,25 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                 if seen == "head":             # this part's drawings already: linked, its first publish is recorded
                     res["adopted"] = (f"{it['name']} was already in the workspace with this part's drawings (released "
                                       "elsewhere): no new revision")
+                    mode = "params"
                 else:
                     mode = "revision"          # an earlier revision of this library's: the head goes up
                     halves = unpublished_halves(lg, target, sent_models, it, head)
                     res["unpublished"] = (f"{it['name']} is in the workspace but this library has no record of "
                                           f"publishing it there: released again from ledger revision r{head['revision']}")
+            if existing and mode == "revision" and not why and it.get("status") == "ready":
+                want = {k: model_digest(lg, head, k) for k in ("symbols", "footprints")}
+                try:                           # the component holds this revision's drawings already (another plan
+                    have = component_digests(client, existing, it)     # folder's push made it): no second revision
+                except (ValueError, NexarError, OSError):
+                    have = None
+                if have and all(want.values()) and have == want:
+                    mode = "params"
+                    res["adopted"] = (f"{it['name']} already holds the drawings of ledger revision r{head['revision']} "
+                                      f"(workspace revision {_rev_id(existing)}, pushed from another plan folder): no "
+                                      "new revision")
+                else:
+                    cross_plan(it, head)
             if (existing or (dry_run and lg and _published(lg, it["name"], target))) and mode == "revision":
                 if why:
                     recheck(res, why)
@@ -1043,6 +1095,15 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             return {"action": r.get("action", ""), **({"a365_revision": rid} if rid else {}),
                     **({"models": r["models"]} if r.get("models") else {})}
         CG.record_publish(folder, items, target, ok=lambda i: i["name"] in ok, detail=detail)
+        if claims is not None:                 # this plan folder pushed them here (shared with other plan folders)
+            before = json.dumps([claims.claims, claims.plans], sort_keys=True)
+            claims.claim(sorted({str(n).casefold() for n in ok}), me, folder)
+            if json.dumps([claims.claims, claims.plans], sort_keys=True) != before or forgotten:
+                claims.save()
+    for label in forgotten:
+        results.append({"name": label, "action": "forgotten",
+                        "detail": "that plan folder is gone (--forget-missing-plans): its claim on the parts it pushed "
+                                  "here was dropped"})
     return results
 
 
@@ -1084,6 +1145,9 @@ def main(argv=None):
     u.add_argument("--dry-run", action="store_true", help="no network; write the requests that would be sent")
     u.add_argument("-o", "--out", default="out/altium365/push_report.json")
     u.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
+    u.add_argument("--forget-missing-plans", action="store_true",
+                   help="another plan folder that pushed the same parts to this workspace is gone (deleted, not "
+                        "renamed): drop its claim, so this plan's approved changes make new revisions")
     a = ap.parse_args(argv)
     from . import rules as RU
 
@@ -1158,7 +1222,7 @@ def main(argv=None):
                         i[k]["file"] = str((Path(a.plan).parent / i[k]["file"]).resolve())
             t0 = time.time()
             results = push(items, client, a.workspace, dry_run=a.dry_run, policy=load_policy(Path(a.plan).parent),
-                           rules=rules, folder=Path(a.plan).parent)
+                           rules=rules, folder=Path(a.plan).parent, forget_missing=a.forget_missing_plans)
             if not a.dry_run:
                 record_push(Path(a.plan).parent, t0, results)
     except Exception as e:                     # auth / network / GraphQL errors before any per-part work

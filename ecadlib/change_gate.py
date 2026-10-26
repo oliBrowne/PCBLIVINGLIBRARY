@@ -1544,6 +1544,81 @@ def heads_agree(lg_a, head_a, lg_b, head_b, kinds=("symbols", "footprints"), ide
     return True
 
 
+class Claims:
+    """Which plan folders (CG.plan_id) released what into a target shared by several, kept in a JSON file: {"claims":
+    {key: [plan id]}, "plans": {plan id: {"path": where it was last seen, relative to `rel_to`}}}. A target with no
+    state of its own (an Altium 365 workspace) keeps it next to the plan folders (publishers_file); an output folder
+    keeps it inside. A claim of a plan whose folder is gone is stale: it is named, and forget() drops it."""
+
+    def __init__(self, path, rel_to, section=None):
+        self.path, self.rel_to, self.section = Path(path), Path(rel_to), section
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8")) if self.path.is_file() else {}
+        except (OSError, ValueError):
+            raw = {}
+        self.raw = raw if isinstance(raw, dict) else {}
+        d = self.raw.get(section) if section else self.raw
+        d = d if isinstance(d, dict) else {}
+        self.claims = {k: list(v) for k, v in (d.get("claims") or {}).items() if isinstance(v, list)}
+        self.plans = {k: dict(v) for k, v in (d.get("plans") or {}).items() if isinstance(v, dict)}
+
+    def _here(self, hint):
+        return Path(hint) if Path(hint).is_absolute() else self.rel_to / hint
+
+    def label(self, pid):
+        return (self.plans.get(pid) or {}).get("path") or pid
+
+    def folder(self, pid):
+        hint = (self.plans.get(pid) or {}).get("path")
+        return plan_at(self._here(hint), pid) if hint else None
+
+    def others(self, key, me):
+        """(the other plans' folders that claim key {id: folder}, [ids of those whose folder is gone])."""
+        live, gone = {}, []
+        for pid in self.claims.get(key) or []:
+            if pid == me:
+                continue
+            f = self.folder(pid)
+            if f is None:
+                gone.append(pid)
+            else:
+                live[pid] = f
+        return live, gone
+
+    def claim(self, keys, me, plan_folder):
+        for k in keys:
+            if me not in self.claims.setdefault(k, []):
+                self.claims[k].append(me)
+        self.plans[me] = {"path": project_key(self.rel_to, plan_folder)}
+
+    def forget(self, pids):
+        for k in list(self.claims):
+            self.claims[k] = [p for p in self.claims[k] if p not in pids]
+            if not self.claims[k]:
+                del self.claims[k]
+        for p in pids:
+            self.plans.pop(p, None)
+
+    def save(self):
+        from .fsutil import write_text_atomic
+        d = {"claims": dict(sorted(self.claims.items())), "plans": dict(sorted(self.plans.items()))}
+        raw = dict(self.raw, **{self.section: d}) if self.section else d
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(self.path, json.dumps(raw, indent=1, sort_keys=True) + "\n")
+
+
+def publishers_file(plan_folder):
+    """Where plan folders that share a target with no state of its own (an Altium 365 workspace) record what each
+    released there: ecadlib_publishers.json beside the ecadlib.toml found from the plan folder upward (the project the
+    plan folders belong to), else in the plan folder's parent (plan folders side by side)."""
+    from .rules import FILES
+    f = Path(plan_folder).resolve()
+    for d in [f, *f.parents]:
+        if any((d / n).is_file() for n in FILES):
+            return (d if d != f else f.parent) / "ecadlib_publishers.json"
+    return f.parent / "ecadlib_publishers.json"
+
+
 def head_of(lg, part):
     """The ledger head of `part` (case-folded match when the spelling differs), or None; None for a ledger that can't
     tell (LedgerError)."""

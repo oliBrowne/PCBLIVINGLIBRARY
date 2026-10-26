@@ -183,3 +183,75 @@ def test_dblib_state_keyed_by_plan_path_is_read_as_plan_ids(tmp_path):
     assert _acts(S.sync(a, lib))["RES-0603-10k"] == "updated"
     st = json.loads((lib / "ecadlib_sync.json").read_text())
     assert all(w.startswith("plan-") for w in st["writers"]["rows"]["RES-0603-10k"]), st
+
+
+# ---------------------------------------------------------------- R-FX15-3: Altium 365 follows the same rule
+def _a365_push(plan, nx, **kw):
+    """`ecadlib altium365 push` of plan folder plan.parent against fake workspace nx: settle, then push."""
+    from ecadlib import altium365 as A, change_gate as CG, rules as RU
+    from tests.test_hunt1026_altpub import _push
+    lib = Path(plan).parent
+    items = json.loads(Path(plan).read_text())
+    CG.publish_guard(plan, items, "altium365", log=lambda *a, **k: None)
+    items = json.loads(Path(plan).read_text())
+    if kw:
+        for i in items:
+            for k in ("symbol", "footprint"):
+                i[k]["file"] = str(lib / i[k]["file"])
+        return {r["name"]: r for r in A.push(items, nx, WS, rules=RU.load(None, start=lib), folder=lib, **kw)}
+    return _push(A, plan, lib, nx, WS, RU.load(None, start=lib), items=items)
+
+
+WS = "https://test.365.altium.com"
+
+
+@lite
+def test_a365_change_of_a_component_another_plan_pushed_waits_for_its_sign_off(tmp_path):
+    """Two plan folders push RES-0603-10k (B's push adopts A's component). A's approval alone made a new revision of
+    the component B's boards use (B never signed it off), and B's later approval made a needless second one. The same
+    rule as dblib-sync: A's change waits for B; B's approval makes the one revision; A then adopts it."""
+    from tests.test_change_control import FakeA365
+    _signed_off(tmp_path)
+    nx = FakeA365()
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    b = _plan_folder(tmp_path / "B", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    assert _a365_push(a, nx)["RES-0603-10k"]["action"] == "release"
+    r = _a365_push(b, nx)["RES-0603-10k"]
+    assert r["action"] == "up_to_date" and r.get("adopted"), r
+    _new_land(tmp_path / "A")
+    r = _a365_push(a, nx)["RES-0603-10k"]
+    assert r["action"] == "skip" and "(B)" in r["detail"] and "another plan folder" in r["detail"], r
+    assert len(nx.comps["RES-0603-10k"]["revisions"]) == 1
+    _new_land(tmp_path / "B")
+    assert _a365_push(b, nx)["RES-0603-10k"]["action"] == "new_revision"
+    assert len(nx.comps["RES-0603-10k"]["revisions"]) == 2
+    r = _a365_push(a, nx)["RES-0603-10k"]
+    assert r["action"] in ("up_to_date", "update_parameters") and r.get("adopted"), r
+    assert len(nx.comps["RES-0603-10k"]["revisions"]) == 2
+    # and the next push of each is quiet
+    assert _a365_push(a, nx)["RES-0603-10k"]["action"] == "up_to_date"
+    assert _a365_push(b, nx)["RES-0603-10k"]["action"] == "up_to_date"
+
+
+@lite
+def test_a365_one_plan_still_makes_its_revision_and_a_gone_plan_can_be_forgotten(tmp_path):
+    """No false hold: a part only this plan pushed gets its new revision at once. A plan folder that pushed it and is
+    gone is named stale; --forget-missing-plans clears it."""
+    from tests.test_change_control import FakeA365
+    _signed_off(tmp_path)
+    nx = FakeA365()
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    _a365_push(a, nx)
+    _new_land(tmp_path / "A")
+    assert _a365_push(a, nx)["RES-0603-10k"]["action"] == "new_revision"
+    b = _plan_folder(tmp_path / "B", [_res("RES-0603-10k", "RC0603FR-0710KL")], land=BIG)
+    assert _a365_push(b, nx)["RES-0603-10k"].get("adopted")
+    shutil.rmtree(tmp_path / "B")
+    from ecadlib import altium_lib as AL
+    spec = json.loads((ROOT / "ecadlib/package_specs/R_0603_1608Metric.json").read_text())
+    AL.write_pcblib(tmp_path / "A/models/PcbLib/R_0603_1608Metric.PcbLib", [AL.footprint_from_spec(spec)[0]])
+    r = _a365_push(a, nx)["RES-0603-10k"]
+    assert r["action"] == "skip" and "not there any more" in r["detail"] and "--forget-missing-plans" in r["detail"], r
+    out = _a365_push(a, nx, forget_missing=True)
+    assert out["RES-0603-10k"]["action"] == "new_revision", out
+    assert out["B"]["action"] == "forgotten"
