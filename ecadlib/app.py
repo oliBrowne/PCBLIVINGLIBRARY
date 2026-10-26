@@ -217,11 +217,11 @@ class Workspace:
         provs = [c(http) for c in self._provider_classes()]
         lines, mapping = self._read_bom(bom_path)
         index = self._index()
-        rows = []
+        rows, dup = [], T.shared_designators(lines)  # R3 on two lines: only the whole BOM can say
         for i, ln in enumerate(lines, 1):            # one line at a time so long lookups can report progress
             if progress:
                 progress(i - 1, len(lines), ln.get("mpn") or ln.get("value") or ln.get("designator", ""))
-            r = T.triage([ln], index, provs, http)[0]
+            r = T.triage([ln], index, provs, http, shared={1: dup[i]} if i in dup else {})[0]
             r["line"] = i
             rows.append(r)
         if progress:

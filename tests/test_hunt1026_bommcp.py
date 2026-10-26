@@ -35,3 +35,33 @@ def test_imperial_case_column_wins_over_the_metric_one_in_either_order(tmp_path)
         lines, m = _read(tmp_path / "both.csv", f"Designator,Qty,Value,MPN,{hdr}\nC1,1,100nF,XYZCAP100N,{row}\n")
         assert m["footprint"] == "Case Code (in)", (hdr, m)
         assert lines[0]["footprint"] == "0201", (hdr, lines)
+
+
+# ---------------------------------------------------------------- bommcp-02: designators on two lines
+def test_ref_keys_reads_ranges_as_count_refs_does():
+    # shared_designators (R2 = 10k on one line and R2 = 1k on another) expands with ref_keys, which knew only 'R1-R4':
+    # 'R1..R4', 'R1 to R4', 'R1:R4', a reversed 'R5-R1' and 'R1/R2' were missed (or kept whole as 'R1..R4')
+    for s, want in (("R1..R4", {"R1", "R2", "R3", "R4"}), ("R1 to R3", {"R1", "R2", "R3"}), ("R1:R3", {"R1", "R2", "R3"}),
+                    ("R5-R3", {"R3", "R4", "R5"}), ("R1/R2", {"R1", "R2"}), ("R1&R2+R3", {"R1", "R2", "R3"}),
+                    ("U1A, U1B", {"U1"}), ("R1_CH1, R1_CH2", {"R1_CH1", "R1_CH2"}), ("C1~C3", {"C1", "C2", "C3"})):
+        assert T.ref_keys(s) == want, (s, T.ref_keys(s))
+        assert T.count_refs(s) == len(want), (s, T.count_refs(s))
+    lines = [{"designator": "R1..R4", "mpn": "A"}, {"designator": "R2", "mpn": "B"}, {"designator": "R9-R5", "mpn": "C"},
+             {"designator": "R7", "mpn": "D"}]
+    assert set(T.shared_designators(lines)) == {1, 2, 3, 4}, T.shared_designators(lines)
+
+
+@lite
+def test_workspace_triage_says_a_designator_is_on_two_lines_as_the_cli_does(tmp_path, monkeypatch):
+    # the web UI / MCP triage_bom ran triage() one line at a time, so no line ever saw the others and the CLI's
+    # 'designator on two lines' note never reached them
+    from ecadlib.app import Workspace
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    ws = Workspace(str(tmp_path / "ws"), [], [], True)
+    (ws.root / "b.csv").write_text("Designator,Qty,Value,MPN\nR1,1,10k,RC0603FR-0710KL\n\"R2,R3\",2,1k,RC0603FR-071KL\n"
+                                   "R3,1,100R,RC0603FR-07100RL\n", encoding="utf-8")
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        r = ws.triage("b.csv")
+    notes = {x["line"]: x["notes"] for x in r["rows"]}
+    assert "R3 is also on line 3" in notes[2] and "R3 is also on line 2" in notes[3], notes
+    assert "designator on two lines" not in notes[1], notes

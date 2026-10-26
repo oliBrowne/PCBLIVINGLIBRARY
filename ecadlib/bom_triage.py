@@ -856,22 +856,32 @@ def part_numbers(ln):
     return [c for c in dict.fromkeys(c.strip() for c in out) if c and not is_vault_id(c)]
 
 
-def count_refs(s):
-    """'R1, R2, R5-R8' -> 6 (ranges like R5-R8, R5-8 or 'R5 - R8' count every designator). Units of one multi-unit
-    part ('U1A, U1B', Altium's suffixed designators) count once, as does a designator listed twice."""
-    s = re.sub(r"(?<=[0-9A-Za-z])\s*([-\u2013\u2014~\uff5e:]|\.\.|\s(?i:to)\s)\s*(?=[A-Za-z]*\d)", "-",
-               s.strip())                                        # 'R1 – R4', 'C1~C4', 'R1..R4', 'R1 to R4' -> 'R1-R4'
-    seen, extra = set(), 0
+def _ref_spans(s):
+    """A designator list -> (PREFIX, low, high) per designator or range, or (None, TOKEN, None) for an Altium channel
+    designator (R1_CH1, R1_A). 'R1 – R4', 'C1~C4', 'R1..R4', 'R1 to R4', 'R1:R4' and a reversed 'R5-R1' are ranges;
+    units of one part (U1A, U1B) are U1. Shared by count_refs and ref_keys, so the Qty check and the designator-on-
+    two-lines check read a list the same way."""
+    s = re.sub(r"(?<=[0-9A-Za-z])\s*([-–—~～:]|\.\.|\s(?i:to)\s)\s*(?=[A-Za-z]*\d)", "-",
+               str(s or "").strip())                             # 'R1 – R4', 'C1~C4', 'R1..R4', 'R1 to R4' -> 'R1-R4'
     for tok in re.split(r"[,;/&+\s]+", s):
         m = re.fullmatch(r"([A-Za-z]+)(\d+)[A-Za-z]?(?:-(?:\1)?(\d+)[A-Za-z]?)?", tok)
         if not m:
             if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9_.]*", tok):   # Altium channel designators (R1_CH1, R1_A): one each
-                seen.add(("", tok.upper()))
+                yield None, tok.upper(), None
             continue
-        pre, lo = m.group(1).upper(), int(m.group(2))
+        lo = int(m.group(2))
         hi = int(m.group(3)) if m.group(3) else lo
-        lo, hi = min(lo, hi), max(lo, hi)                        # 'R5-R1' is R1..R5
-        if hi - lo > 100000:                     # absurd range: count it, don't enumerate it
+        yield m.group(1).upper(), min(lo, hi), max(lo, hi)       # 'R5-R1' is R1..R5
+
+
+def count_refs(s):
+    """'R1, R2, R5-R8' -> 6 (ranges like R5-R8, R5-8 or 'R5 - R8' count every designator). Units of one multi-unit
+    part ('U1A, U1B', Altium's suffixed designators) count once, as does a designator listed twice."""
+    seen, extra = set(), 0
+    for pre, lo, hi in _ref_spans(s):
+        if pre is None:
+            seen.add(("", lo))
+        elif hi - lo > 100000:                   # absurd range: count it, don't enumerate it
             extra += hi - lo + 1
         else:
             seen.update((pre, k) for k in range(lo, hi + 1))
@@ -880,18 +890,12 @@ def count_refs(s):
 
 def ref_keys(s, limit=10000):
     """'R1, R2, R5-R8' -> {'R1', 'R2', 'R5', ..., 'R8'} (units U1A / U1B are U1); an absurd range is left out."""
-    s = re.sub(r"(?<=[0-9A-Za-z])\s*[-–—~～]\s*(?=[A-Za-z]*\d)", "-", str(s or "").strip())
     out = set()
-    for tok in re.split(r"[,;\s]+", s):
-        m = re.fullmatch(r"([A-Za-z]+)(\d+)[A-Za-z]?(?:-(?:\1)?(\d+)[A-Za-z]?)?", tok)
-        if not m:
-            if re.fullmatch(r"[A-Za-z]+\d+[A-Za-z0-9_.]*", tok):
-                out.add(tok.upper())
-            continue
-        lo = int(m.group(2))
-        hi = int(m.group(3)) if m.group(3) and int(m.group(3)) >= lo else lo
-        if hi - lo <= limit:
-            out.update(f"{m.group(1).upper()}{k}" for k in range(lo, hi + 1))
+    for pre, lo, hi in _ref_spans(s):
+        if pre is None:
+            out.add(lo)
+        elif hi - lo <= limit:
+            out.update(f"{pre}{k}" for k in range(lo, hi + 1))
     return out
 
 
@@ -910,9 +914,12 @@ def shared_designators(lines):
     return {i: "designator on two lines: " + "; ".join(v[:5]) + (" ..." if len(v) > 5 else "") for i, v in out.items()}
 
 
-def triage(lines, index, provs, http):
+def triage(lines, index, provs, http, shared=None):
+    """shared: {line number in `lines` (1-based): designator-on-two-lines note}, for a caller that triages a BOM a line
+    at a time (the web UI and MCP report progress per line) and so must work them out on the whole BOM; None = from
+    `lines`."""
     rows = []
-    dup = shared_designators(lines)
+    dup = shared_designators(lines) if shared is None else shared
     for i, ln in enumerate(lines, 1):
         if ln.get("dnp"):
             rows.append({"line": i, "designator": ln.get("designator", ""), "qty": ln.get("qty", ""),
