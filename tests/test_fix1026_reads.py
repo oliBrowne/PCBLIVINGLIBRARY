@@ -558,6 +558,16 @@ def test_f6_h1_a_rectangular_qfp_read_with_no_row_split_or_an_equal_one_never_bu
     assert _qfp_read(sq)[0] == "ok"
 
 
+
+def test_f6_h2_a_span_copied_into_both_spans_of_a_rectangular_qfp_never_builds_wrong():
+    """Before: QFP-52 12x14 read with lead_span = lead_span_y = 16 built the X rows 1 mm out, assess ok. The spans
+    differ by what the body sides differ by."""
+    for t in RECT_QFPS:
+        _never_wrong(t, dict(t, lsy=t["ls"]), "short span copied")
+        _never_wrong(t, dict(t, ls=t["lsy"]), "long span copied")
+        assert _qfp_read(dict(t, ls=t["ls"] + 0.1))[0] == "ok", t["name"]        # a span read 0.1 mm off: still fine
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

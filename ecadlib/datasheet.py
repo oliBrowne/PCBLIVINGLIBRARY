@@ -1827,6 +1827,13 @@ def _qfp_rows(spec):
         out.append(f"lead_span_y missing: a rectangular {L[1]:g} x {W[1]:g} mm QFP has a different span across each "
                    "pair of sides, and one lead_span would build all four rows at it, which is implausible (give "
                    "lead_span_y, the span across the top and bottom rows)")
+    sx, sy = _dim(spec.get("lead_span")), _dim(spec.get("lead_span_y"))
+    if sx and sy:                                     # the feet are as long on every side: the spans differ as the
+        want, got = W[1] - L[1], sy[1] - sx[1]         # body sides do (a span copied into both: 0 apart, rows 1 mm out)
+        if abs(got - want) > max(0.3, 0.25 * abs(want)):
+            out.append(f"lead_span {sx[1]:g} and lead_span_y {sy[1]:g} differ by {got:.3g} mm but the {L[1]:g} x "
+                       f"{W[1]:g} mm body sides differ by {want:.3g} mm: the feet would be longer on one pair of "
+                       "sides, which is implausible (check both spans against the drawing)")
     return out
 
 
