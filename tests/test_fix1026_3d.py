@@ -87,3 +87,30 @@ def test_no_rotation_fits_raises_and_add_body_extrudes_with_a_note():
     assert any("no generated STEP" in x for x in notes) and any("extruded body" in x for x in notes), notes
     _, ok = SG.generate(n, pads=_dual(8, 1.27, 2.475, 1.95, 0.6))           # the right pads still get the model
     assert ok["leads_on_pads"] is True
+
+
+# ---------------------------------------------------------------- R-3D-2
+def test_every_standard_table_height_sits_in_its_release_band():
+    """release_check's plausibility band never flags the standard table's own height (MS-013 SOIC-20W at 2.65, SOP-8
+    6.6 wide at 5.08, UFQFPN at 0.6): a correct body is not warned, nor held under [release] height = "hold"."""
+    from ecadlib import footprint_gen as F, release_check as RC, stdparts as SP
+    out = []
+    for name, rec in SP.packages().items():
+        hm = rec.get("height_max")
+        if not hm:
+            continue
+        h = F.dim(hm)[2] if isinstance(hm, dict) else float(hm)
+        for n in (name, f"{rec.get('lib') or 'Package_SO'}:{name}"):
+            lo, hi, _ = RC.height_range(n)
+            if not lo - 0.01 <= h <= hi + 0.01:
+                out.append((n, h, lo, hi))
+    assert not out, out[:10]
+
+
+def test_wide_soic_band_by_body_width_and_narrow_band_kept():
+    from ecadlib import release_check as RC
+    for n in ("SOIC-20_L12.8-W7.5-P1.27-LS10.3-BL", "SOIC-24W_7.5x15.4mm_P1.27mm_Custom", "SOP-28_8.4x18.0mm_P1.27mm_X"):
+        lo, hi, _ = RC.height_range(n)
+        assert lo <= 2.65 <= hi, (n, lo, hi)
+    assert RC.height_range("SOIC-8_3.9x4.9mm_P1.27mm")[1] < 2.0          # a narrow SOIC at 2.65 is still flagged
+    assert RC.height_range("SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL")[1] < 2.0

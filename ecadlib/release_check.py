@@ -42,7 +42,9 @@ HEIGHTS = [
     (r"(^|[_-])(1210|1812|2010|2512)(?!\d)", 0.4, 3.0), (r"^CP_EIA", 0.8, 3.5),
     (r"^SOT-223", 1.4, 1.95), (r"^SOT-23", 0.8, 1.45), (r"^SOT-89", 1.3, 1.7), (r"^SOT-?(323|363|353|563|666)", 0.45, 1.1),
     (r"^(D_)?SOD-?(123|323|523|923)", 0.4, 1.4), (r"^(D_)?(SMA|SMB|SMC)\b", 1.9, 2.7),
-    (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 0.75, 1.25), (r"^SSOP", 1.2, 2.05), (r"^(SOIC|SOP|SO-)", 1.2, 1.85),
+    (r"^(TSSOP|MSOP|VSSOP|HTSSOP|TSOP)", 0.75, 1.25), (r"^SSOP", 1.2, 2.05),
+    (r"^(SOIC|SOP|SO)-\d+W?_((?:[5-9]|1\d)(?:\.\d+)?x|L[\d.]+-W(?:[5-9]|1\d))|^SOIC-\d+W", 1.2, 3.1),   # body 5 mm+ wide (MS-013 2.65)
+    (r"^(SOIC|SOP|SO-)", 1.2, 1.85),
     (r"(QFN|DFN|[^S]SON|^SON|WSON|USON)", 0.3, 1.05), (r"^LQFP", 1.35, 1.7), (r"^TQFP", 1.0, 1.25), (r"QFP", 1.0, 4.1),
     (r"BGA", 0.4, 2.6), (r"^Crystal_SMD_(1612|2016|2520|3225|5032)", 0.35, 1.4), (r"^Crystal_SMD_HC49", 3.0, 5.0),
     (r"^USB_C_Receptacle", 2.0, 3.6), (r"^JST_SH", 1.8, 3.5), (r"^PinHeader_.*P1\.27mm", 2.0, 9.0),
@@ -93,10 +95,31 @@ def _land_size(name):
 
 
 def height_range(fp_name):
-    for rx, lo, hi in HEIGHTS:
-        if re.search(rx, fp_name or "", re.I):
-            return lo, hi, rx
-    return (*GENERIC_HEIGHT, None)
+    """(lo, hi, family regex or None) for a footprint name. A standard-table package's own height_max (the height its
+    body is built at) always sits inside the band: the family band is widened to it, never narrowed."""
+    lo, hi, fam = next(((lo, hi, rx) for rx, lo, hi in HEIGHTS if re.search(rx, fp_name or "", re.I)), (*GENERIC_HEIGHT, None))
+    std = _table_height(fp_name)
+    return (min(lo, std), max(hi, std), fam) if std else (lo, hi, fam)
+
+
+def _table_height(fp_name):
+    """The standard table's height_max (mm, the largest value) for a footprint name (`Lib:` prefix and a land variant
+    such as _ThermalVias allowed), or None."""
+    from . import stdparts as SP
+    from .footprint_gen import dim
+    name = str(fp_name or "").split(":")[-1]
+    try:
+        pk = SP.packages()
+    except (OSError, ValueError, KeyError):
+        return None
+    rec = pk.get(name) or pk.get(re.sub(r"_+$", "", SP.LAND_VARIANT.sub("", name).replace("__", "_")))
+    hm = (rec or {}).get("height_max")
+    if not hm:
+        return None
+    try:
+        return float(dim(hm)[2]) if isinstance(hm, dict) else float(hm)
+    except (TypeError, ValueError, KeyError, IndexError):
+        return None
 
 
 def _package_height(item, fp_name):
