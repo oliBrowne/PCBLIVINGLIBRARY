@@ -80,14 +80,26 @@ def third_party_var(kicad):
 def default_identifier(lib):
     """local.ecadlib.<lib>: accents folded (Bibliothèque -> Bibliotheque). A name with letters that do not fold to ASCII
     (部品, Ω) also gets a short hash of the name, so two such libraries never share one identifier (KiCad treats one
-    identifier as one package: installing the second replaced the first). ASCII names keep their identifier."""
+    identifier as one package: installing the second replaced the first). ASCII names keep their identifier. A name
+    too long for KiCad's 100 characters is cut and gets the hash too, after the cut, so two long names never meet."""
     import unicodedata
     lib = str(lib)
     folded = unicodedata.normalize("NFKD", lib).encode("ascii", "ignore").decode("ascii")
     stem = re.sub(r"[^-a-zA-Z0-9]+", "-", folded).strip("-")
-    if any(not unicodedata.normalize("NFKD", c)[:1].isascii() for c in lib if not c.isascii()):
-        stem = f"{stem}-{hashlib.sha256(lib.encode('utf-8')).hexdigest()[:8]}".strip("-")
-    return "local.ecadlib." + (stem[:80].strip("-") or "library")
+    room = 100 - len("local.ecadlib.")
+    tag = hashlib.sha256(lib.encode("utf-8")).hexdigest()[:8]
+    if any(not unicodedata.normalize("NFKD", c)[:1].isascii() for c in lib if not c.isascii()) or len(stem) > room:
+        stem = f"{stem[:room - len(tag) - 1].strip('-')}-{tag}".strip("-")
+    return "local.ecadlib." + (stem or "library")
+
+
+def reuse_identifier(out, lib):
+    """The identifier the package of library `lib` was built with before in `out` (its kicad_pcm.json), or None. A
+    rebuild keeps it, so a change of default_identifier (or a name an earlier ecadlib spelled otherwise) never makes
+    KiCad install a second package with the 3D model paths moved."""
+    old = _read(Path(out) / "kicad_pcm.json")
+    ident = old.get("identifier")
+    return ident if old.get("library") == str(lib) and isinstance(ident, str) and ID_RE.match(ident) else None
 
 
 # ---------------------------------------------------------------- file transforms
@@ -376,7 +388,7 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
     exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked)
     unchecked = bool(unchecked and Path(src).is_dir() and xrep is None)
     try:
-        identifier = identifier or default_identifier(lib)
+        identifier = identifier or reuse_identifier(out, lib) or default_identifier(lib)
         if not ID_RE.match(identifier):
             raise ValueError(f"identifier {identifier!r}: letters, digits, '-' and '.', starting with a letter (KiCad's PCM rule)")
         files = stage(exp, lib, identifier, prefix, kicad)

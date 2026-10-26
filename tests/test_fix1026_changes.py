@@ -185,3 +185,30 @@ def test_fix_changes_rpub_no_false_fix_after_librarian_refresh():
     assert "Traceback" not in out, out
     assert not [e for e in _ledger(lib)[n:] if e["event"] in ("overwritten", "hold")], out
 
+
+# ------------------------------------------------------------------ R-PUB-5: PCM identifier truncation and churn
+def test_fix_changes_rpub5_long_names_keep_distinct_identifiers():
+    from ecadlib import kicad_pcm as KP
+    a, b = "A" * 85 + "one", "A" * 85 + "two"
+    ia, ib = KP.default_identifier(a), KP.default_identifier(b)
+    assert ia != ib and KP.ID_RE.match(ia) and KP.ID_RE.match(ib), (ia, ib)
+    n1, n2 = "部" * 60 + "品", "部" * 60 + "抵"     # long non-ASCII names: the hash is never cut off
+    assert KP.default_identifier(n1) != KP.default_identifier(n2)
+    assert KP.ID_RE.match(KP.default_identifier(n1))
+    assert KP.default_identifier("mylib") == "local.ecadlib.mylib"           # short ASCII names unchanged
+
+
+def test_fix_changes_rpub5_an_existing_package_keeps_its_identifier():
+    """A package built before (kicad_pcm.json in the out folder, same library) keeps its identifier when the default
+    formula changed (Bibliothèque was local.ecadlib.Biblioth-que before upkeep-05): an upgrade must not install a
+    second KiCad package and move the 3D paths."""
+    from ecadlib import kicad_pcm as KP
+    lib = "Bibliothèque"
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        (out / "kicad_pcm.json").write_text(json.dumps({"identifier": "local.ecadlib.Biblioth-que", "library": lib}),
+                                            encoding="utf-8")
+        assert KP.reuse_identifier(out, lib) == "local.ecadlib.Biblioth-que"
+        assert KP.reuse_identifier(out, "Other") is None             # another library's record: not reused
+        (out / "kicad_pcm.json").write_text("{garbled", encoding="utf-8")
+        assert KP.reuse_identifier(out, lib) is None
