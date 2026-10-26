@@ -6,8 +6,50 @@ counterpart of the accuracy gate (`ecadlib eval gate`, 328/331 on a committed sy
 The gate is a check of the generator and the pipeline: it says the footprint is right *when the reader's answer is
 right*. This page measures the whole thing, reading included: how often ecadlib reads a real datasheet correctly.
 
-**Run of 2026-10-21** (set kicad-v1, Claude Opus 5.5 and Haiku 5.5, sources `standard,datasheet`, Message Batches, code at
-main 4f78db8, pages picked automatically):
+## Latest result: 87 of 110 parts right (79 %), none built wrong
+
+| | 2026-10-25 reads, re-scored on 10-25 (PR #194 code) |
+|---|---|
+| Right, every part | **87/110 (79 %)**: 69 match KiCad exactly, 18 follow the maker's datasheet where KiCad differs |
+| Built wrong | **0**: every one of the 87 footprints built is right; the 23 misses are parts held or not built |
+| Built from a datasheet read: right | 52 of 52 built (34 match KiCad exactly, 18 by the datasheet) |
+| Built from the standard-package table: right | 35 of 35 |
+| Pad match over the footprints built | 89.0 % (1,504 of KiCad's 1,690 pads, 87 footprints) |
+| Without the one PDF downloaded by hand | 86/109 (79 %) |
+
+**How it was measured.** The answers are the datasheet reads of a live run on 2026-10-25 (Claude Opus 5.5, zoom on,
+sources `standard,datasheet`, cap $30), which scored 77/110 and cost $25.46, plus targeted paid re-reads of AQY282GS
+($0.11) and 2ED21824S06J ($0.23, from Infineon's PDF downloaded by hand). Those saved answers were then re-scored for
+free (`--cached-only`, nothing sent) on Oliver's PC with the code of PR #194: 87/110. The later merges (#195 and
+the #196 bug hunt) were checked after every round with a free cached re-score in the cloud, which did not change.
+
+**What moved it from 77 to 87.** General product fixes after the run (the cross-check and land rules, the DO-34
+axial table entry, fewer false holds), two paid re-reads, and fairer grading: five parts where KiCad's reference
+disagrees with the datasheet are scored right, with the evidence in the errata file. Of the gains since the 2026-10-23 run (64/110), about 13 are general product fixes, 4-5 fairer grading and 2
+answer-key errata.
+
+**Read it with care.** The fixes were made while looking at these same 110 parts, so 79 % is the score on parts
+the code was tuned on. A fresh set of 30-50 parts it has never seen is the real accuracy check and has not been run
+yet. The 23 misses: 15 parts whose saved read has no cross-check (a live read would score them, BTS6143D has never
+been read), 4 reads that left a dimension blank, 2 held because the cross-check disagreed, and 2 held for another
+reason (EPM240F100 has no pin list, OPA569DWP's thermal land read as its body). None of the 23 was built.
+
+| Family | Right | Family | Right |
+|---|---|---|---|
+| chip | 10/10 | soic | 6/10 |
+| diode | 10/10 | sot | 6/10 |
+| qfp | 9/10 | tssop | 6/10 |
+| bga | 6/10 | qfn | 4/10 |
+| power | 6/10 | connector | 3/10 |
+| tht | 3/10 | | |
+
+The target in #42 is a 97 % pad match on live reads. **This is still short of it.** The sections below describe
+the earlier 2026-10-21 run in full; the method ("What was measured") is the same for both.
+
+## Run of 2026-10-21
+
+Set kicad-v1, Claude Opus 5.5 and Haiku 5.5, sources `standard,datasheet`, Message Batches, code at
+main 4f78db8, pages picked automatically:
 
 | | Opus, zoom on | Opus, default settings | Haiku 5.5, default |
 |---|---|---|---|
@@ -77,7 +119,7 @@ where the misses are.
   evidence in `ecadlib/eval/sets/kicad-v1.errata.json`: AH1806-W, whose SC59 pins 2 and 3 KiCad swaps (Diodes
   AH1806 datasheet p1-2: pin 2 GND, pin 3 OUTPUT).
 
-## By family
+## By family (2026-10-21 run)
 
 | Family | Zoom on | Default | 10-19 (Opus) | Notes |
 |---|---|---|---|---|
@@ -93,7 +135,7 @@ where the misses are.
 | qfn | 1/10 | 0/10 | 1/10 | |
 | power | 0/10 | 0/10 | 0/10 | |
 
-## Where the misses are
+## Where the misses are (2026-10-21 run)
 
 **The 15 footprints built from a datasheet that miss KiCad (zoom run)** are mostly not misread numbers: the read
 is right and the footprint is built by different rules than KiCad's.
