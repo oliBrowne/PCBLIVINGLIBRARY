@@ -3864,6 +3864,16 @@ def read_hold(res, fp_from_read=True):
     return f"{HELD_FAILED}: {'; '.join(hold[:3])[:400]}" if hold else None
 
 
+def cross_check_review(cc):
+    """Review lines for a cross-check that accepted the package but compared no pin names (a standard table match,
+    or a symbol-only read in auto): the symbol's names are the read's alone (review R-RT-2). An unchecked or
+    self-checked record already says so in its summary line."""
+    from . import crosscheck as CC
+    if not cc or cc.get("pins") != "unchecked" or cc.get("status") not in ("agreed", "skipped"):
+        return []
+    return [f"cross-check: {CC.PINS_UNCHECKED}; check the symbol's pin names against the datasheet's pin table"]
+
+
 def hold_on_doubt(inf, model, res):
     """A guided model's answer that still fails datasheet's checks is not written (the hold_on_doubt rail)."""
     from . import ds_route as DR
@@ -4543,6 +4553,8 @@ class Reader:
             res["sidecar"]["cross_check"] = res["cross_check"] = cc
             if cc["status"] in ("unchecked", "self-checked"):
                 res["needs_review"].append(f"cross-check: {CC.summary_line(cc)}")
+            else:
+                res["needs_review"] += cross_check_review(cc)
             res["needs_review"] += [f"cross-check agreed once a difference was set aside: {t}; check it on the drawing"
                                     for c in cc.get("checks") or [] for t in c.get("tie_breaks") or []]
             res["needs_review"] += [f"{INJECTION} (cross-check read): {q[:200]!r}" for c in cc.get("checks") or []

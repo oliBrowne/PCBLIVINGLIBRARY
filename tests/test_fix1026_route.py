@@ -82,3 +82,78 @@ def test_rrt3_a_second_read_that_names_no_pin_does_not_agree_on_pin_names():
     # a real difference among the few named pins is still a disagreement
     rec = CC.against_read(spec, dict(spec), read, [("1", "LED_A"), ("2", ""), ("3", ""), ("4", "")])
     assert rec["status"] == "disagreed" and any(d["field"] == "pin_names" for d in rec["disagreed"]), rec
+
+
+# ---------------------------------------------------------------- R-RT-2
+SOIC8 = {"name": "SOIC-8_3.9x4.9mm_P1.27mm", "package_type": "gullwing", "pin_count": 8, "pitch": 1.27,
+         "body_length": {"min": 4.8, "nom": 4.9, "max": 5.0}, "body_width": {"min": 3.8, "nom": 3.9, "max": 4.0},
+         "lead_span": {"min": 5.8, "nom": 6.0, "max": 6.2}, "terminal_length": 0.6, "terminal_width": 0.42}
+NAMES = ["GND", "VIN", "EN", "NC", "FB", "SW", "BST", "VOUT"]          # VIN and GND swapped: nothing compares them
+
+
+class _NoSecondRead:
+    cfg = {}
+    effort = "high"
+
+    def check_message(self, *a, **k):
+        raise AssertionError("no second read may be made in this round (a cost decision)")
+
+
+def _res(names=NAMES):
+    return {"spec": dict(SOIC8), "symbol": {"pins": [{"num": str(i + 1), "name": n} for i, n in enumerate(names)]}}
+
+
+def test_rrt2_a_standard_table_match_never_says_the_pin_names_were_checked():
+    """A strong table match accepts the read without a second read, but the table compares only dimensions: the
+    record must say the pin names were not compared, and the review must say so (no new paid read is added)."""
+    from ecadlib import crosscheck as CC
+    rec = CC.run(_NoSecondRead(), {"part": "X", "package": "SOIC-8", "fp_needed": True}, _res(), "m")
+    assert rec["status"] in ("agreed", "self-checked"), rec
+    assert rec["pins"] == "unchecked", rec
+    assert "pin names" in CC.summary_line(rec) and "not compared" in CC.summary_line(rec)
+    assert any("pin names" in ln and "not compared" in ln for ln in CC.report_md(rec))
+
+
+def test_rrt2_a_symbol_only_read_skipped_in_auto_marks_its_pin_names_unchecked():
+    from ecadlib import crosscheck as CC
+    rec = CC.run(_NoSecondRead(), {"part": "X", "package": "SOT-23", "fp_needed": False}, _res(["G", "S", "D"]), "m")
+    assert rec["status"] == "skipped" and rec["pins"] == "unchecked", rec
+    assert "pin names" in CC.summary_line(rec)
+
+
+def test_rrt2_pins_are_agreed_only_when_a_second_read_named_them():
+    from ecadlib import crosscheck as CC
+    first = CC.critical(SOIC8)
+    pins = [(str(i + 1), n) for i, n in enumerate(NAMES)]
+
+    class Second(_NoSecondRead):
+        def __init__(self, other):
+            self.other, self.cfg = other, {"cross_check": "always"}
+
+    import ecadlib.crosscheck as M
+    for other, want in ((pins, "agreed"), ([(n, "") for n, _ in pins], "unchecked")):
+        orig = M.second_read
+        M.second_read = lambda reader, job, f, fp, model, other=other: dict(
+            M.against_read(f, dict(f), fp, other), source="second read", against="second read (m)", model="m")
+        try:
+            rec = CC.run(Second(other), {"part": "X", "package": "SOIC-8", "fp_needed": True}, _res(), "m")
+        finally:
+            M.second_read = orig
+        assert rec["pins"] == want, (want, rec)
+
+
+@lite
+def test_rrt2_the_read_review_and_the_librarian_record_say_the_pin_names_are_unchecked(tmp_path, monkeypatch):
+    """datasheet: a cross-check that 'agreed' on the package but compared no pin names puts a review line on the read;
+    the librarian keeps pins: unchecked with the part's cross-check record."""
+    from ecadlib import crosscheck as CC, datasheet as D
+    rec = {"mode": "auto", "status": "agreed", "pins": "unchecked", "checks": []}
+    lines = D.cross_check_review(rec)
+    assert any("pin names" in ln and "not compared" in ln for ln in lines), lines
+    from ecadlib import ds_route as DR
+    for ln in lines:                                  # a review note, never a failed or incomplete check
+        assert not DR.FAILED.search(ln) and not DR.INCOMPLETE.search(ln), ln
+    assert D.cross_check_review({"mode": "auto", "status": "agreed", "pins": "agreed", "checks": []}) == []
+    from ecadlib import librarian as L
+    assert L.cross_check_state(rec) == {"status": "agreed", "summary": CC.summary_line(rec), "pins": "unchecked"}
+    assert "pins" not in L.cross_check_state(dict(rec, pins="agreed"))

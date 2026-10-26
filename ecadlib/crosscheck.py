@@ -748,10 +748,13 @@ def run(reader, job, res, model):
     mode = mode_of(reader.cfg)
     if mode == "off":
         return None
+    first_pins = [(p["num"], p["name"]) for p in ((res.get("symbol") or {}).get("pins") or [])]
     if mode == "auto" and job.get("fp_needed") is False:
-        return {"mode": mode, "status": "skipped", "why": "the footprint comes from another source", "checks": []}
+        out = {"mode": mode, "status": "skipped", "why": "the footprint comes from another source", "checks": []}
+        if first_pins:                                # the symbol is still the read's own: its names are unchecked
+            out["pins"] = "unchecked"
+        return out
     first = critical(res["spec"])
-    first_pins = [(p["num"], p["name"]) for p in res["symbol"].get("pins") or []]
     checks = [against_table(first, n, where) for where, n in standard_matches(job.get("package"), res["spec"].get("name"))]
     strong = [c for c in checks if len(c["compared"]) >= 2]
     held = None if checks else held_anyway(reader, job, res)
@@ -771,9 +774,25 @@ def run(reader, job, res, model):
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
         else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) else "unchecked"
     out = {"mode": mode, "status": status, "checks": checks}
+    if first_pins:
+        out["pins"] = pins_status(checks)
     if standard:
         out["standard"] = standard
     return out
+
+
+def pins_status(checks):
+    """agreed | disagreed | unchecked for the symbol's pin names. Only a second read that named the pins compares
+    them: a standard table compares the package's dimensions, never its pin names, so a part accepted on the table
+    alone (or a symbol-only read, which auto does not read again) has its pin names unchecked, whatever the status of
+    the package says (review R-RT-2). No second read is added for them here: that is a paid read."""
+    reads = [c for c in checks if c.get("source") == "second read"]
+    if any(d["field"] in ("pins", "pin_names") for c in reads for d in c.get("disagreed") or []):
+        return "disagreed"
+    return "agreed" if any("pin_names" in (c.get("agreed") or []) for c in reads) else "unchecked"
+
+
+PINS_UNCHECKED = "pin names not compared with any second source (only the package was checked)"
 
 
 SWAPPED = "the same with length and width swapped"
@@ -894,8 +913,9 @@ def summary_line(rec):
     """One line for review lists: what was compared with what, and every value on both sides."""
     if not rec:
         return "not cross-checked"
+    tail = f"; {PINS_UNCHECKED}" if rec.get("pins") == "unchecked" else ""
     if rec["status"] == "skipped":
-        return f"not cross-checked ({rec.get('why')})"
+        return f"not cross-checked ({rec.get('why')})" + tail
     parts = []
     for c in rec.get("checks") or []:
         if c["status"] == "disagreed":
@@ -910,7 +930,7 @@ def summary_line(rec):
                          + "".join(f"; set aside: {t}" for t in c.get("tie_breaks") or []))
         else:
             parts.append(f"{c['against']}: not checked ({c.get('why') or 'nothing to compare'})")
-    return "; ".join(parts)
+    return "; ".join(parts) + tail
 
 
 def report_md(rec):
@@ -920,8 +940,10 @@ def report_md(rec):
     word = {"agreed": "agreed", "disagreed": "disagreed, the part is held", "unchecked": "could not be made",
             "self-checked": "self-checked only (no independent second source)", "skipped": "not needed"}.get(rec["status"], rec["status"])
     out = ["", f"## Cross-check: {word}", "", f"Setting: [datasheet] cross_check = {rec['mode']}", ""]
+    pins = ["", f"Symbol pin names: {PINS_UNCHECKED}. **Check them against the datasheet's pin table.**"] \
+        if rec.get("pins") == "unchecked" else []
     if rec["status"] == "skipped":
-        return out + [rec.get("why") or ""]
+        return out + [rec.get("why") or ""] + pins
     for c in rec.get("checks") or []:
         out.append(f"* **{c['against']}** ({c['source']}{', ' + c['via'] if c.get('via') and c['source'] == 'standard table' else ''}"
                    f"{', ' + c['pages'] if c.get('pages') else ''}): "
@@ -935,6 +957,7 @@ def report_md(rec):
         if c.get("agreed"):
             out.append(f"  agreed: {', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}")
         out += [f"  set aside: {t}" for t in c.get("tie_breaks") or []]
+    out += pins
     if rec["status"] == "self-checked":
         out += ["", "**Next:** the BOM names no package the standard table knows, so nothing independent confirmed this "
                 "read. Compare the drawing by hand, put the package in the BOM, or set [datasheet] cross_check = \"always\"."]

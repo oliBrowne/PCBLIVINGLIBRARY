@@ -1042,13 +1042,23 @@ class Run:
                               if rt.get("model") else ""))
         cc = res.get("cross_check")
         if cc:
-            st["cross_check"] = {"status": cc["status"], "summary": CC.summary_line(cc)}
+            st["cross_check"] = cross_check_state(cc)
             st["tried"].append(f"cross-check ({cc['mode']}): {cc['status']}: {CC.summary_line(cc)}")
         if url:                                       # (a PDF from the [datasheet] folder of a line with no link has none)
             st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
         st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                             "see datasheet/*.review.md"
                             + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+
+
+def cross_check_state(cc):
+    """The part's cross-check record in the plan: status and summary, and pins: unchecked when no second source
+    compared the symbol's pin names (crosscheck.pins_status, review R-RT-2)."""
+    from . import crosscheck as CC
+    out = {"status": cc["status"], "summary": CC.summary_line(cc)}
+    if cc.get("pins") == "unchecked":
+        out["pins"] = "unchecked"
+    return out
 
 
 def kicad_chain_types(chain, pin_map=None):
