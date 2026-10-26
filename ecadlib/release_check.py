@@ -545,9 +545,14 @@ def publish_problems(item, base=".", rules=None, writes_files=False, policy=None
     fails, _, _ = check_item(item, base, rules)
     covered = set((item.get("allow") or {}).get("failures", []))
     out = [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
-    from .approvals import push_block          # sign-off, checked again on the files as they are now, for every
-    block = push_block(item, policy, base)     # route (kicad-export, dblib-sync, ...), not only the Altium 365 push;
-                                               # policy: the caller's explicit policy ({} = none), as push_block
+    from .approvals import load_policy, policy_file, push_block   # sign-off, checked again on the files as they
+    if policy is None:                         # are now, for every route (kicad-export, dblib-sync, ...), not only the
+        try:                                   # Altium 365 push. policy: the caller's explicit policy ({} = none), as
+            policy = load_policy(base)         # push_block; None = the policy in force now (approvals.json beside the
+        except Exception as e:                 # plan, else [release.approvals]), as the Altium 365 push loads it: one
+            where = policy_file(base) or "ecadlib.toml [release.approvals]"   # added after the release check
+            return out + [f"sign-off: the approval policy {where} cannot be read ({e}): fix it, then publish again"]
+    block = push_block(item, policy, base)     # holds here too. No policy now: the release check's snapshot decides
     return out + ([f"sign-off: {block}"] if block else [])
 
 

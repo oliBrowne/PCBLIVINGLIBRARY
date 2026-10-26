@@ -121,6 +121,37 @@ def test_fx11_3_v1_release_check_snapshot_upgraded(tmp_path):
     assert "changed since the release check" in (AP.push_block(it, pol, tmp_path) or ""), AP.push_block(it, pol, tmp_path)
 
 
+# ---- R-FX11-4: every publisher checks the sign-off policy in force now, not only the release check's snapshot
+@lite
+def test_fx11_4_policy_added_after_release_check_holds_kicad_export(tmp_path):
+    import contextlib, io
+    from ecadlib import kicad_export as KE, release_check as RC
+    from tests.test_release_check import make
+    d = tmp_path
+    it = make(d)
+    RC.apply([it], d)
+    assert it["status"] == "ready"
+    (d / "approvals.json").write_text(json.dumps({"required": 1}))
+    why = RC.publish_problems(it, d, writes_files=True)
+    assert any(w.startswith("sign-off: awaiting approval") for w in why), why
+    assert RC.publish_problems(it, d, writes_files=True, policy={}) == []      # an explicit "no policy" still wins
+    (d / "plan.json").write_text(json.dumps([it], indent=2))
+    with contextlib.redirect_stdout(io.StringIO()):
+        rep = KE.export(str(d / "plan.json"), str(d / "kicad"), "lib", log=lambda *a, **k: None)
+    assert not rep["parts"] and [s["part"] for s in rep["skipped"]] == ["PART1"], rep
+
+
+@lite
+def test_fx11_4_unreadable_policy_holds(tmp_path):
+    from ecadlib import release_check as RC
+    from tests.test_release_check import make
+    it = make(tmp_path)
+    RC.apply([it], tmp_path)
+    (tmp_path / "approvals.json").write_text("{not json")
+    why = RC.publish_problems(it, tmp_path, writes_files=True)
+    assert any(w.startswith("sign-off:") and "approvals.json" in w for w in why), why
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
