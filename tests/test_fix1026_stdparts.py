@@ -100,6 +100,20 @@ def test_family_fallback_keeps_the_family_names_it_is_for():
         assert S.resolve(texts, kind, mpn, "")["footprint"] is None, (texts, S.resolve(texts, kind, mpn, ""))
 
 
+def test_family_fallback_takes_lead_count_suffixes_again():
+    """R-FX5-7: R-SP-2's anchoring held SOT-223-3L, TO-220-3L, TO-220AB-3, SOT-23_3L, TO-261-4, TO-92A / TO-92AP, and
+    any 'shunt' / 'filter' word in a transistor's description; they resolve as before R-SP-2."""
+    from ecadlib import stdparts as S
+    for text, kind, mpn, want in (("SOT-223-3L", "U", "AMS1117-3.3", "SOT-223-3_TabPin2"),
+                                  ("TO-261-4", "U", "AMS1117-3.3", "SOT-223-3_TabPin2"),
+                                  ("TO-220-3L", "U", "L7805CV", "TO-220-3_Vertical"),
+                                  ("TO-220AB-3", "U", "L7805CV", "TO-220-3_Vertical"),
+                                  ("SOT-23_3L", "Q", "MMBT3904", "SOT-23"), ("TO-92A", "Q", "2N3904", "TO-92_Inline"),
+                                  ("TO-92AP", "Q", "2N3904", "TO-92_Inline"), ("SOT-89-3L", "U", "78L05", "SOT-89-3")):
+        assert S.resolve([text], kind, mpn, "")["footprint"] == want, (text, S.resolve([text], kind, mpn, ""))
+    assert S.resolve([""], "Q", "2N7002", "MOSFET N-CH 60V SOT-23 shunt")["footprint"] == "SOT-23"
+
+
 def test_library_prefixed_to92_is_kicads_own_land():
     """'Package_TO_SOT_THT:TO-92' names KiCad's TO-92 footprint (not the table's TO-92_Inline); bare 'TO-92' is the
     package name and keeps meaning the inline land."""

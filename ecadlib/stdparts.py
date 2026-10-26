@@ -982,9 +982,11 @@ FAMILY = [
     (r"^(L|LM|MC|UA|KA)?78L\d\d", ("TO-92_Inline", "SOT-89-3"), ("REG", "78L")),
 ]
 # anchored at the token end: 'SOT-23W', 'TO-92Mini-2', 'TO-92_Wide', 'SOT-223-5' are other lands, not the family's
-FAMILY_PKG = {"SOT-23": r"\bSOT-?23(?![-\w])", "TO-92_Inline": r"\bTO-?92(?![-\w])",
-              "SOT-223-3_TabPin2": r"\bSOT-?223(?:-[34])?(?![-\w])|\bTO-?261(?:AA)?(?![-\w])",
-              "TO-220-3_Vertical": r"\bTO-?220(?:AB|-3)?(?![-\w])", "SOT-89-3": r"\bSOT-?89(?:-3)?(?![-\w])"}
+# (lead-count suffixes of the family's own land: SOT-223-3L, TO-220AB-3, SOT-23_3L, TO-261-4; TO-92A / TO-92AP are
+# makers' names for the inline TO-92)
+FAMILY_PKG = {"SOT-23": r"\bSOT-?23(?:_3L?)?(?:_TR)?(?![-\w])", "TO-92_Inline": r"\bTO-?92(?:AP?)?(?![-\w])",
+              "SOT-223-3_TabPin2": r"\bSOT-?223(?:-[34]L?)?(?![-\w])|\bTO-?261(?:AA)?(?:-[34])?(?![-\w])",
+              "TO-220-3_Vertical": r"\bTO-?220(?:AB)?(?:-3L?)?(?![-\w])", "SOT-89-3": r"\bSOT-?89(?:-3L?)?(?![-\w])"}
 PNP_RE = re.compile(r"^(2N3906|2N2907|2N4403|2N5401|BC3[2]7|BC55[6-9]|BC560)")
 
 
@@ -1148,7 +1150,7 @@ def resolve(texts, kind=None, mpn="", description=""):
         said = " ".join(map(str, texts)) + " " + str(description)
         hit = [p for p in fam if re.search(FAMILY_PKG[p], said, re.I)]
         if len(hit) == 1 and not POWER_PKG.search(said) and not NO_GO.search(said) and not LAND_VARIANT.search(said) \
-                and not EP_WORD.search(said) and not NOT_CHIP.search(said) \
+                and not EP_WORD.search(said) and not any(NOT_CHIP.search(str(x or "")) for x in texts) \
                 and not (hit[0].startswith("TO-92") and NO_GO_TO92.search(said)) and not _names_other_land(texts, hit[0]):
             name, how = hit[0], f"{mpn}: its family comes in {hit[0]} (named as {re.search(FAMILY_PKG[hit[0]], said, re.I).group(0)})"
     sym, sym_how = symbol_kind(kind, mpn, name, description) if (name or kind in ("R", "C", "CP", "L", "LED")) else (None, "no standard package")
