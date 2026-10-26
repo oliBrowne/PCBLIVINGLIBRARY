@@ -123,3 +123,31 @@ def test_fix2_rrc1_an_edit_saved_while_a_release_is_recorded_is_not_released_unc
     head = LG.Ledger(lib).head("CAP-0402-100nF")
     assert head["files"]["kicad_mod"]["sha256"] != edit_sha, head.get("classes")
 
+
+# ------------------------------------------------------------------ R-RC-2: kicad-export ships what the gate checked
+@lite
+def test_fix2_rrc2_kicad_export_ships_the_released_footprint_not_an_edit_saved_meanwhile(tmp_path, monkeypatch):
+    """A hand edit of the CAP-0402 .kicad_mod (pads 0.40 mm) saved after publish_guard settled the library and the
+    export checked the part again was copied into the export and recorded as the released revision. The export now ships the
+    released revision's bytes and says the file changed while it ran."""
+    import re
+    from ecadlib import kicad_export as KX, release_check as RC
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    w, lib = _demo()
+    plan = lib / "plan.json"
+    f = lib / "models" / "KiCad" / "C_0402_1005Metric.kicad_mod"
+    orig = f.read_text(encoding="utf-8")
+    edit = re.sub(r"\(size [\d.]+ 0\.62\)", "(size 0.40 0.62)", orig)
+    assert edit != orig
+    real = RC.publish_problems
+
+    def checked(it, *a, **k):
+        out = real(it, *a, **k)
+        if it.get("name") == "CAP-0402-100nF":       # checked; the person saves now (an editor takes no lock)
+            f.write_text(edit, encoding="utf-8")
+        return out
+    monkeypatch.setattr(RC, "publish_problems", checked)
+    rep = KX.export(plan, w / "kx", "ecadlib", log=lambda *a, **k: None)
+    shipped = (w / "kx" / "ecadlib.pretty" / "C_0402_1005Metric.kicad_mod").read_text(encoding="utf-8")
+    assert "(size 0.40 0.62)" not in shipped, "the hand edit saved during the export was shipped"
+    assert any("changed while" in x for x in rep["warnings"]), rep["warnings"]

@@ -1119,7 +1119,40 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         """The footprint's .kicad_mod text (its own, or its .PcbLib entry converted back) and where it came from."""
         kmod = RC._kicad_mod(it, plan_dir, RC._path(plan_dir, it["footprint"].get("file")))
         if kmod:
-            return kmod.read_text(encoding="utf-8"), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
+            data = released_bytes(it, kmod)
+            return data.decode("utf-8"), f"{kmod.relative_to(plan_dir) if kmod.is_relative_to(plan_dir) else kmod}"
+
+    from . import ledger as LG
+    ledger = LG.Ledger(plan_dir)
+
+    def released_bytes(it, path):
+        """The file's bytes as the released revision has them. publish_guard settled the library (a held edit put
+        back), but an editor saving now takes no lock: bytes that are not the head's are an edit saved while this
+        export ran, so the head's own copy from the blob store goes out instead (the next writer settles the edit)."""
+        data = path.read_bytes()
+        head = ledger.head(it["name"]) if it.get("status") != "held" else None
+        for r in ((head or {}).get("files") or {}).values():
+            p = Path(r["path"]) if Path(r["path"]).is_absolute() else plan_dir / r["path"]
+            if p.resolve() == path.resolve() and LG.sha_bytes(data) != r.get("sha256"):
+                try:
+                    kept = ledger.get_bytes(r["sha256"])
+                except Exception:              # no copy to send: the edit is not shipped either
+                    raise ValueError(f"{path.name} changed while the export ran and the released copy is missing")
+                if FP_same(kept, data):        # the same content, other bytes (a re-save): nothing to say
+                    return data
+                rep["warnings"].append(f"{it['name']}: {path.name} changed while the export ran (an edit saved "
+                                       f"meanwhile); the released revision r{head['revision']} was exported, the "
+                                       f"edit is settled by the next ecadlib run")
+                return kept
+        return data
+
+    def FP_same(a, b):
+        """Two .kicad_mod files that fingerprint the same (pads, art, 3D model): one is a re-save of the other."""
+        from .fingerprint import kicad_footprint
+        try:
+            return a == b or kicad_footprint(a.decode("utf-8")) == kicad_footprint(b.decode("utf-8"))
+        except Exception:
+            return False
         return (footprint_from_pcblib(plan_dir / it["footprint"]["file"], fpn, fnotes, pick=it["footprint"].get("ref"),
                                       rules=rules), f"{it['footprint']['file']} converted back")
     for it in items:
