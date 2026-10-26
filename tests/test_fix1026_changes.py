@@ -430,3 +430,24 @@ def test_fix_changes_2e_a_command_line_run_holding_the_lock_queues_and_keeps_ui_
 
 
 WAITING_TEXT = "waiting for the librarian run to finish"
+
+
+# ------------------------------------------------------------------ R-E2E-3: upkeep's change-control row
+def test_fix_changes_re2e3_upkeep_row_says_a_hand_edit_was_found():
+    """`upkeep --checks changes` found a hand edit of a released part but its report row said "ok" and its notes named
+    no part. The row now asks for attention and names the edited parts, on every run until it is settled; the state
+    is still saved (each edit is a new change once)."""
+    w, lib = _demo()
+    args = ("upkeep", lib / "plan.json", "--checks", "changes", "--state", "st", "-o", "up")
+    k = lib / "models/KiCad/R_0603_1608Metric.kicad_mod"
+    k.write_text(k.read_text(encoding="utf-8").replace("(size 0.8 0.95)", "(size 1.8 0.95)", 1), encoding="utf-8")
+    for n in (1, 2):
+        r = _run(w, *args)
+        assert r.returncode == (1 if n == 1 else 0), r.stdout + r.stderr
+        rep = json.loads((w / "up.json").read_text(encoding="utf-8"))
+        sec = next(s for s in rep["checks"] if s["check"] == "changes")
+        assert sec["status"] == "attention", sec
+        assert "RES-0603-10k" in sec["reason"] and "not settled" in sec["reason"], sec["reason"]
+        row = next(x for x in (w / "up.md").read_text(encoding="utf-8").splitlines() if x.startswith("| Change control"))
+        assert "| attention" in row and "RES-0603-10k" in row, row
+        assert len(sec["changes"]) == (2 if n == 1 else 0), sec["changes"]     # new once (state saved)
