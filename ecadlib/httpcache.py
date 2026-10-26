@@ -67,10 +67,12 @@ def page_not_data(url, text):
 def api_url(url):
     """An API (JSON) endpoint: api.<host>, /api/, /graphql or a .json file. An HTML 404 there is a proxy or captive
     portal's page, never the API's own answer. A raw library file (GitLab /-/raw/, .kicad_mod, .step) is not one: its
-    host answers a missing file with its own HTML 404 page, a real "not there" that is cached (R-FX13-3)."""
+    host answers a missing file with its own HTML 404 page, a real "not there" that is cached (R-FX13-3).
+    A DATA_HOSTS host (EasyEDA's model host) serves only data too: an HTML 404 there is a portal's (R-FX16-5)."""
     u = urlparse(url)
     host, path = u.netloc.lower(), u.path.lower()
-    return host.startswith("api.") or "/api/" in path + "/" or path.endswith("/graphql") or path.endswith(".json")
+    return host.startswith("api.") or host in DATA_HOSTS or "/api/" in path + "/" or path.endswith("/graphql") \
+        or path.endswith(".json")
 
 
 # A download that may work on a later try: a timeout, a dropped or reset connection (not a TLS or proxy refusal,

@@ -162,3 +162,26 @@ def test_a_page_whose_pdf_opens_as_a_change_notice_is_not_the_datasheet():
         http = Scripted({_B: [(200, page, {})], "https://www.maker.com/ds/lm358.pdf": [good]})
         data, meta = D.PdfStore(d, http, sleep=lambda s: None).fetch(_B, "BOM", part="LM358DR", mpn="LM358DR")
         assert data == good and meta["page_url"] == _B, meta
+
+
+# ---------------------------------------------------------------- R-FX16-5: a portal 404 for EasyEDA's model host
+class _R:
+    def __init__(self, status, text):
+        self.status_code, self.text, self.ok, self.headers = status, text, 200 <= status < 300, {}
+        self.content = text.encode()
+
+
+@lite
+def test_a_portal_404_page_for_the_easyeda_model_host_is_not_cached(tmp_path, monkeypatch):
+    from ecadlib import easyeda_3d as E3, httpcache as H
+    n = []
+    portal = "<!DOCTYPE html><html><body>Blocked by proxy policy</body></html>"
+    h = H.CachedHTTP(tmp_path / "c", min_interval=0)
+    monkeypatch.setattr(h.s, "request", lambda *a, **k: n.append(1) or _R(404, portal))
+    url = E3.STEP_URL.format("0123456789abcdef0123456789abcdef")
+    assert h.get(url).status == 404
+    assert not h.get(url).from_cache and len(n) == 2, "a captive portal's 404 was cached for the STEP host"
+    # a raw file host's own 404 page is still cached (R-FX13-3)
+    u = "https://gitlab.com/kicad/libraries/kicad-symbols/-/raw/master/Device.kicad_sym"
+    h.get(u)
+    assert h.get(u).from_cache
