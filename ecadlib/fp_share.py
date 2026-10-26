@@ -26,13 +26,78 @@ from . import altium_lib as AL, sexpr
 
 
 def digest(text):
-    """Geometry hash of a .kicad_mod: dedupe's footprint hash (pads, shapes, holes, courtyard); a text hash when it has no pads."""
+    """Geometry hash of a .kicad_mod: dedupe's footprint hash (pads, shapes, holes, courtyard), plus what that leaves
+    out but the board gets (extra(): custom-pad copper, paste / mask windows, the copper side, copper graphics); a
+    text hash when it has no pads."""
     from . import dedupe as DD
     try:
         h = DD.fp_hash(DD.fp_geometry_kicad(text))
+        more = extra(text) if h else []
+        if more:                               # only then: a plain footprint keeps the hash workspaces recorded
+            h = DD._digest([h] + more)
     except Exception:                          # unparsable: only an identical file is "the same"
         h = None
     return h or "text:" + hashlib.sha256(str(text).encode()).hexdigest()[:16]
+
+
+_PRIM_PTS = ("start", "end", "center", "mid")
+
+
+def _shape_key(g):
+    """A graphic (pad primitive or fp_* item) as a sortable list: its kind, layer, points (0.01 mm), width, fill."""
+    from . import dedupe as DD
+    q = lambda v: round(DD._q(float(v)), 2)
+    pts = [[k, q(c[1]), q(c[2])] for k in _PRIM_PTS for c in [sexpr.first(g, k)] if c and len(c) > 2]
+    pts += [[q(p[1]), q(p[2])] for p in sexpr.find(sexpr.first(g, "pts") or [], "xy")]
+    w = sexpr.first(g, "width") or (sexpr.first(sexpr.first(g, "stroke") or [], "width"))
+    fill = sexpr.first(g, "fill")
+    return [str(g[0]), str((sexpr.first(g, "layer") or [None, ""])[1]), pts, q(w[1]) if w else 0,
+            str(fill[1]) if fill and len(fill) > 1 else ""]
+
+
+def extra(text):
+    """What dedupe's pad hash leaves out of a .kicad_mod but a board gets: a custom pad's copper primitives, a copper
+    pad without the usual paste / mask opening (or with paste / mask margins), paste- or mask-only apertures, a pad
+    on the bottom copper, and copper / paste / mask graphics. Sorted; empty for a plain footprint."""
+    from . import dedupe as DD
+    t = sexpr.parse(text)
+    out = []
+    num = lambda v: round(float(v), 4)
+    for k in ("solder_paste_margin", "solder_paste_margin_ratio", "solder_paste_ratio", "solder_mask_margin"):
+        v = sexpr.first(t, k)
+        if v and len(v) > 1 and float(v[1]):
+            out.append(["fp", k, num(v[1])])
+    for p in sexpr.find(t, "pad"):
+        if len(p) < 4 or p[2] == "np_thru_hole":
+            continue
+        layers = [str(x) for x in (sexpr.first(p, "layers") or ["layers"])[1:]]
+        cu = [x for x in layers if x.endswith(".Cu")]
+        paste = any(x.endswith(".Paste") for x in layers)
+        mask = any(x.endswith(".Mask") for x in layers)
+        if not cu:                             # a paste- or mask-only aperture: a window the pad hash drops
+            at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
+            w, h = float(size[1]), float(size[2] if len(size) > 2 else size[1])
+            out.append(["aperture", sorted(layers), str(p[3]),
+                        list(DD._pad_tuple("", float(at[1]), -float(at[2]), w, h, float(at[3]) if len(at) > 3 else 0.0, False))])
+            continue
+        n = str(p[1])
+        if p[2] == "smd" and cu != ["F.Cu"]:
+            out.append(["side", n, sorted(cu)])
+        if (paste, mask) != (p[2] == "smd", True):
+            out.append(["openings", n, paste, mask])
+        for k in ("solder_paste_margin", "solder_paste_margin_ratio", "solder_mask_margin"):
+            v = sexpr.first(p, k)
+            if v and len(v) > 1 and float(v[1]):
+                out.append(["margin", n, k, num(v[1])])
+        if p[3] == "custom":
+            prims = sexpr.first(p, "primitives") or []
+            out.append(["custom", n, sorted(_shape_key(g) for g in prims[1:] if isinstance(g, list))])
+    for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
+        for g in sexpr.find(t, kind):
+            lay = str((sexpr.first(g, "layer") or [None, ""])[1])
+            if lay.endswith((".Cu", ".Paste", ".Mask")):
+                out.append(["graphic", _shape_key(g)])
+    return sorted(out, key=lambda e: repr(e))
 
 
 def real_name(text, source=""):

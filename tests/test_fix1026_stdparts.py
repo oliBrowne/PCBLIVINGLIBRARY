@@ -123,3 +123,49 @@ def test_samsung_rc_resistor_size_is_metric_not_yageo_imperial():
     for mpn, size in (("RC0603FR-0710KL", "0603"), ("RC0402JR-071KL", "0402"), ("RT0603BRD0710KL", "0603"),
                       ("AC0805FR-0710KL", "0805"), ("RL1206FR-070R1L", "1206"), ("AF0402FR-0710KL", "0402")):
         assert S.mpn_size(mpn) == ("R", size), mpn
+
+
+# --- R-SP-4: fp_share compares custom-pad copper, paste / mask windows and the copper side ------------------------
+
+def _qfn(ep_pad, extra=""):
+    leads = "\n".join(f'  (pad "{i + 1}" smd rect (at -1.5 {-0.75 + 0.5 * i:g}) (size 0.8 0.3) (layers "F.Cu" "F.Paste" "F.Mask"))'
+                      for i in range(4))
+    return (f'(footprint "QFN-X" (layer "F.Cu")\n  (fp_rect (start -2 -2) (end 2 2) (stroke (width 0.05) (type solid)) '
+            f'(fill none) (layer "F.CrtYd"))\n{leads}\n{ep_pad}\n{extra})')
+
+
+EP_FULL = _qfn('  (pad "5" smd rect (at 0 0) (size 1.7 1.7) (layers "F.Cu" "F.Paste" "F.Mask"))')
+EP_WINDOWS = _qfn('  (pad "5" smd rect (at 0 0) (size 1.7 1.7) (layers "F.Cu" "F.Mask"))',
+                  "\n".join(f'  (pad "" smd rect (at {x:g} {y:g}) (size 0.6 0.6) (layers "F.Paste"))'
+                            for x in (-0.45, 0.45) for y in (-0.45, 0.45)))
+EP_NOPASTE = _qfn('  (pad "5" smd rect (at 0 0) (size 1.7 1.7) (layers "F.Cu" "F.Mask"))')
+_CUST = ('  (pad "5" smd custom (at 0 0) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask") (options (clearance outline) '
+         '(anchor rect)) (primitives (gr_poly (pts {pts}) (width 0) (fill yes))))')
+EP_CUST_SQUARE = _qfn(_CUST.format(pts="(xy -0.85 -0.85) (xy 0.85 -0.85) (xy 0.85 0.85) (xy -0.85 0.85)"))
+EP_CUST_BAR = _qfn(_CUST.format(pts="(xy -0.2 -1.5) (xy 0.2 -1.5) (xy 0.2 1.5) (xy -0.2 1.5)"))
+EP_BOTTOM = EP_FULL.replace('(pad "5" smd rect (at 0 0) (size 1.7 1.7) (layers "F.Cu" "F.Paste" "F.Mask"))',
+                            '(pad "5" smd rect (at 0 0) (size 1.7 1.7) (layers "B.Cu" "B.Paste" "B.Mask"))')
+
+
+def test_fp_share_digest_sees_custom_copper_paste_and_side():
+    from ecadlib import fp_share as FS
+    d = {k: FS.digest(v) for k, v in dict(full=EP_FULL, windows=EP_WINDOWS, nopaste=EP_NOPASTE, square=EP_CUST_SQUARE,
+                                          bar=EP_CUST_BAR, bottom=EP_BOTTOM).items()}
+    assert len(set(d.values())) == len(d), d
+    assert FS.digest(EP_CUST_BAR) == FS.digest(EP_CUST_BAR.replace("(xy -0.2 -1.5)", "(xy -0.200001 -1.5)"))
+
+
+def test_fp_share_digest_of_a_plain_footprint_is_unchanged():
+    """Footprints with nothing of the above keep the hash workspaces already recorded (so a re-run shares again)."""
+    from ecadlib import dedupe as DD, fp_share as FS
+    assert FS.digest(EP_FULL) == DD.fp_hash(DD.fp_geometry_kicad(EP_FULL))
+
+
+@lite
+def test_fp_share_pick_gives_a_part_with_other_paste_its_own_file(tmp_path):
+    from ecadlib import fp_share as FS
+    (tmp_path / "a.kicad_mod").write_text(EP_FULL)
+    written = {str(tmp_path / "models/PcbLib/QFN-16.PcbLib"): {"file": "models/PcbLib/QFN-16.PcbLib", "kicad_mod": "a.kicad_mod",
+               "name": "QFN-16", "hash": FS.digest(EP_FULL), "source": "datasheet", "by": "PARTA"}}
+    got = FS.pick(written, tmp_path / "models", "QFN-16", EP_WINDOWS, "datasheet", "PARTB", tmp_path, {})
+    assert got[0] != "QFN-16", got
