@@ -129,6 +129,24 @@ def test_03_rough_estimate_counts_zoom_images_and_a_feedback_answer(tmp_path, mo
     assert D.rough_extra_tokens(plain["body"]) == 0          # an ordinary request: priced as before
 
 
+# ---------------------------------------------------------------- costfetch-04: the web search's hold
+def test_04_search_hold_grows_with_max_uses_and_takes_the_long_prompt_price():
+    """ds_search.estimate held 90K input tokens at the base price whatever web_search_max_uses said (up to 10): ten
+    searches read ~300K tokens, and Haiku 5.5 (the default search model) bills 5x over 100K, so one search could be
+    billed several times its hold."""
+    from ecadlib import ds_route as DR, ds_search as WS
+    for model in ("claude-haiku-5-5", "claude-opus-5-5"):
+        for uses in (1, 3, 4, 10):
+            tin = WS.EST_TOKENS[0] * max(1, uses / WS.MAX_USES)
+            usage = {"input_tokens": int(tin), "output_tokens": WS.MAX_TOKENS}
+            billed = DR.usage_usd(model, usage) + WS.SEARCH_USD * uses
+            assert WS.estimate(model, uses) >= billed - 1e-9, (model, uses, WS.estimate(model, uses), billed)
+    assert abs(WS.estimate("claude-haiku-5-5", 3) - ((90000 * 0.10 + 4096 * 0.50) / 1e6 + 0.03)) < 1e-12   # unchanged
+    turn = {"usage": {"input_tokens": 95000, "output_tokens": 500}}
+    nxt = WS.next_turn("claude-haiku-5-5", [turn])
+    assert nxt >= DR.usage_usd("claude-haiku-5-5", {"input_tokens": 95500 + 90000, "output_tokens": 4096}), nxt
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
