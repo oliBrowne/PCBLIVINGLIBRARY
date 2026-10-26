@@ -152,3 +152,56 @@ def test_component_made_by_hand_in_the_workspace_is_released_from_the_head_not_r
     assert [c for c in nx.calls if c[0] == "release" and c[1] == "AO3401A"], nx.calls
     assert len(nx.comps["AO3401A"]["revisions"]) == 2
     assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["revision"] == 1
+
+
+# ---------------------------------------------------------------- R-AM-3: pick_named and parts named like a revision
+def _node(name, params):
+    return {"id": "ID-" + name, "name": name, "revision": {"revisionId": "R1"},
+            "details": {"parameters": [{"name": k, "value": v} for k, v in params.items()]}}
+
+
+def test_pick_named_only_takes_the_revision_form_and_reads_house_mpn_names():
+    from ecadlib import altium365 as A, rules as RU
+    house = RU.load({"parameters": {"names": {"Manufacturer Part Number": "MfrPN"}}})
+    # "-04" (leading zero) is no revision Altium names: another part
+    assert A.pick_named([_node("BAT54-04", {"Description": "dual series Schottky"})], "BAT54") is None
+    # its MPN under a house name says it is another part, with the rules or without them
+    assert A.pick_named([_node("BAV99-7", {"MfrPN": "BAV99-7"})], "BAV99", rules=house) is None
+    assert A.pick_named([_node("BAV99-7", {"MfrPN": "BAV99-7"})], "BAV99") is None
+    assert A.pick_named([_node("BAV99-7", {"Mfr. Part #": "BAV99-7"})], "BAV99") is None
+    # our own revisions are still found: numeric, letter.number, MPN under ecadlib's or a house name
+    assert A.pick_named([_node("BAT54-1", {"Manufacturer Part Number": "BAT54"})], "BAT54")["name"] == "BAT54-1"
+    assert A.pick_named([_node("BAT54-12", {"MfrPN": "BAT54"})], "BAT54", rules=house)["name"] == "BAT54-12"
+    assert A.pick_named([_node("BAT54-A.1", {})], "BAT54")["name"] == "BAT54-A.1"
+    assert A.pick_named([_node("BAT54", {})], "bat54")["name"] == "BAT54"
+
+
+def test_push_does_not_write_parameters_onto_a_revision_looking_component_with_no_mpn():
+    """SS34-13 with no MPN parameter (Altium keeps it in Part Choices) may be revision 13 of SS34 or another part:
+    a push without a publish record of SS34 must not write MPN=SS34 onto it."""
+    import tempfile
+    from ecadlib import altium365 as A
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def release_defs(self, ws):
+            return {}
+
+        def find(self, ws, name):
+            return A.pick_named([_node("SS34-13", {"Description": "Schottky 40V 3A"})], name)
+
+        def update_params(self, cid, params, note, replace=False):
+            self.calls.append(("update_params", cid, params))
+            return cid
+
+        def release(self, inp):
+            self.calls.append(("release", inp))
+    it = {"name": "SS34", "folder": "Components/Diodes", "description": "Schottky 40V 3A SMA", "comment": "SS34",
+          "parameters": [{"name": "Manufacturer Part Number", "value": "SS34"}, {"name": "Manufacturer", "value": "onsemi"}],
+          "symbol": {"ref": "D_Schottky", "file": None}, "footprint": {"ref": "SMA", "file": None}, "status": "ready"}
+    c = Fake()
+    r = A.push([it], c, "https://x.365.altium.com", folder=tempfile.mkdtemp())[0]
+    assert not [x for x in c.calls if x[0] == "update_params"], c.calls
+    assert r["action"] == "skip" and "SS34-13" in r["detail"], r

@@ -83,22 +83,45 @@ M_UPDATE_PARAMS = """mutation ($input: DesUpdateComponentRevisionParametersInput
 }"""
 
 
-def pick_named(nodes, name):
+REVISION = r"-([1-9]\d*|[A-Z]\.(0|[1-9]\d*))"     # the revision labels Altium's naming schemes give: 1, 2, 12 / A.1
+
+
+def node_mpn(node, rules=None):
+    """The MPN a workspace component node carries ("" when none): under ecadlib's names, the rules' house name
+    ([parameters.names]) or a usual MPN parameter name (MfrPN, Mfr. Part #, Manufacturer Part No)."""
+    import re
+    from .rules import param_name
+    par = {str(p.get("name") or "").strip().lower(): str(p.get("value") or "").strip()
+           for p in ((node.get("details") or {}).get("parameters") or []) if isinstance(p, dict)}
+    for k in ((param_name("Manufacturer Part Number", rules),) if rules else ()) + MPN_NAMES:
+        if par.get(k.lower()):
+            return par[k.lower()]
+    return next((v for k, v in par.items() if v and re.fullmatch(
+        r"(mfr|mfg|manufacturer|manuf)\.?[ _]*(part)?[ _]*(no\.?|number|num|#|pn|p/n)|mpn\d*", k)), "")
+
+
+def pick_named(nodes, name, rules=None):
     """The node that is item `name` ("SS34" or its revision "SS34-1"), or None. Live 2026-10-18: the
     `name: {eq: "AMS1117-3.3"}` filter also returns Altium's sample part CMP-017-000002-1 (it matches more than
-    the item name), so a hit is only a match when its own name is the item's."""
+    the item name), so a hit is only a match when its own name is the item's. A revision is only a label Altium's
+    naming schemes give ("-1", "-12", "-A.1"): "BAT54-04" is no revision. A node whose MPN (under ecadlib's, the
+    rules' house or a usual MPN parameter name), or else any parameter, names the node itself and not `name` is
+    another part (BAV99-7 with MfrPN = BAV99-7)."""
     import re
     if not name:
         return None
     nodes = nodes or []
     exact = next((n for n in nodes if (n.get("name") or "").lower() == name.lower()), None)
-    rev = re.compile(re.escape(name) + r"-(\d+|[A-Z]\.\d+)", re.I)     # a revision ("-1", "-A.1"), not "LM358-N"
+    rev = re.compile(re.escape(name) + REVISION, re.I)
 
-    def other_part(n):                         # "BAT54-04" is a part of its own, not revision 04 of BAT54: its MPN
-        par = {str(p.get("name") or "").lower(): str(p.get("value") or "").strip()     # says so when it has one
-               for p in ((n.get("details") or {}).get("parameters") or []) if isinstance(p, dict)}
-        mpn = next((par[k.lower()] for k in MPN_NAMES if par.get(k.lower())), "")
-        return bool(mpn) and mpn.lower() == (n.get("name") or "").lower() and mpn.lower() != name.lower()
+    def other_part(n):
+        own = (n.get("name") or "").lower()
+        mpn = node_mpn(n, rules).lower()
+        if mpn:
+            return mpn == own and mpn != name.lower()
+        vals = {str(p.get("value") or "").strip().lower()
+                for p in ((n.get("details") or {}).get("parameters") or []) if isinstance(p, dict)}
+        return own in vals and name.lower() not in vals
     return exact or next((n for n in nodes if rev.fullmatch(n.get("name") or "") and not other_part(n)), None)
 
 
@@ -175,7 +198,7 @@ class Nexar:
 
     def find(self, ws, name):
         conn = self.gql(Q_FIND, {"ws": ws, "name": name})["desLibrary"]["components"] or {}
-        return pick_named(conn.get("nodes"), name)
+        return pick_named(conn.get("nodes"), name, getattr(self, "rules", None))
 
     def component(self, cid):
         return self.gql(Q_BY_ID, {"id": cid})["desComponentById"]
@@ -477,6 +500,13 @@ def change_mode(lg, it, target):
     return "revision", halves, head, pub
 
 
+def _maybe_other(node, name, rules=None):
+    """True when workspace node `node` was matched to item `name` only by a revision-looking name (SS34-13 for SS34)
+    and carries no MPN to confirm it: it may be another part."""
+    own = str(node.get("name") or "")
+    return bool(own) and own.lower() != str(name).lower() and not node_mpn(node, rules)
+
+
 def unpublished_halves(lg, target, sent_models, it, head):
     """The halves ({"symbol", "footprint"}) a new revision of a component this library never published to `target`
     must send: all but one whose workspace item the ledger knows holds the head's drawing (a shared symbol released
@@ -643,6 +673,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     checked = RU.resolve(rules, folder or ".")
     rechecks = [RC.publish_problems(i, folder or ".", checked) for i in items]
     items = [house_item(i, rules) for i in items]
+    if isinstance(client, Nexar):              # find reads the MPN under the house name too (pick_named)
+        client.rules = rules
     defs = {} if dry_run else client.release_defs(ws)
     results, uploaded, released = [], {}, set()   # one upload per file per run; (kind, name) released this run
     sent_models = {}                           # "kind:name" -> (digest, part, revision) released this run
@@ -686,6 +718,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     res.update(push_revision(it, client, ws, defs, upload, models_root, existing, halves,
                                              head["revision"], dry_run, note, transition, digests))
                     sent_models.update({k: (d, it["name"], head["revision"]) for k, d in (res.get("models") or {}).items()})
+            elif existing and not pub and _maybe_other(existing, it["name"], rules):
+                res["action"], res["detail"] = "skip", (
+                    f"the workspace has {existing.get('name')}, which may be a revision of {it['name']} or another "
+                    "part (no MPN parameter says which), and this library never published it there: nothing was "
+                    "changed. Add its MPN parameter in Altium 365, or rename one of them")
             elif existing:
                 new = merged_params(existing, it, rules)
                 res["a365_revision"] = _rev_id(existing)
