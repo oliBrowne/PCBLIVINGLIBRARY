@@ -152,3 +152,27 @@ def test_a_handsoldering_copy_of_a_land_is_no_second_choice():
             idx = KiCadIndex([])
             idx.footprints = {k: {"path": "", "has_3d": True} for k in order}
             assert idx.find_footprint_for_package(pkg, cls, hint=pkg) == fps[0], (pkg, order)
+
+
+# ---------------------------------------------------------------- R-FX-7: the A365 'released' count
+@lite
+def test_a365_released_count_is_the_ready_parts_put_in_the_workspace_only(tmp_path):
+    from ecadlib import altium_menu as AM
+
+    class WS:
+        root = tmp_path
+
+        def rules(self):
+            return {"altium365": {"workspace": "https://acme.365.altium.com"}}
+
+        def altium365_push(self, bom, url, dry_run):
+            return {"report": "r.json", "results": [
+                {"name": "P1", "action": "release"}, {"name": "P2", "action": "skip", "detail": "held: fields"},
+                {"name": "E1", "action": "update_parameters"}, {"name": "E2", "action": "up_to_date"}]}
+
+        def _plan(self, bom):
+            return None, None, [{"name": "P1", "status": "ready"}, {"name": "P2", "status": "ready"},
+                                {"name": "E1", "status": "held"}, {"name": "E2", "status": "held"}]
+
+    pub = AM.publish(WS(), "uploads/x/parts.csv", tmp_path / "lib")
+    assert pub["released"] == 1 and set(pub["held"]) == {"P2"}, pub

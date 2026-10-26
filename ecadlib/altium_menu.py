@@ -1014,8 +1014,9 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
                     "fix": "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again" if "NEXAR_TOKEN" in str(e) else ""}
         from .altium365 import PUSHED as _PUSHED
         PUSHED = _PUSHED + ("released", "create", "created", "update", "updated")    # (older names, as counted before)
-        acts = [r.get("action") for r in res["results"]]
         ready = {i.get("name") for i in ws._plan(bom_rel)[2] if i.get("status") == "ready"}
+        put = {r["name"] for r in res["results"] if r.get("action") in PUSHED and r["name"] in ready}   # this BOM's
+        # ready parts now in the workspace (another part's parameter update or an up-to-date one is not counted)
         return {"target": "a365", "install": [], "problems": [f"{r['name']}: {r.get('detail')}" for r in res["results"]
                                                               if r.get("action") == "error"],
                 # every part the push did not put in the workspace (a release-check hold, a sign-off the policy still
@@ -1023,7 +1024,7 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
                 "held": {r["name"]: r.get("detail") or r.get("action") for r in res["results"]
                          if r.get("action") not in PUSHED and r.get("action") != "error" and (r["name"] in ready or r.get("recheck"))},
                 "actions": {r["name"]: r.get("action") for r in res["results"]},
-                "workspace": url, "released": sum(a in PUSHED for a in acts), "report": str(ws.root / res["report"])}
+                "workspace": url, "released": len(put), "report": str(ws.root / res["report"])}
     bom_path, plan_f, items = ws._plan(bom_rel)
     if not any(i.get("status") == "ready" for i in items) and not any(Path(library).glob("*.DbLib")):
         return {"target": "folder", "install": [], "problems": [], "library": str(library)}
