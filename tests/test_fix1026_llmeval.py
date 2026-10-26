@@ -74,3 +74,27 @@ def test_eval_provider_switch_drops_the_ai_key_env_and_base_url():
     assert _ep(got)[0]["key_env"] == "MY_ROUTER"
     got = R.ai_overrides(rules, provider="openai", model="gpt-5-mini")        # same provider: keeps its key
     assert _ep(got)[0]["key_env"] == "OPENAI_API_KEY"
+
+
+# ---------------------------------------------------------------- R-LE-2: the gate fails on any built-wrong case
+def _row(i, fam, ok, source):
+    return {"id": i, "family": fam, "pass": ok, "source": source, "fields": {}, "usd": 0, "tokens_in": 0,
+            "tokens_out": 0, "errors": [] if ok else ["pads: 6 of 28 pads off"], "tried": ["datasheet"]}
+
+
+def _rep(rows):
+    from ecadlib.eval import runner as R
+    return {"meta": {"set": "t", "set_version": 1, "sources": [], "wall_s": 0}, "cases": rows,
+            "summary": R.summarize(rows)}
+
+
+def test_gate_fails_when_a_held_failing_case_becomes_built_wrong():
+    from ecadlib.eval import gate as G
+    held = _rep([_row("a", "qfn", True, "standard"), _row("b", "qfn", False, "none")])
+    base = G.baseline(held)
+    assert G.check(held, base)["ok"]                                       # held: the safe outcome, passes
+    wrong = _rep([_row("a", "qfn", True, "standard"), _row("b", "qfn", False, "datasheet")])
+    assert wrong["summary"]["outcome"]["built_wrong"] == ["b"]
+    res = G.check(wrong, base)
+    assert not res["ok"] and any("built wrong" in p and "b" in p for p in res["problems"]), res
+    assert not G.check(wrong, base, subset=True)["ok"]

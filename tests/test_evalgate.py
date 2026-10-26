@@ -82,7 +82,7 @@ def test_check_flags_a_family_drop_and_a_broken_case_and_reports_new_passes():
     base2["passing"] = []                              # only the rate check left
     r3 = copy.deepcopy(rows)
     for k in range(5):
-        r3[k] = _row(f"qfn-P{k}", "qfn", False, ["pin1: mirrored"])
+        r3[k] = _row(f"qfn-P{k}", "qfn", False)          # held (not built): a built-wrong case fails on its own (R-LE-2)
     res = G.check(_rep(r3), base2)
     assert not res["ok"] and res["problems"] == ["family qfn: pass rate 95.0 % < baseline 100.0 % - 1.0 %"], res
     assert G.check(_rep(r3), base2, tol=0.06)["ok"]
