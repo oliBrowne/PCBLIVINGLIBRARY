@@ -79,6 +79,8 @@ def ask(job, inf, send, judge, client=None, allow_feedback=True, guard=None):
                 msg = msg2 if _better(kind, why, kind2, why2) else dict(msg, usage=msg2["usage"])
             except DatasheetError as e:
                 rec["feedback"] = {"errors": why[:15], "before": kind, "after": f"error: {e}", "kept": "first"}
+                if getattr(e, "usage", None):         # the redo's billed calls count, kept answer or not
+                    msg = dict(msg, usage=R.add_usage(usage, e.usage))
         rec["steps"] = [{k: v for k, v in s.items() if k != "model_served"} for s in steps]
     else:
         body = R.adapt_body(job["body"], prof, p, notes) if p["guided"] else job["body"]

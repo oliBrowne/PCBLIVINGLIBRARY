@@ -408,6 +408,9 @@ class Client:
                                st in (retry_on or RETRY_STATUS) or (retry_on is None and r.status_code >= 500), rid)
                 rec["error"] = f"{etype}: {emsg}"[:300]
                 retry_after = hdr.get("retry-after")
+                if paid and r.status_code == 200 and not (isinstance(payload, dict) and payload.get("type") == "error"):
+                    err.maybe_billed, err.retryable = True, False   # a 200 whose body did not read (cut off, a proxy's
+                    # page): the generation ran and is billed; the cost cap keeps its hold and it is not sent again
             self._log(rec)
             if not err.retryable or attempt == self.retries:
                 if err.retryable and attempt:
@@ -4357,6 +4360,8 @@ class Reader:
         except DatasheetError as e:
             if not getattr(e, "maybe_billed", False):
                 self._release(key)                    # no answer, nothing billed: the hold is given back
+            else:
+                self._maybe_billed(job, key, model, e, "cross_check")
             if isinstance(e, APIError):
                 raise                                 # no answer came back: the part is retried next run
             raise CC.Unavailable(str(e)[:200])
@@ -4475,6 +4480,8 @@ class Reader:
                 if msg is None:                       # no answer came back (API error): nothing to record
                     if not getattr(e, "maybe_billed", False):
                         self._release(job["key"])
+                    else:
+                        self._maybe_billed(job, job["key"], job.get("model") or self.model, e)
                     nxt = self._next_link(job, e)     # the API could not fetch the link: the next one, if any
                     if nxt is None:
                         raise
@@ -4580,6 +4587,8 @@ class Reader:
         except DatasheetError as e:
             if not getattr(e, "maybe_billed", False):
                 self._release(job["key"])
+            else:
+                self._maybe_billed(job, job["key"], model, e, "feedback")
             raise
         if msg2 is not None:                          # its own cost, at synchronous rates
             self._settle(job["key"], model, msg2, "sync")
@@ -4813,6 +4822,21 @@ class Reader:
                 return
         if self._holds.get(key):
             self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)))
+
+    def _maybe_billed(self, job, key, model, e, purpose=None):
+        """A request with no answer that the API may still have run and billed (a read timeout, a response cut off):
+        its hold stays for this run, and cost.jsonl gets a line at that worst case, so a run resumed under
+        --max-total-usd (eval) counts it instead of $0. The hold is taken over by the line: never counted twice."""
+        held = self._holds.pop(key, None)
+        if not held:
+            return
+        rec = {"part": job.get("part"), "name": job.get("name") or job.get("part"), "model": model, "model_served": None,
+               "via": "sync", "pages_sent": self._pages_sent(job), "pages_total": job.get("n_pages"),
+               "input_tokens": 0, "output_tokens": 0, "usd": round(sum(held), 6), "how": "maybe billed",
+               "verdict": "error", "error": str(e)[:300]}
+        if purpose:
+            rec["purpose"] = purpose
+        self.ledger.add(rec)
 
     # --- batch
     def _state(self):

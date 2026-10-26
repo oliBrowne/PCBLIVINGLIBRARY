@@ -197,11 +197,17 @@ def spent(folder, since=0):
             rec = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(rec, dict):                 # a damaged line ("5", a list): not a read
+            continue
         out["reads"] += 1
-        if rec.get("usd") is None:
+        try:
+            usd = None if rec.get("usd") is None or isinstance(rec["usd"], bool) else float(rec["usd"])
+        except (TypeError, ValueError):
+            usd = None
+        if usd is None or not math.isfinite(usd) or usd < 0:   # NaN would make a folder total NaN: no cap at all
             out["unpriced"] += 1
         else:
-            out["usd"] += float(rec["usd"])
+            out["usd"] += usd
         m = rec.get("model_served") or rec.get("model")
         if m and m not in out["models"]:
             out["models"].append(m)

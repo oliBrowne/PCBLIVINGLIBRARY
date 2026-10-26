@@ -197,6 +197,8 @@ class OpenAICompatClient:
                                (e or {}).get("type") if isinstance(e, dict) else None, r.status_code in RETRY_STATUS)
                 rec["error"] = str(emsg)[:300]
                 retry_after = (getattr(r, "headers", None) or {}).get("retry-after")
+                if r.status_code == 200 and not e:            # a 200 that is no chat completion (cut off, a proxy's
+                    err.maybe_billed, err.retryable = True, False   # page): the server ran it; the cap keeps its hold
             self._log(rec)
             if not err.retryable or attempt == self.retries:
                 raise err

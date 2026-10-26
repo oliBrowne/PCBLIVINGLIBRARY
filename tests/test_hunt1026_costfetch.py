@@ -262,6 +262,142 @@ def test_05_bom_link_redirect_to_loopback_or_metadata_is_never_requested(tmp_pat
     assert got[0] == 200 and got[1] == pdf, got[:5]
 
 
+# ---------------------------------------------------------------- costfetch-06: a maybe-billed request left no record
+def test_06_a_request_that_may_have_been_billed_is_in_the_cost_ledger():
+    """A read timeout on /v1/messages (the API may have run and billed the request) kept its hold for this run, but
+    cost.jsonl got no line: a run resumed with --max-total-usd counted that spend as $0."""
+    import tempfile
+    from tests import test_datasheet_batch as TB
+
+    class Timeout(TB.FakeAPI):
+        def post(self, url, headers=None, json=None, timeout=None):
+            if url.endswith("/v1/messages"):
+                self.calls.append(("POST", url, headers, json))
+                raise requests.exceptions.ReadTimeout("read timed out")
+            return super().post(url, headers, json, timeout)
+    api = Timeout(tokens=20000)
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = D.Reader(d, d, key=KEY, http=TB.PdfHTTP({"https://a/ds.pdf": TB.PDF}), log=None, sleep=lambda s: None,
+                      rules={"datasheet": {"max_cost_usd": 5.0}})
+        try:
+            rd.read_now(rd.job("TESTPART", [("https://a/ds.pdf", "BOM")], "RGT"))
+            raise AssertionError("no error")
+        except D.DatasheetError as e:
+            assert "billed" in str(e), e
+        assert len(api.of("/v1/messages")) == 1                  # never sent twice
+        held = rd.committed_usd
+        got = AC.spent(rd.dir.parent)
+        assert held > 0 and got["reads"] == 1 and abs(got["usd"] - round(held, 4)) < 1e-4, (held, got)
+        rec = json.loads((rd.dir / "cost.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        assert rec["how"] == "maybe billed" and rec["part"] == "TESTPART", rec
+
+
+# ---------------------------------------------------------------- costfetch-07: the small-model steps lost billed usage
+def _steps_body():
+    import base64
+    from tests import test_ds_route as TR
+    pdf = TR.pdf_lines([["TESTPART 3 A buck converter", "Pin Functions", "Pin No. Name Type", "1 SW O"],
+                        ["Package outline RGT0016C VQFN", "Dim Min Nom Max", "D 2.90 3.00 3.10", "e 0.50 BSC"]])
+    return {"model": "tiny-3b", "max_tokens": 16000, "messages": [{"role": "user", "content": [
+        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                        "data": base64.b64encode(pdf).decode()}}, {"type": "text", "text": "read"}]}],
+        "output_config": {"format": {"type": "json_schema", "schema": D.output_schema()}}}
+
+
+def test_07_split_steps_failure_keeps_what_the_billed_calls_used():
+    """identify answered (billed), then the dims call failed with HTTP 500 after its retries: the APIError carried no
+    usage and was not maybe_billed, so the Reader gave back the whole hold and cost.jsonl got nothing for a paid call.
+    A refusal in a step lost that step's usage the same way."""
+    from ecadlib.llm import rails as RL
+    from tests import test_llm as TL
+    u = {"input_tokens": 1000, "output_tokens": 200}
+    p = {"rails": ["split_steps", "json_repair", "schema_in_prompt"], "tier": "small", "guided": True}
+    prof = {"context": 8192, "pdf": False, "vision": False, "json_schema": False}
+
+    class Client:
+        def __init__(self, fail):
+            self.n, self.fail = 0, fail
+
+        def messages(self, body, headers=None):
+            self.n += 1
+            if self.n == 1:
+                return {"content": [{"type": "text", "text": json.dumps(TL.IDENT)}], "stop_reason": "end_turn", "usage": u}
+            if self.fail == "api":
+                raise D.APIError("HTTP 500: api_error (gave up after 5 attempts)", 500, "api_error", True)
+            return {"content": [{"type": "text", "text": ""}], "stop_reason": "refusal", "usage": u}
+    for fail in ("api", "refusal"):
+        try:
+            RL.run_steps(Client(fail), _steps_body(), prof, p, "TESTPART", None, [])
+            raise AssertionError("no error")
+        except D.DatasheetError as e:
+            want = 1000 if fail == "api" else 2000
+            assert (getattr(e, "usage", None) or {}).get("input_tokens") == want, (fail, getattr(e, "usage", None))
+            if fail == "api":
+                assert getattr(e, "maybe_billed", False), "an API error after billed steps must keep its hold"
+    # the redo after a failing gate: its billed calls were dropped when it failed and the first answer was kept
+    from ecadlib.llm import run as LR
+    answers = [TL.IDENT, TL.DIMS, TL.PINS, "not json", "still not json"]
+
+    class Seq:
+        def messages(self, body, headers=None):
+            a = answers.pop(0)
+            return {"content": [{"type": "text", "text": a if isinstance(a, str) else json.dumps(a)}],
+                    "stop_reason": "end_turn", "usage": u}
+    inf = {"plan": dict(p, rails=p["rails"] + ["feedback_retry"], assist="auto"), "prof": prof,
+           "ep": {"name": "x", "provider": "openai-compatible"}}
+    job = {"body": _steps_body(), "part": "TESTPART", "package": None}
+    msg = LR.ask(job, inf, None, lambda m: ("failed", ["symbol: pin count"]), Seq(), allow_feedback=True)
+    assert msg["usage"]["input_tokens"] == 5000, msg["usage"]          # 3 steps + the redo's 2 attempts
+
+
+# ---------------------------------------------------------------- costfetch-08: a 200 whose body did not read
+def test_08_a_200_with_an_unreadable_body_keeps_its_hold():
+    """HTTP 200 on /v1/messages (or /chat/completions) whose body is not JSON (cut off by a proxy, an HTML page) was a
+    plain APIError: the Reader gave the hold back and wrote nothing, though the generation ran and is billed."""
+    from unittest import mock
+    from ecadlib.llm.openai_compat import OpenAICompatClient
+    from tests import test_datasheet_batch as TB
+    sent = []
+
+    def post(url, headers=None, json=None, timeout=None, **kw):
+        sent.append(url)
+        return TB.R(200, None, text='{"id": "msg_1", "content": [{"type": "te')
+    with mock.patch.object(D.requests, "post", post):
+        try:
+            D.Client(KEY, sleep=lambda s: None, log_file=None).messages({"model": "claude-opus-5-5", "messages": []})
+            raise AssertionError("no error")
+        except D.APIError as e:
+            assert e.maybe_billed and KEY not in str(e), e
+    assert len(sent) == 1, sent
+    sent.clear()
+    cl = OpenAICompatClient("https://api.example.com/v1", "sk-x", {}, sleep=lambda s: None, post=post, log_file=None,
+                            say=None, model="gpt-x")
+    try:
+        cl.chat({"model": "gpt-x", "messages": []})
+        raise AssertionError("no error")
+    except D.APIError as e:
+        assert e.maybe_billed, e
+    assert len(sent) == 1, sent
+
+
+# ---------------------------------------------------------------- costfetch-09: a damaged ledger line
+@lite
+def test_09_spent_skips_damaged_lines_and_never_sums_nan(tmp_path, monkeypatch):
+    """A ledger line that is JSON but not an object crashed ai_cost.spent (AttributeError) after a paid run, and a
+    "usd": NaN line (json writes NaN) made the folder total NaN, so --max-total-usd's cap became NaN: no cap."""
+    f = AC.ledger(tmp_path)
+    f.parent.mkdir(parents=True)
+    f.write_text("\n".join([json.dumps({"usd": 1.5, "model": "m"}), "5", "[1, 2]", '{"usd": NaN}',
+                            json.dumps({"usd": "abc"}), json.dumps({"usd": -3}), "{broken"]) + "\n", encoding="utf-8")
+    got = AC.spent(tmp_path)
+    assert got["usd"] == 1.5 and got["reads"] == 4 and got["unpriced"] == 3, got
+    try:
+        ER.total_cap(tmp_path, 10.0, log=lambda *a: None)
+        raise AssertionError("an unpriced line must refuse a folder total")
+    except ValueError as e:
+        assert "no price" in str(e), e
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
