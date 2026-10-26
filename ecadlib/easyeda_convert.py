@@ -508,7 +508,10 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
                 notes.append(f"pin {num}: slanted pin path ({raw % 360:.0f} deg) drawn at {ang} deg")
             length = (abs(dx) if ang in (0, 180) else abs(dy)) * U or 2.54
             x, y = P(cx, cy)
-            pins.append(f'      (pin {PIN_TYPE.get(st[2], "unspecified")} line (at {x} {y} {ang}) (length {_n(length)})'
+            # the inversion circle ("^^1~x~y" after the name / number) and the clock mark ("^^1~path"), shown or not
+            dot, clk = (len(seg) > k and seg[k][0].strip() == "1" for k in (5, 6))
+            shape = "inverted_clock" if dot and clk else "inverted" if dot else "clock" if clk else "line"
+            pins.append(f'      (pin {PIN_TYPE.get(st[2], "unspecified")} {shape} (at {x} {y} {ang}) (length {_n(length)})'
                         f' (name {_q(nm or "~")} (effects (font (size 1.27 1.27)))) (number {_q(num)} (effects (font (size 1.27 1.27)))))')
         elif kind == "R":
             f = s.split("~") + [""] * 8

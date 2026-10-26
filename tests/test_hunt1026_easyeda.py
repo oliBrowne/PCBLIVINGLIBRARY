@@ -94,6 +94,40 @@ def test_footprint_without_head_origin_is_centred_on_its_pads():
     assert all(abs(a - b) < 0.01 for a, b in zip(ref["origin"], r2["origin"])), (ref["origin"], r2["origin"])
 
 
+def _all_pins(node):
+    out = []
+    for c in node:
+        if isinstance(c, list) and c:
+            out += [c] if c[0] == "pin" else _all_pins(c)
+    return out
+
+
+def _sym_pins(shapes):
+    t = sexpr.parse(EC.symbol_to_kicad({"head": {"x": 400, "y": 300}, "shape": shapes}, "X", "", {}, []))
+    return {str(sexpr.first(p, "number")[1]): p for p in _all_pins(t)}
+
+
+def test_symbol_pin_inversion_and_clock_marks_are_kept():
+    # EasyEDA's pin: segment 5 is the inversion circle, segment 6 the clock mark, each "1" when shown (easyeda2kicad
+    # reads them the same way); they were all written as plain lines, so an active-low pin lost its circle
+    base = "P~show~1~{n}~355~285~180~gge{n}~0^^355~285^^M355,285h10~#880000^^1~368~289~0~P{n}~start~~~#0000FF^^" \
+           "1~364~284~0~{n}~end~~~#0000FF^^{d}~362~285^^{c}~M 365 288 L 368 285 L 365 282"
+    pins = _sym_pins([base.format(n=1, d=0, c=0), base.format(n=2, d=1, c=0), base.format(n=3, d=0, c=1),
+                      base.format(n=4, d=1, c=1)])
+    assert {k: str(p[2]) for k, p in pins.items()} == {"1": "line", "2": "inverted", "3": "clock", "4": "inverted_clock"}
+    from ecadlib import kicad_import as K       # and Altium's converter reads them
+    sym = K.convert_symbol([K._find_symbol(sexpr.parse(EC.symbol_to_kicad(
+        {"head": {"x": 400, "y": 300}, "shape": [base.format(n=2, d=1, c=0)]}, "X", "", {}, [])), "X")], "X", None, [], None, [])
+    assert [pr[1].get("shape") for pr in sym["prims"] if pr[0] == "pin"] == ["inverted"]
+
+
+def test_real_symbols_keep_plain_pins():
+    for lcsc in ("C5423", "C7593"):
+        r = _live(lcsc)["result"]
+        t = sexpr.parse(EC.symbol_to_kicad(r["dataStr"], "X", "", {}, []))
+        assert {str(p[2]) for p in _all_pins(t)} == {"line"}, lcsc
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
