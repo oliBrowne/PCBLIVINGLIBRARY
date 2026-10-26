@@ -934,9 +934,11 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None, 
     from the body (outline, standoff and height), written to <lib>.3dshapes/ (write(path, bytes); default a plain
     write). -> ([(model ...) node, ...], [(file name, how), ...]) or None. Altium and KiCad then both have the part's
     3D model (ecadlib.parity checks it). An embedded STEP is placed as the body places it in Altium (MODEL.2D.X / Y,
-    MODEL.3D.ROTZ, MODEL.3D.DZ; the library's model record when the body has none): KiCad's offset (y down) and its
-    z rotation (KiCad turns a model by the negated angle, as kicad_import.step_extent); one tilted (ROTX / ROTY) or
-    turned in 2D is not written, with a note. at: the model folder as the footprint names it (models_at)."""
+    MODEL.3D.ROTZ, MODEL.3D.DZ; the library's model record when the body has none), as KiCad's own Altium importer
+    does: offset (X, +Y, DZ) in the model's y-up frame, rotation z = -ROTZ (KiCad turns a model by the negated angle).
+    One tilted (ROTX / ROTY) or turned in 2D is not written, nor a body projected to the bottom side
+    (BODYPROJECTION = 1, which a top-side KiCad model would show on the wrong side), each with a note.
+    at: the model folder as the footprint names it (models_at)."""
     from . import step_gen as SG
     at = at or models_at(lib)
     fps = AL.read_pcblib(pcblib)
@@ -952,6 +954,10 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None, 
         mil = lambda key: RC._mil(bp.get(key)) or 0.0
         base = fpn if k == 0 else f"{fpn}_{k + 1}"
         fn = f"{base}.step" if f"{base}.step" not in taken else f"{base}_ecadlib.step"
+        if str(bp.get("BODYPROJECTION") or "0").strip() not in ("0", ""):
+            K._note(notes, f"3D: body {k + 1} is on the bottom side in Altium (BODYPROJECTION {bp.get('BODYPROJECTION')}); "
+                           f"not written for KiCad")
+            continue
         emb = by_id.get(str(bp.get("MODELID", "")))
         if emb is None and len(lib_models) == 1 and len(fps) == 1:
             emb = lib_models[0]                       # one footprint, one model (no matching id): it is this one's
@@ -967,7 +973,7 @@ def altium_model(pcblib, fpn, lib, shapes, taken, notes, pick=None, write=None, 
                 continue
             dz = RC._mil(bp["MODEL.3D.DZ"]) if RC._mil(bp.get("MODEL.3D.DZ")) is not None else \
                 AL.to_mm(int(float(mp.get("DZ", 0) or 0)))
-            off, rz = (mil("MODEL.2D.X"), -mil("MODEL.2D.Y"), dz), -rot[2]
+            off, rz = (mil("MODEL.2D.X"), mil("MODEL.2D.Y"), dz), -rot[2]   # KiCad's importer: y = +MODEL.2D.Y
             how = f"embedded STEP {mp.get('NAME', '')} from the .PcbLib"
         elif emb is not None:
             continue

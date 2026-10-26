@@ -187,8 +187,9 @@ def test_rkw4_body_offset_and_rotation_are_honoured(tmp_path):
     assert got, notes
     n = got[0][0]
     off, rot = _node(n, "offset"), _node(n, "rotate")
-    assert abs(off[0] - 1.27) < 1e-6 and abs(off[1] + 2.54) < 1e-6 and abs(off[2]) < 1e-6, off   # y down in KiCad
-    assert rot == [0.0, 0.0, -90.0], rot          # KiCad turns a model by the negated angle (kicad_import.step_extent)
+    # R-FX5-2: KiCad's Altium importer gives offset y = +MODEL.2D.Y (the model offset is in the y-up model frame)
+    assert abs(off[0] - 1.27) < 1e-6 and abs(off[1] - 2.54) < 1e-6 and abs(off[2]) < 1e-6, off
+    assert rot == [0.0, 0.0, -90.0], rot          # KiCad's importer: rotation z = -MODEL.3D.ROTZ
 
 
 @lite
@@ -207,6 +208,35 @@ def test_rkw4_body_tilted_or_2d_rotated_is_not_written(tmp_path):
         notes = []
         got = X.altium_model(_placed_lib(d, repl), "SOIC8", "lib", d / "lib.3dshapes", {}, notes)
         assert got is None and any("rotated in Altium" in n for n in notes), (repl, got, notes)
+
+
+
+# ---- R-FX5-2: a body projected to the bottom side (BODYPROJECTION=1) is not written (KiCad would show it on top)
+def _extruded_lib(d, repl):
+    from ecadlib import stdparts as SP
+    text, _ = SP.build("SOIC-8_3.9x4.9mm_P1.27mm")
+    fp, _ = K.convert_footprint(text, "SOIC8")
+    fp["bodies"] = [{"pts": [(-2, -2.5), (2, -2.5), (2, 2.5), (-2, 2.5)], "height": 1.75}]
+    orig = AL.body_params
+
+    def placed(*a, **k):
+        s = orig(*a, **k)
+        for o, n in repl:
+            s = s.replace(o, n)
+        return s
+    with mock.patch.object(AL, "body_params", placed):
+        return AL.write_pcblib(d / "e.PcbLib", [fp])
+
+
+@lite
+def test_rfx52_bottom_projected_body_is_not_written(tmp_path):
+    for k, make in enumerate((_placed_lib, _extruded_lib)):
+        d = tmp_path / str(k)
+        d.mkdir()
+        assert X.altium_model(make(d, []), "SOIC8", "lib", d / "s", {}, []), make     # top side: written
+        notes = []
+        got = X.altium_model(make(d, [("BODYPROJECTION=0", "BODYPROJECTION=1")]), "SOIC8", "lib", d / "s2", {}, notes)
+        assert got is None and any("bottom" in n for n in notes), (make, got, notes)
 
 
 if __name__ == "__main__":
