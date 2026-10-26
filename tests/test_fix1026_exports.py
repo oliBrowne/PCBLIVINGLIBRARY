@@ -173,6 +173,41 @@ def test_cli_dblib_from_a_plan_ships_only_parts_that_pass_the_release_check(tmp_
     assert "BADPART" in text and "description is empty" in text and "HELDPART" in text, text
 
 
+# ------------------------------------------------------------------ R-PUB-6: exporter plugins get the same gate
+@lite
+def test_exporter_plugin_gets_only_parts_that_pass_the_gate(tmp_path, monkeypatch):
+    """plugins.run_exporter re-checked only `ready` parts: a broken `existing` part, a 'draft', a 'Ready' typo and a
+    duplicate reached the plugin unchecked and not held. They reach it held with the reason now, as on every route."""
+    import json
+    from ecadlib import plugins as PL
+    from tests.test_change_control_round4 import _EP
+    from tests.test_release_check import make
+    monkeypatch.setenv("ECADLIB_CONFIG", "")
+    items = []
+    for i, st in enumerate(["ready", "existing", "existing", "draft", "Ready", "duplicate", "held"]):
+        it = make(tmp_path, name=f"P{i}", fp_name=f"SOIC-8_v{i}")
+        it["status"] = st
+        items.append(it)
+    items[2]["description"] = ""                       # P2: existing, fails the check
+    items[5]["duplicate_of"] = "P0"
+    items[6]["hold_reasons"] = ["verify: by hand"]
+    pulled = _pulled(tmp_path, "PULLED", "SOIC-8_pulled")
+    (tmp_path / pulled["footprint"]["file"]).unlink()   # a pulled part whose footprint file is gone
+    items.append(pulled)
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps(items))
+    seen = {}
+    PL.run_exporter("t", plan, tmp_path / "px", eps=[_EP("t", lambda items, out, rules: seen.update(
+        {i["name"]: (i["status"], i.get("hold_reasons")) for i in items}) or [])])
+    assert seen["P0"][0] == "ready" and seen["P1"][0] == "existing", seen
+    assert seen["P2"] == ("held", ["fields: Description is empty"]), seen
+    for n in ("P3", "P4"):
+        assert seen[n][0] == "held" and seen[n][1][0].startswith("status: "), seen[n]
+    assert seen["P5"] == ("held", ["duplicate of P0 (dedupe)"]), seen["P5"]
+    assert seen["P6"] == ("held", ["verify: by hand"]), seen["P6"]
+    assert seen["PULLED"][0] == "held" and "files: footprint file missing" in seen["PULLED"][1][0], seen["PULLED"]
+
+
 # ------------------------------------------------------------------ R-PUB-3: a changed shared model links NAME-r<n>
 def _shared_symbol_changed():
     """RES-0603-10k released; the shared Resistor symbol then changed and approved for both resistors."""
