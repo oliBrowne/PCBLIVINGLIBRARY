@@ -750,6 +750,26 @@ def total_cap(lib, total, per_run=None, log=print):
     return cap
 
 
+def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=None, model=None):
+    """rules with eval's --provider / --base-url / --assist / --api-key-env / --model put into [ai] (and [datasheet]'s
+    own provider settings cleared, so [ai] decides). A --provider other than [ai]'s drops [ai]'s base_url and
+    api_key_env unless given again: they belong to the old provider, and its key went to the new one (R-LE-1)."""
+    over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
+                              ("api_key_env", api_key_env)) if v}
+    if not (over or (model and provider)):
+        return rules
+    ai = dict(rules.get("ai", {}))
+    if provider and str(provider).strip().lower() != str(ai.get("provider") or "anthropic").strip().lower():
+        for k in ("base_url", "api_key_env"):
+            if k not in over:
+                ai[k] = ""
+    rules = dict(rules, ai={**ai, **over, **({"model": model} if model else {})},
+                 datasheet={**rules.get("datasheet", {}), **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
+                            **({"api_key_env": ""} if provider and provider != "anthropic" else {})})
+    RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
+    return rules
+
+
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
         tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1, batch=False,
@@ -784,13 +804,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     if max_cost_usd is not None:                      # the run's spending cap ([datasheet] max_cost_usd, default $10)
         rules = dict(rules, datasheet={**rules.get("datasheet", {}), "max_cost_usd": float(max_cost_usd)},
                      _set=[*(rules.get("_set") or []), "datasheet.max_cost_usd"])     # a cap you set, 10 too
-    over = {k: v for k, v in (("provider", provider), ("base_url", base_url), ("assist", assist),
-                              ("api_key_env", api_key_env)) if v}
-    if over or (model and provider):
-        rules = dict(rules, ai={**rules.get("ai", {}), **over, **({"model": model} if model else {})},
-                     datasheet={**rules.get("datasheet", {}), **({k: "" for k in ("provider", "base_url", "assist")} if over else {}),
-                                **({"api_key_env": ""} if provider and provider != "anthropic" else {})})
-        RU.validate({k: v for k, v in rules.items() if k in ("ai",)}, "eval --provider/--model")
+    rules = ai_overrides(rules, provider=provider, base_url=base_url, assist=assist, api_key_env=api_key_env,
+                         model=model)
     if datasheets:
         rules = dict(rules, datasheet={**rules.get("datasheet", {}), "folder": str(datasheets)})
     if (rules.get("datasheet") or {}).get("zoom_drawings") and not replay and D.no_zoom():

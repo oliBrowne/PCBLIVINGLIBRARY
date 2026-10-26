@@ -105,6 +105,21 @@ def split_ref(ref, rules=None):
     return None, ref
 
 
+def _same_endpoint(ai, provider, base):
+    """True when a section resolved to (provider, base) talks to [ai]'s own provider, so [ai] api_key_env is its key:
+    the same provider and, for openai-compatible, the same server."""
+    try:
+        ai_provider, ai_preset = _norm_provider(ai["provider"])
+    except AIConfigError:
+        return False
+    if provider != ai_provider:
+        return False
+    if provider == "anthropic":
+        return True
+    ai_base = ai["base_url"] or (PRESETS[ai_preset][0] if ai_preset else "")
+    return (ai_base or "").rstrip("/").lower() == (base or "").rstrip("/").lower()
+
+
 def endpoint(rules=None, section="datasheet", model=None):
     """Where a request for `section` goes: {provider, preset, base_url, key_env, model, ref, name, local, assist,
     feedback_retry, detect}. `model` (an explicit --model or a ladder rung) may name an endpoint: 'local:qwen2.5:7b'.
@@ -112,6 +127,10 @@ def endpoint(rules=None, section="datasheet", model=None):
     ai, sec = _ai(rules), _section(rules, section)
     ds = _section(rules, "datasheet")
     if section == "proof":                                # [agent.proof] empty = [datasheet] (as before)
+        if sec.get("provider") and str(sec["provider"]).strip().lower() != \
+                str(ds.get("provider") or "").strip().lower():
+            # its own provider: [datasheet]'s server and key name belong to another provider (R-LE-1)
+            ds = {k: v for k, v in ds.items() if k not in ("base_url", "api_key_env")}
         sec = {k: sec.get(k) or ds.get(k) for k in set(sec) | set(ds) | {"provider", "base_url", "assist", "model",
                                                                          "api_key_env"}}
     name, mref = split_ref(model, rules) if model else (None, None)
@@ -129,7 +148,11 @@ def endpoint(rules=None, section="datasheet", model=None):
         sk = sec.get("api_key_env") or ""
         if sk == ANTHROPIC_KEY and (provider != "anthropic" or ai["api_key_env"]):
             sk = ""                                       # [datasheet]'s default key name: [ai] api_key_env / the endpoint's decide
-        key_env = sk or ai["api_key_env"] or (PRESETS[preset][1] if preset else "") or \
+        # [ai] api_key_env names the key of [ai]'s provider: a section on another provider (or, openai-compatible,
+        # another server) never inherits it, or e.g. the OpenAI key went to openrouter.ai as a Bearer header (R-LE-1).
+        # It takes its own preset's key variable instead; key_for() then refuses when that one is not set.
+        ai_key = ai["api_key_env"] if _same_endpoint(ai, provider, base) else ""
+        key_env = sk or ai_key or (PRESETS[preset][1] if preset else "") or \
             (ANTHROPIC_KEY if provider == "anthropic" else "")
         assist = sec.get("assist") or ai["assist"]
         mref = model
