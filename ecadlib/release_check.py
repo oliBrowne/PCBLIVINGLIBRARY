@@ -54,9 +54,6 @@ REQUIRED = ["Manufacturer", "Manufacturer Part Number"]
 UNFIXABLE = ("files",)                         # rules --allow cannot override
 
 
-CHIP_LAND = re.compile(r"^(?:R|C|CP|L|LED|D|FB|Fuse)_(\d{4,5})_(\d{4,5})Metric(?:_|$)")
-
-
 def chip_size_problem(item):
     """R-BF-1: the built chip land's size vs the size the MPN encodes (stdparts.mpn_size) -> a message, or None.
     The land is the one the footprint source names (standard / kicad / local: ...R_0402_1005Metric); a land read from
@@ -68,13 +65,15 @@ def chip_size_problem(item):
     if not size:
         return None
     src = str((item.get("source") or {}).get("footprint") or "")
+    if src.split(":")[0] in ("datasheet", "easyeda"):     # the part's own land: a URL / an LCSC number, no size
+        return None
     fp = item.get("footprint") or {}
     names = [src.split(":")[-1]] if src else [str(fp.get("kicad") or ""), str(fp.get("ref") or "")]
-    for n in names:
-        m = CHIP_LAND.match(n)
-        if m:
-            if m.group(1) != size:
-                return (f"chip size: MPN {mpn} is a {size} {kind or 'part'} but the footprint is {n} ({m.group(1)}): "
+    for n in names:                   # any chip land name: R_0402_1005Metric, a local R0402 / CAP_0402 / RESC1005X40N
+        code = SP.chip_size(n, strict=True)                                                  # (R-B2-3)
+        if code:
+            if code != size:
+                return (f"chip size: MPN {mpn} is a {size} {kind or 'part'} but the footprint is {n} ({code}): "
                         "the BOM's footprint and its part number name two sizes; fix the BOM line")
             return None
     return None

@@ -172,3 +172,41 @@ def test_stm32_from_an_altium_bom_with_an_ipc_name_is_not_held_for_its_land(tmp_
         it = next(iter(items.values()))
         assert it["source"]["footprint"].endswith("LQFP-48_7x7mm_P0.5mm"), (fp, it["source"])
         assert it["status"] == "ready", (fp, it["status"], _holds(it))
+
+
+# --- R-B2-3: the MPN's chip size is checked against a local land however it is named --------------------------------
+
+def _chip(mpn, src):
+    return {"name": "X", "folder": "Components/Resistors", "description": "part",
+            "parameters": [{"name": "Manufacturer Part Number", "value": mpn}],
+            "symbol": {}, "footprint": {"ref": src.split(":")[-1]}, "source": {"footprint": src}}
+
+
+def test_release_check_reads_the_chip_size_of_local_land_names():
+    from ecadlib import release_check as RC
+    for mpn, src in (("RC0603FR-0710KL", "local:mylib:R0402"), ("GRM188R71C104KA01D", "local:mylib:CAP_0402"),
+                     ("ERJ-3EKF1001V", "local:mylib:RESC1005X40N"), ("RC0603FR-0710KL", "standard:R_0402"),
+                     ("RC0603FR-074K7L", "kicad:Resistor_SMD:R_0402_1005Metric")):
+        fails, _, _ = RC.check_item(_chip(mpn, src))
+        assert [m for r, m in fails if r == "footprint" and "chip size" in m], (mpn, src, fails)
+    for mpn, src in (("RC0603FR-0710KL", "local:mylib:R0603"), ("GRM188R71C104KA01D", "local:mylib:CAP_0603"),
+                     ("ERJ-3EKF1001V", "local:mylib:RESC1608X55N"), ("RC0603FR-0710KL", "local:mylib:L_Bourns_SRR1210"),
+                     ("RC0603FR-0710KL", "easyeda:C0402"), ("RC0603FR-0710KL", "datasheet:https://x.com/R0402.pdf")):
+        fails, _, _ = RC.check_item(_chip(mpn, src))
+        assert not [m for r, m in fails if r == "footprint" and "chip size" in m], (mpn, src, fails)
+
+
+@lite
+def test_librarian_holds_0603_mpns_on_local_0402_lands(tmp_path):
+    from ecadlib import stdparts as SP
+    lib = Path(tmp_path) / "lib3"
+    (lib / "mylib.pretty").mkdir(parents=True)
+    for n, k in (("R0402", "R_0402_1005Metric"), ("CAP_0402", "C_0402_1005Metric"), ("RESC1005X40N", "R_0402_1005Metric")):
+        (lib / "mylib.pretty" / f"{n}.kicad_mod").write_text(SP.build(k)[0].replace(f'"{k}"', f'"{n}"', 1), encoding="utf-8")
+    items = _run(tmp_path, HDR + "R1,1,10k,mylib:R0402,Yageo,RC0603FR-0710KL,RES 10k 1%,https://example.com/r.pdf\n"
+                 "C1,1,100nF,mylib:CAP_0402,Murata,GRM188R71C104KA01D,CAP 100nF,https://example.com/c.pdf\n"
+                 "R2,1,1k,mylib:RESC1005X40N,Panasonic,ERJ-3EKF1001V,RES 1k,https://example.com/e.pdf\n",
+                 ["kicad", "standard"], [lib])
+    assert len(items) == 3, list(items)
+    for it in items.values():
+        assert it["status"] == "held" and "chip size" in _holds(it), (it["name"], it["source"], _holds(it))
