@@ -3737,6 +3737,16 @@ BROKEN_LINK = r"not a PDF|HTTP 4(?!01|03|29)\d\d|larger than|doesn't mention|the
 HELD_FAILED = "held: the last read still fails its checks, so nothing was built (fix the read or read the datasheet yourself)"
 
 
+def read_hold(res, fp_from_read=True):
+    """The hold line for a route's last answer that still fails a check that can build the part wrong
+    (ds_route.hold_reasons), or None. The librarian asks it after every rescue the route has (the cross-check's settle,
+    a checked standard land the read identified): fp_from_read=False when the footprint does not come from the read's
+    own numbers, so only the symbol's checks count."""
+    from . import ds_route as DR
+    hold = DR.hold_reasons(res, fp_from_read)
+    return f"{HELD_FAILED}: {'; '.join(hold[:3])[:400]}" if hold else None
+
+
 def hold_on_doubt(inf, model, res):
     """A guided model's answer that still fails datasheet's checks is not written (the hold_on_doubt rail)."""
     from . import ds_route as DR
@@ -4408,10 +4418,6 @@ class Reader:
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)
-        from . import ds_route as DR
-        hold = DR.hold_reasons(res, job.get("fp_needed"))
-        if hold:                                      # the route's last answer still fails a check that can build it
-            raise DatasheetError(f"{HELD_FAILED}: {'; '.join(hold[:3])[:400]}")   # wrong: nothing written
         from . import crosscheck as CC                # an independent second source before the footprint is accepted
         cc = CC.run(self, job, res, rec.get("model") or job.get("model") or self.model)
         if cc:

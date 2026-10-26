@@ -883,6 +883,9 @@ class Run:
             if tab:
                 std = (tab, found, "a tab land runs under the body, where the IPC tab built from the read covers only "
                        "the exposed tab, and the datasheet gives no land of its own")
+        held = None if edited or st["symbol"] else D.read_hold(res, False)   # (a person's fp-edit: they decided)
+        if held:                                      # the read's symbol still fails a check that wires it wrong
+            raise D.DatasheetError(held)
         if not st["footprint"]:                       # before any land choice: a table land never replaces these holds
             maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
             joined = D.joined_to_pad(res["spec"], (res.get("symbol") or {}).get("pins")) or \
@@ -927,6 +930,9 @@ class Run:
             st["review"].append(f"standard land: the datasheet read identified {pkg} ({found}); {why}, so the checked standard "
                                 f"land was used. Check the package code on the drawing is this one")
         elif not st["footprint"]:
+            held = None if edited else D.read_hold(res)   # built from the read's own numbers: after every rescue (no
+            if held:                                  # checked land, no settle), a read that still fails a check
+                raise D.DatasheetError(held)          # that can build it wrong is held, nothing written
             st["review"].extend(pad_table_problems(res["spec"]))
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))

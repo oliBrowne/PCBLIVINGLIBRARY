@@ -198,33 +198,36 @@ def _msg(name, dims, pins, other, ptype="gullwing"):
     return {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(wire)}], "model": "claude-opus-5-5"}
 
 
-def _final(tmp_path, msg, fp_needed=None):
-    rd = D.Reader(tmp_path / "out", tmp_path / "cache", rules={"datasheet": {"cross_check": "off"}}, log=None)
-    job = {"part": "XPART", "url": "ds.pdf", "offset": 0, "prov": {"sent_as": "base64"}, "model": "claude-opus-5-5",
-           "fp_needed": fp_needed, "key": "k"}
-    return rd._result(job, {"message": msg, "model": "claude-opus-5-5", "via": "sync"})
+def _librarian_read(ext):
+    """The part DSPART1 read with this answer through the librarian (tests.test_datasheet_batch.run2): its state."""
+    import tempfile
+    from tests import test_crosscheck as TC, test_datasheet_batch as TB, test_ds_route as TR
+    with tempfile.TemporaryDirectory() as d:
+        items, _, _ = TB.run2(d, TC.API(lambda k, m, b: TR.on_page(ext)), reader_kw={"batch": False})
+        return items["DSPART1"]
 
 
-MIXED = [dict(p) for p in SOT143_POS]
-MIXED[2]["offset"], MIXED[3]["offset"] = -0.95, 0.95                             # R side runs down: a mirrored side
-
-
-@lite
-def test_2_a_last_answer_failing_a_layout_check_is_held_before_anything_is_written(tmp_path, monkeypatch):
+def test_2_a_last_answer_failing_a_layout_check_is_held_before_anything_is_written():
     """Before: built with its review items (the eval counted it built: built wrong if it was wrong), held only later
-    by the release check's verify."""
-    msg = _msg("SOT-143", SOT143, SOT143_PINS, {"pin_count": 4, "pin_positions": MIXED})
-    try:
-        _final(tmp_path, msg)
-        raise AssertionError("a read that still fails its layout check was built")
-    except D.DatasheetError as e:
-        assert str(e).startswith(D.HELD_FAILED) and "pin_positions" in str(e), e
-    assert not (tmp_path / "out" / "datasheet").exists() or not list((tmp_path / "out" / "datasheet").glob("*.json"))
-    res = _final(tmp_path, msg, fp_needed=False)      # the footprint comes from elsewhere: its layout can't make it wrong
-    assert res["spec"]["name"] == "SOT-143"
+    by the release check's verify. Judged after every rescue the route has (the cross-check's settle, a checked
+    standard land): tests/test_crosscheck_settle_1022 keeps a turned SOIC-8 read built from the table."""
+    import copy
+    from tests import test_datasheet as TD
+    ext = copy.deepcopy(TD.GOOD)
+    ext["package"]["name"] = "XQFN-16_3x3mm"                  # no checked package to fall back on
+    ext["package"]["exposed_pad"] = None
+    ext["pins"] = ext["pins"][:16]
+    ext["package"]["terminal_width"].update(min=0.45, nom=0.5, max=0.55)   # leads as wide as the pitch: they touch
+    it = _librarian_read(ext)
+    a = it["librarian"]
+    assert any(D.HELD_FAILED in t and "leads would touch" in t for t in a["tried"]), a["tried"]
+    assert not it.get("footprint", {}).get("kicad_mod"), it.get("footprint")
+    ext["package"]["terminal_width"].update(min=0.18, nom=0.25, max=0.3)    # the same read, right: built
+    it = _librarian_read(ext)
+    assert not any(D.HELD_FAILED in t for t in it["librarian"]["tried"]), it["librarian"]["tried"]
+    assert it.get("footprint", {}).get("kicad_mod") or it["footprint"].get("file"), it.get("footprint")
 
 
-@lite
 def test_2_a_read_failing_only_a_soft_check_is_still_built(tmp_path, monkeypatch):
     """LT3652IDD (benchmark 2026-10-23): a real 0.45 mm pitch fails self-check's standard-pitch list; it was built
     right and counted right. Holding it would lose a right part, so self-check lines never hold."""
@@ -232,7 +235,7 @@ def test_2_a_read_failing_only_a_soft_check_is_still_built(tmp_path, monkeypatch
     dims = dict(SOT143, pitch=("", 1.85, ""))
     pos = [dict(p, offset=o) for p, o in zip(SOT143_POS, (-0.925, 0.925, 0.925, -0.925))]
     msg = _msg("SOT-143", dims, SOT143_PINS, {"pin_count": 4, "pin_positions": pos})
-    res = _final(tmp_path, msg)
+    res = D.process(D.parse_message(msg), "XPART", "ds.pdf")
     kind, why = DR.assess(res)
     assert kind == "failed" and all(w.startswith("self-check:") for w in why), why
     assert DR.hold_reasons(res) == []
