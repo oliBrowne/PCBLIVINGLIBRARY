@@ -228,8 +228,9 @@ def applies(item, policy):
 
 
 # ---------------------------------------------------------------- content hash
-DERIVED_PARAMS = frozenset(("Assembly Profile", "LCSC Part", "Assembly Rotation", "Assembly Offset", "Assembly Check",
-                            "Assembly Evidence"))          # the removed assembly check's PARAMS: not signed
+DERIVED_PARAMS = frozenset(("Assembly Profile", "Assembly Rotation", "Assembly Offset", "Assembly Check",
+                            "Assembly Evidence"))          # the removed assembly check's PARAMS: not signed. Its
+# "LCSC Part" is signed: release_check and altium_project read it as the part's supplier number (what JLCPCB fits)
 def _resolve(base, p):
     return None if not p else Path(p) if Path(p).is_absolute() else Path(base) / p
 

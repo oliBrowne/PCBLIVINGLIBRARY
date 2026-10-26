@@ -185,6 +185,17 @@ def test_ru4_parameter_names_onto_a_key_column_or_another_name_are_refused():
     assert ok["parameters"]["names"]["Manufacturer Part Number"] == "Mfr PN"
 
 
+# ------------------------------------------------------------------ R-RU-5: an LCSC Part change needs a new sign-off
+def test_ru5_lcsc_part_change_makes_the_sign_off_stale():
+    from ecadlib import approvals as A
+    mpn = {"name": "Manufacturer Part Number", "value": "SMAJ5.0A"}
+    it = {"name": "SMAJ5.0A", "description": "TVS 5V", "parameters": [mpn, {"name": "LCSC Part", "value": "C35496"}]}
+    b = dict(it, parameters=[mpn, {"name": "LCSC Part", "value": "C114005"}])
+    assert A.content_hash(it) != A.content_hash(b)
+    c = dict(it, parameters=[mpn, {"name": "LCSC Part", "value": "C35496"}, {"name": "Assembly Rotation", "value": "90"}])
+    assert A.content_hash(it) == A.content_hash(c)          # the removed assembly check's own fields stay unsigned
+
+
 def _main():
     import sys
     n = 0
