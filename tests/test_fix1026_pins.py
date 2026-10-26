@@ -142,3 +142,21 @@ def test_d1_out_of_order_numbering_is_not_a_swap(tmp_path):
     assert len(po["misplaced"]) == 6, po
     f, w = _rc(tmp_path, odd, "datasheet:u")
     assert not any("swapped" in m for m in f), f
+
+
+# R-PUB-7: a symbol name lives inside the .kicad_sym, never as a file: a part named CON / AUX keeps its KiCad lib id
+# (as released before the Windows device-name rule); footprint and library names are files and keep the rule
+@lite
+def test_rpub7_symbol_ids_keep_device_names(tmp_path):
+    from ecadlib import parts_export as PE
+    assert X.ksym("CON") == "CON" and X.ksym("aux") == "aux" and X.ksym("A/B") == "A_B"
+    assert X.kname("CON") == "CON_"                       # a footprint / library file stem
+    it = {"name": "CON", "source": {"symbol": "datasheet:u"}, "symbol": {"file": "s.SchLib"},
+          "footprint": {"ref": "AUX", "file": "f.PcbLib"}}
+    assert PE.kicad_ids(it, "Lib") == ("Lib:CON", "Lib:AUX_")
+    item = _plan(tmp_path, LDO, name="CON")
+    item["source"]["symbol"] = ""
+    rep_notes = []
+    sym, _ = X.load_symbol(item, tmp_path, None, [], X.ksym("CON"), rep_notes)
+    assert str(sym[1]).strip('"') == "CON", sym[1]
+

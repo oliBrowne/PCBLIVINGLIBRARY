@@ -58,11 +58,18 @@ KICAD_NOTICE = ("Parts of this library come from the KiCad libraries (https://gi
 
 
 def kname(s):
-    """A symbol or footprint name KiCad accepts in a lib id and as a file name: NFC (macOS file systems take NFC and
+    """A footprint or library name KiCad accepts in a lib id and as a file name: NFC (macOS file systems take NFC and
     NFD spellings for one file name) and no Windows device name (AUX -> AUX_: fsutil.portable_stem)."""
-    import unicodedata
     from .fsutil import portable_stem
-    return portable_stem(re.sub(r'[\s:/\\<>"|?*\x00-\x1f]', "_", unicodedata.normalize("NFC", str(s))).strip("._") or "_")
+    return portable_stem(ksym(s))
+
+
+def ksym(s):
+    """A symbol name KiCad accepts in a lib id: kname without the device-name rule. A symbol lives inside the
+    .kicad_sym, never as a file of its own, so a part named CON or AUX keeps the lib id it was released with
+    (footprint and library names are file names: kname)."""
+    import unicodedata
+    return re.sub(r'[\s:/\\<>"|?*\x00-\x1f]', "_", unicodedata.normalize("NFC", str(s))).strip("._") or "_"
 
 
 def libname(s):
@@ -1015,7 +1022,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                         f"(delete {lib}.kicad_sym and {lib}.pretty/ by hand if that is what you want)")
     from . import change_gate as CG          # change control (#105): a hand edit since the last writer is settled
     CG.publish_guard(plan, items, "kicad", rules=rules, log=log)   # first; a held change exports the released revision
-    items = sorted(items, key=lambda i: kname(i["name"]))
+    items = sorted(items, key=lambda i: ksym(i["name"]))
     pretty, shapes = out / f"{lib}.pretty", out / f"{lib}.3dshapes"
     out.mkdir(parents=True, exist_ok=True)
     pretty.mkdir(exist_ok=True)
@@ -1136,7 +1143,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                                    "says": [{k: e[k] for k in ("code", "text", "fix")} for e in M.explain_all(why)]})
             held.append((it, why))
             continue
-        sname, notes = kname(it["name"]), []
+        sname, notes = ksym(it["name"]), []
         if str((it.get("source") or {}).get("symbol") or "").startswith("easyeda:") and not P.unofficial_allowed(rules):
             notes.append("EasyEDA not fetched again ([providers] unofficial = false): the symbol is read back from the SchLib")
             it = dict(it, source=dict(it["source"], symbol=""))

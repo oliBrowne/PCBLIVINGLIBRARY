@@ -823,7 +823,7 @@ def main(argv=None):
     if a.kicad:
         from . import kicad_export as X, sexpr
         notes = []
-        ks = X.symbol_from_schlib(out, X.kname(name), notes)
+        ks = X.symbol_from_schlib(out, X.ksym(name), notes)
         own = {str(p["num"]): {"power_out": "power_out", "nc": "no_connect"}.get(_ptype(p.get("type"))) for p in pins}
         X.restore_types(ks, {k: v for k, v in own.items() if v}, guess=False)   # Altium has no power_out / nc: the
         #                                                  source's types back (never guessed from names: the list says)

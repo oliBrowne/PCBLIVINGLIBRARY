@@ -866,7 +866,7 @@ def check_item(item, base=".", rules=None, kicad=None, altium_rows=None, second_
             k_fp = kicad_footprint(kmod.read_text(encoding="utf-8"))
             res["kicad_footprint"] = str(kmod)
     else:
-        sname = X.kname(name)
+        sname = X.ksym(name)
         sym = kicad.symbols.get(sname)
         if sym is not None:
             k_sym = kicad_symbol(sym)
