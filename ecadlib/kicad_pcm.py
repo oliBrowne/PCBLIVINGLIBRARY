@@ -289,7 +289,33 @@ UNCHECKED_NOTE = "NOT CHECKED: packaged with --unchecked from a KiCad folder eca
 EXPORT_DIR = ".kicad-export"     # in --out: where a plan is exported before it is packaged (kept between builds)
 
 
-def _source(src, name, include_held, http, offline, cache, log, unchecked=False, out=None, take_over=False):
+def staging_dir(out, src, name, identifier):
+    """Where a plan is exported before it is packaged: <out>/.kicad-export-<identifier> for a package named with
+    --identifier (two plans building their own packages into one --out under one --name each have theirs, R-FX18-4),
+    else <out>/.kicad-export. A package's own folder starts as a copy of the .kicad-export an earlier ecadlib kept for
+    it (the same plan's, or the package built there last), so a released part held again keeps what it shipped."""
+    out = Path(out)
+    legacy = out / EXPORT_DIR
+    if not identifier:
+        return legacy
+    keyed = out / f"{EXPORT_DIR}-{identifier}"
+    if not keyed.exists() and legacy.is_dir():
+        from . import change_gate as CG, kicad_export as X
+        lib = X.libname(name or "ecadlib")
+        plan_folder = Path(src).parent
+        c = CG.Claims(legacy / CG.OWNER, legacy)
+        key = f"kicad-export:{lib}"
+        mine = CG.plan_id(plan_folder, create=False)
+        claimed = c.claims.get(key) or []
+        ours = (claimed and all(c.is_me(p, mine, plan_folder) for p in claimed)) or \
+            (not claimed and reuse_identifier(out, lib) == identifier)
+        if ours:
+            shutil.copytree(legacy, keyed)
+    return keyed
+
+
+def _source(src, name, include_held, http, offline, cache, log, unchecked=False, out=None, take_over=False,
+            identifier=None):
     """(export folder, library name, that library's kicad_export record or None, temp dir to clean up or None). unchecked: a folder
     with no kicad_export.json (not written by ecadlib) is packaged without the change-control check; a folder
     kicad-export wrote is always checked. name: the library to package (None: a folder's only library; a plan's is
@@ -332,7 +358,7 @@ def _source(src, name, include_held, http, offline, cache, log, unchecked=False,
         raise FileNotFoundError(f"{src}: no such plan.json or kicad-export folder")
     from .httpcache import CachedHTTP
     tmp = None if out is not None else Path(tempfile.mkdtemp(prefix="ecadlib-pcm-"))
-    exp = Path(out) / EXPORT_DIR if out is not None else tmp
+    exp = staging_dir(out, src, name, identifier) if out is not None else tmp
     exp.mkdir(parents=True, exist_ok=True)
     rep = X.export(src, exp, name or "ecadlib", include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60),
                    log=log, take_over=take_over)
@@ -396,7 +422,7 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
                          "; use one of KiCad's, e.g. CC-BY-SA-4.0, MIT, CC0-1.0, open-source or unrestricted"))
     out = Path(out)
     exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked, out=out,
-                                  take_over=take_over)
+                                  take_over=take_over, identifier=identifier)
     unchecked = bool(unchecked and Path(src).is_dir() and xrep is None)
     # parts kicad-export wrote while held (its --include-held): never packaged unless asked for, and then said
     held = sorted({str(p.get("part")) for p in (xrep or {}).get("parts") or []

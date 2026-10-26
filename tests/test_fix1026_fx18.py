@@ -200,3 +200,49 @@ def test_a365_adopting_a_component_no_record_names_says_its_changes_are_not_held
     monkeypatch.setenv("ECADLIB_HOME", tmp_path / "computer2")
     r = _a365_push(b, nx)["RES-0603-10k"]
     assert r["action"] == "up_to_date" and "Neither this project nor this computer" in r["adopted"] and "not held" in r["adopted"], r
+
+
+# ---------------------------------------------------------------- R-FX18-4: kicad-pcm staging keyed by package
+@lite
+def test_kicad_pcm_two_packages_with_their_own_identifier_share_one_out(tmp_path):
+    """F3: plans A and B build separate packages (--identifier) into one --out under one --name. The plan export staged
+    in <out>/.kicad-export claimed kicad-export:<name> for A, so B was refused although the packages are separate.
+    The staging folder is the package's own: both build, and each package holds only its plan's parts; the same
+    identifier from another plan is still refused."""
+    import datetime
+    import zipfile
+    from ecadlib import kicad_pcm as PCM
+    from tests.test_fix1026_fx15 import _quiet, _refused
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    b = _plan_folder(tmp_path / "B", [_res("RES-0603-1k", "RC0603FR-071KL")])
+    day = datetime.date(2026, 10, 26)
+    pcm = lambda p, ident: PCM.build(p, tmp_path / "pcm", "parts", identifier=ident, offline=True,
+                                     cache=str(tmp_path / "c"), log=_quiet, today=day)
+    ra = pcm(a, "com.acme.boarda")
+    rb = pcm(b, "com.acme.boardb")
+    assert pcm(a, "com.acme.boarda")["zip"] == ra["zip"]
+    syms = lambda r: zipfile.ZipFile(r["zip"]).read(
+        next(n for n in zipfile.ZipFile(r["zip"]).namelist() if n.endswith(".kicad_sym"))).decode()
+    assert "RES-0603-10k" in syms(ra) and "RES-0603-1k" not in syms(ra)
+    assert "RES-0603-1k" in syms(rb) and "RES-0603-10k" not in syms(rb)
+    _refused(lambda: pcm(b, "com.acme.boarda"))
+
+
+@lite
+def test_kicad_pcm_keyed_staging_starts_from_the_folder_an_earlier_build_kept(tmp_path):
+    """A package built before the staging folder was keyed kept its export in <out>/.kicad-export (a released part
+    held again keeps the version the last package shipped, R-FL-3): the package's own staging folder starts from it."""
+    import datetime
+    from ecadlib import kicad_pcm as PCM
+    from tests.test_fix1026_fx15 import _quiet
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    pcm = lambda: PCM.build(a, tmp_path / "pcm", "parts", identifier="com.acme.boarda", offline=True,
+                            cache=str(tmp_path / "c"), log=_quiet, today=datetime.date(2026, 10, 26))
+    pcm()
+    keyed = [p for p in (tmp_path / "pcm").iterdir() if p.name.startswith(".kicad-export") and p.name != ".kicad-export"]
+    assert len(keyed) == 1, sorted(p.name for p in (tmp_path / "pcm").iterdir())
+    shutil.rmtree(tmp_path / "pcm/.kicad-export", ignore_errors=True)
+    keyed[0].rename(tmp_path / "pcm/.kicad-export")                # as an earlier ecadlib left it
+    (tmp_path / "pcm/.kicad-export/kept.txt").write_text("kept")
+    pcm()
+    assert (keyed[0] / "kept.txt").read_text() == "kept"
