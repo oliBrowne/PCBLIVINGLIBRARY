@@ -142,6 +142,19 @@ def test_upkeep05_pcm_default_identifier_keeps_non_ascii_libraries_apart():
         assert KP.ID_RE.match(i), i
 
 
+# ------------------------------------------------------------------ upkeep-06: kicad-pcm packed unchecked SPICE files
+def test_upkeep06_pcm_from_an_export_folder_checks_the_sim_folder_too():
+    w, lib = _demo()
+    r = _run(w, "kicad-export", lib / "plan.json", "-o", "kx", "--name", "m")
+    assert r.returncode == 0, r.stdout + r.stderr
+    sim = w / "kx/m.sim"
+    sim.mkdir()
+    (sim / "AO3401A.lib").write_text(".model AO3401A PMOS (VTO=-9)\n", encoding="utf-8")   # put in by hand
+    r = _run(w, "kicad-pcm", w / "kx", "--out", "pcm")
+    assert r.returncode == 2 and "m.sim/AO3401A.lib" in r.stdout + r.stderr, r.stdout + r.stderr
+    assert not list((w / "pcm").glob("*.zip")) if (w / "pcm").is_dir() else True
+
+
 # ------------------------------------------------------------------ upkeep-03: a ledger write cut short
 def _ledger_lib(d):
     from ecadlib import ledger as LG

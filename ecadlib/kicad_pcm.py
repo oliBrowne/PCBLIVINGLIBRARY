@@ -238,8 +238,8 @@ def check_metadata(m, schema_path=None, definition="Package"):
 # ---------------------------------------------------------------- package
 def check_export_folder(src, lib, rep):
     """Change control (#105): a kicad-export folder is packaged only as kicad-export wrote it. kicad_export.json lists
-    every file the export wrote with its sha256 (taken from the released revisions); a symbol library or footprint
-    edited, replaced or added by hand since is refused, so a package never carries a change no one approved. A 3D
+    every file the export wrote with its sha256 (taken from the released revisions); a symbol library, footprint or
+    SPICE file (<lib>.sim/, which the symbols' Sim.Library points at) edited, replaced or added by hand since is refused, so a package never carries a change no one approved. A 3D
     model the export did not write stays the user's file (kicad-export keeps those too). CRLF line ends (a git checkout
     with core.autocrlf) are not an edit, as for kicad-export. Raises ValueError."""
     from .kicad_export import _same
@@ -252,6 +252,7 @@ def check_export_folder(src, lib, rep):
     written = rep.get("written") or {}
     files = ([src / f"{lib}.kicad_sym"] if (src / f"{lib}.kicad_sym").is_file() else []) + \
         sorted((src / f"{lib}.pretty").glob("*.kicad_mod")) + \
+        sorted(f for f in (src / f"{lib}.sim").glob("*") if f.is_file()) + \
         sorted(f for f in (src / f"{lib}.3dshapes").glob("*") if f.is_file() and f"{lib}.3dshapes/{f.name}" in written)
     bad = []
     for f in files:
