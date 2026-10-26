@@ -116,18 +116,79 @@ def _safe_name(s, notes):
         return lib_name(safe)
 
 
+def _land_canon(name):
+    """A footprint field as the package it names: a known alias as its land ('DO-214AC' -> 'D_SMA', 'TO-236' ->
+    'SOT-23'), a distributor's pins-first name the family's way ('48-LQFP' -> 'LQFP-48', '8-SOIC'), ST's 'SO8N'."""
+    from . import stdparts as SP
+    key = SP._norm(name)
+    hit = SP.ALIASES.get(key) or SP.DIODE_ALIASES.get(key)
+    if hit and key not in SP.AMBIGUOUS:
+        return hit
+    fams = "|".join(sorted(SP.FAMILIES, key=len, reverse=True))
+    name = re.sub(rf"^(\d{{1,3}})[-_ ]?({fams})(?![A-Za-z0-9])", r"\2-\1", name, flags=re.I)
+    return re.sub(r"^(SO-?\d{1,2})N(?![A-Za-z0-9])", r"\1", name, flags=re.I)
+
+
+def _ic_land(name):
+    """IC family attributes of a land name (stdparts' free-text reading), the family written one way: SO / SOP-8/14/16
+    are JEDEC SOIC unless a body says otherwise, a bare 'QFP' is any QFP of the count. -> dict or None."""
+    from . import stdparts as SP
+    a = SP._free_attrs(name)
+    if not a:
+        return None
+    if a["fam"] == "SO" or a["fam"] == "SOP" and a["pins"] in (8, 14, 16):
+        a["fam"] = "SOIC"
+    a["leadless"] = a["fam"] in SP.NO_LEAD
+    return a
+
+
 def lands_differ(a, b):
     """Two BOM footprint fields that name two lands (R_0603_1608Metric vs R_0402_1005Metric, SOIC-8 vs SOIC-8-1EP_..),
-    not one land written two ways ('0603' vs 'Resistor_SMD:R_0603_1608Metric'). An empty field says nothing."""
-    from .kicad_index import EP_HINT, EP_NAME
+    not one land written two ways ('0603' vs 'Resistor_SMD:R_0603_1608Metric'; R-FX10-2: 'LQFP-48_7x7mm' vs '48-LQFP'
+    or 'QFP-48', 'SOIC-8_3.9x4.9mm' vs 'SO-8' / '8-SOIC' / EasyEDA's 'SOIC-8_L5.0-W4.0-P1.27..', 'D_SMA' vs 'DO-214AC').
+    IC packages compare by family, pin count, wide body, exposed pad, and body and pitch where both give them. An empty
+    field says nothing."""
+    from .kicad_index import EP_FAMILY, EP_HINT, EP_NAME, LAND_VARIANT
+    from . import stdparts as SP
     a, b = (str(x or "").split(":")[-1].strip() for x in (a, b))
     if not a or not b or a.casefold() == b.casefold():
         return False
-    if package_of(a) != package_of(b):
+    if bool(LAND_VARIANT.search(a) or SP.LAND_VARIANT.search(a)) != bool(LAND_VARIANT.search(b) or SP.LAND_VARIANT.search(b)):
+        return True                             # the hand-solder / thermal-via copy of a land is another land
+    ca, cb = _land_canon(a), _land_canon(b)
+    if ca.casefold() == cb.casefold():
+        return False
+
+    def ep(n, attrs):
+        return bool(EP_NAME.search(n) or EP_HINT.search(n) or EP_FAMILY.search(n) or (attrs or {}).get("ep"))
+
+    ia, ib = _ic_land(ca), _ic_land(cb)
+    if ia and ib:
+        if SP.NAME_RE.match(ca) and SP.NAME_RE.match(cb):
+            return True                         # two KiCad names of one family: two lands
+        if (ia["fam"], ia["pins"]) != (ib["fam"], ib["pins"]) and not (
+                ia["pins"] == ib["pins"] and {ia["fam"], ib["fam"]} & {"QFP"} and {ia["fam"], ib["fam"]} <= SP.QUAD_LEADED):
+            return True
+        if ia["w"] != ib["w"]:
+            return True
+        ea, eb = ep(ca, ia), ep(cb, ib)
+        if ea != eb and not (ib if ea else ia)["leadless"]:
+            return True                         # a bare leadless name ('QFN-20') does not say there is no pad
+        if ia["body"] and ib["body"] and any(abs(x - y) > 0.15 for x, y in zip(ia["body"], ib["body"])):
+            return True
+        if ia.get("body_w") and ib["body"] and abs(ia["body_w"] - ib["body"][0]) > 0.15 or \
+                ib.get("body_w") and ia["body"] and abs(ib["body_w"] - ia["body"][0]) > 0.15:
+            return True
+        if ia["pitch"] and ib["pitch"] and abs(ia["pitch"] - ib["pitch"]) > 0.01:
+            return True
+        if ia["epsize"] and ib["epsize"] and any(abs(x - y) > 0.05 for x, y in zip(ia["epsize"], ib["epsize"])):
+            return True
+        return False
+    if package_of(ca) != package_of(cb):
         return True
-    if bool(EP_NAME.search(a) or EP_HINT.search(a)) != bool(EP_NAME.search(b) or EP_HINT.search(b)):
+    if bool(EP_NAME.search(ca) or EP_HINT.search(ca)) != bool(EP_NAME.search(cb) or EP_HINT.search(cb)):
         return True
-    return "_" in a and "_" in b                # two full land names of one package: two lands ('_HandSolder')
+    return "_" in ca and "_" in cb              # two full land names of one package: two lands ('_HandSolder')
 
 
 def _fields_differ(key, a, b):

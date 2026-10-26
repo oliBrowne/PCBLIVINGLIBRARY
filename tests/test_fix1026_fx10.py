@@ -44,3 +44,40 @@ def test_a_bare_chip_land_name_is_still_built_by_its_size(tmp_path):
     for it in items.values():
         assert it.get("status") == "ready", (it["name"], _holds(it))
         assert str(it["source"]["footprint"]).endswith("R_0603_1608Metric"), it["source"]
+
+
+# --- R-FX10-2: one package written two ways is one land; two packages stay two ---------------------------------------
+
+_SAME = [("Package_QFP:LQFP-48_7x7mm_P0.5mm", "48-LQFP"), ("Package_QFP:LQFP-48_7x7mm_P0.5mm", "QFP-48"),
+         ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SO-8"), ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SO8"),
+         ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "8-SOIC"), ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOP-8"),
+         ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SO8N"),
+         ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL"),     # EasyEDA's name
+         ("Package_TO_SOT_SMD:SOT-23", "TO-236"), ("Package_TO_SOT_SMD:SOT-23", "TO-236AB"),
+         ("Diode_SMD:D_SMA", "DO-214AC"), ("Diode_SMD:D_SMB", "DO-214AA"),
+         ("Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm_EP2.5x2.5mm", "QFN-20"),         # a bare leadless name: pad unsaid
+         ("Package_SO:HTSSOP-16-1EP_4.4x5mm_P0.65mm_EP3.4x5mm", "HTSSOP-16"),      # HTSSOP always has the pad
+         ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8"), ("Resistor_SMD:R_0603_1608Metric", "0603"),
+         ("Package_TO_SOT_SMD:SOT-23", "SOT23")]
+_DIFFER = [("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm"),
+           ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8_HandSoldering"),
+           ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-14"), ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "TSSOP-8"),
+           ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOP-8_5.3x5.3mm_P1.27mm"),    # EIAJ SOP-8: the body says another
+           ("Package_SO:SOIC-16W_7.5x10.3mm_P1.27mm", "SOIC-16"),
+           ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8-1EP"),
+           ("Package_QFP:LQFP-48_7x7mm_P0.5mm", "LQFP-64"), ("Package_QFP:LQFP-48_7x7mm_P0.5mm", "QFN-48"),
+           ("Package_QFP:LQFP-48_7x7mm_P0.5mm", "LQFP-48_7x7mm_P0.5mm_ThermalVias"),
+           ("Package_TO_SOT_SMD:SOT-23", "SOT-23-3"),            # KiCad's SOT-23-3 is the MO-178 body (stdparts.AMBIGUOUS)
+           ("Package_TO_SOT_SMD:SOT-23", "SOT-23-5"), ("Diode_SMD:D_SMA", "DO-214AA"), ("Diode_SMD:D_SMA", "D_SMA_Handsoldering"),
+           ("Package_TO_SOT_THT:TO-220-3_Vertical", "TO-220-3_Horizontal_TabDown"),
+           ("Resistor_SMD:R_0603_1608Metric", "R_0402_1005Metric"), ("Package_TO_SOT_SMD:TSOT-23-5", "SOT-23-5")]
+
+
+def test_lands_differ_reads_the_package_not_the_spelling():
+    from ecadlib.altium_export import lands_differ
+    for a, b in _SAME:
+        assert not lands_differ(a, b), (a, b)
+        assert not lands_differ(b, a), (b, a)
+    for a, b in _DIFFER:
+        assert lands_differ(a, b), (a, b)
+        assert lands_differ(b, a), (b, a)
