@@ -880,7 +880,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     claims = me = None
     forgotten = []
     if lg is not None:                         # which plan folders pushed each part to this workspace
-        claims = CG.Claims(CG.publishers_file(folder), CG.publishers_file(folder).parent, section=target)
+        claims = CG.SharedClaims(CG.publishers_file(folder), CG.publishers_file(folder).parent, section=target,
+                                 computer=CG.computer_publishers_file())
         me = claims.me(folder, create=not dry_run) or "?this"
         if forget_missing:
             gone = sorted({p for v in claims.claims.values() for p in v
@@ -910,6 +911,18 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     f"{claims.path.name} or its full path: if that plan folder (or the project) was renamed or moved, "
                     "push that plan once from where it is now; only if it no longer exists, push this plan with --forget-missing-plans")
         raise _Held([why])
+    def unknown_publisher(it):
+        """Adopting a component no plan folder on record pushed (another computer's project, an ecadlib before these
+        records, made in Altium): its later changes cannot wait for this plan's sign-off. Said, not held."""
+        if claims is None:
+            return ""
+        live, gone = claims.others(str(it["name"]).casefold(), me, folder)
+        if live or gone:
+            return ""
+        return (". Neither this project nor this computer has a record of the plan folder that pushed it (another "
+                "computer's or another project's, or made in Altium): a later change of it there is not held for "
+                "this plan's sign-off. Push the plan folders that share a workspace from one project (one "
+                "ecadlib.toml) or one computer")
     transition = ((rules or {}).get("change") or {}).get("a365_transition") or None
     def upload(p):
         if p not in uploaded:
@@ -939,7 +952,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                 seen = released_elsewhere(client, existing, it, lg, target) if it.get("status") == "ready" and not why else None
                 if seen == "head":             # this part's drawings already: linked, its first publish is recorded
                     res["adopted"] = (f"{it['name']} was already in the workspace with this part's drawings (released "
-                                      "elsewhere): no new revision")
+                                      "elsewhere): no new revision" + unknown_publisher(it))
                     mode = "params"
                 else:
                     mode = "revision"          # an earlier revision of this library's: the head goes up
@@ -956,7 +969,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     mode = "params"
                     res["adopted"] = (f"{it['name']} already holds the drawings of ledger revision r{head['revision']} "
                                       f"(workspace revision {_rev_id(existing)}, pushed from another plan folder): no "
-                                      "new revision")
+                                      "new revision" + unknown_publisher(it))
                 else:
                     cross_plan(it, head)
             if (existing or (dry_run and lg and _published(lg, it["name"], target))) and mode == "revision":

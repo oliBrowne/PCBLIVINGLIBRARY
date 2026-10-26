@@ -153,3 +153,50 @@ def test_moved_output_folder_never_calls_its_live_writer_gone(tmp_path):
     except X.PlanError as e:
         assert "another plan folder" in str(e) and "no longer exists" not in str(e) and "not found" not in str(e), e
     X.export(a, tmp_path / "shared/kicad", "lib", log=_quiet)          # A itself: fine
+
+
+# ---------------------------------------------------------------- R-FX18-3: Altium 365 claims across projects
+def _two_projects(tmp_path):
+    for p in ("projA", "projB"):
+        (tmp_path / p).mkdir()
+        _signed_off(tmp_path / p)
+    a = _plan_folder(tmp_path / "projA/A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    b = _plan_folder(tmp_path / "projB/B", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    return a, b
+
+
+@lite
+def test_a365_component_shared_by_plans_of_two_projects_waits_for_both(tmp_path):
+    """F4: plan folders in two projects (each its own ecadlib.toml) push to one workspace; B adopts A's component.
+    ecadlib_publishers.json is per project, so A's approval alone made a new revision of the component B's boards use.
+    This computer's record of who pushed what to the workspace covers both: A's change waits for B."""
+    from tests.test_change_control import FakeA365
+    from tests.test_fix1026_fx15 import _a365_push
+    nx = FakeA365()
+    a, b = _two_projects(tmp_path)
+    assert _a365_push(a, nx)["RES-0603-10k"]["action"] == "release"
+    r = _a365_push(b, nx)["RES-0603-10k"]
+    assert r["action"] == "up_to_date" and r.get("adopted") and "Neither this project" not in r["adopted"], r
+    _new_land(tmp_path / "projA/A")
+    r = _a365_push(a, nx)["RES-0603-10k"]
+    assert r["action"] == "skip" and "another plan folder" in r["detail"] and "projB" in r["detail"], r
+    assert len(nx.comps["RES-0603-10k"]["revisions"]) == 1
+    _new_land(tmp_path / "projB/B")                    # B signs it off too: one revision, A adopts it
+    assert _a365_push(b, nx)["RES-0603-10k"]["action"] == "new_revision"
+    assert _a365_push(a, nx)["RES-0603-10k"].get("adopted")
+    assert len(nx.comps["RES-0603-10k"]["revisions"]) == 2
+
+
+@lite
+def test_a365_adopting_a_component_no_record_names_says_its_changes_are_not_held(tmp_path, monkeypatch):
+    """A component pushed from a plan folder neither this project nor this computer has a record of (another
+    computer's): its later changes cannot wait for this plan. The adoption says so, plainly, instead of nothing."""
+    from tests.test_change_control import FakeA365
+    from tests.test_fix1026_fx15 import _a365_push
+    nx = FakeA365()
+    a, b = _two_projects(tmp_path)
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "computer1")
+    _a365_push(a, nx)
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path / "computer2")
+    r = _a365_push(b, nx)["RES-0603-10k"]
+    assert r["action"] == "up_to_date" and "Neither this project nor this computer" in r["adopted"] and "not held" in r["adopted"], r

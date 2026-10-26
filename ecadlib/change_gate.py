@@ -1695,6 +1695,73 @@ class Claims:
         write_text_atomic(self.path, json.dumps(raw, indent=1, sort_keys=True) + "\n")
 
 
+class SharedClaims(Claims):
+    """Claims on a target with no state of its own (an Altium 365 workspace) kept in two files: the project's
+    (publishers_file: shared with the project, a clone or another computer sees it) and this computer's
+    (computer_publishers_file: plan folders of other projects that push to the same workspace, R-FX18-3). The
+    computer's file adds only plans whose folder is there now (a project deleted long ago holds nothing), and is never
+    copied into the project's. Plan folders on another computer, in another project, are in neither: see
+    known_publishers (a component adopted from one is told so)."""
+
+    def __init__(self, path, rel_to, section=None, computer=None):
+        super().__init__(path, rel_to, section)
+        self.borrowed = set()
+        self.computer = Claims(computer, Path(computer).parent, section) if computer else None
+        if self.computer is None:
+            return
+        for pid, rec in self.computer.plans.items():
+            if found_at(rec, self.computer.rel_to, pid) is None:
+                continue
+            mine = self.plans.get(pid)
+            if mine is None:
+                self.plans[pid] = {"abs": rec.get("abs")}
+                self.borrowed.add(pid)
+            elif found_at(mine, self.rel_to, pid) is None:
+                mine["abs"] = rec.get("abs")
+            for k, v in self.computer.claims.items():
+                if pid in v and pid not in self.claims.get(k, []):
+                    self.claims.setdefault(k, []).append(pid)
+
+    def label(self, pid):
+        rec = self.plans.get(pid) or {}
+        return rec.get("path") or rec.get("abs") or pid
+
+    def claim(self, keys, me, plan_folder):
+        super().claim(keys, me, plan_folder)
+        self.borrowed.discard(me)
+
+    def save(self):
+        merged = (self.claims, self.plans)
+        try:
+            own = {k: [p for p in v if p not in self.borrowed] for k, v in self.claims.items()}
+            self.claims = {k: v for k, v in own.items() if v}
+            self.plans = {p: v for p, v in self.plans.items() if p not in self.borrowed}
+            super().save()
+        finally:
+            self.claims, self.plans = merged
+        if self.computer is None:
+            return
+        live = {}
+        for pid, rec in self.plans.items():          # this computer's file: the plans that are there, by full path
+            f = found_at(rec, self.rel_to, pid) or found_at(rec, self.computer.rel_to, pid)
+            if f is not None:
+                live[pid] = {"abs": Path(f).resolve().as_posix()}
+        self.computer.claims = {k: [p for p in v if p in live] for k, v in self.claims.items()}
+        self.computer.claims = {k: v for k, v in self.computer.claims.items() if v}
+        self.computer.plans = {p: r for p, r in live.items() if any(p in v for v in self.computer.claims.values())}
+        try:
+            self.computer.save()
+        except OSError:                              # (a read-only settings folder: the project's file still holds)
+            pass
+
+
+def computer_publishers_file():
+    """This computer's record of which plan folders pushed what to each Altium 365 workspace (all projects): in the
+    ecadlib settings folder (userconfig.config_dir)."""
+    from .userconfig import config_dir
+    return config_dir() / "ecadlib_publishers.json"
+
+
 OWNER = ".ecadlib_owner.json"                 # in an output folder: which plan folder wrote each library there
 
 

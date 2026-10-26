@@ -247,6 +247,20 @@ the change is matched on what its stored fingerprint recorded.
 - **Previews**: the web UI and MCP Altium 365 plan and `altium365 push --dry-run` write nothing, so they do not settle
   a hand edit. A released part whose files or fields were edited in a way the policy holds is shown held, with "an
   edit not yet settled" as its reason; the released revision is what a real push sends.
+- **Targets shared by several plan folders** (one DbLib folder, one KiCad output folder, one Altium 365 workspace):
+  change control is per plan folder, so one plan never changes a part another plan released there until that plan
+  has released the same drawing. Each plan folder has an id in `.ecadlib/plan_id.json`: a renamed or moved plan
+  folder is still the same plan, and a copy of one is another plan. A target keeps where each plan was last seen both
+  relative to it and as a full path, so moving the target or the plan folders does not make a plan look gone. A plan
+  is named "not found from here" only when neither path finds it; run that plan once from where it is now, and use
+  `--forget-missing-plans` (or `--take-over`) only for a plan folder that no longer exists.
+- **Altium 365 workspaces shared across projects**: a workspace has no record of its own of which plan folder pushed
+  each component (ecadlib writes no parameter for it, as parameters reach schematics). The record is kept in the
+  project (`ecadlib_publishers.json` beside `ecadlib.toml`) and on this computer (`ecadlib_publishers.json` in the
+  ecadlib settings folder), so plan folders of one project, or of several projects pushed from one computer, wait for
+  each other. Plan folders of different projects pushed from different computers do not: a push that adopts a
+  component no record names says so ("Neither this project nor this computer has a record ..."). Push the plan
+  folders that share a workspace from one project or one computer.
 - **Upgrading ecadlib**: a revision fingerprinted by an older ecadlib is fingerprinted again from its saved files, so
   an upgrade that reads more detail does not show every released part as changed.
 
