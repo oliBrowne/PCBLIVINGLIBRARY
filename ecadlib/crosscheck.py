@@ -767,12 +767,21 @@ def run(reader, job, res, model):
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
     standard = _settle_turn(checks) or _settle_tab(checks, res["spec"], first_pins)
+    # a second read of a package drawing found by web search reads the same pages again: it cannot tell whether that
+    # drawing is this part's package, so it is no independent source (R-FX19-1)
+    web = [o.get("from") for o in (job.get("prov") or {}).get("outline") or () if o.get("code") == "web search"]
+    if web:
+        for c in checks:
+            if c.get("source") == "second read":
+                c["same_pages"] = f"web search ({web[-1]})"
     st = [c["status"] for c in checks]
-    ok = [c["status"] for c in checks if c.get("source") != "standard table" or c in strong and not _self(c)]
+    ok = [c["status"] for c in checks if (c.get("source") != "standard table" or c in strong and not _self(c))
+          and not c.get("same_pages")]
     if first.get("sides"):                  # only a second read that compared the pins on each side checks them
-        ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", [])]
+        ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", []) and not c.get("same_pages")]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
-        else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) else "unchecked"
+        else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) or \
+        any(c["status"] == "agreed" and c.get("same_pages") for c in checks) else "unchecked"
     out = {"mode": mode, "status": status, "checks": checks}
     if first_pins:
         out["pins"] = pins_status(checks)
@@ -922,6 +931,10 @@ def summary_line(rec):
             parts.append(f"{c['against']}: " + "; ".join(f"{LABEL.get(d['field'], d['field'])} read {d['first']}, "
                                                          f"{'table' if c['source'] == 'standard table' else 'second read'} "
                                                          f"{shown(d)}" for d in c["disagreed"]))
+        elif c["status"] == "agreed" and c.get("same_pages"):
+            parts.append(f"self-checked only: {c['against']} of the same pages, whose package drawing came from "
+                         f"{c['same_pages']}, agrees ({', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}); "
+                         "no independent second source")
         elif c["status"] == "agreed" and _self(c):
             parts.append(f"self-checked only: {c['against']}, chosen by the read's own package name, fits the read "
                          f"({', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}); no independent second source")
@@ -948,7 +961,9 @@ def report_md(rec):
         out.append(f"* **{c['against']}** ({c['source']}{', ' + c['via'] if c.get('via') and c['source'] == 'standard table' else ''}"
                    f"{', ' + c['pages'] if c.get('pages') else ''}): "
                    + ("self-checked (the entry was chosen by this read, so it is not independent)"
-                      if c["status"] == "agreed" and _self(c) else c["status"])
+                      if c["status"] == "agreed" and _self(c) else
+                      f"self-checked (the same pages again, the package drawing from {c['same_pages']})"
+                      if c["status"] == "agreed" and c.get("same_pages") else c["status"])
                    + (f" - {c['why']}" if c.get("why") else ""))
         if c.get("disagreed"):
             out += ["", "| field | this read | other source |", "|---|---|---|"]
@@ -958,7 +973,10 @@ def report_md(rec):
             out.append(f"  agreed: {', '.join(LABEL.get(f, f) for f in c['agreed'])}{_turned(c)}")
         out += [f"  set aside: {t}" for t in c.get("tie_breaks") or []]
     out += pins
-    if rec["status"] == "self-checked":
+    if rec["status"] == "self-checked" and any(c.get("same_pages") for c in rec.get("checks") or []):
+        out += ["", "**Next:** the package drawing came from web search and the second read saw the same pages, so "
+                "nothing independent confirmed it is this part's package. Compare it with the maker's own drawing."]
+    elif rec["status"] == "self-checked":
         out += ["", "**Next:** the BOM names no package the standard table knows, so nothing independent confirmed this "
                 "read. Compare the drawing by hand, put the package in the BOM, or set [datasheet] cross_check = \"always\"."]
     if rec["status"] == "disagreed":

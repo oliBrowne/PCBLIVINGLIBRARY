@@ -83,6 +83,131 @@ def names_it(texts, part, codes=(), own=(), url=""):
     return said is None and len(key) >= 4 and key in re.sub(r"[^A-Z0-9]", "", str(url).upper())
 
 
+# ---------------------------------------------------------------- a searched drawing must be this part's body (R-FX19-1)
+# A family and a pin count do not make a package: a QFP100 is 14 x 14 / 0.5 mm or 14 x 20 / 0.65 mm, a TSSOP28 4.4 or
+# 6.1 mm wide. What the part's own datasheet prints for its package (body size, pitch, an outline code such as NXP's
+# SOT407-1) is what a drawing found by web search, and the read built from it, must match.
+_SIZE = re.compile(r"(?<![\d.])(\d{1,2}(?:\.\d{1,2})?)\s?(?:mm)?\s?[x×]\s?(\d{1,2}(?:\.\d{1,2})?)"
+                   r"(?:\s?(?:mm)?\s?[x×]\s?\d{1,2}(?:\.\d{1,2})?)?\s?mm\b", re.I)
+_PITCH = re.compile(r"(?<![\d.])(\d?\.\d{1,3})\s?(?:mm)?\s?(?:(?:lead|ball|pin|terminal)s?\s)?pitch\b|"
+                    r"\bpitch\s?(?:of\s|=\s?|:\s?)?(\d?\.\d{1,3})\s?mm\b", re.I)
+_OUTLINE = re.compile(r"(?<![A-Z0-9])(SOT\d{3,4}-\d{1,2})(?![0-9])")     # NXP / Nexperia outline versions
+_FAM_PAREN = re.compile(r"(?<![A-Z0-9])([A-Z]{2,7})\s?\((\d{1,4})\)")      # TI's "TSSOP (20)": TSSOP20
+
+
+def _pkg_toks(ln):
+    """The packages a line names, an outline code (SOT407-1) not one of them and TI's "TSSOP (20)" as TSSOP20."""
+    up = _FAM_PAREN.sub(r"\1\2", _OUTLINE.sub(" ", DR.norm_text(ln).upper()))
+    return DR.package_tokens(up)
+
+
+def _facts_of(lines):
+    bodies, pitches, outlines = set(), set(), set()
+    for ln in lines:
+        for m in _SIZE.finditer(ln):
+            a, b = sorted((float(m.group(1)), float(m.group(2))))
+            if a > 0:
+                bodies.add((a, b))
+        for m in _PITCH.finditer(ln):
+            v = float(m.group(1) or m.group(2))
+            if 0.1 <= v <= 5.08:
+                pitches.add(v)
+        outlines |= set(_OUTLINE.findall(ln.upper()))
+    return {"bodies": sorted([list(b) for b in bodies]), "pitches": sorted(pitches), "outlines": sorted(outlines)}
+
+
+def printed_body(texts, part=None, own=()):
+    """What a PDF prints for this part's package (own: its package tokens, QFP100): {"bodies": [[short, long] mm],
+    "pitches": [mm], "outlines": [SOT407-1]}, from the lines that name this package (or the part) and no other
+    package, and the line after such a line when it names no package (a wrapped ordering row). Empty lists: nothing
+    printed. "LPC1768FBD100 LQFP100 ... body 14 x 14 x 1.4 mm SOT407-1" -> [[14, 14]], [], [SOT407-1]."""
+    key = re.sub(r"[^A-Z0-9]", "", re.split(r"[#/]", str(part or "").upper())[0])
+    out = []
+    for t in texts or ():
+        lines = DR.norm_text(t or "").splitlines()
+        for k, ln in enumerate(lines):
+            toks = _pkg_toks(ln)
+            named = len(key) >= 4 and key in re.sub(r"[^A-Z0-9]", "", ln.upper())
+            if toks:
+                if not own or not all(_same_package(own, {x}) for x in toks):
+                    continue                          # another package (or one of several) on this line
+            elif not named:
+                continue
+            out.append(ln)
+            if k + 1 < len(lines) and not _pkg_toks(lines[k + 1]):
+                out.append(lines[k + 1])
+    return _facts_of(out)
+
+
+def _near(a, b, rel=0.05, ab=0.2):
+    return abs(a - b) <= max(ab, rel * max(a, b))
+
+
+def _body_in(body, bodies):
+    return any(_near(body[0], o[0]) and _near(body[1], o[1]) for o in bodies)
+
+
+def body_mismatch(found, facts):
+    """Why a package document's printed body (printed_body of it) is not the one the part's datasheet prints (facts),
+    or None: a different outline code, no printed body size or pitch among the datasheet's."""
+    if not facts:
+        return None
+    if facts["outlines"] and found["outlines"] and not set(facts["outlines"]) & set(found["outlines"]):
+        return f"it prints outline {', '.join(found['outlines'])}, the datasheet {', '.join(facts['outlines'])}"
+    if facts["bodies"] and found["bodies"] and not any(_body_in(b, facts["bodies"]) for b in found["bodies"]):
+        return (f"it prints body {' / '.join(f'{a:g} x {b:g} mm' for a, b in found['bodies'])}, the datasheet "
+                f"{' / '.join(f'{a:g} x {b:g} mm' for a, b in facts['bodies'])}")
+    if facts["pitches"] and found["pitches"] and not any(abs(p - q) <= 0.01 for p in found["pitches"]
+                                                         for q in facts["pitches"]):
+        return (f"it prints pitch {' / '.join(f'{p:g}' for p in found['pitches'])} mm, the datasheet "
+                f"{' / '.join(f'{p:g}' for p in facts['pitches'])} mm")
+    return None
+
+
+def body_tied(found, facts):
+    """Does a package document print something of this part's own body (the datasheet's outline code, a body size
+    it prints, or its pitch when it prints no body)?"""
+    if not facts:
+        return False
+    if set(facts["outlines"]) & set(found["outlines"]):
+        return True
+    if facts["bodies"]:
+        return any(_body_in(b, facts["bodies"]) for b in found["bodies"])
+    return any(abs(p - q) <= 0.01 for p in found["pitches"] for q in facts["pitches"])
+
+
+def outline_named(own):
+    """Is this part's package an outline whose name is its body (DO-34, SOT-223, TO-220, SOD-123: the number names
+    the outline, not a pin count)? Then a document of that outline is of this body, whatever else it prints."""
+    return bool(own) and all(t in DR.OUTLINE_FAMS or re.sub(r"\d+$", "", t) in DR.OUTLINE_FAMS and re.search(r"\d$", t)
+                             for t in own)
+
+
+def has_facts(facts):
+    return bool(facts and (facts.get("bodies") or facts.get("pitches") or facts.get("outlines")))
+
+
+def read_mismatch(crit, facts):
+    """Why a read (crosscheck.critical of its spec) is not the body or pitch the part's datasheet prints, or None."""
+    if not has_facts(facts):
+        return None
+
+    def nom(v):                                       # crosscheck.critical gives (min, nom, max)
+        if isinstance(v, (list, tuple)):
+            got = [x for x in v if isinstance(x, (int, float))]
+            v = v[1] if len(v) == 3 and isinstance(v[1], (int, float)) else (sum(got) / len(got) if got else None)
+        return v
+    bl, bw = nom(crit.get("body_length")), nom(crit.get("body_width"))
+    if facts["bodies"] and isinstance(bl, (int, float)) and isinstance(bw, (int, float)) and bl > 0 and bw > 0 \
+            and not _body_in(sorted((bl, bw)), facts["bodies"]):
+        return (f"the read's body {bl:g} x {bw:g} mm is not the datasheet's "
+                f"{' / '.join(f'{a:g} x {b:g} mm' for a, b in facts['bodies'])}")
+    p = nom(crit.get("pitch"))
+    if facts["pitches"] and isinstance(p, (int, float)) and p > 0 and not any(abs(p - q) <= 0.01 for q in facts["pitches"]):
+        return f"the read's pitch {p:g} mm is not the datasheet's {' / '.join(f'{q:g}' for q in facts['pitches'])} mm"
+    return None
+
+
 def _token(code):
     """A package code as a whole token (FG484, FG-484), never inside another word or number (MM256, LEAD100)."""
     m = re.fullmatch(r"([A-Z]+)(\d+)", code)

@@ -4025,6 +4025,25 @@ def cross_check_review(cc):
     return [f"cross-check: {CC.PINS_UNCHECKED}; check the symbol's pin names against the datasheet's pin table"]
 
 
+def searched_body(job, res):
+    """A read built on a package drawing found by web search whose body or pitch is not the one the part's own
+    datasheet prints is not written: the drawing is another maker's package of the same family and pin count
+    (LPC1768FBD100's 14 x 14 mm SOT407-1 read from a 14 x 20 mm QFP100, R-FX19-1)."""
+    from . import crosscheck as CC, outline_docs as OD
+    for o in (job.get("prov") or {}).get("outline") or ():
+        if o.get("code") != "web search" or not OD.has_facts(o.get("body")):
+            continue
+        try:
+            crit = CC.critical(res.get("spec") or {})
+        except Exception:                             # a read too broken to measure: the other checks hold it
+            return
+        why = OD.read_mismatch(crit, o["body"])
+        if why:
+            raise DatasheetError(f"held: the package drawing found by web search ({o.get('from')}) is not this part's "
+                                 f"package: {why}; nothing was written (put the maker's drawing of this package in "
+                                 "the [datasheet] folder, or check the part number)")
+
+
 def hold_on_doubt(inf, model, res):
     """A guided model's answer that still fails datasheet's checks is not written (the hold_on_doubt rail)."""
     from . import ds_route as DR
@@ -4231,6 +4250,7 @@ class Reader:
         "<part> package drawing"). What could not be got is said in prov["outline_missing"], the misses in attempts."""
         from . import ds_route as DR, ds_search as WS, outline_docs as OD
         own = DR.page_scores(texts, part, package)[1]
+        body = OD.printed_body(texts, part, own)      # what the datasheet prints of this package's body (R-FX19-1)
         found, key, where = WS.Found(self.dir), f"{part} package drawing", "web search (package drawing)"
         saved, n0 = found.get(key), len(attempts)
         got = None
@@ -4261,6 +4281,23 @@ class Reader:
             if not OD.names_it(pages, part, codes, own, meta.get("url") or url):
                 attempts.append({"url": url, "where": where,
                                  "error": f"the PDF at {meta.get('url') or url} names neither {part} nor its package"})
+                return None
+            # a family and a pin count are not a package (QFP100: 14 x 14 / 0.5 or 14 x 20 / 0.65): what the
+            # datasheet prints of the body must be what the drawing prints, and with nothing printed to compare, only
+            # a drawing that names the part, its own code or an outline whose name is its body (DO-34) is taken (R-FX19-1)
+            found = OD.printed_body(pages, part, own)
+            why = OD.body_mismatch(found, body)
+            if why:
+                attempts.append({"url": url, "where": where, "error": f"the PDF at {meta.get('url') or url} is "
+                                 f"another body of this package: {why}"})
+                return None
+            flat = re.sub(r"[^A-Z0-9]", "", " ".join(t or "" for t in pages).upper())
+            if not OD.has_facts(body) and not (OD.outline_named(own) or mentions_part(pages, part, whole=True) or
+                                               OD.mpn_package_codes(part, own) or any(
+                    re.sub(r"[^A-Z0-9]", "", c.upper()) in flat for c in codes if c)):
+                attempts.append({"url": url, "where": where, "error": f"the PDF at {meta.get('url') or url} names "
+                                 f"{part}'s package family and count only, and the datasheet prints no body size, "
+                                 "pitch or outline code to tie it to this part's body"})
                 return None
             return b, meta.get("url") or url
 
@@ -4294,7 +4331,7 @@ class Reader:
         first = (pdf_pages(data) or 0) + 1
         return merged, dict(prov, sha256=hashlib.sha256(merged).hexdigest(), pages=pdf_pages(merged),
                             outline=list(prov.get("outline") or []) + [{"code": "web search", "from": got[1],
-                                                                        "first_page": first}])
+                                                                        "first_page": first, "body": body}])
 
     def _fetch_found(self, url, part, attempts):
         """A link a web search gave -> (data, prov) or None (the miss in attempts). Never a private address: the link
@@ -4698,6 +4735,7 @@ class Reader:
         if job["prov"].get("pages_sent"):
             res["needs_review"].append(f"only some pages were sent ({job['prov']['note']}): check nothing was missed")
         self._ai_record(job, rec, res)
+        searched_body(job, res)
         from . import crosscheck as CC                # an independent second source before the footprint is accepted
         cc = CC.run(self, job, res, rec.get("model") or job.get("model") or self.model)
         if cc:
