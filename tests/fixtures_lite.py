@@ -38,7 +38,9 @@ def lite(fn):
     def run():
         mp = MonkeyPatch()
         _SCOPES.append([])
-        try:
+        home = tempfile.mkdtemp(prefix="ecadlib-home-")     # its own settings folder: no file this computer keeps
+        mp.setenv("ECADLIB_HOME", home)                     # there (the A365 publishers file, R-FX18-3) carries over
+        try:                                                # from an earlier test in the same process
             with tempfile.TemporaryDirectory() as d:
                 got = {"tmp_path": Path(d), "monkeypatch": mp}
                 try:
@@ -46,7 +48,9 @@ def lite(fn):
                 finally:
                     mp.undo()
         finally:
+            mp.undo()
             _close(_SCOPES.pop())
+            rmtree(home)
     run.__name__, run.__doc__, run.__module__ = fn.__name__, fn.__doc__, fn.__module__
     return run
 
