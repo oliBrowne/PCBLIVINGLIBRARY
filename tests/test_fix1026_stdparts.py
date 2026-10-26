@@ -274,3 +274,51 @@ def test_librarian_passive_kind_agrees():
         assert L.passive_kind(item(d)) is None, d
     for d in LEDS:
         assert L.passive_kind(item(d)) == "LED", d
+
+
+# --- R-FX5-1 / R-FX5-4: the copper the board gets is compared, touching a pad or not, whatever shapes drew it -------
+
+_NETTIE = ('(footprint "NetTie-2_THT" (version 20221018) (layer "F.Cu")\n'
+           '  (fp_rect (start -2 -1.5) (end 2 1.5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))\n'
+           '  (pad "1" thru_hole circle (at -1 0) (size 1.2 1.2) (drill 0.6) (layers "*.Cu" "*.Mask"))\n'
+           '  (pad "2" thru_hole circle (at 1 0) (size 1.2 1.2) (drill 0.6) (layers "*.Cu" "*.Mask"))\n'
+           '  {cu})')
+_BRIDGE_F = '(fp_line (start -1 0) (end 1 0) (stroke (width 0.4) (type solid)) (layer "F.Cu"))'
+_BRIDGE_B = '(fp_line (start -1 0) (end 1 0) (stroke (width 0.4) (type solid)) (layer "B.Cu"))'
+
+
+def _errs(diffs):
+    return [d["msg"] for d in diffs if d["level"] == "error"]
+
+
+@lite
+def test_parity_copper_touching_pads_is_compared(tmp_path):
+    """A net tie's bridge touches both pads: before, it was merged into the pads' boxes and never compared, so a
+    .PcbLib without it passed."""
+    from ecadlib import altium_lib as AL, parity as P
+    text = _NETTIE.format(cu=_BRIDGE_F)
+    assert not _errs(P.footprint_pair(text, _pcblib(tmp_path, text))), "a faithful conversion passes"
+    lost = P.footprint_pair(text, _pcblib(tmp_path, text, lambda f: f.update(tracks=[x for x in f["tracks"] if x[-1] != AL.TOP])))
+    assert any("F.Cu copper" in m for m in _errs(lost)), lost
+
+
+@lite
+def test_parity_bottom_copper_bridge_lost_by_the_converter_is_an_error(tmp_path):
+    from ecadlib import parity as P
+    text = _NETTIE.format(cu=_BRIDGE_F + " " + _BRIDGE_B)
+    assert any("B.Cu copper" in m for m in _errs(P.footprint_pair(text, _pcblib(tmp_path, text))))
+
+
+@lite
+def test_librarian_holds_a_footprint_whose_copper_was_dropped(tmp_path):
+    from ecadlib import librarian as L
+    r = L.Run(tmp_path, None, None, [], [])
+    st = {"name": "TIE1", "symbol": None, "footprint": None}
+    r.put_fp(st, _NETTIE.format(cu=_BRIDGE_F + " " + _BRIDGE_B), "NetTie-2_THT", "kicad:NetTie:NetTie-2_THT")
+    assert any("B.Cu x1" in v for v in st.get("verify", [])), st.get("verify")
+    st2 = {"name": "TIE2", "symbol": None, "footprint": None}            # a part sharing that file is held too
+    r.put_fp(st2, _NETTIE.format(cu=_BRIDGE_F + " " + _BRIDGE_B), "NetTie-2_THT", "kicad:NetTie:NetTie-2_THT")
+    assert any("B.Cu x1" in v for v in st2.get("verify", [])), st2
+    st3 = {"name": "TIE3", "symbol": None, "footprint": None}
+    r.put_fp(st3, _NETTIE.format(cu=_BRIDGE_F), "NetTie-2_THT_F", "kicad:NetTie:NetTie-2_THT_F")
+    assert not st3.get("verify"), st3

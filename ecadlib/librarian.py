@@ -287,6 +287,16 @@ def passive_pins(sym):
     return dict(sym, prims=prims)
 
 
+def _hold_lost_copper(st, name, notes):
+    """kicad_import dropped copper it has no Altium layer for (B.Cu graphics, inner copper): the .PcbLib lacks copper
+    the KiCad footprint has, so the part is held for a person (a net tie's bottom bridge, an antenna's ground)."""
+    lost = [x for n in notes if str(n).startswith("graphics on unmapped layers dropped:")
+            for x in str(n).split(": ", 1)[1].split(", ") if ".Cu" in x]
+    if lost:
+        st.setdefault("verify", []).append(f"footprint {name}: copper not written to the .PcbLib ({', '.join(lost)}); "
+                                           "draw it in Altium or choose another footprint")
+
+
 def passive_kind(item):
     from . import stdparts as SP
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
@@ -387,12 +397,14 @@ class Run:
             st["footprint"] = {**{k: v for k, v in same.items() if k not in ("renamed_from", "chosen")},
                                "notes": _own_notes(same) if same.get("by") == st["name"] else
                                [f"shared with {same['by']}"], "name": name, "hash": h, **renamed}
+            _hold_lost_copper(st, name, same.get("notes") or [])
             self._relink(st, bom_name, name)
             return
         pcb, stem = Path(pcb), AL.file_stem(name)
         notes = [f"named {name}: footprint {bom_name} is another part's, with other pads"] if renamed else []
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes,
                                     K.KICAD_LICENSE if source.startswith("kicad:") else "")
+        _hold_lost_copper(st, name, notes)
         if model:                               # the source's own 3D model: its shape and height beat any table
             E3.add_body(fp, model["text"], model["info"], model["ref"], notes, embed=self.gen_step)
             warn = E3.checks(model["info"], model["ref"], fp["pads"])

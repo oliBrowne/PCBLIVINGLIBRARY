@@ -340,6 +340,7 @@ def kicad_footprint(text):
     out["models"] = [str(m[1]) for m in sexpr.find(t, "model")]
     fab = [x for x in AL.texts_from_kicad(t) if x[0] == ".Designator" and x[6] == AL.MECH13]
     out["fab_ref"] = (lambda c: (c[0], -c[1]))(AL.text_centre(*fab[0][:4], fab[0][5])) if fab else None
+    out["cu_map"], out["cu_extra"] = _copper_k(t)
     return out
 
 
@@ -461,6 +462,7 @@ def altium_footprint(fp, courtyard=AL.MECH15):
            and r.get("layer") not in (AL.TOP_OVERLAY, AL.BOTTOM_OVERLAY, AL.TOP, AL.BOTTOM)]   # layer but silk / copper
     out["fab_designator"] = (lambda c: (c[0], -c[1]))(AL.text_centre(".Designator", _mm(fab[0]["x"]), _mm(fab[0]["y"]),
                                                              _mm(fab[0]["h"]), fab[0]["rot"])) if fab else None
+    out["cu_map"], out["cu_extra"] = _copper_a(recs)
     return out
 
 
@@ -599,6 +601,155 @@ def exposed_pad(fp):
             "coverage": round(100.0 * area / (ep["w"] * ep["h"]), 2) if inside else (100.0 if ep.get("paste") else 0.0)}
 
 
+# ---------------------------------------------------------------- copper as the board gets it (ecadlib.copper_map)
+def _cu_sides(layers):
+    """KiCad pad / graphic layers -> the copper sides {"F", "B"} it is on."""
+    out = set()
+    for l in layers:
+        l = str(l)
+        if l in ("*.Cu", "F&B.Cu"):
+            out |= {"F", "B"}
+        elif l in ("F.Cu", "B.Cu"):
+            out.add(l[0])
+    return out
+
+
+def _pad_shape(shape, cx, cy, w, h, rot, radius=0.0):
+    """A pad's copper outline: rect / roundrect / circle / oval (stadium), KiCad frame."""
+    from . import copper_map as CM
+    if shape in ("circle", "round", "oval") and abs(w - h) < 1e-9:
+        return [CM.disc(cx, cy, w / 2)]
+    if shape in ("circle", "round", "oval"):
+        d = abs(w - h) / 2
+        (x1, y1), (x2, y2) = (CM.place(-d, 0, cx, cy, rot), CM.place(d, 0, cx, cy, rot)) if w > h else \
+            (CM.place(0, -d, cx, cy, rot), CM.place(0, d, cx, cy, rot))
+        return [CM.capsule(x1, y1, x2, y2, min(w, h))]
+    return [CM.rect(cx, cy, w, h, rot, radius)]
+
+
+def _kicad_shape_polys(g, kind, xf, default_w=0.0):
+    """One KiCad graphic (fp_* or a custom pad's gr_*) -> copper polygons. xf maps a point to the footprint frame."""
+    from . import copper_map as CM
+    pt = lambda k: (_f(sexpr.first(g, k)[1]), _f(sexpr.first(g, k)[2])) if sexpr.first(g, k) else None
+    sw = sexpr.first(sexpr.first(g, "stroke") or [], "width") or sexpr.first(g, "width")
+    w = _f(sw[1]) if sw else 0.0
+    fill = sexpr.first(g, "fill")
+    filled = _filled(g) or (kind.endswith("poly") and not fill)       # a KiCad 5 polygon (no fill token) is filled
+    if kind.startswith("gr_") and kind != "gr_line" and kind != "gr_arc" and not fill:
+        filled = True                                                   # custom-pad primitives: filled unless told
+    out = []
+    if kind.endswith("line") and pt("start") and pt("end"):
+        out.append(CM.capsule(*xf(*pt("start")), *xf(*pt("end")), w or default_w))
+    elif kind.endswith("rect") and pt("start") and pt("end"):
+        (x1, y1), (x2, y2) = pt("start"), pt("end")
+        pts = [xf(*q) for q in ((x1, y1), (x2, y1), (x2, y2), (x1, y2))]
+        out += ([pts] if filled else []) + CM.polyline(pts, w, closed=True)
+    elif kind.endswith("poly"):
+        pts = [xf(_f(a[1]), _f(a[2])) for a in sexpr.find(sexpr.first(g, "pts") or [], "xy")]
+        if len(pts) >= 2:
+            out += ([pts] if filled else []) + CM.polyline(pts, w, closed=True)
+    elif kind.endswith("circle") and pt("center") and pt("end"):
+        (cx, cy), (ex, ey) = pt("center"), pt("end")
+        r = math.hypot(ex - cx, ey - cy)
+        ring = [xf(*q) for q in CM.arc_points(cx, cy, r, 0.0, 360.0)]
+        out += [[xf(*q) for q in CM.disc(cx, cy, r + w / 2)]] if filled else CM.polyline(ring, w)
+    elif kind.endswith("arc") and pt("start") and pt("end"):
+        if pt("mid"):
+            from .kicad_import import _arc3
+            try:
+                cx, cy, r, a0, a1 = _arc3(pt("start"), pt("mid"), pt("end"))
+            except ValueError:
+                return [CM.capsule(*xf(*pt("start")), *xf(*pt("end")), w)]
+            pts = CM.arc_points(cx, cy, r, a0, (a1 - a0) % 360 or 360.0)
+        else:                                   # KiCad 5: (start centre) (end first point) (angle, y down)
+            (cx, cy), (sx, sy) = pt("start"), pt("end")
+            ang = _f((sexpr.first(g, "angle") or [None, 0])[1])
+            pts = CM.arc_points(cx, cy, math.hypot(sx - cx, sy - cy), math.degrees(math.atan2(sy - cy, sx - cx)), ang)
+        out += CM.polyline([xf(*q) for q in pts], w)
+    return [p for p in out if p]
+
+
+def _copper_k(t):
+    """A parsed .kicad_mod -> ({"F" / "B": [copper polygons]}, whether it has more than plain pads: copper graphics
+    or custom pads)."""
+    layers, extra = {"F": [], "B": []}, False
+    for p in sexpr.find(t, "pad"):
+        if len(p) < 4 or p[2] == "np_thru_hole":
+            continue
+        sides = _cu_sides((sexpr.first(p, "layers") or ["layers"])[1:])
+        if not sides:
+            continue
+        at, size = sexpr.first(p, "at"), sexpr.first(p, "size")
+        x, y, rot = _f(at[1]), _f(at[2]), _f(at[3]) if len(at) > 3 else 0.0
+        w, h = _f(size[1]), _f(size[2] if len(size) > 2 else size[1])
+        off = _turn(_kicad_drill(p)[1], rot)
+        cx, cy = x + off[0], y + off[1]
+        shape = p[3]
+        if shape == "custom":
+            extra = True
+            anchor = (sexpr.first(sexpr.first(p, "options") or [], "anchor") or [None, "circle"])[1]
+            polys = _pad_shape("circle" if anchor == "circle" else "rect", cx, cy, w, h, rot)
+            xf = lambda u, v: _rot_pt(u, v, cx, cy, rot)
+            for g in (sexpr.first(p, "primitives") or [])[1:]:
+                if isinstance(g, list) and str(g[0]).startswith("gr_"):
+                    polys += _kicad_shape_polys(g, str(g[0]), xf)
+        else:
+            rr = sexpr.first(p, "roundrect_rratio")
+            radius = min(_f(rr[1]), 0.5) * min(w, h) if rr and shape == "roundrect" else 0.0
+            polys = _pad_shape(shape, cx, cy, w, h, rot, radius)
+        for s in sides:
+            layers[s] += polys
+    for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
+        for g in sexpr.find(t, kind):
+            lay = str((sexpr.first(g, "layer") or [None, ""])[1])
+            if lay in ("F.Cu", "B.Cu"):
+                extra = True
+                layers[lay[0]] += _kicad_shape_polys(g, kind, lambda u, v: (u, v), default_w=0.1)
+    return layers, extra
+
+
+def _rot_pt(u, v, cx, cy, rot):
+    from . import copper_map as CM
+    return CM.place(u, v, cx, cy, rot)
+
+
+def _copper_a(recs):
+    """Altium footprint records -> ({"F" / "B": [copper polygons]} in the KiCad frame, whether it has copper that is
+    not a plain pad: tracks, arcs, fills or regions on the copper layers)."""
+    from . import copper_map as CM
+    side = {AL.TOP: ("F",), AL.BOTTOM: ("B",), AL.MULTI: ("F", "B")}
+    layers, extra = {"F": [], "B": []}, False
+    for r in recs:
+        t, lay = r["type"], r.get("layer")
+        if t == "pad":
+            if lay not in side or (lay == AL.MULTI and not r.get("plated")):
+                continue
+            x, y = _a2k(r["x"], r["y"])
+            ox, oy = r.get("offset") or (0, 0)
+            off = _turn((_mm(ox), -_mm(oy)), r["rot"]) if r.get("hole") else (0.0, 0.0)
+            w, h = _mm(r["w"]), _mm(r["h"])
+            shape = {1: "round", 2: "rect", 9: "roundrect"}.get(r["shape"], "rect")
+            radius = float(r.get("corner") or 0) / 100 * min(w, h) / 2 if shape == "roundrect" else 0.0
+            for s in side[lay]:
+                layers[s] += _pad_shape(shape, x + off[0], y + off[1], w, h, r["rot"], radius)
+            continue
+        if lay not in (AL.TOP, AL.BOTTOM) or t not in ("track", "arc", "fill", "region"):
+            continue
+        extra, s = True, side[lay][0]
+        if t == "track":
+            layers[s].append(CM.capsule(*_a2k(r["x1"], r["y1"]), *_a2k(r["x2"], r["y2"]), _mm(r["w"])))
+        elif t == "arc":                        # counter-clockwise from a0 to a1 in Altium's frame (y up)
+            sweep = (r["a1"] - r["a0"]) % 360 or 360.0
+            pts = [(x, -y) for x, y in CM.arc_points(_mm(r["cx"]), _mm(r["cy"]), _mm(r["r"]), r["a0"], sweep)]
+            layers[s] += CM.polyline(pts, _mm(r["w"]))
+        elif t == "fill":
+            (x1, y1), (x2, y2) = _a2k(r["x1"], r["y1"]), _a2k(r["x2"], r["y2"])
+            layers[s].append([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
+        elif len(r.get("pts") or ()) >= 3:
+            layers[s].append([_a2k(px, py) for px, py in r["pts"]])
+    return layers, extra
+
+
 def copper_extent(fp):
     """Bounding box of all copper: pads (custom outlines included) and footprint copper graphics."""
     pts = []
@@ -658,30 +809,29 @@ def compare_footprints(k, a, export=False, model_ok=None):
         _d(out, "error", f"pad {p['num'] or '(unnumbered)'}", "missing", "present", "missing", f"at {_fmt((p['x'], p['y']))}")
     for p in aonly:
         _d(out, "error", f"pad {p['num'] or '(unnumbered)'}", "missing", "missing", "present", f"at {_fmt((p['x'], p['y']))}")
-    uk, fk = _pad_copper(k)
-    ua, fa = _pad_copper(a)
+    # copper as the board gets it (pads, custom shapes and footprint copper together), compared cell by cell when
+    # either side has more than plain pads: a lost, extra or moved copper graphic is an error wherever it is, on or
+    # off a pad; a pad's shape error is only a warning when the copper around that pad is the same (an Altium region
+    # belongs to no pad; KiCad may draw one custom pad as a pad plus a polygon)
+    cu = None
+    if (k.get("cu_extra") or a.get("cu_extra")) and "cu_map" in k and "cu_map" in a:
+        from . import copper_map as CM
+        cu = CM.compare(k["cu_map"], a["cu_map"])
+        for layer, kb, ab, area in cu:
+            _d(out, lvl, f"{layer}.Cu copper", "extent", kb or "nothing more", ab or "nothing more",
+               f"copper on one side only, x0, y0, x1, y1 mm; {area:g} mm2")
+    uk, _ = _pad_copper(k)
     for kp, ap in pairs:
         diffs = []
         compare_pad(kp, ap, diffs)
-        # footprint copper touching a pad (Altium regions belong to no pad; a KiCad pad drawn as pad + polygon): the
-        # pad's shape may differ while its copper, the pad with what touches it, is the same. Per pad, never the
-        # whole footprint's extent (copper elsewhere says nothing about this pad).
-        bk, ba = uk.get(id(kp)), ua.get(id(ap))
-        same = bk and ba and (bk[1] or ba[1]) and all(abs(p - q) <= TOL["outline"] for p, q in zip(bk[0], ba[0]))
+        bk = uk.get(id(kp))
+        near = lambda b: any(x and _overlap(bk[0], x, TOL["outline"]) for _, kb, ab, _ in cu for x in (kb, ab))
+        same = cu is not None and bk and not near(bk)
         for d in diffs:
             if same and d["level"] == "error" and d["field"] in ("shape", "custom outline", "custom anchor"):
                 d["level"] = "warn"
                 d["msg"] += " (the pad with the copper touching it: the copper itself is the same, extent " + _fmt(bk[0]) + ")"
         out += diffs
-    left = list(fa)                           # footprint copper touching no pad: each graphic, on its layer
-    for b in fk:
-        hit = [c for c in left if c[4] == b[4] and all(abs(p - q) <= TOL["outline"] for p, q in zip(b[:4], c[:4]))]
-        if hit:
-            left.remove(hit[0])
-        else:
-            _d(out, "error", f"{b[4]}.Cu copper", "graphic", tuple(round(v, 3) for v in b[:4]), "missing", "x0, y0, x1, y1 mm")
-    for c in left:
-        _d(out, "error", f"{c[4]}.Cu copper", "graphic", "missing", tuple(round(v, 3) for v in c[:4]), "x0, y0, x1, y1 mm")
     kw = sorted((w, tuple(round(v, 3) for v in b)) for w, b in k["windows"] if b)
     aw = sorted((w, tuple(round(v, 3) for v in b)) for w, b in a["windows"] if b)
     if len(kw) != len(aw):
