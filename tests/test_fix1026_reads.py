@@ -290,6 +290,44 @@ def test_rpr3_a_rectangular_qfp_read_either_way_round_passes_and_builds_the_same
     assert DR.assess(D.process(bad, "TESTPART", "ds.pdf"))[0] == "failed"
 
 
+
+# ---------------------------------------------------------------- R-PR-4: an exposed pad numbered after gap-numbered leads
+def _soic14_16_ep(ep_num):
+    import copy
+    from tests import test_datasheet as TD
+    dim = lambda lbl, lo, nom, hi: {"label": lbl, "min": lo, "nom": nom, "max": hi, "unit": "mm", "page": 5, "figure": "X"}
+    e = copy.deepcopy(TD.GOOD)
+    p = e["package"]
+    p.update(name="SOIC-14-16-1EP_3.9x9.9mm_P1.27mm", description="SOIC-16 with pins 13, 14 removed, EP",
+             package_type="gullwing", pin_count=14, pitch=dim("e", None, 1.27, None), body_length=dim("D", 9.8, 9.9, 10.0),
+             body_width=dim("E1", 3.8, 3.9, 4.0), lead_span=dim("E", 5.8, 6.0, 6.2), terminal_length=dim("L", 0.4, None, 1.27),
+             terminal_width=dim("b", 0.31, None, 0.51), pins_left_right=None, pins_top_bottom=None,
+             exposed_pad={"length": dim("E2", None, 2.0, None), "width": dim("D2", None, 2.0, None)}, drawing="X")
+    p["pin_positions"] = [{"number": str(i), "side": "L", "offset": round((i - 1 - 3.5) * 1.27, 4)} if i <= 8 else
+                          {"number": str(i), "side": "R", "offset": round((3.5 - (i - 9)) * 1.27, 4)}
+                          for i in list(range(1, 13)) + [15, 16]]
+    e["pins"] = [{"num": str(i), "name": f"P{i}", "type": "passive", "side": "left", "page": 3}
+                 for i in list(range(1, 13)) + [15, 16]] + [{"num": ep_num, "name": "GND", "type": "power", "side": "left",
+                                                              "page": 3}]
+    e["pin_table"]["rows"] = 14
+    return e
+
+
+def test_rpr4_an_exposed_pad_numbered_after_gap_numbered_leads_is_read_and_built_with_its_number():
+    """SOIC-14-16 + EP: leads 1-12, 15, 16 and the thermal pad 17 in the pin table. check_pins wanted EP = 15
+    (pin_count + 1), which is a lead, and no read schema can carry exposed_pad.number: held forever."""
+    import re
+    from ecadlib import ds_route as DR, footprint_gen as F
+    res = D.process(_soic14_16_ep("17"), "TESTPART", "ds.pdf")
+    kind, why = DR.assess(res)
+    assert kind == "ok", why
+    assert res["spec"]["exposed_pad"]["number"] == "17"
+    txt, _ = F.build(res["spec"])
+    assert sorted(re.findall(r'\(pad "(\d+)"', txt), key=int)[-3:] == ["15", "16", "17"]
+    kind, why = DR.assess(D.process(_soic14_16_ep("15"), "TESTPART", "ds.pdf"))   # the EP on a lead's number
+    assert kind != "ok", why
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

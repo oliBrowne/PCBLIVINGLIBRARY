@@ -1908,6 +1908,24 @@ def bank_slips(pins):
     return out
 
 
+def ep_number(spec, ext, review):
+    """An exposed pad numbered after gap-numbered leads (SOIC-14-16 + EP: leads 1-12, 15, 16, the thermal pad 17): the
+    default pin_count + 1 is a lead's number, and no read schema carries exposed_pad.number, so the number is taken
+    from the read's own pin table: the one number past the highest listed lead, when it is there and pin_count + 1
+    is a lead. Set on the spec (footprint_gen numbers the pad with it), with a line for the person."""
+    ep, n = spec.get("exposed_pad"), spec.get("pin_count")
+    if not isinstance(ep, dict) or ep.get("number") not in (None, "") or not isinstance(n, int) or spec.get("tab"):
+        return
+    leads = {str(p.get("number")) for p in _listed(spec)}
+    if len(leads) != n or str(n + 1) not in leads or not all(x.isdecimal() for x in leads):
+        return
+    nxt = str(max(int(x) for x in leads) + 1)
+    if nxt in {str(p.get("num")) for p in ext.get("pins") or []}:
+        spec["exposed_pad"] = dict(ep, number=nxt)
+        review.append(f"exposed_pad: numbered {nxt} from the pin table (the leads are {', '.join(sorted(leads, key=int))},"
+                      f" so pin_count + 1 = {n + 1} is a lead); check the thermal pad's number on the drawing")
+
+
 def check_pins(spec, ext, review):
     n, pins, rows = spec.get("pin_count"), ext["pins"], ext["pin_table"]["rows"]
     nums = [p["num"] for p in pins]
@@ -1950,8 +1968,11 @@ def check_pins(spec, ext, review):
     if rows != n:
         review.append(f"pin count: drawing says {n}, pin table has {rows}")
     listed = {str(p.get("number")) for p in _listed(spec)}          # a depopulated row: its pads' own numbers
-    want = listed if len(listed) == n and not spec.get("exposed_pad") and not spec.get("tab") else \
-        {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if spec.get("exposed_pad") else set())
+    ep = spec.get("exposed_pad")
+    epn = str(ep["number"]) if isinstance(ep, dict) and ep.get("number") not in (None, "") else None
+    want = listed if len(listed) == n and not ep and not spec.get("tab") else \
+        listed | {epn} if epn and len(listed) == n and not spec.get("tab") else \
+        {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if ep else set())
     key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)
     miss, extra = sorted(want - set(nums), key=key), sorted(set(nums) - want, key=key)
     if miss:
@@ -2369,6 +2390,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     two_sided(spec, review)
     grid_from_balls(spec, ext, review)
+    ep_number(spec, ext, review)
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):
