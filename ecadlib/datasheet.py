@@ -1684,6 +1684,7 @@ def sanity(spec, review, evidence=""):
         if d and 0 < d[2] < low:                      # 0.030-0.060 "mm"; no real foot or lead is under 0.1 mm at its max)
             review.append(f"{k}: {d[2]} mm is implausibly small (unit mislabelled?)")
     review.extend(_two_terminal_terms(spec))
+    review.extend(_header_mount(spec))
     h, hi = spec.get("height_max"), 60 if t in NO_BODY else 25
     if isinstance(h, (int, float)) and not isinstance(h, bool) and 0 < h and not 0.1 <= h <= hi:
         review.append(f"height_max: {h} mm is implausible (0.1-{hi} mm expected; unit mislabelled?)")
@@ -1770,6 +1771,30 @@ def sanity(spec, review, evidence=""):
     if small:
         review.append(f"land pattern: {small}")
     review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
+
+
+SAYS_SMD = re.compile(r"(?<![A-Za-z0-9])(?:SMD|SMT)(?![A-Za-z0-9])|surface[ -]?mount", re.I)
+SAYS_THT = re.compile(r"(?<![A-Za-z0-9])(?:THT|THD)(?![A-Za-z0-9])|through[ -]?hole", re.I)
+KICAD_HEADER = re.compile(r"^Pin(?:Header|Socket)_\d+x\d+_P[\d.]+mm_", re.I)
+
+
+def _header_mount(spec):
+    """A pin header whose mount contradicts its own name or description (review 196 R-RD-6): mount smd on a header
+    named or described through-hole (a KiCad PinHeader / PinSocket name without _SMD is through-hole), or mount tht
+    (or none: the default) on one that says SMD, built the other pad kind under that name. -> review lines."""
+    if spec.get("package_type") != "pin_header":
+        return []
+    name, text = str(spec.get("name") or ""), f"{spec.get('name') or ''} {spec.get('description') or ''}"
+    mount = spec.get("mount") or "tht"
+    smd, tht = bool(SAYS_SMD.search(text)), bool(SAYS_THT.search(text)) or bool(KICAD_HEADER.match(name)) and \
+        not SAYS_SMD.search(name)
+    if mount == "tht" and smd and not tht:
+        return [f"mount: tht, but the header's name / description says SMD ({name}), which is implausible: check the "
+                "drawing (SMD pads, or pins through the board?) and set mount"]
+    if mount == "smd" and tht and not smd:
+        return [f"mount: smd, but the header's name / description says through-hole ({name}), which is implausible: "
+                "check the drawing (pins through the board, or SMD pads?) and set mount"]
+    return []
 
 
 def _two_terminal_terms(spec):

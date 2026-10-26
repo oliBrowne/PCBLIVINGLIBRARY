@@ -320,3 +320,27 @@ def test_rd5_dpak_by_its_other_names_gets_the_checked_tab_land():
     for said, fam in (("D²PAK", "TO-263"), ("DDPAK", "TO-263"), ("SOT-404", "TO-263"), ("SOT428", "TO-252")):
         m = SP.TAB_FAMILY.search(said.upper())
         assert m and SP.TAB_PREFIX[SP._norm(m.group(1).replace("²", "2"))] == fam, said
+
+
+# ---------------------------------------------------------------- R-RD-6: a header's mount against its own name
+def hdr(name, cols, rows, e, **kw):
+    return dict(name=name, package_type="pin_header", cols=cols, rows=rows, pitch=e, pin_count=cols * rows, **kw)
+
+
+HDR_THT = hdr("PinHeader_2x05_P2.54mm_Vertical", 2, 5, 2.54, mount="tht", drill=(0.95, 1.0, 1.05))
+HDR_SMD = hdr("PinHeader_2x05_P1.27mm_Vertical_SMD", 2, 5, 1.27, mount="smd")
+
+
+def test_rd6_true_header_reads_pass():
+    for t in (HDR_THT, HDR_SMD, hdr("PinHeader_1x08_P2.54mm_Vertical", 1, 8, 2.54, mount="tht", drill=(0.95, 1.0, 1.05)),
+              dict(HDR_SMD, name="Samtec_TSM", description="Samtec TSM surface mount terminal strip"),
+              dict(HDR_THT, name="Samtec_TSW", description="through-hole terminal strip", mount=None)):
+        assert_ok(t)
+
+
+def test_rd6_header_mount_flipped_against_its_name_is_held():
+    """Before: a THT header read mount smd (or an _SMD one read tht) built the other pad kind under its name."""
+    assert_held(dict(HDR_THT, mount="smd"), "mount: smd")
+    assert_held(dict(HDR_SMD, mount="tht"), "mount: tht")
+    assert_held(dict(HDR_SMD, mount=None), "mount: tht")
+    assert_held(dict(HDR_THT, name="Samtec_TSW", description="through-hole terminal strip", mount="smd"), "mount: smd")
