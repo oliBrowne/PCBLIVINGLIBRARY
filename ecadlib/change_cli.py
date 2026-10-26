@@ -486,7 +486,11 @@ def _put_proposed(plan, items, group, lg, who=""):
     checked = [i for i in sel if not i.get("_manifest")]   # kicad_import parts have no plan fields to check
     RC.apply(checked, folder, change_holds=False)     # the version being approved
     bad = [i for i in checked if i.get("status") == "held"]
-    reasons = "; ".join(f"{i['name']}: {', '.join(i.get('hold_reasons') or [])}" for i in bad)
+    unmatched = {i["name"]: CG.recipe_unmatched(i, heads.get(i["name"]), folder) for i in sel}
+    bad += [i for i in sel if unmatched[i["name"]] and i not in bad]   # its recipe would ship something else
+    reasons = "; ".join(f"{i['name']}: {', '.join((i.get('hold_reasons') if i.get('status') == 'held' else []) or [])}"
+                        + ("; " if i.get("status") == "held" and unmatched[i["name"]] else "")
+                        + "; ".join(unmatched[i["name"]]) for i in bad)
     if bad:                                    # the approved version fails the release check: put the released one back
         for p in group:
             h = heads[p["part"]]

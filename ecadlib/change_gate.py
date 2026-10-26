@@ -191,6 +191,58 @@ def _sides_now(f):
             "steps": {s: LG.sha_bytes((f.parent / s).read_bytes()) for s in LG.step_files(f) if (f.parent / s).is_file()}}
 
 
+def _built_by_recipe(f):
+    """Problems between library file f and the build recipe beside it (<f>.ecadbuild, and the STEP files it names):
+    Altium's own rebuild (altium_native, altium-pkg) makes the shipped library from the recipe, so a recipe that does
+    not build f would ship something else than f. [] without a recipe."""
+    from . import altium_lib as AL, altium_native as AN
+    f = Path(f)
+    rp = f.with_name(f.name + AN.EXT)
+    if not rp.is_file():
+        return []
+    try:
+        probs = AN.compare_one(f, rp)
+        if f.suffix.lower() == ".pcblib":      # the STEP files it names: the 3D models the .PcbLib holds
+            held = {b for fp in AL.read_pcblib(f) for m in (fp.get("models") or []) for b in m
+                    if isinstance(b, (bytes, bytearray))}
+            probs += [f"{s} is not a 3D model {f.name} holds" for s in LG.step_files(f)
+                      if (f.parent / s).is_file() and (f.parent / s).read_bytes() not in held]
+    except Exception as e:                     # an unreadable recipe or library: not shown to build it
+        probs = [f"{rp.name} cannot be compared with {f.name} ({type(e).__name__}: {e})"]
+    return probs
+
+
+def recipe_unmatched(item, head, base, rewrote=None):
+    """A changed .SchLib / .PcbLib whose build recipe or 3D models changed too, while the recipe no longer builds that
+    file -> [reason] (else []). The fingerprint reads the library file only, so a minor edit there (silkscreen: pass
+    or warn) beside a moved pad in the recipe would be released, and Altium's rebuild ships the recipe's pad. Every
+    ecadlib write of a library file writes its matching recipe; a writer that rewrote the file itself since begin()
+    (rewrote(f, sha)) wrote its recipe with it. A library file still the head's bytes is _settle_sides' business."""
+    out = []
+    if not head:
+        return out
+    recs = {(Path(r["path"]) if Path(r["path"]).is_absolute() else Path(base) / r["path"]).resolve(): r
+            for k, r in (head.get("files") or {}).items() if k in ("symbol", "footprint")}
+    for kind in ("symbol", "footprint"):
+        rel = (item.get(kind) or {}).get("file")
+        if not rel:
+            continue
+        f = Path(rel) if Path(rel).is_absolute() else Path(base) / rel
+        r = recs.get(f.resolve()) if f.is_file() else None
+        if r is None:
+            continue
+        sha = LG.sha_bytes(f.read_bytes())
+        if sha == r.get("sha256") or (rewrote and rewrote(f, sha)) or not LG.side_drift(r, f):
+            continue
+        probs = _built_by_recipe(f)
+        if probs:
+            more = f" and {len(probs) - 1} more" if len(probs) > 1 else ""
+            out.append(f"the build recipe beside {f.name} changed and does not build it ({probs[0]}{more}): Altium's "
+                       f"rebuild would ship the recipe, not the file (edit both with ecadlib fp-edit, or put the "
+                       f"recipe back)")
+    return out
+
+
 def released(item):
     return item.get("status") in RELEASED_STATUSES
 
@@ -645,6 +697,13 @@ class Guard:
             dec = decide(changes, self.policy, self.mode)
             rej = self.ledger.rejected(it["name"], new["hashes"]["digest"], new) if dec["action"] == "hold" else None
             todo[it["name"]] = {"item": it, "head": head, "fp": new, "changes": changes, "dec": dec, "rejected": rej}
+        for t in todo.values():                # a recipe edited beside an edited library file: not released
+            if t["dec"]["action"] == "hold" or self.mode == "observe":
+                continue
+            why = recipe_unmatched(t["item"], t["head"], self.base, rewrote=self._rewrote)
+            if why:
+                t["dec"] = dict(t["dec"], action="hold", why=why + list(t["dec"].get("why") or []))
+                t["rejected"] = self.ledger.rejected(t["item"]["name"], t["fp"]["hashes"]["digest"], t["fp"])
         self._check_releases([t for t in todo.values() if t["dec"]["action"] != "hold"])
         held_files = {}
         for name, t in todo.items():

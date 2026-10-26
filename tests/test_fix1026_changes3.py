@@ -432,3 +432,58 @@ def test_fix7_rfx72_a365_push_sends_nothing_when_the_released_copy_is_missing():
     res, sent, head, name = _a365_midrun(drop_blob=True)
     row = next(r for r in res if r["name"] == "RES-0603-10k")
     assert row["action"] == "error" and "released copy is missing" in str(row["detail"]), row
+
+
+# ------------------------------------------------------------------ R-FX7-3
+def _silk_edit(lib, move_recipe):
+    """cosmetic_recipe.py silk: the C_0402 .PcbLib rewritten with its silkscreen 0.12 -> 0.15 mm (write_pcblib writes
+    a matching recipe), then, if move_recipe, PAD 1 moved in that recipe only. -> the moved recipe line or None"""
+    import re
+    from ecadlib import altium_lib as AL, stdparts as SP
+    txt = SP.build("C_0402_1005Metric")[0]
+    txt = re.sub(r"\(stroke \(width 0\.12\)", "(stroke (width 0.15)", re.sub(r"\(width 0\.12\)", "(width 0.15)", txt))
+    AL.write_pcblib(lib / "models/PcbLib/C_0402_1005Metric.PcbLib", [AL.footprint_from_kicad(txt)])
+    if not move_recipe:
+        return None
+    edited, new = _moved_pad(lib)
+    _recipe(lib).write_text(edited, encoding="utf-8")
+    return new
+
+
+def test_fix7_rfx73_an_edited_recipe_beside_a_changed_pcblib_is_held_not_released():
+    """A real minor .PcbLib edit (silkscreen) plus PAD 1 moved in its recipe, found by a publisher's settle: the recipe
+    no longer builds the .PcbLib, so the change is held (the released files go back) instead of released at warn;
+    approving it as it is is refused."""
+    from ecadlib import change_cli as CC, change_gate as CG, ledger as LG
+    w, lib = _demo()
+    plan = lib / "plan.json"
+    released = _recipe(lib).read_bytes()
+    new = _silk_edit(lib, True)
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    with contextlib.redirect_stderr(io.StringIO()):
+        CG.publish_guard(plan, items, "altium")
+    head = LG.Ledger(lib).head(CAP)
+    assert head["revision"] == 1 and new not in _head_recipe(lib), head
+    assert _recipe(lib).read_bytes() == released                   # the released recipe is back
+    prop = LG.Ledger(lib).proposal(CAP)
+    assert prop and any("recipe" in w_ for w_ in prop["why"]), prop and prop["why"]
+    try:
+        CC.approve(plan, [CAP], who=ANN, comment="silk only")
+        raise AssertionError("approved a change whose recipe does not build its .PcbLib")
+    except CG.ChangeError as e:
+        assert "recipe" in str(e), e
+    assert LG.Ledger(lib).head(CAP)["revision"] == 1 and new not in _head_recipe(lib)
+
+
+def test_fix7_rfx73_a_changed_pcblib_with_its_own_matching_recipe_still_releases():
+    """No false hold: the same silkscreen edit written with its matching recipe (as every ecadlib .PcbLib write does)
+    is released as before."""
+    from ecadlib import change_gate as CG, ledger as LG
+    w, lib = _demo()
+    plan = lib / "plan.json"
+    _silk_edit(lib, False)
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    with contextlib.redirect_stderr(io.StringIO()):
+        CG.publish_guard(plan, items, "altium")
+    head = LG.Ledger(lib).head(CAP)
+    assert head["revision"] == 2 and not LG.Ledger(lib).proposal(CAP), head
