@@ -3383,22 +3383,25 @@ def public_only():
     return getattr(_PUBLIC, "on", False)
 
 
-def redirect_refused(base, location):
-    """Why a redirect from base to location must not be followed for a web search's link, or None."""
+def redirect_refused(base, location, public=True):
+    """Why a redirect from base to location must not be followed, or None: unsafe_download's rule for the link being
+    downloaded (public: a web search's link, every redirect public too; else a BOM link's, never this machine or a
+    link-local / cloud-metadata address, your own network allowed)."""
     from urllib.parse import urljoin
     nxt = urljoin(base, location or "")
-    why = unsafe_download(nxt, public=True)
+    why = unsafe_download(nxt, public=public)
     return f"redirected to {nxt}, not followed ({why})" if why else None
 
 
 def redirect_hooks():
-    """requests hooks for a web search's link: a redirect to an address unsafe_download(public=True) refuses stops
-    before it is requested (the response hook runs on each hop, before requests follows it). {} for any other link."""
-    if not public_only():
-        return {}
+    """requests hooks: a redirect to an address unsafe_download refuses stops before it is requested (the response
+    hook runs on each hop, before requests follows it). A web search's link (public_only) is held to public sites; a
+    BOM link's redirect is never followed to this machine or a link-local address (cloud metadata), as the link itself
+    would not be: checking only the final URL left the request already made."""
+    public = public_only()
 
     def check(r, **_):
-        why = r.is_redirect and redirect_refused(r.url, r.headers.get("location"))
+        why = r.is_redirect and redirect_refused(r.url, r.headers.get("location"), public)
         if why:
             r.close()
             raise DatasheetError(why)

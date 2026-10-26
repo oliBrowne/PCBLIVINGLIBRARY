@@ -147,6 +147,121 @@ def test_04_search_hold_grows_with_max_uses_and_takes_the_long_prompt_price():
     assert nxt >= DR.usage_usd("claude-haiku-5-5", {"input_tokens": 95500 + 90000, "output_tokens": 4096}), nxt
 
 
+# ---------------------------------------------------------------- costfetch-05: a BOM link's redirect to this machine
+class _Raw:
+    """urllib3's response body as read_capped reads it (read1 / read with decode_content)."""
+
+    def __init__(self, body):
+        import io as _io
+        self.b = _io.BytesIO(body)
+
+    def read1(self, n=-1, decode_content=True):
+        return self.b.read1(n)
+
+    def read(self, n=-1, decode_content=True, **kw):
+        return self.b.read(n)
+
+    def stream(self, n=65536, decode_content=True):
+        while True:
+            c = self.b.read(n)
+            if not c:
+                return
+            yield c
+
+    def close(self):
+        pass
+
+    def release_conn(self):
+        pass
+
+
+class _Adapter(requests.adapters.BaseAdapter):
+    """A transport that answers from a table and records every URL requested (nothing leaves the process)."""
+
+    def __init__(self, table):
+        super().__init__()
+        self.table, self.seen = table, []
+
+    def send(self, request, **kw):
+        import io as _io
+        self.seen.append(request.url)
+        status, headers, body = self.table.get(request.url, (404, {}, b"no"))
+        r = requests.Response()
+        r.status_code, r.url, r.request = status, request.url, request
+        r.headers.update(headers)
+        r.raw = _Raw(body)
+        return r
+
+    def close(self):
+        pass
+
+
+class _HTTP:
+    offline, min_interval = False, 0
+
+    def __init__(self, adapter):
+        self.s = requests.Session()
+        self.s.trust_env = False
+        self.s.mount("http://", adapter)
+        self.s.mount("https://", adapter)
+
+
+@lite
+def test_05_bom_link_redirect_to_loopback_or_metadata_is_never_requested(tmp_path, monkeypatch):
+    """A BOM link is refused when it names 127.0.0.1 or 169.254.169.254, but one that redirects there was followed:
+    the request reached the metadata service / a local admin page, and only its answer was thrown away afterwards."""
+    from ecadlib import pdf_fetch as PF
+    for target in ("http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+                   "http://127.0.0.1:8080/admin/reboot", "http://localhost/x.pdf"):
+        ad = _Adapter({"https://maker.example.com/ds.pdf": (302, {"location": target}, b"")})
+        st = D.PdfStore(tmp_path / "c", http=_HTTP(ad))
+        try:
+            st.fetch("https://maker.example.com/ds.pdf")
+            raise AssertionError("fetched")
+        except D.DatasheetError as e:
+            assert "169.254" in str(e) or "127.0.0.1" in str(e) or "localhost" in str(e), e
+        assert ad.seen == ["https://maker.example.com/ds.pdf"], ad.seen
+        s = requests.Session()
+        s.trust_env = False
+        ad2 = _Adapter({"https://maker.example.com/ds.pdf": (302, {"location": target}, b"")})
+        s.mount("https://", ad2)
+        s.mount("http://", ad2)
+        got = PF.headers_get("https://maker.example.com/ds.pdf", session=s)
+        assert got[1] is None and got[4], got
+        assert ad2.seen == ["https://maker.example.com/ds.pdf"], ad2.seen
+    if PF.impersonate_available():                    # curl_cffi followed every redirect of a BOM link by itself
+        class Resp:
+            def __init__(self, url, status, loc=None):
+                self.url, self.status_code, self.headers = url, status, {"location": loc} if loc else {}
+
+            def iter_content(self):
+                yield b"secret"
+
+            def close(self):
+                pass
+
+        class Sess:
+            def __init__(self):
+                self.seen = []
+
+            def get(self, url, allow_redirects=True, **kw):
+                self.seen.append(url)
+                if url.startswith("https://maker"):
+                    return Resp(url, 302, "http://169.254.169.254/latest/meta-data/")
+                return Resp(url, 200)
+        imp = PF.Impersonate()
+        imp._s = Sess()
+        got = imp.get("https://maker.example.com/ds.pdf")
+        assert got[1] is None and "169.254" in got[4], got
+        assert imp._s.seen == ["https://maker.example.com/ds.pdf"], imp._s.seen
+    pdf = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+    ad = _Adapter({"https://maker.example.com/a.pdf": (302, {"location": "http://10.0.0.5/ds.pdf"}, b""),
+                   "http://10.0.0.5/ds.pdf": (200, {"content-type": "application/pdf"}, pdf)})
+    st = D.PdfStore(tmp_path / "c2", http=_HTTP(ad))
+    got = st._get("https://maker.example.com/a.pdf")         # your own network's datasheet server: still allowed
+    assert got[0] == 200 and got[1] == pdf, got[:5]
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

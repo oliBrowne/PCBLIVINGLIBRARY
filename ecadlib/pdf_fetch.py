@@ -164,15 +164,19 @@ class Impersonate:
         if self._s is None:
             self._s = cr.Session(impersonate="chrome")
         try:
-            at, public = url, public_only()           # a web search's link: each redirect checked before it is followed
-            for _ in range(10):
-                r = self._s.get(at, timeout=self.timeout, allow_redirects=not public, stream=True,
+            # each redirect checked before it is followed (datasheet.redirect_refused): a web search's link only to
+            # public sites, a BOM link never to this machine or a link-local / cloud-metadata address
+            at, public = url, public_only()
+            for hop in range(11):
+                r = self._s.get(at, timeout=self.timeout, allow_redirects=False, stream=True,
                                 headers={"Referer": origin(at)})
-                where = public and 300 <= r.status_code < 400 and r.headers.get("location")
+                where = 300 <= r.status_code < 400 and r.headers.get("location")
                 if not where:
                     break
                 r.close()
-                why = redirect_refused(at, where)
+                if hop == 10:
+                    return 0, None, "", url, "too many redirects (10)"
+                why = redirect_refused(at, where, public)
                 if why:
                     return 0, None, "", url, why
                 from urllib.parse import urljoin
