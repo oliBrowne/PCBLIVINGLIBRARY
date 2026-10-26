@@ -185,3 +185,18 @@ def test_logic_part_numbers_carry_no_package_code_and_codes_match_whole_tokens()
         assert not _taken(mpn, own, text), (mpn, text)
     assert _taken("EPM1270M256C5N", "BGA256", "M256 Micro FineLine BGA-256 package outline, 0.5 mm pitch")
     assert _taken("LPC1768FBD100", "QFP100", "LQFP100 package FBD100, 14 x 14 mm, SOT407-1")
+
+
+# ---------------------------------------------------------------- R-FX13-6: a viewer page's embedded PDF
+def test_pdf_link_reads_a_pdf_embedded_in_iframe_embed_or_object():
+    from ecadlib import datasheet as D
+    base = "https://www.example.com/viewer?part=LM358DR"
+    for tag in ("<embed src='/direct.pdf' type='application/pdf' width=800 height=600>",
+                "<iframe src=\"/lit/ds/lm358.pdf#page=3\"></iframe>",
+                "<object data='https://www.example.com/direct.pdf' type='application/pdf'></object>",
+                "<embed type=\"application/pdf\" src=\"/getfile?id=123\">"):
+        got = D.pdf_link(f"<html><body>{tag}</body></html>", base, part="LM358DR")
+        assert got and got.startswith("https://www.example.com/") and "#" not in got, (tag, got)
+    # an iframe of something else is no datasheet, and an href still wins over nothing
+    assert D.pdf_link("<html><iframe src='https://www.youtube.com/embed/x'></iframe></html>", base) is None
+    assert D.pdf_link("<a href='/a.pdf'>x</a><iframe src='/b.html'></iframe>", base) == "https://www.example.com/a.pdf"

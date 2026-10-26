@@ -3645,7 +3645,8 @@ def _names_part(link, part):
 
 
 def pdf_link(html, base, docs=False, part=None):
-    """The datasheet PDF an HTML product page links to (an href ending .pdf, or a meta refresh), absolute, read as a
+    """The datasheet PDF an HTML product page links to (an href ending .pdf, a meta refresh, or a PDF shown in an
+    iframe / embed / object), absolute, read as a
     browser reads it: entities decoded (&amp;), white space inside the quotes and a #page= fragment dropped. A link
     named for the part (part: its MPN), then one whose name says datasheet, then one on the page's own site, is
     preferred. None when there is none.
@@ -3656,6 +3657,12 @@ def pdf_link(html, base, docs=False, part=None):
     refresh = _refresh_url(text)
     links = [m.group(1) for m in re.finditer(r"""href\s*=\s*["']\s*([^"'#]+?\.pdf(?:\?[^"'#]*)?)\s*(?:#[^"']*)?["']""",
                                              text, re.I)]
+    # a viewer page showing its PDF in an iframe / embed / object with no link to it (R-FX13-6): its src / data,
+    # when it names a .pdf or the tag says application/pdf
+    for m in re.finditer(r"<(?:iframe|embed|object)\b[^>]*>", text, re.I):
+        a = re.search(r"""\b(?:src|data)\s*=\s*["']\s*([^"'#]+?)\s*(?:#[^"']*)?["']""", m.group(), re.I)
+        if a and (re.search(r"\.pdf(?:\?|$)", a.group(1), re.I) or re.search(r"application/pdf", m.group(), re.I)):
+            links.append(a.group(1))
     if refresh:
         links.insert(0, refresh)
     if docs and not links:
