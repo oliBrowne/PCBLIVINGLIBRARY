@@ -81,3 +81,36 @@ def test_fix3_rfx31_a_writer_that_rebuilt_the_file_keeps_its_own_recipe():
     g.close()
     assert not [e for e in _ledger(lib) if e.get("event") == "overwritten"], _ledger(lib)
     assert rp.read_text(encoding="utf-8") == mine
+
+
+# ------------------------------------------------------------------ R-FX3-2
+@lite
+def test_fix3_rfx32_a_recipe_saved_while_a_release_is_recorded_is_not_released(tmp_path, monkeypatch):
+    """repro_side_snapshot_race.py: a description-only (pass) change is being released; the recipe is saved with PAD 1
+    moved between the side-file check and the copy into the blob store. The released revision must not carry the
+    edited recipe: the release is classified again and the released recipe goes back first."""
+    from ecadlib import change_gate as CG, ledger as LG
+    w, lib = _demo()
+    plan = lib / "plan.json"
+    released = _recipe(lib).read_text(encoding="utf-8")
+    edited, new = _moved_pad(lib)
+    items = json.loads(plan.read_text(encoding="utf-8"))
+    cap = next(i for i in items if i["name"] == CAP)
+    cap["description"] = (cap.get("description") or "") + " (restyled)"
+    plan.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    real, done = LG.Ledger.snapshot_files, []
+
+    def snap(self, item, base=None):
+        if item.get("name") == CAP and not done:
+            done.append(1)
+            _recipe(lib).write_text(edited, encoding="utf-8")      # the person saves the recipe now
+        return real(self, item, base)
+    monkeypatch.setattr(LG.Ledger, "snapshot_files", snap)
+    with contextlib.redirect_stderr(io.StringIO()):
+        CG.publish_guard(plan, items, "altium")
+    assert done
+    head = LG.Ledger(lib).head(CAP)
+    assert head["revision"] == 2 and "(restyled)" in (head["item"].get("description") or ""), head
+    assert new not in _head_recipe(lib), "the recipe saved during the release was recorded as released"
+    assert _head_recipe(lib) == released
+    assert _recipe(lib).read_text(encoding="utf-8") == released     # put back, the edit kept in the blob store

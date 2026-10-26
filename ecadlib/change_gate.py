@@ -180,6 +180,17 @@ def decide(changes, pol, mode="gate"):
     return {"action": action, "why": why, "by_class": by}
 
 
+def _sides_now(f):
+    """The recipe and STEP files beside library file f on disk, as Ledger.snapshot_files copies them ->
+    {"ecadbuild": sha or None, "steps": {name: sha}}."""
+    f = Path(f)
+    side = f.with_name(f.name + ".ecadbuild")
+    if not side.is_file():
+        return {"ecadbuild": None, "steps": {}}
+    return {"ecadbuild": LG.sha_bytes(side.read_bytes()),
+            "steps": {s: LG.sha_bytes((f.parent / s).read_bytes()) for s in LG.step_files(f) if (f.parent / s).is_file()}}
+
+
 def released(item):
     return item.get("status") in RELEASED_STATUSES
 
@@ -236,6 +247,7 @@ class Guard:
         self.pre = {}                          # path -> bytes on disk at begin() that are the released part
         self.pre_steps = {}                    # PcbLib path -> {STEP path: bytes} of a head recorded without its STEPs
         self.found = {}                        # path -> sha256 at begin() of a released part's .SchLib / .PcbLib
+        self.sides_seen = {}                   # library file path -> its recipe / STEP shas as _settle_sides left them
         self._lock = None
         self._begun = False                    # begin() ran: what the writer found on disk was checked there
         self._was_empty = None                 # the ledger had no line when this guard first looked
@@ -612,6 +624,8 @@ class Guard:
 
     def _settle(self, items, tries=0):
         rows, todo = [], {}
+        if not tries:                          # what this settle's _settle_sides leaves is what its releases copy
+            self.sides_seen = {}
         for it in items:
             head = self.ledger.head(it["name"])
             if not head:
@@ -691,6 +705,14 @@ class Guard:
         beside a re-saved file as released."""
         files = head.get("files") or {}
         drift = {}
+        try:
+            return self._settle_sides_of(it, head, files, drift, new, old)
+        finally:                               # what a release of this part must copy (_snapshot_as)
+            for r in files.values():
+                f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
+                self.sides_seen[str(f.resolve())] = _sides_now(f)
+
+    def _settle_sides_of(self, it, head, files, drift, new, old):
         for kind, r in files.items():
             f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
             if not f.is_file():
@@ -962,6 +984,10 @@ class Guard:
             f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
             if not f.is_file() or LG.sha_bytes(f.read_bytes()) != r["sha256"]:
                 raise FilesMoved(it["name"])
+            copied = {"ecadbuild": r.get("ecadbuild"), "steps": r.get("steps") or {}}
+            seen = self.sides_seen.get(str(f.resolve()))
+            if _sides_now(f) != copied or (seen is not None and seen != copied):
+                raise FilesMoved(it["name"])   # the recipe / a 3D model is not the one checked (or copied)
         return files
 
     def _propose(self, t):
