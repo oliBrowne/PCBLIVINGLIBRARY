@@ -780,7 +780,7 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
             return None, f"{_strip_lib(t).strip()}: the {v.group(1)} land variant is not in the standard table"
     for t in texts:                                       # another KiCad footprint ('R_Array_Convex_4x0603', 'TO-92_Wide',
         n = _strip_lib(t).strip()                         # 'SO-8_3.9x4.9mm_P1.27mm'): its own land, not the chip size
-        if n in kicad_names() and n not in pk and _norm(n) not in ALIASES and _norm(n) not in DIODE_ALIASES:
+        if n in kicad_names() and n not in pk and (_kicad_own(t) or _norm(n) not in ALIASES and _norm(n) not in DIODE_ALIASES):
             return None, (f"{n}: KiCad's {kicad_names()[n]}:{n} is not in the checked standard table (its land is not "
                           "the table's land for the size or package in its name)")   # (bare 'TO-92' is the package)
     if kind in CHIP_PREFIX:                              # chip passives: size from the texts, then the MPN
@@ -930,8 +930,10 @@ FAMILY = [
     (r"^LM317T", ("TO-220-3_Vertical",), ("REG", "317")),
     (r"^(L|LM|MC|UA|KA)?78L\d\d", ("TO-92_Inline", "SOT-89-3"), ("REG", "78L")),
 ]
-FAMILY_PKG = {"SOT-23": r"\bSOT-?23(?![-\d])", "TO-92_Inline": r"\bTO-?92(?![-\dLS])", "SOT-223-3_TabPin2": r"\bSOT-?223\b|\bTO-?261",
-              "TO-220-3_Vertical": r"\bTO-?220(?:AB|-3)?(?![-\dF])", "SOT-89-3": r"\bSOT-?89(?:-3)?(?![-\d])"}
+# anchored at the token end: 'SOT-23W', 'TO-92Mini-2', 'TO-92_Wide', 'SOT-223-5' are other lands, not the family's
+FAMILY_PKG = {"SOT-23": r"\bSOT-?23(?![-\w])", "TO-92_Inline": r"\bTO-?92(?![-\w])",
+              "SOT-223-3_TabPin2": r"\bSOT-?223(?:-[34])?(?![-\w])|\bTO-?261(?:AA)?(?![-\w])",
+              "TO-220-3_Vertical": r"\bTO-?220(?:AB|-3)?(?![-\w])", "SOT-89-3": r"\bSOT-?89(?:-3)?(?![-\w])"}
 PNP_RE = re.compile(r"^(2N3906|2N2907|2N4403|2N5401|BC3[2]7|BC55[6-9]|BC560)")
 
 
@@ -1026,6 +1028,23 @@ POLAR_CAP = re.compile(r"^(T49[1-9]|T5[2-9]\d|TAJ|TPS[A-Z]|TPM|TRJ|TCJ|TCM|TCN|T
                        r"T8[36]|TR3|TP3|EEE|EEV|EEH|EEF|EEU|ECA|\d+TP[A-Z]|\d+SVP|\d+SEP|UWT|UWX|UUD|UUX|UCD|PCJ|PCF|PLV)")
 
 
+def _kicad_own(t):
+    """The KiCad footprint a text names as such, or None: an exact KiCad name, except a bare package name that is
+    also the package's common name ('SOT-223', 'TO-92': the package, the part decides the land); with a library
+    prefix ('Package_TO_SOT_THT:TO-92') it is KiCad's own footprint."""
+    n = _strip_lib(t).strip()
+    if n not in kicad_names():
+        return None
+    if n == str(t).strip() and (_norm(n) in ALIASES or _norm(n) in DIODE_ALIASES or _norm(n) in AMBIGUOUS):
+        return None
+    return n
+
+
+def _names_other_land(texts, name):
+    """A text names a KiCad footprint other than the table land `name` (the family fallback must not override it)."""
+    return any(_kicad_own(t) not in (None, name) for t in texts if str(t or "").strip())
+
+
 def resolve(texts, kind=None, mpn="", description=""):
     """What the standard source builds for one part:
     {"footprint": table name | None, "fp_how": str, "kicad_ref": "Lib:Name", "symbol": key | None, "sym_how": str}.
@@ -1044,7 +1063,8 @@ def resolve(texts, kind=None, mpn="", description=""):
         said = " ".join(map(str, texts)) + " " + str(description)
         hit = [p for p in fam if re.search(FAMILY_PKG[p], said, re.I)]
         if len(hit) == 1 and not POWER_PKG.search(said) and not NO_GO.search(said) and not LAND_VARIANT.search(said) \
-                and not EP_WORD.search(said):
+                and not EP_WORD.search(said) and not NOT_CHIP.search(said) \
+                and not (hit[0].startswith("TO-92") and NO_GO_TO92.search(said)) and not _names_other_land(texts, hit[0]):
             name, how = hit[0], f"{mpn}: its family comes in {hit[0]} (named as {re.search(FAMILY_PKG[hit[0]], said, re.I).group(0)})"
     sym, sym_how = symbol_kind(kind, mpn, name, description) if (name or kind in ("R", "C", "CP", "L", "LED")) else (None, "no standard package")
     return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name) if name else None, "symbol": sym, "sym_how": sym_how}
