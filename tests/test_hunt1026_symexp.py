@@ -113,3 +113,28 @@ def test_symexp05_compare_sees_pad_shape_corner_and_slot(tmp_path):
         lib.write_bytes(AL.pcblib_bytes([dict(fp, pads=pads)], lib.name, stamp))
         probs = AN.compare_one(lib, rp)
         assert len(probs) == 1 and f"pad {i + 1}:" in probs[0] and what in probs[0], (what, probs)
+
+
+# symexp-06: the same for pins: the part a pin is in, its display mode, hidden flag and IEEE symbols (inverted dot,
+# clock) were not compared, so a pin Altium put in another part, or saved without its dot, was 0 differences
+@lite
+def test_symexp06_compare_sees_pin_part_hidden_and_shape(tmp_path):
+    from ecadlib import altium_native as AN
+    pins = [{"num": str(n), "name": nm, "type": t} for n, nm, t in
+            ((1, "1IN", "input"), (2, "1OUT", "output"), (3, "2IN", "input"), (4, "2OUT", "output"), (5, "VCC", "power"), (6, "GND", "ground"))]
+    pins[0]["shape"] = "inverted"
+    sym = SL.build("DUAL", pins, rules={"symbols": dict(RU.DEFAULTS["symbols"], unit_pins=8)}, split=True)
+    sym["prims"] = [pr if pr[0] != "pin" or pr[1]["num"] != "5" else (pr[0], dict(pr[1], hidden=True, net="VCC"), *pr[2:])
+                    for pr in sym["prims"]]
+    lib = tmp_path / "DUAL.SchLib"
+    AL.write_schlib(lib, [sym])
+    rp = lib.with_name(lib.name + AN.EXT)
+    assert AN.compare_one(lib, rp) == []
+    pp = sym["prim_parts"]
+    for what, edit in (("part", lambda pr, k: (pr, 9 if pr[0] == "pin" and pr[1]["num"] == "3" else pp[k])),
+                       ("hidden", lambda pr, k: ((pr[0], dict(pr[1], hidden=False), *pr[2:]) if pr[0] == "pin" and pr[1]["num"] == "5" else pr, pp[k])),
+                       ("symbols", lambda pr, k: ((pr[0], dict(pr[1], shape=None), *pr[2:]) if pr[0] == "pin" and pr[1]["num"] == "1" else pr, pp[k]))):
+        got = [edit(pr, k) for k, pr in enumerate(sym["prims"])]
+        lib.write_bytes(AL.schlib_bytes([dict(sym, prims=[g[0] for g in got], prim_parts=[g[1] for g in got])]))
+        probs = AN.compare_one(lib, rp)
+        assert len(probs) == 1 and what in probs[0], (what, probs)

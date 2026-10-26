@@ -554,14 +554,20 @@ def _recipe_items(rp):
                 pad.update(shape=f[7], corner=int(f[8]), hole_shape=f[11], slot=int(f[12]), hole_rot=int(f[13]) / 1000)
             cur["pads"].append(pad)
         elif f[0] == "PIN" and cur is not None:
-            cur["pins"].append({"num": f[3], "name": f[4], "x": round(int(f[7]) / 10000), "y": round(int(f[8]) / 10000),
-                                "length": round(int(f[9]) / 10000), "orient": int(f[6]), "etype": int(f[5])})
+            pin = {"num": f[3], "name": f[4], "x": round(int(f[7]) / 10000), "y": round(int(f[8]) / 10000),
+                   "length": round(int(f[9]) / 10000), "orient": int(f[6]), "etype": int(f[5])}
+            if len(f) > 16:                     # the part and display mode it is in, hidden, IEEE symbols (dot, clock)
+                pin.update(part=int(f[1]), mode=int(f[2]), hidden=f[12] == "1", symbols=tuple(int(v) for v in f[13:17]))
+            cur["pins"].append(pin)
     return out
 
 
 def _key(d):
-    """Sort key of a pad (designator) or pin (num); an unnumbered pad (NPTH mounting hole) has designator ''."""
-    return (str((d["designator"] if "designator" in d else d.get("num")) or ""), d["x"], d["y"])
+    """Sort key of a pad (designator) or pin (num, then part and display mode: a KiCad unit-0 pin is in every part,
+    at the same spot); an unnumbered pad (NPTH mounting hole) has designator ''."""
+    if "designator" in d:
+        return (str(d["designator"] or ""), 0, 0, d["x"], d["y"])
+    return (str(d.get("num") or ""), int(d.get("part") or 0), int(d.get("mode") or 0), d["x"], d["y"])
 
 
 def _pad_diffs(a, b, tol):
@@ -656,6 +662,9 @@ def compare_one(lib, rp, tol=10, known=None):
                 probs.append(f"{lib.name}/{name}: {len(g)} pins, recipe has {len(w['pins'])}")
             for a, b in zip(sorted(w["pins"], key=_key), sorted(g, key=_key)):
                 bad = [k for k in ("x", "y", "length", "orient", "etype") if a[k] != b[k]]
+                if "part" in a:
+                    b = dict(b, hidden=bool(b["conglomerate"] & 0x04), symbols=tuple(b["symbols"]))
+                    bad += [k for k in ("part", "mode", "hidden", "symbols") if a[k] != b[k]]
                 if a["name"] != b["name"] and best_fit_name(a["name"], b["name"]):
                     known.append(f"{lib.name}/{name} pin {a['num']}: name {b['name']!r} for {a['name']!r} (cp1252 can't hold "
                                  f"{AL.not_cp1252(a['name'])!r}; the SchLib pin record has no Unicode copy)")
