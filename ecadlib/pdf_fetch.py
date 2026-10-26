@@ -291,6 +291,38 @@ class _State:
         self.warm, self.public = set(), getattr(self, "public", False)   # (kept when a dead browser is started again)
 
 
+ROUTE_VERDICT_S = 300                                  # how long the browser keeps one host's verdict
+
+
+def route_check(s, clock=time.monotonic):
+    """The browser's request handler: every request of a page (its scripts, images, frames) is checked by
+    datasheet.unsafe_download, which looks the host name up. A page makes dozens of requests to one host, so the
+    verdict is kept per (scheme, host, public) for ROUTE_VERDICT_S: one blocking lookup per host, not per request.
+    It changes nothing the check could catch: the lookup here was never the one the browser makes (DNS rebinding is
+    out of its reach either way), and the rest of the check reads only the scheme and the host."""
+    from urllib.parse import urlsplit
+    from . import datasheet as D
+    seen = {}
+
+    def check(route):
+        url = route.request.url
+        try:
+            u = urlsplit(url)
+            key = (u.scheme.lower(), (u.hostname or "").lower(), bool(s.public))
+        except ValueError:
+            key = None
+        hit = seen.get(key) if key and key[1] else None
+        now = clock()
+        if hit and now - hit[1] < ROUTE_VERDICT_S:
+            bad = hit[0]
+        else:
+            bad = bool(D.unsafe_download(url, s.public))
+            if key and key[1]:
+                seen[key] = (bad, now)
+        route.abort() if bad else route.continue_()
+    return check
+
+
 class Browser:
     """A headless browser for the whole run (one per process: shared()), started on first use and closed at exit.
     Every call runs on one worker thread of its own; a call that overruns (a site that stops sending) is given up,
@@ -366,9 +398,7 @@ class Browser:
             s.ctx = s.browser.new_context(accept_downloads=False, user_agent=ua, locale="en-US",
                                           viewport={"width": 1366, "height": 768})
             if not self.allow_local:
-                from . import datasheet as D
-                s.ctx.route("**/*", lambda route: route.abort() if D.unsafe_download(route.request.url, s.public)
-                            else route.continue_())
+                s.ctx.route("**/*", route_check(s))
         except Exception as e:                        # the driver cannot run (a broken install, a frozen build)
             self._close(s)
             s.why = f"could not start a browser ({type(e).__name__}: {str(e).splitlines()[0][:120] if str(e) else ''})"

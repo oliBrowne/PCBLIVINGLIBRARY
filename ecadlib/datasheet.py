@@ -3497,11 +3497,11 @@ class PdfStore:
                 meta = None
             if isinstance(meta, dict) and hashlib.sha256(data).hexdigest() == meta.get("sha256") and pdf_complete(data):
                 return data, dict(meta, where=where or meta.get("where"), from_cache=True)
+        if self.offline:                              # first: the safety check below looks the host name up (DNS)
+            raise DatasheetError(f"{url}: offline and not downloaded before")
         why = unsafe_download(url, public)            # a BOM cell or a page's link to this machine / cloud metadata
         if why:
             raise DatasheetError(f"{url}: not downloaded ({why})")
-        if self.offline:
-            raise DatasheetError(f"{url}: offline and not downloaded before")
         n, was = len(self.refusals), public_only()
         _PUBLIC.on = public                           # every way checks each redirect of a web search's link
         try:
