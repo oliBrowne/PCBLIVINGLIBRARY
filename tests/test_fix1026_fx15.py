@@ -255,3 +255,71 @@ def test_a365_one_plan_still_makes_its_revision_and_a_gone_plan_can_be_forgotten
     out = _a365_push(a, nx, forget_missing=True)
     assert out["RES-0603-10k"]["action"] == "new_revision", out
     assert out["B"]["action"] == "forgotten"
+
+
+# ---------------------------------------------------------------- R-FX15-4: one plan folder per output library
+def _quiet(*a, **k):
+    pass
+
+
+@lite
+def test_kicad_export_into_another_plans_library_is_refused_unless_taken_over(tmp_path):
+    """Two plan folders exported into one -o under one --name: B's export replaced A's library (A's symbol removed,
+    the shared footprint now B's land) with only a removed-part note. Refused, naming A; --take-over still can. The
+    same plan again, the plan folder renamed, and another --name into the same folder are fine."""
+    from ecadlib import kicad_export as X
+    out = tmp_path / "kicad"
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    b = _plan_folder(tmp_path / "B", [_res("RES-0603-1k", "RC0603FR-071KL")], land=BIG)
+    X.export(a, out, "lib", log=_quiet)
+    sym = (out / "lib.kicad_sym").read_bytes()
+    try:
+        X.export(b, out, "lib", log=_quiet)
+        raise AssertionError("B's export replaced A's library")
+    except X.PlanError as e:
+        assert "another plan folder (../A)" in str(e) and "--take-over" in str(e), e
+    assert (out / "lib.kicad_sym").read_bytes() == sym
+    X.export(b, out, "libB", log=_quiet)                # another library in the same folder: fine
+    X.export(a, out, "lib", log=_quiet)                 # the same plan again: fine
+    shutil.move(tmp_path / "A", tmp_path / "A2")
+    X.export(tmp_path / "A2/plan.json", out, "lib", log=_quiet)    # renamed: still the same plan
+    X.export(b, out, "lib", log=_quiet, take_over=True)
+    assert b"RES-0603-1k" in (out / "lib.kicad_sym").read_bytes()
+
+
+def _refused(fn):
+    try:
+        fn()
+    except ValueError as e:
+        assert "another plan folder" in str(e) and "--take-over" in str(e), e
+        return
+    raise AssertionError("another plan folder's output was overwritten")
+
+
+@lite
+def test_kicad_dblib_pcm_and_altium_pkg_refuse_another_plans_output(tmp_path):
+    """kicad-dblib (same -o and --name), kicad-pcm (same --out and package id) and altium-pkg of a models folder
+    (same --out) let plan B overwrite plan A's output with no warning."""
+    import datetime
+    from ecadlib import altium_pkg as AP, change_gate as CG, kicad_dblib as KD, kicad_pcm as PCM
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    b = _plan_folder(tmp_path / "B", [_res("RES-0603-1k", "RC0603FR-071KL")], land=BIG)
+    KD.build(a, tmp_path / "kd", "lib", log=_quiet)
+    db = (tmp_path / "kd/lib.sqlite").read_bytes()
+    _refused(lambda: KD.build(b, tmp_path / "kd", "lib", log=_quiet))
+    assert (tmp_path / "kd/lib.sqlite").read_bytes() == db
+    KD.build(b, tmp_path / "kd", "lib", log=_quiet, take_over=True)
+    assert (tmp_path / "kd/lib.sqlite").read_bytes() != db
+    day = datetime.date(2026, 10, 26)
+    pcm = lambda p, name="lib": PCM.build(p, tmp_path / "pcm", name, offline=True, cache=str(tmp_path / "c"),
+                                          log=_quiet, today=day)
+    pcm(a)
+    zips = {z.name: z.read_bytes() for z in (tmp_path / "pcm").glob("*.zip")}
+    _refused(lambda: pcm(b))
+    assert {z.name: z.read_bytes() for z in (tmp_path / "pcm").glob("*.zip")} == zips
+    pcm(b, "libB")                                      # another package in the same folder: fine
+    AP.build(tmp_path / "A/models", tmp_path / "pkg", "lib", plan=a, log=_quiet)
+    land = (tmp_path / "pkg/PcbLib/R_0603_1608Metric.PcbLib").read_bytes()
+    _refused(lambda: AP.build(tmp_path / "B/models", tmp_path / "pkg", "lib", plan=b, log=_quiet))
+    assert (tmp_path / "pkg/PcbLib/R_0603_1608Metric.PcbLib").read_bytes() == land
+    assert CG.OWNER in {p.name for p in (tmp_path / "pkg").iterdir()}

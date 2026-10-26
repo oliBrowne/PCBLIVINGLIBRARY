@@ -878,7 +878,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         me = CG.plan_id(folder, create=not dry_run) or "?this"
         claims = CG.Claims(CG.publishers_file(folder), CG.publishers_file(folder).parent, section=target)
         if forget_missing:
-            gone = sorted({p for v in claims.claims.values() for p in v if p != me and claims.folder(p) is None})
+            gone = sorted({p for v in claims.claims.values() for p in v
+                           if not claims.is_me(p, me, folder) and claims.folder(p) is None})
             forgotten = [claims.label(p) for p in gone]
             claims.forget(gone)
 
@@ -887,7 +888,7 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         boards use that component; it has not signed the change off). _Held names it; a gone one is named stale."""
         if claims is None:
             return
-        live, gone = claims.others(str(it["name"]).casefold(), me)
+        live, gone = claims.others(str(it["name"]).casefold(), me, folder)
         bad = []
         for p, f in sorted(live.items()):
             lw = LG.Ledger(f)

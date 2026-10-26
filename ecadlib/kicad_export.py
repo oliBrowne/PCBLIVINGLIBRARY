@@ -1050,20 +1050,22 @@ def _pins(sym):
 
 
 # ---------------------------------------------------------------- driver
-def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None):
+def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, take_over=False):
     """Write the KiCad library for plan.json into `out`; returns the report dict (also kicad_export.json).
     rules: library rules (dict or path); None = the ecadlib.toml found from the plan's folder, if any.
     project: the KiCad project folder that uses the library (KIPRJMOD), when `out` is not that folder itself (the
     KiCad window's <project>/ecadlib/): the 3D model paths are written from there (models_at). None: the folder an
     earlier export into `out` was given, else `out` is taken as the project folder.
-    The library lock is held for the whole export (change control: the files read are the settled ones)."""
+    The library lock is held for the whole export (change control: the files read are the settled ones).
+    take_over: write library `name` into `out` although another plan folder wrote it there (else PlanError)."""
     import tempfile
     from . import change_gate as CG
     with CG.publishing(Path(plan).parent), tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as stage:
-        return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage)
+        return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage, take_over=take_over)
 
 
-def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, stage=None):
+def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, stage=None,
+            take_over=False):
     plan, out = Path(plan), Path(out)
     plan_dir, lib = plan.parent, libname(name)
     from .rules import resolve
@@ -1077,6 +1079,10 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         raise PlanError(f"{plan} has no parts: exporting it would empty the library {lib} in {out}; nothing written "
                         f"(delete {lib}.kicad_sym and {lib}.pretty/ by hand if that is what you want)")
     from . import change_gate as CG          # change control (#105): a hand edit since the last writer is settled
+    try:                                      # one plan folder's library per name and folder (R-FX15-4)
+        CG.claim_output(out, f"kicad-export:{lib}", plan_dir, take_over, what=f"the KiCad library {lib}")
+    except CG.OutputTaken as e:
+        raise PlanError(str(e)) from None
     CG.publish_guard(plan, items, "kicad", rules=rules, log=log)   # first; a held change exports the released revision
     items = sorted(items, key=lambda i: ksym(i["name"]))
     pretty, shapes = out / f"{lib}.pretty", out / f"{lib}.3dshapes"
@@ -1526,10 +1532,13 @@ def main(argv=None):
     ap.add_argument("--project", help="the KiCad project folder that uses the library, when -o is not that folder: the "
                                       "3D model paths are written from it (${KIPRJMOD}/<path to -o>/<lib>.3dshapes); "
                                       "remembered for later exports into -o")
+    ap.add_argument("--take-over", action="store_true", help="write the library although another plan folder wrote "
+                    "it into -o (its parts are replaced by this plan's)")
     a = ap.parse_args(argv)
     try:
         rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60),
-                     rules=a.rules, log=(lambda *x, **k: None) if a.json else print, project=a.project)
+                     rules=a.rules, log=(lambda *x, **k: None) if a.json else print, project=a.project,
+                     take_over=a.take_over)
     except PlanError as e:
         print(f"ecadlib kicad-export: {e}", file=sys.stderr)
         return 2

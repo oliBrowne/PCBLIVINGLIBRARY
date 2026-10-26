@@ -259,9 +259,12 @@ def add_lib_row(table_file, nick, uri, descr, typ="Database", table="sym_lib_tab
 
 
 def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFAULT_DRIVER, dsn="", export=False,
-          http=None, log=print):
+          http=None, log=print, take_over=False):
     from .kicad_export import libname
+    from . import change_gate as CG
     out, lib = Path(out), libname(name)
+    if Path(plan).is_file():                  # one plan folder's database library per name and folder (R-FX15-4)
+        CG.claim_output(out, f"kicad-dblib:{lib}", Path(plan).parent, take_over, what=f"the database library {lib}")
     out.mkdir(parents=True, exist_ok=True)
     rep = {"plan": str(plan), "library": lib, "dblib": f"{lib}.kicad_dbl", "database": f"{lib}.sqlite",
            "nickname": f"{lib}-db", "tables": {}, "skipped": [], "warnings": []}
@@ -270,7 +273,7 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
                          f"nothing written (delete {lib}.sqlite by hand if that is what you want)")
     if export:
         from . import kicad_export as X
-        xr = X.export(plan, out, name, include_held, http=http, log=log, rules=rules)
+        xr = X.export(plan, out, name, include_held, http=http, log=log, rules=rules, take_over=take_over)
         rep["kicad_export"] = {"symbols": xr.get("symbols"), "errors": xr.get("errors")}
     tables, skipped = part_rows(plan, lib, include_held, rules)
     rep["skipped"] = skipped
@@ -376,13 +379,16 @@ def main(argv=None):
     ap.add_argument("--cache", default="out/http_cache")
     ap.add_argument("--offline", action="store_true", help="with --export: use the HTTP cache only")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan)")
+    ap.add_argument("--take-over", action="store_true", help="write the library although another plan folder wrote "
+                    "it into -o (its rows are replaced by this plan's)")
     a = ap.parse_args(argv)
     http = None
     if a.export:
         from .httpcache import CachedHTTP
         http = CachedHTTP(a.cache, offline=a.offline, timeout=60)
     try:
-        rep = build(a.plan, a.out, a.name, a.include_held, a.rules, a.driver, a.dsn, a.export, http)
+        rep = build(a.plan, a.out, a.name, a.include_held, a.rules, a.driver, a.dsn, a.export, http,
+                    take_over=a.take_over)
     except (OSError, ValueError) as e:
         print(f"cannot build the database library: {e}", file=sys.stderr)
         return 2

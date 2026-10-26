@@ -649,7 +649,6 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     # plan folder that is gone (stale: forget_missing drops its claim)
     from . import ledger as LG
     pf = CG.lib_folder(base)
-    fresh = CG.plan_id(pf, create=False) is None        # this folder has no plan id yet (new, or made again)
     me = CG.plan_id(pf, create=not dry_run) or CG.project_key(to, pf)
     writers = state.get("writers") or {}
     plans = {k: dict(v) for k, v in (writers.get("plans") or {}).items() if isinstance(v, dict)}
@@ -670,9 +669,10 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         other = CG.plan_id(here(w), create=False) if CG.plan_at(here(w)) else None
         plans.setdefault(other or w, {"path": w})
         return other or w
-    # a plan folder made again where it was (deleted and run again, its .ecadlib/ lost) is the plan recorded there, as
-    # before plan ids: a writer last seen at this folder's own place, which no longer holds that id
-    again = {w for w, v in plans.items() if fresh and CG.is_plan_id(w) and v.get("path")
+    # a plan folder made again where it was (deleted and run again, its .ecadlib/ lost), or copied with the library
+    # it syncs into (the copy gets an id of its own), is the plan recorded there, as before plan ids: a writer last
+    # seen at this folder's own place, which no longer holds that id
+    again = {w for w, v in plans.items() if CG.is_plan_id(w) and v.get("path")
              and same_folder(here(v["path"]), pf) and CG.plan_at(here(v["path"]), w) is None}
     norm = lambda w: me if w in again else norm_writer(w)
     row_writers = {k: sorted({norm(x) for x in (v if isinstance(v, list) else [v])})

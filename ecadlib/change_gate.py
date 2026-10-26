@@ -1572,11 +1572,24 @@ class Claims:
         hint = (self.plans.get(pid) or {}).get("path")
         return plan_at(self._here(hint), pid) if hint else None
 
-    def others(self, key, me):
+    def is_me(self, pid, me, plan_folder=None):
+        """pid is this plan: its id, or a claim last seen at this very folder that no longer holds that id (the folder
+        was made again, or copied with what it published: a copy's own id, CG.plan_id)."""
+        if pid == me:
+            return True
+        hint = (self.plans.get(pid) or {}).get("path")
+        if not (hint and plan_folder is not None):
+            return False
+        try:
+            return os.path.samefile(self._here(hint), plan_folder) and plan_at(self._here(hint), pid) is None
+        except OSError:
+            return False
+
+    def others(self, key, me, plan_folder=None):
         """(the other plans' folders that claim key {id: folder}, [ids of those whose folder is gone])."""
         live, gone = {}, []
         for pid in self.claims.get(key) or []:
-            if pid == me:
+            if self.is_me(pid, me, plan_folder):
                 continue
             f = self.folder(pid)
             if f is None:
@@ -1605,6 +1618,52 @@ class Claims:
         raw = dict(self.raw, **{self.section: d}) if self.section else d
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_text_atomic(self.path, json.dumps(raw, indent=1, sort_keys=True) + "\n")
+
+
+OWNER = ".ecadlib_owner.json"                 # in an output folder: which plan folder wrote each library there
+
+
+class OutputTaken(ValueError):
+    """Another plan folder's library is in the output folder: not overwritten (R-FX15-4)."""
+
+
+def claim_output(out, key, plan_folder, take_over=False, what="the library", check=None, shared=False, flag="--take-over"):
+    """Before a publisher writes library `key` (kicad-export:<lib>, kicad-pcm:<package id>, ...) into output folder
+    `out` from plan_folder: another plan folder that wrote it there (or, check: any of those keys) keeps it, as one plan's
+    export replaces the whole library and the other plan's released parts would change or go without its sign-off
+    (R-FX15-4). Raises OutputTaken naming it (and whether its folder is gone), unless take_over. Then records this plan
+    as its writer (shared: as one of several, for a target that keeps each plan's rows apart). A folder written before
+    this was recorded is taken by its next writer."""
+    out = Path(out)
+    c = Claims(out / OWNER, out)
+    me = plan_id(plan_folder)
+    live, gone = {}, []
+    for k in check or [key]:
+        lv, gn = c.others(k, me, plan_folder)
+        live.update(lv)
+        gone += [g for g in gn if g not in gone]
+    if (live or gone) and not take_over:
+        named = [c.label(p) for p in sorted(live)] + [c.label(p) for p in gone]
+        why = (f"{out}: {what} there was written from another plan folder ({', '.join(named)}): not overwritten, as "
+               "this plan's parts would replace that plan's (its released parts would change or go without its "
+               f"sign-off). Write this plan into another folder (or under another --name), or pass {flag} to make "
+               "this plan folder its writer")
+        if gone:
+            why += f" ({', '.join(c.label(p) for p in gone)} is not there any more: {flag} if that plan no longer exists)"
+        raise OutputTaken(why)
+    before = json.dumps([c.claims, c.plans], sort_keys=True)
+    for k in set(check or []) | {key}:        # (a claim of this folder under the id it had before: this plan's)
+        c.claims[k] = sorted({me if c.is_me(p, me, plan_folder) else p for p in c.claims.get(k, [])})
+    if take_over:
+        for k in check or [key]:
+            c.claims[k] = [p for p in c.claims.get(k, []) if p == me]
+    c.claims[key] = sorted(set(c.claims.get(key, [])) | {me}) if shared else [me]
+    c.claims = {k: v for k, v in c.claims.items() if v}
+    c.plans[me] = {"path": project_key(out, plan_folder)}
+    c.plans = {p: v for p, v in c.plans.items() if any(p in v2 for v2 in c.claims.values())}
+    if json.dumps([c.claims, c.plans], sort_keys=True) != before:
+        c.save()
+    return me
 
 
 def publishers_file(plan_folder):

@@ -289,7 +289,7 @@ UNCHECKED_NOTE = "NOT CHECKED: packaged with --unchecked from a KiCad folder eca
 EXPORT_DIR = ".kicad-export"     # in --out: where a plan is exported before it is packaged (kept between builds)
 
 
-def _source(src, name, include_held, http, offline, cache, log, unchecked=False, out=None):
+def _source(src, name, include_held, http, offline, cache, log, unchecked=False, out=None, take_over=False):
     """(export folder, library name, that library's kicad_export record or None, temp dir to clean up or None). unchecked: a folder
     with no kicad_export.json (not written by ecadlib) is packaged without the change-control check; a folder
     kicad-export wrote is always checked. name: the library to package (None: a folder's only library; a plan's is
@@ -334,7 +334,8 @@ def _source(src, name, include_held, http, offline, cache, log, unchecked=False,
     tmp = None if out is not None else Path(tempfile.mkdtemp(prefix="ecadlib-pcm-"))
     exp = Path(out) / EXPORT_DIR if out is not None else tmp
     exp.mkdir(parents=True, exist_ok=True)
-    rep = X.export(src, exp, name or "ecadlib", include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60), log=log)
+    rep = X.export(src, exp, name or "ecadlib", include_held, http=http or CachedHTTP(cache, offline=offline, timeout=60),
+                   log=log, take_over=take_over)
     return exp, rep["library"], rep, tmp
 
 
@@ -378,7 +379,8 @@ def content_hash(files):
 
 def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_="CC-BY-SA-4.0",
           author="ecadlib user", description=None, homepage=None, base_url=None, include_held=False, http=None,
-          offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False, warn=None):
+          offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False, warn=None,
+          take_over=False):
     """Build the PCM package from a plan.json or a kicad-export folder into `out`; returns the report dict.
     name: with a plan, the library name to export it as (None: 'ecadlib'); with a folder, the library to package
     (None: the folder's only one). unchecked: package a KiCad folder ecadlib did not export (no kicad_export.json) as it is; the package's NOTICE.txt
@@ -393,7 +395,8 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
         raise ValueError(f"--license {license_!r} is not on KiCad's PCM list" + (f" (did you mean {near[0]}?)" if near else
                          "; use one of KiCad's, e.g. CC-BY-SA-4.0, MIT, CC0-1.0, open-source or unrestricted"))
     out = Path(out)
-    exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked, out=out)
+    exp, lib, xrep, tmp = _source(src, name, include_held, http, offline, cache, log, unchecked, out=out,
+                                  take_over=take_over)
     unchecked = bool(unchecked and Path(src).is_dir() and xrep is None)
     # parts kicad-export wrote while held (its --include-held): never packaged unless asked for, and then said
     held = sorted({str(p.get("part")) for p in (xrep or {}).get("parts") or []
@@ -410,6 +413,13 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
         identifier = identifier or reuse_identifier(out, lib) or default_identifier(lib)
         if not ID_RE.match(identifier):
             raise ValueError(f"identifier {identifier!r}: letters, digits, '-' and '.', starting with a letter (KiCad's PCM rule)")
+        # one plan folder's package per id and folder (R-FX15-4): a new version from another plan would hold only its
+        # parts, and KiCad's update would replace the first plan's library for its users
+        from . import change_gate as CG
+        owner = Path(src).parent if Path(src).is_file() else \
+            Path(str((xrep or {}).get("plan"))).parent if (xrep or {}).get("plan") else None
+        if owner is not None and owner.is_dir():
+            CG.claim_output(out, f"kicad-pcm:{identifier}", owner, take_over, what=f"the package {identifier}")
         files = stage(exp, lib, identifier, prefix, kicad)
         notice = exp / "NOTICE.txt"
         if notice.is_file():
@@ -641,6 +651,8 @@ def main(argv=None):
     ap.add_argument("--schema", help="KiCad's pcm.v1.schema.json to validate against (default: the one KiCad installs)")
     ap.add_argument("--unchecked", action="store_true", help="package a KiCad folder ecadlib did not export (no "
                     "kicad_export.json) without checking it against an ecadlib library; the package says so")
+    ap.add_argument("--take-over", action="store_true", help="build the package although another plan folder built "
+                    "it (the same package id) into --out: its library is replaced by this plan's for every user")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     a = ap.parse_args(argv)
     if a.plugin:
@@ -658,7 +670,7 @@ def main(argv=None):
     try:
         rep = build(a.src, a.out, a.name, a.identifier, a.pkg_version, a.kicad, a.prefix, a.license, a.author,
                     a.description, a.homepage, a.base_url, a.include_held, offline=a.offline, cache=a.cache,
-                    schema=a.schema, log=say, unchecked=a.unchecked, warn=log)
+                    schema=a.schema, log=say, unchecked=a.unchecked, warn=log, take_over=a.take_over)
     except (OSError, ValueError) as e:
         print(f"ecadlib kicad-pcm: {e}", file=sys.stderr)
         return 2

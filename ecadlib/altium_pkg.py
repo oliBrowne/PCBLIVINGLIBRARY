@@ -480,18 +480,25 @@ def ecadlib_made(src):
     return marks
 
 
-def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=True, plan=None, unchecked=False):
+def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=True, plan=None, unchecked=False,
+          take_over=False):
     """Write the Altium hand-off folder; returns the report dict (also altium_pkg.json). native: write the build
     recipes as ecadlib_build.txt + ecadlib_build.pas so the install script lets Altium write the libraries itself.
     plan: for a folder, the plan.json of the ecadlib library its files come from (else found beside the folder or in
     an earlier altium_pkg.json). unchecked: package a folder of ecadlib-made files whose library is not known without
-    checking them against the released revisions (the report and the output say so)."""
+    checking them against the released revisions (the report and the output say so). take_over: package a folder
+    into `out` although another plan folder's parts are there (R-FX15-4: its libraries would be overwritten)."""
     src, out = Path(src), Path(out)
     check_name(name)
     out.mkdir(parents=True, exist_ok=True)
     rep = {"source": str(src), "folder": str(out), "name": name, "sync": None}
+    from . import change_gate as CG
     if src.is_file():
         from . import altium_dblib_sync as DS
+        # several plans may share a plan package's DbLib folder (dblib-sync keeps their rows apart), but not one a
+        # folder was copied into
+        CG.claim_output(out, "altium-pkg:plan", src.parent, take_over, what="an Altium package", shared=True,
+                        check=["altium-pkg:folder"])
         res = DS.sync(src, out, "dblib", name, win_dir=win_dir, rules=rules)
         rep["sync"] = DS.summary(res)
         bad = [r for r in res["results"] if r["action"] == "error"]
@@ -509,6 +516,9 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
         with CG.publishing(lib.parent) if lib else contextlib.nullcontext():
             if lib:                            # change control (#105): only the released revisions leave the library
                 check_released(src, lib, rules)
+                # a folder's files are copied over what is in `out`: only one plan folder's (R-FX15-4)
+                CG.claim_output(out, "altium-pkg:folder", lib.parent, take_over, what="an Altium package",
+                                check=["altium-pkg:folder", "altium-pkg:plan"])
             elif ecadlib_made(src) and not unchecked:
                 marks = ", ".join(m.relative_to(src).as_posix() for m in ecadlib_made(src)[:3])
                 raise ValueError(f"{src}: these are ecadlib-made libraries ({marks}) but their library is not known (no "
@@ -589,11 +599,13 @@ def main(argv=None):
                                    "checked against its released revisions)")
     ap.add_argument("--unchecked", action="store_true", help="with a folder of ecadlib-made files whose library is "
                     "not known: package them without checking them against released revisions")
+    ap.add_argument("--take-over", action="store_true", help="with a folder: package it into --out although another "
+                    "plan folder's parts are there (they are overwritten)")
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
     a = ap.parse_args(argv)
     try:
         rep = build(a.src, a.out, a.name, a.win_dir, a.rules, native=not a.no_native_build, plan=a.plan,
-                    unchecked=a.unchecked)
+                    unchecked=a.unchecked, take_over=a.take_over)
     except (OSError, ValueError) as e:
         print(f"ecadlib altium-pkg: {e}" + (f"\n  hint: {e.hint}" if getattr(e, "hint", "") else ""), file=sys.stderr)
         return 2
