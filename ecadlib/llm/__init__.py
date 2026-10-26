@@ -108,10 +108,18 @@ def split_ref(ref, rules=None):
 def same_server(a, b):
     """True when two resolved endpoints ({provider, base_url}, as endpoint() returns) are the same server: the same
     provider and the same base_url (trailing "/" and case aside). A key name set for one is sent only to the same
-    one (R-FX16-1, R-FX16-3); None (an endpoint that does not resolve) is never the same."""
+    one (R-FX16-1, R-FX16-3); None (an endpoint that does not resolve) is never the same. A provider is compared by
+    its wire protocol: "openai", a preset, speaks openai-compatible, so openai and openai-compatible at the same
+    base_url are one server (R-FX19-5)."""
     if not a or not b:
         return False
-    return a["provider"] == b["provider"] and \
+
+    def wire(p):
+        try:
+            return _norm_provider(p)[0]
+        except AIConfigError:
+            return str(p or "").strip().lower()
+    return wire(a.get("provider")) == wire(b.get("provider")) and \
         (a.get("base_url") or "").rstrip("/").lower() == (b.get("base_url") or "").rstrip("/").lower()
 
 
@@ -128,6 +136,15 @@ def _same_endpoint(ai, provider, base):
         return True
     ai_base = ai["base_url"] or (PRESETS[ai_preset][0] if ai_preset else "")
     return same_server({"provider": provider, "base_url": ai_base}, {"provider": provider, "base_url": base})
+
+
+def _own_server(sec):
+    """The {provider, base_url} a section's own provider and base_url (or its preset's default) name, or None."""
+    try:
+        provider, preset = _norm_provider(sec.get("provider"))
+    except AIConfigError:
+        return None
+    return {"provider": provider, "base_url": sec.get("base_url") or (PRESETS[preset][0] if preset else "")}
 
 
 def server_of(rules, section="datasheet"):
@@ -150,8 +167,10 @@ def endpoint(rules=None, section="datasheet", model=None):
     if section == "proof":                                # [agent.proof] empty = [datasheet] (as before)
         # [datasheet]'s provider as resolved: its own, else [ai]'s (default anthropic), not "" as written (R-FX13-7)
         if sec.get("provider") and str(sec["provider"]).strip().lower() != \
-                str(ds.get("provider") or ai["provider"] or "anthropic").strip().lower():
-            # its own provider: [datasheet]'s server and key name belong to another provider (R-LE-1)
+                str(ds.get("provider") or ai["provider"] or "anthropic").strip().lower() and \
+                not same_server(_own_server(sec), server_of(rules, "datasheet")):
+            # its own provider: [datasheet]'s server and key name belong to another provider (R-LE-1), unless it is
+            # the same server written another way (openai-compatible at api.openai.com for openai, R-FX19-5)
             ds = {k: v for k, v in ds.items() if k not in ("base_url", "api_key_env")}
         sec = {k: sec.get(k) or ds.get(k) for k in set(sec) | set(ds) | {"provider", "base_url", "assist", "model",
                                                                          "api_key_env"}}

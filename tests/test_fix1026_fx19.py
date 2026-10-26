@@ -324,3 +324,36 @@ def test_a_notice_or_certificate_is_refused_on_every_route():
                                ("direct BOM link", RAK_PDF, "")):
             got = _rak(url, body, first)
             assert got != "taken" and "not a datasheet" in got, (how, first[0], got)
+
+
+# ---------------------------------------------------------------- R-FX19-5: openai and openai-compatible on one server
+def test_same_server_compares_the_wire_protocol_not_the_written_provider():
+    from ecadlib import llm as LL
+    O = "https://api.openai.com/v1"
+    assert LL.same_server({"provider": "openai", "base_url": O}, {"provider": "openai-compatible", "base_url": O + "/"})
+    assert not LL.same_server({"provider": "openai", "base_url": O}, {"provider": "openai-compatible",
+                                                                    "base_url": "https://gw.example.com/v1"})
+    assert not LL.same_server({"provider": "anthropic", "base_url": ""}, {"provider": "openai-compatible", "base_url": ""})
+
+
+def test_the_proof_keeps_the_datasheet_key_on_the_same_server_written_another_way():
+    O = "https://api.openai.com/v1"
+    with _env19(), mock.patch.dict(os.environ, {"DS_KEY": "sk-ds"}):
+        # [datasheet] openai + DS_KEY, [agent.proof] openai-compatible at api.openai.com: the same server
+        r = _rules19({"provider": "anthropic"}, {"provider": "openai", "model": "m", "api_key_env": "DS_KEY"},
+                     {"provider": "openai-compatible", "base_url": O, "model": "m"})
+        base, env, key = _ep(r, "proof")
+        assert base == O and env == "DS_KEY" and key == "sk-ds", (base, env, key)
+        # and the other way round
+        r = _rules19({"provider": "anthropic"}, {"provider": "openai-compatible", "base_url": O, "model": "m",
+                                                 "api_key_env": "DS_KEY"}, {"provider": "openai", "model": "m"})
+        base, env, key = _ep(r, "proof")
+        assert base == O and env == "DS_KEY", (base, env)
+        # another server never gets it
+        r = _rules19({"provider": "anthropic"}, {"provider": "openai", "model": "m", "api_key_env": "DS_KEY"},
+                     {"provider": "openai-compatible", "base_url": "https://gw2.example.net/v1", "model": "m"})
+        base, env, key = _ep(r, "proof")
+        assert env != "DS_KEY" and key != "sk-ds", (base, env)
+        r = _rules19({"provider": "anthropic"}, {"provider": "openai", "model": "m", "api_key_env": "DS_KEY"},
+                     {"provider": "openrouter", "model": "m"})
+        assert _ep(r, "proof")[1] != "DS_KEY"
