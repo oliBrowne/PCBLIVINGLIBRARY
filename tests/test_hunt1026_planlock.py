@@ -222,19 +222,110 @@ def test_planlock_07_ui_part_decision_and_a_library_writer_do_not_deadlock(tmp_p
     _deadlock_case(tmp_path, monkeypatch, second)
 
 
-def test_planlock_08_state_files_are_written_atomically():
+class _Crash(OSError):
+    pass
+
+
+def _crash_at_rename(monkeypatch, targets):
+    """The process dies (here: an OSError) at the moment the new file would take the old one's place, for these paths
+    only. An atomic writer leaves the old file whole; one that writes in place has already replaced it by then."""
+    from ecadlib import fsutil
+    real, targets = _REAL_REPLACE.setdefault("f", fsutil.replace), {Path(t).resolve() for t in targets}
+    _HIT.clear()
+
+    def replace(src, dst):
+        if Path(dst).resolve() in targets:
+            _HIT.append(str(dst))
+            raise _Crash(f"crashed while writing {dst}")
+        return real(src, dst)
+    monkeypatch.setattr(fsutil, "replace", replace)
+
+
+_REAL_REPLACE, _HIT = {}, []
+
+
+def _kept(path, old):
+    """The old file is whole. On the code before the fix (an in-place write_text) the file holds the new text here, and
+    the crash at the rename never came (the writer did not write through write_text_atomic): both fail."""
+    assert Path(path).read_text(encoding="utf-8") == old, f"{path} was written in place (a crash leaves half a file)"
+    assert _HIT, f"{path}: not written through an atomic replace"
+
+
+@lite
+def test_planlock_08_state_files_are_written_atomically(tmp_path, monkeypatch):
     """Report and state JSON that other commands read back (a365 plan, check-a365 state, dblib-sync report, the
     datasheet read's spec / symbol / sidecar, the web UI's a365 plan) were written in place: a crash left half a file.
-    (A source check: these writes sit at the end of CLI commands that need a network or Altium to reach.)"""
-    from ecadlib import fsutil
-    src = {m: (Path(fsutil.__file__).parent / f"{m}.py").read_text(encoding="utf-8")
-           for m in ("altium365", "upstream", "altium_dblib_sync", "datasheet", "app")}
-    assert "out.write_text(json.dumps(items, indent=2))" not in src["altium365"]
-    assert "write_text_atomic(out, json.dumps(items, indent=2))" in src["altium365"]
-    assert "Path(a.state).write_text(" not in src["upstream"]
-    assert "Path(a.out).write_text(json.dumps(out" not in src["altium_dblib_sync"]
-    assert "paths[k].write_text(json.dumps(res[k]" not in src["datasheet"]
-    assert 'out.write_text(json.dumps(items, indent=2), encoding="utf-8")' not in src["app"]
+    Each writer runs here (offline, the network faked) with a crash at its final rename: the old file stays whole."""
+    import copy
+    from ecadlib import altium365 as A, altium_dblib_sync as DS, datasheet as D, upstream as U, userconfig as UC
+    from ecadlib.app import Workspace
+    from tests import test_datasheet as TD
+    from tests.ui_fixture import BOM
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    old = '{"old": "whole"}\n'
+    quiet = contextlib.redirect_stdout(io.StringIO())
+    # ecadlib altium365 plan BOM -o plan.json
+    out = tmp_path / "a365" / "plan.json"
+    out.parent.mkdir()
+    out.write_text(old, encoding="utf-8")
+    _crash_at_rename(monkeypatch, [out])
+    try:
+        with quiet, contextlib.redirect_stderr(io.StringIO()):
+            A.main(["plan", str(BOM), "-o", str(out)])
+    except (_Crash, SystemExit):
+        pass
+    _kept(out, old)
+    # the web UI's Altium 365 plan (no librarian plan yet: planned from the triage)
+    ws = Workspace(tmp_path / "ws", [], providers=[], offline=True)
+    bom = ws.save_upload("bom.csv", BOM.read_bytes())
+    target = ws.root / "altium365" / f"plan_{ws._key(ws._bom_path(bom))}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(old, encoding="utf-8")
+    _crash_at_rename(monkeypatch, [target])
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            ws.altium365_plan(bom)
+    except _Crash:
+        pass
+    _kept(target, old)
+    # the datasheet read's spec / symbol / sidecar / review
+    res = D.process(copy.deepcopy(TD.GOOD), "TESTPART", "u")
+    names = [p.name for p in D.write(res, tmp_path / "ds1").values()]
+    for name in names:                                # a fresh folder each time: the file is not there yet
+        d = tmp_path / f"ds_{name}"
+        _crash_at_rename(monkeypatch, [d / name])
+        try:
+            D.write(copy.deepcopy(res), d)
+        except _Crash:
+            pass
+        assert not (d / name).exists() and _HIT, f"{name}: written in place (a crash leaves half a file)"
+    # upstream check-a365 --state (Nexar faked: no network)
+    plan = tmp_path / "up" / "plan.json"
+    plan.parent.mkdir()
+    plan.write_text("[]", encoding="utf-8")
+    state = tmp_path / "up" / "state.json"
+    state.write_text(old, encoding="utf-8")
+    monkeypatch.setattr(UC, "secret", lambda name: "token" if name == "NEXAR_TOKEN" else None)
+    monkeypatch.setattr(A, "Nexar", lambda token: object())
+    monkeypatch.setattr(U, "workspace_components", lambda client, w: [])
+    _crash_at_rename(monkeypatch, [state])
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            U.main(["check-a365", str(plan), "--workspace", "https://ws.example", "--state", str(state),
+                    "-o", str(tmp_path / "up" / "drift")])
+    except (_Crash, SystemExit):
+        pass
+    _kept(state, old)
+    # dblib-sync -o report.json
+    rep = tmp_path / "dblib_report.json"
+    rep.write_text(old, encoding="utf-8")
+    _crash_at_rename(monkeypatch, [rep])
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            DS.main([str(plan), "--to", str(tmp_path / "dblib"), "-o", str(rep)])
+    except (_Crash, SystemExit):
+        pass
+    _kept(rep, old)
 
 
 @lite
@@ -271,7 +362,42 @@ def test_planlock_09_library_lock_is_kept_between_settle_and_baseline(tmp_path, 
         log.append("run baseline")
     t.join(5)
     assert log == ["run baseline", "cli library lock", "cli plan lock"], log
-    import inspect
-    from ecadlib import librarian as L, datasheet as D
-    assert "LG.locked(out), _decisions_lock(plan_f)" in inspect.getsource(L.run)
-    assert "LG.locked(out), L._decisions_lock(plan_f)" in inspect.getsource(D.fill_plan)
+
+
+@lite
+def test_planlock_09b_librarian_and_datasheet_runs_keep_the_library_lock_into_baseline(tmp_path, monkeypatch):
+    """The real writers: when a librarian run (Workspace.librarian_run) and a datasheet fill (datasheet.fill_plan) reach
+    their baseline step, after settle let go of the gate's own hold, another thread still cannot take the library
+    lock (the writers hold it across the block). Before the fix it was free there."""
+    import threading
+    from types import SimpleNamespace
+    from ecadlib import change_gate as CG, datasheet as D, ledger as LG
+    from tests.ui_fixture import build
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        ws, bom = build(tmp_path / "ws")
+    plan = ws.root / "librarian" / "sample_bom" / "plan.json"
+    seen, real = [], CG.Guard.baseline
+
+    def baseline(self, items):
+        got = []
+
+        def probe():                                  # another thread: a CLI `part reject` wanting the library lock
+            try:
+                LG.unlock(LG.lock(self.folder, wait=0.3))
+                got.append(True)
+            except LG.LedgerError:
+                got.append(False)
+        t = threading.Thread(target=probe, daemon=True)
+        t.start()
+        t.join(5)
+        seen.append((self.writer, got))
+        return real(self, items)
+    monkeypatch.setattr(CG.Guard, "baseline", baseline)
+    with contextlib.redirect_stdout(io.StringIO()):
+        ws.librarian_run(bom, ai=False)
+        D.fill_plan(plan, SimpleNamespace(http=None, key=None), ws.rules(), log=lambda *a: None)
+    writers = {w: g for w, g in seen}
+    assert set(writers) >= {"librarian", "datasheet"}, seen
+    for w, got in seen:
+        assert got == [False], f"{w}: the library lock was free between settle and baseline ({seen})"
