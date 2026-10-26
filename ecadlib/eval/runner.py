@@ -365,6 +365,17 @@ def _safe(s):
 
 
 
+def _model_token(m):
+    """A model name as a ResultCache key spells it."""
+    return re.sub(r"[^A-Za-z0-9.-]", "_", str(m or ""))
+
+
+def _rec_model(rec):
+    """The model a saved answer was asked of: its record, else its key (<pdf>-<model>-<schema>-<request>)."""
+    k = str(rec.get("key") or "")
+    return rec.get("model") or (k[17:].rsplit("-", 2)[0] if k.count("-") >= 3 else "")
+
+
 def saved_prov(prov, offset):
     """The PDF record of a saved answer scored in place of a step never sent: its own pages, not the pages this run's
     picker would send. TLC5951DAP's 10-21 answer read pages 4,5,15,39,49,50; stamped with today's pick (4,5,39,49-51) its
@@ -486,13 +497,18 @@ class EvalReader(D.Reader):
         rec = self._saved_answer(j)
         if rec is None:
             raise D.DatasheetError("not sent (--cached-only: saved answers only); a live run reads it")
-        self.used.setdefault(j["part"], {"estimate": j.get("estimate")})["via"] = "cached (another step of its route)"
+        self.used.setdefault(j["part"], {"estimate": j.get("estimate")})["via"] = \
+            f"cached (another step of its route, {_rec_model(rec) or '?'})"
         off = rec.get("page_offset", j["offset"])
         return self._result(dict(j, final=True, offset=off, prov=saved_prov(j.get("prov"), off)), rec)
 
     def _saved_answer(self, job):
         """The part's saved answer for the same datasheet (any step of its route) that does best: ok first, then one
-        that reads, then the latest. None when there is none."""
+        that reads, then the latest. None when there is none. Only answers of this run's models (the job's, the run's
+        and its ladder's): another model's answer for the same PDF was scored under this model's name (R-LE-4)."""
+        router = getattr(self, "router", None)
+        mine = {_model_token(m) for m in [job.get("model"), getattr(self, "model", None),
+                                          *(getattr(router, "ladder", None) or [])] if m}
         best = None
         for f in sorted(self.results.dir.glob(f"{job['key'][:16]}-*.json")):
             try:
@@ -500,6 +516,8 @@ class EvalReader(D.Reader):
             except (OSError, ValueError):
                 continue
             if rec.get("part") != job["part"] or "message" not in rec or rec.get("purpose"):
+                continue
+            if _model_token(_rec_model(rec) or f.stem[17:].rsplit("-", 2)[0]) not in mine:
                 continue
             try:
                 kind = self._judge(dict(job, offset=rec.get("page_offset", job["offset"])), rec)[0] if "rung" in job else "ok"

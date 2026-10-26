@@ -152,3 +152,38 @@ def test_a365_writeback_never_lowers_severity():
     c = _A365("")                                       # an empty value is filled from a firm status
     up = LC.a365_updates(_mouser_rows("Active", "Texas Instruments", ""), c, "ws", apply=True)
     assert up[0]["action"] == "updated", up
+
+
+# ---------------------------------------------------------------- R-LE-4: --cached-only scores the asked model's answers
+@lite
+def test_cached_only_takes_only_the_runs_own_models_answers(tmp_path):
+    import types
+    from ecadlib import datasheet as D
+    from ecadlib.eval import runner as R
+    rc = D.ResultCache(tmp_path)
+    src = "ab" * 32
+    k_haiku = D.ResultCache.key(src, "claude-haiku-5-5", "X1", None, [0, None], "high")
+    k_opus = D.ResultCache.key(src, "claude-opus-5-5", "X1", None, [0, None], "high")
+    rc.put(k_haiku + "OLD", {"key": k_haiku, "part": "X1", "model": "claude-haiku-5-5", "message": {"m": "haiku"},
+                             "at": "2026-10-20"})
+    rc.put(k_opus, {"key": k_opus, "part": "X1", "model": "claude-opus-5-5", "message": {"m": "opus"},
+                    "at": "2026-10-19"})
+    judge = lambda job, rec: ("ok" if rec["message"]["m"] == "opus" else "failed", [], None)
+    job = {"key": "ab" * 8 + "-claude-haiku-5-5-NEWSCHEMA-123", "part": "X1", "offset": 0, "rung": 0,
+           "model": "claude-haiku-5-5"}
+    fake = types.SimpleNamespace(results=rc, _judge=judge, model="claude-haiku-5-5",
+                                 router=types.SimpleNamespace(ladder=["claude-haiku-5-5"]))
+    got = R.EvalReader._saved_answer(fake, job)
+    assert got and got["model"] == "claude-haiku-5-5", got          # not the better-scoring opus answer
+    # the rescore kit: an opus run reads the opus answers saved under an older schema key
+    job_o = dict(job, key="ab" * 8 + "-claude-opus-5-5-NEWSCHEMA-123", model="claude-opus-5-5")
+    fake_o = types.SimpleNamespace(results=rc, _judge=judge, model="claude-opus-5-5",
+                                   router=types.SimpleNamespace(ladder=["claude-opus-5-5"]))
+    assert R.EvalReader._saved_answer(fake_o, job_o)["model"] == "claude-opus-5-5"
+    # a ladder run may score any of its own rungs' answers, still never another model's
+    fake_l = types.SimpleNamespace(results=rc, _judge=judge, model="claude-haiku-5-5",
+                                   router=types.SimpleNamespace(ladder=["claude-haiku-5-5", "claude-opus-5-5"]))
+    assert R.EvalReader._saved_answer(fake_l, job)["model"] == "claude-opus-5-5"
+    fake_s = types.SimpleNamespace(results=rc, _judge=judge, model="claude-sonnet-5-5",
+                                   router=types.SimpleNamespace(ladder=["claude-sonnet-5-5"]))
+    assert R.EvalReader._saved_answer(fake_s, dict(job, model="claude-sonnet-5-5")) is None
