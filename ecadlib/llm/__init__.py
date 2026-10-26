@@ -127,8 +127,9 @@ def endpoint(rules=None, section="datasheet", model=None):
     ai, sec = _ai(rules), _section(rules, section)
     ds = _section(rules, "datasheet")
     if section == "proof":                                # [agent.proof] empty = [datasheet] (as before)
+        # [datasheet]'s provider as resolved: its own, else [ai]'s (default anthropic), not "" as written (R-FX13-7)
         if sec.get("provider") and str(sec["provider"]).strip().lower() != \
-                str(ds.get("provider") or "").strip().lower():
+                str(ds.get("provider") or ai["provider"] or "anthropic").strip().lower():
             # its own provider: [datasheet]'s server and key name belong to another provider (R-LE-1)
             ds = {k: v for k, v in ds.items() if k not in ("base_url", "api_key_env")}
         sec = {k: sec.get(k) or ds.get(k) for k in set(sec) | set(ds) | {"provider", "base_url", "assist", "model",

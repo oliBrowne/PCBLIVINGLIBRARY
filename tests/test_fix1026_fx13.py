@@ -80,3 +80,21 @@ def test_visual_proof_on_anthropic_never_takes_the_datasheet_key_of_another_prov
         os.environ["ANTHROPIC_API_KEY"] = "sk-ant-real"
         V.prove(TV.item(d), d, r, out_dir=d / "out2")
         assert calls and all(c["headers"].get("x-api-key") == "sk-ant-real" for c in calls), calls[0]["headers"]
+
+
+# ---------------------------------------------------------------- R-FX13-7: proof provider vs [datasheet]'s resolved one
+def test_proof_on_the_datasheet_provider_by_default_keeps_its_key_name():
+    from ecadlib import llm as LL
+    r = _rules({"ai": {"provider": "openai", "model": "gpt-5"}, "datasheet": {"api_key_env": "MY_OPENAI"},
+                "agent": {"proof": {"provider": "openai", "model": "gpt-5"}}})
+    with _env({"MY_OPENAI": "sk-openai-mine"}):
+        for s in ("datasheet", "proof"):
+            ep = LL.endpoint(r, s)
+            assert ep["key_env"] == "MY_OPENAI" and LL.key_for(ep) == "sk-openai-mine", (s, ep)
+        # a proof on another provider still drops it
+        r2 = _rules({"ai": {"provider": "openai", "model": "gpt-5"}, "datasheet": {"api_key_env": "MY_OPENAI"},
+                     "agent": {"proof": {"provider": "openrouter", "model": "x/y"}}})
+        assert LL.endpoint(r2, "proof")["key_env"] == "OPENROUTER_API_KEY"
+        # no [ai] provider: [datasheet] defaults to anthropic, so an anthropic proof keeps a Claude key name
+        r3 = _rules({"datasheet": {"api_key_env": "CLAUDE_KEY"}, "agent": {"proof": {"provider": "anthropic"}}})
+        assert LL.endpoint(r3, "proof")["key_env"] == "CLAUDE_KEY"
