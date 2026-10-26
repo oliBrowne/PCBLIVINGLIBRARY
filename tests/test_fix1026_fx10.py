@@ -81,3 +81,35 @@ def test_lands_differ_reads_the_package_not_the_spelling():
     for a, b in _DIFFER:
         assert lands_differ(a, b), (a, b)
         assert lands_differ(b, a), (b, a)
+
+
+# --- R-FX10-3: KiCad's x-wildcard symbols take a dotted MPN again ---------------------------------------------------
+
+def _wild_lib():
+    from ecadlib.librarian import KiCadLibrary
+    lib = KiCadLibrary.__new__(KiCadLibrary)
+    lib.symbols = {n: ["Diode"] for n in ("1.5KExxA", "1.5KExxCA", "P6KExxA", "SMAJxxA", "SMAJxxCA", "1N47xxA")}
+    lib.symbols.update({n: ["Regulator_Linear"] for n in ("AMS1117-3.3", "XC6206PxxxMR")})
+    lib.footprints = {}
+    lib._build_norm()
+    return lib
+
+
+def test_x_wildcard_symbols_take_a_decimal_point_in_the_mpn():
+    lib = _wild_lib()
+    for mpn, want in (("1.5KE6.8A", "Diode:1.5KExxA"), ("1.5KE9.1A", "Diode:1.5KExxA"), ("1.5KE6.8CA", "Diode:1.5KExxCA"),
+                      ("1.5KE68A", "Diode:1.5KExxA"), ("SMAJ5.0A", "Diode:SMAJxxA"), ("SMAJ5.0CA", "Diode:SMAJxxCA"),
+                      ("P6KE6.8A", "Diode:P6KExxA"), ("SMAJ50A", "Diode:SMAJxxA"), ("1N4733A", "Diode:1N47xxA"),
+                      ("XC6206P332MR", "Regulator_Linear:XC6206PxxxMR")):
+        ref, how = lib.find_symbol(mpn)
+        assert ref == want and "wildcard" in how, (mpn, ref, how)
+
+
+def test_a_dotted_mpn_still_keys_apart_from_the_undotted_one():
+    from ecadlib.kicad_index import norm_mpn
+    lib = _wild_lib()
+    assert norm_mpn("SMAJ5.0A") != norm_mpn("SMAJ50A") and norm_mpn("1.5KE6.8A") != norm_mpn("1.5KE68A")
+    for mpn in ("1.5KE100A", "SMAJ5.0.0A", "1.5KE6.8.1A"):              # more characters than the x slots take
+        assert lib.find_symbol(mpn)[0] is None or "wildcard" not in lib.find_symbol(mpn)[1], (mpn, lib.find_symbol(mpn))
+    assert lib.find_symbol("AMS1117-3.3")[0] == "Regulator_Linear:AMS1117-3.3"
+    assert lib.find_symbol("AMS1117-33")[0] is None                       # 3.3 V is not 33

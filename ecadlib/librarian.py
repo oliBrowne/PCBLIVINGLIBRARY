@@ -129,10 +129,13 @@ class KiCadLibrary:
         for name, libs in self.symbols.items():
             self._norm.setdefault(norm_mpn(name), []).extend(f"{l}:{name}" for l in libs)
             if re.search(r"(?<![0-9])x|x(?![0-9])", name) and re.search(r"[A-Z0-9]x", name) and not any(l.startswith("Connector") for l in libs):
-                # a '.' between digits (or x wildcards) is kept by norm_mpn on the MPN side: 'LM1117-x.x' -> optional
+                # a '.' between digits (or x wildcards) is kept by norm_mpn on the MPN side: 'LM1117-x.x' -> optional,
+                # and two x slots take a decimal point between them: 1.5KExxA is 1.5KE6.8A, SMAJxxA SMAJ5.0A (R-FX10-3)
                 flat = re.sub(r"(?<=[0-9x])\.(?=[0-9x])", "\x00", name)
-                rx = "".join("[A-Z0-9]" if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
-                             for c in re.sub(r"[^A-Za-z0-9\x00]", "", flat))
+                flat = re.sub(r"[^A-Za-z0-9\x00]", "", flat)
+                rx = "".join(r"\.?[A-Z0-9]" if c == "x" and i and flat[i - 1] == "x" else
+                             "[A-Z0-9]" if c == "x" else r"\.?" if c == "\x00" else re.escape(c.upper())
+                             for i, c in enumerate(flat))
                 self._wild.append((re.compile(rx), [f"{l}:{name}" for l in libs]))
         self._fpn = [(norm_mpn(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items()]
 
