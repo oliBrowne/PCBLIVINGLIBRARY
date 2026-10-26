@@ -1011,16 +1011,22 @@ class Workspace:
         """Which datasheet parts of the librarian plan were cross-checked against a second source (ecadlib.crosscheck)
         and how: agreed, disagreed (held, both values in the review), unchecked or skipped. Sends nothing."""
         import json
-        from . import crosscheck as CC
+        from . import crosscheck as CC, partview as PV
         out = self._librarian_dir(self._bom_path(bom))
         plan_f = out / "plan.json"
         if not plan_f.exists():
             raise ValueError("no librarian plan for this BOM yet: run the librarian (Fill missing parts) first")
-        parts = [{"part": it["name"], "status": it.get("status"), "cross_check": it["cross_check"]["status"],
-                  "summary": it["cross_check"].get("summary", "")}
-                 for it in json.loads(plan_f.read_text(encoding="utf-8")) if it.get("cross_check")]
+        parts = []
+        for it in json.loads(plan_f.read_text(encoding="utf-8")):
+            if not it.get("cross_check"):
+                continue
+            shown = PV.cross_check(it["cross_check"]) or {}         # (the part panel's label and pins, R-FX18-5)
+            parts.append({"part": it["name"], "status": it.get("status"), "cross_check": it["cross_check"]["status"],
+                          "label": shown.get("label", ""), "summary": it["cross_check"].get("summary", ""),
+                          **({"pins": shown["pins"]} if shown.get("pins") else {})})
         counts = {s: sum(p["cross_check"] == s for p in parts) for s in ("agreed", "disagreed", "unchecked", "skipped")}
-        return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}
+        counts["pins_unchecked"] = sum(p.get("pins") == "unchecked" for p in parts)   # (of those agreed: pin names
+        return {"parts": parts, "counts": counts, "modes": list(CC.MODES)}             # no second source compared)
 
     def library_parts(self, bom, pictures=True):
         """The librarian plan of a BOM as cards (ecadlib.partview): status in plain words, held reasons with a next

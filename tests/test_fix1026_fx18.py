@@ -246,3 +246,32 @@ def test_kicad_pcm_keyed_staging_starts_from_the_folder_an_earlier_build_kept(tm
     (tmp_path / "pcm/.kicad-export/kept.txt").write_text("kept")
     pcm()
     assert (keyed[0] / "kept.txt").read_text() == "kept"
+
+
+# ---------------------------------------------------------------- R-FX18-5 / -6: pins: unchecked reaches every reader
+def _pins_unchecked_plan(ws):
+    """A librarian plan for bom.csv in workspace ws: A's package agreed but its pin names were never compared (pins:
+    unchecked), B agreed in full, C disagreed."""
+    (ws.root / "bom.csv").write_text("Ref,MPN\nU1,X\n")
+    out = ws._librarian_dir(ws._bom_path("bom.csv"))
+    out.mkdir(parents=True)
+    plan = [{"name": "A", "status": "ready", "cross_check": {"status": "agreed", "pins": "unchecked",
+                                                             "summary": "standard:SOIC-8 agrees (pitch); pins: unchecked"}},
+            {"name": "B", "status": "ready", "cross_check": {"status": "agreed", "summary": "standard:QFN agrees (pitch)"}},
+            {"name": "C", "status": "held", "cross_check": {"status": "disagreed", "summary": "pitch read 0.5 mm, second 0.65 mm"}}]
+    (out / "plan.json").write_text(json.dumps(plan))
+
+
+@lite
+def test_mcp_cross_checks_carries_pins_unchecked(tmp_path):
+    """The MCP cross_checks tool dropped `pins`: a part whose pin names no second source compared was listed and
+    counted as plainly agreed (only the summary's tail said otherwise). It carries pins and a pins_unchecked count, as
+    the part panel does."""
+    from ecadlib import app as APP, mcp_server as M
+    ws = APP.Workspace(tmp_path, providers=[])
+    _pins_unchecked_plan(ws)
+    r = M.call_tool(ws, "cross_checks", {"bom": "bom.csv"})
+    by = {p["part"]: p for p in r["parts"]}
+    assert by["A"].get("pins") == "unchecked" and "pins" not in by["B"], r
+    assert r["counts"]["pins_unchecked"] == 1 and r["counts"]["agreed"] == 2 and r["counts"]["disagreed"] == 1, r
+    assert "pin names not compared" in by["A"]["label"] and "pin names" not in by["B"]["label"], r
