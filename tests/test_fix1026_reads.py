@@ -625,6 +625,16 @@ def test_f6_l1_a_row_split_off_by_one_never_builds_wrong():
         _never_wrong(t, dict(t, nlr=t["nlr"] - 1, ntb=t["ntb"] + 1), "-1/+1")
 
 
+
+def test_f6_l3_an_exposed_pad_across_a_rectangular_qfp_never_builds_wrong():
+    """Before: TQFP-80-1EP 12x14 with its 6 x 8 pad read 8 x 6 built the pad across the body, assess ok. A pad runs
+    with the body's long side (as qfp_frame lays a turned one)."""
+    for t in RECT_QFPS:
+        if t.get("epl"):
+            assert _qfp_read(t)[0] == "ok", t["name"]
+            _never_wrong(t, dict(t, epl=t["epw"], epw=t["epl"]), "EP swapped")
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

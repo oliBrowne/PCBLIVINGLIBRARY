@@ -1848,6 +1848,11 @@ def _qfp_rows(spec):
             out.append(f"lead_span {sx[1]:g} and lead_span_y {sy[1]:g} differ by {got:.3g} mm but the {L[1]:g} x "
                        f"{W[1]:g} mm body sides differ by {want:.3g} mm: the feet would be longer on one pair of "
                        "sides, which is implausible (check both spans against the drawing)")
+    ep = spec.get("exposed_pad") or {}
+    el, ew = _dim(ep.get("length")), _dim(ep.get("width"))
+    if el and ew and abs(el[1] - ew[1]) > 0.05 and (el[1] > ew[1]) != (L[1] > W[1]):   # length on X, as body_length
+        out.append(f"exposed_pad {el[1]:g} x {ew[1]:g} mm runs across the {L[1]:g} x {W[1]:g} mm body (a pad runs with "
+                   "the body's long side), which is implausible (check exposed_pad length and width against the body's)")
     return out
 
 
