@@ -122,3 +122,119 @@ def test_dblib_prune_keeps_rows_another_plan_wrote(tmp_path):
     assert set(_rows(lib)) == {"RES-0603-10k", "RES-0603-1k"}, out["results"]
     r = next(r for r in out["results"] if r["name"] == "RES-0603-10k")
     assert r["action"] == "not_in_plan" and "another plan" in r["detail"], r
+
+
+# ---------------------------------------------------------------- R-FL-2: an Altium 365 item this library never released
+def _ws_fake():
+    """FakeA365 (it keeps the model items released, with their bytes: model_data is Nexar's dataDownloadUrl) that
+    records each read-back."""
+    from tests.test_change_control import FakeA365
+
+    class WS(FakeA365):
+        downloads = []
+
+        def model_data(self, ws, kind, name, folder):
+            self.downloads.append((kind, name))
+            return super().model_data(ws, kind, name, folder)
+    return WS()
+
+
+def _other_r0603(path):
+    """An R_0603_1608Metric.PcbLib with another land (bigger terminals), as another plan folder or a person released."""
+    from ecadlib import altium_lib as AL
+    spec = json.loads((ROOT / "ecadlib/package_specs/R_0603_1608Metric.json").read_text())
+    spec["terminal_length"] = {"min": 0.3, "max": 0.6}
+    AL.write_pcblib(path, [AL.footprint_from_spec(spec)[0]])
+    return Path(path).read_bytes()
+
+
+@lite
+def test_a365_unknown_workspace_footprint_with_another_drawing_is_not_linked(tmp_path):
+    """The workspace already has an R_0603_1608Metric footprint item this library never released (another plan folder
+    pushed it, or someone made it): the push linked it by name, released RES-0603-10k on a land its release check
+    never saw, and recorded `publish r1`. Now the item is read back and compared: another drawing holds the part."""
+    from ecadlib import altium365 as A, ledger as LG, rules as RU
+    from tests.test_change_control import demo
+    from tests.test_hunt1026_altpub import _push
+    plan, lib = demo()
+    nx = _ws_fake()
+    nx.models["footprints"]["R_0603_1608Metric"] = _other_r0603(tmp_path / "R_0603_1608Metric.PcbLib")
+    ws = "https://test.365.altium.com"
+    res = _push(A, plan, lib, nx, ws, RU.load(None, start=lib))
+    for n in ("RES-0603-10k", "RES-0603-4.7k"):
+        assert res[n]["action"] == "skip" and "R_0603_1608Metric" in res[n]["detail"] and "another drawing" in res[n]["detail"], res[n]
+        assert n not in nx.comps and LG.Ledger(lib).published(n, A.ws_target(ws)) is None
+    assert ("footprints", "R_0603_1608Metric") in nx.downloads
+    assert res["AO3401A"]["action"] == "release"          # the other parts go up as before
+
+
+@lite
+def test_a365_unknown_workspace_footprint_with_the_same_drawing_is_linked(tmp_path):
+    """No false hold: the item holds this part's drawing (the same file another plan folder released) -> linked."""
+    from ecadlib import altium365 as A, rules as RU
+    from tests.test_change_control import demo
+    from tests.test_hunt1026_altpub import _push
+    plan, lib = demo()
+    nx = _ws_fake()
+    nx.models["footprints"]["R_0603_1608Metric"] = (lib / "models/PcbLib/R_0603_1608Metric.PcbLib").read_bytes()
+    res = _push(A, plan, lib, nx, "https://test.365.altium.com", RU.load(None, start=lib))
+    assert res["RES-0603-10k"]["action"] == "release", res["RES-0603-10k"]
+    rel = nx.comps["RES-0603-10k"]["revisions"][0]
+    assert rel["footprints"] == [{"id": "footprints:R_0603_1608Metric"}] and not rel["footprintFiles"], rel
+
+
+@lite
+def test_a365_unknown_workspace_item_that_does_not_read_back_holds(tmp_path):
+    """A download that fails (or a file that does not read) can't show the drawing is this part's: held, not linked."""
+    from ecadlib import altium365 as A, rules as RU
+    from tests.test_change_control import demo
+    from tests.test_hunt1026_altpub import _push
+    plan, lib = demo()
+    nx = _ws_fake()
+    nx.models["footprints"]["R_0603_1608Metric"] = b"not a PcbLib"
+    res = _push(A, plan, lib, nx, "https://test.365.altium.com", RU.load(None, start=lib))
+    assert res["RES-0603-10k"]["action"] == "skip" and "R_0603_1608Metric" in res["RES-0603-10k"]["detail"], res["RES-0603-10k"]
+    assert "RES-0603-10k" not in nx.comps
+
+
+def test_a365_model_data_reads_the_item_through_its_download_url():
+    """Nexar.model_data: the newest revision of the item in its folder, by its dataDownloadUrl (the query validates
+    against Nexar's schema); the file reads back raw or zipped to the same drawing digest."""
+    import io, tempfile, zipfile
+    from ecadlib import altium365 as A
+    try:
+        from graphql import build_schema, parse, validate
+        schema = build_schema((ROOT / "tests/nexar/schema.graphql").read_text(), assume_valid_sdl=True)
+        for q in A.Q_MODEL_DATA.values():
+            assert not validate(schema, parse(q)), q
+    except ImportError:
+        pass
+    with tempfile.TemporaryDirectory() as t:
+        data = _other_r0603(Path(t) / "x.PcbLib")
+
+    class N(A.Nexar):
+        def __init__(self):
+            self.token, self.got = "t", []
+
+        def gql(self, query, variables=None):
+            assert "dataDownloadUrl" in query
+            return {"desLibrary": {"footprints": {"nodes": [
+                {"id": "a", "name": "R_0603_1608Metric-1", "releasedAt": "2026-01-01", "folder": {"path": "C/Models/Footprints"}, "dataDownloadUrl": "https://dl/1"},
+                {"id": "b", "name": "R_0603_1608Metric-2", "releasedAt": "2026-02-01", "folder": {"path": "C/Models/Footprints"}, "dataDownloadUrl": "https://dl/2"}]}}}
+
+        def download(self, url):
+            self.got.append(url)
+            return data
+    n = N()
+    assert n.model_data("ws", "footprints", "R_0603_1608Metric", "C/Models/Footprints") == data and n.got == ["https://dl/2"]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("Released/R_0603_1608Metric.PcbLib", data)
+    raw = A.model_file_digest(data, "footprints", "R_0603_1608Metric")
+    assert raw and A.model_file_digest(buf.getvalue(), "footprints", "R_0603_1608Metric") == raw
+    try:
+        A.model_file_digest(b"junk", "footprints", "R_0603_1608Metric")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("junk read as a footprint")

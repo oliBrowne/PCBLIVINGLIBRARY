@@ -186,14 +186,18 @@ class Workspace(FakeA365):
     can be released once (a second release of the same item name fails as duplicate, as live), linked by name."""
     def __init__(self):
         super().__init__()
-        self.models, self.fail = {}, set()
+        self.wmodels, self.fail = {}, set()
 
     def find(self, ws, name):
         from ecadlib import altium365 as A
         return A.pick_named(list(self.comps.values()), name)
 
     def find_model(self, ws, kind, name, folder):
-        return self.models.get((kind, name.lower()), (None,))[0]
+        return self.wmodels.get((kind, name.lower()), (None,))[0]
+
+    def model_data(self, ws, kind, name, folder):
+        hit = self.wmodels.get((kind, name.lower()))
+        return self.blobs.get(hit[1][0]) if hit else None
 
     def release(self, inp):
         from ecadlib import altium365 as A
@@ -201,13 +205,13 @@ class Workspace(FakeA365):
             raise A.NexarError("boom")
         halves = (("symbols", "symbolItemName", "symbolFiles"), ("footprints", "footprintItemName", "footprintFiles"))
         for kind, key, files in halves:
-            if inp.get(files) and (kind, (inp.get(key) or "").lower()) in self.models:
+            if inp.get(files) and (kind, (inp.get(key) or "").lower()) in self.wmodels:
                 raise A.NexarError("AddALU_ItemsDuplicate: Duplicate ID is not allowed")
         super().release(inp)
         self.comps[inp["componentItemName"]]["details"] = {"parameters": [dict(p) for p in inp["parameters"]]}
         for kind, key, files in halves:
             if inp.get(files):
-                self.models[(kind, inp[key].lower())] = (f"{kind}:{inp[key]}", [f["fileId"] for f in inp[files]])
+                self.wmodels[(kind, inp[key].lower())] = (f"{kind}:{inp[key]}", [f["fileId"] for f in inp[files]])
 
     def update_params(self, cid, params, note, replace=False):     # a new revision, as live (it takes a release note)
         super().update_params(cid, params, note, replace)

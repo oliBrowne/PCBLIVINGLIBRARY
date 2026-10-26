@@ -62,6 +62,12 @@ Q_MODELS = {k: """query ($ws: String!, $prefix: String!) {
   desLibrary(workspaceUrl: $ws) { %s(first: 50, where: {name: {startsWith: $prefix}}) { nodes { id name releasedAt folder { path } } } }
 }""" % k for k in ("symbols", "footprints")}
 
+# the same, with each revision's data download URL: an item this library has no record of is read back and compared
+# before a part is released linking it (Q_MODELS stays the lean lookup)
+Q_MODEL_DATA = {k: """query ($ws: String!, $prefix: String!) {
+  desLibrary(workspaceUrl: $ws) { %s(first: 50, where: {name: {startsWith: $prefix}}) { nodes { id name releasedAt folder { path } dataDownloadUrl } } }
+}""" % k for k in ("symbols", "footprints")}
+
 # folders by parent: componentReleaseFolder is one child folder name (a "/" in it fails with AddALU_FoldersInvalid
 # folder HRID), so a nested component folder is released as componentParentFolderId + leaf name
 # live schema 2026-10: a folder has a node id (base64) and a folderId (GUID); desCreateFolder takes the parent's
@@ -225,9 +231,23 @@ class Nexar:
         """Node id of the newest revision of symbol / footprint item_name in folder ("a/b"), or None.
         kind: "symbols" or "footprints". A same-named item in another folder is an error: item names are unique in
         the workspace, so releasing it again would fail, and linking someone else's model is not ours to decide."""
+        n = self._model_node(ws, kind, item_name, folder, Q_MODELS)
+        return n["id"] if n else None
+
+    def model_data(self, ws, kind, item_name, folder):
+        """The file the newest revision of symbol / footprint item_name in folder holds (its dataDownloadUrl), as
+        bytes: a .SchLib / .PcbLib, or a zip holding one (model_file_digest reads either). None: no such item."""
+        n = self._model_node(ws, kind, item_name, folder, Q_MODEL_DATA)
+        if not n:
+            return None
+        if not n.get("dataDownloadUrl"):
+            raise NexarError(f"{kind[:-1]} {item_name!r} has no download URL")
+        return self.download(n["dataDownloadUrl"])
+
+    def _model_node(self, ws, kind, item_name, folder, queries):
         import re
         rev = re.compile(re.escape(item_name) + r"-[^-]+$", re.I)          # "Capacitor-1", not "Capacitor-SYM-1"
-        conn = self.gql(Q_MODELS[kind], {"ws": ws, "prefix": item_name + "-"})["desLibrary"][kind] or {}
+        conn = self.gql(queries[kind], {"ws": ws, "prefix": item_name + "-"})["desLibrary"][kind] or {}
         nodes = [n for n in conn.get("nodes") or [] if rev.match(n.get("name") or "")]
         if not nodes:
             return None
@@ -237,7 +257,7 @@ class Nexar:
             where = sorted({(n.get("folder") or {}).get("path") or "?" for n in nodes})
             raise NexarError(f"{kind[:-1]} {item_name!r} already exists in {', '.join(where)}, not in {folder}: "
                              "rename it in the plan or release under that folder")
-        return max(here, key=lambda n: n.get("releasedAt") or "")["id"]
+        return max(here, key=lambda n: n.get("releasedAt") or "")
 
     def _read_folders(self, ws):
         self._folders = [{"id": f["id"], "guid": f.get("folderId"), "name": f["name"], "parent": (f.get("parent") or {}).get("id")}
@@ -537,6 +557,42 @@ def model_digest(lg, entry, kind):
     return FP.digest(fp.get("symbol")) if kind == "symbols" else FP.digest([fp.get("footprint"), fp.get("model")])
 
 
+def model_file_digest(data, kind, ref):
+    """Fingerprint digest of the drawing in a workspace item's file (bytes: a .SchLib / .PcbLib, or a zip holding one),
+    as model_digest gives it for a ledger revision whose symbol / footprint ref is `ref`: the symbol, or the land with
+    its art and 3D model. A file holding one entry is read whatever that entry is called. Raises ValueError when the
+    file does not read."""
+    import io, tempfile, zipfile
+    from . import altium_lib as AL, fingerprint as FP
+    ext = ".SchLib" if kind == "symbols" else ".PcbLib"
+    if data and zipfile.is_zipfile(io.BytesIO(data)):
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            inner = [n for n in z.namelist() if n.lower().endswith(ext.lower())]
+            if not inner:
+                raise ValueError(f"the download holds no {ext} ({', '.join(z.namelist()[:5]) or 'empty'})")
+            data = z.read(inner[0])
+    with tempfile.TemporaryDirectory(prefix="ecadlib-a365-item-") as d:
+        f = Path(d) / f"item{ext}"
+        f.write_bytes(data or b"")
+        try:
+            entries = AL.read_schlib(f)[1] if kind == "symbols" else AL.read_pcblib(f)
+            e = entries[0] if len(entries) == 1 else FP._pick_named(entries, ref, kind[:-1])
+        except Exception as ex:                # not an Altium library, or not one this reads: no match
+            raise ValueError(f"{type(ex).__name__}: {ex}") from None
+    if kind == "symbols":
+        sym, _ = FP.altium_symbol(e)
+        return FP.digest(dict(sym, name=ref) if ref else sym)
+    land, art, model = FP.altium_footprint(e)
+    return FP.digest([dict(land, art=art, name=ref) if ref else dict(land, art=art), model])
+
+
+def item_model_digest(it, kind, folder):
+    """model_digest of the part's own files (no ledger revision: a plan without change control)."""
+    from . import fingerprint as FP
+    fp = FP.of_item(it, folder or ".")
+    return FP.digest(fp.get("symbol")) if kind == "symbols" else FP.digest([fp.get("footprint"), fp.get("model")])
+
+
 def released_model(lg, target, kind, name):
     """(digest, part, revision) of the drawing the workspace item `name` holds, from the ledger: a symbol / footprint
     item is released once (a second release of the name fails as duplicate), so it is the drawing of the first push to
@@ -783,6 +839,25 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                         found.append(f"<id of {name}>" if key in released else None)
                     else:
                         found.append(client.find_model(ws, kind, name, f"{models_root}/{sub}"))
+                # an item of that name this library has no record of releasing (another plan folder pushed it to this
+                # workspace, or someone made it in Altium) is linked only when it holds this part's drawing: it is
+                # read back and fingerprinted; another drawing, or a file that does not read back, holds the part
+                for i, (kind, sub) in enumerate((("symbols", "Symbols"), ("footprints", "Footprints"))):
+                    if dry_run or not found[i] or known.get(kind) or (kind, names[i].lower()) in released:
+                        continue                   # (released by an earlier part of this run: this plan's own)
+                    ref = it["symbol" if kind == "symbols" else "footprint"]["ref"]
+                    want = digests.get(kind) or item_model_digest(it, kind, folder)
+                    try:
+                        have = model_file_digest(client.model_data(ws, kind, names[i], f"{models_root}/{sub}"), kind, ref)
+                        why = None if have == want else "it holds another drawing than this part's"
+                    except (ValueError, NexarError, OSError) as e:
+                        why = f"it could not be read back to compare ({e})"
+                    if why:
+                        raise _Held([f"the workspace already has a {kind[:-1]} {names[i]!r} this library never released "
+                                     f"(another plan folder's push, or made in Altium) and {why}: linking it would "
+                                     f"release this part with a {kind[:-1]} its release check never saw. Give this "
+                                     f"part's {kind[:-1]} another name, or push this plan to a workspace of its own"])
+                    known[kind] = (have, "the workspace's item", "?")
                 # a shared symbol / footprint is linked by name: when the workspace's item holds another drawing than
                 # this part's (it changed since it went up), the item that does hold it (NAME-r<n>, released by a new
                 # revision of another part) is linked instead; with none, the part is held

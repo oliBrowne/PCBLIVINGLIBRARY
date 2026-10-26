@@ -580,15 +580,19 @@ def test_every_library_writer_is_gated_or_exempt():
 
 # ---------------------------------------------------------------- Altium 365
 class FakeA365:
-    """Nexar mock: components with revisions; desReleaseComponent of an existing item makes its next revision."""
+    """Nexar mock: components with revisions; desReleaseComponent of an existing item makes its next revision. Symbol
+    and footprint items are the ones released (with their file's bytes, model_data): a second release of an item name
+    fails as a duplicate, as live."""
     def __init__(self):
         self.comps, self.calls, self.n = {}, [], 0
+        self.models, self.blobs = {"symbols": {}, "footprints": {}}, {}
 
     def release_defs(self, ws):
         return {"componentLifeCycle": {"id": "LC1"}}
 
     def upload(self, p):
         self.calls.append(("upload", Path(p).name))
+        self.blobs[f"file:{Path(p).name}"] = Path(p).read_bytes()
         return f"file:{Path(p).name}"
 
     def find(self, ws, name):
@@ -598,12 +602,24 @@ class FakeA365:
         return next((c for c in self.comps.values() if c["id"] == cid), None)
 
     def find_model(self, ws, kind, name, folder):
-        return f"{kind}:{name}"
+        return f"{kind}:{name}" if name in self.models[kind] else None
+
+    def model_data(self, ws, kind, name, folder):
+        return self.models[kind].get(name)
 
     def folder_id(self, ws, path):
         return f"folder:{path}"
 
     def release(self, inp):
+        from ecadlib import altium365 as A
+        new = {}
+        for kind, key, fk in (("symbols", "symbolItemName", "symbolFiles"), ("footprints", "footprintItemName", "footprintFiles")):
+            if inp.get(fk):
+                if inp.get(key) in self.models[kind]:
+                    raise A.NexarError(f"AddALU_ItemsDuplicate item HRID {inp[key]}")
+                new[kind] = (inp[key], self.blobs.get(inp[fk][0]["fileId"]))
+        for kind, (name, data) in new.items():
+            self.models[kind][name] = data
         self.calls.append(("release", inp["componentItemName"], bool(inp["symbolFiles"]), bool(inp["footprintFiles"])))
         self.n += 1
         c = self.comps.setdefault(inp["componentItemName"], {"id": f"C{self.n}", "name": inp["componentItemName"],
@@ -640,7 +656,8 @@ def test_a365_approved_change_is_a_new_revision_and_held_sends_nothing():
     first = push()
     assert first["AO3401A"]["action"] == "release" and nx.comps["AO3401A"]["revision"]["revisionId"] == "R1"
     assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["revision"] == 1
-    assert LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["detail"] == {"action": "release", "a365_revision": "R1"}
+    d = LG.Ledger(lib).published("AO3401A", f"altium365:{ws}")["detail"]
+    assert {k: d[k] for k in ("action", "a365_revision")} == {"action": "release", "a365_revision": "R1"}, d
     # a held change: the plan still has the released revision, so nothing new goes up
     items = items_of(plan)
     g = gate(lib)
