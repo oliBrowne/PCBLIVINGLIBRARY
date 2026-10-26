@@ -880,13 +880,30 @@ class KiCadLib:
         f = self.pretty / f"{fp_name}.kicad_mod"
         return f.read_text(encoding="utf-8") if f.is_file() else None
 
+    def models_at(self):
+        """Where the export's footprints say <lib>.3dshapes/ is (kicad_export.models_at, kept in kicad_export.json);
+        ${KIPRJMOD}/<lib>.3dshapes when no export recorded another place."""
+        plain = f"${{KIPRJMOD}}/{self.name}.3dshapes"
+        try:
+            rep = json.loads((self.dir / "kicad_export.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return plain
+        rec = (rep.get("libraries") or {}).get(self.name) if isinstance(rep, dict) and isinstance(rep.get("libraries"), dict) else None
+        at = rec.get("models_at") if isinstance(rec, dict) else None
+        return at if isinstance(at, str) and at.endswith(f"/{self.name}.3dshapes") else plain
+
     def model_ok(self, path):
-        p = str(path)
-        if "${KIPRJMOD}" in p:                   # the export folder, or a project folder above it (kicad-export
-            if (self.dir / p.replace("${KIPRJMOD}/", "").replace("${KIPRJMOD}", "")).is_file():   # --project)
-                return True
-            m = re.search(r"(?:^|/)(" + re.escape(self.name) + r"\.3dshapes/[^/]+)$", p)
-            return bool(m) and (self.dir / m.group(1)).is_file()
+        """A footprint's model path resolves as KiCad resolves it: with the plain place, KIPRJMOD is the export
+        folder; with an export --project place (${KIPRJMOD}/<path>/<lib>.3dshapes), only that prefix reaches the
+        export's <lib>.3dshapes/ (any other, the plain one included, is a path KiCad does not find)."""
+        p, at = str(path), self.models_at()
+        if at == f"${{KIPRJMOD}}/{self.name}.3dshapes" and "${KIPRJMOD}" in p:
+            return (self.dir / p.replace("${KIPRJMOD}/", "").replace("${KIPRJMOD}", "")).is_file()
+        if p.startswith(at + "/"):
+            rest = p[len(at) + 1:]
+            return "/" not in rest and (self.dir / f"{self.name}.3dshapes" / rest).is_file()
+        if "${KIPRJMOD}" in p:
+            return False
         return Path(p).is_file()
 
 

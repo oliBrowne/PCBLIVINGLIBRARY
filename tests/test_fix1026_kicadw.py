@@ -239,6 +239,24 @@ def test_rfx52_bottom_projected_body_is_not_written(tmp_path):
         assert got is None and any("bottom" in n for n in notes), (make, got, notes)
 
 
+# ---- R-FX5-8: parity's model_ok accepts the plain ${KIPRJMOD}/<lib>.3dshapes path or the export's own models_at, only
+@lite
+def test_rfx58_model_ok_only_the_real_prefix(tmp_path):
+    from ecadlib import parity as PA
+    (tmp_path / "ecadlib.kicad_sym").write_text("(kicad_symbol_lib (version 20231120))\n")
+    (tmp_path / "ecadlib.3dshapes").mkdir()
+    (tmp_path / "ecadlib.3dshapes" / "X.step").write_text("x")
+    plain, sub, wrong = ("${KIPRJMOD}/ecadlib.3dshapes/X.step", "${KIPRJMOD}/ecadlib/ecadlib.3dshapes/X.step",
+                         "${KIPRJMOD}/other/ecadlib.3dshapes/X.step")
+    lib = PA.KiCadLib(tmp_path, "ecadlib")                      # no record: KIPRJMOD is the export folder
+    assert lib.model_ok(plain) and not lib.model_ok(sub) and not lib.model_ok(wrong)
+    (tmp_path / "kicad_export.json").write_text(json.dumps(
+        {"library": "ecadlib", "libraries": {"ecadlib": {"models_at": "${KIPRJMOD}/ecadlib/ecadlib.3dshapes"}}}))
+    lib = PA.KiCadLib(tmp_path, "ecadlib")                      # exported with --project: KIPRJMOD is the project
+    assert lib.model_ok(sub) and not lib.model_ok(wrong) and not lib.model_ok(plain)
+    assert not lib.model_ok("${KIPRJMOD}/ecadlib/ecadlib.3dshapes/Y.step")
+
+
 if __name__ == "__main__":
     fails = 0
     for k, f in list(globals().items()):
