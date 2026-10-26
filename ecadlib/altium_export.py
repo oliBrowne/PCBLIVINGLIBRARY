@@ -139,7 +139,44 @@ def _ic_land(name):
     if a["fam"] == "SO" or a["fam"] == "SOP" and a["pins"] in (8, 14, 16):
         a["fam"] = "SOIC"
     a["leadless"] = a["fam"] in SP.NO_LEAD
+    a["width"] = _body_width(name, a)
     return a
+
+
+def _body_width(name, attrs):
+    """The body width (mm) a land name states, or None: a distributor's '(0.209", 5.30mm Width)', '208 mil', EasyEDA's
+    'L5.0-W4.0', or the first figure of a KiCad-style 'W x L' body ('TSSOP-8_4.4x3mm' is 4.4 wide, 3 long)."""
+    t = str(name or "")
+    m = re.search(r"(\d+(?:\.\d+)?)\s*mm\s*Width", t, re.I)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"(?<![\d.])(0?\.\d{2,3})\s*(?:\"|''|in\b|inch)", t, re.I)
+    if m:
+        return round(float(m.group(1)) * 25.4, 2)
+    if attrs.get("body_w"):
+        return attrs["body_w"]
+    m = re.search(r"(?<![A-Z])L\d+(?:\.\d+)?-W(\d+(?:\.\d+)?)", t)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[xX\u00d7*]\s*\d+(?:\.\d+)?", t)
+    return float(m.group(1)) if m else None
+
+
+def _family_width(attrs):
+    """The one body width a body-less IC name can mean: JEDEC's 3.9 mm SOIC (7.5 mm for SOIC-W), else the width when
+    every KiCad package of that family and pin count has the same one ('LQFP-48' is 7 mm; 'QFN-20' is 3, 3.5, 4 or
+    5 mm: None, the name does not say which land)."""
+    from . import stdparts as SP
+    if attrs["fam"] == "SOIC":
+        return 7.5 if attrs["w"] else 3.9
+    fams = SP.QUAD_LEADED if attrs["fam"] == "QFP" else {attrs["fam"]}
+    ws = {float(SP.NAME_RE.match(n).group("a")) for g, n in SP._generic()
+          if g["fam"] in fams and g["pins"] == attrs["pins"] and g["w"] == attrs["w"]}
+    return ws.pop() if len(ws) == 1 else None
+
+
+# stdparts' power packages and distributors' 'Power' + leadless names ('8-PowerTDFN', 'PowerVSON-8')
+POWER_LAND = re.compile(r"(?<![A-Za-z])Power[A-Z]*(?:DFN|SON|SOIC|SO|SSO|QFN)", re.I)
 
 
 def lands_differ(a, b):
@@ -158,6 +195,8 @@ def lands_differ(a, b):
     ca, cb = _land_canon(a), _land_canon(b)
     if ca.casefold() == cb.casefold():
         return False
+    if any(SP.POWER_PKG.search(x) or POWER_LAND.search(x) for x in (a, b)):   # PowerPAK SO-8, LFPAK56: not the SOIC
+        return SP._norm(ca) != SP._norm(cb)
 
     def ep(n, attrs):
         return bool(EP_NAME.search(n) or EP_HINT.search(n) or EP_FAMILY.search(n) or (attrs or {}).get("ep"))
@@ -169,15 +208,13 @@ def lands_differ(a, b):
         if (ia["fam"], ia["pins"]) != (ib["fam"], ib["pins"]) and not (
                 ia["pins"] == ib["pins"] and {ia["fam"], ib["fam"]} & {"QFP"} and {ia["fam"], ib["fam"]} <= SP.QUAD_LEADED):
             return True
-        if ia["w"] != ib["w"]:
-            return True
+        wa, wb = ia["width"] or _family_width(ia), ib["width"] or _family_width(ib)
+        if wa is None or wb is None or abs(wa - wb) > 0.15:
+            return True                         # 5.3 mm is not 3.9 mm; a bare name of a family of several widths
         ea, eb = ep(ca, ia), ep(cb, ib)
         if ea != eb and not (ib if ea else ia)["leadless"]:
             return True                         # a bare leadless name ('QFN-20') does not say there is no pad
         if ia["body"] and ib["body"] and any(abs(x - y) > 0.15 for x, y in zip(ia["body"], ib["body"])):
-            return True
-        if ia.get("body_w") and ib["body"] and abs(ia["body_w"] - ib["body"][0]) > 0.15 or \
-                ib.get("body_w") and ia["body"] and abs(ib["body_w"] - ia["body"][0]) > 0.15:
             return True
         if ia["pitch"] and ib["pitch"] and abs(ia["pitch"] - ib["pitch"]) > 0.01:
             return True

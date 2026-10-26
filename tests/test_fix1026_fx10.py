@@ -55,7 +55,7 @@ _SAME = [("Package_QFP:LQFP-48_7x7mm_P0.5mm", "48-LQFP"), ("Package_QFP:LQFP-48_
          ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8_L5.0-W4.0-P1.27-LS6.0-BL"),     # EasyEDA's name
          ("Package_TO_SOT_SMD:SOT-23", "TO-236"), ("Package_TO_SOT_SMD:SOT-23", "TO-236AB"),
          ("Diode_SMD:D_SMA", "DO-214AC"), ("Diode_SMD:D_SMB", "DO-214AA"),
-         ("Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm_EP2.5x2.5mm", "QFN-20"),         # a bare leadless name: pad unsaid
+         ("Package_DFN_QFN:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm", "VQFN-16"),     # a bare leadless name: pad unsaid
          ("Package_SO:HTSSOP-16-1EP_4.4x5mm_P0.65mm_EP3.4x5mm", "HTSSOP-16"),      # HTSSOP always has the pad
          ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8"), ("Resistor_SMD:R_0603_1608Metric", "0603"),
          ("Package_TO_SOT_SMD:SOT-23", "SOT23")]
@@ -65,6 +65,7 @@ _DIFFER = [("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8-1EP_3.9x4.9mm_P1.27mm
            ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOP-8_5.3x5.3mm_P1.27mm"),    # EIAJ SOP-8: the body says another
            ("Package_SO:SOIC-16W_7.5x10.3mm_P1.27mm", "SOIC-16"),
            ("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8-1EP"),
+           ("Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm_EP2.5x2.5mm", "QFN-20"),   # QFN-20 is 3, 3.5, 4 or 5 mm (R-B2-1)
            ("Package_QFP:LQFP-48_7x7mm_P0.5mm", "LQFP-64"), ("Package_QFP:LQFP-48_7x7mm_P0.5mm", "QFN-48"),
            ("Package_QFP:LQFP-48_7x7mm_P0.5mm", "LQFP-48_7x7mm_P0.5mm_ThermalVias"),
            ("Package_TO_SOT_SMD:SOT-23", "SOT-23-3"),            # KiCad's SOT-23-3 is the MO-178 body (stdparts.AMBIGUOUS)
