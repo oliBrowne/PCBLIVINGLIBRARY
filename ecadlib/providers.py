@@ -43,6 +43,35 @@ def clean_maker(name):
     return short or name
 
 
+_MAKER_FILL = {"inc", "corp", "corporation", "co", "ltd", "llc", "gmbh", "ag", "sa", "bv", "nv", "plc", "group", "usa",
+               "semiconductor", "semiconductors", "semi", "electronics", "electronic", "technology", "technologies",
+               "international", "components", "devices", "the", "and", "of", "incorporated", "limited", "company"}
+
+
+def same_maker(a, b):
+    """Do two maker names (a BOM's, a source's) name the same maker? Lenient: a shared word ('Diodes Incorporated' /
+    'DIODES(美台)'), one run together starting the other ('ST' / 'STMicroelectronics', 'Lite-On' / 'LITEON',
+    'onsemi' / 'ON Semiconductor'), or one the initials of the other ('TI' / 'Texas Instruments', 'ADI' / 'Analog
+    Devices Inc.'). False when either is empty."""
+    import unicodedata
+
+    def words(s):
+        s = unicodedata.normalize("NFKD", clean_maker(s)).encode("ascii", "ignore").decode().lower()
+        return re.findall(r"[a-z0-9]+", s.replace("&", " "))
+    wa, wb = words(a), words(b)
+    if not wa or not wb:
+        return False
+    ka, kb = [w for w in wa if w not in _MAKER_FILL] or wa, [w for w in wb if w not in _MAKER_FILL] or wb
+    if {w for w in ka if len(w) >= 3} & {w for w in kb if len(w) >= 3}:
+        return True
+    ja, jb = "".join(ka), "".join(kb)
+    if len(min(ja, jb, key=len)) >= 2 and (ja.startswith(jb) or jb.startswith(ja)):
+        return True
+    ini = lambda ws: "".join(w[0] for w in ws)
+    return (len(wa) == 1 and len(wa[0]) >= 2 and wa[0] in (ini(wb), ini(kb))) or \
+        (len(wb) == 1 and len(wb[0]) >= 2 and wb[0] in (ini(wa), ini(ka)))
+
+
 def describe(text="", category="", package=""):
     """The part description a source gives: its own description text, else '<category>, <package>' when it names a
     category (both are the distributor's words; nothing is made up). '' when it gives neither."""
@@ -185,7 +214,7 @@ class JLCPCBSearch(Provider):
         if not r.ok:
             res.error = r.error or f"HTTP {r.status}"
             return res
-        return parse_jlcpcb(r, mpn, res)
+        return parse_jlcpcb(r, mpn, res, maker=line.get("manufacturer") or "")
 
     def lookup_lcsc(self, lcsc):
         """The part with this LCSC number (a search for the number; only that exact code counts): its LCSC
@@ -198,18 +227,20 @@ class JLCPCBSearch(Provider):
         return parse_jlcpcb(r, "", res, code=lcsc)
 
 
-def parse_jlcpcb(r, mpn, res, code=""):
+def parse_jlcpcb(r, mpn, res, code="", maker=""):
     """One JLCPCB search answer -> res (exact MPN match only, or with code the part with that LCSC number; the field
-    paths easyeda2kicad reads)."""
+    paths easyeda2kicad reads). maker: the BOM's manufacturer; of several exact matches (clones sell under the same
+    MPN, in other packages too) the one by that maker is taken, not the first listed."""
     try:
         from .kicad_index import norm_mpn
         items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
-        exact = [i for i in items if (str(i.get("componentCode") or "").strip().upper() == code.upper() if code else
-                                      norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn))]
+        exact = [i for i in items if isinstance(i, dict) and (
+            str(i.get("componentCode") or "").strip().upper() == code.upper() if code else
+            norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn))]
     except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
         res.error = f"unparseable: {e}"
         return res
-    best = (exact or [None])[0]
+    best = next((i for i in exact if maker and same_maker(maker, i.get("componentBrandEn"))), (exact or [None])[0])
     code = str((best or {}).get("componentCode") or "").strip().upper()
     if best and not re.fullmatch(r"C\d{1,9}", code):   # untrusted: only a real LCSC number goes on (into EasyEDA's URL)
         res.error = f"unparseable: componentCode {code[:20]!r} is not an LCSC number"

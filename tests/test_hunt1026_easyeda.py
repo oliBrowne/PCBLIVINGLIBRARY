@@ -137,6 +137,65 @@ def test_html_page_answering_the_3d_model_url_is_not_cached():
     assert not HC.page_not_data(url, "ISO-10303-21;\nHEADER;")
 
 
+class _R:
+    def __init__(self, body, status=200):
+        import json
+        self.text, self.status, self.error = json.dumps(body) if not isinstance(body, str) else body, status, None
+
+    @property
+    def ok(self):
+        return 200 <= self.status < 300
+
+    def json(self):
+        import json
+        return json.loads(self.text)
+
+
+def _jlc(items):
+    return _R({"data": {"componentPageInfo": {"list": items}}})
+
+
+def test_jlcpcb_search_takes_the_boms_maker_of_several_exact_matches():
+    # clones sell under the same MPN (in other packages too): the first listed was taken whoever made it, and its LCSC
+    # number then chose the EasyEDA footprint
+    from ecadlib import providers as P
+    items = [{"componentCode": "C111", "componentModelEn": "SS34", "componentBrandEn": "MSKSEMI(美森科)",
+              "componentSpecificationEn": "SMB"},
+             {"componentCode": "C222", "componentModelEn": "SS34", "componentBrandEn": "MDD(辰达半导体)",
+              "componentSpecificationEn": "SMA"}]
+    res = P.parse_jlcpcb(_jlc(items), "SS34", P.SourceResult("jlcpcb_search"), maker="MDD Microdiode")
+    assert res.found and res.lcsc == "C222" and res.manufacturer == "MDD", res
+    res = P.parse_jlcpcb(_jlc(items), "SS34", P.SourceResult("jlcpcb_search"))          # no maker: as before
+    assert res.lcsc == "C111"
+    seen = {}
+
+    class H:
+        def post(self, url, body, **kw):
+            seen["body"] = body
+            return _jlc(items)
+    res = P.JLCPCBSearch(H()).lookup({"mpn": "SS34", "manufacturer": "MDD"})
+    assert res.lcsc == "C222", res
+
+
+def test_jlcpcb_search_survives_odd_list_items():
+    from ecadlib import providers as P
+    for items in (["x", None, 3], {"a": 1}, "list"):
+        res = P.parse_jlcpcb(_jlc(items), "SS34", P.SourceResult("jlcpcb_search"))
+        assert res.found is False or res.error, (items, res)
+
+
+def test_same_maker():
+    from ecadlib.providers import same_maker as S
+    for a, b in (("TI", "Texas Instruments"), ("TI(德州仪器)", "Texas Instruments Inc."), ("ST", "STMicroelectronics"),
+                 ("ADI", "Analog Devices Inc."), ("onsemi", "ON Semiconductor"), ("Lite-On", "LITEON(光宝)"),
+                 ("Diodes Incorporated", "DIODES(美台)"), ("Würth Elektronik", "Wurth Elektronik"),
+                 ("Alpha & Omega Semiconductor", "AOS"), ("muRata(村田)", "Murata Electronics"),
+                 ("Vishay Dale", "Vishay Intertech")):
+        assert S(a, b) and S(b, a), (a, b)
+    for a, b in (("TI", "UMW(友台半导体)"), ("Nexperia", "NXP"), ("", "TI"), ("Texas Instruments", "Microchip")):
+        assert not S(a, b) and not S(b, a), (a, b)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
