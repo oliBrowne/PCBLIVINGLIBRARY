@@ -322,3 +322,37 @@ def test_librarian_holds_a_footprint_whose_copper_was_dropped(tmp_path):
     st3 = {"name": "TIE3", "symbol": None, "footprint": None}
     r.put_fp(st3, _NETTIE.format(cu=_BRIDGE_F), "NetTie-2_THT_F", "kicad:NetTie:NetTie-2_THT_F")
     assert not st3.get("verify"), st3
+
+
+@lite
+def test_parity_correct_conversions_of_copper_graphics_pass(tmp_path):
+    """Unfilled rects / polygons (written as tracks), circles (written as arcs), arcs and lines, modern and KiCad 5:
+    the same copper, no error (the graphic-by-graphic pairing failed the first three)."""
+    from ecadlib import parity as P
+    modern = ('(footprint "X" (version 20221018) (layer "F.Cu")\n'
+              '  (fp_rect (start -4 -4) (end 4 4) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))\n'
+              '  (pad "1" smd rect (at -1 0) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask"))\n'
+              '  (pad "2" smd rect (at 1 0) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask"))\n  {g})')
+    k5 = ('(module X (layer F.Cu)\n  (fp_line (start -4 -4) (end 4 4) (layer F.CrtYd) (width 0.05))\n'
+          '  (pad 1 smd rect (at -1 0) (size 0.8 0.8) (layers F.Cu F.Paste F.Mask))\n'
+          '  (pad 2 smd rect (at 1 0) (size 0.8 0.8) (layers F.Cu F.Paste F.Mask))\n  {g})')
+    for base, g in (
+            (modern, '(fp_rect (start -1 2) (end 1 3) (stroke (width 0.2) (type solid)) (fill none) (layer "F.Cu"))'),
+            (modern, '(fp_poly (pts (xy -1 2) (xy 1 2) (xy 0 3)) (stroke (width 0.2) (type solid)) (fill none) (layer "F.Cu"))'),
+            (modern, '(fp_circle (center 0 2.5) (end 0.5 2.5) (stroke (width 0) (type solid)) (fill solid) (layer "F.Cu"))'),
+            (modern, '(fp_circle (center 0 2.5) (end 0.5 2.5) (stroke (width 0.2) (type solid)) (fill none) (layer "F.Cu"))'),
+            (modern, '(fp_arc (start -1 2) (mid 0 3) (end 1 2) (stroke (width 0.2) (type solid)) (layer "F.Cu"))'),
+            (modern, '(fp_poly (pts (xy -1.2 -0.1) (xy -2 -0.1) (xy -2 0.1) (xy -1.2 0.1)) (stroke (width 0) (type solid)) (fill solid) (layer "F.Cu"))'),
+            (k5, "(fp_poly (pts (xy -1 2) (xy 1 2) (xy 0 3)) (layer F.Cu) (width 0.15))"),
+            (k5, "(fp_circle (center 0 2.5) (end 0.5 2.5) (layer F.Cu) (width 0.15))"),
+            (k5, "(fp_arc (start 0 2) (end 1 2) (angle 90) (layer F.Cu) (width 0.15))")):
+        text = base.format(g=g)
+        assert not _errs(P.footprint_pair(text, _pcblib(tmp_path, text))), g
+
+
+def test_kicad5_polygon_is_written_filled():
+    """KiCad 5 polygons have no fill token and are filled; kicad_import wrote only their outline."""
+    from ecadlib import kicad_import as K
+    f, _ = K.convert_footprint('(module X (layer F.Cu) (pad 1 smd rect (at 0 0) (size 1 1) (layers F.Cu)) '
+                               '(fp_poly (pts (xy -1 2) (xy 1 2) (xy 0 3)) (layer F.Cu) (width 0.15)))', "X", notes=[])
+    assert len(f["regions"]) == 1, f["regions"]

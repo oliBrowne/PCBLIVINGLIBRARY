@@ -567,7 +567,8 @@ def _graphic(fp, kind, g, layer, notes=None):
     else:
         (x1, y1), (x2, y2) = _xy(sexpr.first(g, "start")), _xy(sexpr.first(g, "end"))
         pts = [(x1, y1), (x2, y2)] if kind == "fp_line" else [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-    if kind != "fp_line" and _filled(g):
+    # a KiCad 5 polygon has no fill token and is always filled (KiCad 6+ writes (fill ...) on every fp_poly)
+    if kind != "fp_line" and (_filled(g) or kind == "fp_poly" and not sexpr.first(g, "fill")):
         fp["regions"].append((pts, layer))
         if w:                                 # stroke around the filled shape
             fp["tracks"] += [(a[0], a[1], b[0], b[1], w, layer) for a, b in zip(pts, pts[1:] + pts[:1])]
