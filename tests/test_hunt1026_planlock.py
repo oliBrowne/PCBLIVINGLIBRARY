@@ -235,3 +235,43 @@ def test_planlock_08_state_files_are_written_atomically():
     assert "Path(a.out).write_text(json.dumps(out" not in src["altium_dblib_sync"]
     assert "paths[k].write_text(json.dumps(res[k]" not in src["datasheet"]
     assert 'out.write_text(json.dumps(items, indent=2), encoding="utf-8")' not in src["app"]
+
+
+@lite
+def test_planlock_09_library_lock_is_kept_between_settle_and_baseline(tmp_path, monkeypatch):
+    # review C1: librarian.run / fill_plan took plan.lock, then the gate's steps each took and let go of the library
+    # lock (settle closes it), so a CLI `part reject` (library lock, then plan.lock) got in between and the run's
+    # baseline waited ECADLIB_LOCK_WAIT for a lock the CLI held while it waited for plan.lock. The writers now hold the
+    # library lock across the block: the CLI waits for the whole block and nothing times out.
+    import threading, time
+    from ecadlib import ledger as LG, change_gate as CG
+    from ecadlib.fsutil import plan_lock
+    monkeypatch.setenv("ECADLIB_LOCK_WAIT", "3")
+    ws = tmp_path / "ws"
+    lib = ws / "librarian" / "bom"
+    lib.mkdir(parents=True)
+    (lib / "plan.json").write_text("[]")
+    g = CG.Guard(lib, "librarian")
+    g.begin([])
+    log, started = [], threading.Event()
+
+    def cli_reject():
+        started.set()
+        with LG.locked(lib):
+            log.append("cli library lock")
+            with plan_lock(ws, wait=True):
+                log.append("cli plan lock")
+    with LG.locked(lib), plan_lock(ws, wait=True):    # as librarian.run and datasheet.fill_plan now do
+        g.settle([])
+        t = threading.Thread(target=cli_reject, daemon=True)
+        t.start()
+        started.wait(2)
+        time.sleep(0.3)
+        g.baseline([])                                # did not wait for the library lock: no LedgerError
+        log.append("run baseline")
+    t.join(5)
+    assert log == ["run baseline", "cli library lock", "cli plan lock"], log
+    import inspect
+    from ecadlib import librarian as L, datasheet as D
+    assert "LG.locked(out), _decisions_lock(plan_f)" in inspect.getsource(L.run)
+    assert "LG.locked(out), L._decisions_lock(plan_f)" in inspect.getsource(D.fill_plan)

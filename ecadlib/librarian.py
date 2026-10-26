@@ -1333,7 +1333,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     if todo:
         save_state()                           # a stop while the summary is logged keeps them too
-    with _decisions_lock(plan_f):              # decisions people recorded while this run looked parts up (the web UI,
+    from . import ledger as LG                 # the library lock across the whole block, then plan.lock (fsutil's order):
+    with LG.locked(out), _decisions_lock(plan_f):   # the gate steps below let go of their own hold between settle and baseline
+        # decisions people recorded while this run looked parts up (the web UI,
         old = _fresh_decisions(old, plan_f)    # `ecadlib approve`) are kept, not overwritten with the run's old copy
         for it in items:
             apply_state(it, state[it["name"]], _line_for(it, lines, rows)[0])

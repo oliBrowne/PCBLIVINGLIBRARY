@@ -5291,7 +5291,8 @@ def fill_plan(plan, reader, rules=None, log=print, parts=None):
         state[it["name"]] = st
         log(f"  {'done ' if L._done(st, out) else 'open '}{it['name']:<28} sym={it['source']['symbol'] or '-'}  fp={it['source']['footprint'] or '-'}")
     write_text_atomic(state_f, json.dumps(state, indent=2))
-    with L._decisions_lock(plan_f):                    # a reject / approval recorded while the reads ran (the web UI,
+    from . import ledger as LG                         # library lock first and across settle..baseline, then plan.lock
+    with LG.locked(out), L._decisions_lock(plan_f):    # a reject / approval recorded while the reads ran (the web UI,
         L.keep_decisions(items, plan_f)                # `ecadlib approve`) is kept, not overwritten with the old copy
         gate.settle(items)
         checks = RC.apply(items, out, rules=rules)
