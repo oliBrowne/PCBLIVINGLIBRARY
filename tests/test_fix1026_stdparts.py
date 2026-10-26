@@ -433,3 +433,54 @@ def test_librarian_records_the_hash_version(tmp_path):
     st = {"name": "P1", "symbol": None, "footprint": None}
     r.put_fp(st, EP_WINDOWS, "QFN-16", "datasheet")
     assert st["footprint"]["hash_v"] == FS.HASH_V and st["footprint"]["hash"] == FS.digest(EP_WINDOWS)
+
+
+# --- R-CV-1: dedupe --merge keys footprints by custom copper, paste / mask and side too ---------------------------
+
+def _dedupe_plan(d, texts):
+    from ecadlib import altium_lib as AL, kicad_import as K
+    (d / "models").mkdir()
+    items = []
+    for i, (n, t) in enumerate(texts):
+        t = t.replace('"QFN-X"', f'"{n}"')
+        (d / f"models/{n}.kicad_mod").write_text(t)
+        fp, _ = K.convert_footprint(t, n, "", [])
+        AL.write_pcblib(d / f"models/{n}.PcbLib", [fp])
+        items.append({"name": f"PART{i}", "folder": "Components/ICs", "status": "needs_review",
+                      "parameters": [{"name": "Manufacturer Part Number", "value": f"PART{i}"}],
+                      "symbol": {"ref": f"PART{i}", "file": None},
+                      "footprint": {"ref": n, "file": f"models/{n}.PcbLib", "kicad_mod": f"models/{n}.kicad_mod"},
+                      "source": {"footprint": "easyeda:C1"}})
+    (d / "plan.json").write_text(json.dumps(items))
+    from ecadlib import dedupe as DD
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        DD.main([str(d / "plan.json"), "--merge", "--kinds", "footprint"])
+    return {i["name"]: i["footprint"]["ref"] for i in json.loads((d / "plan.json").read_text())}
+
+
+@lite
+def test_dedupe_merge_keeps_other_custom_copper_or_paste_apart(tmp_path):
+    """A 1.7 mm square custom EP and a 0.4 x 3 mm bar on the same anchor (or an EP with and without paste) hashed
+    alike and --merge pointed one part at the other's land."""
+    got = _dedupe_plan(tmp_path, [("FP_A", EP_CUST_SQUARE), ("FP_B", EP_CUST_BAR), ("FP_C", EP_FULL), ("FP_D", EP_NOPASTE)])
+    assert got == {"PART0": "FP_A", "PART1": "FP_B", "PART2": "FP_C", "PART3": "FP_D"}, got
+
+
+@lite
+def test_dedupe_merge_still_merges_the_same_custom_footprint(tmp_path):
+    got = _dedupe_plan(tmp_path, [("FP_A", EP_CUST_SQUARE), ("FP_A2", EP_CUST_SQUARE), ("FP_W", EP_WINDOWS),
+                                  ("FP_W2", EP_WINDOWS)])
+    assert len(set(got.values())) == 2, got
+
+
+def test_dedupe_key_of_a_plain_footprint_is_unchanged():
+    """Plain footprints keep dedupe's old key in both formats, so .kicad_mod and .PcbLib copies still group."""
+    import tempfile
+    from pathlib import Path
+    from ecadlib import altium_lib as AL, dedupe as DD, kicad_import as K
+    plain = _qfn('  (pad "5" smd rect (at 0 0) (size 1.7 1.7) (layers "F.Cu" "F.Paste" "F.Mask"))')
+    old = DD.fp_hash(DD.fp_geometry_kicad(plain))
+    assert DD.fp_key_kicad(plain) == old
+    with tempfile.TemporaryDirectory() as d:
+        AL.write_pcblib(Path(d) / "a.PcbLib", [K.convert_footprint(plain, "X", "", [])[0]])
+        assert DD.fp_key_pcblib(AL.read_pcblib(Path(d) / "a.PcbLib")[0]) == old

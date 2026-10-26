@@ -289,6 +289,57 @@ def _kicad_marks(t):
     return out
 
 
+_CU_PASTE_MASK = (AL.TOP, AL.BOTTOM, AL.TOP_PASTE, AL.BOTTOM_PASTE, AL.TOP_SOLDER, AL.BOTTOM_SOLDER)
+
+
+def fp_extra_pcblib(fp):
+    """What fp_hash leaves out of a .PcbLib footprint but a board gets (the .PcbLib side of fp_share.extra): copper,
+    paste and mask regions / fills / tracks / arcs (custom-pad shapes, paste windows, copper graphics), pads on the
+    bottom, SMD pads with paste or mask closed or with a set expansion. Sorted; empty for a plain footprint."""
+    q = lambda v: round(_q(AL.to_mm(v)), 2)
+    out = []
+    for r in fp["records"]:
+        t, lay = r["type"], r.get("layer")
+        if t == "pad":
+            n = str(r["designator"])
+            if lay == AL.BOTTOM:
+                out.append(["side", n, "B"])
+            if lay in (AL.TOP, AL.BOTTOM):
+                half = max(r["w"], r["h"]) // 2
+                for what, mode, v in (("paste", r.get("paste_mode"), r.get("paste")), ("mask", r.get("mask_mode"), r.get("mask"))):
+                    if mode == 2 and v is not None and v <= -half:
+                        out.append(["closed", n, what])
+                    elif mode == 2 and v:
+                        out.append(["margin", n, what, q(v)])
+            continue
+        if lay not in _CU_PASTE_MASK:
+            continue
+        if t == "region" and r.get("pts"):
+            out.append(["region", lay, [[q(x), q(y)] for x, y in r["pts"]]])
+        elif t == "fill":
+            out.append(["fill", lay, [q(r[k]) for k in ("x1", "y1", "x2", "y2")]])
+        elif t == "track":
+            out.append(["track", lay, [q(r[k]) for k in ("x1", "y1", "x2", "y2", "w")]])
+        elif t == "arc":
+            out.append(["arc", lay, [q(r[k]) for k in ("cx", "cy", "r", "w")] + [round(r["a0"], 1), round(r["a1"], 1)]])
+    return sorted(out, key=repr)
+
+
+def fp_key_pcblib(fp, courtyard=AL.MECH15):
+    """dedupe's merge key of a .PcbLib footprint: fp_hash, folded with fp_extra_pcblib when there is any (a plain
+    footprint keeps the hash it had, and the same key as its .kicad_mod)."""
+    h = fp_hash(fp_geometry_pcblib(fp, courtyard))
+    extra = fp_extra_pcblib(fp) if h else []
+    return _digest([h, "pcblib"] + extra) if extra else h
+
+
+def fp_key_kicad(text):
+    """dedupe's merge key of a .kicad_mod: fp_share.digest (fp_hash plus custom copper, paste / mask and side), or None
+    for a footprint without pads."""
+    from . import fp_share as FS
+    return FS.digest(text) if fp_hash(fp_geometry_kicad(text)) else None
+
+
 def fp_hash(geom):
     if not geom or not geom["pads"]:
         return None
@@ -352,10 +403,10 @@ class Collector:
         separate file)."""
         f = Path(f)
         if f.suffix.lower() == ".kicad_mod":
-            g = self._read(f, lambda p: fp_geometry_kicad(Path(p).read_text(encoding="utf-8")))
-            return [(ref or f.stem, fp_hash(g), None)] if g else []
+            got = self._read(f, lambda p: [fp_key_kicad(Path(p).read_text(encoding="utf-8"))])   # None: unreadable
+            return [(ref or f.stem, got[0], None)] if got else []
         fps = self._read(f, AL.read_pcblib) or []
-        return [(fp["name"], fp_hash(fp_geometry_pcblib(fp, self.cfg.get("courtyard", AL.MECH15))), body_height(fp))
+        return [(fp["name"], fp_key_pcblib(fp, self.cfg.get("courtyard", AL.MECH15)), body_height(fp))
                 for fp in fps if not ref or fp["name"] == ref or len(fps) == 1]
 
     def _sym_from_file(self, f, ref=None):
@@ -584,6 +635,15 @@ def _rel(f, base):
         return Path(f).resolve().as_posix()
 
 
+def _same_kicad(a, b):
+    """Two .kicad_mod files hold the same footprint by fp_share.digest; True when either is missing (nothing more to
+    compare than the group's key)."""
+    from . import fp_share as FS
+    if not (a.is_file() and b.is_file()):
+        return True
+    return FS.digest(a.read_text(encoding="utf-8")) == FS.digest(b.read_text(encoding="utf-8"))
+
+
 def merge(items, groups, base, kinds=("mpn", "footprint", "symbol"), who="ecadlib dedupe"):
     """Rewrite plan references to each group's keeper. Returns the mapping rows {kind, from, to, file, parts}."""
     by = {i["name"]: i for i in items}
@@ -618,6 +678,11 @@ def merge(items, groups, base, kinds=("mpn", "footprint", "symbol"), who="ecadli
             for name in m["used_by"]:
                 it = by.get(name)
                 if not it or (it.get(kind) or {}).get("ref") != m["ref"]:
+                    continue
+                if kind == "footprint" and kmod and not _same_kicad(Path(base) / kmod, Path(base) / str(it[kind].get("kicad_mod") or "")):
+                    mapping.append({"kind": kind, "from": m["ref"], "to": keeper["ref"], "file": "", "parts": "",
+                                    "note": f"{name}: its .kicad_mod differs from the keeper's (custom copper, paste / "
+                                            "mask or side, fp_share.digest): not changed"})
                     continue
                 old = dict(it[kind])
                 new = {"ref": keeper["ref"], "file": _rel(kfile, base)}
