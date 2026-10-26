@@ -54,7 +54,9 @@ _MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON":
                 "ST": "ST", "STM": "ST", "ADI": "ANALOG", "MPS": "MONOLITHICPOWER", "AOS": "ALPHAOMEGA", "NXP": "NXP", "PHILIPS": "NXP",
                 "FAIRCHILD": "ON", "IR": "INFINEON", "RECTIFIER": "INFINEON", "CYPRESS": "INFINEON",
                 "MICROCHIPTECHNOLOGY": "MICROCHIP", "ATMEL": "MICROCHIP", "DIODESINC": "DIODES", "DIODES": "DIODES",
-                "RENESAS": "RENESAS", "IDT": "RENESAS", "INTERSIL": "RENESAS"}
+                "RENESAS": "RENESAS", "IDT": "RENESAS", "INTERSIL": "RENESAS",
+                "LTC": "ANALOG", "MAXIM": "ANALOG", "HITTITE": "ANALOG",   # now Analog Devices
+                "KYOCERAAVX": "AVX", "KYOCERA": "AVX", "SILICONLABS": "SILICONLABORATORIES", "SILABS": "SILICONLABORATORIES"}
 
 
 def _maker_words(name):
@@ -66,6 +68,11 @@ def _maker_words(name):
     return [w for w in words if w not in _MAKER_WORDS] or words
 
 
+def _maker_words_all(name):
+    name = clean_maker(name or "") if isinstance(name, str) else ""
+    return re.findall(r"[A-Z0-9]+", unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().upper())
+
+
 def maker_key(name):
     """A maker's name reduced to which company it is: letters and digits of its words, company-kind words left out,
     a Chinese alias in brackets dropped, short names mapped (TI -> Texas Instruments, onsemi / ON Semiconductor -> ON,
@@ -73,6 +80,8 @@ def maker_key(name):
     kept = _maker_words(name)
     if kept[:2] == ["TEXAS", "INSTRUMENTS"]:
         return "TEXASINSTRUMENTS"
+    if kept[:1] == ["LINEAR"] and "TECHNOLOGY" in _maker_words_all(name):   # Linear Technology (not Linear Integrated
+        return "ANALOG"                                                  # Systems): Analog Devices now
     if kept and kept[0].startswith("STMICRO"):
         return "ST"
     if kept and kept[0] == "VISHAY":              # Vishay Dale / Siliconix / Intertechnology / Sprague: one maker
@@ -86,6 +95,9 @@ def same_maker(a, b):
     least 4 letters ("Vishay" / "Vishay Siliconix", "Murata" / "Murata Manufacturing"); or a one-word name of 3+
     letters that is the other's first word ("MDD" / "MDD Microdiode"). Never a substring elsewhere: "ON" is not in
     "Monolithic", "TI" is not "Tiger", "ON" is not "ON Shore Technology"."""
+    for x, y in ((a, b), (b, a)):              # DigiKey's "Analog Devices Inc./Maxim Integrated": either name
+        if isinstance(x, str) and "/" in x and any(same_maker(part, y) for part in x.split("/") if part.strip()):
+            return True
     ka, kb = maker_key(a), maker_key(b)
     if not ka or not kb:
         return False

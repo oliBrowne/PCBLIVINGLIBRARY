@@ -52,6 +52,12 @@ HIDDEN_HEADER = "<hidden>"     # a column the workbook hides, in a CSV copy of i
 METRIC_HEADER = re.compile(r"\b(mm|metric|millimet(er|re)s?)\b")   # on a normalised header: 'Case Code (mm)'
 
 
+def metric_header(nh):
+    """A normalised header that says its case codes are metric ('Case Code (mm)'), not one naming both systems ('Case
+    (Imperial/Metric)', 'Size inch / mm'), whose bare 0603 is as likely the inch code."""
+    return bool(METRIC_HEADER.search(nh)) and not re.search(r"\b(imperial|inch|inches|in|eia|mil|mils)\b", nh)
+
+
 def metric_size(cell, header):
     """A footprint cell from a millimetre column ('Case Code (mm)') -> (footprint text, [note]). A bare chip size code
     is metric there: '1608' -> '0603', '0603' -> '0201' (read as an inch code it was the wrong part). A bare code
@@ -110,7 +116,7 @@ def map_headers(headers, threshold=0.72):
                 best *= 0.5                                              # 'Internal PN' is a house number
             if f == "footprint" and re.search(r"\b(qty|quantity|count|pcs|size|weight)\b", nh):
                 best *= 0.5                                              # 'Package Qty' is a reel size
-            if f == "footprint" and METRIC_HEADER.search(nh):
+            if f == "footprint" and metric_header(nh):
                 best *= 0.95                                             # 'Case Code (mm)' 0603 is an 0201: the
                                                                          # inch column wins when both are there
             if f != "lcsc" and re.search(r"\b(lcsc|jlc|jlcpcb)\b", nh):
@@ -347,7 +353,7 @@ def read_bom(path, columns=None, rules=None, root=None):
     hwidth = max(widths[hdr_row:hdr_row + (2 if two else 1)]) if widths else 0   # the header row's own cells: Excel
                                                                   # saves an unnamed notes column as 'Footprint,'
     suppliers = _supplier_pairs(headers)
-    metric_fp = "footprint" in col and bool(METRIC_HEADER.search(_hnorm(headers[col["footprint"]])))
+    metric_fp = "footprint" in col and metric_header(_hnorm(headers[col["footprint"]]))
     nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
                                                                   # after Value holds in the rows that fit the header
     lines, skipped = [], 0

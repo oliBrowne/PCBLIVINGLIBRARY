@@ -135,10 +135,13 @@ def test_gate02_maker_names():
     same = [("TI", "Texas Instruments"), ("Burr-Brown", "Texas Instruments"), ("onsemi", "ON Semiconductor"),
             ("Vishay", "Vishay Siliconix"), ("Rohm", "ROHM Semiconductor"), ("Würth Elektronik", "Wurth Elektronik"),
             ("Diodes Inc.", "Diodes Incorporated"), ("ADI", "Analog Devices Inc."), ("ST", "STMicroelectronics"),
-            ("Vishay Dale", "Vishay Intertech"), ("MDD", "MDD Microdiode")]
+            ("Vishay Dale", "Vishay Intertech"), ("MDD", "MDD Microdiode"),
+            ("Maxim Integrated", "Analog Devices Inc./Maxim Integrated"), ("Linear Technology", "Analog Devices Inc."),
+            ("AVX", "KYOCERA AVX"), ("Silicon Laboratories", "Silicon Labs")]   # review I2: DigiKey's current names
     differ = [("ON", "Monolithic Power Systems"), ("ON", "STMicroelectronics"), ("ON", "ON Shore Technology"),
               ("TI", "Tiger"), ("TI", "STMicroelectronics"), ("Nexperia", "NXP"), ("", ""), ("", "TI"),
-              ("ST", "Stackpole Electronics"), ("ON", "ON Shore Technology"), ("Micro Commercial", "Microchip")]
+              ("ST", "Stackpole Electronics"), ("ON", "ON Shore Technology"), ("Micro Commercial", "Microchip"),
+              ("Linear Integrated Systems", "Analog Devices Inc."), ("TI", "Analog Devices Inc./Maxim Integrated")]
     for a, b in same:
         assert L.same_maker(a, b) and L.same_maker(b, a), (a, b)
     for a, b in differ:

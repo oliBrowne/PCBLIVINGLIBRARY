@@ -449,8 +449,8 @@ def _menu_command(ws, cmd):
     m = _MENU_EXE.match(cmd)
     ok = bool(m) and bool(_MENU_ARGS.fullmatch(cmd[m.end():]))
     exe = m.group(0).strip('"').lower() if m else ""
-    if ok and ":" in exe and exe.endswith(("python.exe", "pythonw.exe", "python3.exe", "python3w.exe")):
-        ok = bool(cmd[m.end():].strip())                 # python.exe itself needs -m ecadlib
+    if ok and re.sub(r"\.exe$", "", exe.rsplit("\\", 1)[-1]) != "ecadlib":
+        ok = bool(cmd[m.end():].strip())                 # python / py / python.exe itself needs -m ecadlib
     if ok and ":" in exe and os.name == "nt":
         p = Path(m.group(0).strip('"')).resolve()
         ok = not (p == ws.root or ws.root in p.parents)  # not a program uploaded into the workspace

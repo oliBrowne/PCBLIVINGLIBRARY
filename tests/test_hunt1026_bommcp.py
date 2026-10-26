@@ -175,7 +175,7 @@ def test_mcp_altium_menu_takes_only_a_way_to_run_ecadlib_as_its_command(tmp_path
         return r["result"]["isError"], r["result"]["content"][0]["text"]
     for bad in ("calc.exe & rem", "ecadlib\r\nworkspace=C:\\Users\\x\\other", 'cmd /c "evil"', "powershell -c x",
                 '"C:\\Temp\\evil.exe"', '"C:\\Python\\python.exe" -c "import os"', "C:\\venv\\python.exe",
-                "C:\\x\\ecadlib.exe & calc", "ecadlib | x", "py -3 -m ecadlib %X%"):
+                "C:\\x\\ecadlib.exe & calc", "python", "py", "py.exe", "ecadlib | x", "py -3 -m ecadlib %X%"):
         err, text = call(bad)
         assert err and "command" in text and "ecadlib_menu.ini" in text, (bad, text)
         assert not ini.exists(), bad
@@ -331,3 +331,10 @@ def test_xlsx_merged_part_over_a_wrapped_designator_list_stays_one_line(tmp_path
         lines, _ = _read_xlsx(f)
         got = [(l.get("qty"), l["designator"], l.get("mpn")) for l in lines]
         assert got == [("6", "R1, R2, R3, R4, R5, R6", "RC0603FR-0710KL"), ("1", "C1", "GRM188R71H104KA93D")], (plain, got)
+
+
+def test_a_header_naming_both_systems_is_not_read_as_metric():
+    # review M3: 'Case (Imperial/Metric)' matched the metric rule, so its bare 0603 became an 0201
+    for h, metric in (("Case Code (mm)", True), ("Metric size", True), ("Case (Imperial/Metric)", False),
+                      ("Size inch / mm", False), ("Package", False)):
+        assert T.metric_header(T._hnorm(h)) is metric, h
