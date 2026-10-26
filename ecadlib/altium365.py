@@ -477,6 +477,19 @@ def change_mode(lg, it, target):
     return "revision", halves, head, pub
 
 
+def unpublished_halves(lg, target, sent_models, it, head):
+    """The halves ({"symbol", "footprint"}) a new revision of a component this library never published to `target`
+    must send: all but one whose workspace item the ledger knows holds the head's drawing (a shared symbol released
+    with another part), which is linked."""
+    out = set()
+    for kind, half, name in zip(("symbols", "footprints"), ("symbol", "footprint"), model_item_names(it)):
+        want = model_digest(lg, head, kind)
+        have = name and (sent_models.get(f"{kind}:{name.lower()}") or released_model(lg, target, kind, name))
+        if not (want and have and have[0] == want):
+            out.add(half)
+    return out
+
+
 def _dup(e):
     return "duplicate" in str(e).lower()
 
@@ -659,7 +672,12 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                              "(ecadlib part show)")
         try:
             existing = None if dry_run else client.find(ws, it["name"])
-            mode, halves, head, _ = change_mode(lg, it, target) if lg else ("params", set(), None, None)
+            mode, halves, head, pub = change_mode(lg, it, target) if lg else ("params", set(), None, None)
+            if existing and head and not pub:  # in the workspace, never published there from this library (made by
+                mode = "revision"              # hand, an older ecadlib, a release whose answer was lost): what it
+                halves = unpublished_halves(lg, target, sent_models, it, head)   # holds is unknown, so the head goes
+                res["unpublished"] = (f"{it['name']} is in the workspace but this library has no record of publishing "
+                                      f"it there: released again from ledger revision r{head['revision']}")
             if (existing or (dry_run and lg and _published(lg, it["name"], target))) and mode == "revision":
                 if why:
                     recheck(res, why)
@@ -761,7 +779,10 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
         results.append(res)
     if lg and not dry_run:                     # what went up, per part, at which ledger revision
         from . import change_gate as CG
-        ok = {r["name"] for r in results if r["action"] in PUSHED}
+        # an in-place result (up_to_date / update_parameters) proves nothing about the drawings: it is recorded only
+        # over an earlier publish line of that part (never the first publish of a part already in the workspace)
+        ok = {r["name"] for r in results if r["action"] in ("release", "new_revision") or (
+            r["action"] in PUSHED and _published(lg, r["name"], target))}
         def detail(i):                         # the action, and the workspace revision it left (project check)
             r = next((r for r in results if r["name"] == i["name"]), {})
             d = r.get("detail")
