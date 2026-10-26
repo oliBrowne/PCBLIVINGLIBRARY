@@ -197,3 +197,18 @@ def test_the_workspace_list_marks_the_configured_workspace_and_the_ui_uses_it(tm
     assert [w["configured"] for w in r["workspaces"]] == [False, True], r
     page = Path("ecadlib/ui/static/index.html").read_text(encoding="utf-8")
     assert "x.configured" in page and "w.configured" in page                # preselected; push only to that one
+
+
+# ---------------------------------------------------------------- R-FX-9: an exposed pad that has its own pin
+@lite
+def test_an_exposed_pad_numbered_onto_a_ground_lead_holds_when_the_symbol_gives_the_pad_its_own_pin(tmp_path):
+    from tests.test_fix1026_pins import _ep_item
+    # pad 15 on lead 15 (GND), but the symbol has an EP pin 17: the pad's net is that pin's, not GND's
+    for ep_name in ("EP", "PAD", "EPAD", "Exposed Pad", "THERMAL PAD", "EP (V-)", "PowerPAD"):
+        f, w = _ep_item(tmp_path / ep_name.replace(" ", "_"), "15", {15: "GND", 16: ep_name})
+        assert any("exposed pad" in m and "15" in m for m in f), (ep_name, f)
+    # the maker's 'EP = pin 15 GND' with no pad pin of its own stays fine, and so does a pad pin of the same number
+    f, w = _ep_item(tmp_path / "ok", "15", {15: "GND"})
+    assert not any("exposed pad" in m for m in f), f
+    f, w = _ep_item(tmp_path / "ok2", "15", {15: "GND/EP"})
+    assert not any("exposed pad" in m for m in f), f

@@ -256,6 +256,11 @@ EP_NET = re.compile(r"(?i)^(E?PAD|EP|EPAD|EXP(OSED)?[ _]?PAD|THERMAL([ _]?PAD)?|
                     r"VSS\w*|VEE|0V)$")
 
 
+# a symbol pin that is the exposed pad itself ('EP', 'PAD', 'Exposed Pad', 'EP (V-)', 'PowerPAD'), not a lead also
+# tied to it ('GND/EP' starts with its lead's name)
+EP_PIN = re.compile(r"(?i)^(EPAD\d*|EP\d*|PAD|EXP(OSED)?[ _]?PAD|THERMAL[ _]?PAD|POWER[ _]?PAD|SLUG|DAP)(\W.*)?$")   # not PAD1 (a touch pad)
+
+
 def ep_lead_holds(text, pin_names):
     """R-CL-2: an exposed pad numbered as a lead it does not touch (footprint_check.ep_on_lead) joins the thermal pad to
     that lead's net. A datasheet read told to number the pad pin_count + 1 does this on a part whose leads are numbered
@@ -265,6 +270,15 @@ def ep_lead_holds(text, pin_names):
     out = []
     for n in FC.ep_on_lead(text):
         nm = str(pin_names.get(n) or "")
+        # the symbol gives the pad a pin of its own (EP / PAD / Exposed Pad, another number): the pad is that pin's
+        # net, so a number shared with lead n is wrong whatever lead n is (a GND lead included)
+        own = [(str(k), str(v)) for k, v in pin_names.items()
+               if str(k) != str(n) and EP_PIN.match(SL.plain(str(v or "")).strip())]
+        if own:
+            out.append(f"the exposed pad is numbered {n}, the number of lead {n} ({nm or 'no pin'}), which it does not "
+                       f"touch, while the symbol gives the pad its own pin {own[0][0]} ({own[0][1]}): number the pad "
+                       f"{own[0][0]} as the datasheet does")
+            continue
         if nm and (EP_NET.match(SL.plain(nm).strip()) or SL.classify({"name": nm, "num": n}) in ("ground", "ep")):
             continue
         out.append(f"the exposed pad is numbered {n}, the number of lead {n} ({nm or 'no pin'}), which it does not "
