@@ -744,18 +744,34 @@ def template_for(cat, rules, ref=""):
     return by.get(cat) or by.get(ref) or (n["passive"] if cat in PASSIVES else n["component"])
 
 
+_VALUE_MARK = "\x01\x02"                   # stands for the value while the rest of a name changes case
+
+
+def _fold(s, case):
+    return s.upper() if case == "upper" else s.lower() if case == "lower" else s
+
+
+def _fold_value(v, case):
+    """A value token in another case, except an m / M right after a digit: milli and mega are two values (10m is
+    10 mOhm, 10M 10 MOhm), so naming case never turns one into the other."""
+    return "".join(c if c in "mM" and i and v[i - 1].isdigit() else _fold(c, case) for i, c in enumerate(v))
+
+
 def component_name(item_or_fields, rules, cat=None):
     """Part name per the rules. item_or_fields: a fields dict from line_fields (or a BOM line plus cat)."""
     f = item_or_fields if "cat3" in item_or_fields else line_fields(item_or_fields, cat or "Misc", "", rules)
     cat = f.get("category") or cat or "Misc"
+    case = (rules or DEFAULTS)["naming"]["case"]
+    value = str(f.get("value") or "")
+    if case in ("upper", "lower") and value:
+        f = dict(f, value=_VALUE_MARK)         # the value keeps its milli / mega letter (_fold_value)
     t = template_for(cat, rules, f.get("ref", ""))
     name = render(t, f)
     if ("{value}" in t and not f.get("value")) or ("{mpn}" in t and not f.get("mpn")):
         name = ""                              # the template's key field is missing: named like any other part
     if not name:
         name = render((rules or DEFAULTS)["naming"]["component"], f) or f.get("mpn") or f.get("value") or ""
-    case = (rules or DEFAULTS)["naming"]["case"]
-    return name.upper() if case == "upper" else name.lower() if case == "lower" else name
+    return _fold(name, case).replace(_VALUE_MARK, _fold_value(value, case))
 
 
 def symbol_name(fields, rules):

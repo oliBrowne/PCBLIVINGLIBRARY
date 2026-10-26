@@ -136,6 +136,35 @@ def test_ru2_change_control_classes_a_rating_change_as_identity():
         assert CD.worst(CD.diff(a, b)) == "cosmetic", (k, v, CD.diff(a, b))
 
 
+# ------------------------------------------------------------------ R-RU-3: case never folds milli into mega
+def test_ru3_naming_case_keeps_milli_and_mega_apart():
+    from ecadlib import rules as RU
+    for case in ("upper", "lower"):
+        for style in ("keep", "si", "rkm_lower", "si_upper"):
+            r = RU.load({"naming": {"case": case, "value_style": style}})
+            a = RU.component_name(RU.line_fields({"value": "10m", "mpn": "WSL0603R0100FEA"}, "Resistors", "0603", r), r)
+            b = RU.component_name(RU.line_fields({"value": "10M", "mpn": "RC0603FR-0710ML"}, "Resistors", "0603", r), r)
+            assert a != b, (case, style, a, b)
+            if case == "upper" and style == "keep":
+                assert a == "RES-0603-10m" and b == "RES-0603-10M", (a, b)
+    r = RU.load({"naming": {"case": "upper"}})
+    assert RU.component_name(RU.line_fields({"value": "100nF"}, "Capacitors", "0402", r), r) == "CAP-0402-100NF"
+    r = RU.load({"naming": {"case": "lower"}})
+    assert RU.component_name(RU.line_fields({"value": "4K7"}, "Resistors", "0603", r), r) == "res-0603-4k7"
+
+
+def test_ru3_upper_case_export_keeps_both_resistors():
+    import contextlib, io
+    from ecadlib import altium_export as AE, rules as RU
+    lines = [{"designator": "R1", "value": "10m", "footprint": "Resistor_SMD:R_0603_1608Metric",
+              "description": "shunt 10mOhm 0603", "qty": "1"},
+             {"designator": "R2", "value": "10M", "footprint": "Resistor_SMD:R_0603_1608Metric", "description": "10M 0603",
+              "qty": "1"}]
+    with contextlib.redirect_stderr(io.StringIO()):
+        df = AE.to_rows(lines, None, RU.load({"naming": {"case": "upper"}}))["Resistors"]
+    assert sorted(zip(df["Part Number"], df["Value"])) == [("RES-0603-10M", "10M"), ("RES-0603-10m", "10m")]
+
+
 def _main():
     import sys
     n = 0
