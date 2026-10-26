@@ -49,6 +49,24 @@ HIDDEN_HEADER = "<hidden>"     # a column the workbook hides, in a CSV copy of i
                                # with '<' and the other header rules match whole headers, so it is never read as live
 
 
+METRIC_HEADER = re.compile(r"\b(mm|metric|millimet(er|re)s?)\b")   # on a normalised header: 'Case Code (mm)'
+
+
+def metric_size(cell, header):
+    """A footprint cell from a millimetre column ('Case Code (mm)') -> (footprint text, [note]). A bare chip size code
+    is metric there: '1608' -> '0603', '0603' -> '0201' (read as an inch code it was the wrong part). A bare code
+    that is no metric chip size ('1206') cannot be told apart, so it is not used: the part is held for its footprint
+    rather than built on a guess. Anything else ('SOT-23-5', 'R_0603_1608Metric') is kept."""
+    from .kicad_index import METRIC_TO_IMPERIAL
+    m = re.fullmatch(r"\s*(\d{4})\s*(?:mm)?\s*", str(cell))
+    if not m:
+        return cell, []
+    if m.group(1) in METRIC_TO_IMPERIAL:
+        return METRIC_TO_IMPERIAL[m.group(1)], []
+    return "", [f"footprint '{cell}' from the millimetre column '{header}' is no metric chip size: not used "
+                "(give the inch size, e.g. 0603, or the footprint name)"]
+
+
 def map_headers(headers, threshold=0.72):
     """Fuzzy, case-insensitive header -> field mapping. Returns {field: header}."""
     dist = {nj for nj, _ in _supplier_pairs(headers)}            # 'Vendor' beside 'Vendor Part Number': a distributor
@@ -92,6 +110,9 @@ def map_headers(headers, threshold=0.72):
                 best *= 0.5                                              # 'Internal PN' is a house number
             if f == "footprint" and re.search(r"\b(qty|quantity|count|pcs|size|weight)\b", nh):
                 best *= 0.5                                              # 'Package Qty' is a reel size
+            if f == "footprint" and METRIC_HEADER.search(nh):
+                best *= 0.95                                             # 'Case Code (mm)' 0603 is an 0201: the
+                                                                         # inch column wins when both are there
             if f != "lcsc" and re.search(r"\b(lcsc|jlc|jlcpcb)\b", nh):
                 best *= 0.5                                              # 'LCSC Part Number' is not the MPN
             if f == "lcsc" and not re.search(r"\b(lcsc|jlc|jlcpcb)", nh):
@@ -326,7 +347,8 @@ def read_bom(path, columns=None, rules=None, root=None):
     hwidth = max(widths[hdr_row:hdr_row + (2 if two else 1)]) if widths else 0   # the header row's own cells: Excel
                                                                   # saves an unnamed notes column as 'Footprint,'
     suppliers = _supplier_pairs(headers)
-    nxt = _column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
+    metric_fp = "footprint" in col and bool(METRIC_HEADER.search(_hnorm(headers[col["footprint"]])))
+    nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
                                                                   # after Value holds in the rows that fit the header
     lines, skipped = [], 0
     for idx, row in df.iterrows():
@@ -359,6 +381,9 @@ def read_bom(path, columns=None, rules=None, root=None):
         for f in ("mpn", "lcsc"):
             if d.get(f):
                 d[f] = clean_part_number(d[f])
+        if metric_fp and d.get("footprint"):                     # 'Case Code (mm)': 1608 is an 0603, 0603 an 0201
+            d["footprint"], extra = metric_size(d["footprint"], headers[col["footprint"]])
+            note += extra
         if not any(d.values()):
             continue
         if shifted:
