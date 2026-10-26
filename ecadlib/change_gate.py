@@ -235,6 +235,7 @@ class Guard:
         self.adopt_revision = {}               # part -> the revision an adopted part gets (never one it had before)
         self.pre = {}                          # path -> bytes on disk at begin() that are the released part
         self.pre_steps = {}                    # PcbLib path -> {STEP path: bytes} of a head recorded without its STEPs
+        self.found = {}                        # path -> sha256 at begin() of a released part's .SchLib / .PcbLib
         self._lock = None
         self._begun = False                    # begin() ran: what the writer found on disk was checked there
         self._was_empty = None                 # the ledger had no line when this guard first looked
@@ -300,6 +301,7 @@ class Guard:
                 n += 1
             elif head:
                 self._keep_bytes(it, head)
+                self._note_found(head)
         self._refuse_lost(lost)
         if n:
             self.log(f"  change control: {n} released part(s) recorded as revision 1 (they were released before the ledger)")
@@ -537,6 +539,21 @@ class Guard:
                     self.pre_steps[p] = {str(f.parent / s): (f.parent / s).read_bytes() for s in LG.step_files(f)
                                          if (f.parent / s).is_file()}
 
+    def _note_found(self, head):
+        """Remember the bytes of the head's library files as begin() found them: settle tells by them which files this
+        writer rewrote (_settle_sides)."""
+        for r in (head.get("files") or {}).values():
+            f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
+            if f.is_file():
+                self.found.setdefault(str(f.resolve()), LG.sha_bytes(f.read_bytes()))
+
+    def _rewrote(self, f, sha):
+        """This writer rewrote file f (now sha) since begin(): it wrote its recipe and 3D models anew with it."""
+        if self.writer == "hand-edit" or not self._begun:
+            return False
+        was = self.found.get(str(Path(f).resolve()))
+        return was is not None and was != sha
+
     def _is_head(self, fp, head):
         """fp is the released revision: the same digest as the head's, or (a head an older ecadlib fingerprinted) as
         the head's snapshot fingerprinted again now."""
@@ -667,18 +684,20 @@ class Guard:
         """A released part whose .SchLib / .PcbLib is still the head's, but whose build recipe or 3D model beside it is
         not (an edit outside ecadlib): Altium's own rebuild would ship that edit, and no fingerprint sees it. The
         released side files go back; the edited ones are kept in the blob store with an `overwritten` line.
-        "Still the head's": the same bytes, or (for a publisher's settle, writer hand-edit, which builds nothing) the
-        same symbol / footprint and 3D model in the fingerprint `new` as in the head's `old`, so a re-saved .PcbLib
-        (other bytes, same content) does not hide an edited recipe. A writer that rebuilt the file writes its recipe
-        anew, so only the same bytes count there."""
+        "Still the head's": the same bytes, or the same symbol / footprint and 3D model in the fingerprint `new` as in
+        the head's `old`, so a re-saved .PcbLib (other bytes, same content) does not hide an edited recipe. Only a file
+        this writer rewrote itself since begin() (librarian, resolve: it wrote its recipe anew) needs the same bytes;
+        a writer that rebuilt nothing there (a publisher's settle, style apply, approve) never takes an edited recipe
+        beside a re-saved file as released."""
         files = head.get("files") or {}
         drift = {}
         for kind, r in files.items():
             f = Path(r["path"]) if Path(r["path"]).is_absolute() else self.base / r["path"]
             if not f.is_file():
                 continue
-            same = LG.sha_bytes(f.read_bytes()) == r.get("sha256")
-            if not same and new is not None and self.writer == "hand-edit" and kind in ("symbol", "footprint"):
+            sha = LG.sha_bytes(f.read_bytes())
+            same = sha == r.get("sha256")
+            if not same and new is not None and kind in ("symbol", "footprint") and not self._rewrote(f, sha):
                 if old is None:
                     old = self.ledger.fingerprint(head) or {}
                 keys = ("symbol",) if kind == "symbol" else ("footprint", "model")
