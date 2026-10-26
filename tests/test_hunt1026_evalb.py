@@ -142,6 +142,18 @@ def test_footprint_tolerances_and_wrong_lands():
     assert not S.score(sw, ref)["pass"]
 
 
+def test_footprint_bench_report_with_no_pad_number_in_common():
+    # a generated footprint that shares no pad number with KiCad's has no worst offset: the report printed nothing
+    # but a TypeError (None formatted as a float)
+    from ecadlib import footprint_bench as FB
+    r = FB.compare({"pads": [["9", 0, 0, 1, 1, 0]], "courtyard": []}, {"pads": [["1", 0, 0, 1, 1, 0]], "courtyard": [0, 0, 1, 1]})
+    assert r["worst_pos"] is None and not r["all_pads_ok"] and r["missing_in_ours"] == ["1"] and r["extra_in_ours"] == ["9"]
+    s = {"footprints": 1, "unavailable": 0, "pads": 1, "pads_ok": 0, "footprints_all_pads_ok": 0, "courtyards_ok": 0,
+         "check_clean": 1}
+    txt = FB.report([dict(name="X", shows="s", **r)], s)
+    assert "0/1" in txt and "KiCad-only pads ['1'], ours-only ['9']" in txt, txt
+
+
 # ---------------------------------------------------------------- report: built wrong apart from held
 def test_the_report_counts_built_wrong_apart_from_parts_not_built():
     # the 10-23 live report said "46 parts were wrong" where 11 were built wrong and 35 held / not built: a held part

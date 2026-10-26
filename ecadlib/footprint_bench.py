@@ -193,7 +193,8 @@ def report(results, summary):
             note += f"; KiCad-only pads {r['missing_in_ours']}, ours-only {r['extra_in_ours']}"
         if not r["courtyard_ok"] and r["courtyard_kicad"]:
             note += f"; courtyard ours {r['courtyard_ours']} KiCad {r['courtyard_kicad']}"
-        out.append(f"{r['name']:<58} {r['pads_ok']:>4}/{r['pads']:<4} {r['worst_pos']:>7.3f}/{r['worst_size']:<7.3f} {crt:>10}  {note}")
+        worst = "-" if r["worst_pos"] is None else f"{r['worst_pos']:.3f}/{r['worst_size']:.3f}"   # no pad numbers shared
+        out.append(f"{r['name']:<58} {r['pads_ok']:>4}/{r['pads']:<4} {worst:>15} {crt:>10}  {note}")
     s = summary
     pct = lambda a, b: "-" if not b else f"{100 * a / b:.0f} %" if a == b or 100 * a / b < 99.5 else \
         f"{int(1000 * a / b) / 10:.1f} %"                  # a failing run never rounds up to 100 %
