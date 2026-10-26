@@ -209,6 +209,40 @@ def _family_width(attrs):
     return ws.pop() if len(ws) == 1 else None
 
 
+# packages of one pin count that distributors suffix with it anyway (Mouser 'SOT-363-6'): the suffix says nothing
+_FIXED_COUNT = {"SOT-363": 6, "SOT-353": 5, "SOT-323": 3, "SOT-563": 6, "SOT-666": 6, "SC-70": 3}
+_DIP_ROW = {"0.300": 7.62, "7.62": 7.62, "0.400": 10.16, "10.16": 10.16, "0.600": 15.24, "15.24": 15.24}
+
+
+def _distributor_alias(name):
+    """A distributor's spelling of a land as KiCad's, or the name unchanged (R-FX17-3): DigiKey's 'TO-252-3, DPak
+    (2 Leads + Tab), SC-63' and Mouser's 'DPAK-3' (terminals counted with the tab) are TO-252-2, 'D2PAK-3' TO-263-2;
+    LCSC's 'TO-252-2(DPAK)' drops its bracketed alias; 'SOT-363-6' drops a count its package always has; '8-DIP
+    (0.300", 7.62mm)' is DIP-8_W7.62mm; 'SOIC-Wide-16' is SOIC-16W."""
+    t = str(name or "").strip()
+    m = re.search(r"\((\d+)\s*Leads?\s*\+\s*Tab\)", t, re.I)
+    fam = "TO-263" if re.search(r"D2\s*PAK|TO-?263", t, re.I) else "TO-252" if re.search(r"(?<![0-9A-Z])DPAK|TO-?252", t, re.I) else None
+    if m and fam:
+        return f"{fam}-{m.group(1)}"
+    m = re.fullmatch(r"D(2)?PAK-?3", t, re.I)
+    if m:
+        return "TO-263-2" if m.group(1) else "TO-252-2"
+    m = re.fullmatch(r"(\d{1,2})-P?DIP\s*\(\s*([\d.]+)\s*(?:\"|in)?\s*,\s*([\d.]+)\s*mm\s*\)", t, re.I) or \
+        re.fullmatch(r"P?DIP-?(\d{1,2})\s*\(\s*([\d.]+)\s*(?:\"|in)?\s*,\s*([\d.]+)\s*mm\s*\)", t, re.I)
+    if m and _DIP_ROW.get(m.group(2)) and _DIP_ROW.get(m.group(2)) == _DIP_ROW.get(m.group(3)):
+        return f"DIP-{m.group(1)}_W{_DIP_ROW[m.group(2)]:.2f}mm"
+    m = re.fullmatch(r"SOIC-?W(?:ide)?-?(\d{1,2})", t, re.I)
+    if m:
+        return f"SOIC-{m.group(1)}W"
+    m = re.fullmatch(r"(.*?[A-Za-z0-9])\s*\(\s*[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*\s*\)", t)
+    if m:                                       # 'TO-252-2(DPAK)': the name, its alias in brackets
+        t = m.group(1)
+    m = re.fullmatch(r"(SOT-?\d{3}|SC-?70)-(\d)", t, re.I)
+    if m and _FIXED_COUNT.get(re.sub(r"^(SOT|SC)-?", r"\1-", m.group(1).upper())) == int(m.group(2)):
+        return m.group(1)
+    return t
+
+
 QFN_LANDS = {"QFN", "VQFN", "WQFN", "UQFN", "TQFN", "HVQFN"}
 # stdparts' power packages and distributors' 'Power' + leadless names ('8-PowerTDFN', 'PowerVSON-8')
 POWER_LAND = re.compile(r"(?<![A-Za-z])Power[A-Z]*(?:DFN|SON|SOIC|SO|SSO|QFN)", re.I)
@@ -227,11 +261,12 @@ def lands_differ(a, b):
         return False
     if bool(LAND_VARIANT.search(a) or SP.LAND_VARIANT.search(a)) != bool(LAND_VARIANT.search(b) or SP.LAND_VARIANT.search(b)):
         return True                             # the hand-solder / thermal-via copy of a land is another land
-    ca, cb = _land_canon(a), _land_canon(b)
+    ca, cb = _land_canon(_distributor_alias(a)), _land_canon(_distributor_alias(b))
     if ca.casefold() == cb.casefold():
         return False
     if any(SP.POWER_PKG.search(x) or POWER_LAND.search(x) for x in (a, b)):   # PowerPAK SO-8, LFPAK56: not the SOIC
-        return SP._norm(ca) != SP._norm(cb)
+        one = lambda n: re.sub(r"SINGLE$", "", SP._norm(n))          # 'PowerPAK SO-8' is KiCad's _Single, not _Dual
+        return one(ca) != one(cb)
 
     def ep(n, attrs):
         return bool(EP_NAME.search(n) or EP_HINT.search(n) or EP_FAMILY.search(n) or (attrs or {}).get("ep"))

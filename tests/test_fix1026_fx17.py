@@ -40,3 +40,24 @@ def test_fx17_2_kicad_land_names_with_an_odd_metric_code_are_not_held():
                      ("GRM55DR72J224KW01L", "kicad:Inductor_SMD:L_1206_3216Metric_Pad1.22x1.90mm_HandSolder"),
                      ("GRM155R71C104KA88D", "kicad:Capacitor_SMD:C_0603_1608Metric")):
         assert "chip size" in (RC.chip_size_problem(_chip_item(mpn, src)) or ""), (mpn, src)
+
+
+# ---------------------------------------------------------------- R-FX17-3: distributor package aliases are one land
+def test_fx17_3_distributor_aliases_name_the_same_land():
+    """Before (583a195): two names no rule reads were one land only when _norm made them equal, so a distributor's own
+    spelling of the same package held the line. Their aliases are canonicalised first; real differences stay held."""
+    from ecadlib import altium_export as A
+    same = (("TO-252-3, DPak (2 Leads + Tab), SC-63", "TO-252-2"), ("DPAK-3", "TO-252-2"), ("TO-252-2(DPAK)", "TO-252-2"),
+            ("SOT-363-6", "SOT-363_SC-70-6"), ("D2PAK-3", "TO-263-2"), ("TO-263-3, D2Pak (2 Leads + Tab), TO-263AB", "TO-263-2"),
+            ('8-DIP (0.300", 7.62mm)', "DIP-8_W7.62mm"), ("SOIC-Wide-16", "SOIC-16W_7.5x10.3mm"),
+            ("PowerPAK SO-8", "PowerPAK_SO-8_Single"))
+    for a, b in same:
+        assert not A.lands_differ(a, b), (a, b)
+        assert not A.lands_differ(b, a), (b, a)
+    differ = (("TO-263-2", "TO-252-2"), ("SOT-563", "SOT-363_SC-70-6"), ("SOT-563-6", "SOT-363_SC-70-6"),
+              ("TO-247-3", "TO-220-3_Vertical"), ("D2PAK-3", "TO-252-2"), ("DPAK-3", "TO-263-2"), ("TO-252-3", "TO-252-2"),
+              ("TO-252-5, DPak (4 Leads + Tab)", "TO-252-2"), ("SOIC-Wide-16", "SOIC-16_3.9x9.9mm_P1.27mm"),
+              ('8-DIP (0.300", 7.62mm)', "DIP-8_W10.16mm"), ('8-DIP (0.300", 7.62mm)', "DIP-14_W7.62mm"),
+              ("PowerPAK SO-8", "PowerPAK_SO-8_Dual"), ("SOT-363-6", "SOT-23-6"), ("DPAK-3", "TO-252-2_TabPin1"))
+    for a, b in differ:
+        assert A.lands_differ(a, b) and A.lands_differ(b, a), (a, b)
