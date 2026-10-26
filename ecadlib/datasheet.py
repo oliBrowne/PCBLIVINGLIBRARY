@@ -3151,6 +3151,24 @@ def _private(ip):
     return ip.is_private or (ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"))
 
 
+def _nat64_ipv4(ip):
+    """The IPv4 addresses a NAT64 address stands for, or []: on an IPv6-only network (DNS64: hotspots, some corporate
+    and campus Wi-Fi) every IPv4-only host name resolves to one, and Python calls the prefix reserved. The well-known
+    prefix 64:ff9b::/96 carries the address in its last 32 bits (RFC 6052 allows only /96 there). The local-use
+    64:ff9b:1::/48 (RFC 8215) may be split at /48, /56, /64 or /96, and the network's choice is not known here: every
+    such reading is returned, the /96 one first (the usual one), so a dangerous address in any of them is refused."""
+    import ipaddress
+    if ip.version != 6:
+        return []
+    n = int(ip)
+    if ip in ipaddress.ip_network("64:ff9b::/96"):
+        return [ipaddress.IPv4Address(n & 0xFFFFFFFF)]
+    if ip not in ipaddress.ip_network("64:ff9b:1::/48"):
+        return []
+    b = n.to_bytes(16, "big")                         # RFC 6052 2.2: byte 8 (bits 64-71) is never used
+    return [ipaddress.IPv4Address(bytes(x)) for x in (b[12:16], b[6:8] + b[9:11], b[7:8] + b[9:12], b[9:13])]
+
+
 def unsafe_download(url, public=False):
     """Why a datasheet link must not be downloaded, or None: only http(s), and never this machine (loopback), a
     link-local address (cloud metadata at 169.254.169.254) or another non-routable address. A datasheet link comes
@@ -3191,13 +3209,18 @@ def unsafe_download(url, public=False):
                 ips.append(ipaddress.ip_address(a.split("%")[0]))
             except ValueError:
                 continue
-    for ip in ips:
-        ip = getattr(ip, "ipv4_mapped", None) or ip
+    unwrapped = []
+    for ip in ips:                                    # ::ffff:a.b.c.d and NAT64: the IPv4 address it reaches
+        nat = _nat64_ipv4(ip)
+        # (a local-use prefix's other readings: only an address refused for itself; zero padding reads 0.0.0.0)
+        unwrapped += [(a, k == 0) for k, a in enumerate(nat) if k == 0 or a != ipaddress.IPv4Address(0)] if nat else \
+            [(getattr(ip, "ipv4_mapped", None) or ip, True)]
+    for ip, main in unwrapped:
         if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved:
             return f"{host} is this machine, a link-local or a reserved address"
         if ip in _METADATA_IPS:
             return f"{host} is a cloud metadata service's address"
-        if public and _private(ip):
+        if public and main and _private(ip):
             return f"{host} is a private network's address (a web search's link: only public sites)"
     return None
 
