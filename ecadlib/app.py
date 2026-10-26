@@ -1089,8 +1089,13 @@ class Workspace:
         return self.rel(dest)
 
     def altium365_workspaces(self):
+        """The workspaces the token sees, each marked `configured` when it is the one the rules name ([altium365]
+        workspace): the only one a real push goes to. `configured` at the top: that URL, or "" when none is set."""
         from . import altium365 as A
-        return {"workspaces": A.Nexar(_nexar_token()).workspaces()}
+        conf = str((self.rules().get("altium365") or {}).get("workspace") or "").strip()
+        got = [dict(w, configured=bool(conf) and A.ws_target(w.get("url")) == A.ws_target(conf))
+               for w in A.Nexar(_nexar_token()).workspaces()]
+        return {"workspaces": got, "configured": conf, "rules": self._label(self.rules_in_use() or self.rules_file())}
 
     def altium365_push(self, bom, workspace_url, dry_run=True):
         """Release ready parts and update parameters of existing ones; parts the release check held are left

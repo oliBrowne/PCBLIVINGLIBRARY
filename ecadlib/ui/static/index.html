@@ -827,11 +827,23 @@ let planned = null;
 $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async () => {
   planned = await api("/api/altium365/plan", { bom: current.bom });
   $("#dry").disabled = false; $("#dry").title = "";
+  let wsNote = "";
   if (info.altium365.token) {
     try {
       const w = await api("/api/altium365/workspaces", {});
-      $("#wsurl").innerHTML = w.workspaces.map(x => `<option value="${esc(x.url)}">${esc(x.name)}</option>`).join("");
-      $("#wsurl").hidden = false; $("#push").disabled = !w.workspaces.length || !planned.ready; disabledWhy();
+      // a real push goes only to the workspace the rules name ([altium365] workspace): preselected; picking another
+      // one is for a dry run, and Push says why it is off instead of failing after the confirm dialog
+      $("#wsurl").innerHTML = w.workspaces.map(x => `<option value="${esc(x.url)}" data-configured="${x.configured ? 1 : ""}"${x.configured ? " selected" : ""}>${esc(x.name)}${x.configured ? " (this library's)" : " (dry run only)"}</option>`).join("");
+      $("#wsurl").hidden = false;
+      const pushable = () => {
+        const o = $("#wsurl").selectedOptions[0];
+        $("#push").disabled = !o || !o.dataset.configured || !planned.ready; disabledWhy();
+        if (!w.configured) $("#push").title = `No Altium 365 workspace is set for this library: add [altium365] workspace = "<its URL>" to ${w.rules} to push (a dry run needs none)`;
+        else if (o && !o.dataset.configured) $("#push").title = `A push goes only to this library's workspace (${w.configured}, [altium365] in ${w.rules}); pick it, or dry-run this one`;
+      };
+      $("#wsurl").onchange = pushable;
+      if (!w.workspaces.some(x => x.configured)) wsNote = `<div class="banner s-warn"><span>${esc(w.configured ? `This library's Altium 365 workspace (${w.configured}) is not one your token can see, so Push is off.` : `No Altium 365 workspace is set for this library ([altium365] workspace in ${w.rules}), so Push is off; Dry run works.`)}</span></div>`;
+      pushable();
     } catch (err) { banner($("#planout"), "Couldn't list Altium 365 workspaces: " + err.message); }
   }
   const why = i => i.status === "held" ? "held: " + ((i.hold_reasons || [])[0] || "failed the release check") :
@@ -839,7 +851,7 @@ $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async 
     i.status === "duplicate" ? "duplicate of " + (i.duplicate_of || "?") :
     !i.symbol.file && !i.footprint.file ? "needs symbol and footprint" : !i.symbol.file ? `needs symbol ${i.symbol.ref}.SchLib` : `needs footprint ${i.footprint.ref}.PcbLib`;
   const notReady = planned.total - planned.ready;
-  return `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}` +
+  return wsNote + `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}` +
     `<div class="next s-info"><span>Next: <i>Dry run</i> lists what would be sent, without sending anything.${notReady ? ` The ${notReady} part(s) not ready are skipped; step 2 shows why.` : ""}</span></div>` + `
     <table style="margin-top:6px"><tbody>${planned.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.folder)}</div></td>
     <td>${i.status === "ready" ? '<span class="pill s-ok">ready</span>' : `<span class="pill s-warn">${esc(why(i))}</span>`}</td></tr>`).join("")}</tbody></table>`;

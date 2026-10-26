@@ -176,3 +176,24 @@ def test_a365_released_count_is_the_ready_parts_put_in_the_workspace_only(tmp_pa
 
     pub = AM.publish(WS(), "uploads/x/parts.csv", tmp_path / "lib")
     assert pub["released"] == 1 and set(pub["held"]) == {"P2"}, pub
+
+
+# ---------------------------------------------------------------- R-FX-8: the web UI's Altium 365 workspace list
+@lite
+def test_the_workspace_list_marks_the_configured_workspace_and_the_ui_uses_it(tmp_path, monkeypatch):
+    from pathlib import Path
+    from ecadlib import altium365 as A, app
+    from ecadlib.app import Workspace
+    monkeypatch.setattr(app, "_nexar_token", lambda: "t")
+    monkeypatch.setattr(A.Nexar, "workspaces", lambda self: [{"name": "Other", "url": "https://other.365.altium.com"},
+                                                            {"name": "Acme", "url": "https://ACME.365.altium.com/"}])
+    ws = Workspace(tmp_path / "ws", ["examples/kicad_lib"], providers=["digikey"], offline=True)
+    monkeypatch.setattr(ws, "rules", lambda: {"altium365": {}})
+    r = ws.altium365_workspaces()
+    assert r["configured"] == "" and not any(w["configured"] for w in r["workspaces"]), r
+    monkeypatch.setattr(ws, "rules", lambda: {"altium365": {"workspace": "https://acme.365.altium.com"}})
+    r = ws.altium365_workspaces()
+    assert r["configured"] == "https://acme.365.altium.com", r
+    assert [w["configured"] for w in r["workspaces"]] == [False, True], r
+    page = Path("ecadlib/ui/static/index.html").read_text(encoding="utf-8")
+    assert "x.configured" in page and "w.configured" in page                # preselected; push only to that one
