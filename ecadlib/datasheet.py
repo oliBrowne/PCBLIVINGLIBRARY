@@ -1851,7 +1851,8 @@ def _qfp_rows(spec):
                        "sides, which is implausible (check both spans against the drawing)")
     ep = spec.get("exposed_pad") or {}
     el, ew = _dim(ep.get("length")), _dim(ep.get("width"))
-    if el and ew and abs(el[1] - ew[1]) > 0.05 and (el[1] > ew[1]) != (L[1] > W[1]):   # length on X, as body_length
+    # length on X, as body_length; only a pad at least 10 % longer one way has a long side (8.1 x 8 has none)
+    if el and ew and max(el[1], ew[1]) >= 1.1 * min(el[1], ew[1]) and (el[1] > ew[1]) != (L[1] > W[1]):
         out.append(f"exposed_pad {el[1]:g} x {ew[1]:g} mm runs across the {L[1]:g} x {W[1]:g} mm body (a pad runs with "
                    "the body's long side), which is implausible (check exposed_pad length and width against the body's)")
     return out

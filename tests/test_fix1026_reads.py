@@ -654,6 +654,18 @@ def test_fx8_1_a_rectangular_quad_qfn_row_split_far_off_the_body_fails():
         assert not any("end margins" in w for w in why), (nm, why)
 
 
+
+def test_fx8_2_a_near_square_exposed_pad_across_a_rectangular_qfp_is_not_held():
+    """Before: TQFP-100-1EP 14x20 with an 8.1 x 8 pad (0.1 mm off square) read across the body was held by the L3
+    check; only a pad at least 10 % longer one way has a long side to run with the body."""
+    t = {"name": "TQFP-100-1EP_14x20mm_P0.65mm", "n": 100, "e": 0.65, "bl": 14, "bw": 20, "ls": 16, "lsy": 22,
+         "nlr": 30, "ntb": 20, "epl": 8.1, "epw": 8, "b": 0.3}
+    kind, hold, _ = _qfp_read(t)
+    assert kind == "ok" and not hold, (kind, hold)
+    kind, hold, _ = _qfp_read(dict(t, epl=8.9, epw=8))       # 11 % longer across: still a pad read across
+    assert kind == "failed" and hold, kind
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main
