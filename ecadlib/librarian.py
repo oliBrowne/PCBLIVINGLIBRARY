@@ -1410,15 +1410,37 @@ def _fresh_decisions(old, plan_f):
 
 def keep_decisions(items, plan_f):
     """In place: each plan item's decisions as plan.json has them now (a step that read the plan long ago, such as a
-    datasheet batch, must not write back the old ones). Call under _decisions_lock(plan_f)."""
-    by = {i["name"]: i for i in items}
+    datasheet batch, must not write back the old ones). Call under _decisions_lock(plan_f). -> the items whose
+    decisions changed."""
+    by = {i["name"]: i for i in items if isinstance(i, dict) and i.get("name")}
+    changed = []
     for n, fresh in _fresh_decisions(dict(by), plan_f).items():
         it = by[n]
+        was = {k: it.get(k) for k in DECISIONS}
         for k in DECISIONS:
             if k in fresh:
                 it[k] = fresh[k]
             else:
                 it.pop(k, None)
+        if was != {k: it.get(k) for k in DECISIONS}:
+            changed.append(it)
+    return changed
+
+
+def save_plan(plan_f, items, rules=None, keep=None):
+    """Write a librarian plan that a step read earlier (change control's `ecadlib part approve`, a publisher's settle,
+    `ecadlib style apply`) while other front ends may record decisions into it (the web UI's Approvals, `ecadlib
+    approve`, release anyway): under the plan lock, each part's decisions are taken as plan.json has them now, and a
+    part whose decisions changed meanwhile gets the release check again, so a reject recorded meanwhile leaves it
+    not ready. keep(item): which items go into the file (default all). Written atomically."""
+    from . import release_check as RC
+    plan_f = Path(plan_f)
+    with _decisions_lock(plan_f):
+        changed = keep_decisions(items, plan_f)
+        if changed:
+            RC.apply(changed, plan_f.parent, rules=rules)
+        write_text_atomic(plan_f, json.dumps([i for i in items if keep is None or keep(i)], indent=2))
+    return changed
 
 
 def main(argv=None):

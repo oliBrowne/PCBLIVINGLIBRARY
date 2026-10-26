@@ -970,7 +970,8 @@ def main(argv=None):
               ([(f"ecadlib review {a.plan}", "the held parts")] if any(r["action"] == "held" for r in out["results"]) else []))
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(a.out).write_text(json.dumps(out, indent=2))
+        from .fsutil import write_text_atomic
+        write_text_atomic(Path(a.out), json.dumps(out, indent=2))
     errors = sum(r["action"] == "error" for r in out["results"])
     if errors or (out.get("svn") or {}).get("error"):
         sys.exit(f"{errors} part(s) failed" + (f"; svn: {out['svn']['error']}" if (out.get("svn") or {}).get("error") else ""))

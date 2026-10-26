@@ -437,19 +437,23 @@ def plan_workspace(plan):
 @contextlib.contextmanager
 def cli_plan_lock(plan):
     """For CLI commands that rewrite a workspace plan (<ws>/librarian/<name>/plan.json): wait while the web UI records
-    into it, so neither write is lost. Other plans: no lock."""
+    into it, so neither write is lost. Other plans: no lock. The plan's library lock is taken first (the lock order
+    in fsutil): these commands go on to change-control steps (resolve, release anyway, dedupe merge) that take it, and
+    a plan.lock holder never waits for the library lock."""
     ws = plan_workspace(plan)
     if ws is None:
         yield
         return
+    from . import ledger as LG
     from .fsutil import plan_lock
-    with plan_lock(ws, wait=False) as free:
-        if free:
+    with LG.locked(Path(plan).resolve().parent):
+        with plan_lock(ws, wait=False) as free:
+            if free:
+                yield
+                return
+        print("another ecadlib command is changing this plan; waiting for it to finish ...", file=sys.stderr)
+        with plan_lock(ws, wait=True):
             yield
-            return
-    print("another ecadlib command is changing this plan; waiting for it to finish ...", file=sys.stderr)
-    with plan_lock(ws, wait=True):
-        yield
 
 
 def _run(a):

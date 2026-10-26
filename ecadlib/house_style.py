@@ -1067,15 +1067,8 @@ def _run(a, rules, pf, send):
         more, rejected = adapt_with_model(work, old, rules, a.model, send, only)
         for k, v in more.items():
             done.setdefault(k, []).extend(v)
-    if done and not a.dry_run:                 # change control (#105): a restyle may only change cosmetics
-        from . import change_gate as CG
-        gate = CG.Guard(plan_f.parent, "style-apply", rules=rules)
-        gate.begin(items)
-        for r in gate.restyle(items, work):
-            if r["action"] in ("refused", "hold"):
-                done.pop(r["part"], None)
-                rejected.append(f"{r['part']}: {r['summary']}" + ("" if r["action"] == "refused" else
-                                f" (held for approval: ecadlib part show {plan_f} {r['part']})"))
+    if done and not a.dry_run:                 # change control (#105) and decisions recorded while the model worked
+        work = write_restyled(plan_f, items, work, done, rejected, rules)
     if a.json:
         print(json.dumps({"changes": done, "rejected": rejected, "written": not a.dry_run and bool(done)}, indent=1,
                          ensure_ascii=False))
@@ -1087,13 +1080,60 @@ def _run(a, rules, pf, send):
         for r in rejected:
             print(f"  not applied: {r}")
         print(f"{len(done)} part(s) adapted" + (" (dry run: nothing written)" if a.dry_run else ""))
-    if done and not a.dry_run:
-        bak = plan_f.with_name(plan_f.name + ".style.bak")
-        if not bak.exists():
-            bak.write_text(plan_f.read_text(encoding="utf-8"), encoding="utf-8")
-        from .fsutil import write_text_atomic
-        write_text_atomic(plan_f, json.dumps(work, indent=2))
     return 0
+
+
+def write_restyled(plan_f, start, work, done, rejected, rules=None, held_hint=True):
+    """Write a restyle (`ecadlib style apply`, the web UI / MCP apply_house_style) of the plan read as `start` into
+    `work`. The model call can take minutes, and meanwhile the web UI or `ecadlib approve` may record a reject or an
+    approval, or another command change a part: under the library lock and then the plan lock (the lock order in
+    fsutil) plan.json is read again and each restyled part's new wording goes onto the part as it is NOW (its
+    decisions, status and approval as recorded meanwhile: a part rejected meanwhile stays not ready). A part whose
+    files or fields another command changed meanwhile is not restyled (reported in `rejected`). Then change control:
+    a restyle may only change cosmetics. done / rejected are updated in place. -> the items written"""
+    import copy
+    from . import change_gate as CG, ledger as LG, librarian as L
+    from .fsutil import write_text_atomic
+    plan_f = Path(plan_f)
+    with LG.locked(plan_f.parent), L._decisions_lock(plan_f):
+        try:
+            fresh = json.loads(plan_f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            fresh = copy.deepcopy(start)
+        was, new = {i["name"]: i for i in start}, {i["name"]: i for i in work}
+        out = []
+        for f in fresh:
+            n = f.get("name") if isinstance(f, dict) else None
+            if n not in done:
+                out.append(f)
+            elif n in was and n in new and LG.content_of(was[n]) == LG.content_of(f):
+                it = copy.deepcopy(f)
+                LG.apply_content(it, LG.content_of(new[n]))
+                if "house_style" in new[n]:
+                    it["house_style"] = new[n]["house_style"]
+                out.append(it)
+            else:
+                done.pop(n, None)
+                out.append(f)
+                rejected.append(f"{n}: changed by another ecadlib command while this ran: not restyled (run style apply "
+                                f"again)")
+        names = {i.get("name") for i in out if isinstance(i, dict)}
+        for n in [n for n in done if n not in names]:
+            done.pop(n)                        # removed from the plan meanwhile
+        if done:
+            gate = CG.Guard(plan_f.parent, "style-apply", rules=rules)
+            gate.begin(fresh)
+            for r in gate.restyle(fresh, out):
+                if r["action"] in ("refused", "hold"):
+                    done.pop(r["part"], None)
+                    rejected.append(f"{r['part']}: {r['summary']}" + ("" if r["action"] == "refused" or not held_hint else
+                                    f" (held for approval: ecadlib part show {plan_f} {r['part']})"))
+        if done:
+            bak = plan_f.with_name(plan_f.name + ".style.bak")
+            if not bak.exists():
+                bak.write_text(plan_f.read_text(encoding="utf-8"), encoding="utf-8")
+            write_text_atomic(plan_f, json.dumps(out, indent=2))
+    return out
 
 
 if __name__ == "__main__":

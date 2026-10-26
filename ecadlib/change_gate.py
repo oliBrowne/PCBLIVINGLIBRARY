@@ -972,9 +972,13 @@ def read_plan(folder):
         return []
 
 
-def write_plan(plan, items):
-    from .fsutil import write_text_atomic
-    write_text_atomic(Path(plan), json.dumps([i for i in items if not i.get("_manifest")], indent=2))
+def write_plan(plan, items, rules=None):
+    """Write plan.json from items a change-control step read earlier (it holds the library lock, not the plan lock, while
+    it works): the web UI's Approvals or `ecadlib approve` may have recorded a decision meanwhile. Under the plan lock
+    (taken second: the lock order in fsutil) those decisions are kept and such a part's status re-checked
+    (librarian.save_plan). The kicad_import parts library_items adds (_manifest) stay out."""
+    from .librarian import save_plan
+    save_plan(Path(plan), items, rules=rules, keep=lambda i: not i.get("_manifest"))
 
 
 def publish_guard(plan, items, target, rules=None, user=None, log=None, base=None, save=True):
@@ -995,7 +999,7 @@ def publish_guard(plan, items, target, rules=None, user=None, log=None, base=Non
     try:                                       # under the library lock: parallel publishers settle one at a time
         g.finish(items)
         if save and plan.suffix.lower() == ".json" and json.dumps(items, sort_keys=True, default=str) != before:
-            write_plan(plan, items)
+            write_plan(plan, items, rules=rules)
         out = {}
         for it in items:
             head = g.ledger.head(it["name"])

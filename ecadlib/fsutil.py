@@ -122,12 +122,26 @@ def read_ini_text(path):
         return data.decode("latin-1"), "latin-1"      # any byte, written back unchanged
 
 
+_HELD = threading.local()                # plan.lock folders this thread holds (plan_lock is re-entrant per thread)
+
+
+# Lock order (two locks guard a librarian plan): the library lock (ledger.locked(<plan folder>), held by change-control
+# writers from their begin() to their end, and by publishers) is taken FIRST, <workspace>/plan.lock SECOND, and only
+# for the short read-merge-write of plan.json. A plan.lock holder never waits for the library lock: a command that
+# needs both takes the library lock before plan.lock (approvals.cli_plan_lock, Workspace._plan_lock with a folder),
+# so a librarian run (library lock, then plan.lock) and a web UI / CLI decision can never wait for each other.
 @contextlib.contextmanager
 def plan_lock(workspace_root, wait=True):
     """<workspace>/plan.lock: every path that records into a plan (the web UI's Approvals page / approve_part, change
     decisions, `ecadlib approve`) takes it while it rewrites plan.json, so two of them never overwrite each other.
-    wait=False yields False at once when it is held. Not re-entrant. Released by the OS if the holder dies."""
+    wait=False yields False at once when another thread or process holds it. Re-entrant in one thread (an inner plan
+    write under an outer lock does not wait for itself); other threads and processes are kept out. Released by the
+    OS if the holder dies. See the lock order above."""
     d = Path(workspace_root).resolve()
+    held = _HELD.__dict__.setdefault("dirs", set())
+    if d in held:
+        yield True
+        return
     d.mkdir(parents=True, exist_ok=True)
     f = open(d / "plan.lock", "a+b")
     msvcrt = None
@@ -145,9 +159,13 @@ def plan_lock(workspace_root, wait=True):
             got = False
         else:
             got = True
+        if got:
+            held.add(d)
         try:
             yield got
         finally:
+            if got:
+                held.discard(d)
             if msvcrt is not None and got:                      # Windows frees a lock left on a closed file late
                 try:
                     f.seek(0)

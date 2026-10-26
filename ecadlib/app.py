@@ -466,7 +466,8 @@ class Workspace:
         else:
             items = A.plan(lines, self._triage_frame(bom_path), self.models, rules=self.rules())
             out = self.root / "altium365" / f"plan_{self._key(bom_path)}.json"
-            out.write_text(json.dumps(items, indent=2), encoding="utf-8")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            write_text_atomic(out, json.dumps(items, indent=2))
             src = "triage"
         ready = sum(i["status"] == "ready" for i in items)
         return {"items": items, "ready": ready, "total": len(items), "plan": self.rel(out), "source": src}
@@ -568,7 +569,7 @@ class Workspace:
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
         failures (allow) or taking that back (unallow). user, when given, is recorded as the person who gave the
         allow (approvals' no_self_approval uses it). Never touches the network."""
-        with self._plan_lock():
+        with self._plan_lock(bom):
             return self._release_check(bom, allow, unallow, user)
 
     def _release_check(self, bom, allow=(), unallow=(), user=None):
@@ -600,16 +601,38 @@ class Workspace:
         L.write_review(L.review_rows(items), out, str(bom_path))
         return self._librarian_summary(bom_path, items, [])
 
+    LIBRARY_LOCK_WAIT = 5                              # seconds a UI request waits for a library another run is changing
+
     @contextlib.contextmanager
-    def _plan_lock(self):
-        """<workspace>/plan.lock around a plan rewrite (not re-entrant: locked methods call the unlocked _bodies): while
-        another ecadlib command rewrites the plan, a change written now would be overwritten by its copy, so it is
-        refused instead."""
+    def _plan_lock(self, bom=None, folder=None):
+        """<workspace>/plan.lock around a plan rewrite (locked methods call the unlocked _bodies): while another ecadlib
+        command rewrites the plan, a change written now would be overwritten by its copy, so it is refused instead.
+        bom / folder: the rewrite goes on to change-control steps (release anyway, resolve, dedupe merge, restyle, part
+        approve), so that plan's library lock is taken first (the lock order in fsutil); a run holding it (a librarian
+        run, a publisher) refuses the request after a few seconds instead of a wait with plan.lock held."""
         from .fsutil import plan_lock
-        with plan_lock(self.root, wait=False) as free:
-            if not free:
-                raise ValueError("another ecadlib command is changing this plan right now; try again in a minute")
+        if folder is None and bom is not None:
+            folder = self._librarian_dir(self._bom_path(bom))
+        with self._library_lock(folder):
+            with plan_lock(self.root, wait=False) as free:
+                if not free:
+                    raise ValueError("another ecadlib command is changing this plan right now; try again in a minute")
+                yield
+
+    @contextlib.contextmanager
+    def _library_lock(self, folder):
+        from . import ledger as LG
+        if folder is None or not (Path(folder) / "plan.json").is_file():
             yield
+            return
+        try:
+            key = LG.lock(folder, wait=self.LIBRARY_LOCK_WAIT)
+        except LG.LedgerError:
+            raise ValueError("another ecadlib command is changing this library right now; try again in a minute") from None
+        try:
+            yield
+        finally:
+            LG.unlock(key)
 
     def _librarian_summary(self, bom_path, items, log):
         from . import librarian as L, reports as RP
@@ -701,7 +724,7 @@ class Workspace:
         the librarian's models folder, then re-run the release check and rewrite the review / release-check reports.
         pin_map {symbol pin: pad} remaps pin numbers. Returns the librarian summary plus `chosen`. approve=False: the
         choice is not an approval of a change to a released part (resolve.choose), which is then held."""
-        with self._plan_lock():
+        with self._plan_lock(bom):
             return self._choose_part(bom, part, kind, candidate_id, pin_map, user, approve)
 
     def _choose_part(self, bom, part, kind, candidate_id, pin_map=None, user=None, approve=True):
@@ -789,7 +812,7 @@ class Workspace:
         """Duplicate parts (same MPN), footprints (same geometry) and symbols (same pinout) across the librarian plan
         and the workspace's altium_models/ and footprints/. merge=True points duplicates at their keeper in the plan
         (library files are never changed; plan.json.pre-dedupe keeps the old plan) and re-runs the release check."""
-        with self._plan_lock() if merge else contextlib.nullcontext():
+        with self._plan_lock(bom) if merge else contextlib.nullcontext():
             return self._find_duplicates(bom, merge)
 
     def _find_duplicates(self, bom, merge=False):
@@ -988,16 +1011,13 @@ class Workspace:
         approve / reject`). An approval names the digest of the held change the person was shown (the part card's
         change.digest); a change proposed again since is refused. Holds the plan lock like approve_part."""
         from . import change_cli as CC, change_gate as CG
-        from .fsutil import plan_lock
         if decision not in ("approve", "reject"):
             raise ValueError("decision must be approve or reject")
         if decision == "approve" and not str(digest or "").strip():
             raise ValueError("digest is required: the digest of the held change shown to you (reload the part to see it)")
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
-        with plan_lock(self.root, wait=False) as free:
-            if not free:
-                raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
+        with self._plan_lock(folder=plan_f.parent):    # the library lock, then plan.lock (CC writes under both)
             try:
                 res = (CC.approve(plan_f, [part], user, comment or "", role, {part: str(digest)}) if decision == "approve"
                        else CC.reject(plan_f, [part], user, comment or ""))
@@ -1008,16 +1028,13 @@ class Workspace:
     def revert_part(self, bom, part, revision, user, comment=""):
         """Release an older revision of a part again, as a new revision (`ecadlib part revert PART@REV`)."""
         from . import change_cli as CC, change_gate as CG
-        from .fsutil import plan_lock
         try:
             revision = int(revision)
         except (TypeError, ValueError):
             raise ValueError("revision must be a number") from None
         _, plan_f, items = self._plan(bom)
         self._part(items, part)
-        with plan_lock(self.root, wait=False) as free:
-            if not free:
-                raise ValueError("another ecadlib command is changing this plan right now; try again in a minute")
+        with self._plan_lock(folder=plan_f.parent):
             try:
                 res = CC.revert(plan_f, f"{part}@{revision}", user, comment or "")
             except CG.ChangeError as e:
@@ -1272,41 +1289,30 @@ class Workspace:
         (restyle_quote); with the amount the person approved, the model is asked (dry run or not)."""
         from . import house_style as HS
         prof = self._style_or_raise()
-        with self._plan_lock():
-            _, plan_f, items = self._plan(bom)
-            only = {part} if part else None
-            done = HS.adapt_items(items, prof, self.rules(), only)
-            rejected = []
-            quote = None
-            if ai:
-                from . import ai_cost as AC
-                if self.offline:
-                    raise ValueError("--offline: the model is not asked; run without --offline to reword with it")
-                quote = self.restyle_quote(items, prof, model, only)
-                if approved_usd is None and not (price_unknown_ok and not quote["price_known"]):
-                    return {"changes": done, "rejected": [], "written": False, "plan": self.rel(plan_f), "ai": quote,
-                            "text": "the model was not asked: approve the quote (approved_usd) to have it reword the parts"}
-                if not quote["key_set"]:
-                    raise ValueError(quote["text"])
-                AC.approve(quote, approved_usd, over_limit_ok, price_unknown_ok)
-                more, rejected = HS.adapt_with_model(items, prof, self.rules(), model, only=only)
-                for k, v in more.items():
-                    done.setdefault(k, []).extend(v)
-            if done and not dry_run:              # change control (#105): a restyle may only change cosmetics
-                from . import change_gate as CG
-                before = json.loads(plan_f.read_text(encoding="utf-8"))
-                gate = CG.Guard(plan_f.parent, "style-apply", rules=self.rules())
-                gate.begin(before)
-                for r in gate.restyle(before, items):
-                    if r["action"] in ("refused", "hold"):
-                        done.pop(r["part"], None)
-                        rejected.append(f"{r['part']}: {r['summary']}")
-            if done and not dry_run:
-                bak = plan_f.with_name(plan_f.name + ".style.bak")
-                if not bak.exists():
-                    bak.write_text(plan_f.read_text(encoding="utf-8"), encoding="utf-8")
-                from .fsutil import write_text_atomic
-                write_text_atomic(plan_f, json.dumps(items, indent=2))
+        import copy
+        _, plan_f, items = self._plan(bom)
+        start = copy.deepcopy(items)
+        only = {part} if part else None
+        done = HS.adapt_items(items, prof, self.rules(), only)
+        rejected = []
+        quote = None
+        if ai:
+            from . import ai_cost as AC
+            if self.offline:
+                raise ValueError("--offline: the model is not asked; run without --offline to reword with it")
+            quote = self.restyle_quote(items, prof, model, only)
+            if approved_usd is None and not (price_unknown_ok and not quote["price_known"]):
+                return {"changes": done, "rejected": [], "written": False, "plan": self.rel(plan_f), "ai": quote,
+                        "text": "the model was not asked: approve the quote (approved_usd) to have it reword the parts"}
+            if not quote["key_set"]:
+                raise ValueError(quote["text"])
+            AC.approve(quote, approved_usd, over_limit_ok, price_unknown_ok)
+            more, rejected = HS.adapt_with_model(items, prof, self.rules(), model, only=only)
+            for k, v in more.items():
+                done.setdefault(k, []).extend(v)
+        if done and not dry_run:                  # the plan as it is now, its decisions kept; change control (#105)
+            with self._plan_lock(bom):            # (the model call above holds no lock: decisions go on meanwhile)
+                HS.write_restyled(plan_f, start, items, done, rejected, self.rules(), held_hint=False)
         r = {"changes": done, "rejected": rejected, "written": bool(done) and not dry_run, "plan": self.rel(plan_f)}
         if quote:
             r["ai"] = quote

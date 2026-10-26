@@ -781,7 +781,10 @@ def main(argv=None):
                         i[k]["file"] = os.path.relpath(i[k]["file"], out.parent.resolve()).replace(os.sep, "/")
                     except ValueError:         # another drive on Windows: keep it absolute
                         i[k]["file"] = Path(i[k]["file"]).resolve().as_posix()
-        out.write_text(json.dumps(items, indent=2))
+        from .approvals import cli_plan_lock    # a workspace plan: the web UI may be recording into it right now
+        from .fsutil import write_text_atomic
+        with cli_plan_lock(out):
+            write_text_atomic(out, json.dumps(items, indent=2))
         ready = sum(i["status"] == "ready" for i in items)
         print(f"{len(items)} components planned, {ready} with models, {len(items) - ready} need Altium models -> {out}")
         if ready:                              # `ready` = the files are there; push checks them before it releases

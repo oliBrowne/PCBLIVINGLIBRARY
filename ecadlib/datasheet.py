@@ -2514,9 +2514,9 @@ def write(res, outdir):
     if own.exists() or isinstance(other, dict) and "package_type" in other and other != json.loads(json.dumps(res["spec"])):
         spec_f = d / f"{spec_stem}.{part}.json"       # kept apart: ecadlib fp-edit reads this part's own
     paths = {"spec": spec_f, **paths}
-    for k in ("spec", "symbol", "sidecar"):
-        paths[k].write_text(json.dumps(res[k], indent=2) + "\n", encoding="utf-8")
-    paths["report"].write_text(report(res), encoding="utf-8")
+    for k in ("spec", "symbol", "sidecar"):          # read back by fp-edit, partview and the web UI: never half written
+        write_text_atomic(paths[k], json.dumps(res[k], indent=2) + "\n")
+    write_text_atomic(paths["report"], report(res))
     return paths
 
 
