@@ -703,9 +703,15 @@ def apply_variant(comps, variant, rules=None):
                     # the alternate's Design Item ID, whatever order the keys come in (not its symbol's LibReference)
                     alt = pick(r"designitemid") or pick(r"libreference|libref") or hit.get("AlternatePart", "")
                     c["variant_note"] = f"alternate part {alt}".strip()
-                    if alt and not alt.startswith("="):
-                        c.update(design_item_id=alt, mpn=alt if c["mpn_source"] in ("DesignItemId", "") else c["mpn"],
-                                 libref=pick(r"libreference") or c["libref"])
+                    alt = "" if alt.startswith("=") else alt
+                    # another part: nothing the base part's parameters / ActiveBOM gave is kept (its MPN, maker, LCSC,
+                    # supplier, datasheet, value, LibRef, GUIDs). The MPN is the alternate's Design Item ID when that
+                    # reads as a part number (or is a DbLib key); otherwise none, and the line holds.
+                    dblib = c["mpn_source"] == "DesignItemId" or c["source_library"].lower().endswith((".dblib", ".svndblib"))
+                    mpn = alt if alt and not _is_vault_id(alt) and (dblib or looks_like_mpn(alt)) else ""
+                    c.update({f: "" for f in DERIVED_FIELDS + ("description", "item_guid", "revision_guid", "vault_guid")})
+                    c.update(design_item_id=alt, mpn=mpn, mpn_source="Alternate", comment=alt, value=alt, alternates=[],
+                             libref=pick(r"libreference") or "", alternate=alt)
             params = dict(c["params"])
             for pv in variant["param_variations"]:
                 if (pv["unique_id"] and pv["unique_id"].rsplit("\\", 1)[-1] in uids and (not c.get("channel") or pv["designator"] in ("", c["designator"]))) or (not pv["unique_id"] and pv["designator"] == c["designator"]):
@@ -732,6 +738,8 @@ def _group_key(c):
     from .dedupe import mpn_key
     if c["mpn"]:
         return "MPN:" + mpn_key(c["mpn"])
+    if c.get("mpn_source") == "Alternate":            # a variant's alternate with no part number: never with the base part
+        return "ALT:" + (c["design_item_id"] or "?" + c["designator"]).upper()
     if c["design_item_id"]:
         return "ID:" + c["design_item_id"].upper()
     return "LIB:" + "|".join(x.upper() for x in (c["libref"], c["value"], c["footprint"]))
@@ -792,6 +800,12 @@ def bom_lines(path, variant=None, rules=None, root=None):
                 ln[f"altium_{k}"] = g[k]
         if g.get("mpn_source") == "Comment":
             ln["altium_mpn_source"] = "Comment"
+        elif g.get("mpn_source") == "Alternate":
+            alt = g.get("design_item_id") or "(not named)"
+            ln["altium_mpn_source"] = "Alternate"
+            ln["bom_note"] = (f"variant alternate part {alt}: MPN taken from its Design Item ID; check it" if g.get("mpn") else
+                              f"variant alternate part {alt}: no part number for it (the base part's MPN and maker "
+                              "are not used); set the alternate's MPN parameter in the variant")
         lines.append(ln)
     if not lines:
         raise ValueError(f"{Path(path).name}: no components found in the project's schematics")

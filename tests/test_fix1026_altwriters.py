@@ -42,6 +42,44 @@ def _lines(prj, variant, rules=None):
 
 
 @lite
+def test_alternate_part_never_keeps_the_base_mpn_and_maker(tmp_path):
+    """R-AW-1: Kind=2 swaps U1 for MCP6002T-I/SN; the base MPN came from a parameter, so the variant line kept LM358DR /
+    TI / C7950 next to the alternate's Design Item ID. The variant line must name the alternate and carry none of the
+    base part's maker / LCSC / supplier data, with a note that says where the MPN came from."""
+    prj = _project(tmp_path, "Designator=U1|UniqueId=\\ABCDEFGH|Kind=2|AlternatePart=MCP6002T-I/SN")
+    ln = _lines(prj, "V2")[0]
+    assert ln["mpn"] == "MCP6002T-I/SN", ln
+    assert not ln.get("manufacturer") and not ln.get("lcsc") and not ln.get("datasheet"), ln
+    assert not ln.get("altium_supplier_pn") and not ln.get("altium_lifecycle"), ln
+    assert ln.get("value") != "LM358DR", ln
+    assert ln.get("altium_mpn_source") == "Alternate" and "alternate" in ln.get("bom_note", ""), ln
+    base = _lines(prj, None)[0]                      # the base BOM is unchanged
+    assert base["mpn"] == "LM358DR" and base["manufacturer"] == "TI" and base["lcsc"] == "C7950", base
+
+
+@lite
+def test_alternate_part_that_is_not_a_part_number_holds(tmp_path):
+    """R-AW-1: an alternate known only by a vault id (or nothing) gives no MPN: the line has no MPN (held), never the
+    base part's."""
+    for alt in ("AlternatePart=CMP-1035-02800-1", "AlternatePart="):
+        prj = _project(tmp_path, f"Designator=U1|UniqueId=\\ABCDEFGH|Kind=2|{alt}")
+        ln = _lines(prj, "V2")[0]
+        assert not ln.get("mpn") and not ln.get("manufacturer") and not ln.get("lcsc"), (alt, ln)
+        assert ln.get("value") != "LM358DR", (alt, ln)
+        assert not ln.get("libref"), (alt, ln)       # the base LibRef could be read as a part number
+        assert "alternate" in ln.get("bom_note", ""), (alt, ln)
+
+
+@lite
+def test_alternate_then_param_variation_sets_the_alternate_mpn(tmp_path):
+    """Kind=2 plus a Manufacturer variation: the alternate's maker is the varied one, the base LCSC is still dropped."""
+    prj = _project(tmp_path, "Designator=U1|UniqueId=\\ABCDEFGH|Kind=2|AlternatePart=MCP6002T-I/SN",
+                   [("Manufacturer", "Microchip")])
+    ln = _lines(prj, "V2")[0]
+    assert ln["mpn"] == "MCP6002T-I/SN" and ln["manufacturer"] == "Microchip" and not ln.get("lcsc"), ln
+
+
+@lite
 def test_param_variation_rederives_every_field(tmp_path):
     """R-AW-2: a variant that sets MPN, Manufacturer, LCSC, supplier PN, datasheet and lifecycle: every one of them
     reaches the variant line (only the MPN / comment / value did; maker and LCSC stayed TI / C7950)."""
