@@ -79,6 +79,8 @@ def ask(job, inf, send, judge, client=None, allow_feedback=True, guard=None):
                 msg = msg2 if _better(kind, why, kind2, why2) else dict(msg, usage=msg2["usage"])
             except DatasheetError as e:
                 rec["feedback"] = {"errors": why[:15], "before": kind, "after": f"error: {e}", "kept": "first"}
+                if getattr(e, "maybe_billed", False):  # a redo the API may still have run and billed (a timeout): the
+                    rec["feedback"]["maybe_billed"] = True   # Reader keeps its hold and books it (review R-CE-3)
                 if getattr(e, "usage", None):         # the redo's billed calls count, kept answer or not
                     msg = dict(msg, usage=R.add_usage(usage, e.usage))
         rec["steps"] = [{k: v for k, v in s.items() if k != "model_served"} for s in steps]

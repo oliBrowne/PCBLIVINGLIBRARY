@@ -92,3 +92,56 @@ def test_spelled_out_swap_fails_the_scorer_on_a_big_symbol():
     assert S.score_symbol(mine, ref)["symbol_names"]["ok"]
 
 
+# ---------------------------------------------------------------- R-CE-3: a maybe-billed split_steps redo
+def test_a_maybe_billed_redo_is_marked_and_keeps_its_hold():
+    from ecadlib.llm import run as LR
+    from tests import test_llm as TL
+    from tests.test_hunt1026_costfetch import _steps_body
+    u = {"input_tokens": 1000, "output_tokens": 200}
+    p = {"rails": ["split_steps", "json_repair", "schema_in_prompt", "feedback_retry"], "tier": "small",
+         "guided": True, "assist": "auto"}
+    prof = {"context": 8192, "pdf": False, "vision": False, "json_schema": False}
+    answers = [TL.IDENT, TL.DIMS, TL.PINS]
+
+    class Seq:
+        def messages(self, body, headers=None):
+            if not answers:                           # the redo: a read timeout, the API may have run it
+                e = D.APIError("API request failed: ReadTimeout (may have been billed)")
+                e.maybe_billed = True
+                raise e
+            return {"content": [{"type": "text", "text": json.dumps(answers.pop(0))}], "stop_reason": "end_turn",
+                    "usage": u}
+    inf = {"plan": p, "prof": prof, "ep": {"name": "x", "provider": "openai-compatible"}}
+    msg = LR.ask({"body": _steps_body(), "part": "TESTPART", "package": None}, inf, None,
+                 lambda m: ("failed", ["symbol: pin count"]), Seq(), allow_feedback=True, guard=lambda b: None)
+    assert msg["ecadlib"]["feedback"].get("maybe_billed") is True, msg["ecadlib"]["feedback"]
+
+    # the Reader: the first answer's hold gives way to its usage, the redo's hold (the last, the feedback guard's) stays
+    # and is booked in cost.jsonl as maybe billed
+    with tempfile.TemporaryDirectory() as d:
+        rd = D.Reader(Path(d) / "o", Path(d) / "c", key=KEY, log=None, sleep=lambda s: None)
+        model = "claude-opus-5-5"
+        msg = {"type": "message", "model": model, "stop_reason": "end_turn", "content": [{"type": "text", "text": ""}],
+               "usage": {"input_tokens": 10000, "output_tokens": 1000},
+               "ecadlib": {"feedback": {"after": "error: ReadTimeout", "maybe_billed": True}}}
+        rd._holds["k"], rd.committed_usd = [3.0, 1.25], 4.25
+        from ecadlib import ds_route as DR
+        usd = DR.usage_usd(model, msg["usage"])
+        try:
+            rd._store({"key": "k", "part": "TESTPART", "model": model}, msg, "sync")
+        except D.DatasheetError:
+            pass                                      # an empty answer: what it cost is what this test is about
+        assert abs(rd.committed_usd - (usd + 1.25)) < 1e-9, (rd.committed_usd, usd)
+        led = [json.loads(x) for x in (rd.dir / "cost.jsonl").read_text(encoding="utf-8").splitlines()]
+        mb = [x for x in led if x.get("how") == "maybe billed"]
+        assert len(mb) == 1 and mb[0]["usd"] == 1.25 and mb[0].get("purpose") == "feedback", led
+        # no redo flag: the whole hold gives way to the usage, as before
+        rd._holds["k2"], rd.committed_usd = [3.0, 1.25], 4.25
+        plain = dict(msg, ecadlib={"feedback": {"after": "error: x"}})
+        try:
+            rd._store({"key": "k2", "part": "TESTPART", "model": model}, plain, "sync")
+        except D.DatasheetError:
+            pass
+        assert abs(rd.committed_usd - usd) < 1e-9, rd.committed_usd
+
+

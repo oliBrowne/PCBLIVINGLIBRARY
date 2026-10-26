@@ -4452,7 +4452,11 @@ class Reader:
                 return None
             wider = "more pages" if nx[1] != job["level"] else ""
             return ", ".join(x for x in (self.router.ladder[nx[0]] if nx[0] != job["rung"] else "", wider) if x)
-        self._settle(job["key"], model, msg, via)
+        kept = self._settle(job["key"], model, msg, via)
+        if kept:                                      # the maybe-billed redo: a ledger line at its worst case, as for
+            self._holds[job["key"]] = [kept]          # any request that may have been billed (taken over by the line)
+            self._maybe_billed(job, job["key"], model, ((msg.get("ecadlib") or {}).get("feedback") or {}).get("after"),
+                               "feedback")
         try:
             if error is not None:
                 raise error
@@ -4827,7 +4831,14 @@ class Reader:
                            batch=str(via or "").startswith("batch"))                  # the cost ledger prices it
         if usd is None:                               # no price, or no usage block: the real cost is unknown
             return
-        self.committed_usd = max(0.0, self.committed_usd - sum(self._holds.pop(key)) + usd)
+        holds = self._holds.pop(key)
+        # a feedback redo that failed with no answer but may have been billed (llm.run: a timeout on the redo) is not
+        # in the usage block: its own hold, the last one taken (the feedback guard's), stays and is returned so the
+        # caller books it in cost.jsonl as maybe billed (review R-CE-3)
+        fb = ((msg or {}).get("ecadlib") or {}).get("feedback") or {}
+        kept = holds[-1] if fb.get("maybe_billed") and len(holds) > 1 else 0.0
+        self.committed_usd = max(0.0, self.committed_usd - sum(holds) + usd + kept)
+        return kept
 
     def _release(self, key, e=None):
         """A request that got no answer and is not billed (an HTTP error response, no connection made, or a batch
