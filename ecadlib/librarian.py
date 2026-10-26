@@ -505,6 +505,8 @@ class Run:
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
+        if ln.get("altium_mpn_source") == "Alternate" and ln.get("footprint"):   # alternate_footprint: the land
+            st["alternate"] = True                     # is the base part's until the alternate's own read says so
         both = two_readings(ln.get("value"))
         if both:                                             # '4,700pF': 4.7 pF or 4.7 nF, so a person says which
             st["verify"].append(f"value {ln['value'].strip()} reads two ways: {both[0]} or {both[1]}; write it without the comma")
@@ -884,6 +886,12 @@ class Run:
             st["tried"].extend(edited)
             st["review"].extend(edited)
         from . import stdparts as SP
+        if st.get("alternate"):                       # a variant's alternate: the package its own datasheet names
+            try:
+                known = list(res["sidecar"].get("package_from_pdf") or [])
+                st["alt_read_package"] = SP.identify(res["spec"], known[0] if len(known) == 1 else None)[0]
+            except Exception:                         # a read stdparts cannot judge names nothing
+                st["alt_read_package"] = None
         other = [r for r in res["needs_review"] if r.startswith("datasheet from your folder:")]   # another file's PDF
         st["review"].extend(other)
         st["verify"].extend(other)                    # its own hold reason: a person confirms this PDF is this part's
@@ -949,6 +957,7 @@ class Run:
             h = F.dim((res["spec"] if hs == "datasheet height_max" else sp)["height_max"])[2] if hs else None   # this part's own height first
             need_pins()
             self.put_fp(st, text, fp_name, f"standard:{SP.kicad_ref(pkg)}", None, h, hs or "", sp)
+            st["alt_own_land"] = bool(st.get("alternate"))   # from the alternate's own read, not the base part's name
             got.append(f"footprint {SP.kicad_ref(pkg)} (identified from the read)")
             st["review"].append(f"standard land: the datasheet read identified {pkg} ({found}); {why}, so the checked standard "
                                 f"land was used. Check the package code on the drawing is this one")
@@ -969,6 +978,7 @@ class Run:
             h = F.dim(res["spec"]["height_max"])[2] if res["spec"].get("height_max") else None
             need_pins()
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max", res["spec"])
+            st["alt_own_land"] = bool(st.get("alternate"))
             got.append("footprint")
         need_pins()
         if not st["symbol"]:
@@ -1122,6 +1132,39 @@ def write_notice(out, items):
     return f
 
 
+ALTERNATE = "variant alternate part"
+
+
+def alternate_footprint(ln, st):
+    """A project variant's alternate part (Kind=2, altium_project.apply_variant) keeps the base part's footprint:
+    Altium's variation names no footprint for the alternate, and alternates usually share the land. When it does
+    not (LM358DR SOIC-8 -> MCP6002T-I/MS, an MSOP), the part would be built on the wrong land, so the line is held
+    for a person unless the alternate's own data confirms the land: its footprint was built from its own datasheet
+    read, a person chose it (`ecadlib resolve`), or its datasheet read names the same checked package as the
+    inherited footprint (stdparts.identify == stdparts.footprint_for). -> (verify line, review line); (None, None)
+    for any other line."""
+    from . import stdparts as SP
+    fp = str(ln.get("footprint") or "").strip()
+    if ln.get("altium_mpn_source") != "Alternate" or not fp:
+        return None, None
+    mpn, rec = ln.get("mpn") or "(no part number)", st.get("footprint") or {}
+    if rec.get("chosen"):
+        return None, f"{ALTERNATE} {mpn}: footprint chosen by a person"
+    if st.get("alt_own_land") and str(rec.get("source") or "").startswith(("datasheet:", "standard:")):
+        return None, f"{ALTERNATE} {mpn}: footprint built from its own datasheet read, not the base part's {fp}"
+    try:
+        want = SP.footprint_for([fp])[0]
+    except Exception:
+        want = None
+    own = st.get("alt_read_package")
+    if want and own == want:
+        return None, (f"{ALTERNATE} {mpn}: the base part's footprint {fp} kept: {mpn}'s datasheet read names the same "
+                      "package")
+    return (f"{ALTERNATE} {mpn}: footprint {fp} is the base part's (an Altium variant names no footprint for its "
+            "alternate)" + (f", and {mpn}'s datasheet read names {own}" if own else "") +
+            f": check {mpn} comes in that package, or give the alternate its own footprint"), None
+
+
 def apply_state(item, st, ln):
     """Copy a part's state into its plan item: model files, sources, filled-in fields, what was tried."""
     for k in ("symbol", "footprint"):
@@ -1173,12 +1216,16 @@ def apply_state(item, st, ln):
             item["description"], fields["Description"] = desc, "the BOM line's value and package"
     item["field_sources"] = fields
     item["verify"] = list(st.get("verify", []))
+    alt_hold, alt_note = alternate_footprint(ln or {}, st)
+    if alt_hold:
+        item["verify"].append(alt_hold)
     if st.get("cross_check"):                     # ecadlib.crosscheck: agreed / disagreed (held) / unchecked / skipped
         item["cross_check"] = dict(st["cross_check"])
     else:
         item.pop("cross_check", None)
     item["librarian"] = {"tried": st.get("tried", []),
-                         "review": list(dict.fromkeys(st.get("review", []) + item.get("bom_notes", []))),
+                         "review": list(dict.fromkeys(st.get("review", []) + item.get("bom_notes", []) +
+                                                      ([alt_note] if alt_note else []))),
                          "notes": [n for k in ("symbol", "footprint") for n in (st.get(k) or {}).get("notes", [])]}
 
 

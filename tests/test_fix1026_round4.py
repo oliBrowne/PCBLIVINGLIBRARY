@@ -245,3 +245,67 @@ def test_a_held_read_that_a_pad_table_edit_rescues_is_still_cross_checked(monkey
     it, sent = _librarian(_touching_xqfn(), monkeypatch, fp_edit=True)
     assert "check" in sent, sent                      # the edit lifts the geometry hold: the build needs its check
     assert not any(D.HELD_FAILED in t for t in it["librarian"]["tried"]), it["librarian"]["tried"]
+
+
+# ---------------------------------------------------------------- R-FX4-1: a variant alternate's inherited footprint
+@lite
+def test_a_variant_alternate_line_says_its_footprint_is_the_base_parts(tmp_path):
+    from ecadlib import altium_project as AP
+    prj = _project(tmp_path, {"Manufacturer Part Number": "LM358DR", "Manufacturer": "TI"},
+                   "Designator=U1|UniqueId=\\ABCDEFGH|Kind=2|AlternatePart=MCP6002T-I/MS")
+    with contextlib.redirect_stderr(io.StringIO()):
+        base, v2 = AP.bom_lines(prj, None)[0][0], AP.bom_lines(prj, "V2")[0][0]
+    assert base["footprint"] == v2["footprint"] == "SOIC-8_3.9x4.9mm_P1.27mm", (base, v2)   # kept: alternates
+    assert v2["altium_mpn_source"] == "Alternate" and "footprint" in v2["bom_note"], v2       # usually share it
+
+
+def _alternate(monkeypatch, footprint):
+    """DSPART1 (a VQFN-16 3x3 by its datasheet read) as a variant's alternate line inheriting `footprint`."""
+    from ecadlib import librarian as L
+    from tests import test_datasheet as TD
+    line_for = L._line_for
+
+    def alt(item, lines, rows):
+        ln, row = line_for(item, lines, rows)
+        if (ln or {}).get("mpn") == "DSPART1":
+            ln = dict(ln, footprint=footprint, altium_mpn_source="Alternate")
+        return ln, row
+    monkeypatch.setattr(L, "_line_for", alt)
+    it, _ = _librarian(TD.GOOD)
+    return it
+
+
+_ALT = "variant alternate part"
+
+
+@lite
+def test_a_variant_alternate_on_another_package_is_held_for_its_footprint(monkeypatch):
+    it = _alternate(monkeypatch, "SOIC-8_3.9x4.9mm_P1.27mm")          # the base part's land; the read says VQFN-16
+    assert any(_ALT in v and "SOIC-8_3.9x4.9mm_P1.27mm" in v for v in it.get("verify", [])), it.get("verify")
+
+
+@lite
+def test_a_variant_alternate_whose_read_names_the_inherited_package_is_not_held_for_it(monkeypatch):
+    it = _alternate(monkeypatch, "VQFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm")
+    assert not any(_ALT in v for v in it.get("verify", [])), it.get("verify")
+    assert any(_ALT in r for r in it["librarian"]["review"]), it["librarian"]["review"]   # said, for the person
+
+
+def test_the_alternate_footprint_rule():
+    from ecadlib import librarian as L
+    soic, alt = "SOIC-8_3.9x4.9mm_P1.27mm", {"altium_mpn_source": "Alternate", "mpn": "MCP6002T-I/MS"}
+    fp = lambda src: {"source": src, "file": "x"}
+    # no evidence of the alternate's own package: held
+    assert L.alternate_footprint(dict(alt, footprint=soic), {"footprint": fp("kicad:Package_SO:" + soic)})[0]
+    # the alternate's own read names another package: held
+    assert L.alternate_footprint(dict(alt, footprint=soic), {"footprint": fp("kicad:x"),
+                                                             "alt_read_package": "MSOP-8_3x3mm_P0.65mm"})[0]
+    # the same package: kept, with a review line
+    v, r = L.alternate_footprint(dict(alt, footprint=soic), {"footprint": fp("kicad:x"), "alt_read_package": soic})
+    assert not v and r
+    # the land was built from the alternate's own datasheet: not the base part's
+    v, r = L.alternate_footprint(dict(alt, footprint=soic), {"footprint": fp("datasheet:u"), "alt_own_land": True})
+    assert not v and r
+    # a base-design line, or an alternate with no footprint: nothing to say
+    assert L.alternate_footprint({"footprint": soic, "mpn": "LM358DR"}, {"footprint": fp("kicad:x")}) == (None, None)
+    assert L.alternate_footprint(dict(alt, footprint=""), {}) == (None, None)

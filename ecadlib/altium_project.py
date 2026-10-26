@@ -806,6 +806,9 @@ def bom_lines(path, variant=None, rules=None, root=None):
             ln["bom_note"] = (f"variant alternate part {alt}: MPN taken from its Design Item ID; check it" if g.get("mpn") else
                               f"variant alternate part {alt}: no part number for it (the base part's MPN and maker "
                               "are not used); set the alternate's MPN parameter in the variant")
+            if g.get("footprint"):                    # kept (alternates usually share the land); the librarian holds
+                ln["bom_note"] += (f"; footprint {g['footprint']} is the base part's (the variant names none for the "   # it
+                                   "alternate): held until the alternate's datasheet confirms that package")   # (librarian.alternate_footprint)
         lines.append(ln)
     if not lines:
         raise ValueError(f"{Path(path).name}: no components found in the project's schematics")
