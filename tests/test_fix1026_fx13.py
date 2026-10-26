@@ -130,3 +130,38 @@ def test_gitlab_404_page_for_a_missing_kicad_file_is_cached_and_read_offline(tmp
     h.get(api)
     assert not h.get(api).from_cache
     assert not h.get("https://example.com/api/v1/parts.json").from_cache
+
+
+# ---------------------------------------------------------------- R-FX13-4: a maker's own outline code is no other package
+def _taken(mpn, own, text):
+    from ecadlib import ds_route as DR, outline_docs as OD
+    return OD.names_it([text], mpn, (), DR.package_tokens(DR.norm_text(own)), "")
+
+
+def test_a_makers_own_outline_code_does_not_hold_the_right_package_document():
+    right = [("XCZU3EG-1SBVA484E", "BGA484", "SBVA484 package: BGA-484, 19 x 19 mm, 0.8 mm pitch"),
+             ("XC9572XL-10VQG64C", "QFP64", "VQG64 package: TQFP-64 10 x 10 mm"),
+             ("XC95144XL-10TQG100C", "QFP100", "TQG100 package: TQFP-100 14 x 14 mm"),
+             ("EP4CE22F17C8N", "BGA256", "F256 FineLine BGA-256 17 x 17 mm 1.0 mm pitch"),
+             ("5CEBA4F23C7N", "BGA484", "F484 FineLine BGA-484 23 x 23 mm"),
+             ("LTC6811HG-1", "SSOP48", "48-Lead SSOP-48 (G48) package"),
+             ("ADXL345BCCZ", "LGA14", "14-Terminal LGA-14 (CC-14-1)"),
+             ("ADM3053BRWZ", "SO20", "20-Lead SOIC-20 wide body (RW-20)"),
+             ("ADA4805-2ARMZ", "MSOP10", "10-Lead MSOP-10 (RM-10)"),
+             ("AD7124-4BRUZ", "TSSOP24", "24-Lead TSSOP-24 (RU-24)"),
+             ("TL074CDR", "SO14", "D (R-PDSO-G14) PLASTIC SMALL OUTLINE SOIC-14"),
+             ("TPS7A4701RGWR", "QFN20", "RGW (S-PVQFN-N20) QFN-20 5 x 5"),
+             ("TMS320F28035PAGT", "QFP64", "PAG (S-PQFP-G64) TQFP-64 10 x 10"),
+             ("MCP2515-I/SO", "SO18", "18-Lead SOIC-18 (SO) 7.50 mm C04-051")]
+    for mpn, own, text in right:
+        assert _taken(mpn, own, text), (mpn, text)
+    # another maker's code for a ball grid of this count is still refused when the part number names no package
+    assert not _taken("XQ7Z100-1I", "BGA256", "Package outline FTG256 fine-pitch BGA 17 x 17 mm (BGA-256), DIM MIN MAX")
+    assert not _taken("XQ7Z100-1I", "BGA256", "256-Pin FineLine BGA package outline FG256, 1.0 mm pitch, BGA-256")
+
+
+def test_the_package_code_with_a_two_digit_speed_grade_or_four_letters_is_read():
+    from ecadlib import ds_route as DR, outline_docs as OD
+    for mpn, own, code in (("XC9572XL-10VQG64C", "QFP64", "VQG64"), ("XCZU3EG-1SBVA484E", "BGA484", "SBVA484")):
+        assert OD.mpn_package_code(mpn, DR.package_tokens(own)) == code, (mpn, OD.mpn_package_code(mpn, DR.package_tokens(own)))
+

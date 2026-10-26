@@ -71,8 +71,9 @@ def names_it(texts, part, codes=(), own=(), url=""):
     if any(re.sub(r"[^A-Z0-9]", "", c.upper()) in flat for c in codes if c):
         return True
     codes = mpn_package_codes(part, own)              # EPM1270M256's M256: a 256-ball FineLine BGA is not it
-    # no code in the MPN: a drawing that prints another code for this count (FTG256) is another maker's package
-    printed = any(c in flat for c in codes) if codes else not other_codes(texts, own)
+    # no code in the MPN: a ball grid drawing that prints another maker's code for this count (FTG256) is another
+    # package (pitch, body). A maker's own outline codes (ADI RW-20, LTC G48, Intel F256 for an F17 part) are not
+    printed = any(c in flat for c in codes) if codes else not foreign_codes(texts, part, own)
     if printed and _same_package(own, set().union(*(DR.package_tokens(DR.norm_text(t or "")) for t in texts))):
         return True
     key = re.sub(r"[^A-Z0-9]", "", str(part or "").upper())
@@ -88,7 +89,8 @@ def mpn_package_codes(part, own=()):
     """Every form of the package code in an MPN whose number is this part's pin or ball count (own: BGA256 ...), the
     first the one mpn_package_code gives; [] when there is none. The code may carry an ordering tail after it (speed
     grade, temperature, lead-free, packing: EPM1270M256C5N, ICE40HX8K-BG121TR, LCMXO2-1200HC-4MG132C).
-    - a later segment that starts with the code, after a speed-grade digit at most: BG121TR -> BG121, 4MG132C -> MG132;
+    - a later segment that starts with the code (1 to 4 letters), after a speed grade of up to 2 digits: BG121TR ->
+      BG121, 4MG132C -> MG132, 10VQG64C -> VQG64, 1SBVA484E -> SBVA484;
     - in the first segment, a code after the part's own letters and number (EPM1270 | M256, 10M08SC | M153): which of
       the letters before the count are the code's is not known (10M08SC + M153), so each ending of them (up to 3) is
       a form, the shortest first. A number that only follows digits is the part number itself: 74HC14 is the 14th
@@ -99,7 +101,7 @@ def mpn_package_codes(part, own=()):
     segs = [x for x in re.split(r"[-_/#\s]+", str(part or "").strip().upper()) if x]
     for i, seg in reversed(list(enumerate(segs))):
         if i:
-            m = re.match(r"\d?([A-Z]{1,3})(\d{2,4})(?!\d)", seg)
+            m = re.match(r"\d{0,2}([A-Z]{1,4})(\d{2,4})(?!\d)", seg)     # 10VQG64C, 1SBVA484E (R-FX13-4)
             if m and m.group(2) in counts:
                 return [m.group(1) + m.group(2)]
             continue
@@ -129,6 +131,26 @@ def other_codes(texts, own=()):
     up = " ".join(DR.norm_text(t or "") for t in texts).upper()
     return {m.group(1) + m.group(2) for m in re.finditer(r"(?<![A-Z0-9])([A-Z]{1,6})-?(\d{2,4})(?![0-9])", up)
             if m.group(2) in counts and not DR.package_tokens(m.group(1) + m.group(2))}
+
+
+ARRAYS = {"BGA", "LGA", "CSP"}                           # one count, many pitches and bodies: the code tells them apart
+JEDEC = re.compile(r"(?<![A-Z0-9])[A-Z]-P[A-Z]{2,5}-[A-Z]\d{1,4}(?![A-Z0-9])")   # TI's R-PDSO-G14: the generic outline
+
+
+def foreign_codes(texts, part, own=()):
+    """other_codes that clearly name another maker's package, for a part number with no package code of its own:
+    only for a ball / land grid (BGA, LGA, CSP), where one count comes in many pitches and bodies, and only a code
+    whose letters the part number does not carry (Intel's F256 for EP4CE22F17C8N's F17, ADI's CC-14 for ADXL345BCCZ
+    are the part's own maker's). A leaded package's family and count are enough: ADI RW-20, LTC G48, TI R-PDSO-G14
+    name the right SOIC / SSOP (R-FX13-4)."""
+    if not any(re.sub(r"\d+$", "", t) in ARRAYS for t in own or ()):
+        return set()
+    texts = [JEDEC.sub(" ", DR.norm_text(t or "").upper()) for t in texts]
+    runs = re.findall(r"[A-Z]+", str(part or "").upper())
+    def ours(code):
+        letters = re.sub(r"\d+$", "", code)
+        return any(r == letters or (len(letters) > 1 and letters in r) for r in runs)
+    return {c for c in other_codes(texts, own) if not ours(c)}
 
 
 def _same_package(own, toks):
