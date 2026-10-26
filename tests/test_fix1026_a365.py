@@ -248,3 +248,42 @@ def test_push_sends_no_parameter_update_for_a_part_that_is_not_publishable():
         assert not c.calls, (st, c.calls)
         assert real["action"] == "skip" == dry["action"], (st, real, dry)
         assert st.replace("_", " ") in real["detail"].replace("_", " "), (st, real)
+
+
+# ---------------------------------------------------------------- R-AM-5: sign-off re-checked by every export route
+def _signed_off(d):
+    """A part released, signed off by one person under a 1-approval policy: (item, policy)."""
+    from ecadlib import approvals as AP, release_check as RC
+    from tests.test_release_check import make
+    it = make(d)
+    (d / "approvals.json").write_text(json.dumps({"required": 1}))
+    RC.apply([it], d)
+    pol = AP.load_policy(d)
+    AP.decide(it, "approve", "Ann Lee <ann@example.com>", base=d, policy=pol)
+    assert AP.refresh_status(it, pol, d) == "ready"
+    return it, pol
+
+
+@lite
+def test_part_edited_after_sign_off_is_not_shipped_by_kicad_export(tmp_path):
+    """Signed off, then the footprint edited (pads 0.58 -> 0.45 in the .kicad_mod and the .PcbLib): the Altium 365
+    push skipped it, kicad-export shipped it. The release check's publish_problems (every export route) now holds it."""
+    import contextlib, io
+    from ecadlib import altium_lib as AL, kicad_export as KE, kicad_import as K, release_check as RC
+    from tests.test_release_check import SOIC
+    d = tmp_path
+    it, pol = _signed_off(d)
+    assert RC.publish_problems(it, d, writes_files=True) == []
+    (d / "plan.json").write_text(json.dumps([it], indent=2))
+    edited = SOIC.replace("(size 1.965 0.58)", "(size 1.965 0.45)")
+    assert edited != SOIC
+    (d / it["footprint"]["kicad_mod"]).write_text(edited)
+    fp, t = K.convert_footprint(edited, it["footprint"]["ref"])
+    K.add_body(fp, t, None, None)
+    AL.write_pcblib(d / it["footprint"]["file"], [fp])
+    why = RC.publish_problems(it, d, writes_files=True)
+    assert any("sign-off" in w and "changed since the release check" in w for w in why), why
+    with contextlib.redirect_stdout(io.StringIO()):
+        rep = KE.export(str(d / "plan.json"), str(d / "kicad"), "lib", log=lambda *a, **k: None)
+    assert not any("0.45" in m.read_text() for m in (d / "kicad").rglob("*.kicad_mod")), rep
+    assert rep["skipped"], rep

@@ -544,7 +544,10 @@ def publish_problems(item, base=".", rules=None, writes_files=False):
         return [f"status: {st!r} is not ready: run ecadlib release-check on the plan"]
     fails, _, _ = check_item(item, base, rules)
     covered = set((item.get("allow") or {}).get("failures", []))
-    return [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
+    out = [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
+    from .approvals import push_block          # sign-off, checked again on the files as they are now, for every
+    block = push_block(item, None, base)       # route (kicad-export, dblib-sync, ...), not only the Altium 365 push
+    return out + ([f"sign-off: {block}"] if block else [])
 
 
 PUBLISHABLE = ("ready", "existing")           # change_gate.RELEASED_STATUSES: what a publisher may send (re-checked)
