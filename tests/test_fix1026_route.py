@@ -181,3 +181,26 @@ def test_rrt4_a_symbol_gone_from_its_library_is_held_as_a_footprint_gone_is(tmp_
     res = PJ.check_kicad(pro, use_global=False)
     sym = [r for r in res["rows"] if r["kind"] == "symbol"]
     assert sym[0]["state"] == "not in library" and sym[0]["action"] != "hold", sym
+
+
+# ---------------------------------------------------------------- R-RT-5
+def _row_fp(w, pitch, h=0.8, n=4):
+    from ecadlib import fingerprint as F
+    x0 = -pitch * (n - 1) / 2
+    pads = "".join(f'(pad "{i + 1}" smd rect (at {x0 + pitch * i:.3f} 0) (size {w} {h}) (layers "F.Cu" "F.Paste" "F.Mask"))\n'
+                   for i in range(n))
+    mod = f'(footprint "T" (version 20240108) (generator x) (layer "F.Cu")\n{pads})'
+    return F.build("T", None, *F.kicad_footprint(mod), tool="kicad")
+
+
+def test_rrt5_a_fine_pitch_pad_widened_by_the_old_floor_is_a_major_change():
+    """0.4 mm pitch, pads 0.20 -> 0.25 mm (the gap 0.20 -> 0.15 mm, +25 % copper) was geometry-minor under the flat
+    50 um floor. The floor now scales with the pitch."""
+    from ecadlib import change_diff as CD
+    assert CD.worst(CD.diff(_row_fp(0.20, 0.4), _row_fp(0.25, 0.4))) == "geometry-major"
+    # the old floor still applies where the pitch is wide: 1.27 mm pitch, 0.60 -> 0.65 mm stays minor
+    assert CD.worst(CD.diff(_row_fp(0.60, 1.27), _row_fp(0.65, 1.27))) == "geometry-minor"
+    # 10 % of the side is still minor at fine pitch: 0.20 -> 0.21 mm on 0.4 mm
+    assert CD.worst(CD.diff(_row_fp(0.20, 0.4), _row_fp(0.21, 0.4))) == "geometry-minor"
+    # a lone pad keeps the 50 um floor
+    assert CD.worst(CD.diff(_row_fp(1.00, 1.0, n=1), _row_fp(1.04, 1.0, n=1))) == "geometry-minor"

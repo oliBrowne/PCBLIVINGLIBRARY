@@ -28,7 +28,8 @@ Classes, most severe first (default policy in brackets, see change_gate.POLICY):
                   another way (RESET# -> ~{RESET}), the value written another way (100nF -> 100n), other fields                                                                                  [pass]
 
 Tolerances: a length change within TOL["noise"] (parity's position tolerance, 1 um) is no change; SIZE_MINOR is the
-pad-size band that counts as minor (max(50 um, 10 % of that side)); 3D origin within TOL["model"] (10 um)."""
+pad-size band that counts as minor (max(50 um, 10 % of that side), the 50 um floor no more than 10 % of the pad's
+pitch to its nearest neighbour: a fine-pitch gap is too small for it); 3D origin within TOL["model"] (10 um)."""
 import json, re
 from collections import Counter
 
@@ -589,13 +590,24 @@ def _renumbered(po, pn):
     return moves or None
 
 
-def _size_minor(a, b):
+def _size_minor(a, b, pitch=None):
+    """A pad side change within the minor band. pitch: the centre distance to the pad's nearest neighbour; the 50 um
+    floor is at most 10 % of it, so 0.20 -> 0.25 mm pads on 0.4 mm pitch (the gap 0.20 -> 0.15) is major (R-RT-5)."""
     if a is None or b is None:
         return a == b
-    return abs(a - b) <= max(SIZE_MINOR["abs"], SIZE_MINOR["rel"] * max(abs(a), abs(b)))
+    floor = SIZE_MINOR["abs"] if not pitch else min(SIZE_MINOR["abs"], SIZE_MINOR["rel"] * pitch)
+    return abs(a - b) <= max(floor, SIZE_MINOR["rel"] * max(abs(a), abs(b)))
 
 
-def _pad(a, b, out, origin=None):
+def _pitch(p, pads):
+    """The centre distance from pad p to its nearest other pad on the same side, or None (a lone pad)."""
+    d = [((q["x"] or 0) - (p["x"] or 0)) ** 2 + ((q["y"] or 0) - (p["y"] or 0)) ** 2 for q in pads or ()
+         if q is not p and q.get("side") == p.get("side")]
+    d = [x for x in d if x > TOL["noise"] ** 2]
+    return min(d) ** 0.5 if d else None
+
+
+def _pad(a, b, out, origin=None, pads=None):
     what = f"pad {a['num'] or '(unnumbered)'}"
     dx, dy = (b["x"] or 0) - (a["x"] or 0), (b["y"] or 0) - (a["y"] or 0)
     if origin:
@@ -628,7 +640,8 @@ def _pad(a, b, out, origin=None):
     if PA._angle_diff(a["rot"] or 0, b["rot"] or 0, 90.0) > TOL["angle"]:
         _chg(out, "geometry-major", "footprint", what, a["rot"], b["rot"], f"{what} rotated {_f(a['rot'])} -> {_f(b['rot'])} degrees")
     if _ne(a["w"], b["w"], TOL["noise"]) or _ne(a["h"], b["h"], TOL["noise"]):
-        minor = _size_minor(a["w"], b["w"]) and _size_minor(a["h"], b["h"])
+        pitch = _pitch(a, pads)                       # (only for a pad whose size changed: n pads, not n^2)
+        minor = _size_minor(a["w"], b["w"], pitch) and _size_minor(a["h"], b["h"], pitch)
         _chg(out, "geometry-minor" if minor else "geometry-major", "footprint", what, [a["w"], a["h"]], [b["w"], b["h"]],
              f"{what} size {_f(a['w'])} x {_f(a['h'])} -> {_f(b['w'])} x {_f(b['h'])} mm")
     for k, label in (("paste", "solder paste"), ("mask", "solder mask opening")):
@@ -722,7 +735,7 @@ def _footprint(o, n, out):
         else:
             origin = None
         for a, b in pairs:
-            _pad(a, b, sub, origin)
+            _pad(a, b, sub, origin, po)
             if a["side"] in ("F", "B") and b["side"] in ("F", "B") and not a.get("paste") and not b.get("paste") and \
                     _pasted(a, fo.get("windows")) and not _pasted(b, fn.get("windows")):
                 _chg(sub, "geometry-major", "footprint", f"pad {a['num'] or '(unnumbered)'}", True, False,
