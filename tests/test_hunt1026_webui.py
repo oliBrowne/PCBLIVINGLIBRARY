@@ -146,3 +146,21 @@ def test_webui_06_the_ui_sample_bom_looks_nothing_up_online(tmp_path, monkeypatc
         srv.shutdown()
         srv.server_close()
     assert tried == [], sorted(set(tried))
+
+
+@lite
+def test_webui_07_host_check_on_port_80_takes_the_browsers_host_without_a_port(tmp_path):
+    """A browser leaves the default port out of Host (http://localhost/ sends "Host: localhost"), so `ecadlib ui
+    --port 80` refused every request, the page itself included, as a DNS-rebinding attempt."""
+    from types import SimpleNamespace
+    from ecadlib.app import Workspace
+    from ecadlib.ui.server import make_handler
+    H = make_handler(Workspace(tmp_path / "ws", [], providers=[], offline=True))
+
+    def ok(port, host):
+        h = H.__new__(H)
+        h.server, h.headers = SimpleNamespace(server_address=("127.0.0.1", port)), {"Host": host}
+        return h._host_ok()
+    assert ok(80, "localhost") and ok(80, "127.0.0.1") and ok(80, "localhost:80") and ok(8765, "127.0.0.1:8765")
+    assert not ok(8765, "localhost") and not ok(80, "evil.example") and not ok(80, "evil.example:80") \
+        and not ok(8765, "127.0.0.1:80") and not ok(80, None)

@@ -273,7 +273,8 @@ def make_handler(ws: Workspace):
             """Refuse DNS-rebinding requests: the Host header must name this server's own loopback address."""
             port = self.server.server_address[1]
             names = {"127.0.0.1", "localhost", "[::1]", self.server.server_address[0]}
-            return self.headers.get("Host") in {f"{h}:{port}" for h in names}
+            ok = {f"{h}:{port}" for h in names} | (names if port == 80 else set())   # browsers leave out :80
+            return self.headers.get("Host") in ok
 
         def _origin_ok(self):
             """Stop other sites driving the API: an Origin, when sent, must be this server."""
