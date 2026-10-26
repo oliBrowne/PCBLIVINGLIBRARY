@@ -457,8 +457,9 @@ def read_bom(path, columns=None, rules=None, root=None):
         if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
-                    and re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's
-                    # own unit only: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8)
+                    and (re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's
+                         # own unit: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8);
+                         or _rated_value(cells[vj], cells[vj + 1]))     # a zener's '3,3V', a fuse's '1,5A' (R-FX10-4)
                     and _fraction_fits(cells, vj, col, nxt)):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
                 note.append(f"value {cells[vj]} was split by an unquoted {'' if two_readings(cells[vj]) else 'decimal '}"
@@ -574,6 +575,14 @@ def _column_shapes(df, j, hlen):
     if j >= df.shape[1]:
         return set()
     return {_shape(r[j]) for r in df.to_numpy() if not any(str(c).strip() for c in r[hlen:])}
+
+
+def _rated_value(whole, frac):
+    """'3' | '3V', '0' | '25W': a value in volts, amps or watts split at its decimal comma (a zener's 3,3V, a fuse's
+    1,5A, a resistor's 0,5W), not a whole value then a rating column ('100' | '50V', '10' | '16V', '1' | '16V'): one
+    digit before the comma and one after it, or 0 before it (0,25W, 0,125W)."""
+    return bool(re.fullmatch(r"\d", whole) and re.fullmatch(r"\d\s*[mkK]?[VvAW]", frac) or
+                whole == "0" and re.fullmatch(r"\d{1,3}\s*[mkK]?[VvAW]", frac))
 
 
 def _fraction_fits(cells, vj, col, shapes=()):

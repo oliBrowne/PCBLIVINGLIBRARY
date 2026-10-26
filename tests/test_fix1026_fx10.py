@@ -113,3 +113,33 @@ def test_a_dotted_mpn_still_keys_apart_from_the_undotted_one():
         assert lib.find_symbol(mpn)[0] is None or "wildcard" not in lib.find_symbol(mpn)[1], (mpn, lib.find_symbol(mpn))
     assert lib.find_symbol("AMS1117-3.3")[0] == "Regulator_Linear:AMS1117-3.3"
     assert lib.find_symbol("AMS1117-33")[0] is None                       # 3.3 V is not 33
+
+
+# --- R-FX10-4: an unquoted '3,3V' / '1,5A' / '0,5W' value is one value, a '100,50V' row is still a shifted row -----
+
+@lite
+def test_decimal_comma_values_in_volts_amps_watts_are_one_value(tmp_path):
+    from tests.test_fix1026_bomflow import _read
+    lines = _read(tmp_path, "Designator,Qty,Value,Footprint,Manufacturer,MPN,Description\n"
+                            "D1,1,3,3V,SOD-123,Nexperia,BZT52-C3V3,Zener\n"
+                            "D2,1,5,1V,SOD-123,Nexperia,BZT52-C5V1,Zener\n"
+                            "F1,1,1,5A,1206,Littelfuse,0466001.NR,Fuse\n"
+                            "R4,1,0,5W,R_2512,Vishay,CRCW25121R00FKEG,Res\n"
+                            "R5,1,0,25W,R_1206,Vishay,CRCW12061R00FKEA,Res\n")
+    got = {ln["designator"]: ln for ln in lines}
+    for des, v, mpn in (("D1", "3,3V", "BZT52-C3V3"), ("D2", "5,1V", "BZT52-C5V1"), ("F1", "1,5A", "0466001.NR"),
+                        ("R4", "0,5W", "CRCW25121R00FKEG"), ("R5", "0,25W", "CRCW12061R00FKEA")):
+        ln = got[des]
+        assert ln.get("value") == v and ln.get("mpn") == mpn and not ln.get("bom_hold"), ln
+
+
+@lite
+def test_a_rating_after_a_whole_value_is_still_a_shifted_row(tmp_path):
+    from tests.test_fix1026_bomflow import _read
+    lines = _read(tmp_path, "Designator,Qty,Value,Description,Footprint,Manufacturer,MPN\n"
+                            "C1,1,100,50V, X7R,C_0603_1608Metric,Samsung,CL10B101KB8NNNC\n"
+                            "C2,1,10,16V, X5R,C_0603_1608Metric,Samsung,CL10A106KO8NNNC\n"
+                            "C3,1,1,16V, X5R,C_0603_1608Metric,Samsung,CL10A105KO8NNNC\n"
+                            "R1,1,10,5W, wirewound,R_2512,Vishay,WSR51R000FEA\n")
+    for ln in lines:
+        assert ln.get("bom_hold") and "," not in str(ln.get("value")), ln
