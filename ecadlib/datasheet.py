@@ -1684,6 +1684,11 @@ def sanity(spec, review):
     if t == "gullwing" and ls and bw and ls[0] <= bw[2]:
         review.append(f"lead_span min {ls[0]} <= body_width max {bw[2]}")
     review.extend(_feet_outside(spec))
+    ball, py = g("ball_diameter"), spec.get("pitch_y")
+    near = min(x for x in (e, py, 99) if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0)
+    if t == "bga" and ball and near < 99 and ball[1] >= 0.9 * near:      # (real balls: 0.3 at 0.5, 0.75 at 1.27 mm)
+        review.append(f"ball_diameter {ball[1]:g} mm on a {near:g} mm pitch: the balls would touch, which is implausible "
+                      "(the pitch read as the ball, or the ball's unit?)")
     if t == "gullwing":
         review.extend(_listed_layout(spec))
     ep = spec.get("exposed_pad") or {}

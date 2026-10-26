@@ -127,3 +127,18 @@ def test_pads_and_pins_that_differ_fail_the_read():
     e = _sot223_ext()
     e["package"]["tab"]["number"] = "1"                       # tab on pin 1: pin 4 has no pad
     _held(e, "symbol:", "4")
+
+
+# ---- pipeline-06: a BGA ball as big as its pitch (the pitch read as the ball) built a land on balls that would touch
+def test_a_ball_as_big_as_the_pitch_is_held():
+    def bga(ball):
+        pkg = {k: None for k in D.output_schema()["properties"]["package"]["properties"]}
+        pkg.update({"name": "TFBGA-48_8x6mm_Layout8x6_P0.75mm", "description": "", "package_type": "bga", "unresolved": [],
+                    "drawing": "BGA", "pin_count": 48, "pitch": TD.dim("e", None, 0.75, None), "rows": 6, "cols": 8,
+                    "body_length": TD.dim("D", 5.9, 6.0, 6.1), "body_width": TD.dim("E", 7.9, 8.0, 8.1),
+                    "ball_diameter": TD.dim("b", ball - 0.05, ball, ball + 0.05), "height_max": TD.dim("A", None, None, 1.2)})
+        pins = [TD.pin(f"{r}{c}", f"IO{r}{c}") for r in "ABCDEF" for c in range(1, 9)]
+        return {"package": pkg, "pin_table": {"page": 3, "figure": "Ball map", "rows": 48}, "pins": pins,
+                "symbol_description": "x", "notes": [], "embedded_instructions": []}
+    assert _verdict(bga(0.35), "BGAPART")[0] == ("ok", [])
+    _held(bga(0.75), "ball_diameter", "touch", part="BGAPART")
