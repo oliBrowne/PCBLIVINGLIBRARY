@@ -65,3 +65,56 @@ def test_workspace_triage_says_a_designator_is_on_two_lines_as_the_cli_does(tmp_
     notes = {x["line"]: x["notes"] for x in r["rows"]}
     assert "R3 is also on line 3" in notes[2] and "R3 is also on line 2" in notes[3], notes
     assert "designator on two lines" not in notes[1], notes
+
+
+# ---------------------------------------------------------------- bommcp-03: merged cells in an .xlsx BOM
+def _merged_book(path, rows, merges):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for r in rows:
+        ws.append(r)
+    for m in merges:
+        ws.merge_cells(m)
+    wb.save(path)
+    return path
+
+
+@lite
+def test_xlsx_cells_merged_down_over_one_part_fill_every_row(tmp_path, monkeypatch):
+    # a hand-made BOM: one row per designator, the part's value / maker / MPN merged down over its rows. Only the top
+    # cell of a merge holds the text, so R2 and R3 came out with no part at all
+    f = _merged_book(tmp_path / "m.xlsx", [["Designator", "Qty", "Value", "Manufacturer", "MPN", "Description"],
+                                          ["R1", 1, "10k", "Yageo", "RC0603FR-0710KL", "thick film"],
+                                          ["R2", 1, None, None, None, None], ["R3", 1, None, None, None, None],
+                                          ["C1", 1, "100n", "Murata", "GRM188R71H104KA93D", "X7R"]],
+                     ["C2:C4", "D2:D4", "E2:E4"])
+    for plain in (False, True):                       # pandas + openpyxl, and the standard-library reader
+        if plain:
+            def no_openpyxl(*a, **k):
+                raise ImportError("Missing optional dependency 'openpyxl'")
+            monkeypatch.setattr(T.pd, "read_excel", no_openpyxl)
+        lines, _ = _read_xlsx(f)
+        got = [(l["designator"], l.get("value"), l.get("manufacturer"), l.get("mpn"), l.get("description")) for l in lines]
+        assert got == [("R1", "10k", "Yageo", "RC0603FR-0710KL", "thick film"), ("R2", "10k", "Yageo", "RC0603FR-0710KL", ""),
+                       ("R3", "10k", "Yageo", "RC0603FR-0710KL", ""), ("C1", "100n", "Murata", "GRM188R71H104KA93D", "X7R")], \
+            (plain, got)
+
+
+@lite
+def test_xlsx_merged_qty_and_merges_across_columns_are_not_copied(tmp_path):
+    # a Qty merged over the rows is the group's count (the rows below continue its designator list, as before), and a
+    # cell merged across columns (a Description over the MPN column) must never become a part number
+    f = _merged_book(tmp_path / "q.xlsx", [["Designator", "Qty", "MPN", "Description"],
+                                          ["R1", 3, "RC0603FR-0710KL", "10k"], ["R2", None, None, None], ["R3", None, None, None],
+                                          ["U1", 1, "see note", None], ["U2", 1, None, None]],
+                     ["B2:B4", "C2:C4", "C5:D6"])
+    lines, _ = _read_xlsx(f)
+    got = [(l["designator"], l.get("qty"), l.get("mpn")) for l in lines]
+    assert got[0] == ("R1, R2, R3", "3", "RC0603FR-0710KL"), got
+    assert ("U2", "1", "") in got, got
+
+
+def _read_xlsx(f):
+    with contextlib.redirect_stderr(io.StringIO()):
+        return T.read_bom(f)

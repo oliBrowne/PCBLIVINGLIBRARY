@@ -544,6 +544,36 @@ def _two_row_header(top, sub, columns=None):
     return out if score(out) > score(list(top)) else None
 
 
+def _fill_merged(df, full, kept, spans, h, columns=None):
+    """Cells merged down over data rows (one column, several rows: a part's value / maker / MPN over the rows of its
+    designators) hold their text in the top cell only: it is copied into the rows below, in df and full alike. Not in
+    the Qty column nor into the rows under a merged Qty (a merged count is the group's: its rows continue one
+    designator list, which read_bom joins), not in the designator column,
+    never for a merge across columns (a Description over the MPN column is no part number), and not above or in the
+    header row h. kept: the sheet row (0 = row 1) of each frame row. Returns the number of cells filled."""
+    pos = {r: k for k, r in enumerate(kept)}
+    head = [str(x).strip() for x in df.iloc[h]]
+    fmap = apply_columns(map_headers(head), head, columns)
+    skip = {head.index(fmap[f]) for f in ("qty", "designator") if f in fmap}
+    qj = head.index(fmap["qty"]) if "qty" in fmap else None
+    grouped = {r for r0, c0, r1, c1 in spans if c0 == qj == c1 for r in range(r0 + 1, r1 + 1)}   # rows under a
+    n = 0                                                        # merged Qty: one line's designators, joined by read_bom
+    for r0, c0, r1, c1 in spans:
+        if c0 != c1 or r1 <= r0 or r0 not in pos or pos[r0] <= h or c0 in skip or c0 >= df.shape[1]:
+            continue
+        v, vf = df.iat[pos[r0], c0], full.iat[pos[r0], c0]
+        for r in range(r0 + 1, r1 + 1):
+            k = pos.get(r)
+            if k is None or r in grouped:
+                continue
+            if str(v).strip() and not str(df.iat[k, c0]).strip():
+                df.iat[k, c0] = v
+                n += 1
+            if str(vf).strip() and not str(full.iat[k, c0]).strip():
+                full.iat[k, c0] = vf
+    return n
+
+
 def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
     """[(sheet name, frame, uncached formula cells)] -> the BOM frame. Hidden sheets and hidden columns are left out (an old BOM kept hidden);
     blank rows are dropped (title blocks); the sheet with the best header wins, then the one with more rows; sheets
@@ -555,12 +585,17 @@ def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
         hidden = _BI().xlsx_hidden(p)
     except Exception:                                    # not an .xlsx zip (old .xls): nothing is known to be hidden
         hidden = {}
+    try:
+        merged = _BI().xlsx_merged(p)
+    except Exception:                                    # as for hidden: nothing is known to be merged
+        merged = {}
     frames = []
     unc = {}
     for name, df, u in sheets:
         unc[name] = u
         if name in hidden and hidden[name] is None:
             continue
+        sparse = bool(df.attrs.get("sparse"))            # its rows are not the sheet's rows
         df = df.copy()
         pos = {c: k for k, c in enumerate(df.columns)}  # sheet column (0 = A) -> frame column: a sparse frame leaves
         hid = {pos[j] for j in hidden.get(name) or () if j in pos}   # out empty ones
@@ -570,13 +605,16 @@ def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
             df.iloc[:, j] = ""
         df = df.fillna("")
         rows = df.astype(str).apply(lambda c: c.str.strip()).ne("").any(axis=1)
-        frames.append((name, df[rows].reset_index(drop=True), full[rows].reset_index(drop=True), hid))
+        kept = [] if sparse else [int(r) for r in df.index[rows]]   # frame row -> sheet row (0 = row 1)
+        frames.append((name, df[rows].reset_index(drop=True), full[rows].reset_index(drop=True), hid, kept))
     if not frames:
         return pd.DataFrame()
-    info = []
-    for name, df, full, hid in frames:
-        score = _header_score(df, columns)
+    info, filled = [], {}
+    for name, df, full, hid, kept in frames:
         h = header_row(df, columns) if len(df) else 0
+        if kept and merged.get(name):
+            filled[name] = _fill_merged(df, full, kept, merged[name], h, columns)
+        score = _header_score(df, columns)
         head = tuple(_norm(x) for x in df.iloc[h]) if len(df) else ()
         info.append((score, len(df) - h - 1, name, full if keep_hidden else df, h, head, hid))
     best = max(info, key=lambda t: (t[0], t[1]))
@@ -593,6 +631,10 @@ def _bom_sheet(p, sheets, columns=None, keep_hidden=False):
     if other:
         print(f"  note: {Path(p).name}: read sheet {best[2]!r}; sheet(s) {', '.join(map(repr, other))} also look like "
               "a BOM and were not read", file=sys.stderr)
+    n = sum(filled.get(t[2], 0) for t in [best] + same)
+    if n:
+        print(f"  note: {Path(p).name}: {n} cell(s) merged down over several rows were read into each of those rows "
+              "(one part on several rows)", file=sys.stderr)
     if keep_hidden:
         out.attrs["hidden_cols"] = sorted(set().union(*(t[6] for t in [best] + same)))
     return out
@@ -724,8 +766,10 @@ def _sparse_frames(p):
         cells = {k: _xl_text(c.value).strip() for k, c in getattr(ws, "_cells", {}).items() if c.value is not None}
         cells = {k: v for k, v in cells.items() if v}
         rows, cols = _compact(cells, f"{p}: sheet {ws.title!r}") if cells else ([], [])
-        out.append((ws.title, pd.DataFrame(rows, columns=cols, dtype=object)))   # labelled by sheet column, as
-    return out                                                                   # _bom_sheet hides by it
+        df = pd.DataFrame(rows, columns=cols, dtype=object)   # labelled by sheet column, as _bom_sheet hides by it;
+        df.attrs["sparse"] = True                              # its rows are not the sheet's (no merged-cell fill)
+        out.append((ws.title, df))
+    return out
 
 
 def _uncached_formulas(p):

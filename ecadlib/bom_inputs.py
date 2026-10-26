@@ -368,6 +368,45 @@ def xlsx_hidden(path):
     return out
 
 
+def _cell_rc(ref):
+    """'C12' -> (11, 2), zero-based (row, column)."""
+    m = re.fullmatch(r"\$?([A-Z]{1,3})\$?(\d+)", ref.strip().upper())
+    if not m:
+        raise ValueError(f"not a cell reference: {ref!r}")
+    return int(m.group(2)) - 1, _col(m.group(1))
+
+
+def xlsx_merged(path):
+    """{sheet name: [(first row, first column, last row, last column)]} of an .xlsx's merged cells, zero-based (A1 is
+    (0, 0)); only the first cell of a merge holds its text."""
+    from .bom_triage import MAX_UNZIPPED
+    out = {}
+    with zipfile.ZipFile(path) as z:
+        if sum(i.file_size for i in z.infolist()) > MAX_UNZIPPED:
+            return out
+        names = set(z.namelist())
+        rels = {}
+        if "xl/_rels/workbook.xml.rels" in names:
+            for r in _xml_root(z.read("xl/_rels/workbook.xml.rels"), "rels").findall("rel:Relationship", NS):
+                t = r.get("Target", "")
+                rels[r.get("Id")] = t.lstrip("/") if t.startswith("/") else "xl/" + t
+        for i, s in enumerate(_xml_root(z.read("xl/workbook.xml"), "workbook").findall("m:sheets/m:sheet", NS)):
+            target = rels.get(s.get(f"{{{NS['r']}}}id"), f"xl/worksheets/sheet{i + 1}.xml")
+            if target not in names:
+                continue
+            spans = []
+            for mc in _xml_root(z.read(target), target).findall("m:mergeCells/m:mergeCell", NS):
+                a, _, b = mc.get("ref", "").partition(":")
+                try:
+                    (r0, c0), (r1, c1) = _cell_rc(a), _cell_rc(b or a)
+                except ValueError:
+                    continue
+                spans.append((min(r0, r1), min(c0, c1), max(r0, r1), max(c0, c1)))
+            if spans:
+                out[s.get("name", f"Sheet{i + 1}")] = spans
+    return out
+
+
 def xlsx_sheets(path, uncached=None):
     """{sheet name: rows (lists of text)} read with the standard library only. Numbers come back as BOM text the
     way bom_triage writes them (1e-07 -> '100n', 3.0 -> '3'); dates stay as Excel serial numbers. A sheet whose
