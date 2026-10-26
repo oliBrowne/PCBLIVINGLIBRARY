@@ -244,8 +244,27 @@ def chip_size(text, strict=False):
         if m.group(1) in METRIC:
             found.add(METRIC[m.group(1)])
             glued |= bool(re.match(r"-\d", t[m.end():]))           # 'Metric-6': a 6-pad part on that size
+    # a metric / mm word next to the code, not glued to it: '0603 (metric)', 'Metric 0603', 'mm: 0603', '0603 [mm]'
+    near, words = set(), []
+    for m in re.finditer(r"(?<![0-9A-Za-z.])(\d{4,5})[\s(\[:,]*(?:size|code)?[\s(\[:,]*(metric|mm)(?![A-Za-z])|"
+                         r"(?<![A-Za-z])(metric|mm)(?:\s*(?:size|code))?[\s:)\],-]*(\d{4,5})(?![0-9.])", t, re.I):
+        w = m.start(3) if m.group(3) else m.start(2)
+        if re.search(r"\d\s*$", t[:w]) and (m.group(2) or m.group(3)).lower() == "mm" and m.group(3):
+            continue                                                # '1.6 mm 0603': a dimension, not a marker
+        code = m.group(1) or m.group(4)
+        found.add(METRIC[code] if code in METRIC else f"conflict:{code} metric?")
+        near.add(m.start(1) if m.group(1) else m.start(4))
+        words.append((m.start(2), m.end(2)) if m.group(2) else (m.start(3), m.end(3)))
+    for m in re.finditer(r"(?<![A-Za-z])(metric|mm)(?![A-Za-z])", t, re.I):    # a marker the code does not touch
+        if (m.start(), m.end()) not in words and not re.search(r"(?:\d|_)\s*$", t[:m.start()]):
+            words.append(None)                  # unclear: a bare code below is not read as imperial
     for m in re.finditer(rf"(?<![0-9.])(\d{{4,5}})(?![0-9.])(?!\s*(?:_?Metric|M\b|mm|mil|{_UNIT_LETTER}|nF|pF|uF|µF|Ω|ohm|%))", t, re.I):
         code = m.group(1)
+        if m.start(1) in near:
+            continue
+        if code in IMPERIAL and None in words and not _in_part_number(t, m.start(), m.end()):
+            found.add(f"conflict:{code} imperial or metric?")
+            continue
         if code in IMPERIAL and not re.search(r"(?:RES|CAP|IND|LED|DIO|FUS)C$", t[:m.start()], re.I):
             if _in_part_number(t, m.start(), m.end()):
                 glued = True

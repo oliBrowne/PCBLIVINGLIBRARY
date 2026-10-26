@@ -226,3 +226,25 @@ def test_parity_still_softens_a_pad_whose_copper_is_drawn_as_pad_plus_graphic(tm
     cust = _EP_CUSTOM.replace("(xy -0.9 -0.15)", "(xy 0 -0.15)").replace("(xy -0.9 0.15)", "(xy 0 0.15)")
     diffs = P.footprint_pair(_qfn(_EP_PLAIN, cu), _pcblib(tmp_path, _qfn(cust)))
     assert not [d for d in diffs if d["level"] == "error"], diffs
+
+
+# --- R-SP-6: a metric / mm word next to a size code makes it metric; unclear is no size ----------------------------
+
+def test_metric_word_next_to_the_code_reads_metric():
+    from ecadlib import stdparts as S
+    for t in ("0603 (metric)", "Metric 0603", "metric: 0603", "0603 [mm]", "0603(mm)", "mm: 0603", "Metric size 0603",
+              "SMD 0603 (metric code)"):
+        assert S.chip_size(t) == "0201", (t, S.chip_size(t))
+        assert S.footprint_for([t], "R")[0] == "R_0201_0603Metric", t
+    assert S.chip_size("1005 (metric)") == "0402"
+    assert S.chip_size("0805 (metric)").startswith("conflict")        # 0805 is no metric code: refuse
+    assert S.chip_size("SMD 0603 resistor, metric").startswith("conflict")   # the marker names no code: refuse
+
+
+def test_metric_word_keeps_the_readings_that_were_right():
+    from ecadlib import stdparts as S
+    for t, want in (("0603", "0603"), ("0603 (1608 Metric)", "0603"), ("0805 (2012 metric)", "0805"),
+                    ("R_0603_1608Metric", "0603"), ("0603 Metric", "0201"), ("1608 Metric", "0603"),
+                    ("Chip resistor 0603 (1.6 x 0.8 mm)", "0603"), ("RES 10K 0603 1.6mm x 0.8mm", "0603"),
+                    ("0603 (inch)", "0603"), ("0402 [1005 Metric]", "0402")):
+        assert S.chip_size(t) == want, (t, S.chip_size(t))
