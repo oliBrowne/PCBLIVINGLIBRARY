@@ -71,3 +71,42 @@ def test_eval_override_keeps_the_datasheet_key_on_its_own_server():
         # --api-key-env always wins
         r = _rules({"datasheet": {"provider": "openai-compatible", "base_url": GW1, "model": "m", "api_key_env": "GW1_KEY"}})
         assert _eval_key(r, provider="openai-compatible", base_url=GW2, model="m", api_key_env="GW2_KEY")[1] == "sk-gw2"
+
+
+# ---------------------------------------------------------------- R-FX16-3: [agent.proof] on its own server
+def _proof(rules):
+    from ecadlib import llm as LL
+    ep = LL.endpoint(rules, "proof")
+    return ep["base_url"], LL.key_for(ep)
+
+
+def test_proof_on_its_own_server_never_gets_the_datasheet_key():
+    with _env():
+        r = _rules({"ai": {"provider": "openai-compatible", "base_url": GW1, "model": "m"},
+                    "datasheet": {"api_key_env": "GW1_KEY"},
+                    "agent": {"proof": {"provider": "openai-compatible", "base_url": GW2, "model": "m"}}})
+        base, key = _proof(r)
+        assert base == GW2 and key != "sk-gw1-secret", (base, key)
+        r = _rules({"datasheet": {"provider": "openai-compatible", "base_url": GW1, "model": "m", "api_key_env": "GW1_KEY"},
+                    "agent": {"proof": {"provider": "openai-compatible", "base_url": GW2, "model": "m"}}})
+        base, key = _proof(r)
+        assert base == GW2 and key != "sk-gw1-secret", (base, key)
+        # the proxy key goes only where the proof goes when that is the proxy ([ai]'s base_url for the same provider)
+        r = _rules({"ai": {"provider": "openai", "base_url": PROXY, "model": "gpt-5"},
+                    "datasheet": {"api_key_env": "PROXY_KEY"}, "agent": {"proof": {"provider": "openai", "model": "gpt-5"}}})
+        assert _proof(r) == (PROXY, "sk-proxy-secret")
+        # a proof sent to api.openai.com itself never gets the proxy key
+        r["agent"]["proof"]["base_url"] = "https://api.openai.com/v1"
+        assert _proof(r) == ("https://api.openai.com/v1", "sk-openai")
+
+
+def test_proof_on_the_datasheet_server_keeps_its_key():
+    with _env():
+        r = _rules({"datasheet": {"provider": "openai-compatible", "base_url": GW1, "model": "m", "api_key_env": "GW1_KEY"},
+                    "agent": {"proof": {"provider": "openai-compatible", "model": "m"}}})
+        assert _proof(r) == (GW1, "sk-gw1-secret")
+        r = _rules({"datasheet": {"provider": "openai-compatible", "base_url": GW1, "model": "m", "api_key_env": "GW1_KEY"},
+                    "agent": {"proof": {"provider": "openai-compatible", "base_url": GW1 + "/", "model": "m"}}})
+        assert _proof(r)[1] == "sk-gw1-secret"
+        r = _rules({"datasheet": {"provider": "openai-compatible", "base_url": GW1, "model": "m", "api_key_env": "GW1_KEY"}})
+        assert _proof(r) == (GW1, "sk-gw1-secret")

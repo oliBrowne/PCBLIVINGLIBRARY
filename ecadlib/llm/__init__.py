@@ -144,6 +144,9 @@ def endpoint(rules=None, section="datasheet", model=None):
     With no [ai] table and no section overrides this is Anthropic + [datasheet] model + [datasheet] api_key_env."""
     ai, sec = _ai(rules), _section(rules, section)
     ds = _section(rules, "datasheet")
+    ds_key_server = None                                  # [agent.proof] inherits [datasheet]'s key name: its server
+    if section == "proof" and not sec.get("api_key_env") and ds.get("api_key_env"):
+        ds_key_server = server_of(rules, "datasheet") or {}
     if section == "proof":                                # [agent.proof] empty = [datasheet] (as before)
         # [datasheet]'s provider as resolved: its own, else [ai]'s (default anthropic), not "" as written (R-FX13-7)
         if sec.get("provider") and str(sec["provider"]).strip().lower() != \
@@ -165,6 +168,8 @@ def endpoint(rules=None, section="datasheet", model=None):
         base = sec.get("base_url") or ("" if own_provider and sec.get("provider") != ai["provider"] else ai["base_url"]) \
             or (PRESETS[preset][0] if preset else "")
         sk = sec.get("api_key_env") or ""
+        if sk and ds_key_server is not None and not same_server(ds_key_server, {"provider": provider, "base_url": base}):
+            sk = ""                                       # [datasheet]'s key name belongs to its server, not the proof's (R-FX16-3)
         if sk == ANTHROPIC_KEY and (provider != "anthropic" or ai["api_key_env"]):
             sk = ""                                       # [datasheet]'s default key name: [ai] api_key_env / the endpoint's decide
         # [ai] api_key_env names the key of [ai]'s provider: a section on another provider (or, openai-compatible,
