@@ -382,3 +382,44 @@ def test_rd8_correct_sod_reads_are_ok_not_incomplete():
 def test_rd8_a_listed_row_still_needs_its_pitch():
     res = read(dict(SOT23, pitch=None))
     assert "pitch" in (res["spec"].get("unresolved") or []), res["spec"].get("unresolved")
+
+
+# ---------------------------------------------------------------- R-FX14-2: the code-read dimension table disagrees
+SC59_TABLE = [{"page": 7, "unit": "mm", "rows": {
+    "D": {"min": 2.8, "nom": 2.9, "max": 3.0, "span": False}, "E1": {"min": 1.5, "nom": 1.6, "max": 1.7, "span": False},
+    "E": {"min": 2.6, "nom": 2.8, "max": 3.0, "span": False}, "e": {"min": None, "nom": 0.95, "max": None, "span": True},
+    "b": {"min": 0.35, "nom": None, "max": 0.5, "span": False}, "A": {"min": None, "nom": None, "max": 1.3, "span": False}}}]
+
+
+def _tdim(lab, mn, nm, mx):
+    return {"label": lab, "min": mn, "nom": nm, "max": mx, "unit": "mm", "page": 7, "figure": ""}
+
+
+def _table_review(**kw):
+    pkg = {"package_type": "gullwing", "body_length": _tdim("D", 2.8, 2.9, 3.0), "body_width": _tdim("E1", 1.5, 1.6, 1.7),
+           "lead_span": _tdim("E", 2.6, 2.8, 3.0), "pitch": _tdim("e", None, 0.95, None),
+           "terminal_width": _tdim("b", 0.35, None, 0.5), "height_max": _tdim("A", None, None, 1.3)}
+    pkg.update(kw)
+    review = []
+    D.table_check(pkg, SC59_TABLE, 0, review)
+    return review, [r for r in review if DR.FAILED.search(r) and not DR._soft(r)]
+
+
+def test_fx14_2_a_read_that_agrees_with_its_table_passes():
+    review, hard = _table_review()
+    assert review == [] and hard == [], review
+    review, hard = _table_review(pitch=_tdim("e", None, 0.96, None), height_max=_tdim("A", None, None, 1.45))
+    assert len(review) == 2 and hard == [], review    # a rounding, the height: review lines, as before
+
+
+def test_fx14_2_a_copper_dimension_far_off_its_table_is_a_hard_failure():
+    """Before: AH1806-W's pitch read 1.9 against the table's 0.95 was only a review line; assess ok, built 2.4 mm off."""
+    review, hard = _table_review(pitch=_tdim("e", None, 1.9, None))
+    assert len(hard) == 1 and "pitch (e) differs" in hard[0], review
+    review, hard = _table_review(terminal_width=_tdim("b", 0.7, None, 1.0))
+    assert len(hard) == 1 and "terminal_width" in hard[0], review
+    review, hard = _table_review(height_max=_tdim("A", None, None, 2.6))   # the height builds no copper
+    assert len(review) == 1 and hard == [], review
+    review, hard = _table_review(body_length=_tdim("D", 3.6, 3.8, 4.0))  # a gull-wing's body places no pad
+    assert len(review) == 1 and hard == [], review
+

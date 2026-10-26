@@ -2346,24 +2346,36 @@ def table_check(pkg, tables, offset, review):
         row = hit["rows"][lab]
         tol = 0.006 if k_mm == 1.0 else 0.03          # an inch column is rounded differently from the mm one
         mine = {x: d.get(x) * k_mm for x in ("min", "nom", "max") if isinstance(d.get(x), (int, float))}
+        gross = lambda m, v: abs(m - v) > max(0.05, 0.1 * abs(v))   # not a rounding: another value (pitch x 2)
         if row["span"]:
             v = next(row[x] for x in ("min", "nom", "max") if row[x] is not None)
             off = [f"{x} {m:g}" for x, m in mine.items()] if mine and not any(abs(m - v) <= tol for m in mine.values()) else []
+            big = bool(off) and all(gross(m, v) for m in mine.values())
             off = [f"{', '.join(off)} mm, the table says {v:g} mm"] if off else []
             fill = []
         else:
             off = [f"{x} {mine[x]:g}, table {row[x]:g}" for x in mine if row[x] is not None and abs(mine[x] - row[x]) > tol]
+            big = any(gross(mine[x], row[x]) for x in mine if row[x] is not None)
             off = [f"{'; '.join(off)} mm"] if off else []
             fill = [x for x in ("min", "nom", "max") if x not in mine and row[x] is not None] if k_mm == 1.0 else []
         if mine or fill:
-            found.setdefault(id(hit), (hit, []))[1].append((k, lab, d, row, off, fill))
+            found.setdefault(id(hit), (hit, []))[1].append((k, lab, d, row, off, fill, big))
+    # the dimensions the pads are sized or placed from: a gross disagreement with the code-read table fails the read;
+    # the body only where it places the pads (chip / molded ends, QFN toes), the height never
+    copper = {"pitch", "pitch_y", "lead_span", "lead_span_y", "terminal_length", "terminal_width", "inner_span",
+              "ball_diameter", "land_diameter", "drill", "exposed_pad.length", "exposed_pad.width"}
+    if pkg.get("package_type") in ("chip", "molded", "qfn"):
+        copper |= {"body_length", "body_width"}
     for t, rows in found.values():
         bad = sum(1 for r in rows if r[4])
         if bad >= 2 and bad * 2 > len(rows):          # most of it disagrees: not this package's table
             continue
         where = f"the dimension table on p{t['page']} (read in code)"
-        for k, lab, d, row, off, fill in rows:
-            if off:
+        for k, lab, d, row, off, fill, big in rows:
+            if off and big and k in copper:           # review 196 R-FX14-2: AH1806-W's pitch read 1.9 for the
+                review.append(f"{k} ({lab}) differs from {where}: {off[0]}: the read and the drawing's own table "
+                              "disagree on a dimension the pads are built from, which is implausible: check the read")
+            elif off:                                 # table's 0.95 was only a review line, and built 2.4 mm off
                 review.append(f"{k} ({lab}) differs from {where}: {off[0]}: check the read")
             elif fill:
                 for x in fill:
