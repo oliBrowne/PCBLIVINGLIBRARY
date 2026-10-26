@@ -180,3 +180,71 @@ def test_a_web_search_http_error_is_not_booked_as_billed():
         assert abs(rd.committed_usd - est) < 1e-9
 
 
+# ---------------------------------------------------------------- weak tests made end-to-end
+@lite
+def test_cli_cap_nan_is_refused_by_the_real_parser(tmp_path, monkeypatch):
+    """--max-cost-usd nan through the real command line (ecadlib eval run, ecadlib datasheet): argparse refuses it
+    before anything is built or sent."""
+    import contextlib, io
+    from ecadlib import cli
+    from ecadlib.eval import runner as ER
+    monkeypatch.setattr(ER, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ran with a nan cap")))
+    monkeypatch.setattr(D, "Reader", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Reader with a nan cap")))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    for argv in (["eval", "run", "--max-cost-usd", "nan"], ["eval", "run", "--max-total-usd", "inf"],
+                 ["eval", "run", "--max-cost-usd", "-1"],
+                 ["datasheet", str(tmp_path / "x.pdf"), "--part", "X", "--max-cost-usd", "nan"]):
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                cli.main(argv)
+            raise AssertionError(f"{argv} was not refused")
+        except SystemExit as e:
+            assert e.code == 2, (argv, e.code, err.getvalue())
+        assert "max-" in err.getvalue() and "usd" in err.getvalue(), err.getvalue()
+
+
+def test_bom_case_code_mm_0603_is_not_built_on_an_imperial_0603_land():
+    """metric_header end to end, read_bom -> triage: a bare 0603 in a 'Case Code (mm)' column is the metric 0603 (an
+    inch 0201), never the inch 0603; in a column naming both systems a bare 0603 is not turned into an 0201."""
+    from ecadlib import bom_triage as T
+    from ecadlib.kicad_index import KiCadIndex
+    idx = KiCadIndex([])
+    idx.symbols = []
+    with tempfile.TemporaryDirectory() as d:
+        for head, wrong in (("Case Code (mm)", "0603"), ("Case (Imperial/Metric)", "0201")):
+            f = Path(d) / "bom.csv"
+            f.write_text(f"Designator,Comment,{head},Quantity\nR1,10k,0603,1\n", encoding="utf-8")
+            lines, _ = T.read_bom(f)
+            rows = T.triage(lines, idx, [], None)
+            assert len(rows) == 1 and rows[0]["package"] != wrong, (head, rows[0])
+            assert wrong not in (rows[0].get("local_footprint") or ""), (head, rows[0])
+
+
+@lite
+def test_lifecycle_st_part_never_takes_stackpoles_status(tmp_path, monkeypatch):
+    """same_maker end to end through the lifecycle check: a BOM line by "ST" never gets Stackpole's listing (its
+    status, stock or maker), from Mouser (a list of listings) or DigiKey (one product)."""
+    from ecadlib import lifecycle as L
+    from tests.test_lifecycle import FakeHTTP
+    monkeypatch.setenv("MOUSER_API_KEY", "k")
+    monkeypatch.setenv("DIGIKEY_CLIENT_ID", "id")
+    monkeypatch.setenv("DIGIKEY_CLIENT_SECRET", "s")
+    parts = {"a": {"mpn": "XC0603A", "manufacturer": "ST", "lcsc": "", "name": "XC0603A", "sources": ["bom"],
+                   "component_id": "", "a365_value": None}}
+    mouser = {"Errors": [], "SearchResults": {"NumberOfResult": 2, "Parts": [
+        {"ManufacturerPartNumber": "XC0603A", "Manufacturer": "Stackpole Electronics Inc", "LifecycleStatus": "Obsolete",
+         "AvailabilityInStock": "0"},
+        {"ManufacturerPartNumber": "XC0603A", "Manufacturer": "Bourns", "LifecycleStatus": "Obsolete",
+         "AvailabilityInStock": "0"}]}}
+    out, _ = L.check_parts(parts, [L.MouserLifecycle(FakeHTTP({"search/partnumber": (200, mouser)}))])
+    assert out["a"]["status"] == "unknown" and "Stackpole" not in out["a"]["raw"], out["a"]
+    dk = {"Product": {"ManufacturerProductNumber": "XC0603A", "Manufacturer": {"Name": "Stackpole Electronics Inc"},
+                      "ProductStatus": {"Status": "Obsolete"}, "QuantityAvailable": 0}}
+    out, _ = L.check_parts(parts, [L.DigiKeyLifecycle(FakeHTTP({"oauth2/token": (200, {"access_token": "t"}),
+                                                                 "productdetails": (200, dk)}))])
+    assert out["a"]["status"] == "unknown" and not out["a"]["results"][0]["found"], out["a"]
+    # by STMicroelectronics: taken
+    mouser["SearchResults"]["Parts"][1]["Manufacturer"] = "STMicroelectronics"
+    out, _ = L.check_parts(parts, [L.MouserLifecycle(FakeHTTP({"search/partnumber": (200, mouser)}))])
+    assert out["a"]["status"] == "obsolete" and out["a"]["results"][0]["manufacturer"] == "STMicroelectronics", out["a"]
