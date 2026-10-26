@@ -410,8 +410,12 @@ def test_ds2_22_a_cap_set_to_ten_holds_like_any_cap_you_set(tmp_path, monkeypatc
                          "prov": {"pages": 40, "sent_as": "base64"}}])
         return rules
 
-    rules = guard("unset.toml")                       # no cap in the file: the default one can't stop it, said aloud
-    assert "the default $10 cap can't be checked" in said[0] and AC.limit(rules) == (1.0, "ask_above_usd"), said
+    try:                                              # no cap in the file: the default one can't be checked, so a
+        guard("unset.toml")                           # remote model with no price is not sent (fix 2026-10-26)
+        raise AssertionError("an unpriced remote model was sent under the default cap")
+    except D.DatasheetError as e:
+        assert "the default $10 cap can't be checked" in str(e) and "nothing sent" in str(e), e
+    assert AC.limit(RU.load(str(tmp_path / "unset.toml"))) == (1.0, "ask_above_usd")
     try:
         guard("set.toml")
         raise AssertionError("max_cost_usd = 10 in the file did not hold an unpriced model")

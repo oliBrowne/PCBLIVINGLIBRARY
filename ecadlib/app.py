@@ -1459,13 +1459,13 @@ class Workspace:
                                           "`ecadlib keys set`.", "")
             pr["ai"] = q
         if not render_only and q is not None:     # a paid call: only for the amount the person approved
-            cap, _ = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+            cap, unknown_ok = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
             import copy
             rules = copy.deepcopy(rules)
             pc = rules.setdefault("agent", {}).setdefault("proof", {})
             own = float(pc.get("max_cost_usd") or 0)      # the person's own [agent.proof] cap still holds
             pc["max_cost_usd"] = min(cap, own) if cap and own else cap or own
-            pr = dict(VC.prove(item, self.root, rules, client=client, out_dir=out, render_only=False), ai=q)
+            pr = dict(VC.prove(item, self.root, rules, client=client, out_dir=out, render_only=False, yes=unknown_ok), ai=q)
         pr["proof_file"] = self.rel(VC.write_proof(pr, out / "proof.json"))
         pr["images"] = {k: [self.rel(f) for f in v] for k, v in pr["images"].items()}
         return pr

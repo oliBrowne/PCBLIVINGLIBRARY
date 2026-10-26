@@ -491,7 +491,9 @@ def test_cost_cap_with_unknown_price_sends_nothing():
         with mock.patch.dict(D.PRICES, clear=True):                                       # a model with no price
             pr = V.prove(item(d), d, {"agent": {"proof": {"max_cost_usd": 5.0}}}, out_dir=d / "out")
             assert pr["verdict"] == "skipped" and "no price known" in pr["reason"] and not calls, pr["reason"]
-            ok = V.prove(item(d), d, None, out_dir=d / "o2")                              # no cap: goes ahead
+            no = V.prove(item(d), d, None, out_dir=d / "o2")                              # no cap, no yes: held too
+            assert no["verdict"] == "skipped" and "--yes" in no["reason"] and not calls, no["reason"]
+            ok = V.prove(item(d), d, None, out_dir=d / "o3", yes=True)                    # yes to no price: goes ahead
             assert ok["verdict"] == "pass" and len(calls) == 1
 
 

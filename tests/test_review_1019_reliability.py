@@ -129,13 +129,13 @@ def test_default_cap_uses_the_rough_estimate_without_a_request():
 
 def test_unpriced_model_default_cap_sends_your_cap_refuses():
     with tempfile.TemporaryDirectory() as d:
-        said = []
         rd = _reader(d)
-        rd.say = said.append
         with mock.patch.object(rd, "estimate", return_value=_est(None, "qwen2.5:7b")):
-            rd._guard_cost(_jobs())                       # a local model: the default cap can't stop it
-            rd._guard_cost(_jobs())
-        assert len(said) == 1 and "no price known for qwen2.5:7b" in said[0], said   # said once per run
+            try:                                          # fix 2026-10-26: a local model is priced at $0 by
+                rd._guard_cost(_jobs())                   # llm.price(), so "no price" is a remote (paid) one: the
+                raise AssertionError("an unpriced model was sent under the default cap")   # default cap refuses too
+            except D.DatasheetError as e:
+                assert "no price known for qwen2.5:7b" in str(e) and "--yes" in str(e), e
         rd = _reader(d, max_cost_usd=2.0)
         with mock.patch.object(rd, "estimate", return_value=_est(None, "qwen2.5:7b")):
             try:

@@ -4789,16 +4789,17 @@ class Reader:
         else:
             est = self.estimate(jobs)
         if est["usd_max"] is None:
-            if self.yes:                              # a model with no known price (a local one): sent as approved
+            if self.yes:                              # a model with no known price, sent as the person said (--yes)
                 return
-            if default:                               # only the default cap: a local model is not stopped by it
-                if not getattr(self, "_said_unpriced", False):
-                    self._said_unpriced = True
-                    self.say(f"  datasheet: no price known for {', '.join(est['models']) or self.model}, so the default "
-                             f"${cap:g} cap can't be checked; sending (set [datasheet] max_cost_usd to hold it)")
-                return
-            raise DatasheetError(f"no price known for {', '.join(est['models']) or self.model}: can't hold [datasheet] max_cost_usd = {cap}; "
-                                 "pass --yes to send anyway")
+            # llm.price() prices a local endpoint at $0, so "no price" means a remote model, most likely a paid one:
+            # never sent on a guess, not even under the default cap (it can't be checked)
+            names = ', '.join(est['models']) or self.model
+            first = next(iter(est['models'] or ()), self.model)
+            what = (f"the default ${cap:g} cap can't be checked" if default
+                    else f"can't hold [datasheet] max_cost_usd = {cap:g}")
+            raise DatasheetError(f"no price known for {names}: {what}; nothing sent. To send it, set the model's "
+                                 f"price in ecadlib.toml ([ai.profiles.\"{first}\"] price_in = ... and price_out = ..., "
+                                 "$ per million tokens) so the cap holds, or pass --yes to send it without a cost check")
         unk = [r for r in est["rows"] if r.get("size_unknown")]
         if unk and self.committed_usd + est["usd_max"] > cap:     # DS-37: never a silent 30-page guess
             what = (f"the size of the PDF of {', '.join(r['part'] for r in unk)} is unknown (sent as a URL, not counted "
