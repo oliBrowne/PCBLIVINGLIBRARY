@@ -18,7 +18,22 @@ def report_file(stem, ext):
     return stem.with_name(stem.name + ext)
 
 
-RETRY = os.name == "nt"              # only Windows refuses a rename over an open file; elsewhere it is a real error
+# Windows device names: CON.SchLib (any case, any extension, trailing spaces before the dot) opens the console, not a
+# file. Superscript 1-3 count too (COM¹).
+DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+                *(f"{p}{d}" for p in ("COM", "LPT") for d in "0123456789¹²³")}
+
+
+def portable_stem(stem):
+    """A generated file name stem that is no Windows device name: 'AUX' -> 'AUX_', 'nul.x' -> 'nul_.x'; any other
+    stem as it is. (Illegal characters and trailing dots are the caller's naming rule.)"""
+    stem = str(stem)
+    i = stem.find(".")
+    i = len(stem) if i < 0 else i
+    return stem[:i] + "_" + stem[i:] if stem[:i].rstrip(" ").upper() in DEVICE_NAMES else stem
+
+
+RETRY = os.name == "nt"             # only Windows refuses a rename over an open file; elsewhere it is a real error
 DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
 TMP = re.compile(r"\..+\.\d+\.\d+\.tmp")   # the temp file name below: .NAME.<pid>.<thread>.tmp
 

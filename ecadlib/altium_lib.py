@@ -170,8 +170,10 @@ def not_cp1252(s):
 
 
 def file_stem(s):
-    """Filename for one-entry-per-file libraries: path separators and Windows-illegal characters -> '_'."""
-    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", lib_name(s)).rstrip(". ") or "_"
+    """Filename for one-entry-per-file libraries: path separators and Windows-illegal characters -> '_', and no
+    Windows device name (AUX -> AUX_: fsutil.portable_stem)."""
+    from .fsutil import portable_stem
+    return portable_stem(re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", lib_name(s)).rstrip(". ") or "_")
 
 
 def section_key(name):

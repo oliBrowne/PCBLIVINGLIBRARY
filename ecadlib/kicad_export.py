@@ -58,8 +58,11 @@ KICAD_NOTICE = ("Parts of this library come from the KiCad libraries (https://gi
 
 
 def kname(s):
-    """A symbol or footprint name KiCad accepts in a lib id and as a file name."""
-    return re.sub(r'[\s:/\\<>"|?*\x00-\x1f]', "_", str(s)).strip("._") or "_"
+    """A symbol or footprint name KiCad accepts in a lib id and as a file name: NFC (macOS file systems take NFC and
+    NFD spellings for one file name) and no Windows device name (AUX -> AUX_: fsutil.portable_stem)."""
+    import unicodedata
+    from .fsutil import portable_stem
+    return portable_stem(re.sub(r'[\s:/\\<>"|?*\x00-\x1f]', "_", unicodedata.normalize("NFC", str(s))).strip("._") or "_")
 
 
 def libname(s):

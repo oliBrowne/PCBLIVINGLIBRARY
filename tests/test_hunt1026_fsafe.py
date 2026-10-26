@@ -103,3 +103,30 @@ def test_migrate_scan_survives_an_unreadable_rules_file(tmp_path, monkeypatch):
     rows = [r for r in MG.scan(tmp_path) if r["kind"] == "rules"]
     assert [r["state"] for r in rows] == ["error"], rows
     MG.guard_tree(tmp_path)                                   # the web UI opening the workspace does not crash
+
+
+# ---------------------------------------------------------------- generated file names on Windows / macOS
+DEVICES = {"AUX", "CON", "NUL", "PRN", "COM1", "LPT9", "COM¹"}
+
+
+def test_file_names_never_a_windows_device_name():
+    """A part / footprint named like a Windows device (AUX, CON, NUL, COM1, LPT9; any case; with an extension too)
+    gave AUX.SchLib / CON.kicad_mod: Windows opens the device instead of a file, so the library cannot be written
+    or opened there."""
+    from ecadlib import altium_lib as AL, kicad_export as KX
+    for name in ("AUX", "aux", "CON", "NUL", "PRN", "COM1", "lpt9", "COM¹", "NUL.x", "CON ", "AUX."):
+        for stem in (AL.file_stem(name), KX.kname(name), KX.libname(name)):
+            assert stem.split(".")[0].rstrip(" ").upper() not in DEVICES, (name, stem)
+    for name in ("AUXILIARY", "CONN-2", "COM10", "LM358", "NULL", "R1"):
+        assert AL.file_stem(name) == name and KX.kname(name) == name, name
+    assert AL.file_stem("R1.") == "R1"
+
+
+def test_kicad_names_are_nfc():
+    """macOS file systems treat NFC u-umlaut and NFD u + U+0308 as one file name: two footprints spelled so got two
+    names (the case-insensitive clash check missed them) and one .kicad_mod overwrote the other there."""
+    import unicodedata
+    from ecadlib import kicad_export as KX
+    nfc = "Bürklin_1x02"
+    nfd = unicodedata.normalize("NFD", nfc)
+    assert nfc != nfd and KX.kname(nfc) == KX.kname(nfd) == nfc
