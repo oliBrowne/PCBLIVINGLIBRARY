@@ -3,7 +3,7 @@ Run:  python3 -m tests.test_hunt1026_gate"""
 import math, random, tempfile
 from pathlib import Path
 
-from ecadlib import altium_lib as AL, dedupe as DD, kicad_import as K
+from ecadlib import altium_lib as AL, dedupe as DD, kicad_import as K, lifecycle as L
 
 FP = """(footprint "X"
   (layer "F.Cu")
@@ -61,6 +61,51 @@ def test_gate01_pad_tuple_equal_iff_same_copper_property():
         same = _corners(0, 0, w1, h1, a1) == _corners(0, 0, w2, h2, a2)
         t1, t2 = DD._pad_tuple("1", 0, 0, w1, h1, a1, False), DD._pad_tuple("1", 0, 0, w2, h2, a2, False)
         assert (t1 == t2) == same, ((w1, h1, a1), (w2, h2, a2), t1, t2)
+
+
+def _mouser(part, listings):
+    data = {"Errors": [], "SearchResults": {"Parts": [
+        {"ManufacturerPartNumber": part["mpn"], "Manufacturer": m, "LifecycleStatus": st, "AvailabilityInStock": "5"}
+        for m, st in listings]}}
+    return L.parse_mouser(data, part, L.LifecycleResult("mouser", mpn=part["mpn"]))
+
+
+def test_gate02_lifecycle_picks_the_parts_own_maker():
+    # the same MPN from several makers: each has its own lifecycle; the part's maker must be the one read
+    many = [("STMicroelectronics", "Obsolete"), ("onsemi", "Active"), ("Texas Instruments", "Not Recommended for New Designs")]
+    for maker, want in (("ON", "active"), ("ON Semiconductor", "active"), ("TI", "nrnd"), ("Texas Instruments", "nrnd"),
+                        ("ST", "obsolete"), ("STMicroelectronics", "obsolete"), ("TI(德州仪器)", "nrnd")):
+        r = _mouser({"mpn": "LM358D", "manufacturer": maker}, many)
+        assert r.found and r.status == want, (maker, r.status, r.manufacturer)
+    # a maker none of the listings is by, among two others: another maker's status says nothing about this part
+    r = _mouser({"mpn": "LM358D", "manufacturer": "Monolithic Power Systems"}, many)
+    assert not r.found and r.status == "unknown"
+    # no maker on the part, or one listing only: as before, the first exact MPN
+    assert _mouser({"mpn": "LM358D", "manufacturer": ""}, many).status == "obsolete"
+    assert _mouser({"mpn": "LM358D", "manufacturer": "TI"}, [("Texas Instruments Inc.", "Active")]).status == "active"
+
+
+def test_gate02_digikey_other_makers_part_is_not_this_part():
+    data = {"Product": {"ManufacturerProductNumber": "2N7002", "Manufacturer": {"Name": "Nexperia USA Inc."},
+                        "ProductStatus": {"Status": "Obsolete"}, "QuantityAvailable": 0}}
+    r = L.parse_digikey(data, {"mpn": "2N7002", "manufacturer": "onsemi"}, L.LifecycleResult("digikey", mpn="2N7002"))
+    assert r.found is False and r.status == "unknown" and "Nexperia" in r.note
+    r = L.parse_digikey(data, {"mpn": "2N7002", "manufacturer": "Nexperia"}, L.LifecycleResult("digikey", mpn="2N7002"))
+    assert r.found and r.status == "obsolete"
+    r = L.parse_digikey(data, {"mpn": "2N7002", "manufacturer": ""}, L.LifecycleResult("digikey", mpn="2N7002"))
+    assert r.found and r.status == "obsolete"
+
+
+def test_gate02_maker_names():
+    same = [("TI", "Texas Instruments"), ("Burr-Brown", "Texas Instruments"), ("onsemi", "ON Semiconductor"),
+            ("Vishay", "Vishay Siliconix"), ("Rohm", "ROHM Semiconductor"), ("Würth Elektronik", "Wurth Elektronik"),
+            ("Diodes Inc.", "Diodes Incorporated"), ("ADI", "Analog Devices Inc."), ("ST", "STMicroelectronics")]
+    differ = [("ON", "Monolithic Power Systems"), ("ON", "STMicroelectronics"), ("ON", "ON Shore Technology"),
+              ("TI", "Tiger"), ("TI", "STMicroelectronics"), ("Nexperia", "NXP"), ("", ""), ("", "TI")]
+    for a, b in same:
+        assert L.same_maker(a, b) and L.same_maker(b, a), (a, b)
+    for a, b in differ:
+        assert not L.same_maker(a, b) and not L.same_maker(b, a), (a, b)
 
 
 if __name__ == "__main__":

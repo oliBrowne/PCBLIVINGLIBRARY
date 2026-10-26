@@ -17,7 +17,7 @@ unknown), 2 bad input or a failed Altium 365 update, 3 no source answered for an
 
 Response shapes: each provider's `shapes` says what is confirmed from public docs and what is assumed.
 None of these hosts was reachable from the sandbox this was written in; parsers are tested against mocks."""
-import argparse, csv, json, os, re, sqlite3, sys
+import argparse, csv, json, os, re, sqlite3, sys, unicodedata
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -69,11 +69,65 @@ class LifecycleResult:
     error: str = ""
 
 
+# words that say what kind of company it is, not which one ("Rohm Semiconductor" is Rohm, "Vishay Intertechnology" Vishay)
+_MAKER_WORDS = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "LTD", "LIMITED", "LLC", "GMBH", "AG",
+                "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE", "GROUP", "HOLDINGS", "INTERNATIONAL",
+                "SEMICONDUCTOR", "SEMICONDUCTORS", "SEMI", "ELECTRONICS", "ELECTRONIC", "ELECTRIC", "TECHNOLOGY",
+                "TECHNOLOGIES", "TECH", "INDUSTRIES", "INDUSTRIAL", "DEVICES", "COMPONENTS", "PRODUCTS", "SYSTEMS",
+                "MICROELECTRONICS", "INTEGRATED", "INTERTECHNOLOGY", "DIVISION"}
+# the short names makers go by -> the words of their full name (after _MAKER_WORDS are dropped)
+_MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON": "ON", "ONSEMI": "ON",
+                "ST": "ST", "STM": "ST", "ADI": "ANALOG", "MPS": "MONOLITHICPOWER", "AOS": "ALPHAOMEGA", "NXP": "NXP", "PHILIPS": "NXP",
+                "FAIRCHILD": "ON", "IR": "INFINEON", "RECTIFIER": "INFINEON", "CYPRESS": "INFINEON",
+                "MICROCHIPTECHNOLOGY": "MICROCHIP", "ATMEL": "MICROCHIP", "DIODESINC": "DIODES", "DIODES": "DIODES",
+                "RENESAS": "RENESAS", "IDT": "RENESAS", "INTERSIL": "RENESAS"}
+
+
+def maker_key(name):
+    """A maker's name reduced to which company it is: letters and digits of its words, company-kind words left out,
+    a Chinese alias in brackets dropped, short names mapped (TI -> Texas Instruments, onsemi / ON Semiconductor -> ON,
+    STMicroelectronics -> ST). '' when nothing is left."""
+    name = P.clean_maker(name or "") if isinstance(name, str) else ""
+    name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()       # Würth -> Wurth
+    words = re.findall(r"[A-Z0-9]+", re.sub(r"[-'&.]", "", name.upper()))
+    if words[:2] == ["TEXAS", "INSTRUMENTS"]:
+        return "TEXASINSTRUMENTS"
+    if words and words[0].startswith("STMICRO"):
+        return "ST"
+    kept = [w for w in words if w not in _MAKER_WORDS] or words
+    joined = "".join(kept)
+    return _MAKER_ALIAS.get(joined, joined)          # the whole name only: "ON Shore Technology" is not onsemi
+
+
+def same_maker(a, b):
+    """Do two maker names name the same company? Equal keys, or one key starting the other when the shorter has at
+    least 4 letters ("Vishay" / "Vishay Siliconix", "Murata" / "Murata Manufacturing"). Never a substring elsewhere:
+    "ON" is not in "Monolithic", "TI" is not "Tiger"."""
+    ka, kb = maker_key(a), maker_key(b)
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    short, long_ = sorted((ka, kb), key=len)
+    return len(short) >= 4 and long_.startswith(short)
+
+
 def _pick(items, part, mpn_of, mfr_of):
-    """Exact (normalised) MPN match; prefer one whose manufacturer agrees with the part's."""
+    """Exact (normalised) MPN match; prefer one whose manufacturer is the part's (same_maker). When the part names a
+    maker, no listing is by that maker, and the listings name more than one other maker, nothing is picked: the same
+    MPN from two other makers says nothing about this maker's part (LM358 from TI, onsemi and ST have their own
+    lifecycles), so the source reports "not found" rather than another maker's status."""
     exact = [i for i in items if isinstance(i, dict) and norm_mpn(mpn_of(i)) == norm_mpn(part["mpn"])]
-    want = norm_mpn(part.get("manufacturer"))[:6]
-    return next((i for i in exact if want and want in norm_mpn(mfr_of(i))), exact[0] if exact else None)
+    if not exact:
+        return None
+    want = part.get("manufacturer") or ""
+    if not maker_key(want):
+        return exact[0]
+    hit = next((i for i in exact if same_maker(want, mfr_of(i))), None)
+    if hit is not None:
+        return hit
+    others = {maker_key(mfr_of(i)) for i in exact} - {""}
+    return exact[0] if len(others) <= 1 else None
 
 
 def _http_error(res, r):
@@ -175,6 +229,10 @@ def parse_digikey(data, part, res):
     p = data.get("Product") if isinstance(data.get("Product"), dict) else data
     if norm_mpn(p.get("ManufacturerProductNumber")) != norm_mpn(part["mpn"]):
         res.found, res.note = False, f"best match {p.get('ManufacturerProductNumber')!r} is not this MPN"
+        return res
+    maker = (p.get("Manufacturer") or {}).get("Name", "") if isinstance(p.get("Manufacturer"), dict) else ""
+    if maker_key(part.get("manufacturer")) and maker_key(maker) and not same_maker(part.get("manufacturer"), maker):
+        res.found, res.note = False, f"DigiKey's {p.get('ManufacturerProductNumber')!r} is by {maker}, not {part['manufacturer']}"
         return res
     res.found = True
     words = [(p.get("ProductStatus") or {}).get("Status") or ""]
