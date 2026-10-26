@@ -512,6 +512,8 @@ def check_item(item, base=".", rules=None):
         add("verify", v)
     for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
         add("fields", v)
+    for v in item.get("bom_holds") or []:             # altium365.plan: BOM lines of this part that disagree on what is
+        add("verify", v)                              # built (two footprints, two values): a person fixes the BOM
     return fails, warns, info
 
 

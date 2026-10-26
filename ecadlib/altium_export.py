@@ -116,6 +116,20 @@ def _safe_name(s, notes):
         return lib_name(safe)
 
 
+def lands_differ(a, b):
+    """Two BOM footprint fields that name two lands (R_0603_1608Metric vs R_0402_1005Metric, SOIC-8 vs SOIC-8-1EP_..),
+    not one land written two ways ('0603' vs 'Resistor_SMD:R_0603_1608Metric'). An empty field says nothing."""
+    from .kicad_index import EP_HINT, EP_NAME
+    a, b = (str(x or "").split(":")[-1].strip() for x in (a, b))
+    if not a or not b or a.casefold() == b.casefold():
+        return False
+    if package_of(a) != package_of(b):
+        return True
+    if bool(EP_NAME.search(a) or EP_HINT.search(a)) != bool(EP_NAME.search(b) or EP_HINT.search(b)):
+        return True
+    return "_" in a and "_" in b                # two full land names of one package: two lands ('_HandSolder')
+
+
 def prior_names(items):
     """{plan item name: its MPN} of an existing plan, for to_rows(prior=...)."""
     return {i["name"]: next((str(p.get("value") or "") for p in i.get("parameters") or []
@@ -129,17 +143,22 @@ def to_rows(lines, triage=None, rules=None, prior=None):
     (held by the release check). prior: {part name: MPN} already in the plan (prior_names), so names stay with parts."""
     from . import rules as RU
     custom = rules is not None and not RU.is_default(rules, "naming")
-    tri = {}
+    tri, by_line = {}, {}
     if triage is not None:
         for _, t in triage.iterrows():
             if str(t["mpn"]):                  # an empty MPN would hand one row's footprint to every MPN-less line
                 tri[str(t["mpn"])] = t
+            try:                               # each BOM line's own row (R-BF-2): one MPN on an 0603 and an 0402
+                by_line[int(str(t.get("line", "")).strip())] = t    # line must not take the last row's land
+            except ValueError:
+                pass
+    holds = {}
     out, seen, renamed, same_value, canon, first, notes, unstorable = {}, {}, {}, {}, {}, {}, {}, {}
     # a name already in the plan stays with its part (SYS-1): when the part released under it is still in the BOM, a
     # line added above it with another MPN takes the suffixed name instead
     present = {norm_mpn("" if placeholder_mpn(ln.get("mpn", "")) else ln.get("mpn", "")) for ln in lines}
     reserved = {n: norm_mpn(m) for n, m in (prior or {}).items() if norm_mpn(m) in present}
-    for ln in lines:
+    for i, ln in enumerate(lines, 1):
         bad = []
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
@@ -147,7 +166,9 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         if placeholder_mpn(mpn):               # 'N/A' / '-' names no part: two such lines are two parts, not one
             mpn = ""
         fp = ln.get("footprint", "")
-        t = tri.get(mpn)
+        t = by_line.get(i)
+        if t is None or not mpn or str(t["mpn"]) != mpn:
+            t = tri.get(mpn)
         ref, kind = (prefix.group(0) if prefix else "U"), None
         if cat in ("ICs", "Misc"):              # U? / no designator: what the part is, if the source or footprint says
             got = t if t is not None else {}
@@ -215,15 +236,23 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         row, des = out[cat][-1], ln.get("designator", "") or "?"
         notes.setdefault(pn, []).extend(bad)
         if pn not in first:
-            first[pn] = (row, des)
+            first[pn] = (row, des, ln.get("footprint", ""))
         else:                                   # a second BOM line for this part: the first one wins, say what differs
-            keep, kdes = first[pn]
+            keep, kdes, kfp = first[pn]
             diff = [f"{k} {keep[k]!r} vs {row[k]!r}" for k in ("Footprint Ref", "Manufacturer", "Value",
                                                                  "Manufacturer Part Number", "Supplier Part Number 1")
                     if str(keep[k]).strip() and str(row[k]).strip() and keep[k] != row[k]]
+            land = lands_differ(kfp, ln.get("footprint", "")) or lands_differ(keep["Footprint Ref"], row["Footprint Ref"])
+            if land and not any(d.startswith("Footprint Ref") for d in diff):
+                diff.insert(0, f"Footprint {kfp!r} vs {ln.get('footprint', '')!r}")
             if diff:
                 notes[pn].append(f"BOM lines {kdes} and {des} are one part {pn} but differ ({'; '.join(diff)}): "
                                  f"using {kdes}; check the BOM")
+            if land:                            # one part built on one land for lines that name two: held (R-BF-2)
+                holds.setdefault(pn, []).append(
+                    f"BOM lines {kdes} and {des} are one part {pn} on two footprints "
+                    f"({kfp or keep['Footprint Ref']!r} vs {ln.get('footprint', '') or row['Footprint Ref']!r}): "
+                    "give the lines their own MPNs or one footprint")
     notes = {k: list(dict.fromkeys(v)) for k, v in notes.items() if v}
     for v in notes.values():
         for n in v:
@@ -234,6 +263,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         df.attrs["kicad_fp"] = renamed
         df.attrs["unstorable"] = unstorable
         df.attrs["notes"] = notes               # {Part Number: [BOM conflicts, renamed characters]}
+        df.attrs["holds"] = {k: list(dict.fromkeys(v)) for k, v in holds.items()}   # {Part Number: [BOM conflicts
+        # that hold the part]}: altium365.plan -> item bom_holds -> release check
     return res
 
 

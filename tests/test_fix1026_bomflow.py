@@ -81,3 +81,45 @@ def test_librarian_holds_rc0603_on_an_0402_land(tmp_path):
                  ["standard"])
     for it in items.values():
         assert it["status"] == "held" and "chip size" in _holds(it), (it["name"], _holds(it))
+
+
+# --- R-BF-2: one MPN on two lines with two footprints: each line keeps its own, and the part is held -----------------
+
+F2 = (HDR + '"R1,R2",2,10k,R_0603_1608Metric,Acme,ACME-10K-X,Resistor 10k,https://example.com/a.pdf\n'
+      "R3,1,10k,R_0402_1005Metric,Acme,ACME-10K-X,Resistor 10k,https://example.com/a.pdf\n")
+
+
+def test_to_rows_reads_each_lines_own_triage_row_and_holds_two_footprints():
+    import pandas as pd
+    from ecadlib import altium_export as AX
+    lines = [{"designator": "R1,R2", "qty": "2", "value": "10k", "footprint": "R_0603_1608Metric", "mpn": "ACME-10K-X",
+              "description": "Resistor 10k"},
+             {"designator": "R3", "qty": "1", "value": "10k", "footprint": "R_0402_1005Metric", "mpn": "ACME-10K-X",
+              "description": "Resistor 10k"}]
+    tri = pd.DataFrame([{"line": "1", "mpn": "ACME-10K-X", "local_footprint": "Resistor_SMD:R_0603_1608Metric"},
+                        {"line": "2", "mpn": "ACME-10K-X", "local_footprint": "Resistor_SMD:R_0402_1005Metric"}])
+    with contextlib.redirect_stderr(io.StringIO()):
+        res = AX.to_rows(lines, tri)
+    df = next(iter(res.values()))
+    assert list(df["Footprint Ref"]) == ["R_0603_1608Metric"], list(df["Footprint Ref"])   # the first line's own land
+    holds = df.attrs.get("holds", {}).get(df["Part Number"].iloc[0]) or []
+    assert any("R_0603_1608Metric" in h and "R_0402_1005Metric" in h for h in holds), df.attrs
+
+
+def test_to_rows_does_not_hold_one_land_written_two_ways():
+    from ecadlib import altium_export as AX
+    lines = [{"designator": "R1", "qty": "1", "value": "10k", "footprint": "0603", "mpn": "ACME-10K-X"},
+             {"designator": "R3", "qty": "1", "value": "10k", "footprint": "Resistor_SMD:R_0603_1608Metric",
+              "mpn": "ACME-10K-X"}]
+    with contextlib.redirect_stderr(io.StringIO()):
+        df = next(iter(AX.to_rows(lines).values()))
+    assert not df.attrs.get("holds"), df.attrs.get("holds")
+
+
+@lite
+def test_librarian_holds_one_mpn_on_an_0603_and_an_0402_line(tmp_path):
+    items = _run(tmp_path, F2, ["kicad", "standard"], [KICAD_FIXTURE])
+    assert len(items) == 1, list(items)
+    it = next(iter(items.values()))
+    assert it["status"] == "held", (it["name"], it["status"])
+    assert "R_0603_1608Metric" in _holds(it) and "R_0402_1005Metric" in _holds(it), _holds(it)

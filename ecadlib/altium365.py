@@ -311,6 +311,8 @@ def plan(lines, triage=None, models=None, root=None, rules=None, prior=None):
             })
             if df.attrs.get("notes", {}).get(row["Part Number"]):    # BOM lines that disagree, renamed characters
                 items[-1]["bom_notes"] = list(df.attrs["notes"][row["Part Number"]])
+            if df.attrs.get("holds", {}).get(row["Part Number"]):    # lines that disagree on what is built: held
+                items[-1]["bom_holds"] = list(df.attrs["holds"][row["Part Number"]])
             why = df.attrs.get("unstorable", {}).get(row["Part Number"])
             if why:                            # a name Altium can't store: this part is held, the others go on
                 items[-1]["name_problems"] = [why]
