@@ -205,7 +205,9 @@ def _canon_pads(pads):
         if q["shape"] == "round" and q["w"] == q["h"]:
             q["rot"] = 0.0
         out.append(q)
-    return sorted(out, key=lambda q: (q["num"], q["x"] or 0, q["y"] or 0))
+    # pads that share a number and a centre (a pad shape built of stacked pads) in a fixed order whatever the file's:
+    # the rest of the pad decides, so the same pads written in another order are the same fingerprint
+    return sorted(out, key=lambda q: (q["num"], q["x"] or 0, q["y"] or 0, json.dumps(q, sort_keys=True, default=str)))
 
 
 # per-pad details one tool has and the other has not (kept out of gid, compared within one tool):

@@ -196,6 +196,34 @@ def test_same_maker():
         assert not S(a, b) and not S(b, a), (a, b)
 
 
+def test_official_source_pick_prefers_the_boms_maker_by_name_not_by_letters():
+    # lifecycle._pick looked for the BOM maker's first six letters anywhere in the source's maker: "ST" is inside
+    # "TexaSInSTruments", "ON" inside "STMicroelectrONics", so an ST line took TI's part (datasheet, LCSC offer)
+    from ecadlib import lifecycle as L
+    items = [{"mpn": "LM2903D", "m": "Texas Instruments"}, {"mpn": "LM2903D", "m": "STMicroelectronics"},
+             {"mpn": "LM2903D", "m": "onsemi"}]
+    pick = lambda maker: L._pick(items, {"mpn": "LM2903D", "manufacturer": maker}, lambda x: x["mpn"], lambda x: x["m"])["m"]
+    assert pick("ST") == "STMicroelectronics"
+    assert pick("ON Semiconductor") == "onsemi"
+    assert pick("ON") == "onsemi"
+    assert pick("TI") == "Texas Instruments"
+    assert pick("Nobody") == "Texas Instruments"                 # no maker agrees: the first exact match, as before
+    assert pick("") == "Texas Instruments"
+
+
+def test_fingerprint_of_stacked_pads_does_not_depend_on_file_order():
+    # two pads with one number at one centre (a pad shape made of stacked pads) were kept in file order: the same
+    # footprint written with them swapped had another gid and change_diff saw "pad 1 shape rect -> round" (a false hold)
+    from ecadlib import change_diff as CD, fingerprint as FP
+    a = '(pad "1" smd rect (at 0 0) (size 1 2) (layers "F.Cu" "F.Paste" "F.Mask"))'
+    b = '(pad "1" smd circle (at 0 0) (size 1.5 1.5) (layers "F.Cu" "F.Mask"))'
+    c = '(pad "2" smd rect (at 3 0) (size 1 2) (layers "F.Cu" "F.Paste" "F.Mask"))'
+    mod = lambda *p: '(footprint "X" (version 20221018) (generator x) (layer "F.Cu") (attr smd) ' + " ".join(p) + ")"
+    f1, f2 = FP.of_kicad(None, mod(a, b, c)), FP.of_kicad(None, mod(c, b, a))
+    assert FP.hashes(f1) == FP.hashes(f2)
+    assert CD.diff(f1, f2) == []
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
