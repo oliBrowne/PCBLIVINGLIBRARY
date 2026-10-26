@@ -159,6 +159,28 @@ def test_pick_named_does_not_take_a_part_named_like_a_revision():
     assert A.pick_named([mk("bat54", "BAT54")], "BAT54")["id"] == "bat54"
 
 
+def test_kicad_menu_part_exported_is_not_failed_by_another_parts_error():
+    """The KiCad window's add-part: one plan is the whole library, so another part's export error ("OTHER: symbol
+    name ... already used") made the part just exported say "built but not published"."""
+    import tempfile
+    from unittest import mock
+    from ecadlib import altium_menu as AM
+    items = [{"name": n, "status": "ready", "hold_reasons": [], "source": {}, "parameters": []} for n in ("PART-A", "OTHER")]
+    with tempfile.TemporaryDirectory() as t:
+        ws = _MenuWS(t, items, [])
+        pub = {"target": "kicad", "install": [], "problems": ["OTHER: symbol name X already used by another part"],
+               "library": t, "held": {}, "footprints": {"PART-A": "ecadlib:SOT-23"}}
+        with mock.patch.object(AM, "publish", lambda *a, **k: pub):
+            res = AM._part_result({"library": Path(t), "name": "ecadlib", "tool": "kicad"}, ws, "bom.csv", "bom.csv",
+                                  "PART-A", AM.Progress(None))
+        assert res["status"] == "ready" and res["footprint"] == "ecadlib:SOT-23", res
+        pub["problems"] = ["library: ecadlib.pretty could not be written"]          # not another part's: still counts
+        with mock.patch.object(AM, "publish", lambda *a, **k: pub):
+            res = AM._part_result({"library": Path(t), "name": "ecadlib", "tool": "kicad"}, ws, "bom.csv", "bom.csv",
+                                  "PART-A", AM.Progress(None))
+        assert res["status"] == "error", res
+
+
 class Workspace(FakeA365):
     """A closer Nexar mock: components found by name whatever the case (pick_named), symbol / footprint items that
     can be released once (a second release of the same item name fails as duplicate, as live), linked by name."""

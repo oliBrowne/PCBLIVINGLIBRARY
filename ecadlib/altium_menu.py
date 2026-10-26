@@ -1154,7 +1154,9 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
             res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
-        probs = pub.get("problems") or []
+        # the list holds every part added from the menu: another part's problem ("OTHER: ...") is not this one's
+        others = {str(i.get("name")) for i in items if i.get("name") and i.get("name") != nm}
+        probs = [p for p in pub.get("problems") or [] if not any(str(p).startswith(f"{o}: ") for o in others)]
         if pub.get("target") == "a365" and "actions" in pub:    # one result per part: only this part's counts for it
             probs = [p for p in probs if p.startswith(f"{nm}: ")]
             if nm not in pub["actions"] and not probs:
