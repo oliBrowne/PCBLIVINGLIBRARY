@@ -54,7 +54,7 @@ The script is written from Altium's scripting references (TR0120 DelphiScript, T
 Schematic API references) and Altium's own example scripts; ALTIUM_API lists every identifier it calls and where it is
 documented. tests/test_altium_native.py checks that the script calls nothing else. Run in Altium Designer 26 on a
 real PC before it is trusted: see docs/altium-native.md for the result of that run."""
-import argparse, hashlib, json, re, sys
+import argparse, hashlib, json, re, struct, sys
 from pathlib import Path
 
 from . import altium_lib as AL
@@ -559,6 +559,150 @@ def _recipe_items(rp):
             if len(f) > 16:                     # the part and display mode it is in, hidden, IEEE symbols (dot, clock)
                 pin.update(part=int(f[1]), mode=int(f[2]), hidden=f[12] == "1", symbols=tuple(int(v) for v in f[13:17]))
             cur["pins"].append(pin)
+        elif f[0] in PRIM_KINDS and cur is not None:
+            cur.setdefault("prims", []).append(f)
+    return out
+
+
+PRIM_KINDS = {"TRACK", "ARC", "FILL", "REGION", "TEXT", "BODY",          # PCB primitives beyond pads
+              "RECT", "LINE", "POLYLINE", "POLYGON", "SARC", "CIRCLE", "LABEL"}       # symbol graphics
+SCH_RECORD = {"RECT": "14", "LINE": "13", "POLYLINE": "6", "POLYGON": "7", "SARC": "12", "CIRCLE": "8", "LABEL": "4"}
+SCH_NAME = {v: k.lower() for k, v in SCH_RECORD.items()}
+
+
+def _mil_units(v):
+    """'12.5mil' (a body's parameter) -> internal units; None when absent or not a length."""
+    try:
+        return round(float(str(v).lower().removesuffix("mil")) * 10000)
+    except ValueError:
+        return None
+
+
+def _model_file(name):
+    """A STEP model's file name, without folders."""
+    return str(name or "").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _ring_same(a, b, tol):
+    """Two closed outlines with the same corners, whatever the first corner or the direction (a repeated closing
+    corner is dropped)."""
+    norm = lambda pts: pts[:-1] if len(pts) > 1 and all(abs(u - v) <= tol for u, v in zip(pts[0], pts[-1])) else pts
+    a, b = norm(list(a)), norm(list(b))
+    if len(a) != len(b):
+        return False
+    if not a:
+        return True
+    near = lambda p, q: abs(p[0] - q[0]) <= tol and abs(p[1] - q[1]) <= tol
+    for seq in (b, b[::-1]):
+        for k in range(len(seq)):
+            if near(a[0], seq[k]) and all(near(a[i], seq[(k + i) % len(seq)]) for i in range(len(a))):
+                return True
+    return False
+
+
+def _pcb_prims(recipe_lines):
+    """Recipe TRACK / ARC / FILL / REGION / TEXT / BODY lines -> [(kind, layer, value)] to match against the file's."""
+    out = []
+    for f in recipe_lines:
+        k, n = f[0], lambda i: int(f[i])
+        if k == "TRACK":
+            out.append(("track", n(6), ((n(1), n(2)), (n(3), n(4)), n(5))))
+        elif k == "ARC":
+            out.append(("arc", n(7), (n(1), n(2), n(3), int(f[4]) / 1000, int(f[5]) / 1000, n(6))))
+        elif k == "FILL":
+            out.append(("fill", n(5), (min(n(1), n(3)), min(n(2), n(4)), max(n(1), n(3)), max(n(2), n(4)))))
+        elif k == "REGION":
+            out.append(("region", n(1), (f[2] == "1", [(n(4 + 2 * i), n(5 + 2 * i)) for i in range(n(3))])))
+        elif k == "TEXT":
+            out.append(("text", n(7), (f[1], n(2), n(3), n(4), n(5), int(f[6]) / 1000)))
+        elif k == "BODY":
+            out.append(("body", n(1), (_model_file(f[4]), n(2), n(3), [(n(10 + 2 * i), n(11 + 2 * i)) for i in range(n(9))])))
+    return out
+
+
+def _file_prims(records):
+    """The file's PCB records other than pads -> [(kind, layer, value)] in _pcb_prims' form (a via, or a record kind
+    the recipe has no line for, as (kind, layer, None): never in the recipe)."""
+    out = []
+    for r in records:
+        t = r["type"]
+        if t == "pad":
+            continue
+        if t == "track":
+            out.append(("track", r["layer"], ((r["x1"], r["y1"]), (r["x2"], r["y2"]), r["w"])))
+        elif t == "arc":
+            out.append(("arc", r["layer"], (r["cx"], r["cy"], r["r"], r["a0"], r["a1"], r["w"])))
+        elif t == "fill":
+            out.append(("fill", r["layer"], (min(r["x1"], r["x2"]), min(r["y1"], r["y2"]), max(r["x1"], r["x2"]), max(r["y1"], r["y2"]))))
+        elif t == "region":
+            flags = struct.unpack_from("<H", r["raw"][0], 1)[0] if len(r["raw"][0]) >= 3 else 0
+            ko = "KEEPOUTRESTRICTIONS=" in r.get("params", "").upper() or bool(flags & 0x200)
+            out.append(("region", r["layer"], (ko, [(round(x), round(y)) for x, y in r["pts"]])))
+        elif t == "text":
+            out.append(("text", r["layer"], (r["text"], r["x"], r["y"], r["h"], r["w"], r["rot"])))
+        elif t == "body":
+            pr = AL.parse_params(r.get("params", ""))
+            model = _model_file(pr.get("MODEL.NAME")) if pr.get("MODEL.EMBED", "").upper() == "TRUE" else ""
+            out.append(("body", r["layer"], (model, _mil_units(pr.get("OVERALLHEIGHT")), _mil_units(pr.get("STANDOFFHEIGHT")),
+                                             [(round(x), round(y)) for x, y in r["pts"]])))
+        else:
+            out.append((t, r["layer"], None))
+    return out
+
+
+def _angle_same(a, b):
+    d = abs(a - b) % 360
+    return min(d, 360 - d) <= 0.01
+
+
+def _prim_same(kind, a, b, tol):
+    """A recipe primitive a and one of the file's, b (same kind and layer), are the same as far as Altium keeps it:
+    track ends in either order, an arc's angles modulo 360, a region's / body's outline from any corner and in either
+    direction. Text box sizes are Altium's own and not compared; a STEP body's height comes from its model."""
+    close = lambda u, v: abs(u - v) <= tol
+    if b is None:
+        return False
+    if kind == "track":
+        (p1, p2, w), (q1, q2, v) = a, b
+        ends = lambda p, q: close(p[0], q[0]) and close(p[1], q[1])
+        return close(w, v) and ((ends(p1, q1) and ends(p2, q2)) or (ends(p1, q2) and ends(p2, q1)))
+    if kind == "arc":
+        full = lambda s, e: abs(abs(e - s) - 360) <= 0.01 or abs(e - s) <= 0.01
+        angles = (full(a[3], a[4]) and full(b[3], b[4])) or (_angle_same(a[3], b[3]) and _angle_same(a[4], b[4]))
+        return all(close(u, v) for u, v in zip(a[:3] + a[5:], b[:3] + b[5:])) and angles
+    if kind == "fill":
+        return all(close(u, v) for u, v in zip(a, b))
+    if kind == "region":
+        return a[0] == b[0] and _ring_same(a[1], b[1], tol)
+    if kind == "text":
+        return a[0] == b[0] and all(close(u, v) for u, v in zip(a[1:5], b[1:5])) and _angle_same(a[5], b[5])
+    if kind == "body":
+        if a[0].lower() != b[0].lower():
+            return False
+        if not a[0] and not (b[1] is not None and close(a[1], b[1]) and b[2] is not None and close(a[2], b[2])):
+            return False                             # an extruded body: its heights are the recipe's
+        return _ring_same(a[3], b[3], tol)
+    return False
+
+
+def _prim_diffs(name, want, got, tol):
+    """Recipe primitives Altium's file lacks (or has changed) and file primitives the recipe has none of, counted per
+    kind and layer."""
+    left = list(got)
+    missing = []
+    for kind, layer, a in want:
+        k = next((i for i, (gk, gl, b) in enumerate(left) if gk == kind and gl == layer and _prim_same(kind, a, b, tol)), None)
+        if k is None:
+            missing.append((kind, layer))
+        else:
+            left.pop(k)
+    out = []
+    for what, xs in (("of the recipe missing or different", missing), ("not in the recipe", [x[:2] for x in left])):
+        counts = {}
+        for x in xs:
+            counts[x] = counts.get(x, 0) + 1
+        for (kind, layer), n in sorted(counts.items()):
+            out.append(f"{name}: {n} {kind}{'s' if n > 1 else ''} on layer {layer} {what}")
     return out
 
 
@@ -625,11 +769,15 @@ def compare_one(lib, rp, tol=10, known=None):
     want = _recipe_items(rp)
     probs = []
     if lib.suffix.lower() == ".pcblib":
-        got = {c["name"]: [r for r in c["records"] if r["type"] == "pad"] for c in AL.read_pcblib(lib)}
+        comps = {c["name"]: c["records"] for c in AL.read_pcblib(lib)}
+        got = {n: [r for r in rs if r["type"] == "pad"] for n, rs in comps.items()}
         for name, w in want.items():
             if name not in got:
                 probs.append(f"{lib.name}: footprint {name} missing")
                 continue
+            # every other primitive too, per kind and layer: a custom pad's copper region, paste windows, outlines,
+            # text, 3D bodies (with pads alone, an Altium build without them passed as 'built')
+            probs += _prim_diffs(f"{lib.name}/{name}", _pcb_prims(w.get("prims", [])), _file_prims(comps[name]), tol)
             g = got[name]
             if len(g) != len(w["pads"]):
                 probs.append(f"{lib.name}/{name}: {len(g)} pads, recipe has {len(w['pads'])}")
@@ -660,6 +808,21 @@ def compare_one(lib, rp, tol=10, known=None):
                 probs.append(f"{lib.name}/{name}: footprint link {w['footprint']} missing (got {models})")
             if len(g) != len(w["pins"]):
                 probs.append(f"{lib.name}/{name}: {len(g)} pins, recipe has {len(w['pins'])}")
+            gw, gg = {}, {}                  # symbol graphics: how many of each kind in each part and display mode
+            for f in w.get("prims", []):
+                if f[0] in SCH_RECORD:
+                    k = (f[0].lower(), int(f[1]), int(f[2]))
+                    gw[k] = gw.get(k, 0) + 1
+            for r in recs[name]:
+                if r.get("RECORD") in SCH_NAME:
+                    try:
+                        k = (SCH_NAME[r["RECORD"]], int(r.get("OWNERPARTID", 0)), int(r.get("OWNERPARTDISPLAYMODE", 0)))
+                    except ValueError:
+                        k = (SCH_NAME[r["RECORD"]], -2, -2)
+                    gg[k] = gg.get(k, 0) + 1
+            for k in sorted(set(gw) | set(gg)):
+                if gw.get(k, 0) != gg.get(k, 0):
+                    probs.append(f"{lib.name}/{name}: {gg.get(k, 0)} {k[0]} in part {k[1]} mode {k[2]}, recipe has {gw.get(k, 0)}")
             for a, b in zip(sorted(w["pins"], key=_key), sorted(g, key=_key)):
                 bad = [k for k in ("x", "y", "length", "orient", "etype") if a[k] != b[k]]
                 if "part" in a:

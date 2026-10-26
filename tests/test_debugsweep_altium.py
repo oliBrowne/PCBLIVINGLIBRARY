@@ -19,6 +19,7 @@ def test_ds2_34_compare_reports_a_rebuild_that_dropped_the_drill_offset(tmp_path
     rp = lib.with_name(lib.name + AN.EXT)
     AN.record(lib, AN._sha(lib.read_bytes()))
     kept = tmp_path / "kept.PcbLib"                     # a rebuild that kept the 0.7 mm copper offset: a match
+    fp = AL.add_fab_designator(fp)                      # as write_pcblib (and its recipe) has it: Altium builds that
     kept.write_bytes(AL.pcblib_bytes([fp], lib.name, ("02/02/2031", "01:01:01")))
     assert AN.compare_one(kept, rp) == []
     centred = [dict(fp, pads=[dict(p, offset=None) for p in fp["pads"]])]    # copper centred on the hole

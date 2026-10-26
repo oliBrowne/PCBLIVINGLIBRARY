@@ -112,7 +112,8 @@ def test_symexp05_compare_sees_pad_shape_corner_and_slot(tmp_path):
     for i, change, what in ((0, {"shape": "round"}, "shape"), (1, {"corner": 25}, "corner"),
                             (2, {"hole_shape": "round", "slot": 0.0}, "hole")):
         pads = [dict(p, **change) if k == i else p for k, p in enumerate(fp["pads"])]
-        lib.write_bytes(AL.pcblib_bytes([dict(fp, pads=pads)], lib.name, stamp))
+        lib.write_bytes(AL.pcblib_bytes([dict(AL.add_fab_designator(fp), pads=pads)], lib.name, stamp))   # (the recipe's
+        #                                                 fab designator too: compare checks every primitive, R-BR-1)
         probs = AN.compare_one(lib, rp)
         assert len(probs) == 1 and f"pad {i + 1}:" in probs[0] and what in probs[0], (what, probs)
 

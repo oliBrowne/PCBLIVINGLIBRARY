@@ -196,3 +196,131 @@ def test_custom_pad_silk_measured_to_the_real_copper():
     t = _custom(_ROT.format(a=90), "3 3").replace(
         '(pad "2"', '(fp_line (start -1 -2) (end 1 -2) (stroke (width 0.12)) (layer "F.SilkS"))\n  (pad "2"')
     assert any(i[1] == "silk" and i[0] == "error" for i in FC.check(t)), FC.check(t)
+
+
+# ---------------------------------------------------------------- R-BR-1: altium-native compare checks every primitive
+def _rich_fp():
+    """A footprint with every kind of PCB primitive ecadlib writes: pads, tracks, arcs, fills, regions (copper, keep-out,
+    mechanical), texts, an extruded body and an embedded STEP model."""
+    from pathlib import Path
+    from ecadlib import altium_lib as AL
+    spec = json.loads((Path(AL.__file__).parent / "package_specs" / "SOIC-8_3.9x4.9mm_P1.27mm.json").read_text())
+    fp = AL.footprint_from_spec(spec)[0]
+    return dict(fp, tracks=list(fp["tracks"]) + [(-2.0, 3.0, 2.0, 3.0, 0.12, AL.TOP_OVERLAY)],
+                arcs=list(fp.get("arcs", [])) + [(0.0, 0.0, 0.5, 0.0, 360.0, 0.1, AL.TOP_OVERLAY),
+                                                  (1.0, 1.0, 0.3, 45.0, 135.0, 0.1, AL.MECH13)],
+                fills=list(fp.get("fills", [])) + [(-0.5, -0.5, 0.5, 0.2, AL.TOP)],
+                regions=list(fp.get("regions", [])) + [([(0, 0), (1, 0), (1, 0.5), (0, 0.5)], AL.TOP),
+                                                        ([(-1, -1), (-0.5, -1), (-0.5, -0.5)], AL.TOP, 31),
+                                                        ([(2, 2), (3, 2), (3, 3)], AL.MECH13)],
+                texts=list(fp.get("texts", [])) + [(".Designator", -1.0, 3.5, 1.0, 0.15, 0.0, AL.TOP_OVERLAY)],
+                bodies=[{"pts": [(-1, -1), (1, -1), (1, 1), (-1, 1)], "height": 1.5, "standoff": 0.1},
+                        {"pts": [(-2, -2), (2, -2), (2, 2), (-2, 2)], "height": 1.75,
+                         "step": {"name": "SOIC-8.step", "data": b"ISO-10303-21; BODY", "rot": (0.0, 0.0, 90.0)}}])
+
+
+def _built(d, fp, altium):
+    """Write fp (ecadlib's file + recipe), then put 'Altium's build' (the footprint dict altium) over the file."""
+    from ecadlib import altium_lib as AL, altium_native as AN
+    lib = d / "X.PcbLib"
+    AL.write_pcblib(lib, [fp])
+    rp = lib.with_name(lib.name + AN.EXT)
+    AN.record(lib, AN._sha(lib.read_bytes()))
+    lib.write_bytes(AL.pcblib_bytes([altium], lib.name))
+    return lib, rp
+
+
+@lite
+def test_native_compare_matches_ecadlibs_own_libraries(tmp_path):
+    from pathlib import Path
+    from ecadlib import altium_lib as AL, altium_native as AN, kicad_import as K
+    fp = _rich_fp()
+    lib = tmp_path / "R.PcbLib"
+    AL.write_pcblib(lib, [fp])
+    assert AN.compare_one(lib, lib.with_name(lib.name + AN.EXT)) == []
+    # what Altium changes by itself (docs/altium-native.md): primitive order, track end order; and a region's first point
+    alt = dict(fp, tracks=[(x2, y2, x1, y1, w, l) for x1, y1, x2, y2, w, l in reversed(fp["tracks"])],
+               arcs=list(reversed(fp["arcs"])), regions=[(r[0][1:] + r[0][:1], *r[1:]) for r in reversed(fp["regions"])],
+               texts=list(reversed(fp["texts"])))
+    d = tmp_path / "alt"
+    d.mkdir()
+    lib2, rp2 = _built(d, fp, alt)
+    assert AN.compare_one(lib2, rp2) == [], AN.compare_one(lib2, rp2)
+    assert AN.lib_state(lib2, rp2) == "built"
+    # every footprint the repo's package specs and KiCad fixtures make compares equal to itself
+    root = Path(AL.__file__).parent.parent
+    fps = [AL.footprint_from_spec(json.loads(f.read_text()))[0] for f in sorted((root / "ecadlib/package_specs").glob("*.json"))]
+    for f in sorted((root / "tests/fixtures/kicad_golden").glob("*.kicad_mod")):
+        fps.append(K.convert_footprint(f.read_text(encoding="utf-8"))[0])
+    assert len(fps) > 40
+    for i, f in enumerate(fps):
+        lib = tmp_path / f"S{i}.PcbLib"
+        AL.write_pcblib(lib, [f])
+        probs = AN.compare_one(lib, lib.with_name(lib.name + AN.EXT))
+        assert probs == [], (f["name"], probs)
+
+
+@lite
+def test_native_compare_finds_missing_or_changed_primitives(tmp_path):
+    from ecadlib import altium_native as AN
+    fp = _rich_fp()
+    last = fp["regions"][-1]
+    cases = {
+        "a copper region gone": dict(fp, regions=fp["regions"][:-3] + fp["regions"][-2:]),
+        "keep-out region no keep-out": dict(fp, regions=[(r[0], r[1]) for r in fp["regions"]]),
+        "no tracks": dict(fp, tracks=[]),
+        "track moved": dict(fp, tracks=[(x1 + 0.1, y1, x2 + 0.1, y2, w, l) for x1, y1, x2, y2, w, l in fp["tracks"]]),
+        "track on another layer": dict(fp, tracks=fp["tracks"][:-1] + [fp["tracks"][-1][:5] + (fp["tracks"][-1][5] + 1,)]),
+        "arc angle": dict(fp, arcs=fp["arcs"][:-1] + [(1.0, 1.0, 0.3, 45.0, 180.0, 0.1, fp["arcs"][-1][6])]),
+        "fill gone": dict(fp, fills=fp["fills"][:-1]),
+        "text changed": dict(fp, texts=fp["texts"][:-1] + [(".Comment",) + tuple(fp["texts"][-1][1:])]),
+        "extruded body height": dict(fp, bodies=[dict(fp["bodies"][0], height=2.5), fp["bodies"][1]]),
+        "STEP model renamed": dict(fp, bodies=[fp["bodies"][0],
+                                               dict(fp["bodies"][1], step=dict(fp["bodies"][1]["step"], name="other.step"))]),
+        "body gone": dict(fp, bodies=fp["bodies"][:1]),
+        "Mechanical 13 region on 15": dict(fp, regions=fp["regions"][:-1] + [(last[0], last[1] + 2)]),
+    }
+    for label, alt in cases.items():
+        d = tmp_path / label.replace(" ", "_")
+        d.mkdir()
+        lib, rp = _built(d, fp, alt)
+        assert AN.compare_one(lib, rp), label                 # was [] for every one: only pads were compared
+        assert AN.lib_state(lib, rp) == "edited", label        # was "built": recorded as Altium's build
+
+
+@lite
+def test_native_compare_l_shaped_custom_pad(tmp_path):
+    """The reviewer's case: a KiCad custom pad (anchor + copper REGION on Top) built without its region and outlines."""
+    from ecadlib import altium_native as AN, kicad_import as K
+    mod = '''(footprint "L_PAD" (layer "F.Cu")
+  (fp_rect (start -2 -2) (end 2 2) (stroke (width 0.05)) (fill none) (layer "F.CrtYd"))
+  (fp_rect (start -1.5 -1.5) (end 1.5 1.5) (stroke (width 0.1)) (fill none) (layer "F.Fab"))
+  (pad "1" smd custom (at -1 0) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask")
+    (options (clearance outline) (anchor rect))
+    (primitives (gr_poly (pts (xy -0.25 -0.25) (xy 1.5 -0.25) (xy 1.5 0.25) (xy -0.25 0.25)) (width 0) (fill yes))))
+  (pad "2" smd rect (at 1 1) (size 0.5 0.5) (layers "F.Cu" "F.Paste" "F.Mask"))
+)'''
+    fp = K.convert_footprint(mod)[0]
+    assert fp["regions"]
+    lib, rp = _built(tmp_path, fp, dict(fp, regions=[], tracks=[], arcs=[], fills=[]))
+    probs = AN.compare_one(lib, rp)
+    assert any("region" in p for p in probs), probs
+    assert AN.lib_state(lib, rp) == "edited"
+
+
+@lite
+def test_native_compare_symbol_graphics(tmp_path):
+    from ecadlib import altium_lib as AL, altium_native as AN
+    pins = [{"num": str(i), "name": f"P{i}", "type": "io", "side": "left" if i < 3 else "right"} for i in range(1, 5)]
+    sym = AL.ic_symbol("U4", pins, "Test", footprint="SOIC8", layout=False)
+    lib = tmp_path / "U.SchLib"
+    AL.write_schlib(lib, [sym])
+    rp = lib.with_name(lib.name + AN.EXT)
+    assert AN.compare_one(lib, rp) == []
+    keep = [i for i, pr in enumerate(sym["prims"]) if pr[0] != "rect"]          # Altium's build lost the body rectangle
+    assert len(keep) < len(sym["prims"])
+    alt = dict(sym, prims=[sym["prims"][i] for i in keep],
+               **{k: [sym[k][i] for i in keep] for k in ("prim_parts", "prim_modes") if sym.get(k)})
+    lib.write_bytes(AL.schlib_bytes([alt]))
+    probs = AN.compare_one(lib, rp)
+    assert any("rect" in p.lower() for p in probs), probs
