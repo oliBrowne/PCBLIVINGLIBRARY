@@ -838,7 +838,7 @@ def load_library(plan=None, libs=(), a365=None, log=None):
     from . import dedupe as DD
     col = DD.Collector(DD.load_config(None, Path(plan).parent if plan else None), log or (lambda *a, **k: None))
     if plan:
-        col.add_plan(json.loads(Path(plan).read_text()), Path(plan).parent)
+        col.add_plan(json.loads(Path(plan).read_text(encoding="utf-8")), Path(plan).parent)
         a365 = a365 or (Path(plan).parent / "a365_state.json" if (Path(plan).parent / "a365_state.json").exists() else None)
     for lib in libs:
         if not Path(lib).exists():             # else every project part would read "missing from library"
@@ -847,7 +847,7 @@ def load_library(plan=None, libs=(), a365=None, log=None):
     guids = {}
     if a365:
         col.add_a365(a365)
-        data = json.loads(Path(a365).read_text())     # any GUIDs the state carries map back to the component name
+        data = json.loads(Path(a365).read_text(encoding="utf-8"))     # any GUIDs the state carries map back to the component name
         for name, snap in (data.items() if isinstance(data, dict) else ((n.get("name"), n) for n in data)):
             for g in re.findall(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}", json.dumps(snap)):
                 guids[g.upper()] = name
@@ -859,7 +859,7 @@ def load_lifecycle(path):
         return {}
     if not Path(path).exists():                # a typo would skip the NRND / EOL check silently
         raise FileNotFoundError(f"--lifecycle {path}: not found")
-    data = json.loads(Path(path).read_text())
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
     return {k: v for k, v in (data.get("parts") or {}).items()}
 
 
@@ -972,7 +972,7 @@ def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, r
     lc = load_lifecycle(lifecycle or (dflt if dflt and dflt.exists() else None))
     plan_lc = {}
     if plan:
-        for it in json.loads(Path(plan).read_text()):
+        for it in json.loads(Path(plan).read_text(encoding="utf-8")):
             st = it.get("lifecycle")
             st = st.get("status") if isinstance(st, dict) else st
             if st:
@@ -1053,9 +1053,9 @@ def write_where_used(res, stem):
                   f"{r['qty']} | {r['designators'][:60]} | {r['not_fitted'] or '-'} |")
     if res["warnings"]:
         md += ["", "## Warnings", ""] + [f"- {w}" for w in res["warnings"]]
-    stem.with_suffix(".md").write_text("\n".join(md) + "\n")
+    stem.with_suffix(".md").write_text("\n".join(md) + "\n", encoding="utf-8")
     js = {"projects": res["projects"], "flags": res["flags"], "warnings": res["warnings"], "parts": res["parts"]}
-    stem.with_suffix(".json").write_text(json.dumps(js, indent=1, default=list))
+    stem.with_suffix(".json").write_text(json.dumps(js, indent=1, default=list), encoding="utf-8")
     return {"md": stem.with_suffix(".md"), "csv": stem.with_suffix(".csv"), "flags": stem.with_name(stem.name + "_flags.csv"),
             "json": stem.with_suffix(".json")}
 
