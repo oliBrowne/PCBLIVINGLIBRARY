@@ -63,3 +63,43 @@ def test_two_wildcard_names_with_one_pinout_are_not_held_for_it(tmp_path):
     (it,) = _run(tmp_path, csv, ("kicad",), extra_sym=syms).values()
     assert it["source"]["symbol"] == "kicad:Amplifier_Operational:MCP6L01Rx-xOT"
     assert "check the variant" not in _holds(it), _holds(it)
+
+
+# --- R-SY-2: an unnumbered copper pad of a generated footprint (TI's PowerPAD printed '-') is held ----------------
+
+def _ep_item(d, source, unnumbered=True):
+    from tests.test_release_check import SOIC, make
+    ep = '  (pad "" smd rect (at 0 0) (size 2.29 3) (layers "F.Cu" "F.Paste" "F.Mask"))\n'
+    kmod = SOIC.rstrip()[:-1] + (ep if unnumbered else "") + ")\n"
+    return make(d, kmod=kmod, source=source)
+
+
+@lite
+def test_an_unnumbered_copper_pad_of_a_generated_footprint_is_held(tmp_path):
+    from ecadlib import release_check as RC
+    for src in ("datasheet:https://example.com/p.pdf", "standard:SOIC-8"):
+        d = tmp_path / src.split(":")[0]
+        it = _ep_item(d, src)
+        f, _, _ = RC.check_item(it, d)
+        assert any(r == "pins" and "unnumbered" in m for r, m in f), (src, f)
+        it["footprint"]["mount_pads"] = 1             # the pad table names it a mounting pad (role mount)
+        f, _, _ = RC.check_item(it, d)
+        assert not any("unnumbered" in m for _, m in f), (src, f)
+
+
+@lite
+def test_no_unnumbered_pad_or_a_curated_library_footprint_is_not_held_for_it(tmp_path):
+    from ecadlib import release_check as RC
+    f, _, _ = RC.check_item(_ep_item(tmp_path / "a", "datasheet:x", unnumbered=False), tmp_path / "a")
+    assert not any("unnumbered" in m for _, m in f), f
+    f, _, _ = RC.check_item(_ep_item(tmp_path / "b", "kicad:Package_SO:SOIC-8"), tmp_path / "b")
+    assert not any("unnumbered" in m for _, m in f), f
+
+
+def test_the_librarian_records_the_pad_tables_own_unnumbered_mounting_pads():
+    from ecadlib.librarian import explicit_mount_pads
+    t = {"pads": [{"number": "1"}, {"number": None, "type": "smd"}, {"number": None, "role": "mount"},
+                  {"number": None, "type": "npth"}, {"number": "MP", "role": "mount"}]}
+    assert explicit_mount_pads({"pad_table": t}) == 1
+    assert explicit_mount_pads({"pad_table": dict(t, default_pad={"role": "mount"})}) == 2
+    assert explicit_mount_pads({}) == 0 and explicit_mount_pads(None) == 0

@@ -378,6 +378,18 @@ def check_item(item, base=".", rules=None):
             add("pins", f"pads without a symbol pin: {FC._ranges(numbered - pins)}")
         if mech - {""}:
             warns.append(f"mechanical pads without a pin (allowed): {FC._ranges(mech - {''})}")
+        # an unnumbered copper pad of ecadlib's own build (a pad table's row with no number: TI prints the PowerPAD
+        # as '-') is on no net: a thermal pad left off GND. Held unless the pad table named it a mounting pad
+        # (role mount, recorded by the librarian as footprint.mount_pads); the KiCad library's are curated (R-SY-2)
+        bare = [p for p in pads if not p["designator"] and not (p["hole"] and not p["plated"])]
+        if bare and str((item.get("source") or {}).get("footprint") or "").startswith(GENERATED_FP):
+            try:
+                ok = int(item["footprint"].get("mount_pads") or 0)
+            except (TypeError, ValueError):
+                ok = 0
+            if len(bare) > ok:
+                add("pins", f"{len(bare) - ok} unnumbered copper pad(s) on no net (a thermal / exposed pad needs its "
+                            f"pin's number; a mounting pad role mount in the pad table)")
         links = {r["MODELNAME"] for s in syms for r in s["records"] if r.get("RECORD") == "45" and r.get("MODELNAME")
                  and str(r.get("MODELTYPE") or "PCBLIB").upper() == "PCBLIB"}
         names = {fp["name"] for fp in fps} | ({AL.lib_name(item["footprint"]["ref"])} if item["footprint"].get("ref") else set())

@@ -130,6 +130,11 @@ CODES = {
     "pins.pad_without_pin": ("Footprint {pads_have} no pin on the symbol.",
                              "Pick a symbol that has those pins, or a footprint that matches; mounting pads are fine.",
                              [r"^pins: pads without a symbol pin: (?P<pads>.+)"]),
+    "pins.unnumbered_pad": ("The footprint built by ecadlib has {n} copper pad(s) with no number, so they are on no net "
+                            "(a thermal pad the datasheet prints as '-' would not reach GND).",
+                            "Give the pad the number of the pin it belongs to (the pin table names the thermal pad's net), or mark it role "
+                            "mount in the pad table if it is only a mounting pad.",
+                            [r"^pins: (?P<n>\d+) unnumbered copper pad"]),
     # the datasheet's pad table failed footprint_adv.check_pad_table, so no footprint was built (librarian, release check)
     "padtable.no_pin1": ("The footprint read from the datasheet has no pad numbered 1 or A1[ (its pads are {pads})], so "
                          "nothing says which pad is pin 1.",

@@ -474,6 +474,7 @@ class Run:
         AL.write_pcblib(pcb, [fp], RU.layers(self.rules))
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
                            "name": name, "hash": h, "hash_v": FS.HASH_V, "height": fp.get("height_mm") or None, **renamed,
+                           **({"mount_pads": explicit_mount_pads(spec)} if explicit_mount_pads(spec) else {}),
                            **({"model": {"source": f"easyeda:{model['ref']['uuid']}", "url": model["ref"]["url"],
                                          "title": model["ref"]["title"], "credit": EC.CREDIT}} if model else {})}
         self.written[str(pcb)] = st["footprint"]
@@ -1268,6 +1269,20 @@ def alternate_footprint(ln, st):
             f": check {mpn} comes in that package, or give the alternate its own footprint"), None
 
 
+def explicit_mount_pads(spec):
+    """How many unnumbered copper pads the read's pad table itself calls mounting / shield pads (role mount or
+    shield, on the row or default_pad): the release check holds any other unnumbered copper pad (R-SY-2)."""
+    t = (spec or {}).get("pad_table") or {}
+    base = t.get("default_pad") or {}
+    n = 0
+    for p in t.get("pads") or []:
+        q = dict(base, **{k: v for k, v in p.items() if v is not None})
+        if str(q.get("number") if q.get("number") is not None else "").strip() == "" and q.get("type") != "npth" \
+                and q.get("role") in ("mount", "shield"):
+            n += 1
+    return n
+
+
 def apply_state(item, st, ln):
     """Copy a part's state into its plan item: model files, sources, filled-in fields, what was tried."""
     for k in ("symbol", "footprint"):
@@ -1280,6 +1295,10 @@ def apply_state(item, st, ln):
                     item[k].pop("kicad_types", None)
             if k == "footprint":
                 item[k]["kicad_mod"] = st[k].get("kicad_mod")
+                if st[k].get("mount_pads"):            # the pad table's own unnumbered mounting pads (R-SY-2)
+                    item[k]["mount_pads"] = st[k]["mount_pads"]
+                else:
+                    item[k].pop("mount_pads", None)
                 if st[k].get("model"):                 # where its 3D model came from (EasyEDA's STEP, with the credit)
                     item[k]["model"] = st[k]["model"]
                 else:
