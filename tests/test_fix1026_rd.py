@@ -181,3 +181,63 @@ def test_rd2_j_leads_stay_exempt():
 def test_rd2_leads_on_one_side_keep_the_whole_room():
     """SOT-89: three leads on one side, the tab under the other: its 0.95 mm foot is not two feet in the room."""
     assert_ok(SOT89)
+
+
+# ---------------------------------------------------------------- R-RD-3: pad-table unit labels
+def table(name, pads, default, body=None, unit="mm", **kw):
+    t = {"unit": unit, "y_axis": "down", "view": "top", "origin": "center", "center_at": None, "footprint_origin": "center",
+         "default_pad": default, "pads": pads, "arrays": None, "body": body, "keepouts": None}
+    return dict(name=name, package_type="custom", pin_count=len({p["number"] for p in pads}), pad_table=t, **kw)
+
+
+def dip_pads(n, w=7.62):
+    out = []
+    for i in range(n // 2):
+        y = (i - (n // 2 - 1) / 2) * 2.54
+        out += [{"number": str(i + 1), "x": -w / 2, "y": y}, {"number": str(n - i), "x": w / 2, "y": y}]
+    return out
+
+
+DIP8 = table("DIP-8_W7.62mm", dip_pads(8), {"type": "tht", "drill": 0.8, "d": 1.6},
+             body={"x1": -3.3, "y1": -4.9, "x2": 3.3, "y2": 4.9}, pitch=2.54, body_length=(6.1, 6.35, 6.6),
+             body_width=(9.0, 9.27, 9.5), terminal_width=(0.36, 0.46, 0.56), drill=0.8)
+SO8_LAND = table("SOIC-8_land", [{"number": str(i + 1), "x": -2.7, "y": (i - 1.5) * 1.27} for i in range(4)] +
+                 [{"number": str(8 - i), "x": 2.7, "y": (i - 1.5) * 1.27} for i in range(4)],
+                 {"type": "smd", "w": 1.55, "h": 0.6}, body={"x1": -1.95, "y1": -2.45, "x2": 1.95, "y2": 2.45}, pitch=1.27)
+SOT23_LAND = table("SOT-23_land", [{"number": "1", "x": -1.1, "y": -0.95}, {"number": "2", "x": -1.1, "y": 0.95},
+                                   {"number": "3", "x": 1.1, "y": 0.0}], {"type": "smd", "w": 1.0, "h": 0.6},
+                   body={"x1": -0.65, "y1": -1.45, "x2": 0.65, "y2": 1.45}, pitch=0.95)
+
+
+def relabel(t, unit):
+    m = copy.deepcopy(t)
+    m["pad_table"]["unit"] = unit
+    return m
+
+
+def test_rd3_true_pad_tables_pass():
+    for t in (DIP8, SO8_LAND, SOT23_LAND):
+        assert_ok(t)
+        for inch in (relabel(t, "in"), relabel(t, "mil")):      # the same table truly in inches / mils
+            k = 1 / 25.4 if inch["pad_table"]["unit"] == "in" else 1 / 0.0254
+            tb = inch["pad_table"]
+            tb["pads"] = [dict(p, x=round(p["x"] * k, 5), y=round(p["y"] * k, 5)) for p in tb["pads"]]
+            tb["default_pad"] = {a: (round(v * k, 5) if isinstance(v, float) else v) for a, v in tb["default_pad"].items()}
+            assert not [m for m in FA.check_pad_table(inch) if m["level"] == "error"], (t["name"], FA.check_pad_table(inch))
+
+
+def test_rd3_mm_table_labelled_inches_is_held():
+    """Before: a DIP-8 pad table in mm labelled "in" built 40.6 mm pads at +-96.8 mm, assess ok."""
+    for t in (DIP8, SO8_LAND, SOT23_LAND):
+        assert_held(relabel(t, "in"), "pad_table", "unit")
+        try:
+            FA.build(read(relabel(t, "in"))["spec"])
+            raise AssertionError(f"{t['name']}: a 25.4x table was built")
+        except ValueError as e:
+            assert "unit" in str(e), e
+
+
+def test_rd3_mm_table_labelled_mil_is_an_error_not_a_warning():
+    for t in (DIP8, SO8_LAND, SOT23_LAND):
+        errs = [m for m in FA.check_pad_table(relabel(t, "mil")) if m["level"] == "error" and m["rule"] == "units"]
+        assert errs, (t["name"], FA.check_pad_table(relabel(t, "mil")))

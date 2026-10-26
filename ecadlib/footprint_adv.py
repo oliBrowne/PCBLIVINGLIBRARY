@@ -529,6 +529,16 @@ def tht_pad_size(pads, pitch=None):
             p["shape"] = "roundrect"
 
 
+def _body_nom(v):
+    """A body dimension's nominal in mm (dim dict or number), or None."""
+    try:
+        from .footprint_gen import dim
+        d = dim(v) if isinstance(v, dict) else (v, v, v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        return d[1] if d and d[1] and d[1] > 0 else None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------- consistency checks on a table
 def check_pad_table(spec, pads=None):
     """Consistency checks on a pad table (mm, KiCad frame). Returns [{level, rule, message}]."""
@@ -579,7 +589,44 @@ def check_pad_table(spec, pads=None):
         inch = f"no pad or hole bigger than {tiny:g}"
     if raw and unit == "mm" and inch and not what:
         add("error", "units", f"pad_table {inch} with unit mm: that looks like inches (set unit to in)")
-    if raw and unit == "mil" and sizes and max(sizes) < 4:
+    # any other unit label: the same size checks on the values converted to mm (review 196 R-RD-3: a DIP-8 table in mm
+    # labelled "in" built 40.6 mm pads 193 mm apart; one labelled "mil" 0.04 mm pads)
+    f = UNIT.get(unit)
+    wrong = None
+    if raw and unit != "mm" and f:
+        if big * f > 60:
+            wrong = f"pad / hole sizes up to {big * f:g} mm"
+        elif span * f > 200:
+            wrong = f"pads spread over {span * f:g} mm"
+        elif gap and gap * f > 10 and span * f > 60 and big > 0.25 * gap:
+            wrong = f"no two pads closer than {gap * f:g} mm (pads up to {big * f:g} mm)"
+        elif tiny is not None and 0 < tiny * f < 0.15 and not any(p.get("polygon") for p in raw):
+            wrong = f"no pad or hole bigger than {tiny * f:.3g} mm"
+        if wrong:
+            add("error", "units", f"pad_table {wrong} with unit {unit}: that is implausible for a land; is the table "
+                                  "in another unit (mm)?")
+    # every unit label: the closest pads a whole number of the spec's pitches apart (SOT-23: two) in the unit the table
+    # gives, or in none; fitting only in another unit is the unit mislabelled
+    if raw and f and gap and num(sp) and sp > 0 and not wrong and not (unit == "mm" and (what or inch)):
+        fits = lambda g: any(abs(gap * g - k * sp) <= 0.03 * k * sp for k in (1, 2, 3, 4))
+        other = [u for u, g in UNIT.items() if u != unit and fits(g)]
+        if not fits(f) and other:
+            wrong = other[0]
+            add("error", "units", f"pad_table the closest pads {gap:g} {unit} apart ({gap * f:g} mm) are no whole "
+                                  f"number of the spec's {sp:g} mm pitch, and are in {other[0]}: is the table in "
+                                  f"{other[0]} (set unit to {other[0]})?")
+    # the table's extent in mm against the read's own body (a separate number, its unit read on its own): 25.4 times
+    # too big is far past any lead or holder beyond its body (DO-35 on a 25.4 mm pitch: 7 x its 4 mm body)
+    bodies = [_body_nom(spec.get(k)) for k in ("body_length", "body_width")]
+    cu_pads = [q for q in pads if q.get("kind") != "np_thru_hole"]
+    if raw and cu_pads and all(bodies) and not wrong and not (unit == "mm" and (what or inch)):
+        boxes = [pad_bbox(q) for q in cu_pads]
+        ext = max(max(b[2] for b in boxes) - min(b[0] for b in boxes), max(b[3] for b in boxes) - min(b[1] for b in boxes))
+        if ext > 30 and ext > 10 * max(bodies):
+            wrong = "extent"
+            add("error", "units", f"pad_table pads spread over {ext:g} mm for a {bodies[0]:g} x {bodies[1]:g} mm body: "
+                                  f"that is implausible; is the table's unit ({unit}) right?")
+    if raw and unit == "mil" and sizes and max(sizes) < 4 and not wrong:
         add("warning", "units", f"pad_table unit is mil but no pad or hole is bigger than {max(sizes):g} mil "
                                 f"({max(sizes) * 0.0254:.3f} mm): is the table in mm?")
     pins = [p for p in pads if p["role"] in PIN_ROLES]
