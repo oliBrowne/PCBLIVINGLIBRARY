@@ -324,3 +324,102 @@ def test_native_compare_symbol_graphics(tmp_path):
     lib.write_bytes(AL.schlib_bytes([alt]))
     probs = AN.compare_one(lib, rp)
     assert any("rect" in p.lower() for p in probs), probs
+
+
+# ---------------------------------------------------------------- R-BR-3: a small hostile .PcbLib cannot take GBs
+def _soic_fp():
+    from pathlib import Path
+    from ecadlib import altium_lib as AL
+    spec = json.loads((Path(AL.__file__).parent / "package_specs" / "SOIC-8_3.9x4.9mm_P1.27mm.json").read_text())
+    return AL.footprint_from_spec(spec)[0]
+
+
+def _tree(path):
+    import olefile
+    tree = {}
+    with olefile.OleFileIO(str(path)) as o:
+        for e in o.listdir():
+            node = tree
+            for part in e[:-1]:
+                node = node.setdefault(part, {})
+            node[e[-1]] = o.openstream(e).read()
+    return tree
+
+
+@lite
+def test_pcblib_zlib_bomb_model_is_not_unpacked_on_read(tmp_path):
+    import struct, tracemalloc, zlib
+    from ecadlib import altium_lib as AL, cfb
+    plain = tmp_path / "plain.PcbLib"
+    AL.write_pcblib(plain, [_soic_fp()])
+    tree = _tree(plain)
+    c = zlib.compressobj(9)
+    comp = b"".join(c.compress(b"\0" * (1 << 24)) for _ in range(5)) + c.flush()        # 80 MB of zeros in ~80 kB
+    models = tree["Library"].setdefault("Models", {})
+    models.update(Header=struct.pack("<I", 1), Data=AL.pblock("|EMBED=TRUE|ID={X}|NAME=x.step|"), **{"0": comp})
+    bomb = tmp_path / "bomb.PcbLib"
+    cfb.write_cfb(bomb, tree)
+    tracemalloc.start()
+    try:
+        got = AL.read_pcblib(bomb)                            # was: 80 MB (1 GB for the reviewer's file) unpacked here
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 20 * 2 ** 20, peak
+    assert got[0]["records"] and len(got[0]["models"]) == 1
+    params, _ = got[0]["models"].packed(0)
+    assert params["NAME"] == "x.step"
+    try:
+        got[0]["models"][0]
+    except ValueError as e:
+        assert "3D model" in str(e) and "MB" in str(e), e
+    else:
+        raise AssertionError("an 80 MB model was unpacked past the cap")
+
+
+@lite
+def test_pcblib_stream_bigger_than_the_file_is_refused(tmp_path):
+    import olefile, struct, time
+    from ecadlib import altium_lib as AL
+    p = tmp_path / "plain.PcbLib"
+    AL.write_pcblib(p, [_soic_fp()])
+    d = bytearray(p.read_bytes())
+    with olefile.OleFileIO(str(p)) as o:
+        sid = o._find("Library/Data")
+        e = o.direntries[sid]
+        assert e.size >= 4096                                  # regular sectors: its FAT entry is made to point at itself
+        hdr = struct.unpack_from("<109I", d, 76)
+    struct.pack_into("<I", d, 512 * (1 + hdr[0]) + 4 * e.isectStart, e.isectStart)
+    first_dir = struct.unpack_from("<I", d, 48)[0]
+    struct.pack_into("<Q", d, 512 * (1 + first_dir) + 128 * sid + 120, 64 << 20)        # and its size says 64 MB
+    f = tmp_path / "loop.PcbLib"
+    f.write_bytes(d)
+    t = time.time()
+    try:
+        AL.read_pcblib(f)
+    except ValueError as ex:
+        assert "Library/Data" in str(ex) and "bigger than the file" in str(ex), ex     # was: read 64 MB of one sector
+    else:
+        raise AssertionError("a looping 64 MB stream was read")
+    assert time.time() - t < 2
+
+
+@lite
+def test_real_libraries_still_read_with_their_models(tmp_path):
+    from pathlib import Path
+    from ecadlib import altium_lib as AL
+    root = Path(AL.__file__).parent.parent
+    for f in sorted(root.glob("out/altium_models/PcbLib/*.PcbLib")):
+        assert AL.read_pcblib(f)[0]["records"], f
+    for f in sorted(root.glob("out/altium_models/SchLib/*.SchLib")):
+        assert AL.read_schlib(f)[1], f
+    data = b"ISO-10303-21;\n" + bytes(range(256)) * 4000                # a 1 MB embedded STEP model
+    fp = dict(_soic_fp(), bodies=[{"pts": [(-1, -1), (1, -1), (1, 1), (-1, 1)], "height": 1.5,
+                                   "step": {"name": "S.step", "data": data, "rot": (0.0, 0.0, 0.0)}}])
+    lib = tmp_path / "S.PcbLib"
+    AL.write_pcblib(lib, [fp])
+    models = AL.read_pcblib(lib)[0]["models"]
+    assert len(models) == 1 and models
+    [(params, got)] = list(models)
+    assert got == data and params["NAME"] == "S.step"
+    assert models[0][1] == data and {str(mp.get("ID")): d for mp, d in models}

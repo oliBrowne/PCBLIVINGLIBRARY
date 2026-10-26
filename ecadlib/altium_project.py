@@ -153,7 +153,8 @@ def read_schdoc(path, rules=None):
     import olefile
     path = Path(path)
     warnings = []
-    with olefile.OleFileIO(str(path)) as o:
+    from .altium_lib import ole_open
+    with ole_open(path) as o:                 # (a stream bigger than the file is refused, not followed round a loop)
         if not o.exists("FileHeader"):
             raise ValueError(f"{path.name}: no FileHeader stream; not an Altium schematic")
         recs = _records(o.openstream("FileHeader").read())

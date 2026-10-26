@@ -688,8 +688,7 @@ def _pcblib_stamp(path):
     if not Path(path).is_file():
         return None
     try:
-        import olefile
-        with olefile.OleFileIO(str(path)) as o:
+        with ole_open(path) as o:
             hdr = o.openstream("Library/Data").read(4096)
     except Exception:                  # not ours, damaged, not OLE: just write the new file
         return None
@@ -975,7 +974,7 @@ def relink_schlib(path, old, new):
     from . import altium_native as AN
     path, old, new = Path(path), lib_name(old), lib_name(new)
     tree, hit = {}, False
-    with olefile.OleFileIO(str(path)) as o:
+    with ole_open(path) as o:
         for parts in o.listdir(streams=True, storages=False):
             data = o.openstream(parts).read()
             if parts[-1] == "Data" and len(parts) == 2:
@@ -1122,20 +1121,94 @@ def parse_pcb_data(d):
     return name, recs
 
 
+MODEL_CAP = 64 * 2 ** 20                     # bytes an embedded 3D model may unpack to
+
+
+def ole_open(path):
+    """olefile.OleFileIO(path), refused (ValueError) when a stream says it is bigger than the whole file: olefile reads a
+    stream's whole declared size when it is opened, following its sector chain, so a 100 kB file whose chain loops
+    back on itself and whose size says 1 GB took 2.35 GB and 14 s before failing. Every stream (the root entry holds
+    the mini stream) fits in the file, so no chain is followed further than the file is long."""
+    import olefile, os
+    limit = os.path.getsize(path)
+    o = olefile.OleFileIO(str(path))
+    try:
+        for e in o.direntries:
+            if e is not None and e.size > limit:
+                raise ValueError(f"{Path(path).name}: damaged or hostile file: stream {_stream_path(o, e)} says it "
+                                 f"holds {e.size:,} bytes, bigger than the file ({limit:,} bytes)")
+    except BaseException:
+        o.close()
+        raise
+    return o
+
+
+def _stream_path(o, e):
+    """The path ('Library/Data') of a directory entry, for error messages."""
+    for parts in o.listdir(streams=True, storages=True):
+        try:
+            if o.direntries[o._find(parts)] is e:
+                return "/".join(parts)
+        except (OSError, IndexError):
+            continue
+    return e.name
+
+
+class Models:
+    """A .PcbLib's embedded 3D models [(params, STEP bytes)], unpacked one at a time when asked for (never on read)
+    and each refused (ValueError) past MODEL_CAP: a 1 MB zlib bomb unpacked to 1 GB on every read of the file (release
+    check, dedupe, fingerprint, compare) though they never look at the models. len() and truthiness cost nothing."""
+
+    def __init__(self, packed, name=""):
+        self._packed, self._name = list(packed), name
+
+    def __len__(self):
+        return len(self._packed)
+
+    def packed(self, i):
+        """(params, the zlib-packed bytes) of model i, not unpacked."""
+        return self._packed[i]
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return [self[k] for k in range(*i.indices(len(self)))]
+        params, data = self._packed[i]
+        if i < 0:
+            i += len(self)
+        d = zlib.decompressobj()
+        try:
+            out = d.decompress(data, MODEL_CAP + 1)
+        except zlib.error as e:
+            raise ValueError(f"{self._name}: embedded 3D model {i} ({params.get('NAME', '?')}) is damaged ({e})") from e
+        if len(out) > MODEL_CAP or d.unconsumed_tail:
+            raise ValueError(f"{self._name}: embedded 3D model {i} ({params.get('NAME', '?')}) unpacks to more than "
+                             f"{MODEL_CAP // 2 ** 20} MB: refused (a damaged or hostile file)")
+        return params, out
+
+    def __iter__(self):
+        return (self[i] for i in range(len(self)))
+
+    def __eq__(self, other):
+        return list(self) == list(other) if isinstance(other, (list, tuple, Models)) else NotImplemented
+
+    def __repr__(self):
+        return f"Models({[p.get('NAME') for p, _ in self._packed]})"
+
+
 def read_pcblib(path):
-    """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all)."""
-    import olefile
-    with olefile.OleFileIO(str(path)) as o:
+    """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all), and for a
+    stream bigger than the file (ole_open). Embedded 3D models (entry 0's "models") unpack when used (Models)."""
+    with ole_open(path) as o:
         if not o.exists("Library/Data"):
             raise ValueError(f"{Path(path).name} is not a .PcbLib (no Library/Data stream"
                              + ("; it looks like a .SchLib)" if o.exists("FileHeader") and not o.exists("Library") else ")"))
         try:
-            return _read_pcblib(o)
+            return _read_pcblib(o, Path(path).name)
         except (struct.error, zlib.error, IndexError, KeyError, EOFError) as e:
             raise ValueError(f"{Path(path).name}: damaged or unsupported .PcbLib ({type(e).__name__}: {e})") from e
 
 
-def _read_pcblib(o):
+def _read_pcblib(o, name=""):
     d = o.openstream("Library/Data").read()
     hb, i = _blk(d, 0)
     n = struct.unpack_from("<I", d, i)[0]; i += 4
@@ -1154,19 +1227,19 @@ def _read_pcblib(o):
         nm2, recs = parse_pcb_data(o.openstream(f"{key}/Data").read())
         out.append({"name": nm, "storage": key, "params": pr, "records": recs,
                     "header_count": struct.unpack("<I", o.openstream(f"{key}/Header").read())[0]})
-    if o.exists("Library/Models/Header") and out:     # embedded STEP models: [(params, decompressed bytes)]
+    if o.exists("Library/Models/Header") and out:     # embedded STEP models: [(params, STEP bytes)], unpacked when used
         md, j, models = o.openstream("Library/Models/Data").read(), 0, []
         while j < len(md):
             b, j = _blk(md, j)
-            models.append((parse_param_bytes(b), zlib.decompress(o.openstream(f"Library/Models/{len(models)}").read())))
-        out[0]["models"] = models
+            models.append((parse_param_bytes(b), o.openstream(f"Library/Models/{len(models)}").read()))
+        out[0]["models"] = Models(models, name)
     return out
 
 
 def read_schlib(path):
-    """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all)."""
-    import olefile
-    with olefile.OleFileIO(str(path)) as o:
+    """Raises ValueError for a damaged or unknown-format file (OSError when it is not an OLE file at all), and for a
+    stream bigger than the file (ole_open)."""
+    with ole_open(path) as o:
         if o.exists("Library/Data") or not o.exists("FileHeader"):
             raise ValueError(f"{Path(path).name} is not a .SchLib"
                              + (" (it looks like a .PcbLib)" if o.exists("Library/Data") else " (no FileHeader stream)"))

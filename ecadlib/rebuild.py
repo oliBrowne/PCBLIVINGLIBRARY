@@ -57,8 +57,8 @@ def norm_bytes(path):
     if p.suffix.lower() != ".pcblib":
         return data
     try:
-        import olefile
-        with olefile.OleFileIO(str(p)) as o:
+        from .altium_lib import ole_open
+        with ole_open(p) as o:                # (a stream bigger than the file is refused: ValueError, raw bytes below)
             parts = []
             for s in sorted("/".join(e) for e in o.listdir(streams=True, storages=False)):
                 b = o.openstream(s).read()
