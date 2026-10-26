@@ -332,7 +332,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
     # line added above it with another MPN takes the suffixed name instead
     present = {norm_mpn("" if placeholder_mpn(ln.get("mpn", "")) else ln.get("mpn", "")) for ln in lines}
     prior = {n: (p if isinstance(p, dict) else {"mpn": str(p or "")}) for n, p in (prior or {}).items()}
-    reserved = {n: norm_mpn(p["mpn"]) for n, p in prior.items() if norm_mpn(p["mpn"]) in present}
+    # keyed folded, as Altium compares part numbers: a new 'RES-0603-10K' must not take a released 'RES-0603-10k' (R-B2-4)
+    reserved = {n.casefold(): (n, norm_mpn(p["mpn"])) for n, p in prior.items() if norm_mpn(p["mpn"]) in present}
     for i, ln in enumerate(lines, 1):
         bad = []
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
@@ -382,10 +383,11 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             # Altium part numbers ignore case: names are compared folded, and a name spelt another way is another
             # part (RES-2512-10m is 10 mOhm, RES-2512-10M 10 MOhm), never one name in two cases (R-FX10-7, R-BF-9)
             ident, fold = (ident, "" if key else pn), pn.casefold()
-            if pn in reserved and fold not in seen and key != reserved[pn]:
+            held = reserved.get(fold)
+            if held and fold not in seen and key != held[1]:
                 seen[fold] = None               # held for the part released under this name, further down the BOM
-            if pn in reserved and seen.get(fold) is None and key == reserved[pn]:
-                seen[fold] = ident
+            if held and seen.get(fold) is None and key == held[1]:
+                seen[fold], pn = ident, held[0]     # the released part keeps its name as released
             if seen.setdefault(fold, ident) != ident:   # same synthetic PN, different part (100nF 16V vs 50V; a 10k
                 pn = f"{pn}-{name_mpn or fp_ref}".replace(" ", "")              # SMD and a 10k axial): keep both
                 seen.setdefault(pn.casefold(), ident)

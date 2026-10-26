@@ -210,3 +210,30 @@ def test_librarian_holds_0603_mpns_on_local_0402_lands(tmp_path):
     assert len(items) == 3, list(items)
     for it in items.values():
         assert it["status"] == "held" and "chip size" in _holds(it), (it["name"], it["source"], _holds(it))
+
+
+# --- R-B2-4: a released name keeps its part whatever case a new line spells it in -----------------------------------
+
+def _names(lines, prior):
+    from ecadlib import altium_export as AX
+    with contextlib.redirect_stderr(io.StringIO()):
+        res = AX.to_rows(lines, prior=prior)
+    return {r["Manufacturer Part Number"]: r["Part Number"] for df in res.values() for _, r in df.iterrows()}
+
+
+def test_a_new_line_in_another_case_does_not_take_a_released_name():
+    yageo = {"designator": "R1", "qty": "1", "value": "10k", "footprint": "R_0603_1608Metric", "manufacturer": "Yageo",
+             "mpn": "RC0603FR-0710KL", "description": "RES 10k 1% 0603"}
+    vishay = {"designator": "R5", "qty": "1", "value": "10K", "footprint": "R_0603_1608Metric", "manufacturer": "Vishay",
+              "mpn": "CRCW060310K0FKEA", "description": "RES 10k 1% 0603"}
+    prior = {"RES-0603-10k": {"mpn": "RC0603FR-0710KL", "manufacturer": "Yageo", "value": "10k",
+                              "folder": "Components/Resistors", "land": "R_0603_1608Metric"}}
+    for lines in ([vishay, yageo], [yageo, vishay]):
+        got = _names(lines, prior)
+        assert got["RC0603FR-0710KL"] == "RES-0603-10k", got
+        assert got["CRCW060310K0FKEA"].casefold() != "res-0603-10k", got
+    # a released name spelt in another case is the same name: its own part keeps it
+    prior = {"RES-0603-10K": dict(prior["RES-0603-10k"], value="10K")}
+    got = _names([vishay, yageo], prior)
+    assert got["RC0603FR-0710KL"] == "RES-0603-10K", got
+    assert got["CRCW060310K0FKEA"].casefold() != "res-0603-10k", got
