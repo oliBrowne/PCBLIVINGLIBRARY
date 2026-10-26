@@ -137,6 +137,16 @@ def _has_pin1(nums, pin1=None):
     return bool(set(pin1 or ("1", "A1")) & set(nums))
 
 
+EMPTY_VALUE = re.compile(r"~|-+|\?+|n/?a|none|null|tbd|tba|tbc", re.I)
+
+
+def _filled(v):
+    """A required field holds a value: not blank and not a stand-in for none (KiCad's "~" for no datasheet, "N/A",
+    "TBD", "-"), which a BOM-only plan (`altium365 plan`) or a hand edit carries over as it is."""
+    v = str(v if v is not None else "").strip()
+    return bool(v) and not EMPTY_VALUE.fullmatch(v)
+
+
 _LCSC_FIELDS = {"lcsc", "lcsc part", "lcsc part number", "lcsc part #", "lcsc#", "jlcpcb part", "jlcpcb part #"}
 
 
@@ -375,7 +385,7 @@ def check_item(item, base=".", rules=None):
     par = {p["name"]: p.get("value", "") for p in item["parameters"]}
     for k in rules["parameters"]["required"]:         # default: REQUIRED, then the datasheet link and Description
         if k == "Datasheet":
-            if not any(str(par.get(x, "")).strip() for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):
+            if not any(_filled(par.get(x)) for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):
                 add("fields", "no datasheet link")
         elif k == "Description":
             if not str(item.get("description") or "").strip():
@@ -383,7 +393,7 @@ def check_item(item, base=".", rules=None):
             elif str((item.get("field_sources") or {}).get("Description", "")).startswith("written by ecadlib"):
                 warns.append(f"Description \"{item['description']}\" was written by ecadlib from the category and "
                              "package (no source had one): check it")
-        elif not str(par.get(RU.canonical_param(k, rules), par.get(k, ""))).strip() and not _supplier_number(par, k, rules):
+        elif not _filled(par.get(RU.canonical_param(k, rules), par.get(k, ""))) and not _supplier_number(par, k, rules):
             add("fields", f"{k} is empty")
     for v in doubts(item):
         add("verify", v)

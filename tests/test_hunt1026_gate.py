@@ -108,6 +108,70 @@ def test_gate02_maker_names():
         assert not L.same_maker(a, b) and not L.same_maker(b, a), (a, b)
 
 
+def test_gate03_placeholder_fields_are_empty():
+    from ecadlib import release_check as RC
+    from tests.test_release_check import make
+    with tempfile.TemporaryDirectory() as d:
+        for name, v, want in (("Datasheet", "~", "fields: no datasheet link"), ("Datasheet", "N/A", "fields: no datasheet link"),
+                              ("Manufacturer", "N/A", "fields: Manufacturer is empty"),
+                              ("Manufacturer Part Number", "TBD", "fields: Manufacturer Part Number is empty"),
+                              ("Manufacturer", "-", "fields: Manufacturer is empty")):
+            it = make(d)
+            drop = "ComponentLink2URL" if name == "Datasheet" else name
+            it["parameters"] = [p for p in it["parameters"] if p["name"] != drop] + [{"name": name, "value": v}]
+            f = [f"{r}: {m}" for r, m in RC.check_item(it, d)[0]]
+            assert f == [want], (name, v, f)
+        it = make(d)                                       # real values still pass
+        it["parameters"] = [p for p in it["parameters"] if p["name"] != "Manufacturer"] + [{"name": "Manufacturer", "value": "NA Corp"}]
+        assert RC.check_item(it, d)[0] == []
+
+
+def test_gate04_release_check_mutation_property():
+    """Seeded mutations of a good part: each must hold under its own rule (pins, parity, fields), and a missing or
+    implausible 3D height is a note unless [release] height = "hold"."""
+    import re
+    from ecadlib import release_check as RC
+    from tests.test_release_check import SOIC, make, HOLD_HEIGHT
+    extra = '  (pad "9" smd roundrect (at 0 0) (size 1.0 1.0) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))\n'
+    muts = ["drop_pad", "extra_pad", "pin_no_pad", "renumber", "parity", "no3d", "tall3d", "no_ds", "no_mfr", "no_desc"]
+    rnd = random.Random(26)
+    for _ in range(30):
+        ms = set(rnd.sample(muts, rnd.randint(1, 3)))
+        if {"no3d", "tall3d"} <= ms:
+            ms.discard("tall3d")
+        hold_h = rnd.random() < 0.3
+        kmod, pins, height, exp = SOIC, list(range(1, 9)), None, set()
+        if "drop_pad" in ms:
+            kmod = re.sub(r'  \(pad "%d" .*\n' % rnd.randint(1, 8), "", kmod); exp.add("pins")
+        if "extra_pad" in ms:
+            kmod = kmod[:kmod.rstrip().rfind(")")] + extra + ")\n"; exp.add("pins")
+        if "pin_no_pad" in ms:
+            pins.append(10); exp.add("pins")
+        if "renumber" in ms:
+            pins = [p for p in pins if p != 3] + [11]; exp.add("pins")
+        if "no3d" in ms or "tall3d" in ms:
+            height = False if "no3d" in ms else 9.0
+            if hold_h:
+                exp.add("height")
+        with tempfile.TemporaryDirectory() as d:
+            it = make(d, kmod=kmod, pins=pins, height=height)
+            if "parity" in ms:                     # the .kicad_mod changed after the PcbLib was written from it
+                p = Path(d, it["footprint"]["kicad_mod"])
+                p.write_text(p.read_text().replace("(size 1.965 0.58)", "(size 1.765 0.58)", 1)); exp.add("parity")
+            for m, drop in (("no_ds", "ComponentLink2URL"), ("no_mfr", "Manufacturer")):
+                if m in ms:
+                    it["parameters"] = [x for x in it["parameters"] if x["name"] != drop]; exp.add("fields")
+            if "no_desc" in ms:
+                it["description"] = ""; exp.add("fields")
+            f, w, _ = RC.check_item(it, d, HOLD_HEIGHT if hold_h else None)
+            got = {r for r, _ in f}
+            if {"drop_pad", "extra_pad"} & ms:
+                got.discard("footprint")           # the name check counts the pads too: an extra hold is right
+            assert got == exp, (sorted(ms), hold_h, f)
+            if ({"no3d", "tall3d"} & ms) and not hold_h:
+                assert any(x.startswith("height: ") for x in w), (sorted(ms), w)
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
