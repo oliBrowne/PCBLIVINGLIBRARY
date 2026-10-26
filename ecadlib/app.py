@@ -29,6 +29,7 @@ STATUS_ORDER = ["needs_footprint_generation", "unverified (source unreachable)",
 
 
 UPLOAD_DIR = re.compile(r"\d{8}-\d{6}-[0-9a-f]{6}")      # the folder save_upload makes for each upload
+WIN_DEVICE = re.compile(r"(?i)(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?")   # Windows device names, any suffix
 STYLE_OFFLINE = "--offline: the model is not asked to write the house style guide; run without --offline to have it write it"
 
 
@@ -190,6 +191,8 @@ class Workspace:
         if not data:
             raise ValueError(f"{filename} is empty")
         name = self.safe_name(filename)
+        if WIN_DEVICE.fullmatch(name):                # con.csv, NUL.xlsx: a device on Windows (the BOM would be lost)
+            name = "_" + name
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
         for _ in range(20):
             d = self.root / "uploads" / f"{stamp}-{secrets.token_hex(3)}"

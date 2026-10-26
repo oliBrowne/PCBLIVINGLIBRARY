@@ -55,3 +55,19 @@ def test_webui_02_bad_json_field_types_are_400s_not_crashed_jobs(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+@lite
+def test_webui_03_uploads_never_take_a_windows_device_name(tmp_path):
+    """An upload named con.csv / NUL.xlsx / com1.csv / LPT9.tsv was stored under that name. On Windows those names are
+    devices (CON = the console), so the BOM is lost on write and triage then reads the device."""
+    import re
+    from ecadlib.app import Workspace
+    ws = Workspace(tmp_path / "ws", [], providers=[], offline=True)
+    data = b"Designator,Qty,Value,MPN\nR1,1,10k,RC0603FR-0710KL\n"
+    for n in ("con.csv", "CON", "nul.xlsx", "Aux.csv", "prn.tsv", "com1.csv", "LPT9.txt", "con.tar.csv", "COM¹.csv"):
+        name = ws.save_upload(n, data).rsplit("/", 1)[1]
+        assert not re.fullmatch(r"(?i)(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?", name), (n, name)
+        assert Path(n).suffix.lower() == Path(name).suffix.lower(), (n, name)     # the reader still picks by the suffix
+    for n in ("console.csv", "bom_con.csv", "com10.csv", "nullable.csv"):          # not devices: kept
+        assert ws.save_upload(n, data).endswith("/" + n), n
