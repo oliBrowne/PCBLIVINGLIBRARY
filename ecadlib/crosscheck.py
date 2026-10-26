@@ -700,6 +700,33 @@ def mode_of(cfg):
     return m if m in MODES else "auto"
 
 
+def held_anyway(reader, job, res):
+    """The hard-failing checks (ds_route.hold_reasons) of a read the librarian is sure to hold, or None. A read that
+    fails one is held only after every rescue (librarian.put_datasheet: the cross-check's table settle, a checked
+    standard land or tab land the read identifies, a person's fp-edit), so it counts only when none of them can
+    apply: no standard table names its package (the caller's check), stdparts identifies no package or tab from it,
+    and no fp-edit is saved for the part. Then a second read cannot change the outcome."""
+    from . import ds_route as DR, stdparts as SP
+    hold = DR.hold_reasons(res, job.get("fp_needed"))
+    if not hold:
+        return None
+    spec, pins = res.get("spec") or {}, (res.get("symbol") or {}).get("pins") or []
+    known = list((res.get("sidecar") or {}).get("package_from_pdf") or [])
+    try:
+        if SP.identify(spec, known[0] if len(known) == 1 else None)[0] or \
+                SP.identify_tab(spec, [(q.get("num"), q.get("name")) for q in pins])[0]:
+            return None
+    except Exception:                                 # a read stdparts cannot judge: not sure, so it is checked
+        return None
+    try:
+        from . import fp_edit as FE
+        if FE.for_part(FE.load(reader.out), job.get("name"), job.get("part")):
+            return None
+    except Exception:
+        return None
+    return "; ".join(hold[:3])
+
+
 def run(reader, job, res, model):
     """Cross-check the read `res` (datasheet.process()) of `job` -> record or None (off). The caller holds the part
     when record["status"] == "disagreed"."""
@@ -712,6 +739,10 @@ def run(reader, job, res, model):
     first_pins = [(p["num"], p["name"]) for p in res["symbol"].get("pins") or []]
     checks = [against_table(first, n, where) for where, n in standard_matches(job.get("package"), res["spec"].get("name"))]
     strong = [c for c in checks if len(c["compared"]) >= 2]
+    held = None if checks else held_anyway(reader, job, res)
+    if held:                                          # the librarian holds it whatever a second read says: not paid for
+        return {"mode": mode, "status": "skipped", "why": f"the read is held ({held[:200]}); nothing can stand in for "
+                "it, so no second read was made", "checks": []}
     # a table has the package's common numbering, not the maker's: a read that placed its pins is always read again
     if mode == "always" or not strong or first.get("sides"):
         checks.append(second_read(reader, job, first, first_pins, model))

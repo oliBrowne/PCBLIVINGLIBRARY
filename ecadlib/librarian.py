@@ -904,7 +904,9 @@ class Run:
             if tab:
                 std = (tab, found, "a tab land runs under the body, where the IPC tab built from the read covers only "
                        "the exposed tab, and the datasheet gives no land of its own")
-        held = None if edited or st["symbol"] else D.read_hold(res, False)   # (a person's fp-edit: they decided)
+        # (a person's fp-edit settles the footprint's holds, below; the symbol's is judged on the edited read: a pad
+        # rename that fixes the pin numbers lifts it, a pad-table edit that leaves the channels wrong does not)
+        held = None if st["symbol"] else D.read_hold(res, False)
         if held:                                      # the read's symbol still fails a check that wires it wrong
             raise D.DatasheetError(held)
         if not st["footprint"]:                       # before any land choice: a table land never replaces these holds

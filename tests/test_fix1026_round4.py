@@ -188,3 +188,60 @@ def test_where_used_reads_house_named_mpn_parameters(tmp_path):
     _project(tmp_path / "ws" / "p2", {"MfrPN": "LM358DR", "Maker": "TI"})
     out = ws.where_used([str(tmp_path / "ws" / "p2")])
     assert [r.get("mpn") for r in out["rows"]] == ["LM358DR"], out["rows"]
+
+
+# ---------------------------------------------------------------- R-FX4-7: the read hold (21c90c5) side effects
+def _librarian(ext, monkeypatch=None, fp_edit=False, sym_hold=False):
+    """DSPART1 read with `ext` through the librarian -> (item, kinds of model requests sent)."""
+    import tempfile
+    from ecadlib import datasheet as D, fp_edit as FE
+    from tests import test_crosscheck as TC, test_datasheet_batch as TB, test_ds_route as TR
+    if fp_edit:                                       # a person's pad-table edit for this part
+        monkeypatch.setattr(FE, "for_part", lambda edits, *names: {"by": "test"})
+        monkeypatch.setattr(FE, "apply", lambda edits, res: (res, ["fp-edit: pad 1 renamed (by test)"]))
+    if sym_hold:                                      # the read's symbol fails the numbered-bank check
+        hold = D.read_hold
+        monkeypatch.setattr(D, "read_hold", lambda res, fp_from_read=True: "held: symbol bank (test)"
+                            if fp_from_read is False else hold(res, fp_from_read))
+    api = TC.API(lambda k, m, b: TR.on_page(ext))
+    with tempfile.TemporaryDirectory() as d:
+        items, _, _ = TB.run2(d, api, reader_kw={"batch": False})
+        return items["DSPART1"], [k for k, _ in api.sent]
+
+
+@lite
+def test_an_fp_edit_lifts_only_the_footprint_hold_never_the_symbols(monkeypatch):
+    from tests import test_datasheet as TD
+    it, _ = _librarian(TD.GOOD, monkeypatch, fp_edit=True, sym_hold=True)
+    assert any("symbol bank (test)" in t for t in it["librarian"]["tried"]), it["librarian"]["tried"]
+    assert not it.get("footprint", {}).get("kicad_mod"), it.get("footprint")
+
+
+def _touching_xqfn():
+    import copy
+    from tests import test_datasheet as TD
+    ext = copy.deepcopy(TD.GOOD)
+    ext["package"]["name"] = "XQFN-16_3x3mm"          # no checked package to fall back on
+    ext["package"]["exposed_pad"] = None
+    ext["pins"] = ext["pins"][:16]
+    ext["package"]["terminal_width"].update(min=0.45, nom=0.5, max=0.55)   # leads as wide as the pitch: they touch
+    return ext
+
+
+def test_a_read_held_with_nothing_to_rescue_it_skips_the_cross_checks_second_read():
+    from ecadlib import datasheet as D
+    ext = _touching_xqfn()
+    it, sent = _librarian(ext)
+    assert any(D.HELD_FAILED in t and "leads would touch" in t for t in it["librarian"]["tried"]), it["librarian"]
+    assert "check" not in sent, sent                  # no second read paid for a part that is held anyway (both parts)
+    ext["package"]["terminal_width"].update(min=0.18, nom=0.25, max=0.3)    # the same read, right: checked and built
+    it, sent = _librarian(ext)
+    assert sent.count("check") == 2 and not any(D.HELD_FAILED in t for t in it["librarian"]["tried"]), sent
+
+
+@lite
+def test_a_held_read_that_a_pad_table_edit_rescues_is_still_cross_checked(monkeypatch):
+    from ecadlib import datasheet as D
+    it, sent = _librarian(_touching_xqfn(), monkeypatch, fp_edit=True)
+    assert "check" in sent, sent                      # the edit lifts the geometry hold: the build needs its check
+    assert not any(D.HELD_FAILED in t for t in it["librarian"]["tried"]), it["librarian"]["tried"]
