@@ -337,3 +337,26 @@ def test_comment_that_is_the_mpns_family_is_a_suggestion_that_holds(tmp_path):
                  ["standard"], [KICAD_FIXTURE])
     it = next(iter(items.values()))
     assert it["status"] == "held" and "LM2904" in _holds(it), (it["status"], _holds(it))
+
+
+# --- R-BF-7: a row shifted by an unquoted comma is held (its later cells are in the wrong columns) -------------------
+
+H = ("Designator,Qty,Description,Value,Footprint,MPN\n"
+     "R1,1,RES 0402, 1%,10k,R_0603_1608Metric,RC0603FR-0710KL\n"
+     "R2,1,RES 0603 1%,4k7,R_0603_1608Metric,RC0603FR-074K7L\n"
+     "C1,1,CAP 100nF, 0402, X7R,100nF,C_0603_1608Metric,CL10B104KB8NNNC\n")
+
+
+@lite
+def test_a_shifted_row_is_held_not_built_from_its_shifted_cells(tmp_path):
+    items = _run(tmp_path, H, ["standard"])
+    by_mpn = {}
+    for it in items.values():
+        v = {p["name"]: p["value"] for p in it["parameters"]}
+        by_mpn.setdefault(v.get("Manufacturer Part Number", ""), []).append(it)
+    for name, it in items.items():
+        if "4k7" in name:
+            assert "unquoted comma" not in _holds(it), _holds(it)     # the row that fits is not held for the others
+        else:
+            assert it["status"] == "held" and "unquoted comma" in _holds(it), (name, it["status"], _holds(it))
+

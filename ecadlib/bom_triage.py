@@ -501,6 +501,9 @@ def read_bom(path, columns=None, rules=None, root=None):
         if shifted:
             for f in ("mpn", "footprint", "lcsc", "manufacturer", "libref", "datasheet"):
                 d.pop(f, None)
+            d["bom_hold"] = (f"row {idx + 1} has {n} cells but the header has {hlen} (an unquoted comma?): its cells "   # R-BF-7: the
+                             "after the comma are in the wrong columns; quote the cell or fix the row")  # value / description
+                                                              # left are shifted too: held, never built from them
         if all(_norm(cells[j]) == _norm(headers[j]) for j in col.values()):
             continue                                              # the header again (BOMs pasted together, page breaks)
         if suppliers and not d.get("lcsc"):                       # Altium: Supplier 1 = LCSC, Supplier Part Number 1
@@ -531,7 +534,7 @@ def read_bom(path, columns=None, rules=None, root=None):
         q = re.fullmatch(r"(\d+),000", d.get("qty", "")) if decimal_comma else None
         if q and count_refs(d.get("designator", "")) == int(q.group(1)):   # a ';' (decimal-comma) CSV: '1,000' on one
             d["qty"] = q.group(1)                                        # designator is 1,000 = 1 piece
-        if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp", "fitted", "bom_note")):
+        if _is_total(d) or not any(v for f, v in d.items() if f not in ("qty", "dnp", "fitted", "bom_note", "bom_hold")):
             continue                                                     # 'Total;;;12' footer / a bare sum, not a part
         if _not_a_part(d):                                               # 'Resistors' heading, 'Notes: ...' row
             skipped += 1
@@ -626,7 +629,7 @@ def _same_classes(new, prev):
 def _not_a_part(d):
     """A section heading ('Resistors') or a note row ('Notes: all parts RoHS'): one cell, no designator digits, no
     part number shape."""
-    filled = [(f, v) for f, v in d.items() if v and f not in ("dnp", "fitted", "bom_note")]
+    filled = [(f, v) for f, v in d.items() if v and f not in ("dnp", "fitted", "bom_note", "bom_hold")]
     if len(filled) != 1:
         return False
     f, v = filled[0]

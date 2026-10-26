@@ -248,6 +248,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         })
         row, des = out[cat][-1], ln.get("designator", "") or "?"
         notes.setdefault(pn, []).extend(bad)
+        if ln.get("bom_hold"):                  # a row read_bom could not read as the header says (shifted cells)
+            holds.setdefault(pn, []).append(f"BOM line {des}: {ln['bom_hold']}")
         if pn not in first:
             first[pn] = (row, des, ln.get("footprint", ""))
         else:                                   # a second BOM line for this part: the first one wins, say what differs
