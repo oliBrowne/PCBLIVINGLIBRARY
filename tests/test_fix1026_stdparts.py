@@ -679,6 +679,21 @@ def test_says_led_named_other_diode_wins_unless_the_led_is_the_head_noun():
         assert S.part_kind("Diodes", "", d) == "LED", d
 
 
+# --- R-FX9-5: chip_size honours an explicit imperial / inch word -------------------------------------------------
+
+def test_chip_size_imperial_word_names_its_code():
+    from ecadlib import stdparts as S
+    for t, want in (("1608 Metric, 0603", "0603"), ("1608 Metric - 0603 Imperial", "0603"), ("1608 metric 0603 inch", "0603"),
+                    ("0603 metric, 0201 imperial", "0201"), ("0603 metric - 0201 inch", "0201"), ("1005 metric 0402", "0402"),
+                    ("chip 1005 metric, 0402", "0402"), ("Metric: 1608, Imperial: 0603", "0603"),
+                    ("Imperial 0603, Metric 1608", "0603"), ("0402 (inch), 1005 (metric)", "0402"),
+                    ("0603 Metric 1608", "0603"), ("0603 [Metric 1608]", "0603")):
+        assert S.chip_size(t) == want, (t, S.chip_size(t))
+    for t in ("0603 metric, 0402 imperial", "0603 metric 0402", "0603 metric 1206",      # a real conflict: held
+              "0603 Metric (1.6 x 0.8 mm)"):
+        assert str(S.chip_size(t)).startswith("conflict"), (t, S.chip_size(t))
+
+
 # --- R-FX9-2: a stroked custom-pad polygon is written with KiCad's round corners -----------------------------------
 
 _STROKED = '''(footprint "JSTLIKE" (version 20221018) (layer "F.Cu")

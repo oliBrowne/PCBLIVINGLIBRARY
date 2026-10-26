@@ -259,19 +259,46 @@ def chip_size(text, strict=False):
     if m and m.group(1) in METRIC:
         found.add(METRIC[m.group(1)])
     for m in re.finditer(r"(?<![0-9])(\d{4,5})\s*(?:_?Metric|M)(?![A-Za-z0-9])", t, re.I):
-        if re.match(r"[\s:,(\[]*\d{4,5}(?![0-9.])", t[m.end():]):
-            continue                                                # '0603 Metric 1608': the word is 1608's
+        if re.match(r"[\s:,(\[-]*\d{4,5}(?![0-9.])", t[m.end():]):
+            continue                                                # '0603 Metric 1608': read below
         if m.group(1) in METRIC:
             found.add(METRIC[m.group(1)])
+            if _chip_dims(t) and _chip_dims(t) != METRIC[m.group(1)]:     # '0603 Metric (1.6 x 0.8 mm)': the body
+                found.add(f"conflict:{m.group(1)} metric, body {_chip_dims(t)}")   # disagrees: held
             glued |= bool(re.match(r"-\d", t[m.end():]))           # 'Metric-6': a 6-pad part on that size
     # a metric / mm word next to the code, not glued to it: '0603 (metric)', 'Metric 0603', 'mm: 0603', '0603 [mm]'.
     # 'mm' counts only in brackets or before a colon ('0603, mm' and 'mm 0603' are unclear); a word between two codes
     # belongs to the one after it ('0603 [Metric 1608]', '0603 size, metric 1608': 1608 is the metric code); body
     # dimensions in the text ('1.6x0.8') that fit the imperial reading decide for it
     dims = _chip_dims(t)
+    # an imperial / inch word names its code imperial ('1608 Metric - 0603 Imperial', 'Imperial 0603'): the word right
+    # after a code is that code's, else the code right after it takes it (R-FX9-5)
+    imp = {}
+    for w in re.finditer(r"(?<![A-Za-z])(imperial|inch(?:es)?|EIA)(?![A-Za-z])", t, re.I):
+        b = re.search(r"(?<![0-9A-Za-z.])(\d{4,5})[\s(\[:,-]*$", t[:w.start()])
+        a = re.match(r"[\s:)\],-]*(\d{4,5})(?![0-9.])", t[w.end():])
+        if b and not (a and (re.match(r"\s*:", t[w.end():]) or b.group(1) not in IMPERIAL)):   # 'Imperial: 0603'
+            imp[b.start(1)] = b.group(1)
+        elif a:
+            imp[w.end() + a.start(1)] = a.group(1)
+    for at, code in imp.items():
+        found.add(code if code in IMPERIAL else f"conflict:{code} imperial?")
+
+    def owner_is_before(m):
+        """A metric word between two codes ('1608 Metric, 0603'): it is the code before's when the code after is
+        named imperial, or the code before is the only one that can only be metric; else the code after's."""
+        b = re.search(r"(?<![0-9A-Za-z.])(\d{4,5})(?:\s*(?:size|code))?[\s(\[:,-]*$", t[:m.start(1)])
+        if not b or b.start(1) in imp:
+            return False
+        if m.start(2) in imp:
+            return True
+        only = lambda c: c in METRIC and c not in IMPERIAL
+        return only(b.group(1)) and not only(m.group(2))
     after = {m.start(1): m for m in re.finditer(
         r"(?<![A-Za-z])(metric|mm)(?:\s*(?:size|code))?[\s:)\],-]*(\d{4,5})(?![0-9.])", t, re.I)
-        if m.group(1).lower() == "metric" or re.match(r"mm\s*:", m.group(0), re.I)}
+        if (m.group(1).lower() == "metric" or re.match(r"mm\s*:", m.group(0), re.I)) and m.start(2) not in imp
+        and not owner_is_before(m)}
+    given = {m.start(1) for m in after.values()}                  # metric words a later code took
     before = [m for m in re.finditer(r"(?<![0-9A-Za-z.])(\d{4,5})[\s(\[:,]*(?:size|code)?[\s(\[:,]*(metric|mm)(?![A-Za-z])",
                                      t, re.I)
               if m.start(2) not in after and (m.group(2).lower() == "metric" or (
@@ -286,10 +313,13 @@ def chip_size(text, strict=False):
         near.add(at)
     free = [m.span() for m in re.finditer(r"(?<![A-Za-z])(metric|mm)(?![A-Za-z])", t, re.I)     # a marker no code
             if m.span() not in marks and not re.search(r"(?:\d|_)\s*$", t[:m.start()])]   # takes, not a dimension
-    for m in re.finditer(rf"(?<![0-9.])(\d{{4,5}})(?![0-9.])(?!\s*(?:_?Metric|M\b|mm|mil|{_UNIT_LETTER}|nF|pF|uF|µF|Ω|ohm|%))", t, re.I):
+    for m in re.finditer(rf"(?<![0-9.])(\d{{4,5}})(?![0-9.])(?!\s*(?:mil|{_UNIT_LETTER}|nF|pF|uF|µF|Ω|ohm|%))", t, re.I):
         code = m.group(1)
-        if m.start(1) in near:
+        if m.start(1) in near or m.start(1) in imp:
             continue
+        w = re.match(r"\s*(?:_?(Metric)|M\b|mm)", t[m.end():], re.I)
+        if w and not (w.group(1) and m.end() + w.start(1) in given):
+            continue                                                # its own metric marker (read above)
         # unclear: a free marker with no value between it and the code ('10k 0603 1% 100mW metric': not its marker)
         unclear = [w for w in free if not re.search(r"\d", t[min(m.end(), w[1]):max(m.start(), w[0])])]
         if code in IMPERIAL and unclear and code != dims and not _in_part_number(t, m.start(), m.end()):
