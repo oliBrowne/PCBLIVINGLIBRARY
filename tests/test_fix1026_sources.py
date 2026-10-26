@@ -184,3 +184,18 @@ def test_a_hand_solder_variant_is_no_ambiguity():
 def test_real_land_ambiguity_still_holds():
     qfn = ["lib:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm", "lib:QFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm"]
     assert _index(qfn).find_footprint_for_package("QFN16", "U", hint="QFN-16 3x3mm exposed pad") is None
+
+
+# ---------------------------------------------------------------- R-SRC-4b: a leadless line naming no pad
+def test_a_leadless_line_naming_no_pad_is_held_when_both_lands_exist():
+    # R-SRC-4b: a QFN / DFN line that names no exposed pad is not read as 'no pad' when both lands exist
+    both = ["lib:QFN-16_3x3mm_P0.5mm", "lib:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm"]
+    for fps in (both, both[::-1]):
+        idx = _index(fps)
+        assert idx.find_footprint_for_package("QFN16", "U", hint="QFN-16 3x3mm") is None
+        assert idx.find_footprint_for_package("QFN16", "U", hint="QFN-16 3x3mm, IC regulator") is None
+        assert idx.find_footprint_for_package("QFN16", "U", hint="QFN-16 3x3mm exposed pad") == both[1]
+    # 'pad' alone ('touch pad controller') is no exposed pad: a SOIC-8 touch controller keeps the plain land
+    soic = ["lib:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm", "lib:SOIC-8_3.9x4.9mm_P1.27mm"]
+    assert _index(soic).find_footprint_for_package("SOIC8", "U", hint="SOIC-8 touch pad controller") == soic[1]
+    assert _index(soic).find_footprint_for_package("SOIC8", "U", hint="SOIC-8 EPAD") == soic[0]

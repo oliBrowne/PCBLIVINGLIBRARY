@@ -12,9 +12,12 @@ SI = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "μ": 1e-6, "m": 1e-3, "": 1
 PKG_RE = re.compile(r"(?<![0-9])(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)(?![0-9])|"
                     r"(?<![A-Z0-9])(SOT-?23(?:-\d)?|SOT-?223|SOIC-?\d+|SOP-?\d+|TSSOP-?\d+|QFN-?\d+|VQFN-?\d+|LQFP-?\d+|SMA|SMB|SOD-?\d+)(?![A-Z0-9])", re.I)
 EP_NAME = re.compile(r"-\d*EP(?=[_-]|$)|_EP\d", re.I)              # KiCad's exposed-pad lands: QFN-16-1EP_..._EP1.7x1.7mm
-EP_HINT = re.compile(r"\bE?PAD\b|-\d*EP\b|\bEP\b|exposed|thermal ?pad|power ?pad|heat ?sink ?pad", re.I)
+EP_HINT = re.compile(r"\bEPAD\b|-\d*EP\b|\bEP\b|exposed|thermal ?pad|power ?pad|heat ?sink ?pad", re.I)   # not 'pad'
+                                                                    # alone ('touch pad controller')
 # KiCad's copies of one land: a hand-solder land (longer pads), thermal vias in the exposed pad, castellated pads
 LAND_VARIANT = re.compile(r"(?:_Pad\d+(?:\.\d+)?x\d+(?:\.\d+)?mm)?_HandSolder$|_ThermalVias$|_Castellated$", re.I)
+NO_LEAD = re.compile(r"QFN|DFN|SON|MLF|MLP|LGA", re.I)            # leadless: an exposed pad is common and BOM text rarely
+                                                                  # says so
 
 
 def plain_land(name):
@@ -216,6 +219,9 @@ class KiCadIndex:
             return None                           # several body sizes and nothing to choose by: ambiguous
         if len(hits) > 1:                         # one body, several lands (with / without an exposed pad, EP sizes):
             ep = bool(EP_HINT.search(str(hint or "")))       # the one the line's words name, never the first indexed
+            has = {bool(EP_NAME.search(k.split(":")[-1])) for k in hits}
+            if not ep and has == {True, False} and any(NO_LEAD.search(k.split(":")[-1]) for k in hits):
+                return None                       # 'QFN-16 3x3mm' saying nothing of a pad: most have one, some not
             hits = [k for k in hits if bool(EP_NAME.search(k.split(":")[-1])) == ep]
             if len(hits) > 1:
                 return None
