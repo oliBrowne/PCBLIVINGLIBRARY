@@ -215,6 +215,43 @@ def clear_doubts(entry, src, halves):
     return dropped
 
 
+NUMBERING_WARN = re.compile(r"numbering doubles back|is not the top-left pad")
+GENERATED_FP = ("datasheet:", "standard:")   # ecadlib's own generator (a datasheet read, pad table, standard family)
+
+
+def numbering_hold(text, src, pin_names):
+    """fpgen D1: footprint_check warns when pads are numbered out of KiCad's order (pin 1 top-left, counter-clockwise).
+    In a KiCad library footprint, a module, relay or power part that is legitimately numbered where the datasheet's pads
+    fall, so it stays a warning there. A footprint ecadlib generated (a package family, a datasheet's pads or pad table)
+    with one or two pairs of leads swapped (SOIC-8 pads 1 and 2) builds a part whose pins land on the wrong pads: held,
+    unless the swapped pins are interchangeable (the same pin name, as GND / GND, VDD_1 / VDD_2, or both not
+    connected), when the swap cannot change the circuit. -> the hold message, or None. Not checked: leads of mixed
+    sizes, 2-row zig-zag numbering, single rows (footprint_check.perimeter_order), and more than two pairs out of place
+    (numbered where they fall, not a swap)."""
+    if not str(src or "").startswith(GENERATED_FP) or not pin_names:
+        return None
+    po = FC.perimeter_order(text)
+    if not po or not po["misplaced"]:
+        return None                            # in order (perhaps turned round: the circuit is the same)
+    got = dict(po["misplaced"])
+    pairs = sorted({tuple(sorted((w, g), key=int)) for w, g in got.items() if got.get(g) == w}, key=lambda p: int(p[0]))
+    if len(pairs) * 2 != len(got) or len(pairs) > 2:
+        return None
+    from . import symbol_layout as SL
+
+    def key(n):
+        nm = pin_names.get(n)
+        if nm in (None, ""):
+            return ("pin", n)                  # no pin of that number: never interchangeable
+        return "NC" if SL.classify({"name": nm, "num": n}) == "nc" else SL.stack_key(nm)
+    bad = [(a, b) for a, b in pairs if key(a) != key(b)]
+    if not bad:
+        return None
+    return "; ".join(f"pads {a} and {b} are swapped (pin {a} {pin_names.get(a) or '?'} sits where pin {b} "
+                     f"{pin_names.get(b) or '?'} belongs, counting counter-clockwise from pin 1)" for a, b in bad) + \
+        ": the generated footprint would put these pins on the wrong pads; check the pad numbers on the datasheet drawing"
+
+
 def check_item(item, base=".", rules=None):
     """-> (failures [(rule, message)], warnings [str], info {height, ...}). rules (ecadlib.rules): required fields,
     accepted pin-1 names and the courtyard layer; None = ecadlib's own."""
@@ -308,7 +345,13 @@ def check_item(item, base=".", rules=None):
         except Exception as e:                 # checker crash: fall back to the PcbLib minimum below
             issues, nums, kmod = [], set(), None
             warns.append(f"footprint_check failed on {info.pop('kicad_mod')} ({type(e).__name__}: {e})")
+        numbering = numbering_hold(text, src, pin_names) if text is not None and syms and any(
+            r == "pin1" and NUMBERING_WARN.search(m) for _, r, m in issues) else None
+        if numbering:                          # a swapped pair the generator / pad table numbered: held (fpgen D1)
+            add("footprint", f"pin1: {numbering}")
         for lvl, rule, msg in issues:
+            if numbering and rule == "pin1" and NUMBERING_WARN.search(msg):
+                continue                       # said by the hold above
             if rule == "pin1" and msg == "no pad numbered 1" and _has_pin1(nums, pin1):
                 continue                       # A1 counts as pin 1 (connectors, BGAs)
             if rule == "copper" and "overlap" in msg and _same_net(msg, pin_names):

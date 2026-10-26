@@ -481,6 +481,56 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     return issues
 
 
+def perimeter_order(text):
+    """How a perimeter part's pads are numbered against KiCad's rule (pin 1 top-left, counter-clockwise seen from the
+    top), for the release check's numbering hold. -> None when the rule does not apply: fewer than 4 numbered leads,
+    a single row, 2-row zig-zag (connector) numbering, lettered or BGA numbers, or leads of more than one size besides
+    one longer pin-1 lead (a module, relay or power part whose datasheet numbers the pads where they fall). Else
+    {"order": the lead numbers
+    counter-clockwise from the top-left lead, "want": the numbers in order, "shift": how far round pin 1 sits from
+    the top-left (0: there), "misplaced": [(number that belongs there, number there)] at the best rotation}.
+    Exposed pads and tabs are left out, as check's numbering rule leaves them out."""
+    tree = sexpr.parse(text) if isinstance(text, str) else text
+    cu = [p for p in _pad_rects(tree) if p["copper"] and p["num"]]
+    rx = mount_rx([p["num"] for p in cu])
+    sig = [p for p in cu if not rx.fullmatch(p["num"])]
+    if not sig or not all(str(p["num"]).isdecimal() for p in sig):
+        return None
+    areas = sorted(p["w"] * p["h"] for p in sig)
+    typical = areas[len(areas) // 2]
+    uniq = {}
+    for p in sig:
+        if p["w"] * p["h"] <= 3 * typical:
+            uniq.setdefault(p["num"], p)
+    leads = list(uniq.values())
+    want = sorted(uniq, key=int)
+    if len(want) < 4 or _zigzag(want, uniq):
+        return None
+    size = lambda p: tuple(sorted((round(p["w"], 2), round(p["h"], 2))))
+    cx, cy = sum(p["x"] for p in leads) / len(leads), sum(p["y"] for p in leads) / len(leads)
+    far = sorted(math.hypot(p["x"] - cx, p["y"] - cy) for p in leads)
+    leads = [p for p in leads if math.hypot(p["x"] - cx, p["y"] - cy) >= far[len(far) // 2] / 2]   # a small centre pad
+    want = sorted((p["num"] for p in leads), key=int)                                       # is no lead
+    if len(want) < 4:
+        return None
+    sizes = [size(p) for p in leads]
+    if len(leads) - max(sizes.count(s) for s in sizes) > 1:      # one odd lead allowed: a longer pin-1 marker lead
+        return None
+    mx, my = sum(p["x"] for p in leads) / len(leads), sum(p["y"] for p in leads) / len(leads)
+    if len({round(p["x"], 3) for p in leads}) == 1 or len({round(p["y"], 3) for p in leads}) == 1:
+        return None
+    left = min(p["x"] for p in leads)
+    top = min(p["y"] for p in leads if abs(p["x"] - left) < EPS)
+    start = math.atan2(top - my, left - mx)
+    ang = lambda p: (start - math.atan2(p["y"] - my, p["x"] - mx)) % (2 * math.pi)   # y down: counter-clockwise
+    order = [p["num"] for p in sorted(leads, key=lambda p: (round(ang(p), 6), p["y"]))]
+    n = len(want)
+    best = min(range(n), key=lambda s: (sum(order[(i + s) % n] != want[i] for i in range(n)), s))
+    rot = [order[(i + best) % n] for i in range(n)]
+    return {"order": order, "want": want, "shift": best,
+            "misplaced": [(w, g) for w, g in zip(want, rot) if w != g]}
+
+
 def _zigzag(order, uniq):
     """Dual-row connector numbering: odd pins in one row, even pins in the other (1 3 5 / 2 4 6)."""
     for k in ("x", "y"):

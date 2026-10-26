@@ -79,3 +79,66 @@ def test_q1_apply_state_carries_types(tmp_path):
     st["symbol"] = {"file": "SchLib/X.SchLib", "source": "kicad:Lib:X"}
     LB.apply_state(item, st, {})
     assert "kicad_types" not in item["symbol"]
+
+
+# ---------------------------------------------------------------- fpgen D1: footprint numbering holds
+import re as _re
+
+
+def _swap(text, a, b):
+    return _re.sub(r'\(pad "(%s|%s)"' % (a, b), lambda m: '(pad "%s"' % (b if m.group(1) == a else a), text)
+
+
+def _rc(tmp_path, kmod, source, names=None):
+    from ecadlib import release_check as RC
+    from tests.test_release_check import make
+    it = make(tmp_path, kmod=kmod, source=source)
+    if names:
+        sym = AL.ic_symbol("PART1", [{"num": str(n), "name": names[n - 1], "type": "io", "side": "left"} for n in range(1, 9)],
+                           footprint="SOIC-8_3.9x4.9mm_P1.27mm")
+        AL.write_schlib(Path(tmp_path) / it["symbol"]["file"], [sym])
+    f, w, _ = RC.check_item(it, tmp_path)
+    return [f"{r}: {m}" for r, m in f], w
+
+
+def _soic():
+    from tests.test_release_check import SOIC
+    return SOIC
+
+
+# a generated (datasheet / standard) footprint with two pads swapped is held, a KiCad library one only warned
+@lite
+def test_d1_swapped_pair_holds_generated_only(tmp_path):
+    bad = _swap(_soic(), "1", "2")
+    f, w = _rc(tmp_path / "a", bad, "datasheet:https://example.com/x.pdf")
+    assert any(m.startswith("footprint: pin1: pads 1 and 2 are swapped") for m in f), (f, w)
+    f, w = _rc(tmp_path / "b", _swap(_soic(), "3", "4"), "standard:Package_SO:SOIC-8_3.9x4.9mm_P1.27mm")
+    assert any("pads 3 and 4 are swapped" in m for m in f), (f, w)
+    f, w = _rc(tmp_path / "c", bad, "kicad:Package_SO:SOIC-8_3.9x4.9mm_P1.27mm")
+    assert not any("swapped" in m for m in f) and any("doubles back" in m for m in w), (f, w)
+    f, w = _rc(tmp_path / "d", _soic(), "datasheet:https://example.com/x.pdf")
+    assert f == [], f
+
+
+# swapped pads whose pins are interchangeable (same name, both NC) cannot change the circuit: a warning only
+@lite
+def test_d1_interchangeable_swap_is_a_warning(tmp_path):
+    f, w = _rc(tmp_path / "a", _swap(_soic(), "1", "2"), "datasheet:u", ["GND", "GND", "IN", "EN", "NC", "OUT", "VIN", "SW"])
+    assert f == [] and any("doubles back" in m for m in w), (f, w)
+    f, w = _rc(tmp_path / "b", _swap(_soic(), "3", "4"), "datasheet:u", ["A", "B", "NC", "DNC", "Y", "OUT", "VIN", "SW"])
+    assert f == [], (f, w)
+    f, w = _rc(tmp_path / "c", _swap(_soic(), "1", "8"), "datasheet:u", ["VDD_1", "B", "C", "D", "E", "F", "G", "VDD_2"])
+    assert f == [], (f, w)
+    f, w = _rc(tmp_path / "d", _swap(_soic(), "1", "8"), "datasheet:u", ["VDD", "B", "C", "D", "E", "F", "G", "EN"])
+    assert any("pads 1 and 8 are swapped" in m for m in f), (f, w)
+
+
+# pads numbered where they fall (more than two pairs out of order): not a swap, no hold
+@lite
+def test_d1_out_of_order_numbering_is_not_a_swap(tmp_path):
+    from ecadlib import footprint_check as FC
+    odd = _swap(_swap(_swap(_soic(), "1", "5"), "2", "7"), "3", "6")
+    po = FC.perimeter_order(odd)
+    assert len(po["misplaced"]) == 6, po
+    f, w = _rc(tmp_path, odd, "datasheet:u")
+    assert not any("swapped" in m for m in f), f
