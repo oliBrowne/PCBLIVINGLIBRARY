@@ -1000,6 +1000,23 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
 PUSHED = ("release", "update_parameters", "up_to_date", "new_revision")
 
 
+def explain(r):
+    """Plain lines under a push result for the terminal (the report has the detail): what a new revision is, and why
+    a component already in the workspace was released again or linked as it is."""
+    out = []
+    d = r.get("detail") if isinstance(r.get("detail"), dict) else {}
+    if r.get("action") == "new_revision":
+        ch = " and ".join(d.get("changed") or []) or "model"
+        out.append(f"new component revision{' ' + d['revision'] if d.get('revision') else ''} with the changed {ch} of "
+                   f"ledger revision r{d.get('ledger_revision')}"
+                   + (f" (released as new items {', '.join(n for n in d['model_item_names'] if n)}: the names were "
+                      "taken)" if d.get("model_item_names") else ""))
+    for k in ("unpublished", "adopted", "change"):
+        if r.get(k):
+            out.append(str(r[k]))
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Release BOM parts into an Altium 365 workspace via Nexar")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1102,6 +1119,8 @@ def main(argv=None):
     out.write_text(json.dumps(results, indent=2))
     for r in results:
         print(f"  {r['action']:<18} {r['name']}")
+        for why in explain(r):
+            print(f"  {'':<18}   {why}")
     print(f"report -> {out}")
     if a.dry_run:                              # no network: what the workspace already holds was not looked up
         print("dry run: the workspace was not read, so a part shown as `release` may already be there (the real push "

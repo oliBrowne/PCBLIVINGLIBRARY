@@ -298,3 +298,40 @@ def test_a365_component_another_plan_released_with_the_same_drawing_is_linked_no
         assert LG.Ledger(l).published("RES-0603-10k", A.ws_target(ws)) is not None
     assert len(nx.comps["RES-0603-10k"]["revisions"]) == 1
     assert not [k for k in nx.wmodels if k[1].endswith("-r1")], nx.wmodels
+
+
+# ---------------------------------------------------------------- R-FX11-7: the CLI says what a new revision is
+@lite
+def test_a365_cli_explains_a_new_revision(tmp_path, monkeypatch):
+    """`ecadlib altium365 push` printed a bare `new_revision`: the line now says it is a new component revision, of
+    which ledger revision, with which half changed (and, for a component never published from here, why)."""
+    import contextlib, io
+    from ecadlib import altium365 as A, change_cli as CC, change_gate as CG
+    from tests.test_change_control import ANN, FakeA365, demo, gate, item, items_of, write_symbol
+    plan, lib = demo()
+    nx = FakeA365()
+    class N(FakeA365):                           # Nexar(token) hands back the one fake workspace
+        def __new__(cls, *a, **k):
+            return nx
+    monkeypatch.setattr(A, "Nexar", N)
+    monkeypatch.setenv("NEXAR_TOKEN", "x")
+
+    def run():
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                A.main(["push", str(plan), "--workspace", "https://t.365.altium.com", "-o", str(tmp_path / "r.json")])
+            except SystemExit:
+                pass
+        return out.getvalue()
+    run()
+    items = items_of(plan)
+    g = gate(lib)
+    write_symbol(lib, item(items, "AO3401A"), [("1", "S", "passive"), ("2", "G", "input"), ("3", "D", "passive")])
+    g.settle(items)
+    CG.write_plan(plan, items)
+    CC.approve(plan, ["AO3401A"], who=ANN)
+    text = run()
+    line = next(l for l in text.splitlines() if "AO3401A" in l)
+    assert "new_revision" in line, text
+    assert "new component revision" in text and "ledger revision r2" in text and "symbol" in text, text
