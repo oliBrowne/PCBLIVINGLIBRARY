@@ -192,8 +192,6 @@ def read_schdoc(path, rules=None):
                         impls.append(m)
         cur = next((m for m in impls if m.get("ISCURRENT", "").upper() == "T"), impls[0] if impls else None)
         kind = next((_int(r[k], 0) for k in ("COMPONENTKINDVERSION3", "COMPONENTKINDVERSION2", "COMPONENTKIND") if k in r), 0)
-        comment = _resolve(params.get("Comment", ""), params)
-        mpn = _mpn_of(params, _param_names("Manufacturer Part Number", MPN_PARAMS, rules))
         did = r.get("DESIGNITEMID", "").strip()
         comps.append({
             "sheet": path.name, "designator": des, "libref": r.get("LIBREFERENCE", ""), "design_item_id": did,
@@ -201,12 +199,8 @@ def read_schdoc(path, rules=None):
             "database_table": r.get("DATABASETABLENAME", ""), "unique_id": r.get("UNIQUEID", ""),
             "current_part": _int(r.get("CURRENTPARTID"), 1), "part_count": max(_int(r.get("PARTCOUNT"), 2) - 1, 1),
             "description": r.get("COMPONENTDESCRIPTION", ""), "kind": kind, "in_bom": kind not in NO_BOM_KINDS,
-            "comment": comment, "value": _ci(params, VALUE_PARAMS) or comment,
             "footprint": (cur or {}).get("MODELNAME", ""), "footprints": [m.get("MODELNAME", "") for m in impls],
-            "mpn": mpn, "manufacturer": _ci(params, _param_names("Manufacturer", MFR_PARAMS, rules)),
-            "lcsc": _ci(params, LCSC_PARAMS), "datasheet": _datasheet(params),
-            "supplier": _ci(params, ["Supplier 1", "Supplier"]), "supplier_pn": _ci(params, ["Supplier Part Number 1", "Supplier Part Number"]),
-            "lifecycle": _ci(params, LIFECYCLE_PARAMS),
+            **_derive(params, rules),
             "vault_guid": r.get("VAULTGUID", ""), "item_guid": r.get("ITEMGUID", ""), "revision_guid": r.get("REVISIONGUID", ""),
             "symbol_item_guid": r.get("SYMBOLITEMGUID", ""), "symbol_revision_guid": r.get("SYMBOLREVISIONGUID", ""),
             "params": params,
@@ -218,8 +212,29 @@ def read_schdoc(path, rules=None):
     return {"path": str(path), "header": header, "components": comps, "warnings": warnings, "sheet_symbols": symbols}
 
 
-def _datasheet(params):
-    d = _ci(params, DATASHEET_PARAMS)
+# the component fields that come from its parameters: (field, canonical ecadlib parameter name, built-in names)
+DERIVED = (("mpn", "Manufacturer Part Number", MPN_PARAMS), ("manufacturer", "Manufacturer", MFR_PARAMS),
+           ("lcsc", "LCSC", LCSC_PARAMS), ("datasheet", "Datasheet", DATASHEET_PARAMS),
+           ("supplier", "Supplier 1", ["Supplier 1", "Supplier"]),
+           ("supplier_pn", "Supplier Part Number 1", ["Supplier Part Number 1", "Supplier Part Number"]),
+           ("lifecycle", "Lifecycle Status", LIFECYCLE_PARAMS), ("value", "Value", VALUE_PARAMS))
+DERIVED_FIELDS = ("comment",) + tuple(f for f, _, _ in DERIVED)
+
+
+def _derive(params, rules=None):
+    """Parameters -> every field derived from them (MPN, maker, LCSC, datasheet, supplier, supplier PN, lifecycle,
+    value, comment), with the house parameter names from rules ([parameters] names) first. read_schdoc and
+    apply_variant both use it, so a variant's parameter change re-derives the same fields the same way."""
+    names = {f: _param_names(canon, defaults, rules) for f, canon, defaults in DERIVED}
+    comment = _resolve(params.get("Comment", ""), params)
+    return {"comment": comment, "mpn": _mpn_of(params, names["mpn"]), "manufacturer": _ci(params, names["manufacturer"]),
+            "lcsc": _ci(params, names["lcsc"]), "datasheet": _datasheet(params, names["datasheet"]),
+            "supplier": _ci(params, names["supplier"]), "supplier_pn": _ci(params, names["supplier_pn"]),
+            "lifecycle": _ci(params, names["lifecycle"]), "value": _ci(params, names["value"]) or comment}
+
+
+def _datasheet(params, names=DATASHEET_PARAMS):
+    d = _ci(params, names)
     if d:
         return d
     for k, v in params.items():                       # ComponentLink<N>Description=Datasheet + ComponentLink<N>URL
@@ -667,7 +682,7 @@ def variant_of(project, name):
     return v
 
 
-def apply_variant(comps, variant):
+def apply_variant(comps, variant, rules=None):
     """-> copies of comps with 'fitted' and variant overrides (alternate part, parameter values)."""
     out = []
     for c in comps:
@@ -696,13 +711,18 @@ def apply_variant(comps, variant):
                 if (pv["unique_id"] and pv["unique_id"].rsplit("\\", 1)[-1] in uids and (not c.get("channel") or pv["designator"] in ("", c["designator"]))) or (not pv["unique_id"] and pv["designator"] == c["designator"]):
                     params[pv["name"]] = pv["value"]
             if params != c["params"]:
-                changed = {k for k in params if params[k] != c["params"].get(k)}
+                # every field the varied parameters change is re-derived (maker, LCSC, supplier PN ... with the MPN);
+                # a field they leave alone keeps what the base part has (an ActiveBOM / DbLib MPN included)
+                was, now = _derive(c["params"], rules), _derive(params, rules)
                 c["params"] = params
-                mpn = _mpn_of({k: params[k] for k in changed}, MPN_PARAMS)
-                c["comment"] = _resolve(params.get("Comment", c["comment"]), params)
-                c["value"] = _ci(params, VALUE_PARAMS) or c["comment"]
-                if mpn:
-                    c["mpn"] = mpn
+                for f in DERIVED_FIELDS:
+                    if now[f] != was[f]:
+                        c[f] = now[f]
+                        if f == "mpn":
+                            c["mpn_source"] = "parameter" if now[f] else ""
+                if c.get("mpn_source") == "Comment" and now["comment"] != was["comment"]:   # the MPN was the Comment
+                    c["mpn"] = c["comment"].strip() if looks_like_mpn(c["comment"]) else ""
+                    c["mpn_source"] = "Comment" if c["mpn"] else ""
                 c["variant_note"] = (c["variant_note"] + "; parameters changed").strip("; ")
         out.append(c)
     return out

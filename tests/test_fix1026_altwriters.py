@@ -42,6 +42,34 @@ def _lines(prj, variant, rules=None):
 
 
 @lite
+def test_param_variation_rederives_every_field(tmp_path):
+    """R-AW-2: a variant that sets MPN, Manufacturer, LCSC, supplier PN, datasheet and lifecycle: every one of them
+    reaches the variant line (only the MPN / comment / value did; maker and LCSC stayed TI / C7950)."""
+    prj = _project(tmp_path, params=[("Manufacturer Part Number", "MCP6002T-I/SN"), ("Manufacturer", "Microchip"),
+                                     ("LCSC", "C7377"), ("Supplier Part Number 1", "C7377"),
+                                     ("Datasheet", "https://microchip.com/mcp6002.pdf"), ("Lifecycle Status", "NRND")])
+    ln = _lines(prj, "V2")[0]
+    assert (ln["mpn"], ln["manufacturer"], ln["lcsc"]) == ("MCP6002T-I/SN", "Microchip", "C7377"), ln
+    assert ln["datasheet"] == "https://microchip.com/mcp6002.pdf" and ln["altium_supplier_pn"] == "C7377", ln
+    assert ln["altium_lifecycle"] == "NRND", ln
+    # a variation of an unrelated parameter keeps every base field
+    prj = _project(tmp_path, params=[("Tolerance", "1%")])
+    ln = _lines(prj, "V2")[0]
+    assert (ln["mpn"], ln["manufacturer"], ln["lcsc"]) == ("LM358DR", "TI", "C7950"), ln
+
+
+@lite
+def test_comment_variation_moves_a_comment_mpn(tmp_path):
+    """R-AW-2: no MPN parameter, the Comment is the MPN (Content Vault parts); a variant that changes the Comment
+    changes the MPN with it (it kept the base Comment's MPN)."""
+    prj = _project(tmp_path, params=[("Comment", "MCP6002T-I/SN")], sch={"Comment": "LM358DR"})
+    assert _lines(prj, None)[0]["mpn"] == "LM358DR"
+    ln = _lines(prj, "V2")[0]
+    assert ln["mpn"] == "MCP6002T-I/SN" and ln["value"] == "MCP6002T-I/SN", ln
+    prj = _project(tmp_path, params=[("Comment", "10k")], sch={"Comment": "LM358DR"})
+    assert not _lines(prj, "V2")[0].get("mpn")
+
+@lite
 def test_where_used_writes_utf8_on_a_narrow_locale(tmp_path, monkeypatch):
     """R-AW-4: the .md / .json were written in the locale encoding: 'RES 10kΩ' crashed on cp1252 after the CSVs."""
     from ecadlib import altium_project as AP
