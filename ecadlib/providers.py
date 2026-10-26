@@ -92,7 +92,16 @@ _MAKER_GENERIC = {"ANALOG", "GENERAL", "AMERICAN", "NATIONAL", "MICRO", "SILICON
                   "ADVANCED", "UNITED", "CENTRAL", "STANDARD", "UNIVERSAL", "PRECISION", "APPLIED", "SMART", "NEW"}
 _MAKER_LEGAL = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "LTD", "LIMITED", "LLC", "GMBH", "AG",
                 "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE"}
-_MAKER_ALIAS.update({"ANALOGDEVICES": "ANALOG", "NATIONALSEMICONDUCTOR": "TEXASINSTRUMENTS"})
+_MAKER_ALIAS.update({"ANALOGDEVICES": "ANALOG", "NATIONALSEMICONDUCTOR": "TEXASINSTRUMENTS",
+                     "CENTRAL": "CENTRALSEMICONDUCTOR", "TEXAS": "TEXASINSTRUMENTS",    # "Central" alone on a BOM
+                     "PERICOM": "DIODES", "DIALOG": "RENESAS", "SIPEX": "MAXLINEAR", "CATALYST": "ON"})   # bought
+# the words of a company name an alias maps to, where it has several: where a shorter name may end in it ("Texas" /
+# "TI"), and where not ("Teco" is no "TE" = TE Connectivity)
+_ALIAS_WORDS = {"TEXASINSTRUMENTS": ["TEXAS", "INSTRUMENTS"], "TECONNECTIVITY": ["TE", "CONNECTIVITY"],
+                "WURTHELEKTRONIK": ["WURTH", "ELEKTRONIK"], "MONOLITHICPOWER": ["MONOLITHIC", "POWER"],
+                "ALPHAOMEGA": ["ALPHA", "OMEGA"], "SILICONLABORATORIES": ["SILICON", "LABORATORIES"],
+                "SAMSUNGELECTROMECHANICS": ["SAMSUNG", "ELECTROMECHANICS"], "GLOBALCONNECTOR": ["GLOBAL", "CONNECTOR"],
+                "CIRRUSLOGIC": ["CIRRUS", "LOGIC"], "CENTRALSEMICONDUCTOR": ["CENTRAL", "SEMICONDUCTOR"]}
 # Nexperia (NXP's Standard Products until 2017) is its own company now, with its own lifecycles and datasheets for the
 # discretes and logic NXP once sold: an NXP line is not matched to a Nexperia listing (nor Philips / Freescale to it).
 
@@ -135,6 +144,8 @@ def maker_key(name):
         return "ANALOG"                                                  # Linear Integrated Systems): Analog Devices now
     if "".join(kept).startswith("STMICRO"):                              # STMicroelectronics, ST Micro
         return "ST"
+    if _maker_words_all(name)[:2] == ["INTEGRATED", "DEVICE"]:            # Integrated Device Technology (IDT), not
+        return "RENESAS"                                                 # "Device Engineering": Renesas since 2019
     if kept and kept[0] == "VISHAY":              # Vishay Dale / Siliconix / Intertechnology / Sprague: one maker
         return "VPG" if "PRECISION" in kept else "VISHAY"    # Vishay Precision Group: its own company since 2010
     joined = "".join(_key_words(name))
@@ -164,11 +175,15 @@ def same_maker(a, b):
         words = _key_words(ln)                   # at a word's end: "Murata" / "Murata Power Solutions", not "Micron" /
         split = [w for w in re.findall(r"[A-Z0-9]+", re.sub(r"['.]", "", unicodedata.normalize("NFKD", clean_maker(ln))
                  .encode("ascii", "ignore").decode().upper())) if w not in _MAKER_WORDS]      # "Micronas"; "Wakefield-Vette"
-        if "".join(words) != long_ or any("".join(ws[:i]) == short for ws in (words, split) for i in range(1, len(ws) + 1)):
+        if "".join(words) != long_:              # the long key is an alias's company ("TE" -> TECONNECTIVITY): its
+            words, split = _ALIAS_WORDS.get(long_, [long_]), []          # own words, so "Teco" is no "TE"
+        if any("".join(ws[:i]) == short for ws in (words, split) for i in range(1, len(ws) + 1)):
             return True
     wa, wb = _maker_words(a), _maker_words(b)
-    return any(len(x) == 1 and len(x[0]) >= 3 and x[0] not in _MAKER_GENERIC and y and y[0] == x[0] and ky.startswith(kx)
-               for x, y, kx, ky in ((wa, wb, ka, kb), (wb, wa, kb, ka)))     # not "Vishay" / Vishay Precision (VPG)
+    raw = lambda n: "".join(_key_words(n))       # the key before an alias: "Wurth" is WURTH, "Würth ... Midcom" WURTHMIDCOM
+    return any(len(x) == 1 and len(x[0]) >= 3 and x[0] not in _MAKER_GENERIC and y and y[0] == x[0]
+               and (ky.startswith(kx) or (_MAKER_ALIAS.get(raw(n)) == kx != raw(n) and raw(m).startswith(raw(n))))
+               for x, y, kx, ky, n, m in ((wa, wb, ka, kb, a, b), (wb, wa, kb, ka, b, a)))   # not "Vishay" / VPG
 
 
 def describe(text="", category="", package=""):

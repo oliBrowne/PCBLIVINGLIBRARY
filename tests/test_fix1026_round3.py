@@ -105,3 +105,25 @@ def test_the_ui_and_mcp_dblib_export_refuse_a_bom_the_librarian_has_not_run_for(
     assert "librarian" in tool["description"].lower(), tool
     page = Path("ecadlib/ui/static/index.html").read_text(encoding="utf-8")
     assert "Written (draft" not in page                                    # the UI has no draft branch any more
+
+
+# ---------------------------------------------------------------- R-FX-4: maker matcher regressions
+def test_maker_names_lost_by_the_fix_round_match_again_and_teco_is_not_te():
+    from ecadlib.providers import same_maker as S
+    for a, b in (("Wurth", "Würth Electronics Midcom"), ("Würth", "Wurth Electronics Midcom Inc"),
+                 ("Central", "Central Semiconductor Corp"), ("Central", "Central Semiconductor"),
+                 ("Texas", "TI"), ("Wurth", "WE"), ("TE", "TE Connectivity / Raychem"),
+                 ("Murata", "Murata Power Solutions"), ("OSRAM", "ams OSRAM")):
+        assert S(a, b) and S(b, a), (a, b)
+    for a, b in (("Teco", "TE"), ("TECO", "TE Connectivity"), ("Tecate", "TE"), ("Texas", "TE"),
+                 ("Wurth", "Winbond"), ("Central", "Central Technologies"), ("Vishay", "Vishay Precision Group"),
+                 ("ST", "Stackpole Electronics"), ("TI", "Analog Devices Inc."), ("AMS", "ams OSRAM"),
+                 ("Micron", "Micronas"), ("Analog Devices", "Analog Power"),
+                 ("Integrated Device Technology", "Device Engineering Inc.")):
+        assert not S(a, b) and not S(b, a), (a, b)
+    # makers bought by another, found under the buyer's name at the distributor
+    for a, b in (("Pericom", "Diodes Incorporated"), ("Pericom Semiconductor", "Diodes Inc"),
+                 ("Dialog Semiconductor", "Renesas Electronics America Inc"), ("Sipex", "MaxLinear, Inc."),
+                 ("Catalyst Semiconductor", "onsemi"), ("Integrated Device Technology", "Renesas Electronics"),
+                 ("Integrated Device Technology Inc", "IDT")):
+        assert S(a, b) and S(b, a), (a, b)
