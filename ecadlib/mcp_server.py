@@ -734,8 +734,8 @@ def _normalize(tool, args):
                     out[k] = int(f) if typ == "integer" and f == int(f) else f
             except ValueError:
                 pass
-        elif typ == "integer" and isinstance(v, float) and v == int(v):
-            out[k] = int(v)
+        elif typ == "integer" and isinstance(v, float) and math.isfinite(v) and v == int(v):
+            out[k] = int(v)                            # 1e999 (json reads it as inf) stays a float: the schema refuses it
         elif typ == "string" and isinstance(v, (int, float)) and not isinstance(v, bool):
             out[k] = str(v)
         elif typ == "object" and isinstance(v, str):

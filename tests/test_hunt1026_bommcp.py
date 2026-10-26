@@ -118,3 +118,78 @@ def test_xlsx_merged_qty_and_merges_across_columns_are_not_copied(tmp_path):
 def _read_xlsx(f):
     with contextlib.redirect_stderr(io.StringIO()):
         return T.read_bom(f)
+
+
+# ---------------------------------------------------------------- bommcp-04..06: JSON-RPC over stdio and HTTP
+def _ws(tmp_path):
+    from ecadlib.app import Workspace
+    from ecadlib import mcp_server as M
+    ws = Workspace(str(tmp_path / "ws"))
+    ws.mcp_options = M.Options(wait=30)
+    return ws
+
+
+@lite
+def test_an_infinite_integer_argument_is_a_tool_error_not_an_internal_error(tmp_path):
+    # json.loads reads 1e999 as inf: int(inf) raised OverflowError inside handle(), so the client got a JSON-RPC
+    # 'internal error' (and a traceback on stderr) instead of the usual argument message it can act on
+    from ecadlib import mcp_server as M
+    ws = _ws(tmp_path)
+    for tool, args in (("job_status", '{"id": "x", "wait_seconds": 1e999}'),
+                       ("part_candidates", '{"bom": "b.csv", "part": "P", "limit": -1e999}')):
+        line = '{"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "%s", "arguments": %s}}' % (tool, args)
+        with contextlib.redirect_stderr(io.StringIO()):
+            r = M.handle(ws, json.loads(line))
+        assert r.get("result", {}).get("isError") is True, r
+        assert "invalid argument" in r["result"]["content"][0]["text"], r
+
+
+@lite
+def test_http_body_with_a_byte_order_mark_is_read_as_stdio_reads_it(tmp_path):
+    import http.client
+    from ecadlib import mcp_http as H
+    srv, url = H.serve_in_thread(_ws(tmp_path), token="t0k")
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=30)
+        c.request("POST", "/mcp", body="﻿".encode() + b'{"jsonrpc": "2.0", "id": 1, "method": "ping"}',
+                  headers={"Authorization": "Bearer t0k", "Content-Type": "application/json"})
+        r = c.getresponse()
+        assert r.status == 200 and json.loads(r.read()) == {"jsonrpc": "2.0", "id": 1, "result": {}}
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@lite
+def test_http_chunked_body_is_read_not_taken_for_the_next_request(tmp_path):
+    # a body sent with Transfer-Encoding: chunked (no Content-Length) was read as empty: the answer was 'invalid
+    # request' and the chunk lines were then parsed as a second HTTP request ('400 Bad request syntax')
+    import socket
+    from ecadlib import mcp_http as H
+    srv, url = H.serve_in_thread(_ws(tmp_path), token="t0k")
+    try:
+        body = b'{"jsonrpc": "2.0", "id": 5, "method": "ping"}'
+        s = socket.create_connection(("127.0.0.1", srv.server_address[1]), timeout=30)
+        s.sendall(b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer t0k\r\nContent-Type: application/json\r\n"
+                  b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                  + b"%x\r\n" % 10 + body[:10] + b"\r\n" + b"%x\r\n" % (len(body) - 10) + body[10:] + b"\r\n0\r\n\r\n")
+        out = b""
+        while True:
+            b = s.recv(65536)
+            if not b:
+                break
+            out += b
+        s.close()
+        text = out.decode("latin-1")
+        assert text.startswith("HTTP/1.1 200") and text.count("HTTP/1.1") == 1, text
+        assert json.loads(text.split("\r\n\r\n", 1)[1]) == {"jsonrpc": "2.0", "id": 5, "result": {}}, text
+        for chunks, status in ((b"zz\r\nabc\r\n0\r\n\r\n", "400"), (b"%x\r\n" % (H.MAX_BODY + 1), "413")):
+            s = socket.create_connection(("127.0.0.1", srv.server_address[1]), timeout=30)
+            s.sendall(b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer t0k\r\n"
+                      b"Transfer-Encoding: chunked\r\n\r\n" + chunks)
+            got = s.recv(65536).decode("latin-1")
+            s.close()
+            assert got.startswith(f"HTTP/1.1 {status}"), got
+    finally:
+        srv.shutdown()
+        srv.server_close()

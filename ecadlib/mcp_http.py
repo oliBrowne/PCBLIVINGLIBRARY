@@ -52,6 +52,8 @@ def make_server(ws, host="127.0.0.1", port=8766, path="/mcp", token=None, origin
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "ecadlib-mcp"
         protocol_version = "HTTP/1.1"
+        timeout = 300                                       # a client that sends less than its Content-Length (or
+                                                            # goes quiet on an open connection) frees its thread
 
         def log_message(self, fmt, *args):                  # request lines only: never headers, so never the token
             if not quiet:
@@ -100,6 +102,28 @@ def make_server(ws, host="127.0.0.1", port=8766, path="/mcp", token=None, origin
                                   {"WWW-Authenticate": 'Bearer realm="ecadlib-mcp"'}) or True
             return None
 
+        def _chunked(self):
+            """A Transfer-Encoding: chunked body -> bytes; None when it is over MAX_BODY, False when it is malformed."""
+            out = bytearray()
+            while True:
+                line = self.rfile.readline(1024)
+                try:
+                    size = int(line.split(b";", 1)[0].strip(), 16)
+                except ValueError:
+                    return False
+                if size < 0:
+                    return False
+                if size == 0:
+                    while self.rfile.readline(8192).strip():    # trailer fields, up to the blank line
+                        pass
+                    return bytes(out)
+                if len(out) + size > MAX_BODY:
+                    return None
+                data = self.rfile.read(size)
+                if len(data) < size or self.rfile.readline(1024).strip():   # cut short, or no CRLF after the data
+                    return False
+                out += data
+
         def _ours(self):
             return urlsplit(self.path).path.rstrip("/") == path.rstrip("/")
 
@@ -136,15 +160,25 @@ def make_server(ws, host="127.0.0.1", port=8766, path="/mcp", token=None, origin
             pv = self.headers.get("MCP-Protocol-Version")
             if pv and pv not in M.SUPPORTED:
                 return self._send(400, {"error": f"unsupported MCP-Protocol-Version {pv}"})
-            try:
-                n = int(self.headers.get("Content-Length") or 0)
-            except ValueError:
-                n = -1
-            if n < 0 or n > MAX_BODY:
-                return self._send(413 if n > MAX_BODY else 400, {"error": "body too large" if n > MAX_BODY else "bad length"})
-            raw = self.rfile.read(n)
-            try:
-                msg = json.loads(raw.decode("utf-8", errors="replace")) if raw.strip() else None
+            te = (self.headers.get("Transfer-Encoding") or "").strip().lower()
+            if te:                                          # no Content-Length: read as sent, else the body would
+                if te != "chunked":                         # be taken for the next request on this connection
+                    return self._send(501, {"error": f"Transfer-Encoding {te} is not supported"})
+                raw = self._chunked()
+                if raw is None:
+                    return self._send(413, {"error": "body too large"})
+                if raw is False:
+                    return self._send(400, {"error": "bad chunked body"})
+            else:
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    n = -1
+                if n < 0 or n > MAX_BODY:
+                    return self._send(413 if n > MAX_BODY else 400, {"error": "body too large" if n > MAX_BODY else "bad length"})
+                raw = self.rfile.read(n)
+            try:                                            # utf-8-sig: a byte-order mark, as the stdio server reads it
+                msg = json.loads(raw.decode("utf-8-sig", errors="replace")) if raw.strip() else None
             except (ValueError, RecursionError):
                 return self._send(400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
             try:
