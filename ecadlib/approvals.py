@@ -235,19 +235,57 @@ def _resolve(base, p):
     return None if not p else Path(p) if Path(p).is_absolute() else Path(base) / p
 
 
-def content_hash(item, base="."):
-    """sha256 over the released model files' bytes and the item's key fields. Paths do not count, contents do."""
-    h = hashlib.sha256(b"ecadlib-approval-v1\0")
+HASH_VERSION = 2                                   # 2: also the .kicad_mod the KiCad publishers ship ("v2:" + hex)
+
+
+def content_hash(item, base=".", version=HASH_VERSION):
+    """sha256 over the released model files' bytes and the item's key fields. Paths do not count, contents do.
+    version 1 (a plain hex string, every approval written before 2026-10-26): the .SchLib and .PcbLib only; version 2
+    ("v2:<hex>"): also the footprint's .kicad_mod (ledger.item_files), which kicad-export / kicad-dblib / kicad-pcm
+    ship. A stored hash is compared with the hash of its own version (hash_matches), as fingerprint schemas are."""
+    h = hashlib.sha256(b"ecadlib-approval-v1\0" if version == 1 else b"ecadlib-approval-v2\0")
     for kind in ("symbol", "footprint"):
         f = _resolve(base, (item.get(kind) or {}).get("file"))
         h.update(f"{kind}:{(item.get(kind) or {}).get('ref') or ''}\0".encode())
         h.update(hashlib.sha256(f.read_bytes()).digest() if f and f.is_file() else b"missing")
+    if version >= 2:
+        f = _kicad_mod_file(item, base)
+        h.update(b"kicad_mod\0" + (hashlib.sha256(f.read_bytes()).digest() if f and f.is_file() else b"none"))
     fields = {k: item.get(k) or "" for k in KEY_FIELDS}
     fields["parameters"] = sorted((p["name"], str(p["value"])) for p in item.get("parameters") or []
                                   if p["name"] not in DERIVED_PARAMS)
     fields["cleared"] = sorted(item.get("cleared") or [])
     h.update(json.dumps(fields, sort_keys=True).encode())
-    return h.hexdigest()
+    return h.hexdigest() if version == 1 else f"v{version}:{h.hexdigest()}"
+
+
+def _kicad_mod_file(item, base="."):
+    """The footprint's .kicad_mod (ledger.item_files), or None. Its path is relative to the plan's folder; a publisher
+    that made the .SchLib / .PcbLib paths absolute (the UI / MCP push) leaves it relative, so it is also looked for
+    from the folders above the .PcbLib, nearest first."""
+    from .ledger import item_files
+    rel = item_files(item).get("kicad_mod")
+    f = _resolve(base, rel)
+    if not f or f.is_file() or Path(rel).is_absolute():
+        return f
+    fp = (item.get("footprint") or {}).get("file")
+    if fp and Path(fp).is_absolute():
+        return next((a / rel for a in Path(fp).parents if (a / rel).is_file()), f)
+    return f
+
+
+def hash_matches(stored, item, base=".", current=None, _old=None):
+    """True when a stored content hash (an approval's, the release check's snapshot) is the item's now, compared in
+    the stored hash's own version: an approval recorded before the .kicad_mod was hashed stays valid as long as the
+    files it covered are unchanged. current: the item's hash now (content_hash); _old: a dict caching version 1."""
+    if not stored:
+        return False
+    if str(stored).startswith("v2:"):
+        return stored == (current or content_hash(item, base))
+    cache = _old if _old is not None else {}
+    if 1 not in cache:
+        cache[1] = content_hash(item, base, version=1)
+    return stored == cache[1]
 
 
 # ---------------------------------------------------------------- evaluation
@@ -259,6 +297,8 @@ def _allow_user(item):
 def evaluate(item, policy, base=".", h=None):
     """-> {required, met, hash, approved_by, missing, stale, rejected_by, ignored}."""
     h = h or content_hash(item, base)
+    old = {}                                       # version-1 hash, worked out once when an old record needs it
+    same = lambda stored: hash_matches(stored, item, base, h, old)
     latest, pos = {}, {}
     for i, r in enumerate(item.get("approvals") or []):   # one person, however they spelled their name (same_person)
         k = r.get("key") or user_key(r["who"])
@@ -270,7 +310,7 @@ def evaluate(item, policy, base=".", h=None):
     for k, r in latest.items():
         if r["decision"] == "reject":          # a "no" holds until that person approves, whatever changed since (a
             rejects.append(k)                  # restyle, a revert, a re-run lifts none)
-        elif r.get("hash") != h:
+        elif not same(r.get("hash")):
             stale.append(r["who"])
         elif policy and policy["no_self_approval"] and self_user and (k == user_key(self_user) or same_person(r["who"], self_user)):
             ignored.append(f"{r['who']}: released it with --allow")
@@ -287,7 +327,7 @@ def evaluate(item, policy, base=".", h=None):
             ignored.append(f"{r['who']}: rejected it, but is no longer in the policy's users; {by} approved after")
             continue
         rejected.append(f"{r['who']}" + (f" ({r['comment']})" if r.get("comment") else "")
-                        + ("; the part changed since" if r.get("hash") != h else "")
+                        + ("; the part changed since" if not same(r.get("hash")) else "")
                         + ("; no longer in the policy's users: an approve by a current one lifts it" if gone else ""))
     need = applies(item, policy)
     missing = []
@@ -342,7 +382,8 @@ def push_block(item, policy=None, base="."):
             return "rejected: " + "; ".join(ev["missing"])
         return "awaiting approval" if item.get("status") == "awaiting_approval" else None
     ev = evaluate(item, pol, base)
-    if snap.get("checked_hash") and snap["checked_hash"] != ev["hash"] and item.get("status") != "held":
+    if snap.get("checked_hash") and not hash_matches(snap["checked_hash"], item, base, ev["hash"]) and \
+            item.get("status") != "held":
         return "changed since the release check: run release-check again"
     if ev["required"] and not ev["met"]:
         return "awaiting approval: " + "; ".join(ev["missing"])
@@ -397,12 +438,12 @@ def refresh_status(item, policy, base="."):
         snap = item.get("approval") or {}
         if snap and not snap.get("policy"):
             item.pop("approval", None)
-            if snap.get("checked_hash") in (None, ev["hash"]):
+            if snap.get("checked_hash") is None or hash_matches(snap["checked_hash"], item, base, ev["hash"]):
                 item["status"] = "ready"           # it waited only for the reject that is now taken back
         return item["status"]
     snap = item.setdefault("approval", {"policy": policy, "checked_hash": None})
     snap.update({"policy": policy, **{k: ev[k] for k in ("required", "met", "approved_by", "missing", "stale")}})
-    changed = snap.get("checked_hash") not in (None, ev["hash"])
+    changed = snap.get("checked_hash") is not None and not hash_matches(snap["checked_hash"], item, base, ev["hash"])
     if changed:
         snap["missing"] = snap["missing"] + ["changed since the release check: run release-check again"]
     item["status"] = "ready" if (not ev["required"] or ev["met"]) and not changed else "awaiting_approval"

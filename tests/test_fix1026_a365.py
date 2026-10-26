@@ -287,3 +287,45 @@ def test_part_edited_after_sign_off_is_not_shipped_by_kicad_export(tmp_path):
         rep = KE.export(str(d / "plan.json"), str(d / "kicad"), "lib", log=lambda *a, **k: None)
     assert not any("0.45" in m.read_text() for m in (d / "kicad").rglob("*.kicad_mod")), rep
     assert rep["skipped"], rep
+
+
+# ---------------------------------------------------------------- R-AM-6: the sign-off covers the .kicad_mod
+@lite
+def test_sign_off_goes_stale_when_only_the_kicad_mod_changes(tmp_path):
+    """kicad-export, kicad-dblib and kicad-pcm ship the .kicad_mod: an edit of it alone (pads 0.58 -> 0.30), with
+    [release] parity = warn, kept the approval valid also after release-check ran again."""
+    from ecadlib import approvals as AP, release_check as RC, rules as RU
+    from tests.test_release_check import SOIC
+    d = tmp_path
+    it, pol = _signed_off(d)
+    h0 = AP.content_hash(it, d)
+    (d / it["footprint"]["kicad_mod"]).write_text(SOIC.replace("(size 1.965 0.58)", "(size 1.965 0.30)"))
+    assert AP.content_hash(it, d) != h0
+    RC.apply([it], d, rules=RU.load({"release": {"parity": "warn"}}))
+    ev = AP.evaluate(it, pol, d)
+    assert not ev["met"] and ev["stale"], ev
+    assert it["status"] == "awaiting_approval", it["status"]
+
+
+@lite
+def test_sign_off_recorded_under_the_old_hash_stays_valid(tmp_path):
+    """Approvals and release-check snapshots written before the .kicad_mod was hashed are compared like for like
+    (the old hash): upgrading ecadlib does not send every signed-off part back for approval."""
+    from ecadlib import approvals as AP, release_check as RC
+    d = tmp_path
+    it, pol = _signed_off(d)
+    old = AP.content_hash(it, d, version=1)
+    assert len(old) == 64 and old != AP.content_hash(it, d)
+    for r in it["approvals"]:
+        r["hash"] = old
+    it["approval"]["checked_hash"] = old
+    assert AP.evaluate(it, pol, d)["met"]
+    assert AP.push_block(it, pol, d) is None
+    assert AP.refresh_status(it, pol, d) == "ready"
+    assert RC.publish_problems(it, d) == []
+    RC.apply([it], d)                          # release-check again: still signed off
+    assert it["status"] == "ready" and AP.evaluate(it, pol, d)["met"], it.get("approval")
+    # an edit of the files the old hash covers still makes the old approval stale
+    f = d / it["symbol"]["file"]
+    f.write_bytes(f.read_bytes() + b"\0")
+    assert not AP.evaluate(it, pol, d)["met"]
