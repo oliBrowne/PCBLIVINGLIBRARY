@@ -698,6 +698,53 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         rows = tables.get(t, ([], []))[1]
         return next((r for r in rows if _pk(r.get("Part Number")) == _pk(pn)), None)
 
+    def row_update(cur, it, want):
+        """The row `cur` as the plan item writes it, and the columns that change."""
+        new = dict(cur)
+        for c in (param_name(c, rules) for c in it.get("cleared", [])):
+            if c in new:
+                new[c] = ""
+        for c in [c for c in new if c not in KEY_COLUMNS and param_name(c, rules) != c and param_name(c, rules) in want]:
+            new[c] = ""                                     # ecadlib's own name of a field the house name now carries:
+        new.update(want)                                    # never a second, stale value of it
+        return new, [c for c in new if str(new.get(c, "")) != str(cur.get(c, ""))]
+
+    def cross_plan_hold(it):
+        """Why the plan item may not change its row, which another plan folder released into this library (R-FL-1,
+        R-FX15-1): that plan's part stays the part it is (no identity change in place, as A365 refuses) on the symbol
+        and land it released (no Ref / Path change to another drawing). Checked before any file is written. None: free."""
+        old_t = where.get(_pk(it["name"]))
+        cur = find(it["name"], old_t) if old_t else None
+        if cur is None:
+            return None
+        new, changed = row_update(cur, it, plan_row(it, rules))
+        theirs = other_plans(cur.get("Part Number") or it["name"]) if changed else []
+        if not theirs:
+            return None
+        from .altium365 import identity_change          # the part it is (A365 refuses the same, in place)
+        ident = identity_change({"details": {"parameters": [{"name": k, "value": v} for k, v in cur.items()]}},
+                                [{"name": k, "value": v} for k, v in new.items()], rules)
+        if ident:
+            return (f"identity change ({'; '.join(ident)}): the row {cur.get('Part Number')} was released into this "
+                    f"library from another plan folder ({plans_text(theirs)}), so it is not made another part in "
+                    "place. Give this part another name in this plan, or sync this plan into a library folder of its own")
+        moved = []
+        for k, d, w in KINDS:
+            if f"{w} Ref" not in changed and f"{w} Path" not in changed:
+                continue
+            src = Path(it[k]["file"])
+            src = src if src.is_absolute() else base / src
+            old_f = to / str(cur.get(f"{w} Path") or "").replace("\\", "/")
+            was = _drawing(old_f, d, cur.get(f"{w} Ref")) if cur.get(f"{w} Path") and old_f.is_file() else None
+            if was is None or was != _drawing(src, d, it[k]["ref"]):
+                moved.append(f"{w} {cur.get(f'{w} Ref') or '(none)'} -> {new.get(f'{w} Ref')}")
+        if moved:
+            return (f"model change ({'; '.join(moved)}): the row {cur.get('Part Number')} was released into this library "
+                    f"from another plan folder ({plans_text(theirs)}) on its own symbol and land, and this plan's is "
+                    "another drawing: not changed without that plan's sign-off. Give this part another name in this "
+                    "plan, or sync this plan into a library folder of its own")
+        return None
+
     for it in items:
         t0 = sheets.get(id(it)) or table_of(it)             # Excel sheet names ignore case: Passives = passives
         res = {"name": it["name"], "action": "", "detail": "", "table": next((k for k in tables if table_key(k) == table_key(t0)), t0)}
@@ -729,6 +776,12 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             res["detail"] = f"duplicate part name in the plan (also {seen[it['name'].casefold()]!r}): rename one of them"
             continue
         seen[it["name"].casefold()] = it["name"]
+        why = cross_plan_hold(it)                           # before any file is written for it
+        if why:
+            res["action"], res["detail"] = "held", why
+            if _pk(it["name"]) in where:
+                res["table"] = where[_pk(it["name"])]
+            continue
         notes, problems = [], []
         for k, d, w in KINDS:                               # model files first: a bad file must not reach the table
             src, ref = it[k]["file"], it[k]["ref"]
@@ -844,26 +897,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             res["action"], res["detail"] = "added", "; ".join(notes)
             own(it["name"])
             continue
-        new = dict(cur)
-        for c in (param_name(c, rules) for c in it.get("cleared", [])):
-            if c in new:
-                new[c] = ""
-        for c in [c for c in new if c not in KEY_COLUMNS and param_name(c, rules) != c and param_name(c, rules) in want]:
-            new[c] = ""                                     # ecadlib's own name of a field the house name now carries:
-        new.update(want)                                    # never a second, stale value of it
-        changed = [c for c in new if str(new.get(c, "")) != str(cur.get(c, ""))]
-        theirs = other_plans(cur.get("Part Number") or it["name"]) if changed else []
-        if theirs:                                          # another plan folder released this row: its part stays
-            from .altium365 import identity_change          # the part it is (A365 refuses the same, in place)
-            ident = identity_change({"details": {"parameters": [{"name": k, "value": v} for k, v in cur.items()]}},
-                                    [{"name": k, "value": v} for k, v in new.items()], rules)
-            if ident:
-                res["action"] = "held"
-                res["detail"] = (f"identity change ({'; '.join(ident)}): the row {cur.get('Part Number')} was released "
-                                 f"into this library from another plan folder ({plans_text(theirs)}), so it is not "
-                                 "made another part in place. Give this part another name in this plan, or sync this "
-                                 "plan into a library folder of its own")
-                continue
+        new, changed = row_update(cur, it, want)
         if old_t != t:                                      # category changed: move the row
             tables[old_t][1].remove(cur)
             hdr, rows = tables.setdefault(t, (list(want), []))
