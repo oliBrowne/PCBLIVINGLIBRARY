@@ -114,3 +114,37 @@ def test_wide_soic_band_by_body_width_and_narrow_band_kept():
         assert lo <= 2.65 <= hi, (n, lo, hi)
     assert RC.height_range("SOIC-8_3.9x4.9mm_P1.27mm")[1] < 2.0          # a narrow SOIC at 2.65 is still flagged
     assert RC.height_range("SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL")[1] < 2.0
+
+
+# ---------------------------------------------------------------- R-3D-3
+def test_generated_height_takes_the_standard_table_height():
+    for n, h in (("SOP-20_7.5x12.8mm_P1.27mm", 2.65), ("PQFP-208_28x28mm_P0.5mm", 3.6), ("SOP-8_6.605x9.655mm_P2.54mm", 5.08)):
+        s = SG.spec_from_name(n)
+        assert s and SG.default_height(s) == h, (n, s and SG.default_height(s))
+        _, info = SG.build(s)
+        assert info["height"] == h and "standard table" in info["height_src"], info
+
+
+def _offline_kicad_body(name):
+    """The KiCad route with no KiCad STEP (offline / cache miss): the model and its height are made here."""
+    from ecadlib import footprint_gen as F, kicad_import as K
+    spec = json.loads((Path(SG.__file__).with_name("package_specs") / "SOIC-8_3.9x4.9mm_P1.27mm.json").read_text())
+    text, _ = F.build(spec)
+    notes = []
+    fp, t = K.convert_footprint(text, name, "kicad:x", notes)
+    t = (t[0], name, *t[2:])
+    K.add_body(fp, t, None, None, False, notes, gen_step=True)
+    return fp, [n for n in notes if n.startswith("3D")]
+
+
+def test_offline_family_height_is_labelled_a_package_default():
+    """A height from step_gen's per-family guess (no spec, no table height) says so: release_check's package-default
+    warning ("verify against the datasheet") then fires; a table height is labelled as the table's."""
+    from ecadlib import stdparts as SP
+    n = "SOP-8_3.9x4.9mm_P1.27mm"
+    assert n not in SP.packages()
+    fp, notes = _offline_kicad_body(n)
+    assert any(b.get("step") for b in fp["bodies"]), notes
+    assert any("package default" in x and "verify" in x for x in notes), notes
+    fp, notes = _offline_kicad_body("SOP-20_7.5x12.8mm_P1.27mm")       # in the table: its height and its label
+    assert any("2.65 mm (standard table height_max)" in x for x in notes), notes

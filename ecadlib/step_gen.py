@@ -697,22 +697,35 @@ def spec_from_name(name):
     return None
 
 
+PACKAGE_DEFAULT = "package default (step_gen family height), verify"
+
+
 def default_height(spec):
+    return height_source(spec)[0]
+
+
+def height_source(spec):
+    """(height, label) when the caller gives none: the spec's height_max, the header / axial / CP_EIA geometry, the
+    standard table's height_max for the name, else the family guess (HEIGHT, the release band's middle), labelled a
+    package default so release_check asks for it to be checked."""
     if spec.get("height_max"):
-        return float(spec["height_max"])
+        return float(spec["height_max"]), "spec/table"
     if spec["package_type"] == "pin_header":
-        return {2.54: 8.5, 2.0: 6.0, 1.27: 4.0}.get(round(spec["pitch"], 2), 3 * spec["pitch"])
+        return {2.54: 8.5, 2.0: 6.0, 1.27: 4.0}.get(round(spec["pitch"], 2), 3 * spec["pitch"]), "spec/table"
     if spec["package_type"] == "axial":
-        return spec["diameter"]
+        return spec["diameter"], "spec/table"
     m = re.match(r"CP_EIA-\d{4}-(\d{2})", spec["name"])
     if m:
-        return int(m.group(1)) / 10
+        return int(m.group(1)) / 10, "spec/table"
+    from .release_check import height_range, _table_height
+    h = _table_height(spec["name"])
+    if h:
+        return h, "standard table height_max"
     h = next((v for rx, v in HEIGHT if re.search(rx, spec["name"])), None)
     if h is None:
-        from .release_check import height_range
         lo, hi, rx = height_range(spec["name"])
         h = round((lo + hi) / 2, 2) if rx else None
-    return h
+    return h, PACKAGE_DEFAULT
 
 
 # ---------------------------------------------------------------- STEP writer
@@ -804,7 +817,7 @@ def build(spec, height=None):
     t = spec["package_type"]
     if t not in BUILDERS:
         raise ValueError(f"no 3D builder for package_type {t!r}")
-    H, src = (float(height), "caller") if height else (default_height(spec), "spec/table")
+    H, src = (float(height), "caller") if height else height_source(spec)
     if not H:
         raise ValueError(f"{spec['name']}: no height (no height_max, no table entry); pass a height")
     solids = BUILDERS[t](spec, H)

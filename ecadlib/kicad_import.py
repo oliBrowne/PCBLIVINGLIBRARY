@@ -674,7 +674,8 @@ def add_body(fp, t, http=None, height=None, step=False, notes=None, gen_step=Fal
             notes.append(f"3D: no generated STEP ({e})")
         else:
             x0, y0, _, x1, y1, z1 = info["bbox"]
-            h, src = round(z1, 4), "step_gen table" if generic or not src else src     # through-hole: the pin tops
+            gsrc = info.get("height_src") if info.get("height_src") in ("standard table height_max", step_gen.PACKAGE_DEFAULT) else "step_gen table"
+            h, src = round(z1, 4), gsrc if generic or not src else src     # through-hole: the pin tops
             fp["bodies"].append({"pts": [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "height": h,
                                  "step": {"name": f"{AL.file_stem(fp['name'])}.step", "data": data.encode("ascii"), "rot": (0.0, 0.0, 0.0)}})
             notes.append(f"3D: generated STEP ({info['family']} model from {'the package spec' if spec else 'package_specs / the footprint name'}"
