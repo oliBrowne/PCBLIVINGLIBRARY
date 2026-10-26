@@ -89,3 +89,27 @@ def test_symexp04_parts_export_no_borrowed_kicad_ids():
     got = {r["Part ID"]: (r["KiCad Symbol"], r["KiCad Footprint"]) for r in PE.rows(items)}
     assert got == {"A_B": ("ecadlib:A_B", "ecadlib:SOT-23"), "A/B": ("", "ecadlib:SOT_23"), "C": ("ecadlib:C", ""),
                    "D": ("ecadlib:D", "ecadlib:SOT-23")}, got          # one footprint shared by two parts: fine
+
+
+# symexp-05: altium-native compare (and lib_state's "built" test) checked pad position, size, hole, rotation, layer,
+# plating and masks but not the pad shape, corner radius or slot: a rect pad Altium saved round, a roundrect saved
+# with another corner, a slot saved as a round hole all compared as 0 differences
+@lite
+def test_symexp05_compare_sees_pad_shape_corner_and_slot(tmp_path):
+    from ecadlib import altium_native as AN
+    fp = {"name": "TST", "description": "", "height_mm": 1.0, "tracks": [], "fills": [], "regions": [], "texts": [],
+          "pads": [{"designator": "1", "x": -1.0, "y": 0.0, "w": 1.0, "h": 0.6, "rot": 0.0, "shape": "rect", "corner": 0, "paste": None},
+                   {"designator": "2", "x": 1.0, "y": 0.0, "w": 1.0, "h": 0.6, "rot": 0.0, "shape": "roundrect", "corner": 50, "paste": None},
+                   {"designator": "3", "x": 0.0, "y": 3.0, "w": 2.0, "h": 1.2, "rot": 0.0, "shape": "round", "corner": 0, "paste": None,
+                    "layer": AL.MULTI, "hole": 0.6, "hole_shape": "slot", "slot": 1.4, "hole_rot": 0.0, "plated": True}]}
+    lib = tmp_path / "TST.PcbLib"
+    AL.write_pcblib(lib, [fp])
+    rp = lib.with_name(lib.name + AN.EXT)
+    assert AN.compare_one(lib, rp) == []
+    stamp = ("02/02/2030", "01:01:01")
+    for i, change, what in ((0, {"shape": "round"}, "shape"), (1, {"corner": 25}, "corner"),
+                            (2, {"hole_shape": "round", "slot": 0.0}, "hole")):
+        pads = [dict(p, **change) if k == i else p for k, p in enumerate(fp["pads"])]
+        lib.write_bytes(AL.pcblib_bytes([dict(fp, pads=pads)], lib.name, stamp))
+        probs = AN.compare_one(lib, rp)
+        assert len(probs) == 1 and f"pad {i + 1}:" in probs[0] and what in probs[0], (what, probs)

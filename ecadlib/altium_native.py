@@ -550,6 +550,8 @@ def _recipe_items(rp):
                            paste=(f[15] == "manual", int(f[16])), mask=(f[17] == "manual", int(f[18])))
             if len(f) > 20:                     # copper offset from the hole (x, y), pad frame
                 pad["offset"] = (int(f[19]), int(f[20]))
+            if len(f) > 13:                     # shape, corner radius, hole shape / slot: Altium must build those too
+                pad.update(shape=f[7], corner=int(f[8]), hole_shape=f[11], slot=int(f[12]), hole_rot=int(f[13]) / 1000)
             cur["pads"].append(pad)
         elif f[0] == "PIN" and cur is not None:
             cur["pins"].append({"num": f[3], "name": f[4], "x": round(int(f[7]) / 10000), "y": round(int(f[8]) / 10000),
@@ -577,6 +579,18 @@ def _pad_diffs(a, b, tol):
     got = tuple(b.get("offset") or (0, 0))
     if "offset" in a and any(abs(u - v) > tol for u, v in zip(a["offset"], got)):
         bad.append(f"offset {got} != {a['offset']}")
+    if "shape" in a and b.get("shape") is not None and AL.SHAPE.get(a["shape"]) != b["shape"]:
+        bad.append(f"shape {b['shape']} != {AL.SHAPE.get(a['shape'])} ({a['shape']})")
+    elif a.get("shape") == "roundrect" and b.get("corner") is not None and abs(b["corner"] - a["corner"]) > 1:
+        bad.append(f"corner {b['corner']}% != {a['corner']}%")
+    if a["hole"] and "hole_shape" in a:
+        hs = AL.HOLE.get(a["hole_shape"], 0)
+        if b.get("hole_shape", 0) != hs:
+            bad.append(f"hole shape {b.get('hole_shape', 0)} != {hs} ({a['hole_shape']})")
+        elif hs == AL.HOLE["slot"]:
+            d = abs(a["hole_rot"] - float(b.get("hole_rot") or 0)) % 180
+            if abs(a["slot"] - (b.get("slot") or 0)) > tol or min(d, 180 - d) > 0.01:
+                bad.append(f"slot {b.get('slot')} at {float(b.get('hole_rot') or 0):g} != {a['slot']} at {a['hole_rot']:g}")
     for k in ("paste", "mask"):
         manual, v = a[k]
         mode = b.get(f"{k}_mode")
