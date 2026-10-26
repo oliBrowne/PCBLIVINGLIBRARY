@@ -27,12 +27,11 @@ matching. No key -> "skipped" (images are still written). Answers are cached by 
 schema + model + effort) under <workspace>/agent/proof_cache/, so a re-run costs nothing.
 
 Settings: [agent.proof] in the rules (model, effort, api_key_env, max_cost_usd, fail_on, max_pages, dpi); empty
-model / effort / api_key_env fall back to [datasheet]."""
+model / effort fall back to [datasheet]; the key is the proof endpoint's (llm.endpoint(rules, "proof"))."""
 import argparse, base64, functools, hashlib, io, json, math, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 from . import datasheet as D, sexpr
-from . import userconfig as UC
 
 FONT_FILES = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf",
               "/Library/Fonts/Arial.ttf", "C:/Windows/Fonts/arial.ttf")
@@ -113,15 +112,19 @@ def _natural(s):
 
 
 def _settings(rules=None):
-    """[agent.proof] over PROOF_DEFAULTS; empty model / effort / api_key_env come from [datasheet]."""
+    """[agent.proof] over PROOF_DEFAULTS; empty model / effort come from [datasheet]. api_key_env is the proof
+    endpoint's key name (llm.endpoint(rules, "proof")): [datasheet]'s only when the proof talks to the same provider,
+    never another provider's key name sent to Claude (R-FX13-2)."""
     ds = D.settings(rules)
     got = ((rules or {}).get("agent") or {}).get("proof") if isinstance(rules, dict) else None
     s = dict(PROOF_DEFAULTS, **{k: v for k, v in (got or {}).items() if k in PROOF_DEFAULTS and v not in (None, "")})
-    for k in ("model", "effort", "api_key_env"):
+    for k in ("model", "effort"):
         s[k] = s[k] or ds[k]
+    s["api_key_env"] = s["api_key_env"] or "ANTHROPIC_API_KEY"     # until the endpoint below names it
     try:                                              # [ai] / [agent.proof] provider and model (ecadlib.llm)
         from . import llm as LL
-        s["model"] = LL.endpoint(rules if isinstance(rules, dict) else None, "proof", s["model"] if (got or {}).get("model") else None)["ref"]
+        ep = LL.endpoint(rules if isinstance(rules, dict) else None, "proof", s["model"] if (got or {}).get("model") else None)
+        s["model"], s["api_key_env"] = ep["ref"], ep["key_env"] or s["api_key_env"]
     except Exception as e:                            # never a silent switch to another (billed) model
         from . import fallbacks as FB
         FB.note("[agent.proof] / [ai] model setting did not resolve", e, instead=f"model {s['model']!r}")
@@ -1487,9 +1490,8 @@ def prove(item_or_part, workspace=None, rules=None, client=None, out_dir=None, k
                                     model=inf["ep"]["model"])
     if client is None:
         try:
-            from . import llm as LL               # [ai] api_key_env counts, as for the datasheet reader
-            k = key or (LL.key_for(inf["ep"]) if inf else None) or UC.secret(cfg["api_key_env"]) \
-                or UC.secret("ANTHROPIC_API_KEY")
+            from . import llm as LL               # the proof endpoint's key only (R-FX13-2); key_for falls back to
+            k = key or (LL.key_for(inf["ep"]) if inf else None)     # ANTHROPIC_API_KEY, never [datasheet]'s other key
         except Exception:
             k = None
         if not k:

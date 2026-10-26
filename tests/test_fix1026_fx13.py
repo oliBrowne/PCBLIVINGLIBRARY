@@ -58,3 +58,25 @@ def test_eval_provider_anthropic_drops_the_datasheet_key_of_another_provider():
         assert LL.endpoint(got, "datasheet")["key_env"] == "OR_KEY"
         mine = _rules({"datasheet": {"api_key_env": "CLAUDE_KEY"}})
         assert D.require_key(None, ai_overrides(mine, provider="anthropic")) == "sk-ant-mine"
+
+
+# ---------------------------------------------------------------- R-FX13-2: the proof key comes from the proof endpoint
+def test_visual_proof_on_anthropic_never_takes_the_datasheet_key_of_another_provider():
+    from ecadlib import llm as LL, visual_check as V
+    r = _rules({"datasheet": {"provider": "openrouter", "model": "qwen/qwen3", "api_key_env": "OR_KEY"},
+                "agent": {"proof": {"provider": "anthropic", "model": "claude-opus-5-5"}}})
+    with _env():
+        ep = LL.endpoint(r, "proof")
+        cfg = V._settings(r)
+        assert ep["provider"] == "anthropic" and cfg["api_key_env"] == ep["key_env"] != "OR_KEY", cfg
+    # the whole proof path: no Anthropic key -> skipped, nothing sent (the OpenRouter key never goes to Anthropic)
+    from tests import test_visual_check as TV
+    calls = []
+    with TV.setup(key=None) as d, _env(), mock.patch.object(V.D.requests, "post", TV.fake_post(TV.message(TV.answer()), calls)):
+        pr = V.prove(TV.item(d), d, r, out_dir=d / "out")
+        assert pr["verdict"] == "skipped" and not calls, (pr["verdict"], pr["reason"],
+                                                          [c["headers"].get("x-api-key") for c in calls])
+        # with a Claude key, that key is the one sent
+        os.environ["ANTHROPIC_API_KEY"] = "sk-ant-real"
+        V.prove(TV.item(d), d, r, out_dir=d / "out2")
+        assert calls and all(c["headers"].get("x-api-key") == "sk-ant-real" for c in calls), calls[0]["headers"]
