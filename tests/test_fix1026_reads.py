@@ -446,6 +446,23 @@ def test_fx2_5_a_turned_qfp_body_lays_its_exposed_pad_along_the_long_side():
         assert _qfp_read(bad)[2] == right, bad
 
 
+
+def test_fx2_3_a_qfp_or_quad_qfn_pad_too_big_as_read_is_not_excused_by_fitting_turned():
+    """EQFP-64 10x14 (body_length min 9.9) with the exposed pad read 9.95 x 6: it fits turned, but nothing turns a
+    QFP's or a quad QFN's pad (orient_ep turns gull-wing and DFN pads only), so it built a 9.95 mm pad in a 10 mm body."""
+    t = {"name": "EQFP-64-1EP_10x14mm_P0.65mm", "n": 64, "e": 0.65, "bl": 10, "bw": 14, "ls": 12, "lsy": 16, "nlr": 19,
+         "ntb": 13, "b": 0.3, "epl": 9.95, "epw": 6}
+    kind, hold, pads = _qfp_read(t)
+    assert kind == "failed" and hold, (kind, hold)
+    assert _qfp_read(dict(t, epl=6, epw=10))[0] == "ok"
+    mm = lambda a, b: {"min": a, "nom": round((a + b) / 2, 4), "max": b}
+    rev = []
+    D.sanity({"package_type": "qfn", "pin_count": 28, "pitch": 0.5, "pins_left_right": 8, "pins_top_bottom": 6,
+              "body_length": mm(3.9, 4.1), "body_width": mm(4.9, 5.1), "terminal_length": mm(0.3, 0.5),
+              "terminal_width": mm(0.2, 0.3), "exposed_pad": {"length": mm(3.9, 4.0), "width": mm(1.9, 2.1)}}, rev)
+    assert any(r.startswith("exposed_pad.length") for r in rev), rev           # quad QFN: not excused either
+
+
 if __name__ == "__main__":
     import sys
     from tests.run_all import main

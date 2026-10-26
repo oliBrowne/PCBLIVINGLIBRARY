@@ -1729,7 +1729,9 @@ def sanity(spec, review, evidence=""):
     eps, bodies = [_dim(ep.get(d)) for d in ("length", "width")], [g(k) for k in ("body_length", "body_width")]
     # a pad that fits the body turned is not too big: footprint_gen turns it to fit (orient_ep; SOIC-8-1EP's
     # 2.41 x 3.81 pad in a 4.9 x 3.9 body, read along the other axes)
-    turned_fits = all(eps) and all(bodies) and eps[0][1] < bodies[1][0] and eps[1][1] < bodies[0][0]
+    turns = t == "gullwing" or (t == "qfn" and isinstance(n, int) and F.rows(spec)[1] == 0)   # only these turn (a
+    turned_fits = turns and all(eps) and all(bodies) and \
+        eps[0][1] < bodies[1][0] and eps[1][1] < bodies[0][0]                   # QFP's, a quad QFN's pad: never)
     for d, k in (("length", "body_length"), ("width", "body_width")):
         v, body = _dim(ep.get(d)), g(k)
         if v and body and v[1] >= body[0] and not turned_fits:
