@@ -267,7 +267,7 @@ def _convert_footprint(text, name=None, source="", notes=None, license_=""):
                 continue
             _graphic(fp, kind, g, layer, notes)
     if skipped:
-        notes.append("graphics on unmapped layers dropped: " + ", ".join(f"{k} x{v}" for k, v in sorted(skipped.items(), key=str)))
+        notes.append(LOST_NOTE + ", ".join(f"{k} x{v}" for k, v in sorted(skipped.items(), key=str)))
     _zones(fp, t, notes)
     fp["texts"] = AL.texts_from_kicad(t)
     if fp["texts"]:
@@ -279,6 +279,22 @@ def _convert_footprint(text, name=None, source="", notes=None, license_=""):
         if n:
             notes.append(f"{n} {'user ' if k == 'fp_text' else ''}{k} not converted")
     return fp, t
+
+
+LOST_NOTE = "graphics on unmapped layers dropped: "
+
+
+def lost_copper(notes):
+    """The copper graphics convert_footprint dropped (B.Cu, inner copper: no Altium layer for them) -> ["B.Cu x2", ...]."""
+    return [x for n in notes if str(n).startswith(LOST_NOTE) for x in str(n)[len(LOST_NOTE):].split(", ") if ".Cu" in x]
+
+
+def lost_copper_hold(name, notes):
+    """The hold for a footprint whose .PcbLib lacks copper the KiCad footprint has (a net tie's bottom bridge, an
+    antenna's ground), for every caller of convert_footprint; None when nothing was dropped (R-FX9-1)."""
+    lost = lost_copper(notes)
+    return (f"footprint {name}: copper not written to the .PcbLib ({', '.join(lost)}); draw it in Altium or choose "
+            "another footprint") if lost else None
 
 
 def _offset(pts, d):
@@ -881,6 +897,9 @@ def import_part(spec, out, http, step=False, write=True, gen_step=True, layers=N
         text, src = load_footprint(spec["footprint"], http)
         fp, t = convert_footprint(text, spec.get("footprint_as"), src, rep["notes"],
                                   KICAD_LICENSE if src.startswith("KiCad ") else "")
+        held = lost_copper_hold(fp["name"], rep["notes"])
+        if held:                              # held: no .PcbLib that lacks copper (R-FX9-1)
+            raise ValueError(held)
         add_body(fp, t, http, spec.get("height_mm"), step, rep["notes"], gen_step=gen_step)
         rep["pcblib"] = str(AL.write_pcblib(Path(out) / "PcbLib" / f"{AL.file_stem(fp['name'])}.PcbLib", [fp], layers)) if write else None
         rep["pads"] = len(fp["pads"])

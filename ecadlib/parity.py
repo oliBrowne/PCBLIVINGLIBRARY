@@ -794,6 +794,25 @@ def _pad_copper(fp):
     return {k: (v[0], v[1]) for k, v in boxes.items()}, free
 
 
+def _approx_boxes(k, a):
+    """[(copper side, box)] of the KiCad pads the converter approximates (chamfer, trapezoid, a curved custom pad as
+    its bounding rectangle), each with the Altium pad of its number (the approximation as written): copper
+    differences inside only these boxes are that approximation (R-FX9-1)."""
+    def box(p):
+        o = p.get("outline")
+        return _bbox(_rot_pts(p["x"], p["y"], p["w"], p["h"], p["rot"]) + ([(o[0], o[1]), (o[2], o[3])] if o else []))
+    out = []
+    for p in k["pads"]:
+        if p.get("approx") and p.get("side") in ("F", "B", "THT"):
+            b = box(p)
+            for q in a["pads"]:
+                if q.get("num") == p.get("num") and q.get("side") == p.get("side") and _overlap(box(q), b, TOL["outline"]):
+                    b = _bbox([b[:2], b[2:], box(q)[:2], box(q)[2:]])
+            b = (b[0] - TOL["outline"], b[1] - TOL["outline"], b[2] + TOL["outline"], b[3] + TOL["outline"])
+            out += [(s, b) for s in (("F", "B") if p["side"] == "THT" else (p["side"],))]
+    return out
+
+
 def compare_footprints(k, a, export=False, model_ok=None):
     """Canonical KiCad and Altium footprints -> diffs. export: the KiCad side is a kicad-export library, so its 3D
     model must be there (model_ok: whether each (model ...) path resolves to a file)."""
@@ -816,10 +835,12 @@ def compare_footprints(k, a, export=False, model_ok=None):
     cu = None
     if (k.get("cu_extra") or a.get("cu_extra")) and "cu_map" in k and "cu_map" in a:
         from . import copper_map as CM
-        cu = CM.compare(k["cu_map"], a["cu_map"])
-        for layer, kb, ab, area in cu:
-            _d(out, lvl, f"{layer}.Cu copper", "extent", kb or "nothing more", ab or "nothing more",
-               f"copper on one side only, x0, y0, x1, y1 mm; {area:g} mm2")
+        cu = CM.compare(k["cu_map"], a["cu_map"], soft=_approx_boxes(k, a))
+        for layer, kb, ab, area, soft in cu:         # lost / extra copper is an error; only inside the box of a
+            _d(out, "warn" if soft else "error", f"{layer}.Cu copper", "extent", kb or "nothing more",   # pad the
+               ab or "nothing more", f"copper on one side only, x0, y0, x1, y1 mm; {area:g} mm2"         # converter
+               + ("; inside an approximated pad" if soft else ""))                                       # approximates
+        cu = [c[:4] for c in cu]
     uk, _ = _pad_copper(k)
     for kp, ap in pairs:
         diffs = []

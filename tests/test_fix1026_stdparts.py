@@ -581,6 +581,60 @@ def test_symbol_layout_name_classes():
         assert c(n) == {"-IN": "left", "+IN": "left", "VREF-": "bottom", "VIN": "top"}[n], n
 
 
+# --- R-FX9-1: lost copper is an error whatever else is approximated; every import route holds dropped copper ------
+
+_TWO_PADS = ('(pad "1" smd rect (at -1 0) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask"))\n'
+             ' (pad "2" smd rect (at 1 0) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask"))')
+_CHAMFER = ' (pad "3" smd roundrect (at 0 3) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0) ' \
+           '(chamfer_ratio 0.2) (chamfer top_left))'
+_CURVED = (' (pad "3" smd custom (at 0 3) (size 0.4 0.4) (layers "F.Cu" "F.Paste" "F.Mask") (options (clearance outline) '
+           '(anchor circle)) (primitives (gr_arc (start 0.4 -0.4) (mid 0.8 0) (end 0.4 0.4) (width 0.2))))')
+_FREE = ' (fp_poly (pts (xy -0.5 -2) (xy 0.5 -2) (xy 0.5 -1.5) (xy -0.5 -1.5)) (stroke (width 0) (type solid)) ' \
+        '(fill solid) (layer "F.Cu"))'
+
+
+def _fp(*items):
+    return ('(footprint "X" (version 20221018) (layer "F.Cu") (fp_rect (start -4 -4) (end 4 4) (stroke (width 0.05) '
+            '(type solid)) (fill none) (layer "F.CrtYd")) ' + _TWO_PADS + " ".join(items) + ")")
+
+
+@lite
+def test_parity_lost_copper_next_to_a_chamfered_pad_is_an_error(tmp_path):
+    from ecadlib import parity as P
+    t = _fp(_CHAMFER, _FREE)
+    assert _errors(P.footprint_pair(t, _pcblib(tmp_path, t))) == []
+    got = _errors(P.footprint_pair(t, _pcblib(tmp_path, t, lambda f: f.update(regions=[]))))
+    assert any("F.Cu copper" in m for m in got), got
+
+
+@lite
+def test_parity_curved_custom_pad_approximation_stays_a_warning(tmp_path):
+    """Inside the approximated pad's own box the copper difference is the documented approximation."""
+    from ecadlib import parity as P
+    t = _fp(_CURVED)
+    diffs = P.footprint_pair(t, _pcblib(tmp_path, t))
+    assert _errors(diffs) == [], diffs
+    t2 = _fp(_CURVED, _FREE)                               # ... but not a lost polygon elsewhere
+    assert any("F.Cu copper" in m for m in _errors(P.footprint_pair(t2, _pcblib(tmp_path, t2, lambda f: f.update(regions=[])))))
+
+
+_BCU = ' (fp_poly (pts (xy -0.6 -0.1) (xy 0.6 -0.1) (xy 0.6 0.1) (xy -0.6 0.1)) (stroke (width 0) (type solid)) ' \
+       '(fill solid) (layer "B.Cu"))'
+
+
+@lite
+def test_kicad_import_holds_a_footprint_whose_copper_is_dropped(tmp_path):
+    from ecadlib import kicad_import as K
+    f = tmp_path / "NT.kicad_mod"
+    f.write_text(_fp(_BCU))
+    rep = K.import_part({"footprint": str(f), "height_mm": 1.0}, tmp_path / "out", None, write=False)
+    assert not rep["ok"] and "copper not written" in rep.get("error", ""), rep
+    f.write_text(_fp())
+    assert K.import_part({"footprint": str(f), "height_mm": 1.0}, tmp_path / "out", None, write=False)["ok"]
+    assert K.lost_copper_hold("NT", ["graphics on unmapped layers dropped: B.Cu x1, Dwgs.User x2"]).startswith("footprint NT")
+    assert K.lost_copper_hold("NT", ["graphics on unmapped layers dropped: Dwgs.User x2"]) is None
+
+
 # --- R-FX9-2: a stroked custom-pad polygon is written with KiCad's round corners -----------------------------------
 
 _STROKED = '''(footprint "JSTLIKE" (version 20221018) (layer "F.Cu")

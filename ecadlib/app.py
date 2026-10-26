@@ -418,6 +418,10 @@ class Workspace:
             try:
                 said = []
                 fp, t = K.convert_footprint(Path(hit["path"]).read_text(encoding="utf-8"), None, "", said)
+                held = K.lost_copper_hold(ref, said)
+                if held:                             # held, not written: the .PcbLib would lack copper (R-FX9-1)
+                    skipped.append(held)
+                    continue
                 try:
                     K.add_body(fp, t, None, None, False, said, gen_step=True)
                 except ValueError as e:              # no height known: the footprint is still right, the body is not

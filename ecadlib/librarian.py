@@ -297,11 +297,9 @@ def passive_pins(sym):
 def _hold_lost_copper(st, name, notes):
     """kicad_import dropped copper it has no Altium layer for (B.Cu graphics, inner copper): the .PcbLib lacks copper
     the KiCad footprint has, so the part is held for a person (a net tie's bottom bridge, an antenna's ground)."""
-    lost = [x for n in notes if str(n).startswith("graphics on unmapped layers dropped:")
-            for x in str(n).split(": ", 1)[1].split(", ") if ".Cu" in x]
-    if lost:
-        st.setdefault("verify", []).append(f"footprint {name}: copper not written to the .PcbLib ({', '.join(lost)}); "
-                                           "draw it in Altium or choose another footprint")
+    held = K.lost_copper_hold(name, notes)
+    if held:
+        st.setdefault("verify", []).append(held)
 
 
 def passive_kind(item):

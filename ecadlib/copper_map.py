@@ -87,9 +87,11 @@ def raster(polys, frame, step):
     return cells
 
 
-def compare(k_layers, a_layers, tol=0.03, max_cells=360000):
-    """{layer: [polygon]} for both sides -> [(layer, kicad-only box, altium-only box, area mm2)] where they differ by
-    more than tol (mm). Boxes in the KiCad frame, None when that side has nothing extra."""
+def compare(k_layers, a_layers, tol=0.03, max_cells=360000, soft=()):
+    """{layer: [polygon]} for both sides -> [(layer, kicad-only box, altium-only box, area mm2, soft)] where they
+    differ by more than tol (mm). Boxes in the KiCad frame, None when that side has nothing extra. soft: [(layer,
+    box)] where a difference is a documented approximation (a pad the converter approximates): differences inside
+    such a box come as their own entry with soft True, every other difference with soft False (R-FX9-1)."""
     every = [p for d in (k_layers, a_layers) for ps in d.values() for p in ps]
     box = bbox(every)
     if not box:
@@ -106,10 +108,21 @@ def compare(k_layers, a_layers, tol=0.03, max_cells=360000):
             lone = [c for c in mine - other if not any((c[0] + di, c[1] + dj) in other
                                                         for di in range(-reach, reach + 1) for dj in range(-reach, reach + 1))]
             extra.append(lone)
-        if not any(len(e) > 2 for e in extra):            # a speck at the tolerance edge is no copper
+        out += _entries(layer, extra, frame, step, [b for l, b in soft if l == layer])
+    return out
+
+
+def _entries(layer, extra, frame, step, soft_boxes):
+    """Lone cells of each side -> entries (hard first, then the soft ones inside soft_boxes)."""
+    centre = lambda c: (frame[0] + (c[0] + 0.5) * step, frame[1] + (c[1] + 0.5) * step)
+    inside = lambda c: any(b[0] <= centre(c)[0] <= b[2] and b[1] <= centre(c)[1] <= b[3] for b in soft_boxes)
+    cell = lambda e: (round(frame[0] + min(i for i, _ in e) * step, 3), round(frame[1] + min(j for _, j in e) * step, 3),
+                      round(frame[0] + (max(i for i, _ in e) + 1) * step, 3), round(frame[1] + (max(j for _, j in e) + 1) * step, 3))
+    out = []
+    for is_soft in (False, True):
+        part = [[c for c in e if inside(c) == is_soft] for e in extra]
+        if not any(len(e) > 2 for e in part):              # a speck at the tolerance edge is no copper
             continue
-        cell = lambda e: (round(frame[0] + min(i for i, _ in e) * step, 3), round(frame[1] + min(j for _, j in e) * step, 3),
-                          round(frame[0] + (max(i for i, _ in e) + 1) * step, 3), round(frame[1] + (max(j for _, j in e) + 1) * step, 3))
-        out.append((layer, cell(extra[0]) if len(extra[0]) > 2 else None, cell(extra[1]) if len(extra[1]) > 2 else None,
-                    round(sum(len(e) for e in extra) * step * step, 4)))
+        out.append((layer, cell(part[0]) if len(part[0]) > 2 else None, cell(part[1]) if len(part[1]) > 2 else None,
+                    round(sum(len(e) for e in part) * step * step, 4), is_soft))
     return out
