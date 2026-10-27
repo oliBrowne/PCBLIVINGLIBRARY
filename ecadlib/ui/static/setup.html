@@ -262,7 +262,6 @@ function render() {
 let a365poll = null, a365new = false;
 function renderA365() {
   const A = S.altium365;
-  if (document.activeElement !== $("a365ws")) $("a365ws").value = A.workspace;
   $("a365redir").textContent = A.redirect;
   $("a365state").innerHTML = A.signed_in ? pill("signed in", "ok") : A.signin && A.signin.state === "waiting" ? pill("waiting for the browser", "warn") : pill("not signed in", "info");
   $("a365app").hidden = A.app_stored && !a365new;
@@ -270,6 +269,7 @@ function renderA365() {
   $("a365-signout").hidden = !A.signed_in;
   $("a365-signin").textContent = A.signed_in ? "Sign in again" : "Sign in to Altium 365";
   const g = A.signin;
+  if (g && g.state === "waiting" && !a365poll) pollA365();   // also after a reload while the browser sign-in is open
   if (g && g.state === "waiting" && g.url) msg("a365msg", `Finish the sign-in in the browser tab that opened and allow access. No tab? <a href="${esc(g.url)}" target="_blank" rel="noopener">Open the Altium 365 sign-in</a>`, "info");
   else if (g && g.state !== "waiting") msg("a365msg", esc(g.message), g.state === "done" ? "ok" : "bad");
 }
@@ -277,8 +277,10 @@ function pollA365() {
   clearInterval(a365poll);
   let n = 0;
   a365poll = setInterval(async () => {
-    try { S.altium365 = (await api("/api/setup")).altium365; renderA365(); } catch (e) { /* the page keeps the last view */ }
-    if (++n > 160 || !S.altium365.signin || S.altium365.signin.state !== "waiting") clearInterval(a365poll);
+    try { S.altium365 = (await api("/api/setup")).altium365; } catch (e) { /* the page keeps the last view */ }
+    if (++n > 160) { clearInterval(a365poll); a365poll = -1; }   // 5 minutes: the sign-in has timed out by now
+    else if (!S.altium365.signin || S.altium365.signin.state !== "waiting") { clearInterval(a365poll); a365poll = null; }
+    renderA365();
   }, 2000);
 }
 $("a365-signin").onclick = async () => {
@@ -291,7 +293,7 @@ $("a365-signin").onclick = async () => {
     const r = await api("/api/setup/nexar/signin", b);
     if (tab && r.url) tab.location = r.url; else if (tab) tab.close();
     $("a365sec").value = ""; a365new = false;
-    S.altium365 = (await api("/api/setup")).altium365; renderA365(); pollA365();
+    S.altium365 = (await api("/api/setup")).altium365; a365poll = a365poll === -1 ? null : a365poll; renderA365();
   } catch (e) { if (tab) tab.close(); msg("a365msg", esc(e.message), "bad"); }
   $("a365-signin").disabled = false;
 };
@@ -301,7 +303,7 @@ $("a365-signout").onclick = async () => {
   catch (e) { msg("a365msg", esc(e.message), "bad"); }
 };
 
-async function load() { S = await api("/api/setup"); render(); renderA365(); }
+async function load() { S = await api("/api/setup"); render(); $("a365ws").value = S.altium365.workspace; renderA365(); }
 
 $("savekey").onclick = async () => {
   try {

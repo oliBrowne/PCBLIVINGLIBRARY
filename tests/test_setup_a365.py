@@ -112,6 +112,56 @@ def test_signin_uses_the_stored_app_and_says_why_it_failed():
         assert ES.nexar_signout({}) == {"signed_out": False}
 
 
+def test_two_presses_at_once_start_one_signin():
+    with _home() as d:
+        ES._SIGNIN.clear()
+        release, calls = threading.Event(), []
+        fake, _ = _fake_signin(release)
+
+        def counting(*a, **k):
+            calls.append(1)
+            return fake(*a, **k)
+        real_secret = UC.secret
+
+        def slow_secret(name, *a, **k):                          # widens the gap between "is one waiting?" and
+            time.sleep(0.2)                                      # "this one waits now", as a slow key store would
+            return real_secret(name, *a, **k)
+        UC.set_key("NEXAR_CLIENT_ID", "c")
+        UC.set_key("NEXAR_CLIENT_SECRET", "s")
+        with mock.patch.object(NS, "signin", counting), mock.patch.object(UC, "secret", slow_secret):
+            got, go = [], threading.Event()
+
+            def press():
+                go.wait(5)
+                got.append(ES.start_nexar_signin({}))
+            ts = [threading.Thread(target=press) for _ in range(4)]
+            for t in ts:
+                t.start()
+            go.set()
+            for t in ts:
+                t.join(15)
+            assert len(calls) == 1, calls                        # one sign-in, one listener on the port
+            assert len(got) == 4 and all(g["waiting"] for g in got)
+            release.set()
+            assert _wait(lambda: ES.state(d)["altium365"]["signin"]["state"] == "done")
+
+
+def test_sign_out_while_a_signin_waits_cancels_it():
+    with _home() as d:
+        ES._SIGNIN.clear()
+        release = threading.Event()
+        fake, _ = _fake_signin(release)
+        with mock.patch.object(NS, "signin", fake):
+            ES.start_nexar_signin({"client_id": "c", "client_secret": "s"})
+            ES.nexar_signout({})
+            release.set()                                        # the browser finishes after the sign-out
+            assert _wait(lambda: ES.state(d)["altium365"]["signin"]["state"] != "waiting")
+            time.sleep(0.2)
+            st = ES.state(d)["altium365"]
+            assert not st["signed_in"] and st["signin"]["state"] == "cancelled", st
+            assert ES.start_nexar_signin({"client_id": "c", "client_secret": "s"})["waiting"]   # a new one may start
+
+
 def test_signin_routes_need_this_page():
     with _home() as d, _server(d / "ws") as port:
         ES._SIGNIN.clear()

@@ -260,7 +260,8 @@ def check_key(b, get=None):
 
 
 # ------------------------------------------------------------------ Altium 365
-_SIGNIN = {}                    # the sign-in started from this page: {state: waiting|done|error, url, message}
+_SIGNIN = {}                    # the sign-in started from this page: {state: waiting|done|error|cancelled, url,
+                                # message, attempt}
 _SIGNIN_LOCK = threading.Lock()
 
 
@@ -288,32 +289,40 @@ def a365_state(raw):
             "redirect": NS.redirect_uri(), "signin": sg}
 
 
+def _waiting():
+    """{url, waiting: True} of the sign-in this page is waiting on, or None. Call with _SIGNIN_LOCK held."""
+    return {"url": _SIGNIN.get("url"), "waiting": True} if _SIGNIN.get("state") == "waiting" else None
+
+
 def start_nexar_signin(b, wait=10):
     """Start the browser sign-in in the background; -> {url, waiting} once the sign-in listens for the browser.
     b: {client_id, client_secret} of the person's Nexar app, or nothing to use the stored app. Pressed again while one
-    is waiting: the same sign-in (its address), not a second one on the same port."""
+    is waiting (another tab too): the same sign-in (its address), not a second one on the same port."""
     from . import nexar_signin as NS
-    with _SIGNIN_LOCK:
-        if _SIGNIN.get("state") == "waiting":
-            return {"url": _SIGNIN.get("url"), "waiting": True}
     cid = b.get("client_id") if isinstance(b.get("client_id"), str) else ""
     sec = b.get("client_secret") if isinstance(b.get("client_secret"), str) else ""
     cid, sec = cid.strip(), sec.strip()
     if not (cid and sec):
         cid, sec = UC.secret("NEXAR_CLIENT_ID") or "", UC.secret("NEXAR_CLIENT_SECRET") or ""
+    problem = None
     if not (cid and sec):
-        raise ValueError("paste your Nexar app's client ID and client secret first (portal.nexar.com > your app > "
-                         "Authorization)")
-    if len(cid) > 200 or len(sec) > 500 or any(c.isspace() for c in cid + sec):
-        raise ValueError("that does not look like a Nexar client ID and secret: copy them again from portal.nexar.com")
-    ready = threading.Event()
-    with _SIGNIN_LOCK:
+        problem = ("paste your Nexar app's client ID and client secret first (portal.nexar.com > your app > "
+                   "Authorization)")
+    elif len(cid) > 200 or len(sec) > 500 or any(c.isspace() for c in cid + sec):
+        problem = "that does not look like a Nexar client ID and secret: copy them again from portal.nexar.com"
+    ready, me = threading.Event(), object()
+    with _SIGNIN_LOCK:                          # "is one waiting?" and "this one waits now" in one step
+        if _waiting():
+            return _waiting()
+        if problem:
+            raise ValueError(problem)
         _SIGNIN.clear()
-        _SIGNIN.update(state="waiting", message="waiting for the browser sign-in")
+        _SIGNIN.update(state="waiting", message="waiting for the browser sign-in", attempt=me)
 
     def opened(url):                            # the sign-in listens now: the page opens the address itself
         with _SIGNIN_LOCK:
-            _SIGNIN["url"] = url
+            if _SIGNIN.get("attempt") is me:
+                _SIGNIN["url"] = url
         ready.set()
         return True
 
@@ -327,23 +336,30 @@ def start_nexar_signin(b, wait=10):
         except Exception as e:                  # SigninError, a network error: the reason, never a secret
             res = {"state": "error", "message": str(e) or type(e).__name__}
         with _SIGNIN_LOCK:
-            _SIGNIN.update(res)
-            _SIGNIN.pop("url", None)
+            if _SIGNIN.get("attempt") is me and _SIGNIN.get("state") == "waiting":
+                _SIGNIN.update(res)
+                _SIGNIN.pop("url", None)
+            elif res["state"] == "done":        # signed out while the browser was still open: keep it signed out
+                NS.signout()
         ready.set()
     threading.Thread(target=run, daemon=True, name="ecadlib-nexar-signin").start()
     ready.wait(wait)
     with _SIGNIN_LOCK:
-        if _SIGNIN.get("state") == "error":
+        if _SIGNIN.get("attempt") is me and _SIGNIN.get("state") == "error":
             raise ValueError(_SIGNIN["message"])
         return {"url": _SIGNIN.get("url"), "waiting": _SIGNIN.get("state") == "waiting"}
 
 
 def nexar_signout(b):
+    """Forget the sign-in. A sign-in still waiting for the browser is cancelled: if the browser finishes it later,
+    its tokens are dropped again."""
     from . import nexar_signin as NS
     with _SIGNIN_LOCK:
-        if _SIGNIN.get("state") != "waiting":
-            _SIGNIN.clear()
-    return {"signed_out": bool(NS.signout())}
+        was_waiting = bool(_waiting())
+        _SIGNIN.clear()
+        if was_waiting:
+            _SIGNIN.update(state="cancelled", message="signed out; the sign-in still open in the browser was cancelled")
+        return {"signed_out": bool(NS.signout())}
 
 
 # ------------------------------------------------------------------ add to Altium / KiCad
