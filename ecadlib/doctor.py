@@ -81,9 +81,13 @@ def check_packages(find_spec=importlib.util.find_spec, which=shutil.which, rules
     missing = [pip for mod, pip in CORE if find_spec(mod) is None]
     out.append(_c("packages", "FAIL", f"missing: {', '.join(missing)}", f"pip install {' '.join(missing)}") if missing
                else _c("packages", "OK", ", ".join(pip for _, pip in CORE)))
+    lacking = [pip for mod, pip, _ in OPTIONAL if find_spec(mod) is None]
     for mod, pip, why in OPTIONAL:
-        out.append(_c(f"optional {pip}", "OK", "installed") if find_spec(mod) is not None
-                   else _c(f"optional {pip}", "WARN", f"not installed ({why})", f"pip install {pip}"))
+        hint = f"pip install {pip}"
+        if len(lacking) > 1 and pip == lacking[0]:      # once, on the first: the one line that installs them all
+            hint += ', or all of them at once: pip install "ecadlib[all]"'
+        out.append(_c(f"optional {pip}", "OK", "installed") if pip not in lacking
+                   else _c(f"optional {pip}", "WARN", f"not installed ({why})", hint))
     for tool, why, fix in TOOLS:
         p = _find_tool(tool, which)
         if p:

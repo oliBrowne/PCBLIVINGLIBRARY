@@ -19,8 +19,8 @@ The key goes into a file of your own user account:
 | System  | File | Protection |
 |---------|------|------------|
 | Windows | `%APPDATA%\ecadlib\keys.json` | each value encrypted for your Windows account (DPAPI) |
-| macOS   | `~/Library/Application Support/ecadlib/keys.json` | readable by you only (mode 600) |
-| Linux   | `~/.config/ecadlib/keys.json` (`$XDG_CONFIG_HOME`) | readable by you only (mode 600) |
+| macOS   | `~/Library/Application Support/ecadlib/keys.json` | not encrypted; the file is readable by you only (mode 600) |
+| Linux   | `~/.config/ecadlib/keys.json` (`$XDG_CONFIG_HOME`) | not encrypted; the file is readable by you only (mode 600) |
 
 `ECADLIB_HOME` moves the folder. `ecadlib.toml` holds only the *name* of a key (`api_key_env`), never the key.
 

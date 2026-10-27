@@ -81,13 +81,18 @@ jobs:
 
   package:
     # Build the sdist and wheel the release workflow would publish, then install each into a
-    # clean venv and smoke-test it from outside the checkout (catches missing package data).
+    # clean venv and smoke-test it from outside the checkout (catches missing package data), then run what a new user
+    # runs first (demo, init --yes, doctor). Every Python we support, from the oldest (3.10): the test job runs 3.11/3.13.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       - run: python -m pip install build twine
       - run: python -m build
       - run: python -m twine check --strict dist/*
@@ -101,6 +106,7 @@ jobs:
             echo "::endgroup::"
           done
       - uses: actions/upload-artifact@v4
+        if: matrix.python == '3.13'
         with:
           name: dist
           path: dist/

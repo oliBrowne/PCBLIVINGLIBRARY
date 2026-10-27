@@ -1,11 +1,14 @@
 """One command for everything:  ecadlib <command> [options]   (or: python -m ecadlib <command>)
 
+Start here:
     ecadlib setup                                 the setup page in your browser: AI model + key, Altium / KiCad, folders
     ecadlib start                                 the desktop app (what the Windows Start menu entry runs)
+    ecadlib demo      [-o DIR]                    a small library from a bundled BOM, offline, no keys (try this first)
+    ecadlib init      [--yes] [--tool T] [--lib DIR] [--from DIR ...]   set up: tool, libraries, workspace, sources -> ecadlib.toml, doctor
     ecadlib keys      list|set NAME|remove NAME   API keys stored for you (encrypted on Windows), instead of env variables
     ecadlib nexar     signin|status|signout       Altium 365 sign-in with your own Nexar app; stays signed in
-    ecadlib init      [--yes] [--tool T] [--lib DIR] [--from DIR ...]   set up: tool, libraries, workspace, sources -> ecadlib.toml, doctor
-    ecadlib demo      [-o DIR]                    a small library from a bundled BOM, offline, no keys (start here)
+
+Every other command:
     ecadlib rules     check|show                  validate the rules file / print the defaults
     ecadlib style     learn|show|direct|check|apply|export-dataset   learn your house style from your library + your direction
     ecadlib ui        --lib <kicad libs>          local web UI in your browser

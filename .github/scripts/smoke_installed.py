@@ -1,7 +1,7 @@
 """Smoke-test an installed ecadlib (wheel or sdist), run with the venv's python from a directory
 that is NOT the checkout, so the source tree can't shadow the installed package.
     python smoke_installed.py [expected-version]"""
-import subprocess, sys, tempfile
+import json, os, subprocess, sys, tempfile
 from importlib import metadata, resources
 from pathlib import Path
 
@@ -38,4 +38,18 @@ else:
         with resources.as_file(spec) as sp:
             subprocess.run([str(exe), "footprint", "gen", str(sp), "-o", d], check=True, capture_output=True)
         assert list(Path(d).glob("*.kicad_mod")), "footprint gen wrote nothing"
+    # what a new user runs first (README, START_HERE): the demo, the setup check and `init --yes`, with an empty home
+    with tempfile.TemporaryDirectory() as d:
+        env = {**os.environ, "ECADLIB_HOME": str(Path(d, "home")), "HOME": d, "USERPROFILE": d}
+        env.pop("ECADLIB_WORKSPACE", None)
+        run = lambda *a: subprocess.run([str(exe), *a], cwd=d, env=env, capture_output=True, text=True)
+        r = run("demo", "-o", "demo")
+        assert r.returncode == 0 and "ready" in r.stdout, r.stdout + r.stderr
+        assert list(Path(d, "demo").rglob("plan.json")) and list(Path(d, "demo").rglob("*.kicad_sym")), "demo wrote no library"
+        r = run("init", "--yes")
+        assert r.returncode == 0 and Path(d, "ecadlib.toml").is_file(), r.stdout + r.stderr
+        r = run("doctor", "--json")
+        assert r.returncode == 0, r.stdout + r.stderr
+        bad = [c for c in json.loads(r.stdout)["checks"] if c["level"] == "FAIL"]
+        assert not bad, bad
 print(f"ok: ecadlib {ecadlib.__version__} from {pkg}, {len(specs)} package specs")
