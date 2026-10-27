@@ -13,6 +13,14 @@ only to the services listed below, and only when you use the feature that needs 
 | GitHub | Upkeep issues or pull requests | Only if you run `ecadlib upkeep --github` | Leave out `--github` |
 | A webhook you configure | Short notifications | Only if you set `[notify]` | Leave `[notify]` empty |
 
+Bug reports are never sent by ecadlib. When ecadlib hits an error it did not expect (a bug, not a wrong path or a bad
+setting), it saves the error on your computer, in the `crashes` folder next to your stored keys (`%APPDATA%\ecadlib`
+on Windows), keeping the newest 20. Before saving, it blanks out API keys, tokens, e-mail addresses, your user name and
+your home folder. `ecadlib report-bug` (or **Report a bug** in the web UI) shows you that text and opens a GitHub issue
+filled in with it, the ecadlib version, your OS and your Python version. Nothing leaves your computer unless you press
+Submit on GitHub, and you can edit or delete any of it first. GitHub issues are public. `ecadlib report-bug --clear`
+deletes the saved errors.
+
 API keys you add on the setup page or with `ecadlib keys set` are stored only on your computer: on Windows they are
 encrypted for your Windows account, elsewhere they are in a file only you can read. They are never written to your
 library, your project files or `ecadlib.toml`.

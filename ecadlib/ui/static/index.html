@@ -272,6 +272,7 @@ details summary { cursor: pointer; color: var(--muted); }
   <h1><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M16 23.5L16 13.5"/><path d="M16 20L10 14"/><path d="M16 15L22 9"/><circle cx="16" cy="26.8" r="2.75" stroke-width="2.5"/></g><path fill="var(--copper, #c2622d)" d="M8.58 13.91 L7.32 13.64 L6.22 13.22 L5.26 12.66 L4.44 11.97 L3.76 11.18 L3.21 10.30 L2.78 9.34 L2.47 8.33 L2.28 7.28 L2.19 6.20 L2.20 5.12 L3.28 5.12 L4.34 5.23 L5.36 5.46 L6.33 5.82 L7.23 6.32 L8.03 6.95 L8.74 7.73 L9.31 8.66 L9.74 9.74 L10.01 10.99 L10.11 12.41 L10.00 14.00Z"/><path fill="var(--copper, #c2622d)" d="M22.02 7.74 L22.18 6.58 L22.48 5.54 L22.90 4.61 L23.45 3.79 L24.10 3.09 L24.85 2.50 L25.70 2.03 L26.62 1.68 L27.62 1.44 L28.68 1.32 L29.80 1.32 L29.80 2.49 L29.66 3.59 L29.41 4.61 L29.03 5.55 L28.54 6.40 L27.93 7.14 L27.20 7.77 L26.37 8.29 L25.43 8.68 L24.39 8.93 L23.24 9.04 L22.00 9.00Z"/></svg>ecadlib</h1>
   <span class="meta" id="meta">loading…</span>
   <a class="keyhint" href="setup" style="text-decoration:none" title="AI model and key, Altium / KiCad, folders, add ecadlib to Altium and KiCad">Setup</a>
+  <button class="keyhint" id="bugbtn" title="Report a bug: the last error ecadlib saved, as a GitHub issue you check before sending">Report a bug</button>
   <button class="keyhint" id="keysbtn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">? Shortcuts</button>
 </header>
 <nav class="steps" id="steps" aria-label="Sections" hidden>
@@ -520,6 +521,15 @@ details summary { cursor: pointer; color: var(--muted); }
   <div class="phead"><div><h2 id="ptitle"></h2><div class="muted small" id="psub"></div></div><button class="small" id="pclose" aria-label="Close the part panel">Close</button></div>
   <div class="pbody" id="pbody"></div>
 </aside>
+<dialog id="bugdlg" aria-labelledby="bugtitle">
+  <div class="dlg-head"><strong id="bugtitle">Report a bug</strong><button id="bugclose">Close</button></div>
+  <div style="padding:10px 16px 16px;max-width:680px">
+    <p class="small" id="bugwhen" style="margin:0 0 8px"></p>
+    <textarea id="bugtext" readonly rows="14" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" aria-label="The report"></textarea>
+    <p class="muted small" style="margin:8px 0">Nothing has been sent. GitHub opens with this text filled in: you can edit it there, describe what you were doing, and press Submit yourself (a free GitHub account is needed). API keys, e-mail addresses, your user name and home folder are blanked out.</p>
+    <div class="row"><button class="primary" id="buglink">Open GitHub</button></div>
+  </div>
+</dialog>
 <dialog id="keysdlg" aria-labelledby="keystitle">
   <div class="dlg-head"><strong id="keystitle">Keyboard shortcuts</strong><button id="keysclose">Close</button></div>
   <div style="padding:10px 16px 16px"><table><tbody>
@@ -1594,6 +1604,19 @@ function startApp() {
 const keysdlg = $("#keysdlg");
 $("#keysbtn").addEventListener("click", () => keysdlg.showModal());
 $("#keysclose").addEventListener("click", () => keysdlg.close());
+// ---- Report a bug: the last error ecadlib saved on this computer, shown here, sent only by the person on GitHub
+const bugdlg = $("#bugdlg");
+$("#bugbtn").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/bugreport");
+    $("#bugwhen").textContent = r.saved ? `The last error ecadlib saved (${r.when}):` : "No error was saved: describe what went wrong on GitHub.";
+    $("#bugtext").value = r.title + "\n\n" + r.body;
+    bugdlg.url = r.url;
+    bugdlg.showModal();
+  } catch (e) { showErr(e); }
+});
+$("#buglink").addEventListener("click", () => window.open(bugdlg.url, "_blank", "noopener"));
+$("#bugclose").addEventListener("click", () => bugdlg.close());
 function movePart(step) {
   const cards = Array.from(document.querySelectorAll("#plist [data-openp]"));
   if (!cards.length) return toast("No parts shown yet: fill the library first (step 2).");

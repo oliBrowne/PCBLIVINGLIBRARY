@@ -518,7 +518,7 @@ ERRORS = {
     "permission": ("ecadlib is not allowed to write {name}.", "Pick a folder you can write to, or fix its permissions."),
     "locked": ("Someone else is changing this library right now.", "Wait a moment and try again."),
     "bad_value": ("{what} is not valid[: {why}].", "Fix it and try again."),
-    "unexpected": ("Something went wrong[ ({what})].", "Run it again with --debug and report the output."),
+    "unexpected": ("Something went wrong[ ({what})].", "Run `ecadlib report-bug` to report it (you see the text before anything is sent); --debug shows the traceback."),
 }
 
 

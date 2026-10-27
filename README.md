@@ -226,7 +226,8 @@ Everything else lives in [docs/](docs/README.md):
 * [Command line, setup and integrations](docs/command-line.md)
 * [Working on ecadlib](docs/development.md): tests, the accuracy gate and releases
 
-Changes are in [CHANGELOG.md](CHANGELOG.md). Bug reports and pull requests are welcome: see
+Changes are in [CHANGELOG.md](CHANGELOG.md). Hit a bug? `ecadlib report-bug` (or **Report a bug** in the web UI)
+opens a GitHub issue filled in with the error, which you check before sending. Bug reports and pull requests are welcome: see
 [CONTRIBUTING.md](CONTRIBUTING.md) (and [SECURITY.md](SECURITY.md) for anything private).
 
 ## Credits

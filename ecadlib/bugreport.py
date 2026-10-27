@@ -1,0 +1,254 @@
+"""Bug reports the user sends themselves: ecadlib sends nothing on its own.
+
+    ecadlib report-bug              show the last error ecadlib saved, then open a pre-filled GitHub issue
+    ecadlib report-bug --print      only show the text and the link
+    ecadlib report-bug --list       the saved errors, newest first
+    ecadlib report-bug --clear      delete the saved errors
+
+When a command, the web UI or the MCP server hits an error it did not expect (a bug, not a wrong path or a bad
+setting), record() saves it in the config folder (crashes/, the newest MAX_KEPT) with API keys, tokens, e-mail
+addresses, the user name and the home folder blanked out. report-bug turns the newest one into a GitHub issue link;
+the user reads the text on GitHub and decides whether to press Submit."""
+import argparse, getpass, json, os, platform, re, sys, time, traceback, webbrowser
+from pathlib import Path
+from urllib.parse import quote, urlencode
+
+ISSUES_NEW = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/new"
+MAX_KEPT = 20
+MAX_URL = 7000                                # GitHub refuses much longer links; the traceback's top is cut first
+MAX_TB_LINES = 80
+SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT\b|CREDENTIAL|AUTH", re.I)
+_SHAPES = [                                   # keys and tokens by their look, wherever they appear
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"),                          # Anthropic, OpenAI, OpenRouter
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"),                         # Google / Gemini
+    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"),                   # Slack webhooks / tokens
+    re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*"),   # JWTs (Nexar access tokens)
+]
+_BEARER = re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=\-]{8,}")
+_QUERY = re.compile(r"(?i)([?&;\s\"'](?:api[_-]?key|apikey|key|token|access_token|secret|client_secret|password|sig)"
+                    r"\s*[=:]\s*)([^&\s\"',;)]+)")
+_LONG = re.compile(r"[A-Za-z0-9_\-]{40,}")
+_EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
+_USER_DIRS = re.compile(r"(?i)([A-Za-z]:[\\/]+(?:Users|Documents and Settings)[\\/]+|/home/|/Users/)([^\\/\"'\n<>|]+)")
+
+
+_COMMON_USERS = {"root", "user", "admin", "administrator", "runner", "owner", "guest", "ubuntu", "pi", "test"}
+# account names that are also ordinary words in code (ws.root): blanked only inside home-folder paths
+
+
+def crash_dir(environ=None):
+    from .userconfig import config_dir
+    return config_dir(environ) / "crashes"
+
+
+def _known_secrets():
+    """Values of the keys ecadlib can see (stored keys, environment variables named like a key): blanked by value."""
+    vals = {v for k, v in os.environ.items() if SECRET_NAME.search(k) and v}
+    try:
+        from . import userconfig as U
+        for name in U.stored_names():
+            v = U.get_key(name)
+            if v:
+                vals.add(v)
+    except Exception:                         # a broken key store must not stop a bug report
+        pass
+    return sorted((v for v in vals if len(v) >= 8), key=len, reverse=True)
+
+
+def _long_token(m):
+    s = m.group(0)
+    return "[secret]" if re.search(r"\d", s) and re.search(r"[A-Za-z]", s) else s
+
+
+def scrub(text):
+    """text with API keys, tokens, e-mail addresses, the home folder and user names blanked out."""
+    text = str(text)
+    for v in _known_secrets():
+        text = text.replace(v, "[secret]")
+    for rx in _SHAPES:
+        text = rx.sub("[secret]", text)
+    text = _BEARER.sub(lambda m: m.group(1) + " [secret]", text)
+    text = _QUERY.sub(lambda m: m.group(1) + "[secret]", text)
+    text = _LONG.sub(_long_token, text)
+    text = _EMAIL.sub("[email]", text)
+    home = str(Path.home())
+    if len(home) > 3:
+        for h in {home, home.replace("\\", "/"), home.replace("/", "\\")}:
+            text = re.sub(re.escape(h) + r"(?=[\\/\"'\s:]|$)", "~", text, flags=re.I if os.name == "nt" else 0)
+    text = _USER_DIRS.sub(lambda m: m.group(1) + "[user]", text)
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = ""
+    if len(user) >= 3 and user.lower() not in _COMMON_USERS:
+        text = re.sub(r"(?i)(?<![A-Za-z0-9])" + re.escape(user) + r"(?![A-Za-z0-9])", "[user]", text)
+    return text
+
+
+def _short_paths(text):
+    """Python's and ecadlib's own folders as <python> / ecadlib/: the frames stay readable, the install path goes."""
+    import sysconfig
+    pkg = str(Path(__file__).resolve().parent)
+    roots = [(pkg, "ecadlib")] + [(p, "<python>") for p in {sysconfig.get_paths().get(k) for k in ("purelib", "platlib", "stdlib")} if p]
+    for p, short in sorted(roots, key=lambda r: len(r[0]), reverse=True):
+        for v in {p, p.replace("\\", "/")}:
+            text = text.replace(v, short)
+    return text
+
+
+def _installed():
+    return "Windows app" if getattr(sys, "frozen", False) else "pip"
+
+
+def record(where, exc):
+    """Save exc (an error ecadlib did not expect) for a later bug report; -> the file, or None. Never raises."""
+    try:
+        from . import __version__
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).splitlines()[-MAX_TB_LINES:]
+        rec = {"time": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()), "version": __version__,
+               "os": platform.platform(terse=True), "python": platform.python_version(), "installed": _installed(),
+               "where": scrub(str(where))[:200], "error": type(exc).__name__,
+               "message": scrub(_short_paths(str(exc)))[:2000],
+               "traceback": scrub(_short_paths("\n".join(tb)))}
+        d = crash_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / f"{time.time_ns()}.json"
+        f.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+        for old in _files()[MAX_KEPT:]:
+            old.unlink(missing_ok=True)
+        return f
+    except Exception:
+        return None
+
+
+def _files():
+    try:
+        return sorted(crash_dir().glob("*.json"), key=lambda p: p.name, reverse=True)   # newest first
+    except OSError:
+        return []
+
+
+def saved():
+    out = []
+    for f in _files():
+        try:
+            out.append(json.loads(f.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def latest():
+    s = saved()
+    return s[0] if s else None
+
+
+def clear():
+    for f in _files():
+        f.unlink(missing_ok=True)
+
+
+def _system():
+    from . import __version__
+    return {"version": __version__, "os": platform.platform(terse=True), "python": platform.python_version(),
+            "installed": _installed()}
+
+
+def build(rec=None, tb_lines=None):
+    """(title, Markdown body) of a GitHub issue for rec (a saved error), or a blank report when rec is None."""
+    info = rec or _system()
+    if rec:
+        msg = rec.get("message", "").splitlines()[0] if rec.get("message") else ""
+        title = f"{rec.get('where')}: {rec.get('error')}: {msg}"[:120]
+    else:
+        title = "Bug: "
+    lines = ["**What happened**", "", "<!-- What were you doing? e.g. checked a BOM from Altium, filled the library "
+             "for 12 parts. What did you expect instead? -->", "", "",
+             "**Details** (filled in by ecadlib; keys, e-mail addresses, your user name and home folder are blanked "
+             "out. Please check before you submit.)", "",
+             f"- ecadlib version: {info.get('version')} ({info.get('installed', '?')})",
+             f"- OS: {info.get('os')}", f"- Python: {info.get('python')}"]
+    if rec:
+        tb = rec.get("traceback", "").splitlines()
+        if tb_lines is not None:
+            tb = (["..."] if tb_lines < len(tb) else []) + tb[len(tb) - tb_lines:] if tb_lines else []
+        lines += [f"- Where: `{rec.get('where')}`", f"- When: {rec.get('time')}", "",
+                  "```", *tb, "```"]
+    return title, "\n".join(lines) + "\n"
+
+
+def issue_url(title, body, rec=None):
+    """The new-issue link, pre-filled. Too long for GitHub: the traceback's oldest lines are dropped first."""
+    def url(t, b):
+        return ISSUES_NEW + "?" + urlencode({"title": t, "labels": "bug", "body": b}, quote_via=quote)
+    u = url(title, body)
+    n = len(rec.get("traceback", "").splitlines()) if rec else 0
+    while len(u) > MAX_URL and n > 0:
+        n //= 2
+        u = url(title, build(rec, n)[1])
+    while len(u) > MAX_URL:                   # a huge message on its own: cut the body itself
+        body = body[: int(len(body) * 0.8)]
+        u = url(title, body)
+    return u
+
+
+def report_for(rec=None):
+    """{title, body, url} of the GitHub issue for rec (the newest saved error when rec is None)."""
+    rec = latest() if rec is None else rec
+    title, body = build(rec)
+    u = issue_url(title, body, rec)
+    return {"title": title, "body": body, "url": u, "saved": bool(rec), "when": (rec or {}).get("time")}
+
+
+def _open(url):
+    webbrowser.open(url)
+
+
+def main(argv=None, out=None, inp=None):
+    out = out or sys.stdout
+    ap = argparse.ArgumentParser(prog="ecadlib report-bug",
+                                 description="Report a bug: shows the last error ecadlib saved on this computer and "
+                                             "opens a pre-filled GitHub issue you read before sending.")
+    ap.add_argument("--print", action="store_true", help="only print the report and the link; open nothing")
+    ap.add_argument("--yes", "-y", action="store_true", help="open GitHub without asking")
+    ap.add_argument("--list", action="store_true", help="list the saved errors, newest first")
+    ap.add_argument("--clear", action="store_true", help="delete the saved errors")
+    a = ap.parse_args(argv)
+    if a.clear:
+        clear()
+        print("Saved errors deleted.", file=out)
+        return 0
+    if a.list:
+        recs = saved()
+        if not recs:
+            print("No saved errors.", file=out)
+        for r in recs:
+            print(f"{r.get('time')}  {r.get('where')}: {r.get('error')}: {(r.get('message') or '').splitlines()[:1]}",
+                  file=out)
+        print(f"Folder: {crash_dir()}", file=out)
+        return 0
+    r = report_for()
+    print("No saved error: the report below is blank, describe what went wrong on GitHub." if not r["saved"] else
+          f"The last error ecadlib saved ({r['when']}):", file=out)
+    print("", file=out)
+    print(r["title"], file=out)
+    print(r["body"], file=out)
+    print("Nothing has been sent. GitHub shows this text first; you can edit it and you press Submit yourself "
+          "(a free GitHub account is needed).", file=out)
+    print(f"Link: {r['url']}", file=out)
+    if a.print:
+        return 0
+    if not a.yes:
+        if inp is None:
+            if not sys.stdin or not sys.stdin.isatty():
+                return 0
+            inp = input
+        if inp("Open GitHub in your browser now? [Y/n] ").strip().lower() not in ("", "y", "yes"):
+            return 0
+    _open(r["url"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

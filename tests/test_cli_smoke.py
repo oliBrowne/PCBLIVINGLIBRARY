@@ -81,6 +81,7 @@ CASES = [
       "--workspace", "{out}/ws"], (0, 1, 2)),
     (["doctor", "--workspace", "{out}/ws", "--lib", "{in}/lib"], (0, 1)),
     (["status", "--workspace", "{out}/demo"], (0,)),
+    (["report-bug", "--print"], (0,)),
     (["completion", "bash"], (0,)),
     (["ai", "show"], (0,)),
     (["ai", "rails"], (0,)),

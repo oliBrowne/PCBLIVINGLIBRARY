@@ -42,6 +42,7 @@ Every other command:
     ecadlib symbol    PINS.csv|PART -o x.SchLib [--preview x.svg]   big-chip symbol with pins grouped by function
     ecadlib visual-check PART|x.kicad_mod --datasheet DS.pdf [--pages 3,7-8]   Claude compares our drawings with the datasheet
     ecadlib doctor    [--workspace W] [--lib DIR] [--json]   check Python, packages, API keys, ecadlib.toml, folders
+    ecadlib report-bug [--print] [--list] [--clear]  the last error ecadlib saved -> a GitHub issue you check first
     ecadlib status    [--workspace W] [--json]    one-screen summary of a workspace: parts, held, sign-off, last runs
     ecadlib completion bash|zsh|fish              shell completion script (e.g. ecadlib completion bash > ~/.ecadlib.bash)
     ecadlib plugins   list|export NAME PLAN -o DIR   installed part-source / exporter plugins (Python entry points)
@@ -106,6 +107,7 @@ COMMANDS = {
     "visual-check": ("ecadlib.visual_check", "render footprint/symbol + datasheet pages; Claude checks they match"),
     "symbol": ("ecadlib.symbol_layout", "IC symbol with pins grouped by function (power, ports, debug ...), SVG preview"),
     "doctor": ("ecadlib.doctor", "check the setup: Python, packages, API keys (names only), ecadlib.toml, folders"),
+    "report-bug": ("ecadlib.bugreport", "report a bug: the last error ecadlib saved, as a GitHub issue you check before sending"),
     "status": ("ecadlib.ws_status", "one-screen summary of a workspace: parts, held, waiting for sign-off, last runs"),
     "completion": ("ecadlib.completion", "shell completion script for bash, zsh or fish"),
     "plugins": ("ecadlib.plugins", "installed part-source and exporter plugins; run an exporter on a plan"),

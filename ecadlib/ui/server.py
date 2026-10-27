@@ -15,6 +15,12 @@ from ..app import WAITING, LibraryBusy, Workspace
 from .. import easy_setup as ES
 
 STATIC = Path(__file__).with_name("static")
+
+
+def _save_bug(where, e):
+    """An error ecadlib did not expect: saved on this computer for `ecadlib report-bug` / Report a bug."""
+    from .. import bugreport
+    bugreport.record(where, e)
 MAX_UPLOAD = 20 * 1024 * 1024
 MAX_JSON = 2 * 1024 * 1024                 # JSON bodies: no 20 MB parse
 EXPECTED = (ValueError, KeyError, FileExistsError, json.JSONDecodeError, PermissionError)   # user errors: no traceback
@@ -79,6 +85,7 @@ class Jobs:
             except Exception as e:
                 if not isinstance(e, EXPECTED):
                     traceback.print_exc()
+                    _save_bug(f"web UI job: {tool or (key or 'job').split(':', 1)[0]}", e)
                 job["error"], job["state"] = _msg(e, self.root), "error"
             job["seconds"] = round(time.time() - job["started"], 1)
         th = threading.Thread(target=run, daemon=True)
@@ -374,6 +381,9 @@ def make_handler(ws: Workspace):
                     return self._send(200, ws.house_style())
                 if u.path == "/api/status":
                     return self._send(200, ws.status())
+                if u.path == "/api/bugreport":                  # the last saved error as a GitHub issue link:
+                    from .. import bugreport                    # the page shows it; nothing is sent from here
+                    return self._send(200, bugreport.report_for())
                 if u.path == "/api/doctor":
                     return self._send(200, ws.doctor())
                 if u.path == "/api/triage/history":            # every finished triage, whoever ran it
@@ -638,6 +648,7 @@ def make_handler(ws: Workspace):
         def _error(self, e):
             if not isinstance(e, EXPECTED):
                 traceback.print_exc()
+                _save_bug(f"web UI: {urlparse(self.path).path}", e)
             code = 409 if isinstance(e, FileExistsError) else 403 if isinstance(e, PermissionError) else 400
             return self._send(code, {"error": _msg(e, ws.root)})
 

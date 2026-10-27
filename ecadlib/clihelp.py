@@ -81,6 +81,8 @@ EXAMPLES = {
     "nexar": ["ecadlib nexar signin", "ecadlib nexar status", "ecadlib nexar signout"],
     "doctor": ["ecadlib doctor", "ecadlib doctor --workspace ws --lib ~/kicad/libs --json"],
     "status": ["ecadlib status", "ecadlib status --workspace ws --json"],
+    "report-bug": ["ecadlib report-bug                    # show the last saved error, then open GitHub (you press Submit)",
+                   "ecadlib report-bug --print            # only the text and the link", "ecadlib report-bug --clear"],
     "completion": ["mkdir -p ~/.local/share/bash-completion/completions && "
                    "ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib",
                    "source <(ecadlib completion zsh)"],
