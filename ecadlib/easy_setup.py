@@ -13,11 +13,14 @@ What the page does (each step also works on its own, later):
      run this ecadlib, and shows the one step left inside Altium (Install from file...). Add to KiCad: copies the
      "ecadlib: add part" PCB editor plugin into KiCad's plugin folder for each KiCad found, with this ecadlib's command
      next to it, so it works without PATH changes.
+  5. Altium 365 (optional): the workspace address (saved as [altium365] workspace) and "Sign in to Altium 365", the
+     same browser sign-in with your own Nexar app as `ecadlib nexar signin` (ecadlib.nexar_signin), run in the
+     background so the page can show when it is done.
 Saving writes <workspace>/ecadlib.toml through `ecadlib init`'s own code (rules_infer.propose: it also learns naming
 conventions from the library folders given) and the answers to the user's settings.json.
 
 The routes are served by the local web UI (ecadlib/ui/server.py), which checks Host and Origin first."""
-import argparse, json, os, re, shutil, sys
+import argparse, json, os, re, shutil, sys, threading, urllib.parse
 from pathlib import Path
 
 from . import __version__, detect, userconfig as UC
@@ -116,6 +119,7 @@ def state(ws_root, environ=None):
             "providers": [{"id": p[0], "label": p[1], "key": p[3], "models": [{"id": m, "note": n} for m, n in p[4]],
                            "key_url": p[5], "note": p[6]} for p in PROVIDERS],
             "keys": keys, "detected": found, "installed": s.get("installed") or {},
+            "altium365": a365_state(raw),
             "can_restart": RESTART is not None, "config_dir": str(UC.config_dir())}
 
 
@@ -170,6 +174,8 @@ def save(ws_root, b):
         extra["ai"] = {"provider": p[2], "model": model}
         old_ai = _ws_rules_raw(ws).get("ai") or {}
         extra["ai"].update({k: "" for k in ("base_url", "api_key_env") if old_ai.get(k)})   # a preset brings its own
+    if "a365_workspace" in b:                   # only when the page sends it: an older page keeps what is there
+        extra["altium365"] = {"workspace": a365_address(b["a365_workspace"])}
     out = ws / "ecadlib.toml"
     prop = RI.propose([x for x in libs] or [], existing=out, extra=extra)
     if prop["errors"]:
@@ -251,6 +257,109 @@ def check_key(b, get=None):
         return {"ok": False, "message": f"Ollama has no model {model}: run `ollama pull {model}` first"}
     return {"ok": True, "message": (f"{p[1]} accepted the key" + (": press Save to keep it" if pasted else "")) if key
             else f"{p[1]} answered"}
+
+
+# ------------------------------------------------------------------ Altium 365
+_SIGNIN = {}                    # the sign-in started from this page: {state: waiting|done|error|cancelled, url,
+                                # message, attempt}
+_SIGNIN_LOCK = threading.Lock()
+
+
+def a365_address(v):
+    """The Altium 365 workspace address as typed on the page: "" (none), or https://<host>/ ; ValueError otherwise."""
+    if not isinstance(v, str) or len(v) > 300:
+        raise ValueError("the Altium 365 workspace address must be a web address such as https://yourcompany.365.altium.com/")
+    v = v.strip()
+    if not v:
+        return ""
+    u = urllib.parse.urlsplit(v)
+    if u.scheme != "https" or not u.hostname or not re.fullmatch(r"[A-Za-z0-9.-]+", u.netloc.split(":")[0]):
+        raise ValueError(f"{v!r} is not an Altium 365 workspace address: copy it from your browser, e.g. "
+                         "https://yourcompany.365.altium.com/")
+    return v
+
+
+def a365_state(raw):
+    """What the page shows about Altium 365. Never a token, a refresh token or the app's secret."""
+    from . import nexar_signin as NS
+    with _SIGNIN_LOCK:
+        sg = {k: _SIGNIN[k] for k in ("state", "url", "message") if k in _SIGNIN} or None
+    return {"workspace": str((raw.get("altium365") or {}).get("workspace") or ""), "signed_in": NS.signed_in(),
+            "app_stored": bool(UC.secret("NEXAR_CLIENT_ID") and UC.secret("NEXAR_CLIENT_SECRET")),
+            "redirect": NS.redirect_uri(), "signin": sg}
+
+
+def _waiting():
+    """{url, waiting: True} of the sign-in this page is waiting on, or None. Call with _SIGNIN_LOCK held."""
+    return {"url": _SIGNIN.get("url"), "waiting": True} if _SIGNIN.get("state") == "waiting" else None
+
+
+def start_nexar_signin(b, wait=10):
+    """Start the browser sign-in in the background; -> {url, waiting} once the sign-in listens for the browser.
+    b: {client_id, client_secret} of the person's Nexar app, or nothing to use the stored app. Pressed again while one
+    is waiting (another tab too): the same sign-in (its address), not a second one on the same port."""
+    from . import nexar_signin as NS
+    cid = b.get("client_id") if isinstance(b.get("client_id"), str) else ""
+    sec = b.get("client_secret") if isinstance(b.get("client_secret"), str) else ""
+    cid, sec = cid.strip(), sec.strip()
+    if not (cid and sec):
+        cid, sec = UC.secret("NEXAR_CLIENT_ID") or "", UC.secret("NEXAR_CLIENT_SECRET") or ""
+    problem = None
+    if not (cid and sec):
+        problem = ("paste your Nexar app's client ID and client secret first (portal.nexar.com > your app > "
+                   "Authorization)")
+    elif len(cid) > 200 or len(sec) > 500 or any(c.isspace() for c in cid + sec):
+        problem = "that does not look like a Nexar client ID and secret: copy them again from portal.nexar.com"
+    ready, me = threading.Event(), object()
+    with _SIGNIN_LOCK:                          # "is one waiting?" and "this one waits now" in one step
+        if _waiting():
+            return _waiting()
+        if problem:
+            raise ValueError(problem)
+        _SIGNIN.clear()
+        _SIGNIN.update(state="waiting", message="waiting for the browser sign-in", attempt=me)
+
+    def opened(url):                            # the sign-in listens now: the page opens the address itself
+        with _SIGNIN_LOCK:
+            if _SIGNIN.get("attempt") is me:
+                _SIGNIN["url"] = url
+        ready.set()
+        return True
+
+    def run():
+        try:
+            got = NS.signin(cid, sec, open_browser=opened, out=lambda *a: None, timeout=300)
+            msg = ("signed in to Altium 365; ecadlib keeps the sign-in fresh by itself" if got.get("refresh") else
+                   "signed in to Altium 365, but Nexar gave no refresh token: allow offline access for your app, "
+                   "or sign in again when it runs out")
+            res = {"state": "done", "message": msg}
+        except Exception as e:                  # SigninError, a network error: the reason, never a secret
+            res = {"state": "error", "message": str(e) or type(e).__name__}
+        with _SIGNIN_LOCK:
+            if _SIGNIN.get("attempt") is me and _SIGNIN.get("state") == "waiting":
+                _SIGNIN.update(res)
+                _SIGNIN.pop("url", None)
+            elif res["state"] == "done":        # signed out while the browser was still open: keep it signed out
+                NS.signout()
+        ready.set()
+    threading.Thread(target=run, daemon=True, name="ecadlib-nexar-signin").start()
+    ready.wait(wait)
+    with _SIGNIN_LOCK:
+        if _SIGNIN.get("attempt") is me and _SIGNIN.get("state") == "error":
+            raise ValueError(_SIGNIN["message"])
+        return {"url": _SIGNIN.get("url"), "waiting": _SIGNIN.get("state") == "waiting"}
+
+
+def nexar_signout(b):
+    """Forget the sign-in. A sign-in still waiting for the browser is cancelled: if the browser finishes it later,
+    its tokens are dropped again."""
+    from . import nexar_signin as NS
+    with _SIGNIN_LOCK:
+        was_waiting = bool(_waiting())
+        _SIGNIN.clear()
+        if was_waiting:
+            _SIGNIN.update(state="cancelled", message="signed out; the sign-in still open in the browser was cancelled")
+        return {"signed_out": bool(NS.signout())}
 
 
 # ------------------------------------------------------------------ add to Altium / KiCad
@@ -350,7 +459,9 @@ POST_ROUTES = {"/api/setup": save, "/api/setup/key": lambda ws, b: store_key(b),
                "/api/setup/key/forget": lambda ws, b: forget_key(b), "/api/setup/key/check": lambda ws, b: check_key(b),
                "/api/setup/altium": lambda ws, b: install_altium_menu(ws),
                "/api/setup/kicad": lambda ws, b: install_kicad_plugin(b.get("series")),
-               "/api/setup/restart": lambda ws, b: restart(b.get("workspace") or ws)}
+               "/api/setup/restart": lambda ws, b: restart(b.get("workspace") or ws),
+               "/api/setup/nexar/signin": lambda ws, b: start_nexar_signin(b),
+               "/api/setup/nexar/signout": lambda ws, b: nexar_signout(b)}
 WRITES = {"/api/setup", "/api/setup/altium"}             # these write into the workspace: under the server's write lock
 
 

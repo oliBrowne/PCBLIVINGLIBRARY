@@ -72,7 +72,8 @@ every day. Instead, make your own free Nexar app once and let ecadlib keep itsel
 2. On the app's **Authorization** tab, add `http://localhost:3000/login` as a redirect URI (ecadlib listens there on
    your own computer for the one browser sign-in; `NEXAR_REDIRECT_URI` picks another port).
 3. Run `ecadlib nexar signin`, paste the app's **client ID** and **client secret** when asked (once), and allow access
-   in the browser that opens.
+   in the browser that opens. Without a terminal: the setup page's **Altium 365** card does the same (paste the ID
+   and secret, press **Sign in to Altium 365**), and also takes the workspace address (`[altium365] workspace`).
 
 `ecadlib nexar status` says whether you are signed in and until when the current access token is valid (never the
 token); `ecadlib nexar signout` forgets the sign-in. Every Altium 365 command, the web UI and the Altium menu use the
