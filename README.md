@@ -79,7 +79,8 @@ same library and report any drift.
 
 * **Inside Altium Designer:** an **ecadlib** menu adds a part from its MPN, checks the project's BOM, builds the
   libraries and opens the parts that need a person, with Altium's own dialogs.
-* **Inside KiCad:** a plugin (Plugins > ecadlib) opens an ecadlib window that does the same for KiCad projects.
+* **Inside KiCad:** a plugin (**Tools > External Plugins > ecadlib** in the PCB editor) opens an ecadlib window that
+  does the same for KiCad projects.
 * **In your browser:** a local web UI (`ecadlib ui`) for the whole flow, from dropping a BOM to releasing to Altium 365.
 * **From an AI agent:** an MCP server (`ecadlib mcp`) lets Claude, Codex, Grok or another agent run the same steps in
   conversation, with the same holds and cost checks.
@@ -93,9 +94,8 @@ All of them run on your own machine: your libraries and API keys stay there.
   [Releases page](https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases) and run it. A setup page opens where you
   paste an API key, pick a model and add ecadlib to Altium or KiCad. [docs/START_HERE.md](docs/START_HERE.md) walks
   through it.
-* **Command line:** `pip install ecadlib` (Python 3.10+). These docs follow the main branch: what
-  [CHANGELOG.md](CHANGELOG.md) lists under *Unreleased* (change control and `ecadlib part`, `mcp --http`, the run and
-  review lines of `ecadlib status`) is not in the PyPI release yet. To get it:
+* **Command line:** `pip install ecadlib` (Python 3.10+). These docs follow the main branch; anything
+  [CHANGELOG.md](CHANGELOG.md) lists under *Unreleased* is not on PyPI yet. To get it:
   `pip install "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY"`.
 
 ## Try the demo
@@ -204,8 +204,8 @@ What has been measured so far:
 
 | When | What |
 |---|---|
-| Now: v0.4.0, due 2026-11-30 | A proven BOM-to-Altium 365 flow: a fresh benchmark on parts the code was not tuned on, a full BOM released to a real workspace and placed in Altium Designer, house style tried on a real company library |
-| v0.5.0, due 2027-01-15 | Easy to adopt: a signed Windows installer and the cost shown before every AI step in Altium, KiCad and the browser |
+| Now: v0.5.0, due 2026-11-30 | A proven BOM-to-Altium 365 flow: a fresh benchmark on parts the code was not tuned on, a full BOM released to a real workspace and placed in Altium Designer, house style tried on a real company library |
+| v0.6.0, due 2027-01-15 | Easy to adopt: a signed Windows installer and the cost shown before every AI step in Altium, KiCad and the browser |
 | Parked | A library agent that opens review pull requests, and two-way Altium 365 sync (kept on a branch until the core flow is proven) |
 | Out of scope | Assembly output for a fab house, SPICE models, pricing and stock, a hosted service |
 
