@@ -58,22 +58,21 @@ closing Altium: gear icon > Preferences > Scripting System > Global Projects > *
 
 ### 3b. Point ecadlib at your Altium 365 workspace
 
-Skip this to get a database library (DbLib) folder instead of Altium 365.
+Skip this to get a database library (DbLib) folder instead of Altium 365. Everything is on the setup page's
+**Altium 365** card (Start menu > **ecadlib setup**):
 
-1. Sign in to Altium 365 once: make your own free Nexar app and run `ecadlib nexar signin` (steps in
-   [Signing in to Altium 365](altium.md#signing-in-to-altium-365-ecadlib-nexar-signin)). ecadlib then keeps itself
-   signed in. Quick alternative for a day: make a token at [portal.nexar.com](https://portal.nexar.com/applications)
-   with your Altium account (scopes `openid`, `user.access`, `design.domain`) and paste it on the setup page under
-   **Optional keys > Altium 365 (Nexar) token**; it runs out after 24 hours. Either way it stays in ecadlib's own key
-   store, never in an environment variable.
-2. Open `Documents\ecadlib\ecadlib.toml` (your workspace folder) in Notepad and add your workspace's address:
+1. **Workspace address.** Open your workspace in the browser, copy the address (like
+   `https://yourcompany.365.altium.com/`) into the card, and press **Save setup**.
+2. **Sign in once.** Make your own free Nexar app with Design access and the redirect address
+   `http://localhost:3000/login` (steps in [Signing in to Altium 365](altium.md#signing-in-to-altium-365-ecadlib-nexar-signin)),
+   paste its client ID and secret into the card and press **Sign in to Altium 365**. Allow access in the browser tab
+   that opens; the card then says **signed in**, and ecadlib keeps itself signed in. From a terminal,
+   `ecadlib nexar signin` does the same. Quick alternative for a day: make a token at
+   [portal.nexar.com](https://portal.nexar.com/applications) with your Altium account (scopes `openid`,
+   `user.access`, `design.domain`) and paste it under **Optional keys > Altium 365 (Nexar) token**; it runs out after
+   24 hours. Either way it stays in ecadlib's own key store, never in an environment variable.
 
-   ```toml
-   [altium365]
-   workspace = "https://yourcompany.365.altium.com/"
-   ```
-
-Parts are released into `Components/<category>` (Capacitors, ICs, Resistors ...). `[folders]` in the same file
+Parts are released into `Components/<category>` (Capacitors, ICs, Resistors ...). `[folders]` in the workspace's `ecadlib.toml`
 changes that; `ecadlib rules show` lists every setting.
 
 ### 3c. Check the project BOM

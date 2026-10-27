@@ -124,6 +124,29 @@ ol.steps li { margin: 4px 0; }
     <div class="chips" id="libsugg"></div>
   </section>
 
+  <section class="card" id="c-a365">
+    <h2><span class="n">+</span>Altium 365 (optional)</h2>
+    <p class="sub">Only if ecadlib should release parts to an Altium 365 workspace. Without it, Altium parts go into a
+      database library (DbLib) folder.</p>
+    <label class="f" for="a365ws">Workspace address</label>
+    <input type="text" id="a365ws" spellcheck="false" placeholder="https://yourcompany.365.altium.com/">
+    <p class="hint">Copy it from your browser's address bar when your workspace is open. Saved with <b>Save setup</b>.</p>
+    <label class="f">Sign in <span id="a365state"></span></label>
+    <div id="a365app">
+      <p class="hint">Once: make a free app on <a href="https://portal.nexar.com/applications" target="_blank" rel="noopener">portal.nexar.com</a>
+        with Design access and the redirect address <span class="mono" id="a365redir"></span>, then paste its client ID and
+        secret here. ecadlib then keeps you signed in.</p>
+      <div class="row"><input type="text" id="a365cid" spellcheck="false" autocomplete="off" placeholder="client ID"></div>
+      <div class="row" style="margin-top:8px"><input type="password" id="a365sec" autocomplete="off" placeholder="client secret"></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="a365-signin">Sign in to Altium 365</button>
+      <button id="a365-newapp" hidden>Use another Nexar app</button>
+      <button id="a365-signout" hidden>Sign out</button>
+    </div>
+    <div id="a365msg"></div>
+  </section>
+
   <div class="actions">
     <button class="primary" id="save">Save setup</button>
     <span id="savemsg" class="hint"></span>
@@ -236,7 +259,49 @@ function render() {
   document.querySelectorAll(".xforget").forEach((b) => b.onclick = async () => { await api("/api/setup/key/forget", {name: b.dataset.k}); await load(); });
 }
 
-async function load() { S = await api("/api/setup"); render(); }
+let a365poll = null, a365new = false;
+function renderA365() {
+  const A = S.altium365;
+  if (document.activeElement !== $("a365ws")) $("a365ws").value = A.workspace;
+  $("a365redir").textContent = A.redirect;
+  $("a365state").innerHTML = A.signed_in ? pill("signed in", "ok") : A.signin && A.signin.state === "waiting" ? pill("waiting for the browser", "warn") : pill("not signed in", "info");
+  $("a365app").hidden = A.app_stored && !a365new;
+  $("a365-newapp").hidden = !A.app_stored || a365new;
+  $("a365-signout").hidden = !A.signed_in;
+  $("a365-signin").textContent = A.signed_in ? "Sign in again" : "Sign in to Altium 365";
+  const g = A.signin;
+  if (g && g.state === "waiting" && g.url) msg("a365msg", `Finish the sign-in in the browser tab that opened and allow access. No tab? <a href="${esc(g.url)}" target="_blank" rel="noopener">Open the Altium 365 sign-in</a>`, "info");
+  else if (g && g.state !== "waiting") msg("a365msg", esc(g.message), g.state === "done" ? "ok" : "bad");
+}
+function pollA365() {
+  clearInterval(a365poll);
+  let n = 0;
+  a365poll = setInterval(async () => {
+    try { S.altium365 = (await api("/api/setup")).altium365; renderA365(); } catch (e) { /* the page keeps the last view */ }
+    if (++n > 160 || !S.altium365.signin || S.altium365.signin.state !== "waiting") clearInterval(a365poll);
+  }, 2000);
+}
+$("a365-signin").onclick = async () => {
+  const b = {};
+  if (!$("a365app").hidden) { b.client_id = $("a365cid").value.trim(); b.client_secret = $("a365sec").value.trim(); }
+  const tab = window.open("", "_blank");          // opened on the click itself: a tab opened after the await is blocked
+  $("a365-signin").disabled = true;
+  msg("a365msg", "starting the sign-in ...", "info");
+  try {
+    const r = await api("/api/setup/nexar/signin", b);
+    if (tab && r.url) tab.location = r.url; else if (tab) tab.close();
+    $("a365sec").value = ""; a365new = false;
+    S.altium365 = (await api("/api/setup")).altium365; renderA365(); pollA365();
+  } catch (e) { if (tab) tab.close(); msg("a365msg", esc(e.message), "bad"); }
+  $("a365-signin").disabled = false;
+};
+$("a365-newapp").onclick = () => { a365new = true; renderA365(); };
+$("a365-signout").onclick = async () => {
+  try { await api("/api/setup/nexar/signout", {}); S.altium365 = (await api("/api/setup")).altium365; renderA365(); msg("a365msg", "signed out of Altium 365", "info"); }
+  catch (e) { msg("a365msg", esc(e.message), "bad"); }
+};
+
+async function load() { S = await api("/api/setup"); render(); renderA365(); }
 
 $("savekey").onclick = async () => {
   try {
@@ -253,7 +318,7 @@ $("checkkey").onclick = async () => {
 
 $("save").onclick = async () => {
   const b = {provider: prov.id, model: $("model").value.trim(), tool, workspace: $("ws").value.trim(),
-             libs: $("libs").value.split("\n").map((x) => x.trim()).filter(Boolean)};
+             libs: $("libs").value.split("\n").map((x) => x.trim()).filter(Boolean), a365_workspace: $("a365ws").value.trim()};
   $("save").disabled = true; $("savemsg").textContent = b.libs.length ? "saving (reading your library folders) ..." : "saving ...";
   try {
     const r = await api("/api/setup", b);
