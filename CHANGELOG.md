@@ -7,6 +7,10 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-27
+
+The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right with none built wrong (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
+
 ### Added
 
 - A dimension printed as a nominal with two one-sided tolerances is read as min/nom/max in either order, including an unsigned zero side: "0.7 +0.1/0" (JST's board hole) is 0.7 to 0.8 mm, "3.56 -0.25/+0.15" reads like "3.56 +0.15/-0.25". An unsigned non-zero side ("0.7 +0.1/0.05") stays unread, since it could mean either way.
@@ -149,10 +153,6 @@ a minor release may change command-line options and file formats.
 - Altium menu: a failed Altium build keeps the previous library files, installs nothing and says so instead of "Ready". When Altium stops the build script part way (a script error writes no report), the menu puts the moved-aside library back.
 - Altium menu: shared resistor / capacitor / inductor symbols carry no footprint, so each DbLib row's Footprint Ref picks it; passive parts get Passive pins; distributor categories (including LCSC's "LED Indication - Discrete") route parts to the Capacitors, Transistors, Diodes, Crystals and Connectors tables; *Open review queue* lists the menu's held parts; an MPN no source knows is "Not found", not held.
 - A space in an MPN becomes `_` in the DbLib part name (`FC-135 32.768KA-AG0` → `FC-135_32.768KA-AG0`); the Manufacturer Part Number column keeps the space.
-
-## [0.3.2.dev0] - 2026-10-20
-
-The development build of main (not on PyPI). It writes files 0.3.1 cannot read (librarian_state v3), so it no longer calls itself 0.3.1: a refusal of a newer file now names a version that can read it. Its changes are the ones under [Unreleased] above.
 
 ## [0.3.1] - 2026-10-17
 
@@ -363,7 +363,8 @@ The development build of main (not on PyPI). It writes files 0.3.1 cannot read (
 - Initial prototypes: IPC-7351B footprint generator driven by `package_schema.json`, BOM triage
   against local KiCad libraries and public part sources, and Altium Database Library (DbLib) export.
 
-[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.1.0...v0.2.0

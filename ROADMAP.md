@@ -1,13 +1,13 @@
 # Roadmap
 
-Last updated 2026-10-19. What ecadlib is for, who it is for and how success is measured are in
+Last updated 2026-10-27. What ecadlib is for, who it is for and how success is measured are in
 [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md). Every planned item below has an issue, and every milestone is a
 [GitHub milestone](https://github.com/oliBrowne/PCBLIVINGLIBRARY/milestones) with the same due date.
 
-Milestones follow the package version (v0.3.1, v0.4.0, v0.5.0), not v1 / v1.1: ecadlib is at 0.3.1 on PyPI, and
+Milestones follow the package version (v0.4.0, v0.5.0, v0.6.0), not v1 / v1.1: ecadlib is at 0.4.0 on PyPI, and
 the changelog keeps 0.x minor releases free to change command-line options and file formats until 1.0.0.
 
-**Focus until v0.4.0:** a proven BOM-to-Altium 365 flow with a published accuracy benchmark, and real-BOM trials
+**Focus until v0.5.0:** a proven BOM-to-Altium 365 flow with a published accuracy benchmark, and real-BOM trials
 with 3 to 5 Altium users (from the 2026-10-17 market-fit review). Altium (Altium 365 first) and KiCad are the
 supported targets. The Fusion Electronics / EAGLE and EasyEDA Pro exports were removed on 2026-10-18 (P13, below).
 On 2026-10-19 five more features were cut and three parked for the same reason
@@ -32,11 +32,12 @@ table is kept as the record of what was merged.
 | 2026-10-17 | #31, #32, #34 | **v0.3.0** released: on PyPI (`pip install ecadlib`) and as a Windows installer on the GitHub release |
 | 2026-10-17 | #35 | Official part APIs first with unofficial endpoints fenced off, weekly sources canary, and Altium rebuilding every library itself (8 of 8 test libraries, 0 differences on AD26) |
 | 2026-10-17 | #61-#80 (issues #36-#40) | **v0.3.1** released: Build libraries in the Altium menu, fab-layer designator in Altium, multi-part symbols, keep-outs and bottom-side pads checked in AD26, and the fixes from the overnight system test |
-| 2026-10-17 to 19 | #81-#125 | On `main`, not released yet: change control ([#105](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/105), `ecadlib part`), time from BOM to library and the review rate in `ecadlib status` (P7, P8), the cost shown before every AI step (P12), docs/START_HERE.md (P14), the first live benchmark run (docs/benchmark.md), `ecadlib mcp --http`, and the 2026-10-19 cut and park |
+| 2026-10-17 to 19 | #81-#125 | Released in v0.4.0: change control ([#105](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/105), `ecadlib part`), time from BOM to library and the review rate in `ecadlib status` (P7, P8), the cost shown before every AI step (P12), docs/START_HERE.md (P14), the first live benchmark run (docs/benchmark.md), `ecadlib mcp --http`, and the 2026-10-19 cut and park |
+| 2026-10-19 to 27 | #126-#199 | **v0.4.0** released: the release gate, Nexar sign-in, the live benchmark at 87 of 110 parts fully right with none built wrong, and the scope cut to Altium and KiCad. The milestones below were renumbered: the BOM-to-Altium 365 flow is now v0.5.0 |
 
 ## Next milestones
 
-### v0.4.0: Proven BOM-to-Altium 365 flow (due 2026-11-30)
+### v0.5.0: Proven BOM-to-Altium 365 flow (due 2026-11-30)
 
 **Goal.** Show, with numbers, that a real BOM becomes a correct, house-style library in Altium 365 faster than by
 hand.
@@ -55,7 +56,7 @@ KiCad's library; at least 3 outside Altium users have run their own BOMs, with t
 recorded for each; a 20+ line BOM has been released to a real Altium 365 workspace and places correctly in Altium
 Designer.
 
-### v0.5.0: Easy to adopt (due 2027-01-15)
+### v0.6.0: Easy to adopt (due 2027-01-15)
 
 **Goal.** An Altium user can go from download to a released BOM without a warning dialog, a surprise bill or help
 from us.
@@ -98,7 +99,7 @@ Removed from `main`, kept on the branch
 - **The library agent:** `ecadlib agent`, `ecadlib agent-watch`, its review queue (`ecadlib queue`), the visual check
   as the agent used it, and its branch / pull request batches.
 - **Two-way Altium 365 sync:** `ecadlib a365 pull`, `status` and `reconcile`. Pushing to Altium 365
-  (`ecadlib altium365 push`) stays: it is the v0.4.0 goal.
+  (`ecadlib altium365 push`) stays: it is the v0.5.0 goal.
 
 Frozen: **KiCad PCM packaging** (`ecadlib kicad-pcm`) stays in the code, but gets no new work.
 
@@ -135,18 +136,18 @@ gantt
     Check multi-part, keep-outs, bottom pads in AD26    :done, p3, 2026-10-17, 1d
     v0.3.1 release                                     :milestone, done, r1, 2026-10-17, 0d
 
-    section v0.4.0 Proven BOM to Altium 365
+    section v0.5.0 Proven BOM to Altium 365
     Real Altium 365 release of a full BOM               :p10, 2026-11-01, 10d
     Time and approval-rate metrics                      :p7, 2026-11-01, 10d
     Live accuracy benchmark                             :p5, 2026-11-01, 22d
     Real-BOM trials with 3 to 5 Altium users            :p6, 2026-11-09, 21d
     House style on a real company library               :p9, 2026-11-12, 15d
-    v0.4.0 release                                     :milestone, r2, 2026-11-30, 0d
+    v0.5.0 release                                     :milestone, r2, 2026-11-30, 0d
 
-    section v0.5.0 Easy to adopt
+    section v0.6.0 Easy to adopt
     Signed Windows installer                            :p11, 2026-12-01, 21d
     Cost shown before every AI step                     :p12, 2026-12-01, 21d
     Decide on experimental exports                      :p13, 2026-12-14, 7d
     Installer to Altium 365 guide                       :p14, 2027-01-04, 11d
-    v0.5.0 release                                     :milestone, r3, 2027-01-15, 0d
+    v0.6.0 release                                     :milestone, r3, 2027-01-15, 0d
 ```
