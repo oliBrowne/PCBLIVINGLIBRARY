@@ -206,10 +206,28 @@ def setup_workspace(start="."):
         return p
 
 
-def default_out(kind, bom, start="."):
-    """Default -o of `librarian` / `triage` for this BOM: <[setup] workspace>/librarian/<BOM name> or
-    <workspace>/reports/triage_<BOM name> (where `ecadlib status` looks), else out/librarian / out/triage."""
+def out_workspace(start=".", environ=None):
+    """The workspace `ecadlib status` and `ecadlib ui` read when no --workspace is given, for output to land in:
+    $ECADLIB_WORKSPACE, else [setup] workspace, else ./ecadlib_workspace when it exists, else the folder picked on
+    the setup page (settings.json) when it exists; else None."""
+    environ = os.environ if environ is None else environ
+    env = (environ.get("ECADLIB_WORKSPACE") or "").strip()
+    if env:
+        return Path(env).expanduser()
     ws = setup_workspace(start)
+    if ws:
+        return ws
+    if (Path(start) / "ecadlib_workspace").is_dir():
+        return Path(start) / "ecadlib_workspace"
+    page = _settings_workspace(start, environ)
+    return Path(page[0]) if page else None
+
+
+def default_out(kind, bom, start="."):
+    """Default -o of `librarian` / `triage` for this BOM: <workspace>/librarian/<BOM name> or
+    <workspace>/reports/triage_<BOM name> in the workspace `ecadlib status` looks at (out_workspace), else
+    out/librarian / out/triage."""
+    ws = out_workspace(start)
     stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
     if kind == "librarian":
         return str(ws / "librarian" / stem) if ws else "out/librarian"
