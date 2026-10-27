@@ -75,6 +75,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- `release-check --allow` on a part already allowed for the same failures keeps the date it was first allowed, so re-running a librarian or `ecadlib testpack` on a new day no longer rewrites `plan.json`.
 - A through-hole part's EasyEDA 3D model sits at its real depth: EasyEDA's z is where the model's bottom goes, so a 2.54 mm header (z = -3 mm) no longer sinks 3 mm into the board, and its height reads 8.5 mm, not 5.5.
 - Typing a bare LCSC number (e.g. `C9002`) in Altium's Add part uses EasyEDA's part again; it was refused as "BOM says C9002" and held with no symbol or footprint.
 - `ecadlib.cli.main` called in-process (tests, an app that embeds ecadlib) puts `-q` / `-v` / `--json` and `sys.argv` back when it returns, so the caller's own output is not left unstyled. Three tests that failed only now and then under `pytest -n 4` are fixed: the terminal-style test (it inherited `--json` from another test), the browser UI test (fixed scroll pauses became waits) and the fresh-install doctor test (it no longer fails where the optional browser extras are not installed).

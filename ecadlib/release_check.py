@@ -671,7 +671,10 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
         if it["name"] in unallow:
             it.pop("allow", None)
         if it["name"] in allow:
-            it["allow"] = {"by": who, "date": today, "failures": [m for m in msgs if not m.startswith(UNFIXABLE)]}
+            fixable = [m for m in msgs if not m.startswith(UNFIXABLE)]
+            old = it.get("allow") or {}
+            same = old.get("by") == who and old.get("failures") == fixable and old.get("date")
+            it["allow"] = {"by": who, "date": old["date"] if same else today, "failures": fixable}   # a re-run keeps the first date
             for k in ("hold_reasons", "release_check"):     # the key order a librarian re-run writes: no plan.json churn
                 if k in it:
                     it[k] = it.pop(k)

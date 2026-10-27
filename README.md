@@ -79,7 +79,8 @@ same library and report any drift.
 
 * **Inside Altium Designer:** an **ecadlib** menu adds a part from its MPN, checks the project's BOM, builds the
   libraries and opens the parts that need a person, with Altium's own dialogs.
-* **Inside KiCad:** a plugin (Plugins > ecadlib) opens an ecadlib window that does the same for KiCad projects.
+* **Inside KiCad:** a plugin (**Tools > External Plugins > ecadlib** in the PCB editor) opens an ecadlib window that
+  does the same for KiCad projects.
 * **In your browser:** a local web UI (`ecadlib ui`) for the whole flow, from dropping a BOM to releasing to Altium 365.
 * **From an AI agent:** an MCP server (`ecadlib mcp`) lets Claude, Codex, Grok or another agent run the same steps in
   conversation, with the same holds and cost checks.
