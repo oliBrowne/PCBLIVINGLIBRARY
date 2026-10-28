@@ -1210,6 +1210,8 @@ def _error_text(e):
     if isinstance(e, OSError) and e.errno in (errno.ENAMETOOLONG, errno.ENOTDIR, errno.EINVAL, errno.ELOOP):
         return f"not found: that path is not valid here ({e.strerror or type(e).__name__}); check the BOM / file path"
     traceback.print_exc(file=sys.stderr)                # a bug: keep the traceback on stderr
+    from . import bugreport                             # and saved on this computer for `ecadlib report-bug`
+    bugreport.record("MCP server", e)
     from . import messages as M                         # one line what went wrong, one line what to do (shared voice)
     return "\n".join(M.friendly_error(e))
 
@@ -1378,6 +1380,8 @@ def respond(ws, msg, notify=None):
             return handle(ws, m, notify)
         except Exception as e:                          # a bug or odd input in one request: report and go on
             traceback.print_exc(file=sys.stderr)
+            from . import bugreport
+            bugreport.record("MCP server", e)
             mid = m.get("id") if isinstance(m, dict) and isinstance(m.get("id"), (str, int)) else None
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"internal error: {type(e).__name__}"}}
     if isinstance(msg, list) and msg:

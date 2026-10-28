@@ -1685,6 +1685,10 @@ def _error(e):
         fix = "sign in to Altium 365 once with `ecadlib nexar signin` (ecadlib then stays signed in), or store a Nexar token (NEXAR_TOKEN) on the setup page, then try again"
     elif "ecadlib.toml" in msg or "rules" in msg.lower():
         fix = "`ecadlib rules check` shows the problem in ecadlib.toml"
+    elif not isinstance(e, (ValueError, OSError)):      # a bug: saved on this PC for `ecadlib report-bug`
+        from . import bugreport
+        bugreport.record("Altium / KiCad menu", e)
+        fix = "this looks like a bug in ecadlib: run `ecadlib report-bug` to report it (you see the text before anything is sent)"
     return {"status": "error", "message": msg if isinstance(e, (ValueError, OSError)) else f"{type(e).__name__}: {msg}",
             "fix": fix or "see log.txt in the job folder; `ecadlib doctor` checks the setup"}
 

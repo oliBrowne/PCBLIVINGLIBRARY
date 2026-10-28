@@ -130,9 +130,12 @@ def refuse(cmd, e, hint, out=None):
 def report(cmd, e, out):
     """Print one line (and a hint) for e to `out`; returns the exit code."""
     f = friendly(e)
-    if f is None:
+    if f is None:                                   # a bug: saved on this computer for `ecadlib report-bug`
+        from . import bugreport
+        bugreport.record(cmd, e)
         msg, hint, code = (f"internal error ({type(e).__name__}: {e})",
-                           f"run again with --debug (or {DEBUG_ENV}=1) for the traceback, and please report it", 1)
+                           "this looks like a bug in ecadlib: `ecadlib report-bug` shows what was saved and opens a "
+                           f"GitHub issue you check before sending (--debug or {DEBUG_ENV}=1 shows the traceback)", 1)
     else:
         msg, hint, code = f[0], f[1] + "; --debug shows the traceback", f[2]
     print(f"ecadlib {cmd}: {msg}\n  hint: {hint}", file=out)

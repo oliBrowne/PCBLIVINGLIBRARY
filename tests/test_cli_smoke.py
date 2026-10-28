@@ -81,6 +81,7 @@ CASES = [
       "--workspace", "{out}/ws"], (0, 1, 2)),
     (["doctor", "--workspace", "{out}/ws", "--lib", "{in}/lib"], (0, 1)),
     (["status", "--workspace", "{out}/demo"], (0,)),
+    (["report-bug", "--print"], (0,)),
     (["completion", "bash"], (0,)),
     (["ai", "show"], (0,)),
     (["ai", "rails"], (0,)),
@@ -151,7 +152,8 @@ def smoke(sub=False, verbose=False):
         out.mkdir()
         old_cwd, old_env = os.getcwd(), dict(os.environ)
         os.chdir(d)
-        os.environ.update(HOME=str(d / "home"), XDG_CACHE_HOME=str(d / "home" / ".cache"), ECADLIB_OFFLINE="1")
+        os.environ.update(HOME=str(d / "home"), XDG_CACHE_HOME=str(d / "home" / ".cache"), ECADLIB_OFFLINE="1",
+                          ECADLIB_HOME=str(d / "home" / "ecadlib"))   # own settings: no saved bug reports from other tests
         for k in ("ANTHROPIC_API_KEY", "NEXAR_TOKEN", "NEXAR_CLIENT_ID", "DIGIKEY_CLIENT_ID", "MOUSER_API_KEY", "GITHUB_TOKEN"):
             os.environ.pop(k, None)
         try:
