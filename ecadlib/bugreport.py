@@ -9,7 +9,7 @@ When a command, the web UI or the MCP server hits an error it did not expect (a 
 setting), record() saves it in the config folder (crashes/, the newest MAX_KEPT) with API keys, tokens, e-mail
 addresses, the user name and the home folder blanked out. report-bug turns the newest one into a GitHub issue link;
 the user reads the text on GitHub and decides whether to press Submit."""
-import argparse, getpass, json, os, platform, re, sys, time, traceback, webbrowser
+import argparse, getpass, itertools, json, os, platform, re, sys, time, traceback, webbrowser
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -17,19 +17,24 @@ ISSUES_NEW = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/new"
 MAX_KEPT = 20
 MAX_URL = 7000                                # GitHub refuses much longer links; the traceback's top is cut first
 MAX_TB_LINES = 80
-SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT\b|CREDENTIAL|AUTH", re.I)
+MAX_LINE, MAX_LAST, MAX_BODY_LINE = 500, 1000, 300   # characters per traceback line: saved / its last line / in the link
+SECRET_NAME = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT|CREDENTIALS?|SIGNIN)(?:$|_)", re.I)
 _SHAPES = [                                   # keys and tokens by their look, wherever they appear
     re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"),                          # Anthropic, OpenAI, OpenRouter
     re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"),                         # Google / Gemini
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"),
     re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"),                   # Slack webhooks / tokens
     re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*"),   # JWTs (Nexar access tokens)
+    re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),   # UUID keys (Mouser)
+    re.compile(r"\b[0-9a-fA-F]{32,}\b"),                            # hex client ids and secrets
 ]
+_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,15}://)[^/\s:@]{1,200}:[^/\s@]{1,500}@")
 _BEARER = re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=\-]{8,}")
-_QUERY = re.compile(r"(?i)([?&;\s\"'](?:api[_-]?key|apikey|key|token|access_token|secret|client_secret|password|sig)"
-                    r"\s*[=:]\s*)([^&\s\"',;)]+)")
+_QUERY = re.compile(r"(?i)((?<![A-Za-z0-9])[\w-]{0,40}(?:api[_-]?key|apikey|key|token|secret|password|passwd|pass|sig)"
+                    r"[\"']?\s*[=:]\s*[\"']?)([^&\s\"',;)}\]]+)")
 _LONG = re.compile(r"[A-Za-z0-9_\-]{40,}")
-_EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
+_EMAIL = re.compile(r"(?<![\w.+\-])[\w.+\-]{1,64}@[\w\-]{1,63}(?:\.[\w\-]{1,63})+")   # bounded: linear on long runs
+_ORG = re.compile(r"OneDrive - [^\\/\"'\n]{1,100}")                # the employer in a synced folder's name
 _USER_DIRS = re.compile(r"(?i)([A-Za-z]:[\\/]+(?:Users|Documents and Settings)[\\/]+|/home/|/Users/)([^\\/\"'\n<>|]+)")
 
 
@@ -51,9 +56,28 @@ def _known_secrets():
             v = U.get_key(name)
             if v:
                 vals.add(v)
+                vals.update(_json_strings(v))     # NEXAR_SIGNIN: a JSON blob; its tokens on their own too
     except Exception:                         # a broken key store must not stop a bug report
         pass
+    vals |= {quote(v, safe="") for v in vals}  # the same value inside a URL
     return sorted((v for v in vals if len(v) >= 8), key=len, reverse=True)
+
+
+def _json_strings(v):
+    try:
+        data = json.loads(v)
+    except (ValueError, TypeError):
+        return set()
+    out, todo = set(), [data]
+    while todo:
+        x = todo.pop()
+        if isinstance(x, dict):
+            todo += list(x.values())
+        elif isinstance(x, list):
+            todo += x
+        elif isinstance(x, str):
+            out.add(x)
+    return out
 
 
 def _long_token(m):
@@ -68,6 +92,7 @@ def scrub(text):
         text = text.replace(v, "[secret]")
     for rx in _SHAPES:
         text = rx.sub("[secret]", text)
+    text = _USERINFO.sub(lambda m: m.group(1) + "[user]:[secret]@", text)
     text = _BEARER.sub(lambda m: m.group(1) + " [secret]", text)
     text = _QUERY.sub(lambda m: m.group(1) + "[secret]", text)
     text = _LONG.sub(_long_token, text)
@@ -77,6 +102,13 @@ def scrub(text):
         for h in {home, home.replace("\\", "/"), home.replace("/", "\\")}:
             text = re.sub(re.escape(h) + r"(?=[\\/\"'\s:]|$)", "~", text, flags=re.I if os.name == "nt" else 0)
     text = _USER_DIRS.sub(lambda m: m.group(1) + "[user]", text)
+    text = _ORG.sub("OneDrive - [org]", text)
+    try:
+        node = platform.node()
+    except Exception:
+        node = ""
+    if len(node) >= 3:                        # the computer's name (DESKTOP-5JE5S2P, JANES-MBP)
+        text = re.sub(r"(?i)(?<![A-Za-z0-9])" + re.escape(node) + r"(?![A-Za-z0-9])", "[computer]", text)
     try:
         user = getpass.getuser()
     except Exception:
@@ -101,20 +133,29 @@ def _installed():
     return "Windows app" if getattr(sys, "frozen", False) else "pip"
 
 
+_SEQ = itertools.count()
+
+
 def record(where, exc):
-    """Save exc (an error ecadlib did not expect) for a later bug report; -> the file, or None. Never raises."""
+    """Save exc (an error ecadlib did not expect) for a later bug report; -> the file, or None. Never raises.
+    The same error again (a page polling a broken endpoint) is not saved twice in a row."""
     try:
         from . import __version__
+        from .userconfig import _write_private
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).splitlines()[-MAX_TB_LINES:]
+        tb = [ln[:MAX_LINE] for ln in tb[:-1]] + [ln[:MAX_LAST] for ln in tb[-1:]]
         rec = {"time": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()), "version": __version__,
                "os": platform.platform(terse=True), "python": platform.python_version(), "installed": _installed(),
-               "where": scrub(str(where))[:200], "error": type(exc).__name__,
-               "message": scrub(_short_paths(str(exc)))[:2000],
+               "where": re.sub(r"[`\r\n]", " ", scrub(str(where)[:200])), "error": type(exc).__name__,
+               "message": scrub(_short_paths(str(exc)[:8000]))[:2000],
                "traceback": scrub(_short_paths("\n".join(tb)))}
+        last = latest()
+        if last and all(last.get(k) == rec[k] for k in ("where", "error", "message")):
+            return _files()[0]
         d = crash_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        f = d / f"{time.time_ns()}.json"
-        f.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
+        f = d / f"{time.time_ns()}-{os.getpid()}-{next(_SEQ)}.json"
+        _write_private(f, json.dumps(rec, indent=1))     # mode 600: other accounts on the PC cannot read it
         for old in _files()[MAX_KEPT:]:
             old.unlink(missing_ok=True)
         return f
@@ -133,9 +174,11 @@ def saved():
     out = []
     for f in _files():
         try:
-            out.append(json.loads(f.read_text(encoding="utf-8")))
+            r = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if isinstance(r, dict):
+            out.append(r)
     return out
 
 
@@ -170,26 +213,40 @@ def build(rec=None, tb_lines=None):
              f"- ecadlib version: {info.get('version')} ({info.get('installed', '?')})",
              f"- OS: {info.get('os')}", f"- Python: {info.get('python')}"]
     if rec:
-        tb = rec.get("traceback", "").splitlines()
-        if tb_lines is not None:
-            tb = (["..."] if tb_lines < len(tb) else []) + tb[len(tb) - tb_lines:] if tb_lines else []
+        tb = [ln[:MAX_BODY_LINE] for ln in rec.get("traceback", "").splitlines()]
+        if tb_lines is not None and tb_lines < len(tb):          # the newest frames and the error line are kept
+            tb = ["..."] + tb[len(tb) - max(tb_lines, 1):]
         lines += [f"- Where: `{rec.get('where')}`", f"- When: {rec.get('time')}", "",
                   "```", *tb, "```"]
     return title, "\n".join(lines) + "\n"
 
 
 def issue_url(title, body, rec=None):
-    """The new-issue link, pre-filled. Too long for GitHub: the traceback's oldest lines are dropped first."""
+    """The new-issue link, pre-filled. Too long for GitHub: the traceback's oldest lines are dropped first (the error
+    line itself is always kept), then, if still too long, the body is cut and its code block closed again."""
     def url(t, b):
         return ISSUES_NEW + "?" + urlencode({"title": t, "labels": "bug", "body": b}, quote_via=quote)
     u = url(title, body)
-    n = len(rec.get("traceback", "").splitlines()) if rec else 0
-    while len(u) > MAX_URL and n > 0:
-        n //= 2
-        u = url(title, build(rec, n)[1])
-    while len(u) > MAX_URL:                   # a huge message on its own: cut the body itself
-        body = body[: int(len(body) * 0.8)]
-        u = url(title, body)
+    if len(u) <= MAX_URL:
+        return u
+    if rec:                                   # binary search: the most traceback lines that fit
+        lo, hi = 1, len(rec.get("traceback", "").splitlines())
+        best = url(title, build(rec, 1)[1])
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            cand = url(title, build(rec, mid)[1])
+            if len(cand) <= MAX_URL:
+                best, lo = cand, mid + 1
+            else:
+                hi = mid - 1
+        if len(best) <= MAX_URL:
+            return best
+        body = build(rec, 1)[1]
+    fenced = body.rstrip().endswith("```")
+    core = body.rstrip()[:-3] if fenced else body
+    while len(u) > MAX_URL and core:          # a huge message on its own: cut it, keep the fence closed
+        core = core[: int(len(core) * 0.8)]
+        u = url(title, core + ("\n...\n```\n" if fenced else "\n..."))
     return u
 
 
@@ -224,8 +281,8 @@ def main(argv=None, out=None, inp=None):
         if not recs:
             print("No saved errors.", file=out)
         for r in recs:
-            print(f"{r.get('time')}  {r.get('where')}: {r.get('error')}: {(r.get('message') or '').splitlines()[:1]}",
-                  file=out)
+            msg = ((r.get("message") or "").splitlines() or [""])[0]
+            print(f"{r.get('time')}  {r.get('where')}: {r.get('error')}: {msg}", file=out)
         print(f"Folder: {crash_dir()}", file=out)
         return 0
     r = report_for()
@@ -234,8 +291,9 @@ def main(argv=None, out=None, inp=None):
     print("", file=out)
     print(r["title"], file=out)
     print(r["body"], file=out)
-    print("Nothing has been sent. GitHub shows this text first; you can edit it and you press Submit yourself "
-          "(a free GitHub account is needed).", file=out)
+    print("Nothing has been sent yet. Opening the link passes this text to GitHub so it can show it to you; there you "
+          "can edit it, and it becomes a public issue only when you press Submit (a free GitHub account is needed).",
+          file=out)
     print(f"Link: {r['url']}", file=out)
     if a.print:
         return 0

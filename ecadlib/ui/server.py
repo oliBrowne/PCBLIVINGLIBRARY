@@ -20,7 +20,9 @@ STATIC = Path(__file__).with_name("static")
 def _save_bug(where, e):
     """An error ecadlib did not expect: saved on this computer for `ecadlib report-bug` / Report a bug."""
     from .. import bugreport
-    bugreport.record(where, e)
+    from ..cliutil import friendly
+    if friendly(e) is None:                    # a wrong path or a missing package is not a bug
+        bugreport.record(where, e)
 MAX_UPLOAD = 20 * 1024 * 1024
 MAX_JSON = 2 * 1024 * 1024                 # JSON bodies: no 20 MB parse
 EXPECTED = (ValueError, KeyError, FileExistsError, json.JSONDecodeError, PermissionError)   # user errors: no traceback

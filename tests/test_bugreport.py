@@ -197,3 +197,104 @@ def test_altium_and_kicad_menu_bugs_are_saved_and_say_how_to_report(tmp_path, mo
     B.clear()
     AM._error(ValueError("a wrong MPN"))                              # the user's mistake, not a bug
     assert B.latest() is None
+
+
+@lite
+def test_scrub_is_fast_on_huge_messages(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path)
+    import time
+    t0 = time.time()
+    B.scrub("x" * 200000)
+    B.record("triage", _boom("y" * 200000))
+    assert time.time() - t0 < 2, time.time() - t0
+
+
+@lite
+def test_scrub_key_value_forms(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path)
+    for s in ('{"api_key": "abcd1234efgh"}', "{'token': 'abcd1234efgh'}", "api_key = 'abcd1234efgh'",
+              'x token="abcd1234efgh"', "client_secret: 'abcd1234efgh'", "apikey=abcd1234efgh&x",
+              "password=abcd1234efgh", "refresh_token=abcd1234efgh", "x-api-key: abcd1234efgh",
+              "X-Mouser-Key: abcd1234efgh", "https://jdoe:abcd1234efgh@example.com/x",
+              "id 3fa85f64-5717-4562-b3fc-2c963f66afa6", "hex 0123456789abcdef0123456789abcdef"):
+        out = B.scrub(s)
+        assert "abcd1234efgh" not in out and "3fa85f64" not in out and "0123456789abcdef0" not in out, (s, out)
+    assert "jdoe" not in B.scrub("https://jdoe:abcd1234efgh@example.com/x")
+
+
+@lite
+def test_scrub_parts_of_a_stored_json_key_and_url_encoded_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path)
+    from ecadlib import userconfig
+    userconfig.set_key("NEXAR_SIGNIN", json.dumps({"refresh": "plainrefreshvalue", "n": 1}))
+    userconfig.set_key("MOUSER_API_KEY", "a+b/c=dvalue99")
+    out = B.scrub("r plainrefreshvalue u a%2Bb%2Fc%3Ddvalue99")
+    assert "plainrefreshvalue" not in out and "dvalue99" not in out, out
+
+
+@lite
+def test_scrub_keeps_ordinary_env_values_and_hides_org_and_computer(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path)
+    monkeypatch.setenv("PIP_KEYRING_PROVIDER", "subprocess")
+    monkeypatch.setattr(B.platform, "node", lambda: "DESKTOP-5JE5S2P")
+    out = B.scrub(r"subprocess.py C:\Users\jane\OneDrive - Acme Corp\x.csv on DESKTOP-5JE5S2P")
+    assert "subprocess.py" in out and "Acme" not in out and "5JE5S2P" not in out, out
+
+
+@lite
+def test_long_reports_keep_the_error_line_and_closed_fences(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path)
+    def deep(n):
+        if n == 0:
+            raise RuntimeError("Ω" * 3000)
+        deep(n - 1)
+    try:
+        deep(60)
+    except RuntimeError as e:
+        B.record("librarian", e)
+    r = B.report_for()
+    body = parse_qs(urlparse(r["url"]).query)["body"][0]
+    assert len(r["url"]) <= B.MAX_URL and "RuntimeError: Ω" in body and body.count("```") == 2, body[-300:]
+    assert body.count("File ") >= 5                                   # the newest frames are kept, not all dropped
+
+
+@lite
+def test_saved_files_are_private_and_repeats_are_not_saved_twice(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path)
+    for _ in range(3):
+        B.record("web UI: /api/status", _boom("same"))
+    files = list((tmp_path / "crashes").glob("*.json"))
+    assert len(files) == 1
+    if os.name != "nt":
+        assert files[0].stat().st_mode & 0o077 == 0
+    (tmp_path / "crashes" / "9999999999999999999.json").write_text("[]")   # a damaged file is skipped
+    assert B.latest()["message"].endswith("same")
+
+
+@lite
+def test_debug_run_still_saves_the_bug(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path)
+    from ecadlib import cli
+    def boom(args):
+        raise RuntimeError("debug crash")
+    import types, sys as _sys
+    mod = types.ModuleType("ecadlib._crashy")
+    mod.main = boom
+    monkeypatch.setattr(cli, "COMMANDS", dict(cli.COMMANDS, crashy=("ecadlib._crashy", "x")))
+    _sys.modules["ecadlib._crashy"] = mod
+    try:
+        cli.main(["crashy", "--debug"])
+    except RuntimeError:
+        pass
+    finally:
+        _sys.modules.pop("ecadlib._crashy", None)
+    assert B.latest() and B.latest()["message"] == "debug crash"
+
+
+@lite
+def test_list_prints_the_message_not_a_list(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECADLIB_HOME", tmp_path)
+    B.record("triage", _boom("one"))
+    out = io.StringIO()
+    B.main(["--list"], out=out)
+    assert "RuntimeError: one" in out.getvalue() and "['" not in out.getvalue()

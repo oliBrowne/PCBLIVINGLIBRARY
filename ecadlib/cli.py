@@ -246,6 +246,10 @@ def _main(argv=None):
         if isinstance(e, OSError) and _pipe_gone(e):         # the reader went away (`| head`): stop quietly
             return _quiet_stdout()
         if debug:
+            from .cliutil import friendly
+            if friendly(e) is None:                          # a bug: saved for `ecadlib report-bug` here too
+                from . import bugreport
+                bugreport.record(argv[0], e)
             raise
         return report(argv[0], e, sys.stderr)
 
