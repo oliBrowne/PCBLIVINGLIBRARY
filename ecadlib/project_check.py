@@ -614,7 +614,8 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
     names = {}
     for fpid, d in variants:
         names.setdefault(fpid, []).append(d)
-    labels = _unique({fpid: (fpid.partition(":")[0], _fp_file_stem(fpid.rpartition(":")[2])) for fpid in names})
+    labels = {k: _fp_file_stem(v) for k, v in      # Nick_Name takes the board's nickname too: cleaned again
+              _unique({fpid: (fpid.partition(":")[0], _fp_file_stem(fpid.rpartition(":")[2])) for fpid in names}).items()}
     fp_new = {}
     for fpid, ds in names.items():
         for n, d in enumerate(ds):              # the same footprint id placed in two different versions: two parts

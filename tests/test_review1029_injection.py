@@ -102,6 +102,26 @@ def test_freeze_keeps_board_footprint_names_inside_the_pretty_folder(tmp_path):
     assert not (tmp_path / "work" / "ESCAPED.kicad_mod").exists()
 
 
+@lite
+def test_freeze_keeps_a_shared_name_with_a_hostile_nickname_inside_the_pretty_folder(tmp_path):
+    from pathlib import Path
+    from ecadlib import project_check as PC
+    pcb = ('(kicad_pcb (version 20240108) (generator "pcbnew")\n'
+           '  (footprint "../../../E:A" (layer "F.Cu") (at 10 10)\n'
+           '    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu")))\n'
+           '  (footprint "Lib:A" (layer "F.Cu") (at 20 10)\n'
+           '    (pad "1" smd rect (at -2 0) (size 1 1) (layers "F.Cu"))))\n')
+    proj = tmp_path / "work" / "received" / "proj"
+    proj.mkdir(parents=True)
+    (proj / "board.kicad_pro").write_text("{}")
+    (proj / "board.kicad_pcb").write_text(pcb)
+    res = PC.freeze_kicad(proj / "board.kicad_pro", rewrite=False)
+    mods = [Path(f) for f in res["files"] if str(f).endswith(".kicad_mod")]
+    assert len(mods) == 2 and len({f.name for f in mods}) == 2
+    for f in mods:
+        assert f.resolve().parent == (proj / "board-frozen.pretty").resolve(), f
+
+
 _FP = ('(footprint "{n}" (layer "F.Cu")\n  (pad "1" smd rect (at -{x} 0) (size 1 1) (layers "F.Cu"))\n'
        '  (pad "2" smd rect (at {x} 0) (size 1 1) (layers "F.Cu")))')
 
