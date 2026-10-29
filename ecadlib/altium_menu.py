@@ -1618,7 +1618,10 @@ def _open(path_or_url, opener=None):
 def open_file(cfg, path, opener=None):
     """Open a report the dialog offers (in the browser / its default program). Only files under the workspace or the
     library folder: a request.ini is plain text anyone can write, so it never names an arbitrary program to start."""
-    p = Path(path)
+    try:
+        p = Path(ansi_path(path))              # the dialog wrote it back in the ANSI code page ('?' for what it lacks)
+    except ValueError:
+        p = Path(path)
     roots = [Path(cfg["workspace"]).resolve(), Path(cfg["library"]).resolve()]
     try:
         rp = p.resolve()

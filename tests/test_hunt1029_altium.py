@@ -135,3 +135,23 @@ def test_release_anyway_for_a_bom_named_outside_the_ansi_code_page():
         res = AM.release_part(cfg, {"bom": "reports/project_?????_0123abcd.csv", "part": "XYZ123", "mpn": "XYZ123",
                                     "reason": "checked", "release_key": "x"})
         assert "not in the library plan" not in res["message"], res
+
+
+def test_open_report_whose_path_the_dialog_wrote_with_question_marks():
+    """The BOM check's "Open the full report" sends the report path back through request.ini (ANSI code page): the
+    report of a project named in Cyrillic arrived as reports/triage_project_?????_<hash>_altium.html and the job said
+    it is "not a report in the ecadlib workspace"."""
+    with tempfile.TemporaryDirectory() as d:
+        ws = Path(d) / "ws"
+        rep = ws / "reports" / "triage_project_Плата_0123abcd_altium.html"
+        rep.parent.mkdir(parents=True)
+        rep.write_text("<html></html>", encoding="utf-8")
+        cfg = {"workspace": ws, "library": Path(d) / "lib"}
+        opened = []
+        res = AM.open_file(cfg, str(ws / "reports" / "triage_project_?????_0123abcd_altium.html"),
+                           opener=lambda p: opened.append(p) or True)
+        assert res["status"] == "ok" and opened, res
+        # still only under the workspace or the library folder
+        outside = Path(d) / "xЖ.html"
+        outside.write_text("x", encoding="utf-8")
+        assert AM.open_file(cfg, str(Path(d) / "x?.html"), opener=lambda p: opened.append(p) or True)["status"] == "error"
