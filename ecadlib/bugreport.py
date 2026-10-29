@@ -177,8 +177,8 @@ def saved():
             r = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(r, dict):
-            out.append(r)
+        if isinstance(r, dict):                   # a damaged or hand-edited file: text fields as text, never a crash
+            out.append({k: v if isinstance(v, str) else "" if v is None else str(v) for k, v in r.items()})
     return out
 
 
