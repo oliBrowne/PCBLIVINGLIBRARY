@@ -1313,14 +1313,15 @@ def main(argv=None):
     ap.add_argument("--rules", help="library rules file; its [bom] columns name your BOM headers (default: ecadlib.toml found from here)")
     ap.add_argument("--json", action="store_true", help="print the result as JSON (bom, lines, mapping, counts, rows, reports)")
     a = ap.parse_args(argv)
-    from .firstrun import default_out
+    from .firstrun import default_out, rules_start
+    given_out = bool(a.out)
     a.out = a.out or default_out("triage", a.bom)
     if Path(a.out).suffix.lower() in (".md", ".csv", ".json"):         # -o out/t.md: the stem out/t, as before
         a.out = str(Path(a.out).with_suffix(""))
 
     from . import rules as RU
     from . import plugins as PL
-    rules = RU.load(a.rules, start=Path(a.out).parent)
+    rules = RU.load(a.rules, start=rules_start(str(Path(a.out).parent), given_out))
     from .firstrun import bom_hint
     try:
         lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)

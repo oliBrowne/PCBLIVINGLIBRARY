@@ -30,9 +30,7 @@ def key_status(rules=None, environ=None):
     environ = os.environ if environ is None else environ
     out = []
     for name, env, why in key_services(rules):
-        ok = all(UC.secret(e, environ) for e in env)
-        if name == "altium365" and not ok and UC.secret("NEXAR_CLIENT_ID", environ) and UC.secret("NEXAR_CLIENT_SECRET", environ):
-            env, ok = ["NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET"], True
+        ok = all(UC.secret(e, environ) for e in env)   # Altium 365: NEXAR_TOKEN / the sign-in, not a stored app
         out.append((" + ".join(env), ok, why))
     return out
 
@@ -230,8 +228,43 @@ def default_out(kind, bom, start="."):
     ws = out_workspace(start)
     stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
     if kind == "librarian":
-        return str(ws / "librarian" / stem) if ws else "out/librarian"
+        if not ws:
+            return "out/librarian"
+        d = ws / "librarian" / stem
+        other, mine = _plan_bom_path(d), _resolved(bom)
+        if other and mine and other != mine:      # another BOM with this file name (projA/bom.csv, projB/bom.csv)
+            import hashlib                        # has this folder: its own one, never a silent replace of that plan
+            d = d.with_name(f"{stem}_{hashlib.sha1(os.fsencode(str(mine))).hexdigest()[:8]}")
+        return str(d)
     return str(ws / "reports" / f"triage_{stem}") if ws else "out/triage"
+
+
+def _resolved(p):
+    try:
+        return Path(str(p)).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _plan_bom_path(out):
+    """The BOM file whose plan is in folder `out` (its library.lock.json, the path relative to `out`), or None."""
+    try:
+        f = json.loads((Path(out) / "library.lock.json").read_text(encoding="utf-8"))["bom"]["file"]
+        return _resolved(Path(out) / str(f)) if f else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def rules_start(out, given_out):
+    """Where `librarian` / `triage` look for ecadlib.toml: from -o when the person gave one (as before); when -o was
+    defaulted into the workspace (default_out), the current folder's file still wins, as it did when the default was
+    ./out/..., and the workspace's own file is used only when there is none here."""
+    if given_out:
+        return out
+    try:
+        return "." if RU.find(".") else out
+    except Exception:
+        return out
 
 
 def _rel_to(p, rules_file):
@@ -267,6 +300,8 @@ def config_defaults(cmd, argv, environ=None, start="."):
             vals = [str(_rel_to(v, f)) for v in vals]
         elif flag == "--workspace":
             vals, where = _settings_workspace(start, environ), "the setup page (settings.json)"
+        elif f is None:                         # no rules file here: the library folders saved with the page's
+            vals, where = _settings_libs(start, environ), "the setup page (settings.json)"   # workspace
         if not vals:
             continue
         extra = [x for v in vals for x in (flag, v)]
@@ -291,6 +326,19 @@ def _settings_workspace(start=".", environ=None):
     except Exception:
         pass
     return []
+
+
+def _settings_libs(start=".", environ=None):
+    """The library folders saved on the setup page (settings.json), when its workspace is the one in use here
+    (_settings_workspace) and they are folders; else []."""
+    if not _settings_workspace(start, environ):
+        return []
+    try:
+        libs = UC.load_settings(environ).get("libs")
+        return [str(Path(x).expanduser()) for x in libs if isinstance(x, str) and x.strip()
+                and Path(x).expanduser().is_dir()] if isinstance(libs, list) else []
+    except Exception:
+        return []
 
 
 # ------------------------------------------------------------------ checks before a command runs

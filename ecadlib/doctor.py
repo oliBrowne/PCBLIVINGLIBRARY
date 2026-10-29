@@ -189,9 +189,15 @@ def check_keys(rules=None, environ=None):
     out, lookups = [], []
     for name, env, why in key_services(rules):
         ok = all(UC.secret(e, environ) for e in env)
-        if name == "altium365" and not ok:
-            ok = bool(UC.secret("NEXAR_CLIENT_ID", environ) and UC.secret("NEXAR_CLIENT_SECRET", environ))
-            env = env if not ok else ["NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET"]
+        if name == "altium365" and not ok:             # Altium 365 commands use only NEXAR_TOKEN / the sign-in: a
+            from . import nexar_signin as NS           # stored Nexar app alone is not a token (signed out, expired)
+            app = bool(UC.secret("NEXAR_CLIENT_ID", environ) and UC.secret("NEXAR_CLIENT_SECRET", environ))
+            if _configured(name, rules):
+                out.append(_c(f"key {name}", "WARN", "NEXAR_TOKEN not set and not signed in" + (
+                    " (your Nexar app is stored)" if app else "") + f" ({why} skipped)", NS.hint()))
+            else:
+                out.append(_c(f"key {name}", "OK", f"NEXAR_TOKEN not set; only needed for {why}"))
+            continue
         if why.endswith("part lookups"):                 # optional extra sources: one line for all of them
             lookups.append((name, env, ok))
             continue
