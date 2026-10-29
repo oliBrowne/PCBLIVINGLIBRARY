@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated 2026-10-27. What ecadlib is for, who it is for and how success is measured are in
+Last updated 2026-10-29. What ecadlib is for, who it is for and how success is measured are in
 [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md). Every planned item below has an issue, and every milestone is a
 [GitHub milestone](https://github.com/oliBrowne/PCBLIVINGLIBRARY/milestones) with the same due date.
 
@@ -33,7 +33,7 @@ table is kept as the record of what was merged.
 | 2026-10-17 | #35 | Official part APIs first with unofficial endpoints fenced off, weekly sources canary, and Altium rebuilding every library itself (8 of 8 test libraries, 0 differences on AD26) |
 | 2026-10-17 | #61-#80 (issues #36-#40) | **v0.3.1** released: Build libraries in the Altium menu, fab-layer designator in Altium, multi-part symbols, keep-outs and bottom-side pads checked in AD26, and the fixes from the overnight system test |
 | 2026-10-17 to 19 | #81-#125 | Released in v0.4.0: change control ([#105](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/105), `ecadlib part`), time from BOM to library and the review rate in `ecadlib status` (P7, P8), the cost shown before every AI step (P12), docs/START_HERE.md (P14), the first live benchmark run (docs/benchmark.md), `ecadlib mcp --http`, and the 2026-10-19 cut and park |
-| 2026-10-19 to 27 | #126-#199 | **v0.4.0** released: the release gate, Nexar sign-in, the live benchmark at 87 of 110 parts fully right with none built wrong, and the scope cut to Altium and KiCad. The milestones below were renumbered: the BOM-to-Altium 365 flow is now v0.5.0 |
+| 2026-10-19 to 28 | #126-#204 | **v0.4.0** released on 2026-10-29: the release gate, Nexar sign-in, the live benchmark at 87 of 110 parts fully right with none built wrong, and the scope cut to Altium and KiCad. The milestones below were renumbered: the BOM-to-Altium 365 flow is now v0.5.0 |
 
 ## Next milestones
 
@@ -44,11 +44,11 @@ hand.
 
 | Item | Issue | Label |
 |---|---|---|
-| P5. Publish an accuracy benchmark on real parts | [#42](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/42) | docs, feature |
-| P6. Real-BOM trials with 3 to 5 Altium users | [#43](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/43) | docs |
-| P7. Measure time from BOM to released library (on `main`) | [#44](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/44) | feature |
-| P8. Report the review and approval rate (on `main`) | [#45](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/45) | feature |
-| P9. Try house style on a real company library | [#46](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/46) | feature |
+| P5. Publish an accuracy benchmark on real parts (shipped in v0.4.0: 87 of 110 fully right, none built wrong; the 97% pad-match exit criterion is not met yet) | [#42](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/42) | docs, feature |
+| P6. Real-BOM trials with 3 to 5 Altium users (**skipped for now**: no outside users to ask yet) | [#43](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/43) | docs |
+| P7. Measure time from BOM to released library (shipped in v0.4.0) | [#44](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/44) | feature |
+| P8. Report the review and approval rate (shipped in v0.4.0) | [#45](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/45) | feature |
+| P9. Try house style on a real company library (waits for a real company library) | [#46](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/46) | feature |
 | P10. Release a full BOM into a real Altium 365 workspace | [#47](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/47) | feature |
 
 **Exit criteria.** A live benchmark of 100+ parts is published with a pad-match rate of 97% or better against
@@ -63,10 +63,10 @@ from us.
 
 | Item | Issue | Label |
 |---|---|---|
-| P11. Sign the Windows installer | [#48](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/48) | feature |
-| P12. Show the cost before every AI step in Altium, KiCad and the web UI (on `main`; not yet tried in Altium or KiCad) | [#49](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/49) | feature |
+| P11. Sign the Windows installer (**on hold** until the maintainer picks it up again) | [#48](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/48) | feature |
+| P12. Show the cost before every AI step in Altium, KiCad and the web UI (shipped in v0.4.0; not yet tried in Altium or KiCad) | [#49](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/49) | feature |
 | P13. Decide on the experimental Fusion / EAGLE and EasyEDA Pro exports: **removed** (2026-10-18) | [#50](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/50) | docs |
-| P14. One-page guide from installer to a BOM in Altium 365 (on `main`: docs/START_HERE.md) | [#51](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/51) | docs |
+| P14. One-page guide from installer to a BOM in Altium 365 (shipped in v0.4.0: docs/START_HERE.md) | [#51](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/51) | docs |
 
 **Exit criteria.** The installer is signed and installs without a SmartScreen warning; every place that starts a
 model call shows its estimated cost first; the experimental exports are kept or removed with the reason recorded;
