@@ -318,7 +318,7 @@ def test_export_parts_formats():
     assert all(list(r) == PE.COLUMNS for r in rs)
     t = rs[3]
     assert (t["Category"], t["Manufacturer Part Number"], t["KiCad Symbol"], t["Release Check"]) == \
-        ("ICs", "TPS1234DSGR", "lib:TPS1234DSGR", "allowed"), t      # its near-name symbol: released anyway (--allow)
+        ("ICs", "TPS1234DSGR", "lib:TPS1234DSGR", "pass"), t         # TPS1234DSG + R (reel): the same part, no review
     assert rs[2]["Release Check"] == "pass", rs[2]                   # RES-0603-10k passes on its own
     assert t["Other Parameters"]["Temperature Range"] == "-40..125 C"
     assert len(PE.rows(plan, "lib", include_held=True)) == 6

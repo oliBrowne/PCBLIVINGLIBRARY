@@ -38,8 +38,6 @@ SYMS = {"Device:R": ksym("R", ["1", "2"], "R", desc="Resistor"),
         "Device:LED": ksym("LED", ["1", "2"], "D", desc="Light emitting diode"),
         "Regulator_Test:TPS1234DSG": ksym("TPS1234DSG", [str(i) for i in range(1, 9)], footprint="Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
                                           datasheet="https://example.com/tps1234.pdf", desc="Test regulator"),
-        "Timer_Test:NE555D": ksym("NE555D", [str(i) for i in range(1, 9)], footprint="Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
-                                  datasheet="http://www.ti.com/lit/ds/symlink/ne555.pdf", desc="Precision Timers, 555 compatible"),
         "Connector_Generic:Conn_01x04": ksym("Conn_01x04", ["1", "2", "3", "4"], "J")}
 FOOTS = {"Resistor_SMD:R_0603_1608Metric": (FPS / "R_0603_1608Metric.kicad_mod").read_text(),
          "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm": (FPS / "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod").read_text(),
@@ -284,7 +282,10 @@ def test_reel_suffix_and_maker_from_datasheet_link():
     or another maker's part: held to check, and no maker is taken from its link."""
     bom = ("Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description,Datasheet\n"
            "U1,1,NE555DR,,,NE555DR,,,\nU2,1,NE555DQ,,,NE555DQ,,,\n")
-    with tempfile.TemporaryDirectory() as d:
+    ne555 = ksym("NE555D", [str(i) for i in range(1, 9)], footprint="Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+                 datasheet="http://www.ti.com/lit/ds/symlink/ne555.pdf", desc="Precision Timers, 555 compatible")
+    # only here: other tests (EasyEDA C7593, the house-rule layout) take NE555DR from EasyEDA, not this symbol
+    with tempfile.TemporaryDirectory() as d, mock.patch.dict(SYMS, {"Timer_Test:NE555D": ne555}):
         items, _ = run(d, bom=bom)
         ne = items["NE555DR"]
         par = {p["name"]: p["value"] for p in ne["parameters"]}
