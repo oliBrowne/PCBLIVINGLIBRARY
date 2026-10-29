@@ -21,32 +21,12 @@ import argparse, datetime, json, re, subprocess, sys
 from pathlib import Path
 
 from .. import footprint_bench as FB, kicad_import as K, sexpr
+from ..providers import MAKER_DOMAINS as MAKERS, maker_from_url as maker
 
 # family -> how many cases to keep; classify() maps a KiCad footprint to one of these
 QUOTA = {"chip": 36, "sot": 40, "soic": 30, "tssop": 30, "qfn": 40, "qfp": 25, "bga": 25, "diode": 25, "power": 15,
          "tht": 30, "connector": 35}
 PER_FOOTPRINT = 2
-MAKERS = {"st.com": "STMicroelectronics", "ti.com": "Texas Instruments", "microchip.com": "Microchip", "analog.com": "Analog Devices",
-          "nxp.com": "NXP", "onsemi.com": "onsemi", "vishay.com": "Vishay", "infineon.com": "Infineon", "diodes.com": "Diodes Inc.",
-          "nexperia.com": "Nexperia", "maximintegrated.com": "Maxim Integrated", "allegromicro.com": "Allegro MicroSystems",
-          "littelfuse.com": "Littelfuse", "power.com": "Power Integrations", "powerint.com": "Power Integrations",
-          "silabs.com": "Silicon Labs", "murata.com": "Murata", "wolfspeed.com": "Wolfspeed", "skyworksinc.com": "Skyworks",
-          "semicon-storage.com": "Toshiba", "toshiba.com": "Toshiba", "rohm.com": "ROHM", "broadcom.com": "Broadcom",
-          "kemet.com": "KEMET", "diotec.com": "Diotec", "cypress.com": "Cypress", "renesas.com": "Renesas", "akm.com": "AKM",
-          "bourns.com": "Bourns", "issi.com": "ISSI", "wch-ic.com": "WCH", "microsemi.com": "Microsemi", "osram-os.com": "ams OSRAM",
-          "espressif.com": "Espressif", "irf.com": "Infineon (IR)", "latticesemi.com": "Lattice", "ftdichip.com": "FTDI",
-          "ams.com": "ams OSRAM", "sitime.com": "SiTime", "xilinx.com": "AMD Xilinx", "altera.com": "Intel (Altera)",
-          "intersil.com": "Renesas (Intersil)", "nordicsemi.com": "Nordic Semiconductor", "linear.com": "Analog Devices",
-          "fairchildsemi.com": "onsemi (Fairchild)", "ixys.com": "IXYS", "mps.com": "Monolithic Power Systems",
-          "monolithicpower.com": "Monolithic Power Systems", "richtek.com": "Richtek", "semtech.com": "Semtech",
-          "torexsemi.com": "Torex", "ablic.com": "ABLIC", "sii-ic.com": "ABLIC", "jst-mfg.com": "JST", "molex.com": "Molex",
-          "hirose.com": "Hirose", "we-online.com": "Wurth Elektronik", "te.com": "TE Connectivity", "kingbright.com": "Kingbright",
-          "kingbrightusa.com": "Kingbright", "liteon.com": "Lite-On", "panasonic.com": "Panasonic", "lcsc.com": None,
-          "krhro.com": "HRO", "samtec.com": "Samtec", "amphenol.com": "Amphenol", "cui.com": "CUI", "sameskydevices.com": "Same Sky",
-          "melexis.com": "Melexis", "zilog.com": "Zilog", "atmel.com": "Microchip (Atmel)",
-          "national.com": "Texas Instruments (National)", "awinic.com": "Awinic", "gigadevice.com": "GigaDevice",
-          "winbond.com": "Winbond", "neutrik.com": "Neutrik", "cuidevices.com": "CUI Devices",
-          "switchcraft.com": "Switchcraft", "lumberg.com": "Lumberg", "amphenolrf.com": "Amphenol RF", "kycon.com": "Kycon", "macronix.com": "Macronix", "cree.com": "Wolfspeed (Cree)", "ween-semi.com": "WeEn"}
 MPN_RE = re.compile(r"[A-Z0-9][A-Z0-9.+/-]{3,}")
 WILDCARD = re.compile(r"(?<![0-9])x|x(?![0-9])")
 CHIP_RE = re.compile(r"(R|C|L|LED)_(\d{4})_(\d{4})Metric")
@@ -132,18 +112,6 @@ def short_package(fp):
         return ""
     toks = re.sub(r"^(D|LED)_", "", name).split("_")
     return next((t for t in toks if re.search(r"\d", t)), toks[-1])
-
-
-def maker(url):
-    m = re.match(r"https?://([^/:]+)", url or "")
-    if not m:
-        return None
-    parts = m.group(1).lower().split(".")
-    for k in range(len(parts) - 1):
-        d = ".".join(parts[k:])
-        if d in MAKERS:
-            return MAKERS[d]
-    return None
 
 
 def pins_of(chain):

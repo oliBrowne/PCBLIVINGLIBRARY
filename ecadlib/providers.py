@@ -43,6 +43,43 @@ def clean_maker(name):
     return short or name
 
 
+# the maker a datasheet link names by its domain (www.ti.com/lit/... -> Texas Instruments); None: a shop or a mirror
+MAKER_DOMAINS = {"st.com": "STMicroelectronics", "ti.com": "Texas Instruments", "microchip.com": "Microchip", "analog.com": "Analog Devices",
+                 "nxp.com": "NXP", "onsemi.com": "onsemi", "vishay.com": "Vishay", "infineon.com": "Infineon", "diodes.com": "Diodes Inc.",
+                 "nexperia.com": "Nexperia", "maximintegrated.com": "Maxim Integrated", "allegromicro.com": "Allegro MicroSystems",
+                 "littelfuse.com": "Littelfuse", "power.com": "Power Integrations", "powerint.com": "Power Integrations",
+                 "silabs.com": "Silicon Labs", "murata.com": "Murata", "wolfspeed.com": "Wolfspeed", "skyworksinc.com": "Skyworks",
+                 "semicon-storage.com": "Toshiba", "toshiba.com": "Toshiba", "rohm.com": "ROHM", "broadcom.com": "Broadcom",
+                 "kemet.com": "KEMET", "diotec.com": "Diotec", "cypress.com": "Cypress", "renesas.com": "Renesas", "akm.com": "AKM",
+                 "bourns.com": "Bourns", "issi.com": "ISSI", "wch-ic.com": "WCH", "microsemi.com": "Microsemi", "osram-os.com": "ams OSRAM",
+                 "espressif.com": "Espressif", "irf.com": "Infineon (IR)", "latticesemi.com": "Lattice", "ftdichip.com": "FTDI",
+                 "ams.com": "ams OSRAM", "sitime.com": "SiTime", "xilinx.com": "AMD Xilinx", "altera.com": "Intel (Altera)",
+                 "intersil.com": "Renesas (Intersil)", "nordicsemi.com": "Nordic Semiconductor", "linear.com": "Analog Devices",
+                 "fairchildsemi.com": "onsemi (Fairchild)", "ixys.com": "IXYS", "mps.com": "Monolithic Power Systems",
+                 "monolithicpower.com": "Monolithic Power Systems", "richtek.com": "Richtek", "semtech.com": "Semtech",
+                 "torexsemi.com": "Torex", "ablic.com": "ABLIC", "sii-ic.com": "ABLIC", "jst-mfg.com": "JST", "molex.com": "Molex",
+                 "hirose.com": "Hirose", "we-online.com": "Wurth Elektronik", "te.com": "TE Connectivity", "kingbright.com": "Kingbright",
+                 "kingbrightusa.com": "Kingbright", "liteon.com": "Lite-On", "panasonic.com": "Panasonic", "lcsc.com": None,
+                 "krhro.com": "HRO", "samtec.com": "Samtec", "amphenol.com": "Amphenol", "cui.com": "CUI", "sameskydevices.com": "Same Sky",
+                 "melexis.com": "Melexis", "zilog.com": "Zilog", "atmel.com": "Microchip (Atmel)",
+                 "national.com": "Texas Instruments (National)", "awinic.com": "Awinic", "gigadevice.com": "GigaDevice",
+                 "winbond.com": "Winbond", "neutrik.com": "Neutrik", "cuidevices.com": "CUI Devices",
+                 "switchcraft.com": "Switchcraft", "lumberg.com": "Lumberg", "amphenolrf.com": "Amphenol RF", "kycon.com": "Kycon", "macronix.com": "Macronix", "cree.com": "Wolfspeed (Cree)", "ween-semi.com": "WeEn"}
+
+
+def maker_from_url(url):
+    """The maker a link's domain names (MAKER_DOMAINS, a subdomain too: www.ti.com), or None."""
+    m = re.match(r"https?://([^/:]+)", url or "")
+    if not m:
+        return None
+    parts = m.group(1).lower().split(".")
+    for k in range(len(parts) - 1):
+        d = ".".join(parts[k:])
+        if d in MAKER_DOMAINS:
+            return MAKER_DOMAINS[d]
+    return None
+
+
 # words that say what kind of company it is, not which one ("Rohm Semiconductor" is Rohm, "Vishay Intertechnology" Vishay)
 _MAKER_WORDS = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "LTD", "LIMITED", "LLC", "GMBH", "AG",
                 "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE", "GROUP", "HOLDINGS", "INTERNATIONAL",
