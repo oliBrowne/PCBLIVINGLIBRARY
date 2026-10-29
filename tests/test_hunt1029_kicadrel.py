@@ -144,6 +144,8 @@ def test_two_sources_naming_two_makers_fill_none():
     assert "the maker is not filled" in rows[0]["notes"], rows[0]["notes"]
     rows = T.triage([dict(line)], KiCadIndex([]), [_Src("RealMaker", ["RealMaker"]), _Src("CloneCo", ["CloneCo"])], None)
     assert rows[0]["src_manufacturer"] == "", rows[0]
+    # both are listed for the librarian (#211: a KiCad symbol's datasheet-link maker fills only if it is one of them)
+    assert rows[0]["src_makers"].split("; ") == ["RealMaker", "CloneCo"], rows[0]["src_makers"]
     # the same company under two spellings is one maker
     rows = T.triage([dict(line)], KiCadIndex([]), [P.JLCPCBSearch(TP.HTTP({}, {"ABC1234": _jlc("Murata")})),
                                                    _Src("Murata Electronics", ["Murata Electronics"])], None)

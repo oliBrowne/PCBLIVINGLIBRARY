@@ -53,11 +53,14 @@ def test_export_altium_dblib_with_every_part_held_answers_instead_of_errno(tmp_p
 def _ws_with_held_library(tmp_path):
     from ecadlib.app import Workspace
     ws = Workspace(tmp_path / "w", offline=True)
+    # held by a house rule (an empty Manufacturer holds when [release] manufacturer = "hold"): a missing datasheet
+    # link alone no longer holds a part (#211)
+    (ws.root / "ecadlib.toml").write_text('[release]\nmanufacturer = "hold"\n', encoding="utf-8")
     (ws.root / "uploads" / "b.csv").write_text("Designator,Qty,Value,Footprint,Manufacturer,MPN\n"
-                                               "R1,1,10k,R_0603_1608Metric,UNI-ROYAL,0603WAF1002T5E\n", encoding="utf-8")
+                                               "R1,1,10k,R_0603_1608Metric,,0603WAF1002T5E\n", encoding="utf-8")
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         r = ws.librarian_run("uploads/b.csv", sources=["standard"], ai=False, offline=True)
-    assert r["held"] >= 1 and not r.get("ready"), r       # no datasheet link offline: held
+    assert r["held"] >= 1 and not r.get("ready"), r
     return ws
 
 

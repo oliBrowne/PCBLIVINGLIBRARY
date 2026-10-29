@@ -504,6 +504,15 @@ Begin
     Run('fill');
 End;
 
+Function OneLine(S : String; Room : Integer) : String;
+{ The status line holds one line (about 54 characters at 7 px each in 380 px): longer text ends in '...' instead of
+  being cut off mid-word by the label's edge. }
+Begin
+    Result := S;
+    If Length(S) > Room Then
+        Result := Copy(S, 1, Room - 3) + '...';
+End;
+
 Function Elapsed : String;
 { ' (12 s)' after the first few seconds, so a long step still shows the dialog is alive. }
 Begin
@@ -536,7 +545,7 @@ Begin
     For i := 1 To N Do
         Rows := Rows + #10 + Ini.ReadString('progress', 'row' + IntToStr(i), '');
     Ini.Free;
-    EcadlibDialog.Status.Caption := Said + Elapsed;
+    EcadlibDialog.Status.Caption := OneLine(Said, 46) + Elapsed;     { room for ' (123 s)' }
     Meter(Done, Count);
     If Rows <> Seen Then
     Begin
@@ -590,7 +599,7 @@ Begin
         Phase := 'install';
         Second := '';
         If Answer(Job, 'build') <> '' Then
-            EcadlibDialog.Status.Caption := 'Altium is building the library files, then installing them. Altium is busy until then.'
+            EcadlibDialog.Status.Caption := 'Altium is busy building and installing the library'
         Else
             EcadlibDialog.Status.Caption := 'Altium is installing the library again';
         Buttons('Installing...', '', True);

@@ -82,6 +82,24 @@ def drop_joined_tab(res, table_spec, st):
                         f"the symbol has no pin {tab} (check the pin table)")
     return dict(res, symbol=dict(res["symbol"], pins=[q for q in pins if str(q["num"]) != tab]))
 
+PACKING = ("TR", "G4", "E4")          # TI / NXP reel and lead-free codes after a package code (LM358DG4, TPS62162DSGR)
+
+
+def packing_suffix(mpn, nm, k, head=""):
+    """Is the rest of the MPN after a KiCad name (nm[:k], nm the normalised MPN; head: the MPN as written up to the
+    rest) only a packing code: the same part on a reel or lead-free? R / T after package letters that follow a digit
+    (NE555D + R, TPS62162DSG + R; never LM317 + T: TO-220, never ATmega8A-P + T: -P is PDIP-28, -PT TQFP-32), TR / G4 /
+    E4, and the suffixes the duplicate check strips (-TR, /TR, -REEL7, #PBF ...). Anything else can be another variant."""
+    from .dedupe import DEFAULT_SUFFIXES
+    rest = nm[k:]
+    pkg = re.search(r"(.?)[A-Za-z]+$", head or str(mpn)[:len(str(mpn)) - len(rest)])
+    if rest in ("R", "T") and pkg and pkg.group(1).isdigit():
+        return True
+    if rest in PACKING:
+        return True
+    return any(norm_mpn(re.sub(p, "", str(mpn), flags=re.I)) == nm[:k] for p in DEFAULT_SUFFIXES)
+
+
 class KiCadLibrary:
     """Name index of the official KiCad libraries (see the module docstring). Building it reads ~400 GitLab tree pages;
     each page is kept in the HTTP cache, so a build that stops (timeout, HTTP 429) resumes where it stopped. After a
@@ -258,9 +276,15 @@ class KiCadLibrary:
                (c == "." and str(mpn)[i - 1:i].isdigit() and str(mpn)[i + 1:i + 2].isdigit())]   # kept decimal point)
         for k in range(len(nm) - 1, max(5, int(len(nm) * 0.6)) - 1, -1):
             sep = raw[k] > raw[k - 1] + 1                             # a '-', '/', '(' ... right before the suffix
-            if nm[:k] in self._norm and (len(nm) - k <= 2 or (sep and len(nm) - k <= 6)):
+            if nm[:k] not in self._norm:
+                continue
+            pack = packing_suffix(mpn, nm, k, str(mpn)[:raw[k]])      # a known packing code may be longer (IRFP460 + PBF)
+            if pack or len(nm) - k <= 2 or (sep and len(nm) - k <= 6):
                 ref, more = self._pick(self._norm[nm[:k]])
-                return ref, f"name + ordering suffix '{str(mpn)[raw[k]:]}' (check the variant)" + more
+                suffix = str(mpn)[raw[k]:]
+                if pack:                                              # the same part on a reel / lead-free: nothing to check
+                    return ref, f"name + packing suffix '{suffix}' (tape and reel or lead-free, same part)" + more
+                return ref, f"name + ordering suffix '{suffix}' (check the variant)" + more
         return None, None
 
     @staticmethod
@@ -727,6 +751,16 @@ class Run:
             st["hint_fp"] = st["hint_fp"] or props.get("Footprint", "")
             if str(props.get("Datasheet", "")).startswith("http"):
                 st["found"].setdefault("datasheet", (props["Datasheet"], f"KiCad symbol {sym_ref}"))
+                maker = P.maker_from_url(props["Datasheet"])
+                # the symbol named after this very part (its MPN, or that plus a packing code) links its maker's
+                # datasheet: www.ti.com for NE555D. A wildcard or near name can be another maker's part: not used.
+                # The part search speaks first: its one maker fills it (below), and when it lists this MPN under
+                # several makers (clones), the link's maker is used only if it is one of them.
+                listed = [m for m in str(row.get("src_makers") or "").split("; ") if m]
+                if maker and own and (how.startswith("exact name") or how.startswith("name + packing suffix")) \
+                        and not row.get("src_manufacturer") and (not listed or any(P.same_maker(maker, m) for m in listed)):
+                    host = re.match(r"https?://([^/:]+)", props["Datasheet"]).group(1)
+                    st["found"].setdefault("manufacturer", (maker, f"the datasheet link of KiCad symbol {sym_ref} ({host})"))
             shared = kind in ("R", "C", "CP", "L")            # one generic symbol for every value: no MPN, no footprint link
             if props.get("Description") and own:     # a generic symbol's "Resistor" / "Light emitting diode" /
                 st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))  # "Generic
