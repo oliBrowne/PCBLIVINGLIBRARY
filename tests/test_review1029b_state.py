@@ -79,11 +79,30 @@ def test_upkeep_state_survives_an_interrupted_save(tmp_path, monkeypatch):
     def torn(self, data, *a, **k):              # half the bytes reach the disk, then the write fails
         real(self, data[:len(data) // 2], *a, **k)
         raise OSError(28, "No space left on device")
+    from ecadlib import fsutil
+
+    def full(fd):                               # the atomic path: the temp file's flush to disk fails
+        raise OSError(28, "No space left on device")
     monkeypatch.setattr(Path, "write_text", torn)
+    monkeypatch.setattr(fsutil.os, "fsync", full)
+    failed = False
     try:
         UK.save_state({"date": "2026-10-08T00:00:00+00:00", "new_changes": 2, "checks": []}, d)
     except OSError:
-        pass
+        failed = True
     monkeypatch.undo()
+    assert failed, "the save was meant to fail"
     last = json.loads((d / "upkeep_last.json").read_text(encoding="utf-8"))   # what the next run reads first
-    assert last["date"] in ("2026-10-01T00:00:00+00:00", "2026-10-08T00:00:00+00:00")
+    assert last["date"] == "2026-10-01T00:00:00+00:00", last
+
+
+@lite
+def test_stored_schema6_fingerprint_with_hide_yes_still_adopts():
+    """change_diff.diff_stored: schema 6 read (hide yes) as shown, so an unchanged hidden model looked changed after
+    the upgrade to schema 7 and adopt refused it."""
+    hidden = FP.of_kicad(kicad_mod=_MOD % "(hide yes)", part="R")
+    old = json.loads(json.dumps(hidden))
+    old["schema"] = 6
+    old["model"]["models"][0]["hide"] = False          # what schema 6 stored for this same file
+    assert CD.diff_stored(old, hidden) == []
+    assert CD.diff(old, hidden), "same schema: the hide flag is still compared"

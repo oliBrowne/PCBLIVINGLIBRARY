@@ -1029,6 +1029,10 @@ def diff_stored(old, new):
     compared."""
     if old.get("schema") != new.get("schema"):
         new = {k: (v if old.get(k) is not None else old.get(k)) for k, v in new.items()}
+        mo, mn = old.get("model") or {}, new.get("model") or {}
+        if (old.get("schema") or 0) < 7 and mo.get("tool") == mn.get("tool") == "kicad" and \
+                len(mo.get("models") or []) == len(mn.get("models") or []):   # before 7, (hide yes) read as shown
+            new = {**new, "model": {**mn, "models": [{**y, "hide": x.get("hide")} for x, y in zip(mo["models"], mn["models"])]}}
     return diff(old, new)
 
 
