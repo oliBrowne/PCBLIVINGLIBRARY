@@ -1159,6 +1159,11 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
         notes = [M.explain(w)["text"] for w in (it.get("release_check") or {}).get("warnings") or [] if str(w).startswith("height:")]
         if notes:                              # a 3D height is a note to check, not a hold ([release] height)
             res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
+        warns = [str(w) for w in (it.get("release_check") or {}).get("warnings") or []]
+        for start, note in (("no datasheet link", "It has no datasheet link yet: add one to check it against."),
+                            ("Manufacturer is empty", "Its Manufacturer is empty: fill it in before ordering.")):
+            if any(w.startswith(start) for w in warns):    # notes, not holds ([release] datasheet / manufacturer)
+                res["message"] += " " + note
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
         # the list holds every part added from the menu: another part's problem ("OTHER: ...") is not this one's

@@ -550,7 +550,11 @@ def check_item(item, base=".", rules=None):
     for k in rules["parameters"]["required"]:         # default: REQUIRED, then the datasheet link and Description
         if k == "Datasheet":
             if not any(_filled(par.get(x)) for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):
-                add("fields", "no datasheet link")
+                if (rules.get("release") or {}).get("datasheet", "warn") != "hold":
+                    warns.append("no datasheet link: add one so the part can be checked against its datasheet "
+                                 "([release] datasheet = \"hold\" holds the part instead)")
+                else:
+                    add("fields", "no datasheet link")
         elif k == "Description":
             if not str(item.get("description") or "").strip():
                 add("fields", "Description is empty")

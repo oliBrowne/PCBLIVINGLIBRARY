@@ -596,7 +596,17 @@ def build_request(source, part, package, model, effort, fallback=True, positions
 
 def parse(msg):
     """A second-read answer -> (critical numbers, [(num, name)]). Only the fields it needs are read, so any answer
-    carrying them (this schema's, or a full extraction) is accepted. Raises Unavailable."""
+    carrying them (this schema's, or a full extraction) is accepted. Raises Unavailable, also for an answer of the
+    wrong shape ("pins": 5): a broken second read is no reason to stop a whole BOM run."""
+    try:
+        return _parse(msg)
+    except Unavailable:
+        raise
+    except (TypeError, ValueError, AttributeError, KeyError) as e:
+        raise Unavailable(f"the second read has the wrong shape ({type(e).__name__}: {str(e)[:120]})")
+
+
+def _parse(msg):
     from . import datasheet as D
     if (msg or {}).get("stop_reason") in ("refusal", "max_tokens"):
         raise Unavailable(f"the second read stopped ({msg['stop_reason']})")
@@ -607,6 +617,9 @@ def parse(msg):
         ext = json.loads(text)
     except ValueError:
         raise Unavailable("the second read is not JSON")
+    bad = D._non_finite(ext)                          # json.loads takes Infinity, and inf is "close" to any number
+    if bad:
+        raise Unavailable(f"the second read's {bad} is not a finite number")
     pkg = ext.get("package") if isinstance(ext, dict) else None
     if not isinstance(pkg, dict):
         raise Unavailable("the second read has no package")

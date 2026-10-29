@@ -1106,7 +1106,7 @@ def triage(lines, index, provs, http, shared=None):
                          "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
                          "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
                          "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
-                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_datasheet": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
+                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), *pns)
@@ -1135,7 +1135,8 @@ def triage(lines, index, provs, http, shared=None):
         gen_fp = None if fp_key else index.find_footprint_for_package(
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
-        maker, maker_from = "", ""             # who makes this exact MPN, from a part search (BOM maker empty)
+        limited = {}                                   # source -> its quota / plan-limit answer
+        maker, maker_from, makers_seen = "", "", []     # who makes this exact MPN, from a part search (BOM maker empty)
         sheets = []                                    # every datasheet link every source gave, in source order
         if skipped:
             notes.append(skipped)
@@ -1191,6 +1192,9 @@ def triage(lines, index, provs, http, shared=None):
                     r = P.SourceResult(prov.name, error=f"plugin error: {type(e).__name__}: {str(e)[:120]}")
                 if not isinstance(r, P.SourceResult):
                     r = P.SourceResult(getattr(prov, "name", "?"), error="plugin returned no SourceResult")
+                if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
+                    limited.setdefault(prov.name, r.error)  # with no key, not an unreachable one
+                    continue
                 if r.error:
                     errored = True
                     notes.append(f"{prov.name}: {r.error}")
@@ -1203,6 +1207,7 @@ def triage(lines, index, provs, http, shared=None):
                         if not maker and len(makers) == 1:          # LCSC sells this exact MPN under one maker only
                             maker, maker_from = makers[0], prov.name
                         elif not maker and len(makers) > 1:         # clones under the same MPN: not ours to pick
+                            makers_seen = makers
                             notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
                                          f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
                     notes.append(f"jlcpcb: MPN -> {r.lcsc}" if r.found else "jlcpcb: no exact MPN match")
@@ -1238,6 +1243,8 @@ def triage(lines, index, provs, http, shared=None):
             status = "needs_footprint_generation"
         if unconfigured:
             notes.append("not configured: " + ",".join(unconfigured))
+        for name, err in limited.items():
+            notes.append(f"{name}: not used, the account's limit is reached ({err[:120]})")
         if sym and not fp_key:
             notes.append(f"local symbol OK but footprint '{sym.props.get('Footprint', '')}' not in indexed libs")
         if gen_fp and not sym:
@@ -1253,6 +1260,7 @@ def triage(lines, index, provs, http, shared=None):
             "src_footprint": _yn(src and src.has_footprint), "src_3d": _yn(src and src.has_3d),
             "src_mpn": src.mpn if src else "", "src_description": desc, "src_description_from": desc_from,
             "src_manufacturer": "" if ln.get("manufacturer") else maker, "src_manufacturer_from": "" if ln.get("manufacturer") else maker_from,
+            "src_makers": "; ".join(makers_seen),
             "src_datasheet": sheet,
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })

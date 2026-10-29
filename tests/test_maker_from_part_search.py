@@ -81,6 +81,33 @@ def _noted_not_held(it):
     assert any(w.startswith("Manufacturer is empty") for w in it["release_check"]["warnings"]), it["release_check"]
 
 
+class _TiLinkHTTP(TD.HTTP):
+    """The fake KiCad library with TPS1234DSG's datasheet on www.ti.com (as KiCad's own TI symbols link it)."""
+    def __init__(self, jlc):
+        sym = TD.TL.ksym("TPS1234DSG", [str(i) for i in range(1, 9)], footprint="Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+                         datasheet="https://www.ti.com/lit/ds/symlink/tps1234.pdf", desc="Test regulator")
+        TD.TL.FakeHTTP.__init__(self, {}, syms={"Regulator_Test:TPS1234DSG": sym})
+        self.jlc = jlc
+
+
+def _run_ti_link(jlc_answer):
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = TD.TL.run(d, http=_TiLinkHTTP({"TPS1234DSGR": jlc_answer} if jlc_answer else {}), bom=BOM,
+                             sources=["kicad"], providers=["jlcpcb_search"])
+    it = next(iter(items.values()))
+    return _par(it, "Manufacturer"), (it.get("field_sources") or {}).get("Manufacturer", "")
+
+
+def test_the_datasheet_link_names_the_maker_only_when_the_search_allows_it():
+    assert _run_ti_link(None)[0] == "Texas Instruments"                               # no search answer: the link
+    got, src = _run_ti_link(_answer(_hit("C1", "TPS1234DSGR", "TI(德州仪器)"), _hit("C2", "TPS1234DSGR", "UMW(友台半导体)")))
+    assert got == "Texas Instruments" and "www.ti.com" in src, (got, src)            # clones listed, TI among them
+    got, _ = _run_ti_link(_answer(_hit("C2", "TPS1234DSGR", "UMW(友台半导体)"), _hit("C4", "TPS1234DSGR", "HGSEMI(华冠)")))
+    assert not got, got                                                               # TI not among them: left empty
+    got, src = _run_ti_link(_answer(_hit("C2", "TPS1234DSGR", "UMW(友台半导体)")))
+    assert got == "UMW" and "exact MPN" in src, (got, src)                            # the search's one maker wins
+
+
 def test_the_hold_comes_back_only_when_asked():
     assert RU.DEFAULTS["release"]["manufacturer"] == "warn"
     assert RU.load({"release": {"manufacturer": "hold"}})["release"]["manufacturer"] == "hold"

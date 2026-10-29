@@ -108,7 +108,7 @@ class Workspace:
                 and b"\0" in head and head[:2] not in (b"\xff\xfe", b"\xfe\xff") and not T.utf16_without_bom(head)):
             raise ValueError(f"{bom_path.name} looks like a binary file, not a CSV; export the BOM as CSV or XLSX")
         try:
-            fence = self.root if self.root in Path(bom_path).resolve().parents else None   # an uploaded / workspace
+            fence = self._fence(bom_path)                                                  # an uploaded / workspace
             lines, mapping = T.read_bom(bom_path, RU.bom_columns(self.rules()), root=fence)  # schematic's sub-sheets stay
                                                                                              # in the workspace
         except Exception as e:                        # pandas/csv/zip errors -> one message a person can act on
@@ -184,6 +184,11 @@ class Workspace:
         nested = [f for d in sorted((d for d in up.iterdir() if d.is_dir() and not d.is_symlink()), reverse=True)
                   for f in sorted(d.iterdir()) if f.is_file() and not f.is_symlink()]
         return [self.rel(p) for p in nested + flat if self._is_inside(p)]
+
+    def _fence(self, p):
+        """The workspace when p is in it, else None: a project in the workspace (an uploaded one) only reads the
+        schematics and device sheets in the workspace, not a '..\\..\\x.SchDoc' it names."""
+        return self.root if self.root in Path(p).resolve().parents else None
 
     def _is_inside(self, p):
         try:
@@ -914,7 +919,7 @@ class Workspace:
         reports/project_<name>.csv, which triage/librarian also accept, as does the project file itself."""
         from . import altium_project as AP
         p = self._bom_path(project)
-        prj = AP.load_project(p, self.rules())        # house parameter names ([parameters] names) for base and variant
+        prj = AP.load_project(p, self.rules(), self._fence(p))   # house parameter names ([parameters] names)
         groups = AP.bom_groups(prj, variant)
         variants = [v["name"] for v in prj["variants"]]
         out = AP.write_bom_csv(groups, self.root / "reports" / f"project_{self._key(p)}{'_' + self.safe_name(variant) if variant else ''}.csv", variants)
@@ -933,7 +938,7 @@ class Workspace:
         if plan and not plans[0].is_file():
             raise ValueError(f"plan not found: {plan} is not a plan.json file")
         libs = [str(self.models)] if self.models.exists() else []
-        res = AP.where_used(dirs, part, plans[0] if plans else None, libs, rules=self.rules())
+        res = AP.where_used(dirs, part, plans[0] if plans else None, libs, rules=self.rules(), root=self.root)
         files = AP.write_where_used(res, self.root / "reports" / "where_used")
         rows = AP.where_used_rows(res)
         return {"projects": res["projects"], "flags": res["flags"], "rows": rows, "warnings": res["warnings"],
@@ -1461,7 +1466,7 @@ class Workspace:
                                      "--offline or pass a datasheet PDF in the workspace")
                 item["datasheet"] = str(self.root / "http_cache" / "datasheets"
                                         / (hashlib.sha256(ds.encode()).hexdigest()[:24] + ".pdf"))
-        out = self.root / "agent" / "proofs" / self.safe_name(item["part"])
+        out = self.root / "agent" / "proofs" / VC._slug(item["part"])     # one folder per part: '*/NOPB' parts too
         rules = self.rules()
         pr = VC.prove(item, self.root, rules, client=client, out_dir=out, render_only=True)
         est = pr.get("estimate")

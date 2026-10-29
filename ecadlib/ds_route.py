@@ -1050,8 +1050,11 @@ def unresolved_field(u):
 
 
 def assess(res):
-    """-> (ok | incomplete | failed, reasons) from datasheet.process()'s spec and review list."""
-    rev = list(res.get("needs_review") or [])
+    """-> (ok | incomplete | failed, reasons) from datasheet.process()'s spec and review list. The datasheet's own
+    instruction-like words, quoted into the review, are never matched: a PDF that writes "implausible" or "no value
+    printed" must not hold a right part or buy more reads."""
+    from .datasheet import INJECTION
+    rev = [r for r in res.get("needs_review") or [] if not str(r).startswith(INJECTION)]
     unres = [u for u in (res.get("spec") or {}).get("unresolved") or [] if unresolved_field(u) not in ADVISORY]
     inc = [f"unresolved: {', '.join(unres)}"] if unres else []
     inc += [r for r in rev if INCOMPLETE.search(r)]

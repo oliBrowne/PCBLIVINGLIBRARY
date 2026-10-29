@@ -1311,7 +1311,10 @@ class ProofCache:
 
 # ================================================================ prove
 def _slug(s):
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", str(s)).strip("._")[:80] or "part"
+    """The part's proof folder name: ledger.safe_name, so 'LM2596S-5.0/NOPB' and 'LMR14020SDDA/NOPB' get folders of
+    their own and 'CON' is no Windows device name."""
+    from .ledger import safe_name
+    return safe_name(s)
 
 
 def _resolve(v, base):

@@ -19,6 +19,13 @@ a minor release may change command-line options and file formats.
 
 - The ecadlib dialog in Altium: its buttons light up under the mouse and darken while held, the close mark turns red under the mouse, and the header shows the small ecadlib mark. While ecadlib works, the window keeps its height (the buttons no longer jump), the rows are redrawn only when they change, and the status line counts the seconds. While Altium builds and installs the library, the dialog says Altium is busy and ignores clicks, so a click made during the build no longer lands on the result's buttons. The result rows come in about four times faster. The "still working" question no longer stacks or marks a job that finished meanwhile as stopped.
 
+### Fixed (2026-10-29 full test in Altium)
+
+- A symbol that matches the part number once a reel or lead-free code is taken off (NE555D + R, TPS62162DSG + R, -TR, PBF) no longer holds the part as "check the variant". An R or T after a separator (ATmega8A-P + T is TQFP, not PDIP) still holds. The KiCad symbol's datasheet link names the maker (www.ti.com: Texas Instruments) when the part search has no single maker, and only if that maker is among the ones it lists.
+- No datasheet link is a note, not a hold (`[release] datasheet = "hold"` holds it again); the Altium result says so on a ready part, as it does for an empty Manufacturer.
+- A part source answering that the account's limit is used up (Nexar: "You have exceeded your part limit of 0") no longer counts as unreachable: a part number no source knows says Not found again, and the BOM check stops counting those lines as "source refused/unreachable".
+- The Altium dialog's status line no longer runs past its edge while Altium builds and installs the library; long progress text ends in "...".
+
 ## [0.4.0] - 2026-10-27
 
 The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right with none built wrong (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
