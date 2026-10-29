@@ -228,8 +228,31 @@ def default_out(kind, bom, start="."):
     ws = out_workspace(start)
     stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
     if kind == "librarian":
-        return str(ws / "librarian" / stem) if ws else "out/librarian"
+        if not ws:
+            return "out/librarian"
+        d = ws / "librarian" / stem
+        other, mine = _plan_bom_path(d), _resolved(bom)
+        if other and mine and other != mine:      # another BOM with this file name (projA/bom.csv, projB/bom.csv)
+            import hashlib                        # has this folder: its own one, never a silent replace of that plan
+            d = d.with_name(f"{stem}_{hashlib.sha1(os.fsencode(str(mine))).hexdigest()[:8]}")
+        return str(d)
     return str(ws / "reports" / f"triage_{stem}") if ws else "out/triage"
+
+
+def _resolved(p):
+    try:
+        return Path(str(p)).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _plan_bom_path(out):
+    """The BOM file whose plan is in folder `out` (its library.lock.json, the path relative to `out`), or None."""
+    try:
+        f = json.loads((Path(out) / "library.lock.json").read_text(encoding="utf-8"))["bom"]["file"]
+        return _resolved(Path(out) / str(f)) if f else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def rules_start(out, given_out):

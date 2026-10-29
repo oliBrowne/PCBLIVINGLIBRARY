@@ -131,6 +131,31 @@ def test_status_last_triage_is_the_newest_one_cli_or_web_ui(tmp_path, monkeypatc
     assert t["report"] == "reports/triage_old_board.json" and t["name"] == "old_board.csv", t
 
 
+@lite
+def test_two_boms_with_one_file_name_get_their_own_default_plan_folders(tmp_path, monkeypatch):
+    """H-SETUP-5: since #202 `ecadlib librarian bom.csv` (no -o) in projA/ and then in projB/ both wrote
+    <workspace>/librarian/bom: projB's run silently replaced projA's plan, sign-offs and models (the note about
+    another BOM's plan compared only file names). Before, each project folder had its own ./out/librarian."""
+    tmp_path = tmp_path.resolve()
+    from ecadlib import firstrun as FR
+    ws = _page_workspace(tmp_path, monkeypatch)
+    a, b = tmp_path / "projA" / "bom.csv", tmp_path / "projB" / "bom.csv"
+    for f in (a, b):
+        f.parent.mkdir()
+        f.write_text("Designator,MPN\nR1,X\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    out_a = Path(FR.default_out("librarian", a))
+    assert out_a == ws / "librarian" / "bom"
+    out_a.mkdir(parents=True)                                            # projA's plan, as the librarian records it
+    (out_a / "library.lock.json").write_text(json.dumps({"bom": {"file": "../../../projA/bom.csv"}}), encoding="utf-8")
+    assert Path(FR.default_out("librarian", a)) == out_a                 # the same BOM again: the same plan
+    monkeypatch.chdir(tmp_path / "projA")
+    assert Path(FR.default_out("librarian", "bom.csv")) == out_a
+    out_b = Path(FR.default_out("librarian", b))
+    assert out_b != out_a and out_b.parent == out_a.parent and out_b.name.startswith("bom_"), out_b
+    assert Path(FR.default_out("librarian", b)) == out_b                 # and stays put for projB
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all
