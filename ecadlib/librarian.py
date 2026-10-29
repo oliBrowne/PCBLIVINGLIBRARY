@@ -603,7 +603,8 @@ class Run:
         par = _par(item)
         mpn = par.get("Manufacturer Part Number", "")
         st = {"name": item["name"], "symbol": None, "footprint": None, "tried": [], "review": [], "verify": [],
-              "found": {}, "hint_fp": "", "maker": par.get("Manufacturer", "")}
+              "found": {}, "hint_fp": "",
+              "maker": par.get("Manufacturer", "") if RC._filled(par.get("Manufacturer")) else ""}   # not "N/A"
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
@@ -1386,7 +1387,7 @@ def apply_state(item, st, ln):
         if not par.get("ComponentLink1URL"):
             _set_par(item, "ComponentLink1Description", "LCSC")
             _set_par(item, "ComponentLink1URL", f"https://www.lcsc.com/product-detail/{v}.html"); fields["ComponentLink1URL"] = w
-    if not par.get("Manufacturer") and "manufacturer" in st.get("found", {}):
+    if not RC._filled(par.get("Manufacturer")) and "manufacturer" in st.get("found", {}):   # empty, or "-" / "N/A"
         v, w = st["found"]["manufacturer"]
         _set_par(item, "Manufacturer", v); fields["Manufacturer"] = w
     credits = [st["found"]["credit"]] if "credit" in st.get("found", {}) else []   # EasyEDA asks for credit on every reuse

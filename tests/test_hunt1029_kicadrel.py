@@ -111,6 +111,20 @@ def test_empty_manufacturer_under_its_house_name_is_a_note_not_a_hold():
     assert ("fields", "Mfr is empty") in fails, fails
 
 
+# ---------------------------------------------------------------- H-KICADREL-3: a BOM maker of "-" / "N/A"
+def test_placeholder_maker_on_the_bom_is_filled_like_an_empty_one():
+    # the release check reads "-", "N/A", "~" as empty (a note), but the fill took them for a maker: the part kept
+    # "N/A" as its Manufacturer although the search named its one maker
+    for mk in ("-", "N/A", "~"):
+        bom = BOM.replace("U1,1,ABC1234,,,ABC1234", f"U1,1,ABC1234,,{mk},ABC1234")
+        with tempfile.TemporaryDirectory() as d:
+            items, _ = TL.run(d, http=TP.HTTP({"C1001": _ee("RealMaker", "C1001")}, {"ABC1234": _jlc("RealMaker")}),
+                              bom=bom, sources=["easyeda"], providers=["jlcpcb_search", "easyeda"])
+        it = next(iter(items.values()))
+        assert _maker(it) == "RealMaker", (mk, _maker(it), it.get("field_sources"))
+        assert not any(w.startswith("Manufacturer is empty") for w in it["release_check"]["warnings"]), it["release_check"]
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):

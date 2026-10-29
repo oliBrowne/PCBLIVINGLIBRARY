@@ -1137,6 +1137,8 @@ def triage(lines, index, provs, http, shared=None):
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         maker, maker_from = "", ""             # who makes this exact MPN, from a part search (BOM maker empty)
         several = False                        # a source lists this exact MPN under more than one maker: none is filled
+        from .release_check import _filled     # a BOM maker of "-" / "N/A" / "~" names none: filled like an empty one
+        bom_maker = _filled(ln.get("manufacturer"))
         sheets = []                                    # every datasheet link every source gave, in source order
         if skipped:
             notes.append(skipped)
@@ -1263,8 +1265,8 @@ def triage(lines, index, provs, http, shared=None):
             "src": src.provider if src else "", "src_symbol": _yn(src and src.has_symbol),
             "src_footprint": _yn(src and src.has_footprint), "src_3d": _yn(src and src.has_3d),
             "src_mpn": src.mpn if src else "", "src_description": desc, "src_description_from": desc_from,
-            "src_manufacturer": "" if ln.get("manufacturer") or several else maker,
-            "src_manufacturer_from": "" if ln.get("manufacturer") or several else maker_from,
+            "src_manufacturer": "" if bom_maker or several else maker,
+            "src_manufacturer_from": "" if bom_maker or several else maker_from,
             "src_datasheet": sheet,
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })
