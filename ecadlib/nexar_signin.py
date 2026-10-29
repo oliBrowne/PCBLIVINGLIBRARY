@@ -265,7 +265,7 @@ def main(argv=None, inp=None, out=print):
     s.add_argument("--new-app", action="store_true", help="ask for the app's client id and secret again")
     s.add_argument("--no-browser", action="store_true", help="only print the address to open")
     s.add_argument("--timeout", type=int, default=300, help="seconds to wait for the browser (default 300)")
-    sub.add_parser("status", help="signed in or not (never shows a token)")
+    sub.add_parser("status", help="signed in or not, refreshing the sign-in when it ran out (never shows a token)")
     sub.add_parser("signout", help="forget the sign-in; the app's id and secret stay stored")
     a = ap.parse_args(argv)
     if a.cmd == "status":
@@ -274,6 +274,10 @@ def main(argv=None, inp=None, out=print):
             out("not signed in: run `ecadlib nexar signin`" + ("  (a pasted NEXAR_TOKEN is stored; it lasts a day)"
                                                                 if UC.get_key("NEXAR_TOKEN") else ""))
             return 1
+        if not access_token():                  # ran out and the refresh failed: what every Altium 365 command hits
+            out(f"signed in once, but the sign-in no longer works: {last_error or 'no access token'}")
+            return 1
+        blob = _load() or blob                  # refreshed just now: the new expiry
         cid = UC.secret("NEXAR_CLIENT_ID") or ""
         exp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(blob.get("expires_at", 0)))
         out(f"signed in to Altium 365 with Nexar app ...{cid[-4:]}; access token valid until {exp}")

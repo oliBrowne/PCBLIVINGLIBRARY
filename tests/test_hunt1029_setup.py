@@ -156,6 +156,34 @@ def test_two_boms_with_one_file_name_get_their_own_default_plan_folders(tmp_path
     assert Path(FR.default_out("librarian", b)) == out_b                 # and stays put for projB
 
 
+@lite
+def test_nexar_status_says_when_the_sign_in_can_no_longer_be_refreshed(tmp_path, monkeypatch):
+    """H-SETUP-6: the access token ran out and Nexar refuses the refresh token (revoked, app secret changed): every
+    Altium 365 command stops with "could not refresh the Altium 365 sign-in", but `ecadlib nexar status` said "signed
+    in ... access token valid until <a time already past>; ecadlib refreshes it by itself" and exit code 0."""
+    import time
+    from ecadlib import nexar_signin as NS, userconfig as UC
+    from tests.test_nexar_signin import FakeIdentity, _home
+    _home(tmp_path, monkeypatch)
+    UC.set_key("NEXAR_CLIENT_ID", "my-app-1234")
+    UC.set_key("NEXAR_CLIENT_SECRET", "s3cret")
+    NS._save({"access_token": "OLD_AT", "expires_in": 3600, "refresh_token": "SECRET_RT"}, now=time.time() - 7200)
+    fake = FakeIdentity((400, {"error": "invalid_grant"}))
+    monkeypatch.setattr(NS, "_post", fake)
+    out = []
+    rc = NS.main(["status"], out=out.append)
+    text = "\n".join(out)
+    assert rc == 1, (rc, text)
+    assert "nexar signin" in text and "invalid_grant" in text, text
+    assert "SECRET" not in text and "s3cret" not in text and "OLD_AT" not in text
+    NS._failed.clear()
+    good = FakeIdentity((200, {"access_token": "NEW_AT", "expires_in": 3600, "refresh_token": "RT2"}))
+    monkeypatch.setattr(NS, "_post", good)                               # a refresh that works: signed in, fresh expiry
+    out.clear()
+    assert NS.main(["status"], out=out.append) == 0, out
+    assert "signed in" in out[0] and "NEW_AT" not in "\n".join(out)
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all
