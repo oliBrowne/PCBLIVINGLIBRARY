@@ -159,6 +159,8 @@ def test_kicad_index_matching():
         assert lib.find_symbol("TPS1234DSG")[0] == "Regulator_Test:TPS1234DSG"
         ref, how = lib.find_symbol("TPS1234DSGR")
         assert ref == "Regulator_Test:TPS1234DSG" and "packing suffix 'R'" in how and "check" not in how, how   # reel
+        ref, how = lib.find_symbol("TPS1234DSGTRPBF")                             # a known code longer than 2: reached
+        assert ref == "Regulator_Test:TPS1234DSG" and "packing suffix 'TRPBF'" in how, how
         ref, how = lib.find_symbol("TPS1234DSG-TR")
         assert ref == "Regulator_Test:TPS1234DSG" and "packing suffix 'TR'" in how, how
         assert not L.packing_suffix("ATMEGA8A-PT", "ATMEGA8APT", 9, "ATMEGA8A-P")       # -P PDIP, -PT TQFP: not a reel

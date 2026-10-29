@@ -276,10 +276,13 @@ class KiCadLibrary:
                (c == "." and str(mpn)[i - 1:i].isdigit() and str(mpn)[i + 1:i + 2].isdigit())]   # kept decimal point)
         for k in range(len(nm) - 1, max(5, int(len(nm) * 0.6)) - 1, -1):
             sep = raw[k] > raw[k - 1] + 1                             # a '-', '/', '(' ... right before the suffix
-            if nm[:k] in self._norm and (len(nm) - k <= 2 or (sep and len(nm) - k <= 6)):
+            if nm[:k] not in self._norm:
+                continue
+            pack = packing_suffix(mpn, nm, k, str(mpn)[:raw[k]])      # a known packing code may be longer (IRFP460 + PBF)
+            if pack or len(nm) - k <= 2 or (sep and len(nm) - k <= 6):
                 ref, more = self._pick(self._norm[nm[:k]])
                 suffix = str(mpn)[raw[k]:]
-                if packing_suffix(mpn, nm, k, str(mpn)[:raw[k]]):        # the same part on a reel / lead-free: nothing to check
+                if pack:                                              # the same part on a reel / lead-free: nothing to check
                     return ref, f"name + packing suffix '{suffix}' (tape and reel or lead-free, same part)" + more
                 return ref, f"name + ordering suffix '{suffix}' (check the variant)" + more
         return None, None
@@ -750,7 +753,11 @@ class Run:
                 maker = P.maker_from_url(props["Datasheet"])
                 # the symbol named after this very part (its MPN, or that plus a packing code) links its maker's
                 # datasheet: www.ti.com for NE555D. A wildcard or near name can be another maker's part: not used.
-                if maker and own and (how.startswith("exact name") or how.startswith("name + packing suffix")):
+                # The part search speaks first: its one maker fills it (below), and when it lists this MPN under
+                # several makers (clones), the link's maker is used only if it is one of them.
+                listed = [m for m in str(row.get("src_makers") or "").split("; ") if m]
+                if maker and own and (how.startswith("exact name") or how.startswith("name + packing suffix")) \
+                        and not row.get("src_manufacturer") and (not listed or any(P.same_maker(maker, m) for m in listed)):
                     host = re.match(r"https?://([^/:]+)", props["Datasheet"]).group(1)
                     st["found"].setdefault("manufacturer", (maker, f"the datasheet link of KiCad symbol {sym_ref} ({host})"))
             shared = kind in ("R", "C", "CP", "L")            # one generic symbol for every value: no MPN, no footprint link
