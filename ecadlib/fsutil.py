@@ -33,6 +33,12 @@ def portable_stem(stem):
     return stem[:i] + "_" + stem[i:] if stem[:i].rstrip(" ").upper() in DEVICE_NAMES else stem
 
 
+def plain_stem(name):
+    """A part / package name -> the stem of the datasheet answer files (datasheet.write, read back by fp-edit and the
+    web UI): letters, digits and _.+- only, never a Windows device name ('COM1' -> 'COM1_')."""
+    return portable_stem(re.sub(r"[^A-Za-z0-9_.+-]", "_", str(name)))
+
+
 RETRY = os.name == "nt"             # only Windows refuses a rename over an open file; elsewhere it is a real error
 DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
 TMP = re.compile(r"\..+\.\d+\.\d+\.tmp")   # the temp file name below: .NAME.<pid>.<thread>.tmp
