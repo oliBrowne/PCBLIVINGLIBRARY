@@ -545,9 +545,13 @@ def ini_value(v):
 
 
 def _fill_command(ini, command):
-    """Set command= in an existing ecadlib_menu.ini when it is empty (nothing else changes). True when it did."""
+    """Set command= in an existing ecadlib_menu.ini when it is empty, or when it is this command in the one pair of
+    quotes an older build wrote (Altium's profile API drops them, so cmd.exe ran "C:\\Program"); nothing else
+    changes. True when it did."""
     data = ini.read_bytes()
-    new = re.sub(rb"(?m)^command=[ \t]*(?=\r?$)", lambda m: b"command=" + ini_value(command).encode("utf-8"), data, count=1)
+    want = ini_value(command).encode("utf-8")
+    old = b"" if want == command.encode("utf-8") else b"(?:" + re.escape(command.encode("utf-8")) + b")?"
+    new = re.sub(rb"(?m)^command=[ \t]*" + old + rb"[ \t]*(?=\r?$)", lambda m: b"command=" + want, data, count=1)
     if new == data:
         return False
     ini.write_bytes(new)
@@ -1989,7 +1993,7 @@ def main(argv=None):
             print(f"wrote {', '.join(rep['written']) or 'nothing new'} in {a.out}" +
                   (f" (kept your {', '.join(rep['kept'])})" if rep["kept"] else ""))
             if rep["command_filled"]:
-                print(f"  {INI}: command= was empty; set it to {rep['command']}")
+                print(f"  {INI}: command= was empty or lost its quotes in Altium; set it to {rep['command']}")
             print(f"  runs ecadlib with: {rep['command'] or 'ecadlib on PATH, else py -3 / python (set command= in ' + INI + ' for a venv)'}")
             print(f"  in Altium: Preferences > Scripting System > Global Projects > Install from file > {PROJECT}; "
                   f"then Customize to put {', '.join(rep['menu_entries'])} on a menu (see {README})")

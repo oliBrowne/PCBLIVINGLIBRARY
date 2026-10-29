@@ -53,8 +53,33 @@ def test_doctor_sees_the_command_altium_sees():
     by Altium without its quotes; doctor must not call it OK."""
     with tempfile.TemporaryDirectory() as d:
         ini = Path(d) / "ecadlib_menu.ini"
-        ini.write_bytes(AM.ini_text(command='"C:\\Program Files\\ecadlib\\ecadlib.exe"').encode("utf-8"))
-        assert AM.load_command(ini) == profile_read(ini.read_text(encoding="utf-8"), "command")
+        exe = Path(d) / "Program Files" / "ecadlib" / "ecadlib.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"MZ")
+        # written by hand, one pair of quotes (ini_text would double them): Altium reads it without the quotes
+        ini.write_bytes(f'[ecadlib]\r\ncommand="{exe}"\r\nworkspace=workspace\r\n'.encode("utf-8"))
+        seen = profile_read(ini.read_text(encoding="utf-8"), "command")
+        assert seen == str(exe) and AM.load_command(ini) == seen, (seen, AM.load_command(ini))
+        c = D.check_altium_menu(ini, probe=False)
+        assert c["level"] != "OK", c                      # Altium runs "<...>/Program" (does not exist)
+        # as build writes it (quotes doubled), Altium reads the quoted path, and doctor finds the program
+        ini.write_bytes(f'[ecadlib]\r\ncommand={AM.ini_value(chr(34) + str(exe) + chr(34))}\r\n'.encode("utf-8"))
+        assert D.check_altium_menu(ini, probe=False)["level"] == "OK", D.check_altium_menu(ini, probe=False)
+
+
+def test_build_repairs_the_command_an_older_build_wrote_in_one_pair_of_quotes():
+    """Review M8: an older build wrote command="C:\\Program Files\\ecadlib\\ecadlib.exe" (one pair, Altium drops it);
+    building again over that ini must write it so Altium keeps the quotes. A hand-written different command stays."""
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d) / "ecadlib_menu.ini"
+        cmd = '"C:\\Program Files\\ecadlib\\ecadlib.exe"'
+        ini.write_bytes(f"[ecadlib]\r\ncommand={cmd}\r\nport=8765\r\n".encode("utf-8"))
+        assert AM._fill_command(ini, cmd)
+        text = ini.read_text(encoding="utf-8")
+        assert profile_read(text, "command") == cmd and "port=8765" in text, text
+        assert not AM._fill_command(ini, cmd)                  # once repaired, left alone
+        ini.write_bytes(b'[ecadlib]\r\ncommand="D:\\py\\python.exe" -m ecadlib\r\n')
+        assert not AM._fill_command(ini, cmd)                  # someone's own command is theirs
 
 
 def test_menu_settings_paths_in_quotes_are_the_paths():
