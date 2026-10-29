@@ -27,7 +27,7 @@ def test_dblib_sync_with_every_part_held_does_not_claim_a_dblib_it_never_wrote(t
     code = 0
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            S.main([str(plan), "--to", str(tmp_path / "lib")])
+            code = S.main([str(plan), "--to", str(tmp_path / "lib")])
         except SystemExit as e:
             code = e.code
     text = out.getvalue() + err.getvalue()

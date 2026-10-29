@@ -1277,10 +1277,10 @@ def main(argv=None):
     if empty and not errors:                       # expected while every part is held: exit 2, as altium-pkg does
         print(f"ecadlib dblib-sync: nothing written: no part in {a.plan} is ready (held parts stay out of the "
               "library), so there is no DbLib to open yet", file=sys.stderr)
-        sys.exit(2)
+        return 2
     if errors or (out.get("svn") or {}).get("error"):
         sys.exit(f"{errors} part(s) failed" + (f"; svn: {out['svn']['error']}" if (out.get("svn") or {}).get("error") else ""))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
