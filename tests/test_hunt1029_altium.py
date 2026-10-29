@@ -66,3 +66,30 @@ def test_menu_settings_paths_in_quotes_are_the_paths():
         cfg = AM.load_config(ini)
         assert str(cfg["workspace"]).replace("/", "\\").endswith("D:\\My Parts\\ws") and '"' not in str(cfg["workspace"])
         assert "'" not in str(cfg["library"])
+
+
+def test_install_menu_in_a_folder_outside_latin1_says_what_to_do():
+    """install-menu merges the menu into DXP.RCS, written in Latin-1: a menu folder named in Cyrillic (C:\\Users\\Ольга)
+    stopped with Python's "'latin-1' codec can't encode characters in position 91-95", after making a backup."""
+    import json
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "m").mkdir()
+        (d / "a").mkdir()
+        (d / "a" / "DXP.RCS").write_bytes(b"")
+        (d / "m" / "altium_menu.json").write_text(json.dumps({"win_dir": "C:\\Users\\\u041e\u043b\u044c\u0433\u0430\\menu"}))
+        try:
+            AM.install_menu_bar(d / "m", folders=[d / "a"], running=lambda: False, settle_s=0)
+            raise AssertionError("a folder DXP.RCS cannot name must be refused")
+        except UnicodeError as e:
+            raise AssertionError(f"raw codec error: {e}")
+        except ValueError as e:
+            assert "codec" not in str(e) and "--out" in str(e), e
+        assert sorted(p.name for p in (d / "a").iterdir()) == ["DXP.RCS"], "nothing written, no backup"
+
+
+def test_menu_folder_outside_latin1_goes_by_its_short_name():
+    """On Windows the folder's 8.3 short name (ASCII) names it in DXP.RCS, as wake_command does for RunScript."""
+    short = lambda p: "C:\\Users\\OLGA~1\\menu" if "\u041e" in str(p) else p
+    assert AM.rcs_folder("C:\\Users\\\u041e\u043b\u044c\u0433\u0430\\menu", short=short) == "C:\\Users\\OLGA~1\\menu"
+    assert AM.rcs_folder("C:\\Users\\Jos\u00e9\\menu", short=short) == "C:\\Users\\Jos\u00e9\\menu"   # Latin-1 as it was

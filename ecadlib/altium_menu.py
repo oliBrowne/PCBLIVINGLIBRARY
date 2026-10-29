@@ -346,13 +346,30 @@ def altium_running():
     return "x2.exe" in out.lower()
 
 
+def rcs_folder(win_dir, short=None):
+    """The menu folder as install-menu names it in DXP.RCS (written in Latin-1): check_win_dir's form, or, when the
+    path has a character Latin-1 lacks (a Cyrillic user name), its 8.3 short name (ASCII), as wake_command does.
+    ValueError, saying what to do, when neither fits."""
+    w = check_win_dir(win_dir)
+    for cand in (w, str((short or _short_path)(w))):
+        try:
+            cand = check_win_dir(cand)
+            cand.encode("latin-1")
+            return cand
+        except (ValueError, UnicodeError):
+            continue
+    raise ValueError(f"{w}: Altium's menu file can only name a folder in Latin-1 characters, and this one has others "
+                     f"(and no short 8.3 name without them): build the menu into a folder such as D:\\ecadlib-menu "
+                     f"(`ecadlib altium-menu build --out D:\\ecadlib-menu`), then run install-menu with that --out")
+
+
 def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_running, now=None, settle_s=5.0,
                      sleep=time.sleep):
     """Put the "ecadlib" menu into Altium's top menu bar (schematic, PCB, SchLib and PcbLib editors, before Window)
     by merging it into each Altium's DXP.RCS, after a backup next to it. Altium must be closed: it writes that
     file when it closes. remove=True takes it out again. -> {"installed"|"removed": [DXP.RCS], "backups": [...]}."""
     if os.name == "nt":
-        win = check_win_dir(str(Path(menu_dir).resolve()))
+        win = rcs_folder(str(Path(menu_dir).resolve()))
     else:                                # WSL / Linux writing to the Windows side: the folder `build --win-dir` recorded
         try:
             rec = json.loads((Path(menu_dir) / "altium_menu.json").read_text(encoding="utf-8")).get("win_dir")
@@ -364,6 +381,7 @@ def install_menu_bar(menu_dir, folders=None, remove=False, running=altium_runnin
             raise ValueError(f"{menu_dir}: not a Windows folder, and no Windows folder recorded for this menu: run "
                              f"`ecadlib altium-menu build --out {menu_dir} --win-dir D:\\ecadlib-menu` first (the "
                              "folder Altium will read it from), or give --out as that Windows folder") from None
+        win = rcs_folder(win, short=lambda p: p)       # no 8.3 name to ask Windows for from here
     folders = [Path(f) for f in folders] if folders else altium_user_folders()
     if not folders:                      # first: with no settings folder, a running Altium is not the problem
         raise ValueError("no Altium Designer settings folder found (%APPDATA%\\Altium\\Altium Designer {...}): start "
