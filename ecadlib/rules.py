@@ -708,7 +708,10 @@ def fmt_value(raw, cat, style):
     if style == "keep" or cat not in UNIT or not str(raw or "").strip():
         return raw
     from .kicad_index import parse_value, two_readings
-    v = parse_value(raw)
+    s = str(raw)
+    if cat != "Resistors":                     # '100N', '0.1UF', '4U7', '10UH' (DigiKey's and the rkm style's own
+        s = re.sub(r"(?<=\d)[PNU]", lambda m: m.group(0).lower(), s)   # capitals): pico / nano / micro, never ambiguous
+    v = parse_value(s)
     return raw if v is None or two_readings(raw) else fmt_number(v, cat, style)     # '4,700pF' stays as written
 
 
@@ -732,9 +735,9 @@ def fmt_number(v, cat, style):
 
 
 TOL_RE = re.compile(r"(?<![\d.])±?\s?(\d+(?:\.\d+)?)\s?%")
-VOLT_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s?V(?:DC)?(?![A-Za-z])")
-DIEL_RE = re.compile(r"\b(X[5-8][RSTPV]|C0G|NP0|COG|Y5V|Z5U)\b", re.I)
-POWER_RE = re.compile(r"(?<![\w.])(\d+/\d+|\d+(?:\.\d+)?)\s?W(?![A-Za-z])")
+VOLT_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s?V(?:DC|\d+(?![.\d]))?(?![A-Za-z\d])")   # 6V3: IEC 60062, not 6V
+DIEL_RE = re.compile(r"\b(X[5-8][RSTPV]|C0G|NP0|COG|NPO|Y5V|Z5U)\b", re.I)    # COG / NPO: a letter O for the 0
+POWER_RE = re.compile(r"(?<![\w.])(\d+/\d+|\d+(?:\.\d+)?)\s?W(?:\d+(?![.\d]))?(?![A-Za-z\d])")   # 0W5 is 0.5 W
 
 
 def line_fields(ln, cat, pkg, rules=None, ref=""):
@@ -743,7 +746,7 @@ def line_fields(ln, cat, pkg, rules=None, ref=""):
     text = " ".join(str(ln.get(k, "")) for k in ("value", "description"))
     g = lambda rx: (rx.search(text).group(0).replace(" ", "").lstrip("±") if rx.search(text) else "")
     met = {v: k for k, v in METRIC_TO_IMPERIAL.items()}.get(pkg or "", "")
-    diel = g(DIEL_RE).upper().replace("COG", "C0G")
+    diel = g(DIEL_RE).upper().replace("COG", "C0G").replace("NPO", "NP0")
     return {"mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""),
             "value": fmt_value(ln.get("value", ""), cat, (rules or DEFAULTS)["naming"]["value_style"]),
             "package": pkg or "", "metric": met, "category": cat, "cat3": CAT3.get(cat, cat[:3].upper()),

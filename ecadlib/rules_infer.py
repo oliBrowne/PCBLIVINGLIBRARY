@@ -503,11 +503,11 @@ def classify(tok, comp, styles_seen):
         return lit + "{package}"
     if re.fullmatch(r"\d+(\.\d+)?%", tok):
         return "{tolerance}"
-    if re.fullmatch(r"\d+(\.\d+)?V", tok, re.I) and cat in RU.PASSIVES + ("Diodes",):
+    if re.fullmatch(r"\d+(\.\d+)?V|\d+V\d+", tok, re.I) and cat in RU.PASSIVES + ("Diodes",):
         return "{voltage}"
-    if re.fullmatch(r"X[5-8][RSTPV]|C0G|NP0|Y5V|Z5U", up):
+    if re.fullmatch(r"X[5-8][RSTPV]|C0G|NP0|COG|NPO|Y5V|Z5U", up):
         return "{dielectric}"
-    if re.fullmatch(r"(\d+/\d+|\d+(\.\d+)?)W", tok, re.I):
+    if re.fullmatch(r"(\d+/\d+|\d+(\.\d+)?)W|\d+W\d+", tok, re.I):
         return "{power}"
     st = value_styles(tok, cat) if cat in RU.PASSIVES else None
     if st is not None:
