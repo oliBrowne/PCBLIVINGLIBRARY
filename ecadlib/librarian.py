@@ -110,8 +110,8 @@ class KiCadLibrary:
             pass
         elif wait:
             self.error = wait
-            if f.exists():                     # a stale index beats none
-                self._load(f)
+            if not (f.exists() and self._load(f)):          # a stale index beats none, the shipped one beats nothing
+                self._load_snapshot()
         else:
             try:
                 self.symbols = self._crawl("kicad-symbols", ".kicad_symdir", ".kicad_sym")

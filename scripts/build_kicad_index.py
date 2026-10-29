@@ -13,9 +13,12 @@ from ecadlib.httpcache import CachedHTTP  # noqa: E402
 
 
 def snapshot_bytes(index):
-    """The .json.gz for an index dict: sorted, compact, no gzip time stamp, so the same index gives the same file."""
+    """The .json.gz for an index dict: sorted, compact, no gzip time stamp and a fixed OS byte (Python 3.11 on Linux
+    writes 3 there, 3.13 writes 255), so the same index gives the same file on any Python."""
     data = json.dumps(index, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return gzip.compress(data, compresslevel=9, mtime=0)
+    gz = bytearray(gzip.compress(data, compresslevel=9, mtime=0))
+    gz[9] = 255                                        # header byte 9 is the OS: 255 = unknown
+    return bytes(gz)
 
 
 def main(argv=None):

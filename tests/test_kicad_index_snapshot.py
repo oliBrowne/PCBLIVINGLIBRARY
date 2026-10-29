@@ -53,6 +53,19 @@ def test_a_failed_build_falls_back_on_the_shipped_index(tmp_path, monkeypatch):
 
 
 @lite
+def test_while_a_failed_build_waits_to_retry_a_broken_index_still_falls_back(tmp_path, monkeypatch):
+    _on(monkeypatch)
+    f = tmp_path / "idx.json"
+    L.KiCadLibrary(_Gitlab429("timeout"), f, refresh=True)                  # leaves idx.json.retry.json behind
+    assert f.with_name("idx.json.retry.json").exists()
+    f.write_text("{not json", encoding="utf-8")                             # and an index that cannot be read
+    http = FakeHTTP()
+    lib = L.KiCadLibrary(http, f)
+    assert not http.calls and lib.error                                     # still waiting, gitlab.com left alone
+    assert lib.find_symbol("NE555DR")[0] == "Timer:NE555D"
+
+
+@lite
 def test_switched_off_it_builds_from_gitlab(tmp_path, monkeypatch):
     monkeypatch.setenv("ECADLIB_KICAD_SNAPSHOT", "0")
     http = FakeHTTP()
