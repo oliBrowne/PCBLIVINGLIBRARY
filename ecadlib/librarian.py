@@ -782,9 +782,9 @@ class Run:
         url = (result.get("lcsc") or {}).get("url") or ""
         if url.startswith("http"):
             st["found"].setdefault("datasheet", (url, f"EasyEDA {lcsc} (lcsc.url)"))
-        # the maker of the BOM's own LCSC number; of a number a part search found, only when the triage found that
-        # MPN under one maker (src_manufacturer): the search's first hit among clones is not this part's maker
-        if res.manufacturer and (P.lcsc_number(ln.get("lcsc")) == lcsc or row.get("src_manufacturer")):
+        # the maker of the BOM's own LCSC number only; for a number a part search found, the triage's one-maker
+        # answer (src_manufacturer, resolve) fills it: the search's first hit among clones is not this part's maker
+        if res.manufacturer and P.lcsc_number(ln.get("lcsc")) == lcsc:
             st["found"].setdefault("manufacturer", (res.manufacturer, f"EasyEDA {lcsc}"))
         st["found"].setdefault("lcsc", (lcsc, f"EasyEDA {lcsc}" + ("" if ln.get("lcsc") else " (LCSC number found by ecadlib, not in the BOM)")))
         if res.extra.get("description"):       # after the part search's LCSC / distributor text (resolve)

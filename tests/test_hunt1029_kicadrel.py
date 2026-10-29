@@ -170,6 +170,17 @@ def test_placeholder_maker_is_not_sent_to_the_sources():
     assert seen == ["RealMaker"], seen
 
 
+# ---------------------------------------------------------------- review M5: EasyEDA's name over the triage's
+def test_easyeda_maker_of_a_searched_lcsc_number_does_not_win_over_the_triage():
+    # the triage found ABC1234 under one maker (RealMaker); EasyEDA's part for the LCSC number the search picked names
+    # another: the triage's one-maker answer is filled, EasyEDA's only for the BOM's own LCSC number
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = TL.run(d, http=TP.HTTP({"C1001": _ee("OtherCo", "C1001")}, {"ABC1234": _jlc("RealMaker")}),
+                          bom=BOM, sources=["easyeda"], providers=["jlcpcb_search"])
+    it = next(iter(items.values()))
+    assert _maker(it) == "RealMaker", (_maker(it), it.get("field_sources"))
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
