@@ -217,12 +217,146 @@ def _gullwing(spec, fil):
     return pads, (body_x, body_y), rep
 
 
+SIDES = ("left", "bottom", "right", "top")                 # _qfn's order: counter-clockwise from pin 1, top left
+
+
+def listed_sides(spec):
+    """The read's pin_sides (the pin figure's numbers along each side, "" for a lead place with no pin) as
+    {side: [number or ""]}, or None when the read gave none (a side left out or null has no leads)."""
+    ps = spec.get("pin_sides")
+    if not isinstance(ps, dict):
+        return None
+    out = {s: ["" if x is None else str(x).strip() for x in ps.get(s)] if isinstance(ps.get(s), list) else []
+           for s in SIDES}
+    return out if any(out.values()) else None
+
+
 def rows(spec):
-    """(pins_left_right, pins_top_bottom) as _qfn lays a QFN / QFP out: a split the read left blank is the default
+    """(pins_left_right, pins_top_bottom) as _qfn lays a QFN / QFP out: the lead places of the longer row of each
+    pair when the read listed the sides (pin_sides), else the read's split, and a split it left blank the default
     (a quarter of the pins per side; with only pins_left_right given, the rest on top/bottom, so 0 for a DFN)."""
+    ls = listed_sides(spec)
+    if ls:
+        return max(len(ls["left"]), len(ls["right"])), max(len(ls["bottom"]), len(ls["top"]))
     n = spec["pin_count"]
     nlr = spec.get("pins_left_right", n // 4)
     return nlr, spec.get("pins_top_bottom", (n - 2 * nlr) // 2)
+
+
+def side_lists(spec):
+    """{side: [pad number, or "" for a lead place with no pad]} as _qfn lays the pads out: the read's pin_sides, else
+    the row split numbered 1, 2, 3 ... counter-clockwise from pin 1 (left top->bottom, bottom, right, top)."""
+    ls = listed_sides(spec)
+    if ls:
+        return ls
+    nlr, ntb = rows(spec)
+    out, k = {}, 1
+    for s, cnt in zip(SIDES, (nlr, ntb, nlr, ntb)):
+        out[s] = [str(k + i) for i in range(cnt)]
+        k += cnt
+    return out
+
+
+def _key(s):
+    return (not str(s).isdecimal(), int(s) if str(s).isdecimal() else 0, str(s))
+
+
+def pin_sides_problems(spec):
+    """What makes a read's pin_sides unbuildable or contradict the rest of the read -> lines (sanity's). Rows facing
+    each other have as many lead places (a lead the part leaves out is a place with no pin, ""), so a short row is
+    never centred on a guess; pin 1 starts the left side (the frame's top left); every pin once, pin_count of them;
+    and a row split read as well (pins_left_right / pins_top_bottom) says the same: a figure with 7/5 and a split of
+    6/6 is a pin read onto the wrong side, which the margins alone cannot tell (QFN-24 4x5, R-FX12-2a)."""
+    ls = listed_sides(spec)
+    if not ls:
+        return []
+    if spec.get("package_type") != "qfn":
+        return [f"pin_sides is for a no-lead quad / dual package (qfn), not {spec.get('package_type')}: lay the pads "
+                "out with the fields of that package type"]
+    out = []
+    nums = [x for s in SIDES for x in ls[s] if x]
+    twice = sorted({x for x in nums if nums.count(x) > 1}, key=_key)
+    if twice:
+        out.append(f"pin_sides lists pin {', '.join(twice)} twice: each pin sits on one side, once")
+    n = spec.get("pin_count")
+    if isinstance(n, int) and not isinstance(n, bool) and len(set(nums)) != n:
+        out.append(f"pin_sides lists {len(set(nums))} pins but pin_count is {n} (the exposed pad is not a side's pin)")
+    for a, b in (("left", "right"), ("bottom", "top")):
+        if ls[a] and ls[b] and len(ls[a]) != len(ls[b]):
+            out.append(f"pin_sides: the {a} side has {len(ls[a])} lead places and the {b} side {len(ls[b])}: rows "
+                       "facing each other have as many (a lead place with no pin is \"\"), so where the short row's "
+                       "pins sit is not known (check the pin figure)")
+    first = next((x for x in ls["left"] if x), None)
+    if "1" in nums and first != "1":
+        out.append("pin_sides: pin 1 is not the first pin of the left side; the sides start from pin 1 at the top "
+                   "left (left top to bottom, bottom left to right, right bottom to top, top right to left)")
+    nlr, ntb = spec.get("pins_left_right"), spec.get("pins_top_bottom")
+    got = rows(spec)
+    for k, v, w in (("pins_left_right", nlr, got[0]), ("pins_top_bottom", ntb, got[1])):
+        if isinstance(v, int) and not isinstance(v, bool) and v != w:
+            out.append(f"{k} {v} disagrees with pin_sides ({w} lead places on each of those sides): the row split and "
+                       "the pin figure say different things, so a pin is read onto the wrong side (check the pin "
+                       "figure)")
+    return out
+
+
+def joined(spec):
+    """(side, [the joined pins]) when the read gives joined_pins (leads that are one piece of metal with the exposed
+    pad, a MOSFET's drain leads) and they are every lead of one side as the builder lays them out, else None."""
+    j = spec.get("joined_pins")
+    if not isinstance(j, list) or not j or spec.get("package_type") != "qfn" or not spec.get("exposed_pad"):
+        return None
+    try:
+        sl = side_lists(spec)
+    except (KeyError, TypeError):
+        return None
+    want = {str(x).strip() for x in j}
+    for s in SIDES:
+        have = [x for x in sl[s] if x]
+        if have and set(have) == want and len(have) == len(j):
+            return s, sorted(want, key=_key)
+    return None
+
+
+def joined_problems(spec):
+    """joined_pins that cannot be one pad with the exposed pad -> lines (sanity's)."""
+    j = spec.get("joined_pins")
+    if not j:
+        return []
+    if spec.get("package_type") != "qfn":
+        return [f"joined_pins is for a no-lead package (qfn), not {spec.get('package_type')}: give the land as a "
+                "pad_table (custom) instead"]
+    if not spec.get("exposed_pad"):
+        return ["joined_pins names leads joined to the exposed pad, but the read gives no exposed pad"]
+    if joined(spec):
+        return []
+    try:
+        sl = side_lists(spec)
+        shown = "; ".join(f"{s} {' '.join(x for x in sl[s] if x)}" for s in SIDES if any(sl[s]))
+    except (KeyError, TypeError):
+        shown = "not known"
+    return [f"joined_pins {', '.join(map(str, j))} are not every lead of one side (the sides: {shown}): the leads "
+            "that run into the exposed pad are one side's whole row (check the bottom view)"]
+
+
+def ep_offset(spec):
+    """(x, y) of the thermal land's centre as build() draws it: land.ep_center toward the joined side for a merged pad
+    (joined), else the part's centre."""
+    jn, land = joined(spec), spec.get("land") or {}
+    c = land.get("ep_center") if isinstance(land, dict) else None
+    if not jn or not isinstance(c, (int, float)) or isinstance(c, bool):
+        return 0.0, 0.0
+    sx, sy = TOWARD[jn[0]]
+    return round(sx * c, 4), round(sy * c, 4)
+
+
+TOWARD = {"left": (-1, 0), "right": (1, 0), "bottom": (0, 1), "top": (0, -1)}   # a side's way out, KiCad's y down
+
+
+def merged_number(spec):
+    """The merged pad's number: the lowest of the joined pins (KiCad's TDSON-8-1, LFPAK56: the drain is pad 5)."""
+    jn = joined(spec)
+    return jn[1][0] if jn else None
 
 
 def _qfn(spec, fil):
@@ -249,15 +383,21 @@ def _qfn(spec, fil):
                 "(pins_left_right / pins_top_bottom) or the exposed pad are read the other way round (check them "
                 "against the drawing)")
     X = min(rx["X"], rdn(e - MIN_PAD_GAP))
-    pads, k = [], 1
-    for i in range(nlr):                                      # left, top->bottom
-        pads.append((str(k), -rx["pad_ctr"], (i - (nlr - 1) / 2) * e, rx["pad_len"], X)); k += 1
-    for i in range(ntb):                                      # bottom, left->right
-        pads.append((str(k), (i - (ntb - 1) / 2) * e, ry["pad_ctr"], X, ry["pad_len"])); k += 1
-    for i in range(nlr):                                      # right, bottom->top
-        pads.append((str(k), rx["pad_ctr"], ((nlr - 1) / 2 - i) * e, rx["pad_len"], X)); k += 1
-    for i in range(ntb):                                      # top, right->left
-        pads.append((str(k), ((ntb - 1) / 2 - i) * e, -ry["pad_ctr"], X, ry["pad_len"])); k += 1
+    pads, sl = [], side_lists(spec)                           # each side centred on its own lead places; a place with
+    for side in SIDES:                                        # no pin ("") gets no pad
+        row = sl[side]
+        c = len(row)
+        for i, num in enumerate(row):
+            if not num:
+                continue
+            if side == "left":                                # top->bottom
+                pads.append((num, -rx["pad_ctr"], (i - (c - 1) / 2) * e, rx["pad_len"], X))
+            elif side == "bottom":                            # left->right
+                pads.append((num, (i - (c - 1) / 2) * e, ry["pad_ctr"], X, ry["pad_len"]))
+            elif side == "right":                             # bottom->top
+                pads.append((num, rx["pad_ctr"], ((c - 1) / 2 - i) * e, rx["pad_len"], X))
+            else:                                             # top, right->left
+                pads.append((num, ((c - 1) / 2 - i) * e, -ry["pad_ctr"], X, ry["pad_len"]))
     return pads, (body_x[1] / 2, body_y[1] / 2), {"Z": rx["Z"], "G": rx["G"], "X": X, "Zy": ry["Z"], "Gy": ry["G"]}
 
 
@@ -294,8 +434,8 @@ def _left_right(spec, pads):
     t = spec["package_type"]
     if t not in ("qfn", "qfp"):
         return [True] * len(pads)                             # chips, gull-wings (and their tab): all along X
-    nlr, ntb = rows(spec)
-    side = ([True] * nlr + [False] * ntb) * 2                 # _qfn(): left, bottom, right, top
+    sl = side_lists(spec)                                     # _qfn(): left, bottom, right, top; no pad on a place
+    side = [s in ("left", "right") for s in SIDES for x in sl[s] if x]                     # with no pin
     return [side[i] if i < len(side) else True for i in range(len(pads))]
 
 
@@ -488,7 +628,8 @@ def sanity(spec):
             int(dep.group(1)) < int(dep.group(2)):        # UCC256301's SOIC-14-16 built as 7 + 7 would be a wrong land
         errs.append(f"{spec['name']} puts {dep.group(1)} pins on {dep.group(2)} places: list the pads in pin_positions "
                     f"(a full dual row of {n} pads puts them on the wrong places)")
-    if t in ("qfn", "qfp") and n:
+    errs += pin_sides_problems(spec) + joined_problems(spec)
+    if t in ("qfn", "qfp") and n and not listed_sides(spec):   # (pin_sides: its own count, above)
         nlr, ntb = rows(spec)
         if 2 * nlr + 2 * ntb != n:
             errs.append(f"pin_count {n} doesn't equal 2 x {nlr} (left/right) + 2 x {ntb} (top/bottom); "
@@ -673,12 +814,19 @@ def build(spec, density=None):
 
     ep = spec.get("exposed_pad")
     ep_lines = []
+    ox = oy = 0.0                                             # the thermal land's centre (off it for a merged pad)
+    jn = joined(spec)
+    if jn:
+        ep, gone, pads = _merge(spec, jn, pads, rep)
+        ox, oy = rep["ep_at"]
     if ep:
         ew, eh = dim(ep["length"])[1], dim(ep["width"])[1]
         land = spec.get("land") or {}
         if land.get("ep_across") and land.get("ep_along"):   # the maker's thermal land (TI PowerPAD: 3.4 x 5 around a
             ew, eh = land["ep_across"], land["ep_along"]      # 3 x 3 exposed pad), as KiCad draws it
             rep["ep_land"] = "datasheet"
+        if jn:
+            _merged_covers(jn, gone, ew, eh, ox, oy)
         given = ep.get("number") not in (None, "")                                    # (an EP read as pin 0 stays 0)
         epnum = str(ep["number"] if given else (spec.get("pin_count") or len(pads)) + 1)  # pin_positions may omit pin_count
         if not given and epnum in {p[0] for p in pads}:
@@ -688,8 +836,8 @@ def build(spec, density=None):
                              f"(pads {', '.join(sorted({p[0] for p in pads}, key=lambda s: (len(s), s)))}): give "
                              "exposed_pad.number as the datasheet numbers the thermal pad")
         lr = _left_right(spec, pads)                                                  # gullwing: all pads are L/R
-        gaps = [abs(p[1]) - p[3] / 2 - ew / 2 for p, s in zip(pads, lr) if s]         # left/right rows vs EP
-        gaps += [abs(p[2]) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]    # qfn top/bottom rows vs EP
+        gaps = [abs(p[1] - ox) - p[3] / 2 - ew / 2 for p, s in zip(pads, lr) if s]    # left/right rows vs EP
+        gaps += [abs(p[2] - oy) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]   # qfn top/bottom rows vs EP
         rx = [abs(p[1]) - p[3] / 2 for p, s in zip(pads, lr) if s]                    # the room between the rows, less
         ry = [abs(p[2]) - p[4] / 2 for p, s in zip(pads, lr) if not s]                # the mask web: shorts() asks
         rep["ep_room"] = (2 * (min(rx) - MIN_PAD_GAP) if rx else None, 2 * (min(ry) - MIN_PAD_GAP) if ry else None)
@@ -699,11 +847,11 @@ def build(spec, density=None):
         if why:
             rep.setdefault("notes", []).append(why)
         if (mw, mh) == (ew, eh):
-            ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
+            ep_lines.append(pad(epnum, ox, oy, ew, eh, shape="rect", layers=("F.Cu", "F.Mask")))
         else:                                       # solder-mask-defined (TI PowerPAD land): the copper spreads heat
-            ep_lines.append(pad(epnum, 0, 0, ew, eh, shape="rect", layers=("F.Cu",)))  # under the mask, the opening
-            ep_lines.append(pad("", 0, 0, mw, mh, shape="rect", layers=("F.Mask",)))  # is a pad of its own, as KiCad
-            rep["ep_mask"] = (mw, mh)                                                    # draws it
+            ep_lines.append(pad(epnum, ox, oy, ew, eh, shape="rect", layers=("F.Cu",)))  # under the mask, the opening
+            ep_lines.append(pad("", ox, oy, mw, mh, shape="rect", layers=("F.Mask",)))  # is a pad of its own, as KiCad
+            rep["ep_mask"] = (mw, mh)                                                      # draws it
         cov = ep.get("paste_coverage", 0.65)                          # KLC F6.3: 50-80 %, 65 % recommended
         grid = ep.get("paste_grid")                                   # split into windows of about 1.2 mm or less
         gx = grid or max(1, min(5, math.ceil(mw / 1.2 - 1e-9)))       # paste only where the mask is open
@@ -711,11 +859,11 @@ def build(spec, density=None):
         sw, sh = mw * math.sqrt(cov) / gx, mh * math.sqrt(cov) / gy
         for i in range(gx):
             for j in range(gy):
-                cx, cy = (i - (gx - 1) / 2) * mw / gx, (j - (gy - 1) / 2) * mh / gy
+                cx, cy = ox + (i - (gx - 1) / 2) * mw / gx, oy + (j - (gy - 1) / 2) * mh / gy
                 ep_lines.append(pad("", round(cx, 4), round(cy, 4), round(sw, 3), round(sh, 3), layers=("F.Paste",)))
         rep["EP"] = (ew, eh, f"paste {gx}x{gy} @ {cov:.0%}")
         rep["ep_num"] = epnum
-    copper = pads + ([(None, 0, 0, ew, eh)] if ep else [])        # the copper drawn: a thermal land, not the package's pad
+    copper = pads + ([(None, ox, oy, ew, eh)] if ep else [])      # the copper drawn: a thermal land, not the package's pad
 
     # ---- courtyard: union(pads, body) + excess, rounded up to the 0.01 mm grid (KLC F5.3)
     exc = fil[3]
@@ -727,7 +875,7 @@ def build(spec, density=None):
     out = [f'(footprint {q(spec["name"])} (version 20221018) (generator "ecadlib_footprint_gen")',
            '  (layer "F.Cu")',
            f'  (descr {q(descr(spec, rep))})',
-           f'  (tags {q(" ".join(filter(None, [t, fam, "polarized" if polarized else "", "IPC-7351B density-" + density])))})',
+           f'  (tags {q(" ".join(filter(None, [t, fam, "polarized" if polarized else "", "IPC-7351B density-" + density, JOINED_TAG + ",".join(jn[1]) if jn else ""])))})',
            '  (attr smd)',
            text("reference", "REF**", 0, -cy - 0.7, "F.SilkS"),
            text("value", spec["name"], 0, cy + 0.7, "F.Fab"),
@@ -793,6 +941,45 @@ def build(spec, density=None):
     rep["checks"] = [{"level": l, "rule": r_, "message": m}
                      for l, r_, m in footprint_check.check(text_out, allow_duplicate_pads=[str(spec["tab"]["number"])] if spec.get("tab") else None)]
     return text_out, rep
+
+
+# the tag a merged pad's footprint carries (footprint_rules: the name counts the leads the merged pad took in)
+JOINED_TAG = "joined_pins="
+
+
+# a merged pad's edge may fall short of a joined lead's land by the scorer's position tolerance (eval.score TOL["pos"])
+MERGE_TOL = 0.05
+
+
+def _merge(spec, jn, pads, rep):
+    """The leads joined to the exposed pad (joined: a MOSFET's drain leads) taken out of the pads: they and the pad are
+    one pad, the maker's land's thermal land (ep_across x ep_along, ep_center off the centre toward the joined side),
+    numbered with the lowest joined pin. Only the maker's land sizes it: the package outline gives the metal, not the
+    land, so a read with no land is not built (datasheet.joined_to_pad holds it). -> (exposed pad, joined lead pads,
+    the other pads); rep["ep_at"] = the merged pad's centre."""
+    land = spec.get("land") or {}
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    side, nums = jn
+    if not (num(land.get("ep_across")) and num(land.get("ep_along"))):
+        raise ValueError(f"joined_pins: leads {', '.join(nums)} and the exposed pad are one pad, which only the maker's "
+                         "land sizes (land.ep_across / ep_along / ep_center), and the read gives no land for it: not "
+                         "built from the package outline (check the land pattern drawing)")
+    rep["ep_at"] = ep_offset(spec)
+    rep["merged"] = {"pins": nums, "side": side, "number": nums[0]}
+    gone = [p for p in pads if p[0] in nums]
+    return dict(spec["exposed_pad"], number=nums[0]), gone, [p for p in pads if p[0] not in nums]
+
+
+def _merged_covers(jn, gone, ew, eh, ox, oy):
+    """The merged pad must cover the land of every lead joined to it (a lead's land left bare outside the pad means the
+    land's thermal pad was misread: its size or its ep_center). Raises ValueError."""
+    x0, x1, y0, y1 = ox - ew / 2, ox + ew / 2, oy - eh / 2, oy + eh / 2
+    for p in gone:
+        out = max(x0 - (p[1] - p[3] / 2), (p[1] + p[3] / 2) - x1, y0 - (p[2] - p[4] / 2), (p[2] + p[4] / 2) - y1)
+        if out > MERGE_TOL + 1e-9:
+            raise ValueError(f"joined_pins: the merged pad ({ew:g} x {eh:g} mm at ({ox:g}, {oy:g})) leaves joined lead "
+                             f"{p[0]}'s land {out:.3g} mm bare: the land's thermal pad and its leads do not meet, which "
+                             "is implausible (check land.ep_across / ep_along / ep_center against the land drawing)")
 
 
 def shorts(rep):

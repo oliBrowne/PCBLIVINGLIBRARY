@@ -296,13 +296,14 @@ def _quad_pins(spec):
     an LGA's come from its pads (spec terminals)."""
     if spec.get("terminals"):
         return [tuple(t) for t in spec["terminals"]]
-    n, e = spec["pin_count"], spec["pitch"]
-    nlr = spec.get("pins_left_right", n // 4)
-    ntb = spec.get("pins_top_bottom", (n - 2 * nlr) // 2)
-    pins, k = [], 1
-    for side, cnt, sgn in (("L", nlr, -1), ("B", ntb, 1), ("R", nlr, 1), ("T", ntb, -1)):
-        for i in range(cnt):
-            pins.append((str(k), side, sgn * (i - (cnt - 1) / 2) * e)); k += 1
+    from . import footprint_gen as F
+    e, sl = spec["pitch"], F.side_lists(spec)   # the footprint's sides (a read's pin_sides: no lead where it has none)
+    pins = []
+    for side, key, sgn in (("L", "left", -1), ("B", "bottom", 1), ("R", "right", 1), ("T", "top", -1)):
+        cnt = len(sl[key])
+        for i, num in enumerate(sl[key]):
+            if num:
+                pins.append((num, side, sgn * (i - (cnt - 1) / 2) * e))
     return pins                                 # offset: model y for L/R rows, model x for B/T rows
 
 

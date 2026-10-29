@@ -338,12 +338,25 @@ def _close(a, b, tol):
     return abs(a - b) <= tol
 
 
+def joined_pins(tree):
+    """The leads footprint_gen merged into the exposed pad (its tag joined_pins=5,6,7,8: a MOSFET's drain leads and
+    pad drawn as one pad, numbered 5), or []."""
+    words = str((sexpr.first(tree, "tags") or [None, ""])[1]).split()
+    from .footprint_gen import JOINED_TAG
+    got = next((w[len(JOINED_TAG):] for w in words if w.startswith(JOINED_TAG)), "")
+    return [x for x in got.split(",") if x]
+
+
 def _name_rules(s, add):
     name = s["name"]
     claim = parse_name(name)
     if not claim:
         return claim
     pins, eps, mps = s["pins"], s["ep_nums"], s["mount"]
+    jp = joined_pins(s["tree"])
+    if jp and jp[0] in set(pins) | set(eps):          # the merged pad is the leads it took in and the exposed pad:
+        pins = sorted(set(pins) | set(jp), key=_natural)                      # count those leads as the name does,
+        eps = (set(eps) - {jp[0]}) | ({"(merged)"} if claim.get("ep") else set())   # and the name's -1EP as that pad
     fam = claim.get("family", "")
     bga = fam == "BGA" or bool(BGA_NAME.search(name)) and claim.get("layout")
     # pin count: KLC counts uniquely numbered pads without the exposed pad(s); IPC counts the thermal pad too

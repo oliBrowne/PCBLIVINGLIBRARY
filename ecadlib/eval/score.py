@@ -400,6 +400,10 @@ def maker_land(mine, spec, tol=None):
         return None
     cx, cy = _centre(pads)
     ep = [p for p in pads if p[0] in ep_numbers(mine)]
+    off = F.ep_offset(spec)                           # a merged pad (joined_pins) sits off the centre by ep_center:
+    mp = next((p for p in ep if off != (0.0, 0.0) and str(p[0]) == F.merged_number(spec)), None)
+    if mp:                                            # the part's centre from it, not the pads' box (leads one side)
+        cx, cy = mp[1] - off[0], mp[2] - off[1]
     near = lambda a, b, k: abs(a - b) <= t[k] + 1e-9
     tab = (spec.get("tab") or {}) if isinstance(spec.get("tab"), dict) else {}
     tl = [land.get(k) for k in F.TAB_LAND] if tab and all(isinstance(land.get(k), (int, float)) for k in F.TAB_LAND) else None
@@ -427,7 +431,7 @@ def maker_land(mine, spec, tol=None):
                (near(p[4], l, "size") and near(p[3], w, "size") and near(y, cyy, "pos"))
     rest = [p for p in pads if p not in ep]
     if not lead:                                      # the signal pads are IPC's, scored against KiCad as any;
-        used = _ep_land(ep, rest, ea, eb, cx, cy, near)   # only the thermal pad is the maker's, when it can be:
+        used = _ep_land(ep, rest, ea, eb, cx + off[0], cy + off[1], near)   # only the thermal pad is the maker's:
         small = F.thermal_land_small(spec)                # never smaller than the package's pad
         return {"followed": bool(used) and not small, "pads": [], "ep": [p[0] for p in ep],
                 "ep_land": [] if small else used, "thermal_only": True, **({"implausible": small} if small else {})}
@@ -457,14 +461,16 @@ def maker_land(mine, spec, tol=None):
     # (the lead pads' long side runs across the rows: pads wider than tall are rows at +-x, so across is the pad's
     # width; taller than wide, its height; both kinds, a quad package: either way round. Not the pads' extent: a long
     # TSSOP's rows reach further along y than the rows sit apart, TPS70345 PWP 3.575 vs 2.9)
-    ep_used = _ep_land(ep, rest, ea, eb, cx, cy, near) if thermal and not F.thermal_land_small(spec) else []
+    ep_used = _ep_land(ep, rest, ea, eb, cx + off[0], cy + off[1], near) if thermal and not F.thermal_land_small(spec) \
+        else []
     return {"followed": bool(rest) and len(used) == len(rest) and sane, "pads": used + tab_used, "ep": [p[0] for p in ep],
             "ep_land": ep_used,
             **({} if sane else {"implausible": "the land does not cover the leads read from the same drawing"})}
 
 
 def _ep_land(ep, rest, ea, eb, cx, cy, near):
-    """The exposed pads that are the land's thermal pad (ep_across x ep_along, centred on the pads)."""
+    """The exposed pads that are the land's thermal pad (ep_across x ep_along, centred at cx, cy: the pads' centre, or
+    ep_center off it for a merged pad)."""
     if not rest:
         return []
     wide, tall = sum(p[3] > p[4] for p in rest), sum(p[4] > p[3] for p in rest)
