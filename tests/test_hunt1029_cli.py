@@ -179,3 +179,23 @@ def test_approve_footprint_named_con_writes_no_windows_device_file(tmp_path):
             assert stem.upper() not in DEVICE_NAMES, (nm, f)
             assert (ws.root / f).is_file(), f
         assert ws.preview_footprint(dict(spec, name=nm))["exists"], nm     # found again under the name it was saved as
+
+
+# ---------------------------------------------------------------- PR #212 review: CON_ file, CON drawing inside
+@lite
+def test_approve_footprint_named_con_names_the_drawing_inside_as_the_file(tmp_path):
+    # the files were CON_.kicad_mod and CON_.PcbLib, but the footprint inside both was still CON: the index finds
+    # ecadlib:CON_, the plan asks Altium for drawing CON_ in CON_.PcbLib, and that drawing is not there
+    from ecadlib import altium_lib as AL, sexpr
+    from ecadlib.app import Workspace
+    from ecadlib.kicad_index import KiCadIndex
+    ws = Workspace(tmp_path / "w", offline=True)
+    spec = dict(next(iter(ws.example_specs().values())))
+    for nm in ("CON", "my part"):
+        r = ws.approve_footprint(dict(spec, name=nm))
+        kmod = next(ws.root / f for f in r["files"] if f.endswith(".kicad_mod"))
+        inner = sexpr.parse(kmod.read_text(encoding="utf-8"))[1]
+        assert inner == kmod.stem == r["name"], (nm, inner, kmod.stem, r["name"])
+        pcb = next(ws.root / f for f in r["files"] if f.endswith(".PcbLib"))
+        assert [fp["name"] for fp in AL.read_pcblib(pcb)] == [pcb.stem] == [r["name"]], (nm, pcb)
+        assert f"{kmod.parent.stem}:{r['name']}" in KiCadIndex([kmod.parent.parent]).footprints

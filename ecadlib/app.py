@@ -375,8 +375,11 @@ class Workspace:
         where triage and the Altium 365 plan will find it. Refuses to replace an existing one unless overwrite."""
         from . import altium_lib
         spec_obj = json.loads(spec) if isinstance(spec, str) else spec
-        res = self.preview_footprint(spec_obj, density)
-        name = portable_stem(self.safe_name(res["name"], strict=True))   # CON -> CON_: a file, not the console
+        if not isinstance(spec_obj, dict) or not spec_obj.get("name"):
+            raise ValueError("the package spec needs at least a \"name\"")
+        name = portable_stem(self.safe_name(spec_obj["name"], strict=True))   # CON -> CON_: a file, not the console
+        spec_obj = dict(spec_obj, name=name)      # the footprint inside both files is named as the files (the index
+        res = self.preview_footprint(spec_obj, density)                   # and the plan go by the file name)
         p = self.gen_dir / f"{name}.kicad_mod"
         if p.exists() and not overwrite:
             raise FileExistsError(f"{name} is already in the workspace library; approve again with overwrite to replace it")
