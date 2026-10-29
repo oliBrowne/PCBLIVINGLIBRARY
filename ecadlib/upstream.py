@@ -511,7 +511,8 @@ def main(argv=None):
     k.add_argument("manifest", nargs="?", default="out/altium_models_kicad/manifest.json")
     k.add_argument("--update", action="store_true", help="reconvert parts whose sources changed")
     k.add_argument("--all", action="store_true", help="list unchanged sources in the report too")
-    k.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    k.add_argument("--cache", default=default_cache())
     k.add_argument("--offline", action="store_true", help="--update reads unchanged sources from the HTTP cache only")
     k.add_argument("-o", "--out", default="out/upstream_kicad", help="report path stem (.md and .csv)")
     a3 = sub.add_parser("check-a365", help="compare a plan.json with an Altium 365 workspace (NEXAR_TOKEN)")

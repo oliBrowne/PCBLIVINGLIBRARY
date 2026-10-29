@@ -15,8 +15,8 @@ only to the services listed below, and only when you use the feature that needs 
 
 Bug reports are never sent by ecadlib. When ecadlib hits an error it did not expect (a bug, not a wrong path or a bad
 setting), it saves the error on your computer, in the `crashes` folder next to your stored keys (`%APPDATA%\ecadlib`
-on Windows), keeping the newest 20. Before saving, it blanks out API keys, tokens, e-mail addresses, your user name, your computer's name and
-your home folder. `ecadlib report-bug` (or **Report a bug** in the web UI) shows you that text and opens a GitHub issue
+on Windows), keeping the newest 20. Before saving, it blanks out API keys, tokens, e-mail addresses, your user name, your computer's name,
+your company's name in an Altium 365 address and your home folder. `ecadlib report-bug` (or **Report a bug** in the web UI) shows you that text and opens a GitHub issue
 filled in with it, the ecadlib version, your OS and your Python version. Nothing leaves your computer until you choose
 to open that link: the text then travels to GitHub inside the link so GitHub can show it to you, and it becomes a
 public issue only when you press Submit. You can edit or delete any of it first. `ecadlib report-bug --clear`

@@ -162,7 +162,11 @@ def save(ws_root, b):
     if not ok:
         raise PermissionError(f"ecadlib's settings folder {cfg} cannot be written (permission denied), so nothing was "
                               "changed; fix its permissions, or set ECADLIB_HOME to a folder you can write")
-    ws.mkdir(parents=True, exist_ok=True)
+    try:
+        ws.mkdir(parents=True, exist_ok=True)
+    except OSError as e:                        # a drive that is not there, a folder the account cannot write
+        raise ValueError(f"cannot make the workspace folder {ws} ({e.strerror or type(e).__name__}): pick a folder "
+                         f"you can write, e.g. {UC.default_workspace()}") from None
     order = (_ws_rules_raw(ws).get("sources") or {}).get("order")   # the person's order: the page only sets the
     order = list(order if isinstance(order, list) else RU.DEFAULTS["sources"]["order"])   # datasheet reader
     if p[0] == "none":
@@ -266,17 +270,26 @@ _SIGNIN_LOCK = threading.Lock()
 
 
 def a365_address(v):
-    """The Altium 365 workspace address as typed on the page: "" (none), or https://<host>/ ; ValueError otherwise."""
+    """The Altium 365 workspace address as typed on the page: "" (none), or https://<host>/ ; ValueError otherwise.
+    An address copied from the browser while a page of the workspace is open (https://acme.365.altium.com/projects)
+    is the workspace's own address: Nexar knows the workspace by https://<host>/ only."""
     if not isinstance(v, str) or len(v) > 300:
         raise ValueError("the Altium 365 workspace address must be a web address such as https://yourcompany.365.altium.com/")
     v = v.strip()
     if not v:
         return ""
+    bad = ValueError(f"{v!r} is not an Altium 365 workspace address: copy it from your browser, e.g. "
+                     "https://yourcompany.365.altium.com/")
+    if any(c.isspace() or ord(c) < 32 for c in v):
+        raise bad
     u = urllib.parse.urlsplit(v)
-    if u.scheme != "https" or not u.hostname or not re.fullmatch(r"[A-Za-z0-9.-]+", u.netloc.split(":")[0]):
-        raise ValueError(f"{v!r} is not an Altium 365 workspace address: copy it from your browser, e.g. "
-                         "https://yourcompany.365.altium.com/")
-    return v
+    try:
+        port = u.port
+    except ValueError:
+        raise bad from None
+    if u.scheme != "https" or not u.hostname or "@" in u.netloc or not re.fullmatch(r"[A-Za-z0-9.-]+", u.hostname):
+        raise bad                               # user:password@ would be kept in ecadlib.toml as plain text
+    return f"https://{u.hostname.lower()}" + (f":{port}" if port else "") + "/"
 
 
 def a365_state(raw):

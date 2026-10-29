@@ -673,7 +673,8 @@ def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
                     help="https://host/api/v4 (default CI_API_V4_URL, else [agent] gitlab_api)")
     ap.add_argument("--no-notify", action="store_true", help="do not send [notify] webhooks for this run")
     ap.add_argument("--rules", help="ecadlib.toml (default: searched from the input's folder)")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--offline", action="store_true", help="HTTP cache only")
     ap.add_argument("--no-save", action="store_true", help="do not update the state (dry run)")
     a = ap.parse_args(argv)

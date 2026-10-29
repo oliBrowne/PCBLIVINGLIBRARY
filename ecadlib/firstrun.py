@@ -234,6 +234,17 @@ def default_out(kind, bom, start="."):
     return str(ws / "reports" / f"triage_{stem}") if ws else "out/triage"
 
 
+def default_cache(start="."):
+    """Default --cache of the commands that download: <workspace>/http_cache, the one the web UI, the MCP server and the
+    menus use for that workspace (out_workspace), else out/http_cache. One cache per workspace: run from another folder,
+    a command does not download the same datasheets again or pay again for datasheet answers it already has."""
+    try:
+        ws = out_workspace(start)
+    except Exception:                         # a broken settings file: the old default
+        ws = None
+    return str(Path(ws) / "http_cache") if ws else "out/http_cache"
+
+
 def _rel_to(p, rules_file):
     p = Path(str(p)).expanduser()
     return p if p.is_absolute() else (Path(rules_file).resolve().parent / p)

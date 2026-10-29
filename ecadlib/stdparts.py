@@ -1277,7 +1277,8 @@ def main(argv=None):
     b = sub.add_parser("bench", help="every table entry against KiCad's official footprint")
     b.add_argument("--kicad", help="a kicad-footprints checkout (default: fetch from GitLab through the HTTP cache)")
     b.add_argument("--fixture", help="numbers-only reference file (.json or .json.gz)")
-    b.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    b.add_argument("--cache", default=default_cache())
     b.add_argument("--offline", action="store_true")
     c = sub.add_parser("coverage", help="BOM lines the standard source resolves")
     c.add_argument("bom", nargs="+")

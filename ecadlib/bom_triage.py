@@ -1297,7 +1297,8 @@ def main(argv=None):
     ap.add_argument("--providers", help="comma list in order (default: [providers] order in the rules, else "
                     "nexar,digikey,mouser,jlcpcb_search,easyeda: the official APIs first); plugins: `ecadlib plugins list`")
     ap.add_argument("--offline", action="store_true", help="use HTTP cache only")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--rate", type=float, default=1.0, help="min seconds between requests per host")
     ap.add_argument("--rules", help="library rules file; its [bom] columns name your BOM headers (default: ecadlib.toml found from here)")
     ap.add_argument("--json", action="store_true", help="print the result as JSON (bom, lines, mapping, counts, rows, reports)")

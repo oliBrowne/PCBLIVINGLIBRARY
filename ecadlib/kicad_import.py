@@ -932,7 +932,8 @@ def main(argv=None):
     def opts(p, pre=""):                                     # accepted before or after the subcommand
         d = dict(default=argparse.SUPPRESS) if pre else {}
         p.add_argument("-o", "--out", dest=pre + "out", **(d or {"default": "out/altium_models_kicad"}))
-        p.add_argument("--cache", dest=pre + "cache", **(d or {"default": "out/http_cache"}))
+        from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+        p.add_argument("--cache", dest=pre + "cache", **(d or {"default": default_cache()}))
         p.add_argument("--offline", dest=pre + "offline", action="store_true", help="only use the HTTP cache", **d)
         p.add_argument("--step", dest=pre + "step", action="store_true", help="embed the KiCad STEP model instead of an extruded body", **d)
         p.add_argument("--box", dest=pre + "box", action="store_true",

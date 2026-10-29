@@ -376,7 +376,8 @@ def main(argv=None):
     ap.add_argument("--include-held", action="store_true", help="also list parts the release check held")
     ap.add_argument("--driver", default=DEFAULT_DRIVER, help="ODBC driver name (Linux unixODBC: usually SQLite3)")
     ap.add_argument("--dsn", default="", help="use this ODBC data source name instead of a driver connection string")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--offline", action="store_true", help="with --export: use the HTTP cache only")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan)")
     ap.add_argument("--take-over", action="store_true", help="write the library although another plan folder wrote "
