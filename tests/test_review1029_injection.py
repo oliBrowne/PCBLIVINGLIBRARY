@@ -39,3 +39,42 @@ def test_where_used_does_not_read_schematics_outside_the_workspace(tmp_path):
     ws = _confined_ws(tmp_path)
     out = _call(ws, "where_used", {"projects": [_upload_project(ws)]})
     assert "TOPSECRET" not in out and "U9" not in out
+
+
+_SYM = ('(kicad_symbol_lib (version 20231120) (generator x)\n'
+        ' (symbol "U1" (property "Reference" "U" (at 0 0 0)) (property "Value" "U1" (at 0 0 0))\n'
+        '  (symbol "U1_1_1"\n'
+        '   (pin input line (at -5.08 0 0) (length 2.54) (name "EN{sep}ABLE") (number "1"))\n'
+        '   (pin output line (at 5.08 0 180) (length 2.54) (name "OUT") (number "2")))))\n')
+
+
+@lite
+def test_altium_recipe_pin_name_with_any_line_break_stays_one_record(tmp_path):
+    import warnings
+    from ecadlib import sexpr, kicad_import as K, altium_lib as AL, altium_native as AN
+    for i, sep in enumerate(("\x0c", "\x0b", "\x1c", "\x85", "\u2028", "\u2029")):   # str.splitlines() breaks on all
+        d = tmp_path / str(i)
+        d.mkdir()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sym = K.convert_symbol([K._find_symbol(sexpr.parse(_SYM.format(sep=sep)), "U1")], "U1")
+            AL.write_schlib(d / "U1.SchLib", [sym])
+        pins = AN._recipe_items(d / ("U1.SchLib" + AN.EXT))["U1"]["pins"]
+        assert len(pins) == 2, repr(sep)
+        lines = [ln for ln in AN.build_text(d).split("\n") if ln.startswith("PIN")]
+        assert len({len(ln.split("\t")) for ln in lines}) == 1, repr(sep)
+
+
+@lite
+def test_altium_recipe_pad_number_with_a_form_feed_stays_one_record(tmp_path):
+    import warnings
+    from ecadlib import kicad_import as K, altium_lib as AL, altium_native as AN
+    mod = ('(footprint "X" (version 20221018) (generator x) (layer "F.Cu")\n'
+           ' (pad "1\x0cA" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))\n'
+           ' (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))\n')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fp, _ = K.convert_footprint(mod, "X", "test", [], "")
+        AL.write_pcblib(tmp_path / "X.PcbLib", [fp])
+    assert len(AN._recipe_items(tmp_path / ("X.PcbLib" + AN.EXT))["X"]["pads"]) == 2
+    assert not [ln for ln in AN.build_text(tmp_path).split("\n") if ln.startswith("A\t")]
