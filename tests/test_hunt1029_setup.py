@@ -295,3 +295,23 @@ def test_librarian_without_o_says_where_a_second_bom_plan_went(tmp_path, monkeyp
             contextlib.redirect_stdout(io.StringIO()):
         L.main([str(b), "--offline"])
     assert "holds the plan for" in err.getvalue() and "librarian/bom_" in err.getvalue().replace("\\", "/"), err.getvalue()
+
+
+@lite
+def test_status_last_triage_is_a_newer_cli_csv_over_an_old_web_json_of_the_same_name(tmp_path, monkeypatch):
+    """Review M6 / Greptile P2: a CLI triage of ~/proj/bom.csv writes reports/triage_bom.csv, the same name as an old
+    web-UI triage of uploads/bom.csv (triage_bom.json + .csv). The newest file is the CLI .csv, but status showed the
+    old web .json's counts and time."""
+    import os
+    from ecadlib import ws_status as WS
+    rep = tmp_path / "reports"
+    rep.mkdir(parents=True)
+    (rep / "triage_bom.json").write_text(json.dumps({"name": "bom.csv", "rows": [{}] * 7, "counts": {"in_library": 7},
+                                                     "finished": "2023-11-14T22:13:20"}), encoding="utf-8")
+    os.utime(rep / "triage_bom.json", (1_700_000_000, 1_700_000_000))
+    (rep / "triage_bom.csv").write_text("﻿line,status\n1,in_library\n2,needs_footprint_generation\n", encoding="utf-8")
+    t = WS.status(tmp_path)["last_triage"]
+    assert t["report"] == "reports/triage_bom.csv" and t["lines"] == 2, t
+    os.utime(rep / "triage_bom.csv", (1_700_000_001, 1_700_000_001))   # written with its .json: the .json's details
+    t = WS.status(tmp_path)["last_triage"]
+    assert t["report"] == "reports/triage_bom.json" and t["lines"] == 7, t

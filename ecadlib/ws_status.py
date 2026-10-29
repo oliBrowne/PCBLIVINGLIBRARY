@@ -182,8 +182,9 @@ def status(root):
     tri = _files(root, "reports/triage_*.json") + _files(root, "reports/triage_*.csv")
     if tri:                                    # the newest triage, the web UI's (.json) or a CLI one (.csv only)
         f = max(tri, key=lambda p: (p.stat().st_mtime, p.suffix == ".json"))
-        if f.suffix == ".csv" and f.with_suffix(".json") in tri:     # a web UI triage: its .json has who and when
-            f = f.with_suffix(".json")
+        js = f.with_suffix(".json")             # a web UI triage writes its .csv, then its .json (who and when); a
+        if f.suffix == ".csv" and js in tri and js.stat().st_mtime >= f.stat().st_mtime - 2:   # newer CLI .csv of
+            f = js                              # the same name (~/proj/bom.csv vs uploads/bom.csv) is its own run
         t = {"report": rel(f), "finished": _iso(f.stat().st_mtime)}
         if f.suffix == ".csv":
             try:
