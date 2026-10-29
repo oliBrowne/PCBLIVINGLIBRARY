@@ -356,7 +356,7 @@ def test_dialog_form_matches_its_unit_and_the_results():
     read = set(re.findall(r"Answer\(Job, '(\w+)'\)", files[AF.DIALOG_UNIT]))
     assert read == {"status", "install", "build", "big", "report", "warnings", "offer_fill", "fix", "offer_queue",
                     "offer_ai", "ai_text", "ai_button", "ai_cost_text", "offer_release", "release_part",
-                    "release_more"}, read                     # R-MN-2: "and N more" when the dialog cannot list them all
+                    "release_more", "note"}, read                     # R-MN-2: "and N more" when the dialog cannot list them all
     asked = set(re.findall(r"Answer\(Prev, '(\w+)'\)", files[AF.DIALOG_UNIT]))       # the AI step's next job
     assert asked == {"ai_over", "ai_confirm", "ai_bom", "ai_mpn", "ai_part", "ai_approve", "ai_unknown",
                      "release_part", "release_bom", "release_mpn", "release_key"}, asked    # and Release anyway's

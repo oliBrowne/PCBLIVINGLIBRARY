@@ -162,7 +162,7 @@ def test_gate03_placeholder_fields_are_empty():
     from ecadlib import release_check as RC
     from tests.test_release_check import make
     with tempfile.TemporaryDirectory() as d:
-        hold_m = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "manufacturer": "hold"}}
+        hold_m = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "manufacturer": "hold", "datasheet": "hold"}}
         for name, v, want in (("Datasheet", "~", "fields: no datasheet link"), ("Datasheet", "N/A", "fields: no datasheet link"),
                               ("Manufacturer", "N/A", "fields: Manufacturer is empty"),
                               ("Manufacturer Part Number", "TBD", "fields: Manufacturer Part Number is empty"),
@@ -212,12 +212,13 @@ def test_gate04_release_check_mutation_property():
             for m, drop in (("no_ds", "ComponentLink2URL"), ("no_mfr", "Manufacturer")):
                 if m in ms:
                     it["parameters"] = [x for x in it["parameters"] if x["name"] != drop]
-                    if m == "no_ds" or hold_m:
+                    if hold_m:                     # both a note unless [release] manufacturer / datasheet = "hold"
                         exp.add("fields")
             if "no_desc" in ms:
                 it["description"] = ""; exp.add("fields")
             rules = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "height": "hold" if hold_h else "warn",
-                                                "manufacturer": "hold" if hold_m else "warn"}}
+                                                "manufacturer": "hold" if hold_m else "warn",
+                                                "datasheet": "hold" if hold_m else "warn"}}
             f, w, _ = RC.check_item(it, d, rules)
             got = {r for r, _ in f}
             if {"drop_pad", "extra_pad"} & ms:

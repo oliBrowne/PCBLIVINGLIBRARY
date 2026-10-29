@@ -189,7 +189,7 @@ def dialog_dfm_text():
   Position = poMainFormCenter
   PixelsPerInch = 96
   TextHeight = 15
-{head}{ask}{_label("Big", 16, 46, w, 34, "", size=-24)}{rows}{_label("Status", 16, 250, w, 18, "", color=DIM)}{meter}{_label("Note", 16, 310, w, 18, "", wrap=True, color=DIM)}  object Report: TLabel
+{head}{ask}{_label("Big", 16, 46, w, 34, "", size=-24)}{rows}{_label("Status", 16, 250, w, 18, "", wrap=True, color=DIM)}{meter}{_label("Note", 16, 310, w, 18, "", wrap=True, color=DIM)}  object Report: TLabel
     Left = 16
     Top = 330
     Width = 160

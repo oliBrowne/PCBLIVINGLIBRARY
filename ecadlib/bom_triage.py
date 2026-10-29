@@ -36,6 +36,13 @@ DELIMS = (",", ";", "\t", "|")
 csv.field_size_limit(max(csv.field_size_limit(), 64 * 1024 * 1024))   # a long notes cell (> 128 KiB) is still a BOM
 
 
+# an error that is the account, not the network: the source answered that this key or plan may not ask (Nexar "You
+# have exceeded your part limit of 0. Please upgrade your plan."). Asking again will not help, so it is no reason to
+# call a line "unverified (source unreachable)" when the other sources answered.
+ACCOUNT_LIMIT = re.compile(r"part limit|exceeded your [\w ]*limit|quota|upgrade your plan|unauthori[sz]ed|"
+                           r"invalid (api )?key|api key (is )?invalid|expired token|token (has )?expired", re.I)
+
+
 def _norm(h):
     return re.sub(r"[^a-z0-9]+", " ", str(h).lower()).strip()
 
@@ -1191,6 +1198,9 @@ def triage(lines, index, provs, http, shared=None):
                     r = P.SourceResult(prov.name, error=f"plugin error: {type(e).__name__}: {str(e)[:120]}")
                 if not isinstance(r, P.SourceResult):
                     r = P.SourceResult(getattr(prov, "name", "?"), error="plugin returned no SourceResult")
+                if r.error and ACCOUNT_LIMIT.search(r.error):   # reached, but the account may not ask: out of use,
+                    notes.append(f"{prov.name}: {r.error}")         # like one not configured; the others' answers stand
+                    continue
                 if r.error:
                     errored = True
                     notes.append(f"{prov.name}: {r.error}")

@@ -272,8 +272,11 @@ Begin
     End;
     If EcadlibDialog.Status.Visible Then
     Begin
+        EcadlibDialog.Status.AutoSize := False;        { wraps: "Altium is building ..., Altium is busy until then." }
+        EcadlibDialog.Status.Width := 380;
+        EcadlibDialog.Status.Height := NoteLines(EcadlibDialog.Status.Caption) * 17;
         EcadlibDialog.Status.Top := Y + 4;
-        Y := Y + 24;
+        Y := Y + EcadlibDialog.Status.Height + 6;
     End;
     If EcadlibDialog.MeterTrack.Visible Then
     Begin
@@ -546,7 +549,9 @@ Begin
             SetRow(i, Ini.ReadString('progress', 'row' + IntToStr(i), ''));
         Ini.Free;
         Layout;
-    End;
+    End
+    Else If NoteLines(EcadlibDialog.Status.Caption) * 17 <> EcadlibDialog.Status.Height Then
+        Layout;                     { the status grew a line (or lost one): make room, nothing is cut off }
     If Waited >= SettingNumber('timeout_s', 1800) * 1000 Then
     Begin
         Waited := 0;
@@ -640,6 +645,8 @@ Begin
     Begin
         If (Answer(Job, 'fix') <> '') And (St <> 'ready') Then
             EcadlibDialog.Note.Caption := 'Next: ' + Answer(Job, 'fix');
+        If (St = 'ready') And (Answer(Job, 'note') <> '') Then
+            EcadlibDialog.Note.Caption := Answer(Job, 'note');      { a note, not a hold: no datasheet link, 3D height }
         If Answer(Job, 'ai_cost_text') <> '' Then
             EcadlibDialog.Note.Caption := Answer(Job, 'ai_cost_text') + #13#10 + EcadlibDialog.Note.Caption;
         NextHint := '';

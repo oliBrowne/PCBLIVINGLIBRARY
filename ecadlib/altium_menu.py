@@ -1156,9 +1156,17 @@ def _part_result(cfg, ws, bom, rel, mpn, progress, ai=None, ai_cost=None):
     whys = M.explain_all(it.get("hold_reasons") or [])
     if st == "ready":
         res["message"] = f"{mpn} is ready as {nm}: {_where(cfg, pub)}."
-        notes = [M.explain(w)["text"] for w in (it.get("release_check") or {}).get("warnings") or [] if str(w).startswith("height:")]
+        warns = [str(w) for w in (it.get("release_check") or {}).get("warnings") or []]
+        notes = [M.explain(w)["text"] for w in warns if w.startswith("height:")]
         if notes:                              # a 3D height is a note to check, not a hold ([release] height)
             res["message"] += " Note: " + " ".join(dict.fromkeys(notes)) + " Check the 3D body in Altium."
+        # an empty Manufacturer or no datasheet link is a note too ([release] manufacturer / datasheet): fill it later
+        fields = [w.split(":")[0][:1].upper() + w.split(":")[0][1:] + "." for w in warns
+                  if w.startswith(("Manufacturer is empty", "no datasheet link"))]
+        if fields:
+            res["message"] += " Note: " + " ".join(fields) + " Fill it in before ordering."
+        if notes or fields:                    # the dialog shows it under the rows (a ready part has no Next:)
+            res["note"] = "Note: " + " ".join(list(dict.fromkeys(notes)) + fields)
         if pub.get("footprints", {}).get(nm):
             res["footprint"] = pub["footprints"][nm]
         # the list holds every part added from the menu: another part's problem ("OTHER: ...") is not this one's
