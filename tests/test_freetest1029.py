@@ -30,6 +30,7 @@ def test_setup_page_errors_name_the_full_folder_the_person_typed():
     """The page shortened every path in its error to the last name: "give the workspace as a full path, e.g. ecadlib"
     and "library folder not found: nolib". A workspace that cannot be made answered "Something went wrong"."""
     with _home() as d, _server(d / "ws") as port:
+        d = d.resolve()                                # Windows: the long form (RUNNER~1), as the page saves it
         st, j = _call(port, "POST", "/api/setup", {"provider": "none", "workspace": "relative/x"})
         assert st == 400 and str(ES.UC.default_workspace()) in j["error"], j
         missing = d / "nolib"
