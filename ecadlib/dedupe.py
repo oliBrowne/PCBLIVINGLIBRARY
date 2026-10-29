@@ -41,11 +41,11 @@ from .kicad_index import norm_mpn, parse_value
 from .fsutil import write_text_atomic
 
 DEFAULT_SUFFIXES = [
-    r"#(TR)?PBF$", r"#TR$",                                   # Analog Devices / Linear Technology
+    r"#(TRM?)?PBF$", r"#TRM?$",                               # Analog Devices / Linear Technology (TRM: mini reel)
     r"(?<=[0-9A-Z])TRPBF$", r"(?<=\d[A-Z])PBF$|(?<=\d)PBF$",  # Infineon/IR lead-free (+ tape and reel)
     r"(\((LF|SN|PBF|PB-?FREE)\))+$",                         # JST (LF)(SN)
-    r"[-/ _](TR|T/R|T&R|TR7|TR13|R7|R13|TAPE|REEL|CT|CUT ?TAPE|BULK|TRAY|TUBE)$",
-    r"-?REEL(7|13)?$", r"(T&R|T/R)$", r",\d{3}$",           # ADI -REEL7, NXP packing code ,115
+    r"[-/ _](TR|T/R|T&R|TR7|TR13|R7|R13|RL|RL7|TAPE|REEL|CT|CUT ?TAPE|BULK|TRAY|TUBE)$",
+    r"-?REEL(7|13)?$", r"(T&R|T/R)$", r",\d{3}$",           # ADI -REEL7 / -RL7, NXP packing code ,115
 ]
 CONFIG = {"strip_suffixes": [], "default_suffixes": True, "symbol_min_pins": 3, "keep": [], "ignore": []}
 MPN_COLS = ("Manufacturer Part Number", "MPN", "Mfr Part Number")
