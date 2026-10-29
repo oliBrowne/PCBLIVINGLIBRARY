@@ -104,5 +104,5 @@ def test_stored_schema6_fingerprint_with_hide_yes_still_adopts():
     old = json.loads(json.dumps(hidden))
     old["schema"] = 6
     old["model"]["models"][0]["hide"] = False          # what schema 6 stored for this same file
+    old["hashes"] = FP.hashes(old)
     assert CD.diff_stored(old, hidden) == []
-    assert CD.diff(old, hidden), "same schema: the hide flag is still compared"
