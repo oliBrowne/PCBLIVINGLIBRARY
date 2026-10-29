@@ -8,6 +8,7 @@ import csv, re, tempfile
 from pathlib import Path
 
 from ecadlib import altium_menu as AM, bom_triage as T, providers as P, rules as RU
+from tests.fixtures_lite import lite
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -46,6 +47,7 @@ def test_a_quota_answer_is_not_an_unreachable_source():
     assert down["status"] == "unverified (source unreachable)", down             # a network failure still is
 
 
+@lite
 def test_the_menu_says_not_found_when_nexar_is_over_quota(tmp_path):
     row = T.triage([dict(LINE)], T.KiCadIndex([]), [_OverQuota(None), _Miss(None)], None)[0]
     f = tmp_path / "triage.csv"
@@ -83,15 +85,7 @@ def test_the_status_line_never_runs_past_the_dialog():
 
 
 if __name__ == "__main__":
-    import shutil
     for n, f in list(globals().items()):
         if n.startswith("test_"):
-            if "tmp_path" in f.__code__.co_varnames[:f.__code__.co_argcount]:
-                t = Path(tempfile.mkdtemp())
-                try:
-                    f(t)
-                finally:
-                    shutil.rmtree(t, ignore_errors=True)
-            else:
-                f()
+            f()
             print("ok", n)
