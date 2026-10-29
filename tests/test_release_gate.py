@@ -93,11 +93,11 @@ def test_dblib_sync_rechecks_ready_parts():
         d = Path(t)
         ok, bad = make(d), make(d, name="PART2", fp_name="SOIC-8_other")
         RC.apply([ok, bad], d)
-        bad["parameters"] = [p for p in bad["parameters"] if p["name"] != "ComponentLink2URL"]   # after the check
+        bad["description"] = ""                                                    # after the check
         (d / "plan.json").write_text(json.dumps([ok, bad]))
         out = S.sync(d / "plan.json", d / "lib")
         acts = {r["name"]: (r["action"], r["detail"]) for r in out["results"]}
-        assert acts["PART1"][0] == "added" and acts["PART2"] == ("held", "fields: no datasheet link"), acts
+        assert acts["PART1"][0] == "added" and acts["PART2"] == ("held", "fields: Description is empty"), acts
         assert not (d / "lib" / "PcbLib" / "SOIC-8_other.PcbLib").exists()
         rows = [r for _, (_, rs) in S.read_tables(d / "lib" / "ecadlib.xlsx").items() for r in rs]
         assert [r["Part Number"] for r in rows] == ["PART1"], rows

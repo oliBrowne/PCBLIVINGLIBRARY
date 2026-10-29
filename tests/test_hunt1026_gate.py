@@ -162,7 +162,7 @@ def test_gate03_placeholder_fields_are_empty():
     from ecadlib import release_check as RC
     from tests.test_release_check import make
     with tempfile.TemporaryDirectory() as d:
-        hold_m = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "manufacturer": "hold"}}
+        hold_m = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "manufacturer": "hold", "datasheet": "hold"}}
         for name, v, want in (("Datasheet", "~", "fields: no datasheet link"), ("Datasheet", "N/A", "fields: no datasheet link"),
                               ("Manufacturer", "N/A", "fields: Manufacturer is empty"),
                               ("Manufacturer Part Number", "TBD", "fields: Manufacturer Part Number is empty"),
@@ -179,7 +179,8 @@ def test_gate03_placeholder_fields_are_empty():
 
 def test_gate04_release_check_mutation_property():
     """Seeded mutations of a good part: each must hold under its own rule (pins, parity, fields), and a missing or
-    implausible 3D height or an empty Manufacturer is a note unless [release] height / manufacturer = "hold"."""
+    implausible 3D height, an empty Manufacturer or no datasheet link is a note unless [release] height /
+    manufacturer / datasheet = "hold"."""
     import re
     from ecadlib import release_check as RC
     from tests.test_release_check import SOIC, make, HOLD_HEIGHT
@@ -190,7 +191,7 @@ def test_gate04_release_check_mutation_property():
         ms = set(rnd.sample(muts, rnd.randint(1, 3)))
         if {"no3d", "tall3d"} <= ms:
             ms.discard("tall3d")
-        hold_h, hold_m = rnd.random() < 0.3, rnd.random() < 0.5
+        hold_h, hold_m, hold_d = rnd.random() < 0.3, rnd.random() < 0.5, rnd.random() < 0.5
         kmod, pins, height, exp = SOIC, list(range(1, 9)), None, set()
         if "drop_pad" in ms:
             kmod = re.sub(r'  \(pad "%d" .*\n' % rnd.randint(1, 8), "", kmod); exp.add("pins")
@@ -212,12 +213,13 @@ def test_gate04_release_check_mutation_property():
             for m, drop in (("no_ds", "ComponentLink2URL"), ("no_mfr", "Manufacturer")):
                 if m in ms:
                     it["parameters"] = [x for x in it["parameters"] if x["name"] != drop]
-                    if m == "no_ds" or hold_m:
+                    if (hold_d if m == "no_ds" else hold_m):
                         exp.add("fields")
             if "no_desc" in ms:
                 it["description"] = ""; exp.add("fields")
             rules = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "height": "hold" if hold_h else "warn",
-                                                "manufacturer": "hold" if hold_m else "warn"}}
+                                                "manufacturer": "hold" if hold_m else "warn",
+                                                "datasheet": "hold" if hold_d else "warn"}}
             f, w, _ = RC.check_item(it, d, rules)
             got = {r for r, _ in f}
             if {"drop_pad", "extra_pad"} & ms:
@@ -225,6 +227,8 @@ def test_gate04_release_check_mutation_property():
             assert got == exp, (sorted(ms), hold_h, f)
             if ({"no3d", "tall3d"} & ms) and not hold_h:
                 assert any(x.startswith("height: ") for x in w), (sorted(ms), w)
+            if "no_ds" in ms and not hold_d:
+                assert any(x.startswith("no datasheet link") for x in w), (sorted(ms), w)
             if "no_mfr" in ms and not hold_m:
                 assert any(x.startswith("Manufacturer is empty") for x in w), (sorted(ms), w)
 
