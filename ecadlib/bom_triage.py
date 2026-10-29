@@ -1136,6 +1136,9 @@ def triage(lines, index, provs, http, shared=None):
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         maker, maker_from = "", ""             # who makes this exact MPN, from a part search (BOM maker empty)
+        several = False                        # a source lists this exact MPN under more than one maker: none is filled
+        from .release_check import _filled     # a BOM maker of "-" / "N/A" / "~" names none: filled like an empty one
+        bom_maker = _filled(ln.get("manufacturer"))
         sheets = []                                    # every datasheet link every source gave, in source order
         if skipped:
             notes.append(skipped)
@@ -1202,9 +1205,11 @@ def triage(lines, index, provs, http, shared=None):
                         makers = (r.extra or {}).get("makers") or []
                         if not maker and len(makers) == 1:          # LCSC sells this exact MPN under one maker only
                             maker, maker_from = makers[0], prov.name
-                        elif not maker and len(makers) > 1:         # clones under the same MPN: not ours to pick
-                            notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
-                                         f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
+                        elif len(makers) > 1:                       # clones under the same MPN: not ours to pick
+                            several = True
+                            if not bom_maker:               # the BOM names the maker: nothing to fill
+                                notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
+                                             f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
                     notes.append(f"jlcpcb: MPN -> {r.lcsc}" if r.found else "jlcpcb: no exact MPN match")
                 else:
                     if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
@@ -1213,8 +1218,17 @@ def triage(lines, index, provs, http, shared=None):
                     if r.found:
                         if not desc and (r.extra or {}).get("description"):
                             desc, desc_from = r.extra["description"], prov.name
-                        if not maker and r.manufacturer and r.mpn and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):
-                            maker, maker_from = P.clean_maker(r.manufacturer), prov.name    # that exact MPN's maker
+                        # that exact MPN's maker, only where the source says it is the only one: its list of makers
+                        # for the MPN names one (an official search), or it answered for the BOM's own LCSC number
+                        # (EasyEDA: one part). A source's first hit of several, or EasyEDA's answer for the LCSC
+                        # number a search picked among clones, is not this part's maker (R-SRC-5)
+                        makers = (r.extra or {}).get("makers") or []
+                        one = len(makers) == 1 or (not makers and isinstance(prov, P.EasyEDA) and r.lcsc
+                                                   and r.lcsc == P.lcsc_number(ln.get("lcsc")))
+                        several = several or len(makers) > 1
+                        if not maker and one and r.manufacturer and r.mpn and \
+                                _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):
+                            maker, maker_from = P.clean_maker(r.manufacturer), prov.name
                         sheet = sheet or (r.extra or {}).get("datasheet") or ""
                         sheets += [u for u in (r.extra or {}).get("datasheets") or [(r.extra or {}).get("datasheet")]
                                    if u and u not in sheets]
@@ -1252,7 +1266,8 @@ def triage(lines, index, provs, http, shared=None):
             "src": src.provider if src else "", "src_symbol": _yn(src and src.has_symbol),
             "src_footprint": _yn(src and src.has_footprint), "src_3d": _yn(src and src.has_3d),
             "src_mpn": src.mpn if src else "", "src_description": desc, "src_description_from": desc_from,
-            "src_manufacturer": "" if ln.get("manufacturer") else maker, "src_manufacturer_from": "" if ln.get("manufacturer") else maker_from,
+            "src_manufacturer": "" if bom_maker or several else maker,
+            "src_manufacturer_from": "" if bom_maker or several else maker_from,
             "src_datasheet": sheet,
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })

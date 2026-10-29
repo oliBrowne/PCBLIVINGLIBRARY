@@ -94,6 +94,18 @@ def _pick(items, part, mpn_of, mfr_of):
     return exact[0] if len(others) <= 1 else None
 
 
+def exact_makers(items, mpn, mpn_of, mfr_of):
+    """Every maker a source lists this exact (normalised) MPN under, one name per company (same_maker): one name =
+    one maker sells it; more = clones or second sources share the MPN, so none of them is the part's maker."""
+    out = []
+    for i in items:
+        if isinstance(i, dict) and norm_mpn(mpn_of(i)) == norm_mpn(mpn):
+            m = str(mfr_of(i) or "").strip()
+            if maker_key(m) and not any(same_maker(m, o) for o in out):
+                out.append(m)
+    return out
+
+
 def _http_error(res, r):
     res.error = re.sub(r"(?i)(api_?key=)[^&\s'\")]*", r"\1***", r.error or f"HTTP {r.status}")   # may be cut mid-key
     return res

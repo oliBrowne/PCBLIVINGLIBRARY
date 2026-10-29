@@ -603,7 +603,8 @@ class Run:
         par = _par(item)
         mpn = par.get("Manufacturer Part Number", "")
         st = {"name": item["name"], "symbol": None, "footprint": None, "tried": [], "review": [], "verify": [],
-              "found": {}, "hint_fp": "", "maker": par.get("Manufacturer", "")}
+              "found": {}, "hint_fp": "",
+              "maker": par.get("Manufacturer", "") if RC._filled(par.get("Manufacturer")) else ""}   # not "N/A"
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
@@ -781,7 +782,9 @@ class Run:
         url = (result.get("lcsc") or {}).get("url") or ""
         if url.startswith("http"):
             st["found"].setdefault("datasheet", (url, f"EasyEDA {lcsc} (lcsc.url)"))
-        if res.manufacturer:
+        # the maker of the BOM's own LCSC number; of a number a part search found, only when the triage found that
+        # MPN under one maker (src_manufacturer): the search's first hit among clones is not this part's maker
+        if res.manufacturer and (P.lcsc_number(ln.get("lcsc")) == lcsc or row.get("src_manufacturer")):
             st["found"].setdefault("manufacturer", (res.manufacturer, f"EasyEDA {lcsc}"))
         st["found"].setdefault("lcsc", (lcsc, f"EasyEDA {lcsc}" + ("" if ln.get("lcsc") else " (LCSC number found by ecadlib, not in the BOM)")))
         if res.extra.get("description"):       # after the part search's LCSC / distributor text (resolve)
@@ -1384,7 +1387,7 @@ def apply_state(item, st, ln):
         if not par.get("ComponentLink1URL"):
             _set_par(item, "ComponentLink1Description", "LCSC")
             _set_par(item, "ComponentLink1URL", f"https://www.lcsc.com/product-detail/{v}.html"); fields["ComponentLink1URL"] = w
-    if not par.get("Manufacturer") and "manufacturer" in st.get("found", {}):
+    if not RC._filled(par.get("Manufacturer")) and "manufacturer" in st.get("found", {}):   # empty, or "-" / "N/A"
         v, w = st["found"]["manufacturer"]
         _set_par(item, "Manufacturer", v); fields["Manufacturer"] = w
     credits = [st["found"]["credit"]] if "credit" in st.get("found", {}) else []   # EasyEDA asks for credit on every reuse
