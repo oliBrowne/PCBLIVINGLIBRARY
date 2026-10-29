@@ -454,7 +454,8 @@ class Workspace:
         to = self.root / "altium" / self._key(bom_path)
         rep = DS.sync(plan, to)
         act = lambda a: [r["name"] for r in rep["results"] if r.get("action") == a and r.get("kind", "part") == "part"]
-        return {"files": [self.rel(p) for p in sorted(to.iterdir()) if p.is_file()], "folder": self.rel(to),
+        files = sorted(p for p in to.iterdir() if p.is_file()) if to.is_dir() else []   # every part held: none
+        return {"files": [self.rel(p) for p in files], "folder": self.rel(to),
                 "from_plan": True, "held": act("held"),
                 "written": len(act("added")) + len(act("updated")) + len(act("up_to_date"))}
 

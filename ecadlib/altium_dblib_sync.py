@@ -1258,7 +1258,9 @@ def main(argv=None):
         if not s["ran"]:
             for c in s["commands"]:
                 t.write(f"  {c}")
-    written = [] if a.dry_run else [(out["dblib"], "open this in Altium (it lists the parts from the .xlsx next to it)")]
+    # no ready part and no library there yet: nothing was written, so there is no DbLib to open
+    empty = not a.dry_run and not Path(out["dblib"]).exists()
+    written = [] if a.dry_run or empty else [(out["dblib"], "open this in Altium (it lists the parts from the .xlsx next to it)")]
     if not a.dry_run and t.verbose:
         written += [(w, "") for w in out["written"]]
     t.summary(f"{summary(out)}" + (" (dry run: nothing written; " + M.plural(len(out["written"]), "file") + " would be)" if a.dry_run else "")
@@ -1271,6 +1273,9 @@ def main(argv=None):
         from .fsutil import write_text_atomic
         write_text_atomic(Path(a.out), json.dumps(out, indent=2))
     errors = sum(r["action"] == "error" for r in out["results"])
+    if empty and not errors:
+        sys.exit(f"ecadlib dblib-sync: nothing written: no part in {a.plan} is ready (held parts stay out of the "
+                 "library), so there is no DbLib to open yet")
     if errors or (out.get("svn") or {}).get("error"):
         sys.exit(f"{errors} part(s) failed" + (f"; svn: {out['svn']['error']}" if (out.get("svn") or {}).get("error") else ""))
 
