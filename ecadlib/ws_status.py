@@ -179,10 +179,20 @@ def status(root):
     runs = [dict(p["timing"], plan=p["plan"]) for p in out["plans"] if p["timing"]]
     out["last_run"] = max(runs, key=lambda r: r["finished"]) if runs else None
 
-    tri = _files(root, "reports/triage_*.json") or _files(root, "reports/triage_*.csv")
-    if tri:
-        f = tri[0]
+    tri = _files(root, "reports/triage_*.json") + _files(root, "reports/triage_*.csv")
+    if tri:                                    # the newest triage, the web UI's (.json) or a CLI one (.csv only)
+        f = max(tri, key=lambda p: (p.stat().st_mtime, p.suffix == ".json"))
+        if f.suffix == ".csv" and f.with_suffix(".json") in tri:     # a web UI triage: its .json has who and when
+            f = f.with_suffix(".json")
         t = {"report": rel(f), "finished": _iso(f.stat().st_mtime)}
+        if f.suffix == ".csv":
+            try:
+                import csv
+                with open(f, newline="", encoding="utf-8-sig") as fh:
+                    st = [str(r.get("status") or "") for r in csv.DictReader(fh)]
+                t.update(lines=len(st), counts={k: st.count(k) for k in dict.fromkeys(st)})
+            except (OSError, ValueError, csv.Error):
+                pass
         if f.suffix == ".json":
             d = _json(f, problems, root) or {}
             if isinstance(d, dict):

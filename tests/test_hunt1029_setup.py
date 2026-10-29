@@ -107,6 +107,30 @@ def test_doctor_does_not_call_altium365_ready_on_a_stored_nexar_app_without_a_si
     assert a365[1] is False, a365
 
 
+@lite
+def test_status_last_triage_is_the_newest_one_cli_or_web_ui(tmp_path, monkeypatch):
+    """H-SETUP-4: since #202 `ecadlib triage BOM` (no -o) writes reports/triage_<BOM>.csv/.md into the workspace, but
+    `ecadlib status` (and the UI's status) took any web-UI triage .json first, however old, so the triage just run
+    from the command line never showed as the last one."""
+    import os
+    from ecadlib import ws_status as WS
+    rep = tmp_path / "reports"
+    rep.mkdir(parents=True)
+    old = rep / "triage_old_board.json"
+    old.write_text(json.dumps({"name": "old_board.csv", "rows": [{}] * 7, "counts": {"in_library": 7}}), encoding="utf-8")
+    (rep / "triage_old_board.csv").write_text("line,status\n", encoding="utf-8")
+    for f in rep.iterdir():
+        os.utime(f, (1_700_000_000, 1_700_000_000))
+    (rep / "triage_bom.csv").write_text("\ufeffline,status,mpn\n1,in_library,A\n2,needs_footprint_generation,B\n"
+                                        "3,in_library,C\n", encoding="utf-8")
+    t = WS.status(tmp_path)["last_triage"]
+    assert t["report"] == "reports/triage_bom.csv", t
+    assert t["lines"] == 3 and t["counts"] == {"in_library": 2, "needs_footprint_generation": 1}, t
+    os.utime(old, None)                                                  # the web UI's triage is the newest again
+    t = WS.status(tmp_path)["last_triage"]
+    assert t["report"] == "reports/triage_old_board.json" and t["name"] == "old_board.csv", t
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all
