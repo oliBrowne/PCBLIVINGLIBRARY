@@ -1,10 +1,11 @@
 """Add part with the Manufacturer box empty (2026-10-29 full test, in Altium: NE555DR built from the KiCad library and
 then held, "fields: Manufacturer is empty"). The KiCad library records no maker, so the part search's maker for that
 exact MPN fills it, and only when that MPN is listed under one maker: LCSC also lists clones under the same MPN, and a
-maker picked from several could name the wrong company. python3 -m tests.test_maker_from_part_search"""
+maker picked from several could name the wrong company. An empty Manufacturer is a note, not a hold (Oliver
+2026-10-29: "it shouldn't hold over this"). python3 -m tests.test_maker_from_part_search"""
 import json, tempfile
 
-from ecadlib import providers as P
+from ecadlib import providers as P, rules as RU
 from ecadlib.httpcache import Response
 from tests import test_part_descriptions as TD
 
@@ -55,7 +56,7 @@ def test_one_maker_fills_the_empty_manufacturer_and_says_where_from():
 def test_clones_under_the_same_mpn_fill_nothing():
     it, triage = _run(_answer(_hit("C3003", "TPS1234DSGR", "TI(德州仪器)"), _hit("C4004", "TPS1234DSGR", "UMW(友台半导体)")))
     assert not _par(it, "Manufacturer"), it.get("parameters")
-    assert any("Manufacturer is empty" in h for h in it.get("hold_reasons") or []), it.get("hold_reasons")
+    _noted_not_held(it)
     assert "listed under 2 makers (TI, UMW)" in triage, triage
 
 
@@ -68,10 +69,26 @@ def test_a_bom_maker_is_never_replaced():
     assert _par(it, "Manufacturer") == "ACME", it.get("parameters")
 
 
-def test_no_answer_from_the_search_keeps_the_hold():
+def test_no_answer_from_the_search_leaves_it_empty_with_a_note():
     it, _ = _run(None)                                                          # refused, as from the cloud
     assert not _par(it, "Manufacturer")
-    assert any("Manufacturer is empty" in h for h in it.get("hold_reasons") or []), it.get("hold_reasons")
+    _noted_not_held(it)
+
+
+def _noted_not_held(it):
+    """Oliver 2026-10-29: an empty Manufacturer does not hold the part ([release] manufacturer = "hold" does)."""
+    assert not any("Manufacturer" in h for h in it.get("hold_reasons") or []), it.get("hold_reasons")
+    assert any(w.startswith("Manufacturer is empty") for w in it["release_check"]["warnings"]), it["release_check"]
+
+
+def test_the_hold_comes_back_only_when_asked():
+    assert RU.DEFAULTS["release"]["manufacturer"] == "warn"
+    assert RU.load({"release": {"manufacturer": "hold"}})["release"]["manufacturer"] == "hold"
+    try:
+        RU.load({"release": {"manufacturer": "sometimes"}})
+        raise AssertionError("bad value accepted")
+    except RU.RulesError as e:
+        assert "release.manufacturer" in str(e)
 
 
 if __name__ == "__main__":
