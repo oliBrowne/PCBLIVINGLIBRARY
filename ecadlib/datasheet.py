@@ -1023,6 +1023,10 @@ def parse_message(msg):
         v = pkg.get(k)                                # pin_count 100000000 ran for a minute and ran out of memory
         if isinstance(v, int) and v > MAX_COUNT:
             raise DatasheetError(f"response $.package.{k} {v} is more than any package has ({MAX_COUNT}); rejected")
+    for p in ext.get("pins") or []:                   # a pin numbered 100000000 sizes range(1, n + 1) further on
+        num = str(p.get("num") or "") if isinstance(p, dict) else ""
+        if num.isdecimal() and int(num) > MAX_COUNT:
+            raise DatasheetError(f"response pin number {num[:20]} is more than any package has ({MAX_COUNT}); rejected")
     return ext
 
 
@@ -2540,7 +2544,7 @@ def _depop_positions(spec, ext, review=None):
     else:
         places = name_facts(name)["count"]
     n = spec.get("pin_count")
-    if not places or places % 2 or len(ints) >= places or ints[0] != 1 or ints[-1] != places or n not in (None, len(ints)):
+    if not places or places > MAX_COUNT or places % 2 or len(ints) >= places or ints[0] != 1 or ints[-1] != places or n not in (None, len(ints)):
         return None
     gone = sorted(set(range(1, places + 1)) - set(ints))
     if not (m and int(m.group(2)) > int(m.group(1))) and said != gone and n != len(ints):   # (n: the maker's count)

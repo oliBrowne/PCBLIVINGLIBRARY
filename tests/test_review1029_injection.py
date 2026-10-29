@@ -208,3 +208,41 @@ def test_datasheet_answer_with_a_huge_pin_count_is_rejected_not_processed():
     else:
         raise AssertionError("a 4,000,000-pin answer was accepted")
     D.parse_message(message(D.to_wire(copy.deepcopy(GOOD))))          # a real answer still reads
+
+
+@lite
+def test_freeze_gives_names_that_clean_alike_files_of_their_own(tmp_path):
+    from pathlib import Path
+    from ecadlib import project_check as PC
+    pcb = ('(kicad_pcb (version 20240108) (generator "pcbnew")\n'
+           '  (footprint "Lib:CON" (layer "F.Cu") (at 10 10)\n'
+           '    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu")))\n'
+           '  (footprint "Lib:CON_" (layer "F.Cu") (at 20 10)\n'
+           '    (pad "1" smd rect (at -2 0) (size 1 1) (layers "F.Cu"))))\n')
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "board.kicad_pro").write_text("{}")
+    (proj / "board.kicad_pcb").write_text(pcb)
+    res = PC.freeze_kicad(proj / "board.kicad_pro", rewrite=False)
+    mods = [Path(f).name.casefold() for f in res["files"] if str(f).endswith(".kicad_mod")]
+    assert len(mods) == 2 and len(set(mods)) == 2, mods
+
+
+def test_depopulated_name_with_a_huge_place_count_is_not_expanded():
+    from ecadlib import datasheet as D
+    spec = {"package_type": "gullwing", "name": "SOIC-2-100000000", "pitch": 1.27, "pin_count": 2}
+    assert D._depop_positions(spec, {"pins": [{"num": "1"}, {"num": "100000000"}]}, []) is None
+
+
+def test_datasheet_answer_with_a_huge_pin_number_is_rejected():
+    import copy
+    from ecadlib import datasheet as D
+    from tests.test_datasheet import GOOD, message
+    e = copy.deepcopy(GOOD)
+    e["pins"][-1]["num"] = "100000000"
+    try:
+        D.parse_message(message(D.to_wire(e)))
+    except D.DatasheetError as x:
+        assert "pin number" in str(x)
+    else:
+        raise AssertionError("pin 100000000 was accepted")

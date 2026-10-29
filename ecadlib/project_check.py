@@ -620,6 +620,13 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
     for fpid, ds in names.items():
         for n, d in enumerate(ds):              # the same footprint id placed in two different versions: two parts
             fp_new[(fpid, d)] = labels[fpid] if n == 0 else f"{labels[fpid]}_v{n + 1}"
+    taken = set()                               # one file each, also once cleaned ('CON' and 'CON_' -> 'CON_') and on
+    for key, n in fp_new.items():               # a file system that ignores case
+        base, i = n, 2
+        while n.casefold() in taken:
+            n, i = f"{base}_{i}", i + 1
+        taken.add(n.casefold())
+        fp_new[key] = n
     written = []
     if keys:
         lib = ["kicad_symbol_lib", ["version", "20241209"], ["generator", sexpr.Q("ecadlib")]]
