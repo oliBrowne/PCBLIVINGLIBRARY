@@ -118,7 +118,9 @@ class PartInfo:
     datasheets: list = field(default_factory=list)   # every datasheet link the source gave, best first (Nexar's
                                        # documentCollections hold distributor-hosted copies too)
     makers: list = field(default_factory=list)       # every maker the source lists this exact MPN under (one name per
-                                       # company); [] = the source does not say (DigiKey's product details: one product)
+                                       # company); [] = the source does not say (DigiKey's product details: one
+                                       # product), so it never fills the Manufacturer alone (the triage fills a maker
+                                       # only from a source that names exactly one)
 
 
 class NexarSourcing(L.NexarSupply):
@@ -250,6 +252,8 @@ def parse_nexar_part(data, p, res, currency="USD"):
         res.found = False
         return res
     info = nexar_info(best, res.provider, currency)
+    # known limit: only the results asked for (part(): 5, as Nexar counts every part it returns against the plan's
+    # quota); a second maker of the exact MPN ranked lower is missed and the MPN reads as one maker's
     info.makers = L.exact_makers(parts, p["mpn"], mpn_of, mfr_of)
     return info
 
