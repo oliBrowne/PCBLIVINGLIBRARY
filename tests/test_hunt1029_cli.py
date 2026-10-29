@@ -48,3 +48,27 @@ def test_export_altium_dblib_with_every_part_held_answers_instead_of_errno(tmp_p
     _held_plan(ws._librarian_dir(bom))
     r = ws.export_dblib("uploads/b.csv")
     assert r["files"] == [] and r["held"] == ["X1"] and r["written"] == 0, r
+
+
+def _ws_with_held_library(tmp_path):
+    from ecadlib.app import Workspace
+    ws = Workspace(tmp_path / "w", offline=True)
+    (ws.root / "uploads" / "b.csv").write_text("Designator,Qty,Value,Footprint,Manufacturer,MPN\n"
+                                               "R1,1,10k,R_0603_1608Metric,UNI-ROYAL,0603WAF1002T5E\n", encoding="utf-8")
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        r = ws.librarian_run("uploads/b.csv", sources=["standard"], ai=False, offline=True)
+    assert r["held"] >= 1 and not r.get("ready"), r       # no datasheet link offline: held
+    return ws
+
+
+# ---------------------------------------------------------------- cli-02: tool_packages with every part held
+@lite
+def test_tool_packages_include_held_returns_the_kicad_zip_when_altium_has_nothing_released(tmp_path):
+    # MCP tool_packages include_held=true wrote the KiCad zip with the held parts, then the Altium side (release-checked
+    # parts only) raised "nothing to package: all 1 part(s) are held" and the whole answer was that error: the zip
+    # written on disk was never named
+    ws = _ws_with_held_library(tmp_path)
+    r = ws.tool_packages("uploads/b.csv", include_held=True)
+    assert r["kicad"]["zip"] and (ws.root / r["kicad"]["zip"]).is_file(), r
+    assert r["kicad"]["footprints"] >= 1, r
+    assert r["altium"]["libpkg"] is None and any("held" in p for p in r["altium"]["problems"]), r

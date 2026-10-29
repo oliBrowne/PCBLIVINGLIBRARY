@@ -1541,7 +1541,11 @@ class Workspace:
         out = self.root / "packages" / self._key(bom_path)
         pcm = KP.build(plan_f, out / "kicad", lib, kicad=int(kicad), include_held=include_held,
                        http=CachedHTTP(self.root / "http_cache", offline=self.offline), log=lambda *a: None)
-        alt = AP.build(plan_f, out / "altium", lib, rules=self.rules_in_use(), log=lambda *a: None)
+        try:                                           # Altium: release-checked parts only (include_held is KiCad's)
+            alt = AP.build(plan_f, out / "altium", lib, rules=self.rules_in_use(), log=lambda *a: None)
+        except AP.NothingReleased as e:                # every part held: the KiCad zip above is still the answer
+            alt = {"libpkg": None, "script": None, "dblibs": [], "documents": [],
+                   "problems": [str(e).split(": ", 1)[-1] + " (Altium packages carry released parts only)"]}
         return {"folder": self.rel(out),
                 "kicad": {"zip": self.rel(Path(pcm["zip"])), "version": pcm["version"], "nickname": pcm["nickname"],
                           "symbols": pcm["symbols"], "footprints": pcm["footprints"], "problems": pcm["problems"]},
