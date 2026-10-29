@@ -558,8 +558,9 @@ def check_item(item, base=".", rules=None):
                 warns.append(f"Description \"{item['description']}\" was written by ecadlib from the category and "
                              "package (no source had one): check it")
         elif not _filled(par.get(RU.canonical_param(k, rules), par.get(k, ""))) and not _supplier_number(par, k, rules):
-            if k == "Manufacturer" and (rules.get("release") or {}).get("manufacturer", "warn") != "hold":
-                warns.append("Manufacturer is empty: no source named the maker; fill it before ordering "
+            if RU.canonical_param(k, rules) == "Manufacturer" and \
+                    (rules.get("release") or {}).get("manufacturer", "warn") != "hold":   # also under its house name
+                warns.append(f"{k} is empty: no source named the maker; fill it before ordering "
                              "([release] manufacturer = \"hold\" holds the part instead)")
             else:
                 add("fields", f"{k} is empty")

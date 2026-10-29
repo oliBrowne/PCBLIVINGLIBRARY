@@ -117,6 +117,8 @@ class PartInfo:
     datasheet: str = ""                # the source's datasheet link (official APIs: Nexar bestDatasheet, DigiKey, Mouser)
     datasheets: list = field(default_factory=list)   # every datasheet link the source gave, best first (Nexar's
                                        # documentCollections hold distributor-hosted copies too)
+    makers: list = field(default_factory=list)       # every maker the source lists this exact MPN under (one name per
+                                       # company); [] = the source does not say (DigiKey's product details: one product)
 
 
 class NexarSourcing(L.NexarSupply):
@@ -241,12 +243,15 @@ def nexar_info(part, provider, currency):
 
 def parse_nexar_part(data, p, res, currency="USD"):
     results = ((data or {}).get("supSearchMpn") or {}).get("results") or []
-    best = L._pick([x.get("part") for x in results if isinstance(x, dict)], p,
-                   lambda x: x.get("mpn"), lambda x: (x.get("manufacturer") or {}).get("name"))
+    parts = [x.get("part") for x in results if isinstance(x, dict)]
+    mpn_of, mfr_of = (lambda x: x.get("mpn")), (lambda x: ((x.get("manufacturer") or {}).get("name")))
+    best = L._pick(parts, p, mpn_of, mfr_of)
     if not best:
         res.found = False
         return res
-    return nexar_info(best, res.provider, currency)
+    info = nexar_info(best, res.provider, currency)
+    info.makers = L.exact_makers(parts, p["mpn"], mpn_of, mfr_of)
+    return info
 
 
 class DigiKeySourcing(L.DigiKeyLifecycle):
@@ -368,6 +373,8 @@ class MouserSourcing(L.MouserLifecycle):
                 res.found = False
                 return res
             info = mouser_info(best, self.name)
+            info.makers = L.exact_makers(parts, p["mpn"], lambda x: x.get("ManufacturerPartNumber"),
+                                         lambda x: x.get("Manufacturer"))
             rep = str(best.get("SuggestedReplacement") or "").strip()
             if rep and norm_mpn(rep) != norm_mpn(p["mpn"]):
                 info.similar.append(PartInfo(self.name, True, rep, note="Mouser suggested replacement"))
