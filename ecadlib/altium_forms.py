@@ -39,6 +39,7 @@ FORM_API = {
     "Font": "TControl.Font", "Color": "TControl.Color / TFont.Color", "Text": "TEdit.Text", "Enabled": "TTimer.Enabled",
     "Interval": "TTimer.Interval", "ModalResult": "TForm.ModalResult (Forms & Components: ShowModal example)",
     "ShowModal": "TForm.ShowModal (Forms & Components)", "mrOk": "TModalResult", "mrCancel": "TModalResult",
+    "caNone": "TCloseAction (OnClose keeps the form open)", "CloseAction": "OnClose Var parameter",
     "Cursor": "TControl.Cursor", "crHandPoint": "TCursor", "crDefault": "TCursor",
     "SetFocus": "TWinControl.SetFocus", "Update": "TControl.Update (paints now, before a long Altium step)", "SelectAll": "TEdit.SelectAll",
     "EcadlibDialog": "the form instance a script form unit gets (named after the .dfm's object)",

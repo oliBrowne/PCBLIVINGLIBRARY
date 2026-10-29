@@ -56,7 +56,9 @@ def test_install_step_is_shown_busy_and_ignores_clicks():
     for h in ("TEcadlibDialog.SecondaryClick", "TEcadlibDialog.CloseClick"):
         body = _routine(PAS, h)
         assert body.index("If Phase = 'install' Then") < body.index("ModalResult"), h
-    assert "Phase = 'install'" not in _routine(PAS, "TEcadlibDialog.PrimaryClick")   # it does nothing then anyway
+    assert "Phase = 'install'" not in _routine(PAS, "TEcadlibDialog.PrimaryClick")
+    close = _routine(PAS, "TEcadlibDialog.EcadlibDialogClose")     # Alt+F4 / taskbar Close pressed during the build
+    assert close.index("CloseAction := caNone") < close.index("Tick.Enabled := False")   # it does nothing then anyway
 
 
 def test_timeout_question_stops_the_timer_and_respects_a_finished_job():

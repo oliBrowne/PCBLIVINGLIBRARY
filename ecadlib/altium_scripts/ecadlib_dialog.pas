@@ -990,8 +990,14 @@ End;
 
 Procedure TEcadlibDialog.EcadlibDialogClose(Sender : TObject; Var CloseAction : TCloseAction);
 { A closed form's enabled timer fires again whenever this script project runs (AD 26.10): stop it. Closed another
-  way while it works (Alt+F4, the taskbar): the job still goes on waiting.txt, as with Keep working. }
+  way while it works (Alt+F4, the taskbar): the job still goes on waiting.txt, as with Keep working. While Altium
+  installs the part it stays open: an Alt+F4 pressed during the build would otherwise hide the result. }
 Begin
+    If Phase = 'install' Then
+    Begin
+        CloseAction := caNone;
+        Exit;
+    End;
     Tick.Enabled := False;
     If (Phase = 'run') And (Second = 'background') Then
         If Not FileExists(Job + '\background.txt') Then
