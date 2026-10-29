@@ -145,6 +145,24 @@ def _set_hole(spec, mm):
     return f"hole confirmed by hand: {mm:g} mm{how}, the pads sized round it by KiCad's rule"
 
 
+def plan_name(plan, part):
+    """The plan's own name for --part: as typed, else the one plan item it names in another case or punctuation
+    (ch340c, ABC_DEF_12 for ABC/DEF:12). The librarian looks an edit up by the plan's name, so an edit saved under
+    another spelling would never be applied."""
+    try:
+        items = json.loads((_base(plan) / "plan.json").read_text(encoding="utf-8"))
+        names = [str(i["name"]) for i in items if isinstance(i, dict) and i.get("name")]
+    except (OSError, ValueError, TypeError):
+        return part
+    if part in names:
+        return part
+    for same in (lambda n: n.casefold() == part.casefold(), lambda n: _safe(n).casefold() == _safe(part).casefold()):
+        hit = [n for n in names if same(n)]
+        if len(hit) == 1:
+            return hit[0]
+    return part
+
+
 def read(plan, part):
     """The part's last datasheet answer in <plan dir>/datasheet -> {spec, symbol} (raises FileNotFoundError)."""
     d = _base(plan) / "datasheet"
@@ -228,6 +246,7 @@ def main(argv=None):
     sub.add_parser("undo", help="drop this part's edits")
     a = ap.parse_args(argv)
     base = _base(a.plan)
+    a.part = plan_name(a.plan, a.part)
     edits = load(base)
     try:
         got = read(a.plan, a.part)

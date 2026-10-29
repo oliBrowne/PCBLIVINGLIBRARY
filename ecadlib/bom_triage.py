@@ -1381,9 +1381,9 @@ TRIAGE_WORDS = {   # triage status -> (term status, plain words)
 
 def _lib_out(bom):
     """The librarian folder to suggest for this BOM: <[setup] workspace or ecadlib_workspace>/librarian/<BOM name>."""
-    from .firstrun import default_out
+    from .firstrun import bom_stem, default_out
     out = default_out("librarian", bom)
-    stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
+    stem = bom_stem(bom)
     return out if out != "out/librarian" else f"ecadlib_workspace/librarian/{stem}"
 
 
@@ -1408,9 +1408,10 @@ def print_result(rows, counts, a, t=None):
                       + (" (--offline: only the cache)" if a.offline else ""),
                       "run again online, or add API keys (`ecadlib doctor` lists them)"))
     stem = Path(a.out)
+    from .cliutil import shell_word as q             # a BOM name with spaces stays one word when pasted
     t.summary(f"{M.plural(len(rows), 'BOM line')}: " + ", ".join(f"{v} {k}" for k, v in by.items()),
               written=[(str(report_file(stem, ".md")), "triage report"), (str(report_file(stem, ".csv")), "the same as a table")],
-              next=[(f"ecadlib librarian {a.bom} -o {_lib_out(a.bom)}", "fill the missing parts and build the library")],
+              next=[(f"ecadlib librarian {q(a.bom)} -o {q(_lib_out(a.bom))}", "fill the missing parts and build the library")],
               notes=notes)
 
 if __name__ == "__main__":

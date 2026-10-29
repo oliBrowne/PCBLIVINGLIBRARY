@@ -221,12 +221,19 @@ def out_workspace(start=".", environ=None):
     return Path(page[0]) if page else None
 
 
+def bom_stem(bom):
+    """A BOM's name as a folder / report name: punctuation -> '_', no trailing dot (Windows drops it, so 'rev2.' and
+    'rev2' would be one folder there) and no Windows device name (aux.csv, the auxiliary board's BOM -> 'aux_')."""
+    from .fsutil import portable_stem
+    return portable_stem(re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem).rstrip(".") or "bom")
+
+
 def default_out(kind, bom, start="."):
     """Default -o of `librarian` / `triage` for this BOM: <workspace>/librarian/<BOM name> or
     <workspace>/reports/triage_<BOM name> in the workspace `ecadlib status` looks at (out_workspace), else
     out/librarian / out/triage."""
     ws = out_workspace(start)
-    stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
+    stem = bom_stem(bom)
     if kind == "librarian":
         if not ws:
             return "out/librarian"

@@ -1235,6 +1235,7 @@ def main(argv=None):
         from .cliutil import refuse
         sys.exit(refuse("dblib-sync", e, "check the plan and --to / --name (`ecadlib dblib-sync -h`)"))
     from . import messages as M, term as TM
+    from .cliutil import shell_word
     t = TM.Term()
     rows = []
     for r in out["results"]:
@@ -1258,22 +1259,28 @@ def main(argv=None):
         if not s["ran"]:
             for c in s["commands"]:
                 t.write(f"  {c}")
-    written = [] if a.dry_run else [(out["dblib"], "open this in Altium (it lists the parts from the .xlsx next to it)")]
+    # no ready part and no library there yet: nothing was written, so there is no DbLib to open
+    empty = not a.dry_run and not Path(out["dblib"]).exists()
+    written = [] if a.dry_run or empty else [(out["dblib"], "open this in Altium (it lists the parts from the .xlsx next to it)")]
     if not a.dry_run and t.verbose:
         written += [(w, "") for w in out["written"]]
     t.summary(f"{summary(out)}" + (" (dry run: nothing written; " + M.plural(len(out["written"]), "file") + " would be)" if a.dry_run else "")
               + (f"; removed {', '.join(out['removed'])}" if out["removed"] else ""),
               written=written,
-              next=[(f"ecadlib dblib-sync {a.plan} --to {a.to}", "write it for real")] if a.dry_run else
-              ([(f"ecadlib review {a.plan}", "the held parts")] if any(r["action"] == "held" for r in out["results"]) else []))
+              next=[(f"ecadlib dblib-sync {shell_word(a.plan)} --to {shell_word(a.to)}", "write it for real")] if a.dry_run else
+              ([(f"ecadlib review {shell_word(a.plan)}", "the held parts")] if any(r["action"] == "held" for r in out["results"]) else []))
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         from .fsutil import write_text_atomic
         write_text_atomic(Path(a.out), json.dumps(out, indent=2))
     errors = sum(r["action"] == "error" for r in out["results"])
+    if empty and not errors:                       # expected while every part is held: exit 2, as altium-pkg does
+        print(f"ecadlib dblib-sync: nothing written: no part in {a.plan} is ready (held parts stay out of the "
+              "library), so there is no DbLib to open yet", file=sys.stderr)
+        return 2
     if errors or (out.get("svn") or {}).get("error"):
         sys.exit(f"{errors} part(s) failed" + (f"; svn: {out['svn']['error']}" if (out.get("svn") or {}).get("error") else ""))
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
