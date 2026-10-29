@@ -234,6 +234,18 @@ def default_out(kind, bom, start="."):
     return str(ws / "reports" / f"triage_{stem}") if ws else "out/triage"
 
 
+def rules_start(out, given_out):
+    """Where `librarian` / `triage` look for ecadlib.toml: from -o when the person gave one (as before); when -o was
+    defaulted into the workspace (default_out), the current folder's file still wins, as it did when the default was
+    ./out/..., and the workspace's own file is used only when there is none here."""
+    if given_out:
+        return out
+    try:
+        return "." if RU.find(".") else out
+    except Exception:
+        return out
+
+
 def _rel_to(p, rules_file):
     p = Path(str(p)).expanduser()
     return p if p.is_absolute() else (Path(rules_file).resolve().parent / p)

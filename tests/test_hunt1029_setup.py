@@ -1,0 +1,67 @@
+"""Bug hunt 2026-10-29, area setup: first run, the setup page, the Nexar sign-in, the default output of librarian /
+triage (#202).  Run:  python3 -m tests.test_hunt1029_setup"""
+import io, json, contextlib
+from pathlib import Path
+
+from tests.fixtures_lite import lite
+
+
+def _page_workspace(tmp_path, monkeypatch):
+    """A user who saved the setup page: settings.json names workspace W, and W has the page's own ecadlib.toml."""
+    home, ws = tmp_path / "home", tmp_path / "W"
+    ws.mkdir(parents=True)
+    (ws / "ecadlib.toml").write_text('[sources]\norder = ["standard"]\n\n[setup]\ntool = "both"\nlibs = []\n'
+                                     'workspace = "."\n', encoding="utf-8")
+    home.mkdir()
+    (home / "settings.json").write_text(json.dumps({"workspace": str(ws), "setup_done": True}), encoding="utf-8")
+    monkeypatch.setenv("ECADLIB_HOME", str(home))
+    monkeypatch.setenv("ECADLIB_CONFIG", "")
+    monkeypatch.setenv("ECADLIB_WORKSPACE", "")
+    return ws
+
+
+def _project(tmp_path):
+    """A project folder with its own ecadlib.toml that maps the BOM's unusual headers."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "ecadlib.toml").write_text('[bom.columns]\nmpn = "Widget"\ndesignator = "Spot"\n', encoding="utf-8")
+    (proj / "bom.csv").write_text("Spot,Widget,Qty\nR1,RC0603FR-0710KL,1\nC1,GRM188R71H104KA93D,1\n", encoding="utf-8")
+    return proj
+
+
+@lite
+def test_triage_without_o_keeps_the_ecadlib_toml_of_the_current_folder(tmp_path, monkeypatch):
+    """H-SETUP-1: after the setup page was saved, `ecadlib triage bom.csv` (no -o) wrote into the page's workspace but
+    also took that workspace's rules instead of the ecadlib.toml in the folder it was run from, so a [bom.columns]
+    mapping there was ignored: "no BOM header found ... map your headers in ecadlib.toml" (they were)."""
+    tmp_path = tmp_path.resolve()
+    ws = _page_workspace(tmp_path, monkeypatch)
+    monkeypatch.chdir(_project(tmp_path))
+    from ecadlib import bom_triage as BT
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        rc = BT.main(["bom.csv", "--offline", "--json"])
+    assert "no BOM header" not in err.getvalue(), err.getvalue()
+    assert rc in (0, 1), (rc, err.getvalue())
+    assert (ws / "reports" / "triage_bom.csv").is_file()                 # still lands in the workspace (#202)
+
+
+@lite
+def test_rules_start_prefers_the_current_folders_file_when_out_was_defaulted(tmp_path, monkeypatch):
+    tmp_path = tmp_path.resolve()
+    ws = _page_workspace(tmp_path, monkeypatch)
+    from ecadlib import firstrun as FR, rules as RU
+    monkeypatch.chdir(_project(tmp_path))
+    out = FR.default_out("librarian", "bom.csv")
+    assert Path(RU.find(FR.rules_start(out, given_out=False))).resolve() == tmp_path / "proj" / "ecadlib.toml"
+    assert FR.rules_start(out, given_out=True) == out                    # an explicit -o: its own rules, as before
+    (tmp_path / "bare").mkdir()
+    monkeypatch.chdir(tmp_path / "bare")                                 # no rules here: the workspace's own
+    out = FR.default_out("librarian", "bom.csv")
+    assert Path(RU.find(FR.rules_start(out, given_out=False))).resolve() == ws / "ecadlib.toml"
+
+
+if __name__ == "__main__":
+    import sys
+    from tests import run_all
+    sys.exit(run_all.main(["test_hunt1029_setup"]))

@@ -1766,12 +1766,13 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help='print {"plan", "review", "parts", "ready", "held", "blockers"} instead of the log')
     a = ap.parse_args(argv)
     from . import firstrun as FR
+    given_out = bool(a.out)
     a.out = a.out or FR.default_out("librarian", a.bom)
     other = _plan_bom(a.out)                  # the folder holds another BOM's plan: say so before it is replaced
     if other and other != Path(a.bom).name and not a.json:
         print(f"note: {a.out} holds the plan for {other}; it is replaced by {Path(a.bom).name}'s "
               f"(give each BOM its own -o folder to keep both)", file=sys.stderr)
-    rules = RU.load(a.rules, start=a.out)
+    rules = RU.load(a.rules, start=FR.rules_start(a.out, given_out))
     reader = None
     if a.datasheet_batch:
         reader = D.Reader(a.out, a.cache, None, rules, CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline, timeout=60),
