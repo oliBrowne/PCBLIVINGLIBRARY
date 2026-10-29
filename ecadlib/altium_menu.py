@@ -1454,6 +1454,16 @@ def _library_mpns(cfg, ws):
 def _bom_of(ws, project):
     """(workspace-relative BOM csv, project summary or None) for an Altium project / SchDoc, or a BOM file."""
     p = Path(project)
+    if not p.is_file() and "?" in str(project):
+        # the menu writes request.ini in the ANSI code page: a character it lacks arrives as '?', which no Windows file
+        # name holds, so the one file the path matches with '?' as a wildcard is the project
+        import glob
+        found = [f for f in glob.glob(re.sub(r"([*\[])", r"[\1]", str(project))) if Path(f).is_file()]
+        if len(found) != 1:
+            raise ValueError(f"{project}: Altium handed over this path with '?' for characters the Windows code page "
+                             f"cannot hold, and {'no file' if not found else f'{len(found)} files'} match it. Next: "
+                             f"rename the project's folders and files to plain letters (A-Z, 0-9) and open it again")
+        p = Path(found[0])
     if not p.is_file():
         raise ValueError(f"{project}: no such file (save the project first)")
     if p.suffix.lower() in (".prjpcb", ".schdoc"):

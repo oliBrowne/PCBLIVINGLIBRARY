@@ -93,3 +93,24 @@ def test_menu_folder_outside_latin1_goes_by_its_short_name():
     short = lambda p: "C:\\Users\\OLGA~1\\menu" if "\u041e" in str(p) else p
     assert AM.rcs_folder("C:\\Users\\\u041e\u043b\u044c\u0433\u0430\\menu", short=short) == "C:\\Users\\OLGA~1\\menu"
     assert AM.rcs_folder("C:\\Users\\Jos\u00e9\\menu", short=short) == "C:\\Users\\Jos\u00e9\\menu"   # Latin-1 as it was
+
+
+def test_project_path_the_script_wrote_with_question_marks_is_found():
+    """The menu writes request.ini with TIniFile, in the ANSI code page: a project folder named in characters that
+    code page lacks (Cyrillic on a Western Windows) arrives as C:\\Users\\?????\\board, and the job said
+    "no such file (save the project first)" for a saved project. '?' cannot be in a Windows file name, so the one file
+    that matches is the project."""
+    with tempfile.TemporaryDirectory() as d:
+        real = Path(d) / "\u041e\u043b\u044c\u0433\u0430" / "board"
+        real.mkdir(parents=True)
+        (real / "bom.csv").write_text("Designator,MPN\nR1,RC0603FR-0710KL\n", encoding="utf-8")
+        asked = str(Path(d) / "?????" / "board" / "bom.csv")
+        bom, pb = AM._bom_of(None, asked)
+        assert Path(bom) == (real / "bom.csv").resolve() and pb is None
+        try:                                            # two matches: say so, never guess
+            (Path(d) / "\u041e\u043b\u044c\u0433\u0431" / "board").mkdir(parents=True)
+            (Path(d) / "\u041e\u043b\u044c\u0433\u0431" / "board" / "bom.csv").write_text("x", encoding="utf-8")
+            AM._bom_of(None, asked)
+            raise AssertionError("an ambiguous path must not be guessed")
+        except ValueError as e:
+            assert "save the project" not in str(e), e
