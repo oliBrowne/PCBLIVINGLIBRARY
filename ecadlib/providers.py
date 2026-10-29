@@ -20,6 +20,17 @@ from dataclasses import dataclass, field
 from . import userconfig as UC
 
 
+# an answer that says this account may not ask (Nexar: "You have exceeded your part limit of 0"): the source was
+# reached and refused on quota, so a part it did not look up is not "unreachable" and a miss elsewhere is a real miss
+_ACCOUNT_LIMIT = re.compile(r"exceeded .{0,40}limit|part limit|quota (exceeded|reached)|limit (exceeded|reached)|"
+                            r"too many requests for (this|your) (plan|account)", re.I)
+
+
+def account_limit(error):
+    """Does a source's error say the account's quota or plan limit is used up (not a network failure)?"""
+    return bool(error and _ACCOUNT_LIMIT.search(str(error)))
+
+
 class NotConfigured(Exception):
     pass
 

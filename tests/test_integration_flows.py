@@ -225,11 +225,12 @@ def test_a_plan_or_an_all_held_plan_gets_a_clear_message():
     w = _tmp("ecadlib-flows-msg-")
     E.seed_cache(w / "cache")
     shutil.copy(ROOT / "examples" / "sensor_node_bom.csv", w / "bom.csv")
+    (w / "ecadlib.toml").write_text('[release]\ndatasheet = "hold"\n', encoding="utf-8")   # no datasheet: held
     env = E.clean_env()
     assert E.ecadlib(w, "librarian", "bom.csv", "-o", "lib", "--offline", "--cache", "cache", env=env,
                      check=False).returncode == 2
     plan = json.loads((w / "lib" / "plan.json").read_text(encoding="utf-8"))
-    assert plan and all(i["status"] == "held" for i in plan), "the default rules hold every part of a BOM with no datasheets"
+    assert plan and all(i["status"] == "held" for i in plan), "datasheet = \"hold\" holds every part of a BOM with no datasheets"
     for args in (("altium365", "plan", "lib/plan.json"), ("triage", "lib/plan.json", "--offline")):
         p = E.ecadlib(w, *args, env=env, check=False)
         out = p.stdout + p.stderr

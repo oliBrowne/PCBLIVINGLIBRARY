@@ -222,8 +222,8 @@ def test_each_source_and_review():
         assert "kicad: no symbol" in tried and "easyeda: no LCSC number" in tried, tried
         assert "datasheet: no datasheet URL known" in items["NOWHERE1"]["librarian"]["tried"]
         nw = items["NOWHERE1"]["hold_reasons"]
-        assert items["NOWHERE1"]["status"] == "held" and "fields: no datasheet link" in nw, nw
-        assert not any("Manufacturer" in r for r in nw), nw                                # a note, not a hold
+        assert items["NOWHERE1"]["status"] == "held" and not any("Manufacturer" in r or "datasheet" in r for r in nw), nw
+        assert any(w.startswith("no datasheet link") for w in items["NOWHERE1"]["release_check"]["warnings"])  # a note
         plan = json.loads((out / "plan.json").read_text())
         assert {i["name"]: i["status"] for i in plan} == {n: i["status"] for n, i in items.items()}
         rev = (out / "review.md").read_text()

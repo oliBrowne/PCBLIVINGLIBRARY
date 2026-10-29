@@ -1135,6 +1135,7 @@ def triage(lines, index, provs, http, shared=None):
         gen_fp = None if fp_key else index.find_footprint_for_package(
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
+        limited = {}                                   # source -> its quota / plan-limit answer
         maker, maker_from, makers_seen = "", "", []     # who makes this exact MPN, from a part search (BOM maker empty)
         sheets = []                                    # every datasheet link every source gave, in source order
         if skipped:
@@ -1191,6 +1192,9 @@ def triage(lines, index, provs, http, shared=None):
                     r = P.SourceResult(prov.name, error=f"plugin error: {type(e).__name__}: {str(e)[:120]}")
                 if not isinstance(r, P.SourceResult):
                     r = P.SourceResult(getattr(prov, "name", "?"), error="plugin returned no SourceResult")
+                if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
+                    limited.setdefault(prov.name, r.error)  # with no key, not an unreachable one
+                    continue
                 if r.error:
                     errored = True
                     notes.append(f"{prov.name}: {r.error}")
@@ -1239,6 +1243,8 @@ def triage(lines, index, provs, http, shared=None):
             status = "needs_footprint_generation"
         if unconfigured:
             notes.append("not configured: " + ",".join(unconfigured))
+        for name, err in limited.items():
+            notes.append(f"{name}: not used, the account's limit is reached ({err[:120]})")
         if sym and not fp_key:
             notes.append(f"local symbol OK but footprint '{sym.props.get('Footprint', '')}' not in indexed libs")
         if gen_fp and not sym:

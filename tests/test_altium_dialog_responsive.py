@@ -31,7 +31,7 @@ def test_poll_redraws_rows_only_when_progress_changes():
 def test_status_counts_seconds_after_a_few():
     el = _routine(PAS, "Elapsed")
     assert "Waited >= 3000" in el and "Waited Div 1000" in el
-    assert "Said + Elapsed" in _routine(PAS, "Poll")
+    assert "OneLine(Said, 46) + Elapsed" in _routine(PAS, "Poll")
 
 
 def test_running_window_does_not_shrink():
