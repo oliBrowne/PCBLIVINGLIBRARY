@@ -72,3 +72,20 @@ def test_tool_packages_include_held_returns_the_kicad_zip_when_altium_has_nothin
     assert r["kicad"]["zip"] and (ws.root / r["kicad"]["zip"]).is_file(), r
     assert r["kicad"]["footprints"] >= 1, r
     assert r["altium"]["libpkg"] is None and any("held" in p for p in r["altium"]["problems"]), r
+
+
+# ---------------------------------------------------------------- cli-03: a BOM named like a Windows device
+@lite
+def test_default_librarian_folder_for_a_bom_named_aux_is_no_windows_device_name(tmp_path, monkeypatch):
+    # aux.csv (the auxiliary board's BOM), con.xlsx, "rev2..csv": the librarian's default -o was <ws>/librarian/aux,
+    # a folder Windows cannot make (AUX is a device), and "rev2." whose trailing dot Windows drops (another folder)
+    from ecadlib import firstrun as FR, bom_triage as T
+    from ecadlib.fsutil import DEVICE_NAMES
+    monkeypatch.setenv("ECADLIB_WORKSPACE", str(tmp_path / "ws"))
+    for bom in ("aux.csv", "CON.xlsx", "Com1.csv", "rev2..csv", "board .csv"):
+        for got in (FR.default_out("librarian", bom), T._lib_out(bom)):
+            leaf = Path(got).name
+            assert leaf.split(".")[0].rstrip(" ").upper() not in DEVICE_NAMES, (bom, got)
+            assert not leaf.endswith((".", " ")), (bom, got)
+        tri = Path(FR.default_out("triage", bom)).name
+        assert not tri.endswith((".", " ")), (bom, tri)

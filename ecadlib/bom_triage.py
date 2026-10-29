@@ -1365,9 +1365,9 @@ TRIAGE_WORDS = {   # triage status -> (term status, plain words)
 
 def _lib_out(bom):
     """The librarian folder to suggest for this BOM: <[setup] workspace or ecadlib_workspace>/librarian/<BOM name>."""
-    from .firstrun import default_out
+    from .firstrun import bom_stem, default_out
     out = default_out("librarian", bom)
-    stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
+    stem = bom_stem(bom)
     return out if out != "out/librarian" else f"ecadlib_workspace/librarian/{stem}"
 
 
