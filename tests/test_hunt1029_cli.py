@@ -199,3 +199,81 @@ def test_approve_footprint_named_con_names_the_drawing_inside_as_the_file(tmp_pa
         pcb = next(ws.root / f for f in r["files"] if f.endswith(".PcbLib"))
         assert [fp["name"] for fp in AL.read_pcblib(pcb)] == [pcb.stem] == [r["name"]], (nm, pcb)
         assert f"{kmod.parent.stem}:{r['name']}" in KiCadIndex([kmod.parent.parent]).footprints
+
+
+# ---------------------------------------------------------------- review of the cli hunt: hints still unquoted
+def _marked(mod, name="shell_word"):
+    from unittest import mock
+    return mock.patch.object(mod, name, lambda s: f"<{s}>")
+
+
+def test_part_show_and_adopt_hints_quote_the_plan_and_part():
+    # `ecadlib part show` / `part adopt` printed `ecadlib part approve <plan> --part SM04B-SRSS-TB(LF)(SN)` unquoted:
+    # pasted into a shell, the brackets (and a folder with a space) break the command
+    from ecadlib import change_cli as CC
+    from tests.test_change_control import ANN, demo, item, items_of, write_symbol
+    from tests.test_change_control_workflow import SGD, held_hand_edit, run_cli
+    from tests.test_change_control_round2 import _cut_part, _lose_ledger, _two_approvers
+    plan, lib = demo()
+    held_hand_edit(plan, lib, SGD)
+    with _marked(CC, "q"):
+        rc, out = run_cli("show", lib, "AO3401A")
+    assert rc == 0 and "part approve <" in out and "--part <AO3401A>" in out, out
+    plan, lib = demo()
+    _two_approvers(lib)
+    _cut_part(lib, "AO3401A")
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
+    with _marked(CC, "q"):
+        rc, out = run_cli("adopt", lib, "--part", "AO3401A", "-m", "checked", "--user", ANN, "--accept-changes")
+    assert "part show <" in out and "<AO3401A>" in out, (rc, out)
+    plan, lib = demo()
+    _lose_ledger(lib)
+    write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
+    with _marked(CC, "q"):
+        rc, out = run_cli("adopt", lib, "--all", "-m", "checked", "--user", ANN)
+    assert rc == 1 and "part adopt <" in out and "--part <AO3401A>" in out, (rc, out)
+
+
+def test_lost_ledger_hint_quotes_the_library_and_part():
+    from ecadlib import change_gate as CG, ledger as LG
+    from tests.test_change_control import demo, item, items_of, write_symbol
+    from tests.test_change_control_workflow import SGD
+    plan, lib = demo()
+    (lib / LG.LEDGER).unlink()
+    items = items_of(plan)
+    write_symbol(lib, item(items, "AO3401A"), SGD)
+    try:
+        with _marked(CG):
+            CG.publish_guard(plan, items, "kicad")
+        raise AssertionError("a lost ledger must refuse")
+    except LG.LedgerError as e:
+        assert "part adopt <" in e.hint and "--part <" in e.hint, e.hint
+
+
+def test_resolve_held_change_notes_quote_the_plan_and_part():
+    # `resolve choose` on a released part: "it waits as a held change (ecadlib part show <plan> <part>)" and
+    # "ecadlib part approve <plan> --part <part>" were printed unquoted
+    from ecadlib import resolve as R
+    from tests.fixtures_lite import scratch
+    from tests.test_change_control import ANN, demo
+    for approvers in (1, 2):
+        plan, lib = demo()
+        if approvers == 2:
+            (lib / "ecadlib.toml").write_text("[change]\napprovers = 2\n", encoding="utf-8")
+        with _marked(R):
+            res = R.choose(plan, "AO3401A", "footprint", "spec:SOT-23-5", src=R.Sources(cache=scratch(), offline=True),
+                           user=ANN)
+        notes = " ".join(res["notes"])
+        assert ("part show <" if approvers == 1 else "part approve <") in notes and "<AO3401A>" in notes, notes
+
+
+def test_shell_word_quotes_cmd_specials_on_windows():
+    # on Windows shell_word used subprocess.list2cmdline, which quotes only blanks: a folder R&D or a part
+    # SM04B-SRSS-TB(LF)(SN) stayed bare, and cmd.exe ran `ecadlib review R` and then a command named D\plan.json
+    from ecadlib.cliutil import shell_word
+    assert shell_word("R&D\\board\\plan.json", nt=True) == '"R&D\\board\\plan.json"'
+    assert shell_word("SM04B-SRSS-TB(LF)(SN)", nt=True) == '"SM04B-SRSS-TB(LF)(SN)"'
+    assert shell_word("a|b<c>d^e", nt=True) == '"a|b<c>d^e"'
+    assert shell_word("C:\\My Parts\\", nt=True) == '"C:\\My Parts\\\\"'      # a closing \" would escape the quote
+    assert shell_word("C:\\libs\\plan.json", nt=True) == "C:\\libs\\plan.json"
+    assert shell_word("My Board (rev 2).csv", nt=False) == "'My Board (rev 2).csv'"
