@@ -13,6 +13,8 @@ a minor release may change command-line options and file formats.
 
 ### Changed
 
+- The first part looked up in a new workspace no longer waits about 4 minutes for the KiCad library name index. ecadlib now ships a copy of that index, and a workspace without one starts from it; it is refreshed from gitlab.com after 30 days as before. If gitlab.com times out or answers 429 while building it, the shipped copy is used instead of none, so the part is not built without the KiCad library. `scripts/build_kicad_index.py` refreshes the copy before a release; `ECADLIB_KICAD_SNAPSHOT=0` turns it off.
+
 - The ecadlib dialog in Altium: its buttons light up under the mouse and darken while held, the close mark turns red under the mouse, and the header shows the small ecadlib mark. While ecadlib works, the window keeps its height (the buttons no longer jump), the rows are redrawn only when they change, and the status line counts the seconds. While Altium builds and installs the library, the dialog says Altium is busy and ignores clicks, so a click made during the build no longer lands on the result's buttons. The result rows come in about four times faster. The "still working" question no longer stacks or marks a job that finished meanwhile as stopped.
 
 ## [0.4.0] - 2026-10-27
