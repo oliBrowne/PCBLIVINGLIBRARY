@@ -33,7 +33,7 @@ table is kept as the record of what was merged.
 | 2026-10-17 | #35 | Official part APIs first with unofficial endpoints fenced off, weekly sources canary, and Altium rebuilding every library itself (8 of 8 test libraries, 0 differences on AD26) |
 | 2026-10-17 | #61-#80 (issues #36-#40) | **v0.3.1** released: Build libraries in the Altium menu, fab-layer designator in Altium, multi-part symbols, keep-outs and bottom-side pads checked in AD26, and the fixes from the overnight system test |
 | 2026-10-17 to 19 | #81-#125 | Released in v0.4.0: change control ([#105](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/105), `ecadlib part`), time from BOM to library and the review rate in `ecadlib status` (P7, P8), the cost shown before every AI step (P12), docs/START_HERE.md (P14), the first live benchmark run (docs/benchmark.md), `ecadlib mcp --http`, and the 2026-10-19 cut and park |
-| 2026-10-19 to 28 | #126-#204 | **v0.4.0** released on 2026-10-29: the release gate, Nexar sign-in, the live benchmark at 87 of 110 parts fully right with none built wrong, and the scope cut to Altium and KiCad. The milestones below were renumbered: the BOM-to-Altium 365 flow is now v0.5.0 |
+| 2026-10-19 to 28 | #126-#204 | **v0.4.0** (dated 2026-10-27 in the changelog, published on GitHub on 2026-10-29): the release gate, Nexar sign-in, the live benchmark at 87 of 110 parts fully right with none built wrong, and the scope cut to Altium and KiCad. The milestones below were renumbered: the BOM-to-Altium 365 flow is now v0.5.0 |
 
 ## Next milestones
 
@@ -110,7 +110,7 @@ Seven risks are tracked in the [product spec](docs/PRODUCT_SPEC.md#risks), each 
 
 ## Timeline
 
-Past bars run from the day a PR was opened to the day it was merged. Future bars are plans.
+Past bars run from the day a PR was opened to the day it was merged. Future bars are plans; bars marked skipped, on hold or waiting keep their dates only as a placeholder until that work starts again.
 
 ```mermaid
 gantt
@@ -140,12 +140,12 @@ gantt
     Real Altium 365 release of a full BOM               :p10, 2026-11-01, 10d
     Time and approval-rate metrics                      :p7, 2026-11-01, 10d
     Live accuracy benchmark                             :p5, 2026-11-01, 22d
-    Real-BOM trials with 3 to 5 Altium users            :p6, 2026-11-09, 21d
-    House style on a real company library               :p9, 2026-11-12, 15d
+    Trials with 3 to 5 users (skipped for now)          :p6, 2026-11-09, 21d
+    House style on a company library (waits for one)    :p9, 2026-11-12, 15d
     v0.5.0 release                                     :milestone, r2, 2026-11-30, 0d
 
     section v0.6.0 Easy to adopt
-    Signed Windows installer                            :p11, 2026-12-01, 21d
+    Signed Windows installer (on hold)                  :p11, 2026-12-01, 21d
     Cost shown before every AI step                     :p12, 2026-12-01, 21d
     Decide on experimental exports                      :p13, 2026-12-14, 7d
     Installer to Altium 365 guide                       :p14, 2027-01-04, 11d
