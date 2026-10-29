@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import bom_triage as T, footprint_gen as F, providers as P, rules as RU, sexpr
-from .fsutil import report_file, write_text_atomic
+from .fsutil import portable_stem, report_file, write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex
 from . import userconfig as UC
@@ -341,7 +341,7 @@ class Workspace:
             where = "/".join(map(str, e.absolute_path))
             raise ValueError(f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}") from e
         sexpr.parse(text)
-        name = self.safe_name(spec["name"], strict=True)
+        name = portable_stem(self.safe_name(spec["name"], strict=True))   # CON.kicad_mod is a Windows device
         return {"name": spec["name"], "report": rep, "kicad_mod": text, "svg": footprint_svg(rep, kicad_mod=text),
                 "exists": (self.gen_dir / f"{name}.kicad_mod").exists()}
 
@@ -376,7 +376,7 @@ class Workspace:
         from . import altium_lib
         spec_obj = json.loads(spec) if isinstance(spec, str) else spec
         res = self.preview_footprint(spec_obj, density)
-        name = self.safe_name(res["name"], strict=True)
+        name = portable_stem(self.safe_name(res["name"], strict=True))   # CON -> CON_: a file, not the console
         p = self.gen_dir / f"{name}.kicad_mod"
         if p.exists() and not overwrite:
             raise FileExistsError(f"{name} is already in the workspace library; approve again with overwrite to replace it")

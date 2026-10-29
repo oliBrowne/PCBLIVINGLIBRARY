@@ -161,3 +161,21 @@ def test_fp_edit_keys_the_edit_by_the_plans_part_name(tmp_path):
         edits = FE.load(base)
         assert FE.for_part(edits, name), (name, edits)
         assert typed == name or typed not in edits, (name, edits)
+
+
+# ---------------------------------------------------------------- cli-06: approve_footprint named like a device
+@lite
+def test_approve_footprint_named_con_writes_no_windows_device_file(tmp_path):
+    # MCP approve_footprint / the web UI with a spec named CON wrote footprints/ecadlib.pretty/CON.kicad_mod and
+    # altium_models/PcbLib/CON.PcbLib: on Windows that opens the console device, not a file
+    from ecadlib.app import Workspace
+    from ecadlib.fsutil import DEVICE_NAMES
+    ws = Workspace(tmp_path / "w", offline=True)
+    spec = dict(next(iter(ws.example_specs().values())))
+    for nm in ("CON", "nul", "COM1.x"):
+        r = ws.approve_footprint(dict(spec, name=nm))
+        for f in r["files"]:
+            stem = Path(f).name.split(".")[0]
+            assert stem.upper() not in DEVICE_NAMES, (nm, f)
+            assert (ws.root / f).is_file(), f
+        assert ws.preview_footprint(dict(spec, name=nm))["exists"], nm     # found again under the name it was saved as
