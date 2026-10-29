@@ -34,6 +34,7 @@ import argparse, json, sys
 from pathlib import Path
 
 from . import change_diff as CD, change_gate as CG, fingerprint as FP, ledger as LG, term as TM
+from .cliutil import shell_word as q             # a folder with a space, SM04B-SRSS-TB(LF)(SN): one word each
 
 CLASS_MARK = {"identity": "ID", "electrical": "EL", "geometry-major": "G+", "geometry-minor": "g-", "cosmetic": "c "}
 
@@ -220,8 +221,8 @@ def cmd_show(a):
     digest = CG.review_digest(lg, a.part, group)
     print(f"digest {digest}")
     if head:
-        print(f"diff again: ecadlib part diff {plan}:{a.part}@head {plan}:{a.part}@proposed")
-    print(f"approve this change: ecadlib part approve {plan} --part {a.part} --digest {digest[:12]}")
+        print(f"diff again: ecadlib part diff {q(f'{plan}:{a.part}@head')} {q(f'{plan}:{a.part}@proposed')}")
+    print(f"approve this change: ecadlib part approve {q(plan)} --part {q(a.part)} --digest {digest[:12]}")
     return 0
 
 
@@ -953,11 +954,11 @@ def main(argv=None):
             for c in r["changes"]:
                 print(f"      {c}")
             if r.get("held"):
-                print(f"    the files on disk are held as a change: ecadlib part show {a.plan} {r['part']}, then a person "
+                print(f"    the files on disk are held as a change: ecadlib part show {q(a.plan)} {q(r['part'])}, then a person "
                       f"approves it (ecadlib part approve)")
     if refused:
         print(f"  {len(refused)} part(s) not adopted: restore the ledger and .ecadlib/ from git, put the released files "
-              f"back, or `ecadlib part adopt {a.plan} --part {refused[0]['part']} --accept-changes` to hold them as a "
+              f"back, or `ecadlib part adopt {q(a.plan)} --part {q(refused[0]['part'])} --accept-changes` to hold them as a "
               f"change for approval", file=sys.stderr)
         return 1
     return 0

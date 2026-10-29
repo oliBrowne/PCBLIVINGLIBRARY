@@ -40,6 +40,7 @@ from pathlib import Path
 
 from . import change_diff as CD, fingerprint as FP, ledger as LG
 from . import __version__
+from .cliutil import shell_word
 
 ACTIONS = ("pass", "warn", "hold")
 POLICY = {"identity": "hold", "electrical": "hold", "geometry_major": "hold", "geometry_minor": "warn", "cosmetic": "pass",
@@ -578,7 +579,7 @@ class Guard:
             f"{self.folder}: the ledger has no release of {names}, but the library shows it was released before "
             f"({lost[0][1]}); the files on disk are not taken as revision 1 without a person, so nothing was changed",
             f"restore {LG.LEDGER} from git (`git checkout -- {LG.LEDGER}` in the library folder); or, after checking the "
-            f"files on disk by hand: ecadlib part adopt {self.folder} --part {lost[0][0]} -m \"why\"")
+            f"files on disk by hand: ecadlib part adopt {shell_word(self.folder)} --part {shell_word(lost[0][0])} -m \"why\"")
 
     def _keep_bytes(self, it, head):
         """The files on disk now, when their bytes differ from the head's snapshot but they still are the released
