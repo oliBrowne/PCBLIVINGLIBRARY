@@ -228,10 +228,10 @@ def bom_stem(bom):
     return portable_stem(re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem).rstrip(".") or "bom")
 
 
-def default_out(kind, bom, start="."):
+def default_out(kind, bom, start=".", note=None):
     """Default -o of `librarian` / `triage` for this BOM: <workspace>/librarian/<BOM name> or
     <workspace>/reports/triage_<BOM name> in the workspace `ecadlib status` looks at (out_workspace), else
-    out/librarian / out/triage."""
+    out/librarian / out/triage. note(text) is told when another BOM's plan has the folder and this BOM gets its own."""
     ws = out_workspace(start)
     stem = bom_stem(bom)
     if kind == "librarian":
@@ -239,9 +239,13 @@ def default_out(kind, bom, start="."):
             return "out/librarian"
         d = ws / "librarian" / stem
         other, mine = _plan_bom_path(d), _resolved(bom)
-        if other and mine and other != mine:      # another BOM with this file name (projA/bom.csv, projB/bom.csv)
-            import hashlib                        # has this folder: its own one, never a silent replace of that plan
+        if other and mine and not _same_bom(other, mine):   # another BOM with this file name (projA/bom.csv,
+            import hashlib                        # projB/bom.csv) has this folder: its own one, never a silent replace
+            first = d
             d = d.with_name(f"{stem}_{hashlib.sha1(os.fsencode(str(mine))).hexdigest()[:8]}")
+            if note:
+                note(f"note: {first} holds the plan for {other}; this BOM's plan is in {d} "
+                     f"(to continue the other one instead: -o {first})")
         return str(d)
     return str(ws / "reports" / f"triage_{stem}") if ws else "out/triage"
 
@@ -251,6 +255,20 @@ def _resolved(p):
         return Path(str(p)).expanduser().resolve()
     except (OSError, ValueError, RuntimeError):
         return None
+
+
+def _same_bom(other, mine):
+    """The plan folder's recorded BOM (other) is this BOM (mine): the same file however it is spelled (samefile: case
+    on macOS, 8.3 names / subst on Windows, links), or the recorded one no longer exists (the project folder or the
+    workspace was moved or renamed: the same plan moving on, not another BOM's)."""
+    try:
+        if not other.exists():
+            return True
+        if mine.exists():
+            return os.path.samefile(other, mine)
+    except OSError:
+        pass
+    return other == mine
 
 
 def _plan_bom_path(out):

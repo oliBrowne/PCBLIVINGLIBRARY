@@ -230,3 +230,68 @@ if __name__ == "__main__":
     import sys
     from tests import run_all
     sys.exit(run_all.main(["test_hunt1029_setup"]))
+
+
+def _two_projects(tmp_path, monkeypatch):
+    tmp_path = tmp_path.resolve()
+    ws = _page_workspace(tmp_path, monkeypatch)
+    a, b = tmp_path / "projA" / "bom.csv", tmp_path / "projB" / "bom.csv"
+    for f in (a, b):
+        f.parent.mkdir()
+        f.write_text("Designator,MPN\nR1,X\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    out_a = ws / "librarian" / "bom"
+    out_a.mkdir(parents=True)
+    (out_a / "library.lock.json").write_text(json.dumps({"bom": {"file": "../../../projA/bom.csv"}}), encoding="utf-8")
+    return tmp_path, ws, a, b, out_a
+
+
+@lite
+def test_a_moved_project_keeps_its_default_plan_folder(tmp_path, monkeypatch):
+    """Review I2: the project folder renamed (projA -> projA_v2): the lock's recorded BOM no longer exists, so it is
+    the same plan moving on, not another BOM's; the re-run must continue it (sign-offs, decisions, paid reads), not
+    start a fresh bom_<hash> folder without a word."""
+    from ecadlib import firstrun as FR
+    tmp_path, ws, a, b, out_a = _two_projects(tmp_path, monkeypatch)
+    (tmp_path / "projA").rename(tmp_path / "projA_v2")
+    assert Path(FR.default_out("librarian", tmp_path / "projA_v2" / "bom.csv")) == out_a
+
+
+@lite
+def test_the_same_bom_by_another_name_keeps_its_default_plan_folder(tmp_path, monkeypatch):
+    """Review I2: the same file reached by another spelling (macOS case-insensitive BOM.csv vs bom.csv, Windows subst,
+    a hard link) is the same BOM: same plan folder (compared with samefile, not path strings)."""
+    import os
+    from ecadlib import firstrun as FR
+    tmp_path, ws, a, b, out_a = _two_projects(tmp_path, monkeypatch)
+    (tmp_path / "alias").mkdir()
+    alias = tmp_path / "alias" / "bom.csv"
+    os.link(a, alias)                                   # another path to the same file
+    assert Path(FR.default_out("librarian", alias)) == out_a
+
+
+@lite
+def test_a_hashed_default_plan_folder_is_announced(tmp_path, monkeypatch):
+    """Review I2: when another BOM's plan has the folder, the person is told where this plan goes and how to continue
+    the old one."""
+    from ecadlib import firstrun as FR
+    tmp_path, ws, a, b, out_a = _two_projects(tmp_path, monkeypatch)
+    notes = []
+    out_b = Path(FR.default_out("librarian", b, note=notes.append))
+    assert out_b.name.startswith("bom_") and len(notes) == 1, notes
+    assert str(out_b) in notes[0] and "-o" in notes[0], notes
+    notes.clear()
+    FR.default_out("librarian", a, note=notes.append)
+    assert not notes, notes
+
+
+@lite
+def test_librarian_without_o_says_where_a_second_bom_plan_went(tmp_path, monkeypatch):
+    from unittest import mock
+    from ecadlib import librarian as L
+    tmp_path, ws, a, b, out_a = _two_projects(tmp_path, monkeypatch)
+    err = io.StringIO()
+    with mock.patch.object(L, "run", side_effect=ValueError("stop here")), contextlib.redirect_stderr(err), \
+            contextlib.redirect_stdout(io.StringIO()):
+        L.main([str(b), "--offline"])
+    assert "holds the plan for" in err.getvalue() and "librarian/bom_" in err.getvalue().replace("\\", "/"), err.getvalue()

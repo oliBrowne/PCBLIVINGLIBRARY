@@ -1770,7 +1770,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     from . import firstrun as FR
     given_out = bool(a.out)
-    a.out = a.out or FR.default_out("librarian", a.bom)
+    a.out = a.out or FR.default_out("librarian", a.bom, note=lambda m: print(m, file=sys.stderr))
     other = _plan_bom(a.out)                  # the folder holds another BOM's plan: say so before it is replaced
     if other and other != Path(a.bom).name and not a.json:
         print(f"note: {a.out} holds the plan for {other}; it is replaced by {Path(a.bom).name}'s "
