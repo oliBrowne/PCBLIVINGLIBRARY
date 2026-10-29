@@ -1210,8 +1210,10 @@ def _error_text(e):
     if isinstance(e, OSError) and e.errno in (errno.ENAMETOOLONG, errno.ENOTDIR, errno.EINVAL, errno.ELOOP):
         return f"not found: that path is not valid here ({e.strerror or type(e).__name__}); check the BOM / file path"
     traceback.print_exc(file=sys.stderr)                # a bug: keep the traceback on stderr
-    from . import bugreport                             # and saved on this computer for `ecadlib report-bug`
-    bugreport.record("MCP server", e)
+    from .cliutil import friendly
+    if friendly(e) is None:                             # and saved for `ecadlib report-bug`, as the CLI and the web
+        from . import bugreport                         # UI do: not a network error when offline (an OSError)
+        bugreport.record("MCP server", e)
     from . import messages as M                         # one line what went wrong, one line what to do (shared voice)
     return "\n".join(M.friendly_error(e))
 
