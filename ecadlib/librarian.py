@@ -1828,17 +1828,18 @@ def print_result(items, out, why=(), t=None, tool=None):
     held = [i["name"] for i in items if i.get("status") == "held"]
     changed = [i["name"] for i in items if (i.get("change") or {}).get("state") == "held"]
     plan = out / "plan.json"
+    from .cliutil import shell_word as q             # a folder with a space stays one word when pasted
     nxt = []
     if held:
-        nxt.append((f"ecadlib review {plan}", "go through the held parts one by one"))
+        nxt.append((f"ecadlib review {q(plan)}", "go through the held parts one by one"))
     if changed:
-        nxt.append((f"ecadlib part status {plan}", "changes to released parts, held until a person approves them"))
+        nxt.append((f"ecadlib part status {q(plan)}", "changes to released parts, held until a person approves them"))
     # one KiCad library / Altium folder per plan, named after it: a second BOM's export never replaces the first one's
     ws = out.parent.parent if out.parent.name == "librarian" else Path(".")
     if tool in (None, "", "kicad", "both"):
-        nxt.append((f"ecadlib kicad-export {plan} -o {ws / 'kicad' / out.name} --name {out.name}", "write the KiCad library"))
+        nxt.append((f"ecadlib kicad-export {q(plan)} -o {q(ws / 'kicad' / out.name)} --name {q(out.name)}", "write the KiCad library"))
     if tool in (None, "", "altium", "both"):
-        nxt.append((f"ecadlib altium-pkg {plan} --out {ws / 'altium_pkg' / out.name}",
+        nxt.append((f"ecadlib altium-pkg {q(plan)} --out {q(ws / 'altium_pkg' / out.name)}",
                     "the Altium hand-off folder (.LibPkg, DbLib)"))
     t.summary(f"{M.plural(len(items), 'part')}: {M.counts(i.get('status') for i in items)}"
               + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else "")

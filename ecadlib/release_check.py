@@ -771,11 +771,13 @@ def print_result(rows, plan, stem, t=None):
                 table += ([["", "", e["text"]]] if k else []) + [["", "", f"fix: {e['fix']}"]]
     t.table(table)
     held = [r["name"] for r in rows if r["status"] == "held"]
-    nxt = [(f"ecadlib review {plan}", "go through the held parts one by one")] if held else []
+    from .cliutil import shell_word
+    qp = shell_word(plan)                            # a folder with a space stays one word when pasted
+    nxt = [(f"ecadlib review {qp}", "go through the held parts one by one")] if held else []
     if any(r["status"] == "awaiting_approval" for r in rows):
-        nxt.append((f"ecadlib approve {plan} status", "who still has to sign off"))
+        nxt.append((f"ecadlib approve {qp} status", "who still has to sign off"))
     if not held:
-        nxt.append((f"ecadlib kicad-export {plan} -o kicad --name mylib", "write the KiCad library"))
+        nxt.append((f"ecadlib kicad-export {qp} -o kicad --name mylib", "write the KiCad library"))
     t.summary(M.counts(r["status"] for r in rows) + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else ""),
               written=[(str(stem.with_suffix(".md")), "release check report"), (str(plan), "library plan, statuses updated")],
               next=nxt)

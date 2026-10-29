@@ -1235,6 +1235,7 @@ def main(argv=None):
         from .cliutil import refuse
         sys.exit(refuse("dblib-sync", e, "check the plan and --to / --name (`ecadlib dblib-sync -h`)"))
     from . import messages as M, term as TM
+    from .cliutil import shell_word
     t = TM.Term()
     rows = []
     for r in out["results"]:
@@ -1266,8 +1267,8 @@ def main(argv=None):
     t.summary(f"{summary(out)}" + (" (dry run: nothing written; " + M.plural(len(out["written"]), "file") + " would be)" if a.dry_run else "")
               + (f"; removed {', '.join(out['removed'])}" if out["removed"] else ""),
               written=written,
-              next=[(f"ecadlib dblib-sync {a.plan} --to {a.to}", "write it for real")] if a.dry_run else
-              ([(f"ecadlib review {a.plan}", "the held parts")] if any(r["action"] == "held" for r in out["results"]) else []))
+              next=[(f"ecadlib dblib-sync {shell_word(a.plan)} --to {shell_word(a.to)}", "write it for real")] if a.dry_run else
+              ([(f"ecadlib review {shell_word(a.plan)}", "the held parts")] if any(r["action"] == "held" for r in out["results"]) else []))
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         from .fsutil import write_text_atomic

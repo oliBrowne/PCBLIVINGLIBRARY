@@ -89,3 +89,75 @@ def test_default_librarian_folder_for_a_bom_named_aux_is_no_windows_device_name(
             assert not leaf.endswith((".", " ")), (bom, got)
         tri = Path(FR.default_out("triage", bom)).name
         assert not tri.endswith((".", " ")), (bom, tri)
+
+
+# ---------------------------------------------------------------- cli-04: "next:" commands that break when pasted
+def _next_commands(text):
+    lines = text.splitlines()
+    i = next(k for k, l in enumerate(lines) if l.strip() == "next:")
+    return [l.split("  # ")[0].strip() for l in lines[i + 1:] if l.startswith("  ecadlib ")]
+
+
+@lite
+def test_next_commands_quote_a_bom_or_folder_name_with_spaces_and_brackets(tmp_path, monkeypatch):
+    # triage of "My Board (rev 2).csv" suggested `ecadlib librarian My Board (rev 2).csv -o ...`: pasted into a shell
+    # that is a syntax error (bash) or three arguments; the librarian's next commands had the same problem for -o
+    import shlex, types
+    from ecadlib import bom_triage as T, librarian as L, term as TM
+    monkeypatch.setenv("ECADLIB_WORKSPACE", str(tmp_path / "my ws"))
+    buf = io.StringIO()
+    a = types.SimpleNamespace(bom="My Board (rev 2).csv", out=str(tmp_path / "reports" / "t"), offline=True)
+    T.print_result([], {}, a, t=TM.Term(buf, styled=False, width=200))
+    buf2 = io.StringIO()
+    L.print_result([{"name": "X1", "status": "held", "hold_reasons": []}], tmp_path / "my lib (a)", t=TM.Term(buf2, styled=False, width=300))
+    for text in (buf.getvalue(), buf2.getvalue()):
+        cmds = _next_commands(text)
+        assert cmds, text
+        for c in cmds:
+            words = shlex.split(c)
+            assert not any(w in ("(rev", "2).csv", "(a)/plan.json") or w.startswith("(") for w in words), (c, words)
+    assert "My Board (rev 2).csv" in shlex.split(_next_commands(buf.getvalue())[0]), buf.getvalue()
+
+
+@lite
+def test_review_fix_commands_quote_a_part_number_with_brackets(tmp_path):
+    # `ecadlib review` printed "to fix: ecadlib release-check plan.json --allow SM04B-SRSS-TB(LF)(SN)" (a part of the
+    # bundled sample BOM): bash refuses it ("syntax error near unexpected token `('")
+    import shlex
+    from ecadlib import review_cli as R
+    item = {"name": "SM04B-SRSS-TB(LF)(SN)", "hold_reasons": ["fields: no datasheet link"]}
+    plan = tmp_path / "my lib" / "plan.json"
+    cmds = R.fix_commands(plan, item, [("symbol", {"id": "kicad:Connector:Conn_01x04"})])
+    assert cmds, cmds
+    for c in cmds:
+        words = shlex.split(c)
+        assert str(plan) in words and "SM04B-SRSS-TB(LF)(SN)" in words, (c, words)
+        assert "'SM04B-SRSS-TB(LF)(SN)'" in c or '"SM04B-SRSS-TB(LF)(SN)"' in c, c     # quoted: bash reads ( as syntax
+
+
+# ---------------------------------------------------------------- cli-05: fp-edit --part spelled another way
+def _datasheet_answer(base, name):
+    import re
+    d = base / "datasheet"
+    d.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9_.+-]", "_", name)
+    (d / f"{safe}.json").write_text(json.dumps({"name": name, "footprint": "PKG-4", "pins": [{"num": "1", "name": "A"}]}))
+    (d / "PKG-4.json").write_text(json.dumps({"name": "PKG-4", "package_type": "custom"}))
+    (base / "plan.json").write_text(json.dumps([{"name": name, "status": "held"}]))
+    return base / "plan.json"
+
+
+@lite
+def test_fp_edit_keys_the_edit_by_the_plans_part_name(tmp_path):
+    # fp-edit found the answer file by the --part spelling's file name (ABC_DEF_12.json for ABC/DEF:12, and any case
+    # on Windows), then saved the edit under that spelling: the librarian looks the edit up by the plan's name, so the
+    # rename the person made was never applied (and `show` said "run the librarian again to build the part")
+    from ecadlib import fp_edit as FE
+    for name, typed in (("ABC/DEF:12", "ABC_DEF_12"), ("CH340C", "ch340c")):
+        base = tmp_path / typed
+        plan = _datasheet_answer(base, name)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            FE.main([str(plan), "--part", typed, "rename", "1=2"])
+        edits = FE.load(base)
+        assert FE.for_part(edits, name), (name, edits)
+        assert typed == name or typed not in edits, (name, edits)

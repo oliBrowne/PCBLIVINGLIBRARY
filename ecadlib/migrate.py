@@ -26,6 +26,7 @@ import argparse, datetime, json, os, shutil, sys, time
 from pathlib import Path
 
 from . import __version__
+from .cliutil import shell_word
 from .fsutil import write_text_atomic
 
 STAMP = "ecadlib_schema.json"
@@ -455,7 +456,7 @@ def main(argv=None):
         verb = "would be migrated" if dry else "migrated"
         nxt = []
         if dry and n_old:
-            nxt.append((f"ecadlib migrate {a.path}", "upgrade them (backups go to .ecadlib_backup/ first)"))
+            nxt.append((f"ecadlib migrate {shell_word(a.path)}", "upgrade them (backups go to .ecadlib_backup/ first)"))
         if any(r["state"] == "new" for r in rows):
             nxt.append(("pip install -U ecadlib", "a file was written by a newer ecadlib (up to date already: the main-branch "
                                                   "build, see README Install)"))

@@ -20,6 +20,7 @@ import argparse, json, os, re, sys, webbrowser
 from pathlib import Path
 
 from . import messages as M, term as TM
+from .cliutil import shell_word
 
 CHOICES = "1-{n} use a candidate   a release anyway   d open the datasheet   s skip   q quit"
 
@@ -155,15 +156,17 @@ def release_anyway(plan, name, user=None, reason=""):
 
 
 def fix_commands(plan, item, numbered):
+    from .cliutil import shell_word as q             # SM04B-SRSS-TB(LF)(SN), a folder with a space: one word each
+    plan, name = q(plan), q(item["name"])
     cmds = []
     if numbered:
         kind, c = numbered[0]
-        cmds.append(f"ecadlib resolve {plan} --part {item['name']} choose {kind} {c['id']}")
+        cmds.append(f"ecadlib resolve {plan} --part {name} choose {kind} {q(c['id'])}")
     codes = [e["code"] for e in M.explain_all(item.get("hold_reasons") or [])]
     if "change.held" in codes:                 # only an approval releases it: --allow cannot
-        cmds.append(f"ecadlib part show {plan} {item['name']}")
+        cmds.append(f"ecadlib part show {plan} {name}")
     elif any(not c.startswith("files.") for c in codes):
-        cmds.append(f"ecadlib release-check {plan} --allow {item['name']}")
+        cmds.append(f"ecadlib release-check {plan} --allow {name}")
     return cmds
 
 
@@ -307,7 +310,7 @@ def main(argv=None, inp=input):
             break
     if not total:
         t.summary(f"Nothing is held{' for ' + a.part if a.part else ''}: every part is ready or waiting for sign-off.",
-                  next=[(f"ecadlib status --workspace {a.workspace}" if not a.plan else f"ecadlib release-check {plans[0]}", "")])
+                  next=[(f"ecadlib status --workspace {shell_word(a.workspace)}" if not a.plan else f"ecadlib release-check {shell_word(plans[0])}", "")])
         return 0
     done = total - still
     head = (f"{M.plural(total, 'held part')} reviewed: {done} fixed, {still} still held" if interactive
@@ -315,7 +318,7 @@ def main(argv=None, inp=input):
     nxt = [] if interactive else [("ecadlib review" + (f" {a.plan}" if a.plan else f" --workspace {a.workspace}"),
                                    "in a terminal: pick a fix for each part")]
     if done:
-        nxt.append((f"ecadlib release-check {plans[0]}", "check the whole library again"))
+        nxt.append((f"ecadlib release-check {shell_word(plans[0])}", "check the whole library again"))
     t.summary(head, next=nxt)
     return 2 if still else 0
 
