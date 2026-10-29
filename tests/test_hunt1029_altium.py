@@ -114,3 +114,24 @@ def test_project_path_the_script_wrote_with_question_marks_is_found():
             raise AssertionError("an ambiguous path must not be guessed")
         except ValueError as e:
             assert "save the project" not in str(e), e
+
+
+def test_release_anyway_for_a_bom_named_outside_the_ansi_code_page():
+    """A project named in Cyrillic has its BOM at reports/project_<name>_<hash>.csv; result.ini (UTF-16) hands that
+    to the dialog, but the dialog's Release anyway / Read with AI writes it back into request.ini with TIniFile in the
+    ANSI code page, as reports/project_?????_<hash>.csv. The release then said the part "is not in the library plan
+    any more" for a part held right there."""
+    import json
+    with tempfile.TemporaryDirectory() as d:
+        cfg = {"workspace": Path(d) / "ws", "library": Path(d) / "lib", "name": "ecadlib", "port": 8765, "offline": True}
+        ws = AM._workspace(cfg)
+        real = "reports/project_Плата_0123abcd.csv"
+        (ws.root / real).parent.mkdir(parents=True, exist_ok=True)
+        (ws.root / real).write_text("Designator,MPN\nU1,XYZ123\n", encoding="utf-8")
+        plan = ws._librarian_dir(ws._bom_path(real)) / "plan.json"
+        plan.parent.mkdir(parents=True)
+        plan.write_text(json.dumps([{"name": "XYZ123", "status": "held", "hold_reasons": ["files.symbol missing"]}]),
+                        encoding="utf-8")
+        res = AM.release_part(cfg, {"bom": "reports/project_?????_0123abcd.csv", "part": "XYZ123", "mpn": "XYZ123",
+                                    "reason": "checked", "release_key": "x"})
+        assert "not in the library plan" not in res["message"], res

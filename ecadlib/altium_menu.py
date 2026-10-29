@@ -1308,6 +1308,7 @@ def release_part(cfg, req, progress=None):
         return {"status": "error", "message": f"{name} was not released: Release anyway needs a reason.",
                 "fix": "Click Release anyway again and say why the part is fine as it is."}
     ws = _workspace(cfg)
+    rel = ansi_path(rel, ws.root)
     bom = ws._bom_path(rel)
     plan = ws._librarian_dir(bom) / "plan.json"
     try:
@@ -1363,7 +1364,7 @@ def ai_read(cfg, req, progress=None):
     approved, then the same publish and result as add-part (ai_mpn given) or fill, with the real cost."""
     progress = progress or Progress()
     ws = _workspace(cfg)
-    bom = req.get("bom", "")
+    bom = ansi_path(req.get("bom", ""), ws.root)          # written back by the dialog in the ANSI code page
     approved = req.get("approved_usd") or None
     s = ws.ai_read(bom, float(approved) if approved else None, req.get("over_limit_ok") == "1",
                    req.get("price_unknown_ok") == "1", parts=[req["part"]] if req.get("part") else None, progress=progress)
@@ -1451,19 +1452,26 @@ def _library_mpns(cfg, ws):
     return have
 
 
+def ansi_path(path, base=None):
+    """A path the menu's script handed over in request.ini, which TIniFile writes in the ANSI code page: a character
+    that code page lacks arrives as '?', which no Windows file name holds, so the one file the path matches with '?'
+    as a wildcard is the one meant (relative paths: under base). The path as given when it needs no such match."""
+    path = str(path or "")
+    full = Path(base) / path if base is not None and not Path(path).is_absolute() else Path(path)
+    if "?" not in path or full.exists():
+        return path
+    import glob
+    found = [f for f in glob.glob(re.sub(r"([*\[])", r"[\1]", str(full))) if Path(f).is_file()]
+    if len(found) != 1:
+        raise ValueError(f"{path}: Altium handed over this path with '?' for characters the Windows code page cannot "
+                         f"hold, and {'no file' if not found else f'{len(found)} files'} match it. Next: rename the "
+                         f"project's folders and files to plain letters (A-Z, 0-9) and open it again")
+    return found[0] if full == Path(path) else Path(os.path.relpath(found[0], base)).as_posix()
+
+
 def _bom_of(ws, project):
     """(workspace-relative BOM csv, project summary or None) for an Altium project / SchDoc, or a BOM file."""
-    p = Path(project)
-    if not p.is_file() and "?" in str(project):
-        # the menu writes request.ini in the ANSI code page: a character it lacks arrives as '?', which no Windows file
-        # name holds, so the one file the path matches with '?' as a wildcard is the project
-        import glob
-        found = [f for f in glob.glob(re.sub(r"([*\[])", r"[\1]", str(project))) if Path(f).is_file()]
-        if len(found) != 1:
-            raise ValueError(f"{project}: Altium handed over this path with '?' for characters the Windows code page "
-                             f"cannot hold, and {'no file' if not found else f'{len(found)} files'} match it. Next: "
-                             f"rename the project's folders and files to plain letters (A-Z, 0-9) and open it again")
-        p = Path(found[0])
+    p = Path(ansi_path(project))
     if not p.is_file():
         raise ValueError(f"{project}: no such file (save the project first)")
     if p.suffix.lower() in (".prjpcb", ".schdoc"):
