@@ -133,13 +133,16 @@ def _value_tokens(v):
     except Exception:
         return []
     rest = re.sub(r"(\d+)\s*/\s*(\d+)\s*W\b", lambda m: f"{int(m.group(1)) / max(int(m.group(2)), 1):g}W", rest)
-    rest = re.sub(r"(?i)(\d)\s+(%|ppm|°C|mV|kV|V|mW|W|mA|A)(?![A-Za-z0-9])", r"\1\2", rest.replace("+/-", "±"))
+    # as electrical_facts reads them: a tolerance is ± ('±1%' == '1%') and a voltage rating DC ('50 VDC' == '50V')
+    rest = re.sub(r"±\s*(?=\d)", "", rest.replace("+/-", "±"))
+    rest = re.sub(r"(\d)\s*([mk]?V)\s*(?:DC|dc|Dc)(?![A-Za-z0-9])", r"\1\2", rest)
+    rest = re.sub(r"(?i)(\d)\s+(%|ppm|°C|mV|kV|V|mW|W|mA|A)(?![A-Za-z0-9])", r"\1\2", rest)
     toks = []
     for t in re.split(r"[\s/,;]+", rest):
         if not t:
             continue
         if t.upper() in PACKAGE_SIZES or t.upper() in DIELECTRICS:
-            toks.append(t.upper())
+            toks.append(_DIEL_SAME.get(t.upper(), t.upper()))      # NP0 is C0G
             continue
         try:
             y, u, left = split_value(t)
