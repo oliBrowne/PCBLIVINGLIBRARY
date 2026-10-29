@@ -62,7 +62,8 @@ CASES = [
     (["migrate", "{out}", "--check"], (0, 1)),
     (["kicad-export", "{out}/lib/plan.json", "-o", "{out}/kicad", "--offline", "--cache", "{out}/cache",
       "--include-held"], (0,)),
-    (["dblib-sync", "{out}/lib/plan.json", "--to", "{out}/dbsync", "-o", "{out}/dbsync.json"], (0,)),
+    # every part of this plan is held: nothing is written, said so, exit 2 (as altium-pkg)
+    (["dblib-sync", "{out}/lib/plan.json", "--to", "{out}/dbsync", "-o", "{out}/dbsync.json"], (0, 2)),
     (["resolve", "{out}/lib/plan.json", "--offline", "--cache", "{out}/cache", "list"], (0,)),
     (["review", "--workspace", "{out}/ws", "--yes", "--offline"], (0, 2)),
     (["approve", "{out}/lib/plan.json", "status"], (0,)),

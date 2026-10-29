@@ -30,7 +30,7 @@ def test_dblib_sync_with_every_part_held_does_not_claim_a_dblib_it_never_wrote(t
             S.main([str(plan), "--to", str(tmp_path / "lib")])
         except SystemExit as e:
             code = e.code
-    text = out.getvalue() + err.getvalue() + str(code)   # sys.exit(message): Python prints it to stderr
+    text = out.getvalue() + err.getvalue()
     assert not (tmp_path / "lib" / "ecadlib.DbLib").exists()
     assert "open this in Altium" not in text, text
     assert "nothing written" in text, text
