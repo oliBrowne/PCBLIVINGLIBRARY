@@ -311,6 +311,10 @@ CODES = {
                               "package's separate pads, and the symbol has one pin for it.",
                               "Check on the datasheet's land drawing that those pins share the pad.",
                               [r"joined_pins: pins (?P<pins>[\w.+-]+(?:,[\w.+-]+)*) and the exposed pad are one pad"]),
+    "datasheet.sides_unlike_standard": ("The datasheet's pin figure puts the pins on the sides differently from the standard "
+                                        "package {package}, so its land would put pads where the part has none.",
+                                        "Check the pins on each side against the datasheet's pin figure.",
+                                        [r"pin sides: the read's pins per side differ from the standard package (?P<package>\S+?)'s rows"]),
     "datasheet.tab_joined": ("The datasheet numbers the tab {tab}, on pin {lead}'s net. The checked land numbers the tab {lead}, so "
                              "the symbol has no pin {tab}.",
                              "Check in the datasheet's pin table that the tab and pin {lead} are the same connection.",

@@ -272,3 +272,27 @@ def test_a_merged_pad_whose_number_is_a_lead_is_not_merged():
     pins = [{"num": str(i), "name": n} for i, n in zip((1, 2, 3, 4, 6, 7, 8), "SSSGDDD")] + [{"num": "9", "name": "D"}]
     review = []
     assert D.merge_pins(s, pins, review) is None and any("implausib" in r for r in review), review
+
+
+def test_a_merge_with_a_joined_row_missing_from_the_pin_table_is_not_merged():
+    # review 2026-10-29 (Greptile): pin 7 or the pad's row left out of the pin table skipped the one-net check
+    for gone in ("7", "9"):
+        pins = [{"num": str(i), "name": n} for i, n in enumerate("SSSGDDDD", 1)] + [{"num": "9", "name": "D"}]
+        pins = [p for p in pins if p["num"] != gone]
+        review = []
+        assert D.merge_pins(tdson(), pins, review) is None and any("implausib" in r for r in review), (gone, review)
+
+
+def test_a_standard_land_must_have_the_reads_pins_per_side():
+    # review 2026-10-29 (Greptile): a 5/3/5/3 QFN-16 read must not take a 4/4/4/4 table land of the same size
+    from ecadlib import stdparts as SP
+    name = "Analog_LFCSP-16-1EP_4x4mm_P0.65mm_EP2.1x2.1mm"
+    even = {"left": ["1", "2", "3", "4"], "bottom": ["5", "6", "7", "8"], "right": ["9", "10", "11", "12"],
+            "top": ["13", "14", "15", "16"]}
+    odd = {"left": ["1", "2", "3", "4", "5"], "bottom": ["6", "7", "8"], "right": ["9", "10", "11", "12", "13"],
+           "top": ["14", "15", "16"]}
+    base = SP.spec(name)
+    assert SP.sides_fit(base, name)                                     # no pin_sides read: as before
+    assert SP.sides_fit(dict(base, pin_sides=even), name)
+    assert not SP.sides_fit(dict(base, pin_sides=odd), name)
+    assert not SP.sides_fit(dict(base, pin_sides=even), "SOIC-8_3.9x4.9mm_P1.27mm")

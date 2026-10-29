@@ -1053,6 +1053,10 @@ class Run:
                                 "that merged pad is built, not the standard table's separate pads, so the footprint "
                                 "matches the symbol's one pin for it")
             std = None                                # a table's separate pads would leave the merged symbol pin bare
+        if std and not st["footprint"] and not SP.sides_fit(res["spec"], std[0]):
+            raise D.DatasheetError(f"pin sides: the read's pins per side differ from the standard package {std[0]}'s "
+                                   "rows, so its land would put pads where the part has none (check pin_sides against "
+                                   "the pin figure)")
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
             ren = SP.tab_renumber(res["spec"], pkg, [(q["num"], q["name"]) for q in (res.get("symbol") or {}).get("pins") or []])

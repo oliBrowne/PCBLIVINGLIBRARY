@@ -2220,8 +2220,9 @@ def merge_pins(spec, pins, review):
     from . import crosscheck as CC
     net = lambda v: CC._names(v) - CC.EP_NAMES - {"NC", "DNC"}
     gone = [p for p in pins if str(p.get("num")) in drop]
-    keep = next((p for p in gone if str(p.get("num")) == jn[1][0]), None)
-    if keep is None or any(not (net(p.get("name") or "") & net(keep.get("name") or "")) for p in gone):
+    keep = next((p for p in gone if str(p.get("num")) == jn[1][0]), {})
+    if {str(p.get("num")) for p in gone} != drop or \
+            any(not (net(p.get("name") or "") & net(keep.get("name") or "")) for p in gone):   # every row, one net
         shown = ", ".join(f"{p.get('num')} {p.get('name')}" for p in gone)
         review.append(f"joined_pins: the leads joined to the exposed pad and the pad are one piece of metal, one net, "
                       f"but the pin table names them {shown or 'nothing'}, which is implausible (check joined_pins "

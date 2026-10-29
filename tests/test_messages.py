@@ -90,6 +90,9 @@ EXAMPLES = {
     "datasheet.joined_land": "joined_pins: pins 5,6,7,8 and the exposed pad are one pad on the maker's land; that merged "
                              "pad is built, not the standard table's separate pads, so the footprint matches the symbol's "
                              "one pin for it",
+    "datasheet.sides_unlike_standard": "pin sides: the read's pins per side differ from the standard package "
+                                       "QFN-16-1EP_4x4mm_P0.65mm's rows, so its land would put pads where the part has "
+                                       "none (check pin_sides against the pin figure)",
     "datasheet.tab_joined": "tab: the datasheet numbers the tab 3, on pin 1's net; the land numbers it 1, so the symbol has "
                             "no pin 3 (check the pin table)",
     "datasheet.tab_cut_lead": "tab: the datasheet numbers the tab 4, and lead 2 is cut (N.C.); the land numbers the tab 2, "
