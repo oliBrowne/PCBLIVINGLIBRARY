@@ -114,7 +114,8 @@ def _arc_extent(s, m, e):
 
 
 def courtyard_bbox(mod_tree):
-    """Bounding box of the F.CrtYd graphics: lines, rectangles, polygons, circles and arcs (their true extent)."""
+    """Bounding box of the F.CrtYd graphics: lines, rectangles, polygons (arc segments too), circles and arcs (their
+    true extent)."""
     xs, ys = [], []
     add = lambda p: (xs.append(float(p[0])), ys.append(float(p[1])))
     for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
@@ -146,4 +147,9 @@ def courtyard_bbox(mod_tree):
                     add((p[1], p[2]))
             for xy in find(first(g, "pts") or [], "xy"):
                 add((xy[1], xy[2]))
+            for a in find(first(g, "pts") or [], "arc"):     # KiCad 7+: (pts ... (arc (start) (mid) (end)) ...)
+                s, m, e = (first(a, k) for k in ("start", "mid", "end"))
+                if s and m and e:
+                    for p in _arc_extent(*((float(q[1]), float(q[2])) for q in (s, m, e))):
+                        add(p)
     return (min(xs), min(ys), max(xs), max(ys)) if xs else None
