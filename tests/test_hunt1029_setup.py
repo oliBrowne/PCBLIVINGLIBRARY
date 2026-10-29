@@ -201,6 +201,31 @@ def test_setup_page_takes_a_folder_pasted_with_quotes(tmp_path, monkeypatch):
     assert ES.restart(f'"{ws}"') == {"restarting": True, "workspace": str(ws)}
 
 
+@lite
+def test_setup_page_library_folders_are_the_default_lib_where_its_workspace_is(tmp_path, monkeypatch):
+    """H-SETUP-8: library folders given on the setup page were the default --lib only for commands run inside the
+    workspace's folder. From any other folder `ecadlib librarian BOM` wrote into the page's workspace (#202) and used
+    its rules, but searched none of the person's libraries, so it built parts they already have; `ecadlib ui` and
+    `ecadlib doctor` from there did not see them either (`ecadlib setup` did)."""
+    tmp_path = tmp_path.resolve()
+    from ecadlib import easy_setup as ES, firstrun as FR
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ECADLIB_CONFIG", "")
+    monkeypatch.setenv("ECADLIB_WORKSPACE", "")
+    monkeypatch.setenv("ECADLIB_LIB", "")
+    lib, ws = tmp_path / "mylib", tmp_path / "W"
+    lib.mkdir()
+    ES.save(tmp_path, {"workspace": str(ws), "libs": [str(lib)], "provider": "none"})
+    (tmp_path / "bare").mkdir()
+    monkeypatch.chdir(tmp_path / "bare")
+    for cmd in ("librarian", "triage", "ui", "doctor"):
+        argv, notes = FR.config_defaults(cmd, ["bom.csv"])
+        assert argv.count("--lib") == 1 and argv[argv.index("--lib") + 1] == str(lib), (cmd, argv)
+    assert FR.config_defaults("librarian", ["bom.csv", "--lib", "x"])[0].count("--lib") == 1
+    (tmp_path / "bare" / "ecadlib.toml").write_text("[setup]\nlibs = []\n", encoding="utf-8")   # a project's own
+    assert "--lib" not in FR.config_defaults("librarian", ["bom.csv"])[0]          # file: as it says
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all

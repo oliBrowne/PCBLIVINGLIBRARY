@@ -300,6 +300,8 @@ def config_defaults(cmd, argv, environ=None, start="."):
             vals = [str(_rel_to(v, f)) for v in vals]
         elif flag == "--workspace":
             vals, where = _settings_workspace(start, environ), "the setup page (settings.json)"
+        elif f is None:                         # no rules file here: the library folders saved with the page's
+            vals, where = _settings_libs(start, environ), "the setup page (settings.json)"   # workspace
         if not vals:
             continue
         extra = [x for v in vals for x in (flag, v)]
@@ -324,6 +326,19 @@ def _settings_workspace(start=".", environ=None):
     except Exception:
         pass
     return []
+
+
+def _settings_libs(start=".", environ=None):
+    """The library folders saved on the setup page (settings.json), when its workspace is the one in use here
+    (_settings_workspace) and they are folders; else []."""
+    if not _settings_workspace(start, environ):
+        return []
+    try:
+        libs = UC.load_settings(environ).get("libs")
+        return [str(Path(x).expanduser()) for x in libs if isinstance(x, str) and x.strip()
+                and Path(x).expanduser().is_dir()] if isinstance(libs, list) else []
+    except Exception:
+        return []
 
 
 # ------------------------------------------------------------------ checks before a command runs
