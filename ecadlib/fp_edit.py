@@ -24,7 +24,7 @@ from pathlib import Path
 from .fsutil import write_text_atomic
 
 FILE = "footprint_edits.json"
-_safe = lambda s: re.sub(r"[^A-Za-z0-9_.+-]", "_", s)
+from .fsutil import plain_stem as _safe        # datasheet.write's file names
 
 
 def _base(plan):

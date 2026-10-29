@@ -959,7 +959,8 @@ def main(argv=None):
                 continue
             from . import sexpr
             sexpr.parse(txt)                                          # sanity: balanced S-expression
-            (outdir / f"{spec['name']}.kicad_mod").write_text(txt, encoding="utf-8", newline="\n")
+            from .fsutil import portable_stem                            # a package named NUL: NUL_.kicad_mod
+            (outdir / f"{portable_stem(spec['name'])}.kicad_mod").write_text(txt, encoding="utf-8", newline="\n")
             p1 = rep["pads"][0]
             zgx = f"Z={rep['Z']:.2f} G={rep['G']:.2f} X={rep['X']:.2f}" if "G" in rep else f"{len(rep['pads'])} pads"
             print(f"{spec['name']:<44} {rep['ipc_family']:<13} {zgx} "

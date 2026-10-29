@@ -24,7 +24,7 @@ import requests
 
 from . import altium_lib as AL, footprint_gen as F
 from . import httpcache as H
-from .fsutil import write_text_atomic
+from .fsutil import plain_stem as _plain_stem, write_text_atomic
 from .kicad_index import norm_mpn
 from .pdf_fetch import looks_html
 from . import userconfig as UC
@@ -2781,7 +2781,7 @@ def CC_SHOWN(d):
 def write(res, outdir):
     d = Path(outdir)
     d.mkdir(parents=True, exist_ok=True)
-    safe = lambda s: re.sub(r"[^A-Za-z0-9_.+-]", "_", s)
+    from .fsutil import plain_stem as safe              # fp_edit.read and partview rebuild these names with it
     raw = res["symbol"]["name"]
     part = safe(raw)
 
@@ -5992,7 +5992,7 @@ def main(argv=None):
                 if rec:
                     raise
                 Path(a.out).mkdir(parents=True, exist_ok=True)
-                f = Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
+                f = Path(a.out) / (_plain_stem(a.part) + ".response.json")
                 f.write_text(json.dumps({"page_offset": offset, "failed": str(e), "message": msg}, indent=2) + "\n",
                              encoding="utf-8")
                 raise DatasheetError(f"{e} (the answer is saved in {f}: --from-response {f} re-checks it with no API call)")
@@ -6007,13 +6007,13 @@ def main(argv=None):
                 hold_on_doubt(inf, a.model, res)
             except DatasheetError as e:           # the paid answer is kept: --from-response writes it anyway
                 Path(a.out).mkdir(parents=True, exist_ok=True)
-                f = Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
+                f = Path(a.out) / (_plain_stem(a.part) + ".response.json")
                 f.write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n", encoding="utf-8")
                 raise DatasheetError(f"{e} (the answer is saved in {f})")
         held = read_hold(res)                         # as the librarian: a read that can build wrong is not written
         if held:
             f = Path(a.from_response) if a.from_response else \
-                Path(a.out) / (re.sub(r"[^A-Za-z0-9_.+-]", "_", a.part) + ".response.json")
+                Path(a.out) / (_plain_stem(a.part) + ".response.json")
             if not a.from_response:
                 Path(a.out).mkdir(parents=True, exist_ok=True)
                 f.write_text(json.dumps({"page_offset": offset, "message": msg}, indent=2) + "\n", encoding="utf-8")

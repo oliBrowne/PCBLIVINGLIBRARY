@@ -117,7 +117,8 @@ def _sidecar(out, name, mpn=""):
     own = [p for p in dict.fromkeys((str(mpn or "").strip(), name)) if p]
     stems = []
     for p in own:
-        safe = re.sub(r"[^A-Za-z0-9_.+-]", "_", p)          # datasheet.write's `safe`
+        from .fsutil import plain_stem
+        safe = plain_stem(p)                                # datasheet.write's file names
         stems += [p, safe, f"{safe}-{hashlib.sha1(p.encode()).hexdigest()[:6]}"]
     for stem in dict.fromkeys(stems):
         f = d / f"{stem}.extraction.json"
