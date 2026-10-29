@@ -325,8 +325,8 @@ def config_defaults(cmd, argv, environ=None, start="."):
             vals = [str(_rel_to(v, f)) for v in vals]
         elif flag == "--workspace":
             vals, where = _settings_workspace(start, environ), "the setup page (settings.json)"
-        elif f is None:                         # no rules file here: the library folders saved with the page's
-            vals, where = _settings_libs(start, environ), "the setup page (settings.json)"   # workspace
+        elif "libs" not in st:                  # no [setup] libs here (none given: `libs = []` says none): the
+            vals, where = _settings_libs(start, environ, argv), "the setup page (settings.json)"   # page's folders
         if not vals:
             continue
         extra = [x for v in vals for x in (flag, v)]
@@ -353,10 +353,19 @@ def _settings_workspace(start=".", environ=None):
     return []
 
 
-def _settings_libs(start=".", environ=None):
-    """The library folders saved on the setup page (settings.json), when its workspace is the one in use here
-    (_settings_workspace) and they are folders; else []."""
-    if not _settings_workspace(start, environ):
+def _settings_libs(start=".", environ=None, argv=()):
+    """The library folders saved on the setup page (settings.json), when its workspace is the one in use here (a
+    --workspace in argv, else out_workspace: $ECADLIB_WORKSPACE, [setup] workspace, ./ecadlib_workspace, the page's)
+    and they are folders; else []."""
+    page = _settings_workspace(start, environ)
+    if not page:
+        return []
+    given = _values(list(argv), ["--workspace"])
+    used = Path(given[-1]).expanduser() if given else out_workspace(start, environ)
+    try:
+        if used is None or not os.path.samefile(used, page[0]):
+            return []
+    except OSError:
         return []
     try:
         libs = UC.load_settings(environ).get("libs")

@@ -226,12 +226,6 @@ def test_setup_page_library_folders_are_the_default_lib_where_its_workspace_is(t
     assert "--lib" not in FR.config_defaults("librarian", ["bom.csv"])[0]          # file: as it says
 
 
-if __name__ == "__main__":
-    import sys
-    from tests import run_all
-    sys.exit(run_all.main(["test_hunt1029_setup"]))
-
-
 def _two_projects(tmp_path, monkeypatch):
     tmp_path = tmp_path.resolve()
     ws = _page_workspace(tmp_path, monkeypatch)
@@ -315,3 +309,34 @@ def test_status_last_triage_is_a_newer_cli_csv_over_an_old_web_json_of_the_same_
     os.utime(rep / "triage_bom.csv", (1_700_000_001, 1_700_000_001))   # written with its .json: the .json's details
     t = WS.status(tmp_path)["last_triage"]
     assert t["report"] == "reports/triage_bom.json" and t["lines"] == 7, t
+
+
+@lite
+def test_setup_page_libs_follow_its_workspace_not_whether_a_rules_file_exists(tmp_path, monkeypatch):
+    """Review M7: a ./ecadlib.toml with only [bom] columns (no [setup] libs) turned the page's library folders off,
+    though the output still went into the page's workspace; and a --workspace naming another workspace still got
+    the page's library folders."""
+    tmp_path = tmp_path.resolve()
+    from ecadlib import easy_setup as ES, firstrun as FR
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    for v in ("ECADLIB_CONFIG", "ECADLIB_WORKSPACE", "ECADLIB_LIB"):
+        monkeypatch.setenv(v, "")
+    lib, ws, other = tmp_path / "mylib", tmp_path / "W", tmp_path / "other_ws"
+    lib.mkdir()
+    other.mkdir()
+    ES.save(tmp_path, {"workspace": str(ws), "libs": [str(lib)], "provider": "none"})
+    (tmp_path / "proj").mkdir()
+    monkeypatch.chdir(tmp_path / "proj")
+    (tmp_path / "proj" / "ecadlib.toml").write_text('[bom.columns]\nmpn = "Widget"\n', encoding="utf-8")
+    argv = FR.config_defaults("librarian", ["bom.csv"])[0]
+    assert argv.count("--lib") == 1 and argv[argv.index("--lib") + 1] == str(lib), argv
+    assert "--lib" not in FR.config_defaults("ui", ["--workspace", str(other)])[0]
+    assert "--lib" in FR.config_defaults("ui", ["--workspace", str(ws)])[0]
+    monkeypatch.setenv("ECADLIB_WORKSPACE", str(other))
+    assert "--lib" not in FR.config_defaults("librarian", ["bom.csv"])[0]
+
+
+if __name__ == "__main__":
+    import sys
+    from tests import run_all
+    sys.exit(run_all.main(["test_hunt1029_setup"]))
