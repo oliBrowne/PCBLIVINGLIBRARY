@@ -310,14 +310,15 @@ def start_nexar_signin(b, wait=10):
                    "Authorization)")
     elif len(cid) > 200 or len(sec) > 500 or any(c.isspace() for c in cid + sec):
         problem = "that does not look like a Nexar client ID and secret: copy them again from portal.nexar.com"
-    ready, me = threading.Event(), object()
+    ready, me, stop, stopped = threading.Event(), object(), threading.Event(), threading.Event()
     with _SIGNIN_LOCK:                          # "is one waiting?" and "this one waits now" in one step
         if _waiting():
             return _waiting()
         if problem:
             raise ValueError(problem)
         _SIGNIN.clear()
-        _SIGNIN.update(state="waiting", message="waiting for the browser sign-in", attempt=me)
+        _SIGNIN.update(state="waiting", message="waiting for the browser sign-in", attempt=me, stop=stop,
+                       stopped=stopped)
 
     def opened(url):                            # the sign-in listens now: the page opens the address itself
         with _SIGNIN_LOCK:
@@ -328,7 +329,10 @@ def start_nexar_signin(b, wait=10):
 
     def run():
         try:
-            got = NS.signin(cid, sec, open_browser=opened, out=lambda *a: None, timeout=300)
+            try:
+                got = NS.signin(cid, sec, open_browser=opened, out=lambda *a: None, timeout=300, cancel=stop)
+            finally:
+                stopped.set()                   # the redirect port is free again: a new sign-in can listen on it
             msg = ("signed in to Altium 365; ecadlib keeps the sign-in fresh by itself" if got.get("refresh") else
                    "signed in to Altium 365, but Nexar gave no refresh token: allow offline access for your app, "
                    "or sign in again when it runs out")
@@ -356,10 +360,15 @@ def nexar_signout(b):
     from . import nexar_signin as NS
     with _SIGNIN_LOCK:
         was_waiting = bool(_waiting())
+        stop, stopped = _SIGNIN.get("stop"), _SIGNIN.get("stopped")
         _SIGNIN.clear()
         if was_waiting:
             _SIGNIN.update(state="cancelled", message="signed out; the sign-in still open in the browser was cancelled")
-        return {"signed_out": bool(NS.signout())}
+        gone = bool(NS.signout())
+    if was_waiting and stop is not None:        # stop listening on the redirect port, so Sign in works again at once
+        stop.set()
+        stopped.wait(5)
+    return {"signed_out": gone}
 
 
 # ------------------------------------------------------------------ add to Altium / KiCad
