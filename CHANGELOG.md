@@ -11,6 +11,10 @@ a minor release may change command-line options and file formats.
 
 - Bug reports the user sends themselves: an error ecadlib did not expect (from a command, the web UI, the MCP server or the Altium / KiCad menu) is saved on this computer with API keys, tokens, e-mail addresses, the user name and home folder blanked out. `ecadlib report-bug` and **Report a bug** in the web UI show that text and open a pre-filled GitHub issue; nothing is sent unless the user presses Submit there. PRIVACY.md and the site's privacy page say so.
 
+### Changed
+
+- The ecadlib dialog in Altium: its buttons light up under the mouse and darken while held, the close mark turns red under the mouse, and the header shows the small ecadlib mark. While ecadlib works, the window keeps its height (the buttons no longer jump), the rows are redrawn only when they change, and the status line counts the seconds. While Altium builds and installs the library, the dialog says Altium is busy and ignores clicks, so a click made during the build no longer lands on the result's buttons. The result rows come in about four times faster. The "still working" question no longer stacks or marks a job that finished meanwhile as stopped.
+
 ## [0.4.0] - 2026-10-27
 
 The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right with none built wrong (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.

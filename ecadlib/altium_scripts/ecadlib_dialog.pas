@@ -28,6 +28,9 @@ Var
     Total : Integer;
     Swing : Integer;
     Dragging : Boolean;
+    Busy : Boolean;         { the blue button says Working... / Installing...: no highlight, no hand }
+    Seen : String;          { the progress.ini the dialog shows: Poll redraws only when it changes }
+    RunHeight : Integer;    { the tallest the running view has been: it does not shrink while ecadlib works }
     DragX : Integer;
     DragY : Integer;
 
@@ -123,15 +126,48 @@ Begin
     Result := Length(S) * 7 + 30;
 End;
 
-Procedure Buttons(Primary : String; Secondary : String; Busy : Boolean);
+Procedure Shade(Which : Integer; Level : Integer);
+{ A button's colour: Which 1 = the blue one (Primary), 2 = Secondary, 3 = Release anyway; Level 0 = at rest,
+  1 = under the mouse, 2 = held down. }
+Var
+    C : Integer;
 Begin
+    If Which = 1 Then
+    Begin
+        C := $00D9772F;
+        If Busy Then
+            C := $00705A4A
+        Else If Level = 1 Then
+            C := $00E8893F
+        Else If Level = 2 Then
+            C := $00B8621F;
+        EcadlibDialog.Primary.Color := C;
+        Exit;
+    End;
+    C := $00443E3E;
+    If Level = 1 Then
+        C := $00564F4F
+    Else If Level = 2 Then
+        C := $00363131;
+    If Which = 2 Then
+        EcadlibDialog.Secondary.Color := C
+    Else
+        EcadlibDialog.ReleaseBtn.Color := C;
+End;
+
+Procedure Buttons(Primary : String; Secondary : String; IsBusy : Boolean);
+Begin
+    Busy := IsBusy;
     EcadlibDialog.Primary.Caption := Primary;
     EcadlibDialog.Primary.Width := ButtonWidth(Primary);
     EcadlibDialog.Primary.Left := 420 - 16 - EcadlibDialog.Primary.Width;
     If Busy Then
-        EcadlibDialog.Primary.Color := $00705A4A
+        EcadlibDialog.Primary.Cursor := crDefault
     Else
-        EcadlibDialog.Primary.Color := $00D9772F;
+        EcadlibDialog.Primary.Cursor := crHandPoint;
+    Shade(1, 0);
+    Shade(2, 0);
+    Shade(3, 0);
     EcadlibDialog.Secondary.Caption := Secondary;
     EcadlibDialog.Secondary.Visible := Secondary <> '';
     EcadlibDialog.Secondary.Width := ButtonWidth(Secondary);
@@ -257,10 +293,17 @@ Begin
         EcadlibDialog.Report.Top := Y + 2;
         Y := Y + 22;
     End;
-    EcadlibDialog.Primary.Top := Y + 10;
-    EcadlibDialog.Secondary.Top := Y + 10;
-    EcadlibDialog.ReleaseBtn.Top := Y + 10;
-    EcadlibDialog.ClientHeight := Y + 10 + 30 + 16;
+    Y := Y + 10 + 30 + 16;
+    If (Phase = 'run') Or (Phase = 'install') Then
+    Begin
+        If Y < RunHeight Then
+            Y := RunHeight;         { rows coming and going would make the window and its buttons jump }
+        RunHeight := Y;
+    End;
+    EcadlibDialog.Primary.Top := Y - 46;
+    EcadlibDialog.Secondary.Top := Y - 46;
+    EcadlibDialog.ReleaseBtn.Top := Y - 46;
+    EcadlibDialog.ClientHeight := Y;
 End;
 
 Procedure Meter(Done : Integer; Count : Integer);
@@ -314,6 +357,9 @@ Begin
     Shown := 0;
     Total := 0;
     Swing := -60;
+    Seen := '';
+    RunHeight := 0;
+    EcadlibDialog.Tick.Interval := 250;
     ClearRows;
     EcadlibDialog.AskBox.Visible := False;
     EcadlibDialog.Report.Visible := False;
@@ -458,31 +504,56 @@ Begin
     Run('fill');
 End;
 
+Function Elapsed : String;
+{ ' (12 s)' after the first few seconds, so a long step still shows the dialog is alive. }
+Begin
+    Result := '';
+    If Waited >= 3000 Then
+        Result := ' (' + IntToStr(Waited Div 1000) + ' s)';
+End;
+
 Procedure Poll;
+{ Every tick: the meter moves and the seconds count; the rows and the layout are redrawn only when progress.ini says
+  something new, so the window does not flicker. }
 Var
     Ini : TIniFile;
     Done : Integer;
     Count : Integer;
     N : Integer;
     i : Integer;
+    Said : String;
+    Rows : String;
 Begin
     Waited := Waited + EcadlibDialog.Tick.Interval;
     Ini := TIniFile.Create(Job + '\progress.ini');
     Done := Ini.ReadInteger('progress', 'done', 0);
     Count := Ini.ReadInteger('progress', 'total', 0);
-    EcadlibDialog.Status.Caption := Ini.ReadString('progress', 'text', EcadlibDialog.Status.Caption);
+    Said := Ini.ReadString('progress', 'text', 'starting ecadlib');
     N := Ini.ReadInteger('progress', 'rows', 0);
     If N > 7 Then
         N := 7;
+    Rows := IntToStr(N);
     For i := 1 To N Do
-        SetRow(i, Ini.ReadString('progress', 'row' + IntToStr(i), ''));
+        Rows := Rows + #10 + Ini.ReadString('progress', 'row' + IntToStr(i), '');
     Ini.Free;
+    EcadlibDialog.Status.Caption := Said + Elapsed;
     Meter(Done, Count);
-    Layout;
+    If Rows <> Seen Then
+    Begin
+        Seen := Rows;
+        Ini := TIniFile.Create(Job + '\progress.ini');
+        For i := 1 To N Do
+            SetRow(i, Ini.ReadString('progress', 'row' + IntToStr(i), ''));
+        Ini.Free;
+        Layout;
+    End;
     If Waited >= SettingNumber('timeout_s', 1800) * 1000 Then
     Begin
         Waited := 0;
-        If Not ConfirmNoYes('ecadlib: ' + Title + ' is still working. Keep waiting?') Then
+        EcadlibDialog.Tick.Enabled := False;      { no second question, and no Finish under the open question }
+        If ConfirmNoYes('ecadlib: ' + Title + ' is still working. Keep waiting?') Or FileExists(Job + '\exit.txt') Then
+            EcadlibDialog.Tick.Enabled := True
+        Else
             Fail('Stopped waiting. ecadlib may still finish in the background.' + #13#10 + 'Next: look at its log, ' + Job + '\log.txt');
     End;
 End;
@@ -514,12 +585,20 @@ Begin
     Extra := '';
     If Answer(Job, 'install') <> '' Then
     Begin
+        { Altium does this itself and is busy until it is done: Keep working cannot help now, and clicks made
+          meanwhile are taken (and ignored) before the result's buttons appear. }
+        Phase := 'install';
+        Second := '';
         If Answer(Job, 'build') <> '' Then
-            EcadlibDialog.Status.Caption := 'Altium is building the library files, then installing them'
+            EcadlibDialog.Status.Caption := 'Altium is building the library files, then installing them. Altium is busy until then.'
         Else
-            EcadlibDialog.Status.Caption := 'installing the library again';
+            EcadlibDialog.Status.Caption := 'Altium is installing the library again';
+        Buttons('Installing...', '', True);
+        Layout;
+        EcadlibDialog.Update;
         Application.ProcessMessages;
         Extra := Reinstall(Job);
+        Application.ProcessMessages;
     End;
     Headline := Answer(Job, 'big');
     If Headline = '' Then
@@ -536,6 +615,7 @@ Begin
     If Total > 7 Then
         Total := 7;
     Shown := 0;
+    EcadlibDialog.Tick.Interval := 70;      { the result rows come in quickly: the work is done, nobody waits for them }
     EcadlibDialog.Status.Visible := False;
     EcadlibDialog.MeterFill.Left := 0;
     EcadlibDialog.MeterFill.Width := EcadlibDialog.MeterTrack.Width;
@@ -730,6 +810,8 @@ End;
 
 Procedure TEcadlibDialog.SecondaryClick(Sender : TObject);
 Begin
+    If Phase = 'install' Then
+        Exit;
     If Second = 'queue' Then
     Begin
         Fire('queue', '', '');
@@ -772,6 +854,79 @@ End;
 Procedure TEcadlibDialog.ReportClick(Sender : TObject);
 Begin
     Fire('open', 'path', Answer(Job, 'report'));
+End;
+
+{ The buttons' highlight (TPanel has none of its own): lighter under the mouse, darker while held. }
+Procedure TEcadlibDialog.PrimaryEnter(Sender : TObject);
+Begin
+    Shade(1, 1);
+End;
+
+Procedure TEcadlibDialog.PrimaryLeave(Sender : TObject);
+Begin
+    Shade(1, 0);
+End;
+
+Procedure TEcadlibDialog.PrimaryDown(Sender : TObject; Button : TMouseButton; Shift : TShiftState; X, Y : Integer);
+Begin
+    Shade(1, 2);
+End;
+
+Procedure TEcadlibDialog.PrimaryUp(Sender : TObject; Button : TMouseButton; Shift : TShiftState; X, Y : Integer);
+Begin
+    Shade(1, 1);
+End;
+
+Procedure TEcadlibDialog.SecondaryEnter(Sender : TObject);
+Begin
+    Shade(2, 1);
+End;
+
+Procedure TEcadlibDialog.SecondaryLeave(Sender : TObject);
+Begin
+    Shade(2, 0);
+End;
+
+Procedure TEcadlibDialog.SecondaryDown(Sender : TObject; Button : TMouseButton; Shift : TShiftState; X, Y : Integer);
+Begin
+    Shade(2, 2);
+End;
+
+Procedure TEcadlibDialog.SecondaryUp(Sender : TObject; Button : TMouseButton; Shift : TShiftState; X, Y : Integer);
+Begin
+    Shade(2, 1);
+End;
+
+Procedure TEcadlibDialog.ReleaseEnter(Sender : TObject);
+Begin
+    Shade(3, 1);
+End;
+
+Procedure TEcadlibDialog.ReleaseLeave(Sender : TObject);
+Begin
+    Shade(3, 0);
+End;
+
+Procedure TEcadlibDialog.ReleaseDown(Sender : TObject; Button : TMouseButton; Shift : TShiftState; X, Y : Integer);
+Begin
+    Shade(3, 2);
+End;
+
+Procedure TEcadlibDialog.ReleaseUp(Sender : TObject; Button : TMouseButton; Shift : TShiftState; X, Y : Integer);
+Begin
+    Shade(3, 1);
+End;
+
+Procedure TEcadlibDialog.HeadCloseEnter(Sender : TObject);
+Begin
+    HeadClose.Color := $003A3AC4;
+    HeadClose.Font.Color := $00FFFFFF;
+End;
+
+Procedure TEcadlibDialog.HeadCloseLeave(Sender : TObject);
+Begin
+    HeadClose.Color := $00242121;
+    HeadClose.Font.Color := $009C9C9C;
 End;
 
 Procedure TEcadlibDialog.HeadMouseDown(Sender : TObject; Button : TMouseButton; Shift : TShiftState; X, Y : Integer);
@@ -835,8 +990,14 @@ End;
 
 Procedure TEcadlibDialog.EcadlibDialogClose(Sender : TObject; Var CloseAction : TCloseAction);
 { A closed form's enabled timer fires again whenever this script project runs (AD 26.10): stop it. Closed another
-  way while it works (Alt+F4, the taskbar): the job still goes on waiting.txt, as with Keep working. }
+  way while it works (Alt+F4, the taskbar): the job still goes on waiting.txt, as with Keep working. While Altium
+  installs the part it stays open: an Alt+F4 pressed during the build would otherwise hide the result. }
 Begin
+    If Phase = 'install' Then
+    Begin
+        CloseAction := caNone;
+        Exit;
+    End;
     Tick.Enabled := False;
     If (Phase = 'run') And (Second = 'background') Then
         If Not FileExists(Job + '\background.txt') Then
@@ -848,6 +1009,8 @@ End;
 
 Procedure TEcadlibDialog.CloseClick(Sender : TObject);
 Begin
+    If Phase = 'install' Then
+        Exit;               { Altium is putting the part in: closing now would hide whether it got there }
     If (Phase = 'run') And (Second = 'background') Then
     Begin
         KeepWorking;                { the X while it works: the same as Keep working }
