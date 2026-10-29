@@ -184,6 +184,23 @@ def test_nexar_status_says_when_the_sign_in_can_no_longer_be_refreshed(tmp_path,
     assert "signed in" in out[0] and "NEW_AT" not in "\n".join(out)
 
 
+@lite
+def test_setup_page_takes_a_folder_pasted_with_quotes(tmp_path, monkeypatch):
+    """H-SETUP-7: Windows Explorer's "Copy as path" puts the path in double quotes ("C:\\Users\\me\\libs"). Pasted on
+    the setup page, the workspace was refused as "give the workspace as a full path" (it is one) and a library folder
+    as "library folder not found"."""
+    tmp_path = tmp_path.resolve()
+    from ecadlib import easy_setup as ES
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    lib, ws = tmp_path / "my libs", tmp_path / "ws"
+    lib.mkdir()
+    res = ES.save(tmp_path, {"workspace": f' "{ws}" ', "libs": [f'"{lib}"', f"'{lib}'"], "provider": "none"})
+    assert Path(res["workspace"]) == ws and ws.is_dir(), res
+    assert ES.ws_libs(ws) == [str(lib), str(lib)], ES.ws_libs(ws)
+    monkeypatch.setattr(ES, "RESTART", lambda w: None)
+    assert ES.restart(f'"{ws}"') == {"restarting": True, "workspace": str(ws)}
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all

@@ -52,6 +52,15 @@ EXTRA_KEYS = [("NEXAR_TOKEN", "Altium 365 (Nexar) token", "send parts to an Alti
 TOOLS = ("altium", "kicad", "both")
 
 
+def _path_text(v):
+    """A folder as typed or pasted: spaces around it and one pair of quotes around it go (Windows Explorer's "Copy as
+    path" gives "C:\\Users\\me\\libs" with the quotes)."""
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()
+    return v
+
+
 def _provider(pid):
     p = next((p for p in PROVIDERS if p[0] == pid), None)
     if p is None:
@@ -135,7 +144,7 @@ def save(ws_root, b):
     libs = b.get("libs") or []
     if not isinstance(libs, list) or not all(isinstance(x, str) for x in libs) or len(libs) > 50:
         raise ValueError("libs must be a list of folders")
-    libs = [str(Path(x.strip()).expanduser().resolve()) for x in libs if x.strip()]   # the folder checked below,
+    libs = [str(Path(_path_text(x)).expanduser().resolve()) for x in libs if _path_text(x)]   # the folder checked below,
                                                                                        # not one under the workspace
     missing = [x for x in libs if not Path(x).is_dir()]
     if missing:
@@ -143,7 +152,7 @@ def save(ws_root, b):
     ws = b.get("workspace") or str(ws_root)
     if not isinstance(ws, str) or len(ws) > 500:
         raise ValueError("bad workspace folder")
-    ws = Path(ws.strip()).expanduser()
+    ws = Path(_path_text(ws)).expanduser()
     if not ws.is_absolute():
         raise ValueError("give the workspace as a full path, e.g. " + str(UC.default_workspace()))
     if ws.exists() and not ws.is_dir():
@@ -189,9 +198,9 @@ def save(ws_root, b):
 
 def restart(ws):
     if not isinstance(ws, (str, Path)) or len(str(ws)) > 500 or "\0" in str(ws) \
-            or not Path(str(ws).strip()).expanduser().is_absolute():
+            or not Path(_path_text(str(ws))).expanduser().is_absolute():
         raise ValueError("give the workspace as a full path, e.g. " + str(UC.default_workspace()))
-    ws = Path(str(ws).strip()).expanduser()
+    ws = Path(_path_text(str(ws))).expanduser()
     if not ws.is_dir():                         # save() makes it: a folder that is not there is a typo, not a move
         raise ValueError(f"workspace folder not found: {ws}; save the setup first")
     if RESTART is None:
