@@ -216,8 +216,9 @@ def build(rec=None, tb_lines=None):
         tb = [ln[:MAX_BODY_LINE] for ln in rec.get("traceback", "").splitlines()]
         if tb_lines is not None and tb_lines < len(tb):          # the newest frames and the error line are kept
             tb = ["..."] + tb[len(tb) - max(tb_lines, 1):]
-        lines += [f"- Where: `{rec.get('where')}`", f"- When: {rec.get('time')}", "",
-                  "```", *tb, "```"]
+        fence = "`" * max([3] + [len(r) + 1 for r in re.findall(r"`{3,}", "\n".join(tb))])   # a ``` in the error
+        lines += [f"- Where: `{rec.get('where')}`", f"- When: {rec.get('time')}", "",   # does not end the block
+                  fence, *tb, fence]
     return title, "\n".join(lines) + "\n"
 
 
@@ -242,11 +243,12 @@ def issue_url(title, body, rec=None):
         if len(best) <= MAX_URL:
             return best
         body = build(rec, 1)[1]
-    fenced = body.rstrip().endswith("```")
-    core = body.rstrip()[:-3] if fenced else body
+    fence = re.search(r"`{3,}$", body.rstrip())
+    fence = fence.group(0) if fence else ""
+    core = body.rstrip()[:-len(fence)] if fence else body
     while len(u) > MAX_URL and core:          # a huge message on its own: cut it, keep the fence closed
         core = core[: int(len(core) * 0.8)]
-        u = url(title, core + ("\n...\n```\n" if fenced else "\n..."))
+        u = url(title, core + (f"\n...\n{fence}\n" if fence else "\n..."))
     return u
 
 
