@@ -173,3 +173,18 @@ def test_datasheet_quoted_words_do_not_decide_the_read_verdict():
         assert any(r.startswith(D.INJECTION) for r in res["needs_review"])     # still shown to the person
         assert DR.assess(res)[0] == "ok", quote
         assert D.read_hold(res) is None, quote
+
+
+def test_datasheet_answer_with_a_huge_pin_count_is_rejected_not_processed():
+    import copy
+    from ecadlib import datasheet as D
+    from tests.test_datasheet import GOOD, message
+    e = copy.deepcopy(GOOD)
+    e["package"].update(pin_count=4_000_000, pins_left_right=1_000_000, pins_top_bottom=1_000_000)
+    try:
+        D.parse_message(message(D.to_wire(e)))
+    except D.DatasheetError as x:
+        assert "pin_count" in str(x) or "pins_" in str(x)
+    else:
+        raise AssertionError("a 4,000,000-pin answer was accepted")
+    D.parse_message(message(D.to_wire(copy.deepcopy(GOOD))))          # a real answer still reads

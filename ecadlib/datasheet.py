@@ -1018,7 +1018,16 @@ def parse_message(msg):
         errs = [e for e in [check_shape(ext, output_schema())] if e]
     if errs:
         raise DatasheetError(f"response does not match the output schema; rejected: {errs[0][:200]}")
+    pkg = ext.get("package") if isinstance(ext.get("package"), dict) else {}
+    for k in COUNT_FIELDS:                            # the schema has no maximum (a change to it re-keys the cache):
+        v = pkg.get(k)                                # pin_count 100000000 ran for a minute and ran out of memory
+        if isinstance(v, int) and v > MAX_COUNT:
+            raise DatasheetError(f"response $.package.{k} {v} is more than any package has ({MAX_COUNT}); rejected")
     return ext
+
+
+COUNT_FIELDS = ("pin_count", "pins_left_right", "pins_top_bottom", "rows", "cols")
+MAX_COUNT = 10000                                     # the biggest BGAs have a few thousand balls
 
 
 # ---------------------------------------------------------------- PDF source
