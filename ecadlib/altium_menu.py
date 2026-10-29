@@ -1452,16 +1452,40 @@ def _library_mpns(cfg, ws):
     return have
 
 
+def _ansi_lacks(ch, nt=None, encode=None):
+    """True when TIniFile would write ch as '?': the ANSI code page cannot encode it (Windows: the strict "mbcs"
+    codec raises); elsewhere, where that code page is unknown, any non-ASCII character."""
+    nt = os.name == "nt" if nt is None else nt
+    if not nt:
+        return ord(ch) > 0x7F
+    try:
+        (encode or (lambda c: c.encode("mbcs", "strict")))(ch)
+    except (UnicodeError, LookupError):
+        return True
+    return False
+
+
+def _ansi_match(pattern, found):
+    """found matches pattern with every '?' standing for a character the ANSI code page lacks (never a plain letter,
+    or a moved project's '?????' would take another folder's same-shaped file)."""
+    if len(found) != len(pattern):
+        return False
+    return all(_ansi_lacks(f) for p, f in zip(pattern, found) if p == "?")
+
+
 def ansi_path(path, base=None):
     """A path the menu's script handed over in request.ini, which TIniFile writes in the ANSI code page: a character
-    that code page lacks arrives as '?', which no Windows file name holds, so the one file the path matches with '?'
-    as a wildcard is the one meant (relative paths: under base). The path as given when it needs no such match."""
+    that code page lacks arrives as '?', which no Windows file name holds, so the one file the path matches with each
+    '?' standing for such a character is the one meant (relative paths: under base). The path as given when it needs
+    no such match. One '?' per character: a character outside the BMP (two UTF-16 units) may arrive as '??', and
+    then nothing matches, which is a refusal, never a wrong file."""
     path = str(path or "")
     full = Path(base) / path if base is not None and not Path(path).is_absolute() else Path(path)
     if "?" not in path or full.exists():
         return path
     import glob
-    found = [f for f in glob.glob(re.sub(r"([*\[])", r"[\1]", str(full))) if Path(f).is_file()]
+    found = [f for f in glob.glob(re.sub(r"([*\[])", r"[\1]", str(full)))
+             if Path(f).is_file() and _ansi_match(str(full), f)]
     if len(found) != 1:
         raise ValueError(f"{path}: Altium handed over this path with '?' for characters the Windows code page cannot "
                          f"hold, and {'no file' if not found else f'{len(found)} files'} match it. Next: rename the "

@@ -155,3 +155,39 @@ def test_open_report_whose_path_the_dialog_wrote_with_question_marks():
         outside = Path(d) / "xЖ.html"
         outside.write_text("x", encoding="utf-8")
         assert AM.open_file(cfg, str(Path(d) / "x?.html"), opener=lambda p: opened.append(p) or True)["status"] == "error"
+
+
+def test_question_mark_never_stands_for_a_plain_letter():
+    """Review I1: '?' in request.ini stands only for a character the ANSI code page lacks. With the project at
+    C:\\Users\\Ольга\\board missing (moved, never saved) and another project at C:\\Users\\Admin\\board, the job ran
+    Admin's BOM without a word; it must say no file matches."""
+    with tempfile.TemporaryDirectory() as d:
+        other = Path(d) / "Admin" / "board"
+        other.mkdir(parents=True)
+        (other / "board.csv").write_text("Designator,MPN\nR1,X\n", encoding="utf-8")
+        asked = str(Path(d) / "?????" / "board" / "board.csv")
+        try:
+            got = AM.ansi_path(asked)
+            raise AssertionError(f"took a plain-letter file for '?': {got}")
+        except ValueError as e:
+            assert "no file" in str(e), e
+        try:
+            AM._bom_of(None, asked)
+            raise AssertionError("must refuse")
+        except ValueError:
+            pass
+        # with the real one there too, the real one is the one match
+        real = Path(d) / "\u041e\u043b\u044c\u0433\u0430" / "board"
+        real.mkdir(parents=True)
+        (real / "board.csv").write_text("x", encoding="utf-8")
+        assert Path(AM.ansi_path(asked)) == real / "board.csv"
+
+
+def test_question_mark_lacks_check_uses_the_code_page():
+    """On Windows a '?' stands for a character the ANSI code page (mbcs) cannot encode; elsewhere a non-ASCII one."""
+    assert AM._ansi_lacks("\u041e", nt=False) and not AM._ansi_lacks("A", nt=False)
+    def enc(ch):                       # a Western code page: Latin-1 letters encode, Cyrillic does not
+        ch.encode("cp1252")
+    assert AM._ansi_lacks("\u041e", nt=True, encode=enc)
+    assert not AM._ansi_lacks("\u00e9", nt=True, encode=enc)
+    assert not AM._ansi_lacks("A", nt=True, encode=enc)
