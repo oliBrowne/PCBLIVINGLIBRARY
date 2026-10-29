@@ -38,6 +38,8 @@ SYMS = {"Device:R": ksym("R", ["1", "2"], "R", desc="Resistor"),
         "Device:LED": ksym("LED", ["1", "2"], "D", desc="Light emitting diode"),
         "Regulator_Test:TPS1234DSG": ksym("TPS1234DSG", [str(i) for i in range(1, 9)], footprint="Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
                                           datasheet="https://example.com/tps1234.pdf", desc="Test regulator"),
+        "Timer_Test:NE555D": ksym("NE555D", [str(i) for i in range(1, 9)], footprint="Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+                                  datasheet="http://www.ti.com/lit/ds/symlink/ne555.pdf", desc="Precision Timers, 555 compatible"),
         "Connector_Generic:Conn_01x04": ksym("Conn_01x04", ["1", "2", "3", "4"], "J")}
 FOOTS = {"Resistor_SMD:R_0603_1608Metric": (FPS / "R_0603_1608Metric.kicad_mod").read_text(),
          "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm": (FPS / "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod").read_text(),
@@ -158,7 +160,11 @@ def test_kicad_index_matching():
         assert lib.symbols["TPS1234DSG"] == ["Regulator_Test"] and "README" not in lib.symbols
         assert lib.find_symbol("TPS1234DSG")[0] == "Regulator_Test:TPS1234DSG"
         ref, how = lib.find_symbol("TPS1234DSGR")
-        assert ref == "Regulator_Test:TPS1234DSG" and "ordering suffix 'R'" in how, how
+        assert ref == "Regulator_Test:TPS1234DSG" and "packing suffix 'R'" in how and "check" not in how, how   # reel
+        ref, how = lib.find_symbol("TPS1234DSG-TR")
+        assert ref == "Regulator_Test:TPS1234DSG" and "packing suffix 'TR'" in how, how
+        ref, how = lib.find_symbol("TPS1234DSGQ")                                  # Q is no packing code: a variant
+        assert ref == "Regulator_Test:TPS1234DSG" and "ordering suffix 'Q' (check the variant)" in how, how
         assert lib.find_symbol("TPS1234DSGRXYZW") == (None, None)                 # 5 extra chars, no separator
         assert lib.find_symbol("TPS12") == (None, None)
         assert lib.generic_connector("Conn_01x04")[0] == "Connector_Generic:Conn_01x04"
@@ -197,14 +203,16 @@ def test_each_source_and_review():
             assert (out / items[n]["symbol"]["file"]).exists() and (out / items[n]["footprint"]["kicad_mod"]).exists()
         for n in ("RES-0603-10k", "LED-RED-0603"):
             assert items[n]["status"] == "ready", (n, items[n]["hold_reasons"])
-        # a symbol matched by its MPN minus an ordering suffix, and an EasyEDA conversion: built, held for a person
-        for n, doubt in (("TPS1234DSGR", "ordering suffix"), ("EEPART1", "EasyEDA C2002 conversion")):
-            assert items[n]["status"] == "held" and [h for h in items[n]["hold_reasons"] if h.startswith("verify: ")
-                                                     and doubt in h], (n, items[n]["hold_reasons"])
+        # a symbol matched by its MPN minus a reel suffix ('R') is the same part: ready, nothing to check
+        assert items["TPS1234DSGR"]["status"] == "ready", items["TPS1234DSGR"]["hold_reasons"]
+        # an EasyEDA conversion: built, held for a person
+        assert items["EEPART1"]["status"] == "held" and [h for h in items["EEPART1"]["hold_reasons"] if h.startswith(
+            "verify: ") and "EasyEDA C2002 conversion" in h], items["EEPART1"]["hold_reasons"]
         assert "assembly" not in items["TPS1234DSGR"]                            # the assembly check was cut
         assert items["RES-0603-10k"]["symbol"]["file"] == "models/SchLib/Resistor.SchLib"
         assert items["TPS1234DSGR"]["field_sources"]["ComponentLink2URL"] == "LCSC datasheet URL pattern (not fetched)"
-        assert any("ordering suffix" in r for r in items["TPS1234DSGR"]["verify"])
+        assert not items["TPS1234DSGR"]["verify"], items["TPS1234DSGR"]["verify"]
+        assert any("packing suffix 'R'" in r for r in items["TPS1234DSGR"]["librarian"]["tried"])
         assert not any("easyeda" in t for t in items["TPS1234DSGR"]["librarian"]["tried"])   # kicad came first, easyeda not needed
         tried = " | ".join(items["DSPART1"]["librarian"]["tried"])
         assert "needs datasheet reader (no API key): https://example.com/ds.pdf (BOM)" in tried, tried
@@ -268,6 +276,25 @@ def test_datasheet_source_held_until_allowed():
         assert items["DSPART1"]["allow"]["failures"] and len(calls) == 1          # resumed: no second API call
         items, _ = run(d, api_key="sk-test")                                       # --allow is kept in the plan
         assert items["DSPART1"]["status"] == "ready"
+
+
+def test_reel_suffix_and_maker_from_datasheet_link():
+    """NE555DR from the free KiCad library, no Manufacturer on the line: NE555D + R (tape and reel) is the same part,
+    and the symbol's www.ti.com datasheet names its maker. Nothing holds it. A near name (+ Q) can be another variant
+    or another maker's part: held to check, and no maker is taken from its link."""
+    bom = ("Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description,Datasheet\n"
+           "U1,1,NE555DR,,,NE555DR,,,\nU2,1,NE555DQ,,,NE555DQ,,,\n")
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = run(d, bom=bom)
+        ne = items["NE555DR"]
+        par = {p["name"]: p["value"] for p in ne["parameters"]}
+        assert ne["status"] == "ready", ne["hold_reasons"]
+        assert par["Manufacturer"] == "Texas Instruments", par
+        assert ne["field_sources"]["Manufacturer"] == "the datasheet link of KiCad symbol Timer_Test:NE555D (www.ti.com)", ne["field_sources"]
+        assert ne["source"]["symbol"] == "kicad:Timer_Test:NE555D", ne["source"]
+        q = items["NE555DQ"]
+        assert q["status"] == "held" and any("ordering suffix 'Q'" in h for h in q["hold_reasons"]), q["hold_reasons"]
+        assert not {p["name"]: p["value"] for p in q["parameters"]}.get("Manufacturer"), q["parameters"]
 
 
 def test_resume_idempotent_and_refresh():
