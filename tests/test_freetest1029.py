@@ -50,6 +50,8 @@ def test_scrub_blanks_quoted_values_client_ids_and_the_altium365_company(tmp_pat
     for bad in ("pass phrase", "two words", "AbCdEfGh", "acme-corp", "q8z7"):
         assert bad not in out, (bad, out)
     assert "[secret]]" not in out and "https://[workspace].365.altium.com/x" in out, out
+    out = B.scrub('password="first \\"second phrase\\"" token=\'it\\\'s mine\' next')   # escaped quotes inside
+    assert "second phrase" not in out and "s mine" not in out and out.endswith(" next"), out
 
 
 @lite
@@ -68,9 +70,15 @@ def test_download_cache_defaults_to_the_workspace_the_web_ui_uses(tmp_path, monk
     assert FR.default_cache() == "out/http_cache"                       # nothing set up: as before
     ws = tmp_path / "ws"
     monkeypatch.setenv("ECADLIB_WORKSPACE", str(ws))
+    assert FR.default_cache() == "out/http_cache" and not ws.exists()  # a stale setting: not created for a cache
+    ws.mkdir()
+    assert Path(FR.default_cache()) == ws / "http_cache"
+    (tmp_path / "out" / "http_cache").mkdir(parents=True)                # downloads (paid answers) from before
+    assert FR.default_cache() == "out/http_cache"                       # kept until the workspace has its own
+    (ws / "http_cache").mkdir()
     assert Path(FR.default_cache()) == ws / "http_cache"
     seen = {}
-    for name, mod in (("librarian", L), ("triage", BT), ("datasheet", D)):
+    for name, mod, argv in (("librarian", L, ["x.csv"]), ("triage", BT, ["x.csv"]), ("datasheet", D, ["batch", "x.csv"])):
         real = mod.argparse.ArgumentParser.parse_args
         def grab(self, args=None, namespace=None, _real=real, _name=name):
             a = _real(self, args, namespace)
@@ -79,11 +87,11 @@ def test_download_cache_defaults_to_the_workspace_the_web_ui_uses(tmp_path, monk
         monkeypatch.setattr(mod.argparse.ArgumentParser, "parse_args", grab)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             try:
-                mod.main(["x.csv"])
+                mod.main(argv)
             except SystemExit:
                 pass
         monkeypatch.setattr(mod.argparse.ArgumentParser, "parse_args", real)
-    assert {k: Path(v) for k, v in seen.items() if v} == {k: ws / "http_cache" for k in seen}, seen
+    assert {k: Path(v) for k, v in seen.items() if v} == {k: ws / "http_cache" for k in ("librarian", "triage", "datasheet")}, seen
 
 
 if __name__ == "__main__":

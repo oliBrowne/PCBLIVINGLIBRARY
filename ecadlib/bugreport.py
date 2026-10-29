@@ -31,7 +31,8 @@ _SHAPES = [                                   # keys and tokens by their look, w
 _USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,15}://)[^/\s:@]{1,200}:[^/\s@]{1,500}@")
 _BEARER = re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=\-]{8,}")
 _SECRET_WORDS = r"(?:api[_-]?key|apikey|key|token|secret|password|passwd|pass|sig|client[_-]?id)"
-_QUOTED = re.compile(r"(?i)((?<![A-Za-z0-9])[\w-]{0,40}" + _SECRET_WORDS + r"[\"']?\s*[=:]\s*)(\"[^\"\n]{1,500}\"|'[^'\n]{1,500}')")
+_QUOTED = re.compile(r"(?i)((?<![A-Za-z0-9])[\w-]{0,40}" + _SECRET_WORDS + r"[\"']?\s*[=:]\s*)"   # a quoted value, spaces
+                     r"(\"(?:\\.|[^\"\\\n]){1,500}\"|'(?:\\.|[^'\\\n]){1,500}')")                   # and \" inside it too
 _QUERY = re.compile(r"(?i)((?<![A-Za-z0-9])[\w-]{0,40}" + _SECRET_WORDS +
                     r"[\"']?\s*[=:]\s*[\"']?)(?!\[secret\])([^&\s\"',;)}\]]+)")
 _LONG = re.compile(r"[A-Za-z0-9_\-]{40,}")

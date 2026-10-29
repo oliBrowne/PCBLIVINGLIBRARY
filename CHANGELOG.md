@@ -9,9 +9,9 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
-- Commands that download (librarian, triage, datasheet, resolve, kicad-export and the others with `--cache`) keep their download cache, and with it the paid datasheet answers, in `<workspace>/http_cache` when a workspace is set up: the same cache the web UI, the MCP server and the menus use. Before, it was `out/http_cache` of whatever folder the terminal was in, so a run from another folder or from the web UI downloaded and paid for the same datasheets again. Without a workspace it is still `out/http_cache`.
+- Commands that download (librarian, triage, datasheet, resolve, kicad-export and the others with `--cache`) keep their download cache, and with it the paid datasheet answers, in `<workspace>/http_cache` when a workspace is set up: the same cache the web UI, the MCP server and the menus use. Before, it was `out/http_cache` of whatever folder the terminal was in, so a run from another folder or from the web UI downloaded and paid for the same datasheets again. Without a workspace (or when its folder is missing) it is still `out/http_cache`, and an `out/http_cache` that already holds downloads keeps being used until the workspace has its own, so answers paid for before are not paid for again; `ecadlib review` looks in both.
 - Setup page: the Altium 365 address is saved as the workspace's own address (`https://acme.365.altium.com/`) when a page of the workspace was copied (`.../projects`); an address with a line break, a tab or a `user:password@` in it is refused instead of saved (the password would have been kept in `ecadlib.toml`). Errors name the full folder that was typed ("give the workspace as a full path, e.g. C:\Users\...\Documents\ecadlib", not "e.g. ecadlib"), and a workspace folder that cannot be made says so instead of "Something went wrong".
-- Bug reports also blank quoted values with spaces (`password='my pass phrase'`), `client_id=` values and the company name in an Altium 365 address.
+- Bug reports also blank quoted values with spaces or escaped quotes (`password='my pass phrase'`), `client_id=` values and the company name in an Altium 365 address.
 
 ## [0.4.0] - 2026-10-27
 
