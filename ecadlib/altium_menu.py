@@ -222,7 +222,7 @@ name={name}
 ; how to run ecadlib. `ecadlib altium-menu build` on Windows writes the Python it ran with (a venv's too).
 ; empty = ecadlib on PATH, else py -3 -m ecadlib, else python -m ecadlib (a venv install is not found that way)
 ; example: command="C:\\Program Files\\Python311\\python.exe" -m ecadlib
-command={command}
+command={ini_value(command)}
 ; 1 = no console window (wscript + ecadlib_run.vbs), 0 = run ecadlib_run.cmd in a console window
 hidden={1 if hidden else 0}
 ; seconds to wait before asking whether to keep waiting
@@ -512,10 +512,24 @@ def default_command(executable=None, nt=None, frozen=None):
     return f'"{exe}"{suffix}'
 
 
+def profile_value(v):
+    """A value as Windows' profile API (TIniFile.ReadString, so the menu's .pas) reads it: blanks around it dropped and,
+    when it is enclosed in a pair of single or double quotation marks, without them."""
+    v = str(v or "").strip()
+    return v[1:-1] if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'" else v
+
+
+def ini_value(v):
+    """v written so that profile_value() reads v back: a value that is all in quotes ("C:\\Program Files\\x.exe", the
+    Windows app's command) gets one more pair, which the profile API takes off."""
+    v = str(v or "")
+    return v[0] + v + v[0] if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'" else v
+
+
 def _fill_command(ini, command):
     """Set command= in an existing ecadlib_menu.ini when it is empty (nothing else changes). True when it did."""
     data = ini.read_bytes()
-    new = re.sub(rb"(?m)^command=[ \t]*(?=\r?$)", lambda m: b"command=" + command.encode("utf-8"), data, count=1)
+    new = re.sub(rb"(?m)^command=[ \t]*(?=\r?$)", lambda m: b"command=" + ini_value(command).encode("utf-8"), data, count=1)
     if new == data:
         return False
     ini.write_bytes(new)
@@ -919,7 +933,7 @@ def rows_result(rows, big=""):
 def load_command(ini_path):
     """command= of an ecadlib_menu.ini ('' when empty or missing)."""
     try:
-        return (read_ini(ini_path)["ecadlib"].get("command") or "").strip()
+        return profile_value(read_ini(ini_path)["ecadlib"].get("command"))    # what the .pas reads
     except (OSError, KeyError, configparser.Error):
         return ""
 
@@ -934,7 +948,7 @@ def load_config(ini_path):
     if not cp.has_section("ecadlib"):
         raise ValueError(f"{ini_path}: no [ecadlib] section (is this the menu's {INI}?)")
     sec = cp["ecadlib"]
-    get = lambda k, d="": (sec.get(k, d) or d).strip()
+    get = lambda k, d="": profile_value(sec.get(k, d) or d) or d   # read as Altium's TIniFile reads it
     def path(v, rel_to):
         if Path(v).is_absolute() or PureWindowsPath(v).is_absolute():
             return Path(v)
