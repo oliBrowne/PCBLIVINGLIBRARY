@@ -526,6 +526,14 @@ def _unique(names):
     return {k: (n if seen[n] == 1 else f"{nick}_{n}") for k, (nick, n) in names.items()}
 
 
+def _fp_file_stem(name):
+    """A footprint name from the board -> the .kicad_mod file stem: a received board's 'Lib:../../x' or 'Lib:CON'
+    must not write outside the .pretty folder or name a Windows device. Path separators and characters no file
+    name takes become '_'; an ordinary name is kept as it is."""
+    from .fsutil import portable_stem
+    return portable_stem(re.sub(r'[/\\:<>"|?*\x00-\x1f]', "_", name).rstrip(". ") or "_")
+
+
 def _clean_fp(node, name):
     """A board footprint (already unplaced) -> a library footprint: the instance's nets, sheet path and reference go."""
     drop_top, drop_pad = {"path", "sheetname", "sheetfile", "uuid", "tstamp", "locked"}, {"net", "pinfunction", "pintype"}
@@ -606,7 +614,7 @@ def freeze_kicad(path, nick=None, dry_run=False, out_dir=None, rewrite=True):
     names = {}
     for fpid, d in variants:
         names.setdefault(fpid, []).append(d)
-    labels = _unique({fpid: (fpid.partition(":")[0], fpid.rpartition(":")[2]) for fpid in names})
+    labels = _unique({fpid: (fpid.partition(":")[0], _fp_file_stem(fpid.rpartition(":")[2])) for fpid in names})
     fp_new = {}
     for fpid, ds in names.items():
         for n, d in enumerate(ds):              # the same footprint id placed in two different versions: two parts

@@ -78,3 +78,25 @@ def test_altium_recipe_pad_number_with_a_form_feed_stays_one_record(tmp_path):
         AL.write_pcblib(tmp_path / "X.PcbLib", [fp])
     assert len(AN._recipe_items(tmp_path / ("X.PcbLib" + AN.EXT))["X"]["pads"]) == 2
     assert not [ln for ln in AN.build_text(tmp_path).split("\n") if ln.startswith("A\t")]
+
+
+@lite
+def test_freeze_keeps_board_footprint_names_inside_the_pretty_folder(tmp_path):
+    from pathlib import Path
+    from ecadlib import project_check as PC
+    pcb = ('(kicad_pcb (version 20240108) (generator "pcbnew")\n'
+           '  (footprint "Lib:../../../ESCAPED" (layer "F.Cu") (at 10 10)\n'
+           '    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu")))\n'
+           '  (footprint "Lib:CON" (layer "F.Cu") (at 20 10)\n'
+           '    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu"))))\n')
+    proj = tmp_path / "work" / "received" / "proj"
+    proj.mkdir(parents=True)
+    (proj / "board.kicad_pro").write_text("{}")
+    (proj / "board.kicad_pcb").write_text(pcb)
+    res = PC.freeze_kicad(proj / "board.kicad_pro", rewrite=False)
+    mods = [Path(f) for f in res["files"] if str(f).endswith(".kicad_mod")]
+    assert len(mods) == 2
+    for f in mods:
+        assert f.resolve().parent == (proj / "board-frozen.pretty").resolve(), f
+    assert sorted(f.stem for f in mods) == [".._.._.._ESCAPED", "CON_"]
+    assert not (tmp_path / "work" / "ESCAPED.kicad_mod").exists()
