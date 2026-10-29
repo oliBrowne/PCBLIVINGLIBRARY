@@ -123,3 +123,40 @@ def test_visual_check_proofs_of_two_nopb_parts_do_not_share_a_folder(tmp_path):
     proofs = sorted((tmp_path / "agent" / "proofs").rglob("proof.json"))
     assert sorted(json.loads(p.read_text())["part"] for p in proofs) == sorted(names)
     assert VC._slug("CON") != "CON"                      # a Windows device name is no folder
+
+
+def _second_read(ext):
+    from tests.test_datasheet import message
+    msg = message(ext)
+    msg["content"][1]["text"] = json.dumps(ext)          # json.dumps writes Infinity as is, as a model answer can
+    return msg
+
+
+def test_crosscheck_answer_of_the_wrong_shape_is_unavailable_not_a_crash():
+    from ecadlib import crosscheck as CC
+    pkg = {"name": "VQFN-16", "package_type": "qfn", "pin_count": 16}
+    for bad in ({"package": pkg, "pins": 5}, {"package": pkg, "pins": [], "embedded_instructions": 7}):
+        try:
+            CC.parse(_second_read(bad))
+        except CC.Unavailable:
+            continue
+        raise AssertionError(f"accepted {bad}")
+
+
+def test_crosscheck_infinity_in_a_second_read_is_not_agreement():
+    import copy
+    from ecadlib import datasheet as D, crosscheck as CC
+    from tests.test_datasheet import GOOD
+    res = D.process(copy.deepcopy(GOOD), "TESTPART", "https://x/t.pdf")
+    first_pins = [(p["num"], p["name"]) for p in res["symbol"]["pins"]]
+    d = lambda x: {"min": None, "nom": x, "max": None, "unit": "mm"}
+    ext = {"package": {"name": "VQFN-16", "package_type": "qfn", "pin_count": 16, "pitch": d(0.5),
+                       "body_length": d(float("inf")), "body_width": d(float("inf")), "lead_span": None,
+                       "exposed_pad": {"length": d(float("inf")), "width": d(float("inf"))}},
+           "pins": [{"num": n, "name": m} for n, m in first_pins], "embedded_instructions": []}
+    try:
+        s, pins, _ = CC.parse(_second_read(ext))
+    except CC.Unavailable:
+        return
+    c = CC.against_read(CC.critical(res["spec"]), s, first_pins, pins)
+    assert "body_length" not in c["agreed"], c
