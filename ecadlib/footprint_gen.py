@@ -938,7 +938,7 @@ def main(argv=None):
         from . import rules as RU
         outdir = Path(a.out); outdir.mkdir(parents=True, exist_ok=True)
         rules = RU.load(a.rules, start=outdir)
-        bad = 0
+        bad, written = 0, set()
         import jsonschema
         for sp in a.specs:
             spec = None
@@ -960,7 +960,17 @@ def main(argv=None):
             from . import sexpr
             sexpr.parse(txt)                                          # sanity: balanced S-expression
             from .fsutil import portable_stem                            # a package named NUL: NUL_.kicad_mod
-            (outdir / f"{portable_stem(spec['name'])}.kicad_mod").write_text(txt, encoding="utf-8", newline="\n")
+            f = outdir / f"{portable_stem(spec['name'])}.kicad_mod"
+            try:                                                      # 'NUL' and 'NUL_' share one file: never let
+                had = sexpr.parse(f.read_text(encoding="utf-8"))[1] if f.is_file() else spec["name"]   # one replace
+            except (OSError, ValueError, IndexError):                 # the other
+                had = spec["name"]
+            if str(had) != spec["name"] or f.name.casefold() in written:
+                print(f"{spec['name']}: not written: {f.name} already holds another package ({had})", file=sys.stderr)
+                bad += 1
+                continue
+            written.add(f.name.casefold())
+            f.write_text(txt, encoding="utf-8", newline="\n")
             p1 = rep["pads"][0]
             zgx = f"Z={rep['Z']:.2f} G={rep['G']:.2f} X={rep['X']:.2f}" if "G" in rep else f"{len(rep['pads'])} pads"
             print(f"{spec['name']:<44} {rep['ipc_family']:<13} {zgx} "

@@ -281,3 +281,39 @@ def test_footprint_gen_names_a_package_called_nul_safely(tmp_path):
     except SystemExit:
         pass
     assert sorted(f.name for f in out.iterdir()) == ["NUL_.kicad_mod"]
+
+
+@lite
+def test_fp_edit_reads_the_part_it_was_asked_for_when_two_names_share_a_file(tmp_path):
+    import copy
+    from ecadlib import datasheet as D, fp_edit as FE
+    from tests.test_datasheet import GOOD
+    out = tmp_path / "datasheet"
+    for part, pkg in (("COM1", "PKG-A"), ("COM1_", "PKG-B")):
+        e = copy.deepcopy(GOOD)
+        e["package"]["name"] = pkg
+        D.write(D.process(e, part, "https://x/t.pdf"), out)
+    assert FE.read(tmp_path, "COM1")["symbol"]["name"] == "COM1"
+    assert FE.read(tmp_path, "COM1_")["symbol"]["name"] == "COM1_"
+
+
+@lite
+def test_footprint_gen_never_lets_nul_and_nul_underscore_share_a_file(tmp_path):
+    import copy
+    from ecadlib import datasheet as D, footprint_gen as F
+    from tests.test_datasheet import GOOD
+    specs = []
+    for i, n in enumerate(("NUL", "NUL_")):
+        e = copy.deepcopy(GOOD)
+        e["package"]["name"] = n
+        sp = tmp_path / f"s{i}.json"
+        sp.write_text(json.dumps(D.process(e, f"P{i}", "https://x/t.pdf")["spec"]))
+        specs.append(str(sp))
+    out = tmp_path / "out.pretty"
+    try:
+        F.main(["gen", *specs, "-o", str(out)])
+    except SystemExit:
+        pass
+    from ecadlib import sexpr
+    f = out / "NUL_.kicad_mod"
+    assert sexpr.parse(f.read_text(encoding="utf-8"))[1] == "NUL"      # the first stays; the second is refused

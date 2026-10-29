@@ -149,12 +149,14 @@ def read(plan, part):
     """The part's last datasheet answer in <plan dir>/datasheet -> {spec, symbol} (raises FileNotFoundError)."""
     d = _base(plan) / "datasheet"
     sym = None
-    for f in (d / f"{_safe(part)}.json", d / f"{_safe(part)}.symbol.json"):
+    import hashlib                                    # datasheet.write: a part whose file name another part has
+    own = f"{_safe(part)}-{hashlib.sha1(str(part).encode()).hexdigest()[:6]}"   # ('COM1' and 'COM1_') gets a hash
+    for f in (d / f"{own}.json", d / f"{own}.symbol.json", d / f"{_safe(part)}.json", d / f"{_safe(part)}.symbol.json"):
         try:
             v = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if isinstance(v, dict) and "pins" in v and "package_type" not in v:
+        if isinstance(v, dict) and "pins" in v and "package_type" not in v and str(v.get("name") or part).casefold() == str(part).casefold():
             sym = v
             break
     if sym is None:
