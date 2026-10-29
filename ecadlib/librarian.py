@@ -9,7 +9,8 @@ anything still missing, the sources are tried in --sources order, each filling o
   kicad      the official KiCad libraries on gitlab.com. A name index of kicad-symbols (KiCad 9 <Lib>.kicad_symdir/
              <Name>.kicad_sym, so derived symbols/aliases are names too) and kicad-footprints is built once from the
              GitLab tree API and cached (<cache>/kicad_library_index.json, 30 days; a build stopped by a timeout or
-             HTTP 429 resumes from the cached pages after a pause of 15 min / 1 h, in which runs skip gitlab.com).
+             HTTP 429 resumes from the cached pages after a pause of 15 min / 1 h, in which runs skip gitlab.com). A cache
+             with no index starts from the copy shipped with ecadlib (assets/kicad_library_index.json.gz), not a build.
              Symbol by MPN: exact name, a name with KiCad's `x` wildcards (STM32F103C8Tx), or the MPN minus an
              ordering suffix (TPS62162DSG for TPS62162DSGR); generic connectors by value (Conn_01x04). Footprint: the BOM footprint name, the symbol's
              Footprint property, a footprint named after the MPN, or the shortest name starting with the BOM footprint.
@@ -88,6 +89,14 @@ class KiCadLibrary:
     every run in between goes straight to the other sources instead of waiting on gitlab.com again."""
     PAGE_TIMEOUT = 20                          # s per tree page (the client's own timeout is 60 s)
     RETRY_AFTER, RETRY_AFTER_429 = 15 * 60, 60 * 60
+    # A copy of the index made when this ecadlib was released (scripts/build_kicad_index.py). With no index of its own,
+    # a run starts from it instead of reading ~400 tree pages first (about 4 minutes, and gitlab.com may answer 429):
+    # it becomes the cached index, refreshed after max_age like any other. A failed build falls back on it too.
+    # ECADLIB_KICAD_SNAPSHOT=0 turns it off (always build from gitlab.com; the test suite's fake gitlab needs that).
+    SNAPSHOT = Path(__file__).parent / "assets" / "kicad_library_index.json.gz"
+
+    def _snapshot(self):
+        return None if os.environ.get("ECADLIB_KICAD_SNAPSHOT", "").strip().lower() in ("0", "off", "no") else self.SNAPSHOT
 
     def __init__(self, http, cache_file, refresh=False, max_age=30 * 86400, now=time.time):
         self.http, self.error, self.symbols, self.footprints = http, None, {}, {}
@@ -97,10 +106,12 @@ class KiCadLibrary:
         if f.exists() and not refresh and (getattr(http, "offline", False) or now() - f.stat().st_mtime < max_age) \
                 and self._load(f):
             pass
+        elif not f.exists() and not refresh and self._seed(f):
+            pass
         elif wait:
             self.error = wait
-            if f.exists():                     # a stale index beats none
-                self._load(f)
+            if not (f.exists() and self._load(f)):          # a stale index beats none, the shipped one beats nothing
+                self._load_snapshot()
         else:
             try:
                 self.symbols = self._crawl("kicad-symbols", ".kicad_symdir", ".kicad_sym")
@@ -120,8 +131,8 @@ class KiCadLibrary:
                         retry.write_text(json.dumps({"after": now() + hold, "error": self.error}), encoding="utf-8")
                     except OSError:
                         pass
-                if f.exists():                 # a stale index beats none
-                    self._load(f)
+                if not (f.exists() and self._load(f)):      # a stale index beats none
+                    self._load_snapshot()
         self._build_norm()
 
     def _build_norm(self):
@@ -148,6 +159,35 @@ class KiCadLibrary:
                 lit = sum(c not in "x\x00" for c in flat)
                 self._wild.append((re.compile(rx), [f"{l}:{name}" for l in libs], lit, re.compile(bx)))
         self._fpn = [(norm_mpn(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items()]
+
+    def _load_snapshot(self):
+        """The index shipped with ecadlib -> True (False when this install has none or it does not read)."""
+        import gzip
+        try:
+            snap = self._snapshot()
+            if not snap:
+                return False
+            d = json.loads(gzip.decompress(Path(snap).read_bytes()).decode("utf-8"))
+            sy, fp = d["symbols"], d["footprints"]
+        except (OSError, ValueError, KeyError, TypeError, EOFError):
+            return False
+        if not isinstance(sy, dict) or not isinstance(fp, dict):
+            return False
+        self.symbols, self.footprints, self.built = sy, fp, d.get("built", "")
+        return True
+
+    def _seed(self, f):
+        """No index in this cache yet: start from the shipped one and keep it as this cache's index (so it is
+        refreshed from gitlab.com after max_age, not on the first run). -> True when it was used."""
+        if not self._load_snapshot():
+            return False
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            from .fsutil import write_text_atomic
+            write_text_atomic(f, json.dumps({"built": self.built, "symbols": self.symbols, "footprints": self.footprints}))
+        except OSError:
+            pass                               # a read-only cache still uses it for this run
+        return True
 
     def _load(self, f):
         """The cached index -> True; one that does not read (cut short by a crash) -> False, so it is built again
@@ -601,6 +641,9 @@ class Run:
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
         if "easyeda_description" in st["found"]:                  # then the text on EasyEDA's component
             st["found"].setdefault("description", st["found"].pop("easyeda_description"))
+        if row.get("src_manufacturer"):        # the maker a part search lists for this exact MPN (one maker only: an MPN
+            src = _desc_label({"src": row.get("src_manufacturer_from", "")})       # sold by clones too fills nothing)
+            st["found"].setdefault("manufacturer", (row["src_manufacturer"], f"{src} part data {lc} (exact MPN)".replace("  ", " ")))
         return st
 
     def local(self, st, row, kind, fp_name, sym_name):

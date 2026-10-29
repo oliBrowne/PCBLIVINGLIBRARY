@@ -318,7 +318,7 @@ reason (the dialog and the review queue say which), and nothing held reaches the
 person may override (not a missing file, not a change waiting for `ecadlib part approve`) gets **Release anyway** at
 the bottom left of the dialog: it lists why the part is held, then asks why it is fine, and releases it the way the
 review queue does (`release-check --allow`, your name and the reason kept in the plan's `allow`, revision 1 in the
-change-control ledger) before it puts the part into the library. The reason box starts with "Checked it: fine as it is", so Enter releases; an emptied box releases nothing. A missing 3D height does not hold a part (`[release] height = "hold"` makes it): the dialog adds a note to check the 3D body. Check this project BOM reads the
+change-control ledger) before it puts the part into the library. The reason box starts with "Checked it: fine as it is", so Enter releases; an emptied box releases nothing. A missing 3D height does not hold a part (`[release] height = "hold"` makes it): the dialog adds a note to check the 3D body. An empty Manufacturer does not hold it either (`[release] manufacturer = "hold"` makes it): Add part fills it from the free part search when the exact MPN has one maker, otherwise the dialog notes it is empty. Check this project BOM reads the
 project's device sheets (`[DeviceSheetN]`; one it cannot find is a warning) and lists multi-channel sheets once per
 channel (R1_CH1 ...); a Content Vault component without an MPN parameter uses its Comment as the MPN when it reads as
 one. Workspace `altium_menu(win_dir)` and the MCP

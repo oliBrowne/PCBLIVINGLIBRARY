@@ -35,6 +35,7 @@ def make(d, kmod=SOIC, pins=range(1, 9), height=None, source="local:ecadlib:SOIC
 
 
 HOLD_HEIGHT = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "height": "hold"}}
+HOLD_MAKER = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "manufacturer": "hold"}}
 
 
 def fails(item, d, rules=None):
@@ -153,8 +154,10 @@ def test_fields_and_verify():
         it["parameters"] = [p for p in it["parameters"] if p["name"] not in ("Manufacturer", "ComponentLink2URL")]
         it["description"] = " "
         it["verify"] = ["datasheet reader output: compare"]
-        assert fails(it, d)[0] == ["fields: Manufacturer is empty", "fields: no datasheet link", "fields: Description is empty",
+        assert fails(it, d)[0] == ["fields: no datasheet link", "fields: Description is empty",
                                    "verify: datasheet reader output: compare"]
+        assert any(w.startswith("Manufacturer is empty") for w in fails(it, d)[1])     # a note unless asked to hold
+        assert fails(it, d, HOLD_MAKER)[0][0] == "fields: Manufacturer is empty"
         it["parameters"].append({"name": "Datasheet", "value": "https://x/y.pdf"})
         assert "fields: no datasheet link" not in fails(it, d)[0]
 

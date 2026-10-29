@@ -5,6 +5,10 @@ import atexit, os, tempfile
 # a bare mkdtemp() in a test, or one in ecadlib a test does not clean up, goes too. Each process that imports tests
 # (python -m tests.run_all, a pytest-xdist worker) has its own. ECADLIB_KEEP_TEST_TMP=1 keeps it, to look for leaks.
 TEMP_ROOT = tempfile.mkdtemp(prefix="ecadlib-tests-")
+# The librarian's KiCad index starts from the copy shipped with ecadlib (assets/kicad_library_index.json.gz); the tests
+# give it a fake gitlab.com instead, so it is built from that (and child processes inherit this too).
+# tests/test_kicad_index_snapshot.py turns it back on where it tests the shipped copy.
+os.environ["ECADLIB_KICAD_SNAPSHOT"] = "0"
 _OWNER = os.getpid()
 
 

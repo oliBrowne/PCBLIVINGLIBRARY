@@ -379,8 +379,14 @@ def parse_jlcpcb(r, mpn, res, code="", maker=""):
     if best:
         res.lcsc = code
         res.manufacturer = clean_maker(best.get("componentBrandEn", ""))
+        makers = {}                        # every maker LCSC lists this exact MPN under (clones share MPNs): one
+        for i in exact:                    # maker_key -> its name, so a caller can tell one maker from several
+            m = clean_maker(i.get("componentBrandEn", ""))
+            if m:
+                makers.setdefault(maker_key(m) or m.upper(), m)
         res.package = best.get("componentSpecificationEn", "")
-        res.extra = {"stock": best.get("stockCount"), "library_type": best.get("componentLibraryType")}
+        res.extra = {"stock": best.get("stockCount"), "library_type": best.get("componentLibraryType"),
+                     "makers": sorted(makers.values())}
         desc = describe(best.get("describe") or best.get("description"))
         if desc:                           # JLCPCB/LCSC's description of the part (a category + package says too little)
             res.extra["description"] = desc

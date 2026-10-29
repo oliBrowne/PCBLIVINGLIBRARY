@@ -59,7 +59,8 @@ DEFAULTS = {
     "bom": {"columns": {}},                    # ecadlib field (mpn, manufacturer, value, ...) -> your BOM header
     "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
                 "parity": "hold",              # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
-                "height": "warn"},             # hold | warn: a missing or implausible 3D height holds the part, or is a note
+                "height": "warn",              # hold | warn: a missing or implausible 3D height holds the part, or is a note
+                "manufacturer": "warn"},       # hold | warn: an empty Manufacturer holds the part, or is a note
     "altium365": {"workspace": ""},
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes"]},   # ecadlib.upkeep
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
@@ -467,6 +468,8 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
     if "height" in (raw.get("release") or {}) and raw["release"]["height"] not in ("hold", "warn"):
         _err(where, "release.height", f"= {raw['release']['height']!r}: must be hold or warn")
+    if "manufacturer" in (raw.get("release") or {}) and raw["release"]["manufacturer"] not in ("hold", "warn"):
+        _err(where, "release.manufacturer", f"= {raw['release']['manufacturer']!r}: must be hold or warn")
     if (raw.get("release") or {}).get("approvals"):
         from .approvals import normalize_policy
         try:

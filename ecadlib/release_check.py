@@ -558,7 +558,11 @@ def check_item(item, base=".", rules=None):
                 warns.append(f"Description \"{item['description']}\" was written by ecadlib from the category and "
                              "package (no source had one): check it")
         elif not _filled(par.get(RU.canonical_param(k, rules), par.get(k, ""))) and not _supplier_number(par, k, rules):
-            add("fields", f"{k} is empty")
+            if k == "Manufacturer" and (rules.get("release") or {}).get("manufacturer", "warn") != "hold":
+                warns.append("Manufacturer is empty: no source named the maker; fill it before ordering "
+                             "([release] manufacturer = \"hold\" holds the part instead)")
+            else:
+                add("fields", f"{k} is empty")
     for v in doubts(item):
         add("verify", v)
     for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
