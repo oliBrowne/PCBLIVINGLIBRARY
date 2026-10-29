@@ -1,6 +1,6 @@
 # ecadlib product spec
 
-Last updated 2026-10-19, for v0.3.1. The plan for what comes next is in [ROADMAP.md](../ROADMAP.md).
+Last updated 2026-10-29, for v0.4.0. The plan for what comes next is in [ROADMAP.md](../ROADMAP.md).
 
 ## Problem
 
@@ -110,7 +110,7 @@ The library agent (with its review queue) and two-way Altium 365 sync are kept o
 | Pad-match rate against KiCad's library | `ecadlib eval gate` on the 331-part kicad-v1 set | 327 / 331 (98.8%), on a **synthetic** replay pack: a check of the generator and pipeline given correct answers, not live reads (docs/benchmark.md has the live figure) | 97% or better on **live** reads of 100+ parts, published (P5) |
 | Review and approval rate | Parts approved first time / held / rejected, from the release check, approvals and the review queue | Not reported yet | Reported per workspace (P8); 80%+ approved first time in trials |
 | Time from BOM to released library | Wall time per step, from BOM to Altium 365 release | Not measured on a real BOM (`ecadlib demo`: 1 s offline) | Measured in every trial (P7); faster than the user's usual process |
-| Outside use | Users who ran their own BOM end to end | 0 | 3 to 5 Altium users by v0.4.0 (P6) |
+| Outside use | Users who ran their own BOM end to end | 0 | 3 to 5 Altium users by v0.5.0 (P6) |
 
 ## Risks
 
@@ -124,5 +124,5 @@ Each risk has its own issue, labelled `risk`. The owner of all of them is the ma
 | R3 | Licensing of third-party part data (KiCad CC-BY-SA, EasyEDA credit) | NOTICE files (KiCad exports and librarian output), KiCad exports kept out of git, EasyEDA and KiCad credit on every converted part (Altium `Library Credit`), CC-BY-SA label only on KiCad content, no SnapMagic; own code MIT. Rechecked 2026-10-18: Nexar/DigiKey/Mouser give part facts and datasheet links only. | Handled | [#54](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/54) |
 | R4 | Model API cost surprises users | Most parts use no model; page routing and model ladder; cost estimate and `max_cost_usd`; docs/costs.md. The estimate is shown before every AI step on the command line, in the Altium dialog, the KiCad window and the web UI, and the key is never put in the global environment ([#49](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/49), docs/api-keys.md). The Altium and KiCad dialogs are not yet tried in the real tools. | Mitigated | [#55](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/55) |
 | R5 | External part APIs change or block us | Official APIs first; unofficial ones last and switchable off; own User-Agent; weekly `sources-canary`. | Watched weekly | [#56](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/56) |
-| R6 | Scope too wide for one maintainer | Altium + KiCad supported, other exports removed; five features cut and three parked on 2026-10-19; v0.4.0 only proves the core flow. | Mitigating | [#57](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/57) |
+| R6 | Scope too wide for one maintainer | Altium + KiCad supported, other exports removed; five features cut and three parked on 2026-10-19; v0.5.0 only proves the core flow. | Mitigating | [#57](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/57) |
 | R7 | No outside users yet; competitors cover single-part generation | Lead with the BOM-level librarian workflow; real-BOM trials and a published benchmark. | Open | [#58](https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues/58) |
