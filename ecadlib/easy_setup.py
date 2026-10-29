@@ -320,6 +320,10 @@ def start_nexar_signin(b, wait=10):
     elif len(cid) > 200 or len(sec) > 500 or any(c.isspace() for c in cid + sec):
         problem = "that does not look like a Nexar client ID and secret: copy them again from portal.nexar.com"
     ready, me, stop, stopped = threading.Event(), object(), threading.Event(), threading.Event()
+    with _SIGNIN_LOCK:                          # a sign-in just signed out of (another tab) may still hold the port
+        prev = _SIGNIN.get("stopped") if _SIGNIN.get("state") != "waiting" else None
+    if prev is not None:
+        prev.wait(5)
     with _SIGNIN_LOCK:                          # "is one waiting?" and "this one waits now" in one step
         if _waiting():
             return _waiting()
@@ -372,7 +376,8 @@ def nexar_signout(b):
         stop, stopped = _SIGNIN.get("stop"), _SIGNIN.get("stopped")
         _SIGNIN.clear()
         if was_waiting:
-            _SIGNIN.update(state="cancelled", message="signed out; the sign-in still open in the browser was cancelled")
+            _SIGNIN.update(state="cancelled", message="signed out; the sign-in still open in the browser was cancelled",
+                           stopped=stopped)     # a Sign in meanwhile waits for it to free the port
         gone = bool(NS.signout())
     if was_waiting and stop is not None:        # stop listening on the redirect port, so Sign in works again at once
         stop.set()

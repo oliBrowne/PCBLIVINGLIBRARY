@@ -336,6 +336,34 @@ def test_setup_page_libs_follow_its_workspace_not_whether_a_rules_file_exists(tm
     assert "--lib" not in FR.config_defaults("librarian", ["bom.csv"])[0]
 
 
+@lite
+def test_sign_in_from_another_tab_while_sign_out_still_frees_the_port(tmp_path, monkeypatch):
+    """Review M9: Sign out clears the sign-in before the old listener has let go of the redirect port; a Sign in from
+    another tab in that moment got "port N in use". It waits for the old listener to stop first."""
+    import threading
+    from unittest import mock
+    from ecadlib import easy_setup as ES, nexar_signin as NS
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    old_stopped = threading.Event()
+    with ES._SIGNIN_LOCK:
+        ES._SIGNIN.clear()
+        ES._SIGNIN.update(state="cancelled", message="signed out", stopped=old_stopped)   # as Sign out leaves it
+    threading.Timer(0.3, old_stopped.set).start()
+    seen = []
+
+    def fake_signin(cid, sec, open_browser=None, out=None, timeout=0, cancel=None):
+        seen.append(old_stopped.is_set())
+        open_browser("http://localhost/x")
+        cancel.wait(5)
+        raise NS.SigninError("cancelled")
+    try:
+        with mock.patch.object(NS, "signin", fake_signin):
+            got = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})
+            assert got["waiting"] and seen == [True], (got, seen)
+    finally:
+        ES.nexar_signout({})
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all
