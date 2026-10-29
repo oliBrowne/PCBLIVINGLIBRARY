@@ -100,3 +100,26 @@ def test_freeze_keeps_board_footprint_names_inside_the_pretty_folder(tmp_path):
         assert f.resolve().parent == (proj / "board-frozen.pretty").resolve(), f
     assert sorted(f.stem for f in mods) == [".._.._.._ESCAPED", "CON_"]
     assert not (tmp_path / "work" / "ESCAPED.kicad_mod").exists()
+
+
+_FP = ('(footprint "{n}" (layer "F.Cu")\n  (pad "1" smd rect (at -{x} 0) (size 1 1) (layers "F.Cu"))\n'
+       '  (pad "2" smd rect (at {x} 0) (size 1 1) (layers "F.Cu")))')
+
+
+@lite
+def test_visual_check_proofs_of_two_nopb_parts_do_not_share_a_folder(tmp_path):
+    from ecadlib import visual_check as VC
+    ws = Workspace(str(tmp_path))
+    pl = tmp_path / "librarian" / "b"
+    pl.mkdir(parents=True)
+    names = ("LM2596S-5.0/NOPB", "LMR14020SDDA/NOPB")
+    items = []
+    for i, m in enumerate(names):
+        (pl / f"fp{i}.kicad_mod").write_text(_FP.format(n=f"FP{i}", x=1 + 2 * i))
+        items.append({"name": m, "footprint": {"kicad_mod": f"fp{i}.kicad_mod"}, "parameters": []})
+    (pl / "plan.json").write_text(json.dumps(items))
+    for m in names:
+        ws.visual_check(m, render_only=True)
+    proofs = sorted((tmp_path / "agent" / "proofs").rglob("proof.json"))
+    assert sorted(json.loads(p.read_text())["part"] for p in proofs) == sorted(names)
+    assert VC._slug("CON") != "CON"                      # a Windows device name is no folder

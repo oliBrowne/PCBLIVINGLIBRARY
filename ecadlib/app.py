@@ -1466,7 +1466,7 @@ class Workspace:
                                      "--offline or pass a datasheet PDF in the workspace")
                 item["datasheet"] = str(self.root / "http_cache" / "datasheets"
                                         / (hashlib.sha256(ds.encode()).hexdigest()[:24] + ".pdf"))
-        out = self.root / "agent" / "proofs" / self.safe_name(item["part"])
+        out = self.root / "agent" / "proofs" / VC._slug(item["part"])     # one folder per part: '*/NOPB' parts too
         rules = self.rules()
         pr = VC.prove(item, self.root, rules, client=client, out_dir=out, render_only=True)
         est = pr.get("estimate")
