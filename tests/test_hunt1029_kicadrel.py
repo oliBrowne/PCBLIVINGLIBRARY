@@ -125,6 +125,14 @@ def test_placeholder_maker_on_the_bom_is_filled_like_an_empty_one():
         assert not any(w.startswith("Manufacturer is empty") for w in it["release_check"]["warnings"]), it["release_check"]
 
 
+def test_several_makers_note_only_when_the_bom_names_none():
+    http = TP.HTTP({}, {"ABC1234": _jlc("CloneCo", "RealMaker")})
+    rows = T.triage([{"designator": "U1", "mpn": "ABC1234", "manufacturer": "RealMaker"},
+                     {"designator": "U2", "mpn": "ABC1234"}], KiCadIndex([]), [P.JLCPCBSearch(http)], None)
+    assert "the maker is not filled" not in rows[0]["notes"], rows[0]["notes"]
+    assert "the maker is not filled" in rows[1]["notes"] and rows[1]["src_manufacturer"] == "", rows[1]
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):

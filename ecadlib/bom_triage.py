@@ -1207,8 +1207,9 @@ def triage(lines, index, provs, http, shared=None):
                             maker, maker_from = makers[0], prov.name
                         elif len(makers) > 1:                       # clones under the same MPN: not ours to pick
                             several = True
-                            notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
-                                         f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
+                            if not bom_maker:               # the BOM names the maker: nothing to fill
+                                notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
+                                             f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
                     notes.append(f"jlcpcb: MPN -> {r.lcsc}" if r.found else "jlcpcb: no exact MPN match")
                 else:
                     if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
