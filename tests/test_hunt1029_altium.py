@@ -96,7 +96,14 @@ def test_menu_settings_paths_in_quotes_are_the_paths():
 def test_install_menu_in_a_folder_outside_latin1_says_what_to_do():
     """install-menu merges the menu into DXP.RCS, written in Latin-1: a menu folder named in Cyrillic (C:\\Users\\Ольга)
     stopped with Python's "'latin-1' codec can't encode characters in position 91-95", after making a backup."""
-    import json
+    import json, os
+    if os.name == "nt":      # on Windows install-menu names the real (here ASCII) menu folder, not win_dir: check the
+        try:                 # refusal itself, for a folder with no short name
+            AM.rcs_folder("C:\\Users\\\u041e\u043b\u044c\u0433\u0430\\menu", short=lambda p: p)
+            raise AssertionError("a folder DXP.RCS cannot name must be refused")
+        except ValueError as e:
+            assert "codec" not in str(e) and "--out" in str(e), e
+        return
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         (d / "m").mkdir()
