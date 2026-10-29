@@ -38,8 +38,6 @@ SYMS = {"Device:R": ksym("R", ["1", "2"], "R", desc="Resistor"),
         "Device:LED": ksym("LED", ["1", "2"], "D", desc="Light emitting diode"),
         "Regulator_Test:TPS1234DSG": ksym("TPS1234DSG", [str(i) for i in range(1, 9)], footprint="Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
                                           datasheet="https://example.com/tps1234.pdf", desc="Test regulator"),
-        "Timer_Test:NE555D": ksym("NE555D", [str(i) for i in range(1, 9)], footprint="Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
-                                  datasheet="http://www.ti.com/lit/ds/symlink/ne555.pdf", desc="Precision Timers, 555 compatible"),
         "Connector_Generic:Conn_01x04": ksym("Conn_01x04", ["1", "2", "3", "4"], "J")}
 FOOTS = {"Resistor_SMD:R_0603_1608Metric": (FPS / "R_0603_1608Metric.kicad_mod").read_text(),
          "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm": (FPS / "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod").read_text(),
@@ -50,9 +48,9 @@ class FakeHTTP:
     """Serves the fake KiCad library and EasyEDA payloads; every other host is 'blocked'. Counts requests."""
     offline = False
 
-    def __init__(self, easyeda=None):
+    def __init__(self, easyeda=None, syms=None):
         self.routes, self.calls, self.log = {}, [], []
-        for repo, files, dsuf, fsuf in (("kicad-symbols", SYMS, ".kicad_symdir", ".kicad_sym"), ("kicad-footprints", FOOTS, ".pretty", ".kicad_mod")):
+        for repo, files, dsuf, fsuf in (("kicad-symbols", {**SYMS, **(syms or {})}, ".kicad_symdir", ".kicad_sym"), ("kicad-footprints", FOOTS, ".pretty", ".kicad_mod")):
             tree = [{"type": "tree", "path": f"{r.split(':')[0]}{dsuf}"} for r in files]
             tree += [{"type": "blob", "path": f"{r.split(':')[0]}{dsuf}/{r.split(':')[1]}{fsuf}"} for r in files]
             tree += [{"type": "blob", "path": "README.md"}]
@@ -163,6 +161,9 @@ def test_kicad_index_matching():
         assert ref == "Regulator_Test:TPS1234DSG" and "packing suffix 'R'" in how and "check" not in how, how   # reel
         ref, how = lib.find_symbol("TPS1234DSG-TR")
         assert ref == "Regulator_Test:TPS1234DSG" and "packing suffix 'TR'" in how, how
+        assert not L.packing_suffix("ATMEGA8A-PT", "ATMEGA8APT", 9, "ATMEGA8A-P")       # -P PDIP, -PT TQFP: not a reel
+        assert not L.packing_suffix("MCP2551-I/PT", "MCP2551IPT", 9, "MCP2551-I/P")
+        assert L.packing_suffix("NE555DR", "NE555DR", 6, "NE555D") and L.packing_suffix("TPS1234DSGT", "TPS1234DSGT", 10, "TPS1234DSG")
         ref, how = lib.find_symbol("TPS1234DSGQ")                                  # Q is no packing code: a variant
         assert ref == "Regulator_Test:TPS1234DSG" and "ordering suffix 'Q' (check the variant)" in how, how
         assert lib.find_symbol("TPS1234DSGRXYZW") == (None, None)                 # 5 extra chars, no separator
@@ -284,8 +285,10 @@ def test_reel_suffix_and_maker_from_datasheet_link():
     or another maker's part: held to check, and no maker is taken from its link."""
     bom = ("Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description,Datasheet\n"
            "U1,1,NE555DR,,,NE555DR,,,\nU2,1,NE555DQ,,,NE555DQ,,,\n")
-    with tempfile.TemporaryDirectory() as d:
-        items, _ = run(d, bom=bom)
+    ne555 = {"Timer_Test:NE555D": ksym("NE555D", [str(i) for i in range(1, 9)], footprint="Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+                                       datasheet="http://www.ti.com/lit/ds/symlink/ne555.pdf", desc="Precision Timers, 555 compatible")}
+    with tempfile.TemporaryDirectory() as d:          # other tests take NE555DR from EasyEDA: this symbol is this test's
+        items, _ = run(d, http=FakeHTTP({"C2002": EE, "C3003": ee_as("TPS1234DSGR", "C3003", SOIC8)}, syms=ne555), bom=bom)
         ne = items["NE555DR"]
         par = {p["name"]: p["value"] for p in ne["parameters"]}
         assert ne["status"] == "ready", ne["hold_reasons"]

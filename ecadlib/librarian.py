@@ -85,13 +85,15 @@ def drop_joined_tab(res, table_spec, st):
 PACKING = ("TR", "G4", "E4")          # TI / NXP reel and lead-free codes after a package code (LM358DG4, TPS62162DSGR)
 
 
-def packing_suffix(mpn, nm, k):
-    """Is the rest of the MPN after a KiCad name (nm[:k], nm the normalised MPN) only a packing code: the same part on
-    a reel or lead-free? R / T right after a package letter (NE555D + R, never LM317 + T: TO-220), TR / G4 / E4, and
-    the suffixes the duplicate check strips (-TR, /TR, -REEL7, #PBF ...). Anything else can be another variant."""
+def packing_suffix(mpn, nm, k, head=""):
+    """Is the rest of the MPN after a KiCad name (nm[:k], nm the normalised MPN; head: the MPN as written up to the
+    rest) only a packing code: the same part on a reel or lead-free? R / T after package letters that follow a digit
+    (NE555D + R, TPS62162DSG + R; never LM317 + T: TO-220, never ATmega8A-P + T: -P is PDIP-28, -PT TQFP-32), TR / G4 /
+    E4, and the suffixes the duplicate check strips (-TR, /TR, -REEL7, #PBF ...). Anything else can be another variant."""
     from .dedupe import DEFAULT_SUFFIXES
     rest = nm[k:]
-    if rest in ("R", "T") and nm[k - 1:k].isalpha():
+    pkg = re.search(r"(.?)[A-Za-z]+$", head or str(mpn)[:len(str(mpn)) - len(rest)])
+    if rest in ("R", "T") and pkg and pkg.group(1).isdigit():
         return True
     if rest in PACKING:
         return True
@@ -277,7 +279,7 @@ class KiCadLibrary:
             if nm[:k] in self._norm and (len(nm) - k <= 2 or (sep and len(nm) - k <= 6)):
                 ref, more = self._pick(self._norm[nm[:k]])
                 suffix = str(mpn)[raw[k]:]
-                if packing_suffix(mpn, nm, k):        # the same part on a reel / lead-free: nothing to check
+                if packing_suffix(mpn, nm, k, str(mpn)[:raw[k]]):        # the same part on a reel / lead-free: nothing to check
                     return ref, f"name + packing suffix '{suffix}' (tape and reel or lead-free, same part)" + more
                 return ref, f"name + ordering suffix '{suffix}' (check the variant)" + more
         return None, None
