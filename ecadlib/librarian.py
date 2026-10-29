@@ -641,6 +641,9 @@ class Run:
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
         if "easyeda_description" in st["found"]:                  # then the text on EasyEDA's component
             st["found"].setdefault("description", st["found"].pop("easyeda_description"))
+        if row.get("src_manufacturer"):        # the maker a part search lists for this exact MPN (one maker only: an MPN
+            src = _desc_label({"src": row.get("src_manufacturer_from", "")})       # sold by clones too fills nothing)
+            st["found"].setdefault("manufacturer", (row["src_manufacturer"], f"{src} part data {lc} (exact MPN)".replace("  ", " ")))
         return st
 
     def local(self, st, row, kind, fp_name, sym_name):
