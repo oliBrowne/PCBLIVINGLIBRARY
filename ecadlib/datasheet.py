@@ -763,6 +763,11 @@ def _with_added(ext):
         return ext
     pkg = dict(pkg)
     for path in ADDED_FIELDS:
+        props = SCHEMA["properties"]                  # (only a field this schema has)
+        for k in path[:-1]:
+            props = (props.get(k) or {}).get("properties") or {}
+        if path[-1] not in props:
+            continue
         obj = pkg
         for k in path[:-1]:
             obj = obj.get(k) if isinstance(obj, dict) else None
@@ -1776,6 +1781,10 @@ def sanity(spec, review, evidence=""):
     review.extend(_feet_outside(spec))
     review.extend(_qfp_rows(spec))
     review.extend(_qfn_rows(spec))
+    # the pin figure's sides and the merged leads against the rest of the read: a failed read (held or read again),
+    # not only an unbuildable one, so no standard land is chosen over a read that contradicts itself
+    review.extend(p if "implausib" in p else f"{p} (an implausible read)"
+                  for p in F.pin_sides_problems(spec) + F.joined_problems(spec))
     ball, py = g("ball_diameter"), spec.get("pitch_y")
     near = min(x for x in (e, py, 99) if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0)
     if t == "bga" and ball and near < 99 and ball[1] >= 0.9 * near:      # (real balls: 0.3 at 0.5, 0.75 at 1.27 mm)
@@ -2202,7 +2211,12 @@ def merge_pins(spec, pins, review):
         return None
     n, ep = spec.get("pin_count"), spec.get("exposed_pad") or {}
     epn = str(ep["number"]) if ep.get("number") not in (None, "") else str(n + 1) if isinstance(n, int) else None
-    drop = set(jn[1]) | ({epn} if epn else set())
+    if epn is None or epn in _lead_numbers(spec):
+        review.append(f"joined_pins: the exposed pad's pin number is not known (pin_count + 1 = {epn} is a lead's "
+                      "number), so which pin table row is the pad cannot be told, which is implausible (give "
+                      "exposed_pad.number, or check pin_count)")
+        return None
+    drop = set(jn[1]) | {epn}
     from . import crosscheck as CC
     net = lambda v: CC._names(v) - CC.EP_NAMES - {"NC", "DNC"}
     gone = [p for p in pins if str(p.get("num")) in drop]
@@ -4024,11 +4038,18 @@ def _legacy_schema():
     return s
 
 
-def schema_version(legacy=False):
-    """Changes when the output schema (package_schema.json, new families included) or the prompt changes. legacy: the
-    version the schema had before ADDED_FIELDS, whose cached answers ResultCache.get still replays."""
-    out = output_schema(_legacy_schema() if legacy else None)
-    return hashlib.sha256((json.dumps(out, sort_keys=True) + SYSTEM).encode()).hexdigest()[:12]
+def _version(schema=None):
+    return hashlib.sha256((json.dumps(output_schema(schema), sort_keys=True) + SYSTEM).encode()).hexdigest()[:12]
+
+
+def schema_version():
+    """Changes when the output schema (package_schema.json, new families included) or the prompt changes."""
+    return _version()
+
+
+def legacy_schema_version():
+    """The version the schema had before ADDED_FIELDS, whose cached answers ResultCache.get still replays."""
+    return _version(_legacy_schema())
 
 
 class ResultCache:
@@ -4057,7 +4078,7 @@ class ResultCache:
         rec = self._get(key)
         seg = f"-{schema_version()}-"
         if rec is None and not key.startswith("check-") and seg in key:
-            old = schema_version(legacy=True)
+            old = legacy_schema_version()
             prev = self._get(key.replace(seg, f"-{old}-", 1)) if f"-{old}-" != seg else None
             if prev is not None:
                 return dict(prev, legacy_schema=old)

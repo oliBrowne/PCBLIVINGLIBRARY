@@ -45,11 +45,22 @@ def test_a_lead_place_with_no_pin_keeps_the_other_pads_in_their_places():
         assert gap[k] == full[k], (k, gap[k], full[k])
 
 
-def test_pin_sides_number_the_pads_as_the_figure_does():
-    full = pads(dfn8(pins_left_right=4, pins_top_bottom=0))
-    odd = pads(dfn8(pin_sides={"left": ["1", "2", "3", "4"], "right": ["8", "7", "6", "5"]}))
-    for a, b in (("5", "8"), ("6", "7"), ("7", "6"), ("8", "5")):
-        assert odd[a] == full[b], (a, odd[a], b, full[b])
+def test_pin_sides_that_do_not_run_counter_clockwise_are_refused():
+    # review 2026-10-29: the right row written top to bottom (8 7 6 5 read as 5 6 7 8) would build every pad on the
+    # other's place; pins run counter-clockwise from pin 1 on every real package, so anything else is a misread
+    for sides in ({"left": ["1", "2", "3", "4"], "right": ["8", "7", "6", "5"]},
+                  {"left": ["1", "2", "3", "4"], "right": ["6", "5", "7", "8"]},
+                  {"left": ["1", "2", "3", "4"], "right": ["A", "B", "C", "D"]}):
+        probs = F.sanity(dfn8(pin_sides=sides))
+        assert any("counter-clockwise" in p for p in probs), (sides, probs)
+
+
+def test_a_pin_sides_contradiction_is_a_hard_failed_read():
+    from ecadlib import ds_route as DR
+    review = []
+    D.sanity(dfn8(pin_sides={"left": ["1", "2", "3", "4"], "right": ["5", "6", "7"]}, pin_count=7), review)
+    hard = DR.hard_failures([r for r in review if r.startswith("pin_sides")])
+    assert hard, review
 
 
 def test_a_side_with_no_leads_and_rows_of_their_own_length():
@@ -215,19 +226,19 @@ def test_merged_pins_named_apart_are_a_failed_read():
 
 # ---------------------------------------------------------------- old cached answers still replay
 def test_the_schema_before_these_fields_is_a_known_legacy_version():
-    assert D.schema_version(legacy=True) == "af365d52d7c1"           # main before 2026-10-29: no pin_sides / joined_pins
-    assert D.schema_version() != D.schema_version(legacy=True)
+    assert D.legacy_schema_version() == "af365d52d7c1"           # main before 2026-10-29: no pin_sides / joined_pins
+    assert D.schema_version() != D.legacy_schema_version()
 
 
 @lite
 def test_a_cached_answer_read_under_the_legacy_schema_is_replayed(tmp_path):
     rc = D.ResultCache(tmp_path)
     key = D.ResultCache.key("ab" * 16, "claude-opus-5-5", "PART", None, [0, None], "high")
-    old = key.replace(f"-{D.schema_version()}-", f"-{D.schema_version(legacy=True)}-")
+    old = key.replace(f"-{D.schema_version()}-", f"-{D.legacy_schema_version()}-")
     assert old != key
     rc.put(old, {"message": {"content": []}, "model": "claude-opus-5-5"})
     got = rc.get(key)
-    assert got and got.get("legacy_schema") == D.schema_version(legacy=True), got
+    assert got and got.get("legacy_schema") == D.legacy_schema_version(), got
     rc.put(key, {"message": {"content": [{"type": "text", "text": "new"}]}})
     assert "legacy_schema" not in rc.get(key)                         # a read under this schema wins
 
@@ -241,3 +252,23 @@ def test_the_rule_book_counts_the_leads_a_merged_pad_took_in():
         assert not bad, (name, bad)
     plain = F.build(dfn8(name="DFN-8-1EP_3x3mm_P0.65mm", pins_left_right=4, pins_top_bottom=0))[0]
     assert "joined_pins" not in plain
+
+
+def test_the_merged_pad_does_not_put_rows_on_the_wrong_axis():
+    # review 2026-10-29: a QFN-16 merged on its bottom side measured the right row against the pad as a top/bottom row
+    s = {"name": "QFN-16-1EP_4x4mm_P0.65mm", "package_type": "qfn", "pin_count": 16, "pitch": 0.65,
+         "body_length": {"nom": 4.0}, "body_width": {"nom": 4.0}, "terminal_length": {"nom": 0.4},
+         "terminal_width": {"nom": 0.3}, "exposed_pad": {"length": {"nom": 2.2}, "width": {"nom": 2.2}},
+         "joined_pins": ["5", "6", "7", "8"],
+         "land": {"ep_across": 2.2, "ep_along": 3.6, "ep_center": 0.7}}
+    txt, rep = F.build(s)
+    assert "warning" not in rep, rep.get("warning")
+    assert all(v is None or v > 0 for v in rep["ep_room"]), rep["ep_room"]
+
+
+def test_a_merged_pad_whose_number_is_a_lead_is_not_merged():
+    s = tdson(pin_count=7, pin_sides={"left": ["1", "2", "3", "4"], "right": ["", "6", "7", "8"]},
+              joined_pins=["6", "7", "8"])
+    pins = [{"num": str(i), "name": n} for i, n in zip((1, 2, 3, 4, 6, 7, 8), "SSSGDDD")] + [{"num": "9", "name": "D"}]
+    review = []
+    assert D.merge_pins(s, pins, review) is None and any("implausib" in r for r in review), review

@@ -307,6 +307,10 @@ CODES = {
                                 "instead of the pads read from the drawing.",
                                 "Check the package code on the datasheet's drawing is {package}.",
                                 [r"standard land: the datasheet read identified (?P<package>\S+) \(.*\); (?P<why>.+?), so the checked standard land"]),
+    "datasheet.joined_land": ("The maker's land joins pins {pins} into one pad, so that pad was built instead of the standard "
+                              "package's separate pads, and the symbol has one pin for it.",
+                              "Check on the datasheet's land drawing that those pins share the pad.",
+                              [r"joined_pins: pins (?P<pins>[\w.+-]+(?:,[\w.+-]+)*) and the exposed pad are one pad"]),
     "datasheet.tab_joined": ("The datasheet numbers the tab {tab}, on pin {lead}'s net. The checked land numbers the tab {lead}, so "
                              "the symbol has no pin {tab}.",
                              "Check in the datasheet's pin table that the tab and pin {lead} are the same connection.",

@@ -286,6 +286,11 @@ def pin_sides_problems(spec):
             out.append(f"pin_sides: the {a} side has {len(ls[a])} lead places and the {b} side {len(ls[b])}: rows "
                        "facing each other have as many (a lead place with no pin is \"\"), so where the short row's "
                        "pins sit is not known (check the pin figure)")
+    run = [x for s in SIDES for x in ls[s] if x]      # counter-clockwise from pin 1, the places with no pin left out
+    if not all(x.isdecimal() for x in run) or any(int(a) >= int(b) for a, b in zip(run, run[1:])):
+        out.append(f"pin_sides: the pins {' '.join(run)} do not rise counter-clockwise from pin 1 (left top to bottom, "
+                   "bottom left to right, right bottom to top, top right to left), as every package numbers them: a "
+                   "side written the other way round, which is implausible (check the pin figure)")
     first = next((x for x in ls["left"] if x), None)
     if "1" in nums and first != "1":
         out.append("pin_sides: pin 1 is not the first pin of the left side; the sides start from pin 1 at the top "
@@ -816,7 +821,9 @@ def build(spec, density=None):
     ep_lines = []
     ox = oy = 0.0                                             # the thermal land's centre (off it for a merged pad)
     jn = joined(spec)
+    lr_all = _left_right(spec, pads)                          # (before a merge takes the joined leads out)
     if jn:
+        lr_all = [s for p, s in zip(pads, lr_all) if p[0] not in jn[1]]
         ep, gone, pads = _merge(spec, jn, pads, rep)
         ox, oy = rep["ep_at"]
     if ep:
@@ -835,11 +842,11 @@ def build(spec, density=None):
             raise ValueError(f"the exposed pad's default number {epnum} (pin_count + 1) is already a lead's number "
                              f"(pads {', '.join(sorted({p[0] for p in pads}, key=lambda s: (len(s), s)))}): give "
                              "exposed_pad.number as the datasheet numbers the thermal pad")
-        lr = _left_right(spec, pads)                                                  # gullwing: all pads are L/R
+        lr = lr_all                                                                   # gullwing: all pads are L/R
         gaps = [abs(p[1] - ox) - p[3] / 2 - ew / 2 for p, s in zip(pads, lr) if s]    # left/right rows vs EP
         gaps += [abs(p[2] - oy) - p[4] / 2 - eh / 2 for p, s in zip(pads, lr) if not s]   # qfn top/bottom rows vs EP
-        rx = [abs(p[1]) - p[3] / 2 for p, s in zip(pads, lr) if s]                    # the room between the rows, less
-        ry = [abs(p[2]) - p[4] / 2 for p, s in zip(pads, lr) if not s]                # the mask web: shorts() asks
+        rx = [abs(p[1] - ox) - p[3] / 2 for p, s in zip(pads, lr) if s]               # the room between the rows, less
+        ry = [abs(p[2] - oy) - p[4] / 2 for p, s in zip(pads, lr) if not s]           # the mask web: shorts() asks
         rep["ep_room"] = (2 * (min(rx) - MIN_PAD_GAP) if rx else None, 2 * (min(ry) - MIN_PAD_GAP) if ry else None)
         if gaps and min(gaps) < MIN_PAD_GAP - 1e-6:
             rep["warning"] = f"EP to pad gap {min(gaps):.3f} < {MIN_PAD_GAP}"

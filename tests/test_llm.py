@@ -38,14 +38,16 @@ def h(o):
 # nothing else changed (checked with the earlier schema: the earlier hashes).
 # 2026-10-24: land gains tab_length / tab_width / tab_center, the tab's own land pad (SOT-223, DPAK); nothing else
 # changed (checked with the earlier schema: the earlier hashes).
-GOLDEN = {"build_sync": "3d1e2c1bf37e09bf38528f43a7b0a307a70b7197bdb8de37497bd6236a715877",
-          "build_batch": "f4c452182f81cfcf0c14ffad3b8c7627b2c401831200bf48524b5dd9537f38dd",
-          "build_url_haiku": "51b842a71dd3bdce5eb9116dc592961661dd7cf0d1cc6858575a20957567e580",
-          "reader_sync_calls": ["fa37111a63d9da2d92211bfc5c07e1723a84de8c0e0c44f805219f6525c453aa",
-                                "53efc86467213bb7f49bc64072f6ce8d45f8b5018a49186fd0fe074dc419c6c5"],
+# 2026-10-29: pin_sides, joined_pins and land.ep_center (datasheet.ADDED_FIELDS); with them taken out
+# (datasheet._legacy_schema) the build_* and batch requests hash to the earlier hashes, so nothing else changed.
+GOLDEN = {"build_sync": "794561458674286fc101f04063e9008435a768667fb122e9b1890be29dbc6186",
+          "build_batch": "303ee8bb50cab90f88e9517c3fd5fa80c28096dac7b3fa0b1db96c613a46cc6c",
+          "build_url_haiku": "623b60ef2bbad4782478111274395afcc6df652ac82be898efda0f38c64a07f0",
+          "reader_sync_calls": ["252741d43564e53eddb89351e4770d13a7016eec2a1a7c5571d78344053799d4",
+                                "1a2fe1431d799095748333665ad0a0ca1ae89c480b8d824d416f2dd217346362"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["7c0d1f56435dba30fa8a03ac78790cabd406b97dc4a3e5ce0260d37b3a892ec7",
-                          "0de54dfea41410101d2c7b0b7ea2479acd70e9d3ac2ea5201b421c57471a0d93"]}
+          "batch_posts": ["e3cc85e88a9fa71a84e562cc3ca97daf5e157f0fbd29030381d128f77034e834",
+                          "b6376fe54553634ee7c70c5f91777817dc7edf0ffaedd5087bca86e505e6030d"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 

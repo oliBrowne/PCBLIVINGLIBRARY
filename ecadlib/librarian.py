@@ -1047,6 +1047,12 @@ class Run:
                     raise D.DatasheetError(unread)
                 pages = ", ".join(map(str, res["sidecar"]["land_pages"][:4]))
                 std = (pkg, found, f"the datasheet prints its own land (page {pages}) but the read did not return it")
+        jn = std and not st["footprint"] and D.F.joined(res["spec"])   # leads merged into the pad by the maker's land:
+        if jn:
+            st["review"].append(f"joined_pins: pins {','.join(jn[1])} and the exposed pad are one pad on the maker's land; "
+                                "that merged pad is built, not the standard table's separate pads, so the footprint "
+                                "matches the symbol's one pin for it")
+            std = None                                # a table's separate pads would leave the merged symbol pin bare
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
             ren = SP.tab_renumber(res["spec"], pkg, [(q["num"], q["name"]) for q in (res.get("symbol") or {}).get("pins") or []])
