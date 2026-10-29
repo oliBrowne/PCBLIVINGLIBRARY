@@ -1139,7 +1139,20 @@ def triage(lines, index, provs, http, shared=None):
         several = False                        # a source lists this exact MPN under more than one maker: none is filled
         from .release_check import _filled     # a BOM maker of "-" / "N/A" / "~" names none: filled like an empty one
         bom_maker = _filled(ln.get("manufacturer"))
+        if not bom_maker:                      # nor is it a maker for the sources to pick by ("N/A" -> "NA")
+            work["manufacturer"] = ""
         sheets = []                                    # every datasheet link every source gave, in source order
+
+        def disagree(m, by):
+            """A source says m alone makes this exact MPN: the maker, unless an earlier source named another (each
+            says "one maker", together two: a clone and its original), then none is filled."""
+            nonlocal maker, maker_from, several
+            if not maker:
+                maker, maker_from = m, by
+            elif not several and not P.same_maker(maker, m):
+                several = True
+                if not bom_maker:
+                    notes.append(f"{maker_from} names the maker {maker}, {by} names {m}: the maker is not filled")
         if skipped:
             notes.append(skipped)
         if pns and not ln.get("mpn"):
@@ -1203,8 +1216,8 @@ def triage(lines, index, provs, http, shared=None):
                         if not desc and (r.extra or {}).get("description"):
                             desc, desc_from = r.extra["description"], prov.name
                         makers = (r.extra or {}).get("makers") or []
-                        if not maker and len(makers) == 1:          # LCSC sells this exact MPN under one maker only
-                            maker, maker_from = makers[0], prov.name
+                        if len(makers) == 1:                        # LCSC sells this exact MPN under one maker only
+                            disagree(makers[0], prov.name)
                         elif len(makers) > 1:                       # clones under the same MPN: not ours to pick
                             several = True
                             if not bom_maker:               # the BOM names the maker: nothing to fill
@@ -1226,9 +1239,8 @@ def triage(lines, index, provs, http, shared=None):
                         one = len(makers) == 1 or (not makers and isinstance(prov, P.EasyEDA) and r.lcsc
                                                    and r.lcsc == P.lcsc_number(ln.get("lcsc")))
                         several = several or len(makers) > 1
-                        if not maker and one and r.manufacturer and r.mpn and \
-                                _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):
-                            maker, maker_from = P.clean_maker(r.manufacturer), prov.name
+                        if one and r.manufacturer and r.mpn and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):
+                            disagree(P.clean_maker(r.manufacturer), prov.name)
                         sheet = sheet or (r.extra or {}).get("datasheet") or ""
                         sheets += [u for u in (r.extra or {}).get("datasheets") or [(r.extra or {}).get("datasheet")]
                                    if u and u not in sheets]

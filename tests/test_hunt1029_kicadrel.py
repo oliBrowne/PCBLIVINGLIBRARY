@@ -133,6 +133,43 @@ def test_several_makers_note_only_when_the_bom_names_none():
     assert "the maker is not filled" in rows[1]["notes"] and rows[1]["src_manufacturer"] == "", rows[1]
 
 
+# ---------------------------------------------------------------- review M2: two sources, two makers
+def test_two_sources_naming_two_makers_fill_none():
+    # LCSC sells ABC1234 under one maker (a clone) and an official source lists it under one other maker: each alone
+    # says "one maker", together they say two, so no maker is filled (the clone's name was)
+    line = {"designator": "U1", "mpn": "ABC1234"}
+    http = TP.HTTP({}, {"ABC1234": _jlc("CloneCo")})
+    rows = T.triage([dict(line)], KiCadIndex([]), [P.JLCPCBSearch(http), _Src("RealMaker", ["RealMaker"])], None)
+    assert rows[0]["src_manufacturer"] == "", rows[0]
+    assert "the maker is not filled" in rows[0]["notes"], rows[0]["notes"]
+    rows = T.triage([dict(line)], KiCadIndex([]), [_Src("RealMaker", ["RealMaker"]), _Src("CloneCo", ["CloneCo"])], None)
+    assert rows[0]["src_manufacturer"] == "", rows[0]
+    # the same company under two spellings is one maker
+    rows = T.triage([dict(line)], KiCadIndex([]), [P.JLCPCBSearch(TP.HTTP({}, {"ABC1234": _jlc("Murata")})),
+                                                   _Src("Murata Electronics", ["Murata Electronics"])], None)
+    assert rows[0]["src_manufacturer"] == "Murata", rows[0]
+
+
+# ---------------------------------------------------------------- review M4: "N/A" sent to the lookups as a maker
+def test_placeholder_maker_is_not_sent_to_the_sources():
+    # a BOM maker of "N/A" names none; sent to Nexar / Mouser as the wanted maker ("NA") it made their pick of the
+    # exact MPN among two makers say "not found", and the line lost its description, datasheet and lifecycle
+    seen = []
+
+    class Rec(_Src):
+        def lookup(self, line):
+            seen.append(line.get("manufacturer"))
+            return super().lookup(line)
+
+    for mk in ("N/A", "-", "~"):
+        seen.clear()
+        T.triage([{"designator": "U1", "mpn": "ABC1234", "manufacturer": mk}], KiCadIndex([]), [Rec("X", ["X"])], None)
+        assert seen == [""], (mk, seen)
+    seen.clear()
+    T.triage([{"designator": "U1", "mpn": "ABC1234", "manufacturer": "RealMaker"}], KiCadIndex([]), [Rec("X", ["X"])], None)
+    assert seen == ["RealMaker"], seen
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_") and callable(f):
