@@ -19,7 +19,7 @@ Classes, most severe first (default policy in brackets, see change_gate.POLICY):
                   to another land pattern; the 3D model's origin or rotation moved                              [hold]
   geometry-minor  pad size within SIZE_MINOR, corner rounding, paste / mask margins and windows, courtyard, inner-layer
                   copper of a THT pad, keepouts, footprint type and settings, pad property / pin function, the
-                  footprint renamed with the same land pattern, 3D model added / removed / height / file; a symbol
+                  footprint renamed with the same land pattern, 3D model added / removed / hidden / height / file; a symbol
                   pin end moved; power pins of one net and type no longer sharing an end, the number of display
                   modes (body styles) (both a warn at least); in a new body style or unit, pins that share an end
                   where body style 1 does not, or a pin that is another signal than in body style 1: electrical [warn]
@@ -133,13 +133,16 @@ def _value_tokens(v):
     except Exception:
         return []
     rest = re.sub(r"(\d+)\s*/\s*(\d+)\s*W\b", lambda m: f"{int(m.group(1)) / max(int(m.group(2)), 1):g}W", rest)
-    rest = re.sub(r"(?i)(\d)\s+(%|ppm|°C|mV|kV|V|mW|W|mA|A)(?![A-Za-z0-9])", r"\1\2", rest.replace("+/-", "±"))
+    # as electrical_facts reads them: a tolerance is ± ('±1%' == '1%') and a voltage rating DC ('50 VDC' == '50V')
+    rest = re.sub(r"±\s*(?=\d)", "", rest.replace("+/-", "±"))
+    rest = re.sub(r"(\d)\s*([mk]?V)\s*(?:DC|dc|Dc)(?![A-Za-z0-9])", r"\1\2", rest)
+    rest = re.sub(r"(?i)(\d)\s+(%|ppm|°C|mV|kV|V|mW|W|mA|A)(?![A-Za-z0-9])", r"\1\2", rest)
     toks = []
     for t in re.split(r"[\s/,;]+", rest):
         if not t:
             continue
         if t.upper() in PACKAGE_SIZES or t.upper() in DIELECTRICS:
-            toks.append(t.upper())
+            toks.append(_DIEL_SAME.get(t.upper(), t.upper()))      # NP0 is C0G
             continue
         try:
             y, u, left = split_value(t)
@@ -948,6 +951,9 @@ def _model(o, n, out):
             if x.get("file") != y.get("file"):
                 _chg(out, "geometry-minor", "model", "3D file", x.get("file"), y.get("file"),
                      f"3D model file {_f(x.get('file'))} -> {_f(y.get('file'))}")
+            if bool(x.get("hide")) != bool(y.get("hide")):   # KiCad leaves a hidden model out of the 3D view and STEP
+                _chg(out, "geometry-minor", "model", "3D model", x.get("hide"), y.get("hide"),
+                     f"3D model {_f(y.get('file'))} {'hidden' if y.get('hide') else 'shown again'}")
             for k, label, cls in (("offset", "3D model offset", "geometry-major"), ("rotate", "3D model rotation", "geometry-major"),
                                   ("scale", "3D model scale", "geometry-minor")):
                 unit = [1, 1, 1] if k == "scale" else [0, 0, 0]
@@ -1023,6 +1029,10 @@ def diff_stored(old, new):
     compared."""
     if old.get("schema") != new.get("schema"):
         new = {k: (v if old.get(k) is not None else old.get(k)) for k, v in new.items()}
+        mo, mn = old.get("model") or {}, new.get("model") or {}
+        if (old.get("schema") or 0) < 7 and mo.get("tool") == mn.get("tool") == "kicad" and \
+                len(mo.get("models") or []) == len(mn.get("models") or []):   # before 7, (hide yes) read as shown
+            new = {**new, "model": {**mn, "models": [{**y, "hide": x.get("hide")} for x, y in zip(mo["models"], mn["models"])]}}
     return diff(old, new)
 
 

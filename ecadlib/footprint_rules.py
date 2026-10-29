@@ -767,17 +767,22 @@ SILK_TEXT = (0.5, 2.0)        # mm: below this a board house cannot print it, ab
 NOMINAL_REF = 3               # characters a designator shows on a board ("U12"), whatever the library string says
 
 
-def text_box(x, y, size, n, rot=0.0, just=0.5):
+def text_box(x, y, size, n, rot=0.0, just=0.5, upright=True):
     """Box (x0, y0, x1, y1) of n stroke characters of height size whose anchor (x, y) sits at fraction just
-    (0 left, 0.5 centre, 1 right) of the width and at the middle of the height, rotated by a multiple of 90 degrees."""
+    (0 left, 0.5 centre, 1 right) of the width and at the middle of the height, rotated by a multiple of 90 degrees
+    counter-clockwise on screen (KiCad, y down: at 90 the text reads upwards, towards -y). upright: KiCad keeps
+    footprint text readable (no "unlocked" in its at), drawing 180 as 0 and 270 as 90, as altium_lib.texts_from_kicad."""
     from .altium_lib import CHAR_W
     w = CHAR_W * size * n
     x0, x1, y0, y1 = -w * just, w * (1 - just), -size / 2, size / 2
-    if round(rot / 90) % 2:
+    k = round(rot / 90) % 4
+    if upright and k in (2, 3):
+        k -= 2
+    if k % 2:
         x0, x1, y0, y1 = y0, y1, x0, x1
-    if round(rot / 90) % 4 in (1, 2):
+    if k in (2, 3):
         x0, x1 = -x1, -x0
-    if round(rot / 90) % 4 in (2, 3):
+    if k in (1, 2):
         y0, y1 = -y1, -y0
     return (x + x0, y + y0, x + x1, y + y1)
 
@@ -806,7 +811,8 @@ def _silk_texts(tree):
         frac = 0.0 if "left" in just else 1.0 if "right" in just else 0.5
         rot = _f(at[3]) if len(at) > 3 and at[3] != "unlocked" else 0.0
         out.append(("reference" if ref else kind, layer, size,
-                    text_box(_f(at[1]), _f(at[2]), size, NOMINAL_REF if ref else max(len(val), 1), rot, frac)))
+                    text_box(_f(at[1]), _f(at[2]), size, NOMINAL_REF if ref else max(len(val), 1), rot, frac,
+                             "unlocked" not in at)))
     return out
 
 
