@@ -49,6 +49,25 @@ def test_mpn_key_strips_adi_lt_reel_suffixes():
     assert mpn_key("ADP3338AKCZ-3.3") != mpn_key("ADP3338AKCZ-5.0")
 
 
+_MOD = """(footprint "R_0603" (layer "F.Cu")
+  (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+  (pad "2" smd roundrect (at 0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+  (model "${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step" %s
+    (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0))))"""
+
+
+def test_hidden_kicad_3d_model_is_a_change():
+    """fingerprint / change_diff: a KiCad 3D model hidden ((hide yes) or bare hide) was no change at all (diff -> [])."""
+    shown = FP.of_kicad(kicad_mod=_MOD % "", part="R")
+    for hide in ("(hide yes)", "hide"):
+        hidden = FP.of_kicad(kicad_mod=_MOD % hide, part="R")
+        assert hidden["model"]["models"][0]["hide"] is True, hide
+        ch = CD.diff(shown, hidden)
+        assert [c["class"] for c in ch] == ["geometry-minor"] and "hidden" in ch[0]["text"], (hide, ch)
+        assert "shown again" in CD.diff(hidden, shown)[0]["text"]
+    assert FP.of_kicad(kicad_mod=_MOD % "(hide no)", part="R")["hashes"] == shown["hashes"]
+
+
 @lite
 def test_upkeep_state_survives_an_interrupted_save(tmp_path, monkeypatch):
     """upkeep.save_state: a save cut short (disk full, killed) left a torn upkeep_last.json, and every later run crashed."""

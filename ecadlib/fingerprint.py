@@ -49,10 +49,11 @@ from pathlib import Path
 
 from . import altium_lib as AL, parity as PA, sexpr
 
-SCHEMA = 6                                    # 3: a hidden pin's net as written (case and spelling); 4: pin ends
+SCHEMA = 7                                    # 3: a hidden pin's net as written (case and spelling); 4: pin ends
 #                                               and the pins that share one ("stacks"); 5: a pad at 89.9996 deg is
 #                                               at 90, stacked pads in content order, a pin table's first instance;
-#                                               6: a KiCad pad's own paste ratio, clearance and thermal settings
+#                                               6: a KiCad pad's own paste ratio, clearance and thermal settings;
+#                                               7: a KiCad 3D model hidden as (hide yes) (KiCad 8+), not only bare hide
 ETYPE_NAME = {0: "input", 1: "io", 2: "output", 3: "open_collector", 4: "passive", 5: "hiz", 6: "open_emitter", 7: "power"}
 MPN_KEYS = ("manufacturer part number", "manufacturer part number 1", "mpn", "mfr part number", "manufacturer_part_number",
             "manufacturerpartnumber", "manufacturer part #", "mfr. part number", "mfr part #", "mfr. #", "mpn1", "mfr_pn",
@@ -362,7 +363,9 @@ def _kicad_art(t):
 def _kicad_models(t):
     out = []
     for m in sexpr.find(t, "model"):
-        rec = {"file": Path(str(m[1]).replace("\\", "/")).name.lower(), "hide": "hide" in m[1:]}
+        hide = sexpr.first(m, "hide")          # KiCad 6 / 7 write a bare `hide`, KiCad 8+ (hide yes)
+        rec = {"file": Path(str(m[1]).replace("\\", "/")).name.lower(),
+               "hide": "hide" in m[1:] or bool(hide and PA._yes(hide))}
         for k in ("offset", "scale", "rotate"):
             xyz = sexpr.first(sexpr.first(m, k) or [], "xyz")
             rec[k] = [round(float(v), 4) for v in xyz[1:4]] if xyz else None
