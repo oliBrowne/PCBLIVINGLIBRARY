@@ -26,5 +26,6 @@ def test_libpkg_is_ansi_like_the_install_scripts(tmp_path):
     AL.write_pcblib(src / "PcbLib" / "Résistance.PcbLib", [fp])
     rep = PKG.build(src, tmp_path / "pkg", "mylib", log=lambda *a: None, unchecked=True)
     data = (tmp_path / "pkg" / "mylib.LibPkg").read_bytes()
-    assert b"DocumentPath=PcbLib\\R\xe9sistance.PcbLib\r\n" in data, data[-400:]
+    line = next(ln for ln in data.split(b"\r\n") if ln.startswith(b"DocumentPath="))   # absolute on Windows
+    assert line.endswith(b"PcbLib\\R\xe9sistance.PcbLib") and b"\xc3" not in data, line
     assert not rep["problems"] and rep["footprints"] == 1, rep["problems"]
