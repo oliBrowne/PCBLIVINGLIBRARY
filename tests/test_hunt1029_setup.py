@@ -61,6 +61,52 @@ def test_rules_start_prefers_the_current_folders_file_when_out_was_defaulted(tmp
     assert Path(RU.find(FR.rules_start(out, given_out=False))).resolve() == ws / "ecadlib.toml"
 
 
+def _free_port():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+@lite
+def test_sign_in_again_after_signing_out_of_a_waiting_sign_in(tmp_path, monkeypatch):
+    """H-SETUP-2: on the setup page, Sign in (browser not finished yet), Sign out, Sign in again: the first sign-in
+    still listened on the redirect port for up to 5 minutes, so the second one failed with "port N on this computer
+    is in use: close what uses it" (ecadlib itself)."""
+    from ecadlib import easy_setup as ES
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("NEXAR_REDIRECT_URI", f"http://localhost:{_free_port()}/login")
+    try:
+        first = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})
+        assert first["waiting"], first
+        ES.nexar_signout({})
+        again = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})   # raised ValueError: port in use
+        assert again["waiting"], again
+    finally:
+        ES.nexar_signout({})
+
+
+@lite
+def test_doctor_does_not_call_altium365_ready_on_a_stored_nexar_app_without_a_sign_in(tmp_path, monkeypatch):
+    """H-SETUP-3: NEXAR_CLIENT_ID + NEXAR_CLIENT_SECRET stored (after `ecadlib nexar signout`, or for the supply
+    lookups) but no sign-in and no NEXAR_TOKEN: `ecadlib doctor` said "key altium365 OK" and `ecadlib init` listed it
+    as set, while every Altium 365 command stops with "no Altium 365 token" (they only use NEXAR_TOKEN / the sign-in)."""
+    from ecadlib import doctor as DR, firstrun as FR, rules as RU, userconfig as UC
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    for k in ("NEXAR_TOKEN", "NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET", UC.NO_STORED):
+        monkeypatch.setenv(k, "")
+    UC.set_key("NEXAR_CLIENT_ID", "my-app-1234")
+    UC.set_key("NEXAR_CLIENT_SECRET", "s3cret")
+    rules = RU.load({"altium365": {"workspace": "https://acme.365.altium.com/"}})
+    row = next(c for c in DR.check_keys(rules, {}) if c["check"] == "key altium365")
+    assert row["level"] == "WARN", row
+    assert "ecadlib nexar signin" in row["hint"], row
+    a365 = next(r for r in FR.key_status(rules, {}) if "NEXAR" in r[0])
+    assert a365[1] is False, a365
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all

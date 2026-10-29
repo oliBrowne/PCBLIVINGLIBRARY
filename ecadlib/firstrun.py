@@ -30,9 +30,7 @@ def key_status(rules=None, environ=None):
     environ = os.environ if environ is None else environ
     out = []
     for name, env, why in key_services(rules):
-        ok = all(UC.secret(e, environ) for e in env)
-        if name == "altium365" and not ok and UC.secret("NEXAR_CLIENT_ID", environ) and UC.secret("NEXAR_CLIENT_SECRET", environ):
-            env, ok = ["NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET"], True
+        ok = all(UC.secret(e, environ) for e in env)   # Altium 365: NEXAR_TOKEN / the sign-in, not a stored app
         out.append((" + ".join(env), ok, why))
     return out
 
