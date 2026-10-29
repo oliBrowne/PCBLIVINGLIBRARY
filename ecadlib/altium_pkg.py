@@ -63,6 +63,17 @@ def libpkg_text(docs):
     return "\r\n".join(L)
 
 
+def libpkg_bytes(docs):
+    """The .LibPkg file: ANSI (cp1252) as the .PrjScr (script_bytes), since Altium reads a project file with no BOM as
+    ANSI and 'SchLib\\Résistance.SchLib' in UTF-8 became 'RÃ©sistance' (document not found); a path cp1252 can't hold
+    goes out as UTF-8 with a BOM."""
+    text = libpkg_text(docs)
+    try:
+        return text.encode("cp1252")
+    except UnicodeEncodeError:
+        return text.encode("utf-8-sig")
+
+
 def prjscr_text(pas, *more):
     """Script project as Altium saves one (Altium-Designer-addons/scripts-libraries QuickSilk.PrjScr)."""
     L = ["[Design]", "Version=1.0", ""]
@@ -389,7 +400,8 @@ def check_folder(out, libpkg, dblibs):
     """Problems a user would hit in Altium that can be seen without it. Returns (problems, facts)."""
     out = Path(out)
     probs, facts = [], {"symbols": 0, "footprints": 0, "links": 0, "dblib_rows": 0}
-    docs = [ln.split("=", 1)[1] for ln in (out / libpkg).read_text(encoding="utf-8").splitlines() if ln.startswith("DocumentPath=")]
+    from .fsutil import read_ini_text                  # cp1252, or UTF-8 with a BOM (libpkg_bytes)
+    docs = [ln.split("=", 1)[1] for ln in read_ini_text(out / libpkg)[0].splitlines() if ln.startswith("DocumentPath=")]
     names = {"SchLib": set(), "PcbLib": set()}
     links = []
     for d in docs:
@@ -435,8 +447,7 @@ def check_folder(out, libpkg, dblibs):
                 have = ({c["name"] for c in AL.read_schlib(p)[1]} if kind == "SchLib" else {f["name"] for f in AL.read_pcblib(p)})
                 if ref and ref not in have:
                     probs.append(f"{db}: {row.get('Part Number')} {refc} {ref} is not in {rel}")
-        from .fsutil import read_ini_text              # ANSI or UTF-8/16 with a BOM, as Altium may save it
-        text = read_ini_text(out / db)[0]
+        text = read_ini_text(out / db)[0]              # ANSI or UTF-8/16 with a BOM, as Altium may save it
         if "DatabasePathRelative=1" not in text:
             probs.append(f"{db}: the database path is absolute (DatabasePathRelative=0): breaks when the folder moves")
     return probs, facts
@@ -560,7 +571,7 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
         written += nat["written"]
         rep.update(native_up_to_date=nat["up_to_date"], native_edited=nat["edited"])
     more = (AN.UNIT,) if native else ()
-    outs = [(libpkg, libpkg_text(docs).encode("utf-8")),        # all encoded before any is written: a script cp1252
+    outs = [(libpkg, libpkg_bytes(docs)),                       # all encoded before any is written: a script cp1252
             (f"{name}_Install.PrjScr", script_bytes(f"{name}_Install.PrjScr", prjscr_text(f"{name}_Install.pas", *more))),
             (f"{name}_Install.pas", script_bytes(f"{name}_Install.pas", install_script(name, dblibs, libpkg, docs, native))),
             ("ALTIUM_README.txt", readme_text(name, libpkg, dblibs, sum(1 for d in docs if d.lower().endswith(".schlib")),
