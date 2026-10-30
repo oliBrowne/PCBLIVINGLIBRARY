@@ -61,6 +61,18 @@ def test_fmt_value_keeps_r_notation_and_other_units_on_caps_and_inductors():
     assert RU.fmt_value("0.1uF 50V", "Capacitors", "rkm_lower") == "100n"
 
 
+def test_shared_numbers_flags_two_numbered_signals_on_one_pin():
+    """shared_numbers took any two names that differ by an index after a separator for one stack: IN_1 and IN_2 (a
+    dual comparator's two inputs) or GPIO_1 and GPIO_2 on one pin number passed the release check's R-SY-3, a short
+    on the board. Only supply / ground instances (VSS, VSS_2) are one net."""
+    from ecadlib import symbol_layout as SL
+    pins = lambda *nn: [{"num": "7", "name": n} for n in nn]
+    for a, b in (("IN_1", "IN_2"), ("GPIO_1", "GPIO_2"), ("OUT-1", "OUT-2"), ("SDA_1", "SDA_2")):
+        assert SL.shared_numbers(pins(a, b)), (a, b)
+    for a, b in (("VSS", "VSS_2"), ("GND_1", "GND_2"), ("VDD", "VDD_1"), ("IN_1", "IN_1")):
+        assert SL.shared_numbers(pins(a, b)) == [], (a, b)
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all
