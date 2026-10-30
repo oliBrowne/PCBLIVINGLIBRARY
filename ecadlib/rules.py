@@ -713,7 +713,9 @@ def fmt_value(raw, cat, style):
     s = str(raw)
     if cat != "Resistors":                     # '100N', '0.1UF', '4U7', '10UH' (DigiKey's and the rkm style's own
         s = re.sub(r"(?<=\d)[PNU]", lambda m: m.group(0).lower(), s)   # capitals): pico / nano / micro, never ambiguous
-    v = parse_value(s)
+    v, u = parse_value(s, True)                # a unit not the part's ('4R7' inductor: a maker's 4.7 uH, never 4.7 H;
+    if u not in ("", UNIT[cat] or "R"):        # '10uH' on a capacitor line) stays as written
+        return raw
     return raw if v is None or two_readings(raw) else fmt_number(v, cat, style)     # '4,700pF' stays as written
 
 

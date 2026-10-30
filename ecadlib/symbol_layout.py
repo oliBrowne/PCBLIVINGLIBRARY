@@ -514,11 +514,14 @@ def relayout(sym, rules=None, split=None):
 def shared_numbers(pins):
     """One number is one pad: two signals on it short on the board. pins: [{num, name}] -> ['pin number 7 is used by 2
     different signals: WP, SDA']; pins of one stack (VSS, VSS_2) on a number are one signal. Also the release check's
-    (R-SY-3)."""
+    (R-SY-3). Only a supply's, ground's or exposed pad's instances are one stack (VIN / VIN_2, EPAD / EPAD_2): IN_1 and
+    IN_2 are two signals, and so are OUT_1 / OUT_2 (a dual part's two outputs; an LDO's VOUT_2 on VOUT's pad is held)."""
+    one = lambda a, b: _key(a) == _key(b) or stack_key(a) == stack_key(b) and all(
+        classify({"name": stack_key(x)}) in POWER_GROUPS - {"power_out"} for x in (a, b))
     names = {}
     for p in pins:
         ns = names.setdefault(str(p.get("num")), [])
-        if all(stack_key(n) != stack_key(p.get("name") or "") for n in ns):
+        if not any(one(n, p.get("name") or "") for n in ns):
             ns.append(p.get("name") or "")
     return [f"pin number {n} is used by {len(ns)} different signals: {', '.join(map(plain, ns))}"
             for n, ns in names.items() if len(ns) > 1]
