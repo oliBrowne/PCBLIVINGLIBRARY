@@ -448,6 +448,8 @@ def read_bom(path, columns=None, rules=None, root=None):
     mixed_fp = "footprint" in col and mixed_header(_hnorm(headers[col["footprint"]]))   # 'Case (Metric / Imp.)'
     mm_inch = metric_fp and _inch_only_codes(df, col["footprint"])   # a 'Package (mm)' column holding 1206 / 0805
     nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
+    left = {j: _column_shapes(df, j, hlen) for f, j in col.items() if f in ("qty", "footprint") and text_src
+            and "value" in col and j < col["value"]}            # Qty / Footprint before Value, in the rows that fit
                                                                   # after Value holds in the rows that fit the header
     lines, skipped = [], 0
     for idx, row in df.iterrows():
@@ -460,7 +462,7 @@ def read_bom(path, columns=None, rules=None, root=None):
                     and (re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's
                          # own unit: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8);
                          or _rated_value(cells[vj], cells[vj + 1]))     # a zener's '3,3V', a fuse's '1,5A' (R-FX10-4)
-                    and _fraction_fits(cells, vj, col, nxt)):
+                    and _fraction_fits(cells, vj, col, nxt, left)):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
                 note.append(f"value {cells[vj]} was split by an unquoted {'' if two_readings(cells[vj]) else 'decimal '}"
                             "comma; read as one cell")              # '4,700p' reads two ways: triage says so
@@ -585,15 +587,22 @@ def _rated_value(whole, frac):
                 whole == "0" and re.fullmatch(r"\d{1,3}\s*[mkK]?[VvAW]", frac))
 
 
-def _fraction_fits(cells, vj, col, shapes=()):
+def _fraction_fits(cells, vj, col, shapes=(), left=None):
     """cells[vj] | cells[vj + 1] ('4' | '7k', '22' | '1') is one value split at its decimal comma, not Value 100 then
     the next column (Qty 2, Footprint 0603, Voltage 50V, Tolerance 1%) with the stray comma further on. It is not when
     the fraction has a '%' (a tolerance, never a value's decimals); when the column after Value holds cells shaped like
     it in the rows that fit the header (shapes: '50V' among '25V', '16V') and the joined reading's cell there does not;
     when a bare number makes a value of more than 3 significant digits (the E-series: 4,7  22,1  4,99); or when a Qty
-    column after Value, read from the joined row, no longer counts the designators."""
+    column after Value, read from the joined row, no longer counts the designators. Nor when the stray comma is left of
+    Value, so a cell there was shifted into Value ('Cap, X7R' | 0603 | 100n): the whole part has a leading zero
+    (0603), a Qty before Value is no number, or a Qty / Footprint before Value is shaped unlike that column's cells in
+    the rows that fit (left: {column: shapes})."""
     frac = cells[vj + 1]
-    if "%" in frac:
+    if "%" in frac or re.fullmatch(r"0\d+", cells[vj]):
+        return False
+    if col.get("qty") is not None and col["qty"] < vj and not re.fullmatch(r"\d+", cells[col["qty"]]):
+        return False
+    if any(sh and _shape(cells[j]) not in sh for j, sh in (left or {}).items()):
         return False
     if _shape(frac) in shapes and _shape(cells[vj + 2] if vj + 2 < len(cells) else "") not in shapes:
         return False
