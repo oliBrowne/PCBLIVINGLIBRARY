@@ -263,7 +263,15 @@ End;
 """.replace("\n", "\r\n")
 
 
-def readme_text(name, libpkg, dblibs, n_sch, n_pcb):
+def readme_text(name, libpkg, dblibs, n_sch, n_pcb, unlinked=()):
+    """unlinked: footprints no symbol in the package links to. Compile Integrated Library takes only the footprints a
+    symbol's footprint model names (AD26, 2026-10-30: the demo's IntLib held 1 of its 3), so those are named."""
+    shown = ", ".join(list(unlinked)[:8]) + (f" (+{len(unlinked) - 8} more)" if len(unlinked) > 8 else "")
+    how = ("Place those parts from the database library (step 1),\n   which pairs each row's symbol and footprint."
+           if dblibs else "Install the .PcbLib files themselves instead\n   (InstallFileLibraries, step 3).")
+    left_out = (f"\n   {len(unlinked)} footprint{'s' if len(unlinked) != 1 else ''} not linked from any symbol here "
+                f"({shown}) {'are' if len(unlinked) != 1 else 'is'} left out of the IntLib:\n"
+                f"   Altium compiles only the footprints a symbol names. {how}") if unlinked else ""
     return f"""{name}: Altium Designer hand-off (written by `ecadlib altium-pkg`)
 
 This folder can be moved or copied anywhere (a network share, another PC): every path in it is relative.
@@ -277,7 +285,7 @@ This folder can be moved or copied anywhere (a network share, another PC): every
 2. Integrated library ({n_sch} symbol and {n_pcb} footprint libraries)
    File > Open... > {libpkg}, then right-click it in the Projects panel > Compile Integrated Library.
    Altium writes "Project Outputs for {Path(libpkg).stem}\\{Path(libpkg).stem}.IntLib"; install it from the Components panel
-   (... > File-based Libraries Preferences > Install).
+   (... > File-based Libraries Preferences > Install).{left_out}
 
 3. Or let the script do 1 and 2: File > Open... > {name}_Install.PrjScr, then File > Run Script... and pick
    InstallDatabaseLibrary, BuildIntegratedLibrary, InstallFileLibraries or UninstallAll.
@@ -399,7 +407,7 @@ def check_released(src, plan, rules=None):
 def check_folder(out, libpkg, dblibs):
     """Problems a user would hit in Altium that can be seen without it. Returns (problems, facts)."""
     out = Path(out)
-    probs, facts = [], {"symbols": 0, "footprints": 0, "links": 0, "dblib_rows": 0}
+    probs, facts = [], {"symbols": 0, "footprints": 0, "links": 0, "dblib_rows": 0, "unlinked_footprints": []}
     from .fsutil import read_ini_text                  # cp1252, or UTF-8 with a BOM (libpkg_bytes)
     docs = [ln.split("=", 1)[1] for ln in read_ini_text(out / libpkg)[0].splitlines() if ln.startswith("DocumentPath=")]
     names = {"SchLib": set(), "PcbLib": set()}
@@ -421,6 +429,7 @@ def check_folder(out, libpkg, dblibs):
         except Exception as e:
             probs.append(f"{d} does not read back: {type(e).__name__}: {e}")
     facts["symbols"], facts["footprints"], facts["links"] = len(names["SchLib"]), len(names["PcbLib"]), len(links)
+    facts["unlinked_footprints"] = sorted(names["PcbLib"] - {fp for _, fp in links})
     for sym, fp in links:
         if fp and fp not in names["PcbLib"]:
             probs.append(f"symbol {sym} links footprint {fp}, which no PcbLib in the package holds")
@@ -573,17 +582,21 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
     more = (AN.UNIT,) if native else ()
     outs = [(libpkg, libpkg_bytes(docs)),                       # all encoded before any is written: a script cp1252
             (f"{name}_Install.PrjScr", script_bytes(f"{name}_Install.PrjScr", prjscr_text(f"{name}_Install.pas", *more))),
-            (f"{name}_Install.pas", script_bytes(f"{name}_Install.pas", install_script(name, dblibs, libpkg, docs, native))),
-            ("ALTIUM_README.txt", readme_text(name, libpkg, dblibs, sum(1 for d in docs if d.lower().endswith(".schlib")),
-                                              sum(1 for d in docs if d.lower().endswith(".pcblib"))).encode("utf-8")
-                                  + (b"\nNOT CHECKED: packaged with --unchecked. These libraries were not compared with "
-                                     b"any released revision of an ecadlib library.\n" if rep.get("unchecked") else b""))]
+            (f"{name}_Install.pas", script_bytes(f"{name}_Install.pas", install_script(name, dblibs, libpkg, docs, native)))]
     for fname, data in outs:                                    # can't hold leaves no half-written package
         p = out / fname
         if not p.is_file() or p.read_bytes() != data:
             p.write_bytes(data)
             written.append(fname)
-    probs, facts = check_folder(out, libpkg, dblibs)
+    probs, facts = check_folder(out, libpkg, dblibs)            # reads the .LibPkg just written; the README names
+    readme = (readme_text(name, libpkg, dblibs, sum(1 for d in docs if d.lower().endswith(".schlib")),   # what it found
+                          sum(1 for d in docs if d.lower().endswith(".pcblib")), facts["unlinked_footprints"]).encode("utf-8")
+              + (b"\nNOT CHECKED: packaged with --unchecked. These libraries were not compared with "
+                 b"any released revision of an ecadlib library.\n" if rep.get("unchecked") else b""))
+    p = out / "ALTIUM_README.txt"
+    if not p.is_file() or p.read_bytes() != readme:
+        p.write_bytes(readme)
+        written.append("ALTIUM_README.txt")
     rep.update(libpkg=libpkg, script=f"{name}_Install.PrjScr", dblibs=dblibs, documents=docs, written=written, native_build=native,
                problems=probs + rep.get("sync_errors", []), **facts)
     (out / "altium_pkg.json").write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
@@ -627,6 +640,12 @@ def main(argv=None):
     t = TM.Term()
     for p in rep["problems"]:
         t.note(M.clean(p), "fix the part in the plan (ecadlib review), then run altium-pkg again")
+    if rep.get("unlinked_footprints"):
+        n = len(rep["unlinked_footprints"])
+        t.note(f"{M.plural(n, 'footprint')} no symbol links to ({', '.join(rep['unlinked_footprints'][:5])}"
+               f"{' ...' if n > 5 else ''}): Altium leaves {'them' if n != 1 else 'it'} out of the compiled IntLib",
+               "place these parts from the database library (InstallDatabaseLibrary), which pairs symbol and footprint"
+               if rep["dblibs"] else "install the .PcbLib files themselves (InstallFileLibraries in the install script)")
     if rep.get("unchecked"):
         t.note("--unchecked: these libraries were packaged as they are, not checked against any released revision",
                "package the library's plan.json (or pass --plan) for a checked package")
