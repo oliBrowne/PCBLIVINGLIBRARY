@@ -63,6 +63,13 @@ def _fake_signin(release, fail=None):
     return signin, seen
 
 
+def _signins_done(s=10):
+    """Wait for this process's background sign-ins to end: one still finishing (the fake storing its tokens, then the
+    cancelled sign-in dropping them) would otherwise write into the next test's home."""
+    for t in [t for t in threading.enumerate() if t.name == "ecadlib-nexar-signin"]:
+        t.join(s)
+
+
 def _wait(pred, s=5):
     end = time.time() + s
     while time.time() < end:
@@ -156,13 +163,14 @@ def test_sign_out_while_a_signin_waits_cancels_it():
             ES.nexar_signout({})
             release.set()                                        # the browser finishes after the sign-out
             assert _wait(lambda: ES.state(d)["altium365"]["signin"]["state"] != "waiting")
-            time.sleep(0.2)
+            _signins_done()                                      # the cancelled sign-in has dropped its tokens
             st = ES.state(d)["altium365"]
             assert not st["signed_in"] and st["signin"]["state"] == "cancelled", st
             assert ES.start_nexar_signin({"client_id": "c", "client_secret": "s"})["waiting"]   # a new one may start
 
 
 def test_signin_routes_need_this_page():
+    _signins_done()
     with _home() as d, _server(d / "ws") as port:
         ES._SIGNIN.clear()
         release = threading.Event()
