@@ -3,7 +3,7 @@ actions in random orders. Each test is a counterexample found by a hypothesis ha
 import threading
 
 from ecadlib import ledger as LG
-from tests.fixtures_lite import lite
+from tests.fixtures_lite import fresh_home, lite
 
 
 @lite
@@ -61,3 +61,30 @@ def test_a_key_stored_by_another_ecadlib_process_meanwhile_is_kept(tmp_path):
         UC._read_for_write = real
     assert other[0].wait(30) == 0
     assert {"MINE", "OTHER"} <= set(UC.stored_names()), UC.stored_names()
+
+
+@lite
+@fresh_home
+def test_a365_a_push_that_ran_meanwhile_keeps_its_claim_on_the_component(tmp_path):
+    """altium365.push read this computer's (and the project's) ecadlib_publishers.json when it started and wrote its
+    copy back at the end: plan B pushing to the same workspace while plan A's push ran lost its claim on the shared
+    component, so A's next change made a new revision of the component B's boards use without B's sign-off."""
+    from tests.test_change_control import FakeA365
+    from tests.test_fix1026_fx15 import _a365_push, _new_land
+    from tests.test_fix1026_fx18 import _two_projects
+    nx = FakeA365()
+    a, b = _two_projects(tmp_path)
+
+    class Meanwhile:                           # B's whole push runs while A's push looks its part up
+        def __getattr__(self, k):
+            return getattr(nx, k)
+
+        def find(self, ws, name):
+            if not hasattr(self, "b"):
+                self.b = _a365_push(b, nx)["RES-0603-10k"]
+            return nx.find(ws, name)
+    assert _a365_push(a, Meanwhile())["RES-0603-10k"].get("adopted")
+    _new_land(tmp_path / "projA/A")
+    r = _a365_push(a, nx)["RES-0603-10k"]
+    assert r["action"] == "skip" and "projB" in r["detail"], r
+    assert len(nx.comps["RES-0603-10k"]["revisions"]) == 1
