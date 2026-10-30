@@ -267,10 +267,11 @@ def readme_text(name, libpkg, dblibs, n_sch, n_pcb, unlinked=()):
     """unlinked: footprints no symbol in the package links to. Compile Integrated Library takes only the footprints a
     symbol's footprint model names (AD26, 2026-10-30: the demo's IntLib held 1 of its 3), so those are named."""
     shown = ", ".join(list(unlinked)[:8]) + (f" (+{len(unlinked) - 8} more)" if len(unlinked) > 8 else "")
+    how = ("Place those parts from the database library (step 1),\n   which pairs each row's symbol and footprint."
+           if dblibs else "Install the .PcbLib files themselves instead\n   (InstallFileLibraries, step 3).")
     left_out = (f"\n   {len(unlinked)} footprint{'s' if len(unlinked) != 1 else ''} not linked from any symbol here "
                 f"({shown}) {'are' if len(unlinked) != 1 else 'is'} left out of the IntLib:\n"
-                f"   Altium compiles only the footprints a symbol names. Place those parts from the database library "
-                f"(step 1),\n   which pairs each row's symbol and footprint.") if unlinked else ""
+                f"   Altium compiles only the footprints a symbol names. {how}") if unlinked else ""
     return f"""{name}: Altium Designer hand-off (written by `ecadlib altium-pkg`)
 
 This folder can be moved or copied anywhere (a network share, another PC): every path in it is relative.
@@ -643,7 +644,8 @@ def main(argv=None):
         n = len(rep["unlinked_footprints"])
         t.note(f"{M.plural(n, 'footprint')} no symbol links to ({', '.join(rep['unlinked_footprints'][:5])}"
                f"{' ...' if n > 5 else ''}): Altium leaves {'them' if n != 1 else 'it'} out of the compiled IntLib",
-               "place these parts from the database library (InstallDatabaseLibrary), which pairs symbol and footprint")
+               "place these parts from the database library (InstallDatabaseLibrary), which pairs symbol and footprint"
+               if rep["dblibs"] else "install the .PcbLib files themselves (InstallFileLibraries in the install script)")
     if rep.get("unchecked"):
         t.note("--unchecked: these libraries were packaged as they are, not checked against any released revision",
                "package the library's plan.json (or pass --plan) for a checked package")
