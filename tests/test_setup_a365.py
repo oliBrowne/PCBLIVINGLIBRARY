@@ -167,10 +167,11 @@ def test_sign_out_while_a_signin_waits_cancels_it():
             st = ES.state(d)["altium365"]
             assert not st["signed_in"] and st["signin"]["state"] == "cancelled", st
             assert ES.start_nexar_signin({"client_id": "c", "client_secret": "s"})["waiting"]   # a new one may start
+            ES.nexar_signout({})                                 # and ends here, in this home and under the fake:
+            _signins_done()                                      # left running it wrote another test's keys.json
 
 
 def test_signin_routes_need_this_page():
-    _signins_done()
     with _home() as d, _server(d / "ws") as port:
         ES._SIGNIN.clear()
         release = threading.Event()
