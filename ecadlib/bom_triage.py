@@ -5,7 +5,6 @@ and what needs a footprint generated.
         -o out/triage [--offline] [--providers easyeda,jlcpcb_search,digikey,...]
 """
 import argparse, csv, difflib, json, re, sys, unicodedata
-from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -453,23 +452,21 @@ def read_bom(path, columns=None, rules=None, root=None):
     left = {j: _column_shapes(df, j, hlen) for f, j in col.items() if f == "qty" and text_src
             and "value" in col and j < col["value"]}            # a Qty before Value, in the rows that fit (a package
                                                                   # only one row has is no evidence of a shift)
-    data_w = Counter(widths[hdr_row + (2 if two else 1):]) if widths else Counter()
-    wbase = max(hwidth, hlen, max(data_w, key=lambda w: (data_w[w], -w), default=0))   # a ',' ending every data row
-                                                                  # (a script's BOM) is that BOM's width, no shift
     lines, skipped = [], 0
     for idx, row in df.iterrows():
         cells = [str(x).strip() for x in row]
         note, shifted = [], False
         n = max((j + 1 for j, c in enumerate(cells) if c), default=0)
-        if text_src and widths and widths[idx] > wbase:            # 'R1,1,4,7k,X,0603,': the last cell empty, the
-            n = max(n, hlen + widths[idx] - wbase)                 # row is still a cell wider than the header
+        vj = col.get("value")
+        split = (vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
+                 and (re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's own
+                      # unit: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8);
+                      or _rated_value(cells[vj], cells[vj + 1])))     # a zener's '3,3V', a fuse's '1,5A' (R-FX10-4)
+        if text_src and split and widths and widths[idx] > max(hwidth, hlen):   # 'R1,1,4,7k,X,0603,': the last
+            n = max(n, hlen + widths[idx] - max(hwidth, hlen))     # cell empty, the row still a cell wider than the
+                                                                  # header (a bare trailing ',' splits no value)
         if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
-            vj = col.get("value")
-            if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
-                    and (re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's
-                         # own unit: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8);
-                         or _rated_value(cells[vj], cells[vj + 1]))     # a zener's '3,3V', a fuse's '1,5A' (R-FX10-4)
-                    and _fraction_fits(cells, vj, col, nxt, left)):
+            if n == hlen + 1 and split and _fraction_fits(cells, vj, col, nxt, left):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
                 note.append(f"value {cells[vj]} was split by an unquoted {'' if two_readings(cells[vj]) else 'decimal '}"
                             "comma; read as one cell")              # '4,700p' reads two ways: triage says so
@@ -619,7 +616,7 @@ def _fraction_fits(cells, vj, col, shapes=(), left=None):
     q, ref = cells[qj + (qj > vj)], cells[dj + (dj > vj)] if dj is not None else ""
     if not q and qj < vj:                                # a blank Qty before Value: nothing to check
         return True
-    return bool(re.fullmatch(r"\d+", q)) and (not ref or count_refs(ref) == int(q))
+    return bool(re.fullmatch(r"\d+(?:\.0*)?", q)) and (not ref or count_refs(ref) == int(float(q)))   # '1.0': Excel
 
 
 def header_row(raw, columns=None):

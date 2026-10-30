@@ -117,3 +117,21 @@ def test_decimal_comma_with_a_package_only_its_row_has_still_joined(tmp_path):
     other rows' is weak evidence of a shift (the Qty count and a leading zero are the strong ones); '3,3V' is one value."""
     got = _read(tmp_path, "Footprint,Designator,Value,MPN\n0603,R1,10k,RC0603A\nSOD-123,D1,3,3V,BZT52C3V3\n")
     assert got["D1"]["value"] == "3,3V" and got["D1"]["mpn"] == "BZT52C3V3" and not got["D1"].get("bom_hold"), got
+
+
+@lite
+def test_decimal_comma_on_the_only_row_with_an_empty_last_column(tmp_path):
+    """Greptile (#216): with that row alone (so its width is the BOM's usual one), 'R1,1,4,7k,RC0603A,0603,' was read
+    as Value 4, MPN '7k' again: a row a cell wider than the header whose Value looks split is joined or held."""
+    got = _read(tmp_path, "Designator,Qty,Value,MPN,Footprint,Description\nR1,1,4,7k,RC0603A,0603,\n")
+    r1 = got["R1"]
+    assert r1["value"] == "4,7k" and r1["mpn"] == "RC0603A" or r1.get("bom_hold"), r1
+    assert r1.get("mpn") != "7k", r1
+
+
+@lite
+def test_decimal_comma_with_a_qty_written_1_0_before_value_still_joined(tmp_path):
+    """Greptile (#216): a Qty before Value written '1.0' (a spreadsheet's number) failed the digits-only count check:
+    the row was held instead of '4,7k' joined."""
+    got = _read(tmp_path, "Designator,Qty,Value,MPN,Footprint\nR1,1.0,4,7k,RC0603A,0603\nR2,1.0,10k,RC0603B,0603\n")
+    assert got["R1"]["value"] == "4,7k" and got["R1"]["mpn"] == "RC0603A" and not got["R1"].get("bom_hold"), got["R1"]
