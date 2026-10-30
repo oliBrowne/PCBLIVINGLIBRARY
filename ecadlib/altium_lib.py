@@ -1132,6 +1132,11 @@ def ole_open(path):
     the mini stream) fits in the file, so no chain is followed further than the file is long."""
     import olefile, os
     limit = os.path.getsize(path)
+    with open(path, "rb") as f:                   # MS-CFB 2.2: 512 / 4096-byte sectors, 64-byte mini sectors; olefile
+        head = f.read(34)                         # only warns, then reads a 2**34-byte sector (MemoryError)
+    if head[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" and struct.unpack_from("<HH", head, 30) not in ((9, 6), (12, 6)):
+        raise ValueError(f"{Path(path).name}: damaged file: sector size {struct.unpack_from('<H', head, 30)[0]} / mini "
+                         f"sector size {struct.unpack_from('<H', head, 32)[0]} in the header (MS-CFB has 9 or 12 / 6)")
     o = olefile.OleFileIO(str(path))
     try:
         for e in o.direntries:
