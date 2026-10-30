@@ -349,7 +349,9 @@ def fp_hash(geom):
 
 
 def _pin_name(s):
-    return re.sub(r"\\", "", str(s or "")).strip().upper().lstrip("~") or ""
+    """Case folded; an overbar is kept as active low (fingerprint.canon_pin_name): 74HC125 ~{1OE} is not 74HC126 1OE."""
+    from .fingerprint import canon_pin_name
+    return canon_pin_name(s)
 
 
 def sym_pinout(sym):
