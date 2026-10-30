@@ -99,3 +99,21 @@ def test_stray_comma_shifting_a_footprint_into_qty_is_held(tmp_path):
     r2 = got.get("R2") or next(ln for ln in got.values() if ln.get("description") == "Cap")
     assert r2.get("bom_hold") and r2.get("value") != "1,10k", r2
     assert got["R1"]["value"] == "4,7k" and got["R1"]["mpn"] == "AA000", got
+
+
+@lite
+def test_data_rows_with_one_trailing_comma_the_header_lacks_still_read(tmp_path):
+    """Review: a script-written BOM ending every data row in ',' (the header not): each row a cell wider than the
+    header, but no value is split, so nothing was shifted; every row was held, its MPN and footprint dropped."""
+    got = _read(tmp_path, "Designator,Qty,Value,Footprint,MPN\nR1,1,10k,0603,RC0603FR-0710KL,\n"
+                          "C1,1,100n,0402,CL05B104KO5NNNC,\n")
+    assert not got["R1"].get("bom_hold") and got["R1"]["mpn"] == "RC0603FR-0710KL", got["R1"]
+    assert got["C1"]["footprint"] == "0402" and got["C1"]["value"] == "100n", got["C1"]
+
+
+@lite
+def test_decimal_comma_with_a_package_only_its_row_has_still_joined(tmp_path):
+    """Review: Footprint before Value, and the zener's SOD-123 the only one in the BOM: a footprint shaped unlike the
+    other rows' is weak evidence of a shift (the Qty count and a leading zero are the strong ones); '3,3V' is one value."""
+    got = _read(tmp_path, "Footprint,Designator,Value,MPN\n0603,R1,10k,RC0603A\nSOD-123,D1,3,3V,BZT52C3V3\n")
+    assert got["D1"]["value"] == "3,3V" and got["D1"]["mpn"] == "BZT52C3V3" and not got["D1"].get("bom_hold"), got

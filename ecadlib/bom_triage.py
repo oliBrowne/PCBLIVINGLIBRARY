@@ -5,6 +5,7 @@ and what needs a footprint generated.
         -o out/triage [--offline] [--providers easyeda,jlcpcb_search,digikey,...]
 """
 import argparse, csv, difflib, json, re, sys, unicodedata
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -449,15 +450,19 @@ def read_bom(path, columns=None, rules=None, root=None):
     mm_inch = metric_fp and _inch_only_codes(df, col["footprint"])   # a 'Package (mm)' column holding 1206 / 0805
     nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
                                                                   # after Value holds in the rows that fit the header
-    left = {j: _column_shapes(df, j, hlen) for f, j in col.items() if f in ("qty", "footprint") and text_src
-            and "value" in col and j < col["value"]}            # Qty / Footprint before Value, in the rows that fit
+    left = {j: _column_shapes(df, j, hlen) for f, j in col.items() if f == "qty" and text_src
+            and "value" in col and j < col["value"]}            # a Qty before Value, in the rows that fit (a package
+                                                                  # only one row has is no evidence of a shift)
+    data_w = Counter(widths[hdr_row + (2 if two else 1):]) if widths else Counter()
+    wbase = max(hwidth, hlen, max(data_w, key=lambda w: (data_w[w], -w), default=0))   # a ',' ending every data row
+                                                                  # (a script's BOM) is that BOM's width, no shift
     lines, skipped = [], 0
     for idx, row in df.iterrows():
         cells = [str(x).strip() for x in row]
         note, shifted = [], False
         n = max((j + 1 for j, c in enumerate(cells) if c), default=0)
-        if text_src and widths and widths[idx] > max(hwidth, hlen):   # 'R1,1,4,7k,X,0603,': the last cell empty,
-            n = max(n, hlen + widths[idx] - max(hwidth, hlen))     # the row is still a cell wider than the header
+        if text_src and widths and widths[idx] > wbase:            # 'R1,1,4,7k,X,0603,': the last cell empty, the
+            n = max(n, hlen + widths[idx] - wbase)                 # row is still a cell wider than the header
         if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
@@ -597,7 +602,7 @@ def _fraction_fits(cells, vj, col, shapes=(), left=None):
     when a bare number makes a value of more than 3 significant digits (the E-series: 4,7  22,1  4,99); or when a Qty
     column after Value, read from the joined row, no longer counts the designators. Nor when the stray comma is left of
     Value, so a cell there was shifted into Value ('Cap, X7R' | 0603 | 100n): the whole part has a leading zero
-    (0603), a Qty / Footprint before Value is shaped unlike that column's cells in the rows that fit (left: {column:
+    (0603), a Qty before Value is shaped unlike that column's cells in the rows that fit (left: {column:
     shapes}), or a Qty before Value does not count the designators either."""
     frac = cells[vj + 1]
     if "%" in frac or re.fullmatch(r"0\d+", cells[vj]):

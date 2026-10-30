@@ -77,3 +77,12 @@ if __name__ == "__main__":
     import sys
     from tests import run_all
     sys.exit(run_all.main(["test_fuzz1030_symbols"]))
+
+
+def test_shared_numbers_keeps_suffixed_supply_instances_one_net():
+    """Review: VIN + VIN_2, VCC + VCC_3, EPAD + EPAD_2 on one pad are one supply's (or the pad's) instances, as GND /
+    GND_2 are; classifying the suffixed name ('VIN_2' -> other) called them a short and the release check held them."""
+    from ecadlib.symbol_layout import shared_numbers
+    for a, b in (("VIN", "VIN_2"), ("VIN_1", "VIN_2"), ("VCC", "VCC_3"), ("EPAD", "EPAD_2"), ("GND", "GND_2")):
+        assert shared_numbers([{"num": "5", "name": a}, {"num": "5", "name": b}]) == [], (a, b)
+    assert shared_numbers([{"num": "5", "name": "IN_1"}, {"num": "5", "name": "IN_2"}])

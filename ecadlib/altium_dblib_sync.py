@@ -569,6 +569,9 @@ def _released_source(lg, it, src, kind, stage, base, staged):
     return f, note
 
 
+SYNC_WAIT = 600                               # seconds a sync waits for another one into the same DbLib folder
+
+
 def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=None, svn_url=None,
          dry_run=False, base=None, runner=run_cmd, which=shutil.which, rules=None, overwrite_edits=False,
          forget_missing=False):
@@ -592,7 +595,10 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     from .fsutil import plan_lock
     with CG.publishing(lib_dir), contextlib.ExitStack() as held, \
             tempfile.TemporaryDirectory(prefix="ecadlib-dblib-") as stage:
-        hold = lambda: held.enter_context(plan_lock(Path(target_dir) / ".ecadlib", name="sync.lock"))
+        def hold():
+            if not held.enter_context(plan_lock(Path(target_dir) / ".ecadlib", name="sync.lock", timeout=SYNC_WAIT)):
+                raise ValueError(f"{target_dir}: another sync into this DbLib folder is running (waited {SYNC_WAIT:g} s"
+                                 " for .ecadlib/sync.lock); wait for it to finish and run again")
         return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
                      overwrite_edits, stage=stage, forget_missing=forget_missing, hold=hold)
 
