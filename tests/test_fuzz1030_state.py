@@ -29,3 +29,35 @@ def test_usage_index_keeps_every_project_when_two_scans_record_at_once(tmp_path)
     finally:
         LG.load_usage = real
     assert sorted(LG.load_usage(tmp_path)["projects"]) == ["proj1", "proj2"], LG.load_usage(tmp_path)
+
+
+@lite
+def test_a_key_stored_by_another_ecadlib_process_meanwhile_is_kept(tmp_path):
+    """userconfig.set_key read keys.json, changed it and wrote it back under a lock of this process only: a key another
+    ecadlib process stored meanwhile (the web UI's setup page while the MCP server refreshed the Altium 365 sign-in,
+    which rotates its refresh token) was dropped, silently. Here the other process stores OTHER between our read and
+    our write; once the lock covers processes, it waits for our write instead."""
+    import os, subprocess, sys
+    from pathlib import Path
+    from ecadlib import userconfig as UC
+    root = str(Path(__file__).resolve().parents[1])
+    real, other = UC._read_for_write, []
+
+    def read(path):
+        data = real(path)
+        if not other:                          # the other process, started after our read
+            p = subprocess.Popen([sys.executable, "-c", "from ecadlib import userconfig as UC; UC.set_key('OTHER', 'x')"],
+                                 cwd=root, env=dict(os.environ, PYTHONPATH=root))
+            other.append(p)
+            try:
+                p.wait(5)                      # unfixed: it writes now, and our write below drops it
+            except subprocess.TimeoutExpired:  # fixed: it waits for our lock
+                pass
+        return data
+    UC._read_for_write = read
+    try:
+        UC.set_key("MINE", "y")
+    finally:
+        UC._read_for_write = real
+    assert other[0].wait(30) == 0
+    assert {"MINE", "OTHER"} <= set(UC.stored_names()), UC.stored_names()
