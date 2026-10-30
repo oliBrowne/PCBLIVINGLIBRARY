@@ -28,6 +28,22 @@ def test_dedupe_symbol_keeps_overbar_apart():
     assert DD.sym_hash(po["a"]) == DD.sym_hash(po["c"])          # the same symbol twice is still one
 
 
+def test_dedupe_symbol_keeps_pin_types_apart():
+    """dedupe compared pin numbers and names only: a 74HC04 (push-pull outputs) and a 74HC05 (open-drain outputs) were
+    one symbol, so --merge gave the 74HC05 output pins and ERC flagged its wired-OR (or missed two driven outputs)."""
+    from ecadlib import altium_lib as AL, dedupe as DD
+    def hex_inv(out):
+        pins = []
+        for ch, (a, y) in enumerate(((1, 2), (3, 4), (5, 6), (9, 8), (11, 10), (13, 12)), 1):
+            pins += [{"num": str(a), "name": f"{ch}A", "type": "input"}, {"num": str(y), "name": f"{ch}Y", "type": out}]
+        return pins + [{"num": "7", "name": "GND", "type": "power"}, {"num": "14", "name": "VCC", "type": "power"}]
+    with tempfile.TemporaryDirectory() as d:
+        AL.write_schlib(Path(d, "a.SchLib"), [AL.ic_symbol("74HC04", hex_inv("output"))])
+        AL.write_schlib(Path(d, "b.SchLib"), [AL.ic_symbol("74HC05", hex_inv("open_collector"))])
+        po = {n: DD.sym_pinout(AL.read_schlib(Path(d, f"{n}.SchLib"))[1][0]) for n in "ab"}
+    assert DD.sym_hash(po["a"]) != DD.sym_hash(po["b"])
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all

@@ -18,8 +18,8 @@ read from <plan dir>/a365_state.json when present):
              is reported as a conflict. Footprints with the same geometry are still kept apart when the parts using
              them are of different kinds (their plan folders: an inductor is never put on an LED's footprint, a
              resistor never on a capacitor's 3D body) or their 3D bodies differ in height by more than 0.05 mm.
-  symbol     identical symbol pinout under different symbol names: designator prefix plus (pin number, pin name)
-             for every pin. Symbols with fewer than symbol_min_pins (default 3) pins are not compared: every
+  symbol     identical symbol pinout under different symbol names: designator prefix plus (pin number, pin name,
+             electrical type) for every pin. Symbols with fewer than symbol_min_pins (default 3) pins are not compared: every
              resistor and capacitor would match.
 Each group gets a recommended keeper: --keep wins, then an Altium 365 component, then an existing library entry,
 then the one most plan items use, a plan item that is ready, a part from the official KiCad library, the shortest
@@ -355,8 +355,9 @@ def _pin_name(s):
 
 
 def sym_pinout(sym):
-    """(designator prefix, sorted (number, name)) of an altium_lib read_schlib entry."""
-    pins = sorted({(r["num"], _pin_name(r.get("name"))) for r in sym["records"] if r.get("RECORD") == "2"})
+    """(designator prefix, sorted (number, name, electrical type)) of an altium_lib read_schlib entry: a 74HC05's
+    open-drain outputs are not a 74HC04's."""
+    pins = sorted({(r["num"], _pin_name(r.get("name")), r.get("etype", 4)) for r in sym["records"] if r.get("RECORD") == "2"})
     des = next((r.get("TEXT", "") for r in sym["records"] if r.get("RECORD") == "34"), "")
     return re.match(r"[A-Za-z]*", des).group(0).upper() + _polarity(sym), pins
 
