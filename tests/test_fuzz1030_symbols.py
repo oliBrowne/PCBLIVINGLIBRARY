@@ -44,6 +44,23 @@ def test_dedupe_symbol_keeps_pin_types_apart():
     assert DD.sym_hash(po["a"]) != DD.sym_hash(po["b"])
 
 
+def test_fmt_value_keeps_r_notation_and_other_units_on_caps_and_inductors():
+    """fmt_value read the ohm letter R on an inductor or capacitor as the decimal point of the base unit: a '4R7'
+    inductor (maker code for 4.7 uH) was named 4.7H, a '4R7' capacitor (4.7 pF) 4.7F; a '10uH' value on a capacitor
+    line was renamed 10uF. A value in another part's unit is kept as written."""
+    from ecadlib import rules as RU
+    for raw, cat in (("4R7", "Inductors"), ("10R", "Inductors"), ("4R7", "Capacitors"), ("0R5", "Capacitors"),
+                     ("10uH", "Capacitors"), ("100nF", "Inductors"), ("10uF", "Resistors"), ("10kΩ", "Capacitors")):
+        for style in ("si_unit", "rkm", "si"):
+            assert RU.fmt_value(raw, cat, style) == raw, (raw, cat, style, RU.fmt_value(raw, cat, style))
+    # values in the part's own unit, or with none stated, are restyled as before
+    assert RU.fmt_value("4R7", "Resistors", "si_unit") == "4.7"
+    assert RU.fmt_value("4.7k Ohm", "Resistors", "rkm") == "4K7"
+    assert RU.fmt_value("4u7", "Inductors", "si_unit") == "4.7uH"
+    assert RU.fmt_value("100N", "Capacitors", "si_unit") == "100nF"
+    assert RU.fmt_value("0.1uF 50V", "Capacitors", "rkm_lower") == "100n"
+
+
 if __name__ == "__main__":
     import sys
     from tests import run_all
