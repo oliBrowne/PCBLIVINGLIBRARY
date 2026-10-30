@@ -69,3 +69,33 @@ def test_decimal_comma_value_still_joined(tmp_path):
     """The real case stays: an unquoted '4,7k' in the Value column is one value."""
     got = _read(tmp_path, "Designator,Qty,Footprint,Value,MPN\nR1,1,0603,4,7k,RC0603A\nR2,1,0603,10k,RC0603B\n")
     assert got["R1"]["value"] == "4,7k" and got["R1"]["mpn"] == "RC0603A" and not got["R1"].get("bom_hold"), got
+
+
+@lite
+def test_decimal_comma_value_with_empty_last_column(tmp_path):
+    """'R1,1,4,7k,RC0603A,0603,' (Description empty): the stray comma went unseen (the row's last cell is empty, so it
+    looked as wide as the header): Value 4, MPN '7k', Footprint 'RC0603A'."""
+    got = _read(tmp_path, "Designator,Qty,Value,MPN,Footprint,Description\nR1,1,4,7k,RC0603A,0603,\n"
+                          "R2,1,10k,RC0603B,0603,Resistor\n")
+    r1 = got["R1"]
+    assert r1["value"] == "4,7k" and r1["mpn"] == "RC0603A" and r1["footprint"] == "0603" or r1.get("bom_hold"), r1
+    assert r1.get("mpn") != "7k", r1
+    assert got["R2"]["mpn"] == "RC0603B" and not got["R2"].get("bom_hold")
+
+
+@lite
+def test_trailing_empty_cells_on_every_row_are_not_a_stray_comma(tmp_path):
+    """Excel pads every row (header too) to the widest one: those trailing empty cells are no stray comma."""
+    got = _read(tmp_path, "Designator,Qty,Value,MPN,,\nR1,1,10k,RC0603A,,\nR2,1,4k7,RC0603B,,\n")
+    assert all(not ln.get("bom_hold") for ln in got.values()) and got["R1"]["mpn"] == "RC0603A", got
+
+
+@lite
+def test_stray_comma_shifting_a_footprint_into_qty_is_held(tmp_path):
+    """'Cap, X7R' before a Qty / Value pair: the footprint 0603 shifted into Qty (a number, so it passed), the Qty 1 into
+    Value: '1,10k' (1.1k), MPN 'X7R'. Qty 0603 does not count the one designator R2."""
+    got = _read(tmp_path, "Description,MPN,Footprint,Qty,Value,Designator\nResistor,AA000,0603,1,4,7k,R1\n"
+                          "Cap, X7R,AB000,0603,1,10k,R2\n")
+    r2 = got.get("R2") or next(ln for ln in got.values() if ln.get("description") == "Cap")
+    assert r2.get("bom_hold") and r2.get("value") != "1,10k", r2
+    assert got["R1"]["value"] == "4,7k" and got["R1"]["mpn"] == "AA000", got

@@ -448,14 +448,16 @@ def read_bom(path, columns=None, rules=None, root=None):
     mixed_fp = "footprint" in col and mixed_header(_hnorm(headers[col["footprint"]]))   # 'Case (Metric / Imp.)'
     mm_inch = metric_fp and _inch_only_codes(df, col["footprint"])   # a 'Package (mm)' column holding 1206 / 0805
     nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
+                                                                  # after Value holds in the rows that fit the header
     left = {j: _column_shapes(df, j, hlen) for f, j in col.items() if f in ("qty", "footprint") and text_src
             and "value" in col and j < col["value"]}            # Qty / Footprint before Value, in the rows that fit
-                                                                  # after Value holds in the rows that fit the header
     lines, skipped = [], 0
     for idx, row in df.iterrows():
         cells = [str(x).strip() for x in row]
         note, shifted = [], False
         n = max((j + 1 for j, c in enumerate(cells) if c), default=0)
+        if text_src and widths and widths[idx] > max(hwidth, hlen):   # 'R1,1,4,7k,X,0603,': the last cell empty,
+            n = max(n, hlen + widths[idx] - max(hwidth, hlen))     # the row is still a cell wider than the header
         if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
             vj = col.get("value")
             if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
@@ -595,12 +597,10 @@ def _fraction_fits(cells, vj, col, shapes=(), left=None):
     when a bare number makes a value of more than 3 significant digits (the E-series: 4,7  22,1  4,99); or when a Qty
     column after Value, read from the joined row, no longer counts the designators. Nor when the stray comma is left of
     Value, so a cell there was shifted into Value ('Cap, X7R' | 0603 | 100n): the whole part has a leading zero
-    (0603), a Qty before Value is no number, or a Qty / Footprint before Value is shaped unlike that column's cells in
-    the rows that fit (left: {column: shapes})."""
+    (0603), a Qty / Footprint before Value is shaped unlike that column's cells in the rows that fit (left: {column:
+    shapes}), or a Qty before Value does not count the designators either."""
     frac = cells[vj + 1]
     if "%" in frac or re.fullmatch(r"0\d+", cells[vj]):
-        return False
-    if col.get("qty") is not None and col["qty"] < vj and not re.fullmatch(r"\d+", cells[col["qty"]]):
         return False
     if any(sh and _shape(cells[j]) not in sh for j, sh in (left or {}).items()):
         return False
@@ -609,9 +609,11 @@ def _fraction_fits(cells, vj, col, shapes=(), left=None):
     if not re.search(r"[^\d\s]", frac) and len((cells[vj] + re.sub(r"\D", "", frac)).lstrip("0")) > 3:
         return False
     qj, dj = col.get("qty"), col.get("designator")
-    if qj is None or qj < vj:
+    if qj is None:
         return True
-    q, ref = cells[qj + 1], cells[dj + (dj > vj)] if dj is not None else ""
+    q, ref = cells[qj + (qj > vj)], cells[dj + (dj > vj)] if dj is not None else ""
+    if not q and qj < vj:                                # a blank Qty before Value: nothing to check
+        return True
     return bool(re.fullmatch(r"\d+", q)) and (not ref or count_refs(ref) == int(q))
 
 
