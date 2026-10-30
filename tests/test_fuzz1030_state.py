@@ -88,3 +88,32 @@ def test_a365_a_push_that_ran_meanwhile_keeps_its_claim_on_the_component(tmp_pat
     r = _a365_push(a, nx)["RES-0603-10k"]
     assert r["action"] == "skip" and "projB" in r["detail"], r
     assert len(nx.comps["RES-0603-10k"]["revisions"]) == 1
+
+
+@lite
+def test_dblib_two_plans_syncing_into_one_library_at_once_keep_both_rows(tmp_path):
+    """dblib-sync held its own plan folder's library lock only: board B syncing into the shared DbLib folder while
+    board A's sync ran (after A read the table and ecadlib_sync.json) was overwritten by A's copy: B's released row
+    vanished from the DbLib with no message."""
+    from ecadlib import altium_dblib_sync as S
+    from tests.test_fix1026_pubtgt import _acts, _plan_folder, _res, _rows
+    lib = tmp_path / "dblib"
+    a = _plan_folder(tmp_path / "A", [_res("RES-0603-10k", "RC0603FR-0710KL")])
+    b = _plan_folder(tmp_path / "B", [_res("RES-0603-1k", "RC0603FR-071KL")])
+    real, done = S.read_tables, []
+
+    def read(*a_, **k):                        # A has read the state: B's whole sync runs now (in another thread, as
+        out = real(*a_, **k)                   # another process would; it waits if the folder is locked)
+        if not done:
+            done.append(threading.Thread(target=lambda: done.append(S.sync(b, lib))))
+            done[0].start()
+            done[0].join(5)
+        return out
+    S.read_tables = read
+    try:
+        assert _acts(S.sync(a, lib)) == {"RES-0603-10k": "added"}
+    finally:
+        S.read_tables = real
+    done[0].join(60)
+    assert _acts(done[1]) == {"RES-0603-1k": "added"}, done[1]["results"]
+    assert set(_rows(lib)) == {"RES-0603-10k", "RES-0603-1k"}, set(_rows(lib))

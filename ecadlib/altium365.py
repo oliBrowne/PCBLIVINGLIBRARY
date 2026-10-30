@@ -22,7 +22,7 @@ before it uploads anything, and a part that fails it is skipped as held (`ecadli
 Auth: NEXAR_TOKEN = a user access token with scopes openid, user.access, design.domain
 (the token generated in the Nexar portal has them). Supply-only client-credential tokens
 cannot see workspaces."""
-import argparse, contextlib, json, os, sys
+import argparse, json, os, sys
 from pathlib import Path
 
 import pandas as pd
@@ -1116,7 +1116,8 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                     **({"models": r["models"]} if r.get("models") else {})}
         CG.record_publish(folder, items, target, ok=lambda i: i["name"] in ok, detail=detail)
         if claims is not None:                 # this plan folder pushed them here (shared with other plan folders):
-            with _claims_lock():               # read again, so a push of another plan meanwhile keeps its claims
+            from .fsutil import computer_lock  # read again, so a push of another plan meanwhile keeps its claims
+            with computer_lock("publishers"):
                 claims = load_claims()
                 claims.forget(gone)
                 before = json.dumps([claims.claims, claims.plans], sort_keys=True)
@@ -1128,24 +1129,6 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
                         "detail": "that plan folder is gone (--forget-missing-plans): its claim on the parts it pushed "
                                   "here was dropped"})
     return results
-
-
-@contextlib.contextmanager
-def _claims_lock():
-    """The read-change-write of ecadlib_publishers.json: one push at a time on this computer (a file lock in the
-    settings folder; a read-only one: no lock)."""
-    from .fsutil import plan_lock
-    from .userconfig import config_dir
-    try:
-        cm = plan_lock(config_dir(), name=".publishers.lock")
-        cm.__enter__()
-    except OSError:
-        cm = None
-    try:
-        yield
-    finally:
-        if cm is not None:
-            cm.__exit__(None, None, None)
 
 
 PUSHED = ("release", "update_parameters", "up_to_date", "new_revision")

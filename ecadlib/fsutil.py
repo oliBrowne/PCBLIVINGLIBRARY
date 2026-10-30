@@ -192,6 +192,24 @@ def plan_lock(workspace_root, wait=True, timeout=None, name="plan.lock"):
         f.close()
 
 
+@contextlib.contextmanager
+def computer_lock(name):
+    """One writer at a time on this computer for a file several plan folders share (this computer's and the project's
+    ecadlib_publishers.json): a file lock .<name>.lock in the ecadlib settings folder. A settings folder that cannot
+    be written: no lock."""
+    from .userconfig import config_dir
+    cm = plan_lock(config_dir(), name=f".{re.sub(r'[^A-Za-z0-9_.-]', '_', name)}.lock")
+    try:
+        cm.__enter__()
+    except OSError:
+        cm = None
+    try:
+        yield
+    finally:
+        if cm is not None:
+            cm.__exit__(None, None, None)
+
+
 def _win_lock(msvcrt, f, wait, poll=0.5):
     """msvcrt's blocking LK_LOCK gives up with OSError after 10 one-second tries: wait by polling the non-blocking lock
     instead."""
