@@ -2,7 +2,7 @@
 
     ecadlib kicad-pcm out/librarian/plan.json --out out/pcm [--name mylib] [--kicad 8] [--pkg-version 1.2.0]
     ecadlib kicad-pcm out/kicad --out out/pcm --name mylib       # an existing `ecadlib kicad-export` folder
-        [--identifier com.example.mylib] [--prefix PCM_] [--license CC-BY-SA-4.0] [--author NAME]
+        [--identifier com.example.mylib] [--prefix PCM_] [--license LICENSE] [--author NAME]
         [--base-url https://example.com/kicad]   # also write repository.json + packages.json for a custom repository
         [--schema pcm.v1.schema.json] [--json]
 
@@ -61,6 +61,9 @@ LICENSES = ("public-domain", "Apache", "Apache-1.0", "Apache-2.0", "Artistic", "
             "LPPL-1.0", "LPPL-1.1", "LPPL-1.2", "LPPL-1.3", "MPL-1.1", "Perl", "Python-2.0", "QPL-1.0", "W3C", "Zlib",
             "Zope", "Zope-1.0", "Zope-1.1", "Zope-2.0", "Zope-2.1", "CERN-OHL", "WTFPL", "Unlicense", "open-source",
             "unrestricted")                                          # pcm.v1.schema.json's License enum (KiCad master)
+KICAD_LICENSE = "CC-BY-SA-4.0"          # the KiCad libraries' licence: the default only for a library holding their content
+NEUTRAL_LICENSE = "open-source"         # otherwise: KiCad's PCM list has no "see NOTICE"; this one names no licence's terms
+KICAD_MARK = b"gitlab.com/kicad/libraries"     # in the KiCad credit field and NOTICE.txt of KiCad library content
 SCHEMA_PATHS = ("/usr/share/kicad/schemas/pcm.v1.schema.json", "/usr/local/share/kicad/schemas/pcm.v1.schema.json",
                 "/Applications/KiCad/KiCad.app/Contents/SharedSupport/schemas/pcm.v1.schema.json",
                 "C:/Program Files/KiCad/9.0/share/kicad/schemas/pcm.v1.schema.json",
@@ -104,10 +107,12 @@ def reuse_identifier(out, lib):
 
 # ---------------------------------------------------------------- file transforms
 def footprint_text(text, lib, var, cid, kicad):
-    """kicad_export's footprint -> PCM install paths (and KiCad 7 syntax for --kicad 7). A model path written from a
-    project folder above the library (${KIPRJMOD}/ecadlib/<lib>.3dshapes, the KiCad window's library) too."""
-    text = re.sub(r'\(model "\$\{KIPRJMOD\}/(?:[^"]*/)?' + re.escape(lib) + r'\.3dshapes/',
-                  f'(model "${{{var}}}/3dmodels/{cid}/{lib}.3dshapes/', text)
+    """kicad_export's footprint -> PCM install paths (and KiCad 7 syntax for --kicad 7). Any model path into the
+    library's own <lib>.3dshapes/ folder: ${KIPRJMOD}/<lib>.3dshapes, one written from a project folder above the
+    library (${KIPRJMOD}/ecadlib/<lib>.3dshapes, the KiCad window's library) and the absolute folder kicad_export
+    writes when no relative path reaches it (another drive: D:\\libs\\<lib>.3dshapes\\, either slash)."""
+    text = re.sub(r'\(model "(?:[^"]*[/\\])?' + re.escape(lib) + r'\.3dshapes[/\\]+',
+                  lambda m: f'(model "${{{var}}}/3dmodels/{cid}/{lib}.3dshapes/', text)
     return footprint_kicad7(text) if int(kicad) < 8 else text
 
 
@@ -403,20 +408,22 @@ def content_hash(files):
     return h.hexdigest()
 
 
-def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_="CC-BY-SA-4.0",
+def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefix="PCM_", license_=None,
           author="ecadlib user", description=None, homepage=None, base_url=None, include_held=False, http=None,
           offline=False, cache="out/http_cache", schema=None, today=None, log=print, unchecked=False, warn=None,
           take_over=False):
     """Build the PCM package from a plan.json or a kicad-export folder into `out`; returns the report dict.
     name: with a plan, the library name to export it as (None: 'ecadlib'); with a folder, the library to package
     (None: the folder's only one). unchecked: package a KiCad folder ecadlib did not export (no kicad_export.json) as it is; the package's NOTICE.txt
-    and the report say it was not checked. warn: where warnings go (default log; -q silences log, not them)."""
+    and the report say it was not checked. warn: where warnings go (default log; -q silences log, not them).
+    license_: None -> CC-BY-SA-4.0 when the library holds KiCad library content (the CC-BY-SA label only on KiCad
+    content), else NEUTRAL_LICENSE."""
     if int(kicad) < 7:
         raise ValueError("--kicad must be 7 or newer (the Plugin and Content Manager came with KiCad 6, libraries with 7)")
     if base_url and not re.match(r"^https?://", base_url):
         raise ValueError("--base-url must be an http:// or https:// URL: KiCad only fetches repositories over http(s) "
                          "(kicad_curl_easy.cpp); for a local file use the PCM's 'Install from File...'")
-    if license_ not in LICENSES:                                # KiCad's Install from File refuses the metadata
+    if license_ is not None and license_ not in LICENSES:       # KiCad's Install from File refuses the metadata
         near = [x for x in LICENSES if x.lower() == str(license_).lower()]
         raise ValueError(f"--license {license_!r} is not on KiCad's PCM list" + (f" (did you mean {near[0]}?)" if near else
                          "; use one of KiCad's, e.g. CC-BY-SA-4.0, MIT, CC0-1.0, open-source or unrestricted"))
@@ -457,7 +464,11 @@ def build(src, out, name=None, identifier=None, pkg_version=None, kicad=8, prefi
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
-    if (xrep or {}).get("kicad_content") and license_ not in ("CC-BY-SA-4.0",):
+    kicad_content = bool(xrep.get("kicad_content")) if xrep is not None else \
+        any(KICAD_MARK in v for k, v in files.items() if k.endswith((".kicad_sym", ".kicad_mod", ".txt")))
+    if license_ is None:                       # (an unchecked folder: KiCad's credit or notice in its files says it)
+        license_ = KICAD_LICENSE if kicad_content else NEUTRAL_LICENSE
+    if kicad_content and license_ != KICAD_LICENSE:
         (warn or log)(f"  note: the library holds KiCad library content (CC-BY-SA 4.0); --license {license_} may not be allowed")
     chash = content_hash(files | {"#settings": json.dumps([name or "ecadlib", identifier, kicad, prefix, license_, author, description, homepage]).encode()})
     prev = out / "kicad_pcm.json"
@@ -665,7 +676,8 @@ def main(argv=None):
                     "after the previous one when that is today's date or later)")
     ap.add_argument("--kicad", type=int, default=8, choices=(7, 8, 9, 10), help="oldest KiCad to install it (default 8)")
     ap.add_argument("--prefix", default="PCM_", help="KiCad's library nickname prefix for PCM libraries (default %(default)s)")
-    ap.add_argument("--license", default="CC-BY-SA-4.0", help="license from KiCad's PCM list (default %(default)s)")
+    ap.add_argument("--license", help=f"license from KiCad's PCM list (default {KICAD_LICENSE} when the library holds "
+                    f"KiCad library content, else {NEUTRAL_LICENSE})")
     ap.add_argument("--author", default="ecadlib user")
     ap.add_argument("--description")
     ap.add_argument("--homepage")
