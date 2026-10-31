@@ -274,9 +274,14 @@ def test_installed_library_resolves_in_kicad():
         series = f"{major}.0"
         if not (cfg / series).is_dir():
             (cfg / series).mkdir(parents=True)
+        templated = all(KI._template(series, f, KI.template_dirs(series)) for f in ("sym-lib-table", "fp-lib-table"))
+        if not templated:              # KiCad installed without its libraries (no template tables): the tables a
+            for _, f, t in KI.TABLES:  # KiCad that has been started once has, with one row of its own
+                (cfg / series / f).write_text(f'({t}\n  (version 7)\n  (lib (name "Own")(type "KiCad")'
+                                              f'(uri "${{KICAD{major}_FOOTPRINT_DIR}}/Own.x")(options "")(descr ""))\n)\n')
         ins = KI.install(out, "lib", environ={"KICAD_CONFIG_HOME": str(cfg)}, log=lambda *a: None)
-        assert ins["versions"][series]["status"] == "installed", ins     # from KiCad's own template tables
-        assert "${KICAD" in (cfg / series / "fp-lib-table").read_text()   # KiCad's libraries kept / set up
+        assert ins["versions"][series]["status"] == "installed", ins
+        assert "${KICAD" in (cfg / series / "fp-lib-table").read_text()   # KiCad's own rows kept / set up
         fps = [["lib", n, str(out / "lib.pretty")] for n in sorted(rep["footprints"])]
         assert rep["models"] and all(rep["models"].values()), rep["models"]
 
