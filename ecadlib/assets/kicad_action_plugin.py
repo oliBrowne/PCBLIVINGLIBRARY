@@ -11,12 +11,16 @@ Installed by KiCad's Plugin and Content Manager from the zip `ecadlib kicad-pcm 
 KiCad's scripting/plugins folder by the setup page's "Add to KiCad" button). It runs in KiCad's own Python, so it does
 not import ecadlib: it starts the `ecadlib` command (ECADLIB_CMD if set, else the command in ecadlib_cmd.json next to
 this file, else `ecadlib` on PATH, else a python3 that can import ecadlib) as
-`ecadlib kicad-menu run-job JOB --action ...` and shows JOB/progress.ini while it works and JOB/result.ini when done.
-The window does not block KiCad: keep working while ecadlib looks parts up.
+`ecadlib kicad-menu run-job JOB --action ... --kicad N` (N: this KiCad's major version; 7 gets KiCad 7 library files)
+and shows JOB/progress.ini while it works and JOB/result.ini when done, or what went wrong (JOB/log.txt).
+The window does not block KiCad: keep working while ecadlib looks parts up. Closed while a job works, the job still
+finishes and lists the library in the project's tables; the next press of the ecadlib button offers to place a footprint
+it built. When the setup page's copy and the Plugin and Content Manager's are both installed, only the first registers.
 
 Per project, next to the board: ecadlib-work/ (ecadlib's workspace and the jobs) and ecadlib/ (the KiCad library,
-added to the project's sym-lib-table and fp-lib-table as "ecadlib", ${KIPRJMOD}/ecadlib/...). Held parts (failed
-checks) are not placed: the window says why and the review queue fixes them."""
+added to the project's sym-lib-table and fp-lib-table as "ecadlib", ${KIPRJMOD}/ecadlib/...). A placed footprint gets
+the next free reference of its part (R3, U2...) and the part's value. Held parts (failed checks) are not placed: the
+window says why and the review queue fixes them."""
 import datetime, json, os, re, shlex, shutil, subprocess, sys
 
 import pcbnew
@@ -64,9 +68,32 @@ def ecadlib_command(environ=None, which=shutil.which, run=subprocess.run, cmd_fi
         return [exe]
     for py in ("python3", "python"):
         p = which(py)
-        if p and run([p, "-c", "import ecadlib"], capture_output=True, **NO_WINDOW).returncode == 0:
+        if p and _imports_ecadlib(p, run):
             return [p, "-m", "ecadlib"]
     return None
+
+
+def _imports_ecadlib(python, run=subprocess.run):
+    """Whether `python` has the ecadlib package. Asked in an empty folder of its own: in KiCad's working folder (a
+    project folder) the project's ecadlib/ library folder imports as a namespace package and answers yes; and a module
+    of the package (kicad_menu), which no library folder has."""
+    import tempfile
+    d = tempfile.mkdtemp(prefix="ecadlib-probe-")
+    try:
+        return run([python, "-c", "import ecadlib.kicad_menu"], cwd=d, capture_output=True, **NO_WINDOW).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def kicad_major():
+    """The running KiCad's major version (7, 8, 9, ...) from pcbnew.Version(), or None."""
+    try:
+        m = re.search(r"\d+", str(pcbnew.Version()))
+    except Exception:                                # an old or a stand-in pcbnew without Version()
+        return None
+    return int(m.group(0)) if m else None
 
 
 MPN_RE = re.compile(r"^[A-Za-z0-9][-A-Za-z0-9_.+/#,() ]{0,79}$")
@@ -75,14 +102,17 @@ MPN_RE = re.compile(r"^[A-Za-z0-9][-A-Za-z0-9_.+/#,() ]{0,79}$")
 AI_ARGS = (("bom", "--bom"), ("part", "--part"), ("approved_usd", "--approved-usd"))
 
 
-def job_command(cmd, job, action, project, mpn="", manufacturer="", path="", **ai):
-    """The ecadlib run for one job of the window. ai: the AI step's bom / part / approved_usd and the over_limit_ok /
+def job_command(cmd, job, action, project, mpn="", manufacturer="", path="", kicad=None, **ai):
+    """The ecadlib run for one job of the window. kicad: the running KiCad's major version (7: ecadlib writes the
+    library in KiCad 7's formats). ai: the AI step's bom / part / approved_usd and the over_limit_ok /
     price_unknown_ok yeses (ai-read, after the window showed the cost and the person said yes)."""
     if action == "add-part" and not MPN_RE.match(mpn.strip()):
         raise ValueError(f"not a part number: {mpn!r}")
     # every value as --option=value: a value the person typed may start with '-' ("-TI"), which argparse would take
     # for an option when it is a separate argument
     c = cmd + ["kicad-menu", "run-job", job, "--action=" + action, "--project=" + project]
+    if kicad:
+        c.append(f"--kicad={int(kicad)}")
     for k, v in (("--mpn", mpn.strip()), ("--manufacturer", manufacturer.strip()), ("--path", path)):
         if v:
             c.append(f"{k}={v}")
@@ -136,19 +166,54 @@ def rows_of(ini):
     return rows
 
 
+def _field(row, key):
+    """The value of (key "value") or (key value) in one lib table row, "" when it has none."""
+    m = re.search(r"\(\s*" + key + r'\s+(?:"((?:[^"\\]|\\.)*)"|([^\s()]+))', row)
+    if not m:
+        return ""
+    return m.group(1).replace('\\"', '"') if m.group(1) is not None else m.group(2)
+
+
+def table_rows(text):
+    """The rows of a lib table text as [(name, uri)]: each second-level ( ... ) group, strings and nesting respected,
+    whatever the layout (one line, or pretty-printed over several as KiCad and kicad_dblib.add_lib_row write it)."""
+    rows, depth, i, start, n = [], 0, 0, None, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+        elif c == "(":
+            depth += 1
+            if depth == 2:
+                start = i
+        elif c == ")":
+            if depth == 2 and start is not None:
+                row = text[start:i + 1]
+                if re.match(r"\(\s*lib\b", row):
+                    rows.append((_field(row, "name"), _field(row, "uri")))
+                start = None
+            depth -= 1
+        i += 1
+    return rows
+
+
 def ensure_tables(project_dir):
-    """Add the ecadlib rows to the project's fp-lib-table / sym-lib-table (created when missing). Returns changed files."""
+    """Add the ecadlib rows to the project's fp-lib-table / sym-lib-table (created when missing). Returns changed files.
+    The job (`ecadlib kicad-menu run-job`) does this itself; this is for an older ecadlib whose result does not say."""
     changed = []
     for kind, table, uri in (("fp", "fp_lib_table", f"{LIB}/{LIB}.pretty"), ("sym", "sym_lib_table", f"{LIB}/{LIB}.kicad_sym")):
         path = os.path.join(project_dir, f"{kind}-lib-table")
         row = f'  (lib (name "{LIB}")(type "KiCad")(uri "${{KIPRJMOD}}/{uri}")(options "")(descr "ecadlib parts"))\n'
         text = open(path, encoding="utf-8").read() if os.path.isfile(path) else f"({table}\n  (version 7)\n)\n"
-        m = re.search(r'\(lib \(name "?' + LIB + r'"?\)[^\n]*?\(uri "?([^"\)]*)"?\)', text)
-        if m and m.group(1).replace("\\", "/").rstrip("/") != f"${{KIPRJMOD}}/{uri}":   # a row of another ecadlib library
-            raise ValueError(f"the project's {kind}-lib-table already has a library named {LIB} at {m.group(1)}, not "
+        mine = [u for name, u in table_rows(text) if name == LIB]
+        other = [u for u in mine if u.replace("\\", "/").rstrip("/") != f"${{KIPRJMOD}}/{uri}"]
+        if other:                                    # a row of another ecadlib library
+            raise ValueError(f"the project's {kind}-lib-table already has a library named {LIB} at {other[0]}, not "
                              f"${{KIPRJMOD}}/{uri} where this window builds the parts: rename or remove that row "
                              f"(Preferences > Manage {'Footprint' if kind == 'fp' else 'Symbol'} Libraries > Project)")
-        if m or re.search(r'\(lib \(name "?' + LIB + r'"?\)', text):
+        if mine:
             continue
         body = text.rstrip()
         if not body.endswith(")"):
@@ -172,17 +237,121 @@ def tables_after_fill(project_dir):
         return f"Built, but not added to the project's library tables: {e}"
 
 
-def place(board, project_dir, fp_name):
-    """Load ecadlib:<fp_name> from the project's ecadlib library and put it in the middle of the board."""
+def next_reference(refs, prefix):
+    """The first free reference after the highest one of `prefix` on the board: R1, R2, R10 -> R11 ("U" for none)."""
+    prefix = prefix or "U"
+    nums = [int(m.group(1)) for r in refs for m in [re.fullmatch(re.escape(prefix) + r"(\d+)", str(r))] if m]
+    return f"{prefix}{max(nums, default=0) + 1}"
+
+
+def place(board, project_dir, fp_name, ref_prefix="", value=""):
+    """Load ecadlib:<fp_name> from the project's ecadlib library and put it in the middle of the board, with the next
+    free reference of the part's prefix (R, C, U...) and the part's value instead of REF** and the footprint name.
+    Inside an action plugin's Run() KiCad records the change for undo; outside it (the window's timer) the board is
+    marked changed where this KiCad's pcbnew offers that."""
     fp = pcbnew.FootprintLoad(os.path.join(project_dir, LIB, f"{LIB}.pretty"), fp_name)
     if fp is None:
         raise ValueError(f"{fp_name} is not in {LIB}.pretty")
     fp.SetFPID(pcbnew.LIB_ID(LIB, fp_name))
+    fp.SetReference(next_reference([f.GetReference() for f in board.GetFootprints()], ref_prefix))
+    if value:
+        fp.SetValue(value)
     box = board.GetBoardEdgesBoundingBox()
     fp.SetPosition(box.GetCenter() if box.GetWidth() else pcbnew.VECTOR2I(0, 0))
     board.Add(fp)
+    for obj in (fp, board):
+        if hasattr(obj, "SetModified"):
+            obj.SetModified()
     pcbnew.Refresh()
     return fp
+
+
+# ------------------------------------------------------------------ jobs finished while the window was closed
+PENDING, PLACED = "place.txt", "placed.txt"
+
+
+def mark_pending(job):
+    """An add-part job whose footprint the window places when it ends (or the next window, if this one is closed)."""
+    with open(os.path.join(job, PENDING), "w", encoding="utf-8") as f:
+        f.write("place\n")
+
+
+def mark_placed(job, how="placed"):
+    """The job's footprint is placed (or will not be: how says why); no window offers it again."""
+    try:
+        os.replace(os.path.join(job, PENDING), os.path.join(job, PLACED))
+    except OSError:
+        return
+    try:
+        with open(os.path.join(job, PLACED), "a", encoding="utf-8") as f:
+            f.write(how + "\n")
+    except OSError:
+        pass
+
+
+def unplaced_jobs(project_dir):
+    """[(job, result)] of add-part jobs that ended with a footprint to place that no window placed (it was closed while
+    the job worked), newest first."""
+    jobs = os.path.join(project_dir, "ecadlib-work", "jobs")
+    out = []
+    try:
+        names = sorted(os.listdir(jobs), reverse=True)
+    except OSError:
+        return out
+    for n in names:
+        job = os.path.join(jobs, n)
+        if not (os.path.isfile(os.path.join(job, PENDING)) and os.path.isfile(os.path.join(job, "exit.txt"))):
+            continue
+        res = read_ini(os.path.join(job, "result.ini"), "result")
+        if res.get("footprint") and res.get("status") in ("ready", "duplicate") and res.get("tables") != "problem":
+            out.append((job, res))
+    return out
+
+
+def tables_line(res, project_dir, built=False):
+    """The line the window shows about the project's library tables after a job that built parts. The job lists the
+    library itself ("tables" in its result); an older ecadlib's result does not say, and the window does it."""
+    st = res.get("tables")
+    if st is None:                                   # an ecadlib from before the job wrote the tables
+        if not built:
+            return tables_after_fill(project_dir)
+        try:
+            return REOPEN if ensure_tables(project_dir) else ""
+        except Exception as e:
+            return f"Built, but not placed: {e}"
+    if st == "added":
+        return REOPEN
+    if st == "problem":
+        return f"Built, but not {'placed' if built else 'added to the project library tables'}: {res.get('tables_note', '')}"
+    return ""
+
+
+def place_result(job, res, project_dir):
+    """Place the footprint of a finished add-part job on the open board -> (the "Placed ..." line, or the problem)."""
+    try:
+        board = pcbnew.GetBoard()
+        fp = place(board, project_dir, res["footprint"], res.get("reference", ""), res.get("value") or res.get("mpn", ""))
+    except Exception as e:                           # the part is built; placing is the extra step
+        mark_placed(job, f"not placed: {e}")
+        return "", f"Built, but not placed: {e}"
+    mark_placed(job)
+    return f"Placed {fp.GetReference()} ({LIB}:{res['footprint']}) in the middle of the board.", ""
+
+
+def job_failure(job):
+    """What went wrong with a job that has ended, as the window shows it; "" when it did what it was asked."""
+    res = read_ini(os.path.join(job, "result.ini"), "result")
+    if not res:
+        tail = ""
+        try:
+            with open(os.path.join(job, "log.txt"), encoding="utf-8", errors="replace") as f:
+                tail = f.read()[-600:]
+        except OSError:
+            pass
+        return f"ecadlib stopped without a result.\nNext: look at its log, {os.path.join(job, 'log.txt')}\n\n{tail}"
+    if res.get("status") == "error":
+        return (res.get("message") or "ecadlib could not do it.") + (f"\nNext: {res['fix']}" if res.get("fix") else "")
+    return ""
 
 
 def board_project():
@@ -430,8 +599,7 @@ def _window_class():
             self.run("fill", "Fill the library")
 
         def queue(self):
-            self.fire("queue")
-            self.Close()
+            self.run("queue", "Open review queue")
 
         def read_ai(self):
             """The AI step the last job offered: a second yes above the limit, then the reads, held to the amount shown."""
@@ -456,24 +624,40 @@ def _window_class():
                                  "installer, or pip install ecadlib) and press \"Add to KiCad\" on its setup page again, "
                                  "or set ECADLIB_CMD to its command.")
             job = new_job(self.project, action)
-            return job, job_command(cmd, job, action, self.board_file, **kw)
+            return job, job_command(cmd, job, action, self.board_file, kicad=kicad_major(), **kw)
+
+        def start(self, action, **kw):
+            """Start one job -> (job folder, process); its output goes to JOB/log.txt."""
+            job, c = self.command(action, **kw)
+            if action in ("add-part", "ai-read"):
+                mark_pending(job)                        # placed by this window, or offered by the next one
+            with open(os.path.join(job, "log.txt"), "w", encoding="utf-8") as log:
+                # cwd: the job folder, never the project: `python -m ecadlib` would import the project's ecadlib/
+                # library folder instead of the ecadlib package
+                return job, subprocess.Popen(c, cwd=job, stdout=log, stderr=subprocess.STDOUT, **NO_WINDOW)
 
         def fire(self, action, **kw):
-            """A job the window does not wait for (open the review queue or a report)."""
+            """A job the window does not wait for (open a report): its failure is still shown when it ends."""
             try:
-                job, c = self.command(action, **kw)
-                subprocess.Popen(c, cwd=job, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **NO_WINDOW)
+                job, proc = self.start(action, **kw)
             except (OSError, ValueError) as e:
-                self.fail(str(e))
+                return self.fail(str(e))
+            wx.CallLater(300, self.watch, job, proc)
+
+        def watch(self, job, proc):
+            if not self:                                 # the window was closed meanwhile
+                return
+            if proc.poll() is None:
+                wx.CallLater(300, self.watch, job, proc)
+                return
+            problem = job_failure(job)
+            if problem and self.proc is None:            # not over a job the window shows
+                self.fail(problem)
 
         def run(self, action, title, **kw):
             self.action, self.title, self.result = action, title, {}
             try:
-                self.job, c = self.command(action, **kw)
-                self.log = open(os.path.join(self.job, "log.txt"), "w", encoding="utf-8")
-                # cwd: the job folder, never the project: `python -m ecadlib` would import the project's ecadlib/
-                # library folder instead of the ecadlib package
-                self.proc = subprocess.Popen(c, cwd=self.job, stdout=self.log, stderr=subprocess.STDOUT, **NO_WINDOW)
+                self.job, self.proc = self.start(action, **kw)
             except (OSError, ValueError) as e:
                 self.fail(str(e))
                 return
@@ -482,7 +666,8 @@ def _window_class():
 
         def live(self, prog, default=""):
             s = self.page(self.title)
-            big = {"add-part": self.mpn, "check-bom": "Checking…", "fill": "Filling…", "ai-read": "Reading…"}.get(self.action, "")
+            big = {"add-part": self.mpn, "check-bom": "Checking…", "fill": "Filling…", "ai-read": "Reading…",
+                   "queue": "Opening…"}.get(self.action, "")
             s.Add(self.text(self.body, big, TEXT, 20, True), 0, wx.TOP, 10)
             self.rows(s, rows_of(prog))
             s.Add(self.text(self.body, prog.get("text") or default, DIM, 9), 0, wx.TOP, 10)
@@ -507,37 +692,36 @@ def _window_class():
                 self.meter.set(self.meter.done, self.meter.total)
                 return
             self.timer.Stop()
-            self.log.close()
             self.proc = None
             self.finish()
 
         def finish(self):
             res = read_ini(os.path.join(self.job, "result.ini"), "result")
             self.result = res
-            if not res:
-                tail = ""
-                try:
-                    tail = open(os.path.join(self.job, "log.txt"), encoding="utf-8", errors="replace").read()[-600:]
-                except OSError:
-                    pass
-                return self.fail("ecadlib stopped without a result.\nNext: look at its log, "
-                                 f"{os.path.join(self.job, 'log.txt')}\n\n{tail}")
+            problem = job_failure(self.job)
+            if problem:
+                mark_placed(self.job, "failed")
+                return self.fail(problem)
             st = res.get("status", "")
-            if st == "error":
-                return self.fail(res.get("message", "") + (f"\nNext: {res['fix']}" if res.get("fix") else ""))
+            if self.action == "queue":
+                s = self.page(self.title)
+                s.Add(self.text(self.body, "Opened", TEXT, 20, True), 0, wx.TOP, 10)
+                self.note(s, res.get("message") or "The review queue is open in the browser.")
+                self.buttons(s, "Done", self.Close)
+                return self.done_layout()
             placed, extra = "", ""
             if self.action == "fill":
-                extra = tables_after_fill(self.project)
+                extra = tables_line(res, self.project)
             if self.action in ("add-part", "ai-read") and res.get("footprint") and st in ("ready", "duplicate"):
-                board, project, _ = board_project()
-                try:
-                    changed = ensure_tables(self.project)
-                    place(board, self.project, res["footprint"])
-                    placed = f"Placed {LIB}:{res['footprint']} in the middle of the board."
-                    if changed:
-                        extra = REOPEN
-                except Exception as e:                   # the part is built; placing is the extra step
-                    extra = f"Built, but not placed: {e}"
+                extra = tables_line(res, self.project, built=True)
+                if res.get("tables") == "problem" or extra.startswith("Built, but"):
+                    mark_placed(self.job, "not placed: " + extra)
+                else:
+                    placed, err = place_result(self.job, res, self.project)
+                    if err:
+                        extra = err
+            else:
+                mark_placed(self.job, "nothing to place")
             s = self.page(self.title)
             s.Add(self.text(self.body, res.get("big") or "Done", TEXT, 20, True), 0, wx.TOP, 10)
             self.rows(s, rows_of(res))
@@ -572,6 +756,17 @@ def _window_class():
                     self.buttons(s, "Done", self.Close)
             self.done_layout()
 
+        def placed_page(self, lines):
+            """What offer_unplaced did, before anything else: the parts placed now (or why not)."""
+            self.title = "Add part from MPN"
+            s = self.page(self.title)
+            s.Add(self.text(self.body, "Placed" if any(l.startswith("Placed") for l in lines) else "Not placed",
+                            TEXT, 20, True), 0, wx.TOP, 10)
+            for line in lines:
+                self.note(s, line, GREEN if line.startswith("Placed") else DIM)
+            self.buttons(s, "Done", self.Close, "More…", self.home)
+            self.done_layout()
+
         def fail(self, problem):
             self.timer.Stop()
             s = self.page(getattr(self, "title", None) or "ecadlib")
@@ -582,8 +777,10 @@ def _window_class():
 
         def on_close(self, e):
             if self.proc is not None and self.proc.poll() is None:
-                if wx.MessageBox("ecadlib is still working. Close the window anyway? (ecadlib finishes in the background)",
-                                 "ecadlib", wx.YES_NO | wx.NO_DEFAULT, self) != wx.YES:
+                after = (" and adds the part to the project's library; press the ecadlib button again when it is done "
+                         "to place its footprint" if self.action in ("add-part", "ai-read") else "")
+                if wx.MessageBox(f"ecadlib is still working. Close the window anyway? (ecadlib keeps working in the "
+                                 f"background{after}.)", "ecadlib", wx.YES_NO | wx.NO_DEFAULT, self) != wx.YES:
                     e.Veto()
                     return
             self.timer.Stop()
@@ -609,14 +806,37 @@ def open_window(mode="home"):
     else:
         parent = wx.FindWindowByName("PcbFrame") or next((x for x in wx.GetTopLevelWindows()
                                                           if "pcb" in x.GetName().lower()), None)
+        placed = offer_unplaced(project, parent)       # in Run(): KiCad records the placement for undo
         w = _window_class()(parent)
         _WINDOW.append(w)
+        if placed:
+            w.project, w.board_file = project, board_file
+            w.placed_page(placed)
+            w.CentreOnParent()
+            w.Show()
+            return w
     w.project, w.board_file = project, board_file
     {"home": w.home, "add": w.ask, "bom": w.check, "queue": w.queue}[mode]()
-    if mode != "queue":
-        w.CentreOnParent()
-        w.Show()
+    w.CentreOnParent()
+    w.Show()
     return w
+
+
+def offer_unplaced(project, parent=None):
+    """Add-part jobs that ended after their window was closed: ask, per part, to place its footprint now. -> the
+    lines to show (placed, or why not)."""
+    import wx
+    lines = []
+    for job, res in unplaced_jobs(project):
+        what = res.get("mpn") or res.get("part") or res["footprint"]
+        if wx.MessageBox(f"ecadlib finished adding {what} after its window was closed. Place its footprint "
+                         f"({LIB}:{res['footprint']}) on the board now?", "ecadlib", wx.YES_NO | wx.YES_DEFAULT,
+                         parent) != wx.YES:
+            mark_placed(job, "declined")
+            continue
+        done, err = place_result(job, res, project)
+        lines.append(done or err)
+    return lines
 
 
 class EcadlibButton(pcbnew.ActionPlugin):
@@ -665,5 +885,21 @@ class EcadlibQueue(pcbnew.ActionPlugin):
 
 
 PLUGINS = (EcadlibButton, EcadlibAddPart, EcadlibCheckBom, EcadlibQueue)
-for _p in PLUGINS:
-    _p().register()
+
+
+def first_copy():
+    """Whether this copy of the plugin is the first one KiCad loads in this loading pass. The setup page's copy
+    (scripting/plugins/ecadlib_add_part) and the Plugin and Content Manager's (3rdparty/plugins/...) can both be
+    installed: only the first registers, so the toolbar has one ecadlib button. A pass is told apart by the search
+    path string pcbnew.LoadPlugins builds anew each time (Tools > External Plugins > Refresh Plugins loads again)."""
+    this_pass = getattr(pcbnew, "PLUGIN_DIRECTORIES_SEARCH", None)
+    seen = getattr(pcbnew, "_ecadlib_plugin_copy", None)
+    if isinstance(seen, tuple) and len(seen) == 2 and seen[1] is this_pass and seen[0] != HERE:
+        return False
+    pcbnew._ecadlib_plugin_copy = (HERE, this_pass)
+    return True
+
+
+if first_copy():
+    for _p in PLUGINS:
+        _p().register()

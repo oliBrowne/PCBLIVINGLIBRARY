@@ -383,7 +383,7 @@ def test_action_plugin_package_loads_and_registers_in_pcbnew():
     R = _kicad()
     rep = KP.plugin_build(_tmp() / "plug")
     meta = json.loads(zipfile.ZipFile(rep["zip"]).read("metadata.json"))
-    assert meta["type"] == "plugin" and rep["problems"] == [] and zipfile.ZipFile(rep["zip"]).namelist() == ["metadata.json", "plugins/__init__.py", "plugins/ecadlib.png", "resources/icon.png"]
+    assert meta["type"] == "plugin" and rep["problems"] == [] and zipfile.ZipFile(rep["zip"]).namelist() == ["metadata.json", "plugins/__init__.py", "plugins/ecadlib.png", "plugins/ecadlib_cmd.json", "resources/icon.png"]
     if not R.pcbnew_python():
         return R._skip("pcbnew (KiCad's Python module)")
     tp = Path(rep["zip"]).parent / "3rd"
