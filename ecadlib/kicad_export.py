@@ -402,6 +402,50 @@ def symbol_from_schlib(path, name, notes, pick=None):
     return sym
 
 
+def house_rules(sym, item):
+    """A KiCad symbol taken again from the part's source -> the same symbol with the librarian's rules applied as the
+    .SchLib has them (librarian.house_symbol, on the symbol converted to Altium): the category's designator (a crystal
+    Y, not EasyEDA's U), no pin names or numbers on a two-pin passive, every pin passive on a passive part (R / C / L /
+    crystal). The drawing stays the source's. Changed in place; returned."""
+    from . import librarian as L
+    try:
+        conv = K.convert_symbol([sym], str(sym[1]), None, [], None, [])
+    except ValueError:
+        return sym
+    applied = set()
+    got = L.house_symbol(conv, {"passive": L.is_passive_part(item), "folder": item.get("folder")}, applied)
+    if "designator" in applied:
+        for p in sexpr.find(sym, "property"):
+            if str(p[1]) == "Reference":
+                p[2] = Q(str(got["designator"]).rstrip("?"))
+    if "quiet" in applied:
+        for key in ("pin_numbers", "pin_names"):
+            node = sexpr.first(sym, key)
+            if node is None:
+                sym.insert(2, [key, "hide"])
+            elif not K._hidden(node):
+                node[:] = [c for c in node if not (isinstance(c, list) and c[:1] == ["hide"])] + ["hide"]
+    if "passive" in applied:
+        for u in sexpr.find(sym, "symbol"):
+            for p in sexpr.find(u, "pin"):
+                p[1] = "passive"
+    return sym
+
+
+def _pin_text_shown(entry):
+    """A released / fetched .SchLib entry -> (designator, {pin number: (name shown, number shown)}) for the pins that
+    show (stacked pins left out: the house layout may stack power pins the source draws apart)."""
+    recs = entry["records"]
+    des = next((str(r.get("TEXT", "")) for r in recs if r.get("RECORD") == "34"), "")
+    pins = [r for r in recs if r.get("RECORD") == "2" and not r["conglomerate"] & 0x04]
+    at = {}
+    for r in pins:
+        at.setdefault((r.get("part"), r.get("mode"), r["x"], r["y"]), set()).add(str(r["num"]))
+    stacked = {n for s in at.values() if len(s) > 1 for n in s}
+    return des, {str(r["num"]): (bool(r["conglomerate"] & 0x08), bool(r["conglomerate"] & 0x10))
+                 for r in pins if str(r["num"]) not in stacked}
+
+
 def released_differs(item, plan_dir, sym):
     """A symbol fetched again from the part's source (KiCad, --lib, EasyEDA) against the released revision, the item's
     .SchLib (publish_guard has put a held change back) -> the changes that are more than cosmetic (pin names and types,
@@ -424,12 +468,31 @@ def released_differs(item, plan_dir, sym):
         with tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as tmp:
             _, entries = AL.read_schlib(AL.write_schlib(Path(tmp) / "fetched.SchLib", [conv]))
         fetched = FP.altium_symbol(entries[0])[0]
+        _, released_entries = AL.read_schlib(plan_dir / f)
+        marks = (_pin_text_shown(_pick(released_entries, item["symbol"].get("ref"), plan_dir / f, "symbol")),
+                 _pin_text_shown(entries[0]))
     except (ValueError, KeyError, IndexError, OSError) as e:
         return [{"class": "electrical", "text": f"the fetched symbol cannot be compared ({type(e).__name__}: {e})"}]
     got = copy.deepcopy(rel)
     got["symbol"] = dict(fetched, name=rel["symbol"].get("name"))
     got["hashes"] = FP.hashes(got)
-    return [c for c in CD.diff(rel, got) if c["class"] != "cosmetic" and not c.get("drawing")]
+    out = [c for c in CD.diff(rel, got) if c["class"] != "cosmetic" and not c.get("drawing")]
+    (rdes, rpins), (fdes, fpins) = marks          # what the house rules set (librarian.house_symbol): the designator,
+    if rdes.rstrip("?").upper() != fdes.rstrip("?").upper():    # pin names / numbers shown or not
+        out.append({"class": "identity", "area": "symbol", "what": "designator", "old": rdes, "new": fdes,
+                    "text": f"designator {fdes or '-'} (released {rdes or '-'})"})
+    for n in sorted(set(rpins) & set(fpins), key=_natural_num):
+        for i, what in enumerate(("name", "number")):
+            if rpins[n][i] != fpins[n][i]:
+                out.append({"class": "geometry-minor", "area": "symbol", "what": f"pin {what} shown",
+                            "old": rpins[n][i], "new": fpins[n][i],
+                            "text": f"pin {n}: {what} {'shown' if fpins[n][i] else 'hidden'} "
+                                    f"(released: {'shown' if rpins[n][i] else 'hidden'})"})
+    return out
+
+
+def _natural_num(s):
+    return [int(x) if x.isdecimal() else x for x in re.split(r"(\d+)", str(s))]
 
 
 def kicad_pin_details(sym):
@@ -554,7 +617,7 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
     try:
         if src.startswith("kicad:"):
             chain, _ = K.load_symbol(src[6:], http, keep_quotes=True)
-            got = released(flatten(chain, name), f"KiCad {src[6:]} (reused" + (", flattened from " + " -> ".join(str(s[1]) for s in chain[1:]) if len(chain) > 1 else "") + ")")
+            got = released(house_rules(flatten(chain, name), item), f"KiCad {src[6:]} (reused" + (", flattened from " + " -> ".join(str(s[1]) for s in chain[1:]) if len(chain) > 1 else "") + ")")
             if got:
                 return got
         if src.startswith("local:"):
@@ -562,7 +625,7 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
             f = next((p for r in libs for p in sorted(Path(r).rglob(f"{lib}.kicad_sym"))), None)
             if f:
                 chain, _ = K.load_symbol(f"{f}:{sname}", None, keep_quotes=True)
-                got = released(flatten(chain, name), f"local KiCad {lib}:{sname} (reused from {f.name})")
+                got = released(house_rules(flatten(chain, name), item), f"local KiCad {lib}:{sname} (reused from {f.name})")
                 if got:
                     return got
             else:
@@ -576,6 +639,10 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
                 sub = []
                 t = sexpr.parse(EC.symbol_to_kicad(ds, name, "", {}, sub), keep_quotes=True)
                 ks = K._find_symbol(t, name)
+                for p in sexpr.find(ks, "property"):     # the credit goes in the plan's Library Credit field, as the
+                    if str(p[1]) == "Credit":           # .SchLib has it (one field, not Credit and Library Credit)
+                        p[1] = Q("Library Credit")
+                house_rules(ks, item)
                 f = item["symbol"].get("file")
                 npins = len({str(sexpr.first(p, "number")[1]) for u in sexpr.find(ks, "symbol") for p in sexpr.find(u, "pin")})
                 from . import symbol_layout as SL

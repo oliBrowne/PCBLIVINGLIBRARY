@@ -401,6 +401,24 @@ def passive_pins(sym):
     return dict(sym, prims=prims)
 
 
+def house_symbol(sym, st, applied=None):
+    """The librarian's rules for any source's symbol (altium_lib dict), as put_sym writes it: the category's designator,
+    no pin names or numbers on a two-pin passive, every pin Passive on a passive part. st: {passive, folder}. The
+    KiCad export applies the same to a symbol it takes again from the source (kicad_export.house_rules); applied: a
+    set that gets the rules that changed something ("designator", "quiet", "passive")."""
+    applied = set() if applied is None else applied
+    for rule, fn, when in (("designator", lambda s: category_designator(s, st.get("folder")), lambda s: True),
+                           ("quiet", quiet_two_pin, lambda s: st.get("passive") or
+                            re.match(r"(FB|[RCLYX])\??$", str(s.get("designator") or "").upper())),
+                           ("passive", passive_pins, lambda s: st.get("passive"))):
+        if when(sym):
+            new = fn(sym)
+            if new is not sym:
+                applied.add(rule)
+            sym = new
+    return sym
+
+
 def _hold_lost_copper(st, name, notes):
     """kicad_import dropped copper it has no Altium layer for (B.Cu graphics, inner copper): the .PcbLib lacks copper
     the KiCad footprint has, so the part is held for a person (a net tie's bottom bridge, an antenna's ground)."""
@@ -581,11 +599,7 @@ class Run:
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
         if st.get("kind") in SHARED_KINDS:      # one Resistor / Capacitor / Inductor symbol for every value and size,
             sym = shared_symbol(sym)            # whichever source drew it: no footprint, no one part's MPN
-        sym = category_designator(sym, st.get("folder"))
-        if st.get("passive") or re.match(r"(FB|[RCLYX])\??$", str(sym.get("designator") or "").upper()):
-            sym = quiet_two_pin(sym)
-        if st.get("passive"):
-            sym = passive_pins(sym)
+        sym = house_symbol(sym, st)
         fr = st.get("footprint") or {}
         if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
             sym = dict(sym, footprint=fr["name"])
