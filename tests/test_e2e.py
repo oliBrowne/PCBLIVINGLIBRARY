@@ -197,7 +197,8 @@ def test_kicad_loads_every_symbol_and_footprint_and_drc_passes():
         r = KR.cli("sym", "export", "svg", k / f"{lib}.kicad_sym", "-o", tmp / f"svg_{lib}")
         assert r.returncode == 0, (lib, r.stdout[-1500:], r.stderr[-1500:])
         names = {s[1] for s in sexpr.find(sexpr.parse((k / f"{lib}.kicad_sym").read_text()), "symbol") if ":" not in s[1]}
-        drawn = {re.sub(r"(_\d+)?\.svg$", "", f.name) for f in (tmp / f"svg_{lib}").glob("*.svg")}
+        # KiCad 7/8 name the files <name>[_N].svg in lower case; KiCad 9+ keep the case and write <name>_unitN.svg
+        drawn = {re.sub(r"(_unit\d+|_\d+)?\.svg$", "", f.name).lower() for f in (tmp / f"svg_{lib}").glob("*.svg")}
         assert {n.lower() for n in names} == drawn, (names, drawn)
         assert {n for n, i in pl.items() if i["status"] == "ready"} <= names, (lib, names)
         n_sym += len(names)

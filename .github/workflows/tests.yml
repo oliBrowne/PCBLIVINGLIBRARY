@@ -57,13 +57,14 @@ jobs:
 
   kicad:
     # Optional: the tests that need real KiCad (tests/test_kicad_real.py, and kicad_export's kicad-cli check). They skip
-    # in the job above. Ubuntu's kicad package is KiCad 7; the PPA row runs them on KiCad 8 (the export's own format).
+    # in the job above. Ubuntu's kicad package is KiCad 7; the PPA rows run them on KiCad 8 (the export's own format)
+    # and on KiCad 9 and 10, the versions most users have now.
     runs-on: ubuntu-24.04
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        kicad: ["ubuntu", "ppa:kicad/kicad-8.0-releases"]
+        kicad: ["ubuntu", "ppa:kicad/kicad-8.0-releases", "ppa:kicad/kicad-9.0-releases", "ppa:kicad/kicad-10.0-releases"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

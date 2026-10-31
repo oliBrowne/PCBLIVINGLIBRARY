@@ -76,6 +76,19 @@ def _violations(rpt, refmap):
     return agg
 
 
+def _drc_report(board, path, rpt):
+    """KiCad's DRC report for the saved board. KiCad 9+ through kicad-cli (KiCad 10's pcbnew.WriteDRCReport crashes
+    outside the KiCad app: "assert process failed in Pgm()"); KiCad 7 has no `pcb drc`, so the pcbnew call there."""
+    cli = shutil.which("kicad-cli")
+    if cli and int(pcbnew.Version().split(".")[0]) >= 9:
+        r = subprocess.run([cli, "pcb", "drc", "--format", "report", "--units", "mm", "--all-track-errors",
+                            "-o", rpt, path], capture_output=True, text=True, timeout=600)
+        assert Path(rpt).is_file(), (r.returncode, r.stdout[-1000:], r.stderr[-1000:])
+        return
+    mm = getattr(pcbnew, "EDA_UNITS_MILLIMETRES", None)    # KiCad 7/8; KiCad 9 renamed it EDA_UNITS_MM
+    pcbnew.WriteDRCReport(board, rpt, pcbnew.EDA_UNITS_MM if mm is None else mm, True)
+
+
 def drc(a):
     lib, path = a["lib"], a["board"]
     names = sorted(p.stem for p in Path(lib).glob("*.kicad_mod"))
@@ -104,7 +117,7 @@ def drc(a):
     board.Save(path)
     b2 = pcbnew.LoadBoard(path)
     rpt = str(Path(path).with_suffix(".rpt"))
-    pcbnew.WriteDRCReport(b2, rpt, pcbnew.EDA_UNITS_MILLIMETRES, True)
+    _drc_report(b2, path, rpt)
     agg = _violations(rpt, {f"U{i + 1}": n for i, n in enumerate(names)})
     for v in agg.values():
         v.pop("lib_footprint_issues", None)    # no project library table for this scratch board

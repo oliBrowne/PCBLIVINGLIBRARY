@@ -5,7 +5,7 @@ normal CI job stays green; .github/workflows/tests.yml has an optional job that 
 pcbnew lives in KiCad's own Python (usually /usr/bin/python3), so pcbnew work runs in tests/kicad_pcbnew_job.py
 in a subprocess and comes back as JSON; everything is compared here.
 
-What KiCad checks (checked with KiCad 7.0.11 here):
+What KiCad checks (checked with KiCad 7.0.11, 9.0.9 and 10.0.8; CI also runs KiCad 8):
   * every footprint footprint_gen / footprint_adv makes (all package_specs, density A and C of the IPC parts, random
     BGA / header / connector specs) loads in pcbnew with our pads, layers, courtyard (one closed outline, same box)
     and graphics; kicad-cli upgrades and plots them;
@@ -78,6 +78,9 @@ def pcbnew_job(job, **args):
 
 
 def cli(*args):
+    """kicad-cli. For `... export svg ... -o DIR` the folder is made first: KiCad 10 no longer creates it."""
+    if tuple(map(str, args[1:3])) == ("export", "svg") and "-o" in args:
+        Path(args[args.index("-o") + 1]).mkdir(parents=True, exist_ok=True)
     return subprocess.run([kicad_cli(), *map(str, args)], capture_output=True, text=True, timeout=900)
 
 
@@ -190,6 +193,8 @@ def test_drc_on_a_board_of_generated_footprints():
     with tempfile.TemporaryDirectory() as d:
         lib = _all_footprints(d, random_specs=0)
         found = pcbnew_job("drc", lib=str(lib), board=str(Path(d) / "drc.kicad_pcb"))
+        assert found, "no DRC findings read: the known ones (thermal-via drills, USB-C) are missing, so the report " \
+                      "was not parsed"
         bad = {}
         for name, kinds in found.items():
             t = sexpr.parse((lib / f"{name}.kicad_mod").read_text())
