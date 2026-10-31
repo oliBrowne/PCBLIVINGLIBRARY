@@ -328,3 +328,42 @@ def test_a_polarized_two_pad_part_marks_pin_1_wherever_it_sits():
     assert sr == {m(s) for s in sl}, (sl, sr)
     assert fr == {(-x + 0.0, y) for x, y in fl}, (fl, fr)
     assert C.check(left) == [] and C.check(right) == [], (C.check(left), C.check(right))
+
+
+# every copper pad of the KiCad footprints above, [number, x, y, w, h, shape, drill or 0] (tests/fixtures, read once
+# from KiCad 10's official library: CI has no KiCad library installed)
+KICAD_PADS = Path(__file__).resolve().parent / "fixtures" / "kicad_ref_pads.json"
+
+
+def _copper_pads(txt):
+    """Every copper pad of a .kicad_mod as the fixture lists them, sorted by number then position."""
+    t = sexpr.parse(txt)
+    out = []
+    for p, r in zip(sexpr.find(t, "pad"), C._pad_rects(t)):
+        if not set(r["layers"]) & {"F.Cu", "*.Cu", "F&B.Cu"}:
+            continue                                    # paste / mask-only windows
+        d = sexpr.first(p, "drill")
+        drill = max((float(v) for v in d[1:] if isinstance(v, str) and v != "oval"), default=0.0) if d else 0.0
+        if r["num"] or drill:
+            out.append([r["num"], round(r["x"], 4), round(r["y"], 4), round(r["w"], 4), round(r["h"], 4), str(p[3]), drill])
+    return sorted(out, key=lambda p: (p[0], p[1], p[2]))
+
+
+def test_every_pad_matches_kicads_official_footprint():
+    # pad 1 and the courtyard alone (above) miss a wrong pad 2..n: every pad's number, centre, size, shape and drill
+    ref = json.loads(KICAD_PADS.read_text())
+    assert set(KICAD_GENERATED) | set(KICAD_OTHER) <= set(ref), set(KICAD_GENERATED) | set(KICAD_OTHER) - set(ref)
+    bad = []
+    for name in list(KICAD_GENERATED) + list(KICAD_OTHER):
+        ours = _copper_pads(build(name)[0])
+        want = sorted(ref[name]["pads"], key=lambda p: (p[0], p[1], p[2]))
+        if [p[0] for p in ours] != [p[0] for p in want]:
+            bad.append(f"{name}: pads {[p[0] for p in ours]}, KiCad {[p[0] for p in want]}")
+            continue
+        tol = EXACT if name in KICAD_GENERATED else KICAD_OTHER[name][2]
+        for a, b in zip(ours, want):
+            off = max(abs(x - y) for x, y in zip(a[1:5], b[1:5]))
+            # generated parts: the shape too; KiCad draws some hand-made lands (DFN-8) with square corners
+            if off > tol or a[6] != b[6] or (name in KICAD_GENERATED and a[5] != b[5]):
+                bad.append(f"{name} pad {a[0]}: {a[1:]}, KiCad {b[1:]} (allowed {tol} mm)")
+    assert not bad, "\n".join(bad)
