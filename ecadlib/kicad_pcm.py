@@ -62,9 +62,8 @@ LICENSES = ("public-domain", "Apache", "Apache-1.0", "Apache-2.0", "Artistic", "
             "Zope", "Zope-1.0", "Zope-1.1", "Zope-2.0", "Zope-2.1", "CERN-OHL", "WTFPL", "Unlicense", "open-source",
             "unrestricted")                                          # pcm.v1.schema.json's License enum (KiCad master)
 SCHEMA_PATHS = ("/usr/share/kicad/schemas/pcm.v1.schema.json", "/usr/local/share/kicad/schemas/pcm.v1.schema.json",
-                "/Applications/KiCad/KiCad.app/Contents/SharedSupport/schemas/pcm.v1.schema.json",
-                "C:/Program Files/KiCad/9.0/share/kicad/schemas/pcm.v1.schema.json",
-                "C:/Program Files/KiCad/8.0/share/kicad/schemas/pcm.v1.schema.json")
+                "/Applications/KiCad/KiCad.app/Contents/SharedSupport/schemas/pcm.v1.schema.json") + tuple(
+    f"C:/Program Files/KiCad/{n}.0/share/kicad/schemas/pcm.v1.schema.json" for n in range(15, 6, -1))   # newest first
 ZIP_TIME = (1980, 1, 1, 0, 0, 0)                                    # fixed: same input -> byte-identical zip
 
 
@@ -622,12 +621,17 @@ def global_table_rows(installed, third_party, kicad, prefix="PCM_"):
 
 def plugin_build(out, identifier="local.ecadlib.add-part", kicad=7, author="ecadlib user", schema=None):
     """The ecadlib pcbnew action plugins (the toolbar button and the ecadlib window) as a PCM plugin package:
-    plugins/__init__.py, plugins/ecadlib.png (the toolbar icon) and resources/icon.png (the PCM's list icon)."""
-    from . import __version__
+    plugins/__init__.py, plugins/ecadlib.png (the toolbar icon), plugins/ecadlib_cmd.json (the command that runs this
+    ecadlib, as the setup page's "Add to KiCad" writes it: KiCad started from the desktop often has no ecadlib on its
+    PATH; the plugin falls back to PATH when that command is not on the computer it is installed on) and
+    resources/icon.png (the PCM's list icon)."""
+    from . import __version__, userconfig as UC
     from .kicad_menu import icon_png
     src = Path(__file__).with_name("assets") / "kicad_action_plugin.py"
     version = re.match(r"\d+(\.\d+){0,2}", __version__).group(0)
-    files = {"plugins/__init__.py": src.read_bytes(), "plugins/ecadlib.png": icon_png(24), "resources/icon.png": icon_png(64)}
+    cmd = (json.dumps({"command": UC.self_command(), "ecadlib": __version__}, indent=2) + "\n").encode()
+    files = {"plugins/__init__.py": src.read_bytes(), "plugins/ecadlib.png": icon_png(24),
+             "plugins/ecadlib_cmd.json": cmd, "resources/icon.png": icon_png(64)}
     meta = metadata("ecadlib", identifier, version, kicad, "MIT", author,
                     description="ecadlib in the PCB editor: add parts by MPN, check the project BOM, review queue")
     meta["type"], meta["tags"] = "plugin", ["library", "parts"]
