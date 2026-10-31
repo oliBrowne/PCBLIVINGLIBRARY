@@ -293,3 +293,38 @@ def test_the_makers_thermal_land_is_the_exposed_pads_copper():
     spec["land"].update(ep_across=3.4, ep_along=5.0)
     txt, rep = F.build(spec, "B")
     assert FB.numbers(txt)["pads"][-1][3:5] == [3.4, 5.0] and rep["ep_land"] == "datasheet"
+
+
+
+def _gw2(pin1_side):
+    """SOD-123 read as a 2-lead gullwing (reviewer 2026-10-31: variants2.py V_gw2_pin1R), cathode / pin 1 on that side."""
+    far = {"L": "R", "R": "L"}[pin1_side]
+    return {"name": "D_gw2", "package_type": "gullwing", "pin_count": 2, "polarized": True,
+            "body_length": {"nom": 1.6}, "body_width": {"nom": 2.7}, "lead_span": {"min": 3.55, "max": 3.85},
+            "terminal_length": {"min": 0.25, "max": 0.5}, "terminal_width": {"min": 0.5, "max": 0.7},
+            "pin_positions": [{"number": "1", "side": pin1_side, "offset": 0}, {"number": "2", "side": far, "offset": 0}]}
+
+
+def _marks(txt):
+    """Silk lines and the fab outline as sets of rounded points, and pad number -> (x, y)."""
+    t = sexpr.parse(txt)
+    r = lambda v: round(float(v), 4) + 0.0
+    silk = {tuple(sorted([(r(sexpr.first(n, "start")[1]), r(sexpr.first(n, "start")[2])),
+                          (r(sexpr.first(n, "end")[1]), r(sexpr.first(n, "end")[2]))]))
+            for n in sexpr.find(t, "fp_line") if sexpr.first(n, "layer")[1] == "F.SilkS"}
+    fab = [n for n in sexpr.find(t, "fp_poly") if sexpr.first(n, "layer")[1] == "F.Fab"]
+    fab = {(r(a[1]), r(a[2])) for n in fab for a in sexpr.find(sexpr.first(n, "pts"), "xy")}
+    pads = {n[1]: (r(sexpr.first(n, "at")[1]), r(sexpr.first(n, "at")[2])) for n in sexpr.find(t, "pad")}
+    return silk, fab, pads
+
+
+def test_a_polarized_two_pad_part_marks_pin_1_wherever_it_sits():
+    # pin 1 on the right: the bracket and the fab chamfer are the pin-1-left footprint's, mirrored (they sat on pad 2)
+    m = lambda seg: tuple(sorted((-x + 0.0, y) for x, y in seg))
+    left, right = F.build(_gw2("L"))[0], F.build(_gw2("R"))[0]
+    sl, fl, pl = _marks(left)
+    sr, fr, pr = _marks(right)
+    assert pr["1"][0] > 0 > pr["2"][0] and pl["1"][0] < 0 < pl["2"][0], (pl, pr)
+    assert sr == {m(s) for s in sl}, (sl, sr)
+    assert fr == {(-x + 0.0, y) for x, y in fl}, (fl, fr)
+    assert C.check(left) == [] and C.check(right) == [], (C.check(left), C.check(right))
