@@ -501,6 +501,20 @@ def ws_target(ws):
     return "altium365:" + urlunsplit((u.scheme.lower(), u.netloc.lower(), u.path.rstrip("/"), u.query, "")).rstrip("/")
 
 
+def write_refusal(url, rules):
+    """Why a write to workspace url (a real push, a parameter update) is refused, or "": the rules must name the
+    workspace ([altium365] workspace) and url must be that one (ws_target spelling), as the web UI and the menu check."""
+    conf = str(((rules or {}).get("altium365") or {}).get("workspace") or "").strip()
+    if not conf:
+        return ("no Altium 365 workspace is configured, so nothing was written: a write goes only to [altium365] "
+                "workspace in ecadlib.toml. A dry run needs no setting.")
+    if ws_target(url) != ws_target(conf):
+        return (f"{url} is not the Altium 365 workspace this library publishes to ({conf}, [altium365] workspace in "
+                "ecadlib.toml), so nothing was written. To publish there, change [altium365] workspace first. A dry "
+                "run to any workspace is still allowed.")
+    return ""
+
+
 def _published(lg, part, target):
     """The last publish line of part to workspace `target` (ws_target), also one written under another URL spelling."""
     norm = lambda t: ws_target(t[len("altium365:"):]) if str(t or "").startswith("altium365:") else t
@@ -1209,6 +1223,10 @@ def main(argv=None):
         if not a.workspace:
             sys.exit("ecadlib altium365 push: no workspace: pass --workspace URL or set [altium365] workspace in ecadlib.toml "
                      "(`ecadlib altium365 workspaces` lists them)")
+    if a.cmd == "push" and not a.dry_run:      # a real push goes only to the configured workspace, as in the UI and menu
+        why = write_refusal(a.workspace, RU.load(a.rules, start=Path(a.plan).parent))
+        if why:
+            sys.exit(f"ecadlib altium365 push: {why}")
     if a.cmd == "push":                        # the local files first: a damaged one is named, not "Nexar request failed"
         from .kicad_export import PlanError, check_plan
         try:

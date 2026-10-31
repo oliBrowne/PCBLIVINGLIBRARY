@@ -674,6 +674,16 @@ def main(argv=None):
         ap.error("give at least one input file or --a365 WORKSPACE_URL")
     if a.update_a365 and not ws:
         ap.error("--update-a365 needs --workspace or --a365")
+    if a.update_a365 and a.apply:              # a write goes only to the configured workspace, as `altium365 push`
+        from . import rules as RU
+        from .altium365 import write_refusal
+        try:
+            why = write_refusal(ws, RU.load(None, start=Path(a.inputs[0]).resolve().parent if a.inputs else "."))
+        except RU.RulesError as e:
+            why = str(e)
+        if why:
+            print(f"ecadlib lifecycle --update-a365: {why}", file=sys.stderr)
+            return 2
     token = UC.secret("NEXAR_TOKEN")
     if (a.a365 or a.apply) and not token:
         ap.error("set NEXAR_TOKEN (Nexar user token with design.domain, user.access, openid scopes)")

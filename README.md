@@ -165,7 +165,8 @@ ecadlib approve ecadlib_workspace/librarian/my_bom/plan.json approve --part CH34
 in, see [docs/altium.md](docs/altium.md#signing-in-to-altium-365-ecadlib-nexar-signin)), check the plan with a dry
 run, then push. Only parts that pass the release check are pushed: push checks each part's files again before it
 uploads them, and held parts are never pushed. A part already in the workspace gets a new revision, and only after
-change control lets it through.
+change control lets it through. A real push goes only to the workspace set as `[altium365] workspace` in
+`ecadlib.toml`.
 
 ```
 ecadlib altium365 workspaces

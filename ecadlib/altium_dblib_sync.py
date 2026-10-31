@@ -40,7 +40,8 @@ from . import altium_native as AN
 from . import release_check as RC
 from . import sheetsafe as SS
 from .fsutil import read_ini_text                     # (text, encoding) of an INI Altium saved
-from .altium_export import (COLUMNS, dblib_links, excel_connection, fieldmap_section, table_section)
+from .fsutil import replace, write_bytes_atomic
+from .altium_export import (COLUMNS, ace_column, dblib_links, excel_connection, fieldmap_section, table_section)
 
 STATE = "ecadlib_sync.json"
 EXT = {"dblib": ".DbLib", "svndblib": ".SVNDbLib"}
@@ -76,6 +77,18 @@ def column_name(name):
     """A parameter name as a column and DbLib field map: no '|' or line breaks (they split the INI's Options record),
     no control characters. '' when nothing is left."""
     return _CTRL.sub(" ", AL.clean(name)).strip()
+
+
+def respell(hdr, row):
+    """Renames row's columns that differ from one in hdr only in case to hdr's spelling, in place: Excel's ACE provider
+    and Altium's parameters ignore case, so 'tol' next to 'Tol' would be a second column ACE renames 'tol1'."""
+    low = {c.lower(): c for c in hdr}
+    for c in list(row):
+        k = low.get(c.lower())
+        if k is not None and k != c:
+            v = row.pop(c)
+            if not row.get(k):
+                row[k] = v
 
 
 def sheet_name(name):
@@ -167,9 +180,11 @@ def plan_row(item, rules=None):
     columns in the rules' house names ([parameters] names)."""
     row = {c: "" for c in COLUMNS}
     row.update({"Description": cell_text(item.get("description", "")), "Comment": cell_text(item.get("comment", ""))})
+    links = {c.lower() for c in LINK_COLUMNS}
     for p in item.get("parameters", []):            # a parameter named like a key / link column never replaces it
         n = column_name(p["name"])
-        if n and n not in LINK_COLUMNS:
+        if n and n.lower() not in links:            # 'value' next to 'Value': one column (ACE and Altium ignore case)
+            n = next((c for c in row if c.lower() == n.lower()), n)
             row[n] = cell_text(p["value"])
     row["Part Number"] = cell_text(item["name"])
     for k, d, w in KINDS:
@@ -236,8 +251,12 @@ def write_xlsx(path, tables):
                     c.data_type = TYPE_STRING
         ws.freeze_panes = "B2"
     tmp = Path(path).with_name(f"{Path(path).name}.{os.getpid()}.tmp")   # its own name: two runs never share one
-    wb.save(tmp)
-    os.replace(tmp, path)
+    try:
+        wb.save(tmp)
+        replace(tmp, path)                                  # retried while Altium reads the workbook
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def csv_text(tables):
@@ -350,7 +369,7 @@ def dblib_update(existing, tables, links, override=()):
         for tn, cols in names.items():
             for c in cols:
                 fm += 1
-                L += fieldmap_section(fm, tn, c)
+                L += fieldmap_section(fm, tn, c, excel=True)
         return "\r\n".join(L) + "\r\n"
     secs = _sections(existing)
     link_tmpl = _kv(tmpl[3:])
@@ -367,6 +386,14 @@ def dblib_update(existing, tables, links, override=()):
     num = lambda s, p: int(s[0][len(p):]) if s[0].startswith(p) and s[0][len(p):].isdigit() else None
     secs, names = _same_tables(secs, names, num)
     tabs = {_kv(s[1]).get("TableName") for s in secs if num(s, "Table") is not None}
+    for s in secs:                            # a map an older version wrote to 'Temp. Coeff': ACE calls it 'Temp# Coeff'
+        if num(s, "FieldMap") is not None:
+            o = dict(kv.split("=", 1) for kv in _kv(s[1]).get("Options", "").split("|") if "=" in kv)
+            f = o.get("FieldNameOnly", "")
+            if f and ace_column(f) != f and o.get("TableNameOnly"):
+                o["FieldNameOnly"], o["FieldName"] = ace_column(f), f"{o['TableNameOnly']}.{ace_column(f)}"
+                s[1] = [("Options=" + "|".join(f"{a}={b}" for a, b in o.items())) if ln.split("=", 1)[0] == "Options"
+                        else ln for ln in s[1]]
     fmaps = {_kv(s[1]).get("Options", "").split("|", 1)[0].lower() for s in secs if num(s, "FieldMap") is not None}
     ti = max([num(s, "Table") or 0 for s in secs] + [0])
     fi = max([num(s, "FieldMap") or 0 for s in secs] + [0])
@@ -378,9 +405,9 @@ def dblib_update(existing, tables, links, override=()):
             sec = table_section(ti, tn)
             new_t.append([sec[0][1:-1], sec[1:]])
         for c in cols:
-            if f"FieldName={tn}.{c}".lower() not in fmaps:
+            if f"FieldName={tn}.{ace_column(c)}".lower() not in fmaps:
                 fi += 1
-                sec = fieldmap_section(fi, tn, c)
+                sec = fieldmap_section(fi, tn, c, excel=True)
                 new_f.append([sec[0][1:-1], sec[1:]])
     secs = secs[:last_t + 1] + new_t + secs[last_t + 1:] + new_f
     return "".join(f"[{n}]\r\n" + "".join(ln + "\r\n" for ln in body) for n, body in secs)
@@ -623,7 +650,20 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         hold()                              # the state read to the write (or one drops the other's rows)
     fname = data_file_name(name)
     xlsx, csvf, lib, statef = to / f"{fname}.xlsx", to / f"{fname}.csv", to / f"{name}{EXT[mode]}", to / STATE
-    state = json.loads(statef.read_text()) if statef.exists() else {}
+    try:
+        state = json.loads(statef.read_text(encoding="utf-8")) if statef.exists() else {}
+    except (ValueError, UnicodeDecodeError) as e:
+        raise ValueError(f"{statef} is damaged ({e}), so nothing was written: it records which rows and model files "
+                         "this tool wrote. Restore it from a backup or version control; deleting it makes every row "
+                         "count as not this tool's (they are kept, but --prune no longer removes them)") from e
+    if not dry_run:                         # Excel holds an open workbook locked: say so before any file is written
+        for f in (xlsx, lib):
+            try:
+                if f.exists():
+                    open(f, "r+b").close()
+            except PermissionError as e:
+                raise ValueError(f"{f} is open in Excel, Altium or another program (or read-only), so nothing was written. Close it "
+                                 "there, then run this again") from e
     managed_rows, managed_files = set(state.get("rows", [])), set(state.get("files", []))
     # an older ecadlib named the workbook after the package ('Bibliothèque.xlsx'), which Altium can't open: move to
     # the ASCII name, keeping the rows (and columns added by hand) of the old one
@@ -988,6 +1028,9 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             continue
         want, t = plan_row(it, rules), res["table"]
         old_t = where.get(_pk(it["name"]))
+        for k in (t, old_t):                                # a column differing from the sheet's only in case is it
+            if k in tables:
+                respell(tables[k][0], want)
         cur = find(it["name"], old_t) if old_t else None
         if cur is None:
             hdr, rows = tables.setdefault(t, (list(want), []))
@@ -1123,7 +1166,7 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
             if writer:
                 writer()
             else:
-                (to / rel).write_bytes(data if data is not None else text.encode("utf-8"))
+                write_bytes_atomic(to / rel, data if data is not None else text.encode("utf-8"))   # whole or old
         written.append(rel)
     if tables and (tables != old or not xlsx.exists()):
         put(xlsx.name, writer=lambda: write_xlsx(xlsx, {**others, **tables}))   # other sheets: as they were

@@ -71,6 +71,8 @@ from pathlib import Path, PureWindowsPath
 from . import __version__, altium_native as AN
 
 PROJECT, UNIT, INI = "ecadlib_menu.PrjScr", "ecadlib_menu.pas", "ecadlib_menu.ini"
+# StartJob copies this into each job's request.ini first: TIniFile writes UTF-16 into a file that has a BOM, ANSI else
+REQUEST_TEMPLATE, REQUEST_TEMPLATE_BYTES = "request_template.ini", b"\xff\xfe" + "[request]\r\n".encode("utf-16-le")
 RUN_CMD, RUN_VBS, PREFS, README = "ecadlib_run.cmd", "ecadlib_run.vbs", "ecadlib_menu.DXPPrf", "ALTIUM_MENU_README.txt"
 PROCS = [("AddPartFromMPN", "&Add part from MPN...", "Build a part from its manufacturer part number with ecadlib"),
          ("CheckProjectBOM", "&Check this project BOM", "Check the focused project's BOM against the library; offer to fill it"),
@@ -599,6 +601,10 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
         if not p.is_file() or p.read_bytes() != data:
             p.write_bytes(data)
             written.append(fname)
+    tpl = out / REQUEST_TEMPLATE
+    if not tpl.is_file() or tpl.read_bytes() != REQUEST_TEMPLATE_BYTES:
+        tpl.write_bytes(REQUEST_TEMPLATE_BYTES)
+        written.append(REQUEST_TEMPLATE)
     ini = out / INI
     filled = False
     if ini.is_file():
@@ -1787,8 +1793,8 @@ def run_job(job, opener=None):
         named = Path(req["config"]) if req.get("config") else None
         # TIniFile writes request.ini in the ANSI code page: a folder name it cannot hold comes back with '?', and
         # the job is in <menu folder>\jobs\<id> anyway
-        cfg = load_config(named if named and named.is_file() or not (job.parent.parent / INI).is_file()
-                          else job.parent.parent / INI)
+        ini = job.parent.parent / INI                        # neither file: load_config says which one is missing
+        cfg = load_config(named if named and (named.is_file() or not ini.is_file()) else ini)
         res = run_action(cfg, req.get("action", ""), req, opener=opener, progress=Progress(job))
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = _error(e)
