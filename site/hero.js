@@ -316,6 +316,7 @@ function progress() {
 function render() {
   const p = progress(), t = reduce.matches ? 0 : performance.now() / 1000;
   const W = innerWidth, H = innerHeight, phone = narrow.matches;
+  const navH = parseFloat(root.style.getPropertyValue('--xh-nav')) || 0;   // the header sits over the stage
   // desktop: the opened stack (about 300 px of card plus the gaps at a ~0.83 tilt) must fit between the header
   // and the step bar, so the card is sized for a wide gap; the stack also opens along a diagonal for more spread.
   // phones: the stack gets the space between the header and the note card, with a much wider gap than desktop,
@@ -353,7 +354,7 @@ function render() {
   // phones: the closed part sits between the header and the headline (higher still on a short phone, where the
   // headline is tall for the screen); the opened stack is centred between the header and the note card (H - 190
   // tall, so 95 px above centre)
-  const top0 = phone ? Math.min(-H * .18, ((parseFloat(root.style.getPropertyValue('--xh-nav')) || 0) + intro.offsetTop - H) / 2) : 0;
+  const top0 = phone ? Math.min(-H * .18, (navH + intro.offsetTop - H) / 2) : 0;
   const shiftY = (phone ? lerp(lerp(top0, -95, lead), -H * .18, fan) : lerp(lerp(0, -H * .025, lift), -30, fan)) + follow;
   rig.style.transform = `translate(${shiftX}px, ${shiftY}px) scale(${scale * lerp(1, phone ? .62 : .78, fan)}) rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg)`;
   shadow.style.transform = `translate(${shiftX}px, ${shiftY}px) scale(${scale * lerp(.9, 1.35, lift)})`;
@@ -431,14 +432,19 @@ function render() {
   // size, grows to its own, and the card fades as the panel takes over; then the panel fills one line at a time
   const pin = inout(span(p, ...T.morph));
   const pw = panel.offsetWidth, ph = panel.offsetHeight;
-  const pcx = panel.offsetLeft + pw / 2, pcy = panel.offsetTop + (phone ? ph / 2 : 0);
+  const pcx = panel.offsetLeft + pw / 2, pcy = panel.offsetTop + ph / 2;
   const card = els[N - 1].getBoundingClientRect();
   const ccx = card.left + card.width / 2 - sr.left, ccy = card.top + card.height / 2 - sr.top;
   const s0 = Math.min(1, card.width / pw * .9);
   const drift2 = settle * (phone ? -8 : -14);          // the panel keeps drifting up a touch while it fills
+  // it rests between the header and the step bar (a phone: above the bar, where hero.css puts it; wider: centred),
+  // and on a screen too short for it (a phone on its side) it shrinks to fit there and moves off the centre
+  const top = navH + 12, bottom = H - (phone ? 60 : 56);
+  const fit = Math.min(1, (bottom - top) / ph), hh = ph * fit / 2;
+  const rest = clamp((phone ? pcy : H / 2) + drift2, top + hh, Math.max(top + hh, bottom - hh));
   panel.style.transformOrigin = '50% 50%';
   panel.style.opacity = (smooth(span(pin, 0, .3)) * (1 - gone)).toFixed(3);
-  panel.style.transform = `translate(${(ccx - pcx) * (1 - pin)}px, ${(ccy - pcy) * (1 - pin) - (phone ? 0 : ph / 2) + drift2}px) perspective(1400px) rotateY(${lerp(phone ? -10 : -16, 0, pin)}deg) scale(${lerp(s0, 1, pin)})`;
+  panel.style.transform = `translate(${(ccx - pcx) * (1 - pin)}px, ${lerp(ccy + drift2, rest, pin) - pcy}px) perspective(1400px) rotateY(${lerp(phone ? -10 : -16, 0, pin)}deg) scale(${lerp(s0, fit, pin)})`;
   els[N - 1].style.opacity = +els[N - 1].style.opacity * (1 - smooth(span(pin, .05, .45)));
   rows.forEach((r, i) => r.classList.toggle('xh-on', p > T.rows + i * .016));
 

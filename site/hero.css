@@ -251,6 +251,7 @@ svg.xh-leaders circle.xh-ring { fill: none; stroke: var(--copper); stroke-width:
   .xh-btn { min-height: 38px; }
   .xh-end .xh-cap { margin-top: 10px; }
   .xh-hint { display: none; }
+  .xh-panel .xh-body { min-height: 0; padding: 12px 16px 6px; }
 }
 @media (max-height: 340px) { .xh-beats { display: none; } }
 /* a small phone upright: the closing card drops the mark and starts below the header */
