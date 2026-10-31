@@ -303,16 +303,19 @@ const beats = [...document.querySelectorAll('#xh-beats span')];
 const reduce = matchMedia('(prefers-reduced-motion: reduce)'), narrow = matchMedia('(max-width: 760px) and (min-height: 521px), (max-width: 760px) and (orientation: portrait)');   // the same line as hero.css
 const scene = root, stage = $('#xh-stage'), rig = $('#xh-rig'), panel = $('#xh-panel'), shadow = $('#xh-shadow'), end = $('#xh-end'), intro = $('#xh-intro');
 
-// the timeline, as fractions of the pinned scroll
+// the timeline, 0 to 1; warp() maps the pinned scroll onto it
 const T = { explode: [.05, .19], steps: [.2, .66], fan: [.65, .77], morph: [.69, .78], rows: .755, out: [.84, .885], end: [.875, .94] };
 const STEP = (T.steps[1] - T.steps[0]) / N;
+// [scroll, timeline] pairs, straight between: the six layers get half the scroll, the beats around them less
+const WARP = [[0, 0], [.047, T.explode[0]], [.193, T.steps[0]], [.693, T.steps[1]], [.873, T.out[0]], [.953, T.end[1]], [1, 1]];
+const warp = s => { const i = WARP.findIndex(([a]) => a >= s); if (i <= 0) return 0; const [a0, b0] = WARP[i - 1], [a1, b1] = WARP[i]; return b0 + (b1 - b0) * (s - a0) / (a1 - a0); };
 
 function progress() {
   // reduced motion holds one still frame beside the headline: on a wide screen every layer built and apart, none
   // pulled out; on a phone, where the headline sits under the stack, the closed part
   if (reduce.matches) return narrow.matches ? 0 : T.steps[1] + .006;
   const r = scene.getBoundingClientRect();
-  return clamp(-r.top / (r.height - innerHeight));
+  return warp(clamp(-r.top / (r.height - innerHeight)));
 }
 
 function render() {
