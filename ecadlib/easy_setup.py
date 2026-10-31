@@ -52,6 +52,15 @@ EXTRA_KEYS = [("NEXAR_TOKEN", "Altium 365 (Nexar) token", "send parts to an Alti
 TOOLS = ("altium", "kicad", "both")
 
 
+def _path_text(v):
+    """A folder as typed or pasted: spaces around it and one pair of quotes around it go (Windows Explorer's "Copy as
+    path" gives "C:\\Users\\me\\libs" with the quotes)."""
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()
+    return v
+
+
 def _provider(pid):
     p = next((p for p in PROVIDERS if p[0] == pid), None)
     if p is None:
@@ -135,7 +144,7 @@ def save(ws_root, b):
     libs = b.get("libs") or []
     if not isinstance(libs, list) or not all(isinstance(x, str) for x in libs) or len(libs) > 50:
         raise ValueError("libs must be a list of folders")
-    libs = [str(Path(x.strip()).expanduser().resolve()) for x in libs if x.strip()]   # the folder checked below,
+    libs = [str(Path(_path_text(x)).expanduser().resolve()) for x in libs if _path_text(x)]   # the folder checked below,
                                                                                        # not one under the workspace
     missing = [x for x in libs if not Path(x).is_dir()]
     if missing:
@@ -143,7 +152,7 @@ def save(ws_root, b):
     ws = b.get("workspace") or str(ws_root)
     if not isinstance(ws, str) or len(ws) > 500:
         raise ValueError("bad workspace folder")
-    ws = Path(ws.strip()).expanduser()
+    ws = Path(_path_text(ws)).expanduser()
     if not ws.is_absolute():
         raise ValueError("give the workspace as a full path, e.g. " + str(UC.default_workspace()))
     if ws.exists() and not ws.is_dir():
@@ -193,9 +202,9 @@ def save(ws_root, b):
 
 def restart(ws):
     if not isinstance(ws, (str, Path)) or len(str(ws)) > 500 or "\0" in str(ws) \
-            or not Path(str(ws).strip()).expanduser().is_absolute():
+            or not Path(_path_text(str(ws))).expanduser().is_absolute():
         raise ValueError("give the workspace as a full path, e.g. " + str(UC.default_workspace()))
-    ws = Path(str(ws).strip()).expanduser()
+    ws = Path(_path_text(str(ws))).expanduser()
     if not ws.is_dir():                         # save() makes it: a folder that is not there is a typo, not a move
         raise ValueError(f"workspace folder not found: {ws}; save the setup first")
     if RESTART is None:
@@ -323,14 +332,19 @@ def start_nexar_signin(b, wait=10):
                    "Authorization)")
     elif len(cid) > 200 or len(sec) > 500 or any(c.isspace() for c in cid + sec):
         problem = "that does not look like a Nexar client ID and secret: copy them again from portal.nexar.com"
-    ready, me = threading.Event(), object()
+    ready, me, stop, stopped = threading.Event(), object(), threading.Event(), threading.Event()
+    with _SIGNIN_LOCK:                          # a sign-in just signed out of (another tab) may still hold the port
+        prev = _SIGNIN.get("stopped") if _SIGNIN.get("state") != "waiting" else None
+    if prev is not None:
+        prev.wait(5)
     with _SIGNIN_LOCK:                          # "is one waiting?" and "this one waits now" in one step
         if _waiting():
             return _waiting()
         if problem:
             raise ValueError(problem)
         _SIGNIN.clear()
-        _SIGNIN.update(state="waiting", message="waiting for the browser sign-in", attempt=me)
+        _SIGNIN.update(state="waiting", message="waiting for the browser sign-in", attempt=me, stop=stop,
+                       stopped=stopped)
 
     def opened(url):                            # the sign-in listens now: the page opens the address itself
         with _SIGNIN_LOCK:
@@ -341,7 +355,10 @@ def start_nexar_signin(b, wait=10):
 
     def run():
         try:
-            got = NS.signin(cid, sec, open_browser=opened, out=lambda *a: None, timeout=300)
+            try:
+                got = NS.signin(cid, sec, open_browser=opened, out=lambda *a: None, timeout=300, cancel=stop)
+            finally:
+                stopped.set()                   # the redirect port is free again: a new sign-in can listen on it
             msg = ("signed in to Altium 365; ecadlib keeps the sign-in fresh by itself" if got.get("refresh") else
                    "signed in to Altium 365, but Nexar gave no refresh token: allow offline access for your app, "
                    "or sign in again when it runs out")
@@ -369,10 +386,16 @@ def nexar_signout(b):
     from . import nexar_signin as NS
     with _SIGNIN_LOCK:
         was_waiting = bool(_waiting())
+        stop, stopped = _SIGNIN.get("stop"), _SIGNIN.get("stopped")
         _SIGNIN.clear()
         if was_waiting:
-            _SIGNIN.update(state="cancelled", message="signed out; the sign-in still open in the browser was cancelled")
-        return {"signed_out": bool(NS.signout())}
+            _SIGNIN.update(state="cancelled", message="signed out; the sign-in still open in the browser was cancelled",
+                           stopped=stopped)     # a Sign in meanwhile waits for it to free the port
+        gone = bool(NS.signout())
+    if was_waiting and stop is not None:        # stop listening on the redirect port, so Sign in works again at once
+        stop.set()
+        stopped.wait(5)
+    return {"signed_out": gone}
 
 
 # ------------------------------------------------------------------ add to Altium / KiCad

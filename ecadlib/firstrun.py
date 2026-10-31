@@ -30,9 +30,7 @@ def key_status(rules=None, environ=None):
     environ = os.environ if environ is None else environ
     out = []
     for name, env, why in key_services(rules):
-        ok = all(UC.secret(e, environ) for e in env)
-        if name == "altium365" and not ok and UC.secret("NEXAR_CLIENT_ID", environ) and UC.secret("NEXAR_CLIENT_SECRET", environ):
-            env, ok = ["NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET"], True
+        ok = all(UC.secret(e, environ) for e in env)   # Altium 365: NEXAR_TOKEN / the sign-in, not a stored app
         out.append((" + ".join(env), ok, why))
     return out
 
@@ -223,15 +221,75 @@ def out_workspace(start=".", environ=None):
     return Path(page[0]) if page else None
 
 
-def default_out(kind, bom, start="."):
+def bom_stem(bom):
+    """A BOM's name as a folder / report name: punctuation -> '_', no trailing dot (Windows drops it, so 'rev2.' and
+    'rev2' would be one folder there) and no Windows device name (aux.csv, the auxiliary board's BOM -> 'aux_')."""
+    from .fsutil import portable_stem
+    return portable_stem(re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem).rstrip(".") or "bom")
+
+
+def default_out(kind, bom, start=".", note=None):
     """Default -o of `librarian` / `triage` for this BOM: <workspace>/librarian/<BOM name> or
     <workspace>/reports/triage_<BOM name> in the workspace `ecadlib status` looks at (out_workspace), else
-    out/librarian / out/triage."""
+    out/librarian / out/triage. note(text) is told when another BOM's plan has the folder and this BOM gets its own."""
     ws = out_workspace(start)
-    stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
+    stem = bom_stem(bom)
     if kind == "librarian":
-        return str(ws / "librarian" / stem) if ws else "out/librarian"
+        if not ws:
+            return "out/librarian"
+        d = ws / "librarian" / stem
+        other, mine = _plan_bom_path(d), _resolved(bom)
+        if other and mine and not _same_bom(other, mine):   # another BOM with this file name (projA/bom.csv,
+            import hashlib                        # projB/bom.csv) has this folder: its own one, never a silent replace
+            first = d
+            d = d.with_name(f"{stem}_{hashlib.sha1(os.fsencode(str(mine))).hexdigest()[:8]}")
+            if note:
+                note(f"note: {first} holds the plan for {other}; this BOM's plan is in {d} "
+                     f"(to continue the other one instead: -o {first})")
+        return str(d)
     return str(ws / "reports" / f"triage_{stem}") if ws else "out/triage"
+
+
+def _resolved(p):
+    try:
+        return Path(str(p)).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _same_bom(other, mine):
+    """The plan folder's recorded BOM (other) is this BOM (mine): the same file however it is spelled (samefile: case
+    on macOS, 8.3 names / subst on Windows, links), or the recorded one no longer exists (the project folder or the
+    workspace was moved or renamed: the same plan moving on, not another BOM's)."""
+    try:
+        if not other.exists():
+            return True
+        if mine.exists():
+            return os.path.samefile(other, mine)
+    except OSError:
+        pass
+    return other == mine
+
+
+def _plan_bom_path(out):
+    """The BOM file whose plan is in folder `out` (its library.lock.json, the path relative to `out`), or None."""
+    try:
+        f = json.loads((Path(out) / "library.lock.json").read_text(encoding="utf-8"))["bom"]["file"]
+        return _resolved(Path(out) / str(f)) if f else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def rules_start(out, given_out):
+    """Where `librarian` / `triage` look for ecadlib.toml: from -o when the person gave one (as before); when -o was
+    defaulted into the workspace (default_out), the current folder's file still wins, as it did when the default was
+    ./out/..., and the workspace's own file is used only when there is none here."""
+    if given_out:
+        return out
+    try:
+        return "." if RU.find(".") else out
+    except Exception:
+        return out
 
 
 def default_cache(start="."):
@@ -284,6 +342,8 @@ def config_defaults(cmd, argv, environ=None, start="."):
             vals = [str(_rel_to(v, f)) for v in vals]
         elif flag == "--workspace":
             vals, where = _settings_workspace(start, environ), "the setup page (settings.json)"
+        elif "libs" not in st:                  # no [setup] libs here (none given: `libs = []` says none): the
+            vals, where = _settings_libs(start, environ, argv), "the setup page (settings.json)"   # page's folders
         if not vals:
             continue
         extra = [x for v in vals for x in (flag, v)]
@@ -308,6 +368,28 @@ def _settings_workspace(start=".", environ=None):
     except Exception:
         pass
     return []
+
+
+def _settings_libs(start=".", environ=None, argv=()):
+    """The library folders saved on the setup page (settings.json), when its workspace is the one in use here (a
+    --workspace in argv, else out_workspace: $ECADLIB_WORKSPACE, [setup] workspace, ./ecadlib_workspace, the page's)
+    and they are folders; else []."""
+    page = _settings_workspace(start, environ)
+    if not page:
+        return []
+    given = _values(list(argv), ["--workspace"])
+    used = Path(given[-1]).expanduser() if given else out_workspace(start, environ)
+    try:
+        if used is None or not os.path.samefile(used, page[0]):
+            return []
+    except OSError:
+        return []
+    try:
+        libs = UC.load_settings(environ).get("libs")
+        return [str(Path(x).expanduser()) for x in libs if isinstance(x, str) and x.strip()
+                and Path(x).expanduser().is_dir()] if isinstance(libs, list) else []
+    except Exception:
+        return []
 
 
 # ------------------------------------------------------------------ checks before a command runs

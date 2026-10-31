@@ -24,6 +24,7 @@ import argparse, fnmatch, json, math, os, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL, footprint_gen as F, kicad_import as K, librarian as L, messages as M, release_check as RC, rules as RU, sexpr
+from .cliutil import shell_word
 from .fsutil import write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex, _body, norm_mpn, package_of
@@ -538,10 +539,10 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
     for r in gated:
         if r["action"] == "hold" and r.get("refused"):
             notes.append(f"change to released {r['part']} r{r['revision']} not applied ({r['summary']}): {r['refused']}; "
-                         f"it waits as a held change (ecadlib part show {plan} {r['part']})")
+                         f"it waits as a held change (ecadlib part show {shell_word(plan)} {shell_word(r['part'])})")
         elif r["action"] == "hold":
             notes.append(f"change to released {r['part']} r{r['revision']} held for a second approval ({r['summary']}): "
-                         f"ecadlib part approve {plan} --part {r['part']}")
+                         f"ecadlib part approve {shell_word(plan)} --part {shell_word(r['part'])}")
     if not any(r["part"] == part and r["action"] == "hold" for r in gated):   # applied, not held by change control:
         halves = [k for k, _, _ in done]                                       # a doubt about the half it replaced goes
         RC.clear_doubts(it, it["source"], halves)

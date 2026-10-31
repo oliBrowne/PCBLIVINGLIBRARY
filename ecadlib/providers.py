@@ -468,6 +468,8 @@ def from_part_info(info, res):
     if not info.found:
         return res
     res.mpn, res.manufacturer, res.url = info.mpn, info.manufacturer, info.url
+    if getattr(info, "makers", None):      # every maker the source lists the exact MPN under (bom_triage's maker fill)
+        res.extra["makers"] = [clean_maker(m) for m in info.makers]
     specs = getattr(info, "specs", {}) or {}
     res.package = clean_text(specs.get("package") or specs.get("case/package") or "", 80)
     for o in info.offers:

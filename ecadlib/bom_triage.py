@@ -1149,8 +1149,31 @@ def triage(lines, index, provs, http, shared=None):
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         limited = {}                                   # source -> its quota / plan-limit answer
-        maker, maker_from, makers_seen = "", "", []     # who makes this exact MPN, from a part search (BOM maker empty)
+        makers_seen = []                               # every maker any source lists for this exact MPN (src_makers)
+        maker, maker_from = "", ""             # who makes this exact MPN, from a part search (BOM maker empty)
+        several = False                        # a source lists this exact MPN under more than one maker: none is filled
+        from .release_check import _filled     # a BOM maker of "-" / "N/A" / "~" names none: filled like an empty one
+        bom_maker = _filled(ln.get("manufacturer"))
+        if not bom_maker:                      # nor is it a maker for the sources to pick by ("N/A" -> "NA")
+            work["manufacturer"] = ""
         sheets = []                                    # every datasheet link every source gave, in source order
+
+        def seen(*ms):
+            for m in ms:
+                if m and not any(P.same_maker(m, k) for k in makers_seen):
+                    makers_seen.append(m)
+
+        def disagree(m, by):
+            """A source says m alone makes this exact MPN: the maker, unless an earlier source named another (each
+            says "one maker", together two: a clone and its original), then none is filled."""
+            nonlocal maker, maker_from, several
+            seen(m)
+            if not maker:
+                maker, maker_from = m, by
+            elif not several and not P.same_maker(maker, m):
+                several = True
+                if not bom_maker:
+                    notes.append(f"{maker_from} names the maker {maker}, {by} names {m}: the maker is not filled")
         if skipped:
             notes.append(skipped)
         if pns and not ln.get("mpn"):
@@ -1217,12 +1240,14 @@ def triage(lines, index, provs, http, shared=None):
                         if not desc and (r.extra or {}).get("description"):
                             desc, desc_from = r.extra["description"], prov.name
                         makers = (r.extra or {}).get("makers") or []
-                        if not maker and len(makers) == 1:          # LCSC sells this exact MPN under one maker only
-                            maker, maker_from = makers[0], prov.name
-                        elif not maker and len(makers) > 1:         # clones under the same MPN: not ours to pick
-                            makers_seen = makers
-                            notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
-                                         f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
+                        if len(makers) == 1:                        # LCSC sells this exact MPN under one maker only
+                            disagree(makers[0], prov.name)
+                        elif len(makers) > 1:                       # clones under the same MPN: not ours to pick
+                            several = True
+                            seen(*makers)
+                            if not bom_maker:               # the BOM names the maker: nothing to fill
+                                notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
+                                             f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
                     notes.append(f"jlcpcb: MPN -> {r.lcsc}" if r.found else "jlcpcb: no exact MPN match")
                 else:
                     if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
@@ -1231,8 +1256,18 @@ def triage(lines, index, provs, http, shared=None):
                     if r.found:
                         if not desc and (r.extra or {}).get("description"):
                             desc, desc_from = r.extra["description"], prov.name
-                        if not maker and r.manufacturer and r.mpn and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):
-                            maker, maker_from = P.clean_maker(r.manufacturer), prov.name    # that exact MPN's maker
+                        # that exact MPN's maker, only where the source says it is the only one: its list of makers
+                        # for the MPN names one (an official search), or it answered for the BOM's own LCSC number
+                        # (EasyEDA: one part). A source's first hit of several, or EasyEDA's answer for the LCSC
+                        # number a search picked among clones, is not this part's maker (R-SRC-5)
+                        makers = (r.extra or {}).get("makers") or []
+                        one = len(makers) == 1 or (not makers and isinstance(prov, P.EasyEDA) and r.lcsc
+                                                   and r.lcsc == P.lcsc_number(ln.get("lcsc")))
+                        several = several or len(makers) > 1
+                        if len(makers) > 1:
+                            seen(*makers)
+                        if one and r.manufacturer and r.mpn and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):
+                            disagree(P.clean_maker(r.manufacturer), prov.name)
                         sheet = sheet or (r.extra or {}).get("datasheet") or ""
                         sheets += [u for u in (r.extra or {}).get("datasheets") or [(r.extra or {}).get("datasheet")]
                                    if u and u not in sheets]
@@ -1272,7 +1307,8 @@ def triage(lines, index, provs, http, shared=None):
             "src": src.provider if src else "", "src_symbol": _yn(src and src.has_symbol),
             "src_footprint": _yn(src and src.has_footprint), "src_3d": _yn(src and src.has_3d),
             "src_mpn": src.mpn if src else "", "src_description": desc, "src_description_from": desc_from,
-            "src_manufacturer": "" if ln.get("manufacturer") else maker, "src_manufacturer_from": "" if ln.get("manufacturer") else maker_from,
+            "src_manufacturer": "" if bom_maker or several else maker,
+            "src_manufacturer_from": "" if bom_maker or several else maker_from,
             "src_makers": "; ".join(makers_seen),
             "src_datasheet": sheet,
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
@@ -1335,14 +1371,15 @@ def main(argv=None):
     ap.add_argument("--rules", help="library rules file; its [bom] columns name your BOM headers (default: ecadlib.toml found from here)")
     ap.add_argument("--json", action="store_true", help="print the result as JSON (bom, lines, mapping, counts, rows, reports)")
     a = ap.parse_args(argv)
-    from .firstrun import default_out
+    from .firstrun import default_out, rules_start
+    given_out = bool(a.out)
     a.out = a.out or default_out("triage", a.bom)
     if Path(a.out).suffix.lower() in (".md", ".csv", ".json"):         # -o out/t.md: the stem out/t, as before
         a.out = str(Path(a.out).with_suffix(""))
 
     from . import rules as RU
     from . import plugins as PL
-    rules = RU.load(a.rules, start=Path(a.out).parent)
+    rules = RU.load(a.rules, start=rules_start(str(Path(a.out).parent), given_out))
     from .firstrun import bom_hint
     try:
         lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
@@ -1387,9 +1424,9 @@ TRIAGE_WORDS = {   # triage status -> (term status, plain words)
 
 def _lib_out(bom):
     """The librarian folder to suggest for this BOM: <[setup] workspace or ecadlib_workspace>/librarian/<BOM name>."""
-    from .firstrun import default_out
+    from .firstrun import bom_stem, default_out
     out = default_out("librarian", bom)
-    stem = re.sub(r"[^\w.-]+", "_", Path(str(bom)).stem) or "bom"
+    stem = bom_stem(bom)
     return out if out != "out/librarian" else f"ecadlib_workspace/librarian/{stem}"
 
 
@@ -1414,9 +1451,10 @@ def print_result(rows, counts, a, t=None):
                       + (" (--offline: only the cache)" if a.offline else ""),
                       "run again online, or add API keys (`ecadlib doctor` lists them)"))
     stem = Path(a.out)
+    from .cliutil import shell_word as q             # a BOM name with spaces stays one word when pasted
     t.summary(f"{M.plural(len(rows), 'BOM line')}: " + ", ".join(f"{v} {k}" for k, v in by.items()),
               written=[(str(report_file(stem, ".md")), "triage report"), (str(report_file(stem, ".csv")), "the same as a table")],
-              next=[(f"ecadlib librarian {a.bom} -o {_lib_out(a.bom)}", "fill the missing parts and build the library")],
+              next=[(f"ecadlib librarian {q(a.bom)} -o {q(_lib_out(a.bom))}", "fill the missing parts and build the library")],
               notes=notes)
 
 if __name__ == "__main__":

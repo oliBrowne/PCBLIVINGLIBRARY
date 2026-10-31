@@ -179,10 +179,21 @@ def status(root):
     runs = [dict(p["timing"], plan=p["plan"]) for p in out["plans"] if p["timing"]]
     out["last_run"] = max(runs, key=lambda r: r["finished"]) if runs else None
 
-    tri = _files(root, "reports/triage_*.json") or _files(root, "reports/triage_*.csv")
-    if tri:
-        f = tri[0]
+    tri = _files(root, "reports/triage_*.json") + _files(root, "reports/triage_*.csv")
+    if tri:                                    # the newest triage, the web UI's (.json) or a CLI one (.csv only)
+        f = max(tri, key=lambda p: (p.stat().st_mtime, p.suffix == ".json"))
+        js = f.with_suffix(".json")             # a web UI triage writes its .csv, then its .json (who and when); a
+        if f.suffix == ".csv" and js in tri and js.stat().st_mtime >= f.stat().st_mtime - 2:   # newer CLI .csv of
+            f = js                              # the same name (~/proj/bom.csv vs uploads/bom.csv) is its own run
         t = {"report": rel(f), "finished": _iso(f.stat().st_mtime)}
+        if f.suffix == ".csv":
+            try:
+                import csv
+                with open(f, newline="", encoding="utf-8-sig") as fh:
+                    st = [str(r.get("status") or "") for r in csv.DictReader(fh)]
+                t.update(lines=len(st), counts={k: st.count(k) for k in dict.fromkeys(st)})
+            except (OSError, ValueError, csv.Error):
+                pass
         if f.suffix == ".json":
             d = _json(f, problems, root) or {}
             if isinstance(d, dict):

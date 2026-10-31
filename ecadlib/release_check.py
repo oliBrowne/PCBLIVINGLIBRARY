@@ -562,8 +562,9 @@ def check_item(item, base=".", rules=None):
                 warns.append(f"Description \"{item['description']}\" was written by ecadlib from the category and "
                              "package (no source had one): check it")
         elif not _filled(par.get(RU.canonical_param(k, rules), par.get(k, ""))) and not _supplier_number(par, k, rules):
-            if k == "Manufacturer" and (rules.get("release") or {}).get("manufacturer", "warn") != "hold":
-                warns.append("Manufacturer is empty: no source named the maker; fill it before ordering "
+            if RU.canonical_param(k, rules) == "Manufacturer" and \
+                    (rules.get("release") or {}).get("manufacturer", "warn") != "hold":   # also under its house name
+                warns.append(f"{k} is empty: no source named the maker; fill it before ordering "
                              "([release] manufacturer = \"hold\" holds the part instead)")
             else:
                 add("fields", f"{k} is empty")
@@ -775,11 +776,13 @@ def print_result(rows, plan, stem, t=None):
                 table += ([["", "", e["text"]]] if k else []) + [["", "", f"fix: {e['fix']}"]]
     t.table(table)
     held = [r["name"] for r in rows if r["status"] == "held"]
-    nxt = [(f"ecadlib review {plan}", "go through the held parts one by one")] if held else []
+    from .cliutil import shell_word
+    qp = shell_word(plan)                            # a folder with a space stays one word when pasted
+    nxt = [(f"ecadlib review {qp}", "go through the held parts one by one")] if held else []
     if any(r["status"] == "awaiting_approval" for r in rows):
-        nxt.append((f"ecadlib approve {plan} status", "who still has to sign off"))
+        nxt.append((f"ecadlib approve {qp} status", "who still has to sign off"))
     if not held:
-        nxt.append((f"ecadlib kicad-export {plan} -o kicad --name mylib", "write the KiCad library"))
+        nxt.append((f"ecadlib kicad-export {qp} -o kicad --name mylib", "write the KiCad library"))
     t.summary(M.counts(r["status"] for r in rows) + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else ""),
               written=[(str(stem.with_suffix(".md")), "release check report"), (str(plan), "library plan, statuses updated")],
               next=nxt)

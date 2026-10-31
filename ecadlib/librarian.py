@@ -627,7 +627,8 @@ class Run:
         par = _par(item)
         mpn = par.get("Manufacturer Part Number", "")
         st = {"name": item["name"], "symbol": None, "footprint": None, "tried": [], "review": [], "verify": [],
-              "found": {}, "hint_fp": "", "maker": par.get("Manufacturer", "")}
+              "found": {}, "hint_fp": "",
+              "maker": par.get("Manufacturer", "") if RC._filled(par.get("Manufacturer")) else ""}   # not "N/A"
         for k, rec in (keep or {}).items():
             st[k] = rec
             st["tried"].append(f"resolve: {k} {rec['source']} chosen by user (kept)")
@@ -815,7 +816,9 @@ class Run:
         url = (result.get("lcsc") or {}).get("url") or ""
         if url.startswith("http"):
             st["found"].setdefault("datasheet", (url, f"EasyEDA {lcsc} (lcsc.url)"))
-        if res.manufacturer:
+        # the maker of the BOM's own LCSC number only; for a number a part search found, the triage's one-maker
+        # answer (src_manufacturer, resolve) fills it: the search's first hit among clones is not this part's maker
+        if res.manufacturer and P.lcsc_number(ln.get("lcsc")) == lcsc:
             st["found"].setdefault("manufacturer", (res.manufacturer, f"EasyEDA {lcsc}"))
         st["found"].setdefault("lcsc", (lcsc, f"EasyEDA {lcsc}" + ("" if ln.get("lcsc") else " (LCSC number found by ecadlib, not in the BOM)")))
         if res.extra.get("description"):       # after the part search's LCSC / distributor text (resolve)
@@ -1428,7 +1431,7 @@ def apply_state(item, st, ln):
         if not par.get("ComponentLink1URL"):
             _set_par(item, "ComponentLink1Description", "LCSC")
             _set_par(item, "ComponentLink1URL", f"https://www.lcsc.com/product-detail/{v}.html"); fields["ComponentLink1URL"] = w
-    if not par.get("Manufacturer") and "manufacturer" in st.get("found", {}):
+    if not RC._filled(par.get("Manufacturer")) and "manufacturer" in st.get("found", {}):   # empty, or "-" / "N/A"
         v, w = st["found"]["manufacturer"]
         _set_par(item, "Manufacturer", v); fields["Manufacturer"] = w
     credits = [st["found"]["credit"]] if "credit" in st.get("found", {}) else []   # EasyEDA asks for credit on every reuse
@@ -1811,12 +1814,13 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help='print {"plan", "review", "parts", "ready", "held", "blockers"} instead of the log')
     a = ap.parse_args(argv)
     from . import firstrun as FR
-    a.out = a.out or FR.default_out("librarian", a.bom)
+    given_out = bool(a.out)
+    a.out = a.out or FR.default_out("librarian", a.bom, note=lambda m: print(m, file=sys.stderr))
     other = _plan_bom(a.out)                  # the folder holds another BOM's plan: say so before it is replaced
     if other and other != Path(a.bom).name and not a.json:
         print(f"note: {a.out} holds the plan for {other}; it is replaced by {Path(a.bom).name}'s "
               f"(give each BOM its own -o folder to keep both)", file=sys.stderr)
-    rules = RU.load(a.rules, start=a.out)
+    rules = RU.load(a.rules, start=FR.rules_start(a.out, given_out))
     reader = None
     if a.datasheet_batch:
         reader = D.Reader(a.out, a.cache, None, rules, CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline, timeout=60),
@@ -1873,17 +1877,18 @@ def print_result(items, out, why=(), t=None, tool=None):
     held = [i["name"] for i in items if i.get("status") == "held"]
     changed = [i["name"] for i in items if (i.get("change") or {}).get("state") == "held"]
     plan = out / "plan.json"
+    from .cliutil import shell_word as q             # a folder with a space stays one word when pasted
     nxt = []
     if held:
-        nxt.append((f"ecadlib review {plan}", "go through the held parts one by one"))
+        nxt.append((f"ecadlib review {q(plan)}", "go through the held parts one by one"))
     if changed:
-        nxt.append((f"ecadlib part status {plan}", "changes to released parts, held until a person approves them"))
+        nxt.append((f"ecadlib part status {q(plan)}", "changes to released parts, held until a person approves them"))
     # one KiCad library / Altium folder per plan, named after it: a second BOM's export never replaces the first one's
     ws = out.parent.parent if out.parent.name == "librarian" else Path(".")
     if tool in (None, "", "kicad", "both"):
-        nxt.append((f"ecadlib kicad-export {plan} -o {ws / 'kicad' / out.name} --name {out.name}", "write the KiCad library"))
+        nxt.append((f"ecadlib kicad-export {q(plan)} -o {q(ws / 'kicad' / out.name)} --name {q(out.name)}", "write the KiCad library"))
     if tool in (None, "", "altium", "both"):
-        nxt.append((f"ecadlib altium-pkg {plan} --out {ws / 'altium_pkg' / out.name}",
+        nxt.append((f"ecadlib altium-pkg {q(plan)} --out {q(ws / 'altium_pkg' / out.name)}",
                     "the Altium hand-off folder (.LibPkg, DbLib)"))
     t.summary(f"{M.plural(len(items), 'part')}: {M.counts(i.get('status') for i in items)}"
               + (f"  (held: {', '.join(held[:5])}{' ...' if len(held) > 5 else ''})" if held else "")

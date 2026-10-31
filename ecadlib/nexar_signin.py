@@ -110,9 +110,9 @@ def _save(tok, now=None, refresh=None):
     return blob
 
 
-def wait_for_code(redirect, state, timeout=300, ready=None):
+def wait_for_code(redirect, state, timeout=300, ready=None, cancel=None):
     """Listen on the redirect address (this computer only) until the browser comes back with this sign-in's state;
-    returns the code. A request with another state (or none: any web page open in the browser can fetch
+    returns the code. cancel: a threading.Event that stops the wait (and frees the port) when set (SigninError). A request with another state (or none: any web page open in the browser can fetch
     localhost) gets a 400 and is otherwise ignored, so it cannot end the wait before Nexar's real redirect."""
     host, port, path = parse_redirect(redirect)
     got, done, stray = {}, threading.Event(), []
@@ -160,7 +160,12 @@ def wait_for_code(redirect, state, timeout=300, ready=None):
     try:
         if ready:
             ready()
-        if not done.wait(timeout):
+        end = time.monotonic() + timeout
+        while not done.wait(min(0.2, max(0.0, end - time.monotonic()))):
+            if cancel is not None and cancel.is_set():
+                raise SigninError("the sign-in was cancelled: nothing was stored")
+            if time.monotonic() < end:
+                continue
             if stray:
                 raise SigninError(f"no answer for this sign-in in {timeout} s: the browser came back only with the "
                                   "wrong state (not this sign-in): nothing was stored; run `ecadlib nexar signin` again")
@@ -179,7 +184,8 @@ def wait_for_code(redirect, state, timeout=300, ready=None):
     return got["code"]
 
 
-def signin(client_id, client_secret, open_browser=None, redirect=None, post=None, now=None, timeout=300, out=print):
+def signin(client_id, client_secret, open_browser=None, redirect=None, post=None, now=None, timeout=300, out=print,
+           cancel=None):
     """The one-time browser sign-in. Stores the app and the tokens; returns {"refresh": bool, "expires_at": ...}."""
     import webbrowser
     redirect = redirect or redirect_uri()
@@ -192,7 +198,7 @@ def signin(client_id, client_secret, open_browser=None, redirect=None, post=None
         out("Sign in to Altium 365 in your browser and allow access. If no browser opens, open this address:")
         out("  " + url)
         (open_browser or webbrowser.open)(url)
-    code = wait_for_code(redirect, state, timeout=timeout, ready=ready)
+    code = wait_for_code(redirect, state, timeout=timeout, ready=ready, cancel=cancel)
     tok = _token_request({"grant_type": "authorization_code", "code": code, "redirect_uri": redirect,
                           "code_verifier": verifier, "client_id": client_id, "client_secret": client_secret}, post)
     UC.set_key("NEXAR_CLIENT_ID", client_id)
@@ -259,7 +265,7 @@ def main(argv=None, inp=None, out=print):
     s.add_argument("--new-app", action="store_true", help="ask for the app's client id and secret again")
     s.add_argument("--no-browser", action="store_true", help="only print the address to open")
     s.add_argument("--timeout", type=int, default=300, help="seconds to wait for the browser (default 300)")
-    sub.add_parser("status", help="signed in or not (never shows a token)")
+    sub.add_parser("status", help="signed in or not, refreshing the sign-in when it ran out (never shows a token)")
     sub.add_parser("signout", help="forget the sign-in; the app's id and secret stay stored")
     a = ap.parse_args(argv)
     if a.cmd == "status":
@@ -268,6 +274,10 @@ def main(argv=None, inp=None, out=print):
             out("not signed in: run `ecadlib nexar signin`" + ("  (a pasted NEXAR_TOKEN is stored; it lasts a day)"
                                                                 if UC.get_key("NEXAR_TOKEN") else ""))
             return 1
+        if not access_token():                  # ran out and the refresh failed: what every Altium 365 command hits
+            out(f"signed in once, but the sign-in no longer works: {last_error or 'no access token'}")
+            return 1
+        blob = _load() or blob                  # refreshed just now: the new expiry
         cid = UC.secret("NEXAR_CLIENT_ID") or ""
         exp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(blob.get("expires_at", 0)))
         out(f"signed in to Altium 365 with Nexar app ...{cid[-4:]}; access token valid until {exp}")

@@ -142,11 +142,18 @@ def report(cmd, e, out):
     return code
 
 
-def shell_word(s):
+def shell_word(s, nt=None):
     """A path as one shell word for a printed command (a "next:" hint): as it is when it needs no quoting, else quoted
-    for the shell it will be pasted into (cmd.exe on Windows, sh elsewhere)."""
+    for the shell it will be pasted into (cmd.exe / PowerShell on Windows, sh elsewhere). Windows: in double quotes
+    whenever anything but plain characters is in it (subprocess.list2cmdline quotes only blanks, so R&D or (LF) stayed
+    bare and cmd.exe split the line at the &), trailing backslashes doubled so the closing quote is not escaped."""
     import re, shlex, subprocess
     s = str(s)
     if re.fullmatch(r"[\w@%+=:,./\\-]+", s):
         return s
-    return subprocess.list2cmdline([s]) if os.name == "nt" else shlex.quote(s)
+    if not (os.name == "nt" if nt is None else nt):
+        return shlex.quote(s)
+    if '"' in s:                               # never in a Windows file name; a part name: the C runtime's rules
+        return subprocess.list2cmdline([s])
+    tail = re.search(r"\\*$", s).group(0)
+    return f'"{s}{tail}"'

@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import bom_triage as T, footprint_gen as F, providers as P, rules as RU, sexpr
-from .fsutil import report_file, write_text_atomic
+from .fsutil import portable_stem, report_file, write_text_atomic
 from .httpcache import CachedHTTP
 from .kicad_index import KiCadIndex
 from . import userconfig as UC
@@ -346,7 +346,7 @@ class Workspace:
             where = "/".join(map(str, e.absolute_path))
             raise ValueError(f"the package spec isn't valid{' at ' + where if where else ''}: {e.message}") from e
         sexpr.parse(text)
-        name = self.safe_name(spec["name"], strict=True)
+        name = portable_stem(self.safe_name(spec["name"], strict=True))   # CON.kicad_mod is a Windows device
         return {"name": spec["name"], "report": rep, "kicad_mod": text, "svg": footprint_svg(rep, kicad_mod=text),
                 "exists": (self.gen_dir / f"{name}.kicad_mod").exists()}
 
@@ -380,8 +380,11 @@ class Workspace:
         where triage and the Altium 365 plan will find it. Refuses to replace an existing one unless overwrite."""
         from . import altium_lib
         spec_obj = json.loads(spec) if isinstance(spec, str) else spec
-        res = self.preview_footprint(spec_obj, density)
-        name = self.safe_name(res["name"], strict=True)
+        if not isinstance(spec_obj, dict) or not spec_obj.get("name"):
+            raise ValueError("the package spec needs at least a \"name\"")
+        name = portable_stem(self.safe_name(spec_obj["name"], strict=True))   # CON -> CON_: a file, not the console
+        spec_obj = dict(spec_obj, name=name)      # the footprint inside both files is named as the files (the index
+        res = self.preview_footprint(spec_obj, density)                   # and the plan go by the file name)
         p = self.gen_dir / f"{name}.kicad_mod"
         if p.exists() and not overwrite:
             raise FileExistsError(f"{name} is already in the workspace library; approve again with overwrite to replace it")
@@ -459,7 +462,8 @@ class Workspace:
         to = self.root / "altium" / self._key(bom_path)
         rep = DS.sync(plan, to)
         act = lambda a: [r["name"] for r in rep["results"] if r.get("action") == a and r.get("kind", "part") == "part"]
-        return {"files": [self.rel(p) for p in sorted(to.iterdir()) if p.is_file()], "folder": self.rel(to),
+        files = sorted(p for p in to.iterdir() if p.is_file()) if to.is_dir() else []   # every part held: none
+        return {"files": [self.rel(p) for p in files], "folder": self.rel(to),
                 "from_plan": True, "held": act("held"),
                 "written": len(act("added")) + len(act("updated")) + len(act("up_to_date"))}
 
@@ -1545,7 +1549,11 @@ class Workspace:
         out = self.root / "packages" / self._key(bom_path)
         pcm = KP.build(plan_f, out / "kicad", lib, kicad=int(kicad), include_held=include_held,
                        http=CachedHTTP(self.root / "http_cache", offline=self.offline), log=lambda *a: None)
-        alt = AP.build(plan_f, out / "altium", lib, rules=self.rules_in_use(), log=lambda *a: None)
+        try:                                           # Altium: release-checked parts only (include_held is KiCad's)
+            alt = AP.build(plan_f, out / "altium", lib, rules=self.rules_in_use(), log=lambda *a: None)
+        except AP.NothingReleased as e:                # every part held: the KiCad zip above is still the answer
+            alt = {"libpkg": None, "script": None, "dblibs": [], "documents": [],
+                   "problems": [str(e).split(": ", 1)[-1] + " (Altium packages carry released parts only)"]}
         return {"folder": self.rel(out),
                 "kicad": {"zip": self.rel(Path(pcm["zip"])), "version": pcm["version"], "nickname": pcm["nickname"],
                           "symbols": pcm["symbols"], "footprints": pcm["footprints"], "problems": pcm["problems"]},
