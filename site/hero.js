@@ -207,7 +207,9 @@ const LAYERS = [
     update: (el, r) => {
       const n = el._pads.length;
       el._pads.forEach((p, i) => { const k = clamp(r * 1.6 * (n + 8) / 8 - i / 8); p.style.transform = `scale(${k <= 0 ? 0 : back(k)})`; });
-      el._paste.forEach((p, i) => { const k = clamp((r - .55) * 2.4 * 15 / 3 - i / 3); p.style.transform = `scale(${k <= 0 ? 0 : back(k)})`; });
+      // each paste window stamps over a third of the run after the one before, and the last lands by r = .95
+      const m = el._paste.length;
+      el._paste.forEach((p, i) => { const k = clamp(span(r, .55, .95) * (m + 2) / 3 - i / 3); p.style.transform = `scale(${k <= 0 ? 0 : back(k)})`; });
       el._fab.setAttribute('stroke-dashoffset', (1 - span(r, .3, .6)).toFixed(3));
       el._silk.forEach(l => l.setAttribute('stroke-dashoffset', (1 - span(r, .5, .8)).toFixed(3)));
       el._silkRest.forEach(e => e.setAttribute('opacity', span(r, .7, .85)));
