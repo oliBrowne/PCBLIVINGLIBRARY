@@ -656,14 +656,12 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
         raise ValueError(f"{statef} is damaged ({e}), so nothing was written: it records which rows and model files "
                          "this tool wrote. Restore it from a backup or version control; deleting it makes every row "
                          "count as not this tool's (they are kept, but --prune no longer removes them)") from e
-    if not dry_run:                         # Excel holds an open workbook locked: say so before any file is written
-        for f in (xlsx, lib):
-            try:
-                if f.exists():
-                    open(f, "r+b").close()
-            except PermissionError as e:
-                raise ValueError(f"{f} is open in Excel, Altium or another program (or read-only), so nothing was written. Close it "
-                                 "there, then run this again") from e
+    if not dry_run and xlsx.exists():       # Excel opens a workbook with no sharing: say so before any file is written
+        try:                                # (a read, not a write: Altium's ACE reader shares the file and is no problem)
+            open(xlsx, "rb").close()
+        except PermissionError as e:
+            raise ValueError(f"{xlsx} is open in Excel or another program, so nothing was written. Close it there, then "
+                             "run this again") from e
     managed_rows, managed_files = set(state.get("rows", [])), set(state.get("files", []))
     # an older ecadlib named the workbook after the package ('Bibliothèque.xlsx'), which Altium can't open: move to
     # the ASCII name, keeping the rows (and columns added by hand) of the old one
