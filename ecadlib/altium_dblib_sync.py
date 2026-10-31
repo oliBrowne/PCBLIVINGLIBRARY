@@ -569,6 +569,9 @@ def _released_source(lg, it, src, kind, stage, base, staged):
     return f, note
 
 
+SYNC_WAIT = 600                               # seconds a sync waits for another one into the same DbLib folder
+
+
 def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=None, svn_url=None,
          dry_run=False, base=None, runner=run_cmd, which=shutil.which, rules=None, overwrite_edits=False,
          forget_missing=False):
@@ -587,15 +590,21 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     if dry_run:
         return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
                      overwrite_edits, forget_missing=forget_missing)
-    import tempfile
+    import contextlib, tempfile
     from . import change_gate as CG
-    with CG.publishing(lib_dir), tempfile.TemporaryDirectory(prefix="ecadlib-dblib-") as stage:
+    from .fsutil import plan_lock
+    with CG.publishing(lib_dir), contextlib.ExitStack() as held, \
+            tempfile.TemporaryDirectory(prefix="ecadlib-dblib-") as stage:
+        def hold():
+            if not held.enter_context(plan_lock(Path(target_dir) / ".ecadlib", name="sync.lock", timeout=SYNC_WAIT)):
+                raise ValueError(f"{target_dir}: another sync into this DbLib folder is running (waited {SYNC_WAIT:g} s"
+                                 " for .ecadlib/sync.lock); wait for it to finish and run again")
         return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
-                     overwrite_edits, stage=stage, forget_missing=forget_missing)
+                     overwrite_edits, stage=stage, forget_missing=forget_missing, hold=hold)
 
 
 def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules, overwrite_edits,
-          stage=None, forget_missing=False):
+          stage=None, forget_missing=False, hold=None):
     items = load_plan(plan) if isinstance(plan, (str, Path)) else plan
     base = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
     to = Path(target_dir)
@@ -610,6 +619,8 @@ def _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, 
     from . import change_gate as CG                        # change control (#105): hand edits settle first; a held
     if not dry_run:                                         # change syncs the released revision
         CG.publish_guard(plan if isinstance(plan, (str, Path)) else base, items, mode, rules=rules, base=base)
+    if hold:                                # several plan folders' syncs into one DbLib folder: one at a time from
+        hold()                              # the state read to the write (or one drops the other's rows)
     fname = data_file_name(name)
     xlsx, csvf, lib, statef = to / f"{fname}.xlsx", to / f"{fname}.csv", to / f"{name}{EXT[mode]}", to / STATE
     state = json.loads(statef.read_text()) if statef.exists() else {}

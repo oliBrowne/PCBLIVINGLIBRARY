@@ -33,6 +33,12 @@ def portable_stem(stem):
     return stem[:i] + "_" + stem[i:] if stem[:i].rstrip(" ").upper() in DEVICE_NAMES else stem
 
 
+def plain_stem(name):
+    """A part / package name -> the stem of the datasheet answer files (datasheet.write, read back by fp-edit and the
+    web UI): letters, digits and _.+- only, never a Windows device name ('COM1' -> 'COM1_')."""
+    return portable_stem(re.sub(r"[^A-Za-z0-9_.+-]", "_", str(name)))
+
+
 RETRY = os.name == "nt"             # only Windows refuses a rename over an open file; elsewhere it is a real error
 DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
 TMP = re.compile(r"\..+\.\d+\.\d+\.tmp")   # the temp file name below: .NAME.<pid>.<thread>.tmp
@@ -131,20 +137,21 @@ _HELD = threading.local()                # plan.lock folders this thread holds (
 # needs both takes the library lock before plan.lock (approvals.cli_plan_lock, Workspace._plan_lock with a folder),
 # so a librarian run (library lock, then plan.lock) and a web UI / CLI decision can never wait for each other.
 @contextlib.contextmanager
-def plan_lock(workspace_root, wait=True, timeout=None):
+def plan_lock(workspace_root, wait=True, timeout=None, name="plan.lock"):
     """<workspace>/plan.lock: every path that records into a plan (the web UI's Approvals page / approve_part, change
     decisions, `ecadlib approve`) takes it while it rewrites plan.json, so two of them never overwrite each other.
     wait=False yields False at once when another thread or process holds it; timeout (seconds, with wait) yields False
     once that long has passed (plan.lock is held only for a short read-merge-write, so a few seconds is plenty).
     Re-entrant in one thread (an inner plan write under an outer lock does not wait for itself); other threads and
-    processes are kept out. Released by the OS if the holder dies. See the lock order above."""
+    processes are kept out. Released by the OS if the holder dies. See the lock order above. name: another lock file in
+    that folder (userconfig's keys.json / settings.json writes)."""
     d = Path(workspace_root).resolve()
     held = _HELD.__dict__.setdefault("dirs", set())
-    if d in held:
+    if d / name in held:
         yield True
         return
     d.mkdir(parents=True, exist_ok=True)
-    f = open(d / "plan.lock", "a+b")
+    f = open(d / name, "a+b")
     msvcrt = None
     deadline = None if not wait or timeout is None else time.monotonic() + max(0.0, float(timeout))
     try:
@@ -169,12 +176,12 @@ def plan_lock(workspace_root, wait=True, timeout=None):
         else:
             got = True
         if got:
-            held.add(d)
+            held.add(d / name)
         try:
             yield got
         finally:
             if got:
-                held.discard(d)
+                held.discard(d / name)
             if msvcrt is not None and got:                      # Windows frees a lock left on a closed file late
                 try:
                     f.seek(0)
@@ -183,6 +190,24 @@ def plan_lock(workspace_root, wait=True, timeout=None):
                     pass
     finally:
         f.close()
+
+
+@contextlib.contextmanager
+def computer_lock(name):
+    """One writer at a time on this computer for a file several plan folders share (this computer's and the project's
+    ecadlib_publishers.json): a file lock .<name>.lock in the ecadlib settings folder. A settings folder that cannot
+    be written: no lock."""
+    from .userconfig import config_dir
+    cm = plan_lock(config_dir(), name=f".{re.sub(r'[^A-Za-z0-9_.-]', '_', name)}.lock")
+    try:
+        cm.__enter__()
+    except OSError:
+        cm = None
+    try:
+        yield
+    finally:
+        if cm is not None:
+            cm.__exit__(None, None, None)
 
 
 def _win_lock(msvcrt, f, wait, poll=0.5):

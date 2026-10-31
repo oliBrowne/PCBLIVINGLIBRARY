@@ -292,6 +292,23 @@ def rules_start(out, given_out):
         return out
 
 
+def default_cache(start="."):
+    """Default --cache of the commands that download: <workspace>/http_cache, the one the web UI, the MCP server and the
+    menus use for that workspace (out_workspace), else out/http_cache. One cache per workspace: run from another folder,
+    a command does not download the same datasheets again or pay again for datasheet answers it already has.
+    A workspace folder that is not there (a stale setting, an unplugged drive) is not created for a cache: out/http_cache.
+    An out/http_cache here that already holds downloads (a run before the workspace, a cache copied in for an offline
+    replay) keeps being used until the workspace has its own: those answers are not paid for again."""
+    try:
+        ws = out_workspace(start)
+    except Exception:                         # a broken settings file: the old default
+        ws = None
+    old = Path(start) / "out" / "http_cache"
+    if not ws or not Path(ws).is_dir() or (old.is_dir() and not (Path(ws) / "http_cache").is_dir()):
+        return "out/http_cache"
+    return str(Path(ws) / "http_cache")
+
+
 def _rel_to(p, rules_file):
     p = Path(str(p)).expanduser()
     return p if p.is_absolute() else (Path(rules_file).resolve().parent / p)

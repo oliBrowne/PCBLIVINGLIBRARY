@@ -449,18 +449,24 @@ def read_bom(path, columns=None, rules=None, root=None):
     mm_inch = metric_fp and _inch_only_codes(df, col["footprint"])   # a 'Package (mm)' column holding 1206 / 0805
     nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
                                                                   # after Value holds in the rows that fit the header
+    left = {j: _column_shapes(df, j, hlen) for f, j in col.items() if f == "qty" and text_src
+            and "value" in col and j < col["value"]}            # a Qty before Value, in the rows that fit (a package
+                                                                  # only one row has is no evidence of a shift)
     lines, skipped = [], 0
     for idx, row in df.iterrows():
         cells = [str(x).strip() for x in row]
         note, shifted = [], False
         n = max((j + 1 for j, c in enumerate(cells) if c), default=0)
+        vj = col.get("value")
+        split = (vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
+                 and (re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's own
+                      # unit: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8);
+                      or _rated_value(cells[vj], cells[vj + 1])))     # a zener's '3,3V', a fuse's '1,5A' (R-FX10-4)
+        if text_src and split and widths and widths[idx] > max(hwidth, hlen):   # 'R1,1,4,7k,X,0603,': the last
+            n = max(n, hlen + widths[idx] - max(hwidth, hlen))     # cell empty, the row still a cell wider than the
+                                                                  # header (a bare trailing ',' splits no value)
         if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'
-            vj = col.get("value")
-            if (n == hlen + 1 and vj is not None and vj + 1 < len(cells) and re.fullmatch(r"\d+", cells[vj])
-                    and (re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's
-                         # own unit: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8);
-                         or _rated_value(cells[vj], cells[vj + 1]))     # a zener's '3,3V', a fuse's '1,5A' (R-FX10-4)
-                    and _fraction_fits(cells, vj, col, nxt)):
+            if n == hlen + 1 and split and _fraction_fits(cells, vj, col, nxt, left):
                 cells = cells[:vj] + [f"{cells[vj]},{cells[vj + 1]}"] + cells[vj + 2:] + [""]
                 note.append(f"value {cells[vj]} was split by an unquoted {'' if two_readings(cells[vj]) else 'decimal '}"
                             "comma; read as one cell")              # '4,700p' reads two ways: triage says so
@@ -585,25 +591,32 @@ def _rated_value(whole, frac):
                 whole == "0" and re.fullmatch(r"\d{1,3}\s*[mkK]?[VvAW]", frac))
 
 
-def _fraction_fits(cells, vj, col, shapes=()):
+def _fraction_fits(cells, vj, col, shapes=(), left=None):
     """cells[vj] | cells[vj + 1] ('4' | '7k', '22' | '1') is one value split at its decimal comma, not Value 100 then
     the next column (Qty 2, Footprint 0603, Voltage 50V, Tolerance 1%) with the stray comma further on. It is not when
     the fraction has a '%' (a tolerance, never a value's decimals); when the column after Value holds cells shaped like
     it in the rows that fit the header (shapes: '50V' among '25V', '16V') and the joined reading's cell there does not;
     when a bare number makes a value of more than 3 significant digits (the E-series: 4,7  22,1  4,99); or when a Qty
-    column after Value, read from the joined row, no longer counts the designators."""
+    column after Value, read from the joined row, no longer counts the designators. Nor when the stray comma is left of
+    Value, so a cell there was shifted into Value ('Cap, X7R' | 0603 | 100n): the whole part has a leading zero
+    (0603), a Qty before Value is shaped unlike that column's cells in the rows that fit (left: {column:
+    shapes}), or a Qty before Value does not count the designators either."""
     frac = cells[vj + 1]
-    if "%" in frac:
+    if "%" in frac or re.fullmatch(r"0\d+", cells[vj]):
+        return False
+    if any(sh and _shape(cells[j]) not in sh for j, sh in (left or {}).items()):
         return False
     if _shape(frac) in shapes and _shape(cells[vj + 2] if vj + 2 < len(cells) else "") not in shapes:
         return False
     if not re.search(r"[^\d\s]", frac) and len((cells[vj] + re.sub(r"\D", "", frac)).lstrip("0")) > 3:
         return False
     qj, dj = col.get("qty"), col.get("designator")
-    if qj is None or qj < vj:
+    if qj is None:
         return True
-    q, ref = cells[qj + 1], cells[dj + (dj > vj)] if dj is not None else ""
-    return bool(re.fullmatch(r"\d+", q)) and (not ref or count_refs(ref) == int(q))
+    q, ref = cells[qj + (qj > vj)], cells[dj + (dj > vj)] if dj is not None else ""
+    if not q and qj < vj:                                # a blank Qty before Value: nothing to check
+        return True
+    return bool(re.fullmatch(r"\d+(?:\.0*)?", q)) and (not ref or count_refs(ref) == int(float(q)))   # '1.0': Excel
 
 
 def header_row(raw, columns=None):
@@ -1352,7 +1365,8 @@ def main(argv=None):
     ap.add_argument("--providers", help="comma list in order (default: [providers] order in the rules, else "
                     "nexar,digikey,mouser,jlcpcb_search,easyeda: the official APIs first); plugins: `ecadlib plugins list`")
     ap.add_argument("--offline", action="store_true", help="use HTTP cache only")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--rate", type=float, default=1.0, help="min seconds between requests per host")
     ap.add_argument("--rules", help="library rules file; its [bom] columns name your BOM headers (default: ecadlib.toml found from here)")
     ap.add_argument("--json", action="store_true", help="print the result as JSON (bom, lines, mapping, counts, rows, reports)")

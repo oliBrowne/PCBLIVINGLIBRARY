@@ -664,7 +664,8 @@ def main(argv=None):
     ap.add_argument("--apply", action="store_true", help="send the A365 updates (default: dry run)")
     ap.add_argument("--param", default="Lifecycle", help="A365 parameter name")
     ap.add_argument("--offline", action="store_true", help="use HTTP cache only")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--max-age", type=float, default=20, help="hours a cached response stays fresh")
     ap.add_argument("--rate", type=float, default=1.0, help="min seconds between requests per host")
     a = ap.parse_args(argv)

@@ -457,14 +457,13 @@ def save_state(rep, state_dir):
     reported; an errored check keeps its old state)."""
     d = Path(state_dir)
     d.mkdir(parents=True, exist_ok=True)
+    from .fsutil import write_text_atomic          # a run killed (or a full disk) mid-write leaves the old file whole
     for s in rep.get("checks") or []:
         if s.get("status") in ("ok", "attention") and s.get("_state"):
             for f, data in s["_state"].items():
-                tmp = d / (f + ".tmp")
-                tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
-                os.replace(tmp, d / f)
-    (d / "upkeep_last.json").write_text(json.dumps({"date": rep.get("date"), "new_changes": rep.get("new_changes", 0)},
-                                                   indent=1), encoding="utf-8")
+                write_text_atomic(d / f, json.dumps(data, indent=1, sort_keys=True))
+    write_text_atomic(d / "upkeep_last.json", json.dumps({"date": rep.get("date"), "new_changes": rep.get("new_changes", 0)},
+                                                         indent=1))
 
 
 def _esc(v):
@@ -673,7 +672,8 @@ def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
                     help="https://host/api/v4 (default CI_API_V4_URL, else [agent] gitlab_api)")
     ap.add_argument("--no-notify", action="store_true", help="do not send [notify] webhooks for this run")
     ap.add_argument("--rules", help="ecadlib.toml (default: searched from the input's folder)")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--offline", action="store_true", help="HTTP cache only")
     ap.add_argument("--no-save", action="store_true", help="do not update the state (dry run)")
     a = ap.parse_args(argv)

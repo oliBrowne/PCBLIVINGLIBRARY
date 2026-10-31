@@ -579,7 +579,8 @@ def main(argv=None):
     ap.add_argument("plan")
     ap.add_argument("--part", help="plan item (Part Number); without it, `list` shows the held items")
     ap.add_argument("--lib", action="append", default=[], help="local KiCad library dir (repeatable)")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     ap.add_argument("--json", action="store_true", help="print the API result as JSON")
     sub = ap.add_subparsers(dest="cmd", required=True)

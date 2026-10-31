@@ -984,7 +984,7 @@ def test_other_json_objects_without_their_optional_fields_are_read():
     g["package"]["pin_positions"] = [{"number": 1, "side": "L", "offset": "-0.95"}]
     pkg = D.parse_message(TD.message(D.to_wire(g)))["package"]
     assert pkg["land"] == {"pad_length": 1.0, "pad_width": 0.8, "pad_center": 1.2, "pad_center_y": None,
-                           "ep_across": None, "ep_along": None, "ep_mask_across": None, "ep_mask_along": None,
+                           "ep_across": None, "ep_along": None, "ep_center": None, "ep_mask_across": None, "ep_mask_along": None,
                            "pin1_length": None, "pin1_width": None, "tab_length": None, "tab_width": None,
                            "tab_center": None}, pkg["land"]
     assert pkg["tab"]["width"] == {"nom": 3.0, "min": None, "max": None, "tol": None} and pkg["tab"]["length"]["nom"] == 2.0

@@ -1127,6 +1127,16 @@ class Run:
                     raise D.DatasheetError(unread)
                 pages = ", ".join(map(str, res["sidecar"]["land_pages"][:4]))
                 std = (pkg, found, f"the datasheet prints its own land (page {pages}) but the read did not return it")
+        jn = std and not st["footprint"] and D.F.joined(res["spec"])   # leads merged into the pad by the maker's land:
+        if jn:
+            st["review"].append(f"joined_pins: pins {','.join(jn[1])} and the exposed pad are one pad on the maker's land; "
+                                "that merged pad is built, not the standard table's separate pads, so the footprint "
+                                "matches the symbol's one pin for it")
+            std = None                                # a table's separate pads would leave the merged symbol pin bare
+        if std and not st["footprint"] and not SP.sides_fit(res["spec"], std[0]):
+            raise D.DatasheetError(f"pin sides: the read's pins per side differ from the standard package {std[0]}'s "
+                                   "rows, so its land would put pads where the part has none (check pin_sides against "
+                                   "the pin figure)")
         if std:                                       # the read named a checked package: its land, not the read's pads
             pkg, found, why = std
             ren = SP.tab_renumber(res["spec"], pkg, [(q["num"], q["name"]) for q in (res.get("symbol") or {}).get("pins") or []])
@@ -1792,7 +1802,8 @@ def main(argv=None):
     ap.add_argument("--allow", action="append", default=[], metavar="PART", help="release PART despite its release-check failures")
     ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else nexar,digikey,mouser,jlcpcb_search,easyeda)")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")
     ap.add_argument("--box", action="store_true", help="extruded 3D box instead of a generated STEP when there is no KiCad model")
     ap.add_argument("--user", help="who gives the --allow (default: $ECADLIB_USER, then git config user.name/email)")

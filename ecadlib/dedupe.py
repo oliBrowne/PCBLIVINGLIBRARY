@@ -18,8 +18,8 @@ read from <plan dir>/a365_state.json when present):
              is reported as a conflict. Footprints with the same geometry are still kept apart when the parts using
              them are of different kinds (their plan folders: an inductor is never put on an LED's footprint, a
              resistor never on a capacitor's 3D body) or their 3D bodies differ in height by more than 0.05 mm.
-  symbol     identical symbol pinout under different symbol names: designator prefix plus (pin number, pin name)
-             for every pin. Symbols with fewer than symbol_min_pins (default 3) pins are not compared: every
+  symbol     identical symbol pinout under different symbol names: designator prefix plus (pin number, pin name,
+             electrical type) for every pin. Symbols with fewer than symbol_min_pins (default 3) pins are not compared: every
              resistor and capacitor would match.
 Each group gets a recommended keeper: --keep wins, then an Altium 365 component, then an existing library entry,
 then the one most plan items use, a plan item that is ready, a part from the official KiCad library, the shortest
@@ -41,11 +41,11 @@ from .kicad_index import norm_mpn, parse_value
 from .fsutil import write_text_atomic
 
 DEFAULT_SUFFIXES = [
-    r"#(TR)?PBF$", r"#TR$",                                   # Analog Devices / Linear Technology
+    r"#(TRM?)?PBF$", r"#TRM?$",                               # Analog Devices / Linear Technology (TRM: mini reel)
     r"(?<=[0-9A-Z])TRPBF$", r"(?<=\d[A-Z])PBF$|(?<=\d)PBF$",  # Infineon/IR lead-free (+ tape and reel)
     r"(\((LF|SN|PBF|PB-?FREE)\))+$",                         # JST (LF)(SN)
-    r"[-/ _](TR|T/R|T&R|TR7|TR13|R7|R13|TAPE|REEL|CT|CUT ?TAPE|BULK|TRAY|TUBE)$",
-    r"-?REEL(7|13)?$", r"(T&R|T/R)$", r",\d{3}$",           # ADI -REEL7, NXP packing code ,115
+    r"[-/ _](TR|T/R|T&R|TR7|TR13|R7|R13|RL|RL7|TAPE|REEL|CT|CUT ?TAPE|BULK|TRAY|TUBE)$",
+    r"-?REEL(7|13)?$", r"(T&R|T/R)$", r",\d{3}$",           # ADI -REEL7 / -RL7, NXP packing code ,115
 ]
 CONFIG = {"strip_suffixes": [], "default_suffixes": True, "symbol_min_pins": 3, "keep": [], "ignore": []}
 MPN_COLS = ("Manufacturer Part Number", "MPN", "Mfr Part Number")
@@ -349,12 +349,15 @@ def fp_hash(geom):
 
 
 def _pin_name(s):
-    return re.sub(r"\\", "", str(s or "")).strip().upper().lstrip("~") or ""
+    """Case folded; an overbar is kept as active low (fingerprint.canon_pin_name): 74HC125 ~{1OE} is not 74HC126 1OE."""
+    from .fingerprint import canon_pin_name
+    return canon_pin_name(s)
 
 
 def sym_pinout(sym):
-    """(designator prefix, sorted (number, name)) of an altium_lib read_schlib entry."""
-    pins = sorted({(r["num"], _pin_name(r.get("name"))) for r in sym["records"] if r.get("RECORD") == "2"})
+    """(designator prefix, sorted (number, name, electrical type)) of an altium_lib read_schlib entry: a 74HC05's
+    open-drain outputs are not a 74HC04's."""
+    pins = sorted({(r["num"], _pin_name(r.get("name")), r.get("etype", 4)) for r in sym["records"] if r.get("RECORD") == "2"})
     des = next((r.get("TEXT", "") for r in sym["records"] if r.get("RECORD") == "34"), "")
     return re.match(r"[A-Za-z]*", des).group(0).upper() + _polarity(sym), pins
 

@@ -7,9 +7,11 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
-### Added
+### Fixed
 
-- Bug reports the user sends themselves: an error ecadlib did not expect (from a command, the web UI, the MCP server or the Altium / KiCad menu) is saved on this computer with API keys, tokens, e-mail addresses, the user name and home folder blanked out. `ecadlib report-bug` and **Report a bug** in the web UI show that text and open a pre-filled GitHub issue; nothing is sent unless the user presses Submit there. PRIVACY.md and the site's privacy page say so.
+- Commands that download (librarian, triage, datasheet, resolve, kicad-export and the others with `--cache`) keep their download cache, and with it the paid datasheet answers, in `<workspace>/http_cache` when a workspace is set up: the same cache the web UI, the MCP server and the menus use. Before, it was `out/http_cache` of whatever folder the terminal was in, so a run from another folder or from the web UI downloaded and paid for the same datasheets again. Without a workspace (or when its folder is missing) it is still `out/http_cache`, and an `out/http_cache` that already holds downloads keeps being used until the workspace has its own, so answers paid for before are not paid for again; `ecadlib review` looks in both.
+- Setup page: the Altium 365 address is saved as the workspace's own address (`https://acme.365.altium.com/`) when a page of the workspace was copied (`.../projects`); an address with a line break, a tab or a `user:password@` in it is refused instead of saved (the password would have been kept in `ecadlib.toml`). Errors name the full folder that was typed ("give the workspace as a full path, e.g. C:\Users\...\Documents\ecadlib", not "e.g. ecadlib"), and a workspace folder that cannot be made says so instead of "Something went wrong".
+- Bug reports also blank quoted values with spaces or escaped quotes (`password='my pass phrase'`), `client_id=` values and the company name in an Altium 365 address.
 
 ### Changed
 
@@ -32,6 +34,7 @@ The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_stat
 
 ### Added
 
+- Bug reports the user sends themselves: an error ecadlib did not expect (from a command, the web UI, the MCP server or the Altium / KiCad menu) is saved on this computer with API keys, tokens, e-mail addresses, the user name and home folder blanked out. `ecadlib report-bug` and **Report a bug** in the web UI show that text and open a pre-filled GitHub issue; nothing is sent unless the user presses Submit there. PRIVACY.md and the site's privacy page say so.
 - A dimension printed as a nominal with two one-sided tolerances is read as min/nom/max in either order, including an unsigned zero side: "0.7 +0.1/0" (JST's board hole) is 0.7 to 0.8 mm, "3.56 -0.25/+0.15" reads like "3.56 +0.15/-0.25". An unsigned non-zero side ("0.7 +0.1/0.05") stays unread, since it could mean either way.
 - An answer the parser rejected is kept (`datasheet_results/rejected/`), and a later parser that reads it uses it with no new read, so a parser fix can be re-scored for free.
 - When an answer leaves out a maker's land that its pages print (or TI's PowerPAD thermal land), the one feedback turn names the page and the land fields, so the part can build instead of being held. A saved batch answer gets that turn in a later live run too; `--cached-only` never sends it.

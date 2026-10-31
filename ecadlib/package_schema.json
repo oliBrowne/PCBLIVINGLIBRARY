@@ -119,6 +119,56 @@
       "minimum": 0,
       "description": "qfn: pins on each of the top and bottom sides (default pin_count/4)"
     },
+    "pin_sides": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "qfn: the pin numbers along each side of the body, read from the pin configuration figure itself (top view), not from the package name or a common pinout: left from top to bottom, bottom from left to right, right from bottom to top, top from right to left (counter-clockwise from pin 1, the first pin on the left). A lead place with no pin (a lead the part leaves out, a gap in the row) is \"\"; a side with no leads is []. The exposed pad is not a side's pin.",
+      "properties": {
+        "left": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.+-]{0,16}$"
+          },
+          "description": "pins down the left side, top to bottom"
+        },
+        "bottom": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.+-]{0,16}$"
+          },
+          "description": "pins along the bottom, left to right"
+        },
+        "right": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.+-]{0,16}$"
+          },
+          "description": "pins up the right side, bottom to top"
+        },
+        "top": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.+-]{0,16}$"
+          },
+          "description": "pins along the top, right to left"
+        }
+      }
+    },
+    "joined_pins": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "integer"
+        ],
+        "pattern": "^[A-Za-z0-9_.+-]{1,16}$"
+      },
+      "description": "qfn: the pins whose leads are one piece of metal with the exposed pad, as the bottom view draws them (a power MOSFET's drain leads running into its drain pad: PG-TDSON-8, SuperSO8, PQFN 5x6). They are one side's whole row; the land makes them and the pad one pad, numbered with the lowest of them, so give the maker's land for it (land.ep_across, ep_along, ep_center). Leave out when the leads are separate from the pad, even on the same net."
+    },
     "exposed_pad": {
       "type": "object",
       "additionalProperties": false,
@@ -1050,6 +1100,11 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "The same thermal land measured along the pad rows (top to bottom), e.g. TI's (5) or (6.5)."
+        },
+        "ep_center": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The thermal land's centre when the land draws it off the part's centre: its distance from the centre toward the side whose leads are joined to it (joined_pins; KiCad's TDSON-8-1 drain pad, 1.05). Leave out when the land is centred."
         },
         "ep_mask_across": {
           "type": "number",

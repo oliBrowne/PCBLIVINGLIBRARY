@@ -26,8 +26,34 @@ SETTINGS, KEYS = "settings.json", "keys.json"
 NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 MAX_KEY = 4096
 NO_STORED = "ECADLIB_NO_STORED_KEYS"          # set (the eval gate, golden builds): stored keys are not read
-_WRITE = threading.RLock()                    # read-modify-write of settings.json / keys.json: the web UI's request
-                                              # threads (a key saved while setup is saved) never drop each other's change
+class _WriteLock:
+    """The read-modify-write of settings.json / keys.json: the web UI's request threads (a key saved while setup is
+    saved) and other ecadlib processes (the MCP server refreshing the Altium 365 sign-in while the setup page stores a
+    key) never drop each other's change. Re-entrant in a thread; a file lock in the config folder across processes."""
+    def __init__(self):
+        self._r, self._n, self._f = threading.RLock(), 0, None
+
+    def __enter__(self):
+        self._r.acquire()
+        if self._n == 0:
+            from .fsutil import plan_lock
+            cm = plan_lock(config_dir(), name=".write.lock")
+            try:
+                cm.__enter__()
+                self._f = cm
+            except OSError:                       # a read-only config folder: the write itself says so
+                self._f = None
+        self._n += 1
+
+    def __exit__(self, *exc):
+        self._n -= 1
+        if self._n == 0 and self._f is not None:
+            f, self._f = self._f, None
+            f.__exit__(None, None, None)
+        self._r.release()
+
+
+_WRITE = _WriteLock()
 
 
 def config_dir(environ=None):

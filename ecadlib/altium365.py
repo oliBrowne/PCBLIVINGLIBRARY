@@ -878,10 +878,11 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
     target = ws_target(ws)
     from . import change_gate as CG
     claims = me = None
-    forgotten = []
+    forgotten, gone = [], []
+    load_claims = lambda: CG.SharedClaims(CG.publishers_file(folder), CG.publishers_file(folder).parent, section=target,
+                                          computer=CG.computer_publishers_file())
     if lg is not None:                         # which plan folders pushed each part to this workspace
-        claims = CG.SharedClaims(CG.publishers_file(folder), CG.publishers_file(folder).parent, section=target,
-                                 computer=CG.computer_publishers_file())
+        claims = load_claims()
         me = claims.me(folder, create=not dry_run) or "?this"
         if forget_missing:
             gone = sorted({p for v in claims.claims.values() for p in v
@@ -1114,11 +1115,15 @@ def push(items, client, ws, dry_run=False, note="ecadlib sync", policy=None, rul
             return {"action": r.get("action", ""), **({"a365_revision": rid} if rid else {}),
                     **({"models": r["models"]} if r.get("models") else {})}
         CG.record_publish(folder, items, target, ok=lambda i: i["name"] in ok, detail=detail)
-        if claims is not None:                 # this plan folder pushed them here (shared with other plan folders)
-            before = json.dumps([claims.claims, claims.plans], sort_keys=True)
-            claims.claim(sorted({str(n).casefold() for n in ok}), me, folder)
-            if json.dumps([claims.claims, claims.plans], sort_keys=True) != before or forgotten:
-                claims.save()
+        if claims is not None:                 # this plan folder pushed them here (shared with other plan folders):
+            from .fsutil import computer_lock  # read again, so a push of another plan meanwhile keeps its claims
+            with computer_lock("publishers"):
+                claims = load_claims()
+                claims.forget(gone)
+                before = json.dumps([claims.claims, claims.plans], sort_keys=True)
+                claims.claim(sorted({str(n).casefold() for n in ok}), me, folder)
+                if json.dumps([claims.claims, claims.plans], sort_keys=True) != before or forgotten:
+                    claims.save()
     for label in forgotten:
         results.append({"name": label, "action": "forgotten",
                         "detail": "that plan folder is gone (--forget-missing-plans): its claim on the parts it pushed "

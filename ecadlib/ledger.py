@@ -671,13 +671,20 @@ def save_usage(folder, data):
 
 
 def record_usage(folder, project, parts, tool="bom", note=""):
-    """project: a path / name; parts: {part: {"revision": n or None, "designators": [...]}}. Replaces that project's row."""
-    data = load_usage(folder)
-    old = data["projects"].get(str(project)) or {}
-    row = {"tool": tool, "parts": parts, **({"note": note} if note else {})}
-    if {k: old.get(k) for k in row} != row or "scanned_at" not in old:    # unchanged: the file stays byte-identical
-        data["projects"][str(project)] = dict(row, scanned_at=now())
-        save_usage(folder, data)
+    """project: a path / name; parts: {part: {"revision": n or None, "designators": [...]}}. Replaces that project's row.
+    The read-change-write holds the library lock (re-entrant: the librarian holds it already), so two scans at once
+    keep both rows. A library folder this user cannot write (no lock file): the unchanged rescan still reads."""
+    with contextlib.ExitStack() as held:
+        try:
+            held.enter_context(locked(folder))
+        except OSError:                                  # a changed row's write below says what is wrong
+            pass
+        data = load_usage(folder)
+        old = data["projects"].get(str(project)) or {}
+        row = {"tool": tool, "parts": parts, **({"note": note} if note else {})}
+        if {k: old.get(k) for k in row} != row or "scanned_at" not in old:    # unchanged: the file stays byte-identical
+            data["projects"][str(project)] = dict(row, scanned_at=now())
+            save_usage(folder, data)
     return data
 
 

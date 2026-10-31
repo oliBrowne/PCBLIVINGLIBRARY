@@ -97,8 +97,9 @@ FILL = {"body": "body", "line": "line"}
 
 # ------------------------------------------------------------------ recipe text
 def _t(s):
-    """A text field: tabs and line breaks would split the record, so they become spaces."""
-    return re.sub(r"[\t\r\n]+", " ", str(s if s is not None else ""))
+    """A text field: tabs, line breaks and the other control characters would split the record (the readers'
+    str.splitlines() also breaks on form feed, \\x1c-\\x1e, \\x85, U+2028/2029), so they become spaces."""
+    return re.sub(r"[\x00-\x1f\x7f\x85\u2028\u2029]+", " ", str(s if s is not None else ""))
 
 
 def _a(deg):

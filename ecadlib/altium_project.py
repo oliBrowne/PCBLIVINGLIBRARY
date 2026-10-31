@@ -904,7 +904,7 @@ def load_lifecycle(path):
     return rekey(data.get("parts") or {})          # a state keyed before decimal points were kept reads as now
 
 
-def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, rules=None, log=None):
+def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, rules=None, log=None, root=None):
     """-> {parts: {key: entry}, flags: [...], projects: [...], library: bool, warnings: [...]}"""
     from .dedupe import mpn_key
     from .kicad_index import norm_mpn
@@ -912,7 +912,7 @@ def where_used(dirs, part=None, plan=None, libs=(), a365=None, lifecycle=None, r
     projects, warnings, parts = [], [], {}
     for f in find_projects(dirs):
         try:
-            prj = load_project(f, rules)
+            prj = load_project(f, rules, root if _inside(f, root) else None)    # a project in root stays in it
         except Exception as e:
             warnings.append(f"{f}: {type(e).__name__}: {e}")
             continue

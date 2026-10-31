@@ -672,7 +672,8 @@ def main(argv=None):
     ap.add_argument("--base-url", help="https URL the folder will be served from: also write repository.json + packages.json")
     ap.add_argument("--include-held", action="store_true", help="also package held parts (a plan's, or those a kicad-export "
                     "--include-held folder holds); the package's NOTICE.txt and the problems say so")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--offline", action="store_true", help="with a plan: use the HTTP cache only")
     ap.add_argument("--schema", help="KiCad's pcm.v1.schema.json to validate against (default: the one KiCad installs)")
     ap.add_argument("--unchecked", action="store_true", help="package a KiCad folder ecadlib did not export (no "
