@@ -5,6 +5,7 @@ The KiCad side: the library as KiCad files, real KiCad checks and KiCad/Altium p
 On this page:
 
 * [`kicad_export.py`: the same library as KiCad files](#kicad_exportpy-the-same-library-as-kicad-files)
+* [`kicad_install.py`: the library in KiCad itself, for every project](#kicad_installpy-the-library-in-kicad-itself-for-every-project)
 * [`parity.py`: KiCad and Altium always match](#paritypy-kicad-and-altium-always-match)
 * [Real KiCad checks (`tests/test_kicad_real.py`)](#real-kicad-checks-teststest_kicad_realpy)
 
@@ -22,6 +23,33 @@ Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym`
 * **Format:** KiCad 8 (`.kicad_sym` version 20231120, footprints at most 20240108), so KiCad 8, 9 and 10 can open it. KiCad 9/10 syntax from the upstream library is written the KiCad 8 way and flags KiCad 8 doesn't know are dropped.
 * **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **In KiCad itself** (7.0.11, see [real KiCad checks](#real-kicad-checks-teststest_kicad_realpy)): the `fp-lib-table` resolves in a KiCad project and its footprints match the library; KiCad 7 refuses the KiCad 8 symbol library as such, and loads it with the two KiCad 8 tokens (`exclude_from_sim`, `generator_version`) removed, every pin, graphic and field unchanged. KiCad 8, 9 and 10 were not run here. A KiCad 7 symbol's `ki_description` becomes the `Description` field.
 * **License:** KiCad library content is CC-BY-SA 4.0. An export that includes some gets a `NOTICE.txt`, and the export stays out of git (`out/kicad/` is in `.gitignore`).
+
+## `kicad_install.py`: the library in KiCad itself, for every project
+
+```
+ecadlib kicad-export out/librarian/plan.json -o ~/kicad-libs/mylib --name mylib --install
+ecadlib kicad-install ~/kicad-libs/mylib [--kicad 9.0] [--dry-run] [--uninstall]
+```
+
+`kicad-export` alone writes a library for one project (`${KIPRJMOD}` paths). `--install` puts it into KiCad itself, the
+way Preferences > Manage Symbol / Footprint Libraries and Configure Paths would: a `mylib` row in KiCad's own
+`sym-lib-table` and `fp-lib-table` (`${ECADLIB_DIR_MYLIB}/mylib.kicad_sym`, `.../mylib.pretty`) and the path variable
+`ECADLIB_DIR_MYLIB` = the `-o` folder in `kicad_common.json`; the footprints' 3D models are written as
+`${ECADLIB_DIR_MYLIB}/mylib.3dshapes/X.step` (`--models-var`, remembered for later exports), so they show in every
+project. `kicad-install DIR` does the install step alone (`--uninstall` takes it out again).
+
+* Every KiCad version found (7 and newer) is done: `%APPDATA%\kicad\N.0`, `~/Library/Preferences/kicad/N.0`,
+  `~/.config/kicad/N.0`, the Flatpak's folder, or `$KICAD_CONFIG_HOME/N.0`; `--kicad 9.0` picks one.
+* Other rows, their order and layout are kept (rows KiCad wrote over several lines too); a row `mylib` that already
+  exists is replaced in place (a database row of that name is left alone: pass another `--name`). The old file is
+  kept as `*.ecadlib-bak`.
+* A KiCad whose global tables don't exist yet is set up from its own template tables (so KiCad's libraries stay);
+  without them it is skipped with a message: start that KiCad once, then run again.
+* KiCad 7 can't read the KiCad 8 symbol format: its row points at a converted copy `mylib.kicad7.kicad_sym`.
+* KiCad reads these files when it starts and writes `kicad_common.json` when it closes: close KiCad first, start it
+  again after.
+* Checked in real KiCad 9.0.9 and 10.0.8 (`tests/test_kicad_install.py`): with only the global table (no project
+  table) KiCad finds every footprint and every 3D model; with nothing installed it finds none.
 
 ## `parity.py`: KiCad and Altium always match
 

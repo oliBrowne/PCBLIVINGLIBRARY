@@ -7,6 +7,10 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Added
+
+- `ecadlib kicad-install DIR` and `ecadlib kicad-export ... --install`: put a KiCad library into KiCad itself, so every project sees it without its own copy. A row in KiCad's global `sym-lib-table` and `fp-lib-table` for each KiCad version found (7 and newer), a path variable `ECADLIB_DIR_<NAME>` for the library folder in `kicad_common.json`, and 3D model paths through that variable (`--models-var`). Other rows and settings are kept (with a `.ecadlib-bak` copy). A KiCad whose global tables don't exist yet is set up from its own template tables, else skipped. KiCad 7 gets a KiCad 7 copy of the symbols. `--uninstall` takes it out again. Checked in real KiCad 9 and 10: footprints and 3D models resolve with no project table.
+
 ### Fixed
 
 - KiCad PCB editor window (`assets/kicad_action_plugin.py`, `kicad_menu.py`, `kicad_pcm.py`): the job (`kicad-menu run-job`) now lists the library in the project's sym-lib-table / fp-lib-table itself, finding an existing pretty-printed `ecadlib` row instead of adding a duplicate (KiCad refused the whole table), so a window closed mid-job loses nothing; the next press of the ecadlib button offers to place a footprint such a job built. Open review queue shows its failures (ecadlib not found, no result, an error result) instead of closing; every job's output goes to its log. The python fallback probe runs in an empty folder and imports `ecadlib.kicad_menu`, so a project's `ecadlib/` library folder no longer passes for the package. A placed footprint gets the next free reference of its part's prefix and the part's value, not `REF**` and the footprint name. The Plugin and Content Manager zip carries `ecadlib_cmd.json`, and with both installs present only the first copy registers. A KiCad 7 window passes `--kicad 7` and gets KiCad 7 symbol and footprint files (KiCad 7 refused the 20231120 symbol library). The PCM schema lookup on Windows tries KiCad 7.0 through 15.0.
