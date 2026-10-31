@@ -125,6 +125,8 @@ def sym_kicad8(node):
     """One symbol (or any node in it) written the KiCad 8 way; returns a new tree."""
     if not isinstance(node, list):
         return node
+    if node and node[0] == "property":       # KiCad 9 (property private "name" ...): KiCad 7 / 8 refuse the library
+        node = K.public_prop(node)
     out, hide = [node[0]], False
     for c in node[1:]:
         if not isinstance(c, list) or not c:
@@ -186,7 +188,7 @@ def flatten(chain, name):
     base = chain[-1]
     props, order = {}, []
     for s in reversed(chain):
-        for p in sexpr.find(s, "property"):
+        for p in map(K.public_prop, sexpr.find(s, "property")):    # a KiCad 9 private field by its name
             if p[1] not in props:
                 order.append(p[1])
             props[p[1]] = copy.deepcopy(p)

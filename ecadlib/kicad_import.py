@@ -724,10 +724,21 @@ def _pin_text(s):                             # KiCad '~{RESET}' (KiCad 6: '~RES
     return AL.overline(s)
 
 
+def public_prop(p):
+    """A KiCad 9 private field, (property private "name" "value" ...) with `private` a bare atom, -> the same field
+    without that atom, (property "name" "value" ...); any other property as it is. A field named "private" (quoted:
+    a Q with keep_quotes, else followed by its (at ...) list, not by a value) is no private field."""
+    if (len(p) > 3 and p[1] == "private" and not isinstance(p[1], sexpr.Q) and isinstance(p[2], str)
+            and isinstance(p[3], str)):
+        return [p[0]] + p[2:]
+    return p
+
+
 def _props(chain):
     out = {}
     for s in reversed(chain):                 # parent first, derived symbols override
         for p in sexpr.find(s, "property"):
+            p = public_prop(p)
             out[p[1]] = p[2]
     return out
 
