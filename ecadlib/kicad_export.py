@@ -13,7 +13,8 @@ Writes into DIR:
                      <project>/ecadlib/ -> ${KIPRJMOD}/ecadlib/<lib>.3dshapes/X.step)
   <lib>.sim/         SPICE model files of parts with an attached simulation model (`ecadlib sim-models --attach`);
                      their symbols carry Sim.Device / Sim.Library "<lib>.sim/<file>" / Sim.Name / Sim.Pins / Sim.Params
-  sym-lib-table, fp-lib-table   the library's row (uri ${KIPRJMOD}/...) added or replaced; other rows are kept, so
+  sym-lib-table, fp-lib-table   the library's row (uri ${KIPRJMOD}/...; with --project from the same folder as the
+                     model paths: ${KIPRJMOD}/ecadlib/<lib>.pretty) added or replaced; other rows are kept, so
                      -o can be the KiCad project folder itself (or copy DIR's contents / the `lib` lines there)
   kicad_export.json  what came from where, and the checks below
 Symbols, by the plan item's `source.symbol`:
@@ -1442,10 +1443,11 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                                                 or f"{lib}.3dshapes/{fn}" in owned):
             rep["written"][f"{lib}.3dshapes/{fn}"] = _sha(shapes / fn)
     desc = f"ecadlib export of {plan.name}"
-    from .kicad_dblib import add_lib_row          # the row for this library; other rows (a project's own, another
-    for kind, table, uri in (("sym", "sym_lib_table", f"{lib}.kicad_sym"), ("fp", "fp_lib_table", f"{lib}.pretty")):  # export) stay
+    base = at[:-len(f"/{lib}.3dshapes")]        # the rows start where the model paths do (${KIPRJMOD}/ecadlib with
+    from .kicad_dblib import add_lib_row          # --project): the row for this library; other rows (a project's own,
+    for kind, table, uri in (("sym", "sym_lib_table", f"{lib}.kicad_sym"), ("fp", "fp_lib_table", f"{lib}.pretty")):  # another export) stay
         try:                                  # a table it cannot edit: the library is written; say so, keep the report
-            add_lib_row(out / f"{kind}-lib-table", lib, f"${{KIPRJMOD}}/{uri}", desc, "KiCad", table, warnings=rep["warnings"])
+            add_lib_row(out / f"{kind}-lib-table", lib, f"{base}/{uri}", desc, "KiCad", table, warnings=rep["warnings"])
         except (ValueError, OSError) as e:
             rep["warnings"].append(f"{kind}-lib-table not updated: {e}")
     notice = out / "NOTICE.txt"               # a project's own NOTICE.txt is kept: the KiCad notice is added to it
