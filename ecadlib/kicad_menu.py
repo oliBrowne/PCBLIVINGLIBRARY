@@ -5,6 +5,8 @@ review queue), the same flow as the ecadlib menu in Altium (altium_menu), with a
     ecadlib kicad-menu run-job JOB --action check-bom|fill --project BOARD.kicad_pcb|SCHEMATIC.kicad_sch
     ecadlib kicad-menu run-job JOB --action queue|open --project BOARD.kicad_pcb [--path REPORT]
     ecadlib kicad-menu check-bom "%I"      # the schematic editor's Tools > Generate BOM hook (a netlist or .kicad_sch)
+    ecadlib kicad-menu fill "%I"           # the same hook: build the schematic's missing parts into the library
+    ecadlib kicad-menu add-to-schematic [--kicad 9.0] [--remove]   # put both hooks into the schematic editor
 
 The plugin (ecadlib/assets/kicad_action_plugin.py) runs in KiCad's own Python, starts `run-job` in the background and
 reads JOB/progress.ini (live steps) and JOB/result.ini (the answer: big, row1..rowN "label|value|ok", message, fix,
@@ -268,6 +270,15 @@ def run_action(cfg, action, project, mpn="", manufacturer="", path="", opener=No
     raise ValueError(f"unknown action {action!r} (one of {', '.join(ACTIONS)})")
 
 
+def after_build(cfg, res, kicad=None):
+    """What follows a job that built the library: KiCad 7 file formats for a KiCad 7 window, the project's library
+    tables. Changes res in place."""
+    if kicad and int(kicad) < 8:
+        kicad7_library(cfg)
+    res.update(project_tables(cfg))
+    return res
+
+
 def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None, offline=False, ai=None, kicad=None):
     """What the plugin runs: JOB/progress.ini while working, JOB/result.ini at the end. Returns the result dict.
     kicad: the major version of the KiCad window that started it (7: the library in KiCad 7's formats). A job that
@@ -280,9 +291,7 @@ def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None,
         res = run_action(cfg, action, project, mpn, manufacturer, path,
                          opener=False if action == "check-bom" else opener, progress=AM.Progress(job), ai=ai, kicad=kicad)
         if action in ("add-part", "fill", "ai-read"):
-            if kicad and int(kicad) < 8:
-                kicad7_library(cfg)
-            res.update(project_tables(cfg))
+            after_build(cfg, res, kicad)
             if res.get("footprint"):
                 ref, value = symbol_fields(cfg, {res.get("part"), *res.get("message", "").rstrip(".").split()[-1:]})
                 if ref:
@@ -327,7 +336,46 @@ def main(argv=None):
     c.add_argument("output", nargs="?", help="KiCad's %%O (ignored)")
     c.add_argument("--no-open", action="store_true")
     c.add_argument("--json", action="store_true")
+    f = sub.add_parser("fill", help='fill the project\'s ecadlib library from its schematic (Generate BOM: "%%I")')
+    f.add_argument("project", help="netlist (.xml) KiCad's Generate BOM passes as %%I, a .kicad_sch or a board")
+    f.add_argument("output", nargs="?", help="KiCad's %%O (ignored)")
+    f.add_argument("--kicad", type=int, default=None, help="the KiCad's major version (7: KiCad 7 file formats)")
+    f.add_argument("--offline", action="store_true", help="cached downloads and standard parts only")
+    f.add_argument("--json", action="store_true")
+    h = sub.add_parser("add-to-schematic", help="add ecadlib: check BOM / fill library to the schematic editor's "
+                       "Tools > Generate Legacy Bill of Materials (every KiCad found)")
+    h.add_argument("--kicad", help="only this KiCad version (9.0, 10.0, ...)")
+    h.add_argument("--remove", action="store_true", help="take the entries out again")
     a = ap.parse_args(argv)
+    if a.cmd == "add-to-schematic":
+        from . import kicad_install as KI, userconfig as UC
+        got = KI.schematic_hooks(UC.self_command(), a.kicad, remove=a.remove)
+        if not a.remove and any(v in ("added", "already there") for v in got.values()):
+            print("  in the schematic editor: Tools > Generate Legacy Bill of Materials... > ecadlib: check BOM or "
+                  "ecadlib: fill library > Generate (restart KiCad first)")
+        return 0 if got and not any(v.startswith("not changed") for v in got.values()) else 1
+    if a.cmd == "fill":
+        try:
+            cfg = config(a.project, offline=a.offline)
+            res = after_build(cfg, fill(cfg, a.project, progress=AM.Progress()), a.kicad)
+        except (OSError, ValueError) as e:
+            print(f"ecadlib kicad-menu: {e}", file=sys.stderr)
+            return 2
+        if a.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(res["message"])
+            for i in range(1, int(res.get("rows") or 0) + 1):
+                label, value, _ = (str(res.get(f"row{i}", "")) + "||").split("|")[:3]
+                print(f"  {label:<26} {value}")
+            if res.get("tables") == "added":
+                print(f"  the library is listed in the project's tables as {LIB}: Place > Add Symbol shows its parts "
+                      "(close and reopen the schematic if they do not show yet)")
+            elif res.get("tables_note"):
+                print(f"  library tables: {res['tables_note']}")
+            if res.get("fix"):
+                print(f"  next: {res['fix']}")
+        return 0 if res.get("status") != "error" else 1
     if a.cmd == "run-job":
         ai = {"bom": a.bom, "part": a.part, "approved_usd": a.approved_usd,
               "over_limit_ok": "1" if a.over_limit_ok else "", "price_unknown_ok": "1" if a.price_unknown_ok else ""}

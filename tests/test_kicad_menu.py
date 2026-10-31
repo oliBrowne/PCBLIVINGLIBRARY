@@ -169,6 +169,23 @@ def test_use_in_every_project_without_kicad_tables_says_so():
             os.environ["KICAD_CONFIG_HOME"] = old
 
 
+def test_cli_fill_for_the_schematic_editor():
+    """Tools > Generate Legacy Bill of Materials > ecadlib: fill library runs `kicad-menu fill "%I"` with the
+    netlist KiCad wrote: the parts are built and the library is listed in the project's tables."""
+    d = _project()
+    import contextlib, io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = KM.main(["fill", str(d / "board_netlist_kicad7.xml"), str(d / "board"), "--offline"])
+    text = out.getvalue()
+    assert rc == 0 and "ready" in text and "Place > Add Symbol" in text, text
+    assert (d / "ecadlib" / "ecadlib.kicad_sym").is_file() and "${KIPRJMOD}/ecadlib/ecadlib.pretty" in (d / "fp-lib-table").read_text()
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert KM.main(["fill", str(d / "board_netlist_kicad7.xml"), "--offline", "--kicad", "7", "--json"]) == 0
+    assert "(version 20220914)" in (d / "ecadlib" / "ecadlib.kicad_sym").read_text()           # KiCad 7's format
+
+
 def test_global_nick():
     assert KM.global_nick("/p/My Board.kicad_pcb") == "ecadlib_my_board"
     assert KM.global_nick("/p/x/board.kicad_sch") == "ecadlib_board"

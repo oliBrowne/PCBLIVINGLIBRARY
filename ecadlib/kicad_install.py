@@ -25,7 +25,7 @@ converted copy written next to the library.
 
 KiCad reads these files when it starts: restart KiCad (all its windows) after installing. KiCad also writes
 kicad_common.json when it closes, so close KiCad before installing, or the variable may be lost."""
-import argparse, json, os, re, shutil, sys
+import argparse, json, os, re, shlex, shutil, sys
 from pathlib import Path
 
 from . import fsutil, sexpr
@@ -305,6 +305,104 @@ def _one(series, d, lib, folder, root, var, v, rep, dry_run, uninstall, environ,
         _write(common_p, json.dumps(common, indent=2) + "\n", dry_run, rep["backups"])
         v["changed"].append(str(common_p))
     v["status"] = ("removed" if uninstall else "installed") if v["changed"] else ("not there" if uninstall else "already installed")
+
+
+# ------------------------------------------------------------------ the schematic editor
+HOOKS = (("ecadlib: check BOM", "check-bom", "check"),         # (the dialog's name, the kicad-menu action, helper's word)
+         ("ecadlib: fill library", "fill", "fill"))
+HOOK_FILE = "ecadlib_bom.py"
+HOOK_SCRIPT = '''"""
+    @package
+    ecadlib in the schematic editor.
+    ecadlib: check BOM - which parts the project's ecadlib library already has (a report opens in the browser).
+    ecadlib: fill library - builds the missing parts into the project's ecadlib library and lists it in the
+    project's library tables.
+    Written by the ecadlib setup page (or ecadlib kicad-menu add-to-schematic).
+"""
+# Runs ecadlib (the command in ecadlib_cmd.json next to this file) on the netlist KiCad wrote: check|fill NETLIST.xml.
+# Started with python -I and run without the PYTHONHOME / PYTHONPATH KiCad sets for its own Python (on Linux they
+# put the system's older numpy / pandas ahead of ecadlib's).
+import json, os, subprocess, sys
+
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecadlib_cmd.json"), encoding="utf-8") as f:
+    saved = json.load(f)
+env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")}
+if saved.get("pythonpath"):
+    env["PYTHONPATH"] = saved["pythonpath"]
+action = {"check": "check-bom", "fill": "fill"}[sys.argv[1]]
+sys.exit(subprocess.call(saved["command"] + ["kicad-menu", action] + sys.argv[2:], env=env))
+'''
+
+
+def command_record(command, environ=None):
+    """ecadlib_cmd.json: the command that runs this ecadlib, and the PYTHONPATH it was started with (a source
+    checkout needs it; KiCad's own is dropped when KiCad starts ecadlib)."""
+    pp = (os.environ if environ is None else environ).get("PYTHONPATH")
+    return {"command": list(command), **({"pythonpath": pp} if pp else {})}
+
+
+def command_line(argv, nt=None):
+    """argv -> one command line for KiCad's BOM dialog (it runs the line as typed): words with spaces quoted."""
+    nt = os.name == "nt" if nt is None else nt
+    q = (lambda w: f'"{w}"' if (not w or re.search(r"[\s&()^]", w)) else w) if nt else shlex.quote
+    return " ".join(q(str(w)) for w in argv)
+
+
+def schematic_hooks(command, kicad=None, remove=False, environ=None, home=None, platform=None, nt=None, log=print):
+    """The ecadlib entries in each KiCad version's schematic editor, Tools > Generate Legacy Bill of Materials...
+    (eeschema.json bom.plugins: name, path, command): "ecadlib: check BOM" and "ecadlib: fill library", each the
+    command line `PYTHON -I .../ecadlib_bom.py check|fill "%I" [--kicad N]` (%I: the netlist KiCad writes; the
+    helper starts `command kicad-menu check-bom|fill` without KiCad's PYTHONPATH), or a packaged ecadlib.exe's
+    `command kicad-menu ...` itself. Other entries are kept; ours are replaced, or taken out with remove=True. The
+    helper ecadlib_bom.py and ecadlib_cmd.json go next to the settings (KiCad lists only entries whose file exists). -> {series: "added" | "already there" | "removed" | ...}."""
+    out = {}
+    for series, d in config_dirs(kicad, environ, home, platform):
+        d = Path(d)
+        p = d / "eeschema.json"
+        if not d.is_dir():
+            out[series] = f"not changed: KiCad {series} has no settings yet (start it once, then do this again)"
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+            if not isinstance(data, dict):
+                raise ValueError("not a settings file")
+        except ValueError as e:
+            out[series] = f"not changed: {p} is not valid JSON ({e}); fix or delete it in KiCad first"
+            continue
+        bom = data.get("bom") if isinstance(data.get("bom"), dict) else {}
+        plugins = [x for x in (bom.get("plugins") if isinstance(bom.get("plugins"), list) else [])
+                   if not (isinstance(x, dict) and str(x.get("name", "")).startswith("ecadlib:"))]
+        if not remove:
+            helper = d / HOOK_FILE
+            ver = f" --kicad {_major(series)}" if _major(series) < 8 else ""
+            # the command runs the helper with ecadlib's own Python (isolated, -I), which starts ecadlib without
+            # KiCad's PYTHONPATH; a packaged ecadlib.exe is started as it is. "%I" quoted, as KiCad's own entries.
+            py = list(command[:1]) if list(command[1:3]) == ["-m", "ecadlib"] else None
+            plugins += [{"name": name, "path": helper.as_posix(),
+                         "command": (command_line(py + ["-I", helper.as_posix(), short], nt) if py else
+                                     command_line(list(command) + ["kicad-menu", action], nt)) + ' "%I"' + ver}
+                        for name, action, short in HOOKS]
+        bom["plugins"] = plugins
+        data["bom"] = bom
+        text = json.dumps(data, indent=2) + "\n"
+        old = p.read_text(encoding="utf-8") if p.is_file() else None
+        if remove:
+            if old is None or text == old:
+                out[series] = "not there"
+                continue
+        changed = _write(p, text, False, [])
+        if not remove:
+            fsutil.write_text_atomic(d / HOOK_FILE, HOOK_SCRIPT)
+            (d / "ecadlib_cmd.json").write_text(json.dumps(command_record(command), indent=2) + "\n", encoding="utf-8")
+        else:
+            for f in (HOOK_FILE, "ecadlib_cmd.json"):
+                (d / f).unlink(missing_ok=True)
+        out[series] = ("removed" if remove else "added") if changed else "already there"
+    for series, st in out.items():
+        log(f"  KiCad {series:<5} schematic editor: {st}")
+    if not out:
+        log("  no KiCad settings folder found (start KiCad once)")
+    return out
 
 
 def _set_row(text, table, nick, uri, descr):

@@ -1,6 +1,6 @@
 """ecadlib kicad-install: the library goes into KiCad's own per-user tables and path variables (offline; the real-KiCad
 check that KiCad resolves them is test_kicad_real.test_installed_library_resolves_in_kicad)."""
-import json
+import json, os, shlex, subprocess, sys
 from pathlib import Path
 
 from ecadlib import kicad_install as KI, sexpr
@@ -267,6 +267,81 @@ def test_kicad_export_models_var_and_install(tmp_path, monkeypatch):
     assert "${ECADLIB_DIR_LIB}" in said and "<your KiCad project folder>" not in said, said    # send you to a project
     assert ("lib", "${ECADLIB_DIR_LIB}/lib.pretty") in _names(c / "fp-lib-table")
     assert json.loads((c / "kicad_common.json").read_text())["environment"]["vars"]["ECADLIB_DIR_LIB"] == out.resolve().as_posix()
+
+@lite
+def test_schematic_hooks_added_kept_replaced_and_removed(tmp_path):
+    base = tmp_path / "cfg"
+    c9 = _cfg(base, "9.0")
+    (c9 / "eeschema.json").write_text(json.dumps({"bom": {"plugins": [{"name": "bom_csv", "path": "/k/bom_csv.py",
+                                                  "command": "python /k/bom_csv.py %I %O"}], "selected_plugin": "bom_csv"},
+                                                  "appearance": {"x": 1}}))
+    c7 = _cfg(base, "7.0")
+    cmd = ["/opt/My Tools/python3", "-m", "ecadlib"]
+    got = KI.schematic_hooks(cmd, environ=_env(base), log=lambda *a: None, nt=False)
+    assert got == {"9.0": "added", "7.0": "added"}, got
+    d9 = json.loads((c9 / "eeschema.json").read_text())
+    assert d9["appearance"] == {"x": 1} and d9["bom"]["selected_plugin"] == "bom_csv"          # the rest kept
+    names = [p["name"] for p in d9["bom"]["plugins"]]
+    assert names == ["bom_csv", "ecadlib: check BOM", "ecadlib: fill library"], names
+    hook = d9["bom"]["plugins"][2]
+    helper = (c9 / KI.HOOK_FILE).as_posix()
+    assert hook["command"] == f"'/opt/My Tools/python3' -I {shlex.quote(helper)} fill \"%I\"", hook    # the path quoted
+    assert Path(hook["path"]).is_file() and json.loads((c9 / "ecadlib_cmd.json").read_text())["command"] == cmd
+    k7 = json.loads((c7 / "eeschema.json").read_text())["bom"]["plugins"]
+    assert all(h["command"].endswith('"%I" --kicad 7') for h in k7), k7                             # KiCad 7 files
+    assert KI.schematic_hooks(cmd, environ=_env(base), log=lambda *a: None, nt=False) == {"9.0": "already there", "7.0": "already there"}
+    assert [p["name"] for p in json.loads((c9 / "eeschema.json").read_text())["bom"]["plugins"]].count("ecadlib: fill library") == 1
+    assert KI.schematic_hooks(cmd, remove=True, environ=_env(base), log=lambda *a: None)["9.0"] == "removed"
+    assert [p["name"] for p in json.loads((c9 / "eeschema.json").read_text())["bom"]["plugins"]] == ["bom_csv"]
+    assert not (c9 / KI.HOOK_FILE).exists()
+    exe = KI.schematic_hooks([r"C:\Program Files\ecadlib\ecadlib.exe"], environ=_env(base), log=lambda *a: None, nt=True)
+    assert exe["9.0"] == "added"                                         # a packaged ecadlib.exe is started as it is
+    assert json.loads((c9 / "eeschema.json").read_text())["bom"]["plugins"][-1]["command"] == \
+        r'"C:\Program Files\ecadlib\ecadlib.exe" kicad-menu fill "%I"'
+    win = KI.command_line([r"C:\Program Files\ecadlib\ecadlib.exe", "kicad-menu", "check-bom"], nt=True)
+    assert win == r'"C:\Program Files\ecadlib\ecadlib.exe" kicad-menu check-bom', win
+
+
+@lite
+def test_schematic_hook_runs_ecadlib_without_kicads_python_settings(tmp_path):
+    """KiCad on Linux starts the BOM command with PYTHONPATH=...:/usr/lib/python3/dist-packages (an older numpy, which
+    stopped ecadlib's pandas import in KiCad 9). The helper runs isolated and starts ecadlib with the PYTHONPATH saved
+    when the entries were added (none here), and without PYTHONHOME."""
+    base = tmp_path / "cfg"
+    c = _cfg(base, "9.0")
+    seen = tmp_path / "seen.json"
+    fake = tmp_path / "fake_ecadlib.py"
+    fake.write_text("import json, os, sys\n"
+                    f"json.dump({{'argv': sys.argv[1:], 'pp': os.environ.get('PYTHONPATH'), 'ph': os.environ.get('PYTHONHOME')}},"
+                    f" open({str(seen)!r}, 'w'))\n")
+    KI.schematic_hooks([sys.executable, str(fake)], environ=_env(base), log=lambda *a: None)
+    env = {**os.environ, "PYTHONPATH": str(tmp_path / "kicad-dist-packages"), "PYTHONHOME": str(tmp_path / "nowhere")}
+    rec = json.loads((c / "ecadlib_cmd.json").read_text())
+    rec.pop("pythonpath", None)
+    (c / "ecadlib_cmd.json").write_text(json.dumps(rec))
+    r = subprocess.run([sys.executable, "-I", str(c / KI.HOOK_FILE), "fill", "/p/board.xml", "--kicad", "7"],
+                       env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    got = json.loads(seen.read_text())
+    assert got == {"argv": ["kicad-menu", "fill", "/p/board.xml", "--kicad", "7"], "pp": None, "ph": None}, got
+    rec["pythonpath"] = "/src/ecadlib"                                    # a source checkout's saved path is kept
+    (c / "ecadlib_cmd.json").write_text(json.dumps(rec))
+    subprocess.run([sys.executable, "-I", str(c / KI.HOOK_FILE), "check", "/p/board.xml"], env=env, check=True)
+    assert json.loads(seen.read_text())["pp"] == "/src/ecadlib"
+    assert KI.command_record(["e"], {"PYTHONPATH": "/x"}) == {"command": ["e"], "pythonpath": "/x"}
+    assert KI.command_record(["e"], {}) == {"command": ["e"]}
+
+
+@lite
+def test_schematic_hooks_leave_a_broken_or_unstarted_kicad_alone(tmp_path):
+    base = tmp_path / "cfg"
+    c = _cfg(base, "9.0")
+    (c / "eeschema.json").write_text("{not json")
+    got = KI.schematic_hooks(["ecadlib"], environ=_env(base), log=lambda *a: None)
+    assert got["9.0"].startswith("not changed") and (c / "eeschema.json").read_text() == "{not json", got
+    got = KI.schematic_hooks(["ecadlib"], kicad="10.0", environ=_env(base), log=lambda *a: None)
+    assert got["10.0"].startswith("not changed") and not (base / "10.0").exists(), got
+
 
 # ---------------------------------------------------------------- real KiCad (skips without kicad-cli + pcbnew)
 def test_installed_library_resolves_in_kicad():
