@@ -563,7 +563,11 @@ Begin
         If ConfirmNoYes('ecadlib: ' + Title + ' is still working. Keep waiting?') Or FileExists(Job + '\exit.txt') Then
             EcadlibDialog.Tick.Enabled := True
         Else
-            Fail('Stopped waiting. ecadlib may still finish in the background.' + #13#10 + 'Next: look at its log, ' + Job + '\log.txt');
+        Begin                                     { as Keep working: Altium puts it in when ecadlib finishes }
+            MarkJob(Job, 'background.txt');
+            AddWaiting(Job);
+            Fail('Stopped waiting. ecadlib goes on in the background; Altium puts the result into the library when it is done.' + #13#10 + 'Next: look at its log, ' + Job + '\log.txt');
+        End;
     End;
 End;
 

@@ -37,6 +37,20 @@ def _tmp(prefix):
     return d
 
 
+def set_workspace(toml, url):
+    """[altium365] workspace = url in the rules file, as a user sets it before the first real push."""
+    text = toml.read_text(encoding="utf-8")
+    m = re.search(r"(?ms)^\[altium365\]\s*$(.*?)(?=^\[|\Z)", text)
+    if m and re.search(r"(?m)^\s*workspace\s*=", m.group(1)):
+        body = re.sub(r'(?m)^(\s*workspace\s*=).*$', lambda w: f'{w.group(1)} "{url}"', m.group(1), count=1)
+        text = text[:m.start(1)] + body + text[m.end(1):]
+    elif m:                                                   # the section, without the key: right under its header
+        text = text[:m.start(1)] + f'\nworkspace = "{url}"' + text[m.start(1):]
+    else:
+        text = text.rstrip("\n") + f'\n\n[altium365]\nworkspace = "{url}"\n'
+    toml.write_text(text, encoding="utf-8")
+
+
 def golden_path(work, fa, nx, tls, first=True):
     """The whole path in `work` (an empty folder on the first run). -> {step: CompletedProcess}."""
     work.mkdir(parents=True, exist_ok=True)
@@ -50,6 +64,7 @@ def golden_path(work, fa, nx, tls, first=True):
     if not first:                  # init again: the rules file is never replaced without --force (a .proposed is written)
         assert out["init"].returncode in (0, 1) and (work / "ecadlib.toml").read_text() == rules, out["init"].stdout[-2000:]
     if first:                                                 # the user's own files arrive
+        set_workspace(work / "ecadlib.toml", nx.workspace)     # a real push goes only to the configured workspace
         shutil.copytree(E.FIX / "kicad_sch", work / "kicad_project")
         from tests.test_altium_project import board
         board(work / "altium_project")

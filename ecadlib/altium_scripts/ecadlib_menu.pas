@@ -139,6 +139,16 @@ Begin
     Randomize;
     Result := Here + 'jobs\' + FormatDateTime('yyyymmdd-hhnnss', Now) + '-' + IntToStr(Random(100000));
     MkDir(Result);
+    { request.ini starts as a copy of request_template.ini (UTF-16 with a BOM): TIniFile then writes Unicode into it,
+      where a new file would be ANSI and turn a name such as Murata's in kanji into '?'. TStringList keeps the
+      encoding LoadFromFile found when it saves. }
+    If FileExists(Here + 'request_template.ini') Then
+    Begin
+        L := TStringList.Create;
+        L.LoadFromFile(Here + 'request_template.ini');
+        L.SaveToFile(Result + '\request.ini');
+        L.Free;
+    End;
     Ask(Result, 'action', Action);
     Ask(Result, 'config', Here + 'ecadlib_menu.ini');
     Cmd := Trim(Setting('command', ''));
@@ -187,8 +197,10 @@ Begin
             If ConfirmNoYes(Title + ': ecadlib is still working. Keep waiting?') Then
                 Waited := 0
             Else
-            Begin
-                Result := 'Stopped waiting. ecadlib may still finish in the background.' + #13#10 + 'Next: look at its log, ' + Job + '\log.txt';
+            Begin                                 { Altium puts it in when ecadlib finishes (FinishBackgroundJob) }
+                MarkJob(Job, 'background.txt');
+                AddWaiting(Job);
+                Result := 'Stopped waiting. ecadlib goes on in the background; Altium puts the result into the library when it is done.' + #13#10 + 'Next: look at its log, ' + Job + '\log.txt';
                 Exit;
             End;
         End;
