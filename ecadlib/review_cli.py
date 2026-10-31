@@ -59,7 +59,8 @@ def find_plans(workspace):
 def _cache_for(plan, given):
     if given:
         return given
-    for c in (Path(plan).parent.parent.parent / "http_cache", Path("out/http_cache")):
+    from .firstrun import default_cache       # the cache librarian used when its -o was outside the workspace
+    for c in (Path(plan).parent.parent.parent / "http_cache", Path(default_cache()), Path("out/http_cache")):
         if c.is_dir():
             return str(c)
     return "out/http_cache"

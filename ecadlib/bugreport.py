@@ -7,8 +7,8 @@
 
 When a command, the web UI or the MCP server hits an error it did not expect (a bug, not a wrong path or a bad
 setting), record() saves it in the config folder (crashes/, the newest MAX_KEPT) with API keys, tokens, e-mail
-addresses, the user name and the home folder blanked out. report-bug turns the newest one into a GitHub issue link;
-the user reads the text on GitHub and decides whether to press Submit."""
+addresses, the user name, the company in an Altium 365 address and the home folder blanked out. report-bug turns
+the newest one into a GitHub issue link; the user reads the text on GitHub and decides whether to press Submit."""
 import argparse, getpass, itertools, json, os, platform, re, sys, time, traceback, webbrowser
 from pathlib import Path
 from urllib.parse import quote, urlencode
@@ -30,11 +30,15 @@ _SHAPES = [                                   # keys and tokens by their look, w
 ]
 _USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,15}://)[^/\s:@]{1,200}:[^/\s@]{1,500}@")
 _BEARER = re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=\-]{8,}")
-_QUERY = re.compile(r"(?i)((?<![A-Za-z0-9])[\w-]{0,40}(?:api[_-]?key|apikey|key|token|secret|password|passwd|pass|sig)"
-                    r"[\"']?\s*[=:]\s*[\"']?)([^&\s\"',;)}\]]+)")
+_SECRET_WORDS = r"(?:api[_-]?key|apikey|key|token|secret|password|passwd|pass|sig|client[_-]?id)"
+_QUOTED = re.compile(r"(?i)((?<![A-Za-z0-9])[\w-]{0,40}" + _SECRET_WORDS + r"[\"']?\s*[=:]\s*)"   # a quoted value, spaces
+                     r"(\"(?:\\.|[^\"\\\n]){1,500}\"|'(?:\\.|[^'\\\n]){1,500}')")                   # and \" inside it too
+_QUERY = re.compile(r"(?i)((?<![A-Za-z0-9])[\w-]{0,40}" + _SECRET_WORDS +
+                    r"[\"']?\s*[=:]\s*[\"']?)(?!\[secret\])([^&\s\"',;)}\]]+)")
 _LONG = re.compile(r"[A-Za-z0-9_\-]{40,}")
 _EMAIL = re.compile(r"(?<![\w.+\-])[\w.+\-]{1,64}@[\w\-]{1,63}(?:\.[\w\-]{1,63})+")   # bounded: linear on long runs
 _ORG = re.compile(r"OneDrive - [^\\/\"'\n]{1,100}")                # the employer in a synced folder's name
+_A365 = re.compile(r"(?i)\b[a-z0-9][a-z0-9\-]{0,62}(?=\.365\.altium\.com\b)")   # the company in its Altium 365 address
 _USER_DIRS = re.compile(r"(?i)([A-Za-z]:[\\/]+(?:Users|Documents and Settings)[\\/]+|/home/|/Users/)([^\\/\"'\n<>|]+)")
 
 
@@ -94,6 +98,7 @@ def scrub(text):
         text = rx.sub("[secret]", text)
     text = _USERINFO.sub(lambda m: m.group(1) + "[user]:[secret]@", text)
     text = _BEARER.sub(lambda m: m.group(1) + " [secret]", text)
+    text = _QUOTED.sub(lambda m: m.group(1) + m.group(2)[0] + "[secret]" + m.group(2)[0], text)   # 'a pass phrase'
     text = _QUERY.sub(lambda m: m.group(1) + "[secret]", text)
     text = _LONG.sub(_long_token, text)
     text = _EMAIL.sub("[email]", text)
@@ -103,6 +108,7 @@ def scrub(text):
             text = re.sub(re.escape(h) + r"(?=[\\/\"'\s:]|$)", "~", text, flags=re.I if os.name == "nt" else 0)
     text = _USER_DIRS.sub(lambda m: m.group(1) + "[user]", text)
     text = _ORG.sub("OneDrive - [org]", text)
+    text = _A365.sub("[workspace]", text)
     try:
         node = platform.node()
     except Exception:

@@ -450,7 +450,11 @@ def make_handler(ws: Workspace):
                 with write_lock if u.path in ES.WRITES else contextlib.nullcontext():
                     page_libs = lambda: [str(Path(x).resolve()) for x in ES.ws_libs(ws.root)]
                     before = page_libs() if u.path == "/api/setup" else None
-                    out = ES.POST_ROUTES[u.path](ws.root, b)
+                    try:
+                        out = ES.POST_ROUTES[u.path](ws.root, b)
+                    except (ValueError, PermissionError) as e:   # about folders the person typed on this page:
+                        code = 403 if isinstance(e, PermissionError) else 400   # their full paths, not file names
+                        return self._send(code, {"error": (str(e) or type(e).__name__)[:600]})
                     if before is not None and out.get("saved") and not out.get("restart"):
                         after = page_libs()             # saved here: this server uses the page's folders at once
                         ws.libs = [x for x in ws.libs if x not in before or x in after] + [

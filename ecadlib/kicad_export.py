@@ -1534,7 +1534,8 @@ def main(argv=None):
     ap.add_argument("--name", default="ecadlib", help="library name (default %(default)s)")
     ap.add_argument("--lib", action="append", default=[], help="local KiCad library dir for local: symbols (repeatable)")
     ap.add_argument("--include-held", action="store_true", help="also export parts the release check held")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     ap.add_argument("--rules", help="library rules file: house parameter names (default: ecadlib.toml found from the plan)")
     ap.add_argument("--json", action="store_true", help="print the export report as JSON instead of the log")

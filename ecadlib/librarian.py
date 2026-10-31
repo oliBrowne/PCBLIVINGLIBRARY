@@ -1789,7 +1789,8 @@ def main(argv=None):
     ap.add_argument("--allow", action="append", default=[], metavar="PART", help="release PART despite its release-check failures")
     ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else nexar,digikey,mouser,jlcpcb_search,easyeda)")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
-    ap.add_argument("--cache", default="out/http_cache")
+    from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
+    ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")
     ap.add_argument("--box", action="store_true", help="extruded 3D box instead of a generated STEP when there is no KiCad model")
     ap.add_argument("--user", help="who gives the --allow (default: $ECADLIB_USER, then git config user.name/email)")
