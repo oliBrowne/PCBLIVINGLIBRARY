@@ -21,7 +21,7 @@ from pathlib import Path
 from . import altium_menu as AM
 
 WORK, LIB = "ecadlib-work", "ecadlib"
-ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read")
+ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read", "install")
 
 
 def project_dir(project):
@@ -192,7 +192,65 @@ def fill(cfg, project, progress=None):
     return res
 
 
-def run_action(cfg, action, project, mpn="", manufacturer="", path="", opener=None, progress=None, ai=None):
+def global_nick(project):
+    """The name the window's library gets in KiCad's own tables: ecadlib_<project> (every project's library is
+    ecadlib.kicad_sym, so two projects put into KiCad do not take each other's place)."""
+    p = Path(project)
+    stem = p.stem if p.suffix else p.name
+    pros = sorted(p.glob("*.kicad_pro")) if p.is_dir() else []
+    if p.is_dir() and len(pros) == 1:
+        stem = pros[0].stem
+    return f"{LIB}_" + (re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_") or "project")
+
+
+def install_everywhere(cfg, project, kicad=None, progress=None, **where):
+    """The window's "Use in every project": this project's library into KiCad's own symbol / footprint tables as
+    ecadlib_<project>, with a path variable (ECADLIB_DIR_<PROJECT>) for its folder. The library is exported again
+    with its 3D model paths on that variable (later fills keep them), so the models load from any project; this
+    project's own rows stay. where: kicad_install.install's environ / home / platform / templates (tests)."""
+    from . import kicad_install as KI
+    lib = Path(cfg["library"])
+    if not (lib / f"{LIB}.kicad_sym").is_file():
+        return {"status": "error", "message": "Nothing is in this project's ecadlib library yet.",
+                "fix": "add a part or fill the library first, then put it into KiCad"}
+    nick = global_nick(project)
+    var = KI.var_name(nick[len(LIB) + 1:])
+    if progress:
+        progress.step(1, 3, "writing the 3D model paths for every project")
+    ws = AM._workspace(cfg)
+    menu_bom = Path(cfg["workspace"]) / AM.MENU_BOM
+    if not menu_bom.is_file():
+        return {"status": "error", "message": "This project's parts list is missing (ecadlib-work).",
+                "fix": "fill the library again, then put it into KiCad"}
+    pub = AM.publish_kicad(ws, str(menu_bom.resolve()), lib, LIB, models_var=var)
+    if kicad and int(kicad) < 8:
+        kicad7_library(cfg)
+    res = project_tables(cfg)
+    if progress:
+        progress.step(2, 3, "adding it to KiCad's library tables")
+    rep = KI.install(lib, LIB, nick=nick, var=var, log=lambda *a, **k: None, **where)
+    vs = rep["versions"]
+    ok = [s_ for s_, v in vs.items() if v["status"] in ("installed", "already installed")]
+    rows = [AM.row_text(f"KiCad {s_}", v["status"].split(":")[0], s_ in ok) for s_, v in vs.items()]
+    rows.append(AM.row_text("library name", nick, bool(ok)))
+    res.update(AM.rows_result(rows, nick if ok else "Not added"))
+    problems = (pub.get("problems") or []) + [v["status"] for v in vs.values() if v["status"].startswith("not changed")]
+    if ok:
+        res.update(status="ready", message=(
+            f"{nick} is in KiCad's own library tables ({', '.join('KiCad ' + s_ for s_ in ok)}), with {var} for its folder, "
+            f"so every project can use it."))
+        res["fix"] = ("Close KiCad (all its windows) and open it again before you change any library settings: "
+                      "KiCad reads its tables when it starts, and saving them from a window opened before would drop the row.")
+        if problems:
+            res["message"] += f" Not everywhere: {problems[0]}"
+    else:
+        res.update(status="error", message="Not added to KiCad: " + (problems[0] if problems else
+                   "; ".join(rep["warnings"]) or "no KiCad settings folder found"),
+                   fix="start KiCad once so it writes its library tables, then try again")
+    return res
+
+
+def run_action(cfg, action, project, mpn="", manufacturer="", path="", opener=None, progress=None, ai=None, kicad=None):
     if action == "ai-read":                    # only after the window showed the cost and the person said yes
         return AM.ai_read(cfg, dict(ai or {}, mpn=mpn), progress=progress)
     if action == "add-part":
@@ -201,6 +259,8 @@ def run_action(cfg, action, project, mpn="", manufacturer="", path="", opener=No
         return AM.check_bom(cfg, schematic_of(project), opener=opener, progress=progress)
     if action == "fill":
         return fill(cfg, project, progress=progress)
+    if action == "install":
+        return install_everywhere(cfg, project, kicad=kicad, progress=progress)
     if action == "queue":
         return AM.open_queue(cfg, opener=opener)
     if action == "open":
@@ -218,7 +278,7 @@ def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None,
     try:
         cfg = config(project, offline=offline)
         res = run_action(cfg, action, project, mpn, manufacturer, path,
-                         opener=False if action == "check-bom" else opener, progress=AM.Progress(job), ai=ai)
+                         opener=False if action == "check-bom" else opener, progress=AM.Progress(job), ai=ai, kicad=kicad)
         if action in ("add-part", "fill", "ai-read"):
             if kicad and int(kicad) < 8:
                 kicad7_library(cfg)

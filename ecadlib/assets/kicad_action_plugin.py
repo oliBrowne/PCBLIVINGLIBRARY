@@ -5,7 +5,9 @@
     the project's ecadlib library and the footprint is placed in the middle of the board;
   * Check project BOM: the schematic's lines against the library (already in your library / a source can supply /
     needs a footprint), then "Fill the library now" builds the missing ones, or the report opens in the browser;
-  * Open review queue: ecadlib's page, where held parts get a symbol or footprint picked.
+  * Open review queue: ecadlib's page, where held parts get a symbol or footprint picked;
+  * Use in every project: this project's library goes into KiCad's own symbol / footprint tables as
+    ecadlib_<project> (with a path variable for its folder and its 3D models), so other projects can use its parts.
 
 Installed by KiCad's Plugin and Content Manager from the zip `ecadlib kicad-pcm --plugin` writes (or copied into
 KiCad's scripting/plugins folder by the setup page's "Add to KiCad" button). It runs in KiCad's own Python, so it does
@@ -561,7 +563,9 @@ def _window_class():
             s.Add(self.text(self.body, "What would you like to do?", DIM), 0, wx.TOP, 12)
             for label, hint, go in (("Add part from MPN…", "look a part up and place its footprint", self.ask),
                                     ("Check project BOM", "which schematic parts the library already has", self.check),
-                                    ("Open review queue", "pick symbols and footprints for held parts", self.queue)):
+                                    ("Open review queue", "pick symbols and footprints for held parts", self.queue),
+                                    ("Use in every project", "put this project's library into KiCad's own tables",
+                                     self.everywhere)):
                 b = Flat(self.body, label, go, primary=False, width=400)
                 s.Add(b, 0, wx.EXPAND | wx.TOP, 10)
                 s.Add(self.text(self.body, hint, DIM, 9), 0, wx.TOP | wx.LEFT, 3)
@@ -600,6 +604,9 @@ def _window_class():
 
         def queue(self):
             self.run("queue", "Open review queue")
+
+        def everywhere(self):
+            self.run("install", "Use in every project")
 
         def read_ai(self):
             """The AI step the last job offered: a second yes above the limit, then the reads, held to the amount shown."""
@@ -667,7 +674,7 @@ def _window_class():
         def live(self, prog, default=""):
             s = self.page(self.title)
             big = {"add-part": self.mpn, "check-bom": "Checking…", "fill": "Filling…", "ai-read": "Reading…",
-                   "queue": "Opening…"}.get(self.action, "")
+                   "queue": "Opening…", "install": "Adding…"}.get(self.action, "")
             s.Add(self.text(self.body, big, TEXT, 20, True), 0, wx.TOP, 10)
             self.rows(s, rows_of(prog))
             s.Add(self.text(self.body, prog.get("text") or default, DIM, 9), 0, wx.TOP, 10)

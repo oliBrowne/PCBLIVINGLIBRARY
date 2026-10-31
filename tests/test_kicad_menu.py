@@ -103,4 +103,75 @@ def test_cli_check_bom_for_the_schematic_editor():
     assert json.loads(out.getvalue())["lines"] == 5
 
 
+def _kicad_cfg(base, series="9.0"):
+    c = Path(base) / series
+    c.mkdir(parents=True)
+    for kind, table in (("sym", "sym_lib_table"), ("fp", "fp_lib_table")):
+        (c / f"{kind}-lib-table").write_text(f'({table}\n  (version 7)\n  (lib (name "Own")(type "KiCad")'
+                                              f'(uri "/x/Own")(options "")(descr ""))\n)\n')
+    return c
+
+
+def test_use_in_every_project_puts_the_library_into_kicad():
+    """The window's "Use in every project": the project's library goes into KiCad's own tables as ecadlib_<project>
+    with a path variable, its 3D models are re-pointed at that variable (and stay so on the next fill), and the
+    project's own ${KIPRJMOD} rows stay."""
+    import os, re
+    d = _project()
+    base = d / "kicad-config"
+    c = _kicad_cfg(base)
+    old = os.environ.get("KICAD_CONFIG_HOME")
+    os.environ["KICAD_CONFIG_HOME"] = str(base)
+    try:
+        res = _job(d, "install")
+        assert res["status"] == "error" and "Nothing is in" in res["message"], res      # nothing built yet
+        _job(d, "fill")
+        res = _job(d, "install")
+        assert res["status"] == "ready" and res["big"] == "ecadlib_board", res
+        assert "ecadlib_board" in res["message"] and "Close KiCad" in res["fix"], res
+        fp = (c / "fp-lib-table").read_text()
+        assert '(name "Own")' in fp and '(uri "${ECADLIB_DIR_BOARD}/ecadlib.pretty")' in fp and '(name "ecadlib_board")' in fp, fp
+        assert '(uri "${ECADLIB_DIR_BOARD}/ecadlib.kicad_sym")' in (c / "sym-lib-table").read_text()
+        assert json.loads((c / "kicad_common.json").read_text())["environment"]["vars"]["ECADLIB_DIR_BOARD"] == \
+            (d / "ecadlib").resolve().as_posix()
+        models = lambda: [m for f in (d / "ecadlib" / "ecadlib.pretty").glob("*.kicad_mod")
+                          for m in re.findall(r'\(model "([^"]+)"', f.read_text())]
+        assert models() and all(m.startswith("${ECADLIB_DIR_BOARD}/ecadlib.3dshapes/") for m in models()), models()
+        assert "${KIPRJMOD}/ecadlib/ecadlib.pretty" in (d / "fp-lib-table").read_text()     # the project's own row
+        res = _job(d, "add-part", mpn="RC0603FR-0710KL", manufacturer="Yageo")         # a later build keeps them
+        assert res["status"] == "ready", res
+        assert all(m.startswith("${ECADLIB_DIR_BOARD}/ecadlib.3dshapes/") for m in models()), models()
+        assert _job(d, "install")["status"] == "ready"                                   # again: no second row
+        assert (c / "fp-lib-table").read_text().count('(name "ecadlib_board")') == 1
+    finally:
+        if old is None:
+            os.environ.pop("KICAD_CONFIG_HOME", None)
+        else:
+            os.environ["KICAD_CONFIG_HOME"] = old
+
+
+def test_use_in_every_project_without_kicad_tables_says_so():
+    import os
+    d = _project()
+    base = d / "kicad-config"
+    (base / "9.0").mkdir(parents=True)
+    old = os.environ.get("KICAD_CONFIG_HOME")
+    os.environ["KICAD_CONFIG_HOME"] = str(base)
+    try:
+        _job(d, "fill")
+        cfg = KM.config(d / "board.kicad_pcb", offline=True)
+        res = KM.install_everywhere(cfg, str(d / "board.kicad_pcb"), templates=[])
+        assert res["status"] == "error" and "start KiCad" in res["fix"] and "sym-lib-table" in res["message"], res
+    finally:
+        if old is None:
+            os.environ.pop("KICAD_CONFIG_HOME", None)
+        else:
+            os.environ["KICAD_CONFIG_HOME"] = old
+
+
+def test_global_nick():
+    assert KM.global_nick("/p/My Board.kicad_pcb") == "ecadlib_my_board"
+    assert KM.global_nick("/p/x/board.kicad_sch") == "ecadlib_board"
+
+
 clean_all(globals())        # R-G2-8: the scratch folders a test makes go when it ends

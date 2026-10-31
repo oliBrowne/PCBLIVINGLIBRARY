@@ -1,6 +1,6 @@
 """Install an exported KiCad library into KiCad itself, so every project sees it (no per-project copy).
 
-    ecadlib kicad-install DIR [--name LIB] [--kicad 9.0] [--var ECADLIB_DIR_LIB] [--dry-run]
+    ecadlib kicad-install DIR [--name LIB] [--nick NICK] [--kicad 9.0] [--var ECADLIB_DIR_LIB] [--dry-run]
     ecadlib kicad-install DIR --uninstall
 
 DIR is what `ecadlib kicad-export -o DIR --name LIB` wrote (LIB.kicad_sym, LIB.pretty, LIB.3dshapes). For each KiCad
@@ -204,14 +204,19 @@ def model_paths(folder, lib):
 
 
 def install(lib_dir, name=None, kicad=None, var=None, dry_run=False, uninstall=False, environ=None, home=None,
-            platform=None, templates=None, log=print):
+            platform=None, templates=None, log=print, nick=None):
     """Add (or with uninstall=True remove) the library's rows and path variable in each KiCad version's user files.
-    Returns {library, folder, var, versions: {series: {status, changed, notes}}, warnings, backups}."""
+    nick: the name the rows give the library in KiCad (default LIB, the file name): the KiCad window's library is
+    ecadlib.kicad_sym in every project, so each project's goes in as its own nickname (ecadlib_myboard).
+    Returns {library, nick, folder, var, versions: {series: {status, changed, notes}}, warnings, backups}."""
     folder, lib = library(lib_dir, name) if not uninstall or Path(lib_dir).is_dir() else (Path(lib_dir), name)
     if not lib:
         raise ValueError("--uninstall of a folder that is gone needs --name LIB")
-    var = check_var(var or var_name(lib))
-    rep = {"library": lib, "folder": str(folder), "var": var, "versions": {}, "warnings": [], "backups": []}
+    nick = nick or lib
+    if not re.fullmatch(r"[^\s:\"()]+", nick):
+        raise ValueError(f"{nick!r} cannot name a KiCad library (no spaces, ':', quotes or brackets)")
+    var = check_var(var or var_name(nick))
+    rep = {"library": lib, "nick": nick, "folder": str(folder), "var": var, "versions": {}, "warnings": [], "backups": []}
     dirs = config_dirs(kicad, environ, home, platform)
     if not dirs:
         rep["warnings"].append("no KiCad settings folder found (KiCad 7 or newer, started at least once); "
@@ -223,7 +228,7 @@ def install(lib_dir, name=None, kicad=None, var=None, dry_run=False, uninstall=F
             v["status"] = f"skipped: KiCad {series} is older than KiCad {MIN_MAJOR}"
             continue
         try:
-            _one(series, Path(d), lib, folder, root, var, v, rep, dry_run, uninstall, environ, platform, templates)
+            _one(series, Path(d), lib, folder, root, var, v, rep, dry_run, uninstall, environ, platform, templates, nick)
         except ValueError as e:
             v["status"] = f"not changed: {e}"
     if not uninstall and folder.is_dir():
@@ -237,7 +242,8 @@ def install(lib_dir, name=None, kicad=None, var=None, dry_run=False, uninstall=F
     return rep
 
 
-def _one(series, d, lib, folder, root, var, v, rep, dry_run, uninstall, environ, platform, templates):
+def _one(series, d, lib, folder, root, var, v, rep, dry_run, uninstall, environ, platform, templates, nick=None):
+    nick = nick or lib
     major = _major(series)
     sym_file = f"{lib}.kicad_sym"
     if not uninstall and major < 8 and (folder / sym_file).is_file():
@@ -272,17 +278,17 @@ def _one(series, d, lib, folder, root, var, v, rep, dry_run, uninstall, environ,
         texts[kind] = (p, text, table)
     for kind, (p, text, table) in texts.items():
         if uninstall:
-            new = remove_row(text, lib)
+            new = remove_row(text, nick)
         elif not have[kind]:
             continue
         else:
             for _, _, name, typ, uri in _rows(text):
-                if name == lib and typ.casefold() != "kicad":
-                    raise ValueError(f"{p.name} already has a library {lib!r} of type {typ} ({uri}); pass another --name")
-                if name == lib and uri != uris[kind]:
-                    rep["warnings"].append(f"KiCad {series} {p.name}: the {lib!r} row pointed at {uri}; it now points "
+                if name == nick and typ.casefold() != "kicad":
+                    raise ValueError(f"{p.name} already has a library {nick!r} of type {typ} ({uri}); pass another --name")
+                if name == nick and uri != uris[kind]:
+                    rep["warnings"].append(f"KiCad {series} {p.name}: the {nick!r} row pointed at {uri}; it now points "
                                            f"at {uris[kind]}")
-            new = _set_row(text, table, lib, uris[kind], f"ecadlib library ({root})")
+            new = _set_row(text, table, nick, uris[kind], f"ecadlib library ({root})")
         if _write(p, new, dry_run, rep["backups"]):
             v["changed"].append(str(p))
     vars_ = common.setdefault("environment", {})
@@ -334,9 +340,9 @@ def format_result(rep, dry_run=False):
     changed = [v for v in rep["versions"].values() if v["status"] in ("installed", "removed")]   # not a version
     if changed and not dry_run:                      # stopped part way ("not changed: ..." after the KiCad 7 copy)
         if all(v["status"] == "removed" for v in changed):
-            lines.append(f"  {rep['var']} and the {rep['library']} rows removed; restart KiCad (all its windows)")
+            lines.append(f"  {rep['var']} and the {rep.get('nick') or rep['library']} rows removed; restart KiCad (all its windows)")
         else:
-            lines.append(f"  {rep['var']} = {rep['folder']}; restart KiCad (all its windows) to see {rep['library']}")
+            lines.append(f"  {rep['var']} = {rep['folder']}; restart KiCad (all its windows) to see {rep.get('nick') or rep['library']}")
     return lines
 
 
@@ -346,12 +352,13 @@ def main(argv=None):
     ap.add_argument("dir", help="the folder `ecadlib kicad-export -o` wrote")
     ap.add_argument("--name", help="the library name (default: the folder's only .kicad_sym)")
     ap.add_argument("--kicad", help="only this KiCad version (9.0, 10.0, ...); default every version found")
-    ap.add_argument("--var", help="the path variable (default ECADLIB_DIR_<NAME>)")
+    ap.add_argument("--nick", help="the library's name in KiCad's tables (default: --name)")
+    ap.add_argument("--var", help="the path variable (default ECADLIB_DIR_<NICK>)")
     ap.add_argument("--dry-run", action="store_true", help="say what would change, write nothing")
     ap.add_argument("--uninstall", action="store_true", help="remove the rows and the variable again")
     a = ap.parse_args(argv)
     try:
-        rep = install(a.dir, a.name, a.kicad, a.var, a.dry_run, a.uninstall)
+        rep = install(a.dir, a.name, a.kicad, a.var, a.dry_run, a.uninstall, nick=a.nick)
     except ValueError as e:
         print(f"ecadlib kicad-install: {e}", file=sys.stderr)
         return 2
