@@ -12,7 +12,9 @@ bottom (power_side = "left"). Each pin is put in a functional group from its nam
   input) -> left
   power_out (VOUT, VCAP), uart, i2c, spi, can, eth, ports (PA0..PE15, GPIO12, P0.1), outputs (OUT, Q, PG, SW, type
   output), nc -> right
-  (a uart / i2c / spi / can / eth group whose pins are all type input is inputs named like a bus: left)
+  (a uart / i2c / spi / can / eth group whose pins are all type input is inputs named like a bus: left; a pin typed
+  as a driver, output / open_collector / open_emitter / tristate, in a group drawn on the left, such as OSC_OUT,
+  SWO / TDO or a reset output, goes right in a block of its group there)
   other (no name rule and no direction: passive, bidirectional) -> left, moved right when that keeps the symbol square
 Alternate-function names ("PA9/USART1_TX", "PH0-OSC_IN") are grouped by their first (primary) name; overbars
 ('~{RESET}', 'R\\E\\S\\E\\T\\', '/RESET', 'RESET#') are ignored for grouping. Port pins are sorted by port and
@@ -265,14 +267,18 @@ def _blocks(pins, s):
         g = classify(p)
         port = port_of(p.get("name", "")) if g == "ports" else None
         sub = port[0] if port else ""
-        by.setdefault((g, sub), []).append((port[1] if port else i, i, p))
+        # a driver (output, open collector / emitter, tri-state) in a group drawn on the left (OSC_OUT, SWO, a reset
+        # output): outputs right, so a block of its group on the right side
+        out = (sides[g] == "left" and g not in POWER_GROUPS and g not in FLEX
+               and DIRECTED.get(str(p.get("type") or "").lower()) == "other_out")
+        by.setdefault((g, sub, out), []).append((port[1] if port else i, i, p))
     for g in BUSES:                       # a bus group on the right whose pins are all type input is no bus but inputs
-        items = by.get((g, ""))           # named like one (SS/TR, a soft-start input): they go left with the inputs
+        items = by.get((g, "", False))    # named like one (SS/TR, a soft-start input): they go left with the inputs
         if items and sides.get(g) == "right" and all(str(t[2].get("type") or "").lower() == "input" for t in items):
-            by.setdefault(("other_in", ""), []).extend(by.pop((g, "")))
-            by[("other_in", "")].sort(key=lambda t: t[1])
+            by.setdefault(("other_in", "", False), []).extend(by.pop((g, "", False)))
+            by[("other_in", "", False)].sort(key=lambda t: t[1])
     blocks = []
-    for (g, sub), items in sorted(by.items(), key=lambda kv: (order[kv[0][0]], _natural(kv[0][1]))):
+    for (g, sub, out), items in sorted(by.items(), key=lambda kv: (order[kv[0][0]], _natural(kv[0][1]), kv[0][2])):
         if g == "ports":
             items.sort(key=lambda t: (t[0], _natural(t[2].get("num", ""))))
         else:                                             # numbered names in number order (CBUS0..4, SD0..3, VSS_1..5),
@@ -294,7 +300,7 @@ def _blocks(pins, s):
                 slots.append([p])
                 keys.append(k)
         blocks.append({"group": g, "label": f"P{sub}" if sub and sub.isalpha() and len(sub) == 1 else sub or g,
-                       "side": sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)},
+                       "side": "right" if out else sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)},
                        "hide": {id(sl) for sl in slots if _hideable(g, sl)}})
     return blocks
 
