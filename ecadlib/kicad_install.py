@@ -331,8 +331,12 @@ def format_result(rep, dry_run=False):
             lines.append(f"              {n}")
     for w in rep["warnings"]:
         lines.append(f"  warning: {w}")
-    if any(v["changed"] for v in rep["versions"].values()) and not dry_run:
-        lines.append(f"  {rep['var']} = {rep['folder']}; restart KiCad (all its windows) to see {rep['library']}")
+    changed = [v for v in rep["versions"].values() if v["status"] in ("installed", "removed")]   # not a version
+    if changed and not dry_run:                      # stopped part way ("not changed: ..." after the KiCad 7 copy)
+        if all(v["status"] == "removed" for v in changed):
+            lines.append(f"  {rep['var']} and the {rep['library']} rows removed; restart KiCad (all its windows)")
+        else:
+            lines.append(f"  {rep['var']} = {rep['folder']}; restart KiCad (all its windows) to see {rep['library']}")
     return lines
 
 
