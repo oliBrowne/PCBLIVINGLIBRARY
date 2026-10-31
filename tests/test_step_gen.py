@@ -170,11 +170,18 @@ def test_model_turned_to_the_pads():
         x0, y0, _, x1, y1, _ = S.check(fp["bodies"][0]["step"]["data"].decode())["bbox"]
         rows_x = len({round(p["y"], 3) for p in fp["pads"]}) == 2               # pin row axis from the pads
         assert (x1 - x0 > y1 - y0) == rows_x and abs(min(x1 - x0, y1 - y0) - 2.4) < 1e-6, (turn, (x0, y0, x1, y1))
-    # a model that already sits on its pads keeps its rotation (every package spec with its own footprint_gen pads)
-    for f in SPEC_FILES:
+    # a model that already sits on its pads keeps its rotation (every package spec with its own footprint_gen pads,
+    # the BGAs' balls on their lands too): 0, never None, which would pass with no lead checked (reviewer 2026-10-31)
+    for f in SPEC_FILES + sorted((S.SPECS / "advanced").glob("*.json")):
         spec = json.loads(f.read_text())
         fp, _ = K.convert_footprint(F.build(spec)[0])
-        assert S.fit_rotation(spec, fp["pads"]) in (0, None), spec["name"]
+        assert S.fit_rotation(spec, fp["pads"]) == 0, spec["name"]
+    bga = json.loads((S.SPECS / "advanced" / "BGA-100_11.0x11.0mm_Layout10x10_P1.0mm_Ball0.5mm_Pad0.4mm_NSMD.json").read_text())
+    fp, _ = K.convert_footprint(F.build(bga)[0])
+    off = [dict(p, x=p["x"] + 1.0) for p in fp["pads"]]                 # every ball one pitch off its land
+    assert S.fit_rotation(bga, off, checked=True) == S.NO_FIT
+    turned = [dict(p, x=-p["y"], y=p["x"]) for p in fp["pads"]]         # the footprint drawn a quarter turn round
+    assert S.fit_rotation(bga, turned) == 90
     assert S.fit_rotation(S.spec_from_name(n), [dict(p, designator="9") for p in pads]) is None           # no pad numbers: no guess
 
 

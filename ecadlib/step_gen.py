@@ -841,6 +841,9 @@ def _on_pad(cx, cy, p, slack=0.6):
     return abs(cx - p["x"]) <= w / 2 + slack and abs(cy - p["y"]) <= h / 2 + slack
 
 
+BALL_SLACK = 0.1                                # mm a BGA ball's centre may sit off its land's edge
+
+
 def fit_rotation(spec, pads, checked=False):
     """Rotation (0 / 90 / 180 / 270) that puts each lead of the model on the footprint pad with the same number, or None.
     A footprint name does not fix the orientation: EasyEDA draws the same SOT-23-3_L2.9-W1.3-... with the pin rows
@@ -860,16 +863,18 @@ def fit_rotation(spec, pads, checked=False):
             by_num.setdefault(str(p["designator"]), []).append(p)
     leads = []
     for sol in solids:
-        m = re.fullmatch(r"(?:pin|terminal) (\S+)", sol.name)
+        m = re.fullmatch(r"(pin|terminal|ball) (\S+)", sol.name)
         if m:                                   # the lead's foot (its lowest face) is what lands on the pad / in the hole:
             z0 = min(v[2] for v in sol.verts)   # a long axial lead's bounding box centre is half way to the body
             foot = [v for v in sol.verts if v[2] <= z0 + 1e-6]
             xs, ys = [v[0] for v in foot], [v[1] for v in foot]
-            leads.append((m.group(1), (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2))
-    if len(leads) < 2 or any(n not in by_num for n, _, _ in leads):
+            # a ball sits on the middle of its land: a lead's 0.6 mm slack would take a ball one fine pitch over
+            slack = BALL_SLACK if m.group(1) == "ball" else 0.6
+            leads.append((m.group(2), (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, slack))
+    if len(leads) < 2 or any(n not in by_num for n, _, _, _ in leads):
         return None
     def fits(rot):
-        return all(any(_on_pad(*_turn(cx, cy, rot), p) for p in by_num[n]) for n, cx, cy in leads)
+        return all(any(_on_pad(*_turn(cx, cy, rot), p, sl) for p in by_num[n]) for n, cx, cy, sl in leads)
     own = int(spec.get("rotation") or 0) % 360
     if fits(own):
         return own
