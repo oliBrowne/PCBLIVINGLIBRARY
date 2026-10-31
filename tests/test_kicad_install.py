@@ -127,6 +127,18 @@ def test_kicad7_row_points_at_a_kicad7_copy(tmp_path):
 
 
 @lite
+def test_a_kicad7_without_tables_is_not_reported_installed(tmp_path):
+    """The KiCad 7 copy is written before the missing table stops that version: the result must not then say to
+    restart KiCad to see the library."""
+    lib = _lib(tmp_path / "out")
+    _cfg(tmp_path / "cfg", "7.0", common={})
+    rep = KI.install(lib, environ=_env(tmp_path / "cfg"), templates=[], log=lambda *a: None)
+    assert rep["versions"]["7.0"]["status"].startswith("not changed"), rep
+    said = "\n".join(KI.format_result(rep))
+    assert "to see mylib" not in said and "start KiCad 7.0 once" in said, said
+
+
+@lite
 def test_every_version_found_is_installed_and_old_ones_skipped(tmp_path):
     lib = _lib(tmp_path / "out")
     for s in ("6.0", "8.0", "9.0", "10.0"):
@@ -156,6 +168,8 @@ def test_uninstall_takes_rows_and_variable_out(tmp_path):
     assert [n for n, _ in _names(c / "sym-lib-table")] == ["Device"]
     assert [n for n, _ in _names(c / "fp-lib-table")] == ["Resistor_SMD"]
     assert json.loads((c / "kicad_common.json").read_text())["environment"]["vars"] == {"OTHER": "/x"}
+    said = "\n".join(KI.format_result(rep))
+    assert "removed" in said and "to see" not in said, said          # not "restart KiCad to see mylib" after removing it
 
 
 @lite
@@ -245,7 +259,12 @@ def test_kicad_export_models_var_and_install(tmp_path, monkeypatch):
     c = _cfg(tmp_path / "cfg", "9.0", SYM10, FP9, {})
     monkeypatch.setenv("KICAD_CONFIG_HOME", str(tmp_path / "cfg"))
     monkeypatch.setattr(X, "CachedHTTP", lambda *a, **k: http)
-    assert X.main([str(plan), "-o", str(out), "--name", "lib", "--include-held", "--install"]) == 0
+    import contextlib, io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert X.main([str(plan), "-o", str(out), "--name", "lib", "--include-held", "--install"]) == 0
+    said = buf.getvalue()           # the summary names the variable the tables use, not ${KIPRJMOD}, and does not
+    assert "${ECADLIB_DIR_LIB}" in said and "<your KiCad project folder>" not in said, said    # send you to a project
     assert ("lib", "${ECADLIB_DIR_LIB}/lib.pretty") in _names(c / "fp-lib-table")
     assert json.loads((c / "kicad_common.json").read_text())["environment"]["vars"]["ECADLIB_DIR_LIB"] == out.resolve().as_posix()
 

@@ -1557,7 +1557,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     return rep
 
 
-def print_result(rep, out, plan, t=None):
+def print_result(rep, out, plan, t=None, installing=False):
     """Terminal view of an export: a row per part (-v: with the conversion notes), skipped parts with the reason in
     plain words, errors, then the summary (what was written, how to add it in KiCad)."""
     from . import messages as M, term as TM
@@ -1587,20 +1587,25 @@ def print_result(rep, out, plan, t=None):
     held = [s for s in rep["skipped"] if s not in waiting and s["part"] not in kept]
     waiting = [s for s in waiting if s["part"] not in kept]
     q = lambda p: _shell_quote(str(p))
+    at = str(rep.get("models_at") or f"${{KIPRJMOD}}/{lib}.3dshapes")
+    base = at[:-len(f"/{lib}.3dshapes")] if at.endswith(f"/{lib}.3dshapes") else "${KIPRJMOD}"   # where the rows start
     head = (f"{M.plural(rep['symbols'], 'symbol')}, {M.plural(len(rep['footprints']), 'footprint')}, "
             f"{steps}/{len(rep['models'])} 3D models written"
             + (f"; {M.plural(len(held), 'held part')} left out (--include-held adds them)" if held else "")
             + (f"; {M.plural(len(waiting), 'part')} waiting for sign-off left out" if waiting else "")
             + (f"; {M.plural(len(kept), 'held part')} kept as exported before" if kept else ""))
     t.summary(head, written=[(f"{out}/{lib}.kicad_sym", "symbols"), (f"{out}/{lib}.pretty/", "footprints"),
-                             (f"{out}/sym-lib-table, fp-lib-table", "library tables (paths use ${KIPRJMOD})")],
-              next=[(f"ecadlib kicad-export {q(plan)} -o <your KiCad project folder> --name {q(lib)}",
-                     "into the project: its own lib-table rows are kept (copying these tables over would drop them); "
-                     "or Preferences > Manage Symbol / Footprint Libraries"),
-                    (f"ecadlib parity {q(plan)} --kicad {q(out)}", "check KiCad and Altium agree, part by part")]
+                             (f"{out}/sym-lib-table, fp-lib-table", f"library tables (paths use {base})")],
+              next=([] if installing else           # --install: KiCad's own tables get the rows (printed after this)
+                    [(f"ecadlib kicad-export {q(plan)} -o <your KiCad project folder> --name {q(lib)}",
+                      "into the project: its own lib-table rows are kept (copying these tables over would drop them); "
+                      "or Preferences > Manage Symbol / Footprint Libraries")])
+              + [(f"ecadlib parity {q(plan)} --kicad {q(out)}", "check KiCad and Altium agree, part by part")]
               + ([(f"ecadlib review {q(plan)}", "the held parts")] if rep["skipped"] else [])
               + ([(f"ecadlib part status {q(plan)}", f"{M.plural(len(rep['held_changes']), 'held change')} waiting for "
-                   "a person (exit code 1 until then)")] if rep.get("held_changes") else []))
+                   "a person (exit code 1 until then)")] if rep.get("held_changes") else [])
+              + ([] if installing else       # last: only 3 are shown, and the held parts come first
+                 [(f"ecadlib kicad-install {q(out)} --name {q(lib)}", "or into KiCad itself, for every project")]))
 
 
 def _shell_quote(s):
@@ -1644,7 +1649,7 @@ def main(argv=None):
     # exit 1 also while a change is held: the library on disk is not what was exported, a person has to look
     bad = bool(rep["errors"] or rep.get("held_changes") or rep.get("refused"))
     if not a.json:
-        print_result(rep, Path(a.out), a.plan)
+        print_result(rep, Path(a.out), a.plan, installing=a.install and not bad)
     if a.install and not bad:
         from . import kicad_install
         if not a.json:
