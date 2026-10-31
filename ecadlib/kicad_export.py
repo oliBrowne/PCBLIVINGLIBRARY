@@ -1599,12 +1599,13 @@ def print_result(rep, out, plan, t=None, installing=False):
               next=([] if installing else           # --install: KiCad's own tables get the rows (printed after this)
                     [(f"ecadlib kicad-export {q(plan)} -o <your KiCad project folder> --name {q(lib)}",
                       "into the project: its own lib-table rows are kept (copying these tables over would drop them); "
-                      "or Preferences > Manage Symbol / Footprint Libraries"),
-                     (f"ecadlib kicad-install {q(out)} --name {q(lib)}", "or into KiCad itself, for every project")])
+                      "or Preferences > Manage Symbol / Footprint Libraries")])
               + [(f"ecadlib parity {q(plan)} --kicad {q(out)}", "check KiCad and Altium agree, part by part")]
               + ([(f"ecadlib review {q(plan)}", "the held parts")] if rep["skipped"] else [])
               + ([(f"ecadlib part status {q(plan)}", f"{M.plural(len(rep['held_changes']), 'held change')} waiting for "
-                   "a person (exit code 1 until then)")] if rep.get("held_changes") else []))
+                   "a person (exit code 1 until then)")] if rep.get("held_changes") else [])
+              + ([] if installing else       # last: only 3 are shown, and the held parts come first
+                 [(f"ecadlib kicad-install {q(out)} --name {q(lib)}", "or into KiCad itself, for every project")]))
 
 
 def _shell_quote(s):
