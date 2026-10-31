@@ -430,6 +430,44 @@ def test_schema_reaches_the_datasheet_reader():
     assert {"bga", "pin_header", "connector", "custom"} <= set(json.dumps(pkg["package_type"]).replace('"', " ").split())
 
 
+def _poly_tht(x, y, drill=1.0):
+    """An L-shaped through-hole pad (a power-tab lug) with its hole at x, y, and a plain round pin 2."""
+    return {"name": "Poly_THT", "package_type": "custom", "pin_count": 2, "pad_table": {
+        "unit": "mm", "y_axis": "down", "origin": "center", "footprint_origin": "center",
+        "pads": [{"number": "1", "type": "tht", "drill": drill, "x": x, "y": y,
+                  "polygon": [{"x": -3, "y": -1.5}, {"x": 3, "y": -1.5}, {"x": 3, "y": 1.5}, {"x": -1, "y": 1.5},
+                              {"x": -1, "y": 4}, {"x": -3, "y": 4}]},
+                 {"number": "2", "type": "tht", "drill": 1.0, "d": 2.0, "x": 6, "y": 0}],
+        "body": {"x1": -3.5, "y1": -2, "x2": 7.5, "y2": 4.5}}}
+
+
+def test_a_through_hole_polygon_pad_keeps_its_hole_at_the_tables_position():
+    # reviewer 2026-10-31: the custom pad's anchor was moved to the polygon's interior point, taking the drill with it
+    # off the table's x/y, and the anchor (capped at 1 mm) could be smaller than the hole
+    for x, y in ((2.0, 0.0), (-2.0, 3.0), (0.0, 0.0)):
+        txt, _ = F.build(_poly_tht(x, y))
+        t = sexpr.parse(txt)
+        pad = next(p for p in sexpr.find(t, "pad") if p[1] == "1")
+        at, size, drill = sexpr.first(pad, "at"), sexpr.first(pad, "size"), sexpr.first(pad, "drill")
+        assert pad[3] == "custom" and (float(at[1]), float(at[2])) == (x, y), (x, y, pad)
+        assert float(drill[1]) == 1.0 and float(size[1]) >= 1.0 + 2 * A.TH_RING_MIN - 1e-9, pad
+        pts = [(float(a[1]) + x, float(a[2]) + y) for a in sexpr.find(sexpr.first(
+            sexpr.first(sexpr.first(pad, "primitives"), "gr_poly"), "pts"), "xy")]
+        assert sorted(pts) == sorted([(-3, -1.5), (3, -1.5), (3, 1.5), (-1, 1.5), (-1, 4), (-3, 4)]), pts
+        assert C.check(txt) == [], C.check(txt)
+
+
+def test_a_through_hole_polygon_pad_needs_its_hole_and_ring_inside_the_polygon():
+    for x, y, drill in ((0.0, 3.0, 1.0),          # in the L's notch: outside the copper
+                        (2.6, 0.0, 1.0),          # inside, but the hole reaches 0.1 mm from the edge
+                        (-2.0, 0.0, 3.0)):        # a hole wider than the arm
+        try:
+            F.build(_poly_tht(x, y, drill))
+            raise AssertionError(f"hole at {x}, {y} (drill {drill}) accepted")
+        except ValueError as e:
+            assert "pad 1" in str(e) and "polygon" in str(e) and "ring" in str(e), e
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

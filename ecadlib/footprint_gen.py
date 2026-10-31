@@ -888,6 +888,16 @@ def build(spec, density=None):
            text("value", spec["name"], 0, cy + 0.7, "F.Fab"),
            text("user", "${REFERENCE}", 0, 0, "F.Fab", size=math.floor(100 * min(1.0, max(0.25, 0.5 * max(bx, by)))) / 100)]
 
+    p1 = next((p for p in pads if p[0] == "1"), None)
+    if p1 is None:                                                    # e.g. A/K numbering: mark the first pad,
+        p1 = pads[0]                                                  # the checker reports the missing "1"
+        rep["warning"] = (rep.get("warning", "") + "; " if rep.get("warning") else "") + \
+            f"no pad numbered 1; KiCad numbers pins 1, 2, ... (diodes: 1 = cathode), marked pad {p1[0]} as pin 1"
+    # a polarized 2-pad part's marks are drawn with pin 1 on the left (-x) and mirrored when pin 1 is on the right
+    # (a 2-lead gullwing read with the cathode right; 2-pad parts here always sit on the x axis: sides L / R)
+    flip = -1 if two_term and polarized and p1[1] > 0 else 1
+    turn = lambda x, y: (flip * x + 0.0, y)
+
     # ---- fab: body outline; pin-1 / polarity chamfer on everything except plain 2-terminal parts (KLC F5.2)
     if two_term and not polarized:
         out.append(rect(-bx, -by, bx, by, "F.Fab", FAB_W))
@@ -895,24 +905,23 @@ def build(spec, density=None):
         ch = min(1.0, 0.25 * min(2 * bx, 2 * by))
         if two_term:                                                  # KiCad chip LED/diode marker: 0.3 .. 1.0
             ch = max(ch, min(0.3, bx, by))
-        out.append(poly([(-bx + ch, -by), (bx, -by), (bx, by), (-bx, by), (-bx, -by + ch)], "F.Fab", FAB_W))
+        out.append(poly([turn(*v) for v in [(-bx + ch, -by), (bx, -by), (bx, by), (-bx, by), (-bx, -by + ch)]],
+                        "F.Fab", FAB_W))
 
     # ---- silk: body outline pushed out by SILK_FAB_OFFSET, cut back to SILK_PAD_CLEAR from every pad (KLC F5.1)
     c = SILK_PAD_CLEAR + SILK_W / 2
     sx, sy = bx + SILK_FAB_OFFSET, by + SILK_FAB_OFFSET
-    p1 = next((p for p in pads if p[0] == "1"), None)
-    if p1 is None:                                                    # e.g. A/K numbering: mark the first pad,
-        p1 = pads[0]                                                  # the checker reports the missing "1"
-        rep["warning"] = (rep.get("warning", "") + "; " if rep.get("warning") else "") + \
-            f"no pad numbered 1; KiCad numbers pins 1, 2, ... (diodes: 1 = cathode), marked pad {p1[0]} as pin 1"
     if two_term and polarized:
-        # KiCad LED/diode style: a bracket that closes on the pin-1 (cathode / +) side
-        yl = round(max(sy, max(abs(p[2]) + p[4] / 2 for p in pads) + c), 4)
-        xl = -round(max(sx, -(p1[1] - p1[3] / 2) + c), 4)
-        xe = max(bx, max(p[1] for p in pads))
-        out += [line(xl, -yl, xl, yl, "F.SilkS", SILK_W), line(xl, -yl, xe, -yl, "F.SilkS", SILK_W),
-                line(xl, yl, xe, yl, "F.SilkS", SILK_W)]
-        silk_y = yl
+        # KiCad LED/diode style: a bracket that closes on the pin-1 (cathode / +) side, drawn with pin 1 left
+        dp = [(p[0], *turn(p[1], p[2]), *p[3:]) for p in pads]       # (the pads as drawn)
+        d1 = next(q for q, p in zip(dp, pads) if p is p1)
+        yl = round(max(sy, max(abs(p[2]) + p[4] / 2 for p in dp) + c), 4)
+        xl = -round(max(sx, -(d1[1] - d1[3] / 2) + c), 4)
+        xe = max(bx, max(p[1] for p in dp))
+        segs = [((xl, -yl), (xl, yl)), ((xl, -yl), (xe, -yl)), ((xl, yl), (xe, yl))]
+        segs = [(turn(*a), turn(*b)) for a, b in segs]
+        out += [line(a[0], a[1], b[0], b[1], "F.SilkS", SILK_W) for a, b in segs]
+        silk_y = max(abs(v[1]) for sg in segs for v in sg)
     else:
         box = [((-sx, -sy), (sx, -sy)), ((sx, -sy), (sx, sy)), ((sx, sy), (-sx, sy)), ((-sx, sy), (-sx, -sy))]
         segs = [s for b in box for s in _clip(b, copper, c)]

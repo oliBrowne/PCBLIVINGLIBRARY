@@ -120,28 +120,61 @@ def apply(edit, res):
     return res, [f"footprint edited: {n}{who}" for n in notes]
 
 
+def _pad_kind(e, default):
+    """table_layout's kind for a pad_table row: its type, else through-hole when it or the default pad has a drill."""
+    m = dict(default or {}, **{k: v for k, v in e.items() if v is not None})
+    return m.get("type") or ("tht" if m.get("drill") else "smd")
+
+
 def _set_hole(spec, mm):
     """A confirmed hole (mm) on every through-hole pin: the drill set, the read's guessed pad sizes dropped so KiCad's
-    ring is put round it (footprint_adv.tht_pad_size), and the hole no longer listed as unresolved -> the note."""
+    ring is put round it (footprint_adv.tht_pad_size), and the hole no longer listed as unresolved -> the note.
+    Which rows are through-hole is worked out as table_layout does, before the edit, so an SMD pad with no type of its
+    own (a connector's MP tab) keeps its kind and size; when such a pad would take a drill put on the default pad, the
+    drill goes on each through-hole row instead."""
     from . import datasheet as D, footprint_adv as FA
     spec["drill"] = mm
     t = spec.get("pad_table") or {}
+    none = ""
     if t:
         f = FA.UNIT[t.get("unit", "mm")]
         drill = round(mm / f, 6)
-        for e in [t.setdefault("default_pad", {})] + list(t.get("arrays") or []) + list(t.get("pads") or []):
-            if e.get("type") in ("smd", "npth") or e.get("polygon"):
-                continue                              # SMD pads and mounting holes keep theirs
-            if e is t["default_pad"] or e.get("drill") is not None:
+        dp = t.setdefault("default_pad", {})
+        rows = list(t.get("arrays") or []) + list(t.get("pads") or [])
+        kinds = [_pad_kind(e, dp) for e in rows]
+        tht = [e for e, k in zip(rows, kinds) if k == "tht"]
+        other = [e for e, k in zip(rows, kinds) if k != "tht"]
+        on_default = not any(e.get("type") is None and e.get("drill") is None for e in other)
+        sizes = ("d", "w", "h", "shape")
+        for e, k in zip(rows, kinds):                 # an SMD pad or mounting hole sized by the default keeps its size
+            unsized = e.get("d") is None and (e.get("w") is None or e.get("h") is None)
+            if k != "tht" and not e.get("polygon") and (unsized or dp.get("type") in (None, k)):
+                e.update({s: dp[s] for s in sizes if e.get(s) is None and dp.get(s) is not None})
+        slot = dp.get("drill_h") is not None
+        for k in sizes:                               # the default pad now sizes through-hole pads only
+            dp.pop(k, None)
+        if on_default:
+            dp["drill"] = drill
+            dp.pop("drill_h", None)
+        for e in tht:
+            if not on_default or e.get("drill") is not None:
                 e["drill"] = drill                    # (a pad with no drill of its own takes the default's)
-            e.pop("drill_h", None)
-            for k in ("d", "w", "h", "shape"):
-                e.pop(k, None)
+            if slot and not on_default:
+                e["drill_h"] = drill                  # round, over the default's slot
+            else:
+                e.pop("drill_h", None)
+            if not e.get("polygon"):                  # a polygon pad's copper is its outline
+                for k in sizes:
+                    e.pop(k, None)
+        if rows and not tht:
+            none = "; the pad table has no through-hole pad, so no pad takes it"
     # the hole is settled; with no pad table read, its land / pad table is still blank (the pin positions)
     spec["unresolved"] = [u for u in spec.get("unresolved") or [] if not D.HOLES_UNREAD.match(str(u))
                           or not t and re.match(r"\s*(land|pad)", str(u), re.I)]
     ipc = D.ipc_hole(spec)
     how = " (the IPC-2222 suggestion)" if ipc and abs(ipc - mm) < 1e-6 else ""
+    if none:
+        return f"hole confirmed by hand: {mm:g} mm{how}{none}"
     return f"hole confirmed by hand: {mm:g} mm{how}, the pads sized round it by KiCad's rule"
 
 
