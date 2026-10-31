@@ -735,6 +735,21 @@ def tab_renumber(read, name, pins=None):
     return {e[0]: str(read["tab"]["number"])} if _cut_lead(read, pins, e[0], e[1]) else {}
 
 
+def sides_fit(read, name):
+    """True unless the read lists its pins per side (pin_sides) and the table entry lays its pads out otherwise: a
+    QFN-16 read 5/3/5/3 and a same-size 4/4/4/4 land have the same pin numbers, so only the sides tell the pads
+    apart (identify compares counts and sizes, not sides)."""
+    if not F.listed_sides(read):
+        return True
+    t = spec(name)
+    if t.get("package_type") != "qfn":
+        return False
+    try:
+        return F.side_lists(read) == F.side_lists(t)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def spec_renumbered(name, renumber):
     """spec(name) with its pads renumbered ({old: new}, tab_renumber)."""
     s = spec(name)

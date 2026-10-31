@@ -513,9 +513,10 @@ def _strip(s):
     return out
 
 
-def output_schema():
+def output_schema(schema=None):
+    """The first read's answer shape, from package_schema.json (or `schema`, an earlier version of it)."""
     props = {}
-    for k, v in SCHEMA["properties"].items():
+    for k, v in (schema or SCHEMA)["properties"].items():
         if k in SKIP:
             continue
         if k in DIMS or k in NUM_DIMS:
@@ -533,7 +534,7 @@ def output_schema():
                 "name": {"type": "string"}, "type": {"enum": sorted(AL.ETYPE)}, "side": {"enum": list(AL.ORIENT)},
                 "page": {"type": "integer", "description": "1-based PDF page of the pin table row"}})
     return _obj({
-        "package": _obj(props, SCHEMA["description"]),
+        "package": _obj(props, (schema or SCHEMA)["description"]),
         "pin_table": _obj({"page": {"type": "integer"}, "figure": {"type": "string"},
                            "rows": {"type": "integer", "description": "distinct signal pin numbers in the table, excluding the exposed pad"}}),
         "pins": {"type": "array", "items": pin, "description": "one entry per pin number, including the exposed pad"},
@@ -754,12 +755,36 @@ def _dimtxt(d):
     return "/".join("-" if d.get(k) is None else f"{d[k]:g}" for k in ("min", "nom", "max")) + f" {d.get('unit')}"
 
 
+def _with_added(ext):
+    """An answer in the output_schema() shape that has none of ADDED_FIELDS (recorded before they were added, or a
+    model's that left them out): each is optional, so it is given as null, as the wire shape fills a field left out."""
+    pkg = ext.get("package") if isinstance(ext, dict) else None
+    if not isinstance(pkg, dict):
+        return ext
+    pkg = dict(pkg)
+    for path in ADDED_FIELDS:
+        props = SCHEMA["properties"]                  # (only a field this schema has)
+        for k in path[:-1]:
+            props = (props.get(k) or {}).get("properties") or {}
+        if path[-1] not in props:
+            continue
+        obj = pkg
+        for k in path[:-1]:
+            obj = obj.get(k) if isinstance(obj, dict) else None
+        if isinstance(obj, dict) and path[-1] not in obj:
+            if obj is not pkg:                        # a copy, never the caller's answer
+                obj = dict(obj)
+                pkg[path[0]] = obj
+            obj[path[-1]] = None
+    return dict(ext, package=pkg)
+
+
 def from_wire(ext):
     """A wire_schema() answer -> the output_schema() shape. An answer already in that shape (recorded before, or the
     split-steps rail's) is returned as it is."""
     pkg = ext.get("package") if isinstance(ext, dict) else None
     if not isinstance(pkg, dict) or not ("dims" in pkg or "other_json" in pkg):
-        return ext
+        return _with_added(ext)
     _, pk, other_s = _wire_parts()
     oj = pkg.get("other_json")                        # a model without strict schemas may answer the object itself
     raw = json.dumps(oj) if isinstance(oj, dict) else str(oj or "").strip()
@@ -1276,20 +1301,34 @@ def joined_to_pad(spec, pins):
     """The hold line when every lead on one side of a dual-row package is the exposed pad's own pin (FDMT800100DC,
     BSC026N08NS5, benchmark 2026-10-21: drain leads 5-8 and pad 9 all "D", one piece of metal). The makers' lands
     merge them into one pad; building the leads as separate pads would be a wrong land, so the part is held. A pad
-    named for ground or no net is left alone (that side's leads are ordinary pins on the same net). None otherwise."""
+    named for ground or no net is left alone (that side's leads are ordinary pins on the same net). None otherwise.
+    A read that names the joined leads (joined_pins) and gives the maker's land for the one pad they make with the
+    exposed pad (land.ep_across / ep_along) is built as that pad (footprint_gen.joined), so it is not held here;
+    joined_pins with no such land is."""
     n, t, ep = spec.get("pin_count"), spec.get("package_type"), spec.get("exposed_pad")
-    if not (isinstance(n, int) and n >= 4 and n % 2 == 0 and ep and not spec.get("pin_positions")):
+    if spec.get("joined_pins") and F.joined(spec):
+        land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
+        if all(isinstance(land.get(k), (int, float)) and not isinstance(land.get(k), bool) for k in ("ep_across", "ep_along")):
+            return None
+        return (f"no footprint: leads {', '.join(F.joined(spec)[1])} and the exposed pad are one piece of metal "
+                "(joined_pins), and the maker's land for the one pad they make was not read (land.ep_across / "
+                "ep_along / ep_center); the package outline gives the metal, not the land, so check the land "
+                "pattern drawing")
+    sl = F.side_lists(spec) if t == "qfn" and F.listed_sides(spec) else None   # the pin figure's own sides
+    if not (isinstance(n, int) and n >= 4 and (n % 2 == 0 or sl) and ep and not spec.get("pin_positions")):
         return None
     if not (t == "gullwing" or t == "qfn" and F.rows(spec)[1] == 0):   # the split the builder lays out, blanks included
         return None
     name = {str(p.get("num")).strip(): str(p.get("name") or "").strip() for p in pins or []}
-    pad = [v for k, v in name.items() if not (k.isdecimal() and 1 <= int(k) <= n)]
+    leads = {x for r in sl.values() for x in r if x} if sl else {str(i) for i in range(1, n + 1)}
+    pad = [v for k, v in name.items() if k not in leads]
     if len(pad) != 1 or NO_NET.match(pad[0]) or re.match(r"^(?:[ADPS]?GND|[ADP]?VSS|GROUND|0V)", pad[0], re.I):
         return None
     from . import crosscheck as CC                    # "D", "DRAIN", "D (exposed pad)": one net. A pad's own name
     net = lambda v: CC._names(v) - CC.EP_NAMES - {"NC", "DNC"}   # (PAD, EP) or no net matches no lead
-    for side in (range(1, n // 2 + 1), range(n // 2 + 1, n + 1)):
-        if all(net(name.get(str(i), "")) & net(pad[0]) for i in side):
+    halves = [[str(i) for i in range(1, n // 2 + 1)], [str(i) for i in range(n // 2 + 1, n + 1)]]
+    for side in ([[x for x in sl[s] if x] for s in F.SIDES if any(sl[s])] if sl else halves):
+        if all(net(name.get(i, "")) & net(pad[0]) for i in side):
             return (f"no footprint: leads {side[0]}-{side[-1]} and the exposed pad are all {pad[0]} (one piece of "
                     "metal): the maker's land merges them into one pad, which this footprint would build as separate "
                     "pads; check the land on the drawing")
@@ -1685,6 +1724,14 @@ def _listed(spec):
     return [p for p in pos if isinstance(p, dict)] if isinstance(pos, list) else []
 
 
+def _lead_numbers(spec):
+    """The lead numbers the read places itself: pin_positions', or pin_sides' (the pin figure's sides)."""
+    ls = F.listed_sides(spec) if spec.get("package_type") == "qfn" else None
+    if ls:
+        return {x for r in ls.values() for x in r if x}
+    return {str(p.get("number")) for p in _listed(spec)}
+
+
 def sanity(spec, review, evidence=""):
     spec = F.qfp_frame(spec)[0]                       # a QFP's body in footprint_gen's frame, however the read named it
     t, n, e = spec.get("package_type"), spec.get("pin_count"), spec.get("pitch")
@@ -1728,8 +1775,8 @@ def sanity(spec, review, evidence=""):
             per = max(round((max(o) - min(o)) / e) + 1 if o else 0 for o in offs) if pos else n // 2
             rows, low = [("pin rows", per, "body_length")], 0.6
         else:
-            nlr, ntb = F.rows(spec)
-            if 2 * (nlr + ntb) != n:
+            nlr, ntb = F.rows(spec)                   # (pin_sides with a lead place left empty: sanity counts them)
+            if 2 * (nlr + ntb) != n and not F.listed_sides(spec):
                 review.append(f"pins per side {nlr}+{ntb}+{nlr}+{ntb} != pin_count {n}")
             rows, low = [("left/right rows", nlr, "body_width"), ("top/bottom rows", ntb, "body_length")], 0.4
         for label, per, k in rows:
@@ -1747,6 +1794,10 @@ def sanity(spec, review, evidence=""):
     review.extend(_feet_outside(spec))
     review.extend(_qfp_rows(spec))
     review.extend(_qfn_rows(spec))
+    # the pin figure's sides and the merged leads against the rest of the read: a failed read (held or read again),
+    # not only an unbuildable one, so no standard land is chosen over a read that contradicts itself
+    review.extend(p if "implausib" in p else f"{p} (an implausible read)"
+                  for p in F.pin_sides_problems(spec) + F.joined_problems(spec))
     ball, py = g("ball_diameter"), spec.get("pitch_y")
     near = min(x for x in (e, py, 99) if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0)
     if t == "bga" and ball and near < 99 and ball[1] >= 0.9 * near:      # (real balls: 0.3 at 0.5, 0.75 at 1.27 mm)
@@ -2150,9 +2201,10 @@ def ep_number(spec, ext, review):
     from the read's own pin table: the one number past the highest listed lead, when it is there and pin_count + 1
     is a lead. Set on the spec (footprint_gen numbers the pad with it), with a line for the person."""
     ep, n = spec.get("exposed_pad"), spec.get("pin_count")
-    if not isinstance(ep, dict) or ep.get("number") not in (None, "") or not isinstance(n, int) or spec.get("tab"):
+    if not isinstance(ep, dict) or ep.get("number") not in (None, "") or not isinstance(n, int) or spec.get("tab") \
+            or F.joined(spec):                        # (a merged pad takes the lowest joined pin's number)
         return
-    leads = {str(p.get("number")) for p in _listed(spec)}
+    leads = _lead_numbers(spec)
     if len(leads) != n or str(n + 1) not in leads or not all(x.isdecimal() for x in leads):
         return
     nxt = str(max(int(x) for x in leads) + 1)
@@ -2160,6 +2212,39 @@ def ep_number(spec, ext, review):
         spec["exposed_pad"] = dict(ep, number=nxt)
         review.append(f"exposed_pad: numbered {nxt} from the pin table (the leads are {', '.join(sorted(leads, key=int))},"
                       f" so pin_count + 1 = {n + 1} is a lead); check the thermal pad's number on the drawing")
+
+
+def merge_pins(spec, pins, review):
+    """The symbol's pins for a read whose joined_pins and exposed pad build as one pad (footprint_gen.joined): one pin,
+    numbered with the lowest joined pin and named as it is, for the joined leads and the pad (KiCad's BSC026N08NS5:
+    1-3 S, 4 G, 5 D). They must be one net: a joined pin named otherwise (a gate read as a drain lead) would wire the
+    part wrong, so it is a failed read. -> the pins, or None when nothing is joined."""
+    jn = F.joined(spec)
+    if not jn or F.joined_problems(spec):
+        return None
+    n, ep = spec.get("pin_count"), spec.get("exposed_pad") or {}
+    epn = str(ep["number"]) if ep.get("number") not in (None, "") else str(n + 1) if isinstance(n, int) else None
+    if epn is None or epn in _lead_numbers(spec):
+        review.append(f"joined_pins: the exposed pad's pin number is not known (pin_count + 1 = {epn} is a lead's "
+                      "number), so which pin table row is the pad cannot be told, which is implausible (give "
+                      "exposed_pad.number, or check pin_count)")
+        return None
+    drop = set(jn[1]) | {epn}
+    from . import crosscheck as CC
+    net = lambda v: CC._names(v) - CC.EP_NAMES - {"NC", "DNC"}
+    gone = [p for p in pins if str(p.get("num")) in drop]
+    keep = next((p for p in gone if str(p.get("num")) == jn[1][0]), {})
+    if {str(p.get("num")) for p in gone} != drop or \
+            any(not (net(p.get("name") or "") & net(keep.get("name") or "")) for p in gone):   # every row, one net
+        shown = ", ".join(f"{p.get('num')} {p.get('name')}" for p in gone)
+        review.append(f"joined_pins: the leads joined to the exposed pad and the pad are one piece of metal, one net, "
+                      f"but the pin table names them {shown or 'nothing'}, which is implausible (check joined_pins "
+                      "against the bottom view and the pin table)")
+        return None
+    review.append(f"joined_pins: leads {', '.join(jn[1])} and the exposed pad are one pad, {jn[1][0]}, as the maker's "
+                  f"land draws them; the symbol has one pin {jn[1][0]} ({keep.get('name')}) for them")
+    out = [p for p in pins if str(p.get("num")) not in drop or p is keep]
+    return out
 
 
 def check_pins(spec, ext, review):
@@ -2203,12 +2288,15 @@ def check_pins(spec, ext, review):
         return
     if rows != n:
         review.append(f"pin count: drawing says {n}, pin table has {rows}")
-    listed = {str(p.get("number")) for p in _listed(spec)}          # a depopulated row: its pads' own numbers
+    listed = _lead_numbers(spec)                      # a depopulated row: its pads' own numbers
     ep = spec.get("exposed_pad")
     epn = str(ep["number"]) if isinstance(ep, dict) and ep.get("number") not in (None, "") else None
     want = listed if len(listed) == n and not ep and not spec.get("tab") else \
         listed | {epn} if epn and len(listed) == n and not spec.get("tab") else \
         {str(i) for i in range(1, n + 1)} | ({str(n + 1)} if ep else set())
+    jn = F.joined(spec)
+    if jn:                                            # the joined leads and the pad: one pad, one pin (merge_pins)
+        want = (want - set(jn[1]) - {epn or str(n + 1)}) | {jn[1][0]}
     key = lambda s: (not s.isdecimal(), int(s) if s.isdecimal() else 0, s)
     miss, extra = sorted(want - set(nums), key=key), sorted(set(nums) - want, key=key)
     if miss:
@@ -2482,7 +2570,7 @@ def two_sided(spec, review):
     pins_top_bottom = 0 with a review line; a split the read gave is kept."""
     n = spec.get("pin_count")
     if spec.get("package_type") != "qfn" or not isinstance(n, int) or n % 2 or spec.get("pin_positions") \
-            or "pins_left_right" in spec or "pins_top_bottom" in spec:
+            or "pins_left_right" in spec or "pins_top_bottom" in spec or F.listed_sides(spec):
         return
     name = str(spec.get("name") or "")
     if not (DUAL_ROW_NAME.search(name) or DUAL_ROW_FEW.search(name) and n <= DUAL_ROW_FEW_MAX):
@@ -2640,6 +2728,10 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
     two_sided(spec, review)
     grid_from_balls(spec, ext, review)
     ep_number(spec, ext, review)
+    read_ext, read_pins = ext, ext["pins"]            # as read: the review and the cross-check compare these
+    merged = merge_pins(spec, ext["pins"], review)
+    if merged is not None:                            # leads joined to the pad: one pad, so one pin (KiCad's symbols)
+        ext = dict(ext, pins=merged)
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):
@@ -2692,10 +2784,11 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
     sym["needs_review"] = review
     side = {"part": part, "datasheet": datasheet, "model": model, "model_served": (msg or {}).get("model"),
             "usage": (msg or {}).get("usage"), "page_offset": offset, "needs_review": review, "dimensions": prov,
-            "pins": [dict(p, page=_pg(p["page"], offset)) for p in ext["pins"]],
+            "pins": [dict(p, page=_pg(p["page"], offset)) for p in read_pins],
+            **({"merged_pins": [p["num"] for p in merged]} if merged is not None else {}),
             "pin_table": dict(ext["pin_table"], page=_pg(ext["pin_table"]["page"], offset)),
             "notes": ext["notes"], "embedded_instructions": ext["embedded_instructions"], "self_check": info,
-            "extraction": ext}
+            "extraction": read_ext}
     return {"spec": spec, "symbol": sym, "sidecar": side, "needs_review": review}
 
 
@@ -3943,9 +4036,34 @@ def _ranges(pages):
 
 
 # ---------------------------------------------------------------- result cache (re-runs are free)
+# Optional fields added to package_schema.json after answers were cached (2026-10-29: pin_sides, joined_pins,
+# land.ep_center). An answer read before them never had them to give and is still a whole answer, built as it was
+# then, so the result cache replays it instead of buying the read again (a paid re-read gives the new fields).
+ADDED_FIELDS = (("pin_sides",), ("joined_pins",), ("land", "ep_center"))
+
+
+def _legacy_schema():
+    s = copy.deepcopy(SCHEMA)
+    for path in ADDED_FIELDS:
+        props = s["properties"]
+        for k in path[:-1]:
+            props = props[k]["properties"]
+        props.pop(path[-1], None)
+    return s
+
+
+def _version(schema=None):
+    return hashlib.sha256((json.dumps(output_schema(schema), sort_keys=True) + SYSTEM).encode()).hexdigest()[:12]
+
+
 def schema_version():
     """Changes when the output schema (package_schema.json, new families included) or the prompt changes."""
-    return hashlib.sha256((json.dumps(output_schema(), sort_keys=True) + SYSTEM).encode()).hexdigest()[:12]
+    return _version()
+
+
+def legacy_schema_version():
+    """The version the schema had before ADDED_FIELDS, whose cached answers ResultCache.get still replays."""
+    return _version(_legacy_schema())
 
 
 class ResultCache:
@@ -3968,7 +4086,19 @@ class ResultCache:
 
     def get(self, key):
         """The cached record, or None; a damaged entry (cut short by a crash, a sync tool) is a miss, not a crash. An
-        answer this parser reads that an earlier one rejected (put_rejected) is the record, marked reparsed."""
+        answer this parser reads that an earlier one rejected (put_rejected) is the record, marked reparsed. With no
+        answer under this schema, one read under the schema before its ADDED_FIELDS is the record, marked
+        legacy_schema (the same request less the new optional fields: a re-score or a re-run stays free)."""
+        rec = self._get(key)
+        seg = f"-{schema_version()}-"
+        if rec is None and not key.startswith("check-") and seg in key:
+            old = legacy_schema_version()
+            prev = self._get(key.replace(seg, f"-{old}-", 1)) if f"-{old}-" != seg else None
+            if prev is not None:
+                return dict(prev, legacy_schema=old)
+        return rec
+
+    def _get(self, key):
         rec = self._load(self.dir / f"{key}.json")
         if (rec is None or "message" not in rec) and not key.startswith("check-"):
             rej = self._load(self.dir / "rejected" / f"{key}.json")

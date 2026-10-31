@@ -28,6 +28,14 @@ ecadlib check --summary Lib.pretty/         # counts per rule for a whole librar
     repeats a lead number needs `pin_positions`. The cross-check's second read is asked for terminals, so it may count
     such a tab once more (4 for SOT-223-3_TabPin2); that is not a disagreement.
   * `qfp`: 4-sided gull-wing. `qfn`: QFN/DFN/SON with an optional exposed pad (`pins_top_bottom: 0` for DFN).
+    `pin_sides` gives the pin numbers along each side as the pin figure shows them (left top to bottom, bottom, right,
+    top; `""` for a lead place with no pin), for rows numbered or spaced unlike the default. Rows facing each other
+    need as many lead places, and a `pins_left_right` / `pins_top_bottom` that disagrees with it refuses the read
+    (a pin counted on the wrong side).
+    `joined_pins` names the leads that are one piece of metal with the exposed pad (a MOSFET's drain leads: TDSON-8,
+    SuperSO8). They and the pad become one pad, numbered with the lowest of them, sized and placed by the maker's land
+    (`land.ep_across`, `ep_along`, `ep_center`); the symbol gets one pin for it, as KiCad's do. With no maker's land the
+    part is held: the package outline gives the metal, not the land.
   * `polarized: true` adds KiCad's pin-1 silk bracket and fab chamfer (LED/diode: pin 1 = cathode; tantalum: pin 1 = +).
   * `land`: the maker's recommended land pattern, when the datasheet has one. It replaces the IPC pads.
 * **Numbers** follow what KiCad builds its own library with (fillet tables from KiCad's `ipc_7351b.yaml`; see [docs/footprint-rules.md](footprint-rules.md)):

@@ -107,8 +107,8 @@ def critical(spec):
     out["sides"] = sides(spec)
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
-        nlr = spec.get("pins_left_right", n // 4)
-        out["rows"] = (nlr, spec.get("pins_top_bottom", (n - 2 * nlr) // 2))
+        from . import footprint_gen as FG
+        out["rows"] = FG.rows(spec)
     return out
 
 
@@ -147,7 +147,12 @@ def table_fits(spec):
 
 def sides(spec):
     """The pin numbers along each side of the body, in order: from a read's pin_positions (grouped by side, sorted by
-    offset) or a second read's pin_rows. -> [tuple of numbers] or None."""
+    offset), a read's pin_sides (the pin figure's sides; a lead place with no pin left out) or a second read's
+    pin_rows. -> [tuple of numbers] or None."""
+    from . import footprint_gen as FG
+    ls = FG.listed_sides(spec)
+    if ls:
+        return [r for r in (tuple(n for n in ls[s] if n) for s in FG.SIDES) if r] or None
     pos = spec.get("pin_positions")
     if isinstance(pos, list) and pos:
         by = {}
@@ -761,7 +766,9 @@ def run(reader, job, res, model):
     mode = mode_of(reader.cfg)
     if mode == "off":
         return None
-    first_pins = [(p["num"], p["name"]) for p in ((res.get("symbol") or {}).get("pins") or [])]
+    # the pin table as read (a merged pad's symbol has one pin for the leads joined to the pad: datasheet.merge_pins)
+    read = (res.get("sidecar") or {}).get("pins") if (res.get("sidecar") or {}).get("merged_pins") else None
+    first_pins = [(p["num"], p["name"]) for p in (read or (res.get("symbol") or {}).get("pins") or [])]
     if mode == "auto" and job.get("fp_needed") is False:
         out = {"mode": mode, "status": "skipped", "why": "the footprint comes from another source", "checks": []}
         if first_pins:                                # the symbol is still the read's own: its names are unchecked
