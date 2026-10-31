@@ -57,7 +57,7 @@
   background: var(--bg); }                           /* solid: at the very top the page sits behind it */
 
 /* the pinned scene: our own light, a faint warm pool under the part, never a grey floor */
-.xh-scene { position: relative; height: 1000vh; background: var(--xh-bg); }   /* also under a phone's collapsing toolbar */
+.xh-scene { position: relative; height: 850vh; background: var(--xh-bg); }   /* also under a phone's collapsing toolbar */
 .xh.xh-js { margin-top: calc(-1 * var(--xh-nav, 0px)); }
 .xh-stage { position: sticky; top: 0; height: 100vh; height: 100svh; overflow: hidden; perspective: 2100px; perspective-origin: 50% 36%;
   background:
@@ -241,7 +241,7 @@ svg.xh-leaders circle.xh-ring { fill: none; stroke: var(--copper); stroke-width:
 
 /* phones: their own composition, not a shrunk desktop (a phone on its side is short and wide, so it keeps the wide one) */
 @media (max-width: 760px) and (min-height: 521px), (max-width: 760px) and (orientation: portrait) {
-  .xh-scene { height: 900vh; }
+  .xh-scene { height: 770vh; }
   .xh-stage { perspective: 1400px; perspective-origin: 50% 40%; }
   .xh-intro { top: auto; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); }
   .xh-intro h1 { font-size: clamp(30px, 8.6vw, 40px); margin: 12px 0 10px; }
