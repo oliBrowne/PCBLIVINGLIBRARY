@@ -15,8 +15,10 @@ python3 -m http.server -d site 8000      # then http://localhost:8000
   labels, ease-out motion), light and dark, and it holds still under `prefers-reduced-motion`.
 * `hero.js`, `hero.css`: the first screen. Scrolling opens one BOM line (TLC5951DAP) into the six things ecadlib
   builds from it (BOM and search, datasheet, symbol, footprint, 3D model, library record), then turns it into the
-  Altium panel. Dark in both themes; its own layout on phones; one still frame under `prefers-reduced-motion`; a plain
-  first screen without JavaScript. Every class, id and custom property is prefixed `xh-` so it never meets `site.css`
+  Altium panel. Light or dark with the site's theme: each colour in `hero.css` is a `light-dark()` pair, with the dark
+  set repeated at the end for browsers without it (a test keeps the two in step); the footprint stays the PCB editor's
+  dark screen in both. Its own layout on phones; one still frame under `prefers-reduced-motion`; a plain first screen
+  without JavaScript. Every class, id and custom property is prefixed `xh-` so it never meets `site.css`
   (`tests/test_site.py` checks). The footprint's pad colour is one switch: `data-pads="editor"` (the PCB editor's red)
   or `"copper"` on the hero's `<section>` in `index.html`.
 * `hero-data.js`: the TLC5951DAP footprint and symbol the hero draws, made by ecadlib's own `footprint_gen` and

@@ -47,7 +47,7 @@ const LIB = [['Part number', 'TLC5951DAP'], ['Manufacturer', 'Texas Instruments'
   ['Datasheet', 'ti.com/…/tlc5951.pdf']];
 
 const LAYERS = [
-  { key: 'bom', name: 'BOM', theme: 'dark', mark: [24, 142],
+  { key: 'bom', name: 'BOM', mark: [24, 142],
     build: el => {
       // the BOM, then the search for the one line ecadlib has to build: noise settles into answers from each source
       el.insertAdjacentHTML('beforeend', `<div class="xh-file">led-driver-board.csv</div>
@@ -77,7 +77,7 @@ const LAYERS = [
       el._me.textContent = found ? 'draw' : '···';
     } },
 
-  { key: 'ds', name: 'Datasheet', theme: 'dark', mark: at(0, 7.3),
+  { key: 'ds', name: 'Datasheet', mark: at(0, 7.3),
     build: el => {
       // the maker's package drawing: the outline draws itself, the leads land, then each dimension opens out from
       // its middle while its number counts up, and a copper box marks the number as ecadlib reads it
@@ -92,8 +92,8 @@ const LAYERS = [
         <defs><marker id="xh-ar" viewBox="0 0 4 4" refX="2" refY="2" markerWidth="2.6" markerHeight="2.6" orient="auto-start-reverse"><path d="M0 0L4 2L0 4z" fill="${INK}"/></marker>
           <pattern id="xh-mm" width="1" height="1" patternUnits="userSpaceOnUse"><path d="M1 0H0V1" fill="none" stroke="var(--xh-ds-grid)" stroke-width=".03"/></pattern></defs>
         <rect x="-7" y="-8.2" width="14" height="16.8" fill="url(#xh-mm)"/>
-        <rect class="xh-ol" x="-3.05" y="-6.25" width="6.1" height="12.5" fill="#1d1a15" stroke="${INK}" stroke-width=".06" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1"/>
-        <g class="xh-ld" fill="#26221b" stroke="${INK}" stroke-width=".03">${pads.map(p => `<rect x="${p.x < 0 ? -4.05 : 3.05}" y="${p.y - .12}" width="1" height=".24"/>`).join('')}</g>
+        <rect class="xh-ol" x="-3.05" y="-6.25" width="6.1" height="12.5" fill="var(--xh-ds-body)" stroke="${INK}" stroke-width=".06" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1"/>
+        <g class="xh-ld" fill="var(--xh-ds-lead)" stroke="${INK}" stroke-width=".03">${pads.map(p => `<rect x="${p.x < 0 ? -4.05 : 3.05}" y="${p.y - .12}" width="1" height=".24"/>`).join('')}</g>
         <rect class="xh-pp" x="-1.52" y="-3.18" width="3.04" height="6.35" fill="none" stroke="${INK}" stroke-width=".035" stroke-dasharray=".2 .12"/>
         <circle class="xh-pp" cx="-2.3" cy="-5.5" r=".26" fill="none" stroke="${INK}" stroke-width=".03"/>
         <g class="xh-exs">${ext(-4.05, 6.4, -4.05, 7.6)}${ext(4.05, 6.4, 4.05, 7.6)}${ext(3.2, -6.25, 5.5, -6.25)}${ext(3.2, 6.25, 5.5, 6.25)}${ext(-4.2, -5.85, -6, -5.85)}${ext(-4.2, -5.2, -6, -5.2)}</g>
@@ -123,7 +123,7 @@ const LAYERS = [
       el._reads.forEach((d, i) => { const a = span(r, .62 + i * .14, .7 + i * .14); d.setAttribute('opacity', (a * (1 - span(r, .93, 1))).toFixed(3)); });
     } },
 
-  { key: 'sym', name: 'Symbol', theme: 'dark', mark: null,
+  { key: 'sym', name: 'Symbol', mark: null,
     build: el => {
       // symbol_layout units are 10 mil: the body is 140 x 270, pins 30 long; fit it to the card. The body draws,
       // each pin draws out and its name types in, then signals run along a few pins while the layer is out
@@ -143,9 +143,9 @@ const LAYERS = [
       el.insertAdjacentHTML('beforeend', `<svg viewBox="${VB}" aria-hidden="true">
         <defs><pattern id="xh-sg" width=".5" height=".5" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r=".025" fill="var(--xh-sch-grid)"/></pattern></defs>
         <rect x="-7.1" y="-8.4" width="14.2" height="17.5" fill="url(#xh-sg)"/>
-        <g stroke="#24324a" stroke-width=".03" fill="none"><rect x="-7.1" y="-8.4" width="14.2" height="17.5"/><rect x="-6.7" y="-8" width="13.4" height="16.7"/></g>
-        <g font-size=".46" fill="#4d5d73" ${MONO} text-anchor="middle">${[...'1234'].map((n, i) => `<text x="${-5 + i * 3.35}" y="-8.07">${n}</text>`).join('')}${[...'ABCD'].map((n, i) => `<text x="-6.9" y="${-5.5 + i * 4.2}">${n}</text>`).join('')}</g>
-        <rect class="xh-bd" x="${X(x0)}" y="${Y(y0)}" width="${(w * s).toFixed(3)}" height="${(Math.abs(hgt) * s).toFixed(3)}" fill="#0f1826" stroke="var(--xh-sch-ink)" stroke-width=".07" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1"/>
+        <g stroke="var(--xh-sch-line)" stroke-width=".03" fill="none"><rect x="-7.1" y="-8.4" width="14.2" height="17.5"/><rect x="-6.7" y="-8" width="13.4" height="16.7"/></g>
+        <g font-size=".46" fill="var(--xh-sch-soft)" ${MONO} text-anchor="middle">${[...'1234'].map((n, i) => `<text x="${-5 + i * 3.35}" y="-8.07">${n}</text>`).join('')}${[...'ABCD'].map((n, i) => `<text x="-6.9" y="${-5.5 + i * 4.2}">${n}</text>`).join('')}</g>
+        <rect class="xh-bd" x="${X(x0)}" y="${Y(y0)}" width="${(w * s).toFixed(3)}" height="${(Math.abs(hgt) * s).toFixed(3)}" fill="var(--xh-sch-body)" stroke="var(--xh-sch-ink)" stroke-width=".07" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1"/>
         ${SYM.pins.map(pinEl).join('')}
         <g class="xh-lb">${txt(0, -6.7, 'U4', .55, 'var(--xh-sch-ink)', 'text-anchor="middle" font-weight="700"')}${txt(0, 7.9, 'TLC5951DAP', .5, 'var(--xh-sch-name)', 'text-anchor="middle"')}</g>
         <g class="xh-sigs"></g>
@@ -183,7 +183,7 @@ const LAYERS = [
       });
     } },
 
-  { key: 'fp', name: 'Footprint', theme: 'dark', mark: at(pin1.x, pin1.y),
+  { key: 'fp', name: 'Footprint', mark: at(pin1.x, pin1.y),
     build: el => {
       el.insertAdjacentHTML('beforeend', `<svg viewBox="${VB}" aria-hidden="true">
         <defs><pattern id="xh-pg" width="1" height="1" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r=".03" fill="#2b2b2b"/></pattern></defs>
@@ -216,14 +216,14 @@ const LAYERS = [
       el._crt.setAttribute('opacity', span(r, .8, .95));
     } },
 
-  { key: '3d', name: '3D model', theme: 'dark', mark: at(-2.25, -5.45),
+  { key: '3d', name: '3D model', mark: at(-2.25, -5.45),
     build: el => {
       el.insertAdjacentHTML('beforeend', `<svg viewBox="${VB}" aria-hidden="true">
         <defs><linearGradient id="xh-body" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3d3e45"/><stop offset=".55" stop-color="#1c1d21"/><stop offset="1" stop-color="#0f1013"/></linearGradient>
           <linearGradient id="xh-lead" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7d7f87"/><stop offset=".35" stop-color="#f1f2f5"/><stop offset=".6" stop-color="#a0a2aa"/><stop offset="1" stop-color="#d0d1d6"/></linearGradient>
           <filter id="xh-mold" x="0" y="0" width="1" height="1"><feTurbulence type="fractalNoise" baseFrequency="3.2" numOctaves="2" seed="4"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="table" tableValues="0 .18"/></feComponentTransfer><feComposite in2="SourceGraphic" operator="in"/></filter></defs>
-        <ellipse cx=".4" cy=".8" rx="5.6" ry="7.6" fill="rgba(0,0,0,.5)" filter="blur(.6px)"/>
         <g class="xh-solid">
+          <ellipse cx=".4" cy=".8" rx="5.6" ry="7.6" fill="var(--xh-3d-shadow)" filter="blur(.6px)"/>
           <g>${pads.map(p => `<rect x="${p.x < 0 ? -4.1 : 3.05}" y="${p.y - .13}" width="1.05" height=".26" rx=".05" fill="url(#xh-lead)"/>`).join('')}</g>
           <rect x="-3.05" y="-6.25" width="6.1" height="12.5" rx=".2" fill="url(#xh-body)"/>
           <rect x="-3.05" y="-6.25" width="6.1" height="12.5" rx=".2" fill="#fff" filter="url(#xh-mold)"/>
@@ -231,11 +231,11 @@ const LAYERS = [
           <circle cx="-2.25" cy="-5.45" r=".3" fill="#0b0c0e" stroke="rgba(255,255,255,.1)" stroke-width=".03"/>
           <g ${MONO} fill="#b3b5bc" text-anchor="middle" transform="rotate(-90)"><text x="0" y="-.35" font-size=".95" font-weight="700">TLC5951</text><text x="0" y=".6" font-size=".55" fill="#7c7e86">TI · DAP</text></g>
         </g>
-        <g class="xh-wire" fill="none" stroke="#c9cbd2" stroke-width=".03">
+        <g class="xh-wire" fill="none" stroke="var(--xh-3d-wire)" stroke-width=".03">
           <rect x="-3.05" y="-6.25" width="6.1" height="12.5" pathLength="1"/><rect x="-2.6" y="-5.8" width="5.2" height="11.6" pathLength="1"/>
           ${[-4, -2, 0, 2, 4].map(y => `<line x1="-3.05" y1="${y}" x2="3.05" y2="${y}" pathLength="1"/>`).join('')}<line x1="0" y1="-6.25" x2="0" y2="6.25" pathLength="1"/>
           ${pads.map(p => `<rect x="${p.x < 0 ? -4.1 : 3.05}" y="${p.y - .13}" width="1.05" height=".26" pathLength="1"/>`).join('')}</g>
-        ${txt(-7, 8.95, 'STEP · 6.1 × 12.5 MM', .52, '#9a9ca4')}
+        ${txt(-7, 8.95, 'STEP · 6.1 × 12.5 MM', .52, 'var(--xh-3d-label)')}
       </svg><div class="xh-sheen"></div>`);
       el._solid = el.querySelector('.xh-solid'); el._wire = el.querySelector('.xh-wire'); el._wl = [...el._wire.children]; el._last = -1;
       el._wl.forEach(w => w.setAttribute('stroke-dasharray', '1'));
@@ -248,7 +248,7 @@ const LAYERS = [
       el._wire.setAttribute('opacity', 1 - smooth(span(r, .7, .95)));
     } },
 
-  { key: 'lib', name: 'Library', theme: 'dark', mark: [8, 205],
+  { key: 'lib', name: 'Library', mark: [8, 205],
     build: el => {
       // the finished record: its fields fill, the rulebook ticks through, then it is released
       el.insertAdjacentHTML('beforeend', `<div class="xh-bar"><svg class="xh-logo" aria-hidden="true"><use href="#mark"/></svg></div>
@@ -378,7 +378,7 @@ function render() {
     const y = lerp(oy * peel + f * (phone ? 16 : 24), -k * (phone ? 18 : 22), fan);
     const z = lerp(z0 + bob + f * up, -k * 70, fan);
     el.style.transform = `translate3d(${x}px, ${y}px, ${z}px) rotateZ(${orot * peel * (1 - fan)}deg)`;
-    // layers out of focus darken (an opaque shade, so nothing shows through), never fade
+    // layers out of focus recede into the stage colour (an opaque shade, so nothing shows through), never fade
     el._shade.style.opacity = (A * (phone ? .36 : .28) * (1 - f / Math.max(A, 1e-6))).toFixed(3);
     el.style.opacity = (1 - fan * (k > 5 ? .45 : 0)) * (1 - gone);
     el.style.filter = fan > .02 && k > 1 ? `blur(${(fan * (k - 1) * .45).toFixed(2)}px)` : '';
@@ -462,7 +462,7 @@ function render() {
   beats.forEach((b, i) => { const f = span(p, marks[i], marks[i + 1]); b.classList.toggle('xh-on', f > 0 && f < 1 || (i === 3 && f >= 1)); b.style.setProperty('--xh-f', f.toFixed(3)); });
 }
 
-// the site's nav goes dark while it sits over the scene
+// the site's nav takes the scene's colours while it sits over it
 const nav = document.querySelector('.nav');
 const navOver = () => { const r = scene.getBoundingClientRect(), h = nav?.offsetHeight || 0; nav?.classList.toggle('xh-over', r.top <= h + 1 && r.bottom > h); };
 
@@ -471,7 +471,7 @@ let running = false, onScreen = true;
 function loop() { if (!running) return; render(); navOver(); requestAnimationFrame(loop); }
 const start = () => { if (!running && onScreen && !reduce.matches) { running = true; requestAnimationFrame(loop); } };
 root.classList.add('xh-js');                           // without this script the hero is a plain, still first screen
-// the scene starts under the nav, so its first screen is the whole window (the nav is dark over it)
+// the scene starts under the nav, so its first screen is the whole window (the nav takes its colours over it)
 const tuck = () => root.style.setProperty('--xh-nav', `${nav?.offsetHeight || 0}px`);
 tuck(); addEventListener('resize', tuck);
 if (reduce.matches) {

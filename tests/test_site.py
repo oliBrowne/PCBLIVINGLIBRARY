@@ -33,7 +33,7 @@ def test_hero_never_meets_the_site_stylesheet():
     number) and more. Every class, id and custom property the hero owns carries the xh- prefix, so neither side can
     restyle the other."""
     css = re.sub(r"/\*.*?\*/", "", (SITE / "hero.css").read_text(), flags=re.S)
-    own = [ln for ln in css.splitlines() if not ln.lstrip().startswith(".nav.xh-over")]   # the one rule that dresses the site's nav
+    own = re.sub(r"\.nav\.xh-over\s*\{[^}]*\}", "", css).splitlines()      # the one rule that dresses the site's nav
     sels = re.findall(r"([^{}]+)\{", "\n".join(own))
     classes = {c for s in sels if not s.strip().startswith("@") for c in re.findall(r"\.([a-zA-Z_][\w-]*)", s)}
     assert classes and all(c.startswith("xh") for c in classes), sorted(c for c in classes if not c.startswith("xh"))
@@ -60,3 +60,18 @@ def test_hero_phone_layout_is_one_rule():
     js = (SITE / "hero.js").read_text(encoding="utf-8")
     phone = re.search(r"narrow = matchMedia\('([^']*)'\)", js).group(1)
     assert "/* phones:" in css and re.search(r"/\* phones:[^\n]*\*/\n@media ([^{]*) \{", css).group(1) == phone, phone
+
+
+def test_hero_dark_fallback_matches_its_pairs():
+    """Each hero colour is light-dark(light, dark), so the hero follows the site's theme. A browser without
+    light-dark() gets the dark set from an @supports block at the end of hero.css: it must list every pair's dark
+    value, or that browser draws the colour as nothing."""
+    css = re.sub(r"/\*.*?\*/", "", (SITE / "hero.css").read_text(encoding="utf-8"), flags=re.S)
+    main, fallback = css.split("@supports not (color: light-dark(")
+    val = r"((?:rgba?\([^)]*\))|[^,;()]+)"
+    for sel in (".xh {", ".nav.xh-over {"):
+        block = main[main.index(sel):main.index("}", main.index(sel))]
+        pairs = dict((k, d.strip()) for k, _l, d in re.findall(r"(--[\w-]+): light-dark\(" + val + ", " + val + r"\)", block))
+        assert pairs and block.count("light-dark(") == len(pairs), sel
+        back = fallback[fallback.index(sel):fallback.index("}", fallback.index(sel))]
+        assert dict((k, v.strip()) for k, v in re.findall(r"(--[\w-]+): ([^;]+);", back)) == pairs, sel
