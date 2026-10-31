@@ -34,28 +34,18 @@ themeBtn.addEventListener("click", () => {
   labelTheme();
 });
 
-/* ---------- figures ---------- */
-const heroRead = $("#heroread"), heroAz = $("#heroaz");
-H.board($("#fig-board"), { intensity: 0.55, onRead: (t) => { heroRead.textContent = t; } });
-if (!still.matches) H.placeParts();
+/* ---------- figures (the hero is hero.js) ---------- */
 for (const el of $$("[data-fig]")) {
   const out = el.dataset.read ? $("#" + el.dataset.read) : null;
   H[el.dataset.fig](el, { play: true, onRead: out ? (t) => { out.textContent = t; } : undefined });
 }
 
-// The camera: it swings in from the side while the board is drawn, then scrolling the hero turns it.
-let az = 45;
-const setAz = (d) => { az = d; H.turn(d); heroAz.textContent = String(Math.round(d)).padStart(2, "0"); };
-setAz(78);
-requestAnimationFrame(() => setTimeout(() => setAz(45), 120));
 let ticking = false;
 addEventListener("scroll", () => {
   if (ticking) return;
   ticking = true;
   requestAnimationFrame(() => {
     ticking = false;
-    const p = clamp(scrollY / innerHeight, 0, 1);
-    setAz(45 - 32 * p);
     $(".nav").classList.toggle("scrolled", scrollY > 8);
   });
 }, { passive: true });
@@ -685,7 +675,7 @@ function write(el, delay = 0) {
   setTimeout(() => { el.classList.remove("writing"); el.style.animationDelay = ""; }, delay + 1400);
 }
 if (!still.matches) {
-  const SKIP = "svg, script, style, .win *, .sr, h1, h2, .reveal h1 *, .reveal h2 *";
+  const SKIP = "svg, script, style, .win *, .sr, .xh, h1, h2, .reveal h1 *, .reveal h2 *";   // .xh: the hero draws itself
   const boxes = new Set(), texts = new Set();
   $$("body *").forEach((el) => {
     if (el.closest(SKIP) || el.matches(".inkbox")) return;
@@ -709,7 +699,7 @@ if (!still.matches) {
       .forEach((t, i) => {
         ink.unobserve(t);
         const delay = Math.min(i * 45, 1100);
-        if (t.matches("[data-fig], #fig-board")) { const svg = t.querySelector(":scope > svg"); if (svg) inkSvg(svg, delay); }
+        if (t.matches("[data-fig]")) { const svg = t.querySelector(":scope > svg"); if (svg) inkSvg(svg, delay); }
         else if (t.id === "wfcanvas") inkSvg(t, delay);
         if (boxes.has(t)) inkBox(t, delay);
         if (texts.has(t)) {
@@ -727,5 +717,5 @@ if (!still.matches) {
     o.disconnect();
     $$(".undrawn, .unwritten", rail).forEach((el, i) => { const d = Math.min(i * 60, 1200); if (el.matches(".undrawn")) inkBox(el, d); else write(el, d + 120); });
   }).observe(rail);
-  new Set([...$$("[data-fig], #fig-board, #wfcanvas"), ...boxes, ...texts]).forEach((el) => { if (!inRail(el)) ink.observe(el); });
+  new Set([...$$("[data-fig], #wfcanvas"), ...boxes, ...texts]).forEach((el) => { if (!inRail(el)) ink.observe(el); });
 }
