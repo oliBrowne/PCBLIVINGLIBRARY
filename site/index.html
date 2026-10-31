@@ -25,7 +25,6 @@
     <a href="#style">House style</a>
     <a href="#workflow">Workflow</a>
     <a href="#models">Your model</a>
-    <a href="#roadmap">Roadmap</a>
     <a href="#start">Start</a>
   </nav>
   <div class="navend">
@@ -135,12 +134,12 @@
     <div class="head reveal">
       <p class="eyebrow"><span class="num">03</span>House style</p>
       <h2>Parts that look like yours.</h2>
-      <p class="sub">A library is more than footprints. ecadlib learns how your existing library names, describes and draws parts, and every new part follows it. Nothing reaches your tool until it passes the checks or a person signs it off.</p>
+      <p class="sub">ecadlib learns how your library names, describes and draws parts, and every new part follows it.</p>
     </div>
     <div class="grid3">
-      <article class="card reveal"><p class="mono n">learn</p><h3>Your conventions</h3><p><code>ecadlib style learn</code> reads your Altium, Altium 365 or KiCad library offline: naming, description patterns, how values are written, active-low pin names. Add plain-words direction with <code>style direct</code>, then <code>style check</code> and <code>style apply</code> any plan. <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/house-style.md">How it works</a>.</p></article>
-      <article class="card reveal"><p class="mono n">symbols</p><h3>One pin rule</h3><p>Every IC symbol, from a 555 to a 100-pin MCU: inputs on the left, outputs on the right, power on top, ground at the bottom. Prefer power and ground on the left? One setting, <code>power_side = "left"</code>.</p></article>
-      <article class="card reveal"><p class="mono n">review</p><h3>Held until it is right</h3><p>A part that fails the release check is held back from Altium 365 with the reason and the fix. Release it anyway only after you have looked, and the plan records who did.</p></article>
+      <article class="card reveal"><p class="mono n">learn</p><h3>Your conventions</h3><p><code>ecadlib style learn</code> reads your Altium, Altium 365 or KiCad library offline: names, descriptions, value formats, pin names. <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/house-style.md">How it learns</a>.</p></article>
+      <article class="card reveal"><p class="mono n">symbols</p><h3>One pin rule</h3><p>Inputs left, outputs right, power on top, ground at the bottom, on every IC symbol. One setting moves power and ground to the left.</p></article>
+      <article class="card reveal"><p class="mono n">review</p><h3>Held until it is right</h3><p>A part that fails the release check is held back with the reason and the fix. Releasing it anyway records who looked.</p></article>
     </div>
   </section>
   <!-- 04 workflow -->
@@ -180,8 +179,7 @@
     <div class="head reveal">
       <p class="eyebrow"><span class="num">05</span>Your model</p>
       <h2>Bring your own key.<br>Use any model.</h2>
-      <p class="sub">There is no account, hosted service or telemetry. ecadlib talks only to the model you configure, with a key from your own environment. Claude is the default; OpenAI, OpenRouter, Gemini and local models through Ollama or LM Studio work too.</p>
-      <p class="sub">Guide rails scale with the model. A small local model gets the work in small checked steps, JSON repair and worked examples. A frontier model gets one structured call and nothing that narrows it.</p>
+      <p class="sub">No account, hosted service or telemetry. ecadlib talks only to the model you set, with your own key. Claude is the default; OpenAI, OpenRouter, Gemini, Ollama and LM Studio work too. A small local model gets small checked steps, a frontier model one structured call.</p>
       <div class="bill" aria-label="What it costs to run, estimated">
         <p class="billhead mono"><span>What it costs to run</span><span>you pay your provider · we take $0</span></p>
         <dl>
@@ -191,7 +189,7 @@
           <div class="big"><dt>A 500-part library, from scratch</dt><dd>$15–30</dd></div>
           <div><dt>Keeping it up to date</dt><dd>≈ $0</dd></div>
         </dl>
-        <p class="billfoot mono">Most parts never touch the model; it only reads datasheets for parts nobody has drawn. <code>--estimate</code> shows the cost before anything is sent, and <code>max_cost_usd</code> caps it. Estimates on Claude Opus 5.5 at October 2026 API prices; a smaller model costs less. <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/costs.md">Every model, side by side</a>.</p>
+        <p class="billfoot mono">Most parts never touch the model. <code>--estimate</code> shows the cost first and <code>max_cost_usd</code> caps it. Estimated on Claude Opus 5.5 at October 2026 prices. <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/costs.md">Every model, side by side</a>.</p>
       </div>
     </div>
     <div class="reveal">
@@ -222,69 +220,47 @@
         <p class="mono n">altium</p>
         <h3>Altium Designer and Altium 365</h3>
         <ul class="lines">
-          <li>Components released to an Altium 365 workspace through Nexar, with a dry run first</li>
-          <li><code>.SchLib</code> and <code>.PcbLib</code> written in pure Python, read back before release</li>
-          <li>Altium can rebuild every library itself through its own scripting API, then ecadlib compares pad by pad (8 of 8 test libraries identical on AD26; ships in v0.3.1)</li>
-          <li>Database libraries (SQLite or Excel with a <code>.DbLib</code>)</li>
-          <li>An ecadlib menu inside Altium with native dialogs: add a part by MPN, fill the library, check the project's BOM</li>
+          <li>Released to Altium 365 through Nexar, with a dry run first</li>
+          <li><code>.SchLib</code>, <code>.PcbLib</code> and <code>.DbLib</code>, read back before release</li>
+          <li>Altium rebuilds each library itself and ecadlib compares pad by pad</li>
+          <li>An ecadlib menu inside Altium: add a part, fill the library, check the BOM</li>
         </ul>
       </article>
       <article class="card reveal">
         <p class="mono n">kicad</p>
         <h3>KiCad</h3>
         <ul class="lines">
-          <li><code>.kicad_sym</code>, <code>.pretty</code> footprints and library tables</li>
-          <li>A KiCad database library and a PCM package</li>
-          <li>Tested in real KiCad: every package spec loads in pcbnew with the same pads</li>
-          <li>Parity check: the KiCad and Altium output are read back and compared part by part</li>
+          <li><code>.kicad_sym</code>, <code>.pretty</code>, library tables, a database library and a PCM package</li>
+          <li>Every package loads in KiCad's pcbnew with the same pads</li>
+          <li>The KiCad and Altium output are compared part by part</li>
         </ul>
       </article>
     </div>
     <div class="grid3">
-      <article class="card reveal"><p class="mono n">web ui</p><h3>A local page</h3><p><code>ecadlib ui</code> opens it on your machine. Drop a BOM in, fill the library, sign parts off.</p></article>
-      <article class="card reveal"><p class="mono n">mcp</p><h3>An agent's tools</h3><p><code>ecadlib mcp</code> lets Claude or another agent check a BOM and draft footprints in conversation.</p></article>
-      <article class="card reveal"><p class="mono n">cli</p><h3>Scripts and CI</h3><p>Every step is a command with <code>--json</code>, so it fits a pipeline or a weekly job.</p></article>
+      <article class="card reveal"><p class="mono n">web ui</p><h3>A local page</h3><p><code>ecadlib ui</code>: drop a BOM in, sign parts off.</p></article>
+      <article class="card reveal"><p class="mono n">mcp</p><h3>An agent's tools</h3><p><code>ecadlib mcp</code>: an agent checks a BOM in conversation.</p></article>
+      <article class="card reveal"><p class="mono n">cli</p><h3>Scripts and CI</h3><p>Every step takes <code>--json</code>, for CI or a weekly job.</p></article>
     </div>
   </section>
 
   <!-- 07 upkeep -->
-  <section id="upkeep" class="block split rev" data-traces="upkeep">
-    <div class="reveal">
-      <figure class="plate">
-        <figcaption class="tags mono"><span>fig. 7 · upkeep</span><span id="rebuildread">rest</span></figcaption>
-        <div class="fig" data-fig="rebuild" data-read="rebuildread"></div>
-      </figure>
-    </div>
+  <section id="upkeep" class="block" data-traces="upkeep">
     <div class="head reveal">
       <p class="eyebrow"><span class="num">07</span>Living</p>
       <h2>It keeps the library current.</h2>
-      <p class="sub">A weekly upkeep run checks lifecycle with Nexar, DigiKey, Mouser and JLC, watches the KiCad sources your parts came from, and compares your Altium 365 workspace with the plan. It reports only what is new, in one issue or one pull request.</p>
+      <p class="sub">A weekly run checks suppliers, the KiCad sources and your Altium 365 workspace, and reports only what changed, in one issue or pull request.</p>
       <ul class="lines">
-        <li>Parts that went NRND, last-time-buy or end of life</li>
-        <li>Upstream footprints whose pads moved, reconverted with a real diff</li>
-        <li>Change control: a released part never changes without a person approving each change</li>
-        <li>Projects told which parts the library changed under them, before they update</li>
+        <li>Parts gone NRND, last-time-buy or end of life</li>
+        <li>Upstream footprints that changed, reconverted with a real diff</li>
+        <li>No released part changes without a person's approval</li>
       </ul>
     </div>
   </section>
 
-  <!-- 08 roadmap -->
-  <section id="roadmap" class="block" data-traces="roadmap">
-    <div class="head reveal">
-      <p class="eyebrow"><span class="num">08</span>Roadmap</p>
-      <h2>What comes next.</h2>
-      <p class="sub">Planned, not shipped. Each item is a GitHub issue, and each milestone has a due date. The full plan is in <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/ROADMAP.md">ROADMAP.md</a> and the <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/PRODUCT_SPEC.md">product spec</a>.</p>
-    </div>
-    <div class="grid3">
-      <article class="card reveal"><p class="mono n">v0.3.1 · due 31 Oct 2026</p><h3>Altium loop closed</h3><ul class="lines"><li>Build libraries from the ecadlib menu</li><li>Designator on the fab layer</li><li>Multi-part symbols, keep-outs and bottom pads checked in AD26</li></ul></article>
-      <article class="card reveal"><p class="mono n">v0.4.0 · due 30 Nov 2026</p><h3>Proven BOM to Altium 365</h3><ul class="lines"><li>A published accuracy benchmark on 100+ real parts</li><li>Real-BOM trials with 3 to 5 Altium users</li><li>House style tried on a real company library</li></ul></article>
-      <article class="card reveal"><p class="mono n">v0.5.0 · due 15 Jan 2027</p><h3>Easy to adopt</h3><ul class="lines"><li>A signed Windows installer</li><li>The cost shown before every AI step</li><li>One page from installer to a BOM in Altium 365</li></ul></article>
-    </div>
-  </section>
-  <!-- 09 start -->
+  <!-- 08 start -->
   <section id="start" class="block" data-traces="start">
     <div class="head reveal">
-      <p class="eyebrow"><span class="num">09</span>Quick start</p>
+      <p class="eyebrow"><span class="num">08</span>Quick start</p>
       <h2>Two minutes, offline, no keys.</h2>
       <p class="sub">The demo builds a small library from a bundled BOM with the built-in standard parts, so you can see the whole flow before you set anything up. On Windows and not a terminal person? Use the <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases/latest">installer</a> instead.</p>
     </div>

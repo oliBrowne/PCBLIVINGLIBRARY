@@ -85,6 +85,8 @@ h3 { font-size: 16px; letter-spacing: -.01em; margin-bottom: 6px; }
 .lede strong { color: var(--text); font-weight: 500; }
 .sub { color: var(--muted); max-width: 40em; margin: 18px 0 0; }
 .head { margin-bottom: 44px; }
+.head:last-child { margin-bottom: 0; }
+.head > .lines { max-width: 640px; }
 .n { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
 
 .plate { position: relative; margin: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); overflow: hidden; }
