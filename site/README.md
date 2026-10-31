@@ -13,9 +13,18 @@ python3 -m http.server -d site 8000      # then http://localhost:8000
 
 * `index.html`, `site.css`, `site.js`: the page. Same look as the web UI (Hairline: one ground colour, 1px lines, mono
   labels, ease-out motion), light and dark, and it holds still under `prefers-reduced-motion`.
+* `hero.js`, `hero.css`: the first screen. Scrolling opens one BOM line (TLC5951DAP) into the six things ecadlib
+  builds from it (BOM and search, datasheet, symbol, footprint, 3D model, library record), then turns it into the
+  Altium panel. Dark in both themes; its own layout on phones; one still frame under `prefers-reduced-motion`; a plain
+  first screen without JavaScript. Every class, id and custom property is prefixed `xh-` so it never meets `site.css`
+  (`tests/test_site.py` checks). The footprint's pad colour is one switch: `data-pads="editor"` (the PCB editor's red)
+  or `"copper"` on the hero's `<section>` in `index.html`.
+* `hero-data.js`: the TLC5951DAP footprint and symbol the hero draws, made by ecadlib's own `footprint_gen` and
+  `symbol_layout`. Rebuild after changing either: `python3 scripts/build_site_hero.py` (a test fails while it is stale).
+  The BOM, the source lines and the Altium panel in the hero are an example run, and the page says so.
 * `hairline.js`: the line figures. Six come from [Hairline](https://github.com/lucasmarkes/hairline) (MIT,
-  `hairline.LICENSE.txt`); the hero's board is ecadlib's own (`scripts/hairline-site/board.js`, written and checked
-  with Hairline's `hairline-create` skill). Rebuild after changing the figure: `sh scripts/build_site_figures.sh`.
+  `hairline.LICENSE.txt`); the old hero's board (`scripts/hairline-site/board.js`, ecadlib's own) is still bundled
+  but no longer on the page. Rebuild after changing a figure: `sh scripts/build_site_figures.sh`.
 * `footprints.json`: six land patterns made by ecadlib's own IPC-7351B generator from `ecadlib/package_specs`, which
   the page draws like Altium's PCB editor. Rebuild after changing the generator: `python3 scripts/build_site_footprints.py`.
 

@@ -10,9 +10,11 @@
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="site.css">
+<link rel="stylesheet" href="hero.css">
 </head>
 <body>
 <svg class="sr" aria-hidden="true"><defs>
+  <symbol id="mark" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M16 23.5L16 13.5"/><path d="M16 20L10 14"/><path d="M16 15L22 9"/><circle cx="16" cy="26.8" r="2.75" stroke-width="2.5"/></g><path fill="var(--copper, #c2622d)" d="M8.58 13.91 L7.32 13.64 L6.22 13.22 L5.26 12.66 L4.44 11.97 L3.76 11.18 L3.21 10.30 L2.78 9.34 L2.47 8.33 L2.28 7.28 L2.19 6.20 L2.20 5.12 L3.28 5.12 L4.34 5.23 L5.36 5.46 L6.33 5.82 L7.23 6.32 L8.03 6.95 L8.74 7.73 L9.31 8.66 L9.74 9.74 L10.01 10.99 L10.11 12.41 L10.00 14.00Z"/><path fill="var(--copper, #c2622d)" d="M22.02 7.74 L22.18 6.58 L22.48 5.54 L22.90 4.61 L23.45 3.79 L24.10 3.09 L24.85 2.50 L25.70 2.03 L26.62 1.68 L27.62 1.44 L28.68 1.32 L29.80 1.32 L29.80 2.49 L29.66 3.59 L29.41 4.61 L29.03 5.55 L28.54 6.40 L27.93 7.14 L27.20 7.77 L26.37 8.29 L25.43 8.68 L24.39 8.93 L23.24 9.04 L22.00 9.00Z"/></symbol>
   <symbol id="gh" viewBox="0 0 16 16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></symbol>
 </defs></svg>
 
@@ -34,29 +36,64 @@
 </header>
 
 <main id="top">
-  <!-- 01 hero -->
-  <section class="hero" data-traces="hero">
-    <div class="copy reveal">
-      <p class="eyebrow"><span class="tick"></span>Open source · MIT · v0.3.0 alpha</p>
-      <h1>Your component library,<br><em>kept alive.</em></h1>
-      <p class="lede">ecadlib is a librarian for your parts. It reads your BOM, finds every symbol, footprint and 3D model you are missing, draws the ones nobody has from the datasheet, makes them look like the rest of your library, holds anything in doubt for a person, and releases the rest to <strong>Altium 365</strong> or <strong>KiCad</strong>.</p>
-      <div class="ctas">
-        <a class="btn primary" href="https://github.com/oliBrowne/PCBLIVINGLIBRARY"><svg class="i"><use href="#gh"/></svg>View on GitHub</a>
-        <a class="btn" href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases/latest">Windows installer</a>
-        <a class="btn" href="#start">Quick start</a>
+  <!-- 01 hero: scroll opens one BOM line into what ecadlib builds from it (hero.js, hero.css) -->
+  <section class="xh xh-scene" id="xh-scene" data-pads="editor" aria-label="How ecadlib builds a part, step by step">
+    <div class="xh-stage" id="xh-stage">
+      <div class="xh-grid"></div>
+      <div class="xh-shadow" id="xh-shadow"></div>
+
+      <div class="xh-intro" id="xh-intro">
+        <p class="xh-eyebrow"><i></i>Open source · MIT · v0.4.0</p>
+        <h1>One line of your BOM, <span>built into a finished part.</span></h1>
+        <p>ecadlib reads your BOM, finds or draws the symbol, footprint and 3D model from the maker's datasheet, checks them, and releases the part to Altium 365 or KiCad.</p>
+        <div class="xh-ctas">
+          <a class="xh-btn xh-main" href="https://github.com/oliBrowne/PCBLIVINGLIBRARY"><svg aria-hidden="true"><use href="#gh"/></svg>View on GitHub</a>
+          <a class="xh-btn" href="#start">Quick start</a>
+          <a class="xh-skip" href="#how">Skip the walkthrough</a>
+        </div>
       </div>
-      <ul class="facts mono">
-        <li><span class="dot"></span>free, no paid tier</li>
-        <li><span class="dot"></span>your API key, any model</li>
-        <li><span class="dot"></span>runs on your machine</li>
-        <li><span class="dot"></span>about $2 a BOM, paid to your provider</li>
-      </ul>
+
+      <p class="xh-sr">Scrolling on shows ecadlib's six steps for one part: it reads the BOM line and searches your sources, reads the maker's drawing, lays out the symbol, builds the footprint, makes the 3D model, then checks it and releases it to your library.</p>
+      <div class="xh-rig" id="xh-rig" aria-hidden="true"><div class="xh-stack" id="xh-stack"></div></div>
+      <svg class="xh-leaders" id="xh-leaders" aria-hidden="true"></svg>
+      <div id="xh-callouts" aria-hidden="true"></div>
+
+      <div class="xh-panel" id="xh-panel" aria-hidden="true">
+        <div class="xh-pbar"><svg aria-hidden="true"><use href="#mark"/></svg> ecadlib · Altium Designer <span class="xh-ex">example run</span></div>
+        <div class="xh-body">
+          <div class="xh-cmd">Import BOM · led-driver-board.csv</div>
+          <div class="xh-prow"><span class="xh-v">Read</span> 24 lines<div class="xh-s">22 unique parts, 2 duplicates merged</div></div>
+          <div class="xh-prow"><span class="xh-v">Found</span> 20 parts in your sources</div>
+          <div class="xh-prow"><span class="xh-v">Drew</span> TLC5951DAP from the datasheet<div class="xh-s">HTSSOP-38 with PowerPAD · symbol, footprint, 3D</div></div>
+          <div class="xh-prow"><span class="xh-v">Checked</span> pads, pad 1, courtyard<div class="xh-s">0 problems</div></div>
+          <div class="xh-prow"><span class="xh-v">Held</span> 1 part for you<div class="xh-s">DF13-6P-1.25DSA: package drawing unclear, nothing built</div></div>
+          <div class="xh-prow xh-done"><span class="xh-v">Released</span> 21 parts to Altium 365</div>
+        </div>
+        <div class="xh-foot"><span>your key · any model</span><span>library current</span></div>
+      </div>
+
+      <div class="xh-end" id="xh-end">
+        <div>
+          <div class="xh-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#mark"/></svg></div>
+          <h2>Your component library, kept alive.</h2>
+          <p>Free and open source. Runs on your machine with your own API key. Altium 365 first, KiCad too.</p>
+          <div class="xh-btns">
+            <a class="xh-btn xh-main" href="https://github.com/oliBrowne/PCBLIVINGLIBRARY"><svg aria-hidden="true"><use href="#gh"/></svg>View on GitHub</a>
+            <a class="xh-btn" href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases/latest">Windows installer</a>
+            <a class="xh-btn" href="#start">Quick start</a>
+          </div>
+          <ul class="xh-facts">
+            <li>free, no paid tier</li><li>your API key, any model</li><li>runs on your machine</li><li>about $2 a BOM, paid to your provider</li>
+          </ul>
+          <p class="xh-cap">The footprint and symbol above are ecadlib's own output for TLC5951DAP. The BOM, the sources and the Altium panel are an example run.</p>
+        </div>
+      </div>
+
+      <div class="xh-beats" id="xh-beats" aria-hidden="true"><span>The part</span><span>How it's built</span><span>Into Altium</span><span>Released</span></div>
+      <div class="xh-hint" id="xh-hint" aria-hidden="true">Scroll</div>
+      <div class="xh-vignette"></div>
+      <div class="xh-grain"></div>
     </div>
-    <figure class="plate heroplate reveal">
-      <figcaption class="tags mono"><span>fig. 1 · placement</span><span id="heroread" aria-live="off">rest</span></figcaption>
-      <div id="fig-board" class="fig"></div>
-      <div class="axis mono" aria-hidden="true"><span>az <b id="heroaz">45</b>°</span><span>el 30°</span><span>top layer</span></div>
-    </figure>
   </section>
 
   <!-- marquee of sources -->
@@ -295,13 +332,14 @@ ecadlib ui         <span class="c"># or do it all in your browser</span></pre>
     </div>
     <div class="mono small muted credits">
       <p>Alpha. Not yet opened in every Altium setup; check parts before you build boards with them.</p>
-      <p>Line figures from <a href="https://github.com/lucasmarkes/hairline">Hairline</a> by Lucas Marques (MIT); the board figure is ecadlib's own, drawn with its hairline-create skill.</p>
+      <p>Line figures from <a href="https://github.com/lucasmarkes/hairline">Hairline</a> by Lucas Marques (MIT); the hero's footprint and symbol are drawn by ecadlib's own generators.</p>
       <p>Altium, Altium 365 and KiCad are trademarks of their owners. ecadlib is not affiliated with them.</p>
       <p class="footlegal"><a href="/terms">Terms of use</a> · <a href="/privacy">Privacy</a> · <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/LICENSE">MIT License</a></p>
     </div>
   </div>
 </footer>
 
+<script type="module" src="hero.js"></script>
 <script type="module" src="site.js"></script>
 </body>
 </html>
