@@ -522,6 +522,7 @@ def make_handler(ws: Workspace):
             actions = {
                 "/api/footprint/approve": lambda b: ws.approve_footprint(b["spec"], b.get("density"), bool(b.get("overwrite"))),
                 "/api/export/dblib": lambda b: ws.export_dblib(self._bom(b, True)),
+                "/api/export/kicad": lambda b: ws.export_kicad(self._bom(b, True), install=b.get("install") is True),
                 "/api/altium/models": lambda b: ws.build_altium_models(self._bom(b, True)),
                 "/api/altium365/plan": lambda b: ws.altium365_plan(self._bom(b, True)),
                 "/api/release-check": lambda b: ws.release_check(self._bom(b), _names(b.get("allow")), _names(b.get("unallow")),

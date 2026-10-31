@@ -6,6 +6,7 @@ On this page:
 
 * [`kicad_export.py`: the same library as KiCad files](#kicad_exportpy-the-same-library-as-kicad-files)
 * [`kicad_install.py`: the library in KiCad itself, for every project](#kicad_installpy-the-library-in-kicad-itself-for-every-project)
+* [Three ways to get the library into KiCad](#three-ways-to-get-the-library-into-kicad)
 * [`parity.py`: KiCad and Altium always match](#paritypy-kicad-and-altium-always-match)
 * [Real KiCad checks (`tests/test_kicad_real.py`)](#real-kicad-checks-teststest_kicad_realpy)
 
@@ -50,6 +51,31 @@ project. `kicad-install DIR` does the install step alone (`--uninstall` takes it
   again after.
 * Checked in real KiCad 9.0.9 and 10.0.8 (`tests/test_kicad_install.py`): with only the global table (no project
   table) KiCad finds every footprint and every 3D model; with nothing installed it finds none.
+
+## Three ways to get the library into KiCad
+
+**The web page (`ecadlib ui`), step 3 "Send to Altium or KiCad", box "KiCad library".** After step 2 has filled the
+library: *Export KiCad library* writes it to `<workspace>/kicad/<bom>/` (a library named `ecadlib_<bom>`, with
+`${KIPRJMOD}` tables for one project). *Put it in KiCad (every project)* does the same and installs it as above
+(`--install`): rows in KiCad's own tables, the path variable `ECADLIB_DIR_<BOM>` and 3D models through it. The result
+lists each KiCad version found and what happened there. Close KiCad first and start it again after.
+
+**The ecadlib window in the PCB editor, "Use in every project".** The project's own `ecadlib` library (what Fill the
+library and Add part built) goes into KiCad's own tables as `ecadlib_<project>` (`ecadlib kicad-install <project>/ecadlib
+--nick ecadlib_<project>`), so other projects can place its parts. Its 3D models are re-pointed at
+`${ECADLIB_DIR_<PROJECT>}`, and later fills and adds keep that. The project's own `${KIPRJMOD}` rows stay. The window
+says to close KiCad and open it again: KiCad reads the tables at start, and a KiCad left open can write over them.
+
+**The schematic editor, Tools > Generate Legacy Bill of Materials...** The setup page's *Add to KiCad* (or
+`ecadlib kicad-menu add-to-schematic [--kicad 9.0] [--remove]`) adds two entries to each KiCad's `eeschema.json`
+(other entries are kept): *ecadlib: check BOM* (which parts the project's `ecadlib` library has; the report opens in the
+browser) and *ecadlib: fill library* (builds the missing parts into `<project>/ecadlib/` and lists it in the project's
+tables, so Place > Add Symbol shows them). Pick one and press Generate; the dialog shows ecadlib's answer. Each entry runs
+`ecadlib_bom.py` (written next to KiCad's settings, with `ecadlib_cmd.json`) with ecadlib's own Python, isolated
+(`python -I`), and it starts `ecadlib kicad-menu check-bom|fill NETLIST.xml` without the `PYTHONHOME` / `PYTHONPATH` KiCad
+sets for its own Python: on Linux KiCad puts the system's `dist-packages` there, whose older numpy stopped ecadlib from
+starting. The PCB editor window starts ecadlib the same way. By hand: `ecadlib kicad-menu fill PROJECT.xml|.kicad_sch
+[--kicad 7] [--offline]`. Checked in real KiCad 9.0 (both entries listed with their help text, and both run).
 
 ## `parity.py`: KiCad and Altium always match
 

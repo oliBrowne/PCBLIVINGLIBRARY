@@ -1,6 +1,6 @@
 """Install an exported KiCad library into KiCad itself, so every project sees it (no per-project copy).
 
-    ecadlib kicad-install DIR [--name LIB] [--kicad 9.0] [--var ECADLIB_DIR_LIB] [--dry-run]
+    ecadlib kicad-install DIR [--name LIB] [--nick NICK] [--kicad 9.0] [--var ECADLIB_DIR_LIB] [--dry-run]
     ecadlib kicad-install DIR --uninstall
 
 DIR is what `ecadlib kicad-export -o DIR --name LIB` wrote (LIB.kicad_sym, LIB.pretty, LIB.3dshapes). For each KiCad
@@ -25,7 +25,7 @@ converted copy written next to the library.
 
 KiCad reads these files when it starts: restart KiCad (all its windows) after installing. KiCad also writes
 kicad_common.json when it closes, so close KiCad before installing, or the variable may be lost."""
-import argparse, json, os, re, shutil, sys
+import argparse, json, os, re, shlex, shutil, sys
 from pathlib import Path
 
 from . import fsutil, sexpr
@@ -204,14 +204,19 @@ def model_paths(folder, lib):
 
 
 def install(lib_dir, name=None, kicad=None, var=None, dry_run=False, uninstall=False, environ=None, home=None,
-            platform=None, templates=None, log=print):
+            platform=None, templates=None, log=print, nick=None):
     """Add (or with uninstall=True remove) the library's rows and path variable in each KiCad version's user files.
-    Returns {library, folder, var, versions: {series: {status, changed, notes}}, warnings, backups}."""
+    nick: the name the rows give the library in KiCad (default LIB, the file name): the KiCad window's library is
+    ecadlib.kicad_sym in every project, so each project's goes in as its own nickname (ecadlib_myboard).
+    Returns {library, nick, folder, var, versions: {series: {status, changed, notes}}, warnings, backups}."""
     folder, lib = library(lib_dir, name) if not uninstall or Path(lib_dir).is_dir() else (Path(lib_dir), name)
     if not lib:
         raise ValueError("--uninstall of a folder that is gone needs --name LIB")
-    var = check_var(var or var_name(lib))
-    rep = {"library": lib, "folder": str(folder), "var": var, "versions": {}, "warnings": [], "backups": []}
+    nick = nick or lib
+    if not re.fullmatch(r"[^\s:\"()]+", nick):
+        raise ValueError(f"{nick!r} cannot name a KiCad library (no spaces, ':', quotes or brackets)")
+    var = check_var(var or var_name(nick))
+    rep = {"library": lib, "nick": nick, "folder": str(folder), "var": var, "versions": {}, "warnings": [], "backups": []}
     dirs = config_dirs(kicad, environ, home, platform)
     if not dirs:
         rep["warnings"].append("no KiCad settings folder found (KiCad 7 or newer, started at least once); "
@@ -223,7 +228,7 @@ def install(lib_dir, name=None, kicad=None, var=None, dry_run=False, uninstall=F
             v["status"] = f"skipped: KiCad {series} is older than KiCad {MIN_MAJOR}"
             continue
         try:
-            _one(series, Path(d), lib, folder, root, var, v, rep, dry_run, uninstall, environ, platform, templates)
+            _one(series, Path(d), lib, folder, root, var, v, rep, dry_run, uninstall, environ, platform, templates, nick)
         except ValueError as e:
             v["status"] = f"not changed: {e}"
     if not uninstall and folder.is_dir():
@@ -237,7 +242,8 @@ def install(lib_dir, name=None, kicad=None, var=None, dry_run=False, uninstall=F
     return rep
 
 
-def _one(series, d, lib, folder, root, var, v, rep, dry_run, uninstall, environ, platform, templates):
+def _one(series, d, lib, folder, root, var, v, rep, dry_run, uninstall, environ, platform, templates, nick=None):
+    nick = nick or lib
     major = _major(series)
     sym_file = f"{lib}.kicad_sym"
     if not uninstall and major < 8 and (folder / sym_file).is_file():
@@ -272,17 +278,17 @@ def _one(series, d, lib, folder, root, var, v, rep, dry_run, uninstall, environ,
         texts[kind] = (p, text, table)
     for kind, (p, text, table) in texts.items():
         if uninstall:
-            new = remove_row(text, lib)
+            new = remove_row(text, nick)
         elif not have[kind]:
             continue
         else:
             for _, _, name, typ, uri in _rows(text):
-                if name == lib and typ.casefold() != "kicad":
-                    raise ValueError(f"{p.name} already has a library {lib!r} of type {typ} ({uri}); pass another --name")
-                if name == lib and uri != uris[kind]:
-                    rep["warnings"].append(f"KiCad {series} {p.name}: the {lib!r} row pointed at {uri}; it now points "
+                if name == nick and typ.casefold() != "kicad":
+                    raise ValueError(f"{p.name} already has a library {nick!r} of type {typ} ({uri}); pass another --name")
+                if name == nick and uri != uris[kind]:
+                    rep["warnings"].append(f"KiCad {series} {p.name}: the {nick!r} row pointed at {uri}; it now points "
                                            f"at {uris[kind]}")
-            new = _set_row(text, table, lib, uris[kind], f"ecadlib library ({root})")
+            new = _set_row(text, table, nick, uris[kind], f"ecadlib library ({root})")
         if _write(p, new, dry_run, rep["backups"]):
             v["changed"].append(str(p))
     vars_ = common.setdefault("environment", {})
@@ -299,6 +305,104 @@ def _one(series, d, lib, folder, root, var, v, rep, dry_run, uninstall, environ,
         _write(common_p, json.dumps(common, indent=2) + "\n", dry_run, rep["backups"])
         v["changed"].append(str(common_p))
     v["status"] = ("removed" if uninstall else "installed") if v["changed"] else ("not there" if uninstall else "already installed")
+
+
+# ------------------------------------------------------------------ the schematic editor
+HOOKS = (("ecadlib: check BOM", "check-bom", "check"),         # (the dialog's name, the kicad-menu action, helper's word)
+         ("ecadlib: fill library", "fill", "fill"))
+HOOK_FILE = "ecadlib_bom.py"
+HOOK_SCRIPT = '''"""
+    @package
+    ecadlib in the schematic editor.
+    ecadlib: check BOM - which parts the project's ecadlib library already has (a report opens in the browser).
+    ecadlib: fill library - builds the missing parts into the project's ecadlib library and lists it in the
+    project's library tables.
+    Written by the ecadlib setup page (or ecadlib kicad-menu add-to-schematic).
+"""
+# Runs ecadlib (the command in ecadlib_cmd.json next to this file) on the netlist KiCad wrote: check|fill NETLIST.xml.
+# Started with python -I and run without the PYTHONHOME / PYTHONPATH KiCad sets for its own Python (on Linux they
+# put the system's older numpy / pandas ahead of ecadlib's).
+import json, os, subprocess, sys
+
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecadlib_cmd.json"), encoding="utf-8") as f:
+    saved = json.load(f)
+env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")}
+if saved.get("pythonpath"):
+    env["PYTHONPATH"] = saved["pythonpath"]
+action = {"check": "check-bom", "fill": "fill"}[sys.argv[1]]
+sys.exit(subprocess.call(saved["command"] + ["kicad-menu", action] + sys.argv[2:], env=env))
+'''
+
+
+def command_record(command, environ=None):
+    """ecadlib_cmd.json: the command that runs this ecadlib, and the PYTHONPATH it was started with (a source
+    checkout needs it; KiCad's own is dropped when KiCad starts ecadlib)."""
+    pp = (os.environ if environ is None else environ).get("PYTHONPATH")
+    return {"command": list(command), **({"pythonpath": pp} if pp else {})}
+
+
+def command_line(argv, nt=None):
+    """argv -> one command line for KiCad's BOM dialog (it runs the line as typed): words with spaces quoted."""
+    nt = os.name == "nt" if nt is None else nt
+    q = (lambda w: f'"{w}"' if (not w or re.search(r"[\s&()^]", w)) else w) if nt else shlex.quote
+    return " ".join(q(str(w)) for w in argv)
+
+
+def schematic_hooks(command, kicad=None, remove=False, environ=None, home=None, platform=None, nt=None, log=print):
+    """The ecadlib entries in each KiCad version's schematic editor, Tools > Generate Legacy Bill of Materials...
+    (eeschema.json bom.plugins: name, path, command): "ecadlib: check BOM" and "ecadlib: fill library", each the
+    command line `PYTHON -I .../ecadlib_bom.py check|fill "%I" [--kicad N]` (%I: the netlist KiCad writes; the
+    helper starts `command kicad-menu check-bom|fill` without KiCad's PYTHONPATH), or a packaged ecadlib.exe's
+    `command kicad-menu ...` itself. Other entries are kept; ours are replaced, or taken out with remove=True. The
+    helper ecadlib_bom.py and ecadlib_cmd.json go next to the settings (KiCad lists only entries whose file exists). -> {series: "added" | "already there" | "removed" | ...}."""
+    out = {}
+    for series, d in config_dirs(kicad, environ, home, platform):
+        d = Path(d)
+        p = d / "eeschema.json"
+        if not d.is_dir():
+            out[series] = f"not changed: KiCad {series} has no settings yet (start it once, then do this again)"
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+            if not isinstance(data, dict):
+                raise ValueError("not a settings file")
+        except ValueError as e:
+            out[series] = f"not changed: {p} is not valid JSON ({e}); fix or delete it in KiCad first"
+            continue
+        bom = data.get("bom") if isinstance(data.get("bom"), dict) else {}
+        plugins = [x for x in (bom.get("plugins") if isinstance(bom.get("plugins"), list) else [])
+                   if not (isinstance(x, dict) and str(x.get("name", "")).startswith("ecadlib:"))]
+        if not remove:
+            helper = d / HOOK_FILE
+            ver = f" --kicad {_major(series)}" if _major(series) < 8 else ""
+            # the command runs the helper with ecadlib's own Python (isolated, -I), which starts ecadlib without
+            # KiCad's PYTHONPATH; a packaged ecadlib.exe is started as it is. "%I" quoted, as KiCad's own entries.
+            py = list(command[:1]) if list(command[1:3]) == ["-m", "ecadlib"] else None
+            plugins += [{"name": name, "path": helper.as_posix(),
+                         "command": (command_line(py + ["-I", helper.as_posix(), short], nt) if py else
+                                     command_line(list(command) + ["kicad-menu", action], nt)) + ' "%I"' + ver}
+                        for name, action, short in HOOKS]
+        bom["plugins"] = plugins
+        data["bom"] = bom
+        text = json.dumps(data, indent=2) + "\n"
+        old = p.read_text(encoding="utf-8") if p.is_file() else None
+        if remove:
+            if old is None or text == old:
+                out[series] = "not there"
+                continue
+        changed = _write(p, text, False, [])
+        if not remove:
+            fsutil.write_text_atomic(d / HOOK_FILE, HOOK_SCRIPT)
+            (d / "ecadlib_cmd.json").write_text(json.dumps(command_record(command), indent=2) + "\n", encoding="utf-8")
+        else:
+            for f in (HOOK_FILE, "ecadlib_cmd.json"):
+                (d / f).unlink(missing_ok=True)
+        out[series] = ("removed" if remove else "added") if changed else "already there"
+    for series, st in out.items():
+        log(f"  KiCad {series:<5} schematic editor: {st}")
+    if not out:
+        log("  no KiCad settings folder found (start KiCad once)")
+    return out
 
 
 def _set_row(text, table, nick, uri, descr):
@@ -334,9 +438,9 @@ def format_result(rep, dry_run=False):
     changed = [v for v in rep["versions"].values() if v["status"] in ("installed", "removed")]   # not a version
     if changed and not dry_run:                      # stopped part way ("not changed: ..." after the KiCad 7 copy)
         if all(v["status"] == "removed" for v in changed):
-            lines.append(f"  {rep['var']} and the {rep['library']} rows removed; restart KiCad (all its windows)")
+            lines.append(f"  {rep['var']} and the {rep.get('nick') or rep['library']} rows removed; restart KiCad (all its windows)")
         else:
-            lines.append(f"  {rep['var']} = {rep['folder']}; restart KiCad (all its windows) to see {rep['library']}")
+            lines.append(f"  {rep['var']} = {rep['folder']}; restart KiCad (all its windows) to see {rep.get('nick') or rep['library']}")
     return lines
 
 
@@ -346,12 +450,13 @@ def main(argv=None):
     ap.add_argument("dir", help="the folder `ecadlib kicad-export -o` wrote")
     ap.add_argument("--name", help="the library name (default: the folder's only .kicad_sym)")
     ap.add_argument("--kicad", help="only this KiCad version (9.0, 10.0, ...); default every version found")
-    ap.add_argument("--var", help="the path variable (default ECADLIB_DIR_<NAME>)")
+    ap.add_argument("--nick", help="the library's name in KiCad's tables (default: --name)")
+    ap.add_argument("--var", help="the path variable (default ECADLIB_DIR_<NICK>)")
     ap.add_argument("--dry-run", action="store_true", help="say what would change, write nothing")
     ap.add_argument("--uninstall", action="store_true", help="remove the rows and the variable again")
     a = ap.parse_args(argv)
     try:
-        rep = install(a.dir, a.name, a.kicad, a.var, a.dry_run, a.uninstall)
+        rep = install(a.dir, a.name, a.kicad, a.var, a.dry_run, a.uninstall, nick=a.nick)
     except ValueError as e:
         print(f"ecadlib kicad-install: {e}", file=sys.stderr)
         return 2

@@ -231,9 +231,15 @@ def test_check_key_reads_the_providers_answer():
 def test_add_to_kicad_copies_the_plugin_with_this_ecadlib_command():
     with _home() as d:
         kd = d / "kicad-user"
+        (kd / "8.0").mkdir(parents=True)
         with mock.patch.object(DT, "kicad", lambda *a, **k: [{"series": "8.0"}]), \
-                mock.patch.object(DT, "kicad_plugin_dir", lambda s, **k: kd / s / "scripting" / "plugins"):
+                mock.patch.object(DT, "kicad_plugin_dir", lambda s, **k: kd / s / "scripting" / "plugins"), \
+                mock.patch.dict(os.environ, {"KICAD_CONFIG_HOME": str(kd)}):
             r = ES.install_kicad_plugin()
+        assert r["schematic"] == {"8.0": "added"} and any("Generate Legacy Bill of Materials" in s for s in r["steps"]), r
+        hooks = json.loads((kd / "8.0" / "eeschema.json").read_text())["bom"]["plugins"]
+        assert [h["name"] for h in hooks] == ["ecadlib: check BOM", "ecadlib: fill library"], hooks
+        assert all(Path(h["path"]).is_file() and "%I" in h["command"] for h in hooks), hooks
         p = kd / "8.0" / "scripting" / "plugins" / "ecadlib_add_part"
         assert r["installed"] == [str(p)] and (p / "__init__.py").is_file()
         assert (p / "ecadlib.png").read_bytes().startswith(b"\x89PNG")          # the toolbar button's icon

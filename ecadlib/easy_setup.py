@@ -471,6 +471,7 @@ def install_kicad_plugin(series=None):
     if not kicads:
         raise ValueError("no KiCad found on this computer; install KiCad 7 or newer, then press this again")
     from .kicad_menu import icon_png
+    from . import kicad_install as KI                      # the command record, and the schematic editor's entries
     src = Path(__file__).with_name("assets") / "kicad_action_plugin.py"
     done = []
     for k in kicads:
@@ -478,14 +479,24 @@ def install_kicad_plugin(series=None):
         d.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, d / "__init__.py")
         (d / "ecadlib.png").write_bytes(icon_png(24))
-        (d / "ecadlib_cmd.json").write_text(json.dumps({"command": UC.self_command(), "ecadlib": __version__}, indent=2) + "\n",
+        (d / "ecadlib_cmd.json").write_text(json.dumps({**KI.command_record(UC.self_command()), "ecadlib": __version__},
+                                                       indent=2) + "\n",
                                             encoding="utf-8")
         done.append(str(d))
     _record_install("kicad_plugin", done)
-    return {"installed": done,
-            "steps": ["Restart KiCad (or in the PCB editor: Tools > External Plugins > Refresh Plugins)",
-                      "Open a saved board, then press the ecadlib button in the top toolbar (also under Tools > "
-                      "External Plugins)"]}
+    sch = {}
+    for k in kicads:
+        try:
+            sch.update(KI.schematic_hooks(UC.self_command(), k["series"], log=lambda *a, **kw: None))
+        except (OSError, ValueError) as e:
+            sch[k["series"]] = f"not changed: {e}"
+    steps = ["Restart KiCad (or in the PCB editor: Tools > External Plugins > Refresh Plugins)",
+             "Open a saved board, then press the ecadlib button in the top toolbar (also under Tools > "
+             "External Plugins)"]
+    if any(v in ("added", "already there") for v in sch.values()):
+        steps.append("In the schematic editor: Tools > Generate Legacy Bill of Materials... > ecadlib: check BOM or "
+                     "ecadlib: fill library > Generate")
+    return {"installed": done, "schematic": sch, "steps": steps}
 
 
 # ------------------------------------------------------------------ web routes

@@ -467,6 +467,34 @@ class Workspace:
                 "from_plan": True, "held": act("held"),
                 "written": len(act("added")) + len(act("updated")) + len(act("up_to_date"))}
 
+    def export_kicad(self, bom, install=False):
+        """Write the KiCad library for a BOM from the librarian's plan (ready parts; held ones stay out), into
+        kicad/<BOM>/ as ecadlib_<bom>.kicad_sym, .pretty, .3dshapes, as `ecadlib kicad-export` does. install: also
+        put it into KiCad itself (kicad-install: KiCad's own symbol / footprint tables and a path variable for the
+        folder, which its 3D model paths then use), so every project sees it. A library put in once keeps its model
+        paths on the variable when it is exported again."""
+        from . import kicad_export as KX, kicad_install as KI
+        bom_path = self._bom_path(bom)
+        self._read_bom(bom_path)
+        plan = self._librarian_dir(bom_path) / "plan.json"
+        if not plan.is_file():
+            raise ValueError(f"no KiCad library written for {bom_path.name}: the librarian has not run for it, so no part "
+                             "is built or release-checked. Fill the library first (step 2), then export it.")
+        key = self._key(bom_path)
+        name = KX.libname("ecadlib_" + (re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_") or "bom"))
+        to = self.root / "kicad" / key
+        var = KI.var_name(name[len("ecadlib_"):]) if install else None
+        rep = KX.export(plan, to, name, http=CachedHTTP(self.root / "http_cache", offline=self.offline, timeout=60),
+                        rules=self.rules_in_use(), log=lambda *a, **k: None, models_var=var)
+        out = {"folder": self.rel(to), "library": name, "written": len(rep["parts"]),
+               "held": [s["part"] for s in rep["skipped"]], "errors": [str(e) for e in rep["errors"]],
+               "warnings": rep.get("warnings") or [], "models_at": rep.get("models_at", "")}
+        if install and not rep["errors"]:
+            inst = KI.install(to, name, var=var, log=lambda *a, **k: None)
+            out["install"] = {"var": inst["var"], "nick": inst["nick"], "warnings": inst["warnings"],
+                              "versions": {s: v["status"] for s, v in inst["versions"].items()}}
+        return out
+
     def altium365_plan(self, bom):
         """One workspace component per part. When the librarian has run for this BOM its plan is used, with the
         release check's ready / held verdicts; otherwise a part is ready when its .SchLib and .PcbLib are in
