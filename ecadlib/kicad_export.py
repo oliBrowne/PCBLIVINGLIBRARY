@@ -1051,22 +1051,26 @@ def _pins(sym):
 
 
 # ---------------------------------------------------------------- driver
-def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, take_over=False):
+def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, take_over=False,
+           models_var=None):
     """Write the KiCad library for plan.json into `out`; returns the report dict (also kicad_export.json).
     rules: library rules (dict or path); None = the ecadlib.toml found from the plan's folder, if any.
     project: the KiCad project folder that uses the library (KIPRJMOD), when `out` is not that folder itself (the
     KiCad window's <project>/ecadlib/): the 3D model paths are written from there (models_at). None: the folder an
     earlier export into `out` was given, else `out` is taken as the project folder.
     The library lock is held for the whole export (change control: the files read are the settled ones).
-    take_over: write library `name` into `out` although another plan folder wrote it there (else PlanError)."""
+    take_over: write library `name` into `out` although another plan folder wrote it there (else PlanError).
+    models_var: a KiCad path variable (ECADLIB_DIR_MYLIB) the 3D model paths start from instead (${VAR}/<lib>.3dshapes),
+    for a library installed into KiCad itself (kicad_install sets VAR to `out`); remembered for later exports."""
     import tempfile
     from . import change_gate as CG
     with CG.publishing(Path(plan).parent), tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as stage:
-        return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage, take_over=take_over)
+        return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage, take_over=take_over,
+                       models_var=models_var)
 
 
 def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, stage=None,
-            take_over=False):
+            take_over=False, models_var=None):
     plan, out = Path(plan), Path(out)
     plan_dir, lib = plan.parent, libname(name)
     from .rules import resolve
@@ -1118,7 +1122,13 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         {f"{lib}.kicad_sym"} | {f"{lib}.pretty/{k}.kicad_mod" for k in mine.get("footprints") or {}}
         | {f"{lib}.3dshapes/{k}" for k, v in (mine.get("models") or {}).items() if v}) if mine else set()
     was_at = mine.get("models_at")              # where an earlier export (given the project) put the model paths
-    at = models_at(lib, out, project) if project is not None else \
+    if models_var:
+        from .kicad_install import check_var
+        try:
+            check_var(models_var)
+        except ValueError as e:
+            raise PlanError(str(e)) from None
+    at = f"${{{models_var}}}/{lib}.3dshapes" if models_var else models_at(lib, out, project) if project is not None else \
         was_at if isinstance(was_at, str) and was_at.endswith(f"/{lib}.3dshapes") else models_at(lib)
     rep["models_at"] = at
 
@@ -1544,20 +1554,41 @@ def main(argv=None):
                                       "remembered for later exports into -o")
     ap.add_argument("--take-over", action="store_true", help="write the library although another plan folder wrote "
                     "it into -o (its parts are replaced by this plan's)")
+    ap.add_argument("--models-var", metavar="VAR", help="3D model paths start from this KiCad path variable "
+                    "(${VAR}/<lib>.3dshapes) instead of ${KIPRJMOD}: for a library every project uses (see --install)")
+    ap.add_argument("--install", action="store_true", help="also install the library into KiCad itself (its global "
+                    "symbol / footprint tables and a path variable ECADLIB_DIR_<NAME> = -o), so every project sees it; "
+                    "the 3D model paths use that variable. Close KiCad first; see `ecadlib kicad-install --help`")
     a = ap.parse_args(argv)
+    if a.install and not a.models_var:
+        from .kicad_install import var_name
+        a.models_var = var_name(libname(a.name))
     try:
         rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60),
                      rules=a.rules, log=(lambda *x, **k: None) if a.json else print, project=a.project,
-                     take_over=a.take_over)
+                     take_over=a.take_over, models_var=a.models_var)
     except PlanError as e:
         print(f"ecadlib kicad-export: {e}", file=sys.stderr)
         return 2
     # exit 1 also while a change is held: the library on disk is not what was exported, a person has to look
+    bad = bool(rep["errors"] or rep.get("held_changes") or rep.get("refused"))
+    if not a.json:
+        print_result(rep, Path(a.out), a.plan)
+    if a.install and not bad:
+        from . import kicad_install
+        if not a.json:
+            print("installing into KiCad:")
+        try:
+            rep["install"] = kicad_install.install(a.out, libname(a.name), var=a.models_var,
+                                                   log=(lambda *x, **k: None) if a.json else print)
+        except ValueError as e:
+            rep["install"] = {"error": str(e)}
+            print(f"ecadlib kicad-export: --install: {e}", file=sys.stderr)
+        vs = (rep["install"].get("versions") or {}).values()
+        bad = not any(v["status"] in ("installed", "already installed") for v in vs)
     if a.json:
         print(json.dumps(rep, default=str))
-        return 1 if rep["errors"] or rep.get("held_changes") or rep.get("refused") else 0
-    print_result(rep, Path(a.out), a.plan)
-    return 1 if rep["errors"] or rep.get("held_changes") or rep.get("refused") else 0
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

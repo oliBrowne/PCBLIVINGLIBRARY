@@ -91,6 +91,7 @@ CASES = [
     (["plugins", "export", "nosuch", "{out}/lib/plan.json", "-o", "{out}/px"], (2,)),
     (["notify", "show", "--rules", "{in}/ecadlib.toml"], (0,)),
     (["kicad-dblib", "{out}/lib/plan.json", "-o", "{out}/kicad", "--name", "ecadlib"], (0,)),
+    (["kicad-install", "{out}/kicad", "--name", "ecadlib", "--dry-run"], (0, 1)),   # dry run: KiCad's files untouched
     (["export-parts", "{out}/lib/plan.json", "--format", "xlsx", "-o", "{out}/parts.xlsx"], (0,)),
     (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm"], (1, 2)),   # refused: kicad-export above wrote held parts
     (["kicad-pcm", "{out}/kicad", "--out", "{out}/pcm", "--include-held"], (0, 1)),   # 1: held parts are a problem

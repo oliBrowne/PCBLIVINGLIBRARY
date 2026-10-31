@@ -48,6 +48,7 @@ Every other command:
     ecadlib plugins   list|export NAME PLAN -o DIR   installed part-source / exporter plugins (Python entry points)
     ecadlib notify    show|test [--event E]       [notify] webhooks (Slack, Teams, JSON): targets, send a test message
     ecadlib kicad-dblib plan.json -o DIR --name LIB [--export]   KiCad database library (.kicad_dbl + SQLite)
+    ecadlib kicad-install DIR [--name LIB] [--uninstall]   put a kicad-export library into KiCad itself (every project sees it)
     ecadlib export-parts plan.json --format csv|json|xlsx [-o F]   parts table with stable columns (PLM / ERP)
     ecadlib stdparts resolve "SOIC-8 3.9x4.9mm" | coverage BOM | bench   standard packages built offline (librarian source)
     ecadlib kicad-pcm plan.json|KICAD_DIR --out DIR [--kicad 7]   KiCad Plugin and Content Manager zip (--plugin: action plugin)
@@ -112,6 +113,7 @@ COMMANDS = {
     "completion": ("ecadlib.completion", "shell completion script for bash, zsh or fish"),
     "plugins": ("ecadlib.plugins", "installed part-source and exporter plugins; run an exporter on a plan"),
     "notify": ("ecadlib.notify", "webhook notifications ([notify]): show targets, send a test message"),
+    "kicad-install": ("ecadlib.kicad_install", "install a kicad-export library into KiCad's own symbol / footprint tables and path variables"),
     "kicad-dblib": ("ecadlib.kicad_dblib", "KiCad database library: .kicad_dbl (ODBC) + SQLite parts table from a plan"),
     "export-parts": ("ecadlib.parts_export", "parts table with stable columns as CSV / JSON / XLSX for PLM / ERP imports"),
     "kicad-pcm": ("ecadlib.kicad_pcm", "package the library for KiCad's Plugin and Content Manager (zip); --plugin: the add-part action plugin"),

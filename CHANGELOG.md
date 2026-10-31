@@ -7,6 +7,10 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Added
+
+- `ecadlib kicad-install DIR` and `ecadlib kicad-export ... --install`: put a KiCad library into KiCad itself, so every project sees it without its own copy. A row in KiCad's global `sym-lib-table` and `fp-lib-table` for each KiCad version found (7 and newer), a path variable `ECADLIB_DIR_<NAME>` for the library folder in `kicad_common.json`, and 3D model paths through that variable (`--models-var`). Other rows and settings are kept (with a `.ecadlib-bak` copy). A KiCad whose global tables don't exist yet is set up from its own template tables, else skipped. KiCad 7 gets a KiCad 7 copy of the symbols. `--uninstall` takes it out again. Checked in real KiCad 9 and 10: footprints and 3D models resolve with no project table.
+
 ### Fixed
 
 - Commands that download (librarian, triage, datasheet, resolve, kicad-export and the others with `--cache`) keep their download cache, and with it the paid datasheet answers, in `<workspace>/http_cache` when a workspace is set up: the same cache the web UI, the MCP server and the menus use. Before, it was `out/http_cache` of whatever folder the terminal was in, so a run from another folder or from the web UI downloaded and paid for the same datasheets again. Without a workspace (or when its folder is missing) it is still `out/http_cache`, and an `out/http_cache` that already holds downloads keeps being used until the workspace has its own, so answers paid for before are not paid for again; `ecadlib review` looks in both.
