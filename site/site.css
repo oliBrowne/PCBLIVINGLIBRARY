@@ -38,6 +38,8 @@ code { font: 13px/1 var(--mono); padding: 1px 5px; border: 1px solid var(--line)
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .sr { position: absolute; width: 0; height: 0; overflow: hidden; }
+.skiplink { position: absolute; left: 16px; top: -60px; z-index: 20; padding: 8px 14px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; font-size: 13px; white-space: nowrap; }
+.skiplink:focus { top: 12px; outline: 2px solid var(--copper); outline-offset: 2px; }
 :focus-visible { outline: 1.5px solid var(--copper); outline-offset: 3px; border-radius: 6px; }
 
 /* nav */
