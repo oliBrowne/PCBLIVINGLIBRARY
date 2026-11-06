@@ -634,7 +634,8 @@ def _window_class():
             with open(os.path.join(job, "log.txt"), "w", encoding="utf-8") as log:
                 # cwd: the job folder, never the project: `python -m ecadlib` would import the project's ecadlib/
                 # library folder instead of the ecadlib package
-                return job, subprocess.Popen(c, cwd=job, stdout=log, stderr=subprocess.STDOUT, **NO_WINDOW)
+                return job, subprocess.Popen(c, cwd=job, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                         **NO_WINDOW)
 
         def fire(self, action, **kw):
             """A job the window does not wait for (open a report): its failure is still shown when it ends."""

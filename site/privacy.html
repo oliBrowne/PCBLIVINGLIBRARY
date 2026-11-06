@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy policy · ecadlib</title>
-<meta name="description" content="How the ecadlib website and software handle personal data: no accounts, no cookies, no analytics, no telemetry.">
+<meta name="description" content="How the ecadlib website and software handle personal data: no accounts, no cookies, no analytics, no telemetry; crash reports only if you switch them on.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="site.css">
@@ -22,10 +22,10 @@
 </header>
 
 <main class="legal">
-  <p class="mono small muted">Version 1.1 · Last revised 19 October 2026</p>
+  <p class="mono small muted">Version 1.2 · Last revised 6 November 2026</p>
   <h1>Privacy policy</h1>
 
-  <p class="lede">The short version: this website has no accounts, no forms, no cookies, no analytics and no ads. The ecadlib software runs on your computer, has no telemetry, and never sends anything to us.</p>
+  <p class="lede">The short version: this website has no accounts, no forms, no cookies, no analytics and no ads. The ecadlib software runs on your computer and has no telemetry. It sends us nothing unless you switch on automatic crash reports, which carry no personal information and become public GitHub issues.</p>
 
   <p>This policy explains how Oliver Browne, an individual based in Colorado, United States, who runs the ecadlib project ("<strong>we</strong>", "<strong>us</strong>" or "<strong>our</strong>"), handles personal information when you visit <a href="https://pcblivinglibrary.vercel.app">pcblivinglibrary.vercel.app</a> (the "<strong>Site</strong>") or use the ecadlib software (the "<strong>Software</strong>"). For the Site, we are the controller of the limited data described below.</p>
 
@@ -38,20 +38,21 @@
   </ol>
 
   <h2 id="software">2. The Software</h2>
-  <p>The Software runs on your own computer. It has no account, no telemetry and no server run by this project, so we receive nothing from it. When you use a feature that needs an outside service, the Software sends data directly from your computer to that service, using your own key where one is needed:</p>
+  <p>The Software runs on your own computer. It has no account and no telemetry, and we receive nothing from it unless you switch on automatic crash reports (below). When you use a feature that needs an outside service, the Software sends data directly from your computer to that service, using your own key where one is needed:</p>
   <ul>
     <li>the AI provider you pick (Anthropic by default, or OpenAI, Gemini, OpenRouter, or a model on your own machine): datasheet pages, part numbers and pictures of generated footprints;</li>
     <li>part libraries and distributors you turn on (KiCad's libraries on GitLab, DigiKey, Mouser, Nexar and others): part numbers;</li>
     <li>Altium 365, only if you push parts there; GitHub, only if you have the weekly upkeep open an issue or pull request.</li>
   </ul>
   <p><strong>Bug reports.</strong> When the Software hits an error it did not expect, it saves the error on your computer only, with API keys, tokens, e-mail addresses, your user name, your company's name in an Altium 365 address and your home folder blanked out. <code>ecadlib report-bug</code> or the <em>Report a bug</em> button shows you that text and opens a GitHub issue filled in with it, the ecadlib version, your operating system and your Python version. Nothing leaves your computer until you choose to open that issue on GitHub: the text then travels to GitHub inside the link so GitHub can show it to you, and it becomes a public issue only when you press Submit. You can edit it first.</p>
+  <p><strong>Automatic crash reports (only if you switch them on).</strong> The Software asks once, after the first bug it hits, and the setup page has a switch; they are off until you say yes. With them on, every bug the Software hits (at most 10 a day for each user account on a computer) sends our crash-report endpoint on the Site only: the error's type (such as <code>KeyError</code>), the lines of ecadlib's own code it went through, where in ecadlib it happened, and the ecadlib, operating system and Python versions. Never the error message, your file or part names, your keys or anything you typed; the endpoint accepts only values it knows (file and function names from the Software's own code, a command name, an error type, version numbers) and refuses anything else. It files the report as a public issue in the project's GitHub repository (one issue per distinct crash; a repeat raises its count, and a closed issue seen again on a newer release gets one comment), where anyone can read it and help fix it. Issues stay public after you switch reports off. Vercel receives your IP address with the request, as for any page of the Site (section 1). To stop floods, the endpoint counts reports per address for one hour under a one-way hash of the address, never the address itself, and then forgets it; we do not put the address in the issue or pass it on. Turn reports off with <code>ecadlib report-bug --auto off</code>, on the setup page, or with the environment variable <code>ECADLIB_NO_CRASH_REPORTS=1</code> (or <code>DO_NOT_TRACK=1</code>).</p>
   <p>Each of these services handles that data under its own terms. The full list, with how to turn each one off, is in <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/PRIVACY.md">PRIVACY.md</a>. API keys you add are stored only on your computer and are never sent to us.</p>
 
   <h2 id="use">3. How we use and share information</h2>
-  <p>We use the limited information above only to run and secure the Site and to answer you. We do not sell or rent personal information, we do not share it for advertising, and we do not use it to train AI models. We share it only with our hosting provider (Vercel) as needed to run the Site, or when the law requires it.</p>
+  <p>We use the limited information above only to run and secure the Site and to answer you. We do not sell or rent personal information, we do not share it for advertising, and we do not use it to train AI models. We share it only with our hosting provider (Vercel) as needed to run the Site, or when the law requires it. Automatic crash reports hold no personal information and are published as GitHub issues so anyone can help fix the bug.</p>
 
   <h2 id="basis">4. Legal bases (EEA and UK)</h2>
-  <p>If you are in the European Economic Area or the United Kingdom, we rely on our <strong>legitimate interests</strong> in delivering and securing the Site (for server logs) and in answering your messages (for anything you send us). Storing your theme choice on your device is strictly necessary to provide the feature you asked for.</p>
+  <p>If you are in the European Economic Area or the United Kingdom, we rely on our <strong>legitimate interests</strong> in delivering and securing the Site (for server logs) and in answering your messages (for anything you send us). Storing your theme choice on your device is strictly necessary to provide the feature you asked for. Automatic crash reports are sent only with your <strong>consent</strong> (you switch them on), which you can withdraw at any time.</p>
 
   <h2 id="transfers">5. International transfers</h2>
   <p>Vercel may process server logs in the United States and other countries. Where personal data from the EEA or UK is transferred, Vercel relies on safeguards such as the EU-U.S. Data Privacy Framework and standard contractual clauses, as described in its own policies.</p>

@@ -128,8 +128,22 @@ def state(ws_root, environ=None):
             "providers": [{"id": p[0], "label": p[1], "key": p[3], "models": [{"id": m, "note": n} for m, n in p[4]],
                            "key_url": p[5], "note": p[6]} for p in PROVIDERS],
             "keys": keys, "detected": found, "installed": s.get("installed") or {},
-            "altium365": a365_state(raw),
+            "altium365": a365_state(raw), "crash_reports": crash_reports_state(),
             "can_restart": RESTART is not None, "config_dir": str(UC.config_dir())}
+
+
+def crash_reports_state():
+    from . import bugreport as BR
+    c = BR.auto_choice()
+    return {"available": BR.available(), "on": bool(c), "asked": c is not None}
+
+
+def set_crash_reports(b):
+    from . import bugreport as BR
+    if not isinstance(b.get("on"), bool):
+        raise ValueError("on must be true or false")
+    BR.set_auto(b["on"])
+    return crash_reports_state()
 
 
 # ------------------------------------------------------------------ saving
@@ -497,7 +511,8 @@ POST_ROUTES = {"/api/setup": save, "/api/setup/key": lambda ws, b: store_key(b),
                "/api/setup/kicad": lambda ws, b: install_kicad_plugin(b.get("series")),
                "/api/setup/restart": lambda ws, b: restart(b.get("workspace") or ws),
                "/api/setup/nexar/signin": lambda ws, b: start_nexar_signin(b),
-               "/api/setup/nexar/signout": lambda ws, b: nexar_signout(b)}
+               "/api/setup/nexar/signout": lambda ws, b: nexar_signout(b),
+               "/api/setup/crash-reports": lambda ws, b: set_crash_reports(b)}
 WRITES = {"/api/setup", "/api/setup/altium"}             # these write into the workspace: under the server's write lock
 
 
