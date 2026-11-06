@@ -25,12 +25,16 @@ public issue only when you press Submit. You can edit or delete any of it first.
 deletes the saved errors.
 
 **Automatic crash reports** are off until you say yes: ecadlib asks once, in the terminal, after the first bug it hits,
-and the setup page has a switch. With them on, each new bug sends only the short report in the table above (at most 10
-a day). The endpoint accepts only those fields, in fixed formats, so free text cannot get through, and it keeps nothing
-itself: it turns the report into a public GitHub issue (one issue per distinct crash; a repeat only raises its count),
-which anyone can read and help fix. Vercel, which hosts the endpoint, sees your IP address when the report arrives, as
-it does for any web request; it is not passed on or stored by this project. `ecadlib report-bug --auto status` shows
-the setting.
+and the setup page has a switch. With them on, every bug ecadlib hits sends only the short report in the table above (at
+most 10 a day for each user account on a computer; the same bug twice in a row goes once). The endpoint accepts only
+those fields, and only values it knows: file and function names that exist in ecadlib's code, a command name, a Python
+or ecadlib error type, version numbers. So free text cannot get through. It turns the report into a public GitHub
+issue (one issue per distinct crash; a repeat raises its count and adds a released version or a system to its lists,
+and a closed issue seen again on a newer release gets one comment), which anyone can read and help fix. Issues stay
+public after you switch reports off. Vercel, which hosts the endpoint, sees your IP address when the report arrives, as
+it does for any web request. To stop floods, the endpoint counts reports per address for one hour, under a one-way
+hash of the address (never the address itself), and then forgets it; the address is not put in the issue or passed on.
+`ecadlib report-bug --auto status` shows the setting.
 
 API keys you add on the setup page or with `ecadlib keys set` are stored only on your computer: on Windows they are
 encrypted for your Windows account, elsewhere they are in a file only you can read. They are never written to your

@@ -95,19 +95,48 @@ def test_sends_only_the_publishable_part(tmp_path, monkeypatch):
 
 
 @lite
-def test_payload_keeps_only_frames_in_ecadlib_and_safe_characters(tmp_path, monkeypatch):
-    rec = {"version": "0.4.1", "installed": "pip", "os": "Windows-11", "python": "3.13.1", "where": "web UI: /api/x",
-           "error": "KeyError", "traceback": "\n".join([
-               "Traceback (most recent call last):",
-               '  File "ecadlib/app.py", line 12, in run',
-               "    x = y['pins']",
-               '  File "<python>/json/decoder.py", line 3, in decode',
-               '  File "~/projects/acme/script.py", line 9, in <module>',
-               '  File "ecadlib\\ui\\server.py", line 40, in do_GET',
-               "KeyError: 'pins'"])}
+def test_payload_keeps_only_frames_in_ecadlib_and_fixed_values(tmp_path, monkeypatch):
+    rec = {"version": "0.4.1.dev3+g12ab", "installed": "pip", "os": "Windows-11", "python": "3.13.1",
+           "where": "web UI: /api/parts/ACME-SECRET", "error": "KeyError",
+           "frames": "ecadlib/app.py:12:run\nnot a frame\necadlib/ui/server.py:40:do_GET\nC:/acme/x.py:1:f",
+           "traceback": '  File "ecadlib/Acme_Radar_JaneDoe.py", line 1, in leak'}
     p = B.payload(rec)
     assert [f["file"] for f in p["frames"]] == ["ecadlib/app.py", "ecadlib/ui/server.py"]
-    assert "pins" not in json.dumps(p) and "acme" not in json.dumps(p)
+    assert p["where"] == "web UI" and p["version"] == "0.4.1"
+    text = json.dumps(p)
+    for leak in ("ACME", "acme", "Jane", "Radar", "dev3"):
+        assert leak not in text, leak
+    odd = B.payload({"os": "Call Jane 555", "where": "my project", "error": "not an error: x", "python": "3.13.0+"})
+    assert odd["os"] == "Other-unknown" and odd["where"] == "command line" and odd["error"] == "Exception"
+    assert odd["python"] == "3.13.0" and odd["frames"] == []
+    assert B.payload({"where": "librarian"})["where"] == "librarian"           # a real command name stays
+
+
+@lite
+def test_frames_come_from_the_traceback_never_from_the_message(tmp_path, monkeypatch):
+    s = _Sentry()
+    try:
+        _setup(monkeypatch, tmp_path, s)
+        fake = 'x\n  File "ecadlib/Acme_Radar_rev3_JaneDoe.py", line 1, in leak\nKeyError: y'
+        B.record("triage", _in_ecadlib(fake), wait=True)
+        raw = s.got[0]["body"].decode()
+        assert "Acme" not in raw and "JaneDoe" not in raw
+        assert [f["file"] for f in json.loads(raw)["frames"]] == ["ecadlib/userconfig.py"]
+    finally:
+        s.close()
+
+
+@lite
+def test_a_cleared_report_is_not_brought_back_by_a_send(tmp_path, monkeypatch):
+    s = _Sentry()
+    try:
+        _setup(monkeypatch, tmp_path, s)
+        B.record("triage", _boom("x"), wait=True)
+        rec, f = B.latest(), B._files()[0]
+        B.clear()
+        assert B.send(rec, f) and not f.exists()
+    finally:
+        s.close()
 
 
 @lite
@@ -161,6 +190,59 @@ def test_cli_asks_once_after_a_crash_and_remembers(tmp_path, monkeypatch):
         assert B.auto_choice() is False and len(s.got) == 1
     finally:
         s.close()
+
+
+@lite
+def test_ask_once_stays_quiet_unless_a_person_can_answer(tmp_path, monkeypatch):
+    s = _Sentry()
+    try:
+        _setup(monkeypatch, tmp_path, s, choice=None)
+        B.record("triage", _boom("first"))
+
+        class Tty(io.StringIO):
+            def isatty(self):
+                return True
+        monkeypatch.setattr(B.sys, "stdin", Tty("y\n"))
+        out = io.StringIO()                                # stderr is not a terminal (redirected): no question
+        B.ask_once(out)
+        assert out.getvalue() == "" and B.auto_choice() is None
+        monkeypatch.setenv("CI", "true")                   # a CI job never waits on a question
+        B.ask_once(Tty())
+        assert B.auto_choice() is None
+        monkeypatch.setenv("CI", "")
+        out = Tty()
+        B.ask_once(out)                                    # both terminals: asked on `out`, answer read from stdin
+        assert "[y/N]" in out.getvalue() and B.auto_choice() is True
+
+        UC.save_settings({B.SETTING: None})
+
+        def ctrl_c(_):
+            raise KeyboardInterrupt
+        B.ask_once(io.StringIO(), inp=ctrl_c)              # Ctrl-C: no answer, nothing saved, no traceback
+        assert B.auto_choice() is None
+    finally:
+        s.close()
+
+
+@lite
+def test_a_dead_server_never_holds_up_the_exit(tmp_path):
+    """A server that takes the connection and never answers: the command still ends within SEND_DEADLINE."""
+    import os, socket, subprocess, sys, time
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+    try:
+        env = dict(os.environ, ECADLIB_HOME=str(tmp_path), ECADLIB_NO_CRASH_REPORTS="", DO_NOT_TRACK="",
+                   ECADLIB_REPORT_URL=f"http://127.0.0.1:{srv.getsockname()[1]}/x")
+        code = ("from ecadlib import bugreport as B, userconfig as UC\nB.set_auto(True)\n"
+                "try:\n    UC.check_name('bad name ä')\nexcept ValueError as e:\n    B.record('triage', e)\n")
+        t = time.monotonic()
+        r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=30)
+        took = time.monotonic() - t
+        assert r.returncode == 0, r.stderr
+        assert took < B.SEND_DEADLINE + 2.5, took
+    finally:
+        srv.close()
 
 
 @lite

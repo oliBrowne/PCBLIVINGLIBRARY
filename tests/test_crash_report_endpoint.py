@@ -39,3 +39,14 @@ def test_what_the_client_sends_passes_the_endpoint(tmp_path, monkeypatch):
                            capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, (where, p, r.stdout, r.stderr)
         assert p["frames"] and p["frames"][-1]["file"] == "ecadlib/userconfig.py"
+
+
+def test_the_endpoints_list_of_ecadlib_files_and_functions_is_up_to_date():
+    """api/_crash-report-allow.json holds every ecadlib file, function, command and error class: a crash in code it
+    does not know would lose its lines (the endpoint refuses frames it does not know)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("allow", ROOT / "scripts" / "build_crash_report_allow.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    gaps = m.missing()
+    assert not gaps, f"run: python3 scripts/build_crash_report_allow.py  (missing: {gaps[:5]})"
