@@ -1,15 +1,16 @@
-"""Bug reports the user sends themselves: ecadlib sends nothing on its own.
+"""Bug reports: the user sends them themselves, or, only if they switched it on, ecadlib sends a short public-safe part.
 
     ecadlib report-bug              show the last error ecadlib saved, then open a pre-filled GitHub issue
     ecadlib report-bug --print      only show the text and the link
     ecadlib report-bug --list       the saved errors, newest first
     ecadlib report-bug --clear      delete the saved errors
+    ecadlib report-bug --auto on|off|status    automatic crash reports (opt-in; see send() for what goes)
 
 When a command, the web UI or the MCP server hits an error it did not expect (a bug, not a wrong path or a bad
 setting), record() saves it in the config folder (crashes/, the newest MAX_KEPT) with API keys, tokens, e-mail
 addresses, the user name, the company in an Altium 365 address and the home folder blanked out. report-bug turns
 the newest one into a GitHub issue link; the user reads the text on GitHub and decides whether to press Submit."""
-import argparse, getpass, itertools, json, os, platform, re, sys, time, traceback, webbrowser
+import argparse, getpass, itertools, json, os, platform, re, sys, threading, time, traceback, urllib.request, webbrowser
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -142,9 +143,10 @@ def _installed():
 _SEQ = itertools.count()
 
 
-def record(where, exc):
+def record(where, exc, wait=False):
     """Save exc (an error ecadlib did not expect) for a later bug report; -> the file, or None. Never raises.
-    The same error again (a page polling a broken endpoint) is not saved twice in a row."""
+    The same error again (a page polling a broken endpoint) is not saved twice in a row. When the person switched
+    automatic reports on, the publishable part is also sent (a background thread; wait: block until it is done)."""
     try:
         from . import __version__
         from .userconfig import _write_private
@@ -164,6 +166,11 @@ def record(where, exc):
         _write_private(f, json.dumps(rec, indent=1))     # mode 600: other accounts on the PC cannot read it
         for old in _files()[MAX_KEPT:]:
             old.unlink(missing_ok=True)
+        if auto_on():
+            th = threading.Thread(target=send, args=(rec, f), daemon=False)   # not a daemon: a CLI that exits
+            th.start()                                                        # right after still finishes the send
+            if wait:
+                th.join()
         return f
     except Exception:
         return None
@@ -266,6 +273,116 @@ def report_for(rec=None):
     return {"title": title, "body": body, "url": u, "saved": bool(rec), "when": (rec or {}).get("time")}
 
 
+# ------------------------------------------------------------------ automatic reports (opt-in)
+# The endpoint (api/crash-report.js on the project's site) files each crash as a public GitHub issue, one issue per
+# distinct crash. Only the publishable part goes: the error's type, the lines in ecadlib's own code it went through,
+# where it happened and the versions. The message never leaves the computer: it can hold a project or part name.
+REPORT_URL = "https://pcblivinglibrary.vercel.app/api/crash-report"
+URL_ENV, OFF_ENV, SETTING = "ECADLIB_REPORT_URL", "ECADLIB_NO_CRASH_REPORTS", "crash_reports"
+MAX_SENT_PER_DAY = 10
+SCHEMA = 1
+_FRAME = re.compile(r'^\s*File "(ecadlib/[\w/.\-]{1,120}\.py)", line (\d{1,7}), in ([\w<>.]{1,80})\s*$')
+_SAFE = re.compile(r"[^\w .:/()+\-]", re.ASCII)
+
+
+def report_url():
+    return os.environ.get(URL_ENV, REPORT_URL).strip()
+
+
+def available():
+    """Automatic reports are possible in this build and on this computer (an address; not switched off by env)."""
+    off = any(os.environ.get(k, "").strip() not in ("", "0", "false", "no") for k in (OFF_ENV, "DO_NOT_TRACK"))
+    return bool(report_url()) and not off
+
+
+def auto_choice():
+    """True / False as the person answered, None when never asked."""
+    try:
+        from .userconfig import load_settings
+        v = load_settings().get(SETTING)
+    except Exception:
+        return None
+    return {"on": True, "off": False}.get(v)
+
+
+def set_auto(on):
+    from .userconfig import save_settings
+    save_settings({SETTING: "on" if on else "off"})
+
+
+def auto_on():
+    return available() and auto_choice() is True
+
+
+def _short(v, n=80):
+    return _SAFE.sub("_", str(v or ""))[:n]
+
+
+def payload(rec):
+    """The publishable part of a saved report: no message, only frames in ecadlib's own files."""
+    frames = []
+    for ln in (rec.get("traceback") or "").splitlines():
+        m = _FRAME.match(ln.replace("\\", "/"))         # Windows: ecadlib\ui\server.py
+        if m:
+            frames.append({"file": m.group(1), "line": int(m.group(2)), "function": m.group(3)})
+    return {"schema": SCHEMA, "version": _short(rec.get("version"), 40), "installed": _short(rec.get("installed"), 20),
+            "os": _short(rec.get("os"), 60), "python": _short(rec.get("python"), 20),
+            "where": _short(rec.get("where")), "error": _short(rec.get("error")), "frames": frames[-30:]}
+
+
+def _sent_today():
+    """How many reports went today; counts this one (the daily cap, kept in crashes/sent.txt)."""
+    from .userconfig import _write_private
+    f = crash_dir() / "sent.txt"
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    try:
+        d, n = f.read_text(encoding="utf-8").split()
+        n = int(n) if d == day else 0
+    except (OSError, ValueError):
+        n = 0
+    _write_private(f, f"{day} {n + 1}\n")
+    return n + 1
+
+
+def send(rec, path=None, timeout=5):
+    """Send rec's publishable part; mark its file as sent. -> True when the endpoint took it. Never raises."""
+    try:
+        if not auto_on() or _sent_today() > MAX_SENT_PER_DAY:
+            return False
+        req = urllib.request.Request(report_url(), data=json.dumps(payload(rec)).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "User-Agent": "ecadlib-crash-report"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            ok = 200 <= r.status < 300
+        if ok and path:
+            from .userconfig import _write_private
+            _write_private(path, json.dumps(dict(rec, sent="yes"), indent=1))
+        return ok
+    except Exception:
+        return False
+
+
+def ask_once(out, inp=None):
+    """After a crash in a terminal: ask once whether to send reports automatically; a yes also sends this one."""
+    try:
+        if not available() or auto_choice() is not None:
+            return
+        if inp is None:
+            if not sys.stdin or not sys.stdin.isatty():
+                return
+            inp = input
+        print("\necadlib can send reports like this one to its developer automatically. They become public GitHub "
+              "issues, so only the error's type, the lines in ecadlib's own code and the versions go: never the "
+              "message, your files or your keys. `ecadlib report-bug --auto off` stops it.", file=out)
+        yes = str(inp("Send crash reports automatically from now on? [y/N] ")).strip().lower() in ("y", "yes")
+        set_auto(yes)
+        print("Crash reports: on, thank you." if yes else "Crash reports: off.", file=out)
+        files, rec = _files(), latest()
+        if yes and rec and files:
+            send(rec, files[0])
+    except Exception:
+        pass
+
+
 def _open(url):
     webbrowser.open(url)
 
@@ -279,7 +396,16 @@ def main(argv=None, out=None, inp=None):
     ap.add_argument("--yes", "-y", action="store_true", help="open GitHub without asking")
     ap.add_argument("--list", action="store_true", help="list the saved errors, newest first")
     ap.add_argument("--clear", action="store_true", help="delete the saved errors")
+    ap.add_argument("--auto", choices=("on", "off", "status"),
+                    help="automatic crash reports (public GitHub issues, without the message): on, off, or show")
     a = ap.parse_args(argv)
+    if a.auto:
+        if a.auto != "status":
+            set_auto(a.auto == "on")
+        c = auto_choice()
+        state = "on" if c else "off" if c is False else "off (never asked)"
+        print(f"Automatic crash reports: {state}" + ("" if available() else " (switched off on this computer)"), file=out)
+        return 0
     if a.clear:
         clear()
         print("Saved errors deleted.", file=out)

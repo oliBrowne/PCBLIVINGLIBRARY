@@ -139,6 +139,8 @@ def report(cmd, e, out):
     else:
         msg, hint, code = f[0], f[1] + "; --debug shows the traceback", f[2]
     print(f"ecadlib {cmd}: {msg}\n  hint: {hint}", file=out)
+    if f is None:
+        bugreport.ask_once(out)                     # once ever: send reports like this automatically? (terminal only)
     return code
 
 
