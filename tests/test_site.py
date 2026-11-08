@@ -75,3 +75,29 @@ def test_hero_dark_fallback_matches_its_pairs():
         assert pairs and block.count("light-dark(") == len(pairs), sel
         back = fallback[fallback.index(sel):fallback.index("}", fallback.index(sel))]
         assert dict((k, v.strip()) for k, v in re.findall(r"(--[\w-]+): ([^;]+);", back)) == pairs, sel
+
+
+def test_walkthrough_never_meets_the_site_stylesheet():
+    """The 04 Workflow walkthrough (walk.css / walk.js) draws two whole design tools with short class names (.tbar, .mb,
+    .pn, .rows...). Every rule in walk.css is scoped under a .wk class, and the section's own markup uses only wk- classes
+    besides the page's shared section ones, so site.css and the walkthrough can't restyle each other."""
+    css = re.sub(r"/\*.*?\*/", "", (SITE / "walk.css").read_text(encoding="utf-8"), flags=re.S)
+    css = re.sub(r"@keyframes [\w-]+ \{(?:[^{}]*\{[^}]*\})*[^{}]*\}", "", css)
+    sels = [s.strip() for s in re.findall(r"([^{}]+)\{", css) if not s.strip().startswith(("@", "from", "to", "50%"))]
+    bad = [p.strip() for s in sels for p in s.split(",") if not p.strip().startswith(".wk")]
+    assert sels and not bad, bad
+    page = (SITE / "index.html").read_text(encoding="utf-8")
+    at = page.index('<section id="workflow"')
+    sec = page[at:page.index("</section>", at)]
+    tokens = {t for v in re.findall(r'class="([^"]*)"', sec) for t in v.split()}
+    shared = {"block", "wk", "head", "reveal", "eyebrow", "num", "sub"}
+    assert tokens and all(t.startswith("wk-") or t in shared for t in tokens), sorted(tokens - shared)
+    js = (SITE / "walk.js").read_text(encoding="utf-8")
+    assert 'from "./hero-data.js"' in js            # the walkthrough draws the same generator output as the hero
+
+
+def test_old_workflow_code_is_gone():
+    """walk.js replaced the first walkthrough (#win, #wfsteps): none of its hooks may be left in the page or scripts."""
+    for name in ("index.html", "site.js", "site.css"):
+        text = (SITE / name).read_text(encoding="utf-8")
+        assert not re.search(r"wfsteps|wfcanvas|wfdlg|\.win\b|id=\"win\"", text), name
