@@ -11,6 +11,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="site.css">
 <link rel="stylesheet" href="hero.css">
+<link rel="stylesheet" href="walk.css">
 </head>
 <body>
 <svg class="sr" aria-hidden="true"><defs>
@@ -143,35 +144,32 @@
     </div>
   </section>
   <!-- 04 workflow -->
-  <section id="workflow" class="block" data-traces="wf">
+  <section id="workflow" class="block wk" data-wk data-traces="wf">
     <div class="head reveal">
       <p class="eyebrow"><span class="num">04</span>Workflow</p>
       <h2>Right inside Altium and KiCad.</h2>
-      <p class="sub">You never leave your design tool. ecadlib adds an ecadlib menu to Altium and an action plugin to KiCad, each with its own native dialogs; the web page opens only for steps that need it. Ask for a part, and it comes back as a library part you can place.</p>
+      <p class="sub">You never leave your design tool. ecadlib adds an ecadlib menu to Altium and a toolbar button to KiCad, each with its own window; the web page opens only for steps that need it. Ask for a part, and it comes back as a library part you can place.</p>
     </div>
-    <div class="wf reveal">
-      <div class="wftabs mono" role="tablist" aria-label="Design tool">
-        <button role="tab" id="wf-tab-altium" aria-selected="true" data-scene="altium">Altium Designer</button>
-        <button role="tab" id="wf-tab-kicad" aria-selected="false" data-scene="kicad">KiCad</button>
-        <button type="button" class="ghost wfplay" id="wfplay" aria-pressed="true">pause</button>
+    <div class="wk-top">
+      <div class="wk-tabs" role="tablist" aria-label="Design tool">
+        <button role="tab" aria-selected="true" data-scene="altium">Altium Designer</button>
+        <button role="tab" aria-selected="false" data-scene="kicad">KiCad</button>
       </div>
-      <div class="wfgrid">
-        <ol class="wfsteps" id="wfsteps" aria-live="polite"></ol>
-        <div class="win" id="win" aria-label="An animated design tool window showing the ecadlib workflow" role="img">
-          <div class="winbar"><span class="appmark" id="wfapp"></span><span id="wintitle">Board.PrjPcb</span><span class="winctl" aria-hidden="true"><i></i><i></i><i></i></span></div>
-          <div class="menubar" id="menubar"></div>
-          <div class="toolbar" id="wftools" aria-hidden="true"></div>
-          <div class="winbody">
-            <div class="canvas"><div class="doctabs" id="wfdocs"></div><svg id="wfcanvas" viewBox="0 0 400 260" preserveAspectRatio="xMidYMid meet"></svg></div>
-            <aside class="panel" id="wfpanel"></aside>
+      <span class="wk-ex">TLC5951DAP · example run</span>
+      <button type="button" class="wk-play" aria-pressed="true">pause</button>
+    </div>
+    <div class="wk-stage">
+      <div class="wk-fit">
+        <div class="wk-win" role="img" aria-label="An animated design tool window showing the ecadlib workflow">
+          <div class="wk-cam">
+            <div class="wk-dlg" hidden></div>
+            <svg class="wk-cur" viewBox="0 0 16 22" aria-hidden="true"><path d="M1 1 L1 17 L5 13 L8 20 L11 19 L8 12 L14 12 Z"/></svg>
           </div>
-          <div class="statusbar" id="wfstatus"></div>
-          <div class="dlg" id="wfdlg" hidden></div>
-          <div class="drop" id="wfdrop" hidden></div>
-          <svg class="cursor" id="wfcursor" viewBox="0 0 16 22" aria-hidden="true"><path d="M1 1 L1 17 L5 13 L8 20 L11 19 L8 12 L14 12 Z"/></svg>
         </div>
       </div>
+      <div class="wk-cap" aria-live="polite"></div>
     </div>
+    <ol class="wk-steps" aria-live="polite"></ol>
   </section>
 
   <!-- 05 models -->
@@ -299,5 +297,6 @@ ecadlib ui         <span class="c"># or do it all in your browser</span></pre>
 
 <script type="module" src="hero.js"></script>
 <script type="module" src="site.js"></script>
+<script type="module" src="walk.js"></script>
 </body>
 </html>
