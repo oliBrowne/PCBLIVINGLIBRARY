@@ -93,6 +93,12 @@ def test_walkthrough_never_meets_the_site_stylesheet():
     shared = {"block", "wk", "head", "reveal", "eyebrow", "num", "sub"}
     assert tokens and all(t.startswith("wk-") or t in shared for t in tokens), sorted(tokens - shared)
     js = (SITE / "walk.js").read_text(encoding="utf-8")
+    # and the other way: no site.css rule may start on a bare class the walkthrough also uses (.layertabs, .n did)
+    mine = set(re.findall(r"\.([a-zA-Z_][\w-]*)", css))
+    site = re.sub(r"/\*.*?\*/", "", (SITE / "site.css").read_text(encoding="utf-8"), flags=re.S)
+    lead = [p.strip().split()[0] for s in re.findall(r"([^{}]+)\{", site) if not s.strip().startswith("@") for p in re.split(r",(?![^(]*\))", s) if p.strip()]
+    clash = [l for l in lead if re.fullmatch(r"(\.[\w-]+)+(:[\w-]+(\([^)]*\))?)*", l) and set(re.findall(r"\.([\w-]+)", l)) <= mine]
+    assert not clash, clash
     assert 'from "./hero-data.js"' in js            # the walkthrough draws the same generator output as the hero
 
 

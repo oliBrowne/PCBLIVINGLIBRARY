@@ -5,6 +5,7 @@
 .wk-top { display: flex; align-items: center; gap: 6px; margin-bottom: 18px; flex-wrap: wrap; }
 .wk-top [role="tab"] { font: 12px/1 var(--mono); border-radius: 999px; color: var(--muted); border: 1px solid var(--line); background: none; padding: 9px 14px; cursor: pointer; }
 .wk-top [role="tab"][aria-selected="true"] { color: var(--bg); background: var(--text); border-color: var(--text); }
+.wk-top .wk-play[hidden] { display: none; }
 .wk-top .wk-play { margin-left: auto; font: 12px/1 var(--mono); color: var(--muted); border: 1px solid var(--line); background: none; padding: 9px 14px; border-radius: 999px; cursor: pointer; }
 .wk-top .wk-ex { font: 11px var(--mono); color: var(--muted); margin-left: 10px; }
 
@@ -34,11 +35,11 @@
 .wk-steps li.on .bar i { background: var(--copper); animation: wkfill var(--d, 6s) linear forwards; }
 .wk.paused .wk-steps li.on .bar i, .wk:not(.seen) .wk-steps li.on .bar i { animation-play-state: paused; }
 @keyframes wkfill { to { transform: none; } }
-.wk-steps .n { font: 11px var(--mono); color: var(--muted); margin: 0 0 4px; }
+.wk-steps .sn { font: 11px var(--mono); color: var(--muted); margin: 0 0 4px; }
 .wk-steps h3 { font-size: 15px; margin: 0 0 4px; letter-spacing: -.01em; }
 .wk-steps p:last-child { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 @media (max-width: 900px) { .wk-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 560px) { .wk-steps { grid-template-columns: minmax(0, 1fr); gap: 12px; } .wk-steps li:not(.on) p:last-child { display: none; } .wk-top .wk-ex { display: none; } }
+@media (max-width: 560px) { .wk-steps { grid-template-columns: minmax(0, 1fr); gap: 12px; } .wk-steps:has(li.on) li:not(.on) p:last-child { display: none; } .wk-top .wk-ex { display: none; } }
 
 /* ---------- the tool window: fixed pixel layout inside .wk-cam ---------- */
 .wk-app { position: absolute; inset: 0; display: grid; grid-template-rows: 32px 28px 28px minmax(0, 1fr) 24px; font: 12px/1.2 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif; }
@@ -69,7 +70,7 @@
 .wk-app.altium .dt span { padding: 0 14px; display: inline-flex; align-items: center; gap: 7px; border-right: 1px solid #3a3a3a; transition: background .3s, color .3s; }
 .wk-app.altium .dt span.on { background: #474747; color: #fff; box-shadow: inset 0 2px 0 #2f7bd1; }
 .wk-app.altium .dt span.hot { background: #3b5675; color: #fff; }
-.wk-app.altium .dt i { width: 10px; height: 12px; border: 1px solid #d9c27a; background: #fffcf0; } .wk-app.altium .dt i.pcb { border-color: #6c8e5a; background: #24451c; }
+.wk-app.altium .dt i { width: 10px; height: 12px; border: 1px solid #d9c27a; background: #fffcf0; } .wk-app.altium .dt i.dpcb { border-color: #6c8e5a; background: #24451c; }
 .wk-app.altium .cv { background: #474747; border-right: 1px solid #3a3a3a; }
 .wk-app.altium .pn { background: #2b2b2b; }
 .wk-app.altium .pn h4 { margin: 0; padding: 9px 12px; font-size: 12px; font-weight: 600; background: #2f2f2f; display: flex; justify-content: space-between; border-bottom: 1px solid #3a3a3a; }
@@ -85,10 +86,10 @@
 .wk-app .prow.new { animation: wkrowin .6s var(--wk-ease) both; background: #33465c; } .wk-app .prow.new svg { stroke: #e8834a; }
 .wk-app .prow.new b::after { content: " new"; color: #5cb85a; font-weight: 400; font-size: 10.5px; }
 @keyframes wkrowin { from { opacity: 0; transform: translateY(-8px); } }
-.wk-app .layertabs { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; display: flex; align-items: center; gap: 1px; padding: 0 6px; background: #262626; border-top: 1px solid #3a3a3a; font-size: 10.5px; color: #cfcfcf; opacity: 0; transition: opacity .4s; }
-.wk-app .layertabs.on { opacity: 1; }
-.wk-app .layertabs span { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; } .wk-app .layertabs span.on { background: #474747; }
-.wk-app .layertabs i { width: 10px; height: 10px; }
+.wk-app .ltabs { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; display: flex; align-items: center; gap: 1px; padding: 0 6px; background: #262626; border-top: 1px solid #3a3a3a; font-size: 10.5px; color: #cfcfcf; opacity: 0; transition: opacity .4s; }
+.wk-app .ltabs.on { opacity: 1; }
+.wk-app .ltabs span { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; } .wk-app .ltabs span.on { background: #474747; }
+.wk-app .ltabs i { width: 10px; height: 10px; }
 
 /* KiCad PCB editor: light chrome around the navy canvas */
 .wk-app.kicad { color: #1c1c1c; background: #f3f3f3; grid-template-rows: 32px 26px 30px minmax(0, 1fr) 24px; }
@@ -140,9 +141,9 @@
 .wk-dlg .rows { margin: 4px 0 0; padding: 0; list-style: none; }
 .wk-dlg .rows li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #3d3d43; animation: wkrowin .45s var(--wk-ease) both; }
 .wk-dlg .rows li span:last-child { color: #9c9c9c; } .wk-dlg .rows li.ok span:last-child { color: #5cb85a; font-weight: 600; }
-.wk-dlg .note { margin-top: 10px; font-size: 13px; color: #9c9c9c; animation: wkrowin .45s var(--wk-ease) both; } .wk-dlg .note.ok { color: #5cb85a; }
+.wk-dlg .dnote { margin-top: 10px; font-size: 13px; color: #9c9c9c; animation: wkrowin .45s var(--wk-ease) both; } .wk-dlg .dnote.ok { color: #5cb85a; }
 .wk-dlg .status { margin-top: 10px; color: #9c9c9c; font-size: 12px; }
-.wk-dlg .status:empty, .wk-dlg .note:empty { display: none; }
+.wk-dlg .status:empty, .wk-dlg .dnote:empty { display: none; }
 .wk-dlg .meter { height: 3px; background: #3d3d43; margin-top: 6px; overflow: hidden; position: relative; }
 .wk-dlg .meter i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #2f77d9; transition: width .7s var(--wk-ease); }
 .wk-dlg .meter.swing i { width: 60px; animation: wkswing 1.3s ease-in-out infinite alternate; }

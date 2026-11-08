@@ -56,7 +56,7 @@ async function type(el, text) { el.classList.add("focus"); for (let i = 1; i <= 
 let capTimer;
 function say(text) {
   clearTimeout(capTimer);
-  if (!text) { cap.classList.remove("on"); return; }
+  if (!text) { cap.classList.remove("on"); cap.textContent = ""; return; }
   cap.innerHTML = `<i></i>${text}`; cap.classList.add("on");
 }
 
@@ -96,7 +96,7 @@ const D = (s) => $(s, dlg());
 const big = (t) => { D(".big").textContent = t; };
 const row = (a, b, ok = false) => D(".rows").insertAdjacentHTML("beforeend", `<li class="${ok ? "ok" : ""}"><span>${a}</span><span>${b}</span></li>`);
 async function rows(list, ms = 520) { for (const [a, b, ok] of list) { row(a, b, ok); await wait(ms); } }
-const note = (t, ok = false) => D(".notes").insertAdjacentHTML("beforeend", `<div class="note${ok ? " ok" : ""}">${t}</div>`);
+const note = (t, ok = false) => D(".notes").insertAdjacentHTML("beforeend", `<div class="dnote${ok ? " ok" : ""}">${t}</div>`);
 const status = (t) => { D(".status").textContent = t; };
 function meter(p) { const m = D(".meter"); m.hidden = p === null; m.classList.toggle("swing", p === "swing"); if (typeof p === "number") $("i", m).style.width = `${p * 100}%`; else $("i", m).style.width = ""; }
 function buttons(primary, secondary = "", busy = false) {
@@ -180,9 +180,9 @@ const ALT = {
     return `<div class="wk-app altium">
       <div class="tbar"><i class="ic"></i><span class="t">Board.PrjPcb - Altium Designer</span><span class="ctl"><b>—</b><b>☐</b><b>✕</b></span></div>
       <div class="mb">${["File", "Edit", "View", "Project", "Place", "Design", "Tools", "Reports", "ecadlib", "Window", "Help"].map((m) => `<span class="${m === "ecadlib" ? "ours" : ""}">${m}</span>`).join("")}</div>
-      <div class="dt"><span class="on" data-doc="sch"><i></i>Board.SchDoc</span><span data-doc="pcb"><i class="pcb"></i>Board.PcbDoc</span></div>
+      <div class="dt"><span class="on" data-doc="sch"><i></i>Board.SchDoc</span><span data-doc="pcb"><i class="dpcb"></i>Board.PcbDoc</span></div>
       <div class="mid"><div class="cv"><svg viewBox="0 0 790 508" class="alt-sch">${this.sheet()}</svg>
-        <div class="layertabs">${[["Top Layer", "#ff0000", 1], ["Bottom Layer", "#0000ff"], ["Mechanical 1", "#c000c0"], ["Top Overlay", "#ffff00"], ["Top Solder", "#800080"], ["Multi-Layer", "#c0c0c0"]].map(([n, c, on]) => `<span class="${on ? "on" : ""}"><i style="background:${c}"></i>${n}</span>`).join("")}</div></div>
+        <div class="ltabs">${[["Top Layer", "#ff0000", 1], ["Bottom Layer", "#0000ff"], ["Mechanical 1", "#c000c0"], ["Top Overlay", "#ffff00"], ["Top Solder", "#800080"], ["Multi-Layer", "#c0c0c0"]].map(([n, c, on]) => `<span class="${on ? "on" : ""}"><i style="background:${c}"></i>${n}</span>`).join("")}</div></div>
         <div class="pn"><h4>Components <span>≡</span></h4><div class="fld">ecadlib.DbLib <span>▾</span></div><div class="fld q">Search</div><div class="cols"><span>Design Item ID</span><span>Footprint</span></div>
           <div class="list">${prow("STM32G031K8T6", "MCU, LQFP-32", 6)}${prow("RC0603FR-072K4L", "2.4k 1% 0603")}${prow("GRM188R71C104KA01D", "100n 16V 0603")}${prow("B4B-PH-K-S", "Header, 4 pin", 3)}</div></div></div>
       <div class="sb"><span>X:1250mil Y:880mil</span><span>Grid:100mil</span><span>Hotspot Snap</span><span class="sp"></span><span>Panels</span></div>
@@ -296,7 +296,7 @@ const ALT = {
       await menuPick(design, ["Update Schematics in Board.PrjPcb", "Update PCB Document Board.PcbDoc", "-", "Rules...", "Board Shape ▸"], "Update PCB Document Board.PcbDoc");
       const tab = $('.dt [data-doc="pcb"]'); await click(tab);
       $('.dt [data-doc="sch"]').classList.remove("on"); tab.classList.add("on");
-      const svg = $(".alt-sch"); svg.innerHTML = this.pcb(); svg.classList.add("wk-swap", "alt-pcb"); $(".layertabs").classList.add("on");
+      const svg = $(".alt-sch"); svg.innerHTML = this.pcb(); svg.classList.add("wk-swap", "alt-pcb"); $(".ltabs").classList.add("on");
       $(".sb").innerHTML = "<span>X:4625mil Y:3020mil</span><span>Grid:5mil</span><span>(Hotspot Snap)</span><span class=\"sp\"></span><span>Panels</span>";
       moveHand(760, 470);
       await camTo(430, 255, 1.3, 600);
@@ -412,7 +412,7 @@ function setScene(name) {
   hand.style.transition = "none"; moveHand(720, 520); void hand.offsetWidth; hand.style.transition = "";
   say("");
   win.setAttribute("aria-label", name === "altium" ? "Altium Designer: checking the project BOM, approving the datasheet read, and placing TLC5951DAP" : "KiCad: adding TLC5951DAP from the ecadlib button and placing its footprint");
-  stepsEl.innerHTML = sc.steps.map(([h, p, d], k) => `<li data-k="${k}" style="--d:${d}s"><div class="bar"><i></i></div><p class="n">${String(k + 1).padStart(2, "0")}</p><h3>${h}</h3><p>${p}</p></li>`).join("");
+  stepsEl.innerHTML = sc.steps.map(([h, p, d], k) => `<li data-k="${k}" style="--d:${d}s"><div class="bar"><i></i></div><p class="sn">${String(k + 1).padStart(2, "0")}</p><h3>${h}</h3><p>${p}</p></li>`).join("");
 }
 function markStep(k) { $$("li", stepsEl).forEach((li, i) => { li.classList.toggle("on", i === k); li.classList.toggle("done", i < k); }); }
 async function runScene(name, from = 0) {
@@ -428,7 +428,7 @@ async function runScene(name, from = 0) {
 async function stillScene(name) {
   ++S.run; setScene(name); S.fast = true; root.classList.add("wk-fast");
   for (let k = 0; k < 4; k++) await SCENES[name].play(k);
-  S.fast = false; say(""); cam.style.transform = "none"; markStep(4);
+  S.fast = false; root.classList.remove("wk-fast"); say(""); cam.style.transform = "none"; markStep(4);
 }
 $$(".wk-top [role=tab]").forEach((b) => b.addEventListener("click", () => (still.matches ? stillScene(b.dataset.scene) : runScene(b.dataset.scene))));
 stepsEl.addEventListener("click", (e) => { const li = e.target.closest("li"); if (li && !still.matches) runScene(S.scene, +li.dataset.k); });
@@ -439,6 +439,6 @@ else {
   new IntersectionObserver(([e]) => {
     S.visible = e.isIntersecting; root.classList.toggle("seen", S.visible);
     if (S.visible) root.classList.add("in");
-    if (S.visible && !S.started) { S.started = true; setTimeout(() => runScene("altium"), 700); }
+    if (S.visible && !S.started) { S.started = true; setTimeout(() => { if (S.run === 0) runScene("altium"); }, 700); }
   }, { threshold: 0.35 }).observe(fitBox);
 }
