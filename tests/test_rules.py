@@ -281,3 +281,13 @@ def test_scanned_text_cannot_become_toml():
     raw = RU.parse_text(text)
     assert "altium365" not in raw and "sim" not in raw and raw["naming"]["case"] == "upper", text
     assert RU.parse_text(f"k = {RU._val('a' + chr(127))}")["k"] == "a\x7f"
+
+
+def test_dblib_tables_build_without_pandas_dtype_warnings():
+    """A part with no value in a numeric column (a NaN) must not fill "" into a float column: pandas warns now and
+    will raise in pandas 4, which would stop the Altium DbLib export."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        warnings.simplefilter("error", DeprecationWarning)
+        test_tools_use_house_names_at_the_boundaries()
