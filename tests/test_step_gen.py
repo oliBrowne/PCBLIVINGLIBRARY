@@ -359,6 +359,24 @@ def test_cli():
         assert out.read_text().startswith("ISO-10303-21;") and "AUTOMOTIVE_DESIGN" in out.read_text()
 
 
+def test_cli_takes_a_kicad_mod_file():
+    """`ecadlib step-gen FOOTPRINT` with a .kicad_mod file (what `footprint gen` writes): the model is named and shaped
+    from the footprint's own name and its pads, whatever the file is called; a file with an unknown name says so."""
+    from ecadlib import footprint_gen as FG
+    with tempfile.TemporaryDirectory() as d:
+        spec = json.loads((S.SPECS / "SOIC-16_3.9x9.9mm_P1.27mm.json").read_text())
+        text, _ = FG.build(spec)
+        mod = Path(d) / "renamed_by_user.kicad_mod"
+        mod.write_text(text)
+        out = Path(d) / "m.step"
+        assert S.main([str(mod), "-o", str(out)]) == 0
+        assert S.check(out.read_text())["errors"] == []
+        odd = Path(d) / "odd.kicad_mod"
+        odd.write_text(text.replace(f'(footprint "{spec["name"]}"', '(footprint "Foo_Bar"', 1))
+        assert S.main([str(odd), "-o", str(Path(d) / "o.step")]) == 2
+        assert S.main([str(Path(d) / "missing.kicad_mod"), "-o", str(Path(d) / "x.step")]) == 2
+
+
 def test_zero_size_name_is_a_value_error():
     """A degenerate footprint name (zero-size body) must raise ValueError so kicad_import falls back to a box."""
     for n in ("R_0000_0000Metric", "CP_Radial_D0mm_P0mm", "PinHeader_0x00_P2.54mm_Vertical"):
