@@ -490,7 +490,7 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         for n in v:
             print(f"  warning: {n}", file=sys.stderr)
     cols = columns(rules)
-    res = {k: pd.DataFrame(v, columns=cols).fillna("").drop_duplicates("Part Number") for k, v in sorted(out.items())}
+    res = {k: pd.DataFrame(v, columns=cols).astype(object).fillna("").drop_duplicates("Part Number") for k, v in sorted(out.items())}
     for df in res.values():
         df.attrs["kicad_fp"] = renamed
         df.attrs["unstorable"] = unstorable
