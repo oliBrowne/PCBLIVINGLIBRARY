@@ -401,6 +401,24 @@ def passive_pins(sym):
     return dict(sym, prims=prims)
 
 
+def house_symbol(sym, st, applied=None):
+    """The librarian's rules for any source's symbol (altium_lib dict), as put_sym writes it: the category's designator,
+    no pin names or numbers on a two-pin passive, every pin Passive on a passive part. st: {passive, folder}. The
+    KiCad export applies the same to a symbol it takes again from the source (kicad_export.house_rules); applied: a
+    set that gets the rules that changed something ("designator", "quiet", "passive")."""
+    applied = set() if applied is None else applied
+    for rule, fn, when in (("designator", lambda s: category_designator(s, st.get("folder")), lambda s: True),
+                           ("quiet", quiet_two_pin, lambda s: st.get("passive") or
+                            re.match(r"(FB|[RCLYX])\??$", str(s.get("designator") or "").upper())),
+                           ("passive", passive_pins, lambda s: st.get("passive"))):
+        if when(sym):
+            new = fn(sym)
+            if new is not sym:
+                applied.add(rule)
+            sym = new
+    return sym
+
+
 def _hold_lost_copper(st, name, notes):
     """kicad_import dropped copper it has no Altium layer for (B.Cu graphics, inner copper): the .PcbLib lacks copper
     the KiCad footprint has, so the part is held for a person (a net tie's bottom bridge, an antenna's ground)."""
@@ -409,13 +427,20 @@ def _hold_lost_copper(st, name, notes):
         st.setdefault("verify", []).append(held)
 
 
-def passive_kind(item):
+def passive_kind(item, ln=None):
+    """R / C / CP / L / LED for a part that takes the generic passive symbol and a chip land by package, else None.
+    The description decides too: a part it calls an array, a common-mode choke, 4-terminal or RGB is not a two-pin
+    passive (None: it is looked up by its part number like any other part), and a capacitor it calls tantalum /
+    polymer / electrolytic is polarized whatever its part number is."""
     from . import stdparts as SP
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
+    desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), (ln or {}).get("description")) if x))
+    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc):
+        return None
     if cat == "Resistors":
         return "R"
     if cat == "Capacitors":
-        return "CP" if fp.startswith("CP_") else "C"
+        return "CP" if fp.startswith("CP_") or SP.says_polarized(desc) else "C"
     if cat == "Inductors":
         return "L"
     if cat == "Diodes" and (fp.startswith("LED_") or SP.says_led(item.get("description"))):
@@ -581,11 +606,7 @@ class Run:
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
         if st.get("kind") in SHARED_KINDS:      # one Resistor / Capacitor / Inductor symbol for every value and size,
             sym = shared_symbol(sym)            # whichever source drew it: no footprint, no one part's MPN
-        sym = category_designator(sym, st.get("folder"))
-        if st.get("passive") or re.match(r"(FB|[RCLYX])\??$", str(sym.get("designator") or "").upper()):
-            sym = quiet_two_pin(sym)
-        if st.get("passive"):
-            sym = passive_pins(sym)
+        sym = house_symbol(sym, st)
         fr = st.get("footprint") or {}
         if fr.get("renamed_from") and sym.get("footprint") == fr["renamed_from"]:     # footprint renamed (fp_share)
             sym = dict(sym, footprint=fr["name"])
@@ -640,7 +661,7 @@ class Run:
         dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
-        kind, fp_name, sym_name = passive_kind(item), item["footprint"]["ref"], item["symbol"]["ref"]
+        kind, fp_name, sym_name = passive_kind(item, ln), item["footprint"]["ref"], item["symbol"]["ref"]
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
@@ -1732,13 +1753,11 @@ DECISIONS = ("allow", "approvals", "duplicate_of")    # what people decide on a 
 
 
 def _decisions_lock(plan_f):
-    """The workspace's plan lock (<ws>/plan.lock, which every decision recorder takes) while the run settles and
-    writes its plan, for a plan in a workspace (<ws>/librarian/<name>/plan.json); else no lock."""
-    import contextlib
-    from .approvals import plan_workspace
+    """The plan lock every decision recorder takes (approvals.plan_lock_dir: <ws>/plan.lock for a workspace plan,
+    else plan.lock beside plan.json) while the run settles and writes its plan."""
+    from .approvals import plan_lock_dir
     from .fsutil import plan_lock
-    ws = plan_workspace(plan_f)
-    return plan_lock(ws, wait=True) if ws is not None else contextlib.nullcontext()
+    return plan_lock(plan_lock_dir(plan_f), wait=True)
 
 
 def _fresh_decisions(old, plan_f):

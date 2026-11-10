@@ -5,7 +5,7 @@ normal CI job stays green; .github/workflows/tests.yml has an optional job that 
 pcbnew lives in KiCad's own Python (usually /usr/bin/python3), so pcbnew work runs in tests/kicad_pcbnew_job.py
 in a subprocess and comes back as JSON; everything is compared here.
 
-What KiCad checks (checked with KiCad 7.0.11 here):
+What KiCad checks (checked with KiCad 7.0.11, 9.0.9 and 10.0.8; CI also runs KiCad 8):
   * every footprint footprint_gen / footprint_adv makes (all package_specs, density A and C of the IPC parts, random
     BGA / header / connector specs) loads in pcbnew with our pads, layers, courtyard (one closed outline, same box)
     and graphics; kicad-cli upgrades and plots them;
@@ -78,6 +78,9 @@ def pcbnew_job(job, **args):
 
 
 def cli(*args):
+    """kicad-cli. For `... export svg ... -o DIR` the folder is made first: KiCad 10 no longer creates it."""
+    if tuple(map(str, args[1:3])) == ("export", "svg") and "-o" in args:
+        Path(args[args.index("-o") + 1]).mkdir(parents=True, exist_ok=True)
     return subprocess.run([kicad_cli(), *map(str, args)], capture_output=True, text=True, timeout=900)
 
 
@@ -184,12 +187,32 @@ def test_kicad_cli_upgrades_and_plots_footprints():
         assert r.returncode == 0 and len(list((Path(d) / "svg").glob("*.svg"))) == len(list(lib.glob("*.kicad_mod"))), r.stdout + r.stderr
 
 
+def test_a_through_hole_polygon_pads_hole_is_where_the_table_puts_it_in_pcbnew():
+    # reviewer 2026-10-31: the custom pad's anchor (and so its drill) moved to the polygon's interior point
+    if not pcbnew_python():
+        return _skip("pcbnew (KiCad's Python module)")
+    from tests.test_footprints_advanced import _poly_tht
+    with tempfile.TemporaryDirectory() as d:
+        lib = Path(d) / "poly.pretty"
+        lib.mkdir()
+        at = {"P0": (2.0, 0.0), "P1": (-2.0, 3.0)}
+        for name, (x, y) in at.items():
+            (lib / f"{name}.kicad_mod").write_text(F.build(dict(_poly_tht(x, y), name=name))[0])
+        got = pcbnew_job("load", lib=str(lib))
+        for name, (x, y) in at.items():
+            p1 = next(p for p in got[name]["pads"] if p["num"] == "1")
+            assert p1["custom"] and abs(p1["x"] - x) < 1e-4 and abs(p1["y"] - y) < 1e-4, (name, p1)
+            assert p1["drill"] == [1.0, 1.0] and p1["w"] >= 1.0 + 0.3 - 1e-6, (name, p1)
+
+
 def test_drc_on_a_board_of_generated_footprints():
     if not pcbnew_python():
         return _skip("pcbnew (KiCad's Python module)")
     with tempfile.TemporaryDirectory() as d:
         lib = _all_footprints(d, random_specs=0)
         found = pcbnew_job("drc", lib=str(lib), board=str(Path(d) / "drc.kicad_pcb"))
+        assert found, "no DRC findings read: the known ones (thermal-via drills, USB-C) are missing, so the report " \
+                      "was not parsed"
         bad = {}
         for name, kinds in found.items():
             t = sexpr.parse((lib / f"{name}.kicad_mod").read_text())

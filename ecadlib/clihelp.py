@@ -89,6 +89,8 @@ EXAMPLES = {
     "plugins": ["ecadlib plugins list", "ecadlib plugins export myexporter ws/library/plan.json -o out/x"],
     "notify": ["ecadlib notify show", "ecadlib notify test --event upkeep_changes"],
     "kicad-dblib": ["ecadlib kicad-dblib ws/library/plan.json -o ws/kicad --name mylib --export"],
+    "kicad-install": ["ecadlib kicad-install ~/kicad-libs/mylib --dry-run", "ecadlib kicad-install ~/kicad-libs/mylib",
+                      "ecadlib kicad-install ~/kicad-libs/mylib --uninstall"],
     "export-parts": ["ecadlib export-parts ws/library/plan.json --format xlsx -o parts.xlsx"],
     "parity": ["ecadlib parity ws/library/plan.json", "ecadlib parity ws/library/plan.json --kicad ws/kicad --altium ws/altium",
                "ecadlib parity survey --quick"],

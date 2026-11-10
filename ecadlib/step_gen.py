@@ -841,6 +841,9 @@ def _on_pad(cx, cy, p, slack=0.6):
     return abs(cx - p["x"]) <= w / 2 + slack and abs(cy - p["y"]) <= h / 2 + slack
 
 
+BALL_SLACK = 0.1                                # mm a BGA ball's centre may sit off its land's edge
+
+
 def fit_rotation(spec, pads, checked=False):
     """Rotation (0 / 90 / 180 / 270) that puts each lead of the model on the footprint pad with the same number, or None.
     A footprint name does not fix the orientation: EasyEDA draws the same SOT-23-3_L2.9-W1.3-... with the pin rows
@@ -860,16 +863,18 @@ def fit_rotation(spec, pads, checked=False):
             by_num.setdefault(str(p["designator"]), []).append(p)
     leads = []
     for sol in solids:
-        m = re.fullmatch(r"(?:pin|terminal) (\S+)", sol.name)
+        m = re.fullmatch(r"(pin|terminal|ball) (\S+)", sol.name)
         if m:                                   # the lead's foot (its lowest face) is what lands on the pad / in the hole:
             z0 = min(v[2] for v in sol.verts)   # a long axial lead's bounding box centre is half way to the body
             foot = [v for v in sol.verts if v[2] <= z0 + 1e-6]
             xs, ys = [v[0] for v in foot], [v[1] for v in foot]
-            leads.append((m.group(1), (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2))
-    if len(leads) < 2 or any(n not in by_num for n, _, _ in leads):
+            # a ball sits on the middle of its land: a lead's 0.6 mm slack would take a ball one fine pitch over
+            slack = BALL_SLACK if m.group(1) == "ball" else 0.6
+            leads.append((m.group(2), (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, slack))
+    if len(leads) < 2 or any(n not in by_num for n, _, _, _ in leads):
         return None
     def fits(rot):
-        return all(any(_on_pad(*_turn(cx, cy, rot), p) for p in by_num[n]) for n, cx, cy in leads)
+        return all(any(_on_pad(*_turn(cx, cy, rot), p, sl) for p in by_num[n]) for n, cx, cy, sl in leads)
     own = int(spec.get("rotation") or 0) % 360
     if fits(own):
         return own
@@ -1139,9 +1144,23 @@ def _check_breps(E, tol):
 
 
 # ---------------------------------------------------------------- CLI
+def _footprint_file(path):
+    """A .kicad_mod file -> (package name, generate() kwargs): the name inside the file (a user may have renamed the
+    file), else the file name; the pads so the model is turned to sit on them. ValueError for a missing or bad file."""
+    from .kicad_import import convert_footprint
+    p = Path(path)
+    if not p.is_file():
+        raise ValueError(f"{path}: no such footprint file")
+    fp, _ = convert_footprint(p.read_text(encoding="utf-8-sig", errors="replace"))
+    name = str(fp.get("name") or p.stem)
+    if spec_from_name(name) is None and spec_from_name(p.stem) is not None:
+        name = p.stem
+    return name, {"name": name, "pads": fp["pads"]}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Generate a package-shaped STEP model, or check STEP files")
-    ap.add_argument("src", nargs="+", help="package spec .json, footprint name (e.g. SOIC-8_3.9x4.9mm_P1.27mm), or with --check STEP files")
+    ap.add_argument("src", nargs="+", help="package spec .json, footprint name (e.g. SOIC-8_3.9x4.9mm_P1.27mm) or .kicad_mod file, or with --check STEP files")
     ap.add_argument("-o", "--out", help="output .step (default <name>.step)")
     ap.add_argument("--height", type=float, help="overall height, mm (default: spec height_max, else a per-package table)")
     ap.add_argument("--check", action="store_true", help="validate the given STEP files instead")
@@ -1160,7 +1179,10 @@ def main(argv=None):
     if len(a.src) != 1:
         ap.error("give one spec or footprint name (or --check FILES)")
     try:
-        text, info = generate(a.src[0], a.height)
+        src, kw = a.src[0], {}
+        if src.lower().endswith(".kicad_mod"):      # a footprint file: its own name and pads, not the file name
+            src, kw = _footprint_file(src)
+        text, info = generate(src, a.height, **kw)
     except ValueError as e:
         print(f"step_gen: {e}", file=sys.stderr)
         return 2

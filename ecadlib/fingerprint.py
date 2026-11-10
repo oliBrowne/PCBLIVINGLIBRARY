@@ -568,8 +568,9 @@ def flatten(chain):
 
 def kicad_symbol(sym):
     """A KiCad symbol (node or `extends` chain) -> the symbol part of a fingerprint, and its properties."""
+    from .kicad_import import public_prop
     sym = flatten(sym)
-    props = {str(p[1]): "" if str(p[2]) == "~" else str(p[2]) for p in sexpr.find(sym, "property")}
+    props = {str(p[1]): "" if str(p[2]) == "~" else str(p[2]) for p in map(public_prop, sexpr.find(sym, "property"))}
     pins, art, units, styles = [], [], set(), set()
     for u in sexpr.find(sym, "symbol"):
         parts = str(u[1]).rsplit("_", 2)

@@ -37,7 +37,7 @@ def test_rmn5_dash_values_reach_run_job(monkeypatch):
     from tests.test_tool_packages import _plugin_module
     mod, _ = _plugin_module()
     got = {}
-    monkeypatch.setattr(KM, "run_job", lambda job, action, project, mpn, manufacturer, path, offline=False, ai=None:
+    monkeypatch.setattr(KM, "run_job", lambda job, action, project, mpn, manufacturer, path, offline=False, ai=None, kicad=None:
                         got.update(job=job, project=project, mpn=mpn, manufacturer=manufacturer, path=path, ai=ai)
                         or {"status": "ok"})
     for maker in ("TI", "-TI", "--", "-"):

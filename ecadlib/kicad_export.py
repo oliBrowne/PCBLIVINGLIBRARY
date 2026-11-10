@@ -13,7 +13,8 @@ Writes into DIR:
                      <project>/ecadlib/ -> ${KIPRJMOD}/ecadlib/<lib>.3dshapes/X.step)
   <lib>.sim/         SPICE model files of parts with an attached simulation model (`ecadlib sim-models --attach`);
                      their symbols carry Sim.Device / Sim.Library "<lib>.sim/<file>" / Sim.Name / Sim.Pins / Sim.Params
-  sym-lib-table, fp-lib-table   the library's row (uri ${KIPRJMOD}/...) added or replaced; other rows are kept, so
+  sym-lib-table, fp-lib-table   the library's row (uri ${KIPRJMOD}/...; with --project from the same folder as the
+                     model paths: ${KIPRJMOD}/ecadlib/<lib>.pretty) added or replaced; other rows are kept, so
                      -o can be the KiCad project folder itself (or copy DIR's contents / the `lib` lines there)
   kicad_export.json  what came from where, and the checks below
 Symbols, by the plan item's `source.symbol`:
@@ -125,6 +126,8 @@ def sym_kicad8(node):
     """One symbol (or any node in it) written the KiCad 8 way; returns a new tree."""
     if not isinstance(node, list):
         return node
+    if node and node[0] == "property":       # KiCad 9 (property private "name" ...): KiCad 7 / 8 refuse the library
+        node = K.public_prop(node)
     out, hide = [node[0]], False
     for c in node[1:]:
         if not isinstance(c, list) or not c:
@@ -186,7 +189,7 @@ def flatten(chain, name):
     base = chain[-1]
     props, order = {}, []
     for s in reversed(chain):
-        for p in sexpr.find(s, "property"):
+        for p in map(K.public_prop, sexpr.find(s, "property")):    # a KiCad 9 private field by its name
             if p[1] not in props:
                 order.append(p[1])
             props[p[1]] = copy.deepcopy(p)
@@ -399,6 +402,50 @@ def symbol_from_schlib(path, name, notes, pick=None):
     return sym
 
 
+def house_rules(sym, item):
+    """A KiCad symbol taken again from the part's source -> the same symbol with the librarian's rules applied as the
+    .SchLib has them (librarian.house_symbol, on the symbol converted to Altium): the category's designator (a crystal
+    Y, not EasyEDA's U), no pin names or numbers on a two-pin passive, every pin passive on a passive part (R / C / L /
+    crystal). The drawing stays the source's. Changed in place; returned."""
+    from . import librarian as L
+    try:
+        conv = K.convert_symbol([sym], str(sym[1]), None, [], None, [])
+    except ValueError:
+        return sym
+    applied = set()
+    got = L.house_symbol(conv, {"passive": L.is_passive_part(item), "folder": item.get("folder")}, applied)
+    if "designator" in applied:
+        for p in sexpr.find(sym, "property"):
+            if str(p[1]) == "Reference":
+                p[2] = Q(str(got["designator"]).rstrip("?"))
+    if "quiet" in applied:
+        for key in ("pin_numbers", "pin_names"):
+            node = sexpr.first(sym, key)
+            if node is None:
+                sym.insert(2, [key, "hide"])
+            elif not K._hidden(node):
+                node[:] = [c for c in node if not (isinstance(c, list) and c[:1] == ["hide"])] + ["hide"]
+    if "passive" in applied:
+        for u in sexpr.find(sym, "symbol"):
+            for p in sexpr.find(u, "pin"):
+                p[1] = "passive"
+    return sym
+
+
+def _pin_text_shown(entry):
+    """A released / fetched .SchLib entry -> (designator, {pin number: (name shown, number shown)}) for the pins that
+    show (stacked pins left out: the house layout may stack power pins the source draws apart)."""
+    recs = entry["records"]
+    des = next((str(r.get("TEXT", "")) for r in recs if r.get("RECORD") == "34"), "")
+    pins = [r for r in recs if r.get("RECORD") == "2" and not r["conglomerate"] & 0x04]
+    at = {}
+    for r in pins:
+        at.setdefault((r.get("part"), r.get("mode"), r["x"], r["y"]), set()).add(str(r["num"]))
+    stacked = {n for s in at.values() if len(s) > 1 for n in s}
+    return des, {str(r["num"]): (bool(r["conglomerate"] & 0x08), bool(r["conglomerate"] & 0x10))
+                 for r in pins if str(r["num"]) not in stacked}
+
+
 def released_differs(item, plan_dir, sym):
     """A symbol fetched again from the part's source (KiCad, --lib, EasyEDA) against the released revision, the item's
     .SchLib (publish_guard has put a held change back) -> the changes that are more than cosmetic (pin names and types,
@@ -421,12 +468,31 @@ def released_differs(item, plan_dir, sym):
         with tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as tmp:
             _, entries = AL.read_schlib(AL.write_schlib(Path(tmp) / "fetched.SchLib", [conv]))
         fetched = FP.altium_symbol(entries[0])[0]
+        _, released_entries = AL.read_schlib(plan_dir / f)
+        marks = (_pin_text_shown(_pick(released_entries, item["symbol"].get("ref"), plan_dir / f, "symbol")),
+                 _pin_text_shown(entries[0]))
     except (ValueError, KeyError, IndexError, OSError) as e:
         return [{"class": "electrical", "text": f"the fetched symbol cannot be compared ({type(e).__name__}: {e})"}]
     got = copy.deepcopy(rel)
     got["symbol"] = dict(fetched, name=rel["symbol"].get("name"))
     got["hashes"] = FP.hashes(got)
-    return [c for c in CD.diff(rel, got) if c["class"] != "cosmetic" and not c.get("drawing")]
+    out = [c for c in CD.diff(rel, got) if c["class"] != "cosmetic" and not c.get("drawing")]
+    (rdes, rpins), (fdes, fpins) = marks          # what the house rules set (librarian.house_symbol): the designator,
+    if rdes.rstrip("?").upper() != fdes.rstrip("?").upper():    # pin names / numbers shown or not
+        out.append({"class": "identity", "area": "symbol", "what": "designator", "old": rdes, "new": fdes,
+                    "text": f"designator {fdes or '-'} (released {rdes or '-'})"})
+    for n in sorted(set(rpins) & set(fpins), key=_natural_num):
+        for i, what in enumerate(("name", "number")):
+            if rpins[n][i] != fpins[n][i]:
+                out.append({"class": "geometry-minor", "area": "symbol", "what": f"pin {what} shown",
+                            "old": rpins[n][i], "new": fpins[n][i],
+                            "text": f"pin {n}: {what} {'shown' if fpins[n][i] else 'hidden'} "
+                                    f"(released: {'shown' if rpins[n][i] else 'hidden'})"})
+    return out
+
+
+def _natural_num(s):
+    return [int(x) if x.isdecimal() else x for x in re.split(r"(\d+)", str(s))]
 
 
 def kicad_pin_details(sym):
@@ -551,7 +617,7 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
     try:
         if src.startswith("kicad:"):
             chain, _ = K.load_symbol(src[6:], http, keep_quotes=True)
-            got = released(flatten(chain, name), f"KiCad {src[6:]} (reused" + (", flattened from " + " -> ".join(str(s[1]) for s in chain[1:]) if len(chain) > 1 else "") + ")")
+            got = released(house_rules(flatten(chain, name), item), f"KiCad {src[6:]} (reused" + (", flattened from " + " -> ".join(str(s[1]) for s in chain[1:]) if len(chain) > 1 else "") + ")")
             if got:
                 return got
         if src.startswith("local:"):
@@ -559,7 +625,7 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
             f = next((p for r in libs for p in sorted(Path(r).rglob(f"{lib}.kicad_sym"))), None)
             if f:
                 chain, _ = K.load_symbol(f"{f}:{sname}", None, keep_quotes=True)
-                got = released(flatten(chain, name), f"local KiCad {lib}:{sname} (reused from {f.name})")
+                got = released(house_rules(flatten(chain, name), item), f"local KiCad {lib}:{sname} (reused from {f.name})")
                 if got:
                     return got
             else:
@@ -573,6 +639,10 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
                 sub = []
                 t = sexpr.parse(EC.symbol_to_kicad(ds, name, "", {}, sub), keep_quotes=True)
                 ks = K._find_symbol(t, name)
+                for p in sexpr.find(ks, "property"):     # the credit goes in the plan's Library Credit field, as the
+                    if str(p[1]) == "Credit":           # .SchLib has it (one field, not Credit and Library Credit)
+                        p[1] = Q("Library Credit")
+                house_rules(ks, item)
                 f = item["symbol"].get("file")
                 npins = len({str(sexpr.first(p, "number")[1]) for u in sexpr.find(ks, "symbol") for p in sexpr.find(u, "pin")})
                 from . import symbol_layout as SL
@@ -1046,27 +1116,35 @@ def footprint_failures(item, plan_dir, kmod):
     return [f"{r}: {m}" for r, m in fails if r == "footprint"]
 
 
+class _Held(Exception):
+    """Raised inside export() to leave a part's footprint step: the part is held, nothing of it is written."""
+
+
 def _pins(sym):
     return {str(sexpr.first(p, "number")[1]) for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin") if sexpr.first(p, "number")}
 
 
 # ---------------------------------------------------------------- driver
-def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, take_over=False):
+def export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, take_over=False,
+           models_var=None):
     """Write the KiCad library for plan.json into `out`; returns the report dict (also kicad_export.json).
     rules: library rules (dict or path); None = the ecadlib.toml found from the plan's folder, if any.
     project: the KiCad project folder that uses the library (KIPRJMOD), when `out` is not that folder itself (the
     KiCad window's <project>/ecadlib/): the 3D model paths are written from there (models_at). None: the folder an
     earlier export into `out` was given, else `out` is taken as the project folder.
     The library lock is held for the whole export (change control: the files read are the settled ones).
-    take_over: write library `name` into `out` although another plan folder wrote it there (else PlanError)."""
+    take_over: write library `name` into `out` although another plan folder wrote it there (else PlanError).
+    models_var: a KiCad path variable (ECADLIB_DIR_MYLIB) the 3D model paths start from instead (${VAR}/<lib>.3dshapes),
+    for a library installed into KiCad itself (kicad_install sets VAR to `out`); remembered for later exports."""
     import tempfile
     from . import change_gate as CG
     with CG.publishing(Path(plan).parent), tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as stage:
-        return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage, take_over=take_over)
+        return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage, take_over=take_over,
+                       models_var=models_var)
 
 
 def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, rules=None, project=None, stage=None,
-            take_over=False):
+            take_over=False, models_var=None):
     plan, out = Path(plan), Path(out)
     plan_dir, lib = plan.parent, libname(name)
     from .rules import resolve
@@ -1118,7 +1196,13 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         {f"{lib}.kicad_sym"} | {f"{lib}.pretty/{k}.kicad_mod" for k in mine.get("footprints") or {}}
         | {f"{lib}.3dshapes/{k}" for k, v in (mine.get("models") or {}).items() if v}) if mine else set()
     was_at = mine.get("models_at")              # where an earlier export (given the project) put the model paths
-    at = models_at(lib, out, project) if project is not None else \
+    if models_var:
+        from .kicad_install import check_var
+        try:
+            check_var(models_var)
+        except ValueError as e:
+            raise PlanError(str(e)) from None
+    at = f"${{{models_var}}}/{lib}.3dshapes" if models_var else models_at(lib, out, project) if project is not None else \
         was_at if isinstance(was_at, str) and was_at.endswith(f"/{lib}.3dshapes") else models_at(lib)
     rep["models_at"] = at
 
@@ -1231,6 +1315,28 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             (d / Path(path).name).write_bytes(released_bytes(it, Path(path)))
             staged[key] = d / Path(path).name
         return staged[key]
+    def hold_now(it, why):
+        """A part the export's own last checks fail (the footprint as written here; symbol pins against its pads):
+        held like one the release check held. Nothing of it is written, and a version exported before stays."""
+        from . import messages as M
+        rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(why), "recheck": why,
+                               "says": [{k: e[k] for k in ("code", "text", "fix")} for e in M.explain_all(why)]})
+        held.append((it, why))
+
+    fp_undo = {}                               # footprint name -> (file, bytes before | None, written-hash before | None)
+
+    def undo_fp(fpn):
+        """Take back the footprint file this run wrote for a part that is held after all."""
+        path, data, was = fp_undo.pop(fpn)
+        rel = path.relative_to(out).as_posix()
+        if data is None:
+            path.unlink(missing_ok=True)
+        elif path.read_bytes() != data:
+            fsutil.write_bytes_atomic(path, data)
+        (rep["written"].pop(rel, None) if was is None else rep["written"].__setitem__(rel, was))
+        fps.pop(fpn, None)
+        fp_src.pop(fpn, None)
+
     for it in items:
         status = it.get("status", "ready")
         if status == "held" and not include_held:
@@ -1258,6 +1364,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             it = dict(it, source=dict(it["source"], symbol=""))
         row = {"part": it["name"], "symbol_name": sname, "status": status, "symbol": None, "footprint": None, "notes": notes,
                "held": status == "held" or bool(why)}    # --include-held wrote it while held: never kept as released
+        fp_failed = None
         if sname in symbols:
             rep["errors"].append(f"{it['name']}: symbol name {sname} already used by another part"); continue
         src = it.get("source") or {}
@@ -1288,6 +1395,21 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                 fp_src[fpn] = text
                 tree, models = footprint_tree(text, fpn, lib, fnotes, at)
                 sexpr.parse(sexpr.dumps(tree) + "\n")
+                # checked BEFORE anything of it is written (the 3D steps below only add (model ...) nodes): a
+                # footprint that fails more than in the release check is not put in the library (review 2026-11-10)
+                probe = Path(stage) / "check" / f"{len(fps)}" / f"{fpn}.kicad_mod"
+                probe.parent.mkdir(parents=True, exist_ok=True)
+                probe.write_text(sexpr.dumps(tree) + "\n", encoding="utf-8")
+                new = footprint_failures(it, plan_dir, probe)
+                had = [f for f in (it.get("release_check") or {}).get("failures", []) if f.startswith("footprint:")]
+                worse = [f for f in new if f not in had]
+                if worse:
+                    rep["errors"].append(f"footprint {fpn}: fails more than in the release check: {'; '.join(worse)}")
+                    if not include_held:
+                        fp_src.pop(fpn, None)
+                        fp_failed = worse
+                        raise _Held()
+                    row["held"] = True          # written because asked (--include-held): never kept as released
                 mnodes = list(sexpr.find(tree, "model"))
                 for k, (src3d, fn0) in enumerate(models):
                     local = _local_model(src3d, fn0, libs)
@@ -1352,19 +1474,22 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                     fnotes[:] = [n for n in fnotes if not n.startswith("3D body")]   # it is converted, after all
                 elif not models:
                     fnotes.append("no 3D model (no KiCad model and no 3D body in the .PcbLib)")
-                put(pretty / f"{fpn}.kicad_mod", sexpr.dumps(tree) + "\n")
-                new = footprint_failures(it, plan_dir, pretty / f"{fpn}.kicad_mod")
-                had = [f for f in (it.get("release_check") or {}).get("failures", []) if f.startswith("footprint:")]
-                worse = [f for f in new if f not in had]
+                fp_file = pretty / f"{fpn}.kicad_mod"
+                fp_undo[fpn] = (fp_file, fp_file.read_bytes() if fp_file.is_file() else None,
+                                rep["written"].get(fp_file.relative_to(out).as_posix()))
+                put(fp_file, sexpr.dumps(tree) + "\n")
                 fps[fpn] = {"from": how, "by": it["name"], "notes": fnotes, "check": "same as release check" if not worse else "new failures",
                             "failures": new}
-                if worse:
-                    rep["errors"].append(f"footprint {fpn}: fails more than in the release check: {'; '.join(worse)}")
+            except _Held:
+                pass
             except Exception as e:             # one bad part must not stop the export
                 rep["errors"].append(f"footprint {fpn} ({it['name']}): {type(e).__name__}: {e}")
                 fpn = None
         elif fpn is None:
             notes.append("no footprint in the plan")
+        if fp_failed:
+            hold_now(it, fp_failed)
+            continue
         row["footprint"] = fpn if fpn in fps else None
         if not (it.get("source") or {}).get("symbol") and not it["symbol"].get("file"):
             notes.append("no symbol in the plan: not in the .kicad_sym")
@@ -1385,15 +1510,21 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             sym[:] = [c for c in sym if not (isinstance(c, list) and c[0] == "property" and str(c[1]) in gone)]
             set_fields(sym, fields)
             sym[:] = [c for c in sym if not (isinstance(c, list) and c[:2] == ["property", "ki_description"])]   # KiCad 7 -> Description
-            symbols[sname] = sym
-            row["symbol"] = how
-            if row["footprint"]:
+            if row["footprint"]:               # before the symbol goes into the library
                 pads = {p[1] for p in sexpr.find(sexpr.parse((pretty / f"{row['footprint']}.kicad_mod").read_text(encoding="utf-8")), "pad") if p[1]}
                 missing = sorted(_pins(sym) - pads)
                 if missing:                   # a pin with no pad: the symbol / footprint pair is wrong (exit 1)
+                    msg = f"symbol pins without a pad in {lib}:{row['footprint']}: {', '.join(missing)}"
+                    rep["errors"].append(f"{it['name']}: {msg}")
+                    if not include_held:      # held: no symbol, and the footprint this part wrote is taken back
+                        if row["footprint"] in fp_undo and fps[row["footprint"]].get("by") == it["name"]:
+                            undo_fp(row["footprint"])
+                        hold_now(it, [f"pins: {msg}"])
+                        continue
                     notes.append(f"symbol pins without a pad in {row['footprint']}: {', '.join(missing)}")
-                    rep["errors"].append(f"{it['name']}: symbol pins without a pad in {lib}:{row['footprint']}: "
-                                         f"{', '.join(missing)}")
+                    row["held"] = True
+            symbols[sname] = sym
+            row["symbol"] = how
         except Exception as e:
             rep["errors"].append(f"symbol {it['name']}: {type(e).__name__}: {e}")
         rep["parts"].append(row)
@@ -1440,10 +1571,11 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                                                 or f"{lib}.3dshapes/{fn}" in owned):
             rep["written"][f"{lib}.3dshapes/{fn}"] = _sha(shapes / fn)
     desc = f"ecadlib export of {plan.name}"
-    from .kicad_dblib import add_lib_row          # the row for this library; other rows (a project's own, another
-    for kind, table, uri in (("sym", "sym_lib_table", f"{lib}.kicad_sym"), ("fp", "fp_lib_table", f"{lib}.pretty")):  # export) stay
+    base = at[:-len(f"/{lib}.3dshapes")]        # the rows start where the model paths do (${KIPRJMOD}/ecadlib with
+    from .kicad_dblib import add_lib_row          # --project): the row for this library; other rows (a project's own,
+    for kind, table, uri in (("sym", "sym_lib_table", f"{lib}.kicad_sym"), ("fp", "fp_lib_table", f"{lib}.pretty")):  # another export) stay
         try:                                  # a table it cannot edit: the library is written; say so, keep the report
-            add_lib_row(out / f"{kind}-lib-table", lib, f"${{KIPRJMOD}}/{uri}", desc, "KiCad", table, warnings=rep["warnings"])
+            add_lib_row(out / f"{kind}-lib-table", lib, f"{base}/{uri}", desc, "KiCad", table, warnings=rep["warnings"])
         except (ValueError, OSError) as e:
             rep["warnings"].append(f"{kind}-lib-table not updated: {e}")
     notice = out / "NOTICE.txt"               # a project's own NOTICE.txt is kept: the KiCad notice is added to it
@@ -1476,7 +1608,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     return rep
 
 
-def print_result(rep, out, plan, t=None):
+def print_result(rep, out, plan, t=None, installing=False):
     """Terminal view of an export: a row per part (-v: with the conversion notes), skipped parts with the reason in
     plain words, errors, then the summary (what was written, how to add it in KiCad)."""
     from . import messages as M, term as TM
@@ -1506,20 +1638,25 @@ def print_result(rep, out, plan, t=None):
     held = [s for s in rep["skipped"] if s not in waiting and s["part"] not in kept]
     waiting = [s for s in waiting if s["part"] not in kept]
     q = lambda p: _shell_quote(str(p))
+    at = str(rep.get("models_at") or f"${{KIPRJMOD}}/{lib}.3dshapes")
+    base = at[:-len(f"/{lib}.3dshapes")] if at.endswith(f"/{lib}.3dshapes") else "${KIPRJMOD}"   # where the rows start
     head = (f"{M.plural(rep['symbols'], 'symbol')}, {M.plural(len(rep['footprints']), 'footprint')}, "
             f"{steps}/{len(rep['models'])} 3D models written"
             + (f"; {M.plural(len(held), 'held part')} left out (--include-held adds them)" if held else "")
             + (f"; {M.plural(len(waiting), 'part')} waiting for sign-off left out" if waiting else "")
             + (f"; {M.plural(len(kept), 'held part')} kept as exported before" if kept else ""))
     t.summary(head, written=[(f"{out}/{lib}.kicad_sym", "symbols"), (f"{out}/{lib}.pretty/", "footprints"),
-                             (f"{out}/sym-lib-table, fp-lib-table", "library tables (paths use ${KIPRJMOD})")],
-              next=[(f"ecadlib kicad-export {q(plan)} -o <your KiCad project folder> --name {q(lib)}",
-                     "into the project: its own lib-table rows are kept (copying these tables over would drop them); "
-                     "or Preferences > Manage Symbol / Footprint Libraries"),
-                    (f"ecadlib parity {q(plan)} --kicad {q(out)}", "check KiCad and Altium agree, part by part")]
+                             (f"{out}/sym-lib-table, fp-lib-table", f"library tables (paths use {base})")],
+              next=([] if installing else           # --install: KiCad's own tables get the rows (printed after this)
+                    [(f"ecadlib kicad-export {q(plan)} -o <your KiCad project folder> --name {q(lib)}",
+                      "into the project: its own lib-table rows are kept (copying these tables over would drop them); "
+                      "or Preferences > Manage Symbol / Footprint Libraries")])
+              + [(f"ecadlib parity {q(plan)} --kicad {q(out)}", "check KiCad and Altium agree, part by part")]
               + ([(f"ecadlib review {q(plan)}", "the held parts")] if rep["skipped"] else [])
               + ([(f"ecadlib part status {q(plan)}", f"{M.plural(len(rep['held_changes']), 'held change')} waiting for "
-                   "a person (exit code 1 until then)")] if rep.get("held_changes") else []))
+                   "a person (exit code 1 until then)")] if rep.get("held_changes") else [])
+              + ([] if installing else       # last: only 3 are shown, and the held parts come first
+                 [(f"ecadlib kicad-install {q(out)} --name {q(lib)}", "or into KiCad itself, for every project")]))
 
 
 def _shell_quote(s):
@@ -1544,20 +1681,41 @@ def main(argv=None):
                                       "remembered for later exports into -o")
     ap.add_argument("--take-over", action="store_true", help="write the library although another plan folder wrote "
                     "it into -o (its parts are replaced by this plan's)")
+    ap.add_argument("--models-var", metavar="VAR", help="3D model paths start from this KiCad path variable "
+                    "(${VAR}/<lib>.3dshapes) instead of ${KIPRJMOD}: for a library every project uses (see --install)")
+    ap.add_argument("--install", action="store_true", help="also install the library into KiCad itself (its global "
+                    "symbol / footprint tables and a path variable ECADLIB_DIR_<NAME> = -o), so every project sees it; "
+                    "the 3D model paths use that variable. Close KiCad first; see `ecadlib kicad-install --help`")
     a = ap.parse_args(argv)
+    if a.install and not a.models_var:
+        from .kicad_install import var_name
+        a.models_var = var_name(libname(a.name))
     try:
         rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60),
                      rules=a.rules, log=(lambda *x, **k: None) if a.json else print, project=a.project,
-                     take_over=a.take_over)
+                     take_over=a.take_over, models_var=a.models_var)
     except PlanError as e:
         print(f"ecadlib kicad-export: {e}", file=sys.stderr)
         return 2
     # exit 1 also while a change is held: the library on disk is not what was exported, a person has to look
+    bad = bool(rep["errors"] or rep.get("held_changes") or rep.get("refused"))
+    if not a.json:
+        print_result(rep, Path(a.out), a.plan, installing=a.install and not bad)
+    if a.install and not bad:
+        from . import kicad_install
+        if not a.json:
+            print("installing into KiCad:")
+        try:
+            rep["install"] = kicad_install.install(a.out, libname(a.name), var=a.models_var,
+                                                   log=(lambda *x, **k: None) if a.json else print)
+        except ValueError as e:
+            rep["install"] = {"error": str(e)}
+            print(f"ecadlib kicad-export: --install: {e}", file=sys.stderr)
+        vs = (rep["install"].get("versions") or {}).values()
+        bad = not any(v["status"] in ("installed", "already installed") for v in vs)
     if a.json:
         print(json.dumps(rep, default=str))
-        return 1 if rep["errors"] or rep.get("held_changes") or rep.get("refused") else 0
-    print_result(rep, Path(a.out), a.plan)
-    return 1 if rep["errors"] or rep.get("held_changes") or rep.get("refused") else 0
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

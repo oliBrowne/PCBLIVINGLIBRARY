@@ -128,6 +128,38 @@ EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A
 # words in a footprint field that name a part with more pads, or another land, on a chip size code
 NOT_CHIP = re.compile(r"(?<![A-Za-z])(RGB|arrays?|reverse[ _-]?mount|mouse[ _-]?bite|shunt|kelvin|common[ _-]?mode|"
                       r"choke|crystal|balun|filter|transformer|speaker|buzzer|connector|jack|header|modified)(?![a-z])", re.I)
+# words in a DESCRIPTION (free text, so narrower than NOT_CHIP: 'RF choke', 'current sense' and 'EMI filter' bead are
+# two-pad chips) that say the part has more than two terminals, whatever chip size its footprint column gives
+MULTI_WORD = re.compile(
+    r"(?<![A-Za-z])(RGB|arrays?|networks?|common[ _-]?mode|kelvin|balun|transformer|feed[ _-]?thr(?:ough|u)|"
+    r"(?:bi|tri|dual|two|three|multi|full|[2-9])[ _-]?colou?rs?(?:ed)?)(?![a-z])"
+    r"|(?<![\d.A-Za-z])(?:[3-9]|three|four|five|six|eight)[ _-]?"
+    r"(?:terminals?|term|pins?|pads?|leads?|elements?|res(?:istors?)?|caps?|ch(?:annels?)?)(?![a-z])"
+    r"|(?<![\d.A-Za-z])[2-9][ _-]?(?:lines?|LN)(?![a-z])", re.I)
+# words that say a capacitor has a + side (tantalum, polymer, aluminium, niobium, electrolytic), in any maker's or
+# distributor's wording ('CAP TANT', 'CAP ALUM POLY'); 'non-polarized' / 'unpolarized' / 'bipolar' say the opposite
+POLAR_WORD = re.compile(r"(?<![A-Za-z])(tant(?:alum)?|electrolytic|polymer|poly|alum(?:inum|inium)?|niobium|"
+                        r"polari[sz]ed)(?![a-z])", re.I)
+NOT_POLAR = re.compile(r"(?<![A-Za-z])(non|un|bi)[ _-]?polar", re.I)
+
+
+def multi_terminal(*texts):
+    """The words in a description that say the part has more than two terminals ('RES ARRAY 4 RES', 'common mode',
+    '4-terminal', 'RGB'), or None. Such a part is never a two-pad chip land or a generic two-pin symbol."""
+    for t in texts:
+        m = MULTI_WORD.search(str(t or ""))
+        if m:
+            return m.group(0).strip()
+    return None
+
+
+def says_polarized(*texts):
+    """A capacitor's description says it has a + side. The MPN prefix list (POLAR_CAP) is only extra evidence: a
+    series it does not know is still caught by what the BOM says the part is."""
+    said = " ".join(str(t or "") for t in texts)
+    return bool(POLAR_WORD.search(said)) and not NOT_POLAR.search(said)
+
+
 # a land named KiCad's way after a maker or series (L_Wuerth_WE-PD-Typ-LS_1210, R_Shunt_..): its own land, whatever
 # chip code it ends in; 'R_0603', 'RES_0603', 'R_SMD_0603' name the size
 MAKER_LAND = re.compile(r"^(?:R|C|CP|L|LED|D|FB|Fuse)_(?!(?:SMD|Chip|Small)_)[A-Za-z][^_]*_")
@@ -1182,7 +1214,7 @@ def part_kind(category, footprint="", description="", designator=""):
     if cat == "Resistors":
         return "R"
     if cat == "Capacitors":
-        return "CP" if fp.startswith("CP_") or re.search(r"tantal|electrolytic|polarized|polymer", d, re.I) else "C"
+        return "CP" if fp.startswith("CP_") or says_polarized(d) else "C"
     if cat == "Inductors":
         return "L"
     if cat == "Diodes":
@@ -1219,12 +1251,17 @@ def resolve(texts, kind=None, mpn="", description=""):
     {"footprint": table name | None, "fp_how": str, "kicad_ref": "Lib:Name", "symbol": key | None, "sym_how": str}.
     A polarized capacitor (kind CP, or a C whose MPN is a tantalum / polymer / electrolytic series) gets nothing: the
     table has no polarized case, and a chip-capacitor land would lose the + mark."""
-    if kind == "C" and POLAR_CAP.match(_norm(mpn)):
+    if kind == "C" and (POLAR_CAP.match(_norm(mpn)) or says_polarized(description)):
         kind = "CP"
     if kind == "CP":
         return {"footprint": None, "fp_how": "polarized capacitor: its case (tantalum / polymer / electrolytic) is not in "
                 "the standard table", "kicad_ref": None, "symbol": None, "sym_how": "polarized capacitor: pin 1 = + only "
                 "with a footprint that marks it"}
+    multi = multi_terminal(description) if kind in CHIP_PREFIX else None
+    if multi:                                             # 'RES ARRAY 4 RES 10K 1206': the size is the array's body
+        return {"footprint": None, "fp_how": f"the description says {multi!r}: more than two terminals, not a two-pad "
+                "chip land", "kicad_ref": None, "symbol": None, "sym_how": f"the description says {multi!r}: not a "
+                "two-pin part"}
     fk = {"Q": None, "U": None}.get(kind, kind)
     name, how = footprint_for(list(texts), fk, mpn, weak=[description])
     if not name:                                          # a known MPN family settles a bare family name (SOT-223, TO-220)

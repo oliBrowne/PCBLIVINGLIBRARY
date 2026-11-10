@@ -93,6 +93,50 @@ def test_fp_edit_hole_defaults_to_the_ipc_suggestion():
         assert FE.load(d)["GBU4A"]["hole"] == 1.7
 
 
+def _connector(default=None):
+    """A 2-pin THT header with two untyped SMD mounting tabs (MP): the schema's default type is smd."""
+    t = {"unit": "mm", "y_axis": "down", "origin": "center",
+         "pads": [{"number": "1", "x": -1.25, "y": 0, "type": "tht", "drill": 0.9},
+                  {"number": "2", "x": 1.25, "y": 0, "type": "tht", "drill": 0.9},
+                  {"number": "MP", "x": -4, "y": 2, "w": 1.2, "h": 2.0},
+                  {"number": "MP", "x": 4, "y": 2, "w": 1.2, "h": 2.0}]}
+    if default is not None:
+        t["default_pad"] = default
+    return {"name": "X", "package_type": "connector", "pin_count": 2, "pad_table": t}
+
+
+def _pads(spec):
+    txt, _ = F.build(spec)
+    return [l.strip() for l in txt.splitlines() if l.strip().startswith("(pad ")]
+
+
+def test_a_confirmed_hole_leaves_untyped_smd_pads_smd_with_their_size():
+    # reviewer 2026-10-31 (hole.py): MP tabs with no type became plated through-holes, their 1.2 x 2 lost
+    for default in (None, {}, {"shape": "rect"}):
+        s = _connector(default)
+        before = [l for l in _pads(s) if l.startswith('(pad "MP"')]
+        out, notes = FE.apply({"hole": 1.0}, {"spec": s, "symbol": {}})
+        t = out["spec"]["pad_table"]
+        assert all(p["drill"] == 1.0 for p in t["pads"][:2]), t
+        assert all("drill" not in p and (p["w"], p["h"]) == (1.2, 2.0) for p in t["pads"][2:]), t
+        assert "drill" not in t["default_pad"], t      # it would turn the untyped MP tabs through-hole
+        after = _pads(out["spec"])
+        assert [l for l in after if l.startswith('(pad "MP"')] == before, (before, after)
+        assert all(" smd " in l for l in after if l.startswith('(pad "MP"')), after
+        assert all("(drill 1)" in l for l in after if l.startswith(('(pad "1"', '(pad "2"'))), after
+
+
+def test_a_confirmed_hole_keeps_a_default_sized_smd_pad_its_size():
+    # an SMD tab sized only by the default pad keeps that size when the default's guessed sizes are dropped
+    s = _connector({"type": "tht", "drill": 0.9, "d": 1.7})
+    s["pad_table"]["pads"] = s["pad_table"]["pads"][:2] + [{"number": "MP", "type": "smd", "x": -4, "y": 2}]
+    out, _ = FE.apply({"hole": 1.0}, {"spec": s, "symbol": {}})
+    t = out["spec"]["pad_table"]
+    assert t["default_pad"] == {"type": "tht", "drill": 1.0}, t
+    assert t["pads"][2] == {"number": "MP", "type": "smd", "x": -4, "y": 2, "d": 1.7}, t
+    assert all(p["drill"] == 1.0 and "d" not in p for p in t["pads"][:2]), t
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):

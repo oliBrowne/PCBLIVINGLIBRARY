@@ -109,7 +109,7 @@ def test_adopt_never_compares_with_a_held_change():
 
 def _qp_symbol(t1="input", t2="passive", t3="passive", alt=""):
     pin = '(pin {} line (at {}) (length 2.54) (name "{}" (effects (font (size 1.27 1.27)))) (number "{}" (effects (font (size 1.27 1.27)))){})'
-    return ('(kicad_symbol_lib (version 20231120) (generator test)\n  (symbol "QP_TEST" (pin_names (offset 0)) (in_bom yes) (on_board yes)\n'
+    return ('(kicad_symbol_lib (version 20231120) (generator test)\n  (symbol "QP_TEST" (pin_names (offset 0) hide) (in_bom yes) (on_board yes)\n'
             '    (property "Reference" "Q" (at 0 0 0) (effects (font (size 1.27 1.27))))\n'
             '    (property "Value" "QP" (at 0 0 0) (effects (font (size 1.27 1.27))))\n    (symbol "QP_TEST_1_1"\n      '
             + "\n      ".join([pin.format(t1, "-5.08 0 0", "G", "1", alt), pin.format(t2, "2.54 -5.08 90", "S", "2", ""),

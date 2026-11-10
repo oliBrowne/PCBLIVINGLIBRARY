@@ -126,7 +126,7 @@ def test_library_released_before_the_kicad_mod_was_fingerprinted_shows_no_change
 
 # ---------------------------------------------------------------- C2: a re-fetched symbol must be the released one
 SYM = """(kicad_symbol_lib (version 20231120) (generator test)
-  (symbol "QP" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+  (symbol "QP" (pin_names (offset 0) hide) (in_bom yes) (on_board yes)
     (property "Reference" "Q" (at 0 0 0) (effects (font (size 1.27 1.27))))
     (property "Value" "QP" (at 0 0 0) (effects (font (size 1.27 1.27))))
     (symbol "QP_1_1"

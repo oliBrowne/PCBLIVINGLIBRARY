@@ -12,7 +12,9 @@ bottom (power_side = "left"). Each pin is put in a functional group from its nam
   input) -> left
   power_out (VOUT, VCAP), uart, i2c, spi, can, eth, ports (PA0..PE15, GPIO12, P0.1), outputs (OUT, Q, PG, SW, type
   output), nc -> right
-  (a uart / i2c / spi / can / eth group whose pins are all type input is inputs named like a bus: left)
+  (a uart / i2c / spi / can / eth group whose pins are all type input is inputs named like a bus: left; a pin typed
+  as a driver, output / open_collector / open_emitter / tristate, in a group drawn on the left, such as OSC_OUT,
+  SWO / TDO or a reset output, goes right in a block of its group there)
   other (no name rule and no direction: passive, bidirectional) -> left, moved right when that keeps the symbol square
 Alternate-function names ("PA9/USART1_TX", "PH0-OSC_IN") are grouped by their first (primary) name; overbars
 ('~{RESET}', 'R\\E\\S\\E\\T\\', '/RESET', 'RESET#') are ignored for grouping. Port pins are sorted by port and
@@ -265,14 +267,18 @@ def _blocks(pins, s):
         g = classify(p)
         port = port_of(p.get("name", "")) if g == "ports" else None
         sub = port[0] if port else ""
-        by.setdefault((g, sub), []).append((port[1] if port else i, i, p))
+        # a driver (output, open collector / emitter, tri-state) in a group drawn on the left (OSC_OUT, SWO, a reset
+        # output): outputs right, so a block of its group on the right side
+        out = (sides[g] == "left" and g not in POWER_GROUPS and g not in FLEX
+               and DIRECTED.get(str(p.get("type") or "").lower()) == "other_out")
+        by.setdefault((g, sub, out), []).append((port[1] if port else i, i, p))
     for g in BUSES:                       # a bus group on the right whose pins are all type input is no bus but inputs
-        items = by.get((g, ""))           # named like one (SS/TR, a soft-start input): they go left with the inputs
+        items = by.get((g, "", False))    # named like one (SS/TR, a soft-start input): they go left with the inputs
         if items and sides.get(g) == "right" and all(str(t[2].get("type") or "").lower() == "input" for t in items):
-            by.setdefault(("other_in", ""), []).extend(by.pop((g, "")))
-            by[("other_in", "")].sort(key=lambda t: t[1])
+            by.setdefault(("other_in", "", False), []).extend(by.pop((g, "", False)))
+            by[("other_in", "", False)].sort(key=lambda t: t[1])
     blocks = []
-    for (g, sub), items in sorted(by.items(), key=lambda kv: (order[kv[0][0]], _natural(kv[0][1]))):
+    for (g, sub, out), items in sorted(by.items(), key=lambda kv: (order[kv[0][0]], _natural(kv[0][1]), kv[0][2])):
         if g == "ports":
             items.sort(key=lambda t: (t[0], _natural(t[2].get("num", ""))))
         else:                                             # numbered names in number order (CBUS0..4, SD0..3, VSS_1..5),
@@ -294,7 +300,7 @@ def _blocks(pins, s):
                 slots.append([p])
                 keys.append(k)
         blocks.append({"group": g, "label": f"P{sub}" if sub and sub.isalpha() and len(sub) == 1 else sub or g,
-                       "side": sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)},
+                       "side": "right" if out else sides[g], "slots": slots, "nets": {id(sl): k for sl, k in zip(slots, keys)},
                        "hide": {id(sl) for sl in slots if _hideable(g, sl)}})
     return blocks
 
@@ -498,11 +504,8 @@ def relayout(sym, rules=None, split=None):
     footprint and parameters. Pins keep number, name, type, shape. Only single-part symbols are re-laid out."""
     if sym.get("parts", 1) > 1 or any(sym.get("prim_modes") or []):
         return sym
-    pins, seen = [], set()
-    for pr in sym["prims"]:
-        if pr[0] == "pin" and pr[1]["num"] not in seen:
-            seen.add(pr[1]["num"])
-            pins.append({k: v for k, v in pr[1].items() if k in ("num", "name", "type", "shape", "description")})
+    pins = unique_pins([{k: v for k, v in pr[1].items() if k in ("num", "name", "type", "shape", "description")}
+                        for pr in sym["prims"] if pr[0] == "pin"])
     new = build(sym["name"], pins, sym.get("description", ""), sym.get("designator", "U?"), sym.get("footprint"),
                 sym.get("comment", "*"), rules, split)
     if sym.get("params"):
@@ -511,17 +514,36 @@ def relayout(sym, rules=None, split=None):
 
 
 # ------------------------------------------------------------------ checks
+def same_signal(a, b):
+    """Two pin names on one number are one signal: the same name, or a supply's / ground's / exposed pad's stack
+    (VSS and VSS_2). IN_1 and IN_2, OUT_1 and OUT_2 are two signals."""
+    return _key(a) == _key(b) or stack_key(a) == stack_key(b) and all(
+        classify({"name": stack_key(x)}) in POWER_GROUPS - {"power_out"} for x in (a, b))
+
+
+def unique_pins(pins):
+    """A pin list with a number's repeats dropped only when they are the same signal (a stacked VSS drawn twice). A
+    number that carries two different signals keeps both pins, so shared_numbers and the release check still see the
+    fault: dropping the second pin made the symbol look clean (full review 2026-11-10)."""
+    out, by = [], {}
+    for p in pins:
+        had = by.setdefault(str(p.get("num")), [])
+        if any(same_signal(n, p.get("name") or "") for n in had):
+            continue
+        had.append(p.get("name") or "")
+        out.append(p)
+    return out
+
+
 def shared_numbers(pins):
     """One number is one pad: two signals on it short on the board. pins: [{num, name}] -> ['pin number 7 is used by 2
     different signals: WP, SDA']; pins of one stack (VSS, VSS_2) on a number are one signal. Also the release check's
     (R-SY-3). Only a supply's, ground's or exposed pad's instances are one stack (VIN / VIN_2, EPAD / EPAD_2): IN_1 and
     IN_2 are two signals, and so are OUT_1 / OUT_2 (a dual part's two outputs; an LDO's VOUT_2 on VOUT's pad is held)."""
-    one = lambda a, b: _key(a) == _key(b) or stack_key(a) == stack_key(b) and all(
-        classify({"name": stack_key(x)}) in POWER_GROUPS - {"power_out"} for x in (a, b))
     names = {}
     for p in pins:
         ns = names.setdefault(str(p.get("num")), [])
-        if not any(one(n, p.get("name") or "") for n in ns):
+        if not any(same_signal(n, p.get("name") or "") for n in ns):
             ns.append(p.get("name") or "")
     return [f"pin number {n} is used by {len(ns)} different signals: {', '.join(map(plain, ns))}"
             for n, ns in names.items() if len(ns) > 1]
@@ -812,17 +834,16 @@ def pins_from_schlib(path, index=0):
     _, syms = AL.read_schlib(path)
     sy = syms[index]
     slot_names = {v: k for k, v in AL.PIN_SYMBOL.items()}
-    pins, seen = [], set()
+    pins = []
     for r in sy["records"]:
-        if r.get("RECORD") == "2" and r["num"] not in seen and not r["mode"]:
-            seen.add(r["num"])
+        if r.get("RECORD") == "2" and not r["mode"]:
             d = {sl: slot_names.get(v, v) for sl, v in zip(AL.PIN_SLOTS, r["symbols"]) if v}
             shape = next((k for k, v in AL.PIN_SHAPE.items() if v == d), None)
             p = {"num": r["num"], "name": _kicad_name(r["name"]), "type": ETYPE_NAME.get(r["etype"], "passive")}
             if shape and shape != "line":
                 p["shape"] = shape
             pins.append(p)
-    return sy["name"], pins
+    return sy["name"], unique_pins(pins)
 
 
 def _kicad_name(s):
@@ -852,11 +873,8 @@ def load_pins(src, http=None):
     ref = s[6:] if low.startswith("kicad:") else s
     chain, _ = K.load_symbol(ref, http if low.startswith("kicad:") else None)
     sym = K.convert_symbol(chain, None, None, [], None, [])
-    pins, seen = [], set()
-    for pr in sym["prims"]:
-        if pr[0] == "pin" and pr[1]["num"] not in seen:
-            seen.add(pr[1]["num"])
-            pins.append({k: v for k, v in pr[1].items() if k in ("num", "name", "type", "shape")})
+    pins = unique_pins([{k: v for k, v in pr[1].items() if k in ("num", "name", "type", "shape")}
+                        for pr in sym["prims"] if pr[0] == "pin"])
     return str(sym["name"]).strip('"'), pins, {k: sym[k] for k in ("description", "designator") if sym.get(k)}
 
 

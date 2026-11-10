@@ -77,11 +77,13 @@ def test_stm32_lqfp100_grouping_and_order():
     ports = [SL.port_of(p["name"]) for p in g["ports"]]
     assert ports == sorted(ports) and len(ports) == 80                   # PA0..PA15, PB0..PB15, ... PE15 in order
     assert {p["side"] for p in g["power"] + g["analog"]} == {"top"} and {p["side"] for p in g["ground"]} == {"bottom"}
-    assert {p["side"] for p in g["reset"] + g["clock"]} == {"left"} and g["nc"][0]["side"] == "right"
+    assert {p["side"] for p in g["reset"]} == {"left"} and g["nc"][0]["side"] == "right"
+    assert [(p["name"], p["side"]) for p in g["clock"]] == [("OSC_IN", "left"), ("OSC_OUT", "right")]   # outputs right
     sides = {}
     for p in g["ports"]:
         sides.setdefault(SL.port_of(p["name"])[0], set()).add(p["side"])
-    assert sides == {"A": {"left"}, "B": {"left"}, "C": {"right"}, "D": {"right"}, "E": {"right"}}, sides   # whole ports, balanced
+    # balanced: port C's two 8-pin pieces go one to each side (that saves more rows than SPLIT_PENALTY), the rest whole
+    assert sides == {"A": {"left"}, "B": {"left"}, "C": {"left", "right"}, "D": {"right"}, "E": {"right"}}, sides
     stacked = [p for p in g["power"] + g["ground"] if p.get("stacked_on")]
     assert sorted(p["num"] for p in stacked) == ["10", "100", "11", "27", "28", "74", "75", "99"], stacked
     assert all(p["stacked_on"] in ("49", "50") for p in stacked)           # on VSS_1 (pin 49) / VDD_1 (pin 50)
@@ -100,10 +102,10 @@ def test_stm32_symbol_reads_back_altium_and_kicad():
     assert len(at) == 100 - 8                                               # VDD x5 and VSS x5 stacked
     stacks = [ps for ps in at.values() if len(ps) > 1]
     assert sorted(len(s) for s in stacks) == [5, 5] and all(not q["show_name"] and not q["show_num"] for s in stacks for q in s[1:])
-    rows = [y for (x, y) in at if x == 0]                                   # left column top->bottom: NRST, BOOT0, gap, OSC...
+    rows = [y for (x, y) in at if x == 0]                                   # left column top->bottom: NRST, BOOT0, gap, OSC_IN...
     left = sorted(((y, p[0]["name"]) for (x, y), p in at.items() if x == 0), reverse=True)
-    assert [n for _, n in left[:4]] == ["NRST", "BOOT0", "OSC_IN", "OSC_OUT"] and left[1][0] - left[2][0] == 20   # one row gap
-    assert len(rows) == 2 + 2 + 32
+    assert [n for _, n in left[:3]] == ["NRST", "BOOT0", "OSC_IN"] and left[1][0] - left[2][0] == 20   # one row gap
+    assert "OSC_OUT" not in [n for _, n in left] and len(rows) == 2 + 1 + 32 + 8   # OSC_OUT right; PA, PB, half of PC
     with tempfile.TemporaryDirectory() as d:
         f = AL.write_schlib(Path(d) / "stm.SchLib", [sym])
         _, syms = AL.read_schlib(f)

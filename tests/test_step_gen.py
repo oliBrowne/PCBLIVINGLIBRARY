@@ -170,11 +170,18 @@ def test_model_turned_to_the_pads():
         x0, y0, _, x1, y1, _ = S.check(fp["bodies"][0]["step"]["data"].decode())["bbox"]
         rows_x = len({round(p["y"], 3) for p in fp["pads"]}) == 2               # pin row axis from the pads
         assert (x1 - x0 > y1 - y0) == rows_x and abs(min(x1 - x0, y1 - y0) - 2.4) < 1e-6, (turn, (x0, y0, x1, y1))
-    # a model that already sits on its pads keeps its rotation (every package spec with its own footprint_gen pads)
-    for f in SPEC_FILES:
+    # a model that already sits on its pads keeps its rotation (every package spec with its own footprint_gen pads,
+    # the BGAs' balls on their lands too): 0, never None, which would pass with no lead checked (reviewer 2026-10-31)
+    for f in SPEC_FILES + sorted((S.SPECS / "advanced").glob("*.json")):
         spec = json.loads(f.read_text())
         fp, _ = K.convert_footprint(F.build(spec)[0])
-        assert S.fit_rotation(spec, fp["pads"]) in (0, None), spec["name"]
+        assert S.fit_rotation(spec, fp["pads"]) == 0, spec["name"]
+    bga = json.loads((S.SPECS / "advanced" / "BGA-100_11.0x11.0mm_Layout10x10_P1.0mm_Ball0.5mm_Pad0.4mm_NSMD.json").read_text())
+    fp, _ = K.convert_footprint(F.build(bga)[0])
+    off = [dict(p, x=p["x"] + 1.0) for p in fp["pads"]]                 # every ball one pitch off its land
+    assert S.fit_rotation(bga, off, checked=True) == S.NO_FIT
+    turned = [dict(p, x=-p["y"], y=p["x"]) for p in fp["pads"]]         # the footprint drawn a quarter turn round
+    assert S.fit_rotation(bga, turned) == 90
     assert S.fit_rotation(S.spec_from_name(n), [dict(p, designator="9") for p in pads]) is None           # no pad numbers: no guess
 
 
@@ -350,6 +357,24 @@ def test_cli():
         assert S.main(["Foo_Bar", "-o", str(Path(d) / "f.step")]) == 2
         assert cli.main(["step-gen", "R_0402_1005Metric", "-o", str(Path(d) / "r.step")]) == 0
         assert out.read_text().startswith("ISO-10303-21;") and "AUTOMOTIVE_DESIGN" in out.read_text()
+
+
+def test_cli_takes_a_kicad_mod_file():
+    """`ecadlib step-gen FOOTPRINT` with a .kicad_mod file (what `footprint gen` writes): the model is named and shaped
+    from the footprint's own name and its pads, whatever the file is called; a file with an unknown name says so."""
+    from ecadlib import footprint_gen as FG
+    with tempfile.TemporaryDirectory() as d:
+        spec = json.loads((S.SPECS / "SOIC-16_3.9x9.9mm_P1.27mm.json").read_text())
+        text, _ = FG.build(spec)
+        mod = Path(d) / "renamed_by_user.kicad_mod"
+        mod.write_text(text)
+        out = Path(d) / "m.step"
+        assert S.main([str(mod), "-o", str(out)]) == 0
+        assert S.check(out.read_text())["errors"] == []
+        odd = Path(d) / "odd.kicad_mod"
+        odd.write_text(text.replace(f'(footprint "{spec["name"]}"', '(footprint "Foo_Bar"', 1))
+        assert S.main([str(odd), "-o", str(Path(d) / "o.step")]) == 2
+        assert S.main([str(Path(d) / "missing.kicad_mod"), "-o", str(Path(d) / "x.step")]) == 2
 
 
 def test_zero_size_name_is_a_value_error():

@@ -350,6 +350,11 @@ def ep_lead_holds(text, pin_names):
     return out
 
 
+def unchecked(what, e):
+    """The failure line for a check that raised: the part was not checked, so it is held (never passed on a warning)."""
+    return f"{what} could not be checked ({type(e).__name__}: {e}): fix the file or report this; not released unchecked"
+
+
 def check_item(item, base=".", rules=None):
     """-> (failures [(rule, message)], warnings [str], info {height, ...}). rules (ecadlib.rules): required fields,
     accepted pin-1 names and the courtyard layer; None = ecadlib's own."""
@@ -456,16 +461,20 @@ def check_item(item, base=".", rules=None):
             text, tree = None, None
         try:
             issues, nums = (FC.check(text), {p["num"] for p in FC._pad_rects(tree)}) if text is not None else ([], set())
-        except Exception as e:                 # checker crash: fall back to the PcbLib minimum below
-            issues, nums, kmod = [], set(), None
-            warns.append(f"footprint_check failed on {info.pop('kicad_mod')} ({type(e).__name__}: {e})")
-        numbering = numbering_hold(text, src, pin_names) if text is not None and syms and any(
-            r == "pin1" and NUMBERING_WARN.search(m) for _, r, m in issues) else None
-        if numbering:                          # a swapped pair the generator / pad table numbered: held (fpgen D1)
-            add("footprint", f"pin1: {numbering}")
-        if text is not None and syms and not src.startswith(("kicad:", "local:")):
-            for msg in ep_lead_holds(text, pin_names):     # R-CL-2: the thermal pad on a signal lead's number
-                add("footprint", f"pin1: {msg}")
+        except Exception as e:                 # a footprint the checker cannot read was not checked: a hold, never
+            issues, nums, text = [], set(), None            # a pass on the PcbLib minimum (full review 2026-11-10)
+            add("files", unchecked(f"the footprint rules ({kmod.name})", e))
+        numbering = None
+        try:
+            numbering = numbering_hold(text, src, pin_names) if text is not None and syms and any(
+                r == "pin1" and NUMBERING_WARN.search(m) for _, r, m in issues) else None
+            if numbering:                      # a swapped pair the generator / pad table numbered: held (fpgen D1)
+                add("footprint", f"pin1: {numbering}")
+            if text is not None and syms and not src.startswith(("kicad:", "local:")):
+                for msg in ep_lead_holds(text, pin_names):     # R-CL-2: the thermal pad on a signal lead's number
+                    add("footprint", f"pin1: {msg}")
+        except Exception as e:                 # one bad file holds its own part; it does not stop the run
+            add("files", unchecked(f"the pad numbering ({kmod.name})", e))
         for lvl, rule, msg in issues:
             if numbering and rule == "pin1" and NUMBERING_WARN.search(msg):
                 continue                       # said by the hold above
@@ -480,8 +489,9 @@ def check_item(item, base=".", rules=None):
         if kmod and text is not None:          # the rule book (footprint_rules): naming, layers, type, pin map ...
             try:
                 book = FR.check(text, filename=kmod.name, symbol_pins=pin_names if syms else None, geometry=False)
-            except Exception as e:             # a rule-book crash must not hide the other rules
-                book = [("warning", "rulebook", f"footprint_rules failed ({type(e).__name__}: {e})")]
+            except Exception as e:             # a rule-book crash must not hide the other rules, nor pass the part
+                book = []
+                add("files", unchecked(f"the footprint rule book ({kmod.name})", e))
             for lvl, rule, msg in book:
                 if rule == "connect":
                     continue                   # the pins rule above already compares the Altium symbol and footprint
@@ -513,8 +523,10 @@ def check_item(item, base=".", rules=None):
         from . import parity as PY
         try:
             diffs = PY.release_diffs(text, fps[0], syms, rules)
-        except Exception as e:                 # a parity crash must not hide the other rules
-            diffs = [{"level": "warn", "msg": f"parity check failed ({type(e).__name__}: {e})"}]
+        except Exception as e:                 # a parity crash must not hide the other rules; with parity = "hold"
+            diffs = []                         # a comparison that did not run holds the part like one that failed
+            msg = unchecked("the KiCad / Altium comparison", e)
+            (add("files", msg) if mode == "hold" else warns.append(f"parity: {msg}"))
         for d in diffs:
             (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" else warns.append(f"parity: {d['msg']}"))
         info["parity"] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"

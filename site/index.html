@@ -7,12 +7,22 @@
 <meta name="description" content="ecadlib reads your BOM, finds or draws every symbol and footprint you are missing, checks them, and releases them to Altium 365 or KiCad. Free and open source (MIT). Bring your own model.">
 <meta property="og:title" content="ecadlib · a living component library">
 <meta property="og:description" content="BOM in, library out. Free and open source, for Altium 365 and KiCad. Bring your own model.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pcblivinglibrary.vercel.app/">
+<meta property="og:image" content="https://pcblivinglibrary.vercel.app/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="ecadlib: one line of your BOM, built into a finished part.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://pcblivinglibrary.vercel.app/">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="site.css">
 <link rel="stylesheet" href="hero.css">
+<link rel="stylesheet" href="walk.css">
 </head>
 <body>
+<a class="skiplink" href="#footprints">Skip to content</a>
 <svg class="sr" aria-hidden="true"><defs>
   <symbol id="mark" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M16 23.5L16 13.5"/><path d="M16 20L10 14"/><path d="M16 15L22 9"/><circle cx="16" cy="26.8" r="2.75" stroke-width="2.5"/></g><path fill="var(--copper, #c2622d)" d="M8.58 13.91 L7.32 13.64 L6.22 13.22 L5.26 12.66 L4.44 11.97 L3.76 11.18 L3.21 10.30 L2.78 9.34 L2.47 8.33 L2.28 7.28 L2.19 6.20 L2.20 5.12 L3.28 5.12 L4.34 5.23 L5.36 5.46 L6.33 5.82 L7.23 6.32 L8.03 6.95 L8.74 7.73 L9.31 8.66 L9.74 9.74 L10.01 10.99 L10.11 12.41 L10.00 14.00Z"/><path fill="var(--copper, #c2622d)" d="M22.02 7.74 L22.18 6.58 L22.48 5.54 L22.90 4.61 L23.45 3.79 L24.10 3.09 L24.85 2.50 L25.70 2.03 L26.62 1.68 L27.62 1.44 L28.68 1.32 L29.80 1.32 L29.80 2.49 L29.66 3.59 L29.41 4.61 L29.03 5.55 L28.54 6.40 L27.93 7.14 L27.20 7.77 L26.37 8.29 L25.43 8.68 L24.39 8.93 L23.24 9.04 L22.00 9.00Z"/></symbol>
   <symbol id="gh" viewBox="0 0 16 16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></symbol>
@@ -123,8 +133,8 @@
     </div>
     <div class="pkgs mono reveal" id="fppkgs" role="tablist" aria-label="Packages"></div>
     <div class="grid3" id="benchmark">
-      <article class="card reveal"><p class="mono n">benchmark · 25 Oct 2026</p><h3>87 of 110 real parts right</h3><p>Drawn without KiCad's library, then checked against it and the maker's datasheet. None built wrong: the 23 misses were held, not guessed. Tuned on these parts, so a fresh set is next.</p></article>
-      <article class="card reveal"><p class="mono n">pads</p><h3>89 % of pads match KiCad</h3><p>1,504 of KiCad's 1,690 pads. Where KiCad and the maker differ, ecadlib follows the maker. The target is 97 %.</p></article>
+      <article class="card reveal"><p class="mono n">benchmark · 25 Oct 2026</p><h3>86 of 110 real parts right</h3><p>The live run's datasheet reads plus two re-reads, scored on today's code against KiCad's library and the maker's datasheet (the run itself scored 77). None built wrong: the misses were held, not guessed. Tuned on these parts, so a fresh set is next.</p></article>
+      <article class="card reveal"><p class="mono n">pads</p><h3>89 % of pads match KiCad</h3><p>Over every footprint built. Where KiCad and the maker differ, ecadlib follows the maker. The target is 97 %.</p></article>
       <article class="card reveal"><p class="mono n">cost</p><h3>$25.80 in reads</h3><p>One live read of all 110 parts, plus two re-reads. The method and every miss are in <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/benchmark.md">docs/benchmark.md</a>.</p></article>
     </div>
   </section>
@@ -143,35 +153,32 @@
     </div>
   </section>
   <!-- 04 workflow -->
-  <section id="workflow" class="block" data-traces="wf">
+  <section id="workflow" class="block wk" data-wk data-traces="wf">
     <div class="head reveal">
       <p class="eyebrow"><span class="num">04</span>Workflow</p>
       <h2>Right inside Altium and KiCad.</h2>
-      <p class="sub">You never leave your design tool. ecadlib adds an ecadlib menu to Altium and an action plugin to KiCad, each with its own native dialogs; the web page opens only for steps that need it. Ask for a part, and it comes back as a library part you can place.</p>
+      <p class="sub">You never leave your design tool. ecadlib adds an ecadlib menu to Altium and a toolbar button to KiCad, each with its own window; the web page opens only for steps that need it. Ask for a part, and it comes back as a library part you can place.</p>
     </div>
-    <div class="wf reveal">
-      <div class="wftabs mono" role="tablist" aria-label="Design tool">
-        <button role="tab" id="wf-tab-altium" aria-selected="true" data-scene="altium">Altium Designer</button>
-        <button role="tab" id="wf-tab-kicad" aria-selected="false" data-scene="kicad">KiCad</button>
-        <button type="button" class="ghost wfplay" id="wfplay" aria-pressed="true">pause</button>
+    <div class="wk-top">
+      <div class="wk-tabs" role="tablist" aria-label="Design tool">
+        <button role="tab" aria-selected="true" data-scene="altium">Altium Designer</button>
+        <button role="tab" aria-selected="false" data-scene="kicad">KiCad</button>
       </div>
-      <div class="wfgrid">
-        <ol class="wfsteps" id="wfsteps" aria-live="polite"></ol>
-        <div class="win" id="win" aria-label="An animated design tool window showing the ecadlib workflow" role="img">
-          <div class="winbar"><span class="appmark" id="wfapp"></span><span id="wintitle">Board.PrjPcb</span><span class="winctl" aria-hidden="true"><i></i><i></i><i></i></span></div>
-          <div class="menubar" id="menubar"></div>
-          <div class="toolbar" id="wftools" aria-hidden="true"></div>
-          <div class="winbody">
-            <div class="canvas"><div class="doctabs" id="wfdocs"></div><svg id="wfcanvas" viewBox="0 0 400 260" preserveAspectRatio="xMidYMid meet"></svg></div>
-            <aside class="panel" id="wfpanel"></aside>
+      <span class="wk-ex">TLC5951DAP · example run</span>
+      <button type="button" class="wk-play" aria-pressed="true">pause</button>
+    </div>
+    <div class="wk-stage">
+      <div class="wk-fit">
+        <div class="wk-win" role="img" aria-label="An animated design tool window showing the ecadlib workflow">
+          <div class="wk-cam">
+            <div class="wk-dlg" hidden></div>
+            <svg class="wk-cur" viewBox="0 0 16 22" aria-hidden="true"><path d="M1 1 L1 17 L5 13 L8 20 L11 19 L8 12 L14 12 Z"/></svg>
           </div>
-          <div class="statusbar" id="wfstatus"></div>
-          <div class="dlg" id="wfdlg" hidden></div>
-          <div class="drop" id="wfdrop" hidden></div>
-          <svg class="cursor" id="wfcursor" viewBox="0 0 16 22" aria-hidden="true"><path d="M1 1 L1 17 L5 13 L8 20 L11 19 L8 12 L14 12 Z"/></svg>
         </div>
       </div>
+      <div class="wk-cap" aria-live="polite"></div>
     </div>
+    <ol class="wk-steps" aria-live="polite"></ol>
   </section>
 
   <!-- 05 models -->
@@ -270,7 +277,7 @@
 pip install ecadlib
 ecadlib demo       <span class="c"># a 7-part library in ./ecadlib-demo, about a second</span>
 ecadlib init       <span class="c"># your tool, your libraries, your sources</span>
-ecadlib ui         <span class="c"># or do it all in your browser</span></pre>
+ecadlib ui         <span class="c"># in your browser: Add to Altium or KiCad, drop in a BOM</span></pre>
     </div>
   </section>
 </main>
@@ -299,5 +306,6 @@ ecadlib ui         <span class="c"># or do it all in your browser</span></pre>
 
 <script type="module" src="hero.js"></script>
 <script type="module" src="site.js"></script>
+<script type="module" src="walk.js"></script>
 </body>
 </html>

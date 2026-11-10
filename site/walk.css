@@ -1,0 +1,227 @@
+/* 04 Workflow, v2: one fixed 1040 x 620 composition (scaled to fit), a camera that follows the hand, and ecadlib's
+   own dialog exactly as the Altium script form and the KiCad plugin window draw it. Everything is prefixed wk-. */
+.wk { --wk-ease: cubic-bezier(.32, .72, 0, 1); }
+.wk-tabs { display: flex; gap: 6px; }
+.wk-top { display: flex; align-items: center; gap: 6px; margin-bottom: 18px; flex-wrap: wrap; }
+.wk-top [role="tab"] { font: 12px/1 var(--mono); border-radius: 999px; color: var(--muted); border: 1px solid var(--line); background: none; padding: 9px 14px; cursor: pointer; }
+.wk-top [role="tab"][aria-selected="true"] { color: var(--bg); background: var(--text); border-color: var(--text); }
+.wk-top .wk-play[hidden] { display: none; }
+.wk-top .wk-play { margin-left: auto; font: 12px/1 var(--mono); color: var(--muted); border: 1px solid var(--line); background: none; padding: 9px 14px; border-radius: 999px; cursor: pointer; }
+.wk-top .wk-ex { font: 11px var(--mono); color: var(--muted); margin-left: 10px; }
+
+/* the stage: dotted ground, a faint warm light under the window, the window settling flat as it comes into view */
+.wk-stage { position: relative; padding: clamp(14px, 3vw, 32px) clamp(14px, 3vw, 32px) clamp(48px, 5vw, 60px); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; perspective: 1800px;
+  background: radial-gradient(60% 55% at 50% 62%, color-mix(in srgb, var(--copper) 7%, transparent), transparent 70%),
+              radial-gradient(circle, var(--line) .8px, transparent .9px) 0 0 / 18px 18px, var(--bg); }
+.wk-fit { position: relative; aspect-ratio: 1040 / 620; max-width: 1000px; margin: 0 auto; transform-origin: 50% 100%; transform: rotateX(16deg) translateY(28px) scale(.93); opacity: .35;
+  transition: transform 1.6s var(--wk-ease), opacity 1.2s var(--wk-ease); }
+.wk.in .wk-fit { transform: none; opacity: 1; }
+.wk-win { position: absolute; left: 0; top: 0; width: 1040px; height: 620px; transform: scale(var(--fit, 1)); transform-origin: 0 0; border-radius: 10px; overflow: hidden;
+  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 50px 90px -40px rgba(0,0,0,.55), 0 18px 36px -24px rgba(0,0,0,.45); user-select: none; }
+.wk-cam { position: absolute; inset: 0; transform-origin: 0 0; transition: transform 1.1s var(--wk-ease); will-change: transform; }
+.wk-cap { position: absolute; left: 50%; bottom: clamp(10px, 2vw, 18px); transform: translate(-50%, 6px); opacity: 0; z-index: 3; white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis;
+  font: 12px/1 var(--mono); color: var(--text); background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: 999px; padding: 9px 14px;
+  transition: opacity .5s var(--wk-ease), transform .5s var(--wk-ease); }
+.wk-cap.on { opacity: 1; transform: translate(-50%, 0); }
+.wk-cap i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--copper); margin-right: 8px; vertical-align: 1px; }
+
+/* the four steps under the window, each with a bar that fills while it plays */
+.wk-steps { list-style: none; margin: 18px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+.wk-steps li { cursor: pointer; opacity: .5; transition: opacity .5s var(--wk-ease); }
+.wk-steps li:hover { opacity: .8; } .wk-steps li.on, .wk-steps li.done { opacity: 1; }
+.wk-steps .bar { height: 2px; background: var(--line); position: relative; overflow: hidden; margin-bottom: 12px; }
+.wk-steps .bar i { position: absolute; inset: 0; background: var(--text); transform: scaleX(0); transform-origin: left; }
+.wk-steps li.done .bar i { transform: none; }
+.wk-steps li.on .bar i { background: var(--copper); animation: wkfill var(--d, 6s) linear forwards; }
+.wk.paused .wk-steps li.on .bar i, .wk:not(.seen) .wk-steps li.on .bar i { animation-play-state: paused; }
+@keyframes wkfill { to { transform: none; } }
+.wk-steps .sn { font: 11px var(--mono); color: var(--muted); margin: 0 0 4px; }
+.wk-steps h3 { font-size: 15px; margin: 0 0 4px; letter-spacing: -.01em; }
+.wk-steps p:last-child { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+@media (max-width: 900px) { .wk-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .wk-steps { grid-template-columns: minmax(0, 1fr); gap: 12px; } .wk-steps:has(li.on) li:not(.on) p:last-child { display: none; } .wk-top .wk-ex { display: none; } }
+
+/* ---------- the tool window: fixed pixel layout inside .wk-cam ---------- */
+.wk-app { position: absolute; inset: 0; display: grid; grid-template-rows: 32px 28px 28px minmax(0, 1fr) 24px; font: 12px/1.2 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif; }
+.wk-app .tbar { display: flex; align-items: center; gap: 10px; padding-left: 10px; font-size: 12px; }
+.wk-app .tbar .t { flex: 1; text-align: center; }
+.wk-app .tbar .ctl { display: flex; align-self: stretch; } .wk-app .tbar .ctl b { width: 44px; display: grid; place-items: center; font-weight: 400; font-size: 12px; }
+.wk-app .ic { width: 16px; height: 16px; border-radius: 3px; flex: none; }
+.wk-app .mb { display: flex; align-items: center; padding: 0 6px; gap: 1px; }
+.wk-app .mb > span { padding: 5px 9px; border-radius: 3px; position: relative; transition: background .25s; }
+.wk-app .mb > span.ours::after { content: ""; position: absolute; right: 3px; top: 4px; width: 4px; height: 4px; border-radius: 50%; background: var(--copper); }
+.wk-app .mid { display: grid; grid-template-columns: minmax(0, 1fr) 250px; min-height: 0; }
+.wk-app .cv { position: relative; overflow: hidden; }
+.wk-app .cv svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.wk-app .pn { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.wk-app .sb { display: flex; gap: 20px; align-items: center; padding: 0 10px; font-size: 11px; white-space: nowrap; overflow: hidden; }
+.wk-app .sb .sp { flex: 1; }
+.wk-menu { position: absolute; z-index: 6; min-width: 230px; padding: 4px; border-radius: 4px; font-size: 12px; animation: wkmenu .22s var(--wk-ease) both; }
+.wk-menu div { padding: 7px 26px 7px 12px; border-radius: 3px; white-space: nowrap; transition: background .2s; }
+.wk-menu .sep { height: 1px; padding: 0; margin: 4px 6px; }
+@keyframes wkmenu { from { opacity: 0; transform: translateY(-4px); } }
+
+/* Altium Designer: dark chrome around a cream sheet */
+.wk-app.altium { color: #e4e4e4; background: #2b2b2b; }
+.wk-app.altium .tbar { background: #1d1d1d; color: #bdbdbd; } .wk-app.altium .tbar .ctl b { color: #9d9d9d; }
+.wk-app.altium .ic { background: linear-gradient(135deg, #c99d4b, #84652a); }
+.wk-app.altium .mb { background: #262626; border-bottom: 1px solid #3a3a3a; } .wk-app.altium .mb > span.hot { background: #3b5675; }
+.wk-app.altium .dt { display: flex; background: #232323; border-bottom: 1px solid #3a3a3a; font-size: 11.5px; color: #9d9d9d; }
+.wk-app.altium .dt span { padding: 0 14px; display: inline-flex; align-items: center; gap: 7px; border-right: 1px solid #3a3a3a; transition: background .3s, color .3s; }
+.wk-app.altium .dt span.on { background: #474747; color: #fff; box-shadow: inset 0 2px 0 #2f7bd1; }
+.wk-app.altium .dt span.hot { background: #3b5675; color: #fff; }
+.wk-app.altium .dt i { width: 10px; height: 12px; border: 1px solid #d9c27a; background: #fffcf0; } .wk-app.altium .dt i.dpcb { border-color: #6c8e5a; background: #24451c; }
+.wk-app.altium .cv { background: #474747; border-right: 1px solid #3a3a3a; }
+.wk-app.altium .pn { background: #2b2b2b; }
+.wk-app.altium .pn h4 { margin: 0; padding: 9px 12px; font-size: 12px; font-weight: 600; background: #2f2f2f; display: flex; justify-content: space-between; border-bottom: 1px solid #3a3a3a; }
+.wk-app.altium .pn .fld { margin: 8px 10px 0; padding: 6px 8px; border: 1px solid #414141; border-radius: 3px; background: #1e1e1e; display: flex; justify-content: space-between; color: #e4e4e4; }
+.wk-app.altium .pn .fld.q { color: #8a8a8a; margin-bottom: 8px; }
+.wk-app.altium .pn .cols { display: grid; grid-template-columns: 1fr 70px; padding: 5px 12px; font-size: 10.5px; color: #9d9d9d; background: #2f2f2f; border-top: 1px solid #3a3a3a; border-bottom: 1px solid #3a3a3a; }
+.wk-app.altium .sb { background: #1d1d1d; color: #9d9d9d; border-top: 1px solid #3a3a3a; }
+.wk-app.altium .wk-menu { background: #262626; border: 1px solid #414141; box-shadow: 0 12px 30px -10px rgba(0,0,0,.6); }
+.wk-app.altium .wk-menu div.hot { background: #3b5675; } .wk-app.altium .wk-menu .sep { background: #414141; }
+.wk-app .prow { display: grid; grid-template-columns: 34px 1fr; gap: 0 8px; align-items: center; padding: 7px 12px; border-bottom: 1px solid #363636; transition: background .3s; }
+.wk-app .prow svg { width: 26px; height: 22px; fill: none; stroke: #9d9d9d; stroke-width: 1.1; }
+.wk-app .prow b { font-weight: 600; font-size: 12px; display: block; } .wk-app .prow span { color: #9d9d9d; font-size: 11px; }
+.wk-app .prow.new { animation: wkrowin .6s var(--wk-ease) both; background: #33465c; } .wk-app .prow.new svg { stroke: #e8834a; }
+.wk-app .prow.new b::after { content: " new"; color: #5cb85a; font-weight: 400; font-size: 10.5px; }
+@keyframes wkrowin { from { opacity: 0; transform: translateY(-8px); } }
+.wk-app .ltabs { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; display: flex; align-items: center; gap: 1px; padding: 0 6px; background: #262626; border-top: 1px solid #3a3a3a; font-size: 10.5px; color: #cfcfcf; opacity: 0; transition: opacity .4s; }
+.wk-app .ltabs.on { opacity: 1; }
+.wk-app .ltabs span { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; } .wk-app .ltabs span.on { background: #474747; }
+.wk-app .ltabs i { width: 10px; height: 10px; }
+
+/* KiCad PCB editor: light chrome around the navy canvas */
+.wk-app.kicad { color: #1c1c1c; background: #f3f3f3; grid-template-rows: 32px 26px 30px minmax(0, 1fr) 24px; }
+.wk-app.kicad .tbar { background: #fff; color: #333; border-bottom: 1px solid #e3e3e3; } .wk-app.kicad .tbar .ctl b { color: #555; }
+.wk-app.kicad .ic { background: linear-gradient(135deg, #3d7fd6, #1b4f9c); }
+.wk-app.kicad .mb { background: #fff; } .wk-app.kicad .mb > span.hot { background: #cce4f7; }
+.wk-app.kicad .tl { display: flex; align-items: center; gap: 1px; padding: 0 6px; background: #f3f3f3; border-top: 1px solid #e3e3e3; border-bottom: 1px solid #d6d6d6; }
+.wk-app .tbi { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 3px; flex: none; transition: background .25s, box-shadow .25s; }
+.wk-app .tbi svg { width: 15px; height: 15px; fill: none; stroke: #505050; stroke-width: 1.2; stroke-linejoin: round; stroke-linecap: round; }
+.wk-app .tbi.hot { background: #cce4f7; box-shadow: inset 0 0 0 1px #8fc3ee; }
+.wk-app .tsep { width: 1px; height: 18px; background: #d0d0d0; margin: 0 5px; flex: none; }
+.wk-app .layer { margin-left: 8px; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; border: 1px solid #c9c9c9; background: #fff; border-radius: 3px; padding: 3px 8px; }
+.wk-app .layer i { width: 10px; height: 10px; background: #c83434; }
+.wk-app .ecbtn { width: 24px; height: 24px; border-radius: 3px; display: grid; place-items: center; transition: background .25s, box-shadow .25s; }
+.wk-app .ecbtn svg { width: 20px; height: 20px; border-radius: 4px; background: #1d1f22; padding: 2px; color: #f2f2f2; }
+.wk-app.kicad .cv { background: #001023; border-right: 1px solid #cfcfcf; display: grid; grid-template-columns: 30px minmax(0, 1fr) 30px; }
+.wk-app.kicad .cv .vt { background: #f3f3f3; display: flex; flex-direction: column; align-items: center; gap: 2px; padding-top: 6px; z-index: 1; }
+.wk-app.kicad .cv .vt:first-child { border-right: 1px solid #d6d6d6; } .wk-app.kicad .cv .vt:last-child { border-left: 1px solid #d6d6d6; }
+.wk-app.kicad .cv .vt .tsep { width: 18px; height: 1px; margin: 4px 0; }
+.wk-app.kicad .cv .board { position: relative; background-image: radial-gradient(circle, rgba(132,132,132,.5) .7px, transparent .8px); background-size: 12px 12px; }
+.wk-app.kicad .pn { background: #f3f3f3; }
+.wk-app.kicad .pn h4 { margin: 0; padding: 8px 10px; font-size: 12px; font-weight: 600; }
+.wk-app.kicad .ptabs { display: flex; font-size: 11.5px; border-bottom: 1px solid #d6d6d6; padding: 0 6px; } .wk-app.kicad .ptabs span { padding: 5px 9px; color: #5b5b5b; }
+.wk-app.kicad .ptabs span.on { color: #1c1c1c; box-shadow: inset 0 -2px 0 #0067c0; }
+.wk-app.kicad .lay { padding: 4px 0; font-size: 11.5px; } .wk-app.kicad .lay div { display: flex; align-items: center; gap: 8px; padding: 3px 10px; }
+.wk-app.kicad .lay div.on { background: #cce4f7; } .wk-app.kicad .lay i { width: 15px; height: 10px; border: 1px solid rgba(0,0,0,.25); }
+.wk-app.kicad .lay span { margin-left: auto; color: #777; font-size: 10px; }
+.wk-app.kicad .sb { background: #f3f3f3; color: #444; border-top: 1px solid #d6d6d6; }
+.wk-app.kicad .wk-menu { background: #fff; border: 1px solid #cfcfcf; color: #1c1c1c; box-shadow: 0 10px 28px -12px rgba(0,0,0,.35); }
+.wk-app.kicad .wk-menu div.hot { background: #cce4f7; } .wk-app.kicad .wk-menu .sep { background: #e1e1e1; }
+
+/* ecadlib's own window, the same in both tools (altium_forms.py / kicad_action_plugin.py colours) */
+.wk-dlg { position: absolute; z-index: 8; width: 440px; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #e8e8e8; background: #2a2a2e; border: 1px solid #3d3d43; border-radius: 6px; overflow: hidden;
+  box-shadow: 0 40px 80px -24px rgba(0,0,0,.7), 0 0 0 1px rgba(0,0,0,.25); font: 13px/1.35 "Segoe UI", system-ui, -apple-system, sans-serif; animation: wkpop .45s var(--wk-ease) both; }
+.wk-dlg[hidden] { display: none; }
+.wk-dlg.out { animation: wkout .3s var(--wk-ease) both; }
+@keyframes wkpop { from { opacity: 0; transform: translate(-50%, -47%) scale(.97); } }
+@keyframes wkout { to { opacity: 0; transform: translate(-50%, -49%) scale(.985); } }
+.wk-dlg .os { display: none; height: 28px; align-items: center; padding: 0 0 0 10px; background: #fff; color: #222; font-size: 12px; border-bottom: 1px solid #ddd; }
+.wk-dlg .os b { margin-left: auto; width: 40px; text-align: center; font-weight: 400; color: #555; }
+.wk-dlg.kicad .os { display: flex; }
+.wk-dlg .hd { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #212124; font-weight: 600; font-size: 13px; }
+.wk-dlg .hd svg { width: 18px; height: 18px; color: #f2f2f2; flex: none; }
+.wk-dlg .hd b { margin-left: auto; font-weight: 400; color: #9c9c9c; width: 22px; text-align: center; }
+.wk-dlg .bd { padding: 4px 16px 16px; }
+.wk-dlg .big { font-size: 24px; font-weight: 600; letter-spacing: -.01em; margin-top: 10px; }
+.wk-dlg .big:empty { display: none; }
+.wk-dlg .ask { color: #9c9c9c; margin-top: 12px; }
+.wk-dlg .rows { margin: 4px 0 0; padding: 0; list-style: none; }
+.wk-dlg .rows li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #3d3d43; animation: wkrowin .45s var(--wk-ease) both; }
+.wk-dlg .rows li span:last-child { color: #9c9c9c; } .wk-dlg .rows li.ok span:last-child { color: #5cb85a; font-weight: 600; }
+.wk-dlg .dnote { margin-top: 10px; font-size: 13px; color: #9c9c9c; animation: wkrowin .45s var(--wk-ease) both; } .wk-dlg .dnote.ok { color: #5cb85a; }
+.wk-dlg .status { margin-top: 10px; color: #9c9c9c; font-size: 12px; }
+.wk-dlg .status:empty, .wk-dlg .dnote:empty { display: none; }
+.wk-dlg .meter { height: 3px; background: #3d3d43; margin-top: 6px; overflow: hidden; position: relative; }
+.wk-dlg .meter i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #2f77d9; transition: width .7s var(--wk-ease); }
+.wk-dlg .meter.swing i { width: 60px; animation: wkswing 1.3s ease-in-out infinite alternate; }
+@keyframes wkswing { from { left: 0; } to { left: calc(100% - 60px); } }
+.wk-dlg .meter[hidden] { display: none; }
+.wk-dlg label { display: block; color: #9c9c9c; font-size: 12px; margin-top: 12px; }
+.wk-dlg .in { margin-top: 4px; min-height: 30px; padding: 6px 9px; background: #1d1d20; border: 1px solid #3d3d43; border-radius: 3px; font: 14px/1.2 Consolas, ui-monospace, monospace; color: #e8e8e8; }
+.wk-dlg .in.focus { border-color: #2f77d9; }
+.wk-dlg .in.focus::after { content: ""; display: inline-block; width: 1px; height: 15px; background: #e8e8e8; vertical-align: -3px; margin-left: 1px; animation: wkblink 1s steps(2) infinite; }
+@keyframes wkblink { 50% { opacity: 0; } }
+.wk-dlg .flat { display: block; padding: 9px 12px; margin-top: 10px; background: #3e3e44; border-radius: 3px; transition: background .2s; }
+.wk-dlg .flat + small { display: block; color: #9c9c9c; font-size: 11.5px; margin: 3px 0 0 3px; }
+.wk-dlg .flat.hot { background: #4f4f56; }
+.wk-dlg .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.wk-dlg .btns span { padding: 7px 14px; border-radius: 3px; background: #3e3e44; transition: background .2s, transform .1s; }
+.wk-dlg .btns span.p { background: #2f77d9; color: #fff; } .wk-dlg .btns span.p.hot { background: #3f89e8; }
+.wk-dlg .btns span.busy { background: #4a5a70; color: #c8d0da; }
+.wk-app .press, .wk-dlg .press { transform: translateY(1px); filter: brightness(.88); }
+
+/* the hand */
+.wk-cur { position: absolute; z-index: 20; left: 0; top: 0; width: 17px; height: 24px; pointer-events: none; transition: transform .9s var(--wk-ease); filter: drop-shadow(0 2px 2px rgba(0,0,0,.35)); }
+.wk-cur path { fill: #fff; stroke: #000; stroke-width: 1.1; stroke-linejoin: round; }
+.wk-rip { position: absolute; z-index: 19; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; border: 2px solid #2f77d9; pointer-events: none; animation: wkrip .6s ease-out forwards; }
+@keyframes wkrip { from { transform: scale(.2); opacity: .9; } to { transform: scale(1.4); opacity: 0; } }
+.wk-ghost { position: absolute; z-index: 18; pointer-events: none; padding: 6px 10px; border: 1px dashed #2f77d9; border-radius: 3px; background: rgba(43,43,43,.92); color: #e4e4e4; font: 12px "Segoe UI", system-ui, sans-serif; transition: transform .9s var(--wk-ease), opacity .3s; }
+
+/* drawing the new part in: outline first, then pins one by one, then words */
+.wk-new { opacity: 0; } .wk-new.on { opacity: 1; }
+.wk-new .dr { stroke-dasharray: var(--l, 1200); stroke-dashoffset: var(--l, 1200); }
+.wk-new.on .dr { transition: stroke-dashoffset 1.1s var(--wk-ease) calc(var(--i, 0) * 22ms); stroke-dashoffset: 0; }
+.wk-new .fi { opacity: 0; } .wk-new.on .fi { opacity: 1; transition: opacity .6s var(--wk-ease) calc(var(--i, 0) * 22ms + 250ms); }
+.wk-new .pd { transform-box: fill-box; transform-origin: center; transform: scale(.2); opacity: 0; }
+.wk-new.on .pd { transform: none; opacity: 1; transition: transform .55s var(--wk-ease) calc(var(--i, 0) * 22ms), opacity .3s calc(var(--i, 0) * 22ms); }
+.wk-new.on .rat { stroke-dasharray: 400; stroke-dashoffset: 400; animation: wkdraw 1.2s var(--wk-ease) 1s forwards; }
+@keyframes wkdraw { to { stroke-dashoffset: 0; } }
+.wk-fast .wk-new.on .dr, .wk-fast .wk-new.on .fi, .wk-fast .wk-new.on .pd { transition: none; }
+.wk-fast .wk-new.on .rat { animation: none; stroke-dasharray: none; }
+.wk-fast .wk-cam, .wk-fast .wk-cur { transition: none !important; }
+.wk-swap { animation: wkswap .5s var(--wk-ease) both; }
+@keyframes wkswap { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .wk-fit { transform: none; opacity: 1; transition: none; } .wk-cam { transition: none; } }
+
+/* Altium schematic: cream sheet, navy wires, dark-red bodies on pale yellow, Times like Altium's default font */
+.wk .alt-sch .sheet { fill: #fffcf4; stroke: #000; stroke-width: .6; }
+.wk .alt-sch .grid { stroke: #efe9da; stroke-width: .5; fill: none; }
+.wk .alt-sch .zone, .wk .alt-sch .tblk { fill: none; stroke: #000; stroke-width: .6; }
+.wk .alt-sch .zt { fill: #000; font: 7px "Times New Roman", Times, serif; }
+.wk .alt-sch .body { fill: #ffffb0; stroke: #800000; stroke-width: 1; }
+.wk .alt-sch .pin { stroke: #000; stroke-width: 1; fill: none; }
+.wk .alt-sch .pinno, .wk .alt-sch .pinnm { fill: #000; font: 7.4px "Times New Roman", Times, serif; }
+.wk .alt-sch .des { fill: #00008b; font: 600 9.5px "Times New Roman", Times, serif; }
+.wk .alt-sch .cmt { fill: #000; font: 9px "Times New Roman", Times, serif; }
+.wk .alt-sch .wire { fill: none; stroke: #000080; stroke-width: 1.3; }
+.wk .alt-sch .junc { fill: #000080; }
+.wk .alt-sch .pwr { fill: none; stroke: #800000; stroke-width: 1.3; }
+.wk .alt-sch .netl { fill: #000; font: 8px "Times New Roman", Times, serif; }
+.wk .alt-sch .abar rect { fill: #2b2b2b; stroke: #5a5a5a; stroke-width: .6; opacity: .96; }
+.wk .alt-sch .abar path { fill: none; stroke: #d6d6d6; stroke-width: 1.3; stroke-linejoin: round; }
+/* Altium PCB editor defaults: black, red Top Layer, yellow Top Overlay, silver Multi-Layer */
+.wk .alt-pcb .board { fill: #0d0d0d; stroke: #8a8a8a; stroke-width: 1; }
+.wk .alt-pcb .top, .wk .alt-pcb .cu { fill: #ff0000; }
+.wk .alt-pcb .topt { fill: none; stroke: #ff0000; stroke-width: 5; stroke-linejoin: round; }
+.wk .alt-pcb .bott { fill: none; stroke: #0000ff; stroke-width: 5; stroke-linejoin: round; }
+.wk .alt-pcb .via { fill: #b3b3b3; } .wk .alt-pcb .mlpad { fill: #c0c0c0; } .wk .alt-pcb .hole { fill: #2b2b2b; }
+.wk .alt-pcb .silk, .wk .alt-pcb .fab { fill: none; stroke: #ffff00; stroke-width: 1.6; }
+.wk .alt-pcb .fab { stroke: #c000c0; stroke-width: 1; opacity: .8; }
+.wk .alt-pcb .silkf { fill: #ffff00; } .wk .alt-pcb .crt { fill: none; stroke: #c000c0; stroke-width: .8; stroke-dasharray: 4 3; opacity: .7; }
+.wk .alt-pcb .ref { fill: #ffff00; font: 600 13px Arial, sans-serif; }
+.wk .alt-pcb .rat { fill: none; stroke: #e6e6e6; stroke-width: 1; }
+/* KiCad PCB editor default colours */
+.wk .ki-pcb .edge { fill: none; stroke: #d0d2cd; stroke-width: 1.4; }
+.wk .ki-pcb .cu { fill: #c83434; }
+.wk .ki-pcb .thpad { fill: none; stroke: #e3b72e; stroke-width: 4; } .wk .ki-pcb .hole { fill: #8c8c8c; }
+.wk .ki-pcb .silk, .wk .ki-pcb .fab { fill: none; stroke: #f2eda1; stroke-width: 1.4; } .wk .ki-pcb .silkf { fill: #f2eda1; }
+.wk .ki-pcb .fab { stroke: #afafaf; stroke-width: 1; }
+.wk .ki-pcb .crt { fill: none; stroke: #ff26e2; stroke-width: .9; }
+.wk .ki-pcb .ref { fill: #f2eda1; font: 11px ui-monospace, Consolas, monospace; } .wk .ki-pcb .fabt { fill: #afafaf; font: 9px ui-monospace, Consolas, monospace; }
+.wk .ki-pcb .trk { fill: none; stroke: #c83434; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.wk .ki-pcb .btrk { fill: none; stroke: #4d7fc4; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+.wk .ki-pcb .via { fill: #ececec; } .wk .ki-pcb .vhole { fill: #3a3a3a; }
+.wk .ki-pcb .rat { fill: none; stroke: #f5ffd5; stroke-width: .9; opacity: .9; }

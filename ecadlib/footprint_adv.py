@@ -262,6 +262,23 @@ def _interior_point(pts):
     return best
 
 
+def _poly_ring(p):
+    """A through-hole polygon pad: the copper ring round its hole (at the pad's x/y), the polygon edge's least
+    distance from the hole's rim (negative when the hole is not inside the polygon)."""
+    pts, (dw, dh) = p["poly"], p["drill"]
+    r = min(dw, dh) / 2                                    # a slot: its centre line, the short side's radius round it
+    a = math.radians(p.get("rot") or 0) + (math.pi / 2 if dh > dw else 0)
+    half = (max(dw, dh) - min(dw, dh)) / 2
+    edges = list(zip(pts, pts[1:] + pts[:1]))
+    ring = math.inf
+    for k in range(9):
+        t = half * (k / 4 - 1)
+        x, y = p["x"] + t * math.cos(a), p["y"] + t * math.sin(a)
+        d = min(_seg_dist(x, y, u, v) for u, v in edges)
+        ring = min(ring, d - r if _pt_in_poly(x, y, pts) else -d - r)
+    return ring
+
+
 def _poly_area(pts):
     return abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1]))) / 2
 
@@ -679,7 +696,13 @@ def check_pad_table(spec, pads=None):
                                         "check their x/y (list same-net pads in same_net)")
     # drill vs pad
     for p in pads:
-        if p["kind"] == "thru_hole":
+        if p["kind"] == "thru_hole" and p.get("poly"):
+            ring = _poly_ring(p)
+            if ring < TH_RING_MIN - 1e-6:
+                add("error", "drill", f"pad {p['num']} ({p['_src']}): the hole at {p['x']:g}, {p['y']:g} with its "
+                                      f"{TH_RING_MIN} mm ring is not inside the polygon (ring {max(ring, 0):.3f} mm): "
+                                      "check the pad's x/y and drill")
+        elif p["kind"] == "thru_hole":
             ring = min(p["w"] - p["drill"][0], p["h"] - p["drill"][1]) / 2
             if ring <= 0:
                 add("error", "drill", f"pad {p['num']} ({p['_src']}): drill {p['drill'][0]:g} is not smaller than the pad")
@@ -1026,7 +1049,9 @@ def _finish_pads(pads, notes=None):
     """Custom-pad anchors, paste windows and thermal vias."""
     out = []
     for p in pads:
-        if p.get("poly"):
+        if p.get("poly") and p.get("drill"):           # the hole stays at the table's x/y, the anchor round it
+            p["anchor"] = (p["x"], p["y"], _r4(min(p["drill"]) + 2 * TH_RING_MIN))
+        elif p.get("poly"):
             d, ax, ay = _interior_point(p["poly"])
             p["anchor"] = (_r4(ax), _r4(ay), round(max(0.05, min(1.6 * d, 1.0)), 3))
             p["x"], p["y"] = _r4(ax), _r4(ay)
