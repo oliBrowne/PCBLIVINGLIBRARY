@@ -20,6 +20,7 @@ def test_a_multi_terminal_part_named_only_in_the_description_is_not_a_two_pad_ch
             ("1210", "LED", "", "LED RGB 1210"),
             ("0603", "R", "", "Resistor network 4 x 10k isolated 0603"),
             ("0606", "LED", "", "LED bi-color red/green"),
+            ("1210", "LED", "", "LED 3 COLOR 1210 SMD"),
             ("0805", "L", "", "Balun 2.4 GHz 0805")):
         r = res(fp, kind, mpn, desc)
         assert r["footprint"] is None and r["symbol"] is None, (desc, r)

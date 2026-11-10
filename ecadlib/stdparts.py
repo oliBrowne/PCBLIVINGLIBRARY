@@ -132,7 +132,7 @@ NOT_CHIP = re.compile(r"(?<![A-Za-z])(RGB|arrays?|reverse[ _-]?mount|mouse[ _-]?
 # two-pad chips) that say the part has more than two terminals, whatever chip size its footprint column gives
 MULTI_WORD = re.compile(
     r"(?<![A-Za-z])(RGB|arrays?|networks?|common[ _-]?mode|kelvin|balun|transformer|feed[ _-]?thr(?:ough|u)|"
-    r"(?:bi|tri|dual|two|three)[ _-]?colou?r(?:ed)?)(?![a-z])"
+    r"(?:bi|tri|dual|two|three|multi|full|[2-9])[ _-]?colou?rs?(?:ed)?)(?![a-z])"
     r"|(?<![\d.A-Za-z])(?:[3-9]|three|four|five|six|eight)[ _-]?"
     r"(?:terminals?|term|pins?|pads?|leads?|elements?|res(?:istors?)?|caps?|ch(?:annels?)?)(?![a-z])"
     r"|(?<![\d.A-Za-z])[2-9][ _-]?(?:lines?|LN)(?![a-z])", re.I)
