@@ -309,8 +309,9 @@ def test_librarian_passive_kind_agrees():
     item = lambda d: {"folder": "Components/Diodes", "footprint": {"ref": "SOD-123"}, "description": d}
     for d in NOT_LEDS:
         assert L.passive_kind(item(d)) is None, d
-    for d in LEDS:
-        assert L.passive_kind(item(d)) == "LED", d
+    from ecadlib import stdparts as S
+    for d in LEDS:                                        # 'LED array, 4 red' is an LED, but not a two-pin one
+        assert L.passive_kind(item(d)) == (None if S.multi_terminal(d) else "LED"), d   # (review 2026-11-10)
 
 
 # --- R-FX5-1 / R-FX5-4: the copper the board gets is compared, touching a pad or not, whatever shapes drew it -------

@@ -427,13 +427,20 @@ def _hold_lost_copper(st, name, notes):
         st.setdefault("verify", []).append(held)
 
 
-def passive_kind(item):
+def passive_kind(item, ln=None):
+    """R / C / CP / L / LED for a part that takes the generic passive symbol and a chip land by package, else None.
+    The description decides too: a part it calls an array, a common-mode choke, 4-terminal or RGB is not a two-pin
+    passive (None: it is looked up by its part number like any other part), and a capacitor it calls tantalum /
+    polymer / electrolytic is polarized whatever its part number is."""
     from . import stdparts as SP
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
+    desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), (ln or {}).get("description")) if x))
+    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc):
+        return None
     if cat == "Resistors":
         return "R"
     if cat == "Capacitors":
-        return "CP" if fp.startswith("CP_") else "C"
+        return "CP" if fp.startswith("CP_") or SP.says_polarized(desc) else "C"
     if cat == "Inductors":
         return "L"
     if cat == "Diodes" and (fp.startswith("LED_") or SP.says_led(item.get("description"))):
@@ -654,7 +661,7 @@ class Run:
         dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
-        kind, fp_name, sym_name = passive_kind(item), item["footprint"]["ref"], item["symbol"]["ref"]
+        kind, fp_name, sym_name = passive_kind(item, ln), item["footprint"]["ref"], item["symbol"]["ref"]
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
