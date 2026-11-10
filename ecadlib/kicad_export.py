@@ -1116,6 +1116,10 @@ def footprint_failures(item, plan_dir, kmod):
     return [f"{r}: {m}" for r, m in fails if r == "footprint"]
 
 
+class _Held(Exception):
+    """Raised inside export() to leave a part's footprint step: the part is held, nothing of it is written."""
+
+
 def _pins(sym):
     return {str(sexpr.first(p, "number")[1]) for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin") if sexpr.first(p, "number")}
 
@@ -1311,6 +1315,28 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             (d / Path(path).name).write_bytes(released_bytes(it, Path(path)))
             staged[key] = d / Path(path).name
         return staged[key]
+    def hold_now(it, why):
+        """A part the export's own last checks fail (the footprint as written here; symbol pins against its pads):
+        held like one the release check held. Nothing of it is written, and a version exported before stays."""
+        from . import messages as M
+        rep["skipped"].append({"part": it["name"], "why": "held: " + "; ".join(why), "recheck": why,
+                               "says": [{k: e[k] for k in ("code", "text", "fix")} for e in M.explain_all(why)]})
+        held.append((it, why))
+
+    fp_undo = {}                               # footprint name -> (file, bytes before | None, written-hash before | None)
+
+    def undo_fp(fpn):
+        """Take back the footprint file this run wrote for a part that is held after all."""
+        path, data, was = fp_undo.pop(fpn)
+        rel = path.relative_to(out).as_posix()
+        if data is None:
+            path.unlink(missing_ok=True)
+        elif path.read_bytes() != data:
+            fsutil.write_bytes_atomic(path, data)
+        (rep["written"].pop(rel, None) if was is None else rep["written"].__setitem__(rel, was))
+        fps.pop(fpn, None)
+        fp_src.pop(fpn, None)
+
     for it in items:
         status = it.get("status", "ready")
         if status == "held" and not include_held:
@@ -1338,6 +1364,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             it = dict(it, source=dict(it["source"], symbol=""))
         row = {"part": it["name"], "symbol_name": sname, "status": status, "symbol": None, "footprint": None, "notes": notes,
                "held": status == "held" or bool(why)}    # --include-held wrote it while held: never kept as released
+        fp_failed = None
         if sname in symbols:
             rep["errors"].append(f"{it['name']}: symbol name {sname} already used by another part"); continue
         src = it.get("source") or {}
@@ -1368,6 +1395,21 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                 fp_src[fpn] = text
                 tree, models = footprint_tree(text, fpn, lib, fnotes, at)
                 sexpr.parse(sexpr.dumps(tree) + "\n")
+                # checked BEFORE anything of it is written (the 3D steps below only add (model ...) nodes): a
+                # footprint that fails more than in the release check is not put in the library (review 2026-11-10)
+                probe = Path(stage) / "check" / f"{len(fps)}" / f"{fpn}.kicad_mod"
+                probe.parent.mkdir(parents=True, exist_ok=True)
+                probe.write_text(sexpr.dumps(tree) + "\n", encoding="utf-8")
+                new = footprint_failures(it, plan_dir, probe)
+                had = [f for f in (it.get("release_check") or {}).get("failures", []) if f.startswith("footprint:")]
+                worse = [f for f in new if f not in had]
+                if worse:
+                    rep["errors"].append(f"footprint {fpn}: fails more than in the release check: {'; '.join(worse)}")
+                    if not include_held:
+                        fp_src.pop(fpn, None)
+                        fp_failed = worse
+                        raise _Held()
+                    row["held"] = True          # written because asked (--include-held): never kept as released
                 mnodes = list(sexpr.find(tree, "model"))
                 for k, (src3d, fn0) in enumerate(models):
                     local = _local_model(src3d, fn0, libs)
@@ -1432,19 +1474,22 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                     fnotes[:] = [n for n in fnotes if not n.startswith("3D body")]   # it is converted, after all
                 elif not models:
                     fnotes.append("no 3D model (no KiCad model and no 3D body in the .PcbLib)")
-                put(pretty / f"{fpn}.kicad_mod", sexpr.dumps(tree) + "\n")
-                new = footprint_failures(it, plan_dir, pretty / f"{fpn}.kicad_mod")
-                had = [f for f in (it.get("release_check") or {}).get("failures", []) if f.startswith("footprint:")]
-                worse = [f for f in new if f not in had]
+                fp_file = pretty / f"{fpn}.kicad_mod"
+                fp_undo[fpn] = (fp_file, fp_file.read_bytes() if fp_file.is_file() else None,
+                                rep["written"].get(fp_file.relative_to(out).as_posix()))
+                put(fp_file, sexpr.dumps(tree) + "\n")
                 fps[fpn] = {"from": how, "by": it["name"], "notes": fnotes, "check": "same as release check" if not worse else "new failures",
                             "failures": new}
-                if worse:
-                    rep["errors"].append(f"footprint {fpn}: fails more than in the release check: {'; '.join(worse)}")
+            except _Held:
+                pass
             except Exception as e:             # one bad part must not stop the export
                 rep["errors"].append(f"footprint {fpn} ({it['name']}): {type(e).__name__}: {e}")
                 fpn = None
         elif fpn is None:
             notes.append("no footprint in the plan")
+        if fp_failed:
+            hold_now(it, fp_failed)
+            continue
         row["footprint"] = fpn if fpn in fps else None
         if not (it.get("source") or {}).get("symbol") and not it["symbol"].get("file"):
             notes.append("no symbol in the plan: not in the .kicad_sym")
@@ -1465,15 +1510,21 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
             sym[:] = [c for c in sym if not (isinstance(c, list) and c[0] == "property" and str(c[1]) in gone)]
             set_fields(sym, fields)
             sym[:] = [c for c in sym if not (isinstance(c, list) and c[:2] == ["property", "ki_description"])]   # KiCad 7 -> Description
-            symbols[sname] = sym
-            row["symbol"] = how
-            if row["footprint"]:
+            if row["footprint"]:               # before the symbol goes into the library
                 pads = {p[1] for p in sexpr.find(sexpr.parse((pretty / f"{row['footprint']}.kicad_mod").read_text(encoding="utf-8")), "pad") if p[1]}
                 missing = sorted(_pins(sym) - pads)
                 if missing:                   # a pin with no pad: the symbol / footprint pair is wrong (exit 1)
+                    msg = f"symbol pins without a pad in {lib}:{row['footprint']}: {', '.join(missing)}"
+                    rep["errors"].append(f"{it['name']}: {msg}")
+                    if not include_held:      # held: no symbol, and the footprint this part wrote is taken back
+                        if row["footprint"] in fp_undo and fps[row["footprint"]].get("by") == it["name"]:
+                            undo_fp(row["footprint"])
+                        hold_now(it, [f"pins: {msg}"])
+                        continue
                     notes.append(f"symbol pins without a pad in {row['footprint']}: {', '.join(missing)}")
-                    rep["errors"].append(f"{it['name']}: symbol pins without a pad in {lib}:{row['footprint']}: "
-                                         f"{', '.join(missing)}")
+                    row["held"] = True
+            symbols[sname] = sym
+            row["symbol"] = how
         except Exception as e:
             rep["errors"].append(f"symbol {it['name']}: {type(e).__name__}: {e}")
         rep["parts"].append(row)

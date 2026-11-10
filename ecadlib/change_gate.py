@@ -1301,7 +1301,37 @@ def same_content(lg, head, item, path, data, base):
     except Exception:
         return False
     keys = ("symbol",) if kind == "symbol" else ("footprint", "model")
-    return bool(old) and all(old.get(k) == new.get(k) for k in keys)
+    if not (bool(old) and all(old.get(k) == new.get(k) for k in keys)):
+        return False
+    # a .SchLib also carries the part's identity (MPN, Value, Manufacturer ... as parameters). The fingerprint takes
+    # those from the plan, so it cannot see them edited in the file: compare them with the released copy's here, or
+    # another MPN / value would ship under the released revision (full review 2026-11-10)
+    return kind != "symbol" or _same_fields(lg, head, item, path, data, base)
+
+
+def _same_fields(lg, head, item, path, data, base):
+    """The symbol's own parameters in `data` (all but the free-text Description) are those of the head's stored copy
+    of `path`. True when that copy
+    cannot be read (nothing to compare with: the fingerprint test alone decides, as before)."""
+    import tempfile
+    ref = (item.get("symbol") or {}).get("ref")
+    try:
+        kept = lg.get_bytes(next(r["sha256"] for r in (head.get("files") or {}).values()
+                                 if (Path(r["path"]) if Path(r["path"]).is_absolute() else Path(base) / r["path"]).resolve()
+                                 == Path(path).resolve()))
+    except (StopIteration, OSError, KeyError, ValueError):
+        return True
+    with tempfile.TemporaryDirectory(prefix="ecadlib-same-") as d:
+        got = []
+        for i, b in enumerate((kept, data)):
+            f = Path(d) / f"{i}" / Path(path).name
+            f.parent.mkdir()
+            f.write_bytes(b)
+            try:                               # the free-text Description may be reworded by a re-save (a shared
+                got.append({k: v for k, v in FP.schlib(f, ref)[1].items() if k != "Description"})   # Resistor symbol)
+            except Exception:
+                return i == 0                  # the released copy unreadable: nothing to compare; the new one: not a re-save
+    return got[0] == got[1]
 
 
 def released_bytes(lg, item, path, base, data=None):

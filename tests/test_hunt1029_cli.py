@@ -145,7 +145,8 @@ def _datasheet_answer(base, name):
     d.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^A-Za-z0-9_.+-]", "_", name)
     (d / f"{safe}.json").write_text(json.dumps({"name": name, "footprint": "PKG-4", "pins": [{"num": "1", "name": "A"}]}))
-    (d / "PKG-4.json").write_text(json.dumps({"name": "PKG-4", "package_type": "custom"}))
+    (d / "PKG-4.json").write_text(json.dumps({"name": "PKG-4", "package_type": "custom", "pad_table": {   # a pad table:
+        "unit": "mm", "pads": [{"number": "1", "x": 0, "y": 0, "w": 1, "h": 1}]}}))    # fp-edit saves edits only for one
     (base / "plan.json").write_text(json.dumps([{"name": name, "status": "held"}]))
     return base / "plan.json"
 
