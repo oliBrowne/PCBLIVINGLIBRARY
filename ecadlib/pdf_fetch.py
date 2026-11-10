@@ -287,7 +287,7 @@ class _State:
     """One launched browser: its own, so a stuck call on an abandoned worker never touches the next one."""
 
     def __init__(self):
-        self.pw = self.browser = self.ctx = self.why = self.engine = self.pid = None
+        self.pw = self.browser = self.ctx = self.why = self.engine = self.pid = self.proc = None
         self.warm, self.public = set(), getattr(self, "public", False)   # (kept when a dead browser is started again)
 
 
@@ -363,9 +363,10 @@ class Browser:
         try:
             s.pw = sync_playwright().start()
             try:                                      # the driver's process, to stop it if a call never returns
-                s.pid = s.pw._impl_obj._connection._transport._proc.pid
+                s.proc = s.pw._impl_obj._connection._transport._proc
+                s.pid = s.proc.pid
             except Exception:
-                s.pid = None
+                s.proc = s.pid = None
             proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
             bypass = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
             tried = []
@@ -561,9 +562,12 @@ class Browser:
         return status, bytes(buf), ctype, url, None
 
     def _close(self, s):
+        # a driver whose process is gone answers nothing: asking its context or browser to close would wait for ever
+        # (the call then ran out its whole time limit and the datasheet was given up), so they are only let go
+        gone = getattr(s.proc, "returncode", None) is not None
         for x in (s.ctx, s.browser):
             try:
-                x and x.close()
+                x and not gone and x.close()
             except Exception:
                 pass
         try:
