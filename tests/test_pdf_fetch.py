@@ -896,6 +896,19 @@ def test_a_dead_driver_is_started_again_and_an_abandoned_call_stops_its_browser(
 
 
 @lite
+def test_the_driver_pid_is_found_on_the_installed_playwright():
+    if not PF.playwright_available():
+        return
+    from playwright.sync_api import sync_playwright
+    pw = sync_playwright().start()                                     # the driver only: no browser is launched
+    try:
+        pid = PF._driver_pid(pw)
+        assert isinstance(pid, int) and pid > 0, pid                   # Playwright 1.65 moved it: a None here means a stuck call can't be stopped
+    finally:
+        pw.stop()
+
+
+@lite
 def test_a_missing_driver_is_one_note(monkeypatch):
     if not PF.playwright_available():
         return

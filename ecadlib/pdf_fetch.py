@@ -223,6 +223,20 @@ def _runs(cmd):
     return bool(path) and os.access(path, os.X_OK)
 
 
+def _driver_pid(pw):
+    """The Playwright driver's process id, or None. Private attributes, so each known layout is tried:
+    up to 1.64 the connection holds the transport; from 1.65 the client behind pw.stop does."""
+    for get in (lambda: pw._impl_obj._connection._transport._proc.pid,
+                lambda: pw.stop.__self__._client._transport._proc.pid):
+        try:
+            pid = get()
+        except Exception:
+            continue
+        if isinstance(pid, int):
+            return pid
+    return None
+
+
 def pw_proxy(proxy, bypass=None):
     """HTTPS_PROXY as Playwright takes it: Chromium ignores user:password in the server URL, so they go apart."""
     from urllib.parse import urlsplit, unquote
@@ -362,10 +376,7 @@ class Browser:
             pass
         try:
             s.pw = sync_playwright().start()
-            try:                                      # the driver's process, to stop it if a call never returns
-                s.pid = s.pw._impl_obj._connection._transport._proc.pid
-            except Exception:
-                s.pid = None
+            s.pid = _driver_pid(s.pw)                 # the driver's process, to stop it if a call never returns
             proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
             bypass = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
             tried = []
