@@ -655,6 +655,16 @@ def sanity(spec):
             errs.append(f"terminal_width {dim(tw)[0]} is not smaller than the {spec['pitch']} mm pitch")
     if t == "qfn" and T and T >= min(L, W) / 2:
         errs.append(f"terminal_length {T} reaches the middle of the {L} x {W} body")
+    if t == "qfn" and isinstance(n, int) and "pins_left_right" not in spec and "pins_top_bottom" not in spec \
+            and not listed_sides(spec) and not spec.get("pin_positions"):
+        # no split given: a quarter of the pins per side is right only for a square body and a count of four sides.
+        # Anything else was laid out by guess (full review 2026-11-10: 6 pins became 1+2+1+2, 10 became 2+3+2+3)
+        square = L is not None and W is not None and abs(L - W) <= max(0.1, 0.05 * min(L, W))
+        if n % 4 or not square:
+            errs.append(f"{n} pins on a {L} x {W} mm body and no pins_left_right / pins_top_bottom: "
+                        + ("the count is not a multiple of 4" if n % 4 else "the body is not square")
+                        + ", so a quarter of the pins per side would be a guess. Give the split (a DFN / SON: "
+                        f"pins_left_right {n // 2}, pins_top_bottom 0) or list the sides in pin_sides")
     ep = spec.get("exposed_pad")
     bx, by = (W, L) if t == "gullwing" else (L, W)            # EP length is along X: gullwing X is body_width (E1)
     if ep and (dim(ep["length"])[1] >= bx or dim(ep["width"])[1] >= by):
