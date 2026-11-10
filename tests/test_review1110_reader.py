@@ -44,3 +44,54 @@ def test_a_sliver_of_a_body_is_held():
     inch_as_mm = dict(T.R1206, body_width=T.sc(T.R1206["body_width"], 1 / 25.4))   # 0.063 "mm": pads 0.15 mm tall
     h = held(inch_as_mm)
     assert h and "body_width" in h and "implausib" in h, h
+
+
+def test_the_reads_own_same_net_does_not_switch_off_the_overlap_check():
+    from tests.test_datasheet import INCH
+    e = copy.deepcopy(INCH)
+    e["package"]["land"] = {"pad_length": 1.5, "pad_width": 2.0, "pad_center": 2.7, "pad_center_y": None}
+    overlap = D.process(copy.deepcopy(e), "TESTPART", "https://example.com/t.pdf")
+    assert "overlap" in (D.read_hold(overlap) or ""), D.read_hold(overlap)
+    e["package"]["same_net"] = [[str(i) for i in range(1, 9)]]                 # eight different signals "on one net"
+    res = D.process(copy.deepcopy(e), "TESTPART", "https://example.com/t.pdf")
+    assert "overlap" in (D.read_hold(res) or ""), D.read_hold(res)
+    assert not res["spec"].get("same_net") and any(r.startswith("same_net: ") for r in res["needs_review"])
+
+
+def test_a_same_net_group_the_pin_table_bears_out_is_kept():
+    pins = [{"num": "1", "name": "VIN"}, {"num": "2", "name": "vin"}, {"num": "3", "name": "GND"},
+            {"num": "4", "name": "NC"}, {"num": "5", "name": "NC"}]
+    kept, dropped = D.supported_nets(pins, [["1", "2", "TAB"], ["1", "3"], ["4", "5"], ["X", "Y"]])
+    assert kept == [["1", "2", "TAB"]] and dropped == [["1", "3"], ["4", "5"], ["X", "Y"]]
+
+
+def _process(e):
+    return D.process(copy.deepcopy(e), "TESTPART", "https://example.com/t.pdf")
+
+
+def test_what_the_read_could_not_read_is_not_built_from_a_default():
+    from tests.test_datasheet import GOOD, INCH
+    e = copy.deepcopy(GOOD)                                                    # a QFN whose thermal pad was not read
+    e["package"]["exposed_pad"] = None
+    e["package"]["unresolved"] = ["exposed_pad.length", "exposed_pad.width"]
+    e["pins"] = e["pins"][:16]
+    h = D.read_hold(_process(e))
+    assert h and "unresolved: exposed_pad.length" in h, h
+    e = copy.deepcopy(INCH)                                                    # a value the read calls a guess
+    e["package"]["unresolved"] = ["lead_span (digits blurred; E could be 0.236 or 0.286)"]
+    h = D.read_hold(_process(e))
+    assert h and "lead_span" in h, h
+    assert D.read_hold(_process(INCH)) is None and D.read_hold(_process(GOOD)) is None
+
+
+def test_an_unresolved_entry_that_shapes_no_copper_is_not_a_hold():
+    from tests.test_datasheet import INCH
+    for u in ("height_max", "courtyard_excess", "marking code (not shown)", "description",
+              "body_length min/max (not printed)", "terminal_width tolerance"):
+        e = copy.deepcopy(INCH)
+        e["package"]["unresolved"] = [u]
+        assert D.read_hold(_process(e)) is None, (u, D.read_hold(_process(e)))
+    # the symbol alone is wanted (the footprint comes from another source): the read's copper is not built at all
+    e = copy.deepcopy(INCH)
+    e["package"]["unresolved"] = ["lead_span (blurred)"]
+    assert D.read_hold(_process(e), False) is None

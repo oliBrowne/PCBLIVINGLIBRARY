@@ -1695,6 +1695,21 @@ def same_net_from_pins(pins, groups=None):
     return sorted((sorted(g, key=key) for g in merged), key=lambda g: key(g[0]))
 
 
+def supported_nets(pins, groups):
+    """The read's own same_net groups that its pin table bears out -> (kept, dropped). same_net lets pads overlap, so a
+    group is not taken on the read's word (full review 2026-11-10: a read held for overlapping pads passed once the
+    same answer listed all eight pins, eight different signals, as one net; text in a datasheet could ask for that).
+    A group is kept when the pins it names that are in the pin table all carry one name there (not NC), and at least
+    one is in the table; pads the table does not list (a tab, a shield lug) may ride along."""
+    name = {str(p.get("num")): str(p.get("name") or "").strip().upper() for p in pins or []}
+    kept, dropped = [], []
+    for g in groups or []:
+        names = {name[str(n)] for n in g if str(n) in name}
+        ok = len(names) == 1 and not NO_NET.match(next(iter(names))) and next(iter(names)) != ""
+        (kept if ok else dropped).append([str(n) for n in g])
+    return kept, dropped
+
+
 def schema_check(spec, review):
     """package_schema.json via footprint_gen.validate; every error listed when it fails."""
     try:
@@ -2770,6 +2785,14 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
     merged = merge_pins(spec, ext["pins"], review)
     if merged is not None:                            # leads joined to the pad: one pad, so one pin (KiCad's symbols)
         ext = dict(ext, pins=merged)
+    if spec.get("same_net"):                          # the read's word alone never lets pads overlap
+        kept, dropped = supported_nets(ext["pins"], spec["same_net"])
+        if dropped:
+            spec["same_net"] = kept
+            if not kept:
+                del spec["same_net"]
+            review.append("same_net: the read lists pads " + "; ".join(",".join(g) for g in dropped) + " as one net, "
+                          "but the pin table does not give them one name: not used, so those pads may not overlap")
     if spec.get("pad_table"):
         nets = same_net_from_pins(ext["pins"], spec.get("same_net"))
         if nets != (spec.get("same_net") or []):
