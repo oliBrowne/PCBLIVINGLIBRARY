@@ -282,6 +282,26 @@ NUMBERING_WARN = re.compile(r"numbering doubles back|is not the top-left pad")
 GENERATED_FP = ("datasheet:", "standard:")   # ecadlib's own generator (a datasheet read, pad table, standard family)
 
 
+def _row_reversed(po):
+    """One whole run of leads numbered the other way round (full review 2026-11-10: a SOIC-16 pad table with pins 9-16
+    going down the right side, not up it, was 'more than two pairs out of place', so only a warning): at the best
+    rotation every lead is in place but one run of 3 or more, which reads exactly backwards. That is not 'numbered
+    where the pads fall': the rest of the part counts counter-clockwise and this run counts against it. -> the hold
+    message, or None."""
+    want, n = po["want"], len(po["want"])
+    rot = [po["order"][(i + po["shift"]) % n] for i in range(n)]
+    off = [i for i in range(n) if rot[i] != want[i]]
+    if not off:
+        return None
+    a, b = off[0], off[-1]
+    if b - a + 1 < 3 or b - a + 1 == n or rot[a:b + 1] != want[a:b + 1][::-1]:
+        return None
+    return (f"pads {want[a]}-{want[b]} are numbered the other way round: pad {want[a]} sits where pad {want[b]} "
+            "belongs, counting counter-clockwise from pin 1, so those pins would land on the wrong pads; check the "
+            "pad numbers on the datasheet drawing (if the drawing's top view really numbers them so, release the part "
+            "with that reason)")
+
+
 def numbering_hold(text, src, pin_names):
     """fpgen D1: footprint_check warns when pads are numbered out of KiCad's order (pin 1 top-left, counter-clockwise).
     In a KiCad library footprint, a module, relay or power part that is legitimately numbered where the datasheet's pads
@@ -290,7 +310,7 @@ def numbering_hold(text, src, pin_names):
     unless the swapped pins are interchangeable (the same pin name, as GND / GND, VDD_1 / VDD_2, or both not
     connected), when the swap cannot change the circuit. -> the hold message, or None. Not checked: leads of mixed
     sizes, 2-row zig-zag numbering, single rows (footprint_check.perimeter_order), and more than two pairs out of place
-    (numbered where they fall, not a swap)."""
+    (numbered where they fall, not a swap) unless they are one whole run counted backwards (_row_reversed)."""
     if not str(src or "").startswith(GENERATED_FP) or not pin_names:
         return None
     po = FC.perimeter_order(text)
@@ -299,7 +319,7 @@ def numbering_hold(text, src, pin_names):
     got = dict(po["misplaced"])
     pairs = sorted({tuple(sorted((w, g), key=int)) for w, g in got.items() if got.get(g) == w}, key=lambda p: int(p[0]))
     if len(pairs) * 2 != len(got) or len(pairs) > 2:
-        return None
+        return _row_reversed(po)
     from . import symbol_layout as SL
 
     def key(n):
