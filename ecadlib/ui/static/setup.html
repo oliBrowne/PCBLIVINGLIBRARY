@@ -168,6 +168,15 @@ ol.steps li { margin: 4px 0; }
     <div id="extrakeys"></div>
   </section>
 
+  <section class="card" id="c-crash" hidden>
+    <h2><span class="n">+</span>Crash reports</h2>
+    <p class="sub">When ecadlib hits a bug, it can tell its developer automatically. Each report becomes a public GitHub
+      issue, so only the error's type, the lines in ecadlib's own code and the versions are sent: never the error
+      message, your files, your parts or your keys. Off unless you switch it on.</p>
+    <label class="opt"><input type="checkbox" id="crash-on"><span><span class="t">Send crash reports automatically</span></span></label>
+    <div id="crashmsg"></div>
+  </section>
+
   <section class="card" id="c-done">
     <h2>Done?</h2>
     <p class="sub">Open ecadlib and drop a BOM (CSV or Excel, as Altium or KiCad export it) on the first card.</p>
@@ -303,7 +312,17 @@ $("a365-signout").onclick = async () => {
   catch (e) { msg("a365msg", esc(e.message), "bad"); }
 };
 
-async function load() { S = await api("/api/setup"); render(); $("a365ws").value = S.altium365.workspace; renderA365(); }
+async function load() { S = await api("/api/setup"); render(); $("a365ws").value = S.altium365.workspace; renderA365(); renderCrash(); }
+function renderCrash() {
+  const C = S.crash_reports || {};
+  $("c-crash").hidden = !C.available;
+  $("crash-on").checked = !!C.on;
+}
+$("crash-on").onchange = async () => {
+  try { S.crash_reports = await api("/api/setup/crash-reports", {on: $("crash-on").checked}); msg("crashmsg", S.crash_reports.on ? "On. Thank you." : "Off.", "ok"); }
+  catch (e) { msg("crashmsg", esc(e.message), "bad"); }
+  renderCrash();
+};
 
 $("savekey").onclick = async () => {
   try {
