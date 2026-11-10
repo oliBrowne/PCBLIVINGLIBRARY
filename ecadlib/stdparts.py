@@ -85,8 +85,8 @@ ALIASES = {
     "SOT457": "SC-74-6_1.55x2.9mm_P0.95mm",
 }
 DIODE_ALIASES = {
-    "SOD123": "D_SOD-123", "SOD123F": "D_SOD-123F", "SOD323": "D_SOD-323", "SC76": "D_SOD-323", "SC90": "D_SOD-323",
-    "SOD323F": "D_SOD-323F", "SOD523": "D_SOD-523", "SC79": "D_SOD-523", "SOD923": "D_SOD-923", "SOD128": "D_SOD-128",
+    "SOD123": "D_SOD-123", "SOD123F": "D_SOD-123F", "SOD323": "D_SOD-323", "SC76": "D_SOD-323", "SC90": "D_SOD-323F",   # JEITA SC-90 is the
+    "SOD323F": "D_SOD-323F",                      # flat-lead SOD-323F (SC-76 the gull-wing SOD-323) "SOD523": "D_SOD-523", "SC79": "D_SOD-523", "SOD923": "D_SOD-923", "SOD128": "D_SOD-128",
     "SMA": "D_SMA", "DO214AC": "D_SMA", "SMB": "D_SMB", "DO214AA": "D_SMB", "SMC": "D_SMC", "DO214AB": "D_SMC",
     "SMF": "D_SMF", "DO219AB": "D_SMF", "MINIMELF": "D_MiniMELF", "SOD80": "D_MiniMELF", "LL34": "D_MiniMELF",
     "MELF": "D_MELF", "DO213AB": "D_MELF", "LL41": "D_MELF",
@@ -124,7 +124,15 @@ NO_GO = re.compile(r"(?<![A-Za-z])(horizontal|lying|right[- ]angle|bent)(?![a-z]
 NO_GO_TO92 = re.compile(r"(?<![A-Za-z])(wide|stagger\w*)(?![a-z])|(?<![A-Za-z0-9])W\d+(?:\.\d+)?mm", re.I)   # not inline 1.27 mm
 STANDING = re.compile(r"(?<![A-Za-z])(vertical|standing|upright)(?![a-z])", re.I)   # an axial part on end: not laid flat
 BEND = re.compile(r"(?<![\d.])P?(\d{1,2}(?:\.\d{1,2})?)\s?mm\b|(?<![A-Z0-9])P(\d{1,2}(?:\.\d{1,2})?)(?![\d.])", re.I)
-EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A-Z])|PowerPAD", re.I)
+EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A-Z])|PowerPAD|"
+                     r"(?<![A-Za-z])E[ _-]?PAD(?![A-Za-z])|(?<![A-Za-z0-9])(?:PP|TP)(?![A-Za-z0-9])", re.I)
+# words beside a package name that say it is another land than the plain package of that name (full review
+# 2026-11-10: 'SMA FLAT' gave the standard SMA, 'TO-92 Formed Leads' the 1.27 mm inline holes): flat leads
+# (SMAF, SOD-123FL), a smaller namesake (Mini SMA), leads formed or kinked to another hole pattern
+OTHER_LAND = re.compile(r"(?<![A-Za-z])(flat(?:[ _-]?leads?)?|FL|mini|micro|sub|(?:pre[ -]?)?formed|kinked|"
+                        r"lead[ _-]?form\w*)(?![A-Za-z])", re.I)
+# a lead count given beside the name: 'SOT-23 (5)', 'SOT-323 5 pins', '6 leads', '5L', '5-pin'
+LEAD_COUNT = re.compile(r"\(\s*(\d{1,2})\s*\)|(?<![\d.A-Za-z])(\d{1,2})[ -]?(?:pins?|leads?|ld|L)(?![A-Za-z])", re.I)
 # words in a footprint field that name a part with more pads, or another land, on a chip size code
 NOT_CHIP = re.compile(r"(?<![A-Za-z])(RGB|arrays?|reverse[ _-]?mount|mouse[ _-]?bite|shunt|kelvin|common[ _-]?mode|"
                       r"choke|crystal|balun|filter|transformer|speaker|buzzer|connector|jack|header|modified)(?![a-z])", re.I)
@@ -461,8 +469,8 @@ def _free_attrs(text):
     if e:
         a["ep"] = True
         a["epsize"] = tuple(sorted((float(e.group(1)), float(e.group(2) or e.group(1)))))
-    elif re.search(r"exposed pad|thermal pad|\bEP\b|-EP\b|_EP\b|PowerPAD", rest, re.I):
-        a["ep"] = True
+    elif re.search(r"exposed pad|thermal pad|\bEP\b|-EP\b|_EP\b|PowerPAD", rest, re.I) or EP_WORD.search(rest):
+        a["ep"] = True                                # ('MSOP-8 (EPAD)', 'MSOP8-PP', 'MSOP-8-TP' too)
     mil = re.search(r"(150|208|209|300)\s*mil", t, re.I)
     if mil and not a["body"]:
         a["body_w"] = MIL_BODY[mil.group(1)]
@@ -903,6 +911,15 @@ def named_package(text, diode=False, weak=False, kind=None):
             return None, f"{m.group(0).strip()}: {_other_bend(str(text), name)}"
         if name and EP_WORD.search(str(text)):         # 'SOT-23-5-EP': the table's package has no exposed pad
             return None, f"{m.group(0).strip()} with an exposed pad: not the standard package (no pad under the body)"
+        rest = str(text)[:m.start()] + " " + str(text)[m.end():]   # the words beside the name
+        other = OTHER_LAND.search(rest)
+        if name and other:
+            return None, f"{m.group(0).strip()} {other.group(0).strip()}: not the plain {name} land (another lead form or size)"
+        said = [int(x) for c in LEAD_COUNT.finditer(rest) for x in c.groups() if x]
+        have = (packages().get(name) or {}).get("pin_count") if name else None
+        if name and have and said and have not in said:
+            return None, (f"{m.group(0).strip()} with {said[0]} leads: {name} has {have}; name the package with its "
+                          "lead count (SOT-23-5, SOT-353)")
         if name and name in packages():
             return name, f"{m.group(0).strip()} -> {name}"
     return None, None
