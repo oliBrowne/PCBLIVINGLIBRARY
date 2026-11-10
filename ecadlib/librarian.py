@@ -1753,13 +1753,11 @@ DECISIONS = ("allow", "approvals", "duplicate_of")    # what people decide on a 
 
 
 def _decisions_lock(plan_f):
-    """The workspace's plan lock (<ws>/plan.lock, which every decision recorder takes) while the run settles and
-    writes its plan, for a plan in a workspace (<ws>/librarian/<name>/plan.json); else no lock."""
-    import contextlib
-    from .approvals import plan_workspace
+    """The plan lock every decision recorder takes (approvals.plan_lock_dir: <ws>/plan.lock for a workspace plan,
+    else plan.lock beside plan.json) while the run settles and writes its plan."""
+    from .approvals import plan_lock_dir
     from .fsutil import plan_lock
-    ws = plan_workspace(plan_f)
-    return plan_lock(ws, wait=True) if ws is not None else contextlib.nullcontext()
+    return plan_lock(plan_lock_dir(plan_f), wait=True)
 
 
 def _fresh_decisions(old, plan_f):

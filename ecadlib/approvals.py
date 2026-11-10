@@ -518,8 +518,8 @@ def main(argv=None):
     ap.add_argument("-m", "--comment", default="", help="comment (required for reject)")
     ap.add_argument("--json", action="store_true", help="status: print the policy and one row per part as JSON")
     a = ap.parse_args(argv)
-    ws = plan_workspace(a.plan) if a.action != "status" else None
-    if ws is None:
+    ws = plan_lock_dir(a.plan) if a.action != "status" else None
+    if ws is None or not ws.is_dir():                  # no such folder: _run says the plan is not there
         return _run(a)
     from .fsutil import plan_lock                      # the web UI may be recording into this plan: plan.lock is held
     with plan_lock(ws, wait=True, timeout=DECISION_WAIT) as free:   # only for short writes, so wait a little
@@ -534,14 +534,21 @@ def plan_workspace(plan):
     return p.parent.parent.parent if p.parent.parent.name == "librarian" else None
 
 
+def plan_lock_dir(plan):
+    """The folder whose plan.lock guards writes to this plan: the workspace for a workspace plan (the lock the web UI
+    takes), else the plan's own folder. Every plan has one: a plan in out/librarian/ (the default without `ecadlib
+    init`) had none, and a reject recorded while another command held the plan in memory was overwritten."""
+    return plan_workspace(plan) or Path(plan).resolve().parent
+
+
 @contextlib.contextmanager
 def cli_plan_lock(plan):
-    """For CLI commands that rewrite a workspace plan (<ws>/librarian/<name>/plan.json): wait while the web UI records
-    into it, so neither write is lost. Other plans: no lock. The plan's library lock is taken first (the lock order
-    in fsutil): these commands go on to change-control steps (resolve, release anyway, dedupe merge) that take it, and
-    a plan.lock holder never waits for the library lock."""
-    ws = plan_workspace(plan)
-    if ws is None:
+    """For CLI commands that rewrite a plan: wait while the web UI or another command records into it, so neither
+    write is lost (plan_lock_dir: the workspace's lock, else plan.lock beside plan.json). The plan's library lock is
+    taken first (the lock order in fsutil): these commands go on to change-control steps (resolve, release anyway,
+    dedupe merge) that take it, and a plan.lock holder never waits for the library lock."""
+    ws = plan_lock_dir(plan)
+    if not ws.is_dir():                                # no such folder: the command itself says the plan is missing
         yield
         return
     from . import ledger as LG
