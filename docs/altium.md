@@ -241,7 +241,8 @@ Plugins > ecadlib: add part / check project BOM / open review queue) that opens 
 the ecadlib menu in Altium, drawn in the same dark colours: Add part from MPN (MPN, manufacturer optional, a live
 lookup, then the footprint placed in the middle of the board), Check project BOM (the schematic's lines: already in
 your library / a source can supply / needs a footprint, then Later or Fill the library now, and the report on
-request) and Open review queue. The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
+request), Open review queue and Use in every project (the project's library into KiCad's own tables, see
+docs/kicad.md). The window does not block KiCad. It runs `ecadlib kicad-menu run-job` in the background
 (`ecadlib/kicad_menu.py`) and reads its `progress.ini` / `result.ini`, as the Altium dialog does. Per project,
 `<project>/ecadlib-work/` is the workspace (one parts list for every part added or filled, so one plan makes the whole
 library) and `<project>/ecadlib/` the KiCad library, added to the project's tables as `${KIPRJMOD}/ecadlib/...`
@@ -249,8 +250,9 @@ library) and `<project>/ecadlib/` the KiCad library, added to the project's tabl
 (say `kicad-export -o <project>`'s `${KIPRJMOD}/ecadlib.pretty`) is not changed: the window names that row, to rename
 or remove. The BOM check counts a line as in your library when its part number is in `<project>/ecadlib/*.kicad_sym`.
 Open review queue runs one web UI per project: when the port is taken by another project's UI, the next free port.
-KiCad gives plugins no menu or toolbar slot in the schematic editor; its Tools > Generate BOM can run
-`ecadlib kicad-menu check-bom "%I"` there, which checks the netlist against the library and opens the report.
+KiCad gives plugins no menu or toolbar slot in the schematic editor; the setup page's Add to KiCad puts two entries in
+its Tools > Generate Legacy Bill of Materials instead, *ecadlib: check BOM* and *ecadlib: fill library* (see
+docs/kicad.md, "Three ways to get the library into KiCad").
 Tried in KiCad 7.0.11: toolbar button, BOM check, fill and add part with the footprint placed.
 
 **Altium.** `altium-pkg` writes a folder that opens in Altium as is: `SchLib/`, `PcbLib/`, `<name>.LibPkg` (an

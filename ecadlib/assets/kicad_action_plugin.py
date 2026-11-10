@@ -5,7 +5,9 @@
     the project's ecadlib library and the footprint is placed in the middle of the board;
   * Check project BOM: the schematic's lines against the library (already in your library / a source can supply /
     needs a footprint), then "Fill the library now" builds the missing ones, or the report opens in the browser;
-  * Open review queue: ecadlib's page, where held parts get a symbol or footprint picked.
+  * Open review queue: ecadlib's page, where held parts get a symbol or footprint picked;
+  * Use in every project: this project's library goes into KiCad's own symbol / footprint tables as
+    ecadlib_<project> (with a path variable for its folder and its 3D models), so other projects can use its parts.
 
 Installed by KiCad's Plugin and Content Manager from the zip `ecadlib kicad-pcm --plugin` writes (or copied into
 KiCad's scripting/plugins folder by the setup page's "Add to KiCad" button). It runs in KiCad's own Python, so it does
@@ -73,6 +75,24 @@ def ecadlib_command(environ=None, which=shutil.which, run=subprocess.run, cmd_fi
     return None
 
 
+def child_env(environ=None, cmd_file=None):
+    """The environment ecadlib runs in: KiCad's own, less the Python settings KiCad sets for its own Python
+    (PYTHONHOME, and PYTHONPATH: KiCad on Linux puts the system's dist-packages in it, whose older numpy / pandas then
+    shadow ecadlib's and it stops at start). PYTHONPATH is the one saved with the command in ecadlib_cmd.json when
+    ecadlib was added to KiCad (a source checkout needs it), else none."""
+    env = dict(os.environ if environ is None else environ)
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    try:
+        with open(cmd_file or os.path.join(HERE, "ecadlib_cmd.json"), encoding="utf-8") as f:
+            saved = json.load(f).get("pythonpath")
+    except (OSError, ValueError, AttributeError):
+        saved = None
+    if isinstance(saved, str) and saved:
+        env["PYTHONPATH"] = saved
+    return env
+
+
 def _imports_ecadlib(python, run=subprocess.run):
     """Whether `python` has the ecadlib package. Asked in an empty folder of its own: in KiCad's working folder (a
     project folder) the project's ecadlib/ library folder imports as a namespace package and answers yes; and a module
@@ -80,7 +100,8 @@ def _imports_ecadlib(python, run=subprocess.run):
     import tempfile
     d = tempfile.mkdtemp(prefix="ecadlib-probe-")
     try:
-        return run([python, "-c", "import ecadlib.kicad_menu"], cwd=d, capture_output=True, **NO_WINDOW).returncode == 0
+        return run([python, "-c", "import ecadlib.kicad_menu"], cwd=d, capture_output=True, env=child_env(),
+                   **NO_WINDOW).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
     finally:
@@ -561,7 +582,9 @@ def _window_class():
             s.Add(self.text(self.body, "What would you like to do?", DIM), 0, wx.TOP, 12)
             for label, hint, go in (("Add part from MPN…", "look a part up and place its footprint", self.ask),
                                     ("Check project BOM", "which schematic parts the library already has", self.check),
-                                    ("Open review queue", "pick symbols and footprints for held parts", self.queue)):
+                                    ("Open review queue", "pick symbols and footprints for held parts", self.queue),
+                                    ("Use in every project", "put this project's library into KiCad's own tables",
+                                     self.everywhere)):
                 b = Flat(self.body, label, go, primary=False, width=400)
                 s.Add(b, 0, wx.EXPAND | wx.TOP, 10)
                 s.Add(self.text(self.body, hint, DIM, 9), 0, wx.TOP | wx.LEFT, 3)
@@ -601,6 +624,9 @@ def _window_class():
         def queue(self):
             self.run("queue", "Open review queue")
 
+        def everywhere(self):
+            self.run("install", "Use in every project")
+
         def read_ai(self):
             """The AI step the last job offered: a second yes above the limit, then the reads, held to the amount shown."""
             r = self.result
@@ -634,7 +660,8 @@ def _window_class():
             with open(os.path.join(job, "log.txt"), "w", encoding="utf-8") as log:
                 # cwd: the job folder, never the project: `python -m ecadlib` would import the project's ecadlib/
                 # library folder instead of the ecadlib package
-                return job, subprocess.Popen(c, cwd=job, stdout=log, stderr=subprocess.STDOUT, **NO_WINDOW)
+                return job, subprocess.Popen(c, cwd=job, stdout=log, stderr=subprocess.STDOUT, env=child_env(),
+                                             **NO_WINDOW)
 
         def fire(self, action, **kw):
             """A job the window does not wait for (open a report): its failure is still shown when it ends."""
@@ -667,7 +694,7 @@ def _window_class():
         def live(self, prog, default=""):
             s = self.page(self.title)
             big = {"add-part": self.mpn, "check-bom": "Checking…", "fill": "Filling…", "ai-read": "Reading…",
-                   "queue": "Opening…"}.get(self.action, "")
+                   "queue": "Opening…", "install": "Adding…"}.get(self.action, "")
             s.Add(self.text(self.body, big, TEXT, 20, True), 0, wx.TOP, 10)
             self.rows(s, rows_of(prog))
             s.Add(self.text(self.body, prog.get("text") or default, DIM, 9), 0, wx.TOP, 10)

@@ -1077,16 +1077,27 @@ def publish(ws, bom_rel, library, name="ecadlib", tool="altium"):
             "build": str(Path(library).resolve()) if rep.get("native_build") else ""}
 
 
-def publish_kicad(ws, bom_rel, library, name="ecadlib"):
+def publish_kicad(ws, bom_rel, library, name="ecadlib", models_var=None):
     """The plan's parts -> <library>/<name>.kicad_sym, .pretty, .3dshapes (kicad_export). One plan makes the whole
     library, so the KiCad menu keeps every part in one list (MENU_BOM). "footprints" maps part -> footprint name.
     The KiCad menu builds the library into <project>/ecadlib/ (kicad_menu.config), so the footprints' 3D model paths
-    are written from the project folder, the library's parent (KiCad's KIPRJMOD)."""
+    are written from the project folder, the library's parent (KiCad's KIPRJMOD). A library put into KiCad itself
+    (the window's "Use in every project", models_var ECADLIB_DIR_...) keeps its ${ECADLIB_DIR_...} model paths on
+    every later export, so its 3D models resolve from any project."""
     from . import kicad_export as KX
     from .httpcache import CachedHTTP
     _, plan_f, _ = ws._plan(bom_rel)
+    if not models_var:
+        try:
+            prev = json.loads((Path(library) / "kicad_export.json").read_text(encoding="utf-8"))
+            was = str(((prev.get("libraries") or {}).get(name) or prev).get("models_at") or "")
+        except (OSError, ValueError, AttributeError):
+            was = ""
+        m = re.fullmatch(r"\$\{(ECADLIB_DIR_[A-Z0-9_]+)\}/" + re.escape(name) + r"\.3dshapes", was)
+        models_var = m.group(1) if m else None
     rep = KX.export(plan_f, library, name, http=CachedHTTP(ws.root / "http_cache", offline=ws.offline, timeout=60),
-                    rules=ws.rules_in_use(), log=lambda *a, **k: None, project=Path(library).parent)
+                    rules=ws.rules_in_use(), log=lambda *a, **k: None, project=Path(library).parent,
+                    models_var=models_var)
     return {"target": "kicad", "install": [], "problems": rep["errors"], "library": str(library),
             "held": {s["part"]: s["why"] for s in rep["skipped"] if s.get("recheck")},
             "footprints": {p["part"]: p.get("footprint") or "" for p in rep["parts"]}}

@@ -265,3 +265,15 @@ def test_job_command_passes_the_kicad_version():
     assert not any(a.startswith("--kicad") for a in kap.job_command(["e"], "J", "fill", "b.kicad_pcb"))
     assert _plugin(_fake_pcbnew(Version=lambda: "(9.0.1-rc2)")).kicad_major() == 9
     assert _plugin(_fake_pcbnew()).kicad_major() is None
+
+
+@lite
+def test_child_env_drops_kicads_python_settings(tmp_path):
+    """ecadlib starts without the PYTHONHOME / PYTHONPATH KiCad sets for its own Python (on Linux the system's older
+    numpy / pandas came first and ecadlib stopped at start); the PYTHONPATH saved when it was added is used."""
+    kap = _plugin()
+    kicad = {"PATH": "/usr/bin", "PYTHONPATH": "/repo:/usr/bin/../lib/python3/dist-packages", "PYTHONHOME": "/k"}
+    env = kap.child_env(kicad, cmd_file=str(tmp_path / "none.json"))
+    assert env == {"PATH": "/usr/bin"}, env
+    (tmp_path / "c.json").write_text(json.dumps({"command": ["x"], "pythonpath": "/repo"}))
+    assert kap.child_env(kicad, cmd_file=str(tmp_path / "c.json")) == {"PATH": "/usr/bin", "PYTHONPATH": "/repo"}

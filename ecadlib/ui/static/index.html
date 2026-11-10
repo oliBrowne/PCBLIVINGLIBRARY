@@ -276,7 +276,7 @@ details summary { cursor: pointer; color: var(--muted); }
   <button class="keyhint" id="keysbtn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">? Shortcuts</button>
 </header>
 <nav class="steps" id="steps" aria-label="Sections" hidden>
-  <a href="#bomcard">1. Check a BOM</a><a href="#libcard" data-needs-bom>2. Fill the library</a><a href="#export" data-needs-bom>3. Send to Altium</a><a href="#fpcard">Footprints</a><a href="#statuscard">Status</a><a href="#setup">Settings</a>
+  <a href="#bomcard">1. Check a BOM</a><a href="#libcard" data-needs-bom>2. Fill the library</a><a href="#export" data-needs-bom>3. Send to Altium or KiCad</a><a href="#fpcard">Footprints</a><a href="#statuscard">Status</a><a href="#setup">Settings</a>
 </nav>
 <main id="app">
   <section class="card welcome" id="welcome" hidden aria-labelledby="welcomeh">
@@ -386,8 +386,8 @@ details summary { cursor: pointer; color: var(--muted); }
   </section>
 
   <section class="card" id="export" hidden>
-    <h2><span class="stepno">3</span>Send to Altium</h2>
-    <p class="muted small" style="margin:2px 0 0">Pick one way in: a database library (DbLib) you open in Altium Designer, plain .SchLib / .PcbLib files, or managed components in an Altium 365 workspace.</p>
+    <h2><span class="stepno">3</span>Send to Altium or KiCad</h2>
+    <p class="muted small" style="margin:2px 0 0">Pick one way in: a database library (DbLib) you open in Altium Designer, plain .SchLib / .PcbLib files, managed components in an Altium 365 workspace, or a KiCad library.</p>
     <div class="grid3" style="margin-top:10px">
       <div class="box">
         <h3>Database library (DbLib)</h3>
@@ -413,6 +413,15 @@ details summary { cursor: pointer; color: var(--muted); }
         <div class="out" id="planout"></div>
         <div class="out" id="dryout"></div>
       </div>
+    </div>
+    <div class="box" style="margin-top:10px">
+      <h3>KiCad library</h3>
+      <p class="muted small">After step 2: the ready parts as a KiCad library (.kicad_sym, .pretty, 3D models) in kicad/&lt;BOM&gt;/; held parts stay out. <b>Put it in KiCad</b> also adds it to KiCad's own symbol and footprint tables (every KiCad on this computer), so every project can use it: close KiCad first, and open it again afterwards.</p>
+      <div class="row">
+        <button id="kicadlib">Export KiCad library</button>
+        <button id="kicadinst">Put it in KiCad</button>
+      </div>
+      <div class="out" id="kicadout"></div>
     </div>
   </section>
 
@@ -824,6 +833,22 @@ $("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), asyn
     (r.held.length ? `<div class="muted">Held, left out until a person decides: ${esc(r.held.join(", "))}</div>` : "") +
     `<div class="next s-info"><span>Next: copy the whole folder (with its SchLib and PcbLib folders) next to your Altium libraries and open the .DbLib in Altium Designer. The Excel workbook needs the Access database engine.</span></div>`;
 }));
+function kicadOut(r) {
+  const inst = r.install;
+  const vs = inst ? Object.entries(inst.versions) : [];
+  const ok = vs.filter(([, st]) => st === "installed" || st === "already installed");
+  return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span> as <span class="mono">${esc(r.library)}</span>` +
+    (r.held.length ? `<div class="muted">Held, left out until a person decides: ${esc(r.held.join(", "))}</div>` : "") +
+    (r.errors.length ? `<div class="next s-warn"><span>${esc(r.errors[0])}</span></div>` : "") +
+    (!inst ? `<div class="next s-info"><span>Next: Put it in KiCad, or add the folder in KiCad (Preferences &gt; Manage Symbol / Footprint Libraries).</span></div>`
+     : ok.length ? `<div class="next s-ok"><span>In KiCad ${esc(ok.map(([s]) => s).join(", "))} as <span class="mono">${esc(inst.nick)}</span> (path variable <span class="mono">${esc(inst.var)}</span>). Open KiCad again to see it.</span></div>`
+     : `<div class="next s-warn"><span>Not added to KiCad: ${esc(vs.map(([s, st]) => `KiCad ${s} ${st}`).join("; ") || inst.warnings.join("; ") || "no KiCad settings found")}</span></div>`) +
+    (ok.length && ok.length < vs.length ? `<div class="muted">${esc(vs.filter(v => !ok.includes(v)).map(([s, st]) => `KiCad ${s}: ${st}`).join("; "))}</div>` : "");
+}
+$("#kicadlib").addEventListener("click", e => action(e.target, $("#kicadout"), async () =>
+  kicadOut(await api("/api/export/kicad", { bom: current.bom }))));
+$("#kicadinst").addEventListener("click", e => action(e.target, $("#kicadout"), async () =>
+  kicadOut(await api("/api/export/kicad", { bom: current.bom, install: true }))));
 $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
   const r = await api("/api/altium/models", { bom: current.bom });
   await loadInfo();
