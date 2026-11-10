@@ -1031,7 +1031,44 @@ def hold_reasons(res, fp_needed=True):
     hard = hard_failures(why, res.get("spec"))
     if kind == "incomplete":       # a pad-table numbering error never becomes copper (footprint_adv.table_geometry
         hard = [w for w in hard if not PAD_TABLE_NUMBERING.match(w)]   # refuses it): the librarian holds it, with fp-edit's fix
-    return hard if fp_needed is not False else [w for w in hard if SYMBOL_FAILED.match(w)]
+    if fp_needed is False:
+        return [w for w in hard if SYMBOL_FAILED.match(w)]
+    return hard + unread_copper(res.get("spec"))
+
+
+# what an unresolved entry may name without holding the part: it changes no copper and no pin (and ADVISORY)
+NOT_COPPER = ("description", "name", "source", "model_3d", "density", "drawing")
+ONLY_LIMITS = re.compile(r"\b(min|max|tol\w*|limits?)\b", re.I)
+# a feature the builder leaves out without a word when the read gives none: copper or pins change with it
+FEATURES = ("exposed_pad", "land", "pad_table", "pin_positions", "pin_sides", "tab", "joined_pins", "depopulated",
+            "ball_map", "same_net")
+
+
+def unread_copper(spec):
+    """The hold lines for what the read itself says it could not read (spec['unresolved']) and that is built all the
+    same (full review 2026-11-10): a value the read gave and calls unread (a SOIC built from a lead span 'blurred,
+    could be 0.236 or 0.286'), or a feature the builder simply leaves out (a QFN whose exposed pad was unresolved was
+    built with no thermal pad). Not held: the advisory fields, text that names no package field, a limit left out of
+    a dimension whose value was read ('body_length min/max (not printed)': a nominal-only drawing), and a plain
+    dimension with no value: the builder stops on it when this package needs it, and a pad table needs none."""
+    from .datasheet import SCHEMA
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    out = []
+    for u in (spec or {}).get("unresolved") or []:
+        top = unresolved_field(u).split(".")[0]
+        if top in NOT_COPPER + ADVISORY or top not in SCHEMA["properties"]:
+            continue
+        v = spec.get(top)
+        if top in FEATURES:
+            why = "the part would be built without it" if v in (None, [], {}) else "it would be built as the read guessed it"
+        elif num(v) or isinstance(v, dict) and (num(v.get("nom")) or num(v.get("min")) and num(v.get("max"))):
+            if ONLY_LIMITS.search(str(u)):
+                continue
+            why = "it would be built from the value the read guessed"
+        else:
+            continue
+        out.append(f"unresolved: {u}: the read could not read it, and {why}")
+    return out
 
 
 # check_pad_table's numbering errors (datasheet.py writes them "pad_table: ..."): no pin 1, a pad listed twice, a count
