@@ -76,6 +76,9 @@ def _expand_arrays(t, numbers):
         t["arrays"] = keep
 
 
+NO_TABLE = "this footprint was not read as a pad table"
+
+
 def apply(edit, res):
     """A datasheet result {spec, symbol, ...} with one part's edit applied (a copy) -> (res, notes)."""
     if not edit:
@@ -89,7 +92,10 @@ def apply(edit, res):
         _expand_arrays(t, set(ren))
         have = {str(p.get("number")) for p in t.get("pads") or []} | _array_numbers(t)
         gone = [k for k in ren if k not in have]
-        if gone and t:                                    # renaming only the symbol pin would cross pin and pad
+        if not t:                                         # no pads to rename: the symbol's pins alone would move
+            notes.append(NO_TABLE + ": rename skipped (" + ", ".join(f"{k} -> {v}" for k, v in ren.items()) + ")")
+            ren = {}
+        elif gone:                                        # renaming only the symbol pin would cross pin and pad
             notes.append("rename skipped, no such pad: " + ", ".join(f"{k} -> {ren[k]}" for k in gone))
             ren = {k: v for k, v in ren.items() if k in have}
         lands = {}                                        # new number -> the pads that would carry it
@@ -100,6 +106,12 @@ def apply(edit, res):
             notes.append("rename skipped, the new number is another pad's: " + ", ".join(f"{k} -> {ren[k]}" for k in clash)
                          + " (to put pads on one net, use same-net)")
             ren = {k: v for k, v in ren.items() if k not in clash}
+        pins = {str(p.get("num")) for p in sym.get("pins") or []}
+        twice = sorted(k for k, v in ren.items() if k in pins and v in pins and v not in ren)
+        if twice:                                         # pin k would take the number pin v keeps: two pins, one number
+            notes.append("rename skipped, the new number is another symbol pin's: "
+                         + ", ".join(f"{k} -> {ren[k]}" for k in twice) + " (rename that pin too, or use same-net)")
+            ren = {k: v for k, v in ren.items() if k not in twice}
         for p in t.get("pads") or []:
             if str(p.get("number")) in ren:
                 p["number"] = ren[str(p["number"])]
@@ -288,6 +300,11 @@ def main(argv=None):
     except FileNotFoundError as e:
         print(f"ecadlib fp-edit: {e}", file=sys.stderr)
         return 2
+    if a.cmd not in ("show", "undo") and not (got["spec"] or {}).get("pad_table"):
+        # checked before the edit is saved: an edit kept for a SOIC / QFN / BGA would later rename the symbol's pins only
+        print(f"ecadlib fp-edit: {a.part}: {NO_TABLE}: nothing to edit here, nothing saved (see ecadlib resolve)",
+              file=sys.stderr)
+        return 1
     if a.cmd != "show":
         e = dict(edits.get(a.part) or {})
         if a.cmd == "undo":
