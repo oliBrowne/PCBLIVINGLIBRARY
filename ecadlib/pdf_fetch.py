@@ -15,7 +15,7 @@ refusal (refused()) moves on to the next way, in this order:
 
 None of them solves a CAPTCHA, signs in, reads your browser's cookies or goes through a third-party proxy. Each way
 returns what PdfStore._get does: (status, bytes, content-type, final url, error[, response headers])."""
-import atexit, concurrent.futures, os, re, shutil, sys, threading, time
+import atexit, concurrent.futures, contextlib, os, re, shutil, sys, threading, time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -283,6 +283,31 @@ class _Worker:
         self.q.put((None, None))
 
 
+_SPY_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _driver_started():
+    """The process Playwright starts for its driver, caught as it is started: Playwright keeps it in a private place
+    that moved between releases (1.64 no longer has connection._transport), and without it a stuck driver cannot be
+    stopped. Only a process started on this thread counts, so another thread's subprocess is never taken for it."""
+    import asyncio
+    found, me = [], threading.get_ident()
+    with _SPY_LOCK:
+        real = asyncio.create_subprocess_exec
+
+        async def spy(*a, **kw):
+            p = await real(*a, **kw)
+            if threading.get_ident() == me and not found:
+                found.append(p)
+            return p
+        asyncio.create_subprocess_exec = spy
+        try:
+            yield found
+        finally:
+            asyncio.create_subprocess_exec = real
+
+
 class _State:
     """One launched browser: its own, so a stuck call on an abandoned worker never touches the next one."""
 
@@ -361,12 +386,10 @@ class Browser:
         except Exception:                             # (a private helper: when it moves, just start)
             pass
         try:
-            s.pw = sync_playwright().start()
-            try:                                      # the driver's process, to stop it if a call never returns
-                s.proc = s.pw._impl_obj._connection._transport._proc
-                s.pid = s.proc.pid
-            except Exception:
-                s.proc = s.pid = None
+            with _driver_started() as started:        # the driver's process, to stop it if a call never returns
+                s.pw = sync_playwright().start()
+            s.proc = started[0] if started else None
+            s.pid = getattr(s.proc, "pid", None)
             proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
             bypass = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
             tried = []

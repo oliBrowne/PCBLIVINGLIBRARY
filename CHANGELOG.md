@@ -15,7 +15,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
-- Datasheet fetch: when the headless browser's driver process had died, the next fetch asked the dead driver to close and waited for ever (the datasheet was given up after the full time limit). A driver that is gone is now just let go and a new browser is started.
+- Datasheet fetch: when the headless browser's driver process had died, the next fetch asked the dead driver to close and waited for ever (the datasheet was given up after the full time limit). A driver that is gone is now just let go and a new browser is started. With Playwright 1.64 and later ecadlib could also no longer find the driver's process, so a fetch that never finished could not be stopped; the process is now caught as Playwright starts it, whatever the release.
 - Safety fixes from the full code review of 2026-11-10 (ways a wrong part could be released with nobody stopping it):
   - A part the BOM's description calls an array, a network, a common-mode choke, 3- or 4-terminal, a balun or RGB / bi-colour is no longer built as the two-pad chip its footprint column's size (`0805`, `1206`) names, and gets no generic two-pin symbol: it is held and looked up by its part number.
   - A capacitor the description calls tantalum, polymer, aluminium, niobium, electrolytic or polarized is polarized whatever its part number is (the series prefix list is only extra evidence): no unpolarized symbol, no symmetric chip land.
