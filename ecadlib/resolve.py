@@ -149,8 +149,9 @@ def compare(pins, pads):
     res = {"match": bool(pins) and bool(pads) and not nopad and not nopin, "pins": len(pins), "pads": len(numbered),
            "pins_without_pad": nopad, "pads_without_pin": nopin, "pin_map": None}
     free = sorted((every - pins) - {""}, key=_nat)
-    if nopad and len(nopad) == len(nopin) <= 4:          # a small near miss, not a renumbering
-        res["pin_map"] = dict(zip(nopad, nopin))
+    if len(nopad) == len(nopin) == 1:                    # one pin, one pad: the only pairing there is. Two or more
+        res["pin_map"] = dict(zip(nopad, nopin))         # (B, C, E onto 1, 2, 3) can be paired in several ways, and
+        # in sorted order was a guess one "y" accepted (wrong for a SOT-23 transistor; full review 2026-11-10)
     elif len(nopad) == 1 and len(free) == 1 and not nopin:
         res["pin_map"] = {nopad[0]: free[0]}
     return res
