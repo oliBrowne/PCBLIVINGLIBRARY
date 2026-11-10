@@ -1763,6 +1763,7 @@ def sanity(spec, review, evidence=""):
     if e is not None and not 0.2 <= e <= 5:
         review.append(f"pitch: {e} mm is implausible (unit mislabelled?)")
     b = g("terminal_width")
+    review.extend(_body_and_lead(spec, t, bl, g("body_width"), b))
     if t in ("gullwing", "qfn") and e and n:
         if b and b[2] >= e:
             review.append(f"terminal_width max {b[2]} >= pitch {e}: leads would touch")
@@ -1846,6 +1847,26 @@ def sanity(spec, review, evidence=""):
     review.extend(F.land_short(spec))                 # a land (pin 1's own pad too) that would not solder its lead
 
 
+def _body_and_lead(spec, t, bl, bw, b):
+    """Relations every package keeps, whatever its family (full review 2026-11-10: each misread below was built with no
+    flag): a body side is not a sliver (a 1206's width in inches labelled mm, 0.063, gave pads 0.15 mm tall), a
+    two-terminal body is not a needle (the longest real ones, MELF and wide-terminal chips, are under 3 : 1), and no
+    lead is wider than the body side its row runs along (a SOD-123's 0.61 mm lead read as inches gave 18 mm pads; a
+    two-lead part has no pitch to catch it). -> review lines (a failed read)."""
+    out = []
+    if bw and bw[2] < 0.1:
+        out.append(f"body_width: {bw[2]:g} mm is implausibly small (inch values labelled mm?)")
+    if t in ("chip", "molded") and bl and bw and min(bl[1], bw[1]) > 0 and \
+            max(bl[1], bw[1]) > 8 * min(bl[1], bw[1]):
+        out.append(f"body {bl[1]:g} x {bw[1]:g} mm: one side is over 8 x the other, which is implausible for a "
+                   "two-terminal part (one of them in another unit?)")
+    sides = [d[2] for d in ((bl,) if t == "gullwing" else (bl, bw) if t in ("qfn", "qfp") else ()) if d]
+    if b and sides and b[0] > max(sides) + 1e-6:
+        out.append(f"terminal_width min {b[0]:g} mm is wider than the {max(sides):g} mm body side its row runs along, "
+                   "which is implausible (unit mislabelled, inches read as mm?)")
+    return out
+
+
 SAYS_SMD = re.compile(r"(?<![A-Za-z0-9])(?:SMD|SMT)(?![A-Za-z0-9])|surface[ -]?mount", re.I)
 SAYS_THT = re.compile(r"(?<![A-Za-z0-9])(?:THT|THD)(?![A-Za-z0-9])|through[ -]?hole", re.I)
 KICAD_HEADER = re.compile(r"^Pin(?:Header|Socket)_\d+x\d+_P[\d.]+mm_", re.I)
@@ -1908,6 +1929,9 @@ J_LEAD = re.compile(r"SOJ|PLCC|J[- ]?(?:lead|bend)|chip carrier|"            # b
                     r"\bM[OS]-?(?:047|016|018|027|065)\b", re.I)   # PLCC MO-047 / MS-016 / MS-018, SOJ
 
 
+FOOT_ROOM = 2.5                                        # a lead's reach beyond the body, in foot lengths (max)
+
+
 def _feet_outside(spec):
     """A gull-wing foot (terminal_length L) lies outside the plastic, so the span across the leads leaves room for two
     of them beyond the body: lead_span max - body_width min >= 2 x L min, in every tolerance combination, and >= 2 x L nom. A read that
@@ -1942,6 +1966,13 @@ def _feet_outside(spec):
                        f"{body_k} min {body[0]:g} leaves {room / 2:.3g} mm per side for the foot, which is implausible "
                        f"(the lead length or a value in 0.1 in read as the foot? check terminal_length against the "
                        "drawing)")                # 1.14-1.91 with a 0.45 min, only the min was checked)
+        elif two_sided and L[2] > 0 and room / 2 > FOOT_ROOM * L[2]:
+            # the other way round (full review 2026-11-10): a span from another row of the table (a narrow SOIC-8's
+            # body with the wide body's 10.3 mm span) leaves far more room than the foot uses and builds the pads out
+            # past the leads. Real leads stand out at most 1.7 x their longest foot (SOD-123; TSSOP 1.4, SOIC 0.95)
+            out.append(f"{span_k} max {span[2]:g} mm leaves {room / 2:.3g} mm per side beyond {body_k} min {body[0]:g} "
+                       f"mm, over {FOOT_ROOM:g} x the terminal_length max {L[2]:g} mm, which is implausible for a "
+                       f"gull-wing lead (a span from another row of the table? check {span_k} and {body_k})")
     return out
 
 
@@ -2365,6 +2396,11 @@ def _ep_name_fits(size, spec):
     return any(inside(a, r1) and inside(b, r2) for (a, b) in (size, size[::-1]) for r1, r2 in [rng])
 
 
+# a self-check line that is no longer advice (ds_route.SOFT_FAILED): the read's body is not the body its own name
+# states, by more than a rounded name explains (over a quarter of the side and 0.5 mm): the pads are placed from it
+TOO_FAR = "too far apart to build from"
+
+
 def self_check(spec, ext, review):
     """Compare what the model read with what its own package name says and with the family's usual range.
     Disagreements go to review (prefixed 'self-check:'); returns info lines (what was and was not checked)."""
@@ -2394,7 +2430,9 @@ def self_check(spec, ext, review):
         add(f"name says pitch {f['pitch']:g} mm, the drawing value is {e:g} mm")
     body = tuple(x for x in (_nom(spec.get("body_width")), _nom(spec.get("body_length"))) if x)
     if f["body"] and len(body) == 2 and not _pair_close(f["body"], body):
-        add(f"name says body {f['body'][0]:g}x{f['body'][1]:g} mm, the drawing gives {body[0]:g}x{body[1]:g} mm")
+        far = any(abs(x - y) > max(0.5, 0.25 * max(x, y)) for x, y in zip(sorted(f["body"]), sorted(body)))
+        add(f"name says body {f['body'][0]:g}x{f['body'][1]:g} mm, the drawing gives {body[0]:g}x{body[1]:g} mm"
+            + (f": {TOO_FAR} (another row of the table, or a unit?)" if far else ""))
     ep = spec.get("exposed_pad") or {}
     eps = tuple(x for x in (_nom(ep.get("length")), _nom(ep.get("width"))) if x)
     if f["ep_size"] and len(eps) == 2 and not _pair_close(f["ep_size"], eps) and not _ep_name_fits(f["ep_size"], spec):

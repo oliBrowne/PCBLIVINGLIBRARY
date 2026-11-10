@@ -979,12 +979,13 @@ FAILED = re.compile(r"^(schema:|self-check:|symbol:|footprint_gen\.build failed|
 #   schema: / footprint_gen.build failed / altium_lib...failed: the read can't be built, so no footprint comes from it
 #     (the standard table may still give the land: KTY83, benchmark 2026-10-23);
 #   self-check: the read against its own package name and the family's usual range (LT3652IDD's real 0.45 mm pitch,
-#     benchmark 2026-10-23, was built right and counted right);
+#     benchmark 2026-10-23, was built right and counted right). One is not soft: a body far from the one the name
+#     states (datasheet.TOO_FAR; a 2 x 2 mm WSON read 2 x 50.8 mm was built with its pads 25 mm out);
 #   symbol: the pins against the pads and the pin count: right parts fail them (a TO-252's cut middle lead with the
 #     tab numbered 4, a BGA's unconnected balls left out of the pin table, a pin with no usable name: eval gate
 #     answers scored right), and the release check holds them for a person anyway. Only a channel put on another
 #     channel's pin (the numbered-bank check) is held here: it builds a symbol wired to the wrong channel.
-SOFT_FAILED = re.compile(r"^(schema:|self-check:|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
+SOFT_FAILED = re.compile(r"^(schema:|self-check:(?!.*too far apart to build from)|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
                          r"symbol:(?!.* bank has no ))", re.I)
 SYMBOL_FAILED = re.compile(r"^symbol:", re.I)
 
