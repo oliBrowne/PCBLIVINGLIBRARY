@@ -1944,7 +1944,7 @@ J_LEAD = re.compile(r"SOJ|PLCC|J[- ]?(?:lead|bend)|chip carrier|"            # b
                     r"\bM[OS]-?(?:047|016|018|027|065)\b", re.I)   # PLCC MO-047 / MS-016 / MS-018, SOJ
 
 
-FOOT_ROOM = 2.5                                        # a lead's reach beyond the body, in foot lengths (max)
+FOOT_ROOM = 4                                          # a lead's reach beyond the body, in foot lengths (max)
 
 
 def _feet_outside(spec):
@@ -1981,10 +1981,12 @@ def _feet_outside(spec):
                        f"{body_k} min {body[0]:g} leaves {room / 2:.3g} mm per side for the foot, which is implausible "
                        f"(the lead length or a value in 0.1 in read as the foot? check terminal_length against the "
                        "drawing)")                # 1.14-1.91 with a 0.45 min, only the min was checked)
-        elif two_sided and L[2] > 0 and room / 2 > FOOT_ROOM * L[2]:
-            # the other way round (full review 2026-11-10): a span from another row of the table (a narrow SOIC-8's
-            # body with the wide body's 10.3 mm span) leaves far more room than the foot uses and builds the pads out
-            # past the leads. Real leads stand out at most 1.7 x their longest foot (SOD-123; TSSOP 1.4, SOIC 0.95)
+        elif two_sided and (spec.get("terminal_length") or {}).get("max") is not None and room / 2 > FOOT_ROOM * L[2]:
+            # the other way round (full review 2026-11-10): a span far past the body leaves much more room than the
+            # foot uses and builds the pads out past the leads. Real leads stand out up to 3 x their longest foot
+            # (a 4-lead optocoupler SO: 1.5 mm for a 0.5 mm foot; SOD-123 1.7, TSSOP 1.4, SOIC 0.95), so only a
+            # gross slip is caught here; a span from the next row of the table is caught against the standard
+            # package the read names (self_check)
             out.append(f"{span_k} max {span[2]:g} mm leaves {room / 2:.3g} mm per side beyond {body_k} min {body[0]:g} "
                        f"mm, over {FOOT_ROOM:g} x the terminal_length max {L[2]:g} mm, which is implausible for a "
                        f"gull-wing lead (a span from another row of the table? check {span_k} and {body_k})")
@@ -2416,6 +2418,21 @@ def _ep_name_fits(size, spec):
 TOO_FAR = "too far apart to build from"
 
 
+def _std_span(spec):
+    """(the table's lead span, the read's) when the read names a package of the checked standard table and its own
+    lead span is far from that package's (over 0.5 mm and 10 %): a narrow SOIC-8's body with the wide body's 10.3 mm
+    span built its pads 2.2 mm too far out, every number plausible on its own (full review 2026-11-10). Else None."""
+    try:
+        from . import stdparts as SP
+        ref = SP.packages().get(str(spec.get("name") or ""))
+    except Exception:                                 # no table: nothing to compare with
+        return None
+    if not ref or ref.get("package_type") != spec.get("package_type"):
+        return None
+    a, b = _nom(ref.get("lead_span")), _nom(spec.get("lead_span"))
+    return (a, b) if a and b and abs(a - b) > max(0.5, 0.1 * a) else None
+
+
 def self_check(spec, ext, review):
     """Compare what the model read with what its own package name says and with the family's usual range.
     Disagreements go to review (prefixed 'self-check:'); returns info lines (what was and was not checked)."""
@@ -2448,6 +2465,10 @@ def self_check(spec, ext, review):
         far = any(abs(x - y) > max(0.5, 0.25 * max(x, y)) for x, y in zip(sorted(f["body"]), sorted(body)))
         add(f"name says body {f['body'][0]:g}x{f['body'][1]:g} mm, the drawing gives {body[0]:g}x{body[1]:g} mm"
             + (f": {TOO_FAR} (another row of the table, or a unit?)" if far else ""))
+    std = _std_span(spec)
+    if std:
+        add(f"name {spec['name']} is a standard package with a {std[0]:g} mm lead span, the drawing gives "
+            f"{std[1]:g} mm: {TOO_FAR} (another row of the table, or another body?)")
     ep = spec.get("exposed_pad") or {}
     eps = tuple(x for x in (_nom(ep.get("length")), _nom(ep.get("width"))) if x)
     if f["ep_size"] and len(eps) == 2 and not _pair_close(f["ep_size"], eps) and not _ep_name_fits(f["ep_size"], spec):

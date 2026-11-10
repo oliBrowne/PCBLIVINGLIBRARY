@@ -28,10 +28,20 @@ def test_a_body_far_from_the_one_the_name_states_is_held():
     assert held(near) is None, held(near)
 
 
-def test_a_lead_span_far_past_the_foot_is_held():
+def test_a_lead_span_from_another_row_of_the_table_is_held():
     wide_row = dict(T.SOIC8, lead_span=(10.0, 10.3, 10.65))                    # the wide-body row: pads 2.2 mm too far out
     h = held(wide_row)
+    assert h and "standard package with a 6 mm lead span" in h and "too far apart" in h, h
+
+
+def test_a_lead_span_far_past_the_foot_is_held_whatever_the_name():
+    gross = dict(T.SOIC8, name="SO-8 (maker's own)", lead_span=(15.0, 15.3, 15.6))
+    h = held(gross)
     assert h and "lead_span" in h and "implausib" in h, h
+    # a 4-lead optocoupler SO really has long leads (1.5 mm per side for a 0.5 mm foot): not held
+    opto = T.gw("SO-4_4.4x3.6mm_P2.54mm", 4, 2.54, (3.4, 3.6, 3.8), (4.4, 4.55, 4.7), (6.6, 7.0, 7.4), (0.3, 0.4, 0.5),
+                (0.3, 0.4, 0.5))
+    assert held(opto) is None, held(opto)
 
 
 def test_a_lead_wider_than_the_body_it_sits_on_is_held():

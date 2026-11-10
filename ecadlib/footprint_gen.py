@@ -633,7 +633,9 @@ def sanity(spec):
     if t == "gullwing" and twice and listed:
         # a number listed twice with another missing is a slip of the read or the hand (3, 3 for 3, 4), not two leads
         # of one pin: those are listed with every number present (full review 2026-11-10: built, with a warning)
-        gone = [str(i) for i in range(1, max(max(map(int, listed)), n or 0) + 1) if str(i) not in listed]
+        other = {str((spec.get(k) or {}).get("number")) for k in ("tab", "exposed_pad") if isinstance(spec.get(k), dict)}
+        gone = [str(i) for i in range(1, max(max(map(int, listed)), n or 0) + 1) if str(i) not in listed
+                and str(i) not in other]
         if gone:
             errs.append(f"pin_positions lists pad {', '.join(twice)} twice and has no pad {', '.join(gone[:6])}: "
                         "one of them is misnumbered; check the pad numbers against the drawing")
