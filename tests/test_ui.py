@@ -175,6 +175,8 @@ def test_ui_server():
             (Path(d) / "ecadlib.toml").unlink()
             st, e = call("POST", "/api/export/dblib", {"bom": bom})     # no librarian plan: refused, nothing written
             assert st == 400 and "librarian" in e["error"], e
+            st, e = call("POST", "/api/export/kicad", {"bom": bom, "install": True})   # the same for KiCad
+            assert st == 400 and "librarian" in e["error"], e
             assert call("GET", "/api/job?id=nope")[0] == 404
         finally:
             srv.shutdown()
