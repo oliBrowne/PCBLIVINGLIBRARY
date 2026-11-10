@@ -17,6 +17,10 @@ right*. This page measures the whole thing, reading included: how often ecadlib 
 | Pad match over the footprints built | 89.0 % (1,504 of KiCad's 1,690 pads, 87 footprints) |
 | Without the one PDF downloaded by hand | 86/109 (79 %) |
 
+**On the code merged since: 86/110, still none built wrong.** A free re-score of the same answers on main (2026-10-29)
+loses MC33063MNTXG: a stricter rule from the #196 bug hunt now refuses the drawing a web search found, because
+nothing in it ties that package to this part. The earlier pass was a lucky guess, so the hold is the right answer.
+
 **How it was measured.** The answers are the datasheet reads of a live run on 2026-10-25 (Claude Opus 5.5, zoom on,
 sources `standard,datasheet`, cap $30), which scored 77/110 and cost $25.46, plus targeted paid re-reads of AQY282GS
 ($0.11) and 2ED21824S06J ($0.23, from Infineon's PDF downloaded by hand). Those saved answers were then re-scored for
