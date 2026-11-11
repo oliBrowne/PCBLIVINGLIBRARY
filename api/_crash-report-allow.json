@@ -130,6 +130,7 @@
 "update_params",
 "upload",
 "workspaces",
+"write_refusal",
 "ws_target"
 ],
 "ecadlib/altium_dblib_sync.py":[
@@ -190,6 +191,7 @@
 "read_tables",
 "readback_problems",
 "released",
+"respell",
 "row_update",
 "run_cmd",
 "same_folder",
@@ -224,6 +226,7 @@
 "_land_canon",
 "_respelt",
 "_safe_name",
+"ace_column",
 "columns",
 "dblib_links",
 "dblib_text",
