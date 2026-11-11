@@ -82,7 +82,8 @@ EXAMPLES = {
     "doctor": ["ecadlib doctor", "ecadlib doctor --workspace ws --lib ~/kicad/libs --json"],
     "status": ["ecadlib status", "ecadlib status --workspace ws --json"],
     "report-bug": ["ecadlib report-bug                    # show the last saved error, then open GitHub (you press Submit)",
-                   "ecadlib report-bug --print            # only the text and the link", "ecadlib report-bug --clear"],
+                   "ecadlib report-bug --print            # only the text and the link", "ecadlib report-bug --clear",
+                   "ecadlib report-bug --auto off         # stop automatic crash reports"],
     "completion": ["mkdir -p ~/.local/share/bash-completion/completions && "
                    "ecadlib completion bash > ~/.local/share/bash-completion/completions/ecadlib",
                    "source <(ecadlib completion zsh)"],
