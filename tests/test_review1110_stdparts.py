@@ -75,6 +75,8 @@ def test_words_beside_a_package_name_that_mean_another_land_are_not_ignored():
         r = SP.resolve([text], kind, "", "")
         assert r["footprint"] is None, (text, r)
     assert SP.resolve(["SC-90"], "D", "", "")["footprint"] == "D_SOD-323F"     # JEITA SC-90 is the flat-lead SOD-323F
+    for said, fp in (("SOD-523", "D_SOD-523"), ("SC-79", "D_SOD-523"), ("SOD-923", "D_SOD-923"), ("SOD-128", "D_SOD-128")):
+        assert SP.resolve([said], "D", "", "")["footprint"] == fp, said     # the rest of the diode names still resolve
     assert SP.resolve(["SC-76"], "D", "", "")["footprint"] == "D_SOD-323"
 
 

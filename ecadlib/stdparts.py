@@ -85,8 +85,9 @@ ALIASES = {
     "SOT457": "SC-74-6_1.55x2.9mm_P0.95mm",
 }
 DIODE_ALIASES = {
-    "SOD123": "D_SOD-123", "SOD123F": "D_SOD-123F", "SOD323": "D_SOD-323", "SC76": "D_SOD-323", "SC90": "D_SOD-323F",   # JEITA SC-90 is the
-    "SOD323F": "D_SOD-323F",                      # flat-lead SOD-323F (SC-76 the gull-wing SOD-323) "SOD523": "D_SOD-523", "SC79": "D_SOD-523", "SOD923": "D_SOD-923", "SOD128": "D_SOD-128",
+    # JEITA SC-90 is the flat-lead SOD-323F (SC-76 is the gull-wing SOD-323)
+    "SOD123": "D_SOD-123", "SOD123F": "D_SOD-123F", "SOD323": "D_SOD-323", "SC76": "D_SOD-323", "SC90": "D_SOD-323F",
+    "SOD323F": "D_SOD-323F", "SOD523": "D_SOD-523", "SC79": "D_SOD-523", "SOD923": "D_SOD-923", "SOD128": "D_SOD-128",
     "SMA": "D_SMA", "DO214AC": "D_SMA", "SMB": "D_SMB", "DO214AA": "D_SMB", "SMC": "D_SMC", "DO214AB": "D_SMC",
     "SMF": "D_SMF", "DO219AB": "D_SMF", "MINIMELF": "D_MiniMELF", "SOD80": "D_MiniMELF", "LL34": "D_MiniMELF",
     "MELF": "D_MELF", "DO213AB": "D_MELF", "LL41": "D_MELF",
