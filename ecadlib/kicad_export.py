@@ -247,6 +247,19 @@ def plan_fields(item, lib, fp_name, props, rules=None):
     return res
 
 
+HELD_MARK = "HELD, NOT RELEASED"
+
+
+def mark_held(sym, reasons):
+    """A held part written by --include-held, marked in the symbol itself (full review 2026-11-10: it sat in the same
+    library as the released parts with nothing in KiCad to tell them apart): the description, which the symbol chooser
+    shows, starts with HELD, NOT RELEASED and the first reason, and an 'ecadlib Status' field carries all of them."""
+    why = "; ".join(str(r) for r in reasons or [] if r) or "it did not pass the release check"
+    desc = next((str(p[2]) for p in sexpr.find(sym, "property") if p[1] == "Description"), "")
+    desc = desc if desc.startswith(HELD_MARK) else f"{HELD_MARK} ({why[:120]}). {desc}".strip()
+    return set_fields(sym, [("Description", desc), ("ecadlib Status", f"{HELD_MARK}: {why}"[:400])])
+
+
 def set_fields(sym, fields):
     """Set each property's value (existing ones keep their position and visibility); new ones go hidden after them."""
     have = {p[1]: p for p in sexpr.find(sym, "property")}
@@ -1523,6 +1536,8 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                         continue
                     notes.append(f"symbol pins without a pad in {row['footprint']}: {', '.join(missing)}")
                     row["held"] = True
+            if row["held"]:                    # --include-held: the library says so where the part is picked
+                mark_held(sym, (it.get("hold_reasons") if status == "held" else None) or why or notes)
             symbols[sname] = sym
             row["symbol"] = how
         except Exception as e:

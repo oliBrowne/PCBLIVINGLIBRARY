@@ -94,3 +94,23 @@ def test_include_held_still_writes_and_reports():
         assert any("fails more than in the release check" in e for e in rep["errors"]), rep["errors"]
         assert (out / "ecadlib.pretty" / "R_0603_1608Metric.kicad_mod").exists()
         assert next(r for r in rep["parts"] if r["part"] == "RES-0603-10k")["held"] is True   # never kept as released
+
+
+def test_a_part_written_by_include_held_says_so_inside_kicad():
+    """Group 2: --include-held put a held part into the same library as the released ones with nothing in KiCad to
+    tell them apart. Its description now starts HELD, NOT RELEASED and an 'ecadlib Status' field carries the reasons."""
+    import tempfile
+    from pathlib import Path
+    from ecadlib import sexpr
+    from tests import test_bughunt_expk as B
+    with tempfile.TemporaryDirectory() as d:
+        plan, _, http = B._plan(d)
+        B._edit(plan, lambda it: it["TPS1234DSGR"].update(footprint=dict(it["RES-0603-10k"]["footprint"])))
+        B.X.export(plan, Path(d) / "kx", "ecadlib", include_held=True, http=http, log=B.QUIET)
+        tree = sexpr.parse((Path(d) / "kx" / "ecadlib.kicad_sym").read_text(encoding="utf-8"))
+        props = {s[1]: {p[1]: str(p[2]) for p in sexpr.find(s, "property")} for s in sexpr.find(tree, "symbol")}
+        held = [n for n, p in props.items() if p.get("Description", "").startswith("HELD, NOT RELEASED")]
+        assert len(held) == 1 and "TPS1234" in held[0], held
+        assert "symbol pins without a pad" in props[held[0]]["ecadlib Status"], props[held[0]]
+        ok = [p for n, p in props.items() if n not in held]
+        assert ok and all("ecadlib Status" not in p and "HELD" not in p.get("Description", "") for p in ok)

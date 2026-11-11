@@ -62,3 +62,30 @@ def test_the_librarian_takes_the_kind_from_the_description_too():
     assert L.passive_kind(item("Components/Resistors", "RES ARRAY 4 RES 10K OHM 1206")) is None
     assert L.passive_kind(item("Components/Inductors", "Common mode choke 90 ohm 0805")) is None
     assert L.passive_kind(item("Components/Resistors", "RES 10K OHM 1% 0603")) == "R"
+
+
+def test_words_beside_a_package_name_that_mean_another_land_are_not_ignored():
+    """Full review 2026-11-10, group 2: 'SMA FLAT' gave the standard SMA, 'SOT-23 (5)' the 3-lead SOT-23,
+    'MSOP-8 (EPAD)' the MSOP-8 with no pad under it, 'TO-92 Formed Leads' the 1.27 mm inline holes."""
+    for text, kind in (("SMA FLAT", "D"), ("SMB Flat", "D"), ("Mini SMA", "D"), ("SOD-123 FL", "D"),
+                       ("SOD-123 Flat lead", "D"), ("TO-92 Formed Leads", "Q"), ("TO-92-3 kinked", "Q"),
+                       ("TO-220-3 (TO-220AB) Formed", "Q"), ("SOT-23 (5)", "U"), ("SOT-323 (5)", "U"),
+                       ("SOT-323 5 pins", "U"), ("MSOP-8 (EPAD)", "U"), ("MSOP8-PP", "U"), ("MSOP-8-TP", "U"),
+                       ("MSOP-8 E-PAD", "U")):
+        r = SP.resolve([text], kind, "", "")
+        assert r["footprint"] is None, (text, r)
+    assert SP.resolve(["SC-90"], "D", "", "")["footprint"] == "D_SOD-323F"     # JEITA SC-90 is the flat-lead SOD-323F
+    for said, fp in (("SOD-523", "D_SOD-523"), ("SC-79", "D_SOD-523"), ("SOD-923", "D_SOD-923"), ("SOD-128", "D_SOD-128")):
+        assert SP.resolve([said], "D", "", "")["footprint"] == fp, said     # the rest of the diode names still resolve
+    assert SP.resolve(["SC-76"], "D", "", "")["footprint"] == "D_SOD-323"
+
+
+def test_plain_package_names_still_resolve():
+    for text, kind, want in (("SMA", "D", "D_SMA"), ("DO-214AC (SMA)", "D", "D_SMA"), ("SOD-123", "D", "D_SOD-123"),
+                             ("SOD-123F", "D", "D_SOD-123F"), ("TO-92", "Q", "TO-92_Inline"), ("SOT-23", "Q", "SOT-23"),
+                             ("SOT-23 (3)", "Q", "SOT-23"),
+                             ("SOT-23 5-pin", "U", "SOT-23-5"), ("SOT-23-5", "U", "SOT-23-5"),
+                             ("SOT-23 6 Lead", "U", "SOT-23-6"), ("SOT-363 (SC-88)", "U", "SOT-363_SC-70-6"),
+                             ("TO-220 Full Pack", "Q", "TO-220-3_Vertical"), ("MSOP-8 3x3mm P0.65mm", "U", "MSOP-8_3x3mm_P0.65mm")):
+        r = SP.resolve([text], kind, "", "")
+        assert r["footprint"] == want, (text, r)

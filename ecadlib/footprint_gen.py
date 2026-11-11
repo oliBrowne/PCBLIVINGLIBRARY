@@ -628,6 +628,17 @@ def sanity(spec):
     if t == "gullwing" and n and not spec.get("pin_positions") and n % 2:
         errs.append(f"pin_count {n} is odd: a dual-row part needs an even count, or list the pads in pin_positions "
                     "(as for SOT-23)")
+    listed = [str(p.get("number")) for p in pos if isinstance(p, dict) and str(p.get("number")).isdecimal()]
+    twice = sorted({x for x in listed if listed.count(x) > 1}, key=int)
+    if t == "gullwing" and twice and listed:
+        # a number listed twice with another missing is a slip of the read or the hand (3, 3 for 3, 4), not two leads
+        # of one pin: those are listed with every number present (full review 2026-11-10: built, with a warning)
+        other = {str((spec.get(k) or {}).get("number")) for k in ("tab", "exposed_pad") if isinstance(spec.get(k), dict)}
+        gone = [str(i) for i in range(1, max(max(map(int, listed)), n or 0) + 1) if str(i) not in listed
+                and str(i) not in other]
+        if gone:
+            errs.append(f"pin_positions lists pad {', '.join(twice)} twice and has no pad {', '.join(gone[:6])}: "
+                        "one of them is misnumbered; check the pad numbers against the drawing")
     dep = re.match(r"[A-Za-z][A-Za-z0-9]*?-(\d+)-(\d+)(?=_|$)", str(spec.get("name") or ""))
     if t == "gullwing" and n and not spec.get("pin_positions") and dep and n < int(dep.group(2)) and \
             int(dep.group(1)) < int(dep.group(2)):        # UCC256301's SOIC-14-16 built as 7 + 7 would be a wrong land
@@ -655,6 +666,16 @@ def sanity(spec):
             errs.append(f"terminal_width {dim(tw)[0]} is not smaller than the {spec['pitch']} mm pitch")
     if t == "qfn" and T and T >= min(L, W) / 2:
         errs.append(f"terminal_length {T} reaches the middle of the {L} x {W} body")
+    if t == "qfn" and isinstance(n, int) and "pins_left_right" not in spec and "pins_top_bottom" not in spec \
+            and not listed_sides(spec) and not spec.get("pin_positions"):
+        # no split given: a quarter of the pins per side is right only for a square body and a count of four sides.
+        # Anything else was laid out by guess (full review 2026-11-10: 6 pins became 1+2+1+2, 10 became 2+3+2+3)
+        square = L is not None and W is not None and abs(L - W) <= max(0.1, 0.05 * min(L, W))
+        if n % 4 or not square:
+            errs.append(f"{n} pins on a {L} x {W} mm body and no pins_left_right / pins_top_bottom: "
+                        + ("the count is not a multiple of 4" if n % 4 else "the body is not square")
+                        + ", so a quarter of the pins per side would be a guess. Give the split (a DFN / SON: "
+                        f"pins_left_right {n // 2}, pins_top_bottom 0) or list the sides in pin_sides")
     ep = spec.get("exposed_pad")
     bx, by = (W, L) if t == "gullwing" else (L, W)            # EP length is along X: gullwing X is body_width (E1)
     if ep and (dim(ep["length"])[1] >= bx or dim(ep["width"])[1] >= by):

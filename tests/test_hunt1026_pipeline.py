@@ -117,7 +117,7 @@ def test_a_foot_that_does_not_fit_outside_the_body_is_held():
 def test_pads_and_pins_that_differ_fail_the_read():
     e = _sot223_ext()
     e["package"]["pin_positions"][1]["number"] = "1"          # pads 1, 1, 3 + tab 4: no pad 2
-    _held(e, "symbol:", "2")
+    _held(e, "pad 1 twice", "no pad 2")                      # (since 2026-11-10 the generator refuses it first)
     e = _sot223_ext()
     e["package"]["pin_positions"][2]["number"] = "5"          # pads 1, 2, 5 + tab 4
     _held(e, "symbol:", "5")
