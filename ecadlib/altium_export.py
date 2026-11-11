@@ -535,11 +535,22 @@ def table_section(i, table):
     return [f"[Table{i}]", "SchemaName=", f"TableName={table}", "Enabled=True", "UserWhere=0", "UserWhereText="]
 
 
-def fieldmap_section(i, table, column, key="Part Number"):
+_ACE = str.maketrans({".": "#", "!": "_", "`": "_", "[": "(", "]": ")"})
+
+
+def ace_column(column):
+    """The name Excel's ACE provider gives a workbook column headed `column` (seen on this provider: 'Temp. Coeff' ->
+    'Temp# Coeff', 'Tol [%]' -> 'Tol (%)', '!' and '`' -> '_'); the DbLib must query that name."""
+    return str(column).translate(_ACE)
+
+
+def fieldmap_section(i, table, column, key="Part Number", excel=False):
+    """excel: the field is the name ACE exposes for the header `column`; the Altium parameter keeps `column`."""
     ftype = 0 if column == key else 1                                   # observed: key column FieldType=0
     pname = f"[{column}]" if column in RESERVED else column
+    field = ace_column(column) if excel else column
     return [f"[FieldMap{i}]",
-            f"Options=FieldName={table}.{column}|TableNameOnly={table}|FieldNameOnly={column}|FieldType={ftype}|"
+            f"Options=FieldName={table}.{field}|TableNameOnly={table}|FieldNameOnly={field}|FieldType={ftype}|"
             f"ParameterName={pname}|VisibleOnAdd=False|AddMode=0|RemoveMode=0|UpdateMode=0"]
 
 
@@ -555,7 +566,7 @@ def dblib_text(conn_str, tables, left_quote="[", right_quote="]", excel=False, c
     for tn, cs in zip(names, cols.values()):
         for c in cs:
             fm += 1
-            L += fieldmap_section(fm, tn, c)
+            L += fieldmap_section(fm, tn, c, excel=excel)
     return "\r\n".join(L) + "\r\n"
 
 

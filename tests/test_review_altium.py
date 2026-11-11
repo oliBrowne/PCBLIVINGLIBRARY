@@ -88,6 +88,7 @@ def test_push_exits_nonzero_when_a_part_fails():
     try:
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "p.json").write_text(json.dumps([ITEM]))
+            (Path(d) / "ecadlib.toml").write_text('[altium365]\nworkspace = "https://ws"\n')   # a real push needs it
             try:
                 A.main(["push", f"{d}/p.json", "--workspace", "https://ws", "-o", f"{d}/r.json"])
                 raise AssertionError("push with a failed part exited 0")

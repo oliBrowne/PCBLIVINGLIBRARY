@@ -39,7 +39,7 @@ TOP, MID1, BOTTOM, TOP_OVERLAY, BOTTOM_OVERLAY, TOP_PASTE, TOP_SOLDER, MECH13, M
 BOTTOM_PASTE, BOTTOM_SOLDER = 36, 38
 KEEPOUT = 56
 MECH16 = 72
-KICAD_LAYER = {"F.SilkS": TOP_OVERLAY, "F.Fab": MECH13, "F.CrtYd": MECH15}
+KICAD_LAYER = {"F.SilkS": TOP_OVERLAY, "B.SilkS": BOTTOM_OVERLAY, "F.Fab": MECH13, "F.CrtYd": MECH15}
 LAYER_NAME = {TOP: "TOP", BOTTOM: "BOTTOM", TOP_OVERLAY: "TOPOVERLAY", BOTTOM_OVERLAY: "BOTTOMOVERLAY", TOP_PASTE: "TOPPASTE",
               BOTTOM_PASTE: "BOTTOMPASTE", TOP_SOLDER: "TOPSOLDER", BOTTOM_SOLDER: "BOTTOMSOLDER", MECH13: "MECHANICAL13", MECH15: "MECHANICAL15", KEEPOUT: "KEEPOUT"}
 SHAPE = {"round": 1, "circle": 1, "oval": 1, "rect": 2, "octagonal": 3, "roundrect": 9}
@@ -146,7 +146,7 @@ def lib_name(s):
         s.encode("cp1252")
     except UnicodeEncodeError as e:
         raise ValueError(f"name {s!r} has characters Altium libraries can't store ({s[e.start:e.end]!r}); rename it") from None
-    return s
+    return clean(s)        # the spelling a symbol's footprint link stores ('SOT-23 ' -> 'SOT-23'): both must be one
 
 
 def pin_number(s, what="pin number"):
@@ -316,6 +316,8 @@ def texts_from_kicad(t):
         src = (sexpr.first(n, "layer") or [None, ""])[1]
         if kind == "reference" and "SilkS" not in str(src):
             layer = MECH13
+        elif kind == "reference" and str(src).startswith("B."):  # a bottom-side part's reference: on its own silk
+            layer = BOTTOM_OVERLAY
         a, dx, dy = math.radians(rot), -CHAR_W * h * chars * (0 if "left" in just else 1 if "right" in just else 0.5), -h / 2
         x, y = float(at[1]) + dx * math.cos(a) - dy * math.sin(a), -float(at[2]) + dx * math.sin(a) + dy * math.cos(a)
         if any(o[0] == txt and o[6] == layer for o in out):      # Fab reference and ${REFERENCE}: keep the first
@@ -502,10 +504,13 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
         if p[3] not in SHAPE:
             raise ValueError(f"{fp['name']}: pad shape {p[3]} not supported")
         fp["pads"].append(pad)
+    lost = {}
     for kind in ("fp_line", "fp_rect", "fp_poly", "fp_circle", "fp_arc"):
         for g in sexpr.find(t, kind):
-            layer = KICAD_LAYER.get((sexpr.first(g, "layer") or [None, None])[1])
+            ln = (sexpr.first(g, "layer") or [None, None])[1]
+            layer = KICAD_LAYER.get(ln)
             if layer is None:
+                lost[ln] = lost.get(ln, 0) + 1
                 continue
             if kind in ("fp_circle", "fp_arc"):    # a round part's courtyard, a pin-1 arc (KiCad library footprints)
                 K._graphic(fp, kind, g, layer, notes)
@@ -524,6 +529,8 @@ def footprint_from_kicad(text, height_mm=0.0, description=None, notes=None):
                 fp["tracks"] += [(a[0], a[1], b[0], b[1], w, layer) for a, b in segs]
     if sexpr.find(t, "zone"):
         K._zones(fp, t, notes)
+    if lost:                                  # B.Fab, B.CrtYd, user layers: said, not silently gone
+        notes.append(K.LOST_NOTE + ", ".join(f"{k} x{v}" for k, v in sorted(lost.items(), key=str)))
     return fp
 
 

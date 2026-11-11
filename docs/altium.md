@@ -21,6 +21,8 @@ python3 -m ecadlib.altium365 workspaces
 python3 -m ecadlib.altium365 push out/altium365/plan.json --workspace <url> [--dry-run]
 ```
 
+A real push (no `--dry-run`) goes only to the workspace named in `[altium365] workspace` in `ecadlib.toml`, as the web UI and the Altium menu do: another `--workspace` URL, or no setting at all, pushes nothing. Host case and a trailing slash don't count. A dry run may name any workspace.
+
 `plan` turns each unique part into one managed workspace component under `Components/<Category>`, with the same parameters as the DbLib rows (manufacturer, MPN, value, supplier, links). `push` then, for each part:
 
 1. looks the component up by name (`desLibrary.components(where: {name: {eq}})`);
