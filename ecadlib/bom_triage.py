@@ -22,7 +22,8 @@ FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctu
     "qty": ["qty", "quantity", "count", "qnty", "amount", "pcs"],
     "designator": ["designator", "designators", "reference", "references", "ref", "refdes", "ref des", "parts"],
     "value": ["value", "val", "comment"],
-    "footprint": ["footprint", "package", "case", "package case", "pcb footprint"],
+    "footprint": ["footprint", "package", "case", "package case", "pcb footprint",
+                  "size", "case size", "chip size", "size code", "metric size", "imperial size"],   # 'Size (inch)': 0603
     "description": ["description", "desc", "notes"],
     "libref": ["libref", "lib ref", "library ref", "library reference", "symbol"],
     "dnp": ["dnp", "dnf", "dni", "do not populate", "do not place", "do not fit", "do not install", "do not mount",
@@ -181,6 +182,8 @@ def map_headers(headers, threshold=0.72):
                     sc = 0.9 if (f, s) in (("value", "comment"), ("mpn", "part")) else sc   # 'Value' wins over
                                                                      # Altium's 'Comment' ('Resistor'); a real MPN column
                                                                      # over a purchasing BOM's 'Part'
+                    sc = 0.85 if f == "footprint" and "size" in s.split() else sc   # a 'Footprint' / 'Package'
+                                                                     # column wins over a chip 'Size' beside it
                     sc = 0.74 if (f, s) in (("manufacturer", "vendor"), ("description", "notes")) else sc   # a
                                                                      # fallback: any header naming the maker or the
                                                                      # description ('Mfg Name', 'Part Description',
@@ -205,8 +208,10 @@ def map_headers(headers, threshold=0.72):
                 best *= 0.6                                              # 'Total Qty' (all boards), 'Package Qty'
             if f == "mpn" and re.search(r"\b(internal|company|our|house|stock|item|erp|sap|customer|cust|in house)\b", nh):
                 best *= 0.5                                              # 'Internal PN' is a house number
-            if f == "footprint" and re.search(r"\b(qty|quantity|count|pcs|size|weight)\b", nh):
-                best *= 0.5                                              # 'Package Qty' is a reel size
+            if f == "footprint" and (re.search(r"\b(qty|quantity|count|pcs|weight)\b", nh) or re.search(
+                    r"\bsize\b", nh) and re.search(r"\b(package|pkg|pack|reel|tape|box|tray|spq|moq|order|lot)\b", nh)):
+                best *= 0.5                                              # 'Package Qty', 'Reel Size': a reel size
+                                                                         # ('Size (inch)', 'Case Size' are chip sizes)
             if f == "footprint" and (metric_header(nh) or mixed_header(nh)):
                 best *= 0.95                                             # 'Case Code (mm)' 0603 is an 0201: the
                                                                          # inch column wins when both are there
