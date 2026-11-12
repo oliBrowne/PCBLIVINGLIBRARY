@@ -2574,8 +2574,9 @@ def std_dims(spec):
     (compartmental testing 2026-11-12, finding 20), and a 0402's length and width the other way round fits the same
     box. Makers' drawings of one package differ far less than a slip does: the real reads of 2026-10-25 that name a
     table package give 1.00-1.12 x its lead width and 0.89-1.14 x its foot. Far is under 0.6 or over 1.6 x (a foot,
-    which makers tolerance widely: under 0.52 or over 1.9 x). Not compared: a part with a tab or a pad table, and a
-    body the name's own numbers already check (gull-wing, QFN, QFP)."""
+    which makers tolerance widely: under 0.52 or over 1.9 x, and only a foot read with both its limits: '0.4 MIN' is
+    the low limit, not the length). Not compared: a part with a tab or a pad table, and a body the name's own
+    numbers already check (gull-wing, QFN, QFP)."""
     try:
         from . import stdparts as SP
         ref = SP.packages().get(str(spec.get("name") or ""))
@@ -2588,7 +2589,10 @@ def std_dims(spec):
     if spec.get("package_type") in ("chip", "molded"):
         keys += [("body_length", STD_SIZE), ("body_width", STD_SIZE)]
     for k, (lo, hi) in keys:
-        a, b = _nom(ref.get(k)), _nom(spec.get(k))
+        d = spec.get(k)
+        if k == "terminal_length" and not (isinstance(d, dict) and d.get("min") is not None and d.get("max") is not None):
+            continue                                  # a foot printed as '0.4 MIN' is its low limit, not its length
+        a, b = _nom(ref.get(k)), _nom(d)
         if a and b and a > 0 and not lo <= b / a <= hi:
             return k, b, a
     return None

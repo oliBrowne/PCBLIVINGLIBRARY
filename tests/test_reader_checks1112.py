@@ -224,3 +224,10 @@ def test_skip_runs_the_cases_after_the_first_n_of_the_same_order():
     assert not {c["id"] for c in first} & {c["id"] for c in rest}
     assert R.select(cases, skip=110, limit=40) == every[110:150]
     assert R.select(cases, skip=0) == every and R.select(cases, skip=None) == every
+
+
+def test_a_foot_printed_as_one_limit_is_not_compared():
+    """'L 0.016 MIN' is the foot's low limit: half the table's nominal, and a true read (test_one_sided_dims)."""
+    spec = T.read(copy.deepcopy(T.SOIC8))["spec"]
+    assert D.std_dims(dict(spec, terminal_length={"min": 0.4064, "nom": 0.4064})) is None
+    assert D.std_dims(dict(spec, terminal_length={"min": 0.2, "nom": 0.3, "max": 0.4}))[0] == "terminal_length"
