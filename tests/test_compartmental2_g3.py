@@ -44,12 +44,13 @@ def _named_items(d, extra_name):
 @lite
 def test_release_check_holds_a_second_part_whose_name_differs_only_in_case(tmp_path):
     from ecadlib import release_check as RC
-    for other in ("res-0603-10K", "RES-0603-10k"):          # Altium Part Numbers ignore case; dblib-sync refuses it
-        items = _named_items(tmp_path / other, other)
-        rows = RC.apply(items, tmp_path / other)
+    for k, other in enumerate(("res-0603-10K", "RES-0603-10k")):   # Altium Part Numbers ignore case; dblib-sync refuses
+        base = tmp_path / f"case{k}"                         # (one folder each: Windows folder names ignore case too)
+        items = _named_items(base, other)
+        rows = RC.apply(items, base)
         assert [r["status"] for r in rows] == ["ready", "ready", "held"], rows
         assert any("RES-0603-10k" in h and "case" in h for h in items[2]["hold_reasons"]), items[2]["hold_reasons"]
-        RC.apply(items, tmp_path / other, allow=[other])            # a name clash cannot be released anyway
+        RC.apply(items, base, allow=[other])                         # a name clash cannot be released anyway
         assert items[2]["status"] == "held" and items[0]["status"] == "ready", items
 
 
