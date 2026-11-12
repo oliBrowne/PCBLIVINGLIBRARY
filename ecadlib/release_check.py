@@ -756,6 +756,14 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
     rules = RU.resolve(rules, base)
     rows, today = [], datetime.date.today().isoformat()
     lg = LG.Ledger(Path(base)) if change_holds else None
+    first = {}                                 # a part named like an earlier one, in any case: Altium Part Numbers and
+    clash = {}                                 # Windows file names ignore case, so dblib-sync would refuse it later
+    for it in items:
+        k = str(it.get("name") or "").casefold()
+        if k in first:
+            clash[id(it)] = first[k]
+        else:
+            first[k] = it.get("name")
     for it in items:
         if it.get("a365") and it.get("status") in ("existing", "deleted_in_workspace"):
             # pulled from Altium 365 (ecadlib a365 pull): already released there, nothing to release or hold back
@@ -764,6 +772,10 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
                          "footprint_source": "a365", "height_mm": "", "failures": "", "warnings": "", "allowed": ""})
             continue
         fails, warns, info = check_item(it, base, rules)
+        if id(it) in clash:
+            same = "the same name" if clash[id(it)] == it["name"] else "a name that differs only in case"
+            fails = list(fails) + [("files", f"another part in the plan, {clash[id(it)]!r}, has {same} (Altium part "
+                                             "numbers and file names ignore case): rename one of them")]
         msgs = [f"{r}: {m}" for r, m in fails]
         if it["name"] in unallow:
             it.pop("allow", None)
