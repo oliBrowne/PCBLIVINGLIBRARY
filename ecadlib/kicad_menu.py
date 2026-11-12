@@ -6,7 +6,7 @@ review queue), the same flow as the ecadlib menu in Altium (altium_menu), with a
     ecadlib kicad-menu run-job JOB --action queue|open --project BOARD.kicad_pcb [--path REPORT]
     ecadlib kicad-menu check-bom "%I"      # the schematic editor's Tools > Generate BOM hook (a netlist or .kicad_sch)
     ecadlib kicad-menu fill "%I"           # the same hook: build the schematic's missing parts into the library
-    ecadlib kicad-menu add-to-schematic [--kicad 9.0] [--remove]   # put both hooks into the schematic editor
+    ecadlib kicad-menu add-to-schematic [--kicad 9.0] [--remove]   # the ecadlib button (KiCad 9+) and both hooks
 
 The plugin (ecadlib/assets/kicad_action_plugin.py) runs in KiCad's own Python, starts `run-job` in the background and
 reads JOB/progress.ini (live steps) and JOB/result.ini (the answer: big, row1..rowN "label|value|ok", message, fix,
@@ -342,18 +342,24 @@ def main(argv=None):
     f.add_argument("--kicad", type=int, default=None, help="the KiCad's major version (7: KiCad 7 file formats)")
     f.add_argument("--offline", action="store_true", help="cached downloads and standard parts only")
     f.add_argument("--json", action="store_true")
-    h = sub.add_parser("add-to-schematic", help="add ecadlib: check BOM / fill library to the schematic editor's "
-                       "Tools > Generate Legacy Bill of Materials (every KiCad found)")
+    h = sub.add_parser("add-to-schematic", help="add the ecadlib button to the schematic editor's toolbar (KiCad 9+, "
+                       "through KiCad's plugin system) and ecadlib: check BOM / fill library to its Tools > Generate "
+                       "Legacy Bill of Materials (every KiCad found)")
     h.add_argument("--kicad", help="only this KiCad version (9.0, 10.0, ...)")
     h.add_argument("--remove", action="store_true", help="take the entries out again")
     a = ap.parse_args(argv)
     if a.cmd == "add-to-schematic":
         from . import kicad_install as KI, userconfig as UC
         got = KI.schematic_hooks(UC.self_command(), a.kicad, remove=a.remove)
+        api = KI.api_plugin(UC.self_command(), a.kicad, remove=a.remove)
+        if not a.remove and any(v.startswith(("added", "already there")) for v in api.values()):
+            print("  in the schematic editor (KiCad 9 and newer): the ecadlib button at the right end of the top "
+                  "toolbar (close KiCad, all its windows, and start it again first)")
         if not a.remove and any(v in ("added", "already there") for v in got.values()):
             print("  in the schematic editor: Tools > Generate Legacy Bill of Materials... > ecadlib: check BOM or "
                   "ecadlib: fill library > Generate (restart KiCad first)")
-        return 0 if got and not any(v.startswith("not changed") for v in got.values()) else 1
+        both = list(got.values()) + list(api.values())
+        return 0 if got and not any(v.startswith("not changed") for v in both) else 1
     if a.cmd == "fill":
         try:
             cfg = config(a.project, offline=a.offline)
