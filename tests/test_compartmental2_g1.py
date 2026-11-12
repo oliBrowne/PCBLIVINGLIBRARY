@@ -178,3 +178,15 @@ def test_altium_comment_naming_a_missing_parameter_is_no_value():
     by = {ln["designator"]: ln for ln in lines}
     assert by["R2"]["value"] == "4k7", by
     assert not by["R1"].get("value", "").startswith("="), by["R1"]
+
+
+# ---------------------------------------------------------------- step_gen: a height that is no height
+def test_generated_model_height_that_is_not_a_positive_number_is_said_plainly():
+    from ecadlib import step_gen as SG
+    for h in (float("nan"), float("inf"), -1.0):
+        try:
+            SG.generate("SOIC-8_3.9x4.9mm_P1.27mm", height=h)
+            raise AssertionError(f"height {h} built")
+        except ValueError as e:
+            assert "not a positive number" in str(e), (h, e)
+    assert SG.generate("SOIC-8_3.9x4.9mm_P1.27mm", height=1.5)[1]["height"] == 1.5
