@@ -98,14 +98,20 @@ def apply(edit, res):
         elif gone:                                        # renaming only the symbol pin would cross pin and pad
             notes.append("rename skipped, no such pad: " + ", ".join(f"{k} -> {ren[k]}" for k in gone))
             ren = {k: v for k, v in ren.items() if k in have}
-        lands = {}                                        # new number -> the pads that would carry it
-        for n in have:
-            lands.setdefault(ren.get(n, n), []).append(n)
-        clash = sorted(k for k in ren if len(lands.get(ren[k], [])) > 1) if t else []
-        if clash:                                         # two pins on one number: one net, a short nobody asked for
-            notes.append("rename skipped, the new number is another pad's: " + ", ".join(f"{k} -> {ren[k]}" for k in clash)
-                         + " (to put pads on one net, use same-net)")
+        skipped = {}
+        while t:                                          # until no clash is left: a rename skipped keeps its pad's
+            lands = {}                                    # number, which another rename may then land on (T->1 with
+            for n in have:                                # 1->2 skipped: two pads 1; compartmental testing round 2)
+                lands.setdefault(ren.get(n, n), []).append(n)
+            clash = sorted(k for k in ren if len(lands.get(ren[k], [])) > 1)
+            if not clash:
+                break
+            skipped.update({k: ren[k] for k in clash})
             ren = {k: v for k, v in ren.items() if k not in clash}
+        if skipped:                                       # two pins on one number: one net, a short nobody asked for
+            notes.append("rename skipped, the new number is another pad's: " + ", ".join(f"{k} -> {v}" for k, v in
+                                                                                         skipped.items())
+                         + " (to put pads on one net, use same-net)")
         pins = {str(p.get("num")) for p in sym.get("pins") or []}
         twice = sorted(k for k, v in ren.items() if k in pins and v in pins and v not in ren)
         if twice:                                         # pin k would take the number pin v keeps: two pins, one number
