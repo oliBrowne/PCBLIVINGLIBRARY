@@ -111,20 +111,19 @@ def test_ds2_35_hand_row_with_a_ref_altium_cannot_store_is_reported_not_fatal(tm
 
 @lite
 def test_ds2_35_parity_reports_a_workbook_ref_altium_cannot_store_for_that_part(tmp_path):
-    import csv, shutil
+    import shutil
     from ecadlib import parity as P
     from tests.test_parity import _pack
     d = tmp_path / "pack"
     shutil.copytree(_pack()["dir"], d)
-    t = d / "altium" / "testpack.csv"
-    rows = list(csv.DictReader(open(t, encoding="utf-8-sig")))
-    for r in rows:
-        if r["Part Number"] == "MMBT3904LT1G":
-            r["Footprint Ref"] = "SOT-23\u2192"                 # typed into the workbook by hand
-    with open(t, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]))
-        w.writeheader()
-        w.writerows(rows)
+    import openpyxl                                     # the workbook the DbLib names (what Altium reads)
+    wb = openpyxl.load_workbook(d / "altium" / "testpack.xlsx")
+    for ws in wb.worksheets:
+        h = [c.value for c in ws[1]]
+        for r in ws.iter_rows(min_row=2):
+            if r[h.index("Part Number")].value == "MMBT3904LT1G":
+                r[h.index("Footprint Ref")].value = "SOT-23\u2192"   # typed into the workbook by hand
+    wb.save(d / "altium" / "testpack.xlsx")
     rep = P.check_plan(d / "library" / "plan.json", d / "kicad", "testpack", d / "altium")     # was: ValueError
     bad = [x for x in rep["database"] if x["what"] == "part MMBT3904LT1G" and x["field"] == "Footprint Ref"]
     assert len(bad) == 1 and "can't store" in bad[0]["msg"] and bad[0]["level"] == "error", rep["database"]

@@ -222,11 +222,13 @@ def test_export_mode_catches_missing_3d_file_symbol_and_database_rows():
         (d / "kicad" / "testpack.3dshapes" / "SOT-23.step").unlink()
         sym = d / "kicad" / "testpack.kicad_sym"
         sym.write_text(sym.read_text().replace('(name "+IN_A"', '(name "IN_A"', 1))
-        rows = list(csv.DictReader(open(d / "altium" / "testpack.csv", encoding="utf-8-sig")))
-        with open(d / "altium" / "testpack.csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0]))
-            w.writeheader()
-            w.writerows([r for r in rows if r["Part Number"] != "61300511121"])
+        import openpyxl                                 # the workbook the DbLib names (what Altium reads), not the csv mirror
+        wb = openpyxl.load_workbook(d / "altium" / "testpack.xlsx")
+        for ws in wb.worksheets:
+            h = [c.value for c in ws[1]]
+            for i in [r[0].row for r in ws.iter_rows(min_row=2) if r[h.index("Part Number")].value == "61300511121"][::-1]:
+                ws.delete_rows(i)
+        wb.save(d / "altium" / "testpack.xlsx")
         con = sqlite3.connect(d / "kicad" / "testpack.sqlite")
         con.execute('UPDATE "Resistors" SET "MPN" = ? WHERE "Part ID" = ?', ("RC0603FR-07100KL", "RES-0603-10k"))
         con.commit(); con.close()
