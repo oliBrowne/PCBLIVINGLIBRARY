@@ -393,6 +393,21 @@ def ep_lead_holds(text, pin_names):
     return out
 
 
+def value_link_empty(item):
+    """The parameter an Altium Comment link ('=Value', '=Part Number') names, when that parameter is missing or blank:
+    the generic Resistor / Capacitor / Inductor symbols show only their Value, so a 10k and a 4.7k built from a BOM
+    with no Value column look the same and blank. '' when the Comment is plain text or its parameter is filled."""
+    com = str(item.get("comment") or "").strip()
+    m = re.fullmatch(r"=([A-Za-z][A-Za-z0-9 _]*)", com)
+    if not m:
+        return ""
+    name = m.group(1)
+    par = {p["name"]: p.get("value", "") for p in item.get("parameters") or []}
+    if name != "Value" and name not in par and name not in (item.get("cleared") or []):
+        return ""                                     # '=Part Number': a DbLib column, not a parameter of the plan
+    return "" if str(par.get(name) or "").strip() else name
+
+
 def unchecked(what, e):
     """The failure line for a check that raised: the part was not checked, so it is held (never passed on a warning)."""
     return f"{what} could not be checked ({type(e).__name__}: {e}): fix the file or report this; not released unchecked"
@@ -623,6 +638,10 @@ def check_item(item, base=".", rules=None):
                              "([release] manufacturer = \"hold\" holds the part instead)")
             else:
                 add("fields", f"{k} is empty")
+    link = value_link_empty(item)
+    if link:                                          # Comment '=Value' with no Value: the placed part shows nothing
+        add("fields", f"{link} is empty: the part's Comment shows it ('={link}'), so the placed part would show no "
+                      f"value; add a {link} column to the BOM or write the value in the description")
     mpn = str(par.get(RU.canonical_param("Manufacturer Part Number", rules), par.get("Manufacturer Part Number", "")) or "")
     if SS.cell(mpn) != mpn:                           # =cmd|'/c calc'!A1, +SUM(..), @SUM(..): what a spreadsheet runs
         add("fields", f"Manufacturer Part Number {mpn[:40]!r} starts like a spreadsheet formula, not a part number: "

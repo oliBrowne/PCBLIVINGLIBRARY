@@ -227,6 +227,7 @@
 "columns",
 "dblib_links",
 "dblib_text",
+"description_value",
 "ep",
 "excel_connection",
 "fieldmap_section",
@@ -4687,6 +4688,7 @@
 "record_releases",
 "recorded_holds",
 "unchecked",
+"value_link_empty",
 "write_report"
 ],
 "ecadlib/reports.py":[

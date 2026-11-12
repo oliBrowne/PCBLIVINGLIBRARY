@@ -78,6 +78,33 @@ def source_kind(descriptions=()):
     return None
 
 
+_UNIT_WORD = re.compile(r"(?:ohms?|Ω|[pnuµμm]?[fh])", re.I)    # '10 OHM', '1 uF': a number and its unit apart
+_BEAD = re.compile(r"bead|ferrite", re.I)
+
+
+def description_value(desc, cat):
+    """The value a resistor / capacitor / inductor line's description names when its BOM has no Value column
+    ('RES 10K OHM 1% 0603' -> '10K', 'CAP CER 0.1UF 16V X7R' -> '0.1UF', 'FIXED IND 4.7UH 800MA' -> '4.7UH'), as the
+    description spells it. Only a value in the part's own unit counts (16V, 800mA, 1/10W, 1%, X7R, 0402 are none of
+    it; a bead's impedance is its value). None, or two different values ('4.7K or 10K'): '' -- nothing is guessed."""
+    from .librarian import passive_value
+    toks = [t for t in re.split(r"[\s,;/()\[\]]+", str(desc or "")) if t]
+    cats = (cat, "Resistors") if cat == "Inductors" and _BEAD.search(str(desc or "")) else (cat,)
+    found = {}
+    for i, t in enumerate(toks):
+        if re.fullmatch(r"\d+(?:\.\d+)?", t) and i + 1 < len(toks) and _UNIT_WORD.fullmatch(toks[i + 1]):
+            t = f"{t} {toks[i + 1]}"
+        for c in cats:
+            raw = t.replace(" ", "")
+            v = passive_value(raw, c)
+            if v is None and c != "Resistors":                        # '0.1UF', '4.7UH': BOM capitals
+                v = passive_value(raw.lower(), c)
+            if v is not None:
+                found.setdefault((c, f"{v:.6g}"), t)
+                break
+    return next(iter(found.values())) if len(found) == 1 else ""
+
+
 def kind_of(descriptions=(), footprints=()):
     """Resistors / Capacitors / Inductors / Crystals / Connectors / Transistors / Diodes from a source's category
     words or a chip footprint, else None."""
@@ -392,6 +419,9 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         fp_ref = fp.split(":")[-1]
         pkg = package_of(fp, ln.get("description")) or ""
         value = ln.get("value", "")
+        if cat in GENERIC_SYMBOL and not str(value).strip():   # no Value column: the shared symbol shows '=Value'
+            value = description_value(ln.get("description"), cat) or \
+                description_value(t.get("src_description") if t is not None else "", cat)   # the part search text
         if cat in GENERIC_SYMBOL and not mpn and PLAIN_VALUE.fullmatch(value.strip()):
             pv = parse_value(value)                   # 1uF / 1u / 1µF, 100nF / 0.1uF, 4k7 / 4.7k: one part, named
             if pv is not None and not two_readings(value):   # with the first spelling the BOM uses ('4,700pF' reads
