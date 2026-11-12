@@ -264,6 +264,15 @@ class SourceResult:
     extra: dict = field(default_factory=dict)
 
 
+def result_shape_problem(r):
+    """What is wrong with a SourceResult's field types (a third-party plugin's), or '': triage reads them as written."""
+    text = ("provider", "lcsc", "mpn", "manufacturer", "package", "url", "error")
+    bad = [f for f in text if not isinstance(getattr(r, f), str)]
+    bad += [f for f in ("found", "has_symbol", "has_footprint", "has_3d") if getattr(r, f) not in (None, True, False)]
+    bad += [] if r.extra is None or isinstance(r.extra, dict) else ["extra"]
+    return ", ".join(f"{f} is {type(getattr(r, f)).__name__}" for f in bad)
+
+
 class Provider:
     name = "base"
     auth = "none"                       # human-readable description of the credentials needed

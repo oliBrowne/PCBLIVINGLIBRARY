@@ -141,8 +141,13 @@ def test_footprints_whose_names_clash_are_not_merged():
         items.append(two)
     plan, http = _dup_plan(change)
     rep = X.export(plan, plan.parent.parent / "k", "lib", http=http, log=_quiet)
-    row = next(r for r in rep["parts"] if r["part"] == "EEPART2")
-    assert row["footprint"] != "EEPART1" and any("EEPART2" in e and "EEPART1" in e for e in rep["errors"]), (row, rep["errors"])
+    # since 2026-11-12 the release check holds a ref that names no entry of its file (the .PcbLib holds the SOIC-8
+    # land, not 'EEPART1'): held is the safe outcome too; exported, it must not carry the first part's footprint
+    row = next((r for r in rep["parts"] if r["part"] == "EEPART2"), None)
+    if row is None:
+        assert any(s["part"] == "EEPART2" and "is not in" in s["why"] for s in rep["skipped"]), rep["skipped"]
+    else:
+        assert row["footprint"] != "EEPART1" and any("EEPART2" in e and "EEPART1" in e for e in rep["errors"]), (row, rep["errors"])
 
 
 def test_dblib_row_never_points_at_another_parts_symbol():

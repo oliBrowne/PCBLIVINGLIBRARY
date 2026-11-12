@@ -1122,7 +1122,10 @@ def triage(lines, index, provs, http, shared=None):
                          "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
-        pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"), *pns)
+        pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"))
+        if not pkg and pns:                           # a passive's part number names its size by the maker's own code
+            from .stdparts import mpn_size            # (RC0603F103CS is Samsung's 0201); an IC's never does
+            pkg = next((s for s in (mpn_size(pn)[1] for pn in pns) if s), None) or package_of(*pns)
         cls = re.match(r"[A-Z]+", ln.get("designator", "").upper())
         sym = how = None
         own = "" if placeholder_mpn(ln.get("mpn")) else str(ln.get("mpn") or "").strip()
@@ -1228,6 +1231,8 @@ def triage(lines, index, provs, http, shared=None):
                     r = P.SourceResult(prov.name, error=f"plugin error: {type(e).__name__}: {str(e)[:120]}")
                 if not isinstance(r, P.SourceResult):
                     r = P.SourceResult(getattr(prov, "name", "?"), error="plugin returned no SourceResult")
+                elif getattr(prov, "_plugin", False) and (bad := P.result_shape_problem(r)):
+                    r = P.SourceResult(getattr(prov, "name", "?"), error=f"plugin returned a bad SourceResult ({bad})")
                 if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
                     limited.setdefault(prov.name, r.error)  # with no key, not an unreachable one
                     continue

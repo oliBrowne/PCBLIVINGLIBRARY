@@ -4067,6 +4067,9 @@ class PdfStore:
         tries = 1 if host in self.gave_up else H.RETRIES + 1
         for n in range(1, tries + 1):
             status, data, ctype, final, err, *more = self._get(url, PF.HEADERS_S if move_on else 60)
+            if not err and data is not None and len(data) > MAX_DOWNLOAD:
+                again = False                         # stopped at the size cap: the caller says "larger than", no retry
+                break
             if not err and 200 <= (status or 0) < 300 and is_pdf(data) and not pdf_complete(data):
                 err, data = cut_off(data), None       # the connection closed half way: worth another try
             again = bool(H.TRANSIENT.search(err) or err.startswith("the PDF is cut off")) if err else \

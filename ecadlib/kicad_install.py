@@ -139,10 +139,26 @@ def _rows(text):
     return out
 
 
-def remove_row(text, nick):
-    """The table text without the row(s) named `nick` (each removed with its own line)."""
-    for s, e, name, _, _ in reversed(_rows(text)):
-        if name == nick:
+def _descr(text, s, e):
+    node = sexpr.parse(text[s:e])
+    d = sexpr.first(node, "descr") or []
+    return str(d[1]) if len(d) > 1 else ""
+
+
+def ours(text, s, e, uri, our_uri):
+    """A library-table row of this library: ecadlib wrote it (its description, or the very path it would write), or it
+    names this library's own file somewhere else (added by hand, or the folder moved: /old/place/mylib.kicad_sym).
+    Only such a row may be replaced or removed, never a person's own library that has the name ('Device')."""
+    base = lambda u: re.split(r"[/\\]", str(u).rstrip("/\\"))[-1].casefold()
+    kicads = str(uri).startswith("${KICAD")            # KiCad's own library (${KICAD9_SYMBOL_DIR}/Device.kicad_sym)
+    return uri == our_uri or base(uri) == base(our_uri) and not kicads or _descr(text, s, e).startswith("ecadlib library")
+
+
+def remove_row(text, nick, our_uri=None):
+    """The table text without the row(s) named `nick` (each removed with its own line); with our_uri only the rows
+    ecadlib wrote (ours), so an uninstall never takes a person's own library of that name."""
+    for s, e, name, _, uri in reversed(_rows(text)):
+        if name == nick and (our_uri is None or ours(text, s, e, uri, our_uri)):
             while s > 0 and text[s - 1] in " \t":
                 s -= 1
             if text[e:e + 1] == "\n":
@@ -278,13 +294,16 @@ def _one(series, d, lib, folder, root, var, v, rep, dry_run, uninstall, environ,
         texts[kind] = (p, text, table)
     for kind, (p, text, table) in texts.items():
         if uninstall:
-            new = remove_row(text, nick)
+            new = remove_row(text, nick, uris[kind])
         elif not have[kind]:
             continue
         else:
-            for _, _, name, typ, uri in _rows(text):
+            for s0, e0, name, typ, uri in _rows(text):
                 if name == nick and typ.casefold() != "kicad":
                     raise ValueError(f"{p.name} already has a library {nick!r} of type {typ} ({uri}); pass another --name")
+                if name == nick and not ours(text, s0, e0, uri, uris[kind]):
+                    raise ValueError(f"{p.name} already has your own library {nick!r} ({uri}); ecadlib does not replace "
+                                     "it: pass another --name")
                 if name == nick and uri != uris[kind]:
                     rep["warnings"].append(f"KiCad {series} {p.name}: the {nick!r} row pointed at {uri}; it now points "
                                            f"at {uris[kind]}")

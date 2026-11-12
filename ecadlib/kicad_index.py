@@ -55,6 +55,11 @@ def split_value(s):
     """'100nF 50V' -> (1e-07, 'F', '50V'): the leading value in base units, its unit ('F', 'H', 'R' ohm, 'V', 'W', 'A',
     'Hz', or '' when not stated) and the rest of the text; (None, '', text) when it does not start with a value."""
     s = re.sub(r"(?i)(?<=\d)meg", "M", str(s or "").strip())
+    s = re.sub(r"^\.(?=\d)", "0.", s)                                # '.1uF'
+    s = re.sub(r"^(\d+(?:[.,]\d+)?\s*)([UNP])(?=[FH](?![A-Za-z0-9]))", lambda m: m.group(1) + m.group(2).lower(), s)   # 10UF
+    m = re.match(r"^R(\d+)\s*(?:Ω|ω|(?i:ohms?))?(?=\s|$)", s)          # R47 = 0.47 ohm (R005 = 5 milliohm); never
+    if m:                                                               # 'R1,R2' (designators) or 'R5F104' (an MPN)
+        return float("0." + m.group(1)), "R", s[m.end():].strip()
     m = re.match(r"^(\d+)([pnuµμmkKMGR])(\d+)" + _UNIT, s)          # 4k7 / 4R7 notation
     if m:
         v, pre, u = float(f"{m.group(1)}.{m.group(3)}"), m.group(2), m.group(4)
@@ -107,10 +112,20 @@ def package_of(*texts):
         m = IPC_CHIP_RE.search(str(t or ""))
         if m and m.group(1) in METRIC_TO_IMPERIAL:
             return METRIC_TO_IMPERIAL[m.group(1)]
-        m = PKG_RE.search(str(t or ""))
+        # chip size codes are read by stdparts.chip_size: a metric marker ('0603 metric' is an imperial 0201) and a
+        # code inside a part number (LT1206CS8, TPS7A0201PDBVR: no chip) are not read as that imperial chip
+        if PKG_RE.search(str(t or "")):
+            from .stdparts import chip_size
+            chip = chip_size(t)
+            if chip in CHIP_CODES:
+                return chip
+        m = next((m for m in PKG_RE.finditer(str(t or "")) if m.group(2)), None)
         if m:
-            return (m.group(1) or m.group(2)).upper().replace("-", "")
+            return m.group(2).upper().replace("-", "")
     return None
+
+
+CHIP_CODES = {"01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512"}
 
 
 EP_SIZE = re.compile(r"EP(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)", re.I)
@@ -236,6 +251,8 @@ class KiCadIndex:
                     continue                      # don't hand a passive footprint to an IC/connector
                 if "_Array_" in name and not array:
                     continue                      # R_Array_Convex_4x0603 is four resistors, asked for by name only
+                if array and "_Array_" not in name:
+                    continue                      # and an array is never handed a single resistor's land
                 hits.append(k)
         names = {k.split(":")[-1] for k in hits}
         hits = [k for k in hits if plain_land(k.split(":")[-1]) == k.split(":")[-1]

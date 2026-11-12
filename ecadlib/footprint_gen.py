@@ -1118,7 +1118,16 @@ def compare(mine_path, ref_text):
     """Pad rows for every pad number on either side: {pad, mine, ref, d_pos, d_size} for pads on both, {pad, only:
     "mine"|"ref", at} for pads on one side. Pads sharing a number (an EP and its vias) pair up in position order."""
     from . import sexpr
-    a, b = sexpr.parse(Path(mine_path).read_text(encoding="utf-8")), sexpr.parse(ref_text)
+
+    def footprint(text, what):                 # a broken file, a symbol library, an empty file: a plain error, never
+        try:                                   # "every pad differs" against a footprint with no pads
+            t = sexpr.parse(text)
+        except ValueError as e:
+            raise ValueError(f"{what} is not a KiCad footprint ({e})") from e
+        if not (isinstance(t, list) and t and t[0] in ("footprint", "module")):
+            raise ValueError(f"{what} is not a KiCad footprint (a .kicad_mod starts with '(footprint')")
+        return t
+    a, b = footprint(Path(mine_path).read_text(encoding="utf-8"), Path(mine_path).name), footprint(ref_text, "the reference")
     pa, pb = {}, {}
     for t, d in ((a, pa), (b, pb)):
         for p in sexpr.pads(t):
@@ -1215,7 +1224,10 @@ def main(argv=None):
             ref = r.text
         else:
             ref = Path(a.ref).read_text(encoding="utf-8")
-        rows, ca, cb = compare(a.mine, ref)
+        try:
+            rows, ca, cb = compare(a.mine, ref)
+        except ValueError as e:
+            sys.exit(f"ecadlib footprint compare: {e}")
         print(f"{'pad':>4} {'mine (x,y,w,h)':>30} {'kicad (x,y,w,h)':>30}  d_pos       d_size")
         for r in rows:
             if "only" in r:
