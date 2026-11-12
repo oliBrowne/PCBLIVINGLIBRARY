@@ -88,6 +88,84 @@ def test_release_check_holds_a_resistor_whose_value_is_a_capacitance(tmp_path):
     assert any(h.startswith("fields: Value '100nF'") for h in items[0]["hold_reasons"]), items[0]["hold_reasons"]
 
 
+# ---------------------------------------------------------------- the ledger: a hand-edited release line
+def _released(d):
+    """Two parts released by a first kicad-export (revision 1 each)."""
+    import contextlib, io
+    from ecadlib import kicad_export as KX, release_check as RC
+    from tests.test_dblib_sync import _base_items, _models
+    _models(d)
+    items = _base_items()[:2]
+    for k, i in enumerate(items):
+        i["parameters"] += [{"name": "Manufacturer Part Number", "value": f"MPN-{k}"}, {"name": "Manufacturer", "value": "ACME"}]
+    RC.apply(items, d)
+    (d / "plan.json").write_text(json.dumps(items, indent=1))
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        assert KX.main([str(d / "plan.json"), "-o", str(d / "kc"), "--name", "t", "--offline"]) == 0
+
+
+def _edit_ledger_value(d, part, value):
+    from ecadlib import ledger as LG
+    out = []
+    for ln in (d / LG.LEDGER).read_text().splitlines():
+        e = json.loads(ln)
+        if e["part"] == part and e["event"] == "release":
+            for p in e["item"]["parameters"]:
+                if p["name"] == "Value":
+                    p["value"] = value
+        out.append(json.dumps(e, sort_keys=True))
+    (d / LG.LEDGER).write_text("\n".join(out) + "\n")
+
+
+@lite
+def test_a_release_line_whose_fields_were_edited_is_never_published(tmp_path):
+    """The ledger line's item said Value 1k while its fingerprint (content-addressed) says 10k: kicad-export held the
+    plan's edit to 1k and then exported 'the released revision' straight from the edited line, Value 1k."""
+    import contextlib, io, re
+    from ecadlib import cli
+    for plan_value in ("1k", "10k"):
+        d = tmp_path / plan_value
+        _released(d)
+        _edit_ledger_value(d, "RES-0603-10k", "1k")
+        items = json.loads((d / "plan.json").read_text())
+        items[0]["parameters"][0]["value"] = plan_value
+        (d / "plan.json").write_text(json.dumps(items, indent=1))
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = cli.main(["kicad-export", str(d / "plan.json"), "-o", str(d / "kc"), "--name", "t", "--offline"])
+        sym = (d / "kc" / "t.kicad_sym").read_text()
+        vals = re.findall(r'\(property "Value" "([^"]*)"', sym)
+        assert "1k" not in vals, (plan_value, rc, vals, err.getvalue()[-400:])
+        assert rc != 0 and "RES-0603-10k" in err.getvalue(), (plan_value, rc, err.getvalue()[-400:])
+
+
+# ---------------------------------------------------------------- kicad_import: a person's own KiCad library
+_OWN_LIB = '''(kicad_symbol_lib (version 20231120) (generator "hand")
+ (symbol "R 1/4W" (in_bom yes) (on_board yes)
+  (property "Reference" "R" (at 0 0 0) (effects (font (size 1.27 1.27))))
+  (symbol "R 1/4W_1_1"
+   (pin passive line (at 0 3.81 270) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+   (pin passive line (at 0 -3.81 90) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))))
+ (symbol "MCU" (in_bom yes) (on_board yes)
+  (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+  (symbol "MCU_1_1"
+   (pin bidirectional line (at -7.62 0 0) (length 2.54) (name "PA0" (effects (font (size 1.27 1.27)))) (number "10" (effects (font (size 1.27 1.27))))
+    (alternate "UART_TX" output line) (alternate "ADC0" input line)))))'''
+
+
+@lite
+def test_kicad_import_reads_a_symbol_named_with_a_slash_and_says_alternates_are_not_converted(tmp_path):
+    from ecadlib import kicad_import as K
+    f = tmp_path / "Mine.kicad_sym"
+    f.write_text(_OWN_LIB, encoding="utf-8")
+    chain, _ = K.load_symbol(f"{f}:R 1/4W", None)                   # was: ValueError Invalid name 'R 1/4W.kicad_sym'
+    sym = K.convert_symbol(chain, name="R14")
+    assert sorted(pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin") == ["1", "2"]
+    notes = []
+    K.convert_symbol(K.load_symbol(f"{f}:MCU", None)[0], name="MCU", notes=notes)
+    assert any("alternate" in n and "UART_TX" in n and "ADC0" in n for n in notes), notes
+
+
 # ---------------------------------------------------------------- #29 a footprint-name clash in the KiCad export
 @lite
 def test_kicad_export_leaves_out_a_part_whose_footprint_name_another_footprint_has(tmp_path):
