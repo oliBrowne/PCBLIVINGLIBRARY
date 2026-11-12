@@ -62,7 +62,7 @@ CHAR = 7                                       # name width per character, DXP u
 
 _R = lambda s: re.compile(r"^(?:" + s + r")$")
 RX = [  # (group, regex on the primary name, upper case, overbar / active-low markers removed); first match wins
-    ("nc", _R(r"N\.?C\.?\d*|DNC|DNU|NU|RESERVED\d*|RSVD\d*|NOT ?CONNECTED")),
+    ("nc", _R(r"N\.?C\.?[_-]?\d*|DNC|DNU|NU|RESERVED\d*|RSVD\d*|NOT ?CONNECTED")),
     ("ep", _R(r"EP|E?PAD|EXPOSED[ _]?PAD|THERMAL[ _]?PAD|TAB|SLUG")),
     ("ground", _R(r"[ADPSE]?GND[A-Z0-9_]*|GND[ADPS]?|VSS[A-Z0-9_]*|V?REF-|VREFN|VREF_?N|VEE|V-|0V|AVSS|DVSS|PVSS")),
     ("analog", _R(r"VDDA[A-Z0-9_]*|AVDD[A-Z0-9_]*|AVCC|VCCA|V?REF\+?|VREFP|VREF_?P|VREF_?OUT|VREFBUF")),
@@ -110,6 +110,8 @@ PORT_RX = [re.compile(r"^P([A-Z])(\d{1,2})$"), re.compile(r"^P(\d{1,2})[._](\d{1
 def plain(name):
     """Pin name without overbar markup: '~{RESET}' / 'R\\E\\S\\E\\T\\' -> 'RESET'."""
     s = re.sub(r"~\{([^}]*)\}", r"\1", str(name or ""))
+    s = s.replace("\u0305", "").replace("\u0304", "")       # combining overline / macron: R\u0305E\u0305S\u0305E\u0305T\u0305
+    s = re.sub(r"^[\u203e!]+(?=\w)", "", s)                     # '\u203eRESET', '!RESET': active low
     return s.replace("\\", "").replace("~", "")
 
 
@@ -164,6 +166,8 @@ def classify(pin):
                 return "power"
             if g in ("other_in", "other_out") and t in DIRECTED:     # a name only hints the direction: the type says it
                 return DIRECTED[t]
+            if g == "power_out" and k in ("OUT", "VO") and t in DIRECTED:   # a bare OUT typed a logic output (a
+                return DIRECTED[t]                                        # comparator's, a gate's) is no supply
             return g
     if num in ("EP", "PAD", "EPAD", "TAB"):
         return "ep"
@@ -871,6 +875,9 @@ def load_pins(src, http=None):
         return name, pins, {}
     from . import kicad_import as K
     ref = s[6:] if low.startswith("kicad:") else s
+    if ":" not in ref and not re.search(r"\.kicad_sym$", ref, re.I):
+        raise PinListError(f"{s}: not a pin list (.csv / .json), an Altium .SchLib or a KiCad symbol "
+                           "(LIB.kicad_sym:NAME or kicad:Lib:Name)" + ("" if Path(s).exists() else "; no such file"))
     chain, _ = K.load_symbol(ref, http if low.startswith("kicad:") else None)
     sym = K.convert_symbol(chain, None, None, [], None, [])
     pins = unique_pins([{k: v for k, v in pr[1].items() if k in ("num", "name", "type", "shape")}

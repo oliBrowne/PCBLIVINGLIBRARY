@@ -120,9 +120,14 @@ def rank(urls, maker=None):
     an old revision, so it is taken only when no better one gives the part's PDF. -> [url]"""
     names = maker_names(maker)
 
+    from . import providers as P
+
     def tier(url):
         labels = [re.sub(r"[^a-z0-9]", "", l) for l in (_split(url)[0] or "").split(".")]
         if any(l.startswith(n) for l in labels for n in names):
+            return 0
+        owner = P.maker_from_url(url)          # the domain table: ti.com is Texas Instruments, st.com STMicroelectronics
+        if maker and owner and P.same_maker(maker, owner):
             return 0
         return 1 if any(l in DISTRIBUTORS for l in labels) else 2
     return sorted(urls, key=tier)

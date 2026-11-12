@@ -168,7 +168,7 @@ def test_bad_model_is_an_error_and_never_reaches_the_table():
         assert "Resistors" not in S.read_tables(d / "lib/ecadlib.xlsx")
         AL.write_schlib(d / "models/SchLib/Resistor.SchLib", [AL.resistor_symbol(name="Wrong")])
         r = next(r for r in S.sync(_plan(d, _base_items()), d / "lib")["results"] if r["name"] == "RES-0603-10k")
-        assert r["action"] == "error" and "not 'Resistor'" in r["detail"], r
+        assert r["action"] == "held" and "'Resistor' is not in Resistor.SchLib" in r["detail"], r   # the release check
 
 
 def test_existing_dblib_settings_survive():
@@ -289,7 +289,7 @@ def test_blank_header_column_keeps_hand_columns_aligned():
 
 
 def test_shared_model_failing_readback_fails_every_item_using_it():
-    """Two items sharing a symbol whose file does not hold the ref: both are errors, no row points at a missing file."""
+    """Two items sharing a symbol whose file does not hold the ref: both are held, no row points at a missing file."""
     with tempfile.TemporaryDirectory() as t:
         d = Path(t); _models(d)
         a = _base_items()[0]
@@ -297,7 +297,7 @@ def test_shared_model_failing_readback_fails_every_item_using_it():
         (d / "models/SchLib/Resistor.SchLib").write_bytes((d / "models/SchLib/Capacitor.SchLib").read_bytes())
         for dry in (True, False):
             out = S.sync(_plan(d, [a, b]), d / "lib", dry_run=dry)
-            assert _actions(out) == {"RES-0603-10k": "error", "RES-0603-22k": "error"}, out
+            assert _actions(out) == {"RES-0603-10k": "held", "RES-0603-22k": "held"}, out   # the release check holds both
         assert not (d / "lib/SchLib/Resistor.SchLib").exists() and not (d / "lib/ecadlib.xlsx").exists()
 
 

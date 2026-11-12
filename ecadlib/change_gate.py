@@ -1213,8 +1213,16 @@ def publish_guard(plan, items, target, rules=None, user=None, log=None, base=Non
         # (begin / baseline refuse it, with `part adopt` as the way out)
         damaged = {it["name"]: why for it in items if g.ledger.releases(it["name"])
                    for why in [g.ledger.trouble(it["name"])] if why}
+        # two parts with one name: the ledger keys by name, so settling the second would read it
+        # as a hand edit of the first and write it over the first in plan.json. Only the first is settled; the
+        # publisher refuses the others by name as it always has (nothing is rewritten)
+        seen, dups = set(), set()
+        for it in items:
+            if it["name"] in seen:
+                dups.add(id(it))
+            seen.add(it["name"])
         work = [it for it in items if it["name"] not in damaged]
-        g.finish(work)
+        g.finish([it for it in work if id(it) not in dups])
         if save and plan.suffix.lower() == ".json" and json.dumps(items, sort_keys=True, default=str) != before:
             write_plan(plan, items, rules=rules)
         out = {}

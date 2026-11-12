@@ -25,7 +25,7 @@ that exists, rules: the loaded library rules. Optional attributes: name, descrip
 [providers] order = ["mydist", "jlcpcb_search", "easyeda"] chooses and orders the sources for triage, the librarian,
 the web UI / MCP workspace and the library agent; [] (the default) keeps each command's own default. An explicit
 --providers flag still wins. See examples/ecadlib_example_plugin/ for a complete, installable example."""
-import argparse, json, sys
+import argparse, json, os, sys
 from pathlib import Path
 
 from . import providers as P
@@ -71,6 +71,9 @@ def provider_classes(eps=None):
     errors = list(errors)
     for ep_name, cls in plugins.items():
         name = getattr(cls, "name", None) or ep_name
+        if not isinstance(name, str) or not name.strip():
+            errors.append((ep_name, f"provider name {name!r} is not text"))
+            continue
         if not isinstance(cls, type) or not callable(getattr(cls, "lookup", None)):
             errors.append((ep_name, "not a provider class (needs name, lookup(line))"))
             continue
@@ -166,7 +169,14 @@ def exporters(eps=None):
             errors.append((name, "not an exporter (needs export(items, out_dir, rules))"))
             continue
         desc = getattr(target, "description", "") or (fn.__doc__ or "").strip().split("\n")[0]
-        out[getattr(target, "name", None) or name] = (fn, desc)
+        key = getattr(target, "name", None) or name
+        if not isinstance(key, str) or not key.strip():
+            errors.append((name, f"exporter name {key!r} is not text"))
+            continue
+        if key in out:                          # two exporters with one name: neither silently hides the other
+            errors.append((name, f"exporter name {key!r} is taken by another plugin"))
+            continue
+        out[key] = (fn, desc)
     return out, errors
 
 
@@ -205,6 +215,8 @@ def run_exporter(name, plan, out_dir, rules=None, eps=None):
 def _call(name, fn, items, out_dir, rules):
     try:
         paths = fn(items, out_dir, rules) or []
+        if isinstance(paths, (str, os.PathLike)):   # one path, not a list of its characters
+            paths = [paths]
         return [str(p) for p in paths]
     except Exception as e:                     # the plugin's bug, not ecadlib's: name it (never fatal, never "report it")
         raise PluginError(f"exporter {name} (plugin {getattr(fn, '__module__', '?')}) failed: {type(e).__name__}: {e}; "
