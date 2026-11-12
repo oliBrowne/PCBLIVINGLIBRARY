@@ -468,7 +468,12 @@ def compare_pins(a, b, ep=()):
     # blank-17 run 2026-10-24, held a header whose package, pitch and body agreed). Against a real name ("NC") it
     # still differs
     same = lambda n: numbered(n, na[n]) and numbered(n, nb[n])
-    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not same(n) and not names_agree(na[n], nb[n])
+    # the same name with the active-low mark in one read only (EN vs ~{EN}, Q vs /Q) is the pin's sense inverted:
+    # names_agree() reads both as one name, so the mark is compared on its own (full review 2026-11-10, 3.4)
+    from .eval.score import active_low
+    flipped = lambda n: active_low(na[n], na.values()) != active_low(nb[n], nb.values())
+    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not same(n)
+            and (not names_agree(na[n], nb[n]) or flipped(n))
             and not (n in ep and (ep_named(na[n]) or ep_named(nb[n])))]
     if diff:
         out.append({"field": "pin_names", "first": "; ".join(f"{n} {na[n]}" for n in diff[:12]),
@@ -721,6 +726,12 @@ def second_read(reader, job, first, first_pins, model):
     except Unavailable as e:
         rec.update(status="unchecked", why=str(e), compared=[], agreed=[], disagreed=[], not_compared=[])
         return rec
+    if pins and job.get("data") is not None:          # the bar the PDF prints over a name, as the first read's
+        from . import pdf_overline as PO              # symbol got it (datasheet.active_low_from_pdf): the two reads
+        off = job.get("offset")                       # compared on the same footing
+        marked, _ = PO.mark([{"num": n, "name": s} for n, s in pins],
+                            PO.overlined(job["data"], off if isinstance(off, list) else None))
+        pins = [(p["num"], p["name"]) for p in marked]
     rec.update(against_read(first, second, first_pins, pins), pages=note, via=via)
     if instr:
         rec["embedded_instructions"] = instr[:5]
