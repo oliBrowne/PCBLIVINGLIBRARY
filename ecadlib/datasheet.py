@@ -6352,7 +6352,7 @@ def batch_main(argv, estimate=False):
     if not rd.key and not rd.estimate_only and not rd.offline:
         from . import llm as LL
         why = f"{settings(rules)['api_key_env']} is not set" if rd.ep['provider'] == 'anthropic' else LL.needs_key_message(rd.ep)
-        print(f"error: {why} (use `ecadlib datasheet estimate` to see the cost without a key)", file=sys.stderr)
+        print(f"{ap.prog}: {why} (use `ecadlib datasheet estimate` to see the cost without a key)", file=sys.stderr)
         return 1
     try:
         if plan_mode and a.part:                      # a typo'd --part must not read as "nothing to do"
@@ -6381,7 +6381,7 @@ def batch_main(argv, estimate=False):
             items = L.run(str(target), a.lib, out, srcs + ([] if "datasheet" in srcs else ["datasheet"]), offline=a.offline,
                           cache=a.cache, http=http, rules=rules, reader=rd)
     except DatasheetError as e:
-        print(f"error: {e}", file=sys.stderr)
+        print(f"{ap.prog}: {e}", file=sys.stderr)
         return 1
     if rd.last_estimate and rd.estimate_only:
         return 0

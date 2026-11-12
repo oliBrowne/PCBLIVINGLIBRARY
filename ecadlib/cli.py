@@ -228,32 +228,38 @@ def _main(argv=None):
     sys.argv = [f"ecadlib {argv[0]}"] + args                 # so argparse usage lines show the right command
     mod, _, fn = cmd[0].partition(":")
     from .rules import RulesError
-    try:
-        from .clihelp import installed                       # descriptions + examples in every -h
-        with installed(argv[0], cmd[1]):
-            return getattr(importlib.import_module(mod), fn or "main")(args)
-    except RulesError as e:                                  # a bad ecadlib.toml: say which key, no traceback
-        if debug:
-            raise
-        print(f"ecadlib {argv[0]}: {e}\n  hint: `ecadlib doctor` shows the file and line"
-              + ("; `ecadlib init --force` writes a new file (the old one is kept as .bak)" if "not valid" in str(e) else ""),
-              file=sys.stderr)
-        return 2
-    except KeyboardInterrupt:
-        if debug:
-            raise
-        print(f"ecadlib {argv[0]}: interrupted", file=sys.stderr)
-        return 130
-    except Exception as e:                                   # one line + hint; --debug / ECADLIB_DEBUG=1: the traceback
-        if isinstance(e, OSError) and _pipe_gone(e):         # the reader went away (`| head`): stop quietly
-            return _quiet_stdout()
-        if debug:
-            from .cliutil import friendly
-            if friendly(e) is None:                          # a bug: saved for `ecadlib report-bug` here too
-                from . import bugreport
-                bugreport.record(argv[0], e)
-            raise
-        return report(argv[0], e, sys.stderr)
+
+    def call():
+        try:
+            from .clihelp import installed                   # descriptions + examples in every -h
+            with installed(argv[0], cmd[1]):
+                return getattr(importlib.import_module(mod), fn or "main")(args)
+        except RulesError as e:                              # a bad ecadlib.toml: say which key, no traceback
+            if debug:
+                raise
+            print(f"ecadlib {argv[0]}: {e}\n  hint: `ecadlib doctor` shows the file and line"
+                  + ("; `ecadlib init --force` writes a new file (the old one is kept as .bak)" if "not valid" in str(e) else ""),
+                  file=sys.stderr)
+            return 2
+        except KeyboardInterrupt:
+            if debug:
+                raise
+            print(f"ecadlib {argv[0]}: interrupted", file=sys.stderr)
+            return 130
+        except Exception as e:                               # one line + hint; --debug / ECADLIB_DEBUG=1: the traceback
+            if isinstance(e, OSError) and _pipe_gone(e):     # the reader went away (`| head`): stop quietly
+                return _quiet_stdout()
+            if debug:
+                from .cliutil import friendly
+                if friendly(e) is None:                      # a bug: saved for `ecadlib report-bug` here too
+                    from . import bugreport
+                    bugreport.record(argv[0], e)
+                raise
+            return report(argv[0], e, sys.stderr)
+    if term.JSON and not any(a in ("-h", "--help") for a in args):
+        from .cliutil import json_errors
+        return json_errors(argv[0], call)
+    return call()
 
 
 if __name__ == "__main__":

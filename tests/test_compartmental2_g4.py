@@ -118,3 +118,54 @@ def test_eval_repeats_share_the_runs_cost_cap(tmp_path, monkeypatch):
     assert seen[0] == 1.0 and seen[1] == 0.6 and seen[2] == 0.2, seen      # 1 - 0.4, then 1 - 0.8
     assert len(seen) == 3, (seen, logs)                                     # the 4th: nothing left, not run
     assert any("cap" in str(x) and "repeat" in str(x) for x in logs), logs
+
+
+# ---------------------------------------------------------------- the command line: --json and error lines (#44)
+def _cli(*argv):
+    from ecadlib import cli
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = cli.main(list(argv))
+        except SystemExit as e:
+            code = e.code
+    return code, out.getvalue(), err.getvalue()
+
+
+@lite
+def test_json_failure_prints_a_json_error_object(tmp_path, monkeypatch):
+    """`--json` printed nothing on stdout when a command failed (a missing file, an option the command does not take),
+    so a script reading the JSON got an empty string. Now every failing `--json` run prints one error object; the
+    words on stderr stay."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    for argv in (("release-check", "nope.json", "--json"), ("parity", "nope.json", "--json"),
+                 ("style", "show", "--json"), ("migrate", "nope_dir", "--check", "--json"),
+                 ("review", "nope.json", "--json")):                      # the last: review takes no --json
+        code, out, err = _cli(*argv)
+        assert code not in (0, None), (argv, code)
+        got = json.loads(out)
+        assert got["ok"] is False and got["command"] == argv[0] and got["exit_code"] == code, (argv, got)
+        assert got["error"] and "ecadlib" not in got["error"][:8] and got["error"] in err, (argv, got, err)
+    code, out, _ = _cli("costs", "--json")                                 # success: the command's own JSON, unchanged
+    assert code == 0 and isinstance(json.loads(out), list)
+    code, out, err = _cli("release-check", "nope.json")                    # no --json: no JSON
+    assert code == 2 and out == "" and "file not found: nope.json" in err
+
+
+@lite
+def test_missing_files_are_named_in_plain_words_with_the_command(tmp_path, monkeypatch):
+    """`ecadlib triage nope.csv` said "cannot read BOM: [Errno 2] No such file or directory: 'nope.csv'" (no
+    `ecadlib triage:`, a raw errno); `ecadlib project nope.PrjPcb` showed the raw [Errno 2] too."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    for argv, cmd in ((("triage", "nope.csv", "-o", "t"), "triage"), (("project", "nope.PrjPcb"), "project"),
+                      (("dblib", "nope.csv", "-o", "d", "--draft"), "dblib")):
+        code, out, err = _cli(*argv)
+        assert code == 2, (argv, code, err)
+        assert err.startswith(f"ecadlib {cmd}: ") and "[Errno" not in err and "nope." in err, (argv, err)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    code, out, err = _cli("datasheet", "batch", "nope.csv")
+    assert code and err.startswith("ecadlib datasheet batch: "), err
+    code, out, err = _cli("project", "nope.SchDoc")                       # its own words stay as they are
+    assert code == 2 and err.startswith("ecadlib project: nope.SchDoc: no such schematic"), err

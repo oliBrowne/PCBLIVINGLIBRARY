@@ -1396,10 +1396,12 @@ def main(argv=None):
     try:
         lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
     except (ValueError, OSError) as e:                   # unreadable / headerless BOM: a message, not a traceback
-        print(f"cannot read BOM: {e}" + bom_hint(e), file=sys.stderr)
+        from .cliutil import plain
+        print(f"ecadlib triage: cannot read BOM: {plain(e)}" + bom_hint(e), file=sys.stderr)
         return 2
     if not lines:
-        print(f"cannot read BOM: {a.bom}: the BOM has a header but no part rows" + bom_hint("no part rows"), file=sys.stderr)
+        print(f"ecadlib triage: cannot read BOM: {a.bom}: the BOM has a header but no part rows" + bom_hint("no part rows"),
+              file=sys.stderr)
         return 2
     http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)    # after the BOM: a bad one writes nothing
     try:
