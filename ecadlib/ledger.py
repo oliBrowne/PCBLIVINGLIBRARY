@@ -440,7 +440,39 @@ f"{self.path}:{n}: a broken ledger line ({ex}); nothing was changed",
                                   f"release line per revision, the other branch's {STORE}/marks file deleted), then run "
                                   f"again; `ecadlib part history` lists the part's lines; see docs/change-control.md, "
                                   f"\"When the ledger is damaged\"")
+            why = self.edited(r[-1])
+            if why:                            # the line's fields are what a held change restores and a publisher sends
+                raise LedgerError(f"{self.folder}: {why}; nothing was changed",
+                                  f"put the line back as it was (`git diff {LEDGER}` in the library folder shows the "
+                                  f"edit); a change to a released part goes through the library (ecadlib part status / "
+                                  f"approve), never into {LEDGER}; see docs/change-control.md, \"When the ledger is damaged\"")
         return r[-1] if r else None
+
+    def edited(self, entry):
+        """Why a release line's fields cannot be the ones released, or None: its MPN, manufacturer, value or other fields
+        differ from the fingerprint it names (content-addressed, so the line was edited after it was written). Only a
+        fingerprint of this ecadlib's schema is compared (an older one is read again from the line itself)."""
+        if not entry or entry.get("item") is None or not entry.get("fingerprint"):
+            return None
+        from . import fingerprint as FP
+        cache = self.__dict__.setdefault("_edited", {})
+        key = (entry["fingerprint"], json.dumps(entry.get("item"), sort_keys=True, default=str))
+        if key not in cache:
+            try:
+                fp = self.get_json(entry["fingerprint"])
+            except (OSError, ValueError):
+                fp = None                      # a missing blob is told where the files are restored
+            why = None
+            if isinstance(fp, dict) and fp.get("schema") == FP.SCHEMA:
+                par = FP.item_params(entry["item"])
+                for k, mine in (("identity", FP.identity(par)), ("fields", FP.other_fields(par))):
+                    if json.loads(json.dumps(mine, default=str)) != fp.get(k):
+                        why = (f"{LEDGER}: the r{entry.get('revision')} line of {entry.get('part')} was edited by hand "
+                               f"(its {'MPN / manufacturer / value' if k == 'identity' else 'fields'} differ from the "
+                               f"fingerprint it was released with)")
+                        break
+            cache[key] = why
+        return cache[key]
 
     def revision(self, part, rev):
         """A release / revert line by number ('3', 3, 'r3'), or None."""
