@@ -39,3 +39,13 @@ def test_a_line_drawn_over_the_letters_is_a_bar_and_plain_text_is_not():
     assert PO.overlined(_pdf(True)).get("SHDN") == [1, 0]
     assert PO.overlined(_pdf(False)).get("SHDN") == [0, 1]
     assert PO.overlined(_pdf(True)).get("VIN") == [0, 1]
+
+
+def test_a_bar_drawn_in_pieces_is_one_bar():
+    """TI draws AD-EN's bar as three strokes (over AD, the hyphen and EN; bq51051b page 4): no single stroke covers
+    the name, so strokes that continue each other on one line are joined. Strokes on other lines stay apart."""
+    pieces = [(199.2, 262.0, 209.2, 262.0), (209.2, 262.0, 211.6, 262.0), (211.6, 262.0, 221.6, 262.0),
+              (240.0, 262.0, 250.0, 262.0), (199.2, 300.0, 209.2, 300.0)]
+    out = PO._joined(pieces)
+    assert (199.2, 262.0, 221.6, 262.0) in out
+    assert (240.0, 262.0, 250.0, 262.0) in out and (199.2, 300.0, 209.2, 300.0) in out and len(out) == 3

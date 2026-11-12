@@ -65,6 +65,19 @@ def _bars(page):
                 pts = []
             pts.append(_apply(m, x.value, y.value))
         flush()
+    return _joined(out)
+
+
+def _joined(bars):
+    """One bar for the strokes that continue each other on one line: TI draws AD-EN's bar as three (one over AD, one
+    over the hyphen, one over EN; bq51051b page 4), which no single stroke covers."""
+    out = []
+    for b in sorted(bars, key=lambda b: (round(b[1], 1), b[0])):
+        if out and abs(out[-1][1] - b[1]) < 0.3 and abs(out[-1][3] - b[3]) < 0.3 and b[0] <= out[-1][2] + 1.0:
+            p = out[-1]
+            out[-1] = (p[0], min(p[1], b[1]), max(p[2], b[2]), max(p[3], b[3]))
+        else:
+            out.append(b)
     return out
 
 
