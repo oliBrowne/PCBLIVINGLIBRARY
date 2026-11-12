@@ -1254,6 +1254,8 @@ def triage(lines, index, provs, http, shared=None):
                                 notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
                                              f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
                     notes.append(f"jlcpcb: MPN -> {r.lcsc}" if r.found else "jlcpcb: no exact MPN match")
+                    if r.found and (r.extra or {}).get("package_note"):
+                        notes.append(f"jlcpcb: {r.extra['package_note']}")
                 else:
                     if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
                         src = r                                # a found part is kept over a later miss or a later

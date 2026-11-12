@@ -402,7 +402,7 @@ class JLCPCBSearch(Provider):
         if not r.ok:
             res.error = r.error or f"HTTP {r.status}"
             return res
-        return parse_jlcpcb(r, mpn, res, maker=line.get("manufacturer") or "")
+        return parse_jlcpcb(r, mpn, res, maker=line.get("manufacturer") or "", package=bom_land(line))
 
     def lookup_lcsc(self, lcsc):
         """The part with this LCSC number (a search for the number; only that exact code counts): its LCSC
@@ -415,10 +415,23 @@ class JLCPCBSearch(Provider):
         return parse_jlcpcb(r, "", res, code=lcsc)
 
 
-def parse_jlcpcb(r, mpn, res, code="", maker=""):
+def bom_land(line):
+    """The land a BOM line names, for comparing with a source's package: its footprint cell, else the package word in
+    its description ('Dual op amp SOIC-8' -> 'SOIC-8'), else ''."""
+    fp = str(line.get("footprint") or "").strip()
+    if fp:
+        return fp
+    from .kicad_index import PKG_RE
+    m = PKG_RE.search(str(line.get("description") or ""))
+    return m.group(0) if m else ""
+
+
+def parse_jlcpcb(r, mpn, res, code="", maker="", package=""):
     """One JLCPCB search answer -> res (exact MPN match only, or with code the part with that LCSC number; the field
-    paths easyeda2kicad reads). maker: the BOM's manufacturer; of several exact matches (clones sell under the same
-    MPN, in other packages too) the one by that maker is taken, not the first listed."""
+    paths easyeda2kicad reads). maker: the BOM's manufacturer; package: the BOM's land (bom_land). Of several exact
+    matches (clones sell under the same MPN, one maker in DIP-8 and SOP-8 too) the one by that maker in that package
+    is taken, then the maker's, then one in that package, then the first listed; when the BOM names a land and the
+    one taken is listed in another, extra['package_note'] says so."""
     try:
         from .kicad_index import norm_mpn
         items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
@@ -427,7 +440,17 @@ def parse_jlcpcb(r, mpn, res, code="", maker=""):
     except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
         res.error = f"unparseable: {e}"
         return res
-    best = next((i for i in exact if maker and same_maker(maker, i.get("componentBrandEn"))), (exact or [None])[0])
+    from .altium_export import lands_differ
+    land = str(package or "").strip()
+
+    def by_maker(i):
+        return bool(maker) and same_maker(maker, i.get("componentBrandEn"))
+
+    def in_land(i):                        # an empty listing package says nothing, so it is not "in the BOM's land"
+        spec = str(i.get("componentSpecificationEn") or "").strip()
+        return bool(land and spec) and not lands_differ(land, spec)
+    best = next((i for i in exact if by_maker(i) and in_land(i)), None) or next((i for i in exact if by_maker(i)), None) \
+        or next((i for i in exact if in_land(i)), None) or (exact or [None])[0]
     code = str((best or {}).get("componentCode") or "").strip().upper()
     if best and not re.fullmatch(r"C\d{1,9}", code):   # untrusted: only a real LCSC number goes on (into EasyEDA's URL)
         res.error = f"unparseable: componentCode {code[:20]!r} is not an LCSC number"
@@ -447,6 +470,10 @@ def parse_jlcpcb(r, mpn, res, code="", maker=""):
         desc = describe(best.get("describe") or best.get("description"))
         if desc:                           # JLCPCB/LCSC's description of the part (a category + package says too little)
             res.extra["description"] = desc
+        spec = clean_text(best.get("componentSpecificationEn", ""), 80)
+        if land and spec and not in_land(best):
+            res.extra["package_note"] = (f"LCSC {code} ({res.manufacturer or 'maker not listed'}) is listed as {spec}, "
+                                         f"the BOM names {clean_text(land, 80)}: check the package before using its footprint")
     return res
 
 
