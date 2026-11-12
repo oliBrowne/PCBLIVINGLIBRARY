@@ -16,10 +16,14 @@ def test_two_spellings_of_active_low_agree():
     assert CC.compare_pins(a, b) == []
 
 
-def test_the_first_reads_pin_table_gets_the_pdfs_bar_too(monkeypatch):
+def test_the_first_reads_pin_table_gets_the_pdfs_bar_too():
     """A merged pad's cross-check compares the read's own pin table (the sidecar's), not the symbol: it gets the bar
     the PDF prints as the symbol did, or that bar alone would read as a disagreement."""
     from ecadlib import pdf_overline as PO
-    monkeypatch.setattr(PO, "overlined", lambda data, pages=None: {"SHDN": [3, 0]})
-    assert CC.pdf_bars({"data": b"%PDF"}, [("1", "SHDN"), ("2", "VIN")]) == [("1", "~{SHDN}"), ("2", "VIN")]
-    assert CC.pdf_bars({}, [("1", "SHDN")]) == [("1", "SHDN")]          # no PDF here: as read
+    was = PO.overlined
+    PO.overlined = lambda data, pages=None: {"SHDN": [3, 0]}
+    try:
+        assert CC.pdf_bars({"data": b"%PDF"}, [("1", "SHDN"), ("2", "VIN")]) == [("1", "~{SHDN}"), ("2", "VIN")]
+        assert CC.pdf_bars({}, [("1", "SHDN")]) == [("1", "SHDN")]          # no PDF here: as read
+    finally:
+        PO.overlined = was
