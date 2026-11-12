@@ -23,6 +23,10 @@ import math, re
 from collections import Counter
 
 TOL = {"pos": 0.05, "size": 0.10, "drill": 0.05, "pitch": 0.01, "courtyard": 0.25, "pin1": 0.25, "names": 0.8}
+# a pad whose copper gap to its nearest pad of another number is less than this share of KiCad's fails, whatever the
+# size tolerance says: on a 0.4 mm pitch QFN a pad 0.1 mm too wide halves the gap (full review 2026-11-10, 3.3; the
+# same share change_diff.GAP_KEEP treats as a major change)
+GAP_KEEP = 0.80
 INFO_ONLY = ("origin", "rotation", "renumbered")
 
 
@@ -36,6 +40,26 @@ def drop_vias(num):
             continue
         keep.append(p)
     return {"pads": keep, "courtyard": list(num.get("courtyard") or [])}
+
+
+def _gaps(pads):
+    """{index: the copper gap from pad i to its nearest pad of another number} (edge to edge, 0 when they touch); pads
+    with no number (holes) and lone pads are left out."""
+    out = {}
+    for i, p in enumerate(pads):
+        if not p[0]:
+            continue
+        g = None
+        for q in pads:
+            if not q[0] or q[0] == p[0]:
+                continue
+            dx = abs(p[1] - q[1]) - (p[3] + q[3]) / 2
+            dy = abs(p[2] - q[2]) - (p[4] + q[4]) / 2
+            d = math.hypot(max(dx, 0.0), max(dy, 0.0))
+            g = d if g is None else min(g, d)
+        if g is not None:
+            out[i] = g
+    return out
 
 
 def _centre(pads):
@@ -140,6 +164,17 @@ def unswapped(pairs):
     the pad 17, KiCad's GND and GNDPAD) is one net."""
     moved = {(a, b) for a, b in pairs if a != b}
     return tuple(g for g in SPELLINGS if not any(a in g and b in g and (b, a) in moved for a, b in moved))
+
+
+def active_low(s, names=()):
+    """Does the pin name mark the pin active low (~{EN}, EN with an overbar, EN#, /EN, nEN, EN_N)? norm_name() drops
+    the mark, so EN and ~{EN} normalise alike; the scorer compares the mark on its own (full review 2026-11-10, 3.4).
+    names: the part's other pin names: CLK_N beside CLK_P is the negative leg of a pair, not an active-low pin."""
+    from ..house_style import pin_low
+    base, st = pin_low(str(s or "").strip().replace("\u0304", "\u0305"))
+    if st == "suffix_n" and any(str(n or "").strip().upper() == base.upper() + "_P" for n in names):
+        return False
+    return st is not None
 
 
 def norm_name(s):
@@ -270,7 +305,9 @@ def score_footprint(mine, ref, tol=None, renumber=None):
     left, worst, bad, bad_pads = list(ref["pads"]), {"pos": 0.0, "size": 0.0, "drill": 0.0}, [], []
     row = 0.0                                         # worst offset along the pad rows, across the leads (only_maker_land)
     compared = 0
-    for p in m["pads"]:
+    g_ours, g_ref = _gaps(m["pads"]), _gaps(ref["pads"])
+    ref_index = {id(r): j for j, r in enumerate(ref["pads"])}
+    for i, p in enumerate(m["pads"]):
         cands = [r for r in left if r[0] == p[0]]
         if not cands:
             continue
@@ -284,6 +321,9 @@ def score_footprint(mine, ref, tol=None, renumber=None):
         ex, ey = abs(p[1] - r[1]), abs(p[2] - r[2])     # KiCad's pad longer in x: its lead runs along x, the row along y
         row = max(row, ey if r[3] > r[4] + 1e-9 else ex if r[4] > r[3] + 1e-9 else max(ex, ey))
         why = [f"{k} off {v:.3f}" for k, v in e.items() if v > t[k] + 1e-9]
+        go, gr = g_ours.get(i), g_ref.get(ref_index[id(r)])
+        if go is not None and gr and gr > 1e-6 and go < GAP_KEEP * gr - 1e-9:
+            why.append(f"copper gap {go:.3f} (KiCad {gr:.3f})")
         if why:
             bad.append(f"pad {p[0] or '(hole)'}: " + ", ".join(why))
             bad_pads.append(p[0])
@@ -337,6 +377,8 @@ def score_symbol(mine_pins, ref_pins, tol=None):
         groups = unswapped([(norm_name(a.get(n)), s) for n, s in named.items()])
         same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, groups) or short_form(a.get(n), b[n])
                 or one_of(a.get(n), b[n])]
+        # the same name with the active-low mark on one side only: the pin's sense is inverted, never naming noise
+        inverted = sorted((n for n in same if active_low(a.get(n), a.values()) != active_low(b[n], b.values())), key=_natural)
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]
         once = Counter(named.values())
         # a name KiCad has on one other pin, as KiCad spells it, another spelling of it or spelled out (ours VIN / VOUT
@@ -351,10 +393,13 @@ def score_symbol(mine_pins, ref_pins, tol=None):
         # maker's ground pad; the GND pin taken off its pin is a swap). Review R-CE-2 2026-10-26
         moved = [n for n in set(named) - set(same) if elsewhere(n, gone=pad_or_nc(named[n]))
                  or rail(named[n]) and rail(norm_name(a.get(n))) not in (None, rail(named[n]))]
-        out["symbol_names"] = _f(len(same) >= t["names"] * len(named) and not moved,       # swapped pins, not naming noise
-                                 f"{len(same)}/{len(named)} pin names agree"
-                                 + (f" ({len(moved)} on the wrong pin)" if moved else "") + "; " + "; ".join(diff[:4]),
-                                 matched=len(same), named=len(named), moved=len(moved))
+        out["symbol_names"] = _f(len(same) >= t["names"] * len(named) and not moved and not inverted,   # swapped pins,
+                                 f"{len(same)}/{len(named)} pin names agree"                          # not naming noise
+                                 + (f" ({len(moved)} on the wrong pin)" if moved else "")
+                                 + (f" ({len(inverted)} active low on one side only: "
+                                    + ", ".join(f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in inverted[:4]) + ")" if inverted else "")
+                                 + "; " + "; ".join(diff[:4]),
+                                 matched=len(same), named=len(named), moved=len(moved), inverted=len(inverted))
     return out
 
 
