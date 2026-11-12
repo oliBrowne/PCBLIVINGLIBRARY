@@ -142,9 +142,10 @@ def _param_names(field, defaults, rules):
 
 
 def _resolve(text, params):
-    """Altium '=Name' indirection (Comment '=Value', '=Part Number')."""
+    """Altium '=Name' indirection (Comment '=Value', '=Part Number'). One naming a parameter the part does not have
+    is no text: '=Value' with no Value is a broken link, not the part's value (it went into the BOM as '=Value')."""
     if text and text.startswith("=") and len(text) > 1:
-        return _ci(params, [text[1:]]) or text
+        return _ci(params, [text[1:]]) or ""
     return text
 
 
