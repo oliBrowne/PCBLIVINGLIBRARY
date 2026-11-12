@@ -120,8 +120,12 @@ def _imports_ecadlib(python, run=subprocess.run):
 
 def kicad_major(environ=None):
     """The running KiCad's major version (7, 8, 9, ...) from pcbnew.Version(), or None. Started by KiCad's plugin
-    system: from the KICAD<N>_SYMBOL_DIR / _FOOTPRINT_DIR / ... variables KiCad passes on (the highest N)."""
+    system: the N.0 of the plugins folder it was installed into, else from the KICAD<N>_SYMBOL_DIR / ... variables
+    KiCad passes on (the highest N)."""
     if pcbnew is None:
+        series = re.search(r"[\\/](\d+)\.\d+[\\/]plugins[\\/]", HERE)   # <documents>/N.0/plugins/ecadlib
+        if series and environ is None:
+            return int(series.group(1))
         env = os.environ if environ is None else environ
         found = [int(m.group(1)) for k in env for m in [re.fullmatch(r"KICAD(\d+)_[A-Z0-9_]+_DIR", k)] if m]
         return max(found) if found else None
@@ -401,7 +405,8 @@ def job_failure(job):
 def api_project(environ=None):
     """(None, project folder, project file) of the project KiCad has open, for a window started by KiCad's plugin
     system: KiCad passes the project's folder as KIPRJMOD. The project file is its .kicad_pro (the only one there;
-    with several, the one named like the folder), else the folder itself. (None, None, None) without a saved project."""
+    with several, the one named like the folder). (None, None, None) without a saved project (a schematic opened on
+    its own, outside a project, has no .kicad_pro)."""
     env = os.environ if environ is None else environ
     d = env.get("KIPRJMOD") or ""
     if not d or not os.path.isdir(d):
@@ -414,7 +419,9 @@ def api_project(environ=None):
         raise ValueError(f"{d} holds several KiCad projects ({', '.join(pros)}), and KiCad does not say which is "
                          "open.\nNext: keep one project per folder, or use the ecadlib button in that project's PCB "
                          "editor.")
-    return None, d, os.path.join(d, pro) if pro else d
+    if not pro:
+        return None, None, None
+    return None, d, os.path.join(d, pro)
 
 
 def board_project():
@@ -791,7 +798,7 @@ def _window_class():
             if self.action == "fill":
                 extra = tables_line(res, self.project)
             if self.action in ("add-part", "ai-read") and res.get("footprint") and st in ("ready", "duplicate"):
-                extra = tables_line(res, self.project, built=True)
+                extra = tables_line(res, self.project, built=pcbnew is not None)   # no board: no "placed" wording
                 if res.get("tables") == "problem" or extra.startswith("Built, but"):
                     mark_placed(self.job, "not placed: " + extra)
                 elif pcbnew is None:                     # no board here: the person places it, as any library part

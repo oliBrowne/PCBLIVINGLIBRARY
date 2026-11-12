@@ -192,7 +192,7 @@ def test_window_finds_the_project_kicad_has_open(tmp_path):
     d.mkdir()
     assert mod.api_project({}) == (None, None, None)
     assert mod.api_project({"KIPRJMOD": str(tmp_path / "gone")}) == (None, None, None)
-    assert mod.api_project({"KIPRJMOD": str(d)}) == (None, str(d), str(d))            # no .kicad_pro: the folder
+    assert mod.api_project({"KIPRJMOD": str(d)}) == (None, None, None)       # a schematic opened outside a project
     (d / "amp.kicad_pro").write_text("{}")
     assert mod.api_project({"KIPRJMOD": str(d)}) == (None, str(d), str(d / "amp.kicad_pro"))
     (d / "amp_v2.kicad_pro").write_text("{}")
@@ -290,10 +290,6 @@ def test_setup_page_add_to_kicad_reports_the_button(tmp_path):
     assert json.loads((_plugin_dir(docs, "10.0") / "ecadlib_cmd.json").read_text())["command"] == UC.self_command()
 
 
-if __name__ == "__main__":
-    from tests.run_all import main
-    sys.exit(main([Path(__file__).stem]))
-
 
 def _kicad_schema():
     """KiCad's own api.v1.schema.json (share/kicad/schemas), when a KiCad 9+ is installed here; else None."""
@@ -317,3 +313,46 @@ def test_plugin_json_passes_the_schema_kicad_ships(tmp_path):
     for plat in ("linux", "windows"):
         for series in ("9.0", "10.0", "11.0"):
             jsonschema.validate(KI.api_plugin_json(series, plat), js)
+
+
+@lite
+def test_launcher_python_flatpak_and_a_launcher_made_executable_again(tmp_path):
+    conf = tmp_path / "c"
+    conf.mkdir()
+    fallback = "/usr/bin/python3" if os.path.isfile("/usr/bin/python3") else "python3"
+    assert KI.kicad_python(conf) == fallback                              # no settings file
+    (conf / "kicad_common.json").write_text("{ bad")
+    assert KI.kicad_python(conf) == fallback
+    (conf / "kicad_common.json").write_text(json.dumps({"api": {"interpreter_path": str(tmp_path / "gone")}}))
+    assert KI.kicad_python(conf) == fallback
+    (conf / "kicad_common.json").write_text(json.dumps({"api": {"interpreter_path": sys.executable}}))
+    assert KI.kicad_python(conf) == sys.executable
+    env, confs, docs = _env(tmp_path)
+    (confs / "10.0").mkdir(parents=True)
+    KI.api_plugin(CMD, environ=env, platform="linux", log=lambda *a, **k: None)
+    sh = _plugin_dir(docs, "10.0", "linux") / "ecadlib_kicad.sh"
+    if os.name != "nt":
+        sh.chmod(0o644)
+        assert KI.api_plugin(CMD, environ=env, platform="linux", log=lambda *a, **k: None) == {"10.0": "added"}
+        assert os.access(sh, os.X_OK)
+    flat = tmp_path / "home" / ".var" / "app" / "org.kicad.KiCad" / "config" / "kicad"
+    (flat / "9.0").mkdir(parents=True)
+    got = KI.api_plugin(CMD, environ={"KICAD_CONFIG_HOME": str(flat)}, home=tmp_path / "home", platform="linux",
+                        log=lambda *a, **k: None)
+    assert got["9.0"].startswith("not changed: the Flatpak"), got
+    assert not (tmp_path / "home" / ".var" / "app" / "org.kicad.KiCad" / "data").exists()
+
+
+def test_window_version_from_its_plugins_folder():
+    mod = _window_module()
+    mod.HERE = os.path.join("/home/u/.local/share/kicad", "9.0", "plugins", "ecadlib")
+    with mock.patch.dict(os.environ, {"KICAD10_SYMBOL_DIR": "/s"}):
+        assert mod.kicad_major() == 9                       # the folder it was installed for, not a stray variable
+    mod.HERE = "/somewhere/else"
+    with mock.patch.dict(os.environ, {"KICAD10_SYMBOL_DIR": "/s"}):
+        assert mod.kicad_major() == 10
+
+
+if __name__ == "__main__":
+    from tests.run_all import main
+    sys.exit(main([Path(__file__).stem]))

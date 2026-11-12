@@ -354,7 +354,10 @@ def main(argv=None):
         api = KI.api_plugin(UC.self_command(), a.kicad, remove=a.remove)
         if not a.remove and any(v.startswith(("added", "already there")) for v in api.values()):
             print("  in the schematic editor (KiCad 9 and newer): the ecadlib button at the right end of the top "
-                  "toolbar (close KiCad, all its windows, and start it again first)")
+                  "toolbar (start KiCad again first)")
+            if any("Enable KiCad API" in v for v in api.values()):
+                print("  KiCad saves its settings when it closes: if KiCad was open, close it and run this again, or "
+                      "Enable KiCad API is lost")
         if not a.remove and any(v in ("added", "already there") for v in got.values()):
             print("  in the schematic editor: Tools > Generate Legacy Bill of Materials... > ecadlib: check BOM or "
                   "ecadlib: fill library > Generate (restart KiCad first)")

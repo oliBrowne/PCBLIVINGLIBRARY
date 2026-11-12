@@ -414,7 +414,8 @@ API_FILES = ("plugin.json", "requirements.txt", "ecadlib_kicad.py", "ecadlib_kic
              "ecadlib_cmd.json", "ecadlib.png", "ecadlib@2x.png")
 # Linux: KiCad starts a launcher (runtime "exec") instead of making a virtual environment ("python"): Debian and Ubuntu
 # leave out the python3-venv / pip a virtual environment needs, and KiCad then never shows the button (checked in
-# KiCad 10.0.8). The launcher runs the Python KiCad is set to use, which has wxPython (KiCad's packages need it).
+# KiCad 10.0.8). The launcher runs the Python KiCad is set to use, which has wxPython (KiCad's packages need it); it
+# is the one set when ecadlib was added: after changing Preferences > Plugins > Python interpreter, add it again.
 LAUNCHER = """#!/bin/sh
 # ecadlib's button in KiCad (Linux): opens the ecadlib window with the Python KiCad uses. Written by ecadlib.
 exec {python} "$(dirname "$0")/ecadlib_kicad.py" "$@"
@@ -508,6 +509,10 @@ def api_plugin(command, kicad=None, remove=False, environ=None, home=None, platf
         if not Path(conf).is_dir():
             out[series] = f"not changed: KiCad {series} has no settings yet (start it once, then do this again)"
             continue
+        if "org.kicad.KiCad" in Path(conf).parts:
+            # KiCad's Flatpak starts plugins inside its sandbox, where the ecadlib command on this computer is not
+            out[series] = "not changed: the Flatpak KiCad cannot start ecadlib from its sandbox (use the PCB editor's button)"
+            continue
         try:
             api_on = _enable_api(conf)
         except ValueError as e:
@@ -539,7 +544,7 @@ def api_plugin(command, kicad=None, remove=False, environ=None, home=None, platf
         for name, size in (("ecadlib.png", 24), ("ecadlib@2x.png", 48)):
             png = icon_png(size)
             if not (d / name).is_file() or (d / name).read_bytes() != png:
-                (d / name).write_bytes(png)
+                fsutil.write_bytes_atomic(d / name, png)
                 changed = True
         out[series] = ("added" if changed else "already there") + (" (turned on Enable KiCad API)" if api_on else "")
     for series, st in out.items():

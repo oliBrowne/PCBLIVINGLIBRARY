@@ -517,7 +517,8 @@ def install_kicad_plugin(series=None):
                      "toolbar opens the same window for the open project")
         if any("Enable KiCad API" in v for v in api.values()):
             steps.append("ecadlib turned on Preferences > Plugins > Enable KiCad API: KiCad shows plugin buttons only "
-                         "with it on")
+                         "with it on. KiCad saves its settings when it closes: if KiCad was open just now, close it and "
+                         "press Add to KiCad again, or the setting is lost")
     if any(v in ("added", "already there") for v in sch.values()):
         steps.append("In the schematic editor: Tools > Generate Legacy Bill of Materials... > ecadlib: check BOM or "
                      "ecadlib: fill library > Generate")

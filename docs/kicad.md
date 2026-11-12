@@ -108,13 +108,17 @@ Close KiCad (all its windows) first and start it again after: KiCad reads plugin
 * **PCB editor.** Up to KiCad 10 the PCB editor keeps its older plugin's button (which also places footprints), so
   this button is only in the schematic editor there. KiCad 11 drops the older Python plugins (kicad-python's own notes
   say so); for KiCad 11 and newer this button goes into the PCB editor too, as the way into ecadlib there.
+* **Limits.** The launcher on Linux uses the interpreter set when ecadlib was added: after changing Preferences >
+  Plugins > Python interpreter, run `add-to-schematic` again. Each press of the button starts its own window (a
+  process of its own), so let one job finish before starting another on the same project. The Flatpak KiCad is
+  skipped: it starts plugins inside its sandbox, where the ecadlib command is not.
 * **`--remove`** deletes ecadlib's files from `plugins/ecadlib/` (anything else there stays) and leaves *Enable KiCad
   API* on, as other plugins may need it.
 * **Checked 2026-11-12** in real KiCad 9.0.9 and 10.0.8 (the `kicad/kicad` Docker images, Linux): after
   `add-to-schematic` the button is in the schematic editor's toolbar, opens the window for the open project, and *Check
   project BOM* and *Add part* run (the parts were held there: the cloud machine cannot reach the part sources).
   `plugin.json` passes the schema KiCad ships (`tests/test_kicad_api_plugin.py`, run by the CI job `kicad` on KiCad 9
-  and 10). **Not checked:** Windows and macOS KiCad (the virtual environment route), KiCad 11 (not released), and *Add
+  and 10). **Not checked:** Windows and macOS KiCad (the virtual environment route), the Flatpak, KiCad 11 (not released), and *Add
   part* building a part all the way in this window (the line it shows is tested on its own).
 
 ## `parity.py`: KiCad and Altium always match
