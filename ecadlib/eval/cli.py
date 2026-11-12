@@ -1,6 +1,6 @@
 """ecadlib eval: measure how often the pipeline gets a part right, and what it costs.
 
-    ecadlib eval run [--set kicad-v1] [--limit N] [--family F,..] [--case ID,..] [--model M] [--sources S,..]
+    ecadlib eval run [--set kicad-v1] [--limit N] [--skip N] [--family F,..] [--case ID,..] [--model M] [--sources S,..]
                      [--record DIR | --replay DIR] [--repeat N] [--offline] [-o out/eval/run]
     ecadlib eval consistency A B      two runs of the same cases: parts that gave the same files (and cross-check)
     ecadlib eval compare A B          two run folders (or report.json files): pass rate and cost per family, flipped cases
@@ -34,6 +34,8 @@ def main(argv=None):
     r = sub.add_parser("run", help="run the pipeline on a test set and score every part")
     r.add_argument("--set", default="kicad-v1", help="set name (ecadlib/eval/sets) or a set .json file")
     r.add_argument("--limit", type=int, help="first N cases, families interleaved")
+    r.add_argument("--skip", type=int, default=0, help="leave out the first N cases of that order (--skip 110: parts "
+                   "the 110-part benchmark never read)")
     r.add_argument("--family", help="only these families (comma list)")
     r.add_argument("--case", help="only these case ids or MPNs (comma list)")
     r.add_argument("--model", help="datasheet model (default: [ai] / [datasheet] model)")
@@ -141,7 +143,7 @@ def main(argv=None):
                 a.offline, a.cache, rules=a.rules, providers=a.providers, tol=tol, provider=a.provider,
                 base_url=a.base_url, assist=a.assist, api_key_env=a.api_key_env, repeat=a.repeat, batch=a.batch,
                 cached_only=a.cached_only, pins=a.pins, max_cost_usd=a.max_cost_usd, datasheets=a.datasheets,
-                max_total_usd=a.max_total_usd)
+                max_total_usd=a.max_total_usd, skip=a.skip)
     if a.json:
         print(json.dumps(rep["summary"], indent=1))
     else:
