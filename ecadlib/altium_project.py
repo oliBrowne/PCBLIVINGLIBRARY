@@ -493,6 +493,8 @@ def load_project(path, rules=None, root=None):
         proj = read_prjpcb(p, root)
         bomdocs = proj["bomdocs"]
     elif ext in SCH_EXT:
+        if not p.is_file():                           # the one sheet named is the whole BOM: no file, no BOM (never an
+            raise FileNotFoundError(f"{p.name}: no such schematic")    # empty one written as a success)
         proj = {"path": str(p), "name": p.stem, "schdocs": [p], "bomdocs": [], "missing": [], "variants": [], "parameters": {},
                 "documents": [p.name], "design": {}}
     else:
@@ -742,8 +744,21 @@ def _group_key(c):
     if c.get("mpn_source") == "Alternate":            # a variant's alternate with no part number: never with the base part
         return "ALT:" + (c["design_item_id"] or "?" + c["designator"]).upper()
     if c["design_item_id"]:
-        return "ID:" + c["design_item_id"].upper()
+        # a generic library part ('Res2', 'Cap') shares one Design Item ID across every value and footprint: the value
+        # and footprint stay in the key so a 1K is never counted into the 10K line (or an 0805 into the 0402 line)
+        return "ID:" + "|".join(x.upper() for x in (c["design_item_id"], c["value"] or c["comment"], c["footprint"]))
     return "LIB:" + "|".join(x.upper() for x in (c["libref"], c["value"], c["footprint"]))
+
+
+def _footprint_clash(cs):
+    """A note when one part number sits on different footprints: one line can carry only one, so the person checks."""
+    fps = {}
+    for c in cs:
+        if c.get("footprint"):
+            fps.setdefault(c["footprint"], []).append(c["designator"])
+    if len(fps) < 2:
+        return []
+    return ["footprints differ: " + "; ".join(f"{fp} ({', '.join(refs)})" for fp, refs in fps.items())]
 
 
 def bom_groups(project, variant=None, rules=None):
@@ -772,7 +787,9 @@ def bom_groups(project, variant=None, rules=None):
             "lifecycle": pick("lifecycle"), "item_guid": pick("item_guid"), "revision_guid": pick("revision_guid"),
             "vault_guid": pick("vault_guid"), "mpn_source": pick("mpn_source"), "dnp": not fitted,
             "alternates": "; ".join(dict.fromkeys(a.get("mpn", "") for c in cs for a in c.get("alternates", []) if a.get("mpn"))),
-            "variant_notes": "; ".join(dict.fromkeys(f"{c['designator']}: {c['variant_note']}" for c in cs if c["variant_note"])),
+            "variant_notes": "; ".join(list(dict.fromkeys(f"{c['designator']}: {c['variant_note']}" for c in cs if c["variant_note"]))
+                                       + _footprint_clash(cs)),
+            "footprint_clash": "; ".join(_footprint_clash(cs)),
             "sheets": ", ".join(sorted({s for c in cs for s in c["sheets"]})),
             "variants": {vn: sum(1 for r in refs if fit.get(r)) for vn, fit in per_var.items()},
         })
@@ -799,6 +816,8 @@ def bom_lines(path, variant=None, rules=None, root=None):
         for k in ("design_item_id", "item_guid", "revision_guid", "supplier", "supplier_pn", "lifecycle"):
             if g.get(k):
                 ln[f"altium_{k}"] = g[k]
+        if g.get("footprint_clash"):                  # one part number, two lands: which one the part gets is a guess
+            ln["bom_hold"] = f"one part number on different footprints ({g['footprint_clash'].split(': ', 1)[1]}); fix the schematic"
         if g.get("mpn_source") == "Comment":
             ln["altium_mpn_source"] = "Comment"
         elif g.get("mpn_source") == "Alternate":

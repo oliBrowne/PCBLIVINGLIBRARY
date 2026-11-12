@@ -171,7 +171,10 @@ def test_exp55_same_footprint_ref_with_other_content_is_an_error():
         plan, _, http = _plan(d)
         _edit(plan, lambda it: it["LED-RED-0603"]["footprint"].update(ref="R_0603_1608Metric"))   # LED's own files
         rep = X.export(plan, Path(d) / "kx", "ecadlib", http=http, log=QUIET)
-        assert any("differs from the footprint" in e for e in rep["errors"]), rep["errors"]
+        # since 2026-11-12 the release check holds the ref that names no entry of the LED's own file (held is the
+        # safe outcome too); exported, it is an error
+        held = any(s["part"] == "LED-RED-0603" and "is not in" in s["why"] for s in rep["skipped"])
+        assert held or any("differs from the footprint" in e for e in rep["errors"]), (rep["errors"], rep["skipped"])
         rows = {r["part"]: r["footprint"] for r in rep["parts"]}
         assert sorted(v for v in rows.values() if v == "R_0603_1608Metric") == ["R_0603_1608Metric"], rows
 

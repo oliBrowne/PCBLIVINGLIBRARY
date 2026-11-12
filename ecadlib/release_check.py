@@ -405,7 +405,7 @@ def value_link_empty(item):
     par = {p["name"]: p.get("value", "") for p in item.get("parameters") or []}
     if name != "Value" and name not in par and name not in (item.get("cleared") or []):
         return ""                                     # '=Part Number': a DbLib column, not a parameter of the plan
-    return "" if str(par.get(name) or "").strip() else name
+    return "" if _filled(par.get(name)) else name      # '~', 'N/A', 'TBD' are no value either
 
 
 def unchecked(what, e):
@@ -453,6 +453,13 @@ def check_item(item, base=".", rules=None):
                 r = [_pick(r, item[kind].get("ref"), f, kind)]          # plan names, not the first one or all of them
             except ValueError as e:
                 add("files", str(e))
+                continue
+            # a file of one entry under another name: the DbLib row would name an entry the file does not hold
+            # (_pick falls back to the only entry). Compared as the file stores names ('10mΩ' -> '10mOhm')
+            from .altium_lib import lib_name
+            ref = str(item[kind].get("ref") or "").strip()
+            if ref and str(r[0]["name"]).strip().upper() not in (ref.upper(), lib_name(ref).upper()):
+                add("files", f"{kind} {ref!r} is not in {f.name} (it holds {str(r[0]['name'])!r})")
                 continue
             if kind == "symbol":
                 syms = r

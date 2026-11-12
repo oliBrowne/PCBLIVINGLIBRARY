@@ -68,10 +68,11 @@ def test_push_refuses_a_footprint_file_holding_another_footprint(tmp_path):
             it[k]["file"] = str(d / it[k]["file"])
     nx = _Nexar()
     res = A3.push(items, nx, "https://acme.365.altium.com")
-    assert res[0]["action"] == "error" and "holds ['R_0603_1608Metric'], not 'C_0402_1005Metric'" in res[0]["detail"], res
+    assert res[0]["action"] in ("error", "skip") and ("holds ['R_0603_1608Metric'], not 'C_0402_1005Metric'" in res[0]["detail"]
+                                                      or "(it holds 'R_0603_1608Metric')" in res[0]["detail"]), res
     assert nx.calls == [], nx.calls                       # nothing uploaded, nothing released
     dry = A3.push(items, None, "https://acme.365.altium.com", dry_run=True)
-    assert dry[0]["action"] == "error", dry
+    assert dry[0]["action"] in ("error", "skip"), dry
 
 
 # T004: a part dblib-sync refuses (read-back) gets no released revision 1; the fixed file is the first release
@@ -86,7 +87,7 @@ def test_refused_first_sync_releases_nothing_and_the_fix_syncs(tmp_path, monkeyp
     items = released_anyway([_item("CAP-0402-100nF", "Capacitors", "Capacitor", "C_0402_1005Metric", Value="100nF")], d)
     (d / "plan.json").write_text(json.dumps(items, indent=1))
     r = S.sync(d / "plan.json", d / "lib")["results"][0]
-    assert r["action"] == "error" and "holds ['R_0603_1608Metric']" in r["detail"], r
+    assert r["action"] == "held" and "(it holds 'R_0603_1608Metric')" in r["detail"], r   # the release check holds it
     assert not LG.Ledger(d).head("CAP-0402-100nF")       # no released revision for the refused file
     (d / "models/PcbLib/C_0402_1005Metric.PcbLib").write_bytes(good)      # the fix
     (d / "plan.json").write_text(json.dumps(items, indent=1))

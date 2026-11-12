@@ -605,7 +605,7 @@ def build(out, workspace=None, library=None, name="ecadlib", command=None, win_d
         kept.append(INI)
         filled = bool(command) and _fill_command(ini, command)     # an empty command= (older builds) gets this PC's
     else:
-        ini.write_bytes(ini_text(workspace or "workspace", library or "library", name, command, hidden, timeout_s,
+        ini.write_bytes(ini_text(workspace or "workspace", library or "", name, command, hidden, timeout_s,
                                  port, offline).encode("utf-8"))
         written.append(INI)
     if prefs:
@@ -865,7 +865,9 @@ def read_ini(path):
 
 
 def _one_line(v):
-    return re.sub(r"\s*[\r\n]+\s*", " ", str(v if v is not None else "")).strip()
+    """A value on one ini line: every line break any reader splits on (Python's splitlines also breaks at \\v \\f
+    \\x1c-\\x1e \\x85 \\u2028 \\u2029) is folded, so a message cannot start a 'status=ready' line of its own."""
+    return re.sub(r"\s*[\r\n\v\f\x1c-\x1e\x85\u2028\u2029]+\s*", " ", str(v if v is not None else "")).strip()
 
 
 def result_text(res, section="result"):

@@ -182,7 +182,7 @@ def read_ini(path, section):
         return {}
     text = data.decode("utf-16") if data.startswith((b"\xff\xfe", b"\xfe\xff")) else data.decode("utf-8", "replace")
     out, inside = {}, False
-    for line in text.splitlines():
+    for line in re.split(r"\r\n|\r|\n", text):      # the job's own line ends (as Altium's TIniFile), never \x85 / \u2028
         line = line.strip()
         if line.startswith("[") and line.endswith("]"):
             inside = line[1:-1] == section
