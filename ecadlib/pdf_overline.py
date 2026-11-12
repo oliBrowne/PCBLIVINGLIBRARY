@@ -168,12 +168,16 @@ def _overlined(data, pages=None):
 def mark(pins, counts):
     """pins [{num, name, ...}] -> (pins with ~{NAME} where the datasheet prints NAME with a bar, [names marked])."""
     from .eval.score import active_low
+    from .house_style import pin_low
     names = [p.get("name") for p in pins]
+    # a name the pin table already gives barred on another pin (RESET beside ~{RESET}, /RESET, RESET_N: a supervisor's
+    # complementary outputs) is the active-high twin: the bar the PDF prints belongs to the other pin
+    twins = {pin_low(n)[0].strip().upper() for n in names if active_low(n, names)}
     out, done = [], []
     for p in pins:
         name = str(p.get("name") or "").strip()
         c = counts.get(name)
-        if name and c and c[0] >= 2 and c[0] > c[1] and not active_low(name, names):
+        if name and c and c[0] >= 2 and c[0] > c[1] and not active_low(name, names) and name.upper() not in twins:
             p = dict(p, name="~{" + name + "}")
             done.append(name)
         out.append(p)
