@@ -468,7 +468,12 @@ def compare_pins(a, b, ep=()):
     # blank-17 run 2026-10-24, held a header whose package, pitch and body agreed). Against a real name ("NC") it
     # still differs
     same = lambda n: numbered(n, na[n]) and numbered(n, nb[n])
-    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not same(n) and not names_agree(na[n], nb[n])
+    # the same name with the active-low mark in one read only (EN vs ~{EN}, Q vs /Q) is the pin's sense inverted:
+    # names_agree() reads both as one name, so the mark is compared on its own (full review 2026-11-10, 3.4)
+    from .eval.score import active_low
+    flipped = lambda n: active_low(na[n], na.values()) != active_low(nb[n], nb.values())
+    diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not same(n)
+            and (not names_agree(na[n], nb[n]) or flipped(n))
             and not (n in ep and (ep_named(na[n]) or ep_named(nb[n])))]
     if diff:
         out.append({"field": "pin_names", "first": "; ".join(f"{n} {na[n]}" for n in diff[:12]),
@@ -705,6 +710,19 @@ def against_read(first, second, first_pins, pins):
     return c
 
 
+def pdf_bars(job, pins):
+    """[(num, name)] with the bar the PDF prints over a name added (~{NAME}), as the first read's symbol gets it
+    (datasheet.active_low_from_pdf): both reads are compared on the same footing, so the bar the code read is never a
+    disagreement, and a bar one read gives and the other leaves out is one only when the PDF does not settle it."""
+    if not pins or job.get("data") is None:
+        return pins
+    from . import pdf_overline as PO
+    off = job.get("offset")
+    marked, _ = PO.mark([{"num": n, "name": s} for n, s in pins],
+                        PO.overlined(job["data"], off if isinstance(off, list) else None))
+    return [(p["num"], p["name"]) for p in marked]
+
+
 def second_read(reader, job, first, first_pins, model):
     from . import datasheet as D
     cm = (reader.cfg.get("cross_check_model") or "").strip() or model
@@ -721,6 +739,7 @@ def second_read(reader, job, first, first_pins, model):
     except Unavailable as e:
         rec.update(status="unchecked", why=str(e), compared=[], agreed=[], disagreed=[], not_compared=[])
         return rec
+    pins = pdf_bars(job, pins)
     rec.update(against_read(first, second, first_pins, pins), pages=note, via=via)
     if instr:
         rec["embedded_instructions"] = instr[:5]
@@ -768,7 +787,7 @@ def run(reader, job, res, model):
         return None
     # the pin table as read (a merged pad's symbol has one pin for the leads joined to the pad: datasheet.merge_pins)
     read = (res.get("sidecar") or {}).get("pins") if (res.get("sidecar") or {}).get("merged_pins") else None
-    first_pins = [(p["num"], p["name"]) for p in (read or (res.get("symbol") or {}).get("pins") or [])]
+    first_pins = pdf_bars(job, [(p["num"], p["name"]) for p in (read or (res.get("symbol") or {}).get("pins") or [])])
     if mode == "auto" and job.get("fp_needed") is False:
         out = {"mode": mode, "status": "skipped", "why": "the footprint comes from another source", "checks": []}
         if first_pins:                                # the symbol is still the read's own: its names are unchecked

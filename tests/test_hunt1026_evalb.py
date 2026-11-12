@@ -164,7 +164,8 @@ def test_the_report_counts_built_wrong_apart_from_parts_not_built():
             row("c", False, "datasheet"), row("d", False, "standard"), row("e", False, "none"),
             row("f", False, "none", tried=["datasheet: failed (DatasheetError: no datasheet link gave a PDF: x)"])]
     s = R.summarize(rows)
-    assert s["outcome"] == {"right": 2, "built_wrong": ["c", "d"], "not_built": ["e", "f"], "not_run": 0, "cases": 6}, s
+    assert s["outcome"] == {"right": 2, "built_wrong": ["c", "d"], "unverified": [], "not_built": ["e", "f"],
+                            "right_held": [], "built": 4, "precision": 0.5, "not_run": 0, "cases": 6}, s
     assert s["outcome"]["right"] == s["overall"]["right"]
     md = R.report_md({"meta": {"set": "mini", "set_version": 1, "model": "m", "sources": ["standard", "datasheet"],
                                "mode": "live", "cases": 6, "wall_s": 1, "wall_s_per_part": 0.2}, "summary": s, "cases": rows})

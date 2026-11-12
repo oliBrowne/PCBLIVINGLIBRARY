@@ -131,7 +131,10 @@ FAILURE_TYPES = {
     "misread_table": "a pad table misread (pads in the wrong place or size)",
     "thermal_pad": "only the exposed / thermal pad differs",
     "misread_dimension": "a dimension misread or made up (pads or courtyard off)",
-    "maker_land": "follows the datasheet's own land pattern, which KiCad's differs from",
+    "maker_land": "follows the datasheet's own land pattern (checked by hand, the set's errata), which KiCad's differs from",
+    "unverified_land": "built from the land the read gives, which KiCad's differs from; nothing but the read itself says "
+                       "it is the datasheet's (not counted right; check it by hand and add it to the set's errata)",
+    "unverified_body": "every pad is KiCad's; the courtyard follows the body the read gives, which nothing else bears out",
     "datasheet_body": "only the courtyard differs: ours is around the datasheet's body, KiCad's around a nominal one",
     "symbol": "the footprint is right; the symbol's pins or names differ",
 }
@@ -160,6 +163,10 @@ def failure_type(row, mine, spec):
         return "maker_land"
     if row.get("kicad_differs_body"):
         return "datasheet_body"
+    if row.get("land_unverified"):
+        return "unverified_land"
+    if row.get("body_unverified"):
+        return "unverified_body"
     f = row["fields"]
     failed = {k for k, v in f.items() if not v["ok"] and k not in S.INFO_ONLY}
     if failed <= {"symbol_pins", "symbol_names"}:            # SM6T100A (10-19): the PDF never reached the model
@@ -641,6 +648,40 @@ def no_datasheet(row):
 DATASHEET_RIGHT = ("maker_land", "datasheet_body")      # failure types that are right by the datasheet
 
 
+ROUTINE_HOLDS = ("verify", "fields")      # a person signs off every datasheet part; a benchmark BOM has no links
+
+
+def defect_holds(holds):
+    """The release check's hold reasons that are defects it found in the part's files (footprint, pins, files, parity,
+    height), not the routine sign-off every datasheet part waits for or a field the benchmark's BOM leaves empty."""
+    return [h for h in holds or [] if h.split(":", 1)[0].strip() not in ROUTINE_HOLDS]
+
+
+def reads_own_land(sc, ml, body):
+    """The miss is the read's own land (only pads differ, each one a pad of the land it followed). A courtyard-only
+    miss, copper as KiCad's, is the body's: it goes to the body evidence, never to a hand-checked land."""
+    return (not sc["pass"] and not (sc["fields"].get("pads") or {}).get("ok", True)
+            and S.only_maker_land(sc["fields"], ml, body))
+
+
+def hand_land(errata, mine, spec, fields, body):
+    """The case's land checked by hand (errata "land": the maker's recommended land as printed, pad_length x pad_width at
+    +-pad_center, with ep_across / ep_along, pad_center_y, pin1_* as the read gives them, and "why": where it is printed)
+    -> True when the pads that miss KiCad follow it, False when they don't (the read's land is not the datasheet's: a
+    misread), None when no land was checked by hand."""
+    land = (errata or {}).get("land")
+    if not isinstance(land, dict) or not mine:
+        return None
+    hl = {k: v for k, v in land.items() if isinstance(v, (int, float))}
+    return bool(S.only_maker_land(fields, S.maker_land(mine, dict(spec or {}, land=hl)), body))
+
+
+def unverified(row):
+    """Built, wrong by KiCad, and right only by the read's own numbers (its land, or its body with nothing else bearing
+    it out): not counted right, and not proved wrong."""
+    return not row["pass"] and bool(row.get("land_unverified") or row.get("body_unverified"))
+
+
 def datasheet_right(row):
     """Wrong by KiCad but right by the datasheet (Oliver 2026-10-21: the maker's datasheet is the truth, KiCad the
     fallback): the maker's recommended land, or a courtyard around the datasheet's real body."""
@@ -714,9 +755,19 @@ def summarize(rows):
     # every part not right is either built wrong (a footprint was made and it, or the symbol, differs: Oliver's rule is
     # that this must be 0) or not built (held, no datasheet, not read): a held part is the safe outcome, not a wrong one
     miss = [r for r in rows if not r["pass"] and not datasheet_right(r) and not not_run(r)]
-    outcome = {"right": sum(r["pass"] or datasheet_right(r) for r in rows),
-               "built_wrong": sorted(r["id"] for r in miss if r["source"] != "none"),
+    right_rows = [r for r in rows if r["pass"] or datasheet_right(r)]
+    built = [r for r in rows if r["source"] != "none" and not not_run(r)]
+    outcome = {"right": len(right_rows),
+               "built_wrong": sorted(r["id"] for r in miss if r["source"] != "none" and not unverified(r)),
+               # built, KiCad differs, and only the read's own numbers say it is right (not counted right)
+               "unverified": sorted(r["id"] for r in miss if r["source"] != "none" and unverified(r)),
                "not_built": sorted(r["id"] for r in miss if r["source"] == "none"),
+               # right, but the release check held it for a defect it found (not the routine sign-off): a user
+               # does not get these without a person (full review 2026-11-10, 3.2)
+               "right_held": sorted(r["id"] for r in right_rows if r.get("defect_holds")),
+               "built": len(built),
+               # of the parts built, the share that is right: unverified ones count against it (not proved right)
+               "precision": round(sum(r in right_rows for r in built) / len(built), 4) if built else None,
                "not_run": sum(not_run(r) for r in rows), "cases": len(rows)}
     return {"cross_check": dict(sorted(cc.items())), "overall": agg(rows), "maker_land": maker, "pad_match": pm, "headline": head,
             "outcome": outcome,
@@ -889,6 +940,13 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         src = ((it.get("source") or {}).get("footprint") or "none").split(":")[0]
         used = reader.used.get(c["mpn"]) or {}
         ml = S.maker_land(mine, used.get("spec")) if src == "datasheet" else None
+        body = S.body_evidence(used.get("spec"), ref_fp, S.drop_vias(ref)) if src == "datasheet" else None
+        own_land = reads_own_land(sc, ml, body)
+        hand = hand_land(erratas.get(c["mpn"]), mine, used.get("spec"), sc["fields"], body) if own_land else None
+        ds_body = bool(not sc["pass"] and src == "datasheet" and S.datasheet_body(
+            sc["fields"], S.drop_vias(mine) if mine else None, used.get("spec"), ref_fp, S.drop_vias(ref)))
+        it_status = it.get("status") or ""
+        holds = [str(h) for h in it.get("hold_reasons") or []]
         ref_pads = len(S.drop_vias(ref)["pads"])
         shared = next((n[len("shared with "):] for n in (it.get("librarian") or {}).get("notes", []) if n.startswith("shared with ")), "")
         files = {}                                    # what this run wrote for the part (consistency between runs)
@@ -899,11 +957,17 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
                      "files": files, "cross_check": (it.get("cross_check") or {}).get("status", ""),
                      "source": src, "symbol_source": ((it.get("source") or {}).get("symbol") or "none").split(":")[0],
                      "errors": sc["errors"], "fields": sc["fields"], "maker_land": ml, "errata": errata,
-                     "kicad_differs_maker_land": not sc["pass"] and S.only_maker_land(
-                         sc["fields"], ml, S.body_evidence(used.get("spec"), ref_fp, S.drop_vias(ref))),
-                     "kicad_differs_body": bool(not sc["pass"] and src == "datasheet"
-                                                and S.datasheet_body(sc["fields"], S.drop_vias(mine) if mine else None, used.get("spec"),
-                                                                     ref_fp, S.drop_vias(ref))),
+                     # right by the maker's land only when a land checked by hand against the datasheet (the
+                     # errata's "land") is the one built: the read's own land is the answer being scored, and a
+                     # misread agrees with itself (full review 2026-11-10, 3.1). Without one: unverified
+                     "kicad_differs_maker_land": bool(own_land and hand),
+                     "land_unverified": bool(own_land and hand is None),
+                     "land_contradicted": bool(own_land and hand is False),
+                     # a courtyard-only miss (every pad is KiCad's) around the read's body: the body must be borne out
+                     # by something other than the read (KiCad's name or courtyard, or a second source that agreed)
+                     "kicad_differs_body": ds_body and not own_land and (body is True or (it.get("cross_check") or {}).get("status") == "agreed"),
+                     "body_unverified": ds_body and not own_land and not (body is True or (it.get("cross_check") or {}).get("status") == "agreed"),
+                     "status": it_status, "defect_holds": defect_holds(holds),
                      "tokens_in": tin, "tokens_out": tout, "usd": cost,
                      "cost_how": how, "footprint_shared_with": shared, "api_s": (reader.used.get(c["mpn"]) or {}).get("api_s"),
                      "tried": ((it.get("librarian") or {}).get("tried") or []),
@@ -997,13 +1061,21 @@ def report_md(rep):
         cost = f"the AI reads would cost about {_usd(o['usd'])} ({_usd(o['usd_per_part'])} per part; estimate, nothing billed)."
     else:
         right = o.get("right", o["pass"])
-        built = sum(r["source"] != "none" for r in bad)   # a held part is not a wrong one: built wrong must be 0
+        uv = [r for r in bad if r["source"] != "none" and unverified(r)]
+        built = sum(r["source"] != "none" for r in bad) - len(uv)   # a held part is not a wrong one: built wrong must be 0
+        oc = s.get("outcome") or {}
         head = (f"**Right: {right}/{o['cases']} ({_pct(o.get('right_rate', o['rate']))})**"
                 + (f": {o['pass']} match KiCad exactly and {len(dsr)} match the datasheet where KiCad differs (see "
                    "\"Right by the datasheet\")" if dsr else "") + ". " + pad
-                + (f"**Built wrong: {built}**; {len(bad) - built} not built (held, no datasheet or not read). "
+                + (f"**Built wrong: {built}**; " + (f"**unverified: {len(uv)}** (built from the read's own land or body, "
+                   "which KiCad's differs from and nothing else bears out: not counted right); " if uv else "")
+                   + f"{len(bad) - built - len(uv)} not built (held, no datasheet or not read). "
                    f"{len(bad)} {'part is' if len(bad) == 1 else 'parts are'} not right: see \"Wrong parts\" below."
-                   if bad else "Every part was right."))
+                   if bad else "Every part was right.")
+                + (f" Precision (right of the {oc['built']} built): {_pct(oc['precision'])}." if oc.get("built") else "")
+                + (f" {len(oc['right_held'])} of the right parts were held by the release check for a defect it found "
+                   f"({', '.join(oc['right_held'][:6])}{' ...' if len(oc['right_held']) > 6 else ''}): a user gets them "
+                   "only after a person clears it." if oc.get("right_held") else ""))
         cost = f"{_usd(o['usd'])} in all, {_usd(o['usd_per_part'])} per part."
     hl = s.get("headline") or {}
     if hl.get("right"):

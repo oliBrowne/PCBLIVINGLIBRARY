@@ -510,7 +510,7 @@ def test_a_wrong_variant_reference_is_replaced_by_the_right_package_not_excused(
     is the 3 x 3 mm 0.5 mm HVQFN-16. The old erratum excused pads, pin 1 and courtyard whenever our pitch was 0.65, so a
     mirrored part passed. Now the case is scored against KiCad's 4 x 4 mm 0.65 mm VQFN-16: every field is checked."""
     er = R.load_errata("kicad-v1")["PCA9557BS"]
-    assert set(er) == {"reference"}, er
+    assert "reference" in er and set(er) <= {"reference", "land"}, er   # "land" is evidence for the scorer, never an excuse
     refs = R.load_set("kicad-v1")["references"]
     ref = refs[er["reference"]["footprint"]]
     assert R.reference_for({"mpn": "PCA9557BS", "footprint": "x"}, {"PCA9557BS": er}) == er["reference"]["footprint"]
