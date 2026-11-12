@@ -17,7 +17,7 @@ Used by datasheet.Reader (and so by the librarian, `ecadlib datasheet batch` and
 
 Prices: datasheet.PRICES (from the claude-api skill's model table, cached 2026-10-06), plus the cache-read prices
 and the Haiku 5.5 long-prompt tier listed here."""
-import argparse, datetime, io, json, re, sys
+import argparse, datetime, io, json, math, re, sys
 from pathlib import Path
 
 # Cache reads where the model table gives a price that is not 0.1x input; Haiku 5.5 is dearer above 100K prompt tokens.
@@ -1124,14 +1124,42 @@ def prices(model, prompt_tokens=0):
     return p
 
 
+USAGE_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+
+
+def token_count(v):
+    """One token count of a usage block as a whole number of 0 or more, or None when it is not a number (a gateway's
+    "1e3k", NaN, a list): a billed answer with a garbled usage block has an unknown cost, never a crash or $0."""
+    if v is None or v == "":
+        return 0
+    if isinstance(v, bool):
+        return None
+    try:
+        f = float(v) if isinstance(v, (int, float, str)) else None
+    except (TypeError, ValueError):
+        return None
+    if f is None or not math.isfinite(f):
+        return None
+    return max(0, int(f))
+
+
+def usage_tokens(usage):
+    """{key: count} of a usage block's USAGE_KEYS, or None when it is not a table or a count is not a number."""
+    if not isinstance(usage, dict):
+        return None
+    got = {k: token_count(usage.get(k)) for k in USAGE_KEYS}
+    return None if None in got.values() else got
+
+
 def usage_usd(model, usage, batch=False):
     """USD of one response from its usage block (input, cache write 1.25x, cache read, output); half on the Batches
     API. None when the model has no known price, or when there is no usage (a gateway or server that sends none: the
-    cost is unknown, not $0)."""
+    cost is unknown, not $0), or when the usage block is garbled (usage_tokens)."""
     from . import datasheet as D
-    u = usage or {}
-    tin, cw, cr, tout = (max(0, int(u.get(k) or 0)) for k in ("input_tokens", "cache_creation_input_tokens",
-                                                             "cache_read_input_tokens", "output_tokens"))
+    t = usage_tokens(usage or {})
+    if t is None:
+        return None
+    tin, cw, cr, tout = (t[k] for k in USAGE_KEYS)
     if not (tin or cw or cr or tout):
         return None
     p = prices(model, tin + cw + cr)
@@ -1180,8 +1208,9 @@ def attempt_record(part, name, model, msg, via, pages_sent, pages_total, verdict
     u = (msg or {}).get("usage") or {}
     if u:
         usd, how = usage_usd(billed_model(model, msg), u, batch), "usage"
-        tin = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-        tout = int(u.get("output_tokens") or 0)
+        t = usage_tokens(u) or {}                      # a garbled count: 0 here, the line's usd is None (unknown)
+        tin = sum(t.get(k) or 0 for k in USAGE_KEYS[:3])
+        tout = t.get("output_tokens") or 0
     elif ((msg or {}).get("ecadlib") or {}).get("not_sent"):   # refused before the request went out: nothing billed
         tin, tout, usd, how = 0, 0, 0.0, "not sent"
     else:

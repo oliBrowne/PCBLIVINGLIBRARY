@@ -162,10 +162,17 @@ def links_in(content):
 
 
 def add_usage(total, u):
-    for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"):
-        total[k] = total.get(k, 0) + int((u or {}).get(k) or 0)
-    total["web_search_requests"] = total.get("web_search_requests", 0) + \
-        int(((u or {}).get("server_tool_use") or {}).get("web_search_requests") or 0)
+    """Add usage block u to total. A count that is not a number (a garbled block) adds 0 and sets total["garbled"]:
+    that turn's cost is unknown (usd() holds its worst case), never a crash after the search was paid for."""
+    from .ds_route import token_count
+    u = u if isinstance(u, dict) else {}
+    stu = u.get("server_tool_use") if isinstance(u.get("server_tool_use"), dict) else {}
+    for k, v in [(k, u.get(k)) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+                                        "output_tokens")] + [("web_search_requests", stu.get("web_search_requests"))]:
+        n = token_count(v)
+        if n is None:
+            total["garbled"] = True
+        total[k] = total.get(k, 0) + (n or 0)
     return total
 
 
@@ -197,7 +204,8 @@ TOKENS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_token
 
 def _known(m):
     """Did the turn say what it used? (a gateway may send no usage block, or one without token counts)"""
-    return any((m.get("usage") or {}).get(k) for k in TOKENS)
+    u = m.get("usage")
+    return isinstance(u, dict) and any(u.get(k) for k in TOKENS)
 
 
 def usd(model, turns, unknown=None):
@@ -208,7 +216,7 @@ def usd(model, turns, unknown=None):
     total = 0.0
     for m in turns:
         u = add_usage({}, m.get("usage"))
-        tok = DR.usage_usd(DR.billed_model(model, m), u) if _known(m) else None
+        tok = DR.usage_usd(DR.billed_model(model, m), u) if _known(m) and not u.get("garbled") else None
         if tok is None:
             if unknown is None:
                 return None
