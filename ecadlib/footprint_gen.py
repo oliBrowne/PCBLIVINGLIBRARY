@@ -597,7 +597,8 @@ def _reach_problems(spec):
                 f"{REACH_MM:g} mm and {REACH_FEET:g} x the longest foot ({foot[2]:g} mm): no gull-wing lead reaches so "
                 "far, which is implausible (a span from another row of the drawing, or read twice? check lead_span and "
                 "body_width)"]
-    sides = {p.get("side") for p in spec.get("pin_positions") or () if isinstance(p, dict)}
+    pos = spec.get("pin_positions")
+    sides = {p.get("side") for p in pos if isinstance(p, dict)} if isinstance(pos, list) else set()
     if (not sides or {"L", "R"} <= sides) and 2 * reach < 2 * foot[1] - 0.01:
         return [f"terminal_length nom {foot[1]:g} mm does not fit twice between lead_span max {span[2]:g} and "
                 f"body_width min {body[0]:g} mm: are body_length and body_width (D and E1) the other way round, or the "
@@ -776,6 +777,12 @@ def orient_rows(spec):
                body_width=spec.get("body_length"))
     ep = spec.get("exposed_pad")
     if isinstance(ep, dict) and "length" in ep and "width" in ep:
+        try:                                          # a pad that does not fit between the rows as read is a read at
+            room = dim(spec["body_width"])[1] - 2 * dim(spec["terminal_length"])[1]   # odds with itself: refused
+            if dim(ep["width"])[1] > room + 1e-9:     # as before (sanity), never turned into a fit (test_rd4)
+                return spec, []
+        except (KeyError, TypeError, ValueError):
+            return spec, []
         out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
     return out, ["turned 90 degrees to rows left and right (pin 1 upper left): the rows were read top and bottom"]
 

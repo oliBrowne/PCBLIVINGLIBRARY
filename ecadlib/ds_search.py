@@ -122,10 +122,19 @@ def rank(urls, maker=None):
 
     from . import providers as P
 
+    whole = {"".join(w for w in re.findall(r"[a-z0-9]+", str(maker or "").lower()) if w not in MAKER_WORDS)}
+
     def tier(url):
         labels = [re.sub(r"[^a-z0-9]", "", l) for l in (_split(url)[0] or "").split(".")]
-        if any(l.startswith(n) for l in labels for n in names):
+        # a label that is the name or one of its words (analog.com), then one that starts with the whole name
+        # (yageogroup.com), then one that only starts with one word of it: microchip.com for Micro Crystal,
+        # analogictech.com for Analog Devices came first (compartmental testing round 2)
+        if any(l in names for l in labels):
             return 0
+        if any(l.startswith(n) for l in labels for n in whole if len(n) >= 3):
+            return 0.25
+        if any(l.startswith(n) for l in labels for n in names):
+            return 0.5
         owner = P.maker_from_url(url)          # the domain table: ti.com is Texas Instruments, st.com STMicroelectronics
         if maker and owner and P.same_maker(maker, owner):
             return 0

@@ -251,3 +251,16 @@ def test_a_plain_pin_beside_its_own_barred_twin_is_not_barred():
     for twin in ("/RESET", "RESET_N", "nRESET", "RESET#"):
         out, _ = PO.mark([{"num": "1", "name": twin}, {"num": "2", "name": "RESET"}], {"RESET": (5, 2)})
         assert out[1]["name"] == "RESET", (twin, out)
+
+
+# ---------------------------------------------------------------- ds_search.rank: one word of a maker's name
+def test_a_site_that_only_starts_with_one_word_of_the_makers_name_comes_after_the_makers_own():
+    """'Micro Crystal' put microchip.com first (it starts with 'micro'), 'Analog Devices' analogictech.com."""
+    from ecadlib import ds_search as S
+    got = S.rank(["https://www.mouser.com/a.pdf", "https://ww1.microchip.com/a.pdf", "https://www.microcrystal.com/a.pdf"],
+                 "Micro Crystal")
+    assert got[0] == "https://www.microcrystal.com/a.pdf", got
+    got = S.rank(["https://www.analogictech.com/a.pdf", "https://www.analog.com/a.pdf"], "Analog Devices")
+    assert got[0] == "https://www.analog.com/a.pdf", got
+    got = S.rank(["https://www.mouser.com/a.pdf", "https://www.yageogroup.com/a.pdf"], "Yageo")
+    assert got[0] == "https://www.yageogroup.com/a.pdf", got                    # a one-word maker still starts a label
