@@ -2419,11 +2419,35 @@ def name_facts(name):
     bm = re.search(rf"_{num}x{num}(?:x{num})?mm", name)
     em = re.search(rf"_EP{num}x{num}mm", name)
     cm = re.search(r"(?<![0-9A-Za-z])(?:(\d\d)(\d\d)Metric|EIA-(\d\d)(\d\d))(?![0-9A-Za-z])", name)
-    code = tuple(int(x) / 10 for x in cm.groups() if x) if cm else None    # 3216Metric, EIA-3528: 3.2 x 1.6, 3.5 x 2.8
+    code = _code_mm("".join(x for x in cm.groups() if x)) if cm else None  # 3216Metric, EIA-3528: 3.2 x 1.6, 3.5 x 2.8
     return {"count": count, "ep": bool(re.search(r"-\d*EP$|-\d*EP-", head)) or bool(em), "code_body": code,
             "pitch": float(pm.group(1)) if pm else None,
             "body": (float(bm.group(1)), float(bm.group(2))) if bm else None,
             "ep_size": (float(em.group(1)), float(em.group(2))) if em else None}
+
+
+def _code_mm(code):
+    """(length, width) mm of a metric size code: two digits each in tenths of a mm ('3216': 3.2 x 1.6), but the
+    width of the one code over 10 mm wide is in whole mm ('9110', KiCad's 3640: 9.1 x 10, not 9.1 x 1.0; no chip is
+    over four times as long as wide, an 1806 is 2.8). Five digits: three and two ('10251': 10.2 x 5.1)."""
+    a, b = int(code[:-2]) / 10, int(code[-2:]) / 10
+    return (a, b * 10) if 4 * b < a else (a, b)
+
+
+def _same_pitch(a, b):
+    """True when two pitches are one row's pitch printed two ways, so neither is another variant's: the same in
+    thousandths of an inch (0.026 in = 0.6604 mm for 0.65), or an inch pitch of whole mils and its metric name
+    rounded to 0.05 mm (25 mil = 0.635 named P0.65, 30 mil = 0.762 named P0.75)."""
+    if round(a / IN_MM, 3) == round(b / IN_MM, 3):
+        return True
+    for x, y in ((a, b), (b, a)):
+        mil = x / 0.0254
+        if abs(mil - round(mil)) < 0.06 and abs(round(x / 0.05) * 0.05 - y) < 0.003:
+            return True
+    return False
+
+
+IN_MM = 25.4
 
 
 def _nom(d):
@@ -2576,7 +2600,7 @@ def std_dims(spec):
     table package give 1.00-1.12 x its lead width and 0.89-1.14 x its foot. Far is under 0.6 or over 1.6 x (a foot,
     which makers tolerance widely: under 0.52 or over 1.9 x, and only a foot read with both its limits: '0.4 MIN' is
     the low limit, not the length). Not compared: a part with a tab or a pad table, and a body the name's own
-    numbers already check (gull-wing, QFN, QFP)."""
+    numbers already check (gull-wing, QFN, QFP), nor an inductor's (_far_body's larger_ok checks its body)."""
     try:
         from . import stdparts as SP
         ref = SP.packages().get(str(spec.get("name") or ""))
@@ -2585,7 +2609,10 @@ def std_dims(spec):
     if not ref or ref.get("package_type") != spec.get("package_type") or spec.get("tab") or ref.get("tab") or \
             spec.get("pad_table") or F.lead_land(spec):
         return None
-    keys = [("terminal_width", STD_SIZE), ("terminal_length", STD_FOOT)]
+    if spec.get("package_type") in ("chip", "molded") and \
+            INDUCTOR.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
+        return None                                   # an inductor's L_0805 row is one maker's: Coilcraft's 0805CS is
+    keys = [("terminal_width", STD_SIZE), ("terminal_length", STD_FOOT)]   # 1.73 wide for its 0.9 (the code check holds)
     if spec.get("package_type") in ("chip", "molded"):
         keys += [("body_length", STD_SIZE), ("body_width", STD_SIZE)]
     for k, (lo, hi) in keys:
@@ -2615,7 +2642,7 @@ def _chip_code_bodies(name, package=None):
             code = None
         if not code or code.startswith("conflict") or code not in SP.IMP2MET:
             continue
-        mm = lambda c: (int(c[:-2]) / 10, int(c[-2:]) / 10)
+        mm = _code_mm
         bodies = [mm(SP.IMP2MET[code])]
         if code in SP.METRIC and re.search(rf"(?<![0-9]){code}(?![0-9])", text) and \
                 not re.search(r"(?:RES|CAP|IND|LED|DIO|FUS)C\d{4}X", text, re.I):
@@ -2624,11 +2651,21 @@ def _chip_code_bodies(name, package=None):
     return out
 
 
-def _far_body(code, body):
+def _far_body(code, body, larger_ok=False):
     """A body that is not the one a size code states, by more than rounding and tolerance: a side over 0.5 mm and a
-    quarter off, or (the small sizes, where 0.5 mm is the whole part) off by a half or more."""
-    return any(abs(x - y) > max(0.5, 0.25 * max(x, y)) or max(x, y) >= 1.5 * min(x, y)
-               for x, y in zip(sorted(code), sorted(body)))
+    quarter off, or (the small sizes, where 0.5 mm is the whole part) off by a half or more. larger_ok (a wire-wound
+    inductor, sold by the EIA code and wound larger than its body: Coilcraft's 1008CS is 2.92 x 2.79 mm for 2.5 x 2.0,
+    its 0805CS 2.29 x 1.73 for 2.0 x 1.25): a side over the code's is far only at half again or more, which a size
+    read twice or a row two sizes up still is."""
+    def far(x, y):
+        if larger_ok and y >= x:
+            return y >= 1.5 * x
+        return abs(x - y) > max(0.5, 0.25 * max(x, y)) or max(x, y) >= 1.5 * min(x, y)
+    return any(far(x, y) for x, y in zip(sorted(code), sorted(body)))
+
+
+# a two-terminal read of an inductor (_far_body's larger_ok): its name, description or symbol says so
+INDUCTOR = re.compile(r"induct|choke|wire[- ]?wound|(?<![A-Za-z0-9])(?:L_\d|IND(?:C\d|(?![A-Za-z])))", re.I)
 
 
 def _pitch_shift(spec, name_pitch):
@@ -2681,7 +2718,7 @@ def self_check(spec, ext, review, package=None):
     if spec.get("exposed_pad") and spec.get("name") and not f["ep"] and t in LINEAR_TYPES:
         add(f"an exposed pad was read but the name {spec['name']} has no EP")
     if f["pitch"] is not None and e is not None and abs(f["pitch"] - e) > 0.005:
-        shift = _pitch_shift(spec, f["pitch"])        # a rounded name (P0.65 for 0.635) moves no lead; a row at 0.4
+        shift = 0.0 if _same_pitch(f["pitch"], e) else _pitch_shift(spec, f["pitch"])        # a rounded name (P0.65 for 0.635) moves no lead; a row at 0.4
         add(f"name says pitch {f['pitch']:g} mm, the drawing value is {e:g} mm"   # for 0.5 puts its end leads off
             + (f": the row's end leads would sit {shift:.2f} mm from where the name's pitch puts them: {TOO_FAR} "
                "(the pitch of another package variant, or the wrong name?)" if shift > PITCH_SHIFT else ""))
@@ -2690,12 +2727,14 @@ def self_check(spec, ext, review, package=None):
         far = any(abs(x - y) > max(0.5, 0.25 * max(x, y)) for x, y in zip(sorted(f["body"]), sorted(body)))
         add(f"name says body {f['body'][0]:g}x{f['body'][1]:g} mm, the drawing gives {body[0]:g}x{body[1]:g} mm"
             + (f": {TOO_FAR} (another row of the table, or a unit?)" if far else ""))
-    if f["code_body"] and len(body) == 2 and all(f["code_body"]) and _far_body(f["code_body"], body):
+    coil = bool(INDUCTOR.search(f"{spec.get('name') or ''} {spec.get('description') or ''} "
+                                f"{ext.get('symbol_description') or ''}"))
+    if f["code_body"] and len(body) == 2 and all(f["code_body"]) and _far_body(f["code_body"], body, coil):
         add(f"name {spec['name']} carries the size code of a {f['code_body'][0]:g}x{f['code_body'][1]:g} mm body, the "   # a code
             f"drawing gives {body[1]:g}x{body[0]:g} mm: {TOO_FAR} (another case size's row, or a unit?)")   # rounds: only far
     if t in ("chip", "molded") and len(body) == 2:
         for what, bodies in _chip_code_bodies(spec.get("name"), package):
-            if all(_far_body(c, body) for c in bodies):
+            if all(_far_body(c, body, coil) for c in bodies):
                 add(f"{what} carries the size code of a {' or '.join(f'{c[0]:g}x{c[1]:g}' for c in bodies)} mm body, the "
                     f"drawing gives {body[1]:g}x{body[0]:g} mm: {TOO_FAR} (another case size's row, or a unit?)")
     off = std_dims(spec)
