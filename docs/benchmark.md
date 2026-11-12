@@ -211,6 +211,8 @@ ecadlib eval run --set kicad-v1 --limit 110 --sources standard,datasheet \
     --replay bench/rec -o bench/replay                   # free: the saved answers, scored by today's code
 ecadlib eval run --set kicad-v1 --limit 110 --sources standard,datasheet --cached-only -o bench/run
                                                          # free: re-score the live run's folder in place
+ecadlib eval run --set kicad-v1 --skip 110 --limit 40 --sources standard,datasheet --batch \
+    --record bench/rec-held -o bench/held                # live, held-out: 40 parts the benchmark never read
 ecadlib eval compare bench/run bench/replay              # what changed, per family and per part
 ecadlib eval pin bench/run                               # pin the PDFs read (URL + SHA-256) in kicad-v1.pins.json
 ecadlib eval publish bench/run -o docs/benchmark-results.md   # the results page: headline, failures by type
@@ -264,3 +266,11 @@ and its artifact.
    PowerPAD land as the thermal copper (about 10 of the 15 built-but-wrong parts, an estimate; a free
    `--cached-only` re-score shows the real effect).
 5. TO-252 tab parts read without the tab's position (BD33FC0FP), and ATSAME70Q19A-AN's pin table.
+
+## A held-out check
+
+Every reader fix so far was made while looking at the same 110 parts the headline counts, so the headline can
+flatter the reader. The set holds 331 parts and `--limit 110` reads the first 110 of its interleaved order;
+`--skip 110` runs the other 221, which no live run has read. With no model at all (`--sources standard`, free) the
+two halves score alike: 22 of 110 and 40 of 221 fully right from the standard-package table, none built wrong in
+either (2026-11-12). The datasheet reader has not been measured on the held-out half yet: that needs a live run.

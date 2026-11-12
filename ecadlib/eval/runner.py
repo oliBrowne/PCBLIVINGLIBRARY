@@ -328,8 +328,10 @@ def load_set(name):
     return json.loads(set_path(name).read_text(encoding="utf-8"))
 
 
-def select(cases, families=None, ids=None, limit=None):
-    """Filter, then interleave families round-robin so --limit N still covers every family."""
+def select(cases, families=None, ids=None, limit=None, skip=0):
+    """Filter, then interleave families round-robin so --limit N still covers every family. skip: leave out the first
+    `skip` of that order first, so `--skip 110` runs parts the 110-part benchmark never read (a held-out check:
+    the reader's fixes were made on those 110)."""
     cs = [c for c in cases if (not families or c["family"] in families) and (not ids or c["id"] in ids or c["mpn"] in ids)]
     by = {}
     for c in cs:
@@ -338,6 +340,7 @@ def select(cases, families=None, ids=None, limit=None):
     while any(i < len(v) for v in by.values()):
         out += [v[i] for v in by.values() if i < len(v)]
         i += 1
+    out = out[max(int(skip or 0), 0):]
     return out[:limit] if limit else out
 
 
@@ -870,7 +873,7 @@ def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=N
 def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=None, replay=None, sources=None,
         families=None, ids=None, offline=False, cache="out/http_cache", http=None, api_key=None, rules=None, providers=None,
         tol=None, log=print, provider=None, base_url=None, assist=None, api_key_env=None, repeat=1, batch=False,
-        cached_only=False, pins=None, max_cost_usd=None, datasheets=None, max_total_usd=None):
+        cached_only=False, pins=None, max_cost_usd=None, datasheets=None, max_total_usd=None, skip=0):
     """repeat: run the same cases again (into <out>/repeat-2 ...) and report how many parts gave the same files
     (summary["consistency"]): from the recorded answers when there are any (--record / --replay: the code must be
     deterministic), else live again (the model's own consistency; this pays again).
@@ -884,7 +887,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     so a run resumed in the same folder sends at most the rest (max_cost_usd alone is per run: the 2026-10-24
     blank-17 run resumed under a $6 cap meant as the total and spent $4.64 on top of $1.98)."""
     data = load_set(set_name)
-    cases = select(data["cases"], families, ids, limit)
+    cases = select(data["cases"], families, ids, limit, skip)
     if not cases:
         raise ValueError("no cases selected")
     out = Path(out)
@@ -995,7 +998,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     for i in range(2, max(1, int(repeat or 1)) + 1):
         again = run(set_name, out / f"repeat-{i}", limit, model, None, replay or record, sources, families, ids, offline, cache,
                     http, api_key, rules, providers, tol, log, provider, base_url, assist, api_key_env, batch=batch,
-                    cached_only=cached_only, pins=pins, max_cost_usd=max_cost_usd)
+                    cached_only=cached_only, pins=pins, max_cost_usd=max_cost_usd, skip=skip)
         c = consistency(rep, again)
         prev = rep["summary"].get("consistency")
         if prev is None or c["same"] < prev["same"]:

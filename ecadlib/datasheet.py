@@ -1807,6 +1807,7 @@ def sanity(spec, review, evidence=""):
     ls, bw = g("lead_span"), g("body_width")
     if t == "gullwing" and ls and bw and ls[0] <= bw[2]:
         review.append(f"lead_span min {ls[0]} <= body_width max {bw[2]}")
+    review.extend(_lead_vs_pitch(spec))
     review.extend(_feet_outside(spec))
     review.extend(_qfp_rows(spec))
     review.extend(_qfn_rows(spec))
@@ -1882,6 +1883,36 @@ def _body_and_lead(spec, t, bl, bw, b):
     return out
 
 
+def _lead_vs_pitch(spec):
+    """A lead's width against the pitch of its row: on the fine pitches (up to 1.3 mm) the widest lead takes between
+    0.38 and 0.78 of the pitch, and is never under 0.32 mm from a 0.85 mm pitch up or over 0.75 mm. Every regular-row
+    package of the checked standard table keeps it (494: gull-wing, QFN, QFP; their widest leads run 0.42-0.70 of the
+    pitch, a 1.27 mm SOIC's 0.39-0.56 mm), and so do the real reads of 2026-10-25. A width read half or twice
+    (0.155-0.255 for a SOIC's 0.31-0.51; 0.09-0.15 for a QFN's 0.18-0.30) is outside it and was built 'ok', with pads
+    half as wide as the leads (compartmental testing 2026-11-12, finding 20). Not judged: wider pitches (a 2.54 mm
+    optocoupler's leads are 0.16 of it), listed layouts and tabs (a SOT's three leads), pad tables, J leads (the read
+    may give the lead's wide shoulder) and a part with under four pins. -> review lines (a failed read)."""
+    t, e, n = spec.get("package_type"), spec.get("pitch"), spec.get("pin_count")
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    if t not in ("gullwing", "qfn", "qfp") or not num(e) or not 0.2 <= e <= 1.3 or not num(n) or n < 4 or \
+            spec.get("pin_positions") or spec.get("tab") or spec.get("pad_table") or \
+            J_LEAD.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"):
+        return []
+    b = _dim(spec.get("terminal_width"))
+    if not b or b[2] <= 0:
+        return []
+    lo, hi = min(LEAD_SHARE[0] * e, LEAD_MM[0]), min(LEAD_SHARE[1] * e, LEAD_MM[1])
+    if b[2] < lo - 1e-6:
+        return [f"terminal_width max {b[2]:g} mm on a {e:g} mm pitch: the leads of such a row are at least {lo:.2f} mm "
+                "wide, so this is implausible (the width read half, another dimension's row, or a unit? check "
+                "terminal_width against the drawing)"]
+    if b[2] > hi + 1e-6 and b[2] < e:                 # (at the pitch or over: 'leads would touch' says it)
+        return [f"terminal_width max {b[2]:g} mm on a {e:g} mm pitch: the leads of such a row are at most {hi:.2f} mm "
+                "wide, so this is implausible (the width read twice, the land's pad width, or a unit? check "
+                "terminal_width against the drawing)"]
+    return []
+
+
 SAYS_SMD = re.compile(r"(?<![A-Za-z0-9])(?:SMD|SMT)(?![A-Za-z0-9])|surface[ -]?mount", re.I)
 SAYS_THT = re.compile(r"(?<![A-Za-z0-9])(?:THT|THD)(?![A-Za-z0-9])|through[ -]?hole", re.I)
 KICAD_HEADER = re.compile(r"^Pin(?:Header|Socket)_\d+x\d+_P[\d.]+mm_", re.I)
@@ -1944,6 +1975,7 @@ J_LEAD = re.compile(r"SOJ|PLCC|J[- ]?(?:lead|bend)|chip carrier|"            # b
                     r"\bM[OS]-?(?:047|016|018|027|065)\b", re.I)   # PLCC MO-047 / MS-016 / MS-018, SOJ
 
 
+LEAD_SHARE, LEAD_MM = (0.38, 0.78), (0.32, 0.75)     # _lead_vs_pitch: the widest lead, as a share of the pitch and in mm
 FOOT_ROOM = 4                                          # a lead's reach beyond the body, in foot lengths (max)
 
 
@@ -2426,6 +2458,10 @@ def _ep_name_fits(size, spec):
 # a self-check line that is no longer advice (ds_route.SOFT_FAILED): the read's body is not the body its own name
 # states, by more than a rounded name explains (over a quarter of the side and 0.5 mm): the pads are placed from it
 TOO_FAR = "too far apart to build from"
+# ... and one more: the name and the pin table both give an exposed pad the read left out
+NO_EP = "the part would be built without its exposed pad"
+EP_PIN_NAME = re.compile(r"(?<![A-Za-z])(?:EP|E-?PAD|PAD|EPAD|PWRPAD|POWERPAD|THERMAL|TAB|DAP|EXP)(?![A-Za-z])|exposed|thermal", re.I)
+PITCH_SHIFT = 0.1                                      # mm a row's end lead may move for a pitch that is not the name's
 
 
 def _std_span(spec):
@@ -2527,9 +2563,95 @@ def std_pads(spec, rep):
     return None
 
 
-def self_check(spec, ext, review):
+STD_SIZE, STD_FOOT = (0.6, 1.6), (0.52, 1.9)          # std_dims: a read's size / foot length over the named package's
+
+
+def std_dims(spec):
+    """(field, the read's value, the table's) for a read that names a package of the checked standard table and gives
+    a lead or terminal width, a foot length or (two-terminal parts) a body side far from that package's own, or None.
+    std_pads compares the built pads with a 0.75 mm floor, which is wider than most pads: a SOIC's lead width read
+    half built 0.35 mm pads for 0.6 mm ones and a 0603's width read half built 0.5 mm pads for 0.95 mm ones, both 'ok'
+    (compartmental testing 2026-11-12, finding 20), and a 0402's length and width the other way round fits the same
+    box. Makers' drawings of one package differ far less than a slip does: the real reads of 2026-10-25 that name a
+    table package give 1.00-1.12 x its lead width and 0.89-1.14 x its foot. Far is under 0.6 or over 1.6 x (a foot,
+    which makers tolerance widely: under 0.52 or over 1.9 x, and only a foot read with both its limits: '0.4 MIN' is
+    the low limit, not the length). Not compared: a part with a tab or a pad table, and a body the name's own
+    numbers already check (gull-wing, QFN, QFP)."""
+    try:
+        from . import stdparts as SP
+        ref = SP.packages().get(str(spec.get("name") or ""))
+    except Exception:                                 # no table: nothing to compare with
+        return None
+    if not ref or ref.get("package_type") != spec.get("package_type") or spec.get("tab") or ref.get("tab") or \
+            spec.get("pad_table") or F.lead_land(spec):
+        return None
+    keys = [("terminal_width", STD_SIZE), ("terminal_length", STD_FOOT)]
+    if spec.get("package_type") in ("chip", "molded"):
+        keys += [("body_length", STD_SIZE), ("body_width", STD_SIZE)]
+    for k, (lo, hi) in keys:
+        d = spec.get(k)
+        if k == "terminal_length" and not (isinstance(d, dict) and d.get("min") is not None and d.get("max") is not None):
+            continue                                  # a foot printed as '0.4 MIN' is its low limit, not its length
+        a, b = _nom(ref.get(k)), _nom(d)
+        if a and b and a > 0 and not lo <= b / a <= hi:
+            return k, b, a
+    return None
+
+
+def _chip_code_bodies(name, package=None):
+    """[(what says it, [(length, width), ...])] for the chip size codes a two-terminal read is named by: the read's
+    own name when it carries no ...Metric / EIA- code (name_facts reads those: 'C_0603', '0603', 'CAPC1608X90N'), and
+    the BOM's package for the part. A bare four-digit code is imperial by the industry's habit, but '0603' is also
+    the metric code of an 0201, so both bodies are given and a read only has to fit one."""
+    from . import stdparts as SP
+    out = []
+    for what, text in (("name", name), ("BOM package", package)):
+        text = str(text or "")
+        if not text or (what == "name" and name_facts(text)["code_body"]):
+            continue
+        try:
+            code = SP.chip_size(text, strict=True)
+        except Exception:
+            code = None
+        if not code or code.startswith("conflict") or code not in SP.IMP2MET:
+            continue
+        mm = lambda c: (int(c[:-2]) / 10, int(c[-2:]) / 10)
+        bodies = [mm(SP.IMP2MET[code])]
+        if code in SP.METRIC and re.search(rf"(?<![0-9]){code}(?![0-9])", text) and \
+                not re.search(r"(?:RES|CAP|IND|LED|DIO|FUS)C\d{4}X", text, re.I):
+            bodies.append(mm(code))
+        out.append((f"{what} {text}", bodies))
+    return out
+
+
+def _far_body(code, body):
+    """A body that is not the one a size code states, by more than rounding and tolerance: a side over 0.5 mm and a
+    quarter off, or (the small sizes, where 0.5 mm is the whole part) off by a half or more."""
+    return any(abs(x - y) > max(0.5, 0.25 * max(x, y)) or max(x, y) >= 1.5 * min(x, y)
+               for x, y in zip(sorted(code), sorted(body)))
+
+
+def _pitch_shift(spec, name_pitch):
+    """How far (mm) the outermost lead of a row moves when the row is built at the read's pitch and not at the one
+    its own name states: the pitches' difference times half the row's steps."""
+    e, n, t = spec.get("pitch"), spec.get("pin_count"), spec.get("package_type")
+    if spec.get("pin_positions") or spec.get("pad_table"):
+        return 0.0                                    # listed pads are placed by their own offsets, not by the pitch
+    per = 0
+    try:
+        if t in ("qfn", "qfp"):
+            per = max(F.rows(spec))
+    except Exception:
+        per = 0
+    if not per and isinstance(n, int):
+        per = n // 4 if t in ("qfn", "qfp") else n // 2
+    return abs(name_pitch - e) * max(per - 1, 1) / 2
+
+
+def self_check(spec, ext, review, package=None):
     """Compare what the model read with what its own package name says and with the family's usual range.
-    Disagreements go to review (prefixed 'self-check:'); returns info lines (what was and was not checked)."""
+    Disagreements go to review (prefixed 'self-check:'); returns info lines (what was and was not checked).
+    package: the BOM's package for the part, compared with a two-terminal read's body."""
     info, add = [], lambda m: review.append(f"self-check: {m}")
     t, n, e = spec.get("package_type"), spec.get("pin_count"), spec.get("pitch")
     f = name_facts(spec.get("name") or "")
@@ -2549,20 +2671,38 @@ def self_check(spec, ext, review):
         if sig != n and sig != n + tab:
             add(f"pin table lists {sig} signal pins, pin_count is {n}")
     if f["ep"] and not spec.get("exposed_pad"):
-        add(f"name {spec['name']} says exposed pad, none was read")
+        # the pad's own pin in the pin table too (a number past the leads, or one named as the pad): two facts of the
+        # read say the pad is there, and the footprint would be built without it (compartmental testing, finding 21)
+        mine = _lead_numbers(spec) or ({str(i) for i in range(1, n + 1)} if isinstance(n, int) else set())
+        pad_pin = [p["num"] for p in ext.get("pins", []) if mine and str(p["num"]) not in mine and
+                   (str(p["num"]) == str((n or 0) + 1) or EP_PIN_NAME.search(str(p.get("name") or "")))]
+        add(f"name {spec['name']} says exposed pad, none was read"
+            + (f", and the pin table lists pin {pad_pin[0]} for it: {NO_EP}" if pad_pin else ""))
     if spec.get("exposed_pad") and spec.get("name") and not f["ep"] and t in LINEAR_TYPES:
         add(f"an exposed pad was read but the name {spec['name']} has no EP")
     if f["pitch"] is not None and e is not None and abs(f["pitch"] - e) > 0.005:
-        add(f"name says pitch {f['pitch']:g} mm, the drawing value is {e:g} mm")
+        shift = _pitch_shift(spec, f["pitch"])        # a rounded name (P0.65 for 0.635) moves no lead; a row at 0.4
+        add(f"name says pitch {f['pitch']:g} mm, the drawing value is {e:g} mm"   # for 0.5 puts its end leads off
+            + (f": the row's end leads would sit {shift:.2f} mm from where the name's pitch puts them: {TOO_FAR} "
+               "(the pitch of another package variant, or the wrong name?)" if shift > PITCH_SHIFT else ""))
     body = tuple(x for x in (_nom(spec.get("body_width")), _nom(spec.get("body_length"))) if x)
     if f["body"] and len(body) == 2 and not _pair_close(f["body"], body):
         far = any(abs(x - y) > max(0.5, 0.25 * max(x, y)) for x, y in zip(sorted(f["body"]), sorted(body)))
         add(f"name says body {f['body'][0]:g}x{f['body'][1]:g} mm, the drawing gives {body[0]:g}x{body[1]:g} mm"
             + (f": {TOO_FAR} (another row of the table, or a unit?)" if far else ""))
-    if f["code_body"] and len(body) == 2 and all(f["code_body"]) and \
-            any(abs(x - y) > max(0.5, 0.25 * max(x, y)) for x, y in zip(sorted(f["code_body"]), sorted(body))):
+    if f["code_body"] and len(body) == 2 and all(f["code_body"]) and _far_body(f["code_body"], body):
         add(f"name {spec['name']} carries the size code of a {f['code_body'][0]:g}x{f['code_body'][1]:g} mm body, the "   # a code
             f"drawing gives {body[1]:g}x{body[0]:g} mm: {TOO_FAR} (another case size's row, or a unit?)")   # rounds: only far
+    if t in ("chip", "molded") and len(body) == 2:
+        for what, bodies in _chip_code_bodies(spec.get("name"), package):
+            if all(_far_body(c, body) for c in bodies):
+                add(f"{what} carries the size code of a {' or '.join(f'{c[0]:g}x{c[1]:g}' for c in bodies)} mm body, the "
+                    f"drawing gives {body[1]:g}x{body[0]:g} mm: {TOO_FAR} (another case size's row, or a unit?)")
+    off = std_dims(spec)
+    if off:
+        add(f"name {spec['name']} is a standard package whose {off[0]} is {off[2]:g} mm, the drawing gives "
+            f"{off[1]:g} mm: {TOO_FAR} (a size read half or twice, length and width the other way round, or "
+            "another dimension's row?)")
     std = _std_span(spec)
     if std:
         add(f"name {spec['name']} is a standard package with a {std[0]:g} mm lead span, the drawing gives "
@@ -2923,7 +3063,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
     ok = schema_check(spec, review)
     sanity(spec, review, f"{package or ''} {part or ''}")
     check_pins(spec, ext, review)
-    info = self_check(spec, ext, review)
+    info = self_check(spec, ext, review, package)
     if spec.get("pad_table"):
         try:
             from . import footprint_adv as FA                 # pad-table checks (added with the new families)
