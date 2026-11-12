@@ -140,15 +140,33 @@ NOT_CHIP = re.compile(r"(?<![A-Za-z])(RGB|arrays?|reverse[ _-]?mount|mouse[ _-]?
 # words in a DESCRIPTION (free text, so narrower than NOT_CHIP: 'RF choke', 'current sense' and 'EMI filter' bead are
 # two-pad chips) that say the part has more than two terminals, whatever chip size its footprint column gives
 MULTI_WORD = re.compile(
-    r"(?<![A-Za-z])(RGB|arrays?|networks?|common[ _-]?mode|kelvin|balun|transformer|feed[ _-]?thr(?:ough|u)|"
+    r"(?<![A-Za-z])(RGB[WA]?|arrays?|arr|networks?|res[ _-]?nets?|r[ _-]?(?:nets?|packs?)|common[ _-]?mode|CMC|kelvin|"
+    r"balun|transformer|feed[ _-]?thr(?:ough|u)|coupled|bifilar|X2Y|quad|dual|triple|pairs?|bussed|isolated|convex|"
+    r"concave|dividers?|trimmers?|trim[ _-]?pots?|potentiometers?|addressable|common[ _-]?(?:cathode|anode)|"
+    r"(?:T|pi|LC|RC|line)[ _-]?filters?|"
     r"(?:bi|tri|dual|two|three|multi|full|[2-9])[ _-]?colou?rs?(?:ed)?)(?![a-z])"
     r"|(?<![\d.A-Za-z])(?:[3-9]|three|four|five|six|eight)[ _-]?"
-    r"(?:terminals?|term|pins?|pads?|leads?|elements?|res(?:istors?)?|caps?|ch(?:annels?)?)(?![a-z])"
-    r"|(?<![\d.A-Za-z])[2-9][ _-]?(?:lines?|LN)(?![a-z])", re.I)
+    r"(?:terminals?|term|pins?|pads?|leads?|elements?|res(?:istors?)?|caps?|ch(?:annels?)?|wires?)(?![a-z0-9])"
+    r"|(?<![\d.A-Za-z])4[ _-]?T(?![a-z0-9])"            # a 4-terminal sense resistor ('5T' is an air coil's turns)
+    r"|(?<![\d.A-Za-z])[2-9][ _-]?(?:lines?|LN|circuits?|windings?|in[ _-]?1)(?![a-z0-9])"
+    # 8P4R / 4R8P (pins and resistors of an array), 'x4', '4x10k', '4x100nF', '4x0603': a count of elements, where a
+    # body size ('2x1.25mm') is two lengths
+    r"|(?<![\dA-Za-z.])\d{1,2}[PR]\d{1,2}[RP](?![A-Za-z0-9])"
+    r"|(?<![A-Za-z0-9.])x[2-9](?![\d.A-Za-z])"
+    r"|(?<![\d.A-Za-z])[2-9][ ]?x[ ]?(?=\d+(?:\.\d+)?[ ]?(?:[kMR]|ohm|\u03a9|[pnu\u00b5\u03bc]F|[nu\u00b5\u03bcm]H)(?![a-z])|0[1-9]\d\d(?!\d))"
+    # two colours on one LED: 'red/green', 'R+G', 'R/G/B'
+    r"|(?<![A-Za-z0-9])(?:red|green|blue|yellow|amber|orange|white|[RGBYW])[ ]?[/+&][ ]?"
+    r"(?:red|green|blue|yellow|amber|orange|white|[RGBYW])(?![A-Za-z0-9])", re.I)
+# words in a description that name another land than the plain chip of the size code: an LED mounted through a hole
+# in the board or shining sideways sits on its own land
+DESC_LAND = re.compile(r"(?<![A-Za-z])(reverse[ _-]?(?:mount\w*|gull\w*)|side[ _-]?(?:view\w*|emit\w*|look\w*|fir\w*)|"
+                       r"right[ _-]?angled?)(?![a-z])", re.I)
 # words that say a capacitor has a + side (tantalum, polymer, aluminium, niobium, electrolytic), in any maker's or
 # distributor's wording ('CAP TANT', 'CAP ALUM POLY'); 'non-polarized' / 'unpolarized' / 'bipolar' say the opposite
-POLAR_WORD = re.compile(r"(?<![A-Za-z])(tant(?:alum)?|electrolytic|polymer|poly|alum(?:inum|inium)?|niobium|"
-                        r"polari[sz]ed)(?![a-z])", re.I)
+POLAR_WORD = re.compile(r"(?<![A-Za-z])(tant(?:al\w*|cap)?|Ta|electrolytic\w*|elektrolyt\w*|elect?|elko|lytic|e[ _-]?cap|"
+                        r"polymer|poly|alum(?:inum|inium)?|alu|niobium|poscap|os[ _-]?con|sp[ _-]?cap|hybrid|mno2|"
+                        r"super[ _-]?cap\w*|ultra[ _-]?cap\w*|EDLC|double[ _-]?layer|polari[sz]ed)(?![a-z])"
+                        r"|\u94bd|\u7535\u89e3|\u805a\u5408\u7269", re.I)   # tantalum, electrolytic, polymer in Chinese
 NOT_POLAR = re.compile(r"(?<![A-Za-z])(non|un|bi)[ _-]?polar", re.I)
 
 
@@ -1281,7 +1299,11 @@ def resolve(texts, kind=None, mpn="", description=""):
                 "chip land", "kicad_ref": None, "symbol": None, "sym_how": f"the description says {multi!r}: not a "
                 "two-pin part"}
     fk = {"Q": None, "U": None}.get(kind, kind)
-    name, how = footprint_for(list(texts), fk, mpn, weak=[description])
+    other = DESC_LAND.search(str(description or "")) if kind in CHIP_PREFIX else None
+    if other:                                             # 'LED 0603 reverse mount': the size is the body, not the land
+        name, how = None, f"the description says {other.group(0)!r}: another land than the plain chip of that size"
+    else:
+        name, how = footprint_for(list(texts), fk, mpn, weak=[description])
     if not name:                                          # a known MPN family settles a bare family name (SOT-223, TO-220)
         fam = next((pk for rx, pk, _ in FAMILY if re.match(rx, _norm(mpn))), ())
         said = " ".join(map(str, texts)) + " " + str(description)
