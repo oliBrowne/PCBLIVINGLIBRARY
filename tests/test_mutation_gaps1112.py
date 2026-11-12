@@ -3,10 +3,10 @@ a time in the release check, the eval scorer, the change gate, the approvals rul
 check, the footprint checker, the cross-check and the standard-part match; the changes below passed every test. Each
 test here sits on the edge of one such rule, so that change now fails a test.
 Run:  python3 -m tests.run_all test_mutation_gaps1112"""
-import tempfile
+import json, tempfile
+from pathlib import Path
 
-
-from ecadlib import release_check as RC
+from ecadlib import release_check as RC, rules as RU
 from tests.fixtures_lite import lite
 from tests import test_release_check as TRC, test_review1110_fpgen as TFP
 
@@ -78,9 +78,6 @@ def test_check_item_pin1_name_from_the_rules_counts_as_pin_1():
     pins = ["P1"] + list(range(2, 9))
     with tempfile.TemporaryDirectory() as d:
         assert "footprint: pin1: no pad numbered 1" in TRC.fails(TRC.make(d, kmod=p1, pins=pins), d)[0]
-        mine = {**RC.RU.DEFAULTS, "footprint": {**RC.RU.DEFAULTS["footprint"], "pin1": ["1", "A1", "P1"]}} \
-            if hasattr(RC, "RU") else None
-        from ecadlib import rules as RU
         mine = {**RU.DEFAULTS, "footprint": {**RU.DEFAULTS["footprint"], "pin1": ["1", "A1", "P1"]}}
         f = TRC.fails(TRC.make(d, kmod=p1, pins=pins), d, mine)[0]
         assert not any("no pad numbered 1" in x for x in f), f
@@ -90,7 +87,7 @@ def test_check_item_unreadable_kicad_footprint_is_one_hold_not_a_numbering_crash
     # the numbering hold runs only on a footprint that read back (text is not None and syms and a numbering warning)
     with tempfile.TemporaryDirectory() as d:
         it = TRC.make(d, source=GEN)
-        (TRC.Path(d) / it["footprint"]["kicad_mod"]).write_text("(footprint oops")
+        (Path(d) / it["footprint"]["kicad_mod"]).write_text("(footprint oops")
         f = TRC.fails(it, d)[0]
         assert len([x for x in f if x.startswith("files: KiCad footprint file does not read back")]) == 1, f
         assert not any("numbering" in x for x in f), f
@@ -157,7 +154,7 @@ def test_held_block_classes_are_the_proposals_or_counted_from_its_changes():
     assert CG.held_block({"changes": ch, "classes": {"identity": 5}})["classes"] == {"identity": 5}
 
 
-def _publish_guard_writes(monkeypatch, edit, **kw):
+def _publish_guard_writes(monkeypatch, edit, folder=False, **kw):
     """publish_guard on a fresh released demo library -> how many times it wrote the plan file."""
     from ecadlib import change_gate as CG
     from tests import test_change_control as TCC
@@ -167,7 +164,7 @@ def _publish_guard_writes(monkeypatch, edit, **kw):
         _hand_edit_value(plan)                 # a Value typed into plan.json by hand: held, the released one put back
     wrote = []
     monkeypatch.setattr(CG, "write_plan", lambda *a, **k: wrote.append(a))
-    CG.publish_guard(kw.pop("folder", False) and lib or plan, TCC.items_of(plan), "kicad", log=lambda *a, **k: None, **kw)
+    CG.publish_guard(lib if folder else plan, TCC.items_of(plan), "kicad", log=lambda *a, **k: None, **kw)
     return len(wrote)
 
 
@@ -218,8 +215,6 @@ def test_post_check_without_rows_and_with_fewer_rows_than_items():
 
 # ---------------------------------------------------------------- footprint_gen.sanity
 def _spec(name, **kw):
-    import json
-    from pathlib import Path
     s = json.loads((Path(RC.__file__).parent / "package_specs" / f"{name}.json").read_text(encoding="utf-8"))
     s.update(kw)
     return {k: v for k, v in s.items() if v is not None}
@@ -263,3 +258,97 @@ def test_sanity_exposed_pad_as_big_as_the_body_is_refused():
     assert big(length=3.8, width=4.8) == []
     assert len(big(length=3.9, width=3.0)) == 1
     assert len(big(length=2.4, width=4.9)) == 1
+
+
+# ---------------------------------------------------------------- footprint_check.check
+def _pad(num, x, y, w, h, layers='"F.Cu" "F.Mask" "F.Paste"', kind="smd rect", more=""):
+    return f'  (pad "{num}" {kind} (at {x} {y}) (size {w} {h}){more} (layers {layers}))\n'
+
+
+def _check(*pads, silk_y=None):
+    """footprint_check.check on a bare footprint of these pads (and one silk line at silk_y) -> [(level, rule, msg)]."""
+    silk = f'  (fp_line (start -0.5 {silk_y}) (end 0.5 {silk_y}) (layer "F.SilkS") (width 0.12))\n' if silk_y else ""
+    return RC.FC.check('(footprint "X" (layer "F.Cu")\n' + "".join(pads) + silk + ")\n")
+
+
+def _said(issues, rule, part):
+    return [f"{lvl} {m}" for lvl, r, m in issues if r == rule and part in m]
+
+
+def test_check_exposed_pad_paste_window_centred_on_the_pad_edge_is_not_inside():
+    # a paste window counts when its centre is inside the exposed pad (<), not on its edge: 40% stays 40%
+    ep = [_pad("3", 0, 0, 2, 2, '"F.Cu" "F.Mask"'), _pad("1", -2, 0, 0.4, 0.4), _pad("2", 2, 0, 0.4, 0.4)]
+    win = lambda x, y, w, h: _pad("", x, y, w, h, '"F.Paste"')
+    assert len(_said(_check(*ep, win(0, 0, 1.6, 1.0)), "paste", "covers 40% of its copper")) == 1
+    assert len(_said(_check(*ep, win(0, 0, 1.6, 1.0), win(1.0, 0, 0.8, 1.0)), "paste", "covers 40% of its copper")) == 1
+    assert len(_said(_check(*ep, win(0, 0, 1.6, 1.0), win(0, 1.0, 0.8, 1.0)), "paste", "covers 40% of its copper")) == 1
+    assert _said(_check(*ep, win(0, 0, 1.6, 1.0), win(0.9, 0.9, 0.8, 1.0)), "paste", "covers") == []     # inside: 60%
+
+
+def test_check_mask_opening_within_eps_of_the_exposed_pad_is_its_opening():
+    # a solder-mask-defined land: the mask-only opening may reach EPS (0.005 mm) past the copper on each side (<=),
+    # and the paste is then measured against the opening; a wider one is not the pad's opening (against the copper)
+    ep = [_pad("3", 0, 0, 2, 2, '"F.Cu"'), _pad("1", -2, 0, 0.4, 0.4), _pad("2", 2, 0, 0.4, 0.4)]
+    mask = lambda w, h: _pad("", 0, 0, w, h, '"F.Mask"')
+    paste = _pad("", 0, 0, 1.2, 1.0, '"F.Paste"')                     # 1.2 mm2: 60% of the opening, 30% of the copper
+    assert _said(_check(*ep, mask(2.01, 1.0), paste), "paste", "covers") == []
+    assert _said(_check(*ep, mask(1.0, 2.01), paste), "paste", "covers") == []
+    assert len(_said(_check(*ep, mask(2.02, 1.0), paste), "paste", "covers 30% of its copper")) == 1
+    assert len(_said(_check(*ep, mask(1.0, 2.02), paste), "paste", "covers 30% of its copper")) == 1
+
+
+def test_check_pad_exactly_at_the_web_limit_from_a_hole_is_clear():
+    # copper nearer an unplated hole than MIN_WEB - EPS (0.195 mm) is reported (<): at 0.195 itself it is clear.
+    # (a 0.6 mm hole at 0 and a 0.25 mm pad at 0.62: the gap is exactly 0.195 in floating point too)
+    FC = RC.FC
+    hole = _pad("", 0, 0, 0.6, 0.6, '"*.Cu" "*.Mask"', kind="np_thru_hole circle", more=" (drill 0.6)")
+    gap = FC._hole_gap({"x": 0.0, "y": 0.0, "w": 0.6, "h": 0.6}, {"x": 0.62, "y": 0.0, "w": 0.25, "h": 1.0})
+    assert gap == FC.MIN_WEB - FC.EPS, "the fixture must sit exactly on the limit"
+    assert _said(_check(hole, _pad("1", 0.62, 0, 0.25, 1.0)), "copper", "from the hole") == []
+    near = _said(_check(hole, _pad("1", 0.61, 0, 0.25, 1.0)), "copper", "from the hole")
+    assert len(near) == 1 and near[0].startswith("warning pad 1 is 0.185 mm from the hole"), near
+
+
+def test_check_silk_at_a_tenth_is_let_through_only_on_a_tiny_part():
+    # silk 0.15 mm from a pad: allowed where the copper is under 1.7 mm across (pad edge to pad edge, w / 2 each
+    # side), a warning on anything wider
+    two = lambda c: (_pad("1", -c, 0, 0.6, 0.6), _pad("2", c, 0, 0.6, 0.6))
+    assert _said(_check(*two(0.5), silk_y=-0.51), "silk", "from pad") == []                    # 1.6 mm across
+    wide = _said(_check(*two(0.575), silk_y=-0.51), "silk", "from pad")                        # 1.75 mm across
+    assert len(wide) == 1 and wide[0].startswith("warning silkscreen is 0.150 mm from pad"), wide
+    assert _said(_check(*two(0.5), silk_y=-0.44), "silk", "from pad")[0].startswith("error")   # 0.08 mm: never
+
+
+# ---------------------------------------------------------------- crosscheck.compare
+def test_compare_turned_note_only_for_a_second_read_set_aside_by_the_land():
+    # the "built as read" tie-break is said only when a second READ is turned AND the read's own land fixes its axes
+    # AND the pads stand on the body: not against the table, and not for a gull-wing whose body alone turns
+    from ecadlib import crosscheck as CC
+    from tests import test_crosscheck_land_axes_1023 as TL
+    first = CC.critical(TL.dfn(3.0, 5.0, (1.65, 4.4), 16, 0.5, TL.LTC4060_LAND))
+    assert first["land_axes"]
+    turned = TL.dfn(5.0, 3.0, (4.4, 1.65), 16, 0.5)
+    turned.update(pins_left_right=0, pins_top_bottom=8)                 # the table's rows turn with its body
+    c = CC.compare(first, CC.critical(turned), "table")
+    assert c["status"] == "agreed" and c["turned"] == ["body", "exposed pad"] and "tie_breaks" not in c, c
+    so = {"package_type": "gullwing", "pin_count": 8, "pitch": 1.27, "body_length": {"nom": 4.9},
+          "body_width": {"nom": 3.9}, "lead_span": {"nom": 6.0}}
+    c = CC.compare(CC.critical(so), CC.critical(dict(so, body_length={"nom": 3.9}, body_width={"nom": 4.9})))
+    assert c["status"] == "agreed" and c["turned"] == ["body"] and "tie_breaks" not in c, c
+
+
+# ---------------------------------------------------------------- stdparts.identify
+def _so_read(name, pins, length):
+    return {"package_type": "gullwing", "name": name, "pin_count": pins, "pitch": 1.27, "body_length": {"nom": length},
+            "body_width": {"nom": 3.9}, "lead_span": {"nom": 6.0}}
+
+
+def test_identify_a_150_mil_sop_of_8_14_or_16_pins_may_be_the_jedec_soic():
+    # a drawing titled SOP with a 3.9 mm body and 8, 14 or 16 pins has JEDEC SOIC as a rival; any other family
+    # name (TSSOP) keeps to its own family, whatever the numbers fit
+    from ecadlib import stdparts as SP
+    for pins, length, want in ((8, 4.9, "SOIC-8_3.9x4.9mm_P1.27mm"), (14, 8.65, "SOIC-14_3.9x8.7mm_P1.27mm"),
+                               (16, 9.9, "SOIC-16_3.9x9.9mm_P1.27mm")):
+        assert SP.identify(_so_read(f"SOP-{pins}", pins, length))[0] == want, pins
+    name, why = SP.identify(_so_read("TSSOP-14", 14, 8.65))
+    assert name is None and "no standard package fits" in why, (name, why)
