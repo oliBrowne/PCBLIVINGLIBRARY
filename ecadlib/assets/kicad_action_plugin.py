@@ -19,13 +19,23 @@ The window does not block KiCad: keep working while ecadlib looks parts up. Clos
 finishes and lists the library in the project's tables; the next press of the ecadlib button offers to place a footprint
 it built. When the setup page's copy and the Plugin and Content Manager's are both installed, only the first registers.
 
+KiCad 9 and newer also start this window from their plugin system (kicad_api_plugin.py; the ecadlib button in the
+schematic editor, and in KiCad 11's PCB editor): then it runs as a program of its own beside KiCad, without pcbnew,
+for the project KiCad passes as KIPRJMOD, and a part it builds is placed by the person (no board to place it on).
+
 Per project, next to the board: ecadlib-work/ (ecadlib's workspace and the jobs) and ecadlib/ (the KiCad library,
 added to the project's sym-lib-table and fp-lib-table as "ecadlib", ${KIPRJMOD}/ecadlib/...). A placed footprint gets
 the next free reference of its part (R3, U2...) and the part's value. Held parts (failed checks) are not placed: the
 window says why and the review queue fixes them."""
 import datetime, json, os, re, shlex, shutil, subprocess, sys
 
-import pcbnew
+# Started by KiCad's plugin system (KiCad 9+, kicad_api_plugin.py sets this): a program of its own beside KiCad, not
+# inside the PCB editor's Python, so there is no board to place on and nothing to register.
+API = bool(os.environ.get("ECADLIB_KICAD_API_PLUGIN"))
+if API:
+    pcbnew = None
+else:
+    import pcbnew
 
 LIB = "ecadlib"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -108,8 +118,17 @@ def _imports_ecadlib(python, run=subprocess.run):
         shutil.rmtree(d, ignore_errors=True)
 
 
-def kicad_major():
-    """The running KiCad's major version (7, 8, 9, ...) from pcbnew.Version(), or None."""
+def kicad_major(environ=None):
+    """The running KiCad's major version (7, 8, 9, ...) from pcbnew.Version(), or None. Started by KiCad's plugin
+    system: the N.0 of the plugins folder it was installed into, else from the KICAD<N>_SYMBOL_DIR / ... variables
+    KiCad passes on (the highest N)."""
+    if pcbnew is None:
+        series = re.search(r"[\\/](\d+)\.\d+[\\/]plugins[\\/]", HERE)   # <documents>/N.0/plugins/ecadlib
+        if series and environ is None:
+            return int(series.group(1))
+        env = os.environ if environ is None else environ
+        found = [int(m.group(1)) for k in env for m in [re.fullmatch(r"KICAD(\d+)_[A-Z0-9_]+_DIR", k)] if m]
+        return max(found) if found else None
     try:
         m = re.search(r"\d+", str(pcbnew.Version()))
     except Exception:                                # an old or a stand-in pcbnew without Version()
@@ -359,6 +378,14 @@ def place_result(job, res, project_dir):
     return f"Placed {fp.GetReference()} ({LIB}:{res['footprint']}) in the middle of the board.", ""
 
 
+def place_yourself(res):
+    """The line a window outside the PCB editor shows for a part it built: where to place it from."""
+    sym = res.get("part") or res.get("mpn") or ""
+    what = f"{LIB}:{sym}" if sym else f"the {LIB} library"
+    return (f"Built into {what} (footprint {LIB}:{res['footprint']}). Place it as any library part: Place > Add Symbol "
+            "in the schematic editor, or Place > Add Footprint in the PCB editor.")
+
+
 def job_failure(job):
     """What went wrong with a job that has ended, as the window shows it; "" when it did what it was asked."""
     res = read_ini(os.path.join(job, "result.ini"), "result")
@@ -375,8 +402,33 @@ def job_failure(job):
     return ""
 
 
+def api_project(environ=None):
+    """(None, project folder, project file) of the project KiCad has open, for a window started by KiCad's plugin
+    system: KiCad passes the project's folder as KIPRJMOD. The project file is its .kicad_pro (the only one there;
+    with several, the one named like the folder). (None, None, None) without a saved project (a schematic opened on
+    its own, outside a project, has no .kicad_pro)."""
+    env = os.environ if environ is None else environ
+    d = env.get("KIPRJMOD") or ""
+    if not d or not os.path.isdir(d):
+        return None, None, None
+    d = os.path.abspath(d)
+    pros = sorted(f for f in os.listdir(d) if f.lower().endswith(".kicad_pro"))
+    named = [f for f in pros if os.path.splitext(f)[0] == os.path.basename(d)]
+    pro = pros[0] if len(pros) == 1 else named[0] if named else ""
+    if len(pros) > 1 and not named:
+        raise ValueError(f"{d} holds several KiCad projects ({', '.join(pros)}), and KiCad does not say which is "
+                         "open.\nNext: keep one project per folder, or use the ecadlib button in that project's PCB "
+                         "editor.")
+    if not pro:
+        return None, None, None
+    return None, d, os.path.join(d, pro)
+
+
 def board_project():
-    """(board, project folder, board file) of the open board, or (board, None, None) when it is not saved yet."""
+    """(board, project folder, board file) of the open board, or (board, None, None) when it is not saved yet.
+    Started by KiCad's plugin system: the project KiCad has open (api_project)."""
+    if pcbnew is None:
+        return api_project()
     board = pcbnew.GetBoard()
     path = board.GetFileName() if board else ""
     if not path:
@@ -464,8 +516,12 @@ def _window_class():
 
     class EcadlibWindow(wx.Frame):
         def __init__(self, parent):
-            super().__init__(parent, title="ecadlib", style=wx.CAPTION | wx.CLOSE_BOX | wx.FRAME_FLOAT_ON_PARENT
-                             | wx.FRAME_TOOL_WINDOW | wx.RESIZE_BORDER)
+            # inside the PCB editor: a tool window floating over it; started by KiCad's plugin system there is no
+            # KiCad window to float over, so an ordinary window with a taskbar button (not always on top: the report
+            # it opens in the browser must not end up behind it)
+            style = (wx.CAPTION | wx.CLOSE_BOX | wx.FRAME_FLOAT_ON_PARENT | wx.FRAME_TOOL_WINDOW | wx.RESIZE_BORDER
+                     if parent is not None else wx.CAPTION | wx.CLOSE_BOX | wx.SYSTEM_MENU | wx.RESIZE_BORDER)
+            super().__init__(parent, title="ecadlib", style=style)
             self.SetBackgroundColour(colour(BG))
             self.job = self.proc = self.action = None
             self.project = self.board_file = None
@@ -580,7 +636,9 @@ def _window_class():
         def home(self):
             s = self.page("ecadlib")
             s.Add(self.text(self.body, "What would you like to do?", DIM), 0, wx.TOP, 12)
-            for label, hint, go in (("Add part from MPN…", "look a part up and place its footprint", self.ask),
+            add_hint = ("look a part up and place its footprint" if pcbnew is not None else
+                        "look a part up and add it to the project's library")
+            for label, hint, go in (("Add part from MPN…", add_hint, self.ask),
                                     ("Check project BOM", "which schematic parts the library already has", self.check),
                                     ("Open review queue", "pick symbols and footprints for held parts", self.queue),
                                     ("Use in every project", "put this project's library into KiCad's own tables",
@@ -655,7 +713,7 @@ def _window_class():
         def start(self, action, **kw):
             """Start one job -> (job folder, process); its output goes to JOB/log.txt."""
             job, c = self.command(action, **kw)
-            if action in ("add-part", "ai-read"):
+            if action in ("add-part", "ai-read") and pcbnew is not None:
                 mark_pending(job)                        # placed by this window, or offered by the next one
             with open(os.path.join(job, "log.txt"), "w", encoding="utf-8") as log:
                 # cwd: the job folder, never the project: `python -m ecadlib` would import the project's ecadlib/
@@ -740,9 +798,11 @@ def _window_class():
             if self.action == "fill":
                 extra = tables_line(res, self.project)
             if self.action in ("add-part", "ai-read") and res.get("footprint") and st in ("ready", "duplicate"):
-                extra = tables_line(res, self.project, built=True)
+                extra = tables_line(res, self.project, built=pcbnew is not None)   # no board: no "placed" wording
                 if res.get("tables") == "problem" or extra.startswith("Built, but"):
                     mark_placed(self.job, "not placed: " + extra)
+                elif pcbnew is None:                     # no board here: the person places it, as any library part
+                    placed = place_yourself(res)
                 else:
                     placed, err = place_result(self.job, res, self.project)
                     if err:
@@ -805,7 +865,8 @@ def _window_class():
         def on_close(self, e):
             if self.proc is not None and self.proc.poll() is None:
                 after = (" and adds the part to the project's library; press the ecadlib button again when it is done "
-                         "to place its footprint" if self.action in ("add-part", "ai-read") else "")
+                         "to place its footprint" if self.action in ("add-part", "ai-read") and pcbnew is not None else
+                         " and adds the part to the project's library" if self.action in ("add-part", "ai-read") else "")
                 if wx.MessageBox(f"ecadlib is still working. Close the window anyway? (ecadlib keeps working in the "
                                  f"background{after}.)", "ecadlib", wx.YES_NO | wx.NO_DEFAULT, self) != wx.YES:
                     e.Veto()
@@ -820,9 +881,14 @@ def _window_class():
 def open_window(mode="home"):
     """Show the ecadlib window (one per KiCad) on a page: home, add, bom or queue."""
     import wx
-    board, project, board_file = board_project()
+    try:
+        board, project, board_file = board_project()
+    except ValueError as e:
+        wx.MessageBox(str(e), "ecadlib")
+        return None
     if not project:
-        wx.MessageBox("Save the board first: ecadlib puts the library next to the project.\n"
+        wx.MessageBox(("Save the board first" if pcbnew is not None else "Open a saved KiCad project first") +
+                      ": ecadlib puts the library next to the project.\n"
                       "Next: File > Save, then press the ecadlib button again.", "ecadlib")
         return None
     if _WINDOW:
@@ -831,9 +897,9 @@ def open_window(mode="home"):
         if w.proc is not None:                       # still working: show it, start nothing new
             return w
     else:
-        parent = wx.FindWindowByName("PcbFrame") or next((x for x in wx.GetTopLevelWindows()
-                                                          if "pcb" in x.GetName().lower()), None)
-        placed = offer_unplaced(project, parent)       # in Run(): KiCad records the placement for undo
+        parent = None if pcbnew is None else (wx.FindWindowByName("PcbFrame") or next(
+            (x for x in wx.GetTopLevelWindows() if "pcb" in x.GetName().lower()), None))
+        placed = offer_unplaced(project, parent) if pcbnew is not None else []   # in Run(): undo records it
         w = _window_class()(parent)
         _WINDOW.append(w)
         if placed:
@@ -844,8 +910,9 @@ def open_window(mode="home"):
             return w
     w.project, w.board_file = project, board_file
     {"home": w.home, "add": w.ask, "bom": w.check, "queue": w.queue}[mode]()
-    w.CentreOnParent()
+    w.CentreOnParent() if w.GetParent() is not None else w.Centre()
     w.Show()
+    w.Raise()
     return w
 
 
@@ -866,7 +933,10 @@ def offer_unplaced(project, parent=None):
     return lines
 
 
-class EcadlibButton(pcbnew.ActionPlugin):
+_ActionPlugin = pcbnew.ActionPlugin if pcbnew is not None else object
+
+
+class EcadlibButton(_ActionPlugin):
     def defaults(self):
         self.name = "ecadlib"
         self.category = "Library"
@@ -878,7 +948,7 @@ class EcadlibButton(pcbnew.ActionPlugin):
         open_window("home")
 
 
-class EcadlibAddPart(pcbnew.ActionPlugin):
+class EcadlibAddPart(_ActionPlugin):
     def defaults(self):
         self.name = "ecadlib: add part"
         self.category = "Library"
@@ -889,7 +959,7 @@ class EcadlibAddPart(pcbnew.ActionPlugin):
         open_window("add")
 
 
-class EcadlibCheckBom(pcbnew.ActionPlugin):
+class EcadlibCheckBom(_ActionPlugin):
     def defaults(self):
         self.name = "ecadlib: check project BOM"
         self.category = "Library"
@@ -900,7 +970,7 @@ class EcadlibCheckBom(pcbnew.ActionPlugin):
         open_window("bom")
 
 
-class EcadlibQueue(pcbnew.ActionPlugin):
+class EcadlibQueue(_ActionPlugin):
     def defaults(self):
         self.name = "ecadlib: open review queue"
         self.category = "Library"
@@ -927,6 +997,6 @@ def first_copy():
     return True
 
 
-if first_copy():
+if pcbnew is not None and first_copy():
     for _p in PLUGINS:
         _p().register()

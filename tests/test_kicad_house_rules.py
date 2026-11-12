@@ -59,3 +59,26 @@ def test_released_differs_sees_designator_and_pin_text_visibility():
         ks[:] = [c for c in ks if not (isinstance(c, list) and c[0] in ("pin_numbers", "pin_names"))]
         got = X.released_differs(it, plan_dir, ks)
         assert got and any("pin 1" in c["text"] and ("name" in c["text"] or "number" in c["text"]) for c in got), got
+
+
+def test_a_part_known_as_passive_only_by_its_bom_letter_gets_passive_pins_in_kicad_too():
+    """The librarian calls a part passive from its BOM line's designator (R5) when its folder does not say so; the
+    .SchLib then has passive pins. The KiCad export has no BOM line: it reads the librarian's recorded decision."""
+    from ecadlib import librarian as L
+    s = ('(symbol "PART" (pin_names (offset 1)) (property "Reference" "U" (at 0 0 0)) (property "Value" "PART" (at 0 0 0))'
+         ' (symbol "PART_1_1" (pin input line (at -5.08 0 0) (length 2.54) (name "A" (effects (font (size 1.27 1.27))))'
+         ' (number "1" (effects (font (size 1.27 1.27)))))'
+         ' (pin output line (at 5.08 0 180) (length 2.54) (name "B" (effects (font (size 1.27 1.27))))'
+         ' (number "2" (effects (font (size 1.27 1.27)))))))')
+    item = {"name": "PART", "folder": "Components/Misc"}
+    assert L.is_passive_part(item, {"designator": "R5"}) and not L.is_passive_part(item)
+    sym = X.house_rules(sexpr.parse(s), dict(item, librarian={"passive": True}))
+    assert [p[1] for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin")] == ["passive", "passive"]
+    sym = X.house_rules(sexpr.parse(s), item)                       # no recorded decision: the source's pin types
+    assert [p[1] for u in sexpr.find(sym, "symbol") for p in sexpr.find(u, "pin")] == ["input", "output"]
+
+
+def test_the_plan_records_the_librarians_passive_decision():
+    with tempfile.TemporaryDirectory() as d:
+        items, _ = TL.run(d, TL.FakeHTTP({"C2975360": _xtal_ee()}), bom=BOM)
+        assert items["XTAL16M"]["librarian"]["passive"] is True

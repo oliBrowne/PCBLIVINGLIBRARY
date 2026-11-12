@@ -7,6 +7,7 @@ On this page:
 * [`kicad_export.py`: the same library as KiCad files](#kicad_exportpy-the-same-library-as-kicad-files)
 * [`kicad_install.py`: the library in KiCad itself, for every project](#kicad_installpy-the-library-in-kicad-itself-for-every-project)
 * [Three ways to get the library into KiCad](#three-ways-to-get-the-library-into-kicad)
+* [The ecadlib button in the schematic editor (KiCad 9 and newer)](#the-ecadlib-button-in-the-schematic-editor-kicad-9-and-newer)
 * [`parity.py`: KiCad and Altium always match](#paritypy-kicad-and-altium-always-match)
 * [Real KiCad checks (`tests/test_kicad_real.py`)](#real-kicad-checks-teststest_kicad_realpy)
 
@@ -22,7 +23,7 @@ Writes what the librarian built for Altium as a KiCad library: `mylib.kicad_sym`
 * **Symbols:** a part whose symbol came from KiCad (`kicad:` or a `--lib` folder) gets that KiCad symbol again, with its `extends` chain flattened and renamed; an EasyEDA symbol is converted again from the EasyEDA data; anything else (datasheet reader, or a source that can't be reached) is drawn from its `.SchLib`, read back with `altium_lib.read_schlib` (pins with type, shape and visibility, body graphics, parts as units, display modes as De Morgan styles).
 * **Footprints:** the plan's `.kicad_mod` when there is one, else the `.PcbLib` converted back. STEP files: a KiCad footprint's model comes from `kicad-packages3D` (through the HTTP cache) or next to a `--lib` footprint; a footprint with no KiCad model (every ecadlib-generated or standard one), or one whose KiCad model cannot be had (offline, not cached), gets its `.PcbLib`'s 3D model: the embedded STEP byte for byte, or the extruded body as a STEP (`<fp>_ecadlib.step` when the KiCad model's own name is taken), so KiCad and Altium both have the part in 3D. `kicad_export.json` says where each model came from.
 * **Format:** KiCad 8 (`.kicad_sym` version 20231120, footprints at most 20240108), so KiCad 8, 9 and 10 can open it. KiCad 9/10 syntax from the upstream library is written the KiCad 8 way and flags KiCad 8 doesn't know are dropped.
-* **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **In KiCad itself** (7.0.11, see [real KiCad checks](#real-kicad-checks-teststest_kicad_realpy)): the `fp-lib-table` resolves in a KiCad project and its footprints match the library; KiCad 7 refuses the KiCad 8 symbol library as such, and loads it with the two KiCad 8 tokens (`exclude_from_sim`, `generator_version`) removed, every pin, graphic and field unchanged. KiCad 8, 9 and 10 were not run here. A KiCad 7 symbol's `ki_description` becomes the `Description` field.
+* **Checks:** every file parses with `ecadlib.sexpr`, each footprint passes release_check's footprint rule at the level the release check recorded, and symbol pins are checked against footprint pads. **In KiCad itself** (7.0.11, see [real KiCad checks](#real-kicad-checks-teststest_kicad_realpy)): the `fp-lib-table` resolves in a KiCad project and its footprints match the library; KiCad 7 refuses the KiCad 8 symbol library as such, and loads it with the two KiCad 8 tokens (`exclude_from_sim`, `generator_version`) removed, every pin, graphic and field unchanged. The CI job `kicad` runs the same checks on KiCad 8, 9 and 10 (from the KiCad PPA). A KiCad 7 symbol's `ki_description` becomes the `Description` field.
 * **License:** KiCad library content is CC-BY-SA 4.0. An export that includes some gets a `NOTICE.txt`, and the export stays out of git (`out/kicad/` is in `.gitignore`).
 
 ## `kicad_install.py`: the library in KiCad itself, for every project
@@ -76,6 +77,49 @@ tables, so Place > Add Symbol shows them). Pick one and press Generate; the dial
 sets for its own Python: on Linux KiCad puts the system's `dist-packages` there, whose older numpy stopped ecadlib from
 starting. The PCB editor window starts ecadlib the same way. By hand: `ecadlib kicad-menu fill PROJECT.xml|.kicad_sch
 [--kicad 7] [--offline]`. Checked in real KiCad 9.0 (both entries listed with their help text, and both run).
+
+## The ecadlib button in the schematic editor (KiCad 9 and newer)
+
+```
+ecadlib kicad-menu add-to-schematic [--kicad 10.0] [--remove]     # or the setup page's "Add to KiCad"
+```
+
+KiCad 9 added a plugin system (the KiCad API) whose plugins get a button in the schematic editor's top toolbar, which
+the PCB editor's older Python plugins never could. *Add to KiCad* (and `add-to-schematic`) writes ecadlib's into each
+KiCad 9+ documents folder, `plugins/ecadlib/` (`Documents\KiCad\N.0` on Windows and macOS, `~/.local/share/kicad/N.0`
+on Linux, the Flatpak's `~/.var/app/org.kicad.KiCad/data/kicad/N.0`, or `$KICAD_DOCUMENTS_HOME`), and turns on
+Preferences > Plugins > *Enable KiCad API* in `kicad_common.json`, because KiCad shows plugin buttons only with it on.
+Close KiCad (all its windows) first and start it again after: KiCad reads plugins when it starts, and writes
+`kicad_common.json` when it closes.
+
+* **What it does.** The button at the right end of the schematic editor's toolbar opens the same ecadlib window as the
+  PCB editor's (Add part from MPN, Check project BOM, Fill the library, Open review queue, Use in every project) for
+  the project KiCad has open (KiCad passes its folder as `KIPRJMOD`). Outside the PCB editor there is no board to
+  place on, so *Add part* builds the part into the project's `ecadlib` library and says where to place it from
+  (Place > Add Symbol, or Add Footprint in the PCB editor). A folder with several `.kicad_pro` files is used only when
+  one is named like the folder; otherwise the window says it cannot tell which project is open.
+* **The files.** `plugin.json` (KiCad's `api.v1` schema), `ecadlib_kicad.py` (the starter, `ecadlib/assets/kicad_api_plugin.py`),
+  `ecadlib_window.py` (a copy of the PCB editor plugin, `ecadlib/assets/kicad_action_plugin.py`, which runs without
+  `pcbnew` when the starter sets `ECADLIB_KICAD_API_PLUGIN`), `ecadlib_cmd.json` (the ecadlib command, as for the PCB
+  editor's plugin), two icons and an empty `requirements.txt`. On Windows and macOS KiCad runs the starter with its own
+  Python in a virtual environment that sees KiCad's wxPython. On Linux KiCad instead runs `ecadlib_kicad.sh`, which starts
+  the Python KiCad is set to use (Preferences > Plugins, else `/usr/bin/python3`): Debian and Ubuntu leave out the
+  `python3-venv` / pip a virtual environment needs, and in a real KiCad 10.0.8 without them the button never appeared.
+* **PCB editor.** Up to KiCad 10 the PCB editor keeps its older plugin's button (which also places footprints), so
+  this button is only in the schematic editor there. KiCad 11 drops the older Python plugins (kicad-python's own notes
+  say so); for KiCad 11 and newer this button goes into the PCB editor too, as the way into ecadlib there.
+* **Limits.** The launcher on Linux uses the interpreter set when ecadlib was added: after changing Preferences >
+  Plugins > Python interpreter, run `add-to-schematic` again. Each press of the button starts its own window (a
+  process of its own), so let one job finish before starting another on the same project. The Flatpak KiCad is
+  skipped: it starts plugins inside its sandbox, where the ecadlib command is not.
+* **`--remove`** deletes ecadlib's files from `plugins/ecadlib/` (anything else there stays) and leaves *Enable KiCad
+  API* on, as other plugins may need it.
+* **Checked 2026-11-12** in real KiCad 9.0.9 and 10.0.8 (the `kicad/kicad` Docker images, Linux): after
+  `add-to-schematic` the button is in the schematic editor's toolbar, opens the window for the open project, and *Check
+  project BOM* and *Add part* run (the parts were held there: the cloud machine cannot reach the part sources).
+  `plugin.json` passes the schema KiCad ships (`tests/test_kicad_api_plugin.py`, run by the CI job `kicad` on KiCad 9
+  and 10). **Not checked:** Windows and macOS KiCad (the virtual environment route), the Flatpak, KiCad 11 (not released), and *Add
+  part* building a part all the way in this window (the line it shows is tested on its own).
 
 ## `parity.py`: KiCad and Altium always match
 
@@ -154,5 +198,7 @@ Run 2026-10-15 with KiCad 7.0.11 (`kicad-cli`, `pcbnew` from `/usr/bin/python3`)
   rewriting its KiCad 8 header and Reference/Value properties) with the same copper pads, holes and pad outlines.
 * **STEP:** `step_gen` models of 10 families, put on a board, go through KiCad's OpenCascade reader
   (`kicad-cli pcb export step`) with no read error and every solid in the output; by hand all 68 specs (3151 solids).
-* **Not checked:** KiCad 8, 9 and 10 (not installed; the optional CI job `kicad` also runs the tests on KiCad 8 from
-  the KiCad PPA, not run from here); `sym-lib-table` loaded by KiCad; STEP geometry inside KiCad beyond loading.
+* **KiCad 8, 9 and 10:** the CI job `kicad` runs these tests on Ubuntu's KiCad 7 and on KiCad 8, 9 and 10 from the
+  KiCad PPA (since #220). By hand on 2026-10-31 in KiCad 9.0.9 and 10.0.8: export, `--install`, a new project's DRC
+  through the global tables and the STEP export all work.
+* **Not checked:** STEP geometry inside KiCad beyond loading.

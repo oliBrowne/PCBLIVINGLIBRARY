@@ -405,6 +405,154 @@ def schematic_hooks(command, kicad=None, remove=False, environ=None, home=None, 
     return out
 
 
+# ------------------------------------------------------------------ the button through KiCad's plugin system (9+)
+API_MIN_MAJOR = 9            # KiCad's plugin system (the KiCad API) and its toolbar buttons: KiCad 9 and newer
+SWIG_LAST_MAJOR = 10         # the PCB editor's older Python plugins (kicad_action_plugin.py) load up to KiCad 10
+API_PLUGIN_DIR = "ecadlib"
+API_PLUGIN_ID = "org.ecadlib.kicad"
+API_FILES = ("plugin.json", "requirements.txt", "ecadlib_kicad.py", "ecadlib_kicad.sh", "ecadlib_window.py",
+             "ecadlib_cmd.json", "ecadlib.png", "ecadlib@2x.png")
+# Linux: KiCad starts a launcher (runtime "exec") instead of making a virtual environment ("python"): Debian and Ubuntu
+# leave out the python3-venv / pip a virtual environment needs, and KiCad then never shows the button (checked in
+# KiCad 10.0.8). The launcher runs the Python KiCad is set to use, which has wxPython (KiCad's packages need it); it
+# is the one set when ecadlib was added: after changing Preferences > Plugins > Python interpreter, add it again.
+LAUNCHER = """#!/bin/sh
+# ecadlib's button in KiCad (Linux): opens the ecadlib window with the Python KiCad uses. Written by ecadlib.
+exec {python} "$(dirname "$0")/ecadlib_kicad.py" "$@"
+"""
+
+
+def documents_dir(series, config_dir=None, environ=None, home=None, platform=None):
+    """KiCad `series`' per-user documents folder, where its plugins/ folder is (KiCad's PATHS::getUserDocumentPath):
+    $KICAD_DOCUMENTS_HOME/kicad|KiCad/N.0 when set; the Flatpak's ~/.var/app/org.kicad.KiCad/data/kicad/N.0 for a
+    Flatpak settings folder; else Documents/KiCad/N.0 (Windows, macOS) or ~/.local/share/kicad/N.0 (Linux)."""
+    from . import detect
+    environ = os.environ if environ is None else environ
+    p = _platform(platform)
+    if environ.get("KICAD_DOCUMENTS_HOME"):
+        return Path(environ["KICAD_DOCUMENTS_HOME"]) / ("kicad" if p == "linux" else "KiCad") / series
+    parts = Path(config_dir).parts if config_dir else ()
+    if "org.kicad.KiCad" in parts:
+        i = parts.index("org.kicad.KiCad")
+        return Path(*parts[:i + 1]) / "data" / "kicad" / series
+    return detect.kicad_user_dir(series, home=home, environ=environ, platform=p)
+
+
+def api_plugin_json(series, platform=None):
+    """plugin.json for KiCad `series` (KiCad's api.v1 schema): one action, the ecadlib button, in the schematic
+    editor; in the PCB editor too from KiCad 11, which no longer loads the PCB editor's older plugin (up to KiCad 10
+    that one has the button there, and places footprints). Linux: the launcher (LAUNCHER), else KiCad's Python."""
+    scopes = ["schematic"] + (["pcb"] if _major(series) > SWIG_LAST_MAJOR else [])
+    linux = _platform(platform) == "linux"
+    return {"$schema": "https://go.kicad.org/api/schemas/v1", "identifier": API_PLUGIN_ID, "name": "ecadlib",
+            "description": "ecadlib: check the project BOM against its library, fill the library, add a part from "
+                           "its MPN, use the library in every project",
+            "runtime": {"type": "exec" if linux else "python"},
+            "actions": [{"identifier": "window", "name": "ecadlib",
+                         "description": "ecadlib: check BOM, fill the library, add a part from its MPN",
+                         "show-button": True, "scopes": scopes,
+                         "entrypoint": "ecadlib_kicad.sh" if linux else "ecadlib_kicad.py",
+                         "icons-light": ["ecadlib.png", "ecadlib@2x.png"],
+                         "icons-dark": ["ecadlib.png", "ecadlib@2x.png"]}]}
+
+
+def kicad_python(folder):
+    """The Python KiCad `folder`'s settings use for plugins (Preferences > Plugins > Python interpreter), else the
+    system's /usr/bin/python3 (KiCad's Linux packages put wxPython there), else python3 on PATH."""
+    try:
+        api = _common(folder)[1].get("api")
+    except ValueError:
+        api = None
+    py = api.get("interpreter_path") if isinstance(api, dict) else None
+    if isinstance(py, str) and py and os.path.isfile(py):
+        return py
+    return "/usr/bin/python3" if os.path.isfile("/usr/bin/python3") else "python3"
+
+
+def _enable_api(folder):
+    """Preferences > Plugins > Enable KiCad API, in kicad_common.json (other settings kept). -> True when it was off."""
+    p, data = _common(folder)
+    api = data.get("api") if isinstance(data.get("api"), dict) else {}
+    if api.get("enable_server") is True:
+        return False
+    api["enable_server"] = True
+    data["api"] = api
+    fsutil.write_text_atomic(p, json.dumps(data, indent=2) + "\n")
+    return True
+
+
+def api_plugin(command, kicad=None, remove=False, environ=None, home=None, platform=None, log=print):
+    """The ecadlib button in each KiCad 9+ version, through KiCad's plugin system: plugins/ecadlib/ in KiCad's
+    documents folder (plugin.json, the starter ecadlib_kicad.py, the window ecadlib_window.py, ecadlib_cmd.json,
+    icons, an empty requirements.txt), and Preferences > Plugins > Enable KiCad API turned on (KiCad shows plugin
+    buttons only with it on). remove=True takes the folder out again and leaves the API setting as it is (other
+    plugins may use it). Older KiCad versions are left alone. -> {series: "added" | "already there" | "removed" | ...}"""
+    assets = Path(__file__).with_name("assets")
+    out = {}
+    for series, conf in config_dirs(kicad, environ, home, platform):
+        if _major(series) < API_MIN_MAJOR:
+            continue
+        d = documents_dir(series, conf, environ, home, platform) / "plugins" / API_PLUGIN_DIR
+        if remove:
+            if not d.is_dir():
+                out[series] = "not there"
+                continue
+            for f in API_FILES:                          # only our files: anything else someone put there stays
+                (d / f).unlink(missing_ok=True)
+            shutil.rmtree(d / "__pycache__", ignore_errors=True)
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+            out[series] = "removed"
+            continue
+        if not Path(conf).is_dir():
+            out[series] = f"not changed: KiCad {series} has no settings yet (start it once, then do this again)"
+            continue
+        if "org.kicad.KiCad" in Path(conf).parts:
+            # KiCad's Flatpak starts plugins inside its sandbox, where the ecadlib command on this computer is not
+            out[series] = "not changed: the Flatpak KiCad cannot start ecadlib from its sandbox (use the PCB editor's button)"
+            continue
+        try:
+            api_on = _enable_api(conf)
+        except ValueError as e:
+            out[series] = f"not changed: {e}"
+            continue
+        from .kicad_menu import icon_png
+        linux = _platform(platform) == "linux"
+        files = {"plugin.json": json.dumps(api_plugin_json(series, platform), indent=2) + "\n",
+                 "requirements.txt": "# ecadlib's KiCad button needs nothing from pip: it runs the ecadlib command "
+                                     "saved in ecadlib_cmd.json\n",
+                 "ecadlib_kicad.py": (assets / "kicad_api_plugin.py").read_text(encoding="utf-8"),
+                 "ecadlib_window.py": (assets / "kicad_action_plugin.py").read_text(encoding="utf-8"),
+                 "ecadlib_cmd.json": json.dumps(command_record(command), indent=2) + "\n"}
+        if linux:
+            files["ecadlib_kicad.sh"] = LAUNCHER.format(python=shlex.quote(kicad_python(conf)))
+        d.mkdir(parents=True, exist_ok=True)
+        changed = api_on
+        for name, text in files.items():
+            if not (d / name).is_file() or (d / name).read_text(encoding="utf-8") != text:
+                fsutil.write_text_atomic(d / name, text)
+                changed = True
+        if linux:
+            sh = d / "ecadlib_kicad.sh"
+            # KiCad starts only an executable file; a Windows disk has no execute bits to set or read
+            if os.name != "nt" and sh.stat().st_mode & 0o111 != 0o111:
+                sh.chmod(0o755)
+                changed = True
+        else:
+            (d / "ecadlib_kicad.sh").unlink(missing_ok=True)
+        for name, size in (("ecadlib.png", 24), ("ecadlib@2x.png", 48)):
+            png = icon_png(size)
+            if not (d / name).is_file() or (d / name).read_bytes() != png:
+                fsutil.write_bytes_atomic(d / name, png)
+                changed = True
+        out[series] = ("added" if changed else "already there") + (" (turned on Enable KiCad API)" if api_on else "")
+    for series, st in out.items():
+        log(f"  KiCad {series:<5} ecadlib button (schematic editor{', PCB editor' if _major(series) > SWIG_LAST_MAJOR else ''}): {st}")
+    return out
+
+
 def _set_row(text, table, nick, uri, descr):
     """The table with exactly one KiCad row `nick` -> uri, in place of an existing one, else appended."""
     row = (f'(lib (name {sexpr.quote(nick)})(type "KiCad")(uri {sexpr.quote(uri)})(options "")'

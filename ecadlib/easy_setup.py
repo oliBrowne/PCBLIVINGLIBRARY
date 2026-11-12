@@ -498,19 +498,31 @@ def install_kicad_plugin(series=None):
                                             encoding="utf-8")
         done.append(str(d))
     _record_install("kicad_plugin", done)
-    sch = {}
+    sch, api = {}, {}
     for k in kicads:
         try:
             sch.update(KI.schematic_hooks(UC.self_command(), k["series"], log=lambda *a, **kw: None))
         except (OSError, ValueError) as e:
             sch[k["series"]] = f"not changed: {e}"
-    steps = ["Restart KiCad (or in the PCB editor: Tools > External Plugins > Refresh Plugins)",
+        try:
+            api.update(KI.api_plugin(UC.self_command(), k["series"], log=lambda *a, **kw: None))
+        except (OSError, ValueError) as e:
+            api[k["series"]] = f"not changed: {e}"
+    steps = ["Close KiCad (all its windows) and start it again (or in the PCB editor: Tools > External Plugins > "
+             "Refresh Plugins)",
              "Open a saved board, then press the ecadlib button in the top toolbar (also under Tools > "
              "External Plugins)"]
+    if any(v.startswith(("added", "already there")) for v in api.values()):
+        steps.append("In the schematic editor (KiCad 9 and newer): the ecadlib button at the right end of the top "
+                     "toolbar opens the same window for the open project")
+        if any("Enable KiCad API" in v for v in api.values()):
+            steps.append("ecadlib turned on Preferences > Plugins > Enable KiCad API: KiCad shows plugin buttons only "
+                         "with it on. KiCad saves its settings when it closes: if KiCad was open just now, close it and "
+                         "press Add to KiCad again, or the setting is lost")
     if any(v in ("added", "already there") for v in sch.values()):
         steps.append("In the schematic editor: Tools > Generate Legacy Bill of Materials... > ecadlib: check BOM or "
                      "ecadlib: fill library > Generate")
-    return {"installed": done, "schematic": sch, "steps": steps}
+    return {"installed": done, "schematic": sch, "api_plugin": api, "steps": steps}
 
 
 # ------------------------------------------------------------------ web routes
