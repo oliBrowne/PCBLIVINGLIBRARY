@@ -91,3 +91,13 @@ def test_a_courtyard_only_miss_is_not_the_reads_land():
     ml = S.maker_land(OURS, SPEC)
     assert S.only_maker_land(f, ml) and not R.reads_own_land(sc, ml, None)
     assert R.reads_own_land({"pass": False, "fields": _fields()}, ml, None)
+
+
+def test_a_part_with_no_symbol_is_not_built():
+    """SM6T100A in the cloud: the standard footprint was found but no symbol (its PDF never reached the reader). The
+    release check never lets a part with no symbol out, so it is not built, not built wrong."""
+    base = {"family": "x", "usd": 0, "tokens_in": 0, "tokens_out": 0, "tried": [], "fields": {}, "errors": []}
+    rows = [dict(base, id="a", source="standard", symbol_source="standard", **{"pass": True}),
+            dict(base, id="s", source="standard", symbol_source="none", **{"pass": False})]
+    oc = R.summarize(rows)["outcome"]
+    assert oc["built_wrong"] == [] and oc["not_built"] == ["s"] and oc["built"] == 1 and oc["precision"] == 1.0

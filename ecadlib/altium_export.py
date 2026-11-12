@@ -21,7 +21,7 @@ from pathlib import Path, PureWindowsPath
 import pandas as pd
 
 from .altium_lib import file_stem, lib_name, not_cp1252, storable
-from .bom_triage import placeholder_mpn, read_bom
+from .bom_triage import placeholder_mpn, read_bom, ref_keys
 from .kicad_index import norm_mpn, package_of, parse_value, two_readings
 
 PLAIN_VALUE = re.compile(r"(\d+(?:[.,]\d+)?\s*[pnuµμmkKMGR]?|\d+[pnuµμmkKMGR]\d+)\s*(?:F|H|Ω|R|ohms?)?", re.I)   # '4k7',
@@ -388,7 +388,7 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                 by_line[int(str(t.get("line", "")).strip())] = t    # line must not take the last row's land
             except ValueError:
                 pass
-    holds = {}
+    holds, on = {}, {}
     out, seen, renamed, same_value, canon, first, notes, unstorable = {}, {}, {}, {}, {}, {}, {}, {}
     # a name already in the plan stays with its part (SYS-1): when the part released under it is still in the BOM, a
     # line added above it with another MPN takes the suffixed name instead
@@ -485,6 +485,9 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         })
         row, des = out[cat][-1], ln.get("designator", "") or "?"
         notes.setdefault(pn, []).extend(bad)
+        if not ln.get("dnp"):
+            for r in ref_keys(ln.get("designator", "")):
+                on.setdefault(r, {}).setdefault(pn, des)
         if ln.get("bom_hold"):                  # a row read_bom could not read as the header says (shifted cells)
             holds.setdefault(pn, []).append(f"BOM line {des}: {ln['bom_hold']}")
         if pn not in first:
@@ -515,6 +518,22 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                 holds.setdefault(pn, []).append(                  # lines that name two (R-BF-3): held, not a note
                     f"BOM lines {kdes} and {des} are one part {pn} but differ ({'; '.join(other)}): "
                     "fix the BOM so the lines agree, or give them their own MPNs")
+            said = [" ".join(str(r["Description"]).split()) for r in (keep, row)]
+            if not keep["Manufacturer Part Number"] and not row["Manufacturer Part Number"] and all(said) \
+                    and said[0].casefold() != said[1].casefold():
+                holds.setdefault(pn, []).append(      # a red and a green LED, a 50 V and a 16 V capacitor: one value
+                    f"BOM lines {kdes} and {des} have no part number and are built as one part {pn} (same value "
+                    f"and footprint), but are described differently ({said[0]!r} vs {said[1]!r}): give them part "
+                    "numbers if they are two parts, or one description if they are one")
+    said = {}                                   # a part's review names 5 of them (200 lines sharing 'R1-R9999')
+    for r, parts in sorted(on.items()):         # R3 on a 10k line and on a 1k line: one of the two lines is wrong
+        for pn in parts if len(parts) > 1 else ():
+            if said.get(pn, 0) < 5:
+                said[pn] = said.get(pn, 0) + 1
+                others = [o for o in parts if o != pn]
+                notes.setdefault(pn, []).append(
+                    f"designator {r} is on the BOM lines of two parts ({pn} and {', '.join(others[:5])}"
+                    f"{' ...' if len(others) > 5 else ''}): one board position holds one part; check the BOM")
     notes = {k: list(dict.fromkeys(v)) for k, v in notes.items() if v}
     for v in notes.values():
         for n in v:
