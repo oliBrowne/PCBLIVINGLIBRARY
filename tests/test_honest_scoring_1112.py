@@ -82,3 +82,12 @@ def test_the_negative_leg_of_a_pair_is_not_active_low():
 def test_altiums_bar_is_active_low_too():
     # AM26LS31CD/CN (offline gate): ours G\ (Altium's bar), KiCad's ~{G}: the same sense
     assert S.active_low("G\\") and S.active_low("R\\E\\S\\E\\T\\") and not S.active_low("A\\B")
+
+
+def test_a_courtyard_only_miss_is_not_the_reads_land():
+    f = S.score_footprint(KICAD, KICAD)
+    f["courtyard"] = {"ok": False, "error": "courtyard off 0.4", "off": 0.4}
+    sc = {"pass": False, "fields": f}
+    ml = S.maker_land(OURS, SPEC)
+    assert S.only_maker_land(f, ml) and not R.reads_own_land(sc, ml, None)
+    assert R.reads_own_land({"pass": False, "fields": _fields()}, ml, None)

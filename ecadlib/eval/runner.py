@@ -657,6 +657,13 @@ def defect_holds(holds):
     return [h for h in holds or [] if h.split(":", 1)[0].strip() not in ROUTINE_HOLDS]
 
 
+def reads_own_land(sc, ml, body):
+    """The miss is the read's own land (only pads differ, each one a pad of the land it followed). A courtyard-only
+    miss, copper as KiCad's, is the body's: it goes to the body evidence, never to a hand-checked land."""
+    return (not sc["pass"] and not (sc["fields"].get("pads") or {}).get("ok", True)
+            and S.only_maker_land(sc["fields"], ml, body))
+
+
 def hand_land(errata, mine, spec, fields, body):
     """The case's land checked by hand (errata "land": the maker's recommended land as printed, pad_length x pad_width at
     +-pad_center, with ep_across / ep_along, pad_center_y, pin1_* as the read gives them, and "why": where it is printed)
@@ -934,7 +941,7 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
         used = reader.used.get(c["mpn"]) or {}
         ml = S.maker_land(mine, used.get("spec")) if src == "datasheet" else None
         body = S.body_evidence(used.get("spec"), ref_fp, S.drop_vias(ref)) if src == "datasheet" else None
-        own_land = not sc["pass"] and S.only_maker_land(sc["fields"], ml, body)
+        own_land = reads_own_land(sc, ml, body)
         hand = hand_land(erratas.get(c["mpn"]), mine, used.get("spec"), sc["fields"], body) if own_land else None
         ds_body = bool(not sc["pass"] and src == "datasheet" and S.datasheet_body(
             sc["fields"], S.drop_vias(mine) if mine else None, used.get("spec"), ref_fp, S.drop_vias(ref)))
