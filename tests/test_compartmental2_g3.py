@@ -166,6 +166,24 @@ def test_kicad_import_reads_a_symbol_named_with_a_slash_and_says_alternates_are_
     assert any("alternate" in n and "UART_TX" in n and "ADC0" in n for n in notes), notes
 
 
+# ---------------------------------------------------------------- migrate: a damaged schema stamp
+@lite
+def test_migrate_calls_a_stamp_of_the_wrong_shape_damaged_not_an_internal_error(tmp_path):
+    import contextlib, io
+    from ecadlib import cli, migrate as MG
+    for k, stamp in enumerate(({"schema_version": 1, "ecadlib": "0.3.0", "kinds": ["plan"]}, [1, 2])):
+        d = tmp_path / str(k)
+        d.mkdir()
+        (d / "plan.json").write_text("[]")
+        (d / MG.STAMP).write_text(json.dumps(stamp))
+        err, out = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            rc = cli.main(["migrate", str(d), "--check"])
+        text = err.getvalue() + out.getvalue()
+        assert rc == 1 and "internal error" not in text and "unreadable" in text and "made by ecadlib" not in text, text
+        assert (d / "plan.json").read_text() == "[]"
+
+
 # ---------------------------------------------------------------- #29 a footprint-name clash in the KiCad export
 @lite
 def test_kicad_export_leaves_out_a_part_whose_footprint_name_another_footprint_has(tmp_path):
