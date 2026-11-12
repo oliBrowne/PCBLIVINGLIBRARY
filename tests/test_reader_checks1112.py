@@ -231,3 +231,8 @@ def test_a_foot_printed_as_one_limit_is_not_compared():
     spec = T.read(copy.deepcopy(T.SOIC8))["spec"]
     assert D.std_dims(dict(spec, terminal_length={"min": 0.4064, "nom": 0.4064})) is None
     assert D.std_dims(dict(spec, terminal_length={"min": 0.2, "nom": 0.3, "max": 0.4}))[0] == "terminal_length"
+
+
+def test_listed_pads_are_not_placed_by_the_pitch():
+    listed = {"pitch": 1.9, "pin_count": 3, "package_type": "gullwing", "pin_positions": [{"number": "1"}]}
+    assert D._pitch_shift(listed, 0.95) == 0          # a SOT's e1 given as the pitch: its pads have their own offsets

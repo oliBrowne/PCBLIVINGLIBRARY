@@ -2635,6 +2635,8 @@ def _pitch_shift(spec, name_pitch):
     """How far (mm) the outermost lead of a row moves when the row is built at the read's pitch and not at the one
     its own name states: the pitches' difference times half the row's steps."""
     e, n, t = spec.get("pitch"), spec.get("pin_count"), spec.get("package_type")
+    if spec.get("pin_positions") or spec.get("pad_table"):
+        return 0.0                                    # listed pads are placed by their own offsets, not by the pitch
     per = 0
     try:
         if t in ("qfn", "qfp"):
