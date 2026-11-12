@@ -72,6 +72,14 @@ def _tmp_for(path):
     return path.with_name(f".{name}.{os.getpid()}.{threading.get_ident()}.tmp")
 
 
+def require_file(path):
+    """FileNotFoundError (the CLI says "file not found: <path>") unless `path` is a file: a command checks its plan.json
+    first, so a mistyped path leaves no lock, cache or output folder behind."""
+    if not Path(path).is_file():
+        import errno
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(path))
+
+
 def write_text_atomic(path, text):
     path = Path(path)
     tmp = _tmp_for(path)

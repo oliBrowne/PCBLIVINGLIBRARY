@@ -900,6 +900,8 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the result as JSON (plan, report, counts, rows)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
+    from .fsutil import require_file
+    require_file(plan)                         # before the lock and approvals: a mistyped path leaves nothing behind
     from .approvals import cli_plan_lock, load_policy, policy_error
     try:
         load_policy(plan.parent)               # a broken approvals file: say so, before anything is changed

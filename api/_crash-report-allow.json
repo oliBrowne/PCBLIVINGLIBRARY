@@ -3136,6 +3136,7 @@
 "read_ini_text",
 "replace",
 "report_file",
+"require_file",
 "write_bytes_atomic",
 "write_text_atomic"
 ],

@@ -1151,6 +1151,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     for a library installed into KiCad itself (kicad_install sets VAR to `out`); remembered for later exports."""
     import tempfile
     from . import change_gate as CG
+    fsutil.require_file(plan)                  # before the library lock: a mistyped path leaves nothing behind
     with CG.publishing(Path(plan).parent), tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as stage:
         return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage, take_over=take_over,
                        models_var=models_var)
@@ -1705,6 +1706,7 @@ def main(argv=None):
     if a.install and not a.models_var:
         from .kicad_install import var_name
         a.models_var = var_name(libname(a.name))
+    fsutil.require_file(a.plan)                # before the HTTP cache folder is made
     try:
         rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60),
                      rules=a.rules, log=(lambda *x, **k: None) if a.json else print, project=a.project,

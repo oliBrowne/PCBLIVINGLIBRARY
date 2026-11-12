@@ -51,3 +51,29 @@ def test_release_check_holds_a_second_part_whose_name_differs_only_in_case(tmp_p
         assert any("RES-0603-10k" in h and "case" in h for h in items[2]["hold_reasons"]), items[2]["hold_reasons"]
         RC.apply(items, tmp_path / other, allow=[other])            # a name clash cannot be released anyway
         assert items[2]["status"] == "held" and items[0]["status"] == "ready", items
+
+
+# ---------------------------------------------------------------- #43 a missing plan leaves nothing behind
+@lite
+def test_publishers_on_a_missing_plan_write_nothing(tmp_path, monkeypatch):
+    import contextlib, io, os
+    from ecadlib import cli
+    monkeypatch.chdir(tmp_path)
+    for argv in (["release-check", "nope/plan.json"], ["kicad-export", "nope/plan.json", "-o", "kc", "--name", "x"],
+                 ["kicad-dblib", "nope/plan.json"], ["altium-pkg", "nope/plan.json"],
+                 ["dblib-sync", "nope/plan.json", "--to", "sy"]):
+        for with_folder in (False, True):
+            if with_folder:
+                (tmp_path / "nope").mkdir()
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    rc = cli.main(argv)
+                except SystemExit as e:
+                    rc = e.code
+            assert rc not in (0, None), (argv, rc)
+            assert "nope" in err.getvalue() and "Traceback" not in err.getvalue(), (argv, err.getvalue())
+            left = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+            assert left == (["nope"] if with_folder else []), (argv, with_folder, left)
+            if with_folder:
+                os.rmdir(tmp_path / "nope")

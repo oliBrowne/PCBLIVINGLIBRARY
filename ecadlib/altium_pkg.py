@@ -510,6 +510,8 @@ def build(src, out, name="ecadlib", win_dir=None, rules=None, log=print, native=
     into `out` although another plan folder's parts are there (R-FX15-4: its libraries would be overwritten)."""
     src, out = Path(src), Path(out)
     check_name(name)
+    if not src.exists():                       # before --out is made: a mistyped path leaves nothing behind
+        raise FileNotFoundError(f"{src}: no such plan.json or folder")
     out.mkdir(parents=True, exist_ok=True)
     rep = {"source": str(src), "folder": str(out), "name": name, "sync": None}
     from . import change_gate as CG

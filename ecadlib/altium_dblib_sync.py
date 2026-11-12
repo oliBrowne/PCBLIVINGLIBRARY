@@ -587,6 +587,9 @@ def sync(plan, target_dir, mode="dblib", name="ecadlib", prune=False, win_dir=No
     if mode not in EXT:
         raise ValueError(f"mode must be one of {sorted(EXT)}")
     lib_dir = Path(base or (Path(plan).parent if isinstance(plan, (str, Path)) else "."))
+    if isinstance(plan, (str, Path)):          # before any lock: a mistyped path leaves nothing behind
+        from .fsutil import require_file
+        require_file(plan)
     if dry_run:
         return _sync(plan, target_dir, mode, name, prune, win_dir, svn_url, dry_run, base, runner, which, rules,
                      overwrite_edits, forget_missing=forget_missing)
