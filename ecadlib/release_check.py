@@ -81,6 +81,43 @@ def chip_size_problem(item):
     return None
 
 
+VALUE_UNIT = {"R": ("R", "resistor"), "C": ("F", "capacitor"), "L": ("H", "inductor")}
+FOREIGN_UNITS = {"R": ("F", "H"), "C": ("H", "R"), "L": ("F",)}   # an inductor's folder holds beads too: '600R@100MHz'
+UNIT_WORD = {"R": "a resistance", "F": "a capacitance", "H": "an inductance"}
+
+
+def value_kind_problem(item, rules=None):
+    """#27: the Value written in another passive type's unit (a resistor with Value '100nF', a capacitor with '10kΩ')
+    -> a message, or None. The type is the part's folder (Components/Resistors ...) and the kind its MPN encodes
+    (stdparts.mpn_size: RC0603FR-07.. is a resistor). Only a stated unit is compared: a bare '10k' or '100n' is not,
+    and neither are the MPN's value digits."""
+    from . import rules as RU, stdparts as SP
+    from .kicad_index import parse_value
+    par = {p.get("name"): p.get("value", "") for p in item.get("parameters") or [] if isinstance(p, dict)}
+    rules = rules or {}
+    value = str(par.get(RU.canonical_param("Value", rules) if rules else "Value", par.get("Value", "")) or "").strip()
+    if not value:
+        return None
+    try:
+        _, unit = parse_value(value, with_unit=True)
+    except (TypeError, ValueError):
+        return None
+    if unit not in UNIT_WORD:
+        return None
+    mpn = str(par.get(RU.canonical_param("Manufacturer Part Number", rules) if rules else "Manufacturer Part Number",
+                      par.get("Manufacturer Part Number", "")) or "")
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    kinds = [(k, f"its folder is {cat}") for k in [{"Resistors": "R", "Capacitors": "C", "Inductors": "L"}.get(cat)] if k]
+    mk = SP.mpn_size(mpn)[0]
+    if mk in VALUE_UNIT:
+        kinds.append((mk, f"its MPN {mpn} is a {VALUE_UNIT[mk][1]}'s"))
+    for k, why in kinds:
+        if unit in FOREIGN_UNITS[k]:
+            return (f"Value {value!r} is {UNIT_WORD[unit]}, but the part is a {VALUE_UNIT[k][1]} ({why}): the BOM's "
+                    "value and its part do not match; fix the BOM line")
+    return None
+
+
 def _land_size(name):
     """The imperial chip size a land name gives, or None. KiCad's IMP_METMetric names (C_2220_5650Metric,
     L_1206_3216Metric_Pad1.22x1.90mm_HandSolder) name their imperial size first; KiCad's own metric codes are not
@@ -649,6 +686,9 @@ def check_item(item, base=".", rules=None):
     if link:                                          # Comment '=Value' with no Value: the placed part shows nothing
         add("fields", f"{link} is empty: the part's Comment shows it ('={link}'), so the placed part would show no "
                       f"value; add a {link} column to the BOM or write the value in the description")
+    kind = value_kind_problem(item, rules)
+    if kind:
+        add("fields", kind)
     mpn = str(par.get(RU.canonical_param("Manufacturer Part Number", rules), par.get("Manufacturer Part Number", "")) or "")
     if SS.cell(mpn) != mpn:                           # =cmd|'/c calc'!A1, +SUM(..), @SUM(..): what a spreadsheet runs
         add("fields", f"Manufacturer Part Number {mpn[:40]!r} starts like a spreadsheet formula, not a part number: "

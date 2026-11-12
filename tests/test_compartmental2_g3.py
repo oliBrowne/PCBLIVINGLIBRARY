@@ -53,6 +53,41 @@ def test_release_check_holds_a_second_part_whose_name_differs_only_in_case(tmp_p
         assert items[2]["status"] == "held" and items[0]["status"] == "ready", items
 
 
+# ---------------------------------------------------------------- #27 the Value in another part type's unit
+def test_a_value_in_another_part_types_unit_is_held():
+    from ecadlib import release_check as RC
+
+    def it(folder, value, mpn=""):
+        return {"name": "X", "folder": f"Components/{folder}", "comment": "=Value",
+                "parameters": [{"name": "Value", "value": value}, {"name": "Manufacturer Part Number", "value": mpn}]}
+    bad = [("Resistors", "100nF", ""), ("Resistors", "4.7uH", ""), ("Capacitors", "10kΩ", ""), ("Capacitors", "4.7uH", ""),
+           ("Inductors", "100nF", ""), ("ICs", "100nF", "RC0603FR-0710KL"),             # a Yageo resistor MPN
+           ("Misc", "10 ohm", "GRM188R71C104KA01D"), ("Misc", "1uF", "LQG15HS4N7S02D")]
+    for folder, value, mpn in bad:
+        msg = RC.value_kind_problem(it(folder, value, mpn))
+        assert msg and value in msg, (folder, value, mpn, msg)
+    good = [("Resistors", "10k", ""), ("Resistors", "4R7", ""), ("Resistors", "0R", ""), ("Resistors", "10K 1%", ""),
+            ("Capacitors", "100nF 50V X7R", ""), ("Capacitors", "100n", ""), ("Inductors", "600R@100MHz", "BLM18PG601SN1D"),
+            ("Inductors", "4.7uH", ""), ("ICs", "3.3V", "AMS1117-3.3"), ("ICs", "LM358", ""), ("Resistors", "", ""),
+            ("Capacitors", "1uF/50V", "GRM188R61H105KA93D"), ("Resistors", "10k", "RC0603FR-0710KL"), ("Misc", "100nF", "")]
+    for folder, value, mpn in good:
+        assert RC.value_kind_problem(it(folder, value, mpn)) is None, (folder, value, mpn)
+
+
+@lite
+def test_release_check_holds_a_resistor_whose_value_is_a_capacitance(tmp_path):
+    from ecadlib import release_check as RC
+    from tests.test_dblib_sync import _base_items, _models
+    _models(tmp_path)
+    items = _base_items()[:2]
+    for k, i in enumerate(items):
+        i["parameters"] += [{"name": "Manufacturer Part Number", "value": f"MPN-{k}"}, {"name": "Manufacturer", "value": "ACME"}]
+    items[0]["parameters"][0]["value"] = "100nF"                     # the resistor
+    RC.apply(items, tmp_path)
+    assert items[0]["status"] == "held" and items[1]["status"] == "ready", items
+    assert any(h.startswith("fields: Value '100nF'") for h in items[0]["hold_reasons"]), items[0]["hold_reasons"]
+
+
 # ---------------------------------------------------------------- #29 a footprint-name clash in the KiCad export
 @lite
 def test_kicad_export_leaves_out_a_part_whose_footprint_name_another_footprint_has(tmp_path):
