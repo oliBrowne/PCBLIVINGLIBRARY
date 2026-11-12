@@ -2433,6 +2433,44 @@ def _std_span(spec):
     return (a, b) if a and b and abs(a - b) > max(0.5, 0.1 * a) else None
 
 
+def _lead_box(pads, tabbed):
+    """(width, height) of the box around the copper of a build report's lead pads, or None. Of a part with a tab
+    (tabbed) the largest pad is left out: the generator ends a tab on a pad at the lead span's edge where KiCad's
+    land puts a thermal pad under the body (a D2PAK's is 7 mm wide in one drawing and 10.8 mm in KiCad's), so that
+    pad's size and place say nothing about the read; the leads' pads do."""
+    try:
+        if tabbed and len(pads) >= 3:
+            big = max(pads, key=lambda p: p["w"] * p["h"])
+            pads = [p for p in pads if p is not big]
+        xs = [x for p in pads for x in (p["x"] - p["w"] / 2, p["x"] + p["w"] / 2)]
+        ys = [y for p in pads for y in (p["y"] - p["h"] / 2, p["y"] + p["h"] / 2)]
+    except (KeyError, TypeError):
+        return None
+    return (max(xs) - min(xs), max(ys) - min(ys)) if xs else None
+
+
+def std_copper(spec, rep):
+    """(the table land's lead copper box, the read's) when the read names a package of the checked standard table and
+    the lead pads built from it are far from that package's: a side of the box around their copper over 0.75 mm and
+    a quarter off, either way round. Else None. A name with no numbers in it ('R_0402_1005Metric', 'D_SMA') gave the
+    name checks nothing to compare, so a 3.1 x 1.6 mm chip read under the name R_0402 and an SMA body named D_SOD-123
+    came back 'ok' (deep-dive testing 2026-11-12). The table's land is the package's, whatever the maker draws: real
+    reads of 21 table packages (benchmark 2026-10-25) sit within 0.65 mm and 11 % of it."""
+    try:
+        from . import stdparts as SP
+        name = str(spec.get("name") or "")
+        if name not in SP.packages():
+            return None
+        tabbed = bool(spec.get("tab"))
+        ref, mine = _lead_box(SP.build(name)[1].get("pads") or [], tabbed), _lead_box(rep.get("pads") or [], tabbed)
+    except Exception:                                 # no table, or its entry does not build: nothing to compare with
+        return None
+    if not ref or not mine:
+        return None
+    far = any(abs(a - b) > max(0.75, 0.25 * a) for a, b in zip(sorted(ref), sorted(mine)))
+    return (ref, mine) if far else None
+
+
 def self_check(spec, ext, review):
     """Compare what the model read with what its own package name says and with the family's usual range.
     Disagreements go to review (prefixed 'self-check:'); returns info lines (what was and was not checked)."""
@@ -2839,6 +2877,12 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             txt, rep = F.build(spec)
             from . import sexpr
             sexpr.parse(txt)
+            far = std_copper(spec, rep)
+            if far:                                   # the name is the one fact a person reads first: hold, not advice
+                (a, b), (c, d) = far
+                review.append(f"self-check: name {spec['name']} is a standard package whose lead pads span "
+                              f"{a:.2f} x {b:.2f} mm, this read's span {c:.2f} x {d:.2f} mm: {TOO_FAR} (another "
+                              "package's row of the table, a unit, or the wrong name?)")
             if not any(r.startswith(("symbol: pins missing", "symbol: pins not on the footprint")) for r in review):
                 review.extend(pads_vs_pins(rep, ext["pins"]))   # (check_pins already said it when it did)
             if rep.get("warning"):
