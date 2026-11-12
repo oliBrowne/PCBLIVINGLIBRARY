@@ -257,6 +257,29 @@ def doubts(item):
     return out
 
 
+_RECORD = {}                                 # {librarian_state.json path: ((mtime, size), state)}
+
+
+def recorded_holds(item, base="."):
+    """The `verify` holds the build record (librarian_state.json beside the plan) has for this part and the plan item
+    has lost. The librarian writes every hold to both files, and a person's pick (ecadlib resolve) clears both, so a
+    hold in the record alone was taken out of plan.json by hand: it holds the part all the same. [] when the folder
+    has no build record or it cannot be read."""
+    f = Path(base) / "librarian_state.json"
+    try:
+        st = f.stat()
+        key = (st.st_mtime_ns, st.st_size)
+        if (_RECORD.get(str(f)) or (None,))[0] != key:
+            import json
+            _RECORD.clear()                           # one folder at a time: no growth over a long-lived server
+            _RECORD[str(f)] = (key, json.loads(f.read_text(encoding="utf-8")))
+        rec = _RECORD[str(f)][1].get(item.get("name"))
+    except (OSError, ValueError, AttributeError):
+        return []
+    have = {str(v) for v in item.get("verify") or []}
+    return [str(v) for v in (rec.get("verify") if isinstance(rec, dict) else None) or [] if str(v) not in have]
+
+
 def clear_doubts(entry, src, halves):
     """A person picked another symbol / footprint (`halves`) and it was applied: drop the doubtful-source notes about
     what that half had before from a plan item or its librarian_state entry (`verify`, and the older ecadlib's review
@@ -600,8 +623,15 @@ def check_item(item, base=".", rules=None):
                              "([release] manufacturer = \"hold\" holds the part instead)")
             else:
                 add("fields", f"{k} is empty")
+    mpn = str(par.get(RU.canonical_param("Manufacturer Part Number", rules), par.get("Manufacturer Part Number", "")) or "")
+    if SS.cell(mpn) != mpn:                           # =cmd|'/c calc'!A1, +SUM(..), @SUM(..): what a spreadsheet runs
+        add("fields", f"Manufacturer Part Number {mpn[:40]!r} starts like a spreadsheet formula, not a part number: "
+                      "fix the BOM cell")
     for v in doubts(item):
         add("verify", v)
+    for v in recorded_holds(item, base):              # a hold cleared in plan.json only: still in the build record
+        add("verify", f"{v} (this hold was taken out of plan.json but is still in the build record "
+                      "librarian_state.json: a hold is lifted by fixing the part or with --allow, not by editing the plan)")
     for v in item.get("name_problems") or []:         # altium365.plan: a name Altium can't store (altium_export._name)
         add("fields", v)
     for v in item.get("bom_holds") or []:             # altium365.plan: BOM lines of this part that disagree on what is

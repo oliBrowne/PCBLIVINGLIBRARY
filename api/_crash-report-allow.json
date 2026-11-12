@@ -1855,6 +1855,7 @@
 "_strip",
 "_summary",
 "_tab_fits",
+"_tab_land",
 "_table_symbols",
 "_tht_layout",
 "_toleranced",
@@ -2015,6 +2016,7 @@
 "sibling_sheet.<locals>.names",
 "standard_dip_holes",
 "std_copper",
+"std_pads",
 "submit",
 "supported_nets",
 "tab_land_unread",
@@ -4682,6 +4684,7 @@
 "print_result",
 "publish_problems",
 "record_releases",
+"recorded_holds",
 "unchecked",
 "write_report"
 ],

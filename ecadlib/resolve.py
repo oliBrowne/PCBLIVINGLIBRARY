@@ -549,11 +549,11 @@ def choose(plan, part, kind, candidate_id, base=None, src=None, pin_map=None, us
         RC.clear_doubts(it, it["source"], halves)
         if state is not None and part in state:
             RC.clear_doubts(state[part], it["source"], halves)
+    if state is not None:                      # the build record first: the release check reads its holds from the file
+        write_text_atomic(state_f, json.dumps(state, indent=2))
     RC.apply([it] + [i for i in items if i["name"] in rewritten], base)   # the parts sharing the overwritten file are
                                                                           # re-checked too: their old `ready` no longer holds
     write_text_atomic(plan, json.dumps(items, indent=2))
-    if state is not None:
-        write_text_atomic(state_f, json.dumps(state, indent=2))
     L.refresh_review(plan, items)              # review.md / .csv / .html say what the plan now says
     from . import timing                       # a person picked a part: review time runs to here
     timing.mark_review(plan.parent, f"choose {kind}")
