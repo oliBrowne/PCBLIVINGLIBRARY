@@ -378,8 +378,11 @@ def value_link_empty(item):
     m = re.fullmatch(r"=([A-Za-z][A-Za-z0-9 _]*)", com)
     if not m:
         return ""
+    name = m.group(1)
     par = {p["name"]: p.get("value", "") for p in item.get("parameters") or []}
-    return "" if str(par.get(m.group(1)) or "").strip() else m.group(1)
+    if name != "Value" and name not in par and name not in (item.get("cleared") or []):
+        return ""                                     # '=Part Number': a DbLib column, not a parameter of the plan
+    return "" if str(par.get(name) or "").strip() else name
 
 
 def unchecked(what, e):

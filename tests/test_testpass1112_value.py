@@ -70,3 +70,5 @@ def test_release_check_holds_an_empty_value_behind_an_equals_value_comment():
     item["parameters"][0]["value"] = "10k"
     assert not RC.value_link_empty(item)
     assert not RC.value_link_empty({"name": "U1", "comment": "LM358DR", "parameters": []})
+    assert not RC.value_link_empty({"name": "U1", "comment": "=Part Number", "parameters": []})   # a DbLib column
+    assert RC.value_link_empty({"name": "U1", "comment": "=Tolerance", "parameters": [{"name": "Tolerance", "value": " "}]})
