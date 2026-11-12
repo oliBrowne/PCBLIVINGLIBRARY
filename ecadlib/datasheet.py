@@ -1990,6 +1990,14 @@ def _feet_outside(spec):
             out.append(f"{span_k} max {span[2]:g} mm leaves {room / 2:.3g} mm per side beyond {body_k} min {body[0]:g} "
                        f"mm, over {FOOT_ROOM:g} x the terminal_length max {L[2]:g} mm, which is implausible for a "
                        f"gull-wing lead (a span from another row of the table? check {span_k} and {body_k})")
+        elif not two_sided and (spec.get("terminal_length") or {}).get("max") is not None and \
+                span[1] - body[1] > FOOT_ROOM * L[2]:
+            # leads on one side, the tab on the other (SOT-89, DPAK): the span past the body is the leads' reach plus
+            # the tab's, together still a few feet (SOT-89 1.6 mm for a 1.1 mm foot, DPAK 3.8 for 1.5, SOT-223 3.5
+            # for 1.0); SOT-89's span read twice too long built its leads 2 mm out (deep-dive 2026-11-12, item 3)
+            out.append(f"{span_k} {span[1]:g} mm is {span[1] - body[1]:.3g} mm past {body_k} {body[1]:g} mm, over "
+                       f"{FOOT_ROOM:g} x the terminal_length max {L[2]:g} mm, which is implausible for leads on one side "
+                       f"and a tab on the other (check {span_k} and {body_k})")
     return out
 
 
