@@ -64,6 +64,26 @@ def _f(v, d=0.0):
     return v if math.isfinite(v) else d          # untrusted text: 'nan' / 'inf' are not coordinates
 
 
+def _obj(v):
+    """A JSON object field, or {} for anything else (untrusted data: a head or c_para that is text or a list)."""
+    return v if isinstance(v, dict) else {}
+
+
+def _data(data, what):
+    if not isinstance(data, dict):
+        raise ValueError(f"EasyEDA {what} data is not a JSON object ({type(data).__name__})")
+    return data
+
+
+def _num(v, what):
+    """A number a pad cannot do without (its position or size): an empty or unreadable field is refused, never read
+    as 0, which would put the pad at the canvas' corner or make it a point."""
+    x = _f(v, None)
+    if x is None:
+        raise ValueError(f"EasyEDA {what} is not a number ({str(v)[:20]!r}): footprint not converted")
+    return x
+
+
 def _q(s):
     return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -89,7 +109,7 @@ def origin(data, notes=None):
     """The footprint's origin on EasyEDA's canvas (head x / y, 10 mil units). A head without a usable x / y (a changed
     format, damaged data) would leave the origin at the canvas' 0, 0, a metre from the pads: the centre of the pads
     is taken instead, and the notes say so."""
-    head = (data.get("head") if isinstance(data, dict) else None) or {}
+    head = _obj(data.get("head") if isinstance(data, dict) else None)
     ox, oy = _f(head.get("x"), None), _f(head.get("y"), None)
     if ox is not None and oy is not None:
         return ox, oy
@@ -111,9 +131,9 @@ def origin(data, notes=None):
 def footprint_to_kicad(data, name=None, notes=None):
     """packageDetail.dataStr ({head, shape}) -> .kicad_mod text (KiCad 7 format)."""
     notes = [] if notes is None else notes
-    head = data.get("head") or {}
+    head = _obj(_data(data, "footprint").get("head"))
     ox, oy = origin(data, notes)
-    name = name or (head.get("c_para") or {}).get("package") or "EasyEDA"
+    name = name or _obj(head.get("c_para")).get("package") or "EasyEDA"
     X, Y = (lambda x: (_f(x) - ox) * U), (lambda y: (_f(y) - oy) * U)
     pads, lines, circles, arcs, dropped, extent, copper = [], [], [], [], {}, [], []
     for s in data.get("shape") or []:
@@ -123,7 +143,14 @@ def footprint_to_kicad(data, name=None, notes=None):
         kind = f[0]
         f += [""] * (17 - len(f))                 # a shape cut short (untrusted data) reads as empty fields, not IndexError
         if kind == "PAD":
-            shape, cx, cy, w, h, layer, num, hole_r = f[1], X(f[2]), Y(f[3]), _f(f[4]) * U, _f(f[5]) * U, f[6], f[8], _f(f[9]) * U
+            num = f[8]
+            for k, what in ((2, "x"), (3, "y"), (4, "width"), (5, "height")):
+                _num(f[k], f"pad {num!r} {what}")
+            if f[9].strip():
+                _num(f[9], f"pad {num!r} hole radius")
+            if f[1] != "POLYGON" and (_f(f[4]) <= 0 or _f(f[5]) <= 0):
+                raise ValueError(f"EasyEDA pad {num!r} has size {f[4]} x {f[5]}: footprint not converted")
+            shape, cx, cy, w, h, layer, hole_r = f[1], X(f[2]), Y(f[3]), _f(f[4]) * U, _f(f[5]) * U, f[6], _f(f[9]) * U
             rot, hole_len = _f(f[11]) % 360, _f(f[13]) * U
             seen = _outline_rot(shape, _nums(f[10]), _f(f[2]), _f(f[3]), _f(f[4]), _f(f[5]))
             if seen is not None and _turn_off(seen, rot, 90 if abs(w - h) < 1e-6 else 180) > 0.5:
@@ -141,6 +168,8 @@ def footprint_to_kicad(data, name=None, notes=None):
                     notes.append(f"pad {num}: polygon pad kept as a KiCad custom pad ({len(poly)} points)")   # other pins
                 else:
                     notes.append(f"pad {num}: polygon pad is a plain rectangle {w:.3f}x{h:.3f} mm")
+                if w <= 0 or h <= 0:
+                    raise ValueError(f"EasyEDA polygon pad {num!r} has no area: footprint not converted")
             kshape = {"RECT": "rect", "OVAL": "oval", "ELLIPSE": "circle" if abs(w - h) < 1e-6 else "oval"}.get(shape, "rect")
             at = f"(at {_n(cx)} {_n(cy)}{' ' + _n(rot) if rot else ''})"
             size, prims = f"(size {_n(w)} {_n(h)})", ""
@@ -431,6 +460,8 @@ def _path_ends(path):
             cmd, i = t, i + 1
             continue
         if cmd in ("M", "L", "m", "l"):
+            if i + 1 >= len(toks) or toks[i + 1].isalpha():    # a pair cut short (damaged path): stop here
+                break
             dx, dy = float(toks[i]), float(toks[i + 1]); i += 2
             x, y = (x + dx, y + dy) if cmd.islower() else (dx, dy)
         elif cmd in ("H", "h"):
@@ -481,8 +512,8 @@ def _path_runs(path):
 def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
     """dataStr ({head, shape}) of an EasyEDA symbol -> .kicad_sym library text with one symbol `name`."""
     notes = [] if notes is None else notes
-    head = data.get("head") or {}
-    cp = head.get("c_para") or {}
+    head = _obj(_data(data, "symbol").get("head"))
+    cp = _obj(head.get("c_para"))
     ox, oy = _f(head.get("x")), _f(head.get("y"))
     P = lambda x, y: (_n((_f(x) - ox) * U), _n(-(_f(y) - oy) * U))
     body, pins, dropped, named = [], [], {}, False
@@ -494,6 +525,8 @@ def symbol_to_kicad(data, name, footprint="", props=None, notes=None):
             seg = [g.split("~") for g in s.split("^^")]
             st = seg[0] + [""] * (9 - len(seg[0]))
             num = (seg[4][4] if len(seg) > 4 and len(seg[4]) > 4 else "") or st[3]
+            if st[3].strip() and num.strip() != st[3].strip():   # the shown number goes to the pad; the spice number
+                notes.append(f"pin {num}: its spice pin number is {st[3].strip()}: check which one the footprint's pad is")
             nm = seg[3][4] if len(seg) > 3 and len(seg[3]) > 4 else ""
             named = named or nm.strip() not in ("", "~", num)          # "1" named "1" (a crystal): its name is noise
             cx, cy = _f(st[4]), _f(st[5])

@@ -32,9 +32,10 @@ ENTITY = re.compile(r"\b(CARTESIAN_POINT|DIRECTION)(\s*\(\s*'(?:[^']|'')*'\s*,\s
 
 def _f(v, d=0.0):
     try:
-        return float(str(v).strip())
+        v = float(str(v).strip())
     except (TypeError, ValueError):
         return d
+    return v if math.isfinite(v) else d          # untrusted text: 'nan' / 'inf' are no offset, angle or size
 
 
 def model_ref(data):
