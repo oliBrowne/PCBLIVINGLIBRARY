@@ -53,6 +53,45 @@ def test_release_check_holds_a_second_part_whose_name_differs_only_in_case(tmp_p
         assert items[2]["status"] == "held" and items[0]["status"] == "ready", items
 
 
+# ---------------------------------------------------------------- #29 a footprint-name clash in the KiCad export
+@lite
+def test_kicad_export_leaves_out_a_part_whose_footprint_name_another_footprint_has(tmp_path):
+    """Two parts whose footprints are both named MYFP but differ (pad width): dblib-sync and altium-pkg leave the
+    second part out with an error; kicad-export wrote its symbol with an empty Footprint. Now it is left out too."""
+    import contextlib, io, re
+    from ecadlib import altium_lib as AL, kicad_export as KX, release_check as RC, stdparts as SP
+    d = tmp_path / "lib"
+    soic = SP.build("SOIC-8_3.9x4.9mm_P1.27mm")[0].replace('SOIC-8_3.9x4.9mm_P1.27mm"', 'MYFP"', 1)
+    narrow = re.sub(r"\(size 1\.95 0\.6\)", "(size 1.95 0.45)", soic)
+    assert narrow != soic
+    items = []
+    for name, text in (("PART_A", soic), ("PART_B", narrow)):
+        sub = d / name
+        for k in ("SchLib", "PcbLib", "KiCad"):
+            (sub / k).mkdir(parents=True)
+        (sub / "KiCad" / "MYFP.kicad_mod").write_text(text)
+        AL.write_pcblib(sub / "PcbLib" / "MYFP.PcbLib", [AL.footprint_from_kicad(text, height_mm=1.75)])
+        AL.write_schlib(sub / "SchLib" / f"{name}.SchLib", [AL.ic_symbol(
+            name, [{"num": str(i), "name": f"P{i}", "type": "passive", "side": "left"} for i in range(1, 9)], "x",
+            footprint="MYFP")])
+        items.append({"name": name, "folder": "Components/ICs", "description": "x", "comment": "=Value",
+                      "parameters": [{"name": "Value", "value": name}, {"name": "Manufacturer", "value": "ACME"},
+                                     {"name": "Manufacturer Part Number", "value": name}],
+                      "symbol": {"ref": name, "file": f"{name}/SchLib/{name}.SchLib"},
+                      "footprint": {"ref": "MYFP", "file": f"{name}/PcbLib/MYFP.PcbLib", "kicad_mod": f"{name}/KiCad/MYFP.kicad_mod"},
+                      "status": "ready", "source": {"symbol": "standard:generic", "footprint": "standard:generic"},
+                      "verify": [], "hold_reasons": []})
+    RC.apply(items, d)
+    (d / "plan.json").write_text(json.dumps(items))
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        rc = KX.main([str(d / "plan.json"), "-o", str(tmp_path / "kc"), "--name", "fpx", "--offline"])
+    assert rc == 1 and "PART_B" in err.getvalue(), err.getvalue()
+    txt = (tmp_path / "kc" / "fpx.kicad_sym").read_text()
+    assert '(symbol "PART_A"' in txt and '(symbol "PART_B"' not in txt, txt[:400]
+    assert '(property "Footprint" ""' not in txt
+
+
 # ---------------------------------------------------------------- #43 a missing plan leaves nothing behind
 @lite
 def test_publishers_on_a_missing_plan_write_nothing(tmp_path, monkeypatch):
