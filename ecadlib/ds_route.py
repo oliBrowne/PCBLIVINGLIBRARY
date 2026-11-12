@@ -136,7 +136,9 @@ def package_tokens(text):
             n1, sep = None, ""
         if fam in OUTLINE_FAMS:                       # SOT's number names the outline, not the pin count
             counted.pop(m.start(1), None)
-        if fam in NEEDS_NUM and (not n1 or sep.strip() == "" and sep):   # "TO-220", "SO8"; never "to 85" or "SO 2"
+        # "TO-220", "SO8"; never "to 85" or "SO 2". Only the short words are prose: "SOIC 8" (TI's ordering rows,
+        # "SOIC D 8") is a SOIC, which round 1 of compartmental testing found read as no package (open item 12)
+        if fam in NEEDS_NUM and m.group(1) in NEEDS_NUM and (not n1 or sep.strip() == "" and sep):
             if n1 or not counted.get(m.start(1)):
                 continue
         n1 = n1 or counted.get(m.start(1))
@@ -198,12 +200,17 @@ def ordering_codes(texts, part):
     if not vs:
         return toks, codes
     head = {re.match(r"[A-Z]*", v).group(0) for v in vs}   # STULPI01A: "ULPI" is the family name, not a package code
+    # a line that names this MPN as a whole word, when any does: LM358D's row, not LM358DGKR's (VSSOP) or LM358PW's
+    # (round 1 of compartmental testing, open item 12); a part whose whole name is on no line with a package (a title,
+    # and the table lists it only with a suffix: LM358DRG4) keeps every line that starts with it
+    whole = lambda ln: any(re.search(rf"(?<![A-Z0-9]){re.escape(v)}(?![A-Z0-9])", ln) for v in vs)
+    exact = any(whole(ln) and package_tokens(ln) for t in texts for ln in norm_text(t).upper().splitlines())
     for t in texts:
         last = set()
         for ln in norm_text(t).upper().splitlines():
             here = package_tokens(ln)
             flat = re.sub(r"\s+", "", ln)
-            if any(v in flat for v in vs):
+            if whole(ln) if exact else any(v in flat for v in vs):
                 toks |= here or last
                 for w in re.findall(r"(?<![A-Z0-9])([A-Z]{2,4}|\d{2}[A-Z]\d?(?:-[A-Z])?|[A-Z]{1,4}\d{4}[A-Z])(?![A-Z0-9])", ln):
                     if w not in STOP and w not in FAMILY and not any(w == v or w in h for v in vs for h in head) and (

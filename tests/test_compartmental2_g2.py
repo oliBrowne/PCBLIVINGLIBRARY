@@ -118,3 +118,34 @@ def test_a_3640_body_under_its_own_codes_is_not_held():
     assert SP.chip_size("C_3640_9110Metric") == "3640"
     h = held(dict(c, name="C_3640_9110Metric", body_width=T.sc(c["body_width"], 0.5)))
     assert h and "too far apart" in h, h
+
+
+# ---------------------------------------------------------------- round 1 open item 12: the ordering table's row above
+TI_ADDENDUM = ("PACKAGE OPTION ADDENDUM\nOrderable part number Status Package type Package Drawing Pins Package qty\n"
+               "LM358DGKR ACTIVE VSSOP DGK 8 2500 RoHS & Green NIPDAU Level-1-260C-UNLIM 0 to 70 M358\n"
+               "LM358DR ACTIVE SOIC D 8 2500 RoHS & Green NIPDAU Level-1-260C-UNLIM 0 to 70 LM358\n"
+               "LM358PWR ACTIVE TSSOP PW 8 2000 RoHS & Green NIPDAU Level-1-260C-UNLIM 0 to 70 L358\n")
+PLAIN = ("ORDERABLE DEVICE   PACKAGE TYPE   PINS\nLM358D      SOIC   8\nLM358DGKR   VSSOP  8\nLM358DR     SOIC   8\n"
+         "LM358PW     TSSOP  8\nLM358DRG4   SOIC   8\n")
+
+
+def test_an_ordering_row_is_read_for_its_own_package_not_the_row_above():
+    """LM358DR's row says SOIC, which was not read as a package when spaced from its count ('SOIC D 8', 'SOIC   8'):
+    the row took the VSSOP row above it, and LM358D took every row its name starts (LM358DGKR's VSSOP, LM358PW's
+    TSSOP). The pages of another package were then picked as this part's (round 1, open item 12)."""
+    fam = lambda toks: {DR._fam_n(t)[0] for t in toks}
+    assert fam(DR.ordering_codes([TI_ADDENDUM], "LM358DR")[0]) == {"SO"}
+    assert fam(DR.ordering_codes([TI_ADDENDUM], "LM358PWR")[0]) == {"TSSOP"}
+    assert fam(DR.ordering_codes([TI_ADDENDUM], "LM358DGKR")[0]) == {"MSOP"}
+    for part, want in (("LM358D", "SO"), ("LM358DR", "SO"), ("LM358PW", "TSSOP"), ("LM358DGKR", "MSOP"),
+                       ("LM358DRG4", "SO")):
+        assert fam(DR.ordering_codes([PLAIN], part)[0]) == {want}, (part, DR.ordering_codes([PLAIN], part))
+    assert DR.package_tokens("SOIC 8") == {"SO8"} and DR.package_tokens("SOIC D 8") == {"SO"}
+    assert DR.package_tokens("Operating range -40 to 85 C, SO 2 and TO 5") == set()     # prose is still no package
+
+
+def test_a_part_listed_only_with_a_suffix_still_finds_its_row():
+    toks, _ = DR.ordering_codes(["LM358DRG4   SOIC-8\nLM358DGKR   VSSOP-8"], "LM358DR")
+    assert toks == {"SO8"}, toks
+    toks, _ = DR.ordering_codes(["LM358D dual op amp", "LM358DR   SOIC-8\nLM358DGKR   VSSOP-8"], "LM358D")
+    assert {"SO8"} <= toks, toks                      # the title names it whole, the table only with a suffix
