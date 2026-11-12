@@ -2874,6 +2874,23 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
     return {"spec": spec, "symbol": sym, "sidecar": side, "needs_review": review}
 
 
+def active_low_from_pdf(res, job):
+    """The symbol's pins whose names the datasheet prints with a bar over them (pdf_overline: an overbar font or a line
+    drawn over the letters, read in code from the PDF) get the active-low mark ~{NAME} the read left out: the model
+    copies the letters of SHDN and drops the bar (LT3652, TPS70345, benchmark 2026-11-12). Only the pages the read
+    was sent are looked at; the read as given stays in the sidecar."""
+    data = job.get("data")
+    if data is None or not (res.get("symbol") or {}).get("pins"):
+        return
+    from . import pdf_overline as PO
+    pages = job.get("offset") if isinstance(job.get("offset"), list) else None
+    pins, done = PO.mark(res["symbol"]["pins"], PO.overlined(data, pages))
+    if done:
+        res["symbol"]["pins"] = pins
+        res["needs_review"].append("pin names the datasheet prints with a bar over them, marked active low: "
+                                   + ", ".join(done))
+
+
 def md(v):
     """A value read from the PDF (by the model) as one line of Markdown text or one table cell: no line breaks (a
     note can't start a heading of its own), '|' escaped (a pin name can't add a column), no heading/quote at the start."""
@@ -4972,6 +4989,7 @@ class Reader:
         # answer collected by a run without this part, from a state file with no 'sent', or adopted after a lost create)
         res = process(ext, job["part"], job["url"], rec.get("model") or self.model, job["offset"], rec["message"],
                       facts=job.get("facts"), tables=job.get("tables"), package=job.get("package"))
+        active_low_from_pdf(res, job)
         res["sidecar"]["pdf"], res["sidecar"]["via"] = job["prov"], rec.get("via")
         if job.get("route"):
             res["sidecar"]["route"] = {k: v for k, v in job["route"].items() if k not in ("picked", "best")}
