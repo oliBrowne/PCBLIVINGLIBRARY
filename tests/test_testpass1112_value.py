@@ -72,3 +72,13 @@ def test_release_check_holds_an_empty_value_behind_an_equals_value_comment():
     assert not RC.value_link_empty({"name": "U1", "comment": "LM358DR", "parameters": []})
     assert not RC.value_link_empty({"name": "U1", "comment": "=Part Number", "parameters": []})   # a DbLib column
     assert RC.value_link_empty({"name": "U1", "comment": "=Tolerance", "parameters": [{"name": "Tolerance", "value": " "}]})
+
+
+def test_an_mpn_only_line_takes_the_value_from_the_part_search_text():
+    from ecadlib import altium_export as AX
+    lines = [{"designator": "R1", "mpn": "RC0603FR-0710KL", "description": "", "footprint": "0603", "qty": "1"}]
+    import pandas as pd
+    tri = pd.DataFrame([{"mpn": "RC0603FR-0710KL", "src_description": "10kΩ ±1% 100mW 0603 Chip Resistor",
+                         "status": "found", "line": "0"}])
+    df = AX.to_rows(lines, tri)["Resistors"]
+    assert list(df["Value"]) == ["10kΩ"], df.to_dict("records")

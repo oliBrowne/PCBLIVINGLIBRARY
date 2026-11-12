@@ -420,7 +420,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         pkg = package_of(fp, ln.get("description")) or ""
         value = ln.get("value", "")
         if cat in GENERIC_SYMBOL and not str(value).strip():   # no Value column: the shared symbol shows '=Value'
-            value = description_value(ln.get("description"), cat)
+            value = description_value(ln.get("description"), cat) or \
+                description_value(t.get("src_description") if t is not None else "", cat)   # the part search text
         if cat in GENERIC_SYMBOL and not mpn and PLAIN_VALUE.fullmatch(value.strip()):
             pv = parse_value(value)                   # 1uF / 1u / 1µF, 100nF / 0.1uF, 4k7 / 4.7k: one part, named
             if pv is not None and not two_readings(value):   # with the first spelling the BOM uses ('4,700pF' reads
