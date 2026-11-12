@@ -171,7 +171,10 @@ def active_low(s, names=()):
     the mark, so EN and ~{EN} normalise alike; the scorer compares the mark on its own (full review 2026-11-10, 3.4).
     names: the part's other pin names: CLK_N beside CLK_P is the negative leg of a pair, not an active-low pin."""
     from ..house_style import pin_low
-    base, st = pin_low(str(s or "").strip().replace("\u0304", "\u0305"))
+    n = str(s or "").strip().replace("\u0304", "\u0305")
+    if re.fullmatch(r"(?:[^\\]\\)+", n):          # Altium's bar: a backslash after each letter (G\, R\E\S\E\T\)
+        return True
+    base, st = pin_low(n)
     if st == "suffix_n" and any(str(n or "").strip().upper() == base.upper() + "_P" for n in names):
         return False
     return st is not None

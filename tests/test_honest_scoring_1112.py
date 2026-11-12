@@ -77,3 +77,8 @@ def test_the_negative_leg_of_a_pair_is_not_active_low():
     pair = [("1", "CLK_P"), ("2", "CLK_N"), ("3", "GND"), ("4", "VDD"), ("5", "OUT")]
     assert S.score_symbol(pair, [("1", "CLK+"), ("2", "CLK-"), ("3", "GND"), ("4", "VDD"), ("5", "OUT")]
                           ).get("symbol_names", {"inverted": 0}).get("inverted", 0) == 0
+
+
+def test_altiums_bar_is_active_low_too():
+    # AM26LS31CD/CN (offline gate): ours G\ (Altium's bar), KiCad's ~{G}: the same sense
+    assert S.active_low("G\\") and S.active_low("R\\E\\S\\E\\T\\") and not S.active_low("A\\B")
