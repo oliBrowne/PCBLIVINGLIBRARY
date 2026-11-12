@@ -340,7 +340,8 @@ def test_self_check_flags_disagreements():
     r = rev(lambda p: p["pitch"].update(nom=2.0))
     assert any("pitch 2.0 mm is outside the usual 0.35-1.27 mm for qfn" in x for x in r), r
     assert D.name_facts("SOT-23-5")["count"] == 5 and D.name_facts("SOT-23")["count"] is None
-    assert D.name_facts("SOIC-8_3.9x4.9mm_P1.27mm") == {"count": 8, "ep": False, "pitch": 1.27, "body": (3.9, 4.9), "ep_size": None}
+    assert D.name_facts("SOIC-8_3.9x4.9mm_P1.27mm") == {"count": 8, "ep": False, "pitch": 1.27, "body": (3.9, 4.9), "ep_size": None,
+                                                           "code_body": None}
     assert D.name_facts("HTSSOP-20-1EP_4.4x6.5mm_P0.65mm_EP3.4x6.5mm")["ep"]
     # a family the schema gains later (another helper adds BGA, connectors): generic checks + an info line, no crash
     spec = {"name": "BGA-64_8x8mm_P0.8mm", "package_type": "bga", "pin_count": 64, "pitch": 0.8,

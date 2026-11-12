@@ -1990,6 +1990,14 @@ def _feet_outside(spec):
             out.append(f"{span_k} max {span[2]:g} mm leaves {room / 2:.3g} mm per side beyond {body_k} min {body[0]:g} "
                        f"mm, over {FOOT_ROOM:g} x the terminal_length max {L[2]:g} mm, which is implausible for a "
                        f"gull-wing lead (a span from another row of the table? check {span_k} and {body_k})")
+        elif not two_sided and (spec.get("terminal_length") or {}).get("max") is not None and \
+                span[1] - body[1] > FOOT_ROOM * L[2]:
+            # leads on one side, the tab on the other (SOT-89, DPAK): the span past the body is the leads' reach plus
+            # the tab's, together still a few feet (SOT-89 1.6 mm for a 1.1 mm foot, DPAK 3.8 for 1.5, SOT-223 3.5
+            # for 1.0); SOT-89's span read twice too long built its leads 2 mm out (deep-dive 2026-11-12, item 3)
+            out.append(f"{span_k} {span[1]:g} mm is {span[1] - body[1]:.3g} mm past {body_k} {body[1]:g} mm, over "
+                       f"{FOOT_ROOM:g} x the terminal_length max {L[2]:g} mm, which is implausible for leads on one side "
+                       f"and a tab on the other (check {span_k} and {body_k})")
     return out
 
 
@@ -2378,7 +2386,9 @@ def name_facts(name):
     pm = re.search(rf"_P{num}mm", name)
     bm = re.search(rf"_{num}x{num}(?:x{num})?mm", name)
     em = re.search(rf"_EP{num}x{num}mm", name)
-    return {"count": count, "ep": bool(re.search(r"-\d*EP$|-\d*EP-", head)) or bool(em),
+    cm = re.search(r"(?<![0-9A-Za-z])(?:(\d\d)(\d\d)Metric|EIA-(\d\d)(\d\d))(?![0-9A-Za-z])", name)
+    code = tuple(int(x) / 10 for x in cm.groups() if x) if cm else None    # 3216Metric, EIA-3528: 3.2 x 1.6, 3.5 x 2.8
+    return {"count": count, "ep": bool(re.search(r"-\d*EP$|-\d*EP-", head)) or bool(em), "code_body": code,
             "pitch": float(pm.group(1)) if pm else None,
             "body": (float(bm.group(1)), float(bm.group(2))) if bm else None,
             "ep_size": (float(em.group(1)), float(em.group(2))) if em else None}
@@ -2471,6 +2481,52 @@ def std_copper(spec, rep):
     return (ref, mine) if far else None
 
 
+def _tab_land(pads):
+    """True for a land with a tab: three or more pads, one of them over three times the usual pad's area and off the
+    land's middle (an exposed pad sits in the middle). KiCad draws such a land from the body's middle with the thermal
+    pad under the body; a read's is drawn in other ways (see _lead_box), so their pads do not compare one by one."""
+    if len(pads) < 3:
+        return False
+    areas = sorted(p["w"] * p["h"] for p in pads)
+    big = max(pads, key=lambda p: p["w"] * p["h"])
+    xs = [p["x"] for p in pads]
+    ys = [p["y"] for p in pads]
+    mid = ((max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2)
+    return big["w"] * big["h"] > 3 * areas[len(areas) // 2] and max(abs(big["x"] - mid[0]), abs(big["y"] - mid[1])) > 0.25
+
+
+def std_pads(spec, rep):
+    """The pad of a read that names a package of the checked standard table and is built far from that package's own
+    pad of the same number: -> (pad number, what differs) or None. std_copper's box around all the leads cannot see a
+    terminal read twice too long (the pads grow inwards, the box stays), or a two-pad part's length and width the
+    other way round when the box happens to fit (deep-dive open items 2026-11-12). Far is a centre over 0.5 mm off,
+    or a side over 0.75 mm and a quarter off. Makers' lands differ from the table's by less: the real reads of
+    2026-10-25 that name a table package sit within 0.15 mm in place and 0.6 mm in size, and a true SOD-323 read
+    builds a pad 0.63 mm longer than the table's. Not compared: a land with a tab (_tab_land) and a read whose pad
+    numbers are not the table's."""
+    try:
+        from . import stdparts as SP
+        name = str(spec.get("name") or "")
+        if spec.get("tab") or name not in SP.packages():
+            return None
+        std = SP.build(name)[1].get("pads") or []
+        ref = {str(p["num"]): p for p in std}
+        mine = {str(p["num"]): p for p in rep.get("pads") or []}
+        if not ref or set(ref) != set(mine) or len(ref) != len(std) or _tab_land(std) or _tab_land(rep.get("pads") or []):
+            return None
+        for k, a in ref.items():
+            b = mine[k]
+            off = max(abs(a["x"] - b["x"]), abs(a["y"] - b["y"]))
+            if off > 0.5:
+                return k, f"its centre is {off:.2f} mm from the package's"
+            for u, v in ((a["w"], b["w"]), (a["h"], b["h"])):
+                if abs(u - v) > max(0.75, 0.25 * u):
+                    return k, f"it is {b['w']:.2f} x {b['h']:.2f} mm, the package's is {a['w']:.2f} x {a['h']:.2f} mm"
+    except Exception:                                 # no table, or its entry does not build: nothing to compare with
+        return None
+    return None
+
+
 def self_check(spec, ext, review):
     """Compare what the model read with what its own package name says and with the family's usual range.
     Disagreements go to review (prefixed 'self-check:'); returns info lines (what was and was not checked)."""
@@ -2503,6 +2559,10 @@ def self_check(spec, ext, review):
         far = any(abs(x - y) > max(0.5, 0.25 * max(x, y)) for x, y in zip(sorted(f["body"]), sorted(body)))
         add(f"name says body {f['body'][0]:g}x{f['body'][1]:g} mm, the drawing gives {body[0]:g}x{body[1]:g} mm"
             + (f": {TOO_FAR} (another row of the table, or a unit?)" if far else ""))
+    if f["code_body"] and len(body) == 2 and all(f["code_body"]) and \
+            any(abs(x - y) > max(0.5, 0.25 * max(x, y)) for x, y in zip(sorted(f["code_body"]), sorted(body))):
+        add(f"name {spec['name']} carries the size code of a {f['code_body'][0]:g}x{f['code_body'][1]:g} mm body, the "   # a code
+            f"drawing gives {body[1]:g}x{body[0]:g} mm: {TOO_FAR} (another case size's row, or a unit?)")   # rounds: only far
     std = _std_span(spec)
     if std:
         add(f"name {spec['name']} is a standard package with a {std[0]:g} mm lead span, the drawing gives "
@@ -2510,7 +2570,9 @@ def self_check(spec, ext, review):
     ep = spec.get("exposed_pad") or {}
     eps = tuple(x for x in (_nom(ep.get("length")), _nom(ep.get("width"))) if x)
     if f["ep_size"] and len(eps) == 2 and not _pair_close(f["ep_size"], eps) and not _ep_name_fits(f["ep_size"], spec):
-        add(f"name says EP {f['ep_size'][0]:g}x{f['ep_size'][1]:g} mm, the drawing gives {eps[0]:g}x{eps[1]:g} mm")
+        far = any(abs(x - y) > max(0.4, 0.25 * max(x, y)) for x, y in zip(sorted(f["ep_size"]), sorted(eps)))
+        add(f"name says EP {f['ep_size'][0]:g}x{f['ep_size'][1]:g} mm, the drawing gives {eps[0]:g}x{eps[1]:g} mm"
+            + (f": {TOO_FAR} (another package variant's pad, a size read half or twice, or a unit?)" if far else ""))
     if e is not None and not any(abs(e - s) < 0.006 for s in STD_PITCH):
         add(f"pitch {e} mm is not a standard pitch ({', '.join(map(str, STD_PITCH[:12]))} ...): unit or reading error?")
     norm = FAMILY_NORMS.get(t)
@@ -2883,6 +2945,11 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
                 review.append(f"self-check: name {spec['name']} is a standard package whose lead pads span "
                               f"{a:.2f} x {b:.2f} mm, this read's span {c:.2f} x {d:.2f} mm: {TOO_FAR} (another "
                               "package's row of the table, a unit, or the wrong name?)")
+            off = None if far else std_pads(spec, rep)
+            if off:
+                review.append(f"self-check: name {spec['name']} is a standard package, but pad {off[0]} built from this "
+                              f"read is far from that package's pad: {off[1]}: {TOO_FAR} (a terminal or pad size read "
+                              "twice or half, length and width the other way round, or the wrong name?)")
             if not any(r.startswith(("symbol: pins missing", "symbol: pins not on the footprint")) for r in review):
                 review.extend(pads_vs_pins(rep, ext["pins"]))   # (check_pins already said it when it did)
             if rep.get("warning"):

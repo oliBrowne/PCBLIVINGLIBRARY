@@ -407,6 +407,11 @@ def check(text, allow_duplicate_pads=None, same_net=None):
     for p in cu:                                     # zero-area copper: nothing to solder (size typed as 0, or a lost unit)
         if p["w"] <= EPS or p["h"] <= EPS:
             add("error", "copper", f"pad {p['num'] or '(unnumbered)'} has no copper: size {p['w']:g} x {p['h']:g} mm")
+    for p in sexpr.find(tree, "pad"):                # a custom pad is its outline: with none, only the small anchor
+        prims = [g for g in (sexpr.first(p, "primitives") or [])[1:] if isinstance(g, list) and g]   # is copper, and
+        if len(p) > 3 and p[3] == "custom" and not prims:           # KiCad and Altium need not agree on its shape
+            add("error", "copper", f"pad {p[1] or '(unnumbered)'} is a custom shape with no outline (no primitives): "
+                                   "draw its copper or give the pad a plain shape")
     close = {}                                       # (level, gap) -> [(a, b)]: one finding per distinct gap
     # only pairs whose boxes come within MIN_WEB along x can have a finding (rounding and polygons only widen the
     # gap): a sweep finds them, so a 2500-ball grid is not 3 million pair checks (9 s); the pairs keep their order
