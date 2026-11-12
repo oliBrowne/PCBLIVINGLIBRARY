@@ -536,8 +536,9 @@ def api_plugin(command, kicad=None, remove=False, environ=None, home=None, platf
                 changed = True
         if linux:
             sh = d / "ecadlib_kicad.sh"
-            if sh.stat().st_mode & 0o111 != 0o111:
-                sh.chmod(0o755)                          # KiCad starts only an executable file
+            # KiCad starts only an executable file; a Windows disk has no execute bits to set or read
+            if os.name != "nt" and sh.stat().st_mode & 0o111 != 0o111:
+                sh.chmod(0o755)
                 changed = True
         else:
             (d / "ecadlib_kicad.sh").unlink(missing_ok=True)
