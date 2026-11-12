@@ -227,3 +227,12 @@ def test_a_pdf_over_the_size_cap_is_said_once_not_retried_as_cut_off():
     with mock.patch.object(D, "MAX_DOWNLOAD", 1024):
         status, data, ctype, final, err = D.PdfStore._get_retrying(Fetch(), "http://example.invalid/x.pdf")
     assert len(calls) == 1 and data == big and not err, (calls, err)
+
+
+def test_symbol_from_a_windows_path_that_is_no_symbol_is_a_clear_error():
+    from ecadlib import symbol_layout as SL
+    try:
+        SL.load_pins(r"C:\Users\me\pins.xlsx")
+        raise AssertionError("no error")
+    except SL.PinListError as e:
+        assert "not a pin list" in str(e), e

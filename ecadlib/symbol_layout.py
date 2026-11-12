@@ -875,7 +875,7 @@ def load_pins(src, http=None):
         return name, pins, {}
     from . import kicad_import as K
     ref = s[6:] if low.startswith("kicad:") else s
-    if ":" not in ref and not re.search(r"\.kicad_sym$", ref, re.I):
+    if not (low.startswith("kicad:") and ":" in ref) and not re.search(r"\.kicad_sym(?::|$)", ref, re.I):   # C:\x.xlsx
         raise PinListError(f"{s}: not a pin list (.csv / .json), an Altium .SchLib or a KiCad symbol "
                            "(LIB.kicad_sym:NAME or kicad:Lib:Name)" + ("" if Path(s).exists() else "; no such file"))
     chain, _ = K.load_symbol(ref, http if low.startswith("kicad:") else None)
