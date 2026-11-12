@@ -49,6 +49,11 @@ def schematic_of(project):
     pros = sorted(d.glob("*.kicad_pro"))
     if len(pros) == 1 and pros[0].with_suffix(".kicad_sch").is_file():
         return pros[0].with_suffix(".kicad_sch")
+    if p.suffix.lower() == ".sch" and p.is_file():
+        raise ValueError(f"{p.name} is a KiCad 5 schematic (.sch): open it in KiCad 6 or later and save it, or export a "
+                         "BOM / netlist from KiCad")
+    if not p.exists():
+        raise ValueError(f"file not found: {p.name}")
     raise ValueError(f"no schematic for {p.name}: save the schematic next to the board (same name, .kicad_sch)")
 
 
@@ -390,10 +395,16 @@ def main(argv=None):
               "over_limit_ok": "1" if a.over_limit_ok else "", "price_unknown_ok": "1" if a.price_unknown_ok else ""}
         res = run_job(a.job, a.action, a.project, a.mpn, a.manufacturer, a.path, offline=a.offline, ai=ai, kicad=a.kicad)
         return 0 if res.get("status") != "error" else 1
+    cfg = config(a.project)
+    fresh = not Path(cfg["workspace"]).exists()
     try:
-        res = AM.check_bom(config(a.project), schematic_of(a.project), opener=False if a.no_open else None)
+        res = AM.check_bom(cfg, schematic_of(a.project), opener=False if a.no_open else None)
     except (OSError, ValueError) as e:
-        print(f"ecadlib kicad-menu: {e}", file=sys.stderr)
+        if fresh:                                     # made by this run for a file it could not read: not left behind
+            import shutil
+            shutil.rmtree(cfg["workspace"], ignore_errors=True)
+        from .cliutil import plain
+        print(f"ecadlib kicad-menu: {plain(e)}", file=sys.stderr)
         return 2
     print(json.dumps(res, indent=2) if a.json else res["message"])
     return 0

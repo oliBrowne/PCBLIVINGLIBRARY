@@ -266,10 +266,15 @@ def main(argv=None):
     except (ValueError, OSError) as e:
         print(f"ecadlib plugins export: {e}", file=sys.stderr)
         return 2
-    for p in paths:
+    out = Path(a.out)
+    there = [p for p in paths if Path(p).exists() or (out / p).exists()]
+    for p in there:
         print(p)
-    print(f"{a.name}: {len(paths)} file(s) -> {a.out}")
-    return 0
+    for p in paths:
+        if p not in there:                            # an exporter's word is not proof: a file it never wrote
+            print(f"ecadlib plugins export: {a.name} says it wrote {p}, but there is no such file", file=sys.stderr)
+    print(f"{a.name}: {len(there)} file(s) -> {a.out}")
+    return 0 if len(there) == len(paths) else 1
 
 
 if __name__ == "__main__":

@@ -249,7 +249,9 @@ MENUS = [("SchDoc", "MNSchematicMenu", "MNDesignMenu_Window1_3", "SchCustom"),
 
 def check_win_dir(win_dir):
     w = str(win_dir).rstrip("\\/")
-    if not PureWindowsPath(w).is_absolute() or not re.match(r"^([A-Za-z]:\\|\\\\)", w.replace("/", "\\")):
+    root = re.fullmatch(r"[A-Za-z]:", w)          # D:\ (a drive's root; "D:" as this returns it) + "\file"
+    probe = w + "\\" if root else w
+    if not PureWindowsPath(probe).is_absolute() or not re.match(r"^([A-Za-z]:\\|\\\\)", probe.replace("/", "\\")):
         raise ValueError(f"--win-dir {win_dir!r}: give the absolute Windows folder the menu files will be in (D:\\ecadlib-menu)")
     if any(c in w for c in "'|\"\r\n"):
         raise ValueError(f"--win-dir {win_dir!r}: a menu entry cannot hold ' | or \" in its path; use another folder")

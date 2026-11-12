@@ -169,3 +169,84 @@ def test_missing_files_are_named_in_plain_words_with_the_command(tmp_path, monke
     assert code and err.startswith("ecadlib datasheet batch: "), err
     code, out, err = _cli("project", "nope.SchDoc")                       # its own words stay as they are
     assert code == 2 and err.startswith("ecadlib project: nope.SchDoc: no such schematic"), err
+
+
+# ---------------------------------------------------------------- round 1's open items #38 - #41
+def test_triage_summary_names_the_plugin_source_and_a_plugin_failure_is_no_key_problem():
+    """#38: a part a plugin found was counted as "found online (EasyEDA)" in the summary line (the table row said
+    stockroom); a line where only a plugin failed said "source unreachable ... add API keys"."""
+    import argparse
+    from ecadlib import bom_triage as BT
+    rows = [{"line": 1, "status": "available_easyeda", "src": "stockroom", "mpn": "LM358DR", "lcsc": "", "notes": ""},
+            {"line": 2, "status": "available_easyeda", "src": "easyeda", "mpn": "NE555", "lcsc": "C1", "notes": ""},
+            {"line": 3, "status": "unverified (source unreachable)", "src": "", "mpn": "X1", "lcsc": "",
+             "notes": "bad_plug: plugin error: RuntimeError: boom"}]
+    counts = {"available_easyeda": 2, "unverified (source unreachable)": 1}
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        BT.print_result(rows, counts, argparse.Namespace(offline=False, out="t", bom="bom.csv"))
+    text = out.getvalue()
+    summary = next(ln for ln in text.splitlines() if ln.startswith("3 BOM lines"))
+    assert "1 found online (stockroom)" in summary and "1 found online (EasyEDA)" in summary, summary
+    assert "add API keys" not in text and "plugin" in text, text
+
+
+@lite
+def test_kicad_menu_check_bom_names_a_missing_file_and_an_old_schematic(tmp_path, monkeypatch):
+    """#39: a missing file and a KiCad 5 .sch were both told "save the schematic next to the board", and a file it
+    could not read left an empty ecadlib-work/ behind."""
+    from ecadlib import kicad_menu as KM
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    (tmp_path / "old.sch").write_text("EESchema Schematic File Version 4\n")
+    (tmp_path / "empty.kicad_sch").write_text("")
+    for f, want in (("nope.kicad_sch", "not found"), ("old.sch", "KiCad 5"), ("empty.kicad_sch", "kicad_sch")):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = KM.main(["check-bom", f, "--no-open"])
+        assert code == 2 and want in err.getvalue(), (f, err.getvalue())
+        assert "save the schematic next to the board" not in err.getvalue(), err.getvalue()
+    assert not (tmp_path / KM.WORK).exists(), list(tmp_path.iterdir())
+
+
+@lite
+def test_an_exporters_paths_that_were_never_written_are_not_counted(tmp_path, monkeypatch):
+    """#40: an exporter plugin returning a path it never wrote was reported as written, exit 0."""
+    from ecadlib import plugins as PL
+    real = tmp_path / "out" / "a.txt"
+    monkeypatch.setattr(PL, "run_exporter", lambda *a, **k: [str(real), str(tmp_path / "never.txt")])
+    real.parent.mkdir()
+    real.write_text("x")
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = PL.main(["export", "x", "plan.json", "-o", str(tmp_path / "out")])
+    assert code == 1 and "1 file(s)" in out.getvalue() and "never.txt" in err.getvalue(), (out.getvalue(), err.getvalue())
+
+
+def test_altium_menu_takes_a_drive_root_as_its_windows_folder():
+    """#40: --win-dir D:\\ (a drive's root) was refused as "not an absolute Windows folder"."""
+    from ecadlib import altium_menu as AM
+    assert AM.check_win_dir("D:\\") == "D:"
+    assert "ProjectName=D:\\ecadlib_menu.PrjScr" in AM.rcs_text("D:\\")
+    assert AM.check_win_dir(AM.check_win_dir("D:\\")) == "D:"            # its own answer again (rcs_folder)
+    for bad in ("menus\\x", "D:menu", "\\"):
+        try:
+            AM.check_win_dir(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+
+
+@lite
+def test_mcp_project_bom_on_a_missing_project_does_not_show_the_servers_path(tmp_path, monkeypatch):
+    """#41: project_bom on a missing .PrjPcb answered "[Errno 2] No such file or directory: '/abs/ws/x.PrjPcb'"."""
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
+    from ecadlib.app import Workspace
+    from ecadlib import mcp_server as MS
+    ws = Workspace(str(tmp_path / "ws"), [], None, True)
+    ws.mcp_options = MS.Options(confine=True)
+    r = MS.handle(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": "project_bom", "arguments": {"project": "x.PrjPcb"}}})
+    text = r["result"]["content"][0]["text"]
+    assert r["result"]["isError"] and "x.PrjPcb" in text, r
+    assert str(tmp_path) not in text and "[Errno" not in text, text

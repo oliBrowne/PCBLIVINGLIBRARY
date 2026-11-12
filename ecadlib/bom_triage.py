@@ -1448,19 +1448,26 @@ def print_result(rows, counts, a, t=None):
     """Terminal view: a row per BOM line in plain words (-v: the source notes), the counts, the next step."""
     from . import messages as M, term as TM
     t = t or TM.Term()
-    table = []
+    table, by, plugin_failed = [], {}, 0
     for r in rows:
         st, word = TRIAGE_WORDS.get(r["status"], ("info", r["status"].replace("_", " ")))
         src = str(r.get("src") or "")
         if "EasyEDA" in word and src and "easyeda" not in src.lower():   # the status key is kept for old readers;
             word = word.replace("EasyEDA", src) if "(" in word else f"{word} ({src})"   # the words name the source
+        if str(r["status"]).startswith("unverified") and re.search(r"plugin (?:error|returned)", str(r.get("notes") or "")):
+            plugin_failed += 1                        # a plugin that failed: not a network or key problem
+        by[word] = by.get(word, 0) + 1                # the summary counts what the rows say (the source's own name)
         table.append([str(r["line"]), t.status(st, word), r["mpn"][:32], r["lcsc"],
                       M.clean(r["notes"])[:200] if t.verbose else ""])
     t.table(table, right=(0,))
-    by = {TRIAGE_WORDS.get(str(k), ("", str(k)))[1]: int(v) for k, v in counts.items()}
-    unreach = sum(int(v) for k, v in counts.items() if str(k).startswith("unverified"))
+    if not rows:
+        by = {TRIAGE_WORDS.get(str(k), ("", str(k)))[1]: int(v) for k, v in counts.items()}
+    unreach = sum(int(v) for k, v in counts.items() if str(k).startswith("unverified")) - plugin_failed
     notes = []
-    if unreach:
+    if plugin_failed:
+        notes.append((f"{M.plural(plugin_failed, 'line')} could not be checked: a part source plugin failed (the "
+                      "report's notes say which)", "fix or remove the plugin (`ecadlib plugins list`); -v shows the notes"))
+    if unreach > 0:
         notes.append((f"{M.plural(unreach, 'line')} could not be checked: the part sources were not reachable"
                       + (" (--offline: only the cache)" if a.offline else ""),
                       "run again online, or add API keys (`ecadlib doctor` lists them)"))
