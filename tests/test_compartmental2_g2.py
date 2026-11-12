@@ -3,7 +3,7 @@ Each component is called directly with small hand-made inputs. Offline: no key, 
     python3 -m tests.run_all test_compartmental2_g2"""
 import copy
 
-from ecadlib import datasheet as D, ds_route as DR, stdparts as SP
+from ecadlib import datasheet as D, ds_route as DR, footprint_gen as F, stdparts as SP
 from tests import test_fix1026_rd as T
 from tests.test_fix1026_rd import gw, two
 
@@ -149,3 +149,105 @@ def test_a_part_listed_only_with_a_suffix_still_finds_its_row():
     assert toks == {"SO8"}, toks
     toks, _ = DR.ordering_codes(["LM358D dual op amp", "LM358DR   SOIC-8\nLM358DGKR   VSSOP-8"], "LM358D")
     assert {"SO8"} <= toks, toks                      # the title names it whole, the table only with a suffix
+
+
+# ---------------------------------------------------------------- round 1 open items 14, 15, 16: footprint_gen's door
+SOIC = {"name": "SOIC-8_custom", "package_type": "gullwing", "pin_count": 8, "pitch": 1.27,
+        "body_length": {"min": 4.8, "max": 5.0}, "body_width": {"min": 3.8, "max": 4.0},
+        "lead_span": {"min": 5.8, "max": 6.2}, "terminal_width": {"min": 0.31, "max": 0.51},
+        "terminal_length": {"min": 0.4, "max": 1.27}}
+
+
+def refused(spec, *words):
+    try:
+        F.build(copy.deepcopy(spec))
+    except ValueError as e:
+        assert all(w in str(e) for w in words), (words, str(e))
+        return str(e)
+    raise AssertionError(f"built: {spec}")
+
+
+def test_a_hand_spec_with_no_body_width_or_its_sides_swapped_is_refused():
+    """Round 1, open item 14: a body_width of 0 built a 0 mm wide outline, and D and E1 the other way round built
+    with the outline turned (footprint_gen; the read's door already held both)."""
+    refused(dict(SOIC, body_width={"nom": 0}), "body_width")
+    refused(dict(SOIC, body_length={"nom": 3.9, "tol": 0.1}, body_width={"min": 4.8, "max": 5.0}), "terminal_length")
+    F.build(copy.deepcopy(SOIC))
+
+
+def test_a_gullwing_span_far_past_the_body_is_refused_and_held():
+    """Round 1, open item 16: a 12 mm span on a 3.9 mm SOIC built its pads 5.5 mm out, from a hand spec and from a
+    read whose name is not in the standard table (the 4-foot room rule allows 5 mm a side for a 1.27 mm foot)."""
+    refused(dict(SOIC, lead_span={"nom": 12.0, "tol": 0.2}), "lead_span")
+    t = T.gw("MYPKG-8", 8, 1.27, (4.8, 4.9, 5.0), (3.8, 3.9, 4.0), (11.6, 12.0, 12.4), (0.31, 0.41, 0.51),
+             (0.4, 0.835, 1.27))
+    h = held(t)
+    assert h and "lead_span" in h, h
+
+
+def test_every_standard_gullwing_and_qfp_still_builds():
+    """The evidence for the reach limit: no gull-wing or QFP of the checked table reaches over 2.3 mm past its body."""
+    n = 0
+    for name, s in SP.packages().items():
+        if s.get("package_type") in ("gullwing", "qfp"):
+            n += 1
+            F.build(dict(copy.deepcopy(s), name=name))
+            assert not F.sanity(dict(s, name=name)), name
+    assert n > 200
+
+
+DFN_TB = {"name": "DFN-8-1EP_3x3mm_P0.5mm_EP2.4x1.6mm", "package_type": "qfn", "pin_count": 8, "pitch": 0.5,
+          "pins_left_right": 0, "pins_top_bottom": 4, "body_length": {"nom": 3.0, "tol": 0.05},
+          "body_width": {"nom": 3.0, "tol": 0.05}, "terminal_length": {"min": 0.3, "max": 0.5},
+          "terminal_width": {"min": 0.18, "max": 0.3}, "exposed_pad": {"length": {"nom": 2.4}, "width": {"nom": 1.6}}}
+
+
+def test_a_dfn_read_with_its_rows_top_and_bottom_is_built_pin_1_upper_left():
+    """Round 1, open item 15: rows read top/bottom built the land turned 90 degrees, pin 1 lower left (KLC F1.2). The
+    same land turned to rows left/right is what the IPC orientation draws."""
+    txt, rep = F.build(copy.deepcopy(DFN_TB))
+    lr = dict(DFN_TB, pins_left_right=4, pins_top_bottom=0, exposed_pad={"length": {"nom": 1.6}, "width": {"nom": 2.4}})
+    txt2, rep2 = F.build(copy.deepcopy(lr))
+    at = lambda r: [(p["num"], round(p["x"], 3), round(p["y"], 3), round(p["w"], 3), round(p["h"], 3))
+                    for p in r["pads"]]
+    assert at(rep) == at(rep2), (at(rep), at(rep2))
+    p1 = rep["pads"][0]
+    assert p1["x"] < 0 and p1["y"] < 0, p1
+    assert any("turned" in n for n in rep.get("notes") or []), rep.get("notes")
+    listed = dict(DFN_TB, pin_sides={"left": [], "bottom": ["1", "2", "3", "4"], "right": [], "top": ["8", "7", "6", "5"]})
+    assert F.rows(F.orient_rows(listed)[0]) == (0, 4)  # the read's own sides are built as listed
+
+
+# ---------------------------------------------------------------- fp-edit: a rename left after another is skipped
+def _padres(pads, pins):
+    t = {"unit": "mm", "y_axis": "down", "view": "top", "origin": "center", "default_pad": {"w": 1, "h": 1},
+         "pads": [{"number": n, "x": x, "y": 0} for n, x in pads], "arrays": None}
+    return {"spec": {"name": "X", "package_type": "custom", "pin_count": len(pads), "pad_table": t},
+            "symbol": {"pins": [{"num": n, "name": f"N{n}", "type": "passive"} for n in pins]}}
+
+
+def test_fp_edit_never_puts_two_pads_on_one_number_after_skipping_a_rename():
+    """T->1 with 1->2 (pad 2 exists): 1->2 was skipped as a clash, and T->1 then went ahead onto pad 1, which kept
+    its number: two pads 1, a short nobody asked for (when the symbol had no pin T to stop it)."""
+    from ecadlib import fp_edit as FE
+    out, notes = FE.apply({"rename": {"T": "1", "1": "2"}}, _padres([("T", -2), ("1", 0), ("2", 2)], ["1", "2"]))
+    nums = [str(p["number"]) for p in out["spec"]["pad_table"]["pads"]]
+    assert sorted(nums) == ["1", "2", "T"], (nums, notes)
+    assert any("T -> 1" in n and "skipped" in n for n in notes), notes
+    out, notes = FE.apply({"rename": {"1": "2", "2": "3", "3": "1"}}, _padres([("1", 0), ("2", 1), ("3", 2)], []))
+    assert [p["number"] for p in out["spec"]["pad_table"]["pads"]] == ["2", "3", "1"], notes   # a cycle still turns
+
+
+# ---------------------------------------------------------------- pdf_overline: complementary outputs
+def test_a_plain_pin_beside_its_own_barred_twin_is_not_barred():
+    """A supervisor with complementary RESET and ~{RESET} outputs (ADM6316-style): the datasheet prints RESET with a
+    bar more often than without, and the active-high RESET pin was barred too: two ~{RESET} pins, one of them the
+    wrong sense."""
+    from ecadlib import pdf_overline as PO
+    pins = [{"num": "1", "name": "~{RESET}"}, {"num": "2", "name": "RESET"}, {"num": "3", "name": "MR"}]
+    out, done = PO.mark(pins, {"RESET": (5, 2), "MR": (3, 0)})
+    assert [p["name"] for p in out] == ["~{RESET}", "RESET", "~{MR}"], out
+    assert done == ["MR"]
+    for twin in ("/RESET", "RESET_N", "nRESET", "RESET#"):
+        out, _ = PO.mark([{"num": "1", "name": twin}, {"num": "2", "name": "RESET"}], {"RESET": (5, 2)})
+        assert out[1]["name"] == "RESET", (twin, out)

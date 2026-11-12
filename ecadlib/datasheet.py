@@ -2022,6 +2022,11 @@ def _feet_outside(spec):
             out.append(f"{span_k} max {span[2]:g} mm leaves {room / 2:.3g} mm per side beyond {body_k} min {body[0]:g} "
                        f"mm, over {FOOT_ROOM:g} x the terminal_length max {L[2]:g} mm, which is implausible for a "
                        f"gull-wing lead (a span from another row of the table? check {span_k} and {body_k})")
+        elif two_sided and spec["package_type"] == "gullwing" and F._reach_problems(spec) and \
+                room / 2 > F.REACH_MM:
+            # a long foot's room rule lets a SOIC (L up to 1.27) reach 5 mm: no real gull-wing reaches over 3 mm
+            # (round 1 of compartmental testing, open item 16: a 12 mm span on a 3.9 mm SOIC built 'ok')
+            out.append(F._reach_problems(spec)[0])
         elif not two_sided and (spec.get("terminal_length") or {}).get("max") is not None and \
                 span[1] - body[1] > FOOT_ROOM * L[2]:
             # leads on one side, the tab on the other (SOT-89, DPAK): the span past the body is the leads' reach plus
