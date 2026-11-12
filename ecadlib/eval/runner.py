@@ -682,6 +682,13 @@ def unverified(row):
     return not row["pass"] and bool(row.get("land_unverified") or row.get("body_unverified"))
 
 
+def made(row):
+    """A part was built: it has a footprint and a symbol. One with no symbol (SM6T100A in the cloud: its PDF never
+    reached the reader, so only the standard footprint was found) can never be released (the release check's files
+    rule, which cannot be overridden), so it is not built, not built wrong."""
+    return row["source"] != "none" and row.get("symbol_source", "x") != "none"
+
+
 def datasheet_right(row):
     """Wrong by KiCad but right by the datasheet (Oliver 2026-10-21: the maker's datasheet is the truth, KiCad the
     fallback): the maker's recommended land, or a courtyard around the datasheet's real body."""
@@ -756,12 +763,12 @@ def summarize(rows):
     # that this must be 0) or not built (held, no datasheet, not read): a held part is the safe outcome, not a wrong one
     miss = [r for r in rows if not r["pass"] and not datasheet_right(r) and not not_run(r)]
     right_rows = [r for r in rows if r["pass"] or datasheet_right(r)]
-    built = [r for r in rows if r["source"] != "none" and not not_run(r)]
+    built = [r for r in rows if made(r) and not not_run(r)]
     outcome = {"right": len(right_rows),
-               "built_wrong": sorted(r["id"] for r in miss if r["source"] != "none" and not unverified(r)),
+               "built_wrong": sorted(r["id"] for r in miss if made(r) and not unverified(r)),
                # built, KiCad differs, and only the read's own numbers say it is right (not counted right)
-               "unverified": sorted(r["id"] for r in miss if r["source"] != "none" and unverified(r)),
-               "not_built": sorted(r["id"] for r in miss if r["source"] == "none"),
+               "unverified": sorted(r["id"] for r in miss if made(r) and unverified(r)),
+               "not_built": sorted(r["id"] for r in miss if not made(r)),
                # right, but the release check held it for a defect it found (not the routine sign-off): a user
                # does not get these without a person (full review 2026-11-10, 3.2)
                "right_held": sorted(r["id"] for r in right_rows if r.get("defect_holds")),
@@ -1061,8 +1068,8 @@ def report_md(rep):
         cost = f"the AI reads would cost about {_usd(o['usd'])} ({_usd(o['usd_per_part'])} per part; estimate, nothing billed)."
     else:
         right = o.get("right", o["pass"])
-        uv = [r for r in bad if r["source"] != "none" and unverified(r)]
-        built = sum(r["source"] != "none" for r in bad) - len(uv)   # a held part is not a wrong one: built wrong must be 0
+        uv = [r for r in bad if made(r) and unverified(r)]
+        built = sum(made(r) for r in bad) - len(uv)   # a held part is not a wrong one: built wrong must be 0
         oc = s.get("outcome") or {}
         head = (f"**Right: {right}/{o['cases']} ({_pct(o.get('right_rate', o['rate']))})**"
                 + (f": {o['pass']} match KiCad exactly and {len(dsr)} match the datasheet where KiCad differs (see "

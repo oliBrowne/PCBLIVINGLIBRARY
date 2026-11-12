@@ -2521,6 +2521,7 @@
 "load_errata",
 "load_pins",
 "load_set",
+"made",
 "no_datasheet",
 "not_run",
 "per_run_cap",
