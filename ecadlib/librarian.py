@@ -368,6 +368,8 @@ def _where(e):
 def is_passive_part(item, ln=None):
     """R / C / L / ferrite bead / crystal: every pin is Passive, whatever the source's symbol says (an EasyEDA pin
     typed 1 = Input made Altium warn 'Nets containing floating input pins' on every resistor)."""
+    if ln is None and (item.get("librarian") or {}).get("passive"):
+        return True                            # decided from the BOM line when built (R5): the KiCad export has no line
     folder = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
     ref = re.match(r"[A-Z]+", str((ln or {}).get("designator") or "").upper())
     return folder in PASSIVE_FOLDERS or bool(ref and ref.group(0) in ("R", "C", "L", "FB", "Y"))
@@ -1476,7 +1478,7 @@ def apply_state(item, st, ln):
         item["cross_check"] = dict(st["cross_check"])
     else:
         item.pop("cross_check", None)
-    item["librarian"] = {"tried": st.get("tried", []),
+    item["librarian"] = {"tried": st.get("tried", []), "passive": bool(st.get("passive")),
                          "review": list(dict.fromkeys(st.get("review", []) + item.get("bom_notes", []) +
                                                       ([alt_note] if alt_note else []))),
                          "notes": [n for k in ("symbol", "footprint") for n in (st.get(k) or {}).get("notes", [])]}
