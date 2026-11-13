@@ -878,10 +878,19 @@ Pins:
 - type: the electrical type from the table (power for supplies and grounds, open_collector for open-drain outputs, passive for NC). side: left for supplies and inputs, right for outputs and switching nodes."""
 
 
+CONNECTOR_TASK = ("If this part is a connector: give pad_table.body, the housing's outline in the pad table's own frame (where the "
+                  "housing sits around the pins in the top view, from the drawing's dimensions between the housing "
+                  "edges and the pins), not only its length and width; its pins are rarely centred in the housing.")
+
+
 def task_text(part, package=None, pages=None):
+    """The user turn's text. It is not part of the result cache's key (ResultCache.key: the schema and system prompt
+    are), so a line here changes no cached answer. It asks a connector's read for the housing outline: reads that gave
+    only its size built the housing centred on the pins (B20B-PUDSS, held-out test 2026-11-12, 0.75 mm off)."""
     t = f"Part: {part}\nPackage hint: {package or 'none given; use the package of this part number'}\n"
     if pages:
         t += f"The drawing and pin table are expected on PDF pages {pages[0]}-{pages[1]}.\n"
+    t += CONNECTOR_TASK + "\n"                      # (every part: the hint is often only the MPN, B20B-PUDSS)
     return t + "Return the package dimensions and the pin list for this part."
 
 
@@ -1470,6 +1479,26 @@ def bare_pads(spec):
         all(p["kind"] in ("smd", "np_thru_hole") for p in pads)
 
 
+def _framed_by_mounts(spec):
+    """True when mounting pads sit on both sides of the pins along the row (an SMD header's two MP tabs: JST SR
+    SM04B-SRSS-TB, BM50B-SRDS-G-TF): the housing spans between them, so centring it on all the pads is the drawing's
+    own frame (held-out test 2026-11-12: both built right that way)."""
+    from . import footprint_adv as FA
+    try:
+        pads = FA.table_layout(spec)[0]
+    except Exception:
+        return False
+    pins = [p for p in pads if p["role"] == "pin"]
+    mounts = [p for p in pads if p["role"] in ("mount", "shield")]
+    if not pins or len(mounts) < 2:
+        return False
+    for k in ("x", "y"):
+        lo, hi = min(p[k] for p in pins), max(p[k] for p in pins)
+        if hi - lo > 0 and any(m[k] < lo for m in mounts) and any(m[k] > hi for m in mounts):
+            return True
+    return False
+
+
 DRAWN_TABLE = ("connector", "custom")     # footprint_adv._table: the pads as listed, the body from pad_table.body
 
 
@@ -1480,6 +1509,16 @@ def body_unread(spec):
     a custom part's body can too (27C256). A bare vertical pin header is drawn from its pitch (footprint_adv._header)
     and still builds, and so does a bare pad pattern with no housing (bare_pads: TC2030). None otherwise."""
     t, tab = spec.get("package_type"), spec.get("pad_table") or {}
+    if t == "connector" and spec.get("body_length") and spec.get("body_width") and not tab.get("body") and \
+            (tab.get("pads") or tab.get("arrays")) and not tab.get("center_at") and \
+            tab.get("origin") != "center" and not bare_pads(spec) and not _framed_by_mounts(spec):
+        # (no origin given: where 0,0 is, unknown)
+        # the housing's size but not where it sits: it is drawn centred on the pads, and a connector's pins are
+        # rarely centred in it (B20B-PUDSS, held-out test 2026-11-12: two rows, the housing 0.75 mm towards the
+        # even row; built 0.75 mm off)
+        return ("no footprint: the datasheet read gave the connector's body size but not where the body sits around "
+                "the pins, so its courtyard would be centred on the pads while the housing is off to one side; read the "
+                "body outline (pad_table body) from the drawing")
     # the body each builder draws: _table a pad_table body or body_length x body_width, _header only the latter
     if t not in ("connector", "pin_header", "custom") or spec.get("body_length") and spec.get("body_width") or \
             t in DRAWN_TABLE and tab.get("body"):
@@ -1567,14 +1606,40 @@ def holes_unread(spec):
     return _tht_layout(spec) is not None
 
 
+SIZE_KEYS = ("d", "w", "h", "drill")
+
+
+def _unsized_dip(spec):
+    """A through-hole pad table that gives positions but no pad or hole size anywhere -> a copy whose default pad is
+    KiCad's DIP pad (so the table can be laid out and checked as a DIP), or None when any entry has a size or a type
+    other than through-hole."""
+    import copy
+    from . import footprint_adv as FA
+    t = spec.get("pad_table") or {}
+    entries = [t.get("default_pad") or {}] + list(t.get("arrays") or []) + list(t.get("pads") or [])
+    if not t.get("arrays") and not t.get("pads") or any(e.get(k) is not None for e in entries for k in SIZE_KEYS):
+        return None
+    if any(e.get("type") not in (None, "tht") for e in entries) or not any(e.get("type") == "tht" for e in entries):
+        return None                                   # (typeless pads may be an SMD gull-wing DIP: never guessed THT)
+    out = copy.deepcopy(spec)
+    f = FA.UNIT[out["pad_table"].get("unit", "mm")]
+    out["pad_table"]["default_pad"] = dict(out["pad_table"].get("default_pad") or {}, type="tht", shape="circle",
+                                           d=round(DIP_PAD["pad"] / f, 6), drill=round(DIP_PAD["drill"] / f, 6))
+    return out if _tht_layout(out) is not None else None
+
+
 def standard_dip_holes(spec):
     """A plain DIP pad table whose holes the datasheet does not print (holes_unread) -> the spec with KiCad's DIP holes
     and pads (0.8 mm / 1.6 mm, every DIP in Package_DIP) in place of the model's choice, or None when it is not one.
     The pad positions and the body stay the read's."""
-    if not (holes_unread(spec) and dip_table(spec)):
-        return None
     import copy
     from . import footprint_adv as FA, footprint_gen as F
+    if _tht_layout(spec) is None:                     # no pad or hole size at all (LTV-814, 23AA02M-IP: "land pattern
+        spec = _unsized_dip(spec)                     # (pad size not given)"): laid out with KiCad's to see if it is a DIP
+        if spec is None:
+            return None
+    if not (holes_unread(spec) and dip_table(spec)):
+        return None
     try:
         lead = F.dim(spec.get("terminal_width"))
     except (KeyError, TypeError):

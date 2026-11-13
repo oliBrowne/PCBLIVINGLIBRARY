@@ -112,19 +112,34 @@ def _page_counts(page, counts):
             elif all(font_bar(i) for i in range(m.start(), m.end())):
                 barred = True
             elif bars:
-                box = [tp.get_charbox(i) for i in range(m.start(), m.end())]
-                l, r = min(x[0] for x in box), max(x[2] for x in box)
-                top, bot = max(x[3] for x in box), min(x[1] for x in box)
-                h = max(top - bot, 1.0)
-                # one line over the whole word, no longer than it (a table's rule runs far past a word)
-                barred = any(b[0] <= l + 1.5 and b[2] >= r - 1.5 and b[2] - b[0] <= 1.2 * (r - l) + 4.0
-                             and top - 0.3 * h <= b[1] <= top + 0.8 * h for b in bars)
+                barred = _under_bar(tp, bars, m.start(), m.end())
             else:
                 barred = False
             c = counts.setdefault(w, [0, 0])              # as printed: "fault" in a sentence is no FAULT pin
             c[0 if barred else 1] += 1
+            if "/" in w and not barred:                   # a multi-function name with a bar over one function only
+                at = m.start()                            # (MSP430's RST/NMI/SBWTDIO: the bar spans RST)
+                for k, seg in enumerate(w.split("/")):
+                    if len(re.sub(r"[^A-Za-z0-9]", "", seg)) >= 2 and not seg.isdigit():
+                        hit = bool(bars) and _under_bar(tp, bars, at, at + len(seg))
+                        c = counts.setdefault(f"{w}{SEG}{k}", [0, 0])
+                        c[0 if hit else 1] += 1
+                    at += len(seg) + 1
     finally:
         tp.close()
+
+
+def _under_bar(tp, bars, a, b):
+    """True when one drawn line runs over the characters a..b, no longer than them (a table's rule runs far past)."""
+    box = [tp.get_charbox(i) for i in range(a, b)]
+    l, r = min(x[0] for x in box), max(x[2] for x in box)
+    top, bot = max(x[3] for x in box), min(x[1] for x in box)
+    h = max(top - bot, 1.0)
+    return any(q[0] <= l + 1.5 and q[2] >= r - 1.5 and q[2] - q[0] <= 1.2 * (r - l) + 4.0
+               and top - 0.3 * h <= q[1] <= top + 0.8 * h for q in bars)
+
+
+SEG = "|"                   # counts key of one function of a '/' name: "RST/NMI/SBWTDIO|0" is RST
 
 
 _SEEN = {}
@@ -180,5 +195,14 @@ def mark(pins, counts):
         if name and c and c[0] >= 2 and c[0] > c[1] and not active_low(name, names) and name.upper() not in twins:
             p = dict(p, name="~{" + name + "}")
             done.append(name)
+        elif name and "/" in name and not active_low(name, names):
+            # one function of a multi-function name, barred wherever the name is printed (once is enough: a
+            # ball table prints each name once; a bar over exactly one function of it is no figure's stray line)
+            segs = name.split("/")
+            hit = [k for k, sg in enumerate(segs) if (counts.get(f"{name}{SEG}{k}") or [0, 1])[0] >= 1
+                   and (counts.get(f"{name}{SEG}{k}") or [0, 1])[1] == 0 and sg.strip().upper() not in twins]
+            if hit and len(hit) < len(segs):
+                p = dict(p, name="/".join("~{" + sg + "}" if k in hit else sg for k, sg in enumerate(segs)))
+                done.append(name)
         out.append(p)
     return out, done

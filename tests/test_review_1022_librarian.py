@@ -61,9 +61,14 @@ def test_custom_vs_connector_is_kept_when_the_type_decides_the_body_hold():
     from ecadlib import crosscheck as CCm
     one = {"package_type": "custom", "unread_as": {"custom": False, "connector": True}}
     assert not CCm._label_only(one, {"package_type": "connector"})
-    # with its body read, the type is still a word only (TC2030)
+    # with its body size read but not where it sits, a connector is held and a custom part is not (held-out test
+    # 2026-11-12, B20B-PUDSS): the type decides the hold again, so the reads disagree
     housed = dict(first, body_length={"nom": 12.0}, body_width={"nom": 8.0})
     c = read(housed, nominal(package_type="connector", pitch=2.0, pin_count=28))
+    assert c["status"] == "disagreed", c
+    # with its body outline read, the type is still a word only (TC2030)
+    placed = dict(first, pad_table=dict(first["pad_table"], body={"x1": -28, "y1": -2, "x2": 2, "y2": 6}))
+    c = read(placed, nominal(package_type="connector", pitch=2.0, pin_count=28))
     assert c["status"] == "agreed" and c.get("tie_breaks"), c
 
 

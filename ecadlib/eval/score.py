@@ -184,6 +184,8 @@ def norm_name(s):
     s = str(s or "").translate(OVERLINE).upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
     s = s.replace("~", "")
     s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
+    if "/" in s:                                      # a multi-function pin: the same functions in any order
+        s = "/".join(sorted(x for x in s.split("/") if x))   # (KiCad's TA0.2/P1.3 is the datasheet's P1.3/TA0.2)
     s = re.sub(r"[/#*_-]", "", s)
     s = re.sub(r"^N\.C\.?$", "NC", s)                 # "N.C." is KiCad's "NC"
     return WORDS.get(s, s)                            # a pin spelled out ("Enable") is the same pin as KiCad's "EN"
