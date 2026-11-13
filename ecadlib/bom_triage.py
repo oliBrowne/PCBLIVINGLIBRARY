@@ -1249,6 +1249,10 @@ def triage(lines, index, provs, http, shared=None):
                         work["lcsc"] = r.lcsc
                         if not desc and (r.extra or {}).get("description"):
                             desc, desc_from = r.extra["description"], prov.name
+                        link = (r.extra or {}).get("datasheet")   # LCSC's copy of the datasheet: after any link
+                        if link and link not in sheets:          # an official source gave (they are asked first)
+                            sheet = sheet or link
+                            sheets.append(link)
                         makers = (r.extra or {}).get("makers") or []
                         if len(makers) == 1:                        # LCSC sells this exact MPN under one maker only
                             disagree(makers[0], prov.name)

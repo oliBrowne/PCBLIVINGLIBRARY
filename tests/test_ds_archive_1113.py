@@ -389,3 +389,45 @@ def test_the_suites_switch_keeps_every_other_test_from_the_archive():
     http = ArcHTTP({DEAD: 404, COPY: PDF}, {AR.query(DEAD): _api()})
     with tempfile.TemporaryDirectory() as d:
         assert "HTTP 404" in _fails(_reader(d, http)) and not http.asked
+
+
+# ---------------------------------------------------------------- LCSC's own copy, from the JLCPCB part search
+def test_the_jlcpcb_search_keeps_lcscs_datasheet_link_and_triage_passes_it_on():
+    """IFX25401TBV, 2026-11-13: the search's answer named LCSC's file (dataManualUrl); ecadlib dropped it and tried
+    only lcsc.com/datasheet/<C>.pdf, which now gives a web page."""
+    from unittest import mock
+    from ecadlib import bom_triage as T, providers as P
+    link = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2401161447_Infineon-Technologies-IFX25401TBV_C3750347.pdf"
+
+    class R:
+        status, ok, error = 200, True, None
+
+        def __init__(self, items):
+            self.items = items
+
+        def json(self):
+            return {"data": {"componentPageInfo": {"list": self.items}}}
+    item = {"componentCode": "C3750347", "componentModelEn": "IFX25401TBV", "componentBrandEn": "Infineon Technologies",
+            "componentSpecificationEn": "TO-263-5", "dataManualUrl": link}
+    res = P.parse_jlcpcb(R([item]), "IFX25401TBV", P.SourceResult("jlcpcb_search"))
+    assert res.lcsc == "C3750347" and res.extra["datasheet"] == link, res.extra
+    for bad in ("", None, "javascript:alert(1)", "not a link", "https://x.example/a b.pdf", 7, ["https://x.example/a.pdf"]):
+        res = P.parse_jlcpcb(R([dict(item, dataManualUrl=bad)]), "IFX25401TBV", P.SourceResult("jlcpcb_search"))
+        assert res.found and "datasheet" not in res.extra, bad
+
+    class Http:
+        def post(self, url, body, **kw):
+            return R([item])
+
+        def get(self, url, **kw):
+            return Response(404, "")
+    index = mock.Mock()
+    index.match.return_value = (None, "")
+    index.footprint.return_value = (None, "")
+    index.find_footprint_for_package.return_value = None
+    line = {"designator": "U1", "qty": "1", "mpn": "IFX25401TBV", "lcsc": "", "value": "IFX25401TBV", "footprint": "TO-263-5",
+            "datasheet": DEAD}
+    row = T.triage([line], index, [P.JLCPCBSearch(Http()), P.EasyEDA(Http())], Http())[0]
+    assert row["src_datasheet"] == link, row
+    urls = [u for u, _ in D.datasheet_urls(ln=line, row=row)]
+    assert urls[:2] == [DEAD, link] and "https://www.lcsc.com/datasheet/C3750347.pdf" in urls, urls
