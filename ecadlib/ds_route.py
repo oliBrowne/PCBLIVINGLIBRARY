@@ -834,6 +834,10 @@ def _rank(s, cat):
     return v
 
 
+TIED_IMAGES = 3             # more image-only drawing pages sent when they tie with the best one
+PIN_TABLE_EXTRA = 6         # pages a "(continued)" pin table may run past the page budget
+
+
 def pick_pages(texts, budget, part=None, package=None, marks=None, first=None):
     """-> (sorted 1-based pages, {page: [why]}) or (None, {}) when there is no text layer or nothing matched.
     first: pages that go in before anything else (a wider try keeps every page the narrower one sent). Then the best
@@ -864,6 +868,14 @@ def pick_pages(texts, budget, part=None, package=None, marks=None, first=None):
         if cands:
             best[cat] = max(cands, key=lambda i: (_rank(rows[i], cat), total(i), -i))
             add(best[cat], cat)
+            if cat == "drawing" and rows[best[cat]]["blank"]:
+                # image-only drawing pages nothing tells apart (AM26LS31CD, held-out test 2026-11-12: N, D, W and J
+                # drawings with no text layer, all scoring alike; the lowest page, the PDIP, was sent and the SOIC
+                # was not): send every tied one, so the model reads the titles in the images
+                key = (_rank(rows[best[cat]], cat), total(best[cat]))
+                for i in [i for i in cands if i != best[cat] and rows[i]["blank"] and
+                          (_rank(rows[i], cat), total(i)) == key][:TIED_IMAGES]:
+                    add(i, "drawing (image-only, tied)")
     pins_own = [i for i in range(len(rows)) if rows[i]["own"] and _rank(rows[i], "pinout") > 0 and i != best.get("pinout")]
     if pins_own:                                      # a second pin page naming this package (pinout figure + pin table)
         add(max(pins_own, key=lambda i: (rows[i]["solo"], _rank(rows[i], "pinout"), -i)), "pinout (this package)")
@@ -880,6 +892,7 @@ def pick_pages(texts, budget, part=None, package=None, marks=None, first=None):
                     add(k, "drawing (continued, no text layer)")
                 else:
                     break
+    extra = 0
     for p in sorted({best.get("pinout"), *[q - 1 for q in keep if "pinout (this package)" in why.get(q, [])]} - {None}):
         if not rows[p]["own"]:
             continue
@@ -894,6 +907,11 @@ def pick_pages(texts, budget, part=None, package=None, marks=None, first=None):
                 continue
             if rows[j]["other"] or not (TABLE["pinout"].search(t) or CONTINUED.search(t[:300])):
                 break
+            if len(keep) >= budget and j + 1 not in keep and extra < PIN_TABLE_EXTRA and CONTINUED.search(t[:300]):
+                keep.append(j + 1)                    # a pin table marked "(continued)" goes in whole, past the
+                why.setdefault(j + 1, []).append("pin table (continued, over the page budget)")   # budget (MSP430
+                extra += 1                            # F5333IZQW: a 7-page ball table, 3 pages sent, 66 balls unnamed)
+                continue
             add(j, "pin table (continued)")
     for i in sorted(range(len(rows)), key=lambda i: (-total(i), i)):
         if total(i) <= 0 or len(keep) >= budget:
