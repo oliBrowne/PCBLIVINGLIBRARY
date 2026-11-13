@@ -85,8 +85,8 @@ DEFAULTS = {
                   # gives its own; always
                   "standard_land": "off",
                   # ecadlib.pdf_fetch: a PDF link the maker's site refuses to ecadlib's own request. "auto": a browser's
-                  # headers, then a Chrome TLS fingerprint, then a headless Edge / Chrome (the last needs
-                  # pip install "ecadlib[browser]"); "plain": ecadlib's own request only; or a list of those ways
+                  # headers, then a Chrome TLS fingerprint, then a headless Edge / Chrome (all
+                  # installed with ecadlib); "plain": ecadlib's own request only; or a list of those ways
                   "download": "auto",
                   # ecadlib.ds_search: no link, part source or folder file gave a PDF: ask Claude's web search for the
                   # maker's (else a distributor's) PDF; off by default, counted in max_cost_usd ("" model = Haiku)

@@ -103,3 +103,5 @@ def test_the_download_way_past_makers_bot_checks_is_a_core_dependency():
     text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
     deps = re.search(r"^dependencies = \[(.*?)^keywords", text, re.S | re.M).group(1)
     assert '"curl_cffi"' in deps, deps
+    # ... and the headless browser (Playwright drives the installed Edge / Chrome): no download way needs a second command
+    assert '"playwright>=1.57"' in deps, deps

@@ -156,10 +156,9 @@ Some makers' sites answer a script with 403, a bot-check page or a dropped conne
 
 None of these solves a CAPTCHA, signs in, reads your browser's cookies or goes through a third-party proxy. A link that is simply gone (404 or 410), a proxy refusal, a name that does not resolve, a closed port or a host that never answers the connection never moves on, from any way: those are not the site refusing a script, and no other way would get further. (Behind a proxy, a host that never answers looks like a site that stalls, so the other ways are tried for it.) A TLS or certificate error does move on: Edge and Chrome check certificates against your system's own store (a company network that inspects HTTPS) and talk to older servers that Python's TLS refuses; every way still checks the certificate. The automatic way that worked is tried first for that site's next link during the run (your own browser never is), and the cached PDF's record (`via`) says which way got it. When every way is refused, the error lists what each one got. One headless browser serves the whole run; one that stops answering (a site that stops sending halfway) is given up after a time limit and a new one starts, so a run never hangs on it.
 
-curl_cffi (way 2) is installed with ecadlib. It was an optional extra until 2026-11, so a plain `pip install ecadlib` got none of the PDFs that analog.com, st.com or Nexperia refuse to a script. The headless browser (way 3) is still an extra:
+curl_cffi (way 2) and Playwright (way 3) are installed with ecadlib, so every automatic way runs after a plain `pip install ecadlib` with no second command. Both were an optional extra until 2026-11, and a plain install then got none of the PDFs that analog.com, st.com or Nexperia refuse to a script. Way 3 drives the Edge or Chrome already on the machine (every Windows PC has Edge). Only a machine with neither needs one more step:
 
 ```
-pip install "ecadlib[browser]"          # Playwright; without it the chain skips way 3 and says so
 playwright install chromium             # only when the machine has neither Edge nor Chrome
 ecadlib doctor                          # shows whether curl_cffi and playwright are installed
 ```
