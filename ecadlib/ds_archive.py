@@ -17,7 +17,9 @@ from urllib.parse import parse_qsl, quote, urlsplit
 API = "https://archive.org/wayback/available?url="
 WHERE = "Internet Archive"
 MAX_LINKS = 3                                          # links asked for per part (a part rarely has more)
-TRIES = 3                                              # asks per lookup while the Archive is busy (429, 5xx, a timeout)
+TRIES = 2                                              # asks per lookup while the Archive is down (a 5xx, a timeout)
+PACE_S = 4.0                                           # seconds between two requests to the Archive, lookups and downloads
+REST_S = 3600.0                                        # after it says "too many requests" (429): not asked again for this long
 OLDER = 2                                              # older captures tried when the newest is not the PDF
 STEP_DAYS = 365                                        # how far back each older capture is asked for
 # names only a private network answers: never sent to the Archive (a name that does not resolve here says nothing:
@@ -88,6 +90,42 @@ def parse(text):
     return f"https://web.archive.org/web/{ts}id_/{m.group(2)}", f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
 
 
+# The Archive is a free public service, and it blocks a network it takes for an abusive bot (test of 2026-11-13: after
+# 40 parts in 25 minutes, about 60 requests paced only at a second apart with 429s tried again at once, the PC got
+# "Your request is being blocked because our system has flagged it"). So every request to it, from every reader in the
+# process, waits PACE_S after the last one, and a 429 from either of its hosts ends its use for REST_S: no retry.
+_STATE = {"last": 0.0, "rest_until": 0.0}
+_LOCK = __import__("threading").Lock()
+LIMITED = "the Internet Archive is limiting requests from this network (HTTP 429); it is not asked again in this run"
+
+
+def resting(clock=None):
+    """Did the Archive say "too many requests" less than REST_S ago (in this process)?"""
+    import time
+    return (clock or time.monotonic)() < _STATE["rest_until"]
+
+
+def rest(clock=None):
+    import time
+    _STATE["rest_until"] = (clock or time.monotonic)() + REST_S
+
+
+def pace(sleep=None, clock=None):
+    """Wait until PACE_S has passed since the last request to the Archive (one at a time, process-wide)."""
+    import time
+    clock = clock or time.monotonic
+    with _LOCK:
+        wait = PACE_S - (clock() - _STATE["last"]) if _STATE["last"] else 0
+        if wait > 0:
+            (sleep or time.sleep)(wait)
+        _STATE["last"] = clock()
+
+
+def limited(error):
+    """Is this failure of an Archive download its "too many requests" answer?"""
+    return bool(re.search(r"HTTP 429\b", str(error or "")))
+
+
 def _ask(q, http, timeout):
     if http is not None and hasattr(http, "get"):
         r = http.get(q)
@@ -102,28 +140,35 @@ def _ask(q, http, timeout):
 
 def lookup(url, http=None, timeout=20, before=None, sleep=None, tries=TRIES):
     """Ask the Archive for its newest good capture of url (before: the one closest to that day, "YYYYMMDD") ->
-    ((raw URL, day), None) or (None, why). http: an httpcache.CachedHTTP (its cache, rate limit and offline
-    switch), else one plain request. A busy Archive (429, 5xx, a timeout or a dropped connection) is asked again,
-    up to `tries` times, 2 s then 4 s apart; a proxy refusal or being offline is not (asking again changes nothing)."""
+    ((raw URL, day), None) or (None, why). http: an httpcache.CachedHTTP (its cache and offline switch), else one
+    plain request. Each ask is paced (pace). A 429 ends the Archive's use for REST_S (LIMITED) and is never asked
+    again; an Archive that is down (a 5xx, a timeout, a dropped connection) is asked once more, 5 s later; a proxy
+    refusal or being offline is not (asking again changes nothing)."""
     import time
+    if resting():
+        return None, LIMITED
     q, why = query(url, before), ""
     for n in range(tries):
+        pace(sleep)
         status, text, err = _ask(q, http, timeout)
         if not err and 200 <= (status or 0) < 300:
             got = parse(text)
             return (got, None) if got else (None, "the Internet Archive has no saved copy of it")
+        if status == 429:
+            rest()
+            return None, LIMITED
         why = f"the Internet Archive did not answer ({err if err and not status else f'HTTP {status}'})"
-        busy = status == 429 or 500 <= (status or 0) < 600 or (not status and not _NO_NETWORK.search(err or "")
-                                                                 and "offline" not in (err or ""))
-        if not busy or n + 1 == tries:
+        down = 500 <= (status or 0) < 600 or (not status and not _NO_NETWORK.search(err or "")
+                                               and "offline" not in (err or ""))
+        if not down or n + 1 == tries:
             break
-        (sleep or time.sleep)(2 * 2 ** n)
+        (sleep or time.sleep)(5)
     return None, why + (f" ({n + 1} tries)" if n else "")
 
 
 # a capture that is not the file the link once gave (a bot-check or "moved" page the Archive saved as a 200, a cut-off
 # save): an older capture can be the PDF. One that is the PDF of another part, or too large, is the same document
-_NOT_THE_FILE = re.compile(r"not a PDF|the PDF is cut off|HTTP [45]\d\d|the PDF opens as ")
+_NOT_THE_FILE = re.compile(r"not a PDF|the PDF is cut off|HTTP (?!429)[45]\d\d|the PDF opens as ")
 
 
 def older_worth(error):

@@ -4051,6 +4051,10 @@ class PdfStore:
     rate limit and offline switch as the CachedHTTP passed in are used. A download that fails in a way that may
     pass is tried again (httpcache.RETRIES), except on a host that already failed every try in this run."""
 
+    # hosts asked once, with ecadlib's own request only: no retry, no other way of downloading, no hand-off. The
+    # Internet Archive (ecadlib.ds_archive) refuses nothing to a script, and blocks a network that asks too often
+    ONE_PLAIN_TRY = {"web.archive.org"}
+
     def __init__(self, cache_dir, http=None, offline=None, sleep=None, download="plain", handoff=None):
         """download: [datasheet] download: "plain" (ecadlib's own request only), "auto" (pdf_fetch.TIERS) or a list of
         ecadlib.pdf_fetch ways, tried in order when the site refuses ecadlib's own request (pdf_fetch.refused).
@@ -4105,8 +4109,8 @@ class PdfStore:
         from urllib.parse import urlparse
         from . import pdf_fetch as PF
         host, notes = urlparse(url).hostname or "", []
-        ways = [] if handoff == "only" else list(self.ways)
-        if handoff and self.handoff is not None:
+        ways = [] if handoff == "only" or host in PdfStore.ONE_PLAIN_TRY else list(self.ways)
+        if handoff and self.handoff is not None and host not in PdfStore.ONE_PLAIN_TRY:
             ways.append("handoff")
         # a page whose only "PDF link" is itself (a refresh to the same URL) has none
         link = lambda base: lambda h: (lambda u: u if u and u not in (url, base) else None)(pdf_link(h, base))
@@ -4174,7 +4178,7 @@ class PdfStore:
         from urllib.parse import urlparse
         from . import pdf_fetch as PF
         host = urlparse(url).hostname or ""
-        tries = 1 if host in self.gave_up else H.RETRIES + 1
+        tries = 1 if host in self.gave_up or host in PdfStore.ONE_PLAIN_TRY else H.RETRIES + 1
         for n in range(1, tries + 1):
             status, data, ctype, final, err, *more = self._get(url, PF.HEADERS_S if move_on else 60)
             if not err and data is not None and len(data) > MAX_DOWNLOAD:
@@ -4989,7 +4993,7 @@ class Reader:
             url, same = a.get("url") or "", api_url(a.get("url") or "")
             if not url or same in seen or not AR.worth(a.get("error")) or AR.asked(url):
                 continue
-            if len(seen) >= AR.MAX_LINKS:
+            if len(seen) >= AR.MAX_LINKS or AR.resting():
                 break
             seen.append(same)
             before, days = None, set()
@@ -5001,11 +5005,16 @@ class Reader:
                     break
                 copy, saved = got
                 days.add(saved)
+                AR.pace(self.sleep)                   # (then one plain try: PdfStore.ONE_PLAIN_TRY)
                 try:
                     data, prov = self.store.fetch(copy, f"{AR.WHERE} copy of the {a.get('where') or 'part'}'s link, "
                                                   f"saved {saved}", follow=False, part=part, handoff=False, mpn=mpn,
                                                   public=True)
                 except DatasheetError as e:
+                    if AR.limited(str(e)):            # "too many requests": not asked again in this run
+                        AR.rest()
+                        attempts.append({"url": copy, "where": AR.WHERE, "error": AR.LIMITED})
+                        return None, None
                     attempts.append({"url": copy, "where": AR.WHERE, "error": str(e)})
                     if not AR.older_worth(str(e)):
                         break

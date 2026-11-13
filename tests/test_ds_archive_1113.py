@@ -17,6 +17,7 @@ OLD_SNAP = "http://web.archive.org/web/20210410000000/https://maker.example/old/
 OLD_COPY = "https://web.archive.org/web/20210410000000id_/https://maker.example/old/ds.pdf"
 PAGE = b"<!doctype html><html><body>Access Denied</body></html>"
 SLEPT = []
+PACE_S = AR.PACE_S
 
 
 def _api(snap=SNAP, status="200", available=True):
@@ -46,12 +47,18 @@ class ArcHTTP(PdfHTTP):
 
 
 def setup():
-    """The suite turns the Archive off (tests/__init__.py); these tests turn it on, against the fake above."""
+    """The suite turns the Archive off (tests/__init__.py); these tests turn it on, against the fake above, with no
+    wait between two asks and no rest left over from another test."""
     os.environ.pop("ECADLIB_NO_ARCHIVE", None)
+    AR._STATE.update(last=0.0, rest_until=0.0)
+    AR.PACE_S = 0.0
+    del SLEPT[:]
 
 
 def teardown():
     os.environ["ECADLIB_NO_ARCHIVE"] = "1"
+    AR._STATE.update(last=0.0, rest_until=0.0)
+    AR.PACE_S = PACE_S
 
 
 def archive_on(fn):
@@ -197,7 +204,7 @@ def test_no_copy_and_an_archive_that_is_down_are_said_in_the_error():
         assert "HTTP 404" in why and "the Internet Archive has no saved copy of it" in why, why
     with tempfile.TemporaryDirectory() as d:
         why = _fails(_reader(d, ArcHTTP({DEAD: 404}, down="ConnectionError: reset")))
-        assert "the Internet Archive did not answer (ConnectionError: reset) (3 tries)" in why, why
+        assert "the Internet Archive did not answer (ConnectionError: reset) (2 tries)" in why, why
 
 
 @archive_on
@@ -259,13 +266,13 @@ def test_the_archive_comes_before_a_paid_web_search():
 
 
 @archive_on
-def test_a_busy_archive_is_asked_again_and_a_proxy_refusal_is_not():
-    for first in ([(429, "HTTP 429")], [(503, "HTTP 503"), (0, "ReadTimeout: slow")]):
-        http, n = ArcHTTP({DEAD: 404, COPY: PDF}, {AR.query(DEAD): _api()}, down=list(first)), len(first)
+def test_an_archive_that_is_down_is_asked_once_more_and_a_proxy_refusal_is_not():
+    for first in ([(503, "HTTP 503")], [(0, "ReadTimeout: slow")]):
+        http = ArcHTTP({DEAD: 404, COPY: PDF}, {AR.query(DEAD): _api()}, down=list(first))
         del SLEPT[:]
         with tempfile.TemporaryDirectory() as d:
             assert _reader(d, http).job("TESTPART", [(DEAD, "BOM")], "SOIC-8", mpn="TESTPART")["url"] == COPY
-            assert len(http.asked) == n + 1 and SLEPT == [2, 4][:n], (http.asked, SLEPT)
+            assert len(http.asked) == 2 and SLEPT == [5], (http.asked, SLEPT)
     for err in ("ProxyError: proxy CONNECT refused (403 Forbidden)", "offline: not in cache"):
         http = ArcHTTP({DEAD: 404, COPY: PDF}, {AR.query(DEAD): _api()}, down=err)
         del SLEPT[:]
@@ -273,6 +280,56 @@ def test_a_busy_archive_is_asked_again_and_a_proxy_refusal_is_not():
             why = _fails(_reader(d, http))
             assert len(http.asked) == 1 and not SLEPT and "tries)" not in why.split("Internet Archive")[1], why
     assert AR.lookup(DEAD, ArcHTTP(down=[(404, "HTTP 404")]), sleep=SLEPT.append)[1].endswith("(HTTP 404)") and not SLEPT
+
+
+@archive_on
+def test_too_many_requests_ends_the_archives_use_for_the_run_with_no_retry():
+    """2026-11-13, Oliver's PC: 40 parts in 25 minutes got the network flagged ("Your request is being blocked")."""
+    other = "https://maker.example/b/ds.pdf"
+    http = ArcHTTP({DEAD: 404, other: 404, COPY: PDF}, {AR.query(DEAD): _api()}, down=[(429, "HTTP 429")])
+    with tempfile.TemporaryDirectory() as d:
+        rd = _reader(d, http)
+        why = _fails(rd, [(other, "BOM"), (DEAD, "part source")])
+        assert AR.LIMITED in why and len(http.asked) == 1 and not SLEPT, (why, http.asked, SLEPT)   # the 2nd link: not asked
+        _fails(rd)                                       # the next part: not asked either
+        assert len(http.asked) == 1 and AR.resting()
+        assert not AR.resting(clock=lambda: AR._STATE["rest_until"] + 1)   # ... until the rest is over
+
+
+@archive_on
+def test_a_copy_refused_with_too_many_requests_is_one_request_and_ends_it_too():
+    older = AR.query(DEAD, before="20210413")
+    http = ArcHTTP({DEAD: 404, COPY: 429, OLD_COPY: PDF}, {AR.query(DEAD): _api(), older: _api(OLD_SNAP)})
+    with tempfile.TemporaryDirectory() as d:
+        rd = _reader(d, http)
+        rd.store.ways = ["headers", "impersonate", "browser"]       # [datasheet] download = "auto": still plain only
+        why = _fails(rd)
+        assert AR.LIMITED in why and http.fetched.count(COPY) == 1 and http.asked == [AR.query(DEAD)], (why, http.fetched)
+        assert AR.resting()
+
+
+@archive_on
+def test_requests_to_the_archive_are_paced_lookups_and_downloads_alike():
+    AR.PACE_S = 4.0
+    now = [100.0]
+    waits = []
+
+    def sleep(s):
+        waits.append(s)
+        now[0] += s
+    AR.pace(sleep, lambda: now[0])                       # the first: no wait
+    now[0] += 1.5
+    AR.pace(sleep, lambda: now[0])                       # 1.5 s later: waits the rest
+    now[0] += 10
+    AR.pace(sleep, lambda: now[0])                       # long after: no wait
+    assert waits == [2.5], waits
+    AR._STATE["last"] = 0.0
+    http = ArcHTTP({DEAD: 404, COPY: PAGE, OLD_COPY: PDF},
+                   {AR.query(DEAD): _api(), AR.query(DEAD, before="20210413"): _api(OLD_SNAP)})
+    with tempfile.TemporaryDirectory() as d:
+        del SLEPT[:]
+        assert _reader(d, http).job("TESTPART", [(DEAD, "BOM")], "SOIC-8", mpn="TESTPART")["url"] == OLD_COPY
+        assert len(SLEPT) == 3 and all(3.5 < w <= 4.0 for w in SLEPT), SLEPT   # 2 lookups + 2 downloads: 3 waits
 
 
 @archive_on
