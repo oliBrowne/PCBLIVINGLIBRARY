@@ -5177,9 +5177,9 @@ class Reader:
             out["outline_missing"] = missing
         return merged, out
 
-    def _land_pages(self, job):
-        """ds_route.land_pages for the pages this read was sent (all from the offset when the whole PDF went); [] when
-        the PDF was sent as a link or has no text layer."""
+    def _land_pages(self, job, pullback=False):
+        """ds_route.land_pages (pullback: ds_route.pullback_pages) for the pages this read was sent (all from the offset
+        when the whole PDF went); [] when the PDF was sent as a link or has no text layer."""
         from . import ds_route as DR
         data, off = job.get("data"), job.get("offset")
         if data is None or not job.get("src_hash"):
@@ -5191,6 +5191,8 @@ class Reader:
         if not texts:
             return []
         pages = off if isinstance(off, list) else list(range(int(off or 0) + 1, len(texts) + 1))
+        if pullback:
+            return DR.pullback_pages(texts, pages)
         return DR.land_pages(texts, pages, job.get("part"), job.get("package"))
 
     def _page_texts(self, data, digest):
@@ -5361,6 +5363,9 @@ class Reader:
         lp = self._land_pages(job)
         if lp:                                        # the maker's land was on the pages read (librarian: land_unread)
             res["sidecar"]["land_pages"] = lp
+        pb = self._land_pages(job, pullback=True)
+        if pb:                                        # terminals pulled back from the edge (librarian holds a no-lead
+            res["sidecar"]["pullback_pages"] = pb     # read with no land of its own)
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
         if job["prov"].get("unnamed"):

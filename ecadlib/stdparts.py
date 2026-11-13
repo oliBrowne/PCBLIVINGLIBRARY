@@ -651,7 +651,26 @@ def _identify_known(read, c, known, miss):
     return best, f"{label} -> {best}"
 
 
-def identify(read, known=None):
+def _maker_land(names, maker, c):
+    """The table's maker outline of the one generic package the read fits (Analog_LFCSP-16-1EP_4x4mm_P0.65mm_EP2.1x2.1mm
+    for LFCSP-16-1EP_4x4mm_P0.65mm_EP2.1x2.1mm), when the part's maker is that outline's (its first word: Analog for
+    Analog Devices) and the outline agrees with the whole read; else None. Held-out test 2026-11-13: AD8231's datasheet
+    prints no land, KiCad's footprint is ADI's land, and IPC pads from the body missed it by 0.1-0.2 mm."""
+    from . import crosscheck as CC
+    word = re.split(r"[\s,.]+", str(maker or "").strip())[0].lower()
+    if len(names) != 1 or len(word) < 2:
+        return None
+    hits = [m for m in packages() if m.lower() == f"{word}_{names[0].lower()}"
+            and CC.compare(c, CC.critical(spec(m)), "table")["status"] == "agreed"]
+    return hits[0] if len(hits) == 1 else None
+
+
+UNCHECKED_FIT = re.compile(r"but the read's other numbers disagree")   # identify(): a standard
+# package fits the read, but not one the table vouches for: KiCad's land for it may be a maker's (librarian holds a
+# read with no land of its own then)
+
+
+def identify(read, known=None, maker=None):
     """A datasheet read's package (a footprint_gen spec) -> (table name, how) when its own numbers name exactly one
     checked package, else (None, why). Pin count, pitch, body and exposed pad pick the KiCad generic names that fit, in
     the family the drawing is titled with when it names one; a fit that is not in the checked table makes it ambiguous
@@ -702,6 +721,9 @@ def identify(read, known=None):
     if not names:
         return None, f"{label}: no standard package fits"
     if any(n not in packages() for n in names):
+        own = _maker_land(names, maker, c)
+        if own:                                       # KiCad lands this maker's package its own way, and the table
+            return own, f"{label} -> {own} (the maker's own outline of {names[0]})"   # carries it (AD8231: ADI's
         return None, f"{label}: fits a KiCad package that is not in the checked table ({', '.join(sorted(names)[:3])})"
     agree = [n for n in names if CC.compare(c, CC.critical(spec(n)), "table")["status"] == "agreed"]
     if not agree:

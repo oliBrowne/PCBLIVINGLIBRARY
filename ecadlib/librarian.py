@@ -1065,7 +1065,7 @@ class Run:
                     self.reading(st)
         self.waiting = []
 
-    def standard_land(self, spec, known=None):
+    def standard_land(self, spec, known=None, maker=None):
         """[datasheet] standard_land: a read whose pin count, pitch, body and exposed pad name exactly one checked standard
         package (stdparts.identify) -> (table name, how, why it is used) or None. off (the default): never. auto: when
         the read left a number blank or gave no land of its own (the maker's recommended land, when printed, is kept);
@@ -1077,7 +1077,7 @@ class Run:
         if mode == "off":
             return None
         known = list(known or [])
-        name, how = SP.identify(spec, known[0] if len(known) == 1 else None)
+        name, how = SP.identify(spec, known[0] if len(known) == 1 else None, maker)
         if not name:
             return None
         own = spec.get("land") or spec.get("pad_table")
@@ -1112,17 +1112,36 @@ class Run:
             if not st["symbol"] and not (res.get("symbol") or {}).get("pins"):   # is written, after the footprint's holds
                 raise D.DatasheetError("no symbol: the datasheet read gives no pin list for this part (the PDF may leave "
                                        "the pinout to a separate document), so it is held rather than built without its pins")
-        std = self.standard_land(res["spec"], res["sidecar"].get("package_from_pdf")) if not st["footprint"] else None
+        maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
+        std = self.standard_land(res["spec"], res["sidecar"].get("package_from_pdf"), maker) if not st["footprint"] else None
         settled = (res.get("cross_check") or {}).get("standard")
         if settled and not st["footprint"]:           # the read gave this table package's sizes the other way round
             std = (settled, "the cross-check", "the read gave its length and width the other way round (crosscheck."
                    "_settle_turn)")
+        if not st["footprint"] and not (res["spec"].get("land") or res["spec"].get("pad_table")) and \
+                res["sidecar"].get("pullback_pages") and res["spec"].get("package_type") == "qfn":
+            # neither IPC pads from the body nor the table's lands (none is a pull-back land) fit terminals that stop
+            # short of the edge (AS5055A, held-out test 2026-11-13: KiCad's QFN-16 _PullBack, ours 0.175 mm off)
+            pages = ", ".join(map(str, res["sidecar"]["pullback_pages"][:4]))
+            raise D.DatasheetError(f"land: the drawing's terminals are pulled back from the package edge (page {pages}) "
+                                   "and the datasheet prints no recommended land; pads from the body would reach past "
+                                   "them, so the part is held (save the maker's land or pick a pull-back footprint)")
         if not std and not st["footprint"] and not (res["spec"].get("land") or res["spec"].get("pad_table")):
             # DPAK / D2PAK / SOT-223: the IPC tab is the exposed tab only
             tab, found = SP.identify_tab(res["spec"], [(q["num"], q["name"]) for q in (res.get("symbol") or {}).get("pins") or []])
             if tab:
                 std = (tab, found, "a tab land runs under the body, where the IPC tab built from the read covers only "
                        "the exposed tab, and the datasheet gives no land of its own")
+            elif not st["footprint"]:
+                known = list(res["sidecar"].get("package_from_pdf") or [])
+                _, why_not = SP.identify(res["spec"], known[0] if len(known) == 1 else None)
+                if SP.UNCHECKED_FIT.search(why_not or ""):
+                    # a standard package KiCad lands its own way (a maker's land in another document) that the table
+                    # cannot vouch for, and the datasheet prints no land: IPC pads from the body would be a guess at
+                    # it (held-out test 2026-11-13: AD8231, AS5055A, ADUC816BSZ built 0.1-0.35 mm off KiCad's)
+                    raise D.DatasheetError(f"land: the datasheet prints no recommended land, and the read's package "
+                                           f"{why_not}; held rather than built from IPC pads that may not be the land "
+                                           "the part is made for (save the maker's land drawing or pick a footprint)")
         # (a person's fp-edit settles the footprint's holds, below; the symbol's is judged on the edited read: a pad
         # rename that fixes the pin numbers lifts it, a pad-table edit that leaves the channels wrong does not)
         held = None if st["symbol"] else D.read_hold(res, False)

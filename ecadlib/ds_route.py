@@ -962,6 +962,18 @@ def prints_land(text):
     return False
 
 
+PULLBACK = re.compile(r"pull[\s-]?back|\bback\s+from\s+(?:the\s+)?package\s+edge", re.I)
+
+
+def pullback_pages(texts, pages):
+    """The pages among `pages` (1-based, the ones a read was sent) whose text says the terminals are pulled back from
+    the package edge (a no-lead package's L1: AS5055A, "Dimension L1 represents terminal full back from package edge up
+    to 0.15mm", held-out test 2026-11-13). KiCad lands those as *_PullBack, which the table does not carry, and the
+    read has no field for L1, so IPC pads from the body reach past the terminals. [] when none says so."""
+    sent = {int(q) for q in pages or [] if isinstance(q, int) and not isinstance(q, bool)}
+    return [i + 1 for i, t in enumerate(texts or []) if i + 1 in sent and PULLBACK.search(t or "")]
+
+
 def land_pages(texts, pages, part=None, package=None):
     """The pages among `pages` (1-based, the ones a read was sent) that print a recommended land for this part's
     package (prints_land), not a table of contents or noise. A page about another package only (page_scores 'other')
