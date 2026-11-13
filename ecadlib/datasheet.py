@@ -1480,6 +1480,15 @@ def body_unread(spec):
     a custom part's body can too (27C256). A bare vertical pin header is drawn from its pitch (footprint_adv._header)
     and still builds, and so does a bare pad pattern with no housing (bare_pads: TC2030). None otherwise."""
     t, tab = spec.get("package_type"), spec.get("pad_table") or {}
+    if t == "connector" and spec.get("body_length") and spec.get("body_width") and not tab.get("body") and \
+            (tab.get("pads") or tab.get("arrays")) and not tab.get("center_at") and \
+            tab.get("origin", "center") != "center" and not bare_pads(spec):
+        # the housing's size but not where it sits: it is drawn centred on the pads, and a connector's pins are
+        # rarely centred in it (B20B-PUDSS, held-out test 2026-11-12: two rows, the housing 0.75 mm towards the
+        # even row; built 0.75 mm off)
+        return ("no footprint: the datasheet read gave the connector's body size but not where the body sits around "
+                "the pins, so its courtyard would be centred on the pads while the housing is off to one side; read the "
+                "body outline (pad_table body) from the drawing")
     # the body each builder draws: _table a pad_table body or body_length x body_width, _header only the latter
     if t not in ("connector", "pin_header", "custom") or spec.get("body_length") and spec.get("body_width") or \
             t in DRAWN_TABLE and tab.get("body"):
@@ -1567,14 +1576,40 @@ def holes_unread(spec):
     return _tht_layout(spec) is not None
 
 
+SIZE_KEYS = ("d", "w", "h", "drill")
+
+
+def _unsized_dip(spec):
+    """A through-hole pad table that gives positions but no pad or hole size anywhere -> a copy whose default pad is
+    KiCad's DIP pad (so the table can be laid out and checked as a DIP), or None when any entry has a size or a type
+    other than through-hole."""
+    import copy
+    from . import footprint_adv as FA
+    t = spec.get("pad_table") or {}
+    entries = [t.get("default_pad") or {}] + list(t.get("arrays") or []) + list(t.get("pads") or [])
+    if not t.get("arrays") and not t.get("pads") or any(e.get(k) is not None for e in entries for k in SIZE_KEYS):
+        return None
+    if any(e.get("type") not in (None, "tht") for e in entries):
+        return None
+    out = copy.deepcopy(spec)
+    f = FA.UNIT[out["pad_table"].get("unit", "mm")]
+    out["pad_table"]["default_pad"] = dict(out["pad_table"].get("default_pad") or {}, type="tht", shape="circle",
+                                           d=round(DIP_PAD["pad"] / f, 6), drill=round(DIP_PAD["drill"] / f, 6))
+    return out if _tht_layout(out) is not None else None
+
+
 def standard_dip_holes(spec):
     """A plain DIP pad table whose holes the datasheet does not print (holes_unread) -> the spec with KiCad's DIP holes
     and pads (0.8 mm / 1.6 mm, every DIP in Package_DIP) in place of the model's choice, or None when it is not one.
     The pad positions and the body stay the read's."""
-    if not (holes_unread(spec) and dip_table(spec)):
-        return None
     import copy
     from . import footprint_adv as FA, footprint_gen as F
+    if _tht_layout(spec) is None:                     # no pad or hole size at all (LTV-814, 23AA02M-IP: "land pattern
+        spec = _unsized_dip(spec)                     # (pad size not given)"): laid out with KiCad's to see if it is a DIP
+        if spec is None:
+            return None
+    if not (holes_unread(spec) and dip_table(spec)):
+        return None
     try:
         lead = F.dim(spec.get("terminal_width"))
     except (KeyError, TypeError):

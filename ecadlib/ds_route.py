@@ -29,7 +29,7 @@ ROUTES = ("single", "ladder")
 # ---------------------------------------------------------------- page picking
 _DASH = str.maketrans({"−": "-", "–": "-", "—": "-", " ": " ", "µ": "u", "μ": "u"})   # "µTFBGA36" (ST) is uTFBGA
 FAMILY = {  # package family words -> a canonical family (SOIC-8 / SO8 / SOP-8 are one package)
-    "SOIC": "SO", "SOP": "SO", "SO": "SO", "PSOP": "SO", "PDSO": "SO", "SSOP": "SSOP", "QSOP": "SSOP", "TSSOP": "TSSOP",
+    "SOIC": "SO", "SOICW": "SO", "SOP": "SO", "SO": "SO", "PSOP": "SO", "PDSO": "SO", "SSOP": "SSOP", "QSOP": "SSOP", "TSSOP": "TSSOP",
     "HTSSOP": "TSSOP", "MSOP": "MSOP", "VSSOP": "MSOP", "TSOP": "TSOP", "SOT": "SOT", "TSOT": "SOT", "SOD": "SOD",
     "SC": "SC", "TO": "TO", "DO": "DO", "DPAK": "TO252", "D2PAK": "TO263", "SMA": "SMA", "SMB": "SMB", "SMC": "SMC",
     "QFN": "QFN", "VQFN": "QFN", "WQFN": "QFN", "UQFN": "QFN", "HVQFN": "QFN", "UFQFPN": "QFN", "VFQFPN": "QFN",
@@ -65,11 +65,14 @@ CATS = {
                        r"soldering footprint|solder lands|\bfootprint\b|pad layout|soldering pad|焊盘|"
                        r"recommended\s+(?:pcb\s+)?mounting\s+pads?", re.I),   # Panasonic (AQY282GS)
     "pinout": re.compile(r"pin (configurations?|functions?|descriptions?|assignments?|definitions?)|pinning information|"
-                         r"\bpinouts?\b|terminal functions?|\(top view\)|top view|引脚", re.I),
+                         r"\bpinouts?\b|terminal functions?|terminal configuration|signal descriptions?|"   # TI MSP430:
+                         r"\(top view\)|top view|引脚", re.I),     # "Table 7-1. Signal Descriptions", the ball-name table
     "ordering": re.compile(r"ordering information|order(ing)? code|orderable|package option addendum|device comparison|"
                            r"ordering|part number|订购|订货", re.I)}
 TABLE = {"drawing": re.compile(r"\b(min\.?|minimum)\b[\s\S]{0,80}\b(max\.?|maximum)\b", re.I),
-         "pinout": re.compile(r"\bpin\s*(no\.?|number|#)|\bno\.\s+name\b|\bname\s+(type|i/o)\b|pin name", re.I)}
+         "pinout": re.compile(r"\bpin\s*(no\.?|number|#)|\bno\.\s+name\b|\bname\s+(type|i/o)\b|pin name|"
+                              r"\bterminal\b[\s\S]{0,60}?\bname\b[\s\S]{0,20}?\bno\.", re.I)}   # "TERMINAL I/O DESCRIPTION
+                                                                                  # NAME NO." (TI's terminal tables)
 _SPACES = re.compile(r"[ \t\u00a0]{2,}")
 CAPTION = re.compile(r"package\s+(?:name|outline|drawing|dimensions?)|\boutline\b", re.I)
 DSBGA_BOX = re.compile(r"\bD\s*:\s*Max\s*=[\s\S]{0,160}?\bE\s*:\s*Max\s*=[\s\S]{0,160}?\d\.\d+\s*mm,?\s*Min\s*=", re.I)
@@ -118,12 +121,36 @@ def norm_text(t):
     return (t or "").translate(_DASH)
 
 
+# an IPC-7351 land name: "SOIC127P1030X265-20M" is a 20-pin SOIC (its 127 is the 1.27 mm pitch, not a pin count:
+# A2982 p7, held-out test 2026-11-12, read as SO127 and so as another package's drawing); "SOT95P280X145-5N" names
+# no outline number, so it gives nothing
+_IPC_NAME = re.compile(r"(?<![A-Z0-9])(SOIC|SOP|QFP|QFN|SON|DFN|TSOP|SOT|SOD|TO)\d{2,4}P\d{2,5}X\d{2,5}(?:X\d{2,5})?"
+                       r"-(\d{1,3})[A-Z]{0,2}(?![A-Z0-9])")
+# an outline's lead count: "SOT-23-3", "TSOT-23-5", "TO-220-5", "5-Lead SOT-23" -> {'SOT23': {3}} (package_tokens
+# keeps the outline only, so RT9742SNGV's SOT-23-3 drawing and its TSOT-23-5 one were one package: held-out test
+# 2026-11-12, the TSOT-23-5 pages were sent and the SOT-23-3 one was not)
+_OUTLINE_N = re.compile(r"(?<![A-Z0-9])T?(SOT|SC|TO)\s?-?\s?(\d{2,3})\s?-\s?(\d{1,2})(?![0-9.])")
+_N_OUTLINE = re.compile(r"(?<![\d.])(\d{1,2})\s?-?\s?(?:PIN|LEAD)S?,?\s+T?(SOT|SC|TO)\s?-?\s?(\d{2,3})(?![0-9])")
+
+
+def outline_counts(text):
+    """The lead counts printed with an outline name -> {outline token: {counts}} (outline_counts('SOT-23-3') ->
+    {'SOT23': {3}}); {} when the text numbers no outline's leads."""
+    up, out = norm_text(text).upper(), {}
+    for m in _OUTLINE_N.finditer(up):
+        out.setdefault(m.group(1) + m.group(2), set()).add(int(m.group(3)))
+    for m in _N_OUTLINE.finditer(up):
+        out.setdefault(m.group(2) + m.group(3), set()).add(int(m.group(1)))
+    return out
+
+
 def package_tokens(text):
     """'SOIC-8_3.9x4.9mm' -> {'SO8'}, 'SOT-223-3_TabPin2' -> {'SOT223'}, 'LQFP-32_7x7mm' -> {'QFP32'}; a family
     without a number ('WSON') gives the family alone, unless the text also numbers it ("LQFP144, 144-lead LQFP" is
     QFP144 only: a family-only token would match every other LQFP)."""
     out = set()
     up = re.sub(r"BALL[\s-]*GRID[\s-]*ARRAY", "BGA", norm_text(text).upper())   # "256-Pin Micro FineLine Ball-Grid Array"
+    up = _IPC_NAME.sub(lambda m: "" if FAMILY.get(m.group(1)) in OUTLINE_FAMS else f"{m.group(1)}-{m.group(2)}", up)
     counted = {}                                      # "64-PIN LQFP": the count before the family (SAM E70 bookmarks)
     for m in _COUNT_FAM_RX.finditer(up):
         counted[m.start(2)] = m.group(1)
@@ -190,6 +217,28 @@ def mpn_variants(part):
     if len(p) > 7 and p[-1] in "RTG":                 # a tape-and-reel / lead-free suffix the ordering table may leave off
         out.add(p[:-1])
     return out
+
+
+MPN_TAIL = re.compile(r"\d([A-Z]{3,5})$")
+TEMP_LETTERS = "ICEAM"                                # a temperature-range letter before the package code
+
+
+def mpn_tail_codes(texts, part):
+    """The package code at the end of an MPN, when a page prints it as a word: MSP430F5333IZQW -> {'ZQW'} (TI's
+    signal table heads its ball column "ZCA, ZQW"; the ordering addendum no longer lists ZQW, so nothing else ties
+    the ball-name table to the part: held-out test 2026-11-12). The letters after the last digit, less a
+    temperature-range letter, at least 3 of them; set() when no page prints them."""
+    p = re.sub(r"[\s-]+", "", str(part or "")).upper()
+    m = MPN_TAIL.search(p)
+    if not m:
+        return set()
+    tail = m.group(1)
+    cands = [c for c in (tail, tail[1:] if tail[0] in TEMP_LETTERS else "") if len(c) >= 3]
+    for c in cands:
+        rx = re.compile(rf"(?<![A-Z0-9]){c}(?![A-Z0-9])")
+        if any(rx.search(norm_text(t).upper()) for t in texts or []):
+            return {c}
+    return set()
 
 
 def ordering_codes(texts, part):
@@ -629,6 +678,9 @@ def page_scores(texts, part=None, package=None, marks=None):
     desig = {fx["code"].upper()} if fx and fx.get("code") else set()
     desig |= {c for c in codes if re.fullmatch(r"[A-Z]{1,4}", c)}   # "TXB0101YZP": YZP on the line naming the part
     ktoks, key, sizes = ordering_key(texts, part, hint | otoks)
+    if not (codes or desig or otoks or ktoks):        # no ordering line for the part: its MPN's own package letters
+        codes = mpn_tail_codes(texts, part)
+    hint_n = outline_counts(package or "")            # "SOT-23-3": the outline's lead count, which its token drops
     otoks = _agree(hint, otoks, set(re.findall(r"\d+", package or "")))   # ("SOIC-14-16": 14 pins, 16 body; the
     own = hint | otoks | ktoks                        # ordering key is decoded from the MPN itself: it stays)
     own_counts = {int(n_) for t in own for _, n_ in [_fam_n(t)] if n_}   # pin counts (SOT23's 23 is its name)
@@ -674,6 +726,14 @@ def page_scores(texts, part=None, package=None, marks=None):
                 s["solo"] = s["solo"] and len(dwg) == 1
             else:
                 s["own"], s["other"], s["solo"] = False, True, False
+        page_n = outline_counts(t) if hint_n and s["own"] else {}
+        for k, ns in hint_n.items():                  # this outline with other lead counts only (TSOT-23-5 for a
+            if page_n.get(k):                         # SOT-23-3): another package's page. A count one off is the
+                far = {c for c in page_n[k] if all(abs(c - h) > 1 for h in ns)}   # same body: makers count a tab
+                if far == page_n[k]:                  # or not (KiCad's TO-252-2 is ROHM's TO252-3)
+                    s["own"], s["other"], s["solo"] = False, True, False
+                elif far:
+                    s["solo"] = False
         if re.search(r"orderable|package option addendum|ordering information", t, re.I):
             s["drawing"] //= 3                        # "Package Drawing" is a column of the ordering table there
         toc = len(re.findall(r"\.{5,}|(?:\. ){5,}", t)) >= 6
@@ -1059,11 +1119,17 @@ def unread_copper(spec):
     built with no thermal pad). Not held: the advisory fields, text that names no package field, a limit left out of
     a dimension whose value was read ('body_length min/max (not printed)': a nominal-only drawing), and a plain
     dimension with no value: the builder stops on it when this package needs it, and a pad table needs none."""
-    from .datasheet import SCHEMA
+    from .datasheet import SCHEMA, HOLES_UNREAD, standard_dip_holes
     num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
     out = []
+    dip = None
     for u in (spec or {}).get("unresolved") or []:
         top = unresolved_field(u).split(".")[0]
+        if HOLES_UNREAD.match(str(u)):                # a plain DIP's holes and pads: KiCad's standard ones fill them
+            if dip is None:                           # (the librarian puts them in: datasheet.standard_dip_holes)
+                dip = bool(standard_dip_holes(spec))
+            if dip:
+                continue
         if top in NOT_COPPER + ADVISORY or top not in SCHEMA["properties"]:
             continue
         v = spec.get(top)
