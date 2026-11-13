@@ -40,14 +40,15 @@ def h(o):
 # changed (checked with the earlier schema: the earlier hashes).
 # 2026-10-29: pin_sides, joined_pins and land.ep_center (datasheet.ADDED_FIELDS); with them taken out
 # (datasheet._legacy_schema) the build_* and batch requests hash to the earlier hashes, so nothing else changed.
-GOLDEN = {"build_sync": "794561458674286fc101f04063e9008435a768667fb122e9b1890be29dbc6186",
-          "build_batch": "303ee8bb50cab90f88e9517c3fd5fa80c28096dac7b3fa0b1db96c613a46cc6c",
-          "build_url_haiku": "623b60ef2bbad4782478111274395afcc6df652ac82be898efda0f38c64a07f0",
-          "reader_sync_calls": ["252741d43564e53eddb89351e4770d13a7016eec2a1a7c5571d78344053799d4",
-                                "1a2fe1431d799095748333665ad0a0ca1ae89c480b8d824d416f2dd217346362"],
+# 2026-11-13: re-taken for the task text's connector line (datasheet.CONNECTOR_TASK), on purpose
+GOLDEN = {"build_sync": "9055b0f5f7bff4832059fad6cffbb885ee9b157fef1da9b741af00343d66cdb8",
+          "build_batch": "58327df779a2ea31583adbf805864bb34608ee3156922194be3845821489557f",
+          "build_url_haiku": "07a9bf61be0362f95e7edd8f5fb2210866b0ab69a4d068058915f120a29f6137",
+          "reader_sync_calls": ["3529b0d390904fc7e83ffe5df8612626b0833a21e77f0c338f8ee46a92a55b6f",
+                                "5c95846db336f12b2018889f815264db999e8f0b00dddce1e666efcdc471aebb"],
           "visual": "2617a48dcb947471108561ff7f8eabce190b1cb553e2d2c4cbf4ff3974a03181",
-          "batch_posts": ["e3cc85e88a9fa71a84e562cc3ca97daf5e157f0fbd29030381d128f77034e834",
-                          "b6376fe54553634ee7c70c5f91777817dc7edf0ffaedd5087bca86e505e6030d"]}
+          "batch_posts": ["baecbe194ed890501d35eec51b6da7b205019e9452d23ce21b4ddac764649272",
+                          "a2ef9a9bc2088103f0d25b821e98d353358e048f5c19096e06d3051354f01d68"]}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 

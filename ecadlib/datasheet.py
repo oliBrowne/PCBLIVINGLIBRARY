@@ -878,22 +878,19 @@ Pins:
 - type: the electrical type from the table (power for supplies and grounds, open_collector for open-drain outputs, passive for NC). side: left for supplies and inputs, right for outputs and switching nodes."""
 
 
-CONNECTOR_HINT = re.compile(r"connector|header|socket|terminal|\bjack\b|\busb\b|^(?:JST|Molex|Hirose|TE|Samtec|"
-                            r"Amphenol|Wurth|Phoenix|Neutrik)[_:]", re.I)
-CONNECTOR_TASK = ("This is a connector: give pad_table.body, the housing's outline in the pad table's own frame (where the "
+CONNECTOR_TASK = ("If this part is a connector: give pad_table.body, the housing's outline in the pad table's own frame (where the "
                   "housing sits around the pins in the top view, from the drawing's dimensions between the housing "
                   "edges and the pins), not only its length and width; its pins are rarely centred in the housing.")
 
 
 def task_text(part, package=None, pages=None):
     """The user turn's text. It is not part of the result cache's key (ResultCache.key: the schema and system prompt
-    are), so a line here changes no cached answer. A connector's hint asks for the housing outline: reads that gave
+    are), so a line here changes no cached answer. It asks a connector's read for the housing outline: reads that gave
     only its size built the housing centred on the pins (B20B-PUDSS, held-out test 2026-11-12, 0.75 mm off)."""
     t = f"Part: {part}\nPackage hint: {package or 'none given; use the package of this part number'}\n"
     if pages:
         t += f"The drawing and pin table are expected on PDF pages {pages[0]}-{pages[1]}.\n"
-    if package and CONNECTOR_HINT.search(str(package)):
-        t += CONNECTOR_TASK + "\n"
+    t += CONNECTOR_TASK + "\n"                      # (every part: the hint is often only the MPN, B20B-PUDSS)
     return t + "Return the package dimensions and the pin list for this part."
 
 

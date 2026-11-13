@@ -433,6 +433,9 @@ class EvalReader(D.Reader):
             job = {"key": f"replay-{_safe(part)}", "name": name or part, "part": part, "package": package, "url": j["url"],
                    "where": j["where"], "offset": j["offset"], "headers": {}, "body": {"max_tokens": D.MAX_TOKENS},
                    "prov": j["prov"], "recording": rec, "fp_needed": fp_needed}
+            data = self._replay_pdf(j["prov"] or {})
+            if data is not None:                      # the PDF the read was given, for what is read from it in code
+                job["data"] = data                    # (active_low_from_pdf: a bar over a pin name)
         else:
             job = super().job(part, urls, package, pages, name, fp_needed, mpn, maker)
         job["estimate"] = (job.get("recording") or {}).get("estimate") or self._estimate(job)
@@ -443,6 +446,29 @@ class EvalReader(D.Reader):
             from .. import ds_route as DR
             self.used[part]["text"] = "\n".join(DR.page_texts(job["data"]) or [])
         return job
+
+    def _replay_pdf(self, prov):
+        """The recorded read's PDF from this machine, when one with the recorded SHA-256 is on hand: the [datasheet]
+        folder's file the recording names, or the download cache's copy of its link. None otherwise (never fetched:
+        a replay sends and downloads nothing). Without it a replayed read never had its pin bars read from the PDF
+        (MSP430F5333IZQW's RST, held-out test 2026-11-13)."""
+        import hashlib
+        want = prov.get("sha256")
+        if not want:
+            return None
+        cands = []
+        if prov.get("local") and self.cfg.get("folder"):
+            cands.append(Path(self.cfg["folder"]) / Path(str(prov["local"])).name)
+        for u in {prov.get("url"), prov.get("final_url")} - {None, ""}:
+            cands.append(self.store.dir / (hashlib.sha256(u.encode()).hexdigest()[:24] + ".pdf"))
+        for f in cands:
+            try:
+                data = f.read_bytes()
+            except OSError:
+                continue
+            if hashlib.sha256(data).hexdigest() == want:
+                return data
+        return None
 
     def cached(self, job):
         rec = job.get("recording")
