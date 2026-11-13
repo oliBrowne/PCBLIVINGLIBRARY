@@ -27,16 +27,17 @@ _SI = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "μ": 1e-6, "m": 1e-3, "": 
 
 
 def si(s):
-    """'10 kOhms' / '100nF' / '0.1 µF' / '4k7' / '1/10W' / '0.1W, 1/10W' / '16 VDC' -> float (first number), else None."""
+    """'10 kOhms' / '100nF' / '0.1 µF' / '4k7' / '1/10W' / '0.1W, 1/10W' / '16 VDC' -> float (first number), else None.
+    Capital P / N / U before F or H are pico / nano / micro ('10UF', '100NF'); '1E-7 F' is an exponent."""
     s = str(s or "").strip()
     m = re.match(r"(\d+)([pnuµμmkKMGR])(\d+)\b", s)                      # 4k7, 4R7, 2n2
     if m:
         return float(f"{m.group(1)}.{m.group(3)}") * _SI[m.group(2)]
-    m = re.search(r"(\d+(?:\.\d+)?)(?:\s*/\s*(\d+(?:\.\d+)?))?\s*([pnuµμmkKMG]?)", s)
+    m = re.search(r"(\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?:\s*/\s*(\d+(?:\.\d+)?))?\s*([pnuµμmkKMG]|[PNU](?=[FH]))?", s)
     if not m:
         return None
     v = float(m.group(1)) / (float(m.group(2)) if m.group(2) else 1.0)
-    return v * _SI[m.group(3)]
+    return v * _SI[(m.group(3) or "").replace("P", "p").replace("N", "n").replace("U", "u")]
 
 
 def pct(s):

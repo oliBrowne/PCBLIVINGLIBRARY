@@ -108,7 +108,8 @@ def load_symbol(ref, http, keep_quotes=False):
     if m:                                     # local file; parents from the same file or sibling files (symdir)
         path = Path(m.group(1))
         def get(name):
-            for f in (path, path.with_name(f"{name}.kicad_sym")):
+            sib = [] if re.search(r"[/\\\x00]", name) else [path.with_name(f"{name}.kicad_sym")]   # 'R 1/4W': no file name
+            for f in [path] + sib:
                 if f.exists():
                     s = _find_symbol(parse(f.read_text(encoding="utf-8")), name)
                     if s:
@@ -861,6 +862,10 @@ def _sym_prim(it, hide_names, hide_nums, pins_at, unit, pin_map, notes):
         num = (sexpr.first(it, "number") or ["", ""])[1]
         name = _pin_text((sexpr.first(it, "name") or ["", ""])[1])
         hidden, p = _hidden(it), {"num": pin_map.get(num, num), "name": name, "type": KTYPE.get(etype, "passive")}
+        alts = [str(x[1]) for x in sexpr.find(it, "alternate") if len(x) > 1]
+        if alts:                              # an Altium pin has one function: say what is not carried over
+            _note(notes, f"pin {num} ({name}): KiCad alternate functions {', '.join(alts)} not converted (an Altium "
+                         f"pin has one name)")
         shape = it[2] if isinstance(it[2], str) else "line"
         if shape not in AL.PIN_SHAPE:
             _note(notes, f"pin {num}: pin shape {shape} not converted")

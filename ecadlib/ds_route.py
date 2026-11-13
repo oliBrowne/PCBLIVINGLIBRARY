@@ -17,7 +17,7 @@ Used by datasheet.Reader (and so by the librarian, `ecadlib datasheet batch` and
 
 Prices: datasheet.PRICES (from the claude-api skill's model table, cached 2026-10-06), plus the cache-read prices
 and the Haiku 5.5 long-prompt tier listed here."""
-import argparse, datetime, io, json, re, sys
+import argparse, datetime, io, json, math, re, sys
 from pathlib import Path
 
 # Cache reads where the model table gives a price that is not 0.1x input; Haiku 5.5 is dearer above 100K prompt tokens.
@@ -136,7 +136,9 @@ def package_tokens(text):
             n1, sep = None, ""
         if fam in OUTLINE_FAMS:                       # SOT's number names the outline, not the pin count
             counted.pop(m.start(1), None)
-        if fam in NEEDS_NUM and (not n1 or sep.strip() == "" and sep):   # "TO-220", "SO8"; never "to 85" or "SO 2"
+        # "TO-220", "SO8"; never "to 85" or "SO 2". Only the short words are prose: "SOIC 8" (TI's ordering rows,
+        # "SOIC D 8") is a SOIC, which round 1 of compartmental testing found read as no package (open item 12)
+        if fam in NEEDS_NUM and m.group(1) in NEEDS_NUM and (not n1 or sep.strip() == "" and sep):
             if n1 or not counted.get(m.start(1)):
                 continue
         n1 = n1 or counted.get(m.start(1))
@@ -198,12 +200,17 @@ def ordering_codes(texts, part):
     if not vs:
         return toks, codes
     head = {re.match(r"[A-Z]*", v).group(0) for v in vs}   # STULPI01A: "ULPI" is the family name, not a package code
+    # a line that names this MPN as a whole word, when any does: LM358D's row, not LM358DGKR's (VSSOP) or LM358PW's
+    # (round 1 of compartmental testing, open item 12); a part whose whole name is on no line with a package (a title,
+    # and the table lists it only with a suffix: LM358DRG4) keeps every line that starts with it
+    whole = lambda ln: any(re.search(rf"(?<![A-Z0-9]){re.escape(v)}(?![A-Z0-9])", ln) for v in vs)
+    exact = any(whole(ln) and package_tokens(ln) for t in texts for ln in norm_text(t).upper().splitlines())
     for t in texts:
         last = set()
         for ln in norm_text(t).upper().splitlines():
             here = package_tokens(ln)
             flat = re.sub(r"\s+", "", ln)
-            if any(v in flat for v in vs):
+            if whole(ln) if exact else any(v in flat for v in vs):
                 toks |= here or last
                 for w in re.findall(r"(?<![A-Z0-9])([A-Z]{2,4}|\d{2}[A-Z]\d?(?:-[A-Z])?|[A-Z]{1,4}\d{4}[A-Z])(?![A-Z0-9])", ln):
                     if w not in STOP and w not in FAMILY and not any(w == v or w in h for v in vs for h in head) and (
@@ -1117,14 +1124,42 @@ def prices(model, prompt_tokens=0):
     return p
 
 
+USAGE_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+
+
+def token_count(v):
+    """One token count of a usage block as a whole number of 0 or more, or None when it is not a number (a gateway's
+    "1e3k", NaN, a list): a billed answer with a garbled usage block has an unknown cost, never a crash or $0."""
+    if v is None or v == "":
+        return 0
+    if isinstance(v, bool):
+        return None
+    try:
+        f = float(v) if isinstance(v, (int, float, str)) else None
+    except (TypeError, ValueError):
+        return None
+    if f is None or not math.isfinite(f):
+        return None
+    return max(0, int(f))
+
+
+def usage_tokens(usage):
+    """{key: count} of a usage block's USAGE_KEYS, or None when it is not a table or a count is not a number."""
+    if not isinstance(usage, dict):
+        return None
+    got = {k: token_count(usage.get(k)) for k in USAGE_KEYS}
+    return None if None in got.values() else got
+
+
 def usage_usd(model, usage, batch=False):
     """USD of one response from its usage block (input, cache write 1.25x, cache read, output); half on the Batches
     API. None when the model has no known price, or when there is no usage (a gateway or server that sends none: the
-    cost is unknown, not $0)."""
+    cost is unknown, not $0), or when the usage block is garbled (usage_tokens)."""
     from . import datasheet as D
-    u = usage or {}
-    tin, cw, cr, tout = (max(0, int(u.get(k) or 0)) for k in ("input_tokens", "cache_creation_input_tokens",
-                                                             "cache_read_input_tokens", "output_tokens"))
+    t = usage_tokens(usage or {})
+    if t is None:
+        return None
+    tin, cw, cr, tout = (t[k] for k in USAGE_KEYS)
     if not (tin or cw or cr or tout):
         return None
     p = prices(model, tin + cw + cr)
@@ -1173,8 +1208,9 @@ def attempt_record(part, name, model, msg, via, pages_sent, pages_total, verdict
     u = (msg or {}).get("usage") or {}
     if u:
         usd, how = usage_usd(billed_model(model, msg), u, batch), "usage"
-        tin = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-        tout = int(u.get("output_tokens") or 0)
+        t = usage_tokens(u) or {}                      # a garbled count: 0 here, the line's usd is None (unknown)
+        tin = sum(t.get(k) or 0 for k in USAGE_KEYS[:3])
+        tout = t.get("output_tokens") or 0
     elif ((msg or {}).get("ecadlib") or {}).get("not_sent"):   # refused before the request went out: nothing billed
         tin, tout, usd, how = 0, 0, 0.0, "not sent"
     else:

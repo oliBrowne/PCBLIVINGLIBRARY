@@ -1,0 +1,266 @@
+"""Compartmental testing round 2 (2026-11-12), group 2: datasheet reading checks and footprint / symbol details.
+Each component is called directly with small hand-made inputs. Offline: no key, no network, no model.
+    python3 -m tests.run_all test_compartmental2_g2"""
+import copy
+
+from ecadlib import datasheet as D, ds_route as DR, footprint_gen as F, stdparts as SP
+from tests import test_fix1026_rd as T
+from tests.test_fix1026_rd import gw, two
+
+IN = 25.4
+
+
+def held(t, package=None):
+    res = T.read(copy.deepcopy(t))
+    if package is not None:
+        ext = _ext(t)
+        res = D.process(ext, "TESTPART", "ds.pdf", package=package)
+    return D.read_hold(res)
+
+
+def _ext(t):
+    pkg = {k: None for k in T.PKG_KEYS}
+    pkg.update(unresolved=[], drawing="DWG", description=t.get("description") or t["name"],
+               height_max=T._dim((None, None, 1.5)))
+    for k, v in t.items():
+        pkg[k] = T._dim(v) if k in D.DIMS or k in D.NUM_DIMS else copy.deepcopy(v)
+    pins = [{"num": str(i), "name": str(i), "type": "passive", "side": "left", "page": 3} for i in (1, 2)]
+    return {"package": pkg, "pin_table": {"page": 3, "figure": "t", "rows": 2}, "pins": pins,
+            "symbol_description": t.get("description") or "x", "notes": [], "embedded_instructions": []}
+
+
+# ---------------------------------------------------------------- pitch against the name: an inch pitch's metric name
+def ssop(name, n, e, D_, E1, E):
+    return gw(name, n, e, D_, E1, E, (0.2, 0.25, 0.34), (0.5, 0.75, 1.02))
+
+
+SSOP36 = ssop("SSOP-36_5.3x12.6mm_P0.65mm", 36, 0.635, (12.5, 12.6, 12.7), (5.2, 5.3, 5.4), (7.6, 7.8, 8.0))
+SSOP48 = ssop("SSOP-48_7.5x15.9mm_P0.65mm", 48, 0.635, (15.75, 15.88, 16.0), (7.4, 7.5, 7.6), (10.03, 10.3, 10.67))
+
+
+def test_a_25_mil_row_named_p0_65_is_not_held_on_long_rows():
+    """A 0.635 mm (25 mil) row under a name rounded to P0.65mm: 18 and 24 leads a side moved the end lead 0.13 and
+    0.17 mm 'from the name's', past the 0.1 mm limit, and a true part was held (review of #243). The pads are built
+    at the drawing's 0.635, which is right; the name only rounds it."""
+    for t in (SSOP36, SSOP48):
+        res = T.read(copy.deepcopy(t))
+        assert any("name says pitch 0.65 mm" in r for r in res["needs_review"]), res["needs_review"]   # still advice
+        assert not DR.hold_reasons(res), (t["name"], DR.hold_reasons(res))
+
+
+def test_a_pitch_printed_in_inches_is_not_held():
+    """0.026 in (0.6604 mm) is how an inch drawing prints a 0.65 mm pitch: on 24 leads a side it was held."""
+    for t in (SSOP48, SSOP36, T.SSOP28):
+        assert held(dict(t, pitch=round(0.026 * IN, 4))) is None, t["name"]
+    assert D._same_pitch(0.65, 0.635) and D._same_pitch(0.65, 0.6604) and D._same_pitch(0.5, 0.5004)
+    assert D._same_pitch(0.75, 0.762)                 # 30 mil
+
+
+def test_a_pitch_of_another_variant_is_still_held():
+    for e in (0.5, 0.8, 0.4):
+        h = held(dict(SSOP48, pitch=e))
+        assert h and "pitch" in h, (e, h)
+    tssop48 = gw("TSSOP-48_6.1x12.5mm_P0.5mm", 48, 0.5, (12.4, 12.5, 12.6), (6.0, 6.1, 6.2), (7.9, 8.1, 8.3),
+                 (0.17, 0.22, 0.27), (0.45, 0.6, 0.75))
+    assert held(tssop48) is None
+    h = held(dict(tssop48, pitch=0.4))
+    assert h and "pitch" in h, h
+    for a, b in ((0.5, 0.4), (0.65, 0.5), (1.0, 0.95), (0.8, 0.75), (0.65, 0.8), (1.27, 1.0)):
+        assert not D._same_pitch(a, b), (a, b)
+
+
+# ---------------------------------------------------------------- chip size codes: wire-wound inductors, 3640
+def ind(name, L, W, Tl=(0.3, 0.5, 0.7)):
+    return two(name, "chip", L, W, Tl, description="wirewound chip inductor")
+
+
+CS1008 = ind("1008CS", (2.7, 2.92, 3.0), (2.6, 2.79, 2.9))
+CS0805 = ind("0805CS", (2.0, 2.29, 2.4), (1.5, 1.73, 1.8), (0.3, 0.45, 0.6))
+
+
+def test_a_wirewound_inductor_body_over_its_eia_code_is_not_held():
+    """Coilcraft's 1008CS is 2.92 x 2.79 mm and its 0805CS 2.29 x 1.73 mm: wire-wound chip inductors are sold by
+    the EIA code and are larger than the code's body. Both were held against the BOM's '1008' / '0805' and against
+    the names L_1008_2520Metric / L_0805_2012Metric (review of #243)."""
+    for t, code in ((CS1008, "1008"), (CS0805, "0805")):
+        assert held(t, code) is None, (t["name"], held(t, code))
+        named = dict(t, name=f"L_{code}_{SP.IMP2MET[code]}Metric")
+        assert held(named) is None and held(named, code) is None, held(named, code)
+
+
+def test_an_inductor_read_half_twice_or_from_a_far_size_is_still_held():
+    for t, code in ((CS1008, "1008"), (CS0805, "0805")):
+        for f in (2, 0.5):
+            h = held(dict(t, body_length=T.sc(t["body_length"], f), body_width=T.sc(t["body_width"], f)), code)
+            assert h and "too far apart" in h, (t["name"], f, h)
+    big = ind("1812CS", (4.5, 4.95, 5.1), (3.2, 3.81, 3.9))         # a 1812's row read for a 1008
+    h = held(dict(big, name="1008CS"), "1008")
+    assert h and "too far apart" in h, h
+    small = ind("0603CS", (1.6, 1.8, 1.9), (1.0, 1.12, 1.2))       # a smaller size's row: judged as before
+    h = held(dict(small, name="1008CS"), "1008")
+    assert h and "too far apart" in h, h
+
+
+def test_the_inductor_allowance_is_for_inductors_only():
+    cap = dict(CS1008, name="C_1008", description="ceramic capacitor")
+    h = held(cap, "1008")
+    assert h and "too far apart" in h, h
+
+
+def test_a_3640_body_under_its_own_codes_is_not_held():
+    """KiCad's C_3640_9110Metric read 9.1 x 1.0 mm from its code and the BOM's '3640' 9.1 x 1.6 mm (from 9116): a
+    true 9.14 x 10.16 mm read was held."""
+    c = two("C_3640", "chip", (8.9, 9.14, 9.4), (9.9, 10.16, 10.4), (0.25, 0.6, 0.95))
+    for name in ("C_3640", "3640", "C_3640_9110Metric"):
+        assert held(dict(c, name=name)) is None, (name, held(dict(c, name=name)))
+        assert held(dict(c, name=name), "3640") is None, name
+    assert D.name_facts("C_3640_9110Metric")["code_body"] == (9.1, 10.0)
+    assert SP.chip_size("C_3640_9110Metric") == "3640"
+    h = held(dict(c, name="C_3640_9110Metric", body_width=T.sc(c["body_width"], 0.5)))
+    assert h and "too far apart" in h, h
+
+
+# ---------------------------------------------------------------- round 1 open item 12: the ordering table's row above
+TI_ADDENDUM = ("PACKAGE OPTION ADDENDUM\nOrderable part number Status Package type Package Drawing Pins Package qty\n"
+               "LM358DGKR ACTIVE VSSOP DGK 8 2500 RoHS & Green NIPDAU Level-1-260C-UNLIM 0 to 70 M358\n"
+               "LM358DR ACTIVE SOIC D 8 2500 RoHS & Green NIPDAU Level-1-260C-UNLIM 0 to 70 LM358\n"
+               "LM358PWR ACTIVE TSSOP PW 8 2000 RoHS & Green NIPDAU Level-1-260C-UNLIM 0 to 70 L358\n")
+PLAIN = ("ORDERABLE DEVICE   PACKAGE TYPE   PINS\nLM358D      SOIC   8\nLM358DGKR   VSSOP  8\nLM358DR     SOIC   8\n"
+         "LM358PW     TSSOP  8\nLM358DRG4   SOIC   8\n")
+
+
+def test_an_ordering_row_is_read_for_its_own_package_not_the_row_above():
+    """LM358DR's row says SOIC, which was not read as a package when spaced from its count ('SOIC D 8', 'SOIC   8'):
+    the row took the VSSOP row above it, and LM358D took every row its name starts (LM358DGKR's VSSOP, LM358PW's
+    TSSOP). The pages of another package were then picked as this part's (round 1, open item 12)."""
+    fam = lambda toks: {DR._fam_n(t)[0] for t in toks}
+    assert fam(DR.ordering_codes([TI_ADDENDUM], "LM358DR")[0]) == {"SO"}
+    assert fam(DR.ordering_codes([TI_ADDENDUM], "LM358PWR")[0]) == {"TSSOP"}
+    assert fam(DR.ordering_codes([TI_ADDENDUM], "LM358DGKR")[0]) == {"MSOP"}
+    for part, want in (("LM358D", "SO"), ("LM358DR", "SO"), ("LM358PW", "TSSOP"), ("LM358DGKR", "MSOP"),
+                       ("LM358DRG4", "SO")):
+        assert fam(DR.ordering_codes([PLAIN], part)[0]) == {want}, (part, DR.ordering_codes([PLAIN], part))
+    assert DR.package_tokens("SOIC 8") == {"SO8"} and DR.package_tokens("SOIC D 8") == {"SO"}
+    assert DR.package_tokens("Operating range -40 to 85 C, SO 2 and TO 5") == set()     # prose is still no package
+
+
+def test_a_part_listed_only_with_a_suffix_still_finds_its_row():
+    toks, _ = DR.ordering_codes(["LM358DRG4   SOIC-8\nLM358DGKR   VSSOP-8"], "LM358DR")
+    assert toks == {"SO8"}, toks
+    toks, _ = DR.ordering_codes(["LM358D dual op amp", "LM358DR   SOIC-8\nLM358DGKR   VSSOP-8"], "LM358D")
+    assert {"SO8"} <= toks, toks                      # the title names it whole, the table only with a suffix
+
+
+# ---------------------------------------------------------------- round 1 open items 14, 15, 16: footprint_gen's door
+SOIC = {"name": "SOIC-8_custom", "package_type": "gullwing", "pin_count": 8, "pitch": 1.27,
+        "body_length": {"min": 4.8, "max": 5.0}, "body_width": {"min": 3.8, "max": 4.0},
+        "lead_span": {"min": 5.8, "max": 6.2}, "terminal_width": {"min": 0.31, "max": 0.51},
+        "terminal_length": {"min": 0.4, "max": 1.27}}
+
+
+def refused(spec, *words):
+    try:
+        F.build(copy.deepcopy(spec))
+    except ValueError as e:
+        assert all(w in str(e) for w in words), (words, str(e))
+        return str(e)
+    raise AssertionError(f"built: {spec}")
+
+
+def test_a_hand_spec_with_no_body_width_or_its_sides_swapped_is_refused():
+    """Round 1, open item 14: a body_width of 0 built a 0 mm wide outline, and D and E1 the other way round built
+    with the outline turned (footprint_gen; the read's door already held both)."""
+    refused(dict(SOIC, body_width={"nom": 0}), "body_width")
+    refused(dict(SOIC, body_length={"nom": 3.9, "tol": 0.1}, body_width={"min": 4.8, "max": 5.0}), "terminal_length")
+    F.build(copy.deepcopy(SOIC))
+
+
+def test_a_gullwing_span_far_past_the_body_is_refused_and_held():
+    """Round 1, open item 16: a 12 mm span on a 3.9 mm SOIC built its pads 5.5 mm out, from a hand spec and from a
+    read whose name is not in the standard table (the 4-foot room rule allows 5 mm a side for a 1.27 mm foot)."""
+    refused(dict(SOIC, lead_span={"nom": 12.0, "tol": 0.2}), "lead_span")
+    t = T.gw("MYPKG-8", 8, 1.27, (4.8, 4.9, 5.0), (3.8, 3.9, 4.0), (11.6, 12.0, 12.4), (0.31, 0.41, 0.51),
+             (0.4, 0.835, 1.27))
+    h = held(t)
+    assert h and "lead_span" in h, h
+
+
+def test_every_standard_gullwing_and_qfp_still_builds():
+    """The evidence for the reach limit: no gull-wing or QFP of the checked table reaches over 2.3 mm past its body."""
+    n = 0
+    for name, s in SP.packages().items():
+        if s.get("package_type") in ("gullwing", "qfp"):
+            n += 1
+            F.build(dict(copy.deepcopy(s), name=name))
+            assert not F.sanity(dict(s, name=name)), name
+    assert n > 200
+
+
+DFN_TB = {"name": "DFN-8-1EP_3x3mm_P0.5mm_EP2.4x1.6mm", "package_type": "qfn", "pin_count": 8, "pitch": 0.5,
+          "pins_left_right": 0, "pins_top_bottom": 4, "body_length": {"nom": 3.0, "tol": 0.05},
+          "body_width": {"nom": 3.0, "tol": 0.05}, "terminal_length": {"min": 0.3, "max": 0.5},
+          "terminal_width": {"min": 0.18, "max": 0.3}, "exposed_pad": {"length": {"nom": 2.4}, "width": {"nom": 1.6}}}
+
+
+def test_a_dfn_read_with_its_rows_top_and_bottom_is_built_pin_1_upper_left():
+    """Round 1, open item 15: rows read top/bottom built the land turned 90 degrees, pin 1 lower left (KLC F1.2). The
+    same land turned to rows left/right is what the IPC orientation draws."""
+    txt, rep = F.build(copy.deepcopy(DFN_TB))
+    lr = dict(DFN_TB, pins_left_right=4, pins_top_bottom=0, exposed_pad={"length": {"nom": 1.6}, "width": {"nom": 2.4}})
+    txt2, rep2 = F.build(copy.deepcopy(lr))
+    at = lambda r: [(p["num"], round(p["x"], 3), round(p["y"], 3), round(p["w"], 3), round(p["h"], 3))
+                    for p in r["pads"]]
+    assert at(rep) == at(rep2), (at(rep), at(rep2))
+    p1 = rep["pads"][0]
+    assert p1["x"] < 0 and p1["y"] < 0, p1
+    assert any("turned" in n for n in rep.get("notes") or []), rep.get("notes")
+    listed = dict(DFN_TB, pin_sides={"left": [], "bottom": ["1", "2", "3", "4"], "right": [], "top": ["8", "7", "6", "5"]})
+    assert F.rows(F.orient_rows(listed)[0]) == (0, 4)  # the read's own sides are built as listed
+
+
+# ---------------------------------------------------------------- fp-edit: a rename left after another is skipped
+def _padres(pads, pins):
+    t = {"unit": "mm", "y_axis": "down", "view": "top", "origin": "center", "default_pad": {"w": 1, "h": 1},
+         "pads": [{"number": n, "x": x, "y": 0} for n, x in pads], "arrays": None}
+    return {"spec": {"name": "X", "package_type": "custom", "pin_count": len(pads), "pad_table": t},
+            "symbol": {"pins": [{"num": n, "name": f"N{n}", "type": "passive"} for n in pins]}}
+
+
+def test_fp_edit_never_puts_two_pads_on_one_number_after_skipping_a_rename():
+    """T->1 with 1->2 (pad 2 exists): 1->2 was skipped as a clash, and T->1 then went ahead onto pad 1, which kept
+    its number: two pads 1, a short nobody asked for (when the symbol had no pin T to stop it)."""
+    from ecadlib import fp_edit as FE
+    out, notes = FE.apply({"rename": {"T": "1", "1": "2"}}, _padres([("T", -2), ("1", 0), ("2", 2)], ["1", "2"]))
+    nums = [str(p["number"]) for p in out["spec"]["pad_table"]["pads"]]
+    assert sorted(nums) == ["1", "2", "T"], (nums, notes)
+    assert any("T -> 1" in n and "skipped" in n for n in notes), notes
+    out, notes = FE.apply({"rename": {"1": "2", "2": "3", "3": "1"}}, _padres([("1", 0), ("2", 1), ("3", 2)], []))
+    assert [p["number"] for p in out["spec"]["pad_table"]["pads"]] == ["2", "3", "1"], notes   # a cycle still turns
+
+
+# ---------------------------------------------------------------- pdf_overline: complementary outputs
+def test_a_plain_pin_beside_its_own_barred_twin_is_not_barred():
+    """A supervisor with complementary RESET and ~{RESET} outputs (ADM6316-style): the datasheet prints RESET with a
+    bar more often than without, and the active-high RESET pin was barred too: two ~{RESET} pins, one of them the
+    wrong sense."""
+    from ecadlib import pdf_overline as PO
+    pins = [{"num": "1", "name": "~{RESET}"}, {"num": "2", "name": "RESET"}, {"num": "3", "name": "MR"}]
+    out, done = PO.mark(pins, {"RESET": (5, 2), "MR": (3, 0)})
+    assert [p["name"] for p in out] == ["~{RESET}", "RESET", "~{MR}"], out
+    assert done == ["MR"]
+    for twin in ("/RESET", "RESET_N", "nRESET", "RESET#"):
+        out, _ = PO.mark([{"num": "1", "name": twin}, {"num": "2", "name": "RESET"}], {"RESET": (5, 2)})
+        assert out[1]["name"] == "RESET", (twin, out)
+
+
+# ---------------------------------------------------------------- ds_search.rank: one word of a maker's name
+def test_a_site_that_only_starts_with_one_word_of_the_makers_name_comes_after_the_makers_own():
+    """'Micro Crystal' put microchip.com first (it starts with 'micro'), 'Analog Devices' analogictech.com."""
+    from ecadlib import ds_search as S
+    got = S.rank(["https://www.mouser.com/a.pdf", "https://ww1.microchip.com/a.pdf", "https://www.microcrystal.com/a.pdf"],
+                 "Micro Crystal")
+    assert got[0] == "https://www.microcrystal.com/a.pdf", got
+    got = S.rank(["https://www.analogictech.com/a.pdf", "https://www.analog.com/a.pdf"], "Analog Devices")
+    assert got[0] == "https://www.analog.com/a.pdf", got
+    got = S.rank(["https://www.mouser.com/a.pdf", "https://www.yageogroup.com/a.pdf"], "Yageo")
+    assert got[0] == "https://www.yageogroup.com/a.pdf", got                    # a one-word maker still starts a label

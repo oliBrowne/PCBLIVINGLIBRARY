@@ -117,6 +117,13 @@ def friendly(e):
     return None
 
 
+def plain(e):
+    """An error's words for a message line: friendly()'s plain words for a file error ("file not found: x.csv"),
+    never a raw "[Errno 2] No such file or directory: 'x.csv'"; else the error's own text."""
+    f = friendly(e) if isinstance(e, OSError) and (e.filename or e.errno) else None   # one raised with our own words:
+    return f[0] if f else str(e)                                                   # those, as they are
+
+
 def refuse(cmd, e, hint, out=None):
     """For a command that catches its own errors: friendly()'s line and hint when it knows the error, else the
     error's own words with `hint`; exit 2. A FileNotFoundError without a file name already says which path."""
@@ -142,6 +149,70 @@ def report(cmd, e, out):
     if f is None:
         bugreport.ask_once(out)                     # once ever: send reports like this automatically? (terminal only)
     return code
+
+
+class _Watch:
+    """A stream wrapper that passes everything on and remembers what went through it (stdout: whether anything did;
+    stderr: the text, its last 20000 characters)."""
+
+    def __init__(self, stream, keep=False):
+        self.stream, self.keep, self.n, self.text = stream, keep, 0, ""
+
+    def write(self, s):
+        self.n += len(s)
+        if self.keep:
+            self.text = (self.text + s)[-20000:]
+        return self.stream.write(s)
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def json_error(cmd, code, err_text):
+    """The error object a failing `--json` run prints: {ok: false, command, exit_code, error, hint}. error is the first
+    message line on stderr without its `ecadlib <cmd>:` / `error:` prefix; hint the `hint:` line after it."""
+    import re
+    lines = [ln.rstrip() for ln in str(err_text or "").splitlines() if ln.strip()]
+    msg = hint = None
+    usage = False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("usage:"):
+            usage = True
+            continue
+        if s.startswith("hint:"):
+            hint = hint or s[len("hint:"):].strip()
+            continue
+        if usage and ln.startswith(" ") or s.startswith("warning:"):
+            continue
+        if msg is None:
+            msg = re.sub(r"^(?:ecadlib(?: [\w-]+){0,3}: (?:error: )?|error: )", "", s)
+    return {"ok": False, "command": cmd, "exit_code": code, "error": msg or f"failed (exit code {code})", "hint": hint}
+
+
+def json_errors(cmd, fn):
+    """Run fn() (a command run with --json) and, when it fails without printing anything on stdout (a missing file,
+    an option the command does not take), print json_error() there, so a script reading the JSON always gets JSON.
+    The words on stderr stay as they are. Returns fn()'s exit code; SystemExit (argparse) is raised again after."""
+    import sys
+    out, err = _Watch(sys.stdout), _Watch(sys.stderr, keep=True)
+    sys.stdout, sys.stderr = out, err
+    code = None
+    try:
+        code = fn()
+        return code
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 0 if e.code is None else 1
+        if isinstance(e.code, str):                   # sys.exit("message"): Python prints it after we return
+            err.text += e.code + "\n"
+        raise
+    finally:
+        sys.stdout, sys.stderr = out.stream, err.stream
+        if isinstance(code, int) and not isinstance(code, bool) and code != 0 and not out.n:
+            try:
+                print(json.dumps(json_error(cmd, code, err.text)), file=sys.stdout)
+            except OSError:                           # the reader went away
+                pass
 
 
 def shell_word(s, nt=None):

@@ -573,6 +573,39 @@ def _apply_land(spec, pads):
     return out
 
 
+REACH_MM, REACH_FEET = 3.0, 2.5     # a gull-wing lead's reach past the body: over both is no real lead (_reach_problems)
+
+
+def _reach_problems(spec):
+    """A gull-wing's leads against its body, both ways (round 1 of compartmental testing, open items 14 and 16):
+    - too far: the lead span past the plastic, (E max - E1 min) / 2, over REACH_MM and over REACH_FEET x the longest
+      foot. No gull-wing of the checked standard table reaches over 2.3 mm (a 6.6 mm SOP-8 at 2.54 mm pitch), and the
+      ones that reach furthest for their foot (a 4-lead SO, 1.5 mm for a 0.5 mm foot) are well under 3 mm: a 12 mm span
+      on a 3.9 mm SOIC (pads 5.5 mm out) is a span from another row or read twice.
+    - too near: two nominal feet must fit between the span and the body, E max - E1 min >= 2 x L nom, on a dual row
+      (leads listed on one side only put all the room on that side); a SOIC read with D and E1 the other way round
+      leaves 0.7 mm a side for a 0.835 mm foot. J leads (SOJ, PLCC: under the body) are not judged."""
+    if re.search(r"SOJ|PLCC|J[- ]?lead", f"{spec.get('name') or ''} {spec.get('description') or ''}", re.I):
+        return []
+    try:
+        span, body, foot = dim(spec["lead_span"]), dim(spec["body_width"]), dim(spec["terminal_length"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    reach = (span[2] - body[0]) / 2
+    if reach > REACH_MM and reach > REACH_FEET * foot[2]:
+        return [f"lead_span max {span[2]:g} mm reaches {reach:.2f} mm past body_width min {body[0]:g} mm, over "
+                f"{REACH_MM:g} mm and {REACH_FEET:g} x the longest foot ({foot[2]:g} mm): no gull-wing lead reaches so "
+                "far, which is implausible (a span from another row of the drawing, or read twice? check lead_span and "
+                "body_width)"]
+    pos = spec.get("pin_positions")
+    sides = {p.get("side") for p in pos if isinstance(p, dict)} if isinstance(pos, list) else set()
+    if (not sides or {"L", "R"} <= sides) and 2 * reach < 2 * foot[1] - 0.01:
+        return [f"terminal_length nom {foot[1]:g} mm does not fit twice between lead_span max {span[2]:g} and "
+                f"body_width min {body[0]:g} mm: are body_length and body_width (D and E1) the other way round, or the "
+                "span read short? (check them against the drawing)"]
+    return []
+
+
 def sanity(spec):
     """Catch the usual datasheet-reading mistakes before they turn into a plausible-looking but wrong footprint.
     Returns a list of plain-language problems (empty when the numbers hang together)."""
@@ -588,6 +621,8 @@ def sanity(spec):
             errs.append(f"{k}: min {lo} is bigger than max {hi}")
         if hi > 60:
             errs.append(f"{k} = {hi}: that looks like mils or 0.01 mm units; the spec is in millimetres")
+        if k in ("body_length", "body_width") and hi <= 0:     # (round 1 of compartmental testing, open item 14)
+            errs.append(f"{k} {hi:g} mm: a body side must be above 0 (the drawing's {k} was not read?)")
     ep = spec.get("exposed_pad")
     if ep and min(dim(ep["length"])[1], dim(ep["width"])[1]) < 0.1:    # as build() refuses a signal pad under 0.1 mm
         errs.append(f"the exposed pad is {dim(ep['length'])[1]:g} x {dim(ep['width'])[1]:g} mm: too small to be a pad "
@@ -613,6 +648,7 @@ def sanity(spec):
                         "across the leads (E), body_width the plastic (E1); are they swapped?")
         if span is not None and T and T >= span / 2:
             errs.append(f"terminal_length {T} is half the lead span or more")
+        errs += _reach_problems(spec)
     if t == "qfp":                                  # each span across the body side it crosses (_qfn: X is body_length)
         for k, side, sk in (("lead_span", L, "body_length"), ("lead_span_y" if spec.get("lead_span_y") else "lead_span", W, "body_width")):
             span = nom(k)
@@ -721,6 +757,36 @@ def qfp_frame(spec):
                  f"body_length {round(W, 3)} on X, body_width {round(L, 3)} on Y"]
 
 
+def orient_rows(spec):
+    """(spec, notes): a QFN / DFN read with its two rows top and bottom (pins_left_right 0) turned 90 degrees to rows
+    left and right, as the IPC zero orientation and KLC F1.2 draw it (pin 1 upper left). The land is the same, turned:
+    body length and width, the exposed pad's length and width and the two row counts change places (round 1 of
+    compartmental testing, open item 15: such a read built pin 1 lower left). A read that lists its sides (pin_sides)
+    or places its pads (pin_positions) is built as it lists them, and so is one with the maker's land for its leads
+    (its pad_center / pad_center_y are given per row as read)."""
+    if spec.get("package_type") != "qfn" or listed_sides(spec) or spec.get("pin_positions") or \
+            spec.get("lead_span_y") is not None or lead_land(spec):
+        return spec, []
+    try:
+        nlr, ntb = rows(spec)
+    except (KeyError, TypeError):
+        return spec, []
+    if nlr != 0 or not ntb:
+        return spec, []
+    out = dict(spec, pins_left_right=ntb, pins_top_bottom=0, body_length=spec.get("body_width"),
+               body_width=spec.get("body_length"))
+    ep = spec.get("exposed_pad")
+    if isinstance(ep, dict) and "length" in ep and "width" in ep:
+        try:                                          # a pad that does not fit between the rows as read is a read at
+            room = dim(spec["body_width"])[1] - 2 * dim(spec["terminal_length"])[1]   # odds with itself: refused
+            if dim(ep["width"])[1] > room + 1e-9:     # as before (sanity), never turned into a fit (test_rd4)
+                return spec, []
+        except (KeyError, TypeError, ValueError):
+            return spec, []
+        out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
+    return out, ["turned 90 degrees to rows left and right (pin 1 upper left): the rows were read top and bottom"]
+
+
 def orient_ep(spec):
     """(spec, notes): the spec with its exposed pad the way build() lays it. Each turn needs the read's own numbers to
     rule the other way out, never a reference footprint; the cross-check compares what is built (crosscheck.critical).
@@ -797,8 +863,9 @@ def build(spec, density=None):
         from . import footprint_adv
         return footprint_adv.build(spec, density)
     spec, framed = qfp_frame(spec)
+    spec, rowed = orient_rows(spec)
     spec, turned = orient_ep(spec)
-    turned = framed + turned
+    turned = framed + rowed + turned
     problems = sanity(spec)
     if problems:
         raise ValueError("the package numbers don't add up: " + "; ".join(problems))

@@ -819,6 +819,8 @@ def build(spec, height=None):
     if t not in BUILDERS:
         raise ValueError(f"no 3D builder for package_type {t!r}")
     H, src = (float(height), "caller") if height else height_source(spec)
+    if H and not (math.isfinite(H) and H > 0):          # '--height nan' / -1: said plainly, not as a broken B-rep
+        raise ValueError(f"{spec['name']}: height {height!r} is not a positive number of mm")
     if not H:
         raise ValueError(f"{spec['name']}: no height (no height_max, no table entry); pass a height")
     solids = BUILDERS[t](spec, H)

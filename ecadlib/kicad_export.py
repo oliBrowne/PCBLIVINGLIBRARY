@@ -1151,6 +1151,7 @@ def export(plan, out, name, include_held=False, libs=(), http=None, log=print, r
     for a library installed into KiCad itself (kicad_install sets VAR to `out`); remembered for later exports."""
     import tempfile
     from . import change_gate as CG
+    fsutil.require_file(plan)                  # before the library lock: a mistyped path leaves nothing behind
     with CG.publishing(Path(plan).parent), tempfile.TemporaryDirectory(prefix="ecadlib-kx-") as stage:
         return _export(plan, out, name, include_held, libs, http, log, rules, project, stage=stage, take_over=take_over,
                        models_var=models_var)
@@ -1388,9 +1389,8 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         if fpn and fp_refs.setdefault(fpn.casefold(), (fref, fpn, it["name"]))[0] != fref:
             o_ref, o_fpn, o_part = fp_refs[fpn.casefold()]      # another footprint already has this file name (KiCad
             rep["errors"].append(f"{it['name']}: footprint {fref!r} would be {lib}:{fpn}, the name of footprint "  # name;
-                                 f"{o_ref!r} ({o_part}); rename one of them")         # ignoring case: Windows / macOS)
-            notes.append(f"footprint left out: {fpn} is footprint {o_ref!r} of {o_part}")
-            fpn = ""
+                                 f"{o_ref!r} ({o_part}); rename one of them; the part is left out")  # ignoring case)
+            continue                  # never a symbol without its footprint (dblib-sync / altium-pkg leave it out too)
         if fpn and fpn in fps and fpn in fp_src:   # the same footprint ref again: it must be the same footprint
             try:
                 again = fp_source(it, fpn, [])[0]
@@ -1398,9 +1398,9 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
                 again = f"{type(e).__name__}: {e}"
             if again != fp_src[fpn]:
                 rep["errors"].append(f"{it['name']}: footprint {fref!r} differs from the footprint {fref!r} of "
-                                     f"{fps[fpn]['by']} (written as {lib}:{fpn}); give one of them another footprint name")
-                notes.append(f"footprint left out: {lib}:{fpn} is {fps[fpn]['by']}'s, with different content")
-                fpn = ""
+                                     f"{fps[fpn]['by']} (written as {lib}:{fpn}); give one of them another footprint "
+                                     "name; the part is left out")
+                continue              # never a symbol without its footprint (dblib-sync / altium-pkg leave it out too)
         if fpn and fpn not in fps:
             fnotes = []
             try:
@@ -1705,6 +1705,7 @@ def main(argv=None):
     if a.install and not a.models_var:
         from .kicad_install import var_name
         a.models_var = var_name(libname(a.name))
+    fsutil.require_file(a.plan)                # before the HTTP cache folder is made
     try:
         rep = export(a.plan, a.out, a.name, a.include_held, a.lib, CachedHTTP(a.cache, offline=a.offline, timeout=60),
                      rules=a.rules, log=(lambda *x, **k: None) if a.json else print, project=a.project,

@@ -147,7 +147,11 @@ def read_stamp(folder):
     except (OSError, ValueError) as e:
         raise StampUnreadable(f"{f}: unreadable ({e}); restore it from {BACKUP}/ or delete it to treat the folder as "
                               f"ecadlib 0.3.0 data") from None
-    if not isinstance(d, dict) or _ver(d.get("schema_version")) > STAMP_FORMAT:
+    if not isinstance(d, dict) or not isinstance(d.get("kinds", {}), dict):    # a list, or kinds a list: damaged
+        raise StampUnreadable(f"{f}: unreadable (not a stamp: {'kinds is' if isinstance(d, dict) else 'it is'} a JSON "
+                              f"{type(d.get('kinds') if isinstance(d, dict) else d).__name__}); restore it from "
+                              f"{BACKUP}/ or delete it to treat the folder as ecadlib 0.3.0 data")
+    if _ver(d.get("schema_version")) > STAMP_FORMAT:
         raise SchemaTooNew(f"{f} was made by ecadlib {d.get('ecadlib', '?') if isinstance(d, dict) else '?'} "
                            f"(stamp format {d.get('schema_version') if isinstance(d, dict) else '?'}; this ecadlib "
                            f"{__version__} reads up to {STAMP_FORMAT}): {UPGRADE}")

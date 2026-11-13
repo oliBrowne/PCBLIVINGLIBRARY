@@ -1198,6 +1198,10 @@ def _result(ws, out, error=False, tool=None):
 
 def _error_text(e):
     from .visual_check import VisualCheckError          # e.g. Pillow not installed: the fix, not a bug report
+    if isinstance(e, (FileNotFoundError, PermissionError)) and e.filename:   # its name, never the server's full path
+        import os
+        name = os.path.basename(str(e.filename).rstrip("/\\")) or str(e.filename)
+        return f"{'file not found' if isinstance(e, FileNotFoundError) else 'permission denied'}: {name}"
     if isinstance(e, (ValueError, KeyError, FileExistsError, FileNotFoundError, PermissionError, VisualCheckError)):
         return e.args[0] if isinstance(e, KeyError) and e.args else str(e)   # a wrong id / path is the caller's
     from .datasheet import DatasheetError               # a refused API key, a datasheet not read: says what to fix

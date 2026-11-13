@@ -639,10 +639,11 @@ def main(argv=None):
     try:
         lines, _ = read_bom(a.bom, RU.bom_columns(rules), rules)
     except (ValueError, OSError) as e:                   # unreadable / headerless BOM: a message, not a traceback
-        print(f"cannot read BOM: {e}", file=sys.stderr)
+        from .cliutil import plain
+        print(f"ecadlib dblib: cannot read BOM: {plain(e)}", file=sys.stderr)
         return 2
     if not lines:
-        print(f"cannot read BOM: {a.bom} has a header but no part lines", file=sys.stderr)
+        print(f"ecadlib dblib: cannot read BOM: {a.bom} has a header but no part lines", file=sys.stderr)
         return 2
     tri = pd.read_csv(a.triage, dtype=str).fillna("") if a.triage else None
     tables = to_rows(lines, tri, rules)

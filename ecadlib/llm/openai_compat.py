@@ -118,12 +118,19 @@ class OpenAICompatClient:
         if m.get("refusal"):
             stop = "refusal"
         u = resp.get("usage") if isinstance(resp.get("usage"), dict) else {}
-        cached = int(((u.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
+        from ..ds_route import token_count
+        det = u.get("prompt_tokens_details") if isinstance(u.get("prompt_tokens_details"), dict) else {}
+        pt, ct, cached = (token_count(v) for v in (u.get("prompt_tokens"), u.get("completion_tokens"),
+                                                  det.get("cached_tokens")))
+        if None in (pt, ct, cached):                         # a garbled count: kept as sent, so the cost reads as
+            usage = {"input_tokens": u.get("prompt_tokens"),   # unknown (ds_route.usage_tokens), never a crash
+                     "cache_read_input_tokens": det.get("cached_tokens"), "output_tokens": u.get("completion_tokens")}
+        else:
+            usage = {"input_tokens": max(0, pt - cached), "cache_read_input_tokens": cached, "output_tokens": ct}
         return {"id": resp.get("id"), "type": "message", "role": "assistant", "model": resp.get("model") or model,
                 "content": [{"type": "text", "text": text or ""}], "stop_reason": stop,
                 "stop_details": {"type": "refusal", "category": None, "explanation": m.get("refusal")} if stop == "refusal" else None,
-                "usage": {"input_tokens": max(0, int(u.get("prompt_tokens") or 0) - cached), "cache_read_input_tokens": cached,
-                          "output_tokens": int(u.get("completion_tokens") or 0)} if u else None}   # none sent: unknown
+                "usage": usage if u else None}   # none sent: unknown
 
     # --- HTTP
     def _log(self, rec):

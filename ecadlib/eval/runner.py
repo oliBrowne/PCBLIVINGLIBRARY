@@ -829,6 +829,18 @@ def total_cap(lib, total, per_run=None, log=print):
     return cap
 
 
+def repeat_left(cap, folders):
+    """What a cost cap leaves after the cost-ledger lines written since each (lib folder, AI_COST.mark) in folders:
+    the runs of one `eval run --repeat` share the cap. None when a line has no price (what was spent is unknown)."""
+    from .. import ai_cost as AC
+    used, unpriced = 0.0, 0
+    for lib, since in folders:
+        got = AC.spent(lib, since)
+        used += got["usd"]
+        unpriced += got["unpriced"]
+    return None if unpriced else round(float(cap) - used, 4)
+
+
 def ai_overrides(rules, provider=None, base_url=None, assist=None, api_key_env=None, model=None):
     """rules with eval's --provider / --base-url / --assist / --api-key-env / --model put into [ai] (and [datasheet]'s
     own provider settings cleared, so [ai] decides). A --provider other than [ai]'s drops [ai]'s base_url and
@@ -893,6 +905,8 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     lib = out / "lib"
+    from .. import ai_cost as AC
+    spent_from = [(lib, AC.mark(lib))]                # this command's own ledger lines (a live --repeat shares its cap)
     rules = RU.resolve(rules, out)
     # a benchmark never waits on a person's browser: a refused link stays refused unless a way that needs no one works
     rules = dict(rules, datasheet={**rules.get("datasheet", {}), "handoff": "off"})
@@ -995,10 +1009,21 @@ def run(set_name="kicad-v1", out="out/eval/run", limit=None, model=None, record=
                     "started": datetime.datetime.fromtimestamp(t0).isoformat(timespec="seconds"),
                     "wall_s": round(wall, 1), "wall_s_per_part": round(wall / len(rows), 3)},
            "summary": summarize(rows), "cases": rows}
+    shared = (float((rules.get("datasheet") or {}).get("max_cost_usd") or 0)
+              if D.cap_chosen(rules) and not (replay or record) else 0.0)
     for i in range(2, max(1, int(repeat or 1)) + 1):
+        cap = max_cost_usd
+        if shared:                                    # a live repeat pays again: the cap you set is for the whole
+            left = repeat_left(shared, spent_from)    # command, not each of its runs
+            if left is None or left <= 0:
+                log(f"  repeat {i}: not run, the ${shared:g} cost cap is used up by this command's earlier runs"
+                    + (" (or what they spent is unknown)" if left is None else ""))
+                break
+            cap = left
+            spent_from.append((out / f"repeat-{i}" / "lib", AC.mark(out / f"repeat-{i}" / "lib")))
         again = run(set_name, out / f"repeat-{i}", limit, model, None, replay or record, sources, families, ids, offline, cache,
                     http, api_key, rules, providers, tol, log, provider, base_url, assist, api_key_env, batch=batch,
-                    cached_only=cached_only, pins=pins, max_cost_usd=max_cost_usd, skip=skip)
+                    cached_only=cached_only, pins=pins, max_cost_usd=cap, skip=skip)
         c = consistency(rep, again)
         prev = rep["summary"].get("consistency")
         if prev is None or c["same"] < prev["same"]:

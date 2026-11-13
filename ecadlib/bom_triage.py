@@ -22,7 +22,8 @@ FIELDS = {   # canonical field -> header synonyms (normalised: lowercase, punctu
     "qty": ["qty", "quantity", "count", "qnty", "amount", "pcs"],
     "designator": ["designator", "designators", "reference", "references", "ref", "refdes", "ref des", "parts"],
     "value": ["value", "val", "comment"],
-    "footprint": ["footprint", "package", "case", "package case", "pcb footprint"],
+    "footprint": ["footprint", "package", "case", "package case", "pcb footprint",
+                  "size", "case size", "chip size", "size code", "metric size", "imperial size"],   # 'Size (inch)': 0603
     "description": ["description", "desc", "notes"],
     "libref": ["libref", "lib ref", "library ref", "library reference", "symbol"],
     "dnp": ["dnp", "dnf", "dni", "do not populate", "do not place", "do not fit", "do not install", "do not mount",
@@ -181,6 +182,8 @@ def map_headers(headers, threshold=0.72):
                     sc = 0.9 if (f, s) in (("value", "comment"), ("mpn", "part")) else sc   # 'Value' wins over
                                                                      # Altium's 'Comment' ('Resistor'); a real MPN column
                                                                      # over a purchasing BOM's 'Part'
+                    sc = 0.85 if f == "footprint" and "size" in s.split() else sc   # a 'Footprint' / 'Package'
+                                                                     # column wins over a chip 'Size' beside it
                     sc = 0.74 if (f, s) in (("manufacturer", "vendor"), ("description", "notes")) else sc   # a
                                                                      # fallback: any header naming the maker or the
                                                                      # description ('Mfg Name', 'Part Description',
@@ -205,8 +208,10 @@ def map_headers(headers, threshold=0.72):
                 best *= 0.6                                              # 'Total Qty' (all boards), 'Package Qty'
             if f == "mpn" and re.search(r"\b(internal|company|our|house|stock|item|erp|sap|customer|cust|in house)\b", nh):
                 best *= 0.5                                              # 'Internal PN' is a house number
-            if f == "footprint" and re.search(r"\b(qty|quantity|count|pcs|size|weight)\b", nh):
-                best *= 0.5                                              # 'Package Qty' is a reel size
+            if f == "footprint" and (re.search(r"\b(qty|quantity|count|pcs|weight)\b", nh) or re.search(
+                    r"\bsize\b", nh) and re.search(r"\b(package|pkg|pack|reel|tape|box|tray|spq|moq|order|lot)\b", nh)):
+                best *= 0.5                                              # 'Package Qty', 'Reel Size': a reel size
+                                                                         # ('Size (inch)', 'Case Size' are chip sizes)
             if f == "footprint" and (metric_header(nh) or mixed_header(nh)):
                 best *= 0.95                                             # 'Case Code (mm)' 0603 is an 0201: the
                                                                          # inch column wins when both are there
@@ -1254,6 +1259,8 @@ def triage(lines, index, provs, http, shared=None):
                                 notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
                                              f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
                     notes.append(f"jlcpcb: MPN -> {r.lcsc}" if r.found else "jlcpcb: no exact MPN match")
+                    if r.found and (r.extra or {}).get("package_note"):
+                        notes.append(f"jlcpcb: {r.extra['package_note']}")
                 else:
                     if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
                         src = r                                # a found part is kept over a later miss or a later
@@ -1389,10 +1396,12 @@ def main(argv=None):
     try:
         lines, mapping = read_bom(a.bom, RU.bom_columns(rules), rules)
     except (ValueError, OSError) as e:                   # unreadable / headerless BOM: a message, not a traceback
-        print(f"cannot read BOM: {e}" + bom_hint(e), file=sys.stderr)
+        from .cliutil import plain
+        print(f"ecadlib triage: cannot read BOM: {plain(e)}" + bom_hint(e), file=sys.stderr)
         return 2
     if not lines:
-        print(f"cannot read BOM: {a.bom}: the BOM has a header but no part rows" + bom_hint("no part rows"), file=sys.stderr)
+        print(f"ecadlib triage: cannot read BOM: {a.bom}: the BOM has a header but no part rows" + bom_hint("no part rows"),
+              file=sys.stderr)
         return 2
     http = CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline)    # after the BOM: a bad one writes nothing
     try:
@@ -1439,19 +1448,26 @@ def print_result(rows, counts, a, t=None):
     """Terminal view: a row per BOM line in plain words (-v: the source notes), the counts, the next step."""
     from . import messages as M, term as TM
     t = t or TM.Term()
-    table = []
+    table, by, plugin_failed = [], {}, 0
     for r in rows:
         st, word = TRIAGE_WORDS.get(r["status"], ("info", r["status"].replace("_", " ")))
         src = str(r.get("src") or "")
         if "EasyEDA" in word and src and "easyeda" not in src.lower():   # the status key is kept for old readers;
             word = word.replace("EasyEDA", src) if "(" in word else f"{word} ({src})"   # the words name the source
+        if str(r["status"]).startswith("unverified") and re.search(r"plugin (?:error|returned)", str(r.get("notes") or "")):
+            plugin_failed += 1                        # a plugin that failed: not a network or key problem
+        by[word] = by.get(word, 0) + 1                # the summary counts what the rows say (the source's own name)
         table.append([str(r["line"]), t.status(st, word), r["mpn"][:32], r["lcsc"],
                       M.clean(r["notes"])[:200] if t.verbose else ""])
     t.table(table, right=(0,))
-    by = {TRIAGE_WORDS.get(str(k), ("", str(k)))[1]: int(v) for k, v in counts.items()}
-    unreach = sum(int(v) for k, v in counts.items() if str(k).startswith("unverified"))
+    if not rows:
+        by = {TRIAGE_WORDS.get(str(k), ("", str(k)))[1]: int(v) for k, v in counts.items()}
+    unreach = sum(int(v) for k, v in counts.items() if str(k).startswith("unverified")) - plugin_failed
     notes = []
-    if unreach:
+    if plugin_failed:
+        notes.append((f"{M.plural(plugin_failed, 'line')} could not be checked: a part source plugin failed (the "
+                      "report's notes say which)", "fix or remove the plugin (`ecadlib plugins list`); -v shows the notes"))
+    if unreach > 0:
         notes.append((f"{M.plural(unreach, 'line')} could not be checked: the part sources were not reachable"
                       + (" (--offline: only the cache)" if a.offline else ""),
                       "run again online, or add API keys (`ecadlib doctor` lists them)"))

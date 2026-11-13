@@ -81,6 +81,43 @@ def chip_size_problem(item):
     return None
 
 
+VALUE_UNIT = {"R": ("R", "resistor"), "C": ("F", "capacitor"), "L": ("H", "inductor")}
+FOREIGN_UNITS = {"R": ("F", "H"), "C": ("H", "R"), "L": ("F",)}   # an inductor's folder holds beads too: '600R@100MHz'
+UNIT_WORD = {"R": "a resistance", "F": "a capacitance", "H": "an inductance"}
+
+
+def value_kind_problem(item, rules=None):
+    """#27: the Value written in another passive type's unit (a resistor with Value '100nF', a capacitor with '10kΩ')
+    -> a message, or None. The type is the part's folder (Components/Resistors ...) and the kind its MPN encodes
+    (stdparts.mpn_size: RC0603FR-07.. is a resistor). Only a stated unit is compared: a bare '10k' or '100n' is not,
+    and neither are the MPN's value digits."""
+    from . import rules as RU, stdparts as SP
+    from .kicad_index import parse_value
+    par = {p.get("name"): p.get("value", "") for p in item.get("parameters") or [] if isinstance(p, dict)}
+    rules = rules or {}
+    value = str(par.get(RU.canonical_param("Value", rules) if rules else "Value", par.get("Value", "")) or "").strip()
+    if not value:
+        return None
+    try:
+        _, unit = parse_value(value, with_unit=True)
+    except (TypeError, ValueError):
+        return None
+    if unit not in UNIT_WORD:
+        return None
+    mpn = str(par.get(RU.canonical_param("Manufacturer Part Number", rules) if rules else "Manufacturer Part Number",
+                      par.get("Manufacturer Part Number", "")) or "")
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    kinds = [(k, f"its folder is {cat}") for k in [{"Resistors": "R", "Capacitors": "C", "Inductors": "L"}.get(cat)] if k]
+    mk = SP.mpn_size(mpn)[0]
+    if mk in VALUE_UNIT:
+        kinds.append((mk, f"its MPN {mpn} is a {VALUE_UNIT[mk][1]}'s"))
+    for k, why in kinds:
+        if unit in FOREIGN_UNITS[k]:
+            return (f"Value {value!r} is {UNIT_WORD[unit]}, but the part is a {VALUE_UNIT[k][1]} ({why}): the BOM's "
+                    "value and its part do not match; fix the BOM line")
+    return None
+
+
 def _land_size(name):
     """The imperial chip size a land name gives, or None. KiCad's IMP_METMetric names (C_2220_5650Metric,
     L_1206_3216Metric_Pad1.22x1.90mm_HandSolder) name their imperial size first; KiCad's own metric codes are not
@@ -649,6 +686,9 @@ def check_item(item, base=".", rules=None):
     if link:                                          # Comment '=Value' with no Value: the placed part shows nothing
         add("fields", f"{link} is empty: the part's Comment shows it ('={link}'), so the placed part would show no "
                       f"value; add a {link} column to the BOM or write the value in the description")
+    kind = value_kind_problem(item, rules)
+    if kind:
+        add("fields", kind)
     mpn = str(par.get(RU.canonical_param("Manufacturer Part Number", rules), par.get("Manufacturer Part Number", "")) or "")
     if SS.cell(mpn) != mpn:                           # =cmd|'/c calc'!A1, +SUM(..), @SUM(..): what a spreadsheet runs
         add("fields", f"Manufacturer Part Number {mpn[:40]!r} starts like a spreadsheet formula, not a part number: "
@@ -756,6 +796,14 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
     rules = RU.resolve(rules, base)
     rows, today = [], datetime.date.today().isoformat()
     lg = LG.Ledger(Path(base)) if change_holds else None
+    first = {}                                 # a part named like an earlier one, in any case: Altium Part Numbers and
+    clash = {}                                 # Windows file names ignore case, so dblib-sync would refuse it later
+    for it in items:
+        k = str(it.get("name") or "").casefold()
+        if k in first:
+            clash[id(it)] = first[k]
+        else:
+            first[k] = it.get("name")
     for it in items:
         if it.get("a365") and it.get("status") in ("existing", "deleted_in_workspace"):
             # pulled from Altium 365 (ecadlib a365 pull): already released there, nothing to release or hold back
@@ -764,6 +812,10 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
                          "footprint_source": "a365", "height_mm": "", "failures": "", "warnings": "", "allowed": ""})
             continue
         fails, warns, info = check_item(it, base, rules)
+        if id(it) in clash:
+            same = "the same name" if clash[id(it)] == it["name"] else "a name that differs only in case"
+            fails = list(fails) + [("files", f"another part in the plan, {clash[id(it)]!r}, has {same} (Altium part "
+                                             "numbers and file names ignore case): rename one of them")]
         msgs = [f"{r}: {m}" for r, m in fails]
         if it["name"] in unallow:
             it.pop("allow", None)
@@ -888,6 +940,8 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", help="print the result as JSON (plan, report, counts, rows)")
     a = ap.parse_args(argv)
     plan = Path(a.plan)
+    from .fsutil import require_file
+    require_file(plan)                         # before the lock and approvals: a mistyped path leaves nothing behind
     from .approvals import cli_plan_lock, load_policy, policy_error
     try:
         load_policy(plan.parent)               # a broken approvals file: say so, before anything is changed

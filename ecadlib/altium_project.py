@@ -142,9 +142,10 @@ def _param_names(field, defaults, rules):
 
 
 def _resolve(text, params):
-    """Altium '=Name' indirection (Comment '=Value', '=Part Number')."""
+    """Altium '=Name' indirection (Comment '=Value', '=Part Number'). One naming a parameter the part does not have
+    is no text: '=Value' with no Value is a broken link, not the part's value (it went into the BOM as '=Value')."""
     if text and text.startswith("=") and len(text) > 1:
-        return _ci(params, [text[1:]]) or text
+        return _ci(params, [text[1:]]) or ""
     return text
 
 
@@ -1137,7 +1138,8 @@ def main(argv=None):
         prj = load_project(a.project, RU.resolve(None, Path(a.project).parent) if RU else None)
         groups = bom_groups(prj, a.variant)
     except (ValueError, FileNotFoundError) as e:
-        print(f"ecadlib project: {e}", file=sys.stderr)
+        from .cliutil import plain
+        print(f"ecadlib project: {plain(e)}", file=sys.stderr)
         return 2
     variants = [v["name"] for v in prj["variants"]]
     out = write_bom_csv(groups, a.out or Path(a.project).with_name(f"{Path(a.project).stem}_bom.csv"), variants)
@@ -1171,7 +1173,8 @@ def where_used_main(argv=None):
         rules = RU.resolve(None, first if first.is_dir() else first.parent) if RU else None
         res = where_used(a.projects, a.part, a.plan, a.lib, a.a365, a.lifecycle, rules=rules)
     except (ValueError, FileNotFoundError) as e:
-        print(f"ecadlib where-used: {e}", file=sys.stderr)
+        from .cliutil import plain
+        print(f"ecadlib where-used: {plain(e)}", file=sys.stderr)
         return 2
     files = write_where_used(res, a.out)
     print(f"{len(res['projects'])} projects, {len(res['parts'])} parts, {len(res['flags'])} flags")

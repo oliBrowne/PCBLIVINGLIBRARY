@@ -263,6 +263,7 @@ def build(plan, out, name="ecadlib", include_held=False, rules=None, driver=DEFA
     from .kicad_export import libname
     from . import change_gate as CG
     out, lib = Path(out), libname(name)
+    fsutil.require_file(plan)                 # before -o is made: a mistyped path leaves nothing behind
     if Path(plan).is_file():                  # one plan folder's database library per name and folder (R-FX15-4)
         CG.claim_output(out, f"kicad-dblib:{lib}", Path(plan).parent, take_over, what=f"the database library {lib}")
     out.mkdir(parents=True, exist_ok=True)
