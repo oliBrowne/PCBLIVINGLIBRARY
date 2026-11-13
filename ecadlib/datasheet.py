@@ -73,6 +73,7 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "zoom_drawings": False,                         # close-ups of the drawing pages: zoom_blocks()
             "cross_check": "auto", "cross_check_model": "",  # second source before a footprint is accepted: ecadlib.crosscheck
             "folder": "",                                   # PDFs a person downloaded, <MPN>.pdf: tried before any link
+            "archive": True,                                # no link gave a PDF: the Internet Archive's copy (ecadlib.ds_archive)
             "standard_land": "off",                         # a read that identifies a standard package: off | auto | always
             "download": "auto",                             # a refused PDF link: other ways to download it (ecadlib.pdf_fetch)
             "web_search": False, "web_search_model": "", "web_search_max_uses": 3,   # no link worked: ecadlib.ds_search
@@ -4973,6 +4974,36 @@ class Reader:
                             outline=list(prov.get("outline") or []) + [{"code": "web search", "from": got[1],
                                                                         "first_page": first, "body": body}])
 
+    def _archived(self, part, linked, attempts, mpn=None):
+        """[datasheet] archive: the Internet Archive's saved copy of a link that gave no PDF here (ecadlib.ds_archive),
+        asked for once none of the part's links gave one: a dead link (404, a maker's site that moved), or one every
+        way of downloading was refused. Only a public link is sent to the Archive (ds_archive.asked), and never one
+        whose failure was this machine's network or would repeat (ds_archive.worth). The copy is downloaded as any
+        link is and must name the part; http and https of one link are asked for once, at most ds_archive.MAX_LINKS
+        links a part. -> (data, prov with "archived": {"of", "saved"}) or (None, None), the misses in attempts."""
+        from . import ds_archive as AR
+        seen = []
+        for a in linked:
+            url, same = a.get("url") or "", api_url(a.get("url") or "")
+            if not url or same in seen or not AR.worth(a.get("error")) or AR.asked(url):
+                continue
+            if len(seen) >= AR.MAX_LINKS:
+                break
+            seen.append(same)
+            got, why = AR.lookup(same, self.http)
+            if not got:
+                attempts.append({"url": url, "where": AR.WHERE, "error": why})
+                continue
+            copy, saved = got
+            try:
+                data, prov = self.store.fetch(copy, f"{AR.WHERE} copy of the {a.get('where') or 'part'}'s link, saved "
+                                              f"{saved}", follow=False, part=part, handoff=False, mpn=mpn, public=True)
+            except DatasheetError as e:
+                attempts.append({"url": copy, "where": AR.WHERE, "error": str(e)})
+                continue
+            return data, dict(prov, archived={"of": url, "saved": saved})
+        return None, None
+
     def _fetch_found(self, url, part, attempts):
         """A link a web search gave -> (data, prov) or None (the miss in attempts). Never a private address: the link
         is a web page's, not the person's own BOM's."""
@@ -5017,6 +5048,8 @@ class Reader:
         linked = list(attempts)                       # what the part's own links got (not the hand-off, not a search)
         if data is None:
             data, prov, _ = self._folder_pdf(part, urls, ("family",), attempts)
+        if data is None and self.cfg.get("archive") and not self.offline and not os.environ.get("ECADLIB_NO_ARCHIVE"):
+            data, prov = self._archived(part, linked, attempts, mpn)   # before a person is asked for it
         if data is None and self.store.handoff is not None:   # no link worked by itself: ask the person, link by link
             for url, where, page in dict.fromkeys(self.store.refusals[n0:]):
                 try:
@@ -5363,6 +5396,10 @@ class Reader:
             res["sidecar"]["land_pages"] = lp
         if job["prov"].get("sent_as") == "url":
             res["needs_review"].append("the PDF was not downloaded here (sent as a URL): its content was not validated locally")
+        from . import ds_archive as AR
+        archived = AR.review_line(job["prov"])
+        if archived:
+            res["needs_review"].append(archived)
         if job["prov"].get("unnamed"):
             res["needs_review"].append(f"{job['prov']['unnamed']} (no other link gave a PDF): check it is this part's datasheet")
         if job["prov"].get("local") and re.search(r"\((?:a family datasheet|named for another part number)", str(job["prov"].get("where"))):

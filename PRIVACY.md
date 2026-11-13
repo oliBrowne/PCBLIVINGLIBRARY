@@ -9,6 +9,7 @@ reports, and only from people who switched them on (below).
 | Your AI provider (Anthropic by default; OpenAI, Gemini, OpenRouter, or a model on your own machine) | Datasheet pages and part numbers for parts no library has, and pictures of a generated footprint for the visual check. Your API key goes with each request. | Only when a part needs the datasheet reader or the visual check, and only to the provider you picked | Pick "No AI" on the setup page, or remove `datasheet` from `[sources] order` in `ecadlib.toml` |
 | gitlab.com (KiCad's official libraries) | Requests for library index and footprint/symbol files | When looking parts up online | Run with `--offline`, or remove `kicad` from `[sources] order` |
 | EasyEDA / LCSC | Part numbers | When looking parts up online | Remove `easyeda` from `[sources] order` |
+| The Internet Archive (archive.org) | A part's datasheet link, when it is a public web link | Only when none of the part's datasheet links gave a PDF (a dead link, or a site that refused the download). Never a link to your own network, an intranet name, or a link holding a user name, key or signature | Set `archive = false` under `[datasheet]` |
 | DigiKey, Mouser, Nexar, SnapMagic, SamacSys | Part numbers, with your key | Only if you set that service's key | Do not set the key |
 | Altium 365 (Nexar) | The parts you push, with your token | Only when you push to Altium 365 | Do not set `NEXAR_TOKEN` |
 | GitHub | Upkeep issues or pull requests | Only if you run `ecadlib upkeep --github` | Leave out `--github` |

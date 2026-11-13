@@ -156,8 +156,10 @@ Some makers' sites answer a script with 403, a bot-check page or a dropped conne
 
 None of these solves a CAPTCHA, signs in, reads your browser's cookies or goes through a third-party proxy. A link that is simply gone (404 or 410), a proxy refusal, a name that does not resolve, a closed port or a host that never answers the connection never moves on, from any way: those are not the site refusing a script, and no other way would get further. (Behind a proxy, a host that never answers looks like a site that stalls, so the other ways are tried for it.) A TLS or certificate error does move on: Edge and Chrome check certificates against your system's own store (a company network that inspects HTTPS) and talk to older servers that Python's TLS refuses; every way still checks the certificate. The automatic way that worked is tried first for that site's next link during the run (your own browser never is), and the cached PDF's record (`via`) says which way got it. When every way is refused, the error lists what each one got. One headless browser serves the whole run; one that stops answering (a site that stops sending halfway) is given up after a time limit and a new one starts, so a run never hangs on it.
 
+curl_cffi (way 2) is installed with ecadlib. It was an optional extra until 2026-11, so a plain `pip install ecadlib` got none of the PDFs that analog.com, st.com or Nexperia refuse to a script. The headless browser (way 3) is still an extra:
+
 ```
-pip install "ecadlib[browser]"          # curl_cffi + Playwright; without them the chain skips ways 2 and 3 and says so
+pip install "ecadlib[browser]"          # Playwright; without it the chain skips way 3 and says so
 playwright install chromium             # only when the machine has neither Edge nor Chrome
 ecadlib doctor                          # shows whether curl_cffi and playwright are installed
 ```
@@ -171,6 +173,22 @@ downloads_folder = ""      # "" = the system Downloads folder (on Windows the on
 ```
 
 `ECADLIB_DOWNLOAD=plain` (or a comma list such as `headers,browser`) overrides `download` for one run, and `ECADLIB_NO_HANDOFF=1` turns the hand-off off. `ECADLIB_BROWSER` points the headless browser at a particular Chrome or Edge executable. The test suite sets `ECADLIB_DOWNLOAD=plain` and `ECADLIB_NO_HANDOFF=1`; `tests/test_pdf_fetch.py` checks each way against a local site that refuses scripts the ways bot managers do (a User-Agent check, a cookie set by a script, a challenge page that reloads itself, a link written by a script).
+
+### When no link gives a PDF: the Internet Archive's copy (`ds_archive.py`)
+
+A BOM's datasheet link often dies: the maker renumbered its documents, moved its site or was bought. Other links stay alive and are refused to every automatic way above. The [Wayback Machine](https://web.archive.org) has usually saved the PDF such a link once gave. Once none of a part's links gave a PDF (and no family file in your `[datasheet] folder` did), ecadlib asks the Archive's availability API for the newest good capture of each failed link, and downloads that capture as it downloads any link. It is free and needs no key or account. It comes before your own browser is opened and before a paid web search.
+
+* The PDF must still pass every check a link's PDF does: it is a complete PDF, it names the part, and it does not open as a change notice.
+* The copy can be an older revision than the maker's current one. The part's review says so, with the link and the day the copy was saved, so you can compare the package drawing with the current datasheet.
+* Only a public link is sent to archive.org. A link to your own network (`192.168.x`, `10.x`), an intranet name (`fileserver`, `docs.acme.local`), a link with a user name in it and a link whose query holds a key or a signature are never sent. Nor is a link that failed because this machine's network refused it (a proxy), or one whose PDF simply does not name the part.
+* At most three links are asked for per part; `http` and `https` of one link count once. The Archive's answers are kept in the HTTP cache for a week.
+
+```toml
+[datasheet]
+archive = true             # false: never ask the Internet Archive
+```
+
+`ECADLIB_NO_ARCHIVE=1` turns it off for one run (the test suite sets it; `tests/test_ds_archive_1113.py` tests it against a faked Archive).
 
 ### Fewer pages, a model per part, and what it cost (`ds_route.py`)
 

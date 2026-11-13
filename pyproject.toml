@@ -11,13 +11,16 @@ license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "oliver browne" }]
 requires-python = ">=3.10"
-dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile", "pypdf[crypto]", "pypdfium2",
+dependencies = ["requests", "pandas", "openpyxl", "jsonschema", "olefile", "pypdf[crypto]", "pypdfium2", "curl_cffi",
                 "tomli>=1.1; python_version < '3.11'"]   # olefile: the release check,
                                        # kicad-export, dedupe and project BOMs read .SchLib/.PcbLib/.SchDoc back;
                                        # pypdfium2 (Apache-2.0/BSD-3): renders datasheet pages, so [datasheet]
                                        # zoom_drawings works on every install (the 10-23 benchmark venv had no renderer);
                                        # pypdf: the datasheet reader sends only the pages it needs (a 1976-page PDF fails whole);
                                        # [crypto]: makers' AES-encrypted PDFs with no open password (AQY282GS) read as blank without it
+                                       # curl_cffi (MIT): makers' sites that refuse a script's download (analog.com, st.com,
+                                       # Nexperia) give the PDF to Chrome's TLS fingerprint; it was an extra, so a plain
+                                       # `pip install ecadlib` got none of those datasheets (18 of 24 blocked links, 2026-10-20)
 keywords = [
     "ecad", "pcb", "eda", "footprint", "ipc-7351", "kicad", "altium", "altium-365",
     "component-library", "bom", "datasheet", "mcp",
@@ -48,8 +51,8 @@ Changelog = "https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/CHANGELOG.m
 altium = ["olefile"]                   # kept for old install commands; olefile is now a core dependency
 pdf = ["pypdf", "pdfplumber", "pypdfium2"]   # pdfplumber: ordering tables read by column (text lines without it); pypdfium2: page pictures
 vision = ["pillow", "pypdf", "pypdfium2"]   # visual-check: draw footprints / symbols; pypdfium2 renders datasheet pages (else pdftoppm)
-browser = ["curl_cffi", "playwright>=1.57"]    # datasheet links a maker's site refuses to scripts: Chrome's TLS fingerprint,
-                                       # then the installed Edge / Chrome, headless (ecadlib.pdf_fetch)
+browser = ["curl_cffi", "playwright>=1.57"]    # datasheet links a maker's site refuses even to Chrome's TLS fingerprint
+                                       # (curl_cffi, a core dependency now): the installed Edge / Chrome, headless (ecadlib.pdf_fetch)
 all = ["olefile", "pypdf", "pillow", "curl_cffi", "playwright>=1.57", "pdfplumber", "pypdfium2"]
 dev = ["curl_cffi", "playwright>=1.57", "olefile", "graphql-core", "pyaltiumlib", "pypdf", "pillow", "tomli", "pdfplumber", "pypdfium2"]   # tomli: the Python 3.10 path is tested
 
