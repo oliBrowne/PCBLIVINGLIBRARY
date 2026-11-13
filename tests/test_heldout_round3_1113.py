@@ -104,14 +104,17 @@ def test_one_function_printed_plain_elsewhere_is_not_marked():
     # a bar over every function is the whole name's, which needs the usual two printings
 
 
-def test_a_replayed_read_finds_its_pdf_by_hash(tmp_path):
-    import hashlib
+def test_a_replayed_read_finds_its_pdf_by_hash():
+    import hashlib, tempfile
+    from pathlib import Path
     from ecadlib.eval import runner as R
     data = _seg_pdf(None)
-    (tmp_path / "X.pdf").write_bytes(data)
-    r = R.EvalReader.__new__(R.EvalReader)
-    r.cfg = {"folder": str(tmp_path)}
-    r.store = type("S", (), {"dir": tmp_path / "none"})()
-    prov = {"sha256": hashlib.sha256(data).hexdigest(), "local": "X.pdf", "url": "https://a/x.pdf"}
-    assert r._replay_pdf(prov) == data
-    assert r._replay_pdf(dict(prov, sha256="0" * 64)) is None            # another file under that name: not used
+    with tempfile.TemporaryDirectory() as d:                              # plain function: tests/run_all.py has no fixtures
+        tmp = Path(d)
+        (tmp / "X.pdf").write_bytes(data)
+        r = R.EvalReader.__new__(R.EvalReader)
+        r.cfg = {"folder": str(tmp)}
+        r.store = type("S", (), {"dir": tmp / "none"})()
+        prov = {"sha256": hashlib.sha256(data).hexdigest(), "local": "X.pdf", "url": "https://a/x.pdf"}
+        assert r._replay_pdf(prov) == data
+        assert r._replay_pdf(dict(prov, sha256="0" * 64)) is None        # another file under that name: not used
