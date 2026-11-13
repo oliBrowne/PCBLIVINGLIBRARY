@@ -13,6 +13,10 @@ from tests.test_librarian import Response
 DEAD = "https://maker.example/old/ds.pdf"
 SNAP = "http://web.archive.org/web/20220413111507/https://maker.example/old/ds.pdf"
 COPY = "https://web.archive.org/web/20220413111507id_/https://maker.example/old/ds.pdf"
+OLD_SNAP = "http://web.archive.org/web/20210410000000/https://maker.example/old/ds.pdf"
+OLD_COPY = "https://web.archive.org/web/20210410000000id_/https://maker.example/old/ds.pdf"
+PAGE = b"<!doctype html><html><body>Access Denied</body></html>"
+SLEPT = []
 
 
 def _api(snap=SNAP, status="200", available=True):
@@ -21,7 +25,8 @@ def _api(snap=SNAP, status="200", available=True):
 
 
 class ArcHTTP(PdfHTTP):
-    """PdfHTTP plus the Archive's availability API: answers = {link: the API's JSON text, or an error text}."""
+    """PdfHTTP plus the Archive's availability API: answers = {query: the API's JSON text}; down: an error for every
+    ask, or a list of (status, error) answers given first, one per ask."""
 
     def __init__(self, pdfs=None, answers=None, down=None):
         super().__init__(pdfs)
@@ -30,7 +35,11 @@ class ArcHTTP(PdfHTTP):
     def get(self, url, headers=None, **kw):
         if url.startswith(AR.API):
             self.asked.append(url)
-            if self.down:
+            if isinstance(self.down, list):
+                if self.down:
+                    status, err = self.down.pop(0)
+                    return Response(status, "", error=err)
+            elif self.down:
                 return Response(0, "", error=self.down)
             return Response(200, self.answers.get(url, _api(snap=None)))
         return super().get(url, headers=headers, **kw)
@@ -58,6 +67,7 @@ def archive_on(fn):
 
 def _reader(d, http, client=None, **ds):
     return D.Reader(Path(d) / "out", Path(d) / "cache", key=KEY, log=None, client=client, http=http,
+                    sleep=SLEPT.append,
                     rules={"datasheet": {"cross_check": "off", **ds}})
 
 
@@ -187,13 +197,12 @@ def test_no_copy_and_an_archive_that_is_down_are_said_in_the_error():
         assert "HTTP 404" in why and "the Internet Archive has no saved copy of it" in why, why
     with tempfile.TemporaryDirectory() as d:
         why = _fails(_reader(d, ArcHTTP({DEAD: 404}, down="ConnectionError: reset")))
-        assert "the Internet Archive did not answer (ConnectionError: reset)" in why, why
+        assert "the Internet Archive did not answer (ConnectionError: reset) (3 tries)" in why, why
 
 
 @archive_on
 def test_a_copy_that_is_not_the_parts_pdf_is_not_used():
-    page = b"<!doctype html><html><body>Access Denied</body></html>"
-    for copy_body, said in ((page, "not a PDF"), (404, "HTTP 404")):
+    for copy_body, said in ((PAGE, "not a PDF"), (404, "HTTP 404")):
         http = ArcHTTP({DEAD: 404, COPY: copy_body}, {AR.query(DEAD): _api()})
         with tempfile.TemporaryDirectory() as d:
             why = _fails(_reader(d, http))
@@ -247,6 +256,59 @@ def test_the_archive_comes_before_a_paid_web_search():
     with tempfile.TemporaryDirectory() as d:
         job = _reader(d, http, client=NoSearch(), web_search=True).job("TESTPART", [(DEAD, "BOM")], "SOIC-8", mpn="TESTPART")
         assert job["url"] == COPY
+
+
+@archive_on
+def test_a_busy_archive_is_asked_again_and_a_proxy_refusal_is_not():
+    for first in ([(429, "HTTP 429")], [(503, "HTTP 503"), (0, "ReadTimeout: slow")]):
+        http, n = ArcHTTP({DEAD: 404, COPY: PDF}, {AR.query(DEAD): _api()}, down=list(first)), len(first)
+        del SLEPT[:]
+        with tempfile.TemporaryDirectory() as d:
+            assert _reader(d, http).job("TESTPART", [(DEAD, "BOM")], "SOIC-8", mpn="TESTPART")["url"] == COPY
+            assert len(http.asked) == n + 1 and SLEPT == [2, 4][:n], (http.asked, SLEPT)
+    for err in ("ProxyError: proxy CONNECT refused (403 Forbidden)", "offline: not in cache"):
+        http = ArcHTTP({DEAD: 404, COPY: PDF}, {AR.query(DEAD): _api()}, down=err)
+        del SLEPT[:]
+        with tempfile.TemporaryDirectory() as d:
+            why = _fails(_reader(d, http))
+            assert len(http.asked) == 1 and not SLEPT and "tries)" not in why.split("Internet Archive")[1], why
+    assert AR.lookup(DEAD, ArcHTTP(down=[(404, "HTTP 404")]), sleep=SLEPT.append)[1].endswith("(HTTP 404)") and not SLEPT
+
+
+@archive_on
+def test_an_older_capture_is_tried_when_the_newest_is_not_the_pdf():
+    older = AR.query(DEAD, before="20210413")           # a year before the capture of 2022-04-13
+    assert AR.earlier("2022-04-13") == "20210413" and older.endswith("&timestamp=20210413")
+    for bad in (PAGE, 404, PDF[:len(PDF) // 2]):
+        http = ArcHTTP({DEAD: 404, COPY: bad, OLD_COPY: PDF}, {AR.query(DEAD): _api(), older: _api(OLD_SNAP)})
+        with tempfile.TemporaryDirectory() as d:
+            job = _reader(d, http).job("TESTPART", [(DEAD, "BOM")], "SOIC-8", mpn="TESTPART")
+            assert job["url"] == OLD_COPY and job["base_prov"]["archived"] == {"of": DEAD, "saved": "2021-04-10"}, bad
+            assert http.asked == [AR.query(DEAD), older]
+
+
+@archive_on
+def test_older_captures_stop_at_two_at_the_same_capture_and_at_another_parts_pdf():
+    o1, o2, o3 = (AR.query(DEAD, before=b) for b in ("20210413", "20200410", "20190411"))
+    snap2 = "http://web.archive.org/web/20200411000000/https://maker.example/old/ds.pdf"
+    snap3 = "http://web.archive.org/web/20190412000000/https://maker.example/old/ds.pdf"
+    pdfs = {DEAD: 404, COPY: PAGE, OLD_COPY: PAGE, AR.parse(_api(snap2))[0]: PAGE, AR.parse(_api(snap3))[0]: PDF}
+    http = ArcHTTP(pdfs, {AR.query(DEAD): _api(), o1: _api(OLD_SNAP), o2: _api(snap2), o3: _api(snap3)})
+    with tempfile.TemporaryDirectory() as d:
+        _fails(_reader(d, http))
+        assert http.asked == [AR.query(DEAD), o1, o2] and AR.OLDER == 2, http.asked
+    http = ArcHTTP({DEAD: 404, COPY: PAGE}, {AR.query(DEAD): _api(), o1: _api()})   # the same capture again
+    with tempfile.TemporaryDirectory() as d:
+        _fails(_reader(d, http))
+        assert http.asked == [AR.query(DEAD), o1] and http.fetched.count(COPY) == 1
+    wrong = pdf_with(["LTC4054 Standalone Linear Li-Ion Battery Charger"] + ["page"] * 3)
+    http = ArcHTTP({DEAD: 404, COPY: wrong, OLD_COPY: PDF}, {AR.query(DEAD): _api(), o1: _api(OLD_SNAP)})
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            _reader(d, http).job("LTC4060EDHC", [(DEAD, "BOM")], "DFN-16", mpn="LTC4060EDHC")
+        except D.DatasheetError:
+            pass
+        assert http.asked == [AR.query(DEAD)]            # the same document, older: not asked for
 
 
 def test_the_setting_is_a_known_rules_key_on_by_default_and_can_be_turned_off():

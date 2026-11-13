@@ -17,6 +17,9 @@ from urllib.parse import parse_qsl, quote, urlsplit
 API = "https://archive.org/wayback/available?url="
 WHERE = "Internet Archive"
 MAX_LINKS = 3                                          # links asked for per part (a part rarely has more)
+TRIES = 3                                              # asks per lookup while the Archive is busy (429, 5xx, a timeout)
+OLDER = 2                                              # older captures tried when the newest is not the PDF
+STEP_DAYS = 365                                        # how far back each older capture is asked for
 # names only a private network answers: never sent to the Archive (a name that does not resolve here says nothing:
 # a maker's old domain no longer resolves either, and that is the link an archived copy is for)
 _INTRANET = re.compile(r"\.(local|localdomain|lan|internal|intranet|corp|home|private|test|invalid|localhost)\.?$", re.I)
@@ -57,9 +60,16 @@ def worth(error):
     return bool(e) and not _NO_NETWORK.search(e) and not _SAME_AGAIN.search(e)
 
 
-def query(url):
-    """The availability API's URL for a link (the link whole, percent-encoded: its own query and %20 kept)."""
-    return API + quote(str(url), safe="")
+def query(url, before=None):
+    """The availability API's URL for a link (the link whole, percent-encoded: its own query and %20 kept).
+    before: "YYYYMMDD", the capture closest to that day instead of the newest."""
+    return API + quote(str(url), safe="") + (f"&timestamp={before}" if before else "")
+
+
+def earlier(saved, days=STEP_DAYS):
+    """The day `days` before a capture's day ("YYYY-MM-DD") as the API's timestamp "YYYYMMDD"."""
+    import datetime
+    return (datetime.date.fromisoformat(saved) - datetime.timedelta(days=days)).strftime("%Y%m%d")
 
 
 def parse(text):
@@ -78,24 +88,47 @@ def parse(text):
     return f"https://web.archive.org/web/{ts}id_/{m.group(2)}", f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
 
 
-def lookup(url, http=None, timeout=20):
-    """Ask the Archive for its newest good capture of url -> ((raw URL, day), None) or (None, why). http: an
-    httpcache.CachedHTTP (its cache, rate limit and offline switch), else one plain request."""
-    q = query(url)
+def _ask(q, http, timeout):
     if http is not None and hasattr(http, "get"):
         r = http.get(q)
-        status, text, err = getattr(r, "status", 0), getattr(r, "text", "") or "", getattr(r, "error", None)
-    else:
-        import requests
-        try:
-            r = requests.get(q, timeout=timeout, headers={"Accept": "application/json"})
-            status, text, err = r.status_code, r.text, None
-        except requests.RequestException as e:
-            status, text, err = 0, "", f"{type(e).__name__}: {str(e)[:120]}"
-    if err or not 200 <= (status or 0) < 300:
-        return None, f"the Internet Archive did not answer ({err or f'HTTP {status}'})"
-    got = parse(text)
-    return (got, None) if got else (None, "the Internet Archive has no saved copy of it")
+        return getattr(r, "status", 0), getattr(r, "text", "") or "", getattr(r, "error", None)
+    import requests
+    try:
+        r = requests.get(q, timeout=timeout, headers={"Accept": "application/json"})
+        return r.status_code, r.text, None
+    except requests.RequestException as e:
+        return 0, "", f"{type(e).__name__}: {str(e)[:120]}"
+
+
+def lookup(url, http=None, timeout=20, before=None, sleep=None, tries=TRIES):
+    """Ask the Archive for its newest good capture of url (before: the one closest to that day, "YYYYMMDD") ->
+    ((raw URL, day), None) or (None, why). http: an httpcache.CachedHTTP (its cache, rate limit and offline
+    switch), else one plain request. A busy Archive (429, 5xx, a timeout or a dropped connection) is asked again,
+    up to `tries` times, 2 s then 4 s apart; a proxy refusal or being offline is not (asking again changes nothing)."""
+    import time
+    q, why = query(url, before), ""
+    for n in range(tries):
+        status, text, err = _ask(q, http, timeout)
+        if not err and 200 <= (status or 0) < 300:
+            got = parse(text)
+            return (got, None) if got else (None, "the Internet Archive has no saved copy of it")
+        why = f"the Internet Archive did not answer ({err if err and not status else f'HTTP {status}'})"
+        busy = status == 429 or 500 <= (status or 0) < 600 or (not status and not _NO_NETWORK.search(err or "")
+                                                                 and "offline" not in (err or ""))
+        if not busy or n + 1 == tries:
+            break
+        (sleep or time.sleep)(2 * 2 ** n)
+    return None, why + (f" ({n + 1} tries)" if n else "")
+
+
+# a capture that is not the file the link once gave (a bot-check or "moved" page the Archive saved as a 200, a cut-off
+# save): an older capture can be the PDF. One that is the PDF of another part, or too large, is the same document
+_NOT_THE_FILE = re.compile(r"not a PDF|the PDF is cut off|HTTP [45]\d\d|the PDF opens as ")
+
+
+def older_worth(error):
+    """After a capture failed this way, is an older capture of the link worth asking for?"""
+    return bool(_NOT_THE_FILE.search(str(error or ""))) and not _SAME_AGAIN.search(str(error or ""))
 
 
 def review_line(prov):

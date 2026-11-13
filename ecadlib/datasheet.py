@@ -4980,7 +4980,9 @@ class Reader:
         way of downloading was refused. Only a public link is sent to the Archive (ds_archive.asked), and never one
         whose failure was this machine's network or would repeat (ds_archive.worth). The copy is downloaded as any
         link is and must name the part; http and https of one link are asked for once, at most ds_archive.MAX_LINKS
-        links a part. -> (data, prov with "archived": {"of", "saved"}) or (None, None), the misses in attempts."""
+        links a part. A capture that is not the PDF (a bot-check page the Archive saved) is followed by up to
+        ds_archive.OLDER older ones, a year apart; a busy Archive is asked again (ds_archive.lookup).
+        -> (data, prov with "archived": {"of", "saved"}) or (None, None), the misses in attempts."""
         from . import ds_archive as AR
         seen = []
         for a in linked:
@@ -4990,18 +4992,26 @@ class Reader:
             if len(seen) >= AR.MAX_LINKS:
                 break
             seen.append(same)
-            got, why = AR.lookup(same, self.http)
-            if not got:
-                attempts.append({"url": url, "where": AR.WHERE, "error": why})
-                continue
-            copy, saved = got
-            try:
-                data, prov = self.store.fetch(copy, f"{AR.WHERE} copy of the {a.get('where') or 'part'}'s link, saved "
-                                              f"{saved}", follow=False, part=part, handoff=False, mpn=mpn, public=True)
-            except DatasheetError as e:
-                attempts.append({"url": copy, "where": AR.WHERE, "error": str(e)})
-                continue
-            return data, dict(prov, archived={"of": url, "saved": saved})
+            before, days = None, set()
+            for _ in range(1 + AR.OLDER):             # the newest capture, then older ones while it is not the PDF
+                got, why = AR.lookup(same, self.http, before=before, sleep=self.sleep)
+                if not got or got[1] in days:         # none, or the capture already tried: no older one
+                    if not got and not days:
+                        attempts.append({"url": url, "where": AR.WHERE, "error": why})
+                    break
+                copy, saved = got
+                days.add(saved)
+                try:
+                    data, prov = self.store.fetch(copy, f"{AR.WHERE} copy of the {a.get('where') or 'part'}'s link, "
+                                                  f"saved {saved}", follow=False, part=part, handoff=False, mpn=mpn,
+                                                  public=True)
+                except DatasheetError as e:
+                    attempts.append({"url": copy, "where": AR.WHERE, "error": str(e)})
+                    if not AR.older_worth(str(e)):
+                        break
+                    before = AR.earlier(saved)
+                    continue
+                return data, dict(prov, archived={"of": url, "saved": saved})
         return None, None
 
     def _fetch_found(self, url, part, attempts):

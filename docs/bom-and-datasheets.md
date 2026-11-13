@@ -181,6 +181,7 @@ A BOM's datasheet link often dies: the maker renumbered its documents, moved its
 * The PDF must still pass every check a link's PDF does: it is a complete PDF, it names the part, and it does not open as a change notice.
 * The copy can be an older revision than the maker's current one. The part's review says so, with the link and the day the copy was saved, so you can compare the package drawing with the current datasheet.
 * Only a public link is sent to archive.org. A link to your own network (`192.168.x`, `10.x`), an intranet name (`fileserver`, `docs.acme.local`), a link with a user name in it and a link whose query holds a key or a signature are never sent. Nor is a link that failed because this machine's network refused it (a proxy), or one whose PDF simply does not name the part.
+* Retries cost nothing, so they are made: a busy Archive (429, a 5xx, a timeout) is asked up to three times, 2 s then 4 s apart. When the newest capture is not the PDF (the Archive saved the site's bot-check or "moved" page, or a cut-off file), up to two older captures are tried, each a year further back. A capture that is another part's PDF ends it: an older copy of the same document would be too.
 * At most three links are asked for per part; `http` and `https` of one link count once. The Archive's answers are kept in the HTTP cache for a week.
 
 ```toml
