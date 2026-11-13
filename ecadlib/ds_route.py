@@ -71,7 +71,7 @@ CATS = {
                            r"ordering|part number|订购|订货", re.I)}
 TABLE = {"drawing": re.compile(r"\b(min\.?|minimum)\b[\s\S]{0,80}\b(max\.?|maximum)\b", re.I),
          "pinout": re.compile(r"\bpin\s*(no\.?|number|#)|\bno\.\s+name\b|\bname\s+(type|i/o)\b|pin name|"
-                              r"\bterminal\b[\s\S]{0,60}?\bname\b[\s\S]{0,20}?\bno\.", re.I)}   # "TERMINAL I/O DESCRIPTION
+                              r"(?-i:\bTERMINAL\b[\s\S]{0,60}?\bNAME\b[\s\S]{0,20}?\bNO\.)", re.I)}   # "TERMINAL I/O DESCRIPTION
                                                                                   # NAME NO." (TI's terminal tables)
 _SPACES = re.compile(r"[ \t\u00a0]{2,}")
 CAPTION = re.compile(r"package\s+(?:name|outline|drawing|dimensions?)|\boutline\b", re.I)
@@ -133,6 +133,20 @@ _OUTLINE_N = re.compile(r"(?<![A-Z0-9])T?(SOT|SC|TO)\s?-?\s?(\d{2,3})\s?-\s?(\d{
 _N_OUTLINE = re.compile(r"(?<![\d.])(\d{1,2})\s?-?\s?(?:PIN|LEAD)S?,?\s+T?(SOT|SC|TO)\s?-?\s?(\d{2,3})(?![0-9])")
 
 
+def _ipc_pins(m):
+    """An IPC name -> 'FAM-N' for package_tokens. IPC counts a no-lead package's thermal pad as a pin
+    (QFN50P500X500X100-33N is a QFN-32): an odd count there drops it."""
+    fam, n = m.group(1), int(m.group(2))
+    if FAMILY.get(fam) in OUTLINE_FAMS:
+        return ""
+    if fam in ("QFN", "SON", "DFN") and n % 2:
+        n -= 1
+    return f"{fam}-{n}"
+
+
+TAB_OUTLINES = ("TO",)                                # a lead count one off is the same body: makers count the tab or not
+
+
 def outline_counts(text):
     """The lead counts printed with an outline name -> {outline token: {counts}} (outline_counts('SOT-23-3') ->
     {'SOT23': {3}}); {} when the text numbers no outline's leads."""
@@ -150,7 +164,7 @@ def package_tokens(text):
     QFP144 only: a family-only token would match every other LQFP)."""
     out = set()
     up = re.sub(r"BALL[\s-]*GRID[\s-]*ARRAY", "BGA", norm_text(text).upper())   # "256-Pin Micro FineLine Ball-Grid Array"
-    up = _IPC_NAME.sub(lambda m: "" if FAMILY.get(m.group(1)) in OUTLINE_FAMS else f"{m.group(1)}-{m.group(2)}", up)
+    up = _IPC_NAME.sub(_ipc_pins, up)
     counted = {}                                      # "64-PIN LQFP": the count before the family (SAM E70 bookmarks)
     for m in _COUNT_FAM_RX.finditer(up):
         counted[m.start(2)] = m.group(1)
@@ -220,6 +234,7 @@ def mpn_variants(part):
 
 
 MPN_TAIL = re.compile(r"\d([A-Z]{3,5})$")
+TAIL_WORDS = {"ADJ", "FIX", "TAPE", "REEL", "TRAY", "TUBE", "LEAD", "FREE", "PBF", "ROHS", "AUTO"}
 TEMP_LETTERS = "ICEAM"                                # a temperature-range letter before the package code
 
 
@@ -228,12 +243,13 @@ def mpn_tail_codes(texts, part):
     signal table heads its ball column "ZCA, ZQW"; the ordering addendum no longer lists ZQW, so nothing else ties
     the ball-name table to the part: held-out test 2026-11-12). The letters after the last digit, less a
     temperature-range letter, at least 3 of them; set() when no page prints them."""
-    p = re.sub(r"[\s-]+", "", str(part or "")).upper()
+    p = re.sub(r"\s+", "", str(part or "")).upper()   # (after a hyphen it is an option: AMS1117-ADJ)
     m = MPN_TAIL.search(p)
     if not m:
         return set()
     tail = m.group(1)
-    cands = [c for c in (tail, tail[1:] if tail[0] in TEMP_LETTERS else "") if len(c) >= 3]
+    cands = [c for c in (tail, tail[1:] if tail[0] in TEMP_LETTERS else "") if len(c) >= 3 and c not in FAMILY
+             and c not in TAIL_WORDS and c not in STOP]    # a family word (XYZ123QFN) names every QFN
     for c in cands:
         rx = re.compile(rf"(?<![A-Z0-9]){c}(?![A-Z0-9])")
         if any(rx.search(norm_text(t).upper()) for t in texts or []):
@@ -729,8 +745,9 @@ def page_scores(texts, part=None, package=None, marks=None):
         page_n = outline_counts(t) if hint_n and s["own"] else {}
         for k, ns in hint_n.items():                  # this outline with other lead counts only (TSOT-23-5 for a
             if page_n.get(k):                         # SOT-23-3): another package's page. A count one off is the
-                far = {c for c in page_n[k] if all(abs(c - h) > 1 for h in ns)}   # same body: makers count a tab
-                if far == page_n[k]:                  # or not (KiCad's TO-252-2 is ROHM's TO252-3)
+                tol = 1 if k.startswith(TAB_OUTLINES) else 0   # same body: makers count a TO tab or not (KiCad's
+                far = {c for c in page_n[k] if all(abs(c - h) > tol for h in ns)}   # TO-252-2 is ROHM's TO252-3)
+                if far == page_n[k]:
                     s["own"], s["other"], s["solo"] = False, True, False
                 elif far:
                     s["solo"] = False
@@ -1104,6 +1121,7 @@ def hold_reasons(res, fp_needed=True):
     return hard + unread_copper(res.get("spec"))
 
 
+DIP_PLACE = re.compile(r"position|spacing|pitch|\brows?\b|count|offset|where", re.I)
 # what an unresolved entry may name without holding the part: it changes no copper and no pin (and ADVISORY)
 NOT_COPPER = ("description", "name", "source", "model_3d", "density", "drawing")
 ONLY_LIMITS = re.compile(r"\b(min|max|tol\w*|limits?)\b", re.I)
@@ -1119,13 +1137,14 @@ def unread_copper(spec):
     built with no thermal pad). Not held: the advisory fields, text that names no package field, a limit left out of
     a dimension whose value was read ('body_length min/max (not printed)': a nominal-only drawing), and a plain
     dimension with no value: the builder stops on it when this package needs it, and a pad table needs none."""
-    from .datasheet import SCHEMA, HOLES_UNREAD, standard_dip_holes
+    from .datasheet import SCHEMA, standard_dip_holes
     num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
     out = []
     dip = None
     for u in (spec or {}).get("unresolved") or []:
         top = unresolved_field(u).split(".")[0]
-        if HOLES_UNREAD.match(str(u)):                # a plain DIP's holes and pads: KiCad's standard ones fill them
+        if top in ("drill", "hole", "holes", "land") and not DIP_PLACE.search(str(u)):   # a plain DIP's hole and
+            # pad sizes: KiCad's standard ones fill them (never where the pins are: positions, rows, pitch)
             if dip is None:                           # (the librarian puts them in: datasheet.standard_dip_holes)
                 dip = bool(standard_dip_holes(spec))
             if dip:

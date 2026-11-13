@@ -153,3 +153,48 @@ def test_connector_body_with_position_builds():
     assert D.body_unread(pud(center_at={"x": -9.0, "y": 0.25})) is None
     assert D.body_unread(pud(origin="center")) is None                # the drawing's 0,0 is the package centre
     assert D.body_unread(dict(pud(), package_type="custom")) is None  # a DIP body sits between its rows
+
+
+# ---------------------------------------------------------------- review cases (each built wrong or mis-picked before)
+def test_dip_fill_keeps_holds_on_where_the_pins_are():
+    for note in ("pad_table pin positions guessed", "pad_table row spacing assumed 10.16 (could be 7.62)",
+                 "land pattern row spacing not printed"):
+        s = blank_dip(8)
+        s["unresolved"] = s["unresolved"] + [note]
+        assert any(note in w for w in DR.unread_copper(s)), note
+
+
+def test_typeless_blank_pads_are_never_taken_for_a_tht_dip():
+    s = blank_dip(8)
+    s["pad_table"]["default_pad"] = {}                                # an SMD gull-wing DIP read without types
+    assert D.standard_dip_holes(s) is None
+    assert any("land pattern" in w for w in DR.unread_copper(s))
+
+
+def test_ipc_no_lead_name_counts_without_its_thermal_pad():
+    assert DR.package_tokens("QFN50P500X500X100-33N") == {"QFN32"}
+    assert DR.package_tokens("SON50P300X300X80-11N") == {"SON10"}
+
+
+def test_mpn_tail_never_a_common_word_or_family():
+    texts = _pdf({3: "ADJ version: VOUT set by R1 and R2. QFN package."}, 6)
+    assert DR.mpn_tail_codes(texts, "AMS1117-ADJ") == set()
+    assert DR.mpn_tail_codes(texts, "XYZ123QFN") == set()
+
+
+def test_sot_lead_counts_one_apart_are_other_packages():
+    texts = _pdf({5: "Package Outline Dimension SOT-23-6 Symbol Min Max A 0.9 1.45 A1 0 0.15 mm",
+                  6: "Package Outline Dimension SOT-23-5 Symbol Min Max A 0.9 1.45 A1 0 0.15 mm"}, 8)
+    rows = DR.page_scores(texts, "XC6206P332MR", "SOT-23-5")[0]
+    assert rows[4]["other"] and rows[5]["own"]
+
+
+def test_terminal_name_no_header_is_case_sensitive():
+    assert not DR.TABLE["pinout"].search("Terminal block series. Part name: XYZ. No. of positions 4")
+    assert DR.TABLE["pinout"].search("TERMINAL I/O(1) DESCRIPTION NAME NO.(4) PZ")
+
+
+def test_connector_with_no_origin_is_held():
+    s = pud()
+    s["pad_table"].pop("origin")
+    assert D.body_unread(s)

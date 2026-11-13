@@ -1482,7 +1482,7 @@ def body_unread(spec):
     t, tab = spec.get("package_type"), spec.get("pad_table") or {}
     if t == "connector" and spec.get("body_length") and spec.get("body_width") and not tab.get("body") and \
             (tab.get("pads") or tab.get("arrays")) and not tab.get("center_at") and \
-            tab.get("origin", "center") != "center" and not bare_pads(spec):
+            tab.get("origin") != "center" and not bare_pads(spec):   # (no origin given: where 0,0 is, unknown)
         # the housing's size but not where it sits: it is drawn centred on the pads, and a connector's pins are
         # rarely centred in it (B20B-PUDSS, held-out test 2026-11-12: two rows, the housing 0.75 mm towards the
         # even row; built 0.75 mm off)
@@ -1589,8 +1589,8 @@ def _unsized_dip(spec):
     entries = [t.get("default_pad") or {}] + list(t.get("arrays") or []) + list(t.get("pads") or [])
     if not t.get("arrays") and not t.get("pads") or any(e.get(k) is not None for e in entries for k in SIZE_KEYS):
         return None
-    if any(e.get("type") not in (None, "tht") for e in entries):
-        return None
+    if any(e.get("type") not in (None, "tht") for e in entries) or not any(e.get("type") == "tht" for e in entries):
+        return None                                   # (typeless pads may be an SMD gull-wing DIP: never guessed THT)
     out = copy.deepcopy(spec)
     f = FA.UNIT[out["pad_table"].get("unit", "mm")]
     out["pad_table"]["default_pad"] = dict(out["pad_table"].get("default_pad") or {}, type="tht", shape="circle",

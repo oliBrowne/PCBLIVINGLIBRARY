@@ -2217,6 +2217,7 @@
 "_dim_table",
 "_dim_val",
 "_fam_n",
+"_ipc_pins",
 "_line_key",
 "_noise",
 "_plumber_rows",
