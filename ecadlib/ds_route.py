@@ -242,12 +242,15 @@ def mpn_tail_codes(texts, part):
     """The package code at the end of an MPN, when a page prints it as a word: MSP430F5333IZQW -> {'ZQW'} (TI's
     signal table heads its ball column "ZCA, ZQW"; the ordering addendum no longer lists ZQW, so nothing else ties
     the ball-name table to the part: held-out test 2026-11-12). The letters after the last digit, less a
-    temperature-range letter, at least 3 of them; set() when no page prints them."""
+    temperature-range letter, at least 3 of them; set() when no page prints them, or when a page prints the whole
+    part number (then its ordering lines are the source, not a guess from its letters)."""
     p = re.sub(r"\s+", "", str(part or "")).upper()   # (after a hyphen it is an option: AMS1117-ADJ)
     m = MPN_TAIL.search(p)
     if not m:
         return set()
-    tail = m.group(1)
+    if any(p in re.sub(r"\s+", "", norm_text(t)).upper() for t in texts or []):
+        return set()                                  # the PDF prints the part number itself: its ordering lines decide
+    tail = m.group(1)                                 # (OPA569DWP: "DWP" would make the addendum page the drawing)
     cands = [c for c in (tail, tail[1:] if tail[0] in TEMP_LETTERS else "") if len(c) >= 3 and c not in FAMILY
              and c not in TAIL_WORDS and c not in STOP]    # a family word (XYZ123QFN) names every QFN
     for c in cands:
@@ -1114,6 +1117,10 @@ def hold_reasons(res, fp_needed=True):
     if kind == "ok":
         return []
     hard = hard_failures(why, res.get("spec"))
+    # balls the footprint builds that the pin table never named, still missing after the last read (MSP430F5333IZQW,
+    # held-out test 2026-11-12: 113 balls built, 47 named, the rest of the 7-page signal table never sent): the
+    # symbol would leave them unconnected
+    hard += [w for w in why if BALLS_UNNAMED.match(str(w)) and w not in hard]
     if kind == "incomplete":       # a pad-table numbering error never becomes copper (footprint_adv.table_geometry
         hard = [w for w in hard if not PAD_TABLE_NUMBERING.match(w)]   # refuses it): the librarian holds it, with fp-edit's fix
     if fp_needed is False:
@@ -1121,6 +1128,7 @@ def hold_reasons(res, fp_needed=True):
     return hard + unread_copper(res.get("spec"))
 
 
+BALLS_UNNAMED = re.compile(r"^symbol: pins missing .*\(balls of the ")
 DIP_PLACE = re.compile(r"position|spacing|pitch|\brows?\b|count|offset|where", re.I)
 # what an unresolved entry may name without holding the part: it changes no copper and no pin (and ADVISORY)
 NOT_COPPER = ("description", "name", "source", "model_3d", "density", "drawing")

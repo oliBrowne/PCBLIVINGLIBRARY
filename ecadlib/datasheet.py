@@ -1470,6 +1470,26 @@ def bare_pads(spec):
         all(p["kind"] in ("smd", "np_thru_hole") for p in pads)
 
 
+def _framed_by_mounts(spec):
+    """True when mounting pads sit on both sides of the pins along the row (an SMD header's two MP tabs: JST SR
+    SM04B-SRSS-TB, BM50B-SRDS-G-TF): the housing spans between them, so centring it on all the pads is the drawing's
+    own frame (held-out test 2026-11-12: both built right that way)."""
+    from . import footprint_adv as FA
+    try:
+        pads = FA.table_layout(spec)[0]
+    except Exception:
+        return False
+    pins = [p for p in pads if p["role"] == "pin"]
+    mounts = [p for p in pads if p["role"] in ("mount", "shield")]
+    if not pins or len(mounts) < 2:
+        return False
+    for k in ("x", "y"):
+        lo, hi = min(p[k] for p in pins), max(p[k] for p in pins)
+        if hi - lo > 0 and any(m[k] < lo for m in mounts) and any(m[k] > hi for m in mounts):
+            return True
+    return False
+
+
 DRAWN_TABLE = ("connector", "custom")     # footprint_adv._table: the pads as listed, the body from pad_table.body
 
 
@@ -1482,7 +1502,8 @@ def body_unread(spec):
     t, tab = spec.get("package_type"), spec.get("pad_table") or {}
     if t == "connector" and spec.get("body_length") and spec.get("body_width") and not tab.get("body") and \
             (tab.get("pads") or tab.get("arrays")) and not tab.get("center_at") and \
-            tab.get("origin") != "center" and not bare_pads(spec):   # (no origin given: where 0,0 is, unknown)
+            tab.get("origin") != "center" and not bare_pads(spec) and not _framed_by_mounts(spec):
+        # (no origin given: where 0,0 is, unknown)
         # the housing's size but not where it sits: it is drawn centred on the pads, and a connector's pins are
         # rarely centred in it (B20B-PUDSS, held-out test 2026-11-12: two rows, the housing 0.75 mm towards the
         # even row; built 0.75 mm off)

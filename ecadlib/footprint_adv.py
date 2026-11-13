@@ -406,6 +406,39 @@ def _role(p, mount=MOUNT):
     return "pin"
 
 
+BODY_NOM_MATCH = 0.03        # a body box side within 3 % of a read body dimension's nominal is that dimension
+
+
+def _body_max(v):
+    """A body dimension's largest value (its max, else its nominal): the courtyard covers the biggest body the
+    drawing allows (IPC-7351; KiCad's DIP-8 courtyard follows the 0.400 in maximum length, not the 0.365 in
+    nominal: 23AA02M-IP, held-out test 2026-11-12, built 0.44 mm short)."""
+    d = _dim(v)
+    return max(x for x in (d[1], d[2]) if isinstance(x, (int, float)))
+
+
+def _to_max(spec, box):
+    """A body box read at the nominal size -> grown about its centre to the read maximum on each side that matches
+    body_length or body_width's nominal (within BODY_NOM_MATCH); other sides as read."""
+    x1, y1, x2, y2 = box
+    sides = [x2 - x1, y2 - y1]
+    for k in ("body_length", "body_width"):
+        if not spec.get(k):
+            continue
+        try:
+            nom, big = _dim(spec[k])[1], _body_max(spec[k])
+        except Exception:                                  # a form dim() does not read: the box stays as read
+            continue
+        if not nom or big <= nom:
+            continue
+        for i, side in enumerate(sides):
+            if abs(side - nom) <= BODY_NOM_MATCH * nom:
+                sides[i] = big
+                break
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    return (_r4(cx - sides[0] / 2), _r4(cy - sides[1] / 2), _r4(cx + sides[0] / 2), _r4(cy + sides[1] / 2))
+
+
 def table_layout(spec):
     """pad_table -> (pads in mm / KiCad frame, body rect or None, keepouts, info). Pads keep their source row (_src)."""
     t = spec["pad_table"]
@@ -487,9 +520,9 @@ def table_layout(spec):
     if t.get("body"):
         b = t["body"]
         xa, xb, ya, yb = X(b["x1"]), X(b["x2"]), Y(b["y1"]), Y(b["y2"])
-        body = (min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb))
+        body = _to_max(spec, (min(xa, xb), min(ya, yb), max(xa, xb), max(ya, yb)))
     elif spec.get("body_length") and spec.get("body_width"):
-        bx, by = _dim(spec["body_length"])[1] / 2, _dim(spec["body_width"])[1] / 2
+        bx, by = _body_max(spec.get("body_length")) / 2, _body_max(spec.get("body_width")) / 2
         # the body's length runs with the pin rows (27C256: a DIP table with its rows down y; D is the length, not the
         # width). A row is the pins sharing one x (down y) or one y (along x), not the pads' extent: a DIP-8's extent
         # is square and a SOT-223's lead span is longer than its pin row.

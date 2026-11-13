@@ -198,3 +198,41 @@ def test_connector_with_no_origin_is_held():
     s = pud()
     s["pad_table"].pop("origin")
     assert D.body_unread(s)
+
+
+# ---------------------------------------------------------------- second held-out round (branch measured on the PC)
+def test_smd_header_framed_by_mount_pads_is_not_held():
+    s = {"package_type": "connector", "name": "SM04B-SRSS-TB", "pin_count": 4, "pitch": 1.0,
+         "body_length": 6.0, "body_width": 4.25,
+         "pad_table": {"unit": "mm", "y_axis": "down", "origin": "datum", "default_pad": {"type": "smd", "w": 0.6, "h": 1.55},
+                       "arrays": [{"count": 4, "x": -1.5, "y": -2.0, "dx": 1.0, "dy": 0, "first_number": 1}],
+                       "pads": [{"number": "MP", "x": -2.8, "y": 0.9, "w": 1.2, "h": 1.8},
+                                {"number": "MP", "x": 2.8, "y": 0.9, "w": 1.2, "h": 1.8}]}}
+    assert D.body_unread(s) is None
+    one = dict(s, pad_table=dict(s["pad_table"], pads=s["pad_table"]["pads"][:1]))
+    assert D.body_unread(one)                                         # one tab frames nothing
+
+
+def test_courtyard_body_covers_the_read_maximum():
+    s = blank_dip(8)
+    s = D.standard_dip_holes(s)
+    s["body_length"] = {"min": 8.84, "nom": 9.27, "max": 10.16}       # PDIP-8 D: .348 / .365 / .400 in
+    s["body_width"] = {"min": 6.1, "nom": 6.35, "max": 7.11}
+    s["pad_table"]["body"] = {"x1": 0.635, "y1": -0.825, "x2": 6.985, "y2": 8.445}   # the nominal 6.35 x 9.27 box
+    x1, y1, x2, y2 = FA.table_layout(s)[1]
+    assert round(y2 - y1, 2) == 10.16 and round(x2 - x1, 2) == 7.11
+    s["pad_table"]["body"] = {"x1": 0.0, "y1": -2.0, "x2": 7.62, "y2": 9.62}         # another size: as read
+    x1, y1, x2, y2 = FA.table_layout(s)[1]
+    assert round(y2 - y1, 2) == 11.62 and round(x2 - x1, 2) == 7.62
+
+
+def test_balls_left_unnamed_after_the_last_read_are_held():
+    why = ["symbol: pins missing ['B9', 'B10'] (balls of the 12 x 12 grid with no symbol pin)"]
+    res = {"spec": {"package_type": "bga"}, "needs_review": why}
+    assert DR.hold_reasons(res) == why
+    assert DR.hold_reasons(res, fp_needed=False) == why                # the symbol's own check
+
+
+def test_mpn_tail_only_when_the_part_number_is_printed_nowhere():
+    texts = _pdf({22: "PACKAGE OPTION ADDENDUM Orderable Device OPA569DWP ACTIVE SOIC DWP 20", 28: "DWP drawing"}, 30)
+    assert DR.mpn_tail_codes(texts, "OPA569DWP") == set()
