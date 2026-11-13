@@ -13,6 +13,7 @@ import requests
 from ecadlib import crosscheck as CC, datasheet as D, ds_route as DR, llm as LL, rules as RU, visual_check as V
 from ecadlib.llm import openai_compat as OC, profiles as PR, rails as RL, run as LR
 from tests import test_datasheet as TD, test_datasheet_batch as TB, test_ds_route as TR
+from tests.read_pads import read_pads
 
 KEY = TB.KEY
 GOOD, BAD = TR.GOOD, TR.BAD
@@ -545,6 +546,7 @@ if __name__ == "__main__":
     sys.exit(main(["test_llm"]))
 
 
+@read_pads
 def test_eval_compares_providers_with_record_and_replay():
     """`ecadlib eval run --provider ... --model ...` records a non-Claude model's answers and replays them offline."""
     from ecadlib.eval import runner as ER

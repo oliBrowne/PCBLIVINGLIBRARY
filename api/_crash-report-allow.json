@@ -2634,6 +2634,7 @@
 "on_tab_land",
 "one_of",
 "only_maker_land",
+"opamp",
 "pad_or_nc",
 "pin1",
 "pitch",

@@ -76,10 +76,10 @@ DEFAULTS = {
                   # a folder of datasheet PDFs a person downloaded (<MPN>.pdf), tried before any link: for makers' sites
                   # that refuse downloads from scripts
                   "folder": "",
-                  # a read whose pin count, pitch, body and exposed pad fit exactly one checked standard package:
-                  # off (default until measured live) = the read's pads; auto = the table's land unless the datasheet
+                  # off = the read's pads; auto (default since the held-out test of 2026-11-13, where a no-land read built
+                  # IPC pads that missed the maker's land KiCad uses) = the table's land unless the datasheet gives its own; always
                   # gives its own; always
-                  "standard_land": "off",
+                  "standard_land": "auto",
                   # ecadlib.pdf_fetch: a PDF link the maker's site refuses to ecadlib's own request. "auto": a browser's
                   # headers, then a Chrome TLS fingerprint, then a headless Edge / Chrome (the last two need
                   # pip install "ecadlib[browser]"); "plain": ecadlib's own request only; or a list of those ways

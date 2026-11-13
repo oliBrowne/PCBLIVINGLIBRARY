@@ -73,7 +73,7 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "zoom_drawings": False,                         # close-ups of the drawing pages: zoom_blocks()
             "cross_check": "auto", "cross_check_model": "",  # second source before a footprint is accepted: ecadlib.crosscheck
             "folder": "",                                   # PDFs a person downloaded, <MPN>.pdf: tried before any link
-            "standard_land": "off",                         # a read that identifies a standard package: off | auto | always
+            "standard_land": "auto",                        # a read that identifies a standard package: off | auto | always
             "download": "auto",                             # a refused PDF link: other ways to download it (ecadlib.pdf_fetch)
             "web_search": False, "web_search_model": "", "web_search_max_uses": 3,   # no link worked: ecadlib.ds_search
             "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""}   # ... last, your own browser

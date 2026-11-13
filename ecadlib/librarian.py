@@ -1073,7 +1073,7 @@ class Run:
         this part (ds_route, "QFP144"); when it is one, a read that left the pitch or body blank can still name the
         one checked package of that family and pin count that fits what it did read."""
         from . import stdparts as SP
-        mode = str(D.settings(self.rules).get("standard_land") or "off")
+        mode = str(D.settings(self.rules).get("standard_land") or "auto")
         if mode == "off":
             return None
         known = list(known or [])
@@ -1142,6 +1142,10 @@ class Run:
                 res = dict(res, spec=dip)
                 st["review"].append("DIP holes: the datasheet prints no hole size, so KiCad's DIP hole and pad (0.8 mm / "
                                     "1.6 mm) were used in place of the read's; check the maker's recommended hole")
+            if std and std[2] == "the datasheet gives no land of its own" and \
+                    D.land_unread(res["spec"], res["sidecar"].get("land_pages")):   # standard_land auto: say why truly
+                pages = ", ".join(map(str, res["sidecar"]["land_pages"][:4]))
+                std = (std[0], std[1], f"the datasheet prints its own land (page {pages}) but the read did not return it")
             unread = None if std else D.land_unread(res["spec"], res["sidecar"].get("land_pages"))
             if unread:                                # the maker's land is printed but was not read: IPC pads from the
                 known = list(res["sidecar"].get("package_from_pdf") or [])   # body would differ from it

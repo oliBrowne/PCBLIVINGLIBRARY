@@ -11,6 +11,7 @@ from ecadlib import datasheet as D, librarian as L, messages as M, rules as RU, 
 from tests import test_crosscheck as TC, test_datasheet as TD, test_datasheet_batch as TB, test_ds_route as TR
 from tests import test_datasheet_downloads as TDL, test_librarian as TL
 from tests.fixtures_lite import lite
+from tests.read_pads import read_pads
 
 SOIC = "SOIC-8_3.9x4.9mm_P1.27mm"
 
@@ -195,6 +196,7 @@ def test_a_longer_part_number_is_never_taken_for_this_part():
         assert "from a file not named exactly for this part (DSPART1X.pdf)" in review, review
 
 
+@read_pads
 def test_a_working_link_beats_a_file_named_for_another_part_number():
     """BAT54's own link gives its own PDF: BAT54S.pdf in the folder (another part) is never read for it, and the
     part is not held for a folder file."""
@@ -260,6 +262,7 @@ def test_a_family_file_comes_after_the_links_and_another_parts_file_after_the_ha
             assert asked == [(link, part)] and prov["via"] == "handoff" and "local" not in prov, (name, asked, prov)
 
 
+@read_pads
 def test_a_bom_line_with_no_link_is_read_from_the_folder():
     """A BOM line with no datasheet link at all (and none found) is read from the [datasheet] folder."""
     api = TC.API(lambda k, m, b: TR.on_page(TD.INCH))
@@ -331,6 +334,7 @@ def test_a_folder_that_is_not_there_is_said():
 
 
 @lite
+@read_pads
 def test_a_folder_that_cannot_be_read_never_stops_a_read(tmp_path, monkeypatch):
     """No access to the [datasheet] folder (macOS privacy settings, chmod 000, a Windows ACL): a part with a working
     link is read from it, a line with no link says why the folder gave nothing, and nothing stored names its path."""
@@ -822,9 +826,9 @@ def test_identify_never_picks_another_land_in_the_table():
 def test_standard_land_policy():
     run = lambda mode: SimpleNamespace(rules={"datasheet": {"standard_land": mode}} if mode else None)
     spec = read_spec(TD.INCH)
-    assert L.Run.standard_land(run(None), spec) is None                         # off until measured live
-    name, how, why = L.Run.standard_land(run("auto"), spec)
-    assert name == SOIC and why == "the datasheet gives no land of its own"
+    name, how, why = L.Run.standard_land(run(None), spec)                     # auto by default (held-out test
+    assert name == SOIC and why == "the datasheet gives no land of its own"      # 2026-11-13: no-land reads built
+    assert L.Run.standard_land(run("auto"), spec)[0] == SOIC                     # IPC pads that missed KiCad's)
     assert L.Run.standard_land(run("off"), spec) is None
     own = dict(spec, land={"pad_center": 2.7, "pad_length": 1.55, "pad_width": 0.6})
     assert L.Run.standard_land(run("auto"), own) is None                       # the maker's land is kept
@@ -862,7 +866,11 @@ def test_librarian_writes_the_standard_land_for_an_identified_read():
         assert any(r.startswith(f"standard land: the datasheet read identified {SOIC}") for r in a["librarian"]["review"])
         assert "The datasheet read named the standard package" in (Path(d) / "out" / "review.md").read_text()
     with tempfile.TemporaryDirectory() as d:
-        items, _, _ = TB.run2(d, api, reader_kw={"batch": False})                            # the default
+        items, _, _ = TB.run2(d, api, reader_kw={"batch": False})                            # the default: auto
+        tried = [t for t in items["DSPART1"]["librarian"]["tried"] if t.startswith("datasheet reader")]
+        assert tried[0].startswith(f"datasheet reader (BOM): footprint Package_SO:{SOIC} (identified"), tried
+    with tempfile.TemporaryDirectory() as d:
+        items, _, _ = TB.run2(d, api, reader_kw={"batch": False}, rules={"datasheet": {"standard_land": "off"}})
         tried = [t for t in items["DSPART1"]["librarian"]["tried"] if t.startswith("datasheet reader")]
         assert tried[0].startswith("datasheet reader (BOM): footprint, symbol;"), tried
 

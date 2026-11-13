@@ -6,7 +6,7 @@ part kinds whose pinout is standard, the symbol) offline and deterministically. 
     ecadlib stdparts bench [--kicad DIR] [--fixture F] every table entry against KiCad's official footprint
     ecadlib stdparts coverage BOM [BOM ...]            how many BOM lines this source resolves (no network)
 
-Footprints come only from package_specs/standard.json.gz: 623 packages, each with its KiCad name and library. Their
+Footprints come only from package_specs/standard.json.gz: 624 packages, each with its KiCad name and library. Their
 dimensions are the KiCad footprint generator's size definitions (JEDEC / IPC-SM-782 / manufacturer package drawings,
 built here with footprint_gen's IPC-7351B equations) or, for the packages KiCad draws by hand (SOD, SMA/SMB/SMC, MELF,
 SOT-223, SOT-89, SC-82AB, DO-34, DO-35, DO-41, DO-201AD, DPAK/D2PAK, TO-220, TO-92), the published recommended land as a pad table. Every entry was built and
@@ -874,6 +874,9 @@ def identify_tab(read, pins=None):
         n_leads = counted if counted is not None else len(leads)
         cut = t not in (tab_no, join) and _cut_lead(read, pins, t, ys)
         counts = {n_leads, n_leads - 1} if cut and counted is not None else {n_leads}   # TO252-3: ROHM counts the cut lead
+        if counted is not None and tab_no not in leads and len(leads) == counted - 1:
+            counts.add(len(leads))                    # the lead the name counts and the read leaves out may be cut: the
+        #                                               land without it fits too (TO-263-4, below)
         if t not in (tab_no, join) and not cut or len(ys) not in counts or not set(leads) <= set(ys) or set(ys) - set(leads) - {t}:
             continue
         if any(abs(leads[n] - ys[n]) > TAB_POS_TOL for n in leads):
@@ -882,6 +885,11 @@ def identify_tab(read, pins=None):
             continue
         fits.append(name)
     label = f"{m.group(0)}: tab {tab_no}, leads {' '.join(sorted(leads, key=lambda n: (len(n), n)))}"
+    exact = [f for f in fits if set(_tab_entry(f)[1]) == set(leads)]
+    if len(fits) > 1 and len(exact) == 1:           # a land with exactly the leads drawn: no pad where no lead is
+        fits = exact                                  # (AUIPS7081S, held-out test 2026-11-13: D2PAK-5L drawn with lead 3
+        #                                               cut, the tab numbered 3; KiCad's TO-263-4, not TO-263-5_TabPin3's
+        #                                               middle-lead pad. A family with no such land keeps the counted one)
     if len(fits) != 1:
         return None, f"{label}: {'no' if not fits else 'more than one'} checked tab land fits" + \
             (f" ({', '.join(sorted(fits))})" if fits else "")

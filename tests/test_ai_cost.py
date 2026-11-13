@@ -11,6 +11,7 @@ import requests
 from ecadlib import ai_cost as AC, altium_menu as AM, datasheet as D, userconfig as UC
 from ecadlib.app import Workspace
 from tests import test_datasheet_batch as TB
+from tests.read_pads import read_pads
 
 KEY = TB.KEY
 
@@ -52,6 +53,7 @@ def test_fill_prices_the_datasheet_reads_and_sends_nothing():
         assert ws.ai_quote(bom)["parts"] == q["parts"] and not api.of("/v1/messages")
 
 
+@read_pads
 def test_read_needs_the_ok_and_shows_the_real_cost_next_to_the_estimate():
     with _workspace() as (ws, bom, api):
         q = ws.librarian_run(bom, ai=False)["ai"]

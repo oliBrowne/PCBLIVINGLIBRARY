@@ -12,6 +12,7 @@ from ecadlib import datasheet as D, easyeda_convert as EC, footprint_check as FC
     providers as P, sexpr
 from ecadlib.httpcache import Response
 from tests import test_datasheet as TD
+from tests.read_pads import read_pads
 
 ROOT = Path(__file__).parent.parent
 FPS = ROOT / "out" / "footprints" / "ecadlib.pretty"
@@ -260,6 +261,7 @@ def test_easyeda_mpn_mismatch_not_used():
         assert it["source"]["footprint"] is None and any("LCSC C2002 is EEPART1, not EEPART2" in r for r in it["librarian"]["review"])
 
 
+@read_pads
 def test_datasheet_source_held_until_allowed():
     ext = copy.deepcopy(TD.GOOD)
     calls = []
