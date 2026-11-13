@@ -242,15 +242,18 @@ def mpn_tail_codes(texts, part):
     """The package code at the end of an MPN, when a page prints it as a word: MSP430F5333IZQW -> {'ZQW'} (TI's
     signal table heads its ball column "ZCA, ZQW"; the ordering addendum no longer lists ZQW, so nothing else ties
     the ball-name table to the part: held-out test 2026-11-12). The letters after the last digit, less a
-    temperature-range letter, at least 3 of them; set() when no page prints them, or when a page prints the whole
-    part number (then its ordering lines are the source, not a guess from its letters)."""
+    temperature-range letter, at least 3 of them; set() when no page prints them, or when a page prints the part
+    number (as is, or with up to 3 option letters before the code): then its ordering lines are the source."""
     p = re.sub(r"\s+", "", str(part or "")).upper()   # (after a hyphen it is an option: AMS1117-ADJ)
     m = MPN_TAIL.search(p)
     if not m:
         return set()
-    if any(p in re.sub(r"\s+", "", norm_text(t)).upper() for t in texts or []):
-        return set()                                  # the PDF prints the part number itself: its ordering lines decide
-    tail = m.group(1)                                 # (OPA569DWP: "DWP" would make the addendum page the drawing)
+    tail = m.group(1)
+    near = re.compile(re.escape(p[:m.start(1)]) + r"[A-Z]{0,3}" + re.escape(tail))
+    if any(near.search(re.sub(r"\s+", "", norm_text(t)).upper()) for t in texts or []):
+        return set()                                  # the PDF prints the part number itself, or with an option
+        # letter or two (OPA569DWP as OPA569AIDWP): its ordering lines decide, and "DWP" would make the addendum
+        # page the drawing (held-out pick comparison 2026-11-13)
     cands = [c for c in (tail, tail[1:] if tail[0] in TEMP_LETTERS else "") if len(c) >= 3 and c not in FAMILY
              and c not in TAIL_WORDS and c not in STOP]    # a family word (XYZ123QFN) names every QFN
     for c in cands:

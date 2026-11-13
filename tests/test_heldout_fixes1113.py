@@ -236,3 +236,6 @@ def test_balls_left_unnamed_after_the_last_read_are_held():
 def test_mpn_tail_only_when_the_part_number_is_printed_nowhere():
     texts = _pdf({22: "PACKAGE OPTION ADDENDUM Orderable Device OPA569DWP ACTIVE SOIC DWP 20", 28: "DWP drawing"}, 30)
     assert DR.mpn_tail_codes(texts, "OPA569DWP") == set()
+    texts = _pdf({22: "PACKAGE OPTION ADDENDUM Orderable Device OPA569AIDWP ACTIVE SOIC DWP 20", 28: "DWP"}, 30)
+    assert DR.mpn_tail_codes(texts, "OPA569DWP") == set()             # printed with its option letters only
+    assert DR.mpn_tail_codes(_pdf({11: SIG}, 20), "MSP430F5333IZQW") == {"ZQW"}
