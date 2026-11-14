@@ -484,6 +484,35 @@ def _line_for(item, lines, rows):
     return best
 
 
+def chip_size_clash(st, item, ln):
+    """'footprint: ...' when the land built is a chip size and the BOM's description or value cell names another one
+    (footprint C_0402_1005Metric, description 'CAP CER 0.1UF 50V X7R 0603'): a copy-paste slip in one of the two, so
+    a person says which. Only lands whose source names the land (kicad:Lib:R_0603_1608Metric, standard:...) are read:
+    an EasyEDA source is its LCSC number (easyeda:C1206 is no size) and a datasheet read its file. A text naming two
+    sizes holds only when neither is the land's ('0805/1206' on an 0402). A Value that is only a number ('1210', a
+    1210 ohm resistor) is a value, not a size."""
+    from . import stdparts as SP
+    fp = st.get("footprint") or {}
+    src = str(fp.get("source") or "")
+    built = src.split(":")[-1] if src.startswith(("kicad:", "standard:")) else ""
+    have = SP.chip_size(built, strict=True) if built else None
+    if not have or str(have).startswith("conflict"):
+        return None
+    for label, text in (("description", ln.get("description")), ("description", item.get("description")),
+                        ("value", ln.get("value"))):
+        text = str(text or "").strip()
+        if not text or label == "value" and re.fullmatch(r"\d+", text):
+            continue
+        said = SP.chip_size(text)
+        if said and str(said).startswith("conflict"):
+            named = set(re.findall(r"(?<![\d.])(0201|0402|0603|0805|1008|1206|1210|1812|2010|2512)(?![\d.])", text))
+            said = None if have in named or not named else "/".join(sorted(named))
+        if said and said != have:
+            return (f"footprint: the land built is {have} ({built}) but the BOM {label} says {said} "
+                    f"({text!r}): check which size the part is")
+    return None
+
+
 def _own_land(names, plain):
     """The first footprint field that names a land of its own rather than the chip size `plain` (R_0603_1608Metric):
     a KiCad footprint name (R_Array_Convex_4x0603, L_Bourns_SRR1210A, a hand-solder variant), an array / shunt / RGB
@@ -684,6 +713,9 @@ class Run:
         if st.get("hint_fp") and bom_fp and AX.lands_differ(st["hint_fp"], bom_fp):    # R-BF-5: the BOM's land is
             st["verify"].append(f"footprint: the BOM names {bom_fp} but the symbol's Footprint property is "   # built;
                                 f"{st['hint_fp']}: check which package the part has")    # the symbol says another
+        clash = chip_size_clash(st, item, ln)
+        if clash:
+            st["verify"].append(clash)
         lc = (row.get("lcsc") or "").split(" ")[0]
         if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))

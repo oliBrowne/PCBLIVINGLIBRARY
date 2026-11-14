@@ -41,8 +41,42 @@ def _norm(h):
     return re.sub(r"[^a-z0-9]+", " ", str(h).lower()).strip()
 
 
+def _fold(h):
+    """Lowercase, accents off ('Gehäuse' -> 'gehause'), punctuation -> space; letters of any script are kept."""
+    t = "".join(c for c in unicodedata.normalize("NFKD", str(h)).casefold() if not unicodedata.combining(c))
+    return re.sub(r"[\W_]+", " ", t).strip()
+
+
+# Column names of BOMs written in other languages -> the English header they mean. Whole headers only (after _fold):
+# a word inside a longer header is not translated, so an unknown foreign header still fails with the hint to map it in
+# [bom.columns]. Left out on purpose: French 'Référence' (a part number there, a designator in English BOMs), Chinese
+# 料号 / German 'Artikelnummer' (house numbers), 'Bauteil' / 名称 (a part's name).
+FOREIGN_HEADERS = {_fold(k): v for v, ks in {
+    "designator": ["Bezeichner", "Referenz", "Bauteilbezeichner", "Bestückungsbezeichner", "Repère", "Repères",
+                   "Désignateur", "Designador", "Designadores", "Riferimento", "Designatore", "位号", "元件位号", "标号",
+                   "器件位号", "リファレンス", "部品記号"],
+    "qty": ["Anzahl", "Menge", "Stück", "Stückzahl", "Quantité", "Qté", "Cantidad", "Cant", "Quantità", "数量", "用量"],
+    "value": ["Wert", "Valeur", "Valor", "Valore", "值", "参数", "標準値", "定数"],
+    "footprint": ["Gehäuse", "Bauform", "Boîtier", "Empreinte", "Encapsulado", "Huella", "Contenitore", "封装",
+                  "封装形式", "パッケージ", "フットプリント"],
+    "manufacturer": ["Hersteller", "Fabricant", "Fabricante", "Produttore", "制造商", "厂家", "厂商", "生产厂家",
+                     "品牌", "メーカー", "メーカ"],
+    "manufacturer part number": ["Herstellernummer", "Herstellerteilenummer", "Hersteller-Teilenummer",
+                                 "Hersteller Teilenummer", "Hersteller Artikelnummer", "Herstellerbezeichnung",
+                                 "Référence fabricant", "Réf fabricant", "Numéro de pièce fabricant",
+                                 "Número de parte del fabricante", "Número de parte", "Referencia del fabricante",
+                                 "Codice produttore", "型号", "规格型号", "制造商型号", "厂家型号", "制造商料号",
+                                 "型番", "メーカー型番", "メーカ型番"],
+    "description": ["Beschreibung", "Descripción", "Descrizione", "描述", "规格", "说明", "説明", "仕様"],
+    "notes": ["Bemerkung", "Bemerkungen", "Remarque", "Remarques", "Observaciones", "备注"],
+    "dnp": ["Nicht bestückt", "Non monté", "No montar", "Non montato", "不贴", "不焊"],
+}.items() for k in ks}
+
+
 def _hnorm(h):
-    """A header normalised for matching: '#' and 'P/N' mean part number ('Mfr. #' is the MPN, not the maker)."""
+    """A header normalised for matching: '#' and 'P/N' mean part number ('Mfr. #' is the MPN, not the maker); a header
+    in another language is read as the English one it means (FOREIGN_HEADERS)."""
+    h = FOREIGN_HEADERS.get(_fold(h), h)
     return _norm(re.sub(r"(?i)\bp\s*/\s*n\b", " pn ", str(h)).replace("#", " no "))
 
 
@@ -362,6 +396,23 @@ def clean_part_number(s):
     return re.sub(r"\s+", " ", s).strip()
 
 
+REF_PREFIX = re.compile(r"(?:(?:R|RN|RV|RT|C|CP|L|FB|D|LED|Z|Q|U|IC|OK|J|P|CN|SV|SJ|X|K|Y|F|SW|S|T|TP|BT|B|G|M|H|JP|E|"
+                        r"VR|LS|ANT|MP|FID|FRAME)\d{1,4}[A-Z]?|[A-Z]{1,5}\$\d{1,4})")   # EAGLE: U$1 (no prefix set)
+
+
+def _part_is_designators(df, headers, mapping, columns=None):
+    """True when the column read as the MPN is headed just 'Part' and holds reference designators (EAGLE's BOM:
+    Part / Value / Device / Package, where Part is R1, C1, U1) and nothing else was read as the designator. A 'Part'
+    column of real part numbers (LM358, BC847) does not fit: their letters are no designator prefix."""
+    h = mapping.get("mpn")
+    if not h or "designator" in mapping or _hnorm(h) not in ("part", "parts") or \
+            any(_norm(w) == _norm(h) for ws in (columns or {}).values() for w in ([ws] if isinstance(ws, str) else ws)):
+        return False
+    cells = [str(x).strip() for x in df.iloc[:, headers.index(h)] if str(x).strip()]
+    refs = [c for c in cells if all(REF_PREFIX.fullmatch(t) for t in re.split(r"[\s,;]+", c.upper()) if t)]
+    return len(cells) >= 1 and len(refs) >= 0.8 * len(cells)
+
+
 def apply_columns(mapping, headers, columns):
     """Rules' [bom] columns (field -> your header, or a list of headers: the first one in this BOM is used) win over
     the fuzzy guess; headers not in this BOM are ignored."""
@@ -439,6 +490,8 @@ def read_bom(path, columns=None, rules=None, root=None):
                       "(need a Designator, MPN or Value/Comment column)",
                       "name a column MPN (or Manufacturer Part Number), Designator or Value; or map your headers in "
                       'ecadlib.toml, e.g. [bom.columns] mpn = "Part No"')
+    if _part_is_designators(df, headers, mapping, columns):
+        mapping["designator"] = mapping.pop("mpn")              # EAGLE's 'Part' column: R1, C1, U1
     _warn_unmatched_columns(p, headers, columns)
     col = {f: headers.index(h) for f, h in mapping.items()}       # by position: a BOM may repeat a header (a 2nd 'MPN')
     alt = _alternate_mpns(headers, col)                          # Altium 'Manufacturer Part Number 2' (+ its maker)
@@ -488,6 +541,10 @@ def read_bom(path, columns=None, rules=None, root=None):
                     if jf is not None and jf < len(cells) and cells[jf]:
                         d["manufacturer"] = SS.unquote(cells[jf])
                     break
+        mp = str(d.get("mpn") or "").strip().upper()
+        if mp and mp in {t for t in re.split(r"[\s,;]+", str(d.get("designator") or "").upper()) if t}:
+            note.append(f"part number {d['mpn']} is the line's own designator, not a part number: left out")
+            d["mpn"] = ""                                         # 'R1' copied into the MPN column
         if comment is not None and not d.get("value") and comment < len(cells) and cells[comment]:
             d["value"] = SS.unquote(cells[comment])
         for f in ("mpn", "lcsc"):

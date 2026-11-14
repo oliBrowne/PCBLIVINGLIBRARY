@@ -1065,6 +1065,7 @@
 "_compact",
 "_decode_line",
 "_fill_merged",
+"_fold",
 "_fraction_fits",
 "_header_score",
 "_header_score.<locals>.n",
@@ -1079,6 +1080,7 @@
 "_not_a_part",
 "_one_code",
 "_pair_size",
+"_part_is_designators",
 "_plain_number",
 "_rated_value",
 "_read_csv",
@@ -3777,6 +3779,7 @@
 "alternate_footprint",
 "apply_state",
 "category_designator",
+"chip_size_clash",
 "cost_hint",
 "cross_check_held",
 "cross_check_state",
@@ -4786,6 +4789,7 @@
 "unchecked",
 "value_kind_problem",
 "value_link_empty",
+"value_number_problem",
 "write_report"
 ],
 "ecadlib/reports.py":[
