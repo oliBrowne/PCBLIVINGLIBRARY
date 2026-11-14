@@ -11,6 +11,7 @@ from unittest import mock
 from ecadlib import cli, datasheet as D, footprint_bench as FB, footprint_gen as F
 from ecadlib.eval import build_set as B, runner as R, score as S
 from tests import test_datasheet as TD, test_datasheet_batch as TB, test_librarian as TL
+from tests.read_pads import read_pads
 
 BENCH = json.loads((Path(__file__).parent / "fixtures" / "kicad_bench.json").read_text())
 SOIC = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
@@ -134,6 +135,7 @@ def test_symbol_pins_and_names():
 
 
 # ---------------------------------------------------------------- run / replay / record / estimate / compare
+@read_pads
 def test_replay_runs_the_pipeline_and_scores():
     with tempfile.TemporaryDirectory() as d:
         rec = record_dir(Path(d) / "rec", {"SOICPART": TD.INCH, "QFNPART": qfn_ext()})
@@ -241,6 +243,7 @@ def test_cached_only_rescores_a_live_run_without_sending():
         assert rep2["meta"]["mode"] == "cached answers only (nothing sent)" and cs["SOICPART"]["source"] == "datasheet", cs["SOICPART"]
 
 
+@read_pads
 def test_cached_only_scores_a_route_step_never_sent_from_the_saved_answer():
     """After a parser fix the route can ask for a step the live run never sent (it took another way past the
     rejected answer): --cached-only scores the part from its saved answer for the same datasheet, sending nothing."""

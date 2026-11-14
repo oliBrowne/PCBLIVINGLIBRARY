@@ -13,6 +13,7 @@ from ecadlib import __version__, approvals as AP, librarian as L, migrate as MG,
 from ecadlib.app import Workspace
 from tests import upgrade_fixtures as UF
 from tests.e2e_support import seed_cache
+from tests.read_pads import read_pads
 
 LABELS = ("v0.2.0", "v0.3.0", "r5-agent", "r7-stdparts")
 AGENT = ("r5-agent", "r7-stdparts")
@@ -286,6 +287,7 @@ def test_rebuild_check_passes_then_reports_drift():
             assert RB.main([str(lib), "--check"]) == 2
 
 
+@read_pads
 def test_rebuild_check_reuses_cached_datasheet_answers_and_never_calls_a_model():
     from tests import e2e_support as E
     with tempfile.TemporaryDirectory() as d:
