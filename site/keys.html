@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distributor keys · ecadlib</title>
+<meta name="description" content="Step by step: get your own free DigiKey, Mouser and Nexar (Octopart) keys, paste them into ecadlib, and check they work. All optional.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<header class="nav scrolled">
+  <a class="brand" href="/" aria-label="ecadlib home"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M16 23.5L16 13.5"/><path d="M16 20L10 14"/><path d="M16 15L22 9"/><circle cx="16" cy="26.8" r="2.75" stroke-width="2.5"/></g><path fill="var(--copper, #c2622d)" d="M8.58 13.91 L7.32 13.64 L6.22 13.22 L5.26 12.66 L4.44 11.97 L3.76 11.18 L3.21 10.30 L2.78 9.34 L2.47 8.33 L2.28 7.28 L2.19 6.20 L2.20 5.12 L3.28 5.12 L4.34 5.23 L5.36 5.46 L6.33 5.82 L7.23 6.32 L8.03 6.95 L8.74 7.73 L9.31 8.66 L9.74 9.74 L10.01 10.99 L10.11 12.41 L10.00 14.00Z"/><path fill="var(--copper, #c2622d)" d="M22.02 7.74 L22.18 6.58 L22.48 5.54 L22.90 4.61 L23.45 3.79 L24.10 3.09 L24.85 2.50 L25.70 2.03 L26.62 1.68 L27.62 1.44 L28.68 1.32 L29.80 1.32 L29.80 2.49 L29.66 3.59 L29.41 4.61 L29.03 5.55 L28.54 6.40 L27.93 7.14 L27.20 7.77 L26.37 8.29 L25.43 8.68 L24.39 8.93 L23.24 9.04 L22.00 9.00Z"/></svg>ecadlib</a>
+  <nav aria-label="Pages">
+    <a href="/#start">Quick start</a>
+    <a href="/keys" class="on">Distributor keys</a>
+  </nav>
+  <div class="navend">
+    <button id="themebtn" class="ghost" type="button" aria-label="Switch between light and dark">theme</button>
+  </div>
+</header>
+
+<main class="legal keys">
+  <p class="mono small muted">Setup guide · DigiKey and Mouser steps walked through screen by screen, 14 November 2026</p>
+  <h1>DigiKey, Mouser and Nexar keys</h1>
+
+  <p class="lede">ecadlib can ask DigiKey, Mouser and Nexar (Octopart) who makes each part in your BOM, what it is and where its datasheet is. Each of them only answers programs that bring <strong>your own free key</strong>. This page walks you through getting each one, about five minutes per distributor.</p>
+
+  <p><strong>All of this is optional.</strong> Without any key, ecadlib still builds parts from KiCad's libraries, EasyEDA/LCSC and its own standard packages, and a KiCad library works with no keys at all. A key lets ecadlib identify more parts and find their datasheets. Set up one, two or all three.</p>
+
+  <p>Your keys stay on your computer (encrypted for your Windows account on Windows). ecadlib sends each key only to the company it belongs to and never to us.</p>
+
+  <h2 id="paste">Where to paste a key</h2>
+  <ol>
+    <li><strong>The setup page (easiest).</strong> Run <code>ecadlib setup</code> or open the desktop app. Find the card <strong>Part lookups: DigiKey, Mouser, Nexar (optional)</strong>, open the distributor, paste the key, press <strong>Save</strong>, then <strong>Check it works</strong>. The card shows the same steps as this page.</li>
+    <li><strong>The command line.</strong> <code>ecadlib keys set NAME</code> asks for the key and hides what you type. The names are under each distributor below.</li>
+  </ol>
+
+  <p><strong>Save the keys where you run ecadlib:</strong> on the setup page, or in a normal PowerShell or Command Prompt window (a normal terminal on macOS and Linux). A terminal inside an app that Windows sandboxes, such as the one in the Claude desktop app, saves to a different folder, so ecadlib run from a normal window will not see those keys. Run <code>ecadlib keys list</code> in the window you use: its first line names the folder it reads.</p>
+
+  <h2 id="check">How to check it works</h2>
+  <p>Press <strong>Check it works</strong> on the setup page, or run <code>ecadlib keys check</code> (every distributor whose keys are saved) or <code>ecadlib keys check digikey</code> (one of digikey, mouser, nexar). It does one real search for a common part (NE555DR), free for DigiKey and Mouser, and says in plain words whether it worked, and if not, what to fix. Nexar counts every part it returns against your allowance, so its check asks for a single result and uses one part.</p>
+
+  <h2 id="digikey">DigiKey</h2>
+  <p class="muted">Free. Sign up at <a href="https://developer.digikey.com">https://developer.digikey.com</a>.</p>
+  <ol>
+    <li>Go to developer.digikey.com and click <strong>Register / Login</strong>. New here? Click <strong>Register now</strong> and make a free account (DigiKey emails you to confirm the address). The first time, accept the <strong>API User Agreement</strong>.</li>
+    <li>On <strong>Organizations</strong>, click <strong>+ Create Organization</strong>. Give it a name no other DigiKey user has (for example your name plus "ecadlib") and click <strong>Add organization</strong>.</li>
+    <li>Open the organization's <strong>Production Apps</strong> tab and click <strong>+ Create Production App</strong>.</li>
+    <li>Name the app <code>ecadlib</code>. <strong>OAuth Callback</strong> must be filled in and start with https: type <code>https://localhost</code> (ecadlib never uses it). Under <strong>Products</strong>, set Product Information V4 to <strong>ProductInformation V4</strong> and leave the rest on None. Click <strong>Add production app</strong>. It is approved at once.</li>
+    <li>Click the app's name. Its <strong>Team App Details</strong> page shows the <strong>Client ID</strong> and <strong>Client Secret</strong> (to find them again later: Organizations &gt; your organization &gt; Production Apps &gt; the app). Copy them into the two DigiKey boxes on the setup page, or run <code>ecadlib keys set DIGIKEY_CLIENT_ID</code> and <code>ecadlib keys set DIGIKEY_CLIENT_SECRET</code>.</li>
+  </ol>
+
+  <h2 id="mouser">Mouser</h2>
+  <p class="muted">Free, up to 30 searches a minute and 1,000 a day. Sign up at <a href="https://www.mouser.com/api-search/">https://www.mouser.com/api-search/</a>.</p>
+  <ol>
+    <li>Open mouser.com/api-search and click <strong>Sign Up for Search API</strong>. Sign in, or click <strong>Create a My Mouser Account</strong> first (free).</li>
+    <li>Fill in the request form. <strong>Phone</strong> and <strong>Company Name</strong> are required (a hobbyist can write "Personal"; Company Type: Personal - Hobbyist, Student, Etc). Pick the <strong>Country</strong> first: the Language and Currency lists fill in after it.</li>
+    <li>Application Name: <code>ecadlib</code>. Application Type: Internal desktop application. Estimated Userbase: 1-10 Users. Users charged: No. Advertising: No.</li>
+    <li>Tick <strong>I agree to Mouser's Web API Terms of Service</strong> and click <strong>Submit Request</strong>.</li>
+    <li>Mouser emails you the <strong>Search API key</strong>, usually within minutes. Keep the email: it is where you find the key again. Paste it into the Mouser box on the setup page, or run <code>ecadlib keys set MOUSER_API_KEY</code>.</li>
+  </ol>
+
+  <h2 id="nexar">Nexar (Octopart)</h2>
+  <p class="muted">Free parts to start with; Nexar counts every part it returns, and more parts need a Nexar plan. Sign up at <a href="https://portal.nexar.com">https://portal.nexar.com</a>.</p>
+  <ol>
+    <li>Sign in or sign up at portal.nexar.com.</li>
+    <li>Click <strong>Apps</strong>, then <strong>Create App</strong>. Tick <strong>Supply</strong> for part lookups. If you also want to send parts to Altium 365, tick <strong>Design</strong> as well: an app's scope cannot be changed later.</li>
+    <li>A new app can look up 0 parts until it has a plan: click <strong>Manage supply plan</strong> and pick one. Or use the <strong>Evaluation</strong> app Nexar puts on your dashboard, which comes with free parts.</li>
+    <li>Open the app and copy its <strong>Client ID</strong> and <strong>Client Secret</strong> into the two Nexar boxes on the setup page, or run <code>ecadlib keys set NEXAR_CLIENT_ID</code> and <code>ecadlib keys set NEXAR_CLIENT_SECRET</code>.</li>
+  </ol>
+  <p><strong>Altium 365 only.</strong> Releasing parts to an Altium 365 workspace uses the same kind of Nexar app with <strong>Design</strong> ticked, and a browser sign-in instead of a pasted key. Add the redirect address <code>http://localhost:3000/login</code> to the app, then press <strong>Sign in to Altium 365</strong> on the setup page's Altium 365 card, or run <code>ecadlib nexar signin</code>. One app with both Supply and Design does both jobs.</p>
+
+  <h2 id="trouble">If a check fails</h2>
+  <ul>
+    <li><strong>"save ... first":</strong> that key is not saved yet. Paste it and press Save.</li>
+    <li><strong>Refused the key, Client ID or Client Secret:</strong> copy it again, watching for a missing first or last character.</li>
+    <li><strong>DigiKey knows the app but answered 401 or 403:</strong> on the app, set Products &gt; Product Information V4 to ProductInformation V4, and use a production app (not a sandbox one).</li>
+    <li><strong>Nexar refused the app:</strong> make sure the app has the Supply scope. A Design-only app cannot look up parts.</li>
+    <li><strong>Nexar has no parts left:</strong> pick a plan under Manage supply plan, or use the Evaluation app.</li>
+    <li><strong>Could not reach:</strong> check the internet connection or a company proxy, then try again.</li>
+  </ul>
+
+  <p class="mono small muted source">The full guide is also in the repository: <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/docs/part-lookup-keys.md">docs/part-lookup-keys.md</a>. Something here out of date? Distributors change their sites; <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/issues">open an issue</a>.</p>
+</main>
+
+<footer class="legalfoot mono small muted">
+  <a href="/">ecadlib</a> · <a href="/keys">Distributor keys</a> · <a href="/terms">Terms of use</a> · <a href="/privacy">Privacy</a> · <a href="https://github.com/oliBrowne/PCBLIVINGLIBRARY/blob/main/LICENSE">MIT License</a>
+</footer>
+<script src="legal.js"></script>
+</body>
+</html>

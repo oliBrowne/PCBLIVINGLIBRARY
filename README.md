@@ -98,6 +98,71 @@ All of them run on your own machine: your libraries and API keys stay there.
   [CHANGELOG.md](CHANGELOG.md) lists under *Unreleased* is not on PyPI yet. To get it:
   `pip install "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY"`.
 
+## Setup
+
+`ecadlib setup` (or the Windows app) opens a setup page: pick an AI model and paste its key, choose Altium and/or
+KiCad, and add ecadlib to them. Every key stays on your computer and goes only to the company it belongs to
+([how keys are stored](docs/api-keys.md)).
+
+### DigiKey, Mouser and Nexar keys (optional, free)
+
+With these, ecadlib asks the distributors who makes each part, what it is and where its datasheet is. **They are
+optional:** without them, parts still come from KiCad's libraries, EasyEDA/LCSC and the standard packages, and a KiCad
+library needs no key at all. Paste each key on the setup page's **Part lookups** card (or `ecadlib keys set NAME`),
+then press **Check it works** (or run `ecadlib keys check`), which does one test search (free for DigiKey and Mouser; Nexar counts one part).
+
+<details>
+<summary><b>DigiKey</b>: Client ID and Client Secret (about 5 minutes)</summary>
+
+1. Go to <https://developer.digikey.com> and click **Register / Login**. New here? **Register now**, then confirm
+   your email. The first time, accept the **API User Agreement**.
+2. **Organizations** > **+ Create Organization**. The name must be unique among DigiKey users (for example your name
+   plus "ecadlib"). Click **Add organization**.
+3. Open the organization's **Production Apps** tab > **+ Create Production App**.
+4. Name `ecadlib`. **OAuth Callback** is required and must be https: type `https://localhost` (ecadlib never uses
+   it). Under **Products**, set Product Information V4 to **ProductInformation V4**, leave the rest on None. Click
+   **Add production app**. It is approved at once.
+5. Click the app's name; its **Team App Details** page has the **Client ID** and **Client Secret** (later: Organizations > your organization >
+   Production Apps > the app):
+   `ecadlib keys set DIGIKEY_CLIENT_ID`, `ecadlib keys set DIGIKEY_CLIENT_SECRET`.
+
+</details>
+
+<details>
+<summary><b>Mouser</b>: Search API key (free, 1,000 searches a day)</summary>
+
+1. Open <https://www.mouser.com/api-search/> and click **Sign Up for Search API**. Sign in, or **Create a My Mouser
+   Account** first.
+2. In the form, **Phone** and **Company Name** are required (a hobbyist can write "Personal"; Company Type: Personal -
+   Hobbyist, Student, Etc). Pick **Country** first: Language and Currency fill in after it. Application Name
+   `ecadlib`, Application Type Internal desktop application, Userbase 1-10 Users, charged No, advertising No.
+3. Tick **I agree to Mouser's Web API Terms of Service** > **Submit Request**.
+4. Mouser emails the key (keep the email): `ecadlib keys set MOUSER_API_KEY`.
+
+</details>
+
+<details>
+<summary><b>Nexar (Octopart)</b>: Client ID and Client Secret (free parts to start, then a plan)</summary>
+
+1. Sign in or sign up at <https://portal.nexar.com>.
+2. **Apps** > **Create App**. Tick **Supply** for part lookups, and **Design** too if you will release parts to
+   Altium 365 (the scope cannot be changed later).
+3. A new app looks up 0 parts until it has a plan: **Manage supply plan**. Or use the **Evaluation** app on your
+   dashboard, which has free parts.
+4. Copy the app's **Client ID** and **Client Secret**: `ecadlib keys set NEXAR_CLIENT_ID`,
+   `ecadlib keys set NEXAR_CLIENT_SECRET`.
+5. Altium 365 only: add the redirect `http://localhost:3000/login` to the app, then **Sign in to Altium 365** on the
+   setup page or run `ecadlib nexar signin`.
+
+</details>
+
+Save the keys where you run ecadlib: the setup page, or a normal PowerShell / terminal window. A terminal inside a
+sandboxed Windows app (such as the Claude desktop app) saves to a different folder; `ecadlib keys list` shows which
+folder a window uses.
+
+The full guide, with what to do when a check fails: [docs/part-lookup-keys.md](docs/part-lookup-keys.md), also on the
+website at <https://pcblivinglibrary.vercel.app/keys>.
+
 ## Try the demo
 
 ```
@@ -222,6 +287,7 @@ Everything else lives in [docs/](docs/README.md):
 * [BOMs and datasheets](docs/bom-and-datasheets.md) and
   [footprints, symbols and 3D models](docs/footprints-and-symbols.md)
 * [Bring your own model](docs/models.md), [API keys](docs/api-keys.md) and [costs](docs/costs.md)
+* [DigiKey, Mouser and Nexar keys, step by step](docs/part-lookup-keys.md) (optional, free)
 * [Using it from an AI agent (MCP)](docs/mcp.md)
 * [Command line, setup and integrations](docs/command-line.md)
 * [Working on ecadlib](docs/development.md): tests, the accuracy gate and releases

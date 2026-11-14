@@ -213,7 +213,9 @@ def check_keys(rules=None, environ=None):
         rest = [f"{n} ({' + '.join(e)})" for n, e, ok in lookups if not ok]
         out.append(_c("key part lookups", "OK", (f"set: {', '.join(have)}" if have else "none set")
                       + (f"; optional, not set: {', '.join(rest)}" if rest else "")
-                      + ("" if have else " (KiCad, EasyEDA/LCSC and standard parts need no key)")))
+                      + ("" if have else " (KiCad, EasyEDA/LCSC and standard parts need no key)"),
+                      ("test them: ecadlib keys check; " if have else "")
+                      + "how to get DigiKey / Mouser / Nexar keys: the setup page's Part lookups card, or docs/part-lookup-keys.md"))
     return out
 
 

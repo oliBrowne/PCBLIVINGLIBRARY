@@ -134,6 +134,8 @@ For people who are used to installers, not terminals. The guide for them is `doc
 * **`ecadlib nexar signin|status|signout`** (`nexar_signin.py`): sign in to Altium 365 once with your own free Nexar
   app; ecadlib refreshes the token by itself, so there is no daily portal token to paste. See
   [Signing in to Altium 365](altium.md#signing-in-to-altium-365-ecadlib-nexar-signin).
+* **`ecadlib keys check [digikey|mouser|nexar]`** (`lookup_keys.py`): one free test search (NE555DR) with the saved
+  distributor keys, with what to fix when it fails. How to get the keys: [part-lookup-keys.md](part-lookup-keys.md).
 * **`ecadlib keys list|set NAME|remove NAME`** (`userconfig.py`): API keys stored per user, the way to give ecadlib a
   key. On Windows they are encrypted with DPAPI for your account. Elsewhere they are in a file only you can read
   (mode 600). The folder is `%APPDATA%\ecadlib`, `~/Library/Application Support/ecadlib` or `~/.config/ecadlib`, and

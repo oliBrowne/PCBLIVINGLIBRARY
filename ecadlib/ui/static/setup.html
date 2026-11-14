@@ -63,6 +63,8 @@ a { color: inherit; }
 .found .mono, .mono { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 ol.steps { margin: 8px 0 0; padding-left: 20px; }
 ol.steps li { margin: 4px 0; }
+details.lk { border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; margin-top: 8px; }
+details.lk summary { cursor: pointer; font-weight: 550; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .chips button { border-radius: 999px; font-size: 12px; padding: 2px 10px; min-height: 26px; }
 .actions { margin: -4px 0 26px; padding: 0 2px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -160,6 +162,14 @@ ol.steps li { margin: 4px 0; }
       <button id="add-kicad">Add to KiCad</button>
     </div>
     <div id="addmsg"></div>
+  </section>
+
+  <section class="card" id="c-lookups">
+    <h2><span class="n">+</span>Part lookups: DigiKey, Mouser, Nexar (optional)</h2>
+    <p class="sub">With a free key, ecadlib asks these distributors who makes a part, what it is and where its datasheet
+      is. Without any, ecadlib still works: parts come from KiCad's library, EasyEDA/LCSC and its standard packages.
+      Each key is yours, stays on this computer, and is sent only to that distributor.</p>
+    <div id="lookups"></div>
   </section>
 
   <section class="card" id="c-more">
@@ -268,6 +278,50 @@ function render() {
   document.querySelectorAll(".xforget").forEach((b) => b.onclick = async () => { await api("/api/setup/key/forget", {name: b.dataset.k}); await load(); });
 }
 
+function renderLookups() {
+  const open = new Set([...document.querySelectorAll("details.lk[open]")].map((d) => d.dataset.id));
+  $("lookups").innerHTML = S.lookups.map((g) => `
+    <details class="lk" data-id="${esc(g.id)}" ${open.has(g.id) ? "open" : ""}>
+      <summary>${esc(g.label)} ${g.ready ? pill(g.fields.every((f) => f.stored) ? "saved" : "only in an environment variable", g.fields.every((f) => f.stored) ? "ok" : "warn") : pill("not set up", "info")}</summary>
+      <p class="hint">${esc(g.cost)} Get the key at <a href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.url.replace(/^https:\/\/(www\.)?/, ""))}</a>:</p>
+      <ol class="steps">${g.steps.map((t) => `<li>${esc(t)}</li>`).join("")}</ol>
+      ${g.fields.map((f) => `
+      <label class="f" for="lk-${f.name}">${esc(f.label)} ${f.stored ? pill("saved", "ok") : ""}</label>
+      <div class="row"><input type="password" id="lk-${f.name}" autocomplete="off" spellcheck="false" placeholder="${f.stored ? "saved: paste again to replace" : esc(f.name)}"></div>`).join("")}
+      <div class="row" style="margin-top:8px">
+        <button class="lk-save" data-id="${esc(g.id)}">Save</button>
+        <button class="lk-check" data-id="${esc(g.id)}" ${g.ready ? "" : "disabled"} title="one test search for a common part (NE555DR): free for DigiKey and Mouser; Nexar counts one part">Check it works</button>
+        ${g.fields.some((f) => f.stored) && !(g.id === "nexar" && S.altium365.signed_in) ? `<button class="lk-forget" data-id="${esc(g.id)}">Remove</button>` : ""}
+      </div>
+      <div id="lkmsg-${esc(g.id)}"></div>
+    </details>`).join("");
+  const guide = (id) => S.lookups.find((g) => g.id === id);
+  document.querySelectorAll(".lk-save").forEach((b) => b.onclick = async () => {
+    const g = guide(b.dataset.id), typed = g.fields.filter((f) => $("lk-" + f.name).value.trim());
+    if (!typed.length) return msg("lkmsg-" + g.id, "Paste the key first.", "warn");
+    try {
+      for (const f of typed) await api("/api/setup/key", {name: f.name, value: $("lk-" + f.name).value});
+      S = await api("/api/setup"); renderLookups(); renderA365();   // the Nexar boxes are the Altium 365 app too
+      const n = guide(g.id);
+      msg("lkmsg-" + g.id, n.ready ? "Saved. Press Check it works to test it." : "Saved. Paste the other box too.", n.ready ? "ok" : "warn");
+    } catch (e) { msg("lkmsg-" + g.id, esc(e.message), "bad"); }
+  });
+  document.querySelectorAll(".lk-check").forEach((b) => b.onclick = async () => {
+    const id = b.dataset.id;
+    b.disabled = true; msg("lkmsg-" + id, "Searching for a test part...", "info");
+    try { const r = await api("/api/setup/lookup/check", {id}); msg("lkmsg-" + id, esc(r.message), r.ok ? "ok" : "bad"); }
+    catch (e) { msg("lkmsg-" + id, esc(e.message), "bad"); }
+    b.disabled = false;
+  });
+  document.querySelectorAll(".lk-forget").forEach((b) => b.onclick = async () => {
+    const g = guide(b.dataset.id);
+    try {
+      for (const f of g.fields) if (f.stored) await api("/api/setup/key/forget", {name: f.name});
+      S = await api("/api/setup"); renderLookups(); renderA365();
+    } catch (e) { msg("lkmsg-" + g.id, esc(e.message), "bad"); }
+  });
+}
+
 let a365poll = null, a365new = false;
 function renderA365() {
   const A = S.altium365;
@@ -312,7 +366,7 @@ $("a365-signout").onclick = async () => {
   catch (e) { msg("a365msg", esc(e.message), "bad"); }
 };
 
-async function load() { S = await api("/api/setup"); render(); $("a365ws").value = S.altium365.workspace; renderA365(); renderCrash(); }
+async function load() { S = await api("/api/setup"); render(); renderLookups(); $("a365ws").value = S.altium365.workspace; renderA365(); renderCrash(); }
 function renderCrash() {
   const C = S.crash_reports || {};
   $("c-crash").hidden = !C.available;
