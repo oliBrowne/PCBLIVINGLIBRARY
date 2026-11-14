@@ -51,7 +51,8 @@ Free. Sign up at <https://developer.digikey.com>.
    * **Products**: set **Product Information V4** to **ProductInformation V4** and leave the rest on **None**.
 
    Click **Add production app**. It is approved at once; there is no waiting.
-5. Click the app's name. Its page shows the **Client ID** and **Client Secret**.
+5. Click the app's name. Its page shows the **Client ID** and **Client Secret**. To find them again later:
+   developer.digikey.com > **Organizations** > your organization > **Production Apps** > the app.
 
 Paste them into the two DigiKey boxes on the setup page, or:
 
@@ -77,7 +78,8 @@ Free, up to 30 searches a minute and 1,000 a day. Sign up at <https://www.mouser
    * About your application: **Application Name** `ecadlib`, a one-line description, **Application Type** Internal
      desktop application, **Estimated Userbase** 1-10 Users, users charged **No**, advertising **No**.
 3. Tick **I agree to Mouser's Web API Terms of Service** and click **Submit Request**.
-4. Mouser emails you the **Search API key**.
+4. Mouser emails you the **Search API key** (it came within minutes when we tried). Keep the email: it is where you
+   find the key again.
 
 Paste it into the Mouser box on the setup page, or:
 

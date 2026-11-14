@@ -36,7 +36,9 @@ GUIDES = [
          "Name the app (for example ecadlib). OAuth Callback must be filled in and start with https: type "
          "https://localhost (ecadlib never uses it). Under Products, set Product Information V4 to "
          "ProductInformation V4 and leave the rest on None. Click Add production app. It is approved at once.",
-         "Click the app's name. Its page shows the Client ID and Client Secret: copy both into the two boxes here.",
+         "Click the app's name. Its page shows the Client ID and Client Secret: copy both into the two boxes here. "
+         "To find them again later: developer.digikey.com > Organizations > your organization > Production Apps > "
+         "the app.",
      ]},
     {"id": "mouser", "label": "Mouser", "url": "https://www.mouser.com/api-search/",
      "fields": [("MOUSER_API_KEY", "Search API key")],
@@ -50,7 +52,8 @@ GUIDES = [
          "Application Name: ecadlib. Application Type: Internal desktop application. Estimated Userbase: 1-10 "
          "Users. Users charged: No. Advertising: No.",
          "Tick I agree to Mouser's Web API Terms of Service and click Submit Request.",
-         "Mouser emails you the Search API key. Paste it here.",
+         "Mouser emails you the Search API key (it came within minutes on 14 Nov 2026). Paste it here, and keep the "
+         "email: it is where you find the key again.",
      ]},
     {"id": "nexar", "label": "Nexar (Octopart)", "url": "https://portal.nexar.com",
      "fields": [("NEXAR_CLIENT_ID", "Client ID"), ("NEXAR_CLIENT_SECRET", "Client Secret")],

@@ -122,7 +122,8 @@ then press **Check it works** (or run `ecadlib keys check`), which does one test
 4. Name `ecadlib`. **OAuth Callback** is required and must be https: type `https://localhost` (ecadlib never uses
    it). Under **Products**, set Product Information V4 to **ProductInformation V4**, leave the rest on None. Click
    **Add production app**. It is approved at once.
-5. Click the app's name and copy the **Client ID** and **Client Secret**:
+5. Click the app's name and copy the **Client ID** and **Client Secret** (later: Organizations > your organization >
+   Production Apps > the app):
    `ecadlib keys set DIGIKEY_CLIENT_ID`, `ecadlib keys set DIGIKEY_CLIENT_SECRET`.
 
 </details>
@@ -136,7 +137,7 @@ then press **Check it works** (or run `ecadlib keys check`), which does one test
    Hobbyist, Student, Etc). Pick **Country** first: Language and Currency fill in after it. Application Name
    `ecadlib`, Application Type Internal desktop application, Userbase 1-10 Users, charged No, advertising No.
 3. Tick **I agree to Mouser's Web API Terms of Service** > **Submit Request**.
-4. Mouser emails the key: `ecadlib keys set MOUSER_API_KEY`.
+4. Mouser emails the key (keep the email): `ecadlib keys set MOUSER_API_KEY`.
 
 </details>
 

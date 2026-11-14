@@ -47,7 +47,7 @@
     <li>On <strong>Organizations</strong>, click <strong>+ Create Organization</strong>. Give it a name no other DigiKey user has (for example your name plus "ecadlib") and click <strong>Add organization</strong>.</li>
     <li>Open the organization's <strong>Production Apps</strong> tab and click <strong>+ Create Production App</strong>.</li>
     <li>Name the app <code>ecadlib</code>. <strong>OAuth Callback</strong> must be filled in and start with https: type <code>https://localhost</code> (ecadlib never uses it). Under <strong>Products</strong>, set Product Information V4 to <strong>ProductInformation V4</strong> and leave the rest on None. Click <strong>Add production app</strong>. It is approved at once.</li>
-    <li>Click the app's name. Its page shows the <strong>Client ID</strong> and <strong>Client Secret</strong>. Copy them into the two DigiKey boxes on the setup page, or run <code>ecadlib keys set DIGIKEY_CLIENT_ID</code> and <code>ecadlib keys set DIGIKEY_CLIENT_SECRET</code>.</li>
+    <li>Click the app's name. Its page shows the <strong>Client ID</strong> and <strong>Client Secret</strong> (to find them again later: Organizations &gt; your organization &gt; Production Apps &gt; the app). Copy them into the two DigiKey boxes on the setup page, or run <code>ecadlib keys set DIGIKEY_CLIENT_ID</code> and <code>ecadlib keys set DIGIKEY_CLIENT_SECRET</code>.</li>
   </ol>
 
   <h2 id="mouser">Mouser</h2>
@@ -57,7 +57,7 @@
     <li>Fill in the request form. <strong>Phone</strong> and <strong>Company Name</strong> are required (a hobbyist can write "Personal"; Company Type: Personal - Hobbyist, Student, Etc). Pick the <strong>Country</strong> first: the Language and Currency lists fill in after it.</li>
     <li>Application Name: <code>ecadlib</code>. Application Type: Internal desktop application. Estimated Userbase: 1-10 Users. Users charged: No. Advertising: No.</li>
     <li>Tick <strong>I agree to Mouser's Web API Terms of Service</strong> and click <strong>Submit Request</strong>.</li>
-    <li>Mouser emails you the <strong>Search API key</strong>. Paste it into the Mouser box on the setup page, or run <code>ecadlib keys set MOUSER_API_KEY</code>.</li>
+    <li>Mouser emails you the <strong>Search API key</strong>, usually within minutes. Keep the email: it is where you find the key again. Paste it into the Mouser box on the setup page, or run <code>ecadlib keys set MOUSER_API_KEY</code>.</li>
   </ol>
 
   <h2 id="nexar">Nexar (Octopart)</h2>
