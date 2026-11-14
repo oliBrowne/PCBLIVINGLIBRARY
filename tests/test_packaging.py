@@ -94,3 +94,14 @@ if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):
             f(); print("ok", n)
+
+
+def test_the_download_way_past_makers_bot_checks_is_a_core_dependency():
+    """curl_cffi was only in the [browser] extra: a plain `pip install ecadlib` then had no way past analog.com,
+    st.com or Nexperia (pdf_fetch's impersonate way got 18 of 24 such links on 2026-10-20; the others got none)."""
+    import re
+    text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    deps = re.search(r"^dependencies = \[(.*?)^keywords", text, re.S | re.M).group(1)
+    assert '"curl_cffi"' in deps, deps
+    # ... and the headless browser (Playwright drives the installed Edge / Chrome): no download way needs a second command
+    assert '"playwright>=1.57"' in deps, deps

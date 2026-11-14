@@ -76,13 +76,18 @@ DEFAULTS = {
                   # a folder of datasheet PDFs a person downloaded (<MPN>.pdf), tried before any link: for makers' sites
                   # that refuse downloads from scripts
                   "folder": "",
+                  # ecadlib.ds_archive: none of a part's links gave a PDF (a dead link, a site that refuses every
+                  # way): the Internet Archive's saved copy of the link, free and with no key; only public links are
+                  # sent to archive.org. false = never ask it
+                  "archive": True,
+                  # a read whose pin count, pitch, body and exposed pad fit exactly one checked standard package:
                   # off = the read's pads; auto (default since the held-out test of 2026-11-13, where a no-land read built
                   # IPC pads that missed the maker's land KiCad uses) = the table's land unless the datasheet gives its own; always
                   # gives its own; always
                   "standard_land": "auto",
                   # ecadlib.pdf_fetch: a PDF link the maker's site refuses to ecadlib's own request. "auto": a browser's
-                  # headers, then a Chrome TLS fingerprint, then a headless Edge / Chrome (the last two need
-                  # pip install "ecadlib[browser]"); "plain": ecadlib's own request only; or a list of those ways
+                  # headers, then a Chrome TLS fingerprint, then a headless Edge / Chrome (all
+                  # installed with ecadlib); "plain": ecadlib's own request only; or a list of those ways
                   "download": "auto",
                   # ecadlib.ds_search: no link, part source or folder file gave a PDF: ask Claude's web search for the
                   # maker's (else a distributor's) PDF; off by default, counted in max_cost_usd ("" model = Haiku)
@@ -975,6 +980,9 @@ HELP = {
     "datasheet.cross_check": "auto: compare every datasheet footprint with the standard package table, or (not in the table) "
                              "with a second read of only the critical numbers; disagreement holds the part | always: the "
                              "second read for every datasheet part | off",
+    "datasheet.archive": "when none of a part's datasheet links gave a PDF (dead, or refused to every way of downloading), "
+                         "use the Internet Archive's saved copy of the link; free, no key; only public links are sent "
+                         "to archive.org, and the part's review says the copy's date (on by default)",
     "datasheet.web_search": "when no link, part source or datasheet folder gave a PDF, ask Claude's web search for the "
                             "maker's PDF (else a distributor's); the PDF must name the part; its cost counts in "
                             "max_cost_usd (off by default)",

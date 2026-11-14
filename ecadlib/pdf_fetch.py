@@ -5,7 +5,7 @@ or a dropped connection, and give the same link to a browser. PdfStore tries eca
 refusal (refused()) moves on to the next way, in this order:
 
 - headers: plain requests, with a desktop browser's request headers (User-Agent, Accept, Accept-Language, Referer).
-- impersonate: curl_cffi (optional: pip install "ecadlib[browser]"), a real Chrome TLS and HTTP/2 fingerprint and
+- impersonate: curl_cffi (installed with ecadlib), a real Chrome TLS and HTTP/2 fingerprint and
   headers, no browser. Bot managers that check the TLS fingerprint refuse the two above and pass this one.
 - browser: Playwright (optional, same extra) driving the Edge or Chrome installed on this machine, headless, in a fresh
   profile (none of your cookies or sign-ins). It opens the site's home page first so the site's own scripts run, then

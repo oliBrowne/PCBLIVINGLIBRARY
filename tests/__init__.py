@@ -46,3 +46,4 @@ _RU.DEFAULTS["providers"]["unofficial"] = True
 # ([datasheet] download, ecadlib.pdf_fetch) or opens a browser. tests/test_pdf_fetch.py turns them on where it tests them.
 os.environ["ECADLIB_DOWNLOAD"] = "plain"
 os.environ["ECADLIB_NO_HANDOFF"] = "1"
+os.environ["ECADLIB_NO_ARCHIVE"] = "1"                # no test asks the Internet Archive (tests/test_ds_archive_1113.py fakes it)

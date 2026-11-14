@@ -470,6 +470,10 @@ def parse_jlcpcb(r, mpn, res, code="", maker="", package=""):
         desc = describe(best.get("describe") or best.get("description"))
         if desc:                           # JLCPCB/LCSC's description of the part (a category + package says too little)
             res.extra["description"] = desc
+        sheet = str(best.get("dataManualUrl") or "").strip()
+        if re.fullmatch(r"https?://[^\s\"'<>]{4,2000}", sheet):   # LCSC's own copy of the part's datasheet: the answer
+            res.extra["datasheet"] = sheet  # names the file itself, where the lcsc.com/datasheet/<C>.pdf pattern
+                                            # now gives a web page (IFX25401TBV, 2026-11-13); untrusted: only a link
         spec = clean_text(best.get("componentSpecificationEn", ""), 80)
         if land and spec and not in_land(best):
             res.extra["package_note"] = (f"LCSC {code} ({res.manufacturer or 'maker not listed'}) is listed as {spec}, "
