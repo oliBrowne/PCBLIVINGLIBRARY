@@ -13,7 +13,8 @@ def test_tantalum_land_by_case():
     assert T(["", "10uF"], "T491A106K016AT")[0] == "CP_EIA-3216-18_Kemet-A"
     assert T(["CP_Tantalum_Case-B_EIA-3528-21_Reflow"], "TAJB226K016RNJ")[0] == "CP_EIA-3528-21_Kemet-B"
     assert T(["Capacitor_Tantalum_SMD:CP_EIA-7343-31_Kemet-D"], "")[0] == "CP_EIA-7343-31_Kemet-D"
-    assert T(["Case C"], "")[0] == "CP_EIA-6032-28_Kemet-C"
+    assert T(["Case C"], "", "CAP TANT 47UF 16V")[0] == "CP_EIA-6032-28_Kemet-C"
+    assert T(["Case C"], "TPSC476K016R0350")[0] == "CP_EIA-6032-28_Kemet-C"      # a tantalum series by its MPN
     assert T(["6032-28"], "")[0] == "CP_EIA-6032-28_Kemet-C"
     for texts, mpn in ((["CP_Tantalum_Case-B_EIA-3528-21_Reflow"], "T491A106K016AT"),   # two cases named
                        (["C_1206_3216Metric"], "T491A106K016AT"),                       # a chip land, not a case
@@ -21,6 +22,29 @@ def test_tantalum_land_by_case():
                        (["CP_EIA-3528-12_Kemet-T"], ""),                                # a case not in the table
                        (["Case B"], "T491A106K016AT"), ([""], ""), ([""], "EEE-1HA100SP"), (["3528"], "")):
         assert T(texts, mpn)[0] is None, (texts, mpn, T(texts, mpn))
+
+
+def test_aluminium_can_never_gets_a_tantalum_land():
+    """Review 11-14: aluminium makers letter their cans 'case B/C/D' too (a round body, not a 7343 block)."""
+    T = SP.tantalum_land
+    for texts, mpn, desc in ((["Case D"], "EEE-FK1E101P", "CAP ALUM 100UF 20% 25V SMD"),
+                             (["SMD Case C"], "UWX1E470MCL1GB", "CAP ALUM 47UF 20% 25V SMD"),
+                             (["Case D"], "UWX1E101MCL1GB", ""),                 # an aluminium series, no description
+                             (["Case D"], "", ""), (["Case B"], "XYZ123", "Capacitor 10uF"),   # a bare letter: no proof
+                             (["CP_EIA-7343-31_Kemet-D"], "", "Aluminium electrolytic 100uF"),
+                             (["7343-31"], "16SVP100M", ""),                     # OS-CON polymer series
+                             (["Case D"], "T491D107K016AT", "Al-cap 100uF")):
+        assert T(texts, mpn, desc)[0] is None, (texts, mpn, desc)
+        assert SP.resolve(texts, "C", mpn, desc)["footprint"] is None, (texts, mpn, desc)
+
+
+@lite
+def test_aluminium_cans_on_case_letters_are_held_end_to_end(tmp_path):
+    got, _ = _run(tmp_path, "Designator,Qty,Value,Footprint,Manufacturer,MPN,Description\n"
+                            "C1,1,100uF,Case D,Panasonic,EEE-FK1E101P,CAP ALUM 100UF 20% 25V SMD\n"
+                            "C2,1,47uF,SMD Case C,Nichicon,UWX1E470MCL1GB,CAP ALUM 47UF 20% 25V SMD\n")
+    for it in got.values():
+        assert it["status"] == "held" and "Tantalum" not in str(it["source"]["footprint"]), it["source"]
 
 
 def test_tantalum_land_only_for_a_polarized_capacitor():
@@ -97,6 +121,9 @@ def test_mechanical_symbol():
                  ("easyeda:C123", "TP1", {"1"}), ("local:Mine:TP", "TP1", {"1"}),
                  ("kicad:Connector:Conn_01x01", "TP1", {"1"}), ("standard:Fuse:Fuse_1206_3216Metric", "", {"1", "2"})):
         assert M(*args)[0] is None, args
+    assert M("standard:Fuse:Fuse_1206_3216Metric", "F4", {"1", "2"}, "FUSE 2A 1206 fast-acting non-resettable")[0] == "Fuse"
+    assert M("standard:Fuse:Fuse_1206_3216Metric", "F5", {"1", "2"}, "2A not resettable")[0] == "Fuse"
+    assert M("standard:Fuse:Fuse_1206_3216Metric", "F6", {"1", "2"}, "1206L050")[0] == "Polyfuse"   # Littelfuse PTC MPN
     for key in ("Fuse", "Polyfuse", "TestPoint", "MountingHole_Pad"):           # each symbol's pins are what it claims
         text, name = SP.symbol_text(key)
         assert name == key and text.count("(pin passive") == {"TestPoint": 1, "MountingHole_Pad": 1}.get(key, 2), key

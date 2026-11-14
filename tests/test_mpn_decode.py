@@ -149,3 +149,23 @@ def test_fill_lines_defers_to_and_checks_the_description():
     assert "value" not in lines[0] and "bom_hold" not in lines[0]
     assert "value" not in lines[1] and "another value" in lines[1]["bom_hold"]
     assert lines[2]["value"] == "10kΩ"
+
+
+def test_a_description_value_the_reader_misses_holds_instead_of_filling():
+    """Review 11-14: 'RES 4.7 kOhm' is not read by description_values; the part number's 10k must not fill the Value."""
+    for desc in ("RES 4.7 kOhm 1% 0603", "4.7 kΩ", "Résistance 4,7 kΩ", "RES 4K7 0603"):
+        ln = {"designator": "R1", "mpn": "RC0603FR-0710KL", "value": "", "description": desc}
+        MD.fill_lines([ln])
+        assert not ln.get("value") and "value" in ln.get("bom_hold", ""), (desc, ln)
+    for desc in ("CAP 4.7 uF 0603", "4,7 µF X7R"):
+        ln = {"designator": "C1", "mpn": "GRM188R71H104KA93D", "value": "", "description": desc}
+        MD.fill_lines([ln])
+        assert not ln.get("value") and ln.get("bom_hold"), (desc, ln)
+    for desc in ("RES SMD 1% 1/10W 0603", "Thick film resistor 0603 75V", "", "Chip resistor AEC-Q200"):
+        ln = {"designator": "R1", "mpn": "RC0603FR-0710KL", "value": "", "description": desc}
+        MD.fill_lines([ln])
+        assert ln.get("value") == "10kΩ" and not ln.get("bom_hold"), (desc, ln)
+    for desc in ("MLCC 50V X7R 0603 10%", "CAP CER 0603 16V X5R"):
+        ln = {"designator": "C1", "mpn": "GRM188R71H104KA93D", "value": "", "description": desc}
+        MD.fill_lines([ln])
+        assert ln.get("value") == "100nF" and not ln.get("bom_hold"), (desc, ln)

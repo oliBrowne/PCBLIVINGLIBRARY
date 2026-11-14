@@ -1120,8 +1120,9 @@ SYMBOLS["Polyfuse"] = ("Polyfuse", "F", "Resettable fuse, polymeric positive tem
 SYMBOLS["TestPoint"] = ("TestPoint", "TP", "Test point", [_circle(0, 3.302, 0.762)], [("1", "1", "passive", 0, 0, 90, 2.54)])
 SYMBOLS["MountingHole_Pad"] = ("MountingHole_Pad", "H", "Mounting hole with a plated pad (pin 1)", [_circle(0, 1.27, 1.27, 0.508)],
                                [("1", "1", "passive", 0, -2.54, 90, 2.54)])
-PTC = re.compile(r"(?i)\bPTC\b|poly ?fuse|polyswitch|resettable|\bPPTC\b|multifuse|\bMF-(?:[A-Z]*SM|R|USM|LSMF)|"
-                 r"\b(?:nano|micro|mini)SMD|\b0ZC[A-Z]")
+PTC = re.compile(r"(?i)\bPTC\b|poly ?fuse|polyswitch|(?<!non-)(?<!non )(?<!not )(?<!\bnon)resettable|\bPPTC\b|multifuse|"
+                 r"\bMF-(?:[A-Z]*SM|R|USM|LSMF)|\b(?:nano|micro|mini)SMD|\b0ZC[A-Z]|"
+                 r"\b(?:0402|0603|0805|1206|1210|1812|2016|2920)L\d{3}")     # Littelfuse PolySwitch chip PTCs: 1206L050
 MECHANICAL = {"TestPoint": ("TP",), "MountingHole": ("H", "MH"), "Fuse": ("F",)}   # KiCad library -> designator classes
 
 
@@ -1373,13 +1374,26 @@ EIA_CASE = re.compile(r"(?<![\d.])(3216|3528|6032|7343|2012|1608|7260|7132)[-_ ]
 CASE_LETTER = re.compile(r"(?i)(?<![A-Za-z0-9])case[-_ ]?([A-E])(?![A-Za-z0-9])")
 
 
-def tantalum_land(texts, mpn=""):
+# not a solid tantalum: an aluminium can (Panasonic / Nichicon / Chemi-Con also letter their cans 'case B/C/D', a
+# round body), a polymer or niobium part. Description words and the aluminium MPN series of POLAR_CAP.
+NOT_TANTALUM = re.compile(r"(?i)electrolytic|alumin|\bALUM\b|\bAl[- ]?(?:e|elec|cap)\b|polymer|niobium")
+ALUMINIUM_CAP = re.compile(r"^(EEE|EEV|EEH|EEF|EEU|ECA|UWT|UWX|UUD|UUX|UCD|PCJ|PCF|PLV|\d+SVP|\d+SEP)")
+TANTALUM_CAP = re.compile(r"^(T49[1-9]|T5[2-9]\d|TAJ|TPS[A-Z]|TPM|TRJ|TCJ|TLJ|F9[1-8]|293D|593D|298D|T8[36]|TR3|TP3)")
+
+
+def tantalum_land(texts, mpn="", description=""):
     """(table land, why) for a tantalum capacitor, or (None, why). Its EIA case comes from the footprint texts ('CP_EIA-
     3528-21_Kemet-B', 'CP_Tantalum_Case-B_EIA-3528-21_Reflow', '3528-21', 'Case B') and the MPN's own code (KEMET
     T491A..., AVX TAJB..., ecadlib.mpn_decode). Every one that names a case must name the same one; a footprint text
     that names another land (C_1206_3216Metric, a hand-solder variant) or no case at all builds nothing."""
     from . import mpn_decode as MD
     from .librarian import passive_value
+    m = _norm(mpn)
+    if NOT_TANTALUM.search(" ".join([str(description or "")] + [str(t or "") for t in texts])) or ALUMINIUM_CAP.match(m):
+        return None, "not a solid tantalum (aluminium, polymer or niobium by its description or part number)"
+    d = MD.decode(mpn)
+    tantalum = bool(d and d["kind"] == "CP") or bool(TANTALUM_CAP.match(m)) or bool(re.search(
+        r"(?i)tantal|\bTANT\b", " ".join([str(description or "")] + [str(t or "") for t in texts])))
     said = []                                             # (case, where)
     for t in texts:
         t = str(t or "").strip()
@@ -1392,8 +1406,9 @@ def tantalum_land(texts, mpn=""):
         letters = {MD.TANT_CASE.get(m.group(1).upper(), f"case {m.group(1).upper()}") for m in CASE_LETTER.finditer(t)}
         if not cases and not letters:
             return None, f"the footprint text {t!r} names no tantalum case"
+        if not cases and not tantalum:                    # 'Case D' alone: aluminium cans use the letters too
+            return None, f"{t!r} names a case letter, but nothing says the part is a tantalum (description or part number)"
         said += [(c, t) for c in cases | (letters if not cases else set())]
-    d = MD.decode(mpn)
     if d and d["kind"] == "CP":
         said.append((d["case"], f"{mpn} ({d['series']} code)"))
     found = {c for c, _ in said}
@@ -1416,8 +1431,7 @@ def resolve(texts, kind=None, mpn="", description=""):
                         any(_strip_lib(str(t or "")).strip().startswith("CP_") for t in texts)):
         kind = "CP"                                       # a C on a polarized land ('CP_EIA-3528-21_Kemet-B') is one
     if kind == "CP":
-        name, how = tantalum_land(texts, mpn) if not re.search(r"(?i)electrolytic|alumin|polymer|niobium", str(description)) \
-            else (None, "the description says it is not a solid tantalum")
+        name, how = tantalum_land(texts, mpn, description)
         if name:
             return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name), "symbol": "CP",
                     "sym_how": "polarized capacitor, pin 1 = + as the land marks it"}

@@ -794,7 +794,8 @@ class Run:
                 fp_ref, fp_how = named, "BOM footprint name"            # not L_1210, R_Array_.. not a 2-pad R_0603
             elif kind == "CP":                     # a tantalum by its case (footprint text, KEMET T491 / AVX TAJ code)
                 from . import stdparts as SP
-                land, why = SP.tantalum_land([ln.get("footprint", ""), item["footprint"].get("kicad") or ""], mpn)
+                land, why = SP.tantalum_land([ln.get("footprint", ""), item["footprint"].get("kicad") or ""], mpn,
+                                              item.get("description") or ln.get("description") or "")
                 if land and lib.footprint(land):
                     fp_ref, fp_how = lib.footprint(land), why
             elif PASSIVE[kind][1] and pkg in IMP2MET:
@@ -981,7 +982,7 @@ class Run:
                     st["found"].setdefault("description", (" ".join(x for x in (
                         "PTC resettable fuse" if key == "Polyfuse" else "Fuse", amps.group(1).replace(" ", ""),
                         package_of(land) or "") if x), "the BOM line's value and land"))
-                if key.startswith("MountingHole") or (key == "TestPoint" and land.startswith("TestPoint_Pad")):
+                if not mpn and (key.startswith("MountingHole") or (key == "TestPoint" and land.startswith("TestPoint_Pad"))):
                     st["no_bom_part"] = f"{SP.SYMBOLS[key][2].lower()} ({land}): copper and holes only, nothing to buy"
             else:
                 res["sym_how"] = res["sym_how"] if res["symbol"] else how

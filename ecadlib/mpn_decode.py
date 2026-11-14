@@ -134,6 +134,13 @@ def value_text(d):
 KIND_PREFIX = {"R": ("R",), "C": ("C",), "CP": ("C",)}    # the designator letters a decoded kind may sit on
 
 
+# a number with a unit in a description: the value it names, read loosely (a hold, never a fill, follows from it)
+NAMES_A_VALUE = {
+    "Resistors": re.compile(r"(?i)(?<![A-Za-z\d.,])\d+(?:[.,]\d+)?\s*(?:[kmg]?\s*(?:Ω|ohms?\b)|[kmgr](?![a-z])|[kmr]\d)"),
+    "Capacitors": re.compile(r"(?i)(?<![A-Za-z\d.,])\d+(?:[.,]\d+)?\s*(?:[pnuµμm]\s*f?|f)(?![a-z])"),
+}
+
+
 def fill_lines(lines):
     """For each BOM line whose part number decode() reads, on a designator of that kind (R1 for a resistor code, C1 for
     a capacitor's): an empty Value is filled with the value the part number states (ln['value_from_mpn'] records the
@@ -162,6 +169,11 @@ def fill_lines(lines):
                 ln["bom_hold"] = f"{ln['bom_hold']}; {hold}" if ln.get("bom_hold") else hold
                 continue
             if said:                              # the description says it: the plan takes it in the BOM's spelling
+                continue
+            if NAMES_A_VALUE[cat].search(str(ln.get("description") or "")):   # 'RES 4.7 kOhm', '4,7 kΩ': a value the
+                hold = (f"the description {str(ln.get('description'))[:60]!r} names a value the tool cannot read "  # reader
+                        f"exactly; the part number {mpn} is {text} by its {d['series']} code: fill the Value")  # misses
+                ln["bom_hold"] = f"{ln['bom_hold']}; {hold}" if ln.get("bom_hold") else hold
                 continue
             ln["value"], ln["value_from_mpn"] = text, f"part number {mpn} ({d['series']} code)"
             filled += 1
