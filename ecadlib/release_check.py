@@ -118,6 +118,25 @@ def value_kind_problem(item, rules=None):
     return None
 
 
+def value_number_problem(item, rules=None):
+    """A generic resistor or capacitor (folder Components/Resistors or /Capacitors) is its value: a Value with no digit
+    in it ('see note', 'Resistor', a KiCad 'R' left as it was) or a spreadsheet formula ('=SUM(A1)') gives a placed
+    part that says nothing about which resistor it is -> a message, or None. A blank Value or a 'TBD' is
+    value_link_empty's. Inductors are left out: a ferrite bead's Value is often its kind ('FerriteBead')."""
+    from . import rules as RU, sheetsafe as SS
+    par = {p.get("name"): p.get("value", "") for p in item.get("parameters") or [] if isinstance(p, dict)}
+    value = str(par.get(RU.canonical_param("Value", rules) if rules else "Value", par.get("Value", "")) or "").strip()
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    word = {"Resistors": "resistance", "Capacitors": "capacitance"}.get(cat)
+    if not value or not word or not _filled(value):
+        return None
+    if SS.cell(value) != value:                       # =SUM(..), +.., @..: what a spreadsheet runs
+        return f"Value {value[:40]!r} starts like a spreadsheet formula, not a {word}: fix the BOM cell"
+    if not re.search(r"\d", value):
+        return f"Value {value[:40]!r} has no number, so it names no {word}: write the value in the BOM"
+    return None
+
+
 def _land_size(name):
     """The imperial chip size a land name gives, or None. KiCad's IMP_METMetric names (C_2220_5650Metric,
     L_1206_3216Metric_Pad1.22x1.90mm_HandSolder) name their imperial size first; KiCad's own metric codes are not
@@ -686,7 +705,7 @@ def check_item(item, base=".", rules=None):
     if link:                                          # Comment '=Value' with no Value: the placed part shows nothing
         add("fields", f"{link} is empty: the part's Comment shows it ('={link}'), so the placed part would show no "
                       f"value; add a {link} column to the BOM or write the value in the description")
-    kind = value_kind_problem(item, rules)
+    kind = value_kind_problem(item, rules) or value_number_problem(item, rules)
     if kind:
         add("fields", kind)
     mpn = str(par.get(RU.canonical_param("Manufacturer Part Number", rules), par.get("Manufacturer Part Number", "")) or "")

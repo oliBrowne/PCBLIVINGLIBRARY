@@ -212,6 +212,10 @@ CODES = {
                                           "Check which package the part comes in, and fix the BOM or pick the right footprint.",
                                           [r"^(?:verify: )?footprint: the BOM names (?P<bom>\S+) but the symbol's Footprint "
                                            r"property is (?P<sym>\S+): check which package"]),
+    "librarian.chip_size_clash": ("The footprint built is a {have} chip, but the BOM's {where} says {said}.",
+                                  "Check which size the part is, then fix the BOM's footprint or its {where}.",
+                                  [r"^(?:verify: )?footprint: the land built is (?P<have>\S+) \(\S+\) but the BOM "
+                                   r"(?P<where>description|value) says (?P<said>\S+) "]),
     "footprint.other": ("The footprint check found a problem: {detail}.",
                         "Compare the footprint with the datasheet, then fix it or release anyway.",
                         [r"^footprint: (?P<detail>.+)"]),

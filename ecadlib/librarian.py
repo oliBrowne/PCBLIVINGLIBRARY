@@ -484,6 +484,27 @@ def _line_for(item, lines, rows):
     return best
 
 
+def chip_size_clash(st, item, ln):
+    """'footprint: ...' when the land built is a chip size and the BOM's description or value cell names another one
+    (footprint C_0402_1005Metric, description 'CAP CER 0.1UF 50V X7R 0603'): a copy-paste slip in one of the two, so
+    a person says which. Every source goes through here (KiCad, EasyEDA, standard). The footprint column itself was
+    already read by the source; a text naming two sizes, a metric code with its marker ('1005', '(1608 Metric)')
+    and a code inside a part number are left to stdparts.chip_size."""
+    from . import stdparts as SP
+    fp = st.get("footprint") or {}
+    built = str(fp.get("source") or "").split(":")[-1]
+    have = SP.chip_size(built, strict=True) if built else None
+    if not have or str(have).startswith("conflict"):
+        return None
+    for label, text in (("description", ln.get("description")), ("description", item.get("description")),
+                        ("value", ln.get("value"))):
+        said = SP.chip_size(str(text or ""))
+        if said and not str(said).startswith("conflict") and said != have:
+            return (f"footprint: the land built is {have} ({built}) but the BOM {label} says {said} "
+                    f"({str(text).strip()!r}): check which size the part is")
+    return None
+
+
 def _own_land(names, plain):
     """The first footprint field that names a land of its own rather than the chip size `plain` (R_0603_1608Metric):
     a KiCad footprint name (R_Array_Convex_4x0603, L_Bourns_SRR1210A, a hand-solder variant), an array / shunt / RGB
@@ -684,6 +705,9 @@ class Run:
         if st.get("hint_fp") and bom_fp and AX.lands_differ(st["hint_fp"], bom_fp):    # R-BF-5: the BOM's land is
             st["verify"].append(f"footprint: the BOM names {bom_fp} but the symbol's Footprint property is "   # built;
                                 f"{st['hint_fp']}: check which package the part has")    # the symbol says another
+        clash = chip_size_clash(st, item, ln)
+        if clash:
+            st["verify"].append(clash)
         lc = (row.get("lcsc") or "").split(" ")[0]
         if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
             st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))

@@ -133,7 +133,7 @@ def test_rules_bom_columns_reach_upkeep_and_lifecycle():
 
 def test_unreadable_bom_is_a_message_not_a_traceback():
     with tempfile.TemporaryDirectory() as d:
-        bad = _write("bom.csv", "Pos;Bezeichner;Wert\n1;R1;10k\n", d)
+        bad = _write("bom.csv", "Pos;Kennung;Farbe\n1;R1;rot\n", d)      # (German Bezeichner / Wert are read now)
         header_only = _write("empty.csv", "Designator,Value,MPN\n", d)
         for argv in (["triage", str(bad), "-o", f"{d}/t", "--offline", "--cache", f"{d}/c"],
                      ["dblib", str(bad), "-o", f"{d}/x", "--draft"], ["dblib", str(header_only), "-o", f"{d}/y", "--draft"],
