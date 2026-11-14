@@ -140,6 +140,24 @@ def test_nexar_check_explains_a_missing_supply_scope_or_plan():
         assert "scope=supply.domain" in next(b for _, u, b, _ in http.seen if "connect/token" in u)
 
 
+def test_an_outage_is_not_called_a_wrong_key():
+    with _home():
+        UC.set_key("DIGIKEY_CLIENT_ID", "id")
+        UC.set_key("DIGIKEY_CLIENT_SECRET", "sec")
+        r = LK.check("digikey", http=FakeHTTP({"oauth2/token": (503, {})}))
+        assert not r["ok"] and "refused" not in r["message"] and "503" in r["message"]
+
+
+def test_nexar_supply_token_alone_counts_as_set_up():
+    with _home() as d:
+        UC.set_key("NEXAR_SUPPLY_TOKEN", "tok")
+        nx = {g["id"]: g for g in ES.state(d)["lookups"]}["nexar"]
+        assert nx["ready"] and nx["supply_token"]
+        quota = {"errors": [{"message": "Part limit exceeded"}]}
+        r = LK.check("nexar", http=FakeHTTP({"graphql": (200, quota)}))
+        assert not r["ok"] and "NEXAR_SUPPLY_TOKEN" in r["message"]          # says which credential was tested
+
+
 def test_keys_check_command():
     with _home():
         UC.set_key("MOUSER_API_KEY", "m-key")

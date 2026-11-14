@@ -327,7 +327,7 @@ def main(argv=None, inp=None, out=print, http=None):
     s.add_argument("--stdin", action="store_true", help="read the value from standard input (scripts)")
     r = sub.add_parser("remove", help="forget a stored key")
     r.add_argument("name")
-    c = sub.add_parser("check", help="one free test search with the saved DigiKey / Mouser / Nexar keys")
+    c = sub.add_parser("check", help="one test search with the saved DigiKey / Mouser / Nexar keys (free; Nexar counts one part)")
     c.add_argument("lookup", nargs="*", help="digikey, mouser or nexar (default: every one whose keys are saved)")
     a = ap.parse_args(argv)
     try:

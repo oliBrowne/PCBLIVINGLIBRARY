@@ -290,7 +290,7 @@ function renderLookups() {
       <div class="row"><input type="password" id="lk-${f.name}" autocomplete="off" spellcheck="false" placeholder="${f.stored ? "saved: paste again to replace" : esc(f.name)}"></div>`).join("")}
       <div class="row" style="margin-top:8px">
         <button class="lk-save" data-id="${esc(g.id)}">Save</button>
-        <button class="lk-check" data-id="${esc(g.id)}" ${g.ready ? "" : "disabled"} title="one free test search for a common part (NE555DR)">Check it works</button>
+        <button class="lk-check" data-id="${esc(g.id)}" ${g.ready ? "" : "disabled"} title="one test search for a common part (NE555DR): free for DigiKey and Mouser; Nexar counts one part">Check it works</button>
         ${g.fields.some((f) => f.stored) && !(g.id === "nexar" && S.altium365.signed_in) ? `<button class="lk-forget" data-id="${esc(g.id)}">Remove</button>` : ""}
       </div>
       <div id="lkmsg-${esc(g.id)}"></div>
@@ -301,7 +301,7 @@ function renderLookups() {
     if (!typed.length) return msg("lkmsg-" + g.id, "Paste the key first.", "warn");
     try {
       for (const f of typed) await api("/api/setup/key", {name: f.name, value: $("lk-" + f.name).value});
-      S.lookups = (await api("/api/setup")).lookups; renderLookups();
+      S = await api("/api/setup"); renderLookups(); renderA365();   // the Nexar boxes are the Altium 365 app too
       const n = guide(g.id);
       msg("lkmsg-" + g.id, n.ready ? "Saved. Press Check it works to test it." : "Saved. Paste the other box too.", n.ready ? "ok" : "warn");
     } catch (e) { msg("lkmsg-" + g.id, esc(e.message), "bad"); }
@@ -315,8 +315,10 @@ function renderLookups() {
   });
   document.querySelectorAll(".lk-forget").forEach((b) => b.onclick = async () => {
     const g = guide(b.dataset.id);
-    for (const f of g.fields) if (f.stored) await api("/api/setup/key/forget", {name: f.name});
-    S.lookups = (await api("/api/setup")).lookups; renderLookups();
+    try {
+      for (const f of g.fields) if (f.stored) await api("/api/setup/key/forget", {name: f.name});
+      S = await api("/api/setup"); renderLookups(); renderA365();
+    } catch (e) { msg("lkmsg-" + g.id, esc(e.message), "bad"); }
   });
 }
 

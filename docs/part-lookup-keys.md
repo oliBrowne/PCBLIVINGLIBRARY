@@ -32,8 +32,8 @@ ecadlib keys check digikey    # or just one: digikey, mouser or nexar
 ```
 
 The check does one real search for a common part (NE555DR) with your saved key and tells you in plain words whether
-it worked, and if not, what to fix. It is free. Nexar counts every part it returns against your allowance, so its check
-asks for a single result.
+it worked, and if not, what to fix. It is free for DigiKey and Mouser. Nexar counts every part it returns against your
+allowance, so its check asks for a single result and uses one part.
 
 ## DigiKey
 

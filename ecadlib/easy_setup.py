@@ -14,7 +14,7 @@ What the page does (each step also works on its own, later):
      "ecadlib: add part" PCB editor plugin into KiCad's plugin folder for each KiCad found, with this ecadlib's command
      next to it, so it works without PATH changes.
   +. Part lookups (optional): DigiKey, Mouser and Nexar keys, each with its sign-up steps and a Check button that runs
-     one free test search (ecadlib.lookup_keys).
+     one test search (ecadlib.lookup_keys).
   5. Altium 365 (optional): the workspace address (saved as [altium365] workspace) and "Sign in to Altium 365", the
      same browser sign-in with your own Nexar app as `ecadlib nexar signin` (ecadlib.nexar_signin), run in the
      background so the page can show when it is done.
@@ -291,7 +291,7 @@ def check_key(b, get=None):
 
 
 def lookup_check(b):
-    """The Part lookups card's Check: one free test search with the saved DigiKey / Mouser / Nexar keys."""
+    """The Part lookups card's Check: one test search with the saved DigiKey / Mouser / Nexar keys."""
     from . import lookup_keys as LK
     pid = b.get("id")
     return LK.check(pid if isinstance(pid, str) else "")

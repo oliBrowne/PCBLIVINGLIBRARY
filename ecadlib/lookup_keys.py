@@ -1,6 +1,6 @@
 """DigiKey, Mouser and Nexar part lookups: the keys they need, how to get them, and a test search that proves they work.
 
-    ecadlib keys check digikey|mouser|nexar      one free test search with the saved keys (also the setup page's Check)
+    ecadlib keys check digikey|mouser|nexar      one test search with the saved keys (also the setup page's Check)
 
 Each lookup is optional: KiCad's libraries, EasyEDA/LCSC and the standard packages need no key. The keys are stored like
 every other key (ecadlib.userconfig: encrypted for the Windows account on Windows) and never put into the environment.
@@ -17,7 +17,7 @@ also walked through live that day, screen by screen (Nexar's were not):
   Nexar    support.nexar.com "Creating an application" (Apps > Create App, scope Supply and/or Design, which cannot be
            changed later; a new app's part limit is 0 until a plan is chosen under "Manage supply plan") and
            "Getting free parts in the API" (free parts sit on the Evaluation app)."""
-import tempfile
+import re, tempfile
 
 from . import userconfig as UC
 
@@ -85,8 +85,9 @@ def state(environ=None):
             src = UC.key_source(name, environ)
             fields.append({"name": name, "label": label, "stored": src == "stored", "set": bool(src),
                            "from_env": src == "environment"})
+        token = g["id"] == "nexar" and bool(UC.key_source("NEXAR_SUPPLY_TOKEN", environ))   # Nexar's other way in
         out.append({"id": g["id"], "label": g["label"], "url": g["url"], "cost": g["cost"], "steps": list(g["steps"]),
-                    "fields": fields, "ready": all(f["set"] for f in fields)})
+                    "fields": fields, "ready": all(f["set"] for f in fields) or token, "supply_token": token})
     return out
 
 
@@ -115,12 +116,13 @@ def _why(pid, err):
     low = e.lower()
     if any(w in low for w in ("proxy", "connection", "timeout", "timed out", "offline")):   # first: a network error's
         return f"could not reach {g['label']} ({e}): check the internet connection or proxy, then try again"  # URL may say apiKey
-    if pid == "digikey" and "token" in low:
+    refused = "token" in low and re.search(r"HTTP 40[013]\b", e)        # an outage (5xx, 429) is not a wrong key
+    if pid == "digikey" and refused:
         return f"DigiKey refused the Client ID / Client Secret ({e}): copy both again from your app's page on {g['url']}"
     if pid == "digikey" and ("403" in e or "401" in e):
         return (f"DigiKey knows the app but answered {e}: open the app on {g['url']} and check that Products has "
                 "Product Information V4 set to ProductInformation V4 (and that it is a production app, not a sandbox one)")
-    if pid == "nexar" and "token" in low:
+    if pid == "nexar" and refused:
         return (f"Nexar refused the app ({e}): copy the Client ID and Client Secret again, and check the app has the "
                 "Supply scope (a Design-only app cannot look up parts; make a new app with Supply ticked)")
     if pid == "nexar" and any(w in low for w in ("limit", "quota", "plan", "exceed")):
@@ -149,12 +151,14 @@ def check(pid, http=None):
     finally:
         if tmp is not None:
             tmp.cleanup()
+    via = " (tested with NEXAR_SUPPLY_TOKEN, which comes before the Client ID and Secret)" \
+        if pid == "nexar" and UC.secret("NEXAR_SUPPLY_TOKEN") else ""
     if getattr(info, "error", ""):
-        return {"ok": False, "message": _why(pid, info.error)}
+        return {"ok": False, "message": _why(pid, info.error) + via}
     if info.found:
         maker = f" ({info.manufacturer})" if info.manufacturer else ""
-        return {"ok": True, "message": f"{g['label']} works: it found {info.mpn or TEST_MPN}{maker}"}
-    return {"ok": True, "message": f"{g['label']} accepted the keys (the test part {TEST_MPN} was not found, which is fine)"}
+        return {"ok": True, "message": f"{g['label']} works: it found {info.mpn or TEST_MPN}{maker}{via}"}
+    return {"ok": True, "message": f"{g['label']} accepted the keys (the test part {TEST_MPN} was not found, which is fine){via}"}
 
 
 def main(names, out=print, http=None):

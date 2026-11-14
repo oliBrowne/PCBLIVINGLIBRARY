@@ -109,7 +109,7 @@ KiCad, and add ecadlib to them. Every key stays on your computer and goes only t
 With these, ecadlib asks the distributors who makes each part, what it is and where its datasheet is. **They are
 optional:** without them, parts still come from KiCad's libraries, EasyEDA/LCSC and the standard packages, and a KiCad
 library needs no key at all. Paste each key on the setup page's **Part lookups** card (or `ecadlib keys set NAME`),
-then press **Check it works** (or run `ecadlib keys check`), which does one free test search.
+then press **Check it works** (or run `ecadlib keys check`), which does one test search (free for DigiKey and Mouser; Nexar counts one part).
 
 <details>
 <summary><b>DigiKey</b>: Client ID and Client Secret (about 5 minutes)</summary>
