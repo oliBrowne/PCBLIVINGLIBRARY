@@ -265,6 +265,9 @@ def next_turn(model, turns, max_uses=MAX_USES, fallback=False):
     return ((sent + more) * p[0] + EST_TOKENS[1] * p[1]) / 1e6 + SEARCH_USD * max_uses
 
 
+NO_DATASHEET = "no datasheet"                           # Found.none's key for a datasheet search that found nothing
+
+
 class Found:
     """<out>/datasheet/web_search.json: part -> the link a search found that gave its PDF."""
 
@@ -294,6 +297,13 @@ class Found:
 
     def drop(self, part):
         self.put(part, None)
+
+    @staticmethod
+    def nothing(part, at):
+        """What a part's attempts say of a datasheet search that gave no PDF of it, on the run that searched and on
+        every run that does not search again."""
+        return (f"a web search on {at} found no PDF of it (not searched again for {NONE_DAYS} days; delete "
+                f"\"{part}\" from web_search.json to search sooner)")
 
     @staticmethod
     def none(digest, today=None):

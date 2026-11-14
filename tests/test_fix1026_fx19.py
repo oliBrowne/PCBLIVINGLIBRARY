@@ -70,7 +70,7 @@ def _e2e(tmp_path, doc, g, own_line=OWN_LINE, cross_check=None):
            f"U1,1,{MPN},,NXP,{MPN},,MCU,{DS}\n")
     d = str(tmp_path)
     http = TB.PdfHTTP({DS: pdf_lines(datasheet), DWG: pdf_lines([doc])})
-    ds_cfg = {"web_search": True, "web_search_model": HAIKU, **({"cross_check": cross_check} if cross_check else {})}
+    ds_cfg = {"web_search": True, "web_search_package": True, "web_search_model": HAIKU, **({"cross_check": cross_check} if cross_check else {})}
     rd = D.Reader(Path(d) / "out", Path(d) / "cache", key=TB.KEY, http=http, log=None, client=cl, sleep=lambda s: None,
                   poll=0, rules={"datasheet": ds_cfg})
     with TB.patched(api):

@@ -32,7 +32,7 @@ def test_a_notice_found_for_the_drawing_is_skipped_for_the_next_link():
     cl, api = Client(_answer([PCN, P.DWG])), P._reads()
     files = {P.DS: pdf_lines(P.product_sheet()), PCN: pdf_lines(pcn_sheet()), P.DWG: pdf_lines(P.drawing_sheet())}
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
-        res = P._read(P._reader(d, cl, files, web_search=True))
+        res = P._read(P._reader(d, cl, files, web_search=True, web_search_package=True))
         assert res["sidecar"]["route"]["package_doc"] == P.DWG
         miss = [a for a in res["sidecar"]["pdf"]["attempts"] if a["url"] == PCN]
         assert miss and "a notice, not a package drawing" in miss[0]["error"], miss
@@ -43,7 +43,7 @@ def test_only_notices_found_leaves_the_part_without_a_drawing():
     cl, api = Client(_answer([PCN])), P._reads()
     files = {P.DS: pdf_lines(P.product_sheet()), PCN: pdf_lines(pcn_sheet())}
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
-        res = P._read(P._reader(d, cl, files, web_search=True))
+        res = P._read(P._reader(d, cl, files, web_search=True, web_search_package=True))
         assert [n for _, n in api.sent] == [2]                        # the notice was never appended to the read
         assert any(r.startswith("no package drawing: ") for r in res["needs_review"]), res["needs_review"]
 
@@ -91,7 +91,7 @@ def test_a_long_document_with_no_drawing_of_the_package_is_skipped():
     cl, api = Client(_answer([LONG, P.DWG])), P._reads()
     files = {P.DS: pdf_lines(P.product_sheet()), LONG: pdf_lines(pins), P.DWG: pdf_lines(P.drawing_sheet())}
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
-        res = P._read(P._reader(d, cl, files, web_search=True))
+        res = P._read(P._reader(d, cl, files, web_search=True, web_search_package=True))
         assert res["sidecar"]["route"]["package_doc"] == P.DWG
         miss = [a for a in res["sidecar"]["pdf"]["attempts"] if a["url"] == LONG]
         assert miss and "no drawing of the package" in miss[0]["error"], miss
@@ -108,7 +108,7 @@ def test_a_long_application_note_with_the_land_pattern_is_kept():
     cl, api = Client(_answer([AN])), P._reads(blank_on=2)
     files = {P.DS: pdf_lines(P.product_sheet()), AN: pdf_lines(note)}
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
-        res = P._read(P._reader(d, cl, files, web_search=True))
+        res = P._read(P._reader(d, cl, files, web_search=True, web_search_package=True))
         assert res["sidecar"]["route"].get("package_doc") == AN, res["sidecar"]["pdf"]["attempts"]
 
 
@@ -145,7 +145,7 @@ def test_a_long_package_information_document_of_this_package_is_kept():
     cl, api = Client(_answer([INFO])), P._reads()
     files = {P.DS: pdf_lines(P.product_sheet()), INFO: pdf_lines(info)}
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
-        rd = P._reader(d, cl, files, web_search=True)
+        rd = P._reader(d, cl, files, web_search=True, web_search_package=True)
         res = rd.read_now(rd.job("NC3XYZ-1", [(P.DS, "BOM")], "DO-34", maker="Neutrik"))
         assert res["sidecar"]["route"].get("package_doc") == INFO, res["sidecar"]["pdf"]["attempts"]
     # the same pages with the outline of ANOTHER package only are still no drawing of this one
@@ -153,6 +153,6 @@ def test_a_long_package_information_document_of_this_package_is_kept():
     cl, api = Client(_answer([INFO])), P._reads()
     files = {P.DS: pdf_lines(P.product_sheet()), INFO: pdf_lines(other)}
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
-        rd = P._reader(d, cl, files, web_search=True)
+        rd = P._reader(d, cl, files, web_search=True, web_search_package=True)
         res = rd.read_now(rd.job("NC3XYZ-1", [(P.DS, "BOM")], "DO-34", maker="Neutrik"))
         assert res["sidecar"]["route"].get("package_doc") is None

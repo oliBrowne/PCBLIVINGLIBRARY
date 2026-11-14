@@ -46,4 +46,10 @@ _RU.DEFAULTS["providers"]["unofficial"] = True
 # ([datasheet] download, ecadlib.pdf_fetch) or opens a browser. tests/test_pdf_fetch.py turns them on where it tests them.
 os.environ["ECADLIB_DOWNLOAD"] = "plain"
 os.environ["ECADLIB_NO_HANDOFF"] = "1"
+# [datasheet] web_search ships on (2026-11-14): a part whose links all fail is searched for, billed to the person's key.
+# Most tests count the requests a failed link makes, so they run with it off; tests that test the search turn it on,
+# and tests/test_web_search_default_1114.py checks what ships.
+from ecadlib import datasheet as _DS                   # noqa: E402
+SHIPPED_WEB_SEARCH = (_RU.DEFAULTS["datasheet"]["web_search"], _DS.SETTINGS["web_search"])
+_RU.DEFAULTS["datasheet"]["web_search"] = _DS.SETTINGS["web_search"] = False
 os.environ["ECADLIB_NO_ARCHIVE"] = "1"                # no test asks the Internet Archive (tests/test_ds_archive_1113.py fakes it)

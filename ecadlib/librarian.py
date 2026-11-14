@@ -933,7 +933,8 @@ class Run:
         urls = D.datasheet_urls(item, ln, row, st["found"])
         cfg = getattr(self.reader, "cfg", None) or D.settings(self.rules)   # the reader's [datasheet] settings
         local = None if urls else D.local_datasheet(cfg.get("folder"), mpn or item["name"])[0]   # [datasheet] folder
-        if not urls and local is None and not cfg.get("web_search"):   # (no link: [datasheet] web_search may find one)
+        # (no link: [datasheet] web_search may find one, with a key to bill the search to)
+        if not urls and local is None and not (cfg.get("web_search") and (self.api_key or getattr(self.reader, "key", None))):
             note = D.folder_problem(cfg.get("folder"))
             st["tried"].append("datasheet: no datasheet URL known" + (f"; {note}" if note else ""))
             self.reading(st)                          # (no link: none refused)

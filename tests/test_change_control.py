@@ -377,7 +377,8 @@ def test_rebuild_check_ignores_the_ledger():
     import tests
     from ecadlib import rebuild as RB, rules as RU
     plan, lib = demo()
-    with mock.patch.dict(RU.DEFAULTS["providers"], unofficial=tests.SHIPPED_UNOFFICIAL):   # as the demo subprocess ran
+    with mock.patch.dict(RU.DEFAULTS["providers"], unofficial=tests.SHIPPED_UNOFFICIAL), \
+            mock.patch.dict(RU.DEFAULTS["datasheet"], web_search=tests.SHIPPED_WEB_SEARCH[0]):   # as the demo subprocess ran
         rep = RB.check(lib, log=lambda *a: None)
     assert rep["ok"], [r for r in rep["rows"] if r["result"] == "DRIFT"]
 

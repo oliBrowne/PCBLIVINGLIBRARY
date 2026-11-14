@@ -131,6 +131,7 @@ def test_a_continuation_that_could_pass_the_cap_is_not_sent():
     with tempfile.TemporaryDirectory() as d:
         rd = _reader(d, cl, web_search=True, max_cost_usd=est + 0.01)   # room for one turn's worst case, not two
         assert "the search found no PDF link" in _fails(rd)
+        assert not (Path(d) / "out" / "datasheet" / "web_search.json").exists()   # cut short: not kept as "nothing found"
         assert len(cl.sent) == 1 and rd.committed_usd <= est + 0.01
 
 

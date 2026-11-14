@@ -76,7 +76,8 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "archive": True,                                # no link gave a PDF: the Internet Archive's copy (ecadlib.ds_archive)
             "standard_land": "auto",                        # a read that identifies a standard package: off | auto | always
             "download": "auto",                             # a refused PDF link: other ways to download it (ecadlib.pdf_fetch)
-            "web_search": False, "web_search_model": "", "web_search_max_uses": 3,   # no link worked: ecadlib.ds_search
+            "web_search": True, "web_search_model": "", "web_search_max_uses": 3,   # no link worked: ecadlib.ds_search
+            "web_search_package": False,                    # ... and for a package drawing the datasheet lacks
             "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""}   # ... last, your own browser
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
@@ -179,10 +180,21 @@ def check_shape(v, s, path="$"):
     return None
 
 
+# the review line of a part whose datasheet a billed web search found (messages.py: datasheet.searched)
+SEARCHED = ("datasheet found by a web search, billed to your API key (cost.jsonl: web search), because no link gave a "
+            "PDF: check it is this part's current datasheet; [datasheet] web_search = false turns the search off")
+
+
+NO_LINK = "the search found no PDF link"
+
+
 def settings(rules=None):
     """[datasheet] settings from the library rules (rules.py DEFAULTS has the same keys), over SETTINGS."""
     got = (rules or {}).get("datasheet") if isinstance(rules, dict) else None
-    return {**SETTINGS, **{k: v for k, v in (got or {}).items() if k in SETTINGS and v not in (None, "")}}
+    cfg = {**SETTINGS, **{k: v for k, v in (got or {}).items() if k in SETTINGS and v not in (None, "")}}
+    if os.environ.get("ECADLIB_NO_WEB_SEARCH"):       # one run with no billed search, whatever the rules say
+        cfg["web_search"] = cfg["web_search_package"] = False
+    return cfg
 
 
 def _usd_arg(s):
@@ -4810,22 +4822,37 @@ class Reader:
         """[datasheet] web_search: once no link, part source or folder file gave a PDF (or the part had no link at
         all), one search for the maker's PDF (ecadlib.ds_search), held under [datasheet] max_cost_usd and written to
         cost.jsonl. A link found before for the part is downloaded again without a search (one that fails now is
-        dropped, and searched for again). maker: the BOM's or a part source's manufacturer, named in the search.
+        dropped, and searched for again); a search that found no PDF of the part is not repeated for 30 days. maker: the BOM's or a part source's manufacturer, named in the search.
         Search links must be public addresses (unsafe_download public=True). -> (data, prov) or (None, None), the
         misses in attempts."""
         from . import ds_search as WS
         found = WS.Found(self.dir)
         saved = found.get(part)
-        if saved:
+        if WS.Found.none_for(saved, WS.NO_DATASHEET):  # searched before, no link gave its PDF: not paid for again
+            attempts.append({"url": "", "where": "web search", "error": WS.Found.nothing(part, saved["at"])})
+            return None, None
+        if isinstance(saved, str) and saved:
             got = self._fetch_found(saved, part, attempts)
             if got:
                 return got
             found.drop(part)                          # it gave its PDF once and no longer does: search again
-        for url in self._search_links(part, package, attempts, maker) or ():
+        urls = self._search_links(part, package, attempts, maker)
+        if urls is None:                              # no search was made, or it failed: nothing is remembered
+            return None, None
+        for url in urls:
             got = self._fetch_found(url, part, attempts)
             if got:
                 found.put(part, url)
                 return got
+        if getattr(self, "_search_cut", False):       # stopped by the cost cap or an error: a later run may find it
+            return None, None
+        # a search that ran and gave no PDF of the part is kept NONE_DAYS: the search is on by default, and a part with
+        # no datasheet anywhere would be paid for again on every run
+        entry = WS.Found.none(WS.NO_DATASHEET)
+        found.put(part, entry)                        # ... said now as a later run says it (a re-run changes no plan)
+        if attempts and attempts[-1].get("error") == NO_LINK:
+            attempts.pop()
+        attempts.append({"url": "", "where": "web search", "error": WS.Found.nothing(part, entry["at"])})
         return None, None
 
     def _search_links(self, part, package, attempts, maker=None, kind="datasheet", refs=()):
@@ -4865,6 +4892,9 @@ class Reader:
         urls, usage, turns, err = WS.search(client, part, model, maker=maker, package=package, max_uses=uses,
                                             headers=headers, extra=extra, may_continue=may_continue, kind=kind,
                                             refs=refs)
+        # a search stopped half way (the cost cap allowed no further turn, an error after some links) did not finish: _web_search does not
+        # remember it as one that found nothing
+        self._search_cut = bool(err) or bool(turns) and turns[-1].get("stop_reason") == "pause_turn"
         how = "usage" if WS.usd(model, turns) is not None and not err else "estimate"
         usd = WS.usd(model, turns, unknown=est or 0.0)   # each turn with no usage (or no price) holds its worst case
         # the failed request may still have been billed (a timeout, a body cut off): hold its worst case. An HTTP error
@@ -4883,7 +4913,7 @@ class Reader:
             attempts.append({"url": "", "where": where, "error": f"search failed: {err}"})
             return None
         if not urls:
-            attempts.append({"url": "", "where": where, "error": "the search found no PDF link"})
+            attempts.append({"url": "", "where": where, "error": NO_LINK})
         return WS.rank(urls, maker)
 
     def _package_search(self, data, texts, part, package, prov, attempts, maker=None, codes=()):
@@ -5069,6 +5099,10 @@ class Reader:
             data, prov, _ = self._folder_pdf(part, urls, ("family",), attempts)
         if data is None and self.cfg.get("archive") and not self.offline and not os.environ.get("ECADLIB_NO_ARCHIVE"):
             data, prov = self._archived(part, linked, attempts, mpn)   # before a person is asked for it
+        # the billed search, before a person is asked for anything: nothing a person must do by hand comes before a way
+        # that runs by itself (2026-11-14; it ran after the hand-off while it was off by default)
+        if data is None and self.cfg.get("web_search") and not self.estimate_only:
+            data, prov = self._web_search(mpn or part, package, attempts, maker)
         if data is None and self.store.handoff is not None:   # no link worked by itself: ask the person, link by link
             for url, where, page in dict.fromkeys(self.store.refusals[n0:]):
                 try:
@@ -5079,8 +5113,6 @@ class Reader:
                     attempts.append({"url": url, "where": where, "error": str(e)})
         if data is None:
             data, prov, _ = self._folder_pdf(part, urls, ("other",), attempts)
-        if data is None and self.cfg.get("web_search") and not self.estimate_only:
-            data, prov = self._web_search(mpn or part, package, attempts, maker)
         unnamed = next((a for a in linked if re.match(r"the PDF at .* doesn't mention ", a["error"])), None)
         # the only PDF there is, once nothing else (folder, hand-off, search) gave one: read it, flagged (a connector
         # catalog or a family sheet can name the part only in a table the check misses)
@@ -5353,13 +5385,13 @@ class Reader:
     def _package_retry(self, job, res, done):
         """The route ended on an answer that leaves a dimension the footprint needs blank (build_blockers, or a
         connector / pad table with no body: body_unread), and the datasheet's text shows no drawing of the part's
-        package (outline_docs.drawing_missing): with [datasheet] web_search, the package drawing is searched for
+        package (outline_docs.drawing_missing): with [datasheet] web_search_package, the package drawing is searched for
         (_package_search) and the route goes on, at the same model, with the drawing's pages appended -> that step,
         or None. Only after such a read, so a part read right from its datasheet never pays for a search (benchmark
         2026-10-23: ten parts read right had vector drawings the text check alone took for no drawing). Once per part;
         nothing found is said in the review."""
         if job.get("package_doc") is not None or job.get("data") is None or job.get("pages") or \
-                not self.cfg.get("web_search") or self.estimate_only:
+                not self.cfg.get("web_search_package") or self.estimate_only:
             return None
         spec = (res or {}).get("spec") or {}
         try:
@@ -5424,6 +5456,8 @@ class Reader:
         archived = AR.review_line(job["prov"])
         if archived:
             res["needs_review"].append(archived)
+        if job["prov"].get("found_by") == "web search":
+            res["needs_review"].append(SEARCHED)
         if job["prov"].get("unnamed"):
             res["needs_review"].append(f"{job['prov']['unnamed']} (no other link gave a PDF): check it is this part's datasheet")
         if job["prov"].get("local") and re.search(r"\((?:a family datasheet|named for another part number)", str(job["prov"].get("where"))):
