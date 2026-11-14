@@ -471,7 +471,10 @@ def _free_attrs(text):
     t = str(text or "")
     dk = re.match(r"\s*(\d{1,3})-(" + "|".join(sorted(FAMILIES, key=len, reverse=True)) + r")\b(.*)$", t, re.I)
     if dk:                                            # a distributor's '8-SOIC (0.154", 3.90mm Width)': pins first,
-        t = f"{dk.group(2)}-{dk.group(1)}{dk.group(3)}"    # the body width in words
+        leads = re.search(r"(?i)\b(\d{1,3})\s*Leads?\b", dk.group(3))     # the body width in words; '..., 7 Leads':
+        if leads and int(leads.group(1)) != int(dk.group(1)):            # a pin removed, not the full land
+            return None
+        t = f"{dk.group(2)}-{dk.group(1)}{dk.group(3)}"
     m = FREE_RE.search(t)
     if not m:
         return None
@@ -499,7 +502,7 @@ def _free_attrs(text):
         a["body_w"] = MIL_BODY[mil.group(1)]
     wide = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*mm\s*Width\b", t, re.I)
     if wide and not a["body"] and "body_w" not in a:
-        a["body_w"] = float(wide.group(1))
+        a["body_w"] = a["body_w_words"] = float(wide.group(1))   # the body's width: the first size in KiCad's name too
     return a
 
 
@@ -534,6 +537,9 @@ def _candidates(a):
             continue
         if a.get("body_w") and not _close(g["body"][0], a["body_w"]):
             continue
+        named = re.search(r"_(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)mm", n)       # '(3.00mm Width)' is the width, not the
+        if a.get("body_w_words") and not (named and _close(float(named.group(1)), a["body_w_words"])):   # shorter
+            continue                                                         # side: SSOP-8_5.3x3mm is 5.3 mm wide
         if a["pitch"] is not None and not _close(g["pitch"], a["pitch"], 0.011):
             continue
         if a["ep"] is not None and g["ep"] != a["ep"]:
@@ -1128,7 +1134,7 @@ FERRITE_MPN = re.compile(r"^(BLM\d|BLE\d|BLA\d|MPZ\d|MMZ\d|MAF\d|BK[PM]?\d{4}|FB
 def is_ferrite(designator="", description="", mpn=""):
     """A ferrite bead (not an inductor): every designator FB, or its description or part number says so."""
     refs = {r.upper() for r in re.findall(r"[A-Za-z]+(?=\d)", str(designator or ""))}
-    return bool((refs and refs <= {"FB"}) or re.search(r"(?i)ferrite|\bbeads?\b", str(description or ""))
+    return bool((refs and refs <= {"FB"}) or re.search(r"(?i)\bbeads?\b|ferrite[- ]chip|chip[- ]ferrite", str(description or ""))
                 or FERRITE_MPN.match(_norm(mpn)))
 
 
@@ -1275,6 +1281,25 @@ def spec_pins(name):
         return spec(name).get("pin_count")
     except KeyError:
         return None
+
+
+CASE_EXTRA = re.compile(r"(?i)\bPC\s*Pads?\b|\bconvex\b|\bconcave\b|long\s+side|\barray\b|\bnetwork\b|"
+                        r"\bterminals?\b|\bmodule\b|\bstack(?:ed)?\b|\bradial\b|\baxial\b")
+
+
+def case_text(text):
+    """A part search's case text ('8-SOIC (0.154\", 3.90mm Width)', '1812 (4532 Metric)') when it names only the case:
+    one that adds pads or leads ('0603, 3 PC Pad', '1206, 4 Leads', 'Convex') or a lead count other than its own pin
+    count is not the plain land of that name -> '' (not used)."""
+    t = str(text or "").strip()
+    if not t or CASE_EXTRA.search(t):
+        return ""
+    leads = re.search(r"(?i)\b(\d{1,3})\s*Leads?\b", t)
+    if leads:
+        first = re.match(r"\s*(\d{1,3})-", t)
+        if not first or first.group(1) != leads.group(1):
+            return ""
+    return t
 
 
 CONN_KEY = re.compile(r"^Conn_01x(\d\d)$")

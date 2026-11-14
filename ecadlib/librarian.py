@@ -742,9 +742,10 @@ class Run:
         if "easyeda_description" in st["found"]:                  # then the text on EasyEDA's component
             st["found"].setdefault("description", st["found"].pop("easyeda_description"))
         url = str(row.get("src_datasheet") or "").strip()
-        if url.startswith(("http://", "https://")):    # the part search's datasheet link, after a KiCad symbol's own one:
-            src = _desc_label({"src": row.get("src_datasheet_from", "")})     # held parts carry it too, for the reader
-            st["found"].setdefault("datasheet", (url, f"{src} part data {lc if src == 'LCSC/JLCPCB' else ''}".strip()))
+        if url.startswith(("http://", "https://")) and not row.get("src_several"):   # the part search's link (not a
+            src = _desc_label({"src": row["src_datasheet_from"]}) if row.get("src_datasheet_from") else "part search"   # clone's)
+            st["found"].setdefault("datasheet", (url, "the part search" if src == "part search" else
+                                                  f"{src} part data {lc if src == 'LCSC/JLCPCB' else ''}".strip()))
         if row.get("src_manufacturer"):        # the maker a part search lists for this exact MPN (one maker only: an MPN
             src = _desc_label({"src": row.get("src_manufacturer_from", "")})       # sold by clones too fills nothing)
             st["found"].setdefault("manufacturer", (row["src_manufacturer"],
@@ -976,13 +977,13 @@ class Run:
     def src_standard(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         """Standard packages and pinouts, built offline (ecadlib.stdparts); fills only what is still missing."""
         from . import stdparts as SP
-        desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), ln.get("description"),
-                                                        row.get("src_description") if row.get("src_package") and   # the source that gave
-                                                        row.get("src_package_from") == row.get("src_description_from") else None)   # this
-                                         if x))                                                        # exact MPN's case
+        bom_desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), ln.get("description")) if x))
+        case = self.case_from_search(st, item, ln, row)
+        desc = " ".join(x for x in (bom_desc, row.get("src_description") if case and   # the source that gave this
+                                    row.get("src_package_from") == row.get("src_description_from") else "") if x)   # case
         k = kind or SP.part_kind(item["folder"], item["footprint"].get("kicad") or fp_name, desc, ln.get("designator"))
         res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"),
-                          row.get("src_package")], k, mpn, desc)    # last: a part search's case text for this exact MPN
+                          self.case_from_search(st, item, ln, row)], k, mpn, desc)
         got = []
         if not st["footprint"] and res["footprint"]:
             sp = SP.spec(res["footprint"])
@@ -1028,6 +1029,24 @@ class Run:
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
         why += [] if st["symbol"] else [f"symbol: {res['sym_how']}"]
         st["tried"].append("standard: " + "; ".join(got + why))
+
+    @staticmethod
+    def case_from_search(st, item, ln, row):
+        """The part search's case text for this exact MPN, when the BOM says nothing of the package itself (no footprint,
+        no package or chip size in the description: then the two could disagree) and the MPN is not sold by several
+        makers the BOM does not pick between (a clone's case is not this part's) -> text or ''."""
+        from . import stdparts as SP
+        from .kicad_index import PKG_RE
+        case = SP.case_text(row.get("src_package"))
+        if not case or row.get("src_several"):
+            return ""
+        if any(str(x or "").strip() for x in (ln.get("footprint"), item["footprint"].get("kicad"), st.get("hint_fp"))):
+            return ""
+        said = " ".join(str(x or "") for x in (item.get("description"), ln.get("description"), ln.get("value")))
+        if PKG_RE.search(said) or SP._free_attrs(said) or SP.chip_size(said) or re.search(
+                r"(?i)\b(?:DIP|PDIP|SIP|TO-?\d+|SOT|SOD|DO-?\d+|QFP|BGA|LGA|DFN|QFN|SON|MELF|DPAK)", said):
+            return ""
+        return case
 
     def pad_numbers(self, st):
         """The numbered copper pads of the footprint built for a part (its .kicad_mod): {'1', '2'}; a mounting hole's

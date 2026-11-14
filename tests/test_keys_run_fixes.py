@@ -133,3 +133,48 @@ def test_part_search_case_text_datasheet_and_description_end_to_end(tmp_path, mo
     assert "C7950" not in str(u1.get("field_sources")), u1.get("field_sources")
     f2 = next(i for i in got.values() if "MF-MSMF050-2" in str(i["parameters"]))
     assert "Fuse_1812" in str(f2["source"]["footprint"]) and f2["source"]["symbol"] == "standard:Polyfuse", f2["source"]
+
+
+def test_part_or_series_number_in_a_footprint_name_is_not_a_pin_count():
+    """FC-135 (an Epson crystal), KCSC02-105 (a display), ESP-07 (a module): the number names the part, not 135 pins."""
+    from ecadlib import footprint_rules as FR
+    for n in ("FC-135", "FC-135_3.2x1.5mm", "KCSC02-105", "ESP-07", "WE-PD-1050", "ESP32-S3-WROOM-1"):
+        assert FR.parse_name(n).get("pins") is None, (n, FR.parse_name(n))
+    for n, pins in (("SOIC-8_3.9x4.9mm_P1.27mm", 8), ("HTSSOP-20-1EP_4.4x6.5mm_P0.65mm", 20), ("UFQFPN-28", 28),
+                    ("LFCSP-VQ-24-1EP_4x4mm_P0.5mm", 24), ("DFN-S-8-1EP_6x5mm_P1.27mm", 8), ("TSOP-I-24_12.4x6mm_P0.5mm", 24),
+                    ("DSUB-15_Pins_EdgeMount_P2.77mm", 15), ("SolderJumper-2_P1.3mm_Bridged2Bar_Pad1.0x1.5mm", 2),
+                    ("MSOP-12-16_3x4mm_P0.5mm", 12), ("WFDFPN-8-1EP_3x2mm_P0.5mm", 8), ("SOT-23-5", 5)):
+        assert FR.parse_name(n).get("pins") == pins, (n, FR.parse_name(n))
+
+
+def test_review_case_text_with_extra_pads_or_leads_is_not_used():
+    C = SP.case_text
+    for t in ("0603 (1608 Metric), 3 PC Pad", "1206 (3216 Metric), 4 PC Pad", "1206 (3216 Metric), 4 Leads",
+              "1206 (3216 Metric), Convex, Long Side Terminals", '8-SOIC (0.154", 3.90mm Width), 7 Leads', "Radial", ""):
+        assert C(t) == "", t
+    assert C('8-SOIC (0.154", 3.90mm Width)') and C("1812 (4532 Metric)")
+    F = SP.footprint_for
+    assert F(["", '8-SOIC (0.154", 3.90mm Width), 7 Leads'], "U", "LNK304DG")[0] is None
+    assert F(["", '8-SSOP (0.118", 3.00mm Width)'], "U", "")[0] is None            # 3 mm wide: not SSOP-8_5.3x3mm
+
+
+def test_review_ferrite_core_inductor_is_not_a_bead():
+    assert not SP.is_ferrite("L1", "Power inductor 10uH shielded ferrite core", "SRN3225-100M")
+    assert SP.is_ferrite("L1", "Ferrite Chip 600 Ohm", "") and SP.is_ferrite("L1", "FERRITE BEAD 220 OHM 0603", "")
+
+
+def test_review_case_text_only_when_the_bom_is_silent_and_one_maker():
+    st, item = {"hint_fp": ""}, {"footprint": {"kicad": ""}, "description": ""}
+    row = {"src_package": '8-SOIC (0.154", 3.90mm Width)'}
+    R = L.Run.case_from_search
+    assert R(st, item, {"footprint": "", "description": ""}, row)
+    assert R(st, item, {"footprint": "", "description": "Dual op amp DIP-8"}, row) == ""
+    assert R(st, item, {"footprint": "", "description": "LDO SOT-23-3"}, row) == ""
+    assert R(st, item, {"footprint": "SOIC-14_3.9x8.7mm_P1.27mm", "description": ""}, row) == ""
+    assert R(st, item, {"footprint": "", "description": ""}, dict(row, src_several="yes")) == ""
+    s = {"found": {}}
+    L.Run._finish_found(s, {"src_datasheet": "https://x.example/a.pdf", "src_several": "yes"})
+    assert "datasheet" not in s["found"]
+    s = {"found": {}}
+    L.Run._finish_found(s, {"src_datasheet": "https://x.example/a.pdf"})               # an older row: no source named
+    assert s["found"]["datasheet"] == ("https://x.example/a.pdf", "the part search")

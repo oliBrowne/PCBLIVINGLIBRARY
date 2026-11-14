@@ -1181,7 +1181,7 @@ def triage(lines, index, provs, http, shared=None):
                          "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
                          "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
                          "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
-                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
+                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_several": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"))
@@ -1392,6 +1392,7 @@ def triage(lines, index, provs, http, shared=None):
             "src_makers": "; ".join(makers_seen),
             "src_datasheet": sheet, "src_datasheet_from": sheet_from if sheet else "",
             "src_package": src_pkg, "src_package_from": src_pkg_from,
+            "src_several": "yes" if several and not bom_maker else "",   # makers the BOM does not pick between
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })
     return rows
