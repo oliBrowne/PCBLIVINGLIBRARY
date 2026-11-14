@@ -511,7 +511,7 @@ def from_part_info(info, res):
     if getattr(info, "makers", None):      # every maker the source lists the exact MPN under (bom_triage's maker fill)
         res.extra["makers"] = [clean_maker(m) for m in info.makers]
     specs = getattr(info, "specs", {}) or {}
-    res.package = clean_text(specs.get("package") or specs.get("case/package") or "", 80)
+    res.package = clean_text(specs.get("package_text") or specs.get("package") or specs.get("case/package") or "", 80)
     for o in info.offers:
         if re.search(r"\blcsc\b", str(o.distributor), re.I) and lcsc_sku(o.sku):
             res.lcsc = lcsc_sku(o.sku)

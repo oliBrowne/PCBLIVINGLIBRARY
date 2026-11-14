@@ -335,12 +335,38 @@ class KiCadLibrary:
         hits = sorted((len(n), ref) for n, ref in self._fpn if len(nm) >= 6 and nm in n)
         return hits[0][1] if hits else None
 
+    def footprint_by_series(self, mpn):
+        """The one KiCad footprint named after this part's series, by a whole '_' token of its name: Molex 0532610471 ->
+        Molex_PicoBlade_53261-0471_..., USB4105-GF-A -> ..._GCT_USB4105-xx-A_... ('xx' stands for any code),
+        SRN4018-100M -> L_Bourns-SRN4018. None when no name or several names fit (a guess: held for a look)."""
+        m = re.sub(r"[\s(].*$", "", str(mpn or "").upper().strip())
+        if len(re.sub(r"[^A-Z0-9]", "", m)) < 5:
+            return None
+        flat = re.sub(r"[^A-Z0-9]", "", m).lstrip("0")
+        parts = [p for p in re.split(r"[-./]", m) if p]
+        stem = next((("-".join(parts[:i + 1])) for i in range(len(parts))
+                     if re.search(r"[A-Z]", "-".join(parts[:i + 1])) and re.search(r"\d", "-".join(parts[:i + 1]))
+                     and len(re.sub(r"[^A-Z0-9]", "", "-".join(parts[:i + 1]))) >= 5), None)
+        hits = set()
+        for name, libs in self.footprints.items():
+            for t in name.split("_"):
+                if len(t) < 5 or not re.search(r"\d", t) or (not re.search(r"[A-Za-z]", t) and len(re.sub(r"\D", "", t)) < 7):
+                    continue                           # a size or pitch ('1x04', '3.2x2.5mm'), not a part number
+                rx = "".join("[A-Z0-9]{1,4}" if re.fullmatch(r"x{2,}", c) else re.escape(c.upper())
+                             for c in re.split(r"(x{2,})", re.sub(r"[^A-Za-z0-9]", "", t)))
+                if re.fullmatch(rx.lstrip("0") if rx[:1] == "0" else rx, flat) or \
+                        (stem and stem in {t.upper()} | set(t.upper().split("-")[1:2])):
+                    hits.add(f"{libs[0]}:{name}")
+        hits = {h for h in hits if not LAND_VARIANT_NAME.search(h)}
+        return hits.pop() if len(hits) == 1 else None
+
     def footprint_by_prefix(self, name):
         hits = sorted((len(n), f"{libs[0]}:{n}") for n, libs in self.footprints.items() if name and n.startswith(name + "_"))
         return hits[0][1] if hits else None
 
 
 # ---------------------------------------------------------------- helpers
+LAND_VARIANT_NAME = re.compile(r"HandSolder|ThermalVias|_Pad\d|Mask", re.I)    # a variant of the plain land
 POLARIZED_SYMBOL = "Capacitor_Polarized"   # the Library Ref of every polarized capacitor (pin 1 = +)
 FERRITE_SYMBOL = "Ferrite_Bead"            # the Library Ref of every ferrite bead (not the inductor's shared one)
 SHARED_KINDS = ("R", "C", "CP", "L")       # parts whose Library Ref is the generic symbol (altium_export.GENERIC_SYMBOL)
@@ -429,6 +455,17 @@ def _hold_lost_copper(st, name, notes):
     held = K.lost_copper_hold(name, notes)
     if held:
         st.setdefault("verify", []).append(held)
+
+
+def own_symbol_ref(item, ln):
+    """One shared symbol per kind: a polarized capacitor never takes the plain capacitor's file, nor a ferrite bead the
+    inductor's. Sets item's Library Ref to its own shared one (every run, a resumed part too) -> the ref."""
+    kind, ref = passive_kind(item, ln), item["symbol"]["ref"]
+    if kind == "CP" and ref == AX.GENERIC_SYMBOL["Capacitors"]:
+        ref = item["symbol"]["ref"] = POLARIZED_SYMBOL
+    elif kind == "L" and ref == AX.GENERIC_SYMBOL["Inductors"] and Run.ferrite(item, ln):
+        ref = item["symbol"]["ref"] = FERRITE_SYMBOL
+    return ref
 
 
 def passive_kind(item, ln=None):
@@ -697,11 +734,8 @@ class Run:
         dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
+        own_symbol_ref(item, ln)
         kind, fp_name, sym_name = passive_kind(item, ln), item["footprint"]["ref"], item["symbol"]["ref"]
-        if kind == "CP" and sym_name == AX.GENERIC_SYMBOL["Capacitors"]:   # one shared symbol per kind: a polarized
-            sym_name = item["symbol"]["ref"] = POLARIZED_SYMBOL              # capacitor never takes the plain one's file
-        if kind == "L" and sym_name == AX.GENERIC_SYMBOL["Inductors"] and self.ferrite(item, ln):
-            sym_name = item["symbol"]["ref"] = FERRITE_SYMBOL                # a bead, drawn as one, in a file of its own
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
@@ -883,6 +917,7 @@ class Run:
         for cand, why in ((fp_ref, fp_how), (lib.footprint(bom_fp), "BOM footprint name"),     # the BOM's land first (R-BF-5)
                           (lib.footprint(st["hint_fp"]), "symbol's Footprint property"),
                           (None if kind else lib.footprint_by_mpn(mpn), "footprint named after the MPN"),
+                          (None if kind not in (None, "L") else lib.footprint_by_series(mpn), "footprint named after the MPN's series"),
                           (lib.footprint_by_prefix(bom_fp.split(":")[-1]), f"shortest KiCad name starting with '{bom_fp}'")):
             if cand:
                 text, _ = K.load_footprint(cand, self.http)
@@ -1815,6 +1850,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         if not it["footprint"]["ref"]:
             it["footprint"]["ref"] = AL.lib_name(it["name"])
         fpr, st = _fingerprint(it, ln, row), state.get(it["name"])
+        own_symbol_ref(it, ln)                 # before a resumed part is skipped: the same Library Ref as when built
         redo = refresh is not None and (not refresh or it["name"] in refresh)
         stale = bool(st) and (old.get(it["name"]) or {}).get("status") == "held" and not _built_now(st, rules)
         if stale and st.get("key") == fpr and _done(st, out) and not redo:
