@@ -1284,7 +1284,8 @@ def spec_pins(name):
 
 
 CASE_EXTRA = re.compile(r"(?i)\bPC\s*Pads?\b|\bconvex\b|\bconcave\b|long\s+side|\barray\b|\bnetwork\b|"
-                        r"\bterminals?\b|\bmodule\b|\bstack(?:ed)?\b|\bradial\b|\baxial\b")
+                        r"\bterminals?\b|\bmodule\b|\bstack(?:ed)?\b|\bradial\b|\baxial\b|full\s*pack|long\s*body|"
+                        r"\bvariant\b|\bformed\b|\bbent\b|non-?standard|\bisolated\b|\bwide\s*body\b|\btab\b")
 
 
 def case_text(text):
@@ -1292,7 +1293,7 @@ def case_text(text):
     one that adds pads or leads ('0603, 3 PC Pad', '1206, 4 Leads', 'Convex') or a lead count other than its own pin
     count is not the plain land of that name -> '' (not used)."""
     t = str(text or "").strip()
-    if not t or CASE_EXTRA.search(t):
+    if not t or CASE_EXTRA.search(t) or not re.search(r"\d", t):    # '-', 'Nonstandard': names no case
         return ""
     leads = re.search(r"(?i)\b(\d{1,3})\s*Leads?\b", t)
     if leads:

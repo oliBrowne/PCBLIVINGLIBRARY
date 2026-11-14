@@ -44,9 +44,10 @@ def test_footprint_by_series_names_one_land_or_none():
     S = k.footprint_by_series
     assert S("0532610471") == "Connector_Molex:Molex_PicoBlade_53261-0471_1x04-1MP_P1.25mm_Horizontal"
     assert S("USB4105-GF-A") == "Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal"
-    assert S("SRN4018-100M") == "Inductor_SMD:L_Bourns-SRN4018"                  # not its hand-solder variant
+    assert S("SRN4018-100M", stem_ok=True) == "Inductor_SMD:L_Bourns-SRN4018"    # an inductor series; not its hand-solder variant
+    assert S("SRN4018-100M") is None                                              # the series alone names no part otherwise
     for m in ("0532610371", "USB4105", "SRN4028-100M", "LM358DR", "ABM8-16.000MHZ-B2-T", "3225", "SRP1245A-100M", "", None):
-        assert S(m) is None, (m, S(m))          # another code, too little, no such series, or two names fit
+        assert S(m, stem_ok=True) is None, (m, S(m, stem_ok=True))   # another code, too little, no series, or two fit
 
 
 def test_part_search_keeps_the_case_text_as_written():
@@ -57,3 +58,23 @@ def test_part_search_keeps_the_case_text_as_written():
     assert s["package"] == "1812" and s["package_text"] == "1812 (4532 Metric)"
     s = PL.specs_from_pairs([("Case Code - mm", "1005")])                   # Mouser's metric code: not a case text
     assert "package_text" not in s
+
+
+def test_review_series_match_needs_real_fixed_text_and_the_names_own_part():
+    from ecadlib.librarian import KiCadLibrary
+    k = KiCadLibrary.__new__(KiCadLibrary)
+    k.footprints = {n: [lib] for lib, n in (
+        ("Converter_ACDC", "Converter_ACDC_TRACO_TMF_101xx_THT"), ("Converter_ACDC", "Converter_ACDC_TRACO_TMF_301xx_THT"),
+        ("Battery", "BatteryHolder_MYOUNG_BS-07-A1BJ001_CR2032"), ("LED_SMD", "LED_SK6805_PLCC4_2.4x2.7mm"),
+        ("Inductor_SMD", "L_CommonModeChoke_Coilank_ACM2012"), ("Connector_USB", "USB_C_Receptacle_GCT_USB4105-xx-A_16P"))}
+    S = k.footprint_by_series
+    for m, stem in (("1017505", False), ("3010110", False), ("CR2032", False), ("SK6805-EC15", False),
+                    ("ACM2012-900-2P-T002", True), ("USB4105-GFX-A", False)):
+        assert S(m, stem_ok=stem) is None, m
+    assert S("USB4105-GF-A") == "Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P"
+
+
+def test_review_case_texts_that_name_another_body_are_not_used():
+    from ecadlib import stdparts as SP
+    for t in ("TO-220-3 Full Pack", "TO-92-3 Long Body", "-", "Nonstandard", "TO-220-3 Isolated Tab"):
+        assert SP.case_text(t) == "", t

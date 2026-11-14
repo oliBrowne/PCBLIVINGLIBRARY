@@ -335,7 +335,7 @@ class KiCadLibrary:
         hits = sorted((len(n), ref) for n, ref in self._fpn if len(nm) >= 6 and nm in n)
         return hits[0][1] if hits else None
 
-    def footprint_by_series(self, mpn):
+    def footprint_by_series(self, mpn, stem_ok=False):
         """The one KiCad footprint named after this part's series, by a whole '_' token of its name: Molex 0532610471 ->
         Molex_PicoBlade_53261-0471_..., USB4105-GF-A -> ..._GCT_USB4105-xx-A_... ('xx' stands for any code),
         SRN4018-100M -> L_Bourns-SRN4018. None when no name or several names fit (a guess: held for a look)."""
@@ -349,13 +349,20 @@ class KiCadLibrary:
                      and len(re.sub(r"[^A-Z0-9]", "", "-".join(parts[:i + 1]))) >= 5), None)
         hits = set()
         for name, libs in self.footprints.items():
-            for t in name.split("_"):
+            for t in [next((t for t in name.split("_") if _pn_token(t)), "")]:   # the part it is named after,
+                                                                  # not a later cell or size (..._BS-07-A1BJ001_CR2032)
                 if len(t) < 5 or not re.search(r"\d", t) or (not re.search(r"[A-Za-z]", t) and len(re.sub(r"\D", "", t)) < 7):
                     continue                           # a size or pitch ('1x04', '3.2x2.5mm'), not a part number
-                rx = "".join("[A-Z0-9]{1,4}" if re.fullmatch(r"x{2,}", c) else re.escape(c.upper())
-                             for c in re.split(r"(x{2,})", re.sub(r"[^A-Za-z0-9]", "", t)))
-                if re.fullmatch(rx.lstrip("0") if rx[:1] == "0" else rx, flat) or \
-                        (stem and stem in {t.upper()} | set(t.upper().split("-")[1:2])):
+                bits = re.split(r"(x{2,})", re.sub(r"[^A-Za-z0-9]", "", t))
+                fixed = "".join(c for c in bits if not re.fullmatch(r"x{2,}", c))
+                wild = len(fixed) != len(re.sub(r"[^A-Za-z0-9]", "", t))
+                if wild and (len(fixed) < 5 or not re.search(r"[A-Za-z]", fixed)):
+                    continue                           # '101xx', '03xxS': too little fixed text to name a part
+                rx = "".join(f"[A-Z0-9]{{{len(c)}}}" if re.fullmatch(r"x{2,}", c) else re.escape(c.upper()) for c in bits)
+                full = re.fullmatch(rx, flat) or (not wild and rx[:1] == "0" and re.fullmatch(rx.lstrip("0"), flat))
+                by_stem = stem_ok and stem and stem in {t.upper()} | set(t.upper().split("-")[1:2]) \
+                    and not re.search(r"(?i)CommonMode|Choke|Coupled|Array", name)   # a 2-pad inductor's series
+                if full or by_stem:
                     hits.add(f"{libs[0]}:{name}")
         hits = {h for h in hits if not LAND_VARIANT_NAME.search(h)}
         return hits.pop() if len(hits) == 1 else None
@@ -366,6 +373,12 @@ class KiCadLibrary:
 
 
 # ---------------------------------------------------------------- helpers
+def _pn_token(t):
+    """A footprint name token that can be a part number: digits, 5+ characters, not a size or pitch ('1x04', '3.2x2.5mm')."""
+    return len(t) >= 5 and bool(re.search(r"\d", t)) and not re.fullmatch(r"(?i)\d+x\d+.*|[\d.]+x[\d.]+mm.*|P[\d.]+mm|"
+                                                                        r"W[\d.]+mm|D[\d.]+mm|L[\d.]+mm|H[\d.]+mm", t)
+
+
 LAND_VARIANT_NAME = re.compile(r"HandSolder|ThermalVias|_Pad\d|Mask", re.I)    # a variant of the plain land
 POLARIZED_SYMBOL = "Capacitor_Polarized"   # the Library Ref of every polarized capacitor (pin 1 = +)
 FERRITE_SYMBOL = "Ferrite_Bead"            # the Library Ref of every ferrite bead (not the inductor's shared one)
@@ -917,7 +930,8 @@ class Run:
         for cand, why in ((fp_ref, fp_how), (lib.footprint(bom_fp), "BOM footprint name"),     # the BOM's land first (R-BF-5)
                           (lib.footprint(st["hint_fp"]), "symbol's Footprint property"),
                           (None if kind else lib.footprint_by_mpn(mpn), "footprint named after the MPN"),
-                          (None if kind not in (None, "L") else lib.footprint_by_series(mpn), "footprint named after the MPN's series"),
+                          (None if kind not in (None, "L") else lib.footprint_by_series(mpn, stem_ok=kind == "L"),
+                           "footprint named after the MPN's series"),
                           (lib.footprint_by_prefix(bom_fp.split(":")[-1]), f"shortest KiCad name starting with '{bom_fp}'")):
             if cand:
                 text, _ = K.load_footprint(cand, self.http)

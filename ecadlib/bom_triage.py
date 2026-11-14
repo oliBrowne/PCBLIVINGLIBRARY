@@ -1297,7 +1297,7 @@ def triage(lines, index, provs, http, shared=None):
                     r = P.SourceResult(getattr(prov, "name", "?"), error="plugin returned no SourceResult")
                 elif getattr(prov, "_plugin", False) and (bad := P.result_shape_problem(r)):
                     r = P.SourceResult(getattr(prov, "name", "?"), error=f"plugin returned a bad SourceResult ({bad})")
-                if not src_pkg and r.found and not r.error and str(getattr(r, "package", "") or "").strip() and r.mpn \
+                if not src_pkg and r.found and not r.error and _case_text(getattr(r, "package", "")) and r.mpn \
                         and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
                     src_pkg, src_pkg_from = str(r.package).strip()[:80], prov.name   # near match's (LM358DR != LM358P)
                 if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
@@ -1396,6 +1396,11 @@ def triage(lines, index, provs, http, shared=None):
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })
     return rows
+
+
+def _case_text(text):
+    from .stdparts import case_text
+    return case_text(text)
 
 
 def _n(s):
