@@ -143,3 +143,53 @@ def test_eagle_part_column_of_designators_is_the_designator(tmp_path):
 def test_part_column_of_real_part_numbers_stays_the_mpn(tmp_path):
     lines, mapping = _read(tmp_path, "Ref,Part,Value\nU1,LM358DR,LM358\nQ1,BC847B,BC847\nD1,SS34,SS34\n")
     assert mapping.get("mpn") == "Part" and mapping.get("designator") == "Ref", mapping
+
+
+# ---------------------------------------------------------------- from the PR's own review
+@lite
+def test_eagle_part_column_with_eagle_only_designators(tmp_path):
+    """U$1 (EAGLE's name for a part with no prefix), SV1 (header), SJ1 (solder jumper) are designators too: with them
+    the Part column fell back to the MPN and R1 / C1 were released as part numbers."""
+    lines, mapping = _read(tmp_path, "Part,Value,Device,Package\nR1,10k,R-EU_R0603,R0603\nC1,100n,C-EUC0603,C0603\n"
+                                     "U$1,ATMEGA328P,ATMEGA328P,TQFP32\nSV1,,MA03-1,MA03-1\nSJ1,,SJ,SJ\nU$2,LM358,LM358,SO08\n")
+    assert mapping.get("designator") == "Part" and "mpn" not in mapping, mapping
+
+
+@lite
+def test_part_number_equal_to_its_own_designator_is_dropped(tmp_path):
+    lines, _ = _read(tmp_path, "Designator,Value,MPN\nR1,10k,R1\nC1,100n,GRM155R71C104KA88D\n")
+    assert not lines[0].get("mpn") and lines[1]["mpn"] == "GRM155R71C104KA88D", lines
+
+
+TWO_SIZES = """Designator,Qty,Value,Footprint,MPN,Description
+C1,1,10uF,C_0402_1005Metric,TS-1,CAP 10uF 25V 0805/1206
+C2,1,100nF,C_0402_1005Metric,TS-2,CAP 100nF 0603 (1608 Metric) 0805
+"""
+
+NOT_A_CLASH = """Designator,Qty,Value,Footprint,MPN,Description
+R1,1,1210,R_0603_1608Metric,NC-1,Resistor 1210 ohm
+R2,1,Jumper,R_0603_1608Metric,NC-2,Zero ohm link
+C1,1,1uF,C_0805_2012Metric,NC-3,CAP 1uF 0805/1206
+"""
+
+
+@lite
+def test_description_naming_two_other_sizes_holds(tmp_path):
+    got = _run(tmp_path, TWO_SIZES)
+    for mpn, it in got.items():
+        assert it["status"] == "held" and any("size" in r for r in it["hold_reasons"]), (mpn, it["hold_reasons"])
+
+
+@lite
+def test_value_numbers_jumpers_and_a_size_among_two_release(tmp_path):
+    got = _run(tmp_path, NOT_A_CLASH)
+    for mpn, it in got.items():
+        assert it["status"] == "ready", (mpn, it["hold_reasons"])
+
+
+def test_size_clash_reads_only_land_names_not_lcsc_numbers():
+    """easyeda:C1206 is LCSC part C1206, not a 1206 land."""
+    st = {"footprint": {"source": "easyeda:C1206", "name": "C_0402_1005Metric"}}
+    assert L.chip_size_clash(st, {"description": ""}, {"description": "CAP 100nF 0402"}) is None
+    st = {"footprint": {"source": "kicad:Capacitor_SMD:C_0402_1005Metric"}}
+    assert "0603" in (L.chip_size_clash(st, {}, {"description": "CAP 100nF 0603"}) or "")

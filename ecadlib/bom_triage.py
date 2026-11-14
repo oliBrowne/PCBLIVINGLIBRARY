@@ -396,7 +396,8 @@ def clean_part_number(s):
     return re.sub(r"\s+", " ", s).strip()
 
 
-REF_PREFIX = re.compile(r"(?:R|RN|RV|C|CP|L|FB|D|LED|Q|U|IC|J|P|CN|X|K|Y|F|SW|S|T|TP|BT|M|H|JP|E|ANT|MP|FID)\d{1,4}[A-Z]?")
+REF_PREFIX = re.compile(r"(?:(?:R|RN|RV|RT|C|CP|L|FB|D|LED|Z|Q|U|IC|OK|J|P|CN|SV|SJ|X|K|Y|F|SW|S|T|TP|BT|B|G|M|H|JP|E|"
+                        r"VR|LS|ANT|MP|FID|FRAME)\d{1,4}[A-Z]?|[A-Z]{1,5}\$\d{1,4})")   # EAGLE: U$1 (no prefix set)
 
 
 def _part_is_designators(df, headers, mapping, columns=None):
@@ -540,6 +541,10 @@ def read_bom(path, columns=None, rules=None, root=None):
                     if jf is not None and jf < len(cells) and cells[jf]:
                         d["manufacturer"] = SS.unquote(cells[jf])
                     break
+        mp = str(d.get("mpn") or "").strip().upper()
+        if mp and mp in {t for t in re.split(r"[\s,;]+", str(d.get("designator") or "").upper()) if t}:
+            note.append(f"part number {d['mpn']} is the line's own designator, not a part number: left out")
+            d["mpn"] = ""                                         # 'R1' copied into the MPN column
         if comment is not None and not d.get("value") and comment < len(cells) and cells[comment]:
             d["value"] = SS.unquote(cells[comment])
         for f in ("mpn", "lcsc"):

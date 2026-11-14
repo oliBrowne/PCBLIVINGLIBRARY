@@ -132,6 +132,11 @@ def value_number_problem(item, rules=None):
         return None
     if SS.cell(value) != value:                       # =SUM(..), +.., @..: what a spreadsheet runs
         return f"Value {value[:40]!r} starts like a spreadsheet formula, not a {word}: fix the BOM cell"
+    if word == "resistance" and re.fullmatch(r"(?i)(0\s*(r|ohm|Ω)\s*)?(jumper|bridge|link|wire)", value):
+        return None                                   # a 0 ohm jumper says what it is
+    if re.fullmatch(r"(?i)dnp|dnf|dni|nc|n\.?c\.?|np|no ?pop|not fitted", value):
+        return (f"Value {value!r} says the part is not fitted, but the library part still needs its {word}: write the "
+                "value in the BOM and mark the line DNP in its own column")
     if not re.search(r"\d", value):
         return f"Value {value[:40]!r} has no number, so it names no {word}: write the value in the BOM"
     return None
