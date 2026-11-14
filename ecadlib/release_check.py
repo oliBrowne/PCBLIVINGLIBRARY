@@ -28,7 +28,7 @@ that list. altium365 push releases only `ready` items, and every publisher (alti
 altium-pkg, kicad-export) runs this check again on the files it sends (publish_problems), so a plan that says
 `ready` without a check, or a file changed after one, is held there too. Items `ecadlib a365 pull` brought in from the workspace
 (status `existing`) are already released there and are not checked. Exit code 0 when nothing is held, 2 otherwise."""
-import argparse, csv, datetime, re, sys
+import argparse, csv, datetime, re, sys, unicodedata
 from pathlib import Path
 
 from . import altium_lib as AL, footprint_check as FC, footprint_rules as FR
@@ -134,12 +134,60 @@ def value_number_problem(item, rules=None):
         return f"Value {value[:40]!r} starts like a spreadsheet formula, not a {word}: fix the BOM cell"
     if word == "resistance" and re.fullmatch(r"(?i)(0\s*(r|ohm|Ω)\s*)?(jumper|bridge|link|wire)", value):
         return None                                   # a 0 ohm jumper says what it is
-    if re.fullmatch(r"(?i)dnp|dnf|dni|nc|n\.?c\.?|np|no ?pop|not fitted", value):
+    words = _value_tokens(value, word)
+    if re.fullmatch(NOT_FITTED, value) or (words and all(re.fullmatch(NOT_FITTED, t) for t in words)):   # 'NC 0603'
         return (f"Value {value!r} says the part is not fitted, but the library part still needs its {word}: write the "
                 "value in the BOM and mark the line DNP in its own column")
     if not re.search(r"\d", value):
         return f"Value {value[:40]!r} has no number, so it names no {word}: write the value in the BOM"
+    if not words:
+        return (f"Value {value[:40]!r} holds only a rating, tolerance or size, no {word}: write the value in the BOM "
+                "(the rating can stay beside it)")
     return None
+
+
+NOT_FITTED = r"(?i)dnp|dnf|dni|nc|n\.?c\.?|np|no ?pop|not fitted"
+RATING = re.compile(r"(?i)(?<![\d.])[±+-]?\s*\d+(?:\.\d+)?\s*%|±\s*\S+|\b\d+\s*/\s*\d+\s*W\b|"
+                    r"(?<![\d.])1\s*/\s*(?:2|3|4|8|10|16|20)(?![\d.])|"            # a wattage with its W left off
+                    r"(?<![\d.,])\d+(?:[.,]\d+)?\s*(?:m?W|k?V(?:DC|AC)?|m?A|ppm(?:/K|/°C)?)(?![A-Za-z0-9])|"
+                    r"(?<![\d.,A-Za-z])\d+[VW]\d(?![A-Za-z0-9])|"                    # RKM voltage: 6V3, 2V5
+                    r"\b(?:X[5-8][RSTPUV]|C0G|NP0|NPO|COG|Y5V|Z5U|AEC-?Q\d+|SMD|SMT|THT|RoHS)\b")
+# E96 (which holds E12 / E24's 10, 12, 15 ... as 100, 120, 150 ...): a resistor chip code that is also a resistance in
+# these series ('1210' = 1.21 kOhm) is read as the value, any other ('1206', '2512') as the size
+E96 = {int(x) for x in """100 102 105 107 110 113 115 118 121 124 127 130 133 137 140 143 147 150 154 158 162 165 169 174
+178 182 187 191 196 200 205 210 215 221 226 232 237 243 249 255 261 267 274 280 287 294 301 309 316 324 332 340 348 357
+365 374 383 392 402 412 422 432 442 453 464 475 487 499 511 523 536 549 562 576 590 604 619 634 649 665 681 698 715 732
+750 768 787 806 825 845 866 887 909 931 953 976""".split()}
+E24 = {10, 11, 12, 13, 15, 16, 18, 20, 22, 24, 27, 30, 33, 36, 39, 43, 47, 51, 56, 62, 68, 75, 82, 91}
+
+
+def _chip_code(token, word):
+    """True when a token left in a Value cell is a chip size (0603, 1206 ...), not a value. For a resistor, a size
+    that is also a series resistance ('1210') counts as the value."""
+    from . import stdparts as SP
+    t = token.strip(" -+.,")
+    if t not in SP.IMPERIAL:
+        return False
+    if word != "resistance" or t.startswith("0"):
+        return True
+    sig = t.rstrip("0")
+    return not (len(sig) <= 3 and (int(sig.ljust(3, "0")) in E96 or (len(sig) <= 2 and int(sig.ljust(2, "0")) in E24)))
+
+
+def _names_value(value, word):
+    """True when a resistor's / capacitor's Value cell holds something besides a rating, tolerance, dielectric or chip
+    size: its value ('10k 1%', '100nF/50V', '4k7', '104') or its part number (a BOM whose Value is the MPN,
+    GRM188R71H104KA93D). False for '50V', 'X7R', '1%', '1/10W', '0603', 'AEC-Q200', '50V,X7R,0603', '6V3': the rating
+    column pasted into Value. word ('resistance' / 'capacitance'): a resistor's '1210' is 1.21 kOhm (_chip_code)."""
+    return bool(_value_tokens(value, word))
+
+
+def _value_tokens(value, word):
+    """The words of a Value cell left once ratings, tolerances, dielectrics and chip sizes are taken out."""
+    text = re.sub(r",(?=\s*\d+(?:\.\d+)?\s*%)", " ", unicodedata.normalize("NFKC", value))   # '10,1%': 10 and 1 %
+    left = [t for t in re.split(r"[\s/_;]+|,(?!\d)", RATING.sub(" ", text)) if t.strip(" -+.,")]
+    left = [p for t in left for p in (t.split("-") if re.fullmatch(r"[\d-]+", t) else [t])]   # '1206-0603'
+    return [t for t in left if t.strip(" -+.,") and not _chip_code(t, word)]
 
 
 def _land_size(name):
