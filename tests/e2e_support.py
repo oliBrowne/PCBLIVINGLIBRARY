@@ -186,7 +186,7 @@ class _JSONHandler(BaseHTTPRequestHandler):
 class FakeAnthropic(_Server):
     """POST /v1/messages. A request with our drawings as images is a visual proof (answer: the part's
     anthropic/proof_<PART>.json, else proof_default.json); any other is a datasheet read (answer:
-    anthropic/datasheet_<PART>.json, else HTTP 400). The part is the one named in the request text."""
+    anthropic/datasheet_<PART>.json, else HTTP 400); a web search request finds nothing. The part is the one named in the request text."""
     def __init__(self, key="sk-e2e-test", tls=None, hold=()):
         """hold: parts whose datasheet request is never answered (the client is killed while it waits)."""
         class H(_JSONHandler):
@@ -198,6 +198,13 @@ class FakeAnthropic(_Server):
                 if not self.path.endswith("/v1/messages"):
                     return self._send(404, {"type": "error", "error": {"type": "not_found_error", "message": self.path}})
                 content = body["messages"][0]["content"]
+                if any(t.get("name") == "web_search" for t in body.get("tools") or ()):
+                    # [datasheet] web_search (on by default): a part with no datasheet is searched for; nothing found
+                    srv.searches.append(content if isinstance(content, str) else "")
+                    return self._send(200, {"model": body.get("model"), "stop_reason": "end_turn",
+                                            "content": [{"type": "text", "text": json.dumps({"urls": []})}],
+                                            "usage": {"input_tokens": 900, "output_tokens": 40,
+                                                      "server_tool_use": {"web_search_requests": 1}}})
                 text = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
                 part = srv.part_of(text)
                 kind = "proof" if sum(c.get("type") == "image" for c in content) >= 2 else "datasheet"
@@ -213,7 +220,7 @@ class FakeAnthropic(_Server):
                     return self._send(400, {"type": "error", "error": {"type": "invalid_request_error",
                                                                        "message": f"no recorded answer for {kind} {part}"}})
                 return self._send(200, json.loads(f.read_text()))
-        self.kinds, self.hold, self.held = [], set(hold), threading.Event()
+        self.kinds, self.hold, self.held, self.searches = [], set(hold), threading.Event(), []
         super().__init__(H, tls)
 
     @staticmethod

@@ -86,7 +86,7 @@ def test_a_read_that_left_a_dimension_blank_gets_the_package_drawing():
     files = {DS: pdf_lines(product_sheet()), DWG: pdf_lines(drawing_sheet()),
              OTHER: pdf_lines([["Press release: new connector colours available now for every series"] * 3])}
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
-        rd = _reader(d, cl, files, web_search=True)
+        rd = _reader(d, cl, files, web_search=True, web_search_package=True)
         res = _read(rd)
         assert [n for _, n in api.sent] == [2, 3], api.sent           # the datasheet, then with the drawing appended
         assert len(cl.sent) == 1 and "package outline drawing" in cl.sent[0][0]["messages"][0]["content"]
@@ -98,7 +98,7 @@ def test_a_read_that_left_a_dimension_blank_gets_the_package_drawing():
         led = [json.loads(x) for x in open(Path(d) / "out" / "datasheet" / "cost.jsonl")]
         assert [x["via"] for x in led if "web search" in x["via"]] == ["web search (package drawing)"], led
         cl2 = Client()                                # replayed: the link and both answers are kept, nothing is sent
-        res2 = _read(_reader(d, cl2, files, web_search=True))
+        res2 = _read(_reader(d, cl2, files, web_search=True, web_search_package=True))
         assert not cl2.sent and len(api.sent) == 2 and res2["spec"]["body_length"]
 
 
@@ -107,7 +107,7 @@ def test_a_read_that_came_back_whole_never_searches():
     from tests import test_datasheet_batch as TB
     cl = Client(_answer([DWG]))
     with tempfile.TemporaryDirectory() as d, TB.patched(_reads(blank_on=-1)):
-        res = _read(_reader(d, cl, {DS: pdf_lines(product_sheet()), DWG: pdf_lines(drawing_sheet())}, web_search=True))
+        res = _read(_reader(d, cl, {DS: pdf_lines(product_sheet()), DWG: pdf_lines(drawing_sheet())}, web_search=True, web_search_package=True))
         assert not cl.sent and not any("package drawing" in r for r in res["needs_review"])
 
 
@@ -121,7 +121,7 @@ def test_no_package_search_when_web_search_is_off_or_the_drawing_is_there():
     files[DS] = pdf_lines(product_sheet() + drawing_sheet())
     with tempfile.TemporaryDirectory() as d, TB.patched(_reads(blank_on=3)):
         cl = Client(_answer([DWG]))
-        _read(_reader(d, cl, files, web_search=True))
+        _read(_reader(d, cl, files, web_search=True, web_search_package=True))
         assert not cl.sent
 
 
@@ -129,7 +129,7 @@ def test_nothing_found_is_said_and_the_read_stands():
     from tests import test_datasheet_batch as TB
     cl, api = Client(_answer([])), _reads()
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
-        res = _read(_reader(d, cl, {DS: pdf_lines(product_sheet())}, web_search=True))
+        res = _read(_reader(d, cl, {DS: pdf_lines(product_sheet())}, web_search=True, web_search_package=True))
         assert [n for _, n in api.sent] == [2] and len(cl.sent) == 1
         assert any(r.startswith("no package drawing: ") for r in res["needs_review"]), res["needs_review"]
 
@@ -157,10 +157,10 @@ def test_a_search_that_found_nothing_is_not_paid_for_again():
     files = {DS: pdf_lines(product_sheet())}
     with tempfile.TemporaryDirectory() as d, TB.patched(_reads()):
         cl = Client(_answer([]))
-        _read(_reader(d, cl, files, web_search=True))
+        _read(_reader(d, cl, files, web_search=True, web_search_package=True))
         assert len(cl.sent) == 1
         cl2 = Client()
-        res = _read(_reader(d, cl2, files, web_search=True))
+        res = _read(_reader(d, cl2, files, web_search=True, web_search_package=True))
         assert not cl2.sent and any("found no PDF of it" in r for r in res["needs_review"]), res["needs_review"]
         entry = WS.Found(Path(d) / "out" / "datasheet").get("NC3XYZ-1 package drawing")
         later = datetime.date.fromisoformat(entry["at"]) + datetime.timedelta(days=WS.NONE_DAYS)
@@ -172,7 +172,7 @@ def test_a_failed_search_is_not_remembered_as_found_nothing():
     from tests import test_datasheet_batch as TB
     from tests.test_ds_search import Failing
     with tempfile.TemporaryDirectory() as d, TB.patched(_reads()):
-        _read(_reader(d, Failing(), {DS: pdf_lines(product_sheet())}, web_search=True))
+        _read(_reader(d, Failing(), {DS: pdf_lines(product_sheet())}, web_search=True, web_search_package=True))
         assert WS.Found(Path(d) / "out" / "datasheet").get("NC3XYZ-1 package drawing") is None
 
 
@@ -186,7 +186,7 @@ def test_the_batch_route_goes_on_with_the_package_drawing():
     api = API(lambda m, n: INCOMPLETE if n == 2 else GOOD, polls=0)
     files = {DS: pdf_lines(product_sheet()), DWG: pdf_lines(drawing_sheet())}
     with tempfile.TemporaryDirectory() as d, TB.patched(api):
-        rd = reader(d, files, rules={"datasheet": {"web_search": True, "web_search_model": "claude-haiku-5-5"}},
+        rd = reader(d, files, rules={"datasheet": {"web_search": True, "web_search_package": True, "web_search_model": "claude-haiku-5-5"}},
                     batch=True)
         j = rd.job("NC3XYZ-1", [(DS, "BOM")], None)
         rd.submit(j)

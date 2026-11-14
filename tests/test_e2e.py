@@ -382,6 +382,9 @@ def test_second_run_changes_nothing():
             snaps.append(E.snapshot(work))
             # the datasheet answer for DSPART16 is reused; parts still held (no answer last time) are asked again
             assert ("datasheet", "DSPART16") not in fa.kinds and set(fa.kinds) <= set(claude), (fa.kinds, claude)
+            # [datasheet] web_search ships on: run 1 searched for the parts with no datasheet and found nothing, and
+            # that is remembered, so no later run pays for the same search
+            assert not fa.searches, fa.searches
             assert len(nx.releases) == len(releases), "the push releases the same parts again (FakeNexar has none)"
     diff = lambda a, b: sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
     d12, d23 = diff(snaps[0], snaps[1]), diff(snaps[1], snaps[2])

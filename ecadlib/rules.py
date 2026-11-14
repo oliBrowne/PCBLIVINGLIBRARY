@@ -90,8 +90,12 @@ DEFAULTS = {
                   # installed with ecadlib); "plain": ecadlib's own request only; or a list of those ways
                   "download": "auto",
                   # ecadlib.ds_search: no link, part source or folder file gave a PDF: ask Claude's web search for the
-                  # maker's (else a distributor's) PDF; off by default, counted in max_cost_usd ("" model = Haiku)
-                  "web_search": False, "web_search_model": "", "web_search_max_uses": 3,
+                  # maker's (else a distributor's) PDF; billed to the person's own key (about $0.03 a part on Haiku), counted in
+                  # max_cost_usd, on by default since 2026-11-14 (every free way is tried first); false = never ("" model = Haiku)
+                  "web_search": True, "web_search_model": "", "web_search_max_uses": 3,
+                  # the second search, for a package drawing the datasheet does not have (after a read that left a
+                  # dimension blank): billed like the first; off by default
+                  "web_search_package": False,
                   # last: open the link in your own browser and take the PDF from Downloads ("auto": when a person is
                   # watching the run in a terminal; "off"), waiting this long; "" = the system Downloads folder
                   "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""},
@@ -984,8 +988,10 @@ HELP = {
                          "use the Internet Archive's saved copy of the link; free, no key; only public links are sent "
                          "to archive.org, and the part's review says the copy's date (on by default)",
     "datasheet.web_search": "when no link, part source or datasheet folder gave a PDF, ask Claude's web search for the "
-                            "maker's PDF (else a distributor's); the PDF must name the part; its cost counts in "
-                            "max_cost_usd (off by default)",
+                            "maker's PDF (else a distributor's); the PDF must name the part; billed to your key (about "
+                            "$0.03 a part), counted in max_cost_usd (on by default; false = never search)",
+    "datasheet.web_search_package": "also search for a package drawing the datasheet does not have, after a read that left "
+                                    "a dimension blank; billed like the datasheet search (off by default)",
     "datasheet.web_search_model": "model for the web search (\"\" = claude-haiku-5-5)",
     "datasheet.web_search_max_uses": "most searches per part (default 3; 0 = none)",
     "datasheet.cross_check_model": "model for the second read (\"\" = the model whose answer is checked; endpoint:model works)",

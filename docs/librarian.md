@@ -219,13 +219,21 @@ other pads makes it ambiguous, and then nothing changes. The chosen entry must a
 
 Maker links die: documents get new numbers, sites move their files, a link lands on a product page instead of the PDF.
 When none of a part's links, part sources or folder files gives its PDF (or the BOM line has no link at all), ecadlib
-can ask Claude's web search tool for the maker's current PDF.
+asks Claude's web search tool for the maker's current PDF. This is on by default since 2026-11-14, because a part
+with no datasheet cannot be built at all and nothing else finds a copy that lives at another address. Every free way
+runs first (each link by every download way, your datasheet folder, the Internet Archive's copy), so only a part that
+would otherwise have no datasheet is searched for.
+
+**It is billed to your own API key: about $0.03 a part** (Haiku 5.5, measured 2026-10-22: $1.04 for 41 parts). It
+counts toward `max_cost_usd`, each search is a line in `cost.jsonl`, and the part's review says its datasheet was
+found by a search. To turn it off, set `web_search = false`; for one run, set `ECADLIB_NO_WEB_SEARCH=1`.
 
 ```toml
 [datasheet]
-web_search = true          # off by default: every search is billed
+web_search = true          # on by default; false = never search (a part with no datasheet is then held)
 web_search_model = ""      # "" = claude-haiku-5-5 (see the 2026-10-22 test below)
 web_search_max_uses = 3    # searches per part
+web_search_package = false # the second search below, for a package drawing the datasheet lacks: off by default
 ```
 
 - One short request per part names the MPN, the BOM's maker and the package, and asks for direct PDF links: the
@@ -234,7 +242,9 @@ web_search_max_uses = 3    # searches per part
 - The cost (tokens plus $10 per 1,000 searches; about $0.03 to $0.36 a part on Opus 5.5 in the 2026-10-21 test, mostly
   the search results it reads) counts toward `max_cost_usd` and is written to `cost.jsonl` (via "web search"). A
   search that could pass the cap (budgeted at its worst case) is not sent, and the part's review says so.
-- A link found is kept in `<out>/datasheet/web_search.json`, so the part is not searched again.
+- A link found is kept in `<out>/datasheet/web_search.json`, so the part is not searched again. A search that ran and
+  found no PDF of the part is kept there too, for 30 days, so a part with no datasheet anywhere is not paid for on
+  every run (delete its entry to search sooner). A search that failed (the API was down) is tried again next run.
 - The search needs a Claude model and key: with another provider it fails with a note and the part goes on as
   before. `--offline` never searches.
 - The links are downloaded in this order: the maker's own site (a label of the host starts with the maker's name),
@@ -259,7 +269,8 @@ When other values are blank too (KTY83 has no bend spacing), the hold says the h
 **The package drawing, when the datasheet has none.** Some datasheets have no drawing of the part's package at all. Neutrik's
 product sheets have only photos and spec tables. Altera, Lattice and Microchip family sheets keep their BGA drawings in
 a separate package-information document. An onsemi revision dropped a package. On the 2026-10-23 live benchmark these
-were 12 of the 17 parts held for a blank dimension. With `web_search = true`, such a part gets a second search, for its
+were 12 of the 17 parts held for a blank dimension. With `web_search_package = true` (off by default; it was part of
+`web_search` until 2026-11-14), such a part gets a second search, for its
 package drawing: a package-information document, a case outline, a product drawing or a PCB layout.
 
 - It runs only after a read that left a dimension the footprint needs blank, so a part read right from its datasheet

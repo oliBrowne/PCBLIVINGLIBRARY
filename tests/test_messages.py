@@ -77,6 +77,9 @@ EXAMPLES = {
     "datasheet.not_downloaded": "the PDF was not downloaded here (sent as a URL): its content was not validated locally",
     "crosscheck.tie_break": "cross-check agreed once a difference was set aside: package type read custom, other source connector: a word only, the pads are built as the read lists them; check it on the drawing",
     "datasheet.unnamed": "the PDF at https://x/a.pdf doesn't mention LTC4060EDHC (no other link gave a PDF): check it is this part's datasheet",
+    "datasheet.searched": "datasheet found by a web search, billed to your API key (cost.jsonl: web search), because no "
+                          "link gave a PDF: check it is this part's current datasheet; [datasheet] web_search = false "
+                          "turns the search off",
     "datasheet.archived": "datasheet from the Internet Archive's copy of https://x/a.pdf saved 2022-04-13 (the link gave no PDF "
                           "here): the maker may have a newer revision; check the package drawing against the current datasheet",
     "datasheet.some_pages": "only some pages were sent (pages 1-4 of 40): check nothing was missed",
@@ -326,7 +329,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 21, "datasheet.py": 9,
+    "librarian.py": 21, "datasheet.py": 10,
 }
 
 
