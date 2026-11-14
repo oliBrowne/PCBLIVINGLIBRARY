@@ -28,7 +28,7 @@ that list. altium365 push releases only `ready` items, and every publisher (alti
 altium-pkg, kicad-export) runs this check again on the files it sends (publish_problems), so a plan that says
 `ready` without a check, or a file changed after one, is held there too. Items `ecadlib a365 pull` brought in from the workspace
 (status `existing`) are already released there and are not checked. Exit code 0 when nothing is held, 2 otherwise."""
-import argparse, csv, datetime, re, sys
+import argparse, csv, datetime, re, sys, unicodedata
 from pathlib import Path
 
 from . import altium_lib as AL, footprint_check as FC, footprint_rules as FR
@@ -139,7 +139,26 @@ def value_number_problem(item, rules=None):
                 "value in the BOM and mark the line DNP in its own column")
     if not re.search(r"\d", value):
         return f"Value {value[:40]!r} has no number, so it names no {word}: write the value in the BOM"
+    if not _names_value(value, word):
+        return (f"Value {value[:40]!r} holds only a rating, tolerance or size, no {word}: write the value in the BOM "
+                "(the rating can stay beside it)")
     return None
+
+
+RATING = re.compile(r"(?i)(?<![\d.])[±+-]?\s*\d+(?:\.\d+)?\s*%|±\s*\S+|\b\d+\s*/\s*\d+\s*W\b|"
+                    r"(?<![\d.,])\d+(?:[.,]\d+)?\s*(?:m?W|k?V|m?A|ppm(?:/K|/°C)?)(?![A-Za-z0-9])|"
+                    r"\b(?:X[5-8][RSTPUV]|C0G|NP0|COG|Y5V|Z5U|AEC-?Q\d+|SMD|SMT|THT|RoHS)\b")
+CHIP_CODE = re.compile(r"0(?:1005|201|402|603|805)")
+
+
+def _names_value(value, word):
+    """True when a resistor's / capacitor's Value cell holds something besides a rating, tolerance, dielectric or chip
+    size: its value ('10k 1%', '100nF/50V', '4k7', '104') or its part number (a BOM whose Value is the MPN,
+    GRM188R71H104KA93D). False for '50V', 'X7R', '1%', '1/10W', '0603', 'AEC-Q200': the rating column pasted into
+    Value. word ('resistance' / 'capacitance') is kept for the message."""
+    text = re.sub(r",(?=\s*\d+(?:\.\d+)?\s*%)", " ", unicodedata.normalize("NFKC", value))   # '10,1%': 10 and 1 %
+    left = [t for t in re.split(r"[\s/_;]+|,(?!\d)", RATING.sub(" ", text)) if t.strip(" -+.,")]
+    return any(not CHIP_CODE.fullmatch(t) for t in left)
 
 
 def _land_size(name):
