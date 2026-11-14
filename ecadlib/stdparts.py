@@ -469,6 +469,12 @@ def mpn_size(mpn):
 def _free_attrs(text):
     """IC family attributes from free text (BOM footprint, LCSC package, description)."""
     t = str(text or "")
+    dk = re.match(r"\s*(\d{1,3})-(" + "|".join(sorted(FAMILIES, key=len, reverse=True)) + r")\b(.*)$", t, re.I)
+    if dk:                                            # a distributor's '8-SOIC (0.154", 3.90mm Width)': pins first,
+        leads = re.search(r"(?i)\b(\d{1,3})\s*Leads?\b", dk.group(3))     # the body width in words; '..., 7 Leads':
+        if leads and int(leads.group(1)) != int(dk.group(1)):            # a pin removed, not the full land
+            return None
+        t = f"{dk.group(2)}-{dk.group(1)}{dk.group(3)}"
     m = FREE_RE.search(t)
     if not m:
         return None
@@ -494,6 +500,9 @@ def _free_attrs(text):
     mil = re.search(r"(150|208|209|300)\s*mil", t, re.I)
     if mil and not a["body"]:
         a["body_w"] = MIL_BODY[mil.group(1)]
+    wide = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*mm\s*Width\b", t, re.I)
+    if wide and not a["body"] and "body_w" not in a:
+        a["body_w"] = a["body_w_words"] = float(wide.group(1))   # the body's width: the first size in KiCad's name too
     return a
 
 
@@ -528,6 +537,9 @@ def _candidates(a):
             continue
         if a.get("body_w") and not _close(g["body"][0], a["body_w"]):
             continue
+        named = re.search(r"_(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)mm", n)       # '(3.00mm Width)' is the width, not the
+        if a.get("body_w_words") and not (named and _close(float(named.group(1)), a["body_w_words"])):   # shorter
+            continue                                                         # side: SSOP-8_5.3x3mm is 5.3 mm wide
         if a["pitch"] is not None and not _close(g["pitch"], a["pitch"], 0.011):
             continue
         if a["ep"] is not None and g["ep"] != a["ep"]:
@@ -1109,6 +1121,23 @@ SYMBOLS = {   # kind -> (KiCad-style name, reference, description, graphics, pin
     "LED": ("LED", "D", "Light emitting diode (pin 1 = cathode)", _diode_body("LED"),
             [("1", "K", "passive", -5.08, 0, 0, 3.81), ("2", "A", "passive", 5.08, 0, 180, 3.81)]),
 }
+SYMBOLS["FerriteBead"] = ("FerriteBead", "FB", "Ferrite bead",
+                          [_poly([(-0.508, 2.286), (2.286, -0.508), (0.508, -2.286), (-2.286, 0.508), (-0.508, 2.286)]),
+                           _poly([(0, 2.54), (0, 1.778)]), _poly([(0, -2.54), (0, -1.778)])],
+                          [("1", "~", "passive", 0, 5.08, 270, 2.54), ("2", "~", "passive", 0, -5.08, 90, 2.54)])
+# a ferrite bead: designator FB, its description, or a bead series' part number (Murata BLM / BLE, TDK MPZ / MMZ,
+# Taiyo Yuden BK / FBMH, Laird / Wurth HZ / HI / MI / 742792 / 7427927, Bourns MH / MZ, Vishay ILBB)
+FERRITE_MPN = re.compile(r"^(BLM\d|BLE\d|BLA\d|MPZ\d|MMZ\d|MAF\d|BK[PM]?\d{4}|FBMH|HZ\d{4}|HI\d{4}|MI\d{4}|7427\d|"
+                         r"74279\d|MH\d{4}|MZ\d{4}|ILBB|FBMJ|BKH)")
+
+
+def is_ferrite(designator="", description="", mpn=""):
+    """A ferrite bead (not an inductor): every designator FB, or its description or part number says so."""
+    refs = {r.upper() for r in re.findall(r"[A-Za-z]+(?=\d)", str(designator or ""))}
+    return bool((refs and refs <= {"FB"}) or re.search(r"(?i)\bbeads?\b|ferrite[- ]chip|chip[- ]ferrite", str(description or ""))
+                or FERRITE_MPN.match(_norm(mpn)))
+
+
 # fuses, test points and plated mounting holes: KiCad's Device:Fuse / Polyfuse, Connector:TestPoint, Mechanical:MountingHole_Pad
 # drawn the same way; only used on a land whose pads are exactly these pins (mechanical_symbol)
 SYMBOLS["Fuse"] = ("Fuse", "F", "Fuse", [_rect(-0.762, -2.54, 0.762, 2.54), _poly([(0, 2.54), (0, -2.54)])],
@@ -1136,6 +1165,15 @@ def mechanical_symbol(fp_source, designator, pads, text=""):
     if len(parts) != 3 or parts[0] not in ("kicad", "standard"):
         return None, "the land is not one of KiCad's own (no library to tell its kind)"
     lib = parts[1]
+    row = re.search(r"_1x(\d{2})(?:_|$)", parts[2])
+    if lib.startswith("Connector") and row and not re.search(r"(?i)MountingPin|-\d*MP|_MP|Shield", parts[2]):
+        n = int(row.group(1))                             # one row of n pins, KiCad's own land numbered 1..n: the
+        refs = {re.match(r"[A-Z]+", r).group(0) for r in re.findall(r"[A-Za-z]+(?=\d)", str(designator or "").upper())}
+        if not refs or not refs <= {"J", "P", "X", "CN", "CON", "XS", "XP"}:   # generic single-row connector symbol
+            return None, f"no standard symbol: designator {designator or '(none)'} on a {lib} land"
+        if set(pads) != {str(i) for i in range(1, n + 1)} or not 1 <= n <= 40:
+            return None, f"connector land 1x{n:02d} with pads {sorted(pads)}"
+        return f"Conn_01x{n:02d}", f"single-row connector, pins 1-{n} as the land numbers them"
     want = MECHANICAL.get(lib)
     refs = {re.match(r"[A-Z]+", r).group(0) for r in re.findall(r"[A-Za-z]+(?=\d)", str(designator or "").upper())}
     if not want or not refs or not refs <= set(want):
@@ -1245,9 +1283,41 @@ def spec_pins(name):
         return None
 
 
+CASE_EXTRA = re.compile(r"(?i)\bPC\s*Pads?\b|\bconvex\b|\bconcave\b|long\s+side|\barray\b|\bnetwork\b|"
+                        r"\bterminals?\b|\bmodule\b|\bstack(?:ed)?\b|\bradial\b|\baxial\b")
+
+
+def case_text(text):
+    """A part search's case text ('8-SOIC (0.154\", 3.90mm Width)', '1812 (4532 Metric)') when it names only the case:
+    one that adds pads or leads ('0603, 3 PC Pad', '1206, 4 Leads', 'Convex') or a lead count other than its own pin
+    count is not the plain land of that name -> '' (not used)."""
+    t = str(text or "").strip()
+    if not t or CASE_EXTRA.search(t):
+        return ""
+    leads = re.search(r"(?i)\b(\d{1,3})\s*Leads?\b", t)
+    if leads:
+        first = re.match(r"\s*(\d{1,3})-", t)
+        if not first or first.group(1) != leads.group(1):
+            return ""
+    return t
+
+
+CONN_KEY = re.compile(r"^Conn_01x(\d\d)$")
+
+
+def _conn_row(n):
+    """KiCad's Connector_Generic:Conn_01xNN: one row of n pins on the left, pin 1 at the top, numbered 1..n."""
+    top = round((n // 2) * 2.54, 3)                       # pin 1's y: every pin on the 2.54 mm grid
+    pins = [(str(i + 1), "~", "passive", -5.08, round(top - i * 2.54, 3), 0, 3.81) for i in range(n)]
+    g = [_rect(-1.27, top + 1.27, 1.27, round(top - (n - 1) * 2.54 - 1.27, 3), "background")]
+    return (f"Conn_01x{n:02d}", "J", f"Generic connector, single row, 01x{n:02d}", g, pins)
+
+
 def symbol_text(key, mpn=""):
     """KiCad .kicad_sym text for a symbol key from symbol_kind; returns (text, symbol name)."""
-    if ":" in key:
+    if CONN_KEY.match(key):
+        name, ref, desc, g, pins = _conn_row(int(CONN_KEY.match(key).group(1)))
+    elif ":" in key:
         what, order = key.split(":")
         if what == "REG":
             fixed = order != "1117" or bool(re.search(r"-?(\d\.\d|\d{2}|\d-\d)(?![\d.])", re.sub(r"^.*?1117", "", str(mpn).upper())))
@@ -1269,6 +1339,9 @@ def symbol_text(key, mpn=""):
         hide_names += " (pin_numbers hide)"
     flat = all(p[5] in (0, 180) for p in pins)  # horizontal 2-pin parts (diodes): labels above and below, not on the body
     at_ref, at_val = ("0 2.794", "0 -4.064") if flat else ("2.54 0", "-2.54 0")
+    if CONN_KEY.match(key):                    # a connector's labels above and below its row of pins
+        ys = [p[4] for p in pins]
+        at_ref, at_val = f"0 {max(ys) + 2.54:g}", f"0 {min(ys) - 2.54:g}"
     text = (f'(kicad_symbol_lib (version 20220914) (generator "ecadlib_stdparts")\n'
             f'  (symbol "{name}" {hide_names} (in_bom yes) (on_board yes)\n'
             f'    (property "Reference" "{ref}" (at {at_ref} 0) (effects (font (size 1.27 1.27))))\n'

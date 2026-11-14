@@ -342,6 +342,7 @@ class KiCadLibrary:
 
 # ---------------------------------------------------------------- helpers
 POLARIZED_SYMBOL = "Capacitor_Polarized"   # the Library Ref of every polarized capacitor (pin 1 = +)
+FERRITE_SYMBOL = "Ferrite_Bead"            # the Library Ref of every ferrite bead (not the inductor's shared one)
 SHARED_KINDS = ("R", "C", "CP", "L")       # parts whose Library Ref is the generic symbol (altium_export.GENERIC_SYMBOL)
 PART_PARAMS = {"mpn", "lcsc", "manufacturer", "manufacturer part number", "datasheet", "footprint"}
 
@@ -699,6 +700,8 @@ class Run:
         kind, fp_name, sym_name = passive_kind(item, ln), item["footprint"]["ref"], item["symbol"]["ref"]
         if kind == "CP" and sym_name == AX.GENERIC_SYMBOL["Capacitors"]:   # one shared symbol per kind: a polarized
             sym_name = item["symbol"]["ref"] = POLARIZED_SYMBOL              # capacitor never takes the plain one's file
+        if kind == "L" and sym_name == AX.GENERIC_SYMBOL["Inductors"] and self.ferrite(item, ln):
+            sym_name = item["symbol"]["ref"] = FERRITE_SYMBOL                # a bead, drawn as one, in a file of its own
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
@@ -722,15 +725,31 @@ class Run:
         clash = chip_size_clash(st, item, ln)
         if clash:
             st["verify"].append(clash)
+        self._finish_found(st, row)
+        return st
+
+    @staticmethod
+    def _finish_found(st, row):
+        """The part search's own text and maker (Nexar / DigiKey / Mouser / LCSC) after the sources ran, by priority:
+        a KiCad symbol's own description, the part search's, a symbol's family text that lists packages, EasyEDA's."""
         lc = (row.get("lcsc") or "").split(" ")[0]
-        if row.get("src_description"):        # the part search's own text (Nexar / DigiKey / Mouser / LCSC), after a KiCad symbol's
-            st["found"].setdefault("description", (row["src_description"], f"{_desc_label(row)} part data {lc}".strip()))
+        if row.get("src_description"):        # the LCSC number names LCSC's own record only, never DigiKey's / Mouser's
+            src = _desc_label(row)
+            st["found"].setdefault("description", (row["src_description"],
+                                                   f"{src} part data {lc if src == 'LCSC/JLCPCB' else ''}".strip()))
+        if "kicad_description" in st["found"]:                    # a symbol's family text names its packages: after
+            st["found"].setdefault("description", st["found"].pop("kicad_description"))      # the part's own text
         if "easyeda_description" in st["found"]:                  # then the text on EasyEDA's component
             st["found"].setdefault("description", st["found"].pop("easyeda_description"))
+        url = str(row.get("src_datasheet") or "").strip()
+        if url.startswith(("http://", "https://")) and not row.get("src_several"):   # the part search's link (not a
+            src = _desc_label({"src": row["src_datasheet_from"]}) if row.get("src_datasheet_from") else "part search"   # clone's)
+            st["found"].setdefault("datasheet", (url, "the part search" if src == "part search" else
+                                                  f"{src} part data {lc if src == 'LCSC/JLCPCB' else ''}".strip()))
         if row.get("src_manufacturer"):        # the maker a part search lists for this exact MPN (one maker only: an MPN
             src = _desc_label({"src": row.get("src_manufacturer_from", "")})       # sold by clones too fills nothing)
-            st["found"].setdefault("manufacturer", (row["src_manufacturer"], f"{src} part data {lc} (exact MPN)".replace("  ", " ")))
-        return st
+            st["found"].setdefault("manufacturer", (row["src_manufacturer"],
+                                                    f"{src} part data {lc if src == 'LCSC/JLCPCB' else ''} (exact MPN)".replace("  ", " ")))
 
     def local(self, st, row, kind, fp_name, sym_name):
         ls, lf = (row.get("local_symbol") or "").split(" ")[0], (row.get("local_footprint") or "").split(" ")[0]
@@ -776,6 +795,13 @@ class Run:
                 return alt
         return None
 
+    @staticmethod
+    def ferrite(item, ln):
+        """The line is a ferrite bead: its designators, description or part number say so (stdparts.is_ferrite)."""
+        from . import stdparts as SP
+        return SP.is_ferrite(ln.get("designator"), " ".join(str(x or "") for x in (item.get("description"), ln.get("description"))),
+                             _par(item).get("Manufacturer Part Number", ""))
+
     def src_kicad(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         lib = self.kicad()
         if not lib.symbols:
@@ -787,7 +813,13 @@ class Run:
             sym_ref, how = PASSIVE[kind][0], "generic passive symbol"
             if kind == "R" and RU.resistor_style(self.rules) == "us" and "Device" in lib.symbols.get("R_US", ()):
                 sym_ref = "Device:R_US"                # [symbols] resistor = "us": the zigzag symbol
+            if kind == "L" and self.ferrite(item, ln) and "Device" in lib.symbols.get("FerriteBead", ()):
+                sym_ref, how = "Device:FerriteBead", "ferrite bead symbol"
             pkg = package_of(item["footprint"].get("kicad") or fp_name, item.get("description"))
+            if not pkg and kind in ("R", "C", "L"):    # no package in the BOM: the size the maker's part number states
+                from . import stdparts as SP           # (RC0603FR-0710KL is an 0603), before any converted source
+                mk, size = SP.mpn_size(mpn)
+                pkg = size if size and mk in ("", kind) else None
             names = [ln.get("footprint", ""), item["footprint"].get("kicad") or fp_name]
             named = next((lib.footprint(n) for n in names if lib.footprint(n)), None)
             if named:                              # the land the BOM names, as named (R-BF-4): L_Bourns_SRR1210A is
@@ -830,7 +862,9 @@ class Run:
                     st["found"].setdefault("manufacturer", (maker, f"the datasheet link of KiCad symbol {sym_ref} ({host})"))
             shared = kind in ("R", "C", "CP", "L")            # one generic symbol for every value: no MPN, no footprint link
             if props.get("Description") and own:     # a generic symbol's "Resistor" / "Light emitting diode" /
-                st["found"].setdefault("description", (props["Description"], f"KiCad symbol {sym_ref}"))  # "Generic
+                from .kicad_index import PKG_RE   # one that names packages ('..., DIP-8/SOIC-8/TO-99-8') describes the
+                key = "kicad_description" if PKG_RE.search(props["Description"]) else "description"    # family: the
+                st["found"].setdefault(key, (props["Description"], f"KiCad symbol {sym_ref}"))  # part's own text first; "Generic
                 # connector ..., script generated" describes the symbol, not this part
             self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", kicad_params(mpn, shared))
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
@@ -943,9 +977,13 @@ class Run:
     def src_standard(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         """Standard packages and pinouts, built offline (ecadlib.stdparts); fills only what is still missing."""
         from . import stdparts as SP
-        desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), ln.get("description")) if x))
+        bom_desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), ln.get("description")) if x))
+        case = self.case_from_search(st, item, ln, row)
+        desc = " ".join(x for x in (bom_desc, row.get("src_description") if case and   # the source that gave this
+                                    row.get("src_package_from") == row.get("src_description_from") else "") if x)   # case
         k = kind or SP.part_kind(item["folder"], item["footprint"].get("kicad") or fp_name, desc, ln.get("designator"))
-        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value")], k, mpn, desc)
+        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"),
+                          self.case_from_search(st, item, ln, row)], k, mpn, desc)
         got = []
         if not st["footprint"] and res["footprint"]:
             sp = SP.spec(res["footprint"])
@@ -957,6 +995,8 @@ class Run:
         same_fp = res["footprint"] and fp_src.endswith(":" + res["footprint"])
         if res["symbol"] == "R" and RU.resistor_style(self.rules) == "us":
             res["symbol"] = "R_US"
+        if res["symbol"] == "L" and k == "L" and self.ferrite(item, ln):
+            res["symbol"], res["sym_how"] = "FerriteBead", "ferrite bead symbol"
         if not st["symbol"] and res["symbol"] and (k in ("R", "C", "CP", "L") or same_fp):
             text, name = SP.symbol_text(res["symbol"], mpn)
             shared = k in ("R", "C", "CP", "L")
@@ -989,6 +1029,24 @@ class Run:
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
         why += [] if st["symbol"] else [f"symbol: {res['sym_how']}"]
         st["tried"].append("standard: " + "; ".join(got + why))
+
+    @staticmethod
+    def case_from_search(st, item, ln, row):
+        """The part search's case text for this exact MPN, when the BOM says nothing of the package itself (no footprint,
+        no package or chip size in the description: then the two could disagree) and the MPN is not sold by several
+        makers the BOM does not pick between (a clone's case is not this part's) -> text or ''."""
+        from . import stdparts as SP
+        from .kicad_index import PKG_RE
+        case = SP.case_text(row.get("src_package"))
+        if not case or row.get("src_several"):
+            return ""
+        if any(str(x or "").strip() for x in (ln.get("footprint"), item["footprint"].get("kicad"), st.get("hint_fp"))):
+            return ""
+        said = " ".join(str(x or "") for x in (item.get("description"), ln.get("description"), ln.get("value")))
+        if PKG_RE.search(said) or SP._free_attrs(said) or SP.chip_size(said) or re.search(
+                r"(?i)\b(?:DIP|PDIP|SIP|TO-?\d+|SOT|SOD|DO-?\d+|QFP|BGA|LGA|DFN|QFN|SON|MELF|DPAK)", said):
+            return ""
+        return case
 
     def pad_numbers(self, st):
         """The numbered copper pads of the footprint built for a part (its .kicad_mod): {'1', '2'}; a mounting hole's
