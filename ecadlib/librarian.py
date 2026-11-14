@@ -82,6 +82,10 @@ def drop_joined_tab(res, table_spec, st):
                         f"the symbol has no pin {tab} (check the pin table)")
     return dict(res, symbol=dict(res["symbol"], pins=[q for q in pins if str(q["num"]) != tab]))
 
+PACKAGE_REEL = re.compile(r"[A-Z]{0,2}T[13]G")   # onsemi: LT1G = SOT-23 on a 7" reel, lead-free; WT1G = SC-70: the
+                                                  # case can differ from the KiCad symbol's: held unless it is known
+ONSEMI_CASE = {"LT1G": "SOT-23", "LT3G": "SOT-23", "WT1G": "SOT-323_SC-70"}   # onsemi's case + reel codes (the letter
+                                                  # before T: L = SOT-23 case 318, W = SC-70 case 419)
 PACKING = ("TR", "G4", "E4")          # TI / NXP reel and lead-free codes after a package code (LM358DG4, TPS62162DSGR)
 
 
@@ -279,6 +283,9 @@ class KiCadLibrary:
             if nm[:k] not in self._norm:
                 continue
             pack = packing_suffix(mpn, nm, k, str(mpn)[:raw[k]])      # a known packing code may be longer (IRFP460 + PBF)
+            if not pack and PACKAGE_REEL.fullmatch(nm[k:]):            # onsemi's case + reel code: MMBT3904 + LT1G
+                ref, more = self._pick(self._norm[nm[:k]])
+                return ref, f"name + case and reel suffix '{str(mpn)[raw[k]:]}' (check the case)" + more
             if pack or len(nm) - k <= 2 or (sep and len(nm) - k <= 6):
                 ref, more = self._pick(self._norm[nm[:k]])
                 suffix = str(mpn)[raw[k]:]
@@ -338,7 +345,8 @@ class KiCadLibrary:
     def footprint_by_series(self, mpn, stem_ok=False):
         """The one KiCad footprint named after this part's series, by a whole '_' token of its name: Molex 0532610471 ->
         Molex_PicoBlade_53261-0471_..., USB4105-GF-A -> ..._GCT_USB4105-xx-A_... ('xx' stands for any code),
-        SRN4018-100M -> L_Bourns-SRN4018. None when no name or several names fit (a guess: held for a look)."""
+        SRN4018-100M -> L_Bourns-SRN4018, S2B-PH-K-S(LF)(SN) -> JST_PH_S2B-PH-K_... (a hyphenated series name and then
+        the maker's ordering code after a '-'). None when no name or several names fit (a guess: held for a look)."""
         m = re.sub(r"[\s(].*$", "", str(mpn or "").upper().strip())
         if len(re.sub(r"[^A-Z0-9]", "", m)) < 5:
             return None
@@ -347,7 +355,7 @@ class KiCadLibrary:
         stem = next((("-".join(parts[:i + 1])) for i in range(len(parts))
                      if re.search(r"[A-Z]", "-".join(parts[:i + 1])) and re.search(r"\d", "-".join(parts[:i + 1]))
                      and len(re.sub(r"[^A-Z0-9]", "", "-".join(parts[:i + 1]))) >= 5), None)
-        hits = set()
+        hits, by_order = set(), {}
         for name, libs in self.footprints.items():
             for t in [next((t for t in name.split("_") if _pn_token(t)), "")]:   # the part it is named after,
                                                                   # not a later cell or size (..._BS-07-A1BJ001_CR2032)
@@ -362,9 +370,21 @@ class KiCadLibrary:
                 full = re.fullmatch(rx, flat) or (not wild and rx[:1] == "0" and re.fullmatch(rx.lstrip("0"), flat))
                 by_stem = stem_ok and stem and stem in {t.upper()} | set(t.upper().split("-")[1:2]) \
                     and not re.search(r"(?i)CommonMode|Choke|Coupled|Array", name)   # a 2-pad inductor's series
+                ordered = not wild and "-" in t and re.search(r"[A-Za-z]", t) and len(fixed) >= 6 \
+                    and m.startswith(t.upper() + "-")             # JST S2B-PH-K + '-S(LF)(SN)': its ordering code
+                series = re.sub(r"(?i)-\d+Pin$", "", t)           # KiCad's 'ABM3-2Pin': the ABM3 series, 2 pads
+                ordered = ordered or (series != t and re.search(r"[A-Za-z]", series) and re.search(r"\d", series)
+                                      and len(re.sub(r"[^A-Za-z0-9]", "", series)) >= 4 and m.startswith(series.upper() + "-"))
                 if full or by_stem:
                     hits.add(f"{libs[0]}:{name}")
+                elif ordered:                                     # the longest series name that starts the MPN:
+                    by_order.setdefault(len(series if series != t else t), set()).add(f"{libs[0]}:{name}")   # B10B-ZR-SM4-TF, not B10B-ZR
         hits = {h for h in hits if not LAND_VARIANT_NAME.search(h)}
+        if not hits:                                              # an exact name first; the ordering-code rule after
+            for n in sorted(by_order, reverse=True):
+                hits = {h for h in by_order[n] if not LAND_VARIANT_NAME.search(h)}
+                if hits:
+                    break
         return hits.pop() if len(hits) == 1 else None
 
     def footprint_by_prefix(self, name):
@@ -915,7 +935,9 @@ class Run:
                 # connector ..., script generated" describes the symbol, not this part
             self.put_kicad_sym(st, chain, sym_name, None if shared else fp_name, f"kicad:{sym_ref}", kicad_params(mpn, shared))
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
-            if "check" in how:                     # a near name: a person checks it before it is released
+            if "(check the case)" in how and self.case_agrees(st, item, ln, row, kind, mpn, sym_ref):
+                pass                               # the part search's case for this exact MPN is the symbol's land
+            elif "check" in how:                   # a near name: a person checks it before it is released
                 st["verify"].append(f"symbol {sym_ref} matched by {how}")
             elif own and "x wildcards" in how:
                 other = self._wild_other_pinout(lib, mpn, sym_ref, chain)
@@ -927,17 +949,21 @@ class Run:
         if st["footprint"]:
             return
         bom_fp = ln.get("footprint", "")
+        from . import stdparts as SP
         for cand, why in ((fp_ref, fp_how), (lib.footprint(bom_fp), "BOM footprint name"),     # the BOM's land first (R-BF-5)
                           (lib.footprint(st["hint_fp"]), "symbol's Footprint property"),
                           (None if kind else lib.footprint_by_mpn(mpn), "footprint named after the MPN"),
                           (None if kind not in (None, "L") else lib.footprint_by_series(mpn, stem_ok=kind == "L"),
                            "footprint named after the MPN's series"),
+                          (None if kind or bom_fp else lib.footprint(SP.header_land(row.get("src_description")
+                                                                                     or ln.get("description"))),
+                           "footprint named by the description (a plain pin header)"),
                           (lib.footprint_by_prefix(bom_fp.split(":")[-1]), f"shortest KiCad name starting with '{bom_fp}'")):
             if cand:
                 text, _ = K.load_footprint(cand, self.http)
                 self.put_fp(st, text, fp_name, f"kicad:{cand}", self.http)
                 st["tried"].append(f"kicad: footprint {cand} ({why})")
-                if why.startswith(("shortest", "footprint named")):     # a guess by name: held until a person looks
+                if why.startswith(("shortest", "footprint named")):     # a guess by name or text: held until a person looks
                     st["verify"].append(f"footprint {cand} chosen by {why}: compare with the datasheet land pattern")
                 return
         st["tried"].append(f"kicad: no footprint for '{bom_fp or fp_name}'")
@@ -1078,6 +1104,30 @@ class Run:
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
         why += [] if st["symbol"] else [f"symbol: {res['sym_how']}"]
         st["tried"].append("standard: " + "; ".join(got + why))
+
+    def case_agrees(self, st, item, ln, row, kind, mpn, sym_ref):
+        """MPN = a KiCad symbol's name + an onsemi case and reel code (MMBT3904 + LT1G). The part is released on that
+        symbol (no hold) only when three things name one land: the code's case (LT1G: SOT-23), the symbol's Footprint
+        property, and the part search's case text for this exact MPN (DigiKey's group 'TO-236-3, SC-59, SOT-23-3' names
+        SOT-23; one that also names another known land, 'TO-236-3, SOT-323', does not). Every package the BOM's
+        footprint, value or description names must be that land too (a BOM 'SC-59' or 'SC-70' holds it). Anything else -> False (held for a look)."""
+        from . import stdparts as SP
+        land = str(st.get("hint_fp") or "")
+        code = re.sub(r"[^A-Z0-9]", "", str(mpn or "").upper())[len(norm_mpn(sym_ref.split(":")[-1])):]
+        if ONSEMI_CASE.get(code) != land.split(":")[-1] or not land.startswith("Package_TO_SOT_SMD:") or row.get("src_several"):
+            return False
+        land = land.split(":")[-1]
+        named, only = SP.names_only(row.get("src_package"), land, group=True)
+        if not (named and only):
+            return False
+        for said in (ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"), ln.get("description"),
+                     item.get("description")):
+            named, only = SP.names_only(said, land)
+            if named and not only:
+                return False                                  # the BOM (or a source's text) names another case
+        st["tried"].append(f"kicad: {sym_ref}'s land {land} is the case of onsemi code {code} and of "
+                           f"{row.get('src_package_from') or 'the part search'}'s case for {mpn} ({row.get('src_package')})")
+        return True
 
     @staticmethod
     def case_from_search(st, item, ln, row):
