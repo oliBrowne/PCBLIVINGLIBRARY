@@ -228,6 +228,7 @@
 "dblib_links",
 "dblib_text",
 "description_value",
+"description_values",
 "ep",
 "excel_connection",
 "fieldmap_section",
@@ -3733,6 +3734,7 @@
 "Run.folder_file_failed",
 "Run.kicad",
 "Run.local",
+"Run.pad_numbers",
 "Run.put_datasheet",
 "Run.put_datasheet.<locals>.need_pins",
 "Run.put_fp",
@@ -3764,6 +3766,7 @@
 "_load",
 "_load_snapshot",
 "_marked",
+"_named_land",
 "_own_land",
 "_own_notes",
 "_par",
@@ -3806,6 +3809,7 @@
 "main",
 "need_pins",
 "packing_suffix",
+"pad_numbers",
 "pad_table_problems",
 "passive_description",
 "passive_kind",
@@ -4197,6 +4201,20 @@
 "scan.<locals>.add",
 "too_new",
 "write_stamp"
+],
+"ecadlib/mpn_decode.py":[
+"<dictcomp>",
+"<genexpr>",
+"<lambda>",
+"<listcomp>",
+"<module>",
+"<setcomp>",
+"_eia",
+"_rkm",
+"decode",
+"fill_lines",
+"main",
+"value_text"
 ],
 "ecadlib/nexar_signin.py":[
 "<dictcomp>",
@@ -5124,6 +5142,7 @@
 "kicad_names",
 "kicad_ref",
 "main",
+"mechanical_symbol",
 "mpn_size",
 "multi_terminal",
 "named_package",
@@ -5142,7 +5161,8 @@
 "symbol_text",
 "tab_joins",
 "tab_renumber",
-"table"
+"table",
+"tantalum_land"
 ],
 "ecadlib/step_gen.py":[
 "<dictcomp>",

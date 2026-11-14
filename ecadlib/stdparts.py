@@ -6,7 +6,7 @@ part kinds whose pinout is standard, the symbol) offline and deterministically. 
     ecadlib stdparts bench [--kicad DIR] [--fixture F] every table entry against KiCad's official footprint
     ecadlib stdparts coverage BOM [BOM ...]            how many BOM lines this source resolves (no network)
 
-Footprints come only from package_specs/standard.json.gz: 624 packages, each with its KiCad name and library. Their
+Footprints come only from package_specs/standard.json.gz: 628 packages, each with its KiCad name and library. Their
 dimensions are the KiCad footprint generator's size definitions (JEDEC / IPC-SM-782 / manufacturer package drawings,
 built here with footprint_gen's IPC-7351B equations) or, for the packages KiCad draws by hand (SOD, SMA/SMB/SMC, MELF,
 SOT-223, SOT-89, SC-82AB, DO-34, DO-35, DO-41, DO-201AD, DPAK/D2PAK, TO-220, TO-92), the published recommended land as a pad table. Every entry was built and
@@ -1109,6 +1109,49 @@ SYMBOLS = {   # kind -> (KiCad-style name, reference, description, graphics, pin
     "LED": ("LED", "D", "Light emitting diode (pin 1 = cathode)", _diode_body("LED"),
             [("1", "K", "passive", -5.08, 0, 0, 3.81), ("2", "A", "passive", 5.08, 0, 180, 3.81)]),
 }
+# fuses, test points and plated mounting holes: KiCad's Device:Fuse / Polyfuse, Connector:TestPoint, Mechanical:MountingHole_Pad
+# drawn the same way; only used on a land whose pads are exactly these pins (mechanical_symbol)
+SYMBOLS["Fuse"] = ("Fuse", "F", "Fuse", [_rect(-0.762, -2.54, 0.762, 2.54), _poly([(0, 2.54), (0, -2.54)])],
+                   [("1", "~", "passive", 0, 5.08, 270, 2.54), ("2", "~", "passive", 0, -5.08, 90, 2.54)])
+SYMBOLS["Polyfuse"] = ("Polyfuse", "F", "Resettable fuse, polymeric positive temperature coefficient (PTC)",
+                       [_rect(-0.762, -2.54, 0.762, 2.54), _poly([(0, 2.54), (0, -2.54)]),
+                        _poly([(-1.524, -2.032), (-1.524, -1.524), (1.524, 1.524)])],
+                       [("1", "~", "passive", 0, 5.08, 270, 2.54), ("2", "~", "passive", 0, -5.08, 90, 2.54)])
+SYMBOLS["TestPoint"] = ("TestPoint", "TP", "Test point", [_circle(0, 3.302, 0.762)], [("1", "1", "passive", 0, 0, 90, 2.54)])
+SYMBOLS["MountingHole_Pad"] = ("MountingHole_Pad", "H", "Mounting hole with a plated pad (pin 1)", [_circle(0, 1.27, 1.27, 0.508)],
+                               [("1", "1", "passive", 0, -2.54, 90, 2.54)])
+PTC = re.compile(r"(?i)\bPTC\b|poly ?fuse|polyswitch|resettable|\bPPTC\b|multifuse|\bMF-(?:[A-Z]*SM|R|USM|LSMF)|"
+                 r"\b(?:nano|micro|mini)SMD|\b0ZC[A-Z]")
+MECHANICAL = {"TestPoint": ("TP",), "MountingHole": ("H", "MH"), "Fuse": ("F",)}   # KiCad library -> designator classes
+
+
+def mechanical_symbol(fp_source, designator, pads, text=""):
+    """(symbol key, why) for a fuse, test point or mounting hole built on one of KiCad's own lands of that library
+    (fp_source 'kicad:TestPoint:TestPoint_Pad_D1.0mm', 'standard:Fuse:Fuse_1206_3216Metric'), or (None, why). Every
+    designator of the line must be of that kind (TP, H / MH, F) and the land's numbered copper pads (pads: their set)
+    must be exactly the symbol's pins: a test point one pad 1; a plated mounting hole pad 1; a fuse 1 and 2.
+    text: the line's value, description and MPN: a PTC / resettable fuse gets the Polyfuse symbol."""
+    parts = str(fp_source or "").split(":")
+    if len(parts) != 3 or parts[0] not in ("kicad", "standard"):
+        return None, "the land is not one of KiCad's own (no library to tell its kind)"
+    lib = parts[1]
+    want = MECHANICAL.get(lib)
+    refs = {re.match(r"[A-Z]+", r).group(0) for r in re.findall(r"[A-Za-z]+(?=\d)", str(designator or "").upper())}
+    if not want or not refs or not refs <= set(want):
+        return None, f"no standard symbol: designator {designator or '(none)'} on a {lib} land"
+    pads = set(pads)
+    if lib == "TestPoint":
+        return ("TestPoint", "test point, one pad") if pads == {"1"} else (None, f"test point land with pads {sorted(pads)}")
+    if lib == "MountingHole":
+        if not pads:                                      # KiCad's MountingHole has no pins: a pinless symbol the
+            return None, "mounting hole without a pad: no pins, so no symbol is built (pick it in your library)"   # exports refuse
+        return ("MountingHole_Pad", "mounting hole, plated pad 1") if pads == {"1"} else \
+            (None, f"mounting hole land with pads {sorted(pads)}")
+    if pads != {"1", "2"}:
+        return None, f"fuse land with pads {sorted(pads)}"
+    return ("Polyfuse", "resettable (PTC) fuse, 2 pins") if PTC.search(str(text)) else ("Fuse", "fuse, 2 pins")
+
+
 for _k, _d in (("D", "Diode"), ("D_Schottky", "Schottky diode"), ("D_Zener", "Zener diode"), ("D_TVS", "TVS diode (unidirectional)")):
     SYMBOLS[_k] = (_k, "D", f"{_d} (pin 1 = cathode)", _diode_body(_k), [("1", "K", "passive", -5.08, 0, 0, 3.81), ("2", "A", "passive", 5.08, 0, 180, 3.81)])
 
@@ -1322,17 +1365,64 @@ def _names_other_land(texts, name):
     return any(_kicad_own(t) not in (None, name) for t in texts if str(t or "").strip())
 
 
+# tantalum EIA case (metric size - height) -> the table's land: KiCad's KEMET case lands, which KEMET and AVX share for
+# these four cases (same body); other cases (low-profile, AVX-only) are not in the table
+TANT_LAND = {"3216-18": "CP_EIA-3216-18_Kemet-A", "3528-21": "CP_EIA-3528-21_Kemet-B",
+             "6032-28": "CP_EIA-6032-28_Kemet-C", "7343-31": "CP_EIA-7343-31_Kemet-D"}
+EIA_CASE = re.compile(r"(?<![\d.])(3216|3528|6032|7343|2012|1608|7260|7132)[-_ ](\d{2})(?![\d.])")
+CASE_LETTER = re.compile(r"(?i)(?<![A-Za-z0-9])case[-_ ]?([A-E])(?![A-Za-z0-9])")
+
+
+def tantalum_land(texts, mpn=""):
+    """(table land, why) for a tantalum capacitor, or (None, why). Its EIA case comes from the footprint texts ('CP_EIA-
+    3528-21_Kemet-B', 'CP_Tantalum_Case-B_EIA-3528-21_Reflow', '3528-21', 'Case B') and the MPN's own code (KEMET
+    T491A..., AVX TAJB..., ecadlib.mpn_decode). Every one that names a case must name the same one; a footprint text
+    that names another land (C_1206_3216Metric, a hand-solder variant) or no case at all builds nothing."""
+    from . import mpn_decode as MD
+    from .librarian import passive_value
+    said = []                                             # (case, where)
+    for t in texts:
+        t = str(t or "").strip()
+        if not t or (passive_value(t, "Capacitors") is not None or passive_value(t.lower(), "Capacitors") is not None) \
+                and not EIA_CASE.search(t) and not CASE_LETTER.search(t):
+            continue                                      # the Value cell ('10uF', '22u') names no land; '1206' does
+        if LAND_VARIANT.search(t):
+            return None, f"{t!r} is a land variant, not the table's plain tantalum land"
+        cases = {f"{m.group(1)}-{m.group(2)}" for m in EIA_CASE.finditer(t)}
+        letters = {MD.TANT_CASE.get(m.group(1).upper(), f"case {m.group(1).upper()}") for m in CASE_LETTER.finditer(t)}
+        if not cases and not letters:
+            return None, f"the footprint text {t!r} names no tantalum case"
+        said += [(c, t) for c in cases | (letters if not cases else set())]
+    d = MD.decode(mpn)
+    if d and d["kind"] == "CP":
+        said.append((d["case"], f"{mpn} ({d['series']} code)"))
+    found = {c for c, _ in said}
+    if not found:
+        return None, "no tantalum case named (footprint, case letter or a KEMET T491 / AVX TAJ part number)"
+    if len(found) > 1:
+        return None, "two tantalum cases named: " + ", ".join(f"{c} ({w})" for c, w in said)
+    case = found.pop()
+    if case not in TANT_LAND:
+        return None, f"tantalum case {case} is not in the standard table"
+    return TANT_LAND[case], f"tantalum case EIA {case} (" + ", ".join(dict.fromkeys(w for _, w in said)) + ")"
+
+
 def resolve(texts, kind=None, mpn="", description=""):
     """What the standard source builds for one part:
     {"footprint": table name | None, "fp_how": str, "kicad_ref": "Lib:Name", "symbol": key | None, "sym_how": str}.
     A polarized capacitor (kind CP, or a C whose MPN is a tantalum / polymer / electrolytic series) gets nothing: the
     table has no polarized case, and a chip-capacitor land would lose the + mark."""
-    if kind == "C" and (POLAR_CAP.match(_norm(mpn)) or says_polarized(description)):
-        kind = "CP"
+    if kind == "C" and (POLAR_CAP.match(_norm(mpn)) or says_polarized(description) or
+                        any(_strip_lib(str(t or "")).strip().startswith("CP_") for t in texts)):
+        kind = "CP"                                       # a C on a polarized land ('CP_EIA-3528-21_Kemet-B') is one
     if kind == "CP":
-        return {"footprint": None, "fp_how": "polarized capacitor: its case (tantalum / polymer / electrolytic) is not in "
-                "the standard table", "kicad_ref": None, "symbol": None, "sym_how": "polarized capacitor: pin 1 = + only "
-                "with a footprint that marks it"}
+        name, how = tantalum_land(texts, mpn) if not re.search(r"(?i)electrolytic|alumin|polymer|niobium", str(description)) \
+            else (None, "the description says it is not a solid tantalum")
+        if name:
+            return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name), "symbol": "CP",
+                    "sym_how": "polarized capacitor, pin 1 = + as the land marks it"}
+        return {"footprint": None, "fp_how": f"polarized capacitor: {how}", "kicad_ref": None, "symbol": None,
+                "sym_how": "polarized capacitor: pin 1 = + only with a footprint that marks it"}
     multi = multi_terminal(description) if kind in CHIP_PREFIX else None
     if multi:                                             # 'RES ARRAY 4 RES 10K 1206': the size is the array's body
         return {"footprint": None, "fp_how": f"the description says {multi!r}: more than two terminals, not a two-pad "
@@ -1344,6 +1434,8 @@ def resolve(texts, kind=None, mpn="", description=""):
         name, how = None, f"the description says {other.group(0)!r}: another land than the plain chip of that size"
     else:
         name, how = footprint_for(list(texts), fk, mpn, weak=[description])
+        if name in TANT_LAND.values():                    # a tantalum land: only a polarized capacitor's (pin 1 = +)
+            name, how = None, f"{name} is a polarized capacitor's land, but the part is not one (kind {kind or 'unknown'})"
     if not name:                                          # a known MPN family settles a bare family name (SOT-223, TO-220)
         fam = next((pk for rx, pk, _ in FAMILY if re.match(rx, _norm(mpn))), ())
         said = " ".join(map(str, texts)) + " " + str(description)

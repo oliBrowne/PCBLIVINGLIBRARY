@@ -734,6 +734,9 @@ def check_item(item, base=".", rules=None):
     # ---- fields
     par = {p["name"]: p.get("value", "") for p in item["parameters"]}
     for k in rules["parameters"]["required"]:         # default: REQUIRED, then the datasheet link and Description
+        if item.get("no_bom_part") and RU.canonical_param(k, rules) in (
+                RU.canonical_param("Manufacturer", rules), RU.canonical_param("Manufacturer Part Number", rules)):
+            continue                                  # a mounting hole / test pad: copper only, no maker part to name
         if k == "Datasheet":
             if not any(_filled(par.get(x)) for x in ("ComponentLink2URL", "Datasheet", RU.canonical_param("Datasheet", rules))):
                 if (rules.get("release") or {}).get("datasheet", "warn") != "hold":

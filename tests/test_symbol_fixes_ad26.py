@@ -9,7 +9,8 @@ from ecadlib import altium_lib as AL, kicad_export as X, kicad_import as K, rule
 from tests import test_librarian as TL
 from tests import test_symbol_layout as TS
 
-TWO_PIN = [k for k in SP.SYMBOLS]
+TWO_PIN = [k for k in SP.SYMBOLS if len(SP.SYMBOLS[k][4]) == 2]
+ONE_PIN = [k for k in SP.SYMBOLS if len(SP.SYMBOLS[k][4]) == 1]     # test point, plated mounting hole
 DIODES = [k for k in SP.SYMBOLS if SP.SYMBOLS[k][1] == "D"]
 STEP = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}         # Altium pin orientation -> direction from the body
 
@@ -64,6 +65,19 @@ def test_pins_touch_the_body():
             meets = [p for g in on_axis for p in g if abs(p[axis] - inner[axis]) < 1e-6]   # "+" and LED arrows aside
             assert meets, (key, num, inner)
             assert all(abs(p[axis]) <= abs(inner[axis]) + 0.64 for g in on_axis for p in g), (key, num)  # at most a bar hook past it
+
+
+def test_one_pin_symbols_on_the_grid_and_touching_their_circle():
+    assert sorted(ONE_PIN) == ["MountingHole_Pad", "TestPoint"], ONE_PIN
+    for key in ONE_PIN:
+        _, pins, _, _ = _altium(key)
+        assert len(pins) == 1 and not pins[0]["conglomerate"] & 0x04, key
+        x, y = _hotspot(pins[0])
+        assert x % 10 == 0 and y % 10 == 0, (key, x, y)
+        (num, _n, _t, px, py, ang, ln), = SP.SYMBOLS[key][4]
+        cx, cy, r = (float(v) for v in re.search(r"\(center (-?[\d.]+) (-?[\d.]+)\) \(radius ([\d.]+)\)",
+                                                 SP.SYMBOLS[key][3][0]).groups())
+        assert ang == 90 and abs(py + ln - (cy - r)) < 1e-6 and px == cx, key    # the pin ends on the circle's bottom
 
 
 def test_cathode_pin_is_on_the_bar_side():

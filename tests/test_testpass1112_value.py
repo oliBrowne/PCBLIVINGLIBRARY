@@ -52,16 +52,23 @@ def test_value_comes_from_the_description_when_the_bom_has_no_value_column(tmp_p
 
 @lite
 def test_a_passive_whose_description_names_no_value_or_two_is_held(tmp_path):
+    """Since 2026-11-14 a resistor's / capacitor's part number that states its value by its maker's code fills an empty
+    Value (ecadlib.mpn_decode): RC0603FR-0710KL is 10 kOhm whatever the description leaves out. A description naming
+    another value than the code still holds; a part whose number states nothing is held as before."""
     got = _librarian(tmp_path, [
-        "R1,1,Yageo,RC0603FR-0710KL,RES 0603,0603",                 # no value at all
-        "R2,1,Yageo,RC0603FR-074K7L,RES 4.7K or 10K 0603,0603",     # two values: no guess
-        "C1,1,Murata,GRM155R71C104KA88D,CAP CER 16V X7R 0402,0402",   # 16V is not a capacitance
+        "R1,1,Yageo,RC0603FR-0710KL,RES 0603,0603",                 # no value in the text: the part number's
+        "R2,1,Yageo,RC0603FR-074K7L,RES 4.7K or 10K 0603,0603",     # two values, one not the code's: held
+        "C1,1,Murata,GRM155R71C104KA88D,CAP CER 16V X7R 0402,0402",   # 16V is not a capacitance: the code's 100nF
+        "R3,1,Acme,XR-1234,RES 0603,0603",                          # no value anywhere: held
     ])
-    for name in ("RC0603FR-0710KL", "RC0603FR-074K7L", "GRM155R71C104KA88D"):
+    assert _value(got["RC0603FR-0710KL"]) == "10kΩ" and got["RC0603FR-0710KL"]["status"] == "ready", got["RC0603FR-0710KL"]
+    assert _value(got["GRM155R71C104KA88D"]) == "100nF" and got["GRM155R71C104KA88D"]["status"] == "ready"
+    for name in ("RC0603FR-074K7L", "XR-1234"):
         it = got[name]
         assert _value(it) == "", it
         assert it["status"] == "held", (name, it["status"])
         assert any("Value is empty" in h for h in it.get("hold_reasons") or []), it.get("hold_reasons")
+    assert any("names another value than the part number" in h for h in got["RC0603FR-074K7L"]["hold_reasons"])
 
 
 def test_release_check_holds_an_empty_value_behind_an_equals_value_comment():
