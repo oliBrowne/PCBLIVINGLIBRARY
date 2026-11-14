@@ -64,3 +64,26 @@ def test_names_value_spellings():
         assert RC._names_value(v, "capacitance"), v
     for v in ("50V", "X7R", "25V X5R", "0603", "C0G", "10% 50V"):
         assert not RC._names_value(v, "capacitance"), v
+
+
+def test_names_value_packed_ratings_and_large_chip_sizes():
+    """Review of #250: rating columns pasted with commas or hyphens ('50V,X7R,0603'), DC/AC and RKM voltages
+    ('50VDC', '6V3'), NPO with the letter O, a bare wattage fraction and chip sizes 1206 and up released."""
+    for word in ("resistance", "capacitance"):
+        for v in ("50V,X7R,0603", "1%,0603", "X7R,0603", "50V,0603", "X7R-0603", "1206-0603", "0805/1206", "50V-0603", "0603-X7R", "１％，０６０３",
+                  "50VDC", "16Vdc", "250VAC", "50 VDC", "6V3", "2V5", "NPO 50V", "50V NPO", "1/8", "1/4", "1206",
+                  "2512", "1812", "2220", "2010", "1206 50V X7R"):
+            assert not RC._names_value(v, word), (word, v)
+    for v in ("1210", "10k-1%", "RC0603FR-0710KL", "1,5k", "0R", "1k/1%", "330R 1/4W", "121", "1k21", "CRCW060310K0FKEA"):
+        assert RC._names_value(v, "resistance"), v
+    for v in ("100n-50V", "GRM188R71H104KA93D", "47pF NPO", "6p8", "2u2 6V3", "0,1µF", "100nF 50VDC"):
+        assert RC._names_value(v, "capacitance"), v
+
+
+def test_not_fitted_word_beside_a_rating_gets_the_not_fitted_message():
+    item = {"folder": "Components/Capacitors", "parameters": [{"name": "Value", "value": "NC 0603"}]}
+    assert "not fitted" in RC.value_number_problem(item)
+    item["parameters"][0]["value"] = "DNP"
+    assert "not fitted" in RC.value_number_problem(item)
+    item["parameters"][0]["value"] = "100nF 50V"
+    assert RC.value_number_problem(item) is None
