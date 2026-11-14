@@ -37,6 +37,7 @@ terminal.
 
 * [Bring your own model](models.md): Claude by default, any provider, guide rails for smaller models.
 * [API keys and AI costs](api-keys.md) and [what it costs to run](costs.md).
+* [DigiKey, Mouser and Nexar keys, step by step](part-lookup-keys.md): optional, free, with a check that they work.
 * [Accuracy benchmark](benchmark.md): real parts, live datasheet reads, every miss.
 
 ## Project

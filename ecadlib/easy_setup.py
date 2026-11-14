@@ -13,6 +13,8 @@ What the page does (each step also works on its own, later):
      run this ecadlib, and shows the one step left inside Altium (Install from file...). Add to KiCad: copies the
      "ecadlib: add part" PCB editor plugin into KiCad's plugin folder for each KiCad found, with this ecadlib's command
      next to it, so it works without PATH changes.
+  +. Part lookups (optional): DigiKey, Mouser and Nexar keys, each with its sign-up steps and a Check button that runs
+     one free test search (ecadlib.lookup_keys).
   5. Altium 365 (optional): the workspace address (saved as [altium365] workspace) and "Sign in to Altium 365", the
      same browser sign-in with your own Nexar app as `ecadlib nexar signin` (ecadlib.nexar_signin), run in the
      background so the page can show when it is done.
@@ -109,6 +111,7 @@ def _key_row(name, label, why, url, environ):
 
 def state(ws_root, environ=None):
     """Everything the setup page shows. Never contains a key value."""
+    from . import lookup_keys as LK
     environ = os.environ if environ is None else environ
     s = UC.load_settings()
     raw = _ws_rules_raw(ws_root)
@@ -128,7 +131,7 @@ def state(ws_root, environ=None):
             "providers": [{"id": p[0], "label": p[1], "key": p[3], "models": [{"id": m, "note": n} for m, n in p[4]],
                            "key_url": p[5], "note": p[6]} for p in PROVIDERS],
             "keys": keys, "detected": found, "installed": s.get("installed") or {},
-            "altium365": a365_state(raw), "crash_reports": crash_reports_state(),
+            "lookups": LK.state(environ), "altium365": a365_state(raw), "crash_reports": crash_reports_state(),
             "can_restart": RESTART is not None, "config_dir": str(UC.config_dir())}
 
 
@@ -230,7 +233,8 @@ def restart(ws):
 # ------------------------------------------------------------------ keys
 def store_key(b):
     name, value = b.get("name"), b.get("value")
-    allowed = {p[3] for p in PROVIDERS if p[3]} | {k[0] for k in EXTRA_KEYS}
+    from . import lookup_keys as LK
+    allowed = {p[3] for p in PROVIDERS if p[3]} | {k[0] for k in EXTRA_KEYS} | LK.NAMES
     if name not in allowed:
         raise ValueError(f"{name!r} is not a key this page stores; use `ecadlib keys set NAME` for others")
     if not isinstance(value, str):
@@ -284,6 +288,13 @@ def check_key(b, get=None):
         return {"ok": False, "message": f"Ollama has no model {model}: run `ollama pull {model}` first"}
     return {"ok": True, "message": (f"{p[1]} accepted the key" + (": press Save to keep it" if pasted else "")) if key
             else f"{p[1]} answered"}
+
+
+def lookup_check(b):
+    """The Part lookups card's Check: one free test search with the saved DigiKey / Mouser / Nexar keys."""
+    from . import lookup_keys as LK
+    pid = b.get("id")
+    return LK.check(pid if isinstance(pid, str) else "")
 
 
 # ------------------------------------------------------------------ Altium 365
@@ -535,7 +546,8 @@ POST_ROUTES = {"/api/setup": save, "/api/setup/key": lambda ws, b: store_key(b),
                "/api/setup/restart": lambda ws, b: restart(b.get("workspace") or ws),
                "/api/setup/nexar/signin": lambda ws, b: start_nexar_signin(b),
                "/api/setup/nexar/signout": lambda ws, b: nexar_signout(b),
-               "/api/setup/crash-reports": lambda ws, b: set_crash_reports(b)}
+               "/api/setup/crash-reports": lambda ws, b: set_crash_reports(b),
+               "/api/setup/lookup/check": lambda ws, b: lookup_check(b)}
 WRITES = {"/api/setup", "/api/setup/altium"}             # these write into the workspace: under the server's write lock
 
 

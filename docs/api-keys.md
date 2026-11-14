@@ -4,6 +4,9 @@ ecadlib is free and runs on your computer. The AI steps (reading a datasheet, wr
 optional visual check) use **your own** API key and bill **your** account. This page says where that key lives, who
 can read it, and how ecadlib shows the cost before it spends anything.
 
+The optional distributor keys (DigiKey, Mouser, Nexar) are stored the same way. How to get each one, where to paste
+it and how to check it works: [DigiKey, Mouser and Nexar keys, step by step](part-lookup-keys.md).
+
 ## Where your key lives
 
 Store the key with ecadlib, not in an environment variable:

@@ -318,7 +318,7 @@ def key_hint(name):
 
 
 # ------------------------------------------------------------------ ecadlib keys
-def main(argv=None, inp=None, out=print):
+def main(argv=None, inp=None, out=print, http=None):
     ap = argparse.ArgumentParser(prog="ecadlib keys", description="API keys stored for this user (names only are shown)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="stored keys (names only)")
@@ -327,8 +327,13 @@ def main(argv=None, inp=None, out=print):
     s.add_argument("--stdin", action="store_true", help="read the value from standard input (scripts)")
     r = sub.add_parser("remove", help="forget a stored key")
     r.add_argument("name")
+    c = sub.add_parser("check", help="one free test search with the saved DigiKey / Mouser / Nexar keys")
+    c.add_argument("lookup", nargs="*", help="digikey, mouser or nexar (default: every one whose keys are saved)")
     a = ap.parse_args(argv)
     try:
+        if a.cmd == "check":
+            from . import lookup_keys as LK
+            return LK.main(a.lookup, out=out, http=http)
         return _keys(a, inp, out)
     except (ValueError, EOFError) as e:          # an empty key, a bad name, no input: the user's to fix, not a bug
         print(f"ecadlib keys {a.cmd}: {str(e) or 'no input (nothing was typed)'}", file=sys.stderr)

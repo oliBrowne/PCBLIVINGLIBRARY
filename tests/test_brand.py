@@ -42,7 +42,7 @@ def test_mark_without_tile_is_transparent_around_it():
 
 
 def test_pages_use_the_mark_and_the_copper_token():
-    for f in ("site/index.html", "site/privacy.html", "site/terms.html", "ecadlib/ui/static/index.html",
+    for f in ("site/index.html", "site/privacy.html", "site/terms.html", "site/keys.html", "ecadlib/ui/static/index.html",
               "ecadlib/ui/static/setup.html"):
         s = (ROOT / f).read_text(encoding="utf-8")
         assert B.mark_svg_body() in s, f
