@@ -1366,8 +1366,9 @@ def triage(lines, index, provs, http, shared=None):
             status = "in_library (generated footprint)"
         elif src and src.found and src.has_footprint:
             status = "available_easyeda" if src.has_symbol else "easyeda_footprint_only"
-        elif errored:
-            status = "unverified (source unreachable)"
+        elif errored and not (src and src.found) and not (work.get("lcsc") and work.get("lcsc") != ln.get("lcsc")):
+            # (a source that found the part answered, an official one or JLCPCB's search with its LCSC number: one unreachable
+            status = "unverified (source unreachable)"    # source (JLCPCB's blocked search) does not unverify it
         else:
             status = "needs_footprint_generation"
         if unconfigured:

@@ -1169,15 +1169,24 @@ def mechanical_symbol(fp_source, designator, pads, text=""):
     if len(parts) != 3 or parts[0] not in ("kicad", "standard"):
         return None, "the land is not one of KiCad's own (no library to tell its kind)"
     lib = parts[1]
-    row = re.search(r"_1x(\d{2})(?:_|$)", parts[2])
-    if lib.startswith("Connector") and row and not re.search(r"(?i)MountingPin|-\d*MP|_MP|Shield", parts[2]):
-        n = int(row.group(1))                             # one row of n pins, KiCad's own land numbered 1..n: the
-        refs = {re.match(r"[A-Z]+", r).group(0) for r in re.findall(r"[A-Za-z]+(?=\d)", str(designator or "").upper())}
-        if not refs or not refs <= {"J", "P", "X", "CN", "CON", "XS", "XP"}:   # generic single-row connector symbol
+    row = re.search(r"_1x(\d{2})(?:-1MP)?(?:_|$)", parts[2])
+    conn_refs = {"J", "P", "X", "CN", "CON", "XS", "XP", "TB", "USB"}
+    refs = {re.match(r"[A-Z]+", r).group(0) for r in re.findall(r"[A-Za-z]+(?=\d)", str(designator or "").upper())}
+    if lib == "Connector_USB" and re.match(r"USB_Micro-B_", parts[2]):
+        if not refs or not refs <= conn_refs:
             return None, f"no standard symbol: designator {designator or '(none)'} on a {lib} land"
-        if set(pads) != {str(i) for i in range(1, n + 1)} or not 1 <= n <= 40:
+        if set(pads) != {"1", "2", "3", "4", "5", "SH"}:
+            return None, f"USB Micro-B land with pads {sorted(pads)}"
+        return "USB_Micro-B_Receptacle", "USB Micro-B receptacle, contacts 1-5 as the USB specification numbers them, shell SH"
+    if lib.startswith(("Connector", "TerminalBlock")) and row and not re.search(r"(?i)MountingPin|_MP|Shield", parts[2]):
+        n = int(row.group(1))                             # one row of n pins, KiCad's own land numbered 1..n: the
+        mp = bool(re.search(r"-1MP(?:_|$)", parts[2]))    # generic single-row connector symbol (and the land's
+        if not refs or not refs <= conn_refs:             # mounting pads as one MP pin)
+            return None, f"no standard symbol: designator {designator or '(none)'} on a {lib} land"
+        if set(pads) != {str(i) for i in range(1, n + 1)} | ({"MP"} if mp else set()) or not 1 <= n <= 40:
             return None, f"connector land 1x{n:02d} with pads {sorted(pads)}"
-        return f"Conn_01x{n:02d}", f"single-row connector, pins 1-{n} as the land numbers them"
+        return (f"Conn_01x{n:02d}" + ("_MountingPin" if mp else ""),
+                f"single-row connector, pins 1-{n} as the land numbers them" + (", mounting pads MP" if mp else ""))
     want = MECHANICAL.get(lib)
     refs = {re.match(r"[A-Z]+", r).group(0) for r in re.findall(r"[A-Za-z]+(?=\d)", str(designator or "").upper())}
     if not want or not refs or not refs <= set(want):
@@ -1257,6 +1266,25 @@ FAMILY_PKG = {"SOT-23": r"\bSOT-?23(?:_3L?)?(?:_TR)?(?![-\w])", "TO-92_Inline": 
 PNP_RE = re.compile(r"^(2N3906|2N2907|2N4403|2N5401|BC3[2]7|BC55[6-9]|BC560)")
 
 
+# The TVS series whose part numbers end in A for one direction and CA (or C) for both (Littelfuse, Vishay, Bourns,
+# onsemi, ST all number SMAJ/SMBJ/SMCJ/P6KE/1.5KE this way): SMBJ5.0A is unidirectional, SMBJ5.0CA bidirectional
+TVS_SERIES = re.compile(r"^(?:SMAJ|SMBJ|SMCJ|SMDJ|SMLJ|P4SMA|P6SMB|1SMB|SMF|P4KE|P6KE|1\.5KE|1\.5SMC|5KP|3KP|15KP)"
+                        r"(\d{1,3}(?:\.\d)?)(C?)A(?:[-_].*|\b.*)?$", re.I)
+
+
+def tvs_unidirectional(mpn, description=""):
+    """True when the MPN is one of the A / CA numbered TVS series with A alone (SMBJ5.0A, P6KE6.8A-E3/54) and the
+    description does not say bidirectional, or (no such MPN) the description says unidirectional. A CA number, or a
+    description and number that disagree, is never unidirectional (the part is held for its symbol)."""
+    d = str(description or "")
+    bi = re.search(r"(?i)\bbi-?directional|\bbidir|\bBI\b", d)
+    uni = re.search(r"(?i)\buni-?directional|\bunidir|\bUNI\b", d)
+    m = TVS_SERIES.match(str(mpn or "").strip())
+    if m:
+        return not m.group(2) and not bi
+    return bool(uni) and not bi
+
+
 def symbol_kind(kind, mpn, fp_name, description=""):
     """-> (symbol key, why) for a standard symbol, or (None, why)."""
     if kind in ("R", "C", "CP", "L", "LED"):
@@ -1270,7 +1298,7 @@ def symbol_kind(kind, mpn, fp_name, description=""):
             return None, "chip-size D part: LED or diode is not stated (footprint is the same)"
         sub = "D_Zener" if re.search(r"zener|BZX|BZT|MMSZ|\bZD", d, re.I) else "D_TVS" if re.search(r"\bTVS\b|transient|SMAJ|SMBJ|SMCJ|P6KE|ESD", d, re.I) \
             else "D_Schottky" if re.search(r"schottky|\bBAT\d|\bSS\d|\bB5\d|\bMBR|\bSK\d|\bSB\d|1N58[1-9]", d, re.I) else "D"
-        if sub == "D_TVS":     # KiCad's D_TVS is bidirectional (A1/A2); the MPN does not reliably say which kind it is
+        if sub == "D_TVS" and not tvs_unidirectional(mpn, description):  # KiCad's D_TVS is bidirectional (A1/A2)
             return None, "TVS diode: uni- or bidirectional is not certain from the MPN; symbol left to the other sources"
         return sub, "2-pin diode, pin 1 = cathode"
     m = re.sub(r"[^A-Z0-9]", "", str(mpn or "").upper())
@@ -1361,21 +1389,37 @@ def header_land(text):
     return f"PinHeader_1x{n:02d}_P2.54mm_Vertical"
 
 
-CONN_KEY = re.compile(r"^Conn_01x(\d\d)$")
+CONN_KEY = re.compile(r"^Conn_01x(\d\d)(_MountingPin)?$")
 
 
-def _conn_row(n):
-    """KiCad's Connector_Generic:Conn_01xNN: one row of n pins on the left, pin 1 at the top, numbered 1..n."""
+def _conn_row(n, mp=False):
+    """KiCad's Connector_Generic:Conn_01xNN: one row of n pins on the left, pin 1 at the top, numbered 1..n; mp: and
+    its mounting pads as one pin MP at the bottom (Conn_01xNN_MountingPin, for KiCad's '..._1x04-1MP_...' lands)."""
     top = round((n // 2) * 2.54, 3)                       # pin 1's y: every pin on the 2.54 mm grid
+    bottom = round(top - (n - 1) * 2.54 - 1.27, 3)
     pins = [(str(i + 1), "~", "passive", -5.08, round(top - i * 2.54, 3), 0, 3.81) for i in range(n)]
-    g = [_rect(-1.27, top + 1.27, 1.27, round(top - (n - 1) * 2.54 - 1.27, 3), "background")]
+    g = [_rect(-1.27, top + 1.27, 1.27, bottom, "background")]
+    if mp:
+        pins.append(("MP", "MountPin", "passive", 0, round(bottom - 2.54, 3), 90, 2.54))
+        return (f"Conn_01x{n:02d}_MountingPin", "J", f"Generic connector, single row, 01x{n:02d}, mounting pin", g, pins)
     return (f"Conn_01x{n:02d}", "J", f"Generic connector, single row, 01x{n:02d}", g, pins)
+
+
+# USB Micro-B receptacle: the USB specification numbers its contacts (1 VBUS, 2 D-, 3 D+, 4 ID, 5 GND) and KiCad's
+# USB_Micro-B lands number their pads the same, with the shell's pads SH. Power on top, ground and shield at the bottom
+SYMBOLS_USB = {"USB_Micro-B_Receptacle": ("USB_Micro-B_Receptacle", "J", "USB Micro Type B connector",
+                               [_rect(-5.08, 5.08, 5.08, -5.08, "background")],
+                               [("1", "VBUS", "passive", 0, 7.62, 270, 2.54), ("2", "D-", "passive", 7.62, 0, 180, 2.54),
+                                ("3", "D+", "passive", 7.62, 2.54, 180, 2.54), ("4", "ID", "passive", 7.62, -2.54, 180, 2.54),
+                                ("5", "GND", "passive", 0, -7.62, 90, 2.54), ("SH", "Shield", "passive", -2.54, -7.62, 90, 2.54)])}
 
 
 def symbol_text(key, mpn=""):
     """KiCad .kicad_sym text for a symbol key from symbol_kind; returns (text, symbol name)."""
     if CONN_KEY.match(key):
-        name, ref, desc, g, pins = _conn_row(int(CONN_KEY.match(key).group(1)))
+        name, ref, desc, g, pins = _conn_row(int(CONN_KEY.match(key).group(1)), bool(CONN_KEY.match(key).group(2)))
+    elif key in SYMBOLS_USB:
+        name, ref, desc, g, pins = SYMBOLS_USB[key]
     elif ":" in key:
         what, order = key.split(":")
         if what == "REG":
@@ -1398,6 +1442,8 @@ def symbol_text(key, mpn=""):
         hide_names += " (pin_numbers hide)"
     flat = all(p[5] in (0, 180) for p in pins)  # horizontal 2-pin parts (diodes): labels above and below, not on the body
     at_ref, at_val = ("0 2.794", "0 -4.064") if flat else ("2.54 0", "-2.54 0")
+    if key in SYMBOLS_USB:                     # labels above VBUS and below GND, off the body and its pin names
+        at_ref, at_val = "-2.54 10.16", "2.54 -10.16"
     if CONN_KEY.match(key):                    # a connector's labels above and below its row of pins
         ys = [p[4] for p in pins]
         at_ref, at_val = f"0 {max(ys) + 2.54:g}", f"0 {min(ys) - 2.54:g}"

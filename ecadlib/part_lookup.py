@@ -357,12 +357,23 @@ class MouserSourcing(L.MouserLifecycle):
               "ProductAttributes rarely carry electrical specs, so the Description is parsed too.")
     KEYWORD_URL = "https://api.mouser.com/api/v1/search/keyword?apiKey={}"
 
+    RATE_WAIT = 61.0          # s: Mouser's per-minute allowance is back after a minute
+    _limited = False          # a refusal that a minute's wait did not end (a daily cap or a bad key): no more waits
+
     def _post(self, url, body):
         if not self.configured():
             raise P.NotConfigured(f"{self.name}: set {', '.join(self.env)} ({self.auth})")
         # the key is a query parameter: httpcache redacts apiKey= from the cache key and the stored URL
-        return self.http.post(url.format(quote(UC.secret("MOUSER_API_KEY"), safe="")), json.dumps(body),
-                              headers={"Content-Type": "application/json", "Accept": "application/json"})
+        send = lambda: self.http.post(url.format(quote(UC.secret("MOUSER_API_KEY"), safe="")), json.dumps(body),
+                                      headers={"Content-Type": "application/json", "Accept": "application/json"})
+        r = send()
+        if getattr(r, "status", 0) in (403, 429) and not self._limited:   # over the 30 a minute: wait it out once
+            import time
+            time.sleep(self.RATE_WAIT)
+            r = send()
+            if getattr(r, "status", 0) in (403, 429):
+                self._limited = True
+        return r
 
     def part(self, p, alternates=False):
         res = PartInfo(self.name, mpn=p["mpn"])

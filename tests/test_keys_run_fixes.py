@@ -92,7 +92,10 @@ def test_single_row_connector_symbol_only_on_a_plain_numbered_row():
     M = SP.mechanical_symbol
     assert M("kicad:Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical", "J1", {"1", "2"})[0] == "Conn_01x02"
     assert M("kicad:Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical", "P3, J4", {"1", "2", "3", "4"})[0] == "Conn_01x04"
-    for args in (("kicad:Connector_Molex:Molex_PicoBlade_53261-0471_1x04-1MP_P1.25mm_Horizontal", "J2", {"1", "2", "3", "4", "MP"}),
+    # a '-1MP' land's mounting pads are the symbol's MP pin (2026-11-14 100-part run, test_set3_fixes)
+    assert M("kicad:Connector_Molex:Molex_PicoBlade_53261-0471_1x04-1MP_P1.25mm_Horizontal", "J2",
+             {"1", "2", "3", "4", "MP"})[0] == "Conn_01x04_MountingPin"
+    for args in (("kicad:Connector_Molex:Molex_PicoBlade_53261-0471_1x04-1MP_P1.25mm_Horizontal", "J2", {"1", "2", "3", "4"}),
                  ("kicad:Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical", "JP1", {"1", "2"}),     # a jumper
                  ("kicad:Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical", "J1", {"1", "2", "3"}),
                  ("kicad:Connector_PinHeader_2.54mm:PinHeader_2x04_P2.54mm_Vertical", "J1", {str(i) for i in range(1, 9)}),

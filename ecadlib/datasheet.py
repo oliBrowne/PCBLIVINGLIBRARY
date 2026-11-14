@@ -5238,7 +5238,7 @@ class Reader:
                 except OSError:
                     pass
             errs = []
-            for url in OD.links(code, maker):
+            for url in OD.links(code, maker, texts):
                 try:
                     b, meta = self.store.fetch(url, f"package outline {code}", part=part, handoff=False, mpn=code)
                     got.append((code, b, meta.get("url") or url))
