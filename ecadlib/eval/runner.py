@@ -435,7 +435,8 @@ class EvalReader(D.Reader):
                    "prov": j["prov"], "recording": rec, "fp_needed": fp_needed}
             data = self._replay_pdf(j["prov"] or {})
             if data is not None:                      # the PDF the read was given, for what is read from it in code
-                job["data"] = data                    # (active_low_from_pdf: a bar over a pin name)
+                job["data"] = data                    # (active_low_from_pdf: a bar over a pin name; the land and
+                job["src_hash"] = j["prov"]["sha256"]   # pull-back pages, which need the text's cache key too)
         else:
             job = super().job(part, urls, package, pages, name, fp_needed, mpn, maker)
         job["estimate"] = (job.get("recording") or {}).get("estimate") or self._estimate(job)

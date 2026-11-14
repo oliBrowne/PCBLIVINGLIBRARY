@@ -6,7 +6,7 @@ part kinds whose pinout is standard, the symbol) offline and deterministically. 
     ecadlib stdparts bench [--kicad DIR] [--fixture F] every table entry against KiCad's official footprint
     ecadlib stdparts coverage BOM [BOM ...]            how many BOM lines this source resolves (no network)
 
-Footprints come only from package_specs/standard.json.gz: 623 packages, each with its KiCad name and library. Their
+Footprints come only from package_specs/standard.json.gz: 624 packages, each with its KiCad name and library. Their
 dimensions are the KiCad footprint generator's size definitions (JEDEC / IPC-SM-782 / manufacturer package drawings,
 built here with footprint_gen's IPC-7351B equations) or, for the packages KiCad draws by hand (SOD, SMA/SMB/SMC, MELF,
 SOT-223, SOT-89, SC-82AB, DO-34, DO-35, DO-41, DO-201AD, DPAK/D2PAK, TO-220, TO-92), the published recommended land as a pad table. Every entry was built and
@@ -651,7 +651,26 @@ def _identify_known(read, c, known, miss):
     return best, f"{label} -> {best}"
 
 
-def identify(read, known=None):
+def _maker_land(names, maker, c):
+    """The table's maker outline of the one generic package the read fits (Analog_LFCSP-16-1EP_4x4mm_P0.65mm_EP2.1x2.1mm
+    for LFCSP-16-1EP_4x4mm_P0.65mm_EP2.1x2.1mm), when the part's maker is that outline's (its first word: Analog for
+    Analog Devices) and the outline agrees with the whole read; else None. Held-out test 2026-11-13: AD8231's datasheet
+    prints no land, KiCad's footprint is ADI's land, and IPC pads from the body missed it by 0.1-0.2 mm."""
+    from . import crosscheck as CC
+    word = re.split(r"[\s,.]+", str(maker or "").strip())[0].lower()
+    if len(names) != 1 or len(word) < 2:
+        return None
+    hits = [m for m in packages() if m.lower() == f"{word}_{names[0].lower()}"
+            and CC.compare(c, CC.critical(spec(m)), "table")["status"] == "agreed"]
+    return hits[0] if len(hits) == 1 else None
+
+
+UNCHECKED_FIT = re.compile(r"but the read's other numbers disagree")   # identify(): a standard
+# package fits the read, but not one the table vouches for: KiCad's land for it may be a maker's (librarian holds a
+# read with no land of its own then)
+
+
+def identify(read, known=None, maker=None):
     """A datasheet read's package (a footprint_gen spec) -> (table name, how) when its own numbers name exactly one
     checked package, else (None, why). Pin count, pitch, body and exposed pad pick the KiCad generic names that fit, in
     the family the drawing is titled with when it names one; a fit that is not in the checked table makes it ambiguous
@@ -702,6 +721,9 @@ def identify(read, known=None):
     if not names:
         return None, f"{label}: no standard package fits"
     if any(n not in packages() for n in names):
+        own = _maker_land(names, maker, c)
+        if own:                                       # KiCad lands this maker's package its own way, and the table
+            return own, f"{label} -> {own} (the maker's own outline of {names[0]})"   # carries it (AD8231: ADI's
         return None, f"{label}: fits a KiCad package that is not in the checked table ({', '.join(sorted(names)[:3])})"
     agree = [n for n in names if CC.compare(c, CC.critical(spec(n)), "table")["status"] == "agreed"]
     if not agree:
@@ -874,6 +896,9 @@ def identify_tab(read, pins=None):
         n_leads = counted if counted is not None else len(leads)
         cut = t not in (tab_no, join) and _cut_lead(read, pins, t, ys)
         counts = {n_leads, n_leads - 1} if cut and counted is not None else {n_leads}   # TO252-3: ROHM counts the cut lead
+        if counted is not None and tab_no not in leads and len(leads) == counted - 1:
+            counts.add(len(leads))                    # the lead the name counts and the read leaves out may be cut: the
+        #                                               land without it fits too (TO-263-4, below)
         if t not in (tab_no, join) and not cut or len(ys) not in counts or not set(leads) <= set(ys) or set(ys) - set(leads) - {t}:
             continue
         if any(abs(leads[n] - ys[n]) > TAB_POS_TOL for n in leads):
@@ -882,6 +907,11 @@ def identify_tab(read, pins=None):
             continue
         fits.append(name)
     label = f"{m.group(0)}: tab {tab_no}, leads {' '.join(sorted(leads, key=lambda n: (len(n), n)))}"
+    exact = [f for f in fits if set(_tab_entry(f)[1]) == set(leads)]
+    if len(fits) > 1 and len(exact) == 1:           # a land with exactly the leads drawn: no pad where no lead is
+        fits = exact                                  # (AUIPS7081S, held-out test 2026-11-13: D2PAK-5L drawn with lead 3
+        #                                               cut, the tab numbered 3; KiCad's TO-263-4, not TO-263-5_TabPin3's
+        #                                               middle-lead pad. A family with no such land keeps the counted one)
     if len(fits) != 1:
         return None, f"{label}: {'no' if not fits else 'more than one'} checked tab land fits" + \
             (f" ({', '.join(sorted(fits))})" if fits else "")

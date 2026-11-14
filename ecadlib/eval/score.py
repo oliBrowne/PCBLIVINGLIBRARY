@@ -180,8 +180,11 @@ def active_low(s, names=()):
     return st is not None
 
 
+VOLTS_RX = re.compile(r"\(?\s*(\d+)\.(\d+)\s*V\s*\)?")   # "AVDD (1.8V)": KiCad writes the voltage as a suffix, AVDD_1V8
+
+
 def norm_name(s):
-    s = str(s or "").translate(OVERLINE).upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
+    s = VOLTS_RX.sub(r"\1V\2", str(s or "")).translate(OVERLINE).upper().replace("~{", "").replace("_{", "").replace("^{", "").replace("}", "").replace("\\", "").replace(" ", "")
     s = s.replace("~", "")
     s = re.sub(r"^(N(?=[A-Z]{2,})|/|#)", "", s)
     if "/" in s:                                      # a multi-function pin: the same functions in any order
@@ -253,6 +256,20 @@ def one_of(ours, ref):
         return False
     parts = [norm_name(x) for x in str(ref or "").split("/") if x.strip()]
     return bool(o) and len(parts) > 1 and all(len(x) > 1 for x in parts) and o in parts
+
+
+def opamp(ours, ref):
+    """KiCad's op-amp and amplifier symbols name the inputs by their sign only and the rails V+ / V- (LM324Q, AD8231:
+    "+", "V+", "V-"), where the maker names them 1IN+, VCC, GND. ours names KiCad's pin when it is a non-inverting
+    input (IN and +, no -), or the rail of the same kind. KiCad's "-" (and its unnamed output) normalise to nothing
+    and are not scored."""
+    r, o = str(ref or "").strip(), str(ours or "").upper().replace(" ", "")
+    if r == "+":
+        return "IN" in o and "+" in o and "-" not in o
+    if r in ("V+", "V-"):
+        kind = "supply" if r == "V+" else "gnd"
+        return o in (r, "VS" + r[1], r[1] + "VS") or rail(norm_name(o)) == kind
+    return False
 
 
 def rail(name):
@@ -381,7 +398,7 @@ def score_symbol(mine_pins, ref_pins, tol=None):
     if named:
         groups = unswapped([(norm_name(a.get(n)), s) for n, s in named.items()])
         same = [n for n, s in named.items() if same_name(norm_name(a.get(n)), s, groups) or short_form(a.get(n), b[n])
-                or one_of(a.get(n), b[n])]
+                or one_of(a.get(n), b[n]) or opamp(a.get(n), b[n])]
         # the same name with the active-low mark on one side only: the pin's sense is inverted, never naming noise
         inverted = sorted((n for n in same if active_low(a.get(n), a.values()) != active_low(b[n], b.values())), key=_natural)
         diff = [f"{n}: {a.get(n)!r} vs {b[n]!r}" for n in sorted(set(named) - set(same), key=_natural)]

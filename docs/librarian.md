@@ -163,7 +163,7 @@ some parts have no link at all. Download those PDFs by hand into one folder and 
 ```toml
 [datasheet]
 folder = "~/datasheets"     # <MPN>.pdf, read before any link; "" = links only
-standard_land = "auto"      # "off" (default) | "auto" | "always"
+standard_land = "auto"      # "auto" (default) | "off" | "always"
 ```
 
 - The file is matched by MPN, ignoring case and punctuation: `<MPN>.pdf` first, then the MPN alone after a separator

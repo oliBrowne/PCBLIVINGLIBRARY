@@ -2938,335 +2938,337 @@ graphics fp_line F.SilkS: 2 bbox(-0.1562,-0.91,0.1562,0.91) #5e1ced7871
 graphics fp_poly F.Fab: 1 bbox(-0.7,-0.8,0.7,0.8) #e1c15c2a70
 graphics fp_poly F.SilkS: 1 bbox(-0.915,-1.29,-0.435,-0.96) #890677318a
 graphics fp_rect F.CrtYd: 1 bbox(-1.33,-1.05,1.33,1.05) #a1050152da
-### standard/TQFN-20-1EP_5x5mm_P0.65mm_EP3.25x3.25mm.PcbLib:TQFN-20-1EP_5x5mm_P0.65mm_EP3.25x3.25mm
-params DESCRIPTION=TQFN-20-1EP_5x5mm_P0.65mm_EP3.25x3.25mm; IPC-7351B qfn density B: Z=5.70 G=4.05 X=0.30 HEIGHT=31.4961mil PATTERN=TQFN-20-1EP_5x5mm_P0.65mm_EP3.25x3.25mm
+### standard/TQFN-20-1EP_5x5mm_P0.65mm_EP3.1x3.1mm.PcbLib:TQFN-20-1EP_5x5mm_P0.65mm_EP3.1x3.1mm
+params DESCRIPTION=TQFN-20-1EP_5x5mm_P0.65mm_EP3.1x3.1mm; IPC-7351B qfn density B: Z=5.70 G=3.75 X=0.30 HEIGHT=31.4961mil PATTERN=TQFN-20-1EP_5x5mm_P0.65mm_EP3.1x3.1mm
 text ".Designator" layer=33 at=(-1.3905,3.3) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-4.3) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-2.5,-2.5;2.5,-2.5;2.5,2.5;-1.5,2.5;-2.5,1.5
-pad 1 at=(-2.4375,1.3) layer=1 size=(0.825,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pads x10 layer=1 size=(0.3,0.825) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.3,-2.4375,1.3,2.4375) #67ba2d7c4a
-pads x10 layer=1 size=(0.825,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.4375,-1.3,2.4375,1.3) #eac3ed36f6
-pads x1 layer=1 size=(3.25,3.25) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.635 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #896089886f
+pad 1 at=(-2.3625,1.3) layer=1 size=(0.975,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x10 layer=1 size=(0.3,0.975) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.3,-2.3625,1.3,2.3625) #a6e06d1b29
+pads x10 layer=1 size=(0.975,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.3625,-1.3,2.3625,1.3) #99f0f3622f
+pads x1 layer=1 size=(3.1,3.1) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.56 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #ae044b3782
 graphics region 33: 1 bbox(-2.85,2.61,-2.37,2.94) #2c2e2d695c
-graphics region 35: 9 bbox(-1.5198,-1.5198,1.5198,1.5198) #5c8a13fdfa
+graphics region 35: 9 bbox(-1.4498,-1.4498,1.4498,1.4498) #278fd915ac
 graphics track 33: 11 bbox(-2.85,-2.61,2.61,2.94) #bfb4258bae
 graphics track 69: 5 bbox(-2.5,-2.5,2.5,2.5) #581ec8cbcc
 graphics track 71: 4 bbox(-3.1,-3.1,3.1,3.1) #5914097259
-### standard/TQFN-20-1EP_5x5mm_P0.65mm_EP3.25x3.25mm.kicad_mod
-footprint TQFN-20-1EP_5x5mm_P0.65mm_EP3.25x3.25mm
+### standard/TQFN-20-1EP_5x5mm_P0.65mm_EP3.1x3.1mm.kicad_mod
+footprint TQFN-20-1EP_5x5mm_P0.65mm_EP3.1x3.1mm
 (version 20221018)
 (layer F.Cu)
-(descr "TQFN-20-1EP_5x5mm_P0.65mm_EP3.25x3.25mm | IPC-7351B qfn density B: Z=5.70 G=4.05 X=0.30")
+(descr "TQFN-20-1EP_5x5mm_P0.65mm_EP3.1x3.1mm | IPC-7351B qfn density B: Z=5.70 G=3.75 X=0.30")
 (tags "qfn qfn IPC-7351B density-B")
 (attr smd)
 fp_text reference REF** layer=F.SilkS at=(at 0 -3.8)
-fp_text value TQFN-20-1EP_5x5mm_P0.65mm_EP3.25x3.25mm layer=F.Fab at=(at 0 3.8)
+fp_text value TQFN-20-1EP_5x5mm_P0.65mm_EP3.1x3.1mm layer=F.Fab at=(at 0 3.8)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -2.4375 -1.3) (size 0.825 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-pads x1 (smd rect (size 3.25 3.25) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #150fb0ccab
-pads x10 (smd roundrect (size 0.3 0.825) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.3,-2.4375,1.3,2.4375) #c4b62646e0
-pads x10 (smd roundrect (size 0.825 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-2.4375,-1.3,2.4375,1.3) #02201911cb
-pads x9 (smd roundrect (size 0.873 0.873) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-1.0833,-1.0833,1.0833,1.0833) #a4d34c681e
+(pad 1 smd roundrect (at -2.3625 -1.3) (size 0.975 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x1 (smd rect (size 3.1 3.1) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #3064092d97
+pads x10 (smd roundrect (size 0.3 0.975) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.3,-2.3625,1.3,2.3625) #ca720baa17
+pads x9 (smd roundrect (size 0.833 0.833) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-1.0333,-1.0333,1.0333,1.0333) #affd4d2bf7
+pads x10 (smd roundrect (size 0.975 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-2.3625,-1.3,2.3625,1.3) #08a11a4cd8
 graphics fp_line F.SilkS: 8 bbox(-2.61,-2.61,2.61,2.61) #8082e867a5
 graphics fp_poly F.Fab: 1 bbox(-2.5,-2.5,2.5,2.5) #893c78d288
 graphics fp_poly F.SilkS: 1 bbox(-2.85,-2.94,-2.37,-2.61) #0c3abd55bd
 graphics fp_rect F.CrtYd: 1 bbox(-3.1,-3.1,3.1,3.1) #b0c5733653
-### standard/TQFP-80_12x12mm_P0.5mm.PcbLib:TQFP-80_12x12mm_P0.5mm
-params DESCRIPTION=TQFP-80_12x12mm_P0.5mm; IPC-7351B gullwing_fine density B: Z=14.80 G=11.85 X=0.30 HEIGHT=62.9921mil PATTERN=TQFP-80_12x12mm_P0.5mm
-text ".Designator" layer=33 at=(-1.3905,7.85) h=1 w=0.15 rot=0 mirror=False
-text ".Comment" layer=69 at=(-3.708,-8.85) h=1 w=0.15 rot=0 mirror=False
+### standard/TQFP-80-1EP_14x14mm_P0.65mm_EP9.5x9.5mm.PcbLib:TQFP-80-1EP_14x14mm_P0.65mm_EP9.5x9.5mm
+params DESCRIPTION=TQFP-80-1EP_14x14mm_P0.65mm_EP9.5x9.5mm; IPC-7351B gullwing density B: Z=16.90 G=13.80 X=0.40 HEIGHT=62.9921mil PATTERN=TQFP-80-1EP_14x14mm_P0.65mm_EP9.5x9.5mm
+text ".Designator" layer=33 at=(-1.3905,8.9) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-9.9) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
-body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=62.9921mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=62.9921mil pts=-6,-6;6,-6;6,6;-5,6;-6,5
-pad 1 at=(-6.6625,4.75) layer=1 size=(1.475,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pads x40 layer=1 size=(0.3,1.475) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-4.75,-6.6625,4.75,6.6625) #3ce52f4c3a
-pads x40 layer=1 size=(1.475,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-6.6625,-4.75,6.6625,4.75) #6a0503c0fc
-graphics region 33: 1 bbox(-6.9025,5.16,-6.4225,5.49) #0cd4ad1345
-graphics track 33: 11 bbox(-6.9025,-6.11,6.11,6.11) #8ca54850d1
-graphics track 69: 5 bbox(-6,-6,6,6) #b06465f826
-graphics track 71: 4 bbox(-7.65,-7.65,7.65,7.65) #af7843b5ea
-### standard/TQFP-80_12x12mm_P0.5mm.kicad_mod
-footprint TQFP-80_12x12mm_P0.5mm
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=62.9921mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=62.9921mil pts=-7,-7;7,-7;7,7;-6,7;-7,6
+pad 1 at=(-7.675,6.175) layer=1 size=(1.55,0.4) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x40 layer=1 size=(0.4,1.55) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-6.175,-7.675,6.175,7.675) #4584879a2b
+pads x40 layer=1 size=(1.55,0.4) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-7.675,-6.175,7.675,6.175) #da363605af
+pads x1 layer=1 size=(9.5,9.5) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-4.76 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #1da3d72900
+graphics region 33: 1 bbox(-7.915,6.635,-7.435,6.965) #f74d455041
+graphics region 35: 25 bbox(-4.566,-4.566,4.566,4.566) #c07a4ccac9
+graphics track 33: 11 bbox(-7.915,-7.11,7.11,7.11) #a7c503623d
+graphics track 69: 5 bbox(-7,-7,7,7) #cdbb329cfc
+graphics track 71: 4 bbox(-8.7,-8.7,8.7,8.7) #8d1ee60040
+### standard/TQFP-80-1EP_14x14mm_P0.65mm_EP9.5x9.5mm.kicad_mod
+footprint TQFP-80-1EP_14x14mm_P0.65mm_EP9.5x9.5mm
 (version 20221018)
 (layer F.Cu)
-(descr "TQFP-80_12x12mm_P0.5mm | IPC-7351B gullwing_fine density B: Z=14.80 G=11.85 X=0.30")
-(tags "qfp gullwing_fine IPC-7351B density-B")
+(descr "TQFP-80-1EP_14x14mm_P0.65mm_EP9.5x9.5mm | IPC-7351B gullwing density B: Z=16.90 G=13.80 X=0.40")
+(tags "qfp gullwing IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -8.35)
-fp_text value TQFP-80_12x12mm_P0.5mm layer=F.Fab at=(at 0 8.35)
+fp_text reference REF** layer=F.SilkS at=(at 0 -9.4)
+fp_text value TQFP-80-1EP_14x14mm_P0.65mm_EP9.5x9.5mm layer=F.Fab at=(at 0 9.4)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -6.6625 -4.75) (size 1.475 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-pads x40 (smd roundrect (size 0.3 1.475) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-4.75,-6.6625,4.75,6.6625) #4a7e26f28e
-pads x40 (smd roundrect (size 1.475 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-6.6625,-4.75,6.6625,4.75) #e90fb47143
-graphics fp_line F.SilkS: 8 bbox(-6.11,-6.11,6.11,6.11) #86db0289e3
-graphics fp_poly F.Fab: 1 bbox(-6,-6,6,6) #996104fbc5
-graphics fp_poly F.SilkS: 1 bbox(-6.9025,-5.49,-6.4225,-5.16) #6f253c8dd4
-graphics fp_rect F.CrtYd: 1 bbox(-7.65,-7.65,7.65,7.65) #470e932a1c
-### standard/TSOP-I-56_18.4x14mm_P0.5mm.PcbLib:TSOP-I-56_18.4x14mm_P0.5mm
-params DESCRIPTION=TSOP-I-56_18.4x14mm_P0.5mm; IPC-7351B gullwing_fine density B: Z=20.95 G=17.80 X=0.30 HEIGHT=0mil PATTERN=TSOP-I-56_18.4x14mm_P0.5mm
+(pad 1 smd roundrect (at -7.675 -6.175) (size 1.55 0.4) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x1 (smd rect (size 9.5 9.5) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #d98ca4cf26
+pads x40 (smd roundrect (size 0.4 1.55) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-6.175,-7.675,6.175,7.675) #a1d4628545
+pads x25 (smd roundrect (size 1.532 1.532) (layers F.Paste) (roundrect_rratio 0.1632)) centres bbox(-3.8,-3.8,3.8,3.8) #b471dfc1c8
+pads x40 (smd roundrect (size 1.55 0.4) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-7.675,-6.175,7.675,6.175) #3a0f02a745
+graphics fp_line F.SilkS: 8 bbox(-7.11,-7.11,7.11,7.11) #a26766ed67
+graphics fp_poly F.Fab: 1 bbox(-7,-7,7,7) #8587ade1c5
+graphics fp_poly F.SilkS: 1 bbox(-7.915,-6.965,-7.435,-6.635) #f49cb4b19e
+graphics fp_rect F.CrtYd: 1 bbox(-8.7,-8.7,8.7,8.7) #aa779e1f81
+### standard/TSOP-I-56_16.4x14mm_P0.5mm.PcbLib:TSOP-I-56_16.4x14mm_P0.5mm
+params DESCRIPTION=TSOP-I-56_16.4x14mm_P0.5mm; IPC-7351B gullwing_fine density B: Z=18.95 G=15.80 X=0.30 HEIGHT=0mil PATTERN=TSOP-I-56_16.4x14mm_P0.5mm
 text ".Designator" layer=33 at=(-1.3905,7.45) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-8.45) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
-pad 1 at=(-9.6875,6.75) layer=1 size=(1.575,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pads x56 layer=1 size=(1.575,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-9.6875,-6.75,9.6875,6.75) #ce1ac5b71d
-graphics region 33: 1 bbox(-9.9275,7.16,-9.4475,7.49) #50b87c77a1
-graphics track 33: 5 bbox(-9.9275,-7.11,8.7989,7.49) #f6b2068973
-graphics track 69: 5 bbox(-9.2,-7,9.2,7) #524c8c6ebe
-graphics track 71: 4 bbox(-10.73,-7.25,10.73,7.25) #c83ccf4840
-### standard/TSOP-I-56_18.4x14mm_P0.5mm.kicad_mod
-footprint TSOP-I-56_18.4x14mm_P0.5mm
+pad 1 at=(-8.6875,6.75) layer=1 size=(1.575,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x56 layer=1 size=(1.575,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-8.6875,-6.75,8.6875,6.75) #c69fa80fc8
+graphics region 33: 1 bbox(-8.9275,7.16,-8.4475,7.49) #caabcabee2
+graphics track 33: 5 bbox(-8.9275,-7.11,7.7989,7.49) #501de16d17
+graphics track 69: 5 bbox(-8.2,-7,8.2,7) #066b3159a2
+graphics track 71: 4 bbox(-9.73,-7.25,9.73,7.25) #cb7771f885
+### standard/TSOP-I-56_16.4x14mm_P0.5mm.kicad_mod
+footprint TSOP-I-56_16.4x14mm_P0.5mm
 (version 20221018)
 (layer F.Cu)
-(descr "TSOP-I-56_18.4x14mm_P0.5mm | IPC-7351B gullwing_fine density B: Z=20.95 G=17.80 X=0.30")
+(descr "TSOP-I-56_16.4x14mm_P0.5mm | IPC-7351B gullwing_fine density B: Z=18.95 G=15.80 X=0.30")
 (tags "gullwing gullwing_fine IPC-7351B density-B")
 (attr smd)
 fp_text reference REF** layer=F.SilkS at=(at 0 -7.95)
-fp_text value TSOP-I-56_18.4x14mm_P0.5mm layer=F.Fab at=(at 0 7.95)
+fp_text value TSOP-I-56_16.4x14mm_P0.5mm layer=F.Fab at=(at 0 7.95)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -9.6875 -6.75) (size 1.575 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-pads x56 (smd roundrect (size 1.575 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-9.6875,-6.75,9.6875,6.75) #bedb7e9a11
-graphics fp_line F.SilkS: 2 bbox(-8.7989,-7.11,8.7989,7.11) #2f26bc737b
-graphics fp_poly F.Fab: 1 bbox(-9.2,-7,9.2,7) #8cf6339761
-graphics fp_poly F.SilkS: 1 bbox(-9.9275,-7.49,-9.4475,-7.16) #b2fc29033f
-graphics fp_rect F.CrtYd: 1 bbox(-10.73,-7.25,10.73,7.25) #d2c1c9891c
-### standard/TSSOP-32_8x11mm_P0.65mm.PcbLib:TSSOP-32_8x11mm_P0.65mm
-params DESCRIPTION=TSSOP-32_8x11mm_P0.65mm; IPC-7351B gullwing density B: Z=10.80 G=7.85 X=0.40 HEIGHT=47.2441mil PATTERN=TSSOP-32_8x11mm_P0.65mm
+(pad 1 smd roundrect (at -8.6875 -6.75) (size 1.575 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x56 (smd roundrect (size 1.575 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-8.6875,-6.75,8.6875,6.75) #9d964911eb
+graphics fp_line F.SilkS: 2 bbox(-7.7989,-7.11,7.7989,7.11) #472cbd5276
+graphics fp_poly F.Fab: 1 bbox(-8.2,-7,8.2,7) #7ae7d82593
+graphics fp_poly F.SilkS: 1 bbox(-8.9275,-7.49,-8.4475,-7.16) #1abffe734d
+graphics fp_rect F.CrtYd: 1 bbox(-9.73,-7.25,9.73,7.25) #e834351390
+### standard/TSSOP-32_6.1x11mm_P0.65mm.PcbLib:TSSOP-32_6.1x11mm_P0.65mm
+params DESCRIPTION=TSSOP-32_6.1x11mm_P0.65mm; IPC-7351B gullwing density B: Z=8.90 G=5.95 X=0.40 HEIGHT=47.2441mil PATTERN=TSSOP-32_6.1x11mm_P0.65mm
 text ".Designator" layer=33 at=(-1.3905,5.95) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-6.95) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
-body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=47.2441mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=47.2441mil pts=-4,-5.5;4,-5.5;4,5.5;-3,5.5;-4,4.5
-pad 1 at=(-4.6625,4.875) layer=1 size=(1.475,0.4) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pads x32 layer=1 size=(1.475,0.4) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-4.6625,-4.875,4.6625,4.875) #8cd59fa97c
-graphics region 33: 1 bbox(-4.9025,5.335,-4.4225,5.665) #5bf9cb527e
-graphics track 33: 9 bbox(-4.9025,-5.61,4.11,5.665) #b2a3f09524
-graphics track 69: 5 bbox(-4,-5.5,4,5.5) #25cdcfdf99
-graphics track 71: 4 bbox(-5.65,-5.75,5.65,5.75) #ff82bf79f1
-### standard/TSSOP-32_8x11mm_P0.65mm.kicad_mod
-footprint TSSOP-32_8x11mm_P0.65mm
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=47.2441mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=47.2441mil pts=-3.05,-5.5;3.05,-5.5;3.05,5.5;-2.05,5.5;-3.05,4.5
+pad 1 at=(-3.7125,4.875) layer=1 size=(1.475,0.4) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x32 layer=1 size=(1.475,0.4) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-3.7125,-4.875,3.7125,4.875) #33a69542fb
+graphics region 33: 1 bbox(-3.9525,5.335,-3.4725,5.665) #bdced2501e
+graphics track 33: 9 bbox(-3.9525,-5.61,3.16,5.665) #dc54c4bcd2
+graphics track 69: 5 bbox(-3.05,-5.5,3.05,5.5) #7a965362eb
+graphics track 71: 4 bbox(-4.7,-5.75,4.7,5.75) #e92e3befa2
+### standard/TSSOP-32_6.1x11mm_P0.65mm.kicad_mod
+footprint TSSOP-32_6.1x11mm_P0.65mm
 (version 20221018)
 (layer F.Cu)
-(descr "TSSOP-32_8x11mm_P0.65mm | IPC-7351B gullwing density B: Z=10.80 G=7.85 X=0.40")
+(descr "TSSOP-32_6.1x11mm_P0.65mm | IPC-7351B gullwing density B: Z=8.90 G=5.95 X=0.40")
 (tags "gullwing gullwing IPC-7351B density-B")
 (attr smd)
 fp_text reference REF** layer=F.SilkS at=(at 0 -6.45)
-fp_text value TSSOP-32_8x11mm_P0.65mm layer=F.Fab at=(at 0 6.45)
+fp_text value TSSOP-32_6.1x11mm_P0.65mm layer=F.Fab at=(at 0 6.45)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -4.6625 -4.875) (size 1.475 0.4) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-pads x32 (smd roundrect (size 1.475 0.4) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-4.6625,-4.875,4.6625,4.875) #e1befe1b66
-graphics fp_line F.SilkS: 6 bbox(-4.11,-5.61,4.11,5.61) #089239ae2a
-graphics fp_poly F.Fab: 1 bbox(-4,-5.5,4,5.5) #dc2ed7839f
-graphics fp_poly F.SilkS: 1 bbox(-4.9025,-5.665,-4.4225,-5.335) #4d1271fd9c
-graphics fp_rect F.CrtYd: 1 bbox(-5.65,-5.75,5.65,5.75) #c77ab10f76
-### standard/TSSOP-64_6.1x17mm_P0.5mm.PcbLib:TSSOP-64_6.1x17mm_P0.5mm
-params DESCRIPTION=TSSOP-64_6.1x17mm_P0.5mm; IPC-7351B gullwing_fine density B: Z=8.90 G=5.95 X=0.30 HEIGHT=47.2441mil PATTERN=TSSOP-64_6.1x17mm_P0.5mm
-text ".Designator" layer=33 at=(-1.3905,8.95) h=1 w=0.15 rot=0 mirror=False
-text ".Comment" layer=69 at=(-3.708,-9.95) h=1 w=0.15 rot=0 mirror=False
+(pad 1 smd roundrect (at -3.7125 -4.875) (size 1.475 0.4) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x32 (smd roundrect (size 1.475 0.4) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-3.7125,-4.875,3.7125,4.875) #5485314dde
+graphics fp_line F.SilkS: 6 bbox(-3.16,-5.61,3.16,5.61) #44c45a6e19
+graphics fp_poly F.Fab: 1 bbox(-3.05,-5.5,3.05,5.5) #d589bde9ec
+graphics fp_poly F.SilkS: 1 bbox(-3.9525,-5.665,-3.4725,-5.335) #5dff42a7e7
+graphics fp_rect F.CrtYd: 1 bbox(-4.7,-5.75,4.7,5.75) #d27119b7e8
+### standard/TSSOP-56_8x14mm_P0.5mm.PcbLib:TSSOP-56_8x14mm_P0.5mm
+params DESCRIPTION=TSSOP-56_8x14mm_P0.5mm; IPC-7351B gullwing_fine density B: Z=10.80 G=7.85 X=0.30 HEIGHT=47.2441mil PATTERN=TSSOP-56_8x14mm_P0.5mm
+text ".Designator" layer=33 at=(-1.3905,7.45) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-8.45) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
-body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=47.2441mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=47.2441mil pts=-3.05,-8.5;3.05,-8.5;3.05,8.5;-2.05,8.5;-3.05,7.5
-pad 1 at=(-3.7125,7.75) layer=1 size=(1.475,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pads x64 layer=1 size=(1.475,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-3.7125,-7.75,3.7125,7.75) #ddf8d6d87e
-graphics region 33: 1 bbox(-3.9525,8.16,-3.4725,8.49) #0b1d1f5abf
-graphics track 33: 9 bbox(-3.9525,-8.61,3.16,8.61) #df5dbe7eea
-graphics track 69: 5 bbox(-3.05,-8.5,3.05,8.5) #5179805241
-graphics track 71: 4 bbox(-4.7,-8.75,4.7,8.75) #ead0239392
-### standard/TSSOP-64_6.1x17mm_P0.5mm.kicad_mod
-footprint TSSOP-64_6.1x17mm_P0.5mm
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=47.2441mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=47.2441mil pts=-4,-7;4,-7;4,7;-3,7;-4,6
+pad 1 at=(-4.6625,6.75) layer=1 size=(1.475,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x56 layer=1 size=(1.475,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-4.6625,-6.75,4.6625,6.75) #5a7f9ed9cc
+graphics region 33: 1 bbox(-4.9025,7.16,-4.4225,7.49) #b99ecc79d9
+graphics track 33: 5 bbox(-4.9025,-7.11,3.8239,7.49) #b5bfeec4d3
+graphics track 69: 5 bbox(-4,-7,4,7) #adeac7b707
+graphics track 71: 4 bbox(-5.65,-7.25,5.65,7.25) #d6e4d2a06c
+### standard/TSSOP-56_8x14mm_P0.5mm.kicad_mod
+footprint TSSOP-56_8x14mm_P0.5mm
 (version 20221018)
 (layer F.Cu)
-(descr "TSSOP-64_6.1x17mm_P0.5mm | IPC-7351B gullwing_fine density B: Z=8.90 G=5.95 X=0.30")
+(descr "TSSOP-56_8x14mm_P0.5mm | IPC-7351B gullwing_fine density B: Z=10.80 G=7.85 X=0.30")
 (tags "gullwing gullwing_fine IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -9.45)
-fp_text value TSSOP-64_6.1x17mm_P0.5mm layer=F.Fab at=(at 0 9.45)
+fp_text reference REF** layer=F.SilkS at=(at 0 -7.95)
+fp_text value TSSOP-56_8x14mm_P0.5mm layer=F.Fab at=(at 0 7.95)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -3.7125 -7.75) (size 1.475 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-pads x64 (smd roundrect (size 1.475 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-3.7125,-7.75,3.7125,7.75) #3503c5947f
-graphics fp_line F.SilkS: 6 bbox(-3.16,-8.61,3.16,8.61) #d27f4bd025
-graphics fp_poly F.Fab: 1 bbox(-3.05,-8.5,3.05,8.5) #51cf868a6e
-graphics fp_poly F.SilkS: 1 bbox(-3.9525,-8.49,-3.4725,-8.16) #ba37d46e44
-graphics fp_rect F.CrtYd: 1 bbox(-4.7,-8.75,4.7,8.75) #9ed0fde9b7
-### standard/Texas_RNQ0040A_WQFN-40-1EP_6x4mm_P0.4mm_EP4.7x2.7mm.PcbLib:Texas_RNQ0040A_WQFN-40-1EP_6x4mm_P0.4mm_EP4.7x2.7mm
-params DESCRIPTION=Texas_RNQ0040A_WQFN-40-1EP_6x4mm_P0.4mm_EP4.7x2.7mm; IPC-7351B qfn density B: Z=6.75 G=5.10 X=0.20 HEIGHT=31.4961mil PATTERN=Texas_RNQ0040A_WQFN-40-1EP_6x4mm_P0.4mm_EP4.7x2.7mm
-text ".Designator" layer=33 at=(-1.3905,2.83) h=1 w=0.15 rot=0 mirror=False
-text ".Comment" layer=69 at=(-3.708,-3.83) h=1 w=0.15 rot=0 mirror=False
-text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
-body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-3,-2;3,-2;3,2;-2,2;-3,1
-pad 1 at=(-2.9625,1.4) layer=1 size=(0.825,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pads x24 layer=1 size=(0.2,0.825) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.2,-1.9625,2.2,1.9625) #7ee1ebe69a
-pads x16 layer=1 size=(0.825,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.9625,-1.4,2.9625,1.4) #43c0840e96
-pads x1 layer=1 size=(4.7,2.7) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-2.36 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #b1f3dd193a
-graphics region 33: 1 bbox(-3.35,2.11,-2.87,2.44) #7672b489be
-graphics region 35: 12 bbox(-2.236,-1.263,2.236,1.263) #b7c6d54bb1
-graphics track 33: 11 bbox(-3.35,-2.11,3.11,2.44) #5241d835f0
-graphics track 69: 5 bbox(-3,-2,3,2) #44c025d08b
-graphics track 71: 4 bbox(-3.63,-2.63,3.63,2.63) #b06cd003c3
-### standard/Texas_RNQ0040A_WQFN-40-1EP_6x4mm_P0.4mm_EP4.7x2.7mm.kicad_mod
-footprint Texas_RNQ0040A_WQFN-40-1EP_6x4mm_P0.4mm_EP4.7x2.7mm
-(version 20221018)
-(layer F.Cu)
-(descr "Texas_RNQ0040A_WQFN-40-1EP_6x4mm_P0.4mm_EP4.7x2.7mm | IPC-7351B qfn density B: Z=6.75 G=5.10 X=0.20")
-(tags "qfn qfn IPC-7351B density-B")
-(attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -3.33)
-fp_text value Texas_RNQ0040A_WQFN-40-1EP_6x4mm_P0.4mm_EP4.7x2.7mm layer=F.Fab at=(at 0 3.33)
-fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -2.9625 -1.4) (size 0.825 0.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-pads x1 (smd rect (size 4.7 2.7) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #fec82e6040
-pads x24 (smd roundrect (size 0.2 0.825) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-2.2,-1.9625,2.2,1.9625) #6c248f139d
-pads x16 (smd roundrect (size 0.825 0.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-2.9625,-1.4,2.9625,1.4) #bc6c1e5930
-pads x12 (smd roundrect (size 0.947 0.726) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-1.7625,-0.9,1.7625,0.9) #ed43e83819
-graphics fp_line F.SilkS: 8 bbox(-3.11,-2.11,3.11,2.11) #7558188e21
-graphics fp_poly F.Fab: 1 bbox(-3,-2,3,2) #65df05881b
-graphics fp_poly F.SilkS: 1 bbox(-3.35,-2.44,-2.87,-2.11) #4d10600906
-graphics fp_rect F.CrtYd: 1 bbox(-3.63,-2.63,3.63,2.63) #57734aa1e1
-### standard/UQFN-20-1EP_4x4mm_P0.5mm_EP2.8x2.8mm.PcbLib:UQFN-20-1EP_4x4mm_P0.5mm_EP2.8x2.8mm
-params DESCRIPTION=UQFN-20-1EP_4x4mm_P0.5mm_EP2.8x2.8mm; IPC-7351B qfn density B: Z=4.70 G=3.20 X=0.25 HEIGHT=31.4961mil PATTERN=UQFN-20-1EP_4x4mm_P0.5mm_EP2.8x2.8mm
-text ".Designator" layer=33 at=(-1.3905,2.8) h=1 w=0.15 rot=0 mirror=False
-text ".Comment" layer=69 at=(-3.708,-3.8) h=1 w=0.15 rot=0 mirror=False
-text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
-body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-2,-2;2,-2;2,2;-1,2;-2,1
-pad 1 at=(-1.975,1) layer=1 size=(0.75,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pads x10 layer=1 size=(0.25,0.75) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1,-1.975,1,1.975) #3f98db4c17
-pads x10 layer=1 size=(0.75,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.975,-1,1.975,1) #e123cfff10
-pads x1 layer=1 size=(2.8,2.8) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.41 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #23d449c60f
-graphics region 33: 1 bbox(-2.35,2.11,-1.87,2.44) #6ee089c211
-graphics region 35: 9 bbox(-1.3093,-1.3093,1.3093,1.3093) #a5ce6f9b00
-graphics track 33: 11 bbox(-2.35,-2.11,2.11,2.44) #6cb1911708
-graphics track 69: 5 bbox(-2,-2,2,2) #e0325d5409
-graphics track 71: 4 bbox(-2.6,-2.6,2.6,2.6) #7e33bb1f5b
-### standard/UQFN-20-1EP_4x4mm_P0.5mm_EP2.8x2.8mm.kicad_mod
-footprint UQFN-20-1EP_4x4mm_P0.5mm_EP2.8x2.8mm
-(version 20221018)
-(layer F.Cu)
-(descr "UQFN-20-1EP_4x4mm_P0.5mm_EP2.8x2.8mm | IPC-7351B qfn density B: Z=4.70 G=3.20 X=0.25")
-(tags "qfn qfn IPC-7351B density-B")
-(attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -3.3)
-fp_text value UQFN-20-1EP_4x4mm_P0.5mm_EP2.8x2.8mm layer=F.Fab at=(at 0 3.3)
-fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -1.975 -1) (size 0.75 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-pads x1 (smd rect (size 2.8 2.8) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #94ebe88f2d
-pads x10 (smd roundrect (size 0.25 0.75) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1,-1.975,1,1.975) #015aba5e1e
-pads x10 (smd roundrect (size 0.75 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.975,-1,1.975,1) #d98f17116c
-pads x9 (smd roundrect (size 0.752 0.752) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-0.9333,-0.9333,0.9333,0.9333) #adbbef6585
-graphics fp_line F.SilkS: 8 bbox(-2.11,-2.11,2.11,2.11) #9d02a55ced
-graphics fp_poly F.Fab: 1 bbox(-2,-2,2,2) #009af27ced
-graphics fp_poly F.SilkS: 1 bbox(-2.35,-2.44,-1.87,-2.11) #fc24605936
-graphics fp_rect F.CrtYd: 1 bbox(-2.6,-2.6,2.6,2.6) #f055353721
-### standard/VQFN-40-1EP_5x5mm_P0.4mm_EP3.3x3.3mm.PcbLib:VQFN-40-1EP_5x5mm_P0.4mm_EP3.3x3.3mm
-params DESCRIPTION=VQFN-40-1EP_5x5mm_P0.4mm_EP3.3x3.3mm; IPC-7351B qfn density B: Z=5.75 G=4.05 X=0.20 HEIGHT=31.4961mil PATTERN=VQFN-40-1EP_5x5mm_P0.4mm_EP3.3x3.3mm
+(pad 1 smd roundrect (at -4.6625 -6.75) (size 1.475 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x56 (smd roundrect (size 1.475 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-4.6625,-6.75,4.6625,6.75) #51ef1d311a
+graphics fp_line F.SilkS: 2 bbox(-3.8239,-7.11,3.8239,7.11) #33d92ff32e
+graphics fp_poly F.Fab: 1 bbox(-4,-7,4,7) #e9f6ba6297
+graphics fp_poly F.SilkS: 1 bbox(-4.9025,-7.49,-4.4225,-7.16) #c764988628
+graphics fp_rect F.CrtYd: 1 bbox(-5.65,-7.25,5.65,7.25) #a1f378dc82
+### standard/Texas_RHF0024A_VQFN-24-1EP_4x5mm_P0.5mm_EP2.65x3.65mm.PcbLib:Texas_RHF0024A_VQFN-24-1EP_4x5mm_P0.5mm_EP2.65x3.65mm
+params DESCRIPTION=Texas_RHF0024A_VQFN-24-1EP_4x5mm_P0.5mm_EP2.65x3.65mm; IPC-7351B qfn density B: Z=4.75 G=3.05 X=0.25 HEIGHT=31.4961mil PATTERN=Texas_RHF0024A_VQFN-24-1EP_4x5mm_P0.5mm_EP2.65x3.65mm
 text ".Designator" layer=33 at=(-1.3905,3.33) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-4.33) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
-body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-2.5,-2.5;2.5,-2.5;2.5,2.5;-1.5,2.5;-2.5,1.5
-pad 1 at=(-2.45,1.8) layer=1 size=(0.85,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pads x20 layer=1 size=(0.2,0.85) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.8,-2.45,1.8,2.45) #0d692dc26f
-pads x20 layer=1 size=(0.85,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.45,-1.8,2.45,1.8) #f788b43491
-pads x1 layer=1 size=(3.3,3.3) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.66 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #63cc685075
-graphics region 33: 1 bbox(-2.85,2.61,-2.37,2.94) #2c2e2d695c
-graphics region 35: 9 bbox(-1.5435,-1.5435,1.5435,1.5435) #4d834ce6f7
-graphics track 33: 11 bbox(-2.85,-2.61,2.61,2.94) #5fbcf28fdd
-graphics track 69: 5 bbox(-2.5,-2.5,2.5,2.5) #581ec8cbcc
-graphics track 71: 4 bbox(-3.13,-3.13,3.13,3.13) #abb8b08cdd
-### standard/VQFN-40-1EP_5x5mm_P0.4mm_EP3.3x3.3mm.kicad_mod
-footprint VQFN-40-1EP_5x5mm_P0.4mm_EP3.3x3.3mm
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-2,-2.5;2,-2.5;2,2.5;-1,2.5;-2,1.5
+pad 1 at=(-1.95,1.5) layer=1 size=(0.85,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x10 layer=1 size=(0.25,0.85) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1,-2.45,1,2.45) #eca65d5e34
+pads x14 layer=1 size=(0.85,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.95,-1.5,1.95,1.5) #25422fdb66
+pads x1 layer=1 size=(2.65,3.65) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.835 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #64228616ef
+graphics region 33: 1 bbox(-2.35,2.61,-1.87,2.94) #7fbb18b383
+graphics region 35: 12 bbox(-1.2393,-1.7367,1.2393,1.7367) #4581490227
+graphics track 33: 11 bbox(-2.35,-2.61,2.11,2.94) #0900d17f4d
+graphics track 69: 5 bbox(-2,-2.5,2,2.5) #293f630d73
+graphics track 71: 4 bbox(-2.63,-3.13,2.63,3.13) #93c3d9a5a6
+### standard/Texas_RHF0024A_VQFN-24-1EP_4x5mm_P0.5mm_EP2.65x3.65mm.kicad_mod
+footprint Texas_RHF0024A_VQFN-24-1EP_4x5mm_P0.5mm_EP2.65x3.65mm
 (version 20221018)
 (layer F.Cu)
-(descr "VQFN-40-1EP_5x5mm_P0.4mm_EP3.3x3.3mm | IPC-7351B qfn density B: Z=5.75 G=4.05 X=0.20")
+(descr "Texas_RHF0024A_VQFN-24-1EP_4x5mm_P0.5mm_EP2.65x3.65mm | IPC-7351B qfn density B: Z=4.75 G=3.05 X=0.25")
 (tags "qfn qfn IPC-7351B density-B")
 (attr smd)
 fp_text reference REF** layer=F.SilkS at=(at 0 -3.83)
-fp_text value VQFN-40-1EP_5x5mm_P0.4mm_EP3.3x3.3mm layer=F.Fab at=(at 0 3.83)
+fp_text value Texas_RHF0024A_VQFN-24-1EP_4x5mm_P0.5mm_EP2.65x3.65mm layer=F.Fab at=(at 0 3.83)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -2.45 -1.8) (size 0.85 0.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-pads x1 (smd rect (size 3.3 3.3) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #868b060c3c
-pads x20 (smd roundrect (size 0.2 0.85) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.8,-2.45,1.8,2.45) #57a8fc3e40
-pads x20 (smd roundrect (size 0.85 0.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-2.45,-1.8,2.45,1.8) #b06b01e111
-pads x9 (smd roundrect (size 0.887 0.887) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-1.1,-1.1,1.1,1.1) #6c3420fbc5
-graphics fp_line F.SilkS: 8 bbox(-2.61,-2.61,2.61,2.61) #0cef8ffc0d
+(pad 1 smd roundrect (at -1.95 -1.5) (size 0.85 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x1 (smd rect (size 2.65 3.65) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #55a1b685f6
+pads x10 (smd roundrect (size 0.25 0.85) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1,-2.45,1,2.45) #fe1e94a8c8
+pads x12 (smd roundrect (size 0.712 0.736) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-0.8833,-1.3687,0.8833,1.3687) #8ca2d64f5c
+pads x14 (smd roundrect (size 0.85 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.95,-1.5,1.95,1.5) #6938a0cddc
+graphics fp_line F.SilkS: 8 bbox(-2.11,-2.61,2.11,2.61) #1a2d616d4b
+graphics fp_poly F.Fab: 1 bbox(-2,-2.5,2,2.5) #2cb36e1b4e
+graphics fp_poly F.SilkS: 1 bbox(-2.35,-2.94,-1.87,-2.61) #263c77cd30
+graphics fp_rect F.CrtYd: 1 bbox(-2.63,-3.13,2.63,3.13) #9a3efdf7d2
+### standard/UQFN-20-1EP_3x3mm_P0.4mm_EP1.85x1.85mm.PcbLib:UQFN-20-1EP_3x3mm_P0.4mm_EP1.85x1.85mm
+params DESCRIPTION=UQFN-20-1EP_3x3mm_P0.4mm_EP1.85x1.85mm; IPC-7351B qfn density B: Z=3.70 G=2.25 X=0.20 HEIGHT=31.4961mil PATTERN=UQFN-20-1EP_3x3mm_P0.4mm_EP1.85x1.85mm
+text ".Designator" layer=33 at=(-1.3905,2.3) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-3.3) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=69 at=(-1.0429,-0.375) h=0.75 w=0.112 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-1.5,-1.5;1.5,-1.5;1.5,1.5;-0.75,1.5;-1.5,0.75
+pad 1 at=(-1.4875,0.8) layer=1 size=(0.725,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x10 layer=1 size=(0.2,0.725) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.8,-1.4875,0.8,1.4875) #86eb4ec6c7
+pads x10 layer=1 size=(0.725,0.2) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.4875,-0.8,1.4875,0.8) #6bf23fc9e7
+pads x1 layer=1 size=(1.85,1.85) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-0.935 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #9c94405300
+graphics region 33: 1 bbox(-1.85,1.61,-1.37,1.94) #efb5063eef
+graphics region 35: 4 bbox(-0.8355,-0.8355,0.8355,0.8355) #c5a00578a2
+graphics track 33: 11 bbox(-1.85,-1.61,1.61,1.94) #3fb841aa0f
+graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
+graphics track 71: 4 bbox(-2.1,-2.1,2.1,2.1) #b79b57d494
+### standard/UQFN-20-1EP_3x3mm_P0.4mm_EP1.85x1.85mm.kicad_mod
+footprint UQFN-20-1EP_3x3mm_P0.4mm_EP1.85x1.85mm
+(version 20221018)
+(layer F.Cu)
+(descr "UQFN-20-1EP_3x3mm_P0.4mm_EP1.85x1.85mm | IPC-7351B qfn density B: Z=3.70 G=2.25 X=0.20")
+(tags "qfn qfn IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.8)
+fp_text value UQFN-20-1EP_3x3mm_P0.4mm_EP1.85x1.85mm layer=F.Fab at=(at 0 2.8)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -1.4875 -0.8) (size 0.725 0.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x1 (smd rect (size 1.85 1.85) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #9cb980cb3e
+pads x10 (smd roundrect (size 0.2 0.725) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-0.8,-1.4875,0.8,1.4875) #8acd6f113d
+pads x10 (smd roundrect (size 0.725 0.2) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.4875,-0.8,1.4875,0.8) #39b94ad83b
+pads x4 (smd roundrect (size 0.746 0.746) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-0.4625,-0.4625,0.4625,0.4625) #9f0ab3362e
+graphics fp_line F.SilkS: 8 bbox(-1.61,-1.61,1.61,1.61) #e4b5641776
+graphics fp_poly F.Fab: 1 bbox(-1.5,-1.5,1.5,1.5) #80e322fb30
+graphics fp_poly F.SilkS: 1 bbox(-1.85,-1.94,-1.37,-1.61) #21f620d05f
+graphics fp_rect F.CrtYd: 1 bbox(-2.1,-2.1,2.1,2.1) #691477e69f
+### standard/VQFN-32-1EP_5x5mm_P0.5mm_EP3.5x3.5mm.PcbLib:VQFN-32-1EP_5x5mm_P0.5mm_EP3.5x3.5mm
+params DESCRIPTION=VQFN-32-1EP_5x5mm_P0.5mm_EP3.5x3.5mm; IPC-7351B qfn density B: Z=5.70 G=4.10 X=0.25 HEIGHT=31.4961mil PATTERN=VQFN-32-1EP_5x5mm_P0.5mm_EP3.5x3.5mm
+text ".Designator" layer=33 at=(-1.3905,3.3) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-4.3) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-2.5,-2.5;2.5,-2.5;2.5,2.5;-1.5,2.5;-2.5,1.5
+pad 1 at=(-2.45,1.75) layer=1 size=(0.8,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x16 layer=1 size=(0.25,0.8) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.75,-2.45,1.75,2.45) #231abe6208
+pads x16 layer=1 size=(0.8,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-2.45,-1.75,2.45,1.75) #3475d329ab
+pads x1 layer=1 size=(3.5,3.5) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.76 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #6aee1bd122
+graphics region 33: 1 bbox(-2.85,2.61,-2.37,2.94) #2c2e2d695c
+graphics region 35: 9 bbox(-1.6372,-1.6372,1.6372,1.6372) #739ccfe9d7
+graphics track 33: 11 bbox(-2.85,-2.61,2.61,2.94) #d28147e17c
+graphics track 69: 5 bbox(-2.5,-2.5,2.5,2.5) #581ec8cbcc
+graphics track 71: 4 bbox(-3.1,-3.1,3.1,3.1) #5914097259
+### standard/VQFN-32-1EP_5x5mm_P0.5mm_EP3.5x3.5mm.kicad_mod
+footprint VQFN-32-1EP_5x5mm_P0.5mm_EP3.5x3.5mm
+(version 20221018)
+(layer F.Cu)
+(descr "VQFN-32-1EP_5x5mm_P0.5mm_EP3.5x3.5mm | IPC-7351B qfn density B: Z=5.70 G=4.10 X=0.25")
+(tags "qfn qfn IPC-7351B density-B")
+(attr smd)
+fp_text reference REF** layer=F.SilkS at=(at 0 -3.8)
+fp_text value VQFN-32-1EP_5x5mm_P0.5mm_EP3.5x3.5mm layer=F.Fab at=(at 0 3.8)
+fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
+(pad 1 smd roundrect (at -2.45 -1.75) (size 0.8 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x1 (smd rect (size 3.5 3.5) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #00c0d75b08
+pads x16 (smd roundrect (size 0.25 0.8) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.75,-2.45,1.75,2.45) #d04a8a716c
+pads x16 (smd roundrect (size 0.8 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-2.45,-1.75,2.45,1.75) #a6e1df8dcf
+pads x9 (smd roundrect (size 0.941 0.941) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-1.1667,-1.1667,1.1667,1.1667) #b700dc1531
+graphics fp_line F.SilkS: 8 bbox(-2.61,-2.61,2.61,2.61) #6eb47de3d9
 graphics fp_poly F.Fab: 1 bbox(-2.5,-2.5,2.5,2.5) #893c78d288
 graphics fp_poly F.SilkS: 1 bbox(-2.85,-2.94,-2.37,-2.61) #0c3abd55bd
-graphics fp_rect F.CrtYd: 1 bbox(-3.13,-3.13,3.13,3.13) #43d8ccaf51
-### standard/WQFN-16-1EP_3x3mm_P0.5mm_EP1.6x1.6mm.PcbLib:WQFN-16-1EP_3x3mm_P0.5mm_EP1.6x1.6mm
-params DESCRIPTION=WQFN-16-1EP_3x3mm_P0.5mm_EP1.6x1.6mm; IPC-7351B qfn density B: Z=3.75 G=2.00 X=0.25 HEIGHT=31.4961mil PATTERN=WQFN-16-1EP_3x3mm_P0.5mm_EP1.6x1.6mm
+graphics fp_rect F.CrtYd: 1 bbox(-3.1,-3.1,3.1,3.1) #b0c5733653
+### standard/WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.PcbLib:WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm
+params DESCRIPTION=WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm; IPC-7351B qfn density B: Z=3.75 G=2.08 X=0.25 HEIGHT=31.4961mil PATTERN=WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm
 text ".Designator" layer=33 at=(-1.3905,2.33) h=1 w=0.15 rot=0 mirror=False
 text ".Comment" layer=69 at=(-3.708,-3.33) h=1 w=0.15 rot=0 mirror=False
 text ".Designator" layer=69 at=(-1.0429,-0.375) h=0.75 w=0.112 rot=0 mirror=False
 body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-1.5,-1.5;1.5,-1.5;1.5,1.5;-0.75,1.5;-1.5,0.75
-pad 1 at=(-1.4375,0.75) layer=1 size=(0.875,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pads x8 layer=1 size=(0.25,0.875) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.75,-1.4375,0.75,1.4375) #f135bc3e2d
-pads x8 layer=1 size=(0.875,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.4375,-0.75,1.4375,0.75) #b71874f4dc
-pads x1 layer=1 size=(1.6,1.6) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-0.81 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #45f8654a34
+pad 1 at=(-1.4575,0.75) layer=1 size=(0.835,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pads x8 layer=1 size=(0.25,0.835) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-0.75,-1.4575,0.75,1.4575) #b3bbff1f8f
+pads x8 layer=1 size=(0.835,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(-1.4575,-0.75,1.4575,0.75) #94f6e541ab
+pads x1 layer=1 size=(1.68,1.68) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-0.85 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0 centres bbox(0,0,0,0) #5a60363957
 graphics region 33: 1 bbox(-1.85,1.61,-1.37,1.94) #efb5063eef
-graphics region 35: 4 bbox(-0.7225,-0.7225,0.7225,0.7225) #91391d09b6
+graphics region 35: 4 bbox(-0.7585,-0.7585,0.7585,0.7585) #7b3f9152a7
 graphics track 33: 11 bbox(-1.85,-1.61,1.61,1.94) #9f42ba53fa
 graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
 graphics track 71: 4 bbox(-2.13,-2.13,2.13,2.13) #26036e738a
-### standard/WQFN-16-1EP_3x3mm_P0.5mm_EP1.6x1.6mm.kicad_mod
-footprint WQFN-16-1EP_3x3mm_P0.5mm_EP1.6x1.6mm
+### standard/WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm.kicad_mod
+footprint WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm
 (version 20221018)
 (layer F.Cu)
-(descr "WQFN-16-1EP_3x3mm_P0.5mm_EP1.6x1.6mm | IPC-7351B qfn density B: Z=3.75 G=2.00 X=0.25")
+(descr "WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm | IPC-7351B qfn density B: Z=3.75 G=2.08 X=0.25")
 (tags "qfn qfn IPC-7351B density-B")
 (attr smd)
 fp_text reference REF** layer=F.SilkS at=(at 0 -2.83)
-fp_text value WQFN-16-1EP_3x3mm_P0.5mm_EP1.6x1.6mm layer=F.Fab at=(at 0 2.83)
+fp_text value WQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm layer=F.Fab at=(at 0 2.83)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -1.4375 -0.75) (size 0.875 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-pads x1 (smd rect (size 1.6 1.6) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #b9755cbdd6
-pads x8 (smd roundrect (size 0.25 0.875) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-0.75,-1.4375,0.75,1.4375) #eedbac7136
-pads x4 (smd roundrect (size 0.645 0.645) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-0.4,-0.4,0.4,0.4) #1d976c48f7
-pads x8 (smd roundrect (size 0.875 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.4375,-0.75,1.4375,0.75) #21c491671b
+(pad 1 smd roundrect (at -1.4575 -0.75) (size 0.835 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+pads x1 (smd rect (size 1.68 1.68) (layers F.Cu F.Mask)) centres bbox(0,0,0,0) #6f5ea425c8
+pads x8 (smd roundrect (size 0.25 0.835) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-0.75,-1.4575,0.75,1.4575) #27a2cd6e57
+pads x4 (smd roundrect (size 0.677 0.677) (layers F.Paste) (roundrect_rratio 0.25)) centres bbox(-0.42,-0.42,0.42,0.42) #bbb7f65b11
+pads x8 (smd roundrect (size 0.835 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25)) centres bbox(-1.4575,-0.75,1.4575,0.75) #135ca6b72b
 graphics fp_line F.SilkS: 8 bbox(-1.61,-1.61,1.61,1.61) #73fe87bf3d
 graphics fp_poly F.Fab: 1 bbox(-1.5,-1.5,1.5,1.5) #80e322fb30
 graphics fp_poly F.SilkS: 1 bbox(-1.85,-1.94,-1.37,-1.61) #21f620d05f
 graphics fp_rect F.CrtYd: 1 bbox(-2.13,-2.13,2.13,2.13) #8f06b3bf8b
-### standard/WSON-8-1EP_4x4mm_P0.8mm_EP1.98x3mm.PcbLib:WSON-8-1EP_4x4mm_P0.8mm_EP1.98x3mm
-params DESCRIPTION=WSON-8-1EP_4x4mm_P0.8mm_EP1.98x3mm; IPC-7351B qfn density B: Z=4.75 G=3.00 X=0.30 HEIGHT=31.4961mil PATTERN=WSON-8-1EP_4x4mm_P0.8mm_EP1.98x3mm
-text ".Designator" layer=33 at=(-1.3905,2.45) h=1 w=0.15 rot=0 mirror=False
-text ".Comment" layer=69 at=(-3.708,-3.45) h=1 w=0.15 rot=0 mirror=False
-text ".Designator" layer=69 at=(-1.3905,-0.5) h=1 w=0.15 rot=0 mirror=False
-body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-2,-2;2,-2;2,2;-1,2;-2,1
-pad 1 at=(-1.9375,1.2) layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pad 2 at=(-1.9375,0.4) layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pad 3 at=(-1.9375,-0.4) layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pad 4 at=(-1.9375,-1.2) layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pad 5 at=(1.9375,-1.2) layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pad 6 at=(1.9375,-0.4) layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pad 7 at=(1.9375,0.4) layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pad 8 at=(1.9375,1.2) layer=1 size=(0.875,0.3) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-pad 9 at=(0,0) layer=1 size=(1.98,3) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.51 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
-graphics region 33: 1 bbox(-2.1775,1.61,-1.6975,1.94) #f6d6692000
-graphics region 35: 6 bbox(-0.894,-1.403,0.894,1.403) #bb8c680d3c
-graphics track 33: 9 bbox(-2.1775,-2.11,2.11,2.11) #44ff6e5e41
-graphics track 69: 5 bbox(-2,-2,2,2) #e0325d5409
-graphics track 71: 4 bbox(-2.63,-2.25,2.63,2.25) #d73c7c9c7d
-### standard/WSON-8-1EP_4x4mm_P0.8mm_EP1.98x3mm.kicad_mod
-footprint WSON-8-1EP_4x4mm_P0.8mm_EP1.98x3mm
+### standard/WSON-8-1EP_3x3mm_P0.5mm_EP1.45x2.4mm.PcbLib:WSON-8-1EP_3x3mm_P0.5mm_EP1.45x2.4mm
+params DESCRIPTION=WSON-8-1EP_3x3mm_P0.5mm_EP1.45x2.4mm; IPC-7351B qfn density B: Z=3.75 G=1.85 X=0.25 HEIGHT=31.4961mil PATTERN=WSON-8-1EP_3x3mm_P0.5mm_EP1.45x2.4mm
+text ".Designator" layer=33 at=(-1.3905,1.95) h=1 w=0.15 rot=0 mirror=False
+text ".Comment" layer=69 at=(-3.708,-2.95) h=1 w=0.15 rot=0 mirror=False
+text ".Designator" layer=69 at=(-1.0429,-0.375) h=0.75 w=0.112 rot=0 mirror=False
+body layer=69 V7_LAYER=MECHANICAL13|NAME= |KIND=0|SUBPOLYINDEX=-1|UNIONINDEX=0|ARCRESOLUTION=0.5mil|ISSHAPEBASED=FALSE|CAVITYHEIGHT=0mil|STANDOFFHEIGHT=0mil|OVERALLHEIGHT=31.4961mil|BODYPROJECTION=0|ARCRESOLUTION=0.5mil|BODYCOLOR3D=8421504|BODYOPACITY3D=1.000|IDENTIFIER=|TEXTURE=|TEXTURECENTERX=0mil|TEXTURECENTERY=0mil|TEXTURESIZEX=0mil|TEXTURESIZEY=0mil|TEXTUREROTATION= 0.00000000000000E+0000|MODEL.EMBED=FALSE|MODEL.NAME=|MODEL.2D.X=0mil|MODEL.2D.Y=0mil|MODEL.2D.ROTATION=0.000|MODEL.3D.ROTX=0.000|MODEL.3D.ROTY=0.000|MODEL.3D.ROTZ=0.000|MODEL.3D.DZ=0mil|MODEL.MODELTYPE=0|MODEL.EXTRUDED.MINZ=0mil|MODEL.EXTRUDED.MAXZ=31.4961mil pts=-1.5,-1.5;1.5,-1.5;1.5,1.5;-0.75,1.5;-1.5,0.75
+pad 1 at=(-1.4,0.75) layer=1 size=(0.95,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 2 at=(-1.4,0.25) layer=1 size=(0.95,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 3 at=(-1.4,-0.25) layer=1 size=(0.95,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 4 at=(-1.4,-0.75) layer=1 size=(0.95,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 5 at=(1.4,-0.75) layer=1 size=(0.95,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 6 at=(1.4,-0.25) layer=1 size=(0.95,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 7 at=(1.4,0.25) layer=1 size=(0.95,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 8 at=(1.4,0.75) layer=1 size=(0.95,0.25) hole=0 shape=9 rot=0 corner=50 plated=True paste=1/0 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+pad 9 at=(0,0) layer=1 size=(1.45,2.4) hole=0 shape=2 rot=0 corner=None plated=True paste=2/-1.21 mask=1/0.1016 hole_shape=0 slot=0 hole_rot=0
+graphics region 33: 1 bbox(-1.64,1.135,-1.16,1.465) #88994aa4c0
+graphics region 35: 4 bbox(-0.655,-1.0835,0.655,1.0835) #8cd769ed45
+graphics track 33: 9 bbox(-1.64,-1.61,1.61,1.61) #0f3a840c22
+graphics track 69: 5 bbox(-1.5,-1.5,1.5,1.5) #460ca5617e
+graphics track 71: 4 bbox(-2.13,-1.75,2.13,1.75) #b4e7f51d3d
+### standard/WSON-8-1EP_3x3mm_P0.5mm_EP1.45x2.4mm.kicad_mod
+footprint WSON-8-1EP_3x3mm_P0.5mm_EP1.45x2.4mm
 (version 20221018)
 (layer F.Cu)
-(descr "WSON-8-1EP_4x4mm_P0.8mm_EP1.98x3mm | IPC-7351B qfn density B: Z=4.75 G=3.00 X=0.30")
+(descr "WSON-8-1EP_3x3mm_P0.5mm_EP1.45x2.4mm | IPC-7351B qfn density B: Z=3.75 G=1.85 X=0.25")
 (tags "qfn qfn IPC-7351B density-B")
 (attr smd)
-fp_text reference REF** layer=F.SilkS at=(at 0 -2.95)
-fp_text value WSON-8-1EP_4x4mm_P0.8mm_EP1.98x3mm layer=F.Fab at=(at 0 2.95)
+fp_text reference REF** layer=F.SilkS at=(at 0 -2.45)
+fp_text value WSON-8-1EP_3x3mm_P0.5mm_EP1.45x2.4mm layer=F.Fab at=(at 0 2.45)
 fp_text user "${REFERENCE}" layer=F.Fab at=(at 0 0)
-(pad 1 smd roundrect (at -1.9375 -1.2) (size 0.875 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-(pad 2 smd roundrect (at -1.9375 -0.4) (size 0.875 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-(pad 3 smd roundrect (at -1.9375 0.4) (size 0.875 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-(pad 4 smd roundrect (at -1.9375 1.2) (size 0.875 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-(pad 5 smd roundrect (at 1.9375 1.2) (size 0.875 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-(pad 6 smd roundrect (at 1.9375 0.4) (size 0.875 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-(pad 7 smd roundrect (at 1.9375 -0.4) (size 0.875 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-(pad 8 smd roundrect (at 1.9375 -1.2) (size 0.875 0.3) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
-(pad 9 smd rect (at 0 0) (size 1.98 3) (layers F.Cu F.Mask))
-(pad "" smd roundrect (at -0.495 -1) (size 0.798 0.806) (layers F.Paste) (roundrect_rratio 0.25))
-(pad "" smd roundrect (at -0.495 0) (size 0.798 0.806) (layers F.Paste) (roundrect_rratio 0.25))
-(pad "" smd roundrect (at -0.495 1) (size 0.798 0.806) (layers F.Paste) (roundrect_rratio 0.25))
-(pad "" smd roundrect (at 0.495 -1) (size 0.798 0.806) (layers F.Paste) (roundrect_rratio 0.25))
-(pad "" smd roundrect (at 0.495 0) (size 0.798 0.806) (layers F.Paste) (roundrect_rratio 0.25))
-(pad "" smd roundrect (at 0.495 1) (size 0.798 0.806) (layers F.Paste) (roundrect_rratio 0.25))
-graphics fp_line F.SilkS: 6 bbox(-2.11,-2.11,2.11,2.11) #19c5b2ce96
-graphics fp_poly F.Fab: 1 bbox(-2,-2,2,2) #009af27ced
-graphics fp_poly F.SilkS: 1 bbox(-2.1775,-1.94,-1.6975,-1.61) #d302041725
-graphics fp_rect F.CrtYd: 1 bbox(-2.63,-2.25,2.63,2.25) #61dd244c1e
+(pad 1 smd roundrect (at -1.4 -0.75) (size 0.95 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 2 smd roundrect (at -1.4 -0.25) (size 0.95 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 3 smd roundrect (at -1.4 0.25) (size 0.95 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 4 smd roundrect (at -1.4 0.75) (size 0.95 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 5 smd roundrect (at 1.4 0.75) (size 0.95 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 6 smd roundrect (at 1.4 0.25) (size 0.95 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 7 smd roundrect (at 1.4 -0.25) (size 0.95 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 8 smd roundrect (at 1.4 -0.75) (size 0.95 0.25) (layers F.Cu F.Paste F.Mask) (roundrect_rratio 0.25))
+(pad 9 smd rect (at 0 0) (size 1.45 2.4) (layers F.Cu F.Mask))
+(pad "" smd roundrect (at -0.3625 -0.6) (size 0.585 0.967) (layers F.Paste) (roundrect_rratio 0.25))
+(pad "" smd roundrect (at -0.3625 0.6) (size 0.585 0.967) (layers F.Paste) (roundrect_rratio 0.25))
+(pad "" smd roundrect (at 0.3625 -0.6) (size 0.585 0.967) (layers F.Paste) (roundrect_rratio 0.25))
+(pad "" smd roundrect (at 0.3625 0.6) (size 0.585 0.967) (layers F.Paste) (roundrect_rratio 0.25))
+graphics fp_line F.SilkS: 6 bbox(-1.61,-1.61,1.61,1.61) #5ffd925b3c
+graphics fp_poly F.Fab: 1 bbox(-1.5,-1.5,1.5,1.5) #80e322fb30
+graphics fp_poly F.SilkS: 1 bbox(-1.64,-1.465,-1.16,-1.135) #0af140ca5d
+graphics fp_rect F.CrtYd: 1 bbox(-2.13,-1.75,2.13,1.75) #d5ced61947

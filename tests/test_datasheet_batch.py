@@ -12,6 +12,7 @@ from unittest import mock
 from ecadlib import datasheet as D, ds_route as DR, librarian as L, mcp_server as M
 from ecadlib.app import Workspace
 from tests import test_datasheet as TD, test_librarian as TL
+from tests.read_pads import read_pads
 
 KEY = "sk-ant-test-SECRET-123"
 
@@ -438,6 +439,7 @@ def test_estimate_and_cost_cap():
 
 
 # ---------------------------------------------------------------- batch through the librarian
+@read_pads
 def test_librarian_batch_one_request_per_part():
     def answer(cid):
         return ("errored", "invalid_request_error", "bad pdf") if cid == "DSPART2" else TD.message(TD.GOOD)
@@ -488,6 +490,7 @@ def test_batch_resumes_without_paying_twice():
         assert any("datasheet reader (BOM, cached)" in t for t in items["DSPART1"]["librarian"]["tried"])
 
 
+@read_pads
 def test_expired_and_no_key_and_sync_fallback():
     api = FakeAPI(answer=lambda cid: "expired" if cid == "DSPART1" else TD.message(TD.GOOD))
     with tempfile.TemporaryDirectory() as d:
@@ -501,6 +504,7 @@ def test_expired_and_no_key_and_sync_fallback():
         assert items["DSPART1"]["source"]["footprint"].startswith("datasheet:")
 
 
+@read_pads
 def test_fill_plan_and_cli():
     api = FakeAPI()
     with tempfile.TemporaryDirectory() as d:
@@ -531,6 +535,7 @@ def test_fill_plan_and_cli():
         assert items["DSPART1"]["source"]["footprint"].startswith("datasheet:")
 
 
+@read_pads
 def test_workspace_and_mcp_tools():
     names = {t["name"] for t in M.TOOLS}
     assert {"datasheet_batch", "datasheet_estimate"} <= names
