@@ -87,6 +87,12 @@ def description_value(desc, cat):
     ('RES 10K OHM 1% 0603' -> '10K', 'CAP CER 0.1UF 16V X7R' -> '0.1UF', 'FIXED IND 4.7UH 800MA' -> '4.7UH'), as the
     description spells it. Only a value in the part's own unit counts (16V, 800mA, 1/10W, 1%, X7R, 0402 are none of
     it; a bead's impedance is its value). None, or two different values ('4.7K or 10K'): '' -- nothing is guessed."""
+    found = description_values(desc, cat)
+    return next(iter(found.values())) if len(found) == 1 else ""
+
+
+def description_values(desc, cat):
+    """Every value description_value reads in a description: {(category, value '%.6g'): its spelling}."""
     from .librarian import passive_value
     toks = [t for t in re.split(r"[\s,;/()\[\]]+", str(desc or "")) if t]
     cats = (cat, "Resistors") if cat == "Inductors" and _BEAD.search(str(desc or "")) else (cat,)
@@ -102,7 +108,7 @@ def description_value(desc, cat):
             if v is not None:
                 found.setdefault((c, f"{v:.6g}"), t)
                 break
-    return next(iter(found.values())) if len(found) == 1 else ""
+    return found
 
 
 def kind_of(descriptions=(), footprints=()):

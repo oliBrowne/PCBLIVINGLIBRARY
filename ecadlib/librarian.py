@@ -341,6 +341,7 @@ class KiCadLibrary:
 
 
 # ---------------------------------------------------------------- helpers
+POLARIZED_SYMBOL = "Capacitor_Polarized"   # the Library Ref of every polarized capacitor (pin 1 = +)
 SHARED_KINDS = ("R", "C", "CP", "L")       # parts whose Library Ref is the generic symbol (altium_export.GENERIC_SYMBOL)
 PART_PARAMS = {"mpn", "lcsc", "manufacturer", "manufacturer part number", "datasheet", "footprint"}
 
@@ -441,8 +442,11 @@ def passive_kind(item, ln=None):
         return None
     if cat == "Resistors":
         return "R"
-    if cat == "Capacitors":
-        return "CP" if fp.startswith("CP_") or SP.says_polarized(desc) else "C"
+    if cat == "Capacitors":                  # polarized by its land, its description or its part number's series
+        mpn = SP._norm(_par(item).get("Manufacturer Part Number", ""))     # (KEMET T491, AVX TAJ, Panasonic EEE ...)
+        bom_fp = SP._strip_lib(str((ln or {}).get("footprint") or "")).strip()
+        return "CP" if fp.startswith("CP_") or bom_fp.startswith("CP_") or SP.says_polarized(desc) or \
+            (mpn and SP.POLAR_CAP.match(mpn)) else "C"
     if cat == "Inductors":
         return "L"
     if cat == "Diodes" and (fp.startswith("LED_") or SP.says_led(item.get("description"))):
@@ -693,6 +697,8 @@ class Run:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
         kind, fp_name, sym_name = passive_kind(item, ln), item["footprint"]["ref"], item["symbol"]["ref"]
+        if kind == "CP" and sym_name == AX.GENERIC_SYMBOL["Capacitors"]:   # one shared symbol per kind: a polarized
+            sym_name = item["symbol"]["ref"] = POLARIZED_SYMBOL              # capacitor never takes the plain one's file
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         try:
@@ -786,6 +792,12 @@ class Run:
             named = next((lib.footprint(n) for n in names if lib.footprint(n)), None)
             if named:                              # the land the BOM names, as named (R-BF-4): L_Bourns_SRR1210A is
                 fp_ref, fp_how = named, "BOM footprint name"            # not L_1210, R_Array_.. not a 2-pad R_0603
+            elif kind == "CP":                     # a tantalum by its case (footprint text, KEMET T491 / AVX TAJ code)
+                from . import stdparts as SP
+                land, why = SP.tantalum_land([ln.get("footprint", ""), item["footprint"].get("kicad") or ""], mpn,
+                                              item.get("description") or ln.get("description") or "")
+                if land and lib.footprint(land):
+                    fp_ref, fp_how = lib.footprint(land), why
             elif PASSIVE[kind][1] and pkg in IMP2MET:
                 guess = PASSIVE[kind][1].format(pkg, IMP2MET[pkg])
                 own = _own_land(names, guess.split(":")[-1])
@@ -955,9 +967,40 @@ class Run:
                 st["verify"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
         elif not st["symbol"] and res["symbol"]:
             res["sym_how"] = f"footprint came from {fp_src or 'nowhere'}, not {res['footprint']}: pin numbers not known to match"
+        pads = self.pad_numbers(st) if not st["symbol"] and st["footprint"] and k not in SHARED_KINDS + ("LED", "D") else None
+        if pads is not None:
+            key, how = SP.mechanical_symbol(fp_src, ln.get("designator"), pads,
+                                            " ".join(str(x or "") for x in (ln.get("value"), desc, mpn)))
+            if key:                            # a fuse / test point / mounting hole on KiCad's own land of that kind
+                text, name = SP.symbol_text(key, mpn)
+                self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, fp_name,
+                                   f"standard:{name}", [("MPN", mpn)] if mpn else [])
+                got.append(f"symbol {name} ({how}, pads match)")
+                land = fp_src.split(":")[-1]
+                amps = re.fullmatch(r"\s*(\d+(?:\.\d+)?\s*m?A)\s*", str(ln.get("value") or ""))
+                if key in ("Fuse", "Polyfuse") and amps:     # 'Fuse 500mA 1206': the BOM's rating and the land's size
+                    st["found"].setdefault("description", (" ".join(x for x in (
+                        "PTC resettable fuse" if key == "Polyfuse" else "Fuse", amps.group(1).replace(" ", ""),
+                        package_of(land) or "") if x), "the BOM line's value and land"))
+                if not mpn and (key.startswith("MountingHole") or (key == "TestPoint" and land.startswith("TestPoint_Pad"))):
+                    st["no_bom_part"] = f"{SP.SYMBOLS[key][2].lower()} ({land}): copper and holes only, nothing to buy"
+            else:
+                res["sym_how"] = res["sym_how"] if res["symbol"] else how
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
         why += [] if st["symbol"] else [f"symbol: {res['sym_how']}"]
         st["tried"].append("standard: " + "; ".join(got + why))
+
+    def pad_numbers(self, st):
+        """The numbered copper pads of the footprint built for a part (its .kicad_mod): {'1', '2'}; a mounting hole's
+        unnumbered NPTH is none. None when there is no file to read."""
+        f = (st.get("footprint") or {}).get("kicad_mod")
+        try:
+            text = (self.out / f).read_text(encoding="utf-8") if f else None
+        except OSError:
+            text = None
+        if text is None:
+            return None
+        return {m.group(1) for m in re.finditer(r'\(pad\s+"([^"]*)"\s+(smd|thru_hole|connect)\b', text) if m.group(1)}
 
     def src_datasheet(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
         st["tried"] = [t for t in st["tried"] if "waiting for your OK to read it with AI" not in t   # asked again now
@@ -1387,11 +1430,19 @@ def passive_description(item, st, ln):
     if v is None:
         return ""
     pkg = next((p for p in (package_of(str(t or "").split(":")[-1]) for t in (
-        (st.get("footprint") or {}).get("name"), item.get("footprint", {}).get("kicad"), ln.get("footprint"))) if p), "")
+        (st.get("footprint") or {}).get("name"), item.get("footprint", {}).get("kicad"), ln.get("footprint"),
+        _named_land((st.get("footprint") or {}).get("source")))) if p), "")
     f = RU.line_fields(dict(ln, value=raw), cat, pkg)
     value = RU.fmt_number(v, cat, "si_unit") + ("Ω" if cat == "Resistors" else "")
     return " ".join(x for x in (f["cat3"], value, f["tolerance"], f["voltage"], f["dielectric"],
                                 f["power"], pkg) if x)
+
+
+def _named_land(source):
+    """The land a footprint source names ('standard:Resistor_SMD:R_0603_1608Metric' -> R_0603_1608Metric); '' for a
+    source that names none (easyeda:C98220 is an LCSC number, datasheet: a file)."""
+    s = str(source or "")
+    return s.split(":")[-1] if s.startswith(("kicad:", "standard:")) else ""
 
 
 def is_kicad_source(source):
@@ -1525,6 +1576,14 @@ def apply_state(item, st, ln):
         desc = passive_description(item, st, ln)                # empty (held: a person types it); never made up
         if desc:
             item["description"], fields["Description"] = desc, "the BOM line's value and package"
+    if ln.get("value_from_mpn"):                 # the BOM had no Value: read from the part number (mpn_decode)
+        fields["Value"] = ln["value_from_mpn"]
+    if st.get("no_bom_part"):                   # a mounting hole / test pad: no maker part (release check)
+        item["no_bom_part"] = st["no_bom_part"]
+        if not str(item.get("description") or "").strip():
+            item["description"], fields["Description"] = st["no_bom_part"].split(":")[0].capitalize(), "the standard symbol and its KiCad land"
+    else:
+        item.pop("no_bom_part", None)
     item["field_sources"] = fields
     item["verify"] = list(st.get("verify", []))
     alt_hold, alt_note = alternate_footprint(ln or {}, st)
@@ -1643,6 +1702,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))       # first: an unreadable BOM writes nothing
     if not lines:                                                 # (no -o folder, no HTTP cache)
         raise ValueError(f"{bom}: the BOM has a header but no part rows")
+    from . import mpn_decode as MD                                # an empty R / C Value from its part number's code
+    MD.fill_lines(lines)                                          # (RC0603FR-0710KL: 10kΩ); a Value it contradicts held
     out.mkdir(parents=True, exist_ok=True)
     from . import migrate as MG, rebuild as LK           # versioned files (backed up, migrated) and library.lock.json
     MG.open_folder(out, log=log)
