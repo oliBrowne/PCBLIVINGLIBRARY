@@ -22,6 +22,13 @@ Either way works, and both store the key in the same place:
 * **The command line.** `ecadlib keys set NAME` asks for the key and hides what you type. The names are listed under
   each distributor below.
 
+**Save the keys where you run ecadlib.** Use the setup page, or a normal PowerShell or Command Prompt window (on
+macOS/Linux, a normal terminal). A terminal *inside an app* that Windows sandboxes, such as the one in the Claude
+desktop app, saves to a different folder (Windows moves `%APPDATA%\ecadlib` to
+`%LOCALAPPDATA%\Packages\<app>\LocalCache\Roaming\ecadlib` for it), so ecadlib run from a normal window will not
+see those keys, and the other way round. To check, run `ecadlib keys list` in the same kind of window you run ecadlib
+from: its first line names the folder it reads.
+
 ## How to check it works
 
 On the setup page, press **Check it works**. On the command line:
@@ -51,7 +58,7 @@ Free. Sign up at <https://developer.digikey.com>.
    * **Products**: set **Product Information V4** to **ProductInformation V4** and leave the rest on **None**.
 
    Click **Add production app**. It is approved at once; there is no waiting.
-5. Click the app's name. Its page shows the **Client ID** and **Client Secret**. To find them again later:
+5. Click the app's name. Its **Team App Details** page shows the **Client ID** and **Client Secret**. To find them again later:
    developer.digikey.com > **Organizations** > your organization > **Production Apps** > the app.
 
 Paste them into the two DigiKey boxes on the setup page, or:
@@ -128,6 +135,7 @@ else already uses port 3000 on your computer, `ecadlib nexar signin` says so; se
 | DigiKey knows the app but answered 401/403 | Set Products > Product Information V4 on the app; use a production app. |
 | Nexar refused the app | Check the app has the Supply scope. A Design-only app cannot look up parts. |
 | Nexar: part limit / no parts left | Pick a plan under Manage supply plan, or use the Evaluation app. |
+| "save ... first", but you did save it | You saved it in a different window type (see "Save the keys where you run ecadlib"). Run `ecadlib keys list` in the window you use and save it there. |
 | could not reach | Check the internet connection or a company proxy, then try again. |
 
 `ecadlib doctor` also lists which part lookups have keys saved.

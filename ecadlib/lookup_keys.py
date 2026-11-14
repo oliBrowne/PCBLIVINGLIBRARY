@@ -36,7 +36,7 @@ GUIDES = [
          "Name the app (for example ecadlib). OAuth Callback must be filled in and start with https: type "
          "https://localhost (ecadlib never uses it). Under Products, set Product Information V4 to "
          "ProductInformation V4 and leave the rest on None. Click Add production app. It is approved at once.",
-         "Click the app's name. Its page shows the Client ID and Client Secret: copy both into the two boxes here. "
+         "Click the app's name. Its Team App Details page shows the Client ID and Client Secret: copy both into the two boxes here. "
          "To find them again later: developer.digikey.com > Organizations > your organization > Production Apps > "
          "the app.",
      ]},

@@ -37,6 +37,8 @@
     <li><strong>The command line.</strong> <code>ecadlib keys set NAME</code> asks for the key and hides what you type. The names are under each distributor below.</li>
   </ol>
 
+  <p><strong>Save the keys where you run ecadlib:</strong> on the setup page, or in a normal PowerShell or Command Prompt window (a normal terminal on macOS and Linux). A terminal inside an app that Windows sandboxes, such as the one in the Claude desktop app, saves to a different folder, so ecadlib run from a normal window will not see those keys. Run <code>ecadlib keys list</code> in the window you use: its first line names the folder it reads.</p>
+
   <h2 id="check">How to check it works</h2>
   <p>Press <strong>Check it works</strong> on the setup page, or run <code>ecadlib keys check</code> (every distributor whose keys are saved) or <code>ecadlib keys check digikey</code> (one of digikey, mouser, nexar). It does one real search for a common part (NE555DR), free for DigiKey and Mouser, and says in plain words whether it worked, and if not, what to fix. Nexar counts every part it returns against your allowance, so its check asks for a single result and uses one part.</p>
 
@@ -47,7 +49,7 @@
     <li>On <strong>Organizations</strong>, click <strong>+ Create Organization</strong>. Give it a name no other DigiKey user has (for example your name plus "ecadlib") and click <strong>Add organization</strong>.</li>
     <li>Open the organization's <strong>Production Apps</strong> tab and click <strong>+ Create Production App</strong>.</li>
     <li>Name the app <code>ecadlib</code>. <strong>OAuth Callback</strong> must be filled in and start with https: type <code>https://localhost</code> (ecadlib never uses it). Under <strong>Products</strong>, set Product Information V4 to <strong>ProductInformation V4</strong> and leave the rest on None. Click <strong>Add production app</strong>. It is approved at once.</li>
-    <li>Click the app's name. Its page shows the <strong>Client ID</strong> and <strong>Client Secret</strong> (to find them again later: Organizations &gt; your organization &gt; Production Apps &gt; the app). Copy them into the two DigiKey boxes on the setup page, or run <code>ecadlib keys set DIGIKEY_CLIENT_ID</code> and <code>ecadlib keys set DIGIKEY_CLIENT_SECRET</code>.</li>
+    <li>Click the app's name. Its <strong>Team App Details</strong> page shows the <strong>Client ID</strong> and <strong>Client Secret</strong> (to find them again later: Organizations &gt; your organization &gt; Production Apps &gt; the app). Copy them into the two DigiKey boxes on the setup page, or run <code>ecadlib keys set DIGIKEY_CLIENT_ID</code> and <code>ecadlib keys set DIGIKEY_CLIENT_SECRET</code>.</li>
   </ol>
 
   <h2 id="mouser">Mouser</h2>

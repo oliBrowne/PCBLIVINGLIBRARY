@@ -122,7 +122,7 @@ then press **Check it works** (or run `ecadlib keys check`), which does one test
 4. Name `ecadlib`. **OAuth Callback** is required and must be https: type `https://localhost` (ecadlib never uses
    it). Under **Products**, set Product Information V4 to **ProductInformation V4**, leave the rest on None. Click
    **Add production app**. It is approved at once.
-5. Click the app's name and copy the **Client ID** and **Client Secret** (later: Organizations > your organization >
+5. Click the app's name; its **Team App Details** page has the **Client ID** and **Client Secret** (later: Organizations > your organization >
    Production Apps > the app):
    `ecadlib keys set DIGIKEY_CLIENT_ID`, `ecadlib keys set DIGIKEY_CLIENT_SECRET`.
 
@@ -155,6 +155,10 @@ then press **Check it works** (or run `ecadlib keys check`), which does one test
    setup page or run `ecadlib nexar signin`.
 
 </details>
+
+Save the keys where you run ecadlib: the setup page, or a normal PowerShell / terminal window. A terminal inside a
+sandboxed Windows app (such as the Claude desktop app) saves to a different folder; `ecadlib keys list` shows which
+folder a window uses.
 
 The full guide, with what to do when a check fails: [docs/part-lookup-keys.md](docs/part-lookup-keys.md), also on the
 website at <https://pcblivinglibrary.vercel.app/keys>.

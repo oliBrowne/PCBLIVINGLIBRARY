@@ -25,7 +25,10 @@ The key goes into a file of your own user account:
 | macOS   | `~/Library/Application Support/ecadlib/keys.json` | not encrypted; the file is readable by you only (mode 600) |
 | Linux   | `~/.config/ecadlib/keys.json` (`$XDG_CONFIG_HOME`) | not encrypted; the file is readable by you only (mode 600) |
 
-`ECADLIB_HOME` moves the folder. `ecadlib.toml` holds only the *name* of a key (`api_key_env`), never the key.
+`ECADLIB_HOME` moves the folder. On Windows, a terminal inside a sandboxed (MSIX) app, such as the Claude desktop
+app, sees `%APPDATA%` redirected to `%LOCALAPPDATA%\Packages\<app>\LocalCache\Roaming`, so keys saved there are not
+the ones a normal window reads: save keys from a normal window or the setup page, and `ecadlib keys list` names the
+folder in use. `ecadlib.toml` holds only the *name* of a key (`api_key_env`), never the key.
 
 ## Only ecadlib reads it
 
