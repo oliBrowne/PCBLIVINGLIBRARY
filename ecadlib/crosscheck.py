@@ -25,8 +25,8 @@ the qfn rows) and the turn cannot move a pad (_turn); an exposed pad turned on i
 pin numbers must be equal; pin names must be equal after normalising case and active-low marks (~{X}, X̅, X#, /X,
 nX; X_N only against another active-low mark). A package type that differs holds even when every number agrees (the
 type picks the footprint builder); the message says so. Agree ->
-the part is accepted as before (a person still verifies every datasheet part) and records "cross-checked" (status
-"agreed"). A table entry found only by the read's OWN package name (the BOM names no package the table resolves) is not
+the part's footprint is accepted and records "cross-checked" (status "agreed"); the librarian releases the part with
+no person's look only when its symbol is confirmed too (librarian.read_confirmed: the PDF's own pin table). A table entry found only by the read's OWN package name (the BOM names no package the table resolves) is not
 independent: it shows the read's numbers fit the read's name, which self_check already tests. That outcome is recorded
 as "self-checked" (status "self-checked"), is never counted as an agreement with a second source, and goes on the part's
 review items; auto mode does not add a paid second read for it (cross_check = "always" makes one). Disagree ->

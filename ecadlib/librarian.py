@@ -1250,9 +1250,7 @@ class Run:
     def datasheet_pdf(self, item, ln, row, st, mpn):
         """This MPN's datasheet PDF for a free check (no model): the first link that gives a PDF -> (bytes, url) or
         (None, None). Cached by the HTTP cache; never the hand-off to a person."""
-        if getattr(self.http, "offline", False) and not hasattr(self.http, "get"):
-            return None, None
-        urls = D.datasheet_urls(item, ln, row, st["found"])
+        urls = D.datasheet_urls(item, ln, row, st["found"])   # (--offline: the PDF store reads its cache only)
         if not urls:
             return None, None
         if getattr(self, "_pdfs", None) is None:
