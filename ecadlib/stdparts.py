@@ -1155,15 +1155,22 @@ PTC = re.compile(r"(?i)\bPTC\b|poly ?fuse|polyswitch|(?<!non-)(?<!non )(?<!not )
 SYMBOLS["Crystal"] = ("Crystal", "Y", "Two pin crystal", [_rect(-1.143, 1.905, 1.143, -1.905), _poly([(-1.905, 1.27), (-1.905, -1.27)]),
                                                          _poly([(1.905, 1.27), (1.905, -1.27)])],
                       [("1", "~", "passive", -5.08, 0, 0, 3.175), ("2", "~", "passive", 5.08, 0, 180, 3.175)])
-MECHANICAL = {"TestPoint": ("TP",), "MountingHole": ("H", "MH"), "Fuse": ("F",), "Crystal": ("Y", "X", "XTAL", "XT")}   # KiCad
+# fiducials and unplated mounting holes: KiCad's Mechanical:Fiducial / Mechanical:MountingHole have no pins (nothing
+# connects to them); only used on a KiCad Fiducial / MountingHole land with no numbered pad (mechanical_symbol)
+SYMBOLS["Fiducial"] = ("Fiducial", "FID", "Fiducial marker", [_circle(0, 0, 1.27, 0.508)], [])
+SYMBOLS["MountingHole"] = ("MountingHole", "H", "Mounting hole, not connected", [_circle(0, 0, 1.27, 0.508)], [])
+PINLESS = ("Fiducial", "MountingHole")          # symbol keys with no pins: the release check takes them without a pin
+MECHANICAL = {"TestPoint": ("TP",), "MountingHole": ("H", "MH"), "Fuse": ("F",), "Crystal": ("Y", "X", "XTAL", "XT"),   # KiCad
+              "Fiducial": ("FID", "FD", "FM")}
                                                                                                     # library -> designators
 
 
 def mechanical_symbol(fp_source, designator, pads, text=""):
     """(symbol key, why) for a fuse, test point, mounting hole or 2-pad crystal built on one of KiCad's own lands of that library
     (fp_source 'kicad:TestPoint:TestPoint_Pad_D1.0mm', 'standard:Fuse:Fuse_1206_3216Metric'), or (None, why). Every
-    designator of the line must be of that kind (TP, H / MH, F) and the land's numbered copper pads (pads: their set)
-    must be exactly the symbol's pins: a test point one pad 1; a plated mounting hole pad 1; a fuse 1 and 2.
+    designator of the line must be of that kind (TP, H / MH, F, FID) and the land's numbered copper pads (pads: their set)
+    must be exactly the symbol's pins: a test point one pad 1; a plated mounting hole pad 1; a fuse 1 and 2; an
+    unplated mounting hole and a fiducial none (their symbols have no pins, as KiCad's Mechanical: ones).
     text: the line's value, description and MPN: a PTC / resettable fuse gets the Polyfuse symbol."""
     parts = str(fp_source or "").split(":")
     if len(parts) != 3 or parts[0] not in ("kicad", "standard"):
@@ -1194,11 +1201,14 @@ def mechanical_symbol(fp_source, designator, pads, text=""):
     pads = set(pads)
     if lib == "Crystal":                              # KiCad's 2-pad crystal lands (4-pad ones have other pins)
         return ("Crystal", "crystal, 2 pins") if pads == {"1", "2"} else (None, f"crystal land with pads {sorted(pads)}")
+    if lib == "Fiducial":                             # KiCad's fiducials: one copper dot with no pad number
+        return ("Fiducial", "fiducial, no pad number: a symbol with no pins") if not pads else \
+            (None, f"fiducial land with numbered pads {sorted(pads)}")
     if lib == "TestPoint":
         return ("TestPoint", "test point, one pad") if pads == {"1"} else (None, f"test point land with pads {sorted(pads)}")
     if lib == "MountingHole":
-        if not pads:                                      # KiCad's MountingHole has no pins: a pinless symbol the
-            return None, "mounting hole without a pad: no pins, so no symbol is built (pick it in your library)"   # exports refuse
+        if not pads:                                      # an unplated hole: nothing connects, so KiCad's pinless
+            return "MountingHole", "mounting hole, no pad: a symbol with no pins"   # Mechanical:MountingHole
         return ("MountingHole_Pad", "mounting hole, plated pad 1") if pads == {"1"} else \
             (None, f"mounting hole land with pads {sorted(pads)}")
     if pads != {"1", "2"}:
@@ -1448,7 +1458,7 @@ def symbol_text(key, mpn=""):
         ys = [p[4] for p in pins]
         at_ref, at_val = f"0 {max(ys) + 2.54:g}", f"0 {min(ys) - 2.54:g}"
     text = (f'(kicad_symbol_lib (version 20220914) (generator "ecadlib_stdparts")\n'
-            f'  (symbol "{name}" {hide_names} (in_bom yes) (on_board yes)\n'
+            f'  (symbol "{name}" {hide_names} (in_bom {"no" if key in PINLESS else "yes"}) (on_board yes)\n'
             f'    (property "Reference" "{ref}" (at {at_ref} 0) (effects (font (size 1.27 1.27))))\n'
             f'    (property "Value" "{name}" (at {at_val} 0) (effects (font (size 1.27 1.27))))\n'
             f'    (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))\n'
