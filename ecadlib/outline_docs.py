@@ -21,6 +21,17 @@ LINKS = {"nxp": ["https://www.nxp.com/docs/en/package-information/{code}.pdf"],
          "microchip": [],                                # versioned Packaging Specification: the folder or web search
          "maxim": {"21": ["https://pdfserv.maximintegrated.com/package_dwgs/{code}.PDF"],
                    "90": ["https://pdfserv.maximintegrated.com/land_patterns/{code}.PDF"]}}
+# Analog Devices now keeps Maxim's outline documents in a folder per package family:
+# analog.com/media/en/package-pcb-resources/package/pkg_pdf/soic/21-0111.pdf (tqfp/21-0087, sc70/21-0076, ...)
+ADI_PKG = "https://www.analog.com/media/en/package-pcb-resources/package/pkg_pdf/{folder}/{code}.pdf"
+ADI_FOLDERS = {"SO": ["soic"], "SOIC": ["soic"], "SSOP": ["ssop"], "QSOP": ["qsop"], "TSSOP": ["tssop"],
+               "QFN": ["tqfn", "qfn"], "TQFN": ["tqfn"], "DFN": ["tdfn", "udfn"], "TDFN": ["tdfn"], "SC70": ["sc70"],
+               "TQFP": ["tqfp"], "QFP": ["tqfp"], "UMAX": ["umax"], "SOT23": ["sot23"], "PDIP": ["pdip"], "DIP": ["pdip"]}
+# Maxim's package table rows: "16 SO W16#2 21-0042 90-0107" (pin count, family, package code, outline, land pattern)
+# under a header "PACKAGE TYPE | PACKAGE CODE | OUTLINE NO. | LAND PATTERN NO."
+MAXIM_ROW = re.compile(r"(?<![\w.-])(\d{1,3})\s+(SO|SOIC|SSOP|QSOP|TSSOP|PDIP|DIP|TQFN|QFN|TDFN|DFN|UMAX|µMAX|SOT23|SC70|"
+                       r"TQFP|LQFP)(?:-EP)?(?![A-Z0-9])")
+HEADER_BACK = 12          # lines above a table row its column header ("OUTLINE NO.") may be on
 BACK = 3                # lines above a number its package name may be on (Maxim: name, package code, outline number)
 MAX_DOCS = 2
 CAPTION_ONLY = 400                                       # characters: a drawing page's caption, header and footer
@@ -318,29 +329,91 @@ def refs(texts, part=None, package=None):
     rows, own, _, _ = DR.page_scores(texts, part, package)
     if not own or _has_drawing(texts, rows):
         return []
-    out, seen = [], set()
+    out, seen, table = [], set(), []
+    pins = _pin_count(package, own)
     for i, t in enumerate(texts):
         lines = DR.norm_text(t).upper().splitlines()
         for k, ln in enumerate(lines):
+            row = MAXIM_ROW.search(ln)
+            if row and (pins is None or int(row.group(1)) != pins):
+                row = None if pins is None or not MAXIM_ROW.search(ln) else "other"
+            if row == "other":                        # a table row of another pin count: not this part's
+                continue
             for rx, maker, need in CODES:
-                if need is not None and not need.search(ln):
+                if need is not None and not need.search(ln) and not (   # a table row: the column header above
+                        row and any(need.search(h) for h in lines[max(0, k - HEADER_BACK):k])):
                     continue
                 for m in rx.finditer(ln):
                     before = ln[:m.start()]
                     # the nearest package name above: each block of a list owns the numbers under its name
                     toks = DR.package_tokens(before) or DR.package_tokens(ln) or \
+                        (DR.package_tokens(f"{row.group(2)}-{row.group(1)}") if row and row.start() < m.start() else set()) or \
                         next((t for t in map(DR.package_tokens, lines[max(0, k - BACK):k][::-1]) if t), set())
                     if toks and DR._tok_match(own, toks) and m.group(1) not in seen:
                         seen.add(m.group(1))
-                        out.append((m.group(1), maker, i + 1))
+                        if row and row.start() < m.start() and not (DR.package_tokens(before) or DR.package_tokens(ln)):
+                            table.append((ln, (m.group(1), maker, i + 1)))     # read off a package table row
+                        else:
+                            out.append((m.group(1), maker, i + 1))
+    if table:
+        lines = {ln for ln, _ in table}
+        if len(lines) > 1:                            # two rows of this family and pin count (8 SO S8+2 / W8+...): the
+            code = _ordered_code(texts, part, lines)  # one whose package code the part's ordering line prints
+            table = [x for x in table if x[0] == code] if code else []
+        out += [ref for _, ref in table]
     return out[:MAX_DOCS]
 
 
-def links(code, maker):
+def _pin_count(package, own):
+    """The part's pin count from its package text ('16-SOIC (0.295\", 7.50mm Width)' -> 16) or its tokens (SO16)."""
+    m = re.match(r"\s*(\d{1,3})-", str(package or ""))
+    if m:
+        return int(m.group(1))
+    nums = {int(re.search(r"(\d+)$", t).group(1)) for t in own or () if re.search(r"\d$", t)}
+    return nums.pop() if len(nums) == 1 else None
+
+
+def _ordered_code(texts, part, lines):
+    """Of several table rows, the one whose package code (W16#2, S16+1) the part's own ordering line prints."""
+    key = re.sub(r"[^A-Z0-9]", "", re.split(r"[#+/]", str(part or "").upper())[0])
+    said = [ln for t in texts for ln in DR.norm_text(t or "").upper().splitlines()
+            if len(key) >= 4 and key in re.sub(r"[^A-Z0-9]", "", ln) and ln not in lines]
+    hits = []
+    for ln in lines:
+        code = (ln.split()[2:3] or [""])[0]           # '16 SO W16#2 21-0042 90-0107': W16#2
+        base = re.sub(r"[#+-]\d*$", "", code)
+        if base and any(re.search(rf"(?<![A-Z0-9]){re.escape(base)}(?![A-Z0-9])", s) for s in said):
+            hits.append(ln)
+    return hits[0] if len(hits) == 1 else None
+
+
+def links(code, maker, texts=()):
+    """The links to try for a document number; texts: the datasheet's pages, whose package table row with the number
+    names the family folder Analog Devices keeps Maxim's outline documents in."""
     urls = LINKS.get(maker, [])
     if isinstance(urls, dict):                        # Maxim: outline (21-) and land pattern (90-) documents
         urls = urls.get(code.split("-")[0], [])
-    return [u.format(code=code) for u in urls]
+    out = [u.format(code=code) for u in urls]
+    if maker == "maxim" and code.startswith("21-"):
+        for folder in families(texts, code):
+            out.append(ADI_PKG.format(folder=folder, code=code))
+    return out
+
+
+def families(texts, code):
+    """ADI's folders for the package family on the line that prints this document number ('16 SO ... 21-0042' -> soic)."""
+    out = []
+    for t in texts or ():
+        for ln in DR.norm_text(t or "").upper().splitlines():
+            if code.upper() not in ln:
+                continue
+            row = MAXIM_ROW.search(ln)
+            fams = [row.group(2).replace("µ", "U")] if row else [re.sub(r"\d+$", "", x) for x in DR.package_tokens(ln)]
+            for f in fams:
+                for folder in ADI_FOLDERS.get(f, []):
+                    if folder not in out:
+                        out.append(folder)
+    return out[:3]
 
 
 def append(data, extra):

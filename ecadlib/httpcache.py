@@ -119,6 +119,11 @@ def key_url(url):
     return urlunparse(u._replace(query=urlencode(q))) if q else url
 
 
+# Hosts whose API allows fewer calls than one a second: the least time between two calls to them (s). Mouser's Search
+# API allows 30 a minute (and answers 403 to the 31st), so a BOM of 100 lines kept getting refused for a minute.
+HOST_INTERVAL = {"api.mouser.com": 2.1}
+
+
 class CachedHTTP:
     def __init__(self, cache_dir="out/http_cache", min_interval=1.0, ttl_s=7 * 86400,
                  offline=False, timeout=20):
@@ -166,7 +171,7 @@ class CachedHTTP:
             self.log.append((method, url, "offline-miss", False))
             return Response(0, "", error="offline: not in cache")
         host = urlparse(url).netloc
-        wait = self.min_interval - (time.time() - self._last.get(host, 0))
+        wait = max(self.min_interval, HOST_INTERVAL.get(host, 0)) - (time.time() - self._last.get(host, 0))
         if wait > 0:
             time.sleep(wait)
         self._last[host] = time.time()

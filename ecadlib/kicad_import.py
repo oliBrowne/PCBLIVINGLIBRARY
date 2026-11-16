@@ -26,7 +26,7 @@ multi-part, De Morgan body styles as Altium display modes, `extends` chains; Val
 as parameters.
 
 KiCad's libraries are CC-BY-SA 4.0 with a design-use exception: converted files are not committed (.gitignore)."""
-import argparse, json, math, re, sys
+import argparse, copy, json, math, re, sys
 from pathlib import Path
 
 from . import altium_lib as AL, sexpr
@@ -134,7 +134,59 @@ def load_symbol(ref, http, keep_quotes=False):
     chain = [get(name)]
     while sexpr.first(chain[-1], "extends") and len(chain) < 8:
         chain.append(get(sexpr.first(chain[-1], "extends")[1]))
+    for sym in chain:
+        expand_stacked(sym)
     return chain, label
+
+
+STACKED = re.compile(r"^\[([0-9A-Za-z,\s-]+)\]$")
+
+
+def stacked_numbers(num):
+    """KiCad 9's stacked pin number '[1,15,38,39]' or '[1-4,7]' -> ['1', '15', '38', '39'] / ['1', '2', '3', '4', '7'];
+    any other number -> None (a range only between two plain integers)."""
+    m = STACKED.match(str(num or "").strip())
+    if not m:
+        return None
+    out = []
+    for part in (x.strip() for x in m.group(1).split(",")):
+        r = re.fullmatch(r"(\d+)\s*-\s*(\d+)", part)
+        if r and int(r.group(1)) <= int(r.group(2)) and int(r.group(2)) - int(r.group(1)) < 200:
+            out += [str(i) for i in range(int(r.group(1)), int(r.group(2)) + 1)]
+        elif part and "-" not in part:
+            out.append(part)
+        else:
+            return None
+    return out or None
+
+
+def expand_stacked(node):
+    """One pin per pad: a KiCad 9 pin numbered '[1,15,38,39]' (one GND pin on four pads; ESP32-WROOM-32E) becomes four
+    pins at the same place, the first as written and the others passive, as KiCad 8 and Altium draw stacked pins.
+    Every pad then has its own pin, and the pin / pad checks and the Altium export see the pad numbers."""
+    if not isinstance(node, list):
+        return
+    i = 0
+    while i < len(node):
+        kid = node[i]
+        if isinstance(kid, list) and kid and kid[0] == "pin":
+            num = next((x for x in kid if isinstance(x, list) and x and x[0] == "number" and len(x) > 1), None)
+            nums = stacked_numbers(num[1]) if num else None
+            if nums:
+                copies = []
+                for k, n in enumerate(nums):
+                    c = copy.deepcopy(kid)
+                    cn = next(x for x in c if isinstance(x, list) and x and x[0] == "number")
+                    cn[1] = type(num[1])(n) if isinstance(num[1], str) else n
+                    if k and len(c) > 1:
+                        c[1] = "passive"                         # the copies are the stacked ones
+                    copies.append(c)
+                node[i:i + 1] = copies
+                i += len(copies)
+                continue
+        else:
+            expand_stacked(kid)
+        i += 1
 
 
 def _find_symbol(lib, name):

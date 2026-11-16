@@ -3426,6 +3426,7 @@
 "add_body",
 "convert_footprint",
 "convert_symbol",
+"expand_stacked",
 "fetch",
 "get",
 "import_part",
@@ -3443,6 +3444,7 @@
 "package_default_height",
 "pin_pad_check",
 "public_prop",
+"stacked_numbers",
 "step_extent",
 "step_extent.<locals>.tf",
 "tf"
@@ -3741,6 +3743,7 @@
 "Run.folder_file_failed",
 "Run.kicad",
 "Run.local",
+"Run.other_makers_land",
 "Run.pad_numbers",
 "Run.put_datasheet",
 "Run.put_datasheet.<locals>.need_pins",
@@ -3821,6 +3824,7 @@
 "local",
 "main",
 "need_pins",
+"other_makers_land",
 "own_symbol_ref",
 "packing_suffix",
 "pad_numbers",
@@ -4308,6 +4312,8 @@
 "_facts_of",
 "_has_drawing",
 "_near",
+"_ordered_code",
+"_pin_count",
 "_pkg_toks",
 "_same_package",
 "_token",
@@ -4315,6 +4321,7 @@
 "body_mismatch",
 "body_tied",
 "drawing_missing",
+"families",
 "foreign_codes",
 "foreign_codes.<locals>.ours",
 "has_facts",
@@ -5196,7 +5203,8 @@
 "tab_joins",
 "tab_renumber",
 "table",
-"tantalum_land"
+"tantalum_land",
+"tvs_unidirectional"
 ],
 "ecadlib/step_gen.py":[
 "<dictcomp>",

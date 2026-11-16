@@ -362,6 +362,10 @@ CODES = {
     "librarian.footprint_guess": ("The footprint {fp} was chosen by {how}, not taken from the datasheet.",
                                   "Compare it with the land pattern in the datasheet, then release it anyway if it matches.",
                                   [r"^(?:verify: )?footprint (?P<fp>\S+) chosen by (?P<how>.+?): compare"]),
+    "librarian.other_makers_land": ("The footprint {fp} is the one KiCad drew for {theirs}'s part of this number; {rest}",
+                                    "Check the package in this maker's datasheet is {fp}, then release it anyway if it is.",
+                                    [r"^(?:verify: )?footprint (?P<fp>\S+): KiCad's symbol is (?P<theirs>.+?)'s part[;,] "
+                                     r"(?P<rest>.+?): compare with the datasheet"]),
     "librarian.symbol_match": ("The symbol {sym} was matched by {how}.",
                                "Check its pin names and numbers against the datasheet, then release it anyway if they match.",
                                [r"^(?:verify: )?symbol (?P<sym>\S+) matched by (?P<how>.+)"]),

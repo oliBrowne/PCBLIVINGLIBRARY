@@ -111,6 +111,8 @@ EXAMPLES = {
     "librarian.lcsc_mismatch": "LCSC C123 is BSS84, not BSS138: fix the BOM's LCSC number",
     "librarian.footprint_guess": "footprint SOT-23 chosen by name: compare with the datasheet land pattern",
     "librarian.symbol_match": "symbol Q_NMOS_GSD matched by the BOM's value",
+    "librarian.other_makers_land": "footprint Diode_SMD:D_SMA: KiCad's symbol is Vishay's part, and digikey gives onsemi's "
+                                   "SS34 as 'DO-214AB, SMC': compare with the datasheet",
     "librarian.bom_vs_symbol_footprint": "footprint: the BOM names QFN-48-1EP_7x7mm but the symbol's Footprint property is "
                                          "LQFP-48_7x7mm: check which package the part has",
     "librarian.chip_size_clash": "footprint: the land built is 0402 (C_0402_1005Metric) but the BOM description says 0603 "
@@ -329,7 +331,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 21, "datasheet.py": 10,
+    "librarian.py": 22, "datasheet.py": 10,
 }
 
 

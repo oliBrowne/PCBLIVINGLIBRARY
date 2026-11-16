@@ -255,8 +255,10 @@ def test_pin_removed_variants_are_not_the_standard_package():
 
 
 def test_tvs_symbol_left_to_other_sources():
-    # KiCad's D_TVS is bidirectional (A1/A2); an MPN does not say reliably which kind a TVS is (eval: SM6T100A, ESD9B3.3)
-    for mpn, desc in (("SMAJ5.0A", "TVS diode"), ("SMAJ5.0CA", "TVS diode bidirectional"), ("ESD9B3.3ST5G", "ESD protection")):
+    # KiCad's D_TVS is bidirectional (A1/A2); an MPN does not say reliably which kind a TVS is (eval: SM6T100A, ESD9B3.3),
+    # except the A / CA numbered series (SMAJ5.0A is unidirectional: 2026-11-14 100-part run, test_set3_fixes)
+    assert SP.resolve(["SMA"], "D", "SMAJ5.0A", "TVS diode")["symbol"] == "D_TVS"
+    for mpn, desc in (("SM6T100A", "TVS diode"), ("SMAJ5.0CA", "TVS diode bidirectional"), ("ESD9B3.3ST5G", "ESD protection")):
         r = SP.resolve(["SMA"], "D", mpn, desc)
         assert r["footprint"] == "D_SMA" and r["symbol"] is None and "TVS" in r["sym_how"], (mpn, r)
     assert SP.resolve(["SMA"], "D", "SS14", "Schottky diode")["symbol"] == "D_Schottky"

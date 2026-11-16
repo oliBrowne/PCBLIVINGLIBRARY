@@ -292,6 +292,13 @@ class KiCadLibrary:
                 if pack:                                              # the same part on a reel / lead-free: nothing to check
                     return ref, f"name + packing suffix '{suffix}' (tape and reel or lead-free, same part)" + more
                 return ref, f"name + ordering suffix '{suffix}' (check the variant)" + more
+        from .dedupe import DEFAULT_SUFFIXES             # a packing code after a grade letter: BC847C + ',215' is
+        for p in DEFAULT_SUFFIXES:                        # BC847 + C on a reel; the letter still asks for a look
+            base = re.sub(p, "", str(mpn), flags=re.I)
+            if base != str(mpn) and norm_mpn(base) != nm:
+                ref, how = self.find_symbol(base)
+                if ref:
+                    return ref, f"{how} + packing code '{str(mpn)[len(base):]}'"
         return None, None
 
     @staticmethod
@@ -918,6 +925,7 @@ class Run:
             if str(props.get("Datasheet", "")).startswith("http"):
                 st["found"].setdefault("datasheet", (props["Datasheet"], f"KiCad symbol {sym_ref}"))
                 maker = P.maker_from_url(props["Datasheet"])
+                st["sym_maker"] = maker or ""                  # whose part KiCad drew (its Footprint is that maker's)
                 # the symbol named after this very part (its MPN, or that plus a packing code) links its maker's
                 # datasheet: www.ti.com for NE555D. A wildcard or near name can be another maker's part: not used.
                 # The part search speaks first: its one maker fills it (below), and when it lists this MPN under
@@ -965,6 +973,10 @@ class Run:
                 st["tried"].append(f"kicad: footprint {cand} ({why})")
                 if why.startswith(("shortest", "footprint named")):     # a guess by name or text: held until a person looks
                     st["verify"].append(f"footprint {cand} chosen by {why}: compare with the datasheet land pattern")
+                elif why == "symbol's Footprint property":
+                    other = self.other_makers_land(st, ln, row, kind, mpn, cand)
+                    if other:
+                        st["verify"].append(other)
                 return
         st["tried"].append(f"kicad: no footprint for '{bom_fp or fp_name}'")
 
@@ -1104,6 +1116,31 @@ class Run:
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
         why += [] if st["symbol"] else [f"symbol: {res['sym_how']}"]
         st["tried"].append("standard: " + "; ".join(got + why))
+
+    @staticmethod
+    def other_makers_land(st, ln, row, kind, mpn, land_ref):
+        """KiCad drew a symbol after one maker's part (its datasheet link: Vishay's SS34) and gave it that part's land
+        (D_SMA). Another maker's part of the same number (onsemi's SS34 is an SMC) may be in another package: unless
+        the part search's case text for this exact MPN names that land, the land is held for a look -> why, or ''."""
+        from . import stdparts as SP
+        theirs = st.get("sym_maker") or ""
+        ours = str(ln.get("manufacturer") or row.get("src_manufacturer") or "").strip()
+        if not theirs or not ours or P.same_maker(theirs, ours):
+            return ""      # KiCad's maker unknown, this part is that maker's, or no maker is named: the part is then
+            #                taken as KiCad's maker's (its Manufacturer filled from the symbol's datasheet link)
+        land = str(land_ref).split(":")[-1]
+        case = SP.case_text(row.get("src_package"))
+        if case and not row.get("src_several"):
+            kinds = [kind] + (["D"] if land.startswith("D_") else [])
+            if any(SP.footprint_for(["", case], k, mpn)[0] == land for k in kinds) \
+                    or SP.names_only(case, land, group=True)[1]:
+                st["tried"].append(f"kicad: {land} (KiCad's {theirs} part) is the case {row.get('src_package_from')} "
+                                   f"gives for {ours}'s {mpn} ({case})")
+                return ""
+            return (f"footprint {land_ref}: KiCad's symbol is {theirs}'s part, and {row.get('src_package_from')} gives "
+                    f"{ours}'s {mpn} as '{case}': compare with the datasheet")
+        return (f"footprint {land_ref}: KiCad's symbol is {theirs}'s part; {ours}'s {mpn} may be in another package "
+                f"(no case text confirms it): compare with the datasheet")
 
     def case_agrees(self, st, item, ln, row, kind, mpn, sym_ref):
         """MPN = a KiCad symbol's name + an onsemi case and reel code (MMBT3904 + LT1G). The part is released on that
