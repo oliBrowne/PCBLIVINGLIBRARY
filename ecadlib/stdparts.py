@@ -1152,11 +1152,15 @@ SYMBOLS["MountingHole_Pad"] = ("MountingHole_Pad", "H", "Mounting hole with a pl
 PTC = re.compile(r"(?i)\bPTC\b|poly ?fuse|polyswitch|(?<!non-)(?<!non )(?<!not )(?<!\bnon)resettable|\bPPTC\b|multifuse|"
                  r"\bMF-(?:[A-Z]*SM|R|USM|LSMF)|\b(?:nano|micro|mini)SMD|\b0ZC[A-Z]|"
                  r"\b(?:0402|0603|0805|1206|1210|1812|2016|2920)L\d{3}")     # Littelfuse PolySwitch chip PTCs: 1206L050
-MECHANICAL = {"TestPoint": ("TP",), "MountingHole": ("H", "MH"), "Fuse": ("F",)}   # KiCad library -> designator classes
+SYMBOLS["Crystal"] = ("Crystal", "Y", "Two pin crystal", [_rect(-1.143, 1.905, 1.143, -1.905), _poly([(-1.905, 1.27), (-1.905, -1.27)]),
+                                                         _poly([(1.905, 1.27), (1.905, -1.27)])],
+                      [("1", "~", "passive", -5.08, 0, 0, 3.175), ("2", "~", "passive", 5.08, 0, 180, 3.175)])
+MECHANICAL = {"TestPoint": ("TP",), "MountingHole": ("H", "MH"), "Fuse": ("F",), "Crystal": ("Y", "X", "XTAL", "XT")}   # KiCad
+                                                                                                    # library -> designators
 
 
 def mechanical_symbol(fp_source, designator, pads, text=""):
-    """(symbol key, why) for a fuse, test point or mounting hole built on one of KiCad's own lands of that library
+    """(symbol key, why) for a fuse, test point, mounting hole or 2-pad crystal built on one of KiCad's own lands of that library
     (fp_source 'kicad:TestPoint:TestPoint_Pad_D1.0mm', 'standard:Fuse:Fuse_1206_3216Metric'), or (None, why). Every
     designator of the line must be of that kind (TP, H / MH, F) and the land's numbered copper pads (pads: their set)
     must be exactly the symbol's pins: a test point one pad 1; a plated mounting hole pad 1; a fuse 1 and 2.
@@ -1179,6 +1183,8 @@ def mechanical_symbol(fp_source, designator, pads, text=""):
     if not want or not refs or not refs <= set(want):
         return None, f"no standard symbol: designator {designator or '(none)'} on a {lib} land"
     pads = set(pads)
+    if lib == "Crystal":                              # KiCad's 2-pad crystal lands (4-pad ones have other pins)
+        return ("Crystal", "crystal, 2 pins") if pads == {"1", "2"} else (None, f"crystal land with pads {sorted(pads)}")
     if lib == "TestPoint":
         return ("TestPoint", "test point, one pad") if pads == {"1"} else (None, f"test point land with pads {sorted(pads)}")
     if lib == "MountingHole":
@@ -1284,15 +1290,48 @@ def spec_pins(name):
 
 
 CASE_EXTRA = re.compile(r"(?i)\bPC\s*Pads?\b|\bconvex\b|\bconcave\b|long\s+side|\barray\b|\bnetwork\b|"
-                        r"\bterminals?\b|\bmodule\b|\bstack(?:ed)?\b|\bradial\b|\baxial\b")
+                        r"\bterminals?\b|\bmodule\b|\bstack(?:ed)?\b|\bradial\b|\baxial\b|full\s*pack|long\s*body|"
+                        r"\bvariant\b|\bformed\b|\bbent\b|non-?standard|\bisolated\b|\bwide\s*body\b|\btab\b")
 
 
-def case_text(text):
+CASE_SHAPE = re.compile(r"(?i)\s*,\s*(?:concave|convex)\s*$")       # the end caps' shape: '1206 (3216 Metric), Concave'
+ONE_ELEMENT = re.compile(r"(?i)\bPTC\b|\bPOLYFUSE\b|\bRESETTABLE\b|\bFUSE\b|\bTHERMISTOR\b|\bVARISTOR\b")
+MANY_ELEMENTS = re.compile(r"(?i)\barr(?:ays?|\.)?\b|\bnetworks?\b|\bbussed\b|\bisolated\b|\bquad\b|\bdual\b|\b\d+\s*R\b|"
+                           r"\b\d+\s*(?:RES|RESISTORS?|CAPS?|CAPACITORS?|ELEMENTS?|LINES?|CH(?:ANNELS?)?|BITS?)\b|\d\s*x\s*\d|\bR\d+P\b")
+PLAIN_CHIP_CASE = re.compile(r"(?i)\d{4,5}\s*\(\d{4,5}\s*Metric\)")
+
+
+PKG_WORD = re.compile(r"(?i)(?<![A-Z0-9])(?:SOT|SC|TO|SOD|SOIC|SO|SOP|SSOP|TSSOP|MSOP|QFN|DFN|LQFP|TQFP|DO|DPAK|D2PAK|"
+                      r"SMA|SMB|SMC|MELF)(?:-?\d+[A-Z]{0,2})?(?:-\d+)?(?![A-Z0-9])")
+
+
+def names_only(text, land, group=False):
+    """Does the text name a package, and is every package it names the land 'land' (a table name such as 'SOT-23')?
+    -> (names one, all are it). group: a distributor's case group ('TO-236-3, SC-59, SOT-23-3', DigiKey's one value for
+    the SOT-23 family): it must name the land, and no name it lists may be another land or an ambiguous one of the
+    tables; a name the tables do not know (SC-59) is part of the group."""
+    ok = {k for k, v in ALIASES.items() if v == land} | {_norm(land)}
+    ok |= {k + "3" for k in ok if land in ("SOT-23",)}                  # 'SOT-23-3' / 'TO-236-3': the 3 leads of SOT-23
+    words = [_norm(m.group(0)) for m in PKG_WORD.finditer(str(text or ""))]
+    if not group:
+        return bool(words), bool(words) and all(w in ok for w in words)
+    known = set(ALIASES) | set(DIODE_ALIASES) | set(AMBIGUOUS)
+    return bool(words), any(w in ok for w in words) and not any(w in known and w not in ok for w in words)
+
+
+def case_text(text, desc=""):
     """A part search's case text ('8-SOIC (0.154\", 3.90mm Width)', '1812 (4532 Metric)') when it names only the case:
     one that adds pads or leads ('0603, 3 PC Pad', '1206, 4 Leads', 'Convex') or a lead count other than its own pin
-    count is not the plain land of that name -> '' (not used)."""
+    count is not the plain land of that name -> '' (not used). 'Concave'/'Convex' alone is the end caps' shape: with the
+    same source's description of a one-element part ('PTC RESET FUSE 6V 500MA 1206': a fuse, PTC or thermistor) and
+    nothing else in the text ('1206 (3216 Metric), Concave' only) it is that chip's plain land; an array's ('RES ARRAY
+    4 RES'), another kind's or no description keeps it unused."""
     t = str(text or "").strip()
-    if not t or CASE_EXTRA.search(t):
+    plain = CASE_SHAPE.sub("", t)
+    if plain != t and PLAIN_CHIP_CASE.fullmatch(plain) and ONE_ELEMENT.search(str(desc or "")) \
+            and not MANY_ELEMENTS.search(str(desc or "")):
+        t = plain                                         # a fuse / PTC / thermistor chip: one element, two caps
+    if not t or CASE_EXTRA.search(t) or not re.search(r"\d", t):    # '-', 'Nonstandard': names no case
         return ""
     leads = re.search(r"(?i)\b(\d{1,3})\s*Leads?\b", t)
     if leads:
@@ -1300,6 +1339,26 @@ def case_text(text):
         if not first or first.group(1) != leads.group(1):
             return ""
     return t
+
+
+HEADER_NOT_PLAIN = re.compile(r"(?i)RCPT|RECEPT|SOCKET|FEMALE|SHROUD|\bBOX|R/A|RIGHT\s*ANGLE|\bSMD\b|\bSMT\b|SURFACE|"
+                              r"LOCK|\bKEY|POLARI|\bDUAL\b|DOUBLE|\b[2-9]\s*ROWS?\b|WIRE|IDC|BREAKAWAY|FRICTION|PRESS|"
+                              r"SHUNT|JUMPER|SOLDER\s*CUP|\bPOSTS?\b|\bPIN\s*STRIP\b|SWISS|MACHINED")
+
+
+def header_land(text):
+    """KiCad's plain pin header land for a part-search description of a straight one ('CONN HEADER VERT 2POS 2.54MM'
+    -> 'PinHeader_1x02_P2.54mm_Vertical'), or None. Two positions have one land whatever the rows; more need the text
+    to say one row. Sockets, shrouded / boxed / latching, right-angle and SMD headers are other lands."""
+    t = str(text or "")
+    pos = re.search(r"(?i)\b(\d{1,2})\s*POS(?:ITIONS?)?\b", t)
+    if not (re.search(r"(?i)\bHEADER\b", t) and re.search(r"(?i)\bVERT(?:ICAL)?\b", t) and pos
+            and re.search(r"(?i)\b2\.54\s*MM\b|(?<![\d.])0?\.100?\s*(?:\"|IN)", t)) or HEADER_NOT_PLAIN.search(t):
+        return None
+    n = int(pos.group(1))
+    if not 1 <= n <= 40 or (n > 2 and not re.search(r"(?i)\b(?:1|SINGLE)\s*ROW\b", t)):
+        return None
+    return f"PinHeader_1x{n:02d}_P2.54mm_Vertical"
 
 
 CONN_KEY = re.compile(r"^Conn_01x(\d\d)$")

@@ -71,6 +71,12 @@ def specs_from_pairs(pairs):
                 continue
             if key == "package" and re.search(r"\bmm\b|metric", n):      # Mouser 'Case Code - mm: 0402' is 01005
                 break
+            if key == "package" and str(val or "").strip():   # the text as the source wrote it ('8-SOIC (0.154", 3.90mm
+                text = str(val).strip()[:80]                  # Width)'): package_of reads chip codes only; DigiKey's
+                if "case" in n:                               # 'Package / Case' says more than 'Supplier Device Package'
+                    out["package_text"] = text
+                else:
+                    out.setdefault("package_text", text)
             v = parse(val)
             if v is not None:
                 if key.startswith("value:"):
