@@ -1696,12 +1696,14 @@ def case_land(case, kind=None):
         except Exception:
             n = None
         if n:
-            return n
-    lands = {v for v in SP.ALIASES.values() if v} | {v for v in SP.DIODE_ALIASES.values() if v}
-    hits = [l for l in sorted(lands) if SP.names_only(case, l, group=True) == (True, True)]
-    if len(hits) != 1 or (re.search(r"(?i)TO-?236", str(case)) and hits[0] != "SOT-23"):   # TO-236 is SOT-23's JEDEC name
-        return None
-    return hits[0]
+            break
+    else:
+        lands = {v for v in SP.ALIASES.values() if v} | {v for v in SP.DIODE_ALIASES.values() if v}
+        hits = [l for l in sorted(lands) if SP.names_only(case, l, group=True) == (True, True)]
+        n = hits[0] if len(hits) == 1 else None
+    if n and re.search(r"(?i)TO-?236", str(case)) and n != "SOT-23":       # TO-236 is SOT-23's JEDEC name: a text
+        return None                                                        # naming it and another land names two
+    return n
 
 
 # a datasheet read with one of these review items stays with a person whatever agrees: the PDF may not be this part's,
