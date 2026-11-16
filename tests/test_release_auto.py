@@ -34,12 +34,30 @@ OC 5 3 O Overcurrent open-drain output
 EN 4 4 I Enable input"""
 
 
-def test_pins_agree_with_one_column_of_the_text_layer():
+ONE = """Table 5-1. Pin Functions
+NAME NUMBER DESCRIPTION
+GND 1 Ground pin. Connect sensitive VFB to this GND at a single point.
+SW 2 Switch node connection between high-side NFET and low-side NFET.
+VIN 3 Input voltage supply pin.
+VFB 4 Converter feedback input. Connect to output voltage with feedback resistor divider.
+EN 5 Enable input control. Active high and must be pulled up to enable the device.
+VBST 6 Supply input for the high-side NFET gate drive circuit."""
+
+
+def test_pins_agree_with_a_one_package_table_of_the_text_layer():
+    pins = [("1", "GND"), ("2", "SW"), ("3", "VIN"), ("4", "VFB"), ("5", "EN"), ("6", "VBST")]
+    r = PT.check({4: ONE}, pins)
+    assert r["status"] == "agreed" and r["page"] == 4 and r["column"] == 0, r    # numbers in the descriptions ignored
+
+
+def test_a_table_whose_other_column_numbers_the_pins_otherwise_does_not_agree():
+    """SOIC and SOT-23 columns (or MCP6L01 / MCP6L01R): one column fits, but the text does not say which column is
+    this part's, so it stays with a person."""
     sot = [("1", "OUT"), ("2", "GND"), ("5", "IN"), ("3", "~{OC}"), ("4", "EN")]
     r = PT.check({4: TABLE}, sot)
-    assert r["status"] == "agreed" and r["page"] == 4 and r["column"] == 1, r
-    soic = [("6", "OUT"), ("1", "GND"), ("2", "IN"), ("5", "OC"), ("4", "EN")]
-    assert PT.check({4: TABLE}, soic)["status"] == "agreed"
+    assert r["status"] == "unchecked" and "another column" in r["why"], r
+    same = TABLE.replace("GND 1 2", "GND 2 2").replace("OUT 6, 7, 8 1", "OUT 1 1").replace("IN 2, 3 5", "IN 5 5")         .replace("OC 5 3", "OC 3 3")
+    assert PT.check({4: same}, sot)["status"] == "agreed"                # every column gives the same numbers
 
 
 def test_a_mix_of_two_package_columns_is_not_agreed():
@@ -99,7 +117,8 @@ def test_a_symbol_read_needs_the_pdf_text_to_agree():
     assert not L.read_confirmed(res, {}, ["symbol"])                    # no PDF bytes: unchecked, held
     import ecadlib.pin_text as PTm
     old = PTm.page_texts
-    PTm.page_texts = lambda data, limit=80: {4: TABLE}
+    same = TABLE.replace("GND 1 2", "GND 2 2").replace("OUT 6, 7, 8 1", "OUT 1 1").replace("IN 2, 3 5", "IN 5 5")         .replace("OC 5 3", "OC 3 3")
+    PTm.page_texts = lambda data, limit=80: {4: same}
     try:
         assert L.read_confirmed(res, {"data": b"%PDF"}, ["symbol"])
         bad = _res(pins=[dict(p, num={"1": "2", "2": "1"}.get(p["num"], p["num"])) for p in pins])

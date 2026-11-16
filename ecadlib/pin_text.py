@@ -10,10 +10,13 @@ one column for all of them, not a mix). The result is
     {"status": "disagreed", "why": ...}                         a name printed with other numbers only, in one column
     {"status": "unchecked", "why": ...}                         no text layer, no table found, ambiguous: no verdict
 
+A table whose other columns give the same pins other numbers (SOIC and SOT-23 columns, or a variant with its
+supplies swapped) is unchecked even when one column agrees: the text does not say which column is this part's.
 Only "agreed" lets a part through without a person; "unchecked" keeps the hold it had. A scanned PDF (no text) is
 always unchecked. Pins named N.C. / NC / DNC are skipped (tables often print them as one row "NC 1, 5, 8")."""
 import re
 
+EMPTY = {"—", "–", "-", "--", "‒", "N/A", "NA"}     # a dash in a table column: no pin in that package
 NC = re.compile(r"(?i)^(?:N\.?C\.?|DNC|NO\s*CONNECT(?:ION)?|RESERVED|RSVD)$")
 _OVER = re.compile(r"[~{}̅/#*_]|\\")
 _LIST = re.compile(r"(?<=\d)\s*,\s*(?=\d)")          # "2, 3" (one cell listing two pins) -> "2,3"
@@ -52,32 +55,61 @@ def _rows(text):
         cells = _cells(raw)
         if len(cells) < 2:
             continue
-        nums = [(i, c) for i, c in enumerate(cells) if _CELL_NUM.match(c)]
-        if not nums:
+        nums, started = [], False                      # the table's number cells: one run of them ("1 1", "6,7,8 1",
+        for i, c in enumerate(cells):                  # "— 4"), not the numbers in the description after it
+            if _CELL_NUM.match(c):
+                nums.append((i, c))
+                started = True
+            elif started and c in EMPTY:
+                nums.append((i, ""))
+            elif started:
+                break
+        nums = [(i, c) for i, c in nums]
+        while nums and not nums[-1][1]:
+            nums.pop()
+        if not any(c for _, c in nums):
             continue
         rows.append((cells, nums))
     return rows
 
 
-def _find(rows, name, num):
+def _find(rows, name, num, found=None):
     """Columns (index among the line's number cells) where `num` is printed on a line that names `name`, and whether
-    the name was printed at all (with any numbers)."""
+    the name was printed at all (with any numbers). found: {column: [the line's number cells]} of the lines that
+    matched, for the variant check in check()."""
     target = norm_name(name)
     cols, seen = set(), False
     for cells, nums in rows:
         first = nums[0][0]
         words = cells[:first]                          # the name is printed before the numbers ("OUT A 1 1 O ...")
         if not words:                                  # or after them ("1 OUT A ...": number first)
-            later = [c for c in cells[1:] if not _CELL_NUM.match(c)]
-            words = later[:3]
+            words = cells[nums[-1][0] + 1:][:3]
         cand = {norm_name("".join(words[k:j])) for k in range(len(words)) for j in range(k + 1, min(len(words), k + 3) + 1)}
         if target not in cand:
             continue
         seen = True
         for col, (_, c) in enumerate(nums):
-            if str(num) in _numbers(c):
+            if c and str(num) in _numbers(c):
                 cols.add(col)
+                if found is not None:
+                    found.setdefault(col, [x for _, x in nums])
     return cols, seen
+
+
+def variant_columns(lines, col):
+    """The other number columns of the matched lines that give some pin another number than column `col` does (a
+    table with SOIC and SOT-23 columns, or MCP6L01 / MCP6L01R): '' when every column agrees or there is no other."""
+    out = []
+    width = max((len(c) for f in lines for c in f.values()), default=0)
+    for k in range(width):
+        if k == col:
+            continue
+        for f in lines:
+            cells = f.get(col)
+            if cells and k < len(cells) and set(_numbers(cells[k])) != set(_numbers(cells[col]))                     and not set(_numbers(cells[k])) & set(_numbers(cells[col])):
+                out.append(f"column {k + 1}")
+                break
+    return ", ".join(out)
 
 
 def check(page_texts, pins):
@@ -93,7 +125,8 @@ def check(page_texts, pins):
         rows = _rows(text)
         if not rows:
             continue
-        per = [_find(rows, nm, n) for n, nm in pins]
+        lines = [{} for _ in pins]
+        per = [_find(rows, nm, n, f) for (n, nm), f in zip(pins, lines)]
         named = sum(1 for _, seen in per if seen)
         if named < len(pins):
             if best is None or named > best[1]:
@@ -101,7 +134,13 @@ def check(page_texts, pins):
             continue
         common = set.intersection(*[cols for cols, _ in per])
         if common:
-            return {"status": "agreed", "page": page, "column": min(common), "pins": len(pins)}
+            col = min(common)
+            other = variant_columns(lines, col)
+            if other:                               # another package or variant of the part numbers these pins other
+                return {"status": "unchecked", "page": page,      # ways: which column is this part's is not in
+                        "why": f"page {page}'s table gives these pins other numbers in another column ({other}): which "
+                               "column is this part's package or variant is not in the text"}
+            return {"status": "agreed", "page": page, "column": col, "pins": len(pins)}
         if all(cols for cols, _ in per):
             best = (page, named, "the numbers are in different columns of the table (a mix of packages?)")
             continue

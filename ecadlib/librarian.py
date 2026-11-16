@@ -1184,11 +1184,13 @@ class Run:
         land, case = str(st.get("hint_fp") or "").split(":")[-1], search_case(row)
         if not land or not case:
             return False
+        k = kind or ("D" if sym_ref.startswith(("Diode:", "LED:")) else None)   # a diode's package names (SOD-123)
         try:
-            named = [SP.footprint_for([t], kind=kind)[0] for t in (case, ln.get("footprint")) if str(t or "").strip()]
+            named = [SP.footprint_for([t], kind=k)[0] for t in (case, ln.get("footprint")) if str(t or "").strip()]
         except Exception:                          # a text stdparts can't judge confirms nothing
             return False
         if not named or any(n != land for n in named):
+            st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r} is not its land {land}")
             return False
         try:
             sym = K.convert_symbol(chain, sym_ref.split(":")[-1], None, (), None, [])
