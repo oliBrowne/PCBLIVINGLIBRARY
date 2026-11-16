@@ -2,6 +2,7 @@
 Plain functions: python3 -m tests.run_all test_set3_fixes"""
 from ecadlib import bom_triage as BT, httpcache as H, kicad_import as K, outline_docs as OD, providers as P, sexpr
 from ecadlib import stdparts as SP
+from tests.fixtures_lite import lite
 
 
 # ---------------------------------------------------------------- 1. Mouser's 30 calls a minute
@@ -30,6 +31,7 @@ def _mouser(http, monkeypatch, waits):
     return m
 
 
+@lite
 def test_mouser_refusal_waits_a_minute_once_then_stops_waiting(monkeypatch):
     waits = []
     http = _Http([403, 200])
