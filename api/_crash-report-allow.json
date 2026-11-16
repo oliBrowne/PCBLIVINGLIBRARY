@@ -5204,7 +5204,9 @@
 "tab_joins",
 "tab_renumber",
 "table",
+"tantalum_eia",
 "tantalum_land",
+"tantalum_search_text",
 "tvs_unidirectional"
 ],
 "ecadlib/step_gen.py":[

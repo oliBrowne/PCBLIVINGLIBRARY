@@ -1181,7 +1181,7 @@ def triage(lines, index, provs, http, shared=None):
                          "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
                          "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
                          "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
-                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_several": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
+                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_height": "", "src_several": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"))
@@ -1214,7 +1214,7 @@ def triage(lines, index, provs, http, shared=None):
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         sheet_from = ""                                # the source whose link is `sheet`
-        src_pkg = src_pkg_from = ""                    # the package text a source gives for this exact MPN
+        src_pkg = src_pkg_from = src_height = ""       # the package text (and body height) a source gives for this exact MPN
         limited = {}                                   # source -> its quota / plan-limit answer
         makers_seen = []                               # every maker any source lists for this exact MPN (src_makers)
         maker, maker_from = "", ""             # who makes this exact MPN, from a part search (BOM maker empty)
@@ -1301,6 +1301,7 @@ def triage(lines, index, provs, http, shared=None):
                         getattr(r, "package", ""), (r.extra or {}).get("description") if isinstance(r.extra, dict) else "")) \
                         and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
                     src_pkg, src_pkg_from = case[:80], prov.name                     # near match's (LM358DR != LM358P)
+                    src_height = str((r.extra or {}).get("height") or "")[:60] if isinstance(r.extra, dict) else ""
                 if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
                     limited.setdefault(prov.name, r.error)  # with no key, not an unreachable one
                     continue
@@ -1393,7 +1394,7 @@ def triage(lines, index, provs, http, shared=None):
             "src_manufacturer_from": "" if bom_maker or several else maker_from,
             "src_makers": "; ".join(makers_seen),
             "src_datasheet": sheet, "src_datasheet_from": sheet_from if sheet else "",
-            "src_package": src_pkg, "src_package_from": src_pkg_from,
+            "src_package": src_pkg, "src_package_from": src_pkg_from, "src_height": src_height,
             "src_several": "yes" if several and not bom_maker else "",   # makers the BOM does not pick between
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })

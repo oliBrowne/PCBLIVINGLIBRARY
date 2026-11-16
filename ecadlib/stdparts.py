@@ -463,6 +463,10 @@ def mpn_size(mpn):
             size = METRIC.get(code) if conv == "metric" else conv.get(code) if isinstance(conv, dict) else code
             if size:
                 return kind, size
+    from . import mpn_decode as MD                    # the value decoder's makers too (KYOCERA AVX 0603YC104KAT2A):
+    d = MD.decode(s)                                  # it reads the whole part number, size included
+    if d and d["kind"] in ("R", "C") and d.get("size"):
+        return d["kind"], d["size"]
     return None, None
 
 
@@ -1567,6 +1571,39 @@ CASE_LETTER = re.compile(r"(?i)(?<![A-Za-z0-9])case[-_ ]?([A-E])(?![A-Za-z0-9])"
 NOT_TANTALUM = re.compile(r"(?i)electrolytic|alumin|\bALUM\b|\bAl[- ]?(?:e|elec|cap)\b|polymer|niobium")
 ALUMINIUM_CAP = re.compile(r"^(EEE|EEV|EEH|EEF|EEU|ECA|UWT|UWX|UUD|UUX|UCD|PCJ|PCF|PLV|\d+SVP|\d+SEP)")
 TANTALUM_CAP = re.compile(r"^(T49[1-9]|T5[2-9]\d|TAJ|TPS[A-Z]|TPM|TRJ|TCJ|TLJ|F9[1-8]|293D|593D|298D|T8[36]|TR3|TP3)")
+
+
+# the EIA heights (0.1 mm) of each tantalum case size (KEMET / AVX / Vishay case tables): a part search gives the size
+# ('1411 (3528 Metric)') and the body's maximum seated height ('0.083" (2.11mm)'), not the case code
+EIA_HEIGHTS = {"3216": (10, 12, 16, 18), "3528": (12, 15, 19, 21), "6032": (15, 20, 28), "7343": (12, 15, 19, 20, 28, 31, 40, 43)}
+
+
+def tantalum_eia(case, height):
+    """A part search's case text and maximum height -> the tantalum's EIA case ('3528-21'), or None. The maximum is
+    the code's height or up to 0.15 mm over it (293D B: 2.11 mm max, EIA 3528-21); exactly one of the size's heights
+    must fit, or none is named. T520B (2.00 mm max) is 3528-19, a case the table does not have: no land."""
+    size = re.findall(r"(?<!\d)(\d{4}) Metric\b", str(case or ""))
+    mm = re.search(r"(\d+(?:\.\d+)?)\s*mm\b", str(height or ""))
+    if len(set(size)) != 1 or size[0] not in EIA_HEIGHTS or not mm:
+        return None
+    h = float(mm.group(1))
+    fit = [x for x in EIA_HEIGHTS[size[0]] if -0.005 <= h - x / 10 <= 0.15]
+    return f"{size[0]}-{fit[0]}" if len(fit) == 1 else None
+
+
+def tantalum_search_text(case, height, mpn=""):
+    """The part search's case text as the tantalum land reads it: its EIA case from size and height ('3528-21 (1411
+    (3528 Metric), height 2.11mm)'); '' when no height names one but the MPN's own case code (AVX TAJB: 3528-21) is
+    that size (the code decides); else the text unchanged (it names no case: no land)."""
+    from . import mpn_decode as MD
+    eia = tantalum_eia(case, height)
+    if eia:
+        return f"{eia} ({case}, height {height})"
+    d = MD.decode(mpn)
+    size = re.findall(r"(?<!\d)(\d{4}) Metric\b", str(case or ""))
+    if d and d["kind"] == "CP" and d.get("case") and len(set(size)) == 1 and d["case"].split("-")[0] == size[0]:
+        return ""
+    return case
 
 
 def tantalum_land(texts, mpn="", description=""):

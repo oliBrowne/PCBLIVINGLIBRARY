@@ -1074,8 +1074,10 @@ class Run:
         desc = " ".join(x for x in (bom_desc, row.get("src_description") if case and   # the source that gave this
                                     row.get("src_package_from") == row.get("src_description_from") else "") if x)   # case
         k = kind or SP.part_kind(item["folder"], item["footprint"].get("kicad") or fp_name, desc, ln.get("designator"))
-        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"),
-                          self.case_from_search(st, item, ln, row)], k, mpn, desc)
+        if case and (k == "CP" or k == "C" and SP.POLAR_CAP.match(SP._norm(mpn))):    # a tantalum's size + height
+            case = SP.tantalum_search_text(case, row.get("src_height"), mpn)            # name its EIA case
+        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"), case],
+                         k, mpn, desc)
         got = []
         if not st["footprint"] and res["footprint"]:
             sp = SP.spec(res["footprint"])
