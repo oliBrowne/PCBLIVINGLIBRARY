@@ -1185,10 +1185,7 @@ class Run:
         if not land or not case:
             return False
         k = kind or ("D" if sym_ref.startswith(("Diode:", "LED:")) else None)   # a diode's package names (SOD-123)
-        try:
-            named = [SP.footprint_for([t], kind=k)[0] for t in (case, ln.get("footprint")) if str(t or "").strip()]
-        except Exception:                          # a text stdparts can't judge confirms nothing
-            return False
+        named = [case_land(t, k) for t in (case, ln.get("footprint")) if str(t or "").strip()]
         if not named or any(n != land for n in named):
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r} is not its land {land}")
             return False
@@ -1319,7 +1316,7 @@ class Run:
             try:
                 job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"],
                              mpn=mpn or None, maker=maker)
-                job["search_package"] = search_case(row)   # an independent second source (crosscheck)
+                job["search_package"] = case_land(search_case(row)) or ""   # an independent source (crosscheck)
                 if self.reading(st) and not rd.answered(job):
                     self.refused(st, job, None, cfg.get("folder"))
                 self.folder_file_failed(st, job)
@@ -1343,7 +1340,7 @@ class Run:
         refused_before = self.reading(st)             # (a link that no longer gives a PDF at all: said no more)
         job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"],
                      mpn=mpn or None, maker=maker)
-        job["search_package"] = search_case(row)   # an independent second source (crosscheck)
+        job["search_package"] = case_land(search_case(row)) or ""   # an independent source (crosscheck)
         if refused_before and not rd.answered(job):   # (an earlier answer: the API fetched the link)
             self.refused(st, job, None, cfg.get("folder"))
         self.folder_file_failed(st, job)
@@ -1678,12 +1675,33 @@ def lands_agree(a, b):
 
 
 def search_case(row):
-    """The part search's case text for this exact MPN (DigiKey / Mouser), the datasheet cross-check's independent
-    package: '' when several makers sell the MPN (a clone's case is not this part's) or no case was given."""
+    """The part search's case text for this exact MPN (DigiKey / Mouser): '' when several makers sell the MPN (a
+    clone's case is not this part's) or no case was given."""
     from . import stdparts as SP
     if row.get("src_several"):
         return ""
     return SP.case_text(row.get("src_package"), row.get("src_description")) or ""
+
+
+def case_land(case, kind=None):
+    """The one standard-table land a part search's case text names -> table name or None: '8-SOIC (0.154", 3.90mm
+    Width)' -> SOIC-8_3.9x4.9mm_P1.27mm; DigiKey's group 'TO-236-3, SC-59, SOT-23-3' -> SOT-23 (stdparts.names_only:
+    every name it lists that the tables know is that land). Two lands, or none: None."""
+    from . import stdparts as SP
+    if not str(case or "").strip():
+        return None
+    for k in dict.fromkeys((kind, "D")):
+        try:
+            n = SP.footprint_for([case], kind=k)[0]
+        except Exception:
+            n = None
+        if n:
+            return n
+    lands = {v for v in SP.ALIASES.values() if v} | {v for v in SP.DIODE_ALIASES.values() if v}
+    hits = [l for l in sorted(lands) if SP.names_only(case, l, group=True) == (True, True)]
+    if len(hits) != 1 or (re.search(r"(?i)TO-?236", str(case)) and hits[0] != "SOT-23"):   # TO-236 is SOT-23's JEDEC name
+        return None
+    return hits[0]
 
 
 # a datasheet read with one of these review items stays with a person whatever agrees: the PDF may not be this part's,

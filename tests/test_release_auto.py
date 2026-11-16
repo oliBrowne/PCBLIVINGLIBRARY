@@ -157,3 +157,13 @@ def test_lands_that_differ_or_swap_pins_do_not_agree():
     assert not L.lands_agree(mirrored, kicad)[0]                       # a mirror is never a turn
     three = _mod([("1", -1, 0, 1, 1), ("2", 1, 0, 1, 1), ("3", 0, 1, 1, 1)])
     assert not L.lands_agree(three, kicad)[0]
+
+
+def test_a_distributor_case_group_names_one_land_or_none():
+    from ecadlib import librarian as L
+    assert L.case_land("TO-236-3, SC-59, SOT-23-3") == "SOT-23"
+    assert L.case_land('8-SOIC (0.154", 3.90mm Width)') == "SOIC-8_3.9x4.9mm_P1.27mm"
+    assert L.case_land("SC-74A, SOT-753") == "SOT-23-5"
+    assert L.case_land("SOD-123") == "D_SOD-123"
+    assert L.case_land("TO-236-3, SOT-323") is None                      # two packages named: none
+    assert L.case_land("32-TQFP") is None and L.case_land("") is None    # no body size: no land
