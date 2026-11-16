@@ -702,11 +702,14 @@ def check_item(item, base=".", rules=None):
             msg = unchecked("the KiCad / Altium comparison", e)
             (add("files", msg) if mode == "hold" else warns.append(f"parity: {msg}"))
         for d in diffs:
-            (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" else warns.append(f"parity: {d['msg']}"))
+            (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" and parity_holds(d["msg"])
+             else warns.append(f"parity: {d['msg']}"))
         info["parity"] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"
     # ---- 3D height: a note to check unless [release] height = "hold" (a height is mechanical, never electrical)
     hold_h = (rules.get("release") or {}).get("height", "warn") == "hold"
     height = (lambda m: add("height", m)) if hold_h else (lambda m: warns.append(f"height: {m}"))
+    missing = height if not allow_missing_3d(rules) else (lambda m: warns.append(f"height: {m} ([release] "
+                                                                                 "allow_missing_3d: a note)"))
     if fps:
         bodies = [AL.parse_params(r["params"]) for r in fps[0]["records"] if r["type"] == "body"]
         hs = [h for h in (_mil(b.get("OVERALLHEIGHT")) for b in bodies) if h]
@@ -722,7 +725,7 @@ def check_item(item, base=".", rules=None):
                          "for the datasheet, no KiCad model)")
             info["height"] = pd[0]
         elif not h:
-            height("no 3D height (no 3D body and no HEIGHT)")
+            missing("no 3D height (no 3D body and no HEIGHT)")
         elif default:
             warns.append(f"3D height {h:.2f} mm is the package default, verify against the datasheet")
             if not lo - 0.01 <= h <= hi + 0.01:
@@ -936,6 +939,18 @@ def _split(failures):
 
 
 RULES = ("files", "pins", "footprint", "height", "fields", "parity", "verify")   # check_item's add()
+
+
+def parity_holds(msg):
+    """Whether a KiCad / Altium parity difference holds the part. A 3D model on one side only is mechanical, never
+    electrical: like a missing 3D height (rule since #137) it is a note to check, not a hold."""
+    return not str(msg or "").startswith("3D model presence")
+
+
+def allow_missing_3d(rules):
+    """[release] allow_missing_3d = true (off by default): a part with no 3D height at all is never held for it, even
+    with [release] height = "hold". A height that is there but implausible is still judged by [release] height."""
+    return (rules.get("release") or {}).get("allow_missing_3d") is True
 
 
 def write_report(rows, stem, plan=""):

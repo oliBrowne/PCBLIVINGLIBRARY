@@ -945,6 +945,8 @@ class Run:
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
             if "(check the case)" in how and self.case_agrees(st, item, ln, row, kind, mpn, sym_ref):
                 pass                               # the part search's case for this exact MPN is the symbol's land
+            elif "check" in how and self.variant_agrees(st, item, ln, row, kind, mpn, sym_ref, chain):
+                pass                               # the case and the datasheet's pin table confirm this variant
             elif "check" in how:                   # a near name: a person checks it before it is released
                 st["verify"].append(f"symbol {sym_ref} matched by {how}")
             elif own and "x wildcards" in how:
@@ -1090,7 +1092,8 @@ class Run:
             self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, None if shared else fp_name,
                                f"standard:{name}", [] if shared or not mpn else [("MPN", mpn)])
             got.append(f"symbol {name} ({res['sym_how']})")
-            if ":" in res["symbol"]:               # SOT-23 & co: pinouts differ by maker, so a person checks it
+            if ":" in res["symbol"] and not self.pinout_agrees(st, item, ln, row, mpn, text, name):
+                # SOT-23 & co: pinouts differ by maker, so a person checks it unless the datasheet's own pin table does
                 st["verify"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
         elif not st["symbol"] and res["symbol"]:
             res["sym_how"] = f"footprint came from {fp_src or 'nowhere'}, not {res['footprint']}: pin numbers not known to match"
@@ -1166,6 +1169,77 @@ class Run:
                            f"{row.get('src_package_from') or 'the part search'}'s case for {mpn} ({row.get('src_package')})")
         return True
 
+    def variant_agrees(self, st, item, ln, row, kind, mpn, sym_ref, chain):
+        """MPN = a KiCad symbol's name + an ordering suffix (LM393DR, BAT54S-7-F, ATTINY85-20SU). The suffix may name
+        another variant: another package, or the same package with other pins (MCP6L01R: supplies swapped). Released
+        on that symbol with no person's look only when two sources independent of the name match confirm it:
+          case   the part search found this exact MPN (one maker) and its case text names the symbol's own land, and
+                 the BOM names no other package;
+          pins   the symbol's named pins all agree, in one column of one table, with the pin table printed in this
+                 MPN's datasheet (its text layer, ecadlib.pin_text; no model, no cost).
+        Anything else -> False (held for a look)."""
+        from . import stdparts as SP, pin_text as PT
+        if row.get("src_several") or norm_mpn(row.get("src_mpn") or "") != norm_mpn(mpn or ""):
+            return False
+        land, case = str(st.get("hint_fp") or "").split(":")[-1], search_case(row)
+        if not land or not case:
+            return False
+        try:
+            named = [SP.footprint_for([t], kind=kind)[0] for t in (case, ln.get("footprint")) if str(t or "").strip()]
+        except Exception:                          # a text stdparts can't judge confirms nothing
+            return False
+        if not named or any(n != land for n in named):
+            return False
+        try:
+            sym = K.convert_symbol(chain, sym_ref.split(":")[-1], None, (), None, [])
+            pins = [(pr[1].get("num"), pr[1].get("name")) for pr in sym["prims"] if pr[0] == "pin"]
+        except Exception:
+            return False
+        data, link = self.datasheet_pdf(item, ln, row, st, mpn)
+        v = PT.check(PT.page_texts(data) if data else {}, pins)
+        if v["status"] != "agreed":
+            st["tried"].append(f"kicad: {sym_ref} for {mpn}: the datasheet's pin table did not confirm it ({v.get('why')})")
+            return False
+        st["tried"].append(f"kicad: {sym_ref} for {mpn} confirmed: {row.get('src_package_from') or 'the part search'}'s "
+                           f"case {case!r} is its land {land}, and its {v['pins']} pins agree with the pin table on "
+                           f"page {v['page']} of {link}")
+        return True
+
+    def pinout_agrees(self, st, item, ln, row, mpn, text, name):
+        """A family-table pinout (SOT-23 regulators, transistors: makers differ) confirmed by this MPN's datasheet: its
+        named pins all agree, in one column of one table, with the PDF's text layer (ecadlib.pin_text) -> True."""
+        from . import pin_text as PT
+        try:
+            sym = K.convert_symbol([K._find_symbol(sexpr.parse(text), name)], name, None, (), None, [])
+            pins = [(pr[1].get("num"), pr[1].get("name")) for pr in sym["prims"] if pr[0] == "pin"]
+        except Exception:
+            return False
+        data, link = self.datasheet_pdf(item, ln, row, st, mpn)
+        v = PT.check(PT.page_texts(data) if data else {}, pins)
+        if v["status"] != "agreed":
+            return False
+        st["tried"].append(f"standard: pinout {name} for {mpn} confirmed: its {v['pins']} pins agree with the pin table "
+                           f"on page {v['page']} of {link}")
+        return True
+
+    def datasheet_pdf(self, item, ln, row, st, mpn):
+        """This MPN's datasheet PDF for a free check (no model): the first link that gives a PDF -> (bytes, url) or
+        (None, None). Cached by the HTTP cache; never the hand-off to a person."""
+        if getattr(self.http, "offline", False) and not hasattr(self.http, "get"):
+            return None, None
+        urls = D.datasheet_urls(item, ln, row, st["found"])
+        if not urls:
+            return None, None
+        if getattr(self, "_pdfs", None) is None:
+            self._pdfs = D.PdfStore(Path(self._kicad_args[0] or self.out / "cache").parent, self.http, download="auto")
+        for url, where in urls[:2]:
+            try:
+                data, _ = self._pdfs.fetch(url, where, part=mpn, handoff=False, mpn=mpn)
+                return data, url
+            except Exception:                      # a refused or broken link: the next one, else no check
+                continue
+        return None, None
+
     @staticmethod
     def case_from_search(st, item, ln, row):
         """The part search's case text for this exact MPN, when the BOM says nothing of the package itself (no footprint,
@@ -1218,6 +1292,7 @@ class Run:
             try:
                 job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"],
                              mpn=mpn or None, maker=maker)
+                job["search_package"] = search_case(row)   # an independent second source (crosscheck)
                 if self.reading(st) and not rd.answered(job):
                     self.refused(st, job, None, cfg.get("folder"))
                 self.folder_file_failed(st, job)
@@ -1241,6 +1316,7 @@ class Run:
         refused_before = self.reading(st)             # (a link that no longer gives a PDF at all: said no more)
         job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"],
                      mpn=mpn or None, maker=maker)
+        job["search_package"] = search_case(row)   # an independent second source (crosscheck)
         if refused_before and not rd.answered(job):   # (an earlier answer: the API fetched the link)
             self.refused(st, job, None, cfg.get("folder"))
         self.folder_file_failed(st, job)
@@ -1521,9 +1597,59 @@ class Run:
             st["tried"].append(f"cross-check ({cc['mode']}): {cc['status']}: {CC.summary_line(cc)}")
         if url:                                       # (a PDF from the [datasheet] folder of a line with no link has none)
             st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
-        st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
-                            "see datasheet/*.review.md"
-                            + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+        checked = read_confirmed(res, job, got)
+        if checked:                                   # an independent source agrees: released with no person's look
+            st["tried"].append(f"datasheet reader output ({', '.join(got)}) confirmed: {checked}")
+            st["review"].extend(f"datasheet read: {r}" for r in res["needs_review"])
+        else:
+            st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
+                                "see datasheet/*.review.md"
+                                + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+
+
+def search_case(row):
+    """The part search's case text for this exact MPN (DigiKey / Mouser), the datasheet cross-check's independent
+    package: '' when several makers sell the MPN (a clone's case is not this part's) or no case was given."""
+    from . import stdparts as SP
+    if row.get("src_several"):
+        return ""
+    return SP.case_text(row.get("src_package"), row.get("src_description")) or ""
+
+
+# a datasheet read with one of these review items stays with a person whatever agrees: the PDF may not be this part's,
+# its package drawing came from elsewhere, or the read had to set a difference aside
+UNSURE_READ = re.compile(r"does not seem to name|datasheet from your folder|not downloaded here|found by a web search|"
+                         r"package drawing came from|no drawing of this package|instruction-like text|"
+                         r"set aside|check it is this part", re.I)
+
+
+def read_confirmed(res, job, got):
+    """Why a datasheet read may be released with no person's look, or None (it waits for one). Every half the read
+    built must be confirmed by a source independent of the read itself (never a confidence score):
+      footprint  the cross-check AGREED with an independent source (crosscheck.run: the standard table entry the BOM's
+                 or the part search's package names, or a second read; never the table entry the read's own package
+                 name picked, which only shows the read fits its own name)
+      symbol     every named pin agrees, in one column of one table, with the PDF's own text layer (ecadlib.pin_text)
+    and no review item says the PDF or its drawing may not be this part's (UNSURE_READ)."""
+    if not got or any(UNSURE_READ.search(str(r)) for r in res.get("needs_review") or ()):
+        return None
+    why = []
+    if "footprint" in got or any(g.startswith("footprint") for g in got):
+        cc = res.get("cross_check") or {}
+        if cc.get("status") != "agreed":
+            return None
+        src = [c for c in cc.get("checks") or () if c.get("status") == "agreed" and c.get("via") != "the read's package name"]
+        why.append("footprint agrees with " + (f"{src[0].get('against')} ({src[0].get('via') or src[0].get('source')})"
+                                               if src else "the cross-check"))
+    if "symbol" in got:
+        from . import pin_text as PT
+        pins = [(q.get("num"), q.get("name")) for q in (res.get("symbol") or {}).get("pins") or ()]
+        data = job.get("data")
+        v = PT.check(PT.page_texts(data) if data else {}, pins)
+        if v["status"] != "agreed":
+            return None
+        why.append(f"{v['pins']} pins agree with the pin table on PDF page {v['page']} (text layer)")
+    return "; ".join(why) or None
 
 
 def cross_check_state(cc):

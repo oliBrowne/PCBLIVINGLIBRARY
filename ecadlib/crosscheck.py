@@ -506,11 +506,15 @@ def ep_numbers(first, second, first_pins, pins):
 
 
 # ---------------------------------------------------------------- the standard table
-def standard_matches(hint=None, read_name=None):
-    """[(where, table name)] for the BOM's package and the package the read names, when stdparts resolves them."""
+SEARCH = "part search package"            # librarian sets job["search_package"]: the distributor's case for this MPN
+
+
+def standard_matches(hint=None, read_name=None, search=None):
+    """[(where, table name)] for the BOM's package, the part search's case text for this exact MPN (DigiKey / Mouser:
+    a source independent of the datasheet read) and the package the read names, when stdparts resolves them."""
     from . import stdparts as S
     out = []
-    for where, text in (("BOM package", hint), ("the read's package name", read_name)):
+    for where, text in (("BOM package", hint), (SEARCH, search), ("the read's package name", read_name)):
         if not str(text or "").strip():
             continue
         try:
@@ -794,7 +798,8 @@ def run(reader, job, res, model):
             out["pins"] = "unchecked"
         return out
     first = critical(res["spec"])
-    checks = [against_table(first, n, where) for where, n in standard_matches(job.get("package"), res["spec"].get("name"))]
+    checks = [against_table(first, n, where) for where, n in
+              standard_matches(job.get("package"), res["spec"].get("name"), job.get("search_package"))]
     strong = [c for c in checks if len(c["compared"]) >= 2]
     held = None if checks else held_anyway(reader, job, res)
     if held:                                          # the librarian holds it whatever a second read says: not paid for
