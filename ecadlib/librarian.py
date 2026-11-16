@@ -1187,7 +1187,8 @@ class Run:
         k = kind or ("D" if sym_ref.startswith(("Diode:", "LED:")) else None)   # a diode's package names (SOD-123)
         named = [case_land(t, k) for t in (case, ln.get("footprint")) if str(t or "").strip()]
         if not named or any(n != land for n in named):
-            st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r} is not its land {land}")
+            st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r} does not name its land "
+                               f"{land} alone (still held for a look)")
             return False
         try:
             sym = K.convert_symbol(chain, sym_ref.split(":")[-1], None, (), None, [])
