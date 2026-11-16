@@ -288,6 +288,38 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
             raise P.NotConfigured(f"{self.name}: set {', '.join(self.env)} ({self.auth})")
         return self.token()
 
+    def _shared(self, p, res):
+        """productdetails found nothing: the keyword search lists every maker's listing of exactly this number. The
+        case comes only from the BOM maker's own listing, or, with no maker on the line, only when every listing's case
+        is the same (onsemi's SS34 is SMC, Vishay's is SMA). A renamed part (another number) is never taken."""
+        res.found = False
+        body = json.dumps({"Keywords": p["mpn"], "Limit": 10, "Offset": 0})
+        r = self.http.post(self.KEYWORD_URL, body, headers=self._headers())
+        if r.status == 401:                        # the token ran out between the two requests: renew once
+            self._token = None
+            if self.token():
+                r = self.http.post(self.KEYWORD_URL, body, headers=self._headers())
+        if not r.ok:
+            return res
+        try:
+            d = r.json()
+            hits = [x for x in (d.get("ExactMatches") or []) + (d.get("Products") or []) if isinstance(x, dict)
+                    and norm_mpn(x.get("ManufacturerProductNumber")) == norm_mpn(p["mpn"])]
+            maker = lambda x: (x.get("Manufacturer") or {}).get("Name", "") if isinstance(x.get("Manufacturer"), dict) else ""
+            if (p.get("manufacturer") or "").strip():
+                hits = [x for x in hits if P.same_maker(p["manufacturer"], maker(x))]
+            if not hits:
+                return res
+            cases = {_case_text(x) for x in hits}
+            if len(cases) > 1:
+                res.note = (f"several makers sell {p['mpn']} in different cases ("
+                            + "; ".join(sorted(f"{maker(x)}: {_case_text(x) or '?'}" for x in hits)[:4]) + ")")
+                return res
+            return digikey_info(hits[0], self.name, (d.get("SearchLocaleUsed") or {}).get("Currency") or self.currency)
+        except (ValueError, AttributeError, TypeError) as e:
+            res.error = f"unparseable response: {e}"
+            return res
+
     def part(self, p, alternates=False):
         res = PartInfo(self.name, mpn=p["mpn"])
         if not self._need():
@@ -297,9 +329,8 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
             res.error = "no MPN"
             return res
         r = self.authed_get(self.URL.format(quote(p["mpn"], safe="")), self._headers)
-        if r.status == 404:
-            res.found = False
-            return res
+        if r.status == 404:                        # also what productdetails says when several makers sell this number
+            return self._shared(p, res)
         if not r.ok:
             res.error = L._http_error(L.LifecycleResult(self.name), r).error
             return res
@@ -313,6 +344,13 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
         except (ValueError, AttributeError, TypeError) as e:
             res.error = f"unparseable response: {e}"
             return res
+
+
+def _case_text(prod):
+    for x in prod.get("Parameters") or []:
+        if isinstance(x, dict) and re.search(r"^package\s*/\s*case$", str(x.get("ParameterText") or ""), re.I):
+            return str(x.get("ValueText") or "").strip()
+    return ""
 
 
 def digikey_info(prod, provider, currency):

@@ -214,8 +214,9 @@ def same_maker(a, b):
         if not isinstance(x, str):             # Electronics", "Amphenol ICC (FCI)": either name
             continue
         parts = [p for p in re.split(r"/|\s+-\s+|[()（）]", x) if p.strip()]
-        if len(parts) > 1 and any(same_maker(p, y) for p in parts
-                                  if not set(_maker_words_all(p)) <= _MAKER_REGION | _MAKER_PLACE | _MAKER_WORDS):
+        if len(parts) > 1 and any(same_maker(p, y) for p in parts       # "Vishay ... - Diodes Division": a division
+                                  if "DIVISION" not in _maker_words_all(p)   # names a part of the company, not another
+                                  and not set(_maker_words_all(p)) <= _MAKER_REGION | _MAKER_PLACE | _MAKER_WORDS):
             return True
     ka, kb = maker_key(a), maker_key(b)
     if not ka or not kb:
