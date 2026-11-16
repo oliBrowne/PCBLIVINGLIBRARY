@@ -1207,6 +1207,31 @@ class Run:
                            f"page {v['page']} of {link}")
         return True
 
+    def kicad_land_confirmed(self, st, res):
+        """A KiCad footprint chosen by name (named after the MPN or its series) waits for a person to compare it with
+        the datasheet's land. When this datasheet read gave the maker's land (land or pad table; not IPC pads from the
+        body) and it is the same land (lands_agree), that is the comparison: the hold is lifted and the check said."""
+        fp = st.get("footprint") or {}
+        waits = [v for v in st["verify"] if re.match(r"footprint \S+ chosen by (footprint named|shortest)", v)]
+        if not waits or not str(fp.get("source") or "").startswith("kicad:") or not fp.get("kicad_mod"):
+            return False
+        spec = res.get("spec") or {}
+        if not (spec.get("land") or spec.get("pad_table")):
+            return False                               # pads from the body by IPC: not the maker's land, no check
+        try:
+            mine, _ = F.build(spec, RU.density_for(spec, self.rules))
+            theirs = (self.out / fp["kicad_mod"]).read_text(encoding="utf-8")
+        except Exception:
+            return False
+        same, how = lands_agree(mine, theirs)
+        if not same:
+            st["tried"].append(f"datasheet land vs {fp['source']}: {how} (still held for a look)")
+            return False
+        for v in waits:
+            st["verify"].remove(v)
+        st["tried"].append(f"{fp['source']} confirmed against the datasheet's own land: {how}")
+        return True
+
     def pinout_agrees(self, st, item, ln, row, mpn, text, name):
         """A family-table pinout (SOT-23 regulators, transistors: makers differ) confirmed by this MPN's datasheet: its
         named pins all agree, in one column of one table, with the PDF's text layer (ecadlib.pin_text) -> True."""
@@ -1599,6 +1624,7 @@ class Run:
             st["tried"].append(f"cross-check ({cc['mode']}): {cc['status']}: {CC.summary_line(cc)}")
         if url:                                       # (a PDF from the [datasheet] folder of a line with no link has none)
             st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
+        self.kicad_land_confirmed(st, res)            # a KiCad land picked by name, checked against the read's land
         checked = read_confirmed(res, job, got)
         if checked:                                   # an independent source agrees: released with no person's look
             st["tried"].append(f"datasheet reader output ({', '.join(got)}) confirmed: {checked}")
@@ -1607,6 +1633,48 @@ class Run:
             st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                                 "see datasheet/*.review.md"
                                 + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+
+
+LAND_POS_TOL, LAND_SIZE_TOL = 0.15, 0.15        # mm: a maker's land drawn by KiCad and read from the datasheet
+
+
+def lands_agree(a, b):
+    """Two .kicad_mod texts give the same land: the same pad numbers, each pad's centre and size within LAND_POS_TOL /
+    LAND_SIZE_TOL of the other's, after centring both on their pads and turning one by 0 / 90 / 180 / 270 degrees (a
+    whole footprint turned is the same land) -> (True, how) or (False, why)."""
+    from . import footprint_bench as B
+    try:
+        pa, pb = B.numbers(a)["pads"], B.numbers(b)["pads"]
+    except Exception as e:
+        return False, f"not readable ({type(e).__name__})"
+    if not pa or sorted(str(p[0]) for p in pa) != sorted(str(p[0]) for p in pb):
+        return False, "other pad numbers"
+
+    def centred(ps):
+        cx = (min(p[1] for p in ps) + max(p[1] for p in ps)) / 2
+        cy = (min(p[2] for p in ps) + max(p[2] for p in ps)) / 2
+        return [(str(p[0]), p[1] - cx, p[2] - cy, p[3], p[4]) for p in ps]
+    A, Bc = centred(pa), centred(pb)
+    for turn in range(4):
+        rot = []
+        for n, x, y, w, h in A:
+            for _ in range(turn):
+                x, y, w, h = -y, x, h, w
+            rot.append((n, x, y, w, h))
+        worst = 0.0
+        ok = True
+        for n, x, y, w, h in rot:
+            cand = [q for q in Bc if q[0] == n]
+            q = min(cand, key=lambda q: abs(q[1] - x) + abs(q[2] - y))
+            d = max(abs(q[1] - x), abs(q[2] - y))
+            s = max(abs(q[3] - w), abs(q[4] - h))
+            if d > LAND_POS_TOL or s > LAND_SIZE_TOL:
+                ok = False
+                break
+            worst = max(worst, d, s)
+        if ok:
+            return True, f"{len(A)} pads within {worst:.2f} mm" + (f", turned {turn * 90} degrees" if turn else "")
+    return False, "pads differ by more than 0.15 mm"
 
 
 def search_case(row):

@@ -126,3 +126,34 @@ def test_a_symbol_read_needs_the_pdf_text_to_agree():
         assert not L.read_confirmed(_res("unchecked", pins=pins), {"data": b"%PDF"}, ["footprint", "symbol"])
     finally:
         PTm.page_texts = old
+
+
+# ---------------------------------------------------------------- a KiCad land picked by name vs the read's own land
+def _mod(pads):
+    body = "".join(f'  (pad "{n}" smd roundrect (at {x} {y}) (size {w} {h}) (layers "F.Cu" "F.Paste" "F.Mask"))\n'
+                   for n, x, y, w, h in pads)
+    return f'(footprint "X" (layer "F.Cu")\n{body})\n'
+
+
+def test_lands_agree_within_tolerance_and_turned():
+    from ecadlib import librarian as L
+    kicad = _mod([("1", -4.85, 0, 2.9, 5.4), ("2", 4.85, 0, 2.9, 5.4)])
+    read = _mod([("1", -4.9, 0, 2.9, 5.4), ("2", 4.9, 0, 2.9, 5.4)])
+    assert L.lands_agree(read, kicad)[0]
+    turned = _mod([("1", 0, -4.85, 5.4, 2.9), ("2", 0, 4.85, 5.4, 2.9)])
+    ok, how = L.lands_agree(turned, kicad)
+    assert ok and "turned" in how, how
+
+
+def test_lands_that_differ_or_swap_pins_do_not_agree():
+    from ecadlib import librarian as L
+    kicad = _mod([("1", -1.15, -0.875, 1.3, 1.05), ("2", 1.15, -0.875, 1.3, 1.05),
+                  ("3", 1.15, 0.875, 1.3, 1.05), ("4", -1.15, 0.875, 1.3, 1.05)])
+    bigger = _mod([("1", -1.4, -0.875, 1.3, 1.05), ("2", 1.4, -0.875, 1.3, 1.05),
+                   ("3", 1.4, 0.875, 1.3, 1.05), ("4", -1.4, 0.875, 1.3, 1.05)])
+    assert not L.lands_agree(bigger, kicad)[0]                         # 0.25 mm wider: another land
+    mirrored = _mod([("1", 1.15, -0.875, 1.3, 1.05), ("2", -1.15, -0.875, 1.3, 1.05),
+                     ("3", -1.15, 0.875, 1.3, 1.05), ("4", 1.15, 0.875, 1.3, 1.05)])
+    assert not L.lands_agree(mirrored, kicad)[0]                       # a mirror is never a turn
+    three = _mod([("1", -1, 0, 1, 1), ("2", 1, 0, 1, 1), ("3", 0, 1, 1, 1)])
+    assert not L.lands_agree(three, kicad)[0]
