@@ -11,7 +11,9 @@ one column for all of them, not a mix). The result is
     {"status": "unchecked", "why": ...}                         no text layer, no table found, ambiguous: no verdict
 
 A table whose other columns give the same pins other numbers (SOIC and SOT-23 columns, or a variant with its
-supplies swapped) is unchecked even when one column agrees: the text does not say which column is this part's.
+supplies swapped) is unchecked even when one column agrees: the text does not say which column is this part's. So is
+an agreeing table when another page names every pin too but prints some only with other numbers (a variant's own
+table on another page), whichever page comes first.
 Only "agreed" lets a part through without a person; "unchecked" keeps the hold it had. A scanned PDF (no text) is
 always unchecked. Pins named N.C. / NC / DNC are skipped (tables often print them as one row "NC 1, 5, 8")."""
 import re
@@ -120,7 +122,7 @@ def check(page_texts, pins):
         return {"status": "unchecked", "why": "fewer than two named pins to compare"}
     if not any(str(t or "").strip() for t in (page_texts or {}).values()):
         return {"status": "unchecked", "why": "the PDF has no text layer (scanned?)"}
-    best = None
+    best, agreed, conflicts = None, None, []
     for page, text in sorted((page_texts or {}).items()):
         rows = _rows(text)
         if not rows:
@@ -140,15 +142,28 @@ def check(page_texts, pins):
                 return {"status": "unchecked", "page": page,      # ways: which column is this part's is not in
                         "why": f"page {page}'s table gives these pins other numbers in another column ({other}): which "
                                "column is this part's package or variant is not in the text"}
-            return {"status": "agreed", "page": page, "column": col, "pins": len(pins)}
+            if agreed is None:
+                agreed = {"status": "agreed", "page": page, "column": col, "pins": len(pins)}
+            continue
+        miss = [f"{nm}={n}" for (n, nm), (cols, _) in zip(pins, per) if not cols]
+        if miss:                                       # every pin named on this page, some only with other numbers:
+            conflicts.append((page, miss))             # maybe another variant's table (MCP6L01 / MCP6L01R on two pages)
+        if agreed is not None:
+            continue
         if all(cols for cols, _ in per):
             best = (page, named, "the numbers are in different columns of the table (a mix of packages?)")
             continue
-        miss = [f"{nm}={n}" for (n, nm), (cols, _) in zip(pins, per) if not cols]
         if len(per) >= 3 and len(miss) * 3 <= len(per):  # most pins right, a few printed with other numbers: a real
             return {"status": "disagreed", "page": page,      # difference, not a page that only mentions the names
                     "why": f"page {page} prints {', '.join(miss[:4])} with other numbers"}
         best = (page, named, f"page {page}: {', '.join(miss[:4])} not printed with that number")
+    if agreed is not None:
+        if conflicts:                                  # a table on another page names the same pins with other numbers:
+            pg, miss = conflicts[0]                    # which table is this part's is not in the text, whichever came first
+            return {"status": "unchecked", "page": agreed["page"],
+                    "why": f"page {agreed['page']}'s table agrees, but page {pg} prints {', '.join(miss[:4])} with other "
+                           "numbers (another package or variant?): which table is this part's is not in the text"}
+        return agreed
     if best is None:
         return {"status": "unchecked", "why": "no pin table found in the text layer"}
     return {"status": "unchecked", "why": best[2] or f"page {best[0]} names {best[1]} of {len(pins)} pins"}

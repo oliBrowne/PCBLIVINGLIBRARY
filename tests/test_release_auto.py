@@ -167,3 +167,28 @@ def test_a_distributor_case_group_names_one_land_or_none():
     assert L.case_land("SOD-123") == "D_SOD-123"
     assert L.case_land("TO-236-3, SOT-323") is None                      # two packages named: none
     assert L.case_land("32-TQFP") is None and L.case_land("") is None    # no body size: no land
+
+
+# ---------------------------------------------------------------- review 11-16: wrong-part paths
+def test_a_variant_table_on_another_page_keeps_the_part_with_a_person():
+    """MCP6L01 / MCP6L01R: one page's table agrees, another page names the same pins with the supplies swapped. The
+    text does not say which table is this part's, whichever page comes first."""
+    pins = [("1", "VOUT"), ("2", "VSS"), ("3", "VIN+"), ("4", "VIN-"), ("5", "VDD")]
+    a = "PIN NAME FUNCTION\n1 VOUT Output\n2 VSS Negative supply\n3 VIN+ Input\n4 VIN- Input\n5 VDD Positive supply"
+    b = a.replace("2 VSS", "5 VSS").replace("5 VDD", "2 VDD")
+    assert PT.check({3: a}, pins)["status"] == "agreed"
+    for pages in ({3: a, 4: b}, {3: b, 4: a}):
+        assert PT.check(pages, pins)["status"] != "agreed", pages
+    assert PT.check({3: a, 4: a}, pins)["status"] == "agreed"            # the same table twice still agrees
+
+
+def test_a_kicad_land_is_not_confirmed_by_a_read_that_may_not_be_this_part():
+    from ecadlib import librarian as L
+
+    class R(L.Run):
+        def __init__(self):
+            pass
+    st = {"verify": ["footprint X chosen by footprint named after the MPN"], "tried": [],
+          "footprint": {"source": "kicad:Package_SO:X", "kicad_mod": "x.kicad_mod"}}
+    res = {"spec": {"land": {"x": 1}}, "needs_review": ["the datasheet PDF does not seem to name this part"]}
+    assert R().kicad_land_confirmed(st, res) is False and st["verify"]

@@ -1216,6 +1216,8 @@ class Run:
         spec = res.get("spec") or {}
         if not (spec.get("land") or spec.get("pad_table")):
             return False                               # pads from the body by IPC: not the maker's land, no check
+        if any(UNSURE_READ.search(str(r)) for r in res.get("needs_review") or ()):
+            return False                               # the PDF or its drawing may not be this part's: no check
         try:
             mine, _ = F.build(spec, RU.density_for(spec, self.rules))
             theirs = (self.out / fp["kicad_mod"]).read_text(encoding="utf-8")
