@@ -78,6 +78,20 @@ def test_401_twice_is_an_error_not_a_loop():
         _restore(old)
 
 
+def test_an_odd_expires_in_keeps_the_token():
+    old = _env()
+    try:
+        for odd in ("soon", None, [], "nan", "inf", -5):
+            http = TokenHTTP(expires_in=odd)
+            c = L.DigiKeyLifecycle(http)
+            r = c.check({"mpn": "LM339N"})
+            assert r.found and not r.error, (odd, r.error)
+            c.check({"mpn": "LM339N"})
+            assert sum("oauth2/token" in u for _, u, _ in http.calls) == 1, (odd, http.calls)
+    finally:
+        _restore(old)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

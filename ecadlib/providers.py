@@ -572,12 +572,19 @@ class DigiKey(_Official):
             body = urlencode({"client_id": UC.secret("DIGIKEY_CLIENT_ID"), "client_secret": UC.secret("DIGIKEY_CLIENT_SECRET"),
                               "grant_type": "client_credentials"})
             r = self.http.post(self.TOKEN_URL, body, cache=False, headers={"Content-Type": "application/x-www-form-urlencoded"})
-            life = 0
             try:
                 d = r.json() if r.ok else {}
-                self._token, life = d.get("access_token"), float(d.get("expires_in", 600))
-            except (ValueError, TypeError, AttributeError):
-                pass
+            except ValueError:
+                d = {}
+            d = d if isinstance(d, dict) else {}
+            tok = d.get("access_token")
+            self._token = tok if isinstance(tok, str) and tok else None
+            try:                                   # an odd expires_in never throws away a good token: assume ten minutes
+                life = float(d.get("expires_in", 600))
+            except (ValueError, TypeError):
+                life = 600.0
+            if life != life or life < 0 or life == float("inf"):
+                life = 600.0
             if not self._token:
                 self._token_err = f"token request failed: {r.error or f'HTTP {r.status}'}"
             self._token_due = time.monotonic() + max(0.0, life - 60)      # a minute early, never mid-request
