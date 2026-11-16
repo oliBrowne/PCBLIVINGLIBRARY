@@ -88,6 +88,30 @@ def test_a_division_name_is_not_another_maker():
     assert P.same_maker("TDK", "EPCOS - TDK Electronics")
 
 
+def test_no_maker_and_cases_agree_but_device_packages_differ_is_not_found():
+    def prod(maker, dev):
+        x = _prod("XYZ1", maker, "")
+        x["Parameters"] = [{"ParameterText": "Supplier Device Package", "ValueText": dev}]
+        return x
+    r = _ask(HTTP([prod("Maker A", "SOT-23-3"), prod("Maker B", "SC-70-3")]), "XYZ1")
+    assert not r.found, r.specs
+
+
+def test_no_maker_and_a_cut_short_result_page_is_not_found():
+    class Cut(HTTP):
+        def request(self, method, url, body=None, headers=None, cache=True):
+            r = super().request(method, url, body, headers, cache)
+            if "search/keyword" in url:
+                d = json.loads(r.text)
+                d["ProductsCount"] = 37                   # other makers' listings past the first page
+                return Response(200, json.dumps(d))
+            return r
+    two = [_prod("LM358DR", "Texas Instruments", '8-SOIC'), _prod("LM358DR", "Rohm Semiconductor", '8-SOIC')]
+    r = _ask(Cut(two), "LM358DR")
+    assert not r.found, r.specs
+    assert _ask(Cut(two), "LM358DR", "Texas Instruments").found      # the BOM maker's own listing is still found
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
