@@ -538,6 +538,11 @@ def kicad_params(mpn, shared, kicad=True):
     return ([] if shared or not mpn else [("MPN", mpn)]) + ([("Library Credit", K.KICAD_CREDIT)] if kicad else [])
 
 
+def _first_up(s):
+    """'mounting hole (MountingHole_3.2mm_M3)' -> 'Mounting hole (MountingHole_3.2mm_M3)': str.capitalize() lowercased the land."""
+    return s[:1].upper() + s[1:]
+
+
 def _par(item):
     return {p["name"]: p["value"] for p in item.get("parameters", [])}
 
@@ -1071,8 +1076,10 @@ class Run:
         desc = " ".join(x for x in (bom_desc, row.get("src_description") if case and   # the source that gave this
                                     row.get("src_package_from") == row.get("src_description_from") else "") if x)   # case
         k = kind or SP.part_kind(item["folder"], item["footprint"].get("kicad") or fp_name, desc, ln.get("designator"))
-        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"),
-                          self.case_from_search(st, item, ln, row)], k, mpn, desc)
+        if case and (k == "CP" or k == "C" and SP.POLAR_CAP.match(SP._norm(mpn))):    # a tantalum's size + height
+            case = SP.tantalum_search_text(case, row.get("src_height"), mpn)            # name its EIA case
+        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"), case],
+                         k, mpn, desc)
         got = []
         if not st["footprint"] and res["footprint"]:
             sp = SP.spec(res["footprint"])
@@ -1112,7 +1119,7 @@ class Run:
                     st["found"].setdefault("description", (" ".join(x for x in (
                         "PTC resettable fuse" if key == "Polyfuse" else "Fuse", amps.group(1).replace(" ", ""),
                         package_of(land) or "") if x), "the BOM line's value and land"))
-                if not mpn and (key.startswith("MountingHole") or (key == "TestPoint" and land.startswith("TestPoint_Pad"))):
+                if not mpn and (key.startswith("MountingHole") or key == "Fiducial" or (key == "TestPoint" and land.startswith("TestPoint_Pad"))):
                     st["no_bom_part"] = f"{SP.SYMBOLS[key][2].lower()} ({land}): copper and holes only, nothing to buy"
             else:
                 res["sym_how"] = res["sym_how"] if res["symbol"] else how
@@ -1992,7 +1999,7 @@ def apply_state(item, st, ln):
     if st.get("no_bom_part"):                   # a mounting hole / test pad: no maker part (release check)
         item["no_bom_part"] = st["no_bom_part"]
         if not str(item.get("description") or "").strip():
-            item["description"], fields["Description"] = st["no_bom_part"].split(":")[0].capitalize(), "the standard symbol and its KiCad land"
+            item["description"], fields["Description"] = _first_up(st["no_bom_part"].split(":")[0]), "the standard symbol and its KiCad land"
     else:
         item.pop("no_bom_part", None)
     item["field_sources"] = fields

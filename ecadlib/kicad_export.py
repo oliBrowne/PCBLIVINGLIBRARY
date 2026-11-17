@@ -311,8 +311,9 @@ def _pick(entries, pick, path, what):
     return hit or entries[0]
 
 
-def symbol_from_schlib(path, name, notes, pick=None):
-    """First symbol of a .SchLib (or the one named pick) -> KiCad symbol tree (KiCad 8 syntax), via altium_lib.read_schlib."""
+def symbol_from_schlib(path, name, notes, pick=None, pinless=False):
+    """First symbol of a .SchLib (or the one named pick) -> KiCad symbol tree (KiCad 8 syntax), via altium_lib.read_schlib.
+    pinless: a fiducial / unplated mounting hole (the plan's no_bom_part) may have no pins; it is left out of the BOM."""
     _, syms = AL.read_schlib(path)
     if not syms:
         raise ValueError(f"{path}: no symbol")
@@ -395,14 +396,14 @@ def symbol_from_schlib(path, name, notes, pick=None):
             params.append((r["NAME"], r.get("TEXT", "")))
         if g:
             units.setdefault(owner(r), []).append(g)
-    if not pins:
+    if not pins and not pinless:
         raise ValueError(f"{path}: symbol has no pins")
     show = [p for p in pins if not p["conglomerate"] & 0x04]
     sym = ["symbol", Q(name)]
     if show and not any(p["conglomerate"] & 0x10 for p in show):
         sym.append(["pin_numbers", "hide"])
     sym.append(["pin_names", ["offset", "1.016"]] + (["hide"] if show and not any(p["conglomerate"] & 0x08 for p in show) else []))
-    sym += [["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"]]
+    sym += [["exclude_from_sim", "no"], ["in_bom", "no" if not pins else "yes"], ["on_board", "yes"]]
     # an Altium parameter's location is its bottom-left corner (no JUSTIFICATION record), so the KiCad text is too
     bl = ("left", "bottom")
     sym += [_prop("Reference", ref, False, (*ref_at, 0), bl), _prop("Value", name, False, (*value_at, 0), bl), _prop("Footprint", ""),
@@ -678,7 +679,7 @@ def load_symbol(item, plan_dir, http, libs, name, notes, rules=None, warnings=No
     if not f or not (plan_dir / f).exists():
         raise FileNotFoundError("no symbol: " + "; ".join(why or ["no source and no .SchLib"]))
     sym = symbol_from_schlib(schlib or plan_dir / f, name,   # schlib: the released copy staged by the export
-                              notes, pick=item["symbol"].get("ref"))
+                              notes, pick=item["symbol"].get("ref"), pinless=bool(item.get("no_bom_part")))
     own = item["symbol"].get("kicad_types")
     if not src.startswith(("kicad:", "local:")):
         restore_types(sym, own, notes)

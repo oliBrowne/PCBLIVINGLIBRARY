@@ -58,7 +58,8 @@ SPEC_RX = [   # (canonical, regex on the attribute name/shortname, parser); firs
     ("power", r"^power|power ?rating", si),
     ("current", r"current.*rat|rated current|currentrating|^current$", si),
     ("package", r"case|package|^size$", lambda v: package_of(v)),
-]
+    ("height_text", r"^height\b", lambda v: str(v or "").strip()[:60] or None),   # DigiKey 'Height - Seated (Max)':
+]                                                                                   # a tantalum's EIA height code
 
 
 def specs_from_pairs(pairs):
