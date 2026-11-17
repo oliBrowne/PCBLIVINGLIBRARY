@@ -78,7 +78,9 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "download": "auto",                             # a refused PDF link: other ways to download it (ecadlib.pdf_fetch)
             "web_search": True, "web_search_model": "", "web_search_max_uses": 3,   # no link worked: ecadlib.ds_search
             "web_search_package": False,                    # ... and for a package drawing the datasheet lacks
-            "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""}   # ... last, your own browser
+            "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": "",   # ... last, your own browser
+            "reader": "api"}                                # "assistant": your own assistant reads it, nothing sent (ds_assistant)
+READERS = ("api", "assistant")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # Per-model request parameters (claude-api skill, Thinking & Effort table): effort levels a model accepts (no entry
 # for a listed model = it rejects output_config.effort: Haiku 4.5, Sonnet 4.5), and the PDF page limit of
@@ -192,6 +194,9 @@ def settings(rules=None):
     """[datasheet] settings from the library rules (rules.py DEFAULTS has the same keys), over SETTINGS."""
     got = (rules or {}).get("datasheet") if isinstance(rules, dict) else None
     cfg = {**SETTINGS, **{k: v for k, v in (got or {}).items() if k in SETTINGS and v not in (None, "")}}
+    env = os.environ.get("ECADLIB_DATASHEET_READER", "").strip().lower()
+    if env in READERS:                                # one run read by your own assistant (or by the API) whatever the rules say
+        cfg["reader"] = env
     if os.environ.get("ECADLIB_NO_WEB_SEARCH"):       # one run with no billed search, whatever the rules say
         cfg["web_search"] = cfg["web_search_package"] = False
     return cfg
@@ -210,6 +215,10 @@ def cap_chosen(rules=None):
 
 class DatasheetError(Exception):
     pass
+
+
+class AssistantPending(DatasheetError):
+    """[datasheet] reader = "assistant": the read's pages are in their folder and no answer.json is there yet."""
 
 
 class APIError(DatasheetError):
@@ -4742,6 +4751,11 @@ class Reader:
         self.offline = bool(getattr(http, "offline", False))
         if self.offline:                              # --offline: no model call either (it is network, and it bills)
             self.key = None
+        from . import ds_assistant as DA              # reader = "assistant": no key, nothing sent; the pages go to a
+        self.assistant = DA.root(out) if self.cfg.get("reader") == "assistant" else None   # folder for your assistant
+        if self.assistant is not None:
+            self.key, batch = None, False             # (a key in the environment is never used in this mode)
+        self.assistant_asked = set()                  # the request folders this run asked for (READ_ME lists them)
         self._info = {}
         self.http, self.batch, self.wait, self.poll, self.max_wait_s = http, batch, wait, poll, max_wait_s
         self.estimate_only, self.yes = estimate, yes
@@ -4825,6 +4839,8 @@ class Reader:
         dropped, and searched for again); a search that found no PDF of the part is not repeated for 30 days. maker: the BOM's or a part source's manufacturer, named in the search.
         Search links must be public addresses (unsafe_download public=True). -> (data, prov) or (None, None), the
         misses in attempts."""
+        if self.assistant is not None:                # a search is billed to a key: not in assistant mode
+            return None, None
         from . import ds_search as WS
         found = WS.Found(self.dir)
         saved = found.get(part)
@@ -5637,6 +5653,9 @@ class Reader:
             try:
                 with logging_to(self.log_file, self.say):
                     msg = self._ask(job)
+            except AssistantPending:
+                self._release(job["key"])             # (nothing was sent or held: no other link is tried for it)
+                raise
             except DatasheetError as e:               # refusal / max_tokens / not schema-shaped: an answer, with usage
                 msg = getattr(e, "api_message", None)
                 if msg is None:                       # no answer came back (API error): nothing to record
@@ -5694,7 +5713,16 @@ class Reader:
 
     def _ask(self, job):
         """One answer for this step of the part's route, with the support rails (feedback_retry) and, for a guided
-        or non-PDF model, the rails its plan names (ecadlib.llm.rails)."""
+        or non-PDF model, the rails its plan names (ecadlib.llm.rails). reader = "assistant": answer.json from the
+        part's folder, else its request is written there and AssistantPending raised (ecadlib.ds_assistant)."""
+        if self.assistant is not None:
+            from . import ds_assistant as DA
+            msg = DA.answer(self.assistant, job)
+            self.assistant_asked.add(DA.folder(self.assistant, job).name)
+            if msg is None:
+                d = DA.request(self.assistant, job)
+                raise AssistantPending(f"waiting for your assistant to read it: {d} (see {DA.README} there)")
+            return msg
         from .llm import run as LR
         inf = self.info(job.get("model") or self.model)
         send, cl = self._send_fn(job)
@@ -5913,6 +5941,8 @@ class Reader:
 
     def _guard_cost(self, jobs):
         """[datasheet] max_cost_usd over everything this Reader sends (batches and synchronous calls together)."""
+        if self.assistant is not None:                # reader = "assistant": nothing is sent, nothing costs
+            return
         cap = self._cap()
         if not cap or not jobs:                       # --yes does not lift the cap: a scripted run keeps its ceiling
             return
