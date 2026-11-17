@@ -394,7 +394,7 @@ class KiCadLibrary:
                     continue                           # '101xx', '03xxS': too little fixed text to name a part
                 rx = "".join(f"[A-Z0-9]{{{len(c)}}}" if re.fullmatch(r"x{2,}", c) else re.escape(c.upper()) for c in bits)
                 full = re.fullmatch(rx, flat) or (not wild and rx[:1] == "0" and re.fullmatch(rx.lstrip("0"), flat))
-                by_stem = stem_ok and stem and stem in {t.upper()} | set(t.upper().split("-")[1:2]) \
+                by_stem = stem_ok and stem and stem in {t.upper(), coil_series(t)} | set(t.upper().split("-")[1:2]) \
                     and not re.search(r"(?i)CommonMode|Choke|Coupled|Array", name)   # a 2-pad inductor's series
                 ordered = not wild and "-" in t and re.search(r"[A-Za-z]", t) and len(fixed) >= 6 \
                     and m.startswith(t.upper() + "-")             # JST S2B-PH-K + '-S(LF)(SN)': its ordering code
@@ -1817,6 +1817,13 @@ def diode_land_numbering(sym_lib, pins, land):
             names.get("2") in ("A", "ANODE") and bool(re.match(r"D_", str(land or "").split(":")[-1])))
 
 
+def coil_series(token):
+    """KiCad's Coilcraft inductor lands carry an upper-case value wildcard: 'XAL4020-XXX' is the XAL4020 series, any
+    value (KiCad's lower-case 'xx' wildcards are read by footprint_by_series itself) -> 'XAL4020', else ''."""
+    m = re.fullmatch(r"([A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*\d[A-Za-z0-9]*)-X{3}", str(token or ""))
+    return m.group(1).upper() if m else ""
+
+
 def land_named_after(land_ref, mpn, kind, case=""):
     """Is a KiCad footprint picked by name the land of this very part, so no person needs to compare it?
       whole MPN  the footprint's part-number token (the first one, as footprint_by_series reads it) is the whole MPN
@@ -1846,7 +1853,7 @@ def land_named_after(land_ref, mpn, kind, case=""):
         value = r"\d+(?:\.\d+)?MHZ(?:-[A-Z0-9]{1,4}){0,3}"
     else:
         return False
-    for series in {re.sub(r"(?i)-\d+Pin$", "", tok), tok.split("-")[-1]}:
+    for series in {re.sub(r"(?i)-\d+Pin$", "", tok), tok.split("-")[-1]} | ({coil_series(tok)} if kind == "L" else set()):
         series = series.upper()
         if len(re.sub(r"[^A-Z0-9]", "", series)) >= 4 and re.search(r"[A-Z]", series) and re.search(r"\d", series) \
                 and re.fullmatch(re.escape(series) + "-" + value, m):
