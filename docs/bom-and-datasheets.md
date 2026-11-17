@@ -122,6 +122,21 @@ python3 -m tests.test_datasheet
 
 Claude reads the package drawing and pin table and returns every dimension as printed (min/nom/max plus unit), with the PDF page and figure it came from, through a structured-output schema derived from `package_schema.json`. The tool converts inches and mils to mm, then runs schema validation, `footprint_gen.validate`/`build`, sanity rules (pin count vs pin table, pitch x pins vs body, min <= nom <= max, unit plausibility) and symbol checks (unique pins, 1..N plus EP). Anything that fails goes in `needs_review`; nothing is corrected. Outputs: the package spec, the symbol JSON, a provenance sidecar, a review checklist (.md) and the raw response. The PDF is treated as untrusted data. Exit code 0 when clean, 2 when something needs review, 1 on error.
 
+### No API key: your own assistant reads the datasheets (`ds_assistant.py`)
+
+`ecadlib librarian my_bom.csv --read-with-assistant` (or `[datasheet] reader = "assistant"`, or `ECADLIB_DATASHEET_READER=assistant` for one run) sends nothing to any AI service and costs nothing. Every datasheet read the run needs is written to a folder instead, exactly as a model would get it:
+
+```
+<plan folder>/datasheet/assistant/READ_ME.md        what to do, and each read still waiting
+<plan folder>/datasheet/assistant/<part>-<key>/
+    request.md     the instructions (the model's system prompt) and the task for this part
+    sent.pdf       the PDF pages a model would be sent (page-01.png ... the same pages as pictures)
+    schema.json    the shape the answer must have
+    answer.json    <- your assistant writes this
+```
+
+Point any assistant that reads PDFs or images at the folder (Claude Code, Claude Desktop, another chat) and ask it to answer each `request.md`. Run the same librarian command again: each `answer.json` is read exactly as a model's answer would be, with the same checks, holds and release rules (a footprint from a read is released with no person's look only when an independent source agrees). Answers go into the result cache, so they are not asked for again. A part whose first answer left something out gets a new folder asking for more pages. Not made in this mode: the cross-check's paid second read and the web search for a missing PDF; `--datasheet-batch` is refused with it. A key in the environment is never used.
+
 ### A whole BOM in one batch
 
 ```

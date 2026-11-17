@@ -1339,7 +1339,7 @@ class Run:
                 return
             self.put_datasheet(st, res, job, fp_name, sym_name, "cached")
             return
-        if not rd.key and not rd.estimate_only:
+        if not rd.key and not rd.estimate_only and getattr(rd, "assistant", None) is None:
             st["tried"].append(f"needs datasheet reader (no API key): {first[0]} ({first[1]})")
             return
         if not getattr(rd, "_recollected", False):    # answers paid for in earlier batches, before a parser fix
@@ -2235,6 +2235,12 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
             save_state()
         raise
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
+    if getattr(r.reader, "assistant", None) is not None:   # [datasheet] reader = "assistant": what waits for it
+        from . import ds_assistant as DA
+        wait = DA.index(r.reader.assistant, r.reader.assistant_asked)
+        if wait:
+            log(f"  {len(wait)} datasheet read(s) wait for your assistant: {r.reader.assistant / DA.README} says how "
+                "to answer them; then run this again")
     if todo:
         save_state()                           # a stop while the summary is logged keeps them too
     from . import ledger as LG                 # the library lock across the whole block, then plan.lock (fsutil's order):
@@ -2368,6 +2374,9 @@ def main(argv=None):
     ap.add_argument("--datasheet-batch", action="store_true",
                     help="read every datasheet still needed as one Message Batch (half price; waits for it, see --datasheet-no-wait)")
     ap.add_argument("--datasheet-no-wait", action="store_true", help="submit the batch and finish; re-run to collect it")
+    ap.add_argument("--read-with-assistant", action="store_true",
+                    help="send nothing to any AI service: write each datasheet read's pages to <out>/datasheet/assistant/ "
+                         "for your own assistant to answer (answer.json), then run again ([datasheet] reader = \"assistant\")")
     ap.add_argument("--json", action="store_true", help='print {"plan", "review", "parts", "ready", "held", "blockers"} instead of the log')
     a = ap.parse_args(argv)
     from . import firstrun as FR
@@ -2378,6 +2387,12 @@ def main(argv=None):
         print(f"note: {a.out} holds the plan for {other}; it is replaced by {Path(a.bom).name}'s "
               f"(give each BOM its own -o folder to keep both)", file=sys.stderr)
     rules = RU.load(a.rules, start=FR.rules_start(a.out, given_out))
+    if a.read_with_assistant:
+        if a.datasheet_batch:
+            print("ecadlib librarian: --read-with-assistant sends nothing, so there is no batch: drop --datasheet-batch",
+                  file=sys.stderr)
+            return 2
+        rules = dict(rules or {}, datasheet=dict((rules or {}).get("datasheet") or {}, reader="assistant"))
     reader = None
     if a.datasheet_batch:
         reader = D.Reader(a.out, a.cache, None, rules, CachedHTTP(a.cache, min_interval=a.rate, offline=a.offline, timeout=60),
@@ -2397,6 +2412,12 @@ def main(argv=None):
         from .firstrun import bom_hint
         print(f"ecadlib librarian: {e}" + bom_hint(e), file=sys.stderr)
         return 2
+    if D.settings(rules).get("reader") == "assistant" and not a.json:   # said on every terminal (the log may be quiet)
+        from . import ds_assistant as DA
+        wait = DA.waiting(DA.root(a.out))
+        if wait:
+            print(f"{len(wait)} datasheet read(s) wait for your assistant: see {DA.root(a.out) / DA.README}, "
+                  "then run this command again", file=sys.stderr)
     from .firstrun import blockers
     held = sum(i["status"] != "ready" for i in items)
     why = blockers(review_rows(items), rules, a.offline)

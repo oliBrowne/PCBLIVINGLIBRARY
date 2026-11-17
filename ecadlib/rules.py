@@ -99,7 +99,10 @@ DEFAULTS = {
                   "web_search_package": False,
                   # last: open the link in your own browser and take the PDF from Downloads ("auto": when a person is
                   # watching the run in a terminal; "off"), waiting this long; "" = the system Downloads folder
-                  "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": ""},
+                  "handoff": "auto", "handoff_wait_s": 180, "downloads_folder": "",
+                  # who reads a datasheet: "api" (a model through its API, billed to your key) or "assistant" (nothing
+                  # sent: each read's pages go to <plan>/datasheet/assistant/ for your own assistant to answer)
+                  "reader": "api"},
     "symbols": {                               # ecadlib.symbol_layout: IC symbol pins grouped by function
         "layout_pins": 1,                      # parts with at least this many pins get grouped (0 = never)
         "power_side": "top",                   # top: power top, ground bottom | left: both on the left side, top and bottom empty
@@ -446,6 +449,9 @@ def validate(raw, where="ecadlib.toml"):
         if not ok:
             _err(where, "datasheet.download", f"= {dl!r}: must be \"auto\" (every way, in order), \"plain\" (ecadlib's own "
                                               f"request only) or a list of {', '.join(_PF.TIERS)}")
+    if "reader" in ds and ds["reader"] not in ("api", "assistant"):
+        _err(where, "datasheet.reader", f"= {ds['reader']!r}: must be api (a model through its API, billed to your key) "
+                                        "or assistant (your own assistant answers each read from its folder; nothing sent)")
     if "handoff" in ds and ds["handoff"] not in ("auto", "off"):
         _err(where, "datasheet.handoff", f"= {ds['handoff']!r}: must be auto (open a refused link in your browser when "
                                          "you are watching the run) or off")
