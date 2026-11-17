@@ -1284,6 +1284,13 @@ def to_spec(pkg, part, datasheet, model, offset, review):
             unres.append(k.replace("|", " or "))
     if unres:
         spec["unresolved"] = sorted(set(unres))
+    turned, notes = F.orient_dfn(spec)
+    if notes:                                         # a 2-row DFN lettered the other way round: advice, not a failure
+        spec = turned
+        for a, b in (("body_length", "body_width"), ("exposed_pad.length", "exposed_pad.width")):
+            if a in prov or b in prov:                # the labels (D, E) go with the numbers they were printed on
+                prov[a], prov[b] = prov.get(b), prov.get(a)
+        review.extend(f"turned: {n}" for n in notes)
     return spec, prov
 
 
@@ -1300,8 +1307,9 @@ def build_blockers(spec):
     courtyard_excess are never among them): what a hold must name, whatever the read listed as unresolved."""
     t = spec.get("package_type")
     keys = [] if t in NO_BODY else ["body_length", "body_width"]
-    keys += ["terminal_length|inner_span"] if t in ("chip", "molded") else \
-        ["terminal_length"] if t in LINEAR_TYPES and not F.land_sizes_leads(spec) else []
+    if not F.land_sizes_leads(spec):                  # (the maker's whole lead land: no terminal needed, NRS4018)
+        keys += ["terminal_length|inner_span"] if t in ("chip", "molded") else \
+            ["terminal_length"] if t in LINEAR_TYPES else []
     need = list(NEED.get(t, []))
     if t in ("gullwing", "qfp", "qfn") and not spec.get("pin_positions"):
         need.insert(0, "pin_count")
@@ -5102,6 +5110,12 @@ class Reader:
         # once no link gave a PDF, before the person is asked for one; a file named for another part number comes last
         # (a folder set but not there, or not readable, is said in the part's review and error; the links go on)
         data, prov, how = self._folder_pdf(part, urls, ("exact",), attempts)
+        if data is None and self.assistant is not None:   # a PDF your assistant downloaded where its request asked
+            from . import ds_assistant as DA
+            got = self._folder_pdf(part, urls, ("exact",), attempts, folder=DA.pdf_folder(self.assistant))
+            if got[0] is not None:
+                how = got[2].replace("in the datasheet folder", "saved by your assistant (datasheet/assistant/pdfs)")
+                data, prov = got[0], dict(got[1], where=how)
         note = folder_problem(self.cfg.get("folder")) if data is None else None
         tries = [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))] if data is None else []
         for url, where in tries:                      # http, then https
@@ -5204,21 +5218,22 @@ class Reader:
                     more_urls=rest[1:])
         return self._walk(self._at(base, job["rung"], job["level"]))
 
-    def _folder_pdf(self, part, urls, kinds, attempts):
-        """The part's PDF from the [datasheet] folder when a file there is one of `kinds` of match (local_datasheet)
-        -> (bytes, prov, how) or (None, None, why). A file that does not read or is not a PDF goes into attempts. The
-        part keeps its first public link; prov names the file, never a path on this machine."""
-        f, how = local_datasheet(self.cfg.get("folder"), part, kinds)
+    def _folder_pdf(self, part, urls, kinds, attempts, folder=None):
+        """The part's PDF from the [datasheet] folder (or `folder`: the assistant's pdfs folder) when a file there is
+        one of `kinds` of match (local_datasheet) -> (bytes, prov, how) or (None, None, why). A file that does not read
+        or is not a PDF goes into attempts. The part keeps its first public link; prov names the file, never a path on
+        this machine."""
+        f, how = local_datasheet(folder or self.cfg.get("folder"), part, kinds)
         if f is None:
             return None, None, how
+        place = "your assistant's pdfs folder" if folder else "your [datasheet] folder"
         try:                                          # (said first in the review: asking for <MPN>.pdf again would loop)
             data = f.read_bytes()
         except OSError as e:
-            data, err = None, (f"{f.name} in your [datasheet] folder cannot be read ({type(e).__name__}): replace it "
-                               "with the PDF")
+            data, err = None, (f"{f.name} in {place} cannot be read ({type(e).__name__}): replace it with the PDF")
         else:
-            err = None if is_pdf(data) else (f"{f.name} in your [datasheet] folder is not a PDF (a web page saved as "
-                                             ".pdf?): replace it with the PDF")
+            err = None if is_pdf(data) else (f"{f.name} in {place} is not a PDF (a web page saved as .pdf?): replace "
+                                             "it with the PDF")
         if err:
             attempts.append({"url": f.name, "where": "datasheet folder", "error": err})
             return None, None, err

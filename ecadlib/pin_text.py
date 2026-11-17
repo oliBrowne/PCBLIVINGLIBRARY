@@ -114,17 +114,46 @@ def variant_columns(lines, col):
     return ", ".join(out)
 
 
-def check(page_texts, pins):
-    """page_texts: {page number: text}; pins: [(num, name)] -> verdict dict (see the module doc)."""
+def _top(rows, pins):
+    """The highest pin number printed on the lines of `rows` that name one of `pins` (0 when none)."""
+    names, top = {norm_name(nm) for _, nm in pins}, 0
+    for cells, nums in rows:                          # a table row only: the name is all that comes before the numbers
+        before = cells[:nums[0][0]]                   # ("4OUT 20 Output"), or what starts after them ("1 OUTA ..."),
+        after = cells[nums[-1][0] + 1:][:3]           # never a name inside a sentence or a spec line ("VCC supply
+        cand = {norm_name("".join(before))} if before else {norm_name("".join(after[:j])) for j in (1, 2, 3)}
+        if not before and not after or not cand & names:    # current 25 100")
+            continue
+        top = max([top] + [int(x) for _, c in nums for x in _numbers(c) if x.isdigit()])
+    return top
+
+
+def _figure_rows(text):
+    """figure_lines' "NAME NUMBER" lines as _rows gives a table's (a name such as E0 or A1 is not taken for a number)."""
+    rows = []
+    for line in str(text or "").splitlines():
+        cells = line.split()
+        if len(cells) >= 2 and _INT.match(cells[-1]):
+            rows.append((cells, [(len(cells) - 1, cells[-1])]))
+    return rows
+
+
+def check(page_texts, pins, figures=(), pin_count=None):
+    """page_texts: {page number: text}; pins: [(num, name)]; figures: [(page, text)] of pinout drawings
+    (figure_lines), each read as a table of its own; pin_count: the package's, when known -> verdict dict (see the
+    module doc). A table elsewhere that names these pins otherwise but prints a pin number above this part's highest
+    (TL074's 20-pin LCCC table after its 14-pin SOIC one) is another package's: it is not a doubt about this one."""
     pins = [(str(n).strip(), str(nm or "").strip()) for n, nm in pins or [] if str(n).strip()]
+    most = max([int(n) for n, _ in pins if n.isdigit()] + [pin_count if isinstance(pin_count, int) else 0])
     pins = [(n, nm) for n, nm in pins if nm and not NC.match(nm)]
     if len(pins) < 2:
         return {"status": "unchecked", "why": "fewer than two named pins to compare"}
-    if not any(str(t or "").strip() for t in (page_texts or {}).values()):
+    units = sorted((page_texts or {}).items()) + [(pg, t) for pg, t in figures or ()]
+    if not any(str(t or "").strip() for _, t in units):
         return {"status": "unchecked", "why": "the PDF has no text layer (scanned?)"}
     best, agreed, conflicts = None, None, []
-    for page, text in sorted((page_texts or {}).items()):
-        rows = _rows(text)
+    for i, (page, text) in enumerate(units):
+        drawn = i >= len(units) - len(figures or ())
+        rows = _figure_rows(text) if drawn else _rows(text)
         if not rows:
             continue
         lines = [{} for _ in pins]
@@ -143,9 +172,12 @@ def check(page_texts, pins):
                         "why": f"page {page}'s table gives these pins other numbers in another column ({other}): which "
                                "column is this part's package or variant is not in the text"}
             if agreed is None:
-                agreed = {"status": "agreed", "page": page, "column": col, "pins": len(pins)}
+                agreed = {"status": "agreed", "page": page, "column": col, "pins": len(pins),
+                          "where": "pin drawing" if drawn else "pin table"}
             continue
         miss = [f"{nm}={n}" for (n, nm), (cols, _) in zip(pins, per) if not cols]
+        if miss and most and _top(rows, pins) > most:  # a bigger package's table (TL074M's 20-pin LCCC): not this one
+            continue
         if miss:                                       # every pin named on this page, some only with other numbers:
             conflicts.append((page, miss))             # maybe another variant's table (MCP6L01 / MCP6L01R on two pages)
         if agreed is not None:
@@ -167,6 +199,123 @@ def check(page_texts, pins):
     if best is None:
         return {"status": "unchecked", "why": "no pin table found in the text layer"}
     return {"status": "unchecked", "why": best[2] or f"page {best[0]} names {best[1]} of {len(pins)} pins"}
+
+
+_INT = re.compile(r"^\d{1,3}$")
+_NAME = re.compile(r"^[A-Za-z0-9+\-−–_/#~.()]{1,12}$")
+
+
+def _merged(runs):
+    """Text runs (x, y, text, size) with a name split across runs joined (pypdf gives "V" and the subscript "CC" as
+    two, the subscript a little lower): a run that starts where an earlier one on its line ends. Pin numbers are never
+    joined."""
+    out = []
+    for x, y, t, sz in sorted(runs, key=lambda r: r[0]):
+        for i, (px, py, pt, psz) in enumerate(out):
+            if not _INT.match(t) and not _INT.match(pt) and abs(y - py) <= 0.45 * psz \
+                    and -0.5 <= x - (px + 0.6 * psz * len(pt)) <= 0.3 * psz:
+                out[i] = (px, py, pt + t, psz)
+                break
+        else:
+            out.append((x, y, t, sz))
+    return out
+
+
+def figure_lines(runs):
+    """Pinout drawings on one page -> one text per drawing, "NAME NUMBER" a line, for check(figures=...).
+    runs: [(x, y, text, size)] as the PDF places its text (page_figures). A drawing is columns of pin numbers (each
+    column at least two numbers one above the other, at one x) whose numbers together are exactly 1..K, each once
+    (a lone number beside them, SOT-23's pin 3, joins when it completes the run). Each number takes the one name on its
+    line nearest to it, when that name is clearly nearer (1.6 x) than any other on the line and its own nearest
+    number is this one: a name halfway between two numbers is left out (unchecked, never guessed). Rotated text
+    (a QFN's top and bottom rows) is not read here."""
+    runs = _merged(runs)
+    nums = [(x, y, int(t), sz) for x, y, t, sz in runs if _INT.match(t) and 0 < int(t) <= 300]
+    names = [(x, y, t, sz) for x, y, t, sz in runs if not _INT.match(t) and _NAME.match(t)]
+    cols = []                                          # numbers at one x (left or right edge), one above the other
+    for n in sorted(nums, key=lambda r: (r[0], -r[1])):
+        for c in cols:
+            if abs(c[0][0] - n[0]) <= 1.5 or abs(c[0][0] + 0.6 * c[0][3] * len(str(c[0][2]))
+                                                   - n[0] - 0.6 * n[3] * len(str(n[2]))) <= 1.5:
+                c.append(n)
+                break
+        else:
+            cols.append([n])
+    cols = [c for c in cols if len(c) >= 2 and len({round(r[1]) for r in c}) == len(c)]
+    figs = []                                          # columns side by side (rows overlapping, under 250 pt apart)
+    for c in sorted(cols, key=lambda c: c[0][0]):
+        lo, hi = min(r[1] for r in c), max(r[1] for r in c)
+        for f in figs:
+            if lo <= f["hi"] + 1 and hi >= f["lo"] - 1 and c[0][0] - f["x"] < 250:
+                f["nums"] += c
+                f["lo"], f["hi"], f["x"] = min(lo, f["lo"]), max(hi, f["hi"]), c[0][0]
+                break
+        else:
+            figs.append({"nums": list(c), "lo": lo, "hi": hi, "x0": c[0][0], "x": c[0][0]})
+    out = []
+    for f in figs:
+        have = {r[2] for r in f["nums"]}
+        k = max(have)
+        for n in nums:                                 # a lone number completing 1..K (SOT-23's pin 3)
+            if n not in f["nums"] and (n[2] == k + 1 or n[2] not in have) and n[2] <= k + 1 \
+                    and f["lo"] - 2 <= n[1] <= f["hi"] + 2 and f["x0"] - 150 <= n[0] <= f["x"] + 150:
+                f["nums"].append(n)
+                have.add(n[2])
+                k = max(have)
+        vals = [r[2] for r in f["nums"]]
+        if sorted(vals) != list(range(1, len(vals) + 1)) or len(vals) < 3:
+            continue
+        line_of = lambda a, b: abs(a[1] - b[1]) <= 0.45 * max(a[3], b[3]) + 0.5
+        lines = []
+        for n in f["nums"]:
+            near = sorted((abs(m[0] - n[0]), m) for m in names if line_of(m, n) and abs(m[0] - n[0]) <= 60)
+            if not near or len(near) > 1 and near[1][0] < 1.6 * near[0][0]:
+                continue
+            nm = near[0][1]
+            mine = sorted((abs(nm[0] - o[0]), o[2]) for o in nums if line_of(nm, o))
+            if mine[0][1] != n[2] or len(mine) > 1 and mine[1][0] < 1.6 * mine[0][0]:
+                continue                               # the name is another number's, or halfway between two
+            lines.append(f"{nm[2]} {n[2]}")
+        if lines:
+            out.append("\n".join(lines))
+    return out
+
+
+def check_pdf(pdf_bytes, pins, pin_count=None):
+    """check() on a PDF: its text layer's tables and its pinout drawings (page_figures). No PDF: unchecked."""
+    if not pdf_bytes:
+        return check({}, pins)
+    return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count)
+
+
+def page_figures(pdf_bytes, limit=80):
+    """[(page, text)] of the pinout drawings in the PDF (figure_lines on each page's placed text), or [] when it
+    cannot be read."""
+    try:
+        import io, logging
+        import pypdf
+        logging.getLogger("pypdf").setLevel(logging.ERROR)
+        rd = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    except Exception:
+        return []
+    out = []
+    for i, p in enumerate(rd.pages[:limit], 1):
+        runs = []
+
+        def seen(text, cm, tm, fd, fs, _r=runs):
+            t = str(text or "").strip()
+            if not t or "\n" in t:
+                return
+            m = pypdf.mult(tm, cm)
+            if abs(m[1]) > 0.01 or abs(m[2]) > 0.01 or m[0] <= 0:      # rotated or mirrored text: not read here
+                return
+            _r.append((m[4], m[5], t, fs * m[0] if fs else m[0]))
+        try:
+            p.extract_text(visitor_text=seen)
+        except Exception:
+            continue
+        out += [(i, f) for f in figure_lines(runs)]
+    return out
 
 
 def page_texts(pdf_bytes, limit=80):
