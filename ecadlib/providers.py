@@ -15,7 +15,7 @@ against the live sites every week):
   * EasyEDA      - GET component JSON by LCSC number; the only free source of ready symbol / footprint / 3D data
 Stubs (document auth, raise NotConfigured without keys): SnapMagic, SamacSys (no self-serve public API).
 All response bodies are untrusted: parsed as JSON only, fields read defensively."""
-import json, os, re, unicodedata
+import json, os, re, time, unicodedata
 from dataclasses import dataclass, field
 from . import userconfig as UC
 
@@ -561,20 +561,44 @@ class DigiKey(_Official):
     client_cls = "DigiKeySourcing"
     TOKEN_URL = "https://api.digikey.com/v1/oauth2/token"
     _token = _token_err = None
+    _token_due = 0.0                       # time.monotonic() after which the token is renewed before use
 
     def token(self):
+        """DigiKey's client-credentials token lasts about ten minutes (expires_in), so a long run renews it."""
+        if self._token and time.monotonic() >= self._token_due:
+            self._token = None
         if not (self._token or self._token_err):
             from urllib.parse import urlencode
             body = urlencode({"client_id": UC.secret("DIGIKEY_CLIENT_ID"), "client_secret": UC.secret("DIGIKEY_CLIENT_SECRET"),
                               "grant_type": "client_credentials"})
             r = self.http.post(self.TOKEN_URL, body, cache=False, headers={"Content-Type": "application/x-www-form-urlencoded"})
             try:
-                self._token = r.json().get("access_token") if r.ok else None
+                d = r.json() if r.ok else {}
             except ValueError:
-                pass
+                d = {}
+            d = d if isinstance(d, dict) else {}
+            tok = d.get("access_token")
+            self._token = tok if isinstance(tok, str) and tok else None
+            try:                                   # an odd expires_in never throws away a good token: assume ten minutes
+                life = float(d.get("expires_in", 600))
+            except (ValueError, TypeError):
+                life = 600.0
+            if life != life or life < 0 or life == float("inf"):
+                life = 600.0
             if not self._token:
                 self._token_err = f"token request failed: {r.error or f'HTTP {r.status}'}"
+            self._token_due = time.monotonic() + max(0.0, life - 60)      # a minute early, never mid-request
         return self._token
+
+    def authed_get(self, url, headers):
+        """GET with the bearer token; a 401 (DigiKey ended the token early) renews it once and asks again.
+        headers: a function of the token, so the retry carries the new one."""
+        r = self.http.get(url, headers=headers(self._token))
+        if r.status == 401:
+            self._token = None
+            if self.token():
+                r = self.http.get(url, headers=headers(self._token))
+        return r
 
 
 class Mouser(_Official):

@@ -186,8 +186,8 @@ class DigiKeyLifecycle(P.DigiKey):
         if not self.token():
             res.error = self._token_err
             return res
-        r = self.http.get(self.URL.format(quote(part["mpn"], safe="")), headers={
-            "X-DIGIKEY-Client-Id": UC.secret("DIGIKEY_CLIENT_ID"), "Authorization": f"Bearer {self._token}",
+        r = self.authed_get(self.URL.format(quote(part["mpn"], safe="")), lambda tok: {
+            "X-DIGIKEY-Client-Id": UC.secret("DIGIKEY_CLIENT_ID"), "Authorization": f"Bearer {tok}",
             "Accept": "application/json"})
         if r.status == 404:
             res.found = False

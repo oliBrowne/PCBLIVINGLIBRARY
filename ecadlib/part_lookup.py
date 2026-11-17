@@ -278,8 +278,8 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
     SUBS_URL = "https://api.digikey.com/products/v4/search/{}/substitutions"
     country, currency = "US", "USD"
 
-    def _headers(self):
-        return {"X-DIGIKEY-Client-Id": UC.secret("DIGIKEY_CLIENT_ID"), "Authorization": f"Bearer {self._token}",
+    def _headers(self, tok=None):
+        return {"X-DIGIKEY-Client-Id": UC.secret("DIGIKEY_CLIENT_ID"), "Authorization": f"Bearer {tok or self._token}",
                 "Accept": "application/json", "Content-Type": "application/json",
                 "X-DIGIKEY-Locale-Site": self.country, "X-DIGIKEY-Locale-Currency": self.currency}
 
@@ -296,7 +296,7 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
         if not p["mpn"]:
             res.error = "no MPN"
             return res
-        r = self.http.get(self.URL.format(quote(p["mpn"], safe="")), headers=self._headers())
+        r = self.authed_get(self.URL.format(quote(p["mpn"], safe="")), self._headers)
         if r.status == 404:
             res.found = False
             return res
