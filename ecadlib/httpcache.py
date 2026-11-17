@@ -14,8 +14,9 @@ UA = "ecad-librarian-prototype/0.1 (+https://github.com/; contact: maintainers)"
 
 
 class Response:
-    def __init__(self, status, text, from_cache=False, error=None):
+    def __init__(self, status, text, from_cache=False, error=None, headers=None):
         self.status, self.text, self.from_cache, self.error = status, text, from_cache, error
+        self.headers = headers or {}       # a live answer's headers (Retry-After); a cached one keeps none
 
     @property
     def ok(self):
@@ -192,7 +193,7 @@ class CachedHTTP:
             tmp.write_text(json.dumps({"url": redact(url), "status": r.status_code, "text": r.text}), encoding="utf-8")
             os.replace(tmp, f)                                                       # threads fetching one URL never share one
         return Response(r.status_code, r.text, error=None if r.ok or r.status_code == 404
-                        else f"HTTP {r.status_code}")
+                        else f"HTTP {r.status_code}", headers=dict(getattr(r, "headers", None) or {}))
 
     def get(self, url, **kw):
         return self.request("GET", url, **kw)

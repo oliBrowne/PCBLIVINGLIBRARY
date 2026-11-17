@@ -9,7 +9,7 @@ DIGIKEY_CLIENT_ID/DIGIKEY_CLIENT_SECRET, MOUSER_API_KEY. JLCPCB needs none. Resp
 (query-string secrets such as Mouser's apiKey are redacted from cache keys and files; token requests are never
 cached). Response shapes: each provider's `shapes` says what was checked against public docs or the Nexar schema
 and what is assumed."""
-import json, re
+import json, re, time
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
@@ -289,19 +289,68 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
             raise P.NotConfigured(f"{self.name}: set {', '.join(self.env)} ({self.auth})")
         return self.token()
 
+    # DigiKey answers HTTP 429 for two limits: a per-minute one (wait the seconds it names, then ask again) and the free
+    # plan's 1000 a day (hours): that one ends DigiKey's use for the rest of the run, so the other lines are not each
+    # sent to be refused, and every line it leaves says so (the next run, after the reset, asks only for those: the
+    # answers already had are in the HTTP cache)
+    BURST_MAX = 61.0                     # s: a 429 asking for a longer wait than this is the daily limit
+    sleep = staticmethod(time.sleep)
+    _spent = ""                          # the daily-limit error once DigiKey has given it in this run
+    _spent_until = 0.0                   # time.monotonic() when DigiKey said it resets (a long-running app asks again)
+
+    @property
+    def spent(self):
+        """The daily-limit error while DigiKey's allowance is used up, else ''."""
+        return self._spent if self._spent and time.monotonic() < self._spent_until else ""
+
+    @staticmethod
+    def _limit_seconds(r):
+        """How long a 429 says to wait (Retry-After header, else DigiKey's 'Retry in N seconds'), or None."""
+        h = getattr(r, "headers", None) or {}
+        v = next((str(x) for k, x in h.items() if str(k).lower() == "retry-after"), "")
+        if not re.fullmatch(r"\s*\d+(\.\d+)?\s*", v):
+            m = re.search(r"(?i)retry\s+in\s+(\d+(?:\.\d+)?)\s*s", str(getattr(r, "text", "") or "")[:2000])
+            v = m.group(1) if m else ""
+        try:
+            return float(v) if v.strip() else None
+        except ValueError:
+            return None
+
+    def _limit_wait(self, r):
+        """Seconds to wait before asking again after this 429, or None (no wait named, or the daily limit)."""
+        s = self._limit_seconds(r)
+        return s if s is not None and s <= self.BURST_MAX else None
+
+    def _paced(self, send):
+        """send() once; a per-minute 429 is waited out and asked once more; a daily one marks DigiKey spent."""
+        r = send()
+        if r.status != 429:
+            return r
+        w = self._limit_wait(r)
+        if w is not None:
+            self.sleep(max(w, 1.0))
+            r = send()
+            if r.status != 429:
+                return r
+        s = self._limit_seconds(r)
+        if s is not None and s > self.BURST_MAX:
+            self._spent = _digikey_error(r) + "; not asked again this run"
+            self._spent_until = time.monotonic() + s
+        return r
+
     def _shared(self, p, res):
         """productdetails found nothing: the keyword search lists every maker's listing of exactly this number. The
         case comes only from the BOM maker's own listing, or, with no maker on the line, only when every listing's case
         is the same (onsemi's SS34 is SMC, Vishay's is SMA). A renamed part (another number) is never taken."""
         res.found = False
         body = json.dumps({"Keywords": p["mpn"], "Limit": 10, "Offset": 0})
-        r = self.http.post(self.KEYWORD_URL, body, headers=self._headers())
+        r = self._paced(lambda: self.http.post(self.KEYWORD_URL, body, headers=self._headers()))
         if r.status == 401:                        # the token ran out between the two requests: renew once
             self._token = None
             if self.token():
-                r = self.http.post(self.KEYWORD_URL, body, headers=self._headers())
+                r = self._paced(lambda: self.http.post(self.KEYWORD_URL, body, headers=self._headers()))
         if not r.ok:
-            res.found, res.error = None, _digikey_error(r)
+            res.found, res.error = None, (self.spent or _digikey_error(r)) if r.status == 429 else _digikey_error(r)
             return res
         try:
             d = r.json()
@@ -337,11 +386,14 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
         if not p["mpn"]:
             res.error = "no MPN"
             return res
-        r = self.authed_get(self.URL.format(quote(p["mpn"], safe="")), self._headers)
+        if self.spent:                             # the daily allowance is used up: no line is sent to be refused
+            res.error = self.spent
+            return res
+        r = self._paced(lambda: self.authed_get(self.URL.format(quote(p["mpn"], safe="")), self._headers))
         if r.status == 404:                        # also what productdetails says when several makers sell this number
             return self._shared(p, res)
         if not r.ok:
-            res.error = _digikey_error(r)
+            res.error = (self.spent or _digikey_error(r)) if r.status == 429 else _digikey_error(r)
             return res
         try:
             d = r.json()
@@ -357,6 +409,9 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
 
 def _digikey_error(r):
     if r.status == 429:
+        s = DigiKeySourcing._limit_seconds(r)
+        if s is not None and s <= DigiKeySourcing.BURST_MAX:
+            return "DigiKey: HTTP 429: per-minute request limit reached (asked again after the wait it named)"
         return "DigiKey: HTTP 429: request limit reached (the free plan allows 1000 a day; it resets at midnight UTC)"
     return L._http_error(L.LifecycleResult("digikey"), r).error
 

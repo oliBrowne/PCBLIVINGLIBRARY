@@ -1402,19 +1402,27 @@ def triage(lines, index, provs, http, shared=None):
     return rows
 
 
-SLASH_CASE = re.compile(r"^\s*([A-Z0-9][A-Z0-9.+-]*)/([A-Z0-9][A-Z0-9-]*(?:/[A-Z0-9][A-Z0-9-]*)*)(?=\s|$)", re.I)
+SLASH_CASE = re.compile(r"(?<!\S)([A-Z0-9][A-Z0-9.+-]*)/([A-Z0-9][A-Z0-9-]*(?:/[A-Z0-9][A-Z0-9-]*)*)(?=\s|$|/)", re.I)
+# the first code after the type names a package family (SOT23, SOD323F, SO16, LQFP100, HVQFN24, CFP3, TO-236AB), never a
+# reel or lead-free code ('/2K5', '/NOPB', '/TR7'), which would be read as a case no land has
+SLASH_PKG = re.compile(r"(?i)^(SOT|SOD|SOJ|SO|SSOP|TSSOP|MSOP|VSSOP|TSOP|QFN|HVQFN|DHVQFN|DFN|XQFN|XSON|HXSON|SON|LQFP|TQFP|"
+                       r"QFP|HTQFP|BGA|TFBGA|LFBGA|WLCSP|CSP|DIP|SDIP|TO|SC|CFP|UMT|SMA|SMB|SMC|DO|MELF|SMD)-?\d")
 
 
 def slash_case(desc, mpn):
     """Mouser's description of NXP / Nexperia parts names the case after the type: 'BC847C/SOT23/TO-236AB',
-    '74HC595D/SOT109/SO16' (the type number, then the package codes) -> 'SOT23/TO-236AB', else ''. Only when the
-    first word is this MPN's own type (the MPN without its ',215' packing code), so a slash in other text is not read
-    as a case."""
-    m = SLASH_CASE.match(str(desc or ""))
-    if not m:
-        return ""
+    '74HC595D/SOT109/SO16' (the type number, then the package codes), most often after Mouser's category ('Bipolar
+    Transistors - BJT BC847C/SOT23/TO-236AB') -> 'SOT23/TO-236AB', else ''. Only when the word is this MPN's own type
+    (the MPN without its ',215' packing code) and its first code names a package family, so a slash in other text, a
+    reel code ('OPA2340UA/2K5') or another type's case is not read as this part's case. An empty field ends it
+    ('LPC1768FBD100/LQFP100///STANDARD MARKING' -> 'LQFP100')."""
     own = _n(re.sub(r",\d{3}$", "", str(mpn or "")))
-    return m.group(2) if own and _n(m.group(1)) == own else ""
+    if not own:
+        return ""
+    for m in SLASH_CASE.finditer(str(desc or "")):
+        if _n(m.group(1)) == own and SLASH_PKG.match(m.group(2)):
+            return m.group(2)
+    return ""
 
 
 def _case_text(text, desc=""):
