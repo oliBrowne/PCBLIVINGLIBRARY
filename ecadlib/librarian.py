@@ -49,7 +49,12 @@ TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository
 SOURCES = ("kicad", "easyeda", "standard", "datasheet")
 IMP2MET = {v: k for k, v in METRIC_TO_IMPERIAL.items()}
 PASSIVE = {"R": ("Device:R", "Resistor_SMD:R_{}_{}Metric"), "C": ("Device:C", "Capacitor_SMD:C_{}_{}Metric"),
-           "CP": ("Device:C_Polarized", None), "L": ("Device:L", "Inductor_SMD:L_{}_{}Metric"), "LED": ("Device:LED", "LED_SMD:LED_{}_{}Metric")}
+           "CP": ("Device:C_Polarized", None), "L": ("Device:L", "Inductor_SMD:L_{}_{}Metric"), "LED": ("Device:LED", "LED_SMD:LED_{}_{}Metric"),
+           # thermistors and varistors: KiCad's own symbols, a resistor's chip land by size (KiCad has no other);
+           # TH (type not said): no symbol is chosen, the part is held
+           "NTC": ("Device:Thermistor_NTC", "Resistor_SMD:R_{}_{}Metric"), "PTC": ("Device:Thermistor_PTC", "Resistor_SMD:R_{}_{}Metric"),
+           "VAR": ("Device:Varistor", "Resistor_SMD:R_{}_{}Metric"), "TH": (None, "Resistor_SMD:R_{}_{}Metric")}
+SENSOR_KINDS = ("NTC", "PTC", "VAR", "TH")
 SPECS = Path(F.__file__).with_name("package_specs")
 
 
@@ -413,7 +418,7 @@ SHARED_KINDS = ("R", "C", "CP", "L")       # parts whose Library Ref is the gene
 PART_PARAMS = {"mpn", "lcsc", "manufacturer", "manufacturer part number", "datasheet", "footprint"}
 
 
-PASSIVE_FOLDERS = ("Resistors", "Capacitors", "Inductors", "Crystals")
+PASSIVE_FOLDERS = ("Resistors", "Capacitors", "Inductors", "Crystals", "Thermistors", "Varistors")
 ACTIVE_PIN = re.compile(r"(?i)^(VCC|VDD|V\+|OUT|OUTPUT|CLK|EN|OE|E/D|ST|STBY|TRI)\b")   # an oscillator, not a crystal
 
 
@@ -518,6 +523,10 @@ def passive_kind(item, ln=None):
     desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), (ln or {}).get("description")) if x))
     if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc):
         return None
+    if cat in ("Thermistors", "Varistors"):  # altium_export.sensor_folder filed it: NTC / PTC / VAR, TH (type unsaid)
+        kind = SP.sensor_kind((item.get("description"), (ln or {}).get("value"), (ln or {}).get("description")),
+                              _par(item).get("Manufacturer Part Number", ""), (ln or {}).get("designator", ""))
+        return kind if kind in ("NTC", "PTC", "VAR") and SP.SENSOR_FOLDER[kind] == cat else "TH" if cat == "Thermistors" else None
     if cat == "Resistors":
         return "R"
     if cat == "Capacitors":                  # polarized by its land, its description or its part number's series
@@ -571,6 +580,24 @@ def _line_for(item, lines, rows):
     return best
 
 
+def sensor_hold(st, item, ln, row, kind):
+    """Holds for a thermistor or varistor the line does not settle: a thermistor whose type (NTC or PTC) nothing
+    says (no symbol is chosen), or a line whose words, part number or part search call it both a thermistor and a
+    varistor (a resistor-shaped part built as either could be wrong)."""
+    from . import stdparts as SP
+    mpn = _par(item).get("Manufacturer Part Number", "")
+    said = SP.sensor_kind((item.get("description"), ln.get("value"), ln.get("description"), row.get("src_description")),
+                          mpn, ln.get("designator", ""))
+    if kind == "TH":
+        st["verify"].append("thermistor: NTC or PTC is not said by the line, its part number or the part search; "
+                            "write it in the description")
+    elif said == "conflict" and str(item.get("folder") or "").rsplit("/", 1)[-1] in ("Resistors", "Thermistors", "Varistors", "Misc"):
+        st["verify"].append(f"part kind: the line's words, part number {mpn or '(none)'} or part search say both "
+                            "thermistor and varistor: check which part it is")
+    elif kind in ("NTC", "PTC", "VAR") and said not in (None, kind):
+        st["verify"].append(f"part kind: filed as {SP.SENSOR_SYMBOL[kind]} but the part search says {said}: check which part it is")
+
+
 def chip_size_clash(st, item, ln):
     """'footprint: ...' when the land built is a chip size and the BOM's description or value cell names another one
     (footprint C_0402_1005Metric, description 'CAP CER 0.1UF 50V X7R 0603'): a copy-paste slip in one of the two, so
@@ -597,6 +624,12 @@ def chip_size_clash(st, item, ln):
         if said and said != have:
             return (f"footprint: the land built is {have} ({built}) but the BOM {label} says {said} "
                     f"({text!r}): check which size the part is")
+    if st.get("kind") in SENSOR_KINDS:          # a thermistor / varistor series' own size code (NCP15 is an 0402)
+        mpn = _par(item).get("Manufacturer Part Number", "")
+        size = SP.sensor_size(mpn)
+        if size and size != have:
+            return (f"footprint: the land built is {have} ({built}) but the part number {mpn} is an {size}: "
+                    f"check which size the part is")
     return None
 
 
@@ -783,6 +816,7 @@ class Run:
         kind, fp_name, sym_name = passive_kind(item, ln), item["footprint"]["ref"], item["symbol"]["ref"]
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
+        sensor_hold(st, item, ln, row, kind)
         try:
             self.local(st, row, kind, fp_name, sym_name)
         except Exception as e:
@@ -805,6 +839,12 @@ class Run:
         if clash:
             st["verify"].append(clash)
         self._finish_found(st, row)
+        if kind in ("NTC", "PTC", "VAR") and st["footprint"] and st["symbol"]:   # nothing else describes it (a BOM
+            from . import stdparts as SP                    # line with only the MPN, no part search): what it is and
+            size = SP.chip_size(str(st["footprint"].get("source") or "").split(":")[-1], strict=True)   # its size
+            what = {"NTC": "NTC thermistor", "PTC": "PTC thermistor", "VAR": "Varistor"}[kind]
+            if size and not str(size).startswith("conflict"):
+                st["found"].setdefault("description", (f"{what}, {size}", "the part number's series and the land built"))
         return st
 
     @staticmethod
@@ -890,6 +930,8 @@ class Run:
         own = False
         if kind:
             sym_ref, how = PASSIVE[kind][0], "generic passive symbol"
+            if kind in SENSOR_KINDS:
+                how = "KiCad's own symbol for this kind of part (thermistor / varistor)"
             if kind == "R" and RU.resistor_style(self.rules) == "us" and "Device" in lib.symbols.get("R_US", ()):
                 sym_ref = "Device:R_US"                # [symbols] resistor = "us": the zigzag symbol
             if kind == "L" and self.ferrite(item, ln) and "Device" in lib.symbols.get("FerriteBead", ()):
@@ -899,6 +941,9 @@ class Run:
                 from . import stdparts as SP           # (RC0603FR-0710KL is an 0603), before any converted source
                 mk, size = SP.mpn_size(mpn)
                 pkg = size if size and mk in ("", kind) else None
+            elif not pkg and kind in SENSOR_KINDS:     # a thermistor / varistor series' size code (NCP18: 0603)
+                from . import stdparts as SP
+                pkg = SP.sensor_size(mpn)
             names = [ln.get("footprint", ""), item["footprint"].get("kicad") or fp_name]
             named = next((lib.footprint(n) for n in names if lib.footprint(n)), None)
             if named:                              # the land the BOM names, as named (R-BF-4): L_Bourns_SRR1210A is
@@ -1105,7 +1150,13 @@ class Run:
         elif not st["symbol"] and res["symbol"]:
             res["sym_how"] = f"footprint came from {fp_src or 'nowhere'}, not {res['footprint']}: pin numbers not known to match"
         pads = self.pad_numbers(st) if not st["symbol"] and st["footprint"] and k not in SHARED_KINDS + ("LED", "D") else None
-        if pads is not None:
+        if pads is not None and k in SP.SENSOR_SYMBOL and set(pads) == {"1", "2"} and fp_src.startswith(("kicad:", "standard:")):
+            name = SP.SENSOR_SYMBOL[k]                 # a varistor / thermistor on KiCad's own 2-pad land (RV_Disc_..)
+            text, name = SP.symbol_text(name, mpn)
+            self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, fp_name, f"standard:{name}",
+                               [("MPN", mpn)] if mpn else [])
+            got.append(f"symbol {name} (2-pin {SP.SYMBOLS[name][2].lower()}, pads 1 and 2 of {fp_src.split(':')[-1]})")
+        elif pads is not None:
             key, how = SP.mechanical_symbol(fp_src, ln.get("designator"), pads,
                                             " ".join(str(x or "") for x in (ln.get("value"), desc, mpn)))
             if key:                            # a fuse / test point / mounting hole on KiCad's own land of that kind

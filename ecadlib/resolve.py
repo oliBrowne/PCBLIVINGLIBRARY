@@ -31,7 +31,8 @@ from .kicad_index import KiCadIndex, _body, norm_mpn, package_of
 
 KINDS = ("symbol", "footprint")
 REF_CLASS = {"Resistors": "R", "Capacitors": "C", "Inductors": "L", "Diodes": "D", "Transistors": "Q",
-             "Crystals": "Y", "Connectors": "J", "ICs": "U"}
+             "Crystals": "Y", "Connectors": "J", "ICs": "U",
+             "Thermistors": "TH", "Varistors": "RV"}
 LIB_HINT = {"R": ("Device", "Resistor"), "C": ("Device", "Capacitor"), "L": ("Device", "Inductor"),
             "D": ("Device", "Diode", "LED"), "Q": ("Transistor", "Package_TO"), "Y": ("Device", "Oscillator", "Crystal"),
             "J": ("Connector",)}

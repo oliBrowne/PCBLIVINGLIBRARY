@@ -18,11 +18,14 @@ import argparse, copy, difflib, json, math, os, re, sys
 from pathlib import Path
 
 FILES = ("ecadlib.toml", "ecadlib_rules.json")
-CATEGORIES = ("Resistors", "Capacitors", "Inductors", "Diodes", "Transistors", "Crystals", "Connectors", "ICs", "Misc")
+CATEGORIES = ("Resistors", "Capacitors", "Inductors", "Diodes", "Transistors", "Crystals", "Connectors", "ICs", "Misc",
+              "Thermistors", "Varistors")
 REF_CLASS = {"R": "Resistors", "C": "Capacitors", "L": "Inductors", "D": "Diodes", "LED": "Diodes", "Q": "Transistors",
-             "Y": "Crystals", "X": "Crystals", "J": "Connectors", "P": "Connectors", "CN": "Connectors", "U": "ICs", "IC": "ICs"}
+             "Y": "Crystals", "X": "Crystals", "J": "Connectors", "P": "Connectors", "CN": "Connectors", "U": "ICs", "IC": "ICs",
+             "TH": "Thermistors"}
 CAT_REF = {"Resistors": "R", "Capacitors": "C", "Inductors": "L", "Diodes": "D", "Transistors": "Q", "Crystals": "Y",
-           "Connectors": "J", "ICs": "U", "Misc": "U"}
+           "Connectors": "J", "ICs": "U", "Misc": "U", "Thermistors": "TH",
+           "Varistors": "RV"}
 PASSIVES = ("Resistors", "Capacitors", "Inductors")          # the categories with a generic symbol and a synthetic name
 SOURCES = ("kicad", "easyeda", "standard", "datasheet")   # standard: ecadlib.stdparts (offline, before Claude)
 FIELDS = ("mpn", "manufacturer", "value", "package", "metric", "category", "cat3", "ref", "tolerance", "voltage",
@@ -698,7 +701,8 @@ def bom_columns(rules):
 SI_PRE = [(1e-12, "p"), (1e-9, "n"), (1e-6, "u"), (1e-3, "m"), (1.0, ""), (1e3, "k"), (1e6, "M"), (1e9, "G")]
 UNIT = {"Resistors": "", "Capacitors": "F", "Inductors": "H"}
 CAT3 = {"Resistors": "RES", "Capacitors": "CAP", "Inductors": "IND", "Diodes": "DIO", "Transistors": "TRA",
-        "Crystals": "CRY", "Connectors": "CON", "ICs": "ICS", "Misc": "MIS"}
+        "Crystals": "CRY", "Connectors": "CON", "ICs": "ICS", "Misc": "MIS",
+        "Thermistors": "THM", "Varistors": "VAR"}
 
 
 PREFIXES = {"Resistors": "kMG", "Capacitors": "pnu", "Inductors": "num"}

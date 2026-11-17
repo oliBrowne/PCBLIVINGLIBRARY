@@ -216,6 +216,16 @@ CODES = {
                                   "Check which size the part is, then fix the BOM's footprint or its {where}.",
                                   [r"^(?:verify: )?footprint: the land built is (?P<have>\S+) \(\S+\) but the BOM "
                                    r"(?P<where>description|value) says (?P<said>\S+) "]),
+    "librarian.size_code_clash": ("The footprint built is a {have} chip, but the part number {mpn} is an {said}.",
+                                  "Check which size the part is, then fix the BOM's footprint or its part number.",
+                                  [r"^(?:verify: )?footprint: the land built is (?P<have>\S+) \(\S+\) but the part number "
+                                   r"(?P<mpn>\S+) is an (?P<said>\S+):"]),
+    "librarian.thermistor_type": ("Nothing says whether this thermistor is NTC or PTC, so no symbol was chosen.",
+                                  "Write NTC or PTC in the BOM line's description (or add the part number), then run again.",
+                                  [r"^(?:verify: )?thermistor: NTC or PTC is not said"]),
+    "librarian.sensor_kind": ("It is not clear whether this is a thermistor or a varistor: {detail}.",
+                              "Check which part it is in the datasheet, then fix the BOM line's description or part number.",
+                              [r"^(?:verify: )?part kind: (?P<detail>.+?): check which part it is"]),
     "footprint.other": ("The footprint check found a problem: {detail}.",
                         "Compare the footprint with the datasheet, then fix it or release anyway.",
                         [r"^footprint: (?P<detail>.+)"]),
