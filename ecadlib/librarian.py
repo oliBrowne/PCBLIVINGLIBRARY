@@ -1254,13 +1254,13 @@ class Run:
         except Exception:
             return False
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
-        v = PT.check(PT.page_texts(data) if data else {}, pins)
+        v = PT.check_pdf(data, pins)
         if v["status"] != "agreed":
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the datasheet's pin table did not confirm it ({v.get('why')})")
             return False
         st["tried"].append(f"kicad: {sym_ref} for {mpn} confirmed: {row.get('src_package_from') or 'the part search'}'s "
-                           f"case {case!r} is its land {land}, and its {v['pins']} pins agree with the pin table on "
-                           f"page {v['page']} of {link}")
+                           f"case {case!r} is its land {land}, and its {v['pins']} pins agree with the "
+                           f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
         return True
 
     def kicad_land_confirmed(self, st, res):
@@ -1300,11 +1300,11 @@ class Run:
         except Exception:
             return False
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
-        v = PT.check(PT.page_texts(data) if data else {}, pins)
+        v = PT.check_pdf(data, pins)
         if v["status"] != "agreed":
             return False
-        st["tried"].append(f"standard: pinout {name} for {mpn} confirmed: its {v['pins']} pins agree with the pin table "
-                           f"on page {v['page']} of {link}")
+        st["tried"].append(f"standard: pinout {name} for {mpn} confirmed: its {v['pins']} pins agree with the "
+                           f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
         return True
 
     def datasheet_pdf(self, item, ln, row, st, mpn):
@@ -1670,10 +1670,11 @@ class Run:
             got.append("symbol")
         rt = res["sidecar"].get("route") or {}
         n_ans = len(rt.get("attempts") or [])
+        who = "your assistant (answer.json)" if getattr(self.reader, "assistant", None) else rt.get("model")
         st["tried"].append(f"datasheet reader ({where}{', ' + how if how else ''}): {', '.join(got) or 'nothing needed'}; "
                            f"{len(res['needs_review'])} review items"
-                           + (f"; read by {rt['model']}" + (f" after {n_ans - 1} earlier answers (see review.md)" if n_ans > 1 else "")
-                              if rt.get("model") else ""))
+                           + (f"; read by {who}" + (f" after {n_ans - 1} earlier answers (see review.md)" if n_ans > 1 else "")
+                              if who else ""))
         cc = res.get("cross_check")
         if cc:
             st["cross_check"] = cross_check_state(cc)
@@ -1794,10 +1795,10 @@ def read_confirmed(res, job, got):
         from . import pin_text as PT
         pins = [(q.get("num"), q.get("name")) for q in (res.get("symbol") or {}).get("pins") or ()]
         data = job.get("data")
-        v = PT.check(PT.page_texts(data) if data else {}, pins)
+        v = PT.check_pdf(data, pins, pin_count=(res.get("spec") or {}).get("pin_count"))
         if v["status"] != "agreed":
             return None
-        why.append(f"{v['pins']} pins agree with the pin table on PDF page {v['page']} (text layer)")
+        why.append(f"{v['pins']} pins agree with the {v.get('where', 'pin table')} on PDF page {v['page']} (text layer)")
     return "; ".join(why) or None
 
 

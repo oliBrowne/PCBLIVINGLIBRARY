@@ -33,6 +33,17 @@ def root(out):
     return Path(out) / "datasheet" / "assistant"
 
 
+def pdf_folder(base):
+    """<base>/pdfs: where your assistant saves a datasheet ecadlib could not download (<MPN>.pdf); the next run reads it
+    as it reads a file in your [datasheet] folder."""
+    return Path(base) / "pdfs"
+
+
+def pdf_name(part):
+    """The file name a downloaded datasheet is saved under: <MPN>.pdf, with what a file name cannot hold as "-"."""
+    return re.sub(r'[\\/:*?"<>|]+', "-", str(part or "part")).strip(" .") + ".pdf"
+
+
 def _stem(s):
     return re.sub(r"[^A-Za-z0-9._-]+", "_", str(s or "part")).strip("._") or "part"
 
@@ -111,11 +122,22 @@ def request(base, job):
         texts.append(task_text(job.get("part"), job.get("package")))
     (d / "schema.json").write_text(json.dumps(_schema(job), indent=1), encoding="utf-8")
     md = [f"# Datasheet read for {job.get('name') or job.get('part')}", "",
-          f"Part number: {job.get('part')}  ", f"PDF: {job.get('url') or '(from your datasheet folder)'}", "",
-          "Read the pages below as the instructions say, then write **answer.json** in this folder: one JSON object "
-          "matching schema.json (no comments, no text around it). Leave a value out, or empty, when the pages do not "
-          "print it: a guessed number is worse than none, because ecadlib holds a part with a missing value but may "
-          "build a wrong one.", "", "## Files", ""]
+          f"Part number: {job.get('part')}  ", f"PDF: {job.get('url') or '(from your datasheet folder)'}", ""]
+    if not files:                                            # no PDF: ecadlib's own download was refused or failed
+        md += ["## First: the PDF", "",
+               "ecadlib could not download this datasheet (the maker's or distributor's site refuses scripts, or the "
+               "link is dead). Download it with a browser from the link below and save it as "
+               f"`pdfs/{pdf_name(job.get('part'))}` in the folder above this one (datasheet/assistant/pdfs), then run the same `ecadlib librarian` command "
+               "again: this read is then asked for again with the PDF's own pages, and this folder can be left "
+               "unanswered. Save only this part's datasheet (or its family's) there, never a page that is not a PDF.", ""]
+        tried = [a for a in ((job.get("prov") or {}).get("attempts") or ()) if isinstance(a, dict)]
+        if tried:                                            # why: refused, dead, the Archive had no copy ...
+            md += ["What ecadlib tried:", ""] + [f"- {a.get('where') or ''}: {a.get('error') or ''}"[:400]
+                                                  for a in tried[:8]] + [""]
+    md += ["Read the pages below as the instructions say, then write **answer.json** in this folder: one JSON object "
+           "matching schema.json (no comments, no text around it). Leave a value out, or empty, when the pages do not "
+           "print it: a guessed number is worse than none, because ecadlib holds a part with a missing value but may "
+           "build a wrong one.", "", "## Files", ""]
     md += [f"- {f}" for f in files] or ["- (no pages: open the link below)"]
     md += [f"- link (not downloaded here): {u}" for u in links]
     md += ["", "## Task", "", *texts, "", "## Instructions (the model's system prompt)", "", system or "(none)", ""]
@@ -178,6 +200,12 @@ def index(base, asked=None):
           "Claude Code or Claude Desktop pointed at this folder. Then run the same `ecadlib librarian` command again: "
           "the answers are checked and built like any read, and parts that pass are released.", "",
           f"Waiting: {len(wait)}", ""]
-    md += [f"- {w}/request.md" for w in wait]
+    need = [w for w in wait if not (b / w / "sent.pdf").is_file()]
+    md += [f"- {w}/request.md" + ("  (no PDF yet: download it first, see its request.md)" if w in need else "")
+           for w in wait]
+    if need:
+        md += ["", f"{len(need)} of these have no PDF: ecadlib's own download was refused. Download each from the "
+               "link in its request.md with a browser and save it in pdfs/ here as <MPN>.pdf (the name its request.md "
+               "gives); the next run then asks for the read with the PDF's pages."]
     (b / README).write_text("\n".join(md) + "\n", encoding="utf-8")
     return wait

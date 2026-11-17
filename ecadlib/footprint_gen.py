@@ -186,7 +186,10 @@ def _min_pitch(spec):
 def _two_terminal(spec, fil):
     L = dim(spec["body_length"])
     W = dim(spec.get("terminal_width") or spec["body_width"])
-    r = ipc_land(L, dim(spec.get("terminal_length")), W, fil, S=dim(spec.get("inner_span")))
+    T = spec.get("terminal_length")
+    if T is None and spec.get("inner_span") is None and land_sizes_leads(spec):
+        T = _land_foot(spec, L)                               # only keeps the IPC sum whole: the land replaces its pads
+    r = ipc_land(L, dim(T), W, fil, S=dim(spec.get("inner_span")))
     pads = [("1", -r["pad_ctr"], 0, r["pad_len"], r["X"]), ("2", r["pad_ctr"], 0, r["pad_len"], r["X"])]
     return pads, (L[1] / 2, dim(spec["body_width"])[1] / 2), {k: r[k] for k in ("Z", "G", "X")}
 
@@ -462,8 +465,10 @@ def land_short(spec):
     land, t = spec.get("land") or {}, spec.get("package_type")
     num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
     pl, pw, pc = (land.get(k) for k in ("pad_length", "pad_width", "pad_center"))
-    if t not in ("gullwing", "qfp", "qfn") or not all(num(v) for v in (pl, pw, pc)):
+    if t not in ("gullwing", "qfp", "qfn", "chip", "molded") or not all(num(v) for v in (pl, pw, pc)):
         return []
+    if t in ("chip", "molded"):
+        return _two_terminal_land_short(spec, pl, pw, pc)
     try:
         T, b = (dim(spec[k]) if spec.get(k) else None for k in ("terminal_length", "terminal_width"))
         # a tab package (TO-263, TO-252: leads on one side, the tab on the other) has no tip-to-tip span to halve: its
@@ -502,6 +507,26 @@ def land_short(spec):
     return out
 
 
+def _two_terminal_land_short(spec, pl, pw, pc):
+    """land_short for a chip / molded part built from the maker's land with no terminal read (land_sizes_leads):
+    nothing else checks that land, so its pads must reach the body's ends (a pad's outer end at least the body's
+    half length min) and not meet in the middle. A read with a terminal (or inner span) is left as it was. -> lines."""
+    if spec.get("terminal_length") is not None or spec.get("inner_span") is not None:
+        return []
+    try:
+        L = dim(spec["body_length"]) if spec.get("body_length") else None
+    except (KeyError, TypeError, ValueError):
+        return []
+    why, tol = [], 0.05                               # eval.score TOL["pos"]
+    if L and pc + pl / 2 < L[0] / 2 - tol:
+        why.append(f"outer end at {pc + pl / 2:g} mm, short of the body end at {L[0] / 2:g} (body_length min "
+                   f"{L[0]:g}), and no terminal was read to check it against")
+    if pc - pl / 2 <= 0:
+        why.append(f"inner end at {pc - pl / 2:g} mm: the two pads meet in the middle")
+    return [f"land pattern: the pads ({pl:g} x {pw:g} mm at {pc:g}) would not solder the terminals read from the same "
+            f"drawing: {'; '.join(why)} (check land pad_length / pad_width / pad_center against the drawing)"] if why else []
+
+
 def lead_land(spec):
     """The maker's land sizes the signal pads (pad_length, pad_width and pad_center all given), not only the thermal
     land: a land page that dimensions just the thermal pad leaves the signal pads to IPC-7351B."""
@@ -513,9 +538,14 @@ def lead_land(spec):
 def land_sizes_leads(spec):
     """A gullwing read whose maker's land sizes every pad it builds: the leads' (lead_land) and a tab's, by its own
     length or the land's tab_*. Its foot length (terminal_length) then only feeds the IPC land the maker's replaces,
-    so it may be left blank (LTV-352T, benchmark 2026-10-25: Lite-On prints the land, not the foot)."""
-    tab, land = spec.get("tab"), spec.get("land") or {}
-    return spec.get("package_type") == "gullwing" and lead_land(spec) and (
+    so it may be left blank (LTV-352T, benchmark 2026-10-25: Lite-On prints the land, not the foot). A two-terminal
+    part (chip, molded) the same way with the whole lead land: its two pads are the land's (NRS4018, Taiyo Yuden, PC
+    read sample 2026-11-17: the catalogue prints the land, not the terminals); land_short then checks the land
+    against the body's ends instead."""
+    tab, land, t = spec.get("tab"), spec.get("land") or {}, spec.get("package_type")
+    if t in ("chip", "molded"):
+        return lead_land(spec)
+    return t == "gullwing" and lead_land(spec) and (
         not tab or isinstance(tab, dict) and (bool(tab.get("length")) or all(land.get(k) for k in TAB_LAND)))
 
 
@@ -785,6 +815,34 @@ def orient_rows(spec):
             return spec, []
         out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
     return out, ["turned 90 degrees to rows left and right (pin 1 upper left): the rows were read top and bottom"]
+
+
+def orient_dfn(spec):
+    """(spec, notes): a two-row DFN (pins left and right only) whose rows do not fit along body_width as read but fit
+    along body_length, with the body's sides changing places (and the exposed pad's with them). Makers letter the two
+    sides either way round (ST's TDFN-12 2 x 3: D = 3 along the rows), while ecadlib's left and right rows run along
+    body_width; the read's own numbers rule the other way out (STM6601, PC read sample 2026-11-17). A body the rows fit
+    either way (square) or neither way stays as read, and so does one with its pads placed (pin_positions)."""
+    if spec.get("package_type") != "qfn" or spec.get("pin_positions"):
+        return spec, []
+    try:
+        nlr, ntb = rows(spec)
+        e, L, W = spec["pitch"], dim(spec["body_length"]), dim(spec["body_width"])
+        b = dim(spec["terminal_width"]) if spec.get("terminal_width") else (0, 0, 0)
+    except (KeyError, TypeError, ValueError):
+        return spec, []
+    if ntb or nlr < 2 or not isinstance(e, (int, float)) or isinstance(e, bool) or e <= 0:
+        return spec, []
+    span = (nlr - 1) * e + b[2]
+    if span <= W[2] + 1e-6 or span > L[2] + 1e-6:
+        return spec, []
+    out = dict(spec, body_length=spec["body_width"], body_width=spec["body_length"])
+    ep = spec.get("exposed_pad")
+    if isinstance(ep, dict) and "length" in ep and "width" in ep:
+        out["exposed_pad"] = dict(ep, length=ep["width"], width=ep["length"])
+    return out, [f"body_length and body_width changed places: the {nlr} pins of each left/right row ({span:.2f} mm "
+                 f"at pitch {e:g}) do not fit along the {W[1]:g} mm side as read, but do along the {L[1]:g} mm one "
+                 "(the maker letters the sides the other way round)"]
 
 
 def orient_ep(spec):

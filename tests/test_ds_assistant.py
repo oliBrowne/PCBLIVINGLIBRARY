@@ -149,3 +149,34 @@ def test_readme_lists_only_what_this_run_asked_for():
         assert "GONE" not in (base / DA.README).read_text(encoding="utf-8")
         (new / "answer.json").write_text("{}", encoding="utf-8")
         assert DA.waiting(base) == []
+
+
+def test_a_pdf_ecadlib_could_not_download_is_asked_of_the_assistant_then_read():
+    """34 of the PC's 1000-part reads (2026-11-17) had no PDF: Littelfuse, Nexperia, Mouser and Molex links refuse
+    scripts. The request says to download it with a browser into datasheet/assistant/pdfs/<MPN>.pdf; the next run reads
+    that file like one in the [datasheet] folder and asks for the read with its pages."""
+    api, dead = _api(), "https://maker.example/BAS16.pdf"
+    with tempfile.TemporaryDirectory() as d:
+        with TB.patched(api):
+            rd = TC.reader(d, ASSIST)
+            rd.offline = True                          # nothing here can download the link
+            job = rd.job("BAS16,215", [(dead, "BOM")], "SOD-323")
+            assert job["prov"].get("sent_as") == "url", job["prov"]
+            try:
+                rd.read_now(job)
+                raise AssertionError("no AssistantPending")
+            except D.AssistantPending:
+                pass
+        base = rd.assistant
+        (f,) = [p for p in base.iterdir() if p.is_dir()]
+        req = (f / "request.md").read_text(encoding="utf-8")
+        assert "pdfs/BAS16,215.pdf" in req and dead in req, req[:900]
+        assert "no PDF yet" in (base / DA.README).read_text(encoding="utf-8")
+        DA.pdf_folder(base).mkdir()
+        (DA.pdf_folder(base) / "BAS16,215.pdf").write_bytes(TC.pdf3())
+        with TB.patched(api):
+            rd = TC.reader(d, ASSIST)
+            rd.offline = True
+            job = rd.job("BAS16,215", [(dead, "BOM")], "SOD-323")
+        assert job["prov"].get("sent_as") != "url" and "saved by your assistant" in job["prov"]["where"], job["prov"]
+    assert api.calls == []

@@ -137,6 +137,8 @@ Claude reads the package drawing and pin table and returns every dimension as pr
 
 Point any assistant that reads PDFs or images at the folder (Claude Code, Claude Desktop, another chat) and ask it to answer each `request.md`. Run the same librarian command again: each `answer.json` is read exactly as a model's answer would be, with the same checks, holds and release rules (a footprint from a read is released with no person's look only when an independent source agrees). Answers go into the result cache, so they are not asked for again. A part whose first answer left something out gets a new folder asking for more pages. Not made in this mode: the cross-check's paid second read and the web search for a missing PDF; `--datasheet-batch` is refused with it. A key in the environment is never used.
 
+When ecadlib could not download a part's PDF (the maker's or distributor's site refuses scripts: Littelfuse, Nexperia, Mouser's datasheet links, Molex), its folder has no `sent.pdf`, its `request.md` says so first and lists what was tried, and `READ_ME.md` marks it "no PDF yet". Download the PDF with a browser and save it as `<plan folder>/datasheet/assistant/pdfs/<MPN>.pdf` (the name its `request.md` gives). The next run reads it like a file in your `[datasheet] folder` and asks for the read with its pages, in a new folder.
+
 ### A whole BOM in one batch
 
 ```
