@@ -1150,6 +1150,18 @@ SYMBOLS["Polyfuse"] = ("Polyfuse", "F", "Resettable fuse, polymeric positive tem
                        [_rect(-0.762, -2.54, 0.762, 2.54), _poly([(0, 2.54), (0, -2.54)]),
                         _poly([(-1.524, -2.032), (-1.524, -1.524), (1.524, 1.524)])],
                        [("1", "~", "passive", 0, 5.08, 270, 2.54), ("2", "~", "passive", 0, -5.08, 90, 2.54)])
+# thermistors and varistors: two-pin parts on a chip land like a resistor's, but never a resistor (their own symbol and
+# part number; a 10k NTC must not become the library's plain 10k resistor). KiCad's Device:Thermistor_NTC / _PTC /
+# Varistor, drawn the same way: a resistor body crossed by a bent line
+_TH_BODY = [_rect(-1.016, -2.54, 1.016, 2.54), _poly([(-1.905, -3.175), (-1.905, -1.905), (1.905, 1.905)])]
+_TWO_V = [("1", "~", "passive", 0, 5.08, 270, 2.54), ("2", "~", "passive", 0, -5.08, 90, 2.54)]
+SYMBOLS["Thermistor_NTC"] = ("Thermistor_NTC", "TH", "Temperature dependent resistor, negative temperature coefficient",
+                             _TH_BODY, _TWO_V)
+SYMBOLS["Thermistor_PTC"] = ("Thermistor_PTC", "TH", "Temperature dependent resistor, positive temperature coefficient",
+                             _TH_BODY, _TWO_V)
+SYMBOLS["Varistor"] = ("Varistor", "RV", "Voltage dependent resistor", _TH_BODY, _TWO_V)
+SENSOR_SYMBOL = {"NTC": "Thermistor_NTC", "PTC": "Thermistor_PTC", "VAR": "Varistor"}
+SENSOR_FOLDER = {"NTC": "Thermistors", "PTC": "Thermistors", "TH": "Thermistors", "VAR": "Varistors"}
 SYMBOLS["TestPoint"] = ("TestPoint", "TP", "Test point", [_circle(0, 3.302, 0.762)], [("1", "1", "passive", 0, 0, 90, 2.54)])
 SYMBOLS["MountingHole_Pad"] = ("MountingHole_Pad", "H", "Mounting hole with a plated pad (pin 1)", [_circle(0, 1.27, 1.27, 0.508)],
                                [("1", "1", "passive", 0, -2.54, 90, 2.54)])
@@ -1652,6 +1664,15 @@ def resolve(texts, kind=None, mpn="", description=""):
     {"footprint": table name | None, "fp_how": str, "kicad_ref": "Lib:Name", "symbol": key | None, "sym_how": str}.
     A polarized capacitor (kind CP, or a C whose MPN is a tantalum / polymer / electrolytic series) gets nothing: the
     table has no polarized case, and a chip-capacitor land would lose the + mark."""
+    if kind in ("NTC", "PTC", "VAR", "TH"):                # a thermistor / varistor: a resistor's chip land by size
+        name, how = footprint_for(list(texts), "R", "", weak=[description])     # (not the resistor MPN codes)
+        size = sensor_size(mpn)
+        if not name and size:
+            name, how = footprint_for([size], "R")[0], f"{mpn}: the series' size code says {size}"
+        sym = SENSOR_SYMBOL.get(kind) if name else None
+        return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name) if name else None, "symbol": sym,
+                "sym_how": f"{SYMBOLS[sym][2].lower()}, 2 pins" if sym else
+                "thermistor: NTC or PTC is not said" if kind == "TH" else "no chip land"}
     if kind == "C" and (POLAR_CAP.match(_norm(mpn)) or says_polarized(description) or
                         any(_strip_lib(str(t or "")).strip().startswith("CP_") for t in texts)):
         kind = "CP"                                       # a C on a polarized land ('CP_EIA-3528-21_Kemet-B') is one
@@ -1806,3 +1827,70 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ---------------------------------------------------------------- thermistors and varistors
+# what the line's words say: 'NTC thermistor 10k 3380K', 'Varistor 18V 0805', 'MOV 275VAC'. A PTC said with fuse
+# words ('PTC resettable fuse', 'Polyfuse') is a fuse (part_kind 'F'), not a thermistor
+VARISTOR_WORDS = re.compile(r"(?i)\bvaristors?\b|\bMOVs?\b|\bVDRs?\b|\bMLVs?\b|\bZNR\b|surge absorber")
+THERMISTOR_WORDS = re.compile(r"(?i)thermistors?\b|\bposistors?\b")
+NTC_WORD, PTC_WORD = re.compile(r"(?i)(?<![A-Za-z])NTC(?![A-Za-z])"), re.compile(r"(?i)(?<![A-Za-z])PTC(?![A-Za-z])")
+FUSE_WORDS = re.compile(r"(?i)\bfuses?\b|poly ?fuse|polyswitch|resettable|\bPPTC\b")
+# makers' thermistor / varistor series (the MPN, upper case without punctuation): Murata NCP / NCU (NTC), PRF (PTC);
+# TDK NTCG, EPCOS B57 (NTC), B59 (PTC), B72 (SIOV varistors), AVR-M; Vishay NTCS / NTCLE / NTHS / NTCALUG (NTC),
+# PTCSL / PTCEL (PTC); Panasonic ERT-J (NTC), ERZ / EZJ (varistors); Littelfuse V..MLA / V..LA / V..ZA; Bourns MOV-,
+# CG....MLC
+# (Murata's code is series + size + 2 letters + 3 value digits: NCP18XH103, PRF18BB471; onsemi's NCP1117 is a regulator)
+SENSOR_MPN = (("NTC", re.compile(r"^(?:NC[PU](?:03|15|18|21|31)[A-Z]{2}\d{3}|NTCG\d|NTCS\d|NTCLE|NTCALUG|NTHS\d|B57\d|ERTJ[Z0-9])")),
+              ("PTC", re.compile(r"^(?:PRF(?:03|15|18|21|31)[A-Z]{2}\d{3}|B59\d|PTCSL|PTCEL)")),
+              ("VAR", re.compile(r"^(?:B72\d|AVRM\d|ERZ[A-Z0-9]|EZJ[A-Z0-9]|V\d+MLA|V\d+(?:LA|ZA)\d|MOV\d|CG\d{4}MLC)")))
+SENSOR_REFS = {"TH": "TH", "RT": "TH", "NTC": "NTC", "PTC": "PTC", "VDR": "VAR", "MOV": "VAR"}
+
+
+def sensor_kind(texts=(), mpn="", designator=""):
+    """'NTC' / 'PTC' (thermistors), 'VAR' (varistor), 'TH' (a thermistor whose type nothing says: no symbol is
+    chosen), 'conflict' (one source says thermistor, another varistor: held, built as neither) or None (not one),
+    from the line's words (value, description, the part search's text), its part number's series (SENSOR_MPN) and its
+    designators (TH / RT / NTC / PTC / VDR / MOV; RV is also a potentiometer's, so it says nothing). A bare 'PTC'
+    says nothing either: with fuse words it is a resettable fuse (part_kind 'F'), with 'thermistor' a thermistor."""
+    t = " ".join(str(x or "") for x in texts)
+    th = bool(THERMISTOR_WORDS.search(t))
+    if FUSE_WORDS.search(t) and not th:             # 'PTC resettable fuse' on PTC1 / F1: a fuse, whatever its letters
+        return None
+    said = {"VAR"} if VARISTOR_WORDS.search(t) else set()
+    if NTC_WORD.search(t):
+        said.add("NTC")
+    if PTC_WORD.search(t) and th:
+        said.add("PTC")
+    if th and not said & {"NTC", "PTC"}:
+        said.add("TH")
+    m = _norm(mpn)
+    said |= {k for k, rx in SENSOR_MPN if m and rx.match(m)}
+    refs = {re.match(r"[A-Z]+", r).group(0) for r in re.findall(r"[A-Za-z]+(?=\d)", str(designator or "").upper())}
+    if refs and refs <= set(SENSOR_REFS):
+        said |= {SENSOR_REFS[r] for r in refs}
+    if not said:
+        return None
+    if "VAR" in said:
+        return "VAR" if said == {"VAR"} else "conflict"
+    typed = said & {"NTC", "PTC"}
+    return typed.pop() if len(typed) == 1 else "TH"
+
+
+def sensor_size(mpn):
+    """The imperial chip size a thermistor's or varistor's part number states, or None. Only the series whose size
+    code is printed in the maker's part-number table: Murata NCP / NCU / PRF (03 0201, 15 0402, 18 0603, 21 0805, as
+    GRM), TDK NTCG (063 0201, 103 0402, 163 0603: metric 0603 / 1005 / 1608), Panasonic ERT-J (Z 0201, 0 0402,
+    1 0603), and the ones that print it (Vishay NTCS0603, Littelfuse V18MLA0805, Bourns CG0603MLC, TDK AVR-M1005)."""
+    m = _norm(mpn)
+    imp = r"(0201|0402|0603|0805|1206|1210)"
+    rules = ((r"^(?:NCP|NCU|PRF)(03|15|18|21|31)", {"03": "0201", "15": "0402", "18": "0603", "21": "0805", "31": "1206"}),
+             (r"^NTCG(06|10|16)3", {"06": "0201", "10": "0402", "16": "0603"}),
+             (r"^ERTJ([Z01])", {"Z": "0201", "0": "0402", "1": "0603"}),
+             (r"^NTCS" + imp, None), (r"^V\d+MLA" + imp, None), (r"^CG" + imp + "MLC", None),
+             (r"^AVRM(0603|1005|1608|2012)", {"0603": "0201", "1005": "0402", "1608": "0603", "2012": "0805"}))
+    for rx, conv in rules:
+        g = re.match(rx, m)
+        if g:
+            return conv[g.group(1)] if conv else g.group(1)
+    return None

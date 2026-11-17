@@ -135,6 +135,21 @@ def kind_of(descriptions=(), footprints=()):
     return None
 
 
+def sensor_folder(ln, t, mpn, cat, fp=""):
+    """'Thermistors' / 'Varistors' for a line stdparts.sensor_kind calls one (its words, its part number's series or
+    a TH / NTC / PTC designator), else None. Only a line filed as a resistor or as nothing yet (R, U?, no designator):
+    an IC whose text says 'NTC input' is no thermistor, nor a part on an IC package. t: the line's part search row."""
+    from . import stdparts as SP
+    got = t if t is not None else {}
+    lands = [fp, got.get("local_footprint"), got.get("package")]
+    if cat not in ("Resistors", "ICs", "Misc") or any(re.match(IC_PACKAGE, str(f or "").rpartition(":")[2].strip())
+                                                      for f in lands if isinstance(f, str)):
+        return None
+    words = (ln.get("value"), ln.get("description"), got.get("src_description")) if cat != "ICs" else ()
+    kind = SP.sensor_kind(words, "" if placeholder_mpn(mpn) else mpn, ln.get("designator", ""))
+    return SP.SENSOR_FOLDER.get(kind) if kind not in (None, "conflict") else None
+
+
 def _safe_name(s, notes):
     """lib_name(s), or for a name Altium can't store (CJK text) the same name with those characters as '_' and a note
     saying so: one such part must not stop the whole library. The part is then held (df.attrs["unstorable"],
@@ -420,6 +435,9 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                            (fp, got.get("local_footprint"), got.get("package")))
             if kind:
                 cat, ref = kind, RU.CAT_REF[kind]
+        sensor = sensor_folder(ln, t, mpn, cat, fp)
+        if sensor:                              # a thermistor / varistor on a resistor's chip land is not a resistor:
+            cat, ref = sensor, RU.CAT_REF[sensor]   # its own symbol, part number and name (a 10k NTC is not RES-0603-10k)
         if t is not None and isinstance(t.get("local_footprint"), str) and t["local_footprint"]:
             fp = t["local_footprint"].split(" ")[0]
         fp_ref = fp.split(":")[-1]

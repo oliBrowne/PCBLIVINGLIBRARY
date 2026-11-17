@@ -117,6 +117,12 @@ EXAMPLES = {
                                          "LQFP-48_7x7mm: check which package the part has",
     "librarian.chip_size_clash": "footprint: the land built is 0402 (C_0402_1005Metric) but the BOM description says 0603 "
                                  "('CAP CER 0.1UF 50V X7R 0603'): check which size the part is",
+    "librarian.size_code_clash": "footprint: the land built is 0402 (R_0402_1005Metric) but the part number NCP18XH103F03RB "
+                                 "is an 0603: check which size the part is",
+    "librarian.thermistor_type": "thermistor: NTC or PTC is not said by the line, its part number or the part search; "
+                                 "write it in the description",
+    "librarian.sensor_kind": "part kind: the line's words, part number NTCS0603E3103FMT or part search say both thermistor "
+                             "and varistor: check which part it is",
     "librarian.variant_alternate": "variant alternate part MCP6002T-I/MS: footprint SOIC-8_3.9x4.9mm is the base part's (an "
                                    "Altium variant names no footprint for its alternate): check MCP6002T-I/MS comes in "
                                    "that package, or give the alternate its own footprint",
@@ -331,7 +337,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 22, "datasheet.py": 10,
+    "librarian.py": 25, "datasheet.py": 10,
 }
 
 
