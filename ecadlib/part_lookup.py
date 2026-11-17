@@ -300,6 +300,7 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
             if self.token():
                 r = self.http.post(self.KEYWORD_URL, body, headers=self._headers())
         if not r.ok:
+            res.found, res.error = None, _digikey_error(r)
             return res
         try:
             d = r.json()
@@ -339,7 +340,7 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
         if r.status == 404:                        # also what productdetails says when several makers sell this number
             return self._shared(p, res)
         if not r.ok:
-            res.error = L._http_error(L.LifecycleResult(self.name), r).error
+            res.error = _digikey_error(r)
             return res
         try:
             d = r.json()
@@ -351,6 +352,12 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
         except (ValueError, AttributeError, TypeError) as e:
             res.error = f"unparseable response: {e}"
             return res
+
+
+def _digikey_error(r):
+    if r.status == 429:
+        return "DigiKey: HTTP 429: request limit reached (the free plan allows 1000 a day; it resets at midnight UTC)"
+    return L._http_error(L.LifecycleResult("digikey"), r).error
 
 
 def _case_text(prod):

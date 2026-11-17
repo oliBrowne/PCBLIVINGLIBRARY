@@ -112,6 +112,26 @@ def test_no_maker_and_a_cut_short_result_page_is_not_found():
     assert _ask(Cut(two), "LM358DR", "Texas Instruments").found      # the BOM maker's own listing is still found
 
 
+class Limited(HTTP):
+    """DigiKey's daily allowance is used up: it answers 429 (keyword search, and productdetails unless keyword_only)."""
+    def __init__(self, keyword_only=True):
+        super().__init__([])
+        self.keyword_only = keyword_only
+
+    def request(self, method, url, body=None, headers=None, cache=True):
+        if "search/keyword" in url or ("productdetails" in url and not self.keyword_only):
+            self.calls.append((method, url, body))
+            return Response(429, json.dumps({"status": 429, "detail": "Daily Ratelimit exceeded. Retry in 36000 seconds."}))
+        return super().request(method, url, body, headers, cache)
+
+
+def test_daily_limit_is_an_error_not_not_found():
+    from ecadlib import providers as P
+    for http in (Limited(), Limited(keyword_only=False)):
+        r = _ask(http, "LM358DR", "Texas Instruments")
+        assert r.found is None and r.error and P.account_limit(r.error), (r.found, r.error)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
