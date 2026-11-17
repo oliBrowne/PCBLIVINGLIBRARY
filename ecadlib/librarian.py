@@ -1023,7 +1023,11 @@ class Run:
                 text, _ = K.load_footprint(cand, self.http)
                 self.put_fp(st, text, fp_name, f"kicad:{cand}", self.http)
                 st["tried"].append(f"kicad: footprint {cand} ({why})")
-                if why.startswith(("shortest", "footprint named")):     # a guess by name or text: held until a person looks
+                if why.startswith("footprint named after") and not bom_fp and \
+                        land_named_after(cand, mpn, kind, search_case(row)):    # KiCad's land for this very part
+                    st["tried"].append(f"kicad: {cand} is named after {mpn} itself (or its series and a value code): "
+                                       f"its maker's own land, no look needed")
+                elif why.startswith(("shortest", "footprint named")):   # a guess by name or text: held until a person looks
                     st["verify"].append(f"footprint {cand} chosen by {why}: compare with the datasheet land pattern")
                 elif why == "symbol's Footprint property":
                     other = self.other_makers_land(st, ln, row, kind, mpn, cand)
@@ -1234,15 +1238,24 @@ class Run:
           case   the part search found this exact MPN (one maker) and its case text names the symbol's own land, and
                  the BOM names no other package;
           pins   the symbol's named pins all agree, in one column of one table, with the pin table printed in this
-                 MPN's datasheet (its text layer, ecadlib.pin_text; no model, no cost).
+                 MPN's datasheet (its text layer, ecadlib.pin_text; no model, no cost); for a discrete, instead, a
+                 two-pin diode on a diode land (diode_land_numbering), or a suffix that is only a reel / lead-free /
+                 gain-group code (discrete_ordering_code): the case still has to name the symbol's land.
+        A symbol with no Footprint of its own (LM358) takes the land the case names when its footprint filters accept
+        it (KiCad draws the symbol for that package); the pin table then decides.
         Anything else -> False (held for a look)."""
         from . import stdparts as SP, pin_text as PT
         if row.get("src_several") or norm_mpn(row.get("src_mpn") or "") != norm_mpn(mpn or ""):
             return False
         land, case = str(st.get("hint_fp") or "").split(":")[-1], search_case(row)
+        k = kind or ("D" if sym_ref.startswith(("Diode:", "LED:")) else None)   # a diode's package names (SOD-123)
+        if not land and case:                     # a symbol with no land of its own (LM358): the land the case names,
+            from .resolve import _filter_hit       # when KiCad draws this symbol for it (its footprint filters)
+            named = case_land(case, k)
+            if named and _filter_hit(K._props(chain or []).get("ki_fp_filters", ""), named):
+                land = named
         if not land or not case:
             return False
-        k = kind or ("D" if sym_ref.startswith(("Diode:", "LED:")) else None)   # a diode's package names (SOD-123)
         named = [case_land(t, k) for t in (case, ln.get("footprint")) if str(t or "").strip()]
         if not named or any(n != land for n in named):
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r} does not name its land "
@@ -1253,6 +1266,16 @@ class Run:
             pins = [(pr[1].get("num"), pr[1].get("name")) for pr in sym["prims"] if pr[0] == "pin"]
         except Exception:
             return False
+        sym_lib, said = sym_ref.split(":")[0], f"{row.get('src_package_from') or 'the part search'}'s case {case!r}"
+        rest = rest_after_name(mpn, sym_ref.split(":")[-1])
+        if diode_land_numbering(sym_lib, pins, land):
+            st["tried"].append(f"kicad: {sym_ref} for {mpn} confirmed: {said} is its land {land}, and a two-pin diode "
+                               f"has its cathode on pad 1 of every diode land (whatever '{rest}' orders)")
+            return True
+        if discrete_ordering_code(rest, sym_lib):
+            st["tried"].append(f"kicad: {sym_ref} for {mpn} confirmed: {said} is its land {land}, and '{rest}' is only "
+                               f"a reel / lead-free / gain-group ordering code (the same die and pins)")
+            return True
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
         v = PT.check(PT.page_texts(data) if data else {}, pins)
         if v["status"] != "agreed":
@@ -1731,6 +1754,87 @@ def lands_agree(a, b):
         if ok:
             return True, f"{len(A)} pads within {worst:.2f} mm" + (f", turned {turn * 90} degrees" if turn else "")
     return False, "pads differ by more than 0.15 mm"
+
+
+def rest_after_name(mpn, name):
+    """The MPN as written after a KiCad name it starts with (normalised: 'BAT54S-7-F' after BAT54S -> '-7-F'), a
+    packing code the duplicate check strips left off ('BC847C,215' after BC847 -> 'C'); None when it does not start
+    with that name."""
+    from .dedupe import DEFAULT_SUFFIXES
+    s, nm = str(mpn or ""), norm_mpn(name)
+    for p in DEFAULT_SUFFIXES:                        # NXP ,215 / -TR / #PBF: the same part on a reel
+        t = re.sub(p, "", s, flags=re.I)
+        if t != s and norm_mpn(t).startswith(nm):
+            s = t
+    raw = [i for i, c in enumerate(s) if c.isalnum() or
+           (c == "." and s[i - 1:i].isdigit() and s[i + 1:i + 2].isdigit())]
+    if not nm or norm_mpn(s)[:len(nm)] != nm:
+        return None
+    return s[raw[len(nm) - 1] + 1:]
+
+
+# The makers' ordering codes after a discrete's KiCad name that change neither the die nor the package's pins: a reel
+# size and lead-free mark (Diodes Inc. -7 / -13 / -F, onsemi T1G / T3G / G, Fairchild TO-92 BU / TA / TF / TFR / TAR,
+# Zetex TA / TC, Vishay -E3 + packing / -GS08) and, for a BJT only, its hFE group (BC847 + A/B/C, BC817 + -16/-25/-40).
+# Nothing else: a letter that names another part (BAT54 + S: a series pair, BC847 + W: SC-70, BSS138 + BK, 2N7002 + K)
+# does not parse, and such parts keep the free pin-table check and then a person's look.
+DISCRETE_LIBS = ("Diode", "Transistor_BJT", "Transistor_FET")
+_PACK_TOKEN = r"(?:-(?:7|13)|-F|T[13]G|-?E3(?:[-/]\d{2})?|-?GS(?:08|18)|BU|TAR|TFR|TA|TC|TF)"
+_HFE_GROUP = r"(?:[ABC]|-(?:16|25|40))"
+
+
+def discrete_ordering_code(rest, sym_lib):
+    """Is rest (rest_after_name) only such codes, for a symbol of library sym_lib (DISCRETE_LIBS)?"""
+    r = str(rest or "").upper().strip()
+    if not r or sym_lib not in DISCRETE_LIBS:
+        return False
+    grade = f"{_HFE_GROUP}?" if sym_lib == "Transistor_BJT" else ""
+    return bool(re.fullmatch(rf"{grade}{_PACK_TOKEN}*G?", r))
+
+
+def diode_land_numbering(sym_lib, pins, land):
+    """A two-pin diode whose pin 1 is the cathode, on a KiCad diode land (D_SOD-123, D_SMA, D_DO-41 ...: pad 1 is the
+    cathode, the band end, on every one): its pins are right on that land whatever its ordering suffix says."""
+    names = {str(n): str(nm).strip().upper() for n, nm in pins}
+    return (sym_lib == "Diode" and len(pins) == 2 and names.get("1") in ("K", "CATHODE") and
+            names.get("2") in ("A", "ANODE") and bool(re.match(r"D_", str(land or "").split(":")[-1])))
+
+
+def land_named_after(land_ref, mpn, kind, case=""):
+    """Is a KiCad footprint picked by name the land of this very part, so no person needs to compare it?
+      whole MPN  the footprint's part-number token (the first one, as footprint_by_series reads it) is the whole MPN
+                 as the maker writes it, leading zeros and a bracketed plating / packing code aside (JST
+                 B2B-XH-A(LF)(SN), Molex 0532610471 = 53261-0471): KiCad drew it from that part's own drawing;
+      series     an inductor line (kind L) on an Inductor_* land, or a crystal on a Crystal land, whose MPN is the
+                 series the land is named after + '-' + only a value code (SRR1260-100M, LPS4018-103MRB,
+                 ABM3-16.000MHZ-B2-T): one body for the whole series. A crystal's pad count must also be the one the
+                 part search's case gives ('2-SMD' for ABM3-2Pin).
+    No wildcard name (USB4105-xx-A), no series with an ordering code after it (B2B-PH-K + -S), no name found inside a
+    longer one (282834-2 in 1-282834-2): those stay with a person."""
+    lib, _, name = str(land_ref or "").rpartition(":")
+    m = re.sub(r"[\s(].*$", "", str(mpn or "").upper().strip())
+    flat = re.sub(r"[^A-Z0-9]", "", m).lstrip("0")
+    tok = next((t for t in name.split("_") if _pn_token(t)), "")
+    if not tok or len(flat) < 5 or re.search(r"x{2,}", tok) or lib.startswith("Package_"):
+        return False                                   # a generic package (SOIC-8) is named after no maker's part
+    if re.sub(r"[^A-Za-z0-9]", "", tok).upper().lstrip("0") == flat:
+        return True
+    if kind == "L" and lib.startswith("Inductor"):
+        value = r"(?:\d{3}|\d+R\d+|R\d+)[A-Z]{0,3}"
+    elif kind is None and lib == "Crystal":
+        pads = re.search(r"-(\d+)Pin$", tok)
+        said = re.match(r"\s*(\d+)-", str(case or ""))
+        if not (pads and said and pads.group(1) == said.group(1)):
+            return False
+        value = r"\d+(?:\.\d+)?MHZ(?:-[A-Z0-9]{1,4}){0,3}"
+    else:
+        return False
+    for series in {re.sub(r"(?i)-\d+Pin$", "", tok), tok.split("-")[-1]}:
+        series = series.upper()
+        if len(re.sub(r"[^A-Z0-9]", "", series)) >= 4 and re.search(r"[A-Z]", series) and re.search(r"\d", series) \
+                and re.fullmatch(re.escape(series) + "-" + value, m):
+            return True
+    return False
 
 
 def search_case(row):
