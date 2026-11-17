@@ -1297,8 +1297,9 @@ def triage(lines, index, provs, http, shared=None):
                     r = P.SourceResult(getattr(prov, "name", "?"), error="plugin returned no SourceResult")
                 elif getattr(prov, "_plugin", False) and (bad := P.result_shape_problem(r)):
                     r = P.SourceResult(getattr(prov, "name", "?"), error=f"plugin returned a bad SourceResult ({bad})")
+                rdesc = (r.extra or {}).get("description") if isinstance(r.extra, dict) else ""
                 if not src_pkg and r.found and not r.error and r.mpn and (case := _case_text(
-                        getattr(r, "package", ""), (r.extra or {}).get("description") if isinstance(r.extra, dict) else "")) \
+                        getattr(r, "package", "") or slash_case(rdesc, r.mpn), rdesc)) \
                         and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
                     src_pkg, src_pkg_from = case[:80], prov.name                     # near match's (LM358DR != LM358P)
                 if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
@@ -1398,6 +1399,21 @@ def triage(lines, index, provs, http, shared=None):
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })
     return rows
+
+
+SLASH_CASE = re.compile(r"^\s*([A-Z0-9][A-Z0-9.+-]*)/([A-Z0-9][A-Z0-9-]*(?:/[A-Z0-9][A-Z0-9-]*)*)(?=\s|$)", re.I)
+
+
+def slash_case(desc, mpn):
+    """Mouser's description of NXP / Nexperia parts names the case after the type: 'BC847C/SOT23/TO-236AB',
+    '74HC595D/SOT109/SO16' (the type number, then the package codes) -> 'SOT23/TO-236AB', else ''. Only when the
+    first word is this MPN's own type (the MPN without its ',215' packing code), so a slash in other text is not read
+    as a case."""
+    m = SLASH_CASE.match(str(desc or ""))
+    if not m:
+        return ""
+    own = _n(re.sub(r",\d{3}$", "", str(mpn or "")))
+    return m.group(2) if own and _n(m.group(1)) == own else ""
 
 
 def _case_text(text, desc=""):

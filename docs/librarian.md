@@ -378,3 +378,23 @@ This runs the lifecycle watcher, the KiCad upstream check, the Altium 365 drift 
 A check without credentials is **skipped**, not failed, and the report says what to set. Lifecycle needs Nexar, DigiKey or Mouser keys. A365 needs `NEXAR_TOKEN` and a workspace, from `--workspace` or `[altium365] workspace`. Upstream needs the provenance `manifest.json` that `kicad_import` writes. It is found next to the plan or in `<plan dir>/models/`.
 
 `--apply` only reconverts KiCad parts whose upstream source *changed*. Renamed and deleted sources are left for a person. This gives a pull request a real library diff. `--github issue` updates **one** rolling issue labelled `ecadlib-upkeep`: it replaces the body and adds a short comment, so it never opens duplicates. `--github pr` commits the applied files to `ecadlib/upkeep-YYYY-MM-DD`, pushes the branch and opens or updates the PR. With nothing to commit, it falls back to the issue. When nothing is new, GitHub is not touched. The GitHub calls use the REST API when `GITHUB_TOKEN` and `GITHUB_REPOSITORY` (or `--repo`) are set, and `gh api` otherwise. If the GitHub step fails, no state is saved, so nothing is lost. [`examples/upkeep.yml`](../examples/upkeep.yml) is a ready-to-copy weekly workflow (cron plus a manual run with an `apply` switch) for **your** library repo, with the secrets it reads listed at the top. It is not active in this repo. The same checks are available from the web/MCP side as the `upkeep_run` tool (`Workspace.upkeep_run`), which never calls GitHub. **Not tested live:** GitHub, GitLab, Nexar and the distributors are fakes in the tests.
+
+
+## Parts released with no person's look (independent agreement only)
+
+A part built from a guess or a single source waits for a person (`verify:` holds). It is released on its own only when
+a source independent of that guess agrees, never on a confidence score:
+
+* **Datasheet read:** the footprint must agree with the standard package the BOM or the part search (DigiKey / Mouser
+  case text for this exact MPN) names (`crosscheck`); a table entry picked by the read's own package name does not
+  count. The symbol must agree with the pin table printed in the same PDF, read from its text layer with no model
+  (`ecadlib.pin_text`): every named pin on one line with its number, all in one column of one table. A table whose other
+  columns number the same pins differently (SOIC and SOT-23 columns, or a variant with swapped supplies) is not an
+  agreement, because the text does not say which column is this part's. A scanned PDF never agrees.
+* **KiCad symbol matched by name + an ordering suffix**, and **a family-table pinout** (SOT-23 regulators, transistors):
+  the part search's case for this exact MPN must name the symbol's own land, and the datasheet's pin table must agree as
+  above.
+* **KiCad footprint picked by name** (named after the MPN or its series): released when a datasheet read gave the
+  maker's own land and it is the same land (every pad within 0.15 mm; the whole footprint may be turned, never mirrored).
+
+Everything else keeps its hold, and the reason says what did not agree.

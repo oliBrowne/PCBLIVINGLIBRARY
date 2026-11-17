@@ -60,6 +60,7 @@ DEFAULTS = {
     "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
                 "parity": "hold",              # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
                 "height": "warn",              # hold | warn: a missing or implausible 3D height holds the part, or is a note
+                "allow_missing_3d": False,     # true: a part with NO 3D height is never held for it (even height = "hold")
                 "manufacturer": "warn",        # hold | warn: an empty Manufacturer holds the part, or is a note
                 "datasheet": "warn"},          # hold | warn: no datasheet link holds the part, or is a note
     "altium365": {"workspace": ""},
@@ -478,6 +479,8 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
     if "height" in (raw.get("release") or {}) and raw["release"]["height"] not in ("hold", "warn"):
         _err(where, "release.height", f"= {raw['release']['height']!r}: must be hold or warn")
+    if "allow_missing_3d" in (raw.get("release") or {}) and not isinstance(raw["release"]["allow_missing_3d"], bool):
+        _err(where, "release.allow_missing_3d", f"= {raw['release']['allow_missing_3d']!r}: must be true or false")
     for key in ("manufacturer", "datasheet"):
         if key in (raw.get("release") or {}) and raw["release"][key] not in ("hold", "warn"):
             _err(where, f"release.{key}", f"= {raw['release'][key]!r}: must be hold or warn")
