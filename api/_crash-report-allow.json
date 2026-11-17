@@ -3830,6 +3830,7 @@
 "case_agrees",
 "case_from_search",
 "case_land",
+"case_or_device_land",
 "category_designator",
 "centred",
 "chip_size_clash",

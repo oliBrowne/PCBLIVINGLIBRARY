@@ -36,3 +36,46 @@ def test_the_wildcard_land_is_the_parts_own_only_with_a_value_code_after_the_ser
     assert not E("Inductor_SMD:L_Coilcraft_XAL4020-XXX", "XAL4020-222MEB", None)  # not an inductor line
     assert not E("Inductor_SMD:L_Coilcraft_XAL4020-XXX", "XAL4020-ABC", "L")      # not a value code
     assert not E("Button_Switch_THT:SW_SPST_REED_CT05-XXXX-G1", "CT05-1234-G1", None)
+
+
+# ---------------------------------------------------------------- DigiKey's 'Supplier Device Package'
+def test_the_device_package_settles_a_case_that_names_only_the_family():
+    C = L.case_or_device_land
+    assert C("32-TQFP", "32-TQFP (7x7)") == "TQFP-32_7x7mm_P0.8mm"
+    assert C("44-TQFP", "44-TQFP (10x10)") == "TQFP-44_10x10mm_P0.8mm"
+    assert C("32-TQFP", "") is None and C("32-TQFP", "32-TQFP") is None
+    assert C("SOT-23-6 Thin, TSOT-23-6", "TSOT-23-6") == "TSOT-23-6"      # the group lists the device's land
+    assert C("8-SOIC (0.154\", 3.90mm Width)", "8-SO") == "SOIC-8_3.9x4.9mm_P1.27mm"
+    assert C("24-VFQFN Exposed Pad", "24-QFN (4x4)") is None               # body only: the exposed pad is unknown
+    assert C("8-SOIC (0.209\", 5.30mm Width)", "8-SOIC") is None           # two KiCad lands fit 5.30 mm
+
+
+def test_a_device_package_naming_sc59_under_digikeys_sot23_group_is_not_sot23():
+    C, G = L.case_or_device_land, "TO-236-3, SC-59, SOT-23-3"
+    assert C(G, "") == C(G, "SOT-23-3 (TO-236)") == C(G, "TO-236AB") == C(G, "PG-SOT23") == "SOT-23"
+    assert C(G, "SC-59") is None and C(G, "SC-59-3") is None
+
+
+def test_a_dip_case_with_its_row_spacing_names_kicads_dip_land():
+    assert L.case_land("28-DIP (0.300\", 7.62mm)") == "DIP-28_W7.62mm"
+    assert L.case_land("8-DIP (0.300\", 7.62mm)") == "DIP-8_W7.62mm"
+    assert L.case_land("40-DIP (0.600\", 15.24mm)") == "DIP-40_W15.24mm"
+    assert L.case_land("28-PDIP") is None                                  # 300 or 600 mil: not said
+    assert L.case_land("8-DIP (0.300\", 10.16mm)") is None                 # the two widths disagree
+
+
+def test_digikeys_device_package_reaches_the_triage_row():
+    from ecadlib import part_lookup as PL, providers as P, bom_triage as T
+    from ecadlib.kicad_index import KiCadIndex
+    specs = PL.specs_from_pairs([("Package / Case", "32-TQFP"), ("Supplier Device Package", "32-TQFP (7x7)")])
+    assert specs["package_text"] == "32-TQFP" and specs["device_package"] == "32-TQFP (7x7)", specs
+
+    class Src:
+        name = "digikey"
+
+        def lookup(self, work):
+            r = P.SourceResult("digikey", found=True, mpn="ATMEGA328P-AU", package="32-TQFP")
+            r.extra = {"device_package": "32-TQFP (7x7)", "description": "IC MCU 8BIT 32KB FLASH 32TQFP"}
+            return r
+    row = T.triage([{"designator": "U1", "mpn": "ATMEGA328P-AU"}], KiCadIndex([]), [Src()], None)[0]
+    assert row["src_package"] == "32-TQFP" and row["src_package_device"] == "32-TQFP (7x7)", row
