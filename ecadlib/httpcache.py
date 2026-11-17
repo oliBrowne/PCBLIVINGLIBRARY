@@ -120,6 +120,36 @@ def key_url(url):
     return urlunparse(u._replace(query=urlencode(q))) if q else url
 
 
+# A part search that listed nothing is kept a day, not the whole TTL: the 1000-part run of 2026-11-17 decided some 60
+# lines on Mouser / DigiKey search answers a day and a half old, so a part a catalogue adds, or an answer from a bad
+# minute, is not seen for a week. A found part keeps the full TTL. An API's 404 keeps it too: DigiKey's productdetails
+# says 404 for every part several makers sell, and its keyword search (which is re-asked) decides those.
+NEG_TTL = 86400
+
+
+def empty_answer(url, status, text):
+    """True for an API's 2xx search answer that lists no part (Mouser's
+    SearchResults.Parts, DigiKey's keyword Products / ExactMatches, JLCPCB's componentPageInfo.list)."""
+    if not api_url(url):
+        return False
+    if not (200 <= status < 300) or len(text) > 65536:
+        return False
+    try:
+        d = json.loads(text)
+    except ValueError:
+        return False
+    if not isinstance(d, dict):
+        return False
+    if isinstance(d.get("SearchResults"), dict):
+        return not d["SearchResults"].get("Parts")
+    if "Products" in d or "ExactMatches" in d:
+        return not d.get("Products") and not d.get("ExactMatches")
+    page = (d.get("data") or {}).get("componentPageInfo") if isinstance(d.get("data"), dict) else None
+    if isinstance(page, dict):
+        return not page.get("list")
+    return False
+
+
 # Hosts whose API allows fewer calls than one a second: the least time between two calls to them (s). Mouser's Search
 # API allows 30 a minute (and answers 403 to the 31st), so a BOM of 100 lines kept getting refused for a minute.
 HOST_INTERVAL = {"api.mouser.com": 2.1}
@@ -165,6 +195,9 @@ class CachedHTTP:
                 d = None
             if d is not None and bad(d["status"], d["text"]):
                 d = None
+            elif d is not None and not self.offline and time.time() - f.stat().st_mtime >= min(NEG_TTL, self.ttl) \
+                    and empty_answer(url, d["status"], d["text"]):
+                d = None                             # a day-old "not found": asked again (NEG_TTL)
         if d is not None:
             self.log.append((method, url, d["status"], True))
             return Response(d["status"], d["text"], from_cache=True)
