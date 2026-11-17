@@ -109,6 +109,20 @@ def packing_suffix(mpn, nm, k, head=""):
     return any(norm_mpn(re.sub(p, "", str(mpn), flags=re.I)) == nm[:k] for p in DEFAULT_SUFFIXES)
 
 
+def no_listing(row, mpn):
+    """'' unless every part search that answered for this line found no listing of its MPN (triage's "<source>: not
+    found" notes) and none found it: then one line saying so, with each source's reason (another maker's listing, a
+    near number), so a mistyped, obsolete or invented part number reads as that and not as a lookup that never ran."""
+    notes = [n.strip() for n in re.split(r";\s+(?=[a-z_]+: )", str((row or {}).get("notes") or "")) if n.strip()]
+    missed = [n for n in notes if re.match(r"[a-z_]+: not found\b", n)]
+    if not missed or not mpn or (row or {}).get("src_description") or (row or {}).get("src_datasheet"):
+        return ""
+    names = ", ".join(n.split(":", 1)[0] for n in missed)
+    why = "; ".join(m.group(1) for n in missed if (m := re.search(r"not found \((.*)\)$", n)))
+    return (f"part search: no distributor lists {mpn} ({names} answered: not found"
+            + (f"; {why}" if why else "") + "): check the part number; it may be mistyped, obsolete or not a real part")
+
+
 class KiCadLibrary:
     """Name index of the official KiCad libraries (see the module docstring). Building it reads ~400 GitLab tree pages;
     each page is kept in the HTTP cache, so a build that stops (timeout, HTTP 429) resumes where it stopped. After a
@@ -1386,6 +1400,8 @@ class Run:
         if not urls and local is None and not (cfg.get("web_search") and (self.api_key or getattr(self.reader, "key", None))):
             note = D.folder_problem(cfg.get("folder"))
             st["tried"].append("datasheet: no datasheet URL known" + (f"; {note}" if note else ""))
+            if (nobody := no_listing(row, mpn)):
+                st["tried"].append(nobody)
             self.reading(st)                          # (no link: none refused)
             return
         # (the folder file's name only, never its path)

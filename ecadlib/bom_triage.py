@@ -1300,7 +1300,7 @@ def triage(lines, index, provs, http, shared=None):
                 rdesc = (r.extra or {}).get("description") if isinstance(r.extra, dict) else ""
                 if not src_pkg and r.found and not r.error and r.mpn and (case := _case_text(
                         getattr(r, "package", "") or slash_case(rdesc, r.mpn), rdesc)) \
-                        and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
+                        and _same(r.mpn, ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
                     src_pkg, src_pkg_from = case[:80], prov.name                     # near match's (LM358DR != LM358P)
                     src_height = str((r.extra or {}).get("height") or "")[:60] if isinstance(r.extra, dict) else ""
                 if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
@@ -1348,7 +1348,7 @@ def triage(lines, index, provs, http, shared=None):
                         several = several or len(makers) > 1
                         if len(makers) > 1:
                             seen(*makers)
-                        if one and r.manufacturer and r.mpn and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):
+                        if one and r.manufacturer and r.mpn and _same(r.mpn, ln.get("mpn") or work.get("mpn", "")):
                             disagree(P.clean_maker(r.manufacturer), prov.name)
                         if not sheet and (r.extra or {}).get("datasheet"):
                             sheet, sheet_from = r.extra["datasheet"], prov.name
@@ -1357,7 +1357,10 @@ def triage(lines, index, provs, http, shared=None):
                         if r.lcsc and not work.get("lcsc"):   # an official source (Nexar: LCSC's offer) found the LCSC
                             work["lcsc"] = r.lcsc              # number, so the unofficial JLCPCB search is not needed
                             notes.append(f"{prov.name}: MPN -> {r.lcsc}")
-                    if r.found and ln.get("mpn") and r.mpn and _n(r.mpn) != _n(ln["mpn"]):
+                    if r.found is False and getattr(prov, "official", True):
+                        why = (r.extra or {}).get("note") if isinstance(r.extra, dict) else ""   # a silent miss read
+                        notes.append(f"{prov.name}: not found" + (f" ({why})" if why else ""))  # like a lookup never made
+                    if r.found and ln.get("mpn") and r.mpn and not _same(r.mpn, ln["mpn"]):
                         notes.append(f"MPN mismatch: BOM {ln['mpn']} vs {prov.name} {r.mpn}")
                     if r.found and r.has_footprint:
                         break
@@ -1433,6 +1436,11 @@ def _case_text(text, desc=""):
 def _n(s):
     from .kicad_index import norm_mpn      # as every MPN is compared: SMAJ5.0A is not SMAJ50A (the '.' is kept)
     return norm_mpn(s)
+
+
+def _same(a, b):
+    from .kicad_index import same_mpn      # one part: 22-23-2021 is Molex's 0022232021
+    return same_mpn(a, b)
 
 
 def _yn(v):

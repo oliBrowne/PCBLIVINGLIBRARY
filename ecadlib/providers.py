@@ -213,7 +213,8 @@ def same_maker(a, b):
     for x, y in ((a, b), (b, a)):              # DigiKey's "Analog Devices Inc./Maxim Integrated", "EPCOS - TDK
         if not isinstance(x, str):             # Electronics", "Amphenol ICC (FCI)": either name
             continue
-        parts = [p for p in re.split(r"/|\s+-\s+|[()（）]", x) if p.strip()]
+        parts = [re.sub(r"(?i)^\s*(?:formerly|previously|now)\s+", "", p)   # DigiKey's "Aratas (Formerly Omron
+                 for p in re.split(r"/|\s+-\s+|[()（）]", x) if p.strip()]      # Components)" is Omron too
         if len(parts) > 1 and any(same_maker(p, y) for p in parts       # "Vishay ... - Diodes Division": a division
                                   if "DIVISION" not in _maker_words_all(p)   # names a part of the company, not another
                                   and not set(_maker_words_all(p)) <= _MAKER_REGION | _MAKER_PLACE | _MAKER_WORDS):
@@ -507,6 +508,8 @@ def from_part_info(info, res):
         return res
     res.found = info.found
     if not info.found:
+        if getattr(info, "note", ""):          # why it is not this part (another maker's listing, a near number)
+            res.extra["note"] = clean_text(info.note, 300)
         return res
     res.mpn, res.manufacturer, res.url = info.mpn, info.manufacturer, info.url
     if getattr(info, "makers", None):      # every maker the source lists the exact MPN under (bom_triage's maker fill)

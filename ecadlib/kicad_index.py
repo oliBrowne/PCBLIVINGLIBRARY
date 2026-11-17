@@ -31,6 +31,18 @@ BODY_RE = re.compile(r"(?<![0-9.])(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(?:x\d+(?:\.\d+
 DECIMAL_POINT = re.compile(r"(?<=\d)\.(?=\d)")
 
 
+def same_mpn(a, b):
+    """Two part numbers name one part: equal by norm_mpn, or both all digits and equal but for leading zeros (Molex
+    writes 22-23-2021 in its catalogue and 0022232021 at the distributors; 47219-2001 is 0472192001). Never a suffix,
+    prefix or a near number: those can be another part."""
+    ka, kb = norm_mpn(a), norm_mpn(b)
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    return ka.isdigit() and kb.isdigit() and len(ka.lstrip("0")) >= 7 and ka.lstrip("0") == kb.lstrip("0")
+
+
 def norm_mpn(s, dots=True):
     """An MPN without case and punctuation, for comparing: 'LM358-DR' == 'lm358dr'. The micro sign is U (µA741CN ==
     UA741CN), fullwidth / accented letters fold to ASCII; a letter that has no ASCII form is kept, never dropped

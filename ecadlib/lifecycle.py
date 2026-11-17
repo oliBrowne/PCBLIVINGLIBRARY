@@ -28,7 +28,7 @@ from . import providers as P
 from . import sheetsafe as SS
 from .altium365 import M_UPDATE_PARAMS, Nexar as DesignClient
 from .httpcache import CachedHTTP
-from .kicad_index import norm_mpn
+from .kicad_index import norm_mpn, same_mpn
 from . import userconfig as UC
 
 SEVERITY = {"active": 0, "nrnd": 1, "ltb": 2, "obsolete": 3}
@@ -78,7 +78,7 @@ def _pick(items, part, mpn_of, mfr_of):
     maker, no listing is by that maker, and the listings name more than one other maker, nothing is picked: the same
     MPN from two other makers says nothing about this maker's part (LM358 from TI, onsemi and ST have their own
     lifecycles), so the source reports "not found" rather than another maker's status."""
-    exact = [i for i in items if isinstance(i, dict) and norm_mpn(mpn_of(i)) == norm_mpn(part["mpn"])]
+    exact = [i for i in items if isinstance(i, dict) and same_mpn(mpn_of(i), part["mpn"])]
     if not exact:
         return None
     want = part.get("manufacturer") or ""
@@ -99,7 +99,7 @@ def exact_makers(items, mpn, mpn_of, mfr_of):
     one maker sells it; more = clones or second sources share the MPN, so none of them is the part's maker."""
     out = []
     for i in items:
-        if isinstance(i, dict) and norm_mpn(mpn_of(i)) == norm_mpn(mpn):
+        if isinstance(i, dict) and same_mpn(mpn_of(i), mpn):
             m = str(mfr_of(i) or "").strip()
             if maker_key(m) and not any(same_maker(m, o) for o in out):
                 out.append(m)
@@ -203,7 +203,7 @@ class DigiKeyLifecycle(P.DigiKey):
 
 def parse_digikey(data, part, res):
     p = data.get("Product") if isinstance(data.get("Product"), dict) else data
-    if norm_mpn(p.get("ManufacturerProductNumber")) != norm_mpn(part["mpn"]):
+    if not same_mpn(p.get("ManufacturerProductNumber"), part["mpn"]):
         res.found, res.note = False, f"best match {p.get('ManufacturerProductNumber')!r} is not this MPN"
         return res
     maker = (p.get("Manufacturer") or {}).get("Name", "") if isinstance(p.get("Manufacturer"), dict) else ""

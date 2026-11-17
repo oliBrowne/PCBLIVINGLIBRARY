@@ -9,12 +9,12 @@ DIGIKEY_CLIENT_ID/DIGIKEY_CLIENT_SECRET, MOUSER_API_KEY. JLCPCB needs none. Resp
 (query-string secrets such as Mouser's apiKey are redacted from cache keys and files; token requests are never
 cached). Response shapes: each provider's `shapes` says what was checked against public docs or the Nexar schema
 and what is assumed."""
-import json, re, time
+import json, os, re, time
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from . import lifecycle as L, providers as P
-from .kicad_index import norm_mpn, package_of
+from .kicad_index import norm_mpn, package_of, same_mpn
 from . import userconfig as UC
 
 
@@ -355,10 +355,16 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
         try:
             d = r.json()
             hits = [x for x in (d.get("ExactMatches") or []) + (d.get("Products") or []) if isinstance(x, dict)
-                    and norm_mpn(x.get("ManufacturerProductNumber")) == norm_mpn(p["mpn"])]
+                    and same_mpn(x.get("ManufacturerProductNumber"), p["mpn"])]
             maker = lambda x: (x.get("Manufacturer") or {}).get("Name", "") if isinstance(x.get("Manufacturer"), dict) else ""
             if (p.get("manufacturer") or "").strip():
+                every = hits
                 hits = [x for x in hits if P.same_maker(p["manufacturer"], maker(x))]
+                if every and not hits:             # listed, but only by another maker: said, never taken (a wrong
+                    others = list(dict.fromkeys(maker(x) for x in every if maker(x)))   # maker on the line may be
+                    res.note = (f"DigiKey lists {p['mpn']} only from {', '.join(others[:3])}, not "   # a wrong part)
+                                f"{p['manufacturer'].strip()}: check the BOM's maker")
+                    return res
             else:                                  # no maker: "every listing agrees" needs every listing on the page
                 listed = d.get("Products") if isinstance(d.get("Products"), list) else []
                 total = d.get("ProductsCount")
@@ -367,6 +373,10 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
                         res.note = f"DigiKey lists {total} results for {p['mpn']}; with no maker on the line not all were seen"
                     return res
             if not hits:
+                near = near_numbers(p["mpn"], [x.get("ManufacturerProductNumber") for x in
+                                               (d.get("ExactMatches") or []) + (d.get("Products") or []) if isinstance(x, dict)])
+                if near:                                   # named for the person to check, never used
+                    res.note = f"DigiKey lists no {p['mpn']}, only {', '.join(near)}: check the BOM's part number"
                 return res
             cases = {_case_key(x) for x in hits}
             if len(cases) > 1:
@@ -398,13 +408,36 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
         try:
             d = r.json()
             prod = d.get("Product") if isinstance(d.get("Product"), dict) else d
-            if norm_mpn(prod.get("ManufacturerProductNumber")) != norm_mpn(p["mpn"]):
-                res.found, res.note = False, f"best match {prod.get('ManufacturerProductNumber')!r} is not this MPN"
+            if not same_mpn(prod.get("ManufacturerProductNumber"), p["mpn"]):
+                # productdetails answers its best match: the exact number may still be listed (by another maker, or
+                # as one of several), which the keyword search shows; the best match itself is never taken
+                best = str(prod.get("ManufacturerProductNumber") or "")
+                res = self._shared(p, res)
+                if not res.found and not res.error and not res.note:
+                    res.note = f"DigiKey's nearest listing is {best}, not {p['mpn']}: check the BOM's part number"
                 return res
             return digikey_info(prod, self.name, (d.get("SearchLocaleUsed") or {}).get("Currency") or self.currency)
         except (ValueError, AttributeError, TypeError) as e:
             res.error = f"unparseable response: {e}"
             return res
+
+
+def near_numbers(mpn, listed, n=3):
+    """Up to n listed part numbers that start with this one or that it starts with (PCA9685PW / PCA9685PW,118, the
+    ordering code with a packaging suffix; TR/3216FF2-R, a reel prefix; CRCW0402100RFKEA / CRCW0402100RFKED share all
+    but the last letters), shown to the person as what to check. Never used as the part: a suffix can change it."""
+    want, out = norm_mpn(mpn), []
+    if len(want) < 4:
+        return out
+    for m in listed:
+        k = norm_mpn(m)
+        if not k or k == want or m in out:
+            continue
+        common = len(os.path.commonprefix([k, want]))
+        if k.startswith(want) or want.startswith(k) or (k.endswith(want) and len(k) - len(want) <= 3) \
+                or common >= max(6, len(want) - 2):
+            out.append(str(m))
+    return out[:n]
 
 
 def _digikey_error(r):
@@ -512,6 +545,8 @@ class MouserSourcing(L.MouserLifecycle):
             best = L._pick(parts, p, lambda x: x.get("ManufacturerPartNumber"), lambda x: x.get("Manufacturer"))
             if not best:
                 res.found = False
+                res.note = _miss_note("Mouser", p, parts, lambda x: x.get("ManufacturerPartNumber"),
+                                      lambda x: x.get("Manufacturer"))
                 return res
             info = mouser_info(best, self.name)
             info.makers = L.exact_makers(parts, p["mpn"], lambda x: x.get("ManufacturerPartNumber"),
@@ -523,6 +558,18 @@ class MouserSourcing(L.MouserLifecycle):
         except (ValueError, AttributeError, TypeError) as e:
             res.error = f"unparseable response: {e}"
             return res
+
+
+def _miss_note(source, p, items, mpn_of, mfr_of):
+    """Why a source that answered found no listing of this exact part, for the person to check ('' = it lists nothing
+    like it): the number is listed only by other makers, or only longer / near numbers are."""
+    exact = [i for i in items if isinstance(i, dict) and same_mpn(mpn_of(i), p["mpn"])]
+    if exact:
+        others = list(dict.fromkeys(str(mfr_of(i) or "").strip() for i in exact if str(mfr_of(i) or "").strip()))
+        return (f"{source} lists {p['mpn']} only from {', '.join(others[:3])}, not {(p.get('manufacturer') or '').strip()}:"
+                " check the BOM's maker") if others else ""
+    near = near_numbers(p["mpn"], [mpn_of(i) for i in items if isinstance(i, dict)])
+    return f"{source} lists no {p['mpn']}, only {', '.join(near)}: check the BOM's part number" if near else ""
 
 
 def _mouser_parts(d):
