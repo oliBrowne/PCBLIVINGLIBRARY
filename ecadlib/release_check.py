@@ -575,11 +575,19 @@ def check_item(item, base=".", rules=None):
             else:
                 fps = r
     # ---- pins vs pads
+    pinless = False                            # a fiducial / unplated mounting hole: no pin, no numbered pad (below)
     if syms and fps:
         pins = {r["num"] for s in syms for r in s["records"] if r.get("RECORD") == "2"}
         pin_names = {r["num"]: r.get("name", "") for s in syms for r in s["records"] if r.get("RECORD") == "2"}
         pads = [r for r in fps[0]["records"] if r["type"] == "pad"]
-        if not pins:
+        grid = FC.mount_rx([p["designator"] for p in pads]) is FC.MOUNT_GRID     # BGA: H1, H2 .. are balls, not holes
+        mech = {p["designator"] for p in pads if not p["designator"] or (p["hole"] and not p["plated"])
+                or MECH_PAD.fullmatch(p["designator"]) and not (grid and re.fullmatch(r"H\d+", p["designator"]))}
+        numbered = {p["designator"] for p in pads} - mech
+        # nothing to connect: a fiducial or an unplated mounting hole (the librarian's no_bom_part, KiCad's pinless
+        # Mechanical: symbol) on a land whose pads have no number. Any numbered pad still needs its pin
+        pinless = bool(item.get("no_bom_part") and not pins and pads and not any(p["designator"] for p in pads))
+        if not pins and not pinless:
             add("pins", "symbol has no pins")
         from . import symbol_layout as SL          # pin 7 = SDA and WP: two nets on one pad (R-SY-3)
         for msg in SL.shared_numbers([{"num": r["num"], "name": r.get("name", "")} for s in syms for r in s["records"]
@@ -587,10 +595,6 @@ def check_item(item, base=".", rules=None):
             add("pins", msg)
         if not pads:
             add("pins", "footprint has no pads")
-        grid = FC.mount_rx([p["designator"] for p in pads]) is FC.MOUNT_GRID     # BGA: H1, H2 .. are balls, not holes
-        mech = {p["designator"] for p in pads if not p["designator"] or (p["hole"] and not p["plated"])
-                or MECH_PAD.fullmatch(p["designator"]) and not (grid and re.fullmatch(r"H\d+", p["designator"]))}
-        numbered = {p["designator"] for p in pads} - mech
         if pins - {p["designator"] for p in pads}:
             add("pins", f"symbol pins without a pad: {FC._ranges(pins - {p['designator'] for p in pads})}")
         if numbered - pins:
@@ -652,7 +656,7 @@ def check_item(item, base=".", rules=None):
         for lvl, rule, msg in issues:
             if numbering and rule == "pin1" and NUMBERING_WARN.search(msg):
                 continue                       # said by the hold above
-            if rule == "pin1" and msg == "no pad numbered 1" and _has_pin1(nums, pin1):
+            if rule == "pin1" and msg == "no pad numbered 1" and (pinless or _has_pin1(nums, pin1)):
                 continue                       # A1 counts as pin 1 (connectors, BGAs)
             if rule == "copper" and "overlap" in msg and _same_net(msg, pin_names):
                 warns.append(f"{lvl} {rule}: {msg} (same pin name '{pin_names[OVERLAP.search(msg).group(1)]}': stacked on purpose)")
@@ -702,11 +706,14 @@ def check_item(item, base=".", rules=None):
             msg = unchecked("the KiCad / Altium comparison", e)
             (add("files", msg) if mode == "hold" else warns.append(f"parity: {msg}"))
         for d in diffs:
-            (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" else warns.append(f"parity: {d['msg']}"))
+            (add("parity", d["msg"]) if d["level"] == "error" and mode == "hold" and parity_holds(d["msg"])
+             else warns.append(f"parity: {d['msg']}"))
         info["parity"] = "mismatch" if any(d["level"] == "error" for d in diffs) else "match"
     # ---- 3D height: a note to check unless [release] height = "hold" (a height is mechanical, never electrical)
     hold_h = (rules.get("release") or {}).get("height", "warn") == "hold"
     height = (lambda m: add("height", m)) if hold_h else (lambda m: warns.append(f"height: {m}"))
+    missing = height if not allow_missing_3d(rules) else (lambda m: warns.append(f"height: {m} ([release] "
+                                                                                 "allow_missing_3d: a note)"))
     if fps:
         bodies = [AL.parse_params(r["params"]) for r in fps[0]["records"] if r["type"] == "body"]
         hs = [h for h in (_mil(b.get("OVERALLHEIGHT")) for b in bodies) if h]
@@ -722,7 +729,7 @@ def check_item(item, base=".", rules=None):
                          "for the datasheet, no KiCad model)")
             info["height"] = pd[0]
         elif not h:
-            height("no 3D height (no 3D body and no HEIGHT)")
+            missing("no 3D height (no 3D body and no HEIGHT)")
         elif default:
             warns.append(f"3D height {h:.2f} mm is the package default, verify against the datasheet")
             if not lo - 0.01 <= h <= hi + 0.01:
@@ -936,6 +943,18 @@ def _split(failures):
 
 
 RULES = ("files", "pins", "footprint", "height", "fields", "parity", "verify")   # check_item's add()
+
+
+def parity_holds(msg):
+    """Whether a KiCad / Altium parity difference holds the part. A 3D model on one side only is mechanical, never
+    electrical: like a missing 3D height (rule since #137) it is a note to check, not a hold."""
+    return not str(msg or "").startswith("3D model presence")
+
+
+def allow_missing_3d(rules):
+    """[release] allow_missing_3d = true (off by default): a part with no 3D height at all is never held for it, even
+    with [release] height = "hold". A height that is there but implausible is still judged by [release] height."""
+    return (rules.get("release") or {}).get("allow_missing_3d") is True
 
 
 def write_report(rows, stem, plan=""):

@@ -1181,7 +1181,7 @@ def triage(lines, index, provs, http, shared=None):
                          "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
                          "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
                          "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
-                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_several": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
+                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_height": "", "src_several": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"))
@@ -1214,7 +1214,7 @@ def triage(lines, index, provs, http, shared=None):
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         sheet_from = ""                                # the source whose link is `sheet`
-        src_pkg = src_pkg_from = ""                    # the package text a source gives for this exact MPN
+        src_pkg = src_pkg_from = src_height = ""       # the package text (and body height) a source gives for this exact MPN
         limited = {}                                   # source -> its quota / plan-limit answer
         makers_seen = []                               # every maker any source lists for this exact MPN (src_makers)
         maker, maker_from = "", ""             # who makes this exact MPN, from a part search (BOM maker empty)
@@ -1297,10 +1297,12 @@ def triage(lines, index, provs, http, shared=None):
                     r = P.SourceResult(getattr(prov, "name", "?"), error="plugin returned no SourceResult")
                 elif getattr(prov, "_plugin", False) and (bad := P.result_shape_problem(r)):
                     r = P.SourceResult(getattr(prov, "name", "?"), error=f"plugin returned a bad SourceResult ({bad})")
+                rdesc = (r.extra or {}).get("description") if isinstance(r.extra, dict) else ""
                 if not src_pkg and r.found and not r.error and r.mpn and (case := _case_text(
-                        getattr(r, "package", ""), (r.extra or {}).get("description") if isinstance(r.extra, dict) else "")) \
+                        getattr(r, "package", "") or slash_case(rdesc, r.mpn), rdesc)) \
                         and _n(r.mpn) == _n(ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
                     src_pkg, src_pkg_from = case[:80], prov.name                     # near match's (LM358DR != LM358P)
+                    src_height = str((r.extra or {}).get("height") or "")[:60] if isinstance(r.extra, dict) else ""
                 if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
                     limited.setdefault(prov.name, r.error)  # with no key, not an unreachable one
                     continue
@@ -1393,11 +1395,26 @@ def triage(lines, index, provs, http, shared=None):
             "src_manufacturer_from": "" if bom_maker or several else maker_from,
             "src_makers": "; ".join(makers_seen),
             "src_datasheet": sheet, "src_datasheet_from": sheet_from if sheet else "",
-            "src_package": src_pkg, "src_package_from": src_pkg_from,
+            "src_package": src_pkg, "src_package_from": src_pkg_from, "src_height": src_height,
             "src_several": "yes" if several and not bom_maker else "",   # makers the BOM does not pick between
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })
     return rows
+
+
+SLASH_CASE = re.compile(r"^\s*([A-Z0-9][A-Z0-9.+-]*)/([A-Z0-9][A-Z0-9-]*(?:/[A-Z0-9][A-Z0-9-]*)*)(?=\s|$)", re.I)
+
+
+def slash_case(desc, mpn):
+    """Mouser's description of NXP / Nexperia parts names the case after the type: 'BC847C/SOT23/TO-236AB',
+    '74HC595D/SOT109/SO16' (the type number, then the package codes) -> 'SOT23/TO-236AB', else ''. Only when the
+    first word is this MPN's own type (the MPN without its ',215' packing code), so a slash in other text is not read
+    as a case."""
+    m = SLASH_CASE.match(str(desc or ""))
+    if not m:
+        return ""
+    own = _n(re.sub(r",\d{3}$", "", str(mpn or "")))
+    return m.group(2) if own and _n(m.group(1)) == own else ""
 
 
 def _case_text(text, desc=""):

@@ -110,7 +110,10 @@ def test_mechanical_symbol():
     M = SP.mechanical_symbol
     assert M("kicad:TestPoint:TestPoint_Pad_D1.0mm", "TP1", {"1"})[0] == "TestPoint"
     assert M("kicad:MountingHole:MountingHole_3.2mm_M3_Pad_Via", "H1, H2", {"1"})[0] == "MountingHole_Pad"
-    assert M("kicad:MountingHole:MountingHole_3.2mm_M3", "H1", set())[0] is None        # pinless: not built
+    assert M("kicad:MountingHole:MountingHole_3.2mm_M3", "H1", set())[0] == "MountingHole"   # unplated: no pins
+    assert M("kicad:Fiducial:Fiducial_1mm_Mask2mm", "FID1, FID2", set())[0] == "Fiducial"
+    assert M("kicad:Fiducial:Fiducial_1mm_Mask2mm", "FID1", {"1"})[0] is None             # a numbered pad needs a pin
+    assert M("kicad:Fiducial:Fiducial_1mm_Mask2mm", "U1", set())[0] is None               # not a fiducial's designator
     assert M("standard:Fuse:Fuse_1206_3216Metric", "F1", {"1", "2"}, "500mA 0466.500NR")[0] == "Fuse"
     assert M("standard:Fuse:Fuse_1812_4532Metric", "F2", {"1", "2"}, "MF-MSMF050-2")[0] == "Polyfuse"
     assert M("standard:Fuse:Fuse_1206_3216Metric", "F3", {"1", "2"}, "PTC resettable 500mA")[0] == "Polyfuse"
