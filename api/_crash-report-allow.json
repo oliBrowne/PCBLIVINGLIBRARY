@@ -3866,6 +3866,7 @@
 "house_symbol",
 "is_kicad_source",
 "is_passive_part",
+"jedec_case_fits",
 "keep_decisions",
 "kicad",
 "kicad_chain_types",

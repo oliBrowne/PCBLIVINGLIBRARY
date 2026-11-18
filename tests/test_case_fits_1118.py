@@ -58,6 +58,29 @@ def test_a_case_or_land_of_another_shape_fits_nothing():
 
 
 # ---------------------------------------------------------------- the free check's PDF: every link, as the reader tries
+def test_a_jedec_outline_name_is_the_package_of_kicads_land_of_its_common_name():
+    """DigiKey files SOT-143 as 'TO-253-4, TO-253AA' and SOT-223 as 'TO-261-4, TO-261AA': the JEDEC registrations of
+    those packages. The standard tables hold no SOT-143 and leave SOT-223's tab numbering open, so the case named no
+    land; for a KiCad symbol that names its own land the outline is still that land's package."""
+    J = L.jedec_case_fits
+    assert J("TO-253-4, TO-253AA", "SOT-143-4", "SOT-143") and J("TO-253-4, TO-253AA", "", "SOT-143")
+    assert J("TO-261-4, TO-261AA", "SOT-223-3", "SOT-223-3_TabPin2") and J("TO-261-4, TO-261AA", "SOT-223", "SOT-223")
+    assert not J("TO-253-4, TO-253AA", "SOT-143R", "SOT-143")              # the device package: the mirrored one
+    assert not J("TO-253-4, TO-253AA", "SOT-143-4", "SOT-143R") and not J("TO-253-4, TO-253AA", "", "SOT-343_SC-70-4")
+    assert not J("TO-261-4, TO-261AA", "SOT-223-3", "SOT-223-5") and not J("TO-261-5", "", "SOT-223-3_TabPin2")
+    assert not J("TO-261-4, TO-261AA, SOT-89", "", "SOT-223") and not J("TO-236-3, SC-59, SOT-23-3", "", "SOT-143")
+    assert not J("", "SOT-143-4", "SOT-143") and not J("TO-253-4", "SOT-223-3", "SOT-143")
+
+
+def test_a_device_package_that_only_says_thin_names_no_land_of_its_own():
+    """'SOT-23-THIN' read as a package word was SOT-23, the three-lead land: against the case 'SOT-23-6 Thin,
+    TSOT-23-6' it named another land and TPS563200DDCR's case named none."""
+    C = L.case_or_device_land
+    assert C("SOT-23-6 Thin, TSOT-23-6", "SOT-23-THIN") == C("SOT-23-6 Thin, TSOT-23-6", "") == "SOT-23-6"
+    assert C("", "SOT-23-THIN") is None and C("SOT-23-6 Thin, TSOT-23-6", "TSOT-23-6") == "TSOT-23-6"
+    assert C("TO-236-3, SC-59, SOT-23-3", "SOT-23-3") == "SOT-23"
+
+
 class _Store:
     def __init__(self, good):
         self.good, self.asked = good, []

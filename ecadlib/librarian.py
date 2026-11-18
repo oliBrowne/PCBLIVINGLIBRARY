@@ -1324,7 +1324,8 @@ class Run:
         named = [case_or_device_land(case, device, k)] + \
                 [case_land(t, k) for t in (ln.get("footprint"),) if str(t or "").strip()]
         fits = named[0] != land and not any(n != land for n in named[1:]) and (
-            case_fits_land(case, device, land, self.kicad().footprints) or self.same_copper(named[0], land))
+            case_fits_land(case, device, land, self.kicad().footprints) or jedec_case_fits(case, device, land)
+            or self.same_copper(named[0], land))
         if not fits and any(n != land for n in named):
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r} does not name its land "
                                f"{land} alone (still held for a look)")
@@ -1332,7 +1333,8 @@ class Run:
         if fits:
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r}" +
                                (f" and device package {device!r}" if device else "") + f" is the package of its land "
-                               f"{land} (the same family, pin count and body" +
+                               f"{land} (" + ("the JEDEC outline of that package" if jedec_case_fits(case, device, land)
+                                              else "the same family, pin count and body") +
                                (f"; the land it names, {named[0]}, is the same copper)" if named[0] else ")"))
         try:
             sym = K.convert_symbol(chain, sym_ref.split(":")[-1], None, (), None, [])
@@ -2147,6 +2149,26 @@ def case_fits_land(case, device, land, names):
     return True
 
 
+# JEDEC's registered outline -> the package's common name, for the two a distributor files under the outline alone
+JEDEC_OUTLINE = {"253": "SOT-143", "261": "SOT-223"}
+
+
+def jedec_case_fits(case, device, land):
+    """Is a part search's case, written as a JEDEC outline alone ('TO-253-4, TO-253AA': SOT-143; 'TO-261-4, TO-261AA':
+    SOT-223), the package of this KiCad land? Every name of the case is one outline (its four terminals or its AA
+    variation), the device package, when given, is that package's common name ('SOT-143-4', 'SOT-223-3': not the
+    mirrored SOT-143R), and the land is KiCad's land of that name: SOT-143, SOT-223 or SOT-223-3_TabPinN (how the
+    tab is numbered is the choice of the KiCad symbol whose land it is). Anything else: False."""
+    words = [w for w in re.split(r"\s*,\s*", str(case or "").strip()) if w]
+    hits = [re.fullmatch(r"(?i)TO-?(253|261)(?:-4|AA)?", w) for w in words]
+    if not words or not all(hits) or len({h.group(1) for h in hits}) != 1:
+        return False
+    name = JEDEC_OUTLINE[hits[0].group(1)]
+    if str(device or "").strip() and not re.fullmatch(re.escape(name) + r"(?:-[34])?", str(device).strip(), re.I):
+        return False
+    return bool(re.fullmatch(re.escape(name) + (r"(?:-3_TabPin\d)?" if name == "SOT-223" else ""), str(land or "")))
+
+
 def case_or_device_land(case, device, kind=None):
     """The land a part search's case names, settled by its device package where the case alone names none: DigiKey's
     'Package / Case' '32-TQFP' fits several bodies, its 'Supplier Device Package' '32-TQFP (7x7)' one. The device
@@ -2154,6 +2176,8 @@ def case_or_device_land(case, device, kind=None):
     by name ('SOT-23-6 Thin, TSOT-23-6' + 'TSOT-23-6'); a device package naming another land than the case: None."""
     from . import stdparts as SP
     n = case_land(case, kind)
+    if re.fullmatch(r"(?i)\s*T?SOT-?23[- ]THIN\s*", str(device or "")):   # 'SOT-23-THIN': the thin body with no lead
+        device = ""                                                        # count, not the three-lead SOT-23
     d = case_land(device, kind) if str(device or "").strip() else None
     if n == "SOT-23" and not d and SP.names_only(device, "SOT-23") == (True, False):
         return None                                   # the group 'TO-236-3, SC-59, SOT-23-3' and a device package
