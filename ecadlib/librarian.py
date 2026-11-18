@@ -180,7 +180,7 @@ class KiCadLibrary:
         self._norm, self._wild, self._fpn = {}, [], []
         for name, libs in self.symbols.items():
             self._norm.setdefault(norm_mpn(name), []).extend(f"{l}:{name}" for l in libs)
-            if re.search(r"(?<![0-9])x|x(?![0-9])", name) and re.search(r"[A-Z0-9]x", name) and not any(l.startswith("Connector") for l in libs):
+            if re.search(r"(?<![0-9])x|x(?![0-9])", name) and re.search(r"[A-Z0-9]-?x", name) and not any(l.startswith("Connector") for l in libs):
                 # a '.' between digits (or x wildcards) is kept by norm_mpn on the MPN side: 'LM1117-x.x' -> optional,
                 # and two x slots take a decimal point between them: 1.5KExxA is 1.5KE6.8A, SMAJxxA SMAJ5.0A (R-FX10-3)
                 flat = re.sub(r"(?<=[0-9x])\.(?=[0-9x])", "\x00", name)
@@ -318,6 +318,40 @@ class KiCadLibrary:
                 ref, how = self.find_symbol(base)
                 if ref:
                     return ref, f"{how} + packing code '{str(mpn)[len(base):]}'"
+        # No name by the rules above: the longest KiCad name, or name with x wildcards (OPA2333xxD for OPA2333AID + R),
+        # that the MPN starts with, and after it an ordering code: a packing code, one or two characters, or up to
+        # seven that start with a letter and hold at most one '-' or '/' (TL072 + CDR, INA181 + A1IDBVR, CP2104 +
+        # F03-GMR, M24C02-WMN + 6TP: a grade, package, temperature and reel). A digit right after a digit is the number going on
+        # (another part), and a longer tail names something else (ESP32-C3 + MINI-1-N4 is a module, not the chip).
+        for k in range(len(nm) - 1, 4, -1):
+            head, rest, suffix = str(mpn)[:raw[k]], len(nm) - k, str(mpn)[raw[k]:]
+            named = nm[:k] in self._norm
+            wild = [] if named else self._wild_fits(nm[:k], head)
+            if not named and not wild:
+                continue
+            if named:
+                ref, more = self._pick(self._norm[nm[:k]])
+                what = "name"
+            else:
+                best = max(lit for lit, _ in wild)
+                ref, more = self._pick([r for lit, refs in wild if lit == best for r in refs])
+                what = "name with KiCad x wildcards"
+            if packing_suffix(mpn, nm, k, head):
+                return ref, f"{what} + packing suffix '{suffix}' (tape and reel or lead-free, same part)" + more
+            if rest <= 2 or ((nm[k].isalpha() or nm[k - 1].isalpha()) and rest <= 7 and len(re.findall(r"[^A-Za-z0-9+#]+(?=[A-Za-z0-9])", suffix)) <= 1):
+                return ref, f"{what} + ordering suffix '{suffix}' (check the variant)" + more
+            break                                         # the longest name it starts with does not fit: none shorter
+        reel = re.sub(r"(?<=[0-9A-Za-z])T(?=-[A-Za-z0-9]{1,5}/[A-Za-z0-9]{2,3}$)", "", str(mpn))
+        if reel != str(mpn):                              # Microchip's T before the dash: MCP6002T-I/SN is MCP6002-I/SN
+            ref, how = self.find_symbol(reel)             # on a reel
+            if ref:
+                return ref, f"{how}, Microchip's reel mark T left off"
+        logic = re.match(r"(?i)(SN|MC|CD|HEF|NLV)(?=74[A-Z]{1,5}\d)", str(mpn))
+        if logic:                                         # SN74HC595DR, MC74HC595ADR2G, CD74HC14M96: KiCad's 74HC595
+            ref, how = self.find_symbol(str(mpn)[logic.end():])
+            if ref:
+                return ref, (how if "check" in how else how + " (check the variant)") + \
+                    f", the logic maker's prefix '{logic.group(1).upper()}' left off"
         return None, None
 
     @staticmethod
