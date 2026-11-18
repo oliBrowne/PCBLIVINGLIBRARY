@@ -223,3 +223,26 @@ if __name__ == "__main__":
         if k.startswith("test_") and callable(f):
             f()
             print("ok", k)
+
+
+def test_a_table_titled_for_another_device_of_the_family_is_not_a_doubt_about_the_parts_own_titled_table():
+    """TI's TL07x datasheet: page 5's 'Pin Functions: TL072x' agrees with the TL072 symbol; page 3 is 'Pin Functions:
+    TL071x' beside three TL071 drawings, so IN+ is printed often enough to pass for a dual's page. A page whose pin
+    table titles all name other devices is not this part's, when the agreeing page's title names this part."""
+    pins = [("1", ""), ("2", "-"), ("3", "+"), ("4", "V-"), ("5", "+"), ("6", "-"), ("7", ""), ("8", "V+")]
+    p5 = "Table 4-3. Pin Functions: TL072x\nNAME NO.\n1IN- 2 Input\n1IN+ 3 Input\n1OUT 1 Output\n2IN- 6 Input\n" \
+         "2IN+ 5 Input\n2OUT 7 Output\nVCC- 4 Power\nVCC+ 8 Power\n"
+    p3 = "OUT 1 5 VCC+ IN+ 1 5 VCC+\nVCC- 2 VCC- 2\nIN+ 3 4 IN- IN- 3 4 OUT\nNC 1 8 NC\nIN- 2 7 VCC+\nIN+ 3 6 OUT\n" \
+         "VCC- 4 5 NC\nTable 4-1. Pin Functions: TL071x\nNAME DBV DCK D P\nIN- 4 3 2 2 Input\nIN+ 3 1 3 3 Input\n" \
+         "NC - - 8 8 -\nNC - - 1 1 -\nNC - - 5 5 -\nOUT 1 4 6 6 Output\nVCC- 2 2 4 4 -\nVCC+ 5 5 7 7 -\n"
+    assert PT.check({3: p3, 5: p5}, pins)["status"] == "unchecked"             # the part is not said: still a doubt
+    v = PT.check({3: p3, 5: p5}, pins, part="TL072CDR")
+    assert v["status"] == "agreed" and v["page"] == 5, v
+    assert PT.check({3: p3, 5: p5}, pins, part="TL071CDR")["status"] != "agreed"   # page 3 is this part's own table
+    assert PT.check({3: p3, 5: p5.replace(": TL072x", "")}, pins, part="TL072CDR")["status"] == "unchecked"
+    both = p3.replace("TL071x", "TL071x, TL072x")                              # the other table is titled for it too
+    assert PT.check({3: both, 5: p5}, pins, part="TL072CDR")["status"] == "unchecked"
+    untitled = p3.replace("Table 4-1. Pin Functions: TL071x\n", "")            # no title: nothing says whose it is
+    assert PT.check({3: untitled, 5: p5}, pins, part="TL072CDR")["status"] == "unchecked"
+    m = p5.replace("TL072x", "TL072M")                                         # 'TL072M' is not TL072CDR
+    assert PT.check({3: p3, 5: m}, pins, part="TL072CDR")["status"] == "unchecked"

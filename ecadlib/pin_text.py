@@ -249,9 +249,32 @@ def _figure_rows(text):
     return rows
 
 
-def check(page_texts, pins, figures=(), pin_count=None):
+_TITLE = re.compile(r"(?i)\bpin\s+(?:functions?|descriptions?|configurations?|assignments?)\s*[:\-–]\s*(.+)$")
+_DEVICE = re.compile(r"\b[A-Z]{1,6}\d{2,}[A-Za-z0-9]*")
+
+
+def _titled_for(text):
+    """The devices a page's pin table titles name: 'Table 4-1. Pin Functions: TL071x' -> {'TL071'} (the title's
+    trailing lower-case x is its wildcard); a page with no such title: empty."""
+    out = set()
+    for line in str(text or "").splitlines():
+        m = _TITLE.search(line.strip())
+        if m:
+            out |= {d for d in (re.sub(r"x+$", "", t).upper() for t in _DEVICE.findall(m.group(1))) if len(d) >= 4}
+    return out
+
+
+def _is_part(devices, part):
+    """Does one of a title's device names begin this part number ('TL072' and TL072CDR; not 'TL072M', not 'TL071')?"""
+    p = re.sub(r"[^A-Z0-9]", "", str(part or "").upper())
+    return bool(p) and any(p.startswith(d) for d in devices)
+
+
+def check(page_texts, pins, figures=(), pin_count=None, part=None):
     """page_texts: {page number: text}; pins: [(num, name)]; figures: [(page, text)] of pinout drawings
-    (figure_lines), each read as a table of its own; pin_count: the package's, when known -> verdict dict (see the
+    (figure_lines), each read as a table of its own; pin_count: the package's, when known; part: the part number,
+    when known (a table on another page titled only for other devices of the family is then not a doubt about the
+    agreeing table titled for this part) -> verdict dict (see the
     module doc). A table elsewhere that names these pins otherwise but prints a pin number above this part's highest
     (TL074's 20-pin LCCC table after its 14-pin SOIC one) is another package's: it is not a doubt about this one."""
     pins = [(str(n).strip(), str(nm or "").strip()) for n, nm in pins or [] if str(n).strip()]
@@ -316,6 +339,10 @@ def check(page_texts, pins, figures=(), pin_count=None):
                 agreed = {"status": "agreed", "page": pa, "column": min(common), "pins": len(pins),
                           "where": f"pin table (pages {pa} and {pb})"}
                 break
+    if agreed is not None and conflicts and part and _is_part(_titled_for((page_texts or {}).get(agreed["page"])), part):
+        conflicts = [(pg, miss) for pg, miss in conflicts           # 'Pin Functions: TL071x' beside the agreeing
+                     if not _titled_for((page_texts or {}).get(pg))  # 'Pin Functions: TL072x': another device's table
+                     or _is_part(_titled_for((page_texts or {}).get(pg)), part)]
     if agreed is not None:
         if conflicts:                                  # a table on another page names the same pins with other numbers:
             pg, miss = conflicts[0]                    # which table is this part's is not in the text, whichever came first
@@ -468,11 +495,11 @@ def pin_orders_pdf(pdf_bytes, names):
     return pin_orders(page_texts(pdf_bytes), names, page_figures(pdf_bytes)) if pdf_bytes else []
 
 
-def check_pdf(pdf_bytes, pins, pin_count=None):
+def check_pdf(pdf_bytes, pins, pin_count=None, part=None):
     """check() on a PDF: its text layer's tables and its pinout drawings (page_figures). No PDF: unchecked."""
     if not pdf_bytes:
         return {"status": "unchecked", "why": "none of the part's datasheet links gave a PDF to check it against"}
-    return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count)
+    return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count, part=part)
 
 
 def page_figures(pdf_bytes, limit=80):

@@ -124,7 +124,8 @@ def test_packing_code_after_a_grade_letter_still_finds_the_symbol_for_a_look():
     assert ref == "Transistor_BJT:BC847" and "check" in how and "',215'" in how, how
     ref, how = k.find_symbol("74HC595D,118")
     assert ref == "74xx:74HC595" and "check" in how, how
-    assert k.find_symbol("BC847XYZ,215")[0] is None
+    ref, how = k.find_symbol("BC847XYZ,215")              # an unknown code before the packing code: only to check
+    assert ref is None or "(check the variant)" in how, how
 
 
 def test_tvs_direction_from_the_series_numbering():

@@ -1352,7 +1352,7 @@ class Run:
                                f"a reel / lead-free / gain-group ordering code (the same die and pins)")
             return True
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
-        v = PT.check_pdf(data, pins)
+        v = PT.check_pdf(data, pins, part=mpn)
         if v["status"] != "agreed":
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the datasheet's pin table did not confirm it ({v.get('why')})")
             return False

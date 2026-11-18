@@ -63,8 +63,9 @@ def test_onsemi_case_and_reel_suffix_finds_the_symbol_but_asks_for_the_case():
     ref, how = k.find_symbol("MMBT3904LT1G")
     assert ref == "Transistor_BJT:MMBT3904" and "(check the case)" in how, how
     ref, how = k.find_symbol("BC847BWT1G")                # SC-70: the case decides, never the name
-    assert ref is None or "(check the case)" in how, how
-    assert k.find_symbol("MMBT3904XYZ")[0] is None
+    assert ref is None or "(check the case)" in how or "(check the variant)" in how, how
+    ref, how = k.find_symbol("MMBT3904XYZ")               # an unknown code: never the plain name match (2026-11-18:
+    assert ref is None or "(check the variant)" in how, how   # offered to be checked against the case and pin table)
 
 
 def _agrees(case, mpn="MMBT3904LT1G", bom_fp="", bom_desc="", item_desc="", several="", hint="Package_TO_SOT_SMD:SOT-23"):
