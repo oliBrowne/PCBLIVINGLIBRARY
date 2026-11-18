@@ -3774,6 +3774,7 @@
 "Run.kicad",
 "Run.kicad_land_confirmed",
 "Run.local",
+"Run.measured_land",
 "Run.other_makers_land",
 "Run.pad_numbers",
 "Run.pinout_agrees",
@@ -3868,6 +3869,7 @@
 "lands_agree.<locals>.centred",
 "local",
 "main",
+"measured_land",
 "need_pins",
 "no_listing",
 "other_makers_land",
@@ -5159,6 +5161,21 @@
 "to_rules",
 "value_styles",
 "written"
+],
+"ecadlib/search_land.py":[
+"<dictcomp>",
+"<genexpr>",
+"<lambda>",
+"<listcomp>",
+"<module>",
+"<setcomp>",
+"_mm",
+"_nearest",
+"_num",
+"_one",
+"dims",
+"dims_text",
+"land"
 ],
 "ecadlib/sexpr.py":[
 "<dictcomp>",

@@ -1029,10 +1029,13 @@ class Run:
                           (None if kind else lib.footprint_by_mpn(mpn), "footprint named after the MPN"),
                           (None if kind not in (None, "L") else lib.footprint_by_series(mpn, stem_ok=kind == "L"),
                            "footprint named after the MPN's series"),
+                          (lambda: self.measured_land(st, lib, ln, row, kind), "the part search's measurements"),
                           (None if kind or bom_fp else lib.footprint(SP.header_land(row.get("src_description")
                                                                                      or ln.get("description"))),
                            "footprint named by the description (a plain pin header)"),
                           (lib.footprint_by_prefix(bom_fp.split(":")[-1]), f"shortest KiCad name starting with '{bom_fp}'")):
+            if callable(cand):                     # (asked only when nothing above named a land)
+                cand = cand()
             if cand:
                 text, _ = K.load_footprint(cand, self.http)
                 self.put_fp(st, text, fp_name, f"kicad:{cand}", self.http)
@@ -1301,6 +1304,38 @@ class Run:
                            f"case {case!r} is its land {land}, and its {v['pins']} pins agree with the "
                            f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
         return True
+
+    def measured_land(self, st, lib, ln, row, kind):
+        """KiCad's generic land for the measurements the part search gives (ecadlib.search_land: an SMD can's diameter,
+        base and height; a crystal's pads and body; a plain header's row, positions and pitch) -> 'Lib:Name' or None.
+        Only when the BOM names no footprint and no symbol's Footprint property does. Where the measurements fit more
+        than one KiCad land (a can's height is in the name), every one of them must be the same copper (lands_agree):
+        then what the measurements leave open cannot change the land, and no person needs to compare it."""
+        from . import search_land as SL
+        if str(ln.get("footprint") or "").strip() or st.get("hint_fp") or not row.get("src_dims"):
+            return None
+        got, why = SL.land(row.get("src_dims"), kind, row.get("src_description"), lib.footprints,
+                           several=bool(row.get("src_several")))
+        if not got:
+            if why:
+                st["tried"].append(f"kicad: {why}")
+            return None
+        ref = lib.footprint(got["pick"])
+        try:
+            mine = K.load_footprint(ref, self.http)[0]
+            for other in got["same"]:
+                same, how = lands_agree(mine, K.load_footprint(lib.footprint(other), self.http)[0])
+                if not same:
+                    st["tried"].append(f"kicad: {got['why']}: KiCad's lands {got['pick']} and {other} both fit and "
+                                       f"are not the same land ({how}); not chosen between")
+                    return None
+        except Exception as e:
+            st["tried"].append(f"kicad: {got['why']}: KiCad's land could not be read ({type(e).__name__})")
+            return None
+        st["tried"].append(f"kicad: {row.get('src_dims_from') or 'the part search'} measures {got['why']}: KiCad's "
+                           f"generic land for exactly that is {got['pick']}" +
+                           (f" (the {len(got['same'])} other KiCad lands that fit are the same copper)" if got["same"] else ""))
+        return ref
 
     def kicad_land_confirmed(self, st, res):
         """A KiCad footprint chosen by name (named after the MPN or its series) waits for a person to compare it with
