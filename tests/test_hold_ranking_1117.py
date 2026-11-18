@@ -98,3 +98,12 @@ def test_the_standard_source_takes_the_land_the_case_and_device_package_name():
     assert r["footprint"] is None, r
     r = R(["Package_TO_SOT_SMD:SOT-23-5"], G, "", None, "X", "IC")         # the BOM's own land stands as before
     assert r["footprint"] == "SOT-23-5", r
+
+
+def test_a_case_whose_size_codes_disagree_names_no_land_by_its_device_package_either():
+    """ROHM's SML-P11 LED is filed '0402 (1006 Metric)' with device package '1006 (0402)': 1.0 x 0.6 mm, not the
+    0402 chip (1005). The size check holds it; the device package must not pass it round that check."""
+    r = L.resolve_standard([None], "0402 (1006 Metric)", "1006 (0402)", "LED", "SML-P11VTT86", "LED RED CLEAR 0402 SMD")
+    assert r["footprint"] is None and "disagree" in r["fp_how"], r
+    r = L.resolve_standard([None], "0603 (1608 Metric)", "0603", "LED", "X", "LED RED CLEAR 0603 SMD")
+    assert r["footprint"] == "LED_0603_1608Metric", r

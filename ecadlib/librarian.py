@@ -2036,7 +2036,9 @@ def resolve_standard(texts, case, device, kind, mpn, desc):
     one land the case and its device package name together (case_or_device_land) is the part's."""
     from . import stdparts as SP
     res = SP.resolve(list(texts) + [case], kind, mpn, desc)
-    land = None if res["footprint"] or not case or kind == "CP" else case_or_device_land(case, device, kind)
+    if res["footprint"] or not case or kind == "CP" or "disagree" in str(res.get("fp_how") or ""):
+        return res                                    # (a case whose own size codes disagree, '0402 (1006 Metric)',
+    land = case_or_device_land(case, device, kind)    # names no land by any reading: held as before)
     if land:
         named = SP.resolve(list(texts) + [land], kind, mpn, desc)
         if named["footprint"] == land:
