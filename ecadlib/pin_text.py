@@ -351,6 +351,66 @@ def figure_lines(runs):
     return out
 
 
+TERMINAL = {"GATE": "G", "SOURCE": "S", "DRAIN": "D", "BASE": "B", "EMITTER": "E", "COLLECTOR": "C"}
+_TERMINAL_SETS = ({"G", "S", "D"}, {"B", "E", "C"})
+
+
+def terminal_lines(runs):
+    """A transistor's pin drawing on one page -> one text per drawing, "G 1" a line (as figure_lines gives). The
+    schematic symbol is drawn with each terminal's name (GATE / SOURCE / DRAIN, BASE / EMITTER / COLLECTOR, or the
+    capital letter) and its pin number right beside it, above or below. A name takes the number 1-3 within two text
+    heights of it, when that number is clearly nearer (1.6 x) than any other and the name is that number's nearest
+    too. A drawing is three such pairs close together: one full set of terminals, the numbers 1, 2, 3 each once.
+    Letters with no numbers (Diodes Inc.), a number between two names, a set drawn twice side by side: nothing."""
+    names, nums = [], []
+    for x, y, t, sz in runs:
+        if not sz or sz <= 0:
+            continue
+        key = TERMINAL.get(t.upper()) if len(t) > 1 else t if t in ("G", "S", "D", "B", "E", "C") else None
+        if key:
+            names.append((x + 0.25 * sz * len(t), y, key, sz))
+        elif t in ("1", "2", "3"):
+            nums.append((x + 0.25 * sz, y, int(t), sz))
+    dist = lambda a, b: ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+
+    def nearest(a, others):
+        near = sorted((dist(a, o), i) for i, o in enumerate(others))
+        if not near or near[0][0] > 2 * a[3] or len(near) > 1 and near[1][0] < 1.6 * near[0][0]:
+            return None
+        return near[0][1]
+    pairs = []
+    for i, nm in enumerate(names):
+        j = nearest(nm, nums)
+        if j is not None and nearest(nums[j], names) == i:
+            pairs.append((nm[0], nm[1], nm[2], nums[j][2]))
+    groups = []                                        # pairs within 110 pt of one another: one drawing
+    for pr in sorted(pairs):
+        mine = [g for g in groups if any(dist(pr, q) <= 110 for q in g)]
+        for g in mine[1:]:
+            mine[0].extend(g)
+            groups.remove(g)
+        (mine[0] if mine else groups.append([]) or groups[-1]).append(pr)
+    out = []
+    for g in groups:
+        keys, vals = [q[2] for q in g], [q[3] for q in g]
+        if len(g) == 3 and set(keys) in _TERMINAL_SETS and sorted(vals) == [1, 2, 3]:
+            out.append("\n".join(f"{k} {v}" for k, v in zip(keys, vals)))
+    return out
+
+
+def pin_orders(page_texts, names, figures=()):
+    """The orders of a three-terminal part's names ('GSD', 'BEC') on pins 1, 2, 3 that the datasheet's text agrees
+    with (check): ['GSD'] when it prints one order and no other. Two orders agreeing (two packages drawn), or none: the
+    text does not settle it."""
+    from itertools import permutations
+    return ["".join(o) for o in permutations(names)
+            if check(page_texts, list(zip("123", o)), figures)["status"] == "agreed"]
+
+
+def pin_orders_pdf(pdf_bytes, names):
+    return pin_orders(page_texts(pdf_bytes), names, page_figures(pdf_bytes)) if pdf_bytes else []
+
+
 def check_pdf(pdf_bytes, pins, pin_count=None):
     """check() on a PDF: its text layer's tables and its pinout drawings (page_figures). No PDF: unchecked."""
     if not pdf_bytes:
@@ -384,7 +444,7 @@ def page_figures(pdf_bytes, limit=80):
             p.extract_text(visitor_text=seen)
         except Exception:
             continue
-        out += [(i, f) for f in figure_lines(runs)]
+        out += [(i, f) for f in figure_lines(runs) + terminal_lines(runs)]
     return out
 
 

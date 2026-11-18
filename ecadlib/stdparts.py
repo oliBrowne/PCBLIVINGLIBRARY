@@ -1336,6 +1336,20 @@ def symbol_kind(kind, mpn, fp_name, description=""):
     return None, "no standard pinout for this part"
 
 
+SINGLE_TRANSISTOR = re.compile(r"(?i)\b(?:MOSFETs?\s+(N|P)-CH(?:ANNEL)?\b|TRANS(?:ISTOR)?\s+(NPN|PNP)\b)")
+NOT_SINGLE = re.compile(r"(?i)\b(?:PRE-?BIAS(?:ED)?|DIGITAL|DARL(?:INGTON)?|DUAL|ARRAY|JFET|IGBT|N/P|2\s*[NP])")
+
+
+def transistor_type(description):
+    """'NMOS' / 'PMOS' / 'NPN' / 'PNP' for a part search's description of one plain transistor ('MOSFET N-CH 30V
+    500MA SOT23-3', 'TRANS PNP 60V 0.6A'); a pair, a pre-biased or Darlington one, a JFET: None."""
+    d = str(description or "")
+    m = SINGLE_TRANSISTOR.search(d)
+    if not m or NOT_SINGLE.search(d):
+        return None
+    return f"{m.group(1).upper()}MOS" if m.group(1) else m.group(2).upper()
+
+
 def spec_pins(name):
     try:
         return spec(name).get("pin_count")

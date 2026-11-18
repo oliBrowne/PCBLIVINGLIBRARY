@@ -1144,8 +1144,8 @@ class Run:
         k = kind or SP.part_kind(item["folder"], item["footprint"].get("kicad") or fp_name, desc, ln.get("designator"))
         if case and (k == "CP" or k == "C" and SP.POLAR_CAP.match(SP._norm(mpn))):    # a tantalum's size + height
             case = SP.tantalum_search_text(case, row.get("src_height"), mpn)            # name its EIA case
-        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"), case],
-                         k, mpn, desc)
+        res = resolve_standard([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value")],
+                               case, str(row.get("src_package_device") or ""), k, mpn, desc)
         got = []
         if not st["footprint"] and res["footprint"]:
             sp = SP.spec(res["footprint"])
@@ -1159,13 +1159,21 @@ class Run:
             res["symbol"] = "R_US"
         if res["symbol"] == "L" and k == "L" and self.ferrite(item, ln):
             res["symbol"], res["sym_how"] = "FerriteBead", "ferrite bead symbol"
+        read = False
+        if not st["symbol"] and not res["symbol"] and same_fp and SP.spec_pins(res["footprint"]) == 3 \
+                and SP.transistor_type(desc):
+            # a plain transistor of no known family on a three-pad land: its pin order as its own datasheet draws it
+            order = self.pin_order(st, item, ln, row, mpn, SP.transistor_type(desc))
+            if order:
+                res["symbol"], read = f"{SP.transistor_type(desc)}:{order}", True
+                res["sym_how"] = f"{mpn}: {SP.transistor_type(desc)}, pins 1-3 = {order} as its datasheet draws them"
         if not st["symbol"] and res["symbol"] and (k in ("R", "C", "CP", "L") or same_fp):
             text, name = SP.symbol_text(res["symbol"], mpn)
             shared = k in ("R", "C", "CP", "L")
             self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, None if shared else fp_name,
                                f"standard:{name}", [] if shared or not mpn else [("MPN", mpn)])
             got.append(f"symbol {name} ({res['sym_how']})")
-            if ":" in res["symbol"] and not self.pinout_agrees(st, item, ln, row, mpn, text, name):
+            if ":" in res["symbol"] and not read and not self.pinout_agrees(st, item, ln, row, mpn, text, name):
                 # SOT-23 & co: pinouts differ by maker, so a person checks it unless the datasheet's own pin table does
                 st["verify"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
         elif not st["symbol"] and res["symbol"]:
@@ -1380,6 +1388,28 @@ class Run:
         st["tried"].append(f"standard: pinout {name} for {mpn} confirmed: its {v['pins']} pins agree with the "
                            f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
         return True
+
+    def pin_order(self, st, item, ln, row, mpn, what):
+        """The order of a plain transistor's terminals on pins 1, 2, 3 ('GSD', 'BEC') as this MPN's own datasheet
+        prints it (ecadlib.pin_text: its pin table or pin drawing), when it prints exactly one -> order or None. Not
+        asked when several makers sell the number (the datasheet may be another maker's part)."""
+        from . import pin_text as PT
+        if row.get("src_several") or norm_mpn(row.get("src_mpn") or "") != norm_mpn(mpn or ""):
+            return None
+        data, link = self.datasheet_pdf(item, ln, row, st, mpn)
+        if not data:
+            return None
+        try:
+            orders = PT.pin_orders_pdf(data, "GSD" if what.endswith("MOS") else "BEC")
+        except Exception:
+            return None
+        if len(orders) != 1:
+            st["tried"].append(f"standard: {mpn} ({what}): its datasheet's text does not settle the pin order "
+                               f"({' and '.join(orders) + ' both agree' if orders else 'no pin table or drawing read'})")
+            return None
+        st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link}, and in no "
+                           "other order")
+        return orders[0]
 
     def datasheet_pdf(self, item, ln, row, st, mpn):
         """This MPN's datasheet PDF for a free check (no model): the first link that gives a PDF -> (bytes, url) or
@@ -1905,6 +1935,22 @@ def search_case(row):
     if row.get("src_several"):
         return ""
     return SP.case_text(row.get("src_package"), row.get("src_description")) or ""
+
+
+def resolve_standard(texts, case, device, kind, mpn, desc):
+    """stdparts.resolve for a part's own texts and its part search's case. Where they name no land (DigiKey's group
+    'TO-236-3, SC-59, SOT-23-3' read name by name ends at KiCad's ambiguous 'SOT-23-3'; '44-TQFP' names no body), the
+    one land the case and its device package name together (case_or_device_land) is the part's."""
+    from . import stdparts as SP
+    res = SP.resolve(list(texts) + [case], kind, mpn, desc)
+    land = None if res["footprint"] or not case or kind == "CP" else case_or_device_land(case, device, kind)
+    if land:
+        named = SP.resolve(list(texts) + [land], kind, mpn, desc)
+        if named["footprint"] == land:
+            named["fp_how"] = f"the part search's case {case!r}" + (f" and device package {device!r}" if device else "") \
+                + f" name {land}"
+            return named
+    return res
 
 
 def case_or_device_land(case, device, kind=None):
