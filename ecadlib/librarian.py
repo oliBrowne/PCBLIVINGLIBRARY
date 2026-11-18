@@ -1323,10 +1323,17 @@ class Run:
             return False
         named = [case_or_device_land(case, device, k)] + \
                 [case_land(t, k) for t in (ln.get("footprint"),) if str(t or "").strip()]
-        if not named or any(n != land for n in named):
+        fits = named[0] != land and not any(n != land for n in named[1:]) and (
+            case_fits_land(case, device, land, self.kicad().footprints) or self.same_copper(named[0], land))
+        if not fits and any(n != land for n in named):
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r} does not name its land "
                                f"{land} alone (still held for a look)")
             return False
+        if fits:
+            st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r}" +
+                               (f" and device package {device!r}" if device else "") + f" is the package of its land "
+                               f"{land} (the same family, pin count and body" +
+                               (f"; the land it names, {named[0]}, is the same copper)" if named[0] else ")"))
         try:
             sym = K.convert_symbol(chain, sym_ref.split(":")[-1], None, (), None, [])
             pins = [(pr[1].get("num"), pr[1].get("name")) for pr in sym["prims"] if pr[0] == "pin"]
@@ -1351,6 +1358,18 @@ class Run:
                            f"case {case!r} is its land {land}, and its {v['pins']} pins agree with the "
                            f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
         return True
+
+    def same_copper(self, a, b):
+        """Two KiCad land names (table names) are the same land: the same pads within lands_agree's tolerances (KiCad's
+        SOT-23-6 and TSOT-23-6, MSOP-10 and TSSOP-10 3x3 mm). Either unknown or unreadable: False."""
+        if not a or not b:
+            return False
+        try:
+            lib = self.kicad()
+            ra, rb = lib.footprint(a), lib.footprint(b)
+            return bool(ra and rb) and lands_agree(K.load_footprint(ra, self.http)[0], K.load_footprint(rb, self.http)[0])[0]
+        except Exception:
+            return False
 
     def measured_land(self, st, lib, ln, row, kind):
         """KiCad's generic land for the measurements the part search gives (ecadlib.search_land: an SMD can's diameter,
@@ -1481,21 +1500,41 @@ class Run:
                            "other order")
         return orders[0]
 
+    PDF_LINKS = 6                                     # links a free check tries before it gives up
+
     def datasheet_pdf(self, item, ln, row, st, mpn):
-        """This MPN's datasheet PDF for a free check (no model): the first link that gives a PDF -> (bytes, url) or
-        (None, None). Cached by the HTTP cache; never the hand-off to a person."""
+        """This MPN's datasheet PDF for a free check (no model): the first of its links that gives a PDF (the part
+        search's, the KiCad symbol's, the maker's URL pattern: datasheet.datasheet_urls, as the datasheet reader tries
+        them), else the Internet Archive's copy of one that gave none ([datasheet] archive, as the reader asks for it)
+        -> (bytes, url) or (None, None). Cached by the HTTP cache; never the hand-off to a person."""
         urls = D.datasheet_urls(item, ln, row, st["found"])   # (--offline: the PDF store reads its cache only)
         if not urls:
             return None, None
         if getattr(self, "_pdfs", None) is None:
             self._pdfs = D.PdfStore(Path(self._kicad_args[0] or self.out / "cache").parent, self.http, download="auto")
-        for url, where in urls[:2]:
+        linked = []
+        for url, where in urls[:self.PDF_LINKS]:
             try:
                 data, _ = self._pdfs.fetch(url, where, part=mpn, handoff=False, mpn=mpn)
                 return data, url
-            except Exception:                      # a refused or broken link: the next one, else no check
-                continue
-        return None, None
+            except Exception as e:                 # a refused or broken link: the next one
+                linked.append({"url": url, "where": where, "error": str(e)})
+        return self.archived_pdf(mpn, linked)
+
+    def archived_pdf(self, mpn, linked):
+        """The Internet Archive's copy of a link that gave no PDF (datasheet.Reader._archived: only a public link whose
+        failure is worth asking about, paced, the copy must name the part) -> (bytes, the link it is a copy of) or
+        (None, None). Not asked offline, or with [datasheet] archive off."""
+        import types
+        cfg = getattr(getattr(self, "reader", None), "cfg", None) or D.settings(getattr(self, "rules", None))
+        if not cfg.get("archive") or getattr(self.http, "offline", False) or os.environ.get("ECADLIB_NO_ARCHIVE"):
+            return None, None
+        finder = types.SimpleNamespace(store=self._pdfs, http=self.http, sleep=time.sleep)
+        try:
+            data, prov = D.Reader._archived(finder, mpn, linked, [], mpn)
+        except Exception:
+            return None, None
+        return (data, (prov.get("archived") or {}).get("of")) if data is not None else (None, None)
 
     @staticmethod
     def case_from_search(st, item, ln, row):
@@ -2046,6 +2085,59 @@ def resolve_standard(texts, case, device, kind, mpn, desc):
                 + f" name {land}"
             return named
     return res
+
+
+LAND_SHAPE = re.compile(r"(?:[A-Z][A-Za-z]+_(?:[A-Z]{2,4}_)?)?([A-Z]+)-(\d+)W?(-1EP)?_(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)mm"
+                        r"_P(\d+(?:\.\d+)?)mm(?:_EP\d+(?:\.\d+)?x\d+(?:\.\d+)?mm)?(?:_ThermalVias)?(?:_TopTented)?")
+CASE_SHAPE = re.compile(r'(\d+)-([A-Za-z]+)(?:, (\d+)-([A-Za-z]+))?(?: \(0?\.\d+", (\d+(?:\.\d+)?)mm Width\))?(,? Exposed Pad)?')
+DEVICE_BODY = re.compile(r"(\d+)-([A-Za-z]+) \((\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)\)")
+LEADED, LEADLESS = ("SOIC", "SSOP", "TSSOP", "QSOP"), ("QFN", "DFN")
+
+
+def package_family(word):
+    """A package word as its land family: a distributor's height and pitch letters on a leadless package are not
+    another land (VFQFN, WQFN, XFDFN: QFN / DFN), SO / SOP is SOIC, and the 3 mm TSSOP group's names are one family
+    (TFSOP, MSOP, VSSOP: told apart from the 4.4 mm TSSOP by the width, which is always compared too)."""
+    w = re.sub(r"^[VWUXTLH]{0,2}F?(?=(?:QFN|DFN)$)", "", str(word or "").upper())
+    return {"SO": "SOIC", "SOP": "SOIC", "TFSOP": "TSSOP", "MSOP": "TSSOP", "VSSOP": "TSSOP"}.get(w, w)
+
+
+def case_fits_land(case, device, land, names):
+    """Is a part search's case the package of this KiCad land, although it does not name the land alone? The same
+    family (package_family), pin count and exposed pad, and the same body: the case's width for a leaded package
+    ('8-SOIC (0.209", 5.30mm Width)' and SOIC-8_5.3x5.3mm), the device package's body for a leadless one ('24-QFN
+    (4x4)' and QFN-24-1EP_4x4mm), which the case does not give. And no KiCad land (names) of that family, count, pad
+    and body has another pitch ('20-TSSOP 4.40mm' is KiCad's 0.5 and 0.65 mm land: not told apart). What stays open
+    (a leaded body's length, the exposed pad's size) is then the choice of KiCad's symbol for this part. Any other
+    wording of the case ('Dual Rows', a lead count, a group of other names) or of the land's name: False."""
+    m, c = LAND_SHAPE.fullmatch(str(land or "")), CASE_SHAPE.fullmatch(str(case or "").strip())
+    if not m or not c or (c.group(3) and c.group(3) != c.group(1)):
+        return False
+    fam, pins, pad, pitch = package_family(m.group(1)), int(m.group(2)), bool(m.group(3)), float(m.group(6))
+    x, y = float(m.group(4)), float(m.group(5))
+    if int(c.group(1)) != pins or bool(c.group(6)) != pad or fam not in {package_family(w) for w in (c.group(2), c.group(4)) if w}:
+        return False
+    if fam in LEADED and c.group(5):
+        def body(mm):
+            return abs(float(mm.group(4)) - float(c.group(5))) <= 0.06
+    elif fam in LEADLESS and not c.group(5):
+        d = DEVICE_BODY.fullmatch(str(device or "").strip())
+        if not d or int(d.group(1)) != pins or package_family(d.group(2)) != fam:
+            return False
+        size = sorted((float(d.group(3)), float(d.group(4))))
+
+        def body(mm):
+            return all(abs(a - b) <= 0.06 for a, b in zip(sorted((float(mm.group(4)), float(mm.group(5)))), size))
+    else:
+        return False
+    if not body(m):
+        return False
+    for n in names:
+        o = LAND_SHAPE.fullmatch(str(n))
+        if o and package_family(o.group(1)) == fam and int(o.group(2)) == pins and bool(o.group(3)) == pad and body(o) \
+                and abs(float(o.group(6)) - pitch) > 0.005:
+            return False
+    return True
 
 
 def case_or_device_land(case, device, kind=None):

@@ -183,17 +183,45 @@ def _span(rows, lines, col):
     return cells[lo:hi + 1]
 
 
-def _top(rows, pins):
-    """The highest pin number printed on the lines of `rows` that name one of `pins` (0 when none)."""
+def _top(rows, pins, loose=()):
+    """The highest pin number printed on the lines of `rows` that name one of `pins` (0 when none). loose: the names
+    matched by class (loose_names), as _find matches them: 4IN+ names the symbol's '+'."""
     names, top = {norm_name(nm) for _, nm in pins}, 0
+    kinds = {name_class(n) for n in loose} - {None}
     for cells, nums in rows:                          # a table row only: the name is all that comes before the numbers
         before = cells[:nums[0][0]]                   # ("4OUT 20 Output"), or what starts after them ("1 OUTA ..."),
         after = cells[nums[-1][0] + 1:][:3]           # never a name inside a sentence or a spec line ("VCC supply
         cand = {norm_name("".join(before))} if before else {norm_name("".join(after[:j])) for j in (1, 2, 3)}
-        if not before and not after or not cand & names:    # current 25 100")
-            continue
+        if not before and not after or not (cand & names or kinds and any(name_class(c) in kinds for c in cand)):
+            continue                                  # current 25 100")
         top = max([top] + [int(x) for _, c in nums for x in _numbers(c) if x.isdigit()])
     return top
+
+
+def _row_names(cells, nums):
+    """What a table row is named, when the line is one: the name is all that comes before its numbers ("4OUT 20
+    Output"), or what starts after them ("1 OUTA ..."); never a name inside a sentence or a spec line."""
+    before, after = cells[:nums[0][0]], cells[nums[-1][0] + 1:][:3]
+    return {norm_name("".join(before))} if before else {norm_name("".join(after[:j])) for j in (1, 2, 3) if after[:j]}
+
+
+def _a_table_names(rows, names, loose=()):
+    """Does some line of `rows` name one of `names` as a table row does (_row_names; a loose name by its class)? A
+    page of spec lines that only mentions the pins ('VI = 5.5 V or GND 0 to 5.5 V 5 uA') does not."""
+    want = {norm_name(n) for n in names}
+    kinds = {name_class(n) for n in want if n in loose} - {None}
+    return any(c in want or kinds and name_class(c) in kinds for cells, nums in rows for c in _row_names(cells, nums))
+
+
+def _fewer_channels(rows, pins):
+    """The page is the table of a device with fewer amplifiers than the symbol: the symbol has two or more inputs of
+    one sign ('+' on 3 and 5), the page fewer rows naming an input of that sign (the single's IN+ row beside the
+    dual's table elsewhere in a family datasheet)."""
+    for sign in ("+", "-"):
+        mine = sum(1 for _, nm in pins if norm_name(nm) == sign)
+        if mine >= 2 and sum(1 for cells, nums in rows if any(name_class(c) == sign for c in _row_names(cells, nums))) < mine:
+            return True
+    return False
 
 
 def _figure_rows(text):
@@ -246,8 +274,11 @@ def check(page_texts, pins, figures=(), pin_count=None):
                           "where": "pin drawing" if drawn else "pin table"}
             continue
         miss = [f"{nm}={n}" for (n, nm), (cols, _) in zip(pins, per) if not cols]
-        if miss and most and _top(rows, pins) > most:  # a bigger package's table (TL074M's 20-pin LCCC): not this one
+        if miss and most and _top(rows, pins, loose) > most:  # a bigger package's table (TL074M's 20-pin LCCC): not this one
             continue
+        missed = [nm for (n, nm), (cols, _) in zip(pins, per) if not cols]
+        if miss and (not _a_table_names(rows, missed, loose) or _fewer_channels(rows, pins)):
+            continue                                   # spec lines that only mention the names, or a single's table
         if miss:                                       # every pin named on this page, some only with other numbers:
             conflicts.append((page, miss))             # maybe another variant's table (MCP6L01 / MCP6L01R on two pages)
         if agreed is not None:
@@ -414,7 +445,7 @@ def pin_orders_pdf(pdf_bytes, names):
 def check_pdf(pdf_bytes, pins, pin_count=None):
     """check() on a PDF: its text layer's tables and its pinout drawings (page_figures). No PDF: unchecked."""
     if not pdf_bytes:
-        return check({}, pins)
+        return {"status": "unchecked", "why": "none of the part's datasheet links gave a PDF to check it against"}
     return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count)
 
 

@@ -112,6 +112,53 @@ def test_a_ball_table_still_reads_balls_as_numbers():
     assert PT.check({3: page}, [("A1", "IN"), ("A2", "OUT"), ("B1", "EN"), ("B2", "GND")])["status"] == "agreed"
 
 
+def test_a_bigger_packages_table_on_another_page_is_dismissed_when_the_names_match_by_class_too():
+    """LMV321 (5 pins, KiCad names +, -, V+, V-): page 3's table agrees; page 4 is the quad LMV324's 14-pin table,
+    whose 1IN+ ... 4IN+, VCC+ and GND carry other numbers. Its numbers go above 5: another package, not a doubt."""
+    pins = [("2", "V-"), ("5", "V+"), ("1", "+"), ("3", "-"), ("4", "")]
+    p3 = "Table 5-2. Pin Functions: LMV321\nNAME NO.\n1IN+ 1 I Noninverting input\n1IN- 3 I Inverting input\n" \
+         "GND 2 - Negative supply\nOUT 4 O Output\nVCC+ 5 - Positive supply\n"
+    p4 = "Table 5-3. Pin Functions: LMV324\nNAME NO.\n1IN+ 3 I Noninverting input\n1IN- 2 I Inverting input\n" \
+         "2IN+ 5 I Noninverting input\n2IN- 6 I Inverting input\n2OUT 7 O Output\n3IN+ 10 I Noninverting input\n" \
+         "3IN- 9 I Inverting input\n4IN+ 12 I Noninverting input\n4IN- 13 I Inverting input\n4OUT 14 O Output\n" \
+         "GND 11 - Negative supply\nVCC+ 4 - Positive supply\n"
+    v = PT.check({3: p3, 4: p4}, pins)
+    assert v["status"] == "agreed" and v["page"] == 3, v
+    same = p4.replace(" 10 ", " 1 ").replace(" 9 ", " 1 ").replace(" 12 ", " 2 ").replace(" 13 ", " 2 ") \
+             .replace(" 14 ", " 3 ").replace(" 11 ", " 5 ").replace(" 7 ", " 3 ").replace(" 6 ", " 4 ")
+    v = PT.check({3: p3, 4: same}, pins)              # a table of the same size with other numbers: still a doubt
+    assert v["status"] == "unchecked", v
+
+
+def test_a_page_of_spec_lines_that_only_mentions_the_names_is_not_another_pin_table():
+    """SN74LVC2G34 (SOT-23-6): page 3's table agrees; page 5 is Electrical Characteristics, where A, Y, VCC and GND
+    stand in conditions ('VI = 5.5 V or GND 0 to 5.5 V') beside other numbers. No pin is named there as a table row
+    names it (the name alone before its numbers): not a doubt about the table."""
+    pins = [("1", "1A"), ("2", "GND"), ("3", "2A"), ("4", "2Y"), ("5", "VCC"), ("6", "1Y")]
+    p3 = "NAME NO.\n1A 1 I Input 1\n1Y 6 O Output 1\n2A 3 I Input 2\n2Y 4 O Output 2\nGND 2 - Ground\nVCC 5 - Supply\n"
+    p5 = "6.5 Electrical Characteristics\nII 1A inputs VI = 5.5 V or GND 0 to 5.5 V 5 uA\nICC VI = 5.5 V or GND, IO = 0 10 uA\n" \
+         "tpd 1A 1Y 3 8 ns\ntpd 2A 2Y 1 4 ns\nVCC = 5 V 1 3 ns\n"
+    v = PT.check({3: p3, 5: p5}, pins)
+    assert v["status"] == "agreed" and v["page"] == 3, v
+    other = "NAME NO.\n1A 1 I Input 1\n1Y 6 O Output 1\n2A 3 I Input 2\n2Y 4 O Output 2\nGND 5 - Ground\nVCC 2 - Supply\n"
+    v = PT.check({3: p3, 5: other}, pins)             # a real table with GND and VCC the other way round: a doubt
+    assert v["status"] == "unchecked" and "page 5" in v["why"], v
+
+
+def test_a_singles_table_is_not_a_doubt_about_the_dual():
+    """TL072 (two amplifiers: '+' on 3 and 5, '-' on 2 and 6): page 5's table agrees; page 3 is the single TL071's
+    table, one IN+ row and one IN- row. A table with fewer input rows than the symbol has inputs is another device's."""
+    pins = [("1", ""), ("2", "-"), ("3", "+"), ("4", "V-"), ("5", "+"), ("6", "-"), ("7", ""), ("8", "V+")]
+    p5 = "Pin Functions: TL072x\nNAME NO.\n1IN- 2 Input\n1IN+ 3 Input\n1OUT 1 Output\n2IN- 6 Input\n2IN+ 5 Input\n" \
+         "2OUT 7 Output\nVCC- 4 Power\nVCC+ 8 Power\n"
+    p3 = "Pin Functions: TL071x\nNAME NO.\nIN- 2 Input\nIN+ 3 Input\nNC 1 -\nNC 5 -\nNC 8 -\nOUT 6 Output\nVCC- 4 Power\nVCC+ 7 Power\n"
+    v = PT.check({3: p3, 5: p5}, pins)
+    assert v["status"] == "agreed" and v["page"] == 5, v
+    swapped = p5.replace("1IN- 2", "1IN- 3").replace("1IN+ 3", "1IN+ 2")
+    v = PT.check({3: swapped, 5: p5}, pins)           # another dual's table with the inputs the other way: a doubt
+    assert v["status"] in ("unchecked", "disagreed"), v
+
+
 if __name__ == "__main__":
     for k, f in sorted(globals().items()):
         if k.startswith("test_") and callable(f):

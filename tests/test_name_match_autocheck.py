@@ -33,6 +33,11 @@ class _Run(L.Run):
         self.pdf_asked.append(mpn)
         return None, None
 
+    def kicad(self):                                  # (no KiCad library here: no land names to compare pitches with)
+        k = L.KiCadLibrary.__new__(L.KiCadLibrary)
+        k.footprints = {}
+        return k
+
 
 def _variant(mpn, sym_ref, pins, hint, case, several="", src_mpn=None, bom_fp="", filters=""):
     run = _Run()
