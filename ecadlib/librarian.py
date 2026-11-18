@@ -1462,7 +1462,7 @@ class Run:
             cands, why = [f"Connector:{n}" for n in land_symbol_names(parts[2], names)[:12]], \
                 "KiCad's symbol for this land: its footprint filter names it and its pins are exactly the land's pads"
         elif parts[1].startswith("Button_Switch") and set(pads) == {"1", "2"} and refs and refs <= {"SW", "S", "BTN", "K"} \
-                and re.search(r"\bSPST\b", str(desc or "")):
+                and one_contact(desc, parts[2]):
             cands, why = ["Switch:SW_Push"], "one contact between pads 1 and 2, either way round"
         else:
             return None
@@ -2047,6 +2047,13 @@ def search_case(row):
 
 
 STANDARD_CONTACTS = ("Connector_USB", "Connector_HDMI")   # lands whose pads carry the interface standard's contact names
+
+
+def one_contact(desc, land):
+    """A switch with one contact (SPST): its description says so, or KiCad's land for it does in its own name
+    (SW_SPST_B3U-1000P), and neither says another arrangement (SPDT, DPST ...)."""
+    said = f"{desc or ''} {str(land or '').replace('_', ' ')}"
+    return bool(re.search(r"\bSPST\b", said)) and not re.search(r"\b(?:SPDT|DPST|DPDT|SP[2-9]T|(?!1P1T)\dP\dT)\b", said)
 
 
 def land_symbol_names(land, names):

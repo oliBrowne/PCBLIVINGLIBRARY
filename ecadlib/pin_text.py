@@ -36,7 +36,7 @@ def norm_name(s):
 # Names two sources write differently for one pin. KiCad draws an op-amp's or comparator's inputs as '+' and '-' and
 # its rails as V+ / V-; datasheets print '1IN+', '+IN A', 'INPUT2-', 'VCC', 'GND'. A CMOS part's rails are VDD / VSS in
 # one text and VCC / GND in the other. The number must still be the same: only the spelling is set aside.
-_INPUT = {"+": {"+", "IN+", "+IN", "INPUT+", "+INPUT"}, "-": {"-", "IN-", "-IN", "INPUT-", "-INPUT"}}
+_INPUT = {"+": {"+", "IN+", "+IN", "INPUT+", "+INPUT", "VIN+"}, "-": {"-", "IN-", "-IN", "INPUT-", "-INPUT", "VIN-"}}
 RAILS = ({"V+", "+V", "VCC", "VDD", "VCC+", "VS+", "+VS", "VDD+"},
          {"V-", "-V", "VEE", "VSS", "VCC-", "VS-", "-VS", "GND", "VEE-"})
 
@@ -57,6 +57,10 @@ def loose_names(pins):
     only name of its class (a part with VCC and VDD, or GND and V-, keeps them apart by their exact names)."""
     names = {norm_name(nm) for _, nm in pins}
     out = {n for n in names if n in ("+", "-")}
+    for sign in ("+", "-"):                           # the part's only input of that sign (INA226: Vin+ is TI's IN+)
+        mine = {n for n in names if name_class(n) == sign}
+        if len(mine) == 1:
+            out |= mine
     for rails in RAILS:
         mine = names & rails
         if len(mine) == 1:
@@ -121,7 +125,12 @@ def _find(rows, name, num, found=None, loose=False):
         if not words:                                  # or after them ("1 OUT A ...": number first)
             words = cells[nums[-1][0] + 1:][:3]
         named.append({norm_name("".join(words[k:j])) for k in range(len(words)) for j in range(k + 1, min(len(words), k + 3) + 1)})
-    kind = name_class(target) if loose and not any(target in c for c in named) else None
+    if target in ("+", "-"):                           # a bare sign is printed only as a whole name: the '-' cell
+        exact = any(norm_name("".join(c[:n[0][0]] or c[n[-1][0] + 1:][:3])) == target   # of '15 IN2 -' in a
+                    and all(re.fullmatch(r"[\d,]+", x) for _, x in n) for c, n in rows)        # drawing is IN2-'s
+    else:
+        exact = any(target in c for c in named)
+    kind = name_class(target) if loose and not exact else None
     cols, seen = set(), False
     for (cells, nums), cand in zip(rows, named):
         if target not in cand and not (kind and any(name_class(c) == kind for c in cand)):
@@ -290,6 +299,17 @@ def check(page_texts, pins, figures=(), pin_count=None):
             return {"status": "disagreed", "page": page,      # difference, not a page that only mentions the names
                     "why": f"page {page} prints {', '.join(miss[:4])} with other numbers"}
         best = (page, named, f"page {page}: {', '.join(miss[:4])} not printed with that number")
+    if agreed is None:                                 # a table that runs over two pages: read as one
+        pages = sorted((page_texts or {}).items())
+        for (pa, ta), (pb, tb) in zip(pages, pages[1:]):
+            rows = _rows(ta) + _rows(tb) if pb == pa + 1 else []
+            lines = [{} for _ in pins]
+            per = [_find(rows, nm, n, f, loose=norm_name(nm) in loose) for (n, nm), f in zip(pins, lines)] if rows else []
+            common = set.intersection(*[cols for cols, _ in per]) if per else set()
+            if common and not variant_columns(lines, min(common), most, _span(rows, lines, min(common))):
+                agreed = {"status": "agreed", "page": pa, "column": min(common), "pins": len(pins),
+                          "where": f"pin table (pages {pa} and {pb})"}
+                break
     if agreed is not None:
         if conflicts:                                  # a table on another page names the same pins with other numbers:
             pg, miss = conflicts[0]                    # which table is this part's is not in the text, whichever came first

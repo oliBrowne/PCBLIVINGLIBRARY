@@ -159,6 +159,42 @@ def test_a_singles_table_is_not_a_doubt_about_the_dual():
     assert v["status"] in ("unchecked", "disagreed"), v
 
 
+def test_a_minus_sign_split_from_its_name_in_a_drawing_does_not_stand_for_the_bare_input_name():
+    """LM358: the 20-pin drawing prints '15 IN2 -' (the sign a cell of its own), so '-' seemed printed letter for
+    letter and the table's IN1- / IN2- rows were no longer read as the symbol's '-' pins."""
+    pins = [("1", ""), ("2", "-"), ("3", "+"), ("4", "V-"), ("5", "+"), ("6", "-"), ("7", ""), ("8", "V+")]
+    page = "14 NC\n15 IN2 \u2013\n16 NC\n17 OUT2\nFigure 4-2. FK Package\nNAME LCCC SOIC\nIN1\u2013 5 2 I Negative input\n" \
+           "IN1+ 7 3 I Positive input\nIN2\u2013 15 6 I Negative input\nIN2+ 12 5 I Positive input\nOUT1 2 1 O Output\n" \
+           "OUT2 17 7 O Output\nV\u2013 10 4 \u2014 Negative supply\nV+ 20 8 \u2014 Positive supply\n"
+    v = PT.check({3: page}, pins)
+    assert v["status"] == "agreed" and v["column"] == 1, v
+    v = PT.check({3: page.replace("IN1\u2013 5 2", "IN1\u2013 5 3").replace("IN1+ 7 3", "IN1+ 7 2")}, pins)
+    assert v["status"] != "agreed", v
+
+
+def test_a_parts_only_signed_input_is_matched_by_its_sign():
+    """INA226: KiCad names the shunt inputs Vin+ and Vin-, TI's table IN+ and IN-. One input of each sign: the sign
+    names it; the number must still be the same."""
+    pins = [("1", "A1"), ("2", "A0"), ("4", "SDA"), ("5", "SCL"), ("6", "VS"), ("7", "GND"), ("8", "Vbus"),
+            ("9", "Vin-"), ("10", "Vin+")]
+    page = "NAME NO.\nA0 2 Digital input\nA1 1 Digital input\nGND 7 Analog Ground\nIN+ 10 Analog input\n" \
+           "IN\u2013 9 Analog input\nSCL 5 Digital input\nSDA 4 Digital I/O\nVBUS 8 Analog input\nVS 6 Analog Power supply\n"
+    assert PT.check({3: page}, pins)["status"] == "agreed"
+    assert PT.check({3: page.replace("IN+ 10", "IN+ 9").replace("IN\u2013 9", "IN\u2013 10")}, pins)["status"] != "agreed"
+    two = pins[:-1] + [("10", "Vin+"), ("3", "IN2+")]          # two '+' names: each by its own spelling only
+    assert "Vin+" not in {n for n in PT.loose_names(two)} and "VIN+" not in PT.loose_names(two)
+
+
+def test_a_pin_table_that_runs_over_two_pages_is_read_as_one():
+    pins = [(str(i), f"P{i}") for i in range(1, 9)]
+    a = "NAME NO.\n" + "".join(f"P{i} {i} I/O port\n" for i in range(1, 5))
+    b = "NAME NO.\n" + "".join(f"P{i} {i} I/O port\n" for i in range(5, 9))
+    v = PT.check({5: a, 6: b}, pins)
+    assert v["status"] == "agreed" and v["page"] == 5, v
+    assert PT.check({5: a, 7: b}, pins)["status"] != "agreed"                       # not consecutive pages
+    assert PT.check({5: a, 6: b.replace("P8 8", "P8 9")}, pins)["status"] != "agreed"
+
+
 if __name__ == "__main__":
     for k, f in sorted(globals().items()):
         if k.startswith("test_") and callable(f):

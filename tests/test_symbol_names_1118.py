@@ -92,6 +92,14 @@ def test_a_land_symbol_needs_the_filter_and_the_exact_pads():
     assert not P("USB*C*Plug*", pads, pads, land) and not P("", pads, pads, land)
 
 
+def test_one_contact_is_said_by_the_description_or_by_kicads_land_name():
+    C = L.one_contact
+    assert C("SWITCH TACTILE SPST-NO 0.05A 12V", "SW_Push_1P1T_NO_CK_KMR2")
+    assert C("", "SW_SPST_B3U-1000P") and C(None, "SW_SPST_PTS645")
+    assert not C("", "SW_Push_1P1T_NO_CK_KMR2") and not C("SWITCH SLIDE SPDT 300MA 6V", "SW_SPDT_PCM12")
+    assert not C("SWITCH SLIDE SPDT", "SW_SPST_X")       # (a DIP array of SPSTs has more than pads 1 and 2: land_symbol)
+
+
 if __name__ == "__main__":
     for k, f in sorted(globals().items()):
         if k.startswith("test_") and callable(f):
