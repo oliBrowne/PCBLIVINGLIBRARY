@@ -98,6 +98,29 @@ def test_a_same_size_variant_column_still_holds():
     assert v["status"] == "unchecked" and "another column" in v["why"], v
 
 
+def test_a_column_that_leaves_a_named_pin_without_a_number_is_a_package_without_that_pin():
+    """AP2125's table has a SOT-23-3 column and a SOT-23-5 one; the 3-lead column prints a dash for CE and NC. The
+    rows that start with the dash were read as a pin named '-', and the 3-lead column as a doubt about the 5-lead
+    part: a package that has no CE pin is not the package of a symbol that names CE."""
+    page = ("SOT-23-3 SOT-23-5/SC-70-5\n3 1 VIN Input voltage\n1 2 GND Ground\n- 3 CE Active high enable input pin.\n"
+            "- 4 NC No connection\n2 5 VOUT Regulated output voltage")
+    pins = [("1", "VIN"), ("2", "GND"), ("3", "CE"), ("4", "NC"), ("5", "VOUT")]
+    v = PT.check({2: page}, pins)
+    assert v["status"] == "agreed" and v["column"] == 1, v
+    v = PT.check({2: page}, [("1", "VIN"), ("2", "GND"), ("3", "CE"), ("5", "VOUT")])        # NC left unnamed
+    assert v["status"] == "agreed" and v["column"] == 1, v
+    v = PT.check({2: page}, [("3", "VIN"), ("1", "GND"), ("2", "VOUT")])                     # the 3-lead part: its own
+    assert v["status"] == "agreed" and v["column"] == 0, v                                   # column, CE is not its pin
+    v = PT.check({2: page}, [("1", "VIN"), ("2", "GND"), ("4", "CE"), ("5", "VOUT")])        # CE on the wrong pin
+    assert v["status"] != "agreed", v
+    # a dash that leads a row of a one-column table is not an empty number cell: nothing is read into it
+    assert PT._rows("- 3 CE Active high")[0][1] == [(1, "3")]
+    # only the no-connect lacks a number in the other column: both columns could still be this part's (MCP6L01 / R)
+    page = "EN 3 3 I\nGND 2 2 -\nIN 4 1 I\nN/C — 4 —\nOUT 1 5 O"
+    v = PT.check({3: page}, [("1", "IN"), ("2", "GND"), ("3", "EN"), ("4", "NC"), ("5", "OUT")])
+    assert v["status"] == "unchecked" and "another column" in v["why"], v
+
+
 def test_a_pin_named_like_a_ball_is_a_name():
     page = "A0 1 User Configurable Chip Select\nA1 2 User Configurable Chip Select\nA2 3 User Configurable Chip Select\n" \
            "VSS 4 Ground\nSDA 5 Serial Data\nSCL 6 Serial Clock\nWP 7 Write-Protect Input\nVCC 8 +1.8V to 5.5V"

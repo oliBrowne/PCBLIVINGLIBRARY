@@ -109,6 +109,10 @@ def _rows(text):
         if not any(c for _, c in nums):
             continue
         rows.append((cells, nums))
+    if any(len(n) >= 2 and n[0][0] == 0 and n[1][0] == 1 and n[0][1].isdigit() and n[1][1].isdigit() for _, n in rows):
+        for k, (cells, nums) in enumerate(rows):       # a table with two number columns: the dash that leads a row is
+            if cells[0] in EMPTY and nums[0][0] == 1:  # the first column's empty cell ("- 3 CE": no such pin in that
+                rows[k] = (cells, [(0, "")] + nums)    # package), not the row's name
     return rows
 
 
@@ -167,6 +171,8 @@ def variant_columns(lines, col, most=0, table=()):
     for k in range(width):
         if k == col or _other_package(lines, col, k, most, table):
             continue
+        if any(c and k < len(c) and not any(_numbers(c[k])) and any(_numbers(c[col])) for c in (f.get(col) for f in lines)):
+            continue                                   # no number for a pin this part names: a package without that pin
         for f in lines:
             cells = f.get(col)
             if cells and k < len(cells) and set(_numbers(cells[k])) != set(_numbers(cells[col])) \
