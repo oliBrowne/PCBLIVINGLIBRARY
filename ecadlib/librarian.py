@@ -1237,6 +1237,11 @@ class Run:
                     st["no_bom_part"] = f"{SP.SYMBOLS[key][2].lower()} ({land}): copper and holes only, nothing to buy"
             else:
                 res["sym_how"] = res["sym_how"] if res["symbol"] else how
+                drawn = self.land_symbol(st, fp_src, pads, ln.get("designator"), desc)
+                if drawn:
+                    ref, chain, why = drawn
+                    self.put_kicad_sym(st, chain, sym_name, fp_name, f"kicad:{ref}", kicad_params(mpn, False))
+                    got.append(f"symbol {ref} ({why})")
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
         why += [] if st["symbol"] else [f"symbol: {res['sym_how']}"]
         st["tried"].append("standard: " + "; ".join(got + why))
@@ -1422,6 +1427,37 @@ class Run:
         st["tried"].append(f"standard: pinout {name} for {mpn} confirmed: its {v['pins']} pins agree with the "
                            f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
         return True
+
+    def land_symbol(self, st, fp_src, pads, designator, desc):
+        """KiCad's own generic symbol for one of KiCad's own lands -> ('Lib:Name', chain, why) or None. Two cases, both
+        with nothing left to choose: a USB / HDMI connector, whose land's pads carry the standard's contact names (A1 ..
+        B12, S1): the one symbol named like the land whose footprint filter names it and whose pins are exactly those
+        pads; and a one-contact (SPST) switch on a land with pads 1 and 2: KiCad's SW_Push, either way round."""
+        parts = str(fp_src or "").split(":")
+        if len(parts) != 3 or parts[0] != "kicad" or not pads:
+            return None
+        refs = {m for m in re.findall(r"([A-Za-z]+)\d", str(designator or "").upper())}
+        hits = []
+        if parts[1] in STANDARD_CONTACTS and refs and refs <= {"J", "P", "X", "CN", "CON", "USB"}:
+            names = [n for n, libs in self.kicad().symbols.items() if "Connector" in libs]
+            cands, why = [f"Connector:{n}" for n in land_symbol_names(parts[2], names)[:12]], \
+                "KiCad's symbol for this land: its footprint filter names it and its pins are exactly the land's pads"
+        elif parts[1].startswith("Button_Switch") and set(pads) == {"1", "2"} and refs and refs <= {"SW", "S", "BTN", "K"} \
+                and re.search(r"\bSPST\b", str(desc or "")):
+            cands, why = ["Switch:SW_Push"], "one contact between pads 1 and 2, either way round"
+        else:
+            return None
+        for ref in cands:
+            try:
+                chain, _ = K.load_symbol(ref, self.http)
+                sym = K.convert_symbol(chain, ref.split(":")[-1], None, (), None, [])
+            except Exception:
+                continue
+            pins = {pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"}
+            if ref == "Switch:SW_Push" and pins == {"1", "2"} or ref != "Switch:SW_Push" and land_symbol_fits(
+                    K._props(chain).get("ki_fp_filters", ""), pins, pads, f"{parts[1]}:{parts[2]}"):
+                hits.append((ref, chain, why))
+        return hits[0] if len(hits) == 1 else None
 
     def pin_order(self, st, item, ln, row, mpn, what):
         """The order of a plain transistor's terminals on pins 1, 2, 3 ('GSD', 'BEC') as this MPN's own datasheet
@@ -1969,6 +2005,29 @@ def search_case(row):
     if row.get("src_several"):
         return ""
     return SP.case_text(row.get("src_package"), row.get("src_description")) or ""
+
+
+STANDARD_CONTACTS = ("Connector_USB", "Connector_HDMI")   # lands whose pads carry the interface standard's contact names
+
+
+def land_symbol_names(land, names):
+    """The KiCad symbols named like one of KiCad's lands: those that are, or start with, the land name's leading
+    words, the most words that name any ('USB_C_Receptacle' of USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_
+    Horizontal: USB_C_Receptacle, USB_C_Receptacle_USB2.0_16P ...). At least two words; [] when none."""
+    toks = str(land or "").split("_")
+    for k in range(len(toks), 1, -1):
+        stem = "_".join(toks[:k])
+        hit = sorted(n for n in names if n == stem or n.startswith(stem + "_"))
+        if hit:
+            return hit
+    return []
+
+
+def land_symbol_fits(filters, pins, pads, land_ref):
+    """A KiCad symbol is the one drawn for a KiCad land: its footprint filter names the land and its pin numbers are
+    exactly the land's pads."""
+    from .resolve import _filter_hit
+    return bool(pins) and set(pins) == set(pads) and _filter_hit(filters, land_ref)
 
 
 def resolve_standard(texts, case, device, kind, mpn, desc):

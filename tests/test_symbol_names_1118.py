@@ -71,6 +71,27 @@ def test_what_matched_before_still_matches_the_same_way():
     assert got == "Amplifier_Operational:TL072" and "ordering suffix 'Q1' (check the variant)" in how, how
 
 
+# ---------------------------------------------------------------- KiCad's generic symbol for its own land
+def test_the_generic_symbols_named_like_a_usb_land():
+    names = ["USB_A", "USB_A_Stacked", "USB_C_Plug", "USB_C_Receptacle", "USB_C_Receptacle_USB2.0_16P",
+             "USB_C_Receptacle_USB2.0_14P", "USB_C_Receptacle_PowerOnly_6P", "USB_B_Micro", "Micro_SD_Card", "HDMI_A"]
+    N = L.land_symbol_names
+    assert N("USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal", names) == \
+        ["USB_C_Receptacle", "USB_C_Receptacle_PowerOnly_6P", "USB_C_Receptacle_USB2.0_14P", "USB_C_Receptacle_USB2.0_16P"]
+    assert N("USB_A_Molex_67643_Horizontal", names) == ["USB_A", "USB_A_Stacked"]
+    assert N("USB_Micro-B_Amphenol_10103594-0001LF_Horizontal", names) == []      # KiCad names it USB_B_Micro: no guess
+    assert N("USB", names) == [] and N("", names) == []
+
+
+def test_a_land_symbol_needs_the_filter_and_the_exact_pads():
+    P = L.land_symbol_fits
+    pads = {"A1", "A4", "A5", "A6", "A7", "A8", "A9", "A12", "B1", "B4", "B5", "B6", "B7", "B8", "B9", "B12", "S1"}
+    land = "Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal"
+    assert P("USB*C*Receptacle*", pads, pads, land)
+    assert not P("USB*C*Receptacle*", pads - {"S1"}, pads, land)          # the 14P / power-only symbol: other pins
+    assert not P("USB*C*Plug*", pads, pads, land) and not P("", pads, pads, land)
+
+
 if __name__ == "__main__":
     for k, f in sorted(globals().items()):
         if k.startswith("test_") and callable(f):
