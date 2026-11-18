@@ -102,15 +102,12 @@ def test_the_free_check_tries_the_makers_url_pattern_after_two_dead_links():
                            {"name": "Manufacturer", "value": "Texas Instruments"}]}
     row = {"src": "digikey", "src_datasheet": "https://rocelec.widen.net/view/pdf/x/slos263w.pdf",
            "src_datasheet_more": "https://www.mouser.com/datasheet/x.pdf"}
-    os.environ["ECADLIB_NO_ARCHIVE"] = "1"
-    try:
-        data, url = run.datasheet_pdf(item, {"mpn": "LMV321IDBVR", "manufacturer": "Texas Instruments"}, row, {"found": {}}, "LMV321IDBVR")
-        assert data and url == "https://www.ti.com/lit/ds/symlink/lmv321.pdf", (url, run._pdfs.asked)
-        run._pdfs = _Store("nowhere")
-        assert run.datasheet_pdf(item, {"mpn": "LMV321IDBVR"}, row, {"found": {}}, "LMV321IDBVR") == (None, None)
-        assert 2 < len(run._pdfs.asked) <= L.Run.PDF_LINKS
-    finally:
-        del os.environ["ECADLIB_NO_ARCHIVE"]
+    assert os.environ.get("ECADLIB_NO_ARCHIVE") == "1"     # tests/__init__.py: no test asks the Internet Archive
+    data, url = run.datasheet_pdf(item, {"mpn": "LMV321IDBVR", "manufacturer": "Texas Instruments"}, row, {"found": {}}, "LMV321IDBVR")
+    assert data and url == "https://www.ti.com/lit/ds/symlink/lmv321.pdf", (url, run._pdfs.asked)
+    run._pdfs = _Store("nowhere")
+    assert run.datasheet_pdf(item, {"mpn": "LMV321IDBVR"}, row, {"found": {}}, "LMV321IDBVR") == (None, None)
+    assert 2 < len(run._pdfs.asked) <= L.Run.PDF_LINKS
 
 
 def test_no_pdf_is_said_as_no_pdf_not_as_a_scanned_one():
