@@ -33,6 +33,37 @@ def norm_name(s):
     return re.sub(r"\s+", "", s).upper()
 
 
+# Names two sources write differently for one pin. KiCad draws an op-amp's or comparator's inputs as '+' and '-' and
+# its rails as V+ / V-; datasheets print '1IN+', '+IN A', 'INPUT2-', 'VCC', 'GND'. A CMOS part's rails are VDD / VSS in
+# one text and VCC / GND in the other. The number must still be the same: only the spelling is set aside.
+_INPUT = {"+": {"+", "IN+", "+IN", "INPUT+", "+INPUT"}, "-": {"-", "IN-", "-IN", "INPUT-", "-INPUT"}}
+RAILS = ({"V+", "+V", "VCC", "VDD", "VCC+", "VS+", "+VS", "VDD+"},
+         {"V-", "-V", "VEE", "VSS", "VCC-", "VS-", "-VS", "GND", "VEE-"})
+
+
+def name_class(name):
+    """'+' / '-' for an amplifier input however its channel is written (1IN+, IN1+, +INA, INPUT2- ...), 'pos' / 'neg'
+    for a supply rail's usual names, else None. One channel mark (1-4 or A-D) may stand anywhere in an input's name."""
+    s = norm_name(name)
+    for sign, forms in _INPUT.items():
+        if s in forms or any(s[:i] + s[i + 1:] in forms for i, c in enumerate(s) if c in "1234ABCD"):
+            return sign
+    return "pos" if s in RAILS[0] else "neg" if s in RAILS[1] else None
+
+
+def loose_names(pins):
+    """The pins' names that may be matched by class (name_class) instead of letter for letter: an amplifier input
+    written as the bare sign ('+', '-': KiCad's way, which no datasheet prints), and a rail when it is the symbol's
+    only name of its class (a part with VCC and VDD, or GND and V-, keeps them apart by their exact names)."""
+    names = {norm_name(nm) for _, nm in pins}
+    out = {n for n in names if n in ("+", "-")}
+    for rails in RAILS:
+        mine = names & rails
+        if len(mine) == 1:
+            out |= mine
+    return out
+
+
 def _cells(line):
     """A text line -> its tokens, with "2, 3" kept as one cell and ranges written out."""
     line = _LIST.sub(",", line.replace("–", "-").replace("–", "-"))
@@ -66,7 +97,9 @@ def _rows(text):
                 nums.append((i, ""))
             elif started:
                 break
-        nums = [(i, c) for i, c in nums]
+        if len(nums) >= 2 and nums[0][0] == 0 and not nums[0][1][0].isdigit() and "," not in nums[0][1] \
+                and (nums[1][1].isdigit() or not nums[1][1]):
+            nums = nums[1:]                            # "A0 1 1 — 1": a pin NAMED like a ball, then its numbers
         while nums and not nums[-1][1]:
             nums.pop()
         if not any(c for _, c in nums):
@@ -75,19 +108,23 @@ def _rows(text):
     return rows
 
 
-def _find(rows, name, num, found=None):
+def _find(rows, name, num, found=None, loose=False):
     """Columns (index among the line's number cells) where `num` is printed on a line that names `name`, and whether
     the name was printed at all (with any numbers). found: {column: [the line's number cells]} of the lines that
-    matched, for the variant check in check()."""
+    matched, for the variant check in check(). loose: the name may be matched by its class (loose_names), but only
+    when no line of the page prints it letter for letter."""
     target = norm_name(name)
-    cols, seen = set(), False
+    named = []
     for cells, nums in rows:
         first = nums[0][0]
         words = cells[:first]                          # the name is printed before the numbers ("OUT A 1 1 O ...")
         if not words:                                  # or after them ("1 OUT A ...": number first)
             words = cells[nums[-1][0] + 1:][:3]
-        cand = {norm_name("".join(words[k:j])) for k in range(len(words)) for j in range(k + 1, min(len(words), k + 3) + 1)}
-        if target not in cand:
+        named.append({norm_name("".join(words[k:j])) for k in range(len(words)) for j in range(k + 1, min(len(words), k + 3) + 1)})
+    kind = name_class(target) if loose and not any(target in c for c in named) else None
+    cols, seen = set(), False
+    for (cells, nums), cand in zip(rows, named):
+        if target not in cand and not (kind and any(name_class(c) == kind for c in cand)):
             continue
         seen = True
         for col, (_, c) in enumerate(nums):
@@ -98,20 +135,52 @@ def _find(rows, name, num, found=None):
     return cols, seen
 
 
-def variant_columns(lines, col):
+def _other_package(lines, col, k, most, table=()):
+    """Column k of the matched lines is plainly another package than column `col`'s numbered one: it prints a pin
+    number above this part's highest (a 14-pin TSSOP column beside the 8-pin ones, a 16-pin QFN beside the 14-pin
+    SOIC), or ball names (B1, C2: a DSBGA column) where this part's pins are plain numbers. table: every row of the
+    table's span (its number cells), so a pin the symbol leaves unnamed counts too."""
+    span = [c for f in lines for c in [f.get(col)] if c] + [c for c in table if len(c) > max(col, k)]
+    vals = [x for c in span if k < len(c) for x in _numbers(c[k]) if x]
+    mine = [x for c in span if col < len(c) for x in _numbers(c[col]) if x]
+    if not vals or not mine or not all(x.isdigit() for x in mine):
+        return False
+    return any(not x.isdigit() for x in vals) or bool(most) and any(int(x) > most for x in vals if x.isdigit())
+
+
+def variant_columns(lines, col, most=0, table=()):
     """The other number columns of the matched lines that give some pin another number than column `col` does (a
-    table with SOIC and SOT-23 columns, or MCP6L01 / MCP6L01R): '' when every column agrees or there is no other."""
+    table with SOIC and SOT-23 columns, or MCP6L01 / MCP6L01R): '' when every column agrees or there is no other.
+    most: this part's highest pin number, table: the table's rows: a column that is plainly another package
+    (_other_package) is not counted."""
     out = []
     width = max((len(c) for f in lines for c in f.values()), default=0)
     for k in range(width):
-        if k == col:
+        if k == col or _other_package(lines, col, k, most, table):
             continue
         for f in lines:
             cells = f.get(col)
-            if cells and k < len(cells) and set(_numbers(cells[k])) != set(_numbers(cells[col]))                     and not set(_numbers(cells[k])) & set(_numbers(cells[col])):
+            if cells and k < len(cells) and set(_numbers(cells[k])) != set(_numbers(cells[col])) \
+                    and not set(_numbers(cells[k])) & set(_numbers(cells[col])):
                 out.append(f"column {k + 1}")
                 break
     return ", ".join(out)
+
+
+def _span(rows, lines, col):
+    """The number cells of every row of the table the pins matched in (column `col`): from the first to the last
+    matched row, and on to the rows next to them while they have as many number cells (its unnamed pins, its N.C.s)."""
+    hit = [f[col] for f in lines if f.get(col)]
+    cells = [[x for _, x in nums] for _, nums in rows]
+    at = [i for i, c in enumerate(cells) if c in hit]
+    if not at:
+        return []
+    lo, hi, wide = min(at), max(at), max(len(c) for c in hit)
+    while lo > 0 and len(cells[lo - 1]) == wide:
+        lo -= 1
+    while hi + 1 < len(cells) and len(cells[hi + 1]) == wide:
+        hi += 1
+    return cells[lo:hi + 1]
 
 
 def _top(rows, pins):
@@ -150,6 +219,7 @@ def check(page_texts, pins, figures=(), pin_count=None):
     units = sorted((page_texts or {}).items()) + [(pg, t) for pg, t in figures or ()]
     if not any(str(t or "").strip() for _, t in units):
         return {"status": "unchecked", "why": "the PDF has no text layer (scanned?)"}
+    loose = loose_names(pins)
     best, agreed, conflicts = None, None, []
     for i, (page, text) in enumerate(units):
         drawn = i >= len(units) - len(figures or ())
@@ -157,7 +227,7 @@ def check(page_texts, pins, figures=(), pin_count=None):
         if not rows:
             continue
         lines = [{} for _ in pins]
-        per = [_find(rows, nm, n, f) for (n, nm), f in zip(pins, lines)]
+        per = [_find(rows, nm, n, f, loose=norm_name(nm) in loose) for (n, nm), f in zip(pins, lines)]
         named = sum(1 for _, seen in per if seen)
         if named < len(pins):
             if best is None or named > best[1]:
@@ -166,7 +236,7 @@ def check(page_texts, pins, figures=(), pin_count=None):
         common = set.intersection(*[cols for cols, _ in per])
         if common:
             col = min(common)
-            other = variant_columns(lines, col)
+            other = variant_columns(lines, col, most, _span(rows, lines, col))
             if other:                               # another package or variant of the part numbers these pins other
                 return {"status": "unchecked", "page": page,      # ways: which column is this part's is not in
                         "why": f"page {page}'s table gives these pins other numbers in another column ({other}): which "
