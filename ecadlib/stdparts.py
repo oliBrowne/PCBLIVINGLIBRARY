@@ -1071,8 +1071,9 @@ def _chip_kind_ok(name, kind):
 
 
 # ---------------------------------------------------------------- symbols (KiCad .kicad_sym text)
-def _pin(num, name, typ, x, y, ang, ln=2.54, hide_name=True):
-    return (f'(pin {typ} line (at {x:g} {y:g} {ang}) (length {ln:g}) (name "{name}" (effects (font (size 1.27 1.27))))'
+def _pin(num, name, typ, x, y, ang, ln=2.54, hide_name=True, hidden=False):
+    return (f'(pin {typ} line (at {x:g} {y:g} {ang}) (length {ln:g}){" hide" if hidden else ""} '
+            f'(name "{name}" (effects (font (size 1.27 1.27))))'
             f' (number "{num}" (effects (font (size 1.27 1.27)))))')
 
 
@@ -1258,6 +1259,49 @@ def _three(kind, order):
     return (f"Q_{kind}_{''.join(order)}", ref, f"{desc}, pins {', '.join(f'{i + 1}={n}' for i, n in enumerate(order))}", g, pins)
 
 
+SO8_FET = "SSSGDDDD"      # a single MOSFET in an SO-8: pins 1-3 source, 4 gate, 5-8 drain (the industry's one order)
+
+
+def so8_fet_orders():
+    """The one order a single SO-8 MOSFET is built with, and the others a datasheet could print instead (the gate on
+    another of pins 1-4, or drain and source sides swapped): a pin check must agree with the first and none of these."""
+    alts = []
+    for g in range(4):
+        side = ["S"] * 4
+        side[g] = "G"
+        alts += ["".join(side) + "DDDD", "DDDD" + "".join(side)]
+    return SO8_FET, [o for o in alts if o != SO8_FET]
+
+
+def _eight(kind, order):
+    """A single MOSFET with its terminals on several pins (SO-8: 'SSSGDDDD'): the 3-pin MOSFET drawing, each terminal's
+    first pin drawn and the others stacked on it, hidden (as KiCad's own Q_NMOS_SSSGDDDD-style symbols)."""
+    pos = {"G": (-5.08, 0, 0), "D": (2.54, 5.08, 270), "S": (2.54, -5.08, 90)}
+    seen, pins = set(), []
+    for i, nm in enumerate(order):
+        pins.append((str(i + 1), nm, "input" if nm == "G" else "passive", *pos[nm], 2.54, True, nm in seen))
+        seen.add(nm)
+    desc = {"NMOS": "N-channel MOSFET", "PMOS": "P-channel MOSFET"}[kind]
+    return (f"Q_{kind}_{order}", "Q", f"{desc}, pins {', '.join(f'{i + 1}={n}' for i, n in enumerate(order))}",
+            FET(kind == "PMOS"), pins)
+
+
+def _diode3(kind, order):
+    """A single diode in a three-lead package (SOT-23, SC-70): order = the roles of pins 1, 2, 3, 'A' anode, 'K'
+    cathode, 'N' not connected ('ANK': BAS16, BAT54). The diode as the 2-pin symbol draws it (cathode left), and the
+    lead with no connection as a no-connect pin below the body, so every pad of the land has its pin."""
+    if sorted(order) != ["A", "K", "N"]:
+        raise KeyError(f"not a single diode's pin order: {order}")
+    g = _diode_body(kind if kind in ("D", "D_Schottky", "D_Zener") else "D")
+    at = {"K": ("K", "passive", -5.08, 0, 0, 3.81), "A": ("A", "passive", 5.08, 0, 180, 3.81),
+          "N": ("NC", "no_connect", 0, -5.08, 90, 2.54)}
+    pins = [(str(i + 1), *at[r]) for i, r in enumerate(order)]
+    what = {"D": "Diode", "D_Schottky": "Schottky diode", "D_Zener": "Zener diode"}.get(kind, "Diode")
+    roles = {"A": "anode", "K": "cathode", "N": "not connected"}
+    return (f"{kind if kind in ('D', 'D_Schottky', 'D_Zener') else 'D'}_{order}", "D",
+            f"{what}, three leads: {', '.join(f'{i + 1} = {roles[r]}' for i, r in enumerate(order))}", g, pins)
+
+
 def _regulator(order, adj_names):
     """3-pin linear regulator box; order = names for pins 1..3 (VI, VO, GND or ADJ); tab = the VO pin's number."""
     side = {"VI": (-7.62, 0, 0), "VO": (7.62, 0, 180), "GND": (0, -7.62, 90), "ADJ": (0, -7.62, 90)}
@@ -1334,6 +1378,22 @@ def symbol_kind(kind, mpn, fp_name, description=""):
                 return None, f"{mpn}: standard pinout known for {'/'.join(pk)}, not {fp_name}"
             return f"{what}:{pins}", f"{mpn}: {what} family pinout {pins}"
     return None, "no standard pinout for this part"
+
+
+NOT_ONE_DIODE = re.compile(r"(?i)\b(?:ARR(?:AY|\.)?|DUAL|PAIRS?|COMMON|SERIES|BRIDGE|QUAD|\d\s*(?:ELEMENTS?|INDEPENDENT)|"
+                           r"TVS|ESD|TRANSIENT|SUPPRESS\w*|LED|PHOTO\w*|VARACTOR|PIN\s+DIODE)\b")
+
+
+def single_diode_kind(description, mpn=""):
+    """The 2-pin symbol kind ('D', 'D_Schottky', 'D_Zener') for a part search's description of ONE plain diode
+    ('DIODE SCHOTTKY 30V 200MA SOT23-3', 'DIODE STANDARD 100V 200MA SOT23', 'DIODE ZENER 5.1V'); an array, a pair
+    (common anode / cathode, series), a bridge, a TVS / ESD part (its direction), an LED or photo diode: None."""
+    d = str(description or "")
+    if not re.search(r"(?i)\bDIODES?\b|\bRECTIFIER\b", d) or NOT_ONE_DIODE.search(d):
+        return None
+    if re.search(r"(?i)zener", d):
+        return "D_Zener"
+    return "D_Schottky" if re.search(r"(?i)schottky", d) else "D"
 
 
 SINGLE_TRANSISTOR = re.compile(r"(?i)\b(?:MOSFETs?\s+(N|P)-CH(?:ANNEL)?\b|TRANS(?:ISTOR)?\s+(NPN|PNP)\b)")
@@ -1460,6 +1520,9 @@ def symbol_text(key, mpn=""):
         name, ref, desc, g, pins = _conn_row(int(CONN_KEY.match(key).group(1)), bool(CONN_KEY.match(key).group(2)))
     elif key in SYMBOLS_USB:
         name, ref, desc, g, pins = SYMBOLS_USB[key]
+    elif key.startswith("DIODE3:"):
+        _, kind, order = key.split(":")
+        name, ref, desc, g, pins = _diode3(kind, order)
     elif ":" in key:
         what, order = key.split(":")
         if what == "REG":
@@ -1468,6 +1531,8 @@ def symbol_text(key, mpn=""):
             names = {"1117": [gnd, "VO", "VI"], "78": ["VI", "GND", "VO"], "79": ["GND", "VI", "VO"], "317": ["ADJ", "VO", "VI"],
                      "78L": ["VO", "GND", "VI"]}[order]
             name, ref, desc, g, pins = _regulator(names, ())
+        elif len(order) > 3:
+            name, ref, desc, g, pins = _eight(what, order)
         else:
             kind = what if "|" not in what else ("PNP" if PNP_RE.match(re.sub(r"[^A-Z0-9]", "", str(mpn).upper())) else "NPN")
             name, ref, desc, g, pins = _three(kind, list(order))
@@ -1476,7 +1541,7 @@ def symbol_text(key, mpn=""):
     body = " ".join(g)
     pin_txt = " ".join(_pin(*p) for p in pins)
     # pin names hidden on 2-pin parts and on transistors (KiCad's Q_*: G / S / D written over the gate and channel lines)
-    quiet = all(p[1] in ("~", "1", "2", "K", "A") for p in pins) or ref == "Q"
+    quiet = all(p[1] in ("~", "1", "2", "K", "A", "NC") for p in pins) or ref == "Q"
     hide_names = "(pin_names (offset 0) hide)" if quiet else "(pin_names (offset 0.254))"
     if key in SYMBOLS:                         # 2-pin passives and diodes: no "1"/"2" or K/A text on the body (as KiCad's Device:R)
         hide_names += " (pin_numbers hide)"
