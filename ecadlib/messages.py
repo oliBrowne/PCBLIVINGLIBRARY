@@ -285,6 +285,11 @@ CODES = {
     "crosscheck.unchecked": ("The datasheet read could not be cross-checked[ ({why})].",
                              "Compare the footprint with the datasheet before you release it.",
                              [r"cross-check unchecked: (?P<why>.+)", r"not checked \((?P<why>[^)]+)\)"]),
+    # the pinout drawing read again from pictures and checked in code (pin_drawing) disagrees with the read's symbol
+    "crosscheck.drawing_disagree": ("The datasheet's pinout drawing does not match the symbol the datasheet reader drew "
+                                    "({why}); it was not released.",
+                                    "Compare the symbol's pins with the datasheet's pinout drawing, then fix or release it.",
+                                    [r"^pinout drawing: disagreed: (?P<why>.+)"]),
     # the datasheet reader
     "datasheet.no_link": ("No datasheet link is known, so the datasheet could not be read[, and {folder_note}].",
                           "Add the datasheet link to the BOM line, save the PDF as MPN.pdf in your datasheet folder (set "
