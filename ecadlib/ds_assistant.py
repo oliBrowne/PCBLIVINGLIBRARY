@@ -131,6 +131,15 @@ def request(base, job):
                "again: this read is then asked for again with the PDF's own pages, and this folder can be left "
                "unanswered. Save only this part's datasheet (or its family's) there, never a page that is not a PDF.", ""]
         tried = [a for a in ((job.get("prov") or {}).get("attempts") or ()) if isinstance(a, dict)]
+        order = {}                                           # the part's usable links, as ecadlib tried them
+        for u, w in [(job.get("url"), job.get("where"))] + [tuple(x) for x in job.get("more_urls") or ()]:
+            if u and re.match(r"https?://", str(u)):
+                order.setdefault(u, w)
+        order = list(order.items())
+        if len(order) > 1:                                   # the maker's first; a distributor's copy only if it can't be got
+            md += ["Links to try, in order (the first that gives this part's PDF; a distributor's copy only when the "
+                   "maker's own link can't be got):", ""] + [f"{i}. {u} ({w or 'link'})" for i, (u, w) in
+                                                               enumerate(order[:8], 1)] + [""]
         if tried:                                            # why: refused, dead, the Archive had no copy ...
             md += ["What ecadlib tried:", ""] + [f"- {a.get('where') or ''}: {a.get('error') or ''}"[:400]
                                                   for a in tried[:8]] + [""]
