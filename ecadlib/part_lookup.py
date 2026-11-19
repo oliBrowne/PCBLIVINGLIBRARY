@@ -70,7 +70,9 @@ DIM_RX = [("size", r"^size\s*/\s*dimension$"), ("land", r"^surface mount land si
           ("connector", r"^connector type$"), ("contact", r"^contact type$"), ("positions", r"^number of positions$"),
           ("loaded", r"^number of positions loaded$"), ("rows", r"^number of rows$"), ("pitch", r"^pitch(?: - mating)?$"),
           ("shrouding", r"^shrouding$"), ("termination", r"^termination$"), ("features", r"^features$"),
-          ("type", r"^type$")]
+          ("type", r"^type$"),
+          # a TVS diode's direction as DigiKey files it ('Unidirectional Channels: 1' / 'Bidirectional Channels: 1')
+          ("tvs_uni", r"^unidirectional channels$"), ("tvs_bi", r"^bidirectional channels$")]
 
 
 def specs_from_pairs(pairs):
