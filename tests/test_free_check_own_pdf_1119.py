@@ -4,6 +4,8 @@ and from datasheet/assistant/pdfs (the folder its own request names), but the fr
 only tried the part's links, so a part whose maker site refuses scripts (Nexperia, analog.com) stayed held for a PDF
 that was already on disk. Plain functions: python3 -m tests.run_all test_free_check_own_pdf_1119"""
 from ecadlib import librarian as L
+from pathlib import Path
+
 from tests.fixtures_lite import lite
 from tests.test_datasheet_reading_1019 import _placed_pdf
 
@@ -70,6 +72,32 @@ def test_the_assistants_folder_is_not_read_outside_assistant_mode(tmp_path):
     (pdfs / "BAS16,215.pdf").write_bytes(_placed_pdf([(72, 700, "BAS16 High-speed switching diode")]))
     run = _run(tmp_path, None)
     assert run.datasheet_pdf(ITEM, {"mpn": "BAS16,215"}, ROW, {"found": {}}, "BAS16,215") == (None, None)
+
+
+def test_a_cut_off_pdf_saved_as_the_part_s_file_is_said_and_never_read():
+    """11-19: 15 of 124 hand-downloaded datasheets had stopped early (no end-of-file marker, no page tree). The folder
+    took them as PDFs and sent a read with no pages (NX3225GA, SL1002A090SM); a link's PDF that is cut off is refused
+    (PdfStore._fetch). Now the folder file is refused the same way, and the person is told to download it again."""
+    import tempfile
+    from ecadlib import datasheet as D, messages as M
+    from tests import test_crosscheck as TC
+    from tests.test_datasheet_folder import folder, refused, refused_run, LINK
+    whole = TC.pdf3()
+    assert D.pdf_complete(whole) and not D.pdf_complete(whole[:len(whole) // 2])
+    with tempfile.TemporaryDirectory() as d:
+        f = folder(d)
+        (f / "DSPART1.pdf").write_bytes(whole[:len(whole) // 2])
+        it, _ = refused_run(d, {"datasheet": {"folder": str(f)}})
+        bad = "DSPART1.pdf in your [datasheet] folder is cut off (the download stopped early): replace it with the whole PDF"
+        tried = [t for t in it["librarian"]["tried"] if t.startswith("datasheet")]
+        assert tried[0] == f"datasheet: {bad}", tried
+        line, e = refused(it)
+        assert e["code"] == "files.datasheet_not_pdf", e
+        assert e["text"].startswith("DSPART1.pdf in your datasheet folder is cut off (the download stopped early), and "
+                                    "example.com would not let ecadlib download"), e["text"]
+        assert e["fix"].startswith(f"Replace DSPART1.pdf with the PDF: download it in a browser ({LINK})"), e["fix"]
+        run = _run(Path(d) / "out", {"datasheet": {"folder": str(f)}})     # nor a free check
+        assert run.own_pdf("DSPART1") == (None, None)
 
 
 if __name__ == "__main__":

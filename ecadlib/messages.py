@@ -102,7 +102,7 @@ CODES = {
                                 "again; or read it alone with ecadlib datasheet FILE.pdf[ --part {part}]; or pick a "
                                 "footprint by hand.",
                                 [r"datasheet download refused by (?P<host>\S+) \((?P<why>[^)]*)\).*?automated downloads; "
-                                 r"(?P<bad>.+?\.pdf) in your \[datasheet\] folder (?:(?P<not_pdf>is not a PDF)|cannot be "
+                                 r"(?P<bad>.+?\.pdf) in your \[datasheet\] folder (?:(?P<not_pdf>is not a PDF)|(?P<cut>is cut off)|cannot be "
                                  r"read \((?P<err>\w+)\))(?:.*?download (?P<url>\S+) in a browser)?"
                                  r"(?:.*?save it as (?P<file>.+?\.pdf) and run again)?" + _PART]),
     "files.datasheet_refused": ("{host} would not let ecadlib download the datasheet (it {why}): the maker's site most "
@@ -291,7 +291,7 @@ CODES = {
                           "`folder` under datasheet in ecadlib.toml), or pick a footprint by hand.",
                           # (and why the [datasheet] folder gave nothing: datasheet.folder_problem, a file that is no PDF)
                           [r"no datasheet URL known(?:; | and )?(?P<folder_note>(?:your \[datasheet\] folder \(.*?\) |"
-                           r".+?\.pdf in your \[datasheet\] folder )(?:does not exist|is not a folder|is not a PDF|cannot "
+                           r".+?\.pdf in your \[datasheet\] folder )(?:does not exist|is not a folder|is not a PDF|is cut off|cannot "
                            r"be read \(\w+\)))?"]),
     "datasheet.no_key": ("The datasheet reader is not set up (no model API key).",
                          "Add a model API key (ecadlib init shows how), or pick a footprint by hand.",
@@ -497,6 +497,7 @@ def _refused_advice(code, v):
     if code == "files.datasheet_not_pdf":
         v.setdefault("file", v.get("bad"))
         v["problem"] = (f"cannot be read ({v['err']})" if v.get("err") else
+                        "is cut off (the download stopped early)" if v.get("cut") else
                         "is not a PDF (it may be a web page saved as .pdf)")
         return
     url = f" ({v['url']})" if v.get("url") else ""
