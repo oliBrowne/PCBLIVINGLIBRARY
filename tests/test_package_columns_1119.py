@@ -138,6 +138,35 @@ def test_io_spellings_only_for_a_single_pin_of_that_kind():
     assert PT.loose_class("EN") is None and PT.name_class("OUT") is None
 
 
+LAYOUT_FIGURE = """10.2 Layout Example
+2
+GND
+2
+VOUTA
+2
+IN+B
+2
+IN+A 2
+IN+D
+2
+IN+C
+1
+GND
+2
+V+
+1
+IN-A
+1
+IN-A
+1
+VINA"""
+
+
+def test_a_drawings_labels_and_values_are_not_joined_into_rows():
+    rows = PT._rows(LAYOUT_FIGURE)
+    assert not any(c[0] in ("IN+B", "IN-A", "GND", "V+") and len(c) == 2 for c, _ in rows), rows
+
+
 if __name__ == "__main__":
     import sys
     fails = 0

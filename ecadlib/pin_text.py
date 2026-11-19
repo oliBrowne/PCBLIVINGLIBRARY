@@ -114,14 +114,16 @@ _LONE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9+\-−–_/#~]{0,11}$")
 
 def _joined_lines(text):
     """A page's lines, with a table row the text layer broke in two joined again: a line that is one pin-like name
-    ('Vref', 'RS') followed by a line that is one pin number ('5') is the row 'Vref 5'. A number after a sentence, or
-    a name followed by anything else, is left alone."""
+    ('Vref', 'RS') followed by a line that is one pin number ('5') and then the row's type and description ('O SN65HVD230
+    and ...') is the row 'Vref 5'. A number after a sentence, and a drawing's labels and values ('IN+B' / '2' / 'IN+A 2'
+    in a layout example), are left alone."""
     lines = str(text or "").splitlines()
     out, i = [], 0
     while i < len(lines):
         a = lines[i].strip()
         b = lines[i + 1].strip() if i + 1 < len(lines) else ""
-        if _LONE_NAME.match(a) and re.fullmatch(r"\d{1,3}", b):
+        c = (lines[i + 2].split() if i + 2 < len(lines) else [])
+        if _LONE_NAME.match(a) and re.fullmatch(r"\d{1,3}", b) and len(c) >= 3 and not re.fullmatch(r"[\d,]+", c[1]):
             out.append(f"{a} {b}")
             i += 2
             continue
