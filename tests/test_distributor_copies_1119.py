@@ -28,7 +28,10 @@ def test_a_hash_in_a_file_name_is_part_of_the_name():
     assert D.clean_url("https://www.mouser.com/datasheet/3/76/1/LQH3NPN100MJ0#.pdf") == \
         "https://www.mouser.com/datasheet/3/76/1/LQH3NPN100MJ0%23.pdf"
     assert D.clean_url("https://x.example/LT8610#PBF.PDF") == "https://x.example/LT8610%23PBF.PDF"
-    for keep in ("https://x.example/ds.pdf#page=3", "https://x.example/ds#section", "https://x.example/a.pdf"):
+    assert D.clean_url("https://x.example/a#b#c.pdf") == "https://x.example/a%23b%23c.pdf"
+    for keep in ("https://x.example/ds.pdf#page=3", "https://x.example/ds#section", "https://x.example/a.pdf",
+                 "https://x.example/viewer.html#ds.pdf", "https://x.example/ds.pdf#nameddest=x.pdf",
+                 "https://x.example/view?file=a#b.pdf", "https://x.example/a%23.pdf"):
         assert D.clean_url(keep) == keep, keep
     row = {"src_datasheet": "https://www.mouser.com/datasheet/3/76/1/BLM18AG601SN1#.pdf", "src": "mouser"}
     assert D.datasheet_urls(None, {"mpn": "BLM18AG601SN1D"}, row)[0][0].endswith("BLM18AG601SN1%23.pdf")
@@ -42,9 +45,16 @@ def test_a_distributors_copy_says_so():
                       ("https://datasheets.octopart.com/x.pdf", "octopart.com"),
                       ("https://www.farnell.com/datasheets/123.pdf", "farnell.com")):
         assert D.distributor_host(url) == host, url
+    for url, host in (("https://www.mouser.de/datasheet/2/x.pdf", "mouser.de"), ("https://www.digikey.co.uk/x.pdf", "digikey.co.uk"),
+                      ("https://uk.rs-online.com/x.pdf", "rs-online.com")):
+        assert D.distributor_host(url) == host, url
     for url in ("https://www.we-online.com/x.pdf", "https://www.mouser.com.evil.example/x.pdf",
                 "https://notmouser.com/x.pdf", "https://www.ti.com/lit/ds/symlink/tps2660.pdf", "not a link"):
         assert D.distributor_host(url) is None, url
+    # a search's own link to its own copy ("mouser datasheet link" at mouser.com) is a distributor's copy too
+    row = {"src": "mouser", "src_datasheet": COPY.format("744043100")}
+    assert D.datasheet_urls(None, {"mpn": "744043100"}, row) == [
+        (COPY.format("744043100"), "mouser datasheet link (a distributor's copy, mouser.com)")]
     row = {"src": "digikey", "src_datasheet": MAKER.format("744043100"), "src_datasheet_more": COPY.format("744043100")}
     urls = D.datasheet_urls(None, {"mpn": "744043100"}, row)
     assert urls == [(MAKER.format("744043100"), "digikey datasheet link"),

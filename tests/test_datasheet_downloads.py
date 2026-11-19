@@ -146,7 +146,7 @@ def test_every_link_is_tried_in_order_then_the_maker_pattern():
     urls = D.datasheet_urls(item, ln, row, {"datasheet": ("https://kicad.example/lt8610.pdf", "KiCad symbol LT8610")})
     ad = "https://www.analog.com/media/en/technical-documentation/data-sheets/"
     assert urls == [("https://www.analog.com/LT8610.pdf", "BOM"),
-                    ("https://www.mouser.com/datasheet/2/609/LT8610.pdf", "mouser datasheet link"),
+                    ("https://www.mouser.com/datasheet/2/609/LT8610.pdf", "mouser datasheet link (a distributor's copy, mouser.com)"),
                     ("https://kicad.example/lt8610.pdf", "KiCad symbol LT8610"),
                     ("https://www.lcsc.com/product-detail/C1.html", "LCSC datasheet link"),
                     ("https://www.lcsc.com/datasheet/C2836293.pdf", "LCSC datasheet URL pattern (C2836293)"),
@@ -164,7 +164,7 @@ def test_every_link_is_tried_in_order_then_the_maker_pattern():
         # a link that gives the PDF ends the search: the patterns are not asked
         http = Scripted({urls[0][0]: [TIMEOUT], urls[1][0]: [PDF]})
         j = D.Reader(d, d, key=TB.KEY, http=http, log=None, sleep=lambda s: None).job("LT8610", urls, "MSOP-16")
-        assert j["where"] == "mouser datasheet link" and not [u for u in http.fetched if "data-sheets/" in u], http.fetched
+        assert j["where"] == "mouser datasheet link (a distributor's copy, mouser.com)" and not [u for u in http.fetched if "data-sheets/" in u], http.fetched
 
 
 def test_maker_pattern_table():
