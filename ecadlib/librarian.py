@@ -299,6 +299,10 @@ class KiCadLibrary:
         if nm in self._norm:
             ref, more = self._pick(self._norm[nm])
             return ref, "exact name" + more
+        tr = re.fullmatch(r"(.{4,}\d[A-Z]?)TR[LR]?PBF", nm)   # IR / Infineon: IRF7341 + TR (tape and reel, L / R: its
+        if tr and tr.group(1) + "PBF" in self._norm:          # side) + PBF; KiCad names the lead-free part IRF7341PBF
+            ref, more = self._pick(self._norm[tr.group(1) + "PBF"])
+            return ref, f"name + packing suffix '{nm[len(tr.group(1)):-3]}' before PBF (tape and reel, same part)" + more
         fits = self._wild_fits(nm, mpn)
         if fits:
             best = max(lit for lit, _ in fits)
@@ -1247,6 +1251,24 @@ class Run:
             if order:
                 res["symbol"], read = f"{SP.transistor_type(desc)}:{order}", True
                 res["sym_how"] = f"{mpn}: {SP.transistor_type(desc)}, pins 1-3 = {order} as its datasheet draws them"
+        fet = SP.transistor_type(desc)
+        if not st["symbol"] and not res["symbol"] and same_fp and SP.spec_pins(res["footprint"]) == 8 \
+                and fet in ("NMOS", "PMOS") and re.match(r"SOIC-8_3\.9x4\.9mm_P1\.27mm$", str(res["footprint"])) \
+                and not POWER_SO8.search(" ".join(str(x or "") for x in (case, row.get("src_package_device"), desc, mpn))):
+            # one MOSFET in a plain SO-8 (no exposed pad): source 1-3, gate 4, drain 5-8, when its own datasheet's pin
+            # table or drawing says so and says no other of the orders a maker could print
+            order = self.so8_order(st, item, ln, row, mpn, fet)
+            if order:
+                res["symbol"], read = f"{fet}:{order}", True
+                res["sym_how"] = f"{mpn}: {fet} in SO-8, pins 1-8 = {order} as its datasheet prints them"
+        diode = SP.single_diode_kind(row.get("src_description") or desc) if k == "D" else None
+        if not st["symbol"] and not res["symbol"] and same_fp and SP.spec_pins(res["footprint"]) == 3 and diode:
+            # one plain diode on a three-lead land (BAT54, BAS16 in SOT-23): which lead is which as its own
+            # datasheet names them in words (ANODE / CATHODE beside the pin numbers, the outline's style table)
+            order = self.diode_order(st, item, ln, row, mpn, diode)
+            if order:
+                res["symbol"], read = f"DIODE3:{diode}:{order}", True
+                res["sym_how"] = f"{mpn}: one diode, pins 1-3 = {order} (A anode, K cathode, N not connected) as its datasheet names them"
         if not st["symbol"] and res["symbol"] and (k in ("R", "C", "CP", "L") or same_fp):
             text, name = SP.symbol_text(res["symbol"], mpn)
             shared = k in ("R", "C", "CP", "L")
@@ -1556,6 +1578,53 @@ class Run:
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link}, and in no "
                            "other order")
+        return orders[0]
+
+    def so8_order(self, st, item, ln, row, mpn, what):
+        """A single MOSFET's SO-8 pin order ('SSSGDDDD') when this MPN's own datasheet agrees with it and with none of
+        the other orders (stdparts.so8_fet_orders) -> order or None. Not asked when several makers sell the number."""
+        from . import pin_text as PT
+        from . import stdparts as SP
+        if row.get("src_several") or norm_mpn(row.get("src_mpn") or "") != norm_mpn(mpn or ""):
+            return None
+        data, link = self.datasheet_pdf(item, ln, row, st, mpn)
+        if not data:
+            return None
+        want, others = SP.so8_fet_orders()
+        try:
+            texts, figs = PT.page_texts(data), PT.page_figures(data)
+            ok = [o for o in [want] + others
+                  if PT.check(texts, list(zip(map(str, range(1, 9)), o)), figs, pin_count=8)["status"] == "agreed"]
+        except Exception:
+            return None
+        if ok != [want]:
+            st["tried"].append(f"standard: {mpn} ({what}, SO-8): its datasheet's text does not settle pins 1-8 "
+                               f"({', '.join(ok) + ' agree' if ok else 'no pin table or drawing read'})")
+            return None
+        st["tried"].append(f"standard: {mpn} ({what}): pins 1-8 are {', '.join(want)} in {link}, and in no other "
+                           "order a maker prints")
+        return want
+
+    def diode_order(self, st, item, ln, row, mpn, what):
+        """The roles of a single diode's three leads ('ANK') as this MPN's own datasheet names them in words
+        (ecadlib.pin_text.diode_orders), when it names exactly one order -> order or None. Not asked when several
+        makers sell the number."""
+        from . import pin_text as PT
+        if row.get("src_several") or norm_mpn(row.get("src_mpn") or "") != norm_mpn(mpn or ""):
+            return None
+        data, link = self.datasheet_pdf(item, ln, row, st, mpn)
+        if not data:
+            return None
+        try:
+            orders = PT.diode_orders_pdf(data)
+        except Exception:
+            return None
+        if len(orders) != 1:
+            st["tried"].append(f"standard: {mpn} ({what}, three leads): its datasheet's words do not settle which lead "
+                               "is the anode and which the cathode")
+            return None
+        st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link} "
+                           "(A anode, K cathode, N not connected), and in no other order")
         return orders[0]
 
     PDF_LINKS = 6                                     # links a free check tries before it gives up
@@ -2192,6 +2261,12 @@ LAND_SHAPE = re.compile(r"(?:[A-Z][A-Za-z]+_(?:[A-Z]{2,4}_)?)?([A-Z]+)-(\d+)W?(-
 CASE_SHAPE = re.compile(r'(\d+)-([A-Za-z]+)(?:, (\d+)-([A-Za-z]+))?(?: \(0?\.\d+", (\d+(?:\.\d+)?)mm Width\))?(,? Exposed Pad)?')
 DEVICE_BODY = re.compile(r"(\d+)-([A-Za-z]+) \((\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)\)")
 LEADED, LEADLESS = ("SOIC", "SSOP", "TSSOP", "QSOP"), ("QFN", "DFN")
+
+
+# an SO-8 sized power package with a drain pad under it (PowerPAK SO-8, SO-8FL, LFPAK, Power-SO8, an exposed pad):
+# never the plain SOIC-8 land
+POWER_SO8 = re.compile(r"(?i)power\s*-?\s*(?:pak|so|di)|\bSO-?8\s*-?\s*FL\b|LFPAK|\bPG-TDSON|\bTDSON|"
+                       r"exposed|\bE?PAD\b|\bEP\b|thermal\s+pad|\bSO-?8\s*-?\s*EP\b")
 
 
 def package_family(word):

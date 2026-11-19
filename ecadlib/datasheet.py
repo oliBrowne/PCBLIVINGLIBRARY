@@ -3471,6 +3471,9 @@ MAKER_URLS = [
     (r"analog devices|linear tech|^adi$", r"(^|\.)(analog|linear)\.com$", "Analog Devices",
      "https://www.analog.com/media/en/technical-documentation/data-sheets/{}.pdf",
      lambda s: (re.match(r"[A-Z]+\d+", s) or [""])[0]),
+    # Alpha & Omega: one PDF per part, named as the part is ordered (AO3407A.pdf; DigiKey links AON7408 to a policy)
+    (r"alpha\s*(?:&|and)?\s*omega|^aos$", r"(^|\.)aosmd\.com$", "AOS", "https://www.aosmd.com/res/datasheets/{}.pdf",
+     lambda s: s, "upper"),
 ]
 
 
@@ -3482,12 +3485,13 @@ def maker_urls(mpn, maker="", links=()):
         return []
     hosts = {urlparse(u).hostname or "" for u in links}
     out = []
-    for name_rx, host_rx, label, pattern, base in MAKER_URLS:
+    for name_rx, host_rx, label, pattern, base, *case in MAKER_URLS:
         if not (re.search(name_rx, str(maker or "").strip(), re.I) or any(re.search(host_rx, h) for h in hosts)):
             continue
         for b in dict.fromkeys((s, base(s))):
             if b and re.fullmatch(r"[A-Z0-9][A-Z0-9._-]*", b):
-                out.append((pattern.format(b.lower()), f"{label} datasheet URL pattern ({b.lower()})"))
+                b = b if case == ["upper"] else b.lower()
+                out.append((pattern.format(b), f"{label} datasheet URL pattern ({b})"))
     return out
 
 
@@ -3766,6 +3770,11 @@ def mentions_part(texts, mpn, short=False, whole=False):
         base = re.sub(r"-(?:G|T|TR|R|RL|LF|PBF|E\d|T\d|R\d)$", "", re.sub(r"(?:\([A-Z0-9]{1,4}\))+$", "", main))
         b = re.sub(r"[^A-Z0-9]", "", base)
         return b != key and len(b) >= n and b in flat
+    tape = re.fullmatch(r"([A-Z0-9]*\d[A-Z0-9]*?)([HE]\d{4})(?:[A-Z]{2,4}\d?)?", key)
+    if tape and len(tape.group(1)) >= 4 and re.search(r"(?<![A-Z0-9])" + tape.group(1) + r"(?![A-Z0-9])", raw) and \
+            re.search(r"(?<![A-Z0-9])" + tape.group(2) + r"(?![0-9])", raw):
+        return True       # Infineon's ordering code: BSS84P + its reel code H6327 + XTSA2; the sheet prints the part
+        #                   'BSS84P' and its tape and reel 'H6327:3000pcs/r.' apart: both named, it is the part's sheet
     series = re.match(r"\d*[A-Z]*\d+[A-Z]+", key)     # SM6T100A -> SM6T: only as a word, never inside SM6T200A
     if series and 4 <= series.end() < n and series.group() in {re.sub(r"[^A-Z0-9]", "", w) for w in raw.split()}:
         return True
@@ -3799,7 +3808,8 @@ COMPLIANCE = (r"\bRoHS\s+(?:compliance\s+)?(?:certificate|declaration|statement)
               r"\b(?:EU\s+)?declaration\s+of\s+(?:conformity|conformance|compliance)\b|"
               r"\b(?:full\s+)?material\s+(?:declaration|composition\s+(?:declaration|report)|content\s+declaration)\b|"
               r"\bREACH\s+(?:SVHC\s+)?(?:compliance\s+)?(?:certificate|declaration|statement)\b|"
-              r"\bconflict\s+minerals?\s+(?:declaration|report|statement)\b")
+              r"\bconflict\s+minerals?\s+(?:declaration|report|statement)\b|"
+              r"\b(?:green|environmental|quality|halogen[- ]free|sustainability)\s+policy\b")
 OTHER_DOC = re.compile(r"\b(?:product|process)\s+(?:change|discontinuation)\b|\bchange\s+notif|" + PCN + r"|\bnotification\s+of\b|"
                        r"\bdeclaration\s+letter\b|\b(?:development|evaluation|demo)\s+(?:board|kit)\b|"
                        r"\buser'?s?\s+(?:guide|manual)\b|\bapplication\s+note\b|" + EOL + "|" + COMPLIANCE, re.I)
@@ -5150,6 +5160,12 @@ class Reader:
             try:
                 data, prov = self.store.fetch(unnamed["url"], unnamed["where"], part=part, handoff=False)
                 prov = dict(prov, unnamed=unnamed["error"])
+                from . import ds_route as DR
+                other = not_a_datasheet(DR.page_texts(data, 1), NEVER_DATASHEET)
+                if other:          # a maker's policy or certificate linked as the datasheet (AOS's green policy for
+                    #               AON7408): nothing of the part to read, and a read of it is paid for nothing
+                    attempts.append({"url": unnamed["url"], "where": unnamed["where"], "error": f"{unnamed['error']}; {other}"})
+                    data, prov = None, None
             except DatasheetError:
                 data = None
         if data is None:

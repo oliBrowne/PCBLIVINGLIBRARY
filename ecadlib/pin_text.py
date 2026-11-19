@@ -571,22 +571,23 @@ TERMINAL = {"GATE": "G", "SOURCE": "S", "DRAIN": "D", "BASE": "B", "EMITTER": "E
 _TERMINAL_SETS = ({"G", "S", "D"}, {"B", "E", "C"})
 
 
-def terminal_lines(runs):
-    """A transistor's pin drawing on one page -> one text per drawing, "G 1" a line (as figure_lines gives). The
-    schematic symbol is drawn with each terminal's name (GATE / SOURCE / DRAIN, BASE / EMITTER / COLLECTOR, or the
-    capital letter) and its pin number right beside it, above or below. A name takes the number 1-3 within two text
-    heights of it, when that number is clearly nearer (1.6 x) than any other and the name is that number's nearest
-    too. A drawing is three such pairs close together: one full set of terminals, the numbers 1, 2, 3 each once.
-    Letters with no numbers (Diodes Inc.), a number between two names, a set drawn twice side by side: nothing."""
+_PIN_WORD = re.compile(r"(?i)^pin\s?([1-3])$")
+
+
+def _terminal_pairs(runs, words, letters=(), pin_words=True):
+    """(x, y, key, number) for each terminal name on a page (a word of 'words', or a capital letter of 'letters')
+    whose pin number 1-3 is right beside it: the number within two text heights, clearly nearer (1.6 x) than any
+    other, and the name that number's nearest too. A number between two names: nothing."""
     names, nums = [], []
     for x, y, t, sz in runs:
         if not sz or sz <= 0:
             continue
-        key = TERMINAL.get(t.upper()) if len(t) > 1 else t if t in ("G", "S", "D", "B", "E", "C") else None
+        key = words.get(t.upper()) if len(t) > 1 else t if t in letters else None
+        pin = pin_words and _PIN_WORD.match(t)         # Infineon: 'Gate' over 'pin1', 'Drain' over 'pin 3'
         if key:
             names.append((x + 0.25 * sz * len(t), y, key, sz))
-        elif t in ("1", "2", "3"):
-            nums.append((x + 0.25 * sz, y, int(t), sz))
+        elif t in ("1", "2", "3") or pin:
+            nums.append((x + 0.25 * sz * len(t), y, int(pin.group(1) if pin else t), sz))
     dist = lambda a, b: ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
     def nearest(a, others):
@@ -599,6 +600,17 @@ def terminal_lines(runs):
         j = nearest(nm, nums)
         if j is not None and nearest(nums[j], names) == i:
             pairs.append((nm[0], nm[1], nm[2], nums[j][2]))
+    return pairs
+
+
+def terminal_lines(runs):
+    """A transistor's pin drawing on one page -> one text per drawing, "G 1" a line (as figure_lines gives). The
+    schematic symbol is drawn with each terminal's name (GATE / SOURCE / DRAIN, BASE / EMITTER / COLLECTOR, or the
+    capital letter) and its pin number right beside it, above or below (_terminal_pairs). A drawing is three such
+    pairs close together: one full set of terminals, the numbers 1, 2, 3 each once.
+    Letters with no numbers (Diodes Inc.), a number between two names, a set drawn twice side by side: nothing."""
+    pairs = _terminal_pairs(runs, TERMINAL, ("G", "S", "D", "B", "E", "C"))
+    dist = lambda a, b: ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
     groups = []                                        # pairs within 110 pt of one another: one drawing
     for pr in sorted(pairs):
         mine = [g for g in groups if any(dist(pr, q) <= 110 for q in g)]
@@ -612,6 +624,75 @@ def terminal_lines(runs):
         if len(g) == 3 and set(keys) in _TERMINAL_SETS and sorted(vals) == [1, 2, 3]:
             out.append("\n".join(f"{k} {v}" for k, v in zip(keys, vals)))
     return out
+
+
+DIODE_TERMINAL = {"ANODE": "A", "CATHODE": "K"}
+_CASE_STYLE = re.compile(r"\bCASE\s+(\d{2,4}[A-Z]{0,2})(?:[-−–]\d{2})?\s*,?\s*STYLE\s+(\d{1,2})\b", re.I)
+_STYLE_BLOCK = r"\bSTYLE\s+{n}\s*:\s*PIN\s+1\s*\.\s*(.+?)\s+2\s*\.\s*(.+?)\s+3\s*\.\s*(.+?)(?=\s+STYLE\s+\d|\s+(?:4\s*\.|DIM\b|NOTES?\b)|$)"
+_NC_WORDS = re.compile(r"(?i)^(?:N\.?\s*C\.?|NO\s+CONNECT(?:ION)?|NOT\s+CONNECTED)$")
+
+
+def _diode_role(word):
+    w = " ".join(str(word or "").split()).strip(" .,;").upper()
+    return "A" if w == "ANODE" else "K" if w == "CATHODE" else "N" if _NC_WORDS.match(w) else None
+
+
+def diode_orders(page_texts, page_runs=()):
+    """The pin orders of a single diode in a three-lead package (SOT-23, SC-70) that the datasheet's own words give:
+    'ANK' = pin 1 anode, pin 2 not connected, pin 3 cathode. Two sources, read as text, never guessed:
+    (a) the symbol drawn with the words ANODE and CATHODE, each with its pin number right beside it (onsemi's '3
+    CATHODE' / '1 ANODE'); (b) the outline's style table that the front page points to ('CASE 318 STYLE 8' ->
+    'STYLE 8: PIN 1. ANODE 2. NO CONNECTION 3. CATHODE'). Every ANODE / CATHODE pair in the PDF must name the same
+    pin (a sheet that draws a common-cathode pair too has two anodes: nothing), the front page names one style only,
+    and that style names one anode, one cathode and one pin not connected. -> sorted list of distinct orders: one
+    order settles it; none or two do not."""
+    found = set()
+    drawn = []                                         # (page, pairs) of every page with an ANODE / CATHODE pair
+    for page, runs in page_runs or ():
+        pairs = _terminal_pairs(runs, DIODE_TERMINAL, pin_words=False)
+        if pairs:
+            drawn.append((page, runs, pairs))
+    if drawn:
+        if len(drawn) != 1 or len(drawn[0][2]) != 2 or {q[2] for q in drawn[0][2]} != {"A", "K"}:
+            return []        # pairs on two pages, a second anode or cathode: a pair, a family, two parts drawn
+        _, runs, pairs = drawn[0]
+        nums = {q[3] for q in pairs}
+        if len(nums) != 2:
+            return []
+        third = ({1, 2, 3} - nums).pop()
+        cx, cy = sum(q[0] for q in pairs) / 2, sum(q[1] for q in pairs) / 2
+        if max(abs(a[0] - b[0]) + abs(a[1] - b[1]) for a in pairs for b in pairs) <= 110 and any(
+                t == str(third) and abs(x - cx) <= 110 and abs(y - cy) <= 110 for x, y, t, _ in runs):
+            order = ["N", "N", "N"]
+            for q in pairs:
+                order[q[3] - 1] = q[2]
+            found.add("".join(order))
+        # else: the two words far apart, or no third lead drawn beside them (a 2-pin variant's symbol, or the
+        # package not drawn there): the words settle nothing; the style table may
+    texts = [" ".join(str(t or "").split()) for _, t in sorted((page_texts or {}).items())]
+    styles = {(m.group(1), m.group(2)) for t in texts[:2] for m in _CASE_STYLE.finditer(t)}
+    if len(styles) > 1:
+        return []                                      # two styles named up front: two variants on one sheet
+    if styles:
+        case, n = next(iter(styles))                   # that case's own outline page: its style table
+        blocks = {m.groups() for t in texts if re.search(r"\bCASE\s+" + re.escape(case) + r"\b", t, re.I)
+                  for m in re.finditer(_STYLE_BLOCK.format(n=n), t, re.I)}
+        orders = set()
+        for b in blocks:
+            roles = [_diode_role(w) for w in b]
+            if sorted(r or "?" for r in roles) == ["A", "K", "N"]:
+                orders.add("".join(roles))
+            else:
+                return []                              # the style names something else (a pair, a transistor)
+        found |= orders
+    return sorted(found)
+
+
+def diode_orders_pdf(pdf_bytes):
+    """diode_orders on a PDF's text and placed text, [] when it cannot be read."""
+    if not pdf_bytes:
+        return []
+    return diode_orders(page_texts(pdf_bytes), page_runs(pdf_bytes))
 
 
 def pin_orders(page_texts, names, figures=()):
@@ -639,6 +720,67 @@ def check_pdf(pdf_bytes, pins, pin_count=None, part=None, package=()):
 def page_figures(pdf_bytes, limit=80):
     """[(page, text)] of the pinout drawings in the PDF (figure_lines on each page's placed text), or [] when it
     cannot be read."""
+    out = [(i, f) for i, runs in page_runs(pdf_bytes, limit) for f in figure_lines(runs) + terminal_lines(runs)]
+    seen = set(out)
+    for i, runs in glyph_runs(pdf_bytes, min(limit, GLYPH_PAGES)):     # the same drawings read glyph by glyph: what
+        for f in figure_lines(runs) + terminal_lines(runs):              # pypdf joins ('12' for pins 1 and 2 an inch
+            if (i, f) not in seen:                                       # apart, numbers in a form) comes apart here
+                seen.add((i, f))
+                out.append((i, f))
+    return out
+
+
+GLYPH_PAGES = 15          # a pinout drawing is on the first pages; reading glyph by glyph is slower than pypdf
+
+
+def glyph_runs(pdf_bytes, limit=GLYPH_PAGES):
+    """[(page, runs)] as page_runs gives them, built from each character's own box (pypdfium2): characters on one
+    line and close together make one run, a space or a gap wider than about half a character ends it. pypdf hands
+    over text as the PDF writes it, which can be two pin numbers far apart in one string ('12') or letters inside a
+    form at the form's own origin; the glyph boxes are where the reader sees them. [] when it cannot be read."""
+    try:
+        import pypdfium2 as pdfium
+        import pypdfium2.raw  # noqa: F401  (FPDFText_GetCharAngle)
+        pdf = pdfium.PdfDocument(bytes(pdf_bytes))
+    except Exception:
+        return []
+    out = []
+    try:
+        for i in range(min(len(pdf), limit)):
+            try:
+                tp = pdf[i].get_textpage()
+                runs, cur = [], None
+                for k in range(tp.count_chars()):
+                    c = tp.get_text_range(k, 1)
+                    x0, y0, x1, y1 = tp.get_charbox(k)
+                    turned = abs(pdfium.raw.FPDFText_GetCharAngle(tp.raw, k)) > 0.02    # rotated text: not read
+                    if not c.strip() or y1 - y0 <= 0 or turned:
+                        if cur:
+                            runs.append(cur)
+                        cur = None
+                        continue
+                    h = y1 - y0
+                    if cur and abs((y0 + y1) / 2 - cur[1]) < 0.3 * max(h, cur[3]) and -0.5 <= x0 - cur[4] <= 0.6 * max(h, 1):
+                        cur[2] += c
+                        cur[4] = x1
+                    else:
+                        if cur:
+                            runs.append(cur)
+                        cur = [x0, (y0 + y1) / 2, c, h, x1]
+                if cur:
+                    runs.append(cur)
+                # a glyph box is the ink's height (a digit about 0.7 of the font size): size as pypdf gives it
+                out.append((i + 1, [(r[0], r[1], r[2], r[3] * 1.4) for r in runs]))
+            except Exception:
+                continue
+    finally:
+        pdf.close()
+    return out
+
+
+def page_runs(pdf_bytes, limit=80):
+    """[(page, runs)]: each page's text as the PDF places it, [(x, y, text, size)], upright text only; [] when the
+    PDF cannot be read."""
     try:
         import io, logging
         import pypdf
@@ -662,7 +804,7 @@ def page_figures(pdf_bytes, limit=80):
             p.extract_text(visitor_text=seen)
         except Exception:
             continue
-        out += [(i, f) for f in figure_lines(runs) + terminal_lines(runs)]
+        out.append((i, runs))
     return out
 
 
