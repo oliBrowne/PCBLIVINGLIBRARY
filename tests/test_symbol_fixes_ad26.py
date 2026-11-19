@@ -11,7 +11,7 @@ from tests import test_symbol_layout as TS
 
 TWO_PIN = [k for k in SP.SYMBOLS if len(SP.SYMBOLS[k][4]) == 2]
 ONE_PIN = [k for k in SP.SYMBOLS if len(SP.SYMBOLS[k][4]) == 1]     # test point, plated mounting hole
-DIODES = [k for k in SP.SYMBOLS if SP.SYMBOLS[k][1] == "D"]
+DIODES = [k for k in SP.SYMBOLS if SP.SYMBOLS[k][1] == "D" and k != "D_TVS_Bidirectional"]   # (a two-way TVS: no cathode)
 STEP = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}         # Altium pin orientation -> direction from the body
 
 

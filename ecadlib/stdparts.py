@@ -6,10 +6,10 @@ part kinds whose pinout is standard, the symbol) offline and deterministically. 
     ecadlib stdparts bench [--kicad DIR] [--fixture F] every table entry against KiCad's official footprint
     ecadlib stdparts coverage BOM [BOM ...]            how many BOM lines this source resolves (no network)
 
-Footprints come only from package_specs/standard.json.gz: 628 packages, each with its KiCad name and library. Their
+Footprints come only from package_specs/standard.json.gz: 631 packages, each with its KiCad name and library. Their
 dimensions are the KiCad footprint generator's size definitions (JEDEC / IPC-SM-782 / manufacturer package drawings,
 built here with footprint_gen's IPC-7351B equations) or, for the packages KiCad draws by hand (SOD, SMA/SMB/SMC, MELF,
-SOT-223, SOT-89, SC-82AB, DO-34, DO-35, DO-41, DO-201AD, DPAK/D2PAK, TO-220, TO-92), the published recommended land as a pad table. Every entry was built and
+SOT-223, SOT-89, SC-82AB, SOD-882, PowerDI-123, DO-15, DO-34, DO-35, DO-41, DO-201AD, DPAK/D2PAK, TO-220, TO-92), the published recommended land as a pad table. Every entry was built and
 compared with kicad-footprints (pads and courtyard within footprint_bench tolerances) before it went into the table;
 `bench` repeats that check.
 
@@ -22,7 +22,7 @@ Footprint property; then the description and value; then the MPN):
                        Panasonic ERJ-, Vishay CRCW/TNPW, Stackpole RMCF, Bourns CR, KOA RK73, Uni-Royal). Two different
                        sizes from two places (footprint 0603, MPN GRM21 = 0805) is a conflict: nothing is built.
   named packages       SOT-23/-5/-6, SOT-323/353/363, SOT-523, SOT-89, SOD-123(F)/323(F)/523/923/128, SMA/SMB/SMC/SMF
-                       (DO-214), MicroMELF/MiniMELF/MELF, DO-34/DO-35/DO-41/DO-201AD (axial), SC-82AB, DPAK/D2PAK (TO-252/263), TO-220 (vertical), TO-92 (inline), and
+                       (DO-214), SOD-882, PowerDI-123, MicroMELF/MiniMELF/MELF, DO-15/DO-34/DO-35/DO-41/DO-201AD (axial), SC-82AB, DPAK/D2PAK (TO-252/263), TO-220 (vertical), TO-92 (inline), and
                        SOIC/SO/TSSOP/MSOP/SSOP/QSOP/QFN/DFN/SON/QFP families from the name (pins, body, pitch, exposed pad,
                        KiCad or LCSC style "QFN-32_L5.0-W5.0-P0.50-EP3.5"). The name must give the body: a bare
                        family name (SOIC-8, SO-14, TSSOP-20, SOIC-16W) never resolves, because several bodies share it;
@@ -99,8 +99,15 @@ DIODE_ALIASES = {
     "SOD68": "D_DO-34_SOD68_P7.62mm_Horizontal",        # flat with KiCad's 7.62 mm bend (KTY83 2026-10-25: NXP prints
     "DO35": "D_DO-35_SOD27_P7.62mm_Horizontal", "DO204AH": "D_DO-35_SOD27_P7.62mm_Horizontal",   # no hole or bend)
     "SOD27": "D_DO-35_SOD27_P7.62mm_Horizontal",
+    # DO-15 (JEDEC DO-204AC, 7.6 x 3.6 mm body): laid flat at KiCad's 12.70 mm bend, the same ~2.5 mm of straight lead
+    # each side of the body as DO-41 at 10.16 mm (P6KE6.8A, 2026-11-19)
+    "DO15": "D_DO-15_P12.70mm_Horizontal", "DO204AC": "D_DO-15_P12.70mm_Horizontal",
+    "SOD882": "D_SOD-882",                              # Nexperia's SOD882 (DFN1006-2): KiCad's land drawn from it
     "MICROMELF": "D_MicroMELF",
 }
+# Diodes Incorporated's PowerDI-123 (written 'PowerDI®123', 'POWERDI 123'): one outline, two pads, the big one the
+# cathode (KiCad's D_PowerDI-123, pad 1, drawn from Diodes' suggested pad layout). Other PowerDI cases are other lands.
+POWERDI123 = re.compile(r"(?i)(?<![A-Z0-9])Power[ -]?DI\W{0,2}123(?![0-9])")
 AMBIGUOUS = {"SOT233": "KiCad's SOT-23-3 is the 1.6 mm MO-178 body; distributors use SOT-23-3 for TO-236 SOT-23",
              "SOT223": "SOT-223: tab numbered 2 (SOT-223-3_TabPin2, regulators) or 4 (KiCad's SOT-223)",
              "SOT2233": "SOT-223: tab numbered 2 or 4", "TO261": "SOT-223: tab numbered 2 or 4", "TO261AA": "SOT-223: tab numbered 2 or 4",
@@ -958,6 +965,10 @@ BARE_FAMILY = {"SOT23", "TO220", "TO220AB", "TO263", "TO252", "DPAK", "D2PAK", "
 def named_package(text, diode=False, weak=False, kind=None):
     """SOT/SOD/DO-214/TO names -> (table name, how) / (None, why) / (None, None). weak (a description): a bare family
     name (SOT-23, TO-220 ...) counts only for a transistor or diode, where it means the 3-lead package."""
+    pdi = POWERDI123.search(str(text or ""))
+    if pdi and diode and not POWER_PKG.search(POWERDI123.sub(" ", str(text))) and not EP_WORD.search(str(text)) \
+            and not OTHER_LAND.search(POWERDI123.sub(" ", str(text))):
+        return "D_PowerDI-123", f"{pdi.group(0).strip()} -> D_PowerDI-123 (Diodes Inc. outline, pad 1 = cathode tab)"
     if POWER_PKG.search(str(text or "")):
         return None, f"power package ({POWER_PKG.search(str(text)).group(0)}): not a standard JEDEC outline"
     t = str(text or "").upper()
@@ -1236,6 +1247,15 @@ def mechanical_symbol(fp_source, designator, pads, text=""):
 for _k, _d in (("D", "Diode"), ("D_Schottky", "Schottky diode"), ("D_Zener", "Zener diode"), ("D_TVS", "TVS diode (unidirectional)")):
     SYMBOLS[_k] = (_k, "D", f"{_d} (pin 1 = cathode)", _diode_body(_k), [("1", "K", "passive", -5.08, 0, 0, 3.81), ("2", "A", "passive", 5.08, 0, 180, 3.81)])
 
+# a TVS diode that conducts both ways (SMBJ24CA): two triangles tip to tip on one bar with bent ends, no cathode; pins
+# A1 / A2 like KiCad's Device:D_TVS, either way round on the land
+SYMBOLS["D_TVS_Bidirectional"] = (
+    "D_TVS_Bidirectional", "D", "TVS diode, bidirectional (pins A1 / A2)",
+    [_poly([(-2.54, 1.27), (-2.54, -1.27), (0, 0), (-2.54, 1.27)], "none"),
+     _poly([(2.54, 1.27), (2.54, -1.27), (0, 0), (2.54, 1.27)], "none"),
+     _poly([(0.508, 1.27), (0, 1.27), (0, -1.27), (-0.508, -1.27)]), _poly([(-2.54, 0), (2.54, 0)])],
+    [("1", "A1", "passive", -5.08, 0, 0, 2.54), ("2", "A2", "passive", 5.08, 0, 180, 2.54)])
+
 BJT = lambda pnp: [_circle(1.27, 0, 2.8194), _poly([(0.635, 1.905), (0.635, -1.905)], w=0.508), _poly([(0.635, 0.635), (2.54, 2.54)]),
                    _poly([(0.635, -0.635), (2.54, -2.54)]), _poly([(-2.54, 0), (0.635, 0)])] + (
     [_poly([(2.286, -1.778), (1.778, -2.286), (1.27, -1.27), (2.286, -1.778)], "outline")] if pnp else
@@ -1342,6 +1362,19 @@ TVS_SERIES = re.compile(r"^(?:SMAJ|SMBJ|SMCJ|SMDJ|SMLJ|P4SMA|P6SMB|1SMB|SMF|P4KE
                         r"(\d{1,3}(?:\.\d)?)(C?)A(?:[-_].*|\b.*)?$", re.I)
 
 
+def tvs_bidirectional(mpn, description=""):
+    """True when the MPN is one of the A / CA numbered TVS series with CA or C (SMBJ24CA) and the description does not
+    say unidirectional, or (no such MPN) the description says bidirectional and not unidirectional (a part search's
+    'Bidirectional Channels: 1', PESD5V0S1BL). Anything else is not known to be bidirectional."""
+    d = str(description or "")
+    bi = re.search(r"(?i)\bbi-?directional|\bbidir|\bBI\b", d)
+    uni = re.search(r"(?i)\buni-?directional|\bunidir|\bUNI\b", d)
+    m = TVS_SERIES.match(str(mpn or "").strip())
+    if m:
+        return bool(m.group(2)) and not uni
+    return bool(bi) and not uni
+
+
 def tvs_unidirectional(mpn, description=""):
     """True when the MPN is one of the A / CA numbered TVS series with A alone (SMBJ5.0A, P6KE6.8A-E3/54) and the
     description does not say bidirectional, or (no such MPN) the description says unidirectional. A CA number, or a
@@ -1368,6 +1401,8 @@ def symbol_kind(kind, mpn, fp_name, description=""):
             return None, "chip-size D part: LED or diode is not stated (footprint is the same)"
         sub = "D_Zener" if re.search(r"zener|BZX|BZT|MMSZ|\bZD", d, re.I) else "D_TVS" if re.search(r"\bTVS\b|transient|SMAJ|SMBJ|SMCJ|P6KE|ESD", d, re.I) \
             else "D_Schottky" if re.search(r"schottky|\bBAT\d|\bSS\d|\bB5\d|\bMBR|\bSK\d|\bSB\d|1N58[1-9]", d, re.I) else "D"
+        if sub == "D_TVS" and tvs_bidirectional(mpn, description):      # both ways: no cathode, pins A1 / A2 as
+            return "D_TVS_Bidirectional", "2-pin bidirectional TVS diode, pins A1 / A2"     # KiCad's D_TVS
         if sub == "D_TVS" and not tvs_unidirectional(mpn, description):  # KiCad's D_TVS is bidirectional (A1/A2)
             return None, "TVS diode: uni- or bidirectional is not certain from the MPN; symbol left to the other sources"
         return sub, "2-pin diode, pin 1 = cathode"
@@ -1422,6 +1457,8 @@ CASE_EXTRA = re.compile(r"(?i)\bPC\s*Pads?\b|\bconvex\b|\bconcave\b|long\s+side|
                         r"\bvariant\b|\bformed\b|\bbent\b|non-?standard|\bisolated\b|\bwide\s*body\b|\btab\b")
 
 
+# JEDEC / Philips axial diode outlines: a case text naming one may also say 'Axial' (DigiKey: 'DO-204AL, DO-41, Axial')
+AXIAL_OUTLINE = re.compile(r"(?i)(?<![A-Z0-9])(?:DO-?(?:15|27|34|35|41|201\w{0,2}|204\w{2})|SOD-?(?:27|57|64|68|81))(?![A-Z0-9])")
 CASE_SHAPE = re.compile(r"(?i)\s*,\s*(?:concave|convex)\s*$")       # the end caps' shape: '1206 (3216 Metric), Concave'
 ONE_ELEMENT = re.compile(r"(?i)\bPTC\b|\bPOLYFUSE\b|\bRESETTABLE\b|\bFUSE\b|\bTHERMISTOR\b|\bVARISTOR\b")
 MANY_ELEMENTS = re.compile(r"(?i)\barr(?:ays?|\.)?\b|\bnetworks?\b|\bbussed\b|\bisolated\b|\bquad\b|\bdual\b|\b\d+\s*R\b|"
@@ -1455,6 +1492,8 @@ def case_text(text, desc=""):
     nothing else in the text ('1206 (3216 Metric), Concave' only) it is that chip's plain land; an array's ('RES ARRAY
     4 RES'), another kind's or no description keeps it unused."""
     t = str(text or "").strip()
+    if AXIAL_OUTLINE.search(t):                           # 'DO-204AL, DO-41, Axial': the outline is axial by its name;
+        t = re.sub(r"(?i),?\s*\baxial\b", "", t).strip(" ,")   # the word says nothing more ('Axial' alone still names none)
     plain = CASE_SHAPE.sub("", t)
     if plain != t and PLAIN_CHIP_CASE.fullmatch(plain) and ONE_ELEMENT.search(str(desc or "")) \
             and not MANY_ELEMENTS.search(str(desc or "")):
@@ -1541,7 +1580,7 @@ def symbol_text(key, mpn=""):
     body = " ".join(g)
     pin_txt = " ".join(_pin(*p) for p in pins)
     # pin names hidden on 2-pin parts and on transistors (KiCad's Q_*: G / S / D written over the gate and channel lines)
-    quiet = all(p[1] in ("~", "1", "2", "K", "A", "NC") for p in pins) or ref == "Q"
+    quiet = all(p[1] in ("~", "1", "2", "K", "A", "A1", "A2", "NC") for p in pins) or ref == "Q"
     hide_names = "(pin_names (offset 0) hide)" if quiet else "(pin_names (offset 0.254))"
     if key in SYMBOLS:                         # 2-pin passives and diodes: no "1"/"2" or K/A text on the body (as KiCad's Device:R)
         hide_names += " (pin_numbers hide)"
