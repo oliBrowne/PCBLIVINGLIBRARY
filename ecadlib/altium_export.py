@@ -78,7 +78,9 @@ def source_kind(descriptions=()):
     return None
 
 
-_UNIT_WORD = re.compile(r"(?:k?ohms?|Ω|[pnuµμm]?[fh])", re.I)   # "10 OHM", "1 KOHM" (kilo only: "10 MOHM" reads two ways), "1 uF"
+# '10 OHM', '1 uF', '2.2 KOHM': a number and its unit apart. A kilo-ohm only: DigiKey's upper-case 'MOHM' is milliohms
+# (an inductor's DCR, '425 MOHM'), so an M before OHM is never read as a value
+_UNIT_WORD = re.compile(r"(?:k?(?:ohms?|Ω)|[pnuµμm]?[fh])", re.I)
 _BEAD = re.compile(r"bead|ferrite", re.I)
 
 
@@ -471,7 +473,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             ident = key or ("" if pkg and pkg in pn else fp_ref)              # package (RES-0603-10k) already
             # Altium part numbers ignore case: names are compared folded, and a name spelt another way is another
             # part (RES-2512-10m is 10 mOhm, RES-2512-10M 10 MOhm), never one name in two cases (R-FX10-7, R-BF-9)
-            ident, fold = (ident, "" if key else pn), _safe_name(pn, []).casefold()   # as stored: 'RES-0Ω' is RES-0Ohm
+            # folded as stored: _safe_name spells Ω as Ohm, so 'RES-0Ω' and 'RES-0OHM' are one name in Altium
+            ident, fold = (ident, "" if key else pn), _safe_name(pn, []).casefold()
             held = reserved.get(fold)
             if held and fold not in seen and key != held[1]:
                 seen[fold] = None               # held for the part released under this name, further down the BOM

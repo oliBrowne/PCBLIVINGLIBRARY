@@ -590,6 +590,9 @@ def read_bom(path, columns=None, rules=None, root=None):
                 d["mpn_dnp"] = True                     # 'X (DNP)': read below as a Value '10k (DNF)' is
             if not d["mpn"]:
                 del d["mpn"]
+                hold = next((n for n in extra if "or a label, not a part number" in n), "")
+                if hold:                                # held, not built as a part with no MPN
+                    d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
         if note:
             d["bom_note"] = "; ".join(note)
         if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
@@ -943,7 +946,25 @@ def _split_mpn(mpn, maker=""):
     core, more = _mpn_marks(core)                   # 'X (KEMET).' / '"X" (DNP)': the marks left once the rest is gone
     if gone + more:
         notes.append(f"'{raw}': {', '.join(dict.fromkeys(gone + more))} dropped from the MPN")
+    if maker_only_mpn(core, maker) or maker_only_mpn(raw, maker):   # 'onsemi:' / 'Texas Instruments': no part number
+        notes = [n for n in notes if "dropped from the MPN" not in n]
+        notes.append(f"the MPN cell holds {raw.strip()!r}, a maker's name or a label, not a part number: nothing was searched "
+                     "or built from it; fill in the part number")
+        return "", notes, dnp
     return core, notes, dnp
+
+
+def maker_only_mpn(s, maker=""):
+    """An MPN cell that names a maker and no part: no digit in it, and either a label's colon after it ('onsemi:',
+    'Murata:') or the line's own maker / a maker ecadlib knows by name. Part numbers carry digits; a cell without one
+    that is a company's name would otherwise be searched and name-matched (a KiCad 'OnSemi_ECH8' land for 'onsemi:')."""
+    t = str(s or "").strip()
+    if not t or re.search(r"\d", t):
+        return False
+    if t.endswith(":"):
+        return True
+    known = [maker] + [m for m in P.MAKER_DOMAINS.values() if m]
+    return any(m and str(m).strip() and P.same_maker(t, m) for m in known)
 
 
 def _header_score(raw, columns=None):
