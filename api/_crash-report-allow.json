@@ -3776,6 +3776,7 @@
 "Run.kicad_land_confirmed",
 "Run.land_symbol",
 "Run.local",
+"Run.maker_named",
 "Run.measured_land",
 "Run.other_makers_land",
 "Run.pad_numbers",
@@ -3881,6 +3882,7 @@
 "lands_agree.<locals>.centred",
 "local",
 "main",
+"maker_named",
 "measured_land",
 "need_pins",
 "no_listing",
@@ -3928,6 +3930,7 @@
 "src_standard",
 "stacked_pins",
 "standard_land",
+"tvs_direction",
 "variant_agrees",
 "wild_alternates",
 "write_notice",
@@ -5352,6 +5355,7 @@
 "tantalum_land",
 "tantalum_search_text",
 "transistor_type",
+"tvs_bidirectional",
 "tvs_unidirectional"
 ],
 "ecadlib/step_gen.py":[

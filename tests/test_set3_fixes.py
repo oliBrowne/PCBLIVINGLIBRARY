@@ -137,7 +137,8 @@ def test_tvs_direction_from_the_series_numbering():
     assert U("X1", "TVS DIODE UNIDIRECTIONAL 5V") and not U("SMBJ5.0A", "TVS DIODE BIDIRECTIONAL")
     assert not U("SMBJ5.0CA", "TVS Diode UNIDIRECTIONAL") and not U("SA612A", "TVS") and not U("SM6T100A", "TVS")
     assert SP.symbol_kind("D", "SMBJ5.0A", "D_SMB", "TVS DIODE 5VWM 9.2VC SMB")[0] == "D_TVS"
-    assert SP.symbol_kind("D", "SMBJ5.0CA", "D_SMB", "TVS DIODE 5VWM 9.2VC SMB")[0] is None
+    # a CA number is bidirectional: the two-way symbol (pins A1 / A2), never the one-way D_TVS (2026-11-19)
+    assert SP.symbol_kind("D", "SMBJ5.0CA", "D_SMB", "TVS DIODE 5VWM 9.2VC SMB")[0] == "D_TVS_Bidirectional"
 
 
 def test_generic_symbols_for_connector_lands_with_mounting_pads_usb_and_terminal_blocks():
