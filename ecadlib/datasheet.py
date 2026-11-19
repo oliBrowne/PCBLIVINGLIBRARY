@@ -5287,8 +5287,10 @@ class Reader:
         except OSError as e:
             data, err = None, (f"{f.name} in {place} cannot be read ({type(e).__name__}): replace it with the PDF")
         else:
-            err = None if is_pdf(data) else (f"{f.name} in {place} is not a PDF (a web page saved as .pdf?): replace "
-                                             "it with the PDF")
+            err = None if is_pdf(data) and pdf_complete(data) else (
+                f"{f.name} in {place} is not a PDF (a web page saved as .pdf?): replace it with the PDF"
+                if not is_pdf(data) else    # a download that stopped early: no page tree, no pages to read (2026-11-19)
+                f"{f.name} in {place} is cut off (the download stopped early): replace it with the whole PDF")
         if err:
             attempts.append({"url": f.name, "where": "datasheet folder", "error": err})
             return None, None, err
