@@ -78,7 +78,7 @@ def source_kind(descriptions=()):
     return None
 
 
-_UNIT_WORD = re.compile(r"(?:ohms?|Ω|[pnuµμm]?[fh])", re.I)    # '10 OHM', '1 uF': a number and its unit apart
+_UNIT_WORD = re.compile(r"(?:k?ohms?|Ω|[pnuµμm]?[fh])", re.I)   # "10 OHM", "1 KOHM" (kilo only: "10 MOHM" reads two ways), "1 uF"
 _BEAD = re.compile(r"bead|ferrite", re.I)
 
 
@@ -471,7 +471,7 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             ident = key or ("" if pkg and pkg in pn else fp_ref)              # package (RES-0603-10k) already
             # Altium part numbers ignore case: names are compared folded, and a name spelt another way is another
             # part (RES-2512-10m is 10 mOhm, RES-2512-10M 10 MOhm), never one name in two cases (R-FX10-7, R-BF-9)
-            ident, fold = (ident, "" if key else pn), pn.casefold()
+            ident, fold = (ident, "" if key else pn), _safe_name(pn, []).casefold()   # as stored: 'RES-0Ω' is RES-0Ohm
             held = reserved.get(fold)
             if held and fold not in seen and key != held[1]:
                 seen[fold] = None               # held for the part released under this name, further down the BOM
@@ -479,7 +479,7 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                 seen[fold], pn = ident, held[0]     # the released part keeps its name as released
             if seen.setdefault(fold, ident) != ident:   # same synthetic PN, different part (100nF 16V vs 50V; a 10k
                 pn = f"{pn}-{name_mpn or fp_ref}".replace(" ", "")              # SMD and a 10k axial): keep both
-                seen.setdefault(pn.casefold(), ident)
+                seen.setdefault(_safe_name(pn, []).casefold(), ident)
             if key:
                 canon[key] = pn
         pn = _safe_name(pn, bad)

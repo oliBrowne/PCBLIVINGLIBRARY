@@ -37,7 +37,7 @@ def norm_name(s):
 # its rails as V+ / V-; datasheets print '1IN+', '+IN A', 'INPUT2-', 'VCC', 'GND'. A CMOS part's rails are VDD / VSS in
 # one text and VCC / GND in the other. The number must still be the same: only the spelling is set aside.
 _INPUT = {"+": {"+", "IN+", "+IN", "INPUT+", "+INPUT", "VIN+"}, "-": {"-", "IN-", "-IN", "INPUT-", "-INPUT", "VIN-"}}
-RAILS = ({"V+", "+V", "VCC", "VDD", "VCC+", "VS+", "+VS", "VDD+"},
+RAILS = ({"V+", "+V", "VCC", "VDD", "VCC+", "VS", "VS+", "+VS", "VDD+"},
          {"V-", "-V", "VEE", "VSS", "VCC-", "VS-", "-VS", "GND", "VEE-"})
 
 
@@ -49,6 +49,22 @@ def name_class(name):
         if s in forms or any(s[:i] + s[i + 1:] in forms for i, c in enumerate(s) if c in "1234ABCD"):
             return sign
     return "pos" if s in RAILS[0] else "neg" if s in RAILS[1] else None
+
+
+IO = {"vin": {"IN", "VIN", "VI", "INPUT"}, "vout": {"OUT", "VOUT", "VO", "OUTPUT"}}
+GROUND_ADJ = {"ADJGND", "GNDADJ"}                   # a fixed regulator's ground pin, printed 'ADJ/GND' or 'GND/ADJ'
+
+
+def loose_class(name):
+    """name_class, plus 'vin' / 'vout' for a regulator's or switch's single input / output however it is spelt (IN,
+    VIN, VI; OUT, VOUT, VO) and 'neg' for 'ADJ/GND'."""
+    got = name_class(name)
+    if got:
+        return got
+    s = norm_name(name)
+    if s in GROUND_ADJ:
+        return "neg"
+    return next((k for k, forms in IO.items() if s in forms), None)
 
 
 def loose_names(pins):
@@ -65,11 +81,19 @@ def loose_names(pins):
         mine = names & rails
         if len(mine) == 1:
             out |= mine
+    for forms in IO.values():                          # the part's only input / output pin (a regulator's VI, VO)
+        mine = names & forms
+        if len(mine) == 1:
+            out |= mine
     return out
+
+
+_TAB = re.compile(r"(?<=\d)\s*,\s*(?i:tab)\b")
 
 
 def _cells(line):
     """A text line -> its tokens, with "2, 3" kept as one cell and ranges written out."""
+    line = _TAB.sub("", line)                           # 'OUT 2, Tab': pin 2 (the tab is that pin too)
     line = _LIST.sub(",", line.replace("–", "-").replace("–", "-"))
     return line.split()
 
@@ -85,10 +109,31 @@ def _numbers(cell):
     return out
 
 
+_LONE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9+\-−–_/#~]{0,11}$")
+
+
+def _joined_lines(text):
+    """A page's lines, with a table row the text layer broke in two joined again: a line that is one pin-like name
+    ('Vref', 'RS') followed by a line that is one pin number ('5') is the row 'Vref 5'. A number after a sentence, or
+    a name followed by anything else, is left alone."""
+    lines = str(text or "").splitlines()
+    out, i = [], 0
+    while i < len(lines):
+        a = lines[i].strip()
+        b = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if _LONE_NAME.match(a) and re.fullmatch(r"\d{1,3}", b):
+            out.append(f"{a} {b}")
+            i += 2
+            continue
+        out.append(lines[i])
+        i += 1
+    return out
+
+
 def _rows(text):
     """Lines of a page -> [(joined name candidates, [cells that are pin-number cells])]."""
     rows = []
-    for raw in str(text or "").splitlines():
+    for raw in _joined_lines(text):
         cells = _cells(raw)
         if len(cells) < 2:
             continue
@@ -134,10 +179,10 @@ def _find(rows, name, num, found=None, loose=False):
                     and all(re.fullmatch(r"[\d,]+", x) for _, x in n) for c, n in rows)        # drawing is IN2-'s
     else:
         exact = any(target in c for c in named)
-    kind = name_class(target) if loose and not exact else None
+    kind = loose_class(target) if loose and not exact else None
     cols, seen = set(), False
     for (cells, nums), cand in zip(rows, named):
-        if target not in cand and not (kind and any(name_class(c) == kind for c in cand)):
+        if target not in cand and not (kind and any(loose_class(c) == kind for c in cand)):
             continue
         seen = True
         for col, (_, c) in enumerate(nums):
@@ -202,12 +247,12 @@ def _top(rows, pins, loose=()):
     """The highest pin number printed on the lines of `rows` that name one of `pins` (0 when none). loose: the names
     matched by class (loose_names), as _find matches them: 4IN+ names the symbol's '+'."""
     names, top = {norm_name(nm) for _, nm in pins}, 0
-    kinds = {name_class(n) for n in loose} - {None}
+    kinds = {loose_class(n) for n in loose} - {None}
     for cells, nums in rows:                          # a table row only: the name is all that comes before the numbers
         before = cells[:nums[0][0]]                   # ("4OUT 20 Output"), or what starts after them ("1 OUTA ..."),
         after = cells[nums[-1][0] + 1:][:3]           # never a name inside a sentence or a spec line ("VCC supply
         cand = {norm_name("".join(before))} if before else {norm_name("".join(after[:j])) for j in (1, 2, 3)}
-        if not before and not after or not (cand & names or kinds and any(name_class(c) in kinds for c in cand)):
+        if not before and not after or not (cand & names or kinds and any(loose_class(c) in kinds for c in cand)):
             continue                                  # current 25 100")
         top = max([top] + [int(x) for _, c in nums for x in _numbers(c) if x.isdigit()])
     return top
@@ -224,8 +269,8 @@ def _a_table_names(rows, names, loose=()):
     """Does some line of `rows` name one of `names` as a table row does (_row_names; a loose name by its class)? A
     page of spec lines that only mentions the pins ('VI = 5.5 V or GND 0 to 5.5 V 5 uA') does not."""
     want = {norm_name(n) for n in names}
-    kinds = {name_class(n) for n in want if n in loose} - {None}
-    return any(c in want or kinds and name_class(c) in kinds for cells, nums in rows for c in _row_names(cells, nums))
+    kinds = {loose_class(n) for n in want if n in loose} - {None}
+    return any(c in want or kinds and loose_class(c) in kinds for cells, nums in rows for c in _row_names(cells, nums))
 
 
 def _fewer_channels(rows, pins):
@@ -249,6 +294,68 @@ def _figure_rows(text):
     return rows
 
 
+# Package families a pin table's header may name, one per number column ('NAME SOT-23 SC70', 'NAME X2SON SOT-23').
+# Longest first, so 'TSOT23' is not read as 'SOT23' and 'HTSSOP' not as 'TSSOP'. A name not in this list is no
+# package: a header with one is not used.
+FAMILIES = sorted({"X2SON", "WSON", "VSON", "USON", "SON", "WQFN", "VQFN", "UQFN", "QFN", "TQFN", "TDFN", "WDFN", "UDFN",
+                   "DFN", "DSBGA", "WCSP", "BGA", "LGA", "HTSSOP", "TSSOP", "MSOP", "VSSOP", "HVSSOP", "SSOP", "QSOP",
+                   "TSOP", "SOIC", "SO", "PDIP", "DIP", "SOT223", "TSOT23", "SOT23", "SOT353", "SOT363", "SOT323",
+                   "SOT553", "SOT563", "SOT89", "SC70", "SC88", "SC59", "SC74", "TO220", "TO92", "TO263", "TO252", "DPAK",
+                   "D2PAK", "LCCC", "CDIP", "CFP", "TQFP", "LQFP", "QFP", "PLCC", "CSP", "SOIJ"}, key=len, reverse=True)
+
+
+def _family(token):
+    """'SOT-23' / 'SOT23' / 'SOT-23-5' / '8-SOIC' / 'SC70' -> its family ('SOT23', 'SOIC', 'SC70'), else ''. A token
+    that is a family and more ('SOT-23-THN', 'SOICW') is none."""
+    t = str(token or "").strip().strip("(),;:").upper()
+    cands = [t]
+    m = re.match(r"^\d{1,3}-(.+)$", t)                   # '8-SOIC': DigiKey's pin count first
+    if m:
+        cands.append(m.group(1))
+    for c in list(cands):
+        m = re.match(r"^(.+?)-\d{1,3}$", c)                # 'SOT-23-5', 'SOIC-8': the pin count last
+        if m:
+            cands.append(m.group(1))
+    for c in cands:
+        if c.replace("-", "") in FAMILIES:
+            return c.replace("-", "")
+    return ""
+
+
+def package_families(texts):
+    """The package families a part's land names and case texts name ('SOT-23-5', 'Package_SO:SOIC-8_3.9x4.9mm',
+    '8-SOIC (0.154", 3.90mm Width)', 'SOT-353_SC-70-5' -> {'SOT353', 'SC70'})."""
+    out = set()
+    for t in texts or ():
+        t = str(t or "").split(":")[-1]
+        for tok in re.split(r"[_\s,]+", re.sub(r"\([^)]*\)", " ", t)):
+            f = _family(tok)
+            if f:
+                out.add(f)
+    return out
+
+
+def _package_header(text, width):
+    """The columns of the page's pin-table header that names one package per number column ('NAME SOT-23 SC70' for a
+    two-column table -> [('SOT23', 'SOT-23'), ('SC70', 'SC70')]: family, as printed), or None: no such line, several different ones, or one whose
+    package names are not `width`."""
+    found = []
+    for line in str(text or "").splitlines():
+        toks = line.split()
+        fams = [_family(t) for t in toks]
+        named = [f for f in fams if f]
+        if len(named) < 2:
+            continue
+        rest = [t for t, f in zip(toks, fams) if not f]
+        if any(not re.fullmatch(r"(?i)NAME|PIN|NO\.?|FUNCTION|DESCRIPTION|TYPE|I/O|[A-Z]{1,4}\d?|\([A-Z0-9]{1,5}\)", t)
+               for t in rest):
+            continue                                  # a sentence that names packages, not a header ('DBV' / '(D)' codes may stand beside them)
+        if len(named) == width and named not in found:
+            found.append(named)
+            printed = [t.strip("(),;:") for t, f in zip(toks, fams) if f]
+    return list(zip(found[0], printed)) if len(found) == 1 else None
+
+
 _TITLE = re.compile(r"(?i)\bpin\s+(?:functions?|descriptions?|configurations?|assignments?)\s*[:\-–]\s*(.+)$")
 _DEVICE = re.compile(r"\b[A-Z]{1,6}\d{2,}[A-Za-z0-9]*")
 
@@ -270,7 +377,26 @@ def _is_part(devices, part):
     return bool(p) and any(p.startswith(d) for d in devices)
 
 
-def check(page_texts, pins, figures=(), pin_count=None, part=None):
+def _named_column(text, lines, per, mine):
+    """A table whose number columns are packages, its header naming each ('NAME SOT-23 SC70'): (the column of this
+    part's family, a 'where' text) when exactly one header column is one of `mine` and every pin is printed with its
+    number in that column; else None (the table stays unchecked)."""
+    if not mine:
+        return None
+    width = max((len(c) for f in lines for c in f.values()), default=0)
+    head = _package_header(text, width)
+    if not head:
+        return None
+    cols = [k for k, (f, _) in enumerate(head) if f in mine]
+    if len(cols) != 1 or not all(cols[0] in c for c, _ in per):
+        return None
+    if any(len(f.get(cols[0]) or ()) != width for f in lines):
+        return None                                   # a row the text layer printed with fewer cells ('VSS 8 444 4 44'):
+        #                                               its numbers may not sit under the header's columns
+    return cols[0], f"pin table, its {head[cols[0]][1]} column (the header names one package per column)"
+
+
+def check(page_texts, pins, figures=(), pin_count=None, part=None, package=()):
     """page_texts: {page number: text}; pins: [(num, name)]; figures: [(page, text)] of pinout drawings
     (figure_lines), each read as a table of its own; pin_count: the package's, when known; part: the part number,
     when known (a table on another page titled only for other devices of the family is then not a doubt about the
@@ -286,6 +412,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None):
     if not any(str(t or "").strip() for _, t in units):
         return {"status": "unchecked", "why": "the PDF has no text layer (scanned?)"}
     loose = loose_names(pins)
+    mine = package_families(package)
     best, agreed, conflicts = None, None, []
     for i, (page, text) in enumerate(units):
         drawn = i >= len(units) - len(figures or ())
@@ -303,13 +430,16 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None):
         if common:
             col = min(common)
             other = variant_columns(lines, col, most, _span(rows, lines, col))
-            if other:                               # another package or variant of the part numbers these pins other
+            named = _named_column(text, lines, per, mine) if other and not drawn else None
+            if named is not None:                   # the header names each column's package, and one is this part's
+                col, other = named
+            elif other:                             # another package or variant of the part numbers these pins other
                 return {"status": "unchecked", "page": page,      # ways: which column is this part's is not in
                         "why": f"page {page}'s table gives these pins other numbers in another column ({other}): which "
                                "column is this part's package or variant is not in the text"}
             if agreed is None:
                 agreed = {"status": "agreed", "page": page, "column": col, "pins": len(pins),
-                          "where": "pin drawing" if drawn else "pin table"}
+                          "where": "pin drawing" if drawn else other if named is not None else "pin table"}
             continue
         miss = [f"{nm}={n}" for (n, nm), (cols, _) in zip(pins, per) if not cols]
         if miss and most and _top(rows, pins, loose) > most:  # a bigger package's table (TL074M's 20-pin LCCC): not this one
@@ -495,11 +625,13 @@ def pin_orders_pdf(pdf_bytes, names):
     return pin_orders(page_texts(pdf_bytes), names, page_figures(pdf_bytes)) if pdf_bytes else []
 
 
-def check_pdf(pdf_bytes, pins, pin_count=None, part=None):
-    """check() on a PDF: its text layer's tables and its pinout drawings (page_figures). No PDF: unchecked."""
+def check_pdf(pdf_bytes, pins, pin_count=None, part=None, package=()):
+    """check() on a PDF: its text layer's tables and its pinout drawings (page_figures). No PDF: unchecked.
+    package: this part's land name and case texts (a table with one column per package then checks its column)."""
     if not pdf_bytes:
         return {"status": "unchecked", "why": "none of the part's datasheet links gave a PDF to check it against"}
-    return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count, part=part)
+    return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count, part=part,
+                 package=package)
 
 
 def page_figures(pdf_bytes, limit=80):

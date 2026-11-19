@@ -386,6 +386,10 @@ CODES = {
     "librarian.easyeda": ("The footprint and symbol were converted from EasyEDA ({lcsc}).",
                           "Check the pads and pins against the datasheet, then release it anyway if they match.",
                           [r"EasyEDA (?P<lcsc>\S+) conversion"]),
+    "librarian.check_error": ("Built the {what} from {source}, but an error stopped its checks ({error}).",
+                              "Check it against the datasheet, then release it anyway if it matches; report the error.",
+                              [r"^(?:verify: )?(?P<what>symbol and footprint|symbol|footprint) from (?P<source>.+?): an "
+                               r"error stopped its checks \((?P<error>[^)]+)\)"]),
     "librarian.family_pinout": ("The pinout of {sym} comes from the {mpn} family table, not from this part's datasheet.",
                                 "Check pins 1-3 against the datasheet, then release it anyway if they match.",
                                 [r"symbol pinout (?P<sym>\S+) from the (?P<mpn>\S+) family table"]),
