@@ -1661,7 +1661,7 @@ class Run:
             return None, None
         from . import ds_route as DR
         cfg = getattr(getattr(self, "reader", None), "cfg", None) or D.settings(getattr(self, "rules", None))
-        places = [(cfg.get("folder"), "your [datasheet] folder")]
+        places = [(cfg.get("folder"), "the datasheet folder")]   # (not "your [datasheet] folder": src_datasheet drops those lines)
         if cfg.get("reader") == "assistant" and getattr(self, "out", None) is not None:
             from . import ds_assistant as DA
             places.append((DA.pdf_folder(DA.root(self.out)), "your assistant's pdfs folder"))
@@ -1669,7 +1669,9 @@ class Run:
             if not str(folder or "").strip():
                 continue
             f, _ = D.local_datasheet(folder, mpn, ("exact",))
-            if f is None:
+            # the name is the MPN itself, nothing more: "exact" also takes BAT54-04.pdf for BAT54 (another pinout), which a
+            # read reviews but a free check would trust (mentions_part finds BAT54 in BAT54-04's text too)
+            if f is None or D._mpn_key(f.stem) != D._mpn_key(mpn):
                 continue
             try:
                 data = f.read_bytes()
@@ -1679,7 +1681,10 @@ class Run:
                 continue
             try:
                 texts = DR.page_texts(data, D.MENTION_PAGES)
-                if D.not_a_datasheet(texts[:1], D.NEVER_DATASHEET) or D.mentions_part(texts, mpn) is False:
+                said = D.mentions_part(texts, mpn)
+                if said is False and (D.pdf_pages(data) or 0) > D.MENTION_BIG:   # a family manual: deeper, as fetch does
+                    said = D.mentions_part(DR.page_texts(data, D.MENTION_DEEP), mpn)
+                if D.not_a_datasheet(texts[:1], D.NEVER_DATASHEET) or said is False:
                     continue
             except Exception:                         # a PDF that does not read: not this part's, for a free check
                 continue

@@ -49,7 +49,7 @@ def test_the_datasheet_folder_file_is_used_too(tmp_path):
     (folder / "BAS16,215.pdf").write_bytes(pdf)
     run = _run(tmp_path / "out", {"datasheet": {"folder": str(folder)}})
     data, where = run.datasheet_pdf(ITEM, {"mpn": "BAS16,215"}, ROW, {"found": {}}, "BAS16,215")
-    assert data == pdf and "[datasheet] folder" in where, where
+    assert data == pdf and where == "BAS16,215.pdf in the datasheet folder", where
 
 
 @lite
@@ -63,6 +63,34 @@ def test_a_saved_file_that_does_not_name_the_part_or_is_not_a_pdf_is_not_used(tm
     assert run.datasheet_pdf(ITEM, {"mpn": "BAS16,215"}, ROW, {"found": {}}, "BAS16,215") == (None, None)
     (pdfs / "BAS16,215.pdf").write_bytes(b"<html>Access denied</html>")
     assert run.datasheet_pdf(ITEM, {"mpn": "BAS16,215"}, ROW, {"found": {}}, "BAS16,215") == (None, None)
+
+
+@lite
+def test_another_parts_file_that_starts_with_the_mpn_is_not_this_parts(tmp_path):
+    """BAT54-04.pdf (a series pair) for BAT54 (one diode): local_datasheet calls it "exact" (MPN, separator, more) and its
+    text names BAT54 too, so a free check would read another pinout. Only <MPN>.pdf itself is the part's own file here."""
+    folder = tmp_path / "sheets"
+    folder.mkdir()
+    page = [(72, 700 - 12 * i, "BAT54-04 Schottky barrier double diode, series pair, BAT54 family, SOT23 package")
+            for i in range(12)]
+    (folder / "BAT54-04.pdf").write_bytes(_placed_pdf(page))
+    run = _run(tmp_path / "out", {"datasheet": {"folder": str(folder)}})
+    assert run.own_pdf("BAT54") == (None, None)
+    (folder / "BAT54.pdf").write_bytes(_placed_pdf([(72, 700, "BAT54 Schottky barrier diode")]))
+    assert run.own_pdf("BAT54")[1] == "BAT54.pdf in the datasheet folder"
+
+
+@lite
+def test_the_saved_file_comes_before_a_link_that_works(tmp_path):
+    """As the reader does (Reader.job: the part's own file beats every link): the person saved it for this part."""
+    folder = tmp_path / "sheets"
+    folder.mkdir()
+    pdf = _placed_pdf([(72, 700, "BAS16 High-speed switching diode")])
+    (folder / "BAS16,215.pdf").write_bytes(pdf)
+    run = _run(tmp_path / "out", {"datasheet": {"folder": str(folder)}})
+    run._pdfs.fetch = lambda url, where, **kw: (b"%PDF-1.4 link", {})
+    assert run.datasheet_pdf(ITEM, {"mpn": "BAS16,215"}, ROW, {"found": {}}, "BAS16,215") == (
+        pdf, "BAS16,215.pdf in the datasheet folder")
 
 
 @lite
