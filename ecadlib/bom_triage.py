@@ -584,8 +584,10 @@ def read_bom(path, columns=None, rules=None, root=None):
                     mapping.setdefault("lcsc", f"{headers[pj]} (where {headers[nj]} is LCSC)")
                     break
         if d.get("mpn"):
-            d["mpn"], extra = _split_mpn(d["mpn"])
+            d["mpn"], extra, mpn_dnp = _split_mpn(d["mpn"], d.get("manufacturer", ""))
             note += extra
+            if mpn_dnp:
+                d["mpn_dnp"] = True                     # 'X (DNP)': read below as a Value '10k (DNF)' is
             if not d["mpn"]:
                 del d["mpn"]
         if note:
@@ -609,7 +611,7 @@ def read_bom(path, columns=None, rules=None, root=None):
         if _not_a_part(d):                                               # 'Resistors' heading, 'Notes: ...' row
             skipped += 1
             continue
-        said = dnp_written(d)                                            # Value 'DNP' / '10k (DNF)', MPN 'DNP'
+        said = dnp_written(d) or ("MPN" if d.pop("mpn_dnp", False) else "")   # Value 'DNP' / '10k (DNF)', MPN 'DNP' / 'X (DNP)'
         if "dnp" in d or "fitted" in d:
             flag = "the DNP column" if "dnp" in d else "the fitted column"
             blank = not str(d.get("dnp", d.get("fitted", ""))).strip()
@@ -874,18 +876,74 @@ def _supplier_pairs(headers):
 
 _OR_EQ = re.compile(r"\s*[(\[]?\s*(?:or\s+(?:equivalent|equiv\.?|eq\.?|similar|equal)|o\.?\s*e\.?|or\s+eqv\.?)\s*[)\]]?\s*$", re.I)
 _PN = re.compile(r"(?=.*\d)[A-Za-z0-9][A-Za-z0-9\-./#()+_]{3,}")
+_PN_CELL = re.compile(r"(?=.*\d)[A-Za-z0-9][A-Za-z0-9\-./#()+_,]{3,}")       # Nexperia's 'MMBT3904,215' too
 
 
-def _split_mpn(mpn):
-    """'A / B', 'A, B', 'A or B' -> ('A', [note]); 'A or equivalent' -> ('A', [note]); else (mpn, [])."""
-    core = _OR_EQ.sub("", mpn).strip()
-    notes = [f"'{mpn}': 'or equivalent' dropped from the MPN"] if core != mpn.strip() and core else []
-    core = core or mpn.strip()
-    parts = [x.strip() for x in re.split(r"\s+/\s+|\s*;\s*|,\s+|\s+or\s+", core) if x.strip()]
+_QUOTES = {'"': '"', "'": "'", "‘": "’", "“": "”", "«": "»", "’": "’"}
+_ALT_SEP = r"\s+(?:alt(?:ernate|ernative)?s?|2nd\s+source|second\s+source|sub(?:stitute)?)\s*[:.]\s*"
+_MPN_DNP = re.compile(r"\s*(?:[(\[]\s*(?:dnp|dnf|dni|do\s*not\s*(?:populate|place|fit)|not\s*fitted|nf|np)\s*[)\]]|"
+                      r"(?<=\s)(?:dnp|dnf|dni))\s*$", re.I)
+
+
+def _mpn_marks(s):
+    """Text around a part number that is not part of it, as typed into a BOM: a wrapping pair of quotes, Excel's
+    leading text apostrophe ('0022232021), and a trailing full stop, comma, semicolon, colon or footnote star. A '+',
+    '#' or '/' (MAX232ESE+, LT1086CT#PBF, LM358DR/NOPB) belongs to the number and stays. -> (text, what was dropped)."""
+    t, gone = s.strip(), []
+    while len(t) > 2 and t[0] in _QUOTES and t[-1] == _QUOTES[t[0]]:
+        t, gone = t[1:-1].strip(), gone + ["the quotes around it"]
+    if len(t) > 1 and t[0] in "'‘’" and t[1:2].isalnum() and t[-1] not in "'’":
+        t, gone = t[1:], gone + ["Excel's text apostrophe"]
+    end = re.search(r"[.,;:*]+$", t)
+    if end and len(t) > len(end.group(0)) and t[:end.start()][-1:].isalnum():
+        t, gone = t[:end.start()], gone + [f"the '{end.group(0)}' after it"]
+    return t, gone
+
+
+def _drop_maker(s, maker):
+    """The line's own maker typed into its MPN cell ('Yageo RC0603FR-07470RL', 'C0603C104K5RACTU (KEMET)',
+    'RK73H1JTTD1002F - KOA Speer') -> (part number, True). Only a name that is the Manufacturer cell's company
+    (providers.same_maker) and only when a part number is left; another maker's name, a package or an ordering note
+    in brackets stays (it may be part of the number, B2B-XH-A(LF)(SN), or a question for a person)."""
+    if not maker or not str(maker).strip():
+        return s, False
+    m = re.fullmatch(r"(.+?)\s*(?:[(\[]\s*([^()\[\]]+?)\s*[)\]]|\s+[-–,]\s*([^,()\[\]]+?)|,\s*([^,()\[\]]+?))", s)
+    if m and P.same_maker(next(g for g in m.groups()[1:] if g), maker) and _PN_CELL.fullmatch(m.group(1)):
+        return m.group(1), True
+    words = s.split()
+    for k in range(1, min(4, len(words))):
+        if P.same_maker(" ".join(words[:k]), maker) and _PN_CELL.fullmatch(" ".join(words[k:])):
+            return " ".join(words[k:]), True
+    return s, False
+
+
+def _split_mpn(mpn, maker=""):
+    """'A / B', 'A, B', 'A or B', 'A alt: B' -> ('A', [note], dnp); 'A or equivalent' -> ('A', [note], dnp); the marks
+    around a number (_mpn_marks), the line's maker typed into the cell (_drop_maker) and a DNP mark after it
+    ('A (DNP)': dnp True, as a Value '10k (DNF)' is) are dropped and said in the note; else (mpn, [], False)."""
+    raw = mpn
+    core, gone = _mpn_marks(mpn)
+    notes, dnp = [], False
+    m = _MPN_DNP.search(core)
+    if m and m.start() > 0:
+        core, dnp = core[:m.start()].strip(), True
+        notes.append(f"'{raw}': the DNP mark after the part number makes the line not fitted")
+    stripped = _OR_EQ.sub("", core).strip()
+    if stripped != core.strip() and stripped:
+        notes.append(f"'{raw}': 'or equivalent' dropped from the MPN")
+    core = stripped or core.strip()
+    parts = [x.strip() for x in re.split(r"\s+/\s+|\s*;\s*|,\s+|\s+or\s+|" + _ALT_SEP, core, flags=re.I) if x.strip()]
     if len(parts) > 1 and all(_PN.fullmatch(x) for x in parts):
-        return parts[0], [f"MPN cell lists several part numbers ({core}): {parts[0]} used, alternates "
-                          f"{', '.join(parts[1:])}"]
-    return core, notes
+        core = parts[0]
+        notes.append(f"MPN cell lists several part numbers ({raw.strip()}): {parts[0]} used, alternates "
+                     f"{', '.join(parts[1:])}")
+    core, mk = _drop_maker(core, maker)
+    if mk:
+        notes.append(f"'{raw}': the maker's name dropped from the MPN cell ({maker})")
+    core, more = _mpn_marks(core)                   # 'X (KEMET).' / '"X" (DNP)': the marks left once the rest is gone
+    if gone + more:
+        notes.append(f"'{raw}': {', '.join(dict.fromkeys(gone + more))} dropped from the MPN")
+    return core, notes, dnp
 
 
 def _header_score(raw, columns=None):
@@ -1181,7 +1239,7 @@ def triage(lines, index, provs, http, shared=None):
                          "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
                          "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
                          "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
-                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_height": "", "src_several": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
+                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_height": "", "src_package_device": "", "src_several": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"))
@@ -1214,7 +1272,7 @@ def triage(lines, index, provs, http, shared=None):
             pkg, cls.group(0) if cls else "", hint=f"{ln.get('footprint', '')} {ln.get('description', '')}")
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         sheet_from = ""                                # the source whose link is `sheet`
-        src_pkg = src_pkg_from = src_height = ""       # the package text (and body height) a source gives for this exact MPN
+        src_pkg = src_pkg_from = src_height = src_device = ""       # the package text (and body height) a source gives for this exact MPN
         limited = {}                                   # source -> its quota / plan-limit answer
         makers_seen = []                               # every maker any source lists for this exact MPN (src_makers)
         maker, maker_from = "", ""             # who makes this exact MPN, from a part search (BOM maker empty)
@@ -1303,6 +1361,7 @@ def triage(lines, index, provs, http, shared=None):
                         and _same(r.mpn, ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
                     src_pkg, src_pkg_from = case[:80], prov.name                     # near match's (LM358DR != LM358P)
                     src_height = str((r.extra or {}).get("height") or "")[:60] if isinstance(r.extra, dict) else ""
+                    src_device = str((r.extra or {}).get("device_package") or "")[:80] if isinstance(r.extra, dict) else ""
                 if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
                     limited.setdefault(prov.name, r.error)  # with no key, not an unreachable one
                     continue
@@ -1380,6 +1439,10 @@ def triage(lines, index, provs, http, shared=None):
             notes.append("not configured: " + ",".join(unconfigured))
         for name, err in limited.items():
             notes.append(f"{name}: not used, the account's limit is reached ({err[:120]})")
+        spelt = str(src.mpn or "") if src and src.found else ""
+        if own and spelt and own != spelt and own.upper() == spelt.upper() and not re.search(r"[A-Z]", own):
+            ln["mpn"] = spelt                    # 'grm21br61c106ke15l': the part search's spelling of this very number;
+            notes.append(f"MPN '{own}' written as {src.provider} spells it ({spelt})")   # a BOM with capitals keeps its own
         if sym and not fp_key:
             notes.append(f"local symbol OK but footprint '{sym.props.get('Footprint', '')}' not in indexed libs")
         if gen_fp and not sym:
@@ -1399,6 +1462,7 @@ def triage(lines, index, provs, http, shared=None):
             "src_makers": "; ".join(makers_seen),
             "src_datasheet": sheet, "src_datasheet_from": sheet_from if sheet else "",
             "src_package": src_pkg, "src_package_from": src_pkg_from, "src_height": src_height,
+            "src_package_device": src_device,
             "src_several": "yes" if several and not bom_maker else "",   # makers the BOM does not pick between
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })

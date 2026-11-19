@@ -78,6 +78,8 @@ def specs_from_pairs(pairs):
                     out["package_text"] = text
                 else:
                     out.setdefault("package_text", text)
+                if re.search(r"supplier\s*device\s*package", n):     # ... but only the device package gives the body
+                    out["device_package"] = text                       # size: '32-TQFP' / '32-TQFP (7x7)' 
             v = parse(val)
             if v is not None:
                 if key.startswith("value:"):

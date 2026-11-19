@@ -516,6 +516,8 @@ def from_part_info(info, res):
         res.extra["makers"] = [clean_maker(m) for m in info.makers]
     specs = getattr(info, "specs", {}) or {}
     res.package = clean_text(specs.get("package_text") or specs.get("package") or specs.get("case/package") or "", 80)
+    if specs.get("device_package"):        # DigiKey's 'Supplier Device Package' ('32-TQFP (7x7)', 'SC-59')
+        res.extra["device_package"] = clean_text(specs["device_package"], 80)
     if specs.get("height_text"):           # the body's height as the source writes it ('0.083" (2.11mm)')
         res.extra["height"] = clean_text(specs["height_text"], 60)
     for o in info.offers:

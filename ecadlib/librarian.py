@@ -394,7 +394,7 @@ class KiCadLibrary:
                     continue                           # '101xx', '03xxS': too little fixed text to name a part
                 rx = "".join(f"[A-Z0-9]{{{len(c)}}}" if re.fullmatch(r"x{2,}", c) else re.escape(c.upper()) for c in bits)
                 full = re.fullmatch(rx, flat) or (not wild and rx[:1] == "0" and re.fullmatch(rx.lstrip("0"), flat))
-                by_stem = stem_ok and stem and stem in {t.upper()} | set(t.upper().split("-")[1:2]) \
+                by_stem = stem_ok and stem and stem in {t.upper(), coil_series(t)} | set(t.upper().split("-")[1:2]) \
                     and not re.search(r"(?i)CommonMode|Choke|Coupled|Array", name)   # a 2-pad inductor's series
                 ordered = not wild and "-" in t and re.search(r"[A-Za-z]", t) and len(fixed) >= 6 \
                     and m.startswith(t.upper() + "-")             # JST S2B-PH-K + '-S(LF)(SN)': its ordering code
@@ -1234,8 +1234,8 @@ class Run:
             return False
         land = land.split(":")[-1]
         named, only = SP.names_only(row.get("src_package"), land, group=True)
-        if not (named and only):
-            return False
+        if not (named and only) or case_or_device_land(row.get("src_package"), row.get("src_package_device")) != land:
+            return False                                  # (a device package 'SC-59' under the group: not SOT-23)
         for said in (ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"), ln.get("description"),
                      item.get("description")):
             named, only = SP.names_only(said, land)
@@ -1263,14 +1263,16 @@ class Run:
             return False
         land, case = str(st.get("hint_fp") or "").split(":")[-1], search_case(row)
         k = kind or ("D" if sym_ref.startswith(("Diode:", "LED:")) else None)   # a diode's package names (SOD-123)
+        device = "" if not case else str(row.get("src_package_device") or "")
         if not land and case:                     # a symbol with no land of its own (LM358): the land the case names,
             from .resolve import _filter_hit       # when KiCad draws this symbol for it (its footprint filters)
-            named = case_land(case, k)
+            named = case_or_device_land(case, device, k)
             if named and _filter_hit(K._props(chain or []).get("ki_fp_filters", ""), named):
                 land = named
         if not land or not case:
             return False
-        named = [case_land(t, k) for t in (case, ln.get("footprint")) if str(t or "").strip()]
+        named = [case_or_device_land(case, device, k)] + \
+                [case_land(t, k) for t in (ln.get("footprint"),) if str(t or "").strip()]
         if not named or any(n != land for n in named):
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r} does not name its land "
                                f"{land} alone (still held for a look)")
@@ -1817,6 +1819,13 @@ def diode_land_numbering(sym_lib, pins, land):
             names.get("2") in ("A", "ANODE") and bool(re.match(r"D_", str(land or "").split(":")[-1])))
 
 
+def coil_series(token):
+    """KiCad's Coilcraft inductor lands carry an upper-case value wildcard: 'XAL4020-XXX' is the XAL4020 series, any
+    value (KiCad's lower-case 'xx' wildcards are read by footprint_by_series itself) -> 'XAL4020', else ''."""
+    m = re.fullmatch(r"([A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*\d[A-Za-z0-9]*)-X{3}", str(token or ""))
+    return m.group(1).upper() if m else ""
+
+
 def land_named_after(land_ref, mpn, kind, case=""):
     """Is a KiCad footprint picked by name the land of this very part, so no person needs to compare it?
       whole MPN  the footprint's part-number token (the first one, as footprint_by_series reads it) is the whole MPN
@@ -1846,7 +1855,7 @@ def land_named_after(land_ref, mpn, kind, case=""):
         value = r"\d+(?:\.\d+)?MHZ(?:-[A-Z0-9]{1,4}){0,3}"
     else:
         return False
-    for series in {re.sub(r"(?i)-\d+Pin$", "", tok), tok.split("-")[-1]}:
+    for series in {re.sub(r"(?i)-\d+Pin$", "", tok), tok.split("-")[-1]} | ({coil_series(tok)} if kind == "L" else set()):
         series = series.upper()
         if len(re.sub(r"[^A-Z0-9]", "", series)) >= 4 and re.search(r"[A-Z]", series) and re.search(r"\d", series) \
                 and re.fullmatch(re.escape(series) + "-" + value, m):
@@ -1863,6 +1872,23 @@ def search_case(row):
     return SP.case_text(row.get("src_package"), row.get("src_description")) or ""
 
 
+def case_or_device_land(case, device, kind=None):
+    """The land a part search's case names, settled by its device package where the case alone names none: DigiKey's
+    'Package / Case' '32-TQFP' fits several bodies, its 'Supplier Device Package' '32-TQFP (7x7)' one. The device
+    package is used only when the case names no land, or when the case is a group that lists the device package's land
+    by name ('SOT-23-6 Thin, TSOT-23-6' + 'TSOT-23-6'); a device package naming another land than the case: None."""
+    from . import stdparts as SP
+    n = case_land(case, kind)
+    d = case_land(device, kind) if str(device or "").strip() else None
+    if n == "SOT-23" and not d and SP.names_only(device, "SOT-23") == (True, False):
+        return None                                   # the group 'TO-236-3, SC-59, SOT-23-3' and a device package
+    if not d or d == n:                               # 'SC-59': this part is the SC-59 body, not SOT-23's
+        return n
+    if n is None:
+        return d
+    return d if SP._norm(d) in {SP._norm(w) for w in re.split(r"\s*,\s*", str(case))} else None
+
+
 def case_land(case, kind=None):
     """The one standard-table land a part search's case text names -> table name or None: '8-SOIC (0.154", 3.90mm
     Width)' -> SOIC-8_3.9x4.9mm_P1.27mm; DigiKey's group 'TO-236-3, SC-59, SOT-23-3' -> SOT-23 (stdparts.names_only:
@@ -1870,7 +1896,10 @@ def case_land(case, kind=None):
     from . import stdparts as SP
     if not str(case or "").strip():
         return None
-    for k in dict.fromkeys((kind, "D")):
+    dip = re.fullmatch(r'\s*(\d{1,2})-P?DIP\s*\(0?\.(300|400|600)",\s*(7\.62|10\.16|15\.24)mm\)\s*', str(case), re.I)
+    if dip and {"300": "7.62", "400": "10.16", "600": "15.24"}[dip.group(2)] == dip.group(3):
+        return f"DIP-{int(dip.group(1))}_W{dip.group(3)}mm"     # '28-DIP (0.300", 7.62mm)': KiCad's DIP-28_W7.62mm (a
+    for k in dict.fromkeys((kind, "D")):                         # DIP's land is its pin count and row spacing)
         try:
             n = SP.footprint_for([case], kind=k)[0]
         except Exception:
