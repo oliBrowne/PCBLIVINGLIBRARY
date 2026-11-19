@@ -885,20 +885,31 @@ class Run:
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         sensor_hold(st, item, ln, row, kind)
+        had = (st["symbol"], st["footprint"])
         try:
             self.local(st, row, kind, fp_name, sym_name)
         except Exception as e:
             st["tried"].append(f"local library: failed ({type(e).__name__}: {e})")
+            built = [k for k, was in zip(("symbol", "footprint"), had) if st[k] and st[k] is not was]
+            if built:                         # as below: what an error cut short is never released unseen
+                st["verify"].append(f"{' and '.join(built)} from the local library: an error stopped its checks "
+                                    f"({type(e).__name__}): compare with the datasheet")
         for s in self.sources:
             if st["symbol"] and st["footprint"]:
                 break
             if dnp and s == "datasheet":
                 continue
+            had = (st["symbol"], st["footprint"])
             try:
                 getattr(self, f"src_{s}")(st, item, ln, row, kind, mpn, fp_name, sym_name)
             except Exception as e:            # one bad source or part must not stop the run
                 msg = cost_hint(str(e)) if s == "datasheet" else str(e)
                 st["tried"].append(f"{s}: failed ({type(e).__name__}: {msg}{_where(e)})")
+                built = [k for k, was in zip(("symbol", "footprint"), had) if st[k] and st[k] is not was]
+                if built:                     # it built something, then an error cut its checks short (a name
+                    st["verify"].append(       # match's variant check, a pinout's pin table): never released unseen
+                        f"{' and '.join(built)} from {s}: an error stopped its checks ({type(e).__name__}): "
+                        f"compare with the datasheet")
         bom_fp = str(ln.get("footprint") or "").strip()
         if st.get("hint_fp") and bom_fp and AX.lands_differ(st["hint_fp"], bom_fp):    # R-BF-5: the BOM's land is
             st["verify"].append(f"footprint: the BOM names {bom_fp} but the symbol's Footprint property is "   # built;
@@ -1118,6 +1129,8 @@ class Run:
                     other = self.other_makers_land(st, ln, row, kind, mpn, cand)
                     if other:
                         st["verify"].append(other)
+                    if str((st.get("symbol") or {}).get("source") or "").startswith("kicad:"):
+                        st["kicad_pair"] = cand        # KiCad's own symbol-and-land pair (release check: its N.C. pads)
                 return
         st["tried"].append(f"kicad: no footprint for '{bom_fp or fp_name}'")
 
@@ -1369,11 +1382,13 @@ class Run:
         land, case = str(st.get("hint_fp") or "").split(":")[-1], search_case(row)
         k = kind or ("D" if sym_ref.startswith(("Diode:", "LED:")) else None)   # a diode's package names (SOD-123)
         device = "" if not case else str(row.get("src_package_device") or "")
+        unfiltered = False
         if not land and case:                     # a symbol with no land of its own (LM358): the land the case names,
-            from .resolve import _filter_hit       # when KiCad draws this symbol for it (its footprint filters)
-            named = case_or_device_land(case, device, k)
-            if named and _filter_hit(K._props(chain or []).get("ki_fp_filters", ""), named):
+            from .resolve import _filter_hit       # when KiCad draws this symbol for it (its footprint filters); one
+            named = case_or_device_land(case, device, k)    # its filters leave out (74HC14: DIP only; SOIC-14 has the
+            if named:                                       # same pins) only when the datasheet's own pin table agrees
                 land = named
+                unfiltered = not _filter_hit(K._props(chain or []).get("ki_fp_filters", ""), named)
         if not land or not case:
             return False
         named = [case_or_device_land(case, device, k)] + \
@@ -1398,22 +1413,24 @@ class Run:
             return False
         sym_lib, said = sym_ref.split(":")[0], f"{row.get('src_package_from') or 'the part search'}'s case {case!r}"
         rest = rest_after_name(mpn, sym_ref.split(":")[-1])
-        if diode_land_numbering(sym_lib, pins, land):
+        if diode_land_numbering(sym_lib, pins, land) and not unfiltered:
             st["tried"].append(f"kicad: {sym_ref} for {mpn} confirmed: {said} is its land {land}, and a two-pin diode "
                                f"has its cathode on pad 1 of every diode land (whatever '{rest}' orders)")
             return True
-        if discrete_ordering_code(rest, sym_lib):
+        if discrete_ordering_code(rest, sym_lib) and not unfiltered:
             st["tried"].append(f"kicad: {sym_ref} for {mpn} confirmed: {said} is its land {land}, and '{rest}' is only "
                                f"a reel / lead-free / gain-group ordering code (the same die and pins)")
             return True
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
-        v = PT.check_pdf(data, pins, part=mpn)
+        v = few_named(PT.check_pdf(data, pins, part=mpn, package=(land, case, device)), pins)
         if v["status"] != "agreed":
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the datasheet's pin table did not confirm it ({v.get('why')})")
             return False
         st["tried"].append(f"kicad: {sym_ref} for {mpn} confirmed: {row.get('src_package_from') or 'the part search'}'s "
-                           f"case {case!r} is its land {land}, and its {v['pins']} pins agree with the "
-                           f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
+                           f"case {case!r} is its land {land}" + (" (a package its footprint filters leave out)"
+                                                                  if unfiltered else "") +
+                           f", and its {v['pins']} pins agree with the {v.get('where', 'pin table')} on page {v['page']} "
+                           f"of {link}")
         return True
 
     def same_copper(self, a, b):
@@ -1497,8 +1514,14 @@ class Run:
         except Exception:
             return False
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
-        v = PT.check_pdf(data, pins)
+        case = search_case(row)
+        v = few_named(PT.check_pdf(data, pins, part=mpn, package=(str((st.get("footprint") or {}).get("source") or ""),
+                                                                  case, str(row.get("src_package_device") or "")
+                                                                  if case else "")), pins)
         if v["status"] != "agreed":
+            if data:                             # (no PDF: nothing was compared, nothing to say)
+                st["tried"].append(f"standard: pinout {name} for {mpn}: its PDF pin table did not confirm it "
+                                   f"({v.get('why')})")
             return False
         st["tried"].append(f"standard: pinout {name} for {mpn} confirmed: its {v['pins']} pins agree with the "
                            f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
@@ -2108,20 +2131,32 @@ def land_named_after(land_ref, mpn, kind, case=""):
     """Is a KiCad footprint picked by name the land of this very part, so no person needs to compare it?
       whole MPN  the footprint's part-number token (the first one, as footprint_by_series reads it) is the whole MPN
                  as the maker writes it, leading zeros and a bracketed plating / packing code aside (JST
-                 B2B-XH-A(LF)(SN), Molex 0532610471 = 53261-0471): KiCad drew it from that part's own drawing;
+                 B2B-XH-A(LF)(SN), Molex 0532610471 = 53261-0471), also after the maker's name
+                 (USB_Micro-B_Molex-105017-0001 for 1050170001): KiCad drew it from that part's own drawing;
       series     an inductor line (kind L) on an Inductor_* land, or a crystal on a Crystal land, whose MPN is the
                  series the land is named after + '-' + only a value code (SRR1260-100M, LPS4018-103MRB,
                  ABM3-16.000MHZ-B2-T): one body for the whole series. A crystal's pad count must also be the one the
                  part search's case gives ('2-SMD' for ABM3-2Pin).
-    No wildcard name (USB4105-xx-A), no series with an ordering code after it (B2B-PH-K + -S), no name found inside a
-    longer one (282834-2 in 1-282834-2): those stay with a person."""
+      wildcard   a connector land KiCad names with an 'xx' wildcard (USB4105-xx-A): the MPN is that name with letters
+                 in the wildcard's places (USB4105-GF-A, a plating code), nothing else.
+    No series with an ordering code after it (B2B-PH-K + -S), no name found inside a longer one (282834-2 in
+    1-282834-2), no wildcard filled with digits: those stay with a person."""
     lib, _, name = str(land_ref or "").rpartition(":")
     m = re.sub(r"[\s(].*$", "", str(mpn or "").upper().strip())
     flat = re.sub(r"[^A-Z0-9]", "", m).lstrip("0")
     tok = next((t for t in name.split("_") if _pn_token(t)), "")
-    if not tok or len(flat) < 5 or re.search(r"x{2,}", tok) or lib.startswith("Package_"):
+    if not tok or len(flat) < 5 or lib.startswith("Package_"):
         return False                                   # a generic package (SOIC-8) is named after no maker's part
+    if re.search(r"x{2,}", tok):                       # KiCad's own wildcard: 'USB4105-xx-A' is one land for every
+        if kind is not None:                           # plating / colour code in those places; filled with letters
+            return False                               # only (digits there may count pins or a value)
+        rx = "".join(f"[A-Z]{{{len(p)}}}" if re.fullmatch(r"x{2,}", p) else re.escape(p.upper())
+                     for p in re.split(r"(x{2,})", tok))
+        return bool(re.fullmatch(rx, m))
     if re.sub(r"[^A-Za-z0-9]", "", tok).upper().lstrip("0") == flat:
+        return True
+    maker = re.match(r"([A-Za-z]{2,12})-(?=\d)", tok)          # 'Molex-105017-0001': the maker's name, then its number
+    if maker and re.sub(r"[^A-Za-z0-9]", "", tok[maker.end():]).upper().lstrip("0") == flat:
         return True
     if kind == "L" and lib.startswith("Inductor"):
         value = r"(?:\d{3}|\d+R\d+|R\d+)[A-Z]{0,3}"
@@ -2139,6 +2174,15 @@ def land_named_after(land_ref, mpn, kind, case=""):
                 and re.fullmatch(re.escape(series) + "-" + value, m):
             return True
     return False
+
+
+def few_named(v, pins):
+    """A pin-table verdict that agreed on fewer than half the symbol's pins (KiCad's 74HC14 names only VCC and GND:
+    its twelve gate pins are drawn unnamed) checked too little to release on: unchecked instead."""
+    if v.get("status") == "agreed" and 2 * int(v.get("pins") or 0) < len(pins or ()):
+        return {"status": "unchecked", "why": f"the pin table agrees on the {v['pins']} named pins only, of "
+                                              f"{len(pins)} (the rest are drawn without names)"}
+    return v
 
 
 def search_case(row):
@@ -2637,6 +2681,8 @@ def apply_state(item, st, ln):
                          "review": list(dict.fromkeys(st.get("review", []) + item.get("bom_notes", []) +
                                                       ([alt_note] if alt_note else []))),
                          "notes": [n for k in ("symbol", "footprint") for n in (st.get(k) or {}).get("notes", [])]}
+    if st.get("kicad_pair"):
+        item["librarian"]["kicad_pair"] = st["kicad_pair"]
 
 
 def review_rows(items):
