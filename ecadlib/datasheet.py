@@ -3450,6 +3450,11 @@ def clean_url(u):
     u = str(u or "").strip()
     if u.startswith("//"):
         u = "https:" + u
+    # a '#' in the file name is part of it (Mouser's Murata copies: LQH3NPN100MJ0#.pdf), not a fragment: as a fragment
+    # the request goes to ".../LQH3NPN100MJ0" and fails; "ds.pdf#page=3" stays a fragment
+    m = re.match(r"([^?#]*/[^/?#.]*)#([^/?]*\.pdf)$", u, re.I)   # the name before it has no extension of its own
+    if m:
+        u = f"{m.group(1)}%23{m.group(2).replace('#', '%23')}"
     p = urlparse(u)
     if p.netloc.lower().endswith("ti.com") and "suppproductinfo" in p.path.lower():
         go = {k.lower(): v for k, v in parse_qs(p.query).items()}.get("gotourl")
@@ -3496,6 +3501,36 @@ def maker_urls(mpn, maker="", links=()):
     return out
 
 
+# Distributors that host datasheet copies on their own servers (an official part search gives these links: Mouser's
+# mouser.com/datasheet/..., DigiKey's mm.digikey.com/..., LCSC's own copy): a site, not a part, so no part is listed.
+# (each with its country sites: mouser.de, digikey.co.uk)
+DISTRIBUTORS = ("mouser", "digikey", "lcsc", "octopart", "farnell", "newark", "element14", "arrow", "rs-online", "tme",
+                "jlcpcb")
+_DIST_HOST = re.compile(r"(?:^|\.)((?:%s)\.(?:com|cn|eu|ca|de|fr|it|es|jp|in|co\.uk|com\.au|co\.jp|com\.cn))$"
+                        % "|".join(re.escape(d) for d in DISTRIBUTORS))
+
+
+def distributor_host(url):
+    """The distributor whose server holds this link's file ('mouser.com'), or None for a maker's or anyone else's."""
+    from urllib.parse import urlparse
+    try:
+        m = _DIST_HOST.search((urlparse(str(url or "")).hostname or "").lower())
+    except ValueError:
+        return None
+    return m.group(1) if m else None
+
+
+def _copy_label(url, where):
+    """where, with "a distributor's copy, <site>" added for a distributor's own copy: "mouser datasheet link" says
+    which search gave the link, not whose server holds the file. Not for LCSC's own labels (always LCSC's copy)."""
+    d = distributor_host(url)
+    w = str(where or "")
+    if not d or "distributor's copy" in w or (d.startswith("lcsc.") and "lcsc" in w.lower()):
+        return where
+    note = f"a distributor's copy, {d}"
+    return f"{where[:-1]}; {note})" if str(where).endswith(")") else f"{where} ({note})"
+
+
 def datasheet_urls(item=None, ln=None, row=None, found=None):
     """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the link an official
     part API gave in triage (Nexar / DigiKey / Mouser), the plan's
@@ -3519,7 +3554,7 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
         u = clean_url(u)
         if re.match(r"https?://", u) and u not in seen:
             seen.add(u)
-            out.append((u, w))
+            out.append((u, _copy_label(u, w)))
     return out
 
 
@@ -5188,6 +5223,9 @@ class Reader:
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
             facts = tables = None
         else:
+            dist = distributor_host(prov.get("final_url") or prov["url"])   # (a redirect to the maker: the maker's)
+            if dist:                                  # which copy was read: a distributor's, not the maker's own
+                prov = dict(prov, distributor=dist)
             url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
             lv, why, more = [None], {}, []
             texts = self._page_texts(data, src_hash) if n else None
