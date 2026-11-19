@@ -750,6 +750,28 @@ def second_read(reader, job, first, first_pins, model):
     return rec
 
 
+def land_printed(job, res):
+    """The read's two-pad land against the numbers its own PDF prints in the land drawing (ecadlib.land_text): a free
+    second source that reads no model's answer, for the maker lands no standard table has (inductors, crystals,
+    aluminium cans, fuses). -> a check record, or None when the read gives no two-pad land or there is no PDF. Its
+    "agreed" counts as an independent source (the PDF's text, placed where the drawing prints it, is not the read);
+    a number it does not find is "unchecked", never "disagreed" (the drawing may be an image)."""
+    from . import land_text as LT
+    spec = res.get("spec") or {}
+    if job.get("data") is None or not LT.two_pads(spec):
+        return None
+    v = LT.check_pdf(job["data"], spec, job.get("part"))
+    rec = {"source": "pdf land text", "against": "the land drawing's printed numbers"
+           + (f" (PDF page {v['page']})" if v.get("page") else ""), "status": v["status"],
+           "compared": ["land"], "agreed": [], "disagreed": [], "not_compared": []}
+    if v["status"] == "agreed":
+        rec["agreed"] = [f"{k} {t}" for k, t in v["printed"].items()]
+    else:
+        rec["why"] = v.get("why")
+        rec["not_compared"] = ["land"]
+    return rec
+
+
 # ---------------------------------------------------------------- the whole check
 def mode_of(cfg):
     m = str((cfg or {}).get("cross_check") or "auto").strip().lower()
@@ -805,8 +827,11 @@ def run(reader, job, res, model):
     if held:                                          # the librarian holds it whatever a second read says: not paid for
         return {"mode": mode, "status": "skipped", "why": f"the read is held ({held[:200]}); nothing can stand in for "
                 "it, so no second read was made", "checks": []}
+    land = land_printed(job, res)                     # a maker's two-pad land against its drawing's printed numbers
+    if land:
+        checks.append(land)
     # a table has the package's common numbering, not the maker's: a read that placed its pins is always read again
-    if mode == "always" or not strong or first.get("sides"):
+    if mode == "always" or not strong and not (land and land["status"] == "agreed") or first.get("sides"):
         checks.append(second_read(reader, job, first, first_pins, model))
     # a table check too weak to stand alone (one field, e.g. only the pin count of a pad-table entry) can hold a part
     # but cannot accept it: when the second read could not be made, the part stays unchecked
@@ -816,12 +841,13 @@ def run(reader, job, res, model):
     web = [o.get("from") for o in (job.get("prov") or {}).get("outline") or () if o.get("code") == "web search"]
     if web:
         for c in checks:
-            if c.get("source") == "second read":
+            if c.get("source") in ("second read", "pdf land text"):
                 c["same_pages"] = f"web search ({web[-1]})"
     st = [c["status"] for c in checks]
     ok = [c["status"] for c in checks if (c.get("source") != "standard table" or c in strong and not _self(c))
           and not c.get("same_pages")]
     if first.get("sides"):                  # only a second read that compared the pins on each side checks them
+        # (the land text says nothing about which pad is which: a diode's or a tantalum's polarity is not checked)
         ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", []) and not c.get("same_pages")]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
         else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) or \
