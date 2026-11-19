@@ -52,11 +52,20 @@ def test_pins_agree_with_a_one_package_table_of_the_text_layer():
 
 def test_a_table_whose_other_column_numbers_the_pins_otherwise_does_not_agree():
     """SOIC and SOT-23 columns (or MCP6L01 / MCP6L01R): one column fits, but the text does not say which column is
-    this part's, so it stays with a person."""
+    this part's, so it stays with a person. Only a column that prints a pin number above the symbol's highest is
+    plainly another package (the 8-pin SOIC column for the 5-pin SOT-23 symbol): that one is no doubt."""
     sot = [("1", "OUT"), ("2", "GND"), ("5", "IN"), ("3", "~{OC}"), ("4", "EN")]
-    r = PT.check({4: TABLE}, sot)
+    soic = [("6", "OUT"), ("7", "OUT"), ("8", "OUT"), ("1", "GND"), ("2", "IN"), ("3", "IN"), ("5", "~{OC}"), ("4", "EN")]
+    r = PT.check({4: TABLE}, soic)                                       # the SOT-23 column could be an 8-pin part's
     assert r["status"] == "unchecked" and "another column" in r["why"], r
-    same = TABLE.replace("GND 1 2", "GND 2 2").replace("OUT 6, 7, 8 1", "OUT 1 1").replace("IN 2, 3 5", "IN 5 5")         .replace("OC 5 3", "OC 3 3")
+    r = PT.check({4: TABLE}, sot)
+    assert r["status"] == "agreed" and r["column"] == 1, r               # pins 6, 7, 8 are not a 5-pin part's
+    five = TABLE.replace("OUT 6, 7, 8 1", "OUT 5 1").replace("IN 2, 3 5", "IN 3 5").replace("OC 5 3", "OC 2 3") \
+        .replace("GND 1 2", "GND 1 2")
+    r = PT.check({4: five}, sot)                                         # two 5-pin columns: which is this part's?
+    assert r["status"] == "unchecked" and "another column" in r["why"], r
+    same = TABLE.replace("GND 1 2", "GND 2 2").replace("OUT 6, 7, 8 1", "OUT 1 1").replace("IN 2, 3 5", "IN 5 5") \
+        .replace("OC 5 3", "OC 3 3")
     assert PT.check({4: same}, sot)["status"] == "agreed"                # every column gives the same numbers
 
 

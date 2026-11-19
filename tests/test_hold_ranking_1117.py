@@ -79,3 +79,31 @@ def test_digikeys_device_package_reaches_the_triage_row():
             return r
     row = T.triage([{"designator": "U1", "mpn": "ATMEGA328P-AU"}], KiCadIndex([]), [Src()], None)[0]
     assert row["src_package"] == "32-TQFP" and row["src_package_device"] == "32-TQFP (7x7)", row
+
+
+# ---------------------------------------------------------------- the standard source and DigiKey's SOT-23 group
+def test_the_standard_source_takes_the_land_the_case_and_device_package_name():
+    """'TO-236-3, SC-59, SOT-23-3' read word by word ends at 'SOT-23-3' (KiCad's name for the 1.6 mm body): ambiguous,
+    so BC847CLT1G, SI2302CDS, BAT54 got no footprint. The group is one land (case_or_device_land), SC-59 aside."""
+    R, G = L.resolve_standard, "TO-236-3, SC-59, SOT-23-3"
+    r = R([None, None], G, "SOT-23-3 (TO-236)", None, "BC847CLT1G", "TRANS NPN 45V 0.1A SOT23-3")
+    assert r["footprint"] == "SOT-23" and r["symbol"] == "NPN:BEC" and "TO-236-3, SC-59, SOT-23-3" in r["fp_how"], r
+    r = R([None], G, "TO-236AB", "D", "BZX84-C3V3,215", "DIODE ZENER 3.3V 250MW TO236AB")
+    assert r["footprint"] == "SOT-23" and r["symbol"] is None, r           # three pins: the diode's pinout is not known
+    r = R([None], G, "SC-59", None, "BC847CLT1G", "TRANS NPN 45V 0.1A")
+    assert r["footprint"] is None, r                                       # the SC-59 body: not SOT-23's land
+    r = R([None], "44-TQFP", "44-TQFP (10x10)", None, "PIC18F46K22-I/PT", "IC MCU 8BIT 64KB FLASH 44TQFP")
+    assert r["footprint"] == "TQFP-44_10x10mm_P0.8mm" and r["symbol"] is None, r
+    r = R([None], "24-VFQFN Exposed Pad", "24-QFN (4x4)", None, "X", "IC")
+    assert r["footprint"] is None, r
+    r = R(["Package_TO_SOT_SMD:SOT-23-5"], G, "", None, "X", "IC")         # the BOM's own land stands as before
+    assert r["footprint"] == "SOT-23-5", r
+
+
+def test_a_case_whose_size_codes_disagree_names_no_land_by_its_device_package_either():
+    """ROHM's SML-P11 LED is filed '0402 (1006 Metric)' with device package '1006 (0402)': 1.0 x 0.6 mm, not the
+    0402 chip (1005). The size check holds it; the device package must not pass it round that check."""
+    r = L.resolve_standard([None], "0402 (1006 Metric)", "1006 (0402)", "LED", "SML-P11VTT86", "LED RED CLEAR 0402 SMD")
+    assert r["footprint"] is None and "disagree" in r["fp_how"], r
+    r = L.resolve_standard([None], "0603 (1608 Metric)", "0603", "LED", "X", "LED RED CLEAR 0603 SMD")
+    assert r["footprint"] == "LED_0603_1608Metric", r

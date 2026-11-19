@@ -180,7 +180,7 @@ class KiCadLibrary:
         self._norm, self._wild, self._fpn = {}, [], []
         for name, libs in self.symbols.items():
             self._norm.setdefault(norm_mpn(name), []).extend(f"{l}:{name}" for l in libs)
-            if re.search(r"(?<![0-9])x|x(?![0-9])", name) and re.search(r"[A-Z0-9]x", name) and not any(l.startswith("Connector") for l in libs):
+            if re.search(r"(?<![0-9])x|x(?![0-9])", name) and re.search(r"[A-Z0-9]-?x", name) and not any(l.startswith("Connector") for l in libs):
                 # a '.' between digits (or x wildcards) is kept by norm_mpn on the MPN side: 'LM1117-x.x' -> optional,
                 # and two x slots take a decimal point between them: 1.5KExxA is 1.5KE6.8A, SMAJxxA SMAJ5.0A (R-FX10-3)
                 flat = re.sub(r"(?<=[0-9x])\.(?=[0-9x])", "\x00", name)
@@ -318,6 +318,40 @@ class KiCadLibrary:
                 ref, how = self.find_symbol(base)
                 if ref:
                     return ref, f"{how} + packing code '{str(mpn)[len(base):]}'"
+        # No name by the rules above: the longest KiCad name, or name with x wildcards (OPA2333xxD for OPA2333AID + R),
+        # that the MPN starts with, and after it an ordering code: a packing code, one or two characters, or up to
+        # seven that start with a letter and hold at most one '-' or '/' (TL072 + CDR, INA181 + A1IDBVR, CP2104 +
+        # F03-GMR, M24C02-WMN + 6TP: a grade, package, temperature and reel). A digit right after a digit is the number going on
+        # (another part), and a longer tail names something else (ESP32-C3 + MINI-1-N4 is a module, not the chip).
+        for k in range(len(nm) - 1, 4, -1):
+            head, rest, suffix = str(mpn)[:raw[k]], len(nm) - k, str(mpn)[raw[k]:]
+            named = nm[:k] in self._norm
+            wild = [] if named else self._wild_fits(nm[:k], head)
+            if not named and not wild:
+                continue
+            if named:
+                ref, more = self._pick(self._norm[nm[:k]])
+                what = "name"
+            else:
+                best = max(lit for lit, _ in wild)
+                ref, more = self._pick([r for lit, refs in wild if lit == best for r in refs])
+                what = "name with KiCad x wildcards"
+            if packing_suffix(mpn, nm, k, head):
+                return ref, f"{what} + packing suffix '{suffix}' (tape and reel or lead-free, same part)" + more
+            if rest <= 2 or ((nm[k].isalpha() or nm[k - 1].isalpha()) and rest <= 7 and len(re.findall(r"[^A-Za-z0-9+#]+(?=[A-Za-z0-9])", suffix)) <= 1):
+                return ref, f"{what} + ordering suffix '{suffix}' (check the variant)" + more
+            break                                         # the longest name it starts with does not fit: none shorter
+        reel = re.sub(r"(?<=[0-9A-Za-z])T(?=-[A-Za-z0-9]{1,5}/[A-Za-z0-9]{2,3}$)", "", str(mpn))
+        if reel != str(mpn):                              # Microchip's T before the dash: MCP6002T-I/SN is MCP6002-I/SN
+            ref, how = self.find_symbol(reel)             # on a reel
+            if ref:
+                return ref, f"{how}, Microchip's reel mark T left off"
+        logic = re.match(r"(?i)(SN|MC|CD|HEF|NLV)(?=74[A-Z]{1,5}\d)", str(mpn))
+        if logic:                                         # SN74HC595DR, MC74HC595ADR2G, CD74HC14M96: KiCad's 74HC595
+            ref, how = self.find_symbol(str(mpn)[logic.end():])
+            if ref:
+                return ref, (how if "check" in how else how + " (check the variant)") + \
+                    f", the logic maker's prefix '{logic.group(1).upper()}' left off"
         return None, None
 
     @staticmethod
@@ -1029,10 +1063,13 @@ class Run:
                           (None if kind else lib.footprint_by_mpn(mpn), "footprint named after the MPN"),
                           (None if kind not in (None, "L") else lib.footprint_by_series(mpn, stem_ok=kind == "L"),
                            "footprint named after the MPN's series"),
+                          (lambda: self.measured_land(st, lib, ln, row, kind), "the part search's measurements"),
                           (None if kind or bom_fp else lib.footprint(SP.header_land(row.get("src_description")
                                                                                      or ln.get("description"))),
                            "footprint named by the description (a plain pin header)"),
                           (lib.footprint_by_prefix(bom_fp.split(":")[-1]), f"shortest KiCad name starting with '{bom_fp}'")):
+            if callable(cand):                     # (asked only when nothing above named a land)
+                cand = cand()
             if cand:
                 text, _ = K.load_footprint(cand, self.http)
                 self.put_fp(st, text, fp_name, f"kicad:{cand}", self.http)
@@ -1141,8 +1178,8 @@ class Run:
         k = kind or SP.part_kind(item["folder"], item["footprint"].get("kicad") or fp_name, desc, ln.get("designator"))
         if case and (k == "CP" or k == "C" and SP.POLAR_CAP.match(SP._norm(mpn))):    # a tantalum's size + height
             case = SP.tantalum_search_text(case, row.get("src_height"), mpn)            # name its EIA case
-        res = SP.resolve([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value"), case],
-                         k, mpn, desc)
+        res = resolve_standard([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value")],
+                               case, str(row.get("src_package_device") or ""), k, mpn, desc)
         got = []
         if not st["footprint"] and res["footprint"]:
             sp = SP.spec(res["footprint"])
@@ -1156,13 +1193,21 @@ class Run:
             res["symbol"] = "R_US"
         if res["symbol"] == "L" and k == "L" and self.ferrite(item, ln):
             res["symbol"], res["sym_how"] = "FerriteBead", "ferrite bead symbol"
+        read = False
+        if not st["symbol"] and not res["symbol"] and same_fp and SP.spec_pins(res["footprint"]) == 3 \
+                and SP.transistor_type(desc):
+            # a plain transistor of no known family on a three-pad land: its pin order as its own datasheet draws it
+            order = self.pin_order(st, item, ln, row, mpn, SP.transistor_type(desc))
+            if order:
+                res["symbol"], read = f"{SP.transistor_type(desc)}:{order}", True
+                res["sym_how"] = f"{mpn}: {SP.transistor_type(desc)}, pins 1-3 = {order} as its datasheet draws them"
         if not st["symbol"] and res["symbol"] and (k in ("R", "C", "CP", "L") or same_fp):
             text, name = SP.symbol_text(res["symbol"], mpn)
             shared = k in ("R", "C", "CP", "L")
             self.put_kicad_sym(st, [K._find_symbol(sexpr.parse(text), name)], sym_name, None if shared else fp_name,
                                f"standard:{name}", [] if shared or not mpn else [("MPN", mpn)])
             got.append(f"symbol {name} ({res['sym_how']})")
-            if ":" in res["symbol"] and not self.pinout_agrees(st, item, ln, row, mpn, text, name):
+            if ":" in res["symbol"] and not read and not self.pinout_agrees(st, item, ln, row, mpn, text, name):
                 # SOT-23 & co: pinouts differ by maker, so a person checks it unless the datasheet's own pin table does
                 st["verify"].append(f"symbol pinout {name} from the {mpn} family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
         elif not st["symbol"] and res["symbol"]:
@@ -1192,6 +1237,11 @@ class Run:
                     st["no_bom_part"] = f"{SP.SYMBOLS[key][2].lower()} ({land}): copper and holes only, nothing to buy"
             else:
                 res["sym_how"] = res["sym_how"] if res["symbol"] else how
+                drawn = self.land_symbol(st, fp_src, pads, ln.get("designator"), desc)
+                if drawn:
+                    ref, chain, why = drawn
+                    self.put_kicad_sym(st, chain, sym_name, fp_name, f"kicad:{ref}", kicad_params(mpn, False))
+                    got.append(f"symbol {ref} ({why})")
         why = [] if st["footprint"] else [f"footprint: {res['fp_how']}"]
         why += [] if st["symbol"] else [f"symbol: {res['sym_how']}"]
         st["tried"].append("standard: " + "; ".join(got + why))
@@ -1273,10 +1323,19 @@ class Run:
             return False
         named = [case_or_device_land(case, device, k)] + \
                 [case_land(t, k) for t in (ln.get("footprint"),) if str(t or "").strip()]
-        if not named or any(n != land for n in named):
+        fits = named[0] != land and not any(n != land for n in named[1:]) and (
+            case_fits_land(case, device, land, self.kicad().footprints) or jedec_case_fits(case, device, land)
+            or self.same_copper(named[0], land))
+        if not fits and any(n != land for n in named):
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r} does not name its land "
                                f"{land} alone (still held for a look)")
             return False
+        if fits:
+            st["tried"].append(f"kicad: {sym_ref} for {mpn}: the part search's case {case!r}" +
+                               (f" and device package {device!r}" if device else "") + f" is the package of its land "
+                               f"{land} (" + ("the JEDEC outline of that package" if jedec_case_fits(case, device, land)
+                                              else "the same family, pin count and body") +
+                               (f"; the land it names, {named[0]}, is the same copper)" if named[0] else ")"))
         try:
             sym = K.convert_symbol(chain, sym_ref.split(":")[-1], None, (), None, [])
             pins = [(pr[1].get("num"), pr[1].get("name")) for pr in sym["prims"] if pr[0] == "pin"]
@@ -1293,7 +1352,7 @@ class Run:
                                f"a reel / lead-free / gain-group ordering code (the same die and pins)")
             return True
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
-        v = PT.check_pdf(data, pins)
+        v = PT.check_pdf(data, pins, part=mpn)
         if v["status"] != "agreed":
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the datasheet's pin table did not confirm it ({v.get('why')})")
             return False
@@ -1301,6 +1360,50 @@ class Run:
                            f"case {case!r} is its land {land}, and its {v['pins']} pins agree with the "
                            f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
         return True
+
+    def same_copper(self, a, b):
+        """Two KiCad land names (table names) are the same land: the same pads within lands_agree's tolerances (KiCad's
+        SOT-23-6 and TSOT-23-6, MSOP-10 and TSSOP-10 3x3 mm). Either unknown or unreadable: False."""
+        if not a or not b:
+            return False
+        try:
+            lib = self.kicad()
+            ra, rb = lib.footprint(a), lib.footprint(b)
+            return bool(ra and rb) and lands_agree(K.load_footprint(ra, self.http)[0], K.load_footprint(rb, self.http)[0])[0]
+        except Exception:
+            return False
+
+    def measured_land(self, st, lib, ln, row, kind):
+        """KiCad's generic land for the measurements the part search gives (ecadlib.search_land: an SMD can's diameter,
+        base and height; a crystal's pads and body; a plain header's row, positions and pitch) -> 'Lib:Name' or None.
+        Only when the BOM names no footprint and no symbol's Footprint property does. Where the measurements fit more
+        than one KiCad land (a can's height is in the name), every one of them must be the same copper (lands_agree):
+        then what the measurements leave open cannot change the land, and no person needs to compare it."""
+        from . import search_land as SL
+        if str(ln.get("footprint") or "").strip() or st.get("hint_fp") or not row.get("src_dims"):
+            return None
+        got, why = SL.land(row.get("src_dims"), kind, row.get("src_description"), lib.footprints,
+                           several=bool(row.get("src_several")))
+        if not got:
+            if why:
+                st["tried"].append(f"kicad: {why}")
+            return None
+        ref = lib.footprint(got["pick"])
+        try:
+            mine = K.load_footprint(ref, self.http)[0]
+            for other in got["same"]:
+                same, how = lands_agree(mine, K.load_footprint(lib.footprint(other), self.http)[0])
+                if not same:
+                    st["tried"].append(f"kicad: {got['why']}: KiCad's lands {got['pick']} and {other} both fit and "
+                                       f"are not the same land ({how}); not chosen between")
+                    return None
+        except Exception as e:
+            st["tried"].append(f"kicad: {got['why']}: KiCad's land could not be read ({type(e).__name__})")
+            return None
+        st["tried"].append(f"kicad: {row.get('src_dims_from') or 'the part search'} measures {got['why']}: KiCad's "
+                           f"generic land for exactly that is {got['pick']}" +
+                           (f" (the {len(got['same'])} other KiCad lands that fit are the same copper)" if got["same"] else ""))
+        return ref
 
     def kicad_land_confirmed(self, st, res):
         """A KiCad footprint chosen by name (named after the MPN or its series) waits for a person to compare it with
@@ -1346,21 +1449,94 @@ class Run:
                            f"{v.get('where', 'pin table')} on page {v['page']} of {link}")
         return True
 
+    def land_symbol(self, st, fp_src, pads, designator, desc):
+        """KiCad's own generic symbol for one of KiCad's own lands -> ('Lib:Name', chain, why) or None. Two cases, both
+        with nothing left to choose: a USB / HDMI connector, whose land's pads carry the standard's contact names (A1 ..
+        B12, S1): the one symbol named like the land whose footprint filter names it and whose pins are exactly those
+        pads; and a one-contact (SPST) switch on a land with pads 1 and 2: KiCad's SW_Push, either way round."""
+        parts = str(fp_src or "").split(":")
+        if len(parts) != 3 or parts[0] != "kicad" or not pads:
+            return None
+        refs = {m for m in re.findall(r"([A-Za-z]+)\d", str(designator or "").upper())}
+        hits = []
+        if parts[1] in STANDARD_CONTACTS and refs and refs <= {"J", "P", "X", "CN", "CON", "USB"}:
+            names = [n for n, libs in self.kicad().symbols.items() if "Connector" in libs]
+            cands, why = [f"Connector:{n}" for n in land_symbol_names(parts[2], names)[:12]], \
+                "KiCad's symbol for this land: its footprint filter names it and its pins are exactly the land's pads"
+        elif parts[1].startswith("Button_Switch") and set(pads) == {"1", "2"} and refs and refs <= {"SW", "S", "BTN", "K"} \
+                and one_contact(desc, parts[2]):
+            cands, why = ["Switch:SW_Push"], "one contact between pads 1 and 2, either way round"
+        else:
+            return None
+        for ref in cands:
+            try:
+                chain, _ = K.load_symbol(ref, self.http)
+                sym = K.convert_symbol(chain, ref.split(":")[-1], None, (), None, [])
+            except Exception:
+                continue
+            pins = {pr[1]["num"] for pr in sym["prims"] if pr[0] == "pin"}
+            if ref == "Switch:SW_Push" and pins == {"1", "2"} or ref != "Switch:SW_Push" and land_symbol_fits(
+                    K._props(chain).get("ki_fp_filters", ""), pins, pads, f"{parts[1]}:{parts[2]}"):
+                hits.append((ref, chain, why))
+        return hits[0] if len(hits) == 1 else None
+
+    def pin_order(self, st, item, ln, row, mpn, what):
+        """The order of a plain transistor's terminals on pins 1, 2, 3 ('GSD', 'BEC') as this MPN's own datasheet
+        prints it (ecadlib.pin_text: its pin table or pin drawing), when it prints exactly one -> order or None. Not
+        asked when several makers sell the number (the datasheet may be another maker's part)."""
+        from . import pin_text as PT
+        if row.get("src_several") or norm_mpn(row.get("src_mpn") or "") != norm_mpn(mpn or ""):
+            return None
+        data, link = self.datasheet_pdf(item, ln, row, st, mpn)
+        if not data:
+            return None
+        try:
+            orders = PT.pin_orders_pdf(data, "GSD" if what.endswith("MOS") else "BEC")
+        except Exception:
+            return None
+        if len(orders) != 1:
+            st["tried"].append(f"standard: {mpn} ({what}): its datasheet's text does not settle the pin order "
+                               f"({' and '.join(orders) + ' both agree' if orders else 'no pin table or drawing read'})")
+            return None
+        st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link}, and in no "
+                           "other order")
+        return orders[0]
+
+    PDF_LINKS = 6                                     # links a free check tries before it gives up
+
     def datasheet_pdf(self, item, ln, row, st, mpn):
-        """This MPN's datasheet PDF for a free check (no model): the first link that gives a PDF -> (bytes, url) or
-        (None, None). Cached by the HTTP cache; never the hand-off to a person."""
+        """This MPN's datasheet PDF for a free check (no model): the first of its links that gives a PDF (the part
+        search's, the KiCad symbol's, the maker's URL pattern: datasheet.datasheet_urls, as the datasheet reader tries
+        them), else the Internet Archive's copy of one that gave none ([datasheet] archive, as the reader asks for it)
+        -> (bytes, url) or (None, None). Cached by the HTTP cache; never the hand-off to a person."""
         urls = D.datasheet_urls(item, ln, row, st["found"])   # (--offline: the PDF store reads its cache only)
         if not urls:
             return None, None
         if getattr(self, "_pdfs", None) is None:
             self._pdfs = D.PdfStore(Path(self._kicad_args[0] or self.out / "cache").parent, self.http, download="auto")
-        for url, where in urls[:2]:
+        linked = []
+        for url, where in urls[:self.PDF_LINKS]:
             try:
                 data, _ = self._pdfs.fetch(url, where, part=mpn, handoff=False, mpn=mpn)
                 return data, url
-            except Exception:                      # a refused or broken link: the next one, else no check
-                continue
-        return None, None
+            except Exception as e:                 # a refused or broken link: the next one
+                linked.append({"url": url, "where": where, "error": str(e)})
+        return self.archived_pdf(mpn, linked)
+
+    def archived_pdf(self, mpn, linked):
+        """The Internet Archive's copy of a link that gave no PDF (datasheet.Reader._archived: only a public link whose
+        failure is worth asking about, paced, the copy must name the part) -> (bytes, the link it is a copy of) or
+        (None, None). Not asked offline, or with [datasheet] archive off."""
+        import types
+        cfg = getattr(getattr(self, "reader", None), "cfg", None) or D.settings(getattr(self, "rules", None))
+        if not cfg.get("archive") or getattr(self.http, "offline", False) or os.environ.get("ECADLIB_NO_ARCHIVE"):
+            return None, None
+        finder = types.SimpleNamespace(store=self._pdfs, http=self.http, sleep=time.sleep)
+        try:
+            data, prov = D.Reader._archived(finder, mpn, linked, [], mpn)
+        except Exception:
+            return None, None
+        return (data, (prov.get("archived") or {}).get("of")) if data is not None else (None, None)
 
     @staticmethod
     def case_from_search(st, item, ln, row):
@@ -1872,6 +2048,127 @@ def search_case(row):
     return SP.case_text(row.get("src_package"), row.get("src_description")) or ""
 
 
+STANDARD_CONTACTS = ("Connector_USB", "Connector_HDMI")   # lands whose pads carry the interface standard's contact names
+
+
+def one_contact(desc, land):
+    """A switch with one contact (SPST): its description says so, or KiCad's land for it does in its own name
+    (SW_SPST_B3U-1000P), and neither says another arrangement (SPDT, DPST ...)."""
+    said = f"{desc or ''} {str(land or '').replace('_', ' ')}"
+    return bool(re.search(r"\bSPST\b", said)) and not re.search(r"\b(?:SPDT|DPST|DPDT|SP[2-9]T|(?!1P1T)\dP\dT)\b", said)
+
+
+def land_symbol_names(land, names):
+    """The KiCad symbols named like one of KiCad's lands: those that are, or start with, the land name's leading
+    words, the most words that name any ('USB_C_Receptacle' of USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_
+    Horizontal: USB_C_Receptacle, USB_C_Receptacle_USB2.0_16P ...). At least two words; [] when none."""
+    toks = str(land or "").split("_")
+    for k in range(len(toks), 1, -1):
+        stem = "_".join(toks[:k])
+        hit = sorted(n for n in names if n == stem or n.startswith(stem + "_"))
+        if hit:
+            return hit
+    return []
+
+
+def land_symbol_fits(filters, pins, pads, land_ref):
+    """A KiCad symbol is the one drawn for a KiCad land: its footprint filter names the land and its pin numbers are
+    exactly the land's pads."""
+    from .resolve import _filter_hit
+    return bool(pins) and set(pins) == set(pads) and _filter_hit(filters, land_ref)
+
+
+def resolve_standard(texts, case, device, kind, mpn, desc):
+    """stdparts.resolve for a part's own texts and its part search's case. Where they name no land (DigiKey's group
+    'TO-236-3, SC-59, SOT-23-3' read name by name ends at KiCad's ambiguous 'SOT-23-3'; '44-TQFP' names no body), the
+    one land the case and its device package name together (case_or_device_land) is the part's."""
+    from . import stdparts as SP
+    res = SP.resolve(list(texts) + [case], kind, mpn, desc)
+    if res["footprint"] or not case or kind == "CP" or "disagree" in str(res.get("fp_how") or ""):
+        return res                                    # (a case whose own size codes disagree, '0402 (1006 Metric)',
+    land = case_or_device_land(case, device, kind)    # names no land by any reading: held as before)
+    if land:
+        named = SP.resolve(list(texts) + [land], kind, mpn, desc)
+        if named["footprint"] == land:
+            named["fp_how"] = f"the part search's case {case!r}" + (f" and device package {device!r}" if device else "") \
+                + f" name {land}"
+            return named
+    return res
+
+
+LAND_SHAPE = re.compile(r"(?:[A-Z][A-Za-z]+_(?:[A-Z]{2,4}_)?)?([A-Z]+)-(\d+)W?(-1EP)?_(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)mm"
+                        r"_P(\d+(?:\.\d+)?)mm(?:_EP\d+(?:\.\d+)?x\d+(?:\.\d+)?mm)?(?:_ThermalVias)?(?:_TopTented)?")
+CASE_SHAPE = re.compile(r'(\d+)-([A-Za-z]+)(?:, (\d+)-([A-Za-z]+))?(?: \(0?\.\d+", (\d+(?:\.\d+)?)mm Width\))?(,? Exposed Pad)?')
+DEVICE_BODY = re.compile(r"(\d+)-([A-Za-z]+) \((\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)\)")
+LEADED, LEADLESS = ("SOIC", "SSOP", "TSSOP", "QSOP"), ("QFN", "DFN")
+
+
+def package_family(word):
+    """A package word as its land family: a distributor's height and pitch letters on a leadless package are not
+    another land (VFQFN, WQFN, XFDFN: QFN / DFN), SO / SOP is SOIC, and the 3 mm TSSOP group's names are one family
+    (TFSOP, MSOP, VSSOP: told apart from the 4.4 mm TSSOP by the width, which is always compared too)."""
+    w = re.sub(r"^[VWUXTLH]{0,2}F?(?=(?:QFN|DFN)$)", "", str(word or "").upper())
+    return {"SO": "SOIC", "SOP": "SOIC", "TFSOP": "TSSOP", "MSOP": "TSSOP", "VSSOP": "TSSOP"}.get(w, w)
+
+
+def case_fits_land(case, device, land, names):
+    """Is a part search's case the package of this KiCad land, although it does not name the land alone? The same
+    family (package_family), pin count and exposed pad, and the same body: the case's width for a leaded package
+    ('8-SOIC (0.209", 5.30mm Width)' and SOIC-8_5.3x5.3mm), the device package's body for a leadless one ('24-QFN
+    (4x4)' and QFN-24-1EP_4x4mm), which the case does not give. And no KiCad land (names) of that family, count, pad
+    and body has another pitch ('20-TSSOP 4.40mm' is KiCad's 0.5 and 0.65 mm land: not told apart). What stays open
+    (a leaded body's length, the exposed pad's size) is then the choice of KiCad's symbol for this part. Any other
+    wording of the case ('Dual Rows', a lead count, a group of other names) or of the land's name: False."""
+    m, c = LAND_SHAPE.fullmatch(str(land or "")), CASE_SHAPE.fullmatch(str(case or "").strip())
+    if not m or not c or (c.group(3) and c.group(3) != c.group(1)):
+        return False
+    fam, pins, pad, pitch = package_family(m.group(1)), int(m.group(2)), bool(m.group(3)), float(m.group(6))
+    x, y = float(m.group(4)), float(m.group(5))
+    if int(c.group(1)) != pins or bool(c.group(6)) != pad or fam not in {package_family(w) for w in (c.group(2), c.group(4)) if w}:
+        return False
+    if fam in LEADED and c.group(5):
+        def body(mm):
+            return abs(float(mm.group(4)) - float(c.group(5))) <= 0.06
+    elif fam in LEADLESS and not c.group(5):
+        d = DEVICE_BODY.fullmatch(str(device or "").strip())
+        if not d or int(d.group(1)) != pins or package_family(d.group(2)) != fam:
+            return False
+        size = sorted((float(d.group(3)), float(d.group(4))))
+
+        def body(mm):
+            return all(abs(a - b) <= 0.06 for a, b in zip(sorted((float(mm.group(4)), float(mm.group(5)))), size))
+    else:
+        return False
+    if not body(m):
+        return False
+    for n in names:
+        o = LAND_SHAPE.fullmatch(str(n))
+        if o and package_family(o.group(1)) == fam and int(o.group(2)) == pins and bool(o.group(3)) == pad and body(o) \
+                and abs(float(o.group(6)) - pitch) > 0.005:
+            return False
+    return True
+
+
+# JEDEC's registered outline -> the package's common name, for the two a distributor files under the outline alone
+JEDEC_OUTLINE = {"253": "SOT-143", "261": "SOT-223"}
+
+
+def jedec_case_fits(case, device, land):
+    """Is a part search's case, written as a JEDEC outline alone ('TO-253-4, TO-253AA': SOT-143; 'TO-261-4, TO-261AA':
+    SOT-223), the package of this KiCad land? Every name of the case is one outline (its four terminals or its AA
+    variation), the device package, when given, is that package's common name ('SOT-143-4', 'SOT-223-3': not the
+    mirrored SOT-143R), and the land is KiCad's land of that name: SOT-143, SOT-223 or SOT-223-3_TabPinN (how the
+    tab is numbered is the choice of the KiCad symbol whose land it is). Anything else: False."""
+    words = [w for w in re.split(r"\s*,\s*", str(case or "").strip()) if w]
+    hits = [re.fullmatch(r"(?i)TO-?(253|261)(?:-4|AA)?", w) for w in words]
+    if not words or not all(hits) or len({h.group(1) for h in hits}) != 1:
+        return False
+    name = JEDEC_OUTLINE[hits[0].group(1)]
+    if str(device or "").strip() and not re.fullmatch(re.escape(name) + r"(?:-[34])?", str(device).strip(), re.I):
+        return False
+    return bool(re.fullmatch(re.escape(name) + (r"(?:-3_TabPin\d)?" if name == "SOT-223" else ""), str(land or "")))
+
+
 def case_or_device_land(case, device, kind=None):
     """The land a part search's case names, settled by its device package where the case alone names none: DigiKey's
     'Package / Case' '32-TQFP' fits several bodies, its 'Supplier Device Package' '32-TQFP (7x7)' one. The device
@@ -1879,6 +2176,8 @@ def case_or_device_land(case, device, kind=None):
     by name ('SOT-23-6 Thin, TSOT-23-6' + 'TSOT-23-6'); a device package naming another land than the case: None."""
     from . import stdparts as SP
     n = case_land(case, kind)
+    if re.fullmatch(r"(?i)\s*T?SOT-?23[- ]THIN\s*", str(device or "")):   # 'SOT-23-THIN': the thin body with no lead
+        device = ""                                                        # count, not the three-lead SOT-23
     d = case_land(device, kind) if str(device or "").strip() else None
     if n == "SOT-23" and not d and SP.names_only(device, "SOT-23") == (True, False):
         return None                                   # the group 'TO-236-3, SC-59, SOT-23-3' and a device package

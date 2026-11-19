@@ -62,11 +62,27 @@ SPEC_RX = [   # (canonical, regex on the attribute name/shortname, parser); firs
 ]                                                                                   # a tantalum's EIA height code
 
 
+# What a part search measures beside the case (DigiKey's parameters), kept as written: a can's diameter and base, a
+# crystal's body, a through-hole part's lead spacing, a header's rows / positions / pitch. ecadlib.search_land reads
+# them: together they can name one generic land where the case text ('Radial, Can - SMD', 'Nonstandard') names none.
+DIM_RX = [("size", r"^size\s*/\s*dimension$"), ("land", r"^surface mount land size$"), ("lead_spacing", r"^lead spacing$"),
+          ("mounting", r"^mounting type$"), ("height", r"^height - seated \(max\)$"), ("case", r"^package\s*/\s*case$"),
+          ("connector", r"^connector type$"), ("contact", r"^contact type$"), ("positions", r"^number of positions$"),
+          ("loaded", r"^number of positions loaded$"), ("rows", r"^number of rows$"), ("pitch", r"^pitch(?: - mating)?$"),
+          ("shrouding", r"^shrouding$"), ("termination", r"^termination$"), ("features", r"^features$"),
+          ("type", r"^type$")]
+
+
 def specs_from_pairs(pairs):
-    """[(attribute name, value text)] from any source -> {value, unit, tolerance, voltage, dielectric, power, current, package}."""
+    """[(attribute name, value text)] from any source -> {value, unit, tolerance, voltage, dielectric, power, current,
+    package}; and "dims": {key: text} for the measurements of DIM_RX the source gives."""
     out = {}
     for name, val in pairs:
         n = str(name or "").strip().lower().replace("_", " ")
+        text = " ".join(str(val or "").split())
+        for key, rx in DIM_RX:
+            if re.search(rx, n) and text and text != "-":
+                out.setdefault("dims", {}).setdefault(key, text[:80])
         for key, rx, parse in SPEC_RX:
             if not re.search(rx, n):
                 continue
@@ -88,6 +104,10 @@ def specs_from_pairs(pairs):
                 else:
                     out.setdefault(key, v)
             break
+    if "connector" not in out.get("dims", {"connector": 1}):    # 'Features' matters for a connector's land only
+        out["dims"].pop("features", None)
+        if not out["dims"]:
+            del out["dims"]
     return out
 
 

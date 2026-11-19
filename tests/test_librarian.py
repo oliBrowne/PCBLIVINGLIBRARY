@@ -169,7 +169,9 @@ def test_kicad_index_matching():
         assert L.packing_suffix("NE555DR", "NE555DR", 6, "NE555D") and L.packing_suffix("TPS1234DSGT", "TPS1234DSGT", 10, "TPS1234DSG")
         ref, how = lib.find_symbol("TPS1234DSGQ")                                  # Q is no packing code: a variant
         assert ref == "Regulator_Test:TPS1234DSG" and "ordering suffix 'Q' (check the variant)" in how, how
-        assert lib.find_symbol("TPS1234DSGRXYZW") == (None, None)                 # 5 extra chars, no separator
+        ref, how = lib.find_symbol("TPS1234DSGRXYZW")       # 5 extra chars, no separator: offered only to be checked
+        assert ref == "Regulator_Test:TPS1234DSG" and "ordering suffix 'RXYZW' (check the variant)" in how, how
+        assert lib.find_symbol("TPS1234DSGRXYZWABC") == (None, None)              # 8 extra chars: another part
         assert lib.find_symbol("TPS12") == (None, None)
         assert lib.generic_connector("Conn_01x04")[0] == "Connector_Generic:Conn_01x04"
         assert lib.footprint("SOIC-8_3.9x4.9mm_P1.27mm") == "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"

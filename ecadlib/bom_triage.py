@@ -1239,7 +1239,7 @@ def triage(lines, index, provs, http, shared=None):
                          "mpn": ln.get("mpn", ""), "manufacturer": ln.get("manufacturer", ""), "lcsc": ln.get("lcsc", ""),
                          "value": ln.get("value", ""), "package": "", "status": "dnp (not fitted)",
                          "local_symbol": "", "local_footprint": "", "src": "", "src_symbol": "", "src_footprint": "",
-                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_height": "", "src_package_device": "", "src_several": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
+                         "src_3d": "", "src_mpn": "", "src_description": "", "src_description_from": "", "src_manufacturer": "", "src_manufacturer_from": "", "src_makers": "", "src_datasheet": "", "src_datasheet_from": "", "src_package": "", "src_package_from": "", "src_height": "", "src_package_device": "", "src_dims": "", "src_dims_from": "", "src_several": "", "src_datasheet_more": "", "notes": "marked do-not-populate; not triaged"})
             continue
         pns = part_numbers(ln)
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"))
@@ -1273,6 +1273,7 @@ def triage(lines, index, provs, http, shared=None):
         notes, src, errored, work, unconfigured, desc, sheet, desc_from = [], None, False, dict(ln), [], "", "", ""
         sheet_from = ""                                # the source whose link is `sheet`
         src_pkg = src_pkg_from = src_height = src_device = ""       # the package text (and body height) a source gives for this exact MPN
+        src_dims = src_dims_from = ""                  # its measurements (search_land.dims_text), from the first source that has them
         limited = {}                                   # source -> its quota / plan-limit answer
         makers_seen = []                               # every maker any source lists for this exact MPN (src_makers)
         maker, maker_from = "", ""             # who makes this exact MPN, from a part search (BOM maker empty)
@@ -1362,6 +1363,11 @@ def triage(lines, index, provs, http, shared=None):
                     src_pkg, src_pkg_from = case[:80], prov.name                     # near match's (LM358DR != LM358P)
                     src_height = str((r.extra or {}).get("height") or "")[:60] if isinstance(r.extra, dict) else ""
                     src_device = str((r.extra or {}).get("device_package") or "")[:80] if isinstance(r.extra, dict) else ""
+                rdims = (r.extra or {}).get("dims") if isinstance(r.extra, dict) else None
+                if not src_dims and isinstance(rdims, dict) and rdims and r.found and not r.error and r.mpn \
+                        and _same(r.mpn, ln.get("mpn") or work.get("mpn", "")):   # this exact part's, like its case
+                    from .search_land import dims_text
+                    src_dims, src_dims_from = dims_text(rdims), prov.name
                 if r.error and P.account_limit(r.error):    # answered, but this account may not ask: like a source
                     limited.setdefault(prov.name, r.error)  # with no key, not an unreachable one
                     continue
@@ -1462,7 +1468,7 @@ def triage(lines, index, provs, http, shared=None):
             "src_makers": "; ".join(makers_seen),
             "src_datasheet": sheet, "src_datasheet_from": sheet_from if sheet else "",
             "src_package": src_pkg, "src_package_from": src_pkg_from, "src_height": src_height,
-            "src_package_device": src_device,
+            "src_package_device": src_device, "src_dims": src_dims, "src_dims_from": src_dims_from if src_dims else "",
             "src_several": "yes" if several and not bom_maker else "",   # makers the BOM does not pick between
             "src_datasheet_more": " ".join(u for u in sheets if u != sheet), "notes": "; ".join(dict.fromkeys(notes)),
         })

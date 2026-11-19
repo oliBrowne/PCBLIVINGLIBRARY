@@ -33,6 +33,41 @@ def norm_name(s):
     return re.sub(r"\s+", "", s).upper()
 
 
+# Names two sources write differently for one pin. KiCad draws an op-amp's or comparator's inputs as '+' and '-' and
+# its rails as V+ / V-; datasheets print '1IN+', '+IN A', 'INPUT2-', 'VCC', 'GND'. A CMOS part's rails are VDD / VSS in
+# one text and VCC / GND in the other. The number must still be the same: only the spelling is set aside.
+_INPUT = {"+": {"+", "IN+", "+IN", "INPUT+", "+INPUT", "VIN+"}, "-": {"-", "IN-", "-IN", "INPUT-", "-INPUT", "VIN-"}}
+RAILS = ({"V+", "+V", "VCC", "VDD", "VCC+", "VS+", "+VS", "VDD+"},
+         {"V-", "-V", "VEE", "VSS", "VCC-", "VS-", "-VS", "GND", "VEE-"})
+
+
+def name_class(name):
+    """'+' / '-' for an amplifier input however its channel is written (1IN+, IN1+, +INA, INPUT2- ...), 'pos' / 'neg'
+    for a supply rail's usual names, else None. One channel mark (1-4 or A-D) may stand anywhere in an input's name."""
+    s = norm_name(name)
+    for sign, forms in _INPUT.items():
+        if s in forms or any(s[:i] + s[i + 1:] in forms for i, c in enumerate(s) if c in "1234ABCD"):
+            return sign
+    return "pos" if s in RAILS[0] else "neg" if s in RAILS[1] else None
+
+
+def loose_names(pins):
+    """The pins' names that may be matched by class (name_class) instead of letter for letter: an amplifier input
+    written as the bare sign ('+', '-': KiCad's way, which no datasheet prints), and a rail when it is the symbol's
+    only name of its class (a part with VCC and VDD, or GND and V-, keeps them apart by their exact names)."""
+    names = {norm_name(nm) for _, nm in pins}
+    out = {n for n in names if n in ("+", "-")}
+    for sign in ("+", "-"):                           # the part's only input of that sign (INA226: Vin+ is TI's IN+)
+        mine = {n for n in names if name_class(n) == sign}
+        if len(mine) == 1:
+            out |= mine
+    for rails in RAILS:
+        mine = names & rails
+        if len(mine) == 1:
+            out |= mine
+    return out
+
+
 def _cells(line):
     """A text line -> its tokens, with "2, 3" kept as one cell and ranges written out."""
     line = _LIST.sub(",", line.replace("–", "-").replace("–", "-"))
@@ -66,28 +101,43 @@ def _rows(text):
                 nums.append((i, ""))
             elif started:
                 break
-        nums = [(i, c) for i, c in nums]
+        if len(nums) >= 2 and nums[0][0] == 0 and not nums[0][1][0].isdigit() and "," not in nums[0][1] \
+                and (nums[1][1].isdigit() or not nums[1][1]):
+            nums = nums[1:]                            # "A0 1 1 — 1": a pin NAMED like a ball, then its numbers
         while nums and not nums[-1][1]:
             nums.pop()
         if not any(c for _, c in nums):
             continue
         rows.append((cells, nums))
+    if any(len(n) >= 2 and n[0][0] == 0 and n[1][0] == 1 and n[0][1].isdigit() and n[1][1].isdigit() for _, n in rows):
+        for k, (cells, nums) in enumerate(rows):       # a table with two number columns: the dash that leads a row is
+            if cells[0] in EMPTY and nums[0][0] == 1:  # the first column's empty cell ("- 3 CE": no such pin in that
+                rows[k] = (cells, [(0, "")] + nums)    # package), not the row's name
     return rows
 
 
-def _find(rows, name, num, found=None):
+def _find(rows, name, num, found=None, loose=False):
     """Columns (index among the line's number cells) where `num` is printed on a line that names `name`, and whether
     the name was printed at all (with any numbers). found: {column: [the line's number cells]} of the lines that
-    matched, for the variant check in check()."""
+    matched, for the variant check in check(). loose: the name may be matched by its class (loose_names), but only
+    when no line of the page prints it letter for letter."""
     target = norm_name(name)
-    cols, seen = set(), False
+    named = []
     for cells, nums in rows:
         first = nums[0][0]
         words = cells[:first]                          # the name is printed before the numbers ("OUT A 1 1 O ...")
         if not words:                                  # or after them ("1 OUT A ...": number first)
             words = cells[nums[-1][0] + 1:][:3]
-        cand = {norm_name("".join(words[k:j])) for k in range(len(words)) for j in range(k + 1, min(len(words), k + 3) + 1)}
-        if target not in cand:
+        named.append({norm_name("".join(words[k:j])) for k in range(len(words)) for j in range(k + 1, min(len(words), k + 3) + 1)})
+    if target in ("+", "-"):                           # a bare sign is printed only as a whole name: the '-' cell
+        exact = any(norm_name("".join(c[:n[0][0]] or c[n[-1][0] + 1:][:3])) == target   # of '15 IN2 -' in a
+                    and all(re.fullmatch(r"[\d,]+", x) for _, x in n) for c, n in rows)        # drawing is IN2-'s
+    else:
+        exact = any(target in c for c in named)
+    kind = name_class(target) if loose and not exact else None
+    cols, seen = set(), False
+    for (cells, nums), cand in zip(rows, named):
+        if target not in cand and not (kind and any(name_class(c) == kind for c in cand)):
             continue
         seen = True
         for col, (_, c) in enumerate(nums):
@@ -98,33 +148,95 @@ def _find(rows, name, num, found=None):
     return cols, seen
 
 
-def variant_columns(lines, col):
+def _other_package(lines, col, k, most, table=()):
+    """Column k of the matched lines is plainly another package than column `col`'s numbered one: it prints a pin
+    number above this part's highest (a 14-pin TSSOP column beside the 8-pin ones, a 16-pin QFN beside the 14-pin
+    SOIC), or ball names (B1, C2: a DSBGA column) where this part's pins are plain numbers. table: every row of the
+    table's span (its number cells), so a pin the symbol leaves unnamed counts too."""
+    span = [c for f in lines for c in [f.get(col)] if c] + [c for c in table if len(c) > max(col, k)]
+    vals = [x for c in span if k < len(c) for x in _numbers(c[k]) if x]
+    mine = [x for c in span if col < len(c) for x in _numbers(c[col]) if x]
+    if not vals or not mine or not all(x.isdigit() for x in mine):
+        return False
+    return any(not x.isdigit() for x in vals) or bool(most) and any(int(x) > most for x in vals if x.isdigit())
+
+
+def variant_columns(lines, col, most=0, table=()):
     """The other number columns of the matched lines that give some pin another number than column `col` does (a
-    table with SOIC and SOT-23 columns, or MCP6L01 / MCP6L01R): '' when every column agrees or there is no other."""
+    table with SOIC and SOT-23 columns, or MCP6L01 / MCP6L01R): '' when every column agrees or there is no other.
+    most: this part's highest pin number, table: the table's rows: a column that is plainly another package
+    (_other_package) is not counted."""
     out = []
     width = max((len(c) for f in lines for c in f.values()), default=0)
     for k in range(width):
-        if k == col:
+        if k == col or _other_package(lines, col, k, most, table):
             continue
+        if any(c and k < len(c) and not any(_numbers(c[k])) and any(_numbers(c[col])) for c in (f.get(col) for f in lines)):
+            continue                                   # no number for a pin this part names: a package without that pin
         for f in lines:
             cells = f.get(col)
-            if cells and k < len(cells) and set(_numbers(cells[k])) != set(_numbers(cells[col]))                     and not set(_numbers(cells[k])) & set(_numbers(cells[col])):
+            if cells and k < len(cells) and set(_numbers(cells[k])) != set(_numbers(cells[col])) \
+                    and not set(_numbers(cells[k])) & set(_numbers(cells[col])):
                 out.append(f"column {k + 1}")
                 break
     return ", ".join(out)
 
 
-def _top(rows, pins):
-    """The highest pin number printed on the lines of `rows` that name one of `pins` (0 when none)."""
+def _span(rows, lines, col):
+    """The number cells of every row of the table the pins matched in (column `col`): from the first to the last
+    matched row, and on to the rows next to them while they have as many number cells (its unnamed pins, its N.C.s)."""
+    hit = [f[col] for f in lines if f.get(col)]
+    cells = [[x for _, x in nums] for _, nums in rows]
+    at = [i for i, c in enumerate(cells) if c in hit]
+    if not at:
+        return []
+    lo, hi, wide = min(at), max(at), max(len(c) for c in hit)
+    while lo > 0 and len(cells[lo - 1]) == wide:
+        lo -= 1
+    while hi + 1 < len(cells) and len(cells[hi + 1]) == wide:
+        hi += 1
+    return cells[lo:hi + 1]
+
+
+def _top(rows, pins, loose=()):
+    """The highest pin number printed on the lines of `rows` that name one of `pins` (0 when none). loose: the names
+    matched by class (loose_names), as _find matches them: 4IN+ names the symbol's '+'."""
     names, top = {norm_name(nm) for _, nm in pins}, 0
+    kinds = {name_class(n) for n in loose} - {None}
     for cells, nums in rows:                          # a table row only: the name is all that comes before the numbers
         before = cells[:nums[0][0]]                   # ("4OUT 20 Output"), or what starts after them ("1 OUTA ..."),
         after = cells[nums[-1][0] + 1:][:3]           # never a name inside a sentence or a spec line ("VCC supply
         cand = {norm_name("".join(before))} if before else {norm_name("".join(after[:j])) for j in (1, 2, 3)}
-        if not before and not after or not cand & names:    # current 25 100")
-            continue
+        if not before and not after or not (cand & names or kinds and any(name_class(c) in kinds for c in cand)):
+            continue                                  # current 25 100")
         top = max([top] + [int(x) for _, c in nums for x in _numbers(c) if x.isdigit()])
     return top
+
+
+def _row_names(cells, nums):
+    """What a table row is named, when the line is one: the name is all that comes before its numbers ("4OUT 20
+    Output"), or what starts after them ("1 OUTA ..."); never a name inside a sentence or a spec line."""
+    before, after = cells[:nums[0][0]], cells[nums[-1][0] + 1:][:3]
+    return {norm_name("".join(before))} if before else {norm_name("".join(after[:j])) for j in (1, 2, 3) if after[:j]}
+
+
+def _a_table_names(rows, names, loose=()):
+    """Does some line of `rows` name one of `names` as a table row does (_row_names; a loose name by its class)? A
+    page of spec lines that only mentions the pins ('VI = 5.5 V or GND 0 to 5.5 V 5 uA') does not."""
+    want = {norm_name(n) for n in names}
+    kinds = {name_class(n) for n in want if n in loose} - {None}
+    return any(c in want or kinds and name_class(c) in kinds for cells, nums in rows for c in _row_names(cells, nums))
+
+
+def _fewer_channels(rows, pins):
+    """The page is the table of a device with fewer amplifiers than the symbol: the symbol has two or more inputs of
+    one sign ('+' on 3 and 5), the page fewer rows naming an input of that sign (the single's IN+ row beside the
+    dual's table elsewhere in a family datasheet)."""
+    for sign in ("+", "-"):
+        mine = sum(1 for _, nm in pins if norm_name(nm) == sign)
+        if mine >= 2 and sum(1 for cells, nums in rows if any(name_class(c) == sign for c in _row_names(cells, nums))) < mine:
+            return True
+    return False
 
 
 def _figure_rows(text):
@@ -137,9 +249,32 @@ def _figure_rows(text):
     return rows
 
 
-def check(page_texts, pins, figures=(), pin_count=None):
+_TITLE = re.compile(r"(?i)\bpin\s+(?:functions?|descriptions?|configurations?|assignments?)\s*[:\-–]\s*(.+)$")
+_DEVICE = re.compile(r"\b[A-Z]{1,6}\d{2,}[A-Za-z0-9]*")
+
+
+def _titled_for(text):
+    """The devices a page's pin table titles name: 'Table 4-1. Pin Functions: TL071x' -> {'TL071'} (the title's
+    trailing lower-case x is its wildcard); a page with no such title: empty."""
+    out = set()
+    for line in str(text or "").splitlines():
+        m = _TITLE.search(line.strip())
+        if m:
+            out |= {d for d in (re.sub(r"x+$", "", t).upper() for t in _DEVICE.findall(m.group(1))) if len(d) >= 4}
+    return out
+
+
+def _is_part(devices, part):
+    """Does one of a title's device names begin this part number ('TL072' and TL072CDR; not 'TL072M', not 'TL071')?"""
+    p = re.sub(r"[^A-Z0-9]", "", str(part or "").upper())
+    return bool(p) and any(p.startswith(d) for d in devices)
+
+
+def check(page_texts, pins, figures=(), pin_count=None, part=None):
     """page_texts: {page number: text}; pins: [(num, name)]; figures: [(page, text)] of pinout drawings
-    (figure_lines), each read as a table of its own; pin_count: the package's, when known -> verdict dict (see the
+    (figure_lines), each read as a table of its own; pin_count: the package's, when known; part: the part number,
+    when known (a table on another page titled only for other devices of the family is then not a doubt about the
+    agreeing table titled for this part) -> verdict dict (see the
     module doc). A table elsewhere that names these pins otherwise but prints a pin number above this part's highest
     (TL074's 20-pin LCCC table after its 14-pin SOIC one) is another package's: it is not a doubt about this one."""
     pins = [(str(n).strip(), str(nm or "").strip()) for n, nm in pins or [] if str(n).strip()]
@@ -150,6 +285,7 @@ def check(page_texts, pins, figures=(), pin_count=None):
     units = sorted((page_texts or {}).items()) + [(pg, t) for pg, t in figures or ()]
     if not any(str(t or "").strip() for _, t in units):
         return {"status": "unchecked", "why": "the PDF has no text layer (scanned?)"}
+    loose = loose_names(pins)
     best, agreed, conflicts = None, None, []
     for i, (page, text) in enumerate(units):
         drawn = i >= len(units) - len(figures or ())
@@ -157,7 +293,7 @@ def check(page_texts, pins, figures=(), pin_count=None):
         if not rows:
             continue
         lines = [{} for _ in pins]
-        per = [_find(rows, nm, n, f) for (n, nm), f in zip(pins, lines)]
+        per = [_find(rows, nm, n, f, loose=norm_name(nm) in loose) for (n, nm), f in zip(pins, lines)]
         named = sum(1 for _, seen in per if seen)
         if named < len(pins):
             if best is None or named > best[1]:
@@ -166,7 +302,7 @@ def check(page_texts, pins, figures=(), pin_count=None):
         common = set.intersection(*[cols for cols, _ in per])
         if common:
             col = min(common)
-            other = variant_columns(lines, col)
+            other = variant_columns(lines, col, most, _span(rows, lines, col))
             if other:                               # another package or variant of the part numbers these pins other
                 return {"status": "unchecked", "page": page,      # ways: which column is this part's is not in
                         "why": f"page {page}'s table gives these pins other numbers in another column ({other}): which "
@@ -176,8 +312,11 @@ def check(page_texts, pins, figures=(), pin_count=None):
                           "where": "pin drawing" if drawn else "pin table"}
             continue
         miss = [f"{nm}={n}" for (n, nm), (cols, _) in zip(pins, per) if not cols]
-        if miss and most and _top(rows, pins) > most:  # a bigger package's table (TL074M's 20-pin LCCC): not this one
+        if miss and most and _top(rows, pins, loose) > most:  # a bigger package's table (TL074M's 20-pin LCCC): not this one
             continue
+        missed = [nm for (n, nm), (cols, _) in zip(pins, per) if not cols]
+        if miss and (not _a_table_names(rows, missed, loose) or _fewer_channels(rows, pins)):
+            continue                                   # spec lines that only mention the names, or a single's table
         if miss:                                       # every pin named on this page, some only with other numbers:
             conflicts.append((page, miss))             # maybe another variant's table (MCP6L01 / MCP6L01R on two pages)
         if agreed is not None:
@@ -189,6 +328,21 @@ def check(page_texts, pins, figures=(), pin_count=None):
             return {"status": "disagreed", "page": page,      # difference, not a page that only mentions the names
                     "why": f"page {page} prints {', '.join(miss[:4])} with other numbers"}
         best = (page, named, f"page {page}: {', '.join(miss[:4])} not printed with that number")
+    if agreed is None:                                 # a table that runs over two pages: read as one
+        pages = sorted((page_texts or {}).items())
+        for (pa, ta), (pb, tb) in zip(pages, pages[1:]):
+            rows = _rows(ta) + _rows(tb) if pb == pa + 1 else []
+            lines = [{} for _ in pins]
+            per = [_find(rows, nm, n, f, loose=norm_name(nm) in loose) for (n, nm), f in zip(pins, lines)] if rows else []
+            common = set.intersection(*[cols for cols, _ in per]) if per else set()
+            if common and not variant_columns(lines, min(common), most, _span(rows, lines, min(common))):
+                agreed = {"status": "agreed", "page": pa, "column": min(common), "pins": len(pins),
+                          "where": f"pin table (pages {pa} and {pb})"}
+                break
+    if agreed is not None and conflicts and part and _is_part(_titled_for((page_texts or {}).get(agreed["page"])), part):
+        conflicts = [(pg, miss) for pg, miss in conflicts           # 'Pin Functions: TL071x' beside the agreeing
+                     if not _titled_for((page_texts or {}).get(pg))  # 'Pin Functions: TL072x': another device's table
+                     or _is_part(_titled_for((page_texts or {}).get(pg)), part)]
     if agreed is not None:
         if conflicts:                                  # a table on another page names the same pins with other numbers:
             pg, miss = conflicts[0]                    # which table is this part's is not in the text, whichever came first
@@ -281,11 +435,71 @@ def figure_lines(runs):
     return out
 
 
-def check_pdf(pdf_bytes, pins, pin_count=None):
+TERMINAL = {"GATE": "G", "SOURCE": "S", "DRAIN": "D", "BASE": "B", "EMITTER": "E", "COLLECTOR": "C"}
+_TERMINAL_SETS = ({"G", "S", "D"}, {"B", "E", "C"})
+
+
+def terminal_lines(runs):
+    """A transistor's pin drawing on one page -> one text per drawing, "G 1" a line (as figure_lines gives). The
+    schematic symbol is drawn with each terminal's name (GATE / SOURCE / DRAIN, BASE / EMITTER / COLLECTOR, or the
+    capital letter) and its pin number right beside it, above or below. A name takes the number 1-3 within two text
+    heights of it, when that number is clearly nearer (1.6 x) than any other and the name is that number's nearest
+    too. A drawing is three such pairs close together: one full set of terminals, the numbers 1, 2, 3 each once.
+    Letters with no numbers (Diodes Inc.), a number between two names, a set drawn twice side by side: nothing."""
+    names, nums = [], []
+    for x, y, t, sz in runs:
+        if not sz or sz <= 0:
+            continue
+        key = TERMINAL.get(t.upper()) if len(t) > 1 else t if t in ("G", "S", "D", "B", "E", "C") else None
+        if key:
+            names.append((x + 0.25 * sz * len(t), y, key, sz))
+        elif t in ("1", "2", "3"):
+            nums.append((x + 0.25 * sz, y, int(t), sz))
+    dist = lambda a, b: ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+
+    def nearest(a, others):
+        near = sorted((dist(a, o), i) for i, o in enumerate(others))
+        if not near or near[0][0] > 2 * a[3] or len(near) > 1 and near[1][0] < 1.6 * near[0][0]:
+            return None
+        return near[0][1]
+    pairs = []
+    for i, nm in enumerate(names):
+        j = nearest(nm, nums)
+        if j is not None and nearest(nums[j], names) == i:
+            pairs.append((nm[0], nm[1], nm[2], nums[j][2]))
+    groups = []                                        # pairs within 110 pt of one another: one drawing
+    for pr in sorted(pairs):
+        mine = [g for g in groups if any(dist(pr, q) <= 110 for q in g)]
+        for g in mine[1:]:
+            mine[0].extend(g)
+            groups.remove(g)
+        (mine[0] if mine else groups.append([]) or groups[-1]).append(pr)
+    out = []
+    for g in groups:
+        keys, vals = [q[2] for q in g], [q[3] for q in g]
+        if len(g) == 3 and set(keys) in _TERMINAL_SETS and sorted(vals) == [1, 2, 3]:
+            out.append("\n".join(f"{k} {v}" for k, v in zip(keys, vals)))
+    return out
+
+
+def pin_orders(page_texts, names, figures=()):
+    """The orders of a three-terminal part's names ('GSD', 'BEC') on pins 1, 2, 3 that the datasheet's text agrees
+    with (check): ['GSD'] when it prints one order and no other. Two orders agreeing (two packages drawn), or none: the
+    text does not settle it."""
+    from itertools import permutations
+    return ["".join(o) for o in permutations(names)
+            if check(page_texts, list(zip("123", o)), figures)["status"] == "agreed"]
+
+
+def pin_orders_pdf(pdf_bytes, names):
+    return pin_orders(page_texts(pdf_bytes), names, page_figures(pdf_bytes)) if pdf_bytes else []
+
+
+def check_pdf(pdf_bytes, pins, pin_count=None, part=None):
     """check() on a PDF: its text layer's tables and its pinout drawings (page_figures). No PDF: unchecked."""
     if not pdf_bytes:
-        return check({}, pins)
-    return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count)
+        return {"status": "unchecked", "why": "none of the part's datasheet links gave a PDF to check it against"}
+    return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count, part=part)
 
 
 def page_figures(pdf_bytes, limit=80):
@@ -314,7 +528,7 @@ def page_figures(pdf_bytes, limit=80):
             p.extract_text(visitor_text=seen)
         except Exception:
             continue
-        out += [(i, f) for f in figure_lines(runs)]
+        out += [(i, f) for f in figure_lines(runs) + terminal_lines(runs)]
     return out
 
 
