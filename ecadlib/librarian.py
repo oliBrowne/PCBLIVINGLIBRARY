@@ -123,6 +123,10 @@ def no_listing(row, mpn):
             + (f"; {why}" if why else "") + "): check the part number; it may be mistyped, obsolete or not a real part")
 
 
+
+# a KiCad symbol named '<Maker>_<part number>' (Inolux_IN-PI554FCH): one word of letters, then the part number
+MAKER_NAMED = re.compile(r"([A-Z][A-Za-z]{2,})_([A-Za-z0-9][A-Za-z0-9.\-/]*)")
+
 class KiCadLibrary:
     """Name index of the official KiCad libraries (see the module docstring). Building it reads ~400 GitLab tree pages;
     each page is kept in the HTTP cache, so a build that stops (timeout, HTTP 429) resumes where it stopped. After a
@@ -177,9 +181,14 @@ class KiCadLibrary:
         self._build_norm()
 
     def _build_norm(self):
-        self._norm, self._wild, self._fpn = {}, [], []
+        self._norm, self._wild, self._fpn, self._maker_named = {}, [], [], {}
         for name, libs in self.symbols.items():
             self._norm.setdefault(norm_mpn(name), []).extend(f"{l}:{name}" for l in libs)
+            m = MAKER_NAMED.fullmatch(name)
+            if m and len(norm_mpn(m.group(2))) >= 6 and re.search(r"\d", m.group(2)) and re.search(r"[A-Za-z]", m.group(2)):
+                # KiCad names some parts after their maker first (LED:Inolux_IN-PI554FCH, Diode:Fuxinsemi_PDS760):
+                # the part number after the maker's name, kept with the maker so the part's own maker can be compared
+                self._maker_named.setdefault(norm_mpn(m.group(2)), []).append((m.group(1), [f"{l}:{name}" for l in libs]))
             if re.search(r"(?<![0-9])x|x(?![0-9])", name) and re.search(r"[A-Z0-9]-?x", name) and not any(l.startswith("Connector") for l in libs):
                 # a '.' between digits (or x wildcards) is kept by norm_mpn on the MPN side: 'LM1117-x.x' -> optional,
                 # and two x slots take a decimal point between them: 1.5KExxA is 1.5KE6.8A, SMAJxxA SMAJ5.0A (R-FX10-3)
@@ -346,6 +355,11 @@ class KiCadLibrary:
             ref, how = self.find_symbol(reel)             # on a reel
             if ref:
                 return ref, f"{how}, Microchip's reel mark T left off"
+        named = getattr(self, "_maker_named", {}).get(nm, [])
+        if len(named) == 1:                               # LED:Inolux_IN-PI554FCH for IN-PI554FCH: the caller compares
+            maker, refs = named[0]                        # the maker's name with the part's maker (maker_named)
+            ref, more = self._pick(refs)
+            return ref, f"exact name after the maker's name '{maker}' (check the maker)" + more
         logic = re.match(r"(?i)(SN|MC|CD|HEF|NLV)(?=74[A-Z]{1,5}\d)", str(mpn))
         if logic:                                         # SN74HC595DR, MC74HC595ADR2G, CD74HC14M96: KiCad's 74HC595
             ref, how = self.find_symbol(str(mpn)[logic.end():])
@@ -976,6 +990,17 @@ class Run:
         return None
 
     @staticmethod
+    def maker_named(ln, row, how):
+        """A KiCad symbol named '<Maker>_<this MPN>' (LED:Inolux_IN-PI554FCH) is this part's own when the part's maker,
+        as the BOM or the part search names it, is that maker: -> how without the 'check'. Another or no maker named:
+        how as it was (held for a look)."""
+        maker = re.search(r"after the maker's name '([^']+)'", how).group(1)
+        ours = [m for m in (row.get("src_manufacturer"), ln.get("manufacturer")) if str(m or "").strip()]
+        if ours and all(P.same_maker(maker, m) for m in ours):
+            return how.replace(" (check the maker)", f" ({', '.join(dict.fromkeys(map(str, ours)))}: the part's maker)")
+        return how
+
+    @staticmethod
     def ferrite(item, ln):
         """The line is a ferrite bead: its designators, description or part number say so (stdparts.is_ferrite)."""
         from . import stdparts as SP
@@ -1026,6 +1051,8 @@ class Run:
         elif not st["symbol"]:
             sym_ref, how = lib.find_symbol(mpn)
             own = bool(sym_ref)                        # this part's own symbol, not a generic one
+            if sym_ref and "after the maker's name" in how:
+                how = self.maker_named(ln, row, how)
             if not sym_ref:
                 sym_ref, how = lib.generic_connector(ln.get("value", ""))
         chain = None
@@ -1056,7 +1083,8 @@ class Run:
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
             if "(check the case)" in how and self.case_agrees(st, item, ln, row, kind, mpn, sym_ref):
                 pass                               # the part search's case for this exact MPN is the symbol's land
-            elif "check" in how and self.variant_agrees(st, item, ln, row, kind, mpn, sym_ref, chain):
+            elif "check" in how and "(check the maker)" not in how and \
+                    self.variant_agrees(st, item, ln, row, kind, mpn, sym_ref, chain):   # (another maker: a person looks)
                 pass                               # the case and the datasheet's pin table confirm this variant
             elif "check" in how:                   # a near name: a person checks it before it is released
                 st["verify"].append(f"symbol {sym_ref} matched by {how}")
@@ -1191,6 +1219,9 @@ class Run:
         desc = " ".join(x for x in (bom_desc, row.get("src_description") if case and   # the source that gave this
                                     row.get("src_package_from") == row.get("src_description_from") else "") if x)   # case
         k = kind or SP.part_kind(item["folder"], item["footprint"].get("kicad") or fp_name, desc, ln.get("designator"))
+        way = tvs_direction(row)
+        if way:                                    # the part search files one TVS channel as one way or both ways
+            desc = f"{desc} {way}".strip()
         if case and (k == "CP" or k == "C" and SP.POLAR_CAP.match(SP._norm(mpn))):    # a tantalum's size + height
             case = SP.tantalum_search_text(case, row.get("src_height"), mpn)            # name its EIA case
         res = resolve_standard([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value")],
@@ -2102,6 +2133,20 @@ def one_contact(desc, land):
     (SW_SPST_B3U-1000P), and neither says another arrangement (SPDT, DPST ...)."""
     said = f"{desc or ''} {str(land or '').replace('_', ' ')}"
     return bool(re.search(r"\bSPST\b", said)) and not re.search(r"\b(?:SPDT|DPST|DPDT|SP[2-9]T|(?!1P1T)\dP\dT)\b", said)
+
+
+def tvs_direction(row):
+    """'bidirectional' / 'unidirectional' when the part search's parameters for this exact MPN give one TVS channel
+    of that kind and none of the other (DigiKey 'Bidirectional Channels: 1'), else ''. A part with several channels
+    is an array, not a two-pin diode."""
+    from .search_land import dims
+    d = dims(row.get("src_dims"))
+    uni, bi = d.get("tvs_uni", ""), d.get("tvs_bi", "")
+    if bi == "1" and not uni:
+        return "bidirectional"
+    if uni == "1" and not bi:
+        return "unidirectional"
+    return ""
 
 
 def land_symbol_names(land, names):
