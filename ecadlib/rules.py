@@ -76,7 +76,7 @@ DEFAULTS = {
                   "escalate": True, "max_attempts": 4,
                   "zoom_drawings": False,               # also send sharper close-ups of the drawing pages (A/B test first)
                   # ecadlib.crosscheck: a second source (standard table / a second read) before a footprint is accepted
-                  "cross_check": "auto", "cross_check_model": "",
+                  "cross_check": "auto", "cross_check_model": "", "pin_drawing_check": "auto",
                   # a folder of datasheet PDFs a person downloaded (<MPN>.pdf), tried before any link: for makers' sites
                   # that refuse downloads from scripts
                   "folder": "",
@@ -458,6 +458,8 @@ def validate(raw, where="ecadlib.toml"):
     if "handoff" in ds and ds["handoff"] not in ("auto", "off"):
         _err(where, "datasheet.handoff", f"= {ds['handoff']!r}: must be auto (open a refused link in your browser when "
                                          "you are watching the run) or off")
+    if "pin_drawing_check" in ds and ds["pin_drawing_check"] not in ("auto", "off"):
+        _err(where, "datasheet.pin_drawing_check", f"= {ds['pin_drawing_check']!r}: must be auto or off")
     if "cross_check" in ds and ds["cross_check"] not in ("auto", "always", "off"):
         _err(where, "datasheet.cross_check", f"= {ds['cross_check']!r}: must be auto (standard table, else a second read), "
                                              "always (a second read for every part) or off")
@@ -1008,6 +1010,7 @@ HELP = {
     "datasheet.web_search_model": "model for the web search (\"\" = claude-haiku-5-5)",
     "datasheet.web_search_max_uses": "most searches per part (default 3; 0 = none)",
     "datasheet.cross_check_model": "model for the second read (\"\" = the model whose answer is checked; endpoint:model works)",
+    "datasheet.pin_drawing_check": "auto | off: a symbol whose pinout the PDF only draws is read again from pictures of the drawing and checked in code (ecadlib.pin_drawing)",
     "ai.temperature": "auto: temperature 0 (+ seed) where the model takes one; Claude 4.7+/5.x reject it and get nothing | "
                       "off | a number 0-2",
     "agent.proof": "Claude visual check (ecadlib visual-check): model, effort, api_key_env (empty = [datasheet]), max_cost_usd per "
