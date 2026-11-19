@@ -399,6 +399,8 @@ class KiCadLibrary:
 
     def footprint_by_mpn(self, mpn):
         nm = norm_mpn(re.sub(r"\(.*", "", str(mpn)))
+        if not re.search(r"\d", nm):           # a part number has digits; 'onsemi' is in OnSemi_ECH8 as a maker's name
+            return None
         hits = sorted((len(n), ref) for n, ref in self._fpn if len(nm) >= 6 and nm in n)
         return hits[0][1] if hits else None
 
