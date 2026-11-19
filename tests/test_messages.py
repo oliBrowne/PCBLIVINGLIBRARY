@@ -71,6 +71,7 @@ EXAMPLES = {
     "verify.other": "verify: something a person must look at",
     "crosscheck.disagree": "cross-check disagrees, nothing written: second read: pitch read 0.5, second read 0.65",
     "crosscheck.unchecked": "cross-check unchecked: second read: not checked (refused)",
+    "crosscheck.drawing_disagree": "pinout drawing: disagreed: pin 2 is S in the drawing, D in the symbol",
     "datasheet.no_link": "datasheet: no datasheet URL known",
     "datasheet.no_key": "needs datasheet reader (no API key): https://x.example/a.pdf (BOM)",
     "datasheet.awaiting_ok": "datasheet: waiting for your OK to read it with AI (https://x.example/a.pdf)",
@@ -338,7 +339,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 27, "datasheet.py": 10,
+    "librarian.py": 28, "datasheet.py": 10,
 }
 
 
