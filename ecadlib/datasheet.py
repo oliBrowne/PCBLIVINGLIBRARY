@@ -3771,7 +3771,7 @@ def mentions_part(texts, mpn, short=False, whole=False):
         b = re.sub(r"[^A-Z0-9]", "", base)
         return b != key and len(b) >= n and b in flat
     tape = re.fullmatch(r"([A-Z0-9]*\d[A-Z0-9]*?)([HE]\d{4})(?:[A-Z]{2,4}\d?)?", key)
-    if tape and len(tape.group(1)) >= 4 and tape.group(1) in flat and \
+    if tape and len(tape.group(1)) >= 4 and re.search(r"(?<![A-Z0-9])" + tape.group(1) + r"(?![A-Z0-9])", raw) and \
             re.search(r"(?<![A-Z0-9])" + tape.group(2) + r"(?![0-9])", raw):
         return True       # Infineon's ordering code: BSS84P + its reel code H6327 + XTSA2; the sheet prints the part
         #                   'BSS84P' and its tape and reel 'H6327:3000pcs/r.' apart: both named, it is the part's sheet

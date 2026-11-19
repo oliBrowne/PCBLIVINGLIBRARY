@@ -5,8 +5,8 @@ The runs (x, y, text, size) are as pypdf places them on page 1 of onsemi's BAT54
 from ecadlib import pin_text as PT
 from ecadlib import stdparts as SP
 
-ONSEMI_DIODE = [(428, 523, "3", 8.0), (411, 513, "CATHODE", 8.0), (486, 523, "1", 8.0), (474, 513, "ANODE", 8.0),
-                (300, 300, "2", 8.0)]
+ONSEMI_DIODE = [(413, 589, "3", 8.0), (396, 579, "CATHODE", 8.0), (495, 589, "1", 8.0), (480, 579, "ANODE", 8.0),
+                (434, 673, "1", 7.0), (453, 663, "2", 7.0), (474, 696, "3", 7.0)]     # BAS16LT1G p1: symbol + package
 ONSEMI_P1 = "BAT54L Schottky Barrier Diodes ... SOT-23 (TO-236) CASE 318 STYLE 8 (Note: Microdot may be in either location)"
 ONSEMI_OUTLINE = ("CASE 318 ISSUE AU STYLE 7: PIN 1. EMITTER 2. BASE 3. COLLECTOR STYLE 8: PIN 1. ANODE 2. NO CONNECTION "
                   "3. CATHODE STYLE 9: PIN 1. ANODE 2. ANODE 3. CATHODE STYLE 10: PIN 1. DRAIN 2. SOURCE 3. GATE")
@@ -25,6 +25,8 @@ def test_a_single_diode_is_read_from_the_style_its_front_page_names():
 
 def test_a_style_catalogue_alone_settles_nothing():
     assert PT.diode_orders({5: ONSEMI_OUTLINE}) == []                       # no front-page pointer
+    other_case = ONSEMI_OUTLINE.replace("CASE 318", "CASE 419")             # the style table of another case only
+    assert PT.diode_orders({1: ONSEMI_P1, 5: other_case}) == []
     two = ONSEMI_P1 + " BAT54LT3G CASE 318 STYLE 9"
     assert PT.diode_orders({1: two, 5: ONSEMI_OUTLINE}) == []               # two styles named up front
     pair = ONSEMI_P1.replace("STYLE 8", "STYLE 9")                          # a common-cathode pair's style
@@ -32,10 +34,21 @@ def test_a_style_catalogue_alone_settles_nothing():
 
 
 def test_two_anodes_or_disagreeing_sources_settle_nothing():
-    pair = ONSEMI_DIODE + [(574, 513, "ANODE", 8.0), (586, 523, "2", 8.0)]  # a dual drawn too: two anodes
+    pair = ONSEMI_DIODE + [(574, 579, "ANODE", 8.0), (586, 589, "2", 8.0)]  # a dual drawn too: two anodes
     assert PT.diode_orders({1: "x"}, [(1, pair)]) == []
-    swapped = [(428, 523, "1", 8.0), (411, 513, "CATHODE", 8.0), (486, 523, "3", 8.0), (474, 513, "ANODE", 8.0)]
+    swapped = [(413, 589, "1", 8.0), (396, 579, "CATHODE", 8.0), (495, 589, "3", 8.0), (480, 579, "ANODE", 8.0),
+               (453, 663, "2", 7.0)]
     assert PT.diode_orders({1: ONSEMI_P1, 5: ONSEMI_OUTLINE}, [(1, swapped)]) == ["ANK", "KNA"]   # two orders: none
+
+
+def test_words_without_a_third_lead_beside_them_settle_nothing():
+    sod = [(413, 589, "1", 8.0), (396, 579, "CATHODE", 8.0), (495, 589, "2", 8.0), (480, 579, "ANODE", 8.0)]
+    assert PT.diode_orders({1: "x"}, [(1, sod)]) == []                      # a 2-pin variant's symbol (SOD-123)
+    apart = [(1, ONSEMI_DIODE[:2] + ONSEMI_DIODE[4:]), (7, ONSEMI_DIODE[2:4])]
+    assert PT.diode_orders({1: "x"}, apart) == []                           # anode and cathode on two pages
+    band = [(100, 100, "CATHODE", 8.0), (100, 109, "Pin 1", 8.0), (200, 100, "ANODE", 8.0), (200, 109, "3", 8.0),
+            (150, 150, "2", 8.0)]
+    assert PT.diode_orders({1: "x"}, [(1, band)]) == []                     # a 'Pin 1' marker is no diode pin number
 
 
 def test_only_one_plain_diode_gets_the_three_lead_symbol():
@@ -75,6 +88,8 @@ def test_an_infineon_reel_code_names_the_part_with_its_base():
                                "BSS84PH6327XTSA2")                       # another reel code only
     assert not D.mentions_part(["BSS138 H6327 SIPMOS Small-Signal-Transistor PG-SOT-23 tape and reel"],
                                "BSS84PH6327XTSA2")                       # another part on the same reel code
+    assert not D.mentions_part(["BSS84PW SIPMOS Small-Signal-Transistor SOT-323 H6327: 3000 pcs/reel"],
+                               "BSS84PH6327XTSA2")                       # a sibling (BSS84PW) is not BSS84P
 
 
 def test_a_makers_policy_is_not_a_datasheet():

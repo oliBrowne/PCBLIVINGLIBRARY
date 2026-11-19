@@ -442,7 +442,7 @@ _TERMINAL_SETS = ({"G", "S", "D"}, {"B", "E", "C"})
 _PIN_WORD = re.compile(r"(?i)^pin\s?([1-3])$")
 
 
-def _terminal_pairs(runs, words, letters=()):
+def _terminal_pairs(runs, words, letters=(), pin_words=True):
     """(x, y, key, number) for each terminal name on a page (a word of 'words', or a capital letter of 'letters')
     whose pin number 1-3 is right beside it: the number within two text heights, clearly nearer (1.6 x) than any
     other, and the name that number's nearest too. A number between two names: nothing."""
@@ -451,7 +451,7 @@ def _terminal_pairs(runs, words, letters=()):
         if not sz or sz <= 0:
             continue
         key = words.get(t.upper()) if len(t) > 1 else t if t in letters else None
-        pin = _PIN_WORD.match(t)                       # Infineon: 'Gate' over 'pin1', 'Drain' over 'pin 3'
+        pin = pin_words and _PIN_WORD.match(t)         # Infineon: 'Gate' over 'pin1', 'Drain' over 'pin 3'
         if key:
             names.append((x + 0.25 * sz * len(t), y, key, sz))
         elif t in ("1", "2", "3") or pin:
@@ -495,7 +495,7 @@ def terminal_lines(runs):
 
 
 DIODE_TERMINAL = {"ANODE": "A", "CATHODE": "K"}
-_CASE_STYLE = re.compile(r"\bCASE\s+\d{2,4}[A-Z]{0,2}(?:[-−–]\d{2})?\s*,?\s*STYLE\s+(\d{1,2})\b", re.I)
+_CASE_STYLE = re.compile(r"\bCASE\s+(\d{2,4}[A-Z]{0,2})(?:[-−–]\d{2})?\s*,?\s*STYLE\s+(\d{1,2})\b", re.I)
 _STYLE_BLOCK = r"\bSTYLE\s+{n}\s*:\s*PIN\s+1\s*\.\s*(.+?)\s+2\s*\.\s*(.+?)\s+3\s*\.\s*(.+?)(?=\s+STYLE\s+\d|\s+(?:4\s*\.|DIM\b|NOTES?\b)|$)"
 _NC_WORDS = re.compile(r"(?i)^(?:N\.?\s*C\.?|NO\s+CONNECT(?:ION)?|NOT\s+CONNECTED)$")
 
@@ -515,23 +515,36 @@ def diode_orders(page_texts, page_runs=()):
     and that style names one anode, one cathode and one pin not connected. -> sorted list of distinct orders: one
     order settles it; none or two do not."""
     found = set()
-    a_pins, k_pins = set(), set()
-    for _, runs in page_runs or ():
-        for _, _, key, num in _terminal_pairs(runs, DIODE_TERMINAL):
-            (a_pins if key == "A" else k_pins).add(num)
-    if a_pins or k_pins:
-        if len(a_pins) != 1 or len(k_pins) != 1 or a_pins == k_pins:
-            return []                                  # a second anode or cathode: a pair, or two parts drawn
-        order = ["N", "N", "N"]
-        order[next(iter(a_pins)) - 1], order[next(iter(k_pins)) - 1] = "A", "K"
-        found.add("".join(order))
+    drawn = []                                         # (page, pairs) of every page with an ANODE / CATHODE pair
+    for page, runs in page_runs or ():
+        pairs = _terminal_pairs(runs, DIODE_TERMINAL, pin_words=False)
+        if pairs:
+            drawn.append((page, runs, pairs))
+    if drawn:
+        if len(drawn) != 1 or len(drawn[0][2]) != 2 or {q[2] for q in drawn[0][2]} != {"A", "K"}:
+            return []        # pairs on two pages, a second anode or cathode: a pair, a family, two parts drawn
+        _, runs, pairs = drawn[0]
+        nums = {q[3] for q in pairs}
+        if len(nums) != 2:
+            return []
+        third = ({1, 2, 3} - nums).pop()
+        cx, cy = sum(q[0] for q in pairs) / 2, sum(q[1] for q in pairs) / 2
+        if max(abs(a[0] - b[0]) + abs(a[1] - b[1]) for a in pairs for b in pairs) <= 110 and any(
+                t == str(third) and abs(x - cx) <= 110 and abs(y - cy) <= 110 for x, y, t, _ in runs):
+            order = ["N", "N", "N"]
+            for q in pairs:
+                order[q[3] - 1] = q[2]
+            found.add("".join(order))
+        # else: the two words far apart, or no third lead drawn beside them (a 2-pin variant's symbol, or the
+        # package not drawn there): the words settle nothing; the style table may
     texts = [" ".join(str(t or "").split()) for _, t in sorted((page_texts or {}).items())]
-    styles = {m.group(1) for t in texts[:2] for m in _CASE_STYLE.finditer(t)}
+    styles = {(m.group(1), m.group(2)) for t in texts[:2] for m in _CASE_STYLE.finditer(t)}
     if len(styles) > 1:
         return []                                      # two styles named up front: two variants on one sheet
     if styles:
-        n = next(iter(styles))
-        blocks = {m.groups() for t in texts for m in re.finditer(_STYLE_BLOCK.format(n=n), t, re.I)}
+        case, n = next(iter(styles))                   # that case's own outline page: its style table
+        blocks = {m.groups() for t in texts if re.search(r"\bCASE\s+" + re.escape(case) + r"\b", t, re.I)
+                  for m in re.finditer(_STYLE_BLOCK.format(n=n), t, re.I)}
         orders = set()
         for b in blocks:
             roles = [_diode_role(w) for w in b]
@@ -593,6 +606,7 @@ def glyph_runs(pdf_bytes, limit=GLYPH_PAGES):
     form at the form's own origin; the glyph boxes are where the reader sees them. [] when it cannot be read."""
     try:
         import pypdfium2 as pdfium
+        import pypdfium2.raw  # noqa: F401  (FPDFText_GetCharAngle)
         pdf = pdfium.PdfDocument(bytes(pdf_bytes))
     except Exception:
         return []
@@ -605,7 +619,8 @@ def glyph_runs(pdf_bytes, limit=GLYPH_PAGES):
                 for k in range(tp.count_chars()):
                     c = tp.get_text_range(k, 1)
                     x0, y0, x1, y1 = tp.get_charbox(k)
-                    if not c.strip() or y1 - y0 <= 0:
+                    turned = abs(pdfium.raw.FPDFText_GetCharAngle(tp.raw, k)) > 0.02    # rotated text: not read
+                    if not c.strip() or y1 - y0 <= 0 or turned:
                         if cur:
                             runs.append(cur)
                         cur = None
