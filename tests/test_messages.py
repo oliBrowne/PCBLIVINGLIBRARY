@@ -127,6 +127,7 @@ EXAMPLES = {
                                    "Altium variant names no footprint for its alternate): check MCP6002T-I/MS comes in "
                                    "that package, or give the alternate its own footprint",
     "librarian.easyeda": "EasyEDA C8734 conversion: check pads and pins against the datasheet (native converter, format assumed)",
+    "librarian.check_error": "symbol from kicad: an error stopped its checks (TypeError): compare with the datasheet",
     "librarian.family_pinout": "symbol pinout AMS1117 from the AMS1117-3.3 family table (ecadlib.stdparts): check pins 1-3 against the datasheet",
     "librarian.value_two_ways": "verify: value 4,700pF reads two ways: 4.7pF or 4700pF; write it without the comma",
     "approval.waiting": "awaiting approval: 1 approval from role librarian",
@@ -337,7 +338,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 25, "datasheet.py": 10,
+    "librarian.py": 27, "datasheet.py": 10,
 }
 
 

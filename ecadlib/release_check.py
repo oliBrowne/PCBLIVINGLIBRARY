@@ -597,7 +597,15 @@ def check_item(item, base=".", rules=None):
             add("pins", "footprint has no pads")
         if pins - {p["designator"] for p in pads}:
             add("pins", f"symbol pins without a pad: {FC._ranges(pins - {p['designator'] for p in pads})}")
-        if numbered - pins:
+        src = item.get("source") or {}
+        pair = str((item.get("librarian") or {}).get("kicad_pair") or "")
+        if numbered - pins and pair and str(src.get("symbol") or "").startswith("kicad:") \
+                and src.get("footprint") == f"kicad:{pair}" and not pins - numbered:
+            # KiCad's own symbol names this very land in its Footprint property (KiCad drew the pair): the pads it
+            # gives no pin are left off on purpose (N.C., do-not-connect, a thermal pad the datasheet lets float)
+            warns.append(f"pads without a symbol pin: {FC._ranges(numbered - pins)} (KiCad's symbol for this land "
+                         f"leaves them unconnected: check the datasheet before tying them to a net)")
+        elif numbered - pins:
             add("pins", f"pads without a symbol pin: {FC._ranges(numbered - pins)}")
         if mech - {""}:
             warns.append(f"mechanical pads without a pin (allowed): {FC._ranges(mech - {''})}")

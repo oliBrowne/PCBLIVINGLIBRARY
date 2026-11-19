@@ -140,11 +140,15 @@ def test_a_symbol_without_a_footprint_uses_its_filters_for_the_free_pin_table_ch
     ok, tried, pdf = _variant("LM358DR", "Amplifier_Operational:LM358", pins, "", '8-SOIC (0.154", 3.90mm Width)',
                               filters="SOIC*3.9x4.9mm*P1.27mm* DIP*W7.62mm*")
     assert not ok and pdf == ["LM358DR"], tried          # IC: case agrees with KiCad's filters, the pin table decides
+    # KiCad's filters leave the SOIC out (74HC14: DIP only), or there are none: since 2026-11-19 the pin table still
+    # decides (test_review_holds_1119); with no PDF the part stays held
     ok, tried, pdf = _variant("LM358DR", "Amplifier_Operational:LM358", pins, "", '8-SOIC (0.154", 3.90mm Width)',
                               filters="DIP*W7.62mm*")
-    assert not ok and not pdf, tried                     # KiCad does not draw this symbol for a SOIC
+    assert not ok and pdf == ["LM358DR"], tried
     ok, _, pdf = _variant("LM358DR", "Amplifier_Operational:LM358", pins, "", '8-SOIC (0.154", 3.90mm Width)')
-    assert not ok and not pdf
+    assert not ok and pdf == ["LM358DR"]
+    ok, _, pdf = _variant("LM358DR", "Amplifier_Operational:LM358", pins, "", "")
+    assert not ok and not pdf                            # no case: no land to check it on
 
 
 def _lib(footprints):
@@ -165,8 +169,11 @@ def test_a_footprint_named_after_the_whole_mpn_is_that_parts_land():
     # a series name, an ordering code after it, a wildcard, or the name only inside a longer one: still a person's look
     assert not E("Connector_JST:JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical", "B2B-PH-K-S(LF)(SN)", None)
     assert not E("TerminalBlock_TE-Connectivity:TerminalBlock_TE_1-282834-2_1x12_P2.54mm_Horizontal", "282834-2", None)
-    assert not E("Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal", "USB4105-GF-A", None)
-    assert not E("Connector_USB:USB_Micro-B_Molex-105017-0001", "1050170001", None)
+    assert E("Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal", "USB4105-GF-A", None)  # 11-19
+    assert not E("Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal", "USB4105-12-A", None)
+    assert not E("Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal", "USB4105-GF-B", None)
+    assert not E("Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal", "USB4105-GFX-A", None)
+    assert E("Connector_USB:USB_Micro-B_Molex-105017-0001", "1050170001", None)   # (maker name first: 2026-11-19)
     assert not E("Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical", "B2B-XH-AM(LF)(SN)", None)
     assert not E("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "SOIC-8", None)
 
