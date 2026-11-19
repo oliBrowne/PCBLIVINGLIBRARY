@@ -46,8 +46,10 @@ def test_a_bracketed_word_that_is_not_the_lines_maker_stays():
     # another maker's name, a package or an ordering note in brackets is not dropped on a guess
     lines = _read(["C1,Murata,C0603C104K5RACTU (KEMET)", "U1,TI,TPS62133RGTR (QFN)", "J1,JST,B2B-XH-A(LF)(SN)",
                    "U2,,LM358DR (TI)", "R1,Yageo,Yageo"])
-    assert [l["mpn"] for l in lines] == ["C0603C104K5RACTU (KEMET)", "TPS62133RGTR (QFN)", "B2B-XH-A(LF)(SN)",
-                                         "LM358DR (TI)", "Yageo"], lines
+    assert [l.get("mpn") for l in lines] == ["C0603C104K5RACTU (KEMET)", "TPS62133RGTR (QFN)", "B2B-XH-A(LF)(SN)",
+                                             "LM358DR (TI)", None], lines
+    # a cell holding only the maker's name names no part (2026-11-19): held, never searched or name-matched
+    assert "a maker's name or a label, not a part number" in lines[-1]["bom_hold"], lines[-1]
 
 
 def test_a_dnp_mark_after_the_number_makes_the_line_dnp_like_a_value_mark():

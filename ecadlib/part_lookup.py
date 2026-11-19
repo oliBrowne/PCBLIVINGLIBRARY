@@ -375,10 +375,12 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
                         res.note = f"DigiKey lists {total} results for {p['mpn']}; with no maker on the line not all were seen"
                     return res
             if not hits:
-                near = near_numbers(p["mpn"], [x.get("ManufacturerProductNumber") for x in
-                                               (d.get("ExactMatches") or []) + (d.get("Products") or []) if isinstance(x, dict)])
+                listed = [x for x in (d.get("ExactMatches") or []) + (d.get("Products") or []) if isinstance(x, dict)]
+                near = near_numbers(p["mpn"], [x.get("ManufacturerProductNumber") for x in listed])
                 if near:                                   # named for the person to check, never used
                     res.note = f"DigiKey lists no {p['mpn']}, only {', '.join(near)}: check the BOM's part number"
+                else:                                      # nothing like it: ask for the number's stem (a typo)
+                    res.note = self._near_search(p)
                 return res
             cases = {_case_key(x) for x in hits}
             if len(cases) > 1:
@@ -389,6 +391,31 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
         except (ValueError, AttributeError, TypeError) as e:
             res.error = f"unparseable response: {e}"
             return res
+
+    NEAR_LIMIT = 50                      # listings read per stem search
+
+    def _near_search(self, p):
+        """The BOM's number is listed nowhere and DigiKey's answer showed nothing like it: search for its stem
+        (near_stems, at most two more searches) and name the listed numbers one or two characters away
+        (WSL2512R010FEA -> WSL2512R0100FEA, 25LC1024-I/SN -> 25LC1024-I/SM). The BOM maker's own listings come first.
+        A suggestion for the person, never the part: one character can be another package or value. '' = none."""
+        for stem in near_stems(p["mpn"]):
+            if self.spent:
+                return ""
+            body = json.dumps({"Keywords": stem, "Limit": self.NEAR_LIMIT, "Offset": 0})
+            r = self._paced(lambda: self.http.post(self.KEYWORD_URL, body, headers=self._headers()))
+            if not r.ok:
+                return ""
+            try:
+                d = r.json()
+            except ValueError:
+                return ""
+            listed = [x for x in (d.get("ExactMatches") or []) + (d.get("Products") or []) if isinstance(x, dict)]
+            note = near_note("DigiKey", p, listed, lambda x: x.get("ManufacturerProductNumber"),
+                             lambda x: (x.get("Manufacturer") or {}).get("Name", "") if isinstance(x.get("Manufacturer"), dict) else "")
+            if note:
+                return note
+        return ""
 
     def part(self, p, alternates=False):
         res = PartInfo(self.name, mpn=p["mpn"])
@@ -422,6 +449,77 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
         except (ValueError, AttributeError, TypeError) as e:
             res.error = f"unparseable response: {e}"
             return res
+
+
+def edit_distance(a, b, cap=4):
+    """Optimal-string-alignment distance (a swap of two neighbours counts once), stopped at cap."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev2, prev = None, list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb))
+            if prev2 is not None and i > 1 and j > 1 and ca == b[j - 2] and a[i - 2] == cb:
+                cur[j] = min(cur[j], prev2[j - 2] + 1)
+        if min(cur) > cap:
+            return cap + 1
+        prev2, prev = prev, cur
+    return prev[-1]
+
+
+def typo_distance(mpn, listed_mpn):
+    """How far a listed number is from the BOM's (normalised), when it is near enough to be the number meant: one
+    character for part numbers under 12 characters, two from 12 on. None otherwise. Near is never the same part."""
+    a, b = norm_mpn(mpn), norm_mpn(listed_mpn)
+    if not a or not b or a == b or len(a) < 6:
+        return None
+    d = edit_distance(a, b, 2)
+    return d if d <= (2 if len(a) >= 12 else 1) else None
+
+
+def near_stems(mpn):
+    """At most two shorter searches for a part number nobody lists, longest first: the number less its last three
+    characters (WSL2512R010FEA -> WSL2512R010, 25LC1024-I/SN -> 25LC1024-I), then its series (the letters and digits it
+    starts with, ISL28134IHZ-T7 -> ISL28134; or, when that is too short, the number less its last two dash groups,
+    ECS-160-20-33-AGN-TR -> ECS-160-20-33). Each keeps 5+ letters and digits; a number under 8 gives none."""
+    raw = re.sub(r"\s+", " ", str(mpn or "").strip().upper())
+    alnum = lambda t: len(re.sub(r"[^A-Z0-9]", "", t))
+    if alnum(raw) < 8:
+        return []
+    out = [raw[:-3].rstrip("-/,.#+ ")]
+    head = re.match(r"[A-Z]*\d+", raw)
+    groups = re.split(r"(?<=[A-Z0-9])[-/,#+ ](?=[A-Z0-9])", raw)
+    if head and alnum(head.group(0)) >= 5 and not raw.isdigit():
+        out.append(head.group(0))
+    elif len(groups) > 2:
+        out.append(raw[:len(raw) - len(groups[-1]) - len(groups[-2]) - 2])
+    return [t for t in dict.fromkeys(out) if alnum(t) >= 5 and t != raw][:2]
+
+
+def near_note(source, p, items, mpn_of, mfr_of, n=3):
+    """'' or the note naming the listed numbers a typo away from the BOM's (typo_distance) or that it starts / ends
+    like (near_numbers): the BOM maker's own first, then the nearest. Named for the person to check, never used."""
+    seen, rows = set(), []
+    for i in items:
+        m = str(mpn_of(i) or "").strip()
+        if not m or norm_mpn(m) in seen:
+            continue
+        d = typo_distance(p["mpn"], m)
+        if d is None and not near_numbers(p["mpn"], [m]):
+            continue
+        seen.add(norm_mpn(m))
+        maker = str(mfr_of(i) or "").strip()
+        own = not (p.get("manufacturer") or "").strip() or P.same_maker(p["manufacturer"], maker)
+        rows.append((not own, d if d is not None else 3, len(rows), m, maker, own))
+    if not rows:
+        return ""
+    rows.sort()
+    best = min(r[1] for r in rows)              # the nearest only: R0100 for R010 is one off, R2000 two (another value)
+    rows = [r for r in rows if r[1] == best or r[1] == 3]
+    names = [m if own or not maker else f"{m} ({maker})" for _, _, _, m, maker, own in rows[:n]]
+    return (f"{source} lists no {p['mpn']}; nearest listed: {', '.join(names)}: check the BOM's part number "
+            "(nothing was built from these)")
 
 
 def near_numbers(mpn, listed, n=3):
