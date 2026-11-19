@@ -9,6 +9,8 @@ one column for all of them, not a mix). The result is
     {"status": "agreed", "page": n, "column": c, "pins": k}     every pin found, one page, one column
     {"status": "disagreed", "why": ...}                         a name printed with other numbers only, in one column
     {"status": "unchecked", "why": ...}                         no text layer, no table found, ambiguous: no verdict
+                                                                ("doubt": True when names are printed with other
+                                                                numbers or columns disagree: a doubt, not a gap)
 
 A table whose other columns give the same pins other numbers (SOIC and SOT-23 columns, or a variant with its
 supplies swapped) is unchecked even when one column agrees: the text does not say which column is this part's. So is
@@ -436,7 +438,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=()):
             if named is not None:                   # the header names each column's package, and one is this part's
                 col, other = named
             elif other:                             # another package or variant of the part numbers these pins other
-                return {"status": "unchecked", "page": page,      # ways: which column is this part's is not in
+                return {"status": "unchecked", "page": page, "doubt": True,   # ways: which column is this part's is not in
                         "why": f"page {page}'s table gives these pins other numbers in another column ({other}): which "
                                "column is this part's package or variant is not in the text"}
             if agreed is None:
@@ -478,13 +480,16 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=()):
     if agreed is not None:
         if conflicts:                                  # a table on another page names the same pins with other numbers:
             pg, miss = conflicts[0]                    # which table is this part's is not in the text, whichever came first
-            return {"status": "unchecked", "page": agreed["page"],
+            return {"status": "unchecked", "page": agreed["page"], "doubt": True,
                     "why": f"page {agreed['page']}'s table agrees, but page {pg} prints {', '.join(miss[:4])} with other "
                            "numbers (another package or variant?): which table is this part's is not in the text"}
         return agreed
     if best is None:
         return {"status": "unchecked", "why": "no pin table found in the text layer"}
-    return {"status": "unchecked", "why": best[2] or f"page {best[0]} names {best[1]} of {len(pins)} pins"}
+    out = {"status": "unchecked", "why": best[2] or f"page {best[0]} names {best[1]} of {len(pins)} pins"}
+    if best[2] or conflicts:                           # names printed with other numbers somewhere: a doubt about the
+        out["doubt"] = True                            # read, which no other check may settle (pin_drawing)
+    return out
 
 
 _INT = re.compile(r"^\d{1,3}$")

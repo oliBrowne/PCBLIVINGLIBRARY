@@ -1761,6 +1761,7 @@ class Run:
                 job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"],
                              mpn=mpn or None, maker=maker)
                 job["search_package"] = case_land(search_case(row)) or ""   # an independent source (crosscheck)
+                job["search_description"] = str(row.get("src_description") or "")   # the part's kind (pin_drawing)
                 if self.reading(st) and not rd.answered(job):
                     self.refused(st, job, None, cfg.get("folder"))
                 self.folder_file_failed(st, job)
@@ -1785,6 +1786,7 @@ class Run:
         job = rd.job(mpn or item["name"], urls, fp_name, name=item["name"], fp_needed=not st["footprint"],
                      mpn=mpn or None, maker=maker)
         job["search_package"] = case_land(search_case(row)) or ""   # an independent source (crosscheck)
+        job["search_description"] = str(row.get("src_description") or "")   # the part's kind (pin_drawing)
         if refused_before and not rd.answered(job):   # (an earlier answer: the API fetched the link)
             self.refused(st, job, None, cfg.get("folder"))
         self.folder_file_failed(st, job)
@@ -2067,7 +2069,14 @@ class Run:
         if url:                                       # (a PDF from the [datasheet] folder of a line with no link has none)
             st["found"].setdefault("datasheet", (url, f"datasheet reader ({where})"))
         self.kicad_land_confirmed(st, res)            # a KiCad land picked by name, checked against the read's land
-        checked = read_confirmed(res, job, got)
+        drawn = {}
+        checked = read_confirmed(res, job, got, drawn=lambda: drawn.setdefault("v", self.drawn_pins(st, res, job)))
+        v = drawn.get("v") or {}
+        if v.get("status") in ("disagreed", "waiting", "unchecked") and v.get("why"):
+            line = f"pinout drawing: {v['status']}: {v['why']}"
+            st["tried"].append(line)
+            if v["status"] == "disagreed":
+                st["review"].append(line)
         if checked:                                   # an independent source agrees: released with no person's look
             st["tried"].append(f"datasheet reader output ({', '.join(got)}) confirmed: {checked}")
             st["review"].extend(f"datasheet read: {r}" for r in res["needs_review"])
@@ -2075,6 +2084,24 @@ class Run:
             st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                                 "see datasheet/*.review.md"
                                 + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+
+    def drawn_pins(self, st, res, job):
+        """The pinout drawing's verdict on the read's symbol (ecadlib.pin_drawing), for a PDF whose text layer has no pin
+        table that names its pins."""
+        from . import pin_drawing as PD
+        sym = res.get("symbol") or {}
+        text = " ".join(str(x or "") for x in (job.get("search_description"), (st.get("found", {}).get("description") or ("",))[0],
+                                               (st.get("names") or ["", "", ""])[2]))
+        if not text.strip():
+            text = str(sym.get("description") or "")
+        packages = [str(x or "") for x in (job.get("package"), job.get("search_package"), (res.get("spec") or {}).get("name"),
+                                            (st.get("footprint") or {}).get("name"))]
+        try:
+            return PD.confirm(self.reader, job, res, PD.kind_of(text), packages)
+        except D.AssistantPending as e:
+            return {"status": "waiting", "why": str(e)}
+        except Exception as e:                         # a check that breaks never releases a part: it stays held
+            return {"status": "unchecked", "why": f"the pinout drawing check failed ({type(e).__name__}: {str(e)[:120]})"}
 
 
 LAND_POS_TOL, LAND_SIZE_TOL = 0.15, 0.15        # mm: a maker's land drawn by KiCad and read from the datasheet
@@ -2430,7 +2457,7 @@ UNSURE_READ = re.compile(r"does not seem to name|datasheet from your folder|not 
                          r"set aside|check it is this part", re.I)
 
 
-def read_confirmed(res, job, got):
+def read_confirmed(res, job, got, drawn=None):
     """Why a datasheet read may be released with no person's look, or None (it waits for one). Every half the read
     built must be confirmed by a source independent of the read itself (never a confidence score):
       footprint  the cross-check AGREED with an independent source (crosscheck.run: the standard table entry the BOM's
@@ -2453,9 +2480,16 @@ def read_confirmed(res, job, got):
         pins = [(q.get("num"), q.get("name")) for q in (res.get("symbol") or {}).get("pins") or ()]
         data = job.get("data")
         v = PT.check_pdf(data, pins, pin_count=(res.get("spec") or {}).get("pin_count"))
-        if v["status"] != "agreed":
+        if v["status"] == "agreed":
+            why.append(f"{v['pins']} pins agree with the {v.get('where', 'pin table')} on PDF page {v['page']} (text layer)")
+        elif v["status"] == "unchecked" and not v.get("doubt") and drawn is not None:   # no pin table in the text: the pinout DRAWING, read
+            d = drawn() or {}                                   # again from pictures and checked in code (pin_drawing)
+            if d.get("status") != "agreed":
+                return None
+            why.append(f"{d['why']}, read again from pictures of PDF page{'s' if len(d.get('pages') or ()) > 1 else ''} "
+                       f"{', '.join(map(str, d.get('pages') or ()))}")
+        else:
             return None
-        why.append(f"{v['pins']} pins agree with the {v.get('where', 'pin table')} on PDF page {v['page']} (text layer)")
     return "; ".join(why) or None
 
 

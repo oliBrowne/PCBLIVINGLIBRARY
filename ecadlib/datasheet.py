@@ -72,6 +72,7 @@ SETTINGS = {"model": MODEL, "effort": "high", "api_key_env": "ANTHROPIC_API_KEY"
             "escalate": True, "max_attempts": 4,            # pages / model per part: ecadlib.ds_route
             "zoom_drawings": False,                         # close-ups of the drawing pages: zoom_blocks()
             "cross_check": "auto", "cross_check_model": "",  # second source before a footprint is accepted: ecadlib.crosscheck
+            "pin_drawing_check": "auto",          # a pinout drawn as a picture: ecadlib.pin_drawing
             "folder": "",                                   # PDFs a person downloaded, <MPN>.pdf: tried before any link
             "archive": True,                                # no link gave a PDF: the Internet Archive's copy (ecadlib.ds_archive)
             "standard_land": "auto",                        # a read that identifies a standard package: off | auto | always
@@ -3449,6 +3450,11 @@ def clean_url(u):
     u = str(u or "").strip()
     if u.startswith("//"):
         u = "https:" + u
+    # a '#' in the file name is part of it (Mouser's Murata copies: LQH3NPN100MJ0#.pdf), not a fragment: as a fragment
+    # the request goes to ".../LQH3NPN100MJ0" and fails; "ds.pdf#page=3" stays a fragment
+    m = re.match(r"([^?#]*/[^/?#.]*)#([^/?]*\.pdf)$", u, re.I)   # the name before it has no extension of its own
+    if m:
+        u = f"{m.group(1)}%23{m.group(2).replace('#', '%23')}"
     p = urlparse(u)
     if p.netloc.lower().endswith("ti.com") and "suppproductinfo" in p.path.lower():
         go = {k.lower(): v for k, v in parse_qs(p.query).items()}.get("gotourl")
@@ -3495,6 +3501,36 @@ def maker_urls(mpn, maker="", links=()):
     return out
 
 
+# Distributors that host datasheet copies on their own servers (an official part search gives these links: Mouser's
+# mouser.com/datasheet/..., DigiKey's mm.digikey.com/..., LCSC's own copy): a site, not a part, so no part is listed.
+# (each with its country sites: mouser.de, digikey.co.uk)
+DISTRIBUTORS = ("mouser", "digikey", "lcsc", "octopart", "farnell", "newark", "element14", "arrow", "rs-online", "tme",
+                "jlcpcb")
+_DIST_HOST = re.compile(r"(?:^|\.)((?:%s)\.(?:com|cn|eu|ca|de|fr|it|es|jp|in|co\.uk|com\.au|co\.jp|com\.cn))$"
+                        % "|".join(re.escape(d) for d in DISTRIBUTORS))
+
+
+def distributor_host(url):
+    """The distributor whose server holds this link's file ('mouser.com'), or None for a maker's or anyone else's."""
+    from urllib.parse import urlparse
+    try:
+        m = _DIST_HOST.search((urlparse(str(url or "")).hostname or "").lower())
+    except ValueError:
+        return None
+    return m.group(1) if m else None
+
+
+def _copy_label(url, where):
+    """where, with "a distributor's copy, <site>" added for a distributor's own copy: "mouser datasheet link" says
+    which search gave the link, not whose server holds the file. Not for LCSC's own labels (always LCSC's copy)."""
+    d = distributor_host(url)
+    w = str(where or "")
+    if not d or "distributor's copy" in w or (d.startswith("lcsc.") and "lcsc" in w.lower()):
+        return where
+    note = f"a distributor's copy, {d}"
+    return f"{where[:-1]}; {note})" if str(where).endswith(")") else f"{where} ({note})"
+
+
 def datasheet_urls(item=None, ln=None, row=None, found=None):
     """Datasheet links to try, best first, each with where it came from: the BOM's datasheet column, the link an official
     part API gave in triage (Nexar / DigiKey / Mouser), the plan's
@@ -3518,7 +3554,7 @@ def datasheet_urls(item=None, ln=None, row=None, found=None):
         u = clean_url(u)
         if re.match(r"https?://", u) and u not in seen:
             seen.add(u)
-            out.append((u, w))
+            out.append((u, _copy_label(u, w)))
     return out
 
 
@@ -5187,6 +5223,9 @@ class Reader:
             src_hash, lv, why, n = "url" + hashlib.sha256(url.encode()).hexdigest(), [None], {}, None
             facts = tables = None
         else:
+            dist = distributor_host(prov.get("final_url") or prov["url"])   # (a redirect to the maker: the maker's)
+            if dist:                                  # which copy was read: a distributor's, not the maker's own
+                prov = dict(prov, distributor=dist)
             url, where, src_hash, n = prov["url"], prov["where"], prov["sha256"], prov.get("pages") or pdf_pages(data)
             lv, why, more = [None], {}, []
             texts = self._page_texts(data, src_hash) if n else None
@@ -5581,6 +5620,63 @@ class Reader:
                                "purpose": "cross_check", "at": datetime.datetime.now().isoformat(timespec="seconds"),
                                "message": msg})
         return msg, "sync"
+
+    def pin_drawing_message(self, job, model, headers, body, key, pages_sent=None):
+        """The answer to a pin drawing read (ecadlib.pin_drawing): from the result cache; in reader = "assistant" mode
+        from its folder (pins-<part>-<key>; the request is written there and AssistantPending raised until
+        answer.json is there); else one request like a cross-check's second read. -> message. Raises
+        crosscheck.Unavailable."""
+        from . import crosscheck as CC, ds_route as DR
+        rec = self.results.get_check(key)
+        if rec and "message" in rec:
+            return rec["message"]
+        if self.assistant is not None:
+            from . import ds_assistant as DA
+            ajob = dict(job, key=key, body=body, name=str(job.get("name") or job.get("part")))   # <part>-pins-<key>
+            msg = DA.answer(self.assistant, ajob)
+            self.assistant_asked.add(DA.folder(self.assistant, ajob).name)
+            if msg is None:
+                d = DA.request(self.assistant, ajob)
+                raise AssistantPending(f"waiting for your assistant to read the pinout drawing: {d}")
+            self.results.put(key, {"key": key, "part": job["part"], "url": job.get("url", ""), "model": "assistant",
+                                   "via": "assistant", "purpose": "pin_drawing", "message": msg,
+                                   "at": datetime.datetime.now().isoformat(timespec="seconds")})
+            return msg
+        if self.estimate_only or not self.key:
+            raise CC.Unavailable("no answer: no key for the pin drawing read")
+        try:
+            self._guard_cost([{"key": key, "name": job.get("name") or job["part"], "model": model, "body": body, "sync": True,
+                               "url": job.get("url", ""), "prov": {"pages": pages_sent, "sent_as": "base64"}}])
+        except APIError:
+            raise
+        except DatasheetError as e:
+            raise CC.Unavailable(f"not sent: {e}")
+        inf = self.info(model)
+        p = inf["plan"]
+        if p["guided"]:                               # its rails turn the PDF into text or add the main read's worked
+            self._release(key)                        # example: no page pictures as this read needs them, so not made
+            raise CC.Unavailable(f"{model} is read with guide rails here (no page pictures): the pin drawing read needs "
+                                 "a model that reads images; set [datasheet] cross_check_model to one")
+        send, _ = self._send_fn(dict(job, model=model, headers=headers))
+        try:
+            with logging_to(self.log_file, self.say):
+                msg = send(body)
+        except DatasheetError as e:
+            if not getattr(e, "maybe_billed", False):
+                self._release(key)
+            else:
+                self._maybe_billed(job, key, model, e, "pin_drawing")
+            if isinstance(e, APIError):
+                raise
+            raise CC.Unavailable(str(e)[:200])
+        self._settle(key, model, msg, "sync")
+        r = DR.attempt_record(job["part"], job.get("name"), model, msg, "sync", pages_sent, job.get("n_pages"), "pin drawing")
+        r["purpose"] = "pin_drawing"
+        self.ledger.add(r)
+        self.results.put(key, {"key": key, "part": job["part"], "url": job.get("url", ""), "model": model, "via": "sync",
+                               "purpose": "pin_drawing", "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                               "message": msg})
+        return msg
 
     def _ai_record(self, job, rec, res):
         """Provenance of the model and rails (sidecar "ai"); a guided model's answer that still fails the checks at

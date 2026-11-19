@@ -190,6 +190,13 @@ downloads_folder = ""      # "" = the system Downloads folder (on Windows the on
 
 `ECADLIB_DOWNLOAD=plain` (or a comma list such as `headers,browser`) overrides `download` for one run, and `ECADLIB_NO_HANDOFF=1` turns the hand-off off. `ECADLIB_BROWSER` points the headless browser at a particular Chrome or Edge executable. The test suite sets `ECADLIB_DOWNLOAD=plain` and `ECADLIB_NO_HANDOFF=1`; `tests/test_pdf_fetch.py` checks each way against a local site that refuses scripts the ways bot managers do (a User-Agent check, a cookie set by a script, a challenge page that reloads itself, a link written by a script).
 
+### Distributors' copies of a datasheet
+
+The official part searches give more than the maker's link. Mouser's `DataSheetUrl` is often Mouser's own copy (`mouser.com/datasheet/...`), DigiKey's media links can be DigiKey's copy (`mm.digikey.com/...`), Nexar lists every datasheet it knows, and a part with an LCSC number has LCSC's copy. Triage keeps them all (`src_datasheet`, then `src_datasheet_more`), and every one is tried in turn, with the same checks as any link: a complete PDF that names the part and is not a notice or certificate. The part's review says which link gave the PDF; a distributor's copy says "a distributor's copy, mouser.com" (and `distributor` in its provenance).
+
+* The maker's own links are always tried first: the maker's current datasheet is the reference, and a distributor's copy can be an older or newer revision. A distributor's copy is used only when no maker link gives a usable PDF, and then it is used.
+* When the part searches give only the maker's link (DigiKey and Mouser both point at we-online.com for Würth parts), there is no distributor copy to try. Nexar (`ecadlib nexar signin`) and an LCSC number add more.
+
 ### When no link gives a PDF: the Internet Archive's copy (`ds_archive.py`)
 
 A BOM's datasheet link often dies: the maker renumbered its documents, moved its site or was bought. Other links stay alive and are refused to every automatic way above. The [Wayback Machine](https://web.archive.org) has usually saved the PDF such a link once gave. Once none of a part's links gave a PDF (and no family file in your `[datasheet] folder` did), ecadlib asks the Archive's availability API for the newest good capture of each failed link, and downloads that capture as it downloads any link. It is free and needs no key or account. It comes before your own browser is opened and before a paid web search.
