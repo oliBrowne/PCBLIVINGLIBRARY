@@ -1634,6 +1634,9 @@ class Run:
         search's, the KiCad symbol's, the maker's URL pattern: datasheet.datasheet_urls, as the datasheet reader tries
         them), else the Internet Archive's copy of one that gave none ([datasheet] archive, as the reader asks for it)
         -> (bytes, url) or (None, None). Cached by the HTTP cache; never the hand-off to a person."""
+        own = self.own_pdf(mpn)                    # <MPN>.pdf a person or their assistant saved: before every link
+        if own[0] is not None:
+            return own
         urls = D.datasheet_urls(item, ln, row, st["found"])   # (--offline: the PDF store reads its cache only)
         if not urls:
             return None, None
@@ -1647,6 +1650,41 @@ class Run:
             except Exception as e:                 # a refused or broken link: the next one
                 linked.append({"url": url, "where": where, "error": str(e)})
         return self.archived_pdf(mpn, linked)
+
+    def own_pdf(self, mpn):
+        """The part's own file (<MPN>.pdf, datasheet.local_datasheet "exact") in the [datasheet] folder, else in
+        datasheet/assistant/pdfs with [datasheet] reader = "assistant" (where its request asks your assistant to save a
+        PDF ecadlib could not download), as the datasheet reader takes it -> (bytes, "<file> in your ... folder") or
+        (None, None). Like a link's PDF (PdfStore.fetch with the MPN), a file that is not a PDF, opens as another kind
+        of document or does not name the part is not used. The file's name only, never a path on this machine."""
+        if not mpn:
+            return None, None
+        from . import ds_route as DR
+        cfg = getattr(getattr(self, "reader", None), "cfg", None) or D.settings(getattr(self, "rules", None))
+        places = [(cfg.get("folder"), "your [datasheet] folder")]
+        if cfg.get("reader") == "assistant" and getattr(self, "out", None) is not None:
+            from . import ds_assistant as DA
+            places.append((DA.pdf_folder(DA.root(self.out)), "your assistant's pdfs folder"))
+        for folder, place in places:
+            if not str(folder or "").strip():
+                continue
+            f, _ = D.local_datasheet(folder, mpn, ("exact",))
+            if f is None:
+                continue
+            try:
+                data = f.read_bytes()
+            except OSError:
+                continue
+            if not D.is_pdf(data) or not D.pdf_complete(data):
+                continue
+            try:
+                texts = DR.page_texts(data, D.MENTION_PAGES)
+                if D.not_a_datasheet(texts[:1], D.NEVER_DATASHEET) or D.mentions_part(texts, mpn) is False:
+                    continue
+            except Exception:                         # a PDF that does not read: not this part's, for a free check
+                continue
+            return data, f"{f.name} in {place}"
+        return None, None
 
     def archived_pdf(self, mpn, linked):
         """The Internet Archive's copy of a link that gave no PDF (datasheet.Reader._archived: only a public link whose
