@@ -19,6 +19,13 @@ def test_another_parts_sheet_still_does_not():
     assert D.mentions_part(["74LVC1G08 Single 2-input AND gate" + FILLER], "74LVC1G04GW,125") is False
     assert D.mentions_part(["BAS21 series High-voltage switching diodes" + FILLER], "BAS16,215") is False
     assert D.mentions_part(["PUMH9 NPN/NPN resistor-equipped transistors" + FILLER], "PUMH11,115") is False
+    # what is left must still be a part number: else "can't tell" (None) would let any PDF through
+    assert D.mentions_part(["BAS21 series High-voltage switching diodes" + FILLER], "ABCD,123") is False
+    assert D.mentions_part(["BAS21 series High-voltage switching diodes" + FILLER], "AB1,123") is False
+
+
+def test_a_space_after_the_comma_is_the_same_code():
+    assert D.mentions_part(["74LVC1G04 Single inverter Product data sheet" + FILLER], "74LVC1G04GW, 125") is True
 
 
 if __name__ == "__main__":

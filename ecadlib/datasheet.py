@@ -3790,8 +3790,11 @@ def mentions_part(texts, mpn, short=False, whole=False):
     no minimum length of text. whole: the whole MPN only, never a shorter prefix of it (a package document found by
     search: "S13B" of S13B-EH is in every JST series' S13B-xx part, "KBU4" of KBU4A in a tray table)."""
     main = re.split(r"[#/]", str(mpn or "").strip().upper())[0]                         # #PBF, /NOPB tails off
-    main = re.sub(r",\d{3}$", "", main)              # Nexperia / NXP packing code (74LVC1G04GW,125; BAS16,215): the
-    #   sheet prints 74LVC1G04GW, never the reel; its 3 digits were taken for the part number's numeric core (2026-11-19)
+    base = re.sub(r",\s*\d{3}$", "", main)         # Nexperia / NXP packing code (74LVC1G04GW,125; BAS16,215): the
+    #   sheet prints 74LVC1G04GW, never the reel; its 3 digits were taken for the part number's numeric core (2026-11-19).
+    #   Only when a part number with digits is left: else "can't tell" (None) would let any PDF through (ABCD,123)
+    if base != main and len(re.sub(r"[^A-Z0-9]", "", base)) >= 4 and re.search(r"\d", base):
+        main = base
     key = re.sub(r"[^A-Z0-9]", "", main)
     core = _numeric_core(main, key)
     raw = " ".join(t or "" for t in texts or []).upper()
