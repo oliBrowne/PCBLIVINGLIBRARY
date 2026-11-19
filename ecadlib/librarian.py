@@ -1070,7 +1070,8 @@ class Run:
             st["tried"].append(f"kicad: symbol {sym_ref} ({how})")
             if "(check the case)" in how and self.case_agrees(st, item, ln, row, kind, mpn, sym_ref):
                 pass                               # the part search's case for this exact MPN is the symbol's land
-            elif "check" in how and self.variant_agrees(st, item, ln, row, kind, mpn, sym_ref, chain):
+            elif "check" in how and "(check the maker)" not in how and \
+                    self.variant_agrees(st, item, ln, row, kind, mpn, sym_ref, chain):   # (another maker: a person looks)
                 pass                               # the case and the datasheet's pin table confirm this variant
             elif "check" in how:                   # a near name: a person checks it before it is released
                 st["verify"].append(f"symbol {sym_ref} matched by {how}")
