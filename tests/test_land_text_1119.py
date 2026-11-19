@@ -144,3 +144,19 @@ def test_a_land_the_text_does_not_confirm_keeps_its_hold():
     finally:
         LT.check_pdf = real
     assert rec["status"] == "unchecked" and rec["why"] == "pad width not printed", rec
+
+
+def test_an_agreeing_land_does_not_vouch_for_which_pad_is_which():
+    # a read that placed its pins on sides (a diode's cathode, a tantalum's +) needs a check of those sides: the land
+    # text agreeing checks only the pads' sizes, so the part is not "agreed" on it alone
+    real_lt, real_sides, real_second = LT.check_pdf, CC.sides, CC.second_read
+    LT.check_pdf = lambda data, spec, part=None: {"status": "agreed", "page": 1,
+                                                  "printed": {"pad length": "1.930", "span": "5.639", "pad width": "2.286"}}
+    CC.sides = lambda spec: [("1", "left"), ("2", "right")]
+    CC.second_read = lambda *a: {"source": "second read", "status": "unchecked", "why": "no key", "compared": []}
+    try:
+        res = {"spec": dict(land(1.93, 2.286, 3.709), name="x", package_type="molded"), "symbol": {}}
+        rec = CC.run(_Reader(), {"data": b"%PDF", "part": "x", "fp_needed": True}, res, "m")
+    finally:
+        LT.check_pdf, CC.sides, CC.second_read = real_lt, real_sides, real_second
+    assert rec["status"] != "agreed", rec

@@ -847,8 +847,8 @@ def run(reader, job, res, model):
     ok = [c["status"] for c in checks if (c.get("source") != "standard table" or c in strong and not _self(c))
           and not c.get("same_pages")]
     if first.get("sides"):                  # only a second read that compared the pins on each side checks them
-        ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", []) and not c.get("same_pages")
-              or c.get("source") == "pdf land text"]   # two pads: either can be pin 1, the land is the same
+        # (the land text says nothing about which pad is which: a diode's or a tantalum's polarity is not checked)
+        ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", []) and not c.get("same_pages")]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
         else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) or \
         any(c["status"] == "agreed" and c.get("same_pages") for c in checks) else "unchecked"
