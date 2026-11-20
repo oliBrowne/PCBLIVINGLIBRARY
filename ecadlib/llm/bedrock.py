@@ -46,9 +46,13 @@ def key_for(region):
 
 
 def parse_key(key):
-    """The region a Bedrock pseudo-key names, or None for a real Claude API key."""
+    """The region a Bedrock pseudo-key names, or None for a real Claude API key. A marker naming no AWS region is
+    refused: the region becomes the host the signed request goes to."""
     if isinstance(key, str) and key.startswith(KEY_PREFIX):
-        return key[len(KEY_PREFIX):]
+        r = key[len(KEY_PREFIX):]
+        if not REGION_RE.fullmatch(r):
+            raise BedrockError("the Bedrock key names no AWS region (expected aws-bedrock:<region>)")
+        return r
     return None
 
 
@@ -78,6 +82,9 @@ def model_id(model, region):
 def body_for(body, headers=None):
     """A Claude API Messages body -> the Bedrock InvokeModel body (no model, anthropic_version, betas in the body,
     no server-side fallback). Raises BedrockError for a PDF sent as a link: Bedrock never fetches URLs."""
+    if any(isinstance(t, dict) and str(t.get("type", "")).startswith(("web_search", "web_fetch"))
+           for t in body.get("tools") or []):
+        raise BedrockError("web search is a Claude API tool that Bedrock does not run")
     b = {k: v for k, v in body.items() if k not in ("model", "fallbacks")}
     b["anthropic_version"] = BEDROCK_VERSION
     beta = [x.strip() for x in str((headers or {}).get("anthropic-beta") or "").split(",") if x.strip()]
@@ -92,6 +99,9 @@ def body_for(body, headers=None):
     return b
 
 
+_BOTO = {"creds": None}
+
+
 def credentials(environ=None):
     """(access key, secret key, session token or None): the AWS environment variables, else botocore's chain."""
     env = os.environ if environ is None else environ
@@ -100,12 +110,19 @@ def credentials(environ=None):
         return ak, sk, env.get("AWS_SESSION_TOKEN") or None
     try:
         import botocore.session
-        c = botocore.session.get_session().get_credentials()
-        if c:
-            f = c.get_frozen_credentials()
-            return f.access_key, f.secret_key, f.token
     except ImportError:
-        pass
+        botocore = None
+    if botocore is not None:
+        try:
+            if _BOTO["creds"] is None:                # kept: it refreshes itself (assume-role, SSO), asked once
+                _BOTO["creds"] = botocore.session.get_session().get_credentials() or False
+            if _BOTO["creds"]:
+                f = _BOTO["creds"].get_frozen_credentials()
+                return f.access_key, f.secret_key, f.token
+        except Exception as e:                        # a missing profile, an expired SSO login: one part's error
+            _BOTO["creds"] = None
+            raise BedrockError(f"AWS credentials could not be loaded ({type(e).__name__}): check the AWS profile "
+                               "or sign in again (aws sso login)")
     raise BedrockError("no AWS credentials: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN "
                        "for temporary ones), or install botocore to use an AWS CLI profile")
 
@@ -146,7 +163,9 @@ def count_path(mid):
 
 def count_body(body):
     """Bedrock CountTokens wraps the InvokeModel body, base64-encoded."""
-    raw = json.dumps(body_for(body)).encode()
+    b = dict(body)
+    b.setdefault("max_tokens", 1)                     # InvokeModel's schema wants it; it does not change the count
+    raw = json.dumps(body_for(b)).encode()
     return {"input": {"invokeModel": {"body": base64.b64encode(raw).decode()}}}
 
 

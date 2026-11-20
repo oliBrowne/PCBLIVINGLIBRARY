@@ -21,14 +21,15 @@ def test_endpoint_is_claude_with_no_key_or_url():
     assert ep["provider"] == "anthropic" and ep["preset"] == "bedrock"
     assert ep["base_url"] == "" and ep["key_env"] == "" and ep["region"] == "eu-west-1"
     assert ep["model"] == "claude-opus-5-5"            # the Claude default, as for the Claude API
-    assert LL.key_for(ep, environ={}) == "aws-bedrock:eu-west-1"
+    assert LL.key_for(ep, environ={**AWS, "AWS_REGION": ""}) == "aws-bedrock:eu-west-1"
     assert BR.parse_key("aws-bedrock:eu-west-1") == "eu-west-1" and BR.parse_key("sk-ant-x") is None
 
 
 def test_region_from_environment_and_refused_when_missing_or_odd():
     ep = LL.endpoint(RULES, "datasheet")
-    assert LL.key_for(ep, environ={"AWS_DEFAULT_REGION": "us-west-2"}) == "aws-bedrock:us-west-2"
-    assert LL.key_for(ep, environ={}) is None
+    creds = {k: v for k, v in AWS.items() if k != "AWS_REGION"}
+    assert LL.key_for(ep, environ={**creds, "AWS_DEFAULT_REGION": "us-west-2"}) == "aws-bedrock:us-west-2"
+    assert LL.key_for(ep, environ=creds) is None
     assert "region" in LL.needs_key_message(ep)
     try:
         BR.region_of("us-east-1/../x")
@@ -172,3 +173,96 @@ def test_reader_on_bedrock_sends_no_batch_and_no_web_search(tmp_path, monkeypatc
     attempts = []
     assert r._web_search("X1", None, attempts) == (None, None)
     assert "Bedrock" in attempts[-1]["error"]
+
+
+def test_marker_must_name_a_region():
+    try:
+        D.Client("aws-bedrock:evil.example/x?")
+        raise AssertionError("a marker naming a host instead of a region must be refused")
+    except D.APIError as e:
+        assert "region" in str(e)
+
+
+def test_bedrock_ids_get_the_claude_names_price_and_parameters():
+    for mid in ("us.anthropic.claude-haiku-5-5", "anthropic.claude-haiku-4-5-20251001-v1:0",
+                "arn:aws:bedrock:us-east-1:1:inference-profile/global.anthropic.claude-opus-5-5"):
+        assert D.price_of(mid) is not None, mid
+    assert D.base_model("anthropic.claude-haiku-4-5-20251001-v1:0") == "claude-haiku-4-5"
+    assert D.base_model("claude-opus-5-5") == "claude-opus-5-5"
+
+
+def test_count_body_has_max_tokens_and_no_web_search_through_bedrock():
+    import base64
+    inner = json.loads(base64.b64decode(BR.count_body({"model": "m", "messages": []})["input"]["invokeModel"]["body"]))
+    assert inner["max_tokens"] == 1
+    try:
+        BR.body_for({"model": "m", "messages": [], "tools": [{"type": "web_search_20250305", "name": "web_search"}]})
+        raise AssertionError("web search must not be sent to Bedrock")
+    except BR.BedrockError:
+        pass
+
+
+@lite
+def test_botocore_failure_is_a_bedrock_error(monkeypatch):
+    import sys, types
+    for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+        monkeypatch.setenv(k, "")
+
+    class Sess:
+        def get_credentials(self):
+            raise RuntimeError("The config profile (nope) could not be found")
+    fake = types.ModuleType("botocore.session")
+    fake.get_session = lambda: Sess()
+    pkg = types.ModuleType("botocore")
+    pkg.session = fake
+    monkeypatch.setattr(BR, "_BOTO", {"creds": None})
+    old = {k: sys.modules.get(k) for k in ("botocore", "botocore.session")}
+    sys.modules.update({"botocore": pkg, "botocore.session": fake})
+    try:
+        BR.credentials({})
+        raise AssertionError("must raise")
+    except BR.BedrockError as e:
+        assert "RuntimeError" in str(e) and "nope" not in str(e)
+    finally:
+        for k, v in old.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+
+@lite
+def test_mixed_ladder_sends_each_rung_to_its_own_service(tmp_path, monkeypatch):
+    _env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    rules = {"ai": {"provider": "anthropic", "endpoints": {"aws": {"provider": "bedrock"}}}}
+    r = D.Reader(tmp_path / "out", tmp_path / "cache", rules=rules, log=None, handoff=False)
+    seen = []
+    monkeypatch.setattr(D, "call", lambda h, b, key, timeout=600: seen.append(key) or ({}, {}))
+    for model in ("aws:claude-haiku-5-5", "claude-haiku-5-5"):
+        send, _ = r._send_fn({"model": model, "headers": {}})
+        send({"model": model})
+    assert seen == ["aws-bedrock:us-east-1", "sk-ant-test"]
+    assert r.client("aws:claude-haiku-5-5").bedrock == "us-east-1" and r.client("claude-haiku-5-5").bedrock is None
+
+
+@lite
+def test_package_search_is_not_sent_to_bedrock(tmp_path, monkeypatch):
+    _env(monkeypatch)
+    r = D.Reader(tmp_path / "out", tmp_path / "cache", rules=RULES, log=None, handoff=False)
+    attempts = []
+    assert r._search_links("X1", None, attempts, kind="package") is None
+    assert "Bedrock" in attempts[-1]["error"]
+
+
+@lite
+def test_setup_page_and_doctor_know_bedrock(tmp_path, monkeypatch):
+    _env(monkeypatch)
+    from ecadlib import doctor as DR, easy_setup as ES, firstrun as FR
+    assert ES.current_ai({"ai": {"provider": "bedrock", "model": "claude-haiku-5-5"}}) == ("bedrock", "claude-haiku-5-5")
+    assert not any(s == "anthropic" for s, _, _ in DR.key_services(RULES))
+    lines = DR.check_ai(RULES)
+    assert "Amazon Bedrock" in lines[0][2] if isinstance(lines[0], tuple) else "Amazon Bedrock" in str(lines[0])
+    assert "AWS credentials found" in str(lines[-1])
+    text, ok = FR.reader_key(RULES)
+    assert ok and "AWS" in text

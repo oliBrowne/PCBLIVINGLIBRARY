@@ -2195,6 +2195,7 @@
 "<setcomp>",
 "_ai_key_env",
 "_ai_provider",
+"_bedrock",
 "_c",
 "_configured",
 "_find_tool",

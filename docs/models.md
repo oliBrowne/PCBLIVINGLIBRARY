@@ -17,7 +17,7 @@ model endpoint you configure, with the key you export, and there is no telemetry
   (`claude-haiku-5-5` in us-east-1 goes as `us.anthropic.claude-haiku-5-5`). The model must be enabled for your
   account in the Bedrock console. Differences: no Message Batches (one request per part), no refusal fallback, no
   web search, and Bedrock never fetches a PDF link, so a datasheet ecadlib could not download is not read. When your
-  IAM role may not call `bedrock:CountTokens`, the cost cap uses ecadlib's rough page estimate instead.
+  IAM role may not call `bedrock:CountTokens`, the cost cap uses ecadlib's rough page estimate instead. Costs in `cost.jsonl` and the cap are Anthropic's list prices; Bedrock bills its own rates (a regional inference profile can cost a little more), so check the AWS bill for the exact figure. The setup page lists it as "Claude on Amazon Bedrock"; `ecadlib doctor` checks the region and that credentials exist (names only).
 * **openai-compatible**: any `/v1/chat/completions` server: OpenAI, OpenRouter, Google's OpenAI-compatible Gemini
   endpoint, and local servers (Ollama, LM Studio, vLLM, llama.cpp). Presets fill in the usual `base_url` and key
   variable. A local server needs no key and costs $0 in the cost ledger. Common OpenAI, Gemini and DeepSeek models

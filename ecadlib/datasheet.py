@@ -102,6 +102,11 @@ def base_model(model):
     """'claude-haiku-4-5-20251001' -> 'claude-haiku-4-5': a dated snapshot id gets its alias's request parameters,
     page limit and price."""
     m = str(model or "")
+    # a Bedrock id (us.anthropic.claude-haiku-5-5, anthropic.claude-haiku-4-5-20251001-v1:0, an ARN ending in one)
+    # gets its Claude name's parameters and price: ecadlib.llm.bedrock
+    b = re.search(r"(?:^|[./])anthropic\.(claude-[a-z0-9-]+?)(?:-v\d+(?::\d+)?)?$", m)
+    if b:
+        m = b.group(1)
     return re.sub(r"-\d{8}$", "", m) if m.startswith("claude-") else m
 
 
@@ -346,7 +351,10 @@ class Client:
     def __init__(self, key, base=None, retries=4, backoff=2.0, max_wait=60.0, timeout=600, sleep=None, log_file=None,
                  say=None):
         from .llm import bedrock as BR                # [ai] provider = "bedrock": key is "aws-bedrock:<region>", no secret
-        self.bedrock = BR.parse_key(key)
+        try:
+            self.bedrock = BR.parse_key(key)
+        except BR.BedrockError as e:
+            raise APIError(f"Bedrock: {e}", None, "bedrock")
         if self.bedrock:
             base = "https://" + BR.host(self.bedrock)
         # base: ANTHROPIC_BASE_URL (as the Anthropic SDKs read it: a gateway, a proxy, a local test server), else the API
@@ -456,8 +464,10 @@ class Client:
         from .llm import bedrock as BR
         path = url[len(self.base):].split("?")[0]
         if method != "POST" or path not in ("/v1/messages", "/v1/messages/count_tokens"):
-            raise APIError("Message Batches are not available through Bedrock: ecadlib sends one request per part",
+            err = APIError("Message Batches are not available through Bedrock: ecadlib sends one request per part",
                            None, "bedrock")
+            err.maybe_billed = False
+            raise err
         try:
             mid = BR.model_id((body or {}).get("model"), self.bedrock)
             paid = path == "/v1/messages"
@@ -467,7 +477,9 @@ class Client:
                 sent, bpath = BR.count_body(body), BR.count_path(mid)
             creds = BR.credentials()
         except BR.BedrockError as e:
-            raise APIError(f"Bedrock: {e}", None, "bedrock")
+            err = APIError(f"Bedrock: {e}", None, "bedrock")
+            err.maybe_billed = False                  # nothing was sent
+            raise err
         raw = json.dumps(sent).encode()
         burl = self.base + bpath
         for attempt in range(self.retries + 1):
@@ -1101,11 +1113,11 @@ def zoom_blocks(pdf, sent, why):
 OFFLINE = "--offline: datasheet not read; run without --offline to read it"
 
 
-def require_key(key=None, rules=None):
+def require_key(key=None, rules=None, via_rules=True):
     """The API key: explicit, else the key stored under the name [datasheet] api_key_env gives (default
     ANTHROPIC_API_KEY; `ecadlib keys set`, the setup page), else an environment variable of that name, else
     ANTHROPIC_API_KEY. The key itself never goes in a rules file, log, cache or the environment."""
-    if not (isinstance(key, str) and key and not key.startswith("aws-bedrock:")):
+    if via_rules and not (isinstance(key, str) and key and not key.startswith("aws-bedrock:")):
         from . import llm as LL                       # [ai] provider = "bedrock": AWS signs, the "key" names the region
         try:
             ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
@@ -4901,7 +4913,8 @@ class Reader:
         self.model, self.effort = model or self.ep["ref"], effort or self.cfg["effort"]
         if self.ep["provider"] == "anthropic":
             try:
-                self.key = require_key(key, rules)
+                self.key = require_key(key, rules) if self.ep.get("preset") != "bedrock" else \
+                    (LL.key_for(self.ep) or None)
             except DatasheetError:
                 self.key = None
         else:                                         # from its env var only (`key` is a Claude key); a local
@@ -4941,7 +4954,8 @@ class Reader:
         self.dir = self.out / "datasheet"
         self.log_file = self.dir / "api_log.jsonl"
         self.say, self.sleep = log or (lambda *a: None), sleep or time.sleep
-        self._client, self.pending, self.last_estimate, self.committed_usd = client, {}, None, 0.0
+        self._fixed_client, self._clients = client, {}
+        self.pending, self.last_estimate, self.committed_usd = {}, None, 0.0
         self._holds = {}                              # key -> worst-case USD held for requests not yet answered
         self._creates_done = set()                    # pending-create fingerprints this Reader settled (_save_state)
         self._own_creates = set()                     # ... and the ones it wrote
@@ -4979,19 +4993,31 @@ class Reader:
         """The key a request to the Claude API (count_tokens, Message Batches) carries: this Reader's own when its
         endpoint is Claude, else the key of the Claude endpoint `model` (or the first ladder rung on one) names, as
         _send_fn picks it. Never another provider's key (self.key is the OpenAI one under [ai] provider = openai)."""
+        from . import llm as LL
+        if model:                                     # the key of that model's own endpoint: Bedrock or the Claude API
+            ep = self.info(model)["ep"]
+            if ep["provider"] == "anthropic" and ep.get("preset") != self.ep.get("preset"):
+                return LL.key_for(ep)
         if self.ep["provider"] == "anthropic":
             return self.key
-        from . import llm as LL
         eps = (self.info(r)["ep"] for r in ([model] if model else self.router.ladder))
         return next((LL.key_for(ep) for ep in eps if ep["provider"] == "anthropic"), None)
 
     def client(self, model=None):
         if self.offline:
             raise DatasheetError(OFFLINE)
-        if self._client is None:
-            self._client = Client(require_key(self._claude_key(model)), log_file=self.log_file, say=self.say,
-                                  sleep=self.sleep)
-        return self._client
+        if self._fixed_client is not None:            # a client given to the Reader (tests): used for every model
+            return self._fixed_client
+        key = self._claude_key(model)
+        if not key:
+            from . import llm as LL
+            ep = self.info(model)["ep"] if model else self.ep
+            if ep.get("preset") == "bedrock":
+                raise DatasheetError(LL.needs_key_message(ep))
+        key = require_key(key, self.rules, via_rules=False)   # one client per key: Bedrock and the Claude API apart
+        if key not in self._clients:
+            self._clients[key] = Client(key, log_file=self.log_file, say=self.say, sleep=self.sleep)
+        return self._clients[key]
 
     def _web_search(self, part, package, attempts, maker=None):
         """[datasheet] web_search: once no link, part source or folder file gave a PDF (or the part had no link at
@@ -5041,6 +5067,10 @@ class Reader:
         when no search was made or it failed with no links; the misses in attempts."""
         from . import ds_search as WS
         model = self.cfg.get("web_search_model") or WS.DEFAULT_MODEL
+        where0 = "web search" if kind == "datasheet" else "web search (package drawing)"
+        if self.ep.get("preset") == "bedrock":        # the web search tool is the Claude API's, not Bedrock's
+            attempts.append({"url": "", "where": where0, "error": "not searched: Bedrock has no web search"})
+            return None
         uses = self.cfg.get("web_search_max_uses")
         uses = WS.MAX_USES if uses is None or str(uses).strip() == "" else int(uses)
         where = "web search" if kind == "datasheet" else "web search (package drawing)"
@@ -5928,7 +5958,14 @@ class Reader:
         ep = inf["ep"]
         if ep["provider"] == "anthropic":
             from . import llm as LL
-            key = require_key(self.key if self.ep["provider"] == "anthropic" else LL.key_for(ep), self.rules)
+            if ep.get("preset") == "bedrock":         # Bedrock: AWS signs; never the Claude API's key (and back)
+                key = LL.key_for(ep)
+                if not key:
+                    raise DatasheetError(LL.needs_key_message(ep))
+            else:
+                own = self.key if self.ep["provider"] == "anthropic" and self.ep.get("preset") != "bedrock" \
+                    else LL.key_for(ep)
+                key = require_key(own, self.rules, via_rules=False)
 
             def send(body, _h=job["headers"]):
                 if body.get("model") != ep["model"]:     # a named endpoint's ref ('claude:...'): the API's model id
@@ -6097,6 +6134,8 @@ class Reader:
                     how = "count_tokens"
                 except Exception as e:                # offline, a refused key: an estimate never stops the run
                     self.say(f"  count_tokens failed ({type(e).__name__}): rough estimate instead")
+                    if isinstance(e, APIError) and e.status and 400 <= e.status < 500 and e.status != 429:
+                        self.count_tokens = False     # refused (an IAM role without bedrock:CountTokens): not per part
             if tin is None:
                 pages = len(j["prov"]["pages_sent"]) if j["prov"].get("pages_sent") else j["prov"].get("pages")
                 unknown = not pages and j["prov"].get("sent_as") != "base64"   # sent as a URL, never counted: size unknown

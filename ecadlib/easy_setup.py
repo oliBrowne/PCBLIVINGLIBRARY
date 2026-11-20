@@ -43,6 +43,11 @@ PROVIDERS = [
     ("openrouter", "OpenRouter (many models, one key)", "openrouter", "OPENROUTER_API_KEY",
      [("anthropic/claude-sonnet-4.5", "type any OpenRouter model id")],
      "https://openrouter.ai/settings/keys", ""),
+    ("bedrock", "Claude on Amazon Bedrock (your AWS account)", "bedrock", "",
+     [("claude-haiku-5-5", "cheapest"), ("claude-sonnet-5-5", "balanced"), ("claude-opus-5-5", "most accurate")],
+     "https://console.aws.amazon.com/bedrock/",
+     "No Anthropic key: signed with your AWS credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an AWS CLI "
+     "profile). Set [ai] region in ecadlib.toml, or AWS_REGION."),
     ("ollama", "A model on this computer (Ollama)", "ollama", "",
      [("qwen2.5vl:7b", "type the model name you pulled")],
      "https://ollama.com/download", "Free and private; small local models get extra guide rails and are less accurate."),

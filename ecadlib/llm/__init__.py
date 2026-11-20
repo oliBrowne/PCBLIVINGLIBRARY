@@ -238,7 +238,9 @@ def key_for(ep, explicit=None, environ=None):
     if ep.get("preset") == "bedrock":                 # no secret: a marker naming the region (llm.bedrock)
         from . import bedrock as BR
         try:
-            return BR.key_for(BR.region_of(ep.get("region"), env))
+            region = BR.region_of(ep.get("region"), env)
+            BR.credentials(env)                       # there are AWS credentials to sign with (never returned here)
+            return BR.key_for(region)
         except BR.BedrockError:
             return None
     if explicit:
