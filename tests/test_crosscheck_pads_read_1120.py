@@ -76,7 +76,8 @@ def test_a_pad_table_that_fits_the_package_is_checked_by_the_second_read(monkeyp
 def test_a_footprint_built_from_a_standard_table_is_not_held_for_the_reads_pads(monkeypatch):
     out = _run(monkeypatch, SIT, settled="SOT-23-3")
     assert out["status"] == "agreed" and out["standard"] == "SOT-23-3" and "pads" not in out, out
-    assert _run(monkeypatch, dict(SIT, unresolved=["pitch"]))["status"] == "agreed"
+    # blanks the read left do not exempt it: with no standard package that fits, its own pad table is built
+    assert _run(monkeypatch, dict(SIT, unresolved=["height_max", "lead_span"]))["status"] == "unchecked"
 
 
 @lite

@@ -879,10 +879,11 @@ def run(reader, job, res, model):
         # (the land text says nothing about which pad is which: a diode's or a tantalum's polarity is not checked)
         ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", []) and not c.get("same_pages")]
     # pads the read placed one by one need a check of the pads as well (whatever else checked the sides or the body),
-    # unless the footprint is built from a standard table instead (_settle_turn / _settle_tab, or blanks the table
-    # fills: librarian.standard_land)
-    pads_unchecked = first.get("pads_read") and not standard and not (res["spec"] or {}).get("unresolved") and \
-        "agreed" in ok and not any(c["status"] == "agreed" for c in pad_checks(checks, first))
+    # unless the footprint is built from a standard table instead (_settle_turn / _settle_tab). A read with blanks
+    # (unresolved) is still held: librarian.standard_land builds the table's land only when a standard package fits
+    # the read, and otherwise the read's own pads (VEML7700-TR on Haiku 5.5, 2026-11-20: height and lead span left
+    # blank, no standard package, its pad table built as read)
+    pads_unchecked = first.get("pads_read") and not standard and "agreed" in ok and not any(c["status"] == "agreed" for c in pad_checks(checks, first))
     if pads_unchecked:
         ok = [s for s in ok if s != "agreed"]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
