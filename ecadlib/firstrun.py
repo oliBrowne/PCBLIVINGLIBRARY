@@ -44,6 +44,9 @@ def reader_key(rules=None, environ=None, keys=None):
         ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
     except LL.AIConfigError as e:
         return f"[ai] needs fixing first: {e}", False
+    if ep.get("preset") == "bedrock":
+        ok = bool(LL.key_for(ep, environ=environ))
+        return ("needs an AWS region and AWS credentials, which are " + ("set" if ok else "not set yet")), ok
     if ep["provider"] == "anthropic":
         from .doctor import _ai_key_env
         env = _ai_key_env(rules)
@@ -523,12 +526,19 @@ def blockers(rows, rules=None, offline=False):
             from . import llm as LL
             ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
             env = ep["key_env"] if ep["provider"] != "anthropic" and ep["key_env"] else env
+            bedrock = ep.get("preset") == "bedrock"
         except Exception as e:
             from . import fallbacks as FB
             FB.note("[ai] / [datasheet] model setup did not resolve", e, instead=env)
-        out.append((f"{len(set(nokey))} part(s) need the datasheet reader, but {env} is not set",
-                    f"add it on the setup page (`ecadlib setup`) or with `ecadlib keys set {env}`, or take datasheet out of "
-                    "[sources] order in ecadlib.toml"))
+            bedrock = False
+        if bedrock:
+            out.append((f"{len(set(nokey))} part(s) need the datasheet reader, but Amazon Bedrock has no AWS region or "
+                        "credentials", "set [ai] region (or AWS_REGION) and AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY "
+                        "(or an AWS CLI profile with botocore installed)"))
+        else:
+            out.append((f"{len(set(nokey))} part(s) need the datasheet reader, but {env} is not set",
+                        f"add it on the setup page (`ecadlib setup`) or with `ecadlib keys set {env}`, or take datasheet "
+                        "out of [sources] order in ecadlib.toml"))
     return out
 
 

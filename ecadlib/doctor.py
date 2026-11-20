@@ -103,7 +103,8 @@ def key_services(rules=None):
     """[(service, [env var names], what it unlocks)] - the names come from the rules where the rules name them."""
     ds = _ai_key_env(rules)
     gh = ((rules or {}).get("agent") or {}).get("github_token_env") or "GITHUB_TOKEN"
-    out = [("anthropic", [ds], "datasheet reader and visual check")] if _ai_provider(rules) == "anthropic" else []
+    out = [("anthropic", [ds], "datasheet reader and visual check")] \
+        if _ai_provider(rules) == "anthropic" and not _bedrock(rules) else []
     out += [("altium365", ["NEXAR_TOKEN"], "Altium 365 push")]
     try:
         from . import providers as P
@@ -126,6 +127,15 @@ def _ai_key_env(rules):
         from . import fallbacks as FB
         FB.note("[ai] / [datasheet] model setup did not resolve", e, instead="[datasheet] api_key_env")
     return ((rules or {}).get("datasheet") or {}).get("api_key_env") or "ANTHROPIC_API_KEY"
+
+
+def _bedrock(rules):
+    """[ai] / [datasheet] use Claude through Amazon Bedrock (no Anthropic key)."""
+    try:
+        from . import llm as LL
+        return LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet").get("preset") == "bedrock"
+    except Exception:
+        return False
 
 
 def _ai_provider(rules):
@@ -151,9 +161,21 @@ def check_ai(rules=None, environ=None):
     prof = PR.profile(ep["model"], ep["provider"], rules)
     plan = R.plan(prof, ep["assist"], ep["feedback_retry"])
     guide = [k for k in plan["rails"] if R.RAILS[k][0] != "support"]
-    where = "Anthropic API" if ep["provider"] == "anthropic" else f"{ep['base_url']}" + (" (local)" if ep["local"] else "")
+    bedrock = ep.get("preset") == "bedrock"
+    where = "Amazon Bedrock" if bedrock else "Anthropic API" if ep["provider"] == "anthropic" else \
+        f"{ep['base_url']}" + (" (local)" if ep["local"] else "")
     out = [_c("ai model", "OK", f"{ep['model']} via {ep['name']} ({where}); {plan['tier']} tier, rails: "
                                 f"{', '.join(guide) or 'support only'}")]
+    if bedrock:                                        # AWS signs: a region and credentials, names only
+        from .llm import bedrock as BR
+        try:
+            region = BR.region_of(ep.get("region"), environ)
+            BR.credentials(environ)
+            out.append(_c("ai key", "OK", f"AWS credentials found; region {region}"))
+        except BR.BedrockError as e:
+            out.append(_c("ai key", "WARN", f"{e} (datasheet reader and visual-check skipped)",
+                          "docs/models.md, Amazon Bedrock"))
+        return out
     if ep["provider"] == "anthropic":                  # its key is the `key anthropic` line below
         return out
     key = LL.key_for(ep, environ=environ)

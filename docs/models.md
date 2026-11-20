@@ -11,6 +11,13 @@ model endpoint you configure, with the key you export, and there is no telemetry
 * **anthropic** (the default; nothing to set): Claude through the Messages API exactly as before: PDF document blocks,
   structured outputs, Message Batches, prompt caching, the refusal fallback. With no `[ai]` table the requests are
   byte-for-byte the ones ecadlib sent before this layer existed (a test compares them with hashes taken from the old code).
+* **bedrock**: the same Claude requests through Amazon Bedrock, for an AWS account instead of an Anthropic key.
+  Signed with your AWS credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`, or an AWS CLI
+  profile when botocore is installed); `model` is the Claude name and ecadlib sends the region's inference profile
+  (`claude-haiku-5-5` in us-east-1 goes as `us.anthropic.claude-haiku-5-5`). The model must be enabled for your
+  account in the Bedrock console. Differences: no Message Batches (one request per part), no refusal fallback, no
+  web search, and Bedrock never fetches a PDF link, so a datasheet ecadlib could not download is not read. When your
+  IAM role may not call `bedrock:CountTokens`, the cost cap uses ecadlib's rough page estimate instead. Costs in `cost.jsonl` and the cap are Anthropic's list prices; Bedrock bills its own rates (a regional inference profile can cost a little more), so check the AWS bill for the exact figure. The setup page lists it as "Claude on Amazon Bedrock"; `ecadlib doctor` checks the region and that credentials exist (names only).
 * **openai-compatible**: any `/v1/chat/completions` server: OpenAI, OpenRouter, Google's OpenAI-compatible Gemini
   endpoint, and local servers (Ollama, LM Studio, vLLM, llama.cpp). Presets fill in the usual `base_url` and key
   variable. A local server needs no key and costs $0 in the cost ledger. Common OpenAI, Gemini and DeepSeek models
@@ -26,6 +33,11 @@ visual check) for every model above, and `ecadlib costs` prints the same for the
 [ai]                                   # Claude (the default: this block is the same as having none)
 provider = "anthropic"                 # ecadlib keys set ANTHROPIC_API_KEY
 model = "claude-opus-5-5"
+
+[ai]                                   # Claude through Amazon Bedrock (no Anthropic key: AWS credentials)
+provider = "bedrock"                   # export AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (/ AWS_SESSION_TOKEN)
+region = "us-east-1"                   # "" = AWS_REGION
+model = "claude-haiku-5-5"             # sent as us.anthropic.claude-haiku-5-5; a full Bedrock id or ARN goes as given
 
 [ai]                                   # OpenAI
 provider = "openai"                    # ecadlib keys set OPENAI_API_KEY
