@@ -105,11 +105,36 @@ def critical(spec):
     out["land_axes"] = land_axes(spec)
     out["table_fits"] = table_fits(spec)
     out["sides"] = sides(spec)
+    out["pads_read"] = pads_read(spec)
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
         from . import footprint_gen as FG
         out["rows"] = FG.rows(spec)
     return out
+
+
+def pads_read(spec):
+    """Does the read place the pads itself: a pad table (the maker's land copied pad by pad), or a land block with the
+    signal pads' own size and centre? Then the footprint stands on numbers no package dimension checks: a second read
+    that agrees on the body, the pin count and the pin names says nothing about where each pad is or how big
+    (SiT1533 on Haiku 5.5, 2026-11-20: pad 3 read 0.2 wide at 0.9 for the drawing's 0.4 at 0.8, the second read agreed
+    on everything it compared)."""
+    if not isinstance(spec, dict):
+        return False
+    table = spec.get("pad_table") if isinstance(spec.get("pad_table"), dict) else {}
+    if table.get("pads") or table.get("arrays"):
+        return True
+    land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
+    return all(land.get(k) for k in ("pad_length", "pad_width", "pad_center")) or \
+        all(land.get(k) for k in ("tab_length", "tab_width", "tab_center"))
+
+
+def pad_checks(checks, first):
+    """The checks that confirm a read's own pads (pads_read): the land drawing's printed numbers (land_printed), or a
+    second read that agreed on every number a pad table that fits the package was checked against (table_fits)."""
+    return [c for c in checks if not c.get("same_pages") and (
+        c.get("source") == "pdf land text" or
+        first.get("table_fits") and c.get("source") == "second read" and set(TABLE_CHECKED_BY) <= set(c.get("agreed") or ()))]
 
 
 def table_fits(spec):
@@ -849,6 +874,8 @@ def run(reader, job, res, model):
     if first.get("sides"):                  # only a second read that compared the pins on each side checks them
         # (the land text says nothing about which pad is which: a diode's or a tantalum's polarity is not checked)
         ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", []) and not c.get("same_pages")]
+    elif first.get("pads_read"):            # pads the read placed: only a check of the pads themselves confirms them
+        ok = [c["status"] for c in pad_checks(checks, first)]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
         else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) or \
         any(c["status"] == "agreed" and c.get("same_pages") for c in checks) else "unchecked"

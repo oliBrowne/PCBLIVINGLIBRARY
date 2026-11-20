@@ -7,6 +7,10 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Fixed
+
+- Datasheets: a footprint whose pads the read placed itself (a pad table copied from the maker's land, or a land block with the signal pads' size and centre) is no longer released because a second read agreed on the body, pin count and pin names: that check never looks at the pads. It now needs the land drawing's printed numbers to agree (or, for an exposed-pad table, a second read agreeing on every number the table was checked against); otherwise it is held for a look. Found on Haiku 5.5 through Bedrock: SiT1533's pad 3 was read 0.2 mm wide at 0.9 where the drawing has 0.4 at 0.8, and the part was released.
+
 ### Added
 
 - Claude through Amazon Bedrock: `[ai] provider = "bedrock"` (with `region`, else `AWS_REGION`) sends the same datasheet reads to Claude on your AWS account, signed with your AWS credentials, with no Anthropic key. `model` stays the Claude name (`claude-haiku-5-5`); ecadlib sends the region's inference profile. No Message Batches, refusal fallback or web search through Bedrock, and it does not fetch PDF links, so a datasheet ecadlib could not download is not read. See docs/models.md.

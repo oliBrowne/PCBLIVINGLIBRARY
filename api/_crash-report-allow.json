@@ -1677,6 +1677,8 @@
 "numbered",
 "output_schema",
 "own_tab_land",
+"pad_checks",
+"pads_read",
 "parse",
 "pdf_bars",
 "pins_status",
