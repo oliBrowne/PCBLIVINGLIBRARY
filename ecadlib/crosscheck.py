@@ -114,19 +114,23 @@ def critical(spec):
 
 
 def pads_read(spec):
-    """Does the read place the pads itself: a pad table (the maker's land copied pad by pad), or a land block with the
-    signal pads' own size and centre? Then the footprint stands on numbers no package dimension checks: a second read
-    that agrees on the body, the pin count and the pin names says nothing about where each pad is or how big
-    (SiT1533 on Haiku 5.5, 2026-11-20: pad 3 read 0.2 wide at 0.9 for the drawing's 0.4 at 0.8, the second read agreed
-    on everything it compared)."""
-    if not isinstance(spec, dict):
+    """Does the read place every pad itself: a custom or connector read's pad table (the maker's land copied pad by pad,
+    built as listed by footprint_adv._table)? Then the footprint stands on numbers no package dimension checks: a
+    second read that agrees on the body, the pin count and the pin names says nothing about where each pad is or how
+    big (SiT1533 on Haiku 5.5, 2026-11-20: pad 3 read 0.2 wide at 0.9 for the drawing's 0.4 at 0.8, the second read
+    agreed on everything it compared).
+    Not a land block (pad_length / pad_width / pad_center): its three numbers size a row of pads the package's numbers
+    place, and the build checks them (the copper check under footprint_gen.lead_land, the standard package's pads). Not
+    the thermal land (ep_across / ep_along) either: one central pad, held when smaller than the exposed pad
+    (footprint_gen.thermal_land_small) and caught by the copper check when it reaches the signal pads."""
+    if not isinstance(spec, dict) or spec.get("package_type") not in DRAWN:
         return False
     table = spec.get("pad_table") if isinstance(spec.get("pad_table"), dict) else {}
-    if table.get("pads") or table.get("arrays"):
-        return True
-    land = spec.get("land") if isinstance(spec.get("land"), dict) else {}
-    return all(land.get(k) for k in ("pad_length", "pad_width", "pad_center")) or \
-        all(land.get(k) for k in ("tab_length", "tab_width", "tab_center"))
+    return bool(table.get("pads") or table.get("arrays"))
+
+
+PADS_UNCHECKED = ("the pads were copied from the land drawing pad by pad and no source checked them (a second read "
+                  "compares the body, the pin count and the pin names, not each pad's place and size)")
 
 
 def pad_checks(checks, first):
@@ -874,12 +878,19 @@ def run(reader, job, res, model):
     if first.get("sides"):                  # only a second read that compared the pins on each side checks them
         # (the land text says nothing about which pad is which: a diode's or a tantalum's polarity is not checked)
         ok = [c["status"] for c in checks if "pin_positions" in c.get("compared", []) and not c.get("same_pages")]
-    elif first.get("pads_read"):            # pads the read placed: only a check of the pads themselves confirms them
-        ok = [c["status"] for c in pad_checks(checks, first)]
+    # pads the read placed one by one need a check of the pads as well (whatever else checked the sides or the body),
+    # unless the footprint is built from a standard table instead (_settle_turn / _settle_tab, or blanks the table
+    # fills: librarian.standard_land)
+    pads_unchecked = first.get("pads_read") and not standard and not (res["spec"] or {}).get("unresolved") and \
+        "agreed" in ok and not any(c["status"] == "agreed" for c in pad_checks(checks, first))
+    if pads_unchecked:
+        ok = [s for s in ok if s != "agreed"]
     status = "disagreed" if "disagreed" in st else "agreed" if "agreed" in ok \
         else "self-checked" if not first.get("sides") and any(c["status"] == "agreed" for c in strong) or \
         any(c["status"] == "agreed" and c.get("same_pages") for c in checks) else "unchecked"
     out = {"mode": mode, "status": status, "checks": checks}
+    if pads_unchecked and status != "disagreed":
+        out["pads"] = PADS_UNCHECKED
     if first_pins:
         out["pins"] = pins_status(checks)
     if standard:
@@ -1019,7 +1030,8 @@ def summary_line(rec):
     """One line for review lists: what was compared with what, and every value on both sides."""
     if not rec:
         return "not cross-checked"
-    tail = f"; {PINS_UNCHECKED}" if rec.get("pins") == "unchecked" else ""
+    tail = (f"; {PINS_UNCHECKED}" if rec.get("pins") == "unchecked" else "") + \
+        (f"; held: {rec['pads']}" if rec.get("pads") else "")
     if rec["status"] == "skipped":
         return f"not cross-checked ({rec.get('why')})" + tail
     parts = []

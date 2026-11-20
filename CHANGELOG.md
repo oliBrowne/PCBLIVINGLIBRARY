@@ -9,7 +9,7 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
-- Datasheets: a footprint whose pads the read placed itself (a pad table copied from the maker's land, or a land block with the signal pads' size and centre) is no longer released because a second read agreed on the body, pin count and pin names: that check never looks at the pads. It now needs the land drawing's printed numbers to agree (or, for an exposed-pad table, a second read agreeing on every number the table was checked against); otherwise it is held for a look. Found on Haiku 5.5 through Bedrock: SiT1533's pad 3 was read 0.2 mm wide at 0.9 where the drawing has 0.4 at 0.8, and the part was released.
+- Datasheets: a custom or connector footprint whose pads the read placed itself (a pad table copied from the maker's land) is no longer released because a second read agreed on the body, pin count, pin names or pin sides: that check never looks at the pads. It now needs the land drawing's printed numbers to agree (or, for an exposed-pad table, a second read agreeing on every number the table was checked against); otherwise it is held for a look, and the review says why. Footprints built from a standard table instead, and land blocks (three numbers sizing a row of pads, already checked by the copper check), are unchanged. Found on Haiku 5.5 through Bedrock: SiT1533's pad 3 was read 0.2 mm wide at 0.9 where the drawing has 0.4 at 0.8, and the part was released.
 
 ### Added
 
