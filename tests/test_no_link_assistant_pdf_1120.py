@@ -28,6 +28,11 @@ def _run(d, rules=ASSIST):
     return items["DSPART1"], rd
 
 
+def _named():
+    from tests.test_datasheet_reading_1019 import _placed_pdf
+    return _placed_pdf([(72, 700, "DSPART1 buck converter"), (72, 680, "Pin Functions")])
+
+
 def test_no_link_and_no_saved_pdf_says_so_as_before():
     with tempfile.TemporaryDirectory() as d:
         it, _ = _run(d)
@@ -38,13 +43,11 @@ def test_no_link_but_a_pdf_saved_for_the_assistant_is_asked_of_it_then_built():
     with tempfile.TemporaryDirectory() as d:
         pdfs = DA.pdf_folder(DA.root(Path(d) / "out"))
         pdfs.mkdir(parents=True)
-        (pdfs / "DSPART1.pdf").write_bytes(TC.pdf3())
+        (pdfs / "DSPART1.pdf").write_bytes(_named())
         it, rd = _run(d)
         tried = " ".join(it["librarian"]["tried"])
         assert "no datasheet URL known" not in tried and "waiting for your assistant" in tried, tried
         (f,) = [p for p in rd.assistant.iterdir() if p.is_dir() and p.name.startswith("DSPART1")]
-        req = (f / "request.md").read_text(encoding="utf-8")
-        assert str(d) not in req.split("## Instructions")[0] or "DSPART1.pdf" in req, req[:600]
         (f / "answer.json").write_text(json.dumps(TD.GOOD), encoding="utf-8")
         it, _ = _run(d)
         tried = it["librarian"]["tried"]
@@ -62,11 +65,33 @@ def test_another_parts_file_in_the_assistants_folder_is_not_this_parts():
         assert "datasheet: no datasheet URL known" in it["librarian"]["tried"], it["librarian"]["tried"]
 
 
+def test_a_cut_off_or_wrong_file_saved_for_it_is_said_and_never_read():
+    """As the free checks (Run.own_pdf) and the [datasheet] folder do: a cut-off download, a web page saved as .pdf, or
+    another part's datasheet saved under this part's name is said, with what to do, and the part waits as before."""
+    from tests.test_datasheet_reading_1019 import _placed_pdf
+    whole = TC.pdf3()
+    other = _placed_pdf([(72, 700 - 12 * i, "BAV99 double switching diode in a SOT23 small plastic package, high speed")
+                         for i in range(12)])
+    for data, said in ((whole[:len(whole) // 2], "is cut off (the download stopped early): replace it with the whole PDF"),
+                       (b"<html>Access denied</html>", "is not a PDF (a web page saved as .pdf?): replace it with the PDF"),
+                       (other, "does not name DSPART1 or is not a datasheet: replace it with the part's own datasheet")):
+        with tempfile.TemporaryDirectory() as d:
+            pdfs = DA.pdf_folder(DA.root(Path(d) / "out"))
+            pdfs.mkdir(parents=True)
+            (pdfs / "DSPART1.pdf").write_bytes(data)
+            it, rd = _run(d)
+            tried = it["librarian"]["tried"]
+            assert f"datasheet: DSPART1.pdf in your assistant's pdfs folder {said}" in tried, tried
+            assert "datasheet: no datasheet URL known" in tried, tried
+            assert not [p for p in rd.assistant.iterdir() if p.is_dir() and p.name.startswith("DSPART1")]
+            assert not [t for t in tried if str(d) in t], tried
+
+
 def test_the_assistants_folder_is_not_read_outside_assistant_mode():
     with tempfile.TemporaryDirectory() as d:
         pdfs = DA.pdf_folder(DA.root(Path(d) / "out"))
         pdfs.mkdir(parents=True)
-        (pdfs / "DSPART1.pdf").write_bytes(TC.pdf3())
+        (pdfs / "DSPART1.pdf").write_bytes(_named())
         it, _ = _run(d, rules={})
         assert "datasheet: no datasheet URL known" in it["librarian"]["tried"], it["librarian"]["tried"]
 

@@ -1747,9 +1747,22 @@ class Run:
             # no link, but the part's own PDF saved in datasheet/assistant/pdfs (as its request asks for a link that won't
             # download): Reader.job reads it there, and the free checks do (own_pdf); a family or other part's file is not
             from . import ds_assistant as DA
+            # (checked as the free checks check it: a whole PDF that names the part; else said, so it is replaced)
             f = D.local_datasheet(DA.pdf_folder(DA.root(self.out)), mpn or item["name"], ("exact",))[0]
             if f is not None and D._mpn_key(f.stem) == D._mpn_key(mpn or item["name"]):
-                local, place = f, "saved by your assistant"
+                try:
+                    data = f.read_bytes()
+                except OSError:
+                    data = b""
+                bad = ("is not a PDF (a web page saved as .pdf?): replace it with the PDF" if not D.is_pdf(data) else
+                       "is cut off (the download stopped early): replace it with the whole PDF"
+                       if not D.pdf_complete(data) else None)
+                if bad is None and not (self.own_pdf(mpn or item["name"])[1] or "").endswith("assistant's pdfs folder"):
+                    bad = f"does not name {mpn or item['name']} or is not a datasheet: replace it with the part's own datasheet"
+                if bad:
+                    st["tried"].append(f"datasheet: {f.name} in your assistant's pdfs folder {bad}")
+                else:
+                    local, place = f, "saved by your assistant"
         # (no link: [datasheet] web_search may find one, with a key to bill the search to)
         if not urls and local is None and not (cfg.get("web_search") and (self.api_key or getattr(self.reader, "key", None))):
             note = D.folder_problem(cfg.get("folder"))
