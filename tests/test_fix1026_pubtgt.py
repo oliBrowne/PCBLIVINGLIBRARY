@@ -309,6 +309,8 @@ def test_a365_cli_explains_a_new_revision(tmp_path, monkeypatch):
     from ecadlib import altium365 as A, change_cli as CC, change_gate as CG
     from tests.test_change_control import ANN, FakeA365, demo, gate, item, items_of, write_symbol
     plan, lib = demo()
+    with open(lib.parents[1] / "ecadlib.toml", "a", encoding="utf-8") as f:   # a real CLI push needs the workspace set
+        f.write('\n[altium365]\nworkspace = "https://t.365.altium.com"\n')
     nx = FakeA365()
     class N(FakeA365):                           # Nexar(token) hands back the one fake workspace
         def __new__(cls, *a, **k):

@@ -25,7 +25,7 @@ document the LibPkg lists exists and reads back with ecadlib's reader; every foo
 of the package's PcbLibs (what the IntLib compiler looks for); every [Library Path] / [Footprint Path] in the DbLib's
 table resolves from the DbLib's folder. Not checked: that Altium compiles the package or runs the script (both
 written from Altium's documented scripting API and the examples above, never run)."""
-import argparse, contextlib, json, os, shutil, sys
+import argparse, contextlib, json, os, re, shutil, sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from . import altium_lib as AL
@@ -472,7 +472,13 @@ class NothingReleased(ValueError):
 
 
 def check_name(name):
-    """The package name goes into file names the install scripts open: it must fit cp1252 (see script_bytes)."""
+    """The package name goes into file names the install scripts open: it must fit cp1252 (see script_bytes) and be a
+    Windows file name ('my:lib' wrote the package into an alternate data stream of a file 'my'; 'lib?' failed after
+    half the package was written)."""
+    bad = sorted(set(re.findall(r'[<>:"/\|?*\x00-\x1f]', str(name))))
+    if bad or not str(name).strip() or str(name) != str(name).rstrip(" ."):
+        raise ValueError(f"package name {name!r} can't be a Windows file name"
+                         f"{' (' + ' '.join(map(repr, bad)) + ')' if bad else ''}; pick another --name")
     try:
         str(name).encode("cp1252")
     except UnicodeEncodeError as e:
