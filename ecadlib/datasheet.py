@@ -345,6 +345,10 @@ class Client:
 
     def __init__(self, key, base=None, retries=4, backoff=2.0, max_wait=60.0, timeout=600, sleep=None, log_file=None,
                  say=None):
+        from .llm import bedrock as BR                # [ai] provider = "bedrock": key is "aws-bedrock:<region>", no secret
+        self.bedrock = BR.parse_key(key)
+        if self.bedrock:
+            base = "https://" + BR.host(self.bedrock)
         # base: ANTHROPIC_BASE_URL (as the Anthropic SDKs read it: a gateway, a proxy, a local test server), else the API
         base = (base or os.environ.get("ANTHROPIC_BASE_URL") or API_BASE).rstrip("/")
         if not re.match(r"https?://", base, re.I):
@@ -370,6 +374,8 @@ class Client:
         url = url if url.startswith("http") else self.base + url
         if not url.startswith(self.base + "/"):
             raise APIError(f"refusing to send the API key to {url} (not {self.base})")
+        if self.bedrock:
+            return self._bedrock(method, url, body, headers, retry_on)
         h = {"anthropic-version": API_VERSION, **(headers or {})}
         if body is not None:
             h["content-type"] = "application/json"
@@ -442,6 +448,86 @@ class Client:
             wait = retry_wait(retry_after, attempt, self.backoff, self.max_wait)
             if self.say:
                 self.say(f"  datasheet API: {err.args[0][:120]}; retry {attempt + 1}/{self.retries} in {wait:.0f}s")
+            self.sleep(wait)
+
+    def _bedrock(self, method, url, body, headers, retry_on):
+        """The same request through Amazon Bedrock (ecadlib.llm.bedrock): /v1/messages -> InvokeModel,
+        /v1/messages/count_tokens -> CountTokens, signed with the AWS credentials; retried like the Claude API."""
+        from .llm import bedrock as BR
+        path = url[len(self.base):].split("?")[0]
+        if method != "POST" or path not in ("/v1/messages", "/v1/messages/count_tokens"):
+            raise APIError("Message Batches are not available through Bedrock: ecadlib sends one request per part",
+                           None, "bedrock")
+        try:
+            mid = BR.model_id((body or {}).get("model"), self.bedrock)
+            paid = path == "/v1/messages"
+            if paid:
+                sent, bpath = BR.body_for(body, headers), BR.invoke_path(mid)
+            else:
+                sent, bpath = BR.count_body(body), BR.count_path(mid)
+            creds = BR.credentials()
+        except BR.BedrockError as e:
+            raise APIError(f"Bedrock: {e}", None, "bedrock")
+        raw = json.dumps(sent).encode()
+        burl = self.base + bpath
+        for attempt in range(self.retries + 1):
+            t0, rec = time.time(), {"t": datetime.datetime.now().isoformat(timespec="seconds"), "method": method,
+                                    "url": f"bedrock:{self.bedrock}{bpath}", "attempt": attempt + 1,
+                                    "body": _summary(body) if body is not None else None}
+            h = {"content-type": "application/json", "accept": "application/json",
+                 **BR.sign("POST", BR.host(self.bedrock), bpath, raw, self.bedrock, creds)}
+            retry_after = None
+            try:
+                from .term import waiting
+                with waiting("Claude on Bedrock (model call)" if paid else "Bedrock"):
+                    r = requests.post(burl, **_no_redirects(requests.post, dict(headers=h, data=raw, timeout=self.timeout)))
+            except requests.RequestException as e:
+                again = retry_on is None and (not paid or not_sent(e))
+                err = APIError(f"Bedrock request failed: {type(e).__name__}: {self._scrub(e)[:200]}"
+                               + ("" if again or not paid else " (the request may have reached Bedrock and been billed, "
+                                  "so it is not sent again; run again to retry)"), retryable=again)
+                err.maybe_billed = paid and not not_sent(e)
+                rec.update(error=str(err), ms=int((time.time() - t0) * 1000))
+            else:
+                hdr = getattr(r, "headers", None) or {}
+                rid = hdr.get("x-amzn-RequestId") or hdr.get("x-amzn-requestid")
+                rec.update(status=r.status_code, request_id=rid, ms=int((time.time() - t0) * 1000))
+                try:
+                    payload = r.json()
+                except ValueError:
+                    payload = None
+                if r.status_code == 200 and isinstance(payload, dict) and payload.get("type") != "error":
+                    if not paid:
+                        self._log(rec)
+                        if "inputTokens" not in payload:
+                            raise APIError("Bedrock CountTokens gave no inputTokens", 200, "bedrock")
+                        return {"input_tokens": int(payload["inputTokens"])}
+                    if isinstance(payload.get("usage"), dict):
+                        rec["usage"] = payload["usage"]
+                    for k in ("id", "model", "stop_reason"):
+                        if k in payload:
+                            rec[k] = payload[k]
+                    self._log(rec)
+                    return payload
+                etype, emsg = BR.error_of(payload, hdr)
+                emsg = self._scrub(emsg)
+                st = r.status_code
+                hint = BR.HINTS.get(etype, "")
+                retryable = st in (retry_on or RETRY_STATUS) or (retry_on is None and st >= 500)
+                err = APIError(f"Bedrock HTTP {st}: {etype}: {emsg}" + (f" ({hint})" if hint else "")
+                               + (f" [request-id {rid}]" if rid else ""), st, etype, retryable, rid)
+                rec["error"] = f"{etype}: {emsg}"[:300]
+                retry_after = hdr.get("retry-after")
+                if paid and st == 200:
+                    err.maybe_billed, err.retryable = True, False
+            self._log(rec)
+            if not err.retryable or attempt == self.retries:
+                if err.retryable and attempt:
+                    err.args = (f"{err.args[0]} (gave up after {attempt + 1} attempts)",)
+                raise err
+            wait = retry_wait(retry_after, attempt, self.backoff, self.max_wait)
+            if self.say:
+                self.say(f"  Bedrock: {err.args[0][:120]}; retry {attempt + 1}/{self.retries} in {wait:.0f}s")
             self.sleep(wait)
 
     def _scrub(self, text):
@@ -1019,6 +1105,19 @@ def require_key(key=None, rules=None):
     """The API key: explicit, else the key stored under the name [datasheet] api_key_env gives (default
     ANTHROPIC_API_KEY; `ecadlib keys set`, the setup page), else an environment variable of that name, else
     ANTHROPIC_API_KEY. The key itself never goes in a rules file, log, cache or the environment."""
+    if not (isinstance(key, str) and key and not key.startswith("aws-bedrock:")):
+        from . import llm as LL                       # [ai] provider = "bedrock": AWS signs, the "key" names the region
+        try:
+            ep = LL.endpoint(rules if isinstance(rules, dict) else None, "datasheet")
+        except LL.AIConfigError:
+            ep = None
+        if ep and ep.get("preset") == "bedrock":
+            got = LL.key_for(ep)
+            if not got:
+                raise DatasheetError(LL.needs_key_message(ep))
+            return got
+    if isinstance(key, str) and key.startswith("aws-bedrock:"):
+        return key
     var = settings(rules)["api_key_env"]
     ai = ((rules or {}).get("ai") or {}) if isinstance(rules, dict) else {}
     # another provider's key ([ai] provider = openai ...) is never sent to the Claude API
@@ -4850,6 +4949,9 @@ class Reader:
         self.router, self.ledger, self.page_budget = DR.Router(dict(self.cfg, model=self.model), model), DR.Ledger(self.dir), \
             self.cfg["page_budget"]
         self._texts = {}
+        if self.batch and self.ep.get("preset") == "bedrock":
+            self.batch = False                        # Bedrock has no Message Batches (ecadlib.llm.bedrock)
+            self.say("  datasheet: Bedrock has no Message Batches: one synchronous request per part instead")
         if self.batch and not all(self._plain(m) for m in self.router.ladder):
             self.batch = False                        # Message Batches are Anthropic's, for requests sent as built
             self.say("  datasheet: this model setup is not plain Claude (other provider or guide rails): "
@@ -4899,6 +5001,9 @@ class Reader:
         Search links must be public addresses (unsafe_download public=True). -> (data, prov) or (None, None), the
         misses in attempts."""
         if self.assistant is not None:                # a search is billed to a key: not in assistant mode
+            return None, None
+        if self.ep.get("preset") == "bedrock":        # the web search tool is the Claude API's, not Bedrock's
+            attempts.append({"url": "", "where": "web search", "error": "not searched: Bedrock has no web search"})
             return None, None
         from . import ds_search as WS
         found = WS.Found(self.dir)

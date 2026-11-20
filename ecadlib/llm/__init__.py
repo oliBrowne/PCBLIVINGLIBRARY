@@ -1,8 +1,10 @@
 """Bring your own model: which provider, model, endpoint and key every AI feature uses.
 
-Two providers:
+Three providers:
   anthropic          Claude through the Messages API (datasheet.Client, unchanged: PDF document blocks, structured
                      outputs, Message Batches, prompt caching, server-side refusal fallback). The default.
+  bedrock            the same Claude requests through Amazon Bedrock, signed with your AWS credentials instead of an
+                     Anthropic key ([ai] region, else AWS_REGION; ecadlib.llm.bedrock). No Message Batches.
   openai-compatible  any /v1/chat/completions server: OpenAI, OpenRouter, Google's OpenAI-compatible Gemini endpoint,
                      and local servers (Ollama, LM Studio, vLLM, llama.cpp). base_url + the NAME of the env var holding
                      the key; a local server needs no key. ecadlib.llm.openai_compat translates our Messages-shaped
@@ -11,7 +13,7 @@ Two providers:
 Settings (ecadlib.toml), all optional - with no [ai] table everything is exactly as before (Claude Opus 5.5):
 
     [ai]
-    provider = "anthropic"        # anthropic | openai-compatible | a preset: openai, openrouter, gemini, ollama,
+    provider = "anthropic"        # anthropic | bedrock | openai-compatible | a preset: openai, openrouter, gemini, ollama,
                                   #   lmstudio, vllm, llamacpp (preset = openai-compatible + its usual base_url / key var)
     model = ""                    # "" = [datasheet] model (claude-opus-5-5)
     base_url = ""                 # openai-compatible only; "" = the preset's
@@ -20,6 +22,7 @@ Settings (ecadlib.toml), all optional - with no [ai] table everything is exactly
     feedback_retry = true         # one retry that feeds datasheet's exact check errors back (every model, Claude too)
     detect = true                 # ask an openai-compatible server what the model can do (context, vision, price)
     temperature = "auto"          # auto | off | 0..2: temperature 0 + seed where the model takes them (llm.sampling)
+    region = ""                   # bedrock only: the AWS region ("" = AWS_REGION / AWS_DEFAULT_REGION)
     [ai.profiles."qwen2.5:7b"]    # override what ecadlib assumes about a model (ecadlib.llm.profiles)
     tier = "small"                # frontier | mid | small
     [ai.endpoints.local]          # named endpoints for a mixed ladder: [datasheet] ladder = ["local:qwen2.5:7b",
@@ -33,7 +36,7 @@ import ipaddress, os, re
 from urllib.parse import urlparse
 from .. import userconfig as UC
 
-PROVIDERS = ("anthropic", "openai-compatible")
+PROVIDERS = ("anthropic", "bedrock", "openai-compatible")
 # preset name -> (base_url, key env var name); every preset is an openai-compatible endpoint
 PRESETS = {"openai": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
            "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
@@ -46,7 +49,8 @@ ASSIST = ("auto", "off", "full")
 ANTHROPIC_MODEL = "claude-opus-5-5"
 ANTHROPIC_KEY = "ANTHROPIC_API_KEY"
 DEFAULTS = {"provider": "anthropic", "model": "", "base_url": "", "api_key_env": "", "assist": "auto",
-            "feedback_retry": True, "detect": True, "profiles": {}, "endpoints": {}, "temperature": "auto"}
+            "feedback_retry": True, "detect": True, "profiles": {}, "endpoints": {}, "temperature": "auto",
+            "region": ""}
 SECTION_KEYS = ("provider", "base_url", "assist")       # added to [datasheet] and [agent.proof] (empty = [ai])
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,199}")
 ENV_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -56,6 +60,11 @@ NO_KEY = "no-key-needed"                                # a local endpoint: ther
 
 class AIConfigError(ValueError):
     pass
+
+
+def _P(preset):
+    """(base_url, key env name) of a preset; bedrock has neither (its URL comes from the region, it signs with AWS)."""
+    return ("", "") if preset == "bedrock" else PRESETS[preset]
 
 
 def is_local(url):
@@ -93,7 +102,9 @@ def _norm_provider(p):
         return "openai-compatible", None
     if p == "anthropic":
         return "anthropic", None
-    raise AIConfigError(f"provider {p!r}: use anthropic, openai-compatible or one of {', '.join(PRESETS)}")
+    if p in ("bedrock", "aws-bedrock", "amazon-bedrock"):
+        return "anthropic", "bedrock"                 # Claude's own requests, sent through Bedrock (llm.bedrock)
+    raise AIConfigError(f"provider {p!r}: use anthropic, bedrock, openai-compatible or one of {', '.join(PRESETS)}")
 
 
 def split_ref(ref, rules=None):
@@ -134,7 +145,7 @@ def _same_endpoint(ai, provider, base):
         return False
     if provider == "anthropic":
         return True
-    ai_base = ai["base_url"] or (PRESETS[ai_preset][0] if ai_preset else "")
+    ai_base = ai["base_url"] or (_P(ai_preset)[0] if ai_preset else "")
     return same_server({"provider": provider, "base_url": ai_base}, {"provider": provider, "base_url": base})
 
 
@@ -144,7 +155,7 @@ def _own_server(sec):
         provider, preset = _norm_provider(sec.get("provider"))
     except AIConfigError:
         return None
-    return {"provider": provider, "base_url": sec.get("base_url") or (PRESETS[preset][0] if preset else "")}
+    return {"provider": provider, "base_url": sec.get("base_url") or (_P(preset)[0] if preset else "")}
 
 
 def server_of(rules, section="datasheet"):
@@ -178,14 +189,14 @@ def endpoint(rules=None, section="datasheet", model=None):
     if name:
         ep_cfg = ai["endpoints"][name] or {}
         provider, preset = _norm_provider(ep_cfg.get("provider") or "openai-compatible")
-        base = ep_cfg.get("base_url") or (PRESETS[preset][0] if preset else "")
-        key_env = ep_cfg.get("api_key_env") or (PRESETS[preset][1] if preset else "")
+        base = ep_cfg.get("base_url") or (_P(preset)[0] if preset else "")
+        key_env = ep_cfg.get("api_key_env") or (_P(preset)[1] if preset else "")
         assist = ep_cfg.get("assist") or sec.get("assist") or ai["assist"]
     else:
         provider, preset = _norm_provider(sec.get("provider") or ai["provider"])
         own_provider = bool(sec.get("provider"))
         base = sec.get("base_url") or ("" if own_provider and sec.get("provider") != ai["provider"] else ai["base_url"]) \
-            or (PRESETS[preset][0] if preset else "")
+            or (_P(preset)[0] if preset else "")
         sk = sec.get("api_key_env") or ""
         if sk and ds_key_server is not None and not same_server(ds_key_server, {"provider": provider, "base_url": base}):
             sk = ""                                       # [datasheet]'s key name belongs to its server, not the proof's (R-FX16-3)
@@ -195,7 +206,7 @@ def endpoint(rules=None, section="datasheet", model=None):
         # another server) never inherits it, or e.g. the OpenAI key went to openrouter.ai as a Bearer header (R-LE-1).
         # It takes its own preset's key variable instead; key_for() then refuses when that one is not set.
         ai_key = ai["api_key_env"] if _same_endpoint(ai, provider, base) else ""
-        key_env = sk or ai_key or (PRESETS[preset][1] if preset else "") or \
+        key_env = sk or ai_key or (_P(preset)[1] if preset else "") or \
             (ANTHROPIC_KEY if provider == "anthropic" else "")
         assist = sec.get("assist") or ai["assist"]
         mref = model
@@ -212,7 +223,10 @@ def endpoint(rules=None, section="datasheet", model=None):
     if assist not in ASSIST:
         raise AIConfigError(f"assist = {assist!r}: use auto, off or full")
     ref = f"{name}:{mref}" if name else mref
+    if preset == "bedrock":
+        base, key_env = "", ""                        # signed with AWS credentials: no URL, no key to name
     return {"provider": provider, "preset": preset, "base_url": base.rstrip("/") if base else "", "key_env": key_env,
+            "region": ai["region"] if preset == "bedrock" else "",
             "model": mref, "ref": ref, "name": name or (preset or provider), "local": is_local(base),
             "assist": assist, "feedback_retry": bool(ai["feedback_retry"]), "detect": bool(ai["detect"])}
 
@@ -221,6 +235,12 @@ def key_for(ep, explicit=None, environ=None):
     """The key for an endpoint (userconfig.secret: stored for this user, else the environment). Anthropic: explicit,
     the named key, then ANTHROPIC_API_KEY (as datasheet.require_key always did). A local endpoint needs none (NO_KEY). Otherwise None."""
     env = os.environ if environ is None else environ
+    if ep.get("preset") == "bedrock":                 # no secret: a marker naming the region (llm.bedrock)
+        from . import bedrock as BR
+        try:
+            return BR.key_for(BR.region_of(ep.get("region"), env))
+        except BR.BedrockError:
+            return None
     if explicit:
         return explicit
     k = UC.secret(ep["key_env"], env) if ep.get("key_env") else None
@@ -232,6 +252,9 @@ def key_for(ep, explicit=None, environ=None):
 
 
 def needs_key_message(ep):
+    if ep.get("preset") == "bedrock":
+        return ("Bedrock needs an AWS region: set [ai] region (e.g. \"us-east-1\") or AWS_REGION, and AWS credentials "
+                "(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an AWS CLI profile with botocore installed)")
     if ep["provider"] == "anthropic":
         return (f"{ep['key_env']} is not set: add your Claude API key on the setup page (`ecadlib setup`) or with "
                 f"`ecadlib keys set {ep['key_env']}`")
