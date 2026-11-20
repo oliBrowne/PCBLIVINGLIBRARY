@@ -1742,6 +1742,14 @@ class Run:
         urls = D.datasheet_urls(item, ln, row, st["found"])
         cfg = getattr(self.reader, "cfg", None) or D.settings(self.rules)   # the reader's [datasheet] settings
         local = None if urls else D.local_datasheet(cfg.get("folder"), mpn or item["name"])[0]   # [datasheet] folder
+        place = "datasheet folder"
+        if not urls and local is None and cfg.get("reader") == "assistant":
+            # no link, but the part's own PDF saved in datasheet/assistant/pdfs (as its request asks for a link that won't
+            # download): Reader.job reads it there, and the free checks do (own_pdf); a family or other part's file is not
+            from . import ds_assistant as DA
+            f = D.local_datasheet(DA.pdf_folder(DA.root(self.out)), mpn or item["name"], ("exact",))[0]
+            if f is not None and D._mpn_key(f.stem) == D._mpn_key(mpn or item["name"]):
+                local, place = f, "saved by your assistant"
         # (no link: [datasheet] web_search may find one, with a key to bill the search to)
         if not urls and local is None and not (cfg.get("web_search") and (self.api_key or getattr(self.reader, "key", None))):
             note = D.folder_problem(cfg.get("folder"))
@@ -1751,7 +1759,7 @@ class Run:
             self.reading(st)                          # (no link: none refused)
             return
         # (the folder file's name only, never its path)
-        first = urls[0] if urls else (local.name, "datasheet folder") if local else ("a web search", "web search")
+        first = urls[0] if urls else (local.name, place) if local else ("a web search", "web search")
         maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0] or None
         if self.reader is None:
             self.reader = D.Reader(self.out, Path(self._kicad_args[0] or self.out / "cache").parent, self.api_key, self.rules, self.http)
