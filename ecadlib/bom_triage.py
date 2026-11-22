@@ -407,24 +407,25 @@ def _fixed_width_rows(text):
     cut at the header words' columns; None for any other text. A cell may hold spaces ('C1, C2, C5', 'Chip
     Capacitor'), so the header's column starts are used, not whitespace. The cut is used only when the rows fit
     it: every column start falls on a space or the row's end in at least 90% of the data rows."""
-    lines = text.expandtabs(8).splitlines()
+    lines = text.splitlines()
     k = next((i for i, ln in enumerate(lines[:60]) if _FIXED_HEADER.fullmatch(ln.strip())), None)
-    if k is None or any(d in lines[k] for d in (",", ";", "|")):
+    if k is None or any(d in lines[k] for d in (",", ";", "|", "\t")):   # a delimited file (TSV too): not padded
         return None
+    lines = [ln.expandtabs(8) for ln in lines]
     head = lines[k]
     starts = [m.start() for m in re.finditer(r"\S+", head)]
     data = [ln for ln in lines[k + 1:] if ln.strip() and not re.fullmatch(r"[\s\-=_]+", ln)]
     if not data:
         return None
-    fits = sum(all(s >= len(ln) or s == 0 or ln[s - 1] == " " for s in starts[1:]) for ln in data)
-    if fits < 0.9 * len(data):
-        return None
+    if not all(all(s >= len(ln) or ln[s - 1] == " " for s in starts[1:]) for ln in data):
+        return None                                       # one row off the columns: not cut (it would be mis-read)
 
     def cut(ln):
         return [ln[a:b].strip() for a, b in zip(starts, starts[1:] + [None])]
     top = cut(head)
     if top[0] == "Part":                                  # EAGLE's Partlist: 'Part' is the designator, whatever it
         top[0] = "Designator"                             # holds (R1, but also BATT, +5V, /RST for named parts)
+    top = ["EAGLE " + h if h in ("Library", "Sheet") else h for h in top]   # EAGLE's library name is no LibRef
     return [top] + [cut(ln) for ln in data]
 
 
@@ -454,11 +455,13 @@ def _part_is_designators(df, headers, mapping, columns=None):
     return len(cells) >= 1 and len(refs) >= 0.8 * len(cells)
 
 
-def _part_designator_column(df, headers, mapping):
+def _part_designator_column(df, headers, mapping, columns=None):
     """The header of an unread column headed just 'Part' / 'Parts' whose cells are reference designators, when no
     column was read as the designator (EAGLE's CSV BOM puts 'Part' first and the maker part number in its own
     column); None otherwise."""
     used = set(mapping.values())
+    if "device" not in {_hnorm(x) for x in headers} or columns:      # EAGLE's own columns: Part, Value, Device
+        return None                                                   # (a 'Part' of S8050, MP1584 elsewhere is MPNs)
     for j, h in enumerate(headers):
         if h in used or _hnorm(h) not in ("part", "parts") or headers.index(h) != j:
             continue
@@ -549,7 +552,7 @@ def read_bom(path, columns=None, rules=None, root=None):
     if _part_is_designators(df, headers, mapping, columns):
         mapping["designator"] = mapping.pop("mpn")              # EAGLE's 'Part' column: R1, C1, U1
     elif "designator" not in mapping:                           # EAGLE's CSV: 'Part' (R1, C1) beside a real MPN column
-        part = _part_designator_column(df, headers, mapping)
+        part = _part_designator_column(df, headers, mapping, columns)
         if part:
             mapping["designator"] = part
     _warn_unmatched_columns(p, headers, columns)
@@ -1024,7 +1027,7 @@ def _split_mpn(mpn, maker=""):
 
 
 _SIZE_CODE = r"(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512|2220|1005|1608|2012|3216|3225|4532|5025|6332)"
-_VALUE_WORD = r"(?:\d+(?:[.,]\d+)?\s*[pnuµμmkKMG]?\s*(?:F|H|Ω|ohms?|R)?|\d*[pnuµμkKMGR]\d+)"
+_VALUE_WORD = r"(?:\d+(?:[.,]\d+)?\s*[pnuµμmkKMG]?\s*(?:F|H|Ω|ohms?|R)?|\d*[pnuµμkKMGR]\d+|\d+(?:[.,]\d+)?\s*(?:%|V|W))"
 _SIZE_VALUE_CELL = re.compile(rf"(?:{_SIZE_CODE}|{_VALUE_WORD})(?:\s*[,/;]\s*|\s+)(?:{_SIZE_CODE}|{_VALUE_WORD})"
                               rf"(?:(?:\s*[,/;]\s*|\s+)(?:{_SIZE_CODE}|{_VALUE_WORD}))*", re.I)
 _DIGIKEY_PN = re.compile(r"[A-Z0-9][A-Z0-9\-./#+()]*-ND", re.I)
@@ -1038,7 +1041,7 @@ def _not_a_part_number(s):
     s = str(s or "").strip()
     if not s:
         return None
-    if _SIZE_VALUE_CELL.fullmatch(s) and re.search(_SIZE_CODE, s) and re.search(r"[pnuµμkKMGRFHΩ]", s):
+    if _SIZE_VALUE_CELL.fullmatch(s) and re.search(_SIZE_CODE, s):   # '0805, 4.7uF', '0603 10 ohm', '1608 330'
         return "size_value"
     if _DIGIKEY_PN.fullmatch(s):
         return "digikey"

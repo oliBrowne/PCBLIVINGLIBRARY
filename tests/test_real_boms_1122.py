@@ -210,3 +210,44 @@ def test_a_metric_size_in_the_description_is_not_read_as_megohms(tmp_path):
                   log=lambda *a, **k: None)
     val = next((p["value"] for p in items[0]["parameters"] if p["name"] == "Value"), "")
     assert val != "0603M" and not (items[0]["status"] == "ready" and not val), (val, items[0]["status"])
+
+
+# Review findings (2026-11-22): each failed on the first version of the fixes above.
+@lite
+def test_a_tab_separated_part_value_file_is_not_cut_by_position(tmp_path):
+    rows = ["Part\tValue\tPackage\tMPN"] + [f"R{i}\t10k\t0603\tRC0603FR-0710KL" for i in range(1, 11)]
+    rows.append("C1\t10uF 25V\t0805\tCL21A106KAYNNNE")
+    lines, _ = _read(tmp_path, "\n".join(rows) + "\n", "b.tsv")
+    c1 = lines[-1]
+    assert c1["footprint"] == "0805" and c1["mpn"] == "CL21A106KAYNNNE"
+
+
+@lite
+def test_eia_coded_resistor_values_that_match_the_part_number_are_not_held():
+    from ecadlib import mpn_decode as MD
+    lines = [{"designator": "R1", "value": "103", "mpn": "RC0603FR-0710KL"},
+             {"designator": "R2", "value": "1002", "mpn": "RC0603FR-0710KL"},
+             {"designator": "R3", "value": "4702", "mpn": "CRCW060347K0FKEA"},
+             {"designator": "R4", "value": "4,7", "mpn": "RC0603FR-074K7L"}]           # 4.7 ohm on a 4.7k code
+    MD.fill_lines(lines)
+    assert [bool(ln.get("bom_hold")) for ln in lines] == [False, False, False, True]
+
+
+@lite
+def test_a_part_column_of_short_part_numbers_is_not_taken_for_designators(tmp_path):
+    text = "Part,Qty,Manufacturer Part Number,Footprint\nM7,1,M7-13-F,SMA\nS8050,1,S8050,SOT-23\n" \
+           "MP1584,1,MP1584EN-LF-Z,SOIC-8\nAMS1117,1,AMS1117-3.3,SOT-223\nC1815,1,2SC1815,TO-92\n"
+    _, mapping = _read(tmp_path, text, "b.csv")
+    assert "designator" not in mapping
+
+
+@lite
+def test_more_size_and_value_mpn_cells_are_caught():
+    for cell in ("0603 10 ohm", "10K 0603 1%", "0603 1k 5%", "1608 330", "0805 100nF 50V"):
+        assert BT._not_a_part_number(cell) == "size_value", cell
+
+
+@lite
+def test_eagle_library_column_is_not_read_as_a_libref(tmp_path):
+    _, mapping = _read(tmp_path, EAGLE_PARTLIST)
+    assert "libref" not in mapping
