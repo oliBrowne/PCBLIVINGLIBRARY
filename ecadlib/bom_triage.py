@@ -1349,6 +1349,7 @@ def triage(lines, index, provs, http, shared=None):
         if dup.get(i):
             notes.append(dup[i])
         if not (sym and fp_key):
+            lcsc_answered = False
             for prov in provs:
                 if isinstance(prov, P.LCSC_SEARCHES) and work.get("lcsc"):
                     if not desc and not ln.get("description") and hasattr(prov, "lookup_lcsc"):   # the number is
@@ -1393,9 +1394,11 @@ def triage(lines, index, provs, http, shared=None):
                     limited.setdefault(prov.name, r.error)  # with no key, not an unreachable one
                     continue
                 if r.error:
-                    errored = True
+                    if not (isinstance(prov, P.LCSC_SEARCHES) and lcsc_answered):   # one LCSC search answered: a
+                        errored = True                     # second one failing does not make the line unverified
                     notes.append(f"{prov.name}: {r.error}")
                 elif isinstance(prov, P.LCSC_SEARCHES):
+                    lcsc_answered = True
                     tag = getattr(prov, "note_label", "jlcpcb")
                     if r.found:
                         work["lcsc"] = r.lcsc
@@ -1407,14 +1410,17 @@ def triage(lines, index, provs, http, shared=None):
                             sheet = sheet or link
                             sheets.append(link)
                         makers = (r.extra or {}).get("makers") or []
-                        if len(makers) == 1:                        # LCSC sells this exact MPN under one maker only
+                        partial = bool((r.extra or {}).get("makers_partial"))   # some listings' makers not known
+                        if len(makers) == 1 and not partial:        # LCSC sells this exact MPN under one maker only
                             disagree(makers[0], prov.name)
-                        elif len(makers) > 1:                       # clones under the same MPN: not ours to pick
+                        elif len(makers) > 1 or partial:            # clones under the same MPN: not ours to pick
                             several = True
                             seen(*makers)
                             if not bom_maker:               # the BOM names the maker: nothing to fill
+                                listed = (f"{len(makers)} makers ({', '.join(makers[:4])})" if not partial else
+                                          f"several listings, not all with a known maker ({', '.join(makers[:4]) or 'none read'})")
                                 notes.append(f"{tag}: {ln.get('mpn') or work.get('mpn', '')} is listed under "
-                                             f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
+                                             f"{listed}: the maker is not filled")
                     notes.append(f"{tag}: MPN -> {r.lcsc}" if r.found else f"{tag}: no exact MPN match")
                     if r.found and (r.extra or {}).get("package_note"):
                         notes.append(f"{tag}: {r.extra['package_note']}")

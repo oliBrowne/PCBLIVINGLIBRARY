@@ -514,7 +514,8 @@ class LCSCSearch(Provider):
     number (wmsc.lcsc.com, the JSON LCSC's website reads: maker, package, datasheet link, description).
 
     Only an exact MPN counts, never a near one; a product page whose number or MPN differs from the listing is not
-    used. The maker is named only when every exact listing's product page was read (clones share MPNs). The rows go
+    used. The maker is named only when every exact listing's product page was read and names one (clones share
+    MPNs); otherwise extra['makers_partial'] tells triage the makers listed are not all of them. The rows go
     through pick_listing, the same choice as JLCPCB's search. A 403/429 stops that site for the rest of the run."""
     name = "lcsc_search"
     note_label = "lcsc"
@@ -604,6 +605,8 @@ class LCSCSearch(Provider):
             if d and norm_mpn(d["componentModelEn"]) != want:     # LCSC's page names another part: not this listing
                 notes.append(f"{code} is {d['componentModelEn'] or 'another part'} on LCSC, not {mpn}: not used")
                 continue
+            if d and not d["componentBrandEn"]:                    # a page naming no maker: its maker is not known
+                unread += 1
             if not d:
                 unread += 1
                 if err:
@@ -617,8 +620,11 @@ class LCSCSearch(Provider):
             res.extra = {"note": "; ".join(notes)[:300]} if notes else {}
             return res
         pick_listing(items, mpn, res, maker=line.get("manufacturer") or "", package=bom_land(line))
-        if res.found and unread and len(items) > 1 and len(res.extra.get("makers") or []) < 2:
-            res.extra["makers"] = []     # a listing whose maker was not read may be a clone's: no maker is named
+        if res.found and unread:         # a listing whose maker is not known may be a clone's: the makers read are
+            if len(items) > 1:           # not all of them (triage treats the part as sold by several, naming none)
+                res.extra["makers_partial"] = True
+            elif not res.manufacturer:
+                res.extra["makers"] = []
         if res.found and notes:
             res.extra["note"] = "; ".join(notes)[:300]
         return res

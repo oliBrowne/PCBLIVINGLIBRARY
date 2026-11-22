@@ -82,8 +82,63 @@ def test_clones_under_one_mpn_name_no_maker_and_the_boms_maker_is_preferred():
 def test_an_unread_listing_means_no_maker_is_named():
     # two exact listings, only one product page answers: the other may be a clone's, so no single maker is claimed
     rows = [row(3001, "NTAG213"), row(3002, "NTAG213")]
-    r = P.LCSCSearch(Http({"NTAG213": rows}, {"C3001": page("C3001", "NTAG213", "NXP")})).lookup({"mpn": "NTAG213"})
-    assert r.found and r.extra["makers"] == [], r.extra
+    http = Http({"NTAG213": rows}, {"C3001": page("C3001", "NTAG213", "Clone")})
+    r = P.LCSCSearch(http).lookup({"mpn": "NTAG213"})
+    assert r.found and r.extra["makers"] == ["Clone"] and r.extra["makers_partial"], r.extra
+    t = T.triage([{"designator": "U1", "mpn": "NTAG213"}], KiCadIndex([]), [P.LCSCSearch(http)], None)[0]
+    assert t["src_manufacturer"] == "" and "not all with a known maker" in t["notes"], t
+    # the BOM names NXP, LCSC's one readable listing is a clone's: the clone is not taken as the only maker
+    t = T.triage([{"designator": "U1", "mpn": "NTAG213", "manufacturer": "NXP"}], KiCadIndex([]), [P.LCSCSearch(http)], None)[0]
+    assert t["src_manufacturer"] == "", t
+
+
+def test_a_product_page_naming_no_maker_counts_as_unread():
+    rows = [row(3001, "NTAG213"), row(3002, "NTAG213")]
+    pages = {"C3001": page("C3001", "NTAG213", "NXP"), "C3002": page("C3002", "NTAG213", "")}
+    http = Http({"NTAG213": rows}, pages)
+    assert P.LCSCSearch(http).lookup({"mpn": "NTAG213"}).extra["makers_partial"]
+    t = T.triage([{"designator": "U1", "mpn": "NTAG213"}], KiCadIndex([]), [P.LCSCSearch(http)], None)[0]
+    assert t["src_manufacturer"] == "", t                     # NXP is not filled: the other listing may be a clone
+
+
+def test_only_the_first_listings_product_pages_are_read():
+    n = P.LCSCSearch.DETAIL_CAP + 2
+    rows = [row(4000 + i, "AMS1117-3.3", "SOT-223") for i in range(n)]
+    pages = {f"C{4000 + i}": page(f"C{4000 + i}", "AMS1117-3.3", "AMS", "SOT-223") for i in range(n)}
+    http = Http({"AMS1117-3.3": rows}, pages)
+    r = P.LCSCSearch(http).lookup({"mpn": "AMS1117-3.3"})
+    assert sum("wmsc" in c for c in http.calls) == P.LCSCSearch.DETAIL_CAP, http.calls
+    assert r.found and r.extra["makers_partial"], r.extra     # the unread ones: no single maker
+
+
+def test_a_failing_second_lcsc_search_does_not_unverify_the_line():
+    # JLCPCB answered "no exact match"; the jlcsearch index is down: the line is not "source unreachable"
+    class JlcEmpty(Http):
+        def post(self, url, body, headers=None, **kw):
+            return Response(200, json.dumps({"code": 200, "data": {"componentPageInfo": {"list": []}}}))
+    http = JlcEmpty(refuse={"jlcsearch"})
+    t = T.triage([{"designator": "U1", "mpn": "ZZ1"}], KiCadIndex([]), [P.JLCPCBSearch(http), P.LCSCSearch(http)], None)[0]
+    assert t["status"] == "needs_footprint_generation" and "lcsc_search: the jlcsearch parts index refused" in t["notes"], t
+
+
+def test_a_part_whose_lcsc_number_was_found_is_not_called_a_bad_mpn():
+    import csv, tempfile
+    from pathlib import Path
+    from ecadlib import altium_menu as AM
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "triage.csv"
+        def write(notes, lcsc=""):
+            with f.open("w", encoding="utf-8", newline="") as h:
+                w = csv.DictWriter(h, ["mpn", "status", "src", "lcsc", "notes"])
+                w.writeheader()
+                w.writerow({"mpn": "X1", "status": "needs_footprint_generation", "src": "", "lcsc": lcsc, "notes": notes})
+        held = {"status": "held"}
+        write("jlcpcb: no exact MPN match; lcsc: no exact MPN match")
+        assert AM.not_found(f, "X1", held)
+        write("jlcpcb_search: JLCPCB refused the request (403); lcsc: no exact MPN match")
+        assert AM.not_found(f, "X1", held)                    # the LCSC search's own answer counts too
+        write("jlcpcb: no exact MPN match; lcsc: MPN -> C123", "C123 (via MPN)")
+        assert not AM.not_found(f, "X1", held)
 
 
 def test_a_refusal_stops_that_site_for_the_run_and_is_an_error_not_a_miss():

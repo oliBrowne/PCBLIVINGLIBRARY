@@ -1429,7 +1429,11 @@ def not_found(triage_csv, mpn, item):
         return False
     if row.get("local_symbol") or row.get("local_footprint") or row.get("src_mpn") or row.get("src_description"):
         return False
-    return bool(row.get("src") and row.get("src") != "easyeda") or "jlcpcb: no exact MPN match" in (row.get("notes") or "")   # a source answered
+    notes = row.get("notes") or ""
+    if ": MPN -> " in notes or "(via MPN)" in (row.get("lcsc") or ""):  # a part search found its LCSC number: a real part
+        return False
+    return bool(row.get("src") and row.get("src") != "easyeda") or \
+        bool(re.search(r"\b(jlcpcb|lcsc): no exact MPN match", notes))   # a source answered
 
 
 def _library_mpns(cfg, ws):
