@@ -32,7 +32,7 @@ python3 -m tests.test_offline
   * `unverified (source unreachable)`, which is kept separate on purpose so a network failure is never reported as "needs generation"
 * **Providers** (`providers.py`, interface `lookup(line) -> SourceResult`, raising `NotConfigured`):
 
-  Default order: `nexar,digikey,mouser,jlcpcb_search,easyeda`. The official APIs come first; each is skipped with a
+  Default order: `nexar,digikey,mouser,jlcpcb_search,lcsc_search,easyeda`. The official APIs come first; each is skipped with a
   "not configured" note until its key is set. None of them hands out symbol or footprint geometry, so they identify
   the part (maker, description, datasheet link, package, and the LCSC number when LCSC sells it) and the EasyEDA
   route or the datasheet reader supplies the CAD data.
@@ -43,11 +43,12 @@ python3 -m tests.test_offline
   | `digikey` | yes (Product Information API v4) | OAuth2 client credentials (`DIGIKEY_CLIENT_ID/SECRET`) | MPN match, maker, description, datasheet, package |
   | `mouser` | yes (Search API v1) | `MOUSER_API_KEY` | MPN match, maker, description, datasheet |
   | `jlcpcb_search` | **no**: anonymous JSON POST to `jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList` (from easyeda2kicad 1.0.1) | none | MPN → LCSC, only when no official source found the LCSC number |
+  | `lcsc_search` | **no**: `GET https://jlcsearch.tscircuit.com/api/search?q={MPN}` (tscircuit's free community index of JLCPCB/LCSC parts) and, for each exact match, `GET https://wmsc.lcsc.com/ftps/wm/product/detail?productCode={LCSC}` (the JSON LCSC's own website reads) | none | MPN → LCSC with maker, package, description and LCSC's datasheet link; asked only while no LCSC number is known (JLCPCB's search refused or found nothing). Exact MPN only; a maker is named only when every exact listing's product page was read |
   | `easyeda` | **no**: `GET https://easyeda.com/api/products/{LCSC}/components` with `Referer: https://easyeda.com/` | none | the symbol, footprint and 3D data (the only free source of ready CAD data) |
   | `snapmagic` | partner token only, no self-serve public API | | stub |
   | `samacsys` | account plus Library Loader or partner access, no documented public REST API | | stub |
 
-  * The two undocumented endpoints are on by default and always asked after the official APIs: many parts (often
+  * The undocumented endpoints are on by default and always asked after the official APIs: many parts (often
     Chinese-made ones such as YXC crystals) are only on LCSC. `ecadlib init` asks whether to use them (`--no-unofficial`
     answers no); `[providers] unofficial = false` in `ecadlib.toml` keeps them out of triage, the librarian's EasyEDA
     source and the UI, and parts then come from your libraries, the KiCad libraries, the standard packages and the

@@ -1350,7 +1350,7 @@ def triage(lines, index, provs, http, shared=None):
             notes.append(dup[i])
         if not (sym and fp_key):
             for prov in provs:
-                if isinstance(prov, P.JLCPCBSearch) and work.get("lcsc"):
+                if isinstance(prov, P.LCSC_SEARCHES) and work.get("lcsc"):
                     if not desc and not ln.get("description") and hasattr(prov, "lookup_lcsc"):   # the number is
                         r = prov.lookup_lcsc(work["lcsc"])         # known: only LCSC's description of it (EasyEDA's
                         if r.error:                                # answer seldom has one)
@@ -1395,7 +1395,8 @@ def triage(lines, index, provs, http, shared=None):
                 if r.error:
                     errored = True
                     notes.append(f"{prov.name}: {r.error}")
-                elif isinstance(prov, P.JLCPCBSearch):
+                elif isinstance(prov, P.LCSC_SEARCHES):
+                    tag = getattr(prov, "note_label", "jlcpcb")
                     if r.found:
                         work["lcsc"] = r.lcsc
                         if not desc and (r.extra or {}).get("description"):
@@ -1412,11 +1413,13 @@ def triage(lines, index, provs, http, shared=None):
                             several = True
                             seen(*makers)
                             if not bom_maker:               # the BOM names the maker: nothing to fill
-                                notes.append(f"jlcpcb: {ln.get('mpn') or work.get('mpn', '')} is listed under "
+                                notes.append(f"{tag}: {ln.get('mpn') or work.get('mpn', '')} is listed under "
                                              f"{len(makers)} makers ({', '.join(makers[:4])}): the maker is not filled")
-                    notes.append(f"jlcpcb: MPN -> {r.lcsc}" if r.found else "jlcpcb: no exact MPN match")
+                    notes.append(f"{tag}: MPN -> {r.lcsc}" if r.found else f"{tag}: no exact MPN match")
                     if r.found and (r.extra or {}).get("package_note"):
-                        notes.append(f"jlcpcb: {r.extra['package_note']}")
+                        notes.append(f"{tag}: {r.extra['package_note']}")
+                    if (r.extra or {}).get("note") and tag != "jlcpcb":
+                        notes.append(f"{tag}: {r.extra['note']}")
                 else:
                     if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
                         src = r                                # a found part is kept over a later miss or a later
@@ -1576,7 +1579,7 @@ def main(argv=None):
     ap.add_argument("-o", "--out", help="report path stem (.md and .csv written; default: <[setup] workspace>/reports/"
                     "triage_<BOM name> after `ecadlib init`, else out/triage)")
     ap.add_argument("--providers", help="comma list in order (default: [providers] order in the rules, else "
-                    "nexar,digikey,mouser,jlcpcb_search,easyeda: the official APIs first); plugins: `ecadlib plugins list`")
+                    "nexar,digikey,mouser,jlcpcb_search,lcsc_search,easyeda: the official APIs first); plugins: `ecadlib plugins list`")
     ap.add_argument("--offline", action="store_true", help="use HTTP cache only")
     from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
     ap.add_argument("--cache", default=default_cache())

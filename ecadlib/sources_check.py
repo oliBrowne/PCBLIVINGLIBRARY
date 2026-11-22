@@ -9,6 +9,7 @@ really are (pad and pin counts from their datasheets):
   easyeda        C7593 (NE555DR, SOIC-8: 8 pads, 8 pins), C5423 (LM358DR, SOIC-8: 8 pads, 8 pins),
                  C2040 (RP2040, QFN-56 + exposed pad: 57 pads, 57 pins)
   jlcpcb_search  NE555DR -> C7593
+  lcsc_search    NE555DR -> C7593 (jlcsearch index), C7593 -> NE555DR on LCSC's product page
 Each check reports ok / changed (the answer arrived but is not what it should be: the format moved) / unreachable
 (blocked, rate-limited or down). --save DIR keeps every raw answer (DIR/<source>-<part>.json) so a format change can
 be studied and the converter's tests updated from real data. Nothing is cached: the point is today's answer.
@@ -23,6 +24,7 @@ from .httpcache import Response
 
 EASYEDA = [("C7593", "NE555DR", 8, 8), ("C5423", "LM358DR", 8, 8), ("C2040", "RP2040", 57, 57)]
 JLCPCB = [("NE555DR", "C7593")]
+LCSC = [("NE555DR", "C7593")]
 
 
 class LiveHTTP:
@@ -129,9 +131,52 @@ def check_jlcpcb(http, save=None):
     return out
 
 
+def check_lcsc(http, save=None):
+    """The LCSC search route: the jlcsearch index lists the MPN under its LCSC number, and LCSC's product page for
+    that number names the same MPN (its field paths: result.productCode / productModel)."""
+    from urllib.parse import quote
+    out = []
+    for mpn, lcsc in LCSC:
+        prov = P.LCSCSearch(http)
+        r = prov._get(prov.SEARCH_URL.format(quote(mpn, safe="")), "jlcsearch")
+        _save(save, f"lcsc_search-{mpn}", r)
+        if not r.ok:
+            out.append(("lcsc_search", mpn, "unreachable", r.error or f"HTTP {r.status}"))
+        else:
+            try:
+                codes = [P._lcsc_code(c.get("lcsc")) for c in r.json().get("components") or [] if isinstance(c, dict)
+                         and str(c.get("mfr") or "").strip().upper() == mpn]
+                out.append(("lcsc_search", mpn, "ok", f"-> {lcsc}") if lcsc in codes else
+                           ("lcsc_search", mpn, "changed", f"no listing {lcsc} for {mpn} (field names moved?)"))
+            except (ValueError, AttributeError, TypeError) as e:
+                out.append(("lcsc_search", mpn, "changed", f"answer no longer parses: {type(e).__name__}: {e}"))
+        r = http.get(prov.DETAIL_URL.format(lcsc), headers=prov.HEADERS)
+        _save(save, f"lcsc_detail-{lcsc}", r)
+        if not r.ok:
+            out.append(("lcsc_detail", lcsc, "unreachable", r.error or f"HTTP {r.status}"))
+            continue
+        d, err = P.LCSCSearch(_Fixed(r)).detail(lcsc)
+        if d and d["componentModelEn"].upper() == mpn:
+            out.append(("lcsc_detail", lcsc, "ok", f"{mpn}, {d['componentBrandEn'] or 'no maker'}, "
+                                                   f"{d['componentSpecificationEn'] or 'no package'}, "
+                                                   f"{'datasheet link' if d['dataManualUrl'] else 'no datasheet link'}"))
+        else:
+            out.append(("lcsc_detail", lcsc, "changed", err or f"product page names {d and d['componentModelEn']!r}, not {mpn}"))
+    return out
+
+
+class _Fixed:
+    """An HTTP client that gives one answer already fetched (so a check parses exactly what it saved)."""
+    def __init__(self, r):
+        self.r = r
+
+    def get(self, url, **kw):
+        return self.r
+
+
 def run(http=None, save=None):
     http = http or LiveHTTP()
-    return check_easyeda(http, save) + check_jlcpcb(http, save)
+    return check_easyeda(http, save) + check_jlcpcb(http, save) + check_lcsc(http, save)
 
 
 def exit_code(rows):
