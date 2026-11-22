@@ -246,6 +246,9 @@ def map_headers(headers, threshold=0.72):
                     r"\bsize\b", nh) and re.search(r"\b(package|pkg|pack|reel|tape|box|tray|spq|moq|order|lot)\b", nh)):
                 best *= 0.5                                              # 'Package Qty', 'Reel Size': a reel size
                                                                          # ('Size (inch)', 'Case Size' are chip sizes)
+            if f == "footprint" and re.search(r"\b(price|cost|batch|usd|eur|gbp|total|extended)\b", nh):
+                best *= 0.3                                              # Octopart's 'Unit Price (@ Batch Size: 1)':
+                                                                         # a price, not a chip size
             if f == "footprint" and (metric_header(nh) or mixed_header(nh)):
                 best *= 0.95                                             # 'Case Code (mm)' 0603 is an 0201: the
                                                                          # inch column wins when both are there
@@ -502,6 +505,7 @@ def read_bom(path, columns=None, rules=None, root=None):
     hwidth = max(widths[hdr_row:hdr_row + (2 if two else 1)]) if widths else 0   # the header row's own cells: Excel
                                                                   # saves an unnamed notes column as 'Footprint,'
     suppliers = _supplier_pairs(headers)
+    maker_mpn = "mpn" in col and "manufacturer" not in col and bool(_MAKER_MPN_HEADER.fullmatch(str(headers[col["mpn"]]).strip()))
     metric_fp = "footprint" in col and metric_header(_hnorm(headers[col["footprint"]]))
     mixed_fp = "footprint" in col and mixed_header(_hnorm(headers[col["footprint"]]))   # 'Case (Metric / Imp.)'
     mm_inch = metric_fp and _inch_only_codes(df, col["footprint"])   # a 'Package (mm)' column holding 1206 / 0805
@@ -583,6 +587,13 @@ def read_bom(path, columns=None, rules=None, root=None):
                     d["lcsc"] = cells[pj]
                     mapping.setdefault("lcsc", f"{headers[pj]} (where {headers[nj]} is LCSC)")
                     break
+        if d.get("manufacturer") and placeholder_mpn(d["manufacturer"]) and not DNP_MARK.fullmatch(d["manufacturer"]):
+            d.pop("manufacturer")                                 # 'ANY' / 'Generic' / 'N/A' names no maker
+        if d.get("mpn") and maker_mpn:                            # 'Manufacturer/MPN': 'YAGEO RC0402FR-071KL'
+            d["mpn"], mk, extra = _maker_and_mpn(d["mpn"])
+            if mk and not d.get("manufacturer"):
+                d["manufacturer"] = mk
+            note += extra
         if d.get("mpn"):
             d["mpn"], extra, mpn_dnp = _split_mpn(d["mpn"], d.get("manufacturer", ""))
             note += extra
@@ -593,6 +604,11 @@ def read_bom(path, columns=None, rules=None, root=None):
                 hold = next((n for n in extra if "or a label, not a part number" in n), "")
                 if hold:                                # held, not built as a part with no MPN
                     d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
+        sku = distributor_sku(d.get("mpn", ""))
+        if sku:                                                   # 'WM15144-ND' in the MPN column: DigiKey's order
+            note.append(f"the MPN cell holds {d['mpn']}, a {sku} order number, not the maker's part number: left out "   # code,
+                        "of the MPN (kept as the DigiKey part number); put the maker's part number in the MPN column")  # never
+            d["digikey"] = d.pop("mpn")                           # released as the maker's number
         if note:
             d["bom_note"] = "; ".join(note)
         if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
@@ -627,6 +643,18 @@ def read_bom(path, columns=None, rules=None, root=None):
         elif re.fullmatch(r"0+([.,]0+)?", d.get("qty", "")):
             d["dnp"] = True                                              # no DNP column, Quantity 0: an Altium variant
                                                                          # BOM's 'not fitted'
+        if d.get("dnp"):                                                 # 'J3 | DNP | DNP | DNP | DNP': the mark in
+            marks = [f for f in ("mpn", "value", "footprint", "manufacturer", "description", "libref", "lcsc")   # every
+                     if d.get(f) and (DNP_MARK.fullmatch(d[f].strip()) or DNP_SHORT.fullmatch(d[f].strip()))]   # cell
+            if marks and not any(d.get(f) for f in ("mpn", "value", "footprint", "manufacturer", "description",
+                                                    "libref", "lcsc") if f not in marks):
+                for f in marks:                                          # names no part: a not-fitted place, not a
+                    d.pop(f)                                             # part called 'DNP' held for its number
+                d["bom_note"] = "; ".join(n for n in [d.get("bom_note", "")] if n and "a maker's name or a label" not in n)
+                if not d["bom_note"]:
+                    d.pop("bom_note")
+                if "a maker's name or a label" in d.get("bom_hold", ""):
+                    d.pop("bom_hold")
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
         lines.append(d)
@@ -903,6 +931,43 @@ def _mpn_marks(s):
     return t, gone
 
 
+_MAKER_MPN_HEADER = re.compile(r"(?:manufacturer|mfr|mfg|maker|brand)\.?\s*(?:/|&|\+|\||\band\b)\s*"   # the raw
+                               r"(?:mpn|p/?n|part(?:\s*(?:number|no\.?|num|#))?)", re.I)            # header, its '/'
+                                                                  # kept: 'Manufacturer Part Number' is the MPN alone
+_SKU_ND = re.compile(r"[A-Z0-9][A-Z0-9.#/()+_-]*-ND", re.I)
+
+
+def distributor_sku(mpn):
+    """The distributor whose order code a part number is ('DigiKey' for 'WM15144-ND', '490-3285-1-ND'), else ''.
+    Only DigiKey's '-ND' ending is told apart: a Mouser or Farnell code looks like a maker's number."""
+    return "DigiKey" if _SKU_ND.fullmatch(str(mpn or "").strip()) else ""
+
+
+def _maker_and_mpn(cell):
+    """A 'Manufacturer/MPN' cell -> (part number, maker, [note]). 'YAGEO CC0402KRX7R7BB104' -> the number and YAGEO;
+    'MTCONN MCTF-0403, Suntech ST-TF-003A' -> the first maker's part, the second named as an alternate. The part
+    number is the last word, and only when it has a digit; a cell with one word is the part number alone; a cell
+    that does not read that way is left as it is (and _split_mpn still looks at it)."""
+    raw = str(cell or "").strip()
+    chunks = [c.strip() for c in re.split(r",\s+", raw) if c.strip()]
+    pairs = []
+    for c in chunks:
+        words = c.split()
+        if len(words) == 1 and _PN_CELL.fullmatch(c):
+            pairs.append(("", c))
+        elif len(words) > 1 and _PN_CELL.fullmatch(words[-1]) and len(" ".join(words[:-1])) <= 40:
+            pairs.append((" ".join(words[:-1]), words[-1]))
+        else:
+            return raw, "", []
+    if not pairs or all(not m for m, _ in pairs):
+        return raw, "", []
+    (mk, pn), alts = pairs[0], pairs[1:]
+    note = [f"'{raw}': maker {mk} and part number {pn} read from the one cell" if mk else f"'{raw}': part number {pn}"]
+    if alts:
+        note[-1] += "; alternates " + ", ".join(f"{m} {n}".strip() for m, n in alts)
+    return pn, mk, note
+
+
 def _drop_maker(s, maker):
     """The line's own maker typed into its MPN cell ('Yageo RC0603FR-07470RL', 'C0603C104K5RACTU (KEMET)',
     'RK73H1JTTD1002F - KOA Speer') -> (part number, True). Only a name that is the Manufacturer cell's company
@@ -959,8 +1024,8 @@ def maker_only_mpn(s, maker=""):
     'Murata:') or the line's own maker / a maker ecadlib knows by name. Part numbers carry digits; a cell without one
     that is a company's name would otherwise be searched and name-matched (a KiCad 'OnSemi_ECH8' land for 'onsemi:')."""
     t = str(s or "").strip()
-    if not t or re.search(r"\d", t):
-        return False
+    if not t or re.search(r"\d", t) or placeholder_mpn(t):   # 'ANY' under a Manufacturer 'ANY': no part named, the
+        return False                                          # placeholder it is (any maker's part of that value)
     if t.endswith(":"):
         return True
     known = [maker] + [m for m in P.MAKER_DOMAINS.values() if m]

@@ -770,6 +770,10 @@ def check_item(item, base=".", rules=None):
                     (rules.get("release") or {}).get("manufacturer", "warn") != "hold":   # also under its house name
                 warns.append(f"{k} is empty: no source named the maker; fill it before ordering "
                              "([release] manufacturer = \"hold\" holds the part instead)")
+            elif RU.canonical_param(k, rules) == RU.canonical_param("Manufacturer Part Number", rules) and \
+                    generic_passive(item) and (rules.get("release") or {}).get("mpn", "warn") != "hold":
+                warns.append(f"{k} is empty: a generic part built from its value and size; fill it before ordering "
+                             "([release] mpn = \"hold\" holds the part instead)")
             else:
                 add("fields", f"{k} is empty")
     link = value_link_empty(item)
@@ -793,6 +797,16 @@ def check_item(item, base=".", rules=None):
     for v in item.get("bom_holds") or []:             # altium365.plan: BOM lines of this part that disagree on what is
         add("verify", v)                              # built (two footprints, two values): a person fixes the BOM
     return fails, warns, info
+
+
+def generic_passive(item):
+    """A resistor or capacitor the librarian built as a generic passive (its value and its size, no maker's part):
+    such a part may wait for its MPN without being held (`[release] mpn`). Inductors and beads are not: their land
+    and height follow the maker's part."""
+    lib = item.get("librarian") or {}
+    kind = str((item.get("symbol") or {}).get("ref") or ""), str(item.get("folder") or "").replace("\\", "/").split("/")[-1]
+    return bool(lib.get("passive")) and bool((item.get("footprint") or {}).get("file")) and \
+        bool({"Resistor", "Capacitor", "Resistors", "Capacitors"} & set(kind))
 
 
 PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what its workspace released (no datasheet here)

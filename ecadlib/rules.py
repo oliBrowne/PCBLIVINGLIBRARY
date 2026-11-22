@@ -65,7 +65,8 @@ DEFAULTS = {
                 "height": "warn",              # hold | warn: a missing or implausible 3D height holds the part, or is a note
                 "allow_missing_3d": False,     # true: a part with NO 3D height is never held for it (even height = "hold")
                 "manufacturer": "warn",        # hold | warn: an empty Manufacturer holds the part, or is a note
-                "datasheet": "warn"},          # hold | warn: no datasheet link holds the part, or is a note
+                "datasheet": "warn",           # hold | warn: no datasheet link holds the part, or is a note
+                "mpn": "warn"},                # hold | warn: a generic resistor / capacitor with no MPN, or is a note
     "altium365": {"workspace": ""},
     "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes"]},   # ecadlib.upkeep
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
@@ -492,7 +493,7 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "release.height", f"= {raw['release']['height']!r}: must be hold or warn")
     if "allow_missing_3d" in (raw.get("release") or {}) and not isinstance(raw["release"]["allow_missing_3d"], bool):
         _err(where, "release.allow_missing_3d", f"= {raw['release']['allow_missing_3d']!r}: must be true or false")
-    for key in ("manufacturer", "datasheet"):
+    for key in ("manufacturer", "datasheet", "mpn"):
         if key in (raw.get("release") or {}) and raw["release"][key] not in ("hold", "warn"):
             _err(where, f"release.{key}", f"= {raw['release'][key]!r}: must be hold or warn")
     if (raw.get("release") or {}).get("approvals"):
@@ -967,6 +968,9 @@ HELP = {
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
     "release.parity": "hold | warn | off: a part whose KiCad and Altium files differ (pads, drills, courtyard, 3D, pins) is held",
     "release.height": "warn | hold: a missing or out-of-range 3D height is a note to check (warn, the default) or holds the part",
+    "release.mpn": "warn | hold: a generic resistor or capacitor with a value and a size but no Manufacturer Part "
+                   "Number is a note to fill it (warn, the default) or holds the part; other parts (inductors, beads, "
+                   "ICs) are always held without one",
     "change": "Change control: what a change to a released part needs, per class (hold = a person approves it, warn = "
               "released and listed, pass = released); approvers = people per held change (2 = two-person rule)",
     "change.identity": "hold | warn: the MPN, manufacturer or value changed",

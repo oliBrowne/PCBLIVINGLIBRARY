@@ -420,6 +420,9 @@ def to_rows(lines, triage=None, rules=None, prior=None):
     # keyed folded, as Altium compares part numbers: a new 'RES-0603-10K' must not take a released 'RES-0603-10k' (R-B2-4)
     reserved = {n.casefold(): (n, norm_mpn(p["mpn"])) for n, p in prior.items() if norm_mpn(p["mpn"]) in present}
     for i, ln in enumerate(lines, 1):
+        if ln.get("dnp") and not any(str(ln.get(f) or "").strip() for f in ("mpn", "value", "footprint", "lcsc",
+                                                                           "libref", "description", "digikey")):
+            continue                            # 'J3 | DNP | DNP | DNP': a place left empty, not a part to build
         bad = []
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
@@ -504,7 +507,7 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             "Value": value, "Comment": "=Value" if cat in GENERIC_SYMBOL else mpn,
             "Manufacturer": ln.get("manufacturer", ""), "Manufacturer Part Number": mpn,
             "Supplier 1": "LCSC" if lcsc else "", "Supplier Part Number 1": lcsc,
-            "Supplier 2": "", "Supplier Part Number 2": "",
+            "Supplier 2": "DigiKey" if ln.get("digikey") else "", "Supplier Part Number 2": ln.get("digikey", ""),
             "ComponentLink1Description": "LCSC" if lcsc else "",
             "ComponentLink1URL": f"https://www.lcsc.com/product-detail/{lcsc}.html" if lcsc else "",
             "ComponentLink2Description": "Datasheet" if lcsc else "",
@@ -515,6 +518,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         if not ln.get("dnp"):
             for r in ref_keys(ln.get("designator", "")):
                 on.setdefault(r, {}).setdefault(pn, des)
+        if ln.get("digikey") and ln.get("bom_note"):   # a DigiKey number in the MPN column: say so in the review
+            notes.setdefault(pn, []).extend(n for n in ln["bom_note"].split("; ") if "order number" in n)
         if ln.get("bom_hold"):                  # a row read_bom could not read as the header says (shifted cells)
             holds.setdefault(pn, []).append(f"BOM line {des}: {ln['bom_hold']}")
         if pn not in first:
