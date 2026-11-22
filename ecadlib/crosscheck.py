@@ -254,6 +254,7 @@ def _names(s):
     """The names one pin answers to: "1 cathode (k)" -> {CATHODE(K), CATHODE, K}; "VO (output)" -> {VO(OUTPUT), VO, OUTPUT}."""
     raw = str(s or "").translate(MINUS)
     out = {norm_pin_name(raw)}
+    out |= {norm_pin_name(f"{p}.{b}") for p, b in PORT_BIT.findall(raw)}   # "(GPIO) P2[0]" is P2.0 (Cypress PSoC)
     for part in re.split(r"[()\[\],]|\s/\s", raw):
         if norm_pin_name(part):
             out.add(norm_pin_name(part))
@@ -264,6 +265,9 @@ def _names(s):
         if re.sub(r"[^A-Z]", "", part.upper()) in SPELLED:
             out.add(SPELLED[re.sub(r"[^A-Z]", "", part.upper())])
     return out - {""}
+
+
+PORT_BIT = re.compile(r"\b([A-Za-z]{1,3}\d+)\[(\d+)\]")   # a port pin as PORT[BIT]: P2[0], PA[3]
 
 
 GROUNDISH = re.compile(r"^(?:[PADS]?GND|VSS|[PA]?VSS|GROUND|0V|EP|EPAD|PAD|THERMAL)")

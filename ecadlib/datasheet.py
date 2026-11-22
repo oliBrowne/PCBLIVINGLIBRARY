@@ -2144,11 +2144,22 @@ def _header_mount(spec):
     return []
 
 
+ELECTROLYTIC_CAN = re.compile(r"\belectrolytic\b|\bCP_Elec_", re.I)
+
+
+def _electrolytic_can(spec):
+    """An SMD aluminium electrolytic, by the read's description or KiCad's CP_Elec_ name: its two terminals are strips
+    0.65-1.3 mm wide under a 6.6-19 mm base plate (Panasonic FK/FC, Nichicon UWX, Wurth WCAP-ASLI), 7-13 % of the
+    body width (2026-11-22: EEE-FK1V101P's W 0.90 on an 8.3 mm plate was refused as a misread)."""
+    return bool(ELECTROLYTIC_CAN.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"))
+
+
 def _two_terminal_terms(spec):
     """A chip / molded part's terminals against its body (review 196 R-RD-1): a terminal in inches (SMC's terminal_width
     0.108-0.125 "mm"), wider than the body, or an inner_span as long as the body builds pads off the part with nothing
     else to catch it. Bounds no real part breaks (KiCad's 74 chip sizes, JEDEC DO-214, EIA tantalum cases, MELF): the
-    terminal_length max at least 5 % of the body length, terminal_width max at least 20 % of the body width and its nom
+    terminal_length max at least 5 % of the body length, terminal_width max at least 20 % of the body width (5 % for an
+    aluminium electrolytic whose maker's land sizes the pads: its terminals are narrow strips) and its nom
     no more than 1.1 x the body's, the inner_span max under the body length min. A molded part's terminal_width is
     needed: left blank, the pads would be built as wide as the body; a MELF's end caps are about its diameter.
     -> review lines (a failed read)."""
@@ -2160,9 +2171,10 @@ def _two_terminal_terms(spec):
     if T and L and 0 < T[2] < 0.05 * L[1]:
         out.append(f"terminal_length max {T[2]:g} mm is under 5% of the {L[1]:g} mm body_length, which is implausible "
                    "for a terminal (unit mislabelled, inches read as mm?)")
-    if b and W and 0 < b[2] < 0.2 * W[1]:
-        out.append(f"terminal_width max {b[2]:g} mm is under 20% of the {W[1]:g} mm body_width, which is implausible "
-                   "for a terminal (unit mislabelled, inches read as mm?)")
+    floor = 0.05 if _electrolytic_can(spec) and F.lead_land(spec) else 0.2   # (a can's strips under its base plate)
+    if b and W and 0 < b[2] < floor * W[1]:
+        out.append(f"terminal_width max {b[2]:g} mm is under {floor:.0%} of the {W[1]:g} mm body_width, which is "
+                   "implausible for a terminal (unit mislabelled, inches read as mm?)")
     if b and W and spec.get("lead_type") == "melf" and b[2] < 0.6 * W[1]:   # a MELF's end caps are its diameter
         out.append(f"terminal_width max {b[2]:g} mm is under 60% of the {W[1]:g} mm body diameter, which is implausible "
                    "for a MELF's end caps (they are as wide as the body; a land width read as the terminal?)")
