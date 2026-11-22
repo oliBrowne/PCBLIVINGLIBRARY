@@ -476,3 +476,26 @@ def test_read_bom_hook_uses_house_mpn_name():
 if __name__ == "__main__":
     from tests.run_all import main
     raise SystemExit(main(["test_altium_project"]))
+
+
+def test_a_document_keeps_its_spelling_on_disk_on_a_case_insensitive_file_system():
+    """macOS (and Windows): io.schdoc in the .PrjPcb exists() as IO.SchDoc, so the project's spelling was kept and the
+    sheet names in the BOM differed from the files (found by the macOS CI job, 2026-11-22)."""
+    from unittest import mock
+    real_exists = Path.exists
+
+    def exists_any_case(self, *a, **k):               # a case-insensitive file system, as macOS's APFS by default
+        if real_exists(self):
+            return True
+        cur = Path(self.anchor)
+        for part in self.parts[1:]:
+            cur = next((c for c in cur.iterdir() if c.name.lower() == part.lower()), None) if cur.is_dir() else None
+            if cur is None:
+                return False
+        return True
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "Sheets").mkdir()
+        (Path(td) / "Sheets" / "IO.SchDoc").write_bytes(b"x")
+        with mock.patch.object(Path, "exists", exists_any_case):
+            got = AP._find_file(td, "sheets\\io.schdoc")
+    assert got is not None and got.name == "IO.SchDoc" and got.parent.name == "Sheets", got
