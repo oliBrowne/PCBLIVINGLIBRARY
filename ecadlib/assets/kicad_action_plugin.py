@@ -393,7 +393,7 @@ def place_yourself(res, copied=False):
         more = (f" That is unit A; its other {units - 1} unit{'s' if units > 2 else ''}: Place > Add Symbol."
                 if units > 1 else "")
         return (f"Built into {what} and copied: in the schematic editor press {paste} and click where it goes "
-                f"(footprint {LIB}:{res['footprint']}).{more}")
+                f"(footprint {LIB}:{res['footprint']}; in the PCB editor: Place > Add Footprint).{more}")
     return (f"Built into {what} (footprint {LIB}:{res['footprint']}). Place it as any library part: Place > Add Symbol "
             "in the schematic editor, or Place > Add Footprint in the PCB editor.")
 

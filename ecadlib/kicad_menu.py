@@ -180,6 +180,7 @@ def schematic_paste(cfg, names, at=(25.4, 25.4)):
     except (OSError, ValueError, AttributeError):
         return "", 0, ""
     syms = {str(s[1]): s for s in sexpr.find(tree, "symbol") if len(s) > 1}
+    names = {n for n in names if n}
     name = next((str(p["symbol_name"]) for p in parts if isinstance(p, dict) and p.get("part") in names
                  and str(p.get("symbol_name") or "") in syms), "")
     if not name or sexpr.first(syms[name], "extends") is not None:
@@ -369,11 +370,11 @@ def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None,
                 names = {res.get("part"), *res.get("message", "").rstrip(".").split()[-1:]}
                 try:
                     text, units, name = schematic_paste(cfg, names)
+                    if text:                         # the window (KiCad 9+ schematic editor) puts it on the clipboard
+                        (job / PASTE).write_text(text, encoding="utf-8")
+                        res.update(paste=PASTE, units=units, symbol=name)
                 except Exception:                    # the part is built; the paste is the extra step
-                    text = ""
-                if text:                             # the window (KiCad 9+ schematic editor) puts it on the clipboard
-                    (job / PASTE).write_text(text, encoding="utf-8")
-                    res.update(paste=PASTE, units=units, symbol=name)
+                    pass
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = AM._error(e)
     AM.write_result(job / "result.ini", res)

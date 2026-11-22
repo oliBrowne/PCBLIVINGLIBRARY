@@ -196,6 +196,7 @@ def test_window_reads_only_the_jobs_own_paste_file(tmp_path):
     assert mod.paste_text(str(tmp_path), {"paste": "paste.txt"}) == "(lib_symbols)"
     assert mod.paste_text(str(tmp_path), {}) == ""
     assert mod.paste_text(str(tmp_path), {"paste": "gone.txt"}) == ""
+    (tmp_path / "x").mkdir()                                       # so x/../paste.txt would open without the check
     assert mod.paste_text(str(tmp_path / "x"), {"paste": "../paste.txt"}) == ""            # never outside the job
 
 
