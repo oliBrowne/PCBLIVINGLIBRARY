@@ -34,9 +34,11 @@ from pathlib import Path
 from . import datasheet as D, sexpr
 
 FONT_FILES = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-              "/Library/Fonts/Arial.ttf", "C:/Windows/Fonts/arial.ttf")
+              "/Library/Fonts/Arial.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf",   # macOS 10.15+: Supplemental
+              "C:/Windows/Fonts/arial.ttf")
 BOLD_FILES = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-              "/Library/Fonts/Arial Bold.ttf", "C:/Windows/Fonts/arialbd.ttf")
+              "/Library/Fonts/Arial Bold.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+              "C:/Windows/Fonts/arialbd.ttf")
 MAX_EDGE = 2576                    # longest image edge the current models read without downscaling
 IMG_TOKENS_MAX = 4784              # image tokens at that size (claude-api skill, high-resolution tier)
 PIN1_NAMES = ("1", "A1")
