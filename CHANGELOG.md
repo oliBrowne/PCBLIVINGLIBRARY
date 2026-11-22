@@ -87,7 +87,7 @@ a minor release may change command-line options and file formats.
 
 ## [0.4.0] - 2026-10-27
 
-The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right with none built wrong (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
+The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right on the parts the code was tuned on (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
 
 ### Added
 

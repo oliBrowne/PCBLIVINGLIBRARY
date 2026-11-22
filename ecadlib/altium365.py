@@ -1162,7 +1162,7 @@ def main(argv=None):
     p.add_argument("--root", help="workspace folder to release components under (default: the rules' [folders] root, Components)")
     p.add_argument("-o", "--out", default="out/altium365/plan.json")
     p.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the output folder or here)")
-    sub.add_parser("workspaces", help="list workspaces visible to NEXAR_TOKEN")
+    sub.add_parser("workspaces", help="list the Altium 365 workspaces your sign-in can see")
     u = sub.add_parser("push", help="release / update parts from a plan")
     u.add_argument("plan")
     u.add_argument("--workspace", help="workspace URL from `workspaces` (default: [altium365] workspace in ecadlib.toml)")

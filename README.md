@@ -27,7 +27,8 @@ makes them match the rest of your library. **Every part is verified before it is
 check, or still needs a person, is held until someone signs it off. The rest goes to **Altium 365**, a database
 library or **KiCad**. After that it keeps the library alive: released parts never change behind your back, and a
 weekly check reports parts going end of life, upstream KiCad changes and drift in your Altium 365 workspace. Free and
-open source (MIT); you bring your own API key and pick the model.
+open source (MIT). Datasheet reads use your own API key and whichever model you pick, or, with no key at all, an AI
+assistant you already use (see [no API key](#no-api-key)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/readme/flow-dark.svg">
@@ -40,11 +41,12 @@ open source (MIT); you bring your own API key and pick the model.
 schematics, or a hand-made CSV/XLSX, with whatever column names it has. Each line comes back as already in your
 library, available from a source, needs a footprint, or DNP. `ecadlib where-used` shows which projects use which part.
 
-**2. Fill the library.** Your own libraries first, then the official KiCad libraries and ecadlib's checked table of
-standard packages, then EasyEDA/LCSC (an unofficial source, used last; `[providers] unofficial = false` turns it off).
-Nexar, DigiKey and Mouser identify the part. When nobody has it, a datasheet reader (Claude by default, or any model
-you choose, local ones included) reads the package drawing and a deterministic IPC-7351B generator draws the land:
-chips, gull-wing and no-lead ICs, QFPs, BGAs, connectors and pad tables. Symbols follow one pin rule (inputs left,
+**2. Fill the library.** Your own libraries first, then the official KiCad libraries, then EasyEDA/LCSC (an unofficial
+source; `[providers] unofficial = false` turns it off), then ecadlib's checked table of standard packages. The order
+is `[sources] order` in `ecadlib.toml`. Nexar, DigiKey and Mouser identify the part. When nobody has it, a datasheet
+reader (Claude by default, or any model you choose, local ones included) reads the package drawing and a
+deterministic IPC-7351B generator draws the land: chips, gull-wing and no-lead ICs, QFPs, BGAs, connectors and pad
+tables. Symbols follow one pin rule (inputs left,
 outputs right, power top, ground bottom), and parts get a 3D model (KiCad's, EasyEDA's, or a package-shaped STEP that
 ecadlib makes).
 
@@ -179,7 +181,11 @@ written:
   ecadlib-demo/librarian/demo_bom_demo/plan.json     the library plan
   ecadlib-demo/librarian/demo_bom_demo/review.md     review: what to check, part by part
   ecadlib-demo/librarian/demo_bom_demo/models/       11 Altium files (.SchLib, .PcbLib)
-  ecadlib-demo/kicad/demo_bom_demo/                  KiCad: .kicad_dbl, .kicad_sym, .pretty/
+  ecadlib-demo/kicad/demo_bom_demo/                  KiCad: ecadlib_demo.kicad_dbl, ecadlib_demo.kicad_sym, ecadlib_demo.pretty/
+next:
+  ecadlib status --workspace ecadlib-demo  # one-screen summary
+  ecadlib ui --workspace ecadlib-demo      # look at it in the browser (held parts, sign-off, exports)
+  ecadlib init                             # set up for your own libraries and BOMs
 ```
 
 CH340C is held on purpose (the demo has no symbol for it), so you see what a held part looks like. The regulator and
@@ -211,6 +217,12 @@ ecadlib datasheet estimate my_bom.csv            # optional: what the AI reads w
 ecadlib librarian my_bom.csv                     # writes ecadlib_workspace/librarian/my_bom (the init workspace)
 ecadlib status                                   # ready, held, waiting for sign-off
 ```
+
+<a id="no-api-key"></a>**No API key?** Add `--read-with-assistant` to the librarian command. Nothing is sent to any AI
+service: each datasheet read the run needs is written to `<plan folder>/datasheet/assistant/` as a request, the PDF
+pages and the answer format. Ask an assistant you already use (Claude Code, Claude Desktop or another chat that reads
+PDFs) to answer each `request.md`, then run the same command again. The answers go through the same checks and holds
+as a paid read. Details: [docs/bom-and-datasheets.md](docs/bom-and-datasheets.md#no-api-key-your-own-assistant-reads-the-datasheets-ds_assistantpy).
 
 **3. Deal with held parts.** `ecadlib review` goes through them one at a time: why each is held, ranked symbol or
 footprint candidates to pick from, or **release anyway** after you have looked (recorded in the plan).
@@ -246,7 +258,7 @@ builds an install package, and `ecadlib kicad-export` writes KiCad libraries.
 ```
 ecadlib part status ecadlib_workspace/librarian/my_bom/plan.json   # released parts with a change waiting for a person
 ecadlib upkeep ecadlib_workspace/librarian/my_bom/plan.json --github issue   # lifecycle, KiCad upstream, A365 drift
-ecadlib style check ecadlib_workspace/librarian/my_bom/plan.json             # how far new parts are from your style
+ecadlib style check ecadlib_workspace/librarian/my_bom/plan.json             # how far new parts are from your style (after `ecadlib style learn`)
 ```
 
 [`examples/upkeep.yml`](examples/upkeep.yml) is a ready-to-copy weekly GitHub Actions job for your library repo. See
@@ -260,7 +272,7 @@ What has been measured so far:
 
 | What | Result | What it tells you |
 |---|---|---|
-| **Reading real datasheets** (the number that matters) | 86 of 110 real parts built fully right (78 %), 0 built wrong | Claude Opus 5.5's live datasheet reads of 2026-10-25 plus two targeted re-reads, re-scored free on current code (87 on the code of PR #194; a stricter rule since then holds one part). The live run itself scored 77. The 23 misses were held or left unread, never built. The code was tuned on these same parts, so a fresh set is the real test. Method, every miss and earlier runs: [docs/benchmark.md](docs/benchmark.md). |
+| **Reading real datasheets** (the number that matters) | 86 of 110 real parts built fully right (78 %), measured 2026-10-29 | Claude Opus 5.5's live datasheet reads of 2026-10-25 plus two targeted re-reads, re-scored free on the code of that week. The live run itself scored 77. The code was tuned on these same parts, so this flatters it. On 40 parts it had not seen, a first pass in November built some parts wrong; those causes are fixed, but they were fixed while looking at those 40 too. A fresh set is the real test and is still to come. Check every part before you build a board with it. Method, every miss and earlier runs: [docs/benchmark.md](docs/benchmark.md). |
 | Footprint generator (replay check) | 328 / 331 on every pull request | Given a correct package description, the generator draws the right pads. It does not test datasheet reading. |
 | Altium Designer 26 | Tried | The generated libraries, the ecadlib menu and parts released to Altium 365. Older Altium versions are untested. |
 | Keeping it current (lifecycle, KiCad upstream, Altium 365 drift, upkeep) | Offline tests; the KiCad upstream check run live | The distributor, Nexar and GitHub calls are tested against their documented responses, not yet on a real library over months. |
