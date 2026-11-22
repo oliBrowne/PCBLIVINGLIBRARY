@@ -23,6 +23,7 @@ from pathlib import Path
 from . import altium_menu as AM
 
 WORK, LIB = "ecadlib-work", "ecadlib"
+PASTE = "paste.txt"            # JOB/paste.txt: the built part's symbol as KiCad's schematic clipboard text
 ACTIONS = ("add-part", "check-bom", "fill", "queue", "open", "ai-read", "install")
 
 
@@ -157,6 +158,69 @@ def symbol_fields(cfg, names):
             ref = re.sub(r"[^A-Za-z_#]+$", "", props.get("Reference", "")) or "U"
             return ref, props.get("Value") or p.get("part") or ""
     return "", ""
+
+
+def _num(v):
+    t = f"{round(v, 4):.4f}".rstrip("0").rstrip(".")
+    return "0" if t in ("", "-0") else t
+
+
+def schematic_paste(cfg, names, at=(25.4, 25.4)):
+    """The schematic editor's clipboard text (what KiCad's own Copy writes: a lib_symbols block, then the symbol) for
+    the exported symbol of one of the parts `names`, unit 1 (unit A), not yet annotated ("U?"). Ctrl+V in KiCad's
+    schematic editor (9 and newer; the ecadlib button's window copies it) puts it on the cursor to place, linked to
+    ecadlib:<symbol> and carrying the library's own copy of it, as Place > Add Symbol would. -> (text, units, symbol
+    name); ("", 0, "") when the part is not exported (or is a derived symbol, which KiCad's lib_symbols do not take)."""
+    import copy, uuid
+    from . import sexpr
+    lib = Path(cfg["library"])
+    try:
+        parts = json.loads((lib / "kicad_export.json").read_text(encoding="utf-8")).get("parts", [])
+        tree = sexpr.parse((lib / f"{LIB}.kicad_sym").read_text(encoding="utf-8"), keep_quotes=True)
+    except (OSError, ValueError, AttributeError):
+        return "", 0, ""
+    syms = {str(s[1]): s for s in sexpr.find(tree, "symbol") if len(s) > 1}
+    names = {n for n in names if n}
+    name = next((str(p["symbol_name"]) for p in parts if isinstance(p, dict) and p.get("part") in names
+                 and str(p.get("symbol_name") or "") in syms), "")
+    if not name or sexpr.first(syms[name], "extends") is not None:
+        return "", 0, ""
+    sym, Q = syms[name], sexpr.Q
+    x, y = at
+    units, pins = set(), []
+    for sub in sexpr.find(sym, "symbol"):
+        m = re.search(r"_(\d+)_(\d+)$", str(sub[1]) if len(sub) > 1 else "")
+        if not m:
+            continue
+        unit, style = int(m.group(1)), int(m.group(2))
+        units.add(unit)
+        if unit in (0, 1) and style in (0, 1):            # unit A's pins, and the pins every unit shares
+            for pin in sexpr.find(sub, "pin"):
+                num = sexpr.first(pin, "number")
+                if num is not None and len(num) > 1 and str(num[1]) not in pins:
+                    pins.append(str(num[1]))
+    placed = ["symbol", ["lib_id", Q(f"{LIB}:{name}")], ["at", _num(x), _num(y), "0"], ["unit", "1"]]
+    for flag, default in (("exclude_from_sim", "no"), ("in_bom", "yes"), ("on_board", "yes")):
+        f = sexpr.first(sym, flag)
+        placed.append([flag, str(f[1]) if f is not None and len(f) > 1 else default])
+    placed += [["dnp", "no"], ["uuid", Q(str(uuid.uuid4()))]]
+    for prop in sexpr.find(sym, "property"):
+        if len(prop) < 3 or str(prop[1]).startswith("ki_"):
+            continue
+        key, value = str(prop[1]), str(prop[2])
+        if key == "Reference":
+            value = (value.rstrip("?0123456789") or "U") + "?"
+        a = sexpr.first(prop, "at") or ["at", "0", "0", "0"]
+        try:
+            px, py = float(a[1]), float(a[2])
+        except (IndexError, ValueError):
+            px = py = 0.0
+        new = ["property", Q(key), Q(value), ["at", _num(x + px), _num(y - py), str(a[3]) if len(a) > 3 else "0"]]
+        new += [copy.deepcopy(c) for c in prop[3:] if isinstance(c, list) and c and c[0] != "at"]   # effects, hide, id
+        placed.append(new)
+    placed += [["pin", Q(n), ["uuid", Q(str(uuid.uuid4()))]] for n in pins]
+    lib_symbols = ["lib_symbols", ["symbol", Q(f"{LIB}:{name}")] + copy.deepcopy(sym[2:])]
+    return sexpr.dumps(lib_symbols) + "\n" + sexpr.dumps(placed) + "\n", max(1, len(units - {0})), name
 
 
 def _exported_footprint(cfg, names):
@@ -301,6 +365,16 @@ def run_job(job, action, project, mpn="", manufacturer="", path="", opener=None,
                 ref, value = symbol_fields(cfg, {res.get("part"), *res.get("message", "").rstrip(".").split()[-1:]})
                 if ref:
                     res.update(reference=ref, value=value)
+            (job / PASTE).unlink(missing_ok=True)
+            if action != "fill" and res.get("footprint") and res.get("status") in ("ready", "duplicate"):
+                names = {res.get("part"), *res.get("message", "").rstrip(".").split()[-1:]}
+                try:
+                    text, units, name = schematic_paste(cfg, names)
+                    if text:                         # the window (KiCad 9+ schematic editor) puts it on the clipboard
+                        (job / PASTE).write_text(text, encoding="utf-8")
+                        res.update(paste=PASTE, units=units, symbol=name)
+                except Exception:                    # the part is built; the paste is the extra step
+                    pass
     except Exception as e:                                   # every failure becomes one dialog line with a fix
         res = AM._error(e)
     AM.write_result(job / "result.ini", res)

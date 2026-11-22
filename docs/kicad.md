@@ -94,9 +94,14 @@ Close KiCad (all its windows) first and start it again after: KiCad reads plugin
 
 * **What it does.** The button at the right end of the schematic editor's toolbar opens the same ecadlib window as the
   PCB editor's (Add part from MPN, Check project BOM, Fill the library, Open review queue, Use in every project) for
-  the project KiCad has open (KiCad passes its folder as `KIPRJMOD`). Outside the PCB editor there is no board to
-  place on, so *Add part* builds the part into the project's `ecadlib` library and says where to place it from
-  (Place > Add Symbol, or Add Footprint in the PCB editor). A folder with several `.kicad_pro` files is used only when
+  the project KiCad has open (KiCad passes its folder as `KIPRJMOD`). *Add part* builds the part into the project's
+  `ecadlib` library and puts its symbol on the clipboard in the form KiCad's own Copy uses: press Ctrl+V (Cmd+V on a
+  Mac) in the schematic editor and click where it goes. It comes in linked to `ecadlib:<symbol>`, not yet annotated
+  (`U?`), with its footprint, part number and maker, as Place > Add Symbol would place it. A part with several units
+  pastes unit A; add the others with Place > Add Symbol. *Copy the symbol again* puts it back on the clipboard after
+  something else was copied. Paste before closing the window on a Linux desktop without a clipboard manager: there
+  the copy goes with the window. If the symbol could not be copied, the window says to place it from Place > Add
+  Symbol. A folder with several `.kicad_pro` files is used only when
   one is named like the folder; otherwise the window says it cannot tell which project is open.
 * **The files.** `plugin.json` (KiCad's `api.v1` schema), `ecadlib_kicad.py` (the starter, `ecadlib/assets/kicad_api_plugin.py`),
   `ecadlib_window.py` (a copy of the PCB editor plugin, `ecadlib/assets/kicad_action_plugin.py`, which runs without
@@ -120,6 +125,11 @@ Close KiCad (all its windows) first and start it again after: KiCad reads plugin
   `plugin.json` passes the schema KiCad ships (`tests/test_kicad_api_plugin.py`, run by the CI job `kicad` on KiCad 9
   and 10). **Not checked:** Windows and macOS KiCad (the virtual environment route), the Flatpak, KiCad 11 (not released), and *Add
   part* building a part all the way in this window (the line it shows is tested on its own).
+* **Checked 2026-11-22**, the paste: the text a finished *Add part* job leaves (`JOB/paste.txt`, from
+  `kicad_menu.schematic_paste`) pasted with Ctrl+V in real KiCad 9.0.9 and 10.0.8 places `ecadlib:RES-0603-10k` with
+  footprint `ecadlib:R_0603_1608Metric` and its MPN (KiCad 10 also numbered it R3), and in KiCad 9.0.9 the window
+  itself, started as the button starts it, copied it and the schematic editor pasted it. Not checked: Windows and
+  macOS clipboards.
 
 ## `parity.py`: KiCad and Altium always match
 
