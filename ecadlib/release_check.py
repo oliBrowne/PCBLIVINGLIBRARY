@@ -770,6 +770,10 @@ def check_item(item, base=".", rules=None):
                     (rules.get("release") or {}).get("manufacturer", "warn") != "hold":   # also under its house name
                 warns.append(f"{k} is empty: no source named the maker; fill it before ordering "
                              "([release] manufacturer = \"hold\" holds the part instead)")
+            elif RU.canonical_param(k, rules) == RU.canonical_param("Manufacturer Part Number", rules) and \
+                    generic_passive(item) and (rules.get("release") or {}).get("mpn", "warn") != "hold":
+                warns.append(f"{k} is empty: a generic part built from its value and size; fill it before ordering "
+                             "([release] mpn = \"hold\" holds the part instead)")
             else:
                 add("fields", f"{k} is empty")
     link = value_link_empty(item)
@@ -793,6 +797,23 @@ def check_item(item, base=".", rules=None):
     for v in item.get("bom_holds") or []:             # altium365.plan: BOM lines of this part that disagree on what is
         add("verify", v)                              # built (two footprints, two values): a person fixes the BOM
     return fails, warns, info
+
+
+def generic_passive(item):
+    """A resistor or capacitor the librarian built as a generic passive (its value and its size, no maker's part):
+    such a part may wait for its MPN without being held (`[release] mpn`). Inductors and beads are not: their land
+    and height follow the maker's part."""
+    from .kicad_index import parse_value
+    lib = item.get("librarian") or {}
+    sym = str((item.get("symbol") or {}).get("ref") or "")
+    kind = sym, str(item.get("folder") or "").replace("\\", "/").split("/")[-1]
+    fp = " ".join(str((item.get("footprint") or {}).get(k) or "") for k in ("ref", "kicad"))
+    value = next((str(p.get("value") or "") for p in item.get("parameters") or [] if p.get("name") == "Value"), "")
+    name = str(item.get("name") or "")
+    return bool(lib.get("passive")) and bool((item.get("footprint") or {}).get("file")) and \
+        bool({"Resistor", "Capacitor", "Resistors", "Capacitors"} & set(kind)) and \
+        not re.search(r"polar|tantal|elec|\bCP\b|^CP_|_CP_|CP_Elec|CP_EIA", sym + " " + fp, re.I) and \
+        parse_value(value) is not None and not re.search(r"--|-$|^-", name)   # a value read, a name with no gap
 
 
 PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what its workspace released (no datasheet here)

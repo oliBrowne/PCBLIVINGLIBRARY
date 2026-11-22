@@ -135,7 +135,7 @@ def test_mpn_cells_that_hold_no_part_number(tmp_path):
     by = {d["designator"]: d for d in lines}
     assert not by["C1, C2"].get("mpn") and "0805" in by["C1, C2"]["description"] and not by["C1, C2"].get("bom_hold")
     assert not by["R1"].get("mpn") and "0805" in by["R1"]["description"]
-    assert not by["D1"].get("mpn") and "Digi-Key" in by["D1"]["bom_note"]
+    assert not by["D1"].get("mpn") and by["D1"]["digikey"] == "160-1176-1-ND"
     assert not by["D2"].get("mpn") and "words" in by["D2"]["bom_note"] and by["D2"]["description"] == "Blue LED"
     assert by["U1"]["mpn"] == "LM358DR" and by["U2"]["mpn"] == "ATMEGA328P-AU"
     assert not by["U1"].get("bom_hold")

@@ -97,7 +97,7 @@ def test_triage_uses_official_lcsc_and_skips_the_jlcpcb_search():
             raise AssertionError(f"unexpected request {m} {u}")      # the JLCPCB search must not be asked
         http = nexar_router(more)
         provs = [c(http) for c in PL.select(None, RU.DEFAULTS, default=P.DEFAULT_ORDER)]
-        assert [p.name for p in provs] == ["nexar", "digikey", "mouser", "jlcpcb_search", "easyeda"]
+        assert [p.name for p in provs] == ["nexar", "digikey", "mouser", "jlcpcb_search", "lcsc_search", "easyeda"]
         row = T.triage([{"mpn": "NE555DR", "designator": "U1"}], KiCadIndex([]), provs, http)[0]
         assert row["lcsc"] == "C7593 (via MPN)" and "nexar: MPN -> C7593" in row["notes"], row
         assert row["src"] == "easyeda" and row["status"] in ("available_easyeda", "easyeda_footprint_only"), row

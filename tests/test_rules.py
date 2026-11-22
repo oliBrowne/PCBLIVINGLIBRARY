@@ -204,7 +204,11 @@ def test_librarian_follows_a_house_rules_file():
         fails, _, _ = RC.check_item(it, out, RU.load(Path(d) / "ecadlib.toml"))
         assert ("fields", "RoHS is empty") in fails, fails
         it = dict(r1, parameters=[p for p in r1["parameters"] if p["name"] != "Manufacturer Part Number"])
-        assert ("fields", "MPN is empty") in RC.check_item(it, out, RU.load(Path(d) / "ecadlib.toml"))[0]
+        house = RU.load(Path(d) / "ecadlib.toml")                       # a generic resistor: a note, under its house
+        fails, warns, _ = RC.check_item(it, out, house)                  # name; [release] mpn = "hold" holds it
+        assert ("fields", "MPN is empty") not in fails and any(w.startswith("MPN is empty: a generic part") for w in warns), warns
+        hold = {**house, "release": {**house["release"], "mpn": "hold"}}
+        assert ("fields", "MPN is empty") in RC.check_item(it, out, hold)[0]
         # approvals: [release.approvals] passes through when there is no approvals.json
         assert AP.load_policy(out)["required"] == 1
         assert all(i["status"] in ("awaiting_approval", "held") for i in items.values()), {n: i["status"] for n, i in items.items()}

@@ -7,8 +7,13 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Fixed
+
+- Datasheets: a custom or connector footprint whose pads the read placed itself (a pad table copied from the maker's land) is no longer released because a second read agreed on the body, pin count, pin names or pin sides: that check never looks at the pads. It now needs the land drawing's printed numbers to agree (or, for an exposed-pad table, a second read agreeing on every number the table was checked against); otherwise it is held for a look, and the review says why. Footprints built from a standard table instead, and land blocks (three numbers sizing a row of pads, already checked by the copper check), are unchanged. Found on Haiku 5.5 through Bedrock: SiT1533's pad 3 was read 0.2 mm wide at 0.9 where the drawing has 0.4 at 0.8, and the part was released.
+
 ### Added
 
+- A second way to find parts sold only at LCSC: `lcsc_search` (on by default after `jlcpcb_search`, before `easyeda`). When JLCPCB's part search refuses (on the 1000-part run it answered 403 after the 12th line, so 914 lines never got an LCSC number) or lists nothing, the MPN is looked up in the free jlcsearch parts index and each exact match's LCSC product page is read for maker, package, description and datasheet link. Only an exact MPN counts; a product page that names another part or number is not used; with clone listings no single maker is named. A 403/429 from either site stops it for the rest of the run. `ecadlib sources-check` (weekly) now checks both endpoints too. `[providers] unofficial = false` keeps it out.
 - Claude through Amazon Bedrock: `[ai] provider = "bedrock"` (with `region`, else `AWS_REGION`) sends the same datasheet reads to Claude on your AWS account, signed with your AWS credentials, with no Anthropic key. `model` stays the Claude name (`claude-haiku-5-5`); ecadlib sends the region's inference profile. No Message Batches, refusal fallback or web search through Bedrock, and it does not fetch PDF links, so a datasheet ecadlib could not download is not read. See docs/models.md.
 - Datasheet reads confirmed by more of the datasheet's own text (free, no model). A pinout drawing ("8-pin package connections, top view") now counts like a pin table: each pin number is paired with the name printed beside it, by position on the page, and a name halfway between two numbers is never guessed. A pin table on another page for a package with more pins than the part (TL074's 20-pin LCCC table after its 14-pin SOIC one) no longer keeps the part waiting. On the 17 reads of the 1000-part sample, 5 symbols are now released with no person's look instead of 2 (TL074CDR, M24C02-WMN6TP, SI4401BDY-T1-E3 added); none of 403 deliberately scrambled pinouts was accepted.
 - Datasheets: molded and chip parts (power inductors) whose datasheet prints the maker's land but not the terminal length are built from that land instead of failing (NRS4018). With no terminal to compare, the land must reach the body's ends and its pads must not meet, or the read fails its checks.
@@ -34,6 +39,24 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Real BOMs from open-source boards (a fresh-install test with nine of them, 2026-11-22), read better:
+  - A column with the maker and the part number together (`Manufacturer/MPN`: `YAGEO RC0402FR-071KL`) is split into
+    the two; `A X, B Y` gives the first maker's part, the second named as an alternate. Before, the maker's name was
+    part of the MPN (`Octavo_Systems_OSD3358-512M-BSM`) and nothing was found for it.
+  - Octopart's `Unit Price (@ Batch Size: 1)` column was read as the footprint (a "footprint" 0.45 held parts that
+    KiCad's library has), and its row of distributor names as a part with no name.
+  - A DigiKey order number in the MPN column (`WM15144-ND`) was released as the maker's part number. It is now left
+    out of the MPN, kept as the DigiKey number (Supplier 2), and said in the review.
+  - A line whose every cell says `DNP` became a held part named `DNP`; it now names no part (still DNP in triage).
+  - `ANY` under MPN and Manufacturer (Tomu's BOM) held each passive as "a maker's name, not a part number"; it is a
+    placeholder: no MPN, no maker.
+- A plain resistor or capacitor with a value and a size but no MPN (most passives in hobby KiCad BOMs) is a note to
+  fill the MPN, not a hold. `[release] mpn = "hold"` holds it again. Inductors, beads and every other part with no
+  MPN are still held. On the nine BOMs: 71 of 325 parts ready before, 95 of 323 after (the DNP-only lines are no part),
+  with no API key, no AI and no part-lookup keys.
+- CI: a Windows job installs the wheel in a clean venv on Python 3.10 and 3.13 and runs a new user's first
+  commands, without `PYTHONUTF8` (the test job sets it). The installed-package smoke test now also runs the librarian
+  on a small BOM (maker/MPN in one column, Ω and µ) and `ecadlib status`.
 - KiCad export: a part the librarian called passive only from its BOM line's letter (R5, C3, L1 with a folder that does not say so) got passive pins in the Altium symbol but kept its source's pin types (input, output) in the KiCad one. The plan now records the decision (`librarian.passive`) and the export and `resolve` use it.
 - Open items of the deep-dive testing (2026-11-12), closed:
   - Datasheet reader: a read that names a package of the standard table is now compared with it pad by pad, not only by the box around its leads. Held now: a terminal read twice too long or half as long on a larger part (the pads grow inwards, the box stays the same) and a two-pad part's length and width the other way round. A pad's centre over 0.5 mm from the package's, or a side over 0.75 mm and a quarter off, holds the read. Lands with a tab are left out of this check. An exposed pad far from the size its own name states (over 0.4 mm and a quarter) holds the read; it was a note before. A body far from the size code in its name (`EIA-3528`, `3216Metric`) holds the read. On the sweep of 609 one-value misreads: held 467 -> 484, built with changed pads 56 -> 40, gross ones 5 -> 3. The 88 real reads of the 2026-10-25 benchmark: none is newly held. A value read twice or half its size whose pads stay inside what makers draw for that package still cannot be told from the numbers.
@@ -83,7 +106,7 @@ a minor release may change command-line options and file formats.
 
 ## [0.4.0] - 2026-10-27
 
-The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right with none built wrong (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
+The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right on the parts the code was tuned on (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
 
 ### Added
 

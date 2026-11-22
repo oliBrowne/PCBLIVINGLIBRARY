@@ -6,18 +6,18 @@ counterpart of the accuracy gate (`ecadlib eval gate`, 328/331 on a committed sy
 The gate is a check of the generator and the pipeline: it says the footprint is right *when the reader's answer is
 right*. This page measures the whole thing, reading included: how often ecadlib reads a real datasheet correctly.
 
-## Latest result: 87 of 110 parts right (79 %), none built wrong
+## Result of 2026-10-25: 87 of 110 parts right (79 %) on the parts it was tuned on
 
 | | 2026-10-25 reads, re-scored on 10-25 (PR #194 code) |
 |---|---|
 | Right, every part | **87/110 (79 %)**: 69 match KiCad exactly, 18 follow the maker's datasheet where KiCad differs |
-| Built wrong | **0**: every one of the 87 footprints built is right; the 23 misses are parts held or not built |
+| Built wrong (scorer of the time) | 0 on this tuned set: every one of the 87 footprints built scored right; the 23 misses are parts held or not built. The scorer has been made stricter since (below), and parts the code had not seen did get built wrong |
 | Built from a datasheet read: right | 52 of 52 built (34 match KiCad exactly, 18 by the datasheet) |
 | Built from the standard-package table: right | 35 of 35 |
 | Pad match over the footprints built | 89.0 % (1,504 of KiCad's 1,690 pads, 87 footprints) |
 | Without the one PDF downloaded by hand | 86/109 (79 %) |
 
-**On the code merged since: 86/110, still none built wrong.** A free re-score of the same answers on main (2026-10-29)
+**On the code merged since: 86/110.** A free re-score of the same answers on main (2026-10-29)
 loses MC33063MNTXG: a stricter rule from the #196 bug hunt now refuses the drawing a web search found, because
 nothing in it ties that package to this part. The earlier pass was a lucky guess, so the hold is the right answer.
 
@@ -273,4 +273,16 @@ Every reader fix so far was made while looking at the same 110 parts the headlin
 flatter the reader. The set holds 331 parts and `--limit 110` reads the first 110 of its interleaved order;
 `--skip 110` runs the other 221, which no live run has read. With no model at all (`--sources standard`, free) the
 two halves score alike: 22 of 110 and 40 of 221 fully right from the standard-package table, none built wrong in
-either (2026-11-12). The datasheet reader has not been measured on the held-out half yet: that needs a live run.
+either (2026-11-12).
+
+**The datasheet reader on 40 held-out parts (2026-11-13).** 40 of the 221 were read from their PDFs, with Claude
+reading in a chat session in place of the API (`--replay`, no cost), not as a live API run. The first pass, on the
+code of the time, built 16 right and 1 wrong; once more of their PDFs had been downloaded, 23 right and 7 wrong.
+The causes were fixed (PRs #245 and #247) and the same 40 then scored 27 right and 0 wrong. Those fixes were made
+while looking at these 40, so they are no longer unseen parts either: the clean number after the fixes is not a
+measure of accuracy on new parts. The lesson is the one the rest of this page gives: built-wrong parts do happen on
+parts the code has not seen, which is why every read is held for a person unless an independent source agrees.
+
+**A stricter scorer (2026-11-12, PR #236).** A footprint drawn from the reader's own land now counts as right only
+when that land was checked by hand against the datasheet (the errata file cites the page); otherwise it scores as
+*unverified*, neither right nor built wrong. The headline above was scored before this change.
