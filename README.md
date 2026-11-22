@@ -81,8 +81,9 @@ same library and report any drift.
 
 * **Inside Altium Designer:** an **ecadlib** menu adds a part from its MPN, checks the project's BOM, builds the
   libraries and opens the parts that need a person, with Altium's own dialogs.
-* **Inside KiCad:** a plugin (**Tools > External Plugins > ecadlib** in the PCB editor) opens an ecadlib window that
-  does the same for KiCad projects.
+* **Inside KiCad:** a plugin (**Tools > External Plugins > ecadlib** in the PCB editor, and a toolbar button in the
+  schematic editor of KiCad 9 and newer) opens an ecadlib window that does the same for KiCad projects. **Use in every
+  project** (or `ecadlib kicad-install`) puts the library into KiCad's own tables, so every project sees it.
 * **In your browser:** a local web UI (`ecadlib ui`) for the whole flow, from dropping a BOM to releasing to Altium 365.
 * **From an AI agent:** an MCP server (`ecadlib mcp`) lets Claude, Codex, Grok or another agent run the same steps in
   conversation, with the same holds and cost checks.
@@ -96,15 +97,33 @@ All of them run on your own machine: your libraries and API keys stay there.
   [Releases page](https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases) and run it. A setup page opens where you
   paste an API key, pick a model and add ecadlib to Altium or KiCad. [docs/START_HERE.md](docs/START_HERE.md) walks
   through it.
-* **Command line:** `pip install ecadlib` (Python 3.10+). These docs follow the main branch; anything
-  [CHANGELOG.md](CHANGELOG.md) lists under *Unreleased* is not on PyPI yet. To get it:
+* **Command line:** `pip install ecadlib` (Python 3.10+, Windows, Linux or macOS). The install is a few hundred MB,
+  because it includes the download tools for makers' sites that refuse scripts (Playwright and curl_cffi). Playwright
+  drives the Edge or Chrome already on the machine; with neither, run `playwright install chromium` once.
+  `ecadlib --version` says which version you have.
+* **The newest code:** these docs follow the main branch, and anything [CHANGELOG.md](CHANGELOG.md) lists under
+  *Unreleased* is not on PyPI yet. To get it:
   `pip install "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY"`.
+
+Then run `ecadlib demo` (below) to see it work, and `ecadlib init` in the folder where your libraries and BOMs live.
 
 ## Setup
 
 `ecadlib setup` (or the Windows app) opens a setup page: pick an AI model and paste its key, choose Altium and/or
 KiCad, and add ecadlib to them. Every key stays on your computer and goes only to the company it belongs to
-([how keys are stored](docs/api-keys.md)).
+([how keys are stored](docs/api-keys.md)). `ecadlib doctor` checks the setup at any time.
+
+An AI model is needed only for parts that must be drawn from a datasheet. The choices
+([docs/models.md](docs/models.md)):
+
+* **Claude with your own Anthropic key** (the default), or **Claude through your AWS account** (Amazon Bedrock,
+  `[ai] provider = "bedrock"`, signed with your AWS credentials, no Anthropic key).
+* **Another provider or a local model** (OpenAI-compatible APIs, OpenRouter, Ollama and others), with extra checks
+  for smaller models.
+* **No key at all:** `--read-with-assistant` hands each datasheet read to an AI assistant you already use
+  ([below](#no-api-key)). Nothing is paid and nothing is sent anywhere by ecadlib.
+
+Parts found in KiCad's libraries, EasyEDA/LCSC or the standard package table need no model and no key.
 
 ### DigiKey, Mouser and Nexar keys (optional, free)
 
@@ -273,6 +292,8 @@ What has been measured so far:
 | What | Result | What it tells you |
 |---|---|---|
 | **Reading real datasheets** (the number that matters) | 86 of 110 real parts built fully right (78 %), measured 2026-10-29 | Claude Opus 5.5's live datasheet reads of 2026-10-25 plus two targeted re-reads, re-scored free on the code of that week. The live run itself scored 77. The code was tuned on these same parts, so this flatters it. On 40 parts it had not seen, a first pass in November built some parts wrong; those causes are fixed, but they were fixed while looking at those 40 too. A fresh set is the real test and is still to come. Check every part before you build a board with it. Method, every miss and earlier runs: [docs/benchmark.md](docs/benchmark.md). |
+| **A 1000-part BOM** (998 lines of real parts, many makers) | 709 of 998 ready with no person's look, measured 2026-11-20 | An offline replay of the whole pipeline with saved datasheets, the datasheet reads made by Claude Haiku 5.5 (on Amazon Bedrock, about half a cent a part). The rest were held, mostly for a missing symbol, footprint or datasheet, not for a bad read. The first run released one part built wrong (an oscillator's pad misread); the check that missed it was fixed (PR #279) before the 709. The parts newly released by datasheet reads were checked by hand against their datasheets. |
+| **Real open-source BOMs**, no keys and no AI | 95 of 323 lines ready across 9 BOMs from open-source boards, measured 2026-11-22 | A fresh install as a new user, with no API key, no DigiKey / Mouser / Nexar keys and no EasyEDA (the test machine could not reach it). The rest wait for a key, a datasheet read or a person. Version 0.4.0 from PyPI got 0 of 16 ready on the first of those BOMs, where this release gets 6. What the test found was fixed in PR #284. |
 | Footprint generator (replay check) | 328 / 331 on every pull request | Given a correct package description, the generator draws the right pads. It does not test datasheet reading. |
 | Altium Designer 26 | Tried | The generated libraries, the ecadlib menu and parts released to Altium 365. Older Altium versions are untested. |
 | Keeping it current (lifecycle, KiCad upstream, Altium 365 drift, upkeep) | Offline tests; the KiCad upstream check run live | The distributor, Nexar and GitHub calls are tested against their documented responses, not yet on a real library over months. |
