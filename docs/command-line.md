@@ -206,7 +206,7 @@ markdown-catalog = "ecadlib_example_plugin:markdown_catalog"   # export(items, o
 
 `[providers] order = ["stockroom", "jlcpcb_search", "easyeda"]` chooses and orders the part sources for triage, the
 librarian and the web UI / MCP workspace. `[]` keeps each command's default, and `--providers` still
-overrides it. `jlcpcb_search` is always placed before `easyeda`, because it finds the LCSC number that EasyEDA looks
+overrides it. `jlcpcb_search` and `lcsc_search` are always placed before `easyeda`, because they find the LCSC number that EasyEDA looks
 parts up by. If a plugin raises an exception, or returns something other than a `SourceResult`, the BOM line gets a
 note and triage carries on. A plugin that fails to import is listed by `ecadlib plugins list` with its error. Run an
 exporter with `ecadlib plugins export NAME plan.json -o DIR` (MCP `plugin_export`, `Workspace.plugin_export`).

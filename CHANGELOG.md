@@ -7,6 +7,10 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Fixed
+
+- Datasheets: a custom or connector footprint whose pads the read placed itself (a pad table copied from the maker's land) is no longer released because a second read agreed on the body, pin count, pin names or pin sides: that check never looks at the pads. It now needs the land drawing's printed numbers to agree (or, for an exposed-pad table, a second read agreeing on every number the table was checked against); otherwise it is held for a look, and the review says why. Footprints built from a standard table instead, and land blocks (three numbers sizing a row of pads, already checked by the copper check), are unchanged. Found on Haiku 5.5 through Bedrock: SiT1533's pad 3 was read 0.2 mm wide at 0.9 where the drawing has 0.4 at 0.8, and the part was released.
+
 ### Added
 
 - KiCad 9 and newer, the ecadlib button in the schematic editor: *Add part* now hands the part it built to KiCad's own
@@ -16,6 +20,7 @@ a minor release may change command-line options and file formats.
   part with several units pastes unit A (the window names the others). *Copy the symbol again* puts it back after
   another copy. The job writes the text to `JOB/paste.txt` (`kicad_menu.schematic_paste`). Pasted and placed in real
   KiCad 9.0.9 and 10.0.8 (Linux).
+- A second way to find parts sold only at LCSC: `lcsc_search` (on by default after `jlcpcb_search`, before `easyeda`). When JLCPCB's part search refuses (on the 1000-part run it answered 403 after the 12th line, so 914 lines never got an LCSC number) or lists nothing, the MPN is looked up in the free jlcsearch parts index and each exact match's LCSC product page is read for maker, package, description and datasheet link. Only an exact MPN counts; a product page that names another part or number is not used; with clone listings no single maker is named. A 403/429 from either site stops it for the rest of the run. `ecadlib sources-check` (weekly) now checks both endpoints too. `[providers] unofficial = false` keeps it out.
 - Claude through Amazon Bedrock: `[ai] provider = "bedrock"` (with `region`, else `AWS_REGION`) sends the same datasheet reads to Claude on your AWS account, signed with your AWS credentials, with no Anthropic key. `model` stays the Claude name (`claude-haiku-5-5`); ecadlib sends the region's inference profile. No Message Batches, refusal fallback or web search through Bedrock, and it does not fetch PDF links, so a datasheet ecadlib could not download is not read. See docs/models.md.
 - Datasheet reads confirmed by more of the datasheet's own text (free, no model). A pinout drawing ("8-pin package connections, top view") now counts like a pin table: each pin number is paired with the name printed beside it, by position on the page, and a name halfway between two numbers is never guessed. A pin table on another page for a package with more pins than the part (TL074's 20-pin LCCC table after its 14-pin SOIC one) no longer keeps the part waiting. On the 17 reads of the 1000-part sample, 5 symbols are now released with no person's look instead of 2 (TL074CDR, M24C02-WMN6TP, SI4401BDY-T1-E3 added); none of 403 deliberately scrambled pinouts was accepted.
 - Datasheets: molded and chip parts (power inductors) whose datasheet prints the maker's land but not the terminal length are built from that land instead of failing (NRS4018). With no terminal to compare, the land must reach the body's ends and its pads must not meet, or the read fails its checks.
@@ -90,7 +95,7 @@ a minor release may change command-line options and file formats.
 
 ## [0.4.0] - 2026-10-27
 
-The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right with none built wrong (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
+The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right on the parts the code was tuned on (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
 
 ### Added
 

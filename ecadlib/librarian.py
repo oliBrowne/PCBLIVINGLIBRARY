@@ -2862,7 +2862,7 @@ def write_review(rows, out, bom, items=None):
 def _desc_label(row):
     """Who wrote the part search's description: LCSC/JLCPCB for the unofficial routes, else the official API's name."""
     src = row.get("src_description_from") or row.get("src") or ""
-    return "LCSC/JLCPCB" if src in ("", "jlcpcb_search", "easyeda") else src
+    return "LCSC/JLCPCB" if src in ("", "jlcpcb_search", "lcsc_search", "easyeda") else src
 
 
 def handoff_says(reader, progress):
@@ -3129,7 +3129,7 @@ def main(argv=None):
     ap.add_argument("--refresh", nargs="*", metavar="PART", help="redo finished parts: all, or the named ones")
     ap.add_argument("--refresh-index", action="store_true", help="rebuild the KiCad library name index")
     ap.add_argument("--allow", action="append", default=[], metavar="PART", help="release PART despite its release-check failures")
-    ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else nexar,digikey,mouser,jlcpcb_search,easyeda)")
+    ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else nexar,digikey,mouser,jlcpcb_search,lcsc_search,easyeda)")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
     ap.add_argument("--cache", default=default_cache())
