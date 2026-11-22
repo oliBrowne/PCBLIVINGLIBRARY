@@ -251,3 +251,18 @@ def test_more_size_and_value_mpn_cells_are_caught():
 def test_eagle_library_column_is_not_read_as_a_libref(tmp_path):
     _, mapping = _read(tmp_path, EAGLE_PARTLIST)
     assert "libref" not in mapping
+
+
+@lite
+def test_a_footprint_name_with_another_chip_code_than_the_part_number_holds_the_part(tmp_path):
+    from ecadlib import librarian as L
+    d = Path(tmp_path)
+    bom = d / "bom.csv"                     # EAGLE values export: Murata GRM033 is an 0201, the land is named C0402
+    bom.write_text("Qty,MfgPartNum,Parts,Value,Package\n4,GRM033R61A104KE15D,C1 C2 C3 C4,.1uF,RF-C0402\n"
+                   "1,GRM155R61A104KA01D,C5,.1uF,RF-C0402\n", encoding="utf-8")
+    items = L.run(bom, out=d / "out", sources=["standard"], offline=True, cache=d / "cache", rules={},
+                  log=lambda *a, **k: None)
+    by = {next(p["value"] for p in it["parameters"] if p["name"] == "Manufacturer Part Number"): it for it in items}
+    assert by["GRM033R61A104KE15D"]["status"] != "ready"
+    assert "C_0201" not in str(by["GRM033R61A104KE15D"]["source"].get("footprint"))
+    assert by["GRM155R61A104KA01D"]["source"].get("footprint", "").endswith("C_0402_1005Metric")   # agrees: built
