@@ -933,6 +933,35 @@ def test_a_call_that_never_returns_is_left_behind_on_its_own_thread():
     b.close()
 
 
+def test_a_page_that_never_closes_does_not_hold_up_the_pdf_it_got():
+    """Edge 151+ on Windows sometimes never closes a page left on its error page: page.close() has no time limit, so
+    the PDF already in hand waited out the call's whole limit (90 s in CI). The page is closed after the answer goes
+    back, under a short limit of its own; a page that does not close then is left with its browser (a new one starts)."""
+    class Stuck:
+        closed = False
+
+        def close(self):
+            time.sleep(30)
+
+    class Fine:
+        closed = False
+
+        def close(self):
+            Fine.closed = True
+    b = PF.Browser(timeout=1)
+    b.close_s = 0.5
+    b._get = lambda url, s: (s.leftover.append(Stuck()), (200, PDF, "application/pdf", url, None))[1]
+    t0, stuck = time.monotonic(), b._worker
+    r = b.get(URL)
+    assert r[:2] == (200, PDF) and time.monotonic() - t0 < 3, (r[4], time.monotonic() - t0)
+    assert b._worker is not stuck                                    # that browser is given up; the next call starts afresh
+    b._get = lambda url, s: (s.leftover.append(Fine()), (200, PDF, "application/pdf", url, None))[1]
+    t0, w = time.monotonic(), b._worker
+    assert b.get(URL)[:2] == (200, PDF) and time.monotonic() - t0 < 2
+    assert Fine.closed and b._worker is w and not b._s.leftover       # a page that closes keeps its browser
+    b.close()
+
+
 def test_the_program_exits_at_once_even_with_a_call_left_behind():
     import subprocess
     code = ("import time; from ecadlib import pdf_fetch as PF; b = PF.Browser(timeout=1); b.limit = 0.2; "
