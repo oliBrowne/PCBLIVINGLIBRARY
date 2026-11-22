@@ -86,7 +86,8 @@ parts and counts them: already in your library, found in a public library, or mi
 ### 3d. Fill the library
 
 **Fill the library now** finds or builds every missing part: your own libraries and KiCad's library first, then
-EasyEDA/LCSC, then ecadlib's standard packages, and only then the AI datasheet reader. The dialog shows its progress live.
+EasyEDA/LCSC, then ecadlib's standard packages, and only then the AI datasheet reader. The dialog shows its
+progress live.
 
 Before any datasheet is read by AI, the dialog shows the model and the estimated cost ("3 parts need the datasheet
 read by AI (claude-opus-5-5): about $0.42, at most $1.10") and waits for you. Say no and those parts stay held. Afterwards it shows what the reads really cost. [api-keys.md](api-keys.md) has the details.

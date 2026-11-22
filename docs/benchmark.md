@@ -11,7 +11,7 @@ right*. This page measures the whole thing, reading included: how often ecadlib 
 | | 2026-10-25 reads, re-scored on 10-25 (PR #194 code) |
 |---|---|
 | Right, every part | **87/110 (79 %)**: 69 match KiCad exactly, 18 follow the maker's datasheet where KiCad differs |
-| Built wrong (scorer of the time) | **0**: every one of the 87 footprints built scored right; the 23 misses are parts held or not built. The scorer has been made stricter since (below), and parts the code had not seen did get built wrong |
+| Built wrong (scorer of the time) | 0 on this tuned set: every one of the 87 footprints built scored right; the 23 misses are parts held or not built. The scorer has been made stricter since (below), and parts the code had not seen did get built wrong |
 | Built from a datasheet read: right | 52 of 52 built (34 match KiCad exactly, 18 by the datasheet) |
 | Built from the standard-package table: right | 35 of 35 |
 | Pad match over the footprints built | 89.0 % (1,504 of KiCad's 1,690 pads, 87 footprints) |

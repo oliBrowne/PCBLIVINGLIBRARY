@@ -43,9 +43,10 @@ library, available from a source, needs a footprint, or DNP. `ecadlib where-used
 
 **2. Fill the library.** Your own libraries first, then the official KiCad libraries, then EasyEDA/LCSC (an unofficial
 source; `[providers] unofficial = false` turns it off), then ecadlib's checked table of standard packages. The order
-is `[sources] order` in `ecadlib.toml`. Nexar, DigiKey and Mouser identify the part. When nobody has it, a datasheet reader (Claude by default, or any model
-you choose, local ones included) reads the package drawing and a deterministic IPC-7351B generator draws the land:
-chips, gull-wing and no-lead ICs, QFPs, BGAs, connectors and pad tables. Symbols follow one pin rule (inputs left,
+is `[sources] order` in `ecadlib.toml`. Nexar, DigiKey and Mouser identify the part. When nobody has it, a datasheet
+reader (Claude by default, or any model you choose, local ones included) reads the package drawing and a
+deterministic IPC-7351B generator draws the land: chips, gull-wing and no-lead ICs, QFPs, BGAs, connectors and pad
+tables. Symbols follow one pin rule (inputs left,
 outputs right, power top, ground bottom), and parts get a 3D model (KiCad's, EasyEDA's, or a package-shaped STEP that
 ecadlib makes).
 
