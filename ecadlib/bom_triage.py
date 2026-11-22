@@ -349,11 +349,22 @@ def _read_csv(p, widths=None):
         if re.search(r"[^\x00-\x7f]{3,}", text):                       # runs of accented letters: GBK / Shift-JIS
             print(f"  warning: {Path(p).name} is not UTF-8: read as Windows-1252 (Western) and the text looks garbled "
                   "(a Chinese / Japanese / Cyrillic BOM?): save it as 'CSV UTF-8' and run again", file=sys.stderr)
+    if text.startswith("version https://git-lfs.github.com/spec/"):     # a Git LFS pointer, not the file itself
+        raise ValueError(f"{p}: this is a Git LFS pointer, not the BOM: the repository keeps the real file in Git LFS; "
+                         "run `git lfs pull` (or download the file from the repository's web page) and try again")
     head = text.lstrip()[:4096].lower()
     if re.match(r"(<\?xml[^>]*>\s*)?<(!doctype\s+html|html\b|table\b)", head) or \
             "urn:schemas-microsoft-com:office:spreadsheet" in head:      # '.xls' saved by web tools: HTML / XML 2003
         raise ValueError(f"{p}: this file is an HTML page or Excel 2003 XML, not a CSV or workbook; open it in Excel "
                          "and save it as .xlsx or CSV")
+    fixed = _fixed_width_rows(text)                                     # EAGLE's Partlist / Values text export
+    if fixed:
+        width = max(len(r) for r in fixed)
+        df = pd.DataFrame([r + [""] * (width - len(r)) for r in fixed], dtype=str)
+        df.attrs["text"] = False                                          # cut by position: no stray commas to mend
+        if widths is not None:
+            widths[:] = [len(r) for r in fixed]
+        return df
     # keepends: a quoted cell may span lines. Records end only at \r\n, \n or \r (as for csv / Excel): not at the
     # other Unicode line breaks str.splitlines knows (U+2028, form feed, U+0085 pasted from Word / a PDF)
     lines = [ln for ln in re.findall(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$", text) if ln.strip()]
@@ -390,6 +401,37 @@ def _read_csv(p, widths=None):
     return df
 
 
+_FIXED_HEADER = re.compile(r"(?:Part|Qty)[ ]+Value[ ]+(?:Device|Package)\b.*")   # EAGLE: 'Part  Value  Device ...'
+
+
+def _fixed_width_rows(text):
+    """Rows of a BOM laid out in space-padded columns with no delimiter (EAGLE's 'Export > Partlist' and 'Export >
+    Values' text: 'Part  Value  Device  Package  Library  Sheet' or 'Qty Value Device Package Parts Description'),
+    cut at the header words' columns; None for any other text. A cell may hold spaces ('C1, C2, C5', 'Chip
+    Capacitor'), so the header's column starts are used, not whitespace. The cut is used only when the rows fit
+    it: every column start falls on a space or the row's end in at least 90% of the data rows."""
+    lines = text.splitlines()
+    k = next((i for i, ln in enumerate(lines[:60]) if _FIXED_HEADER.fullmatch(ln.strip())), None)
+    if k is None or any(d in lines[k] for d in (",", ";", "|", "\t")):   # a delimited file (TSV too): not padded
+        return None
+    lines = [ln.expandtabs(8) for ln in lines]
+    head = lines[k]
+    starts = [m.start() for m in re.finditer(r"\S+", head)]
+    data = [ln for ln in lines[k + 1:] if ln.strip() and not re.fullmatch(r"[\s\-=_]+", ln)]
+    if not data:
+        return None
+    if not all(all(s >= len(ln) or ln[s - 1] == " " for s in starts[1:]) for ln in data):
+        return None                                       # one row off the columns: not cut (it would be mis-read)
+
+    def cut(ln):
+        return [ln[a:b].strip() for a, b in zip(starts, starts[1:] + [None])]
+    top = cut(head)
+    if top[0] == "Part":                                  # EAGLE's Partlist: 'Part' is the designator, whatever it
+        top[0] = "Designator"                             # holds (R1, but also BATT, +5V, /RST for named parts)
+    top = ["EAGLE " + h if h in ("Library", "Sheet") else h for h in top]   # EAGLE's library name is no LibRef
+    return [top] + [cut(ln) for ln in data]
+
+
 def clean_part_number(s):
     """A part number as typed into a datasheet or a web page, made plain: fullwidth letters (ＬＭ358) to ASCII,
     en/em dashes and minus signs to '-', no zero-width marks, no-break spaces as spaces."""
@@ -414,6 +456,23 @@ def _part_is_designators(df, headers, mapping, columns=None):
     cells = [str(x).strip() for x in df.iloc[:, headers.index(h)] if str(x).strip()]
     refs = [c for c in cells if all(REF_PREFIX.fullmatch(t) for t in re.split(r"[\s,;]+", c.upper()) if t)]
     return len(cells) >= 1 and len(refs) >= 0.8 * len(cells)
+
+
+def _part_designator_column(df, headers, mapping, columns=None):
+    """The header of an unread column headed just 'Part' / 'Parts' whose cells are reference designators, when no
+    column was read as the designator (EAGLE's CSV BOM puts 'Part' first and the maker part number in its own
+    column); None otherwise."""
+    used = set(mapping.values())
+    if "device" not in {_hnorm(x) for x in headers} or columns:      # EAGLE's own columns: Part, Value, Device
+        return None                                                   # (a 'Part' of S8050, MP1584 elsewhere is MPNs)
+    for j, h in enumerate(headers):
+        if h in used or _hnorm(h) not in ("part", "parts") or headers.index(h) != j:
+            continue
+        cells = [str(x).strip() for x in df.iloc[:, j] if str(x).strip()]
+        refs = [c for c in cells if all(REF_PREFIX.fullmatch(t) for t in re.split(r"[\s,;]+", c.upper()) if t)]
+        if cells and len(refs) >= 0.8 * len(cells):
+            return h
+    return None
 
 
 def apply_columns(mapping, headers, columns):
@@ -495,6 +554,10 @@ def read_bom(path, columns=None, rules=None, root=None):
                       'ecadlib.toml, e.g. [bom.columns] mpn = "Part No"')
     if _part_is_designators(df, headers, mapping, columns):
         mapping["designator"] = mapping.pop("mpn")              # EAGLE's 'Part' column: R1, C1, U1
+    elif "designator" not in mapping:                           # EAGLE's CSV: 'Part' (R1, C1) beside a real MPN column
+        part = _part_designator_column(df, headers, mapping, columns)
+        if part:
+            mapping["designator"] = part
     _warn_unmatched_columns(p, headers, columns)
     col = {f: headers.index(h) for f, h in mapping.items()}       # by position: a BOM may repeat a header (a 2nd 'MPN')
     alt = _alternate_mpns(headers, col)                          # Altium 'Manufacturer Part Number 2' (+ its maker)
@@ -599,6 +662,13 @@ def read_bom(path, columns=None, rules=None, root=None):
                         "number: write the maker and the part number in their own columns")   # FC-135 32.768KA-AG0'
                 note.append(hold)
                 d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
+        bad = _not_a_part_number(d.get("mpn", ""))
+        if bad:                                         # left out of the MPN, as an empty cell is: the line is built
+            why = {"size_value": "a size and value", "words": "words"}[bad]   # (or held) from its value and footprint,
+            note.append(f"the MPN cell holds {d['mpn']!r}, {why}, not the maker's part number: read as the "   # never
+                        "description")                                  # with this as its MPN ('Part' = '0805, 4.7uF'
+            d["description"] = f"{d['description']}; {d['mpn']}" if d.get("description") else d["mpn"]   # / 'Blue LED')
+            d["mpn"] = ""
         if d.get("mpn"):
             d["mpn"], extra, mpn_dnp = _split_mpn(d["mpn"], d.get("manufacturer", ""))
             note += extra
@@ -1041,6 +1111,27 @@ def _split_mpn(mpn, maker=""):
     return core, notes, dnp
 
 
+_SIZE_CODE = r"(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512|2220|1005|1608|2012|3216|3225|4532|5025|6332)"
+_VALUE_WORD = r"(?:\d+(?:[.,]\d+)?\s*[pnuµμmkKMG]?\s*(?:F|H|Ω|ohms?|R)?|\d*[pnuµμkKMGR]\d+|\d+(?:[.,]\d+)?\s*(?:%|V|W))"
+_SIZE_VALUE_CELL = re.compile(rf"(?:{_SIZE_CODE}|{_VALUE_WORD})(?:\s*[,/;]\s*|\s+)(?:{_SIZE_CODE}|{_VALUE_WORD})"
+                              rf"(?:(?:\s*[,/;]\s*|\s+)(?:{_SIZE_CODE}|{_VALUE_WORD}))*", re.I)
+_WORDS_PN = re.compile(r"[A-Za-z][A-Za-z\-]*(?:\s+[A-Za-z][A-Za-z\-]*)+")
+
+
+def _not_a_part_number(s):
+    """Why an MPN cell holds no part number, or None: 'size_value' for a chip size with a value ('0805, 4.7uF', a
+    'Part' column that describes the part), 'words' for two or more words with no digit ('Blue LED', 'Push button').
+    A Digi-Key order code (-ND) is read further on (d['digikey'])."""
+    s = str(s or "").strip()
+    if not s:
+        return None
+    if _SIZE_VALUE_CELL.fullmatch(s) and re.search(_SIZE_CODE, s):   # '0805, 4.7uF', '0603 10 ohm', '1608 330'
+        return "size_value"
+    if _WORDS_PN.fullmatch(s) and not placeholder_mpn(s) and not DNP_MARK.search(s):
+        return "words"
+    return None
+
+
 def maker_only_mpn(s, maker=""):
     """An MPN cell that names a maker and no part: no digit in it, and either a label's colon after it ('onsemi:',
     'Murata:') or the line's own maker / a maker ecadlib knows by name. Part numbers carry digits; a cell without one
@@ -1119,6 +1210,12 @@ def _xlsx_frames(p):
     except Exception as e:                                               # truncated / corrupt zip, missing parts
         if isinstance(e, ValueError) and str(e).startswith(f"{p}:"):    # our own message (_compact)
             raise
+        try:                                                             # openpyxl refuses some styles other tools
+            unc = {}                                                     # write (PatternFill 'extLst'): the cells
+            sheets = _BI().xlsx_sheets(p, uncached=unc)                  # are still readable by the plain reader
+            return [(n, pd.DataFrame(rows, dtype=object), unc.get(n, [])) for n, rows in sheets.items()]
+        except Exception:
+            pass
         raise ValueError(f"{p}: not a readable Excel workbook ({type(e).__name__}: {e})") from e
     unc = _uncached_formulas(p) if has_f else {}
     return [(n, df, unc.get(n, [])) for n, df in frames]

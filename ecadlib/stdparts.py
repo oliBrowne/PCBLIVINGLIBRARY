@@ -1056,6 +1056,13 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
         elif ms and mk != kind:
             return None, f"MPN {mpn} looks like a {mk} ({ms}) but the part is a {kind}"
         real = {s for s in sizes if not s.startswith("conflict")}
+        if real and all(w.startswith("MPN ") for w in sizes.values()):    # the size is the MPN's alone: a footprint
+            for t in texts:                                               # name the reader can't place that still
+                seen = set(re.findall(r"(?<![0-9])(0201|0402|0603|0805|1206|1210|1812|2010|2512)(?![0-9])",
+                                      _strip_lib(t)))                     # names another chip code ('RF-C0402' on a
+                if seen and not seen & real:                              # GRM033 0201 part): which is right is unknown
+                    return None, ("size codes disagree: " + ", ".join(f"{s} ({w})" for s, w in sizes.items())
+                                  + f", {'/'.join(sorted(seen))} in the footprint name {_strip_lib(t).strip()}")
         if any(s.startswith("conflict") for s in sizes) or len(real) > 1:
             return None, "size codes disagree: " + ", ".join(f"{s} ({w})" for s, w in sizes.items())
         if real:

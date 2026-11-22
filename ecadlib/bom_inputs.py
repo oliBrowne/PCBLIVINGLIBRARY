@@ -373,7 +373,9 @@ def _rich_text(si):
     readings (<rPh><t>: the furigana Japanese Excel keeps beside the text)."""
     if si is None:
         return ""
-    return "".join(t.text or "" for t in si.findall("m:t", NS) + si.findall("m:r/m:t", NS))   # one or the other
+    text = "".join(t.text or "" for t in si.findall("m:t", NS) + si.findall("m:r/m:t", NS))   # one or the other
+    return re.sub(r"_x([0-9A-Fa-f]{4})_", lambda m: chr(int(m.group(1), 16)), text)   # Excel's escape for a
+                                                                  # character XML can't hold: '_x0009_' is a tab
 
 
 def _cell_rc(ref):
