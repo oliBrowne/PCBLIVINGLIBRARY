@@ -35,7 +35,7 @@ def quiet(fn, *a, **k):
     return rc, o.getvalue()
 
 
-def altium_house(d):
+def altium_house(d, unit_space=False):
     """Resistors 'RES 10K ±1% 0603' with Tolerance '±1%'; caps with 'Voltage' '16 V'; an IC with barred pins."""
     d = Path(d)
     syms = []
@@ -46,7 +46,7 @@ def altium_house(d):
     for size, val, v, diel in RF.CAPS:
         s = RF.sym(f"CAP_{size}_{val}", "C", {"MPN": RF.MPN_C[val], "Voltage": v.replace("V", " V"), "Dielectric": diel},
                    f"C{size}")
-        s["description"] = f"CAP {val} {v} {diel} {size}"
+        s["description"] = f"CAP {val} {v.replace('V', ' V') if unit_space else v} {diel} {size}"
         syms.append(s)
     ic = AL.ic_symbol("TPS3839", [{"num": "1", "name": "~{RESET}", "side": "right"}, {"num": "2", "name": "GND", "side": "left"},
                                  {"num": "3", "name": "VDD", "side": "left"}, {"num": "4", "name": "~{MR}", "side": "left"},
@@ -112,6 +112,34 @@ def test_learn_from_an_altium_library_and_adapt_a_plan():
         assert {p["value"] for p in items[0]["parameters"]} >= {"Yageo", "RC0603FR-0710KL"}   # identity facts kept
         sym, ren = H.adapt_symbol({"pins": [{"num": "1", "name": "RESET#"}, {"num": "2", "name": "VDD"}]}, prof)
         assert [p["name"] for p in sym["pins"]] == ["~{RESET}", "VDD"] and ren == ["RESET# -> ~{RESET}"]
+
+
+def test_values_written_with_a_space_and_parameters_the_part_already_states():
+    """Found trying `ecadlib style` end to end (2026-11-22): a library that writes "CAP 100N 16 V X7R 0402" (a space
+    before the unit, as its Voltage parameter does) got no capacitor description pattern at all, and a plan part whose
+    own text says 1% / 16V / X7R was told "ecadlib has no value" for the Tolerance / Voltage / Dielectric your library
+    always carries."""
+    with tempfile.TemporaryDirectory() as td:
+        lib = altium_house(Path(td) / "lib", unit_space=True)
+        prof = H.learn([lib])
+        caps = prof["descriptions"]["Capacitors"]
+        assert caps.get("template") == "{cat3} {value} {voltage} {dielectric} {package}", caps
+        items = plan_items()
+        for it in items:                                             # a librarian part: no Tolerance / Voltage parameter
+            it["parameters"] = [p for p in it["parameters"] if p["name"] not in ("Tolerance", "Voltage")]
+        found = {f["field"]: f for f in H.check_item(items[1], prof)}
+        assert found["description"]["want"] == "CAP 100N 16 V X7R 0402", found
+        assert found["parameters.Voltage"]["want"] == "16 V" and found["parameters.Voltage"]["fix"], found
+        assert found["parameters.Dielectric"]["want"] == "X7R" and found["parameters.Dielectric"]["fix"], found
+        found = {f["field"]: f for f in H.check_item(items[0], prof)}
+        assert found["parameters.Tolerance"]["want"] == "±1%" and found["parameters.Tolerance"]["fix"], found
+        assert not found["parameters.Power"]["fix"]                 # the part does not say: still by hand
+        H.adapt_items(items, prof)
+        got = {p["name"]: p["value"] for p in items[1]["parameters"]}
+        assert got["Voltage"] == "16 V" and got["Dielectric"] == "X7R" and items[1]["description"] == "CAP 100N 16 V X7R 0402"
+        assert {p["name"]: p["value"] for p in items[0]["parameters"]}["Tolerance"] == "±1%"
+        again = copy.deepcopy(items)
+        assert H.adapt_items(again, prof) == {} and again == items     # idempotent
 
 
 def test_kicad_pins_and_descriptions_are_learned():
