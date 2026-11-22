@@ -22,3 +22,10 @@ def test_a_port_pin_with_its_other_function():
     assert C.names_agree("P1.7/VREF", "(GPIO) P1[7]")
     assert not C.names_agree("P1.6/VREF", "(GPIO) P1[7]")
     assert not C.names_agree("VREF/SDA", "P1[7]")
+
+
+def test_pinout_page_text_with_bracket_port_names_holds_the_dotted_names():
+    """CY8C4245: the pinout pages print "(GPIO) P2[0]"; the symbol's P2.0 is a word there."""
+    texts = {14: "1 VSS 2 (GPIO) P2[0] 3 (GPIO) P2[1] 44 (GPIO) P1[7]"}
+    assert PD.text_names(texts, [14], [("2", "P2.0"), ("3", "P2.1"), ("1", "VSS")]) is None
+    assert PD.text_names(texts, [14], [("2", "P2.2")])
