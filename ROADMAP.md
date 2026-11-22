@@ -4,7 +4,7 @@ Last updated 2026-10-29. What ecadlib is for, who it is for and how success is m
 [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md). Every planned item below has an issue, and every milestone is a
 [GitHub milestone](https://github.com/oliBrowne/PCBLIVINGLIBRARY/milestones) with the same due date.
 
-Milestones follow the package version (v0.4.0, v0.5.0, v0.6.0), not v1 / v1.1: ecadlib is at 0.4.0 on PyPI, and
+Milestones follow the package version (v0.4.0, v0.5.0, v0.6.0), not v1 / v1.1: ecadlib is at 0.4.0 on PyPI (0.4.1 is being prepared), and
 the changelog keeps 0.x minor releases free to change command-line options and file formats until 1.0.0.
 
 **Focus until v0.5.0:** a proven BOM-to-Altium 365 flow with a published accuracy benchmark, and real-BOM trials

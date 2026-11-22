@@ -14,11 +14,12 @@ defaults changed (below, under *Changed defaults*). It is a patch-numbered relea
 BOM-to-Altium 365 flow.
 
 **Why upgrade.** On a fresh install with no keys and no AI (2026-11-22), 0.4.0 got 0 of 16 parts ready on the first
-real open-source BOM tried (The Open Book) in 212 s; this release gets 6 of 16 in 20 s. Across 9 real open-source
-BOMs it gets 95 of 323 lines ready with no keys, and 1,552 public BOM files ran with no crash (three ways to build a
-part wrong that they showed are now held). On a 1000-part BOM (998 lines, offline replay with saved datasheets,
-datasheet reads by Claude Haiku 5.5 on Amazon Bedrock, 2026-11-20) 709 lines were ready with no person's look; the
-parts newly released by datasheet reads were checked by hand against their datasheets and none was wrong. These are
+real open-source BOM tried (The Open Book) in 212 s; `main` of the same day, just before the last fixes in this
+release, got 6 of 16 in 20 s. Across 9 real open-source BOMs, `main` with #284 got 95 of 323 lines ready with no keys.
+1,552 public BOM files ran through it (one run stopped on a footprint name, now fixed), and together with fake BOMs
+in the same formats they showed three ways to build a part wrong; all three are held now (#285). On a 1000-part BOM (998 lines, offline replay with saved datasheets,
+datasheet reads by Claude Haiku 5.5 on Amazon Bedrock, 2026-11-20) 709 lines were ready with no person's look, and
+none was found built wrong (one found wrong in the first run was fixed by #279 before that count). These are
 measurements on those sets, not a promise for your BOM: check parts before you build a board with them.
 
 **Highlights.**
@@ -36,7 +37,7 @@ measurements on those sets, not a promise for your BOM: check parts before you b
 - Real BOMs read better: EAGLE text BOMs, combined Manufacturer/MPN columns, Octopart and Digi-Key exports, DNP lines.
 - Opt-in automatic crash reports.
 
-**Changed defaults** (each can be set back):
+**Changed defaults** (the first two can be set back):
 
 - `[datasheet] web_search` is on: a part no free way finds a datasheet for gets one web search, billed to your own
   Claude key (about $0.03 a part on Haiku 5.5, counted in `max_cost_usd`). `web_search = false` turns it off.
@@ -157,7 +158,7 @@ Summarised from the pull requests; each PR's description has the details.
   search's case text kept and used, so fewer parts are held after it (#253, #254, #266); DigiKey's case found when
   several makers share a part number (#258), its token renewed on a long run instead of HTTP 401 for every later part
   (#257), its per-minute limit waited out and its daily limit stopped at (#260); Mouser's NXP case read after its
-  category and Mouser paced (#255, #260); a typo-away listed number suggested, maker names in an MPN cell held
+  category (#260) and Mouser paced (#255); a typo-away listed number suggested, maker names in an MPN cell held
   (#268); Molex zero-padded numbers and renamed makers matched, and the review says why no source lists a part
   (#264); a Nexperia/NXP packing code (`,125`) is not part of the part number (#276); messy MPN cells cleaned (#266).
 - Kinds of parts: thermistors and varistors get their own kind and KiCad's own symbols (#261); fuses, test points and
@@ -171,12 +172,22 @@ Summarised from the pull requests; each PR's description has the details.
   picture-only read checked against package rules; free checks that use the part's own PDF from your datasheet folder
   or your assistant's downloads. An error inside one of these checks keeps the part held (#271).
 - Holding wrong parts (the datasheet reader and the BOM): reader holds for misreads found on parts the code had not
-  seen (#243, #245, #247), on tab packages (#238), and for lead widths read half or twice, a named exposed pad left
+  seen (#245, #247), on tab packages (#238), and for lead widths read half or twice, a named exposed pad left
   out, or a pitch that is not the package name's (#243); a BOM with no Value column no longer releases resistors,
   capacitors and inductors with a blank value (#240); a resistor or capacitor whose Value is only a rating (`50V`,
   `X7R`, `1%`, `0603`) or whose sizes clash is held (#249, #250); foreign-language and EAGLE BOM headers read (#249);
   a part's own symbol kept on a re-run (#254); fixes from the 100-part real BOM run, including stacked pins, TVS
   direction and connector symbols (#255).
+- Real BOMs from public hardware projects (#285): EAGLE Partlist / Values text exports read (they were refused or
+  read as one garbled column); EAGLE's `Part` column of designators beside a real MPN column is the designator; MPN
+  cells holding a size and value (`0805, 4.7uF`), a Digi-Key order code (`-ND`) or plain words (`Blue LED`) are not
+  used as the part number. Held now instead of built wrong: a resistor whose bare-number Value disagrees with its part
+  number's code (Value `430`, MPN `0603WAF4302T5E` = 43k), `0603M` / `1608M` read as a resistance, and a chip passive
+  sized only by its part number under a footprint name of another chip size. A footprint name Altium can't store holds
+  that part instead of stopping the run; an .xlsx openpyxl refuses is read by the plain reader; a Git LFS pointer file
+  says so.
+- Datasheets: distributor copies labelled as such, and every link listed when a PDF must be fetched by hand (#274).
+- Site: a new Altium and KiCad walkthrough (#231).
 - Testing fixes: BOM grouping, metric chip sizes, duplicate part names, designators that name no entry, kicad-install
   safety, plugin and command crashes (#242); LCSC package ranking, EasyEDA conversion, reader over-holds, edited
   ledger lines, the spend cap across repeats and JSON errors (#244); `step-gen` takes a `.kicad_mod` file and the
