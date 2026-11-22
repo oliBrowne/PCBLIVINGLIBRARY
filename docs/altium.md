@@ -250,9 +250,11 @@ library) and `<project>/ecadlib/` the KiCad library, added to the project's tabl
 (say `kicad-export -o <project>`'s `${KIPRJMOD}/ecadlib.pretty`) is not changed: the window names that row, to rename
 or remove. The BOM check counts a line as in your library when its part number is in `<project>/ecadlib/*.kicad_sym`.
 Open review queue runs one web UI per project: when the port is taken by another project's UI, the next free port.
-KiCad gives plugins no menu or toolbar slot in the schematic editor; the setup page's Add to KiCad puts two entries in
-its Tools > Generate Legacy Bill of Materials instead, *ecadlib: check BOM* and *ecadlib: fill library* (see
-docs/kicad.md, "Three ways to get the library into KiCad").
+KiCad 7 and 8 give plugins no menu or toolbar slot in the schematic editor; there the setup page's Add to KiCad puts
+two entries in its Tools > Generate Legacy Bill of Materials, *ecadlib: check BOM* and *ecadlib: fill library* (see
+docs/kicad.md, "Three ways to get the library into KiCad"). KiCad 9 and newer also get an ecadlib button in the
+schematic editor's toolbar, whose *Add part* copies the built symbol for Ctrl+V (docs/kicad.md, "The ecadlib button in
+the schematic editor").
 Tried in KiCad 7.0.11: toolbar button, BOM check, fill and add part with the footprint placed.
 
 **Altium.** `altium-pkg` writes a folder that opens in Altium as is: `SchLib/`, `PcbLib/`, `<name>.LibPkg` (an
@@ -320,7 +322,7 @@ reason (the dialog and the review queue say which), and nothing held reaches the
 person may override (not a missing file, not a change waiting for `ecadlib part approve`) gets **Release anyway** at
 the bottom left of the dialog: it lists why the part is held, then asks why it is fine, and releases it the way the
 review queue does (`release-check --allow`, your name and the reason kept in the plan's `allow`, revision 1 in the
-change-control ledger) before it puts the part into the library. The reason box starts with "Checked it: fine as it is", so Enter releases; an emptied box releases nothing. A missing 3D height does not hold a part (`[release] height = "hold"` makes it; `[release] allow_missing_3d = true`, off by default, keeps a part with no 3D height at all from being held even then): the dialog adds a note to check the 3D body. A 3D model on one side only (KiCad has one, the Altium footprint has none) is a note too, not a hold. An empty Manufacturer does not hold it either (`[release] manufacturer = "hold"` makes it): Add part fills it from the free part search when the exact MPN has one maker, otherwise the dialog notes it is empty. No datasheet link is a note too (`[release] datasheet = "hold"` holds the part). Check this project BOM reads the
+change-control ledger) before it puts the part into the library. The reason box starts with "Checked it: fine as it is", so Enter releases; an emptied box releases nothing. A missing 3D height does not hold a part (`[release] height = "hold"` makes it; `[release] allow_missing_3d = true`, off by default, keeps a part with no 3D height at all from being held even then): the dialog adds a note to check the 3D body. A 3D model on one side only (KiCad has one, the Altium footprint has none) is a note too, not a hold. An empty Manufacturer does not hold it either (`[release] manufacturer = "hold"` makes it): Add part fills it from the free part search when the exact MPN has one maker, otherwise the dialog notes it is empty. No datasheet link is a note too (`[release] datasheet = "hold"` holds the part). A plain resistor or capacitor with a value and a size but no Manufacturer Part Number is a note too (`[release] mpn = "hold"` holds it); any other part with no MPN is held. Check this project BOM reads the
 project's device sheets (`[DeviceSheetN]`; one it cannot find is a warning) and lists multi-channel sheets once per
 channel (R1_CH1 ...); a Content Vault component without an MPN parameter uses its Comment as the MPN when it reads as
 one. Workspace `altium_menu(win_dir)` and the MCP

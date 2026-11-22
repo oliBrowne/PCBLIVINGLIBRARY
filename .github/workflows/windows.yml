@@ -54,6 +54,34 @@ jobs:
           PYTHONUTF8: "1"
         run: python -m tests.run_all
 
+  pip-install:
+    # What a Windows user who types `pip install ecadlib` gets: the wheel in a clean venv, then the first commands from
+    # the README (demo, init, doctor, librarian on their own BOM, status) from outside the checkout. No PYTHONUTF8 here
+    # (the test job sets it), so a print a Windows console can't encode fails this job.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install build
+      - run: python -m build --wheel
+      - name: Install the wheel in a clean venv and run the first commands
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m venv "$env:RUNNER_TEMP\venv"
+          $whl = (Get-ChildItem dist -Filter *.whl)[0].FullName
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" -m pip install -q $whl; if ($LASTEXITCODE) { exit 1 }
+          Push-Location $env:RUNNER_TEMP
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" "$env:GITHUB_WORKSPACE\.github\scripts\smoke_installed.py"
+          if ($LASTEXITCODE) { exit 1 }
+          Pop-Location
+
   installer:
     runs-on: windows-latest
     defaults:

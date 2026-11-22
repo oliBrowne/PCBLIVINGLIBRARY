@@ -186,6 +186,77 @@ def test_cli_fill_for_the_schematic_editor():
     assert "(version 20220914)" in (d / "ecadlib" / "ecadlib.kicad_sym").read_text()           # KiCad 7's format
 
 
+def _placed(text):
+    """KiCad's schematic clipboard text -> (lib_symbols, the placed symbol)."""
+    from ecadlib import sexpr
+    tree = sexpr.parse("(clip " + text + ")")
+    assert [c[0] for c in tree[1:]] == ["lib_symbols", "symbol"], text[:200]
+    return tree[1], tree[2]
+
+
+def test_add_part_job_leaves_the_symbol_for_the_schematic_editors_paste():
+    """KiCad 9+'s schematic editor window copies JOB/paste.txt to the clipboard: KiCad's own Copy format (lib_symbols,
+    then the symbol), linked to ecadlib:<symbol>, not annotated, footprint and part fields set, pins with uuids. Pasted
+    with Ctrl+V in real KiCad 9.0.9 and 10.0.8 (the symbol placed as ecadlib:RES-0603-10k, R? / R3)."""
+    from ecadlib import sexpr
+    d = _project()
+    _job(d, "fill")
+    res = _job(d, "add-part", mpn="RC0603FR-0710KL", manufacturer="Yageo")
+    job = d / KM.WORK / "jobs" / "add-part"
+    assert res["paste"] == KM.PASTE and res["units"] == 1 and res["symbol"] == "RES-0603-10k", res
+    assert AM.read_ini(job / "result.ini")["result"]["paste"] == KM.PASTE
+    libs, sym = _placed((job / KM.PASTE).read_text(encoding="utf-8"))
+    assert [str(s[1]) for s in sexpr.find(libs, "symbol")] == ["ecadlib:RES-0603-10k"]
+    assert sexpr.first(sym, "lib_id")[1] == "ecadlib:RES-0603-10k" and sexpr.first(sym, "unit")[1] == "1"
+    props = {str(p[1]): p for p in sexpr.find(sym, "property")}
+    assert props["Reference"][2] == "R?" and props["Value"][2] == "10k"
+    assert props["Footprint"][2] == "ecadlib:R_0603_1608Metric" and props["MPN"][2] == "RC0603FR-0710KL"
+    assert not any(k.startswith("ki_") for k in props)
+    x, y = (float(v) for v in sexpr.first(sym, "at")[1:3])
+    lib_ref = next(p for p in sexpr.find(next(sexpr.find(libs, "symbol")), "property") if p[1] == "Reference")
+    ref_at = sexpr.first(props["Reference"], "at")
+    assert abs(float(ref_at[1]) - x - float(sexpr.first(lib_ref, "at")[1])) < 1e-6
+    assert abs(float(ref_at[2]) - y + float(sexpr.first(lib_ref, "at")[2])) < 1e-6       # a library's y points up
+    pins = list(sexpr.find(sym, "pin"))
+    assert [p[1] for p in pins] == ["1", "2"] and all(sexpr.first(p, "uuid") for p in pins)
+    # a held part leaves nothing to paste, and an old paste.txt of the same job folder goes
+    res = KM.run_job(job, "add-part", str(d / "board.kicad_pcb"), mpn="NOPE-123", offline=True)
+    assert res["status"] != "ready" and "paste" not in res and not (job / KM.PASTE).exists(), res
+
+
+def test_schematic_paste_of_a_multi_unit_symbol_is_unit_a():
+    d = scratch("ecadlib-kpaste-")
+    lib = d / "ecadlib"
+    lib.mkdir()
+    (lib / "kicad_export.json").write_text(json.dumps({"parts": [
+        {"part": "DUAL", "symbol_name": "DUAL-OPAMP"}, {"part": "KID", "symbol_name": "KID"}]}))
+    pin = '(pin input line (at 0 0 0) (length 2.54) (name "~") (number "{}"))'
+    (lib / "ecadlib.kicad_sym").write_text(
+        '(kicad_symbol_lib (version 20231120) (generator "ecadlib")\n'
+        '(symbol "DUAL-OPAMP" (in_bom yes) (on_board no)'
+        ' (property "Reference" "U" (at 0 5 0) (effects (font (size 1.27 1.27))))'
+        ' (property "Value" "DUAL" (at 0 -5 90) (effects (font (size 1.27 1.27))))'
+        ' (property "ki_keywords" "opamp" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))'
+        f' (symbol "DUAL-OPAMP_0_1" {pin.format(8)} {pin.format(4)})'
+        f' (symbol "DUAL-OPAMP_1_1" {pin.format(1)} {pin.format(2)} {pin.format(3)})'
+        f' (symbol "DUAL-OPAMP_1_2" {pin.format(1)} {pin.format(2)} {pin.format(3)})'
+        f' (symbol "DUAL-OPAMP_2_1" {pin.format(5)} {pin.format(6)} {pin.format(7)}))\n'
+        '(symbol "KID" (extends "DUAL-OPAMP") (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))))')
+    from ecadlib import sexpr
+    text, units, name = KM.schematic_paste(KM.config(d), {"DUAL"})
+    assert units == 2 and name == "DUAL-OPAMP"
+    libs, sym = _placed(text)
+    assert sorted(p[1] for p in sexpr.find(sym, "pin")) == ["1", "2", "3", "4", "8"]     # unit A and the shared pins
+    assert sexpr.first(sym, "on_board")[1] == "no" and sexpr.first(sym, "in_bom")[1] == "yes"
+    props = {str(p[1]): p for p in sexpr.find(sym, "property")}
+    assert props["Reference"][2] == "U?" and "ki_keywords" not in props
+    assert sexpr.first(props["Value"], "at")[1:] == ["25.4", "30.4", "90"]
+    assert len(list(sexpr.find(next(sexpr.find(libs, "symbol")), "symbol"))) == 4          # the whole symbol, all units
+    assert KM.schematic_paste(KM.config(d), {"KID"}) == ("", 0, "")                      # derived: not pasted
+    assert KM.schematic_paste(KM.config(d), {"GONE"}) == ("", 0, "")
+    assert KM.schematic_paste(KM.config(scratch("ecadlib-kpaste-")), {"DUAL"}) == ("", 0, "")   # no library
+
+
 def test_global_nick():
     assert KM.global_nick("/p/My Board.kicad_pcb") == "ecadlib_my_board"
     assert KM.global_nick("/p/x/board.kicad_sch") == "ecadlib_board"
