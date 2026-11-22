@@ -629,6 +629,13 @@ def _set_par(item, k, v):
     item["cleared"] = [c for c in item.get("cleared", []) if c != k]
 
 
+def _name_key(s):
+    """A footprint name as the library stores it, for comparing: a BOM footprint Altium can't store ('6.25卫星轴')
+    compares as the '_' name the plan gave it (altium_export._safe_name), never stops the run."""
+    from .altium_export import _safe_name
+    return _safe_name(s, [])
+
+
 def _line_for(item, lines, rows):
     """The BOM line and triage row of a plan item: same MPN, else (no MPN) same value. Of several, the line whose
     footprint is the item's wins (10k 0603 and 10k 0402 are two items with one value: a DNP 0402 line must never be
@@ -636,12 +643,12 @@ def _line_for(item, lines, rows):
     par = _par(item)
     mpn, val = par.get("Manufacturer Part Number", ""), par.get("Value", "")
     fp = item.get("footprint") or {}
-    want = {AL.lib_name(str(x).split(":")[-1]) for x in (fp.get("kicad"), fp.get("bom_ref"), fp.get("ref")) if x}
+    want = {_name_key(str(x).split(":")[-1]) for x in (fp.get("kicad"), fp.get("bom_ref"), fp.get("ref")) if x}
     best, score = ({}, {}), None
     for ln, row in zip(lines, rows):
         lm = "" if T.placeholder_mpn(ln.get("mpn")) else ln.get("mpn")    # 'N/A': planned without an MPN (altium_export)
         if (mpn and lm == mpn) or (not mpn and not lm and ln.get("value", "") == val):
-            fps = {AL.lib_name(str(x).split(" ")[0].split(":")[-1]) for x in (ln.get("footprint"), row.get("local_footprint")) if x}
+            fps = {_name_key(str(x).split(" ")[0].split(":")[-1]) for x in (ln.get("footprint"), row.get("local_footprint")) if x}
             s = (bool(fps & want), not ln.get("dnp") and not str(row.get("status") or "").startswith("dnp"))
             if score is None or s > score:
                 best, score = (ln, row), s
@@ -2589,11 +2596,16 @@ def _done(st, out):
 OWN_UNIT = {"Resistors": ("R", "kKMG"), "Capacitors": ("F", "pnuµμ"), "Inductors": ("H", "nuµμ")}
 
 
+METRIC_SIZE_MARK = re.compile(r"(?:0402|0603|1005|1608|2012|2520|3216|3225|4532|5025|5750|6332)\s*M(?:etric)?", re.I)
+
+
 def passive_value(raw, cat):
     """A BOM value in the part type's own unit ('10kΩ', '100nF', '600R' is no inductance) or bare with a prefix only
     that type uses ('10k' resistor, '100n' cap, '4.7u' cap / inductor) -> float, else None: a bare number or EIA code
     ('104', '1002', '0.1') and another unit ('3.3V', '600R@100MHz' bead, '2A') are no value of it."""
     from .kicad_index import parse_value
+    if METRIC_SIZE_MARK.fullmatch(str(raw).strip()):   # '0603M', '1608M': a metric chip size, not 603 / 1608 megohm
+        return None
     v, u = parse_value(raw, with_unit=True)
     unit, prefixes = OWN_UNIT[cat]
     m = re.match(r"\d+(?:[.,]\d+)?\s*(\D)", raw)

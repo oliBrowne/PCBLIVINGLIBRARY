@@ -181,6 +181,9 @@ def fill_lines(lines):
         v = passive_value(value, cat)
         if v is None and cat == "Capacitors":
             v = passive_value(value.lower(), cat)     # '100N', '10U': BOM capitals
+        if v is None and cat == "Resistors" and re.fullmatch(r"\d+(?:\.\d+)?", value):
+            v = float(value)                          # a resistor's bare '430' is 430 ohm (JLCPCB's matched BOM:
+                                                      # Value 430 on a 43 kOhm 0603WAF4302T5E was released)
         if v is not None and abs(v - d["value"]) > 1e-6 * max(abs(v), abs(d["value"]), 1e-15):
             hold = (f"Value {value} but the part number {mpn} is {text} by its {d['series']} code: one of the two is "
                     "wrong; fix the BOM line")
