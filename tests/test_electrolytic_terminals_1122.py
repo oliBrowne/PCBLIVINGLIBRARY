@@ -41,3 +41,15 @@ def test_other_molded_parts_keep_the_rule():
     spec = can(desc="Schottky diode SMA", name="D_SMA")
     assert twenty(spec)
     assert twenty(can(desc="Tantalum capacitor, case D", name="CP_EIA-7343-31"))
+
+
+def test_land_text_accepts_a_can_land_past_the_base_plate():
+    """The maker's lands of the replay's cans (pad length, width, centre-to-centre; body small x large)."""
+    from ecadlib import land_text as LT
+    for pads, size in (((4.0, 1.6, 6.2), (8.3, 8.3)),        # Panasonic FK 8x6.2
+                       ((4.1, 2.0, 8.7), (10.3, 12.0)),      # Panasonic FC 10x10.2
+                       ((3.5, 1.6, 5.6), (6.6, 6.6))):       # Wurth WCAP-ASLI 6.3x7.7
+        assert LT.fits_body(pads, size) is not None          # a chip-like body's limits refuse them
+        assert LT.fits_body(pads, size, can=True) is None, (pads, size, LT.fits_body(pads, size, can=True))
+    assert LT.fits_body((4.0, 0.9, 6.2), (8.3, 8.3), can=True)   # a terminal width taken for the pad: still refused
+    assert LT.fits_body((5.5, 1.6, 7.0), (8.3, 8.3), can=True)   # pads overlapping / far too long: still refused

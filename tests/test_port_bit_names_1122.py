@@ -15,3 +15,10 @@ def test_another_bit_or_port_still_differs():
     assert not C.names_agree("P2.0", "P3[0]")
     assert not C.names_agree("P1.2", "P12[0]")
     assert not PD.same_pin("ic", "3", "P2.0", "(GPIO) P2[1]")
+
+
+def test_a_port_pin_with_its_other_function():
+    """CY8C4245 pin 44: the read's symbol "P1.7/VREF", the pinout drawing "(GPIO) P1[7]"."""
+    assert C.names_agree("P1.7/VREF", "(GPIO) P1[7]")
+    assert not C.names_agree("P1.6/VREF", "(GPIO) P1[7]")
+    assert not C.names_agree("VREF/SDA", "P1[7]")

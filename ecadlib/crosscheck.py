@@ -255,6 +255,7 @@ def _names(s):
     raw = str(s or "").translate(MINUS)
     out = {norm_pin_name(raw)}
     out |= {norm_pin_name(f"{p}.{b}") for p, b in PORT_BIT.findall(raw)}   # "(GPIO) P2[0]" is P2.0 (Cypress PSoC)
+    out |= {norm_pin_name(x) for x in raw.split("/") if PORT_DOT.fullmatch(x.strip())}   # P1.7/VREF is port pin P1.7
     for part in re.split(r"[()\[\],]|\s/\s", raw):
         if norm_pin_name(part):
             out.add(norm_pin_name(part))
@@ -267,6 +268,7 @@ def _names(s):
     return out - {""}
 
 
+PORT_DOT = re.compile(r"[A-Za-z]{1,3}\d+\.\d+")   # a port pin as PORT.BIT: P1.7
 PORT_BIT = re.compile(r"\b([A-Za-z]{1,3}\d+)\[(\d+)\]")   # a port pin as PORT[BIT]: P2[0], PA[3]
 
 
