@@ -439,6 +439,23 @@ def test_altium_pkg_from_plan():
     assert rep2["written"] == [] and {p: p.stat().st_mtime_ns for p in snap} == snap
 
 
+def test_altium_pkg_through_a_symlinked_folder():
+    """macOS: the temp folder /var/folders/... is /private/var/... (/var is a symlink). An --out given through a
+    symlink listed every document as ..\\..\\private\\var\\... and found none of them in the folder."""
+    import os
+    plan, _ = _plan()
+    real = plan.parent.parent / "real_out"
+    real.mkdir()
+    link = plan.parent.parent / "link_out"
+    try:
+        os.symlink(real, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        print("  (no symlinks here: skipped)")
+        return
+    rep = AP.build(plan.parent / "models", link / "pkg", log=lambda *a: None)
+    assert rep["problems"] == [] and all(not d.startswith("..") for d in rep["documents"]), rep["documents"][:2]
+
+
 def test_altium_pkg_from_models_folder_and_broken_links():
     plan, _ = _plan()
     models = plan.parent / "models"
