@@ -134,9 +134,10 @@ def select(names=None, rules=None, default=None, eps=None):
     if bad:
         why = "".join(f"; plugin {n} failed to load: {e}" for n, e in errors if n in bad)
         raise ValueError(f"unknown provider {bad[0]!r}; available: {', '.join(avail)}{why}")
-    if "jlcpcb_search" in want and "easyeda" in want and want.index("jlcpcb_search") > want.index("easyeda"):
-        want.remove("jlcpcb_search")                    # it finds the LCSC number EasyEDA is keyed by: always before it
-        want.insert(want.index("easyeda"), "jlcpcb_search")
+    for search in ("jlcpcb_search", "lcsc_search"):     # they find the LCSC number EasyEDA is keyed by: always before it
+        if search in want and "easyeda" in want and want.index(search) > want.index("easyeda"):
+            want.remove(search)
+            want.insert(want.index("easyeda"), search)
     seen, out = set(), []
     for n in want:
         if n not in seen:

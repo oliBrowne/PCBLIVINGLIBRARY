@@ -12,6 +12,8 @@ so they are asked last, after the official APIs, and `[providers] unofficial = f
 (`ecadlib init` asks), and .github/workflows/sources-canary.yml checks them
 against the live sites every week):
   * JLCPCBSearch - POST keyword search, resolves MPN -> LCSC number (only when no official source found it)
+  * LCSCSearch   - the same through jlcsearch (community parts index) + LCSC's product page JSON, when JLCPCB's
+                   search refused or found nothing
   * EasyEDA      - GET component JSON by LCSC number; the only free source of ready symbol / footprint / 3D data
 Stubs (document auth, raise NotConfigured without keys): SnapMagic, SamacSys (no self-serve public API).
 All response bodies are untrusted: parsed as JSON only, fields read defensively."""
@@ -369,6 +371,7 @@ def parse_easyeda(data, res):
 # ------------------------------------------------------------------ JLCPCB parts search (MPN -> LCSC)
 class JLCPCBSearch(Provider):
     name = "jlcpcb_search"
+    note_label = "jlcpcb"
     auth = "none (unofficial: anonymous JSON POST; Origin/Referer jlcpcb.com) - as used by easyeda2kicad search"
     official = False
     URL = "https://jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList"
@@ -435,8 +438,19 @@ def parse_jlcpcb(r, mpn, res, code="", maker="", package=""):
     is taken, then the maker's, then one in that package, then the first listed; when the BOM names a land and the
     one taken is listed in another, extra['package_note'] says so."""
     try:
-        from .kicad_index import norm_mpn
         items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
+    except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
+        res.error = f"unparseable: {e}"
+        return res
+    return pick_listing(items, mpn, res, code=code, maker=maker, package=package)
+
+
+def pick_listing(items, mpn, res, code="", maker="", package=""):
+    """LCSC listings in JLCPCB's search shape (componentCode, componentModelEn, componentBrandEn,
+    componentSpecificationEn, describe, dataManualUrl, stockCount, componentLibraryType) -> res: the choice
+    parse_jlcpcb describes. The LCSC search route (LCSCSearch) builds the same rows from its own answers."""
+    try:
+        from .kicad_index import norm_mpn
         exact = [i for i in items if (str(i.get("componentCode") or "").strip().upper() == code.upper() if code else
                                       norm_mpn(i.get("componentModelEn")) == norm_mpn(mpn))]
     except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
@@ -481,6 +495,159 @@ def parse_jlcpcb(r, mpn, res, code="", maker="", package=""):
             res.extra["package_note"] = (f"LCSC {code} ({res.manufacturer or 'maker not listed'}) is listed as {spec}, "
                                          f"the BOM names {clean_text(land, 80)}: check the package before using its footprint")
     return res
+
+
+# ------------------------------------------------------------------ LCSC search (MPN -> LCSC, second route)
+def _lcsc_code(v):
+    """'C7593' from a listing's LCSC number (7593, '7593', 'C7593'), '' when it is not one (untrusted field)."""
+    if isinstance(v, bool):
+        return ""
+    t = str(v).strip().upper() if isinstance(v, (int, str)) else ""
+    t = t if t.startswith("C") else "C" + t
+    return t if re.fullmatch(r"C\d{1,9}", t) else ""
+
+
+class LCSCSearch(Provider):
+    """A second way to the LCSC number when JLCPCB's search refuses (it answered 403 after 12 of 998 lines in the
+    1000-part run, 2026-11-17) or lists nothing: MPN -> LCSC number by the jlcsearch parts index (tscircuit's free
+    community index of JLCPCB/LCSC parts, MIT, no key), then each exact match's own LCSC product page data by its
+    number (wmsc.lcsc.com, the JSON LCSC's website reads: maker, package, datasheet link, description).
+
+    Only an exact MPN counts, never a near one; a product page whose number or MPN differs from the listing is not
+    used. The maker is named only when every exact listing's product page was read and names one (clones share
+    MPNs); otherwise extra['makers_partial'] tells triage the makers listed are not all of them. The rows go
+    through pick_listing, the same choice as JLCPCB's search. A 403/429 stops that site for the rest of the run."""
+    name = "lcsc_search"
+    note_label = "lcsc"
+    auth = ("none (unofficial: jlcsearch.tscircuit.com/api/search, a community index of JLCPCB/LCSC parts; "
+            "wmsc.lcsc.com/ftps/wm/product/detail, LCSC's website JSON)")
+    official = False
+    SEARCH_URL = "https://jlcsearch.tscircuit.com/api/search?q={}&limit=20"
+    DETAIL_URL = "https://wmsc.lcsc.com/ftps/wm/product/detail?productCode={}"
+    HEADERS = {"Accept": "application/json"}
+    SITES = {"jlcsearch": "the jlcsearch parts index", "wmsc": "LCSC's product page"}
+    DETAIL_CAP = 6                       # product pages read per MPN (clone families are listed many times)
+
+    def _get(self, url, site):
+        from .httpcache import Response
+        refused = (getattr(self.http, "_lcsc_refused", None) or {}).get(site)
+        if refused:
+            return Response(refused[0], "", error=f"{refused[1]}; not asked again this run")
+        r = self.http.get(url, headers=self.HEADERS)
+        if r.status in (403, 429) and not r.ok:
+            msg = f"{self.SITES[site]} refused the request ({r.status})"
+            try:
+                memo = getattr(self.http, "_lcsc_refused", None)
+                if memo is None:
+                    memo = self.http._lcsc_refused = {}
+                memo[site] = (r.status, msg)
+            except AttributeError:
+                pass
+            return Response(r.status, r.text, error=msg)
+        return r
+
+    def detail(self, code):
+        """LCSC's product data for one number: a JLCPCB-shaped row, or (None, error). Only an answer for that very
+        number counts (result.productCode); `{"result": null}` is no such product."""
+        r = self._get(self.DETAIL_URL.format(code), "wmsc")
+        if not r.ok:
+            return None, r.error or f"HTTP {r.status}"
+        try:
+            data = r.json()
+            res = data.get("result") if isinstance(data, dict) else None
+        except (ValueError, AttributeError) as e:
+            return None, f"unparseable: {e}"
+        if not isinstance(res, dict) or not res:
+            return None, ""
+        if _lcsc_code(res.get("productCode")) != code:
+            return None, f"answered for {clean_text(str(res.get('productCode')), 20)!r}, not {code}"
+        model = clean_text(res.get("productModel"), 80)
+        sheet = res.get("pdfUrl")
+        sheet = sheet[0] if isinstance(sheet, list) and sheet else sheet
+        return {"componentCode": code, "componentModelEn": model, "componentBrandEn": clean_text(res.get("brandNameEn"), 80),
+                "componentSpecificationEn": clean_text(res.get("encapStandard"), 80),
+                "describe": res.get("productIntroEn") or res.get("productDescEn") or "",
+                "dataManualUrl": sheet if isinstance(sheet, str) else "",
+                "stockCount": res.get("stockNumber") if isinstance(res.get("stockNumber"), int) else None}, ""
+
+    def lookup(self, line):
+        from .kicad_index import norm_mpn
+        mpn = (line.get("mpn") or "").strip()
+        res = SourceResult(self.name, mpn=mpn)
+        if not mpn:
+            res.error = "no MPN"
+            return res
+        from urllib.parse import quote
+        r = self._get(self.SEARCH_URL.format(quote(mpn, safe="")), "jlcsearch")
+        if not r.ok:
+            res.error = r.error or f"HTTP {r.status}"
+            return res
+        try:
+            comps = r.json().get("components")
+            comps = [c for c in comps if isinstance(c, dict)] if isinstance(comps, list) else None
+        except (ValueError, AttributeError) as e:
+            res.error = f"unparseable: {e}"
+            return res
+        if comps is None:
+            res.error = "unparseable: no components list in the answer"
+            return res
+        want, rows = norm_mpn(mpn), {}
+        for c in comps:
+            code = _lcsc_code(c.get("lcsc"))
+            if code and want and norm_mpn(c.get("mfr")) == want and code not in rows:
+                rows[code] = c
+        if not rows:
+            res.found = False
+            return res
+        items, unread, notes = [], 0, []
+        for n, (code, c) in enumerate(rows.items()):
+            d, err = self.detail(code) if n < self.DETAIL_CAP else (None, "")
+            if d and norm_mpn(d["componentModelEn"]) != want:     # LCSC's page names another part: not this listing
+                notes.append(f"{code} is {d['componentModelEn'] or 'another part'} on LCSC, not {mpn}: not used")
+                continue
+            if d and not d["componentBrandEn"]:                    # a page naming no maker: its maker is not known
+                unread += 1
+            if not d:
+                unread += 1
+                if err:
+                    notes.append(f"{code}: {err}")
+                d = {"componentCode": code, "componentModelEn": clean_text(c.get("mfr"), 80), "componentBrandEn": "",
+                     "componentSpecificationEn": clean_text(c.get("package"), 80), "describe": c.get("description") or "",
+                     "dataManualUrl": "", "stockCount": c.get("stock") if isinstance(c.get("stock"), int) else None}
+            items.append(d)
+        if not items:
+            res.found = False
+            res.extra = {"note": "; ".join(notes)[:300]} if notes else {}
+            return res
+        pick_listing(items, mpn, res, maker=line.get("manufacturer") or "", package=bom_land(line))
+        if res.found and unread:         # a listing whose maker is not known may be a clone's: the makers read are
+            if len(items) > 1:           # not all of them (triage treats the part as sold by several, naming none)
+                res.extra["makers_partial"] = True
+            elif not res.manufacturer:
+                res.extra["makers"] = []
+        if res.found and notes:
+            res.extra["note"] = "; ".join(notes)[:300]
+        return res
+
+    def lookup_lcsc(self, lcsc):
+        """The part with this LCSC number, from its LCSC product page (description, datasheet, maker, package)."""
+        res = SourceResult(self.name, lcsc=lcsc)
+        code = lcsc_number(lcsc)
+        if not code:
+            res.error = f"{str(lcsc)[:30]!r} is not an LCSC number"
+            return res
+        d, err = self.detail(code)
+        if not d:
+            if err:
+                res.error = err
+            else:
+                res.found = False
+            return res
+        return pick_listing([d], "", res, code=code)
+
+
+# the part searches that turn an MPN into an LCSC number (triage asks them only while no LCSC number is known)
+LCSC_SEARCHES = (JLCPCBSearch, LCSCSearch)
 
 
 # ------------------------------------------------------------------ authenticated distributor / CAD stubs
@@ -662,10 +829,10 @@ class SamacSys(_Stub):
 
 # official APIs first, the unofficial EasyEDA route after them (JLCPCB search before EasyEDA: it finds the LCSC number
 # EasyEDA is keyed by). This order is also what "every built-in" means (the web UI / MCP workspace's triage default).
-ALL = [Nexar, DigiKey, Mouser, JLCPCBSearch, EasyEDA, SnapMagic, SamacSys]
+ALL = [Nexar, DigiKey, Mouser, JLCPCBSearch, LCSCSearch, EasyEDA, SnapMagic, SamacSys]
 # what triage / the librarian ask when neither --providers nor [providers] order says: the official APIs first (each
 # is skipped with a "not configured" note until its key is set), then the unofficial EasyEDA route
-DEFAULT_ORDER = "nexar,digikey,mouser,jlcpcb_search,easyeda"
+DEFAULT_ORDER = "nexar,digikey,mouser,jlcpcb_search,lcsc_search,easyeda"
 
 
 def unofficial_allowed(rules):
