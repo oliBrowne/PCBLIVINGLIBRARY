@@ -89,7 +89,17 @@ def test_sign_in_again_after_signing_out_of_a_waiting_sign_in(tmp_path, monkeypa
         try:
             again = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})   # raised ValueError: port in use
         except ValueError as e:                     # (macOS CI 2026-11-22: say how long each step took)
-            raise AssertionError(f"{e}; start {t1 - t0:.1f} s, sign out {t2 - t1:.1f} s, again {time.monotonic() - t2:.1f} s, "
+            import faulthandler, socket, sys
+            try:
+                faulthandler.dump_traceback(sys.__stderr__, all_threads=True)
+            except (AttributeError, ValueError, OSError):
+                pass
+            fq = []
+            for h in ("127.0.0.1", "::1"):
+                t = time.monotonic()
+                socket.getfqdn(h)
+                fq.append(f"getfqdn({h}) {time.monotonic() - t:.1f} s")
+            raise AssertionError(f"{fq}; {e}; start {t1 - t0:.1f} s, sign out {t2 - t1:.1f} s, again {time.monotonic() - t2:.1f} s, "
                                  f"url {first.get('url')!r}") from e
         assert again["waiting"], again
     finally:

@@ -681,18 +681,28 @@ def test_open_queue_starts_the_real_web_ui():
         s.bind(("127.0.0.1", 0))
         cfg["port"] = s.getsockname()[1]
     procs, opened = [], []
+    os.environ["PYTHONFAULTHANDLER"] = "1"          # the UI process prints its stacks if it is stopped with SIGABRT
     try:
         r = AM.open_queue(cfg, opener=opened.append, launcher=lambda ws, port: procs.append(AM.start_ui(ws, port)))
         log = Path(cfg["workspace"]) / "altium_menu_ui.log"
+        if r["status"] != "ok":                     # (macOS CI 2026-11-22) where the UI process is: its stacks
+            import signal, time
+            for p in procs:
+                if p.poll() is None:
+                    p.send_signal(signal.SIGABRT if os.name != "nt" else signal.SIGTERM)
+                    p.wait(timeout=10)
+            time.sleep(0.5)
         assert r["status"] == "ok" and r["started"] == "1", (r, [p.poll() for p in procs],
                                                              log.read_text(errors="replace")[-3000:] if log.is_file() else "no log")
         page = urllib.request.urlopen(opened[0].split("#")[0], timeout=10).read().decode("utf-8")
         assert 'id="libcard"' in page and opened[0].endswith("#libcard")
         assert AM.probe_ui(cfg["port"]) == ("ecadlib", str(cfg["workspace"].resolve()))
     finally:
+        os.environ.pop("PYTHONFAULTHANDLER", None)
         for p in procs:
-            p.terminate()
-            p.wait(timeout=10)
+            if p.poll() is None:
+                p.terminate()
+                p.wait(timeout=10)
 
 
 def test_errors_are_one_line_with_a_fix():
