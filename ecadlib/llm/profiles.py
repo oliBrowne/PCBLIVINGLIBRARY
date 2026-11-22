@@ -204,6 +204,7 @@ def detect(ep, key=None, get=None, post=None, timeout=5):
     ck = (ep.get("base_url"), ep.get("model"))
     if ck in _DETECTED:
         return _DETECTED[ck]
+    UNLISTED.pop(ck, None)                            # this probe's answer only, never an earlier one's
     import requests
     get, post = get or requests.get, post or requests.post
     h = {"Authorization": f"Bearer {key}"} if key and key != "no-key-needed" else {}
@@ -213,7 +214,11 @@ def detect(ep, key=None, get=None, post=None, timeout=5):
         r = get(base + "/models", headers=h, timeout=timeout)
         data = r.json() if getattr(r, "status_code", 0) == 200 else None
         rows = (data or {}).get("data") if isinstance(data, dict) else data
-        hit = next((e for e in rows or [] if isinstance(e, dict) and str(e.get("id")) in (ep["model"], bare(ep["model"]))), None)
+        want = {ep["model"], bare(ep["model"])}
+        if ep.get("preset") == "openrouter":          # anthropic/claude-opus-5.5:nitro / :floor / :online: a routing
+            want.add(ep["model"].split(":", 1)[0])    # variant of a listed id, which /models lists only once
+        hit = next((e for e in rows or [] if isinstance(e, dict) and
+                    ({str(e.get("id")), str(e.get("canonical_slug") or "")} & want)), None)
         if hit:
             fields.update(from_models_entry(hit))
             notes.append("/models")

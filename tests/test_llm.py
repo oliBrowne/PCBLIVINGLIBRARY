@@ -602,6 +602,22 @@ def test_openrouter_model_id_checked_against_its_public_catalog():
     r = RU.load({"ai": {"provider": "openrouter", "model": "anthropic/claude-opus-5.5"}})
     inf = LR.info("anthropic/claude-opus-5.5", r, get=lambda *a, **k: R(cat))
     assert inf["prof"]["context"] == 200000
+    # a routing variant (:nitro, :floor, :online) of a listed id is that id
+    PR._DETECTED.clear()
+    LR._INFO.clear()
+    r = RU.load({"ai": {"provider": "openrouter", "model": "anthropic/claude-opus-5.5:nitro"}})
+    assert LR.info("anthropic/claude-opus-5.5:nitro", r, get=lambda *a, **k: R(cat))["prof"]["context"] == 200000
+    # [ai] detect = false turns the check off, even after an earlier run in this process found the id missing
+    PR._DETECTED.clear()
+    LR._INFO.clear()
+    r = RU.load({"ai": {"provider": "openrouter", "model": "x/never-listed"}})
+    try:
+        LR.info("x/never-listed", r, get=lambda *a, **k: R(cat))
+        raise AssertionError("not refused")
+    except LL.AIConfigError:
+        pass
+    r = RU.load({"ai": {"provider": "openrouter", "model": "x/never-listed", "detect": False}})
+    LR.info("x/never-listed", r, get=lambda *a, **k: R(cat))
     # unreachable catalog, or --offline: nothing is refused (the table decides, as before)
     PR._DETECTED.clear()
     LR._INFO.clear()

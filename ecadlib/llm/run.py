@@ -29,7 +29,7 @@ def info(ref, rules=None, section="datasheet", key=None, get=None, post=None, pr
         prof = PR.resolve(ep if probe else dict(ep, detect=False), rules,
                           key_for(ep, key) if ep["provider"] != "anthropic" and probe else None, get, post)
         unlisted = PR.UNLISTED.get((ep.get("base_url"), ep.get("model")))
-        if probe and ep.get("preset") == "openrouter" and unlisted is not None:
+        if probe and ep.get("detect", True) and ep.get("preset") == "openrouter" and unlisted is not None:
             # OpenRouter's /models is its whole catalog: an id it does not list would only fail on the first paid
             # request, part after part. Other servers' /models can leave out aliases they serve, so only OpenRouter.
             from . import AIConfigError
