@@ -250,9 +250,11 @@ library) and `<project>/ecadlib/` the KiCad library, added to the project's tabl
 (say `kicad-export -o <project>`'s `${KIPRJMOD}/ecadlib.pretty`) is not changed: the window names that row, to rename
 or remove. The BOM check counts a line as in your library when its part number is in `<project>/ecadlib/*.kicad_sym`.
 Open review queue runs one web UI per project: when the port is taken by another project's UI, the next free port.
-KiCad gives plugins no menu or toolbar slot in the schematic editor; the setup page's Add to KiCad puts two entries in
-its Tools > Generate Legacy Bill of Materials instead, *ecadlib: check BOM* and *ecadlib: fill library* (see
-docs/kicad.md, "Three ways to get the library into KiCad").
+KiCad 7 and 8 give plugins no menu or toolbar slot in the schematic editor; there the setup page's Add to KiCad puts
+two entries in its Tools > Generate Legacy Bill of Materials, *ecadlib: check BOM* and *ecadlib: fill library* (see
+docs/kicad.md, "Three ways to get the library into KiCad"). KiCad 9 and newer also get an ecadlib button in the
+schematic editor's toolbar, whose *Add part* copies the built symbol for Ctrl+V (docs/kicad.md, "The ecadlib button in
+the schematic editor").
 Tried in KiCad 7.0.11: toolbar button, BOM check, fill and add part with the footprint placed.
 
 **Altium.** `altium-pkg` writes a folder that opens in Altium as is: `SchLib/`, `PcbLib/`, `<name>.LibPkg` (an

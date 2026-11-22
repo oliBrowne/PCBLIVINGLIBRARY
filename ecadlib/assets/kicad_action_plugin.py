@@ -21,7 +21,8 @@ it built. When the setup page's copy and the Plugin and Content Manager's are bo
 
 KiCad 9 and newer also start this window from their plugin system (kicad_api_plugin.py; the ecadlib button in the
 schematic editor, and in KiCad 11's PCB editor): then it runs as a program of its own beside KiCad, without pcbnew,
-for the project KiCad passes as KIPRJMOD, and a part it builds is placed by the person (no board to place it on).
+for the project KiCad passes as KIPRJMOD; a part it builds is put on the clipboard as KiCad's schematic Copy writes it
+(the job's paste.txt), and the schematic editor's own Ctrl+V places it.
 
 Per project, next to the board: ecadlib-work/ (ecadlib's workspace and the jobs) and ecadlib/ (the KiCad library,
 added to the project's sym-lib-table and fp-lib-table as "ecadlib", ${KIPRJMOD}/ecadlib/...). A placed footprint gets
@@ -378,12 +379,35 @@ def place_result(job, res, project_dir):
     return f"Placed {fp.GetReference()} ({LIB}:{res['footprint']}) in the middle of the board.", ""
 
 
-def place_yourself(res):
-    """The line a window outside the PCB editor shows for a part it built: where to place it from."""
-    sym = res.get("part") or res.get("mpn") or ""
+def place_yourself(res, copied=False):
+    """The line a window outside the PCB editor shows for a part it built: where to place it from. copied: the job's
+    symbol (JOB/paste.txt) is on the clipboard, so the schematic editor's own Paste places it."""
+    sym = res.get("symbol") or res.get("part") or res.get("mpn") or ""
     what = f"{LIB}:{sym}" if sym else f"the {LIB} library"
+    if copied:
+        paste = "Cmd+V" if sys.platform == "darwin" else "Ctrl+V"
+        try:
+            units = int(res.get("units") or 1)
+        except ValueError:
+            units = 1
+        more = (f" That is unit A; its other {units - 1} unit{'s' if units > 2 else ''}: Place > Add Symbol."
+                if units > 1 else "")
+        return (f"Built into {what} and copied: in the schematic editor press {paste} and click where it goes "
+                f"(footprint {LIB}:{res['footprint']}).{more}")
     return (f"Built into {what} (footprint {LIB}:{res['footprint']}). Place it as any library part: Place > Add Symbol "
             "in the schematic editor, or Place > Add Footprint in the PCB editor.")
+
+
+def paste_text(job, res):
+    """The schematic clipboard text the job wrote for the part it built (JOB/paste.txt), or ""."""
+    name = res.get("paste") or ""
+    if not name or os.path.basename(name) != name:
+        return ""
+    try:
+        with open(os.path.join(job, name), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
 
 
 def job_failure(job):
@@ -697,6 +721,19 @@ def _window_class():
                      approved_usd=r.get("ai_approve", ""), over_limit_ok=r.get("ai_over", ""),
                      price_unknown_ok=r.get("ai_unknown", ""))
 
+        def copy_symbol(self):
+            """The built part's symbol onto the clipboard, as the schematic editor's own Copy puts it there; kept after
+            the window closes where the system allows (Flush). -> copied?"""
+            text = getattr(self, "paste", "")
+            if not text or not wx.TheClipboard.Open():
+                return False
+            try:
+                ok = wx.TheClipboard.SetData(wx.TextDataObject(text))
+                wx.TheClipboard.Flush()
+            finally:
+                wx.TheClipboard.Close()
+            return bool(ok)
+
         def report(self):
             self.fire("open", path=self.result.get("report", ""))
 
@@ -740,7 +777,7 @@ def _window_class():
                 self.fail(problem)
 
         def run(self, action, title, **kw):
-            self.action, self.title, self.result = action, title, {}
+            self.action, self.title, self.result, self.paste = action, title, {}, ""
             try:
                 self.job, self.proc = self.start(action, **kw)
             except (OSError, ValueError) as e:
@@ -801,8 +838,9 @@ def _window_class():
                 extra = tables_line(res, self.project, built=pcbnew is not None)   # no board: no "placed" wording
                 if res.get("tables") == "problem" or extra.startswith("Built, but"):
                     mark_placed(self.job, "not placed: " + extra)
-                elif pcbnew is None:                     # no board here: the person places it, as any library part
-                    placed = place_yourself(res)
+                elif pcbnew is None:                     # no board here: KiCad's own Paste places it, or the library
+                    self.paste = paste_text(self.job, res)
+                    placed = place_yourself(res, copied=self.copy_symbol())
                 else:
                     placed, err = place_result(self.job, res, self.project)
                     if err:
@@ -818,6 +856,8 @@ def _window_class():
             for line in (placed, extra):
                 if line:
                     self.note(s, line, GREEN if line is placed else DIM)
+            if pcbnew is None and getattr(self, "paste", "") and self.action in ("add-part", "ai-read"):
+                self.link(s, "Copy the symbol again", self.copy_symbol)
             if self.action == "check-bom":
                 if res.get("warnings"):
                     self.note(s, res["warnings"])

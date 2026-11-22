@@ -9,6 +9,13 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- KiCad 9 and newer, the ecadlib button in the schematic editor: *Add part* now hands the part it built to KiCad's own
+  Paste. The window puts the symbol on the clipboard in the form KiCad's Copy uses, so Ctrl+V (Cmd+V on a Mac) in the
+  schematic editor puts it on the cursor to place, linked to `ecadlib:<symbol>` with its footprint, part number and
+  maker filled in, as Place > Add Symbol would. Before, the part had to be looked up again in Place > Add Symbol. A
+  part with several units pastes unit A (the window names the others). *Copy the symbol again* puts it back after
+  another copy. The job writes the text to `JOB/paste.txt` (`kicad_menu.schematic_paste`). Pasted and placed in real
+  KiCad 9.0.9 and 10.0.8 (Linux).
 - Claude through Amazon Bedrock: `[ai] provider = "bedrock"` (with `region`, else `AWS_REGION`) sends the same datasheet reads to Claude on your AWS account, signed with your AWS credentials, with no Anthropic key. `model` stays the Claude name (`claude-haiku-5-5`); ecadlib sends the region's inference profile. No Message Batches, refusal fallback or web search through Bedrock, and it does not fetch PDF links, so a datasheet ecadlib could not download is not read. See docs/models.md.
 - Datasheet reads confirmed by more of the datasheet's own text (free, no model). A pinout drawing ("8-pin package connections, top view") now counts like a pin table: each pin number is paired with the name printed beside it, by position on the page, and a name halfway between two numbers is never guessed. A pin table on another page for a package with more pins than the part (TL074's 20-pin LCCC table after its 14-pin SOIC one) no longer keeps the part waiting. On the 17 reads of the 1000-part sample, 5 symbols are now released with no person's look instead of 2 (TL074CDR, M24C02-WMN6TP, SI4401BDY-T1-E3 added); none of 403 deliberately scrambled pinouts was accepted.
 - Datasheets: molded and chip parts (power inductors) whose datasheet prints the maker's land but not the terminal length are built from that land instead of failing (NRS4018). With no terminal to compare, the land must reach the body's ends and its pads must not meet, or the read fails its checks.
