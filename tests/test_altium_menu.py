@@ -683,7 +683,9 @@ def test_open_queue_starts_the_real_web_ui():
     procs, opened = [], []
     try:
         r = AM.open_queue(cfg, opener=opened.append, launcher=lambda ws, port: procs.append(AM.start_ui(ws, port)))
-        assert r["status"] == "ok" and r["started"] == "1", r
+        log = Path(cfg["workspace"]) / "altium_menu_ui.log"
+        assert r["status"] == "ok" and r["started"] == "1", (r, [p.poll() for p in procs],
+                                                             log.read_text(errors="replace")[-3000:] if log.is_file() else "no log")
         page = urllib.request.urlopen(opened[0].split("#")[0], timeout=10).read().decode("utf-8")
         assert 'id="libcard"' in page and opened[0].endswith("#libcard")
         assert AM.probe_ui(cfg["port"]) == ("ecadlib", str(cfg["workspace"].resolve()))

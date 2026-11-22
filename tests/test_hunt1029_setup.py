@@ -79,10 +79,18 @@ def test_sign_in_again_after_signing_out_of_a_waiting_sign_in(tmp_path, monkeypa
     monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("NEXAR_REDIRECT_URI", f"http://localhost:{_free_port()}/login")
     try:
+        import time
+        t0 = time.monotonic()
         first = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})
         assert first["waiting"], first
+        t1 = time.monotonic()
         ES.nexar_signout({})
-        again = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})   # raised ValueError: port in use
+        t2 = time.monotonic()
+        try:
+            again = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})   # raised ValueError: port in use
+        except ValueError as e:                     # (macOS CI 2026-11-22: say how long each step took)
+            raise AssertionError(f"{e}; start {t1 - t0:.1f} s, sign out {t2 - t1:.1f} s, again {time.monotonic() - t2:.1f} s, "
+                                 f"url {first.get('url')!r}") from e
         assert again["waiting"], again
     finally:
         ES.nexar_signout({})
