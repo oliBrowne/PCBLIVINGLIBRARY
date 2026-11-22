@@ -7,6 +7,44 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-22
+
+The first release since 0.4.0, with four weeks of work from `main`. Nothing in it needs a new setting, but a few
+defaults changed (below, under *Changed defaults*). It is a patch-numbered release because 0.5.0 is kept for the proven
+BOM-to-Altium 365 flow.
+
+**Why upgrade.** On a fresh install with no keys and no AI (2026-11-22), 0.4.0 got 0 of 16 parts ready on the first
+real open-source BOM tried (The Open Book) in 212 s; this release gets 6 of 16 in 20 s. Across 9 real open-source
+BOMs it gets 95 of 323 lines ready with no keys, and 1,552 public BOM files ran with no crash (three ways to build a
+part wrong that they showed are now held). On a 1000-part BOM (998 lines, offline replay with saved datasheets,
+datasheet reads by Claude Haiku 5.5 on Amazon Bedrock, 2026-11-20) 709 lines were ready with no person's look; the
+parts newly released by datasheet reads were checked by hand against their datasheets and none was wrong. These are
+measurements on those sets, not a promise for your BOM: check parts before you build a board with them.
+
+**Highlights.**
+
+- Datasheet reads with no API key and no cost: `--read-with-assistant` hands each read to an AI assistant you
+  already use, with the same checks as a paid read.
+- Claude through Amazon Bedrock (`[ai] provider = "bedrock"`), signed with your AWS credentials.
+- KiCad: a toolbar button in the schematic editor (KiCad 9+), and `ecadlib kicad-install` / *Use in every project*
+  to put a library into KiCad's own tables.
+- More datasheets found by themselves: every download way in a plain `pip install`, the Internet Archive's copy of a
+  dead link, distributor copies labelled as such, and a web search (on by default, billed to your own key).
+- Step-by-step DigiKey, Mouser and Nexar key guide, and `ecadlib keys check`.
+- Many more safety checks that hold a wrong part for a person instead of building it, and many false holds released
+  where an independent source agrees.
+- Real BOMs read better: EAGLE text BOMs, combined Manufacturer/MPN columns, Octopart and Digi-Key exports, DNP lines.
+- Opt-in automatic crash reports.
+
+**Changed defaults** (each can be set back):
+
+- `[datasheet] web_search` is on: a part no free way finds a datasheet for gets one web search, billed to your own
+  Claude key (about $0.03 a part on Haiku 5.5, counted in `max_cost_usd`). `web_search = false` turns it off.
+- An empty Manufacturer, a missing datasheet link, and a plain resistor or capacitor with a value and size but no
+  MPN are now notes, not holds. `[release] manufacturer = "hold"`, `datasheet = "hold"` and `mpn = "hold"` bring the
+  holds back.
+- `pip install ecadlib` now installs Playwright and curl_cffi, so the install is larger (a few hundred MB).
+
 ### Fixed
 
 - Datasheets: a custom or connector footprint whose pads the read placed itself (a pad table copied from the maker's land) is no longer released because a second read agreed on the body, pin count, pin names or pin sides: that check never looks at the pads. It now needs the land drawing's printed numbers to agree (or, for an exposed-pad table, a second read agreeing on every number the table was checked against); otherwise it is held for a look, and the review says why. Footprints built from a standard table instead, and land blocks (three numbers sizing a row of pads, already checked by the copper check), are unchanged. Found on Haiku 5.5 through Bedrock: SiT1533's pad 3 was read 0.2 mm wide at 0.9 where the drawing has 0.4 at 0.8, and the part was released.
@@ -110,6 +148,42 @@ a minor release may change command-line options and file formats.
 - No datasheet link is a note, not a hold (`[release] datasheet = "hold"` holds it again); the Altium result says so on a ready part, as it does for an empty Manufacturer.
 - A part source answering that the account's limit is used up (Nexar: "You have exceeded your part limit of 0") no longer counts as unreachable: a part number no source knows says Not found again, and the BOM check stops counting those lines as "source refused/unreachable".
 - The Altium dialog's status line no longer runs past its edge while Altium builds and installs the library; long progress text ends in "...".
+
+### Also in this release (pull requests merged without their own changelog lines)
+
+Summarised from the pull requests; each PR's description has the details.
+
+- Part search (DigiKey, Mouser, Nexar, LCSC): value and size read from makers' part numbers (#252); the part
+  search's case text kept and used, so fewer parts are held after it (#253, #254, #266); DigiKey's case found when
+  several makers share a part number (#258), its token renewed on a long run instead of HTTP 401 for every later part
+  (#257), its per-minute limit waited out and its daily limit stopped at (#260); Mouser's NXP case read after its
+  category and Mouser paced (#255, #260); a typo-away listed number suggested, maker names in an MPN cell held
+  (#268); Molex zero-padded numbers and renamed makers matched, and the review says why no source lists a part
+  (#264); a Nexperia/NXP packing code (`,125`) is not part of the part number (#276); messy MPN cells cleaned (#266).
+- Kinds of parts: thermistors and varistors get their own kind and KiCad's own symbols (#261); fuses, test points and
+  mounting holes get symbols (#252), and fiducials and mounting holes release (#259); tantalum case lands and AVX chip
+  sizes (#252, #259); Coilcraft "XXX" inductor lands (#266); bead values in kilo-ohms (#268); diodes and LEDs in axial,
+  DO-15, PowerDI-123 and SOD-882 cases and a two-way TVS symbol (#269); transistors and SOT diodes, including SO-8
+  MOSFETs and diodes named by ANODE/CATHODE words (#272).
+- Releasing more parts with no person's look, only when an independent source agrees (#256, #263, #267, #270, #271,
+  #273, #275, #277): KiCad matches by name checked against the part search and the part number; a maker's land read
+  released when the PDF's land drawing prints its sizes; pinouts confirmed from a datasheet's pin drawing by a second
+  picture-only read checked against package rules; free checks that use the part's own PDF from your datasheet folder
+  or your assistant's downloads. An error inside one of these checks keeps the part held (#271).
+- Holding wrong parts (the datasheet reader and the BOM): reader holds for misreads found on parts the code had not
+  seen (#243, #245, #247), on tab packages (#238), and for lead widths read half or twice, a named exposed pad left
+  out, or a pitch that is not the package name's (#243); a BOM with no Value column no longer releases resistors,
+  capacitors and inductors with a blank value (#240); a resistor or capacitor whose Value is only a rating (`50V`,
+  `X7R`, `1%`, `0603`) or whose sizes clash is held (#249, #250); foreign-language and EAGLE BOM headers read (#249);
+  a part's own symbol kept on a re-run (#254); fixes from the 100-part real BOM run, including stacked pins, TVS
+  direction and connector symbols (#255).
+- Testing fixes: BOM grouping, metric chip sizes, duplicate part names, designators that name no entry, kicad-install
+  safety, plugin and command crashes (#242); LCSC package ranking, EasyEDA conversion, reader over-holds, edited
+  ledger lines, the spend cap across repeats and JSON errors (#244); `step-gen` takes a `.kicad_mod` file and the
+  DbLib export is ready for pandas 4 (#230).
+- Benchmark: a stricter scorer (a footprint from the reader's own land counts as right only when that land was checked
+  against the datasheet) and active-low pins from the PDF (#236, #237); `eval run --skip` for the held-out part of
+  the set (#243); the site's benchmark card made honest (#228).
 
 ## [0.4.0] - 2026-10-27
 
@@ -468,7 +542,8 @@ The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_stat
 - Initial prototypes: IPC-7351B footprint generator driven by `package_schema.json`, BOM triage
   against local KiCad libraries and public part sources, and Altium Database Library (DbLib) export.
 
-[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.2.0...v0.3.0
