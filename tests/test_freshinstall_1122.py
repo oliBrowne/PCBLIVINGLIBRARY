@@ -30,6 +30,30 @@ def test_maker_and_mpn_in_one_column():
     assert "alternates Suntech ST-TF-003A" in lines[3]["bom_note"], lines[3]
 
 
+def test_maker_split_only_when_it_reads_as_a_maker():
+    """Review of #284: the words before the last one must read as a company, and the last word must not be a value
+    or a size; otherwise the cell stays whole and the line is held."""
+    lines, _ = _bom('Designator,Manufacturer/MPN,Qty,Description\n'
+                    'Y1,Epson FC-135 32.768KA-AG0,1,crystal\n'
+                    'R1,Generic 10k 0603,1,resistor\n'
+                    'Q1,ON Semi MMBT3904 LT1G,1,npn\n'
+                    'R2,ANY RC0402FR-071KL,1,resistor\n')
+    for l in lines:
+        assert not l.get("manufacturer") and " " in l["mpn"] and "could not be read as a maker" in l["bom_hold"], l
+
+
+def test_digikey_number_beside_a_maker_is_held():
+    lines, _ = _bom("Designator,Manufacturer,MPN\nR1,Foo,ABC123-ND\nR2,,RMCF0402JT10K0CT-ND\n")
+    assert "order number" in lines[0]["bom_hold"] and lines[0]["digikey"] == "ABC123-ND", lines[0]
+    assert "bom_hold" not in lines[1] and lines[1]["digikey"] == "RMCF0402JT10K0CT-ND", lines[1]
+
+
+def test_dnp_cleanup_keeps_other_holds():
+    lines, _ = _bom("Designator,Value,Footprint,Manufacturer,MPN\n"
+                    '"J3,J6",DNP,DNP,DNP,DNP\n')
+    assert "bom_hold" not in lines[0]
+
+
 def test_plain_mpn_header_is_not_split():
     """'Manufacturer Part Number' is the MPN alone: a cell with a space keeps its old reading."""
     lines, _ = _bom("Designator,Manufacturer Part Number\nX1,FC-135 32.768KA-AG0\n")
@@ -86,7 +110,8 @@ def test_any_maker_any_part_is_a_placeholder():
 def _passive(d, folder="Components/Resistors", sym="Resistor"):
     it = make(d, name="RES-0603-10k")
     it["folder"], it["symbol"]["ref"], it["librarian"] = folder, sym, {"passive": True}
-    it["parameters"] = [p for p in it["parameters"] if p["name"] != "Manufacturer Part Number"]
+    it["parameters"] = [p for p in it["parameters"] if p["name"] != "Manufacturer Part Number"] + \
+        [{"name": "Value", "value": "10k"}]
     return it
 
 
@@ -101,6 +126,18 @@ def test_generic_resistor_without_mpn_is_a_note():
         ic = _passive(d, "Components/ICs", "RES-0603-10k")
         ic["librarian"] = {"passive": False}
         assert "fields: Manufacturer Part Number is empty" in fails(ic, d)[0]
+
+
+def test_polarized_or_unread_value_is_still_held():
+    with tempfile.TemporaryDirectory() as d:
+        tant = _passive(d, "Components/Capacitors", "C_Polarized")
+        assert "fields: Manufacturer Part Number is empty" in fails(tant, d)[0]
+        bad = _passive(d)
+        bad["name"] = "RES-0603-10K-"
+        assert "fields: Manufacturer Part Number is empty" in fails(bad, d)[0]
+        novalue = _passive(d)
+        novalue["parameters"] = [p for p in novalue["parameters"] if p["name"] != "Value"]
+        assert "fields: Manufacturer Part Number is empty" in fails(novalue, d)[0]
 
 
 def test_release_mpn_rule_is_checked():

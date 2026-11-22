@@ -594,6 +594,11 @@ def read_bom(path, columns=None, rules=None, root=None):
             if mk and not d.get("manufacturer"):
                 d["manufacturer"] = mk
             note += extra
+            if not extra and re.search(r"\s", d["mpn"]) and not placeholder_mpn(d["mpn"]):
+                hold = (f"the '{headers[col['mpn']]}' cell {d['mpn']!r} could not be read as a maker and a part "   # 'Epson
+                        "number: write the maker and the part number in their own columns")   # FC-135 32.768KA-AG0'
+                note.append(hold)
+                d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
         if d.get("mpn"):
             d["mpn"], extra, mpn_dnp = _split_mpn(d["mpn"], d.get("manufacturer", ""))
             note += extra
@@ -606,9 +611,12 @@ def read_bom(path, columns=None, rules=None, root=None):
                     d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
         sku = distributor_sku(d.get("mpn", ""))
         if sku:                                                   # 'WM15144-ND' in the MPN column: DigiKey's order
-            note.append(f"the MPN cell holds {d['mpn']}, a {sku} order number, not the maker's part number: left out "   # code,
-                        "of the MPN (kept as the DigiKey part number); put the maker's part number in the MPN column")  # never
-            d["digikey"] = d.pop("mpn")                           # released as the maker's number
+            msg = (f"the MPN cell holds {d['mpn']}, a {sku} order number, not the maker's part number: left out "   # code,
+                   "of the MPN (kept as the DigiKey part number); put the maker's part number in the MPN column")   # never
+            note.append(msg)                                      # released as the maker's number
+            if d.get("manufacturer"):                             # a maker named beside it: it may be the maker's
+                d["bom_hold"] = f"{d['bom_hold']}; {msg}" if d.get("bom_hold") else msg   # own number ending -ND
+            d["digikey"] = d.pop("mpn")
         if note:
             d["bom_note"] = "; ".join(note)
         if lines and d.get("designator") and not any(v for f, v in d.items() if f != "designator"):
@@ -653,8 +661,11 @@ def read_bom(path, columns=None, rules=None, root=None):
                 d["bom_note"] = "; ".join(n for n in [d.get("bom_note", "")] if n and "a maker's name or a label" not in n)
                 if not d["bom_note"]:
                     d.pop("bom_note")
-                if "a maker's name or a label" in d.get("bom_hold", ""):
-                    d.pop("bom_hold")
+                kept = [h for h in d.get("bom_hold", "").split("; ") if h and "a maker's name or a label" not in h]
+                if kept:
+                    d["bom_hold"] = "; ".join(kept)
+                else:
+                    d.pop("bom_hold", None)
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
         lines.append(d)
@@ -943,6 +954,16 @@ def distributor_sku(mpn):
     return "DigiKey" if _SKU_ND.fullmatch(str(mpn or "").strip()) else ""
 
 
+def _maker_words(words):
+    """True for the words before a part number in a 'Manufacturer/MPN' cell that read as a company: a maker ecadlib
+    knows ('3M', 'ON Semi'), or up to four words with no digit that are not a placeholder ('ANY', 'Generic')."""
+    name = " ".join(words)
+    if any(P.same_maker(name, m) for m in P.MAKER_DOMAINS.values() if m):
+        return True
+    return len(words) <= 4 and not any(re.search(r"\d", w) for w in words) and not placeholder_mpn(name) \
+        and not any(placeholder_mpn(w) for w in words)
+
+
 def _maker_and_mpn(cell):
     """A 'Manufacturer/MPN' cell -> (part number, maker, [note]). 'YAGEO CC0402KRX7R7BB104' -> the number and YAGEO;
     'MTCONN MCTF-0403, Suntech ST-TF-003A' -> the first maker's part, the second named as an alternate. The part
@@ -955,9 +976,10 @@ def _maker_and_mpn(cell):
         words = c.split()
         if len(words) == 1 and _PN_CELL.fullmatch(c):
             pairs.append(("", c))
-        elif len(words) > 1 and _PN_CELL.fullmatch(words[-1]) and len(" ".join(words[:-1])) <= 40:
-            pairs.append((" ".join(words[:-1]), words[-1]))
-        else:
+        elif len(words) > 1 and _PN_CELL.fullmatch(words[-1]) and _maker_words(words[:-1]) and \
+                parse_value(words[-1]) is None and not _size_code(words[-1]):
+            pairs.append((" ".join(words[:-1]), words[-1]))   # not 'Epson FC-135 32.768KA-AG0' (a number with a
+        else:                                                  # space), 'Generic 10k 0603' (a value and a size)
             return raw, "", []
     if not pairs or all(not m for m, _ in pairs):
         return raw, "", []
