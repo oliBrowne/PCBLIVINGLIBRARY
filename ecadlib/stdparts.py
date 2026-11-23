@@ -1431,10 +1431,16 @@ def symbol_kind(kind, mpn, fp_name, description=""):
         d = str(description or "") + " " + str(mpn or "")
         if re.match(r"^D_\d{4}", fp_name) and not re.search(r"diode|rectifier|zener|schottky|\bTVS\b|\bESD\b", d, re.I):
             return None, "chip-size D part: LED or diode is not stated (footprint is the same)"
-        sub = "D_Zener" if re.search(r"zener|BZX|BZT|MMSZ|\bZD", d, re.I) else "D_TVS" if re.search(r"\bTVS\b|transient|SMAJ|SMBJ|SMCJ|P6KE|ESD", d, re.I) \
+        # the direction is asked first (review 2026-11-23, a4 M3): a part of an A / CA numbered TVS series (the same
+        # list as tvs_bidirectional: P6SMB6.8CA, 1.5SMC33CA) or one the text calls bidirectional has no cathode, so it
+        # never gets a symbol that draws one, whatever else its words say ('TVS zener bidirectional', 'Diode')
+        series = TVS_SERIES.match(str(mpn or "").strip())
+        if tvs_bidirectional(mpn, description):           # both ways: no cathode, pins A1 / A2 as KiCad's D_TVS
+            return "D_TVS_Bidirectional", "2-pin bidirectional TVS diode, pins A1 / A2"
+        if re.search(r"(?i)\bbi-?directional|\bbidir", d):  # said both ways, but its number or text also says one way
+            return None, "TVS diode: uni- or bidirectional is not certain from the MPN; symbol left to the other sources"
+        sub = "D_TVS" if series else "D_Zener" if re.search(r"zener|BZX|BZT|MMSZ|\bZD", d, re.I) else "D_TVS" if re.search(r"\bTVS\b|transient|SMAJ|SMBJ|SMCJ|P6KE|ESD", d, re.I) \
             else "D_Schottky" if re.search(r"schottky|\bBAT\d|\bSS\d|\bB5\d|\bMBR|\bSK\d|\bSB\d|1N58[1-9]", d, re.I) else "D"
-        if sub == "D_TVS" and tvs_bidirectional(mpn, description):      # both ways: no cathode, pins A1 / A2 as
-            return "D_TVS_Bidirectional", "2-pin bidirectional TVS diode, pins A1 / A2"     # KiCad's D_TVS
         if sub == "D_TVS" and not tvs_unidirectional(mpn, description):  # KiCad's D_TVS is bidirectional (A1/A2)
             return None, "TVS diode: uni- or bidirectional is not certain from the MPN; symbol left to the other sources"
         return sub, "2-pin diode, pin 1 = cathode"

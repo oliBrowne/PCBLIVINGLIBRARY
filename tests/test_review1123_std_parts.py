@@ -69,3 +69,18 @@ def test_venkel_capacitor_is_not_built_as_an_0201(tmp_path):
     assert by["C0603X7R500-104KNE"]["status"] != "ready"
     assert "0201" not in str((by["C0603X7R500-104KNE"].get("source") or {}).get("footprint")), by["C0603X7R500-104KNE"].get("source")
     assert str(by["GRM188R71H104KA93D"]["source"]["footprint"]).endswith("C_0603_1608Metric")
+
+
+# ---------------------------------------------------------------- a4 M3 a bidirectional TVS never gets a cathode
+def test_bidirectional_tvs_never_gets_a_symbol_with_a_cathode():
+    for fp, mpn, desc in [("D_SMB", "P6SMB6.8CA", ""), ("D_SMC", "1.5SMC33CA", "Diode"), ("D_SMB", "SMBJ33CA", "Diode"),
+                          ("D_SMA", "", "Bidirectional thyristor surge suppressor SMA"),
+                          ("D_SOD-323", "SD05C-01FTG", "TVS zener bidirectional 5V"), ("D_SMA", "SMAJ5.0CA", "TVS DIODE 5VWM")]:
+        sym, how = SP.symbol_kind("D", mpn, fp, desc)
+        assert sym == "D_TVS_Bidirectional", (mpn, desc, sym, how)
+    assert SP.symbol_kind("D", "SMAJ5.0A", "D_SMA", "TVS DIODE 5VWM")[0] == "D_TVS"
+    assert SP.symbol_kind("D", "P6SMB6.8A", "D_SMB", "Diode")[0] == "D_TVS"
+    assert SP.symbol_kind("D", "SMAJ5.0A", "D_SMA", "TVS diode bidirectional")[0] is None       # the two disagree
+    assert SP.symbol_kind("D", "SS14", "D_SMA", "Schottky 1A 40V")[0] == "D_Schottky"
+    assert SP.symbol_kind("D", "MMSZ5231B", "D_SOD-123", "Zener 5.1V")[0] == "D_Zener"
+    assert SP.symbol_kind("D", "1N4148W", "D_SOD-123", "Diode")[0] == "D"
