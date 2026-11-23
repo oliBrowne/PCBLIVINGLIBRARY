@@ -17,7 +17,7 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, threading, time, unicodedata
+import argparse, base64, contextlib, copy, datetime, glob, hashlib, io, json, math, os, random, re, sys, threading, time, unicodedata
 from pathlib import Path
 
 import requests
@@ -4905,6 +4905,39 @@ def hold_on_doubt(inf, model, res):
                                  "read the datasheet yourself")
 
 
+
+def _own_second_read(msg, body, base, here, job):
+    """Raise crosscheck.Unavailable unless the assistant's answer in a check folder is a second read of its own: the
+    check's own schema (no field of a full extraction), and not any first read's answer for this part copied in
+    (review 2026-11-23: the first answer.json copied into the check folder agreed with itself and was released)."""
+    from . import crosscheck as CC
+    text = msg["content"][0]["text"]
+    try:
+        got = json.loads(text)
+    except ValueError:
+        got = None
+    schema = ((body.get("output_config") or {}).get("format") or {}).get("schema") or {}
+    top = set((schema.get("properties") or {}))
+    pkg = set(((schema.get("properties") or {}).get("package") or {}).get("properties") or ())
+    if not isinstance(got, dict) or not top or set(got) - top or not isinstance(got.get("package"), dict) \
+            or (pkg and set(got["package"]) - pkg) or not got["package"].get("package_type") \
+            or not isinstance(got["package"].get("dims"), list):
+        extra = sorted((set(got) - top) | (set(got["package"]) - pkg if isinstance(got.get("package"), dict) else set())
+                       ) if isinstance(got, dict) else []
+        raise CC.Unavailable(f"{here.name}/answer.json is not in the second read's own schema"
+                             + (f" ({', '.join(extra[:4])} belong to a first read)" if extra else "")
+                             + ": answer it afresh from its pages (see request.md there)")
+    stem = here.name.rsplit("-check-", 1)[0]
+    for f in Path(base).glob(f"{glob.escape(stem)}-*/answer.json"):
+        if "-check-" in f.parent.name or f.parent == here:
+            continue
+        try:
+            if json.loads(f.read_text(encoding="utf-8-sig")) == got:
+                raise CC.Unavailable(f"{here.name}/answer.json is the first read's answer ({f.parent.name}) copied: "
+                                     "a second read must be made afresh from its own pages")
+        except (OSError, ValueError):
+            continue
+
 class Reader:
     """Reads datasheets for many parts. job() finds and validates the PDF, cached() answers from the result cache,
     read_now() makes one synchronous call; with batch=True (or estimate=True) jobs are collected with submit() and
@@ -5742,11 +5775,17 @@ class Reader:
         if self.assistant is not None:                # reader = "assistant": its own folder (<part>-check-<key>), read
             from . import ds_assistant as DA          # from the pages alone, judged by the same code as the API's
             ajob = dict(job, key=key, body=body, name=str(job.get("name") or job.get("part")))   # <part>-check-<key>
-            msg = DA.answer(self.assistant, ajob)
-            self.assistant_asked.add(DA.folder(self.assistant, ajob).name)
+            here = DA.folder(self.assistant, ajob)
+            try:
+                msg = DA.answer(self.assistant, ajob)
+            except DatasheetError as e:               # a broken answer.json holds the part, saying why
+                raise CC.Unavailable(str(e))
+            self.assistant_asked.add(here.name)
             if msg is None:
                 d = DA.request(self.assistant, ajob)
                 raise CC.Unavailable(f"waiting for your assistant's second read: {d.name} (see READ_ME.md there)")
+            _own_second_read(msg, body, self.assistant, here, job)
+            CC.parse(msg)                             # (kept only once it reads: a fixed answer.json is read again)
             self.results.put(key, {"key": key, "part": job["part"], "url": job.get("url", ""), "model": "assistant",
                                    "via": "assistant", "purpose": "cross_check", "message": msg,
                                    "at": datetime.datetime.now().isoformat(timespec="seconds")})

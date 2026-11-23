@@ -81,3 +81,52 @@ def test_a_disagreeing_second_read_from_the_assistant_holds_the_part():
         except D.DatasheetError as e:
             assert "disagree" in str(e).lower() or "cross-check" in str(e).lower(), e
     assert api.calls == []
+
+
+def _second_read(got):
+    return [x for x in (got.get("cross_check") or {}).get("checks") or () if x.get("source") == "second read"][0]
+
+
+def test_a_copy_of_the_first_answer_is_no_second_read():
+    """Review 2026-11-23: the first read's answer.json copied into the check folder agreed with itself and released
+    the footprint. A full extraction (or the first answer itself) in the check folder is refused, and not cached."""
+    api = TA._api()
+    with tempfile.TemporaryDirectory() as d:
+        f = _first_answered(d, api)
+        TA._read(d, api)
+        (c,) = _check_folders(d)
+        (c / "answer.json").write_bytes((f / "answer.json").read_bytes())
+        _, got = TA._read(d, api)
+        sr = _second_read(got)
+        assert sr["status"] == "unchecked" and "first read" in sr["why"], sr
+        assert got["cross_check"]["status"] != "agreed"
+        (c / "answer.json").write_text(json.dumps(TC.check_answer()), encoding="utf-8")   # a real second read, then
+        _, got = TA._read(d, api)
+        assert _second_read(got)["status"] == "agreed", _second_read(got)
+
+
+def test_a_wrong_shape_check_answer_is_not_kept_once_fixed():
+    api = TA._api()
+    with tempfile.TemporaryDirectory() as d:
+        _first_answered(d, api)
+        TA._read(d, api)
+        (c,) = _check_folders(d)
+        for bad in ("{}", '{"package": {}}', "not json"):
+            (c / "answer.json").write_text(bad, encoding="utf-8")
+            _, got = TA._read(d, api)                 # held with the reason, never an error for the whole part
+            assert _second_read(got)["status"] == "unchecked", (bad, _second_read(got))
+        (c / "answer.json").write_text(json.dumps(TC.check_answer()), encoding="utf-8")
+        _, got = TA._read(d, api)
+        assert _second_read(got)["status"] == "agreed", _second_read(got)
+
+
+def test_names_a_folder_name_cannot_hold_get_folders_of_their_own():
+    """TESTPART/A and TESTPART#A (and FOO, FOO_) stemmed to one folder, so one part could use the other's reads."""
+    key = "check-0123456789abcdef"
+    names = ["TESTPART/A", "TESTPART#A", "TESTPART_A", "FOO", "FOO_"]
+    got = {DA.folder("/x", {"name": n, "key": key}).name for n in names}
+    assert len(got) == len(names), got
+    assert DA.folder("/x", {"name": "IND-10UH-NRS4018", "key": "abcdef0123456"}).name == "IND-10UH-NRS4018-abcdef0123"
+    a = DA.folder("/x", {"name": "P", "key": "check-0123abcdef"}).name
+    b = DA.folder("/x", {"name": "P", "key": "check-0123fedcba"}).name
+    assert a != b, a                                   # a check's key gets more than four characters

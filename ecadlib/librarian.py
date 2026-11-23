@@ -2506,8 +2506,9 @@ def read_confirmed(res, job, got, drawn=None):
         if cc.get("status") != "agreed":
             return None
         src = [c for c in cc.get("checks") or () if c.get("status") == "agreed" and c.get("via") != "the read's package name"]
-        why.append("footprint agrees with " + (f"{src[0].get('against')} ({src[0].get('via') or src[0].get('source')})"
-                                               if src else "the cross-check"))
+        how = src and (src[0].get("via") or src[0].get("source"))
+        why.append("footprint agrees with " + ((f"{src[0].get('against')}" + (f" ({how})" if how and how not in
+                                                str(src[0].get("against")) else "")) if src else "the cross-check"))
     if "symbol" in got:
         from . import pin_text as PT
         pins = [(q.get("num"), q.get("name")) for q in (res.get("symbol") or {}).get("pins") or ()]
