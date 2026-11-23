@@ -1243,10 +1243,11 @@ class Run:
             sp = SP.spec(res["footprint"])
             text, _ = SP.build(res["footprint"], RU.density_for(sp, self.rules))
             h = F.dim(sp["height_max"])[2] if sp.get("height_max") else None
-            own, land = SP.EIA_CASE.search(str(case or "")), SP.EIA_CASE.search(res["footprint"])
-            if res["footprint"] in SP.TANT_LAND.values() and own and land and own.group(0) != land.group(0):
-                h = int(own.group(2)) / 10      # a tantalum on its size's land (stdparts.TANT_SIZE_LAND): its own case
-                sp = dict(sp, height_max=h)     # height for the 3D body, not the table land's
+            own = re.match(r"tantalum case EIA (\d{4})-(\d{2})\b", str(res.get("fp_how") or ""))
+            land = SP.EIA_CASE.search(res["footprint"])
+            if res["footprint"] in SP.TANT_LAND.values() and own and land and own.groups() != land.groups():
+                h = int(own.group(2)) / 10      # a tantalum on its size's land (stdparts.TANT_SIZE_LAND): the case
+                sp = dict(sp, height_max=h)     # tantalum_land matched sets the 3D body's height, not the table land's
             self.put_fp(st, text, fp_name, f"standard:{res['kicad_ref']}", None, h, "standard package table", sp)
             got.append(f"footprint {res['kicad_ref']} ({res['fp_how']})")
         fp_src = str((st["footprint"] or {}).get("source") or "")

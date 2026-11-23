@@ -1,7 +1,7 @@
 """Parts the part search's description settles (1000-part BOM run, 2026-11-16). A tantalum's part search gives its
 size ('1411 (3528 Metric)') and its body's maximum height ('0.083" (2.11mm)'), not the case letter: the two together
-name the EIA case (3528-21 = KEMET / AVX case B) and so the table's land. A height that fits two cases, or a case the
-table does not have, builds nothing."""
+name the EIA case (3528-21 = KEMET / AVX case B) and so the table's land. A height that fits two cases builds nothing;
+an EIA height the table has no name for (3528-19) takes its size's land, with the 3D body at its own height."""
 from pathlib import Path
 
 from ecadlib import librarian as L, part_lookup as PL, providers as P, stdparts as SP
@@ -89,8 +89,34 @@ def test_tantalums_build_on_the_case_their_part_search_names(tmp_path, monkeypat
     for mpn, land, h in (("T495X107K016ATE100", "CP_EIA-7343-31_Kemet-D", 4.3),
                          ("T520B107M006ATE040", "CP_EIA-3528-21_Kemet-B", 1.9)):
         it = got[mpn]
-        assert land in str(it["source"]["footprint"]), (mpn, it["source"], it["hold_reasons"])
+        assert it["status"] == "ready" and land in str(it["source"]["footprint"]), (mpn, it["source"], it["hold_reasons"])
+        assert it["source"]["symbol"] == "standard:C_Polarized", it["source"]
         assert abs(it["release_check"]["height"] - h) < 0.01, (mpn, it["release_check"])
+
+
+@lite
+def test_a_bom_footprints_tantalum_height_is_the_3d_bodys_height(tmp_path, monkeypatch):
+    """The case named by the BOM's Footprint cell (no part search case then) also sets the 3D body's height: 7343-43
+    is 4.3 mm on the 7343-31 table land, never the table land's 3.1 mm."""
+    said = {"T495X107K016ATE100": ("", "", "CAP TANT 100UF 10% 16V 2917"),
+            "T491B106K016AT": ("", "", "CAP TANT 10UF 10% 16V 1411")}
+    got = _run(tmp_path, monkeypatch, said, "Designator,Qty,Value,Footprint,Manufacturer,MPN\n"
+               "C1,1,100uF,7343-43,KEMET,T495X107K016ATE100\nC2,1,10uF,CP_EIA-3528-12_Kemet-T,KEMET,T491B106K016AT\n")
+    for mpn, land, h in (("T495X107K016ATE100", "CP_EIA-7343-31_Kemet-D", 4.3),):
+        it = got[mpn]
+        assert it["status"] == "ready" and land in str(it["source"]["footprint"]), (mpn, it["source"], it["hold_reasons"])
+        assert abs(it["release_check"]["height"] - h) < 0.01, (mpn, it["release_check"])
+    assert "CP_EIA" not in str(got["T491B106K016AT"]["source"].get("footprint")), got["T491B106K016AT"]["source"]
+
+
+def test_a_size_fallback_needs_a_real_eia_height_written_as_a_case_and_a_tantalum():
+    """Only a case code ('3528-19') of a real EIA height falls back to its size's land, and only for a tantalum: a
+    voltage or a count after the size ('3528 16V', 'LED_3528_10') names no case."""
+    assert SP.tantalum_land(["3528-19"], "", "CAP TANT POLY 100UF")[0] == "CP_EIA-3528-21_Kemet-B"
+    assert SP.tantalum_land(["3528 16V"], "", "CAP TANT 10UF")[0] is None
+    assert SP.tantalum_land(["LED_3528_10"], "", "CAP TANT 10UF")[0] is None
+    assert SP.tantalum_land(["3528-17"], "", "CAP TANT 10UF")[0] is None          # not an EIA height
+    assert SP.tantalum_land(["3528-19"], "", "CAP 100UF 6.3V")[0] is None         # nothing says tantalum
 
 
 def test_a_chip_size_only_the_value_decoder_reads_names_the_land():

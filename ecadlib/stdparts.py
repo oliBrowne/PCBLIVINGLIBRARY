@@ -1702,7 +1702,9 @@ TANT_LAND = {"3216-18": "CP_EIA-3216-18_Kemet-A", "3528-21": "CP_EIA-3528-21_Kem
 # KiCad's tantalum lands of one EIA size are the same copper at every height (Capacitor_Tantalum_SMD, checked
 # 2026-11-23: CP_EIA-3216-10/-12/-18, 3528-12/-15/-21, 6032-15/-20/-28, 7343-15/-20/-30/-31/-40/-43 share their size's
 # pads); the generator sizes the land from the body's length and width, not its height. A height the table has no name
-# for (KEMET T520B 3528-19, T495X 7343-43) takes its size's table land; the 3D body keeps the part's own height.
+# for (KEMET T520B 3528-19, T495X 7343-43) takes its size's table land, only when it is one of EIA_HEIGHTS written as a
+# case code ('3528-19', never '3528 16V') of a part something says is a tantalum; the 3D body keeps the part's own height
+# (librarian.src_standard reads it from the reason).
 TANT_SIZE_LAND = {c.split("-")[0]: n for c, n in TANT_LAND.items()}
 EIA_CASE = re.compile(r"(?<![\d.])(3216|3528|6032|7343|2012|1608|7260|7132)[-_ ](\d{2})(?![\d.])")
 CASE_LETTER = re.compile(r"(?i)(?<![A-Za-z0-9])case[-_ ]?([A-E])(?![A-Za-z0-9])")
@@ -1723,7 +1725,8 @@ EIA_HEIGHTS = {"3216": (10, 12, 16, 18), "3528": (12, 15, 19, 21), "6032": (15, 
 def tantalum_eia(case, height):
     """A part search's case text and maximum height -> the tantalum's EIA case ('3528-21'), or None. The maximum is
     the code's height or up to 0.15 mm over it (293D B: 2.11 mm max, EIA 3528-21); exactly one of the size's heights
-    must fit, or none is named. T520B (2.00 mm max) is 3528-19, a case the table does not have: no land."""
+    must fit, or none is named. T520B (2.00 mm max) is 3528-19, a height the table has no name for (tantalum_land: its
+size's land)."""
     size = re.findall(r"(?<!\d)(\d{4}) Metric\b", str(case or ""))
     mm = re.search(r"(\d+(?:\.\d+)?)\s*mm\b", str(height or ""))
     if len(set(size)) != 1 or size[0] not in EIA_HEIGHTS or not mm:
@@ -1787,8 +1790,11 @@ def tantalum_land(texts, mpn="", description=""):
     where = ", ".join(dict.fromkeys(w for _, w in said))
     if case in TANT_LAND:
         return TANT_LAND[case], f"tantalum case EIA {case} ({where})"
-    size = case.split("-")[0]
-    if size in TANT_SIZE_LAND and re.fullmatch(r"\d{4}-\d{2}", case):
+    size, high = case.split("-")[0], case.split("-")[-1]
+    written = re.compile(rf"(?<![\d.]){size}-{high}(?![\d.])")   # a case code, not '3528 16V' or 'LED_3528_10'
+    kicad = any(re.search(r"CP_EIA-\d{4}-\d{2}_|Capacitor_Tantalum_SMD|CP_Tantalum_", w) for _, w in said)
+    if size in TANT_SIZE_LAND and (tantalum or kicad) and high.isdigit() and int(high) in EIA_HEIGHTS.get(size, ()) and \
+            (any(written.search(w) for _, w in said) or bool(d and d.get("case") == case)):
         return TANT_SIZE_LAND[size], (f"tantalum case EIA {case} ({where}): KiCad's EIA {size} lands are the same "
                                       f"copper at every height, so its size's land; the 3D body keeps its own height")
     return None, f"tantalum case {case} is not in the standard table"
