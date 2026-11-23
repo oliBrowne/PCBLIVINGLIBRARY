@@ -425,55 +425,80 @@ def chip_size(text, strict=False):
     return found.pop() if len(found) == 1 else ("conflict:" + "/".join(sorted(found)) if found else None)
 
 
-# MPN -> (kind, imperial size); kind "" = any passive kind (decided by the part)
+# MPN -> (kind, imperial size). Review 2026-11-23 (1.2): the rules matched only the START of a part number, so another
+# maker's number that began the same way was read by the wrong code (Venkel's imperial C0603X7R500-104KNE fitted TDK's
+# metric 'C0603X7R' and was built as an 0201). Now a size comes from a part number only when one rule reads the WHOLE
+# number: mpn_decode's value rules first, then these size-only rules (anchored at both ends) for the forms and series
+# mpn_decode has no value rule for. Each rule names its maker: a line that names another maker does not use it.
 def _mpn_rules():
     m3 = {"03": "0201", "15": "0402", "18": "0603", "21": "0805", "31": "1206", "32": "1210", "43": "1812", "55": "2220"}
-    cl = {"03": "0201", "05": "0402", "10": "0603", "21": "0805", "31": "1206", "32": "1210", "43": "1812", "55": "2220"}
     erj = {"XG": "01005", "1G": "0201", "2": "0402", "3": "0603", "6": "0805", "8": "1206", "14": "1210", "12Z": "2010",
            "12": "1812", "1T": "2512", "P03": "0603", "P06": "0805", "P08": "1206", "PA2": "0402", "PA3": "0603", "PA6": "0805",
            "PA8": "1206"}
     koa = {"1H": "0201", "1E": "0402", "1J": "0603", "2A": "0805", "2B": "1206", "2E": "1210", "2H": "2010", "3A": "2512"}
     imp = "(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)"
-    # Samsung RC series: RC<metric size><tolerance><resistance digits> (RC0603F103CS is a 0201)
+    # Samsung RC series: RC<metric size><tolerance><resistance digits>CS (RC0603F103CS is a 0201)
     src = {"0402": "01005", "0603": "0201", "1005": "0402", "1608": "0603", "2012": "0805", "3216": "1206", "3225": "1210",
            "5025": "2010", "6432": "2512"}
+    c = re.compile
     return [
-        (re.compile(r"^RC(0402|0603|1005|1608|2012|3216|3225|5025|6432)[BDFGJK]\d"), "R", src),     # Samsung resistors
-        # Yageo resistors: <series><imperial size><tolerance><packing letter>... (RC0603FR-07, RT0603BRD07)
-        (re.compile(r"^(?:RC|RT|RL|AC|AF|AT|PE|PT|RV)" + imp + r"[A-Z][A-Z]"), "R", None),
-        (re.compile(r"^CC" + imp + r"[A-Z]{2}"), "C", None),                                     # Yageo MLCC
-        (re.compile(r"^(?:GRM|GCM|GJM|GCJ|GRT|GCQ|GQM|GMA)(\d\d)"), "C", m3),                   # Murata MLCC
-        (re.compile(r"^(?:LQG|LQM|LQW|LQP)(\d\d)"), "L", m3), (re.compile(r"^BLM(\d\d)"), "L", m3),   # Murata L, beads
-        (re.compile(r"^CL(\d\d)[A-Z]\d"), "C", cl),                                              # Samsung MLCC
-        (re.compile(r"^C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][A-Z]|JB|CH)"), "C", "metric"),   # TDK
-        # KEMET MLCC: C<imperial><C standard | X flexible termination | F ...><capacitance>; C0603X563K1RACTU is an
-        # imperial 0603, not TDK's metric 0603 (X followed by a digit is KEMET's capacitance code, not a dielectric)
-        (re.compile(r"^C" + imp + r"[CXF]\d{3}[A-Z]"), "C", None),
-        (re.compile(r"^ERJ-?(XG|1G|1T|12Z|12|14|PA[2368]|P0[368]|[2368])"), "R", erj),           # Panasonic
-        (re.compile(r"^(?:CRCW|TNPW|RCG|RCS)" + imp), "R", None),                                # Vishay
-        (re.compile(r"^RMCF" + imp), "R", None), (re.compile(r"^CR" + imp + r"-"), "R", None),   # Stackpole, Bourns
-        (re.compile(r"^RK73[HB](1H|1E|1J|2A|2B|2E|2H|3A)"), "R", koa),                           # KOA
-        (re.compile(r"^" + imp + r"W[A-Z]{2}[A-Z0-9]"), "R", None),                              # Uni-Royal 0603WAF1002T5E
+        ("samsung", c(r"RC(0402|0603|1005|1608|2012|3216|3225|5025|6432)[BDFGJK][0-9R]{3,4}CS"), "R", src),
+        # Yageo resistors: <series><imperial size><tolerance><packing><-|TCR><taping 2><resistance>L (RC0603FR-0710KL,
+        # RT0603BRD0710KL, AT0603BRD0710KL); 'AC0603KRX7R9BB104' is Yageo's automotive MLCC (mpn_decode reads it)
+        ("yageo", c(r"(?:RC|RT|RL|AC|AF|AT|PE|PT|RV)" + imp + r"[A-Z][A-Z][A-Z-][0-9A-Z]{2}[0-9RKM]{2,5}L"), "R", None),
+        ("murata", c(r"(?:LQG|LQM|LQW|LQP)(\d\d)[A-Z]{2}[0-9A-Z]{3}[A-Z][0-9A-Z]{2,3}[A-Z]?"), "L", m3),   # LQG15HS4N7S02D
+        ("murata", c(r"BLM(\d\d)[A-Z]{2}\d{3}[A-Z]{2}\d[A-Z]?"), "L", m3),                     # beads: BLM18AG601SN1D
+        # KEMET MLCC: C<imperial><C standard | X flexible | F ...><capacitance><tolerance><voltage><dielectric>A<C|L>
+        # [-]TU: C0603X563K1RACTU is an imperial 0603 (X then digits is KEMET's capacitance, not TDK's dielectric)
+        ("kemet", c(r"C" + imp + r"[CXF](?:\d{3}|\dR\d)[A-Z][0-9A-Z][A-Z]A[CL](?:-?TU|AUTO|\d{4})?"), "C", None),
+        # TDK MLCC: C<metric size><dielectric><voltage code><capacitance><tolerance>, then the thickness and packing
+        # codes of the current form (C1608X7R1H104K080AA, read by mpn_decode) or none / T of the older one
+        ("tdk", c(r"C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][RSTPVL]|JB|CH)\d[A-Z](?:\d{3}|\dR\d)"
+                  r"[BCDFGJKMZ](?:T|\d{3}[A-Z]{2}[A-Z]?)?"), "C", "metric"),
+        ("panasonic", c(r"ERJ-?(XG|1G|1T|12Z|12|14|PA[2368]|P0[368]|[2368])[A-Z]{1,4}[0-9R]{3,4}[A-Z]"), "R", erj),
+        ("vishay", c(r"(?:CRCW|TNPW|RCG|RCS)" + imp + r"[0-9RKM]{4}[A-Z][A-Z0-9]{1,6}"), "R", None),
+        ("stackpole", c(r"RMC[FP]" + imp + r"[A-Z][TG][0-9RKM]{3,5}"), "R", None),
+        ("bourns", c(r"CR" + imp + r"-[A-Z][A-Z/]-[0-9R]{3,4}[EG]?LF"), "R", None),
+        ("koa", c(r"RK73[HBZ](1H|1E|1J|2A|2B|2E|2H|3A)TT[A-Z]{1,2}(?:[0-9R]{3,4}[A-Z])?"), "R", koa),
+        ("uni-royal", c(imp + r"W[A-Z0-9][A-Z][0-9]{3}[0-9JKLMR]T[0-9A-Z]E"), "R", None),        # 0603WAF1002T5E
     ]
 
 
 MPN_RULES = _mpn_rules()
+# the names a BOM or a part search writes each rule's maker with (lower case; KEMET is a Yageo company, EPCOS TDK's)
+MAKER_NAMES = {"yageo": ("yageo", "phycomp"), "samsung": ("samsung", "semco"), "murata": ("murata",),
+               "kemet": ("kemet", "yageo"), "panasonic": ("panasonic", "matsushita"),
+               "vishay": ("vishay", "dale", "beyschlag", "draloric"), "stackpole": ("stackpole", "sei"),
+               "bourns": ("bourns",), "koa": ("koa",), "tdk": ("tdk", "epcos"),
+               "uni-royal": ("uni-royal", "uniroyal", "uni royal", "uniohm", "royalohm", "royal ohm", "厚声"),
+               "kyocera": ("kyocera", "avx")}
+NO_MAKER = re.compile(r"(?i)\s*(?:|-+|n/?a|none|tbd|any|generic|various|multiple|standard|unknown|\?+)\s*")
 
 
-def mpn_size(mpn):
-    """-> (kind, imperial size) or (None, None)."""
+def maker_is(rule_maker, maker):
+    """May a rule of `rule_maker` read a line whose maker cell or part search says `maker`? Yes when no maker is
+    named, or the name is one of that maker's; another maker's number that fits the code is not that maker's code."""
+    m = str(maker or "").lower()
+    if NO_MAKER.fullmatch(m):
+        return True
+    return any(re.search(r"(?<![a-z])" + re.escape(n) + r"(?![a-z])", m) for n in MAKER_NAMES.get(rule_maker, (rule_maker,)))
+
+
+def mpn_size(mpn, maker=""):
+    """-> (kind, imperial size) or (None, None). Only a part number one rule reads whole, and only a rule of the
+    line's own maker when one is named (maker: the BOM's maker cell or the part search's)."""
+    from . import mpn_decode as MD
     s = re.sub(r"\s+", "", str(mpn or "").upper())
-    for rx, kind, conv in MPN_RULES:
-        m = rx.match(s)
-        if m:
-            code = m.group(1)
-            size = METRIC.get(code) if conv == "metric" else conv.get(code) if isinstance(conv, dict) else code
-            if size:
-                return kind, size
-    from . import mpn_decode as MD                    # the value decoder's makers too (KYOCERA AVX 0603YC104KAT2A):
-    d = MD.decode(s)                                  # it reads the whole part number, size included
+    d = MD.decode(s)                                      # the value decoder: whole number, size included
     if d and d["kind"] in ("R", "C") and d.get("size"):
-        return d["kind"], d["size"]
+        return (d["kind"], d["size"]) if maker_is(d["series"].split()[0].lower(), maker) else (None, None)
+    for who, rx, kind, conv in MPN_RULES:
+        m = rx.fullmatch(s)
+        if m:
+            size = METRIC.get(m.group(1)) if conv == "metric" else conv.get(m.group(1)) if isinstance(conv, dict) else m.group(1)
+            if size and maker_is(who, maker):
+                return kind, size
+            return None, None
     return None, None
 
 
