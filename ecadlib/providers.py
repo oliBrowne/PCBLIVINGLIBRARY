@@ -266,6 +266,40 @@ def same_maker(a, b):
                for x, y, kx, ky in ((wa, wb, ka, kb), (wb, wa, kb, ka)))   # not "Vishay" / VPG
 
 
+_KNOWN_MAKERS = set()
+
+
+def _known_maker(name):
+    """Is this name, whole, a maker this module knows by name (the alias tables, the makers' datasheet domains)?"""
+    if not _KNOWN_MAKERS:
+        _KNOWN_MAKERS.update(_MAKER_ALIAS, _MAKER_ALIAS.values(), _MAKER_GROUP, *_MAKER_GROUP.values(), _MAKER_MOVED,
+                             *_MAKER_MOVED.values(), (maker_key(m) for m in MAKER_DOMAINS.values()))
+        _KNOWN_MAKERS.discard("")
+    return maker_key(name) in _KNOWN_MAKERS
+
+
+def other_makers(maker, listed):
+    """The other makers a listing's maker field names beside `maker` (2026-11-23 review round 3, A9: "onsemi / Vishay"
+    and "Vishay (onsemi second source)" were Vishay's listing, so onsemi's SMC case went to Vishay's SMA part). A part
+    of the field (between / , ; | & + "and" "or" " - " and brackets) counts when it is, or begins with, a maker known
+    by name that is not `maker`: a division, a brand or a former name of one company is not another maker ("Vishay
+    Beyschlag/Draloric/BC Components", "EPCOS - TDK Electronics", "Aratas (Formerly Omron Components)")."""
+    if not isinstance(listed, str) or not isinstance(maker, str):
+        return []
+    out = []
+    for part in re.split(r"[/,;|&+()（）]|\s+-\s+|\s+(?:and|or)\s+", clean_maker(listed)):
+        words = _maker_words_all(part)
+        if not words or set(words) <= _MAKER_REGION | _MAKER_PLACE | _MAKER_WORDS or "DIVISION" in words \
+                or re.match(r"(?i)\s*(?:formerly|previously|now)\s", part):
+            continue
+        first = words[0] if len(words[0]) >= 4 and words[0] not in _MAKER_GENERIC | _MAKER_WORDS | _MAKER_PLACE else ""
+        for name in (part.strip(), first):
+            if name and _known_maker(name) and not same_maker(maker, name) and not same_maker(maker, part):
+                out.append(part.strip())
+                break
+    return out
+
+
 def describe(text="", category="", package=""):
     """The part description a source gives: its own description text, else '<category>, <package>' when it names a
     category (both are the distributor's words; nothing is made up). '' when it gives neither."""

@@ -1700,6 +1700,7 @@ def triage(lines, index, provs, http, shared=None):
             notes.append(dup[i])
         if not (sym and fp_key):
             lcsc_answered = False
+            lcsc_unnamed = False                       # work["lcsc"] came from an LCSC listing that names no maker
             for prov in provs:
                 if isinstance(prov, P.LCSC_SEARCHES) and work.get("lcsc"):
                     if not desc and not ln.get("description") and hasattr(prov, "lookup_lcsc"):   # the number is
@@ -1734,12 +1735,30 @@ def triage(lines, index, provs, http, shared=None):
                 # number are not this part's, whichever source or plugin it came from; said once per source.
                 # Round 2 (I5): nor are its description, datasheet links and CAD answer (the line was still built
                 # from the other maker's datasheet and footprint): nothing of it is taken, the next source is asked
-                foreign = bool(bom_maker and r.found and not r.error and isinstance(r.manufacturer, str)
-                               and P.maker_key(ln.get("manufacturer")) and P.maker_key(r.manufacturer)
-                               and not P.same_maker(ln.get("manufacturer"), r.manufacturer))
-                if foreign:
-                    notes.append(f"{prov.name}: {str(r.mpn or r.lcsc or 'its listing')[:60]} is by "
-                                 f"{P.clean_maker(r.manufacturer)[:60]}, not {str(ln.get('manufacturer')).strip()[:60]}: "
+                # Round 3 (A9): nor is a result that names no maker, or more than one ("onsemi / Vishay", "Vishay
+                # (onsemi second source)", a list), this maker's own listing: who made the part it describes is not
+                # known. Except a result for the LCSC number the line already has, the BOM's own or the one an accepted
+                # listing gave: that number names the listing (EasyEDA's answer for it may carry no maker). An LCSC
+                # search's listing with no maker gives its LCSC number only (number_only), so that EasyEDA can be asked
+                # whose part it is; EasyEDA's answer for such a number must name the maker itself
+                named = P.clean_maker(r.manufacturer) if isinstance(r.manufacturer, str) else ""
+                theirs = str(ln.get("manufacturer")).strip()[:60]
+                foreign, number_only = "", False
+                if bom_maker and r.found and not r.error and P.maker_key(ln.get("manufacturer")):
+                    if not P.maker_key(named):
+                        own_number = bool(r.lcsc) and not lcsc_unnamed and P.lcsc_number(r.lcsc) == P.lcsc_number(work.get("lcsc"))
+                        foreign = "" if own_number else f"names no maker, so it is not {theirs}'s own listing"
+                        number_only = bool(foreign) and isinstance(prov, P.LCSC_SEARCHES) and isinstance(r.manufacturer, str) \
+                            and bool(P.lcsc_number(r.lcsc))
+                    elif not P.same_maker(ln.get("manufacturer"), named):
+                        foreign = f"is by {named[:60]}, not {theirs}"
+                    elif P.other_makers(ln.get("manufacturer"), named):
+                        foreign = f"names more than one maker ({named[:60]}), so it is not {theirs}'s own listing"
+                if number_only:
+                    notes.append(f"{prov.name}: {str(r.mpn or r.lcsc)[:60]} {foreign}: only its LCSC number is used, "
+                                 "its package, description and datasheet are not (check the BOM's maker)")
+                elif foreign:
+                    notes.append(f"{prov.name}: {str(r.mpn or r.lcsc or 'its listing')[:60]} {foreign}: "
                                  "its package and LCSC number are not used, nor its description, datasheet and CAD "
                                  "data (check the BOM's maker)")
                 if not src_pkg and not foreign and r.found and not r.error and r.mpn and (case := _case_text(
@@ -1763,9 +1782,11 @@ def triage(lines, index, provs, http, shared=None):
                 elif isinstance(prov, P.LCSC_SEARCHES):
                     lcsc_answered = True
                     tag = getattr(prov, "note_label", "jlcpcb")
-                    if foreign:                                # another maker's clone: its LCSC number is not taken
+                    if foreign and not number_only:            # another maker's clone: its LCSC number is not taken
                         continue
-                    if r.found:
+                    if number_only:                            # (round 3, A9) nobody's listing: its number, no more
+                        work["lcsc"], lcsc_unnamed = r.lcsc, True
+                    elif r.found:
                         work["lcsc"] = r.lcsc
                         if not desc and (r.extra or {}).get("description"):
                             desc, desc_from = r.extra["description"], prov.name
@@ -1796,7 +1817,7 @@ def triage(lines, index, provs, http, shared=None):
                         notes.append(f"{tag}: {r.extra['note']}")
                 elif foreign:                                  # (2026-11-23 review round 2, I5) only who lists it is kept
                     seen(*([m for m in (r.extra or {}).get("makers") or [] if isinstance(m, str)] if isinstance(r.extra, dict) else [])
-                         or [P.clean_maker(r.manufacturer)])
+                         or [named])
                 else:
                     if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
                         src = r                                # a found part is kept over a later miss or a later

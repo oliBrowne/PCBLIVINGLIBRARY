@@ -49,7 +49,8 @@ def test_another_makers_result_gives_no_description_datasheet_or_cad_answer():
 
 def test_the_makers_own_result_is_taken_as_before():
     for maker, theirs in (("Vishay", "Vishay General Semiconductor"), ("Fairchild", "onsemi"), ("", "onsemi"),
-                          ("-", "onsemi"), ("Vishay", "")):                 # own, renamed, no maker on the line, none named
+                          ("-", "onsemi")):                 # own, renamed, no maker on the line (round 3, A9: a result
+                                                            # that names no maker is not Vishay's own any more)
         r = _row(_Cad(theirs), maker=maker)
         assert (r["src"], r["src_datasheet"], r["src_datasheet_from"], r["src_datasheet_more"]) == \
             ("plug", SHEET, "plug", MORE), (maker, theirs, r)

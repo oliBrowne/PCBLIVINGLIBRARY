@@ -203,8 +203,8 @@ def test_triage_refuses_case_measurements_and_lcsc_number_of_another_makers_resu
     r = _row(_Plugin("onsemi"))
     assert (r["src_package"], r["src_package_device"], r["src_dims"], r["lcsc"]) == ("", "", "", ""), r
     assert "plug: SS34 is by onsemi, not Vishay: its package and LCSC number are not used" in r["notes"], r["notes"]
-    for maker, theirs in (("Vishay", "Vishay General Semiconductor"), ("", "onsemi"), ("Vishay", "")):
-        r = _row(_Plugin(theirs), maker=maker)
+    for maker, theirs in (("Vishay", "Vishay General Semiconductor"), ("", "onsemi")):   # (round 3, A9: a result that
+        r = _row(_Plugin(theirs), maker=maker)                                           # names no maker is refused too)
         assert r["src_package"] == "DO-214AB (SMC)" and r["src_package_device"] == "SMC" and r["src_dims"] \
             and r["lcsc"].startswith("C8678"), (maker, theirs, r)
         assert "not used" not in r["notes"], r["notes"]
