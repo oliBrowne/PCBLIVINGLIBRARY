@@ -136,10 +136,11 @@ def _joined_lines(text):
     return out
 
 
-def _rows(text):
-    """Lines of a page -> [(joined name candidates, [cells that are pin-number cells])]."""
+def _rows(text, at=None):
+    """Lines of a page -> [(joined name candidates, [cells that are pin-number cells])]. at: a list that is given
+    each row's line number (in _joined_lines)."""
     rows = []
-    for raw in _joined_lines(text):
+    for li, raw in enumerate(_joined_lines(text)):
         cells = _cells(raw)
         if len(cells) < 2:
             continue
@@ -160,6 +161,8 @@ def _rows(text):
         if not any(c for _, c in nums):
             continue
         rows.append((cells, nums))
+        if at is not None:
+            at.append(li)
     if any(len(n) >= 2 and n[0][0] == 0 and n[1][0] == 1 and n[0][1].isdigit() and n[1][1].isdigit() for _, n in rows):
         for k, (cells, nums) in enumerate(rows):       # a table with two number columns: the dash that leads a row is
             if cells[0] in EMPTY and nums[0][0] == 1:  # the first column's empty cell ("- 3 CE": no such pin in that
@@ -402,6 +405,26 @@ def _named_column(text, lines, per, mine):
     return cols[0], f"pin table, its {head[cols[0]][1]} column (the header names one package per column)"
 
 
+ABOVE = 8                 # the lines over a pin table that are its heading: its title and the lines just above
+
+
+def _heading(text, pins, col, loose=()):
+    """A pin table's own heading on its page, as text: the ABOVE printed lines over the first row the pins matched
+    in column `col`, and the table down to the last such row (a header may name the package in a row of its own). ''
+    when the rows are not found. Review 2026-11-23, round 2 (C2): what names a text pin order's package."""
+    at = []
+    rows, lines = _rows(text, at), _joined_lines(text)
+    hit = [at[k] for k in range(len(rows)) for n, nm in pins
+           if col in _find([rows[k]], nm, n, loose=norm_name(nm) in loose)[0]]
+    if not hit:
+        return ""
+    lo, left = min(hit), ABOVE
+    while lo > 0 and left:
+        lo -= 1
+        left -= bool(lines[lo].strip())
+    return "\n".join(lines[lo:max(hit) + 1])
+
+
 def _printed_low(rows, name, num, col, names=()):
     """Does the row of pin `num` (its number in column `col`) print `name` with an active-low mark the text layer
     itself carries (/EN, EN#, nRESET, a combining overline)? A bar drawn as a line is not in the text."""
@@ -575,6 +598,8 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), b
             if agreed is None:
                 agreed = {"status": "agreed", "page": page, "column": col, "pins": len(pins),
                           "where": "pin drawing" if drawn else other if named is not None else "pin table"}
+                if not drawn:                       # the table's own heading: what may name its package (package_doubt)
+                    agreed["above"] = _heading(text, pins, col, loose)
                 at = (rows, col, [page])
             continue
         miss = [f"{nm}={n}" for (n, nm), (cols, _) in zip(pins, per) if not cols]
@@ -603,7 +628,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), b
             common = set.intersection(*[cols for cols, _ in per]) if per else set()
             if common and not variant_columns(lines, min(common), most, _span(rows, lines, min(common))):
                 agreed = {"status": "agreed", "page": pa, "column": min(common), "pins": len(pins),
-                          "where": f"pin table (pages {pa} and {pb})"}
+                          "where": f"pin table (pages {pa} and {pb})", "above": ""}
                 at = (rows, min(common), [pa, pb])
                 break
     if agreed is not None and conflicts and part and _is_part(_titled_for((page_texts or {}).get(agreed["page"])), part):
@@ -871,21 +896,53 @@ def diode_orders_pdf(pdf_bytes, package=None, doubts=None):
 
 
 _PKG_LETTERS = "|".join(sorted({f for f in FAMILIES if f.isalpha()} | {"D2PAK", "SOP"}, key=len, reverse=True))
-_PKG_WORD = re.compile(r"(?<![A-Za-z0-9])(?:(\d{1,3})-)?((?:SOT|SOD|SC|TO|DO)-?\d{2,3}[A-Z]{0,2}|" + _PKG_LETTERS +
-                       r")(?:-(\d{1,3}))?(?![A-Za-z0-9])")
-_SAME_PACKAGE = ({"SOIC", "SO", "SOP"}, {"DPAK", "TO252", "TO252AA"}, {"D2PAK", "TO263", "TO263AB"})
+# A numbered package name as makers print it (review 2026-11-23, round 2, C2: 'TO 92', 'to-92', 'TO-' at a line's end
+# and '92' on the next, 'TO-92MOD', 'TO-92Package' were not seen, so a sheet with one of them 'named one package
+# only'): the family in either case when a hyphen or nothing joins it to its number, in capitals when only a space or
+# a line break does (see _spaced), then any letters run on to it.
+_PKG_NUM = re.compile(r"(?<![A-Za-z0-9])(?:(\d{1,3})-)?(?:(?i:(SOT|SOD|SC|TO|DO))(-\s*|)|(SOT|SOD|SC|TO|DO)(\s+))"
+                      r"(\d{2,3})(?!\d)([A-Za-z]*)(?![A-Za-z0-9])(?:-(\d{1,3})(?![A-Za-z0-9]))?")
+_PKG_WORD = re.compile(r"(?i)(?<![A-Za-z0-9])(?:(\d{1,3})-)?(" + _PKG_LETTERS + r")(?:-(\d{1,3}))?(?![A-Za-z0-9])")
+# Makers' own names for a package, which carry no JEDEC family: Zetex's E-Line and ROHM's SPT are TO-92-like leaded
+# bodies; ROHM's SST3 / SMT3 / UMT3 / EMT3 / VMT3 / MPT3 / CPT3 are its names for SOT-23, SC-59, SOT-323, SOT-416,
+# SOT-723, SOT-89 and DPAK (_SAME_PACKAGE)
+_PKG_MAKER = re.compile(r"(?<![A-Za-z0-9])(?:(?i:E-?Line)|SPT|SST3|SMT3|UMT3|EMT3|VMT3|MPT3|CPT3)(?![A-Za-z0-9])")
+_TO_NUMBERS = {"18", "39", "46", "52", "66", "72", "92", "126", "202", "218", "220", "225", "226", "236", "243", "247",
+               "251", "252", "253", "261", "262", "263", "264", "268", "269", "270", "274", "277"}
+_SAME_PACKAGE = ({"SOIC", "SO", "SOP"}, {"DPAK", "TO252", "TO252AA", "CPT3"}, {"D2PAK", "TO263", "TO263AB"},
+                 {"SOT23", "SST3"}, {"SC59", "SMT3"}, {"SOT323", "SC70", "UMT3"}, {"SOT416", "SC75", "EMT3"},
+                 {"SOT723", "VMT3"}, {"SOT89", "MPT3"})
+
+
+def _spaced(text, m):
+    """Is 'TO 92' (the family, a space or a line break, the number) a package name and not words? The family in
+    capitals, the number one JEDEC gives a TO outline, and no number before it ('-55 TO 150', '-65 TO 92': a
+    range)."""
+    if m.group(4) == "TO" and m.group(6) not in _TO_NUMBERS:
+        return False
+    return not re.search(r"\d\s*(?:°\s*C|[A-Za-z%]{0,2})\s*$", text[:m.start()])
 
 
 def package_words(text):
-    """The packages a text names as words, in capitals as makers print them: {(name, lead count or None)}: 'SOT-23
-    (TO-236AB)' -> {('SOT23', None), ('TO236AB', None)}, 'SOT-23-5' -> {('SOT23', 5)}, '8-SOIC' -> {('SOIC', 8)}. A
-    short family word with no lead count (SO, DIP, QFN: plain words and prefixes too) is not one."""
+    """The packages a text names as words: {(name, lead count or None)}: 'SOT-23 (TO-236AB)' -> {('SOT23', None),
+    ('TO236AB', None)}, 'SOT-23-5' -> {('SOT23', 5)}, '8-SOIC' -> {('SOIC', 8)}, 'to-92' / 'TO 92' -> {('TO92', None)},
+    'TO-92MOD' -> {('TO92MOD', None)}, 'E-Line' -> {('ELINE', None)}. Up to three capitals after the number are part
+    of the name (TO-236AB, TO-92MOD: another outline than TO-92); a word run on to it is not ('SOT-23Package' is
+    SOT-23). A short family word with no lead count (SO, DIP, QFN: plain words and prefixes too) is not one."""
+    text = re.sub("[−–—‐‑‒]", "-", str(text or ""))             # onsemi's minus sign
     out = set()
-    for m in _PKG_WORD.finditer(re.sub("[\u2212\u2013\u2010\u2011]", "-", str(text or ""))):   # onsemi's minus sign
+    for m in _PKG_NUM.finditer(text):
+        if m.group(4) and not _spaced(text, m):
+            continue
+        tail = m.group(7) if m.group(7).isupper() and len(m.group(7)) <= 3 else ""
+        count = m.group(1) or m.group(8)
+        out.add(((m.group(2) or m.group(4)).upper() + m.group(6) + tail, int(count) if count else None))
+    for m in _PKG_WORD.finditer(text):
         count = m.group(1) or m.group(3)
-        base = m.group(2).replace("-", "")
-        if count or len(base) >= 4:
-            out.add((base, int(count) if count else None))
+        if count or len(m.group(2)) >= 4:
+            out.add((m.group(2).upper(), int(count) if count else None))
+    for m in _PKG_MAKER.finditer(text):
+        out.add((m.group().replace("-", "").upper(), None))
     return out
 
 
@@ -908,11 +965,15 @@ def own_packages(package):
     return names, count
 
 
-def package_doubt(page_texts, page, package, leads=None, where=""):
+def package_doubt(page_texts, page, package, leads=None, where="", above=None):
     """Why a pin order read on page `page` of a PDF may not be this part's package's, or None (review 2026-11-23,
     1.4: a family datasheet whose text prints only the TO-92 table gave the TO-92 order to the SOT-23 part). It is
-    this package's when every package the PDF names is this part's own (one package only), or the page it was read on
-    names this part's package and no other, or the table's header named this package's column (check's `where`).
+    this package's when every package the PDF names is this part's own (one package only), or the table's header
+    named this package's column (check's `where`), or the table's own heading names it: above, check()'s 'above' of
+    an agreeing table (its title and the lines just over it), names this part's package and no other, and nothing
+    else on the page names another (round 2, C2: the rule turned round; a package named somewhere on the page was
+    enough). above None: an order read from a drawing or a style table, which has no heading in the text: the page
+    it is on names this part's package and no other.
     leads: the part's lead count ('SOT-23-5' is not the three-lead SOT-23). A PDF that names no package: a doubt."""
     mine, count = own_packages(package)
     if not mine:
@@ -925,15 +986,17 @@ def package_doubt(page_texts, page, package, leads=None, where=""):
     if "the header names one package per column" in str(where or ""):
         return None                                    # the table's own header picked this package's column
     here = package_words((page_texts or {}).get(page))
-    if here and all(is_mine(w) for w in here):
-        return None                                    # a family PDF, but this page is headed for this package alone
+    near = here if above is None else package_words(above)
+    if near and all(is_mine(w) for w in here | near):
+        return None                                    # a family PDF, but this table (this page) is headed for this package alone
     if not every:
         return "the PDF names no package, so the order cannot be tied to this part's"
-    if here:
-        return f"page {page} is not headed for this part's package alone (it names {said(here)}): which package's " \
-               "order it prints is not in the text"
-    return f"the PDF names other packages too ({said(w for w in every if not is_mine(w))}) and page {page} names " \
-           "none: which package's order it prints is not in the text"
+    if here and (near or above is None):
+        return f"page {page} is not headed for this part's package alone (it names {said(here | near)}): which " \
+               "package's order it prints is not in the text"
+    return f"the PDF names other packages too ({said(w for w in every if not is_mine(w))}) and " + \
+           (f"the lines above page {page}'s table name" if above is not None and here else f"page {page} names") + \
+           " none: which package's order it prints is not in the text"
 
 
 def pin_orders(page_texts, names, figures=(), part=None, package=None, doubts=None):
@@ -947,7 +1010,8 @@ def pin_orders(page_texts, names, figures=(), part=None, package=None, doubts=No
            for v in [check(page_texts, list(zip("123", o)), figures, part=part, package=package or ())]
            if v["status"] == "agreed"]
     if len(got) == 1 and package is not None:
-        why = package_doubt(page_texts, got[0][1].get("page"), package, len(names), got[0][1].get("where"))
+        why = package_doubt(page_texts, got[0][1].get("page"), package, len(names), got[0][1].get("where"),
+                            got[0][1].get("above"))
         if why:
             if doubts is not None:
                 doubts.append(f"it prints {', '.join(got[0][0])} on pins 1, 2, 3, but {why}")

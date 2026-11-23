@@ -1653,8 +1653,8 @@ class Run:
             got = {o: PT.check(texts, list(zip(map(str, range(1, 9)), o)), figs, pin_count=8, part=mpn,
                                package=(land,) if land else ()) for o in [want] + others}
             ok = [o for o in got if got[o]["status"] == "agreed"]
-            doubt = PT.package_doubt(texts, got[want].get("page"), (land,) if land else (), 8, got[want].get("where")) \
-                if ok == [want] else None
+            doubt = PT.package_doubt(texts, got[want].get("page"), (land,) if land else (), 8, got[want].get("where"),
+                                     got[want].get("above")) if ok == [want] else None
         except Exception:
             return None
         if ok != [want] or doubt:
