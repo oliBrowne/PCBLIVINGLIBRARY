@@ -262,6 +262,42 @@ R1,22k,0603,RES 22K OHM 1% 0603,,
     assert not [n for n, (s, fp) in st.items() if n != "RES-0603-22k" and fp.startswith("standard:")], st
 
 
+# ---------------------------------------------------------------- 1.12 an unpolarized chip needs something to say ceramic
+def test_capacitor_with_an_unread_part_number_needs_a_ceramic_word():
+    for texts, mpn, desc in [(["1206"], "TMCMA1C106MTRF", "CAP 10uF 16V"), (["1206"], "T58A0106M016C0200", "CAP 10uF"),
+                             (["0805"], "TACR106M010RTA", "CAP 10uF"), (["1206"], "CA45-A016K106T", "CAP 10uF 16V 1206"),
+                             (["1206"], "TCA1C106M8R", "CAP 10uF"), (["1206"], "T110A106K016AT", "CAP"),
+                             (["1206"], "ECS-T1CY106R", "CAP 10uF 16V"), (["0805"], "", "CAP TAN 10UF 16V"),
+                             (["0805"], "", "CAP 10UF 16V POL"), (["1206"], "", "C-POL 10uF"), (["1206"], "", "CPOL 10uF")]:
+        r = SP.resolve(texts, "C", mpn, desc)
+        assert r["footprint"] is None and r["symbol"] is None, (mpn, desc, r)
+    r = SP.resolve(["1206"], "C", "TMCMA1C106MTRF", "CAP 10uF 16V")
+    assert "ceramic" in r["fp_how"] and "TMCMA1C106MTRF" in r["fp_how"], r
+
+
+def test_ceramic_capacitors_still_build():
+    for texts, mpn, desc, kw in [(["0603"], "GRM188R71H104KA93D", "", {}), (["0603"], "CL10B104KB8NNNC", "", {}),
+                                 ([""], "GRM188R71H104KA93D", "", {}), (["0603"], "0603B104K500CT", "CAP CER 0.1UF 50V X7R 0603", {}),
+                                 (["0603"], "885012206095", "100nF X7R", {}), (["0603"], "UMK107B7104KA-T", "MLCC 100nF", {}),
+                                 (["0603"], "UMK107B7104KA-T", "", {"value": "100nF X7R"}),
+                                 (["0603"], "UMK107B7104KA-T", "", {"search": "Multilayer Ceramic Capacitors MLCC - SMD/SMT"}),
+                                 (["0402"], "", "", {"value": "100nF"}), (["0402"], "", "CAP 100nF 16V", {})]:
+        r = SP.resolve(texts, "C", mpn, desc, **kw)
+        assert r["footprint"] and r["footprint"].startswith("C_0") and r["symbol"] == "C", (mpn, desc, kw, r)
+
+
+@lite
+def test_unlisted_tantalum_series_end_to_end(tmp_path):
+    plan = _run(tmp_path, "Designator,Value,Footprint,Description,MPN,Manufacturer\n"
+                          "C12,10uF,1206,CAP 10UF 16V 10% 1206,TMCMA1C106MTRF,Vishay\n"
+                          "C13,100nF,0603,CAP CER 0.1UF 50V X7R 0603,CL10B104KB8NNNC,Samsung\n"
+                          "C14,100nF,0603,,GRM188R71H104KA93D,Murata\n"
+                          "R14,10k,,,RC0603FR-0710KL,Yageo\n")
+    st = {_mpn(i): (i["status"], _fp(i)) for i in plan.values()}
+    assert sorted(n for n, (s, _) in st.items() if s == "ready") == ["CL10B104KB8NNNC", "GRM188R71H104KA93D", "RC0603FR-0710KL"], st
+    assert not st["TMCMA1C106MTRF"][1].startswith("standard:"), st
+
+
 # ---------------------------------------------------------------- a4 M1 the Value cell names no land by itself
 def test_a_bare_number_in_the_value_cell_is_not_a_size():
     assert SP.resolve([""], "R", "", "RES 1% 1/4W", value="1210")["footprint"] is None
@@ -292,3 +328,27 @@ def test_bidirectional_tvs_never_gets_a_symbol_with_a_cathode():
     assert SP.symbol_kind("D", "SS14", "D_SMA", "Schottky 1A 40V")[0] == "D_Schottky"
     assert SP.symbol_kind("D", "MMSZ5231B", "D_SOD-123", "Zener 5.1V")[0] == "D_Zener"
     assert SP.symbol_kind("D", "1N4148W", "D_SOD-123", "Diode")[0] == "D"
+
+
+# ---------------------------------------------------------------- the ready count: ordinary lines stay ready
+ORDINARY = """Designator,Value,Footprint,Description,MPN,Manufacturer
+R1,10k,0603,,,
+R2,22k,,,RC0603FR-0722KL,Yageo
+C2,100nF,,,GRM188R71H104KA93D,Murata
+C3,100nF,,,CL10B104KB8NNNC,Samsung
+C6,10nF,0603,,,
+C4,,0603,CAP CER 0.1UF 50V X7R 0603,,
+R3,,0603,RES SMD 47K OHM 1% 1/10W 0603,,
+R4,4k7,0805,RES 4.7K OHM 1% 1/8W 0805,RC0805FR-074K7L,YAGEO
+C5,1uF,0603,CAP CER 1UF 16V X5R 0603,CL10A105KO8NNNC,Samsung Electro-Mechanics
+L1,600R,0603,FERRITE BEAD 600 OHM 0603,BLM18AG601SN1D,Murata
+D1,,SOD-123,DIODE GEN PURP 100V 150MA SOD123,1N4148W,
+"""
+
+
+@lite
+def test_ordinary_lines_stay_ready(tmp_path):
+    plan = _run(tmp_path, ORDINARY)
+    st = {n: (i["status"], _why(i)) for n, i in plan.items()}
+    assert len(plan) == 11 and all(s == "ready" for s, _ in st.values()), st
+    assert all(_fp(i).startswith("standard:") for i in plan.values()), {n: _fp(i) for n, i in plan.items()}

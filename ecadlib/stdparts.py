@@ -2091,6 +2091,17 @@ def resolve(texts, kind=None, mpn="", description="", value="", maker="", search
         return {"footprint": None, "fp_how": f"the description says {multi!r}: more than two terminals, not a two-pad "
                 "chip land", "kicad_ref": None, "symbol": None, "sym_how": f"the description says {multi!r}: not a "
                 "two-pin part"}
+    if kind == "C" and not _no_mpn(mpn) and not (code and code["kind"] == "C") and mpn_size(mpn, maker)[0] != "C" \
+            and not says_unpolarized(description, value, cap_words(search), *texts) and not names_c_chip(texts):
+        # review 2026-11-23 (1.12): the test is turned round. A list of polarized series always misses one (Vishay
+        # TMCM / T58, AVX TACR, ROHM TCA ...), so a capacitor with a part number gets the unpolarized chip only when
+        # something says it is ceramic: an MLCC code reads the whole number, or the line or the part search names a
+        # ceramic dielectric. POLAR_CAP above only chooses the polarized side; it no longer permits this one
+        return held(f"capacitor {mpn}: nothing says it is ceramic (no MLCC part-number code reads the number, and "
+                    "neither the line nor the part search names a ceramic dielectric such as X7R or C0G, or a film), so it may "
+                    "be a tantalum or polymer part with a + side: not built as an unpolarized chip; write the "
+                    "dielectric in the description, or name its footprint",
+                    f"capacitor {mpn}: polarized or not is not known (nothing says ceramic)")
     fk = {"Q": None, "U": None}.get(kind, kind)
     other = next((DESC_LAND.search(x) for x in said if DESC_LAND.search(x)), None) if kind in CHIP_PREFIX else None
     if other:                                             # 'LED 0603 reverse mount': the size is the body, not the land

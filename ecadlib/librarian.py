@@ -629,11 +629,13 @@ def passive_kind(item, ln=None):
         return kind if kind in ("NTC", "PTC", "VAR") and SP.SENSOR_FOLDER[kind] == cat else "TH" if cat == "Thermistors" else None
     if cat == "Resistors":
         return "R"
-    if cat == "Capacitors":                  # polarized by its land, its description or its part number's series
-        mpn = SP._norm(_par(item).get("Manufacturer Part Number", ""))     # (KEMET T491, AVX TAJ, Panasonic EEE ...)
-        bom_fp = SP._strip_lib(str((ln or {}).get("footprint") or "")).strip()
-        return "CP" if fp.startswith("CP_") or bom_fp.startswith("CP_") or SP.says_polarized(desc) or \
-            (mpn and SP.POLAR_CAP.match(mpn)) else "C"
+    if cat == "Capacitors":                  # polarized by its land, any cell of its line or its part number's series
+        if polar:                            # (KEMET T491, AVX TAJ, Panasonic EEE ...)
+            return "CP"
+        if mpn and not (code and code["kind"] == "C") and SP.mpn_size(mpn, par.get("Manufacturer", ""))[0] != "C" \
+                and not SP.says_unpolarized(desc, value, *cells) and not SP.names_c_chip(cells):
+            return None                      # a part number no MLCC code reads, nothing says ceramic: not known to be
+        return "C"                           # unpolarized, so no generic capacitor (stdparts.resolve says why)
     if cat == "Inductors":
         return "L"
     if cat == "Diodes" and (fp.startswith("LED_") or SP.says_led(item.get("description"))):
