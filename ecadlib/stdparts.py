@@ -649,17 +649,26 @@ def _mpn_rules():
         ("bourns", c(r"CR" + imp + r"-[A-Z][A-Z/]-[0-9R]{3,4}[EG]?LF"), "R", None),
         ("koa", c(r"RK73[HBZ](1H|1E|1J|2A|2B|2E|2H|3A)TT[A-Z]{1,2}(?:[0-9R]{3,4}[A-Z])?"), "R", koa),
         ("uni-royal", c(imp + r"W[A-Z0-9][A-Z][0-9]{3}[0-9JKLMR]T[0-9A-Z]E"), "R", None),        # 0603WAF1002T5E
+        # review 2026-11-23 round 3 (Part 2): three more chip series seen in the real BOMs, whose code names the size.
+        # Stackpole's thin film RNCF / RNCS / RNCP (RNCF0805DTE23K2), TE's thin film CPF (CPF0603B10KE1: size,
+        # tolerance, value, TCR, packing digit; Vishay's leaded CPF1 / CPF2 end otherwise) and Fenghua's MLCC
+        # (0603B104K500NT, the form Walsin writes too: size, dielectric CG / N / B / X / F, capacitance, tolerance,
+        # voltage, N or C, T)
+        ("stackpole", c(r"RNC[FSP]" + imp + r"[A-Z][TK][A-Z][0-9RKM]{3,6}"), "R", None),
+        ("te", c(r"CPF" + imp + r"[A-Z][0-9RKM]{2,5}[A-Z]\d"), "R", None),
+        ("fenghua", c(imp + r"(?:CG|N|B|X|F)(?:\d{3}|\dR\d)[BCDFGJKMZ]\d{3}[NC]T"), "C", None),
     ]
 
 
 MPN_RULES = _mpn_rules()
 # the names a BOM or a part search writes each rule's maker with (lower case; KEMET is a Yageo company, EPCOS TDK's)
-MAKER_NAMES = {"yageo": ("yageo", "phycomp"), "samsung": ("samsung", "semco"), "murata": ("murata",),
+MAKER_NAMES = {"yageo": ("yageo", "phycomp", "kemet"), "samsung": ("samsung", "semco"), "murata": ("murata",),
                "kemet": ("kemet", "yageo"), "panasonic": ("panasonic", "matsushita"),
                "vishay": ("vishay", "dale", "beyschlag", "draloric"), "stackpole": ("stackpole", "sei"),
                "bourns": ("bourns",), "koa": ("koa",), "tdk": ("tdk", "epcos"),
                "uni-royal": ("uni-royal", "uniroyal", "uni royal", "uniohm", "royalohm", "royal ohm", "厚声"),
-               "kyocera": ("kyocera", "avx")}
+               "kyocera": ("kyocera", "avx"), "te": ("te", "te connectivity", "tyco", "neohm", "holsworthy"),
+               "fenghua": ("fenghua", "fh", "风华", "walsin", "华新科")}
 NO_MAKER = re.compile(r"(?i)\s*(?:|-+|n/?a|none|tbd|any|generic|various|multiple|standard|unknown|\?+)\s*")
 
 
@@ -676,7 +685,12 @@ def mpn_size(mpn, maker=""):
     """-> (kind, imperial size) or (None, None). Only a part number one rule reads whole, and only a rule of the
     line's own maker when one is named (maker: the BOM's maker cell or the part search's)."""
     from . import mpn_decode as MD
-    s = re.sub(r"\s+", "", str(mpn or "").upper())
+    s = str(mpn or "")
+    m = re.fullmatch(r"\s*\(\s*([^()]+?)\s*\)\s*|\s*([^()]+?)\s*\(\s*([A-Za-z][\w .&-]*?)\s*\)\s*", s)
+    if m:                                                 # round 3: '(CL05B104KO5NNNC)', 'CL10C100JB8NNNC (Samsung)':
+        s = m.group(1) or m.group(2)                      # the number in brackets, or its maker in brackets after it
+        maker = maker if m.group(1) or not NO_MAKER.fullmatch(str(maker or "").lower()) else m.group(3)
+    s = re.sub(r"\s+", "", s.upper())
     d = MD.decode(s)                                      # the value decoder: whole number, size included
     if d and d["kind"] in ("R", "C") and d.get("size"):
         return (d["kind"], d["size"]) if maker_is(d["series"].split()[0].lower(), maker) else (None, None)
