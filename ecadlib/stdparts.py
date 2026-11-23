@@ -139,7 +139,7 @@ EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A
 # 2026-11-10: 'SMA FLAT' gave the standard SMA, 'TO-92 Formed Leads' the 1.27 mm inline holes): flat leads
 # (SMAF, SOD-123FL), a smaller namesake (Mini SMA), leads formed or kinked to another hole pattern
 OTHER_LAND = re.compile(r"(?<![A-Za-z])(flat(?:[ _-]?leads?)?|FL|mini|micro|sub|(?:pre[ -]?)?formed|kinked|"
-                        r"lead[ _-]?form\w*)(?![A-Za-z])", re.I)
+                        r"lead[ _-]?form\w*|gull[ _-]?wing|full[ _-]?pac?k)(?![A-Za-z])", re.I)
 # a lead count given beside the name: 'SOT-23 (5)', 'SOT-323 5 pins', '6 leads', '5L', '5-pin'
 LEAD_COUNT = re.compile(r"\(\s*(\d{1,2})\s*\)|(?<![\d.A-Za-z])(\d{1,2})[ -]?(?:pins?|leads?|ld|L)(?![A-Za-z])", re.I)
 # words in a footprint field that name a part with more pads, or another land, on a chip size code
@@ -168,7 +168,7 @@ MULTI_WORD = re.compile(
 # words in a description that name another land than the plain chip of the size code: an LED mounted through a hole
 # in the board or shining sideways sits on its own land
 DESC_LAND = re.compile(r"(?<![A-Za-z])(reverse[ _-]?(?:mount\w*|gull\w*)|side[ _-]?(?:view\w*|emit\w*|look\w*|fir\w*)|"
-                       r"right[ _-]?angled?)(?![a-z])", re.I)
+                       r"right[ _-]?angled?|R/A)(?![a-z])", re.I)
 # words that say a capacitor has a + side (tantalum, polymer, aluminium, niobium, electrolytic), in any maker's or
 # distributor's wording ('CAP TANT', 'CAP ALUM POLY'); 'non-polarized' / 'unpolarized' / 'bipolar' say the opposite
 # (review 2026-11-23: 'CAP TAN', '15uF/16V/TAN', 'POL', 'C-POL', EAGLE's device 'CPOL-EUC1206'; not 'tan δ', the loss)
@@ -1139,9 +1139,48 @@ def _other_bend(text, name):
 BARE_FAMILY = {"SOT23", "TO220", "TO220AB", "TO263", "TO252", "DPAK", "D2PAK", "TO92"}   # in a description: often the family
 
 
-def named_package(text, diode=False, weak=False, kind=None):
+# words beside a package name that leave it the plain land of that name; any other word left over (review 2026-11-23,
+# a4 M2: 'SMB Gull Wing', 'TO-220 Full Pack', 'SOT-23 Thin') may name another land, so it holds
+PKG_HARMLESS = set("smd smt package pkg case footprint diode diodes d led q u ic transistor mosfet bjt fet jedec jeita "
+                   "eiaj pin pins lead leads ld l std standard plastic".split())
+_PKG_TOKEN = re.compile(r"(?<![A-Z0-9])(SOT|TSOT|SOD|SC|DO|TO|SM[ABCF]|D2PAK|DPAK|MICROMELF|MINIMELF|MELF|LL)[-_ ]?(\d{0,3}[A-Z]{0,2})"
+                        r"(?:[-_ ]?(\d)L?)?(?![A-Z0-9]|[-_ ]?\d)")
+
+
+def _beside_package(text, name, span):
+    """The first word beside a package name (text[span]) that is not known to leave it the plain land `name`: another
+    name of the same land ('DO-214AC, SMA'), a lead count (checked by the caller), 'SMD', 'package', a number, and
+    for the lands that are mounted one way ('TO-220 vertical', an axial 'DO-41 P10.16mm horizontal') that way."""
+    rest = text[:span[0]] + " " + text[span[1]:]
+    rest = LEAD_COUNT.sub(" ", _strip_lib(rest) if re.match(r"^[A-Za-z0-9_.\-]+:", text[:span[0]]) else rest)
+    for m in _PKG_TOKEN.finditer(rest.upper()):           # another name: of the same land, or it is not this land
+        key = _norm(m.group(0))
+        key = re.sub(r"L$", "", key) if re.fullmatch(r"(SOT|TSOT)\d+\dL", key) else key
+        same = ALIASES.get(key) == name or DIODE_ALIASES.get(key) == name or \
+            (name == "SOT-23" and key in ("SOT233", "TO2363"))            # the 3 leads of SOT-23 said with the name
+        if not same:
+            return m.group(0).strip()
+    rest = _PKG_TOKEN.sub(" ", rest.upper())
+    ok = set(PKG_HARMLESS)
+    if name.startswith("TO-220"):
+        ok |= {"vertical", "standing", "upright"}
+    if name.startswith("TO-92"):
+        ok |= {"inline", "straight"}
+    if name.endswith("_Horizontal"):
+        ok |= {"axial", "horizontal", "laid", "lying", "tht", "through", "hole", "mm", "pitch", "bend"}
+    for tok in _SPLIT.split(rest):
+        tok = tok.strip(".,")
+        if not tok or not re.search(r"\w", tok) or tok.lower() in ok or re.fullmatch(r"\d{1,2}", tok) or \
+                (name.endswith("_Horizontal") and re.fullmatch(r"P?\d{1,2}(?:\.\d{1,2})?(?:MM)?", tok)):   # its bend (_other_bend)
+            continue
+        return tok
+    return None
+
+
+def named_package(text, diode=False, weak=False, kind=None, strict=False):
     """SOT/SOD/DO-214/TO names -> (table name, how) / (None, why) / (None, None). weak (a description): a bare family
-    name (SOT-23, TO-220 ...) counts only for a transistor or diode, where it means the 3-lead package."""
+    name (SOT-23, TO-220 ...) counts only for a transistor or diode, where it means the 3-lead package. strict (a
+    footprint text, a part search's case): every word beside the name must be understood (_beside_package)."""
     pdi = POWERDI123.search(str(text or ""))
     if pdi and diode and not POWER_PKG.search(POWERDI123.sub(" ", str(text))) and not EP_WORD.search(str(text)) \
             and not OTHER_LAND.search(POWERDI123.sub(" ", str(text))):
@@ -1183,14 +1222,43 @@ def named_package(text, diode=False, weak=False, kind=None):
         if name and have and said and have not in said:
             return None, (f"{m.group(0).strip()} with {said[0]} leads: {name} has {have}; name the package with its "
                           "lead count (SOT-23-5, SOT-353)")
+        left = _beside_package(str(text), name, m.span()) if strict and name and name in packages() else None
+        if left:
+            return None, (f"{m.group(0).strip()}: {left!r} beside the package name is not understood, so it may name "
+                          f"another land than the plain {name} (a lead form, a variant); name the package alone")
         if name and name in packages():
             return name, f"{m.group(0).strip()} -> {name}"
     return None, None
 
 
-def footprint_for(texts, kind=None, mpn="", weak=()):
+def not_plain_chip(texts):
+    """(text, word) for the first text of a line that names a part with more than two terminals or another land than
+    the plain chip of its size code, or None. One check for every text of the line: the footprint column, a KiCad
+    name, the value, the part search's case text and the description (review 2026-11-23, 1.3: the long word list was
+    only run over the description, so '0603 x4' or 'Resistor Network 0603' in the footprint column built a chip)."""
+    for t in texts:
+        t = str(t or "")
+        w = MULTI_WORD.search(t) or DESC_LAND.search(t)
+        if w:
+            return t.strip(), w.group(0).strip()
+    return None
+
+
+def unread_beside_size(texts, kind):
+    """(text, word) for the first footprint text that carries a chip size code and a word beside it that is not
+    understood, or None. A footprint text gives the chip's size only when the rest of it is understood: any other word
+    ('0603 frobnic', a variant no list knows) may name another land (review 2026-11-23, 1.3)."""
+    for t in texts:
+        left = unread_words(t, kind, footprint=True) if chip_size(t, strict=True) else None
+        if left:
+            return _strip_lib(t).strip(), left[0]
+    return None
+
+
+def footprint_for(texts, kind=None, mpn="", weak=(), maker=""):
     """texts: footprint-like strings in priority order (BOM footprint, KiCad footprint names); weak: descriptions and
-    values, trusted less (no JEDEC default sizes for IC families). kind: R C L LED D F or None.
+    values, trusted less (no JEDEC default sizes for IC families). kind: R C L LED D F or None. maker: the line's
+    maker (mpn_size: a part-number rule of another maker is not used).
     -> (table name, how) or (None, why)."""
     pk = packages()
     texts = [str(t) for t in texts if str(t or "").strip()]
@@ -1214,6 +1282,10 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
                           "the table's land for the size or package in its name)")   # (bare 'TO-92' is the package)
     if kind in CHIP_PREFIX:                              # chip passives: size from the texts, then the MPN
         sizes = {}
+        multi = not_plain_chip(texts + weak)              # any text of the line, before any size is read
+        if multi:
+            return None, (f"{_strip_lib(multi[0])[:60]!r} says {multi[1]!r}: more than two terminals or another land, "
+                          "not the plain two-pad chip of that size")
         for t in texts:                                   # a footprint field naming a multi-pad part or another
             w = NOT_CHIP.search(t)                        # land on a chip size ('LED_RGB_1210', '4x0603 array')
             if w:
@@ -1227,7 +1299,11 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
             s = chip_size(t, strict=t in texts)
             if s:
                 sizes.setdefault(s, t)
-        mk, ms = mpn_size(mpn)
+        left = unread_beside_size(texts, kind)
+        if left:
+            return None, (f"{left[0][:60]!r}: {left[1]!r} beside the size code is not understood, so it may name "
+                          "another land than the plain chip; write the size alone or the footprint's KiCad name")
+        mk, ms = mpn_size(mpn, maker)
         if ms and (mk == kind or (mk == "C" and kind == "C") or (mk == "L" and kind == "L")):
             sizes.setdefault(ms, f"MPN {mpn}")
         elif ms and mk != kind:
@@ -1250,7 +1326,7 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
             return None, f"{kind} chip {s}: not a standard KiCad size"
     why = None
     for t in texts + weak:
-        n, how = named_package(t, diode=kind in ("D", "LED"), weak=t not in texts, kind=kind)
+        n, how = named_package(t, diode=kind in ("D", "LED"), weak=t not in texts, kind=kind, strict=t in texts)
         if n or how:
             return n, how
         n, how = ic_package(t, defaults=t in texts)
@@ -1986,7 +2062,10 @@ def resolve(texts, kind=None, mpn="", description="", value="", maker="", search
     said = [str(x) for x in (description, value) if str(x or "").strip()]      # the line's free words
     weak = [description] + ([value] if value_names_size(value, kind) else [])
     if kind in ("NTC", "PTC", "VAR", "TH"):                # a thermistor / varistor: a resistor's chip land by size
-        name, how = footprint_for(list(texts), "R", "", weak=[description])     # (not the resistor MPN codes)
+        multi = not_plain_chip(said)                       # (the same checks as a chip resistor: review 2026-11-23)
+        if multi:
+            return held(f"{multi[0][:60]!r} says {multi[1]!r}: more than two terminals or another land, not a two-pad chip")
+        name, how = footprint_for(list(texts), "R", "", weak=weak)     # (not the resistor MPN codes)
         size = sensor_size(mpn)
         if not name and size:
             name, how = footprint_for([size], "R")[0], f"{mpn}: the series' size code says {size}"
@@ -2007,17 +2086,20 @@ def resolve(texts, kind=None, mpn="", description="", value="", maker="", search
                     "sym_how": "polarized capacitor, pin 1 = + as the land marks it"}
         return {"footprint": None, "fp_how": f"polarized capacitor: {how}", "kicad_ref": None, "symbol": None,
                 "sym_how": "polarized capacitor: pin 1 = + only with a footprint that marks it"}
-    multi = multi_terminal(description) if kind in CHIP_PREFIX else None
+    multi = multi_terminal(*said) if kind in CHIP_PREFIX else None
     if multi:                                             # 'RES ARRAY 4 RES 10K 1206': the size is the array's body
         return {"footprint": None, "fp_how": f"the description says {multi!r}: more than two terminals, not a two-pad "
                 "chip land", "kicad_ref": None, "symbol": None, "sym_how": f"the description says {multi!r}: not a "
                 "two-pin part"}
     fk = {"Q": None, "U": None}.get(kind, kind)
-    other = DESC_LAND.search(str(description or "")) if kind in CHIP_PREFIX else None
+    other = next((DESC_LAND.search(x) for x in said if DESC_LAND.search(x)), None) if kind in CHIP_PREFIX else None
     if other:                                             # 'LED 0603 reverse mount': the size is the body, not the land
         name, how = None, f"the description says {other.group(0)!r}: another land than the plain chip of that size"
     else:
-        name, how = footprint_for(list(texts), fk, mpn, weak=[description])
+        name, how = footprint_for(list(texts), fk, mpn, weak=weak if kind in CHIP_PREFIX else [description], maker=maker)
+        if not name and kind in CHIP_PREFIX and (not_plain_chip(texts) or unread_beside_size(texts, kind)):
+            return held(how)                              # a word in a footprint text says more than two terminals or
+            #                                               is not understood: no generic two-pin symbol either
         if name in TANT_LAND.values():                    # a tantalum land: only a polarized capacitor's (pin 1 = +)
             name, how = None, f"{name} is a polarized capacitor's land, but the part is not one (kind {kind or 'unknown'})"
     if not name:                                          # a known MPN family settles a bare family name (SOT-223, TO-220)

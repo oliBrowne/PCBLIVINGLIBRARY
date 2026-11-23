@@ -202,6 +202,66 @@ def test_venkel_capacitor_is_not_built_as_an_0201(tmp_path):
     assert str(by["GRM188R71H104KA93D"]["source"]["footprint"]).endswith("C_0603_1608Metric")
 
 
+# ---------------------------------------------------------------- 1.3 multi-pad and variant words in the footprint text
+def test_multi_pad_words_in_the_footprint_column_build_nothing():
+    for kind, texts in [("R", ["RESNET 0603", "Resistor Network 0603", "R-PACK 0603", "0603 x4", "0603 X 4", "0603*4",
+                               "0603 4R", "0603 8P4R", "QUAD 0603", "0603 ISO", "0603 bussed", "0603 network",
+                               "0603 (4 resistors)", "0603 4-element", "1206 convex", "1206 concave", "0603 isolated x4",
+                               "0603 4 PIN", "1206 4-terminal", "1206 4T", "1206 kelvin", "0805 4 pads", "2512 4-wire"]),
+                        ("L", ["0805 common mode", "CMC 0805", "0805 CMC", "0805 2-line", "0805 4P", "0805 dual",
+                               "1210 coupled", "0805 4 pin"]),
+                        ("C", ["0603 feedthrough", "0603 3-terminal", "0603 3T", "0603 3 PAD", "0603 X2Y", "0603 x4"]),
+                        ("LED", ["0603 bicolor", "0603 dual", "0603 2-color", "1210 RGB", "0603 R/G", "LED 0603 RG",
+                                 "0603 side view", "0603 reverse mount", "0603 right angle"])]:
+        for t in texts:
+            r = SP.resolve([t], kind, "", "", value="10k" if kind == "R" else "")
+            assert r["footprint"] is None and r["symbol"] is None, (kind, t, r)
+    r = SP.resolve(["0603"], "LED", "", "LED RED CLEAR 0603 SMD R/A")
+    assert r["footprint"] is None, r
+    for kind, mpn, texts, desc in [("NTC", "", ["0603 4-pad"], "NTC"), ("NTC", "", ["0603 array"], "NTC")]:
+        assert SP.resolve(texts, kind, mpn, desc)["footprint"] is None
+
+
+def test_plain_footprint_texts_still_build():
+    for kind, t, want in [("R", "0603", "R_0603_1608Metric"), ("R", "R_0603_1608Metric", "R_0603_1608Metric"),
+                          ("R", "Resistor_SMD:R_0603_1608Metric", "R_0603_1608Metric"), ("C", "C0805", "C_0805_2012Metric"),
+                          ("C", "0603 (1608 Metric)", "C_0603_1608Metric"), ("R", "RESC1608X55N", "R_0603_1608Metric"),
+                          ("C", "CAP 0402", "C_0402_1005Metric"), ("R", "SMD 0603", "R_0603_1608Metric"),
+                          ("LED", "LED 0603", "LED_0603_1608Metric"), ("L", "0805", "L_0805_2012Metric")]:
+        r = SP.resolve([t], kind, "", "")
+        assert r["footprint"] == want, (kind, t, r)
+
+
+def test_package_variant_words_beside_the_name_build_nothing():
+    for kind, t in [("D", "DO-215AA, SMB Gull Wing"), ("D", "DO-215AC, SMA Gull Wing"), ("Q", "TO-220 Full Pack"),
+                    ("Q", "TO-220 FullPak"), ("U", "SOT-23 Thin"), ("D", "SMA FLAT"), ("Q", "TO-92 Formed Leads"),
+                    ("D", "SOD-123 frobnic")]:
+        r = SP.resolve([t], kind, "", "Diode" if kind == "D" else "")
+        assert r["footprint"] is None, (kind, t, r)
+    for kind, t, want in [("D", "DO-214AC, SMA", "D_SMA"), ("D", "SMA", "D_SMA"), ("D", "SOD-123", "D_SOD-123"),
+                          ("D", "SMB (DO-214AA)", "D_SMB"), ("Q", "SOT-23", "SOT-23"), ("D", "SC-76, SOD-323", "D_SOD-323"),
+                          ("D", "Diode_SMD:D_SOD-123", "D_SOD-123"), ("D", "SOD-123 SMD", "D_SOD-123")]:
+        r = SP.resolve([t], kind, "", "Diode" if kind == "D" else "")
+        assert r["footprint"] == want, (kind, t, r)
+
+
+@lite
+def test_footprint_column_words_end_to_end(tmp_path):
+    plan = _run(tmp_path, """Designator,Value,Footprint,Description,MPN,Manufacturer
+R10,10k,0603 x4,RES 10K 5%,CAT16-103J4LF,Bourns
+R11,10k,Resistor Network 0603,RES 10K 5%,,
+R12,0R01,1206 4-terminal,RES 0.01 OHM 1%,WSK1206R0100FEA,Vishay
+R13,10k,0603 8P4R,RES 10K 5%,,
+L10,90R,0805 CMC,90 OHM 400MA,ACM2012-900-2P-T002,TDK
+C10,100nF,0603 3-terminal,CAP 0.1UF 16V,NFM18PC104R1C3D,Murata
+D21,,"DO-215AA, SMB Gull Wing",TVS DIODE 5VWM unidirectional,SMBG5.0A,Vishay
+R1,22k,0603,RES 22K OHM 1% 0603,,
+""")
+    st = {n: (i["status"], _fp(i)) for n, i in plan.items()}
+    assert len(st) == 8 and [n for n, (s, _) in st.items() if s == "ready"] == ["RES-0603-22k"], st
+    assert not [n for n, (s, fp) in st.items() if n != "RES-0603-22k" and fp.startswith("standard:")], st
+
+
 # ---------------------------------------------------------------- a4 M1 the Value cell names no land by itself
 def test_a_bare_number_in_the_value_cell_is_not_a_size():
     assert SP.resolve([""], "R", "", "RES 1% 1/4W", value="1210")["footprint"] is None
