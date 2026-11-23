@@ -145,6 +145,19 @@ _MAKER_LEGAL = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "
 _MAKER_ALIAS.update({"ANALOGDEVICES": "ANALOG", "NATIONALSEMICONDUCTOR": "TEXASINSTRUMENTS",
                      "CENTRAL": "CENTRALSEMICONDUCTOR", "TEXAS": "TEXASINSTRUMENTS",    # "Central" alone on a BOM
                      "PERICOM": "DIODES", "DIALOG": "RENESAS", "SIPEX": "MAXLINEAR", "CATALYST": "ON"})   # bought
+# 2026-11-23 review round 2 (I7): one company under two names, whose own listing was refused as another maker's (a
+# needless hold). Only names that are the same company, or one it bought whose parts it sells under the same numbers.
+_MAKER_ALIAS.update({"MCC": "MICROCOMMERCIAL",                           # Micro Commercial Components / Co
+                     "AUSTRIAMICROSYSTEMS": "OSRAM",     # ams-OSRAM (AMSOSRAM above). Bare "AMS" is not added: on a BOM it
+                                                         # is also Advanced Monolithic Systems (AMS1117), as the tests pin
+                     "UTC": "UNISONIC",                                  # Unisonic Technologies' brand
+                     "SKYWORKSSOLUTIONS": "SKYWORKS",
+                     "ISSI": "SILICONSOLUTION", "ISSISILICONSOLUTION": "SILICONSOLUTION",   # Integrated Silicon Solution Inc. (DigiKey: "ISSI, Integrated ...")
+                     "MXIC": "MACRONIX",
+                     "INVENSENSE": "TDK", "TDKINVENSENSE": "TDK",        # TDK since 2017, listed as "TDK InvenSense"
+                     "RFMD": "QORVO", "RFMICRO": "QORVO", "TRIQUINT": "QORVO",   # RF Micro Devices + TriQuint = Qorvo, 2015
+                     "HRS": "HIROSE",                                    # Hirose Electric's brand
+                     "JAE": "JAPANAVIATION"})                            # Japan Aviation Electronics
 # the words of a company name an alias maps to, where it has several: where a shorter name may end in it ("Texas" /
 # "TI"), and where not ("Teco" is no "TE" = TE Connectivity)
 _ALIAS_WORDS = {"TEXASINSTRUMENTS": ["TEXAS", "INSTRUMENTS"], "TECONNECTIVITY": ["TE", "CONNECTIVITY"],
@@ -155,7 +168,12 @@ _ALIAS_WORDS = {"TEXASINSTRUMENTS": ["TEXAS", "INSTRUMENTS"], "TECONNECTIVITY": 
 # a company's other makers under its own brand, named on their own (distributors list both): the whole key only, so
 # "Wurth" is Würth Elektronik and Würth Electronics Midcom, never any "Wurth <anything>" (Würth Industrie, a fastener
 # trader), and "Catalyst Lighting" is no Catalyst Semiconductor (onsemi)
-_MAKER_GROUP = {"WURTHELEKTRONIK": {"WURTHMIDCOM"}}
+_MAKER_GROUP = {"WURTHELEKTRONIK": {"WURTHMIDCOM"},
+                # 2026-11-23 review round 2 (I7): a line that moved to another company with its part numbers. The two
+                # keys stay apart (no alias), so each still matches its own other names ("Cree" / "Cree LED", the LED
+                # company Wolfspeed sold, is not Wolfspeed): only this pair is one maker.
+                "CREE": {"WOLFSPEED"},                         # Cree's SiC / RF parts: Cree renamed itself Wolfspeed, 2021
+                "SILICONLABORATORIES": {"SKYWORKS"}}           # Silicon Labs' isolation / timing / power parts, 2021
 # Nexperia (NXP's Standard Products until 2017) is its own company now, with its own lifecycles and datasheets for the
 # discretes and logic NXP once sold: an NXP line is not matched to a Nexperia listing (nor Philips / Freescale to it).
 

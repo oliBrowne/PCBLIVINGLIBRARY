@@ -85,6 +85,59 @@ def test_lcsc_description_of_the_boms_own_lcsc_number_is_still_taken():
         assert r["src_description"] == "16MHz 20pF Crystals" and "not used" not in r["notes"], (maker, theirs, r)
 
 
+# ------------------------------------------------------------------ I7 one company under two names
+SAME = [("MCC", "Micro Commercial Components"), ("MCC", "Micro Commercial Co"), ("Micro Commercial Components", "Micro Commercial Co"),
+        ("MCC", "MCC (Micro Commercial Components)"),
+        ("austriamicrosystems", "ams OSRAM"), ("austriamicrosystems AG", "ams-OSRAM USA INC."), ("OSRAM Opto Semiconductors", "ams-OSRAM"),
+        ("UTC", "Unisonic Technologies"), ("UTC", "UTC(Unisonic Tech)"), ("Unisonic", "Unisonic Technologies Co., Ltd"),
+        ("Cree", "Wolfspeed"), ("Cree Inc.", "Wolfspeed, Inc."), ("Cree/Wolfspeed", "Wolfspeed"),
+        ("Silicon Labs", "Skyworks Solutions Inc."), ("Silicon Laboratories", "Skyworks"), ("SiLabs", "Skyworks Solutions"),
+        ("Skyworks", "Skyworks Solutions Inc."),
+        ("ISSI", "Integrated Silicon Solution Inc."), ("ISSI", "ISSI, Integrated Silicon Solution Inc"),
+        ("MXIC", "Macronix"), ("Macronix International", "MXIC(Macronix)"),
+        ("InvenSense", "TDK InvenSense"), ("InvenSense", "TDK"),
+        ("RFMD", "Qorvo"), ("RF Micro Devices", "Qorvo US Inc."), ("TriQuint", "Qorvo"),
+        ("HRS", "Hirose Electric Co Ltd"), ("HRS(Hirose)", "Hirose"),
+        ("JAE", "JAE Electronics"), ("JAE", "Japan Aviation Electronics"),
+        # in the table before this round: still one maker
+        ("Fairchild", "onsemi"), ("Linear Technology", "Analog Devices Inc."), ("Maxim Integrated", "Analog Devices"),
+        ("International Rectifier", "Infineon Technologies"), ("Atmel", "Microchip Technology"),
+        ("Microsemi", "Microchip"), ("Cree", "Cree LED")]
+# a wrong alias lets another maker's listing through: none of these is the other
+DIFFER = [("MCC", "Microchip"), ("Micro Commercial Co", "Microchip Technology"), ("MCC", "Micro Crystal"),
+          ("ams", "Advanced Monolithic Systems"), ("AMS", "AMSC"), ("ams", "Analog Devices"), ("OSRAM", "Cree"),
+          ("AMS", "ams OSRAM"), ("ams", "ams-OSRAM"),        # "AMS" on a BOM is also Advanced Monolithic Systems (AMS1117): left apart
+          ("UTC", "UMW"), ("Unisonic", "Unisem"), ("UTC", "Texas Instruments"),
+          ("Cree", "Infineon"), ("Wolfspeed", "Cree LED"), ("Wolfspeed", "onsemi"),
+          ("Silicon Labs", "Silicon Storage Technology"), ("Skyworks", "Qorvo"), ("Silicon Labs", "Silicon Motion"),
+          ("Skyworks", "Microchip"), ("ISSI", "Winbond"), ("ISSI", "Silicon Labs"), ("MXIC", "Micron"), ("Macronix", "Microchip"),
+          ("InvenSense", "Bosch Sensortec"), ("RFMD", "Skyworks"), ("TriQuint", "Analog Devices"), ("HRS", "Harris"),
+          ("Hirose", "Hirosugi"), ("JAE", "JST"), ("JAE", "Japan Display"),
+          ("Nexperia", "onsemi"), ("Nexperia", "Diodes Incorporated"), ("Nexperia", "Texas Instruments"), ("NXP", "onsemi")]
+
+
+RENAMED = [("Cree", "Wolfspeed, Inc.", "C3M0065090D"), ("MCC", "Micro Commercial Co", "SS34-TP"),
+           ("Silicon Labs", "Skyworks Solutions Inc.", "SI8621BB-B-IS"), ("UTC", "Unisonic Technologies", "LM358G-S08-R")]
+
+
+def test_one_company_under_two_names_is_one_maker():
+    for a, b in SAME:
+        assert P.same_maker(a, b) and P.same_maker(b, a), (a, b)
+
+
+def test_another_company_is_still_another_maker():
+    for a, b in DIFFER:
+        assert not P.same_maker(a, b) and not P.same_maker(b, a), (a, b)
+
+
+def test_a_renamed_makers_own_listing_is_taken_and_a_strangers_refused():
+    for maker, theirs, mpn in RENAMED:
+        r = _row(_Cad(theirs), maker=maker, mpn=mpn)
+        assert r["src"] == "plug" and r["src_datasheet"] == SHEET and "not used" not in r["notes"], (maker, theirs, r)
+        r = _row(_Cad("HGSEMI"), maker=maker, mpn=mpn)
+        assert r["src"] == "" and r["src_datasheet"] == "" and f"is by HGSEMI, not {maker}" in r["notes"], (maker, r)
+
+
 if __name__ == "__main__":
     import sys
     fns = [f for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
