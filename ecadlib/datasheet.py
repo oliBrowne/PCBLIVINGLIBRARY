@@ -5741,7 +5741,7 @@ class Reader:
             return rec["message"], "cached"
         if self.assistant is not None:                # reader = "assistant": its own folder (<part>-check-<key>), read
             from . import ds_assistant as DA          # from the pages alone, judged by the same code as the API's
-            ajob = dict(job, key=key, body=body, name=f"{job.get('name') or job.get('part')}-check")
+            ajob = dict(job, key=key, body=body, name=str(job.get("name") or job.get("part")))   # <part>-check-<key>
             msg = DA.answer(self.assistant, ajob)
             self.assistant_asked.add(DA.folder(self.assistant, ajob).name)
             if msg is None:
