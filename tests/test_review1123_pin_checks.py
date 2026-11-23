@@ -220,6 +220,65 @@ def test_the_pin_drawing_compares_the_mark_too():
     assert PD.compare("other", pair, {"1": "CLK_P", "2": "CLK_N"}) == []
 
 
+# ------------------------------------------------------------------ 1.10: a pin the symbol calls NC is confirmed too
+BUCK = {1: "Pin Functions\nNAME NO. DESCRIPTION\nBOOT 1 Bootstrap\nVIN 2 Supply input\nEN 3 Enable\nRT 4 Timing resistor\n"
+           "FB 5 Feedback\nCOMP 6 Compensation\nGND 7 Ground\nSW 8 Switch node\n"}
+BUCK_PINS = [("1", "BOOT"), ("2", "VIN"), ("3", "EN"), ("4", "RT"), ("5", "FB"), ("6", "COMP"), ("7", "GND"), ("8", "SW")]
+
+
+def read(pins):
+    return {"symbol": {"pins": [{"num": n, "name": s} for n, s in pins]}, "spec": {"pin_count": 8}, "needs_review": []}
+
+
+def test_a_signal_pin_the_symbol_calls_nc_disagrees_with_the_table():
+    assert PT.check(BUCK, BUCK_PINS, pin_count=8)["status"] == "agreed"
+    v = PT.check(BUCK, [(n, "NC" if n in "35" else s) for n, s in BUCK_PINS], pin_count=8)
+    assert v["status"] == "disagreed" and "pin 3" in v["why"] and "EN" in v["why"], v
+    v = PT.check(BUCK, [(n, s if s in ("VIN", "GND") else "NC") for n, s in BUCK_PINS], pin_count=8)
+    assert v["status"] == "disagreed", v
+    blank = [(n, "" if n in "35" else s) for n, s in BUCK_PINS]              # left blank by a read: not confirmed
+    assert PT.check(BUCK, blank, pin_count=8)["status"] == "agreed"          # (KiCad draws some pins unnamed)
+    v = PT.check(BUCK, blank, pin_count=8, blank=True)
+    assert v["status"] == "unchecked" and "pin 3" in v["why"], v
+    # a table that prints the number first
+    first = {1: "PIN NAME DESCRIPTION\n1 OUT1 output 1\n2 IN1- inverting input 1\n3 IN1+ non-inverting input 1\n4 GND ground\n"
+                "5 IN2+ non-inverting input 2\n6 IN2- inverting input 2\n7 OUT2 output 2\n8 VCC supply"}
+    amp = [("1", "OUT1"), ("2", "NC"), ("3", "NC"), ("4", "GND"), ("5", "NC"), ("6", "NC"), ("7", "NC"), ("8", "VCC")]
+    v = PT.check(first, amp, pin_count=8)
+    assert v["status"] == "disagreed" and "pin 2" in v["why"], v
+
+
+def test_a_real_nc_pin_still_agrees():
+    for nc in ("NC 3 No connection", "N.C. 3 Not connected internally", "NC 3, 5 No connect", "RESERVED 3 Leave open",
+               "— 3 No internal connection", ""):
+        text = {1: BUCK[1].replace("EN 3 Enable\n", nc + "\n" if nc else "")}
+        v = PT.check(text, [(n, "NC" if n == "3" else s) for n, s in BUCK_PINS], pin_count=8)
+        assert v["status"] == "agreed", (nc, v)
+    first = {1: "PIN NAME DESCRIPTION\n1 IN Input\n2 GND Ground\n3 No internal connection\n4 FB Feedback\n5 OUT Output\n"}
+    pins = [("1", "IN"), ("2", "GND"), ("3", "NC"), ("4", "FB"), ("5", "OUT")]
+    assert PT.check(first, pins)["status"] == "agreed"
+    # a line of the description that begins with a number is no row of a table that prints the name first
+    wrapped = {1: BUCK[1].replace("EN 3 Enable\n", "NC 3 No connection\n").replace("RT 4 Timing resistor\n",
+                                                                                  "RT 4 Timing resistor, at least\n3 kOhm to ground\n")}
+    assert PT.check(wrapped, [(n, "NC" if n == "3" else s) for n, s in BUCK_PINS], pin_count=8)["status"] == "agreed"
+
+
+@lite
+def test_a_read_that_calls_signal_pins_nc_is_not_confirmed(monkeypatch):
+    monkeypatch.setattr(PT, "check_pdf", lambda data, pins, **kw: PT.check(BUCK, pins, pin_count=kw.get("pin_count"), blank=kw.get("blank")))
+    assert L.read_confirmed(read(BUCK_PINS), {"data": b"x"}, ["symbol"])
+    for pins in ([(n, "NC" if n in "35" else s) for n, s in BUCK_PINS],
+                 [(n, s if s in ("VIN", "GND") else "NC") for n, s in BUCK_PINS],
+                 [(n, s if s in ("VIN", "GND") else "") for n, s in BUCK_PINS]):
+        assert L.read_confirmed(read(pins), {"data": b"x"}, ["symbol"]) is None, pins
+    # few_named, as its two sibling callers apply it: a table that prints two of the eight pins compared too little
+    two = {1: "Pin Functions\nNAME NO. DESCRIPTION\nVIN 2 Supply input\nGND 7 Ground\n"}
+    monkeypatch.setattr(PT, "check_pdf", lambda data, pins, **kw: PT.check(two, pins, pin_count=kw.get("pin_count"), blank=kw.get("blank")))
+    pins = [(n, s if s in ("VIN", "GND") else "NC") for n, s in BUCK_PINS]
+    assert PT.check(two, pins, pin_count=8)["status"] == "agreed"
+    assert L.read_confirmed(read(pins), {"data": b"x"}, ["symbol"]) is None
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -2567,7 +2567,9 @@ def read_confirmed(res, job, got, drawn=None):
         from . import pin_text as PT
         pins = [(q.get("num"), q.get("name")) for q in (res.get("symbol") or {}).get("pins") or ()]
         data = job.get("data")
-        v = PT.check_pdf(data, pins, pin_count=(res.get("spec") or {}).get("pin_count"))
+        # few_named, as variant_agrees and pinout_agrees apply it: a read that names two pins of eight and calls the
+        # rest NC compared too little to release on (review 2026-11-23, 1.10)
+        v = few_named(PT.check_pdf(data, pins, pin_count=(res.get("spec") or {}).get("pin_count"), blank=True), pins)
         if v["status"] == "agreed":
             why.append(f"{v['pins']} pins agree with the {v.get('where', 'pin table')} on PDF page {v['page']} (text layer)")
         elif v["status"] == "unchecked" and not v.get("doubt") and drawn is not None:   # no pin table in the text: the pinout DRAWING, read

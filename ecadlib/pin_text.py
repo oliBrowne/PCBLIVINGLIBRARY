@@ -17,7 +17,9 @@ supplies swapped) is unchecked even when one column agrees: the text does not sa
 an agreeing table when another page names every pin too but prints some only with other numbers (a variant's own
 table on another page), whichever page comes first.
 Only "agreed" lets a part through without a person; "unchecked" keeps the hold it had. A scanned PDF (no text) is
-always unchecked. Pins named N.C. / NC / DNC are skipped (tables often print them as one row "NC 1, 5, 8")."""
+always unchecked. Pins named N.C. / NC / DNC are not looked for by name (tables often print them as one row
+"NC 1, 5, 8", or leave them out), but once the named pins agree the table's row for such a pin's number must be a
+no-connect row or absent (_quiet), and the active-low marks are compared on their own (_marks)."""
 import re
 
 EMPTY = {"—", "–", "-", "--", "‒", "N/A", "NA"}     # a dash in a table column: no pin in that package
@@ -471,7 +473,61 @@ def _marks(pins, rows, col, pages, bars=None):
     return None
 
 
-def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), bars=None):
+_NC_ROW = re.compile(r"(?i)^(?:N\.?\s*/?\s*C\.?|DNC|DNU|NU|NO(?:T|N)?[\s-]*(?:INTERNAL(?:LY)?\s*)?CONNECT(?:ION|ED)?|"
+                     r"DO\s*NOT\s*CONNECT|RESERVED|RSVD|NOT\s*USED|UNUSED|[-–—‒]+)$")
+
+
+def _quiet(quiet, pins, rows, col, pages, loose=()):
+    """The pins the symbol calls NC, or leaves without a name, confirmed too (review 2026-11-23, 1.10: they were
+    dropped before comparing, so a read that called EN and FB 'NC' agreed on the six pins left). In the table the
+    named pins agreed with (its rows from the first to the last matched one, and the rows next to them of the same
+    width), the row that prints such a pin's number in the agreeing column must be a no-connect row (NC, N.C., DNC,
+    RESERVED, a dash, 'No internal connection') or absent. -> None, or the verdict: 'disagreed' when the table names
+    the number of a pin the symbol calls NC otherwise, 'unchecked' for one the symbol leaves blank (check's
+    `blank`)."""
+    if not quiet:
+        return None
+    names = [(n, norm_name(nm), loose_class(nm) if norm_name(nm) in loose else None) for n, nm in pins]
+    cells = [[x for _, x in nums] for _, nums in rows]
+
+    def cands(k):
+        c, nums = rows[k]
+        words = c[:nums[0][0]] or c[nums[-1][0] + 1:][:3]
+        return {" ".join(words[i:j]) for i in range(len(words)) for j in range(i + 1, min(len(words), i + 3) + 1)}
+
+    def has(k, n):
+        return col < len(cells[k]) and str(n) in _numbers(cells[k][col])
+    hit = [k for k in range(len(rows)) for n, nm, kind in names if has(k, n)
+           and any(norm_name(c) == nm or kind and loose_class(norm_name(c)) == kind for c in cands(k))]
+    if not hit:
+        return None
+    lo, hi, wide = min(hit), max(hit), max(len(cells[k]) for k in hit)
+    while lo > 0 and len(cells[lo - 1]) == wide:
+        lo -= 1
+    while hi + 1 < len(rows) and len(cells[hi + 1]) == wide:
+        hi += 1
+    first = sum(1 for k in set(hit) if rows[k][1][0][0] == 0) * 2 > len(set(hit))     # the table prints the number first
+    named, blank = [], []
+    for n, nm in quiet:
+        mine = [k for k in range(lo, hi + 1) if has(k, n) and (rows[k][1][0][0] == 0) == first]
+        if not mine or any(_NC_ROW.match(c.strip(" .,;:()")) for k in mine for c in cands(k)):
+            continue                                   # no row for it, or a no-connect row: nothing says otherwise
+        c, nums = rows[mine[0]]
+        what = " ".join(c[:nums[0][0]] or c[nums[-1][0] + 1:][:1])
+        (named if nm else blank).append(f"pin {n} {what}")
+    page = pages[0]
+    if named:
+        return {"status": "disagreed", "page": page,
+                "why": f"page {page}'s table names {', '.join(named[:4])}, and the symbol calls "
+                       f"{'it' if len(named) == 1 else 'them'} not connected"}
+    if blank:
+        return {"status": "unchecked", "page": page,
+                "why": f"page {page}'s table names {', '.join(blank[:4])}, and the symbol gives "
+                       f"{'it' if len(blank) == 1 else 'them'} no name: not compared"}
+    return None
+
+
+def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), bars=None, blank=False):
     """page_texts: {page number: text}; pins: [(num, name)]; figures: [(page, text)] of pinout drawings
     (figure_lines), each read as a table of its own; bars: bar_rows for these pages, when there is a PDF (the bars
     drawn over active-low names: _marks); pin_count: the package's, when known; part: the part number,
@@ -481,6 +537,9 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), b
     (TL074's 20-pin LCCC table after its 14-pin SOIC one) is another package's: it is not a doubt about this one."""
     pins = [(str(n).strip(), str(nm or "").strip()) for n, nm in pins or [] if str(n).strip()]
     most = max([int(n) for n, _ in pins if n.isdigit()] + [pin_count if isinstance(pin_count, int) else 0])
+    # confirmed after the named ones agree (_quiet). blank: a pin with no name too (a datasheet read's symbol; not a
+    # KiCad symbol's, which draws an op-amp's outputs and a gate's pins without a name)
+    quiet = [(n, nm) for n, nm in pins if NC.match(nm) or blank and not nm]
     pins = [(n, nm) for n, nm in pins if nm and not NC.match(nm)]
     if len(pins) < 2:
         return {"status": "unchecked", "why": "fewer than two named pins to compare"}
@@ -557,7 +616,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), b
             return {"status": "unchecked", "page": agreed["page"], "doubt": True,
                     "why": f"page {agreed['page']}'s table agrees, but page {pg} prints {', '.join(miss[:4])} with other "
                            "numbers (another package or variant?): which table is this part's is not in the text"}
-        return _marks(pins, *at, bars=bars) or agreed
+        return _quiet(quiet, pins, *at, loose=loose) or _marks(pins, *at, bars=bars) or agreed
     if best is None:
         return {"status": "unchecked", "why": "no pin table found in the text layer"}
     out = {"status": "unchecked", "why": best[2] or f"page {best[0]} names {best[1]} of {len(pins)} pins"}
@@ -875,13 +934,13 @@ def pin_orders_pdf(pdf_bytes, names, part=None, package=None, doubts=None):
     return pin_orders(page_texts(pdf_bytes), names, page_figures(pdf_bytes), part, package, doubts) if pdf_bytes else []
 
 
-def check_pdf(pdf_bytes, pins, pin_count=None, part=None, package=()):
+def check_pdf(pdf_bytes, pins, pin_count=None, part=None, package=(), blank=False):
     """check() on a PDF: its text layer's tables and its pinout drawings (page_figures). No PDF: unchecked.
     package: this part's land name and case texts (a table with one column per package then checks its column)."""
     if not pdf_bytes:
         return {"status": "unchecked", "why": "none of the part's datasheet links gave a PDF to check it against"}
     return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count, part=part,
-                 package=package, bars=lambda pages: bar_rows(pdf_bytes, pages))
+                 package=package, bars=lambda pages: bar_rows(pdf_bytes, pages), blank=blank)
 
 
 def bar_rows(pdf_bytes, pages):
