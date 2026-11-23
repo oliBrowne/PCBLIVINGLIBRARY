@@ -7,6 +7,48 @@ a minor release may change command-line options and file formats.
 
 ## [Unreleased]
 
+### Fixed
+
+A code review on 2026-11-23 found ways a wrong part could come out ready with no hold, all in the paths that release a
+part with no person's look. Each was shown with made-up inputs, none was seen in a real part. They are held now:
+
+- A resistor or capacitor with no part number is released as a generic chip only when every word on its BOM line is
+  understood (value, tolerance, rating, dielectric, size). `10uF tantalum`, `47uF electrolytic`, `1k x4` in the Value,
+  Comment or any other column are held.
+- A chip size is taken from a part number only when a maker's rule reads the whole number (Venkel's
+  `C0603X7R500-104KNE` was read with TDK's metric code and built as an 0201).
+- Words beside a size or package name in the footprint column (`0603 x4`, `0603 8P4R`, `1206 4-terminal`,
+  `SMB Gull Wing`, `TO-220 Full Pack`) hold the part instead of building the plain land.
+- A capacitor with a part number is built as an unpolarized chip only when something says it is ceramic or film (a
+  decoded MLCC number, a dielectric in the text, KiCad's own chip name). Tantalum and polymer series that were not on
+  the list (Vishay TMCM, T58, AVX TACR) are held.
+- A bare number in the Value column (`1210` for 1.21 k) is no longer read as the chip size.
+- A transistor's, SO-8 MOSFET's or diode's pin order is taken from the datasheet's text only when the text is about
+  this part's package (a family sheet's TO-92 table no longer gives its order to the SOT-23 part).
+- Active-low marks are compared in the free pin checks (Q and not-Q swapped, EN for not-EN), and pins a read calls NC
+  must be NC in the datasheet's table too.
+- A series diode pair with a joined `CATHODE/ANODE` label is no longer read as one diode.
+- The check of a land against the PDF's printed numbers no longer agrees with pads turned 90 degrees, nor with another
+  size's row of a family table.
+- The second read is asked for the terminal's length and width and for the pins on each side of a no-lead package; a
+  footprint built from a read's own numbers is released only when every number that places or sizes a pad was
+  compared. Second-read answers saved before this change do not cover those numbers and are asked for again.
+- A no-lead package whose read gives no pins per side is held, not built with a quarter of the pins on each side.
+- A PDF saved by your assistant is tested to name the part, like a downloaded one.
+- An assistant answer is used only for the request its folder was written for.
+- A schema error in a read no longer switches off the checks of the built footprint; an entry the read lists as
+  unresolved holds however it is worded.
+- Another maker's listing is never taken as this part's package or LCSC number (BOM says Vishay SS34, the source lists
+  only onsemi's).
+- BOM reader: a `Package (mm)` column of only 0603 / 0402 is noted and held; lines with no part number that differ in
+  an unmapped column (Color, Tolerance, Voltage) are held instead of merged; words before the number in a
+  `Manufacturer/MPN` cell are the maker only when ecadlib knows the maker; a crafted MPN cell no longer hangs the reader.
+
+### Changed
+
+- Expect more holds: these checks hold some correct parts too (for example an MLCC from a maker ecadlib has no
+  part-number rule for, with no dielectric on the line).
+
 ## [0.4.1] - 2026-11-22
 
 The first release since 0.4.0, with four weeks of work from `main`. Nothing in it needs a new setting, but a few
