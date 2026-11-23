@@ -17,7 +17,7 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, threading, time, unicodedata
+import argparse, base64, contextlib, copy, datetime, glob, hashlib, io, json, math, os, random, re, sys, threading, time, unicodedata
 from pathlib import Path
 
 import requests
@@ -2144,11 +2144,24 @@ def _header_mount(spec):
     return []
 
 
+ELECTROLYTIC_CAN = re.compile(r"alumin(?:i)?um[\w\s,-]{0,40}?electrolytic|\bCP_Elec_", re.I)
+NOT_CAN = re.compile(r"tantal|niob|non-?\s*electrolytic|polymer", re.I)   # solid / polymer chips: block bodies
+
+
+def _electrolytic_can(spec):
+    """An SMD aluminium electrolytic, by the read's description or KiCad's CP_Elec_ name: its two terminals are strips
+    0.65-1.3 mm wide under a 6.6-19 mm base plate (Panasonic FK/FC, Nichicon UWX, Wurth WCAP-ASLI), 7-13 % of the
+    body width (2026-11-22: EEE-FK1V101P's W 0.90 on an 8.3 mm plate was refused as a misread)."""
+    text = f"{spec.get('name') or ''} {spec.get('description') or ''}"
+    return bool(ELECTROLYTIC_CAN.search(text)) and not NOT_CAN.search(text)
+
+
 def _two_terminal_terms(spec):
     """A chip / molded part's terminals against its body (review 196 R-RD-1): a terminal in inches (SMC's terminal_width
     0.108-0.125 "mm"), wider than the body, or an inner_span as long as the body builds pads off the part with nothing
     else to catch it. Bounds no real part breaks (KiCad's 74 chip sizes, JEDEC DO-214, EIA tantalum cases, MELF): the
-    terminal_length max at least 5 % of the body length, terminal_width max at least 20 % of the body width and its nom
+    terminal_length max at least 5 % of the body length, terminal_width max at least 20 % of the body width (5 % for an
+    aluminium electrolytic whose maker's land sizes the pads: its terminals are narrow strips) and its nom
     no more than 1.1 x the body's, the inner_span max under the body length min. A molded part's terminal_width is
     needed: left blank, the pads would be built as wide as the body; a MELF's end caps are about its diameter.
     -> review lines (a failed read)."""
@@ -2160,9 +2173,10 @@ def _two_terminal_terms(spec):
     if T and L and 0 < T[2] < 0.05 * L[1]:
         out.append(f"terminal_length max {T[2]:g} mm is under 5% of the {L[1]:g} mm body_length, which is implausible "
                    "for a terminal (unit mislabelled, inches read as mm?)")
-    if b and W and 0 < b[2] < 0.2 * W[1]:
-        out.append(f"terminal_width max {b[2]:g} mm is under 20% of the {W[1]:g} mm body_width, which is implausible "
-                   "for a terminal (unit mislabelled, inches read as mm?)")
+    floor = 0.05 if _electrolytic_can(spec) and F.lead_land(spec) else 0.2   # (a can's strips under its base plate)
+    if b and W and 0 < b[2] < floor * W[1]:
+        out.append(f"terminal_width max {b[2]:g} mm is under {floor:.0%} of the {W[1]:g} mm body_width, which is "
+                   "implausible for a terminal (unit mislabelled, inches read as mm?)")
     if b and W and spec.get("lead_type") == "melf" and b[2] < 0.6 * W[1]:   # a MELF's end caps are its diameter
         out.append(f"terminal_width max {b[2]:g} mm is under 60% of the {W[1]:g} mm body diameter, which is implausible "
                    "for a MELF's end caps (they are as wide as the body; a land width read as the terminal?)")
@@ -4891,6 +4905,39 @@ def hold_on_doubt(inf, model, res):
                                  "read the datasheet yourself")
 
 
+
+def _own_second_read(msg, body, base, here, job):
+    """Raise crosscheck.Unavailable unless the assistant's answer in a check folder is a second read of its own: the
+    check's own schema (no field of a full extraction), and not any first read's answer for this part copied in
+    (review 2026-11-23: the first answer.json copied into the check folder agreed with itself and was released)."""
+    from . import crosscheck as CC
+    text = msg["content"][0]["text"]
+    try:
+        got = json.loads(text)
+    except ValueError:
+        got = None
+    schema = ((body.get("output_config") or {}).get("format") or {}).get("schema") or {}
+    top = set((schema.get("properties") or {}))
+    pkg = set(((schema.get("properties") or {}).get("package") or {}).get("properties") or ())
+    if not isinstance(got, dict) or not top or set(got) - top or not isinstance(got.get("package"), dict) \
+            or (pkg and set(got["package"]) - pkg) or not got["package"].get("package_type") \
+            or not isinstance(got["package"].get("dims"), list):
+        extra = sorted((set(got) - top) | (set(got["package"]) - pkg if isinstance(got.get("package"), dict) else set())
+                       ) if isinstance(got, dict) else []
+        raise CC.Unavailable(f"{here.name}/answer.json is not in the second read's own schema"
+                             + (f" ({', '.join(extra[:4])} not in it)" if extra else "")
+                             + ": answer it afresh from its pages (see request.md there)")
+    stem = here.name.rsplit("-check-", 1)[0]
+    for f in Path(base).glob(f"{glob.escape(stem)}-*/answer.json"):
+        if "-check-" in f.parent.name or f.parent == here:
+            continue
+        try:
+            if json.loads(f.read_text(encoding="utf-8-sig")) == got:
+                raise CC.Unavailable(f"{here.name}/answer.json is the first read's answer ({f.parent.name}) copied: "
+                                     "a second read must be made afresh from its own pages")
+        except (OSError, ValueError):
+            continue
+
 class Reader:
     """Reads datasheets for many parts. job() finds and validates the PDF, cached() answers from the result cache,
     read_now() makes one synchronous call; with batch=True (or estimate=True) jobs are collected with submit() and
@@ -5723,8 +5770,26 @@ class Reader:
         its tokens and USD go to cost.jsonl. -> (message, via). Raises crosscheck.Unavailable."""
         from . import crosscheck as CC, ds_route as DR
         rec = self.results.get_check(key)
-        if rec and "message" in rec:
-            return rec["message"], "cached"
+        if rec and "message" in rec:                  # (an assistant's answer is named so in the report, cached or not)
+            return rec["message"], "assistant" if rec.get("via") == "assistant" else "cached"
+        if self.assistant is not None:                # reader = "assistant": its own folder (<part>-check-<key>), read
+            from . import ds_assistant as DA          # from the pages alone, judged by the same code as the API's
+            ajob = dict(job, key=key, body=body, name=str(job.get("name") or job.get("part")))   # <part>-check-<key>
+            here = DA.folder(self.assistant, ajob)
+            try:
+                msg = DA.answer(self.assistant, ajob)
+            except DatasheetError as e:               # a broken answer.json holds the part, saying why
+                raise CC.Unavailable(str(e))
+            self.assistant_asked.add(here.name)
+            if msg is None:
+                d = DA.request(self.assistant, ajob)
+                raise CC.Unavailable(f"waiting for your assistant's second read: {d.name} (see READ_ME.md there)")
+            _own_second_read(msg, body, self.assistant, here, job)
+            CC.parse(msg)                             # (kept only once it reads: a fixed answer.json is read again)
+            self.results.put(key, {"key": key, "part": job["part"], "url": job.get("url", ""), "model": "assistant",
+                                   "via": "assistant", "purpose": "cross_check", "message": msg,
+                                   "at": datetime.datetime.now().isoformat(timespec="seconds")})
+            return msg, "assistant"
         if self.estimate_only or not self.key:
             raise CC.Unavailable("no answer: no key for the second read")
         from .llm import rails as LRL

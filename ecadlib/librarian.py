@@ -2483,6 +2483,11 @@ def case_land(case, kind=None):
 UNSURE_READ = re.compile(r"does not seem to name|datasheet from your folder|not downloaded here|found by a web search|"
                          r"package drawing came from|no drawing of this package|instruction-like text|"
                          r"set aside|check it is this part", re.I)
+# ...except the one difference set aside that leaves no doubt about the part: a two-terminal read built from the maker's
+# whole land, called chip on one side and molded on the other, with its pin count and body agreed (crosscheck._label_only)
+WORD_ONLY = re.compile(r"cross-check agreed once a difference was set aside: package type read (?:chip|molded), other "
+                       r"source (?:chip|molded): a word only, the pads are built from the maker's land; check it on the "
+                       r"drawing")
 
 
 def read_confirmed(res, job, got, drawn=None):
@@ -2493,7 +2498,7 @@ def read_confirmed(res, job, got, drawn=None):
                  name picked, which only shows the read fits its own name)
       symbol     every named pin agrees, in one column of one table, with the PDF's own text layer (ecadlib.pin_text)
     and no review item says the PDF or its drawing may not be this part's (UNSURE_READ)."""
-    if not got or any(UNSURE_READ.search(str(r)) for r in res.get("needs_review") or ()):
+    if not got or any(UNSURE_READ.search(str(r)) and not WORD_ONLY.fullmatch(str(r)) for r in res.get("needs_review") or ()):
         return None
     why = []
     if "footprint" in got or any(g.startswith("footprint") for g in got):
@@ -2501,8 +2506,9 @@ def read_confirmed(res, job, got, drawn=None):
         if cc.get("status") != "agreed":
             return None
         src = [c for c in cc.get("checks") or () if c.get("status") == "agreed" and c.get("via") != "the read's package name"]
-        why.append("footprint agrees with " + (f"{src[0].get('against')} ({src[0].get('via') or src[0].get('source')})"
-                                               if src else "the cross-check"))
+        how = src and (src[0].get("via") or src[0].get("source"))
+        why.append("footprint agrees with " + ((f"{src[0].get('against')}" + (f" ({how})" if how and how not in
+                                                str(src[0].get("against")) else "")) if src else "the cross-check"))
     if "symbol" in got:
         from . import pin_text as PT
         pins = [(q.get("num"), q.get("name")) for q in (res.get("symbol") or {}).get("pins") or ()]
