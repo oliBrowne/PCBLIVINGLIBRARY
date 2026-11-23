@@ -400,9 +400,81 @@ def _named_column(text, lines, per, mine):
     return cols[0], f"pin table, its {head[cols[0]][1]} column (the header names one package per column)"
 
 
-def check(page_texts, pins, figures=(), pin_count=None, part=None, package=()):
+def _printed_low(rows, name, num, col, names=()):
+    """Does the row of pin `num` (its number in column `col`) print `name` with an active-low mark the text layer
+    itself carries (/EN, EN#, nRESET, a combining overline)? A bar drawn as a line is not in the text."""
+    from .eval.score import active_low
+    target = norm_name(name)
+    for cells, nums in rows:
+        if col >= len(nums) or str(num) not in _numbers(nums[col][1]):
+            continue
+        words = cells[:nums[0][0]] or cells[nums[-1][0] + 1:][:3]
+        if any(norm_name(raw) == target and active_low(raw, names) for k in range(len(words))
+               for j in range(k + 1, min(len(words), k + 3) + 1) for raw in ["".join(words[k:j])]):
+            return True
+    return False
+
+
+def _drawn_low(lines, name, num):
+    """Is `name` on the row of pin `num` printed with a bar over it, as the reader sees the page (bar_rows' lines)?
+    True / False when every line that has the name within three words of the number says the same, else None (the
+    row was not found, or two lines differ)."""
+    target, hits = norm_name(name), []
+    for line in lines or ():
+        at = [i for i, (_, w, _) in enumerate(line) if str(num) in _numbers(w.strip(",;:()").replace("–", "-"))]
+        mine = [(min(abs(i - k) for k in at), b) for i, (_, w, b) in enumerate(line)
+                if at and i not in at and norm_name(w.strip(",;:()")) == target]
+        if mine and min(mine)[0] <= 3:                 # the copy nearest the number (two as near, a drawing printed
+            hits += [b for d, b in mine if d == min(mine)[0]]   # twice on one line: both count)
+    return None if not hits or len(set(hits)) > 1 else hits[0]
+
+
+def _marks(pins, rows, col, pages, bars=None):
+    """The active-low marks of the pins that agreed, compared on their own (review 2026-11-23, 1.9): norm_name drops
+    the mark, so ~{Q} and Q are both 'Q' and each is found on both rows; a PDF draws the bar as a line, so the text
+    has 'Q' twice. -> None when no mark is in doubt, else the verdict: 'disagreed' when the PDF marks a pin active
+    low (in its text, or a bar drawn over that row's name: bars) and the symbol does not; 'unchecked' when the symbol
+    marks a pin active low, or has the same name with and without the mark on two pins, and neither the text nor a
+    drawn bar shows which row is the barred one."""
+    from .eval.score import active_low
+    names = [nm for _, nm in pins]
+    low = {n: active_low(nm, names) for n, nm in pins}
+    printed = {n: _printed_low(rows, nm, n, col, names) for n, nm in pins}
+    group = {}
+    for n, nm in pins:
+        group.setdefault(norm_name(nm), []).append(n)
+    try:
+        seen = bars(pages) if bars else {}
+    except Exception:
+        seen = {}
+    lines = [ln for pg in pages for ln in (seen or {}).get(pg) or ()]
+    flipped, unsettled = [], []
+    for n, nm in pins:
+        twins = [m for m in group[norm_name(nm)] if m != n]
+        pair = any(low[m] != low[n] for m in twins)             # Q beside ~{Q}
+        bar = _drawn_low(lines, nm, n) if lines else None
+        pdf = True if printed[n] or bar else False if bar is False or any(printed[m] for m in twins) else None
+        if pdf and not low[n]:
+            flipped.append(f"pin {n} {nm}")
+        elif low[n] and not pdf or pair and pdf is None:
+            unsettled.append(f"pin {n} {nm}")
+    page = pages[0]
+    if flipped:
+        return {"status": "disagreed", "page": page,
+                "why": f"the pin numbers agree with page {page}, but it prints {', '.join(flipped[:4])} with an "
+                       "active-low bar or mark and the symbol's pin has none"}
+    if unsettled:
+        return {"status": "unchecked", "page": page,
+                "why": f"the pin numbers agree with page {page}, but the text layer cannot show an active-low bar (a "
+                       f"drawn line), and {'no bar is drawn over the name on the row of' if lines else 'there is no PDF to look for the bar of'} "
+                       f"{', '.join(unsettled[:4])}"}
+    return None
+
+
+def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), bars=None):
     """page_texts: {page number: text}; pins: [(num, name)]; figures: [(page, text)] of pinout drawings
-    (figure_lines), each read as a table of its own; pin_count: the package's, when known; part: the part number,
+    (figure_lines), each read as a table of its own; bars: bar_rows for these pages, when there is a PDF (the bars
+    drawn over active-low names: _marks); pin_count: the package's, when known; part: the part number,
     when known (a table on another page titled only for other devices of the family is then not a doubt about the
     agreeing table titled for this part) -> verdict dict (see the
     module doc). A table elsewhere that names these pins otherwise but prints a pin number above this part's highest
@@ -417,7 +489,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=()):
         return {"status": "unchecked", "why": "the PDF has no text layer (scanned?)"}
     loose = loose_names(pins)
     mine = package_families(package)
-    best, agreed, conflicts = None, None, []
+    best, agreed, conflicts, at = None, None, [], None     # at: the agreeing table's rows, column and page(s)
     for i, (page, text) in enumerate(units):
         drawn = i >= len(units) - len(figures or ())
         rows = _figure_rows(text) if drawn else _rows(text)
@@ -444,6 +516,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=()):
             if agreed is None:
                 agreed = {"status": "agreed", "page": page, "column": col, "pins": len(pins),
                           "where": "pin drawing" if drawn else other if named is not None else "pin table"}
+                at = (rows, col, [page])
             continue
         miss = [f"{nm}={n}" for (n, nm), (cols, _) in zip(pins, per) if not cols]
         if miss and most and _top(rows, pins, loose) > most:  # a bigger package's table (TL074M's 20-pin LCCC): not this one
@@ -472,6 +545,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=()):
             if common and not variant_columns(lines, min(common), most, _span(rows, lines, min(common))):
                 agreed = {"status": "agreed", "page": pa, "column": min(common), "pins": len(pins),
                           "where": f"pin table (pages {pa} and {pb})"}
+                at = (rows, min(common), [pa, pb])
                 break
     if agreed is not None and conflicts and part and _is_part(_titled_for((page_texts or {}).get(agreed["page"])), part):
         conflicts = [(pg, miss) for pg, miss in conflicts           # 'Pin Functions: TL071x' beside the agreeing
@@ -483,7 +557,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=()):
             return {"status": "unchecked", "page": agreed["page"], "doubt": True,
                     "why": f"page {agreed['page']}'s table agrees, but page {pg} prints {', '.join(miss[:4])} with other "
                            "numbers (another package or variant?): which table is this part's is not in the text"}
-        return agreed
+        return _marks(pins, *at, bars=bars) or agreed
     if best is None:
         return {"status": "unchecked", "why": "no pin table found in the text layer"}
     out = {"status": "unchecked", "why": best[2] or f"page {best[0]} names {best[1]} of {len(pins)} pins"}
@@ -807,7 +881,62 @@ def check_pdf(pdf_bytes, pins, pin_count=None, part=None, package=()):
     if not pdf_bytes:
         return {"status": "unchecked", "why": "none of the part's datasheet links gave a PDF to check it against"}
     return check(page_texts(pdf_bytes), pins, figures=page_figures(pdf_bytes), pin_count=pin_count, part=part,
-                 package=package)
+                 package=package, bars=lambda pages: bar_rows(pdf_bytes, pages))
+
+
+def bar_rows(pdf_bytes, pages):
+    """{page: lines} for the 1-based pages: each line the words on it as the reader sees them, left to right,
+    [(x, word, barred)]. barred: the word is printed with a bar over it (active low), which the text layer does not
+    carry: a thin line drawn over it, a font that draws the bar, or combining overlines (ecadlib.pdf_overline reads
+    them; here by position, row by row). {} when the PDF cannot be read."""
+    try:
+        import ctypes
+        import pypdfium2 as pdfium
+        import pypdfium2.raw as R
+        from . import pdf_overline as OV
+        doc = pdfium.PdfDocument(bytes(pdf_bytes))
+    except Exception:
+        return {}
+    out = {}
+    try:
+        for p in pages:
+            if not isinstance(p, int) or not 1 <= p <= len(doc):
+                continue
+            try:
+                page = doc[p - 1]
+                tp = page.get_textpage()
+                n = tp.count_chars()
+                text = tp.get_text_range(0, n) if n else ""
+                drawn = OV._bars(page)
+                buf, flags = ctypes.create_string_buffer(256), ctypes.c_int()
+
+                def font_bar(i):
+                    R.FPDFText_GetFontInfo(tp.raw, i, buf, 256, ctypes.byref(flags))
+                    return bool(OV.FONT_BAR.search(buf.value.decode("latin-1", "replace")))
+                words = []
+                for m in re.finditer(r"\S+", text):
+                    core = re.search(r"[A-Za-z0-9].*[A-Za-z0-9]|[A-Za-z0-9]", m.group().replace("̅", " "))
+                    if not core:
+                        continue
+                    a, b = m.start() + core.start(), m.start() + core.end()
+                    box = [tp.get_charbox(i) for i in range(a, b) if text[i] != "̅"]
+                    if not box or any(q[3] - q[1] <= 0 for q in box):
+                        continue
+                    barred = "̅" in m.group() or all(font_bar(i) for i in range(a, b)) \
+                        or bool(drawn) and OV._under_bar(tp, drawn, a, b)
+                    words.append((box[0][0], (box[0][1] + box[0][3]) / 2, max(q[3] - q[1] for q in box), m.group(), barred))
+                lines = []
+                for x, y, h, w, barred in sorted(words, key=lambda r: (-r[1], r[0])):
+                    if lines and abs(lines[-1][0] - y) <= 0.5 * max(h, lines[-1][1]):
+                        lines[-1][2].append((x, w, barred))
+                    else:
+                        lines.append([y, h, [(x, w, barred)]])
+                out[p] = [sorted(ln[2]) for ln in lines]
+            except Exception:
+                continue
+    finally:
+        doc.close()
+    return out
 
 
 def page_figures(pdf_bytes, limit=80):

@@ -54,8 +54,9 @@ def test_a_table_whose_other_column_numbers_the_pins_otherwise_does_not_agree():
     """SOIC and SOT-23 columns (or MCP6L01 / MCP6L01R): one column fits, but the text does not say which column is
     this part's, so it stays with a person. Only a column that prints a pin number above the symbol's highest is
     plainly another package (the 8-pin SOIC column for the 5-pin SOT-23 symbol): that one is no doubt."""
-    sot = [("1", "OUT"), ("2", "GND"), ("5", "IN"), ("3", "~{OC}"), ("4", "EN")]
-    soic = [("6", "OUT"), ("7", "OUT"), ("8", "OUT"), ("1", "GND"), ("2", "IN"), ("3", "IN"), ("5", "~{OC}"), ("4", "EN")]
+    # (OC with no mark: the bare text cannot show the bar of ~{OC}, so that is unchecked now; review 2026-11-23, 1.9)
+    sot = [("1", "OUT"), ("2", "GND"), ("5", "IN"), ("3", "OC"), ("4", "EN")]
+    soic = [("6", "OUT"), ("7", "OUT"), ("8", "OUT"), ("1", "GND"), ("2", "IN"), ("3", "IN"), ("5", "OC"), ("4", "EN")]
     r = PT.check({4: TABLE}, soic)                                       # the SOT-23 column could be an 8-pin part's
     assert r["status"] == "unchecked" and "another column" in r["why"], r
     r = PT.check({4: TABLE}, sot)

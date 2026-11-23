@@ -148,6 +148,78 @@ def test_a_diodes_lead_order_is_this_packages_or_none():
     assert PT.diode_orders({1: "x"}, [(1, DIODE)], package=("SOT-23",)) == []        # no package named: not tied
 
 
+# ------------------------------------------------------------------ 1.9: the active-low mark is compared on its own
+# A D flip-flop's pin table as a PDF prints it: the bar over a name is a drawn line, so the text has "Q" on two rows
+FLOP = ["Pin Functions", "NAME NO. I/O DESCRIPTION", "CLK 1 I Clock input", "D 2 I Data input", "Q 3 O Inverted output",
+        "GND 4 - Ground", "Q 5 O Output", "CLR 6 I Clear, active low", "PRE 7 I Preset, active low", "VCC 8 - Supply"]
+FLOP_BARS = [(0, 4, "Q"), (0, 7, "CLR"), (0, 8, "PRE")]
+RIGHT = [("1", "CLK"), ("2", "D"), ("3", "~{Q}"), ("4", "GND"), ("5", "Q"), ("6", "~{CLR}"), ("7", "~{PRE}"), ("8", "VCC")]
+WRONG = [("1", "CLK"), ("2", "D"), ("3", "Q"), ("4", "GND"), ("5", "~{Q}"), ("6", "~{CLR}"), ("7", "~{PRE}"), ("8", "VCC")]
+BARE = [(n, s.strip("~{}")) for n, s in RIGHT]
+
+
+def test_q_and_not_q_on_each_others_pins_do_not_agree_with_the_text_layer():
+    data = pdf([FLOP], FLOP_BARS)
+    assert PT.page_texts(data)[1].count("Q ") >= 2                           # the text layer has Q twice, no bar
+    ok = PT.check_pdf(data, RIGHT, pin_count=8)
+    assert ok["status"] == "agreed" and ok["pins"] == 8, ok                  # the drawn bars settle which row is barred
+    bad = PT.check_pdf(data, WRONG, pin_count=8)
+    assert bad["status"] == "disagreed" and "pin 3" in bad["why"], bad
+    assert PT.check_pdf(data, BARE, pin_count=8)["status"] == "disagreed"    # no bars at all in the symbol
+    res = lambda pins: {"symbol": {"pins": [{"num": n, "name": s} for n, s in pins]}, "spec": {"pin_count": 8},
+                        "needs_review": []}
+    assert L.read_confirmed(res(RIGHT), {"data": data}, ["symbol"])
+    assert L.read_confirmed(res(WRONG), {"data": data}, ["symbol"]) is None
+    assert L.read_confirmed(res(BARE), {"data": data}, ["symbol"]) is None
+
+
+def test_the_text_alone_does_not_settle_a_pin_with_an_active_low_mark():
+    text = {1: "\n".join(FLOP)}
+    v = PT.check(text, RIGHT, pin_count=8)                                   # no PDF: the bars cannot be seen
+    assert v["status"] == "unchecked" and not v.get("doubt") and "active-low" in v["why"], v
+    assert PT.check(text, WRONG, pin_count=8)["status"] == "unchecked"
+    assert PT.check(text, BARE, pin_count=8)["status"] == "agreed"           # nothing in the text says otherwise
+    plain = pdf([FLOP])                                                      # a PDF that draws no bar over these rows
+    v = PT.check_pdf(plain, RIGHT, pin_count=8)
+    assert v["status"] == "unchecked" and "pin 3" in v["why"], v
+    # two pins with one name and the same sense (a part's two grounds) are no doubt
+    twice = {1: "NAME NO.\nIN 1\nGND 2\nEN 3\nGND 4\nOUT 5"}
+    assert PT.check(twice, [("1", "IN"), ("2", "GND"), ("3", "EN"), ("4", "GND"), ("5", "OUT")])["status"] == "agreed"
+
+
+def test_a_mark_printed_in_the_text_is_compared():
+    text = {1: "NAME NO.\nIN 1\nGND 2\n/EN 3\nFB 4\nOUT 5\nRESET# 6"}
+    pins = lambda en, rst: [("1", "IN"), ("2", "GND"), ("3", en), ("4", "FB"), ("5", "OUT"), ("6", rst)]
+    assert PT.check(text, pins("~{EN}", "~{RESET}"))["status"] == "agreed"
+    v = PT.check(text, pins("EN", "~{RESET}"))
+    assert v["status"] == "disagreed" and "pin 3" in v["why"], v
+    both = {1: "NAME NO.\nCLK 1\nD 2\n/Q 3\nGND 4\nQ 5"}                     # the text marks one of the pair: settled
+    assert PT.check(both, [("1", "CLK"), ("2", "D"), ("3", "~{Q}"), ("4", "GND"), ("5", "Q")])["status"] == "agreed"
+    assert PT.check(both, [("1", "CLK"), ("2", "D"), ("3", "Q"), ("4", "GND"), ("5", "~{Q}")])["status"] == "disagreed"
+
+
+def test_en_where_the_datasheet_draws_a_bar_over_en_does_not_agree():
+    rows = ["Pin Functions", "NAME NO. DESCRIPTION", "IN 1 Input", "GND 2 Ground", "EN 3 Enable, active low",
+            "FB 4 Feedback", "OUT 5 Output"]
+    data = pdf([rows], [(0, 4, "EN")])
+    pins = lambda en: [("1", "IN"), ("2", "GND"), ("3", en), ("4", "FB"), ("5", "OUT")]
+    assert PT.check_pdf(data, pins("~{EN}"))["status"] == "agreed"
+    v = PT.check_pdf(data, pins("EN"))
+    assert v["status"] == "disagreed" and "pin 3" in v["why"], v
+    assert PT.check_pdf(pdf([rows]), pins("EN"))["status"] == "agreed"       # no bar drawn: EN is EN
+
+
+def test_the_pin_drawing_compares_the_mark_too():
+    from ecadlib import pin_drawing as PD
+    assert PD.same_pin("other", "3", "~{Q}", "~{Q}") and PD.same_pin("other", "3", "~{Q}", "/Q")
+    assert not PD.same_pin("other", "3", "Q", "~{Q}") and not PD.same_pin("other", "3", "~{EN}", "EN")
+    assert [d[0] for d in PD.compare("other", WRONG, dict(RIGHT))] == ["3", "5"]
+    assert PD.compare("other", RIGHT, dict(RIGHT)) == []
+    # the negative leg of a pair is no active-low pin
+    pair = [("1", "CLK_P"), ("2", "CLK_N")]
+    assert PD.compare("other", pair, {"1": "CLK_P", "2": "CLK_N"}) == []
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
