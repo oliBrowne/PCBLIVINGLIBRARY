@@ -143,6 +143,19 @@ EXAMPLES = {
                                  "('CAP CER 0.1UF 50V X7R 0603'): check which size the part is",
     "librarian.size_code_clash": "footprint: the land built is 0402 (R_0402_1005Metric) but the part number NCP18XH103F03RB "
                                  "is an 0603: check which size the part is",
+    "librarian.source_package_clash": "footprint: the land built is SOT-23-5 but the part search package names SC-70-5 "
+                                      "('SC-70-5'): check which package the part has",
+    "librarian.land_kind_clash": "footprint: the part is filed under Capacitors but the land built is R_0402_1005Metric, "
+                                 "another kind's land: check which part the BOM line is",
+    "librarian.value_prefix": "value: Value 10k is spelled with a resistance prefix but the part is filed under "
+                              "Capacitors: check which part the BOM line is",
+    "librarian.value_clash": "value: Value 43k but the BOM description 'RES 430 OHM 1% 0402' names another value: one of "
+                             "the two is a slip; check which value the part is",
+    "librarian.kind_word_clash": "part kind: filed under Resistors but the BOM description 'Capacitor 10k' names a "
+                                 "capacitor: check which part the BOM line is",
+    "librarian.check_failed": "check: the value check could not read this line (TypeError): check the part by hand",
+    "librarian.maker_clash": "maker: the BOM names Rohm but the part search lists onsemi for this part number: check "
+                             "whose part it is",
     "librarian.thermistor_type": "thermistor: NTC or PTC is not said by the line, its part number or the part search; "
                                  "write it in the description",
     "librarian.sensor_kind": "part kind: the line's words, part number NTCS0603E3103FMT or part search say both thermistor "
@@ -362,7 +375,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 32, "datasheet.py": 10,
+    "librarian.py": 33, "datasheet.py": 10,
 }
 
 
