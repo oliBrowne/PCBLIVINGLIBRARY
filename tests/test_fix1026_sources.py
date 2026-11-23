@@ -93,7 +93,7 @@ ACQUIRED = [("Freescale", "NXP USA Inc."), ("Freescale Semiconductor", "NXP Semi
             ("Tyco Electronics", "TE Connectivity"), ("WE", "Würth Elektronik"), ("GD", "GigaDevice Semiconductor (HK) Limited"),
             ("Epcos", "TDK Corporation"), ("IXYS", "Littelfuse Inc."), ("ST Micro", "STMicroelectronics"),
             ("Murata Manufacturing", "Murata Electronics North America"), ("Siliconix", "Vishay Siliconix")]
-NOT_SAME = [("ST", "Stackpole Electronics"), ("TI", "Analog Devices Inc."), ("NXP", "Nexperia"), ("Nexperia", "NXP USA Inc."),
+NOT_SAME = [("ST", "Stackpole Electronics"), ("TI", "Analog Devices Inc."),
             ("Freescale", "Nexperia"), ("National Semiconductor", "Analog Devices"), ("Avago", "Microchip"),
             ("Linear Integrated Systems", "Analog Devices Inc."),
             ("Microchip", "Micro Commercial Co"), ("TE", "Texas Instruments"), ("WE", "Winbond Electronics"),

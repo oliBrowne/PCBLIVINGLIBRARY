@@ -138,6 +138,24 @@ def test_a_renamed_makers_own_listing_is_taken_and_a_strangers_refused():
         assert r["src"] == "" and r["src_datasheet"] == "" and f"is by HGSEMI, not {maker}" in r["notes"], (maker, r)
 
 
+# ------------------------------------------------------------------ I7 NXP / Nexperia
+NXP_SAME = [("NXP", "Nexperia"), ("Nexperia", "NXP USA Inc."), ("NXP Semiconductors", "Nexperia USA Inc."), ("Philips", "Nexperia")]
+
+
+def test_nexperia_sells_nxps_standard_products_under_the_same_numbers():
+    for a, b in NXP_SAME:
+        assert P.same_maker(a, b) and P.same_maker(b, a), (a, b)
+    assert P.maker_key("Nexperia") == "NEXPERIA" and P.maker_key("NXP USA Inc.") == "NXP"     # still two names
+    for a, b in (("Freescale", "Nexperia"), ("Freescale Semiconductor", "Nexperia USA Inc."), ("Nexperia", "onsemi"),
+                 ("Nexperia", "NXP Power"), ("Philips Lumileds", "Nexperia")):     # Freescale's parts stayed with NXP
+        assert not P.same_maker(a, b) and not P.same_maker(b, a), (a, b)
+    for maker, theirs in (("NXP", "Nexperia USA Inc."), ("Nexperia", "NXP Semiconductors")):
+        r = _row(_Cad(theirs), maker=maker, mpn="BC847C,215")
+        assert r["src"] == "plug" and r["src_datasheet"] == SHEET and "not used" not in r["notes"], (maker, theirs, r)
+        r = _row(_Cad("HGSEMI"), maker=maker, mpn="BC847C,215")
+        assert r["src"] == "" and r["src_datasheet"] == "" and f"is by HGSEMI, not {maker}" in r["notes"], (maker, r)
+
+
 if __name__ == "__main__":
     import sys
     fns = [f for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]

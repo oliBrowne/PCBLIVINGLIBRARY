@@ -121,7 +121,7 @@ _MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON":
                 "LTC": "ANALOG", "MAXIM": "ANALOG", "HITTITE": "ANALOG",   # now Analog Devices
                 "KYOCERAAVX": "AVX", "KYOCERA": "AVX", "SILICONLABS": "SILICONLABORATORIES", "SILABS": "SILICONLABORATORIES",
                 # acquisitions: the old maker's name on a BOM, the buyer's at the distributor (and the other way)
-                "FREESCALE": "NXP",                                              # 2015 (Nexperia is not NXP: below)
+                "FREESCALE": "NXP",                                              # 2015 (Nexperia: _MAKER_MOVED below)
                 "NATIONAL": "TEXASINSTRUMENTS", "NATSEMI": "TEXASINSTRUMENTS",   # National Semiconductor, 2011
                 "LT": "ANALOG", "DALLAS": "ANALOG",                              # Linear Technology; Dallas -> Maxim
                 "MICREL": "MICROCHIP", "MICROSEMI": "MICROCHIP", "ACTEL": "MICROCHIP", "SUPERTEX": "MICROCHIP",
@@ -174,8 +174,11 @@ _MAKER_GROUP = {"WURTHELEKTRONIK": {"WURTHMIDCOM"},
                 # company Wolfspeed sold, is not Wolfspeed): only this pair is one maker.
                 "CREE": {"WOLFSPEED"},                         # Cree's SiC / RF parts: Cree renamed itself Wolfspeed, 2021
                 "SILICONLABORATORIES": {"SKYWORKS"}}           # Silicon Labs' isolation / timing / power parts, 2021
-# Nexperia (NXP's Standard Products until 2017) is its own company now, with its own lifecycles and datasheets for the
-# discretes and logic NXP once sold: an NXP line is not matched to a Nexperia listing (nor Philips / Freescale to it).
+# Nexperia (NXP's Standard Products until 2017) is its own company now, and sells the discretes and logic NXP (and
+# Philips before it) once sold under the same type numbers (BC847C,215; 74HC595D,118). 2026-11-23 review round 2 (I7):
+# a BOM that still says NXP for such a part was held as "only from Nexperia", so the two names are one maker for a
+# number both list. By the name as written, not by key: Freescale (NXP's key) never made Nexperia's parts.
+_MAKER_MOVED = {"NXP": {"NEXPERIA"}, "PHILIPS": {"NEXPERIA"}}
 
 
 def _maker_words(name):
@@ -254,6 +257,9 @@ def same_maker(a, b):
         if any("".join(ws[:i]) == short for ws in (words, split) for i in range(1, len(ws) + 1)):
             return True
     if kb in _MAKER_GROUP.get(ka, ()) or ka in _MAKER_GROUP.get(kb, ()):   # Würth Elektronik / Würth Electronics Midcom
+        return True
+    ra, rb = "".join(_key_words(a)), "".join(_key_words(b))                # the names as written, before any alias
+    if rb in _MAKER_MOVED.get(ra, ()) or ra in _MAKER_MOVED.get(rb, ()):   # NXP / Nexperia
         return True
     wa, wb = _maker_words(a), _maker_words(b)
     return any(len(x) == 1 and len(x[0]) >= 3 and x[0] not in _MAKER_GENERIC and y and y[0] == x[0] and ky.startswith(kx)
