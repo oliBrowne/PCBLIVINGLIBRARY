@@ -4925,7 +4925,7 @@ def _own_second_read(msg, body, base, here, job):
         extra = sorted((set(got) - top) | (set(got["package"]) - pkg if isinstance(got.get("package"), dict) else set())
                        ) if isinstance(got, dict) else []
         raise CC.Unavailable(f"{here.name}/answer.json is not in the second read's own schema"
-                             + (f" ({', '.join(extra[:4])} belong to a first read)" if extra else "")
+                             + (f" ({', '.join(extra[:4])} not in it)" if extra else "")
                              + ": answer it afresh from its pages (see request.md there)")
     stem = here.name.rsplit("-check-", 1)[0]
     for f in Path(base).glob(f"{glob.escape(stem)}-*/answer.json"):

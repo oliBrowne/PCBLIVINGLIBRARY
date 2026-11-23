@@ -52,14 +52,18 @@ def _stem(s):
 
 def folder(base, job):
     """<base>/<part>-<first 10 characters of the request key>: one folder per request. A second read's key
-    ("check-...") keeps 10 characters of its own hash. A name the folder cannot hold as written (TESTPART/A and
+    ("check-...") keeps 10 characters of the PDF's hash and 6 of its own inputs'. A name the folder cannot hold as written (TESTPART/A and
     TESTPART#A both stem to TESTPART_A, FOO_ to FOO) gets 6 characters of its own hash too, so two parts never share
     a folder and each other's answers (review 2026-11-23)."""
     raw, key = str(job.get("name") or job.get("part") or "part"), str(job.get("key") or "nokey")
     stem = _stem(raw)
     if stem != raw:
         stem += "~" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:6]
-    return Path(base) / f"{stem}-{key[:16] if key.startswith('check-') else key[:10]}"
+    if key.startswith("check-"):                      # the PDF's hash, then the hash of the check's own inputs (model,
+        key = key[:16] + key.rsplit("-", 1)[-1][:6]    # effort, package, pages): a changed check is a new folder
+    else:
+        key = key[:10]
+    return Path(base) / f"{stem}-{key}"
 
 
 def _blocks(job):
@@ -89,10 +93,10 @@ def answer(base, job, model="assistant"):
     f = folder(base, job) / "answer.json"
     if not f.is_file():
         return None
-    text = f.read_text(encoding="utf-8-sig")
-    try:
+    try:                                              # (UTF-16 from PowerShell's > is not UTF-8: said, not a crash)
+        text = f.read_text(encoding="utf-8-sig")
         json.loads(text)
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         raise DatasheetError(f"{f} is not JSON ({e}): fix it and run again")
     return {"id": f"assistant-{_stem(job.get('part'))}", "type": "message", "role": "assistant", "model": model,
             "stop_reason": "end_turn", "content": [{"type": "text", "text": text}],

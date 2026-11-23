@@ -98,7 +98,7 @@ def test_a_copy_of_the_first_answer_is_no_second_read():
         (c / "answer.json").write_bytes((f / "answer.json").read_bytes())
         _, got = TA._read(d, api)
         sr = _second_read(got)
-        assert sr["status"] == "unchecked" and "first read" in sr["why"], sr
+        assert sr["status"] == "unchecked" and "own schema" in sr["why"], sr
         assert got["cross_check"]["status"] != "agreed"
         (c / "answer.json").write_text(json.dumps(TC.check_answer()), encoding="utf-8")   # a real second read, then
         _, got = TA._read(d, api)
@@ -130,3 +130,17 @@ def test_names_a_folder_name_cannot_hold_get_folders_of_their_own():
     a = DA.folder("/x", {"name": "P", "key": "check-0123abcdef"}).name
     b = DA.folder("/x", {"name": "P", "key": "check-0123fedcba"}).name
     assert a != b, a                                   # a check's key gets more than four characters
+
+
+def test_a_changed_check_is_a_new_folder_and_a_utf16_answer_holds():
+    a = DA.folder("/x", {"name": "P", "key": "check-0123456789abcdef-sonnet-v2-aaaaaa111"}).name
+    b = DA.folder("/x", {"name": "P", "key": "check-0123456789abcdef-sonnet-v2-bbbbbb222"}).name
+    assert a != b, a
+    api = TA._api()
+    with tempfile.TemporaryDirectory() as d:
+        _first_answered(d, api)
+        TA._read(d, api)
+        (c,) = _check_folders(d)
+        (c / "answer.json").write_text(json.dumps(TC.check_answer()), encoding="utf-16")
+        _, got = TA._read(d, api)
+        assert _second_read(got)["status"] == "unchecked", _second_read(got)
