@@ -3188,11 +3188,40 @@ def standard_rows(spec):
     return None
 
 
+# a four-sided no-lead package by its name: QFN with JEDEC's height letters (VQFN, WQFN, TQFN, UQFN, LQFN, XQFN, X2QFN,
+# HVQFN, UTQFN), ST's VFQFPN / UFQFPN / WFQFPN / TFQFPN, LFCSP and MLF, after a vendor prefix or a lead count. Not MLP /
+# LLP (makers use them for DFNs too), and not a name that says power, dual-row or flip-chip (PQFN, DRQFN, aQFN, VQFN-HR:
+# their pads are not four equal rows)
+QUAD_ROW_NAME = re.compile(r"(?:^|[-_\s\d])(?:[HU]?[VWTULX]2?QFN|QFN|[VUWT]FQFPN|LFCSP|MLF)(?![A-Z])", re.I)
+NOT_QUAD_ROWS = re.compile(r"PQFN|DRQFN|AQFN|FCQFN|power|dual|multi|two.?row|stagger|flip|hot.?rod|QFN[-_\s]?HR(?![A-Z])", re.I)
+QUAD_ROW_MIN = 12                                         # under 12 pins a square no-lead body is as often two-sided
+QUAD_SQUARE = 0.05                                        # mm the body's two nominals may differ and still be square
+
+
+def quad_rows(spec):
+    """pin_count / 4 when a no-lead read with no rows can only be four equal rows (review 2026-11-23, round 2: every
+    ordinary QFN-16 / 20 / 24 / 32 / 48 whose read left the rows blank was held), else None. All of: the name says a
+    four-sided no-lead package (QUAD_ROW_NAME); the body is square; pin_count is a multiple of 4 and at least
+    QUAD_ROW_MIN; a quarter of the pins fits along a side at the read's pitch; and half of them does not (so the pins
+    cannot be on two sides only: a 3 x 3 mm "QFN-12" of 0.45 mm pitch may be a DFN-12 and stays held). The split is still
+    the default's, not a reading: crosscheck compares it with the sides the second read gives (pin_positions)."""
+    n, name = spec.get("pin_count"), str(spec.get("name") or "")
+    if not rows_blank(spec) or n < QUAD_ROW_MIN or n % 4 or not QUAD_ROW_NAME.search(name) or NOT_QUAD_ROWS.search(name):
+        return None
+    side, other, pitch = _nom(spec.get("body_length")), _nom(spec.get("body_width")), _nom(spec.get("pitch"))
+    if not side or not other or not pitch or abs(side - other) > QUAD_SQUARE:
+        return None
+    lead = _nom(spec.get("terminal_width")) or 0.0
+    along = lambda k: (k - 1) * pitch + lead              # the length a row of k terminals takes
+    return n // 4 if along(n // 4) <= side + 1e-9 < along(n // 2) else None
+
+
 def rows_unread(spec, review):
     """A no-lead read with no row split left after two_sided (review 2026-11-23, 1.8: a DFN-8 3 x 3 named MLP-8 was
     built 2 + 2 + 2 + 2 by footprint_gen's quarter-per-side default, the second read agreed and it was released). The
-    split is never a default: a checked standard package the read names (by its name, or by its numbers) gives the rows,
-    with a review line; otherwise the read fails (ds_route.FAILED: "pins per side", a hard line: the part is held)."""
+    split is a default only where nothing else fits (quad_rows: a square QFN of 12 pins or more whose pins cannot be on
+    two sides): a checked standard package the read names (by its name, or by its numbers) gives the rows, with a review
+    line; otherwise the read fails (ds_route.FAILED: "pins per side", a hard line: the part is held)."""
     if not rows_blank(spec):
         return
     got = standard_rows(spec)
@@ -3202,6 +3231,13 @@ def rows_unread(spec, review):
         review.append(f"pins_left_right / pins_top_bottom were left blank: {got[0]} per side left and right, {got[1]} top "
                       f"and bottom, as the checked standard package {got[2]} ({got[3]}) has them; check against the "
                       "drawing")
+        return
+    per = quad_rows(spec)
+    if per:
+        spec["pins_left_right"] = spec["pins_top_bottom"] = per
+        review.append(f"pins_left_right / pins_top_bottom were left blank: {per} per side on four sides, as {spec['name']} "
+                      f"is a four-sided no-lead package with a square body and {n} pins do not fit on two sides at its "
+                      "pitch; check against the drawing")
         return
     review.append(f"{ROWS_UNREAD}: {n} pins on a no-lead package and pins_left_right / pins_top_bottom / pin_sides all "
                   "left blank, and no checked standard package gives the rows; a quarter of the pins on each of four "
