@@ -34,6 +34,9 @@ part with no person's look. Each was shown with made-up inputs, none was seen in
   footprint built from a read's own numbers is released only when every number that places or sizes a pad was
   compared. Second-read answers saved before this change do not cover those numbers and are asked for again.
 - A no-lead package whose read gives no pins per side is held, not built with a quarter of the pins on each side.
+  The exception is a square package named QFN (or VQFN, WQFN, LFCSP and the like) with 12 or more pins that cannot
+  sit on two sides at its pitch; it is released only when the second read gives the same sides.
+- A small terminal read at half or 1.5 times its size is a disagreement between the two reads.
 - A PDF saved by your assistant is tested to name the part, like a downloaded one.
 - An assistant answer is used only for the request its folder was written for.
 - A schema error in a read no longer switches off the checks of the built footprint; an entry the read lists as
@@ -43,6 +46,17 @@ part with no person's look. Each was shown with made-up inputs, none was seen in
 - BOM reader: a `Package (mm)` column of only 0603 / 0402 is noted and held; lines with no part number that differ in
   an unmapped column (Color, Tolerance, Voltage) are held instead of merged; words before the number in a
   `Manufacturer/MPN` cell are the maker only when ecadlib knows the maker; a crafted MPN cell no longer hangs the reader.
+- Lines with no part number: every merged line is read for words such as tantalum, array or x4, not only the first;
+  a case letter or a lone `+` beside the value, and a bare yes or number under a header such as `Polarized` or `Pins`,
+  hold the part. Buying columns (price, stock, supplier name) and two names of the plain symbol (`R`, `R_Small`,
+  `Res1`) no longer keep lines apart.
+- A pin order taken from a datasheet's text counts only when the table's own heading names this part's package; a pin
+  a read calls NC is confirmed only by a no-connect row in the table.
+- Another maker's listing gives no description, datasheet link or CAD answer either. One company under two names is
+  one maker (MCC, Unisonic/UTC, Cree/Wolfspeed, Silicon Labs/Skyworks, NXP standard parts/Nexperia and others).
+- A metric size code in a part number that is also an inch size (TDK `C0603...`) is used only when the line names
+  that maker.
+- A PDF saved by your assistant that has no text to tell the part by (a scan) is flagged for a person.
 
 ### Changed
 
