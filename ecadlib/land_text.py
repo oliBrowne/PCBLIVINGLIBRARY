@@ -29,8 +29,8 @@ must be distinct and sit within SPREAD of one another; a size labelled on both p
 may not equal a size along the pads' line; the land must fit the body size the read gives (fits_body); and a PDF
 with two different land drawings, or a drawing that agrees just as well with the pads turned, gives no verdict.
 A drawing
-whose numbers sit in a table of several sizes (two or more lines of three or more numbers) agrees only when the
-read's numbers are all on one line that names the part's series. The result is
+whose numbers sit in a table of several sizes (two or more lines of numbers in columns, five or more numbers in all:
+_lines) agrees only when the read's numbers are all on one line that names the part's series. The result is
 
     {"status": "agreed", "page": n, "printed": {...}}   every number found in one land drawing
     {"status": "unchecked", "why": ...}                 no land drawing in the text, a number not printed there, an
@@ -233,24 +233,30 @@ def _has(region, value, extra=0.0):
 
 
 def _lines(region):
-    """The rows of a table in the drawing's numbers: printed lines (same y, unrotated) of three or more numbers whose
-    places line up in columns with two other such lines (three or more numbers at the same x, within 3 pt). Dimension
-    labels that happen to share a y are no table: their places do not line up with another line's."""
+    """The rows of a table in the drawing's numbers: printed lines (same y, unrotated) of two or more numbers whose
+    places line up in columns with another such line (two or more numbers at the same x, within 3 pt), when those
+    lines hold five or more numbers between them: more than one land needs in aligned rows. Dimension labels that
+    happen to share a y are no table: their places do not line up with another line's.
+    2026-11-23 (review): a table needed three rows of three numbers, so a family sheet of two sizes was no table,
+    and a row that lost a number (a broken run, a dash) took the whole table rule with it; in both the other
+    size's row agreed. An inch label over the same in mm is no second row: drawn_numbers leaves the inch twin out."""
     lines = []
     for n in sorted((n for n in region if not n[4]), key=lambda n: n[3]):
         if lines and abs(n[3] - lines[-1][-1][3]) <= 1.5:
             lines[-1].append(n)
         else:
             lines.append([n])
-    lines = [ln for ln in lines if len(ln) >= 3]
+    lines = [ln for ln in lines if len(ln) >= 2]
     cols = lambda a, b: sum(any(abs(p[2] - q[2]) <= 3 for q in b) for p in a)
-    # a table has three or more such lines in columns; two (a label printed in inches over the same in mm) is not one
-    return [a for a in lines if sum(b is not a and cols(a, b) >= 3 for b in lines) >= 2]
+    rows = [a for a in lines if any(b is not a and cols(a, b) >= 2 for b in lines)]
+    return rows if sum(len(r) for r in rows) >= 5 else []
 
 
 def _line_text(line_text, y):
-    """The whole printed text of the line at y (every unrotated run within 1.5 pt of it)."""
-    return " ".join(t for ly, t in line_text or () if abs(ly - y) <= 1.5)
+    """The whole printed text of the line at y (every unrotated run within 1.5 pt of it). A number read with its
+    characters' places sits at their centre, above its run's baseline, so a run counts up to its text height
+    (2026-11-23, review: a real PDF's table row never found its own name, which only held true parts back)."""
+    return " ".join(t for ly, t, size in line_text or () if ly - 1.5 <= y <= ly + 0.75 * (size or 0) + 1.5)
 
 
 def _series(part):
@@ -308,8 +314,8 @@ def _layout(length, spacing, width):
 
 
 def check_region(region, pads, line_text=None, part=None, size=None, can=False):
-    """The verdict on one land drawing's numbers. pads: two_pads(). line_text: [(y, text)] of the page's unrotated runs,
-    for naming a table row. size, can: the body (body()) and whether it is an electrolytic can, to judge the turned
+    """The verdict on one land drawing's numbers. pads: two_pads(). line_text: [(y, text, text height or 0)] of the page's
+    unrotated runs, for naming a table row. size, can: the body (body()) and whether it is an electrolytic can, to judge the turned
     land against (fits_body). The read agrees when its pad width and two of the four sizes along the line through the
     pads (pad length, gap, span, centre distance: any two give the other two) are printed, each by a number of its own
     (one number cannot be two sizes)."""
@@ -392,7 +398,7 @@ def check(pages, spec, part=None):
     found = []
     for pg in sorted(pages):
         runs = pages[pg]
-        line_text = [(y, t) for x, y, t, size, vertical, *_ in runs if not vertical]
+        line_text = [(y, t, size if len(rest) > 1 and rest[1] else 0) for x, y, t, size, *rest in runs if not rest[0]]
         found += [(pg, region, line_text) for _, region in regions(runs)]
     if not found:
         return {"status": "unchecked", "why": "no land drawing title in the PDF's text"}
@@ -449,7 +455,7 @@ def placed_runs(pdf_bytes, limit=80):
 
 def _runs_of(chars):
     """Characters [(char, left, bottom, right, top, angle)] -> runs, broken at a line break and at a gap wider than
-    one character height (a space the PDF writes as a character still joins words of one line)."""
+    1.2 x the run's text height (a space the PDF writes as a character still joins words of one line)."""
     runs, cur = [], []
 
     def flush():
@@ -470,7 +476,11 @@ def _runs_of(chars):
         if cur and not c.isspace():
             last = next((p for p in reversed(cur) if not p[0].isspace()), None)
             if last is not None:
-                h = max(last[4] - last[2], last[3] - last[1], 1.0)
+                # 2026-11-23 (review): the gap is measured against the run's own text height (the median glyph, or
+                # the coming one if larger), not the last glyph's: after a decimal point that is about 1 pt, and
+                # '1.1' was broken into '1.' and '1', neither of them a number
+                tall = sorted(max(p[4] - p[2], p[3] - p[1]) for p in cur if not p[0].isspace())
+                h = max(tall[len(tall) // 2], t - b, r - l, 1.0)
                 if max(l - last[3], last[1] - r, b - last[4], last[2] - t) > 1.2 * h:
                     flush()
         cur.append(ch)

@@ -61,3 +61,76 @@ def test_the_texts_direction_shows_which_size_runs_along_the_pads():
     pages = {1: [TITLE, run(300, 520, "1.4", True), run(310, 548, "3.0", True), run(270, 590, "2.2")]}
     assert status(pages, land(1.4, 2.2, 4.4, (5.2, 5.0))) == "agreed"
     assert status(pages, land(2.2, 1.4, 5.2, (5.2, 5.0))) == "unchecked"
+
+
+# ------------------------------------------------------------------------------- 1.6 another size's row
+def table(rows, pair_last=False):
+    runs = [TITLE, run(262, 550, "A"), run(290, 550, "C"), run(335, 571, "B"), run(240, 530, "Type A B C")]
+    for i, (name, a, b, g) in enumerate(rows):
+        y = 518 - 11 * i
+        runs += [run(240, y, name), run(288, y, a), run(313, y, b)] + ([run(338, y, g)] if g else [])
+    return {1: runs}
+
+
+TWO = [("SRX4018", "1.2", "3.7", "1.6"), ("SRX4030", "1.6", "3.3", "1.3")]
+BODY = (4.0, 4.0)
+
+
+def test_a_table_of_two_sizes_agrees_only_on_the_row_that_names_the_part():
+    assert status(table(TWO), land(1.2, 3.7, 2.8, BODY), "SRX4018T-100M") == "agreed"
+    v = LT.check(table(TWO), land(1.6, 3.3, 2.9, BODY), "SRX4018T-100M")       # SRX4030's row
+    assert v["status"] == "unchecked" and "table" in v["why"], v
+    assert status(table(TWO), land(1.6, 3.3, 2.9, BODY), "SRX4030T-100M") == "agreed"
+
+
+def test_a_row_short_of_a_number_is_still_a_row_of_the_table():
+    # the third row's last number is not read as one (an image, a dash, a broken run): the table is still a table
+    rows = TWO + [("SRX4045", "1.9", "3.0", "")]
+    v = LT.check(table(rows), land(1.6, 3.3, 2.9, BODY), "SRX4018T-100M")
+    assert v["status"] == "unchecked" and "table" in v["why"], v
+    # two short rows under a drawing's own three numbers: more aligned numbers than one land needs
+    pages = {1: [TITLE, run(288, 528, "1.6"), run(313, 528, "3.3"), run(338, 528, "1.3"),
+                 run(288, 517, "1.2"), run(313, 517, "3.7"), run(288, 506, "1.9"), run(313, 506, "3.0")]}
+    assert status(pages, land(1.6, 3.3, 2.9, BODY), "SRX4018T-100M") == "unchecked"
+
+
+def test_a_drawings_own_labels_are_no_table():
+    # 2.0 | 3.9 | 2.0 on one dimension line with one more number below it is a drawing, not a table
+    pages = {1: CLF[1] + [run(418, 436, "7.9")]}
+    assert status(pages, land(2.0, 2.2, 5.9, (7.2, 6.9)), "CLF7045T-100M-H") == "agreed"
+
+
+def chars(text, x, y, size=8.0):
+    """Glyph boxes as pdfium gives them for Helvetica: a digit about 0.5 x 0.7 of the size, a point 0.1 x 0.1 of it,
+    0.15 of the size between glyphs."""
+    out = []
+    for ch in text:
+        w, h = (0.1 * size, 0.1 * size) if ch in ".," else (0.0, 0.0) if ch == " " else (0.5 * size, 0.7 * size)
+        out.append((ch, x, y, x + w, y + h, 0.0))
+        x += w + (0.19 * size if ch != " " else 0.0)
+    return out
+
+
+def test_a_number_is_not_broken_after_its_decimal_point():
+    # 2026-11-23 (review): the gap after a point was measured against the point's own height (about 1 pt), so '1.1'
+    # became '1.' and '1' and its table row dropped out of the table
+    text = lambda cs: [r[2] for r in LT._runs_of(cs)]
+    assert text(chars("1.1", 338, 496)) == ["1.1"]
+    assert text(chars(".5", 338, 496)) == [".5"]
+    assert text(chars("3.0", 313, 496) + chars("1.1", 338, 496)) == ["3.0", "1.1"]      # columns stay apart
+    assert text(chars("Type A", 240, 530)) == ["Type A"]
+
+
+def test_the_table_rule_holds_for_a_row_that_prints_1_1():
+    rows = TWO + [("SRX4045", "1.9", "3.0", "1.1")]
+    cs = chars("Recommended Land Pattern", 250, 600)
+    for i, row in enumerate(rows):
+        for x, cell in zip((240, 288, 313, 338), row):
+            cs += chars(cell, x, 518 - 11 * i)
+    runs = LT._runs_of(cs)
+    assert "1.1" in [r[2] for r in runs], [r[2] for r in runs]
+    region = LT.regions(runs)[0][1]
+    assert len(LT._lines(region)) == 3, LT._lines(region)
+    v = LT.check({1: runs}, land(1.6, 3.3, 2.9, BODY), "SRX4018T-100M")
+    assert v["status"] == "unchecked" and "table" in v["why"], v
+    assert status({1: runs}, land(1.2, 3.7, 2.8, BODY), "SRX4018T-100M") == "agreed"
