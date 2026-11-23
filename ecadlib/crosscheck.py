@@ -135,24 +135,50 @@ def pads_read(spec):
 PAD_TOL = 0.05     # mm: a pad's place and size as two reads of one land drawing give it (printed to 0.01 .. 0.05)
 
 
+MAX_TABLE_PADS = 400     # a pad table past this is not laid out for the check (an answer's "count": 3000000)
+
+
+def _table_size(t):
+    """How many pads a pad table lists (its arrays' counts too), or None when it is not a table of pads."""
+    pads, arrays = t.get("pads") or [], t.get("arrays") or []
+    if not isinstance(pads, list) or not isinstance(arrays, list) or not all(isinstance(a, dict) for a in arrays):
+        return None
+    counts = [a.get("count") for a in arrays]
+    if not all(isinstance(c, int) and not isinstance(c, bool) and c >= 0 for c in counts):
+        return None
+    return len(pads) + sum(counts)
+
+
 def pad_layout(spec):
-    """A pad table's pads as built (footprint_adv.table_layout: mm, KiCad frame, the view and axes applied), centred
-    on the pads' extent so two reads with other origins compare: [(number, x, y, w, h)], or None (no table, or one
-    that does not build)."""
-    if not isinstance(spec, dict) or not isinstance(spec.get("pad_table"), dict):
+    """A pad table's pads as built (footprint_adv.table_layout: mm, KiCad frame, the view and axes applied, each pad's
+    quarter-turn rotation applied to its size), centred on the pads' extent so two reads with other origins compare:
+    [(number, x, y, w, h)], or None, and then no pad is checked (the part stays held, #279) for: no table, one that
+    does not build, one too big, or one whose pads say more than a place and a rectangle: a hole (THT or NPTH: no
+    drill is compared), a polygon (only its extent would be), a pad turned other than by quarter turns, a pad with no
+    number (which pin goes where is not said: VEML7700, hand check 2026-11-23)."""
+    t = spec.get("pad_table") if isinstance(spec, dict) else None
+    if not isinstance(t, dict) or not (_table_size(t) or 0) or _table_size(t) > MAX_TABLE_PADS:
         return None
     from . import footprint_adv as FA
     try:
-        pads = [p for p in FA.table_layout(spec)[0] if p.get("kind") != "np_thru_hole"]
-    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        pads = FA.table_layout(spec)[0]
+    except (KeyError, TypeError, ValueError, AttributeError, ZeroDivisionError, RecursionError):
         return None
-    # a pad with no number says nothing of which pin goes where: the layout is not compared at all (VEML7700, hand
-    # check 2026-11-23: both reads numbered a land drawing that prints no numbers, in the same reading order)
-    if not pads or any(not str(p.get("num") or "").strip() for p in pads) or any(not all(_num(p.get(k)) for k in ("x", "y", "w", "h")) for p in pads):
+    out = []
+    for p in pads:
+        rot = p.get("rot") or 0
+        if p.get("kind") != "smd" or p.get("poly") or not _num(rot) or float(rot) % 90:
+            return None
+        if not str(p.get("num") or "").strip() or not all(_num(p.get(k)) for k in ("x", "y", "w", "h")):
+            return None
+        w, h = (p["h"], p["w"]) if round(float(rot) / 90) % 2 else (p["w"], p["h"])
+        out.append((str(p["num"]), p["x"], p["y"], w, h))
+    pads = [{"x": x, "y": y, "w": w, "h": h} for _, x, y, w, h in out]
+    if not pads:
         return None
     x0 = (min(p["x"] - p["w"] / 2 for p in pads) + max(p["x"] + p["w"] / 2 for p in pads)) / 2
     y0 = (min(p["y"] - p["h"] / 2 for p in pads) + max(p["y"] + p["h"] / 2 for p in pads)) / 2
-    return [(str(p["num"]), p["x"] - x0, p["y"] - y0, p["w"], p["h"]) for p in pads]
+    return [(n, x - x0, y - y0, w, h) for n, x, y, w, h in out]
 
 
 def pads_alike(a, b):
@@ -177,6 +203,18 @@ def pads_alike(a, b):
                   max(min(gap(o, p) for p in a if p[0] == o[0]) for o in tb))
         if worst is None or off < worst[0]:
             worst = (off, q)
+    # each read is centred on its own pads, so an outer pad PAD_TOL x 2 off moves the centre and reads PAD_TOL off:
+    # every pad-to-pad distance must agree too (review 2026-11-23: a 2.0 mm span against 2.1 agreed)
+    if worst[0] <= PAD_TOL + 1e-9:
+        n2 = {}
+        for p in b:
+            n2.setdefault(p[0], []).append(p)
+        da = lambda u, v: math.hypot(u[1] - v[1], u[2] - v[2])
+        for i, u in enumerate(a):
+            for v in a[i + 1:]:
+                if not any(abs(da(u, v) - da(u2, v2)) <= PAD_TOL + 1e-9 for u2 in n2[u[0]] for v2 in n2[v[0]]):
+                    return False, f"pads {u[0]} and {v[0]} {da(u, v):.2f} mm apart", \
+                        f"{min(da(u2, v2) for u2 in n2[u[0]] for v2 in n2[v[0]]):.2f} mm apart"
     if worst[0] <= PAD_TOL + 1e-9:
         return True, f"{len(a)} pads", f"{len(b)} pads" + (f", turned {90 * worst[1]} degrees" if worst[1] else "")
     show = lambda ps: "; ".join(f"{n} {w:g}x{h:g} at ({x:g}, {y:g})" for n, x, y, w, h in sorted(ps)[:6])
@@ -736,7 +774,7 @@ def parse(msg):
         return _parse(msg)
     except Unavailable:
         raise
-    except (TypeError, ValueError, AttributeError, KeyError) as e:
+    except (TypeError, ValueError, AttributeError, KeyError, RecursionError) as e:
         raise Unavailable(f"the second read has the wrong shape ({type(e).__name__}: {str(e)[:120]})")
 
 
@@ -773,13 +811,17 @@ def _parse(msg):
             "pin_count": pkg.get("pin_count") if isinstance(pkg.get("pin_count"), int) else None,
             "pin_rows": pkg.get("pin_rows")}
     pt = pkg.get("pad_table_json")                    # the land drawing pad by pad, asked when the read placed its pads
-    if isinstance(pt, str) and pt.strip():
+    if isinstance(pt, str) and pt.strip() and len(pt) < 200_000:
         try:
             pt = json.loads(pt)
-        except ValueError:
+        except (ValueError, RecursionError):
             pt = None
-    if isinstance(pt, dict) and pt.get("pads") and not D._non_finite(pt):
-        spec["pad_table"] = pt
+    try:                                              # a broken table drops the pads only, never the whole second read
+        if isinstance(pt, dict) and (pt.get("pads") or pt.get("arrays")) and not D._non_finite(pt) \
+                and 0 < (_table_size(pt) or 0) <= MAX_TABLE_PADS:
+            spec["pad_table"] = pt
+    except RecursionError:
+        pass
 
     def mm(raw):
         if not isinstance(raw, dict) or raw.get("unit") not in D.TO_MM:

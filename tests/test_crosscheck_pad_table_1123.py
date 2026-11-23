@@ -126,3 +126,51 @@ def test_a_pad_table_with_an_unnumbered_pad_checks_no_pads():
     c = read(first(), second(t))
     assert "pads" in c["not_compared"] and "pads" not in c["agreed"], c
     assert "do not number pads in reading order" in CC.system(pads=True)
+
+
+# ---------------------------------------------------------------- review 2026-11-23 (pad-by-pad check)
+def test_a_pad_turned_by_its_rotation_is_compared_as_built():
+    t = moved(SIT, "1", rotation=90)                                  # built as 1.4 x 0.4
+    assert read(first(t), second())["status"] == "disagreed"
+    t2 = moved(moved(SIT, "1", w=1.4, h=0.4), "1", rotation=90)       # 1.4 x 0.4 turned: 0.4 x 1.4 again
+    assert read(first(t2), second())["status"] == "agreed"
+    assert CC.pad_layout(first(moved(SIT, "1", rotation=45))) is None
+
+
+def test_holes_polygons_and_npth_are_not_compared():
+    tht = copy.deepcopy(SIT)
+    tht["default_pad"] = {"type": "tht", "shape": "circle"}
+    for p in tht["pads"]:
+        p["drill"] = 0.1
+    assert CC.pad_layout(first(tht)) is None
+    poly = copy.deepcopy(SIT)
+    poly["pads"][0] = {"number": "1", "polygon": [{"x": -1.0, "y": -0.7}, {"x": -0.6, "y": -0.7}, {"x": -0.8, "y": 0.7}]}
+    assert CC.pad_layout(first(poly)) is None
+    npth = copy.deepcopy(SIT)
+    npth["pads"].append({"type": "npth", "x": 5, "y": 5, "drill": 1.0})
+    assert CC.pad_layout(first(npth)) is None
+    c = read(first(tht), second())
+    assert "pads" not in c["agreed"], c
+
+
+def test_a_span_0_1_mm_longer_disagrees():
+    two = {"unit": "mm", "y_axis": "up", "view": "top", "origin": "center",
+           "pads": [{"number": "1", "x": -1.0, "y": 0, "w": 0.6, "h": 1.0}, {"number": "2", "x": 1.0, "y": 0, "w": 0.6, "h": 1.0}]}
+    wide = copy.deepcopy(two)
+    wide["pads"][1]["x"] = 1.1
+    a, b = dict(first(two), pin_count=2), dict(second(wide), pin_count=2)
+    assert read(a, b)["status"] == "disagreed"
+    sit = moved(SIT, "3", x=0.9)                                       # #279's own place error, width aside
+    assert read(first(), second(sit))["status"] == "disagreed"
+
+
+def test_a_hostile_pad_table_never_stops_the_read():
+    deep = "[" * 20000 + "]" * 20000
+    huge = json.dumps({"unit": "mm", "arrays": [{"count": 3000000, "x": 0, "y": 0, "dx": 0.1, "dy": 0, "first_number": 1,
+                                                  "w": 0.1, "h": 0.1}]})
+    for pt in (deep, huge, json.dumps({"pads": ["x", 1]})):
+        ans = {"package": {"name": "x", "package_type": "custom", "pin_count": 4,
+                           "dims": [{"name": "body_length", "label": "L", "min": "", "nom": "2.0", "max": "", "unit": "mm"}],
+                           "pad_table_json": pt}, "pins": []}
+        crit, _, _ = CC.parse({"content": [{"type": "text", "text": json.dumps(ans)}], "stop_reason": "end_turn"})
+        assert not crit.get("pad_layout") and crit.get("body_length"), crit
