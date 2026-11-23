@@ -143,10 +143,12 @@ def pad_layout(spec):
         return None
     from . import footprint_adv as FA
     try:
-        pads = [p for p in FA.table_layout(spec)[0] if p.get("kind") != "np_thru_hole" and p.get("num")]
+        pads = [p for p in FA.table_layout(spec)[0] if p.get("kind") != "np_thru_hole"]
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return None
-    if not pads or any(not all(_num(p.get(k)) for k in ("x", "y", "w", "h")) for p in pads):
+    # a pad with no number says nothing of which pin goes where: the layout is not compared at all (VEML7700, hand
+    # check 2026-11-23: both reads numbered a land drawing that prints no numbers, in the same reading order)
+    if not pads or any(not str(p.get("num") or "").strip() for p in pads) or any(not all(_num(p.get(k)) for k in ("x", "y", "w", "h")) for p in pads):
         return None
     x0 = (min(p["x"] - p["w"] / 2 for p in pads) + max(p["x"] + p["w"] / 2 for p in pads)) / 2
     y0 = (min(p["y"] - p["h"] / 2 for p in pads) + max(p["y"] + p["h"] / 2 for p in pads)) / 2
@@ -655,7 +657,7 @@ Do not convert units, compute, round or fill in values from memory or JEDEC norm
 # asked only when the first read copied the maker's land pad by pad (pads_read), so every other check keeps its key
 SYSTEM_PADS = """
 
-Also give pad_table_json: the recommended land pattern (PCB footprint / land pattern / solder pad layout) drawing of this part as a JSON object written as text, with "unit" ("mm", "in" or "mil" as printed), "view" ("top" unless the drawing says bottom view), "y_axis": "up", "origin": "center", and "pads": a list of {"number", "x", "y", "w", "h"}, one entry per pad, the pad's centre and its width (along x) and height (along y) in that unit. Number each pad as the drawing does (pin 1 where the drawing marks it). Work every value out from the drawing's own printed dimensions, not from memory; "" if the pages print no land pattern."""
+Also give pad_table_json: the recommended land pattern (PCB footprint / land pattern / solder pad layout) drawing of this part as a JSON object written as text, with "unit" ("mm", "in" or "mil" as printed), "view" ("top" unless the drawing says bottom view), "y_axis": "up", "origin": "center", and "pads": a list of {"number", "x", "y", "w", "h"}, one entry per pad, the pad's centre and its width (along x) and height (along y) in that unit. Number each pad only as the pages show it: the number printed at the pad, or the pin number a pinout drawing in the same view puts at that place. Where the pages do not show which pad is which pin, give every pad "number": "" (do not number pads in reading order or from a photo). Work every value out from the drawing's own printed dimensions, not from memory; "" if the pages print no land pattern."""
 
 # asked only when the first read placed the pins itself (pin_positions), so every other check keeps its cached answer
 SYSTEM_ROWS = """

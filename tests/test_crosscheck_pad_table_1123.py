@@ -118,3 +118,11 @@ def test_two_pads_of_one_number_each_need_their_own_match():
     bad = copy.deepcopy(sw)
     bad["pads"][1].update(x=-3, y=2)                                 # both pad 1s at one place
     assert read(a, dict(second(bad), pin_count=2))["status"] == "disagreed"
+
+
+def test_a_pad_table_with_an_unnumbered_pad_checks_no_pads():
+    t = copy.deepcopy(SIT)
+    t["pads"][2]["number"] = ""
+    c = read(first(), second(t))
+    assert "pads" in c["not_compared"] and "pads" not in c["agreed"], c
+    assert "do not number pads in reading order" in CC.system(pads=True)
