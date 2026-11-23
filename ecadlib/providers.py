@@ -144,7 +144,9 @@ _MAKER_LEGAL = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "
                 "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE"}
 _MAKER_ALIAS.update({"ANALOGDEVICES": "ANALOG", "NATIONALSEMICONDUCTOR": "TEXASINSTRUMENTS",
                      "CENTRAL": "CENTRALSEMICONDUCTOR", "TEXAS": "TEXASINSTRUMENTS",    # "Central" alone on a BOM
-                     "PERICOM": "DIODES", "DIALOG": "RENESAS", "SIPEX": "MAXLINEAR", "CATALYST": "ON"})   # bought
+                     "PERICOM": "DIODES", "DIALOG": "RENESAS", "SIPEX": "MAXLINEAR", "CATALYST": "ON",   # bought
+                     "SEISTACKPOLE": "STACKPOLE",                 # DigiKey's "SEI Stackpole" (Stackpole Electronics Inc.)
+                     "ARATAS": "OMRON"})                          # Omron Electronic Components' new name (2025)
 # the words of a company name an alias maps to, where it has several: where a shorter name may end in it ("Texas" /
 # "TI"), and where not ("Teco" is no "TE" = TE Connectivity)
 _ALIAS_WORDS = {"TEXASINSTRUMENTS": ["TEXAS", "INSTRUMENTS"], "TECONNECTIVITY": ["TE", "CONNECTIVITY"],
