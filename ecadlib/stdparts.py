@@ -1699,6 +1699,11 @@ def _names_other_land(texts, name):
 # these four cases (same body); other cases (low-profile, AVX-only) are not in the table
 TANT_LAND = {"3216-18": "CP_EIA-3216-18_Kemet-A", "3528-21": "CP_EIA-3528-21_Kemet-B",
              "6032-28": "CP_EIA-6032-28_Kemet-C", "7343-31": "CP_EIA-7343-31_Kemet-D"}
+# KiCad's tantalum lands of one EIA size are the same copper at every height (Capacitor_Tantalum_SMD, checked
+# 2026-11-23: CP_EIA-3216-10/-12/-18, 3528-12/-15/-21, 6032-15/-20/-28, 7343-15/-20/-30/-31/-40/-43 share their size's
+# pads); the generator sizes the land from the body's length and width, not its height. A height the table has no name
+# for (KEMET T520B 3528-19, T495X 7343-43) takes its size's table land; the 3D body keeps the part's own height.
+TANT_SIZE_LAND = {c.split("-")[0]: n for c, n in TANT_LAND.items()}
 EIA_CASE = re.compile(r"(?<![\d.])(3216|3528|6032|7343|2012|1608|7260|7132)[-_ ](\d{2})(?![\d.])")
 CASE_LETTER = re.compile(r"(?i)(?<![A-Za-z0-9])case[-_ ]?([A-E])(?![A-Za-z0-9])")
 
@@ -1779,9 +1784,14 @@ def tantalum_land(texts, mpn="", description=""):
     if len(found) > 1:
         return None, "two tantalum cases named: " + ", ".join(f"{c} ({w})" for c, w in said)
     case = found.pop()
-    if case not in TANT_LAND:
-        return None, f"tantalum case {case} is not in the standard table"
-    return TANT_LAND[case], f"tantalum case EIA {case} (" + ", ".join(dict.fromkeys(w for _, w in said)) + ")"
+    where = ", ".join(dict.fromkeys(w for _, w in said))
+    if case in TANT_LAND:
+        return TANT_LAND[case], f"tantalum case EIA {case} ({where})"
+    size = case.split("-")[0]
+    if size in TANT_SIZE_LAND and re.fullmatch(r"\d{4}-\d{2}", case):
+        return TANT_SIZE_LAND[size], (f"tantalum case EIA {case} ({where}): KiCad's EIA {size} lands are the same "
+                                      f"copper at every height, so its size's land; the 3D body keeps its own height")
+    return None, f"tantalum case {case} is not in the standard table"
 
 
 def resolve(texts, kind=None, mpn="", description=""):

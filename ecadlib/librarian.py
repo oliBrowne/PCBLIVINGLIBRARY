@@ -1049,8 +1049,9 @@ class Run:
                 from . import stdparts as SP
                 land, why = SP.tantalum_land([ln.get("footprint", ""), item["footprint"].get("kicad") or ""], mpn,
                                               item.get("description") or ln.get("description") or "")
-                if land and lib.footprint(land):
-                    fp_ref, fp_how = lib.footprint(land), why
+                if land and lib.footprint(land) and "same copper" not in why:    # another height's land (stdparts.
+                    fp_ref, fp_how = lib.footprint(land), why       # TANT_SIZE_LAND) carries KiCad's 3D body at the
+                                                                    # wrong height: the standard source builds it
             elif PASSIVE[kind][1] and pkg in IMP2MET:
                 guess = PASSIVE[kind][1].format(pkg, IMP2MET[pkg])
                 own = _own_land(names, guess.split(":")[-1])
@@ -1242,6 +1243,10 @@ class Run:
             sp = SP.spec(res["footprint"])
             text, _ = SP.build(res["footprint"], RU.density_for(sp, self.rules))
             h = F.dim(sp["height_max"])[2] if sp.get("height_max") else None
+            own, land = SP.EIA_CASE.search(str(case or "")), SP.EIA_CASE.search(res["footprint"])
+            if res["footprint"] in SP.TANT_LAND.values() and own and land and own.group(0) != land.group(0):
+                h = int(own.group(2)) / 10      # a tantalum on its size's land (stdparts.TANT_SIZE_LAND): its own case
+                sp = dict(sp, height_max=h)     # height for the 3D body, not the table land's
             self.put_fp(st, text, fp_name, f"standard:{res['kicad_ref']}", None, h, "standard package table", sp)
             got.append(f"footprint {res['kicad_ref']} ({res['fp_how']})")
         fp_src = str((st["footprint"] or {}).get("source") or "")

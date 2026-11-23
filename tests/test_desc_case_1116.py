@@ -24,7 +24,21 @@ def test_tantalum_eia_from_size_and_height():
         assert E(case, h) is None, (case, h)
     land = lambda c, h: SP.resolve([f"{SP.tantalum_eia(c, h)} ({c})"], "CP", "X1", "CAP TANT 10UF 16V")["footprint"]
     assert land("1411 (3528 Metric)", "2.11mm") == "CP_EIA-3528-21_Kemet-B"
-    assert land("1411 (3528 Metric)", "2.00mm") is None and land("2917 (7343 Metric)", "4.30mm") is None
+    # KiCad's tantalum lands of one EIA size are the same copper at every height (CP_EIA-3528-12/-15/-21, 7343-15 to
+    # -43): a height the table has no name for (KEMET T520B 3528-19, T495X 7343-43) takes its size's land
+    assert land("1411 (3528 Metric)", "2.00mm") == "CP_EIA-3528-21_Kemet-B"
+    assert land("2917 (7343 Metric)", "4.30mm") == "CP_EIA-7343-31_Kemet-D"
+
+
+def test_tantalum_height_variant_is_its_size_land_and_says_so():
+    name, why = SP.tantalum_land(["3528-19 (1411 (3528 Metric), height 2.00mm)"], "T520B107M006ATE040",
+                                 "CAP TANT POLY 100UF 6.3V 1411")
+    assert name == "CP_EIA-3528-21_Kemet-B" and "same copper" in why, (name, why)
+    for size in SP.TANT_SIZE_LAND:                         # every size the fallback serves has its table land
+        assert SP.TANT_SIZE_LAND[size] in SP.TANT_LAND.values()
+    # a size KiCad has no checked land for still builds nothing; an aluminium can is never a tantalum
+    assert SP.tantalum_land(["7260-38"], "", "CAP TANT 100UF")[0] is None
+    assert SP.tantalum_land(["3528-19"], "EEE-FK1V101P", "CAP ALUM 100UF")[0] is None
 
 
 def test_digikey_height_reaches_the_source_result():
@@ -70,8 +84,13 @@ def test_tantalums_build_on_the_case_their_part_search_names(tmp_path, monkeypat
         it = got[mpn]
         assert it["status"] == "ready" and land in str(it["source"]["footprint"]), (mpn, it["source"], it["hold_reasons"])
         assert it["source"]["symbol"] == "standard:C_Polarized", it["source"]
-    for mpn in ("T495X107K016ATE100", "T520B107M006ATE040"):    # 7343-43: not in the table; T520 is a polymer part
-        assert got[mpn]["status"] == "held" and not got[mpn]["source"]["footprint"], (mpn, got[mpn]["source"])
+    # 7343-43 and 3528-19 have no table name: their size's land (the same copper at every height in KiCad), with the
+    # 3D body at the part's own case height, not the table land's
+    for mpn, land, h in (("T495X107K016ATE100", "CP_EIA-7343-31_Kemet-D", 4.3),
+                         ("T520B107M006ATE040", "CP_EIA-3528-21_Kemet-B", 1.9)):
+        it = got[mpn]
+        assert land in str(it["source"]["footprint"]), (mpn, it["source"], it["hold_reasons"])
+        assert abs(it["release_check"]["height"] - h) < 0.01, (mpn, it["release_check"])
 
 
 def test_a_chip_size_only_the_value_decoder_reads_names_the_land():
