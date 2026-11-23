@@ -51,7 +51,10 @@ DIMS = ("pitch", "body_length", "body_width", "lead_span", "ep_length", "ep_widt
 # it (build_fields). A standard table's foot is one maker's, so a table neither agrees nor disagrees on it
 TERMINAL = ("terminal_length", "terminal_width")
 # field -> (absolute mm, relative): the larger one is the tolerance. A terminal read twice or half is 0.1 mm off or more
-# (0.2 mm no-lead terminals, 0.25 mm chip end caps; a 0.2 mm lead's width 0.1); two reads of one drawing differ by less
+# (0.2 mm no-lead terminals, 0.25 mm chip end caps; a 0.2 mm lead's width 0.1); two reads of one drawing differ by less.
+# A terminal's tolerance is also never more than TERMINAL_REL of its size, down to TERMINAL_MIN (review 2026-11-23, round
+# 2: 0.10 mm let a 0.2 mm terminal read 0.1 or 0.3 agree, half and 1.5 times); longer terminals keep what they had
+TERMINAL_MIN, TERMINAL_REL = 0.05, 0.15
 TOL = {"pitch": (0.01, 0.0), "body_length": (0.10, 0.03), "body_width": (0.10, 0.03), "lead_span": (0.10, 0.03),
        "ep_length": (0.10, 0.05), "ep_width": (0.10, 0.05), "terminal_length": (0.10, 0.05), "terminal_width": (0.05, 0.05)}
 LABEL = {"pin_count": "pin count", "pitch": "pitch", "body_length": "body length", "body_width": "body width",
@@ -390,7 +393,10 @@ def _show(v):
 
 def _close(k, a, b, table):
     ab, rel = TOL[k]
-    tol = max(ab, rel * max(abs(a[0]), abs(b[0])))
+    size = max(abs(a[0]), abs(b[0]))
+    tol = max(ab, rel * size)
+    if k in TERMINAL:
+        tol = max(TERMINAL_MIN, min(tol, TERMINAL_REL * size))
     if abs(a[0] - b[0]) <= tol + 1e-9:
         return True
     # the table nominal inside the printed range, when that range is a tolerance band (not 3.0..6.2 mm around a
