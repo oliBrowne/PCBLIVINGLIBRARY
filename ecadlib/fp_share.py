@@ -194,7 +194,7 @@ def same_fp(rec, h, source, out, cache, text=None, height=None):
     3D body as high (height: the new part's own body height, from its own model or a part-specific height; None:
     the part takes the footprint's body). h: the new footprint's digest; text: its .kicad_mod, for a record hashed
     by an older digest version."""
-    a, b = lib_name(rec.get("source")), lib_name(source)
+    a, b = lib_name(rec.get("origin") or rec.get("source")), lib_name(source)   # origin: a store record's own source
     rh, v = hash_of(rec, out, cache)
     if v != HASH_V and text is not None:
         if extra(text):                        # an old pad-only hash cannot tell paste / custom copper apart: a

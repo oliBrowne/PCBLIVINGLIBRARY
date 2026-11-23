@@ -66,8 +66,9 @@ def chip_size_problem(item):
     kind, size = SP.mpn_size(mpn)
     if not size:
         return None
-    src = str((item.get("source") or {}).get("footprint") or "")
-    if src.split(":")[0] in ("datasheet", "easyeda"):     # the part's own land: a URL / an LCSC number, no size
+    from .store_client import item_origin               # a shared-store record: the land it was made from
+    src = item_origin(item, "footprint")
+    if src.split(":")[0] in ("datasheet", "easyeda", "store"):   # the part's own land: a URL / an LCSC number, no size
         return None
     fp = item.get("footprint") or {}
     names = [src.split(":")[-1]] if src else [str(fp.get("kicad") or ""), str(fp.get("ref") or "")]
@@ -411,7 +412,9 @@ def clear_doubts(entry, src, halves):
 
 
 NUMBERING_WARN = re.compile(r"numbering doubles back|is not the top-left pad")
-GENERATED_FP = ("datasheet:", "standard:")   # ecadlib's own generator (a datasheet read, pad table, standard family)
+GENERATED_FP = ("datasheet:", "standard:",   # ecadlib's own generator (a datasheet read, pad table, standard family),
+                "store:")                    # and a shared-store record: whatever it was made from, its drawing came
+#                                              from a download, so it gets every check a generated footprint gets
 
 
 def _row_reversed(po):
@@ -819,7 +822,51 @@ def generic_passive(item):
 PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what its workspace released (no datasheet here)
 
 
-def publish_problems(item, base=".", rules=None, writes_files=False, policy=None):
+def store_problems(item, store, covered=()):
+    """Why a part that owes the shared store must not go out now (store_client.problems): built from a record the
+    store has since withdrawn, disputes, no longer lists or rates below [store] accept, or released by a record's
+    agreement that no longer stands; or the store cannot vouch for it (switched off, its withdrawn list unreadable and
+    no copy younger than store_client.HOLD_MAX_AGE_S saved here). [] when the part owes the store nothing. covered:
+    the failures a person's --allow covers (a reason they already released the part despite is not raised again)."""
+    from . import store_client as SC
+    if not SC.depends(item):
+        return []
+    store = store if store is not None and getattr(store, "enabled", False) else None
+    return list(dict.fromkeys(f"verify: {SC.note_for(d, why)}" for d, why in SC.problems(item, store)
+                              if not any(why in str(c) for c in covered)))
+
+
+_STORES = {}                                   # the shared store a publisher checks against: one per settings, per process
+
+
+def store_for(item, base=".", rules=None):
+    """The store_client.Store [store] names, made once per process and settings (so a plan of 500 parts asks an
+    unreachable store once), when it is set and the item owes it something; else None (nothing is built or asked;
+    a part that owes the store is then held by store_problems: the store cannot vouch for it). The store's copies are
+    kept in the default download cache (firstrun.default_cache), so a withdrawn list read earlier still counts while
+    the store cannot be reached."""
+    from . import rules as RU, store_client as SC
+    if not SC.depends(item):
+        return None
+    try:
+        rules = rules if isinstance(rules, dict) else RU.resolve(rules, base)
+    except Exception:                          # rules that cannot be read: the caller's own check says so
+        return None
+    if not SC.configured(rules):
+        return None
+    s = rules.get("store") or {}
+    k = tuple(str(s.get(x) or "") for x in ("url", "accept", "mode", "snapshot"))
+    if k not in _STORES:
+        try:
+            from .firstrun import default_cache
+            cache = default_cache()
+        except Exception:
+            cache = None
+        _STORES[k] = SC.from_rules(rules, cache_dir=cache)
+    return _STORES[k]
+
+
+def publish_problems(item, base=".", rules=None, writes_files=False, policy=None, store=None):
     """Why a publisher (altium365 push, dblib-sync / altium-pkg, kicad-export) must not send this part's files: the
     release check run again now, on the files as they are, less the failures the item's --allow covers. [] = it may
     go. A plan's `status` alone is never enough: `altium365 plan --models`, a triage plan or a hand edit can say
@@ -828,7 +875,10 @@ def publish_problems(item, base=".", rules=None, writes_files=False, policy=None
     as in apply: it sends them no files. writes_files=True (kicad-export, kicad-dblib, export-parts: routes that put
     the part's own files in a library) checks them too: their files must be there and pass every check that applies.
     The field rules (PULLED_NOT_CHECKED: datasheet link, Description, required parameters) do not: the workspace
-    released those fields and ecadlib holds no datasheet for the part."""
+    released those fields and ecadlib holds no datasheet for the part. store: a store_client.Store, when the caller
+    has one; None = the one [store] names (store_for: only for a part that owes the store something): a part from a
+    record the store has since withdrawn or disputes, or one a withdrawn record's agreement released, does not go
+    (store_problems)."""
     st = item.get("status", "ready")
     if item.get("a365") and st == "deleted_in_workspace":
         return ["status: deleted in the Altium 365 workspace: not published again"]
@@ -852,7 +902,9 @@ def publish_problems(item, base=".", rules=None, writes_files=False, policy=None
             where = policy_file(base) or "ecadlib.toml [release.approvals]"   # added after the release check
             return out + [f"sign-off: the approval policy {where} cannot be read ({e}): fix it, then publish again"]
     block = push_block(item, policy, base)     # holds here too. No policy now: the release check's snapshot decides
-    return out + ([f"sign-off: {block}"] if block else [])
+    if store is None:
+        store = store_for(item, base, rules)
+    return out + ([f"sign-off: {block}"] if block else []) + store_problems(item, store, covered)
 
 
 PUBLISHABLE = ("ready", "existing")           # change_gate.RELEASED_STATUSES: what a publisher may send (re-checked)

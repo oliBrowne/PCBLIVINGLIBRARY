@@ -4135,14 +4135,15 @@ def _nat64_ipv4(ip):
     return [ipaddress.IPv4Address(bytes(x)) for x in (b[12:16], b[6:8] + b[9:11], b[7:8] + b[9:12], b[9:13])]
 
 
-def unsafe_download(url, public=False):
+def unsafe_download(url, public=False, resolve=True):
     """Why a datasheet link must not be downloaded, or None: only http(s), and never this machine (loopback), a
     link-local address (cloud metadata at 169.254.169.254) or another non-routable address. A datasheet link comes
     from a BOM or a web page someone else wrote, and the bytes are stored and sent to the model; a datasheet server
     on your own network (10.x, 192.168.x) stays allowed. A host name is looked up and refused when any address it
     resolves to is one of those (169.254.169.254.nip.io, localtest.me ...); names under .example / .test / .invalid
     are not looked up. public: a link a web search gave (no person chose it): a private network's address is refused
-    too.
+    too. resolve=False: the link's text only, no name lookup (a check that must not reach the network, e.g. of a
+    shared-store record a stranger wrote: a lookup would tell their DNS server who reads it).
     Limits (the best a check before the request can do): the lookup here is not the one the HTTP stack makes when it
     connects, so a name whose answer changes between the two (DNS rebinding) is not caught; and behind an HTTP proxy
     (HTTPS_PROXY) the proxy resolves the name itself, from its own network, so the answer here is only a guess at
@@ -4170,7 +4171,7 @@ def unsafe_download(url, public=False):
         if re.search(r"\.(example|test|invalid)\.?$", host, re.I):
             return None
         ips = []
-        for a in _resolve(host):
+        for a in (_resolve(host) if resolve else ()):
             try:
                 ips.append(ipaddress.ip_address(a.split("%")[0]))
             except ValueError:

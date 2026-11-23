@@ -1383,7 +1383,8 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
         if sname in symbols:
             rep["errors"].append(f"{it['name']}: symbol name {sname} already used by another part"); continue
         src = it.get("source") or {}
-        rep["kicad_content"] |= any(str(src.get(k) or "").startswith("kicad:") for k in ("symbol", "footprint"))
+        from .store_client import item_origin            # (a shared-store record made from the KiCad libraries too)
+        rep["kicad_content"] |= any(item_origin(it, k).startswith("kicad:") for k in ("symbol", "footprint"))
         # footprint first: the symbol's Footprint field names it
         fref = it["footprint"].get("ref")
         fpn = kname(fref) if fref and (it["footprint"].get("file") or it["footprint"].get("kicad_mod")) else None

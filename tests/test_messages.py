@@ -68,6 +68,29 @@ EXAMPLES = {
     "verify.datasheet_read": "verify: datasheet reader output (footprint, symbol): compare with https://x.example/a.pdf; "
                              "see datasheet/*.review.md (3 items flagged)",
     "verify.sim_pin_map": "verify: sim model BSS138: pin map not verified (by position)",
+    "store.disagree": "verify: shared store: the store's record ACME|DSPART1 r1 (checked) has other pads than this build "
+                      "(symbol datasheet, footprint datasheet): compare both with the datasheet",
+    "store.withdrawn": "verify: shared store record ACME|RC0603-10K r1 was withdrawn from the store (pad 1 too small): "
+                       "this part was built from it; build it again",
+    "store.disputed": "verify: shared store record ACME|RC0603-10K r2 is disputed (someone reported a difference)",
+    "store.lift_back": "verify: shared store record ACME|DSPART1 r1 was withdrawn from the store (pin 3 wrong): this "
+                       "part's own build was released because that record agreed with it; the holds it lifted are back",
+    "store.unknown": "verify: shared store record ACME|RC0603-10K r1: cannot tell whether the store withdrew it (its "
+                     "withdrawn list is missing or unreadable): this part was built from it",
+    "store.unchecked": "verify: shared store record ACME|RC0603-10K r1: withdrawals could not be checked for more than "
+                       "30 days (the store could not be read, and the copy of its withdrawn list saved on this computer "
+                       "is older than that): this part was built from it",
+    "store.off": "verify: this part came from the shared store, which is switched off, so withdrawals cannot be "
+                 "checked: release it yourself or switch the store on",
+    "store.gone": "verify: shared store record ACME|RC0603-10K r1 is no longer in the store's index: this part was built "
+                  "from it",
+    "store.level": "verify: shared store record ACME|RC0603-10K r1 is now only checked (below [store] accept = "
+                   "\"confirmed\"): this part was built from it",
+    "store.extras": "verify: shared store: the store's footprint has SMD pads on the bottom copper side: compare with "
+                    "the datasheet",
+    "store.package_clash": "verify: footprint: the BOM names R_1206_3216Metric but the shared store's record "
+                           "ACME|RC0603-10K r1 is R_0603_1608Metric: check which package the part has",
+    "store.note": "shared store: matched NE555DR without a maker: only TEXASINSTRUMENTS has it in the shared store",
     "verify.other": "verify: something a person must look at",
     "crosscheck.disagree": "cross-check disagrees, nothing written: second read: pitch read 0.5, second read 0.65",
     "crosscheck.unchecked": "cross-check unchecked: second read: not checked (refused)",
@@ -352,7 +375,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 29, "datasheet.py": 10,
+    "librarian.py": 33, "datasheet.py": 10,
 }
 
 

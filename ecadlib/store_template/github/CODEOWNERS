@@ -1,0 +1,13 @@
+# Who must review what (GitHub: Settings -> Branches -> "Require review from Code Owners" must be on for this to
+# bind). Every file outside parts/ and index/ is a maintainer's: the workflows and these settings (.github/), the store's
+# own files (store.json, withdrawn.json, withdrawn/, disputes.json, ecadlib-version.txt) and every top-level file
+# (README, CONTRIBUTING, NOTICE, LICENSE). A pull_request check runs the pull request's own copy of the workflows, so
+# a change to .github/ is never proven by its own green check: only a maintainer's review stands behind it.
+# `ecadlib store-repo init --maintainer NAME` writes the maintainers' GitHub names here; replace the placeholder
+# otherwise.
+* @MAINTAINERS
+
+# Parts and the index: no code owner. The verify check holds them to the contributor rules (CONTRIBUTING.md), and a
+# maintainer still merges.
+/parts/
+/index/
