@@ -218,13 +218,14 @@ def _other_columns(df, headers, used):
 
 def other_cells(line):
     """{header: cell} of a line's cells in the columns read_bom maps to no field (line['other_cells'], written as
-    'Color: red | Tolerance: 1%'); {} for a line from another reader."""
+    'Color: red | Tolerance: 1%'); {} for a line from another reader. Two columns under one header ('Type', 'Type')
+    keep both cells, joined (review 2026-11-23 round 2, C5: the second overwrote the first's 'tantalum')."""
     out, last = {}, None
     for part in str(line.get("other_cells") or "").split(" | "):
         h, sep, v = part.partition(": ")
         if sep and h.strip():
             last = h.strip()
-            out[last] = v.strip()
+            out[last] = f"{out[last]} | {v.strip()}" if last in out else v.strip()
         elif last and part:                                       # a cell that holds ' | ' itself
             out[last] += " | " + part
     return out

@@ -259,9 +259,14 @@ _SIZE_TOKEN = re.compile(r"(?:R|C|CP|L|D|F|FB|LED|RES|CAP|IND|FUSE|SMD|SMT|RC|CC
 _PLAIN = set("smd smt chip surface mount mounted generic general purpose standard std gp rohs pb free lead leadfree "
              "halogen aec q200 automotive grade commercial precision high low power voltage rated rating tol "
              "tolerance value val type class size case package pkg footprint metric imperial inch eia code passive "
-             "device small us eu and at to n a l m mm t&r tape reel tr temp temperature coefficient tc tcr max min typ "
+             "device small us eu and at to mm t&r tape reel tr temp temperature coefficient tc tcr max min typ "
              "nom nominal dc ac symbol semiconductor sim model".split())      # (KiCad's 'Resistor, US symbol', Altium's
 #                                                                         'Capacitor (Semiconductor SIM Model)')
+# review 2026-11-23 round 2 (C5): no single letter is a plain word ('10uF/16V/A', '1206_A', '1206 L': a tantalum's case
+# letter), and the kind's own letter is none beside these words ('case C', 'D-case', 'type C', 'size A')
+_CASE_WORD = set("case size type pkg package style code".split())
+_NOT_SAID = re.compile(r"(?i)(?<![A-Za-z0-9])n\s?/\s?a(?![A-Za-z0-9])")       # 'N/A': nothing said, no word of the part
+_PLUS_MARK = re.compile(r"\+(?!\s?[\d.]|\s?/?\s?[-\u2212\u2013])")              # a '+' that is no sign of a number or of '+/-'
 _PLAIN_KIND = {
     "R": "r res resistor resistors resistance resistive ohm ohms thick thin film metal jumper zero pullup pulldown "
          "pull up down anti sulfur sulphur antisulfur resistant moisture widerstand r\u00e9sistance resistencia",
@@ -289,12 +294,22 @@ def unread_words(text, kind=None, footprint=False):
         t = re.sub(r"(?i)(?<![A-Za-z])(?:non|un)[ _-]?polar(?:i[sz]ed)?(?![a-z])", " ", t)
     words = _PLAIN | _PLAIN_KIND.get(kind, set())
     out = []
-    for tok in _SPLIT.split(_GLUE_UNIT.sub("", t)):
-        tok = tok.strip(".,")
+    t = _NOT_SAID.sub(" ", t)
+    if kind in ("C", "CP") and _PLUS_MARK.search(t):      # '10uF +', '1206 (+)': the + side of a polarized capacitor,
+        out.append("+")                                   # never part of a plain chip's text (round 2, C5)
+    toks = [x for x in (tok.strip(".,") for tok in _SPLIT.split(_GLUE_UNIT.sub("", t))) if x]
+    for i, tok in enumerate(toks):
         if footprint and re.fullmatch(r"[2-9][A-Za-z]|\d{1,3}", tok):   # (and '0603_4', '0603 4': a count)      # '0603 4R' in a footprint cell: four resistors
             out.append(tok)                                          # in one body, not a 4 ohm value
             continue
-        if not tok or not re.search(r"\w", tok) or tok.lower() in words or _UNDERSTOOD.fullmatch(tok):
+        if len(tok) == 1 and tok.isalpha() and {x.lower() for x in toks[max(i - 1, 0):i + 2]} & _CASE_WORD:
+            out.append(tok)                                          # 'case C', 'D-case': a case letter, not 'C' the
+            continue                                                 # capacitor
+        if i and re.fullmatch(r"[2-9]", tok) and toks[i - 1].lower() not in ("class", "grade") and not (
+                i + 1 < len(toks) and re.fullmatch(r"(?i)\d+m?w(?:atts?)?", toks[i + 1])):
+            out.append(tok)                                          # '10k 4', 'Resistor 4': a count of elements, where
+            continue                                                 # 'Class 2' and '3/4W' are a class and a rating
+        if not re.search(r"\w", tok) or tok.lower() in words or _UNDERSTOOD.fullmatch(tok):
             continue
         m = _SIZE_TOKEN.fullmatch(tok)
         if m and (m.group(1) in IMPERIAL or m.group(1) in METRIC):
