@@ -412,6 +412,7 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             except ValueError:
                 pass
     holds, on, told = {}, {}, {}             # told: {part: {column: (cell, BOM line)}} of its lines with no MPN
+    unread = {}                              # {part: [(BOM line, why it is no generic chip or None)]} of the same lines
     out, seen, renamed, same_value, canon, first, notes, unstorable = {}, {}, {}, {}, {}, {}, {}, {}
     # a name already in the plan stays with its part (SYS-1): when the part released under it is still in the BOM, a
     # line added above it with another MPN takes the suffixed name instead
@@ -527,7 +528,11 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             # alone. Every other cell they have but designator and quantity, mapped to a field or not, has to say
             # the same (a Color column's red and green, Tolerance 1% and 5%, Voltage 16V and 50V, another maker,
             # library symbol or datasheet): else held. An empty cell says nothing, as for the Description below.
-            from .bom_triage import other_cells
+            # Round 2 (C1): an empty cell says nothing, so a word that holds a generic part ('tantalum', 'x4',
+            # 'array', 'Polarized: yes') on a later line whose first line's cell is empty was never read: the
+            # librarian reads one line of the part. Every line is read here (unread: below the loop).
+            from . import stdparts as SP
+            from .bom_triage import other_cells, said_cells
             from .providers import same_maker
             flat = lambda v: " ".join(str(v or "").split())
             mine = {"Manufacturer": ln.get("manufacturer"), "LibRef": ln.get("libref"), "Datasheet": ln.get("datasheet"),
@@ -540,6 +545,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                 old, odes = was.setdefault(k, (v, des))
                 if old.casefold() != v.casefold() and not (k == "Manufacturer" and same_maker(old, v)):
                     differ.setdefault(odes, []).append(f"{k} {old[:40]!r} vs {v[:40]!r}")
+            unread.setdefault(pn, []).append((des, SP.generic_passive_hold(
+                cat, ln.get("value", ""), ln.get("description", ""), said_cells(ln))))
             for odes, d in differ.items():
                 holds.setdefault(pn, []).append(
                     f"BOM lines {odes} and {des} have no part number and are built as one part {pn} (same value "
@@ -581,6 +588,13 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                     f"BOM lines {kdes} and {des} have no part number and are built as one part {pn} (same value "
                     f"and footprint), but are described differently ({said[0]!r} vs {said[1]!r}): give them part "
                     "numbers if they are two parts, or one description if they are one")
+    for pn, each in unread.items():             # round 2 (C1): the lines with no part number built as one part
+        if len(each) > 1:                       # (one line alone: librarian.passive_kind reads it and says so)
+            for des, why in each:
+                if why:
+                    holds.setdefault(pn, []).append(
+                        f"BOM line {des} is one of {len(each)} lines with no part number built as one part {pn} "
+                        f"(same value and footprint), and {why}")
     said = {}                                   # a part's review names 5 of them (200 lines sharing 'R1-R9999')
     for r, parts in sorted(on.items()):         # R3 on a 10k line and on a 1k line: one of the two lines is wrong
         for pn in parts if len(parts) > 1 else ():

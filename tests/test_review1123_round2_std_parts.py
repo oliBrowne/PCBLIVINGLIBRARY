@@ -158,3 +158,36 @@ def test_header_meaning_end_to_end(tmp_path):
     assert sorted(n for n, (s, _) in st.items() if s == "ready") == ["CAP-0402-100n", "CAP-0603-1uF", "RES-0805-4k71%"], st
     assert "Polarized" in st["CAP-1206-10uF"][1] and "8 Pins" in st["RES-1206-10k"][1], st
     assert not _fp(plan["CAP-1206-10uF"]).startswith("standard:") and not _fp(plan["RES-1206-10k"]).startswith("standard:")
+
+
+# ---------------------------------------------------------------- C1 every merged no-MPN line is read
+MERGED_HOLD = [
+    ("Designator,Qty,Value,Footprint,Description\nC1,1,10uF,1206,\nC2,1,10uF,1206,CAP TANT 10uF 16V\n", "TANT"),
+    ("Designator,Qty,Value,Footprint,Description,Comment\nC1,1,10uF,1206,,\nC2,1,10uF,1206,,tantalum\n", "tantalum"),
+    ("Designator,Qty,Value,Footprint,Description\nR1,1,10k,1206,\nR2,1,10k,1206,RES ARRAY 4x10k\n", "ARRAY"),
+    ("Designator,Qty,Value,Footprint,Notes\nR1,1,10k,1206,\nR2,1,10k,1206,\nR3,1,10k,1206,x4\n", "x4"),
+    ("Designator,Qty,Value,Footprint,Remark\nC1,1,10uF,1206,\nC2,1,10uF,1206,polarized\n", "polarized"),
+    ("Designator,Qty,Value,Footprint,LibRef\nC1,1,10uF,1206,\nC2,1,10uF,1206,Cap Pol1\n", "Pol"),
+    ("Designator,Qty,Value,Footprint,Polarized\nC1,1,10uF,1206,\nC2,1,10uF,1206,yes\n", "Polarized"),
+]
+
+
+@lite
+def test_a_hazard_word_on_a_later_merged_line_is_held(tmp_path):
+    for n, (bom, word) in enumerate(MERGED_HOLD):
+        d = tmp_path / str(n)
+        d.mkdir()
+        plan = _run(d, bom)
+        assert len(plan) == 1, (bom, list(plan))
+        item = next(iter(plan.values()))
+        assert item["status"] != "ready" and word.lower() in _why(item).lower(), (bom, item["status"], _why(item))
+
+
+@lite
+def test_merged_lines_with_nothing_to_hold_stay_ready(tmp_path):
+    plan = _run(tmp_path, "Designator,Qty,Value,Footprint,Description,Comment\n"
+                          "C1,1,100n,0603,,\nC2,1,100n,0603,CAP CER 0.1UF 50V X7R 0603,\nC3,1,100n,0603,,X7R\n"
+                          "R1,1,10k,0603,,\nR2,1,10k,0603,RES SMD 10K OHM 1% 1/10W 0603,\nR3,2,10k,0603,,\n"
+                          "C4,1,10uF 16V X7R 0603,0603,,\nR4,1,4k7 1%,0805,,\nR5,1,4k7 1%,0805,,\n")
+    st = _status(plan)
+    assert len(plan) == 4 and all(s == "ready" for s, _ in st.values()), st
