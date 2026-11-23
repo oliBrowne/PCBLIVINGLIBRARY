@@ -130,6 +130,7 @@ EXAMPLES = {
                              "the two is a slip; check which value the part is",
     "librarian.kind_word_clash": "part kind: filed under Resistors but the BOM description 'Capacitor 10k' names a "
                                  "capacitor: check which part the BOM line is",
+    "librarian.check_failed": "check: the value check could not read this line (TypeError): check the part by hand",
     "librarian.maker_clash": "maker: the BOM names Rohm but the part search lists onsemi for this part number: check "
                              "whose part it is",
     "librarian.thermistor_type": "thermistor: NTC or PTC is not said by the line, its part number or the part search; "

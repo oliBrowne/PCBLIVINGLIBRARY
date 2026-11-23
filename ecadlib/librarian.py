@@ -711,7 +711,7 @@ def chip_size_clash(st, item, ln):
 # IC families that name one outline kind: a text naming another kind than the land built names another package
 _FAMILY_KIND = {"SOIC": "SO", "SO": "SO", "SOP": "SO", "TSSOP": "TSSOP", "HTSSOP": "TSSOP", "MSOP": "MSOP",
                 "VSSOP": "MSOP", "SSOP": "SSOP", "QSOP": "QSOP", "TSOP": "TSOP", "LQFP": "QFP", "TQFP": "QFP",
-                "QFP": "QFP", "PQFP": "QFP"}
+                "QFP": "QFP", "PQFP": "QFP", "DIP": "DIP", "PDIP": "DIP", "SPDIP": "DIP"}
 # no-lead outlines, DigiKey's spellings too (16-VFQFN, 48-UFQFN, 10-XFDFN): pin count and a stated body compared
 _FAMILY_KIND.update({f: "QFN" for f in ("QFN", "VQFN", "WQFN", "UQFN", "TQFN", "HVQFN", "LQFN", "VFQFN", "WFQFN",
                                         "UFQFN", "XQFN", "UFQFPN", "LFCSP")})
@@ -734,9 +734,14 @@ def _families_named(text):
         a = SP._free_attrs(f"{'QFN' if kind == 'QFN' else 'DFN' if kind == 'DFN' else fam}-{pins}"
                            f"{t[m.end():m.end() + 60]}") or {}
         body = a.get("body") if a.get("body") and a["body"][0] <= 30 else None
-        width = (body or (None,))[0] or a.get("body_w")
-        if kind == "TSSOP" and width and width <= 3.1:    # KiCad's TSSOP-8_3x3mm / TSSOP-10_3x3mm: the MSOP body
-            kind = "MSOP"
+        raw = re.match(r"[^,;/]{0,25}?(\d+(?:\.\d+)?)\s*[x\u00d7]\s*(\d+(?:\.\d+)?)\s*mm", t[m.end():m.end() + 60], re.I)
+        # a leaded outline's width is the first size as written (TSSOP-8_4.4x3mm is 4.4 wide, SOIC-8_3.9x4.9mm 3.9)
+        width = None if kind == "DIP" else (float(raw.group(1)) if raw and kind not in ("QFN", "DFN") else
+                                            (body or (None,))[0] or a.get("body_w"))
+        if kind == "TSSOP" and width and width <= 3.1 and (not body or max(body) <= 3.1):
+            kind = "MSOP"                                 # KiCad's TSSOP-8_3x3mm / TSSOP-10_3x3mm: the MSOP body
+        if kind == "SSOP" and width and width <= 4.0:     # a 3.9 mm SSOP is the QSOP body (DigiKey lists QSOPs so)
+            kind = "QSOP"
         out.append((kind, pins, width, body))
     return out
 
@@ -749,9 +754,12 @@ def _lands_named(text, diode, weak=False, kind=None):
     t = str(text or "")
     out = set()
     for frag in [t] + [f for f in re.split(r"[,;/]|\s+-\s+", t) if f.strip()]:
-        n, _ = SP.named_package(frag, diode=diode, weak=weak, kind=kind)
+        n, why = SP.named_package(frag, diode=diode, weak=weak, kind=kind)
         if n:
             out.add(n)
+        elif "ambiguous (KiCad has" in str(why or ""):   # TO-252-2: either tab numbering, the same outline
+            out.update(n for n in re.findall(r"(?:has|and) (\S+?)(?=[ ,)])", str(why).split("ambiguous", 1)[1])[:4]
+                       if n in SP.packages())
     return out
 
 
@@ -789,7 +797,7 @@ def _crystal_clash(built, texts):
         n = re.search(r"(?<!\d)(\d)-SMD\b", t)
         if pins and n and n.group(1) != pins.group(1):
             return (f"footprint: the land built is {built} ({pins.group(1)} pads) but the {w} names {n.group(1)} "
-                    f"({t[:60]!r}): check which package the crystal has")
+                    f"pads ({t[:60]!r}): check which package the crystal has")
     return None
 
 
@@ -862,21 +870,55 @@ def package_clash(st, item, ln, row, kind):
             continue
         named = _lands_named(t, diode, weak="description" in w or w == "BOM value", kind="D" if diode else kind) \
             if table else set()
-        if named and built not in named and not any(SP._same_land([built, n]) for n in named):
+        if named and built not in named and not any(SP._same_land([built, n]) or _same_outline(built, n) for n in named):
             return (f"footprint: the land built is {built} but the {w} names {'/'.join(sorted(named))} "
                     f"({t[:60]!r}): check which package the part has")
         if mine:
             kind_, pins, width, body = mine[0]
+            no_lead = kind_ in ("QFN", "DFN")
+            other = []
             for k2, p2, w2, b2 in _families_named(t):
-                if {k2, kind_} == {"TSSOP", "MSOP"} and not w2:
-                    continue                  # NXP's 'TSSOP8' is a 3 mm body: a TSSOP with no width names neither
-                no_lead = kind_ in ("QFN", "DFN")
+                if {k2, kind_} in ({"TSSOP", "MSOP"}, {"SSOP", "QSOP"}) and not w2:
+                    continue          # NXP's 'TSSOP8' is a 3 mm body, a widthless SSOP may be a QSOP: names neither
                 if k2 != kind_ or p2 != pins or (not no_lead and width and w2 and abs(width - w2) > 0.2) or \
                         (no_lead and body and b2 and any(abs(x - y) > 0.2 for x, y in zip(body, b2))):
-                    size = f" {b2[0]:g}x{b2[1]:g} mm" if no_lead and b2 else f" {w2:g} mm wide" if w2 else ""
-                    return (f"footprint: the land built is {built} but the {w} names a {p2}-pin {k2} outline{size} "
-                            f"({t[:60]!r}): check which package the part has")
+                    other.append((k2, p2, w2, b2))
+                else:
+                    other = None                  # the land built is among the outlines it names ('8-SOIC / 8-TSSOP')
+                    break
+            if other:
+                k2, p2, w2, b2 = other[0]
+                size = f" {b2[0]:g}x{b2[1]:g} mm" if no_lead and b2 else f" {w2:g} mm wide" if w2 else ""
+                return (f"footprint: the land built is {built} but the {w} names {_an(str(p2))} {p2}-pin {k2} "
+                        f"outline{size} ({t[:60]!r}): check which package the part has")
     return None
+
+
+def _clashes(st, item, ln, row, kind):
+    """Every source-clash note for a built part; a check that fails on an odd line holds the part (never stops the
+    run)."""
+    out = []
+    for name, f, args in (("package", package_clash, (st, item, ln, row, kind)),
+                          ("land kind", land_kind_clash, (st, item)), ("part kind", kind_clash, (item, ln)),
+                          ("value", value_clash, (item, ln, row)), ("maker", maker_clash, (ln, row))):
+        try:
+            out.append(f(*args))
+        except Exception as e:                       # noqa: BLE001 -- a check's own failure holds the part
+            out.append(f"check: the {name} check could not read this line ({type(e).__name__}): check the part by hand")
+    return out
+
+
+_SAME_OUTLINE = ({"SOT-23-6", "SC-74-6_1.55x2.9mm_P0.95mm"},)   # SC-74 / SOT-457: the SOT-23-6 outline and land
+
+
+def _same_outline(a, b):
+    return any(a in g and b in g for g in _SAME_OUTLINE)
+
+
+def _an(word):
+    """'a' or 'an' before a word or number as said aloud ('an 8-pin', 'an 11-pin', 'an inductor', 'a 16-pin')."""
+    w = str(word).lower()
+    return "an" if re.match(r"[aeio]|8|11(?!\d)|18(?!\d)", w) else "a"
 
 
 _LAND_KIND = {"R": "Resistors", "C": "Capacitors", "CP": "Capacitors", "L": "Inductors"}
@@ -954,7 +996,8 @@ def kind_clash(item, ln):
     desc = str(ln.get("description") or "")
     said = [k for k, rx in _KIND_WORD.items() if re.search(rf"(?i)(?<![A-Za-z])(?:{rx})(?![A-Za-z])", desc)]
     if len(said) == 1 and said[0] != cat:
-        return (f"part kind: filed under {cat} but the BOM description {desc[:60]!r} names a {said[0][:-1].lower()}: "
+        return (f"part kind: filed under {cat} but the BOM description {desc[:60]!r} names "
+                f"{_an(said[0])} {said[0][:-1].lower()}: "
                 "check which part the BOM line is")
     return None
 
@@ -965,8 +1008,10 @@ def maker_clash(ln, row):
     maker's part of the same number, so a person says which."""
     from .release_check import _filled
     bom = str(ln.get("manufacturer") or "").strip()
-    if not _filled(bom):
-        return None
+    if not _filled(bom) or re.fullmatch(r"(?i)generic|any|various|multiple|unknown|(?:any|other) (?:maker|vendor)s?|"
+                                        r"equivalent|equiv\.?", bom):
+        return None                                      # a stand-in, not a maker
+
     from . import mpn_decode as MD
     mpn = str(ln.get("mpn") or "").strip()
     d = MD.decode(mpn) if mpn else None
@@ -981,7 +1026,7 @@ def maker_clash(ln, row):
     listed += [m for m in [str(row.get("src_manufacturer") or "").strip()] if m and m not in listed]
     if not listed or any(P.same_maker(bom, m) for m in listed):
         return None
-    if P.maker_key(bom) == "NXP" and any(P.maker_key(m) == "NEXPERIA" for m in listed):
+    if {P.maker_key(bom)} | {P.maker_key(m) for m in listed} <= {"NXP", "NEXPERIA"}:
         return None                       # NXP's standard products (logic, discretes) are Nexperia's since 2017
 
     return (f"maker: the BOM names {bom} but the part search lists {_par_safe(listed)} for this part number: check "
@@ -1208,8 +1253,7 @@ class Run:
         clash = chip_size_clash(st, item, ln)
         if clash:
             st["verify"].append(clash)
-        for clash in (package_clash(st, item, ln, row, kind), land_kind_clash(st, item), kind_clash(item, ln),
-                      value_clash(item, ln, row), maker_clash(ln, row)):
+        for clash in _clashes(st, item, ln, row, kind):
             if clash and clash not in st["verify"]:           # the line's own sources disagree: never the first read's
                 st["verify"].append(clash)
         self._finish_found(st, row)

@@ -223,7 +223,7 @@ CODES = {
     "librarian.source_package_clash": ("The footprint built is {have}, but the {where} names {said}.",
                                        "Check which package the part has in its datasheet, then fix the BOM line or "
                                        "pick the right footprint.",
-                                       [r"^(?:verify: )?footprint: the land built is (?:the )?(?P<have>.+?) but the "
+                                       [r"^(?:verify: )?footprint: the land built is (?P<have>.+?) but the "
                                         r"(?P<where>BOM footprint|BOM description|BOM value|part search package|"
                                         r"part search description|part number) (?:names|says) (?P<said>.+?) \("]),
     "librarian.land_kind_clash": ("The part is filed under {cat}, but its footprint {land} is another kind's land.",
@@ -242,6 +242,9 @@ CODES = {
                                   "Check which part the BOM line is, then fix its value or description.",
                                   [r"^(?:verify: )?part kind: filed under (?P<cat>\w+) but the BOM description .* "
                                    r"names an? (?P<said>\w+): check which part the BOM line is"]),
+    "librarian.check_failed": ("The {name} check could not read this BOM line, so the part is held.",
+                               "Check the part by hand, then release it or fix the BOM line.",
+                               [r"^(?:verify: )?check: the (?P<name>[a-z ]+) check could not read this line"]),
     "librarian.maker_clash": ("The BOM names the maker {bom}, but {said}.",
                               "Check whose part it is, then fix the BOM's maker or part number.",
                               [r"^(?:verify: )?maker: the BOM names (?P<bom>.+?) but (?P<said>the part (?:number|search) "

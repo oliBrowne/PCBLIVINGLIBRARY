@@ -240,3 +240,47 @@ def test_description_naming_another_passive_kind_holds():
                          ("Components/Resistors", "Resistor for the capacitor's bleed"),      # both named: no call
                          ("Components/ICs", "Capacitor")]:
         assert L.kind_clash(_item(folder=folder), {"description": desc}) is None, (folder, desc)
+
+
+# ------------------------------------------------------------------ code review fixes
+
+def test_tssop_width_is_the_first_size_written():
+    tssop = "kicad:Package_SO:TSSOP-8_4.4x3mm_P0.65mm"
+    assert not _pkg(tssop, row={"src_package": "8-TSSOP (0.173\", 4.40mm Width)"})
+    assert _pkg("kicad:Package_SO:MSOP-8_3x3mm_P0.65mm", ln={"footprint": "TSSOP-8_4.4x3mm_P0.65mm"})
+
+
+def test_a_text_naming_several_outlines_holds_only_when_none_is_the_land():
+    assert not _pkg("kicad:Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", ln={"description": "EEPROM 8-SOIC / 8-TSSOP"})
+    assert _pkg("kicad:Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", ln={"description": "EEPROM 8-MSOP / 8-TSSOP"})
+
+
+def test_qsop_and_a_narrow_ssop_are_one_outline():
+    assert not _pkg("kicad:Package_SO:QSOP-16_3.9x4.9mm_P0.635mm", row={"src_package": "16-SSOP (0.154\", 3.90mm Width)"})
+    assert not _pkg("kicad:Package_SO:SSOP-16_3.9x4.9mm_P0.635mm", ln={"description": "16-QSOP"})
+
+
+def test_sc74_is_the_sot23_6_outline():
+    assert not _pkg("kicad:Package_TO_SOT_SMD:SOT-23-6", row={"src_package": "SC-74, SOT-457"})
+
+
+def test_stand_in_makers_and_nxp_nexperia_both_ways_do_not_hold():
+    for bom in ("Generic", "Any", "various"):
+        assert not L.maker_clash({"manufacturer": bom, "mpn": "RC0402FR-0710KL"}, {"src_makers": "YAGEO"})
+    assert not L.maker_clash({"manufacturer": "Nexperia", "mpn": "BC847"}, {"src_makers": "NXP USA Inc."})
+
+
+def test_a_dip_or_dpak_footprint_on_another_outline_holds():
+    assert _pkg("kicad:Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", ln={"footprint": "DIP-8_W7.62mm"})
+    assert _pkg("standard:Package_TO_SOT_SMD:SOT-223-3_TabPin2", ln={"footprint": "TO-252-2"})
+
+
+def test_a_failing_check_holds_the_part_and_the_run_goes_on():
+    notes = L._clashes(_st("kicad:Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"), None, {}, {}, None)
+    assert any(n and n.startswith("check: ") for n in notes)
+
+
+def test_note_wording():
+    assert " an 8-pin " in _pkg("kicad:Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", ln={"description": "8-TSSOP"})
+    assert " an inductor" in L.kind_clash({"folder": "Capacitors", "parameters": []},
+                                          {"description": "Inductor 10uH 0805"})
