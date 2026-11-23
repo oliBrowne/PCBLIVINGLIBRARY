@@ -2101,6 +2101,9 @@ def tantalum_land(texts, mpn="", description=""):
     return TANT_LAND[case], f"tantalum case EIA {case} (" + ", ".join(dict.fromkeys(w for _, w in said)) + ")"
 
 
+TEXT_MAX = 1000                                           # characters of one text resolve() reads
+
+
 def _no_mpn(mpn):
     from .bom_triage import placeholder_mpn
     return not str(mpn or "").strip() or placeholder_mpn(mpn)
@@ -2117,6 +2120,10 @@ def resolve(texts, kind=None, mpn="", description="", value="", maker="", search
     is made of count as the line's own)."""
     texts = [t for t in texts]
     held = lambda why, sym=None: {"footprint": None, "fp_how": why, "kicad_ref": None, "symbol": None, "sym_how": sym or why}
+    long = next((str(x) for x in (*texts, description, value) if len(str(x or "")) > TEXT_MAX), None)
+    if long:                                              # round 2 of the 2026-11-23 review: a 20 000 character cell
+        return held(f"a cell of the BOM line is {len(long)} characters long ({long[:40]!r} ...): too long to be a "    # took
+                    "footprint name, a value or a description, so nothing is built from it; shorten the cell")   # 30 s
     said = [str(x) for x in (description, value) if str(x or "").strip()]      # the line's free words
     weak = [description] + ([value] if value_names_size(value, kind) else [])
     if kind in ("NTC", "PTC", "VAR", "TH"):                # a thermistor / varistor: a resistor's chip land by size

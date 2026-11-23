@@ -858,10 +858,15 @@ def read_bom(path, columns=None, rules=None, root=None):
                     d.pop("bom_hold", None)
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
-        rest = "" if shifted else " | ".join(f"{headers[j]}: {SS.unquote(cells[j])[:200]}" for j in others
+        rest = "" if shifted else " | ".join(f"{headers[j]}: {SS.unquote(cells[j])[:SAID_CELL_MAX]}" for j in others
                                              if j < len(cells) and cells[j])
         if rest:                                                  # what the line says in columns no field reads
             d["other_cells"] = rest                               # (altium_export.to_rows compares them)
+        cut = [] if shifted else [headers[j] for j in others if j < len(cells) and len(SS.unquote(cells[j])) > SAID_CELL_MAX]
+        if cut:                                                   # round 2 of the 2026-11-23 review: a word after the
+            d["bom_hold"] = "; ".join(x for x in (d.get("bom_hold"), (     # cut ('... tantalum') was lost silently
+                f"the cell under {cut[0]!r} is longer than {SAID_CELL_MAX} characters and was not read whole: what it "
+                "says about the part past that is not known: shorten the cell")) if x)
         lines.append(d)
     if skipped:
         print(f"  note: {p.name}: skipped {skipped} row(s) that name no part (section headings, notes)", file=sys.stderr)

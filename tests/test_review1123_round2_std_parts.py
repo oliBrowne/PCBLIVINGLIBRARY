@@ -341,3 +341,30 @@ def test_call_sites_pass_the_maker():
     assert "resistor" in RC.value_kind_problem(item)
     item["parameters"][1]["value"] = "Acme"
     assert RC.value_kind_problem(item) is None
+
+
+def test_a_long_cell_is_read_to_its_end_or_held():
+    lines = _read("Designator;Value;Footprint;Remark\nC1;10uF;1206;" + "x" * 201 + " tantalum\n"
+                  "C2;1uF;0603;" + "y" * 1001 + " tantalum\nC3;1uF;0603;X7R\n")
+    assert "tantalum" in lines[0]["other_cells"] and "bom_hold" not in lines[0], lines[0]
+    assert "longer than 1000 characters" in lines[1]["bom_hold"] and "'Remark'" in lines[1]["bom_hold"], lines[1].get("bom_hold")
+    assert "bom_hold" not in lines[2]
+
+
+@lite
+def test_a_word_late_in_a_long_cell_end_to_end(tmp_path):
+    plan = _run(tmp_path, "Designator;Value;Footprint;Remark\nC1;10uF;1206;" + "x" * 201 + " tantalum\n"
+                          "C2;1uF;0603;" + "y" * 1001 + " tantalum\nC3;100n;0603;X7R\nR1;10k;0603;" + "see note " * 20 + "\n")
+    st = _status(plan)
+    assert sorted(n for n, (s, _) in st.items() if s == "ready") == ["CAP-0603-100n", "RES-0603-10k"], st
+    assert "'tantalum'" in st["CAP-1206-10uF"][1] and "longer than 1000 characters" in st["CAP-0603-1uF"][1], st
+
+
+def test_resolve_does_not_read_a_very_long_cell():
+    import time
+    for c in ["0603 " * 4000, "DO NOT " * 3000 + "x", "TO-" * 7000, "0603M" * 4000]:
+        t = time.time()
+        r = SP.resolve([c], "C", "", c, value=c)
+        assert time.time() - t < 2 and r["footprint"] is None and r["symbol"] is None and "characters long" in r["fp_how"], \
+            (c[:10], time.time() - t, r)
+    assert SP.resolve(["0603"], "C", "", "CAP CER 0.1UF 50V X7R 0603 " + "general purpose " * 20)["footprint"] == "C_0603_1608Metric"
