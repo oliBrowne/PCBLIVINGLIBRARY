@@ -73,11 +73,14 @@ class LifecycleResult:
 maker_key, same_maker = P.maker_key, P.same_maker      # which company a maker name names (providers)
 
 
-def _pick(items, part, mpn_of, mfr_of):
+def _pick(items, part, mpn_of, mfr_of, own_only=False):
     """Exact (normalised) MPN match; prefer one whose manufacturer is the part's (same_maker). When the part names a
     maker, no listing is by that maker, and the listings name more than one other maker, nothing is picked: the same
     MPN from two other makers says nothing about this maker's part (LM358 from TI, onsemi and ST have their own
-    lifecycles), so the source reports "not found" rather than another maker's status."""
+    lifecycles), so the source reports "not found" rather than another maker's status.
+    own_only (the part search, part_lookup): one other maker's listing is not picked either, as its package text
+    becomes the part's land with no person looking (onsemi's SS34 is SMC, Vishay's is SMA; 2026-11-23 review 1.11).
+    The lifecycle report keeps taking it: combine() marks such a status not firm (_other_maker)."""
     exact = [i for i in items if isinstance(i, dict) and same_mpn(mpn_of(i), part["mpn"])]
     if not exact:
         return None
@@ -91,6 +94,8 @@ def _pick(items, part, mpn_of, mfr_of):
     for m in (mfr_of(i) for i in exact):         # Connectors" are one other maker
         if maker_key(m) and not any(same_maker(m, o) for o in others):
             others.append(m)
+    if own_only and others:                      # a listing naming no maker is still taken when no other maker is named
+        return None
     return exact[0] if len(others) <= 1 else None
 
 

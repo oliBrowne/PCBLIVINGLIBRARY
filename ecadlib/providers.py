@@ -436,7 +436,8 @@ def parse_jlcpcb(r, mpn, res, code="", maker="", package=""):
     paths easyeda2kicad reads). maker: the BOM's manufacturer; package: the BOM's land (bom_land). Of several exact
     matches (clones sell under the same MPN, one maker in DIP-8 and SOP-8 too) the one by that maker in that package
     is taken, then the maker's, then one in that package, then the first listed; when the BOM names a land and the
-    one taken is listed in another, extra['package_note'] says so."""
+    one taken is listed in another, extra['package_note'] says so. When the BOM names a maker and every listing is by
+    a known other maker, none is taken: not found, with extra['note'] saying who lists it (pick_listing)."""
     try:
         items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
     except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
@@ -465,8 +466,21 @@ def pick_listing(items, mpn, res, code="", maker="", package=""):
     def in_land(i):                        # an empty listing package says nothing, so it is not "in the BOM's land"
         spec = str(i.get("componentSpecificationEn") or "").strip()
         return bool(land and spec) and not lands_differ(land, spec)
+    rest = exact
+    if not code and maker_key(maker) and not any(by_maker(i) for i in exact):
+        # the BOM names a maker and no listing is by it: a listing by a known other maker (a clone under the same
+        # MPN) is not this part, so its LCSC number and package are not taken; said, as DigiKey's keyword route says
+        # it (2026-11-23 review 1.11: TI's LM358DR got HGSEMI's C-number). A listing naming no maker still counts.
+        rest = [i for i in exact if not maker_key(clean_maker(i.get("componentBrandEn", "")))]
+        if exact and not rest:
+            others = list(dict.fromkeys(m for m in (clean_maker(i.get("componentBrandEn", "")) for i in exact) if m))
+            res.found = False
+            res.extra = {**(res.extra or {}), "other_maker": True,
+                         "note": clean_text(f"LCSC lists {mpn} only from {', '.join(others[:3])}, not {str(maker).strip()}: "
+                                            "check the BOM's maker", 300)}
+            return res
     best = next((i for i in exact if by_maker(i) and in_land(i)), None) or next((i for i in exact if by_maker(i)), None) \
-        or next((i for i in exact if in_land(i)), None) or (exact or [None])[0]
+        or next((i for i in rest if in_land(i)), None) or (rest or [None])[0]
     code = str((best or {}).get("componentCode") or "").strip().upper()
     if best and not re.fullmatch(r"C\d{1,9}", code):   # untrusted: only a real LCSC number goes on (into EasyEDA's URL)
         res.error = f"unparseable: componentCode {code[:20]!r} is not an LCSC number"

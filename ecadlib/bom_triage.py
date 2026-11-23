@@ -1570,14 +1570,24 @@ def triage(lines, index, provs, http, shared=None):
                 elif getattr(prov, "_plugin", False) and (bad := P.result_shape_problem(r)):
                     r = P.SourceResult(getattr(prov, "name", "?"), error=f"plugin returned a bad SourceResult ({bad})")
                 rdesc = (r.extra or {}).get("description") if isinstance(r.extra, dict) else ""
-                if not src_pkg and r.found and not r.error and r.mpn and (case := _case_text(
+                # 2026-11-23 review 1.11: the BOM names a maker and this result is another maker's listing of the
+                # number (onsemi's SS34 is SMC, Vishay's is SMA): its case, device package, measurements and LCSC
+                # number are not this part's, whichever source or plugin it came from; said once per source
+                foreign = bool(bom_maker and r.found and not r.error and isinstance(r.manufacturer, str)
+                               and P.maker_key(ln.get("manufacturer")) and P.maker_key(r.manufacturer)
+                               and not P.same_maker(ln.get("manufacturer"), r.manufacturer))
+                if foreign:
+                    notes.append(f"{prov.name}: {str(r.mpn or r.lcsc or 'its listing')[:60]} is by "
+                                 f"{P.clean_maker(r.manufacturer)[:60]}, not {str(ln.get('manufacturer')).strip()[:60]}: "
+                                 "its package and LCSC number are not used (check the BOM's maker)")
+                if not src_pkg and not foreign and r.found and not r.error and r.mpn and (case := _case_text(
                         getattr(r, "package", "") or slash_case(rdesc, r.mpn), rdesc)) \
                         and _same(r.mpn, ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
                     src_pkg, src_pkg_from = case[:80], prov.name                     # near match's (LM358DR != LM358P)
                     src_height = str((r.extra or {}).get("height") or "")[:60] if isinstance(r.extra, dict) else ""
                     src_device = str((r.extra or {}).get("device_package") or "")[:80] if isinstance(r.extra, dict) else ""
                 rdims = (r.extra or {}).get("dims") if isinstance(r.extra, dict) else None
-                if not src_dims and isinstance(rdims, dict) and rdims and r.found and not r.error and r.mpn \
+                if not src_dims and not foreign and isinstance(rdims, dict) and rdims and r.found and not r.error and r.mpn \
                         and _same(r.mpn, ln.get("mpn") or work.get("mpn", "")):   # this exact part's, like its case
                     from .search_land import dims_text
                     src_dims, src_dims_from = dims_text(rdims), prov.name
@@ -1591,6 +1601,8 @@ def triage(lines, index, provs, http, shared=None):
                 elif isinstance(prov, P.LCSC_SEARCHES):
                     lcsc_answered = True
                     tag = getattr(prov, "note_label", "jlcpcb")
+                    if foreign:                                # another maker's clone: its LCSC number is not taken
+                        continue
                     if r.found:
                         work["lcsc"] = r.lcsc
                         if not desc and (r.extra or {}).get("description"):
@@ -1612,6 +1624,9 @@ def triage(lines, index, provs, http, shared=None):
                                           f"several listings, not all with a known maker ({', '.join(makers[:4]) or 'none read'})")
                                 notes.append(f"{tag}: {ln.get('mpn') or work.get('mpn', '')} is listed under "
                                              f"{listed}: the maker is not filled")
+                    if not r.found and (r.extra or {}).get("other_maker"):   # listed, but only by another maker
+                        notes.append(f"{tag}: not found ({r.extra.get('note', '')})")
+                        continue
                     notes.append(f"{tag}: MPN -> {r.lcsc}" if r.found else f"{tag}: no exact MPN match")
                     if r.found and (r.extra or {}).get("package_note"):
                         notes.append(f"{tag}: {r.extra['package_note']}")
@@ -1640,7 +1655,7 @@ def triage(lines, index, provs, http, shared=None):
                             sheet, sheet_from = r.extra["datasheet"], prov.name
                         sheets += [u for u in (r.extra or {}).get("datasheets") or [(r.extra or {}).get("datasheet")]
                                    if u and u not in sheets]
-                        if r.lcsc and not work.get("lcsc"):   # an official source (Nexar: LCSC's offer) found the LCSC
+                        if r.lcsc and not work.get("lcsc") and not foreign:   # an official source (Nexar: LCSC's offer) found the LCSC
                             work["lcsc"] = r.lcsc              # number, so the unofficial JLCPCB search is not needed
                             notes.append(f"{prov.name}: MPN -> {r.lcsc}")
                     if r.found is False and getattr(prov, "official", True):
