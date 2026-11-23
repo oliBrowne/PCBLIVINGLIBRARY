@@ -57,6 +57,16 @@ part with no person's look. Each was shown with made-up inputs, none was seen in
 - A metric size code in a part number that is also an inch size (TDK `C0603...`) is used only when the line names
   that maker.
 - A PDF saved by your assistant that has no text to tell the part by (a scan) is flagged for a person.
+- Third pass: a size code with another kind's prefix (`CP1206`, `LED0603` on a resistor) holds; the symbol column of
+  a line with no part number must name the plain symbol; `bipolar` no longer cancels `tantalum`; a search result that
+  names no maker, or two, is not the BOM maker's listing; a text pin order is tied to the part's own number, not to a
+  list of package names; the place of three single numbers on a land drawing no longer rules out pads turned 90
+  degrees; an unresolved entry of a read holds unless it is about weight, marking, packing and the like.
+- A capacitor with a part number ecadlib cannot read is no longer released on KiCad's `C_0603_1608Metric` name alone:
+  the line or the part search must say it is ceramic.
+- Lines with no part number: words that say nothing about the build (EAGLE's "European symbol", makers, function
+  notes, DNP) no longer hold a plain resistor or capacitor; a word holds when it names another build (tantalum, array,
+  network, MELF, thermistor ...), and short codes must still be understood.
 
 ### Changed
 
