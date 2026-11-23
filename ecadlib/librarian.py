@@ -600,7 +600,9 @@ def passive_kind(item, ln=None):
     mpn = "" if placeholder_mpn(par.get("Manufacturer Part Number", "")) else str(par.get("Manufacturer Part Number", "") or "").strip()
     value = str((ln or {}).get("value") or par.get("Value") or "")
     own = [str(item["footprint"].get(k) or "") for k in ("kicad", "bom_ref", "ref")]   # the item's own footprint text
-    cells = [str((ln or {}).get(k) or "") for k in ("footprint", "libref", "other_cells")] + own
+    from .bom_triage import other_cells              # (the cells alone: a header such as 'Polarized' is no word of the part)
+    cells = [str((ln or {}).get(k) or "") for k in ("footprint", "libref")] + [" | ".join(
+        v for v in other_cells(ln or {}).values() if re.search(r"[^\W\d_]", v))] + own
     if not mpn and cells[0] and cells[0] not in own and any(own):
         cells[0] = ""                        # a no-MPN item is paired with a line by its value (_line_for): of two
         #                                      10k lines, '0603' and '0603 8P4R', each item reads its own footprint text

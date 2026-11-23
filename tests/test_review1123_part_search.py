@@ -252,6 +252,74 @@ def test_mm_column_backed_by_a_metric_only_code_is_noted_not_held(tmp_path):
     assert lines[0]["footprint"] == "0603" and not lines[0].get("bom_note") and not lines[0].get("bom_hold"), lines
 
 
+# ------------------------------------------------------------------ a6-4 no-MPN lines that differ in an unmapped column
+@lite
+def test_no_mpn_lines_that_differ_in_an_unmapped_column_are_held(tmp_path):
+    lines = _read(tmp_path, "Designator,Qty,Value,Footprint,Color,Tolerance,Voltage,Dielectric\n"
+                            "D1,1,LED,0603,red,,,\nD2,1,LED,0603,green,,,\nR1,1,10k,0603,,1%,,\nR2,1,10k,0603,,5%,,\n"
+                            "C1,1,100n,0402,,,16V,X7R\nC2,1,100n,0402,,,50V,C0G\n")
+    holds = _holds(lines)
+    assert len(holds) == 3, holds
+    said = {n: " ".join(h) for n, h in holds.items()}
+    for name, a, b, what in (("LED", "D1", "D2", "Color 'red' vs 'green'"), ("RES-0603-10k", "R1", "R2", "Tolerance '1%' vs '5%'"),
+                             ("CAP-0402-100n", "C1", "C2", "Voltage '16V' vs '50V'; Dielectric 'X7R' vs 'C0G'")):
+        assert "have no part number" in said[name] and "described differently in other columns" in said[name], said
+        assert a in said[name] and b in said[name] and what in said[name], said[name]
+
+
+@lite
+def test_no_mpn_lines_that_say_the_same_are_still_one_part(tmp_path):
+    for text in ("Designator,Qty,Value,Footprint\nD1,1,LED,0603\nD2,1,LED,0603\n",
+                 # the same cells, an empty cell beside a filled one, another case and spacing: one part
+                 "Designator,Qty,Value,Footprint,Color,Tolerance\nD1,1,LED,0603,Red,\nD2,1,LED,0603,red ,\n"
+                 "R1,1,10k,0603,,1%\nR2,1,10k,0603,,\n",
+                 # a row counter, where the part sits, a second quantity column: not what the part is
+                 "Item,Designator,Qty,Value,Footprint,Mid X,Mid Y,Rotation,Layer,Quantity\n"
+                 "1,R1,1,10k,0603,10.5,3.2,90,Top,1\n2,R2,1,10k,0603,14.0,3.2,0,Bottom,1\n3,C1,1,100n,0402,1,2,0,Top,1\n",
+                 "Pos,Designator,Qty,Value,Footprint,Line Item\n10,R1,1,10k,0603,9\n20,R2,1,10k,0603,12\n",
+                 "Designator,Qty,Value,Footprint,Seq\nR1,1,10k,0603,4\nR2,1,10k,0603,5\nR3,1,10k,0603,6\n"):
+        holds = _holds(_read(tmp_path, text))
+        assert not any(holds.values()), (text, holds)
+
+
+@lite
+def test_a_third_line_is_compared_with_the_first_that_fills_the_cell(tmp_path):
+    holds = _holds(_read(tmp_path, "Designator,Qty,Value,Footprint,Color\nD1,1,LED,0603,\nD2,1,LED,0603,red\n"
+                                   "D3,1,LED,0603,green\n"))
+    assert "BOM lines D2 and D3" in " ".join(holds["LED"]) and "Color 'red' vs 'green'" in " ".join(holds["LED"]), holds
+
+
+def test_one_maker_written_two_ways_is_one_maker():
+    a = {"designator": "R1", "value": "10k", "footprint": "0603", "manufacturer": "Yageo"}
+    assert not any(_holds([a, dict(a, designator="R2", manufacturer="YAGEO Corporation")]).values())
+    (h,) = _holds([a, dict(a, designator="R2", manufacturer="Vishay")]).values()
+    assert h and "Manufacturer 'Yageo' vs 'Vishay'" in h[0], h
+
+
+@lite
+def test_a_house_number_column_is_compared(tmp_path):
+    holds = _holds(_read(tmp_path, "Designator,Qty,Value,Footprint,Item Number\nR1,1,10k,0603,100-0023\n"
+                                   "R2,1,10k,0603,100-0977\n"))
+    assert "Item Number '100-0023' vs '100-0977'" in " ".join(holds["RES-0603-10k"]), holds
+
+
+@lite
+def test_lines_with_a_part_number_are_not_held_for_other_columns(tmp_path):
+    lines = _read(tmp_path, "Designator,Qty,Value,Footprint,MPN,Assembly\nR1,1,10k,0603,RC0603FR-0710KL,near U1\n"
+                            "R2,1,10k,0603,RC0603FR-0710KL,pull-up\n")
+    assert lines[0]["other_cells"] == "Assembly: near U1", lines[0]
+    assert not any(_holds(lines).values()), _holds(lines)
+
+
+def test_no_mpn_lines_with_another_symbol_or_datasheet_are_held():
+    a = {"designator": "D1", "value": "LED", "footprint": "0603", "libref": "LED_RED"}
+    b = {"designator": "D2", "value": "LED", "footprint": "0603", "libref": "LED_GREEN"}
+    (h,) = _holds([a, b]).values()
+    assert h and "LibRef 'LED_RED' vs 'LED_GREEN'" in h[0], h
+    assert not any(_holds([a, dict(b, libref="led_red")]).values())
+    assert not any(_holds([a, dict(b, libref="")]).values())
+
+
 if __name__ == "__main__":
     import sys
     fns = [f for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]

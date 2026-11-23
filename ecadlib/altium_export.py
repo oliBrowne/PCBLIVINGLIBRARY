@@ -411,7 +411,7 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                 by_line[int(str(t.get("line", "")).strip())] = t    # line must not take the last row's land
             except ValueError:
                 pass
-    holds, on = {}, {}
+    holds, on, told = {}, {}, {}             # told: {part: {column: (cell, BOM line)}} of its lines with no MPN
     out, seen, renamed, same_value, canon, first, notes, unstorable = {}, {}, {}, {}, {}, {}, {}, {}
     # a name already in the plan stays with its part (SYS-1): when the part released under it is still in the BOM, a
     # line added above it with another MPN takes the suffixed name instead
@@ -522,6 +522,30 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             notes.setdefault(pn, []).extend(n for n in ln["bom_note"].split("; ") if "order number" in n)
         if ln.get("bom_hold"):                  # a row read_bom could not read as the header says (shifted cells)
             holds.setdefault(pn, []).append(f"BOM line {des}: {ln['bom_hold']}")
+        if not row["Manufacturer Part Number"]:
+            # 2026-11-23 review (a6 finding 4): lines with no part number become one part on value and footprint
+            # alone. Every other cell they have but designator and quantity, mapped to a field or not, has to say
+            # the same (a Color column's red and green, Tolerance 1% and 5%, Voltage 16V and 50V, another maker,
+            # library symbol or datasheet): else held. An empty cell says nothing, as for the Description below.
+            from .bom_triage import other_cells
+            from .providers import same_maker
+            flat = lambda v: " ".join(str(v or "").split())
+            mine = {"Manufacturer": ln.get("manufacturer"), "LibRef": ln.get("libref"), "Datasheet": ln.get("datasheet"),
+                    **other_cells(ln)}
+            was, differ = told.setdefault(pn, {}), {}
+            for k, v in mine.items():
+                v = flat(v)
+                if not v:
+                    continue
+                old, odes = was.setdefault(k, (v, des))
+                if old.casefold() != v.casefold() and not (k == "Manufacturer" and same_maker(old, v)):
+                    differ.setdefault(odes, []).append(f"{k} {old[:40]!r} vs {v[:40]!r}")
+            for odes, d in differ.items():
+                holds.setdefault(pn, []).append(
+                    f"BOM lines {odes} and {des} have no part number and are built as one part {pn} (same value "
+                    f"and footprint), but are described differently in other columns ({'; '.join(d[:4])}"
+                    f"{' ...' if len(d) > 4 else ''}): give them part numbers if they are two parts, or the same "
+                    "cells if they are one")
         if pn not in first:
             first[pn] = (row, des, ln.get("footprint", ""))
         else:                                   # a second BOM line for this part: the first one wins, say what differs

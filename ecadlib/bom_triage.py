@@ -188,6 +188,48 @@ def _metric_only_codes(df, j):
     return sorted(found)
 
 
+# columns that say where a part sits on the board or which row of the sheet it is, not what the part is: never a
+# difference between two lines of one part (other_cells)
+_PLACE_HEADER = re.compile(r"(?:(?:mid|center|centre|ref|pos|position|pad)\s*)?[xy](?:\s*(?:mm|mil|mils|pos|position))?|"
+                           r"rot|rotation|angle|orientation|layer|side|tb|sheet|page|"
+                           r"item|line|line item|line no|line number|row|row no|index|pos|position|pos no|pos nr|"
+                           r"no|nr|lp|sr no|s no|sl no")       # ('Item Number' may be a house part number: compared)
+
+
+def _other_columns(df, headers, used):
+    """The columns of a BOM the reader maps to no field and that describe the part (Color, Tolerance, Voltage,
+    Dielectric, anything else), as indexes: read_bom keeps their cells on the line (other_cells), so that two lines
+    with no part number that differ only there are not merged into one part silently (2026-11-23 review, a6
+    finding 4). Left out: a column with no header, a hidden one, a second designator / quantity column, where the
+    part sits (X, Y, rotation, layer), and a row counter (a header that says so, or cells that count up by one)."""
+    out = []
+    for j, h in enumerate(headers):
+        nh = _hnorm(h)
+        if j in used or not nh or "<" in str(h) or nh in FIELDS["designator"] or nh in FIELDS["qty"] \
+                or _PLACE_HEADER.fullmatch(nh):
+            continue
+        cells = [str(c).strip() for c in df.iloc[:, j]] if j < df.shape[1] else []
+        nums = [int(c) for c in cells if re.fullmatch(r"\d{1,6}", c)]
+        if len(nums) >= 3 and len(nums) == sum(1 for c in cells if c) and all(b - a == 1 for a, b in zip(nums, nums[1:])):
+            continue                                              # 1, 2, 3 ...: the sheet's own line numbers
+        out.append(j)
+    return out
+
+
+def other_cells(line):
+    """{header: cell} of a line's cells in the columns read_bom maps to no field (line['other_cells'], written as
+    'Color: red | Tolerance: 1%'); {} for a line from another reader."""
+    out, last = {}, None
+    for part in str(line.get("other_cells") or "").split(" | "):
+        h, sep, v = part.partition(": ")
+        if sep and h.strip():
+            last = h.strip()
+            out[last] = v.strip()
+        elif last and part:                                       # a cell that holds ' | ' itself
+            out[last] += " | " + part
+    return out
+
+
 def mixed_size(cell, header):
     """A footprint cell from a column naming both systems ('Case (Metric / Imp.)') -> (footprint text, [note]). A code
     that is a size in one system only is read in that one ('1608' is the metric 0603, '0805' an inch 0805); one that
@@ -592,6 +634,7 @@ def read_bom(path, columns=None, rules=None, root=None):
     left = {j: _column_shapes(df, j, hlen) for f, j in col.items() if f == "qty" and text_src
             and "value" in col and j < col["value"]}            # a Qty before Value, in the rows that fit (a package
                                                                   # only one row has is no evidence of a shift)
+    others = _other_columns(df, headers, set(col.values()))       # Color / Tolerance / Voltage ...: kept on the line
     lines, skipped = [], 0
     for idx, row in df.iterrows():
         cells = [str(x).strip() for x in row]
@@ -765,13 +808,10 @@ def read_bom(path, columns=None, rules=None, root=None):
                     d.pop("bom_hold", None)
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
-        # the cells of the columns the reader does not map (a second Comment, EAGLE's Device, Dielectric, Notes): kept
-        # as text so the standard-part rules see every word of the line ('tantalum - observe polarity', 'CPOL-EUC1206':
-        # review 2026-11-23, 1.1); nothing else reads them
-        other = [c for j, c in enumerate(cells[:len(headers)]) if headers[j] and j not in col.values()
-                 and re.search(r"[^\W\d_]", c)]                 # (a cell with a word in it: a line number says nothing)
-        if other and not shifted:
-            d["other_cells"] = " | ".join(other)[:600]
+        rest = "" if shifted else " | ".join(f"{headers[j]}: {SS.unquote(cells[j])[:200]}" for j in others
+                                             if j < len(cells) and cells[j])
+        if rest:                                                  # what the line says in columns no field reads
+            d["other_cells"] = rest                               # (altium_export.to_rows compares them)
         lines.append(d)
     if skipped:
         print(f"  note: {p.name}: skipped {skipped} row(s) that name no part (section headings, notes)", file=sys.stderr)
