@@ -7,7 +7,7 @@ that must hold and the ordinary ones that must stay ready.
 Run:  python3 -m tests.test_review1123_round3_pin_checks"""
 from ecadlib import librarian as L
 from ecadlib import pin_text as PT
-from tests.test_review1123_pin_checks import BUCK, BUCK_PINS, ROW, SO8, SO8_ROW, Run, pdf, read, state
+from tests.test_review1123_pin_checks import BUCK, BUCK_PINS, DIODE, OUTLINE, P1, ROW, SO8, SO8_ROW, Run, pdf, read, state
 
 NC3 = [(n, "NC" if n == "3" else s) for n, s in BUCK_PINS]
 ROWS = BUCK[1].split("\n")[2:-1]                       # the eight rows, 'BOOT 1 Bootstrap' ...
@@ -103,6 +103,161 @@ def test_a_read_whose_nc_pin_is_named_by_a_row_is_not_released():
         assert L.read_confirmed(read(NC3), {"data": b"x"}, ["symbol"])
     finally:
         PT.check_pdf = real
+
+
+# ------------------------------------------------------------------ A5: the order is tied to the part, not to a list
+TABLE = "Pin Description\nPIN NAME\n1 E\n2 B\n3 C\n"
+OTHERS = ["To 92", "to 92", "TO.92", "TO_92", "TO - 92", "TO -92", "T0-92", "(TO)92", "TO-5", "TO 5", "TO-3", "TO-3P",
+          "SIP-3", "SIP3", "3-SIP", "DIP", "KT-26", "I-PAK", "IPAK", "DFN1006-3", "X1-DFN1006-3", "SOT-1123", "TSOT-23",
+          "SOT-23 Flat", "SOT-23 FL", "CPH3", "MCPH3", "S-Mini", "SSMini3", "SMini3-G1", "USM", "SSM", "TUMT3", "PCP",
+          "through-hole", "leaded", "radial"]                                # the reviewer's 37
+MADE_UP = ["ZQX", "Qwerty-7", "Blob", "our new", "X"]
+
+
+def family(other, part="XYZ3904"):
+    """The reviewer's sheet: two devices, the other one's package spelt `other`, and one pin table (the other's)."""
+    return {1: f"XYZ3904 / MMXYZ3904 NPN General Purpose Amplifier\n{other} package ({part})\nSOT-23 (MMXYZ3904)\n" + TABLE,
+            2: "Electrical characteristics"}
+
+
+def order(text, part="MMXYZ3904", package=("SOT-23",), names="BEC"):
+    why = []
+    return PT.pin_orders(text, names, part=part, package=package, doubts=why), why
+
+
+def test_another_parts_package_is_a_doubt_whatever_it_is_called():
+    assert len(OTHERS) == 37
+    for other in OTHERS + MADE_UP:
+        text = family(other)
+        assert PT.pin_orders(text, "BEC") == ["EBC"], other                 # the bare text: the other package's order
+        got, why = order(text)
+        assert got == [] and why and "package" in why[0], (other, got, why)
+        got, why = order(text, part=None)                                    # the part number not given: still two parts
+        assert got == [] and why, (other, got, why)
+
+
+def test_the_title_names_two_parts_wherever_the_other_package_is_named():
+    lines = "\n".join(f"Feature line {i} of the part" for i in range(12))
+    cases = {
+        "the other part's package is not named at all": "XYZ3904 / MMXYZ3904 NPN General Purpose Amplifier\nSOT-23\n" + TABLE,
+        "the two parts in a list, far above the table": "XYZ3904, MMXYZ3904\nNPN Amplifier\n" + lines + "\nSOT-23\n" + TABLE,
+        "a base name and a variant of it": "MMXYZ3904 MMXYZ3904W NPN General Purpose Amplifier\nSOT-23\n" + TABLE,
+        "the list is not at the top of the page": "NPN General Purpose Amplifier\nSOT-23\n" + lines + "\n" + TABLE
+                                                  + "Order codes: XYZ3904 / MMXYZ3904\n",
+    }
+    for label, page in cases.items():
+        got, why = order({1: page, 2: "Electrical characteristics"})
+        assert got == [] and "part number" in why[0], (label, got, why)
+    # the title page names two parts and the table's own page names none
+    got, why = order({1: "XYZ3904 / MMXYZ3904 NPN General Purpose Amplifier\nSOT-23", 2: TABLE})
+    assert got == [] and "part number" in why[0], (got, why)
+    # the sheet's only part number is another part's
+    got, why = order({1: "XYZ3904 NPN General Purpose Amplifier\nSOT-23\n" + TABLE})
+    assert got == [] and "part number" in why[0], (got, why)
+
+
+def test_a_package_claimed_beside_this_parts_number_must_be_its_own():
+    # one part number, sold in two packages: the unknown name stands beside the number
+    for line in ("ZQX package (MMXYZ3904)", "MMXYZ3904 (ZQX)", "MMXYZ3904 in a ZQX package", "ZQX (MMXYZ3904)",
+                 "MMXYZ3904 in SOT-23 Flat package", "To 92 package (MMXYZ3904)", "MMXYZ3904 in ZQX and SOT-23 packages",
+                 "through-hole package (MMXYZ3904)", "MMXYZ3904 (TO)92"):
+        text = {1: f"MMXYZ3904 NPN General Purpose Amplifier\n{line}\nSOT-23 (MMXYZ3904)\n" + TABLE, 2: "Electrical characteristics"}
+        assert PT.pin_orders(text, "BEC") == ["EBC"], line
+        got, why = order(text)
+        assert got == [] and why and "package" in why[0], (line, got, why)
+
+
+def test_the_sot23_part_is_not_released_with_an_unknown_packages_order():
+    for other in ("To 92", "TO-5", "S-Mini", "leaded", "ZQX"):
+        data = pdf([[ln for ln in family(other)[1].split("\n") if ln], ["Electrical characteristics"]])
+        st = state("Package_TO_SOT_SMD:SOT-23")
+        assert Run(data).pin_order(st, {}, {}, ROW, "MMXYZ3904", "NPN") is None, (other, st["tried"])
+        assert "does not settle the pin order" in st["tried"][-1] and "package" in st["tried"][-1], st["tried"]
+    # an SO-8 MOSFET and a diode: two part numbers in the title
+    st = state("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm")
+    fam = pdf([["XYF7400 / XYF7400T N-channel MOSFET", "SO-8"] + SO8])
+    assert Run(fam).so8_order(st, {}, {}, SO8_ROW, "XYF7400", "NMOS") is None
+    assert "part number" in st["tried"][-1], st["tried"]
+    why = []
+    assert PT.diode_orders({1: "BAT54L / BAT54T Schottky Barrier Diodes SOT-23", 5: OUTLINE.replace("CASE 318", "")},
+                           [(1, DIODE)], package=("SOT-23",), doubts=why) == [] and "part number" in why[0], why
+
+
+def test_ordinary_one_part_one_package_sheets_stay_confirmed():
+    heads = ["MMXYZ3904 NPN General Purpose Amplifier\nSOT-23",
+             "MMXYZ3904\nNPN General Purpose Amplifier\nSOT-23 (TO-236AB)",
+             "MMXYZ3904 NPN General Purpose Amplifier in a SOT-23 package",
+             "MMXYZ3904 NPN General Purpose Amplifier\nSOT-23 (MMXYZ3904)",
+             "MMXYZ3904 (NPN)\nSOT-23 plastic package",
+             "MMXYZ3904 (SOT-23)\nNPN General Purpose Amplifier",
+             "MMXYZ3904 NPN General Purpose Amplifier\nMMXYZ3904 is supplied in the SOT-23 surface mount package",
+             "MMXYZ3904LT1G (Pb-Free)\nSOT-23 (TO-236) CASE 318",
+             "MMXYZ3904 NPN Amplifier, AEC-Q101 qualified, UL94V-0\nSOT-23",
+             "NPN General Purpose Amplifier\nSOT-23",                       # no part number in the text at all
+             "MMXYZ3904x NPN General Purpose Amplifier\n3-pin SOT-23 package (see note 1)"]
+    for head in heads:
+        text = {1: head + "\n" + TABLE, 2: "Electrical characteristics\nSOT-23 package outline"}
+        for part in ("MMXYZ3904LT1G", "MMXYZ3904LT1G-Q", None) + (("MMXYZ3904", "MMXYZ3904-7-F") if "LT1G" not in head else ()):
+            got, why = order(text, part=part)
+            assert got == ["EBC"], (head, part, why)
+    # the BOM's number is the base name, the sheet prints the orderable one only
+    got, why = order({1: "MMXYZ3904LT1G NPN Amplifier\nSOT-23\n" + TABLE})
+    assert got == ["EBC"], why
+    # a family sheet whose table is headed for this part and this package (the title page names both parts)
+    fam = {1: "XYZ3904 / MMXYZ3904\nTO-92 and SOT-23 packages", 2: "MMXYZ3904 in SOT-23\n" + TABLE}
+    assert order(fam) == (["EBC"], [])
+    assert order(fam, part="XYZ3904", package=("TO-92_Inline",))[0] == []
+    # through the librarian: a one-part sheet is still released
+    data = pdf([["MMXYZ3904  NPN General Purpose Amplifier", "SOT-23 (MMXYZ3904)", "Pin Description", "PIN  NAME",
+                 "1  B", "2  E", "3  C"], ["Electrical characteristics", "Tstg -55 TO 150"]])
+    st = state("Package_TO_SOT_SMD:SOT-23")
+    assert Run(data).pin_order(st, {}, {}, ROW, "MMXYZ3904", "NPN") == "BEC", st["tried"]
+    st = state("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm")
+    one = pdf([["XYF7400 N-channel MOSFET", "XYF7400 in the SO-8 package"] + SO8])
+    assert Run(one).so8_order(st, {}, {}, SO8_ROW, "XYF7400", "NMOS") == "SSSGDDDD", st["tried"]
+    assert PT.diode_orders({1: P1, 5: OUTLINE}, [(1, DIODE)], package=("SOT-23",), part="BAT54LT1G") == ["ANK"]
+
+
+def test_package_names_with_one_and_four_digits():
+    words = lambda t: {b for b, _ in PT.package_words(t)}
+    assert words("TO-3 and TO-5") == {"TO3", "TO5"} and words("TO-3P") == {"TO3P"}
+    assert words("SOT-1123, SOT1061") == {"SOT1123", "SOT1061"} and words("DO-4") == {"DO4"}
+    for plain in ("0 to 5 V", "up to -5 V", "TO 5", "SC18IS602", "DO3316P-103", "do 3 times"):
+        assert words(plain) == set(), (plain, words(plain))
+
+
+# ------------------------------------------------------------------ B4: both names of one outline; capital prose
+def test_both_names_of_one_outline_are_one_package():
+    sheets = [("SOT89 (SC-62)", ("SOT-89-3",)), ("SOT-89 (SC-62, TO-243AA)", ("SOT-89-3",)), ("SOT223 (SC-73)", ("SOT-223-3_TabPin2",)),
+              ("SOT-223 (TO-261AA)", ("SOT-223",)), ("TO-92 (TO-226)", ("TO-92_Inline",)), ("TO-92 (TO-226AA)", ("TO-92_Inline",)),
+              ("TO-92 (SOT54)", ("TO-92_Inline",)), ("TO-92, SC-43", ("TO-92_Inline",))]
+    for head, land in sheets:
+        text = {1: f"XYZ56 NPN transistor\n{head} package\n" + TABLE}
+        got, why = order(text, part="XYZ56", package=land)
+        assert got == ["EBC"], (head, why)
+    own = lambda land: PT.own_packages([land])[0]
+    assert {"SOD323", "SC76"} <= own("D_SOD-323") and {"SOD523", "SC79"} <= own("D_SOD-523")
+    assert {"SOT363", "SC88"} <= own("SOT-363_SC-70-6") and {"SOT89", "SC62"} <= own("SOT-89-3")
+    # another outline is still another package
+    for head, land in (("SOT-89 (SC-59)", ("SOT-89-3",)), ("SOT-23 package (SC-59 compatible)", ("SOT-23",)),
+                       ("TO-92 and SOT-223", ("TO-92_Inline",)), ("SOT-223 (SC-62)", ("SOT-223",))):
+        got, why = order({1: f"XYZ56 NPN transistor\n{head}\n" + TABLE}, part="XYZ56", package=land)
+        assert got == [] and why, (head, got)
+
+
+def test_capital_prose_with_a_number_is_no_package():
+    words = lambda t: {b for b, _ in PT.package_words(t)}
+    for plain in ("EFFICIENCY UP TO 92 %", "CONNECT TO 220 OHM LOAD", "CAPACITANCE SC 70 pF", "UP TO 220 V", "TO 92%",
+                  "RANGE FROM 18 TO 247 kHz", "DERATE TO 126 mW", "LIMIT TO 220 mA"):
+        assert words(plain) == set(), (plain, words(plain))
+        text = {1: f"MMXYZ3904 NPN General Purpose Amplifier\nSOT-23 package\n{plain}\n" + TABLE}
+        got, why = order(text)
+        assert got == ["EBC"], (plain, why)
+    # a package printed in capitals with a space is still one
+    assert words("TO 92 package") == {"TO92"} and words("AVAILABLE IN TO 220") == {"TO220"}
+    assert words("TO 220 AB") == {"TO220"} and words("SOT 23") == {"SOT23"}
+    got, why = order({1: "MMXYZ3904 NPN General Purpose Amplifier\nSOT-23 package\nALSO IN TO 92\n" + TABLE})
+    assert got == [] and "TO92" in why[0], why
 
 
 if __name__ == "__main__":

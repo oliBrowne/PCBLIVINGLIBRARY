@@ -1657,7 +1657,7 @@ class Run:
                                package=(land,) if land else ()) for o in [want] + others}
             ok = [o for o in got if got[o]["status"] == "agreed"]
             doubt = PT.package_doubt(texts, got[want].get("page"), (land,) if land else (), 8, got[want].get("where"),
-                                     got[want].get("above")) if ok == [want] else None
+                                     got[want].get("above"), part=mpn) if ok == [want] else None
         except Exception:
             return None
         if ok != [want] or doubt:
@@ -1682,7 +1682,7 @@ class Run:
         # (review 2026-11-23, 1.4). The package is the land the part was given, by name
         land, doubts = str((st.get("footprint") or {}).get("source") or "").split(":")[-1], []
         try:
-            orders = PT.diode_orders_pdf(data, package=(land,) if land else (), doubts=doubts)
+            orders = PT.diode_orders_pdf(data, package=(land,) if land else (), doubts=doubts, part=mpn)
         except Exception:
             return None
         if len(orders) != 1:

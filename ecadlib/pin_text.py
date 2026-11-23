@@ -910,7 +910,7 @@ def _diode_word(text):
     return "X" if a and k else "A" if a else "K" if k else None
 
 
-def diode_orders(page_texts, page_runs=(), package=None, doubts=None):
+def diode_orders(page_texts, page_runs=(), package=None, doubts=None, part=None):
     """The pin orders of a single diode in a three-lead package (SOT-23, SC-70) that the datasheet's own words give:
     'ANK' = pin 1 anode, pin 2 not connected, pin 3 cathode. Two sources, read as text, never guessed:
     (a) the symbol drawn with the words ANODE and CATHODE, each with its pin number right beside it (onsemi's '3
@@ -922,7 +922,8 @@ def diode_orders(page_texts, page_runs=(), package=None, doubts=None):
     one anode, one cathode and one pin not connected. -> sorted list of distinct orders: one
     order settles it; none or two do not. package: this part's land name(s): the one order then counts only when
     every page it was read on is this package's (package_doubt; review 2026-11-23, 1.4), else [] and the reason is
-    added to the list `doubts`. Not given (None): the bare text check, which no release may rest on."""
+    added to the list `doubts`. Not given (None): the bare text check, which no release may rest on. part: this
+    part's number (package_doubt)."""
     found, used = set(), []                            # used: the pages an order was read on
     drawn = []                                         # (page, pairs) of every page with an ANODE / CATHODE pair
     for page, runs in page_runs or ():
@@ -980,7 +981,7 @@ def diode_orders(page_texts, page_runs=(), package=None, doubts=None):
         if orders:                                     # the front page that names the case and style ties it to the part
             used += [pg for (pg, _), t in list(zip(pages, texts))[:2] if _CASE_STYLE.search(t)]
     if len(found) == 1 and package is not None:
-        why = next((w for w in (package_doubt(page_texts, pg, package, 3) for pg in used) if w), None)
+        why = next((w for w in (package_doubt(page_texts, pg, package, 3, part=part) for pg in used) if w), None)
         if why:
             if doubts is not None:
                 doubts.append(f"it names pins 1, 2, 3 {', '.join(sorted(found)[0])}, but {why}")
@@ -988,11 +989,11 @@ def diode_orders(page_texts, page_runs=(), package=None, doubts=None):
     return sorted(found)
 
 
-def diode_orders_pdf(pdf_bytes, package=None, doubts=None):
+def diode_orders_pdf(pdf_bytes, package=None, doubts=None, part=None):
     """diode_orders on a PDF's text and placed text, [] when it cannot be read."""
     if not pdf_bytes:
         return []
-    return diode_orders(page_texts(pdf_bytes), page_runs(pdf_bytes), package, doubts)
+    return diode_orders(page_texts(pdf_bytes), page_runs(pdf_bytes), package, doubts, part)
 
 
 _PKG_LETTERS = "|".join(sorted({f for f in FAMILIES if f.isalpha()} | {"D2PAK", "SOP"}, key=len, reverse=True))
@@ -1000,8 +1001,12 @@ _PKG_LETTERS = "|".join(sorted({f for f in FAMILIES if f.isalpha()} | {"D2PAK", 
 # and '92' on the next, 'TO-92MOD', 'TO-92Package' were not seen, so a sheet with one of them 'named one package
 # only'): the family in either case when a hyphen or nothing joins it to its number, in capitals when only a space or
 # a line break does (see _spaced), then any letters run on to it.
-_PKG_NUM = re.compile(r"(?<![A-Za-z0-9])(?:(\d{1,3})-)?(?:(?i:(SOT|SOD|SC|TO|DO))(-\s*|)|(SOT|SOD|SC|TO|DO)(\s+))"
-                      r"(\d{2,3})(?!\d)([A-Za-z]*)(?![A-Za-z0-9])(?:-(\d{1,3})(?![A-Za-z0-9]))?")
+# Round 3 (A5): four digits for SOT and SOD (SOT-1123, SOT1061) and, in capitals with a hyphen, one (TO-3, TO-5, DO-4; not '1-to-8').
+# Groups: 1 a lead count before, 2 the family and 3 / 4 its number (hyphen / joined), 5 and 6 the one-digit form, 7 and
+# 8 the spaced form, 9 the letters run on, 10 a lead count after.
+_PKG_NUM = re.compile(r"(?<![A-Za-z0-9])(?:(\d{1,3})-)?(?:(?i:(SOT|SOD|SC|TO|DO))(?:-\s*(\d{2,4})|(\d{2,4}))|"
+                      r"(SOT|SOD|SC|TO|DO)-(\d)|(SOT|SOD|SC|TO|DO)\s+(\d{2,3}))"
+                      r"(?!\d)([A-Za-z]*)(?![A-Za-z0-9])(?:-(\d{1,3})(?![A-Za-z0-9]))?")
 _PKG_WORD = re.compile(r"(?i)(?<![A-Za-z0-9])(?:(\d{1,3})-)?(" + _PKG_LETTERS + r")(?:-(\d{1,3}))?(?![A-Za-z0-9])")
 # Makers' own names for a package, which carry no JEDEC family: Zetex's E-Line and ROHM's SPT are TO-92-like leaded
 # bodies; ROHM's SST3 / SMT3 / UMT3 / EMT3 / VMT3 / MPT3 / CPT3 are its names for SOT-23, SC-59, SOT-323, SOT-416,
@@ -1024,9 +1029,9 @@ def _spaced(text, m):
     """Is 'TO 92' (the family, a space or a line break, the number) a package name and not words? The family in
     capitals, the number one JEDEC gives a TO outline, no number before it on its line ('-55 TO 150', '-65 TO
     92': a range) and no unit after it ('UP TO 92 %', 'CONNECT TO 220 OHM LOAD', 'SC 70 pF': round 3, B4)."""
-    if m.group(4) == "TO" and m.group(6) not in _TO_NUMBERS:
+    if m.group(7) == "TO" and m.group(8) not in _TO_NUMBERS:
         return False
-    if not m.group(7) and _UNIT_NEXT.match(text, m.end(6)):
+    if not m.group(9) and _UNIT_NEXT.match(text, m.end(8)):
         return False
     return not re.search(r"\d[ \t]*(?:°[ \t]*C|[A-Za-z%]{0,2})[ \t]*\Z", text[:m.start()])     # on its own line
 
@@ -1037,21 +1042,158 @@ def package_words(text):
     'TO-92MOD' -> {('TO92MOD', None)}, 'E-Line' -> {('ELINE', None)}. Up to three capitals after the number are part
     of the name (TO-236AB, TO-92MOD: another outline than TO-92); a word run on to it is not ('SOT-23Package' is
     SOT-23). A short family word with no lead count (SO, DIP, QFN: plain words and prefixes too) is not one."""
-    text = re.sub("[−–—‐‑‒]", "-", str(text or ""))             # onsemi's minus sign
-    out = set()
+    return {(name, count) for _, _, name, count in _package_spans(text)}
+
+
+def _package_spans(text):
+    """package_words with each name's place in the text: [(start, end, name, lead count or None)]."""
+    text = re.sub("[−–—‐‑‒]", "-", str(text or ""))             # onsemi's minus sign (one character for one)
+    out = []
     for m in _PKG_NUM.finditer(text):
-        if m.group(4) and not _spaced(text, m):
+        if m.group(7) and not _spaced(text, m):
             continue
-        tail = m.group(7) if m.group(7).isupper() and len(m.group(7)) <= 3 else ""
-        count = m.group(1) or m.group(8)
-        out.add(((m.group(2) or m.group(4)).upper() + m.group(6) + tail, int(count) if count else None))
+        if len(m.group(3) or m.group(4) or "") == 4 and (m.group(2) or "").upper() not in ("SOT", "SOD"):
+            continue                                   # 'DO3316P-103' is a part number; four digits: SOT and SOD only
+        tail = m.group(9) if m.group(9).isupper() and len(m.group(9)) <= 3 else ""
+        count = m.group(1) or m.group(10)
+        name = (m.group(2) or m.group(5) or m.group(7)).upper() + (m.group(3) or m.group(4) or m.group(6) or m.group(8)) + tail
+        out.append((m.start(), m.end(), name, int(count) if count else None))
     for m in _PKG_WORD.finditer(text):
         count = m.group(1) or m.group(3)
         if count or len(m.group(2)) >= 4:
-            out.add((m.group(2).upper(), int(count) if count else None))
+            out.append((m.start(), m.end(), m.group(2).upper(), int(count) if count else None))
     for m in _PKG_MAKER.finditer(text):
-        out.add((m.group().replace("-", "").upper(), None))
+        out.append((m.start(), m.end(), m.group().replace("-", "").upper(), None))
     return out
+
+
+# ---- Whose table is it? (review 2026-11-23, round 3, A5.) Two rounds listed more package names and each time a
+# reviewer found a spelling not on the list ('To 92', 'TO-5', 'S-Mini', 'leaded'): a sheet whose other package is
+# not recognised 'named this part's package only'. The order is tied to the PART instead. A part number is a run of
+# capitals and digits as makers print one (2N3904, MMBT3904LT1G, BC847B); a sheet whose title or table heading
+# names a part number that is not this part's, or prints beside a part number a package claim that is not this
+# part's package, recognised or not ('ZQX package (XYZ3904)', 'MMXYZ3904 (ZQX)'), may print another variant's order.
+_PART_NO = re.compile(r"(?<![A-Za-z0-9])\d{0,2}[A-Z]{1,6}\d{2,}[A-Z0-9]*(?=x*(?![A-Za-z0-9]))")
+_NOT_PART = re.compile(r"^(?:Q[12]0[01]|UL94\w*|(?:ISO|IEC|EN|MIL|JESD|JEP|EIA|IPC|DIN|STD|MSL)\d+\w*)$")   # AEC-Q101, UL94V-0
+TITLE = 4                 # the printed lines at the top of a page that are its title
+# Words that stand beside a package's name and are none themselves. A word not here, in a package claim, is taken
+# for a package name: 'leaded', 'radial', 'Flat', 'ZQX'.
+_FILLER = {"package", "packages", "pkg", "plastic", "smd", "smt", "surface", "mount", "mounted", "mounting", "small",
+           "outline", "signal", "in", "a", "an", "the", "of", "for", "is", "are", "type", "pin", "pins", "lead", "leads",
+           "terminal", "terminals", "pb", "free", "halogen", "rohs", "compliant", "green", "npn", "pnp", "n", "p",
+           "channel", "note", "notes", "see", "top", "bottom", "view", "continued", "marking", "code", "case", "style"}
+_JOINS = {"and", "or", "/", "&", ",", "+"}
+
+
+def _part_numbers(text):
+    """The part numbers a text prints: [(start, end, number)]. A package's name (SOT23, TO236AB) and a standard's
+    (AEC-Q101) are none."""
+    text = str(text or "")
+    inside = [(a, b) for a, b, _, _ in _package_spans(text)]
+    return [(m.start(), m.end(), m.group()) for m in _PART_NO.finditer(text)
+            if not _NOT_PART.match(m.group()) and not package_words(m.group())
+            and not any(a <= m.start() < b for a, b in inside)]
+
+
+def _listed(line):
+    """The part numbers of a line that lists two or more, one after the other ('XYZ3904 / MMXYZ3904 NPN ...',
+    'BC846, BC847 and BC848'): a title wherever the text layer puts it."""
+    found = _part_numbers(line)
+    if any(re.fullmatch(r"(?i)x*(?:\s|[,/;&|+]|and|or)*", line[a[1]:b[0]]) for a, b in zip(found, found[1:])):
+        return {t for _, _, t in found}
+    return set()
+
+
+def _other_parts(numbers, part):
+    """The part numbers of `numbers` that are not this part's: this part's are the ones its number begins with
+    ('MMBT3904' and 'MMBT3904L' for MMBT3904LT1G). When the sheet prints none of those but a longer number that
+    begins with this part's (the BOM has the base name), that one is this part's. part None: the longest."""
+    p = re.sub(r"[^A-Z0-9]", "", str(part or "").upper())
+    numbers = set(numbers)
+    if not any(p and p.startswith(t) for t in numbers):
+        longer = [t for t in numbers if t.startswith(p)]
+        if not longer:
+            return sorted(numbers)
+        p = max(sorted(longer), key=len)
+    return sorted(t for t in numbers if not p.startswith(t))
+
+
+def _claim(line, is_mine):
+    """A package claimed beside a part number on `line` that is not this part's package -> the claim as printed, or
+    None. A claim is what stands in brackets beside the number ('MMXYZ3904 (ZQX)'), what stands before the number in
+    brackets ('ZQX (MMXYZ3904)') and what stands before the word 'package' ('in a ZQX package'). It is this part's
+    when it is a name of this part's package (is_mine) with only filler words (_FILLER) by it; any other word in
+    it is taken for a package name, known or not."""
+    parts = _part_numbers(line)
+    if not parts:
+        return None
+    marked = list(re.sub("[−–—‐‑‒]", "-", line))
+    for a, b, _ in parts:
+        marked[a:b] = " " * (b - a)
+    for a, b, name, count in _package_spans(line):
+        marked[a:b] = ("\x01" if is_mine((name, count)) else "\x02") + " " * (b - a - 1)
+    marked = "".join(marked)
+    words = lambda t: re.findall(r"[\x01\x02]|[A-Za-z0-9]+|[/&,+]", t)
+    plain = lambda w: w.lower() in _FILLER or w.lower() in _JOINS or w.isdigit()
+
+    def before(end):
+        """The claim that ends at `end`: read backwards from there, this part's package (and others joined to it
+        by 'and', '/') must come before any word that is no filler."""
+        at = max(marked.rfind(c, 0, end) for c in ";:|()") + 1
+        seen = need = False
+        for w in reversed(words(marked[at:end])):
+            if w == "\x01":
+                seen, need = True, False
+            elif w == "\x02" or not plain(w) and (need or not seen):
+                return line[at:end].strip()
+            elif w.lower() in _JOINS:
+                need = seen
+            elif not plain(w):
+                break                                  # prose before this part's package name
+        return None
+    for m in re.finditer(r"\(([^()]*)\)", marked):
+        if any(m.start() <= a < m.end() for a, _, _ in parts):      # 'ZQX (MMXYZ3904)': what stands before the number
+            bad = before(m.start())
+        else:                                                       # 'MMXYZ3904 (ZQX)': what stands in the brackets
+            bad = line[m.start(1):m.end(1)].strip() if any(w == "\x02" or w != "\x01" and not plain(w)
+                                                           for w in words(m.group(1))) else None
+        if bad:
+            return bad
+    for m in re.finditer(r"(?i)\b(?:packages?|pkg)\b", marked):
+        bad = before(m.start())
+        if bad:
+            return bad
+    return None
+
+
+def _variant_doubt(page_texts, page, package, leads, above, part):
+    """Why the table (or drawing) on page `page` may be another variant's than this part's, or None: see _PART_NO.
+    The table's own heading decides (above: its title and the lines over it; a drawing's page: its top lines); the
+    datasheet's title (the top of its first page) when the heading names no part number. A line anywhere on those
+    pages that lists two part numbers counts as a title."""
+    mine, count = own_packages(package)
+    is_mine = lambda w: w[0] in mine and (w[1] is None or w[1] in (count, leads) or not (count or leads))
+    printed = lambda t: [ln for ln in str(t or "").splitlines() if ln.strip()]
+    pages = page_texts or {}
+    here = printed(pages.get(page))
+    head = printed(above) if above else here[:TITLE]
+    numbers = {t for ln in head for _, _, t in _part_numbers(ln)}
+    lines, what = here, f"page {page}'s heading"
+    if not numbers:                                    # the heading names no part: the datasheet's title does
+        first = printed(pages[min(pages)]) if pages else []
+        numbers = {t for ln in first[:TITLE] for _, _, t in _part_numbers(ln)}
+        head, lines, what = head + first[:TITLE], here + first, "the datasheet's title"
+    numbers |= {t for ln in lines for t in _listed(ln)}
+    others = _other_parts(numbers, part)
+    if others:
+        return f"{what} names {'another part number' if len(others) == 1 else 'other part numbers'} " \
+               f"({', '.join(others[:4])}): the order may be that part's package's, not this part's"
+    for ln in head:
+        bad = _claim(ln, is_mine)
+        if bad:
+            return f"{what} prints '{bad[:40]}' beside a part number, which is not this part's package: which " \
+                   "package's order it prints is not in the text"
+    return None
 
 
 def own_packages(package):
@@ -1073,7 +1215,18 @@ def own_packages(package):
     return names, count
 
 
-def package_doubt(page_texts, page, package, leads=None, where="", above=None):
+def package_doubt(page_texts, page, package, leads=None, where="", above=None, part=None):
+    """Why a pin order read on page `page` of a PDF may not be this part's, or None: the packages the PDF names
+    (_named_doubt), then the part numbers and package claims of the table's heading (_variant_doubt; round 3, A5:
+    the first alone rests on recognising every other package's name). A table whose own header named this
+    package's column needs no more. part: this part's number, when known."""
+    why = _named_doubt(page_texts, page, package, leads, where, above)
+    if why or "the header names one package per column" in str(where or ""):
+        return why
+    return _variant_doubt(page_texts, page, package, leads, above, part)
+
+
+def _named_doubt(page_texts, page, package, leads=None, where="", above=None):
     """Why a pin order read on page `page` of a PDF may not be this part's package's, or None (review 2026-11-23,
     1.4: a family datasheet whose text prints only the TO-92 table gave the TO-92 order to the SOT-23 part). It is
     this package's when every package the PDF names is this part's own (one package only), or the table's header
@@ -1111,15 +1264,15 @@ def pin_orders(page_texts, names, figures=(), part=None, package=None, doubts=No
     """The orders of a three-terminal part's names ('GSD', 'BEC') on pins 1, 2, 3 that the datasheet's text agrees
     with (check): ['GSD'] when it prints one order and no other. Two orders agreeing (two packages drawn), or none: the
     text does not settle it. package: this part's land name(s), as check() takes them: the one order then counts only
-    when it is this package's (package_doubt; review 2026-11-23, 1.4), else [] and the reason is added to the list
-    `doubts`. Not given (None): the bare text check, which no release may rest on."""
+    when it is this package's and this part's (package_doubt; review 2026-11-23, 1.4, and round 3, A5), else []
+    and the reason is added to the list `doubts`. Not given (None): the bare text check, which no release may rest on."""
     from itertools import permutations
     got = [("".join(o), v) for o in permutations(names)
            for v in [check(page_texts, list(zip("123", o)), figures, part=part, package=package or ())]
            if v["status"] == "agreed"]
     if len(got) == 1 and package is not None:
         why = package_doubt(page_texts, got[0][1].get("page"), package, len(names), got[0][1].get("where"),
-                            got[0][1].get("above"))
+                            got[0][1].get("above"), part)
         if why:
             if doubts is not None:
                 doubts.append(f"it prints {', '.join(got[0][0])} on pins 1, 2, 3, but {why}")
