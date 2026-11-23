@@ -104,9 +104,12 @@ CASES = [
     (["stdparts", "bench", "--fixture", "{tests}/fixtures/stdparts_kicad_numbers.json.gz"], (0,)),
     (["testpack", "--out", "{out}/testpack"], (0,)),
     (["parity", "{out}/lib/plan.json", "-o", "{out}/parity"], (0, 1)),
+    (["store", "status", "--rules", "{in}/ecadlib.toml"], (0,)),          # store off: says so, contacts nothing
+    (["store", "share", "{out}/lib/plan.json", "-o", "{out}/share"], (0, 1)),   # 1: nothing shareable (all held)
+    (["store", "report", "ACME", "X1", "--print"], (0,)),
     (["parity", "{out}/lib/plan.json", "--kicad", "{out}/kicad", "--name", "ecadlib", "-o", "{out}/parity_k"], (0, 1)),
 ]
-HELP_ONLY = {"ui", "mcp", "project", "setup", "start", "sources-check"}   # need a server / network / an Altium project: -h (and mcp below)
+HELP_ONLY = {"ui", "mcp", "project", "setup", "start", "sources-check", "store-repo"}   # need a server / network / an Altium project: -h (and mcp below)
 
 
 def _snapshot(root, skip):

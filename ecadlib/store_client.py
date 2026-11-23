@@ -65,6 +65,24 @@ def parse_source(s):
     return (m[1], int(m[2])) if m else None
 
 
+def origin(source, store=None, half="footprint"):
+    """Where a half really came from: for a half built from a store record (store:<key_id>@r<rev>) the record's own
+    source (kicad:Lib:Name, standard:..., datasheet, easyeda:C123), as the part's `store` block names it ({"symbol",
+    "footprint", ...}, written by the librarian); for any other half its own source. A store half with no such block
+    stays store:... (never taken for a KiCad part: no relaxed check, and no credit to keep)."""
+    s = str(source or "")
+    if parse_source(s) and isinstance(store, dict) and isinstance(store.get(half), str) and store[half]:
+        return store[half]
+    return s
+
+
+def item_origin(item, half):
+    """origin() of a plan item's (or librarian state record's) half."""
+    src = (item or {}).get("source")
+    s = src.get(half) if isinstance(src, dict) else ((item or {}).get(half) or {}).get("source")
+    return origin(s, (item or {}).get("store"), half)
+
+
 def decide(hit, accept="confirmed"):
     """What a run does with a hit: 'use' (build from it), 'second-opinion' (keep it to compare with the local build)
     or 'skip'. A disputed record is only ever a second opinion; a checked one is used only with accept='checked'."""
@@ -84,13 +102,22 @@ def _rev(v):
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
+def default_snapshot_url(url):
+    """Where a store's weekly zip is: for a GitHub raw URL the rolling `snapshot` release of that repository (the
+    store's snapshot workflow attaches it there; a zip is never committed), else <url>/snapshot.zip."""
+    m = re.match(r"https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/", str(url or "") + "/")
+    if m:
+        return f"https://github.com/{m.group(1)}/{m.group(2)}/releases/download/snapshot/snapshot.zip"
+    return str(url) + "/snapshot.zip" if url else ""
+
+
 class Store:
     def __init__(self, url, http=None, cache_dir=None, offline=False, mode="online", now=time.time, ttl_s=TTL_S,
                  snapshot_url=None, snapshot_ttl_s=SNAPSHOT_TTL_S, accept="confirmed"):
         self.url, self.http, self.offline, self.mode, self.now = str(url or "").strip().rstrip("/"), http, offline, \
             mode, now
         self.ttl, self.snapshot_ttl, self.accept = ttl_s, snapshot_ttl_s, accept
-        self.snapshot_url = snapshot_url or (self.url + "/snapshot.zip" if self.url else "")
+        self.snapshot_url = snapshot_url or default_snapshot_url(self.url)
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.trouble = []
         self._mem, self._usable, self._down, self._root, self._tmp = {}, None, False, None, None
@@ -499,7 +526,7 @@ class Store:
 
 def from_rules(rules, http=None, cache_dir=None, offline=False):
     """The Store a run's rules ask for: [store] url, accept ("confirmed" | "checked" | "off"), mode ("online" |
-    "snapshot"), snapshot (the zip's URL; default <url>/snapshot.zip). No [store] section, no url or accept "off":
+    "snapshot"), snapshot (the zip's URL; default: default_snapshot_url). No [store] section, no url or accept "off":
     a Store that is off and contacts nothing."""
     s = (rules or {}).get("store") if isinstance(rules, dict) else None
     s = s if isinstance(s, dict) else {}

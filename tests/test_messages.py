@@ -68,6 +68,14 @@ EXAMPLES = {
     "verify.datasheet_read": "verify: datasheet reader output (footprint, symbol): compare with https://x.example/a.pdf; "
                              "see datasheet/*.review.md (3 items flagged)",
     "verify.sim_pin_map": "verify: sim model BSS138: pin map not verified (by position)",
+    "store.disagree": "verify: shared store: the store's record ACME|DSPART1 r1 (checked) has other pads than this build "
+                      "(symbol datasheet, footprint datasheet): compare both with the datasheet",
+    "store.withdrawn": "verify: shared store record ACME|RC0603-10K r1 was withdrawn from the store (pad 1 too small): "
+                       "this part was built from it; build it again",
+    "store.disputed": "verify: shared store record ACME|RC0603-10K r2 is disputed (someone reported a difference)",
+    "store.package_clash": "verify: footprint: the BOM names R_1206_3216Metric but the shared store's record "
+                           "ACME|RC0603-10K r1 is R_0603_1608Metric: check which package the part has",
+    "store.note": "shared store: matched NE555DR without a maker: only TEXASINSTRUMENTS has it in the shared store",
     "verify.other": "verify: something a person must look at",
     "crosscheck.disagree": "cross-check disagrees, nothing written: second read: pitch read 0.5, second read 0.65",
     "crosscheck.unchecked": "cross-check unchecked: second read: not checked (refused)",
@@ -339,7 +347,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 28, "datasheet.py": 10,
+    "librarian.py": 31, "datasheet.py": 10,
 }
 
 

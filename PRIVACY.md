@@ -12,6 +12,7 @@ reports, and only from people who switched them on (below).
 | The Internet Archive (archive.org) | A part's datasheet link, when it is a public web link | Only when none of the part's datasheet links gave a PDF (a dead link, or a site that refused the download). Never a link to your own network, an intranet name, or a link holding a user name, key or signature | Set `archive = false` under `[datasheet]` |
 | DigiKey, Mouser, Nexar, SnapMagic, SamacSys | Part numbers, with your key | Only if you set that service's key | Do not set the key |
 | Altium 365 (Nexar) | The parts you push, with your token | Only when you push to Altium 365 | Do not set `NEXAR_TOKEN` |
+| The shared store of checked parts (GitHub, or the address in `[store] url`) | The names of the files a lookup fetches: an index file that covers about one in 256 parts (picked by a hash of the part number) and that part's record, plus the store's small withdrawn list. No BOM, no account, no counts | Only if you set `[store] url` (empty by default: no store is asked), when the librarian looks parts up, and for `ecadlib store status`/`get` and the upkeep store check | Leave `[store] url` empty, set `[store] accept = "off"`, run with `--offline`, or use `[store] mode = "snapshot"` to download the whole store and look parts up on your computer |
 | GitHub | Upkeep issues or pull requests | Only if you run `ecadlib upkeep --github` | Leave out `--github` |
 | A webhook you configure | Short notifications | Only if you set `[notify]` | Leave `[notify]` empty |
 | This project's crash-report endpoint (pcblivinglibrary.vercel.app), which files a public GitHub issue | A crash's error type (such as `KeyError`), the lines of ecadlib's own code it went through, where in ecadlib it happened, and the ecadlib, OS and Python versions. Never the error message, file names of yours, parts, keys or anything you typed | Only if you switched automatic crash reports on (asked once after a crash, or on the setup page); off by default | `ecadlib report-bug --auto off`, the setup page, or the environment variable `ECADLIB_NO_CRASH_REPORTS=1` (or `DO_NOT_TRACK=1`) |
@@ -36,6 +37,14 @@ public after you switch reports off. Vercel, which hosts the endpoint, sees your
 it does for any web request. To stop floods, the endpoint counts reports per address for one hour, under a one-way
 hash of the address (never the address itself), and then forgets it; the address is not put in the issue or passed on.
 `ecadlib report-bug --auto status` shows the setting.
+
+**Sharing parts with the shared store** happens only when you ask for it. `ecadlib store share` writes record files on
+your computer and sends nothing; you offer them to the store yourself, in a pull request from your own GitHub account
+(your GitHub name is public on it). A record holds the maker, part number, the maker's description, the public
+datasheet link, the symbol and footprint, pins, dimensions, the checks passed, the ecadlib version and the AI model
+name. It never holds your BOM, project or file names, your name or e-mail, internal part numbers, stock or price
+fields, a private datasheet link, a 3D model or a datasheet PDF. `ecadlib store report` builds a GitHub issue link
+like `ecadlib report-bug`: nothing is sent until you press Submit. See [docs/shared-store.md](docs/shared-store.md).
 
 API keys you add on the setup page or with `ecadlib keys set` are stored only on your computer: on Windows they are
 encrypted for your Windows account, elsewhere they are in a file only you can read. They are never written to your

@@ -66,8 +66,9 @@ def chip_size_problem(item):
     kind, size = SP.mpn_size(mpn)
     if not size:
         return None
-    src = str((item.get("source") or {}).get("footprint") or "")
-    if src.split(":")[0] in ("datasheet", "easyeda"):     # the part's own land: a URL / an LCSC number, no size
+    from .store_client import item_origin               # a shared-store record: the land it was made from
+    src = item_origin(item, "footprint")
+    if src.split(":")[0] in ("datasheet", "easyeda", "store"):   # the part's own land: a URL / an LCSC number, no size
         return None
     fp = item.get("footprint") or {}
     names = [src.split(":")[-1]] if src else [str(fp.get("kicad") or ""), str(fp.get("ref") or "")]
@@ -411,7 +412,9 @@ def clear_doubts(entry, src, halves):
 
 
 NUMBERING_WARN = re.compile(r"numbering doubles back|is not the top-left pad")
-GENERATED_FP = ("datasheet:", "standard:")   # ecadlib's own generator (a datasheet read, pad table, standard family)
+GENERATED_FP = ("datasheet:", "standard:",   # ecadlib's own generator (a datasheet read, pad table, standard family),
+                "store:")                    # and a shared-store record: whatever it was made from, its drawing came
+#                                              from a download, so it gets every check a generated footprint gets
 
 
 def _row_reversed(po):
@@ -819,7 +822,30 @@ def generic_passive(item):
 PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what its workspace released (no datasheet here)
 
 
-def publish_problems(item, base=".", rules=None, writes_files=False, policy=None):
+def store_problems(item, store):
+    """Why a part built from a shared-store record must not go out now: the store (a store_client.Store) has withdrawn
+    that record, or marks it disputed. [] when the part is from no record, the store is off, or it cannot be read (a
+    store that cannot be reached holds nothing)."""
+    from .store_client import parse_source
+    if store is None or not getattr(store, "enabled", False):
+        return []
+    keys = (item.get("store") or {}).get("keys") or {}
+    out = []
+    for h in ("symbol", "footprint"):
+        p = parse_source((item.get("source") or {}).get(h))
+        if not p:
+            continue
+        label = f"{keys.get(p[0]) or p[0]} r{p[1]}"
+        w = store.is_withdrawn(*p)
+        if w:
+            why = "; ".join(str(x) for x in (w.get("reason"), w.get("issue")) if x) or "no reason given"
+            out.append(f"verify: shared store record {label} was withdrawn from the store ({why})")
+        elif keys.get(p[0]) and store.status(p[0], keys[p[0]]) == "disputed":
+            out.append(f"verify: shared store record {label} is disputed")
+    return list(dict.fromkeys(out))
+
+
+def publish_problems(item, base=".", rules=None, writes_files=False, policy=None, store=None):
     """Why a publisher (altium365 push, dblib-sync / altium-pkg, kicad-export) must not send this part's files: the
     release check run again now, on the files as they are, less the failures the item's --allow covers. [] = it may
     go. A plan's `status` alone is never enough: `altium365 plan --models`, a triage plan or a hand edit can say
@@ -828,7 +854,8 @@ def publish_problems(item, base=".", rules=None, writes_files=False, policy=None
     as in apply: it sends them no files. writes_files=True (kicad-export, kicad-dblib, export-parts: routes that put
     the part's own files in a library) checks them too: their files must be there and pass every check that applies.
     The field rules (PULLED_NOT_CHECKED: datasheet link, Description, required parameters) do not: the workspace
-    released those fields and ecadlib holds no datasheet for the part."""
+    released those fields and ecadlib holds no datasheet for the part. store: a store_client.Store, when the caller
+    has one: a part from a record the store has since withdrawn or disputes does not go (store_problems)."""
     st = item.get("status", "ready")
     if item.get("a365") and st == "deleted_in_workspace":
         return ["status: deleted in the Altium 365 workspace: not published again"]
@@ -852,7 +879,7 @@ def publish_problems(item, base=".", rules=None, writes_files=False, policy=None
             where = policy_file(base) or "ecadlib.toml [release.approvals]"   # added after the release check
             return out + [f"sign-off: the approval policy {where} cannot be read ({e}): fix it, then publish again"]
     block = push_block(item, policy, base)     # holds here too. No policy now: the release check's snapshot decides
-    return out + ([f"sign-off: {block}"] if block else [])
+    return out + ([f"sign-off: {block}"] if block else []) + store_problems(item, store)
 
 
 PUBLISHABLE = ("ready", "existing")           # change_gate.RELEASED_STATUSES: what a publisher may send (re-checked)

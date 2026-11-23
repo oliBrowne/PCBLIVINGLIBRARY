@@ -299,7 +299,7 @@ def zip_of(root, prefix="", extra=()):
 
 def test_snapshot_serves_without_further_requests(tmp_path):
     root = make_store(tmp_path / "s", [("TI", "NE555DR", {}), ("TI", "LM358DR", {})])
-    snap = BASE + "/snapshot.zip"
+    snap = SC.default_snapshot_url(BASE)
     http = FakeHTTP(root, zips={snap: zip_of(root, prefix="store-main/")})
     st = SC.Store(BASE, http=http, cache_dir=tmp_path / "c", mode="snapshot")
     assert st.lookup("TI", "NE555DR") and st.lookup("TI", "LM358DR") and st.lookup("TI", "X1") is None
@@ -315,7 +315,7 @@ test_snapshot_serves_without_further_requests = lite(test_snapshot_serves_withou
 
 def test_snapshot_unsafe_zip_refused(tmp_path):
     root = make_store(tmp_path / "s", [("TI", "NE555DR", {})])
-    snap = BASE + "/snapshot.zip"
+    snap = SC.default_snapshot_url(BASE)
     for bad in ("../evil.json", "/etc/evil.json", "a/../../evil.json", "C:/evil.json", "a\\..\\..\\evil.json"):
         http = FakeHTTP(root, zips={snap: zip_of(root, extra=[(bad, "{}")])})
         cache = tmp_path / ("c" + str(abs(hash(bad))))
@@ -327,7 +327,7 @@ def test_snapshot_unsafe_zip_refused(tmp_path):
 
 def test_snapshot_caps(tmp_path, monkeypatch):
     root = make_store(tmp_path / "s", [("TI", "NE555DR", {})])
-    snap = BASE + "/snapshot.zip"
+    snap = SC.default_snapshot_url(BASE)
     monkeypatch.setattr(SC, "SNAPSHOT_MAX_MEMBERS", 2)
     st = SC.Store(BASE, http=FakeHTTP(root, zips={snap: zip_of(root)}), cache_dir=tmp_path / "a", mode="snapshot")
     assert st.lookup("TI", "NE555DR") is None and "snapshot" in st.trouble[0]
@@ -339,3 +339,11 @@ def test_snapshot_caps(tmp_path, monkeypatch):
     assert st.lookup("TI", "NE555DR") is None and len(st.trouble) == 1
 test_snapshot_unsafe_zip_refused = lite(test_snapshot_unsafe_zip_refused)
 test_snapshot_caps = lite(test_snapshot_caps)
+
+
+def test_default_snapshot_url():
+    from ecadlib import store_client as SC
+    assert SC.default_snapshot_url("https://raw.githubusercontent.com/o/r/main") == \
+        "https://github.com/o/r/releases/download/snapshot/snapshot.zip"
+    assert SC.default_snapshot_url("https://x.test/store") == "https://x.test/store/snapshot.zip"
+    assert SC.default_snapshot_url("") == ""

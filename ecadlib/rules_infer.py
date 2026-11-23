@@ -1213,7 +1213,7 @@ def main(argv=None, inp=input, environ=None):
     ap.add_argument("--unofficial", action=argparse.BooleanOptionalAction, default=None,
                     help="use (or not) the unofficial EasyEDA/LCSC and JLCPCB search endpoints ([providers] unofficial; "
                          "default: asked, else off)")
-    ap.add_argument("--sources", help="part sources in order, comma-separated (kicad,easyeda,standard,datasheet; default: asked, else all)")
+    ap.add_argument("--sources", help="part sources in order, comma-separated (store,kicad,easyeda,standard,datasheet; default: asked, else all)")
     ap.add_argument("--no-doctor", action="store_true", help="do not run `ecadlib doctor` at the end")
     a = ap.parse_args(argv)
     out = Path(a.out)
