@@ -1075,7 +1075,7 @@ class Run:
             pkg = package_of(item["footprint"].get("kicad") or fp_name, item.get("description"))
             if not pkg and kind in ("R", "C", "L"):    # no package in the BOM: the size the maker's part number states
                 from . import stdparts as SP           # (RC0603FR-0710KL is an 0603), before any converted source
-                mk, size = SP.mpn_size(mpn)
+                mk, size = SP.mpn_size(mpn, str(ln.get("manufacturer") or st.get("maker") or ""))
                 pkg = size if size and mk in ("", kind) else None
             elif not pkg and kind in SENSOR_KINDS:     # a thermistor / varistor series' size code (NCP18: 0603)
                 from . import stdparts as SP
@@ -2761,7 +2761,7 @@ def alternate_footprint(ln, st):
     if want and own == want:
         return None, (f"{ALTERNATE} {mpn}: the base part's footprint {fp} kept: {mpn}'s datasheet read names the same "
                       "package")
-    mk, ms = SP.mpn_size(ln.get("mpn"))                # a passive whose part number codes its chip size (RC0603FR..,
+    mk, ms = SP.mpn_size(ln.get("mpn"), ln.get("manufacturer", ""))   # a passive whose part number codes its chip size (RC0603FR..,
     if ms and not SP.own_land_name(fp):                # GRM155..): that size and kind on a plain chip land (R-FX10-5)
         m = re.match(r"^(R|C|L)_(\d{4,5})_\d{4,5}Metric$", want or "")
         kind, size = (m.group(1), m.group(2)) if m else (st.get("kind"), SP.chip_size(fp, strict=True))

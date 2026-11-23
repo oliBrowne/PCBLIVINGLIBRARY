@@ -48,8 +48,9 @@ RULES = [
     ("TDK C", "C", re.compile(r"^C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][RSTPV]|JB|CH)\d[A-Z]" + EIA_C +
                               r"[BCDFGJKMZ]\d{3}[A-Z]{2}$"), 1, "metric", 2, "eia"),
     ("KEMET C", "C", re.compile(r"^C" + IMP + r"[CX](\d{3}|\dR\d)[BCDFGJKMZ]\d[A-Z]A[CL](?:TU|AUTO|\d{4}|7\d{3})?$"), 1, None, 2, "eia9"),
-    # (AC0603KRX7R9BB104: Yageo's automotive MLCC series, the same code as CC; not an AC resistor: review 2026-11-23)
-    ("Yageo CC/AC", "C", re.compile(r"^(?:CC|AC)" + IMP + r"[BCDFGJKMZ][RKP](?:NPO|COG|C0G|X7R|X5R|X7S|X6S|X8R|Y5V)\dB[BN]" + EIA_C + r"$"),
+    # (AC0603KRX7R9BB104: Yageo's automotive MLCC series, the same code as CC; not an AC resistor: review 2026-11-23;
+    #  the voltage code is a digit or, from 200 V up, a letter: CC1206KKX7RABB105 is 200 V, round 2)
+    ("Yageo CC/AC", "C", re.compile(r"^(?:CC|AC)" + IMP + r"[BCDFGJKMZ][RKP](?:NPO|COG|C0G|X7R|X5R|X7S|X6S|X8R|Y5V)[0-9A-DYZ]B[BN]" + EIA_C + r"$"),
      1, None, 2, "eia"),
     ("KYOCERA AVX", "C", re.compile(r"^" + IMP + r"[0-9YZ][ACDGUZ](\d{3}|\dR\d)[BCDFGJKMZ]A[T7J][0-9A-Z]{2}$"), 1, None, 2, "eia9"),
     ("KEMET T491", "CP", re.compile(r"^T491([ABCD])(\d{3})[JKM](\d{3})A[TS]\d{0,4}$"), 1, TANT_CASE, 2, "eia_uf"),

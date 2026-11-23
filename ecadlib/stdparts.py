@@ -684,10 +684,29 @@ def mpn_size(mpn, maker=""):
         m = rx.fullmatch(s)
         if m:
             size = METRIC.get(m.group(1)) if conv == "metric" else conv.get(m.group(1)) if isinstance(conv, dict) else m.group(1)
-            if size and maker_is(who, maker):
+            if size and maker_is(who, maker) and not mpn_maker_doubt(s, maker):
                 return kind, size
             return None, None
     return None, None
+
+
+def mpn_maker_doubt(mpn, maker=""):
+    """Why a part number that fits a size-only rule gives no size without its maker, or None. Review 2026-11-23 round
+    2: 'C0603X7R1H104K' with no maker named was read by TDK's size-only rule as a metric 0603 (an inch 0201); other
+    makers write an inch 0603 the same way. A size-only rule that reads its code as metric where the same digits are
+    an inch size too (0402, 0603) is used only when the line names that maker; else the part is held for the maker."""
+    s = re.sub(r"\s+", "", str(mpn or "").upper())
+    if not NO_MAKER.fullmatch(str(maker or "").lower()):
+        return None
+    for who, rx, kind, conv in MPN_RULES:
+        m = rx.fullmatch(s)
+        if m:
+            if conv == "metric" and m.group(1) in IMPERIAL:
+                return (f"MPN {s} reads as {who.upper()}'s metric {m.group(1)} (an inch {METRIC[m.group(1)]}) only if the "
+                        f"part is {who.upper()}'s; another maker's number of this form is an inch {m.group(1)}, and the "
+                        "line names no maker: name the manufacturer")
+            return None
+    return None
 
 
 def _free_attrs(text):
@@ -1339,6 +1358,9 @@ def footprint_for(texts, kind=None, mpn="", weak=(), maker=""):
         if left:
             return None, (f"{left[0][:60]!r}: {left[1]!r} beside the size code is not understood, so it may name "
                           "another land than the plain chip; write the size alone or the footprint's KiCad name")
+        doubt = mpn_maker_doubt(mpn, maker)               # 'C0603X7R1H104K' and no maker: metric or inch is not known
+        if doubt:
+            return None, doubt
         mk, ms = mpn_size(mpn, maker)
         if ms and (mk == kind or (mk == "C" and kind == "C") or (mk == "L" and kind == "L")):
             sizes.setdefault(ms, f"MPN {mpn}")

@@ -297,3 +297,47 @@ def test_ceramics_on_the_kicad_chip_name_stay_ready(tmp_path, monkeypatch):
     st = _status(plan)
     assert len(plan) == 4 and all(s == "ready" for s, _ in st.values()), st
     assert all(_fp(i) == "standard:Capacitor_SMD:C_0603_1608Metric" for i in plan.values()), {n: _fp(i) for n, i in plan.items()}
+
+
+# ---------------------------------------------------------------- Minor (R-A)
+def test_size_only_metric_rule_needs_its_maker():
+    assert SP.mpn_size("C0603X7R1H104K") == (None, None)                 # TDK's metric 0603 or another maker's inch 0603
+    assert SP.mpn_size("C0603X7R1H104K", "TDK") == ("C", "0201")
+    assert SP.mpn_size("C0603X7R1H104K", "Venkel") == (None, None)
+    assert SP.mpn_size("C1608X7R1H104K") == ("C", "0603")                # 1608 is no inch size: not in doubt
+    assert SP.mpn_size("C1608X7R1H104KT") == ("C", "0603")
+    assert SP.mpn_size("C0603X7R1H104K030BA") == ("C", "0201")           # the whole current form (mpn_decode)
+    r = SP.resolve(["0603"], "C", "C0603X7R1H104K", "CAP CER 0.1UF 50V X7R")
+    assert r["footprint"] is None and "names no maker" in r["fp_how"], r
+    assert SP.resolve([""], "C", "C0603X7R1H104K", "CAP CER 0.1UF 50V X7R")["footprint"] is None
+    assert SP.resolve([""], "C", "C0603X7R1H104K", "CAP CER 0.1UF 50V X7R", maker="TDK")["footprint"] == "C_0201_0603Metric"
+    assert SP.resolve(["0603"], "C", "C0603X7R1H104K", "CAP CER 0.1UF 50V X7R", maker="TDK")["footprint"] is None   # two sizes
+    assert SP.resolve(["0603"], "C", "C0603X7R1H104K", "CAP CER 0.1UF 50V X7R", maker="Venkel")["footprint"] == "C_0603_1608Metric"
+    assert SP.resolve(["0603"], "C", "C1608X7R1H104K", "")["footprint"] == "C_0603_1608Metric"
+
+
+def test_yageo_cc_with_a_letter_voltage_code_is_sized():
+    from ecadlib import mpn_decode as MD
+    assert SP.mpn_size("CC1206KKX7RABB105") == ("C", "1206")
+    assert SP.mpn_size("CC0805KKX7RBBB102", "Yageo") == ("C", "0805")
+    assert SP.mpn_size("CC0603KRX7R9BB104") == ("C", "0603")
+    assert abs(MD.decode("CC1206KKX7RABB105")["value"] - 1e-6) < 1e-12
+    assert SP.mpn_size("CC1206KKX7RXBB105") == (None, None)             # no voltage code Yageo writes
+
+
+def test_call_sites_pass_the_maker():
+    from ecadlib import release_check as RC
+    item = {"folder": "Components/Capacitors", "source": {"footprint": "standard:Capacitor_SMD:C_0603_1608Metric"},
+            "footprint": {"ref": "C_0603_1608Metric"},
+            "parameters": [{"name": "Manufacturer Part Number", "value": "C1608X7R1H104K080AA"},
+                           {"name": "Manufacturer", "value": "TDK"}, {"name": "Value", "value": "100nF"}]}
+    assert RC.chip_size_problem(item) is None
+    item["source"]["footprint"] = "standard:Capacitor_SMD:C_0402_1005Metric"
+    assert "0603" in RC.chip_size_problem(item)                         # TDK's own number against another land: held
+    item["parameters"][1]["value"] = "Venkel"                           # not TDK's: the rule is not used, so no size
+    assert RC.chip_size_problem(item) is None                           # of its own to hold the land against
+    item = {"folder": "Components/Misc", "parameters": [{"name": "Manufacturer Part Number", "value": "RC0603FR-0710KL"},
+                                                         {"name": "Manufacturer", "value": "Yageo"}, {"name": "Value", "value": "100nF"}]}
+    assert "resistor" in RC.value_kind_problem(item)
+    item["parameters"][1]["value"] = "Acme"
+    assert RC.value_kind_problem(item) is None

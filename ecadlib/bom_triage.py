@@ -1611,7 +1611,7 @@ def triage(lines, index, provs, http, shared=None):
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"))
         if not pkg and pns:                           # a passive's part number names its size by the maker's own code
             from .stdparts import mpn_size            # (RC0603F103CS is Samsung's 0201); an IC's never does
-            pkg = next((s for s in (mpn_size(pn)[1] for pn in pns) if s), None) or package_of(*pns)
+            pkg = next((s for s in (mpn_size(pn, ln.get("manufacturer", ""))[1] for pn in pns) if s), None) or package_of(*pns)
         cls = re.match(r"[A-Z]+", ln.get("designator", "").upper())
         sym = how = None
         own = "" if placeholder_mpn(ln.get("mpn")) else str(ln.get("mpn") or "").strip()

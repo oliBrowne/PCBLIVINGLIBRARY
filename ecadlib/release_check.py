@@ -63,8 +63,8 @@ def chip_size_problem(item):
     from . import stdparts as SP
     par = {p.get("name"): p.get("value", "") for p in item.get("parameters") or [] if isinstance(p, dict)}
     mpn = str(par.get("Manufacturer Part Number") or "")
-    kind, size = SP.mpn_size(mpn)
-    if not size:
+    kind, size = SP.mpn_size(mpn, str(par.get("Manufacturer") or ""))   # (a rule of another maker than the part's is
+    if not size:                                                        # not used: round 2 of the 2026-11-23 review)
         return None
     src = str((item.get("source") or {}).get("footprint") or "")
     if src.split(":")[0] in ("datasheet", "easyeda"):     # the part's own land: a URL / an LCSC number, no size
@@ -108,7 +108,8 @@ def value_kind_problem(item, rules=None):
                       par.get("Manufacturer Part Number", "")) or "")
     cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
     kinds = [(k, f"its folder is {cat}") for k in [{"Resistors": "R", "Capacitors": "C", "Inductors": "L"}.get(cat)] if k]
-    mk = SP.mpn_size(mpn)[0]
+    mk = SP.mpn_size(mpn, str(par.get(RU.canonical_param("Manufacturer", rules) if rules else "Manufacturer",
+                                      par.get("Manufacturer", "")) or ""))[0]
     if mk in VALUE_UNIT:
         kinds.append((mk, f"its MPN {mpn} is a {VALUE_UNIT[mk][1]}'s"))
     for k, why in kinds:
