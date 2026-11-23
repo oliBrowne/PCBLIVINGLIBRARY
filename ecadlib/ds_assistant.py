@@ -19,9 +19,11 @@ an independent source agrees, as for any read). The answer goes into the result 
 does not ask for it again. Each folder's name carries the request's key: a run that asks for more pages of the same
 part (its first answer left something out) gets a new folder.
 
-Not made in this mode: the paid cross-check's second read (one assistant reading twice is not a second source) and the
-web search for a missing PDF (it is billed). Message Batches are off. Nothing here talks to the network."""
+The cross-check's second read is asked for the same way, in its own folder (<part>-check-<key>), once the first read
+is answered: its request says to read the pages afresh and never reuse the first answer (through the API the second read
+is the same model reading again; 2026-11-23). Not made in this mode: the web search for a missing PDF (it is billed). Message Batches are off. Nothing here talks to the network."""
 import base64
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -49,8 +51,19 @@ def _stem(s):
 
 
 def folder(base, job):
-    """<base>/<part>-<first 10 characters of the request key>: one folder per request."""
-    return Path(base) / f"{_stem(job.get('name') or job.get('part'))}-{str(job.get('key') or 'nokey')[:10]}"
+    """<base>/<part>-<first 10 characters of the request key>: one folder per request. A second read's key
+    ("check-...") keeps 10 characters of the PDF's hash and 6 of its own inputs'. A name the folder cannot hold as written (TESTPART/A and
+    TESTPART#A both stem to TESTPART_A, FOO_ to FOO) gets 6 characters of its own hash too, so two parts never share
+    a folder and each other's answers (review 2026-11-23)."""
+    raw, key = str(job.get("name") or job.get("part") or "part"), str(job.get("key") or "nokey")
+    stem = _stem(raw)
+    if stem != raw:
+        stem += "~" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:6]
+    if key.startswith("check-"):                      # the PDF's hash, then the hash of the check's own inputs (model,
+        key = key[:16] + key.rsplit("-", 1)[-1][:6]    # effort, package, pages): a changed check is a new folder
+    else:
+        key = key[:10]
+    return Path(base) / f"{stem}-{key}"
 
 
 def _blocks(job):
@@ -80,10 +93,10 @@ def answer(base, job, model="assistant"):
     f = folder(base, job) / "answer.json"
     if not f.is_file():
         return None
-    text = f.read_text(encoding="utf-8-sig")
-    try:
+    try:                                              # (UTF-16 from PowerShell's > is not UTF-8: said, not a crash)
+        text = f.read_text(encoding="utf-8-sig")
         json.loads(text)
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         raise DatasheetError(f"{f} is not JSON ({e}): fix it and run again")
     return {"id": f"assistant-{_stem(job.get('part'))}", "type": "message", "role": "assistant", "model": model,
             "stop_reason": "end_turn", "content": [{"type": "text", "text": text}],
@@ -143,6 +156,14 @@ def request(base, job):
         if tried:                                            # why: refused, dead, the Archive had no copy ...
             md += ["What ecadlib tried:", ""] + [f"- {a.get('where') or ''}: {a.get('error') or ''}"[:400]
                                                   for a in tried[:8]] + [""]
+    if str(job.get("key") or "").startswith("check-"):      # the cross-check's second read (ecadlib.crosscheck)
+        md += ["## A second read", "",
+               "This is the cross-check: a second, separate read of the same part, compared in code with the first "
+               "read before a footprint built from it is released. Read it from these pages alone, as if for the "
+               "first time: do not open or reuse any other folder's answer.json, and do not copy numbers from an "
+               "earlier answer. If you answered this part's first read in this conversation, have a fresh session "
+               "or sub-agent answer this one. A disagreement holds the part for a person, which is safe; a copied "
+               "answer agrees with any mistake.", ""]
     md += ["Read the pages below as the instructions say, then write **answer.json** in this folder: one JSON object "
            "matching schema.json (no comments, no text around it). Leave a value out, or empty, when the pages do not "
            "print it: a guessed number is worse than none, because ecadlib holds a part with a missing value but may "

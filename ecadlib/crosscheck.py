@@ -103,6 +103,8 @@ def critical(spec):
     # whether this read is held for no body (body_unread) under each drawn type: a type word that flips it is no word only
     out["unread_as"] = {t: bool(D.body_unread(dict(spec, package_type=t))) for t in DRAWN}
     out["land_axes"] = land_axes(spec)
+    out["lead_land"] = FG.lead_land(spec)
+    out["polarized"] = spec.get("polarized") is True
     out["table_fits"] = table_fits(spec)
     out["sides"] = sides(spec)
     out["pads_read"] = pads_read(spec)
@@ -254,8 +256,14 @@ def _names(s):
     """The names one pin answers to: "1 cathode (k)" -> {CATHODE(K), CATHODE, K}; "VO (output)" -> {VO(OUTPUT), VO, OUTPUT}."""
     raw = str(s or "").translate(MINUS)
     out = {norm_pin_name(raw)}
+    # "(GPIO) P2[0]" is port pin P2.0 (Cypress PSoC): written dotted before the split below, which would otherwise give
+    # the bare "P2" and "0" that every pin of the port shares (review 11-22: P2[0] agreed with P2[1])
+    raw = PORT_BIT.sub(lambda m: f"{m[1]}.{m[2]}", raw)
+    ports = [x for x in raw.split("/") if PORT_DOT.fullmatch(x.strip())]
+    if len(ports) == 1:                               # P1.7/VREF is port pin P1.7 (never one of two ports' names)
+        out.add(norm_pin_name(ports[0]))
     for part in re.split(r"[()\[\],]|\s/\s", raw):
-        if norm_pin_name(part):
+        if norm_pin_name(part) and norm_pin_name(part) not in PIN_CLASS:   # "(GPIO) P2[0]": GPIO names no one pin
             out.add(norm_pin_name(part))
     out |= {LETTER[n] for n in out if n in LETTER}
     from .eval.score import WORDS                     # a pin spelled out ("ENABLE") is "EN", as the eval scorer counts it
@@ -264,6 +272,11 @@ def _names(s):
         if re.sub(r"[^A-Z]", "", part.upper()) in SPELLED:
             out.add(SPELLED[re.sub(r"[^A-Z]", "", part.upper())])
     return out - {""}
+
+
+PIN_CLASS = {"GPIO", "IO"}                          # a pin's kind printed beside its name, shared by many pins
+PORT_DOT = re.compile(r"[A-Za-z]{1,3}\d+\.\d+")   # a port pin as PORT.BIT: P1.7
+PORT_BIT = re.compile(r"\b([A-Za-z]{1,3}\d+)\[(\d+)\]")   # a port pin as PORT[BIT]: P2[0], P10[3]
 
 
 GROUNDISH = re.compile(r"^(?:[PADS]?GND|VSS|[PA]?VSS|GROUND|0V|EP|EPAD|PAD|THERMAL)")
@@ -367,6 +380,16 @@ def _label_only(first, second, agreed=()):
     # against the read's numbers, which the other read must confirm (one that gives no pitch or pad confirms nothing)
     if a == "custom" and b in ("qfn", "gullwing") and first.get("table_fits") and set(TABLE_CHECKED_BY) <= set(agreed):
         return True
+    # a two-terminal read with the maker's whole lead land, called chip one side and molded the other (NRS4018,
+    # free replay 2026-11-23): footprint_gen._apply_land builds both pads from the land either way, so the word changes
+    # nothing built once the pin count and the body agree. Not on a body under 1.55 mm (footprint_gen.family: a chip
+    # there is chip_small, with a smaller courtyard than molded), nor on a read of an unpolarized chip the other calls
+    # molded (a tantalum's or a diode's polarity mark comes from the read alone, and the molded word may be its only sign)
+    if {a, b} == {"chip", "molded"} and first.get("lead_land") \
+            and {"pin_count", "body_length", "body_width"} <= set(agreed) \
+            and (first.get("body_length") or (0,))[0] >= 1.55 \
+            and not (a == "chip" and b == "molded" and not first.get("polarized")):
+        return True
     # ...unless the type decides a hold: a housed connector read "custom" with no body would build pads-hugging
     return a in DRAWN and b in DRAWN and u.get(a) == u.get(b)
 
@@ -381,9 +404,9 @@ def _type_only(rec, first=None, second=None):
         if first is not None and _label_only(first, second, rec["agreed"]) and any(f in DIMS or f == "pin_count" for f in rec["agreed"]):
             x = d.pop(0)
             rec["agreed"].append("package_type")
+            how = "from the maker's land" if {x["first"], x["second"]} == {"chip", "molded"} else "as the read lists them"
             rec.setdefault("tie_breaks", []).append(
-                f"package type read {x['first']}, other source {x['second']}: a word only, the pads are built as "
-                "the read lists them")
+                f"package type read {x['first']}, other source {x['second']}: a word only, the pads are built {how}")
         elif first is not None and {first.get("package_type"), second.get("package_type")} <= set(DRAWN):
             d[0]["note"] = "the type decides whether the read's blank body outline holds the part"
         elif len(d) == 1:
@@ -773,6 +796,8 @@ def second_read(reader, job, first, first_pins, model):
         rec.update(status="unchecked", why=str(e), compared=[], agreed=[], disagreed=[], not_compared=[])
         return rec
     pins = pdf_bars(job, pins)
+    if via == "assistant":                            # reader = "assistant": no model was asked
+        rec.update(against="second read (your assistant)", model="assistant")
     rec.update(against_read(first, second, first_pins, pins), pages=note, via=via)
     if instr:
         rec["embedded_instructions"] = instr[:5]

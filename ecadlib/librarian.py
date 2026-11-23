@@ -1237,8 +1237,9 @@ class Run:
                 from . import stdparts as SP
                 land, why = SP.tantalum_land([ln.get("footprint", ""), item["footprint"].get("kicad") or ""], mpn,
                                               item.get("description") or ln.get("description") or "")
-                if land and lib.footprint(land):
-                    fp_ref, fp_how = lib.footprint(land), why
+                if land and lib.footprint(land) and "same copper" not in why:    # another height's land (stdparts.
+                    fp_ref, fp_how = lib.footprint(land), why       # TANT_SIZE_LAND) carries KiCad's 3D body at the
+                                                                    # wrong height: the standard source builds it
             elif PASSIVE[kind][1] and pkg in IMP2MET:
                 guess = PASSIVE[kind][1].format(pkg, IMP2MET[pkg])
                 own = _own_land(names, guess.split(":")[-1])
@@ -1430,6 +1431,11 @@ class Run:
             sp = SP.spec(res["footprint"])
             text, _ = SP.build(res["footprint"], RU.density_for(sp, self.rules))
             h = F.dim(sp["height_max"])[2] if sp.get("height_max") else None
+            own = re.match(r"tantalum case EIA (\d{4})-(\d{2})\b", str(res.get("fp_how") or ""))
+            land = SP.EIA_CASE.search(res["footprint"])
+            if res["footprint"] in SP.TANT_LAND.values() and own and land and own.groups() != land.groups():
+                h = int(own.group(2)) / 10      # a tantalum on its size's land (stdparts.TANT_SIZE_LAND): the case
+                sp = dict(sp, height_max=h)     # tantalum_land matched sets the 3D body's height, not the table land's
             self.put_fp(st, text, fp_name, f"standard:{res['kicad_ref']}", None, h, "standard package table", sp)
             got.append(f"footprint {res['kicad_ref']} ({res['fp_how']})")
         fp_src = str((st["footprint"] or {}).get("source") or "")
@@ -2674,6 +2680,11 @@ def case_land(case, kind=None):
 UNSURE_READ = re.compile(r"does not seem to name|datasheet from your folder|not downloaded here|found by a web search|"
                          r"package drawing came from|no drawing of this package|instruction-like text|"
                          r"set aside|check it is this part", re.I)
+# ...except the one difference set aside that leaves no doubt about the part: a two-terminal read built from the maker's
+# whole land, called chip on one side and molded on the other, with its pin count and body agreed (crosscheck._label_only)
+WORD_ONLY = re.compile(r"cross-check agreed once a difference was set aside: package type read (?:chip|molded), other "
+                       r"source (?:chip|molded): a word only, the pads are built from the maker's land; check it on the "
+                       r"drawing")
 
 
 def read_confirmed(res, job, got, drawn=None):
@@ -2684,7 +2695,7 @@ def read_confirmed(res, job, got, drawn=None):
                  name picked, which only shows the read fits its own name)
       symbol     every named pin agrees, in one column of one table, with the PDF's own text layer (ecadlib.pin_text)
     and no review item says the PDF or its drawing may not be this part's (UNSURE_READ)."""
-    if not got or any(UNSURE_READ.search(str(r)) for r in res.get("needs_review") or ()):
+    if not got or any(UNSURE_READ.search(str(r)) and not WORD_ONLY.fullmatch(str(r)) for r in res.get("needs_review") or ()):
         return None
     why = []
     if "footprint" in got or any(g.startswith("footprint") for g in got):
@@ -2692,8 +2703,9 @@ def read_confirmed(res, job, got, drawn=None):
         if cc.get("status") != "agreed":
             return None
         src = [c for c in cc.get("checks") or () if c.get("status") == "agreed" and c.get("via") != "the read's package name"]
-        why.append("footprint agrees with " + (f"{src[0].get('against')} ({src[0].get('via') or src[0].get('source')})"
-                                               if src else "the cross-check"))
+        how = src and (src[0].get("via") or src[0].get("source"))
+        why.append("footprint agrees with " + ((f"{src[0].get('against')}" + (f" ({how})" if how and how not in
+                                                str(src[0].get("against")) else "")) if src else "the cross-check"))
     if "symbol" in got:
         from . import pin_text as PT
         pins = [(q.get("num"), q.get("name")) for q in (res.get("symbol") or {}).get("pins") or ()]

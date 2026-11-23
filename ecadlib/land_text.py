@@ -191,7 +191,7 @@ def body(spec):
     return min(dims), max(dims)
 
 
-def fits_body(pads, size):
+def fits_body(pads, size, can=False):
     """Why the two pads cannot be this body's land, or None. The pads must not touch (a gap of 0.1 mm or more), their
     span must reach at least 0.6 x the body's smaller size and at most 3 mm past its larger one, and the pad width must
     be at least a fifth of the smaller size and at most 1.5 mm more than the larger: a land made of a body or
@@ -199,8 +199,11 @@ def fits_body(pads, size):
     reaches to within 0.5 mm of the body's end, and has at least 0.4 of its length under the body: the pads sit at the
     body's two ends, so a read that took the gap for the span (pads pushed out past the body) or the span for the gap
     or the gap for the pad length (pads pulled in short of the ends) breaks one of these. The body's larger size is
-    taken as its length along the pads' line."""
+    taken as its length along the pads' line. can: an SMD aluminium electrolytic, whose maker's land reaches past the
+    square base plate (pads up to 0.6 x its size long, as narrow as 0.15 x it: Panasonic FK/FC 1.6-2.0 mm on 8.3-10.3,
+    Wurth WCAP-ASLI 3.5 mm on 6.6, 2026-11-22)."""
     along, across, centre = pads
+    long_, narrow = (0.6, 0.15) if can else (0.5, 0.2)
     small, large = size
     if centre - along < 0.1:
         return f"the pads would touch (gap {centre - along:.2f} mm)"
@@ -208,15 +211,15 @@ def fits_body(pads, size):
         return f"a span of {centre + along:.2f} mm does not fit a {small:g} x {large:g} mm body"
     if along < 0.15 * large:
         return f"a pad {along:g} mm long is too short for a {large:g} mm body"
-    if along > 0.5 * large:
-        return f"a pad {along:g} mm long is more than half the {large:g} mm body"
+    if along > long_ * large:
+        return f"a pad {along:g} mm long is more than {'0.6 x' if can else 'half'} the {large:g} mm body"
     inner, outer, end = (centre - along) / 2, (centre + along) / 2, large / 2
     if outer < end - 0.5:
         return (f"the pads end {end - outer:.2f} mm short of the body's ends (the land reaches {outer:.2f} mm from the "
                 f"centre, the body {end:g} mm)")
     if min(outer, end) - inner < 0.4 * along:
         return "the pads lie mostly outside the body"
-    if not 0.2 * small <= across <= large + 1.5:
+    if not narrow * small <= across <= large + 1.5:
         return f"a pad width of {across:g} mm does not fit a {small:g} x {large:g} mm body"
     return None
 
@@ -339,7 +342,8 @@ def check(pages, spec, part=None):
     size = body(spec)
     if not size:
         return {"status": "unchecked", "why": "the read gives no body size to judge the land against"}
-    bad = fits_body(pads, size)
+    from .datasheet import _electrolytic_can
+    bad = fits_body(pads, size, can=_electrolytic_can(spec))
     if bad:
         return {"status": "unchecked", "why": bad}
     found = []
