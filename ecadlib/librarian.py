@@ -585,11 +585,43 @@ def passive_kind(item, ln=None):
     """R / C / CP / L / LED for a part that takes the generic passive symbol and a chip land by package, else None.
     The description decides too: a part it calls an array, a common-mode choke, 4-terminal or RGB is not a two-pin
     passive (None: it is looked up by its part number like any other part), and a capacitor it calls tantalum /
-    polymer / electrolytic is polarized whatever its part number is."""
-    from . import stdparts as SP
+    polymer / electrolytic is polarized whatever its part number is.
+    Review 2026-11-23 (1.1, 1.12): every cell of the BOM line is read, not only the Description (the Value, the
+    LibRef, the footprint cell, EAGLE's Device and the cells of columns the reader does not map: line 'other_cells').
+    A resistor or capacitor with NO part number is a generic passive only when its Value and Description are
+    understood whole (stdparts.generic_passive_hold); else item['generic_hold'] says which word held it (the release
+    check shows it) and the part is no generic passive. A capacitor WITH a part number is the unpolarized 'C' only
+    when something says ceramic (an MLCC code reads the number, or the line names a ceramic dielectric)."""
+    from . import mpn_decode as MD, stdparts as SP
+    from .bom_triage import placeholder_mpn
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
     desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), (ln or {}).get("description")) if x))
-    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc):
+    par = _par(item)
+    mpn = "" if placeholder_mpn(par.get("Manufacturer Part Number", "")) else str(par.get("Manufacturer Part Number", "") or "").strip()
+    value = str((ln or {}).get("value") or par.get("Value") or "")
+    own = [str(item["footprint"].get(k) or "") for k in ("kicad", "bom_ref", "ref")]   # the item's own footprint text
+    cells = [str((ln or {}).get(k) or "") for k in ("footprint", "libref", "other_cells")] + own
+    if not mpn and cells[0] and cells[0] not in own and any(own):
+        cells[0] = ""                        # a no-MPN item is paired with a line by its value (_line_for): of two
+        #                                      10k lines, '0603' and '0603 8P4R', each item reads its own footprint text
+    code = MD.decode(mpn) if mpn else None
+    polar = cat == "Capacitors" and bool(
+        fp.startswith("CP_") or any(SP._strip_lib(c).strip().startswith("CP_") for c in [cells[0]] + own)
+        or SP.says_polarized(desc, value, *cells)
+        or (mpn and SP.POLAR_CAP.match(SP._norm(mpn))) or (code and code["kind"] == "CP"))
+    if ln is not None:                       # decided from the BOM line; a caller with no line keeps what it decided
+        hold = None if mpn or polar else SP.generic_passive_hold(cat, value, desc, cells)
+        said = next((t for t in (value, desc, *cells) if SP.says_polarized(t)), "") if polar and not mpn else ""
+        if said:                             # 'C1, 10uF tantalum, 1206': the word that makes it a polarized part
+            hold = (f"the BOM line says {SP.POLAR_WORD.search(said).group(0).strip()!r} ({said.strip()[:60]!r}): a "
+                    "capacitor with a + side is not a generic chip of its value and size; give its part number")
+        if hold:
+            item["generic_hold"] = hold
+        else:
+            item.pop("generic_hold", None)
+    if item.get("generic_hold") and not mpn and not polar:
+        return None
+    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc, value, *cells):
         return None
     if cat in ("Thermistors", "Varistors"):  # altium_export.sensor_folder filed it: NTC / PTC / VAR, TH (type unsaid)
         kind = SP.sensor_kind((item.get("description"), (ln or {}).get("value"), (ln or {}).get("description")),

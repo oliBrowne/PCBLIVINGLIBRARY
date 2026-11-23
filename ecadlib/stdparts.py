@@ -171,7 +171,9 @@ DESC_LAND = re.compile(r"(?<![A-Za-z])(reverse[ _-]?(?:mount\w*|gull\w*)|side[ _
                        r"right[ _-]?angled?)(?![a-z])", re.I)
 # words that say a capacitor has a + side (tantalum, polymer, aluminium, niobium, electrolytic), in any maker's or
 # distributor's wording ('CAP TANT', 'CAP ALUM POLY'); 'non-polarized' / 'unpolarized' / 'bipolar' say the opposite
-POLAR_WORD = re.compile(r"(?<![A-Za-z])(tant(?:al\w*|cap)?|Ta|electrolytic\w*|elektrolyt\w*|elect?|elko|lytic|e[ _-]?cap|"
+# (review 2026-11-23: 'CAP TAN', '15uF/16V/TAN', 'POL', 'C-POL', EAGLE's device 'CPOL-EUC1206'; not 'tan δ', the loss)
+POLAR_WORD = re.compile(r"(?<![A-Za-z])(tant(?:al\w*|cap)?|tan(?![ ]?(?:δ|d(?![a-z])|delta))|Ta|c[ _-]?pol|pol|"
+                        r"chimique|electrolytic\w*|elektrolyt\w*|elect?|elko|lytic|e[ _-]?cap|"
                         r"polymer|poly|alum(?:inum|inium)?|alu|niobium|poscap|os[ _-]?con|sp[ _-]?cap|hybrid|mno2|"
                         r"super[ _-]?cap\w*|ultra[ _-]?cap\w*|EDLC|double[ _-]?layer|polari[sz]ed)(?![a-z])"
                         r"|\u94bd|\u7535\u89e3|\u805a\u5408\u7269", re.I)   # tantalum, electrolytic, polymer in Chinese
@@ -193,6 +195,156 @@ def says_polarized(*texts):
     series it does not know is still caught by what the BOM says the part is."""
     said = " ".join(str(t or "") for t in texts)
     return bool(POLAR_WORD.search(said)) and not NOT_POLAR.search(said)
+
+
+# words that say a capacitor is ceramic (no + side): the dielectric code or the word, in any distributor's wording
+CERAMIC_WORD = re.compile(r"(?<![A-Za-z0-9])(ceramic\w*|cer|cerm|mlcc|keramik\w*|c[eé]ramique|X[5-8][RSTUVL]|Y5[UV]|Z5U|"
+                          r"C0G|COG|NP0|NPO|U2J)(?![A-Za-z])", re.I)
+
+
+def says_ceramic(*texts):
+    """A capacitor's words name a ceramic dielectric (X7R, C0G, 'CAP CER', 'MLCC')."""
+    return bool(CERAMIC_WORD.search(" ".join(str(t or "") for t in texts)))
+
+
+# a film capacitor has no + side either ('CAP FILM 0.1UF', 'Polyester film capacitor', 'polypropylene', 'PPS')
+FILM_WORD = re.compile(r"(?<![A-Za-z])(film|polyester|polypropylene|PPS|PET|PEN|mylar)(?![A-Za-z])", re.I)
+
+
+def says_unpolarized(*texts):
+    """Something positive says the capacitor has no + side: a ceramic dielectric, a film, or the words 'non-polar' /
+    'unpolarized'. The evidence an unpolarized chip needs when no MLCC part-number code reads its number (review
+    2026-11-23, 1.12): the absence of 'tantalum' is not evidence."""
+    said = " ".join(str(t or "") for t in texts)
+    return bool(CERAMIC_WORD.search(said) or FILM_WORD.search(said) or NOT_POLAR.search(said))
+
+
+def names_c_chip(texts):
+    """A footprint text is KiCad's own unpolarized chip capacitor land by its full name ('C_0805_2012Metric',
+    'Capacitor_SMD:C_0603_1608Metric'): the BOM itself chose that land for the part (a polarized one is CP_...), which
+    a bare size code ('1206') does not say."""
+    return any(re.fullmatch(r"C_\d{4,5}_\d{4,5}Metric", _strip_lib(str(t or "")).strip()) for t in texts)
+
+
+def cap_words(text):
+    """The words of a part search's description that say what a capacitor is made of ('CER X7R', 'TANT'): the line's
+    evidence for or against a + side. Its other words (a size code of the listing) are not passed on."""
+    t = str(text or "")
+    return " ".join(m.group(0).strip() for rx in (CERAMIC_WORD, FILM_WORD, NOT_POLAR, POLAR_WORD) for m in rx.finditer(t))
+
+
+# ---- every word understood (review 2026-11-23, 1.1 / 1.3): a list of words to refuse always misses a spelling ('TAN',
+# 'x4', '8P4R', 'CMC', 'bicolor'), so the test is turned round: what is left of a text once the value, tolerance,
+# ratings, dielectric, size and the plain words of the kind are taken out must be nothing, or the part is held
+_NUM = r"\d+(?:[.,]\d+)?"
+_OHM = "ΩΩ"
+_UNDERSTOOD = re.compile(
+    r"(?:[+\-±~<>]*" + _NUM +                                                 # a bare number, an EIA code
+    r"|[+\-±~<>]*" + _NUM + r"%"                                              # tolerance
+    r"|" + _NUM + r"(?:[kmgre]|[kmgµμu]?(?:ohms?|[" + _OHM + r"]|r))|\d*[rkme]\d+"   # resistance: 10k, 4k7, 0R1, 10kΩ
+    r"|" + _NUM + r"(?:[pnuµμm]fd?|[pnuµμ]|f)|\d+[pnuµμ]\d+"                      # capacitance: 100nF, 4u7, 10u
+    r"|" + _NUM + r"[pnuµμm]?h"                                                    # inductance
+    r"|[+\-±]*" + _NUM + r"[mk]?v(?:dc|ac|rms|olts?)?|\d+v\d+"                # voltage rating: 50V, 6V3
+    r"|" + _NUM + r"[mk]?w(?:atts?)?"                                              # power rating: 100mW, 1/10W
+    r"|[+\-±]*" + _NUM + r"°c?|°c|[+\-±]*\d{2,3}c"            # temperature
+    r"|[+\-±]*(?:" + _NUM + r")?ppm(?:°?[ck])?"                          # temperature coefficient
+    r"|X[5-8][RSTUVL]|Y5[UV]|Z5U|C0G|COG|NP0|NPO|U2J"                             # dielectric
+    # body 1.6x0.8, 2x1.25mm: lengths (a decimal point or 'mm'); '0603x4', '4x10k' are counts, never understood
+    r"|(?=[^.]*(?:\.|mm))" + _NUM + r"(?:mm)?[x×*]" + _NUM + r"(?:mm)?(?:[x×*]" + _NUM + r"(?:mm)?)?"
+    r"|[hltwp]?=?" + _NUM + r"(?:mm|mil)"
+    r"|(?:RES|CAP|IND|LED|DIO|FUS)C\d{4}X\d+[A-Z]?)", re.I)                        # IPC-7351 name
+_UNDERSTOOD_RATED = re.compile(_NUM + r"(?:[mµμu]?a|[kmg]?hz)", re.I)             # a bead's / fuse's / LED's rating
+_SIZE_TOKEN = re.compile(r"(?:R|C|CP|L|D|F|FB|LED|RES|CAP|IND|FUSE|SMD|SMT|RC|CC|CR|MLCC|CHIP|EIA)?(\d{4,5})(?:M|Metric)?",
+                         re.I)                                                     # (the chip words chip_size reads glued)
+_PLAIN = set("smd smt chip surface mount mounted generic general purpose standard std gp rohs pb free lead leadfree "
+             "halogen aec q200 automotive grade commercial precision high low power voltage rated rating tol "
+             "tolerance value val type class size case package pkg footprint metric imperial inch eia code passive "
+             "device small us eu and at to n a l m mm t&r tape reel tr temp temperature coefficient tc tcr max min typ "
+             "nom nominal dc ac symbol semiconductor sim model".split())      # (KiCad's 'Resistor, US symbol', Altium's
+#                                                                         'Capacitor (Semiconductor SIM Model)')
+_PLAIN_KIND = {
+    "R": "r res resistor resistors resistance resistive ohm ohms thick thin film metal jumper zero pullup pulldown "
+         "pull up down anti sulfur sulphur antisulfur resistant moisture widerstand r\u00e9sistance resistencia",
+    "C": "c cap caps capacitor capacitors capacitance ceramic cer cerm mlcc multilayer multi layer monolithic soft "
+         "termination flex flexible decoupling bypass ii i kondensator keramik condensateur c\u00e9ramique condensador",
+    "L": "l ind inductor inductors inductance fb ferrite bead beads multilayer ceramic",
+    "LED": "led leds d diode indicator light emitting clear diffused red green blue yellow amber orange white",
+    "D": "d diode diodes",
+    "F": "f fuse fuses fast slow blow acting ptc pptc resettable polyfuse",
+}
+_PLAIN_KIND = {k: set(v.split()) for k, v in _PLAIN_KIND.items()}
+_PLAIN_KIND["CP"] = _PLAIN_KIND["C"]
+_GLUE_UNIT = re.compile(r"(?<=\d)[ ]+(?=(?:[kmg]?ohms?|[kM]?[" + _OHM + r"]|[pnuµμ]F|[nuµμm]H|V(?:DC|AC)?|m?W|%|ppm|mm|[kKMR])"
+                        r"(?![A-Za-z]))", re.I)
+_SPLIT = re.compile(r"[\s;/|()\[\]{}_:=\"'+~@\-]+|,(?!\d)|(?<!\d),")
+
+
+def unread_words(text, kind=None, footprint=False):
+    """The words of a BOM text that are NOT understood as part of a plain two-pad chip of this kind: everything but a
+    value, tolerance, voltage / power rating, dielectric or temperature code, a chip size and the plain words of the
+    kind (resistor, capacitor, ceramic, chip, SMD ...). [] = the whole text is understood. footprint: the text is a
+    footprint name (its library prefix is no word)."""
+    t = _strip_lib(text) if footprint else str(text or "")
+    if kind in ("C", "CP"):                               # KiCad's own 'Unpolarized capacitor', 'non-polarized': no + side
+        t = re.sub(r"(?i)(?<![A-Za-z])(?:non|un)[ _-]?polar(?:i[sz]ed)?(?![a-z])", " ", t)
+    words = _PLAIN | _PLAIN_KIND.get(kind, set())
+    out = []
+    for tok in _SPLIT.split(_GLUE_UNIT.sub("", t)):
+        tok = tok.strip(".,")
+        if footprint and re.fullmatch(r"[2-9][A-Za-z]|\d{1,3}", tok):   # (and '0603_4', '0603 4': a count)      # '0603 4R' in a footprint cell: four resistors
+            out.append(tok)                                          # in one body, not a 4 ohm value
+            continue
+        if not tok or not re.search(r"\w", tok) or tok.lower() in words or _UNDERSTOOD.fullmatch(tok):
+            continue
+        m = _SIZE_TOKEN.fullmatch(tok)
+        if m and (m.group(1) in IMPERIAL or m.group(1) in METRIC):
+            continue
+        if kind in ("L", "F", "LED", "D") and _UNDERSTOOD_RATED.fullmatch(tok):
+            continue
+        out.append(tok)
+    return out
+
+
+_VALUE_TOKEN = re.compile(_NUM + r"(?:[kmgre]|[kmg]?(?:ohms?|[" + _OHM + r"]|r)|[pnuµμm]f?|f|[pnuµμm]?h)|\d*[rkmpnuµμ]\d+", re.I)
+
+
+def value_names_size(value, kind=None):
+    """The Value cell may name the chip size only when it also carries a value ('10k 0603', '100nF 0402'): alone, a
+    number in it is the value ('1210' is 1.21 kOhm, never the 1210 land; review 2026-11-23, a4 M1). For a kind with no
+    numeric value (an LED's 'red 0603') another word does."""
+    toks = [x.strip(".,") for x in _SPLIT.split(_GLUE_UNIT.sub("", str(value or ""))) if x.strip(".,")]
+    rest = [x for x in toks if not re.fullmatch(r"[RCL]?\d{4,5}(?:M|Metric)?", x, re.I)]
+    if len(rest) == len(toks):
+        return False                                      # no size code in it at all
+    if kind in ("R", "C", "CP", "L", "NTC", "PTC", "VAR", "TH"):
+        return any(_VALUE_TOKEN.fullmatch(x) and not x.isdigit() for x in rest)
+    return any(re.search(r"[A-Za-z]", x) for x in rest)
+
+
+def generic_passive_hold(cat, value="", description="", other=()):
+    """Why a resistor or capacitor line with NO part number is not released as a generic chip of its value and size
+    (review 2026-11-23, 1.1), or None. Its Value and Description must be understood whole (unread_words): any other
+    word ('tantalum', 'x4', 'array') holds it, and the hold names the word. other: the line's other cells (LibRef,
+    the footprint cell, an EAGLE Device, the cells of columns the reader does not map): text written for other
+    reasons, so there only words that say polarized or more than two terminals count."""
+    kind = {"Resistors": "R", "Capacitors": "C"}.get(str(cat or "").replace("\\", "/").split("/")[-1])
+    if not kind:
+        return None
+    what = "resistor" if kind == "R" else "capacitor"
+    for name, text in (("Value", value), ("Description", description)):
+        left = unread_words(text, kind)
+        if left:
+            return (f"the BOM line's {name} {str(text).strip()[:60]!r} says {left[0]!r}, which is not read as part of a "
+                    f"plain two-pad chip {what} (value, tolerance, rating, dielectric, size): with no part number the "
+                    "part is not released as a generic one; give its part number, or take the word out if it is a "
+                    "plain chip")
+    for text in other:
+        t = str(text or "")
+        word = multi_terminal(t) or (POLAR_WORD.search(t).group(0).strip() if kind == "C" and says_polarized(t) else None)
+        if word:
+            return (f"the BOM line says {word!r} ({t.strip()[:60]!r}): not a plain two-pad chip {what}; with no part "
+                    "number the part is not released as a generic one; give its part number")
+    return None
 
 
 # a land named KiCad's way after a maker or series (L_Wuerth_WE-PD-Typ-LS_1210, R_Shunt_..): its own land, whatever

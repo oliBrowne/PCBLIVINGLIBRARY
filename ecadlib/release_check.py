@@ -774,6 +774,9 @@ def check_item(item, base=".", rules=None):
                     generic_passive(item) and (rules.get("release") or {}).get("mpn", "warn") != "hold":
                 warns.append(f"{k} is empty: a generic part built from its value and size; fill it before ordering "
                              "([release] mpn = \"hold\" holds the part instead)")
+            elif RU.canonical_param(k, rules) == RU.canonical_param("Manufacturer Part Number", rules) and \
+                    item.get("generic_hold"):                 # a no-MPN R / C whose BOM line is not understood whole
+                add("fields", f"{k} is empty: {item['generic_hold']}")     # (librarian.passive_kind): names the word
             else:
                 add("fields", f"{k} is empty")
     link = value_link_empty(item)
@@ -802,7 +805,11 @@ def check_item(item, base=".", rules=None):
 def generic_passive(item):
     """A resistor or capacitor the librarian built as a generic passive (its value and its size, no maker's part):
     such a part may wait for its MPN without being held (`[release] mpn`). Inductors and beads are not: their land
-    and height follow the maker's part."""
+    and height follow the maker's part.
+    Review 2026-11-23 (1.1): only a part whose BOM line was understood whole. The librarian records why not in
+    item['generic_hold'] (it reads every cell of the line); here the item's own Value must be understood whole too and
+    its description must not say polarized or more than two terminals, so a plan from any route is judged the same."""
+    from . import stdparts as SP
     from .kicad_index import parse_value
     lib = item.get("librarian") or {}
     sym = str((item.get("symbol") or {}).get("ref") or "")
@@ -813,7 +820,9 @@ def generic_passive(item):
     return bool(lib.get("passive")) and bool((item.get("footprint") or {}).get("file")) and \
         bool({"Resistor", "Capacitor", "Resistors", "Capacitors"} & set(kind)) and \
         not re.search(r"polar|tantal|elec|\bCP\b|^CP_|_CP_|CP_Elec|CP_EIA", sym + " " + fp, re.I) and \
-        parse_value(value) is not None and not re.search(r"--|-$|^-", name)   # a value read, a name with no gap
+        parse_value(value) is not None and not re.search(r"--|-$|^-", name) and \
+        not item.get("generic_hold") and not SP.generic_passive_hold(kind[1], value, "", [item.get("description")])
+    #   (a value read, a name with no gap, every word of the line understood)
 
 
 PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what its workspace released (no datasheet here)

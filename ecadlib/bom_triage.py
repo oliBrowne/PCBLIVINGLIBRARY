@@ -738,6 +738,13 @@ def read_bom(path, columns=None, rules=None, root=None):
                     d.pop("bom_hold", None)
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
+        # the cells of the columns the reader does not map (a second Comment, EAGLE's Device, Dielectric, Notes): kept
+        # as text so the standard-part rules see every word of the line ('tantalum - observe polarity', 'CPOL-EUC1206':
+        # review 2026-11-23, 1.1); nothing else reads them
+        other = [c for j, c in enumerate(cells[:len(headers)]) if headers[j] and j not in col.values()
+                 and re.search(r"[^\W\d_]", c)]                 # (a cell with a word in it: a line number says nothing)
+        if other and not shifted:
+            d["other_cells"] = " | ".join(other)[:600]
         lines.append(d)
     if skipped:
         print(f"  note: {p.name}: skipped {skipped} row(s) that name no part (section headings, notes)", file=sys.stderr)
