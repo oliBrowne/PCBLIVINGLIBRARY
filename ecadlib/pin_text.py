@@ -501,7 +501,42 @@ _NC_ROW = re.compile(r"(?i)^(?:N\.?\s*/?\s*C\.?|DNC|DNU|NU|NO(?:T|N)?[\s-]*(?:IN
                      r"DO\s*NOT\s*CONNECT|RESERVED|RSVD|NOT\s*USED|UNUSED|[-–—‒]+)$")
 
 
-def _quiet(quiet, pins, rows, col, pages, loose=()):
+# What a no-connect row may not say of its pin (review 2026-11-23, round 3, minor: 'RESERVED 3 Must be tied to VIN'
+# counted as not connected): an order to connect it. 'Do not connect', 'must be left open', 'may be tied to GND' are none.
+_TIE = re.compile(r"(?i)\b(?:must|shall|should|needs?\s+to|ha(?:s|ve)\s+to|required?)\b[^.;]*?\b(?:tie|tied|connect|connected|"
+                  r"pull|pulled|ground|grounded|short|shorted|bias|biased|bypass|bypassed)\b|"
+                  r"^\W*(?:tie|connect|pull|short|ground|bypass)\b")
+_NOT_TIE = re.compile(r"(?i)\bnot\b|\bleft\b|\bleave\b|float|\bopen\b|unconnected|\bmay\b|\bcan\b|\boptional")
+_NC_SAID = re.compile(r"(?i)\bno(?:t|n)?[\s-]*(?:internal(?:ly)?\s*)?(?:connect|bond|used|pin)|\bunconnected|\bunused|\bleave\b|"
+                      r"\bleft\b|\bfloat|\bopen\b|\bN\.?\s*/?\s*C\b|\breserved\b")
+_DASHES = re.compile(r"^[-\u2013\u2014\u2012\s]+$")
+# A line between two rows that starts another table (round 3, A7): a table's title or header, or a short line that
+# names a package or a version ('SOT-23-5 version'). A row's description running on to the next line is none.
+_TABLE_HEAD = re.compile(r"(?i)\bpin\s+(?:functions?|descriptions?|configurations?|assignments?|names?|outs?)\b|"
+                         r"^\s*(?:table|figure|fig\.)\s*\d|^\s*(?:(?:PIN|NAME|NO\.?|NUMBER|SYMBOL|FUNCTION|DESCRIPTION|TYPE|I/O)\s*){2,}$")
+_VERSION = re.compile(r"(?i)\b(?:versions?|variants?|options?|packages?)\b")
+
+
+def _breaks(text, rows=None):
+    """The rows of a page (their index in _rows) before which another table starts: a blank line, or a heading
+    (_TABLE_HEAD; a line of six words or fewer that names a package or a version), stands between the row and the one
+    before it. Review 2026-11-23, round 3 (A7): the rows of a second table lower on the page, or of one above, were
+    taken for rows of the table the pins agreed with."""
+    at = []
+    got = _rows(text, at)
+    if rows is not None and len(got) != len(rows):
+        return set()
+    lines, out = _joined_lines(text), set()
+    for k in range(1, len(at)):
+        for ln in lines[at[k - 1] + 1:at[k]]:
+            if not ln.strip() or _TABLE_HEAD.search(ln) \
+                    or len(ln.split()) <= 6 and (_VERSION.search(ln) or package_words(ln)):
+                out.add(k)
+                break
+    return out
+
+
+def _quiet(quiet, pins, rows, col, pages, loose=(), cut=()):
     """The pins the symbol calls NC, or leaves without a name, confirmed too (review 2026-11-23, 1.10: they were
     dropped before comparing, so a read that called EN and FB 'NC' agreed on the six pins left). In the table the
     named pins agreed with (its rows from the first to the last matched one, and the rows next to them of the same
@@ -511,7 +546,11 @@ def _quiet(quiet, pins, rows, col, pages, loose=()):
     `blank`), and 'unchecked' when the table has no row the check recognises for such a pin's number (review
     2026-11-23, round 2, C4: no row counted as nothing against it, and a row is not recognised when its number is
     printed '3*', '3(1)', '03', after a dash, first in a table that prints the name first, or under its name on the
-    line above: the read's 'NC' for EN then agreed). Only a no-connect row confirms."""
+    line above: the read's 'NC' for EN then agreed). Only a no-connect row confirms, and EVERY row of the table that
+    prints the number must be one (round 3, A7: 'NC 3 No connection (fixed)' beside 'EN 3 Enable' confirmed the
+    read's NC). cut: the rows before which another table starts (_breaks): the table is the stretch between two of
+    them that holds most of the agreeing rows; another pin table on the page that names the number otherwise leaves
+    it 'unchecked' (which of the two is this part's is not in the text)."""
     if not quiet:
         return None
     page = pages[0]
@@ -538,21 +577,40 @@ def _quiet(quiet, pins, rows, col, pages, loose=()):
         it: 'EN - 3' is EN's row with a dash column, not a no-connect row."""
         c, nums = rows[k]
         before = [w for w in c[:nums[0][0]] if w not in EMPTY] or c[:nums[0][0]]
-        after = c[nums[-1][0] + 1:][:3]
-        return any(_NC_ROW.match(" ".join(w).strip(" .,;:()")) for w in ([before] if before else [after[:j] for j in (1, 2, 3)]) if w)
+        after = c[nums[-1][0] + 1:]
+        for name, rest in ([(before, after)] if before else [(after[:j], after[j:]) for j in (1, 2, 3)]):
+            if not name or not _NC_ROW.match(" ".join(name).strip(" .,;:()")):
+                continue
+            said = " ".join(rest)
+            if _TIE.search(said) and not _NOT_TIE.search(said):
+                return False                           # 'RESERVED 3 Must be tied to VIN': a pin that needs a net
+            if _DASHES.match(" ".join(name)) and said.strip(" .,;:()-\u2013\u2014\u2012") and not _NC_SAID.search(said):
+                return False                           # '- 3 Enable input': a dash for a name, and a function after it
+            return True
+        return False
     hit = [k for k in range(len(rows)) for n, nm, kind in names if has(k, n)
            and any(norm_name(c) == nm or kind and loose_class(norm_name(c)) == kind for c in cands(k))]
     if not hit:                                        # the table's rows are not found again: nothing was confirmed
         return {"status": "unchecked", "page": page,
                 "why": f"page {page}'s table has no no-connect row for {said([f'pin {n}' for n, _ in quiet])}: not confirmed"}
+    part = lambda k: sum(1 for b in cut if b <= k)       # which table of the page row k stands in
+    count = {}
+    for k in set(hit):
+        count[part(k)] = count.get(part(k), 0) + 1
+    own = max(count, key=lambda t: (count[t], -t))       # the table most of the named pins agreed in
+    hit = [k for k in hit if part(k) == own]
     lo, hi, wide = min(hit), max(hit), max(len(cells[k]) for k in hit)
-    while lo > 0 and len(cells[lo - 1]) == wide:
+    while lo > 0 and len(cells[lo - 1]) == wide and part(lo - 1) == own:
         lo -= 1
-    while hi + 1 < len(rows) and len(cells[hi + 1]) == wide:
+    while hi + 1 < len(rows) and len(cells[hi + 1]) == wide and part(hi + 1) == own:
         hi += 1
     first = sum(1 for k in set(hit) if rows[k][1][0][0] == 0) * 2 > len(set(hit))     # the table prints the number first
-    named, blank, unseen = [], [], []
+    named, blank, unseen, elsewhere = [], [], [], []
+    title = lambda k: " ".join(rows[k][0][:rows[k][1][0][0]] or rows[k][0][rows[k][1][-1][0] + 1:][:1])
     for n, nm in quiet:
+        # another pin table on the page (two or more of the named pins agree in it too) that names this number
+        elsewhere += [f"pin {n} {title(k)}" for k in range(len(rows)) if count.get(part(k), 0) >= 2 and part(k) != own
+                      and has(k, n) and (rows[k][1][0][0] == 0) == first and not nc_row(k)]
         mine = [k for k in range(lo, hi + 1) if has(k, n) and (rows[k][1][0][0] == 0) == first]
         if not mine:                                   # no row for its number that the check can read: it may be
             # left out of the table, or printed in a way not recognised. A no-connect row whose number stands in this
@@ -562,10 +620,13 @@ def _quiet(quiet, pins, rows, col, pages, loose=()):
                        and lead(k) and str(n) in _numbers(cells[k][col - lead(k)]) for k in range(lo, hi + 1)):
                 unseen.append(f"pin {n}")
             continue
-        if any(nc_row(k) for k in mine):
-            continue                                   # a no-connect row: confirmed
-        c, nums = rows[mine[0]]
-        what = " ".join(c[:nums[0][0]] or c[nums[-1][0] + 1:][:1])
+        other = [k for k in mine if not nc_row(k)]
+        if not other:
+            continue                                   # no-connect rows only: confirmed
+        c, nums = rows[other[0]]                       # a row that names it otherwise, whatever the rows beside it say
+        what = title(other[0])
+        if _NC_ROW.match(what.strip(" .,;:()")):       # a no-connect name, and a row that gives the pin a net or a function
+            what += f" ('{' '.join(c[nums[-1][0] + 1:][:6])}')"
         (named if nm else blank).append(f"pin {n} {what}")
     if named:
         return {"status": "disagreed", "page": page,
@@ -579,6 +640,10 @@ def _quiet(quiet, pins, rows, col, pages, loose=()):
         return {"status": "unchecked", "page": page,
                 "why": f"page {page}'s table has no no-connect row for {said(unseen)}: not confirmed (the row may be "
                        "left out, or printed in a way the text check does not read)"}
+    if elsewhere:
+        return {"status": "unchecked", "page": page,
+                "why": f"page {page} has another pin table that names {', '.join(elsewhere[:4])}, and the symbol calls "
+                       f"{'it' if len(elsewhere) == 1 else 'them'} not connected: which table is this part's is not in the text"}
     return None
 
 
@@ -604,6 +669,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), b
     loose = loose_names(pins)
     mine = package_families(package)
     best, agreed, conflicts, at = None, None, [], None     # at: the agreeing table's rows, column and page(s)
+    cut = set()                                            # the rows of that page before which another table starts
     for i, (page, text) in enumerate(units):
         drawn = i >= len(units) - len(figures or ())
         rows = _figure_rows(text) if drawn else _rows(text)
@@ -633,6 +699,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), b
                 if not drawn:                       # the table's own heading: what may name its package (package_doubt)
                     agreed["above"] = _heading(text, pins, col, loose)
                 at = (rows, col, [page])
+                cut = set() if drawn else _breaks(text, rows)
             continue
         miss = [f"{nm}={n}" for (n, nm), (cols, _) in zip(pins, per) if not cols]
         if miss and most and _top(rows, pins, loose) > most:  # a bigger package's table (TL074M's 20-pin LCCC): not this one
@@ -662,6 +729,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), b
                 agreed = {"status": "agreed", "page": pa, "column": min(common), "pins": len(pins),
                           "where": f"pin table (pages {pa} and {pb})", "above": ""}
                 at = (rows, min(common), [pa, pb])
+                cut = _breaks(ta) | {k + len(_rows(ta)) for k in _breaks(tb)}     # the page break itself is none
                 break
     if agreed is not None and conflicts and part and _is_part(_titled_for((page_texts or {}).get(agreed["page"])), part):
         conflicts = [(pg, miss) for pg, miss in conflicts           # 'Pin Functions: TL071x' beside the agreeing
@@ -673,7 +741,7 @@ def check(page_texts, pins, figures=(), pin_count=None, part=None, package=(), b
             return {"status": "unchecked", "page": agreed["page"], "doubt": True,
                     "why": f"page {agreed['page']}'s table agrees, but page {pg} prints {', '.join(miss[:4])} with other "
                            "numbers (another package or variant?): which table is this part's is not in the text"}
-        return _quiet(quiet, pins, *at, loose=loose) or _marks(pins, *at, bars=bars) or agreed
+        return _quiet(quiet, pins, *at, loose=loose, cut=cut) or _marks(pins, *at, bars=bars) or agreed
     if best is None:
         return {"status": "unchecked", "why": "no pin table found in the text layer"}
     out = {"status": "unchecked", "why": best[2] or f"page {best[0]} names {best[1]} of {len(pins)} pins"}
