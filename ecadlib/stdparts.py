@@ -362,6 +362,27 @@ def generic_passive_hold(cat, value="", description="", other=()):
     return None
 
 
+_SYMBOL_WORD = {"R": "r res resistor", "C": "c cap capacitor", "L": "l ind inductor"}
+_SYMBOL_PLAIN = set("small us eu device generic smd chip np".split())
+
+
+def plain_symbol_name(text, kind):
+    """A cell names the plain schematic symbol of the kind and nothing more ('Device:R', 'R_Small', 'R_US', Altium's
+    'Res1' / 'Res2' / 'RES', 'Cap', 'R-EU_R0603'): two lines drawn with two such symbols are one part (review
+    2026-11-23 round 2, I3). Any other word ('Res Pack4', 'C_Polarized', 'Cap Pol1') is not plain."""
+    own = set(_SYMBOL_WORD.get(kind, "").split())
+    toks = [x for x in re.split(r"[\s_\-/.,;()]+", _strip_lib(text)) if x]
+    if not own or not toks:
+        return False
+    for tok in toks:
+        m = _SIZE_TOKEN.fullmatch(tok)
+        if m and (m.group(1) in IMPERIAL or m.group(1) in METRIC):
+            continue
+        if re.sub(r"\d$", "", tok.lower()) not in own | _SYMBOL_PLAIN:
+            return False
+    return any(re.sub(r"\d$", "", tok.lower()) in own for tok in toks)
+
+
 # a land named KiCad's way after a maker or series (L_Wuerth_WE-PD-Typ-LS_1210, R_Shunt_..): its own land, whatever
 # chip code it ends in; 'R_0603', 'RES_0603', 'R_SMD_0603' name the size
 MAKER_LAND = re.compile(r"^(?:R|C|CP|L|LED|D|FB|Fuse)_(?!(?:SMD|Chip|Small)_)[A-Za-z][^_]*_")

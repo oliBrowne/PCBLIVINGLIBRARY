@@ -191,3 +191,47 @@ def test_merged_lines_with_nothing_to_hold_stay_ready(tmp_path):
                           "C4,1,10uF 16V X7R 0603,0603,,\nR4,1,4k7 1%,0805,,\nR5,1,4k7 1%,0805,,\n")
     st = _status(plan)
     assert len(plan) == 4 and all(s == "ready" for s, _ in st.values()), st
+
+
+# ---------------------------------------------------------------- I3 ordinary BOMs: administrative columns, symbol names
+ORDINARY_MERGES = [
+    '''"Item","Qty","Reference(s)","Value","LibPart","Footprint","Datasheet","DNP"
+"1","2","R1, R2","10k","Device:R","Resistor_SMD:R_0603_1608Metric","~",""
+"2","1","R3","10k","Device:R_Small","Resistor_SMD:R_0603_1608Metric","~",""
+"3","1","C1","100n","Device:C","Capacitor_SMD:C_0603_1608Metric","~",""
+"4","1","C2","100n","Device:C_Small","Capacitor_SMD:C_0603_1608Metric","~",""
+''',
+    "Designator,Value,Footprint,Function\nR1,10k,0603,pull-up\nR2,10k,0603,LED current limit\n"
+    "C1,100nF,0603,decoupling U1\nC2,100nF,0603,decoupling U2\n",
+    "Designator,Value,Footprint,Unit Price,Stock,Supplier\nR1,10k,0603,0.01,1000,LCSC\nR2,10k,0603,0.012,500,Mouser\n",
+    "Reference,Value,Footprint,Sheetname,Sheetfile,Exclude from BOM\nR1,10k,0603,power,power.kicad_sch,\n"
+    "R2,10k,0603,mcu,mcu.kicad_sch,\n",
+    "Designator,Comment,Footprint,Description,LibRef\nR1,10K,0603,Resistor,Res1\nR2,10K,0603,Resistor,Res2\n"
+    "R3,10K,0603,Resistor,RES\n",
+    "Designator,Value,Footprint,LibRef,Ext Price,Lead Time,Net,Purpose\nC1,100n,0603,Cap,0.04,4 weeks,VDD,bypass\n"
+    "C2,100n,0603,CAP,0.08,6 weeks,VCC,bulk\nR1,10k,0603,R,0.01,4,SDA,I2C\nR2,10k,0603,R_US,0.01,6,SCL,I2C\n",
+]
+
+
+@lite
+def test_ordinary_boms_with_administrative_columns_stay_ready(tmp_path):
+    for n, bom in enumerate(ORDINARY_MERGES):
+        d = tmp_path / str(n)
+        d.mkdir()
+        st = _status(_run(d, bom))
+        assert st and all(s == "ready" for s, _ in st.values()), (bom, st)
+
+
+@lite
+def test_lines_that_differ_in_what_the_part_is_are_still_held(tmp_path):
+    for n, bom in enumerate([
+            "Designator,Value,Footprint,Tolerance\nR1,10k,0603,1%\nR2,10k,0603,5%\n",
+            "Designator,Value,Footprint,Voltage\nC1,100n,0603,16V\nC2,100n,0603,50V\n",
+            "Designator,Value,Footprint,LibRef\nR1,10k,0603,Res1\nR2,10k,0603,Res Pack4\n",
+            "Designator,Value,Footprint,LibPart\nC1,10uF,1206,Device:C\nC2,10uF,1206,Device:C_Polarized\n",
+            "Designator,Value,Footprint,Supplier Part Number 3\nR1,10k,0603,123-456\nR2,10k,0603,123-789\n",
+            "Designator,Value,Footprint,Manufacturer\nR1,10k,0603,Yageo\nR2,10k,0603,Vishay\n"]):
+        d = tmp_path / str(n)
+        d.mkdir()
+        plan = _run(d, bom)
+        assert len(plan) == 1 and all(i["status"] != "ready" for i in plan.values()), (bom, _status(plan))

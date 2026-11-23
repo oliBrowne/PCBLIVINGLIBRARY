@@ -528,22 +528,28 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             # alone. Every other cell they have but designator and quantity, mapped to a field or not, has to say
             # the same (a Color column's red and green, Tolerance 1% and 5%, Voltage 16V and 50V, another maker,
             # library symbol or datasheet): else held. An empty cell says nothing, as for the Description below.
+            # Round 2 (I3): not the columns that say how the part is bought or where it is used (a per-row price,
+            # stock, supplier name, sheet, function: bom_triage.admin_header), and not two names of the kind's
+            # plain symbol (Device:R and Device:R_Small, Altium's Res1 and Res2: stdparts.plain_symbol_name).
             # Round 2 (C1): an empty cell says nothing, so a word that holds a generic part ('tantalum', 'x4',
             # 'array', 'Polarized: yes') on a later line whose first line's cell is empty was never read: the
             # librarian reads one line of the part. Every line is read here (unread: below the loop).
             from . import stdparts as SP
-            from .bom_triage import other_cells, said_cells
+            from .bom_triage import admin_header, other_cells, said_cells, symbol_header
             from .providers import same_maker
             flat = lambda v: " ".join(str(v or "").split())
             mine = {"Manufacturer": ln.get("manufacturer"), "LibRef": ln.get("libref"), "Datasheet": ln.get("datasheet"),
-                    **other_cells(ln)}
+                    **{k: v for k, v in other_cells(ln).items() if not admin_header(k)}}
+            sym_kind = {"Resistors": "R", "Capacitors": "C", "Inductors": "L"}.get(cat)
             was, differ = told.setdefault(pn, {}), {}
             for k, v in mine.items():
                 v = flat(v)
                 if not v:
                     continue
                 old, odes = was.setdefault(k, (v, des))
-                if old.casefold() != v.casefold() and not (k == "Manufacturer" and same_maker(old, v)):
+                if old.casefold() != v.casefold() and not (k == "Manufacturer" and same_maker(old, v)) and not (
+                        (k == "LibRef" or symbol_header(k)) and SP.plain_symbol_name(old, sym_kind)
+                        and SP.plain_symbol_name(v, sym_kind)):
                     differ.setdefault(odes, []).append(f"{k} {old[:40]!r} vs {v[:40]!r}")
             unread.setdefault(pn, []).append((des, SP.generic_passive_hold(
                 cat, ln.get("value", ""), ln.get("description", ""), said_cells(ln))))
