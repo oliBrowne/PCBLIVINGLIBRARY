@@ -4906,6 +4906,19 @@ def hold_on_doubt(inf, model, res):
 
 
 
+def _pad_rows(t):
+    """A pad table (or its JSON text) as a comparable list of its pads' and arrays' numbers, places and sizes."""
+    if isinstance(t, str):
+        try:
+            t = json.loads(t) if t.strip() else None
+        except (ValueError, RecursionError):
+            return None
+    if not isinstance(t, dict):
+        return None
+    rows = [json.dumps(p, sort_keys=True) for p in (t.get("pads") or []) + (t.get("arrays") or []) if isinstance(p, dict)]
+    return sorted(rows) or None
+
+
 def _own_second_read(msg, body, base, here, job):
     """Raise crosscheck.Unavailable unless the assistant's answer in a check folder is a second read of its own: the
     check's own schema (no field of a full extraction), and not any first read's answer for this part copied in
@@ -4928,14 +4941,24 @@ def _own_second_read(msg, body, base, here, job):
                              + (f" ({', '.join(extra[:4])} not in it)" if extra else "")
                              + ": answer it afresh from its pages (see request.md there)")
     stem = here.name.rsplit("-check-", 1)[0]
+    mine = _pad_rows(got["package"].get("pad_table_json"))
     for f in Path(base).glob(f"{glob.escape(stem)}-*/answer.json"):
         if "-check-" in f.parent.name or f.parent == here:
             continue
         try:
-            if json.loads(f.read_text(encoding="utf-8-sig")) == got:
+            first = json.loads(f.read_text(encoding="utf-8-sig"))
+            if first == got:
                 raise CC.Unavailable(f"{here.name}/answer.json is the first read's answer ({f.parent.name}) copied: "
                                      "a second read must be made afresh from its own pages")
-        except (OSError, ValueError):
+            # the first read's pad table copied into an otherwise fresh answer: its pads would agree with themselves
+            pkg = first.get("package") if isinstance(first, dict) else None
+            other = json.loads(pkg.get("other_json") or "{}") if isinstance(pkg, dict) and \
+                isinstance(pkg.get("other_json"), str) else (pkg or {}).get("other_json") if isinstance(pkg, dict) else None
+            theirs = _pad_rows((other or {}).get("pad_table") if isinstance(other, dict) else None)
+            if mine and theirs and mine == theirs:
+                raise CC.Unavailable(f"{here.name}/answer.json copies the first read's pad table ({f.parent.name}): "
+                                     "a second read must read the land drawing afresh")
+        except (OSError, ValueError, RecursionError, AttributeError):
             continue
 
 class Reader:
