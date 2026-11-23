@@ -154,6 +154,33 @@ set. The quotes come from `datasheet_estimate` (its `ai`, for `datasheet_batch`;
 `approved_usd` (its `ai`: nothing is sent). A server started with `--offline` makes no model call at all. See
 [api-keys.md](api-keys.md) for where your key lives.
 
+## What only you can grant
+
+An agent cannot write its own approval. Three things are yours alone, and the server does not take them from the
+arguments of a tool call:
+
+- **A paid run.** The amount the agent passes as `approved_usd` is not your yes. A paid tool starts at once only
+  within a cap you set yourself, `[datasheet] max_cost_usd` in `ecadlib.toml` (never above it, and never for a model
+  with no known price). Otherwise the call answers with a command for you, `ecadlib confirm ID --workspace ...`:
+  run it in a terminal, read the quote, type `yes`. That grants the quoted amount once, for a day; the agent then
+  calls the tool again.
+- **Release anyway.** `release_check` with `allow` releases nothing. It writes the request down and answers with
+  `ecadlib confirm ID`; there you see why each part is held and type your reason, and the part is released under your
+  name (who, when and why go into the library's ledger). `ecadlib review` and the ecadlib page do the same without
+  the agent.
+- **Sign-off.** `approve_part` records nothing by itself either: `ecadlib confirm ID` records your approve or reject
+  under your name. `choose_part` on a part that is already released leaves the change held for `ecadlib part
+  approve`.
+
+`ecadlib confirm` without an ID lists what is waiting. It answers only at a terminal, so an agent that can run
+commands cannot answer for you. Requests lapse after a day.
+
+`save_rules` takes only harmless settings from an agent: naming, folders, BOM columns, symbol style, parameter
+names and defaults (not of a required parameter), supplier slots, the assembly / 3D body / silkscreen / designator
+layers, footprint density and `[style] apply`. A release gate may be made stricter. Everything else (model prices
+and profiles, the datasheet checks and folder, sources, providers, the shared store, where requests and keys go,
+spending limits) is refused: edit `ecadlib.toml` yourself, or use the rules page.
+
 ## Other limits
 
 - Answers longer than `--max-chars` (default 80,000 characters, about 20,000 tokens) are cut, with a note telling the

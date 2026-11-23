@@ -10,7 +10,7 @@ from pathlib import Path
 from ecadlib import altium365 as A, altium_lib as AL, bom_triage as T, cfb, footprint_gen as F, providers as P
 from ecadlib.httpcache import CachedHTTP
 from ecadlib.kicad_index import KiCadIndex, parse_value
-from tests.fixtures_lite import released_anyway
+from tests.fixtures_lite import in_dir, released_anyway
 
 SPECS = Path(__file__).parent.parent / "ecadlib" / "package_specs"
 
@@ -188,7 +188,7 @@ def test_altium365_release_retries_the_parent_folder_by_guid():
             self.sent.append(inp["componentParentFolderId"])
             if inp["componentParentFolderId"] == "node-1" and self.fail:
                 raise A.NexarError(self.fail)
-    with tempfile.TemporaryDirectory() as d:
+    with tempfile.TemporaryDirectory() as d, in_dir(d):       # the release anyway's ledger line goes into d (review 2026-11-23, 2.4)
         _ch340c(d)
         items = [i for i in A.plan([{"designator": "U1", "mpn": "CH340C", "footprint": "SOIC-16"}], models=d) if i["status"] == "ready"]
         released_anyway(items)                 # no maker, datasheet or description in this BOM line: released anyway
@@ -229,7 +229,7 @@ def test_altium365_shared_symbol_is_released_once_then_linked():
             hit = [r for r in self.rel if r.get(k + "ItemName") == name and r[k + "ReleaseFolder"] == folder]
             return f"{k}-rev:{name}" if hit else None
         def release(self, inp): self.rel.append(inp)
-    with tempfile.TemporaryDirectory() as d:
+    with tempfile.TemporaryDirectory() as d, in_dir(d):       # the release anyway's ledger line goes into d (review 2026-11-23, 2.4)
         _models(d, {"Capacitor": AL.capacitor_symbol()}, {"C_0402": "C_0402_1005Metric", "C_0603": "R_0603_1608Metric"})
         items = A.plan(lines, models=d, root="ecadlib-test-47")
         assert [i["status"] for i in items] == ["ready"] * 3 and {i["symbol"]["ref"] for i in items} == {"Capacitor"}, items

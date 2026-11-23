@@ -28,7 +28,7 @@ _GP = {}
 # held for a person to look (datasheet reader, symbol matched with an ordering suffix, EasyEDA conversion): the golden
 # path's reviewer checked them and released them anyway
 REVIEWED = ("DSPART16", "LM358DR", "EEPART1")
-ALLOW = [x for n in REVIEWED for x in ("--allow", n)]
+ALLOW = [x for n in REVIEWED for x in ("--allow", n)] + ["--reason", "checked against the datasheet"]   # 2026-11-23: a reason is required
 
 
 def _tmp(prefix):
@@ -68,7 +68,7 @@ def golden_path(work, fa, nx, tls, first=True):
         out[f"librarian:{name}"] = p
     out["release-check"] = E.ecadlib(work, "release-check", "lib/parts/plan.json", *ALLOW, env=env, check=False)
     for board in ("kicad_board", "altium_board"):          # LM358DR: suffix match, its board libraries reviewed too
-        out[f"release-check:{board}"] = E.ecadlib(work, "release-check", f"lib/{board}/plan.json", "--allow", "LM358DR",
+        out[f"release-check:{board}"] = E.ecadlib(work, "release-check", f"lib/{board}/plan.json", "--allow", "LM358DR", "--reason", "checked against the datasheet",
                                                   env=env, check=False)
     for name in ("kicad_board", "altium_board", "parts"):
         lib = "e2e" if name == "parts" else f"e2e_{name}"

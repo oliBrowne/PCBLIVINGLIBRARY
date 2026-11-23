@@ -131,9 +131,10 @@ def a_offline(src):
     return bool(getattr(getattr(src, "http", None), "offline", False))
 
 
-def release_anyway(plan, name, user=None, reason=""):
+def release_anyway(plan, name, user=None, reason="", via="ecadlib review"):
     """release-check --allow for one part; returns the item after the re-check. reason: why the person released it
-    (the Altium dialog asks for one), kept with who did it in the item's allow record."""
+    (`ecadlib review` and the Altium dialog ask for one), kept with who did it in the item's allow record and in the
+    library's ledger (release_check.record_allow)."""
     from . import release_check as RC
     from .approvals import cli_plan_lock, identity, post_check, stamp_allow
     from .fsutil import write_text_atomic
@@ -144,9 +145,8 @@ def release_anyway(plan, name, user=None, reason=""):
         rows = RC.apply([it], plan.parent, [name])
         who = identity(user, cwd=plan.parent)
         stamp_allow([it], [name], who)
-        if reason and it.get("allow"):
-            it["allow"]["reason"] = reason
-        post_check([it], plan.parent, rows)
+        RC.record_allow([it], plan.parent, [name], who, reason, via=via)   # who / when / why in the ledger: the
+        post_check([it], plan.parent, rows)                                # proof the allow block needs (2026-11-23)
         RC.record_releases([it], plan.parent, [name], who)    # change control: revision 1 of what was released
         write_text_atomic(plan, json.dumps(items, indent=2))
         from .librarian import refresh_review
@@ -232,7 +232,15 @@ def review_plan(plan, a, t, inp, interactive):
                 t.write(f"    {'opened' if opened else 'open this in your browser:'} {full}")
                 continue
             if ans in ("a", "release", "allow"):
-                it = release_anyway(plan, name, a.user)
+                try:                               # review 2026-11-23 (2.4): no release anyway without a reason
+                    why_ok = "" if fixed_only else " ".join(     # (nothing to release: the answer below says so)
+                        inp("    why may it go out anyway? (recorded with your name; empty: not released)\n    > ").split())
+                except EOFError:
+                    why_ok = ""
+                if not why_ok and not fixed_only:
+                    t.write("    not released: a release anyway needs your reason")
+                    continue
+                it = release_anyway(plan, name, a.user, why_ok)
                 status = it.get("status")
                 if status == "held":
                     left = M.explain_all(it.get("hold_reasons") or [])

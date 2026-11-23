@@ -63,6 +63,7 @@ EXAMPLES = {
     "resolve": ["ecadlib resolve ws/library/plan.json list", "ecadlib resolve ws/library/plan.json --part CH340C show"],
     "upstream": ["ecadlib upstream check-kicad --offline"],
     "approve": ["ecadlib approve ws/library/plan.json status", "ecadlib approve ws/library/plan.json approve --part CH340C --user alice"],
+    "confirm": ["ecadlib confirm --workspace ws", "ecadlib confirm K7Q2M9 --workspace ws"],
     "dedupe": ["ecadlib dedupe ws/library/plan.json", "ecadlib dedupe ws/library/plan.json --merge"],
     "step-gen": ["ecadlib step-gen SOIC-8_3.9x4.9mm_P1.27mm -o out/soic8.step", "ecadlib step-gen --check out/soic8.step"],
     "upkeep": ["ecadlib upkeep ws/library/plan.json", "ecadlib upkeep ws/library/plan.json --github issue"],

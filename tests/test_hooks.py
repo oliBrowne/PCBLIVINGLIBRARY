@@ -261,6 +261,10 @@ def test_gitlab_token_of_a_self_hosted_remote_never_goes_to_gitlab_com():
     assert kind == "gitlab" and gl is None and 'gitlab_api = "https://gitlab.mycorp.example/api/v4"' in why, why
     assert "corp-secret" not in why
     own = "https://gitlab.mycorp.example/api/v4"
+    # review 2026-11-23 (2.2): gitlab_api comes from a rules file, so the token goes to a GitLab of your own only once
+    # you allowed it (`ecadlib keys allow GITLAB_TOKEN <host>`, or the environment as here; CI_SERVER_HOST in GitLab CI)
+    assert FG.client(dict(cfg, gitlab_api=own), "git@gitlab.mycorp.example:hw/lib.git", env)[1] is None
+    env = dict(env, ECADLIB_KEY_HOSTS="GITLAB_TOKEN=gitlab.mycorp.example")
     assert FG.client(dict(cfg, gitlab_api=own), "git@gitlab.mycorp.example:hw/lib.git", env)[1].API == own
     assert FG.client(dict(cfg, gitlab_project="hw/lib"), "git@gitlab.mycorp.example:hw/lib.git", env)[1] is not None
     for ok in ("git@gitlab.com:acme/lib.git", "ssh://git@altssh.gitlab.com:443/acme/lib.git", "gitlab-work:acme/lib.git"):

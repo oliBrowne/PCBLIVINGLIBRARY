@@ -8,6 +8,7 @@ const cfg = JSON.parse(process.argv[2]);
   try {
     const p = await b.newPage(), sent = [];
     p.on("request", r => { if (r.url().endsWith("/api/release-check")) sent.push(r.postData()); });
+    p.on("dialog", d => d.accept("checked by hand"));   // the reason a release anyway asks for
     await p.goto(cfg.url);
     await p.locator("[data-open]").first().click();
     await p.waitForSelector(`#plist button.pname[data-openp="${cfg.part}"]`, { timeout: 20000 });

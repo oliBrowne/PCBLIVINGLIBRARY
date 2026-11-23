@@ -22,9 +22,10 @@ Rules, per plan item:
             3D, pin -> pad); `[release] parity = "warn"` reports instead of holding, "off" skips it
   verify    the item carries `verify` notes: a person has to look first (a datasheet-reader footprint, an EasyEDA
             conversion, a pinout from a family table, a KiCad symbol or footprint picked by a near name)
-Failing items get status `held` and `hold_reasons`; others `ready`. `--allow PART` records an override in the
-item (`allow.failures` = the failures it covers); an allowed item is `ready` while its failures stay within
-that list. altium365 push releases only `ready` items, and every publisher (altium365 push, dblib-sync /
+Failing items get status `held` and `hold_reasons`; others `ready`. `--allow PART --reason "why"` records an override in the
+item (`allow.failures` = the failures it covers) and, with who / when / why, in the library's ledger; an allowed item
+is `ready` while its failures stay within that list and the ledger has that record (an `allow` block written into
+plan.json by hand does not count). altium365 push releases only `ready` items, and every publisher (altium365 push, dblib-sync /
 altium-pkg, kicad-export) runs this check again on the files it sends (publish_problems), so a plan that says
 `ready` without a check, or a file changed after one, is held there too. Items `ecadlib a365 pull` brought in from the workspace
 (status `existing`) are already released there and are not checked. Exit code 0 when nothing is held, 2 otherwise."""
@@ -902,8 +903,10 @@ def publish_problems(item, base=".", rules=None, writes_files=False, policy=None
             return [f"duplicate of {item.get('duplicate_of') or '?'} (dedupe)"]
         return [f"status: {st!r} is not ready: run ecadlib release-check on the plan"]
     fails, _, _ = check_item(item, base, rules)
-    covered = set((item.get("allow") or {}).get("failures", []))
+    covered = set(allow_of(item, base).get("failures", []))   # only a release-anyway the ledger records (2026-11-23)
     out = [m for m in (f"{r}: {m}" for r, m in fails) if m not in covered or m.startswith(UNFIXABLE)]
+    if out and (item.get("allow") or {}).get("failures") and not allow_of(item, base):
+        out.append(f"verify: {_not_recorded(item['allow'])}")
     from .approvals import load_policy, policy_file, push_block   # sign-off, checked again on the files as they
     if policy is None:                         # are now, for every route (kicad-export, dblib-sync, ...), not only the
         try:                                   # Altium 365 push. policy: the caller's explicit policy ({} = none), as
@@ -940,6 +943,126 @@ def change_hold(it, base=".", ledger=None):
     except Exception:                          # a damaged ledger: the item's own block above decides
         pass
     return None
+
+
+ALLOW_EVENT, UNALLOW_EVENT = "release_anyway", "release_anyway_withdrawn"   # ledger lines (review 2026-11-23, 2.4)
+_ALLOWS = {}                                   # ledger path -> ((mtime, size), {part: its last such line})
+
+
+def allow_events(base="."):
+    """{part: the last release-anyway line of the library's ledger (ALLOW_EVENT, or UNALLOW_EVENT when it was taken
+    back)}. Read once per state of the file, so a publisher checking 500 parts reads the ledger once. A ledger that
+    cannot be read records nothing: every release-anyway of the plan then does not count (held)."""
+    from . import ledger as LG
+    f = Path(base) / LG.LEDGER
+    try:
+        st = f.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return {}
+    hit = _ALLOWS.get(str(f))
+    if hit and hit[0] == key:
+        return hit[1]
+    out = {}
+    try:
+        for e in LG.Ledger(Path(base)).lines():
+            if e.get("event") in (ALLOW_EVENT, UNALLOW_EVENT) and e.get("part"):
+                out[e["part"]] = e
+    except Exception:                          # a damaged ledger: nothing in it is proof
+        out = {}
+    _ALLOWS[str(f)] = (key, out)
+    return out
+
+
+def allow_of(item, base="."):
+    """The item's release-anyway (its `allow` block) when the library's ledger records it, else {}. Review 2026-11-23
+    (2.4): plan.json alone is not proof, since anything that can write the file can write the block. It counts only
+    when the part's last release-anyway line in library.ledger.jsonl (record_allow: who, when, why, which failures)
+    is by the same person and covers every failure the block lists."""
+    a = item.get("allow")
+    if not isinstance(a, dict) or not a.get("failures"):      # a block that covers nothing releases nothing
+        return {}
+    e = allow_events(base).get(item.get("name"))
+    if not e or e.get("event") != ALLOW_EVENT:
+        return {}
+    listed = a.get("failures") if isinstance(a.get("failures"), list) else []
+    if not set(map(str, listed)) <= set(map(str, e.get("failures") or [])):
+        return {}
+    if str(a.get("user") or "") != str(e.get("by") or ""):
+        return {}
+    return a
+
+
+def record_allow(items, base, names, who, reason="", via="release-check --allow"):
+    """Write each release-anyway given now into the library's ledger: one ALLOW_EVENT line per part with who, when
+    (the line's `at`), why and the failures it covers. Only this line makes the plan's `allow` block count
+    (allow_of). The reason is also kept in the block. Callers hold the library lock; when another run holds it (the
+    web UI's decision recorded during a librarian run) the line is appended only onto a whole ledger. -> the lines"""
+    from . import ledger as LG
+    names = set(names or ())
+    sel = [i for i in items if i.get("name") in names and (i.get("allow") or {}).get("failures")]
+    if not sel:                                # nothing covered (only failures no --allow can cover): nothing to prove
+        return []
+    reason = " ".join(str(reason or "").split())[:500]
+    lg, key, out = LG.Ledger(Path(base)), None, []
+    try:
+        key = LG.lock(Path(base), wait=2)
+    except LG.LedgerError:                     # a run is changing the library: its own lines are whole lines, so one
+        try:                                   # more whole line after a whole ledger harms none of them
+            whole = not lg.path.is_file() or lg.path.stat().st_size == 0 or lg.path.read_bytes()[-1:] == b"\n"
+        except OSError:
+            whole = False
+        if not whole:
+            raise ValueError("another ecadlib command is writing this library's ledger right now; release the part "
+                             "again in a minute") from None
+    try:
+        last = allow_events(base)
+        for it in sel:
+            if reason:
+                it["allow"]["reason"] = reason
+            e = last.get(it["name"]) or {}
+            if e.get("event") == ALLOW_EVENT and (e.get("by"), e.get("reason"), e.get("failures")) == \
+                    (str(who or ""), reason, list(it["allow"].get("failures") or [])):
+                continue                       # the same release anyway given again (a re-run): one line says it
+            out.append(lg.append({"event": ALLOW_EVENT, "part": it["name"], "by": str(who or ""), "reason": reason,
+                                  "failures": list(it["allow"].get("failures") or []), "via": via,
+                                  "writer": "release-allow"}))
+    finally:
+        if key is not None:
+            LG.unlock(key)
+    return out
+
+
+def record_unallow(base, names, who="", via="release-check --unallow"):
+    """A release-anyway taken back: an UNALLOW_EVENT line, so the earlier line no longer counts for a block put back
+    into plan.json by hand. Nothing is written for a part the ledger has no release-anyway of."""
+    from . import ledger as LG
+    had = allow_events(base)
+    names = [n for n in dict.fromkeys(names or ()) if (had.get(n) or {}).get("event") == ALLOW_EVENT]
+    if not names:
+        return []
+    lg, key = LG.Ledger(Path(base)), None
+    try:
+        key = LG.lock(Path(base), wait=2)
+    except LG.LedgerError:
+        pass
+    try:
+        return [lg.append({"event": UNALLOW_EVENT, "part": n, "by": str(who or ""), "via": via,
+                           "writer": "release-allow"}) for n in names]
+    finally:
+        if key is not None:
+            LG.unlock(key)
+
+
+NOT_RECORDED = ("the plan says this part was released anyway{who}, but the library's ledger (library.ledger.jsonl) "
+                "has no record of it, so that does not count: release it again with `ecadlib review` or `ecadlib "
+                "release-check --allow`, with your reason")
+
+
+def _not_recorded(a):
+    a = a if isinstance(a, dict) else {}
+    who = " ".join(str(x) for x in (a.get("user") or "", a.get("date") or "") if x)
+    return NOT_RECORDED.format(who=f" ({who})" if who else "")
 
 
 def record_releases(items, base, names, who=None, log=None):
@@ -992,8 +1115,12 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
             fails = list(fails) + [("files", f"another part in the plan, {clash[id(it)]!r}, has {same} (Altium part "
                                              "numbers and file names ignore case): rename one of them")]
         msgs = [f"{r}: {m}" for r, m in fails]
+        forged = None
         if it["name"] in unallow:
             it.pop("allow", None)
+        elif (it.get("allow") or {}).get("failures") and it["name"] not in allow and not allow_of(it, base):
+            forged = it.pop("allow")           # review 2026-11-23 (2.4): an allow block the ledger does not record (a
+                                               # hand edit, a tool that wrote the plan) releases nothing
         if it["name"] in allow:
             fixable = [m for m in msgs if not m.startswith(UNFIXABLE)]
             old = it.get("allow") or {}
@@ -1017,6 +1144,8 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
         it["hold_reasons"] = open_ if result == "held" else []
         if result == "held" and it.get("allow"):
             it["hold_reasons"] = [m + (" (cannot be overridden)" if m in hard else " (not covered by --allow)") for m in open_]
+        if result == "held" and forged is not None:
+            it["hold_reasons"] = it["hold_reasons"] + [f"verify: {_not_recorded(forged)}"]
         held_change = change_hold(it, base, lg) if change_holds else None
         if held_change:                        # waits for `ecadlib part approve`: never ready from here
             it["status"], result = "held", "held"
@@ -1119,6 +1248,17 @@ def print_result(rows, plan, stem, t=None):
               next=nxt)
 
 
+def ask_reason(given, names, inp=input):
+    """The reason for a release anyway: --reason, else asked for where a person is at a terminal. "" = none given."""
+    reason = " ".join(str(given or "").split())
+    if reason or sys.stdin is None or not sys.stdin.isatty():
+        return reason
+    try:
+        return " ".join(inp(f"Why release {', '.join(names)} anyway? (recorded with your name) > ").split())
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
 def main(argv=None):
     import json
     ap = argparse.ArgumentParser(description="Check every plan item before it goes to Altium 365; hold back what fails")
@@ -1127,6 +1267,8 @@ def main(argv=None):
     ap.add_argument("--unallow", action="append", default=[], help="remove an earlier --allow")
     ap.add_argument("-o", "--out", help="report stem (.md and .csv); default <plan dir>/release_check")
     ap.add_argument("--user", help="who gives the --allow (default: git config user.name/email); see approvals")
+    ap.add_argument("--reason", help="why you release the --allow parts anyway (asked for in a terminal when left out); "
+                                     "recorded with your name in the library's ledger")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from the plan's folder or here)")
     ap.add_argument("--json", action="store_true", help="print the result as JSON (plan, report, counts, rows)")
     a = ap.parse_args(argv)
@@ -1150,13 +1292,22 @@ def main(argv=None):
         unknown = set(a.allow + a.unallow) - {i["name"] for i in items}
         if unknown:
             sys.exit(f"not in the plan: {', '.join(sorted(unknown))}")
+        reason = ask_reason(a.reason, a.allow) if a.allow else ""
+        if a.allow and not reason:             # review 2026-11-23 (2.4): who, when and why, or nothing is released
+            print("ecadlib release-check: --allow needs your reason: add --reason \"why these parts may go out "
+                  "despite the check\" (it is recorded with your name in the library's ledger)", file=sys.stderr)
+            return 2
         rows = apply(items, plan.parent, a.allow, a.unallow, rules=a.rules)
         if a.allow:                            # record the person, so approvals can refuse self-approval
             from .approvals import identity, post_check, stamp_allow
             who = identity(a.user, cwd=plan.parent)
             stamp_allow(items, a.allow, who)
+            record_allow(items, plan.parent, a.allow, who, reason)  # the proof the plan's allow block needs (allow_of)
             post_check(items, plan.parent, rows)
             record_releases(items, plan.parent, a.allow, who)       # change control: revision 1 of what was released
+        if a.unallow:
+            from .approvals import identity
+            record_unallow(plan.parent, a.unallow, identity(a.user, cwd=plan.parent))
         write_text_atomic(plan, json.dumps(items, indent=2))
         from .librarian import refresh_review
         refresh_review(plan, items)

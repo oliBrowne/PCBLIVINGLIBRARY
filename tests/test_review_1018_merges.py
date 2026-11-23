@@ -124,7 +124,9 @@ def test_an_agent_cannot_change_where_the_stored_key_is_sent():
             assert r["isError"] and "cannot change" in _text({"result": r}), (toml, r)
         assert not Path(d, "ecadlib.toml").exists()
         r = _call(ws, "save_rules", {"toml": "[style]\nprofile = 'styles/house.json'\n", "overwrite": True})["result"]
-        assert not r.get("isError"), r                                   # other settings still save
+        assert r["isError"] and "cannot change style.profile" in _text({"result": r}), r   # 2026-11-23: an allow-list
+        r = _call(ws, "save_rules", {"toml": "[naming]\ncase = 'upper'\n", "overwrite": True})["result"]
+        assert not r.get("isError"), r                                   # harmless settings still save
 
 
 def test_mcp_jobs_are_one_list_under_concurrent_first_calls():

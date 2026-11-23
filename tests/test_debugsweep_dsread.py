@@ -391,6 +391,7 @@ def test_ds2_22_a_cap_set_to_ten_holds_like_any_cap_you_set(tmp_path, monkeypatc
     from ecadlib import ai_cost as AC, rules as RU, userconfig as UC
     from tests import test_datasheet_batch as TB
     monkeypatch.setattr(UC, "secret", lambda name, env=None: {"ACME_KEY": "dummy-acme"}.get(name))
+    monkeypatch.setenv("ECADLIB_KEY_HOSTS", "ACME_KEY=llm-gateway.example.com")   # review 2026-11-23 (2.2): a key under a name of your own goes to a server of your own only once you allowed it
     sent = []
 
     def offline(url, *a, **k):                        # nothing leaves this test: a request is recorded and fails

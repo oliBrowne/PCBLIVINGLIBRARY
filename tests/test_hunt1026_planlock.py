@@ -189,7 +189,7 @@ def _deadlock_case(tmp_path, monkeypatch, second):
 def test_planlock_05_ui_release_anyway_and_a_library_writer_do_not_deadlock(tmp_path, monkeypatch):
     def second(ws, bom, plan):
         name = _overridable(plan)
-        ws.release_check(bom, allow=[name], user="Ann Lee")
+        ws.release_check(bom, allow=[name], user="Ann Lee", reason="checked by hand")
     done = _deadlock_case(tmp_path, monkeypatch, second)
     assert "other" in done, done                              # it waited the few seconds for the library, then ran
 
@@ -201,7 +201,7 @@ def test_planlock_06_cli_release_anyway_and_a_library_writer_do_not_deadlock(tmp
     def second(ws, bom, plan):
         name = _overridable(plan)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            RC.main([str(plan), "--allow", name, "--user", ANN, "-o", str(plan.parent / "rc")])
+            RC.main([str(plan), "--allow", name, "--user", ANN, "--reason", "checked against the datasheet", "-o", str(plan.parent / "rc")])
         assert _items(plan)[name].get("allow"), "the CLI allow was lost"
     done = _deadlock_case(tmp_path, monkeypatch, second)
     assert "other" in done, done

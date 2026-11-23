@@ -213,6 +213,13 @@ def send(rules, events, env=None, sender=None, sleep=time.sleep, log=None, clock
             host = urlsplit(url).hostname
             headers = {"Content-Type": "application/json", "User-Agent": "ecadlib-notify"}
             if t["token_env"]:
+                from . import keyhosts as KH          # review 2026-11-23 (2.2): the rules file names the token; a key
+                if t["token_env"] in KH.HOMES and not KH.ok(t["token_env"], host, env):   # ecadlib knows for another
+                    rec["result"] = (f"skipped: ${t['token_env']} is the key of another service, not this "   # service is
+                                     f"hook's token (to send it to {host} anyway: ecadlib keys allow "       # never a
+                                     f"{t['token_env']} {host})")                                            # hook's token
+                    log(f"notify: {t['name']}: {rec['result']}")
+                    continue
                 tok = UC.secret(t["token_env"], env)
                 if not tok:
                     rec["result"] = f"skipped: ${t['token_env']} is not set"

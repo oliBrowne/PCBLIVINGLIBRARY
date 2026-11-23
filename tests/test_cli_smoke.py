@@ -67,6 +67,7 @@ CASES = [
     (["resolve", "{out}/lib/plan.json", "--offline", "--cache", "{out}/cache", "list"], (0,)),
     (["review", "--workspace", "{out}/ws", "--yes", "--offline"], (0, 2)),
     (["approve", "{out}/lib/plan.json", "status"], (0,)),
+    (["confirm", "--workspace", "{out}/ws"], (0,)),                             # nothing is waiting: says so
     (["dedupe", "{out}/lib/plan.json", "-o", "{out}/dedupe"], (0,)),
     (["datasheet", "estimate", "{out}/lib/plan.json"], (0, 1, 2)),
     (["step-gen", "{pkg}/package_specs/SOIC-8_3.9x4.9mm_P1.27mm.json", "-o", "{out}/soic.step"], (0,)),

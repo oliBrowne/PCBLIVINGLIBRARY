@@ -12,6 +12,7 @@ from unittest import mock
 from ecadlib import datasheet as D, ds_route as DR, librarian as L, mcp_server as M
 from ecadlib.app import Workspace
 from tests import test_datasheet as TD, test_librarian as TL
+from tests.fixtures_lite import fresh_home
 from tests.read_pads import read_pads
 
 KEY = "sk-ant-test-SECRET-123"
@@ -536,6 +537,7 @@ def test_fill_plan_and_cli():
 
 
 @read_pads
+@fresh_home
 def test_workspace_and_mcp_tools():
     names = {t["name"] for t in M.TOOLS}
     assert {"datasheet_batch", "datasheet_estimate"} <= names
@@ -587,6 +589,16 @@ def test_workspace_and_mcp_tools():
             lines = [{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                       "params": {"name": "datasheet_batch", "arguments": {"bom": bom, "approved_usd": q["approve_usd"],
                                                                          "over_limit_ok": True}}}]
+            # security review 2026-11-23 (2.3): the amount the call passes is not the person's yes: refused, nothing
+            # sent; the person grants the quote (ecadlib confirm) and the same call then runs
+            from ecadlib import confirm as CF
+            from tests.fixtures_lite import person_confirms
+            try:
+                M.call_tool(ws, "datasheet_batch", lines[0]["params"]["arguments"])
+                raise AssertionError("a paid batch on the caller's own approval")
+            except CF.NeedsPerson:
+                assert not api.of("/v1/messages/batches")
+            person_confirms(ws.root)
             buf = io.BytesIO()
             M.serve(ws, io.BytesIO("\n".join(map(json.dumps, lines)).encode() + b"\n"), buf)
         resp = json.loads(buf.getvalue().decode().splitlines()[0])

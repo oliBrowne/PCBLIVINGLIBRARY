@@ -405,6 +405,11 @@ def check_existing_dblib(lib, fname, name):
 
 # ------------------------------------------------------------------ svn
 def run_cmd(cmd, cwd=None):
+    from .progpath import resolved                   # svn from PATH, never a copy in the current folder (review 2026-11-23, 2.6)
+    try:
+        cmd = resolved(cmd, avoid=[cwd])
+    except FileNotFoundError as e:
+        return subprocess.CompletedProcess(cmd, 127, "", str(e))
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
 
 

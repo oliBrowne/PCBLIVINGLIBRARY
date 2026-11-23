@@ -76,7 +76,7 @@ def status(a, out):
     if a.plan:
         items = _plan(a.plan)
         mine = [i for i in items if SC.depends(i)]
-        bad = {i["name"]: RC.store_problems(i, st, (i.get("allow") or {}).get("failures") or ()) for i in mine}
+        bad = {i["name"]: RC.store_problems(i, st, RC.allow_of(i, Path(a.plan).parent).get("failures") or ()) for i in mine}
         bad = {k: v for k, v in bad.items() if v}
         checked = [i for i in items if (i.get("store_check") or {}).get("result")]
         _say(out, f"plan      : {a.plan}: {len(items)} part(s), {len(mine)} owing the shared store (built from it or "

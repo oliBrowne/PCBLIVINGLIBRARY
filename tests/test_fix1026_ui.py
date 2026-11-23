@@ -41,7 +41,7 @@ def test_fix_ui_01_release_anyway_without_a_name_is_refused(monkeypatch):
     for user in (None, "", "   ", 5):
         with _held_with_policy(monkeypatch) as (ws, bom, plan):
             try:
-                ws.release_check(bom, allow=["USBC-FAKE"], user=user)
+                ws.release_check(bom, allow=["USBC-FAKE"], user=user, reason="checked by hand")
             except ValueError as e:
                 _refused_no_name(plan, str(e))
             else:
@@ -57,10 +57,10 @@ def test_fix_ui_02_web_ui_release_anyway_with_an_empty_name(monkeypatch):
         srv, call = serve(ws)
         try:
             for user in (None, "  "):
-                st, j = call("POST", "/api/release-check", {"bom": bom, "allow": ["USBC-FAKE"], "user": user})
+                st, j = call("POST", "/api/release-check", {"bom": bom, "allow": ["USBC-FAKE"], "user": user, "reason": "checked by hand"})
                 assert st == 400, (st, j)
                 _refused_no_name(plan, j["error"])
-            st, j = call("POST", "/api/release-check", {"bom": bom, "allow": ["USBC-FAKE"], "user": BOB})
+            st, j = call("POST", "/api/release-check", {"bom": bom, "allow": ["USBC-FAKE"], "user": BOB, "reason": "checked by hand"})
             assert st == 200, j
             st, j = call("POST", "/api/approvals/decide", {"bom": bom, "part": "USBC-FAKE", "decision": "approve", "user": BOB})
             assert st == 400 and "no_self_approval" in j["error"], (st, j)
@@ -75,12 +75,24 @@ def test_fix_ui_03_mcp_release_check_without_a_user(monkeypatch):
     with _held_with_policy(monkeypatch) as (ws, bom, plan):
         call = lambda i, name, args: M.handle(ws, {"jsonrpc": "2.0", "id": i, "method": "tools/call",
                                                    "params": {"name": name, "arguments": args}})
-        r = call(1, "release_check", {"bom": bom, "allow": ["USBC-FAKE"]})
-        assert r["result"].get("isError"), r
-        _refused_no_name(plan, json.dumps(r))
-        assert not call(2, "release_check", {"bom": bom, "allow": ["USBC-FAKE"], "user": BOB})["result"].get("isError")
-        r = call(3, "approve_part", {"bom": bom, "part": "USBC-FAKE", "decision": "approve", "user": BOB})
-        assert r["result"].get("isError") and "no_self_approval" in json.dumps(r), r
+        # security review 2026-11-23 (2.3): over MCP a release anyway is asked of the person, with a name passed or
+        # without; it is theirs once they ran `ecadlib confirm ID` (here: as BOB), and the retry then succeeds
+        from ecadlib import confirm as CF
+        from tests.fixtures_lite import person_confirms
+        for i, args in ((1, {"bom": bom, "allow": ["USBC-FAKE"]}), (2, {"bom": bom, "allow": ["USBC-FAKE"], "user": BOB})):
+            r = call(i, "release_check", args)
+            assert r["result"].get("isError") and "ecadlib confirm" in json.dumps(r), r
+            it = _item(plan)
+            assert not it.get("allow") and it["status"] == "held", it      # nothing recorded
+        person_confirms(ws.root, BOB)
+        assert _item(plan)["allow"]["user"] == BOB
+        assert not call(3, "release_check", {"bom": bom, "allow": ["USBC-FAKE"]})["result"].get("isError")
+        r = call(4, "approve_part", {"bom": bom, "part": "USBC-FAKE", "decision": "approve", "user": BOB})
+        assert r["result"].get("isError") and "ecadlib confirm" in json.dumps(r), r
+        with contextlib.redirect_stdout(io.StringIO()) as said:           # BOB released it: he cannot also approve it
+            (res,) = person_confirms(ws.root, BOB)
+        assert res["result"]["exit"] == 2 and "no_self_approval" in said.getvalue(), (res, said.getvalue())
+        assert not _item(plan).get("approvals") and not CF.pending(ws.root)
 
 
 @lite
@@ -90,7 +102,7 @@ def test_fix_ui_03b_cli_still_stamps_identity(monkeypatch):
     with _held_with_policy(monkeypatch) as (ws, bom, plan):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             try:
-                RC.main([str(plan), "--allow", "USBC-FAKE", "-o", str(plan.parent / "rc")])
+                RC.main([str(plan), "--allow", "USBC-FAKE", "--reason", "checked against the datasheet", "-o", str(plan.parent / "rc")])
             except SystemExit:
                 pass
         assert _item(plan)["allow"]["user"] == BOB, _item(plan).get("allow")
@@ -99,7 +111,7 @@ def test_fix_ui_03b_cli_still_stamps_identity(monkeypatch):
 @lite
 def test_fix_ui_04_named_release_keeps_the_typed_name(monkeypatch):
     with _held_with_policy(monkeypatch) as (ws, bom, plan):
-        ws.release_check(bom, allow=["USBC-FAKE"], user="  Ann Lee  ")
+        ws.release_check(bom, allow=["USBC-FAKE"], user="  Ann Lee  ", reason="checked by hand")
         assert _item(plan)["allow"]["user"] == "Ann Lee", _item(plan)["allow"]
 
 
@@ -145,7 +157,9 @@ def test_fix_ui_07_release_anyway_in_chromium(monkeypatch):
         srv = S.make_server(ws, "127.0.0.1", 0)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         try:
-            cfg = {"url": f"http://127.0.0.1:{srv.server_address[1]}/", "part": "USBC-FAKE", "executable": exe}
+            from ecadlib.ui import access as AC             # the address ecadlib would open: with the run's key
+            cfg = {"url": AC.with_key(f"http://127.0.0.1:{srv.server_address[1]}/", srv.access.key), "part": "USBC-FAKE",
+                   "executable": exe}
             p = subprocess.run([node, str(ROOT / "tests" / "fix1026_ui_browser.js"), json.dumps(cfg)], capture_output=True,
                                text=True, env={**os.environ, "NODE_PATH": mods}, timeout=300)
         finally:

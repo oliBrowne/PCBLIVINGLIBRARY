@@ -3,6 +3,7 @@
     ecadlib keys list                  which keys are stored (names only) and which only the environment has
     ecadlib keys set NAME              asks for the value (hidden), stores it for this user
     ecadlib keys remove NAME
+    ecadlib keys allow NAME HOST       let a key go to a server of your own (asks; see ecadlib.keyhosts)
 
 Where: a folder of this user's own, never the workspace or a repository:
   Windows  %APPDATA%\\ecadlib\\          macOS  ~/Library/Application Support/ecadlib/
@@ -318,7 +319,7 @@ def key_hint(name):
 
 
 # ------------------------------------------------------------------ ecadlib keys
-def main(argv=None, inp=None, out=print, http=None):
+def main(argv=None, inp=None, out=print, http=None, confirm=None):
     ap = argparse.ArgumentParser(prog="ecadlib keys", description="API keys stored for this user (names only are shown)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="stored keys (names only)")
@@ -327,6 +328,11 @@ def main(argv=None, inp=None, out=print, http=None):
     s.add_argument("--stdin", action="store_true", help="read the value from standard input (scripts)")
     r = sub.add_parser("remove", help="forget a stored key")
     r.add_argument("name")
+    al = sub.add_parser("allow", help="let a stored key be sent to a server of your own (a gateway, a self-hosted "
+                                      "GitLab); asked for on the terminal, once per key and host")
+    al.add_argument("name", help="the key's name, e.g. CORP_LLM_KEY")
+    al.add_argument("host", help="the server's host name or URL, e.g. llm.corp.example")
+    al.add_argument("--remove", action="store_true", help="take the host back")
     c = sub.add_parser("check", help="one test search with the saved DigiKey / Mouser / Nexar keys (free; Nexar counts one part)")
     c.add_argument("lookup", nargs="*", help="digikey, mouser or nexar (default: every one whose keys are saved)")
     a = ap.parse_args(argv)
@@ -334,10 +340,45 @@ def main(argv=None, inp=None, out=print, http=None):
         if a.cmd == "check":
             from . import lookup_keys as LK
             return LK.main(a.lookup, out=out, http=http)
+        if a.cmd == "allow":
+            return _allow(a, out, confirm)
         return _keys(a, inp, out)
     except (ValueError, EOFError) as e:          # an empty key, a bad name, no input: the user's to fix, not a bug
         print(f"ecadlib keys {a.cmd}: {str(e) or 'no input (nothing was typed)'}", file=sys.stderr)
         return 2
+
+
+def _allow(a, out, confirm=None):
+    """`ecadlib keys allow NAME HOST`: this user's word that a key may be sent to a server that is not the service the
+    key is for (review 2026-11-23, 2.2). The yes is typed on a terminal: a settings file, a script or an assistant's
+    shell cannot give it (they have $ECADLIB_KEY_HOSTS, which is theirs to set and shows in the script)."""
+    from . import keyhosts as KH
+    check_name(a.name)
+    host = KH.host_of(a.host)
+    if not host:
+        raise ValueError(f"{a.host!r} is not a host name (give it as gateway.example.com, or the server's URL)")
+    if a.remove:
+        gone = KH.forget(a.name, host)
+        out(f"{a.name} is no longer sent to {host}" if gone else f"{a.name} was not allowed for {host}")
+        return 0 if gone else 1
+    if host in KH.HOMES.get(a.name, ()):
+        out(f"{host} is the service {a.name} is for: nothing to allow")
+        return 0
+    q = (f"Send the key {a.name} to {host} whenever a settings file (ecadlib.toml) names that server? Whoever runs "
+         f"{host} can then use the key. [y/N] ")
+    if confirm is None:
+        if not (sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty()):
+            print(f"ecadlib keys allow: this asks a question, so run it in a terminal. In a script, set "
+                  f"{KH.ENV}=\"{a.name}={host}\" for the command instead. Nothing was changed.", file=sys.stderr)
+            return 2
+        confirm = input
+    if str(confirm(q) or "").strip().lower() not in ("y", "yes"):
+        out("nothing was changed")
+        return 1
+    KH.allow(a.name, host)
+    out(f"{a.name} may now be sent to {host} (kept in {config_dir() / SETTINGS}; "
+        f"`ecadlib keys allow {a.name} {host} --remove` takes it back)")
+    return 0
 
 
 def _keys(a, inp, out):
@@ -354,6 +395,11 @@ def _keys(a, inp, out):
             env = "also set in the environment; ecadlib uses the stored one" if os.environ.get(n) and os.environ.get(n) != get_key(n) else ""
             out(f"  {n}" + (f"   ({env})" if env else ""))
         out("ecadlib reads these itself and never puts them in the environment, so other programs cannot use them.")
+        from . import keyhosts as KH
+        extra = load_settings().get(KH.SETTING)
+        for n, hosts in sorted(extra.items()) if isinstance(extra, dict) else ():
+            if isinstance(hosts, list) and hosts:
+                out(f"  {n} may also be sent to: {', '.join(str(h) for h in hosts)}   (ecadlib keys allow)")
         return 0
     if a.cmd == "set":
         check_name(a.name)
@@ -363,6 +409,9 @@ def _keys(a, inp, out):
             value = (inp or getpass.getpass)(f"{a.name} (input hidden): ")
         set_key(a.name, value)
         out(f"stored {a.name} for this user; every ecadlib command uses it from now on (only ecadlib reads it)")
+        from . import keyhosts as KH
+        if a.name not in KH.HOMES:                    # a name of your own: where it may go (review 2026-11-23, 2.2)
+            out(f"for a server of your own (a gateway, a self-hosted GitLab), allow it once: ecadlib keys allow {a.name} HOST")
         return 0
     if remove_key(a.name):
         out(f"removed {a.name}")

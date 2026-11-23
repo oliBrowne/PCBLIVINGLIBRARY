@@ -51,7 +51,8 @@ class Refused(Exception):
 # ---------------------------------------------------------------- identity
 def _git(key, cwd=None):
     try:
-        r = subprocess.run(["git", "config", key], capture_output=True, text=True, timeout=5, cwd=cwd)
+        from .progpath import resolved               # never a git in the current folder (review 2026-11-23, 2.6)
+        r = subprocess.run(resolved(["git", "config", key]), capture_output=True, text=True, timeout=5, cwd=cwd)
         return r.stdout.strip() if r.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""

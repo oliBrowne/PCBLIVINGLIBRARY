@@ -132,7 +132,8 @@ def _natural(s):
 
 def _git_head(d):
     try:
-        return subprocess.run(["git", "-C", str(d), "log", "-1", "--format=%H %cs"], capture_output=True, text=True,
+        from ..progpath import resolved              # never a git in the current folder (review 2026-11-23, 2.6)
+        return subprocess.run(resolved(["git", "-C", str(d), "log", "-1", "--format=%H %cs"]), capture_output=True, text=True,
                               check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"

@@ -33,6 +33,7 @@ Every other command:
     ecadlib review    [plan.json] [--part P] [--yes]   go through held parts one by one: why, pick a candidate, release anyway
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
     ecadlib approve   plan.json approve|reject|status [--part P]   sign-off before altium365 push
+    ecadlib confirm   [ID] [--workspace DIR]      answer what your assistant asked over MCP: release anyway, sign-off, a paid run
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib project   BOARD.PrjPcb [-o bom.csv] [--variant V]   BOM straight from an Altium project (.PrjPcb/.SchDoc)
     ecadlib where-used --projects DIR... [--part X] [--plan plan.json]   which projects use which library part
@@ -101,6 +102,7 @@ COMMANDS = {
     "review": ("ecadlib.review_cli", "go through held parts one at a time: the reason in plain words, pick a candidate, release anyway, open the datasheet"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
     "approve": ("ecadlib.approvals", "approve / reject plan items before release"),
+    "confirm": ("ecadlib.confirm", "answer what your assistant asked for over MCP and only you can grant: a release anyway, a sign-off, a paid run"),
     "dedupe": ("ecadlib.dedupe", "find and merge duplicate parts, footprints and symbols"),
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
     "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / A365 checks; new changes as one issue or PR"),

@@ -349,7 +349,15 @@ env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPAT
 if saved.get("pythonpath"):
     env["PYTHONPATH"] = saved["pythonpath"]
 action = {"check": "check-bom", "fill": "fill"}[sys.argv[1]]
-sys.exit(subprocess.call(saved["command"] + ["kicad-menu", action] + sys.argv[2:], env=env))
+if not os.path.isabs(saved["command"][0]):      # a bare or relative name would be looked for in the project's folder
+    sys.exit("ecadlib_cmd.json: the command must start with a full path. Press Add to KiCad on ecadlib's setup page again.")
+# Run from this file's folder, not KiCad's current one (the open project's, which may have come from someone else):
+# `python -m ecadlib` imports from the folder it starts in before anywhere else.
+args = sys.argv[2:]
+if args and not args[0].startswith("-"):
+    args[0] = os.path.abspath(args[0])
+sys.exit(subprocess.call(saved["command"] + ["kicad-menu", action] + args, env=env,
+                         cwd=os.path.dirname(os.path.abspath(__file__))))
 '''
 
 

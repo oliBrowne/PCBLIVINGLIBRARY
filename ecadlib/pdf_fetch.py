@@ -312,8 +312,9 @@ class _State:
     """One launched browser: its own, so a stuck call on an abandoned worker never touches the next one."""
 
     def __init__(self):
-        self.pw = self.browser = self.ctx = self.why = self.engine = self.pid = self.proc = None
+        self.pw = self.browser = self.ctx = self.why = self.engine = self.pid = self.proc = self.route = None
         self.warm, self.public = set(), getattr(self, "public", False)   # (kept when a dead browser is started again)
+        self.own, self.opening = set(), False        # the pages get() opened itself; True while it opens one
 
 
 ROUTE_VERDICT_S = 300                                  # how long the browser keeps one host's verdict
@@ -329,8 +330,7 @@ def route_check(s, clock=time.monotonic):
     from . import datasheet as D
     seen = {}
 
-    def check(route):
-        url = route.request.url
+    def refused(url):
         try:
             u = urlsplit(url)
             key = (u.scheme.lower(), (u.hostname or "").lower(), bool(s.public))
@@ -344,8 +344,62 @@ def route_check(s, clock=time.monotonic):
             bad = bool(D.unsafe_download(url, s.public))
             if key and key[1]:
                 seen[key] = (bad, now)
-        route.abort() if bad else route.continue_()
+        return bad
+
+    def stray(request):
+        """A request of a page get() did not open (a popup: window.open, a target=_blank link a script clicks).
+        Nothing is ever read from such a page, and its redirect hops are outside hop_guard, so it requests nothing
+        (second review 2026-11-23, I3). A request with no page (a worker of the browser itself) is judged as before."""
+        try:
+            return request.frame.page not in s.own
+        except Exception:                             # no page yet (a popup's first request), or a service worker's
+            try:
+                return request.service_worker is None
+            except Exception:
+                return True
+
+    def check(route):
+        route.abort() if stray(route.request) or refused(route.request.url) else route.continue_()
+    check.refused = refused                            # the same verdicts for the redirect hops (hop_guard)
     return check
+
+
+def hop_guard(page, refused):
+    """The redirect hops of a page's requests, checked before they are sent (review 2026-11-23, 2.8). Playwright calls
+    a route handler for a request's first address only: when a site answered 302 to http://127.0.0.1:... or the
+    cloud metadata address, the browser made that request unchecked (the answer was dropped afterwards, the request
+    was already made). Chrome's own request interception (CDP Fetch) pauses every hop, so each is held to `refused`
+    (route_check's verdict) and a refused one fails as a blocked request. Only http(s) is judged here: the browser
+    itself refuses a redirect to file: and the like.
+    This session sees the page's own process. The browser is started so that every frame of the page lives in it
+    (GUARD_ARGS: no separate process for a frame of another site), and a page the site opens by itself requests
+    nothing at all (route_check, Browser._start): otherwise their hops went unchecked (second review, I3)."""
+    cdp = page.context.new_cdp_session(page)
+
+    def paused(ev):
+        rid = ev.get("requestId")
+        try:
+            url = ev["request"]["url"]
+            bad = url.split(":", 1)[0].lower() in ("http", "https") and refused(url)
+        except Exception:                             # an event this code cannot read: not let through
+            bad = True
+        try:
+            if bad:
+                cdp.send("Fetch.failRequest", {"requestId": rid, "errorReason": "BlockedByClient"})
+            else:
+                cdp.send("Fetch.continueRequest", {"requestId": rid})
+        except Exception:                             # the page went away meanwhile
+            pass
+    cdp.on("Fetch.requestPaused", paused)
+    cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*"}]})
+    return cdp
+
+
+# Started with these so that hop_guard sees every request of a page: frames of other sites stay in the page's own
+# process (the browser is used for one page at a time, with no sign-in and no stored data, so nothing is given up),
+# and the headless shell opens no popup window at all.
+GUARD_ARGS = ["--disable-features=IsolateOrigins,site-per-process", "--disable-site-isolation-trials",
+              "--block-new-web-contents"]
 
 
 class Browser:
@@ -394,7 +448,8 @@ class Browser:
             bypass = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
             tried = []
             for ch in ((None,) if self.executable else CHANNELS):
-                kw = {"headless": True, "args": ["--disable-blink-features=AutomationControlled"]}   # no navigator.webdriver
+                kw = {"headless": True, "args": ["--disable-blink-features=AutomationControlled"]   # no navigator.webdriver
+                      + ([] if self.allow_local else GUARD_ARGS)}
                 if self.executable:
                     kw["executable_path"] = self.executable
                 elif ch:
@@ -422,7 +477,16 @@ class Browser:
             s.ctx = s.browser.new_context(accept_downloads=False, user_agent=ua, locale="en-US",
                                           viewport={"width": 1366, "height": 768})
             if not self.allow_local:
-                s.ctx.route("**/*", route_check(s))
+                s.route = route_check(s)
+                s.ctx.route("**/*", s.route)
+
+                def unasked(page):                    # a page the site opened: closed (its requests are refused)
+                    if not s.opening:
+                        try:
+                            page.close()
+                        except Exception:
+                            pass
+                s.ctx.on("page", unasked)
         except Exception as e:                        # the driver cannot run (a broken install, a frozen build)
             self._close(s)
             s.why = f"could not start a browser ({type(e).__name__}: {str(e).splitlines()[0][:120] if str(e) else ''})"
@@ -433,15 +497,35 @@ class Browser:
         if s.why:
             return 0, None, "", url, s.why
         from .datasheet import MAX_DOWNLOAD, is_pdf
+        for left in list(s.ctx.pages) if s.route is not None else []:   # a page a site opened after the last call
+            try:                                                        # returned (it could request nothing)
+                left.close()
+            except Exception:
+                pass
+        s.opening = True
         try:
-            page = s.ctx.new_page()
-        except Exception:                             # the driver or the browser died between calls: start again
-            self._close(s)
-            s.__init__()
-            self._start(s)
-            if s.why:
-                return 0, None, "", url, s.why
-            page = s.ctx.new_page()
+            try:
+                page = s.ctx.new_page()
+            except Exception:                         # the driver or the browser died between calls: start again
+                self._close(s)
+                s.__init__()
+                self._start(s)
+                if s.why:
+                    return 0, None, "", url, s.why
+                s.opening = True
+                page = s.ctx.new_page()
+        finally:
+            s.opening = False
+        s.own = {page}
+        if s.route is not None:                       # where requests are checked (_start: not allow_local), every
+            try:                                      # redirect hop is too; a browser that cannot be watched is not used
+                hop_guard(page, s.route.refused)
+            except Exception as e:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                return 0, None, "", url, f"browser: its redirects cannot be checked ({type(e).__name__}); not used"
         pdfs, downloads, nav = [], [], {}
 
         def on_response(r):

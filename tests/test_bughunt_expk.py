@@ -21,6 +21,11 @@ def _plan(d):
     for f in ("library.ledger.jsonl", "library.lock.json", "library.usage.json", "ecadlib_schema.json"):
         (plan.parent / f).unlink(missing_ok=True)
     shutil.rmtree(plan.parent / ".ecadlib", ignore_errors=True)
+    # security review 2026-11-23 (2.4): a release anyway counts only with its ledger line, so the reviewer's two are
+    # written again (the only lines of the new ledger: still no release history to settle a hand edit back to)
+    from ecadlib import release_check as RC
+    RC.record_allow(json.loads(plan.read_text(encoding="utf-8")), plan.parent, TX.CHECKED, TX.REVIEWER,
+                    "checked by the test reviewer")
     ready = {i["name"] for i in json.loads(plan.read_text(encoding="utf-8")) if i["status"] == "ready"}
     assert ready == {"RES-0603-10k", "LED-RED-0603", "TPS1234DSGR", "EEPART1"}, ready   # the parts the tests export
     return plan, items, http

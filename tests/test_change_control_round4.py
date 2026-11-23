@@ -202,10 +202,10 @@ def test_release_check_and_release_anyway_never_clear_a_change_hold():
     assert item(items, "RES-0402-10k")["status"] == "held"
     assert RV.release_anyway(plan, "RES-0402-10k", user=ANN)["status"] == "held"
     ws = Workspace(lib.parent.parent, [], offline=True)
-    ws.release_check("uploads/demo/demo_bom.csv", allow=["RES-0402-10k"], user=ANN)
+    ws.release_check("uploads/demo/demo_bom.csv", allow=["RES-0402-10k"], user=ANN, reason="checked by hand")
     assert item(items_of(plan), "RES-0402-10k")["status"] == "held"
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        RC.main([str(plan), "--allow", "RES-0402-10k"])
+        RC.main([str(plan), "--allow", "RES-0402-10k", "--reason", "checked against the datasheet"])
     assert item(items_of(plan), "RES-0402-10k")["status"] == "held"
     # not exported by kicad-dblib either, and approval still releases it
     from ecadlib import kicad_dblib as KD
@@ -422,7 +422,10 @@ def test_a_lost_ledger_and_stamp_with_untouched_files_exports_as_before():
     plan, lib = demo()
     _lose_all(lib, stamp=False)
     rep = KX.export(plan, lib.parent / "kx", "t", log=_quiet)
-    assert not rep["errors"] and LG.Ledger(lib).head("AO3401A")["revision"] == 1
+    assert not rep["errors"] and LG.Ledger(lib).head("KT-0603R")["revision"] == 1
+    # security review 2026-11-23 (2.4): AO3401A was released anyway, and that is proved by its ledger line alone.
+    # With the ledger gone the plan's allow block does not count: the part waits for a person to release it again.
+    assert LG.Ledger(lib).head("AO3401A") is None
 
 
 def test_a_lost_ledger_with_an_export_left_fails_closed():
@@ -620,7 +623,7 @@ def test_a_part_held_at_its_first_build_and_fixed_by_hand_is_no_lost_release():
     g = CG.Guard(lib, "kicad-export")
     assert not g.lost_history("AO3401A", item(items_of(plan), "AO3401A"))
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        rc = RC.main([str(plan), "--allow", "AO3401A", "--user", ANN])
+        rc = RC.main([str(plan), "--allow", "AO3401A", "--user", ANN, "--reason", "checked against the datasheet"])
     head = LG.Ledger(lib).head("AO3401A")
     assert head and head["revision"] == 1 and head.get("writer") == "release-allow", (rc, head)
     rep = KX.export(plan, lib.parent / "kx", "t", log=_quiet)
@@ -636,7 +639,10 @@ def test_a_lock_without_statuses_is_no_sign_of_a_lost_release():
     _lock_status(lib, "*", None)
     write_symbol(lib, item(items_of(plan), "AO3401A"), SGD)
     rep = KX.export(plan, lib.parent / "kx", "t", log=_quiet)
-    assert not rep["errors"] and LG.Ledger(lib).head("AO3401A")["revision"] == 1
+    # 2026-11-23 (2.4): no refusal, as before; AO3401A itself (released anyway, its ledger line lost with the ledger)
+    # now waits for a person to release it again, so the part that shows the upgrade is one that passes the check
+    assert not rep["errors"] and LG.Ledger(lib).head("KT-0603R")["revision"] == 1
+    assert LG.Ledger(lib).head("AO3401A") is None
 
 
 def test_release_anyway_and_the_web_ui_record_the_release():
@@ -647,7 +653,7 @@ def test_release_anyway_and_the_web_ui_record_the_release():
     RV.release_anyway(plan, "AO3401A", user=ANN)
     assert LG.Ledger(lib).head("AO3401A")["revision"] == 1
     from ecadlib.app import Workspace
-    Workspace(lib.parent.parent, [], offline=True).release_check("uploads/demo/demo_bom.csv", allow=["KT-0603R"], user=BOB)
+    Workspace(lib.parent.parent, [], offline=True).release_check("uploads/demo/demo_bom.csv", allow=["KT-0603R"], user=BOB, reason="checked by hand")
     assert LG.Ledger(lib).head("KT-0603R")["revision"] == 1
 
 

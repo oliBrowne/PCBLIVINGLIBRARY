@@ -84,7 +84,8 @@ def main(argv=None):
     else:
         ws, _ = build(a.dir)
     srv = make_server(ws, "127.0.0.1", a.port)
-    print(json.dumps({"url": f"http://127.0.0.1:{srv.server_address[1]}/"}), flush=True)
+    from ecadlib.ui import access as AC                 # the page opens only with the run's key (review 2026-11-23)
+    print(json.dumps({"url": AC.with_key(f"http://127.0.0.1:{srv.server_address[1]}/", srv.access.key)}), flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
