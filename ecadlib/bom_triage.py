@@ -1098,14 +1098,24 @@ def distributor_sku(mpn):
     return "DigiKey" if _SKU_ND.fullmatch(str(mpn or "").strip()) else ""
 
 
-def _maker_words(words):
-    """True for the words before a part number in a 'Manufacturer/MPN' cell that read as a company: a maker ecadlib
-    knows ('3M', 'ON Semi'), or up to four words with no digit that are not a placeholder ('ANY', 'Generic')."""
+def _maker_words(words, pn=""):
+    """True for the words before a part number in a 'Manufacturer/MPN' cell that name a maker ecadlib knows: one of
+    its maker table ('3M', 'ON Semi', 'Nexperia'), a short or old name of one ('TI', 'Fairchild'), or the maker whose
+    ordering code the part number pn is ('YAGEO' before CC0402KRX7R7BB104). Any other words are not taken as the
+    maker (2026-11-23 review, a6 finding 7: 'Capacitor GRM188...', 'SMD LTST-...', 'See note BSS138' gave the makers
+    Capacitor, SMD and See note, which went into the part's Manufacturer and steered the part search): the cell
+    stays whole and the line is held for a person to write the maker and the part number in their own columns."""
     name = " ".join(words)
+    if placeholder_mpn(name) or any(placeholder_mpn(w) for w in words):
+        return False
     if any(P.same_maker(name, m) for m in P.MAKER_DOMAINS.values() if m):
         return True
-    return len(words) <= 4 and not any(re.search(r"\d", w) for w in words) and not placeholder_mpn(name) \
-        and not any(placeholder_mpn(w) for w in words)
+    key = P.maker_key(name)
+    if key and (key in P._MAKER_ALIAS or key in P._MAKER_ALIAS.values()):
+        return True
+    from .mpn_decode import decode
+    series = ((decode(pn) or {}).get("series") or "").split()
+    return any(P.same_maker(name, " ".join(series[:k])) for k in range(1, len(series) + 1))
 
 
 def _maker_and_mpn(cell):
@@ -1120,7 +1130,7 @@ def _maker_and_mpn(cell):
         words = c.split()
         if len(words) == 1 and _PN_CELL.fullmatch(c):
             pairs.append(("", c))
-        elif len(words) > 1 and _PN_CELL.fullmatch(words[-1]) and _maker_words(words[:-1]) and \
+        elif len(words) > 1 and _PN_CELL.fullmatch(words[-1]) and _maker_words(words[:-1], words[-1]) and \
                 parse_value(words[-1]) is None and not _size_code(words[-1]):
             pairs.append((" ".join(words[:-1]), words[-1]))   # not 'Epson FC-135 32.768KA-AG0' (a number with a
         else:                                                  # space), 'Generic 10k 0603' (a value and a size)

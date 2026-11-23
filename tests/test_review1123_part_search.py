@@ -349,6 +349,32 @@ def test_size_and_value_cells_read_as_before():
         assert BT._not_a_part_number(cell) != "size_value", cell
 
 
+# ------------------------------------------------------------------ a6-7 words before the number are not a maker
+@lite
+def test_words_before_the_part_number_are_a_maker_only_when_known(tmp_path):
+    lines = _read(tmp_path, "Designator,Manufacturer/MPN,Qty\nC1,Capacitor GRM188R71H104KA93D,1\nD1,SMD LTST-C191TBKT,1\n"
+                            "U1,Dual opamp LM358DR,1\nQ1,See note BSS138,1\nX1,Acme Widgets AW-1234,1\n")
+    for l in lines:                                    # not a maker ecadlib knows: the cell stays whole, held
+        assert not l.get("manufacturer") and " " in l["mpn"], l
+        assert "could not be read as a maker and a part number" in l.get("bom_hold", ""), l
+
+
+@lite
+def test_known_makers_before_the_part_number_are_still_read(tmp_path):
+    cells = {"YAGEO CC0402KRX7R7BB104": ("YAGEO", "CC0402KRX7R7BB104"),          # its own ordering code (mpn_decode)
+             "Murata GRM188R71H104KA93D": ("Murata", "GRM188R71H104KA93D"),
+             "Samsung CL10B104KB8NNNC": ("Samsung", "CL10B104KB8NNNC"),
+             "Texas Instruments LM358DR": ("Texas Instruments", "LM358DR"),      # the maker table
+             "TI LM358DR": ("TI", "LM358DR"), "Fairchild BSS138": ("Fairchild", "BSS138"),   # short and old names
+             "ON Semi MMBT3904LT1G": ("ON Semi", "MMBT3904LT1G"), "Nexperia BSS138,215": ("Nexperia", "BSS138,215"),
+             "Lite-On LTST-C191TBKT": ("Lite-On", "LTST-C191TBKT"), "LM358DR": ("", "LM358DR")}
+    text = "Designator,Manufacturer/MPN,Qty\n" + "".join(f'U{i},"{c}",1\n' for i, c in enumerate(cells, 1))
+    lines = _read(tmp_path, text)
+    got = {c: (l.get("manufacturer", ""), l.get("mpn", "")) for c, l in zip(cells, lines)}
+    assert got == cells, got
+    assert not any(l.get("bom_hold") for l in lines), lines
+
+
 if __name__ == "__main__":
     import sys
     fns = [f for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
