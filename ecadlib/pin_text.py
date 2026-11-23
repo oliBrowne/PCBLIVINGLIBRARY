@@ -642,7 +642,7 @@ def _diode_role(word):
     return "A" if w == "ANODE" else "K" if w == "CATHODE" else "N" if _NC_WORDS.match(w) else None
 
 
-def diode_orders(page_texts, page_runs=()):
+def diode_orders(page_texts, page_runs=(), package=None, doubts=None):
     """The pin orders of a single diode in a three-lead package (SOT-23, SC-70) that the datasheet's own words give:
     'ANK' = pin 1 anode, pin 2 not connected, pin 3 cathode. Two sources, read as text, never guessed:
     (a) the symbol drawn with the words ANODE and CATHODE, each with its pin number right beside it (onsemi's '3
@@ -650,8 +650,10 @@ def diode_orders(page_texts, page_runs=()):
     'STYLE 8: PIN 1. ANODE 2. NO CONNECTION 3. CATHODE'). Every ANODE / CATHODE pair in the PDF must name the same
     pin (a sheet that draws a common-cathode pair too has two anodes: nothing), the front page names one style only,
     and that style names one anode, one cathode and one pin not connected. -> sorted list of distinct orders: one
-    order settles it; none or two do not."""
-    found = set()
+    order settles it; none or two do not. package: this part's land name(s): the one order then counts only when
+    every page it was read on is this package's (package_doubt; review 2026-11-23, 1.4), else [] and the reason is
+    added to the list `doubts`. Not given (None): the bare text check, which no release may rest on."""
+    found, used = set(), []                            # used: the pages an order was read on
     drawn = []                                         # (page, pairs) of every page with an ANODE / CATHODE pair
     for page, runs in page_runs or ():
         pairs = _terminal_pairs(runs, DIODE_TERMINAL, pin_words=False)
@@ -672,9 +674,11 @@ def diode_orders(page_texts, page_runs=()):
             for q in pairs:
                 order[q[3] - 1] = q[2]
             found.add("".join(order))
+            used.append(drawn[0][0])
         # else: the two words far apart, or no third lead drawn beside them (a 2-pin variant's symbol, or the
         # package not drawn there): the words settle nothing; the style table may
-    texts = [" ".join(str(t or "").split()) for _, t in sorted((page_texts or {}).items())]
+    pages = sorted((page_texts or {}).items())
+    texts = [" ".join(str(t or "").split()) for _, t in pages]
     styles = {(m.group(1), m.group(2)) for t in texts[:2] for m in _CASE_STYLE.finditer(t)}
     if len(styles) > 1:
         return []                                      # two styles named up front: two variants on one sheet
@@ -690,27 +694,111 @@ def diode_orders(page_texts, page_runs=()):
             else:
                 return []                              # the style names something else (a pair, a transistor)
         found |= orders
+        if orders:                                     # the front page that names the case and style ties it to the part
+            used += [pg for (pg, _), t in list(zip(pages, texts))[:2] if _CASE_STYLE.search(t)]
+    if len(found) == 1 and package is not None:
+        why = next((w for w in (package_doubt(page_texts, pg, package, 3) for pg in used) if w), None)
+        if why:
+            if doubts is not None:
+                doubts.append(f"it names pins 1, 2, 3 {', '.join(sorted(found)[0])}, but {why}")
+            return []
     return sorted(found)
 
 
-def diode_orders_pdf(pdf_bytes):
+def diode_orders_pdf(pdf_bytes, package=None, doubts=None):
     """diode_orders on a PDF's text and placed text, [] when it cannot be read."""
     if not pdf_bytes:
         return []
-    return diode_orders(page_texts(pdf_bytes), page_runs(pdf_bytes))
+    return diode_orders(page_texts(pdf_bytes), page_runs(pdf_bytes), package, doubts)
 
 
-def pin_orders(page_texts, names, figures=()):
+_PKG_LETTERS = "|".join(sorted({f for f in FAMILIES if f.isalpha()} | {"D2PAK", "SOP"}, key=len, reverse=True))
+_PKG_WORD = re.compile(r"(?<![A-Za-z0-9])(?:(\d{1,3})-)?((?:SOT|SOD|SC|TO|DO)-?\d{2,3}[A-Z]{0,2}|" + _PKG_LETTERS +
+                       r")(?:-(\d{1,3}))?(?![A-Za-z0-9])")
+_SAME_PACKAGE = ({"SOIC", "SO", "SOP"}, {"DPAK", "TO252", "TO252AA"}, {"D2PAK", "TO263", "TO263AB"})
+
+
+def package_words(text):
+    """The packages a text names as words, in capitals as makers print them: {(name, lead count or None)}: 'SOT-23
+    (TO-236AB)' -> {('SOT23', None), ('TO236AB', None)}, 'SOT-23-5' -> {('SOT23', 5)}, '8-SOIC' -> {('SOIC', 8)}. A
+    short family word with no lead count (SO, DIP, QFN: plain words and prefixes too) is not one."""
+    out = set()
+    for m in _PKG_WORD.finditer(re.sub("[\u2212\u2013\u2010\u2011]", "-", str(text or ""))):   # onsemi's minus sign
+        count = m.group(1) or m.group(3)
+        base = m.group(2).replace("-", "")
+        if count or len(base) >= 4:
+            out.add((base, int(count) if count else None))
+    return out
+
+
+def own_packages(package):
+    """The names this part's package goes by, from its land's name and the names the package tables file under that
+    land ('SOT-23' -> SOT23, TO236, TO236AB; 'SOT-323_SC-70' -> SOT323, SC70; 'SOIC-8_3.9x4.9mm_P1.27mm' -> SOIC, SO,
+    SOP with 8 leads) -> (names, lead count or None). package: the land name(s); a distributor's case group is not
+    used here (DigiKey's 'TO-236-3, SC-59, SOT-23-3' lists SC-59, another body, for every SOT-23 part)."""
+    from .stdparts import ALIASES
+    names, count = set(), None
+    for t in package or ():
+        land = str(t or "").split(":")[-1]
+        for base, n in package_words(land.replace("_", " ")):
+            names.add(base)
+            count = count or n
+        names |= {b for k, v in ALIASES.items() if v and v == land for b, _ in package_words(k)}
+    for same in _SAME_PACKAGE:
+        if names & same:
+            names |= same
+    return names, count
+
+
+def package_doubt(page_texts, page, package, leads=None, where=""):
+    """Why a pin order read on page `page` of a PDF may not be this part's package's, or None (review 2026-11-23,
+    1.4: a family datasheet whose text prints only the TO-92 table gave the TO-92 order to the SOT-23 part). It is
+    this package's when every package the PDF names is this part's own (one package only), or the page it was read on
+    names this part's package and no other, or the table's header named this package's column (check's `where`).
+    leads: the part's lead count ('SOT-23-5' is not the three-lead SOT-23). A PDF that names no package: a doubt."""
+    mine, count = own_packages(package)
+    if not mine:
+        return "this part's package is not known, so the order cannot be tied to it"
+    is_mine = lambda w: w[0] in mine and (w[1] is None or w[1] in (count, leads) or not (count or leads))
+    said = lambda ws: ", ".join(sorted({b + (f"-{n}" if n else "") for b, n in ws}))
+    every = set().union(*[package_words(t) for t in (page_texts or {}).values()]) if page_texts else set()
+    if every and all(is_mine(w) for w in every):
+        return None                                    # the PDF names this package only
+    if "the header names one package per column" in str(where or ""):
+        return None                                    # the table's own header picked this package's column
+    here = package_words((page_texts or {}).get(page))
+    if here and all(is_mine(w) for w in here):
+        return None                                    # a family PDF, but this page is headed for this package alone
+    if not every:
+        return "the PDF names no package, so the order cannot be tied to this part's"
+    if here:
+        return f"page {page} is not headed for this part's package alone (it names {said(here)}): which package's " \
+               "order it prints is not in the text"
+    return f"the PDF names other packages too ({said(w for w in every if not is_mine(w))}) and page {page} names " \
+           "none: which package's order it prints is not in the text"
+
+
+def pin_orders(page_texts, names, figures=(), part=None, package=None, doubts=None):
     """The orders of a three-terminal part's names ('GSD', 'BEC') on pins 1, 2, 3 that the datasheet's text agrees
     with (check): ['GSD'] when it prints one order and no other. Two orders agreeing (two packages drawn), or none: the
-    text does not settle it."""
+    text does not settle it. package: this part's land name(s), as check() takes them: the one order then counts only
+    when it is this package's (package_doubt; review 2026-11-23, 1.4), else [] and the reason is added to the list
+    `doubts`. Not given (None): the bare text check, which no release may rest on."""
     from itertools import permutations
-    return ["".join(o) for o in permutations(names)
-            if check(page_texts, list(zip("123", o)), figures)["status"] == "agreed"]
+    got = [("".join(o), v) for o in permutations(names)
+           for v in [check(page_texts, list(zip("123", o)), figures, part=part, package=package or ())]
+           if v["status"] == "agreed"]
+    if len(got) == 1 and package is not None:
+        why = package_doubt(page_texts, got[0][1].get("page"), package, len(names), got[0][1].get("where"))
+        if why:
+            if doubts is not None:
+                doubts.append(f"it prints {', '.join(got[0][0])} on pins 1, 2, 3, but {why}")
+            return []
+    return [o for o, _ in got]
 
 
-def pin_orders_pdf(pdf_bytes, names):
-    return pin_orders(page_texts(pdf_bytes), names, page_figures(pdf_bytes)) if pdf_bytes else []
+def pin_orders_pdf(pdf_bytes, names, part=None, package=None, doubts=None):
+    return pin_orders(page_texts(pdf_bytes), names, page_figures(pdf_bytes), part, package, doubts) if pdf_bytes else []
 
 
 def check_pdf(pdf_bytes, pins, pin_count=None, part=None, package=()):

@@ -1617,13 +1617,17 @@ class Run:
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
         if not data:
             return None
+        # the order must be this part's PACKAGE's: a family sheet prints the TO-92 table as text and draws the SOT-23
+        # (review 2026-11-23, 1.4). The package is the land the part was given, by name
+        land, doubts = str((st.get("footprint") or {}).get("source") or "").split(":")[-1], []
         try:
-            orders = PT.pin_orders_pdf(data, "GSD" if what.endswith("MOS") else "BEC")
+            orders = PT.pin_orders_pdf(data, "GSD" if what.endswith("MOS") else "BEC", part=mpn,
+                                       package=(land,) if land else (), doubts=doubts)
         except Exception:
             return None
         if len(orders) != 1:
             st["tried"].append(f"standard: {mpn} ({what}): its datasheet's text does not settle the pin order "
-                               f"({' and '.join(orders) + ' both agree' if orders else 'no pin table or drawing read'})")
+                               f"({doubts[0] if doubts else ' and '.join(orders) + ' both agree' if orders else 'no pin table or drawing read'})")
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link}, and in no "
                            "other order")
@@ -1640,15 +1644,20 @@ class Run:
         if not data:
             return None
         want, others = SP.so8_fet_orders()
+        # the order must be this part's PACKAGE's (review 2026-11-23, 1.4): the package is the land the part was given
+        land = str((st.get("footprint") or {}).get("source") or "").split(":")[-1]
         try:
             texts, figs = PT.page_texts(data), PT.page_figures(data)
-            ok = [o for o in [want] + others
-                  if PT.check(texts, list(zip(map(str, range(1, 9)), o)), figs, pin_count=8)["status"] == "agreed"]
+            got = {o: PT.check(texts, list(zip(map(str, range(1, 9)), o)), figs, pin_count=8, part=mpn,
+                               package=(land,) if land else ()) for o in [want] + others}
+            ok = [o for o in got if got[o]["status"] == "agreed"]
+            doubt = PT.package_doubt(texts, got[want].get("page"), (land,) if land else (), 8, got[want].get("where")) \
+                if ok == [want] else None
         except Exception:
             return None
-        if ok != [want]:
+        if ok != [want] or doubt:
             st["tried"].append(f"standard: {mpn} ({what}, SO-8): its datasheet's text does not settle pins 1-8 "
-                               f"({', '.join(ok) + ' agree' if ok else 'no pin table or drawing read'})")
+                               f"({'it prints ' + ', '.join(want) + ', but ' + doubt if doubt else ', '.join(ok) + ' agree' if ok else 'no pin table or drawing read'})")
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1-8 are {', '.join(want)} in {link}, and in no other "
                            "order a maker prints")
@@ -1664,13 +1673,16 @@ class Run:
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
         if not data:
             return None
+        # the order must be this part's PACKAGE's: a family sheet prints the TO-92 table as text and draws the SOT-23
+        # (review 2026-11-23, 1.4). The package is the land the part was given, by name
+        land, doubts = str((st.get("footprint") or {}).get("source") or "").split(":")[-1], []
         try:
-            orders = PT.diode_orders_pdf(data)
+            orders = PT.diode_orders_pdf(data, package=(land,) if land else (), doubts=doubts)
         except Exception:
             return None
         if len(orders) != 1:
             st["tried"].append(f"standard: {mpn} ({what}, three leads): its datasheet's words do not settle which lead "
-                               "is the anode and which the cathode")
+                               "is the anode and which the cathode" + (f" ({doubts[0]})" if doubts else ""))
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link} "
                            "(A anode, K cathode, N not connected), and in no other order")
