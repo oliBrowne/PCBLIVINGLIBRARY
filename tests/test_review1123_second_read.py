@@ -265,3 +265,55 @@ def test_the_second_read_is_asked_for_a_no_lead_packages_sides_and_they_are_comp
     assert put(res, job, LIB_SYMBOL)[0] == "verify"
     cc, job = checked(T.read(copy.deepcopy(true)), true)
     assert cc["status"] == "agreed" and "pin_positions" in cc["checks"][-1]["agreed"]
+
+
+# ---------------------------------------------------------------- a PDF the assistant saved is checked to name the part
+ASSIST = {"datasheet": {"reader": "assistant"}}
+DEAD = "https://maker.example/LM358DR.pdf"
+
+
+def _saved(d, lines, part="LM358DR"):
+    """The job of `part` whose only PDF is one the assistant saved as <MPN>.pdf (nothing here can download the link)."""
+    rd = TC.reader(d, ASSIST)
+    rd.offline = True
+    DA.pdf_folder(rd.assistant).mkdir(parents=True, exist_ok=True)
+    (DA.pdf_folder(rd.assistant) / DA.pdf_name(part)).write_bytes(TC.TR.pdf_lines(lines))
+    try:
+        return rd, rd.job(part, [(DEAD, "BOM")], "SOIC-8", mpn=part)
+    except D.DatasheetError as e:
+        return rd, e
+
+
+def test_a_pdf_the_assistant_saved_that_does_not_name_the_part_keeps_the_part_with_a_person():
+    api = TA._api()
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd, job = _saved(d, [["ACME ZX9000 quad op-amp datasheet", "Package outline SOIC-14"]])
+        assert "saved by your assistant" in job["prov"]["where"], job["prov"]
+        assert "doesn't mention LM358DR" in job["prov"]["unnamed"], job["prov"]
+        try:
+            rd.read_now(job)
+            raise AssertionError("no AssistantPending")
+        except D.AssistantPending:
+            pass
+        (DA.folder(rd.assistant, job) / "answer.json").write_text(json.dumps(TD.GOOD), encoding="utf-8")
+        rd, job = _saved(d, [["ACME ZX9000 quad op-amp datasheet", "Package outline SOIC-14"]])
+        res = rd.read_now(job)
+        line = [r for r in res["needs_review"] if "doesn't mention LM358DR" in r]
+        assert line and "check it is this part's datasheet" in line[0] and "taken on its file name" in line[0], res["needs_review"]
+        assert L.UNSURE_READ.search(line[0])          # no release with no person, whatever agrees with that PDF
+        res["cross_check"] = {"status": "agreed", "mode": "auto", "checks": [{"status": "agreed", "against": "second read (m)",
+                                                                              "source": "second read"}]}
+        assert L.read_confirmed(res, job, ["footprint"]) is None
+    assert api.calls == []
+
+
+def test_a_pdf_the_assistant_saved_that_names_the_part_is_read_as_before_and_a_notice_is_not_read():
+    api = TA._api()
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd, job = _saved(d, [["LM358DR dual operational amplifier", "Package outline SOIC-8"]])
+        assert "saved by your assistant" in job["prov"]["where"] and "unnamed" not in job["prov"], job["prov"]
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd, got = _saved(d, [["Product Change Notification", "LM358DR assembly site change"]])
+        text = str(got) if isinstance(got, Exception) else json.dumps(got["prov"].get("attempts"))
+        assert "not a datasheet" in text and "replace it with the datasheet" in text, text
+        assert isinstance(got, Exception) or got["prov"].get("sent_as") == "url", got   # the file itself is never read
