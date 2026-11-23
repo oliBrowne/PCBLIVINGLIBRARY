@@ -16,6 +16,7 @@ def put(res, job=None, symbol=None):
     """librarian.Run.put_datasheet for real (only put_fp / put_sym stand in, so nothing is written) -> (outcome, st,
     got). outcome: "released" (built, nothing left for a person), "verify" (built, waits for a person), or "held: ..."."""
     run = object.__new__(L.Run)
+    run.store, run.second = None, {}                # the shared store (main, #289): off
     run.out, run.rules = Path(tempfile.mkdtemp()), {}
     run.reader = types.SimpleNamespace(assistant=None, cfg=D.settings({}), out=run.out)
     got = {}
@@ -213,6 +214,7 @@ def test_the_rows_hold_ends_as_a_message_on_the_batch_path_too(tmp_path):
     res = T.read(no_rows(T.DFN8, "MLP-8_3x3mm_P0.65mm", ep=False))
     res["sidecar"]["via"] = "batch"
     run = object.__new__(L.Run)
+    run.store, run.second = None, {}                # the shared store (main, #289): off
     run.out, run.rules = tmp_path, {}
     job = {"url": "https://example.com/t.pdf", "where": "BOM", "part": "TESTPART", "key": "k1"}
     run.reader = types.SimpleNamespace(assistant=None, cfg=D.settings({}), out=tmp_path, flush=lambda: {"k1": res},
