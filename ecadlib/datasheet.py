@@ -3159,6 +3159,56 @@ def two_sided(spec, review):
                   f"{spec['name']} is a two-sided package; check against the drawing")
 
 
+ROWS_UNREAD = "pins per side not read"
+
+
+def rows_blank(spec):
+    """A no-lead read that gives no row split, no pin_sides and no pin_positions (and has a pin count to split)."""
+    n = spec.get("pin_count")
+    return spec.get("package_type") == "qfn" and isinstance(n, int) and not isinstance(n, bool) and n > 0 \
+        and "pins_left_right" not in spec and "pins_top_bottom" not in spec and not F.listed_sides(spec) \
+        and not spec.get("pin_positions")
+
+
+def standard_rows(spec):
+    """(pins_left_right, pins_top_bottom, table name, how) from the one checked standard package the read's name
+    resolves to, or else the one its own pin count, pitch, body and exposed pad name (stdparts.identify, which never
+    looks at the rows), or None."""
+    from . import stdparts as SP
+    for how, find in (("the read names", lambda: SP.footprint_for([str(spec.get("name") or "")])[0]),
+                      ("the read's pin count, pitch, body and exposed pad name", lambda: SP.identify(spec)[0])):
+        try:
+            name = find()
+            t = SP.spec(name) if name else None
+        except Exception:                             # a name or read stdparts cannot judge names no package
+            t = None
+        if t and t.get("package_type") == "qfn" and t.get("pin_count") == spec.get("pin_count") \
+                and all(isinstance(t.get(k), int) for k in ("pins_left_right", "pins_top_bottom")):
+            return t["pins_left_right"], t["pins_top_bottom"], name, how
+    return None
+
+
+def rows_unread(spec, review):
+    """A no-lead read with no row split left after two_sided (review 2026-11-23, 1.8: a DFN-8 3 x 3 named MLP-8 was
+    built 2 + 2 + 2 + 2 by footprint_gen's quarter-per-side default, the second read agreed and it was released). The
+    split is never a default: a checked standard package the read names (by its name, or by its numbers) gives the rows,
+    with a review line; otherwise the read fails (ds_route.FAILED: "pins per side", a hard line: the part is held)."""
+    if not rows_blank(spec):
+        return
+    got = standard_rows(spec)
+    n = spec["pin_count"]
+    if got:
+        spec["pins_left_right"], spec["pins_top_bottom"] = got[0], got[1]
+        review.append(f"pins_left_right / pins_top_bottom were left blank: {got[0]} per side left and right, {got[1]} top "
+                      f"and bottom, as the checked standard package {got[2]} ({got[3]}) has them; check against the "
+                      "drawing")
+        return
+    review.append(f"{ROWS_UNREAD}: {n} pins on a no-lead package and pins_left_right / pins_top_bottom / pin_sides all "
+                  "left blank, and no checked standard package gives the rows; a quarter of the pins on each of four "
+                  f"sides would be a guess (an {n}-pin DFN has {n // 2} on each of two sides): give the split or list "
+                  "the sides in pin_sides, from the pin figure")
+
+
 def _pin_count_from(spec, ext):
     """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
     name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "").
@@ -3305,6 +3355,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             spec["pin_count"] = n
             review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     two_sided(spec, review)
+    rows_unread(spec, review)
     grid_from_balls(spec, ext, review)
     ep_number(spec, ext, review)
     read_ext, read_pins = ext, ext["pins"]            # as read: the review and the cross-check compare these

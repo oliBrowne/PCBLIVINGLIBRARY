@@ -186,3 +186,82 @@ def test_pads_that_would_short_hold_the_read():
         "footprint_gen.build failed: the pads would short: pad pairs 1-2 are 0.000 mm apart")
     # a pad table is the maker's land copied pad by pad: pads that meet there stay advice (the release check holds them)
     assert DR._soft("footprint_gen.build failed: the pads would short: pads 5-8 are -0.000 mm from pad 9", {"pad_table": {"pads": [{}]}})
+
+
+# ---------------------------------------------------------------- 1.8: a no-lead part's rows are never a default
+def no_rows(t, name=None, ep=True):
+    return {k: v for k, v in dict(t, name=name or t["name"]).items()
+            if k not in ("pins_left_right", "pins_top_bottom") and (ep or k != "exposed_pad")}
+
+
+def test_a_no_lead_read_with_no_rows_is_held_not_built_a_quarter_per_side():
+    for nm in ("MLP-8_3x3mm_P0.65mm", "LLP-8_3x3mm_P0.65mm", "QFN-8_3x3mm_P0.65mm", "VSSOP-8"):
+        t = no_rows(T.DFN8, nm, ep=False)
+        res = T.read(copy.deepcopy(t))
+        hold = DR.hold_reasons(res, True)
+        assert any(h.startswith(D.ROWS_UNREAD) for h in hold), (nm, DR.assess(res), hold)
+        out, st, got = put(res, symbol=LIB_SYMBOL)
+        assert out.startswith("held: ") and D.ROWS_UNREAD in out and "pin_sides" in out and not got, (nm, out)
+    # 6 pins on a square body (the 2026-11-10 case): the same hold, with a message, not a bare ValueError
+    res = T.read(no_rows(T.WSON6, "QFN-6_2x2mm_P0.65mm", ep=False))
+    out, st, got = put(res, symbol=LIB_SYMBOL)
+    assert out.startswith("held: ") and D.ROWS_UNREAD in out and not got, out
+
+
+@lite
+def test_the_rows_hold_ends_as_a_message_on_the_batch_path_too(tmp_path):
+    res = T.read(no_rows(T.DFN8, "MLP-8_3x3mm_P0.65mm", ep=False))
+    res["sidecar"]["via"] = "batch"
+    run = object.__new__(L.Run)
+    run.out, run.rules = tmp_path, {}
+    job = {"url": "https://example.com/t.pdf", "where": "BOM", "part": "TESTPART", "key": "k1"}
+    run.reader = types.SimpleNamespace(assistant=None, cfg=D.settings({}), out=tmp_path, flush=lambda: {"k1": res},
+                                       answered=lambda *a: True)
+    wrote = []
+    run.put_fp = lambda *a, **k: wrote.append("fp")
+    run.put_sym = lambda *a, **k: wrote.append("sym")
+    st = {"name": "TESTPART", "footprint": None, "symbol": dict(LIB_SYMBOL), "review": [], "tried": [], "verify": [], "found": {}}
+    run.waiting = [(st, job, "fp", "sym")]
+    run.flush_datasheets()                            # must not raise
+    assert not wrote and st["footprint"] is None
+    assert any("DatasheetError" in x and D.ROWS_UNREAD in x for x in st["tried"]), st["tried"]
+
+
+def test_a_two_sided_name_or_a_checked_standard_package_still_gives_the_rows():
+    res = T.read(no_rows(T.DFN8))                      # "DFN" in the name: two sides (datasheet.two_sided, as before)
+    assert (res["spec"]["pins_left_right"], res["spec"]["pins_top_bottom"]) == (4, 0) and not DR.hold_reasons(res, True)
+    from ecadlib import stdparts as SP
+    name = next(n for n, p in sorted(SP.packages().items()) if p.get("package_type") == "qfn" and SP.footprint_for([n])[0] == n
+                and p["pins_left_right"] != p["pins_top_bottom"] and p["pins_top_bottom"] > 0 and not re.search(r"DFN|SON", n))
+    p = SP.spec(name)
+    tup = lambda d: (d["min"], d["nom"], d["max"]) if isinstance(d, dict) else d
+    t = dict(name=name, package_type="qfn", pin_count=p["pin_count"], pitch=p["pitch"],
+             **{k: tup(p[k]) for k in ("body_length", "body_width", "terminal_length", "terminal_width")})
+    if p.get("exposed_pad"):
+        t["exposed_pad"] = {k: tup(p["exposed_pad"][k]) for k in ("length", "width")}
+    res = T.read(t)
+    assert (res["spec"]["pins_left_right"], res["spec"]["pins_top_bottom"]) == (p["pins_left_right"], p["pins_top_bottom"]), name
+    assert any("were left blank" in r and name in r for r in res["needs_review"]), res["needs_review"]
+    assert not any(r.startswith(D.ROWS_UNREAD) for r in res["needs_review"])
+
+
+def test_the_second_read_is_asked_for_a_no_lead_packages_sides_and_they_are_compared():
+    # a DFN-8 read as a quad (2 pins on each of four sides, the split given): the pin count, pitch, body and terminal
+    # all agree, only the sides tell
+    wrong = dict(T.DFN8, pins_left_right=2, pins_top_bottom=2, name="QFN-8_3x3mm_P0.65mm")
+    wrong.pop("exposed_pad")
+    true = {k: v for k, v in T.DFN8.items() if k != "exposed_pad"}
+    res = T.read(copy.deepcopy(wrong))
+    if not DR.hold_reasons(res, True):
+        seen = {}
+        cc, job = checked(res, true, seen=seen)
+        assert seen["asked_rows"]
+        assert cc["status"] == "disagreed", (cc["status"], CC.summary_line(cc))
+        assert "pin_positions" in [d["field"] for c in cc["checks"] for d in c["disagreed"]]
+    # a right read, and a second read that gives no sides: they were not compared, so it is not agreed
+    res = T.read(copy.deepcopy(true))
+    cc, job = checked(res, true, rows=False)
+    assert cc["status"] == "self-checked" and "pin_positions" in cc["uncompared"], (cc["status"], cc.get("uncompared"))
+    assert put(res, job, LIB_SYMBOL)[0] == "verify"
+    cc, job = checked(T.read(copy.deepcopy(true)), true)
+    assert cc["status"] == "agreed" and "pin_positions" in cc["checks"][-1]["agreed"]
