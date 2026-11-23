@@ -637,9 +637,10 @@ def passive_kind(item, ln=None, search=""):
         if polar:                            # (KEMET T491, AVX TAJ, Panasonic EEE ...)
             return "CP"
         if mpn and not (code and code["kind"] == "C") and SP.mpn_size(mpn, par.get("Manufacturer", ""))[0] != "C" \
-                and not SP.says_unpolarized(desc, value, *cells) and not SP.names_c_chip(cells):
+                and not SP.says_unpolarized(desc, value, SP.cap_words(search), *cells):
             return None                      # a part number no MLCC code reads, nothing says ceramic: not known to be
-        return "C"                           # unpolarized, so no generic capacitor (stdparts.resolve says why)
+        return "C"                           # unpolarized, so no generic capacitor (stdparts.resolve says why). Round 3
+        #                                      (A8): KiCad's chip land name alone ('C_1206_3216Metric') does not say so
     if cat == "Inductors":
         return "L"
     if cat == "Diodes" and (fp.startswith("LED_") or SP.says_led(item.get("description"))):

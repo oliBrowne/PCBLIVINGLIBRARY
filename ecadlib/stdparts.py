@@ -1992,7 +1992,8 @@ def part_kind(category, footprint="", description="", designator=""):
 
 # polarized capacitors (tantalum, polymer, aluminium) by MPN: their case is not a chip-capacitor land and pin 1 is +
 POLAR_CAP = re.compile(r"^(T49[1-9]|T5[2-9]\d|TAJ|TPS[A-Z]|TPM|TRJ|TCJ|TCM|TCN|TCQ|TLJ|TPC|NOJ|NOS|F9[1-8]|293D|593D|298D|"
-                       r"T8[36]|TR3|TP3|EEE|EEV|EEH|EEF|EEU|ECA|\d+TP[A-Z]|\d+SVP|\d+SEP|UWT|UWX|UUD|UUX|UCD|PCJ|PCF|PLV)")
+                       r"T8[36]|TR3|TP3|EEE|EEV|EEH|EEF|EEU|ECA|\d+TP[A-Z]|\d+SVP|\d+SEP|UWT|UWX|UUD|UUX|UCD|PCJ|PCF|PLV|"
+                       r"TMCM|T58|CA45)")                 # (round 3, A8: Vishay TMCM / T58, the CA45 tantalums)
 
 
 def _kicad_own(t):
@@ -2157,7 +2158,10 @@ def resolve(texts, kind=None, mpn="", description="", value="", maker="", search
                 "chip land", "kicad_ref": None, "symbol": None, "sym_how": f"the description says {multi!r}: not a "
                 "two-pin part"}
     if kind == "C" and not _no_mpn(mpn) and not (code and code["kind"] == "C") and mpn_size(mpn, maker)[0] != "C" \
-            and not says_unpolarized(description, value, cap_words(search), *texts) and not names_c_chip(texts):
+            and not says_unpolarized(description, value, cap_words(search), *texts):
+        # round 3 (A8, the safe side while the owner is away): KiCad's own chip land name in the footprint cell
+        # ('C_1206_3216Metric') no longer counts as the BOM saying unpolarized: a tantalum of a series no list knows
+        # (Vishay TMCM / T58, CA45) on that name was released as a ceramic. names_c_chip is kept for the reversal.
         # review 2026-11-23 (1.12): the test is turned round. A list of polarized series always misses one (Vishay
         # TMCM / T58, AVX TACR, ROHM TCA ...), so a capacitor with a part number gets the unpolarized chip only when
         # something says it is ceramic: an MLCC code reads the whole number, or the line or the part search names a
