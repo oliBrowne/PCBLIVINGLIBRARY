@@ -231,6 +231,55 @@ def other_cells(line):
     return out
 
 
+# review 2026-11-23 round 2 (I3): columns that say how the part is bought or where it is used, not what it is. Two
+# lines of one value and footprint that differ only there are one part (a per-row price, stock, supplier name, the
+# sheet the row is on, what the resistor is for). A column that carries a number of the part ('Supplier Part Number',
+# 'Order Code') is not one of these: two order numbers are two parts.
+_ADMIN_HEADER = re.compile(
+    r"(?<![a-z])(?:price|cost|total|subtotal|amount|currency|stock|inventory|availab\w*|lead ?time|moq|"
+    r"supplier|distributor|vendor|seller|function|purpose|usage|used (?:for|in|on)|net|nets|net ?name|signal|"
+    r"sheet ?(?:name|file|path)|schematic|exclude from \w+|in bom|on board)(?![a-z])")
+_ADMIN_NOT = re.compile(r"(?<![a-z])(?:part|number|no|nr|pn|sku|code|id|ref|reference|item)(?![a-z])")
+# a column that names the schematic symbol the row was drawn with (KiCad's 'LibPart', 'Symbol', 'Lib Ref', 'Device')
+_SYMBOL_HEADER = re.compile(r"(?<![a-z])(?:lib\w*|symbol\w*|sym|device|schlib)(?![a-z])")
+_BARE_CELL = re.compile(r"(?i)\s*(?:yes|y|true|t|x|ja|j|oui|si|s\u00ed|\u2713|\u2714|\+|\d+(?:[.,]\d+)?)\s*")
+SAID_CELL_MAX = 1000                                              # characters of an unmapped cell kept on the line
+
+
+def admin_header(header):
+    """The header of a column that says how a part is bought or where it is used (price, stock, supplier name,
+    function, sheet), not what it is: never a difference between two lines of one part."""
+    nh = _hnorm(header)
+    return bool(_ADMIN_HEADER.search(nh)) and not _ADMIN_NOT.search(nh)
+
+
+def symbol_header(header):
+    """The header of a column that names the schematic symbol of the row ('LibPart', 'Symbol', 'LibRef')."""
+    return bool(_SYMBOL_HEADER.search(_hnorm(header)))
+
+
+def said_cells(line):
+    """Every text of a BOM line beside its Value and Description that may say what the part is, for the words that
+    say polarized or more than two terminals (stdparts.generic_passive_hold, librarian.passive_kind): the footprint
+    cell, the LibRef and the cells of the columns the reader maps to no field. A cell that is a bare yes / true / x /
+    + / number says nothing alone: it is read with its header ('Polarized: yes' -> 'yes Polarized', 'Pins: 8' ->
+    '8 Pins'; review 2026-11-23 round 2, I10). '0', 'no' and an empty cell say nothing; a bare cell of a column that
+    is about buying the part ('Lead Time: 4') is not read, nor a number under a value column ('Cap (pF): 5', 'Res')."""
+    out = [str(line.get(k) or "") for k in ("footprint", "libref")]
+    for h, v in other_cells(line).items():
+        for cell in v.split(" | "):
+            if _BARE_CELL.fullmatch(cell):
+                if not admin_header(h) and not re.fullmatch(r"\s*0+(?:[.,]0+)?\s*", cell) and not (
+                        re.search(r"\d", cell) and re.match(r"(?:cap|res|ind|c|r|l)\b", _hnorm(h))):
+                    out.append(f"{cell.strip()} " + re.sub(r"(?i)^\s*(?:no|nr|num|number|count|#)\b\.?\s*(?:of\s+)?", "", h))
+            elif re.search(r"[^\W\d_]", cell):
+                out.append(cell)
+            if re.search(r"(?i)(?<![a-z])(?:non|un)[ _-]?polar", str(h)) and \
+                    re.fullmatch(r"(?i)\s*(?:no|n|false|f|nein|non|0)\s*", cell):
+                out.append(f"polarized ({h}: {cell.strip()})")    # 'Non-polarized: no'
+    return out
+
+
 def mixed_size(cell, header):
     """A footprint cell from a column naming both systems ('Case (Metric / Imp.)') -> (footprint text, [note]). A code
     that is a size in one system only is read in that one ('1608' is the metric 0603, '0805' an inch 0805); one that

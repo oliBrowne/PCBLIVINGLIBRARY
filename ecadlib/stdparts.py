@@ -175,9 +175,9 @@ DESC_LAND = re.compile(r"(?<![A-Za-z])(reverse[ _-]?(?:mount\w*|gull\w*)|side[ _
 POLAR_WORD = re.compile(r"(?<![A-Za-z])(tant(?:al\w*|cap)?|tan(?![ ]?(?:δ|d(?![a-z])|delta))|Ta|c[ _-]?pol|pol|"
                         r"chimique|electrolytic\w*|elektrolyt\w*|elect?|elko|lytic|e[ _-]?cap|"
                         r"polymer|poly|alum(?:inum|inium)?|alu|niobium|poscap|os[ _-]?con|sp[ _-]?cap|hybrid|mno2|"
-                        r"super[ _-]?cap\w*|ultra[ _-]?cap\w*|EDLC|double[ _-]?layer|polari[sz]ed)(?![a-z])"
+                        r"super[ _-]?cap\w*|ultra[ _-]?cap\w*|EDLC|double[ _-]?layer|polari[sz]ed|polarity)(?![a-z])"
                         r"|\u94bd|\u7535\u89e3|\u805a\u5408\u7269", re.I)   # tantalum, electrolytic, polymer in Chinese
-NOT_POLAR = re.compile(r"(?<![A-Za-z])(non|un|bi)[ _-]?polar", re.I)
+NOT_POLAR = re.compile(r"(?<![A-Za-z])(?:(non|un|bi)[ _-]?polar|(?:no|without)[ _-]polarity)", re.I)
 
 
 def multi_terminal(*texts):

@@ -114,3 +114,47 @@ def test_a_hazard_word_under_a_repeated_header_is_held(tmp_path):
     st = _status(plan)
     assert sorted(n for n, (s, _) in st.items() if s == "ready") == ["CAP-0603-1uF", "RES-0603-10k"], st
     assert "'tantalum'" in st["CAP-1206-10uF"][1], st
+
+
+# ---------------------------------------------------------------- I10 the header's meaning for a bare cell
+def test_a_bare_cell_is_read_with_its_header():
+    for bom, word in [("Designator,Qty,Value,Footprint,Polarized\nC1,1,10uF,1206,yes\n", "Polarized"),
+                      ("Designator,Qty,Value,Footprint,Polarised\nC1,1,10uF,1206,TRUE\n", "Polarised"),
+                      ("Designator,Qty,Value,Footprint,Polarized\nC1,1,10uF,1206,1\n", "Polarized"),
+                      ("Designator,Qty,Value,Footprint,Polarized\nC1,1,10uF,1206,X\n", "Polarized"),
+                      ("Designator,Qty,Value,Footprint,Polarity\nC1,1,10uF,1206,+\n", "Polarity"),
+                      ("Designator,Qty,Value,Footprint,Tantalum\nC1,1,10uF,1206,Y\n", "Tantalum"),
+                      ("Designator,Qty,Value,Footprint,Pins\nR1,1,10k,1206,8\n", "8 Pins"),
+                      ("Designator,Qty,Value,Footprint,Elements\nR1,1,10k,1206,4\n", "4 Elements"),
+                      ("Designator,Qty,Value,Footprint,Array\nR1,1,10k,1206,yes\n", "Array"),
+                      ("Designator,Qty,Value,Footprint,No. of resistors\nR1,1,10k,1206,4\n", "4 resistors")]:
+        ln = _read(bom)[0]
+        cat = "Capacitors" if ln["designator"].startswith("C") else "Resistors"
+        why = SP.generic_passive_hold(cat, ln["value"], "", T.said_cells(ln))
+        assert why and word.lower() in why.lower(), (bom, T.said_cells(ln), why)
+    for bom in ["Designator,Qty,Value,Footprint,Polarized\nC1,1,10uF,1206,no\n",
+                "Designator,Qty,Value,Footprint,Polarized\nC1,1,10uF,1206,0\n",
+                "Designator,Qty,Value,Footprint,Polarized\nC1,1,10uF,1206,FALSE\n",
+                "Designator,Qty,Value,Footprint,Polarized\nC1,1,10uF,1206,-\n",
+                "Designator,Qty,Value,Footprint,Polarity\nC1,1,10uF,1206,none\n",
+                "Designator,Qty,Value,Footprint,Pins\nR1,1,10k,1206,2\n",
+                "Designator,Qty,Value,Footprint,Pads\nR1,1,10k,1206,2\n",
+                "Designator,Qty,Value,Footprint,Height\nR1,1,10k,1206,4\n",
+                "Designator,Qty,Value,Footprint,Lead Time\nR1,1,10k,1206,4\n",
+                "Designator,Qty,Value,Footprint,Cap (pF)\nC1,1,5p,0603,5\n",
+                "Designator,Qty,Value,Footprint,Res\nR1,1,4R,0603,4\n",
+                "Designator,Qty,Value,Footprint,Stock,Unit Price,Voltage,Tolerance\nC1,1,100n,0603,4,0.04,16,10\n",
+                "Designator,Qty,Value,Footprint,Dielectric,Rating\nC1,1,100n,0603,X7R,50V\n"]:
+        ln = _read(bom)[0]
+        cat = "Capacitors" if ln["designator"].startswith("C") else "Resistors"
+        assert SP.generic_passive_hold(cat, ln["value"], "", T.said_cells(ln)) is None, (bom, T.said_cells(ln))
+
+
+@lite
+def test_header_meaning_end_to_end(tmp_path):
+    plan = _run(tmp_path, "Designator,Qty,Value,Footprint,Polarized,Pins\nC1,1,10uF,1206,yes,2\nC2,1,1uF,0603,no,2\n"
+                          "R1,1,10k,1206,,8\nR2,1,4k7 1%,0805,no,2\nC3,1,100n,0402,,\n")
+    st = _status(plan)
+    assert sorted(n for n, (s, _) in st.items() if s == "ready") == ["CAP-0402-100n", "CAP-0603-1uF", "RES-0805-4k71%"], st
+    assert "Polarized" in st["CAP-1206-10uF"][1] and "8 Pins" in st["RES-1206-10k"][1], st
+    assert not _fp(plan["CAP-1206-10uF"]).startswith("standard:") and not _fp(plan["RES-1206-10k"]).startswith("standard:")
