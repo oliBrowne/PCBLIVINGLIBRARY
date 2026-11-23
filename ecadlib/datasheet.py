@@ -5816,7 +5816,10 @@ class Reader:
             if isinstance(e, APIError):
                 raise                                 # no answer came back: the part is retried next run
             raise CC.Unavailable(str(e)[:200])
-        msg = LRL.repair_message(msg, CC.output_schema(), p)
+        # (the schema that was asked: with pin_rows for a placed read and every no-lead package, which the plain schema
+        # would have the repair drop; review 2026-11-23, 1.8)
+        asked = ((body.get("output_config") or {}).get("format") or {}).get("schema") if isinstance(body.get("output_config"), dict) else None
+        msg = LRL.repair_message(msg, asked or CC.output_schema(), p)
         self._settle(key, model, msg, "sync")
         r = DR.attempt_record(job["part"], job.get("name"), model, msg, "sync", pages_sent, job.get("n_pages"), "cross-check")
         r["purpose"] = "cross_check"

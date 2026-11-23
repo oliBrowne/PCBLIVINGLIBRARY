@@ -176,8 +176,11 @@ def test_e2e_the_right_drawing_still_builds(tmp_path):
 
 def test_a_second_read_of_web_searched_pages_is_self_checked_not_agreed():
     from ecadlib import crosscheck as CC
-    agreed = {"source": "second read", "against": "second read (m)", "status": "agreed", "compared": ["pitch", "body_length"],
-              "agreed": ["pitch", "body_length"], "disagreed": [], "not_compared": []}
+    # (the record compares every number this QFP's pads stand on: since review 2026-11-23 1.7 an agreement on the
+    # pitch and body alone confirms no footprint built from the read)
+    fields = ["pin_count", "pitch", "body_length", "body_width", "terminal_length", "terminal_width"]
+    agreed = {"source": "second read", "against": "second read (m)", "status": "agreed", "compared": list(fields),
+              "agreed": list(fields), "disagreed": [], "not_compared": []}
     res = {"spec": {"name": "LQFP-100", "package_type": "qfp", "pin_count": 100, "pitch": 0.65, "body_length": 20.0,
                     "body_width": 14.0}, "symbol": {"pins": []}}
 

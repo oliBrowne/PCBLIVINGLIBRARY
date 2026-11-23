@@ -2110,6 +2110,8 @@ class Run:
             if held:                                  # checked land, no settle), a read that still fails a check
                 raise D.DatasheetError(held)          # that can build it wrong is held, nothing written
             st["review"].extend(pad_table_problems(res["spec"]))
+            if res.get("cross_check"):                # built from the read's own numbers: an agreement that compared
+                res = dict(res, cross_check=CC.built_from_read(res["cross_check"]))   # not all of them is none (review 2026-11-23, 1.7)
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
             except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: name it, not KeyError

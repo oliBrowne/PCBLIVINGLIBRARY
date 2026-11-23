@@ -66,7 +66,9 @@ def test_only_a_placed_read_asks_for_rows_and_its_key_is_its_own():
     assert "pin_rows" not in json.dumps(plain["output_config"]) and "pin_rows" in json.dumps(placed["output_config"])
     assert plain["system"][0]["text"] == CC.SYSTEM and placed["system"][0]["text"] != CC.SYSTEM
     assert placed["system"][0]["text"].startswith("You check the package")
-    assert CC.version() == "9ecaae641981"                       # every cached check of an unplaced read keeps its key
+    # (was pinned to "9ecaae641981" so cached checks kept their key; review 2026-11-23 1.7 added the terminal's length
+    # and width to what is asked, and an answer cached before that must not be taken as covering them: a new key)
+    assert CC.version() == "ba9329a8b013"
     assert CC.version(True) != CC.version()
 
 

@@ -34,15 +34,22 @@ def first(**over):
 
 
 def check_answer(pitch=0.5, pins=None, unit="mm", **pkg):
-    """An answer in the second read's own (smaller) schema."""
+    """An answer in the second read's own (smaller) schema. Since review 2026-11-23 (1.7, 1.8) it gives the terminal's
+    length and width and the pins on each side as well: an agreement that leaves a number the pads stand on
+    uncompared no longer releases a footprint built from the read (terminal_length=None, pin_rows=None leave them out)."""
     d = lambda lab, mn, nom, mx: {"label": lab, "min": mn, "nom": nom, "max": mx, "unit": unit, "page": 1, "figure": "outline"}
     p = {"name": QFN, "package_type": "qfn", "pin_count": 16, "pitch": pitch if isinstance(pitch, dict) else d("e", None, pitch, None),
          "body_length": d("D", 2.9, 3.0, 3.1), "body_width": d("E", 2.9, 3.0, 3.1), "lead_span": None,
-         "exposed_pad": {"length": d("D2", None, 1.68, None), "width": d("E2", None, 1.68, None)}, "unresolved": []}
+         "exposed_pad": {"length": d("D2", None, 1.68, None), "width": d("E2", None, 1.68, None)}, "unresolved": [],
+         "terminal_length": d("L", 0.3, 0.4, 0.5), "terminal_width": d("b", 0.18, 0.25, 0.3),
+         "pin_rows": [{"pins": [str(i) for i in range(a, a + 4)]} for a in (1, 5, 9, 13)]}
     p.update(pkg)
+    if p["pin_rows"] is None:
+        del p["pin_rows"]
     num = lambda v: "" if v is None else f"{v:g}"
     dims = [{"name": k, "label": r["label"], "unit": r["unit"], **{x: num(r[x]) for x in ("min", "nom", "max")}}
-            for k, r in [(k, p.pop(k)) for k in ("pitch", "body_length", "body_width", "lead_span")] if r]
+            for k, r in [(k, p.pop(k)) for k in ("pitch", "body_length", "body_width", "lead_span", "terminal_length",
+                                                 "terminal_width")] if r]
     ep = p.pop("exposed_pad") or {}
     dims += [{"name": f"exposed_pad.{k}", "label": r["label"], "unit": r["unit"], **{x: num(r[x]) for x in ("min", "nom", "max")}}
              for k, r in ep.items() if r]
@@ -98,8 +105,9 @@ def test_second_read_agrees_is_cached_costed_and_reported():
         (c,) = cc["checks"]
         assert c["source"] == "second read" and {"pin_count", "pitch", "body_length", "ep_length", "pins", "pin_names"} <= set(c["agreed"])
         body = api.calls[-1][3]
-        assert D.check_shape(check_answer(), CC.output_schema()) is None          # the fixture is schema-shaped
-        assert body["output_config"]["format"]["schema"] == CC.output_schema() and body["max_tokens"] == CC.CHECK_MAX_TOKENS
+        # (a no-lead read: the second read is asked for the pins on each side too, review 2026-11-23 1.8)
+        assert D.check_shape(check_answer(), CC.output_schema(True)) is None      # the fixture is schema-shaped
+        assert body["output_config"]["format"]["schema"] == CC.output_schema(True) and body["max_tokens"] == CC.CHECK_MAX_TOKENS
         assert pages_order(body) == ["page three", "page two", "page one"]          # same pages, reverse order
         assert "Part: TESTPART" in body["messages"][0]["content"][1]["text"]
         led = TR.ledger(d)
@@ -224,7 +232,8 @@ def test_modes_off_always_skipped_and_unchecked():
     with tempfile.TemporaryDirectory() as d:                                       # always: the table AND a second read
         api = API(lambda k, m, b: soic if k == "read" else check_answer(
             name="SOIC-8_3.9x4.9mm_P1.27mm", package_type="gullwing", pin_count=8, pitch={"label": "e", "min": None, "nom": 50, "max": None, "unit": "mil", "page": 1, "figure": "outline"},
-            body_length=None, body_width=None, exposed_pad=None, pins=[{"num": str(i), "name": f"P{i}"} for i in range(1, 9)]))
+            body_length=None, body_width=None, exposed_pad=None, terminal_length=None, terminal_width=None, pin_rows=None,
+            pins=[{"num": str(i), "name": f"P{i}"} for i in range(1, 9)]))
         res = read(d, api, rules={"datasheet": {"cross_check": "always", "cross_check_model": "claude-sonnet-5-5"}},
                    package="SOIC-8_3.9x4.9mm_P1.27mm")
         cc = res["sidecar"]["cross_check"]

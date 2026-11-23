@@ -1108,6 +1108,12 @@ FAILED = re.compile(r"^(schema:|self-check:|symbol:|footprint_gen\.build failed|
 #     channel's pin (the numbered-bank check) is held here: it builds a symbol wired to the wrong channel.
 SOFT_FAILED = re.compile(r"^(schema:|self-check:(?!.*(?:too far apart to build from|would be built without its exposed pad))|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
                          r"symbol:(?!.* bank has no ))", re.I)
+# One build line is not soft (review 2026-11-23, 1.7): a build that succeeds with pads that touch, when the pads were
+# placed from the read's dimensions (an SMA's terminal read twice was written with its two pads 0 mm apart, and the
+# librarian builds that read as it is). A pad table is the maker's land copied pad by pad, where pads that meet can be
+# the drawing's own (a power package's drain leads on its pad, a 0.35 mm ball grid: eval gate lands scored right): that
+# stays advice, and the release check holds the footprint for a person.
+SHORTS = re.compile(r"^footprint_gen\.build failed: the pads would short", re.I)
 SYMBOL_FAILED = re.compile(r"^symbol:", re.I)
 
 
@@ -1118,6 +1124,8 @@ _EP_SMALL = re.compile(r"^exposed_pad\.\w+: ([\d.]+) mm is implausibly small for
 
 
 def _soft(line, spec=None):
+    if SHORTS.match(line) and not (spec or {}).get("pad_table"):
+        return False
     if SOFT_FAILED.match(line):
         return True
     m = _EP_SMALL.match(line)
