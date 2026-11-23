@@ -220,6 +220,32 @@ CODES = {
                                   "Check which size the part is, then fix the BOM's footprint or its part number.",
                                   [r"^(?:verify: )?footprint: the land built is (?P<have>\S+) \(\S+\) but the part number "
                                    r"(?P<mpn>\S+) is an (?P<said>\S+):"]),
+    "librarian.source_package_clash": ("The footprint built is {have}, but the {where} names {said}.",
+                                       "Check which package the part has in its datasheet, then fix the BOM line or "
+                                       "pick the right footprint.",
+                                       [r"^(?:verify: )?footprint: the land built is (?:the )?(?P<have>.+?) but the "
+                                        r"(?P<where>BOM footprint|BOM description|BOM value|part search package|"
+                                        r"part search description|part number) (?:names|says) (?P<said>.+?) \("]),
+    "librarian.land_kind_clash": ("The part is filed under {cat}, but its footprint {land} is another kind's land.",
+                                  "Check which part the BOM line is, then fix its value, description or footprint.",
+                                  [r"^(?:verify: )?footprint: the part is filed under (?P<cat>\w+) but the land built "
+                                   r"is (?P<land>\S+), another kind's land"]),
+    "librarian.value_prefix": ("The Value {value} is spelled like another kind of part, but the part is filed under {cat}.",
+                               "Check which part the BOM line is, then fix its value or description.",
+                               [r"^(?:verify: )?value: Value (?P<value>.+?) is spelled with a \w+ prefix but the part "
+                                r"is filed under (?P<cat>\w+)"]),
+    "librarian.value_clash": ("The Value {value} does not match the value in the {where}.",
+                              "Check which value the part is, then fix the BOM's value or description.",
+                              [r"^(?:verify: )?value: Value (?P<value>.+?) but the (?P<where>BOM description|"
+                               r"part search description) .* names another value"]),
+    "librarian.kind_word_clash": ("The part is filed under {cat}, but the BOM description calls it a {said}.",
+                                  "Check which part the BOM line is, then fix its value or description.",
+                                  [r"^(?:verify: )?part kind: filed under (?P<cat>\w+) but the BOM description .* "
+                                   r"names an? (?P<said>\w+): check which part the BOM line is"]),
+    "librarian.maker_clash": ("The BOM names the maker {bom}, but {said}.",
+                              "Check whose part it is, then fix the BOM's maker or part number.",
+                              [r"^(?:verify: )?maker: the BOM names (?P<bom>.+?) but (?P<said>the part (?:number|search) "
+                               r".+?): check whose part it is"]),
     "librarian.thermistor_type": ("Nothing says whether this thermistor is NTC or PTC, so no symbol was chosen.",
                                   "Write NTC or PTC in the BOM line's description (or add the part number), then run again.",
                                   [r"^(?:verify: )?thermistor: NTC or PTC is not said"]),
