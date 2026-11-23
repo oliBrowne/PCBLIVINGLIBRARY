@@ -1689,6 +1689,9 @@
 "output_schema",
 "own_tab_land",
 "pad_checks",
+"pad_layout",
+"pads_alike",
+"pads_alike.<locals>.turn",
 "pads_read",
 "parse",
 "pdf_bars",
@@ -1705,6 +1708,7 @@
 "system",
 "table_fits",
 "task_text",
+"turn",
 "version"
 ],
 "ecadlib/datasheet.py":[
