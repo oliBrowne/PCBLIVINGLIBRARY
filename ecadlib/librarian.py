@@ -570,10 +570,10 @@ def _hold_lost_copper(st, name, notes):
         st.setdefault("verify", []).append(held)
 
 
-def own_symbol_ref(item, ln):
+def own_symbol_ref(item, ln, search=""):
     """One shared symbol per kind: a polarized capacitor never takes the plain capacitor's file, nor a ferrite bead the
     inductor's. Sets item's Library Ref to its own shared one (every run, a resumed part too) -> the ref."""
-    kind, ref = passive_kind(item, ln), item["symbol"]["ref"]
+    kind, ref = passive_kind(item, ln, search), item["symbol"]["ref"]
     if kind == "CP" and ref == AX.GENERIC_SYMBOL["Capacitors"]:
         ref = item["symbol"]["ref"] = POLARIZED_SYMBOL
     elif kind == "L" and ref == AX.GENERIC_SYMBOL["Inductors"] and Run.ferrite(item, ln):
@@ -581,7 +581,7 @@ def own_symbol_ref(item, ln):
     return ref
 
 
-def passive_kind(item, ln=None):
+def passive_kind(item, ln=None, search=""):
     """R / C / CP / L / LED for a part that takes the generic passive symbol and a chip land by package, else None.
     The description decides too: a part it calls an array, a common-mode choke, 4-terminal or RGB is not a two-pin
     passive (None: it is looked up by its part number like any other part), and a capacitor it calls tantalum /
@@ -591,7 +591,10 @@ def passive_kind(item, ln=None):
     A resistor or capacitor with NO part number is a generic passive only when its Value and Description are
     understood whole (stdparts.generic_passive_hold); else item['generic_hold'] says which word held it (the release
     check shows it) and the part is no generic passive. A capacitor WITH a part number is the unpolarized 'C' only
-    when something says ceramic (an MLCC code reads the number, or the line names a ceramic dielectric)."""
+    when something says ceramic (an MLCC code reads the number, or the line names a ceramic dielectric).
+    Round 2 (I8): search is the part search's description of the part. KiCad's own chip land name in the footprint
+    cell ('C_1206_3216Metric') counts as the BOM saying unpolarized, but a word that says polarized from ANY source
+    beats it: the Value, the Description, any other cell, a header ('Polarized: yes') and the part search ('CAP TANT')."""
     from . import mpn_decode as MD, stdparts as SP
     from .bom_triage import placeholder_mpn
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
@@ -608,7 +611,7 @@ def passive_kind(item, ln=None):
     code = MD.decode(mpn) if mpn else None
     polar = cat == "Capacitors" and bool(
         fp.startswith("CP_") or any(SP._strip_lib(c).strip().startswith("CP_") for c in [cells[0]] + own)
-        or SP.says_polarized(desc, value, *cells)
+        or SP.says_polarized(desc, value, *cells) or SP.says_polarized(SP.cap_words(search))
         or (mpn and SP.POLAR_CAP.match(SP._norm(mpn))) or (code and code["kind"] == "CP"))
     if ln is not None:                       # decided from the BOM line; a caller with no line keeps what it decided
         hold = None if mpn or polar else SP.generic_passive_hold(cat, value, desc, cells)
@@ -922,8 +925,9 @@ class Run:
         dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
-        own_symbol_ref(item, ln)
-        kind, fp_name, sym_name = passive_kind(item, ln), item["footprint"]["ref"], item["symbol"]["ref"]
+        search = str(row.get("src_description") or "")       # what the part search calls the part ('CAP TANT ...')
+        own_symbol_ref(item, ln, search)
+        kind, fp_name, sym_name = passive_kind(item, ln, search), item["footprint"]["ref"], item["symbol"]["ref"]
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         sensor_hold(st, item, ln, row, kind)
@@ -3018,7 +3022,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         if not it["footprint"]["ref"]:
             it["footprint"]["ref"] = AL.lib_name(it["name"])
         fpr, st = _fingerprint(it, ln, row), state.get(it["name"])
-        own_symbol_ref(it, ln)                 # before a resumed part is skipped: the same Library Ref as when built
+        own_symbol_ref(it, ln, str(row.get("src_description") or ""))   # before a resumed part is skipped: the same
+        #                                                                 Library Ref as when built
         redo = refresh is not None and (not refresh or it["name"] in refresh)
         stale = bool(st) and (old.get(it["name"]) or {}).get("status") == "held" and not _built_now(st, rules)
         if stale and st.get("key") == fpr and _done(st, out) and not redo:

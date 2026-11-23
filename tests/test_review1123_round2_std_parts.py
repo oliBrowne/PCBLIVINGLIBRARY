@@ -235,3 +235,65 @@ def test_lines_that_differ_in_what_the_part_is_are_still_held(tmp_path):
         d.mkdir()
         plan = _run(d, bom)
         assert len(plan) == 1 and all(i["status"] != "ready" for i in plan.values()), (bom, _status(plan))
+
+
+# ---------------------------------------------------------------- I8 a polarized word beats KiCad's chip land name
+def _run_said(tmp_path, monkeypatch, said, text):
+    """As _run, with the part search's description of each MPN in said (the search itself is not run offline)."""
+    real = T.triage
+
+    def fake(lines, *a, **k):
+        rows = real(lines, *a, **k)
+        for r in rows:
+            if r["mpn"] in said:
+                r.update(src_description=said[r["mpn"]], src_description_from="digikey")
+        return rows
+    monkeypatch.setattr(T, "triage", fake)
+    return _run(tmp_path, text)
+
+
+KICAD_HEAD = "Reference,Value,Footprint,MPN,Manufacturer,Description,Comment,Polarized,LibPart\n"
+C1206 = "Capacitor_SMD:C_1206_3216Metric"
+
+
+@lite
+def test_a_polarized_word_from_any_source_beats_the_kicad_chip_name(tmp_path, monkeypatch):
+    said = {"T58A0106M016C0200": "CAP TANT POLY 10UF 16V 1206", "TMCMA1A106MTRF": "CAP TANT 10UF 10V 20% 1206"}
+    plan = _run_said(tmp_path, monkeypatch, said, KICAD_HEAD +
+                     f"C1,10uF,{C1206},T58A0106M016C0200,Vishay,,,,\n"            # the part search says tantalum polymer
+                     f"C2,10uF,{C1206},TMCMA1A106MTRF,Vishay,,,,\n"               # the part search says tantalum
+                     f"C3,10uF tantalum,{C1206},TMCMA1C106MTRF,Vishay,,,,\n"      # the Value
+                     f"C4,10uF,{C1206},TMCMA1D106MTRF,Vishay,CAP TANT 10UF,,,\n"  # the Description
+                     f"C5,10uF,{C1206},TMCMA1E106MTRF,Vishay,,tantalum,,\n"       # another cell
+                     f"C6,10uF,{C1206},TMCMA1V106MTRF,Vishay,,,yes,\n"            # a header
+                     f"C7,10uF,{C1206},TMCMA0J106MTRF,Vishay,,,,Device:C_Polarized\n")   # the symbol's name
+    assert len(plan) == 7, list(plan)
+    for n, i in plan.items():
+        assert i["status"] != "ready" and "C_1206_3216Metric" not in _fp(i), (n, i["status"], _fp(i), _why(i))
+        assert i["symbol"]["ref"] == L.POLARIZED_SYMBOL, (n, i["symbol"])
+
+
+def test_passive_kind_reads_the_part_search():
+    item = {"folder": "Components/Capacitors", "description": "", "symbol": {"ref": "Capacitor"},
+            "footprint": {"ref": "C_1206_3216Metric", "kicad": "Capacitor_SMD:C_1206_3216Metric"},
+            "parameters": [{"name": "Manufacturer Part Number", "value": "T58A0106M016C0200"}, {"name": "Value", "value": "10uF"}]}
+    ln = {"mpn": "T58A0106M016C0200", "value": "10uF", "footprint": "Capacitor_SMD:C_1206_3216Metric"}
+    assert L.passive_kind(dict(item), ln) == "C"                   # what remains: nothing anywhere says polarized
+    assert L.passive_kind(dict(item), ln, "CAP TANT POLY 10UF 16V 1206") == "CP"
+    assert L.passive_kind(dict(item), ln, "CAP CER 10UF 16V X5R 1206") == "C"
+    assert L.passive_kind(dict(item), dict(ln, other_cells="Polarized: yes")) == "CP"
+    assert L.passive_kind(dict(item), dict(ln, other_cells="Polarized: no")) == "C"
+
+
+@lite
+def test_ceramics_on_the_kicad_chip_name_stay_ready(tmp_path, monkeypatch):
+    said = {"UMK107B7104KA-T": "CAP CER 0.1UF 50V X7R 0603"}
+    c0603 = "Capacitor_SMD:C_0603_1608Metric"
+    plan = _run_said(tmp_path, monkeypatch, said, KICAD_HEAD +
+                     f"C1,100n,{c0603},UMK107B7104KA-T,Taiyo Yuden,,,,Device:C\n"
+                     f"C2,1uF,{c0603},GRM188R61C105KA93D,Murata,,,no,Device:C\n"
+                     f"C3,2.2uF,{c0603},EMK107BJ225KA-T,Taiyo Yuden,,,,Device:C_Small\n"   # the remaining case: an unread
+                     f"C4,10n,{c0603},,,,,,Device:C\n")                                    # number, KiCad's chip name
+    st = _status(plan)
+    assert len(plan) == 4 and all(s == "ready" for s, _ in st.values()), st
+    assert all(_fp(i) == "standard:Capacitor_SMD:C_0603_1608Metric" for i in plan.values()), {n: _fp(i) for n, i in plan.items()}
