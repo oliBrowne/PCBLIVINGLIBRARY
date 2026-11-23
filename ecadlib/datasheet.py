@@ -5454,8 +5454,11 @@ class Reader:
                     attempts.append({"url": prov["local"], "where": "datasheet folder", "error": how})
                     data, prov = None, None
                 elif bad:                             # read, flagged: its review line keeps the part with a person
-                    prov["unnamed"] = (f"{prov['local']} saved by your assistant (datasheet/assistant/pdfs) doesn't "
-                                       f"mention {mpn or part}")
+                    # ("untold": no text layer, or too little text to tell by. A link's PDF like that is read on the
+                    # link's word; this file has only an AI agent's choice behind it. Review 2026-11-23, round 2)
+                    prov["unnamed"] = f"{prov['local']} saved by your assistant (datasheet/assistant/pdfs) " + (
+                        f"doesn't mention {mpn or part}" if bad[0] == "unnamed" else
+                        f"has no text to tell by that it is {mpn or part}'s (a scan?)")
         note = folder_problem(self.cfg.get("folder")) if data is None else None
         tries = [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))] if data is None else []
         for url, where in tries:                      # http, then https
@@ -5571,7 +5574,9 @@ class Reader:
     def _not_this_part(data, mpn):
         """PdfStore.fetch's test of a downloaded PDF, for a file taken on its name: ("other", why) for a notice or a
         certificate (not_a_datasheet), ("unnamed", None) when its first pages do not name the part (mentions_part says
-        False; a PDF with no text to tell by is not refused, as a download is not), else None."""
+        False), ("untold", None) when it cannot be told (no text layer, text that does not read, a part number too
+        short to look for: the file is not refused, as a download is not, but the caller says so), None when they name
+        it."""
         from . import ds_route as DR
         try:
             other = not_a_datasheet(DR.page_texts(data, 1), NEVER_DATASHEET)
@@ -5581,8 +5586,8 @@ class Reader:
             if said is False and (pdf_pages(data) or 0) > MENTION_BIG:
                 said = mentions_part(DR.page_texts(data, MENTION_DEEP), mpn)
         except Exception:                             # a PDF whose text does not read: it cannot be told
-            return None
-        return ("unnamed", None) if said is False else None
+            return "untold", None
+        return None if said else ("unnamed", None) if said is False else ("untold", None)
 
     def _folder_pdf(self, part, urls, kinds, attempts, folder=None):
         """The part's PDF from the [datasheet] folder (or `folder`: the assistant's pdfs folder) when a file there is

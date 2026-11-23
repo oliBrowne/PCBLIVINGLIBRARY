@@ -2,7 +2,8 @@
 the inputs that must be held and the ordinary parts that must stay ready.   python3 -m tests.test_review1123_round2_second_read
   I1  a small terminal read half or 1.5 times is a disagreement (the 0.10 mm tolerance let 0.1 and 0.3 pass for 0.2)
   I2  a square four-sided QFN of 12 pins or more with blank rows gets a quarter per side again; 8 pins stay held
-  I4  an unresolved entry that names nothing built ("not applicable", "weight") does not keep a part with a person"""
+  I4  an unresolved entry that names nothing built ("not applicable", "weight") does not keep a part with a person
+  I6  a PDF the assistant saved that has no text to tell the part by gets the "check it is this part's datasheet" line"""
 import copy, io, json, tempfile
 
 from ecadlib import crosscheck as CC, datasheet as D, ds_assistant as DA, ds_route as DR, librarian as L
@@ -185,6 +186,90 @@ def test_an_unresolved_entry_about_the_drawing_or_a_built_field_still_waits_for_
     # one harmless entry beside one that admits a guess: the guess still counts
     res = T.read(dict(copy.deepcopy(t), unresolved=["weight", "drawing blurred", "not applicable"]))
     assert DR.open_unresolved(res["spec"]) == ["drawing blurred"]
+
+
+# ---------------------------------------------------------------- I6: an assistant-saved PDF with no text to tell by
+def scan_pdf(ops="0.5 w 50 700 m 300 700 l S"):
+    """A one-page PDF with a line drawn and no text layer (a scanned datasheet)."""
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Contents 4 0 R >>",
+            b"<< /Length %d >>\nstream\n" % len(ops) + ops.encode() + b"\nendstream"]
+    out, offs = io.BytesIO(), []
+    out.write(b"%PDF-1.4\n")
+    for i, o in enumerate(objs, 1):
+        offs.append(out.tell())
+        out.write(b"%d 0 obj\n" % i + o + b"\nendobj\n")
+    x = out.tell()
+    out.write(b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1) + b"".join(b"%010d 00000 n \n" % o for o in offs))
+    out.write(b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, x))
+    return out.getvalue()
+
+
+def _saved(d, data, part="LM358DR"):
+    """The job of `part` whose only PDF is `data`, saved by the assistant as <MPN>.pdf (the link cannot be downloaded)."""
+    rd = TC.reader(d, R.ASSIST)
+    rd.offline = True
+    DA.pdf_folder(rd.assistant).mkdir(parents=True, exist_ok=True)
+    (DA.pdf_folder(rd.assistant) / DA.pdf_name(part)).write_bytes(data)
+    return rd, rd.job(part, [(R.DEAD, "BOM")], "SOIC-8", mpn=part)
+
+
+def test_not_this_part_says_when_it_cannot_tell():
+    text = lambda *lines: TC.TR.pdf_lines([list(lines)])
+    assert D.Reader._not_this_part(scan_pdf(), "LM358DR") == ("untold", None)
+    assert D.Reader._not_this_part(text("Datasheet"), "LM358DR") == ("untold", None)          # too little text to tell by
+    assert D.Reader._not_this_part(b"%PDF-1.4 not a pdf at all", "LM358DR") == ("untold", None)
+    assert D.Reader._not_this_part(text("TL072 dual JFET operational amplifier", "Package outline SOIC-8"), "LM358DR") == ("unnamed", None)
+    assert D.Reader._not_this_part(text("LM358DR dual operational amplifier", "Package outline SOIC-8"), "LM358DR") is None
+    assert D.Reader._not_this_part(text("LM358 dual operational amplifier", "Package outline SOIC-8"), "LM358DR") is None
+
+
+def test_a_scanned_pdf_the_assistant_saved_keeps_the_part_with_a_person():
+    api = TA._api()
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd, job = _saved(d, scan_pdf())
+        assert "saved by your assistant" in job["prov"]["where"], job["prov"]
+        said = job["prov"].get("unnamed") or ""
+        assert "no text" in said and "LM358DR" in said and "doesn't mention" not in said, job["prov"]
+        try:
+            rd.read_now(job)
+            raise AssertionError("no AssistantPending")
+        except D.AssistantPending:
+            pass
+        (DA.folder(rd.assistant, job) / "answer.json").write_text(json.dumps(TD.GOOD), encoding="utf-8")
+        rd, job = _saved(d, scan_pdf())
+        res = rd.read_now(job)
+        line = [r for r in res["needs_review"] if "check it is this part's datasheet" in r]
+        assert line and "no text" in line[0] and "taken on its file name" in line[0], res["needs_review"]
+        assert L.UNSURE_READ.search(line[0])          # no release with no person, whatever agrees with that PDF
+        res["cross_check"] = {"status": "agreed", "mode": "auto", "checks": [{"status": "agreed", "against": "second read (m)",
+                                                                              "source": "second read"}]}
+        assert L.read_confirmed(res, job, ["footprint"]) is None
+    assert api.calls == []
+
+
+def test_a_pdf_the_assistant_saved_that_names_the_part_gets_no_such_line():
+    api = TA._api()
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd, job = _saved(d, TC.TR.pdf_lines([["LM358DR dual operational amplifier", "Package outline SOIC-8"]]))
+        assert "saved by your assistant" in job["prov"]["where"] and "unnamed" not in job["prov"], job["prov"]
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):      # the family's sheet: LM358 names LM358DR
+        rd, job = _saved(d, TC.TR.pdf_lines([["LM358, LM258, LM2904 dual operational amplifiers", "Package outline SOIC-8"]]))
+        assert "unnamed" not in job["prov"], job["prov"]
+    assert api.calls == []
+
+
+def test_a_scanned_pdf_in_the_persons_own_folder_is_read_as_before():
+    """The person put that file there for this part: it was never tested to name the part, and still is not."""
+    api = TA._api()
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as own, TB.patched(api):
+        from pathlib import Path
+        (Path(own) / "LM358DR.pdf").write_bytes(scan_pdf())
+        rd = TC.reader(d, {"datasheet": {"reader": "assistant", "folder": own}})
+        rd.offline = True
+        job = rd.job("LM358DR", [(R.DEAD, "BOM")], "SOIC-8", mpn="LM358DR")
+        assert "in the datasheet folder" in job["prov"]["where"] and "unnamed" not in job["prov"], job["prov"]
+    assert api.calls == []
 
 
 if __name__ == "__main__":
