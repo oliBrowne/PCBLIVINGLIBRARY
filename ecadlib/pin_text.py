@@ -948,11 +948,11 @@ _SAME_PACKAGE = ({"SOIC", "SO", "SOP"}, {"DPAK", "TO252", "TO252AA", "CPT3"}, {"
 
 def _spaced(text, m):
     """Is 'TO 92' (the family, a space or a line break, the number) a package name and not words? The family in
-    capitals, the number one JEDEC gives a TO outline, and no number before it ('-55 TO 150', '-65 TO 92': a
-    range)."""
+    capitals, the number one JEDEC gives a TO outline, and no number before it on its line ('-55 TO 150', '-65 TO
+    92': a range)."""
     if m.group(4) == "TO" and m.group(6) not in _TO_NUMBERS:
         return False
-    return not re.search(r"\d\s*(?:°\s*C|[A-Za-z%]{0,2})\s*$", text[:m.start()])
+    return not re.search(r"\d[ \t]*(?:°[ \t]*C|[A-Za-z%]{0,2})[ \t]*\Z", text[:m.start()])     # on its own line
 
 
 def package_words(text):

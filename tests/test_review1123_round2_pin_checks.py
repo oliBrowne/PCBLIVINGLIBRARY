@@ -34,6 +34,7 @@ def test_package_words_in_other_spellings():
     assert words("TO-92MOD") == {"TO92MOD"} and words("TO-92MOD/SOT-23") == {"TO92MOD", "SOT23"}
     assert words("TO-92Package") == {"TO92"} and words("SOT-23package outline") == {"SOT23"}     # a word run on
     assert words("E-Line package") == {"ELINE"} and words("SPT") == {"SPT"} and words("soic") == {"SOIC"}
+    assert words("VCEO 40 V\nTO 92 package") == {"TO92"}                    # a heading under a line that ends in a value
     # ranges, sentences and part numbers are no packages
     for plain in ("Storage from -55 TO 150", "TJ, Tstg -55 TO +150", "Tstg -65 TO 92", "up to 220 V", "equal to 92 %",
                   "DO3316P-103", "SC18IS602", "refer to 5 V", "SPTR", "the dip switch so 8 bits"):
