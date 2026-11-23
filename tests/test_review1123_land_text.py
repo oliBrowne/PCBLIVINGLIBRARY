@@ -32,8 +32,14 @@ def test_a_turned_read_made_of_the_printed_gap_is_not_agreed():
     assert status(CLF, land(2.0, 2.2, 5.9, (7.2, 6.9)), "CLF7045T-100M-H") == "agreed"
     v = LT.check(CLF, land(2.2, 2.0, 6.1, (7.2, 6.9)), "CLF7045T-100M-H")
     assert v["status"] == "unchecked" and "turned" in v["why"], v
-    # a 5.2 x 5.0 mm inductor, true land 1.4 x 2.2 with a 3.0 gap
-    assert status(GAP, land(1.4, 2.2, 4.4, (5.2, 5.0))) == "agreed"
+    # a 5.2 x 5.0 mm inductor, true land 1.4 x 2.2 with a 3.0 gap. 2026-11-23 (review round 3): the true read agreed
+    # here because pad length and gap share a line. One pad length on the gap's line shows nothing (the pad width
+    # beside the pads at the gap's height looks the same to the turned read); TDK's drawing above prints the pad
+    # length on both pads, which does
+    assert status(GAP, land(1.4, 2.2, 4.4, (5.2, 5.0))) == "unchecked"
+    both_pads = {1: GAP[1] + [run(315, 528, "1.4")]}
+    assert status(both_pads, land(1.4, 2.2, 4.4, (5.2, 5.0))) == "agreed"
+    assert status(both_pads, land(2.2, 1.4, 5.2, (5.2, 5.0))) == "unchecked"
     v = LT.check(GAP, land(2.2, 1.4, 5.2, (5.2, 5.0)))
     assert v["status"] == "unchecked" and "turned" in v["why"], v
 
@@ -63,11 +69,15 @@ def test_a_land_the_body_allows_one_way_only_still_agrees():
     assert v["status"] == "unchecked" and "turned" in v["why"], v
 
 
-def test_the_texts_direction_shows_which_size_runs_along_the_pads():
-    # pad length and gap printed turned (along a vertical dimension line), the width printed level: only the read that
-    # takes the two turned numbers along the pads' line agrees
+def test_the_texts_direction_does_not_show_which_size_runs_along_the_pads():
+    # pad length and gap printed turned (along a vertical dimension line), the width printed level. 2026-11-23 (review
+    # round 3): the true read agreed here. The direction of three labels shows nothing: a drawing that turns the
+    # pad-length label alone gives the turned read "its pad length and the gap level, its width turned"
     pages = {1: [TITLE, run(300, 520, "1.4", True), run(310, 548, "3.0", True), run(270, 590, "2.2")]}
-    assert status(pages, land(1.4, 2.2, 4.4, (5.2, 5.0))) == "agreed"
+    assert status(pages, land(1.4, 2.2, 4.4, (5.2, 5.0))) == "unchecked"
+    assert status(pages, land(2.2, 1.4, 5.2, (5.2, 5.0))) == "unchecked"
+    pages = {1: [TITLE, run(269.4, 558.8, "1.4", True), run(287, 540, "3.0"), run(320.2, 540, "2.2")]}
+    assert status(pages, land(1.4, 2.2, 4.4, (5.2, 5.0))) == "unchecked"
     assert status(pages, land(2.2, 1.4, 5.2, (5.2, 5.0))) == "unchecked"
 
 

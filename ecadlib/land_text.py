@@ -15,11 +15,13 @@ whether the read's land is made of those numbers:
 
 A read that turned the pads 90 degrees (pad length and width swapped, the centre distance worked out from the printed
 gap or span with its own wrong pad length) is made of the same three printed numbers, so "pad length + gap" and
-"pad length + span" count only when that turned land is ruled out (2026-11-23, review): by where the numbers are
-printed (pad length and gap on one dimension line, or pad length and gap / span in one text direction and the pad
-width in the other: _layout; a number that only shares a height or a column with the gap is not on its line),
-or, when the places show nothing, because the turned land is no land of this body by the wide limits of
-fits_body(sure=True). Otherwise: no verdict.
+"pad length + span" count only when that turned land is ruled out (2026-11-23, review): because the drawing prints
+the pad length on both pads, either side of the gap on the gap's line (_layout), or because the turned land is no
+land of this body by the wide limits of fits_body(sure=True). Where three single numbers stand, and which way their
+text runs, rules nothing out (round 3 of that review: every such rule says the same of the turned read in the mirror
+placement, and two of them were beaten by ordinary drawings). Gap + span, and a centre distance with the gap or the
+span, give the pad length themselves and leave no such question; pad length + centre distance agrees only when the
+same numbers do not agree turned (check). Otherwise: no verdict.
 
 Only two-pad lands are checked (spec["land"] of a two-pin part, or a two-pad pad_table), the numbers are compared in
 mm as printed (a drawing in inches only is not converted: no verdict), within half the last printed digit.
@@ -311,43 +313,40 @@ def _symmetry_says_otherwise(region, used):
     return False
 
 
-def _on_one_line(a, s, x, edge, chain):
-    """True when the places of three numbers show that a is a size along the line s (a gap) is measured on, and x is
-    not. Text turned with its dimension line: a and s are printed in one direction and x in the other. Or, all three
-    printed in one direction, a and s stand on one dimension line (the same y, or the same x, within 2 pt, 6 pt or
-    more apart), x is on neither s's row nor its column, and a is nearer to s than a number beside the pads would be.
-    The last is what tells a dimension line from its look-alike: a gap printed in the gap with the pad WIDTH beside
-    the pads at the same height, and the pad length over a pad. There the number over the pad (x) marks the pad's
-    centre, the pad reaches edge times as far from the gap's number, and the number beside it is farther still; so
-    a at 0.8 x edge times x's distance or more could be that width, and the places show nothing.
-    edge: 1 + pad length / centre distance of the land that takes x for the pad length. chain: s is a gap (a span's
-    dimension line runs over both pads, so no pad length is printed on it)."""
-    if a[4] == s[4] != x[4]:
-        return True
-    if not chain or not a[4] == s[4] == x[4]:
-        return False
-    same = lambda p, q, k: abs(p[k] - q[k]) <= 2
-    if same(x, s, 2) or same(x, s, 3):
-        return False                                # the width on the gap's own row or column: either could be along
-    for k, j in ((3, 2), (2, 3)):                   # k: the coordinate a line shares, j: the one running along it
-        d = abs(a[j] - s[j])
-        if same(a, s, k) and d >= 6 and d < 0.8 * edge * abs(x[j] - s[j]):
-            return True
+def _on_both_pads(length, gap, region):
+    """True when the drawing prints length's number once more, the two either side of gap's number on one line with
+    it: all three printed in one direction, on one row or one column (within 2 pt), the gap's number between the two
+    and no farther from their middle than a fifth of their distance (a chain 'L | gap | L' has it at the middle).
+    Only a pad's own size is labelled once per pad with the gap between: this is no question of where one label
+    stands. What it rests on: a drawing does not print the pad WIDTH twice, beside either pad at the gap's height
+    with the gap's number between (a size is dimensioned once; it is the chain along the pads that repeats). Such a
+    drawing would read as the turned land's chain."""
+    for other in region:
+        if other is length or other[1] != length[1] or not other[4] == length[4] == gap[4]:
+            continue
+        for k, j in ((3, 2), (2, 3)):               # k: the coordinate a line shares, j: the one running along it
+            sep = abs(other[j] - length[j])
+            if abs(length[k] - gap[k]) <= 2 and abs(other[k] - gap[k]) <= 2 and sep >= 12 and \
+                    abs(gap[j] - (other[j] + length[j]) / 2) <= 0.2 * sep:
+                return True
     return False
 
 
-def _layout(length, spacing, width, pads, turned, role):
-    """What the places of three printed numbers say about a read that takes them for the pad length, the gap or span
-    (role) and the pad width: "kept" when they show the pad length along the spacing's line (_on_one_line) and do
-    not show the same of the width; "turned" when it is the other way round; None when they show nothing or both
-    (a stacked span, a table row, labels on leader lines, a gap and a width at one height). pads, turned: the read's
-    land and the land with its pad turned 90 degrees, as (along, across, centre distance).
-    2026-11-23 (review): the printed numbers alone agree just as well with the pads turned. Round 2 of that review:
-    "the same x OR the same y" was taken for one dimension line, so the gap in the gap and the pad width beside the
-    pads at the same height made the turned read "kept" and the true one "turned"."""
-    chain = role == "gap"
-    kept = _on_one_line(length, spacing, width, 1 + turned[0] / turned[2], chain)
-    other = _on_one_line(width, spacing, length, 1 + pads[0] / pads[2], chain)
+def _layout(length, spacing, width, region, role):
+    """What the drawing shows about a read that takes three of its numbers for the pad length, the gap or span (role)
+    and the pad width: "kept" when the pad length is printed on both pads either side of the gap on the gap's line
+    (_on_both_pads) and the width is not; "turned" when it is the other way round; None otherwise. region: the
+    drawing's numbers.
+    2026-11-23 (review): the printed numbers alone agree just as well with the pads turned. Rounds 2 and 3 of that
+    review: rules about where three bare numbers stand ("pad length and gap on one line", "nearer than a number
+    beside the pads would be", "pad length and gap in one text direction, the width in the other") were each beaten
+    by another ordinary layout: the pad-length label pushed outside its pad, or printed turned alone. They must be:
+    a rule that reads three places says of the turned read in the mirror placement what it says of the true one.
+    So one label's place and direction count for nothing; a span has no such line (its dimension line runs over both
+    pads)."""
+    if role != "gap":
+        return None
+    kept, other = _on_both_pads(length, spacing, region), _on_both_pads(width, spacing, region)
     return None if kept == other else "kept" if kept else "turned"
 
 
@@ -399,16 +398,19 @@ def check_region(region, pads, line_text=None, part=None, size=None, can=False):
                         if r1 == "pad length" and r2 in ("gap", "span"):
                             # 2026-11-23 (review): a read that swapped the pad's two sizes and worked the centre
                             # distance out from this gap / span is made of the same three numbers. It is ruled out
-                            # by where they are printed, or by the turned land not fitting the body
+                            # by the pad length printed on both pads (_layout), or by the turned land not fitting
+                            # the body; never by where three single numbers stand (round 3)
                             turned = (across, along, centre - along + across if r2 == "gap" else centre + along - across)
-                            lay = _layout(t1, t2, tw, pads, turned, r2)
+                            lay = _layout(t1, t2, tw, region, r2)
                             if lay == "turned" or (lay is None and not (size and fits_body(turned, size, can, sure=True))):
                                 why = why or (f"the printed numbers fit the pads turned 90 degrees as well (pad "
                                               f"{across:g} mm along the pads' line and {along:g} mm across it, "
                                               f"with the same {r2}), and " +
-                                              ("they are printed as that turned land would be"
+                                              ("the drawing prints that turned land's pad length on both pads"
                                                if lay == "turned" else
-                                               "neither their places nor the body size show which way the pads lie"))
+                                               "neither the body size nor a pad length printed on both pads either "
+                                               "side of the gap shows which way the pads lie (where single numbers "
+                                               "stand does not)"))
                                 continue
                         if _symmetry_says_otherwise(region, {r1: t1, r2: t2}):
                             why = why or ("the drawing prints one size on both pads and another between them, and "

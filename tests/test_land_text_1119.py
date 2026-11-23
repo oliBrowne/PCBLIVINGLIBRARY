@@ -32,11 +32,11 @@ def test_a_land_whose_sizes_the_drawing_prints_agrees():
     v = LT.check(vishay(), land(1.93, 2.286, 3.709), "IHLP1616BZER2R2M11")
     assert v["status"] == "unchecked" and "turned" in v["why"], v
     # the same drawing with the pad width printed turned, as a drawing that turns its text with the dimension line
-    # prints it: the places show which size is which
+    # prints it. 2026-11-23 (review round 3): this agreed ("the places show which size is which"). They do not: a
+    # drawing that turns the pad-length label alone, to fit it in, gives the turned read the same three directions
     pages = {1: [r if r[2] not in ("0.090", "[2.286]") else r[:4] + (True,) for r in vishay()[1]]}
     v = LT.check(pages, land(1.93, 2.286, 3.709), "IHLP1616BZER2R2M11")
-    assert v["status"] == "agreed" and v["page"] == 1, v
-    assert v["printed"] == {"pad length": "1.930", "span": "5.639", "pad width": "2.286"}, v
+    assert v["status"] == "unchecked" and "turned" in v["why"], v
 
 
 def test_wrong_reads_of_the_same_drawing_are_never_agreed():

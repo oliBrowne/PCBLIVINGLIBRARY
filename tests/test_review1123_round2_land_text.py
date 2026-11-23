@@ -133,15 +133,18 @@ def test_the_turned_0603_is_not_agreed_because_the_true_land_breaks_a_rule_of_th
         assert statuses(runs, (l, w, g), body) == ("unchecked", "unchecked")
 
 
-# ------------------------------------------------------------------ the true read agrees where the layout shows it
+# ------------------------------------------------------------------ what the layout was taken to show
+# 2026-11-23 (review round 3): three of the next four agreed with the true read for where three single numbers stand
+# or which way their text runs. Each such rule was beaten by another ordinary drawing (the pad-length label pushed
+# outside its pad, or printed turned alone), so only the pad length printed on both pads still counts
 def test_pad_length_and_gap_on_one_dimension_line_with_the_width_beside():
     # "1.4 | 3.0" under the left pad and the gap, the width beside the right pad at the pads' height
     for (l, w, g), body in (IND, SMA):
         runs = [run(259, 528, f"{l}"), run(287, 528, f"{g}"), run(335, 551, f"{w}")]
-        assert statuses(runs, (l, w, g), body) == ("agreed", "unchecked"), (l, w, g)
+        assert statuses(runs, (l, w, g), body) == ("unchecked", "unchecked"), (l, w, g)
         # the dimension line above the pads, the width beside the left pad
         runs = [run(315, 575, f"{l}"), run(287, 575, f"{g}"), run(238, 551, f"{w}")]
-        assert statuses(runs, (l, w, g), body) == ("agreed", "unchecked"), (l, w, g)
+        assert statuses(runs, (l, w, g), body) == ("unchecked", "unchecked"), (l, w, g)
 
 
 def test_the_pad_length_on_both_pads_with_the_width_over_one_of_them():
@@ -155,17 +158,17 @@ def test_pads_one_over_the_other_with_the_dimension_line_beside_them():
     # the review's layout C: pad length and gap in one column right of the pads, the width above the upper pad
     for (l, w, g), body in (IND, SMA):
         runs = [run(340, 560, f"{l}"), run(340, 540, f"{g}"), run(300, 580, f"{w}")]
-        assert statuses(runs, (l, w, g), body) == ("agreed", "unchecked"), (l, w, g)
+        assert statuses(runs, (l, w, g), body) == ("unchecked", "unchecked"), (l, w, g)
 
 
 def test_text_turned_with_its_dimension_line():
     # the review's layout B: the width printed turned, pad length and gap level at two heights
     (l, w, g), body = IND
     runs = [run(259, 528, f"{l}"), run(287, 514, f"{g}"), run(240, 545, f"{w}", True)]
-    assert statuses(runs, (l, w, g), body) == ("agreed", "unchecked")
+    assert statuses(runs, (l, w, g), body) == ("unchecked", "unchecked")
     # and the other way: pads one over the other, pad length and gap turned, the width level
     runs = [run(330, 566, f"{l}", True), run(342, 540, f"{g}", True), run(287, 590, f"{w}")]
-    assert statuses(runs, (l, w, g), body) == ("agreed", "unchecked")
+    assert statuses(runs, (l, w, g), body) == ("unchecked", "unchecked")
 
 
 # ------------------------------------------------------------------ every ordinary placement, both ways
@@ -190,29 +193,29 @@ def drawings(true, scales=(6.0, 9.0, 12.0)):
 
 
 def test_no_ordinary_drawing_agrees_with_the_turned_read():
-    agreed = lines = 0
+    # 2026-11-23 (review round 3): the true read agreed in the 48 of these drawings that have pad length and gap on
+    # one dimension line. Three single numbers are no verdict now, wherever they stand
     for true, body in (IND, SMA, CHIP):
         for what, runs, on_line in drawings(true):
             a, b = both(runs, true, body)
             assert b["status"] == "unchecked", (true, what, b)
+            assert a["status"] == "unchecked", (true, what, a)
+
+
+def test_the_same_drawings_with_the_pad_length_on_both_pads():
+    # the pad length labelled on the other pad as well, on the first one's line: the true read agrees exactly where
+    # that line is the gap's, the turned read never
+    agreed = lines = 0
+    for true, body in (IND, SMA, CHIP):
+        l, w, g = true
+        for what, runs, on_line in drawings(true):
+            first, gap = runs[0], runs[1]
+            second = run(first[0], 2 * gap[1] - first[1], f"{l}") if what[-1] else \
+                run(2 * gap[0] - first[0], first[1], f"{l}")
+            a, b = both(runs + [second], true, body)
+            assert b["status"] == "unchecked", (true, what, b)
             if true is not CHIP[0]:
                 lines += on_line
                 agreed += a["status"] == "agreed"
-                # the true read agrees exactly where pad length and gap are on one dimension line
                 assert (a["status"] == "agreed") == on_line, (true, what, a)
     assert agreed == lines and agreed >= 48, (agreed, lines)
-
-
-def test_the_places_never_say_kept_both_ways():
-    # whatever the three places are, the read and its turned twin cannot both be shown by them
-    spots = [(x, y) for x in (250, 252, 275, 300, 340) for y in (500, 502, 520, 560)]
-    for vl in (False, True):
-        for vw in (False, True):
-            for pl in spots:
-                for ps in spots:
-                    for pw in spots:
-                        L, S, W = (1.4, "1.4", *pl, vl), (3.0, "3.0", *ps, False), (2.2, "2.2", *pw, vw)
-                        fwd = LT._layout(L, S, W, (1.4, 2.2, 4.4), (2.2, 1.4, 5.2), "gap")
-                        back = LT._layout(W, S, L, (2.2, 1.4, 5.2), (1.4, 2.2, 4.4), "gap")
-                        assert not (fwd == "kept" and back == "kept"), (L, S, W)
-                        assert (fwd == "kept") == (back == "turned"), (L, S, W, fwd, back)
