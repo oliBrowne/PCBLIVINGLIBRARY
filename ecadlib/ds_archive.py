@@ -35,10 +35,10 @@ _NO_NETWORK = re.compile(r"proxy CONNECT refused|ProxyError|ERR_PROXY|ERR_TUNNEL
 _SAME_AGAIN = re.compile(r"doesn't mention |: not downloaded \(|larger than \d+ MB|redirected to .*, not (used|followed)")
 
 
-def asked(url):
+def asked(url, resolve=True):
     """Why a link is never sent to the Archive, or None when it may be: a public http(s) link with nothing private
     in it (datasheet.unsafe_download's rule for a web search's link, plus intranet names, user names and signed
-    queries)."""
+    queries). resolve=False: from the link's text alone, no name lookup."""
     from .datasheet import unsafe_download
     try:
         u = urlsplit(str(url))
@@ -51,7 +51,7 @@ def asked(url):
         return f"{host or 'no host'} is not a public site's name"
     if any(_SECRET_Q.search(k) for k, _ in parse_qsl(u.query, keep_blank_values=True)):
         return "the link's query holds a key or a signature"
-    return unsafe_download(url, public=True)
+    return unsafe_download(url, public=True, resolve=resolve)
 
 
 def worth(error):

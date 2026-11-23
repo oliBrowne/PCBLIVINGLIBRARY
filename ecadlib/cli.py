@@ -61,6 +61,8 @@ Every other command:
     ecadlib rebuild   LIB_DIR [--check]           rebuild a library from library.lock.json offline; report drift
     ecadlib testpack  --out DIR                   small Altium + KiCad test pack (6 parts) + CHECKLIST.md for a person to open
     ecadlib parity    plan.json [--kicad DIR] [--altium DIR] | pair A B | survey   KiCad and Altium files of every part match
+    ecadlib store     status|get|share|report ... shared parts store: look parts up, write records to share (sends nothing)
+    ecadlib store-repo ...                        for the people who run a shared store: check and merge record files
 
 `ecadlib <command> -h` shows that command's options. -q / --quiet prints only the outcome, -v / --verbose every
 detail; colour only on a terminal (NO_COLOR=1 or ECADLIB_COLOR=never turns it off). --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
@@ -126,6 +128,8 @@ COMMANDS = {
     "rebuild": ("ecadlib.rebuild", "rebuild a library from its library.lock.json offline; --check reports any drift"),
     "parity": ("ecadlib.parity", "read back the KiCad and the Altium library and compare every part (pads, drills, 3D, pins, fields)"),
     "stdparts": ("ecadlib.stdparts", "standard packages and pinouts without Claude: resolve, list, bench vs KiCad, BOM coverage"),
+    "store": ("ecadlib.store_cli", "shared parts store: status, look a part up, write your parts to share (sends nothing), report one"),
+    "store-repo": ("ecadlib.store_cli:store_repo_main", "for the people who run a shared store: check and merge record files"),
 }
 
 

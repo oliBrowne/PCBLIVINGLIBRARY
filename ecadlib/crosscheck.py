@@ -61,7 +61,7 @@ LABEL = {"pin_count": "pin count", "pitch": "pitch", "body_length": "body length
          "lead_span": "lead span", "ep_length": "exposed pad length", "ep_width": "exposed pad width",
          "has_ep": "exposed pad", "package_type": "package type", "pins": "pin numbers", "pin_names": "pin names",
          "pin_positions": "pins on each side", "terminal_length": "terminal length", "terminal_width": "terminal width",
-         "inner_span": "inner span"}
+         "inner_span": "inner span", "pads": "each pad's place and size"}
 
 
 class Held(Exception):
@@ -124,6 +124,7 @@ def critical(spec):
     out["table_fits"] = table_fits(spec)
     out["sides"] = sides(spec)
     out["pads_read"] = pads_read(spec)
+    out["pad_layout"] = pad_layout(spec)
     n = out["pin_count"]
     if out["package_type"] == "qfn" and n:                   # the rows as footprint_gen._qfn lays them out
         from . import footprint_gen as FG
@@ -209,6 +210,95 @@ def pads_read(spec):
     return bool(table.get("pads") or table.get("arrays"))
 
 
+PAD_TOL = 0.05     # mm: a pad's place and size as two reads of one land drawing give it (printed to 0.01 .. 0.05)
+
+
+MAX_TABLE_PADS = 400     # a pad table past this is not laid out for the check (an answer's "count": 3000000)
+
+
+def _table_size(t):
+    """How many pads a pad table lists (its arrays' counts too), or None when it is not a table of pads."""
+    pads, arrays = t.get("pads") or [], t.get("arrays") or []
+    if not isinstance(pads, list) or not isinstance(arrays, list) or not all(isinstance(a, dict) for a in arrays):
+        return None
+    counts = [a.get("count") for a in arrays]
+    if not all(isinstance(c, int) and not isinstance(c, bool) and c >= 0 for c in counts):
+        return None
+    return len(pads) + sum(counts)
+
+
+def pad_layout(spec):
+    """A pad table's pads as built (footprint_adv.table_layout: mm, KiCad frame, the view and axes applied, each pad's
+    quarter-turn rotation applied to its size), centred on the pads' extent so two reads with other origins compare:
+    [(number, x, y, w, h)], or None, and then no pad is checked (the part stays held, #279) for: no table, one that
+    does not build, one too big, or one whose pads say more than a place and a rectangle: a hole (THT or NPTH: no
+    drill is compared), a polygon (only its extent would be), a pad turned other than by quarter turns, a pad with no
+    number (which pin goes where is not said: VEML7700, hand check 2026-11-23)."""
+    t = spec.get("pad_table") if isinstance(spec, dict) else None
+    if not isinstance(t, dict) or not (_table_size(t) or 0) or _table_size(t) > MAX_TABLE_PADS:
+        return None
+    from . import footprint_adv as FA
+    try:
+        pads = FA.table_layout(spec)[0]
+    except (KeyError, TypeError, ValueError, AttributeError, ZeroDivisionError, RecursionError):
+        return None
+    out = []
+    for p in pads:
+        rot = p.get("rot") or 0
+        if p.get("kind") != "smd" or p.get("poly") or not _num(rot) or float(rot) % 90:
+            return None
+        if not str(p.get("num") or "").strip() or not all(_num(p.get(k)) for k in ("x", "y", "w", "h")):
+            return None
+        w, h = (p["h"], p["w"]) if round(float(rot) / 90) % 2 else (p["w"], p["h"])
+        out.append((str(p["num"]), p["x"], p["y"], w, h))
+    pads = [{"x": x, "y": y, "w": w, "h": h} for _, x, y, w, h in out]
+    if not pads:
+        return None
+    x0 = (min(p["x"] - p["w"] / 2 for p in pads) + max(p["x"] + p["w"] / 2 for p in pads)) / 2
+    y0 = (min(p["y"] - p["h"] / 2 for p in pads) + max(p["y"] + p["h"] / 2 for p in pads)) / 2
+    return [(n, x - x0, y - y0, w, h) for n, x, y, w, h in out]
+
+
+def pads_alike(a, b):
+    """Two reads' pad layouts (pad_layout) -> (agree, first, second) for the check record: the same pad numbers, and
+    every pad within PAD_TOL of the other read's pad of that number in place and size, the second read's footprint
+    turned by 0, 90, 180 or 270 degrees as a whole (a drawing printed the other way round), never mirrored (a bottom
+    view read as top: its pads would land on the other side)."""
+    na, nb = sorted(p[0] for p in a), sorted(p[0] for p in b)
+    if na != nb:
+        return False, f"{len(a)} pads ({', '.join(na[:12])})", f"{len(b)} pads ({', '.join(nb[:12])})"
+    worst = None
+    for q in range(4):
+        def turn(p, q=q):
+            n, x, y, w, h = p
+            for _ in range(q):
+                x, y, w, h = -y, x, h, w
+            return n, x, y, w, h
+        tb = [turn(p) for p in b]
+        gap = lambda u, v: max(abs(u[1] - v[1]), abs(u[2] - v[2]), abs(u[3] - v[3]), abs(u[4] - v[4]))
+        # both ways round: two pads of one number (a switch's 1, 1, 2, 2) each need a pad of the other read
+        off = max(max(min(gap(p, o) for o in tb if o[0] == p[0]) for p in a),
+                  max(min(gap(o, p) for p in a if p[0] == o[0]) for o in tb))
+        if worst is None or off < worst[0]:
+            worst = (off, q)
+    # each read is centred on its own pads, so an outer pad PAD_TOL x 2 off moves the centre and reads PAD_TOL off:
+    # every pad-to-pad distance must agree too (review 2026-11-23: a 2.0 mm span against 2.1 agreed)
+    if worst[0] <= PAD_TOL + 1e-9:
+        n2 = {}
+        for p in b:
+            n2.setdefault(p[0], []).append(p)
+        da = lambda u, v: math.hypot(u[1] - v[1], u[2] - v[2])
+        for i, u in enumerate(a):
+            for v in a[i + 1:]:
+                if not any(abs(da(u, v) - da(u2, v2)) <= PAD_TOL + 1e-9 for u2 in n2[u[0]] for v2 in n2[v[0]]):
+                    return False, f"pads {u[0]} and {v[0]} {da(u, v):.2f} mm apart", \
+                        f"{min(da(u2, v2) for u2 in n2[u[0]] for v2 in n2[v[0]]):.2f} mm apart"
+    if worst[0] <= PAD_TOL + 1e-9:
+        return True, f"{len(a)} pads", f"{len(b)} pads" + (f", turned {90 * worst[1]} degrees" if worst[1] else "")
+    show = lambda ps: "; ".join(f"{n} {w:g}x{h:g} at ({x:g}, {y:g})" for n, x, y, w, h in sorted(ps)[:6])
+    return False, show(a), show(b) + f" (off by up to {worst[0]:.2f} mm)"
+
+
 PADS_UNCHECKED = ("the pads were copied from the land drawing pad by pad and no source checked them (a second read "
                   "compares the body, the pin count and the pin names, not each pad's place and size)")
 
@@ -218,7 +308,8 @@ def pad_checks(checks, first):
     second read that agreed on every number a pad table that fits the package was checked against (table_fits)."""
     return [c for c in checks if not c.get("same_pages") and (
         c.get("source") == "pdf land text" or
-        first.get("table_fits") and c.get("source") == "second read" and set(TABLE_CHECKED_BY) <= set(c.get("agreed") or ()))]
+        first.get("table_fits") and c.get("source") == "second read" and set(TABLE_CHECKED_BY) <= set(c.get("agreed") or ()) or
+        c.get("source") == "second read" and "pads" in (c.get("agreed") or ()))]
 
 
 def table_fits(spec):
@@ -570,6 +661,11 @@ def compare(first, second, kind="read"):
         # librarian's own hold (stdparts.sides_fit)
         theirs = tuple(second.get("rows") or ())
         rec["rows_agree"] = tuple(first["rows"]) == theirs or bool(turned) and tuple(first["rows"]) == theirs[::-1]
+    if kind == "read" and first.get("pad_layout"):     # pads the read placed one by one, against the second read's
+        if second.get("pad_layout"):
+            put("pads", *pads_alike(first["pad_layout"], second["pad_layout"]))
+        else:
+            rec["not_compared"].append("pads")
     dims = [f for f in rec["compared"] if f in DIMS]
     _type_only(rec, first, second if kind == "read" else None)
     rec["status"] = "disagreed" if rec["disagreed"] else "agreed" if rec["compared"] and (dims or kind == "table") \
@@ -688,6 +784,11 @@ Find the mechanical package drawing (and its dimension table) for the requested 
 - every pin number with its name as printed (one entry per pin number; the exposed pad is pin_count + 1).
 Do not convert units, compute, round or fill in values from memory or JEDEC norms. If a value cannot be read with confidence, set it to null and name it in unresolved."""
 
+# asked only when the first read copied the maker's land pad by pad (pads_read), so every other check keeps its key
+SYSTEM_PADS = """
+
+Also give pad_table_json: the recommended land pattern (PCB footprint / land pattern / solder pad layout) drawing of this part as a JSON object written as text, with "unit" ("mm", "in" or "mil" as printed), "view" ("top" unless the drawing says bottom view), "y_axis": "up", "origin": "center", and "pads": a list of {"number", "x", "y", "w", "h"}, one entry per pad, the pad's centre and its width (along x) and height (along y) in that unit. Number each pad only as the pages show it: the number printed at the pad, or the pin number a pinout drawing in the same view puts at that place. Where the pages do not show which pad is which pin, give every pad "number": "" (do not number pads in reading order or from a photo). Work every value out from the drawing's own printed dimensions, not from memory; "" if the pages print no land pattern."""
+
 # asked when the first read placed the pins itself (pin_positions, pin_sides) and for every no-lead package, whose row
 # split places its pads (review 2026-11-23, 1.8)
 SYSTEM_ROWS = """
@@ -702,7 +803,7 @@ CHECK_DIMS = ("pitch", "body_length", "body_width", "lead_span", "exposed_pad.le
               "terminal_length", "terminal_width")
 
 
-def output_schema(positions=False):
+def output_schema(positions=False, pads=False):
     """No nullable fields (the API takes at most 16 union-typed ones per schema): dimensions as named records with
     min / nom / max as printed text ("" = blank), pin_count 0 when the datasheet does not give it."""
     from . import datasheet as D
@@ -723,17 +824,22 @@ def output_schema(positions=False):
                                "description": "pin numbers along this side, in order"}})
         pkg = dict(pkg, properties=dict(pkg["properties"], pin_rows={"type": "array", "items": row}),
                    required=[*pkg["required"], "pin_rows"])
+    if pads:
+        pkg = dict(pkg, properties=dict(pkg["properties"], pad_table_json=txt(
+            "the land pattern drawing as a JSON object in text (see the instructions); \"\" if none is printed")),
+                   required=[*pkg["required"], "pad_table_json"])
     pin = D._obj({"num": {"type": "string"}, "name": {"type": "string"}})
     return D._obj({"package": pkg, "pins": {"type": "array", "items": pin},
                    "embedded_instructions": {"type": "array", "items": {"type": "string"}}})
 
 
-def system(positions=False):
-    return SYSTEM + (SYSTEM_ROWS if positions else "")
+def system(positions=False, pads=False):
+    return SYSTEM + (SYSTEM_ROWS if positions else "") + (SYSTEM_PADS if pads else "")
 
 
-def version(positions=False):
-    return hashlib.sha256((json.dumps(output_schema(positions), sort_keys=True) + system(positions)).encode()).hexdigest()[:12]
+def version(positions=False, pads=False):
+    return hashlib.sha256((json.dumps(output_schema(positions, pads), sort_keys=True)
+                           + system(positions, pads)).encode()).hexdigest()[:12]
 
 
 def task_text(part, package=None):
@@ -741,16 +847,16 @@ def task_text(part, package=None):
             "Return the critical package numbers and the pin numbers with their names.")
 
 
-def build_request(source, part, package, model, effort, fallback=True, positions=False):
+def build_request(source, part, package, model, effort, fallback=True, positions=False, pads=False):
     """A Messages-shaped request for the second read (any provider: ecadlib.llm adapts it like the first read)."""
     from . import datasheet as D
     kind, val = source
     src = ({"type": "base64", "media_type": "application/pdf", "data": base64.b64encode(val).decode()}
            if kind == "base64" else {"type": "url", "url": D.api_url(val)})
-    body = {"model": model, "max_tokens": CHECK_MAX_TOKENS, "system": [{"type": "text", "text": system(positions)}],
+    body = {"model": model, "max_tokens": CHECK_MAX_TOKENS, "system": [{"type": "text", "text": system(positions, pads)}],
             "messages": [{"role": "user", "content": [{"type": "document", "source": src},
                                                       {"type": "text", "text": task_text(part, package)}]}],
-            "output_config": D.output_config(model, effort, output_schema(positions))}
+            "output_config": D.output_config(model, effort, output_schema(positions, pads))}
     headers = {"content-type": "application/json", "anthropic-version": D.API_VERSION}
     if fallback and model in D.FALLBACK_MODELS:
         body["fallbacks"] = "default"
@@ -766,7 +872,7 @@ def parse(msg):
         return _parse(msg)
     except Unavailable:
         raise
-    except (TypeError, ValueError, AttributeError, KeyError) as e:
+    except (TypeError, ValueError, AttributeError, KeyError, RecursionError) as e:
         raise Unavailable(f"the second read has the wrong shape ({type(e).__name__}: {str(e)[:120]})")
 
 
@@ -807,6 +913,18 @@ def _parse(msg):
             spec[k] = pkg[k]
     if isinstance(pkg.get("pin_sides"), dict):
         spec["pin_sides"] = pkg["pin_sides"]
+    pt = pkg.get("pad_table_json")                    # the land drawing pad by pad, asked when the read placed its pads
+    if isinstance(pt, str) and pt.strip() and len(pt) < 200_000:
+        try:
+            pt = json.loads(pt)
+        except (ValueError, RecursionError):
+            pt = None
+    try:                                              # a broken table drops the pads only, never the whole second read
+        if isinstance(pt, dict) and (pt.get("pads") or pt.get("arrays")) and not D._non_finite(pt) \
+                and 0 < (_table_size(pt) or 0) <= MAX_TABLE_PADS:
+            spec["pad_table"] = pt
+    except RecursionError:
+        pass
 
     def mm(raw):
         if not isinstance(raw, dict) or raw.get("unit") not in D.TO_MM:
@@ -888,11 +1006,12 @@ def second_read(reader, job, first, first_pins, model):
     rec = {"source": "second read", "against": f"second read ({cm})", "model": cm}
     try:
         source, order, note = _source(job)
-        positions = bool(first.get("sides") or first.get("built_sides"))
-        headers, body = build_request(source, job["part"], job.get("package"), cm, reader.effort, positions=positions)
+        positions, pads = bool(first.get("sides") or first.get("built_sides")), bool(first.get("pads_read"))
+        headers, body = build_request(source, job["part"], job.get("package"), cm, reader.effort, positions=positions,
+                                      pads=pads)
         src_hash = hashlib.sha256(source[1] if source[0] == "base64" else ("url" + source[1]).encode()).hexdigest()
         key = "check-" + D.ResultCache.key(src_hash, cm, job["part"], job.get("package"), order or [0, None],
-                                           f"{reader.effort}|check:{version(positions)}")
+                                           f"{reader.effort}|check:{version(positions, pads)}")
         msg, via = reader.check_message(job, cm, headers, body, key, len(order) if order else None)
         second, pins, instr = parse(msg)
     except Unavailable as e:

@@ -1,0 +1,45 @@
+name: nightly re-check
+
+# Every night every record is rebuilt and checked again with the newest released ecadlib, so a fix to the checks also
+# cleans the store. A record that no longer passes fails this run and opens (or comments on) one issue that lists the
+# `ecadlib store-repo withdraw` commands. Nothing is withdrawn or pushed automatically: a maintainer runs them.
+# It installs the NEWEST ecadlib on purpose (not ecadlib-version.txt, which pins the pull-request check): a new release
+# that would fail a record shows up here before a maintainer bumps the pin.
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  recheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade ecadlib
+      - uses: actions/checkout@v4
+        with:
+          path: store
+          persist-credentials: false
+      - name: Re-check every record
+        id: check
+        run: |
+          set -o pipefail
+          ecadlib store-repo verify store --all --maintainer 2>&1 | tee report.txt
+      - name: Open or update the issue
+        if: failure() && steps.check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          title="Nightly re-check: records no longer pass"
+          { echo "The nightly re-check with ecadlib $(ecadlib --version 2>/dev/null) found records that no longer pass."
+            echo; echo '```'; tail -c 60000 report.txt; echo '```'; } > body.md
+          n="$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')"
+          if [ -n "$n" ]; then gh issue comment "$n" --body-file body.md
+          else gh issue create --title "$title" --body-file body.md; fi

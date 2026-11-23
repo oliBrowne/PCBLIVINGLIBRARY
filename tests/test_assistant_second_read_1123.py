@@ -148,3 +148,22 @@ def test_a_changed_check_is_a_new_folder_and_a_utf16_answer_holds():
         (c / "answer.json").write_text(json.dumps(TC.check_answer()), encoding="utf-16")
         _, got = TA._read(d, api)
         assert _second_read(got)["status"] == "unchecked", _second_read(got)
+
+
+def test_the_first_reads_pad_table_copied_into_a_fresh_answer_is_refused():
+    from ecadlib import crosscheck as CC, datasheet as DS
+    t = {"unit": "mm", "pads": [{"number": "1", "x": -1, "y": 0, "w": 0.5, "h": 1}, {"number": "2", "x": 1, "y": 0, "w": 0.5, "h": 1}]}
+    with tempfile.TemporaryDirectory() as d:
+        first = Path(d) / "P-0123456789"
+        here = Path(d) / "P-check-0123456789abcdef"
+        first.mkdir(), here.mkdir()
+        (first / "answer.json").write_text(json.dumps({"package": {"other_json": json.dumps({"pad_table": t})}}))
+        got = {"package": {"package_type": "custom", "dims": [], "pad_table_json": json.dumps(t)}}
+        body = {"output_config": {"format": {"schema": {"properties": {"package": {"properties": {
+            "package_type": {}, "dims": {}, "pad_table_json": {}}}}}}}}
+        msg = {"content": [{"type": "text", "text": json.dumps(got)}]}
+        try:
+            DS._own_second_read(msg, body, d, here, {})
+            raise AssertionError("not refused")
+        except CC.Unavailable as e:
+            assert "pad table" in str(e), e

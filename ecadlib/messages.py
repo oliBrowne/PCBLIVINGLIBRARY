@@ -46,7 +46,7 @@ def counts(statuses, order=ORDER):
     return ", ".join(f"{n[w]} {w}" for w in keys) or "nothing yet"
 
 
-SOURCES = {"kicad": "KiCad library", "local": "your library", "easyeda": "EasyEDA", "standard": "standard parts",
+SOURCES = {"store": "shared store", "kicad": "KiCad library", "local": "your library", "easyeda": "EasyEDA", "standard": "standard parts",
            "datasheet": "datasheet reader", "resolve": "picked by a person", "spec": "package spec",
            "a365": "Altium 365", "generated": "footprint generator"}
 
@@ -431,6 +431,62 @@ CODES = {
                                  "Write the value without the comma on the BOM line, or release it anyway if the part is right.",
                                  [r"^(?:verify: )?value (?P<value>.+?) reads two ways: (?P<first>.+?) or (?P<second>.+?)"
                                   r"(?:; write it without the comma| \(a decimal or a thousands comma\))"]),
+    # the shared store (librarian src_store / second_opinion / store_holds, release_check.store_problems)
+    "store.disagree": ("An independent build of this part in the shared store ({record}) has other {what} than this one.",
+                       "Compare both with the datasheet (`ecadlib store get` shows the store's record), then fix this "
+                       "part or release it anyway.",
+                       [r"^(?:verify: )?shared store: the store's record (?P<record>\S+ r\d+) \(\w+\) has other "
+                        r"(?P<what>.+?) than this build"]),
+    "store.lift_back": ("This part's own build was released because the shared store's record {record} agreed with it; "
+                        "that no longer stands ({why}), so the holds it lifted are back.",
+                        "Check the part against the datasheet, or build it again with `--refresh`.",
+                        [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+):? (?P<why>.+?): this part's own build "
+                         r"was released because that record agreed with it"]),
+    "store.withdrawn": ("This part was built from the shared store's record {record}, which the store has withdrawn "
+                        "({why}).",
+                        "Build it again (`ecadlib librarian BOM --refresh PART`) or check it against the datasheet.",
+                        [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) was withdrawn from the store "
+                         r"\((?P<why>.+?)\)(?::|$)"]),
+    "store.disputed": ("This part was built from the shared store's record {record}, which someone reported as wrong.",
+                       "Check it against the datasheet (`ecadlib store get` shows the record), or build it again with "
+                       "`--refresh`.",
+                       [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is disputed"]),
+    "store.unknown": ("This part depends on the shared store's record {record}, and the store cannot tell whether it "
+                      "still stands ({why}).",
+                      "Ask the store's maintainers, or build the part again without the store (`--refresh`).",
+                      [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+): cannot tell whether the store "
+                       r"(?P<why>.+?)(?::|$)"]),
+    "store.unchecked": ("This part depends on the shared store's record {record}, and the store could not be read to "
+                        "check whether that record was withdrawn ({why}).",
+                        "Let the store be read again (go online), or check the part against the datasheet and "
+                        "release it yourself.",
+                        [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+): withdrawals could not be checked "
+                         r"(?P<why>.+?)(?::|$)"]),
+    "store.off": ("This part came from the shared store, or was released because a store record agreed with it, and "
+                  "the store is switched off, so nobody can tell this computer if that record is withdrawn.",
+                  "Check the part against the datasheet and release it yourself, or switch the store on again "
+                  "(the store's url in ecadlib.toml).",
+                  [r"^(?:verify: )?this part (?:came from the shared store|was released because a shared store record "
+                   r"agreed with it).*switched off"]),
+    "store.gone": ("This part was built from the shared store's record {record}, which the store no longer lists.",
+                   "Build it again (`ecadlib librarian BOM --refresh PART`) or check it against the datasheet.",
+                   [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is no longer (?:in the store's index|"
+                    r"the store's)"]),
+    "store.level": ("This part was built from the shared store's record {record}, which is now only {level}: below "
+                    "what your store accept setting takes.",
+                    "Check it against the datasheet, or build it again with `--refresh`.",
+                    [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is now only (?P<level>\S+)"]),
+    "store.extras": ("The shared store's footprint for this part has {what}, which ecadlib's own check of a drawing "
+                     "does not cover.",
+                     "Compare the footprint with the datasheet, then release it anyway if it is right.",
+                     [r"^(?:verify: )?shared store: the store's footprint has (?P<what>.+?): compare"]),
+    "store.package_clash": ("The BOM names the footprint {bom}, but the shared store's record {record} is another "
+                            "package.",
+                            "Check which package the part has; fix the BOM line or pick the footprint by hand.",
+                            [r"^(?:verify: )?footprint: the BOM names (?P<bom>\S+)(?: \(\d+ pins\))? but the shared "
+                             r"store's record (?P<record>\S+ r\d+)"]),
+    "store.note": ("Shared store: {detail}.", "Check that the store's part is this part before you release it.",
+                   [r"^shared store: (?P<detail>.+)"]),
     # any other `verify` note, after the specific ones above (some of them come as verify notes too)
     "verify.other": ("A person has to check this part first: {detail}.", "Check it, then release it anyway if it is right.",
                      [r"^verify: (?P<detail>.+)"]),

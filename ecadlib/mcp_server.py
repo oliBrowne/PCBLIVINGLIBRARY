@@ -94,8 +94,10 @@ TOOLS = [
                     "next step (`fix`); show those to the user, keep `code` for logic.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"},
-                                    "sources": {"type": "array", "items": {"type": "string", "enum": ["kicad", "easyeda", "standard", "datasheet"]},
-                                                "description": "sources to try, in order (default all four)"},
+                                    "sources": {"type": "array", "items": {"type": "string", "enum": ["store", "kicad", "easyeda", "standard", "datasheet"]},
+                                                "description": "sources to try, in order (default the rules' [sources] "
+                                                               "order; the shared store, when [store] url is set, is "
+                                                               "always asked first)"},
                                     "refresh": {"type": "array", "items": {"type": "string"},
                                                 "description": "part names to redo"},
                                     "refresh_all": {"type": "boolean", "description": "redo every part"}}}},
@@ -222,7 +224,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"},
                                     "checks": {"type": "array", "items": {"type": "string",
-                                               "enum": ["lifecycle", "upstream", "a365", "changes"]},
+                                               "enum": ["lifecycle", "upstream", "a365", "changes", "store"]},
                                                "description": "checks to run (default: all, or [upkeep] checks in ecadlib.toml)"},
                                     "apply": {"type": "boolean", "default": False},
                                     "workspace": {"type": "string", "description": "Altium 365 workspace URL for the a365 check"}}}},

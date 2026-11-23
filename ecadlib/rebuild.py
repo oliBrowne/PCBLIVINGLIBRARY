@@ -76,7 +76,11 @@ def norm_sha(path):
 
 def rules_hash(rules):
     from . import rules as RU
-    return sha(json.dumps(RU.effective(rules), sort_keys=True, default=str))
+    eff = RU.effective(rules)
+    st = eff.get("store")
+    if not (isinstance(st, dict) and str(st.get("url") or "").strip()):   # the shared store off ([store] url empty, the
+        eff = {k: v for k, v in eff.items() if k != "store"}             # default): no part is built otherwise, so the
+    return sha(json.dumps(eff, sort_keys=True, default=str))             # hash is the one an ecadlib without it gave
 
 
 # ------------------------------------------------------------------ recording what each part fetched
