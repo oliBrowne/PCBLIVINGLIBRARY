@@ -202,6 +202,23 @@ def test_venkel_capacitor_is_not_built_as_an_0201(tmp_path):
     assert str(by["GRM188R71H104KA93D"]["source"]["footprint"]).endswith("C_0603_1608Metric")
 
 
+# ---------------------------------------------------------------- a4 M1 the Value cell names no land by itself
+def test_a_bare_number_in_the_value_cell_is_not_a_size():
+    assert SP.resolve([""], "R", "", "RES 1% 1/4W", value="1210")["footprint"] is None
+    assert SP.resolve([""], "R", "", "", value="2010")["footprint"] is None
+    assert SP.resolve([""], "R", "", "", value="10k 0603")["footprint"] == "R_0603_1608Metric"
+    assert SP.resolve([""], "C", "", "", value="100nF 0402")["footprint"] == "C_0402_1005Metric"
+    assert SP.resolve(["0603"], "R", "", "", value="1210")["footprint"] == "R_0603_1608Metric"
+
+
+@lite
+def test_resistor_value_1210_without_a_footprint_is_held(tmp_path):
+    plan = _run(tmp_path, "Designator,Value,Footprint,Description\nR3,1210,,RES 1% 1/4W\nR4,10k 0603,,\n")
+    st = {n: (i["status"], str((i.get("source") or {}).get("footprint"))) for n, i in plan.items()}
+    assert len(st) == 2 and not any("1210" in fp for _, fp in st.values()), st
+    assert [fp for s, fp in st.values() if s == "ready"] == ["standard:Resistor_SMD:R_0603_1608Metric"], st
+
+
 # ---------------------------------------------------------------- a4 M3 a bidirectional TVS never gets a cathode
 def test_bidirectional_tvs_never_gets_a_symbol_with_a_cathode():
     for fp, mpn, desc in [("D_SMB", "P6SMB6.8CA", ""), ("D_SMC", "1.5SMC33CA", "Diode"), ("D_SMB", "SMBJ33CA", "Diode"),

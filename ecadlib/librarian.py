@@ -1267,8 +1267,16 @@ class Run:
             desc = f"{desc} {way}".strip()
         if case and (k == "CP" or k == "C" and SP.POLAR_CAP.match(SP._norm(mpn))):    # a tantalum's size + height
             case = SP.tantalum_search_text(case, row.get("src_height"), mpn)            # name its EIA case
-        res = resolve_standard([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value")],
-                               case, str(row.get("src_package_device") or ""), k, mpn, desc)
+        if item.get("generic_hold") and not mpn and k != "CP":   # a no-MPN R / C whose line is not understood: no chip
+            res = {"footprint": None, "kicad_ref": None, "symbol": None, "fp_how": item["generic_hold"],
+                   "sym_how": "not a generic passive (see the footprint)"}
+        else:                                      # review 2026-11-23: the Value cell is passed as the value (it names
+            # no land by itself: '1210' is 1.21 kOhm), with the line's maker (a part-number size rule of another maker
+            # is not used) and the part search's own description (what a capacitor is made of)
+            res = resolve_standard([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad")],
+                                   case, str(row.get("src_package_device") or ""), k, mpn, desc,
+                                   value=str(ln.get("value") or ""), search=str(row.get("src_description") or ""),
+                                   maker=str(ln.get("manufacturer") or st.get("maker") or row.get("src_manufacturer") or ""))
         got = []
         if not st["footprint"] and res["footprint"]:
             sp = SP.spec(res["footprint"])
@@ -2368,17 +2376,17 @@ def land_symbol_fits(filters, pins, pads, land_ref):
     return bool(pins) and set(pins) == set(pads) and _filter_hit(filters, land_ref)
 
 
-def resolve_standard(texts, case, device, kind, mpn, desc):
+def resolve_standard(texts, case, device, kind, mpn, desc, **line):
     """stdparts.resolve for a part's own texts and its part search's case. Where they name no land (DigiKey's group
     'TO-236-3, SC-59, SOT-23-3' read name by name ends at KiCad's ambiguous 'SOT-23-3'; '44-TQFP' names no body), the
     one land the case and its device package name together (case_or_device_land) is the part's."""
     from . import stdparts as SP
-    res = SP.resolve(list(texts) + [case], kind, mpn, desc)
+    res = SP.resolve(list(texts) + [case], kind, mpn, desc, **line)      # line: value, maker, search (stdparts.resolve)
     if res["footprint"] or not case or kind == "CP" or "disagree" in str(res.get("fp_how") or ""):
         return res                                    # (a case whose own size codes disagree, '0402 (1006 Metric)',
     land = case_or_device_land(case, device, kind)    # names no land by any reading: held as before)
     if land:
-        named = SP.resolve(list(texts) + [land], kind, mpn, desc)
+        named = SP.resolve(list(texts) + [land], kind, mpn, desc, **line)
         if named["footprint"] == land:
             named["fp_how"] = f"the part search's case {case!r}" + (f" and device package {device!r}" if device else "") \
                 + f" name {land}"

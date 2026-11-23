@@ -1967,11 +1967,24 @@ def tantalum_land(texts, mpn="", description=""):
     return TANT_LAND[case], f"tantalum case EIA {case} (" + ", ".join(dict.fromkeys(w for _, w in said)) + ")"
 
 
-def resolve(texts, kind=None, mpn="", description=""):
+def _no_mpn(mpn):
+    from .bom_triage import placeholder_mpn
+    return not str(mpn or "").strip() or placeholder_mpn(mpn)
+
+
+def resolve(texts, kind=None, mpn="", description="", value="", maker="", search=""):
     """What the standard source builds for one part:
     {"footprint": table name | None, "fp_how": str, "kicad_ref": "Lib:Name", "symbol": key | None, "sym_how": str}.
     A polarized capacitor (kind CP, or a C whose MPN is a tantalum / polymer / electrolytic series) gets nothing: the
-    table has no polarized case, and a chip-capacitor land would lose the + mark."""
+    table has no polarized case, and a chip-capacitor land would lose the + mark.
+    texts: the footprint texts (BOM footprint, KiCad name, the part search's case). value: the BOM's Value cell: its
+    words are read like the description's, but it names a chip size only beside a value (value_names_size). maker: the
+    line's maker (mpn_size). search: the part search's description of this part number (its words on what a capacitor
+    is made of count as the line's own)."""
+    texts = [t for t in texts]
+    held = lambda why, sym=None: {"footprint": None, "fp_how": why, "kicad_ref": None, "symbol": None, "sym_how": sym or why}
+    said = [str(x) for x in (description, value) if str(x or "").strip()]      # the line's free words
+    weak = [description] + ([value] if value_names_size(value, kind) else [])
     if kind in ("NTC", "PTC", "VAR", "TH"):                # a thermistor / varistor: a resistor's chip land by size
         name, how = footprint_for(list(texts), "R", "", weak=[description])     # (not the resistor MPN codes)
         size = sensor_size(mpn)
@@ -1981,11 +1994,14 @@ def resolve(texts, kind=None, mpn="", description=""):
         return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name) if name else None, "symbol": sym,
                 "sym_how": f"{SYMBOLS[sym][2].lower()}, 2 pins" if sym else
                 "thermistor: NTC or PTC is not said" if kind == "TH" else "no chip land"}
-    if kind == "C" and (POLAR_CAP.match(_norm(mpn)) or says_polarized(description) or
+    from . import mpn_decode as MD
+    code = MD.decode(mpn)
+    if kind == "C" and (POLAR_CAP.match(_norm(mpn)) or says_polarized(description, value, cap_words(search)) or
+                        (code and code["kind"] == "CP") or
                         any(_strip_lib(str(t or "")).strip().startswith("CP_") for t in texts)):
         kind = "CP"                                       # a C on a polarized land ('CP_EIA-3528-21_Kemet-B') is one
     if kind == "CP":
-        name, how = tantalum_land(texts, mpn, description)
+        name, how = tantalum_land(texts + ([value] if str(value or "").strip() else []), mpn, description)
         if name:
             return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name), "symbol": "CP",
                     "sym_how": "polarized capacitor, pin 1 = + as the land marks it"}
@@ -2049,7 +2065,8 @@ def coverage(boms, rules=None):
             if cat in ("ICs", "Misc"):
                 cat = AE.kind_of((ln.get("description"),), (ln.get("footprint"),)) or cat
             kind = part_kind(cat, ln.get("footprint"), ln.get("description"), ln.get("designator"))
-            r = resolve([ln.get("footprint"), ln.get("value")], kind, ln.get("mpn") or "", ln.get("description") or "")
+            r = resolve([ln.get("footprint")], kind, ln.get("mpn") or "", ln.get("description") or "",
+                        value=ln.get("value") or "", maker=ln.get("manufacturer") or "")
             out.append({"bom": str(b), "designator": str(ln.get("designator") or "")[:40], "mpn": ln.get("mpn") or "",
                         "footprint_text": ln.get("footprint") or "", "kind": kind or "", **r})
     return out
