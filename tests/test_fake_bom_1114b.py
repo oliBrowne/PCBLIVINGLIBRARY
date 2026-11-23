@@ -30,10 +30,10 @@ R1,1,10k 1%,R_0603_1608Metric,W1,Resistor
 R2,1,4k7 50V,R_0603_1608Metric,W2,Resistor
 R3,1,100R 1/10W,R_0603_1608Metric,W3,Resistor
 R4,1,R047,R_0603_1608Metric,W4,Resistor
-C1,1,100nF/50V,C_0603_1608Metric,W5,Capacitor
-C2,1,10uF X5R,C_0603_1608Metric,W6,Capacitor
-C3,1,104,C_0603_1608Metric,W7,Capacitor
-C4,1,"4,7µF",C_0603_1608Metric,W8,Capacitor
+C1,1,100nF/50V,C_0603_1608Metric,W5,Ceramic capacitor
+C2,1,10uF X5R,C_0603_1608Metric,W6,Ceramic capacitor
+C3,1,104,C_0603_1608Metric,W7,Ceramic capacitor
+C4,1,"4,7µF",C_0603_1608Metric,W8,Ceramic capacitor
 """
 
 

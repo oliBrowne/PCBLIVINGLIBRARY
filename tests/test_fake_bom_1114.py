@@ -23,7 +23,7 @@ R1,1,10k,R_0603_1608Metric,CF-3,RES 10K OHM 1% 1/10W 0402
 R2,1,4k7,R_1206_3216Metric,CF-4,Thick Film Resistors - SMD 4.7K 0805 1%
 L1,1,10uH,L_0805_2012Metric,CF-5,Inductor 10uH 1210
 D1,1,RED,LED_0603_1608Metric,CF-6,LED red 0805
-C3,1,100nF 0603,C_0402_1005Metric,CF-7,Capacitor
+C3,1,100nF 0603,C_0402_1005Metric,CF-7,Ceramic capacitor
 """
 
 SIZE_AGREE = """Designator,Qty,Value,Footprint,MPN,Description
@@ -33,7 +33,7 @@ C4,1,1uF,C_0603_1608Metric,OK-3,CAP CER 1UF 16V X5R 0603 (1608 Metric)
 R5,1,0R,R_0805_2012Metric,OK-4,Jumper 0805
 C5,1,100nF 0402,C_0402_1005Metric,OK-5,CAP CER 0.1UF 1005
 R6,1,10k,R_0603_1608Metric,OK-6,RES 10K 1608M
-C6,1,1uF,C_0805_2012Metric,OK-7,Capacitor 1uF
+C6,1,1uF,C_0805_2012Metric,OK-7,Ceramic capacitor 1uF
 R7,1,22R,R_0402_1005Metric,OK-8,RC0402FR-0722RL 22R
 """
 
@@ -162,14 +162,14 @@ def test_part_number_equal_to_its_own_designator_is_dropped(tmp_path):
 
 
 TWO_SIZES = """Designator,Qty,Value,Footprint,MPN,Description
-C1,1,10uF,C_0402_1005Metric,TS-1,CAP 10uF 25V 0805/1206
-C2,1,100nF,C_0402_1005Metric,TS-2,CAP 100nF 0603 (1608 Metric) 0805
+C1,1,10uF,C_0402_1005Metric,TS-1,CAP CER 10uF 25V 0805/1206
+C2,1,100nF,C_0402_1005Metric,TS-2,CAP CER 100nF 0603 (1608 Metric) 0805
 """
 
 NOT_A_CLASH = """Designator,Qty,Value,Footprint,MPN,Description
 R1,1,1210,R_0603_1608Metric,NC-1,Resistor 1210 ohm
 R2,1,Jumper,R_0603_1608Metric,NC-2,Zero ohm link
-C1,1,1uF,C_0805_2012Metric,NC-3,CAP 1uF 0805/1206
+C1,1,1uF,C_0805_2012Metric,NC-3,CAP CER 1uF 0805/1206
 """
 
 

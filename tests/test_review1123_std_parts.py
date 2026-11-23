@@ -59,14 +59,16 @@ def test_no_mpn_passive_word_in_the_value_cell_is_held(tmp_path):
 
 @lite
 def test_no_mpn_hold_names_the_word(tmp_path):
-    plan = _run(tmp_path, "Designator,Qty,Value,Footprint\nR1,1,1k x4,1206\nR2,1,3k*4,1206\nR3,1,10k frobnic,0603\n"
+    # round 3 (owner's Part 2): an ordinary written word that is no word of a part's build ('10k frobnic') no longer
+    # holds; a short code that is not understood ('10k TAN') still does. The row was 'R3,1,10k frobnic,0603'
+    plan = _run(tmp_path, "Designator,Qty,Value,Footprint\nR1,1,1k x4,1206\nR2,1,3k*4,1206\nR3,1,10k TAN,0603\n"
                           "C1,1,10uF tantalum,1206\n")
     said = {n: _why(i) for n, i in plan.items()}
     assert any("'tantalum'" in w and "+ side" in w for w in said.values()), said
     assert all(i["status"] != "ready" for i in plan.values()), said
     assert any("'x4'" in w for w in said.values()), said
     assert any("'3k*4'" in w for w in said.values()), said
-    assert any("'frobnic'" in w and "Manufacturer Part Number is empty" in w for w in said.values()), said
+    assert any("'TAN'" in w and "Manufacturer Part Number is empty" in w for w in said.values()), said
 
 
 NO_MPN_2 = """Reference,Qty,Value,Footprint,Description,Comment
@@ -271,8 +273,11 @@ def test_capacitor_with_an_unread_part_number_needs_a_ceramic_word():
                              (["0805"], "", "CAP 10UF 16V POL"), (["1206"], "", "C-POL 10uF"), (["1206"], "", "CPOL 10uF")]:
         r = SP.resolve(texts, "C", mpn, desc)
         assert r["footprint"] is None and r["symbol"] is None, (mpn, desc, r)
-    r = SP.resolve(["1206"], "C", "TMCMA1C106MTRF", "CAP 10uF 16V")
-    assert "ceramic" in r["fp_how"] and "TMCMA1C106MTRF" in r["fp_how"], r
+    # round 3 (A8): Vishay's TMCM is now a known tantalum series (held as polarized); the 'nothing says ceramic'
+    # message is checked on a series no rule knows. The number here was TMCMA1C106MTRF
+    assert "polarized" in SP.resolve(["1206"], "C", "TMCMA1C106MTRF", "CAP 10uF 16V")["fp_how"]
+    r = SP.resolve(["1206"], "C", "XQ7A106K016", "CAP 10uF 16V")
+    assert "ceramic" in r["fp_how"] and "XQ7A106K016" in r["fp_how"], r
 
 
 def test_ceramic_capacitors_still_build():

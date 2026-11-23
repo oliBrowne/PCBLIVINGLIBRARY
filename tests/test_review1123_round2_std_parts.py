@@ -278,11 +278,18 @@ def test_passive_kind_reads_the_part_search():
             "footprint": {"ref": "C_1206_3216Metric", "kicad": "Capacitor_SMD:C_1206_3216Metric"},
             "parameters": [{"name": "Manufacturer Part Number", "value": "T58A0106M016C0200"}, {"name": "Value", "value": "10uF"}]}
     ln = {"mpn": "T58A0106M016C0200", "value": "10uF", "footprint": "Capacitor_SMD:C_1206_3216Metric"}
-    assert L.passive_kind(dict(item), ln) == "C"                   # what remains: nothing anywhere says polarized
+    # round 3 (A8): Vishay's T58 is a known polymer tantalum series now, so the number itself says polarized (this
+    # was == "C": 'what remains: nothing anywhere says polarized'); an unknown series is not known here and is
+    # held by stdparts.resolve for a ceramic word
+    assert L.passive_kind(dict(item), ln) == "CP"
+    # .. so the rest of this test now runs on a series no rule knows (the asserts are the round-2 ones)
+    item = dict(item, parameters=[{"name": "Manufacturer Part Number", "value": "XQ7A106K016"}, {"name": "Value", "value": "10uF"}])
+    ln = dict(ln, mpn="XQ7A106K016")
+    assert L.passive_kind(dict(item), ln) is None                  # (not known: nothing says ceramic either)
     assert L.passive_kind(dict(item), ln, "CAP TANT POLY 10UF 16V 1206") == "CP"
     assert L.passive_kind(dict(item), ln, "CAP CER 10UF 16V X5R 1206") == "C"
     assert L.passive_kind(dict(item), dict(ln, other_cells="Polarized: yes")) == "CP"
-    assert L.passive_kind(dict(item), dict(ln, other_cells="Polarized: no")) == "C"
+    assert L.passive_kind(dict(item), dict(ln, other_cells="Polarized: no")) is None    # (was "C" on KiCad's chip name: A8)
 
 
 @lite
@@ -295,8 +302,11 @@ def test_ceramics_on_the_kicad_chip_name_stay_ready(tmp_path, monkeypatch):
                      f"C3,2.2uF,{c0603},EMK107BJ225KA-T,Taiyo Yuden,,,,Device:C_Small\n"   # the remaining case: an unread
                      f"C4,10n,{c0603},,,,,,Device:C\n")                                    # number, KiCad's chip name
     st = _status(plan)
-    assert len(plan) == 4 and all(s == "ready" for s, _ in st.values()), st
-    assert all(_fp(i) == "standard:Capacitor_SMD:C_0603_1608Metric" for i in plan.values()), {n: _fp(i) for n, i in plan.items()}
+    # round 3 (A8, the owner's safe side): KiCad's chip name alone no longer releases a capacitor whose part number no
+    # MLCC code reads and that nothing calls ceramic (C3, EMK107BJ225KA-T: was ready). The other three stay ready
+    assert len(plan) == 4 and all((s == "ready") == (n != "CAP-0603-2.2uF") for n, (s, _) in st.items()), st
+    assert all(_fp(i) == "standard:Capacitor_SMD:C_0603_1608Metric" for n, i in plan.items() if n != "CAP-0603-2.2uF"), \
+        {n: _fp(i) for n, i in plan.items()}
 
 
 # ---------------------------------------------------------------- Minor (R-A)
