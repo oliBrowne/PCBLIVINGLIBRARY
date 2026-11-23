@@ -713,14 +713,15 @@ _PIN_WORD = re.compile(r"(?i)^pin\s?([1-3])$")
 
 
 def _terminal_pairs(runs, words, letters=(), pin_words=True):
-    """(x, y, key, number) for each terminal name on a page (a word of 'words', or a capital letter of 'letters')
+    """(x, y, key, number) for each terminal name on a page (a word of 'words': a dict, or a function of the run's
+    text that gives its key or None; or a capital letter of 'letters')
     whose pin number 1-3 is right beside it: the number within two text heights, clearly nearer (1.6 x) than any
     other, and the name that number's nearest too. A number between two names: nothing."""
     names, nums = [], []
     for x, y, t, sz in runs:
         if not sz or sz <= 0:
             continue
-        key = words.get(t.upper()) if len(t) > 1 else t if t in letters else None
+        key = (words(t) if callable(words) else words.get(t.upper())) if len(t) > 1 else t if t in letters else None
         pin = pin_words and _PIN_WORD.match(t)         # Infineon: 'Gate' over 'pin1', 'Drain' over 'pin 3'
         if key:
             names.append((x + 0.25 * sz * len(t), y, key, sz))
@@ -775,21 +776,32 @@ def _diode_role(word):
     return "A" if w == "ANODE" else "K" if w == "CATHODE" else "N" if _NC_WORDS.match(w) else None
 
 
+def _diode_word(text):
+    """A text run that CONTAINS anode or cathode is a diode terminal: 'A', 'K', or 'X' when it names both (a series
+    pair's joined third lead, 'CATHODE/ANODE': review 2026-11-23, only the exact words counted and the pair was read
+    as one diode with pin 3 not connected)."""
+    t = str(text or "").upper()
+    a, k = "ANODE" in t, "CATHODE" in t
+    return "X" if a and k else "A" if a else "K" if k else None
+
+
 def diode_orders(page_texts, page_runs=(), package=None, doubts=None):
     """The pin orders of a single diode in a three-lead package (SOT-23, SC-70) that the datasheet's own words give:
     'ANK' = pin 1 anode, pin 2 not connected, pin 3 cathode. Two sources, read as text, never guessed:
     (a) the symbol drawn with the words ANODE and CATHODE, each with its pin number right beside it (onsemi's '3
-    CATHODE' / '1 ANODE'); (b) the outline's style table that the front page points to ('CASE 318 STYLE 8' ->
-    'STYLE 8: PIN 1. ANODE 2. NO CONNECTION 3. CATHODE'). Every ANODE / CATHODE pair in the PDF must name the same
-    pin (a sheet that draws a common-cathode pair too has two anodes: nothing), the front page names one style only,
-    and that style names one anode, one cathode and one pin not connected. -> sorted list of distinct orders: one
+    CATHODE' / '1 ANODE'), the third lead drawn there with no label or a no-connect one (any other label, 'COMMON',
+    'CATHODE/ANODE': a pair, nothing); (b) the outline's style table that the front page points to ('CASE 318 STYLE
+    8' -> 'STYLE 8: PIN 1. ANODE 2. NO CONNECTION 3. CATHODE'). Every ANODE / CATHODE pair in the PDF must name the
+    same pin (a sheet that draws a common-cathode pair too has two anodes: nothing), the front page names one style
+    only, that style's table is found (a style named but not found is not settled, whatever is drawn), and it names
+    one anode, one cathode and one pin not connected. -> sorted list of distinct orders: one
     order settles it; none or two do not. package: this part's land name(s): the one order then counts only when
     every page it was read on is this package's (package_doubt; review 2026-11-23, 1.4), else [] and the reason is
     added to the list `doubts`. Not given (None): the bare text check, which no release may rest on."""
     found, used = set(), []                            # used: the pages an order was read on
     drawn = []                                         # (page, pairs) of every page with an ANODE / CATHODE pair
     for page, runs in page_runs or ():
-        pairs = _terminal_pairs(runs, DIODE_TERMINAL, pin_words=False)
+        pairs = _terminal_pairs(runs, _diode_word, pin_words=False)
         if pairs:
             drawn.append((page, runs, pairs))
     if drawn:
@@ -801,8 +813,19 @@ def diode_orders(page_texts, page_runs=(), package=None, doubts=None):
             return []
         third = ({1, 2, 3} - nums).pop()
         cx, cy = sum(q[0] for q in pairs) / 2, sum(q[1] for q in pairs) / 2
-        if max(abs(a[0] - b[0]) + abs(a[1] - b[1]) for a in pairs for b in pairs) <= 110 and any(
-                t == str(third) and abs(x - cx) <= 110 and abs(y - cy) <= 110 for x, y, t, _ in runs):
+        thirds = [r for r in runs if r[2] == str(third) and abs(r[0] - cx) <= 110 and abs(r[1] - cy) <= 110]
+        mid = lambda r: (r[0] + 0.25 * r[3] * len(r[2]), r[1])           # as _terminal_pairs places a run
+        taken = {(q[0], q[1]) for q in pairs}                             # the two words, each by its own number
+        if any(len(r[2]) > 1 and _diode_word(r[2]) and mid(r) not in taken and abs(mid(r)[0] - cx) <= 110
+               and abs(r[1] - cy) <= 110 for r in runs if r[3] and r[3] > 0):
+            return []            # another anode / cathode word in the drawing, by no number of its own: not one diode
+        for x, y, t, sz in thirds:                                        # the third lead's own label, when it has one,
+            for r in runs:                                                # must say not connected: any other wording
+                if r[3] and r[3] > 0 and not _INT.match(r[2]) and not _PIN_WORD.match(r[2]) and mid(r) not in taken \
+                        and ((mid(r)[0] - mid((x, y, t, sz))[0]) ** 2 + (r[1] - y) ** 2) ** 0.5 <= 3 * (sz or r[3]) \
+                        and not _NC_WORDS.match(" ".join(r[2].split()).strip(" .,;")):
+                    return []                                             # ('COMMON', 'K1, A2') is a second diode's
+        if max(abs(a[0] - b[0]) + abs(a[1] - b[1]) for a in pairs for b in pairs) <= 110 and thirds:
             order = ["N", "N", "N"]
             for q in pairs:
                 order[q[3] - 1] = q[2]
@@ -819,6 +842,8 @@ def diode_orders(page_texts, page_runs=(), package=None, doubts=None):
         case, n = next(iter(styles))                   # that case's own outline page: its style table
         blocks = {m.groups() for t in texts if re.search(r"\bCASE\s+" + re.escape(case) + r"\b", t, re.I)
                   for m in re.finditer(_STYLE_BLOCK.format(n=n), t, re.I)}
+        if not blocks:
+            return []                                  # the style the front page names is not in the text: not settled
         orders = set()
         for b in blocks:
             roles = [_diode_role(w) for w in b]

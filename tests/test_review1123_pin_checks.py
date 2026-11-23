@@ -279,6 +279,39 @@ def test_a_read_that_calls_signal_pins_nc_is_not_confirmed(monkeypatch):
     assert L.read_confirmed(read(pins), {"data": b"x"}, ["symbol"]) is None
 
 
+# ------------------------------------------------------------------ a series diode pair is not one diode
+# onsemi draws BAT54S / BAV99 as 'ANODE 1', 'CATHODE 2', '3 CATHODE/ANODE'
+PAIR = [(413, 589, "1", 8.0), (396, 579, "ANODE", 8.0), (495, 589, "2", 8.0), (480, 579, "CATHODE", 8.0),
+        (455, 620, "3", 8.0), (430, 630, "CATHODE/ANODE", 8.0),
+        (434, 673, "1", 7.0), (453, 663, "2", 7.0), (474, 696, "3", 7.0)]
+PAIR_P1 = "BAT54S Schottky Barrier Diodes ... SOT-23 (TO-236) CASE 318 STYLE 11"
+PAIR_OUTLINE = ("CASE 318 ISSUE AU STYLE 9: PIN 1. ANODE 2. ANODE 3. CATHODE STYLE 11: PIN 1. ANODE 2. CATHODE "
+                "3. CATHODE-ANODE STYLE 12: PIN 1. CATHODE 2. CATHODE 3. ANODE")
+
+
+def test_a_series_pairs_joined_label_is_a_terminal():
+    assert PT.diode_orders({1: PAIR_P1, 5: PAIR_OUTLINE}, [(1, PAIR)]) == []
+    assert PT.diode_orders({1: PAIR_P1}, [(1, PAIR)]) == []                 # the style table not in the text
+    assert PT.diode_orders({1: "BAT54S dual Schottky"}, [(1, PAIR)]) == []  # a maker with no CASE / STYLE pointer
+    split = PAIR[:5] + [(430, 630, "CATHODE", 8.0), (470, 630, "/ANODE", 8.0)] + PAIR[6:]
+    assert PT.diode_orders({1: "x"}, [(1, split)]) == []
+
+
+def test_a_third_lead_with_a_label_that_is_not_no_connect_settles_nothing():
+    third = lambda label: DIODE[:4] + [(455, 620, "2", 8.0), (440, 630, label, 8.0)]
+    assert PT.diode_orders({1: "x"}, [(1, DIODE)]) == ["ANK"]               # no label by the third lead
+    assert PT.diode_orders({1: "x"}, [(1, third("NC"))]) == ["ANK"]
+    assert PT.diode_orders({1: "x"}, [(1, third("NO CONNECTION"))]) == ["ANK"]
+    assert PT.diode_orders({1: "x"}, [(1, third("COMMON"))]) == []
+    assert PT.diode_orders({1: "x"}, [(1, third("K1, A2"))]) == []
+
+
+def test_a_style_named_up_front_whose_table_is_not_found_is_not_settled():
+    assert PT.diode_orders({1: P1, 5: OUTLINE}, [(1, DIODE)]) == ["ANK"]
+    assert PT.diode_orders({1: P1}, [(1, DIODE)]) == []                     # CASE 318 STYLE 8 named, its table missing
+    assert PT.diode_orders({1: "BAT54L"}, [(1, DIODE)]) == ["ANK"]          # no style named: the drawing alone
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
