@@ -235,13 +235,23 @@ def other_cells(line):
 # lines of one value and footprint that differ only there are one part (a per-row price, stock, supplier name, the
 # sheet the row is on, what the resistor is for). A column that carries a number of the part ('Supplier Part Number',
 # 'Order Code') is not one of these: two order numbers are two parts.
+# Round 3 (A3, B4): 'total' is no such word ('Total Pins', 'Total Elements' count what is in the part; 'Total Price' is
+# a price by its other word), nor is a column that names a package or a count; RoHS / lifecycle / status columns and
+# notes are ('RoHS: Yes' vs 'Compliant' is one part). stdparts.cell_hold reads such a column only for the words of a
+# capacitor's + side and of another technology.
 _ADMIN_HEADER = re.compile(
-    r"(?<![a-z])(?:price|cost|total|subtotal|amount|currency|stock|inventory|availab\w*|lead ?time|moq|"
+    r"(?<![a-z])(?:price|cost|subtotal|amount|currency|stock|inventory|availab\w*|lead ?time|moq|"
     r"supplier|distributor|vendor|seller|function|purpose|usage|used (?:for|in|on)|net|nets|net ?name|signal|"
-    r"sheet ?(?:name|file|path)|schematic|exclude from \w+|in bom|on board)(?![a-z])")
-_ADMIN_NOT = re.compile(r"(?<![a-z])(?:part|number|no|nr|pn|sku|code|id|ref|reference|item)(?![a-z])")
+    r"sheet ?(?:name|file|path)|schematic|exclude from \w+|in bom|on board|rohs|reach|life ?cycle|status|"
+    r"complian\w*|notes?|remarks?)(?![a-z])")
+_ADMIN_NOT = re.compile(r"(?<![a-z])(?:part|number|no|nr|pn|sku|code|id|ref|reference|item|package|pkg|case|footprint|"
+                        r"size|pins?|pads?|terminals?|elements?|resistors?|capacitors?)(?![a-z])")
 # a column that names the schematic symbol the row was drawn with (KiCad's 'LibPart', 'Symbol', 'Lib Ref', 'Device')
 _SYMBOL_HEADER = re.compile(r"(?<![a-z])(?:lib\w*|symbol\w*|sym|device|schlib)(?![a-z])")
+# round 3 (A2): a column whose cell is the symbol's own name (KiCad's 'LibPart' / 'Cmp name', EAGLE's 'Device', 'Library
+# Reference'), not the library it is in ('Library', 'EAGLE Library', 'Symbol Library')
+_SYMBOL_NAME_HEADER = re.compile(r"(?<![a-z])(?:lib ?ref\w*|lib ?part|library (?:ref\w*|part)|symbol(?: name)?|sym|"
+                                 r"device|cmp ?name|component ?name|schlib ?ref)$")
 _BARE_CELL = re.compile(r"(?i)\s*(?:yes|y|true|t|x|ja|j|oui|si|s\u00ed|\u2713|\u2714|\+|\d+(?:[.,]\d+)?)\s*")
 SAID_CELL_MAX = 1000                                              # characters of an unmapped cell kept on the line
 
@@ -258,25 +268,68 @@ def symbol_header(header):
     return bool(_SYMBOL_HEADER.search(_hnorm(header)))
 
 
-def said_cells(line):
+def symbol_name_header(header):
+    """The header of a column whose cells are the row's schematic symbol by name ('LibPart', 'Symbol', 'Device', 'Cmp
+    name'): a no-part-number resistor's or capacitor's cell there must be the plain symbol (stdparts.cell_hold)."""
+    return bool(_SYMBOL_NAME_HEADER.search(_hnorm(_camel_header(header))))
+
+
+def _camel_header(header):
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", str(header or ""))
+
+
+def line_cells(line):
+    """[(role, header, cell)] for every cell of a BOM line beside its Value and Description that may say what the
+    part is (review 2026-11-23 round 3, A2 / A3 / B3): the footprint cell ('footprint'), the LibRef and the cells of
+    a symbol-name column ('symbol'), the Manufacturer ('maker'), the cells of a column on how the part is bought or
+    used ('admin': admin_header) and of every other column the reader maps to no field ('said'). What each role is
+    read for: stdparts.cell_hold."""
+    out = [("footprint", "Footprint", str(line.get("footprint") or "")), ("symbol", "LibRef", str(line.get("libref") or "")),
+           ("maker", "Manufacturer", str(line.get("manufacturer") or ""))]
+    for h, v in other_cells(line).items():
+        role = "symbol" if symbol_name_header(h) else "admin" if admin_header(_camel_header(h)) else "said"
+        out += [(role, h, cell) for cell in v.split(" | ")]
+    return [c for c in out if c[2].strip()]
+
+
+def said_cells(line, admin=True):
     """Every text of a BOM line beside its Value and Description that may say what the part is, for the words that
-    say polarized or more than two terminals (stdparts.generic_passive_hold, librarian.passive_kind): the footprint
-    cell, the LibRef and the cells of the columns the reader maps to no field. A cell that is a bare yes / true / x /
-    + / number says nothing alone: it is read with its header ('Polarized: yes' -> 'yes Polarized', 'Pins: 8' ->
-    '8 Pins'; review 2026-11-23 round 2, I10). '0', 'no' and an empty cell say nothing; a bare cell of a column that
-    is about buying the part ('Lead Time: 4') is not read, nor a number under a value column ('Cap (pF): 5', 'Res')."""
+    say polarized or more than two terminals (librarian.passive_kind): the footprint cell, the LibRef and the cells
+    of the columns the reader maps to no field. A cell that is a bare yes / true / x / + / number says nothing alone:
+    it is read with its header ('Polarized: yes' -> 'yes Polarized', 'Pins: 8' -> '8 Pins'; review 2026-11-23 round 2,
+    I10). '0', 'no' and an empty cell say nothing; a bare cell of a column that is about buying the part ('Lead Time:
+    4') is not read, nor a number under a value column ('Cap (pF): 5', 'Res').
+    Round 3 (A3): a header that itself says polarized or more than two terminals is read with every cell that is no
+    clear no ('Polarized: Yes.', 'Polarized: P', 'Polar: 1'), and as words ('PinCount: 8' -> '8 Pin Count').
+    admin=False (B3): without the columns on how the part is bought or used, for the words that count elements
+    ('Function: RC filter', 'pull-up for 4 pin header' are what the part is for)."""
+    from . import stdparts as SP
     out = [str(line.get(k) or "") for k in ("footprint", "libref")]
     for h, v in other_cells(line).items():
+        hw, adm = SP.header_words(h), admin_header(_camel_header(h))
+        if adm and not admin:
+            continue
+        says = not adm and (bool(re.search(r"polar", hw)) or SP.says_polarized(hw) or bool(SP.multi_terminal(hw)))
+        polar_header = bool(re.search(r"polar", hw)) and not re.search(r"(?<![a-z])(?:non|un|not?) ?polar", hw) \
+            and not SP.says_polarized(hw)                 # 'Polar', 'Polarity': the header's word is no word of POLAR_WORD
         for cell in v.split(" | "):
-            if _BARE_CELL.fullmatch(cell):
-                if not admin_header(h) and not re.fullmatch(r"\s*0+(?:[.,]0+)?\s*", cell) and not (
-                        re.search(r"\d", cell) and re.match(r"(?:cap|res|ind|c|r|l)\b", _hnorm(h))):
-                    out.append(f"{cell.strip()} " + re.sub(r"(?i)^\s*(?:no|nr|num|number|count|#)\b\.?\s*(?:of\s+)?", "", h))
+            if SP._CLEAR_NO.fullmatch(cell):
+                if re.search(r"(?<![a-z])(?:non|un) ?polar", hw) and re.fullmatch(r"(?i)\s*(?:no|n|false|f|nein|non|0)\s*", cell):
+                    out.append(f"polarized ({h}: {cell.strip()})")    # 'Non-polarized: no'
+            elif _BARE_CELL.fullmatch(cell):
+                if not adm and not (re.search(r"\d", cell) and re.match(r"(?:cap|res|ind|c|r|l)\b", _hnorm(h))):
+                    out.append(f"{cell.strip()} " + re.sub(r"(?i)^\s*(?:no|nr|num|number|count)\b\s*(?:of\s+)?", "",
+                                                           SP.header_words(h, lower=False)))
+                elif adm and cell.strip() == "+":
+                    out.append("+")
+                if says and polar_header:
+                    out.append(f"polarized ({h}: {cell.strip()})")    # 'Polar: 1', 'Polarity: yes'
+            elif says:
+                out.append(f"{cell.strip()} {SP.header_words(h, lower=False)}")
+                if polar_header:
+                    out.append(f"polarized ({h}: {cell.strip()})")
             elif re.search(r"[^\W\d_]", cell):
-                out.append(cell)
-            if re.search(r"(?i)(?<![a-z])(?:non|un)[ _-]?polar", str(h)) and \
-                    re.fullmatch(r"(?i)\s*(?:no|n|false|f|nein|non|0)\s*", cell):
-                out.append(f"polarized ({h}: {cell.strip()})")    # 'Non-polarized: no'
+                out.append(SP._URL.sub(" ", cell))            # (the words of a web address are no words of the part)
     return out
 
 
