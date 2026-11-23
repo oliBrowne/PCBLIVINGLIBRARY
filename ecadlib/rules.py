@@ -27,8 +27,11 @@ CAT_REF = {"Resistors": "R", "Capacitors": "C", "Inductors": "L", "Diodes": "D",
            "Connectors": "J", "ICs": "U", "Misc": "U", "Thermistors": "TH",
            "Varistors": "RV"}
 PASSIVES = ("Resistors", "Capacitors", "Inductors")          # the categories with a generic symbol and a synthetic name
-SOURCES = ("store", "kicad", "easyeda", "standard", "datasheet")   # standard: ecadlib.stdparts (offline, before Claude);
-# store: the shared store of checked parts (ecadlib.store_client), a no-op while [store] url is empty
+DEFAULT_SOURCES = ("kicad", "easyeda", "standard", "datasheet")   # standard: ecadlib.stdparts (offline, before Claude)
+# store: the shared store of checked parts (ecadlib.store_client). Never in the default order and never written by
+# `ecadlib init`: it runs first by itself whenever [store] url is set (accept = "off" turns it off); an explicit order
+# may name it (harmless)
+SOURCES = ("store",) + DEFAULT_SOURCES
 FIELDS = ("mpn", "manufacturer", "value", "package", "metric", "category", "cat3", "ref", "tolerance", "voltage",
           "dielectric", "power", "description")
 FP_FIELDS = ("kicad", "package", "metric", "ref", "cat3", "density", "pins")
@@ -59,7 +62,7 @@ DEFAULTS = {
     "layers": {"courtyard": "Mechanical15", "assembly": "Mechanical13", "body3d": "Mechanical13",
                "silkscreen": "TopOverlay", "designator": "TopOverlay"},
     "footprint": {"density": "N", "pin1": ["1", "A1"]},
-    "sources": {"order": list(SOURCES)},
+    "sources": {"order": list(DEFAULT_SOURCES)},
     "bom": {"columns": {}},                    # ecadlib field (mpn, manufacturer, value, ...) -> your BOM header
     "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
                 "parity": "hold",              # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
@@ -69,7 +72,7 @@ DEFAULTS = {
                 "datasheet": "warn",           # hold | warn: no datasheet link holds the part, or is a note
                 "mpn": "warn"},                # hold | warn: a generic resistor / capacitor with no MPN, or is a note
     "altium365": {"workspace": ""},
-    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes", "store"]},   # ecadlib.upkeep
+    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes"]},   # ecadlib.upkeep (+ store, by itself, when [store] url is set)
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
                   "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 10.0, "auto_pages": 40,   # per run; 0 = no cap
                   "ask_above_usd": 1.0,                 # ecadlib.ai_cost: the dialogs ask twice above this (a max_cost_usd you set wins)
@@ -975,8 +978,8 @@ HELP = {
     "folders": "Altium 365 / DbLib folder per category or designator class",
     "layers": "Altium layers for footprint content (Mechanical1..16, TopOverlay)",
     "footprint": "IPC-7351 density L (least) | N (nominal) | M (most); pin-1 pad names accepted",
-    "sources": "Where missing symbols and footprints are looked for, in order (store: the shared store, used only "
-               "when [store] url is set; an order without it never asks the store)",
+    "sources": "Where missing symbols and footprints are looked for, in order (the shared store, when [store] url is "
+               "set, is always asked first and need not be listed)",
     "store": "The shared store of checked parts (docs/shared-store.md): url (\"\" = off, the default), accept = "
              "confirmed | checked | off, mode = online | snapshot",
     "store.url": "the store: a GitHub raw URL (https://raw.githubusercontent.com/OWNER/REPO/main), a file:// URL or a "

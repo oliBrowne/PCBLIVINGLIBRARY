@@ -3,6 +3,8 @@ name: nightly re-check
 # Every night every record is rebuilt and checked again with the newest released ecadlib, so a fix to the checks also
 # cleans the store. A record that no longer passes fails this run and opens (or comments on) one issue that lists the
 # `ecadlib store-repo withdraw` commands. Nothing is withdrawn or pushed automatically: a maintainer runs them.
+# It installs the NEWEST ecadlib on purpose (not ecadlib-version.txt, which pins the pull-request check): a new release
+# that would fail a record shows up here before a maintainer bumps the pin.
 on:
   schedule:
     - cron: "41 3 * * *"

@@ -10,26 +10,35 @@ What may be shared. Only a part the release check passed (status ready, the chec
 no --allow override, no open verify note or hold) whose symbol AND footprint came from an allowed source:
 `datasheet` (ecadlib's own read), `standard` (ecadlib's tables) or `kicad:` (the KiCad libraries, CC-BY-SA 4.0
 with their credit). `easyeda:` is shared as a pointer only: the LCSC number, the pad and pin hashes and the
-evidence, never the drawing (footprint.kicad_mod / symbol.kicad_sym are null; a machine that uses it fetches it from
-EasyEDA as today and compares the hash). Anything else (a --lib library, `ecadlib resolve` picks, package specs,
+evidence, never the drawing (footprint.kicad_mod / symbol.kicad_sym are null). In this version a pointer record is
+only recorded: no client builds from it, compares with it or lifts a hold because of it. Anything else (a --lib library, `ecadlib resolve` picks, package specs,
 SnapMagic / SamacSys / Ultra Librarian, no source) is never shared: not ours, or we cannot know whose. Maker and
 part number must be filled. A datasheet link is kept only when it is public (ds_archive.asked, the test the
 Internet Archive fallback uses: no intranet name, private address, user name or signed query); a private one is
 left out, unless the part was read from that datasheet, which then has no provenance anyone else can check: refused.
 
 What a record holds, by a whitelist (never the BOM, internal or supplier part numbers, stock or price fields, file
-paths, plan `by` names): maker and MPN as written plus the normalised key (store_keys), the description, the public
-datasheet link and the PDF's hash (library.lock.json), the KiCad symbol text (read back from the released .SchLib,
-kicad_export.symbol_from_schlib, with only its Reference / Value / Footprint / Datasheet / Description fields) and
-its pins, the KiCad footprint text (the released .kicad_mod, renamed to its package; 3D model references and
+paths, plan `by` names): maker and MPN as written plus the normalised key (store_keys), the description only when a
+source gave it (the plan's field_sources names a part search, a library or the datasheet; never the BOM line's own
+Description / Notes text: empty otherwise), the public datasheet link and the PDF's hash (library.lock.json), the
+KiCad symbol text (read back from the released .SchLib, kicad_export.symbol_from_schlib, with only its Reference /
+Value / Footprint / Datasheet / Description fields, set to the record's own values) and its pins, the KiCad footprint text (the released .kicad_mod, renamed to its package; 3D model references and
 embedded files taken out: the body is a height and a pointer to where its model came from, never model bytes), the
-geometry hash (fp_share.digest, HASH_V), the pin-to-pad map, and one `build` evidence entry (who shares it, when,
+geometry hash (fp_share.digest, HASH_V), the pin-to-pad map (pin N on pad N: what build() draws), and one `build` evidence entry (who shares it, when,
 ecadlib version, the datasheet reader's provider and model when it was read, the hashes, the check rules run clean).
 
 Trust (level): `confirmed` when the evidence that agrees with the record's hashes holds a `signoff`, a `kicad-exact`
 entry, or `build` entries from two contributors; else `checked`. One contributor counts once, whatever reader models
 their builds used. A disputed record is `checked` (second opinion only). Two records agree when the pads (geometry
-hash, same digest version) and the pins (pins_hash: pin number, normalised name, pad) are the same."""
+hash, same digest version) and the pins (pins_hash: pin number, normalised name with its active-low bar, pad, and the
+footprint's mounting-pad count) are the same.
+
+What validate() refuses, beyond the schema: a geometry hash of an older digest version, a pin map that is not pin N
+on pad N, control characters anywhere, and KiCad text that carries more than the record's own checked fields: symbol
+properties other than Reference / Value / Footprint / Datasheet / Description (with exactly the record's values),
+footprint nodes and layers outside a whitelist, 3D models, embedded files, images, hyperlinks, text variables other
+than ${REFERENCE}, and more text items than a footprint has (so no file can be split over many of them). It reads
+the record only: no name lookup, no network (private(url, resolve=False))."""
 import copy, datetime, json, re
 from pathlib import Path
 
@@ -56,6 +65,22 @@ _DATA_URI = re.compile(r"data:[\w.+-]+/[\w.+-]+;base64,", re.I)
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 _CHOSEN = re.compile(r"resolve: (symbol|footprint) .* chosen by user")
 _HEX = re.compile(r"[0-9a-f]{64}")
+_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")    # C0 / C1 controls (terminal escapes); \t and \n allowed
+_REF_PREFIX = re.compile(r"[A-Z]{1,4}")
+_LAYER = re.compile(r"(?:F|B|\*|F&B|In\d{1,2})\.Cu|(?:F|B|\*)\.(?:Paste|Mask|SilkS|Silkscreen|Fab|CrtYd|Courtyard|Adhes|"
+                    r"Adhesive)|Edge\.Cuts|Dwgs\.User|Cmts\.User|Eco[12]\.User|Margin|User\.\d{1,2}|"
+                    r"User\.(?:Drawings|Comments|Eco[12])")
+FP_NODES = {"version", "generator", "generator_version", "layer", "descr", "tags", "property", "fp_text", "attr", "pad",
+            "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve", "zone", "uuid", "tedit", "tstamp",
+            "locked", "placed", "at", "solder_mask_margin", "solder_paste_margin", "solder_paste_ratio",
+            "solder_paste_margin_ratio", "clearance", "zone_connect", "thermal_width", "thermal_gap",
+            "net_tie_pad_groups", "private_layers", "duplicate_pad_numbers_are_jumpers", "jumper_pad_groups",
+            "autoplace_cost90", "autoplace_cost180", "sheetname", "sheetfile", "path"}
+SYM_LIB_NODES = {"version", "generator", "generator_version", "symbol"}
+SYM_NODES = {"property", "pin_names", "pin_numbers", "exclude_from_sim", "in_bom", "on_board", "symbol", "power",
+             "in_pos_files", "duplicate_pin_numbers_are_jumpers"}
+UNIT_NODES = {"rectangle", "polyline", "circle", "arc", "bezier", "text", "pin", "unit_name"}
+FP_TEXT_MAX, FP_TEXT_LEN, DESCR_LEN, SYM_TEXT_MAX, SYM_TEXT_LEN, PIN_TEXT_LEN = 10, 64, 500, 16, 100, 48
 
 
 class NotShareable(ValueError):
@@ -91,10 +116,13 @@ def _record_source(source):
     return "datasheet" if kind_of(source) == "datasheet" else str(source)
 
 
-def private(url):
-    """Why a link is not a public web link (ds_archive.asked: the Internet Archive fallback's test), else None."""
+def private(url, resolve=True):
+    """Why a link is not a public web link (ds_archive.asked: the Internet Archive fallback's test), else None.
+    resolve=False: from the link's text alone, with no name lookup (validate: a record a stranger wrote must not make
+    this machine ask a DNS server they may run)."""
     from .ds_archive import asked
-    return asked(url) if str(url or "").lower().startswith(("http://", "https://")) else "not an http(s) link"
+    return asked(url, resolve=resolve) if str(url or "").lower().startswith(("http://", "https://")) else \
+        "not an http(s) link"
 
 
 def _params(item):
@@ -150,6 +178,21 @@ def _datasheet(item, rules, entry):
         return good[0], None, [u for u in read + plan if u != good[0]]
     good = next((u for u in plan if not private(u)), None)
     return good, None, [u for u in plan if u != good]
+
+
+def shared_description(item):
+    """The plan item's description, when a source gave it (field_sources names where the librarian took it from: a
+    part search, the KiCad library, the datasheet read, a store record); "" when it is the BOM line's own text (no
+    field_sources entry, or one that names the BOM), when a house style rewrote it, or when the item does not say.
+    The BOM's Description / Notes columns are the user's own words (project names, internal codes): never shared."""
+    src = str((item.get("field_sources") or {}).get("Description") or "")
+    if not src.strip() or re.search(r"\bBOM\b", src, re.I):
+        return ""
+    hs = item.get("house_style")
+    if isinstance(hs, dict) and any(isinstance(c, dict) and c.get("field") == "description"
+                                    for c in hs.get("changes") or []):
+        return ""
+    return str(item.get("description") or "").strip()
 
 
 def _norm_item(item):
@@ -238,13 +281,31 @@ def sym_pins(tree):
 
 
 def _clean_symbol(tree, name, url, desc):
-    """Only the KiCad fields every symbol has, with the record's values (no supplier, MPN or company fields)."""
-    vals = {"Reference": None, "Value": name, "Footprint": "", "Datasheet": url or "", "Description": desc}
-    out = [c for c in tree if not (isinstance(c, list) and c and c[0] == "property" and str(c[1]) not in SYM_FIELDS)]
-    for c in out:
-        if isinstance(c, list) and c and c[0] == "property" and len(c) > 2 and vals.get(str(c[1])) is not None:
-            c[2] = Q(vals[str(c[1])])
-    out = [c for c in out if not (isinstance(c, list) and c and c[0] in ("embedded_files", "embedded_fonts"))]
+    """Only the KiCad fields every symbol has, each once, with the record's values (no supplier, MPN or company
+    fields; the Reference a plain designator prefix, the Footprint empty)."""
+    props = {str(c[1]): c for c in tree if isinstance(c, list) and c and c[0] == "property" and len(c) > 2}
+    ref = re.sub(r"[^A-Z]", "", str(props["Reference"][2]).upper())[:4] if "Reference" in props else ""
+    vals = {"Reference": ref if _REF_PREFIX.fullmatch(ref) else "U", "Value": name, "Footprint": "",
+            "Datasheet": url or "", "Description": desc or ""}
+    out, seen = [], set()
+    for c in tree:
+        if isinstance(c, list) and c and c[0] == "property":
+            k = str(c[1]) if len(c) > 2 else ""
+            if k not in SYM_FIELDS or k in seen:
+                continue
+            seen.add(k)
+            c = list(c)
+            c[2] = Q(vals[k])
+        elif isinstance(c, list) and c and c[0] in ("embedded_files", "embedded_fonts"):
+            continue
+        out.append(c)
+    at = next((i for i, c in enumerate(out) if isinstance(c, list) and c and c[0] in ("symbol", "pin_names",
+                                                                                         "pin_numbers")), len(out))
+    for k in SYM_FIELDS:
+        if k not in seen:
+            out.insert(at, ["property", Q(k), Q(vals[k]), ["at", 0, 0, 0],
+                            ["effects", ["font", ["size", 1.27, 1.27]], ["hide", "yes"]]])
+            at += 1
     return out
 
 
@@ -288,7 +349,7 @@ def from_item(item, base=".", rules=None, by="", lock=None, at=None):
     package = str(src["footprint"]).rsplit(":", 1)[-1] if fkind in ("kicad", "standard") else KX.kname(mpn)
     text, model_path = clean_footprint(_kicad_mod_path(item, base).read_text(encoding="utf-8"), package)
     text = scrub(text)
-    desc = scrub(str(item.get("description") or "").strip())
+    desc = scrub(shared_description(item))
     name, notes = KX.ksym(mpn), []
     tree = KX.symbol_from_schlib(RC._path(base, item["symbol"]["file"]), name, notes, pick=item["symbol"].get("ref"))
     KX.restore_types(tree, item["symbol"].get("kicad_types"), notes, guess=skind != "kicad")
@@ -297,7 +358,7 @@ def from_item(item, base=".", rules=None, by="", lock=None, at=None):
     sym_text = scrub(sexpr.dumps(lib) + "\n")
     pins = sym_pins(next(sexpr.find(sexpr.parse(sym_text), "symbol")))
     pads = _pads(text)
-    pin_map = {p["num"]: p["num"] for p in pins if p["num"] in pads}
+    pin_map = {p["num"]: p["num"] for p in pins if p["num"] in pads}     # pin N on pad N (what build() draws)
     h = FS.digest(text)
     ds = entry.get("datasheet") or {}
     read = _read(item, entry)
@@ -343,20 +404,38 @@ def _scrub(text, links):
 
 # ---------------------------------------------------------------- hashes and trust
 def _pin_name(s):
-    return re.sub(r"[\s~{}\\]", "", str(s or "")).upper()
+    """A pin name compared across KiCad and Altium spellings: the active-low bar kept (KiCad '~{CS}' and KiCad 6
+    '~CS~' are Altium's 'C\\S\\', never plain 'CS'), white space dropped, upper case."""
+    from .altium_lib import overline
+    s = str(s or "")
+    if "~{" not in s and s != "~":
+        s = re.sub(r"~([^~]*)~?", lambda m: "~{" + m.group(1) + "}" if m.group(1) else "~", s)
+    return re.sub(r"\s", "", overline(s)).upper()
 
 
-def pins_hash(record_or_pins, pin_map=None):
-    """Hash of the sorted (pin number, normalised pin name, pad) rows: a record, or its pins with a pin map."""
+def _mount(v):
+    try:
+        return max(0, int(v or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def pins_hash(record_or_pins, pin_map=None, mount_pads=None):
+    """Hash of the sorted (pin number, normalised pin name, pad) rows and the footprint's mounting-pad count (a pad
+    table's role-mount pads on no net): a record (its pins, pin_map and footprint.mount_pads), or pins with a pin map
+    and mount_pads. Two builds whose hashes agree attest the same pins, pads and mounting pads."""
     if isinstance(record_or_pins, dict):
         pins = (record_or_pins.get("symbol") or {}).get("pins") or []
         pin_map = record_or_pins.get("pin_map") if pin_map is None else pin_map
+        if mount_pads is None:
+            mount_pads = (record_or_pins.get("footprint") or {}).get("mount_pads")
     else:
         pins = record_or_pins or []
-    pm = {str(k): str(v) for k, v in (pin_map or {}).items()}
+    pm = {str(k): str(v) for k, v in (pin_map or {}).items()} if isinstance(pin_map, dict) else {}
     rows = sorted({(str(p.get("num")), _pin_name(p.get("name")), pm.get(str(p.get("num")), str(p.get("num"))))
                    for p in pins if isinstance(p, dict)}, key=lambda r: (_nat(r[0]), r[1], r[2]))
-    return SK.digest([list(r) for r in rows])[:32]
+    mount = _mount(mount_pads)
+    return SK.digest([list(r) for r in rows] + ([["#mount_pads", str(mount)]] if mount else []))[:32]
 
 
 def _same_pads(a, b):
@@ -415,8 +494,9 @@ def add_evidence(record, entry):
 
 
 def merge(existing, incoming):
-    """The store's record with an incoming build of the same part: the same pads and pins -> the evidence and `also`
-    codes of both (each once); otherwise Conflict naming what differs."""
+    """The store's record with an incoming build of the same part: the same pads and pins -> the existing record with
+    the incoming evidence added (each entry once; its `also` codes stay the existing record's: a contributor never
+    adds codes by a merge); otherwise Conflict naming what differs."""
     if existing["key"]["key"] != incoming["key"]["key"]:
         raise Conflict(f"another part: {incoming['key']['key']} is not {existing['key']['key']}")
     what = _differs(existing, incoming)
@@ -426,7 +506,6 @@ def merge(existing, incoming):
     for e in incoming.get("evidence") or []:
         out = add_evidence(out, dict(e, footprint_hash=out["footprint"]["hash"], pins_hash=pins_hash(out))
                            if _agrees(incoming, e) else e)
-    out["also"] = sorted(set(existing.get("also") or []) | set(incoming.get("also") or []))
     return out
 
 
@@ -447,10 +526,24 @@ def _iso(s):
         return False
 
 
-def validate(record):
+def _strings(x):
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for k, v in x.items():
+            yield from _strings(k)
+            yield from _strings(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from _strings(v)
+
+
+def validate(record, resolve=False):
     """Schema 1 problems of a record ([] = good): fields and types, allowed sources and their licences, the key, the
-    hashes recomputed from the drawing and pins, size, forbidden content (3D models, PDFs, base64 blobs, private
-    links, e-mail addresses), evidence."""
+    hashes recomputed from the drawing and pins at this ecadlib's digest version, size, forbidden content (3D models,
+    PDFs, base64 blobs, private links, e-mail addresses, control characters), KiCad text that carries more than the
+    record's fields (_kicad_text), evidence. resolve: look host names up for the private-link test (default no: a
+    syntax test only, nothing goes to the network)."""
     p = []
     if not _section(p, "record", record, TOP):
         return p
@@ -458,6 +551,8 @@ def validate(record):
         text = SK.dumps(record)
     except (TypeError, ValueError) as e:
         return p + [f"record: not JSON ({e})"]
+    if any(_CTRL.search(x) for x in _strings(record)):
+        p.append("record holds control characters (only line breaks and tabs are text)")
     if len(text.encode("utf-8")) > MAX_BYTES:
         p.append(f"record too large ({len(text.encode('utf-8'))} bytes, at most {MAX_BYTES})")
     if _STEP.search(text):
@@ -493,7 +588,7 @@ def validate(record):
             p.append("part: the description holds an e-mail address")
         ds = part.get("datasheet")
         if ds is not None and _section(p, "part.datasheet", ds, DATASHEET):
-            why = private(ds.get("url"))
+            why = private(ds.get("url"), resolve)
             if why:
                 p.append(f"part.datasheet: url is not a public link ({why})")
             if ds.get("sha256") is not None and not _HEX.fullmatch(str(ds["sha256"])):
@@ -524,6 +619,9 @@ def validate(record):
         hv = fp.get("hash_v")
         if not isinstance(hv, int) or isinstance(hv, bool) or not 1 <= hv <= FS.HASH_V:
             p.append(f"footprint: hash_v {hv!r} is not a digest version (1..{FS.HASH_V})")
+        elif isinstance(fp.get("kicad_mod"), str) and hv != FS.HASH_V:
+            p.append(f"footprint: hash_v {hv} is an older digest version: a drawing is hashed at {FS.HASH_V} (an older "
+                     "one cannot tell a pad moved to the bottom side, paste or custom copper apart)")
         if not isinstance(fp.get("hash"), str) or not fp.get("hash"):
             p.append("footprint: hash missing")
         elif isinstance(fp.get("kicad_mod"), str) and isinstance(hv, int):
@@ -553,11 +651,14 @@ def validate(record):
             p.append("body: height_src is text")
         m = body.get("model")
         if m is not None and _section(p, "body.model", m, {"source", "url"}):
-            if private(m.get("url")):
-                p.append(f"body.model: url is not a public link ({private(m.get('url'))})")
+            if private(m.get("url"), resolve):
+                p.append(f"body.model: url is not a public link ({private(m.get('url'), resolve)})")
     pm = record.get("pin_map")
     if not isinstance(pm, dict) or not all(isinstance(a, str) and isinstance(b, str) for a, b in pm.items()):
         p.append("pin_map: an object of pin number -> pad number")
+    elif any(a != b for a, b in pm.items()):
+        p.append("pin_map: only pin N on pad N (the map a record's part is built with); this one maps "
+                 + ", ".join(f"{a}->{b}" for a, b in sorted(pm.items()) if a != b)[:120])
     elif pins is not None:
         nums = {x["num"] for x in pins}
         if set(pm) - nums:
@@ -565,6 +666,145 @@ def validate(record):
         if pads is not None and set(pm.values()) - pads:
             p.append(f"pin_map: pads not on the footprint: {', '.join(sorted(set(pm.values()) - pads))}")
     _evidence(p, record, pins is not None and isinstance(pm, dict) and isinstance(fp, dict))
+    if isinstance(sym, dict) and isinstance(fp, dict) and isinstance(part, dict):
+        p += _kicad_text(record)
+    return p
+
+
+def _walk(t):
+    yield t
+    for c in t[1:] if isinstance(t, list) else ():
+        if isinstance(c, list):
+            yield from _walk(c)
+
+
+def _atoms(t):
+    for c in t if isinstance(t, list) else ():
+        if isinstance(c, list):
+            yield from _atoms(c)
+        else:
+            yield str(c)
+
+
+def _vars(text, allowed=()):
+    """Text variables (${...}) in text other than the allowed ones."""
+    return [v for v in re.findall(r"\$\{[^}]*\}?", text) if v not in allowed]
+
+
+def _kicad_text(record):
+    """Problems of a record's KiCad text beyond its pads and pins: it must carry the record's checked fields and
+    nothing else (validate)."""
+    p = []
+    part, sym, fp = record["part"], record["symbol"], record["footprint"]
+    ks, km = sym.get("kicad_sym"), fp.get("kicad_mod")
+    if isinstance(km, str):
+        try:
+            t = sexpr.parse(km)
+            p += [f"footprint: {x}" for x in _fp_text_problems(t, str(part.get("package") or ""))]
+        except (ValueError, IndexError, TypeError) as e:
+            p.append(f"footprint: kicad_mod is not a KiCad footprint ({type(e).__name__})")
+    if isinstance(ks, str):
+        try:
+            t = sexpr.parse(ks)
+            p += [f"symbol: {x}" for x in _sym_text_problems(t, part)]
+        except (ValueError, IndexError, TypeError) as e:
+            p.append(f"symbol: kicad_sym is not a KiCad symbol library ({type(e).__name__})")
+    return list(dict.fromkeys(p))
+
+
+def _fp_text_problems(t, package):
+    p = []
+    if not (isinstance(t, list) and len(t) > 1 and t[0] in ("footprint", "module")):
+        return ["kicad_mod is not a KiCad footprint"]
+    odd = sorted({str(c[0]) for c in t[2:] if isinstance(c, list) and c and str(c[0]) not in FP_NODES})
+    if odd:
+        p.append(f"kicad_mod holds {', '.join(odd[:5])}: a record's footprint is pads, outlines and its own name only")
+    nodes = list(_walk(t))
+    if any(isinstance(n, list) and n and n[0] in ("href", "image", "model", "embedded_files", "embedded_fonts",
+                                                    "fp_text_box", "dimension", "group", "net")
+           for n in nodes[1:]):
+        p.append("kicad_mod holds a hyperlink, image, 3D model, embedded file, text box, dimension or net")
+    layers = set()
+    for n in nodes:
+        if isinstance(n, list) and n and n[0] in ("layer", "layers"):
+            layers.update(str(x) for x in n[1:] if not isinstance(x, list) and str(x) != "knockout")
+    bad = sorted(x for x in layers if not _LAYER.fullmatch(x))
+    if bad:
+        p.append(f"kicad_mod uses layers {', '.join(bad[:5])}: not a footprint layer")
+    texts = [c for c in t[2:] if isinstance(c, list) and c and c[0] in ("fp_text", "property")]
+    if len(texts) > FP_TEXT_MAX:
+        p.append(f"kicad_mod has {len(texts)} text items (at most {FP_TEXT_MAX}): no text beyond the reference, value "
+                 "and a few notes")
+    for c in texts:
+        kind, val = (str(c[1]), str(c[2])) if len(c) > 2 else ("", "")
+        if c[0] == "fp_text" and kind not in ("reference", "value", "user"):
+            p.append(f"kicad_mod: fp_text {kind[:20]!r} is not reference / value / user")
+        elif c[0] == "property" and kind not in SYM_FIELDS:
+            p.append(f"kicad_mod: property {kind[:30]!r} is not one of {', '.join(SYM_FIELDS)}")
+        elif (c[0] == "fp_text" and kind == "value") or (c[0] == "property" and kind == "Value"):
+            if val != package:
+                p.append(f"kicad_mod: its value text {val[:40]!r} is not the record's package {package!r}")
+        elif len(val) > (DESCR_LEN if kind in ("Description", "Datasheet") else FP_TEXT_LEN):
+            p.append(f"kicad_mod: text {kind[:20]!r} is {len(val)} characters long")
+        if _vars(val, ("${REFERENCE}",)):
+            p.append(f"kicad_mod: text variables {', '.join(_vars(val, ('${REFERENCE}',))[:3])} (only ${{REFERENCE}})")
+    for k in ("descr", "tags"):
+        for c in (c for c in t[2:] if isinstance(c, list) and c and c[0] == k):
+            v = " ".join(_atoms(c[1:]))
+            if len(v) > DESCR_LEN:
+                p.append(f"kicad_mod: {k} is {len(v)} characters long (at most {DESCR_LEN})")
+            if _vars(v):
+                p.append(f"kicad_mod: {k} holds text variables")
+    if sum(1 for c in t[2:] if isinstance(c, list) and c and c[0] in ("descr", "tags")) > 2:
+        p.append("kicad_mod: more than one descr / tags")
+    return p
+
+
+def _sym_text_problems(t, part):
+    p = []
+    if not (isinstance(t, list) and t and t[0] == "kicad_symbol_lib"):
+        return ["kicad_sym is not a KiCad symbol library"]
+    odd = sorted({str(c[0]) for c in t[1:] if isinstance(c, list) and c and str(c[0]) not in SYM_LIB_NODES})
+    if odd:
+        p.append(f"kicad_sym holds {', '.join(odd[:5])}: one symbol only")
+    syms = [c for c in t[1:] if isinstance(c, list) and c and c[0] == "symbol"]
+    if len(syms) != 1:
+        return p + [f"kicad_sym holds {len(syms)} symbols: one only"]
+    sy = syms[0]
+    name = str(sy[1]) if len(sy) > 1 else ""
+    odd = sorted({str(c[0]) for c in sy[2:] if isinstance(c, list) and c and str(c[0]) not in SYM_NODES})
+    if odd:
+        p.append(f"kicad_sym holds {', '.join(odd[:5])}: a record's symbol is its pins, drawing and five fields")
+    for u in (c for c in sy[2:] if isinstance(c, list) and c and c[0] == "symbol"):
+        odd = sorted({str(c[0]) for c in u[2:] if isinstance(c, list) and c and str(c[0]) not in UNIT_NODES})
+        if odd:
+            p.append(f"kicad_sym: unit {str(u[1])[:40]!r} holds {', '.join(odd[:5])}")
+        texts = [c for c in u[2:] if isinstance(c, list) and c and c[0] == "text"]
+        if len(texts) > SYM_TEXT_MAX or any(len(str(c[1])) > SYM_TEXT_LEN for c in texts if len(c) > 1):
+            p.append(f"kicad_sym: unit {str(u[1])[:40]!r} has more or longer text than a symbol drawing has")
+        for pin in (c for c in u[2:] if isinstance(c, list) and c and c[0] == "pin"):
+            for k in ("name", "number"):
+                v = sexpr.first(pin, k)
+                if v and len(v) > 1 and len(str(v[1])) > PIN_TEXT_LEN:
+                    p.append(f"kicad_sym: a pin {k} is {len(str(v[1]))} characters long (at most {PIN_TEXT_LEN})")
+    nodes = list(_walk(t))
+    if any(isinstance(n, list) and n and n[0] in ("href", "image", "embedded_files", "embedded_fonts", "text_box",
+                                                    "extends") for n in nodes[1:]):
+        p.append("kicad_sym holds a hyperlink, image, embedded file, text box or a link to another symbol")
+    if any(_vars(a) for a in _atoms(t)):
+        p.append("kicad_sym holds text variables (${...})")
+    props = [c for c in sy[2:] if isinstance(c, list) and c and c[0] == "property"]
+    got = [str(c[1]) if len(c) > 1 else "" for c in props]
+    if sorted(got) != sorted(SYM_FIELDS):
+        p.append(f"kicad_sym properties are {', '.join(got)[:120]}: exactly {', '.join(SYM_FIELDS)}, once each")
+    want = {"Value": {name}, "Datasheet": {str(((part.get("datasheet") or {}).get("url")) or "")},
+            "Description": {str(part.get("description") or "")}, "Footprint": {"", str(part.get("package") or "")}}
+    for c in props:
+        k, v = (str(c[1]), str(c[2])) if len(c) > 2 else ("", "")
+        if k == "Reference" and not _REF_PREFIX.fullmatch(v):
+            p.append(f"kicad_sym: Reference {v[:20]!r} is not a designator prefix (1 to 4 capital letters)")
+        elif k in want and v not in want[k]:
+            p.append(f"kicad_sym: {k} {v[:60]!r} is not the record's ({sorted(want[k])[-1][:60]!r})")
     return p
 
 
@@ -683,7 +923,11 @@ def build(record, out_dir, rules=None):
         par.append({"name": "Library Credit", "value": K.KICAD_CREDIT})
     types = L.kicad_chain_types(chain)
     mount = record["footprint"].get("mount_pads") or 0
-    return {"name": mpn, "folder": "", "description": record["part"]["description"], "comment": mpn, "parameters": par,
+    # (a record with no source's description, v1's usual case, is checked with its maker, MPN and package as the text:
+    # the release check's fields rule is about the plan's fields, not the record's drawing this rebuild checks)
+    desc = str(record["part"].get("description") or "").strip() or \
+        f"{record['key']['maker']} {mpn} ({record['part'].get('package') or 'package'})"
+    return {"name": mpn, "folder": "", "description": desc, "comment": mpn, "parameters": par,
             "symbol": {"ref": sym["name"], "file": rel(spath), **({"kicad_types": types} if types else {})},
             "footprint": {"ref": fp["name"], "file": rel(pcb), "kicad_mod": rel(kmod),
                           **({"mount_pads": mount} if mount else {})},

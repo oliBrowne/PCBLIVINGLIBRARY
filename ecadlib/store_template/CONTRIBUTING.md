@@ -3,11 +3,13 @@
 1. In a finished ecadlib library, run `ecadlib store share`. It lists the parts that may be shared (released by the
    release check, from an allowed source, with a public datasheet link, no override) and writes their records to a
    folder. Nothing leaves your machine yet. Your GitHub name goes into each record's evidence and is public.
-2. Fork this repository, check out your fork, and run `ecadlib store-repo add . FOLDER` in it. That adds new parts,
-   adds your build as evidence to parts that are already here (when your pads and pins agree), refuses parts whose
-   pads or pins differ, and updates `index/`.
-3. Commit and open a pull request. The `verify` check rebuilds each changed record with the newest ecadlib and runs
-   its release check. `ecadlib store-repo verify . --base origin/main` runs the same check on your machine.
+2. Fork this repository, check out your fork, and run `ecadlib store-repo add . FOLDER --author YOUR-GITHUB-NAME` in
+   it. That adds new parts, adds your build as evidence to parts that are already here (when your pads and pins
+   agree), refuses parts whose pads or pins differ, and updates `index/`. It applies the same rules as the `verify`
+   check below, so what it writes passes: anything it refuses is a maintainer's to add.
+3. Commit and open a pull request. The `verify` check rebuilds each changed record with the ecadlib version in
+   `ecadlib-version.txt` and runs its release check. `ecadlib store-repo verify . --base origin/main --author
+   YOUR-GITHUB-NAME` runs the same check on your machine.
 
 ## What the check refuses
 
@@ -16,11 +18,17 @@
 - different pads or pins for a part that is already here (a conflict: a maintainer looks; a corrected part comes back
   as a new revision after the old one is withdrawn);
 - evidence removed or edited (evidence is only ever added), evidence in several people's names in one pull request or
-  in a name that is not yours (one GitHub account counts once);
-- `signoff` and `kicad-exact` evidence, new `also` codes for a part that is already here, status changes away from
-  disputed, and any change to `withdrawn.json`, `withdrawn/`, `disputes.json`, `store.json`, the licence files or
-  `.github/`: these are the maintainers'. (`kicad-exact` is not yet checked against the KiCad library by CI.)
-- any file that is not `.json`, `.md`, `.yml`, `.txt` or a LICENSE in its folder, and any file over 400 KB.
+  in a name that is not yours (one GitHub account counts once), more than one new evidence entry for one part (your
+  one build per part);
+- maintainer-only changes: `signoff` and `kicad-exact` evidence; `also` codes (other part numbers a record says share
+  its land), on a new part as on one already here; any status change; a new file past rev 1; any record of a part
+  listed in `withdrawn.json` (a withdrawn part comes back only through a maintainer); EasyEDA pointer records
+  ("pointer records are not accepted from contributors yet": nothing can check their claim yet); a removed record;
+  and every file outside `parts/` and `index/`: `store.json` (but its date), `withdrawn.json`, `withdrawn/`,
+  `disputes.json`, `ecadlib-version.txt`, every top-level file (README, CONTRIBUTING, NOTICE, LICENSE) and `.github/`.
+  (`kicad-exact` is not yet checked against the KiCad library by CI.)
+- any file that is not `.json`, `.md`, `.yml`, `.txt` or a LICENSE in its folder, a symbolic link, a submodule, an
+  executable file, and any file over 400 KB.
 
 ## Licence
 
@@ -31,5 +39,8 @@ datasheet or drew, CC-BY-SA 4.0 with the KiCad credit for parts from the KiCad l
 
 `ecadlib store-repo withdraw . MAKER|MPN --reason "..." --issue URL` pulls a part (it stays in `withdrawn/` and
 `withdrawn.json` for good); `ecadlib store-repo dispute . MAKER|MPN --reason "..."` marks it disputed;
-`ecadlib store-repo add . FILE --dispute` marks the store's record disputed when a conflicting build comes in;
-`ecadlib store-repo verify . --base origin/main --maintainer` allows the maintainer-only changes.
+`ecadlib store-repo add . FILE --maintainer` adds what contributors may not (also codes, sign-offs, a corrected rev of
+a withdrawn part, pointer records), and with `--dispute` marks the store's record disputed when a conflicting build
+comes in; `ecadlib store-repo verify . --base origin/main --maintainer` allows the maintainer-only changes. Both tell
+you when a change makes a part confirmed: check who built it. A pull request that touches anything outside `parts/`
+and `index/` needs your review by hand (README.md, maintainer checklist).

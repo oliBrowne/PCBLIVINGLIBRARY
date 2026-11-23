@@ -10,18 +10,19 @@ a minor release may change command-line options and file formats.
 ### Added
 
 - **Shared store of checked parts** (not switched on: there is no public store yet and no default address). With
-  `[store] url` set, the librarian looks each part up in the store first (`store` leads `[sources] order`). A
+  `[store] url` set, the librarian looks each part up in the store first (by itself: it is never in `[sources] order`,
+  and with the url empty nothing changes, not even the rules hash). A
   `confirmed` record (`[store] accept`, default `"confirmed"`; `"checked"` takes single-build records too, `"off"` never
   asks) is drawn into the library and goes through the same release check as any part; its source reads
   `store:<id>@r<rev>`, and a record made from the KiCad libraries keeps the KiCad licence, Library Credit and
-  NOTICE.txt. A record not trusted on its own is a second opinion: your own independent build with the same pads and
-  pins lifts the hold that only waited for a confirmation; different pads or pins hold the part and name both. A part
-  built from a record the store later withdraws or disputes is held on the next run and listed by `ecadlib upkeep`
-  (new `store` check). A store that cannot be reached holds nothing and is noted once. New commands: `ecadlib store
+  NOTICE.txt. A record not trusted on its own is a second opinion: your own build with the same pads and pins, made
+  independently (another kind of source, or a datasheet read by another AI model), lifts the hold that only waited for
+  a confirmation, and gets it back if that record is later withdrawn; different pads or pins hold the part and name
+  both. A part built from a record the store later withdraws, disputes or drops is held on the next run, by every
+  publisher, and listed by `ecadlib upkeep` (a `store` check that runs by itself while a url is set). A store that
+  cannot be reached holds nothing and is noted once. New commands: `ecadlib store
   status|get|share|report` (share writes record files and sends nothing; report builds a GitHub issue link) and
   `ecadlib store-repo` for the people who run a store. Guide: [docs/shared-store.md](docs/shared-store.md).
-- A datasheet-drawn footprint keeps the read's package dimensions in the plan (`footprint.spec`), so a shared record
-  carries them.
 
 ## [0.4.1] - 2026-11-22
 

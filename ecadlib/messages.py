@@ -408,6 +408,11 @@ CODES = {
                        "part or release it anyway.",
                        [r"^(?:verify: )?shared store: the store's record (?P<record>\S+ r\d+) \(\w+\) has other "
                         r"(?P<what>.+?) than this build"]),
+    "store.lift_back": ("This part's own build was released because the shared store's record {record} agreed with it; "
+                        "that no longer stands ({why}), so the holds it lifted are back.",
+                        "Check the part against the datasheet, or build it again with `--refresh`.",
+                        [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+):? (?P<why>.+?): this part's own build "
+                         r"was released because that record agreed with it"]),
     "store.withdrawn": ("This part was built from the shared store's record {record}, which the store has withdrawn "
                         "({why}).",
                         "Build it again (`ecadlib librarian BOM --refresh PART`) or check it against the datasheet.",
@@ -417,6 +422,23 @@ CODES = {
                        "Check it against the datasheet (`ecadlib store get` shows the record), or build it again with "
                        "`--refresh`.",
                        [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is disputed"]),
+    "store.unknown": ("This part depends on the shared store's record {record}, and the store cannot tell whether it "
+                      "still stands ({why}).",
+                      "Ask the store's maintainers, or build the part again without the store (`--refresh`).",
+                      [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+): cannot tell whether the store "
+                       r"(?P<why>.+?)(?::|$)"]),
+    "store.gone": ("This part was built from the shared store's record {record}, which the store no longer lists.",
+                   "Build it again (`ecadlib librarian BOM --refresh PART`) or check it against the datasheet.",
+                   [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is no longer (?:in the store's index|"
+                    r"the store's)"]),
+    "store.level": ("This part was built from the shared store's record {record}, which is now only {level}: below "
+                    "what your store accept setting takes.",
+                    "Check it against the datasheet, or build it again with `--refresh`.",
+                    [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is now only (?P<level>\S+)"]),
+    "store.extras": ("The shared store's footprint for this part has {what}, which ecadlib's own check of a drawing "
+                     "does not cover.",
+                     "Compare the footprint with the datasheet, then release it anyway if it is right.",
+                     [r"^(?:verify: )?shared store: the store's footprint has (?P<what>.+?): compare"]),
     "store.package_clash": ("The BOM names the footprint {bom}, but the shared store's record {record} is another "
                             "package.",
                             "Check which package the part has; fix the BOM line or pick the footprint by hand.",

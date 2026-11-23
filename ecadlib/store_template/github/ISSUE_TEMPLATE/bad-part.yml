@@ -5,8 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you. A report with a concrete difference marks the part disputed: it is then only used as a second
-        opinion until a maintainer has looked. Please do not attach the datasheet PDF; a public link is enough.
+        Thank you. A maintainer reviews every report with a concrete difference, and can mark the part disputed (then
+        it is only used as a second opinion) or withdraw it. Please do not attach the datasheet PDF; a public link is
+        enough.
   - type: input
     id: maker
     attributes:

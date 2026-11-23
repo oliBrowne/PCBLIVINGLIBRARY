@@ -823,26 +823,36 @@ PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what it
 
 
 def store_problems(item, store):
-    """Why a part built from a shared-store record must not go out now: the store (a store_client.Store) has withdrawn
-    that record, or marks it disputed. [] when the part is from no record, the store is off, or it cannot be read (a
-    store that cannot be reached holds nothing)."""
-    from .store_client import parse_source
+    """Why a part that owes the shared store must not go out now (store_client.problems): built from a record the
+    store has since withdrawn, disputes, no longer lists or rates below [store] accept, or released by a record's
+    agreement that no longer stands, or the store's withdrawn list cannot be read. [] when the part owes the store
+    nothing, the store is off, or it cannot be reached (a store that cannot be reached holds nothing)."""
+    from . import store_client as SC
     if store is None or not getattr(store, "enabled", False):
         return []
-    keys = (item.get("store") or {}).get("keys") or {}
-    out = []
-    for h in ("symbol", "footprint"):
-        p = parse_source((item.get("source") or {}).get(h))
-        if not p:
-            continue
-        label = f"{keys.get(p[0]) or p[0]} r{p[1]}"
-        w = store.is_withdrawn(*p)
-        if w:
-            why = "; ".join(str(x) for x in (w.get("reason"), w.get("issue")) if x) or "no reason given"
-            out.append(f"verify: shared store record {label} was withdrawn from the store ({why})")
-        elif keys.get(p[0]) and store.status(p[0], keys[p[0]]) == "disputed":
-            out.append(f"verify: shared store record {label} is disputed")
-    return list(dict.fromkeys(out))
+    return list(dict.fromkeys(f"verify: {SC.note_for(d, why)}" for d, why in SC.problems(item, store)))
+
+
+_STORES = {}                                   # the shared store a publisher checks against: one per settings, per process
+
+
+def store_for(item, base=".", rules=None):
+    """The store_client.Store [store] names, made once per process and settings (so a plan of 500 parts asks an
+    unreachable store once), when it is set and the item owes it something; else None (nothing is built or asked)."""
+    from . import rules as RU, store_client as SC
+    if not SC.depends(item):
+        return None
+    try:
+        rules = rules if isinstance(rules, dict) else RU.resolve(rules, base)
+    except Exception:                          # rules that cannot be read: the caller's own check says so
+        return None
+    if not SC.configured(rules):
+        return None
+    s = rules.get("store") or {}
+    k = tuple(str(s.get(x) or "") for x in ("url", "accept", "mode", "snapshot"))
+    if k not in _STORES:
+        _STORES[k] = SC.from_rules(rules)
+    return _STORES[k]
 
 
 def publish_problems(item, base=".", rules=None, writes_files=False, policy=None, store=None):
@@ -855,7 +865,9 @@ def publish_problems(item, base=".", rules=None, writes_files=False, policy=None
     the part's own files in a library) checks them too: their files must be there and pass every check that applies.
     The field rules (PULLED_NOT_CHECKED: datasheet link, Description, required parameters) do not: the workspace
     released those fields and ecadlib holds no datasheet for the part. store: a store_client.Store, when the caller
-    has one: a part from a record the store has since withdrawn or disputes does not go (store_problems)."""
+    has one; None = the one [store] names (store_for: only for a part that owes the store something): a part from a
+    record the store has since withdrawn or disputes, or one a withdrawn record's agreement released, does not go
+    (store_problems)."""
     st = item.get("status", "ready")
     if item.get("a365") and st == "deleted_in_workspace":
         return ["status: deleted in the Altium 365 workspace: not published again"]
@@ -879,6 +891,8 @@ def publish_problems(item, base=".", rules=None, writes_files=False, policy=None
             where = policy_file(base) or "ecadlib.toml [release.approvals]"   # added after the release check
             return out + [f"sign-off: the approval policy {where} cannot be read ({e}): fix it, then publish again"]
     block = push_block(item, policy, base)     # holds here too. No policy now: the release check's snapshot decides
+    if store is None:
+        store = store_for(item, base, rules)
     return out + ([f"sign-off: {block}"] if block else []) + store_problems(item, store)
 
 

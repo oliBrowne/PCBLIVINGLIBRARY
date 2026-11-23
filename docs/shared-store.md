@@ -24,23 +24,38 @@ with any library part.
 | withdrawn | Pulled from the store, with a reason | Never used; parts already built from it are held |
 
 **Second opinion.** When your own build of a part (a datasheet read, a KiCad footprint found by a near name, an
-EasyEDA conversion) has the same pads and pins as a store record somebody else built independently, the review says
-"matches an independent build in the shared store", and the hold that only waited for someone to confirm that build is
-lifted. Every other hold stays. If the two differ, the part is held and the review names both, so you can compare them
-with the datasheet. A record made from the same KiCad or EasyEDA entry as your build is no second build and lifts
-nothing.
+EasyEDA conversion) has the same pads and pins as a store record with its own drawing, and the two were made
+independently, the review says "matches an independent build in the shared store", and the hold that only waited for
+someone to confirm that build is lifted (the datasheet read's flagged items move to the review list). Every other hold
+stays. Independent means another kind of source (a KiCad or standard-table part against your datasheet read), or two
+datasheet reads by **different AI models**: the same model, or a read whose model is not known, lifts nothing
+("agrees, but not an independent read"), and neither does a record made from the same kind of KiCad or standard entry
+as your build. If the two differ, the part is held and the review names both, so you can compare them with the
+datasheet. A lift is recorded with the part; if that record is later withdrawn, disputed or no longer in the store,
+the next librarian run (and `ecadlib upkeep`) puts the lifted hold back, with the reason.
 
-**Withdrawn and disputed records.** ecadlib reads the store's withdrawn list on every librarian run. A part in your
-library that was built from a record the store has since withdrawn or disputes is held on the next run, with the
-reason, and `ecadlib upkeep` lists it. It stays held until you build it again (`ecadlib librarian BOM --refresh PART`)
-or check it yourself. A store that cannot be reached holds nothing and stops nothing: the run finishes and says so
-once at the end.
+A record found through another code it covers (`also`) or for a BOM line with no maker is never built from: at most it
+is a second opinion as above, and it never fills in the Manufacturer field. An EasyEDA pointer record is only noted.
+
+**Withdrawn and disputed records.** ecadlib reads the store's withdrawn list on every librarian run while a store is
+set, whatever your source order or `--sources`. A part in your library built from a record the store has since
+withdrawn, disputes, no longer lists, or now rates below your `accept` setting is held on the next run, with the reason,
+and `ecadlib upkeep` lists it; every publisher (Altium 365 push, DbLib sync, KiCad export) checks it too. A store that
+answers but has no readable withdrawn list cannot say what it took back: parts built from it are held. It stays held
+until you build it again (`ecadlib librarian BOM --refresh PART`) or check it yourself. A store that cannot be reached
+holds nothing new and stops nothing: the run finishes and says so once at the end. A copy of the store saved on your
+computer that is more than 7 days old is never used to build a part.
+
+**Footprints from strangers.** A store footprint was drawn on someone else's computer, so a part built from it is held
+whenever the footprint has anything the pad check does not cover (pads on the bottom copper side, custom-shape pads,
+paste- or mask-only openings or unusual margins, copper graphics): compare it with the datasheet first.
 
 ## Settings (`ecadlib.toml`)
 
 ```toml
 [store]
-url = ""              # the store: https://raw.githubusercontent.com/OWNER/REPO/main, or a folder. "" = off (the default)
+url = ""              # the store: https://raw.githubusercontent.com/OWNER/REPO/main, a file:// URL or a folder.
+                      # "" = off (the default). A plain http:// address is refused
 accept = "confirmed"  # "confirmed": only confirmed records are used on their own (default)
                       # "checked": single-build records are used too (more parts at once, more risk)
                       # "off": never ask the store
@@ -48,9 +63,12 @@ mode = "online"       # "online": fetch the few small files a lookup needs
                       # "snapshot": download the store's whole weekly zip and look parts up on your computer
 ```
 
-The librarian asks the store first whenever `store` is in `[sources] order` (it is in the default order). If you
-write your own `[sources] order` without `store`, the store is not used, even with a url set. `--offline` asks the
-store nothing.
+While `url` is set (and `accept` is not `"off"`), the librarian asks the store first for every part, whatever your
+`[sources] order` or `--sources` says: you do not list it there (naming `store` in an order is allowed and changes
+nothing). `accept = "off"` is the off switch. `--offline` asks the store nothing new: it uses the copy saved on your
+computer, if any, and never one older than 7 days. While `url` is empty nothing about your runs changes: the source
+order, the plan, the lock file and the rules hash are as without this feature. `ecadlib upkeep` adds its store check by
+itself while a url is set.
 
 ## Commands
 
@@ -68,13 +86,17 @@ store nothing.
 
 ## Privacy
 
-* **Looking parts up** sends the store's host (GitHub, for a store kept there) your IP address and the names of the
-  files fetched: an index file that covers about one in 256 parts (picked by a hash of the part number) and the one
-  record. No BOM, no account, no counts. `mode = "snapshot"` downloads the whole store and looks parts up on your
-  computer instead.
+* **Looking parts up** (`mode = "online"`) sends the store's host (GitHub, for a store kept there) your IP address and
+  requests for the store's description, its withdrawn list, and the index file of the part number's slice: one of 256
+  files, picked by a hash of the part number, so that request narrows your part down to about 1/256 of all parts.
+  Only when the store has the part does ecadlib fetch its record, and that request does identify the exact part: the
+  record's file name is derived from the maker and part number, and the public index lists which part each name is.
+  No BOM is sent and no account is used. `mode = "snapshot"` downloads the whole store as one file and looks every
+  part up on your computer: the host then learns nothing about which parts you look up.
 * **Sharing** happens only when you run `ecadlib store share` and then open the pull request yourself. A record holds
-  the maker, part number, the maker's description, the public datasheet link, the symbol and footprint, pins,
-  dimensions, the checks passed, the ecadlib version and the AI model name. It never holds your BOM, project or file
+  the maker, part number, a description only when a part search, a library or the datasheet gave it (never your BOM's
+  own Description or Notes text: otherwise it is empty), the public datasheet link, the symbol and footprint (with only
+  those fields), pins, pads, the checks passed, the ecadlib version and the AI model name. It never holds your BOM, project or file
   names, your name or e-mail, internal or supplier part numbers (an EasyEDA pointer holds only the LCSC number it
   points to), stock or price fields, a private datasheet link, a 3D model or a datasheet PDF.
 

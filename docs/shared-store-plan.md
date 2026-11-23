@@ -67,7 +67,7 @@ store of its own without us building anything extra. (This is not the cut "team 
 | Data read from a datasheet by ecadlib (pin names, pad sizes, dimensions), and the footprint ecadlib drew from it | Shared under MIT. Dimensions and pinouts are facts; the drawing is ecadlib's output |
 | Standard-table lands (IPC) | Shared under MIT |
 | Symbols and footprints taken from the KiCad libraries | Shared, marked CC-BY-SA 4.0 with the KiCad credit on the record (as #54 does today); the user's exports get the same NOTICE they get now |
-| EasyEDA / LCSC content | **Pointer only** in version 1: the record holds the LCSC number, the hash of the pads we saw, and the check result. The user's machine fetches it from EasyEDA as it does today and the hash must match. Reason: EasyEDA asks for credit on reuse, and whether a public copy of their library data is allowed is unclear. Not worth the risk |
+| EasyEDA / LCSC content | **Pointer only** in version 1: the record holds the LCSC number, the hash of the pads we saw, and the check result. In version 1 a pointer is only recorded for later: no client builds from it, compares with it or lifts a hold because of it (fetching the part from EasyEDA and comparing the hash is not built). Reason: EasyEDA asks for credit on reuse, and whether a public copy of their library data is allowed is unclear. Not worth the risk |
 | Maker 3D models (STEP) | Never stored. The record holds the height and where the model came from; ecadlib fetches or generates the body on each machine |
 | Datasheet PDFs | Never stored. The record holds the public link and the PDF's hash |
 | Anything from SnapMagic, SamacSys, Ultra Librarian, a `--lib` library, `ecadlib resolve` picks | Never shareable. Their terms forbid redistribution, or we cannot know who owns it |
@@ -96,7 +96,7 @@ Contributors agree, in the pull request template, that their record is offered u
 | Record | Default behaviour |
 |---|---|
 | confirmed | Used. Still goes through the local release check like any part |
-| checked | Not used on its own. Kept as a second opinion: if the user's own build agrees, the part is released without a hold; if it disagrees, the part is held and the note says the store has another answer |
+| checked | Not used on its own. Kept as a second opinion: if the user's own build agrees and was made independently (another kind of source, or two datasheet reads by different AI models), the hold that only waited for a confirmation is lifted; if it disagrees, the part is held and the note says the store has another answer |
 | withdrawn | Ignored |
 
 `[store] accept = "confirmed"` is the default; `"checked"` takes single-build records too (more parts at once, more
@@ -121,9 +121,9 @@ problem with the record.
      confirmed); different pads or pins is a **conflict**, which blocks the pull request and marks the existing record
      disputed until a maintainer looks;
    - a contributor cannot confirm their own record (one GitHub account counts once).
-4. A pull request that passes and only adds new `checked` records or agreeing evidence is safe to merge without a
-   review of the geometry, because nothing in it is used unconfirmed. Whether to switch on auto-merge for those is
-   Oliver's call later; the first version leaves merging to him.
+4. No pull request is safe to merge unseen: a new `checked` record is not used on its own, but its agreement with a
+   user's own build can lift that build's hold (the second opinion), so a wrong record that matches a wrong local read
+   would release it. Every pull request is merged by a maintainer who has looked at it; auto-merge is not planned.
 
 The checks cannot read the datasheet, so they cannot tell a wrong-but-plausible footprint from a right one. That gap is
 exactly what the `confirmed` rule covers.
@@ -150,13 +150,16 @@ repo with protected `main` is the only source.
 
 ## Privacy
 
-- **Lookups.** The client fetches an index file that covers 1/256 of all parts (chosen by a hash of the part number),
-  then the one record. GitHub sees an IP address and those two file names; ecadlib sends no account, no BOM, no
-  counts. For stricter needs `[store] mode = "snapshot"` downloads the whole weekly bundle and looks parts up locally,
-  and `--offline` or `[store] accept = "off"` contacts nothing.
-- **Sharing.** Only by the explicit command. A record holds only: maker, part number, the maker's description, the
-  public datasheet link and hash, pins, pads, dimensions, the checks passed, the ecadlib version and the AI model
-  name. It never holds the BOM, project or file names, the user's name or e-mail, internal part numbers, stock or
+- **Lookups.** The client fetches store.json, withdrawn.json and the index file of the part number's shard (1/256 of
+  all parts, chosen by a hash of the part number): that request narrows the part down to a 1/256 slice. Only on a hit
+  does it fetch the record, and that request does identify the exact part: the record's file name is the key id,
+  which the public index lists beside the maker and part number. GitHub sees an IP address and those file names;
+  ecadlib sends no account and no BOM. For stricter needs `[store] mode = "snapshot"` downloads the whole weekly bundle
+  and looks parts up locally (the host then learns nothing about which parts), and `--offline` or
+  `[store] accept = "off"` contacts nothing.
+- **Sharing.** Only by the explicit command. A record holds only: maker, part number, a description only when a source
+  gave it (a part search, a library, the datasheet; never the BOM's own Description or Notes text), the public
+  datasheet link and hash, pins, pads, dimensions, the checks passed, the ecadlib version and the AI model name. It never holds the BOM, project or file names, the user's name or e-mail, internal part numbers, stock or
   price fields, or a private or signed link (the same link test the Internet Archive fallback uses). The contributor's
   GitHub name is public through the pull request itself; the command says so before opening the page.
 - PRIVACY.md and the /privacy page get one new table row for lookups and one paragraph for sharing.
@@ -186,7 +189,7 @@ MPN, and a hit is taken only when exactly one maker has it, with a note.
  "part": {"description", "datasheet": {"url", "sha256", "revision"}, "package"},
  "symbol": {"kicad_sym": <KiCad symbol text>, "pins": [{"num", "name", "type"}], "source", "license", "credit"},
  "footprint": {"kicad_mod": <KiCad footprint text> | null, "pointer": {"lcsc": ...} | null, "hash", "hash_v",
-               "spec": <package dimensions as read, when it came from a datasheet>, "source", "license", "credit",
+               "spec": null (version 1; reserved for the package dimensions as read), "source", "license", "credit",
                "mount_pads"},
  "body": {"height_mm", "height_src", "model": null | {"source", "url"}},
  "pin_map": {pin number: pad number},
@@ -196,8 +199,8 @@ MPN, and a hit is taken only when exactly one maker has it, with a note.
 
 KiCad text is the canonical form for the drawing, as it already is inside ecadlib (decision of 10-13). The local
 converter turns it into the user's Altium or KiCad files and applies their house style there (pin sides, layers, text
-sizes, IPC density when a `spec` is present), which is how "share the data, draw it locally" is met without a new
-drawing format.
+sizes), which is how "share the data, draw it locally" is met without a new drawing format. A record carries no
+package dimensions in version 1 (`spec` is null; a client accepts one, a later version may fill it).
 
 ### Code in this repo
 
@@ -206,11 +209,11 @@ drawing format.
 | `ecadlib/store_keys.py` | Normalise maker and MPN, the key, its id, the shard, canonical JSON and hash |
 | `ecadlib/store_record.py` | Build a record from a released plan item (`from_item`), the share allow-list (`shareable`), `validate`, `level`, `agree`, and `build` (record -> files in a folder, used by the checks) |
 | `ecadlib/store_client.py` | Fetch and cache the index and records (URL or folder), verify hashes, withdrawn list, snapshot mode, the accept policy. Never raises into a run: a store that cannot be reached is a miss with one note |
-| `ecadlib/librarian.py` | New source `store`, tried after the user's own library and before `kicad`. Writes through the existing `put_fp` / `put_kicad_sym`, so footprint sharing, house style and notes behave as for any source. Second-opinion compare after the other sources ran |
+| `ecadlib/librarian.py` | New source `store`, tried after the user's own library and before `kicad`, only while `[store] url` is set (never in the default `[sources] order`: it runs by itself). Writes through the existing `put_fp` / `put_kicad_sym`, so footprint sharing, house style and notes behave as for any source. Second-opinion compare after the other sources ran |
 | `ecadlib/store_repo.py` | Maintainer and CI side: `index`, `verify`, `add`, `withdraw`, `snapshot`; and `store_template/` with the store repo's workflows, templates, README and NOTICE |
 | `ecadlib/store_cli.py` | `ecadlib store status / get / share / report`, `ecadlib store-repo ...` |
-| `ecadlib/upkeep.py`, `release_check.py` | A part from a withdrawn or disputed record is held, with the reason |
-| `ecadlib/rules.py` | `[store] url, accept, mode`; `store` added to the default source order |
+| `ecadlib/upkeep.py`, `release_check.py` | A part from a withdrawn, disputed, gone or down-rated record, or released by such a record's agreement, is held, with the reason; the upkeep check runs by itself while `[store] url` is set |
+| `ecadlib/rules.py` | `[store] url, accept, mode`; not in the default source order, and left out of the rules hash while the url is empty (nothing changes for anyone who has not set one) |
 | docs, PRIVACY.md, site/privacy | User guide `docs/shared-store.md`; privacy rows |
 
 The Altium menu, the KiCad plugin, the web UI and the MCP server need no change to work, since they all run the
@@ -222,8 +225,10 @@ librarian. Showing "from the shared store, confirmed by 3" in their part views i
 2. Store lookup by maker + MPN. Confirmed hit: build from the record, source `store:<key_id>@r<rev>`. Checked hit: keep
    it aside.
 3. Other sources as today, for whatever is still missing.
-4. If a checked record was kept aside and the local build finished: same pads and pin map -> the agreement is recorded
-   and the datasheet-read "verify" hold is cleared; different -> hold with both answers named.
+4. If a checked record was kept aside and the local build finished: same pads and pin map (both drawings hashed at
+   this ecadlib's digest version), and the two builds independent -> the agreement is recorded and the hold that
+   waited for a confirmation is lifted (the read's flagged items go to the review list); the lift is taken back if the
+   record is later withdrawn, disputed or gone. Different -> hold with both answers named.
 5. Release check, as today.
 
 ## Seeding
@@ -237,7 +242,7 @@ waits for Oliver's go.
 ## Risks and open points
 
 - **One maintainer.** Mitigated by making unconfirmed records harmless and by the nightly re-check; still a queue if
-  the project grows. Auto-merge of safe pull requests is the release valve.
+  the project grows. (No pull request is auto-merged: see "How parts get in".)
 - **Poisoning.** Someone could submit a wrong part from two accounts to get it confirmed. Mitigations: new GitHub
   accounts' evidence does not count toward confirmed until a maintainer has merged something of theirs before; the
   local release check; fast withdrawal. Not fully closed; no open store can close it.

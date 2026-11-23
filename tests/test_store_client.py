@@ -12,13 +12,20 @@ from tests.fixtures_lite import lite
 BASE = "https://raw.githubusercontent.com/example/store/main"
 
 
-def record(maker, mpn, rev=1, also=(), schema=1, status="active"):
-    return {"schema": schema, "key": {"maker": maker, "mpn": mpn}, "also": list(also), "rev": rev, "status": status,
-            "evidence": [{"kind": "build", "by": "someone"}]}
+def record(maker, mpn, rev=1, also=(), schema=1, status="active", level="confirmed"):
+    """A stand-in record (no drawing): what the client reads of one. level: what store_record.level gives it (a
+    sign-off that agrees with its (empty) hashes: confirmed; one build: checked)."""
+    from ecadlib import store_record as SR
+    rec = {"schema": schema, "key": {"maker": maker, "mpn": mpn, "key": SK.key(maker, mpn)}, "also": list(also),
+           "rev": rev, "status": status}
+    rec["evidence"] = [{"kind": "signoff" if level == "confirmed" else "build", "by": "someone",
+                        "footprint_hash": None, "pins_hash": SR.pins_hash(rec)}]
+    return rec
 
 
 def make_store(root, parts=(), withdrawn=(), meta=None):
-    """parts: (maker, mpn, dict of overrides) -> a store folder. Overrides: level, status, rev, also, schema, sha256."""
+    """parts: (maker, mpn, dict of overrides) -> a store folder. Overrides: level, status, rev, also, schema, sha256,
+    record (the record itself), entry (index entry fields over the made ones)."""
     root = Path(root)
     (root / "index").mkdir(parents=True, exist_ok=True)
     meta = dict({"schema": 1, "name": "test", "shards": 256, "min_ecadlib": "0.0.1", "updated": "2026-11-23"},
@@ -28,12 +35,14 @@ def make_store(root, parts=(), withdrawn=(), meta=None):
     for maker, mpn, o in parts:
         k = SK.key(maker, mpn)
         kid, ab = SK.key_id(k), SK.shard(k)
-        rec = record(maker, mpn, o.get("rev", 1), [SK.key(maker, a) for a in o.get("also", ())], o.get("schema", 1))
+        rec = o.get("record") or record(maker, mpn, o.get("rev", 1), [SK.key(maker, a) for a in o.get("also", ())],
+                                        o.get("schema", 1), o.get("status", "active"), o.get("level", "confirmed"))
         (root / "parts" / ab).mkdir(parents=True, exist_ok=True)
         (root / "parts" / ab / f"{kid}.json").write_text(json.dumps(rec))
         shards.setdefault(ab, {})[kid] = {"key": k, "also": rec["also"], "rev": rec["rev"],
                                           "sha256": o.get("sha256", SK.digest(rec)),
-                                          "level": o.get("level", "confirmed"), "status": o.get("status", "active")}
+                                          "level": o.get("level", "confirmed"), "status": o.get("status", "active"),
+                                          **o.get("entry", {})}
     for ab, idx in shards.items():
         (root / "index" / f"{ab}.json").write_text(json.dumps(idx))
     (root / "withdrawn.json").write_text(json.dumps([dict(w) for w in withdrawn]))
@@ -307,9 +316,14 @@ def test_snapshot_serves_without_further_requests(tmp_path):
     again = FakeHTTP(root, fail="raise")                          # within the TTL: the unpacked copy, no request
     st = SC.Store(BASE, http=again, cache_dir=tmp_path / "c", mode="snapshot")
     assert st.lookup("TI", "NE555DR") and again.urls == []
-    t = SC.SNAPSHOT_TTL_S + 10 ** 10                              # old and the download fails: the old copy serves
+    import time
+    t = time.time() + SC.SNAPSHOT_TTL_S + 10                      # old and the download fails: the old copy serves
     st = SC.Store(BASE, http=again, cache_dir=tmp_path / "c", mode="snapshot", now=lambda: t)
     assert st.lookup("TI", "NE555DR") and len(again.urls) == 1 and len(st.trouble) == 1
+    t = time.time() + SC.MAX_AGE_S + 3600                         # older than a week: it builds nothing, said once
+    st = SC.Store(BASE, http=again, cache_dir=tmp_path / "c", mode="snapshot", now=lambda: t)
+    assert st.lookup("TI", "NE555DR") is None and st.lookup("TI", "LM358DR") is None
+    assert sum("days old" in x for x in st.trouble) == 1, st.trouble
 test_snapshot_serves_without_further_requests = lite(test_snapshot_serves_without_further_requests)
 
 

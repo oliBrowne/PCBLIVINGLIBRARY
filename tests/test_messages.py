@@ -73,6 +73,16 @@ EXAMPLES = {
     "store.withdrawn": "verify: shared store record ACME|RC0603-10K r1 was withdrawn from the store (pad 1 too small): "
                        "this part was built from it; build it again",
     "store.disputed": "verify: shared store record ACME|RC0603-10K r2 is disputed (someone reported a difference)",
+    "store.lift_back": "verify: shared store record ACME|DSPART1 r1 was withdrawn from the store (pin 3 wrong): this "
+                       "part's own build was released because that record agreed with it; the holds it lifted are back",
+    "store.unknown": "verify: shared store record ACME|RC0603-10K r1: cannot tell whether the store withdrew it (its "
+                     "withdrawn list is missing or unreadable): this part was built from it",
+    "store.gone": "verify: shared store record ACME|RC0603-10K r1 is no longer in the store's index: this part was built "
+                  "from it",
+    "store.level": "verify: shared store record ACME|RC0603-10K r1 is now only checked (below [store] accept = "
+                   "\"confirmed\"): this part was built from it",
+    "store.extras": "verify: shared store: the store's footprint has SMD pads on the bottom copper side: compare with "
+                    "the datasheet",
     "store.package_clash": "verify: footprint: the BOM names R_1206_3216Metric but the shared store's record "
                            "ACME|RC0603-10K r1 is R_0603_1608Metric: check which package the part has",
     "store.note": "shared store: matched NE555DR without a maker: only TEXASINSTRUMENTS has it in the shared store",
@@ -347,7 +357,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 31, "datasheet.py": 10,
+    "librarian.py": 32, "datasheet.py": 10,
 }
 
 

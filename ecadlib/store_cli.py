@@ -49,8 +49,10 @@ def _plan(path):
 
 
 def _say(out, *lines):
+    """Print lines; text from the store (or anywhere) never carries terminal control characters (store_client.safe)."""
+    from .store_client import safe
     for ln in lines:
-        print(ln, file=out)
+        print(safe(ln), file=out)
 
 
 # ------------------------------------------------------------------ status
@@ -59,10 +61,9 @@ def status(a, out):
     rules = _rules(a.rules, str(Path(a.plan).resolve().parent) if a.plan else ".")
     s = rules.get("store") or {}
     st = _store(rules, a.offline, a.cache)
-    order = list((rules.get("sources") or {}).get("order") or [])
     _say(out, f"store url : {s.get('url') or '(none: the shared store is off)'}",
          f"accept    : {s.get('accept')}", f"mode      : {s.get('mode')}",
-         f"in [sources] order: {'yes' if 'store' in order else 'no (the librarian does not ask the store)'}")
+         f"librarian : {'asks it first, for every part' if st.enabled else 'does not ask it'}")
     if not st.enabled:
         reach = "-"
     elif a.offline:
@@ -71,15 +72,16 @@ def status(a, out):
         reach = "yes" if st.usable() else "no"
     _say(out, f"reachable : {reach}")
     rep = {"url": s.get("url") or "", "accept": s.get("accept"), "mode": s.get("mode"), "enabled": st.enabled,
-           "in_sources": "store" in order, "reachable": reach}
+           "reachable": reach}
     if a.plan:
         items = _plan(a.plan)
-        mine = [i for i in items if any(SC.parse_source(x) for x in (i.get("source") or {}).values())]
+        mine = [i for i in items if SC.depends(i)]
         bad = {i["name"]: RC.store_problems(i, st) for i in mine} if st.enabled and not a.offline else {}
         bad = {k: v for k, v in bad.items() if v}
         checked = [i for i in items if (i.get("store_check") or {}).get("result")]
-        _say(out, f"plan      : {a.plan}: {len(items)} part(s), {len(mine)} from the shared store, "
-                  f"{len(checked)} compared with a store record, {len(bad)} withdrawn or disputed")
+        _say(out, f"plan      : {a.plan}: {len(items)} part(s), {len(mine)} owing the shared store (built from it or "
+                  f"released by its agreement), {len(checked)} compared with a store record, {len(bad)} no longer "
+                  "standing (withdrawn, disputed, gone)")
         for n, why in bad.items():
             _say(out, f"  {n}: {'; '.join(w.split(': ', 1)[-1] for w in why)}")
         rep.update(parts=len(items), from_store=len(mine), compared=len(checked), withdrawn_or_disputed=bad)

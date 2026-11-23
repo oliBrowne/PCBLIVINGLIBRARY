@@ -96,7 +96,8 @@ TOOLS = [
                      "properties": {"bom": {"type": "string"},
                                     "sources": {"type": "array", "items": {"type": "string", "enum": ["store", "kicad", "easyeda", "standard", "datasheet"]},
                                                 "description": "sources to try, in order (default the rules' [sources] "
-                                                               "order; store is asked only when [store] url is set)"},
+                                                               "order; the shared store, when [store] url is set, is "
+                                                               "always asked first)"},
                                     "refresh": {"type": "array", "items": {"type": "string"},
                                                 "description": "part names to redo"},
                                     "refresh_all": {"type": "boolean", "description": "redo every part"}}}},

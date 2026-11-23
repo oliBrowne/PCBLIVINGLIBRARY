@@ -414,7 +414,8 @@ def test_level_agree_merge(tmp_path, monkeypatch):
     other = SR.from_item(items["TPS1234DSGR"], base, by="bob", at="2026-11-25T08:00:00Z")
     assert SR.agree(rec, other)
     m = SR.merge(dict(rec, also=["TPS1234DSGT"]), dict(other, also=["TPS1234DSGR-Q1"]))
-    assert SR.level(m) == "confirmed" and m["also"] == ["TPS1234DSGR-Q1", "TPS1234DSGT"] and m["rev"] == rec["rev"]
+    assert SR.level(m) == "confirmed" and m["also"] == ["TPS1234DSGT"] and m["rev"] == rec["rev"]   # (also: the
+    #                                                                   store's own; a merge never adds a contributor's)
     assert len(SR.merge(m, other)["evidence"]) == 2           # merging the same evidence again adds nothing
     moved = copy.deepcopy(other)
     moved["footprint"]["kicad_mod"] = moved["footprint"]["kicad_mod"].replace("(at -2.4725 -1.905)",

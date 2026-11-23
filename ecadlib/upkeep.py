@@ -19,9 +19,10 @@ Checks (each runs in-process; a check whose credentials are missing is skipped w
              the usage index (`ecadlib project scan`) that use an older revision than the released one, and KiCad
              projects there whose parts differ from the library in a way the [change] policy holds
              (`ecadlib project check`). Reports only; it never applies a change.
-  store      the shared store ([store] url; skipped while it is empty), on a plan: parts built from a store record the
-             store has since withdrawn or marks disputed, with the reason (the next librarian run holds them). A store
-             that cannot be reached is a note, never an error.
+  store      the shared store, run by itself whenever [store] url is set (never listed, never run while it is empty),
+             on a plan: parts built from a store record, or released by a store record's agreement, that the store has
+             since withdrawn, disputes, no longer lists or no longer rates high enough, with the reason (the next
+             librarian run holds them). A store that cannot be reached is a note, never an error.
 
 State (--state DIR, default out/upkeep_state): one JSON file per check; what each run saw, so the next run reports only
 transitions. Report: <REPORT>.md and <REPORT>.json (default out/upkeep). Exit codes: 0 nothing new, 1 new changes,
@@ -48,7 +49,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from . import userconfig as UC
 
-CHECKS = ("lifecycle", "upstream", "a365", "changes", "store")
+CHECKS = ("lifecycle", "upstream", "a365", "changes")        # the default list ([upkeep] checks)
+STORE_CHECKS = ("store",)                                     # run by itself when [store] url is set; may be named
 CUT_CHECKS = ("sourcing",)                          # removed on 2026-10-19; an old list that names one still runs
 LABEL = "ecadlib-upkeep"
 DEFAULTS = {"schedule": "weekly", "checks": list(CHECKS)}
@@ -409,11 +411,20 @@ def check_changes(src, state_dir, ctx, cfg, now, rules=None):
 
 
 # ------------------------------------------------------------------ shared store
+def _store_on(rules, ctx):
+    """A shared store is set: [store] url (accept not "off"), or the ready Store a caller (a test) put in ctx."""
+    from . import store_client as SC
+    st = getattr(ctx, "store", None)
+    return bool(st.enabled) if st is not None else SC.configured(rules)
+
+
 def check_store(src, state_dir, ctx, cfg, now, rules=None, store=None):
-    """Parts of the plan built from a shared-store record (source store:<key_id>@r<rev>) that the store has withdrawn
-    or marks disputed (release_check.store_problems). store: a ready store_client.Store (tests); None = the one
-    [store] names, with --offline and --cache."""
-    from . import release_check as RC, store_client as SC
+    """Parts of the plan that owe the shared store (store_client.depends: built from a record, source
+    store:<key_id>@r<rev>, or released by a record's agreement, store_check) where that no longer holds
+    (store_client.problems: withdrawn, disputed, no longer listed, below [store] accept, or the store's withdrawn list
+    cannot be read). store: a ready store_client.Store (tests); None = the one [store] names, with --offline and
+    --cache."""
+    from . import store_client as SC
     sec = _section("store")
     if store is None:
         store = SC.from_rules(rules or {}, cache_dir=ctx.cache, offline=ctx.offline)
@@ -426,21 +437,22 @@ def check_store(src, state_dir, ctx, cfg, now, rules=None, store=None):
     old = _load(state_dir / "store_state.json", {"version": 1, "updated": None, "seen": []})
     seen, n = [], 0
     for it in src.items or []:
-        if not isinstance(it, dict) or not any(SC.parse_source(s) for s in (it.get("source") or {}).values()):
+        if not isinstance(it, dict) or not SC.depends(it):
             continue
         n += 1
-        for p in RC.store_problems(it, store):
+        for d, why in SC.problems(it, store):
+            p = SC.note_for(d, why)
             key = _fp("store", it.get("name"), p)
             seen.append(key)
             if key not in old["seen"]:
-                kind = "store: withdrawn" if "withdrawn" in p else "store: disputed"
-                sec["changes"].append(_change(kind, it.get("name"), ", ".join(sorted(set(
-                    str(s) for s in (it.get("source") or {}).values() if SC.parse_source(s)))), "held at the next "
-                    "librarian run", p.split(": ", 1)[-1]))
-    sec["notes"] += list(store.trouble)
-    sec["notes"].append(f"{n} part(s) built from the shared store")
-    if store.trouble and not store.usable():          # nothing could be read: say so, keep the old state
-        sec.update(status="skipped", reason=f"the shared store could not be read ({store.trouble[0]})")
+                kind = "store: " + ("lifted holds back" if d["kind"] == "lifted" else "withdrawn" if "withdrawn" in why
+                                    else "disputed" if "disputed" in why else "record no longer stands")
+                sec["changes"].append(_change(kind, it.get("name"), f"store:{d['key_id']}@r{d['rev']}",
+                                              "held at the next librarian run", p))
+    sec["notes"] += [SC.safe(t) for t in store.trouble]
+    sec["notes"].append(f"{n} part(s) owe the shared store (built from it, or released by its agreement)")
+    if not store.usable():                           # nothing could be read: say so, keep the old state
+        sec.update(status="skipped", reason=f"the shared store could not be read ({(store.trouble or ['no answer'])[0]})")
         return sec
     sec["resolved"] = [_change("resolved", "", "", "", f"{k} item(s) from earlier runs no longer seen")] \
         if (k := len(set(old["seen"]) - set(seen))) else []
@@ -459,12 +471,15 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
         workspace=None, apply=False, rules=None, ctx=None, now=None, save=True):
     """Run the checks, write <out>.md and <out>.json, save the state (save=False leaves that to save_state)."""
     cfg = upkeep_rules(rules)
+    asked = bool(checks)
     checks = list(checks or cfg["checks"])
+    if not asked and "store" not in checks and _store_on(rules, ctx):   # the shared store's check runs by itself
+        checks.append("store")                                          # whenever a store is set, never otherwise
     cut = [c for c in checks if c in CUT_CHECKS]
     checks = [c for c in checks if c not in CUT_CHECKS]
-    bad = [c for c in checks if c not in CHECKS]
+    bad = [c for c in checks if c not in CHECKS + STORE_CHECKS]
     if bad:
-        raise ValueError(f"unknown check(s) {', '.join(bad)}; choose from {', '.join(CHECKS)}")
+        raise ValueError(f"unknown check(s) {', '.join(bad)}; choose from {', '.join(CHECKS + STORE_CHECKS)}")
     workspace = workspace or ((rules or {}).get("altium365") or {}).get("workspace") or None
     ctx, now, state_dir = ctx or Ctx(), now or _now(), Path(state_dir)
     src = Source(input_path, manifest, bom, dict(((rules or {}).get("bom") or {}).get("columns") or {}) or None)
@@ -701,7 +716,8 @@ def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
     ap = argparse.ArgumentParser(description="Weekly library upkeep: lifecycle, KiCad upstream, Altium 365 drift "
                                              "and change control; report what is new; one GitHub issue or PR")
     ap.add_argument("input", help="altium365 plan.json (all checks) or a BOM .csv/.xlsx (lifecycle)")
-    ap.add_argument("--checks", help=f"comma list from {','.join(CHECKS)} (default: [upkeep] checks, else all)")
+    ap.add_argument("--checks", help=f"comma list from {','.join(CHECKS + STORE_CHECKS)} (default: [upkeep] checks, else "
+                                     "all; store runs by itself when [store] url is set)")
     ap.add_argument("--state", default="out/upkeep_state", help="folder with the last run's state")
     ap.add_argument("-o", "--out", default="out/upkeep", help="report path stem (.md and .json)")
     ap.add_argument("--manifest", help="KiCad provenance manifest.json (default: next to the plan, or <plan dir>/models/)")

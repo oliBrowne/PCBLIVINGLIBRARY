@@ -90,7 +90,7 @@ def test_missing_credentials_skip_checks_not_fail():
         assert "manifest" in got["upstream"][1] and "plan.json" in got["a365"][1] and "plan.json" in got["changes"][1]
         assert rep["exit_code"] == 0 and rep["new_changes"] == 0
         md = (Path(d) / "r.md").read_text()
-        assert md.count("| skipped: ") == len(UK.CHECKS), md     # (store: skipped while [store] url is empty)
+        assert md.count("| skipped: ") == 4, md
         assert not (Path(d) / "s" / "lifecycle_state.json").exists()
         # with a plan but no workspace / token, the a365 check says which is missing
         plan = Path(d) / "plan.json"

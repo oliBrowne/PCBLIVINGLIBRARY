@@ -2,14 +2,16 @@
 models and the altium365 plan, run the release check, and stop with a review list.
 
     python3 -m ecadlib.librarian examples/sample_bom.csv --lib examples/kicad_lib --lib out/footprints -o out/librarian \
-        [--sources store,kicad,easyeda,standard,datasheet] [--allow PART] [--box] [--refresh [PART ...]] [--refresh-index] [--offline]
+        [--sources kicad,easyeda,standard,datasheet] [--allow PART] [--box] [--refresh [PART ...]] [--refresh-index] [--offline]
 
 Per plan item (one per unique part), parts the triage found in a --lib library are converted from there; for
 anything still missing, the sources are tried in --sources order, each filling only what is still missing:
-  store      the shared store of checked parts (ecadlib/store_client.py, docs/shared-store.md), by maker + MPN, only
-             when [store] url is set (empty by default: nothing is asked). A record [store] accept trusts is drawn
-             through the same writers and release check (source store:<key_id>@r<rev>); one it does not is a second
-             opinion: the same pads and pins as this run's own build lift its unconfirmed-build hold, others hold it
+  store      the shared store of checked parts (ecadlib/store_client.py, docs/shared-store.md), by maker + MPN, first
+             and by itself whenever [store] url is set (empty by default: nothing is asked, and it is never in the
+             default order). A record [store] accept trusts is drawn through the same writers and release check
+             (source store:<key_id>@r<rev>); one it does not is a second opinion: the same pads and pins as this run's
+             own independent build lift its unconfirmed-build hold (taken back if the record is withdrawn), others
+             hold it
   kicad      the official KiCad libraries on gitlab.com. A name index of kicad-symbols (KiCad 9 <Lib>.kicad_symdir/
              <Name>.kicad_sym, so derived symbols/aliases are names too) and kicad-footprints is built once from the
              GitLab tree API and cached (<cache>/kicad_library_index.json, 30 days; a build stopped by a timeout or
@@ -819,9 +821,6 @@ class Run:
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
                            "name": name, "hash": h, "hash_v": FS.HASH_V, "height": fp.get("height_mm") or None, **renamed,
                            **({"mount_pads": explicit_mount_pads(spec)} if explicit_mount_pads(spec) else {}),
-                           # the datasheet read's package dimensions: a shared-store record carries them (store_record)
-                           **({"spec": json.loads(json.dumps(spec))} if source.startswith("datasheet:")
-                              and isinstance(spec, dict) and spec else {}),
                            **{k: v for k, v in meta.items() if k in ("origin", "store_key") and v},
                            **({"model": {"source": f"easyeda:{model['ref']['uuid']}", "url": model["ref"]["url"],
                                          "title": model["ref"]["title"], "credit": EC.CREDIT}} if model else {})}
@@ -993,48 +992,56 @@ class Run:
 
     # ---- the shared store of checked parts (docs/shared-store.md; store_client reads it, store_record owns a record)
     def src_store(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
-        """The shared store, by maker + MPN. A record the [store] accept policy lets in (store_client.decide "use") is
-        drawn through the same writers as every source (footprint sharing, house style, layers, notes) and goes through
-        the same release check; its source is store:<key_id>@r<rev>, and the record's own source (kicad / standard /
-        datasheet) is kept as the half's `origin`, so a KiCad record keeps the KiCad licence and credit. A record not
-        trusted on its own (one build under accept = "confirmed", a disputed record, an EasyEDA pointer) builds
-        nothing: it is kept as a second opinion on what the other sources build (second_opinion). The record is checked
-        again here (store_record.validate: its hashes against its own drawing) and the BOM's footprint name against the
-        record's package (store_land_clash). No store set ([store] url ""): nothing is asked, nothing is said."""
+        """The shared store, by maker + MPN. A record the [store] accept policy lets in (store_client.decide "use": the
+        exact maker + MPN, not a code the record also covers, not a lookup without a maker) is drawn through the same
+        writers as every source (footprint sharing, house style, layers, notes) and goes through the same release check;
+        its source is store:<key_id>@r<rev>, and the record's own source (kicad / standard / datasheet) is kept as the
+        half's `origin`, so a KiCad record keeps the KiCad licence and credit. A record not trusted on its own (one
+        build under accept = "confirmed", a disputed record, a match through `also` or without a maker) builds nothing:
+        it is kept as a second opinion on what the other sources build (second_opinion). An EasyEDA pointer record is
+        only noted. The record is checked again here (store_record.validate: its hashes against its own drawing, its
+        KiCad text against its fields) and the BOM's footprint name against the record's package (store_land_clash).
+        A record never fills the Manufacturer field. No store set ([store] url ""): nothing is asked, nothing is said."""
         store = self.store
         if store is None or not getattr(store, "enabled", False):
             return
         from . import store_client as SC, store_record as SR
         hit = store.lookup(st.get("maker") or "", mpn)
         if hit is None:
-            if mpn and store.usable():
+            if mpn and store.usable() and not getattr(store, "_stale_said", False):
                 st["tried"].append(f"store: {mpn} is not in the shared store")
             return
-        rec, label = hit.record, f"{hit.key} r{hit.rev}"
+        rec, label = hit.record, SC.safe(f"{hit.key} r{hit.rev}")
         if hit.note:
-            st["tried"].append(f"store: {hit.note}")
-            st["review"].append(f"shared store: {hit.note}")
+            note = SC.safe(hit.note)
+            st["tried"].append(f"store: {note}")
+            st["review"].append(f"shared store: {note}")
         bad = SR.validate(rec)
         if bad:
-            st["tried"].append(f"store: record {label} refused: {bad[0]}" + (f" (+{len(bad) - 1} more)" if len(bad) > 1 else ""))
+            st["tried"].append(SC.safe(f"store: record {label} refused: {bad[0]}"
+                                       + (f" (+{len(bad) - 1} more)" if len(bad) > 1 else "")))
+            return
+        if SR.footprint_text(rec) is None or SR.symbol_chain(rec) is None:
+            st["tried"].append(f"store: record {label} is a pointer to {SC.safe(rec['footprint']['source'])}: recorded "
+                               "for later; this version neither builds from it nor compares with it")
             return
         how = SC.decide(hit, store.accept)
-        if how == "use" and (SR.footprint_text(rec) is None or SR.symbol_chain(rec) is None):
-            how = "second-opinion"                     # an EasyEDA pointer: no drawing to build from, its hashes only
         what = f"{hit.level}{', disputed' if hit.status == 'disputed' else ''}"
         if how == "skip":
             st["tried"].append(f"store: record {label} ({what}) not used ([store] accept = \"{store.accept}\")")
             return
         if how == "second-opinion":
             self.second[st["name"]] = (st, hit, sym_name)
-            st["tried"].append(f"store: record {label} ({what}) is not used on its own; kept as a second opinion on this "
-                               "part's own build")
+            why = {"also": "it was found through another code it covers", "no-maker": "it was found without a maker"}
+            st["tried"].append(f"store: record {label} ({what}) is not used on its own"
+                               + (f" ({why[hit.via]})" if hit.via in why else "")
+                               + "; kept as a second opinion on this part's own build")
             return
         meta = lambda half: {"origin": rec[half]["source"], "store_key": hit.key}
         got = []
         if not st["footprint"]:
             body = rec.get("body") or {}
-            hs = f"shared store record {label}" + (f": {body['height_src']}" if body.get("height_src") else "")
+            hs = f"shared store record {label}" + (f": {SC.safe(body['height_src'])}" if body.get("height_src") else "")
             self.put_fp(st, SR.footprint_text(rec), fp_name, hit.source, None, SR.height(rec), hs, SR.spec(rec),
                         meta=meta("footprint"))
             mount = (rec.get("footprint") or {}).get("mount_pads")
@@ -1044,6 +1051,9 @@ class Run:
             clash = store_land_clash(rec, [ln.get("footprint"), item["footprint"].get("kicad")], label)
             if clash:
                 st["verify"].append(clash)
+            extras = store_extras(SR.footprint_text(rec))   # strangers' text, not ecadlib's generator: what the pad
+            if extras:                                       # hash leaves out (bottom-side pads, custom copper, paste
+                st["verify"].append(f"shared store: the store's footprint has {extras}: compare with the datasheet")
         if not st["symbol"]:
             shared = kind in SHARED_KINDS
             self.put_kicad_sym(st, SR.symbol_chain(rec), sym_name, None if shared else fp_name, hit.source,
@@ -1052,26 +1062,58 @@ class Run:
         st["store"] = {"key": hit.key, "key_id": hit.key_id, "rev": hit.rev, "level": hit.level, "sha256": hit.sha256}
         st["tried"].append(f"store: {' and '.join(got) or 'nothing needed'} from the shared store's record {label} "
                            f"({hit.level}" + (", taken alone as [store] accept = \"checked\"" if hit.level != "confirmed"
-                                              else "") + f"; made from {rec['footprint']['source']})")
+                                              else "") + f"; made from {SC.safe(rec['footprint']['source'])})")
         part, src = rec.get("part") or {}, f"shared store record {hit.key_id} r{hit.rev}"
         if str(part.get("description") or "").strip():
             st["found"].setdefault("description", (part["description"], src))
         url = str((part.get("datasheet") or {}).get("url") or "")
         if url.startswith(("http://", "https://")):
             st["found"].setdefault("datasheet", (url, src))
-        if (rec.get("key") or {}).get("maker"):
-            st["found"].setdefault("manufacturer", (rec["key"]["maker"], src))
+
+    def _independent(self, st, rec, mine):
+        """(True, "") when the store's record and this part's own build were made independently, so that their
+        agreement confirms the build: for each half, another kind of source (a KiCad / standard entry against a
+        datasheet read), or two datasheet reads by different readers (the record holds an agreeing `build` entry whose
+        reader, provider and model, is not this read's). (False, why) otherwise: the same KiCad or standard entry kind
+        (a KiCad alias is not resolved here, so two KiCad entries never count), the same reader model, a reader not
+        known on either side, or a half from a source the store does not take (a --lib library, a person's pick)."""
+        from . import rebuild as LK, store_record as SR
+        trusted = self.store.trusted() if hasattr(self.store, "trusted") else None
+        for h in ("symbol", "footprint"):
+            lk, rk = SR.kind_of(mine[h]), SR.kind_of((rec.get(h) or {}).get("source"))
+            if lk is None:
+                return False, f"this build's {h} ({mine[h] or 'none'}) is not a source the store compares with"
+            if lk != rk:
+                continue
+            if lk != "datasheet":
+                return False, f"the {h} came from the same kind of source ({lk}) as the store's record, so it is no " \
+                              "second build"
+            ds = LK._datasheet(self.out, mine[h][len("datasheet:"):]) if mine[h].startswith("datasheet:") else {}
+            ours = (str(ds.get("provider") or ""), str(ds.get("model") or "")) if ds.get("model") else None
+            theirs = {(str(e["reader"].get("provider") or ""), str(e["reader"].get("model") or ""))
+                      for e in rec.get("evidence") or [] if isinstance(e, dict) and e.get("kind") == "build"
+                      and SR._agrees(rec, e) and isinstance(e.get("reader"), dict) and e["reader"].get("model")
+                      and (trusted is None or e.get("by") in trusted)}
+            if ours is None or not theirs:
+                return False, "it agrees, but not an independent read (the datasheet reader of " + \
+                    ("this build" if ours is None else "the store's record") + " is not known)"
+            if not theirs - {ours}:
+                return False, f"it agrees, but not an independent read (both read by {ours[1]})"
+        return True, ""
 
     def second_opinion(self, st, hit, sym_name):
-        """A store record kept aside (src_store) against what the other sources built for the part: the pads (geometry
-        hash at the record's digest version) and the pins (store_record.pins_hash: number, name, pad). Other pads or
-        pins: held, naming both. The same: noted, and the holds that wait only for someone to confirm an unconfirmed
+        """A store record kept aside (src_store) against what the other sources built for the part: the pads (both
+        drawings hashed by fp_share.digest at this ecadlib's digest version, never the record's stored hash) and the
+        pins (store_record.pins_hash: number, name with its active-low bar, pad, and the mounting-pad count). Other pads
+        or pins: held, naming both. The same: noted, and the holds that wait only for someone to confirm an unconfirmed
         build (a datasheet read, a KiCad symbol or footprint matched by a near name, an EasyEDA conversion, a family
         pinout: unconfirmed()) are lifted, when the agreement is evidence: the record is active (not disputed) and the
-        two builds are independent (no half of this build is the same KiCad / standard / EasyEDA entry the record was
-        made from; two datasheet reads count as two). Every other hold stays (BOM clashes, fields, pins, parity)."""
+        two builds are independent (_independent). A lifted datasheet read's flagged items go to the review list, as a
+        cross-check's do. The lift is recorded (store_check: key_id, rev, lifted) and taken back on a later run or by
+        upkeep when that record is withdrawn, disputed or gone (store_holds). Every other hold stays."""
         from . import store_client as SC, store_record as SR
-        rec, label = hit.record, f"{hit.key} r{hit.rev}"
+        rec, label = hit.record, SC.safe(f"{hit.key} r{hit.rev}")
+        review = st.pop("read_review", None) or []
         mine = {h: str((st.get(h) or {}).get("source") or "") for h in ("symbol", "footprint")}
         if any(SC.parse_source(s) for s in mine.values()):
             return                                     # (a store part is never its own second opinion)
@@ -1081,10 +1123,10 @@ class Run:
             return
         try:
             text = (self.out / fp["kicad_mod"]).read_text(encoding="utf-8")
-            pads = FS.digest(text, int(rec["footprint"].get("hash_v") or FS.HASH_V)) == rec["footprint"]["hash"]
-            pins = SR.pins_hash(built_pins(self.out, st, sym_name)) == SR.pins_hash(rec)
+            pads = FS.digest(text) == FS.digest(SR.footprint_text(rec))
+            pins = SR.pins_hash(built_pins(self.out, st, sym_name), mount_pads=fp.get("mount_pads")) == SR.pins_hash(rec)
         except Exception as e:                         # a comparison that did not run lifts nothing
-            st["tried"].append(f"store: record {label} not compared ({type(e).__name__}: {e})")
+            st["tried"].append(f"store: record {label} not compared ({type(e).__name__}: {SC.safe(e)[:120]})")
             return
         check = {"key": hit.key, "key_id": hit.key_id, "rev": hit.rev, "level": hit.level, "status": hit.status}
         differ = [w for w, same in (("pads", pads), ("pins", pins)) if not same]
@@ -1098,17 +1140,17 @@ class Run:
                    and dens != "N" else ""))
             st["store_check"] = dict(check, result="disagreed", differ=differ)
             return
-        same = [h for h in ("symbol", "footprint") if SR.kind_of(mine[h]) in ("kicad", "standard", "easyeda")
-                and mine[h] == (rec.get(h) or {}).get("source")]
-        if hit.status != "active" or same:
-            why = "it is disputed" if hit.status != "active" else \
-                f"the {' and '.join(same)} came from the same source ({mine[same[0]]}), so it is no second build"
+        ok, why = self._independent(st, rec, mine)
+        if hit.status != "active" or not ok:
+            why = "it is disputed" if hit.status != "active" else why
             st["tried"].append(f"store: this build matches the shared store's record {label}, but {why}: no hold is "
                                "lifted")
-            st["store_check"] = dict(check, result="agreed, not independent")
+            st["store_check"] = dict(check, result="agreed, not independent", why=why)
             return
         lift = [v for v in st["verify"] if unconfirmed(v)]
         st["verify"] = [v for v in st["verify"] if v not in lift]
+        if any(str(v).startswith("datasheet reader output (") for v in lift):   # the read's flagged items: to review,
+            st["review"].extend(f"datasheet read: {r}" for r in review)          # as a cross-check that agrees does
         st["tried"].append(f"store: matches an independent build in the shared store ({hit.key_id} r{hit.rev}, "
                            f"{hit.level})" + (f"; that confirms: {'; '.join(lift)}" if lift else ""))
         st["store_check"] = dict(check, result="agreed", lifted=lift)
@@ -2258,6 +2300,9 @@ class Run:
             st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                                 "see datasheet/*.review.md"
                                 + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+            if self.store is not None and getattr(self.store, "enabled", False) and res["needs_review"]:
+                st["read_review"] = [str(r) for r in res["needs_review"]]   # (a store agreement lifting the hold
+                #                                                           moves them to the review list)
 
     def drawn_pins(self, st, res, job):
         """The pinout drawing's verdict on the read's symbol (ecadlib.pin_drawing), for a PDF whose text layer has no pin
@@ -2852,33 +2897,43 @@ def store_land_clash(rec, bom_names, label):
     return None
 
 
+STORE_EXTRAS = {"side": "SMD pads on the bottom copper side", "custom": "custom-shape pads",
+                "aperture": "paste- or mask-only apertures", "openings": "pads without the usual paste / mask opening",
+                "margin": "pad paste / mask margins", "fp": "footprint-wide paste / mask margins",
+                "graphic": "copper, paste or mask graphics"}
+
+
+def store_extras(text):
+    """fp_share.extra in words ("" for a plain footprint; an unreadable one is said so): what a shared-store
+    footprint holds beyond its pads (src_store holds the part for it)."""
+    try:
+        kinds = list(dict.fromkeys(str(e[0]) for e in FS.extra(text)))
+    except Exception as e:                     # a footprint extra() cannot read is not a plain one
+        return f"parts the check cannot read ({type(e).__name__})"
+    return ", ".join(STORE_EXTRAS.get(k, k) for k in kinds)
+
+
 STORE_HOLD = "shared store record "
 
 
 def store_holds(st, store, name, bom=""):
-    """A part built from a shared-store record that the store has since withdrawn or marks disputed is held, with the
-    reason, on every run (skipped parts too: their state carries the hold, so the release check and every publisher
-    hold them). A hold stays once given (a withdrawal is for good; a settled dispute is released by a person, or by
-    building the part again with --refresh). A store that cannot be read holds nothing new and lifts nothing."""
+    """What a part owes the shared store, checked again on every run (skipped parts too: their state carries the
+    hold, so the release check and every publisher hold them): a part built from a record that the store has since
+    withdrawn, disputes, no longer lists, rates below [store] accept, or whose withdrawn list it cannot read, is held
+    with the reason; a part whose own build a record's agreement released (store_check, Run.second_opinion) gets the
+    holds that agreement lifted back, with the reason (store_client.problems). A hold stays once given (a withdrawal
+    is for good; a settled dispute is released by a person, or by building the part again with --refresh). A store
+    that cannot be reached or is offline holds nothing new and lifts nothing."""
     from . import store_client as SC
-    halves = {}
-    for h in ("symbol", "footprint"):
-        r = st.get(h) or {}
-        p = SC.parse_source(r.get("source"))
-        if p:
-            halves[p] = r.get("store_key") or halves.get(p) or ""
-    if not halves or store is None or not store.enabled or not store.usable():
+    if store is None or not getattr(store, "enabled", False):
         return
+    redo = f"build it again (`ecadlib librarian {bom or 'BOM'} --refresh {name}`) or check it against the datasheet"
     new = []
-    for (kid, rev), key in halves.items():
-        label, w = f"{key or kid} r{rev}", store.is_withdrawn(kid, rev)
-        redo = f"build it again (`ecadlib librarian {bom or 'BOM'} --refresh {name}`) or check it against the datasheet"
-        if w:
-            why = "; ".join(str(x) for x in (w.get("reason"), w.get("issue")) if x) or "no reason given"
-            new.append(f"{STORE_HOLD}{label} was withdrawn from the store ({why}): this part was built from it; {redo}")
-        elif key and store.status(kid, key) == "disputed":
-            new.append(f"{STORE_HOLD}{label} is disputed (someone reported a difference; `ecadlib store get` shows it): "
-                       f"this part was built from it; {redo}")
+    for d, why in SC.problems(st, store):
+        if d["kind"] == "lifted":
+            st["store_check"] = dict(st.get("store_check") or {}, revoked=why)
+            new += list(d.get("lifted") or [])
+        new.append(SC.note_for(d, why, redo))
     st["verify"] = list(dict.fromkeys(list(st.get("verify") or []) + new))
 
 
@@ -2996,10 +3051,6 @@ def apply_state(item, st, ln):
                     item[k]["model"] = st[k]["model"]
                 else:
                     item[k].pop("model", None)
-                if st[k].get("spec"):                  # the datasheet read's package dimensions (a store record's spec)
-                    item[k]["spec"] = st[k]["spec"]
-                else:
-                    item[k].pop("spec", None)
                 was = item[k].get("bom_ref") or item[k].get("ref")
                 if st[k].get("name") and st[k].get("renamed_from") == was:     # another footprint has the BOM's name
                     item[k]["bom_ref"], item[k]["ref"] = was, st[k]["name"]
@@ -3157,8 +3208,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
     sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity()).
     progress: a term.Progress-like object (start(name) / done(name, status, detail)) for the per-part line.
-    store: a ready store_client.Store (tests); None = the one [store] names (off while its url is empty), asked only
-    when "store" is among the sources; it is always tried first."""
+    store: a ready store_client.Store (tests); None = the one [store] names (off while its url is empty). A store that
+    is set is always tried first, whatever `sources` says, and what parts owe it is checked again (store_holds)."""
     out = Path(out)
     rules = RU.resolve(rules, out)
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))       # first: an unreadable BOM writes nothing
@@ -3179,11 +3230,13 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         raise ValueError(f"unknown sources {sorted(bad)}; use {','.join(SOURCES)}")
     from .approvals import load_policy
     load_policy(out)                                   # a broken approval policy stops the run before anything is written
-    if "store" in sources:                             # the shared store first: a record it trusts is used as is, one
-        sources.remove("store")                        # it does not is a second opinion on what the others build
-        sources.insert(0, "store")
-    elif str(((rules.get("store") or {}).get("url")) or "").strip():
-        log("  store: [store] url is set, but \"store\" is not in [sources] order: the shared store is not used")
+    from . import store_client as SC                   # the shared store, whenever one is set ([store] url, accept not
+    if store is None and SC.configured(rules):         # "off"; or a ready Store a caller passed), is asked first,
+        store = SC.from_rules(rules, cache_dir=cache, offline=offline)   # whatever the order or --sources says: a record
+    store = store if store is not None and getattr(store, "enabled", False) else None   # it trusts is used as is, one
+    sources = [s for s in sources if s != "store"]     # it does not is a second opinion on what the others build. No
+    if store is not None:                              # store: "store" in an order is left out (the order, the lock
+        sources.insert(0, "store")                     # file and the log are as without it)
     if "standard" in sources and "kicad" in sources and sources.index("standard") < sources.index("kicad"):
         sources.remove("standard")                     # never ahead of the KiCad library
         sources.insert(sources.index("kicad") + 1, "standard")
@@ -3216,11 +3269,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     handoff_says(reader, progress)
     if reader is not None and offline and not getattr(reader, "replay", None):   # --offline: nothing goes to the model
         reader.offline, reader.key = True, None                                # (a replay of recorded answers sends nothing)
-    if store is None and "store" in sources:
-        from . import store_client as SC               # (no url: a Store that is off and contacts nothing)
-        store = SC.from_rules(rules, cache_dir=cache, offline=offline)
     r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules,
-            reader, store if "store" in sources else None)
+            reader, store)
     todo = []
     for it in items:
         ln, row = _line_for(it, lines, rows)
@@ -3254,8 +3304,7 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     r.log = log
     rec = LK.Recorder(http)                    # what each part fetched, for library.lock.json
     if todo:
-        said = [s for s in sources if s != "store" or (r.store is not None and r.store.enabled)]   # (no store set:
-        log(f"  finding symbols and footprints for {len(todo)} part(s) (sources: {', '.join(said)}) ...")   # unsaid)
+        log(f"  finding symbols and footprints for {len(todo)} part(s) (sources: {', '.join(sources)}) ...")
     if progress is not None:
         progress.total = len(todo)
 
@@ -3289,13 +3338,16 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         raise
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
     r.second_opinions()                        # shared-store records kept aside, against each part's own build
+    for st in state.values():                  # (a read's flagged items kept for a store agreement: not kept after it)
+        if isinstance(st, dict):
+            st.pop("read_review", None)
     if getattr(r.reader, "assistant", None) is not None:   # [datasheet] reader = "assistant": what waits for it
         from . import ds_assistant as DA
         wait = DA.index(r.reader.assistant, r.reader.assistant_asked)
         if wait:
             log(f"  {len(wait)} datasheet read(s) wait for your assistant: {r.reader.assistant / DA.README} says how "
                 "to answer them; then run this again")
-    if r.store is not None and r.store.enabled:   # parts built from a record the store withdrew or disputes: held
+    if r.store is not None:                    # what parts owe the store, checked again (withdrawn, disputed, gone): held
         for it in items:
             if state.get(it["name"]):
                 store_holds(state[it["name"]], r.store, it["name"], Path(bom).name)
@@ -3419,8 +3471,8 @@ def main(argv=None):
     ap.add_argument("--lib", action="append", default=[], help="local KiCad library dir (repeatable)")
     ap.add_argument("-o", "--out", help="plan folder (default: <[setup] workspace>/librarian/<BOM name> after "
                     "`ecadlib init`, else out/librarian)")
-    ap.add_argument("--sources", help="order of sources to try (default: the rules' [sources] order, else " + ",".join(SOURCES) +
-                    "; store, the shared store, is asked only when [store] url is set, and always first)")
+    ap.add_argument("--sources", help="order of sources to try (default: the rules' [sources] order, else " +
+                    ",".join(RU.DEFAULT_SOURCES) + "; the shared store, when [store] url is set, is always asked first)")
     ap.add_argument("--refresh", nargs="*", metavar="PART", help="redo finished parts: all, or the named ones")
     ap.add_argument("--refresh-index", action="store_true", help="rebuild the KiCad library name index")
     ap.add_argument("--allow", action="append", default=[], metavar="PART", help="release PART despite its release-check failures")

@@ -15,31 +15,70 @@ lookup is a miss and nothing is contacted):
     parts/<ab>/<key_id>.json   the record; refused unless store_keys.digest(record) is the index's sha256
     withdrawn.json             [{"key_id", "key", "rev", "reason", "issue", "at"}]: never used at that rev or older
 
-Privacy: an online lookup asks only for those four kinds of file, so the host learns a shard (1/256 of all parts) and a
-key id, never a maker or a part number. mode="snapshot" downloads the whole store as one zip (at most once per
-SNAPSHOT_TTL_S), unpacks it safely and answers every lookup from that folder. offline=True reads the cache only.
+Privacy (online mode): every lookup asks for store.json, withdrawn.json and the index shard of the MPN (one of 256
+slices, so that request names 1/256 of all parts, never a maker or a part number). Only on a hit is the record itself
+fetched, and that request does identify the exact part: its file name is the key id, which the public index lists
+beside the maker and part number. mode="snapshot" downloads the whole store as one zip (at most once per
+SNAPSHOT_TTL_S), unpacks it safely and answers every lookup from that folder: the host then learns nothing about
+which parts you look up. offline=True reads the cache only. Only https://, file:// URLs and folders are read: a
+plain http:// store or snapshot URL is refused (one trouble line), and every online answer is capped in size
+(FETCH_MAX_BYTES, RECORD_MAX_BYTES).
 
 Caching (online mode, under cache_dir): store.json, the index shards and withdrawn.json are asked again after TTL_S;
 an older copy is used when the network fails. A record is immutable for its sha256, so it is kept for good by that
 hash. The first network failure of a Store stops it asking again for the rest of the run (cache only), so a BOM of
-500 lines waits for one timeout, not 500, and the log says "could not be reached" once.
+500 lines waits for one timeout, not 500, and the log says "could not be reached" once. A copy older than MAX_AGE_S
+(an index shard, withdrawn.json, a snapshot) is never good enough to build a part from: such a lookup is a miss, with
+one trouble line saying how old the copy is.
 
-A record is an opaque JSON dict here: only schema, rev, status, key, also and evidence are ever read
-(store_record.py owns its meaning)."""
+What a lookup checks before it returns a Hit: the record's sha256 is the index's, the index key id is the key's
+(store_keys.key_id), the record's own key, rev and status are the index entry's, and its level is the LOWER of the
+index's and the one store_record.level gives the record itself (store.json "trusted": the contributors whose
+evidence counts, null = everyone; "maintainers"). A match through another code (`also`) or without a maker is never
+used to build a part (decide), only compared.
+
+A record's meaning is store_record.py's; this module reads its schema, key, rev, status and (for level) evidence.
+Everything from the store that is printed goes through safe() (no terminal control characters)."""
 import hashlib, io, json, os, re, shutil, tempfile, time, zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from . import store_keys as SK
+from . import store_keys as SK, store_record as SR
 
 TTL_S = 6 * 3600                    # store.json, index shards, withdrawn.json: asked again after this long
 SNAPSHOT_TTL_S = 86400              # snapshot mode: the zip is downloaded again after this long
 SNAPSHOT_MAX_BYTES = 1024 * 2 ** 20  # unpacked size of a snapshot, and the download's size
 SNAPSHOT_MAX_MEMBERS = 500_000
+MAX_AGE_S = 7 * 86400               # an index / withdrawn list / snapshot older than this builds no part
+FETCH_MAX_BYTES = 16 * 2 ** 20       # store.json, an index shard, withdrawn.json: the most an answer may hold
+RECORD_MAX_BYTES = 2 * SR.MAX_BYTES  # a record (store_record refuses one over MAX_BYTES anyway)
 ACCEPT = ("confirmed", "checked", "off")
+LEVELS = ("checked", "confirmed")    # low to high
 SOURCE = re.compile(r"store:([0-9a-f]{32})@r(\d+)")
+KID = re.compile(r"[0-9a-f]{32}")
+_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def safe(text):
+    """Text from the store as it may be printed: C0 / C1 control characters (terminal escapes) taken out, newlines and
+    tabs kept."""
+    return _CTRL.sub("", str(text))
+
+
+def configured(rules):
+    """A shared store is set in these rules: [store] url not empty and accept not "off"."""
+    s = (rules or {}).get("store") if isinstance(rules, dict) else None
+    s = s if isinstance(s, dict) else {}
+    return bool(str(s.get("url") or "").strip()) and str(s.get("accept") or "confirmed").strip().lower() != "off"
+
+
+def lower(a, b):
+    """The lower of two levels ('checked' < 'confirmed'); anything else is no level ('')."""
+    if a not in LEVELS or b not in LEVELS:
+        return ""
+    return LEVELS[min(LEVELS.index(a), LEVELS.index(b))]
 
 
 @dataclass
@@ -52,6 +91,7 @@ class Hit:
     status: str
     sha256: str
     note: str = ""
+    via: str = "exact"              # exact | also (another code the record covers) | no-maker (the BOM named none)
 
     @property
     def source(self):
@@ -85,11 +125,12 @@ def item_origin(item, half):
 
 def decide(hit, accept="confirmed"):
     """What a run does with a hit: 'use' (build from it), 'second-opinion' (keep it to compare with the local build)
-    or 'skip'. A disputed record is only ever a second opinion; a checked one is used only with accept='checked'."""
+    or 'skip'. A disputed record is only ever a second opinion; a checked one is used only with accept='checked'; a
+    match through an `also` code or without a maker is never used, only compared."""
     if hit is None or accept not in ACCEPT or accept == "off" or hit.status not in ("active", "disputed") \
             or hit.level not in ("confirmed", "checked"):
         return "skip"
-    if hit.status == "disputed":
+    if hit.status == "disputed" or getattr(hit, "via", "exact") != "exact":
         return "second-opinion"
     return "use" if hit.level == "confirmed" or accept == "checked" else "second-opinion"
 
@@ -120,11 +161,17 @@ class Store:
         self.snapshot_url = snapshot_url or default_snapshot_url(self.url)
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.trouble = []
+        self.meta = {}
         self._mem, self._usable, self._down, self._root, self._tmp = {}, None, False, None, None
+        self._down_msg, self._ages, self._snap_age, self._wd_state, self._stale_said = "", {}, 0.0, None, False
         low = self.url.lower()
         self.remote = low.startswith(("https://", "http://"))
         if not self.url:
             self.kind = "off"
+        elif low.startswith("http://") or (mode == "snapshot" and str(self.snapshot_url).lower().startswith("http://")):
+            self.kind = "refused"                    # a plain http:// answer can be changed on the way: never read
+            self._note("shared store: " + ("its snapshot URL" if not low.startswith("http://") else "its URL")
+                       + " is a plain http:// link; only https://, file:// and folders are read, so it is not used")
         elif self.remote:
             self.kind = "snapshot" if mode == "snapshot" else "http"
         else:
@@ -136,6 +183,7 @@ class Store:
         return self.kind != "off"
 
     def _note(self, msg):
+        msg = safe(msg)
         if msg not in self.trouble:
             self.trouble.append(msg)
 
@@ -155,25 +203,55 @@ class Store:
             self.http = CachedHTTP(cache_dir=self._cache() / "http", min_interval=0, offline=self.offline)
         return self.http
 
-    def _fetch(self, rel):
-        """GET base/rel -> ('ok', text) | ('missing', None) | ('error', message). Never raises."""
+    def _get(self, url, cap):
+        """(status, text, error) of one GET, reading at most cap bytes of the answer (a longer one: status -1)."""
+        http = self._http()
+        from .httpcache import CachedHTTP
+        if isinstance(http, CachedHTTP):             # the real client: streamed, so a huge answer is never read whole
+            r = http.s.get(url, timeout=http.timeout or 20, stream=True)
+            try:
+                if r.status_code == 404:
+                    return 404, "", None
+                if not 200 <= r.status_code < 300:
+                    return r.status_code, "", f"HTTP {r.status_code}"
+                buf = io.BytesIO()
+                for chunk in r.iter_content(1 << 16):
+                    buf.write(chunk)
+                    if buf.tell() > cap:
+                        return -1, "", None
+                return r.status_code, buf.getvalue().decode("utf-8"), None
+            finally:
+                r.close()
+        r = http.get(url, cache=False)               # a test's fake or another client: its whole answer, then the cap
+        status, text, err = getattr(r, "status", 0), getattr(r, "text", ""), getattr(r, "error", None)
+        if err is None and 200 <= status < 300 and isinstance(text, str) and len(text.encode("utf-8")) > cap:
+            return -1, "", None
+        return status, text, err
+
+    def _fetch(self, rel, cap=None):
+        """GET base/rel -> ('ok', text) | ('missing', None) | ('error', 'offline' | 'down' | 'large'). Never raises.
+        cap: the most bytes the answer may hold (FETCH_MAX_BYTES)."""
+        cap = FETCH_MAX_BYTES if cap is None else cap
         if self.offline:
             return "error", "offline"
         if self._down:
             return "error", "down"
         try:
-            r = self._http().get(f"{self.url}/{rel}", cache=False)
-            status, text, err = getattr(r, "status", 0), getattr(r, "text", ""), getattr(r, "error", None)
-        except Exception as e:                       # a fake or a future client that raises: still a miss
+            status, text, err = self._get(f"{self.url}/{rel}", cap)
+        except Exception as e:                       # a network error, a fake that raises, bad UTF-8: still a miss
             status, text, err = 0, "", f"{type(e).__name__}: {e}"
+        if status == -1:
+            self._note(f"shared store: {rel} is larger than {cap} bytes; not used")
+            return "error", "large"
         if status == 404:
             return "missing", None
         if err is None and 200 <= status < 300 and isinstance(text, str):
             return "ok", text
-        self._down = True
-        self._note(f"shared store could not be reached ({str(err or f'HTTP {status}')[:120]}); parts are built "
-                   "without it this run")
+        self._down, self._down_msg = True, str(err or f"HTTP {status}")[:120]
         return "error", "down"
+
+    def _unreached(self, then):
+        self._note(f"shared store could not be reached ({self._down_msg or 'no answer'}); {then}")
 
     def _read_cached(self, f):
         try:
@@ -192,18 +270,22 @@ class Store:
             pass                                     # a cache that cannot be written only costs a later request
 
     def _raw(self, rel, sha=None):
-        """Text of a store file -> ('ok', text) | ('missing', None) | ('error', None). sha: a record, cached for good
-        by its hash; otherwise store.json / an index shard / withdrawn.json, cached for self.ttl."""
+        """Text of a store file -> ('ok', text) | ('missing', None) | ('error', why). sha: a record, cached for good
+        by its hash; otherwise store.json / an index shard / withdrawn.json, cached for self.ttl (self._ages: how old
+        the copy used is). why: 'down' / 'offline' (nothing could be asked) or 'bad' (the store answered, wrongly)."""
+        if self.kind == "refused":
+            return "error", "down"
         if self.kind in ("folder", "snapshot"):
             root = self._folder()
             if root is None:
-                return "error", None
+                return "error", "down"
             f = root / rel
+            self._ages[rel] = self._snap_age
             try:
                 return ("ok", f.read_text(encoding="utf-8")) if f.is_file() else ("missing", None)
             except (OSError, UnicodeDecodeError) as e:
                 self._note(f"shared store: cannot read {rel} ({type(e).__name__})")
-                return "error", None
+                return "error", "bad"
         cache = self._cache()
         if sha:
             f = cache / "records" / f"{sha}.json"
@@ -213,25 +295,38 @@ class Store:
                     return "ok", text
             except OSError:
                 pass
-            got, text = self._fetch(rel)
+            got, text = self._fetch(rel, RECORD_MAX_BYTES)   # (read at call time: tests lower the caps)
             if got == "ok" and self._digest_ok(text, sha):
                 self._write(f, text)
-            elif got == "error" and text != "down":
-                self._note("shared store: offline and the record is not cached; parts are built without it")
-            return (got, text) if got != "error" else ("error", None)
+            elif got == "error" and text == "offline":
+                self._note("shared store: offline and the record is not saved on this computer; parts are built "
+                           "without it")
+            elif got == "error" and text == "down":
+                self._unreached("parts whose record is not saved on this computer are built without it")
+            return (got, text) if got != "error" else ("error", "bad" if text == "large" else text)
         f = cache / "live" / rel
         old = self._read_cached(f)
         if old is not None and (self.offline or self._down or 0 <= self.now() - old["at"] < self.ttl):
+            self._ages[rel] = max(0.0, self.now() - old["at"])
             return ("ok", old["text"]) if isinstance(old.get("text"), str) else ("missing", None)
         got, text = self._fetch(rel)
         if got == "ok" or got == "missing":
             self._write(f, json.dumps({"at": self.now(), "text": text}))
+            self._ages[rel] = 0.0
             return got, text
-        if old is not None:                          # the network failed: an old copy beats none
+        if text == "large":
+            return "error", "bad"
+        if old is not None:                          # the network failed: an old copy beats none (MAX_AGE_S decides
+            self._ages[rel] = max(0.0, self.now() - old["at"])   # whether it may build a part)
+            if text == "down":
+                self._unreached("using the copy saved on this computer earlier")
             return ("ok", old["text"]) if isinstance(old.get("text"), str) else ("missing", None)
         if text == "offline":
-            self._note("shared store: offline and nothing of it is cached yet; parts are built without it")
-        return "error", None
+            self._note("shared store: offline and nothing of it is saved on this computer yet; parts are built without "
+                       "it")
+        else:
+            self._unreached("parts are built without it this run")
+        return "error", text
 
     @staticmethod
     def _digest_ok(text, sha):
@@ -242,7 +337,8 @@ class Store:
 
     def _json(self, rel):
         """A live store file (store.json, an index shard, withdrawn.json) -> ('ok', parsed) | ('missing', None) |
-        ('error', None); not JSON is an error, with a trouble line. Within one Store each file is read once."""
+        ('error', 'down' | 'offline' | 'bad'); not JSON is 'bad', with a trouble line. Within one Store each file is
+        read once."""
         if rel not in self._mem:
             got, text = self._raw(rel)
             d = None
@@ -251,9 +347,15 @@ class Store:
                     d = json.loads(text)
                 except ValueError:
                     self._note(f"shared store: {rel} is not valid JSON; ignored")
-                    got = "error"
+                    got, d = "error", "bad"
+            elif got == "error":
+                d = text
             self._mem[rel] = (got, d)
         return self._mem[rel]
+
+    def age(self, *rels):
+        """Seconds since the oldest of these store files (or the snapshot) was read from the store itself."""
+        return max([self._snap_age] + [self._ages.get(r, 0.0) for r in rels])
 
     # ------------------------------------------------------------ snapshot mode
     def _folder(self):
@@ -266,7 +368,7 @@ class Store:
         tree = base / rel if re.fullmatch(r"tree-[\w-]+(/[^/\\:]+)?", rel) and ".." not in rel else base / "none"
         have = stamp is not None and (tree / "store.json").is_file()
         if have and (self.offline or 0 <= self.now() - stamp["at"] < self.snapshot_ttl):
-            self._root = tree
+            self._root, self._snap_age = tree, max(0.0, self.now() - stamp["at"])
             return tree
         data, err = self._download()
         new = self._unpack(data, base) if data is not None else None
@@ -281,6 +383,8 @@ class Store:
             self._root = tree if have else None
         else:
             self._root = tree if have else None
+        if have and self._root == tree:              # an old copy serves: how old (MAX_AGE_S)
+            self._snap_age = max(0.0, self.now() - stamp["at"])
         self._down = self._root is None
         return self._root
 
@@ -368,7 +472,7 @@ class Store:
         return self._usable
 
     def _check_meta(self):
-        if not self.enabled:
+        if not self.enabled or self.kind == "refused":
             return False
         got, meta = self._json("store.json")
         if got == "missing":
@@ -386,28 +490,51 @@ class Store:
         if isinstance(meta.get("schema"), int) and meta["schema"] > SK.SCHEMA:
             self._note(f"shared store is in a newer format (schema {meta['schema']}); update ecadlib to use it")
             return False
+        self.meta = meta
         return True
 
+    def trusted(self):
+        """store.json "trusted": the contributor names whose evidence counts (None: everyone's)."""
+        t = self.meta.get("trusted")
+        return [x for x in t if isinstance(x, str)] if isinstance(t, list) else None
+
+    def maintainers(self):
+        m = self.meta.get("maintainers")
+        return [x for x in m if isinstance(x, str)] if isinstance(m, list) else []
+
     def withdrawn(self):
-        """key_id -> its withdrawal entry (the highest rev withdrawn); {} when there is none or the store is off."""
+        """key_id -> its withdrawal entry (the highest rev withdrawn); {} when there is none, the store is off or its
+        list cannot be read (withdrawals() tells those apart)."""
         if not self.usable():
             return {}
         return self._withdrawn() or {}
+
+    def withdrawals(self):
+        """(key_id -> withdrawal entry, None) when the list was read; (None, why) when it cannot be told: 'down' (the
+        store could not be reached or is off: nothing can be said) or 'unknown' (the store answered, but its
+        withdrawn.json is missing or unreadable: no record of it can be trusted)."""
+        if not self.usable():
+            return None, "down"
+        wd = self._withdrawn()
+        return (wd, None) if wd is not None else (None, "down" if self._wd_state == "down" else "unknown")
 
     def _withdrawn(self):
         """As withdrawn(), but None when the list could not be read (a lookup then refuses: it cannot tell)."""
         if "_withdrawn" in self._mem:
             return self._mem["_withdrawn"]
         got, lst = self._json("withdrawn.json")
+        out = None
         if got == "error":
-            out = None
-        elif got == "missing":
-            out = {}
+            self._wd_state = "down" if lst in ("down", "offline") else "bad"
+        elif got == "missing":               # store_repo always writes one: a store without it cannot say what it took
+            self._wd_state = "missing"       # back, so none of its records is used and parts built from them are held
+            self._note("shared store: it has no withdrawn.json, so it cannot be told which records were withdrawn; "
+                       "its parts are not used")
         elif not isinstance(lst, list):
+            self._wd_state = "bad"
             self._note("shared store: withdrawn.json is not a list; store parts are not used")
-            out = None
         else:
-            out = {}
+            self._wd_state, out = "ok", {}
             for w in lst:
                 if isinstance(w, dict) and isinstance(w.get("key_id"), str):
                     old = out.get(w["key_id"])
@@ -426,18 +553,53 @@ class Store:
         w = self.withdrawn().get(str(key_id))
         return w if w is not None and (_rev(rev) is None or self._wrev(w) >= rev) else None
 
+    def _shard(self, ab):
+        """(state, {key_id: entry}) of one index shard: state 'ok' / 'missing' (no such shard: no part in it) / 'down' /
+        'bad'. An entry whose key id is not its key's (store_keys.key_id) or whose `also` is not a list of codes is
+        left out, with one trouble line."""
+        if not re.fullmatch(r"[0-9a-f]{2}", ab or ""):
+            return "bad", {}
+        got, idx = self._json(f"index/{ab}.json")
+        if got == "missing":
+            return "missing", {}
+        if got == "error":
+            return ("down" if idx in ("down", "offline") else "bad"), {}
+        if not isinstance(idx, dict):
+            self._note(f"shared store: index/{ab}.json is not an index; ignored")
+            return "bad", {}
+        out, bad = {}, 0
+        for k, e in idx.items():
+            if not (isinstance(e, dict) and isinstance(e.get("key"), str)):
+                continue
+            also = e.get("also", [])
+            if not (isinstance(k, str) and KID.fullmatch(k) and k == SK.key_id(e["key"])) or not (
+                    isinstance(also, list) and all(isinstance(a, str) for a in also)):
+                bad += 1
+                continue
+            out[k] = e
+        if bad:
+            self._note(f"shared store: index/{ab}.json has {bad} entr{'y' if bad == 1 else 'ies'} that do not name "
+                       "their part; ignored")
+        return "ok", out
+
     def _index(self, ab):
-        idx = self._json(f"index/{ab}.json")[1] if re.fullmatch(r"[0-9a-f]{2}", ab or "") else None
-        return {k: e for k, e in idx.items() if isinstance(e, dict) and isinstance(e.get("key"), str)} \
-            if isinstance(idx, dict) else {}
+        return self._shard(ab)[1]
 
     def entry(self, key_id, mpn_shard):
         """A part's current index entry (level, status, rev, sha256) or None. mpn_shard: the shard ('3f'), an MPN or a
         key."""
+        return self.entry_state(key_id, mpn_shard)[1]
+
+    def entry_state(self, key_id, mpn_shard):
+        """(state, entry): state 'ok' (entry: the part's index entry, or None when the store does not list it) or, with
+        entry None, 'down' (nothing could be read) / 'bad' (the store's index shard is unreadable)."""
         if not self.usable():
-            return None
+            return "down", None
         s = str(mpn_shard or "")
-        return self._index(s if re.fullmatch(r"[0-9a-f]{2}", s) else SK.shard(s)).get(str(key_id))
+        state, idx = self._shard(s if re.fullmatch(r"[0-9a-f]{2}", s) else SK.shard(s))
+        if state in ("down", "bad"):
+            return state, None
+        return "ok", idx.get(str(key_id))
 
     def status(self, key_id, mpn_shard):
         e = self.entry(key_id, mpn_shard)
@@ -453,13 +615,13 @@ class Store:
             return None
 
     def _find(self, k, idx):
-        """(key_id, entry, note) for key k in one index shard, or None."""
+        """(key_id, entry, note, via) for key k in one index shard, or None."""
         exact = [(i, e) for i, e in idx.items() if e["key"] == k]
         if exact:
-            return exact[0] + ("",)
+            return exact[0] + ("", "exact")
         also = [(i, e) for i, e in idx.items() if k in (e.get("also") or [])]
         if len(also) == 1:
-            return also[0] + (f"{SK.mpn_of(k)} is one of the codes the store record {also[0][1]['key']} covers",)
+            return also[0] + (f"{SK.mpn_of(k)} is one of the codes the store record {also[0][1]['key']} covers", "also")
         return None
 
     def _find_no_maker(self, k, idx):
@@ -478,7 +640,7 @@ class Store:
             return None
         i, e = pick[0]
         return i, e, (f"matched {mpn} without a maker: only {SK.maker_of(e['key'])} has it in the shared store"
-                      + ("" if exact else f" (as a code the record {e['key']} covers)"))
+                      + ("" if exact else f" (as a code the record {e['key']} covers)")), "no-maker"
 
     def _lookup(self, maker, mpn):
         if not self.enabled or self.accept == "off":
@@ -486,11 +648,12 @@ class Store:
         k = SK.key(maker, mpn)
         if not k or not self.usable():
             return None
-        idx = self._index(SK.shard(k))
+        ab = SK.shard(k)
+        idx = self._index(ab)
         found = self._find_no_maker(k, idx) if k.startswith("|") else self._find(k, idx)
         if found is None:
             return None
-        kid, e, note = found
+        kid, e, note, via = found
         rev, sha = _rev(e.get("rev")), e.get("sha256")
         if rev is None or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha):
             self._note(f"shared store: index entry {kid} is incomplete; ignored")
@@ -499,6 +662,13 @@ class Store:
         if wd is None:
             return None
         if self.is_withdrawn(kid, rev):
+            return None
+        old = self.age(f"index/{ab}.json", "withdrawn.json")
+        if old > MAX_AGE_S:                          # a withdrawal since then would not be seen: never built from
+            if not self._stale_said:
+                self._stale_said = True
+                self._note(f"shared store: the copy saved on this computer is {old / 86400:.0f} days old (more than "
+                           f"{MAX_AGE_S // 86400}) and no newer one could be read; its parts are not used until it can")
             return None
         rel = f"parts/{SK.shard(e['key'])}/{kid}.json"
         got, text = self._raw(rel, sha)
@@ -521,7 +691,108 @@ class Store:
         if schema > SK.SCHEMA:
             self._note(f"shared store has parts in a newer format (schema {schema}); update ecadlib to use them")
             return None
-        return Hit(rec, e["key"], kid, rev, str(e.get("level") or ""), str(e.get("status") or "active"), sha, note)
+        rk = rec.get("key") if isinstance(rec.get("key"), dict) else {}
+        status = str(e.get("status") or "active")
+        if rk.get("key") != e["key"] or _rev(rec.get("rev")) != rev or rec.get("status") != status:
+            self._note(f"shared store: record {kid} is not what its index entry says (key, rev or status); refused")
+            return None
+        try:
+            own = SR.level(rec, trusted=self.trusted(), maintainers=self.maintainers())
+        except Exception:                            # a record level() cannot read: no level, so never used
+            own = ""
+        level = lower(str(e.get("level") or ""), own)
+        return Hit(rec, e["key"], kid, rev, level, status, sha, note, via)
+
+    # ------------------------------------------------------------ parts that depend on the store
+    def problems(self, item, accept=None):
+        """problems(item, self, accept): see the module function."""
+        return problems(item, self, accept)
+
+
+def _level_ok(level, accept):
+    """A record at this index level may still stand behind a part built from it under [store] accept."""
+    return level in LEVELS and (accept == "checked" or level == "confirmed")
+
+
+def depends(item):
+    """What a plan item (or a librarian state record) owes the shared store: [{"kind": "built", "key_id", "rev", "key",
+    "halves"}] for halves built from a record (source store:<key_id>@r<rev>), and {"kind": "lifted", ..., "lifted":
+    [holds]} for a part whose own build a record's agreement released (store_check, Run.second_opinion), unless those
+    holds are back already (store_check "revoked")."""
+    out = {}
+    item = item if isinstance(item, dict) else {}
+    src = item.get("source") if isinstance(item.get("source"), dict) else None
+    keys = (item.get("store") or {}).get("keys") or {} if isinstance(item.get("store"), dict) else {}
+    for h in ("symbol", "footprint"):
+        half = item.get(h) if isinstance(item.get(h), dict) else {}
+        p = parse_source(src.get(h) if src is not None else half.get("source"))
+        if p:
+            d = out.setdefault(("built",) + p, {"kind": "built", "key_id": p[0], "rev": p[1], "key": "", "halves": []})
+            d["halves"].append(h)
+            d["key"] = d["key"] or str(half.get("store_key") or keys.get(p[0]) or "")
+    sc = item.get("store_check")
+    if isinstance(sc, dict) and sc.get("result") == "agreed" and sc.get("lifted") and not sc.get("revoked") \
+            and isinstance(sc.get("key_id"), str) and _rev(sc.get("rev")) is not None:
+        out[("lifted", sc["key_id"], sc["rev"])] = {"kind": "lifted", "key_id": sc["key_id"], "rev": sc["rev"],
+                                                    "key": str(sc.get("key") or ""), "lifted": list(sc["lifted"])}
+    return list(out.values())
+
+
+def note_for(dep, why, redo=""):
+    """The `verify` note for one of problems()'s answers: a part built from the record, or a part whose lifted holds
+    are back (redo: what to do, for a part built from it)."""
+    if dep.get("kind") == "lifted":
+        return f"{why}: this part's own build was released because that record agreed with it; the holds it lifted " \
+               "are back"
+    return f"{why}: this part was built from it" + (f"; {redo}" if redo else "")
+
+
+def problems(item, store, accept=None):
+    """[(dependency, why)] for what a part owes the shared store (depends) that no longer holds: the record was
+    withdrawn at that rev, is disputed, is no longer in the store's index (or, for an agreement, no longer at that
+    rev), its level is now below [store] accept (a part built from it), or the store answers but its withdrawn list
+    cannot be read ("cannot tell"). [] when the part owes the store nothing, the store is off, or it cannot be
+    reached / is offline with nothing saved (nothing is said about a part then; the store's trouble says why).
+    why is text for a `verify` note: 'shared store record KEY rN ...'."""
+    deps = depends(item)
+    if not deps or store is None or not getattr(store, "enabled", False) or not store.usable():
+        return []
+    accept = accept or getattr(store, "accept", "confirmed")
+    wd, why = store.withdrawals()
+    if wd is None and why == "down":
+        return []
+    out = []
+    for d in deps:
+        label = safe(f"{d['key'] or d['key_id']} r{d['rev']}")
+        if wd is None:
+            out.append((d, f"shared store record {label}: cannot tell whether the store withdrew it (its withdrawn "
+                           "list is missing or unreadable)"))
+            continue
+        w = wd.get(d["key_id"])
+        if w is not None and store._wrev(w) >= d["rev"]:
+            reason = "; ".join(str(x) for x in (w.get("reason"), w.get("issue")) if x) or "no reason given"
+            out.append((d, safe(f"shared store record {label} was withdrawn from the store ({reason[:200]})")))
+            continue
+        if not d["key"]:
+            continue                                  # (no key: its index shard is unknown; withdrawals were checked)
+        state, e = store.entry_state(d["key_id"], d["key"])
+        if state == "down":
+            continue
+        if state == "bad":
+            out.append((d, f"shared store record {label}: cannot tell whether the store still lists it (its index "
+                           "cannot be read)"))
+        elif e is None:
+            out.append((d, f"shared store record {label} is no longer in the store's index"))
+        elif str(e.get("status") or "active") == "disputed":
+            out.append((d, f"shared store record {label} is disputed"))
+        elif d["kind"] == "lifted" and _rev(e.get("rev")) != d["rev"]:
+            out.append((d, f"shared store record {label} is no longer the store's (it is at r{e.get('rev')} now)"))
+        elif d["kind"] == "built" and accept in ACCEPT and accept != "off" and \
+                LEVELS.index(str(e.get("level"))) < LEVELS.index("confirmed" if accept == "confirmed" else "checked") \
+                if str(e.get("level")) in LEVELS else d["kind"] == "built":
+            out.append((d, f"shared store record {label} is now only {safe(e.get('level') or 'unrated')} (below "
+                           f"[store] accept = \"{accept}\")"))
+    return out
 
 
 def from_rules(rules, http=None, cache_dir=None, offline=False):

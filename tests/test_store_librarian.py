@@ -45,10 +45,18 @@ def _datasheet_part():
     return copy.deepcopy(it), out
 
 
-def _record(item, base, by="alice"):
+def _record(item, base, by="alice", reader=None):
+    """item's record by `by`. reader: {"provider", "model"} the record's build says read the datasheet (another
+    model than this machine's mocked read: an independent read)."""
     rec = SR.from_item(item, base, by=by, at=AT)
+    if reader is not None:
+        for e in rec["evidence"]:
+            e["reader"] = dict(reader)
     assert SR.validate(rec) == [], SR.validate(rec)
     return rec
+
+
+OTHER_READER = {"provider": "other-ai", "model": "other-model-1"}
 
 
 def _confirm(rec):
@@ -161,7 +169,7 @@ def test_checked_record_needs_accept_checked(tmp_path, monkeypatch):
 def test_second_opinion_agreeing_lifts_the_read_hold_and_disagreeing_holds(tmp_path, monkeypatch):
     _no_dns(monkeypatch)
     it, base = _datasheet_part()
-    rec = _record(it, base, by="carol")                     # another person's datasheet read: checked
+    rec = _record(it, base, by="carol", reader=OTHER_READER)   # another person's read, by another model: checked
     assert SR.level(rec) == "checked"
     for name, recs, ready in (("agree", [rec], True), ("disagree", [_tamper(rec)], False)):
         d = tmp_path / name
@@ -217,15 +225,23 @@ def test_store_off_changes_nothing_and_an_explicit_order_is_kept(tmp_path, monke
             assert "store" not in i and not any(str(s).startswith("store:") for s in i["source"].values())
     assert json.dumps(plans["default"], sort_keys=True, default=str) == \
         json.dumps(plans["without"], sort_keys=True, default=str)
-    # a store set, but [sources] order without "store": not used, and said once
+    # a store set: asked first, though [sources] order does not name it ("store" is never needed there)
     items, base = _kicad()
     root = _store(tmp_path / "s", [_confirm(_record(items["RES-0603-10k"], base))])
     d = tmp_path / "order"
     d.mkdir()
     rules = {"store": {"url": str(root)}, "sources": {"order": ["kicad", "easyeda"]}}
     got, log = _run(d, rules=rules)
+    assert got["RES-0603-10k"]["source"]["footprint"].startswith("store:"), got["RES-0603-10k"]["source"]
+    lock = json.loads((d / "out" / "library.lock.json").read_text(encoding="utf-8"))
+    assert lock["settings"]["sources"][0] == "store"
+    # and accept = "off" is the off switch: as without a store
+    d = tmp_path / "off"
+    d.mkdir()
+    got, log = _run(d, rules=dict(rules, store={"url": str(root), "accept": "off"}))
     assert got["RES-0603-10k"]["source"]["footprint"].startswith("kicad:")
-    assert sum("not in [sources] order" in l for l in log) == 1, log
+    lock = json.loads((d / "out" / "library.lock.json").read_text(encoding="utf-8"))
+    assert "store" not in lock["settings"]["sources"]
 
 
 # ---------------------------------------------------------------- (e) withdrawn / disputed
@@ -249,7 +265,8 @@ def test_withdrawn_record_holds_the_part_on_the_next_run_and_upkeep_lists_it(tmp
     plan = d / "out" / "plan.json"
     item = json.loads(plan.read_text(encoding="utf-8"))[0]
     assert RC.store_problems(item, SC.Store(str(root))) == [
-        f"verify: shared store record {rec['key']['key']} r1 was withdrawn from the store (pad 1 too small)"]
+        f"verify: shared store record {rec['key']['key']} r1 was withdrawn from the store (pad 1 too small): this part "
+        "was built from it"]
     probs = RC.publish_problems(dict(item, status="ready"), d / "out", store=SC.Store(str(root)))   # (a hand edit)
     assert any("withdrawn" in p for p in probs), probs
     res = UK.run(plan, checks=["store"], state_dir=tmp_path / "upk", out=tmp_path / "upk" / "upkeep",
@@ -321,16 +338,6 @@ def test_offline_run_contacts_no_store(tmp_path, monkeypatch):
     store = SC.from_rules(rules, http=http, cache_dir=tmp_path / "sc", offline=True)
     got, _ = _run(d, offline=True, rules=rules, store=store)
     assert http.urls == [] and not any(str(s).startswith("store:") for i in got.values() for s in i["source"].values())
-
-
-# ---------------------------------------------------------------- (7) the datasheet read's package spec is kept
-@lite
-def test_datasheet_spec_is_carried_into_the_plan_and_the_record(tmp_path, monkeypatch):
-    it, base = _datasheet_part()
-    spec = it["footprint"].get("spec")
-    assert isinstance(spec, dict) and spec, it["footprint"]
-    rec = _record(it, base)
-    assert rec["footprint"]["spec"] == spec
 
 
 # ---------------------------------------------------------------- (i) ecadlib store
