@@ -19,8 +19,9 @@ an independent source agrees, as for any read). The answer goes into the result 
 does not ask for it again. Each folder's name carries the request's key: a run that asks for more pages of the same
 part (its first answer left something out) gets a new folder.
 
-Not made in this mode: the paid cross-check's second read (one assistant reading twice is not a second source) and the
-web search for a missing PDF (it is billed). Message Batches are off. Nothing here talks to the network."""
+The cross-check's second read is asked for the same way, in its own folder (<part>-check-<key>), once the first read
+is answered: its request says to read the pages afresh and never reuse the first answer (through the API the second read
+is the same model reading again; 2026-11-23). Not made in this mode: the web search for a missing PDF (it is billed). Message Batches are off. Nothing here talks to the network."""
 import base64
 import json
 import re
@@ -143,6 +144,14 @@ def request(base, job):
         if tried:                                            # why: refused, dead, the Archive had no copy ...
             md += ["What ecadlib tried:", ""] + [f"- {a.get('where') or ''}: {a.get('error') or ''}"[:400]
                                                   for a in tried[:8]] + [""]
+    if str(job.get("key") or "").startswith("check-"):      # the cross-check's second read (ecadlib.crosscheck)
+        md += ["## A second read", "",
+               "This is the cross-check: a second, separate read of the same part, compared in code with the first "
+               "read before a footprint built from it is released. Read it from these pages alone, as if for the "
+               "first time: do not open or reuse any other folder's answer.json, and do not copy numbers from an "
+               "earlier answer. If you answered this part's first read in this conversation, have a fresh session "
+               "or sub-agent answer this one. A disagreement holds the part for a person, which is safe; a copied "
+               "answer agrees with any mistake.", ""]
     md += ["Read the pages below as the instructions say, then write **answer.json** in this folder: one JSON object "
            "matching schema.json (no comments, no text around it). Leave a value out, or empty, when the pages do not "
            "print it: a guessed number is worse than none, because ecadlib holds a part with a missing value but may "
