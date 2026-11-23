@@ -48,11 +48,19 @@ def test_a_turned_read_made_of_the_printed_span_is_not_agreed():
 
 
 def test_a_land_the_body_allows_one_way_only_still_agrees():
-    # the same stacked span, on a 7.0 x 3.0 body: turned, the pad (2.2 mm) would be longer than the body allows... the
-    # turned land (pad 2.6 long on a 4.5 body) is no land of this body, so the read as given is the only one
+    # the same stacked span, on a 4.5 x 3.0 body: turned, the two pads (3.4 mm long, 5.4 mm over both) would overlap,
+    # so the read as given is the only one
+    pages = {1: [TITLE, run(259, 528, "1.2"), run(287, 514, "5.4"), run(335, 551, "3.4")]}
+    assert LT.fits_body((3.4, 1.2, 2.0), (3.0, 4.5), sure=True) is not None
+    assert status(pages, land(1.2, 3.4, 4.2, (4.5, 3.0))) == "agreed"
+    # round 2 of the review: this test's first land (pads 2.6 mm wide) agreed because, turned, a pad 2.6 mm long is
+    # more than half the 4.5 mm body. That rule of thumb turns real lands away (a 0603's pads are 0.9 mm long on
+    # 1.6 mm, an SOD-323's 1.0 on 1.7), so it cannot rule the turned land out: no verdict
     pages = {1: [TITLE, run(259, 528, "1.2"), run(287, 514, "5.4"), run(335, 551, "2.6")]}
     assert LT.fits_body((2.6, 1.2, 2.8), (3.0, 4.5)) is not None
-    assert status(pages, land(1.2, 2.6, 4.2, (4.5, 3.0))) == "agreed"
+    assert LT.fits_body((2.6, 1.2, 2.8), (3.0, 4.5), sure=True) is None
+    v = LT.check(pages, land(1.2, 2.6, 4.2, (4.5, 3.0)))
+    assert v["status"] == "unchecked" and "turned" in v["why"], v
 
 
 def test_the_texts_direction_shows_which_size_runs_along_the_pads():
