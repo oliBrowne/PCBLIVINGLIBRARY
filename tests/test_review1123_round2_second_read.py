@@ -1,7 +1,8 @@
 """Offline tests for round 2 of the 2026-11-23 review, group R-D (the second read and the datasheet read): each fix has
 the inputs that must be held and the ordinary parts that must stay ready.   python3 -m tests.test_review1123_round2_second_read
   I1  a small terminal read half or 1.5 times is a disagreement (the 0.10 mm tolerance let 0.1 and 0.3 pass for 0.2)
-  I2  a square four-sided QFN of 12 pins or more with blank rows gets a quarter per side again; 8 pins stay held"""
+  I2  a square four-sided QFN of 12 pins or more with blank rows gets a quarter per side again; 8 pins stay held
+  I4  an unresolved entry that names nothing built ("not applicable", "weight") does not keep a part with a person"""
 import copy, io, json, tempfile
 
 from ecadlib import crosscheck as CC, datasheet as D, ds_assistant as DA, ds_route as DR, librarian as L
@@ -149,6 +150,41 @@ def test_the_rows_default_changed_no_text_sent_to_a_model():
     p = D.SCHEMA["properties"]
     assert p["pins_left_right"]["description"] == "qfn: pins on each of the left and right sides (default pin_count/4)"
     assert p["pins_top_bottom"]["description"] == "qfn: pins on each of the top and bottom sides (default pin_count/4)"
+
+
+# ---------------------------------------------------------------- I4: unresolved entries that name nothing built
+HARMLESS = ("not applicable", "Not applicable.", "N/A", "n/a", "none", "weight", "weight not given", "marking code",
+            "top marking not shown", "moisture sensitivity level", "thermal resistance not stated", "tape and reel quantity",
+            "lead_span (not applicable: no-lead package)", "RoHS status")
+ADMITS = ("could not read the dimension table clearly", "drawing blurred", "pin 1 orientation unclear",
+          "some dimensions guessed", "pad size not legible", "cathode mark not found", "terminal_length", "the lead span",
+          "body width digits blurred", "package outline on a page not sent", "pitch")
+
+
+def test_an_unresolved_entry_that_names_nothing_built_does_not_keep_the_part_with_a_person():
+    t = T.SMA
+    for u in HARMLESS:
+        res = T.read(dict(copy.deepcopy(t), unresolved=[u]))
+        assert not DR.open_unresolved(res["spec"]), (u, DR.open_unresolved(res["spec"]))
+        assert not DR.hold_reasons(res, True), (u, DR.hold_reasons(res, True))
+        cc, job = R.checked(res, t)
+        assert cc["status"] == "agreed" and not cc.get("unresolved"), (u, cc["status"], cc.get("unresolved"))
+        assert R.put(res, job, LIB_SYMBOL)[0] == "released", u
+
+
+def test_an_unresolved_entry_about_the_drawing_or_a_built_field_still_waits_for_a_person():
+    t = T.SMA
+    for u in ADMITS:
+        res = T.read(dict(copy.deepcopy(t), unresolved=[u]))
+        assert DR.open_unresolved(res["spec"]) == [u], (u, DR.open_unresolved(res["spec"]))
+        if DR.hold_reasons(res, True):                # held outright (a field the read gave and calls unread): as safe
+            continue
+        cc, job = R.checked(res, t)
+        assert cc["status"] == "self-checked" and cc["unresolved"] == [u], (u, cc["status"], cc.get("unresolved"))
+        assert R.put(res, job, LIB_SYMBOL)[0] == "verify", u
+    # one harmless entry beside one that admits a guess: the guess still counts
+    res = T.read(dict(copy.deepcopy(t), unresolved=["weight", "drawing blurred", "not applicable"]))
+    assert DR.open_unresolved(res["spec"]) == ["drawing blurred"]
 
 
 if __name__ == "__main__":

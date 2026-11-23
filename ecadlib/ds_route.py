@@ -1250,16 +1250,30 @@ def named_field(u):
     return "exposed_pad" if EP_WORDS.search(str(u)) or re.search(r"\bEP\b", str(u)) else ""
 
 
+# an unresolved entry that says the thing does not apply to this part: nothing was guessed
+NOT_APPLICABLE = re.compile(r"\bnot[\s_-]+applicable\b|\bdoes(?:\s+not|n't)\s+apply\b|(?<![\w/])n\s*/\s*a(?![\w/])|^\W*(?:none|nothing|nil)\W*$", re.I)
+# what an entry that names no package field must speak of to count as a doubt about the footprint: the drawing, a
+# size, the pads or pins, their place or direction, or a guess. "weight", "marking code", "thermal resistance" do not
+DRAWN_WORDS = re.compile(r"\b(?:dimension|drawing|drawn|outline|mechanical|footprint|land|pads?\b|pins?\b|pinout|leads?\b(?![\s-]*free)|"
+                         r"terminal|ball|bod(?:y|ies)|pitch|span|sizes?\b|width|length|diameter|package\b|tables?\b|figure|"
+                         r"rows?\b|sides?\b|orientation|polarity|cathode|anode|tab\b|holes?\b|drill|digits?\b|mm\b|inch|mils?\b|"
+                         r"guess|assum|estimat)", re.I)
+
+
 def open_unresolved(spec):
     """The read's unresolved entries that are not clearly advisory: everything but the fields no pad and no pin
     stands on (ADVISORY, NOT_COPPER) and a limit left out of a dimension whose value was read (a nominal-only
     drawing). A read that says it could not read something is not released with no person on a footprint built from
-    its own numbers, whatever agrees with it: a second read can make the same guess (review 2026-11-23)."""
+    its own numbers, whatever agrees with it: a second read can make the same guess (review 2026-11-23).
+    Round 2 of that review: every free-form entry counted, so "not applicable", "weight" and "marking code" kept
+    ordinary parts with a person. An entry that says the thing does not apply (NOT_APPLICABLE) is no doubt at all, and
+    one that names no package field counts only when it speaks of the drawing, a size, the pads or pins, or a guess
+    (DRAWN_WORDS: "could not read the dimension table clearly" still counts)."""
     num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
     out = []
     for u in (spec or {}).get("unresolved") or []:
         top = named_field(u)
-        if top in NOT_COPPER + ADVISORY:
+        if top in NOT_COPPER + ADVISORY or NOT_APPLICABLE.search(str(u)) or not top and not DRAWN_WORDS.search(str(u)):
             continue
         v = (spec or {}).get(top) if top else None
         if ONLY_LIMITS.search(str(u)) and (num(v) or isinstance(v, dict) and (num(v.get("nom")) or num(v.get("min")) and num(v.get("max")))):
