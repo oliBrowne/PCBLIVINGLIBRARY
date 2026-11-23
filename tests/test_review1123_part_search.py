@@ -320,6 +320,35 @@ def test_no_mpn_lines_with_another_symbol_or_datasheet_are_held():
     assert not any(_holds([a, dict(b, libref="")]).values())
 
 
+# ------------------------------------------------------------------ a6-5 a crafted MPN cell does not hang the reader
+def test_size_and_value_cell_check_does_not_backtrack():
+    for n in (24, 40, 400):
+        t = time.time()
+        assert BT._not_a_part_number("0603 " * n + "!") is None
+        assert time.time() - t < 0.5, (n, time.time() - t)
+    t = time.time()
+    assert BT._not_a_part_number(("0603 " * 16)[:79] + "!") is None      # the longest cell the check walks
+    assert BT._not_a_part_number("0603 4k7 " * 8 + "x") is None
+    assert time.time() - t < 0.5, time.time() - t
+
+
+@lite
+def test_a_bom_with_a_40_token_mpn_cell_is_read_at_once(tmp_path):
+    t = time.time()
+    lines = _read(tmp_path, "Designator,Qty,MPN\nR1,1," + "0603 " * 40 + "!\nR2,1,RC0603FR-0710KL\n")
+    assert time.time() - t < 5.0, time.time() - t      # (the old pattern: weeks; the check itself is timed above)
+    assert len(lines) == 2 and lines[1]["mpn"] == "RC0603FR-0710KL", lines
+
+
+def test_size_and_value_cells_read_as_before():
+    for cell in ("0805, 4.7uF", "0603 10 ohm", "1608 330", "0402/100nF/16V", "4,7uF 0805", "0603 10k 1%", "0805;22pF",
+                 "10 uF 0805 16 V", "0603  4k7", "0603 0603 0603 0603 0603 0603 0603 0603 0603 0603 10k"):
+        assert BT._not_a_part_number(cell) == "size_value", cell
+    for cell in ("RC0603FR-0710KL", "0603", "10k", "4.7uF 16V", "0603 10k!", "0603-10k", "LM358 0603", "0603 10k x",
+                 "GRM188R71H104KA93D", "0603,", ", 0603 10k", "0603 " * 20 + "10k"):
+        assert BT._not_a_part_number(cell) != "size_value", cell
+
+
 if __name__ == "__main__":
     import sys
     fns = [f for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]

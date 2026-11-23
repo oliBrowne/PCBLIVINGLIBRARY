@@ -1187,8 +1187,35 @@ def _split_mpn(mpn, maker=""):
 
 _SIZE_CODE = r"(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512|2220|1005|1608|2012|3216|3225|4532|5025|6332)"
 _VALUE_WORD = r"(?:\d+(?:[.,]\d+)?\s*[pnuµμmkKMG]?\s*(?:F|H|Ω|ohms?|R)?|\d*[pnuµμkKMGR]\d+|\d+(?:[.,]\d+)?\s*(?:%|V|W))"
-_SIZE_VALUE_CELL = re.compile(rf"(?:{_SIZE_CODE}|{_VALUE_WORD})(?:\s*[,/;]\s*|\s+)(?:{_SIZE_CODE}|{_VALUE_WORD})"
-                              rf"(?:(?:\s*[,/;]\s*|\s+)(?:{_SIZE_CODE}|{_VALUE_WORD}))*", re.I)
+_SIZE_VALUE_ITEM = re.compile(rf"(?:{_SIZE_CODE}|{_VALUE_WORD})", re.I)
+_SIZE_VALUE_SEP = re.compile(r"\s*[,/;]?\s*")
+SIZE_VALUE_MAX = 80                     # characters: a size-and-value cell ('0805, 4.7uF 10% 50V') is far shorter
+
+
+def _size_value_cell(s):
+    """True for a cell that is two or more chip sizes / values and nothing else, with spaces or one of , / ; between
+    them ('0805, 4.7uF', '0603 10 ohm', '1608 330', '4,7uF 0805'). Walked item by item from each place an item can
+    start, each place looked at once: as one pattern with a repeat (2026-11-23 review, a6 finding 5) every '0603'
+    could be a size or a value, a cell of n of them that did not fit was tried 2^n ways, and 24 took half a minute.
+    A cell over SIZE_VALUE_MAX characters is not such a cell."""
+    n = len(s)
+    if n > SIZE_VALUE_MAX:
+        return False
+    starts, seen = [(0, 0)], {(0, 0)}                    # (where the next item starts, items before it: 0, 1 or 2+)
+    while starts:
+        i, k = starts.pop()
+        for j in range(i + 1, n + 1):
+            if s[j - 1].isspace() or not _SIZE_VALUE_ITEM.fullmatch(s, i, j):   # (an item's own trailing space is
+                continue                                                        # the separator's)
+            if j == n:
+                if k >= 1:
+                    return True
+                continue
+            e = _SIZE_VALUE_SEP.match(s, j).end()
+            if e > j and (e, min(k + 1, 2)) not in seen:
+                seen.add((e, min(k + 1, 2)))
+                starts.append((e, min(k + 1, 2)))
+    return False
 _WORDS_PN = re.compile(r"[A-Za-z][A-Za-z\-]*(?:\s+[A-Za-z][A-Za-z\-]*)+")
 
 
@@ -1199,7 +1226,7 @@ def _not_a_part_number(s):
     s = str(s or "").strip()
     if not s:
         return None
-    if _SIZE_VALUE_CELL.fullmatch(s) and re.search(_SIZE_CODE, s):   # '0805, 4.7uF', '0603 10 ohm', '1608 330'
+    if _size_value_cell(s) and re.search(_SIZE_CODE, s):   # '0805, 4.7uF', '0603 10 ohm', '1608 330'
         return "size_value"
     if _WORDS_PN.fullmatch(s) and not placeholder_mpn(s) and not DNP_MARK.search(s):
         return "words"
