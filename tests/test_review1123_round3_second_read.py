@@ -233,6 +233,36 @@ def test_an_lcsc_number_easyeda_or_the_listing_names_the_maker_for_is_taken_as_b
     assert (r["src"], r["status"]) == ("easyeda", "available_easyeda") and "not used" not in r["notes"], r
 
 
+# ---------------------------------------------------------------- B4: ams / ams AG is ams-OSRAM
+AMS_SAME = (("ams", "ams-OSRAM USA INC."), ("ams", "ams-OSRAM"), ("ams", "ams OSRAM"), ("ams AG", "ams-OSRAM USA INC."),
+            ("ams AG", "ams OSRAM"), ("AMS AG", "ams-OSRAM AG"), ("ams ag", "ams-OSRAM"), ("ams-AG", "ams OSRAM"),
+            ("ams(艾迈斯)", "ams-OSRAM"), ("ams", "ams OSRAM (Formerly ams AG)"))
+AMS_APART = (("AMS", "ams OSRAM"), ("AMS", "ams-OSRAM USA INC."), ("Ams", "ams OSRAM"), ("ams", "Advanced Monolithic Systems"),
+             ("AMS", "Advanced Monolithic Systems Inc."), ("ams AG", "Advanced Monolithic Systems"), ("ams", "Analog Devices"),
+             ("AMS", "AMSC"), ("ams", "AMSC"), ("ams", "Cree"), ("ams AG", "onsemi"), ("ams", "OSRAM Opto Semiconductors"),
+             ("ams", "OSRAM"), ("ams Technologies", "ams OSRAM"), ("AMS Semiconductor", "ams OSRAM"), ("Linear", "Analog Devices"),
+             ("Linear", "Linear Integrated Systems"))
+
+
+def test_ams_and_ams_ag_as_the_company_writes_itself_are_ams_osram():
+    for a, b in AMS_SAME:
+        assert P.same_maker(a, b) and P.same_maker(b, a), (a, b)
+    r = PS._row(PS._Cad("ams-OSRAM USA INC."), maker="ams", mpn="AS5600-ASOM")
+    assert r["src"] == "plug" and r["src_datasheet"] == PS.SHEET and "not used" not in r["notes"], r
+    r = PS._row(PS._Cad("ams OSRAM"), maker="ams AG", mpn="AS5600-ASOM")
+    assert r["src"] == "plug" and "not used" not in r["notes"], r
+
+
+def test_bare_ams_in_capitals_and_other_makers_stay_apart():
+    for a, b in AMS_APART:
+        assert not P.same_maker(a, b) and not P.same_maker(b, a), (a, b)
+    assert P.maker_key("ams") == P.maker_key("AMS") == "AMS" and P.maker_key("ams-OSRAM USA INC.") == "OSRAM"   # the keys are as they were
+    r = PS._row(PS._Cad("ams-OSRAM USA INC."), maker="AMS", mpn="AMS1117-3.3")
+    assert r["src"] == "" and "is by ams-OSRAM USA INC., not AMS" in r["notes"], r
+    r = PS._row(PS._Cad("Advanced Monolithic Systems"), maker="ams", mpn="AMS1117-3.3")
+    assert r["src"] == "" and "not ams" in r["notes"], r
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

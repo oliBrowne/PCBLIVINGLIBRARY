@@ -150,6 +150,7 @@ _MAKER_ALIAS.update({"ANALOGDEVICES": "ANALOG", "NATIONALSEMICONDUCTOR": "TEXASI
 _MAKER_ALIAS.update({"MCC": "MICROCOMMERCIAL",                           # Micro Commercial Components / Co
                      "AUSTRIAMICROSYSTEMS": "OSRAM",     # ams-OSRAM (AMSOSRAM above). Bare "AMS" is not added: on a BOM it
                                                          # is also Advanced Monolithic Systems (AMS1117), as the tests pin
+                                                         # ("ams" / "ams AG" as written: _ams_ag, round 3)
                      "UTC": "UNISONIC",                                  # Unisonic Technologies' brand
                      "SKYWORKSSOLUTIONS": "SKYWORKS",
                      "ISSI": "SILICONSOLUTION", "ISSISILICONSOLUTION": "SILICONSOLUTION",   # Integrated Silicon Solution Inc. (DigiKey: "ISSI, Integrated ...")
@@ -261,9 +262,21 @@ def same_maker(a, b):
     ra, rb = "".join(_key_words(a)), "".join(_key_words(b))                # the names as written, before any alias
     if rb in _MAKER_MOVED.get(ra, ()) or ra in _MAKER_MOVED.get(rb, ()):   # NXP / Nexperia
         return True
+    if _ams_ag(a) and kb == "OSRAM" and "AMS" in _maker_words_all(b) or _ams_ag(b) and ka == "OSRAM" and "AMS" in _maker_words_all(a):
+        return True                                                        # ams / ams AG is ams-OSRAM (B4, below)
     wa, wb = _maker_words(a), _maker_words(b)
     return any(len(x) == 1 and len(x[0]) >= 3 and x[0] not in _MAKER_GENERIC and y and y[0] == x[0] and ky.startswith(kx)
                for x, y, kx, ky in ((wa, wb, ka, kb), (wb, wa, kb, ka)))   # not "Vishay" / VPG
+
+
+def _ams_ag(name):
+    """Is this ams AG (austriamicrosystems, ams-OSRAM since 2020) by the name as written: "ams" in the small letters
+    the company writes itself in, or "ams AG" in any letters? 2026-11-23 review round 3 (B4): a BOM that says "ams"
+    for an AS5600 was held against its own listing by "ams-OSRAM USA INC.". By the name as written, like _MAKER_MOVED,
+    and only against a name that says ams and OSRAM: the key stays "AMS", so "AMS" in capitals (on a BOM that is
+    Advanced Monolithic Systems, the AMS1117) is still no ams-OSRAM, and "ams" is no Advanced Monolithic Systems."""
+    name = clean_maker(name) if isinstance(name, str) else ""
+    return bool(re.fullmatch(r"ams|(?i:ams[\s-]+ag)\.?", name.strip()))
 
 
 _KNOWN_MAKERS = set()

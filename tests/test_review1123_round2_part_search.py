@@ -107,7 +107,8 @@ SAME = [("MCC", "Micro Commercial Components"), ("MCC", "Micro Commercial Co"), 
 # a wrong alias lets another maker's listing through: none of these is the other
 DIFFER = [("MCC", "Microchip"), ("Micro Commercial Co", "Microchip Technology"), ("MCC", "Micro Crystal"),
           ("ams", "Advanced Monolithic Systems"), ("AMS", "AMSC"), ("ams", "Analog Devices"), ("OSRAM", "Cree"),
-          ("AMS", "ams OSRAM"), ("ams", "ams-OSRAM"),        # "AMS" on a BOM is also Advanced Monolithic Systems (AMS1117): left apart
+          ("AMS", "ams OSRAM"),        # "AMS" on a BOM is also Advanced Monolithic Systems (AMS1117): left apart
+                                       # (round 3, B4: "ams" in small letters, as ams AG writes itself, is ams-OSRAM)
           ("UTC", "UMW"), ("Unisonic", "Unisem"), ("UTC", "Texas Instruments"),
           ("Cree", "Infineon"), ("Wolfspeed", "Cree LED"), ("Wolfspeed", "onsemi"),
           ("Silicon Labs", "Silicon Storage Technology"), ("Skyworks", "Qorvo"), ("Silicon Labs", "Silicon Motion"),
