@@ -264,10 +264,14 @@ def test_a_signal_pin_the_symbol_calls_nc_disagrees_with_the_table():
 
 def test_a_real_nc_pin_still_agrees():
     for nc in ("NC 3 No connection", "N.C. 3 Not connected internally", "NC 3, 5 No connect", "RESERVED 3 Leave open",
-               "— 3 No internal connection", ""):
-        text = {1: BUCK[1].replace("EN 3 Enable\n", nc + "\n" if nc else "")}
+               "— 3 No internal connection"):
+        text = {1: BUCK[1].replace("EN 3 Enable\n", nc + "\n")}
         v = PT.check(text, [(n, "NC" if n == "3" else s) for n, s in BUCK_PINS], pin_count=8)
         assert v["status"] == "agreed", (nc, v)
+    # no row for pin 3 at all: not confirmed (round 2, C4: a row the check does not recognise looks the same as no
+    # row; this case asserted 'agreed' before)
+    v = PT.check({1: BUCK[1].replace("EN 3 Enable\n", "")}, [(n, "NC" if n == "3" else s) for n, s in BUCK_PINS], pin_count=8)
+    assert v["status"] == "unchecked" and not v.get("doubt") and "pin 3" in v["why"], v
     first = {1: "PIN NAME DESCRIPTION\n1 IN Input\n2 GND Ground\n3 No internal connection\n4 FB Feedback\n5 OUT Output\n"}
     pins = [("1", "IN"), ("2", "GND"), ("3", "NC"), ("4", "FB"), ("5", "OUT")]
     assert PT.check(first, pins)["status"] == "agreed"
@@ -289,7 +293,12 @@ def test_a_read_that_calls_signal_pins_nc_is_not_confirmed(monkeypatch):
     two = {1: "Pin Functions\nNAME NO. DESCRIPTION\nVIN 2 Supply input\nGND 7 Ground\n"}
     monkeypatch.setattr(PT, "check_pdf", lambda data, pins, **kw: PT.check(two, pins, pin_count=kw.get("pin_count"), blank=kw.get("blank")))
     pins = [(n, s if s in ("VIN", "GND") else "NC") for n, s in BUCK_PINS]
-    assert PT.check(two, pins, pin_count=8)["status"] == "agreed"
+    assert PT.check(two, pins[1:2] + pins[6:7], pin_count=8)["status"] == "agreed"
+    assert PT.check(two, pins, pin_count=8)["status"] == "unchecked"       # round 2, C4: six NC pins with no row
+    assert L.read_confirmed(read(pins), {"data": b"x"}, ["symbol"]) is None
+    with_rows = {1: two[1] + "NC 1, 3, 4, 5, 6, 8 No connection\n"}       # the NC rows printed: few_named holds it
+    monkeypatch.setattr(PT, "check_pdf", lambda data, pins, **kw: PT.check(with_rows, pins, pin_count=kw.get("pin_count"), blank=kw.get("blank")))
+    assert PT.check(with_rows, pins, pin_count=8)["status"] == "agreed"
     assert L.read_confirmed(read(pins), {"data": b"x"}, ["symbol"]) is None
 
 

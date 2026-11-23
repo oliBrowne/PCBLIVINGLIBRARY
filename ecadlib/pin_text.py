@@ -18,8 +18,9 @@ an agreeing table when another page names every pin too but prints some only wit
 table on another page), whichever page comes first.
 Only "agreed" lets a part through without a person; "unchecked" keeps the hold it had. A scanned PDF (no text) is
 always unchecked. Pins named N.C. / NC / DNC are not looked for by name (tables often print them as one row
-"NC 1, 5, 8", or leave them out), but once the named pins agree the table's row for such a pin's number must be a
-no-connect row or absent (_quiet), and the active-low marks are compared on their own (_marks)."""
+"NC 1, 5, 8"), but once the named pins agree the table's row for such a pin's number must be a no-connect row
+(_quiet; no row the check recognises for it: unchecked), and the active-low marks are compared on their own
+(_marks)."""
 import re
 
 EMPTY = {"—", "–", "-", "--", "‒", "N/A", "NA"}     # a dash in a table column: no pin in that package
@@ -505,11 +506,16 @@ def _quiet(quiet, pins, rows, col, pages, loose=()):
     dropped before comparing, so a read that called EN and FB 'NC' agreed on the six pins left). In the table the
     named pins agreed with (its rows from the first to the last matched one, and the rows next to them of the same
     width), the row that prints such a pin's number in the agreeing column must be a no-connect row (NC, N.C., DNC,
-    RESERVED, a dash, 'No internal connection') or absent. -> None, or the verdict: 'disagreed' when the table names
+    RESERVED, a dash, 'No internal connection'). -> None, or the verdict: 'disagreed' when the table names
     the number of a pin the symbol calls NC otherwise, 'unchecked' for one the symbol leaves blank (check's
-    `blank`)."""
+    `blank`), and 'unchecked' when the table has no row the check recognises for such a pin's number (review
+    2026-11-23, round 2, C4: no row counted as nothing against it, and a row is not recognised when its number is
+    printed '3*', '3(1)', '03', after a dash, first in a table that prints the name first, or under its name on the
+    line above: the read's 'NC' for EN then agreed). Only a no-connect row confirms."""
     if not quiet:
         return None
+    page = pages[0]
+    said = lambda ps: f"{', '.join(ps[:4])}, which the symbol {'calls not connected' if any(nm for _, nm in quiet) else 'gives no name'}"
     names = [(n, norm_name(nm), loose_class(nm) if norm_name(nm) in loose else None) for n, nm in pins]
     cells = [[x for _, x in nums] for _, nums in rows]
 
@@ -520,25 +526,47 @@ def _quiet(quiet, pins, rows, col, pages, loose=()):
 
     def has(k, n):
         return col < len(cells[k]) and str(n) in _numbers(cells[k][col])
+
+    def lead(k):
+        """The dash cells between a row's name and its first number: the columns in which it has no pin."""
+        c, nums = rows[k]
+        before = c[:nums[0][0]]
+        return sum(1 for w in before if w in EMPTY) if any(w not in EMPTY for w in before) else 0
+
+    def nc_row(k):
+        """Is the row's whole name a no-connect one ('NC', 'N.C.', a dash, 'No internal connection')? Not a part of
+        it: 'EN - 3' is EN's row with a dash column, not a no-connect row."""
+        c, nums = rows[k]
+        before = [w for w in c[:nums[0][0]] if w not in EMPTY] or c[:nums[0][0]]
+        after = c[nums[-1][0] + 1:][:3]
+        return any(_NC_ROW.match(" ".join(w).strip(" .,;:()")) for w in ([before] if before else [after[:j] for j in (1, 2, 3)]) if w)
     hit = [k for k in range(len(rows)) for n, nm, kind in names if has(k, n)
            and any(norm_name(c) == nm or kind and loose_class(norm_name(c)) == kind for c in cands(k))]
-    if not hit:
-        return None
+    if not hit:                                        # the table's rows are not found again: nothing was confirmed
+        return {"status": "unchecked", "page": page,
+                "why": f"page {page}'s table has no no-connect row for {said([f'pin {n}' for n, _ in quiet])}: not confirmed"}
     lo, hi, wide = min(hit), max(hit), max(len(cells[k]) for k in hit)
     while lo > 0 and len(cells[lo - 1]) == wide:
         lo -= 1
     while hi + 1 < len(rows) and len(cells[hi + 1]) == wide:
         hi += 1
     first = sum(1 for k in set(hit) if rows[k][1][0][0] == 0) * 2 > len(set(hit))     # the table prints the number first
-    named, blank = [], []
+    named, blank, unseen = [], [], []
     for n, nm in quiet:
         mine = [k for k in range(lo, hi + 1) if has(k, n) and (rows[k][1][0][0] == 0) == first]
-        if not mine or any(_NC_ROW.match(c.strip(" .,;:()")) for k in mine for c in cands(k)):
-            continue                                   # no row for it, or a no-connect row: nothing says otherwise
+        if not mine:                                   # no row for its number that the check can read: it may be
+            # left out of the table, or printed in a way not recognised. A no-connect row whose number stands in this
+            # column once the dashes before it are counted as cells confirms it (TI's 'N/C - 4 - No internal
+            # connection' under X2SON and SOT-23 columns: _rows starts the cells at the first number)
+            if not any(len(cells[k]) < wide and (rows[k][1][0][0] == 0) == first and nc_row(k) and 0 <= col - lead(k) < len(cells[k])
+                       and lead(k) and str(n) in _numbers(cells[k][col - lead(k)]) for k in range(lo, hi + 1)):
+                unseen.append(f"pin {n}")
+            continue
+        if any(nc_row(k) for k in mine):
+            continue                                   # a no-connect row: confirmed
         c, nums = rows[mine[0]]
         what = " ".join(c[:nums[0][0]] or c[nums[-1][0] + 1:][:1])
         (named if nm else blank).append(f"pin {n} {what}")
-    page = pages[0]
     if named:
         return {"status": "disagreed", "page": page,
                 "why": f"page {page}'s table names {', '.join(named[:4])}, and the symbol calls "
@@ -547,6 +575,10 @@ def _quiet(quiet, pins, rows, col, pages, loose=()):
         return {"status": "unchecked", "page": page,
                 "why": f"page {page}'s table names {', '.join(blank[:4])}, and the symbol gives "
                        f"{'it' if len(blank) == 1 else 'them'} no name: not compared"}
+    if unseen:
+        return {"status": "unchecked", "page": page,
+                "why": f"page {page}'s table has no no-connect row for {said(unseen)}: not confirmed (the row may be "
+                       "left out, or printed in a way the text check does not read)"}
     return None
 
 

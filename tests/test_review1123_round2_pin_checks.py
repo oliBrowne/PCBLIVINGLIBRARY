@@ -5,7 +5,7 @@ first). Each has the inputs that must hold and the ordinary ones that must stay 
 Run:  python3 -m tests.test_review1123_round2_pin_checks"""
 from ecadlib import librarian as L
 from ecadlib import pin_text as PT
-from tests.test_review1123_pin_checks import ROW, SO8, SO8_ROW, Run, pdf, state
+from tests.test_review1123_pin_checks import BUCK, BUCK_PINS, ROW, SO8, SO8_ROW, Run, pdf, read, state
 
 # ------------------------------------------------------------------ C2: the other package, however it is spelt
 TABLE = "Pin Description\nPIN NAME\n1 E\n2 B\n3 C\n"
@@ -94,6 +94,71 @@ def test_an_so8_order_needs_the_tables_heading_too():
                + [f"Feature line {i} of the part" for i in range(12)] + SO8, ["XYF7400T in TSSOP-8"]])
     assert Run(fam).so8_order(st, {}, {}, SO8_ROW, "XYF7400", "NMOS") is None
     assert "above" in st["tried"][-1], st["tried"]
+
+
+# ------------------------------------------------------------------ C4: NC is confirmed by a no-connect row only
+def buck(row3):
+    return {1: BUCK[1].replace("EN 3 Enable\n", row3 + "\n" if row3 else "")}
+
+
+NC3 = [(n, "NC" if n == "3" else s) for n, s in BUCK_PINS]
+UNSEEN = ["EN 3* Enable", "EN 3(1) Enable", "EN 03 Enable", "EN 3, Enable", "EN — 3 Enable", "3 EN Enable",
+          "EN\n3 Enable", "EN Pin 3: Enable", "ENABLE(3) Enable input", ""]
+
+
+def test_a_pin_called_nc_with_no_recognised_row_is_not_confirmed():
+    for row in UNSEEN:
+        v = L.few_named(PT.check(buck(row), NC3, pin_count=8, blank=True), NC3)
+        assert v["status"] != "agreed", (row, v)
+        if v["status"] == "unchecked":
+            assert "pin 3" in v["why"] and "no-connect" in v["why"], (row, v)
+    # a pin the read left without a name is not confirmed by a missing row either
+    blank = [(n, "" if n == "3" else s) for n, s in BUCK_PINS]
+    for row in UNSEEN:
+        assert PT.check(buck(row), blank, pin_count=8, blank=True)["status"] != "agreed", row
+    # nor two of them, one with a no-connect row and one without
+    two = {1: BUCK[1].replace("EN 3 Enable\n", "NC 3 No connect\n").replace("FB 5 Feedback\n", "FB 5* Feedback\n")}
+    v = PT.check(two, [(n, "NC" if n in "35" else s) for n, s in BUCK_PINS], pin_count=8)
+    assert v["status"] == "unchecked" and "pin 5" in v["why"] and "pin 3" not in v["why"], v
+
+
+def test_a_read_whose_nc_pin_has_no_recognised_row_is_not_released():
+    real = PT.check_pdf
+    try:
+        for row in UNSEEN:
+            PT.check_pdf = lambda data, pins, row=row, **kw: PT.check(buck(row), pins, pin_count=kw.get("pin_count"), blank=kw.get("blank"))
+            assert L.read_confirmed(read(NC3), {"data": b"x"}, ["symbol"]) is None, row
+        PT.check_pdf = lambda data, pins, **kw: PT.check(buck("NC 3 No connect"), pins, pin_count=kw.get("pin_count"), blank=kw.get("blank"))
+        assert L.read_confirmed(read(NC3), {"data": b"x"}, ["symbol"])
+        PT.check_pdf = lambda data, pins, **kw: PT.check(BUCK, pins, pin_count=kw.get("pin_count"), blank=kw.get("blank"))
+        assert L.read_confirmed(read(BUCK_PINS), {"data": b"x"}, ["symbol"])
+    finally:
+        PT.check_pdf = real
+
+
+def test_a_recognised_no_connect_row_still_confirms():
+    for row in ("NC 3 No connection", "N.C. 3 Not connected internally", "NC 3, 5 No connect", "RESERVED 3 Leave open",
+                "— 3 No internal connection", "DNC 3 Do not connect", "N/C 3"):
+        v = PT.check(buck(row), NC3, pin_count=8, blank=True)
+        assert v["status"] == "agreed" and v["pins"] == 7, (row, v)
+    assert PT.check(BUCK, BUCK_PINS, pin_count=8, blank=True)["status"] == "agreed"     # no NC pin: nothing to confirm
+    first = {1: "PIN NAME DESCRIPTION\n1 IN Input\n2 GND Ground\n3 NC No internal connection\n4 FB Feedback\n5 OUT Output\n"}
+    pins = [("1", "IN"), ("2", "GND"), ("3", "NC"), ("4", "FB"), ("5", "OUT")]
+    assert PT.check(first, pins, blank=True)["status"] == "agreed"
+    # TI's table with a column a package: the no-connect row's dash stands for the other package's column
+    ti = {3: "Table 4-2. Pin Functions: X2SON, SOT-23\nPIN\nTYPE DESCRIPTION\nNAME X2SON SOT-23\nEN 3 3 I Enable input.\n"
+             "GND 2 2 \u2014 Common ground.\nIN 4 1 I Input voltage supply.\nN/C \u2014 4 \u2014 No internal connection.\n"
+             "OUT 1 5 O Regulated output voltage."}
+    ldo = [("1", "IN"), ("2", "GND"), ("3", "EN"), ("4", "NC"), ("5", "OUT")]
+    v = PT.check(ti, ldo, package=["Package_TO_SOT_SMD:SOT-23-5", "SOT-23-5"], blank=True)
+    assert v["status"] == "agreed" and v["column"] == 1, v
+    # the other package's no-connect row ('N/C 4 -': X2SON's pin 4) does not confirm this column's pin 4
+    other = {3: ti[3].replace("N/C \u2014 4 \u2014 No", "N/C 4 \u2014 \u2014 No").replace("IN 4 1 I", "IN 5 1 I")}
+    assert PT.check(other, ldo, package=["Package_TO_SOT_SMD:SOT-23-5", "SOT-23-5"], blank=True)["status"] != "agreed"
+    # a KiCad symbol's pins drawn without a name (blank not asked for) are not looked for, as before
+    assert PT.check(buck(""), [(n, "" if n == "3" else s) for n, s in BUCK_PINS], pin_count=8)["status"] == "agreed"
+    # a signal the read calls NC still disagrees (the stronger verdict)
+    assert PT.check(BUCK, NC3, pin_count=8)["status"] == "disagreed"
 
 
 if __name__ == "__main__":
