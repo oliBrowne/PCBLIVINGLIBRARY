@@ -317,3 +317,60 @@ def test_a_pdf_the_assistant_saved_that_names_the_part_is_read_as_before_and_a_n
         text = str(got) if isinstance(got, Exception) else json.dumps(got["prov"].get("attempts"))
         assert "not a datasheet" in text and "replace it with the datasheet" in text, text
         assert isinstance(got, Exception) or got["prov"].get("sent_as") == "url", got   # the file itself is never read
+
+
+# ---------------------------------------------------------------- one assistant folder per request
+def test_another_request_of_the_same_pdf_is_not_answered_by_the_first_answer():
+    """More pages or another package of one PDF: the key's first 10 characters (the PDF's hash) are the same."""
+    api = TA._api()
+    with tempfile.TemporaryDirectory() as d, TB.patched(api):
+        rd = TC.reader(d, ASSIST)
+        j1 = rd.job("TESTPART", [(TC.URL, "BOM")], TC.QFN)
+        try:
+            rd.read_now(j1)
+        except D.AssistantPending:
+            pass
+        f1 = DA.folder(rd.assistant, j1)
+        (f1 / "answer.json").write_text(json.dumps(TD.GOOD), encoding="utf-8")
+        rd = TC.reader(d, ASSIST)
+        j2 = rd.job("TESTPART", [(TC.URL, "BOM")], "SOIC-8_3.9x4.9mm_P1.27mm")
+        assert j1["key"] != j2["key"] and j1["key"][:10] == j2["key"][:10]
+        f2 = DA.folder(rd.assistant, j2)
+        assert f1 != f2 and DA.answer(rd.assistant, j2) is None
+        try:
+            rd.read_now(j2)
+            raise AssertionError("the other package's request was answered by the first answer")
+        except D.AssistantPending:
+            pass
+        assert (f2 / "request.md").is_file() and "SOIC-8" in (f2 / "request.md").read_text(encoding="utf-8")
+        assert DA.answer(rd.assistant, j1) is not None  # the first request still has its answer
+    assert api.calls == []
+
+
+def test_an_answer_is_taken_only_for_the_request_its_folder_was_written_for():
+    with tempfile.TemporaryDirectory() as d:
+        k1, k2 = "0123456789abcdef-m-v1-aaaaaaaaaaaa", "0123456789abcdef-m-v1-bbbbbbbbbbbb"
+        j1, j2 = {"part": "P", "name": "P", "key": k1}, {"part": "P", "name": "P", "key": k2}
+        # a folder under the name used before 2026-11-23 (the key's first 10 characters), answered for request 1
+        old = Path(d) / "P-0123456789"
+        old.mkdir()
+        (old / "job.json").write_text(json.dumps({"part": "P", "name": "P", "key": k1}), encoding="utf-8")
+        (old / "answer.json").write_text("{}", encoding="utf-8")
+        assert DA.folder(d, j1) == old and DA.answer(d, j1) is not None      # its own request: still usable
+        assert DA.folder(d, j2) != old and DA.answer(d, j2) is None          # another request of that PDF: not
+        assert DA.folder(d, dict(j1, part="Q")) != old                       # nor another part's
+        # an answer.json in a folder whose job.json is another request's (or gone) is no answer, and is set aside
+        new = DA.folder(d, j2)
+        new.mkdir()
+        (new / "answer.json").write_text("{}", encoding="utf-8")
+        assert DA.answer(d, j2) is None
+        (new / "job.json").write_text(json.dumps({"part": "P", "key": k1}), encoding="utf-8")
+        assert DA.answer(d, j2) is None
+        DA.request(d, dict(j2, data=None))
+        assert DA.answer(d, j2) is None and (new / "answer.other-request.json").is_file()
+        (new / "answer.json").write_text("{}", encoding="utf-8")            # answered after the request was written
+        assert DA.answer(d, j2) is not None
+        # the kinds keep their mark, and the whole key is in the name
+        c = DA.folder(d, {"name": "P", "key": "check-0123456789abcdef-m-v1-cccccccccccc"}).name
+        assert c.startswith("P-check-0123456789-") and DA.folder(d, {"name": "P", "key": "pins-ab12cd34ef567890"}).name.startswith("P-pins-")
+        assert DA.folder(d, {"name": "P", "key": "check-0123456789abcdef-m1-v1-cccccccccccc"}).name != c

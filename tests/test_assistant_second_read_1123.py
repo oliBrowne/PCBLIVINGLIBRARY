@@ -126,7 +126,11 @@ def test_names_a_folder_name_cannot_hold_get_folders_of_their_own():
     names = ["TESTPART/A", "TESTPART#A", "TESTPART_A", "FOO", "FOO_"]
     got = {DA.folder("/x", {"name": n, "key": key}).name for n in names}
     assert len(got) == len(names), got
-    assert DA.folder("/x", {"name": "IND-10UH-NRS4018", "key": "abcdef0123456"}).name == "IND-10UH-NRS4018-abcdef0123"
+    # (was exactly "IND-10UH-NRS4018-abcdef0123": the key's first 10 characters, which are only the PDF's hash, so every
+    # request of one PDF shared the folder and its answer.json; the name now ends in 8 characters of the whole key's
+    # hash, review 2026-11-23)
+    plain = DA.folder("/x", {"name": "IND-10UH-NRS4018", "key": "abcdef0123456"}).name
+    assert plain.startswith("IND-10UH-NRS4018-abcdef0123-") and len(plain) == len("IND-10UH-NRS4018-abcdef0123-") + 8, plain
     a = DA.folder("/x", {"name": "P", "key": "check-0123abcdef"}).name
     b = DA.folder("/x", {"name": "P", "key": "check-0123fedcba"}).name
     assert a != b, a                                   # a check's key gets more than four characters
