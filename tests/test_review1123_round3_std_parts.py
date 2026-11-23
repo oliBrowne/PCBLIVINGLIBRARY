@@ -455,7 +455,7 @@ R16,1,100 kOm,0603,
 R17,1,1 Meg,0603,
 R18,1,10k,0603,from: somebody
 C12,1,2.2uF,0805,"Chip Capacitor, 2.2 uF, +/- 10%, 10 V, -55 to 85 degC, 0805"
-R19,1,10k,0603,Host-side 3.3 V pull-up; remove R4/R5 if the host already has it
+R19,1,10k,0603,Host-side pull-up; remove if the host already has it
 C13,1,100nF,0603,"C14663, CAP CER 0.1UF 25V X7R 0603"
 R20,1,0 Ohm,0603,0 Ohm link
 R21,1,10k,0603,optional
