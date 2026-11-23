@@ -1,0 +1,43 @@
+name: Report a wrong part
+description: A part in this store differs from its maker's datasheet (a pad, a pin, the land, the height).
+title: "Wrong part: MAKER MPN"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. A report with a concrete difference marks the part disputed: it is then only used as a second
+        opinion until a maintainer has looked. Please do not attach the datasheet PDF; a public link is enough.
+  - type: input
+    id: maker
+    attributes:
+      label: Maker
+      placeholder: Texas Instruments
+    validations:
+      required: true
+  - type: input
+    id: mpn
+    attributes:
+      label: Manufacturer part number
+      placeholder: NE555DR
+    validations:
+      required: true
+  - type: textarea
+    id: differs
+    attributes:
+      label: What differs
+      description: Which pad or pin, what the store has, what the datasheet says.
+      placeholder: Pad 1 is 1.55 x 0.6 mm in the store; the recommended land pattern says 1.95 x 0.6 mm.
+    validations:
+      required: true
+  - type: input
+    id: datasheet
+    attributes:
+      label: Datasheet link and page
+      placeholder: https://www.ti.com/lit/ds/symlink/ne555.pdf page 32 (revision R)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ecadlib version (optional)
+      placeholder: ecadlib --version
