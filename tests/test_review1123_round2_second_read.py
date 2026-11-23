@@ -156,7 +156,7 @@ def test_the_rows_default_changed_no_text_sent_to_a_model():
 # ---------------------------------------------------------------- I4: unresolved entries that name nothing built
 HARMLESS = ("not applicable", "Not applicable.", "N/A", "n/a", "none", "weight", "weight not given", "marking code",
             "top marking not shown", "moisture sensitivity level", "thermal resistance not stated", "tape and reel quantity",
-            "lead_span (not applicable: no-lead package)", "RoHS status")
+            "RoHS status")       # (round 3, B1: "lead_span (not applicable: no-lead package)" names a build field and holds again)
 ADMITS = ("could not read the dimension table clearly", "drawing blurred", "pin 1 orientation unclear",
           "some dimensions guessed", "pad size not legible", "cathode mark not found", "terminal_length", "the lead span",
           "body width digits blurred", "package outline on a page not sent", "pitch")

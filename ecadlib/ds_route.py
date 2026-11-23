@@ -1252,12 +1252,30 @@ def named_field(u):
 
 # an unresolved entry that says the thing does not apply to this part: nothing was guessed
 NOT_APPLICABLE = re.compile(r"\bnot[\s_-]+applicable\b|\bdoes(?:\s+not|n't)\s+apply\b|(?<![\w/])n\s*/\s*a(?![\w/])|^\W*(?:none|nothing|nil)\W*$", re.I)
-# what an entry that names no package field must speak of to count as a doubt about the footprint: the drawing, a
-# size, the pads or pins, their place or direction, or a guess. "weight", "marking code", "thermal resistance" do not
-DRAWN_WORDS = re.compile(r"\b(?:dimension|drawing|drawn|outline|mechanical|footprint|land|pads?\b|pins?\b|pinout|leads?\b(?![\s-]*free)|"
-                         r"terminal|ball|bod(?:y|ies)|pitch|span|sizes?\b|width|length|diameter|package\b|tables?\b|figure|"
-                         r"rows?\b|sides?\b|orientation|polarity|cathode|anode|tab\b|holes?\b|drill|digits?\b|mm\b|inch|mils?\b|"
-                         r"guess|assum|estimat)", re.I)
+# 2026-11-23 review round 3 (B1): the things an unresolved entry may be about that no pad, pin or outline stands on
+# (the part's weight, its marking, its thermal figures, how it is packed and ordered, its moisture level, RoHS) ...
+HARMLESS_WORDS = frozenset("weight mass marking markings thermal theta rth packing packaging tape reel tray tube ordering "
+                           "orderable moisture msl rohs reach halogen".split())
+# ... and the words that may stand beside them, or beside "not applicable", and say nothing more. Every word of an
+# entry must be one of the two: "marking code not shown" is harmless, "cathode marking not found" and "marking
+# differs: datasheet is for a different part" are not
+HARMLESS_FILLER = frozenset("not no none nothing nil n a an the this that of for and or in on to per is was are were it its "
+                            "applicable apply does doesn t given stated shown found printed specified listed available "
+                            "provided mentioned indicated included datasheet document sheet unknown missing omitted code "
+                            "codes quantity qty status level sensitivity information info data details top device part "
+                            "component resistance impedance characteristics ratings junction ambient case size free "
+                            "compliance compliant".split())
+
+
+def harmless(u):
+    """Is an unresolved entry that names no package field wholly about a thing the footprint does not stand on
+    (HARMLESS_WORDS), or does it only say that nothing applies ("not applicable", "N/A", "none")? Every word must be
+    known: a word this does not know ("scale", "variant", "blurry", a JEDEC dimension letter: e, D, E, b, L, D2, A1) may
+    be the doubt, so the entry counts."""
+    words = re.findall(r"[^\W\d_]+", str(u).lower())
+    if not words or not all(w in HARMLESS_WORDS or w in HARMLESS_FILLER for w in words):
+        return False
+    return any(w in HARMLESS_WORDS for w in words) or bool(NOT_APPLICABLE.search(str(u)))
 
 
 def open_unresolved(spec):
@@ -1265,15 +1283,17 @@ def open_unresolved(spec):
     stands on (ADVISORY, NOT_COPPER) and a limit left out of a dimension whose value was read (a nominal-only
     drawing). A read that says it could not read something is not released with no person on a footprint built from
     its own numbers, whatever agrees with it: a second read can make the same guess (review 2026-11-23).
-    Round 2 of that review: every free-form entry counted, so "not applicable", "weight" and "marking code" kept
-    ordinary parts with a person. An entry that says the thing does not apply (NOT_APPLICABLE) is no doubt at all, and
-    one that names no package field counts only when it speaks of the drawing, a size, the pads or pins, or a guess
-    (DRAWN_WORDS: "could not read the dimension table clearly" still counts)."""
+    Round 2 of that review skipped every free-form entry without a word about the drawing, and every "n/a": "scale",
+    "variant A vs B", "e", "the scan is blurry", "wrong datasheet?", "from memory" and "not applicable: pitch" stopped
+    holding. Round 3 (B1) turns it round: an entry that names a field that changes copper holds, as it always did
+    ("lead_span: n/a" too: a read that calls a build field not applicable has not read it), and one that names no
+    field holds unless every word of it is harmless (harmless: "weight", "marking code", "thermal resistance not
+    stated", "tape and reel quantity", "RoHS status", "not applicable", "N/A", "none")."""
     num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
     out = []
     for u in (spec or {}).get("unresolved") or []:
         top = named_field(u)
-        if top in NOT_COPPER + ADVISORY or NOT_APPLICABLE.search(str(u)) or not top and not DRAWN_WORDS.search(str(u)):
+        if top in NOT_COPPER + ADVISORY or not top and harmless(u):
             continue
         v = (spec or {}).get(top) if top else None
         if ONLY_LIMITS.search(str(u)) and (num(v) or isinstance(v, dict) and (num(v.get("nom")) or num(v.get("min")) and num(v.get("max")))):
