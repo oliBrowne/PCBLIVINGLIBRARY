@@ -2485,8 +2485,9 @@ UNSURE_READ = re.compile(r"does not seem to name|datasheet from your folder|not 
                          r"set aside|check it is this part", re.I)
 # ...except the one difference set aside that leaves no doubt about the part: a two-terminal read built from the maker's
 # whole land, called chip on one side and molded on the other, with its pin count and body agreed (crosscheck._label_only)
-WORD_ONLY = re.compile(r"set aside: package type read (?:chip|molded), other source (?:chip|molded): a word only, the "
-                       r"pads are built from the maker's land; check it on the drawing$")
+WORD_ONLY = re.compile(r"cross-check agreed once a difference was set aside: package type read (?:chip|molded), other "
+                       r"source (?:chip|molded): a word only, the pads are built from the maker's land; check it on the "
+                       r"drawing")
 
 
 def read_confirmed(res, job, got, drawn=None):
@@ -2497,7 +2498,7 @@ def read_confirmed(res, job, got, drawn=None):
                  name picked, which only shows the read fits its own name)
       symbol     every named pin agrees, in one column of one table, with the PDF's own text layer (ecadlib.pin_text)
     and no review item says the PDF or its drawing may not be this part's (UNSURE_READ)."""
-    if not got or any(UNSURE_READ.search(str(r)) and not WORD_ONLY.search(str(r)) for r in res.get("needs_review") or ()):
+    if not got or any(UNSURE_READ.search(str(r)) and not WORD_ONLY.fullmatch(str(r)) for r in res.get("needs_review") or ()):
         return None
     why = []
     if "footprint" in got or any(g.startswith("footprint") for g in got):

@@ -34,8 +34,8 @@ def test_molded_read_with_the_makers_land_settles_a_chip_word():
     assert any("maker's land" in t for t in c.get("tie_breaks", [])), c
 
 
-def test_chip_read_with_the_makers_land_settles_a_molded_word():
-    assert read(first("chip"), second("molded"))["status"] == "agreed"
+def test_polarized_chip_read_with_the_makers_land_settles_a_molded_word():
+    assert read(dict(first("chip"), polarized=True), second("molded"))["status"] == "agreed"
 
 
 def test_without_the_land_the_type_still_holds():
@@ -67,3 +67,30 @@ def test_any_other_difference_set_aside_still_holds_the_release():
     from ecadlib import librarian as L
     assert not L.read_confirmed(_res("package type read custom, other source connector: a word only, the pads are "
                                      "built as the read lists them"), {}, ["footprint"])
+
+
+def test_a_body_under_1_55_mm_still_holds():
+    # footprint_gen.family: a chip that small is chip_small, with a smaller courtyard than molded
+    a = dict(first(), body_length=r(0.9, 1.0, 1.1), body_width=r(0.5, 0.6, 0.7))
+    b = dict(second(body=1.0), body_width={"nom": 0.6})
+    assert read(a, b)["status"] == "disagreed"
+
+
+def test_an_unpolarized_chip_the_other_read_calls_molded_still_holds():
+    # the molded word may be the only sign of a tantalum's or a diode's polarity, which the read alone gives
+    assert read(first("chip"), second("molded"))["status"] == "disagreed"
+    assert read(dict(first("chip"), polarized=True), second("molded"))["status"] == "agreed"
+
+
+def test_a_body_turned_90_degrees_still_holds():
+    a = dict(first(), body_length=r(5.9, 6.0, 6.1), body_width=r(3.9, 4.0, 4.1))
+    b = dict(second(body=4.0), body_width={"nom": 6.0})
+    assert read(a, b)["status"] == "disagreed"
+
+
+def test_only_the_whole_line_is_exempt():
+    from ecadlib import librarian as L
+    tie = read(first(), second())["tie_breaks"][0]
+    res = _res(tie)
+    res["needs_review"] = [f"datasheet from your folder: x; set aside: {tie}; check it on the drawing"]
+    assert not L.read_confirmed(res, {}, ["footprint"])

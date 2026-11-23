@@ -104,6 +104,7 @@ def critical(spec):
     out["unread_as"] = {t: bool(D.body_unread(dict(spec, package_type=t))) for t in DRAWN}
     out["land_axes"] = land_axes(spec)
     out["lead_land"] = FG.lead_land(spec)
+    out["polarized"] = spec.get("polarized") is True
     out["table_fits"] = table_fits(spec)
     out["sides"] = sides(spec)
     out["pads_read"] = pads_read(spec)
@@ -381,9 +382,13 @@ def _label_only(first, second, agreed=()):
         return True
     # a two-terminal read with the maker's whole lead land, called chip one side and molded the other (NRS4018,
     # free replay 2026-11-23): footprint_gen._apply_land builds both pads from the land either way, so the word changes
-    # nothing built once the pin count and the body agree
+    # nothing built once the pin count and the body agree. Not on a body under 1.55 mm (footprint_gen.family: a chip
+    # there is chip_small, with a smaller courtyard than molded), nor on a read of an unpolarized chip the other calls
+    # molded (a tantalum's or a diode's polarity mark comes from the read alone, and the molded word may be its only sign)
     if {a, b} == {"chip", "molded"} and first.get("lead_land") \
-            and {"pin_count", "body_length", "body_width"} <= set(agreed):
+            and {"pin_count", "body_length", "body_width"} <= set(agreed) \
+            and (first.get("body_length") or (0,))[0] >= 1.55 \
+            and not (a == "chip" and b == "molded" and not first.get("polarized")):
         return True
     # ...unless the type decides a hold: a housed connector read "custom" with no body would build pads-hugging
     return a in DRAWN and b in DRAWN and u.get(a) == u.get(b)
