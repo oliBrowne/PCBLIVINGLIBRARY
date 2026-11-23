@@ -103,6 +103,7 @@ def critical(spec):
     # whether this read is held for no body (body_unread) under each drawn type: a type word that flips it is no word only
     out["unread_as"] = {t: bool(D.body_unread(dict(spec, package_type=t))) for t in DRAWN}
     out["land_axes"] = land_axes(spec)
+    out["lead_land"] = FG.lead_land(spec)
     out["table_fits"] = table_fits(spec)
     out["sides"] = sides(spec)
     out["pads_read"] = pads_read(spec)
@@ -378,6 +379,12 @@ def _label_only(first, second, agreed=()):
     # against the read's numbers, which the other read must confirm (one that gives no pitch or pad confirms nothing)
     if a == "custom" and b in ("qfn", "gullwing") and first.get("table_fits") and set(TABLE_CHECKED_BY) <= set(agreed):
         return True
+    # a two-terminal read with the maker's whole lead land, called chip one side and molded the other (NRS4018,
+    # free replay 2026-11-23): footprint_gen._apply_land builds both pads from the land either way, so the word changes
+    # nothing built once the pin count and the body agree
+    if {a, b} == {"chip", "molded"} and first.get("lead_land") \
+            and {"pin_count", "body_length", "body_width"} <= set(agreed):
+        return True
     # ...unless the type decides a hold: a housed connector read "custom" with no body would build pads-hugging
     return a in DRAWN and b in DRAWN and u.get(a) == u.get(b)
 
@@ -392,9 +399,9 @@ def _type_only(rec, first=None, second=None):
         if first is not None and _label_only(first, second, rec["agreed"]) and any(f in DIMS or f == "pin_count" for f in rec["agreed"]):
             x = d.pop(0)
             rec["agreed"].append("package_type")
+            how = "from the maker's land" if {x["first"], x["second"]} == {"chip", "molded"} else "as the read lists them"
             rec.setdefault("tie_breaks", []).append(
-                f"package type read {x['first']}, other source {x['second']}: a word only, the pads are built as "
-                "the read lists them")
+                f"package type read {x['first']}, other source {x['second']}: a word only, the pads are built {how}")
         elif first is not None and {first.get("package_type"), second.get("package_type")} <= set(DRAWN):
             d[0]["note"] = "the type decides whether the read's blank body outline holds the part"
         elif len(d) == 1:
