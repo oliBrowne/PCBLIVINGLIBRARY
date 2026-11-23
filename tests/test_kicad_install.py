@@ -323,7 +323,9 @@ def test_schematic_hook_runs_ecadlib_without_kicads_python_settings(tmp_path):
                        env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     got = json.loads(seen.read_text())
-    assert got == {"argv": ["kicad-menu", "fill", "/p/board.xml", "--kicad", "7"], "pp": None, "ph": None}, got
+    # (the file is passed as a full path: the helper starts ecadlib from its own folder, not the project's; on
+    # Windows that gives "/p/board.xml" a drive letter)
+    assert got == {"argv": ["kicad-menu", "fill", os.path.abspath("/p/board.xml"), "--kicad", "7"], "pp": None, "ph": None}, got
     rec["pythonpath"] = "/src/ecadlib"                                    # a source checkout's saved path is kept
     (c / "ecadlib_cmd.json").write_text(json.dumps(rec))
     subprocess.run([sys.executable, "-I", str(c / KI.HOOK_FILE), "check", "/p/board.xml"], env=env, check=True)

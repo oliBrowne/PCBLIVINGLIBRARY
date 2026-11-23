@@ -215,7 +215,7 @@ def test_the_workspace_is_never_the_settings_folder(tmp_path, monkeypatch):
     try:
         port = srv.server_address[1]
         cookie = srv.access.key
-        (tmp_path / "home" / "notes.txt").write_text("a workspace file\n")
+        (tmp_path / "home" / "notes.txt").write_bytes(b"a workspace file\n")   # (bytes: no \r\n on Windows)
         st, body, h = _call(port, "GET", "/api/file?path=notes.txt", cookie=cookie)
         assert body == b"a workspace file\n" and h["X-Content-Type-Options"] == "nosniff", dict(h)
         assert h["Content-Security-Policy"].startswith("sandbox;") and "attachment" in h["Content-Disposition"]   # M1
