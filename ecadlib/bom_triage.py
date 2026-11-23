@@ -1676,14 +1676,17 @@ def triage(lines, index, provs, http, shared=None):
                 rdesc = (r.extra or {}).get("description") if isinstance(r.extra, dict) else ""
                 # 2026-11-23 review 1.11: the BOM names a maker and this result is another maker's listing of the
                 # number (onsemi's SS34 is SMC, Vishay's is SMA): its case, device package, measurements and LCSC
-                # number are not this part's, whichever source or plugin it came from; said once per source
+                # number are not this part's, whichever source or plugin it came from; said once per source.
+                # Round 2 (I5): nor are its description, datasheet links and CAD answer (the line was still built
+                # from the other maker's datasheet and footprint): nothing of it is taken, the next source is asked
                 foreign = bool(bom_maker and r.found and not r.error and isinstance(r.manufacturer, str)
                                and P.maker_key(ln.get("manufacturer")) and P.maker_key(r.manufacturer)
                                and not P.same_maker(ln.get("manufacturer"), r.manufacturer))
                 if foreign:
                     notes.append(f"{prov.name}: {str(r.mpn or r.lcsc or 'its listing')[:60]} is by "
                                  f"{P.clean_maker(r.manufacturer)[:60]}, not {str(ln.get('manufacturer')).strip()[:60]}: "
-                                 "its package and LCSC number are not used (check the BOM's maker)")
+                                 "its package and LCSC number are not used, nor its description, datasheet and CAD "
+                                 "data (check the BOM's maker)")
                 if not src_pkg and not foreign and r.found and not r.error and r.mpn and (case := _case_text(
                         getattr(r, "package", "") or slash_case(rdesc, r.mpn), rdesc)) \
                         and _same(r.mpn, ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
@@ -1736,6 +1739,9 @@ def triage(lines, index, provs, http, shared=None):
                         notes.append(f"{tag}: {r.extra['package_note']}")
                     if (r.extra or {}).get("note") and tag != "jlcpcb":
                         notes.append(f"{tag}: {r.extra['note']}")
+                elif foreign:                                  # (2026-11-23 review round 2, I5) only who lists it is kept
+                    seen(*([m for m in (r.extra or {}).get("makers") or [] if isinstance(m, str)] if isinstance(r.extra, dict) else [])
+                         or [P.clean_maker(r.manufacturer)])
                 else:
                     if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
                         src = r                                # a found part is kept over a later miss or a later
