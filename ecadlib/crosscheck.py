@@ -1017,7 +1017,10 @@ def run(reader, job, res, model):
     # only while a checked standard land may be built in place of the read's pads (the librarian then decides:
     # built_from_read), and is "self-checked" (it waits for a person) when the read's own pads are all there is
     missing = [] if status != "agreed" or standard else uncompared(first, checks)
-    unsure = []
+    # the same for what the read itself lists as unresolved and is not clearly advisory: a second read can make the
+    # same guess, so the read's own pads wait for a person (review 2026-11-23; a standard land needs none of it)
+    from . import ds_route as DR
+    unsure = [] if status != "agreed" or standard else DR.open_unresolved(res["spec"])
     if missing:
         out["uncompared"] = missing
     if unsure:

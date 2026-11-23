@@ -417,3 +417,53 @@ def test_any_other_schema_error_still_runs_the_build_checks_when_the_read_builds
     assert any(r.startswith("schema:") for r in res["needs_review"])
     assert any(r.startswith("land pattern:") and "overlap" in r for r in res["needs_review"]), res["needs_review"]
     assert put(res, symbol=LIB_SYMBOL)[0].startswith("held: ")
+
+
+# ---------------------------------------------------------------- unresolved, however it is worded
+WORDINGS = ("lead_span (digits blurred; E could be 0.236 or 0.286)", "E (lead span): digits blurred, could be 0.236 or 0.286",
+            "lead span blurred", "package.lead_span", "Lead_span unreadable", "dimension E / lead_span not legible",
+            "the lead span")
+
+
+def test_an_unresolved_entry_holds_however_the_field_is_written():
+    for u in WORDINGS:
+        assert DR.named_field(u) == "lead_span", u
+        e = copy.deepcopy(TD.INCH)
+        e["package"]["unresolved"] = [u]
+        res = D.process(e, "TESTPART", "https://example.com/t.pdf")
+        hold = DR.hold_reasons(res, True)
+        assert any(h.startswith("unresolved: ") and "guessed" in h for h in hold), (u, hold)
+        out, st, got = put(res, symbol=LIB_SYMBOL)    # (a SOIC-8: the checked standard land may stand in for the read's
+        assert out.startswith("held: ") or st["footprint"]["source"].startswith("standard:"), (u, out)   # own pads)
+    # an exposed pad the read could not size, in the words a model uses: the QFN is not built without its pad
+    for u in ("EP size not printed", "thermal pad dimensions (D2, E2) not legible", "exposed pad"):
+        assert DR.named_field(u) == "exposed_pad", u
+        e = copy.deepcopy(TD.GOOD)
+        e["package"]["exposed_pad"], e["package"]["unresolved"], e["pins"] = None, [u], e["pins"][:16]
+        res = D.process(e, "TESTPART", "https://example.com/t.pdf")
+        assert any("would be built without it" in h for h in DR.hold_reasons(res, True)), (u, DR.hold_reasons(res, True))
+    # what stays advice: the height, a limit of a dimension whose value was read, text that names nothing
+    assert DR.named_field("height_max (not in the lead span table)") == "height_max"
+    assert DR.named_field("no table found") == "" and DR.named_field("seated height") == "height"
+    for u in ("height_max", "body_length min/max (not printed)", "seated height not given"):
+        e = copy.deepcopy(TD.INCH)
+        e["package"]["unresolved"] = [u]
+        res = D.process(e, "TESTPART", "https://example.com/t.pdf")
+        assert not DR.hold_reasons(res, True) and not DR.open_unresolved(res["spec"]), (u, DR.hold_reasons(res, True))
+
+
+def test_an_unresolved_entry_that_is_not_advisory_blocks_a_release_with_no_person():
+    """An entry that names no field ("could not read the drawing's table clearly") holds nothing by itself, but the
+    read says it guessed: a second read that agrees does not release the read's own pads."""
+    t = T.SMA
+    for u, waits in (("could not read the dimension table clearly", True), ("height_max", False),
+                     ("body_length min/max (not printed)", False)):
+        res = T.read(dict(copy.deepcopy(t), unresolved=[u]))
+        assert not DR.hold_reasons(res, True), (u, DR.hold_reasons(res, True))
+        cc, job = checked(res, t)
+        out, st, got = put(res, job, LIB_SYMBOL)
+        if waits:
+            assert cc["status"] == "self-checked" and cc["unresolved"] == [u], (u, cc["status"], cc.get("unresolved"))
+            assert out == "verify" and "lists as unresolved" in CC.summary_line(cc), (out, CC.summary_line(cc))
+        else:
+            assert cc["status"] == "agreed" and not cc.get("unresolved") and out == "released", (u, cc["status"], out)

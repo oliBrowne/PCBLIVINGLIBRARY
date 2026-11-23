@@ -1191,7 +1191,7 @@ def unread_copper(spec):
     out = []
     dip = None
     for u in (spec or {}).get("unresolved") or []:
-        top = unresolved_field(u).split(".")[0]
+        top = named_field(u)
         if top in ("drill", "hole", "holes", "land") and not DIP_PLACE.search(str(u)):   # a plain DIP's hole and
             # pad sizes: KiCad's standard ones fill them (never where the pins are: positions, rows, pitch)
             if dip is None:                           # (the librarian puts them in: datasheet.standard_dip_holes)
@@ -1227,6 +1227,45 @@ def unresolved_field(u):
     """'lead_span (not printed)' -> 'lead_span': the field an unresolved entry names."""
     m = re.match(r"\s*([A-Za-z_.]+)", str(u))
     return m.group(1) if m else ""
+
+
+def named_field(u):
+    """The package field an unresolved entry is about, however the model worded it (review 2026-11-23: only an entry
+    that began with the exact field name held, so 'E (lead span): digits blurred', 'lead span blurred',
+    'package.lead_span', 'Lead_span unreadable' and 'the lead span' were all built from the guessed value): the entry's
+    first word when that is a field, else a field named anywhere in it with case, spaces and punctuation folded
+    ('lead span' is lead_span), the longest name at the earliest place, one that changes copper before an advisory
+    one; an exposed pad by its usual words (EP, thermal pad). '' when it names none."""
+    from .datasheet import SCHEMA
+    from .crosscheck import EP_WORDS
+    known = (set(SCHEMA["properties"]) | set(ADVISORY)) - {"unresolved"}
+    top = unresolved_field(u).split(".")[0].lower()
+    if top in known:
+        return top
+    text = "_" + re.sub(r"[^a-z0-9]+", "_", str(u).lower()).strip("_") + "_"
+    found = sorted((text.find(f"_{f}_"), -len(f), f) for f in known if f"_{f}_" in text)
+    copper = [f for _, _, f in found if f not in NOT_COPPER + ADVISORY]
+    if copper or found:
+        return copper[0] if copper else found[0][2]
+    return "exposed_pad" if EP_WORDS.search(str(u)) or re.search(r"\bEP\b", str(u)) else ""
+
+
+def open_unresolved(spec):
+    """The read's unresolved entries that are not clearly advisory: everything but the fields no pad and no pin
+    stands on (ADVISORY, NOT_COPPER) and a limit left out of a dimension whose value was read (a nominal-only
+    drawing). A read that says it could not read something is not released with no person on a footprint built from
+    its own numbers, whatever agrees with it: a second read can make the same guess (review 2026-11-23)."""
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    out = []
+    for u in (spec or {}).get("unresolved") or []:
+        top = named_field(u)
+        if top in NOT_COPPER + ADVISORY:
+            continue
+        v = (spec or {}).get(top) if top else None
+        if ONLY_LIMITS.search(str(u)) and (num(v) or isinstance(v, dict) and (num(v.get("nom")) or num(v.get("min")) and num(v.get("max")))):
+            continue
+        out.append(str(u))
+    return out
 
 
 def assess(res):
