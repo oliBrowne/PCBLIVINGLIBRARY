@@ -48,3 +48,22 @@ def test_a_body_that_disagrees_still_holds():
 
 def test_a_gullwing_word_still_holds():
     assert read(first(), second("gullwing"))["status"] == "disagreed"
+
+
+def _res(tie):
+    cc = {"status": "agreed", "checks": [{"status": "agreed", "source": "second read", "via": "assistant",
+                                          "against": "second read (your assistant)", "tie_breaks": [tie]}]}
+    return {"cross_check": cc, "symbol": {"pins": []},
+            "needs_review": [f"cross-check agreed once a difference was set aside: {tie}; check it on the drawing"]}
+
+
+def test_the_chip_molded_word_set_aside_does_not_hold_the_release():
+    from ecadlib import librarian as L
+    tie = read(first(), second())["tie_breaks"][0]
+    assert L.read_confirmed(_res(tie), {}, ["footprint"])
+
+
+def test_any_other_difference_set_aside_still_holds_the_release():
+    from ecadlib import librarian as L
+    assert not L.read_confirmed(_res("package type read custom, other source connector: a word only, the pads are "
+                                     "built as the read lists them"), {}, ["footprint"])
