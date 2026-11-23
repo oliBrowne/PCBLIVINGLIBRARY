@@ -25,9 +25,18 @@ def land(l, w, c, body=(4.45, 4.06)):
 
 
 def test_a_land_whose_sizes_the_drawing_prints_agrees():
+    # 2026-11-23 (review round 2): Vishay's own drawing no longer agrees. Span, pad width and pad length are printed
+    # one under the other with nothing to show which pad size runs along the pads, and the nearly square pad turned
+    # (2.286 mm along a 4.45 mm body) was ruled out only by "a pad is at most half the body long", which real lands
+    # break (a 0603's 0.9 mm pads on 1.6 mm): a turned read of such a land would have agreed the same way
     v = LT.check(vishay(), land(1.93, 2.286, 3.709), "IHLP1616BZER2R2M11")
-    assert v["status"] == "agreed" and v["page"] == 1, v
-    assert v["printed"] == {"pad length": "1.930", "span": "5.639", "pad width": "2.286"}, v
+    assert v["status"] == "unchecked" and "turned" in v["why"], v
+    # the same drawing with the pad width printed turned, as a drawing that turns its text with the dimension line
+    # prints it. 2026-11-23 (review round 3): this agreed ("the places show which size is which"). They do not: a
+    # drawing that turns the pad-length label alone, to fit it in, gives the turned read the same three directions
+    pages = {1: [r if r[2] not in ("0.090", "[2.286]") else r[:4] + (True,) for r in vishay()[1]]}
+    v = LT.check(pages, land(1.93, 2.286, 3.709), "IHLP1616BZER2R2M11")
+    assert v["status"] == "unchecked" and "turned" in v["why"], v
 
 
 def test_wrong_reads_of_the_same_drawing_are_never_agreed():
@@ -48,7 +57,10 @@ def test_a_body_number_near_the_land_is_no_land_size():
     pages = vishay(run(380, 270, "[2.0] Max."), run(372, 294, "[3.18 ± 0.3]"))
     assert LT.check(pages, land(1.93, 2.0, 3.709), "x")["status"] == "unchecked"
     assert LT.check(pages, land(1.93, 3.18, 3.709), "x")["status"] == "unchecked"
-    assert LT.check(pages, land(1.93, 2.286, 3.709), "x")["status"] == "agreed"
+    # the true read finds all three of its numbers; since round 2 of the review of 2026-11-23 this drawing does not
+    # show which way the pads lie (see the first test), so its verdict is the turned doubt, not a missing number
+    v = LT.check(pages, land(1.93, 2.286, 3.709), "x")
+    assert v["status"] == "unchecked" and "turned" in v["why"] and "not printed" not in v["why"], v
 
 
 def test_the_land_must_fit_the_body_the_read_gives():

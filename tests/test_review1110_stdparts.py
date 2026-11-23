@@ -86,6 +86,8 @@ def test_plain_package_names_still_resolve():
                              ("SOT-23 (3)", "Q", "SOT-23"),
                              ("SOT-23 5-pin", "U", "SOT-23-5"), ("SOT-23-5", "U", "SOT-23-5"),
                              ("SOT-23 6 Lead", "U", "SOT-23-6"), ("SOT-363 (SC-88)", "U", "SOT-363_SC-70-6"),
-                             ("TO-220 Full Pack", "Q", "TO-220-3_Vertical"), ("MSOP-8 3x3mm P0.65mm", "U", "MSOP-8_3x3mm_P0.65mm")):
+                             ("MSOP-8 3x3mm P0.65mm", "U", "MSOP-8_3x3mm_P0.65mm")):
         r = SP.resolve([text], kind, "", "")
         assert r["footprint"] == want, (text, r)
+    # review 2026-11-23 (a4 M2): 'Full Pack' is a package variant (the insulated TO-220F), no longer the plain land
+    assert SP.resolve(["TO-220 Full Pack"], "Q", "", "")["footprint"] is None

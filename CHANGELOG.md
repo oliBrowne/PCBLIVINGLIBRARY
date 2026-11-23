@@ -33,6 +33,72 @@ a minor release may change command-line options and file formats.
   status|get|share|report` (share writes record files and sends nothing; report builds a GitHub issue link) and
   `ecadlib store-repo` for the people who run a store. Guide: [docs/shared-store.md](docs/shared-store.md).
 
+### Fixed
+
+A code review on 2026-11-23 found ways a wrong part could come out ready with no hold, all in the paths that release a
+part with no person's look. Each was shown with made-up inputs, none was seen in a real part. They are held now:
+
+- A resistor or capacitor with no part number is released as a generic chip only when every word on its BOM line is
+  understood (value, tolerance, rating, dielectric, size). `10uF tantalum`, `47uF electrolytic`, `1k x4` in the Value,
+  Comment or any other column are held.
+- A chip size is taken from a part number only when a maker's rule reads the whole number (Venkel's
+  `C0603X7R500-104KNE` was read with TDK's metric code and built as an 0201).
+- Words beside a size or package name in the footprint column (`0603 x4`, `0603 8P4R`, `1206 4-terminal`,
+  `SMB Gull Wing`, `TO-220 Full Pack`) hold the part instead of building the plain land.
+- A capacitor with a part number is built as an unpolarized chip only when something says it is ceramic or film (a
+  decoded MLCC number, a dielectric in the text, KiCad's own chip name). Tantalum and polymer series that were not on
+  the list (Vishay TMCM, T58, AVX TACR) are held.
+- A bare number in the Value column (`1210` for 1.21 k) is no longer read as the chip size.
+- A transistor's, SO-8 MOSFET's or diode's pin order is taken from the datasheet's text only when the text is about
+  this part's package (a family sheet's TO-92 table no longer gives its order to the SOT-23 part).
+- Active-low marks are compared in the free pin checks (Q and not-Q swapped, EN for not-EN), and pins a read calls NC
+  must be NC in the datasheet's table too.
+- A series diode pair with a joined `CATHODE/ANODE` label is no longer read as one diode.
+- The check of a land against the PDF's printed numbers no longer agrees with pads turned 90 degrees, nor with another
+  size's row of a family table.
+- The second read is asked for the terminal's length and width and for the pins on each side of a no-lead package; a
+  footprint built from a read's own numbers is released only when every number that places or sizes a pad was
+  compared. Second-read answers saved before this change do not cover those numbers and are asked for again.
+- A no-lead package whose read gives no pins per side is held, not built with a quarter of the pins on each side.
+  The exception is a square package named QFN (or VQFN, WQFN, LFCSP and the like) with 12 or more pins that cannot
+  sit on two sides at its pitch; it is released only when the second read gives the same sides.
+- A small terminal read at half or 1.5 times its size is a disagreement between the two reads.
+- A PDF saved by your assistant is tested to name the part, like a downloaded one.
+- An assistant answer is used only for the request its folder was written for.
+- A schema error in a read no longer switches off the checks of the built footprint; an entry the read lists as
+  unresolved holds however it is worded.
+- Another maker's listing is never taken as this part's package or LCSC number (BOM says Vishay SS34, the source lists
+  only onsemi's).
+- BOM reader: a `Package (mm)` column of only 0603 / 0402 is noted and held; lines with no part number that differ in
+  an unmapped column (Color, Tolerance, Voltage) are held instead of merged; words before the number in a
+  `Manufacturer/MPN` cell are the maker only when ecadlib knows the maker; a crafted MPN cell no longer hangs the reader.
+- Lines with no part number: every merged line is read for words such as tantalum, array or x4, not only the first;
+  a case letter or a lone `+` beside the value, and a bare yes or number under a header such as `Polarized` or `Pins`,
+  hold the part. Buying columns (price, stock, supplier name) and two names of the plain symbol (`R`, `R_Small`,
+  `Res1`) no longer keep lines apart.
+- A pin order taken from a datasheet's text counts only when the table's own heading names this part's package; a pin
+  a read calls NC is confirmed only by a no-connect row in the table.
+- Another maker's listing gives no description, datasheet link or CAD answer either. One company under two names is
+  one maker (MCC, Unisonic/UTC, Cree/Wolfspeed, Silicon Labs/Skyworks, NXP standard parts/Nexperia and others).
+- A metric size code in a part number that is also an inch size (TDK `C0603...`) is used only when the line names
+  that maker.
+- A PDF saved by your assistant that has no text to tell the part by (a scan) is flagged for a person.
+- Third pass: a size code with another kind's prefix (`CP1206`, `LED0603` on a resistor) holds; the symbol column of
+  a line with no part number must name the plain symbol; `bipolar` no longer cancels `tantalum`; a search result that
+  names no maker, or two, is not the BOM maker's listing; a text pin order is tied to the part's own number, not to a
+  list of package names; the place of three single numbers on a land drawing no longer rules out pads turned 90
+  degrees; an unresolved entry of a read holds unless it is about weight, marking, packing and the like.
+- A capacitor with a part number ecadlib cannot read is no longer released on KiCad's `C_0603_1608Metric` name alone:
+  the line or the part search must say it is ceramic.
+- Lines with no part number: words that say nothing about the build (EAGLE's "European symbol", makers, function
+  notes, DNP) no longer hold a plain resistor or capacitor; a word holds when it names another build (tantalum, array,
+  network, MELF, thermistor ...), and short codes must still be understood.
+
+### Changed
+
+- Expect more holds: these checks hold some correct parts too (for example an MLCC from a maker ecadlib has no
+  part-number rule for, with no dielectric on the line).
+
 ## [0.4.1] - 2026-11-22
 
 The first release since 0.4.0, with four weeks of work from `main`. Nothing in it needs a new setting, but a few

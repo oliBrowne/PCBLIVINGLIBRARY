@@ -147,10 +147,10 @@ def test_gate02_maker_names():
             ("Spansion", "Infineon Technologies"), ("Zetex", "Diodes Incorporated"), ("Exar", "MaxLinear, Inc."),
             ("Xilinx", "AMD"), ("Altera", "Intel"), ("Same Sky", "CUI Devices"), ("TE", "TE Connectivity"), ("WE", "Würth Elektronik")]
     differ = [("ON", "Monolithic Power Systems"), ("ON", "STMicroelectronics"), ("ON", "ON Shore Technology"),
-              ("TI", "Tiger"), ("TI", "STMicroelectronics"), ("Nexperia", "NXP"), ("", ""), ("", "TI"),
+              ("TI", "Tiger"), ("TI", "STMicroelectronics"), ("Nexperia", "onsemi"), ("", ""), ("", "TI"),
               ("ST", "Stackpole Electronics"), ("ON", "ON Shore Technology"), ("Micro Commercial", "Microchip"),
               ("Linear Integrated Systems", "Analog Devices Inc."), ("TI", "Analog Devices Inc./Maxim Integrated"),
-              ("TI", "Analog Devices Inc."), ("Freescale", "Nexperia"), ("NXP", "Nexperia USA Inc."), ("Micrel", "Broadcom"),
+              ("TI", "Analog Devices Inc."), ("Freescale", "Nexperia"), ("Micrel", "Broadcom"),
               ("National Semiconductor", "Analog Devices Inc."), ("ST", "Stackpole Electronics Inc")]
     for a, b in same:
         assert L.same_maker(a, b) and L.same_maker(b, a), (a, b)

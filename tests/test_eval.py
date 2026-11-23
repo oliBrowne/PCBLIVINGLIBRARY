@@ -157,7 +157,10 @@ def test_replay_runs_the_pipeline_and_scores():
         rec2 = record_dir(Path(d) / "rec2", {"QFNPART": qfn_ext(pitch=0.65)})
         rep2 = run(d, "b", replay=rec2)
         cs2 = {c["mpn"]: c for c in rep2["cases"]}
-        assert not cs2["QFNPART"]["pass"] and any(e.startswith("pitch:") for e in cs2["QFNPART"]["errors"])
+        # (16 pins at 0.65 mm on the 3 mm body: the corner pads overlap. Until review 2026-11-23 (1.7) that read was
+        # built with its pads touching and scored "pitch: ..."; "the pads would short" now holds it, nothing is built)
+        assert not cs2["QFNPART"]["pass"] and cs2["QFNPART"]["source"] == "none"
+        assert any("the pads would short" in t for t in cs2["QFNPART"]["tried"]), cs2["QFNPART"]["tried"]
         assert cs2["SOICPART"]["source"] == "none" and any("no recorded response for SOICPART" in t for t in cs2["SOICPART"]["tried"])
         cmp = R.compare(Path(d) / "a", Path(d) / "b")
         assert sorted(cmp["flipped"]["broken"]) == ["qfn-QFNPART", "soic-SOICPART"] and not cmp["flipped"]["fixed"]

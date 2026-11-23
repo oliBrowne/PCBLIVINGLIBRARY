@@ -3159,6 +3159,98 @@ def two_sided(spec, review):
                   f"{spec['name']} is a two-sided package; check against the drawing")
 
 
+ROWS_UNREAD = "pins per side not read"
+
+
+def rows_blank(spec):
+    """A no-lead read that gives no row split, no pin_sides and no pin_positions (and has a pin count to split)."""
+    n = spec.get("pin_count")
+    return spec.get("package_type") == "qfn" and isinstance(n, int) and not isinstance(n, bool) and n > 0 \
+        and "pins_left_right" not in spec and "pins_top_bottom" not in spec and not F.listed_sides(spec) \
+        and not spec.get("pin_positions")
+
+
+def standard_rows(spec):
+    """(pins_left_right, pins_top_bottom, table name, how) from the one checked standard package the read's name
+    resolves to, or else the one its own pin count, pitch, body and exposed pad name (stdparts.identify, which never
+    looks at the rows), or None."""
+    from . import stdparts as SP
+    said = str(spec.get("name") or "")
+    for how, find in (("the read names", lambda: SP.footprint_for([str(spec.get("name") or "")])[0]),
+                      ("the read's pin count, pitch, body and exposed pad name", lambda: SP.identify(spec)[0])):
+        if how != "the read names" and NOT_QUAD_ROWS.search(said):
+            continue                                  # (review 2026-11-23 round 3, B2) "FCQFN16" with an ordinary QFN-16's
+        try:                                          # numbers is no ordinary QFN-16: its name says so
+            name = find()
+            t = SP.spec(name) if name else None
+        except Exception:                             # a name or read stdparts cannot judge names no package
+            t = None
+        if t and t.get("package_type") == "qfn" and t.get("pin_count") == spec.get("pin_count") \
+                and all(isinstance(t.get(k), int) for k in ("pins_left_right", "pins_top_bottom")):
+            return t["pins_left_right"], t["pins_top_bottom"], name, how
+    return None
+
+
+# a four-sided no-lead package by its name: QFN with JEDEC's height letters (VQFN, WQFN, TQFN, UQFN, LQFN, XQFN, X2QFN,
+# HVQFN, UTQFN), ST's VFQFPN / UFQFPN / WFQFPN / TFQFPN, LFCSP and MLF, after a vendor prefix or a lead count. Not MLP /
+# LLP (makers use them for DFNs too), and not a name that says power, dual-row or flip-chip (PQFN, DRQFN, aQFN, VQFN-HR:
+# their pads are not four equal rows)
+QUAD_ROW_NAME = re.compile(r"(?:^|[-_\s\d])(?:[HU]?[VWTULX]2?QFN|QFN|[VUWT]FQFPN|LFCSP|MLF)(?![A-Z])", re.I)
+# (2026-11-23 review round 3, B2: FC-QFN-16, DR-QFN-44 and QFN-16-HR got the default: FC / DR may stand apart before the
+# QFN word, and FC / DR / HR after it or after its lead count, never as the start of a longer word: "QFN-16 (DRB)")
+NOT_QUAD_ROWS = re.compile(r"PQFN|DRQFN|AQFN|FCQFN|power|dual|multi|two.?row|stagger|flip|hot.?rod|"
+                           r"(?<![A-Z])(?:FC|DR)[-_\s]*[A-Z]{0,2}2?QFN|QFN[-_\s]*(?:\d+[-_\s]*)?(?:HR|FC|DR)(?![A-Z])", re.I)
+QUAD_ROW_MIN = 12                                         # under 12 pins a square no-lead body is as often two-sided
+QUAD_SQUARE = 0.05                                        # mm the body's two nominals may differ and still be square
+
+
+def quad_rows(spec):
+    """pin_count / 4 when a no-lead read with no rows can only be four equal rows (review 2026-11-23, round 2: every
+    ordinary QFN-16 / 20 / 24 / 32 / 48 whose read left the rows blank was held), else None. All of: the name says a
+    four-sided no-lead package (QUAD_ROW_NAME); the body is square; pin_count is a multiple of 4 and at least
+    QUAD_ROW_MIN; a quarter of the pins fits along a side at the read's pitch; and half of them does not (so the pins
+    cannot be on two sides only: a 3 x 3 mm "QFN-12" of 0.45 mm pitch may be a DFN-12 and stays held). The split is still
+    the default's, not a reading: crosscheck compares it with the sides the second read gives (pin_positions)."""
+    n, name = spec.get("pin_count"), str(spec.get("name") or "")
+    if not rows_blank(spec) or n < QUAD_ROW_MIN or n % 4 or not QUAD_ROW_NAME.search(name) or NOT_QUAD_ROWS.search(name):
+        return None
+    side, other, pitch = _nom(spec.get("body_length")), _nom(spec.get("body_width")), _nom(spec.get("pitch"))
+    if not side or not other or not pitch or abs(side - other) > QUAD_SQUARE:
+        return None
+    lead = _nom(spec.get("terminal_width")) or 0.0
+    along = lambda k: (k - 1) * pitch + lead              # the length a row of k terminals takes
+    return n // 4 if along(n // 4) <= side + 1e-9 < along(n // 2) else None
+
+
+def rows_unread(spec, review):
+    """A no-lead read with no row split left after two_sided (review 2026-11-23, 1.8: a DFN-8 3 x 3 named MLP-8 was
+    built 2 + 2 + 2 + 2 by footprint_gen's quarter-per-side default, the second read agreed and it was released). The
+    split is a default only where nothing else fits (quad_rows: a square QFN of 12 pins or more whose pins cannot be on
+    two sides): a checked standard package the read names (by its name, or by its numbers) gives the rows, with a review
+    line; otherwise the read fails (ds_route.FAILED: "pins per side", a hard line: the part is held)."""
+    if not rows_blank(spec):
+        return
+    got = standard_rows(spec)
+    n = spec["pin_count"]
+    if got:
+        spec["pins_left_right"], spec["pins_top_bottom"] = got[0], got[1]
+        review.append(f"pins_left_right / pins_top_bottom were left blank: {got[0]} per side left and right, {got[1]} top "
+                      f"and bottom, as the checked standard package {got[2]} ({got[3]}) has them; check against the "
+                      "drawing")
+        return
+    per = quad_rows(spec)
+    if per:
+        spec["pins_left_right"] = spec["pins_top_bottom"] = per
+        review.append(f"pins_left_right / pins_top_bottom were left blank: {per} per side on four sides, as {spec['name']} "
+                      f"is a four-sided no-lead package with a square body and {n} pins do not fit on two sides at its "
+                      "pitch; check against the drawing")
+        return
+    review.append(f"{ROWS_UNREAD}: {n} pins on a no-lead package and pins_left_right / pins_top_bottom / pin_sides all "
+                  "left blank, and no checked standard package gives the rows; a quarter of the pins on each of four "
+                  f"sides would be a guess (an {n}-pin DFN has {n // 2} on each of two sides): give the split or list "
+                  "the sides in pin_sides, from the pin figure")
+
+
 def _pin_count_from(spec, ext):
     """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
     name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "").
@@ -3305,6 +3397,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             spec["pin_count"] = n
             review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     two_sided(spec, review)
+    rows_unread(spec, review)
     grid_from_balls(spec, ext, review)
     ep_number(spec, ext, review)
     read_ext, read_pins = ext, ext["pins"]            # as read: the review and the cross-check compare these
@@ -3339,9 +3432,18 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             pass
         except Exception as e:
             review.append(f"footprint_adv.check_pad_table failed: {e!r}")
-    if ok:
+    # the build checks run whenever the read builds, schema error or not: the librarian builds the same spec without
+    # the schema (review 2026-11-23: a schema error skipped the standard package's, the land's and the shorts checks,
+    # and "schema:" alone holds nothing). A read that fails the schema and does not build has its schema lines
+    built = None
+    try:
+        built = F.build(spec)
+    except Exception as e:
+        if ok:
+            review.append(f"footprint_gen.build failed: {e!r}")
+    if built:
         try:
-            txt, rep = F.build(spec)
+            txt, rep = built
             from . import sexpr
             sexpr.parse(txt)
             far = std_copper(spec, rep)
@@ -5373,6 +5475,20 @@ class Reader:
             if got[0] is not None:
                 how = got[2].replace("in the datasheet folder", "saved by your assistant (datasheet/assistant/pdfs)")
                 data, prov = got[0], dict(got[1], where=how)
+                # an AI agent chose and saved this file: the same test a downloaded link gets (PdfStore.fetch), not
+                # the file's name alone (review 2026-11-23: another part's PDF under this part's name was read, and the
+                # land text, the pin table and the second read all then agreed with that same wrong PDF)
+                bad = self._not_this_part(data, mpn or part)
+                if bad and bad[0] == "other":         # a notice or certificate: nothing of the part to read
+                    how = f"{prov['local']} in your assistant's pdfs folder: {bad[1]}: replace it with the datasheet"
+                    attempts.append({"url": prov["local"], "where": "datasheet folder", "error": how})
+                    data, prov = None, None
+                elif bad:                             # read, flagged: its review line keeps the part with a person
+                    # ("untold": no text layer, or too little text to tell by. A link's PDF like that is read on the
+                    # link's word; this file has only an AI agent's choice behind it. Review 2026-11-23, round 2)
+                    prov["unnamed"] = f"{prov['local']} saved by your assistant (datasheet/assistant/pdfs) " + (
+                        f"doesn't mention {mpn or part}" if bad[0] == "unnamed" else
+                        f"has no text to tell by that it is {mpn or part}'s (a scan?)")
         note = folder_problem(self.cfg.get("folder")) if data is None else None
         tries = [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))] if data is None else []
         for url, where in tries:                      # http, then https
@@ -5483,6 +5599,25 @@ class Reader:
         base = dict(job, url=url, where=where, src_hash="url" + hashlib.sha256(url.encode()).hexdigest(), base_prov=prov,
                     more_urls=rest[1:])
         return self._walk(self._at(base, job["rung"], job["level"]))
+
+    @staticmethod
+    def _not_this_part(data, mpn):
+        """PdfStore.fetch's test of a downloaded PDF, for a file taken on its name: ("other", why) for a notice or a
+        certificate (not_a_datasheet), ("unnamed", None) when its first pages do not name the part (mentions_part says
+        False), ("untold", None) when it cannot be told (no text layer, text that does not read, a part number too
+        short to look for: the file is not refused, as a download is not, but the caller says so), None when they name
+        it."""
+        from . import ds_route as DR
+        try:
+            other = not_a_datasheet(DR.page_texts(data, 1), NEVER_DATASHEET)
+            if other:
+                return "other", other
+            said = mentions_part(DR.page_texts(data, MENTION_PAGES), mpn)
+            if said is False and (pdf_pages(data) or 0) > MENTION_BIG:
+                said = mentions_part(DR.page_texts(data, MENTION_DEEP), mpn)
+        except Exception:                             # a PDF whose text does not read: it cannot be told
+            return "untold", None
+        return None if said else ("unnamed", None) if said is False else ("untold", None)
 
     def _folder_pdf(self, part, urls, kinds, attempts, folder=None):
         """The part's PDF from the [datasheet] folder (or `folder`: the assistant's pdfs folder) when a file there is
@@ -5758,7 +5893,9 @@ class Reader:
         if job["prov"].get("found_by") == "web search":
             res["needs_review"].append(SEARCHED)
         if job["prov"].get("unnamed"):
-            res["needs_review"].append(f"{job['prov']['unnamed']} (no other link gave a PDF): check it is this part's datasheet")
+            res["needs_review"].append(f"{job['prov']['unnamed']} ("
+                                       + ("it was taken on its file name" if job["prov"].get("local") else "no other link gave a PDF")
+                                       + "): check it is this part's datasheet")
         if job["prov"].get("local") and re.search(r"\((?:a family datasheet|named for another part number)", str(job["prov"].get("where"))):
             res["needs_review"].append(f"datasheet from your folder: {job['prov']['where']}; check it covers this part")
         for o in job["prov"].get("outline") or ():
@@ -5840,7 +5977,10 @@ class Reader:
             if isinstance(e, APIError):
                 raise                                 # no answer came back: the part is retried next run
             raise CC.Unavailable(str(e)[:200])
-        msg = LRL.repair_message(msg, CC.output_schema(), p)
+        # (the schema that was asked: with pin_rows for a placed read and every no-lead package, which the plain schema
+        # would have the repair drop; review 2026-11-23, 1.8)
+        asked = ((body.get("output_config") or {}).get("format") or {}).get("schema") if isinstance(body.get("output_config"), dict) else None
+        msg = LRL.repair_message(msg, asked or CC.output_schema(), p)
         self._settle(key, model, msg, "sync")
         r = DR.attempt_record(job["part"], job.get("name"), model, msg, "sync", pages_sent, job.get("n_pages"), "cross-check")
         r["purpose"] = "cross_check"

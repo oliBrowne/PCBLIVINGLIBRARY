@@ -279,10 +279,11 @@ def parse_nexar_part(data, p, res, currency="USD"):
     results = ((data or {}).get("supSearchMpn") or {}).get("results") or []
     parts = [x.get("part") for x in results if isinstance(x, dict)]
     mpn_of, mfr_of = (lambda x: x.get("mpn")), (lambda x: ((x.get("manufacturer") or {}).get("name")))
-    best = L._pick(parts, p, mpn_of, mfr_of)
+    best = L._pick(parts, p, mpn_of, mfr_of, own_only=True)
     if not best:
         res.found = False
-        return res
+        res.note = _miss_note("Nexar", p, parts, mpn_of, mfr_of)   # only another maker's listing: said, never taken
+        return res                                                 # (2026-11-23 review 1.11)
     info = nexar_info(best, res.provider, currency)
     # known limit: only the results asked for (part(): 5, as Nexar counts every part it returns against the plan's
     # quota); a second maker of the exact MPN ranked lower is missed and the MPN reads as one maker's
@@ -466,6 +467,17 @@ class DigiKeySourcing(L.DigiKeyLifecycle):
                 res = self._shared(p, res)
                 if not res.found and not res.error and not res.note:
                     res.note = f"DigiKey's nearest listing is {best}, not {p['mpn']}: check the BOM's part number"
+                return res
+            m = prod.get("Manufacturer")
+            theirs = str((m.get("Name") if isinstance(m, dict) else m) or "").strip()
+            if P.maker_key(p.get("manufacturer")) and P.maker_key(theirs) and not P.same_maker(p["manufacturer"], theirs):
+                # productdetails answers one product, here another maker's (2026-11-23 review 1.11: the BOM says
+                # Vishay SS34 = SMA, the product is onsemi's SS34 = SMC). The BOM maker's own listing may still be
+                # there, which the keyword search shows; the other maker's is said, never taken
+                res = self._shared(p, res)
+                if not res.found and not res.error and (not res.note or res.note.startswith(f"DigiKey lists no {p['mpn']}")):
+                    res.note = (f"DigiKey lists {p['mpn']} only from {theirs}, not {p['manufacturer'].strip()}: "
+                                "check the BOM's maker")
                 return res
             return digikey_info(prod, self.name, (d.get("SearchLocaleUsed") or {}).get("Currency") or self.currency)
         except (ValueError, AttributeError, TypeError) as e:
@@ -664,7 +676,8 @@ class MouserSourcing(L.MouserLifecycle):
             if err:
                 res.error = err
                 return res
-            best = L._pick(parts, p, lambda x: x.get("ManufacturerPartNumber"), lambda x: x.get("Manufacturer"))
+            best = L._pick(parts, p, lambda x: x.get("ManufacturerPartNumber"), lambda x: x.get("Manufacturer"),
+                           own_only=True)             # one other maker's listing is not this part (2026-11-23 review)
             if not best:
                 res.found = False
                 res.note = _miss_note("Mouser", p, parts, lambda x: x.get("ManufacturerPartNumber"),
@@ -765,9 +778,12 @@ class JLCSourcing(L.JLCLifecycle):
             return res
         items, err = self._query(lcsc or mpn)
         best = None if err else (next((i for i in items if str(i.get("componentCode", "")).upper() == lcsc), None) if lcsc
-                                 else L._pick(items, p, lambda i: i.get("componentModelEn"), lambda i: i.get("componentBrandEn")))
+                                 else L._pick(items, p, lambda i: i.get("componentModelEn"), lambda i: i.get("componentBrandEn"),
+                                              own_only=True))
         if best:
             return jlc_info(best, self.name)
+        if not err and not lcsc:       # listed only by another maker (a clone under the same MPN): said, never taken
+            res.note = _miss_note("JLCPCB", p, items, lambda i: i.get("componentModelEn"), lambda i: i.get("componentBrandEn"))
         if lcsc:                       # the search refused or missed: the C-number is asked of LCSC directly instead
             direct = self._lcsc_direct(lcsc)
             if direct.found:

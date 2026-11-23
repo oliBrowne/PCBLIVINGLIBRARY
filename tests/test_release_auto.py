@@ -54,8 +54,9 @@ def test_a_table_whose_other_column_numbers_the_pins_otherwise_does_not_agree():
     """SOIC and SOT-23 columns (or MCP6L01 / MCP6L01R): one column fits, but the text does not say which column is
     this part's, so it stays with a person. Only a column that prints a pin number above the symbol's highest is
     plainly another package (the 8-pin SOIC column for the 5-pin SOT-23 symbol): that one is no doubt."""
-    sot = [("1", "OUT"), ("2", "GND"), ("5", "IN"), ("3", "~{OC}"), ("4", "EN")]
-    soic = [("6", "OUT"), ("7", "OUT"), ("8", "OUT"), ("1", "GND"), ("2", "IN"), ("3", "IN"), ("5", "~{OC}"), ("4", "EN")]
+    # (OC with no mark: the bare text cannot show the bar of ~{OC}, so that is unchecked now; review 2026-11-23, 1.9)
+    sot = [("1", "OUT"), ("2", "GND"), ("5", "IN"), ("3", "OC"), ("4", "EN")]
+    soic = [("6", "OUT"), ("7", "OUT"), ("8", "OUT"), ("1", "GND"), ("2", "IN"), ("3", "IN"), ("5", "OC"), ("4", "EN")]
     r = PT.check({4: TABLE}, soic)                                       # the SOT-23 column could be an 8-pin part's
     assert r["status"] == "unchecked" and "another column" in r["why"], r
     r = PT.check({4: TABLE}, sot)
@@ -89,7 +90,11 @@ def test_no_text_layer_or_no_table_leaves_it_unchecked():
 def test_nc_pins_are_not_needed_and_numbers_may_come_first():
     text = "PIN NAME FUNCTION\n1 OUTA Output A\n2 -INA Inverting input A\n3 +INA Noninverting\n4 V- Negative supply"
     pins = [("1", "OUTA"), ("2", "−INA"), ("3", "+INA"), ("4", "V-"), ("5", "NC")]
-    assert PT.check({3: text}, pins)["status"] == "agreed"
+    assert PT.check({3: text + "\n5 NC No connection"}, pins)["status"] == "agreed"
+    # the table leaves pin 5 out: nothing confirms the NC (review 2026-11-23, round 2, C4: a row the check does not
+    # recognise looks the same as no row, so no row is no agreement; this asserted 'agreed' before)
+    assert PT.check({3: text}, pins)["status"] == "unchecked"
+    assert PT.check({3: text}, pins[:4])["status"] == "agreed"
 
 
 # ---------------------------------------------------------------- Mouser's NXP-style description names the case

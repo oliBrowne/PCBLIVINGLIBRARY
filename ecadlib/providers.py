@@ -121,7 +121,7 @@ _MAKER_ALIAS = {"TI": "TEXASINSTRUMENTS", "BURRBROWN": "TEXASINSTRUMENTS", "ON":
                 "LTC": "ANALOG", "MAXIM": "ANALOG", "HITTITE": "ANALOG",   # now Analog Devices
                 "KYOCERAAVX": "AVX", "KYOCERA": "AVX", "SILICONLABS": "SILICONLABORATORIES", "SILABS": "SILICONLABORATORIES",
                 # acquisitions: the old maker's name on a BOM, the buyer's at the distributor (and the other way)
-                "FREESCALE": "NXP",                                              # 2015 (Nexperia is not NXP: below)
+                "FREESCALE": "NXP",                                              # 2015 (Nexperia: _MAKER_MOVED below)
                 "NATIONAL": "TEXASINSTRUMENTS", "NATSEMI": "TEXASINSTRUMENTS",   # National Semiconductor, 2011
                 "LT": "ANALOG", "DALLAS": "ANALOG",                              # Linear Technology; Dallas -> Maxim
                 "MICREL": "MICROCHIP", "MICROSEMI": "MICROCHIP", "ACTEL": "MICROCHIP", "SUPERTEX": "MICROCHIP",
@@ -147,6 +147,20 @@ _MAKER_ALIAS.update({"ANALOGDEVICES": "ANALOG", "NATIONALSEMICONDUCTOR": "TEXASI
                      "PERICOM": "DIODES", "DIALOG": "RENESAS", "SIPEX": "MAXLINEAR", "CATALYST": "ON",   # bought
                      "SEISTACKPOLE": "STACKPOLE",                 # DigiKey's "SEI Stackpole" (Stackpole Electronics Inc.)
                      "ARATAS": "OMRON"})                          # Omron Electronic Components' new name (2025)
+# 2026-11-23 review round 2 (I7): one company under two names, whose own listing was refused as another maker's (a
+# needless hold). Only names that are the same company, or one it bought whose parts it sells under the same numbers.
+_MAKER_ALIAS.update({"MCC": "MICROCOMMERCIAL",                           # Micro Commercial Components / Co
+                     "AUSTRIAMICROSYSTEMS": "OSRAM",     # ams-OSRAM (AMSOSRAM above). Bare "AMS" is not added: on a BOM it
+                                                         # is also Advanced Monolithic Systems (AMS1117), as the tests pin
+                                                         # ("ams" / "ams AG" as written: _ams_ag, round 3)
+                     "UTC": "UNISONIC",                                  # Unisonic Technologies' brand
+                     "SKYWORKSSOLUTIONS": "SKYWORKS",
+                     "ISSI": "SILICONSOLUTION", "ISSISILICONSOLUTION": "SILICONSOLUTION",   # Integrated Silicon Solution Inc. (DigiKey: "ISSI, Integrated ...")
+                     "MXIC": "MACRONIX",
+                     "INVENSENSE": "TDK", "TDKINVENSENSE": "TDK",        # TDK since 2017, listed as "TDK InvenSense"
+                     "RFMD": "QORVO", "RFMICRO": "QORVO", "TRIQUINT": "QORVO",   # RF Micro Devices + TriQuint = Qorvo, 2015
+                     "HRS": "HIROSE",                                    # Hirose Electric's brand
+                     "JAE": "JAPANAVIATION"})                            # Japan Aviation Electronics
 # the words of a company name an alias maps to, where it has several: where a shorter name may end in it ("Texas" /
 # "TI"), and where not ("Teco" is no "TE" = TE Connectivity)
 _ALIAS_WORDS = {"TEXASINSTRUMENTS": ["TEXAS", "INSTRUMENTS"], "TECONNECTIVITY": ["TE", "CONNECTIVITY"],
@@ -157,9 +171,17 @@ _ALIAS_WORDS = {"TEXASINSTRUMENTS": ["TEXAS", "INSTRUMENTS"], "TECONNECTIVITY": 
 # a company's other makers under its own brand, named on their own (distributors list both): the whole key only, so
 # "Wurth" is Würth Elektronik and Würth Electronics Midcom, never any "Wurth <anything>" (Würth Industrie, a fastener
 # trader), and "Catalyst Lighting" is no Catalyst Semiconductor (onsemi)
-_MAKER_GROUP = {"WURTHELEKTRONIK": {"WURTHMIDCOM"}}
-# Nexperia (NXP's Standard Products until 2017) is its own company now, with its own lifecycles and datasheets for the
-# discretes and logic NXP once sold: an NXP line is not matched to a Nexperia listing (nor Philips / Freescale to it).
+_MAKER_GROUP = {"WURTHELEKTRONIK": {"WURTHMIDCOM"},
+                # 2026-11-23 review round 2 (I7): a line that moved to another company with its part numbers. The two
+                # keys stay apart (no alias), so each still matches its own other names ("Cree" / "Cree LED", the LED
+                # company Wolfspeed sold, is not Wolfspeed): only this pair is one maker.
+                "CREE": {"WOLFSPEED"},                         # Cree's SiC / RF parts: Cree renamed itself Wolfspeed, 2021
+                "SILICONLABORATORIES": {"SKYWORKS"}}           # Silicon Labs' isolation / timing / power parts, 2021
+# Nexperia (NXP's Standard Products until 2017) is its own company now, and sells the discretes and logic NXP (and
+# Philips before it) once sold under the same type numbers (BC847C,215; 74HC595D,118). 2026-11-23 review round 2 (I7):
+# a BOM that still says NXP for such a part was held as "only from Nexperia", so the two names are one maker for a
+# number both list. By the name as written, not by key: Freescale (NXP's key) never made Nexperia's parts.
+_MAKER_MOVED = {"NXP": {"NEXPERIA"}, "PHILIPS": {"NEXPERIA"}}
 
 
 def _maker_words(name):
@@ -239,9 +261,58 @@ def same_maker(a, b):
             return True
     if kb in _MAKER_GROUP.get(ka, ()) or ka in _MAKER_GROUP.get(kb, ()):   # Würth Elektronik / Würth Electronics Midcom
         return True
+    ra, rb = "".join(_key_words(a)), "".join(_key_words(b))                # the names as written, before any alias
+    if rb in _MAKER_MOVED.get(ra, ()) or ra in _MAKER_MOVED.get(rb, ()):   # NXP / Nexperia
+        return True
+    if _ams_ag(a) and kb == "OSRAM" and "AMS" in _maker_words_all(b) or _ams_ag(b) and ka == "OSRAM" and "AMS" in _maker_words_all(a):
+        return True                                                        # ams / ams AG is ams-OSRAM (B4, below)
     wa, wb = _maker_words(a), _maker_words(b)
     return any(len(x) == 1 and len(x[0]) >= 3 and x[0] not in _MAKER_GENERIC and y and y[0] == x[0] and ky.startswith(kx)
                for x, y, kx, ky in ((wa, wb, ka, kb), (wb, wa, kb, ka)))   # not "Vishay" / VPG
+
+
+def _ams_ag(name):
+    """Is this ams AG (austriamicrosystems, ams-OSRAM since 2020) by the name as written: "ams" in the small letters
+    the company writes itself in, or "ams AG" in any letters? 2026-11-23 review round 3 (B4): a BOM that says "ams"
+    for an AS5600 was held against its own listing by "ams-OSRAM USA INC.". By the name as written, like _MAKER_MOVED,
+    and only against a name that says ams and OSRAM: the key stays "AMS", so "AMS" in capitals (on a BOM that is
+    Advanced Monolithic Systems, the AMS1117) is still no ams-OSRAM, and "ams" is no Advanced Monolithic Systems."""
+    name = clean_maker(name) if isinstance(name, str) else ""
+    return bool(re.fullmatch(r"ams|(?i:ams[\s-]+ag)\.?", name.strip()))
+
+
+_KNOWN_MAKERS = set()
+
+
+def _known_maker(name):
+    """Is this name, whole, a maker this module knows by name (the alias tables, the makers' datasheet domains)?"""
+    if not _KNOWN_MAKERS:
+        _KNOWN_MAKERS.update(_MAKER_ALIAS, _MAKER_ALIAS.values(), _MAKER_GROUP, *_MAKER_GROUP.values(), _MAKER_MOVED,
+                             *_MAKER_MOVED.values(), (maker_key(m) for m in MAKER_DOMAINS.values()))
+        _KNOWN_MAKERS.discard("")
+    return maker_key(name) in _KNOWN_MAKERS
+
+
+def other_makers(maker, listed):
+    """The other makers a listing's maker field names beside `maker` (2026-11-23 review round 3, A9: "onsemi / Vishay"
+    and "Vishay (onsemi second source)" were Vishay's listing, so onsemi's SMC case went to Vishay's SMA part). A part
+    of the field (between / , ; | & + "and" "or" " - " and brackets) counts when it is, or begins with, a maker known
+    by name that is not `maker`: a division, a brand or a former name of one company is not another maker ("Vishay
+    Beyschlag/Draloric/BC Components", "EPCOS - TDK Electronics", "Aratas (Formerly Omron Components)")."""
+    if not isinstance(listed, str) or not isinstance(maker, str):
+        return []
+    out = []
+    for part in re.split(r"[/,;|&+()（）]|\s+-\s+|\s+(?:and|or)\s+", clean_maker(listed)):
+        words = _maker_words_all(part)
+        if not words or set(words) <= _MAKER_REGION | _MAKER_PLACE | _MAKER_WORDS or "DIVISION" in words \
+                or re.match(r"(?i)\s*(?:formerly|previously|now)\s", part):
+            continue
+        first = words[0] if len(words[0]) >= 4 and words[0] not in _MAKER_GENERIC | _MAKER_WORDS | _MAKER_PLACE else ""
+        for name in (part.strip(), first):
+            if name and _known_maker(name) and not same_maker(maker, name) and not same_maker(maker, part):
+                out.append(part.strip())
+                break
+    return out
 
 
 def describe(text="", category="", package=""):
@@ -438,7 +509,8 @@ def parse_jlcpcb(r, mpn, res, code="", maker="", package=""):
     paths easyeda2kicad reads). maker: the BOM's manufacturer; package: the BOM's land (bom_land). Of several exact
     matches (clones sell under the same MPN, one maker in DIP-8 and SOP-8 too) the one by that maker in that package
     is taken, then the maker's, then one in that package, then the first listed; when the BOM names a land and the
-    one taken is listed in another, extra['package_note'] says so."""
+    one taken is listed in another, extra['package_note'] says so. When the BOM names a maker and every listing is by
+    a known other maker, none is taken: not found, with extra['note'] saying who lists it (pick_listing)."""
     try:
         items = (((r.json().get("data") or {}).get("componentPageInfo") or {}).get("list")) or []
     except (ValueError, AttributeError, TypeError) as e:          # untrusted body of an unexpected shape
@@ -467,8 +539,21 @@ def pick_listing(items, mpn, res, code="", maker="", package=""):
     def in_land(i):                        # an empty listing package says nothing, so it is not "in the BOM's land"
         spec = str(i.get("componentSpecificationEn") or "").strip()
         return bool(land and spec) and not lands_differ(land, spec)
+    rest = exact
+    if not code and maker_key(maker) and not any(by_maker(i) for i in exact):
+        # the BOM names a maker and no listing is by it: a listing by a known other maker (a clone under the same
+        # MPN) is not this part, so its LCSC number and package are not taken; said, as DigiKey's keyword route says
+        # it (2026-11-23 review 1.11: TI's LM358DR got HGSEMI's C-number). A listing naming no maker still counts.
+        rest = [i for i in exact if not maker_key(clean_maker(i.get("componentBrandEn", "")))]
+        if exact and not rest:
+            others = list(dict.fromkeys(m for m in (clean_maker(i.get("componentBrandEn", "")) for i in exact) if m))
+            res.found = False
+            res.extra = {**(res.extra or {}), "other_maker": True,
+                         "note": clean_text(f"LCSC lists {mpn} only from {', '.join(others[:3])}, not {str(maker).strip()}: "
+                                            "check the BOM's maker", 300)}
+            return res
     best = next((i for i in exact if by_maker(i) and in_land(i)), None) or next((i for i in exact if by_maker(i)), None) \
-        or next((i for i in exact if in_land(i)), None) or (exact or [None])[0]
+        or next((i for i in rest if in_land(i)), None) or (rest or [None])[0]
     code = str((best or {}).get("componentCode") or "").strip().upper()
     if best and not re.fullmatch(r"C\d{1,9}", code):   # untrusted: only a real LCSC number goes on (into EasyEDA's URL)
         res.error = f"unparseable: componentCode {code[:20]!r} is not an LCSC number"

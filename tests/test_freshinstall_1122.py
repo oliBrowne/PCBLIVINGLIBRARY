@@ -25,9 +25,17 @@ U9,LM358,1,op amp
 def test_maker_and_mpn_in_one_column():
     lines, mapping = _bom(POCKETBEAGLE)
     got = [(l.get("manufacturer", ""), l.get("mpn", "")) for l in lines]
-    assert got == [("YAGEO", "CC0402KRX7R7BB104"), ("C&K Components", "KMR231GLFS"), ("Nexperia", "74LVC1G07GV,125"),
-                   ("MTCONN", "MCTF-0403"), ("", "LM358")], got
-    assert "alternates Suntech ST-TF-003A" in lines[3]["bom_note"], lines[3]
+    # 2026-11-23 review (a6 finding 7): the words before the number are a maker only when ecadlib knows the maker
+    # (YAGEO by its own ordering code, Nexperia by the maker table). 'C&K Components' and 'MTCONN' are not in the
+    # table, and read the same way 'Capacitor GRM188...' gave the maker Capacitor: those cells now stay whole and
+    # the lines are held for a person (was: makers C&K Components and MTCONN, alternate Suntech ST-TF-003A)
+    assert got[0] == ("YAGEO", "CC0402KRX7R7BB104") and got[2] == ("Nexperia", "74LVC1G07GV,125") and got[4] == ("", "LM358"), got
+    for l in (lines[1], lines[3]):
+        assert not l.get("manufacturer") and "could not be read as a maker and a part number" in l["bom_hold"], l
+    assert lines[1]["mpn"] == "C&K Components KMR231GLFS", lines[1]
+    lines, _ = _bom('Designator,Manufacturer/MPN,Qty\nX2,"Hirose DM3AT-SF-PEJM5, JST SM04B-SRSS-TB",1\n')
+    assert (lines[0]["manufacturer"], lines[0]["mpn"]) == ("Hirose", "DM3AT-SF-PEJM5"), lines[0]
+    assert "alternates JST SM04B-SRSS-TB" in lines[0]["bom_note"], lines[0]
 
 
 def test_maker_split_only_when_it_reads_as_a_maker():

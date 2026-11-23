@@ -177,6 +177,165 @@ def _inch_only_codes(df, j):
     return sorted(found)
 
 
+def _metric_only_codes(df, j):
+    """The bare size codes in column j that are metric sizes and no inch one ('1608', '2012', '3216'), sorted: in a
+    column labelled mm they back the header up, so its 0603 / 0402 (sizes in both systems) are the metric ones."""
+    from .kicad_index import METRIC_TO_IMPERIAL
+    metric = set(METRIC_TO_IMPERIAL) - set(METRIC_TO_IMPERIAL.values())
+    found = set()
+    for _, row in df.iterrows():
+        if j < len(row):
+            m = re.fullmatch(r"\s*(\d{4,5})\s*(?:mm)?\s*", str(row.iloc[j]))
+            if m and m.group(1) in metric:
+                found.add(m.group(1))
+    return sorted(found)
+
+
+# columns that say where a part sits on the board or which row of the sheet it is, not what the part is: never a
+# difference between two lines of one part (other_cells)
+_PLACE_HEADER = re.compile(r"(?:(?:mid|center|centre|ref|pos|position|pad)\s*)?[xy](?:\s*(?:mm|mil|mils|pos|position))?|"
+                           r"rot|rotation|angle|orientation|layer|side|tb|sheet|page|"
+                           r"item|line|line item|line no|line number|row|row no|index|pos|position|pos no|pos nr|"
+                           r"no|nr|lp|sr no|s no|sl no")       # ('Item Number' may be a house part number: compared)
+
+
+def _other_columns(df, headers, used):
+    """The columns of a BOM the reader maps to no field and that describe the part (Color, Tolerance, Voltage,
+    Dielectric, anything else), as indexes: read_bom keeps their cells on the line (other_cells), so that two lines
+    with no part number that differ only there are not merged into one part silently (2026-11-23 review, a6
+    finding 4). Left out: a column with no header, a hidden one, a second designator / quantity column, where the
+    part sits (X, Y, rotation, layer), and a row counter (a header that says so, or cells that count up by one)."""
+    out = []
+    for j, h in enumerate(headers):
+        nh = _hnorm(h)
+        if j in used or not nh or "<" in str(h) or nh in FIELDS["designator"] or nh in FIELDS["qty"] \
+                or _PLACE_HEADER.fullmatch(nh):
+            continue
+        cells = [str(c).strip() for c in df.iloc[:, j]] if j < df.shape[1] else []
+        nums = [int(c) for c in cells if re.fullmatch(r"\d{1,6}", c)]
+        if len(nums) >= 3 and len(nums) == sum(1 for c in cells if c) and all(b - a == 1 for a, b in zip(nums, nums[1:])):
+            continue                                              # 1, 2, 3 ...: the sheet's own line numbers
+        out.append(j)
+    return out
+
+
+def other_cells(line):
+    """{header: cell} of a line's cells in the columns read_bom maps to no field (line['other_cells'], written as
+    'Color: red | Tolerance: 1%'); {} for a line from another reader. Two columns under one header ('Type', 'Type')
+    keep both cells, joined (review 2026-11-23 round 2, C5: the second overwrote the first's 'tantalum')."""
+    out, last = {}, None
+    for part in str(line.get("other_cells") or "").split(" | "):
+        h, sep, v = part.partition(": ")
+        if sep and h.strip():
+            last = h.strip()
+            out[last] = f"{out[last]} | {v.strip()}" if last in out else v.strip()
+        elif last and part:                                       # a cell that holds ' | ' itself
+            out[last] += " | " + part
+    return out
+
+
+# review 2026-11-23 round 2 (I3): columns that say how the part is bought or where it is used, not what it is. Two
+# lines of one value and footprint that differ only there are one part (a per-row price, stock, supplier name, the
+# sheet the row is on, what the resistor is for). A column that carries a number of the part ('Supplier Part Number',
+# 'Order Code') is not one of these: two order numbers are two parts.
+# Round 3 (A3, B4): 'total' is no such word ('Total Pins', 'Total Elements' count what is in the part; 'Total Price' is
+# a price by its other word), nor is a column that names a package or a count; RoHS / lifecycle / status columns and
+# notes are ('RoHS: Yes' vs 'Compliant' is one part). stdparts.cell_hold reads such a column only for the words of a
+# capacitor's + side and of another technology.
+_ADMIN_HEADER = re.compile(
+    r"(?<![a-z])(?:price|cost|subtotal|amount|currency|stock|inventory|availab\w*|lead ?time|moq|"
+    r"supplier|distributor|vendor|seller|function|purpose|usage|used (?:for|in|on)|net|nets|net ?name|signal|"
+    r"sheet ?(?:name|file|path)|schematic|exclude from \w+|in bom|on board|rohs|reach|life ?cycle|status|"
+    r"complian\w*|notes?|remarks?)(?![a-z])")
+_ADMIN_NOT = re.compile(r"(?<![a-z])(?:part|number|no|nr|pn|sku|code|id|ref|reference|item|package|pkg|case|footprint|"
+                        r"size|pins?|pads?|terminals?|elements?|resistors?|capacitors?)(?![a-z])")
+# a column that names the schematic symbol the row was drawn with (KiCad's 'LibPart', 'Symbol', 'Lib Ref', 'Device')
+_SYMBOL_HEADER = re.compile(r"(?<![a-z])(?:lib\w*|symbol\w*|sym|device|schlib)(?![a-z])")
+# round 3 (A2): a column whose cell is the symbol's own name (KiCad's 'LibPart' / 'Cmp name', EAGLE's 'Device', 'Library
+# Reference'), not the library it is in ('Library', 'EAGLE Library', 'Symbol Library')
+_SYMBOL_NAME_HEADER = re.compile(r"(?<![a-z])(?:lib ?ref\w*|lib ?part|library (?:ref\w*|part)|symbol(?: name)?|sym|"
+                                 r"device|cmp ?name|component ?name|schlib ?ref)$")
+_BARE_CELL = re.compile(r"(?i)\s*(?:yes|y|true|t|x|ja|j|oui|si|s\u00ed|\u2713|\u2714|\+|\d+(?:[.,]\d+)?)\s*")
+SAID_CELL_MAX = 1000                                              # characters of an unmapped cell kept on the line
+
+
+def admin_header(header):
+    """The header of a column that says how a part is bought or where it is used (price, stock, supplier name,
+    function, sheet), not what it is: never a difference between two lines of one part."""
+    nh = _hnorm(header)
+    return bool(_ADMIN_HEADER.search(nh)) and not _ADMIN_NOT.search(nh)
+
+
+def symbol_header(header):
+    """The header of a column that names the schematic symbol of the row ('LibPart', 'Symbol', 'LibRef')."""
+    return bool(_SYMBOL_HEADER.search(_hnorm(header)))
+
+
+def symbol_name_header(header):
+    """The header of a column whose cells are the row's schematic symbol by name ('LibPart', 'Symbol', 'Device', 'Cmp
+    name'): a no-part-number resistor's or capacitor's cell there must be the plain symbol (stdparts.cell_hold)."""
+    return bool(_SYMBOL_NAME_HEADER.search(_hnorm(_camel_header(header))))
+
+
+def _camel_header(header):
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", str(header or ""))
+
+
+def line_cells(line):
+    """[(role, header, cell)] for every cell of a BOM line beside its Value and Description that may say what the
+    part is (review 2026-11-23 round 3, A2 / A3 / B3): the footprint cell ('footprint'), the LibRef and the cells of
+    a symbol-name column ('symbol'), the Manufacturer ('maker'), the cells of a column on how the part is bought or
+    used ('admin': admin_header) and of every other column the reader maps to no field ('said'). What each role is
+    read for: stdparts.cell_hold."""
+    out = [("footprint", "Footprint", str(line.get("footprint") or "")), ("symbol", "LibRef", str(line.get("libref") or "")),
+           ("maker", "Manufacturer", str(line.get("manufacturer") or ""))]
+    for h, v in other_cells(line).items():
+        role = "symbol" if symbol_name_header(h) else "admin" if admin_header(_camel_header(h)) else "said"
+        out += [(role, h, cell) for cell in v.split(" | ")]
+    return [c for c in out if c[2].strip()]
+
+
+def said_cells(line, admin=True):
+    """Every text of a BOM line beside its Value and Description that may say what the part is, for the words that
+    say polarized or more than two terminals (librarian.passive_kind): the footprint cell, the LibRef and the cells
+    of the columns the reader maps to no field. A cell that is a bare yes / true / x / + / number says nothing alone:
+    it is read with its header ('Polarized: yes' -> 'yes Polarized', 'Pins: 8' -> '8 Pins'; review 2026-11-23 round 2,
+    I10). '0', 'no' and an empty cell say nothing; a bare cell of a column that is about buying the part ('Lead Time:
+    4') is not read, nor a number under a value column ('Cap (pF): 5', 'Res').
+    Round 3 (A3): a header that itself says polarized or more than two terminals is read with every cell that is no
+    clear no ('Polarized: Yes.', 'Polarized: P', 'Polar: 1'), and as words ('PinCount: 8' -> '8 Pin Count').
+    admin=False (B3): without the columns on how the part is bought or used, for the words that count elements
+    ('Function: RC filter', 'pull-up for 4 pin header' are what the part is for)."""
+    from . import stdparts as SP
+    out = [str(line.get(k) or "") for k in ("footprint", "libref")]
+    for h, v in other_cells(line).items():
+        hw, adm = SP.header_words(h), admin_header(_camel_header(h))
+        if adm and not admin:
+            continue
+        says = not adm and (bool(re.search(r"polar", hw)) or SP.says_polarized(hw) or bool(SP.multi_terminal(hw)))
+        polar_header = bool(re.search(r"polar", hw)) and not re.search(r"(?<![a-z])(?:non|un|not?) ?polar", hw) \
+            and not SP.says_polarized(hw)                 # 'Polar', 'Polarity': the header's word is no word of POLAR_WORD
+        for cell in v.split(" | "):
+            if SP._CLEAR_NO.fullmatch(cell):
+                if re.search(r"(?<![a-z])(?:non|un) ?polar", hw) and re.fullmatch(r"(?i)\s*(?:no|n|false|f|nein|non|0)\s*", cell):
+                    out.append(f"polarized ({h}: {cell.strip()})")    # 'Non-polarized: no'
+            elif _BARE_CELL.fullmatch(cell):
+                if not adm and not (re.search(r"\d", cell) and re.match(r"(?:cap|res|ind|c|r|l)\b", _hnorm(h))):
+                    out.append(f"{cell.strip()} " + re.sub(r"(?i)^\s*(?:no|nr|num|number|count)\b\s*(?:of\s+)?", "",
+                                                           SP.header_words(h, lower=False)))
+                elif adm and cell.strip() == "+":
+                    out.append("+")
+                if says and polar_header:
+                    out.append(f"polarized ({h}: {cell.strip()})")    # 'Polar: 1', 'Polarity: yes'
+            elif says:
+                out.append(f"{cell.strip()} {SP.header_words(h, lower=False)}")
+                if polar_header:
+                    out.append(f"polarized ({h}: {cell.strip()})")
+            elif re.search(r"[^\W\d_]", cell):
+                out.append(SP._URL.sub(" ", cell))            # (the words of a web address are no words of the part)
+    return out
+
+
 def mixed_size(cell, header):
     """A footprint cell from a column naming both systems ('Case (Metric / Imp.)') -> (footprint text, [note]). A code
     that is a size in one system only is read in that one ('1608' is the metric 0603, '0805' an inch 0805); one that
@@ -663,11 +822,13 @@ def read_bom(path, columns=None, rules=None, root=None):
     metric_fp = "footprint" in col and metric_header(_hnorm(headers[col["footprint"]]))
     mixed_fp = "footprint" in col and mixed_header(_hnorm(headers[col["footprint"]]))   # 'Case (Metric / Imp.)'
     mm_inch = metric_fp and _inch_only_codes(df, col["footprint"])   # a 'Package (mm)' column holding 1206 / 0805
+    mm_backed = metric_fp and _metric_only_codes(df, col["footprint"])   # ... holding 1608 / 2012: it is metric
     nxt =_column_shapes(df, col["value"] + 1, hlen) if text_src and "value" in col else set()   # what the column
                                                                   # after Value holds in the rows that fit the header
     left = {j: _column_shapes(df, j, hlen) for f, j in col.items() if f == "qty" and text_src
             and "value" in col and j < col["value"]}            # a Qty before Value, in the rows that fit (a package
                                                                   # only one row has is no evidence of a shift)
+    others = _other_columns(df, headers, set(col.values()))       # Color / Tolerance / Voltage ...: kept on the line
     lines, skipped = [], 0
     for idx, row in df.iterrows():
         cells = [str(x).strip() for x in row]
@@ -716,8 +877,20 @@ def read_bom(path, columns=None, rules=None, root=None):
                         "inch or a metric code: not used (give the inch size in an inch column, or the footprint name)")
             d["footprint"] = ""
         elif metric_fp and d.get("footprint"):                   # 'Case Code (mm)': 1608 is an 0603, 0603 an 0201
+            was = d["footprint"]
             d["footprint"], extra = metric_size(d["footprint"], headers[col["footprint"]])
             note += extra
+            code = re.fullmatch(r"\s*(0402|0603)\s*(mm)?\s*", str(was))   # a size in both systems, read by the header:
+            if code and d["footprint"]:                 # always said (2026-11-23 review: an 0201 was released for a
+                head = headers[col["footprint"]]        # 'Package (mm)' 0603 with no note anywhere)
+                note.append(f"footprint '{was}' from the column '{head}': {code.group(1)} read as metric = "
+                            f"{d['footprint']} because the column says mm")
+                if not mm_backed and not code.group(2):  # nothing but the header says metric: a person looks
+                    hold = (f"footprint '{was}' from the column '{head}' was read as the metric code of an inch "
+                            f"{d['footprint']} on the header alone: {code.group(1)} is an inch size too and no cell of "
+                            "the column holds a metric-only size (1608, 2012, 3216 ...) to back the header up: check "
+                            "the size (give the inch size in an inch column, or the footprint name)")
+                    d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
         elif mixed_fp and d.get("footprint"):                    # an 0603 there is an 0603 or an 0201: held
             d["footprint"], extra = mixed_size(d["footprint"], headers[col["footprint"]])
             note += extra
@@ -829,6 +1002,15 @@ def read_bom(path, columns=None, rules=None, root=None):
                     d.pop("bom_hold", None)
         if d.get("lcsc") and not re.fullmatch(r"C\d+", d["lcsc"], re.I):
             d["lcsc_invalid"] = d.pop("lcsc")
+        rest = "" if shifted else " | ".join(f"{headers[j]}: {SS.unquote(cells[j])[:SAID_CELL_MAX]}" for j in others
+                                             if j < len(cells) and cells[j])
+        if rest:                                                  # what the line says in columns no field reads
+            d["other_cells"] = rest                               # (altium_export.to_rows compares them)
+        cut = [] if shifted else [headers[j] for j in others if j < len(cells) and len(SS.unquote(cells[j])) > SAID_CELL_MAX]
+        if cut:                                                   # round 2 of the 2026-11-23 review: a word after the
+            d["bom_hold"] = "; ".join(x for x in (d.get("bom_hold"), (     # cut ('... tantalum') was lost silently
+                f"the cell under {cut[0]!r} is longer than {SAID_CELL_MAX} characters and was not read whole: what it "
+                "says about the part past that is not known: shorten the cell")) if x)
         lines.append(d)
     if skipped:
         print(f"  note: {p.name}: skipped {skipped} row(s) that name no part (section headings, notes)", file=sys.stderr)
@@ -1115,14 +1297,24 @@ def distributor_sku(mpn):
     return "DigiKey" if _SKU_ND.fullmatch(str(mpn or "").strip()) else ""
 
 
-def _maker_words(words):
-    """True for the words before a part number in a 'Manufacturer/MPN' cell that read as a company: a maker ecadlib
-    knows ('3M', 'ON Semi'), or up to four words with no digit that are not a placeholder ('ANY', 'Generic')."""
+def _maker_words(words, pn=""):
+    """True for the words before a part number in a 'Manufacturer/MPN' cell that name a maker ecadlib knows: one of
+    its maker table ('3M', 'ON Semi', 'Nexperia'), a short or old name of one ('TI', 'Fairchild'), or the maker whose
+    ordering code the part number pn is ('YAGEO' before CC0402KRX7R7BB104). Any other words are not taken as the
+    maker (2026-11-23 review, a6 finding 7: 'Capacitor GRM188...', 'SMD LTST-...', 'See note BSS138' gave the makers
+    Capacitor, SMD and See note, which went into the part's Manufacturer and steered the part search): the cell
+    stays whole and the line is held for a person to write the maker and the part number in their own columns."""
     name = " ".join(words)
+    if placeholder_mpn(name) or any(placeholder_mpn(w) for w in words):
+        return False
     if any(P.same_maker(name, m) for m in P.MAKER_DOMAINS.values() if m):
         return True
-    return len(words) <= 4 and not any(re.search(r"\d", w) for w in words) and not placeholder_mpn(name) \
-        and not any(placeholder_mpn(w) for w in words)
+    key = P.maker_key(name)
+    if key and (key in P._MAKER_ALIAS or key in P._MAKER_ALIAS.values()):
+        return True
+    from .mpn_decode import decode
+    series = ((decode(pn) or {}).get("series") or "").split()
+    return any(P.same_maker(name, " ".join(series[:k])) for k in range(1, len(series) + 1))
 
 
 def _maker_and_mpn(cell):
@@ -1137,7 +1329,7 @@ def _maker_and_mpn(cell):
         words = c.split()
         if len(words) == 1 and _PN_CELL.fullmatch(c):
             pairs.append(("", c))
-        elif len(words) > 1 and _PN_CELL.fullmatch(words[-1]) and _maker_words(words[:-1]) and \
+        elif len(words) > 1 and _PN_CELL.fullmatch(words[-1]) and _maker_words(words[:-1], words[-1]) and \
                 parse_value(words[-1]) is None and not _size_code(words[-1]):
             pairs.append((" ".join(words[:-1]), words[-1]))   # not 'Epson FC-135 32.768KA-AG0' (a number with a
         else:                                                  # space), 'Generic 10k 0603' (a value and a size)
@@ -1204,8 +1396,35 @@ def _split_mpn(mpn, maker=""):
 
 _SIZE_CODE = r"(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512|2220|1005|1608|2012|3216|3225|4532|5025|6332)"
 _VALUE_WORD = r"(?:\d+(?:[.,]\d+)?\s*[pnuµμmkKMG]?\s*(?:F|H|Ω|ohms?|R)?|\d*[pnuµμkKMGR]\d+|\d+(?:[.,]\d+)?\s*(?:%|V|W))"
-_SIZE_VALUE_CELL = re.compile(rf"(?:{_SIZE_CODE}|{_VALUE_WORD})(?:\s*[,/;]\s*|\s+)(?:{_SIZE_CODE}|{_VALUE_WORD})"
-                              rf"(?:(?:\s*[,/;]\s*|\s+)(?:{_SIZE_CODE}|{_VALUE_WORD}))*", re.I)
+_SIZE_VALUE_ITEM = re.compile(rf"(?:{_SIZE_CODE}|{_VALUE_WORD})", re.I)
+_SIZE_VALUE_SEP = re.compile(r"\s*[,/;]?\s*")
+SIZE_VALUE_MAX = 80                     # characters: a size-and-value cell ('0805, 4.7uF 10% 50V') is far shorter
+
+
+def _size_value_cell(s):
+    """True for a cell that is two or more chip sizes / values and nothing else, with spaces or one of , / ; between
+    them ('0805, 4.7uF', '0603 10 ohm', '1608 330', '4,7uF 0805'). Walked item by item from each place an item can
+    start, each place looked at once: as one pattern with a repeat (2026-11-23 review, a6 finding 5) every '0603'
+    could be a size or a value, a cell of n of them that did not fit was tried 2^n ways, and 24 took half a minute.
+    A cell over SIZE_VALUE_MAX characters is not such a cell."""
+    n = len(s)
+    if n > SIZE_VALUE_MAX:
+        return False
+    starts, seen = [(0, 0)], {(0, 0)}                    # (where the next item starts, items before it: 0, 1 or 2+)
+    while starts:
+        i, k = starts.pop()
+        for j in range(i + 1, n + 1):
+            if s[j - 1].isspace() or not _SIZE_VALUE_ITEM.fullmatch(s, i, j):   # (an item's own trailing space is
+                continue                                                        # the separator's)
+            if j == n:
+                if k >= 1:
+                    return True
+                continue
+            e = _SIZE_VALUE_SEP.match(s, j).end()
+            if e > j and (e, min(k + 1, 2)) not in seen:
+                seen.add((e, min(k + 1, 2)))
+                starts.append((e, min(k + 1, 2)))
+    return False
 _WORDS_PN = re.compile(r"[A-Za-z][A-Za-z\-]*(?:\s+[A-Za-z][A-Za-z\-]*)+")
 
 
@@ -1216,7 +1435,7 @@ def _not_a_part_number(s):
     s = str(s or "").strip()
     if not s:
         return None
-    if _SIZE_VALUE_CELL.fullmatch(s) and re.search(_SIZE_CODE, s):   # '0805, 4.7uF', '0603 10 ohm', '1608 330'
+    if _size_value_cell(s) and re.search(_SIZE_CODE, s):   # '0805, 4.7uF', '0603 10 ohm', '1608 330'
         return "size_value"
     if _WORDS_PN.fullmatch(s) and not placeholder_mpn(s) and not DNP_MARK.search(s):
         return "words"
@@ -1541,7 +1760,7 @@ def triage(lines, index, provs, http, shared=None):
         pkg = package_of(ln.get("footprint"), ln.get("description"), ln.get("value"))
         if not pkg and pns:                           # a passive's part number names its size by the maker's own code
             from .stdparts import mpn_size            # (RC0603F103CS is Samsung's 0201); an IC's never does
-            pkg = next((s for s in (mpn_size(pn)[1] for pn in pns) if s), None) or package_of(*pns)
+            pkg = next((s for s in (mpn_size(pn, ln.get("manufacturer", ""))[1] for pn in pns) if s), None) or package_of(*pns)
         cls = re.match(r"[A-Z]+", ln.get("designator", "").upper())
         sym = how = None
         own = "" if placeholder_mpn(ln.get("mpn")) else str(ln.get("mpn") or "").strip()
@@ -1625,6 +1844,7 @@ def triage(lines, index, provs, http, shared=None):
             notes.append(dup[i])
         if not (sym and fp_key):
             lcsc_answered = False
+            lcsc_unnamed = False                       # work["lcsc"] came from an LCSC listing that names no maker
             for prov in provs:
                 if isinstance(prov, P.LCSC_SEARCHES) and work.get("lcsc"):
                     if not desc and not ln.get("description") and hasattr(prov, "lookup_lcsc"):   # the number is
@@ -1654,14 +1874,45 @@ def triage(lines, index, provs, http, shared=None):
                 elif getattr(prov, "_plugin", False) and (bad := P.result_shape_problem(r)):
                     r = P.SourceResult(getattr(prov, "name", "?"), error=f"plugin returned a bad SourceResult ({bad})")
                 rdesc = (r.extra or {}).get("description") if isinstance(r.extra, dict) else ""
-                if not src_pkg and r.found and not r.error and r.mpn and (case := _case_text(
+                # 2026-11-23 review 1.11: the BOM names a maker and this result is another maker's listing of the
+                # number (onsemi's SS34 is SMC, Vishay's is SMA): its case, device package, measurements and LCSC
+                # number are not this part's, whichever source or plugin it came from; said once per source.
+                # Round 2 (I5): nor are its description, datasheet links and CAD answer (the line was still built
+                # from the other maker's datasheet and footprint): nothing of it is taken, the next source is asked
+                # Round 3 (A9): nor is a result that names no maker, or more than one ("onsemi / Vishay", "Vishay
+                # (onsemi second source)", a list), this maker's own listing: who made the part it describes is not
+                # known. Except a result for the LCSC number the line already has, the BOM's own or the one an accepted
+                # listing gave: that number names the listing (EasyEDA's answer for it may carry no maker). An LCSC
+                # search's listing with no maker gives its LCSC number only (number_only), so that EasyEDA can be asked
+                # whose part it is; EasyEDA's answer for such a number must name the maker itself
+                named = P.clean_maker(r.manufacturer) if isinstance(r.manufacturer, str) else ""
+                theirs = str(ln.get("manufacturer")).strip()[:60]
+                foreign, number_only = "", False
+                if bom_maker and r.found and not r.error and P.maker_key(ln.get("manufacturer")):
+                    if not P.maker_key(named):
+                        own_number = bool(r.lcsc) and not lcsc_unnamed and P.lcsc_number(r.lcsc) == P.lcsc_number(work.get("lcsc"))
+                        foreign = "" if own_number else f"names no maker, so it is not {theirs}'s own listing"
+                        number_only = bool(foreign) and isinstance(prov, P.LCSC_SEARCHES) and isinstance(r.manufacturer, str) \
+                            and bool(P.lcsc_number(r.lcsc))
+                    elif not P.same_maker(ln.get("manufacturer"), named):
+                        foreign = f"is by {named[:60]}, not {theirs}"
+                    elif P.other_makers(ln.get("manufacturer"), named):
+                        foreign = f"names more than one maker ({named[:60]}), so it is not {theirs}'s own listing"
+                if number_only:
+                    notes.append(f"{prov.name}: {str(r.mpn or r.lcsc)[:60]} {foreign}: only its LCSC number is used, "
+                                 "its package, description and datasheet are not (check the BOM's maker)")
+                elif foreign:
+                    notes.append(f"{prov.name}: {str(r.mpn or r.lcsc or 'its listing')[:60]} {foreign}: "
+                                 "its package and LCSC number are not used, nor its description, datasheet and CAD "
+                                 "data (check the BOM's maker)")
+                if not src_pkg and not foreign and r.found and not r.error and r.mpn and (case := _case_text(
                         getattr(r, "package", "") or slash_case(rdesc, r.mpn), rdesc)) \
                         and _same(r.mpn, ln.get("mpn") or work.get("mpn", "")):   # this exact part's case, never a
                     src_pkg, src_pkg_from = case[:80], prov.name                     # near match's (LM358DR != LM358P)
                     src_height = str((r.extra or {}).get("height") or "")[:60] if isinstance(r.extra, dict) else ""
                     src_device = str((r.extra or {}).get("device_package") or "")[:80] if isinstance(r.extra, dict) else ""
                 rdims = (r.extra or {}).get("dims") if isinstance(r.extra, dict) else None
-                if not src_dims and isinstance(rdims, dict) and rdims and r.found and not r.error and r.mpn \
+                if not src_dims and not foreign and isinstance(rdims, dict) and rdims and r.found and not r.error and r.mpn \
                         and _same(r.mpn, ln.get("mpn") or work.get("mpn", "")):   # this exact part's, like its case
                     from .search_land import dims_text
                     src_dims, src_dims_from = dims_text(rdims), prov.name
@@ -1675,7 +1926,11 @@ def triage(lines, index, provs, http, shared=None):
                 elif isinstance(prov, P.LCSC_SEARCHES):
                     lcsc_answered = True
                     tag = getattr(prov, "note_label", "jlcpcb")
-                    if r.found:
+                    if foreign and not number_only:            # another maker's clone: its LCSC number is not taken
+                        continue
+                    if number_only:                            # (round 3, A9) nobody's listing: its number, no more
+                        work["lcsc"], lcsc_unnamed = r.lcsc, True
+                    elif r.found:
                         work["lcsc"] = r.lcsc
                         if not desc and (r.extra or {}).get("description"):
                             desc, desc_from = r.extra["description"], prov.name
@@ -1696,11 +1951,17 @@ def triage(lines, index, provs, http, shared=None):
                                           f"several listings, not all with a known maker ({', '.join(makers[:4]) or 'none read'})")
                                 notes.append(f"{tag}: {ln.get('mpn') or work.get('mpn', '')} is listed under "
                                              f"{listed}: the maker is not filled")
+                    if not r.found and (r.extra or {}).get("other_maker"):   # listed, but only by another maker
+                        notes.append(f"{tag}: not found ({r.extra.get('note', '')})")
+                        continue
                     notes.append(f"{tag}: MPN -> {r.lcsc}" if r.found else f"{tag}: no exact MPN match")
                     if r.found and (r.extra or {}).get("package_note"):
                         notes.append(f"{tag}: {r.extra['package_note']}")
                     if (r.extra or {}).get("note") and tag != "jlcpcb":
                         notes.append(f"{tag}: {r.extra['note']}")
+                elif foreign:                                  # (2026-11-23 review round 2, I5) only who lists it is kept
+                    seen(*([m for m in (r.extra or {}).get("makers") or [] if isinstance(m, str)] if isinstance(r.extra, dict) else [])
+                         or [named])
                 else:
                     if not (src and src.found and (not r.found or not (r.has_footprint or r.has_symbol))):
                         src = r                                # a found part is kept over a later miss or a later
@@ -1724,7 +1985,7 @@ def triage(lines, index, provs, http, shared=None):
                             sheet, sheet_from = r.extra["datasheet"], prov.name
                         sheets += [u for u in (r.extra or {}).get("datasheets") or [(r.extra or {}).get("datasheet")]
                                    if u and u not in sheets]
-                        if r.lcsc and not work.get("lcsc"):   # an official source (Nexar: LCSC's offer) found the LCSC
+                        if r.lcsc and not work.get("lcsc") and not foreign:   # an official source (Nexar: LCSC's offer) found the LCSC
                             work["lcsc"] = r.lcsc              # number, so the unofficial JLCPCB search is not needed
                             notes.append(f"{prov.name}: MPN -> {r.lcsc}")
                     if r.found is False and getattr(prov, "official", True):

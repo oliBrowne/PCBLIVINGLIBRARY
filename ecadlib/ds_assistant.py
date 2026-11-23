@@ -50,20 +50,45 @@ def _stem(s):
     return re.sub(r"[^A-Za-z0-9._-]+", "_", str(s or "part")).strip("._") or "part"
 
 
-def folder(base, job):
-    """<base>/<part>-<first 10 characters of the request key>: one folder per request. A second read's key
-    ("check-...") keeps 10 characters of the PDF's hash and 6 of its own inputs'. A name the folder cannot hold as written (TESTPART/A and
-    TESTPART#A both stem to TESTPART_A, FOO_ to FOO) gets 6 characters of its own hash too, so two parts never share
-    a folder and each other's answers (review 2026-11-23)."""
+KINDS = ("check-", "pins-")                           # a second read's and a pin drawing read's keys say what they are
+
+
+def _names(job):
+    """(this request's folder name, the name it had before 2026-11-23)."""
     raw, key = str(job.get("name") or job.get("part") or "part"), str(job.get("key") or "nokey")
     stem = _stem(raw)
     if stem != raw:
         stem += "~" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:6]
-    if key.startswith("check-"):                      # the PDF's hash, then the hash of the check's own inputs (model,
-        key = key[:16] + key.rsplit("-", 1)[-1][:6]    # effort, package, pages): a changed check is a new folder
-    else:
-        key = key[:10]
-    return Path(base) / f"{stem}-{key}"
+    kind = next((k for k in KINDS if key.startswith(k)), "")
+    new = f"{stem}-{kind}{key[len(kind):][:10]}-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:8]}"
+    old = key[:16] + key.rsplit("-", 1)[-1][:6] if kind == "check-" else key[:10]
+    return new, f"{stem}-{old}"
+
+
+def same_request(d, job):
+    """Is the folder d this very request's: its job.json carries the request's whole key and its part? A folder
+    with no job.json, or another request's, is not (review 2026-11-23: an answer.json was taken on the folder's name)."""
+    try:
+        had = json.loads((Path(d) / "job.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(had, dict) and bool(job.get("key")) and had.get("key") == str(job.get("key")) \
+        and str(had.get("part")) == str(job.get("part"))
+
+
+def folder(base, job):
+    """<base>/<part>-<kind><first 10 characters of the PDF's hash>-<8 of the hash of the whole request key>: one folder
+    per request. The key's first characters are only the PDF's hash, so a name made of them (as it was) gave every
+    request of one PDF one folder: more pages, another package or another model was answered by the old answer.json
+    (review 2026-11-23). A second read's folder keeps "-check-" in its name and a pin drawing read's "-pins-". A name
+    the folder cannot hold as written (TESTPART/A and TESTPART#A both stem to TESTPART_A, FOO_ to FOO) gets 6 characters
+    of its own hash too, so two parts never share a folder and each other's answers.
+    A folder under the old name is still this request's when its job.json carries the request's whole key (an answer
+    saved before the change is kept, for the request it answered and no other)."""
+    new, old = _names(job)
+    if not (Path(base) / new).exists() and same_request(Path(base) / old, job):
+        return Path(base) / old
+    return Path(base) / new
 
 
 def _blocks(job):
@@ -91,7 +116,7 @@ def answer(base, job, model="assistant"):
     An answer.json that is not JSON raises DatasheetError naming the file (fix it and run again)."""
     from .datasheet import DatasheetError
     f = folder(base, job) / "answer.json"
-    if not f.is_file():
+    if not f.is_file() or not same_request(f.parent, job):   # another request's folder: no answer yet (asked afresh)
         return None
     try:                                              # (UTF-16 from PowerShell's > is not UTF-8: said, not a crash)
         text = f.read_text(encoding="utf-8-sig")
@@ -107,7 +132,9 @@ def request(base, job):
     """Write this request's folder (the pages, the instructions, the schema) and the READ_ME index -> the folder."""
     d = folder(base, job)
     d.mkdir(parents=True, exist_ok=True)
-    content, system = _blocks(job)
+    if (d / "answer.json").is_file() and not same_request(d, job):   # an answer to no request this folder knows (its
+        (d / "answer.json").replace(d / "answer.other-request.json")   # job.json gone or another's): set aside, never
+    content, system = _blocks(job)                                    # taken for this one once job.json is written
     files, texts, links, n_img = [], [], [], 0
     for b in content:
         if not isinstance(b, dict):

@@ -36,8 +36,10 @@ PLAIN = (
     ("0603", "R", "RES 10K OHM 1% 1/10W 0603"), ("0402", "R", "Thick film resistor 4.7k 5% AEC-Q200 anti-sulfur"),
     ("2512", "R", "RES 0.01 OHM 1% 1W 2512 current sense"), ("0603", "R", "Zero ohm jumper 0603"),
     ("0603", "R", "NTC thermistor 10k 1% B3950"), ("0805", "R", "Resistor 4.7k"), ("0603", "R", "RES 4.02K 0.1% 25ppm"),
-    ("0603", "C", "CAP CER 0.1UF 50V X7R 0603"), ("0805", "C", "MLCC 10uF 16V X5R"), ("1206", "C", "Cap 4.7uF 25V 10%"),
-    ("0402", "C", "CAP CER 4PF 50V C0G/NP0 0402"), ("1210", "C", "Capacitor 22uF 6.3V soft termination"),
+    ("0603", "C", "CAP CER 0.1UF 50V X7R 0603"), ("0805", "C", "MLCC 10uF 16V X5R"), ("1206", "C", "Cap 4.7uF 25V 10% X7R"),
+    ("0402", "C", "CAP CER 4PF 50V C0G/NP0 0402"), ("1210", "C", "Ceramic capacitor 22uF 6.3V soft termination"),
+    # (review 2026-11-23, 1.12: with a part number no MLCC code reads, 'Cap 4.7uF 25V 10%' alone no longer builds the
+    # unpolarized chip: the two capacitor lines above now name their dielectric; see test_review1123_std_parts)
     ("0603", "L", "FERRITE BEAD 600 OHM 0603 1LN"), ("0805", "L", "Inductor 10uH 20% shielded"),
     ("0402", "L", "RF inductor 3.9nH wirewound high-Q"), ("1210", "L", "Power inductor 4.7uH 2A"),
     ("0603", "LED", "LED RED CLEAR 0603 SMD"), ("0805", "LED", "LED green 520nm 20mA"),

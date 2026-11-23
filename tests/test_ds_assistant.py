@@ -179,4 +179,16 @@ def test_a_pdf_ecadlib_could_not_download_is_asked_of_the_assistant_then_read():
             rd.offline = True
             job = rd.job("BAS16,215", [(dead, "BOM")], "SOD-323")
         assert job["prov"].get("sent_as") != "url" and "saved by your assistant" in job["prov"]["where"], job["prov"]
+        # the file saved here is another part's sheet ("TESTPART buck converter"). Until review 2026-11-23 it was read
+        # as BAS16's on its file name alone; it is still read (there is no other PDF), but flagged like a downloaded
+        # PDF that does not name the part, and that review line keeps the part with a person
+        assert "doesn't mention BAS16,215" in job["prov"]["unnamed"], job["prov"]
+        (DA.pdf_folder(base) / "BAS16,215.pdf").write_bytes(TC.TR.pdf_lines([
+            ["BAS16 high-speed switching diode", "SOD-323", "Product data sheet"]]))     # (text enough to tell the part by:
+        #                             with less it cannot be told, and that is flagged too since review 2026-11-23, round 2)
+        with TB.patched(api):
+            rd = TC.reader(d, ASSIST)
+            rd.offline = True
+            job = rd.job("BAS16,215", [(dead, "BOM")], "SOD-323")
+        assert "unnamed" not in job["prov"] and "saved by your assistant" in job["prov"]["where"], job["prov"]
     assert api.calls == []

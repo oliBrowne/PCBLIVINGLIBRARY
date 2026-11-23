@@ -576,10 +576,10 @@ def _hold_lost_copper(st, name, notes):
         st.setdefault("verify", []).append(held)
 
 
-def own_symbol_ref(item, ln):
+def own_symbol_ref(item, ln, search=""):
     """One shared symbol per kind: a polarized capacitor never takes the plain capacitor's file, nor a ferrite bead the
     inductor's. Sets item's Library Ref to its own shared one (every run, a resumed part too) -> the ref."""
-    kind, ref = passive_kind(item, ln), item["symbol"]["ref"]
+    kind, ref = passive_kind(item, ln, search), item["symbol"]["ref"]
     if kind == "CP" and ref == AX.GENERIC_SYMBOL["Capacitors"]:
         ref = item["symbol"]["ref"] = POLARIZED_SYMBOL
     elif kind == "L" and ref == AX.GENERIC_SYMBOL["Inductors"] and Run.ferrite(item, ln):
@@ -587,15 +587,55 @@ def own_symbol_ref(item, ln):
     return ref
 
 
-def passive_kind(item, ln=None):
+def passive_kind(item, ln=None, search=""):
     """R / C / CP / L / LED for a part that takes the generic passive symbol and a chip land by package, else None.
     The description decides too: a part it calls an array, a common-mode choke, 4-terminal or RGB is not a two-pin
     passive (None: it is looked up by its part number like any other part), and a capacitor it calls tantalum /
-    polymer / electrolytic is polarized whatever its part number is."""
-    from . import stdparts as SP
+    polymer / electrolytic is polarized whatever its part number is.
+    Review 2026-11-23 (1.1, 1.12): every cell of the BOM line is read, not only the Description (the Value, the
+    LibRef, the footprint cell, EAGLE's Device and the cells of columns the reader does not map: line 'other_cells').
+    A resistor or capacitor with NO part number is a generic passive only when its Value and Description are
+    understood whole (stdparts.generic_passive_hold); else item['generic_hold'] says which word held it (the release
+    check shows it) and the part is no generic passive. A capacitor WITH a part number is the unpolarized 'C' only
+    when something says ceramic (an MLCC code reads the number, or the line names a ceramic dielectric).
+    Round 2 (I8): search is the part search's description of the part. KiCad's own chip land name in the footprint
+    cell ('C_1206_3216Metric') counts as the BOM saying unpolarized, but a word that says polarized from ANY source
+    beats it: the Value, the Description, any other cell, a header ('Polarized: yes') and the part search ('CAP TANT')."""
+    from . import mpn_decode as MD, stdparts as SP
+    from .bom_triage import placeholder_mpn
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
     desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), (ln or {}).get("description")) if x))
-    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc):
+    par = _par(item)
+    mpn = "" if placeholder_mpn(par.get("Manufacturer Part Number", "")) else str(par.get("Manufacturer Part Number", "") or "").strip()
+    value = str((ln or {}).get("value") or par.get("Value") or "")
+    own = [str(item["footprint"].get(k) or "") for k in ("kicad", "bom_ref", "ref")]   # the item's own footprint text
+    from .bom_triage import line_cells, said_cells   # the footprint cell, the LibRef and every unmapped cell; a bare
+    cells = said_cells(ln or {}) + own               # yes / number is read with its header ('Polarized: yes', round 2 I10)
+    counted = said_cells(ln or {}, admin=False) + own    # round 3 (B3): a Function / Notes column says what the part is
+    by_role = line_cells(ln or {})                       # for: its words that count elements are not the part's
+    if not mpn and cells[0] and cells[0] not in own and any(own):
+        cells[0] = counted[0] = ""           # a no-MPN item is paired with a line by its value (_line_for): of two
+        by_role = [c for c in by_role if c[0] != "footprint"]   # 10k lines, '0603' and '0603 8P4R', each item reads its
+        #                                                         own footprint text
+    code = MD.decode(mpn) if mpn else None
+    polar = cat == "Capacitors" and bool(
+        fp.startswith("CP_") or SP.polar_size_prefix(cells[0], *own)     # ('CP1206', 'cp0805': round 3, A1)
+        or SP.says_polarized(desc, value, *cells) or SP.says_polarized(SP.cap_words(search))
+        or (mpn and SP.POLAR_CAP.match(SP._norm(mpn))) or (code and code["kind"] == "CP"))
+    if ln is not None:                       # decided from the BOM line; a caller with no line keeps what it decided
+        hold = None if mpn or polar else SP.generic_passive_hold(cat, value, desc, own, by_role)   # (round 3: each
+        #                                      cell is read by what its column is: stdparts.cell_hold)
+        said = next((t for t in (value, desc, *cells) if SP.says_polarized(t)), "") if polar and not mpn else ""
+        if said:                             # 'C1, 10uF tantalum, 1206': the word that makes it a polarized part
+            hold = (f"the BOM line says {SP.POLAR_WORD.search(said).group(0).strip()!r} ({said.strip()[:60]!r}): a "
+                    "capacitor with a + side is not a generic chip of its value and size; give its part number")
+        if hold:
+            item["generic_hold"] = hold
+        else:
+            item.pop("generic_hold", None)
+    if item.get("generic_hold") and not mpn and not polar:
+        return None
+    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc, value, *counted):
         return None
     if cat in ("Thermistors", "Varistors"):  # altium_export.sensor_folder filed it: NTC / PTC / VAR, TH (type unsaid)
         kind = SP.sensor_kind((item.get("description"), (ln or {}).get("value"), (ln or {}).get("description")),
@@ -603,11 +643,14 @@ def passive_kind(item, ln=None):
         return kind if kind in ("NTC", "PTC", "VAR") and SP.SENSOR_FOLDER[kind] == cat else "TH" if cat == "Thermistors" else None
     if cat == "Resistors":
         return "R"
-    if cat == "Capacitors":                  # polarized by its land, its description or its part number's series
-        mpn = SP._norm(_par(item).get("Manufacturer Part Number", ""))     # (KEMET T491, AVX TAJ, Panasonic EEE ...)
-        bom_fp = SP._strip_lib(str((ln or {}).get("footprint") or "")).strip()
-        return "CP" if fp.startswith("CP_") or bom_fp.startswith("CP_") or SP.says_polarized(desc) or \
-            (mpn and SP.POLAR_CAP.match(mpn)) else "C"
+    if cat == "Capacitors":                  # polarized by its land, any cell of its line or its part number's series
+        if polar:                            # (KEMET T491, AVX TAJ, Panasonic EEE ...)
+            return "CP"
+        if mpn and not (code and code["kind"] == "C") and SP.mpn_size(mpn, par.get("Manufacturer", ""))[0] != "C" \
+                and not SP.says_unpolarized(desc, value, SP.cap_words(search), *cells):
+            return None                      # a part number no MLCC code reads, nothing says ceramic: not known to be
+        return "C"                           # unpolarized, so no generic capacitor (stdparts.resolve says why). Round 3
+        #                                      (A8): KiCad's chip land name alone ('C_1206_3216Metric') does not say so
     if cat == "Inductors":
         return "L"
     if cat == "Diodes" and (fp.startswith("LED_") or SP.says_led(item.get("description"))):
@@ -1229,8 +1272,9 @@ class Run:
         dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
-        own_symbol_ref(item, ln)
-        kind, fp_name, sym_name = passive_kind(item, ln), item["footprint"]["ref"], item["symbol"]["ref"]
+        search = str(row.get("src_description") or "")       # what the part search calls the part ('CAP TANT ...')
+        own_symbol_ref(item, ln, search)
+        kind, fp_name, sym_name = passive_kind(item, ln, search), item["footprint"]["ref"], item["symbol"]["ref"]
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         sensor_hold(st, item, ln, row, kind)
@@ -1565,7 +1609,7 @@ class Run:
             pkg = package_of(item["footprint"].get("kicad") or fp_name, item.get("description"))
             if not pkg and kind in ("R", "C", "L"):    # no package in the BOM: the size the maker's part number states
                 from . import stdparts as SP           # (RC0603FR-0710KL is an 0603), before any converted source
-                mk, size = SP.mpn_size(mpn)
+                mk, size = SP.mpn_size(mpn, str(ln.get("manufacturer") or st.get("maker") or ""))
                 pkg = size if size and mk in ("", kind) else None
             elif not pkg and kind in SENSOR_KINDS:     # a thermistor / varistor series' size code (NCP18: 0603)
                 from . import stdparts as SP
@@ -1765,8 +1809,16 @@ class Run:
             desc = f"{desc} {way}".strip()
         if case and (k == "CP" or k == "C" and SP.POLAR_CAP.match(SP._norm(mpn))):    # a tantalum's size + height
             case = SP.tantalum_search_text(case, row.get("src_height"), mpn)            # name its EIA case
-        res = resolve_standard([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value")],
-                               case, str(row.get("src_package_device") or ""), k, mpn, desc)
+        if item.get("generic_hold") and not mpn and k != "CP":   # a no-MPN R / C whose line is not understood: no chip
+            res = {"footprint": None, "kicad_ref": None, "symbol": None, "fp_how": item["generic_hold"],
+                   "sym_how": "not a generic passive (see the footprint)"}
+        else:                                      # review 2026-11-23: the Value cell is passed as the value (it names
+            # no land by itself: '1210' is 1.21 kOhm), with the line's maker (a part-number size rule of another maker
+            # is not used) and the part search's own description (what a capacitor is made of)
+            res = resolve_standard([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad")],
+                                   case, str(row.get("src_package_device") or ""), k, mpn, desc,
+                                   value=str(ln.get("value") or ""), search=str(row.get("src_description") or ""),
+                                   maker=str(ln.get("manufacturer") or st.get("maker") or row.get("src_manufacturer") or ""))
         got = []
         if not st["footprint"] and res["footprint"]:
             sp = SP.spec(res["footprint"])
@@ -2110,13 +2162,17 @@ class Run:
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
         if not data:
             return None
+        # the order must be this part's PACKAGE's: a family sheet prints the TO-92 table as text and draws the SOT-23
+        # (review 2026-11-23, 1.4). The package is the land the part was given, by name
+        land, doubts = str((st.get("footprint") or {}).get("source") or "").split(":")[-1], []
         try:
-            orders = PT.pin_orders_pdf(data, "GSD" if what.endswith("MOS") else "BEC")
+            orders = PT.pin_orders_pdf(data, "GSD" if what.endswith("MOS") else "BEC", part=mpn,
+                                       package=(land,) if land else (), doubts=doubts)
         except Exception:
             return None
         if len(orders) != 1:
             st["tried"].append(f"standard: {mpn} ({what}): its datasheet's text does not settle the pin order "
-                               f"({' and '.join(orders) + ' both agree' if orders else 'no pin table or drawing read'})")
+                               f"({doubts[0] if doubts else ' and '.join(orders) + ' both agree' if orders else 'no pin table or drawing read'})")
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link}, and in no "
                            "other order")
@@ -2133,15 +2189,20 @@ class Run:
         if not data:
             return None
         want, others = SP.so8_fet_orders()
+        # the order must be this part's PACKAGE's (review 2026-11-23, 1.4): the package is the land the part was given
+        land = str((st.get("footprint") or {}).get("source") or "").split(":")[-1]
         try:
             texts, figs = PT.page_texts(data), PT.page_figures(data)
-            ok = [o for o in [want] + others
-                  if PT.check(texts, list(zip(map(str, range(1, 9)), o)), figs, pin_count=8)["status"] == "agreed"]
+            got = {o: PT.check(texts, list(zip(map(str, range(1, 9)), o)), figs, pin_count=8, part=mpn,
+                               package=(land,) if land else ()) for o in [want] + others}
+            ok = [o for o in got if got[o]["status"] == "agreed"]
+            doubt = PT.package_doubt(texts, got[want].get("page"), (land,) if land else (), 8, got[want].get("where"),
+                                     got[want].get("above"), part=mpn) if ok == [want] else None
         except Exception:
             return None
-        if ok != [want]:
+        if ok != [want] or doubt:
             st["tried"].append(f"standard: {mpn} ({what}, SO-8): its datasheet's text does not settle pins 1-8 "
-                               f"({', '.join(ok) + ' agree' if ok else 'no pin table or drawing read'})")
+                               f"({'it prints ' + ', '.join(want) + ', but ' + doubt if doubt else ', '.join(ok) + ' agree' if ok else 'no pin table or drawing read'})")
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1-8 are {', '.join(want)} in {link}, and in no other "
                            "order a maker prints")
@@ -2157,13 +2218,16 @@ class Run:
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
         if not data:
             return None
+        # the order must be this part's PACKAGE's: a family sheet prints the TO-92 table as text and draws the SOT-23
+        # (review 2026-11-23, 1.4). The package is the land the part was given, by name
+        land, doubts = str((st.get("footprint") or {}).get("source") or "").split(":")[-1], []
         try:
-            orders = PT.diode_orders_pdf(data)
+            orders = PT.diode_orders_pdf(data, package=(land,) if land else (), doubts=doubts, part=mpn)
         except Exception:
             return None
         if len(orders) != 1:
             st["tried"].append(f"standard: {mpn} ({what}, three leads): its datasheet's words do not settle which lead "
-                               "is the anode and which the cathode")
+                               "is the anode and which the cathode" + (f" ({doubts[0]})" if doubts else ""))
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link} "
                            "(A anode, K cathode, N not connected), and in no other order")
@@ -2589,6 +2653,8 @@ class Run:
             if held:                                  # checked land, no settle), a read that still fails a check
                 raise D.DatasheetError(held)          # that can build it wrong is held, nothing written
             st["review"].extend(pad_table_problems(res["spec"]))
+            if res.get("cross_check"):                # built from the read's own numbers: an agreement that compared
+                res = dict(res, cross_check=CC.built_from_read(res["cross_check"]))   # not all of them is none (review 2026-11-23, 1.7)
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
             except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: name it, not KeyError
@@ -2874,17 +2940,17 @@ def land_symbol_fits(filters, pins, pads, land_ref):
     return bool(pins) and set(pins) == set(pads) and _filter_hit(filters, land_ref)
 
 
-def resolve_standard(texts, case, device, kind, mpn, desc):
+def resolve_standard(texts, case, device, kind, mpn, desc, **line):
     """stdparts.resolve for a part's own texts and its part search's case. Where they name no land (DigiKey's group
     'TO-236-3, SC-59, SOT-23-3' read name by name ends at KiCad's ambiguous 'SOT-23-3'; '44-TQFP' names no body), the
     one land the case and its device package name together (case_or_device_land) is the part's."""
     from . import stdparts as SP
-    res = SP.resolve(list(texts) + [case], kind, mpn, desc)
+    res = SP.resolve(list(texts) + [case], kind, mpn, desc, **line)      # line: value, maker, search (stdparts.resolve)
     if res["footprint"] or not case or kind == "CP" or "disagree" in str(res.get("fp_how") or ""):
         return res                                    # (a case whose own size codes disagree, '0402 (1006 Metric)',
     land = case_or_device_land(case, device, kind)    # names no land by any reading: held as before)
     if land:
-        named = SP.resolve(list(texts) + [land], kind, mpn, desc)
+        named = SP.resolve(list(texts) + [land], kind, mpn, desc, **line)
         if named["footprint"] == land:
             named["fp_how"] = f"the part search's case {case!r}" + (f" and device package {device!r}" if device else "") \
                 + f" name {land}"
@@ -3051,7 +3117,9 @@ def read_confirmed(res, job, got, drawn=None):
         from . import pin_text as PT
         pins = [(q.get("num"), q.get("name")) for q in (res.get("symbol") or {}).get("pins") or ()]
         data = job.get("data")
-        v = PT.check_pdf(data, pins, pin_count=(res.get("spec") or {}).get("pin_count"))
+        # few_named, as variant_agrees and pinout_agrees apply it: a read that names two pins of eight and calls the
+        # rest NC compared too little to release on (review 2026-11-23, 1.10)
+        v = few_named(PT.check_pdf(data, pins, pin_count=(res.get("spec") or {}).get("pin_count"), blank=True), pins)
         if v["status"] == "agreed":
             why.append(f"{v['pins']} pins agree with the {v.get('where', 'pin table')} on PDF page {v['page']} (text layer)")
         elif v["status"] == "unchecked" and not v.get("doubt") and drawn is not None:   # no pin table in the text: the pinout DRAWING, read
@@ -3352,7 +3420,7 @@ def alternate_footprint(ln, st):
     if want and own == want:
         return None, (f"{ALTERNATE} {mpn}: the base part's footprint {fp} kept: {mpn}'s datasheet read names the same "
                       "package")
-    mk, ms = SP.mpn_size(ln.get("mpn"))                # a passive whose part number codes its chip size (RC0603FR..,
+    mk, ms = SP.mpn_size(ln.get("mpn"), ln.get("manufacturer", ""))   # a passive whose part number codes its chip size (RC0603FR..,
     if ms and not SP.own_land_name(fp):                # GRM155..): that size and kind on a plain chip land (R-FX10-5)
         m = re.match(r"^(R|C|L)_(\d{4,5})_\d{4,5}Metric$", want or "")
         kind, size = (m.group(1), m.group(2)) if m else (st.get("kind"), SP.chip_size(fp, strict=True))
@@ -3643,7 +3711,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         if not it["footprint"]["ref"]:
             it["footprint"]["ref"] = AL.lib_name(it["name"])
         fpr, st = _fingerprint(it, ln, row), state.get(it["name"])
-        own_symbol_ref(it, ln)                 # before a resumed part is skipped: the same Library Ref as when built
+        own_symbol_ref(it, ln, str(row.get("src_description") or ""))   # before a resumed part is skipped: the same
+        #                                                                 Library Ref as when built
         redo = refresh is not None and (not refresh or it["name"] in refresh)
         stale = bool(st) and (old.get(it["name"]) or {}).get("status") == "held" and not _built_now(st, rules)
         if stale and st.get("key") == fpr and _done(st, out) and not redo:

@@ -377,14 +377,21 @@ def standard_ok(kind, mapping, packages):
 
 
 # ---------------------------------------------------------------- the comparison
-def same_pin(kind, num, a, b):
-    """The symbol's name a and the drawing's label b name the same pin (for a crystal: the same role)."""
+def same_pin(kind, num, a, b, names=((), ())):
+    """The symbol's name a and the drawing's label b name the same pin (for a crystal: the same role). names: the
+    symbol's and the drawing's other names (CLK_N beside CLK_P is a pair's negative leg, not an active-low pin)."""
     if kind == "crystal":
         return xtal_role(num, a) is not None and xtal_role(num, a) == xtal_role(num, b)
     if kind in ("mosfet", "bjt", "diode") and role(a) and role(a) == role(b):
         return True
     if (not str(b or "").strip() or role(b) == "NC") and role(a) == "NC":
         return True
+    # the same name with the active-low mark on one side only (Q vs ~{Q}, EN vs ~{EN}) is the pin's sense inverted:
+    # names_agree() reads both as one name, so the mark is compared on its own, as crosscheck.compare_pins does
+    # (review 2026-11-23, 1.9)
+    from .eval.score import active_low
+    if active_low(a, names[0]) != active_low(b, names[1]):
+        return False
     return names_agree(a, b)
 
 
@@ -392,7 +399,8 @@ def compare(kind, pins, mapping):
     """[(num, symbol name, drawing label)] that differ, plus pin numbers on one side only."""
     sym = {str(n): str(s or "") for n, s in pins}
     out = [(n, sym.get(n, "(none)"), mapping.get(n, "(none)")) for n in sorted(set(sym) | set(mapping), key=_key)
-           if n not in sym or n not in mapping or not same_pin(kind, n, sym[n], mapping[n])]
+           if n not in sym or n not in mapping
+           or not same_pin(kind, n, sym[n], mapping[n], (list(sym.values()), list(mapping.values())))]
     return out
 
 
