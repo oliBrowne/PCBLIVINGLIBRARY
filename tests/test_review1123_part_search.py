@@ -210,6 +210,48 @@ def test_triage_refuses_case_measurements_and_lcsc_number_of_another_makers_resu
         assert "not used" not in r["notes"], r["notes"]
 
 
+# ------------------------------------------------------------------ a6-3 a "Package (mm)" column of 0603 / 0402 only
+def _read(tmp_path, text, name="bom.csv"):
+    f = tmp_path / name
+    f.write_text(text, encoding="utf-8")
+    return BT.read_bom(f)[0]
+
+
+def _holds(lines):
+    from ecadlib import altium365 as A, rules as RU
+    return {i["name"]: i.get("bom_holds") or [] for i in A.plan(lines, None, rules=RU.DEFAULTS)}
+
+
+@lite
+def test_mm_column_with_only_0603_and_0402_is_noted_and_held(tmp_path):
+    lines = _read(tmp_path, "Designator,Qty,Value,Package (mm)\nR1,1,10k,0603\nR2,1,4k7,0402\nC1,1,100nF,0402\n")
+    by = {l["designator"]: l for l in lines}
+    assert "0603 read as metric = 0201 because the column says mm" in by["R1"].get("bom_note", ""), by["R1"]
+    assert "0402 read as metric = 01005 because the column says mm" in by["C1"].get("bom_note", ""), by["C1"]
+    for l in lines:                                    # nothing in the column backs the header up: a person looks
+        assert "on the header alone" in l.get("bom_hold", ""), l
+    holds = _holds(lines)
+    assert len(holds) == 3 and all("on the header alone" in " ".join(v) for v in holds.values()), holds
+    row = BT.triage(lines, KiCadIndex([]), [], None)[0]
+    assert "read as metric = 0201" in row["notes"], row["notes"]
+
+
+@lite
+def test_mm_column_backed_by_a_metric_only_code_is_noted_not_held(tmp_path):
+    lines = _read(tmp_path, "Designator,Qty,Value,Package (mm)\nR1,1,10k,0603\nR2,1,4k7,1608\nC1,1,100nF,2012\n")
+    by = {l["designator"]: l for l in lines}
+    assert by["R1"]["footprint"] == "0201" and by["R2"]["footprint"] == "0603" and by["C1"]["footprint"] == "0805", by
+    assert "0603 read as metric = 0201 because the column says mm" in by["R1"]["bom_note"], by["R1"]
+    assert not any(l.get("bom_hold") for l in lines), lines
+    assert not by["R2"].get("bom_note") and not by["C1"].get("bom_note"), by      # 1608 is metric anywhere: no note
+    # a cell that says mm itself needs no other cell to back it
+    lines = _read(tmp_path, "Designator,Qty,Value,Package (mm)\nR1,1,10k,0603 mm\n")
+    assert lines[0]["footprint"] == "0201" and "read as metric" in lines[0]["bom_note"] and not lines[0].get("bom_hold")
+    # an inch column is untouched
+    lines = _read(tmp_path, "Designator,Qty,Value,Package\nR1,1,10k,0603\n")
+    assert lines[0]["footprint"] == "0603" and not lines[0].get("bom_note") and not lines[0].get("bom_hold"), lines
+
+
 if __name__ == "__main__":
     import sys
     fns = [f for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
