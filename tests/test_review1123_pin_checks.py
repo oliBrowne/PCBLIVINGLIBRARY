@@ -8,24 +8,38 @@ from ecadlib import pin_text as PT
 from tests.fixtures_lite import lite
 
 
+WIDE = {"C": 7.22, "E": 6.67, "L": 5.56, "N": 7.22, "P": 6.67, "Q": 7.78, "R": 7.22}     # Helvetica at 10 pt
+
+
 def pdf(pages, bars=()):
-    """A PDF of text lines, one list a page; bars: (page index, line index, word) drawn with a line over it."""
-    from reportlab.pdfgen import canvas
-    b = io.BytesIO()
-    c = canvas.Canvas(b)
+    """A PDF of text lines (Helvetica 10 pt), one list a page, written by hand: no PDF library is needed to make it.
+    bars: (page index, line index): the first word of that line is drawn with a line over it, as a PDF draws the bar
+    of an active-low name (the text layer then has the bare letters)."""
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", None, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
     for pi, lines in enumerate(pages):
-        c.setFont("Helvetica", 10)
-        y = 800
+        ops, y = [], 800
         for li, ln in enumerate(lines):
-            c.drawString(50, y, ln)
-            for p, l, word in bars:
-                if (p, l) == (pi, li):
-                    x = 50 + c.stringWidth(ln[:ln.index(word)], "Helvetica", 10)
-                    c.line(x, y + 9, x + c.stringWidth(word, "Helvetica", 10), y + 9)
+            text = ln.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            ops.append(f"BT /F1 10 Tf 50 {y} Td ({text}) Tj ET")
+            if (pi, li) in bars:
+                ops.append(f"0.5 w 50 {y + 9} m {50 + sum(WIDE[ch] for ch in ln.split()[0]):.2f} {y + 9} l S")
             y -= 16
-        c.showPage()
-    c.save()
-    return b.getvalue()
+        content = "\n".join(ops).encode("latin-1")
+        kids.append(len(objs) + 1)
+        objs.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Contents %d 0 R /Resources << /Font << /F1 3 0 R >> >> >>"
+                    % (len(objs) + 2))
+        objs.append(b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream")
+    objs[1] = b"<< /Type /Pages /Kids [" + b" ".join(b"%d 0 R" % k for k in kids) + b"] /Count %d >>" % len(kids)
+    out, offs = io.BytesIO(), []
+    out.write(b"%PDF-1.4\n")
+    for i, o in enumerate(objs, 1):
+        offs.append(out.tell())
+        out.write(b"%d 0 obj\n" % i + o + b"\nendobj\n")
+    x = out.tell()
+    out.write(b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1) + b"".join(b"%010d 00000 n \n" % o for o in offs))
+    out.write(b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, x))
+    return out.getvalue()
 
 
 # ------------------------------------------------------------------ 1.4: a pin order is this PACKAGE's, or it is none
@@ -152,7 +166,7 @@ def test_a_diodes_lead_order_is_this_packages_or_none():
 # A D flip-flop's pin table as a PDF prints it: the bar over a name is a drawn line, so the text has "Q" on two rows
 FLOP = ["Pin Functions", "NAME NO. I/O DESCRIPTION", "CLK 1 I Clock input", "D 2 I Data input", "Q 3 O Inverted output",
         "GND 4 - Ground", "Q 5 O Output", "CLR 6 I Clear, active low", "PRE 7 I Preset, active low", "VCC 8 - Supply"]
-FLOP_BARS = [(0, 4, "Q"), (0, 7, "CLR"), (0, 8, "PRE")]
+FLOP_BARS = [(0, 4), (0, 7), (0, 8)]
 RIGHT = [("1", "CLK"), ("2", "D"), ("3", "~{Q}"), ("4", "GND"), ("5", "Q"), ("6", "~{CLR}"), ("7", "~{PRE}"), ("8", "VCC")]
 WRONG = [("1", "CLK"), ("2", "D"), ("3", "Q"), ("4", "GND"), ("5", "~{Q}"), ("6", "~{CLR}"), ("7", "~{PRE}"), ("8", "VCC")]
 BARE = [(n, s.strip("~{}")) for n, s in RIGHT]
@@ -201,7 +215,7 @@ def test_a_mark_printed_in_the_text_is_compared():
 def test_en_where_the_datasheet_draws_a_bar_over_en_does_not_agree():
     rows = ["Pin Functions", "NAME NO. DESCRIPTION", "IN 1 Input", "GND 2 Ground", "EN 3 Enable, active low",
             "FB 4 Feedback", "OUT 5 Output"]
-    data = pdf([rows], [(0, 4, "EN")])
+    data = pdf([rows], [(0, 4)])
     pins = lambda en: [("1", "IN"), ("2", "GND"), ("3", en), ("4", "FB"), ("5", "OUT")]
     assert PT.check_pdf(data, pins("~{EN}"))["status"] == "agreed"
     v = PT.check_pdf(data, pins("EN"))
