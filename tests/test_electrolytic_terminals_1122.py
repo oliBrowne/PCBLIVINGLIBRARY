@@ -41,6 +41,9 @@ def test_other_molded_parts_keep_the_rule():
     spec = can(desc="Schottky diode SMA", name="D_SMA")
     assert twenty(spec)
     assert twenty(can(desc="Tantalum capacitor, case D", name="CP_EIA-7343-31"))
+    for desc in ("Solid Tantalum Electrolytic Chip Capacitor", "Niobium oxide electrolytic capacitor",   # review 11-22
+                 "Non-electrolytic film capacitor", "Aluminium polymer electrolytic chip", "Electrolytic capacitor"):
+        assert twenty(can(desc=desc, name="")), desc
 
 
 def test_land_text_accepts_a_can_land_past_the_base_plate():

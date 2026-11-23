@@ -2144,14 +2144,16 @@ def _header_mount(spec):
     return []
 
 
-ELECTROLYTIC_CAN = re.compile(r"\belectrolytic\b|\bCP_Elec_", re.I)
+ELECTROLYTIC_CAN = re.compile(r"alumin(?:i)?um[\w\s,-]{0,40}?electrolytic|\bCP_Elec_", re.I)
+NOT_CAN = re.compile(r"tantal|niob|non-?\s*electrolytic|polymer", re.I)   # solid / polymer chips: block bodies
 
 
 def _electrolytic_can(spec):
     """An SMD aluminium electrolytic, by the read's description or KiCad's CP_Elec_ name: its two terminals are strips
     0.65-1.3 mm wide under a 6.6-19 mm base plate (Panasonic FK/FC, Nichicon UWX, Wurth WCAP-ASLI), 7-13 % of the
     body width (2026-11-22: EEE-FK1V101P's W 0.90 on an 8.3 mm plate was refused as a misread)."""
-    return bool(ELECTROLYTIC_CAN.search(f"{spec.get('name') or ''} {spec.get('description') or ''}"))
+    text = f"{spec.get('name') or ''} {spec.get('description') or ''}"
+    return bool(ELECTROLYTIC_CAN.search(text)) and not NOT_CAN.search(text)
 
 
 def _two_terminal_terms(spec):

@@ -42,7 +42,7 @@ one the first read built, so a part this check cannot judge is no worse off than
 """
 import base64, hashlib, json, re
 
-from .crosscheck import names_agree, numbered, Unavailable
+from .crosscheck import names_agree, numbered, Unavailable, PORT_BIT
 
 MODES = ("auto", "off")
 MAX_PAGES = 3
@@ -410,8 +410,7 @@ def text_names(texts, page_list, pins, data=None, words_of=None):
         for w in re.split(r"[\s,;:()\[\]]+", str(texts.get(p) or "")):
             if w:
                 words.add(norm_name(w))
-        from .crosscheck import PORT_BIT              # P2[0] in the text is the symbol's P2.0 (Cypress PSoC)
-        words |= {norm_name(f"{a}.{b}") for a, b in PORT_BIT.findall(str(texts.get(p) or ""))}
+        words |= {norm_name(f"{a}.{b}") for a, b in PORT_BIT.findall(str(texts.get(p) or ""))}   # P2[0] is P2.0
         if data is not None:
             words |= {norm_name(w) for w, _, _ in phrases((words_of or page_words)(data, p))}
     if not words:

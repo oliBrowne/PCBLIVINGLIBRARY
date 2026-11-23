@@ -14,6 +14,10 @@ def test_another_bit_or_port_still_differs():
     assert not C.names_agree("P2.0", "P2[1]")
     assert not C.names_agree("P2.0", "P3[0]")
     assert not C.names_agree("P1.2", "P12[0]")
+    assert not C.names_agree("P2[0]", "P2[1]")                       # review 11-22: the port alone is no pin
+    assert not C.names_agree("(GPIO) P2[0]", "(GPIO) P2[1]")
+    assert not C.names_agree("P2[0]", "0")
+    assert not C.names_agree("P1.7/P1.6", "P1.6")                    # two ports' names: no one port pin
     assert not PD.same_pin("ic", "3", "P2.0", "(GPIO) P2[1]")
 
 

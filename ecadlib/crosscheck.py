@@ -254,10 +254,14 @@ def _names(s):
     """The names one pin answers to: "1 cathode (k)" -> {CATHODE(K), CATHODE, K}; "VO (output)" -> {VO(OUTPUT), VO, OUTPUT}."""
     raw = str(s or "").translate(MINUS)
     out = {norm_pin_name(raw)}
-    out |= {norm_pin_name(f"{p}.{b}") for p, b in PORT_BIT.findall(raw)}   # "(GPIO) P2[0]" is P2.0 (Cypress PSoC)
-    out |= {norm_pin_name(x) for x in raw.split("/") if PORT_DOT.fullmatch(x.strip())}   # P1.7/VREF is port pin P1.7
+    # "(GPIO) P2[0]" is port pin P2.0 (Cypress PSoC): written dotted before the split below, which would otherwise give
+    # the bare "P2" and "0" that every pin of the port shares (review 11-22: P2[0] agreed with P2[1])
+    raw = PORT_BIT.sub(lambda m: f"{m[1]}.{m[2]}", raw)
+    ports = [x for x in raw.split("/") if PORT_DOT.fullmatch(x.strip())]
+    if len(ports) == 1:                               # P1.7/VREF is port pin P1.7 (never one of two ports' names)
+        out.add(norm_pin_name(ports[0]))
     for part in re.split(r"[()\[\],]|\s/\s", raw):
-        if norm_pin_name(part):
+        if norm_pin_name(part) and norm_pin_name(part) not in PIN_CLASS:   # "(GPIO) P2[0]": GPIO names no one pin
             out.add(norm_pin_name(part))
     out |= {LETTER[n] for n in out if n in LETTER}
     from .eval.score import WORDS                     # a pin spelled out ("ENABLE") is "EN", as the eval scorer counts it
@@ -268,8 +272,9 @@ def _names(s):
     return out - {""}
 
 
+PIN_CLASS = {"GPIO", "IO"}                          # a pin's kind printed beside its name, shared by many pins
 PORT_DOT = re.compile(r"[A-Za-z]{1,3}\d+\.\d+")   # a port pin as PORT.BIT: P1.7
-PORT_BIT = re.compile(r"\b([A-Za-z]{1,3}\d+)\[(\d+)\]")   # a port pin as PORT[BIT]: P2[0], PA[3]
+PORT_BIT = re.compile(r"\b([A-Za-z]{1,3}\d+)\[(\d+)\]")   # a port pin as PORT[BIT]: P2[0], P10[3]
 
 
 GROUNDISH = re.compile(r"^(?:[PADS]?GND|VSS|[PA]?VSS|GROUND|0V|EP|EPAD|PAD|THERMAL)")
