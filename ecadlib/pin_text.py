@@ -1009,16 +1009,24 @@ _PKG_WORD = re.compile(r"(?i)(?<![A-Za-z0-9])(?:(\d{1,3})-)?(" + _PKG_LETTERS + 
 _PKG_MAKER = re.compile(r"(?<![A-Za-z0-9])(?:(?i:E-?Line)|SPT|SST3|SMT3|UMT3|EMT3|VMT3|MPT3|CPT3)(?![A-Za-z0-9])")
 _TO_NUMBERS = {"18", "39", "46", "52", "66", "72", "92", "126", "202", "218", "220", "225", "226", "236", "243", "247",
                "251", "252", "253", "261", "262", "263", "264", "268", "269", "270", "274", "277"}
+# Two names of one outline (JEDEC's, JEITA's SC number, the maker's): review 2026-11-23, round 3, B4: a one-package
+# sheet that prints both ('SOT89 (SC-62)', 'TO-92 (TO-226)') was a doubt. Only pairs that are one outline: SC-59 is
+# not SOT-23, SC-88A (five leads) is not SC-88
 _SAME_PACKAGE = ({"SOIC", "SO", "SOP"}, {"DPAK", "TO252", "TO252AA", "CPT3"}, {"D2PAK", "TO263", "TO263AB"},
                  {"SOT23", "SST3"}, {"SC59", "SMT3"}, {"SOT323", "SC70", "UMT3"}, {"SOT416", "SC75", "EMT3"},
-                 {"SOT723", "VMT3"}, {"SOT89", "MPT3"})
+                 {"SOT723", "VMT3"}, {"SOT89", "SC62", "TO243", "TO243AA", "MPT3"}, {"SOT223", "SC73", "TO261", "TO261AA"},
+                 {"TO92", "TO226", "TO226AA", "SOT54", "SC43"}, {"SOD323", "SC76"}, {"SOD523", "SC79"}, {"SOT363", "SC88"})
+# what a value has after its number and a package name has not: '%', a unit ('UP TO 92 %', 'TO 220 OHM', 'SC 70 pF')
+_UNIT_NEXT = re.compile(r"[ \t]*(?:%|°|[pnuµμmkMG]?(?:V|A|W|F|H|Hz|Ω)(?![A-Za-z])|(?i:ohms?|volts?|amps?|watts?|percent|degrees?)(?![A-Za-z]))")
 
 
 def _spaced(text, m):
     """Is 'TO 92' (the family, a space or a line break, the number) a package name and not words? The family in
-    capitals, the number one JEDEC gives a TO outline, and no number before it on its line ('-55 TO 150', '-65 TO
-    92': a range)."""
+    capitals, the number one JEDEC gives a TO outline, no number before it on its line ('-55 TO 150', '-65 TO
+    92': a range) and no unit after it ('UP TO 92 %', 'CONNECT TO 220 OHM LOAD', 'SC 70 pF': round 3, B4)."""
     if m.group(4) == "TO" and m.group(6) not in _TO_NUMBERS:
+        return False
+    if not m.group(7) and _UNIT_NEXT.match(text, m.end(6)):
         return False
     return not re.search(r"\d[ \t]*(?:°[ \t]*C|[A-Za-z%]{0,2})[ \t]*\Z", text[:m.start()])     # on its own line
 
