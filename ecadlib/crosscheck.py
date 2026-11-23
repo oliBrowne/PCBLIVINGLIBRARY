@@ -796,6 +796,8 @@ def second_read(reader, job, first, first_pins, model):
         rec.update(status="unchecked", why=str(e), compared=[], agreed=[], disagreed=[], not_compared=[])
         return rec
     pins = pdf_bars(job, pins)
+    if via == "assistant":                            # reader = "assistant": no model was asked
+        rec.update(against="second read (your assistant)", model="assistant")
     rec.update(against_read(first, second, first_pins, pins), pages=note, via=via)
     if instr:
         rec["embedded_instructions"] = instr[:5]

@@ -60,7 +60,11 @@ def test_an_agreeing_second_read_from_the_assistant_counts_like_the_apis():
             (got.get("cross_check"), want.get("cross_check"))
         assert DA.waiting(rd.assistant) == []
         sr = [x for x in got["cross_check"]["checks"] if x.get("source") == "second read"]
-        assert sr and sr[0].get("via") == "assistant", sr
+        assert sr and sr[0].get("via") == "assistant" and sr[0]["against"] == "second read (your assistant)", sr
+        (c / "answer.json").unlink()                # cached like a paid answer, still named as the assistant's
+        _, again = TA._read(d, api)
+        sr = [x for x in again["cross_check"]["checks"] if x.get("source") == "second read"]
+        assert sr and sr[0]["against"] == "second read (your assistant)", sr
     assert api.calls == []
 
 

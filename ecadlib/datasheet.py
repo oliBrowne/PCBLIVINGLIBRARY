@@ -5737,8 +5737,8 @@ class Reader:
         its tokens and USD go to cost.jsonl. -> (message, via). Raises crosscheck.Unavailable."""
         from . import crosscheck as CC, ds_route as DR
         rec = self.results.get_check(key)
-        if rec and "message" in rec:
-            return rec["message"], "cached"
+        if rec and "message" in rec:                  # (an assistant's answer is named so in the report, cached or not)
+            return rec["message"], "assistant" if rec.get("via") == "assistant" else "cached"
         if self.assistant is not None:                # reader = "assistant": its own folder (<part>-check-<key>), read
             from . import ds_assistant as DA          # from the pages alone, judged by the same code as the API's
             ajob = dict(job, key=key, body=body, name=str(job.get("name") or job.get("part")))   # <part>-check-<key>
