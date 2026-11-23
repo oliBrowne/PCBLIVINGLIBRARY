@@ -535,7 +535,7 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             # 'array', 'Polarized: yes') on a later line whose first line's cell is empty was never read: the
             # librarian reads one line of the part. Every line is read here (unread: below the loop).
             from . import stdparts as SP
-            from .bom_triage import admin_header, other_cells, said_cells, symbol_header
+            from .bom_triage import admin_header, line_cells, other_cells, symbol_header
             from .providers import same_maker
             flat = lambda v: " ".join(str(v or "").split())
             mine = {"Manufacturer": ln.get("manufacturer"), "LibRef": ln.get("libref"), "Datasheet": ln.get("datasheet"),
@@ -551,8 +551,16 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                         (k == "LibRef" or symbol_header(k)) and SP.plain_symbol_name(old, sym_kind)
                         and SP.plain_symbol_name(v, sym_kind)):
                     differ.setdefault(odes, []).append(f"{k} {old[:40]!r} vs {v[:40]!r}")
-            unread.setdefault(pn, []).append((des, SP.generic_passive_hold(
-                cat, ln.get("value", ""), ln.get("description", ""), said_cells(ln))))
+            unread.setdefault(pn, []).append((des, SP.generic_passive_hold(      # (round 3: each cell by what its
+                cat, ln.get("value", ""), ln.get("description", ""), (), line_cells(ln))))   # column is, the maker too)
+            # round 3 (B3): a rating written in a column on what the part is for is still a rating of the part
+            # ('Usage: 0.1% reference' and '5% pull-up', 'Function: 16V rail' and '50V rail' are two parts)
+            rated = was.setdefault("\0ratings", ({}, des))[0]
+            for k, v in other_cells(ln).items():
+                for num, unit in re.findall(r"(?<![\w.])(\d+(?:\.\d+)?)\s?(%|V|W|ppm)(?![A-Za-z])", str(v)) if admin_header(k) else ():
+                    old, odes = rated.setdefault((k, unit), (float(num), des))
+                    if old != float(num):
+                        differ.setdefault(odes, []).append(f"{k} {old:g}{unit} vs {float(num):g}{unit}")
             for odes, d in differ.items():
                 holds.setdefault(pn, []).append(
                     f"BOM lines {odes} and {des} have no part number and are built as one part {pn} (same value "

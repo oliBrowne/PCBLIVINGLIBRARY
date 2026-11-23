@@ -603,18 +603,22 @@ def passive_kind(item, ln=None, search=""):
     mpn = "" if placeholder_mpn(par.get("Manufacturer Part Number", "")) else str(par.get("Manufacturer Part Number", "") or "").strip()
     value = str((ln or {}).get("value") or par.get("Value") or "")
     own = [str(item["footprint"].get(k) or "") for k in ("kicad", "bom_ref", "ref")]   # the item's own footprint text
-    from .bom_triage import said_cells               # the footprint cell, the LibRef and every unmapped cell; a bare
+    from .bom_triage import line_cells, said_cells   # the footprint cell, the LibRef and every unmapped cell; a bare
     cells = said_cells(ln or {}) + own               # yes / number is read with its header ('Polarized: yes', round 2 I10)
+    counted = said_cells(ln or {}, admin=False) + own    # round 3 (B3): a Function / Notes column says what the part is
+    by_role = line_cells(ln or {})                       # for: its words that count elements are not the part's
     if not mpn and cells[0] and cells[0] not in own and any(own):
-        cells[0] = ""                        # a no-MPN item is paired with a line by its value (_line_for): of two
-        #                                      10k lines, '0603' and '0603 8P4R', each item reads its own footprint text
+        cells[0] = counted[0] = ""           # a no-MPN item is paired with a line by its value (_line_for): of two
+        by_role = [c for c in by_role if c[0] != "footprint"]   # 10k lines, '0603' and '0603 8P4R', each item reads its
+        #                                                         own footprint text
     code = MD.decode(mpn) if mpn else None
     polar = cat == "Capacitors" and bool(
-        fp.startswith("CP_") or any(SP._strip_lib(c).strip().startswith("CP_") for c in [cells[0]] + own)
+        fp.startswith("CP_") or SP.polar_size_prefix(cells[0], *own)     # ('CP1206', 'cp0805': round 3, A1)
         or SP.says_polarized(desc, value, *cells) or SP.says_polarized(SP.cap_words(search))
         or (mpn and SP.POLAR_CAP.match(SP._norm(mpn))) or (code and code["kind"] == "CP"))
     if ln is not None:                       # decided from the BOM line; a caller with no line keeps what it decided
-        hold = None if mpn or polar else SP.generic_passive_hold(cat, value, desc, cells)
+        hold = None if mpn or polar else SP.generic_passive_hold(cat, value, desc, own, by_role)   # (round 3: each
+        #                                      cell is read by what its column is: stdparts.cell_hold)
         said = next((t for t in (value, desc, *cells) if SP.says_polarized(t)), "") if polar and not mpn else ""
         if said:                             # 'C1, 10uF tantalum, 1206': the word that makes it a polarized part
             hold = (f"the BOM line says {SP.POLAR_WORD.search(said).group(0).strip()!r} ({said.strip()[:60]!r}): a "
@@ -625,7 +629,7 @@ def passive_kind(item, ln=None, search=""):
             item.pop("generic_hold", None)
     if item.get("generic_hold") and not mpn and not polar:
         return None
-    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc, value, *cells):
+    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc, value, *counted):
         return None
     if cat in ("Thermistors", "Varistors"):  # altium_export.sensor_folder filed it: NTC / PTC / VAR, TH (type unsaid)
         kind = SP.sensor_kind((item.get("description"), (ln or {}).get("value"), (ln or {}).get("description")),
