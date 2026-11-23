@@ -64,6 +64,34 @@ def test_an_unresolved_entry_about_a_harmless_thing_does_not_keep_the_part_with_
     assert DR.open_unresolved({"unresolved": ["weight", "scale", "N/A", "e"]}) == ["scale", "e"]
 
 
+# ---------------------------------------------------------------- B2: FC-QFN, DR-QFN, QFN-16-HR
+def test_a_flip_chip_dual_row_or_hot_rod_qfn_written_with_a_hyphen_gets_no_quarter_per_side():
+    for name, n, side, pitch, ep in (("FC-QFN-16", 16, 3.0, 0.5, 1.6), ("DR-QFN-44", 44, 5.0, 0.4, None), ("QFN-16-HR", 16, 3.0, 0.5, None),
+                                     ("FC QFN-16", 16, 3.0, 0.5, 1.6), ("FC_QFN_16", 16, 3.0, 0.5, 1.6), ("DR QFN 44", 44, 5.0, 0.4, None),
+                                     ("DR_QFN-44", 44, 5.0, 0.4, None), ("QFN-16 HR", 16, 3.0, 0.5, None), ("QFN_16_HR", 16, 3.0, 0.5, None),
+                                     ("QFN16-HR", 16, 3.0, 0.5, None), ("QFN16HR", 16, 3.0, 0.5, None), ("VQFN-16-HR", 16, 3.0, 0.5, None),
+                                     ("QFN-FC-16", 16, 3.0, 0.5, 1.6), ("QFN-16-FC", 16, 3.0, 0.5, 1.6), ("QFN-DR-44", 44, 5.0, 0.4, None),
+                                     ("FC-VQFN-16", 16, 3.0, 0.5, 1.6), ("DR-WQFN-44", 44, 5.0, 0.4, None),
+                                     ("FCQFN-16", 16, 3.0, 0.5, 1.6), ("FCQFN16", 16, 3.0, 0.5, None), ("DRQFN-44", 44, 5.0, 0.4, None), ("VQFN-HR-12", 12, 2.0, 0.4, None)):
+        res = T.read(R2.quad(name, n, side, pitch, ep))
+        s = res["spec"]
+        assert "pins_left_right" not in s and "pins_top_bottom" not in s, (name, s.get("pins_left_right"), res["needs_review"])
+        assert any(r.startswith(D.ROWS_UNREAD) for r in res["needs_review"]), (name, res["needs_review"])
+        out = R.put(res, symbol=LIB_SYMBOL)[0]            # ("verify": a checked standard land of the read's numbers is
+        assert out.startswith("held: ") and D.ROWS_UNREAD in out or out == "verify", (name, out)   # built, for a person)
+
+
+def test_an_ordinary_qfn_name_with_letters_like_hr_fc_or_dr_in_it_keeps_its_quarter_per_side():
+    for name, n, side, pitch, ep in R2.QUADS + (("QFN-16 (DRB)", 16, 3.0, 0.5, 1.6), ("QFN-16-HRS", 16, 3.0, 0.5, 1.6),
+                                               ("AFC-QFN-16", 16, 3.0, 0.5, 1.6), ("QFN-16-DRV", 16, 3.0, 0.5, 1.6),
+                                               ("PG-VQFN-48", 48, 7.0, 0.5, 5.35), ("QFN-16-EP", 16, 3.0, 0.5, 1.6)):
+        res = T.read(R2.quad(name, n, side, pitch, ep))
+        s = res["spec"]
+        assert (s.get("pins_left_right"), s.get("pins_top_bottom")) == (n // 4, n // 4), (name, n, side, res["needs_review"])
+        assert not DR.hold_reasons(res, True), (name, DR.hold_reasons(res, True))
+    R2.test_the_rows_default_changed_no_text_sent_to_a_model()      # the schema's words on the rows are as they were
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

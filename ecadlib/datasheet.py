@@ -3175,9 +3175,12 @@ def standard_rows(spec):
     resolves to, or else the one its own pin count, pitch, body and exposed pad name (stdparts.identify, which never
     looks at the rows), or None."""
     from . import stdparts as SP
+    said = str(spec.get("name") or "")
     for how, find in (("the read names", lambda: SP.footprint_for([str(spec.get("name") or "")])[0]),
                       ("the read's pin count, pitch, body and exposed pad name", lambda: SP.identify(spec)[0])):
-        try:
+        if how != "the read names" and NOT_QUAD_ROWS.search(said):
+            continue                                  # (review 2026-11-23 round 3, B2) "FCQFN16" with an ordinary QFN-16's
+        try:                                          # numbers is no ordinary QFN-16: its name says so
             name = find()
             t = SP.spec(name) if name else None
         except Exception:                             # a name or read stdparts cannot judge names no package
@@ -3193,7 +3196,10 @@ def standard_rows(spec):
 # LLP (makers use them for DFNs too), and not a name that says power, dual-row or flip-chip (PQFN, DRQFN, aQFN, VQFN-HR:
 # their pads are not four equal rows)
 QUAD_ROW_NAME = re.compile(r"(?:^|[-_\s\d])(?:[HU]?[VWTULX]2?QFN|QFN|[VUWT]FQFPN|LFCSP|MLF)(?![A-Z])", re.I)
-NOT_QUAD_ROWS = re.compile(r"PQFN|DRQFN|AQFN|FCQFN|power|dual|multi|two.?row|stagger|flip|hot.?rod|QFN[-_\s]?HR(?![A-Z])", re.I)
+# (2026-11-23 review round 3, B2: FC-QFN-16, DR-QFN-44 and QFN-16-HR got the default: FC / DR may stand apart before the
+# QFN word, and FC / DR / HR after it or after its lead count, never as the start of a longer word: "QFN-16 (DRB)")
+NOT_QUAD_ROWS = re.compile(r"PQFN|DRQFN|AQFN|FCQFN|power|dual|multi|two.?row|stagger|flip|hot.?rod|"
+                           r"(?<![A-Z])(?:FC|DR)[-_\s]*[A-Z]{0,2}2?QFN|QFN[-_\s]*(?:\d+[-_\s]*)?(?:HR|FC|DR)(?![A-Z])", re.I)
 QUAD_ROW_MIN = 12                                         # under 12 pins a square no-lead body is as often two-sided
 QUAD_SQUARE = 0.05                                        # mm the body's two nominals may differ and still be square
 
