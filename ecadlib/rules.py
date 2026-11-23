@@ -140,6 +140,9 @@ DEFAULTS["ai"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _LL.DEF
 for _k in _LL.SECTION_KEYS:                           # [datasheet] / [agent.proof] may pick their own ("" = [ai])
     DEFAULTS["datasheet"].setdefault(_k, "")
     DEFAULTS["agent"]["proof"].setdefault(_k, "")
+# [review]: ai_reviewer = "assistant" writes a review task for your own assistant for each built part held only for a
+# person's look, and releases the ones it passes (ecadlib.ai_review); "off" (the default) leaves them for a person.
+DEFAULTS["review"] = {"ai_reviewer": "off"}
 DEFAULTS["providers"] = {"order": [], "unofficial": True}    # EasyEDA / JLCPCB search: on, asked last; false opts out
 # [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
 # --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
@@ -487,6 +490,10 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "style.apply", f"= {sty['apply']!r}: must be auto (adapt new parts to house_style.json) or off")
     if sty.get("profile") and not str(sty["profile"]).endswith(".json"):
         _err(where, "style.profile", f"= {sty['profile']!r}: must be a .json file (written by `ecadlib style learn`)")
+    rv = raw.get("review") or {}
+    if "ai_reviewer" in rv and str(rv["ai_reviewer"]).strip().lower() not in ("off", "assistant"):
+        _err(where, "review.ai_reviewer", f"= {rv['ai_reviewer']!r}: must be off or assistant (your own assistant "
+             "reviews held parts; ecadlib.ai_review)")
     if "parity" in (raw.get("release") or {}) and raw["release"]["parity"] not in ("hold", "warn", "off"):
         _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
     if "height" in (raw.get("release") or {}) and raw["release"]["height"] not in ("hold", "warn"):
@@ -966,6 +973,7 @@ HELP = {
     "sources": "Where missing symbols and footprints are looked for, in order",
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
+    "review": "The AI hold reviewer: ai_reviewer = off (default) or assistant (your assistant looks at held parts)",
     "release.parity": "hold | warn | off: a part whose KiCad and Altium files differ (pads, drills, courtyard, 3D, pins) is held",
     "release.height": "warn | hold: a missing or out-of-range 3D height is a note to check (warn, the default) or holds the part",
     "release.mpn": "warn | hold: a generic resistor or capacitor with a value and a size but no Manufacturer Part "

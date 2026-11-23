@@ -54,21 +54,24 @@ def _fold(h):
 FOREIGN_HEADERS = {_fold(k): v for v, ks in {
     "designator": ["Bezeichner", "Referenz", "Bauteilbezeichner", "Bestückungsbezeichner", "Repère", "Repères",
                    "Désignateur", "Designador", "Designadores", "Riferimento", "Designatore", "位号", "元件位号", "标号",
-                   "器件位号", "リファレンス", "部品記号"],
-    "qty": ["Anzahl", "Menge", "Stück", "Stückzahl", "Quantité", "Qté", "Cantidad", "Cant", "Quantità", "数量", "用量"],
+                   "器件位号", "参考位号", "參考位號", "位號", "元件位號", "器件位號", "標號", "指定符",
+                   "リファレンス", "部品記号"],
+    "qty": ["Anzahl", "Menge", "Stück", "Stückzahl", "Quantité", "Qté", "Cantidad", "Cant", "Quantità", "数量", "數量", "用量"],
     "value": ["Wert", "Valeur", "Valor", "Valore", "值", "参数", "標準値", "定数"],
     "footprint": ["Gehäuse", "Bauform", "Boîtier", "Empreinte", "Encapsulado", "Huella", "Contenitore", "封装",
-                  "封装形式", "パッケージ", "フットプリント"],
-    "manufacturer": ["Hersteller", "Fabricant", "Fabricante", "Produttore", "制造商", "厂家", "厂商", "生产厂家",
+                  "封装形式", "封裝", "封裝形式", "パッケージ", "フットプリント"],
+    "manufacturer": ["Hersteller", "Fabricant", "Fabricante", "Produttore", "制造商", "厂家", "厂商", "生产厂家", "製造商",
+                     "廠家", "廠商",
                      "品牌", "メーカー", "メーカ"],
     "manufacturer part number": ["Herstellernummer", "Herstellerteilenummer", "Hersteller-Teilenummer",
                                  "Hersteller Teilenummer", "Hersteller Artikelnummer", "Herstellerbezeichnung",
                                  "Référence fabricant", "Réf fabricant", "Numéro de pièce fabricant",
                                  "Número de parte del fabricante", "Número de parte", "Referencia del fabricante",
                                  "Codice produttore", "型号", "规格型号", "制造商型号", "厂家型号", "制造商料号",
+                                 "器件型号", "型號", "規格型號", "製造商型號",
                                  "型番", "メーカー型番", "メーカ型番"],
-    "description": ["Beschreibung", "Descripción", "Descrizione", "描述", "规格", "说明", "説明", "仕様"],
-    "notes": ["Bemerkung", "Bemerkungen", "Remarque", "Remarques", "Observaciones", "备注"],
+    "description": ["Beschreibung", "Descripción", "Descrizione", "描述", "规格", "说明", "説明", "說明", "規格", "仕様"],
+    "notes": ["Bemerkung", "Bemerkungen", "Remarque", "Remarques", "Observaciones", "备注", "備註"],
     "dnp": ["Nicht bestückt", "Non monté", "No montar", "Non montato", "不贴", "不焊"],
 }.items() for k in ks}
 
@@ -634,6 +637,89 @@ def _part_designator_column(df, headers, mapping, columns=None):
     return None
 
 
+# Headers a designator list is found under when no header says 'Designator'. Strong: the header itself means "where on
+# the board" (Mouser/Digi-Key 'Customer #' / 'Customer Reference', OrCAD 'Component Name', 'Identifier', 'symbol').
+# Weak: 'Part' / 'Name' / 'Item' / a blank header, which just as often hold short part numbers (D882, M7), so their cells
+# must also read like a board's designator list (R1 beside R2, or 'C1, C4' in one cell).
+_REF_HEADERS_STRONG = {"customer", "customer no", "customer reference", "customer ref", "cust ref", "customer part", "component name",
+                       "component", "components", "identifier", "symbol", "symbols", "label", "labels", "position",
+                       "positions", "ref no", "ref number", "reference number", "reference designator",
+                       "reference designators", "part reference", "part references", "part ref", "location on board"}
+_REF_HEADERS_WEAK = {"", "part", "parts", "name", "names", "item", "items", "id"}
+_VALUE_CLASS = {"R": "R", "F": "C", "H": "L"}
+
+
+def _value_class(v):
+    """'R' / 'C' / 'L' when a Value cell says by its unit what the part is (10k, 4k7, 22R -> R; 100nF, 100n -> C;
+    10uH -> L), else None."""
+    v = str(v or "").strip()
+    if not v:
+        return None
+    _, unit = parse_value(v, with_unit=True)
+    if unit in _VALUE_CLASS:
+        return _VALUE_CLASS[unit]
+    if re.fullmatch(r"\d+(?:[.,]\d+)?\s*[kKM]\d*", v):
+        return "R"
+    if re.fullmatch(r"\d+(?:[.,]\d+)?\s*[pnuµ]\d*", v):
+        return "C"
+    return None
+
+
+def _designator_column_by_content(df, headers, mapping, columns=None):
+    """The header of a column whose cells are reference designators, when no header said 'Designator': Mouser carts
+    ('Part'), Digi-Key / Mouser lists ('Customer #'), OrCAD ('Component Name'), home-made sheets ('symbol', 'Name',
+    'Identifier'). The designator decides the part's class (R, C, L) downstream, so a look-alike column (a stock
+    'Location' C3, a 'Model' of D882 / M7) must not be taken: only a column under a header from the lists above, read as
+    nothing or as the LibRef; at least 80% of its cells designator lists, nearly all different (not a revision 'R01' on
+    every row), designator-sized numbers (not S8050 / LCSC C2040); and no row whose R / C / L designator disagrees with
+    the unit of its Value (C3 = 10k). None when nothing fits or [bom] columns are set (the user's mapping wins)."""
+    if columns:
+        return None
+    used = {h for f, h in mapping.items() if f != "libref"}
+    vj = headers.index(mapping["value"]) if "value" in mapping else None
+    best, best_n = None, 0
+    for j, h in enumerate(headers):
+        nh = _hnorm(h)
+        strong = nh in _REF_HEADERS_STRONG
+        if h in used or headers.index(h) != j or not (strong or nh in _REF_HEADERS_WEAK) or \
+                REF_PREFIX.fullmatch(str(h).strip().upper()):
+            continue
+        rows = [(str(df.iloc[i, j]).strip(), str(df.iloc[i, vj]).strip() if vj is not None else "")
+                for i in range(len(df)) if str(df.iloc[i, j]).strip()]
+        cells = [c for c, _ in rows]
+        if len(cells) < 2:
+            continue
+        split = [[t for t in re.split(r"[\s,;]+", c.upper()) if t] for c in cells]
+        refs = [ts for ts in split if ts and all(REF_PREFIX.fullmatch(t) for t in ts)]
+        nums = [m.group(1) for ts in split for t in ts for m in [re.search(r"(\d+)[A-Z]?$", t)] if m]
+        if len(refs) < 0.8 * len(cells) or len(set(cells)) < 0.8 * len(cells) or not nums:
+            continue
+        if sum(n.startswith("0") for n in nums) > 0.2 * len(nums) or sum(len(n) >= 4 for n in nums) >= 0.5 * len(nums):
+            continue                                                  # R01 / C001 codes, S8050 / C2040 part numbers
+        if not strong:                                                # a list in one cell, or R1 near R2
+            near = {}
+            for ts in refs:
+                for t in ts:
+                    m = re.fullmatch(r"([A-Z$]+?)(\d+)[A-Z]?", t)
+                    if m:
+                        near.setdefault(m.group(1), []).append(int(m.group(2)))
+            if not (any(len(ts) > 1 for ts in refs) or
+                    any(b - a <= 3 for ns in near.values() for a, b in zip(sorted(ns), sorted(ns)[1:]))):
+                continue
+        clash = False
+        for c, v in rows:
+            want = _value_class(v)
+            first = re.match(r"[A-Z]+", c.upper())
+            if want and first and first.group(0) in ("R", "C", "L") and first.group(0) != want:
+                clash = True                                          # 'C3' on a 10k line: a shelf label, not C3
+                break
+        if clash:
+            continue
+        if len(refs) > best_n:
+            best, best_n = h, len(refs)
+    return best
+
+
 def apply_columns(mapping, headers, columns):
     """Rules' [bom] columns (field -> your header, or a list of headers: the first one in this BOM is used) win over
     the fuzzy guess; headers not in this BOM are ignored."""
@@ -717,6 +803,11 @@ def read_bom(path, columns=None, rules=None, root=None):
         part = _part_designator_column(df, headers, mapping, columns)
         if part:
             mapping["designator"] = part
+    if "designator" not in mapping:                             # designators under another header ('Customer #')
+        found = _designator_column_by_content(df, headers, mapping, columns)
+        if found:
+            mapping = {f: h for f, h in mapping.items() if h != found}
+            mapping["designator"] = found
     _warn_unmatched_columns(p, headers, columns)
     col = {f: headers.index(h) for f, h in mapping.items()}       # by position: a BOM may repeat a header (a 2nd 'MPN')
     alt = _alternate_mpns(headers, col)                          # Altium 'Manufacturer Part Number 2' (+ its maker)

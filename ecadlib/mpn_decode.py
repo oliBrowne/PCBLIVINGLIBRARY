@@ -156,8 +156,10 @@ def fill_lines(lines):
         d = decode(mpn) if mpn else None
         if not d:
             continue
-        refs = re.findall(r"[A-Za-z]+(?=\d)", str(ln.get("designator") or ""))
-        if not refs or any(r.upper() not in KIND_PREFIX[d["kind"]] for r in refs):
+        toks = [t for t in re.split(r"[\s,;/|]+", str(ln.get("designator") or "")) if re.search(r"[A-Za-z]", t)]
+        ours = lambda t: any(c.upper() in KIND_PREFIX[d["kind"]] for c in      # R1; R_AUX1 (leading R); AUX_R1
+                             re.findall(r"^[A-Za-z]+(?=\d|_)|[A-Za-z]+(?=\d)", t))   # (the R before the 1)
+        if not toks or not all(ours(t) for t in toks):
             continue                                  # no designator, or one of another kind (an R code on C1): not ours
         text, value = value_text(d), str(ln.get("value") or "").strip()
         cat = "Resistors" if d["kind"] == "R" else "Capacitors"
@@ -189,6 +191,26 @@ def fill_lines(lines):
             near = lambda x: x is not None and abs(x - d["value"]) <= 1e-6 * max(abs(x), abs(d["value"]), 1e-15)
             v = None if near(bare) or near(eia) else bare   # neither reading is the part number's value (JLCPCB:
                                                       # Value 430 on a 43 kOhm 0603WAF4302T5E was released)
+        if v is None and cat == "Resistors" and re.match(r"\d", value) and not re.fullmatch(r"\d+(?:[.,]\d+)?", value):
+            near = lambda x: x is not None and abs(x - d["value"]) <= 1e-6 * max(abs(x), abs(d["value"]), 1e-15)
+            reads = []                                # a spelling the reader skips ('1mR', '22E 1%', '4E7', '75B')
+            for core in dict.fromkeys((value, re.split(r"[\s,;]+", value)[0])):                # whole, or before a '1%' / rating
+                core = re.sub(r"(?i)(?<=[\dkm])\s*(?:r|e|b|f|j|g|d|ohms?|Ω|\?)$", "", core)   # 24.9kR, 470r, 22E, 75B,
+                                                                                # 220? (an Ω lost in an encoding)
+                core = re.sub(r"(?i)^(\d+)[er](\d+)$", r"\1.\2", core)        # '4E7', '4r7': 4.7 ohm
+                reads.append(passive_value(core, cat))
+                if re.fullmatch(r"\d+(?:\.\d+)?", core):
+                    reads.append(float(core))
+                    reads.append(_eia(core) if re.fullmatch(r"\d{3,4}", core) else None)   # '103 1%'
+                elif re.fullmatch(r"\d+[kKM]\d+", core):                       # '2k49'
+                    reads.append(passive_value(core.lower().replace("m", "M"), cat))
+                elif re.fullmatch(r"\d+(?:\.\d+)?m", core):                    # '100mR': 0.1 ohm
+                    reads.append(float(core[:-1]) / 1000)
+            if not any(near(x) for x in reads):       # '1mR' on a 1 MOhm code, '40B' on a 39.2 ohm one, '220 1%' on
+                hold = (f"Value {value} does not read as the part number's value: {mpn} is {text} by its "   # a 10k
+                        f"{d['series']} code: fix the BOM line")                # one: released as typed before
+                ln["bom_hold"] = f"{ln['bom_hold']}; {hold}" if ln.get("bom_hold") else hold
+            continue
         if v is not None and abs(v - d["value"]) > 1e-6 * max(abs(v), abs(d["value"]), 1e-15):
             hold = (f"Value {value} but the part number {mpn} is {text} by its {d['series']} code: one of the two is "
                     "wrong; fix the BOM line")

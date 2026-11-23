@@ -16,10 +16,10 @@ def test_tantalum_land_by_case():
     assert T(["Case C"], "", "CAP TANT 47UF 16V")[0] == "CP_EIA-6032-28_Kemet-C"
     assert T(["Case C"], "TPSC476K016R0350")[0] == "CP_EIA-6032-28_Kemet-C"      # a tantalum series by its MPN
     assert T(["6032-28"], "")[0] == "CP_EIA-6032-28_Kemet-C"
+    assert T(["CP_EIA-3528-12_Kemet-T"], "")[0] == "CP_EIA-3528-21_Kemet-B"     # another height: same copper in KiCad
     for texts, mpn in ((["CP_Tantalum_Case-B_EIA-3528-21_Reflow"], "T491A106K016AT"),   # two cases named
                        (["C_1206_3216Metric"], "T491A106K016AT"),                       # a chip land, not a case
                        (["CP_EIA-3528-21_Kemet-B_HandSolder"], ""),                     # a land variant
-                       (["CP_EIA-3528-12_Kemet-T"], ""),                                # a case not in the table
                        (["Case B"], "T491A106K016AT"), ([""], ""), ([""], "EEE-1HA100SP"), (["3528"], "")):
         assert T(texts, mpn)[0] is None, (texts, mpn, T(texts, mpn))
 

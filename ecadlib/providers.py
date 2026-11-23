@@ -144,7 +144,9 @@ _MAKER_LEGAL = {"INC", "INCORPORATED", "CORP", "CORPORATION", "CO", "COMPANY", "
                 "SA", "SAS", "SPA", "BV", "NV", "KK", "PLC", "AB", "OY", "THE"}
 _MAKER_ALIAS.update({"ANALOGDEVICES": "ANALOG", "NATIONALSEMICONDUCTOR": "TEXASINSTRUMENTS",
                      "CENTRAL": "CENTRALSEMICONDUCTOR", "TEXAS": "TEXASINSTRUMENTS",    # "Central" alone on a BOM
-                     "PERICOM": "DIODES", "DIALOG": "RENESAS", "SIPEX": "MAXLINEAR", "CATALYST": "ON"})   # bought
+                     "PERICOM": "DIODES", "DIALOG": "RENESAS", "SIPEX": "MAXLINEAR", "CATALYST": "ON",   # bought
+                     "SEISTACKPOLE": "STACKPOLE",                 # DigiKey's "SEI Stackpole" (Stackpole Electronics Inc.)
+                     "ARATAS": "OMRON"})                          # Omron Electronic Components' new name (2025)
 # 2026-11-23 review round 2 (I7): one company under two names, whose own listing was refused as another maker's (a
 # needless hold). Only names that are the same company, or one it bought whose parts it sells under the same numbers.
 _MAKER_ALIAS.update({"MCC": "MICROCOMMERCIAL",                           # Micro Commercial Components / Co

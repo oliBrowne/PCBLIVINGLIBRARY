@@ -439,6 +439,13 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             got = t if t is not None else {}
             kind = kind_of((ln.get("description"), got.get("src_description")),
                            (fp, got.get("local_footprint"), got.get("package")))
+            if kind == "Resistors":             # FB1 '120R' on an R_0603 land, a BLM18 / 742792 part number: a ferrite
+                from . import stdparts as SP    # bead's impedance in ohms, not a resistor (left unfiled: held)
+                from . import mpn_decode as MD
+                said_res = re.search(r"(?i)\bres(?:istors?)?\b", str(ln.get("description") or "")) or \
+                    (MD.decode(mpn) or {}).get("kind") == "R"          # FB4 = 0R RC0603JR-070RL: a resistor fitted
+                if SP.is_ferrite(ln.get("designator"), ln.get("description"), mpn) and not said_res:   # in a bead's place
+                    kind = None
             if kind:
                 cat, ref = kind, RU.CAT_REF[kind]
         sensor = sensor_folder(ln, t, mpn, cat, fp)

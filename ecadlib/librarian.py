@@ -751,6 +751,335 @@ def chip_size_clash(st, item, ln):
     return None
 
 
+# IC families that name one outline kind: a text naming another kind than the land built names another package
+_FAMILY_KIND = {"SOIC": "SO", "SO": "SO", "SOP": "SO", "TSSOP": "TSSOP", "HTSSOP": "TSSOP", "MSOP": "MSOP",
+                "VSSOP": "MSOP", "SSOP": "SSOP", "QSOP": "QSOP", "TSOP": "TSOP", "LQFP": "QFP", "TQFP": "QFP",
+                "QFP": "QFP", "PQFP": "QFP", "DIP": "DIP", "PDIP": "DIP", "SPDIP": "DIP"}
+# no-lead outlines, DigiKey's spellings too (16-VFQFN, 48-UFQFN, 10-XFDFN): pin count and a stated body compared
+_FAMILY_KIND.update({f: "QFN" for f in ("QFN", "VQFN", "WQFN", "UQFN", "TQFN", "HVQFN", "LQFN", "VFQFN", "WFQFN",
+                                        "UFQFN", "XQFN", "UFQFPN", "LFCSP")})
+_FAMILY_KIND.update({f: "DFN" for f in ("DFN", "TDFN", "WDFN", "UDFN", "VDFN", "XDFN", "WFDFN", "XFDFN", "UFDFN",
+                                        "SON", "VSON", "WSON", "USON", "X2SON")})
+_TANT_IMPERIAL = {"1206": "3216", "1411": "3528", "2312": "6032", "2917": "7343"}
+
+
+def _families_named(text):
+    """(outline kind, pin count, body width or None, body (w, l) or None) for each IC family a text names: '8-TSSOP',
+    'SOIC-8', '48LQFP', '8-SOIC (0.209", 5.30mm Width)', 'TSSOP-20_4.4x6.5mm', '16QFN 4x4', 'VQFN-16-1EP_3x3mm'."""
+    from . import stdparts as SP
+    fams = "|".join(sorted(_FAMILY_KIND, key=len, reverse=True))
+    out = []
+    t = str(text or "")
+    for m in re.finditer(rf"(?<![A-Za-z0-9.])(?:(\d{{1,3}})-?({fams})|({fams})[-_ ]?(\d{{1,3}}))(W)?(?![A-Za-z0-9])", t, re.I):
+        fam = (m.group(2) or m.group(3)).upper()
+        pins = int(m.group(1) or m.group(4))
+        kind = _FAMILY_KIND[fam]
+        a = SP._free_attrs(f"{'QFN' if kind == 'QFN' else 'DFN' if kind == 'DFN' else fam}-{pins}"
+                           f"{t[m.end():m.end() + 60]}") or {}
+        body = a.get("body") if a.get("body") and a["body"][0] <= 30 else None
+        raw = re.match(r"[^,;/]{0,25}?(\d+(?:\.\d+)?)\s*[x\u00d7]\s*(\d+(?:\.\d+)?)\s*mm", t[m.end():m.end() + 60], re.I)
+        # a leaded outline's width is the first size as written (TSSOP-8_4.4x3mm is 4.4 wide, SOIC-8_3.9x4.9mm 3.9)
+        width = None if kind == "DIP" else (float(raw.group(1)) if raw and kind not in ("QFN", "DFN") else
+                                            (body or (None,))[0] or a.get("body_w"))
+        if kind == "TSSOP" and width and width <= 3.1 and (not body or max(body) <= 3.1):
+            kind = "MSOP"                                 # KiCad's TSSOP-8_3x3mm / TSSOP-10_3x3mm: the MSOP body
+        if kind == "SSOP" and width and width <= 4.0:     # a 3.9 mm SSOP is the QSOP body (DigiKey lists QSOPs so)
+            kind = "QSOP"
+        out.append((kind, pins, width, body))
+    return out
+
+
+def _lands_named(text, diode, weak=False, kind=None):
+    """Every standard-table land a text names, read whole and by its comma / slash parts ('SOT-23-5 Thin, TSOT-23-5'
+    names SOT-23-5 and TSOT-23-5). weak (a description): a bare family name ('SOT23' on a 5-pin regulator) names
+    the 3-lead package only for a transistor or diode (stdparts.named_package)."""
+    from . import stdparts as SP
+    t = str(text or "")
+    out = set()
+    for frag in [t] + [f for f in re.split(r"[,;/]|\s+-\s+", t) if f.strip()]:
+        n, why = SP.named_package(frag, diode=diode, weak=weak, kind=kind)
+        if n:
+            out.add(n)
+        elif "ambiguous (KiCad has" in str(why or ""):   # TO-252-2: either tab numbering, the same outline
+            out.update(n for n in re.findall(r"(?:has|and) (\S+?)(?=[ ,)])", str(why).split("ambiguous", 1)[1])[:4]
+                       if n in SP.packages())
+    return out
+
+
+def _tant_cases(text):
+    """The tantalum EIA sizes a text names: '3528-21', 'CP_EIA-3528-21_Kemet-B', 'case B', '1411 (3528 Metric)',
+    a bare imperial case '1411' -> {'3528'} (the metric size; the height is not compared)."""
+    from . import stdparts as SP, mpn_decode as MD
+    t = str(text or "")
+    got = {m.group(1) for m in SP.EIA_CASE.finditer(t)}
+    got |= {MD.TANT_CASE[m.group(1).upper()].split("-")[0] for m in SP.CASE_LETTER.finditer(t)
+            if m.group(1).upper() in MD.TANT_CASE}
+    got |= {m.group(1) for m in re.finditer(r"(?<!\d)(3216|3528|6032|7343)\s*Metric", t, re.I)}
+    got |= {_TANT_IMPERIAL[m.group(1)] for m in re.finditer(r"(?<![\d.])(1206|1411|2312|2917)(?![\d.])", t)}
+    return got
+
+
+# crystal and oscillator size codes (length x width in 0.1 mm): 3225 is 3.2 x 2.5 mm
+_XTAL_CODE = {"1210": (1.2, 1.0), "1612": (1.6, 1.2), "2012": (2.0, 1.2), "2016": (2.0, 1.6), "2520": (2.5, 2.0),
+              "3215": (3.2, 1.5), "3225": (3.2, 2.5), "5032": (5.0, 3.2), "6035": (6.0, 3.5), "7050": (7.0, 5.0)}
+
+
+def _crystal_clash(built, texts):
+    """A crystal land's body ('_3.2x2.5mm') and pad count ('-4Pin') against a body ('2.0x1.6mm'), a size code ('2520')
+    or a pad count ('4-SMD') a text names."""
+    m = re.search(r"_(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)mm", built)
+    body = tuple(sorted((float(m.group(1)), float(m.group(2))), reverse=True)) if m else None
+    pins = re.search(r"-(\d+)Pin", built)
+    for w, t in texts:
+        said = [tuple(sorted((float(a), float(b)), reverse=True)) for a, b in
+                re.findall(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*mm)?(?![\d.])", t)]
+        said += [_XTAL_CODE[c] for c in re.findall(r"(?<![\d.])(\d{4})(?![\d.])", t) if c in _XTAL_CODE]
+        if body and said and not any(all(abs(x - y) <= 0.15 for x, y in zip(body, b)) for b in said):
+            return (f"footprint: the land built is {built} ({body[0]:g}x{body[1]:g} mm) but the {w} names "
+                    f"{said[0][0]:g}x{said[0][1]:g} mm ({t[:60]!r}): check which size the crystal is")
+        n = re.search(r"(?<!\d)(\d)-SMD\b", t)
+        if pins and n and n.group(1) != pins.group(1):
+            return (f"footprint: the land built is {built} ({pins.group(1)} pads) but the {w} names {n.group(1)} "
+                    f"pads ({t[:60]!r}): check which package the crystal has")
+    return None
+
+
+def _positions_clash(built, texts):
+    """A connector land's positions (rows x cols in its name: _1x04, _2x05; mounting pads apart) against a count a
+    text names ('3POS', '5 positions', '10-pin')."""
+    m = re.search(r"_(\d+)x(\d+)(?:-\d+MP)?_", built)
+    if not m:
+        return None
+    have = int(m.group(1)) * int(m.group(2))
+    for w, t in texts:
+        said = {int(x) for x in re.findall(r"(?i)(?<![\d.])(\d{1,3})\s*[- ]?\s*(?:POS(?:ITIONS?)?|WAYS?|CONTACTS?|PINS?)\b", t)}
+        if said and have not in said:
+            return (f"footprint: the land built is {built} ({have} positions) but the {w} names {min(said)} "
+                    f"({t[:60]!r}): check which connector the part is")
+    return None
+
+
+def package_clash(st, item, ln, row, kind):
+    """'footprint: ...' when the land built is a standard outline (a KiCad or table land: SOT-23-5, SOIC-8, D_SMA, a
+    tantalum case, a chip size) and one of the line's own texts -- the BOM's footprint, description or value, the part
+    search's package or description -- names another one. Which source was read first must not decide a package two
+    sources disagree on (a part search's SC-70-5 on a DBV SOT-23-5 part, an SMB package with an SMA description, a
+    case-A footprint on a case-B tantalum code), so a person says which. A text naming no outline, or the land built
+    among those it names, is no clash."""
+    from . import stdparts as SP, mpn_decode as MD
+    src = str((st.get("footprint") or {}).get("source") or "")
+    if not src.startswith(("kicad:", "standard:")):
+        return None
+    built = src.split(":")[-1]
+    texts = [("BOM footprint", ln.get("footprint")), ("BOM description", ln.get("description")),
+             ("BOM value", ln.get("value")), ("part search package", row.get("src_package")),
+             ("part search description", row.get("src_description"))]
+    texts = [(w, str(t).strip()) for w, t in texts if str(t or "").strip()]
+    mpn = _par(item).get("Manufacturer Part Number", "")
+    if built in SP.TANT_LAND.values():                        # a tantalum case: size by code, words and part number
+        have = built.split("-")[1]
+        said = [(w, t, c) for w, t in texts for c in _tant_cases(t)]
+        d = MD.decode(mpn)
+        if d and d["kind"] == "CP" and d.get("case"):
+            said.append(("part number", mpn, d["case"].split("-")[0]))
+        other = [(w, t, c) for w, t, c in said if c != have]
+        if other:
+            w, t, c = other[0]
+            return (f"footprint: the land built is the {have} tantalum case ({built}) but the {w} names {c} "
+                    f"({t[:60]!r}): check which case the part is")
+        return None
+    lib = src.split(":")[-2] if src.count(":") >= 2 else ""
+    if lib in ("Crystal", "Oscillator"):                      # a crystal's body and pad count by its land's name
+        return _crystal_clash(built, texts)
+    if lib.startswith("Connector"):                           # a connector's position count by its land's rows x cols
+        return _positions_clash(built, texts)
+    chip = SP.chip_size(built, strict=True)
+    if chip and not str(chip).startswith("conflict"):        # a chip land: the part search's size words too
+        for w, t in texts:
+            if not w.startswith("part search"):
+                continue                                      # (the BOM's own texts: chip_size_clash)
+            said = SP.chip_size(t)
+            if said and str(said).startswith("conflict"):
+                continue
+            if said and said != chip:
+                return (f"footprint: the land built is {chip} ({built}) but the {w} says {said} ({t[:60]!r}): "
+                        "check which size the part is")
+        return None
+    diode = kind in ("D", "LED") or built.startswith("D_")
+    mine = _families_named(built)
+    table = built in SP.packages()             # a table land: compared by name too (another maker's land: by family)
+    for w, t in texts:
+        if w == "BOM value" and not re.search(r"[A-Za-z]{2}", t):
+            continue
+        named = _lands_named(t, diode, weak="description" in w or w == "BOM value", kind="D" if diode else kind) \
+            if table else set()
+        if named and built not in named and not any(SP._same_land([built, n]) or _same_outline(built, n) for n in named):
+            return (f"footprint: the land built is {built} but the {w} names {'/'.join(sorted(named))} "
+                    f"({t[:60]!r}): check which package the part has")
+        if mine:
+            kind_, pins, width, body = mine[0]
+            no_lead = kind_ in ("QFN", "DFN")
+            other = []
+            for k2, p2, w2, b2 in _families_named(t):
+                if {k2, kind_} in ({"TSSOP", "MSOP"}, {"SSOP", "QSOP"}) and not w2:
+                    continue          # NXP's 'TSSOP8' is a 3 mm body, a widthless SSOP may be a QSOP: names neither
+                if k2 != kind_ or p2 != pins or (not no_lead and width and w2 and abs(width - w2) > 0.2) or \
+                        (no_lead and body and b2 and any(abs(x - y) > 0.2 for x, y in zip(body, b2))):
+                    other.append((k2, p2, w2, b2))
+                else:
+                    other = None                  # the land built is among the outlines it names ('8-SOIC / 8-TSSOP')
+                    break
+            if other:
+                k2, p2, w2, b2 = other[0]
+                size = f" {b2[0]:g}x{b2[1]:g} mm" if no_lead and b2 else f" {w2:g} mm wide" if w2 else ""
+                return (f"footprint: the land built is {built} but the {w} names {_an(str(p2))} {p2}-pin {k2} "
+                        f"outline{size} ({t[:60]!r}): check which package the part has")
+    return None
+
+
+def _clashes(st, item, ln, row, kind):
+    """Every source-clash note for a built part; a check that fails on an odd line holds the part (never stops the
+    run)."""
+    out = []
+    for name, f, args in (("package", package_clash, (st, item, ln, row, kind)),
+                          ("land kind", land_kind_clash, (st, item)), ("part kind", kind_clash, (item, ln)),
+                          ("value", value_clash, (item, ln, row)), ("maker", maker_clash, (ln, row))):
+        try:
+            out.append(f(*args))
+        except Exception as e:                       # noqa: BLE001 -- a check's own failure holds the part
+            out.append(f"check: the {name} check could not read this line ({type(e).__name__}): check the part by hand")
+    return out
+
+
+_SAME_OUTLINE = ({"SOT-23-6", "SC-74-6_1.55x2.9mm_P0.95mm"},)   # SC-74 / SOT-457: the SOT-23-6 outline and land
+
+
+def _same_outline(a, b):
+    return any(a in g and b in g for g in _SAME_OUTLINE)
+
+
+def _an(word):
+    """'a' or 'an' before a word or number as said aloud ('an 8-pin', 'an 11-pin', 'an inductor', 'a 16-pin')."""
+    w = str(word).lower()
+    return "an" if re.match(r"[aeio]|8|11(?!\d)|18(?!\d)", w) else "a"
+
+
+_LAND_KIND = {"R": "Resistors", "C": "Capacitors", "CP": "Capacitors", "L": "Inductors"}
+
+
+def land_kind_clash(st, item):
+    """'footprint: ...' when a resistor, capacitor or inductor is built on another kind's chip land (a 100nF C15 whose
+    BOM footprint is R_0402_1005Metric): the BOM line names two parts, so a person says which."""
+    src = str((st.get("footprint") or {}).get("source") or "")
+    if not src.startswith(("kicad:", "standard:")):
+        return None
+    name = src.split(":")[-1]
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    m = re.match(r"(R|C|CP|L)_", name)
+    if not m or cat not in _LAND_KIND.values() or _LAND_KIND[m.group(1)] == cat:
+        return None
+    return (f"footprint: the part is filed under {cat} but the land built is {name}, another kind's land: check "
+            "which part the BOM line is")
+
+
+def value_clash(item, ln, row):
+    """'value: ...' when a resistor's, capacitor's or inductor's (ferrite bead's) Value names another value than the
+    BOM's description or the part search's description names (Value 22uH on a 'FIXED IND 2.2UH' part, a 10 nF part
+    number whose part search says 1000PF): one of the two is a slip, so a person says which. A description naming
+    no value of the kind, or the Value among those it names, is no clash."""
+    from .altium_export import description_values
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    if cat not in ("Resistors", "Capacitors", "Inductors"):
+        return None
+    value = str(_par(item).get("Value") or "").strip()
+    if not value:
+        return None
+    cats = (cat, "Resistors") if cat == "Inductors" else (cat,)        # a bead's value is its impedance
+    have = None
+    for c in cats:
+        for raw in (value, value.lower(), value.replace(" ", ""), value.replace(" ", "").lower()):
+            v = passive_value(raw, c)
+            if v is not None:
+                have = (c, v)
+                break
+        if have:
+            break
+    prefix = re.fullmatch(r"\d+(?:[.,]\d+)?\s*([kKM]|[pnuµμ])", value)
+    if not have and prefix and cat in ("Resistors", "Capacitors") and \
+            (prefix.group(1) in "kKM") == (cat == "Capacitors"):   # '10k' on a capacitor, '100n' on a resistor
+        return (f"value: Value {value} is spelled with a {'resistance' if cat == 'Capacitors' else 'capacitance'} "
+                f"prefix but the part is filed under {cat}: check which part the BOM line is")
+    readings = [have[1]] if have else []
+    if not have and cat == "Resistors" and re.fullmatch(r"\d+(?:\.\d+)?", value):
+        from .mpn_decode import _eia                             # a resistor's bare '22' is 22 ohm, '103' may be EIA
+        readings = [float(value)] + ([_eia(value)] if re.fullmatch(r"\d{3,4}", value) and _eia(value) is not None else [])
+        have = ("Resistors", readings[0])
+    if not have:
+        return None
+    for w, text in (("BOM description", ln.get("description")), ("part search description", row.get("src_description"))):
+        said = {(c, float(v)) for (c, v) in description_values(text, cat)}
+        same = [v for c, v in said if c == have[0]]
+        if same and not any(abs(v - r) <= 1e-6 * max(abs(v), abs(r), 1e-15) for v in same for r in readings):
+            return (f"value: Value {value} but the {w} {str(text)[:60]!r} names another value: one of the two is a "
+                    "slip; check which value the part is")
+    return None
+
+
+_KIND_WORD = {"Resistors": r"resistors?|\bRES\b", "Capacitors": r"capacitors?|\bCAP\b",
+              "Inductors": r"inductors?|\bIND\b|ferrite|bead"}
+
+
+def kind_clash(item, ln):
+    """'part kind: ...' when the BOM description calls the part a resistor, capacitor or inductor and the line was
+    filed (by designator, value or part number) as another of the three ('Capacitor 10k' on R20): the line names two
+    parts, so a person says which. A description naming two kinds names neither."""
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    if cat not in _KIND_WORD:
+        return None
+    desc = str(ln.get("description") or "")
+    said = [k for k, rx in _KIND_WORD.items() if re.search(rf"(?i)(?<![A-Za-z])(?:{rx})(?![A-Za-z])", desc)]
+    if len(said) == 1 and said[0] != cat:
+        return (f"part kind: filed under {cat} but the BOM description {desc[:60]!r} names "
+                f"{_an(said[0])} {said[0][:-1].lower()}: "
+                "check which part the BOM line is")
+    return None
+
+
+def maker_clash(ln, row):
+    """'maker: ...' when the BOM names a maker and the part search lists this exact part number only under other
+    makers (an MCP2562 the BOM says is Microchip's, found only as Texas Instruments'): the part built may be another
+    maker's part of the same number, so a person says which."""
+    from .release_check import _filled
+    bom = str(ln.get("manufacturer") or "").strip()
+    if not _filled(bom) or re.fullmatch(r"(?i)generic|any|various|multiple|unknown|(?:any|other) (?:maker|vendor)s?|"
+                                        r"equivalent|equiv\.?", bom):
+        return None                                      # a stand-in, not a maker
+
+    from . import mpn_decode as MD
+    mpn = str(ln.get("mpn") or "").strip()
+    d = MD.decode(mpn) if mpn else None
+    if d or (mpn and re.sub(r"[\s-]", "", bom).upper() == re.sub(r"[\s-]", "", mpn).upper()):
+        words = d["series"].split(" ") if d else []
+        coder = " ".join(words[:-1]) if len(words) > 1 else " ".join(words)   # 'Yageo RC/AC/..' -> Yageo
+        if not d or not P.same_maker(bom, coder):     # a maker's own ordering code (RC0402FR-07..L is Yageo's), or
+            return (f"maker: the BOM names {bom} but the part number {mpn} is "   # the part number typed as the maker
+                    + (f"{coder}'s ({d['series']} code)" if d else "in the maker column too")
+                    + ": check whose part it is")
+    listed = [m.strip() for m in str(row.get("src_makers") or "").split(";") if m.strip()]
+    listed += [m for m in [str(row.get("src_manufacturer") or "").strip()] if m and m not in listed]
+    if not listed or any(P.same_maker(bom, m) for m in listed):
+        return None
+    if {P.maker_key(bom)} | {P.maker_key(m) for m in listed} <= {"NXP", "NEXPERIA"}:
+        return None                       # NXP's standard products (logic, discretes) are Nexperia's since 2017
+
+    return (f"maker: the BOM names {bom} but the part search lists {_par_safe(listed)} for this part number: check "
+            "whose part it is")
+
+
+def _par_safe(makers):
+    return " / ".join(makers[:3]) + (" ..." if len(makers) > 3 else "")
+
+
 def _own_land(names, plain):
     """The first footprint field that names a land of its own rather than the chip size `plain` (R_0603_1608Metric):
     a KiCad footprint name (R_Array_Convex_4x0603, L_Bourns_SRR1210A, a hand-solder variant), an array / shunt / RGB
@@ -968,6 +1297,9 @@ class Run:
         clash = chip_size_clash(st, item, ln)
         if clash:
             st["verify"].append(clash)
+        for clash in _clashes(st, item, ln, row, kind):
+            if clash and clash not in st["verify"]:           # the line's own sources disagree: never the first read's
+                st["verify"].append(clash)
         self._finish_found(st, row)
         if kind in ("NTC", "PTC", "VAR") and st["footprint"] and st["symbol"]:   # nothing else describes it (a BOM
             from . import stdparts as SP                    # line with only the MPN, no part search): what it is and
@@ -1093,8 +1425,9 @@ class Run:
                 from . import stdparts as SP
                 land, why = SP.tantalum_land([ln.get("footprint", ""), item["footprint"].get("kicad") or ""], mpn,
                                               item.get("description") or ln.get("description") or "")
-                if land and lib.footprint(land):
-                    fp_ref, fp_how = lib.footprint(land), why
+                if land and lib.footprint(land) and "same copper" not in why:    # another height's land (stdparts.
+                    fp_ref, fp_how = lib.footprint(land), why       # TANT_SIZE_LAND) carries KiCad's 3D body at the
+                                                                    # wrong height: the standard source builds it
             elif PASSIVE[kind][1] and pkg in IMP2MET:
                 guess = PASSIVE[kind][1].format(pkg, IMP2MET[pkg])
                 own = _own_land(names, guess.split(":")[-1])
@@ -1294,6 +1627,11 @@ class Run:
             sp = SP.spec(res["footprint"])
             text, _ = SP.build(res["footprint"], RU.density_for(sp, self.rules))
             h = F.dim(sp["height_max"])[2] if sp.get("height_max") else None
+            own = re.match(r"tantalum case EIA (\d{4})-(\d{2})\b", str(res.get("fp_how") or ""))
+            land = SP.EIA_CASE.search(res["footprint"])
+            if res["footprint"] in SP.TANT_LAND.values() and own and land and own.groups() != land.groups():
+                h = int(own.group(2)) / 10      # a tantalum on its size's land (stdparts.TANT_SIZE_LAND): the case
+                sp = dict(sp, height_max=h)     # tantalum_land matched sets the 3D body's height, not the table land's
             self.put_fp(st, text, fp_name, f"standard:{res['kicad_ref']}", None, h, "standard package table", sp)
             got.append(f"footprint {res['kicad_ref']} ({res['fp_how']})")
         fp_src = str((st["footprint"] or {}).get("source") or "")
@@ -3127,6 +3465,10 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         t_check = time.time()
         TI.record(out, "build", t_build, t_check, parts=len(todo))
         checks = RC.apply(items, out, allow, rules=rules)
+        from . import ai_review as AR               # [review] ai_reviewer (off by default): a look at held parts
+        passed = AR.review(items, out, rules, cache=cache, log=log) if AR.mode(rules) != "off" else {}
+        if passed:
+            checks = RC.apply(items, out, allow, rules=rules, ai=passed)
         if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
             from .approvals import identity, post_check, stamp_allow
             stamp_allow(items, allow, identity(user, cwd=out))
