@@ -5,7 +5,8 @@
    folder. Nothing leaves your machine yet. Your GitHub name goes into each record's evidence and is public.
 2. Fork this repository, check out your fork, and run `ecadlib store-repo add . FOLDER --author YOUR-GITHUB-NAME` in
    it. That adds new parts, adds your build as evidence to parts that are already here (when your pads and pins
-   agree), refuses parts whose pads or pins differ, and updates `index/`. It applies the same rules as the `verify`
+   agree; it confirms the part only when your whole drawing is the same too, its `text_hash`, and add says so when it
+   is not), refuses parts whose pads or pins differ, and updates `index/`. It applies the same rules as the `verify`
    check below, so what it writes passes: anything it refuses is a maintainer's to add.
 3. Commit and open a pull request. The `verify` check rebuilds each changed record with the ecadlib version in
    `ecadlib-version.txt` and runs its release check. `ecadlib store-repo verify . --base origin/main --author
@@ -13,7 +14,10 @@
 
 ## What the check refuses
 
-- a record that does not match the format, holds a file (3D model, PDF, embedded data) or a private link;
+- a record that does not match the format, holds a file (3D model, PDF, embedded data), a private link or an e-mail
+  address anywhere, or KiCad text beyond a plain part: a footprint with a zone, a BOM / position-file / DNP /
+  board-only flag, anything but pads on a copper, mask or paste layer, or text other than its reference, value and one
+  `${REFERENCE}`; a symbol with hidden pins (other than ones stacked on a shown pin) or pin alternates;
 - a part that the release check would hold when it is rebuilt from the record alone, or whose hashes do not match;
 - different pads or pins for a part that is already here (a conflict: a maintainer looks; a corrected part comes back
   as a new revision after the old one is withdrawn);

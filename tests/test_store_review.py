@@ -10,7 +10,7 @@ D  records: current digest version only, no `also` merging, no BOM text, no DNS 
    carries only the record's fields, active-low pins and mounting pads in pins_hash, an identity pin map
 
 Every store is a folder (or a fake HTTP server) in tmp_path; nothing goes to the network, no API is called."""
-import base64, copy, io, json, os, re, shutil, subprocess, sys, tarfile, tempfile
+import base64, copy, io, json, os, re, shutil
 from pathlib import Path
 
 from ecadlib import datasheet as D, fp_share as FS, librarian as L, release_check as RC, rebuild as LK, \
@@ -19,7 +19,7 @@ from tests import test_librarian as TL
 from tests.fixtures_lite import lite
 from tests.test_store_client import BASE, FakeHTTP as StoreHTTP, make_store, record as fake_record
 from tests.test_store_librarian import DS_RULES, DS_SOURCES, OTHER_READER, _confirm, _datasheet_part, _no_dns, \
-    _reader, _record, _run as _run_in, _store
+    _reader, _record, _run as _run_in, _store, _as_also
 from tests.test_store_record import AT, _kicad
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,36 +35,6 @@ def _bom(*idx):
     return "\n".join([ls[0]] + [ls[i] for i in idx]) + "\n"
 
 
-def _rules_hash_of(tree):
-    """rules_hash of the default rules as the ecadlib in folder `tree` computes it, in a clean process (the tests'
-    own settings, e.g. no web search, left out), or None."""
-    code = ("import sys; sys.path.insert(0, sys.argv[1]); from ecadlib import rules as RU, rebuild as R; "
-            "print(R.rules_hash(RU.load({})))")
-    try:
-        r = subprocess.run([sys.executable, "-I", "-c", code, str(tree)], capture_output=True, text=True, timeout=120,
-                           cwd=tempfile.gettempdir())
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return r.stdout.strip().splitlines()[-1] if r.returncode == 0 and r.stdout.strip() else None
-
-
-def _main_rules_hash():
-    """(this tree's, origin/main's) default rules_hash, or None when origin/main is not here (a shallow CI
-    checkout)."""
-    try:
-        data = subprocess.run(["git", "-C", str(ROOT), "archive", "origin/main", "ecadlib"], capture_output=True,
-                              timeout=60).stdout
-        if not data:
-            return None
-        with tempfile.TemporaryDirectory() as d:
-            with tarfile.open(fileobj=io.BytesIO(data)) as t:
-                t.extractall(d, filter="data") if hasattr(tarfile, "data_filter") else t.extractall(d)
-            main = _rules_hash_of(d)
-    except (OSError, subprocess.SubprocessError, tarfile.TarError):
-        return None
-    return (_rules_hash_of(ROOT), main) if main else None
-
-
 # ================================================================ A: a no-op while the store is off
 def test_a1_default_order_and_init_never_name_the_store():
     assert "store" not in RU.DEFAULTS["sources"]["order"] and "store" in RU.SOURCES     # (an explicit order may)
@@ -76,17 +46,18 @@ def test_a1_default_order_and_init_never_name_the_store():
     RU.validate({"sources": {"order": ["store", "kicad"]}})                  # harmless when named
 
 
-def test_a2_default_rules_hash_is_mains():
-    """Existing parts are not rebuilt as "built with other rules" and `rebuild --check` shows no drift."""
-    h = LK.rules_hash(RU.load({}))
-    eff = {k: v for k, v in RU.effective(RU.load({})).items() if k != "store"}
+def test_a2_default_rules_hash_does_not_see_the_store():
+    """Existing parts are not rebuilt as "built with other rules" and `rebuild --check` shows no drift: the [store]
+    defaults leave the rules hash as it was without them (no git needed: CI's checkout is shallow; see also
+    test_store_review2.test_6_the_default_rules_hash_does_not_see_the_store_section)."""
+    rules = RU.load({})
+    h = LK.rules_hash(rules)
+    eff = {k: v for k, v in RU.effective(rules).items() if k != "store"}
     assert h == LK.sha(json.dumps(eff, sort_keys=True, default=str))         # [store] off: out of the hash
+    assert h == LK.rules_hash({k: v for k, v in rules.items() if k != "store"})
     on = RU.load({})
     on["store"] = dict(on["store"], url="https://raw.githubusercontent.com/o/r/main")
     assert LK.rules_hash(on) != h                                            # set: in it
-    both = _main_rules_hash()
-    if both is not None:
-        assert both[0] == both[1], both
 
 
 @lite
@@ -139,7 +110,8 @@ def test_b1_a_pointer_record_never_lifts(tmp_path, monkeypatch):
     for h, key in (("symbol", "kicad_sym"), ("footprint", "kicad_mod")):
         rec[h].update({"source": "easyeda:C999999", key: None, "pointer": {"lcsc": "C999999"},
                        "license": "pointer only", "credit": EC.CREDIT})
-    got = _ds_run(tmp_path / "ws", [rec])
+    SR.rehash(rec)
+    got = _ds_run(tmp_path / "ws", [_as_also(_confirm(rec))])
     assert got["status"] == "held" and "store_check" not in got, got.get("store_check")
     assert any("is a pointer to easyeda:C999999" in t for t in got["librarian"]["tried"])
 
@@ -148,15 +120,17 @@ def test_b1_a_pointer_record_never_lifts(tmp_path, monkeypatch):
 def test_b2_same_reader_model_is_not_an_independent_read(tmp_path, monkeypatch):
     _no_dns(monkeypatch)
     it, base = _datasheet_part()
-    same = _record(it, base, by="carol")                     # read by the same model as this machine's read
+    # (records confirmed and found through `also`: a second opinion that could lift, were it independent; a checked
+    # record never lifts: test_store_review2)
+    same = _as_also(_confirm(_record(it, base, by="carol")))  # read by the same model as this machine's read
     got = _ds_run(tmp_path / "same", [same])
     assert got["status"] == "held" and got["store_check"]["result"] == "agreed, not independent"
     assert "not an independent read" in got["store_check"]["why"]
     unknown = _record(it, base, by="carol", reader=None)
     unknown["evidence"][0]["reader"] = None                  # the record does not say who read it
-    got = _ds_run(tmp_path / "unknown", [unknown])
+    got = _ds_run(tmp_path / "unknown", [_as_also(_confirm(unknown))])
     assert got["status"] == "held" and got["store_check"]["result"] == "agreed, not independent"
-    got = _ds_run(tmp_path / "other", [_record(it, base, by="carol", reader=OTHER_READER)])
+    got = _ds_run(tmp_path / "other", [_as_also(_confirm(_record(it, base, by="carol", reader=OTHER_READER)))])
     assert got["status"] == "ready" and got["store_check"]["result"] == "agreed", got["hold_reasons"]
 
 
@@ -173,15 +147,15 @@ def test_b3_compared_at_this_digest_version(tmp_path, monkeypatch):
     assert FS.digest(bad, 1) == FS.digest(text, 1) and FS.digest(bad) != FS.digest(text)
     v1 = copy.deepcopy(rec)
     v1["footprint"].update(kicad_mod=bad, hash_v=1, hash=FS.digest(bad, 1))
+    v1["text_hash"] = SR.text_hash(v1)
     for e in v1["evidence"]:
-        e["footprint_hash"] = v1["footprint"]["hash"]
+        e["footprint_hash"], e["text_hash"] = v1["footprint"]["hash"], v1["text_hash"]
     assert any("older digest version" in p for p in SR.validate(v1)), SR.validate(v1)
     got = _ds_run(tmp_path / "v1", [v1])
     assert got["status"] == "held" and "store_check" not in got
     v2 = copy.deepcopy(rec)
     v2["footprint"].update(kicad_mod=bad, hash=FS.digest(bad))
-    for e in v2["evidence"]:
-        e["footprint_hash"] = v2["footprint"]["hash"]
+    SR.rehash(v2)
     assert SR.validate(v2) == []
     got = _ds_run(tmp_path / "v2", [v2])
     assert got["status"] == "held" and got["store_check"]["result"] == "disagreed", got.get("store_check")
@@ -191,7 +165,7 @@ def test_b3_compared_at_this_digest_version(tmp_path, monkeypatch):
 def test_b4_b5_a_lift_keeps_the_review_items_and_is_taken_back(tmp_path, monkeypatch):
     _no_dns(monkeypatch)
     it, base = _datasheet_part()
-    rec = _record(it, base, by="carol", reader=OTHER_READER)
+    rec = _as_also(_confirm(_record(it, base, by="carol", reader=OTHER_READER)))   # a lift needs a confirmed record
     kid = SK.key_id(rec["key"]["key"])
     d = tmp_path / "ws"
     got = _ds_run(d, [rec])
@@ -219,14 +193,21 @@ def test_b4_b5_a_lift_keeps_the_review_items_and_is_taken_back(tmp_path, monkeyp
         assert any(r.startswith("verify: datasheet reader output") for r in got["hold_reasons"]), got["hold_reasons"]
         assert any("pin 3 and 4 swapped" in r and "holds it lifted are back" in r for r in got["hold_reasons"])
         assert got["store_check"]["revoked"]
-    # unreachable store: nothing changes either way (a lift stands, a hold stays), one note
+    # unreachable store, nothing of it saved here: the lift cannot be vouched for, so the part is held (review 2,
+    # decision 3), with one note in the log; the hold goes again once the store can be read
     d2 = tmp_path / "ws2"
     got = _ds_run(d2, [rec])
     assert got["status"] == "ready"
     down = SC.Store(BASE, http=StoreHTTP(None, fail="error"), cache_dir=tmp_path / "sc")
     with _reader():
         got, log = _run(d2, api_key="sk-test", sources=DS_SOURCES, rules=DS_RULES, store=down)
-    assert got["DSPART1"]["status"] == "ready" and sum(l.startswith("  store:") for l in log) == 1, log
+    assert got["DSPART1"]["status"] == "held" and sum(l.startswith("  store:") for l in log) == 1, log
+    assert any("withdrawals could not be checked" in h for h in got["DSPART1"]["hold_reasons"])
+    assert any(h.startswith("verify: datasheet reader output") for h in got["DSPART1"]["hold_reasons"])
+    with _reader():
+        got = _run(d2, api_key="sk-test", sources=DS_SOURCES, rules=DS_RULES,
+                   store=SC.Store(str(d2.parent / f"s_{d2.name}")))[0]["DSPART1"]
+    assert got["status"] == "ready", got["hold_reasons"]
 
 
 @lite
@@ -365,13 +346,14 @@ def test_c5_publishers_see_withdrawals_without_a_store_argument(tmp_path, monkey
     RC._STORES.clear()
     probs = RC.publish_problems(it, d / "out", rules=RU.resolve(rules, d / "out"))
     assert any("pad 1 too small" in p for p in probs), probs
-    # an unreachable store: no problem, no crash, asked once for a whole plan
+    # an unreachable store with nothing saved here: held (it cannot vouch: review 2), no crash, asked once for a plan
     RC._STORES.clear()
     made, http = [], StoreHTTP(None, fail="error")
     monkeypatch.setattr(SC, "from_rules", lambda r, **kw: made.append(1) or SC.Store(BASE, http=http,
                                                                                          cache_dir=tmp_path / "sc"))
     for _ in range(5):
-        assert RC.publish_problems(it, d / "out", rules=RU.resolve({"store": {"url": BASE}}, d / "out")) == []
+        probs = RC.publish_problems(it, d / "out", rules=RU.resolve({"store": {"url": BASE}}, d / "out"))
+        assert len(probs) == 1 and "withdrawals could not be checked" in probs[0], probs
     assert len(made) == 1 and len(http.urls) <= 1, (made, http.urls)
     plain = dict(it, source={"symbol": "kicad:Device:R", "footprint": "kicad:R:R_0603"})
     plain.pop("store", None)
@@ -450,10 +432,7 @@ def test_d4_validate_makes_no_name_lookup(tmp_path, monkeypatch):
 
 
 def _rehash(rec):
-    rec["footprint"]["hash"] = FS.digest(rec["footprint"]["kicad_mod"])
-    for e in rec["evidence"]:
-        e["footprint_hash"], e["pins_hash"] = rec["footprint"]["hash"], SR.pins_hash(rec)
-    return rec
+    return SR.rehash(rec)
 
 
 @lite

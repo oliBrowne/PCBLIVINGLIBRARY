@@ -427,6 +427,18 @@ CODES = {
                       "Ask the store's maintainers, or build the part again without the store (`--refresh`).",
                       [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+): cannot tell whether the store "
                        r"(?P<why>.+?)(?::|$)"]),
+    "store.unchecked": ("This part depends on the shared store's record {record}, and the store could not be read to "
+                        "check whether that record was withdrawn ({why}).",
+                        "Let the store be read again (go online), or check the part against the datasheet and "
+                        "release it yourself.",
+                        [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+): withdrawals could not be checked "
+                         r"(?P<why>.+?)(?::|$)"]),
+    "store.off": ("This part came from the shared store, or was released because a store record agreed with it, and "
+                  "the store is switched off, so nobody can tell this computer if that record is withdrawn.",
+                  "Check the part against the datasheet and release it yourself, or switch the store on again "
+                  "(the store's url in ecadlib.toml).",
+                  [r"^(?:verify: )?this part (?:came from the shared store|was released because a shared store record "
+                   r"agreed with it).*switched off"]),
     "store.gone": ("This part was built from the shared store's record {record}, which the store no longer lists.",
                    "Build it again (`ecadlib librarian BOM --refresh PART`) or check it against the datasheet.",
                    [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is no longer (?:in the store's index|"

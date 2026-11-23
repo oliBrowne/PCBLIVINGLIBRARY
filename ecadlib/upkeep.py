@@ -19,10 +19,11 @@ Checks (each runs in-process; a check whose credentials are missing is skipped w
              the usage index (`ecadlib project scan`) that use an older revision than the released one, and KiCad
              projects there whose parts differ from the library in a way the [change] policy holds
              (`ecadlib project check`). Reports only; it never applies a change.
-  store      the shared store, run by itself whenever [store] url is set (never listed, never run while it is empty),
-             on a plan: parts built from a store record, or released by a store record's agreement, that the store has
-             since withdrawn, disputes, no longer lists or no longer rates high enough, with the reason (the next
-             librarian run holds them). A store that cannot be reached is a note, never an error.
+  store      the shared store, run by itself whenever [store] url is set or the plan holds a part that owes the store
+             (never listed, never run otherwise), on a plan: parts built from a store record, or released by a store
+             record's agreement, that the store has since withdrawn, disputes, no longer lists or no longer rates high
+             enough, or that it cannot vouch for (switched off; its withdrawn list unreadable and no copy younger than
+             30 days saved here), with the reason (the next librarian run holds them). Never an error.
 
 State (--state DIR, default out/upkeep_state): one JSON file per check; what each run saw, so the next run reports only
 transitions. Report: <REPORT>.md and <REPORT>.json (default out/upkeep). Exit codes: 0 nothing new, 1 new changes,
@@ -418,6 +419,14 @@ def _store_on(rules, ctx):
     return bool(st.enabled) if st is not None else SC.configured(rules)
 
 
+def _owes_store(src):
+    """The plan holds a part that owes the shared store (store_client.depends): built from a record, or released by a
+    record's agreement. Such a part is checked whether or not a store is set (a store that is off cannot vouch)."""
+    from . import store_client as SC
+    return getattr(src, "kind", "") == "plan" and any(isinstance(it, dict) and SC.depends(it)
+                                                      for it in getattr(src, "items", None) or [])
+
+
 def check_store(src, state_dir, ctx, cfg, now, rules=None, store=None):
     """Parts of the plan that owe the shared store (store_client.depends: built from a record, source
     store:<key_id>@r<rev>, or released by a record's agreement, store_check) where that no longer holds
@@ -428,7 +437,8 @@ def check_store(src, state_dir, ctx, cfg, now, rules=None, store=None):
     sec = _section("store")
     if store is None:
         store = SC.from_rules(rules or {}, cache_dir=ctx.cache, offline=ctx.offline)
-    if not store.enabled:
+    off = not store.enabled or store.accept == "off"
+    if off and not _owes_store(src):
         sec.update(status="skipped", reason="no shared store set ([store] url is empty, or accept = \"off\")")
         return sec
     if src.kind != "plan":
@@ -440,20 +450,23 @@ def check_store(src, state_dir, ctx, cfg, now, rules=None, store=None):
         if not isinstance(it, dict) or not SC.depends(it):
             continue
         n += 1
-        for d, why in SC.problems(it, store):
+        covered = set((it.get("allow") or {}).get("failures") or [])
+        for d, why in SC.problems(it, None if off else store):
+            if any(why in str(c) for c in covered):   # a person released it despite this already
+                continue
             p = SC.note_for(d, why)
             key = _fp("store", it.get("name"), p)
             seen.append(key)
             if key not in old["seen"]:
-                kind = "store: " + ("lifted holds back" if d["kind"] == "lifted" else "withdrawn" if "withdrawn" in why
-                                    else "disputed" if "disputed" in why else "record no longer stands")
+                kind = "store: " + ("cannot vouch" if d.get("unchecked") else "lifted holds back" if d["kind"] == "lifted"
+                                    else "withdrawn" if "withdrawn from" in why else "disputed" if "disputed" in why
+                                    else "record no longer stands")
                 sec["changes"].append(_change(kind, it.get("name"), f"store:{d['key_id']}@r{d['rev']}",
                                               "held at the next librarian run", p))
     sec["notes"] += [SC.safe(t) for t in store.trouble]
-    sec["notes"].append(f"{n} part(s) owe the shared store (built from it, or released by its agreement)")
-    if not store.usable():                           # nothing could be read: say so, keep the old state
-        sec.update(status="skipped", reason=f"the shared store could not be read ({(store.trouble or ['no answer'])[0]})")
-        return sec
+    sec["notes"].append(f"{n} part(s) owe the shared store (built from it, or released by its agreement)"
+                        + ("; the store is switched off, so they are held until a person releases them or it is on "
+                           "again" if off else ""))
     sec["resolved"] = [_change("resolved", "", "", "", f"{k} item(s) from earlier runs no longer seen")] \
         if (k := len(set(old["seen"]) - set(seen))) else []
     sec["_state"] = {"store_state.json": {"version": 1, "updated": now, "seen": seen}}
@@ -473,8 +486,6 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
     cfg = upkeep_rules(rules)
     asked = bool(checks)
     checks = list(checks or cfg["checks"])
-    if not asked and "store" not in checks and _store_on(rules, ctx):   # the shared store's check runs by itself
-        checks.append("store")                                          # whenever a store is set, never otherwise
     cut = [c for c in checks if c in CUT_CHECKS]
     checks = [c for c in checks if c not in CUT_CHECKS]
     bad = [c for c in checks if c not in CHECKS + STORE_CHECKS]
@@ -483,7 +494,9 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
     workspace = workspace or ((rules or {}).get("altium365") or {}).get("workspace") or None
     ctx, now, state_dir = ctx or Ctx(), now or _now(), Path(state_dir)
     src = Source(input_path, manifest, bom, dict(((rules or {}).get("bom") or {}).get("columns") or {}) or None)
-    prev = _load(state_dir / "upkeep_last.json", {}).get("date")
+    if not asked and "store" not in checks and (_store_on(rules, ctx) or _owes_store(src)):
+        checks.append("store")     # the shared store's check runs by itself whenever a store is set, or the plan holds
+    prev = _load(state_dir / "upkeep_last.json", {}).get("date")   # a part that owes it; never otherwise
     sections = []
     for name in checks:
         try:

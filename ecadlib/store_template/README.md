@@ -6,14 +6,20 @@ your machine like any part it builds itself.
 
 ## Trust
 
-- **checked**: one build passed the full release check.
-- **confirmed**: checked, and a second independent build gave the same pads and pins (another contributor, or two AI
-  models in a maintainer's seed run), or a maintainer signed it off, or it is the KiCad library's own entry for that
-  exact part number. By default ecadlib uses only confirmed parts without a person looking; a checked part is a
-  second opinion.
-- **disputed**: a maintainer marked it after a concrete report of a difference: a second opinion only, until a
+- **checked**: one build passed the full release check (or several builds agree on the pads and pins but not on the
+  whole drawing). Never used on its own and never releases anything: ecadlib only compares it with your own build of
+  the part, holds the part if they differ, and notes it if they agree.
+- **confirmed**: checked, and a second independent build drew exactly the same part: the same pads and pins and the
+  same whole drawing (silk, fab, courtyard, text and symbol graphics; the record's `text_hash`), by another
+  contributor, or by two AI models in a maintainer's seed run; or a maintainer signed that drawing off; or it is the
+  KiCad library's own entry for that exact part number. By default ecadlib uses only confirmed parts without a person
+  looking, and only a confirmed record's agreement can release a part someone built themselves.
+- **disputed**: a maintainer marked it after a concrete report of a difference: compared only, never used, until a
   maintainer has settled it.
-- **withdrawn**: never used; a library that holds a part from a withdrawn record is told on its next run.
+- **withdrawn**: never used. A library that holds a part built from a withdrawn record (or released by its agreement)
+  is held on its next run that can read this store's withdrawn list, and every ecadlib publisher refuses the part. A
+  library that cannot read the list (the store switched off, or not reached for 30 days) holds such parts until a
+  person releases them.
 
 EasyEDA pointer records (an LCSC number and hashes, no drawing) are informational only: nothing checks their claim
 yet, so they are never confirmed, never used and never a second opinion, and only a maintainer adds them.

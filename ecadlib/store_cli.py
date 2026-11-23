@@ -76,12 +76,12 @@ def status(a, out):
     if a.plan:
         items = _plan(a.plan)
         mine = [i for i in items if SC.depends(i)]
-        bad = {i["name"]: RC.store_problems(i, st) for i in mine} if st.enabled and not a.offline else {}
+        bad = {i["name"]: RC.store_problems(i, st, (i.get("allow") or {}).get("failures") or ()) for i in mine}
         bad = {k: v for k, v in bad.items() if v}
         checked = [i for i in items if (i.get("store_check") or {}).get("result")]
         _say(out, f"plan      : {a.plan}: {len(items)} part(s), {len(mine)} owing the shared store (built from it or "
                   f"released by its agreement), {len(checked)} compared with a store record, {len(bad)} no longer "
-                  "standing (withdrawn, disputed, gone)")
+                  "standing (withdrawn, disputed, gone, or the store cannot vouch for them: off or unreadable)")
         for n, why in bad.items():
             _say(out, f"  {n}: {'; '.join(w.split(': ', 1)[-1] for w in why)}")
         rep.update(parts=len(items), from_store=len(mine), compared=len(checked), withdrawn_or_disputed=bad)

@@ -27,8 +27,10 @@ sits at the wrong path or is withdrawn at its rev is never indexed (and is a pro
 drawing, nothing to rebuild or compare) is indexed as "checked" at most, never "confirmed". Files are written as sorted,
 indented JSON, so an unchanged store re-indexes to the same bytes; store.json "updated" changes only with the index.
 
-Revisions. A new part is rev 1, or one past its withdrawal. Agreeing evidence is merged into the record at the same
-rev: it adds to the record, it never changes the land. A land that changes is a new rev, and only a maintainer makes
+Revisions. A new part is rev 1, or one past its withdrawal. Agreeing evidence (the same pads and pins) is merged into
+the record at the same rev: it adds to the record, it never changes the land. An entry whose text_hash is not the
+record's (the same pads and pins, another drawing) is merged too, with a note, but confirms nothing
+(store_record.level); add refuses an incoming entry whose text_hash is not the drawing it is shared with. A land that changes is a new rev, and only a maintainer makes
 one (withdraw the old, add the corrected: there is deliberately no `restore`).
 
 Contributors (add without --maintainer, verify without --maintainer) may only add parts and their own builds: per
@@ -431,6 +433,12 @@ def add(root, sources, dispute=False, at=None, log=print, maintainer=False, auth
             if why:
                 probs.append(f"{f}: refused: the store's {rel} is {why}")
                 continue
+        had = {SK.digest(e) for e in (old or {}).get("evidence") or []}
+        other = [e for e in rec["evidence"] if SK.digest(e) not in had and e.get("text_hash") != rec["text_hash"]]
+        if other:
+            probs.append(f"{f}: refused: evidence by {other[0].get('by')!r} gives a text_hash that is not this file's "
+                         "drawing (an entry attests the drawing it is shared with)")
+            continue
         if not maintainer:
             mine = []
             if kid in wd:
@@ -502,6 +510,8 @@ def add(root, sources, dispute=False, at=None, log=print, maintainer=False, auth
         else:
             log(f"merged into {k} r{new['rev']}: {len(new['evidence']) - len(old['evidence'])} evidence entries, "
                 f"{len(new.get('also') or []) - len(old.get('also') or [])} codes added")
+        for line in other_drawing_notes(old, new):
+            log(line)
         if level_of(new, trusted, maint) == "confirmed" and (
                 old is None or level_of(old, trusted, maint) != "confirmed"):
             log(f"note: this makes {k} confirmed (used without a person looking): check who built it")
@@ -792,6 +802,19 @@ def _against_base(rel, new, old_text, author, wd):
     return probs, mo, {b for b in bys if b}
 
 
+def other_drawing_notes(old, new):
+    """Notes for evidence new adds over old (None: a new record) that attests the record's pads and pins but another
+    drawing (its text_hash is not the record's): merged, but it does not confirm the record (store_record.level)."""
+    had = {SK.digest(e) for e in (old or {}).get("evidence") or [] if isinstance(e, dict)}
+    out = []
+    for e in new.get("evidence") or []:
+        if isinstance(e, dict) and SK.digest(e) not in had and e.get("text_hash") != new.get("text_hash"):
+            out.append(f"note: {new['key']['key']}: the {e.get('kind')} by {e.get('by')!r} has the same pads and pins "
+                       "but another drawing (silk, fab, courtyard, text or symbol graphics): merged as evidence; it "
+                       "does not confirm the record")
+    return out
+
+
 def _dupes(record):
     seen, out = set(), []
     for e in record.get("evidence") or []:
@@ -828,6 +851,22 @@ def _outside(rel, read_old, meta):
     return None, f"{rel}: {MAINTAINER_ONLY} ({why}: every file outside parts/ and index/ is a maintainer's)"
 
 
+def _root_rel(root, path):
+    """A --changed path (absolute, or relative to the current folder, as a shell completes it) as a path relative to
+    the store root; Unusable when it is not inside the root. Links are not followed (a path names a file in the tree)."""
+    p = Path(path)
+    p = p if p.is_absolute() else Path.cwd() / p
+    for a, b in ((os.path.abspath(p), os.path.abspath(root)), (os.path.realpath(p), os.path.realpath(root))):
+        try:
+            rel = Path(a).relative_to(b).as_posix()
+        except ValueError:
+            continue
+        if rel not in ("", ".") and ".." not in rel.split("/"):
+            return rel
+    raise Unusable(f"--changed {path}: not a file inside the store {root} (give paths as your shell sees them: "
+                   "relative to the current folder, or absolute)")
+
+
 def verify(root, changed=None, base=None, old=None, all_records=False, maintainer=False, author=None, log=print):
     """The pull-request / nightly check (module doc). -> problems ([] = pass). Prints one line per problem."""
     root = Path(root)
@@ -836,8 +875,7 @@ def verify(root, changed=None, base=None, old=None, all_records=False, maintaine
     trusted, maint = _people(meta)
     read_old, diff = _base_reader(root, base, old)
     if changed:
-        diff = sorted({(Path(c).resolve().relative_to(root.resolve()).as_posix() if Path(c).is_absolute()
-                        else Path(c).as_posix()) for c in changed})
+        diff = sorted({_root_rel(root, c) for c in changed})
     probs, mo, notes, failing, names = [], [], [], {}, set()
     every = sorted(r for r in _files(root) if re.fullmatch(r"parts/[^/]+/[^/]+\.json", r))
     todo = every if all_records or diff is None else [r for r in diff if r.startswith("parts/")]
@@ -877,6 +915,8 @@ def verify(root, changed=None, base=None, old=None, all_records=False, maintaine
                         not isinstance(old_rec, dict) or level_of(old_rec, trusted, maint) != "confirmed"):
                     notes.append(f"{rel}: note: this change makes {new['key']['key']} confirmed (used without a "
                                  "person looking): check who built it")
+                notes += [f"{rel}: {x}" for x in other_drawing_notes(old_rec if isinstance(old_rec, dict) else None,
+                                                                     new)]
         probs += [f"{rel}: {x}" for x in mine]
         if mine and isinstance(new, dict) and isinstance(new.get("key"), dict):
             failing[new["key"].get("key")] = mine[0]
@@ -983,7 +1023,10 @@ def _parser():
     g = p.add_mutually_exclusive_group()
     g.add_argument("--base", help="git ref of the target branch (origin/main): check what changed against it")
     g.add_argument("--old", help="the base as a store folder or one record file (instead of git)")
-    p.add_argument("--changed", nargs="+", help="the changed files (default: from --base / --old, else all)")
+    p.add_argument("--changed", nargs="+", metavar="FILE",
+                   help="the changed files, as paths relative to the current folder or absolute (each must be inside "
+                        "ROOT; e.g. from the store's folder: parts/ab/<key_id>.json); default: from --base / --old, "
+                        "else all")
     p.add_argument("--all", action="store_true", help="check every record (the nightly)")
     p.add_argument("--maintainer", action="store_true", help="the change is a maintainer's: allow maintainer-only")
     p.add_argument("--author", help="the pull request's GitHub name: new evidence must be theirs")

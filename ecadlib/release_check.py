@@ -822,15 +822,18 @@ def generic_passive(item):
 PULLED_NOT_CHECKED = ("fields",)            # a pulled part's fields are what its workspace released (no datasheet here)
 
 
-def store_problems(item, store):
+def store_problems(item, store, covered=()):
     """Why a part that owes the shared store must not go out now (store_client.problems): built from a record the
     store has since withdrawn, disputes, no longer lists or rates below [store] accept, or released by a record's
-    agreement that no longer stands, or the store's withdrawn list cannot be read. [] when the part owes the store
-    nothing, the store is off, or it cannot be reached (a store that cannot be reached holds nothing)."""
+    agreement that no longer stands; or the store cannot vouch for it (switched off, its withdrawn list unreadable and
+    no copy younger than store_client.HOLD_MAX_AGE_S saved here). [] when the part owes the store nothing. covered:
+    the failures a person's --allow covers (a reason they already released the part despite is not raised again)."""
     from . import store_client as SC
-    if store is None or not getattr(store, "enabled", False):
+    if not SC.depends(item):
         return []
-    return list(dict.fromkeys(f"verify: {SC.note_for(d, why)}" for d, why in SC.problems(item, store)))
+    store = store if store is not None and getattr(store, "enabled", False) else None
+    return list(dict.fromkeys(f"verify: {SC.note_for(d, why)}" for d, why in SC.problems(item, store)
+                              if not any(why in str(c) for c in covered)))
 
 
 _STORES = {}                                   # the shared store a publisher checks against: one per settings, per process
@@ -838,7 +841,10 @@ _STORES = {}                                   # the shared store a publisher ch
 
 def store_for(item, base=".", rules=None):
     """The store_client.Store [store] names, made once per process and settings (so a plan of 500 parts asks an
-    unreachable store once), when it is set and the item owes it something; else None (nothing is built or asked)."""
+    unreachable store once), when it is set and the item owes it something; else None (nothing is built or asked;
+    a part that owes the store is then held by store_problems: the store cannot vouch for it). The store's copies are
+    kept in the default download cache (firstrun.default_cache), so a withdrawn list read earlier still counts while
+    the store cannot be reached."""
     from . import rules as RU, store_client as SC
     if not SC.depends(item):
         return None
@@ -851,7 +857,12 @@ def store_for(item, base=".", rules=None):
     s = rules.get("store") or {}
     k = tuple(str(s.get(x) or "") for x in ("url", "accept", "mode", "snapshot"))
     if k not in _STORES:
-        _STORES[k] = SC.from_rules(rules)
+        try:
+            from .firstrun import default_cache
+            cache = default_cache()
+        except Exception:
+            cache = None
+        _STORES[k] = SC.from_rules(rules, cache_dir=cache)
     return _STORES[k]
 
 
@@ -893,7 +904,7 @@ def publish_problems(item, base=".", rules=None, writes_files=False, policy=None
     block = push_block(item, policy, base)     # holds here too. No policy now: the release check's snapshot decides
     if store is None:
         store = store_for(item, base, rules)
-    return out + ([f"sign-off: {block}"] if block else []) + store_problems(item, store)
+    return out + ([f"sign-off: {block}"] if block else []) + store_problems(item, store, covered)
 
 
 PUBLISHABLE = ("ready", "existing")           # change_gate.RELEASED_STATUSES: what a publisher may send (re-checked)

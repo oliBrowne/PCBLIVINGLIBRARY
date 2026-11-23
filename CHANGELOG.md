@@ -15,12 +15,21 @@ a minor release may change command-line options and file formats.
   `confirmed` record (`[store] accept`, default `"confirmed"`; `"checked"` takes single-build records too, `"off"` never
   asks) is drawn into the library and goes through the same release check as any part; its source reads
   `store:<id>@r<rev>`, and a record made from the KiCad libraries keeps the KiCad licence, Library Credit and
-  NOTICE.txt. A record not trusted on its own is a second opinion: your own build with the same pads and pins, made
-  independently (another kind of source, or a datasheet read by another AI model), lifts the hold that only waited for
-  a confirmation, and gets it back if that record is later withdrawn; different pads or pins hold the part and name
-  both. A part built from a record the store later withdraws, disputes or drops is held on the next run, by every
-  publisher, and listed by `ecadlib upkeep` (a `store` check that runs by itself while a url is set). A store that
-  cannot be reached holds nothing and is noted once. New commands: `ecadlib store
+  NOTICE.txt. "Confirmed" means two builders drew the same whole part (pads, pins with their types, and the record's
+  `text_hash`: silk, fab, courtyard, text and symbol graphics), or a person signed that drawing off. A record not used
+  directly is a second opinion: different pads or pins hold the part and name both; the same pads and pins release
+  your own build only when the record is confirmed (reached through an `also` code or with no maker) and the two were
+  made independently (another kind of source, or a datasheet read by another AI model): a `checked` record's
+  agreement is only noted and releases nothing. A record is refused unless its footprint is plain (no zones, no BOM /
+  DNP / board-only flags, nothing but pads on copper, mask or paste, only the reference, value and one
+  `${REFERENCE}` text) and its symbol has no hidden or alternate pins; KiCad-library parts are cleaned to that shape.
+  A part that depends on the store (built from it, or released by its agreement) is held when the store withdraws,
+  disputes or drops the record, and also when the store cannot vouch for it: switched off ("release it yourself or
+  switch the store on"), or its withdrawn list unreadable with no copy younger than 30 days saved; a person's
+  `--allow` keeps it released, and parts that owe the store nothing never change. The librarian, every publisher and
+  `ecadlib upkeep` (a `store` check that runs by itself while a url is set or the plan has such a part) all check
+  this; a broken store file holds, never crashes. Store requests follow no redirect (the snapshot download only
+  GitHub's own, over https). New commands: `ecadlib store
   status|get|share|report` (share writes record files and sends nothing; report builds a GitHub issue link) and
   `ecadlib store-repo` for the people who run a store. Guide: [docs/shared-store.md](docs/shared-store.md).
 

@@ -77,6 +77,11 @@ EXAMPLES = {
                        "part's own build was released because that record agreed with it; the holds it lifted are back",
     "store.unknown": "verify: shared store record ACME|RC0603-10K r1: cannot tell whether the store withdrew it (its "
                      "withdrawn list is missing or unreadable): this part was built from it",
+    "store.unchecked": "verify: shared store record ACME|RC0603-10K r1: withdrawals could not be checked for more than "
+                       "30 days (the store could not be read, and the copy of its withdrawn list saved on this computer "
+                       "is older than that): this part was built from it",
+    "store.off": "verify: this part came from the shared store, which is switched off, so withdrawals cannot be "
+                 "checked: release it yourself or switch the store on",
     "store.gone": "verify: shared store record ACME|RC0603-10K r1 is no longer in the store's index: this part was built "
                   "from it",
     "store.level": "verify: shared store record ACME|RC0603-10K r1 is now only checked (below [store] accept = "

@@ -9,9 +9,9 @@ anything still missing, the sources are tried in --sources order, each filling o
   store      the shared store of checked parts (ecadlib/store_client.py, docs/shared-store.md), by maker + MPN, first
              and by itself whenever [store] url is set (empty by default: nothing is asked, and it is never in the
              default order). A record [store] accept trusts is drawn through the same writers and release check
-             (source store:<key_id>@r<rev>); one it does not is a second opinion: the same pads and pins as this run's
-             own independent build lift its unconfirmed-build hold (taken back if the record is withdrawn), others
-             hold it
+             (source store:<key_id>@r<rev>); one it does not is a second opinion: other pads or pins hold the part;
+             the same pads and pins lift this run's own independent build's unconfirmed-build hold only when the
+             record is confirmed (taken back if it is withdrawn), and a checked record's agreement is only noted
   kicad      the official KiCad libraries on gitlab.com. A name index of kicad-symbols (KiCad 9 <Lib>.kicad_symdir/
              <Name>.kicad_sym, so derived symbols/aliases are names too) and kicad-footprints is built once from the
              GitLab tree API and cached (<cache>/kicad_library_index.json, 30 days; a build stopped by a timeout or
@@ -1124,7 +1124,10 @@ class Run:
         try:
             text = (self.out / fp["kicad_mod"]).read_text(encoding="utf-8")
             pads = FS.digest(text) == FS.digest(SR.footprint_text(rec))
-            pins = SR.pins_hash(built_pins(self.out, st, sym_name), mount_pads=fp.get("mount_pads")) == SR.pins_hash(rec)
+            sym = st["symbol"]
+            mine_pins = SR.schlib_pins(self.out / sym["file"], "x", AL.lib_name(sym_name) if sym_name else None,
+                                       sym.get("kicad_types"), sym.get("source") or "")   # (types too: as a record)
+            pins = SR.pins_hash(mine_pins, mount_pads=fp.get("mount_pads")) == SR.pins_hash(rec)
         except Exception as e:                         # a comparison that did not run lifts nothing
             st["tried"].append(f"store: record {label} not compared ({type(e).__name__}: {SC.safe(e)[:120]})")
             return
@@ -1141,6 +1144,12 @@ class Run:
             st["store_check"] = dict(check, result="disagreed", differ=differ)
             return
         ok, why = self._independent(st, rec, mine)
+        if hit.status == "active" and hit.level != "confirmed":
+            st["tried"].append(f"store: this build agrees with one unconfirmed build in the shared store ({label}, "
+                               f"{hit.level}); not enough to release: no hold is lifted")
+            st["store_check"] = dict(check, result="agreed, unconfirmed",
+                                     why="agrees with one unconfirmed build in the shared store; not enough to release")
+            return
         if hit.status != "active" or not ok:
             why = "it is disputed" if hit.status != "active" else why
             st["tried"].append(f"store: this build matches the shared store's record {label}, but {why}: no hold is "
@@ -2929,24 +2938,37 @@ STORE_HOLD = "shared store record "
 
 
 def store_holds(st, store, name, bom=""):
-    """What a part owes the shared store, checked again on every run (skipped parts too: their state carries the
-    hold, so the release check and every publisher hold them): a part built from a record that the store has since
-    withdrawn, disputes, no longer lists, rates below [store] accept, or whose withdrawn list it cannot read, is held
-    with the reason; a part whose own build a record's agreement released (store_check, Run.second_opinion) gets the
-    holds that agreement lifted back, with the reason (store_client.problems). A hold stays once given (a withdrawal
-    is for good; a settled dispute is released by a person, or by building the part again with --refresh). A store
-    that cannot be reached or is offline holds nothing new and lifts nothing."""
+    """What a part owes the shared store, checked again on every run, whatever the store's settings (skipped parts
+    too: their state carries the hold, so the release check and every publisher hold them; a part that owes the store
+    nothing is left exactly as it is). A part built from a record that the store has since withdrawn, disputes, no
+    longer lists or rates below [store] accept is held with the reason; a part whose own build a record's agreement
+    released (store_check, Run.second_opinion) gets the holds that agreement lifted back, with the reason
+    (store_client.problems). Such a hold stays once given (a withdrawal is for good; a settled dispute is released by a
+    person, or by building the part again with --refresh). store: the run's Store, or None when the store is off.
+    When the store cannot vouch for the part (switched off, its withdrawn list unreadable and no copy younger than
+    store_client.HOLD_MAX_AGE_S saved here) the part is held too, but only for as long as that lasts: those notes
+    (and any lifted holds put back for them) are kept in st["store_unchecked"] and taken out again first on the next
+    run. Their text never changes, so a person's --allow keeps covering them."""
     from . import store_client as SC
-    if store is None or not getattr(store, "enabled", False):
+    prev = st.pop("store_unchecked", None)
+    if isinstance(prev, list) and prev:
+        st["verify"] = [v for v in st.get("verify") or [] if v not in prev]
+    if not SC.depends(st):
         return
+    store = store if store is not None and getattr(store, "enabled", False) else None
     redo = f"build it again (`ecadlib librarian {bom or 'BOM'} --refresh {name}`) or check it against the datasheet"
-    new = []
+    have, new, unchecked = list(st.get("verify") or []), [], []
     for d, why in SC.problems(st, store):
-        if d["kind"] == "lifted":
+        back = list(d.get("lifted") or []) if d["kind"] == "lifted" else []
+        note = SC.note_for(d, why, redo)
+        if d.get("unchecked"):
+            unchecked += [v for v in back + [note] if v not in have]
+        elif d["kind"] == "lifted":
             st["store_check"] = dict(st.get("store_check") or {}, revoked=why)
-            new += list(d.get("lifted") or [])
-        new.append(SC.note_for(d, why, redo))
-    st["verify"] = list(dict.fromkeys(list(st.get("verify") or []) + new))
+        new += back + [note]
+    st["verify"] = list(dict.fromkeys(have + new))
+    if unchecked:
+        st["store_unchecked"] = list(dict.fromkeys(unchecked))
 
 
 def write_notice(out, items):
@@ -3359,10 +3381,9 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         if wait:
             log(f"  {len(wait)} datasheet read(s) wait for your assistant: {r.reader.assistant / DA.README} says how "
                 "to answer them; then run this again")
-    if r.store is not None:                    # what parts owe the store, checked again (withdrawn, disputed, gone): held
-        for it in items:
-            if state.get(it["name"]):
-                store_holds(state[it["name"]], r.store, it["name"], Path(bom).name)
+    for it in items:                           # what parts owe the store, checked again (withdrawn, disputed, gone, or a
+        if state.get(it["name"]):              # store that is off or cannot vouch for them): held. Parts that owe it
+            store_holds(state[it["name"]], r.store, it["name"], Path(bom).name)   # nothing are left as they are
     if todo:
         save_state()                           # a stop while the summary is logged keeps them too
     from . import ledger as LG                 # the library lock across the whole block, then plan.lock (fsutil's order):

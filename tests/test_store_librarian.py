@@ -66,6 +66,17 @@ def _confirm(rec):
     return two
 
 
+def _as_also(rec, mpn="DSPART1"):
+    """rec (confirmed) filed under another code of its maker, with the part's own code in `also`: a lookup by the
+    part's code finds it through `also`, so it is never used directly, only compared (a second opinion)."""
+    out = copy.deepcopy(rec)
+    maker = out["key"]["maker"]
+    out["key"] = {"maker": maker, "mpn": f"{mpn}ALT", "key": SK.key(maker, f"{mpn}ALT")}
+    out["also"] = [SK.key(maker, mpn)]
+    assert SR.validate(out) == [], SR.validate(out)
+    return out
+
+
 def _store(root, recs, status=None, withdrawn=()):
     """A store folder holding these records (index level from store_record.level). status: key_id -> status."""
     root = Path(root)
@@ -78,9 +89,10 @@ def _store(root, recs, status=None, withdrawn=()):
         kid, ab = SK.key_id(k), SK.shard(k)
         (root / "parts" / ab).mkdir(parents=True, exist_ok=True)
         (root / "parts" / ab / f"{kid}.json").write_text(SK.dumps(rec))
-        shards.setdefault(ab, {})[kid] = {"key": k, "also": rec.get("also") or [], "rev": rec["rev"],
-                                          "sha256": SK.digest(rec), "level": SR.level(rec),
-                                          "status": (status or {}).get(kid, "active")}
+        entry = {"key": k, "also": rec.get("also") or [], "rev": rec["rev"], "sha256": SK.digest(rec),
+                 "level": SR.level(rec), "status": (status or {}).get(kid, "active")}
+        for s in {ab} | {SK.shard(a) for a in rec.get("also") or []}:   # as store_repo indexes `also` codes
+            shards.setdefault(s, {})[kid] = entry
     (root / "index").mkdir(exist_ok=True)
     for ab, idx in shards.items():
         (root / "index" / f"{ab}.json").write_text(json.dumps(idx))
@@ -113,9 +125,7 @@ def _tamper(rec):
     assert m, text[:400]
     w = f"{float(m.group(1)) + 0.1:g}"
     out["footprint"]["kicad_mod"] = text[:m.start(1)] + w + text[m.end(1):]
-    out["footprint"]["hash"] = FS.digest(out["footprint"]["kicad_mod"])
-    for e in out["evidence"]:
-        e["footprint_hash"], e["pins_hash"] = out["footprint"]["hash"], SR.pins_hash(out)
+    SR.rehash(out)
     assert SR.validate(out) == [], SR.validate(out)
     return out
 
@@ -171,7 +181,8 @@ def test_second_opinion_agreeing_lifts_the_read_hold_and_disagreeing_holds(tmp_p
     it, base = _datasheet_part()
     rec = _record(it, base, by="carol", reader=OTHER_READER)   # another person's read, by another model: checked
     assert SR.level(rec) == "checked"
-    for name, recs, ready in (("agree", [rec], True), ("disagree", [_tamper(rec)], False)):
+    agree = _as_also(_confirm(rec))                           # confirmed, found through `also`: a second opinion
+    for name, recs, ready in (("agree", [agree], True), ("disagree", [_tamper(rec)], False)):
         d = tmp_path / name
         d.mkdir()
         with _reader():
@@ -197,10 +208,10 @@ def test_second_opinion_agreeing_lifts_the_read_hold_and_disagreeing_holds(tmp_p
 
 @lite
 def test_second_opinion_from_the_same_kicad_entry_lifts_nothing(tmp_path, monkeypatch):
-    """A checked record made from the same KiCad footprint this build used is no independent build."""
+    """A confirmed record made from the same KiCad footprint this build used is no independent build."""
     _no_dns(monkeypatch)
     items, base = _kicad()
-    rec = _record(items["TPS1234DSGR"], base)
+    rec = _as_also(_confirm(_record(items["TPS1234DSGR"], base)), "TPS1234DSGR")
     d = tmp_path / "ws"
     d.mkdir()
     got = _run(d, store=SC.Store(str(_store(tmp_path / "s", [rec]))))[0]["TPS1234DSGR"]

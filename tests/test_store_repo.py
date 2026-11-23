@@ -31,10 +31,7 @@ def rec_of(name="TPS1234DSGR", by="alice", at=AT, **kw):
 
 def rehash(rec):
     """Hashes and evidence made to match the record's (edited) drawing and pins, so validate passes."""
-    rec["footprint"]["hash"] = FS.digest(rec["footprint"]["kicad_mod"])
-    for e in rec["evidence"]:
-        e["footprint_hash"], e["pins_hash"] = rec["footprint"]["hash"], SR.pins_hash(rec)
-    return rec
+    return SR.rehash(rec)
 
 
 def moved(rec):
@@ -383,7 +380,7 @@ def test_verify_changed_list_and_git_base(tmp_path, monkeypatch):
     rec = json.loads(f.read_text())
     f.write_text(json.dumps(SR.add_evidence(rec, _ev(rec, "mallory", kind="signoff", at="2026-11-27T00:00:00Z"))))
     run("index", pr)
-    code, out = run("verify", pr, "--changed", rel)                 # no base: every entry counts as contributed
+    code, out = run("verify", pr, "--changed", f)                   # no base: every entry counts as contributed
     assert code == 1 and "signoff" in out
     calls = []
 
@@ -401,6 +398,58 @@ def test_verify_changed_list_and_git_base(tmp_path, monkeypatch):
     code, out = run("verify", pr, "--base", "origin/main")
     assert code == 1 and "signoff" in out and "maintainer-only" in out, out
     assert any(a[0] == "diff" and "origin/main" in a for a in calls)
+
+
+@lite
+def test_verify_changed_takes_cwd_relative_and_absolute_paths(tmp_path, monkeypatch):
+    """p10_flow.sh: `verify store --changed store/parts/...` (as a shell completes it from the folder above) checked
+    nothing: the paths were taken as relative to the store. Now relative to the current folder or absolute; a path
+    outside the store cannot run (exit 2)."""
+    _offline(monkeypatch)
+    base, pr = _pr(tmp_path, rec_of(by="alice"))
+    assert run("add", pr, put(Path(tmp_path) / "bob.json", rec_of(by="bob", at="2026-11-25T08:00:00Z")))[0] == 0
+    f = rec_path(pr, *TPS)
+    monkeypatch.chdir(tmp_path)
+    for path in (f.relative_to(tmp_path).as_posix(), str(f)):
+        code, out = run("verify", "pr", "--old", base, "--changed", path, "--author", "bob")
+        assert code == 0 and "1 record checked" in out, (path, out)
+        code, out = run("verify", "pr", "--old", base, "--changed", path, "--author", "mallory")
+        assert code == 1 and "mallory" in out, (path, out)
+    monkeypatch.chdir(pr)
+    code, out = run("verify", ".", "--old", base, "--changed", f.relative_to(pr).as_posix(), "--author", "bob")
+    assert code == 0 and "1 record checked" in out, out
+    code, _ = run("verify", ".", "--changed", str(tmp_path / "bob.json"))
+    assert code == 2
+    hlp = " ".join(SR2._parser()._subparsers._group_actions[0].choices["verify"].format_help().split())
+    assert "relative to the current folder or absolute" in hlp, hlp
+
+
+@lite
+def test_add_refuses_a_zone_and_dnp_and_says_when_a_build_does_not_confirm(tmp_path, monkeypatch):
+    """p9_repo.py: a zone and BOM / DNP flags (pad hash unchanged) were indexed and then "confirmed" by bob's honest
+    build. Now refused; and a build with the same pads and pins but another silk drawing confirms nothing."""
+    _offline(monkeypatch)
+    honest = rec_of(by="bob")
+    bad = copy.deepcopy(honest)
+    km = bad["footprint"]["kicad_mod"]
+    last = km.rstrip().rfind(")")
+    bad["footprint"]["kicad_mod"] = (km[:last] + '\n  (zone (layer "F.Cu") (hatch edge 0.5) (polygon (pts (xy -3 -3) '
+                                     '(xy 3 -3) (xy 3 3))))\n' + km[last:]).replace("(attr smd", "(attr smd dnp", 1)
+    bad["evidence"][0]["by"] = "mallory"
+    rehash(bad)
+    root = store(Path(tmp_path) / "a")
+    code, out = run("add", root, put(Path(tmp_path) / "m.json", bad), "--author", "mallory")
+    assert code == 1 and "zone" in out and not list((root / "parts").glob("*/*.json")), out
+    silk = copy.deepcopy(honest)
+    silk["footprint"]["kicad_mod"] = km[:last] + '\n  (fp_circle (center 4 2.7) (end 4.2 2.7) (layer "F.SilkS") ' \
+        '(stroke (width 0.2) (type solid)) (fill solid))\n' + km[last:]
+    silk["evidence"][0]["by"] = "mallory"
+    rehash(silk)
+    assert run("add", root, put(Path(tmp_path) / "s.json", silk), "--author", "mallory")[0] == 0
+    code, out = run("add", root, put(Path(tmp_path) / "b.json", honest), "--author", "bob")
+    assert code == 0 and "does not confirm" in out and "makes" not in out, out
+    e = json.loads((root / "index" / f"{SK.shard(SK.key(*TPS))}.json").read_text())[SK.key_id(SK.key(*TPS))]
+    assert e["level"] == "checked", e
 
 
 # ---------------------------------------------------------------- withdraw, dispute
@@ -540,7 +589,7 @@ def pointer(rec, lcsc="C999999"):
     for half, text in (("symbol", "kicad_sym"), ("footprint", "kicad_mod")):
         out[half].update({"source": f"easyeda:{lcsc}", text: None, "pointer": {"lcsc": lcsc},
                           "license": SR.LICENSE["easyeda"], "credit": SR.credit_of("easyeda")})
-    return out
+    return SR.rehash(out)
 
 
 def _new_in_pr(tmp_path, rec, *base_recs, maintainers=("oli",)):

@@ -31,9 +31,13 @@ Not every part gains the same.
 | EasyEDA / LCSC conversion | The conversion and its "check this" hold | Only as a pointer (see licences) |
 | A user's own or company library, SnapMagic, SamacSys, Ultra Librarian | - | Never: not ours to share |
 
-The second effect matters as much as the downloads: a store record is a **second opinion**. When a user's own datasheet
-read gives the same pads and pins as a record somebody else built, that agreement is real evidence, and the part can be
-released without a person. So the store also lowers the hold rate for parts it does not yet fully trust.
+The second effect: a store record is a **second opinion**. When a user's own build differs from a record, the part is
+held and both answers are named. When it agrees with a record, that is evidence only when the record itself is
+**confirmed** (two builders drew the same whole part, or a person signed it off): one contributor's build cannot be
+verified by anyone (not even which AI model read the datasheet: that is their own word), so agreeing with a `checked`
+record releases nothing; the review only notes it. Since a confirmed record with an exact maker + MPN match is used
+directly anyway, in practice a lift happens only for a confirmed record reached through another code it covers
+(`also`) or for a BOM line with no maker.
 
 What it cannot do: prove a footprint matches the datasheet. No automatic check can. The store's claim is "passed the
 release check, and N independent builds agree", and the docs must say so in those words. (The 11-10 review rule stands:
@@ -84,10 +88,13 @@ Contributors agree, in the pull request template, that their record is offered u
 
 - **checked**: one build, passed the full release check (#141), no `--allow` override, no open "verify" note.
 - **confirmed**: checked, plus at least one of:
-  - a second, independent build with the same pads (geometry hash) and the same pin-to-pad map. Independent means
-    another contributor, or another AI model reading the datasheet. Two runs of the same code on the same input do not
-    count;
-  - a person's sign-off recorded with the record (who, when, against which datasheet revision);
+  - a second, independent build of the same whole drawing: the same pads (geometry hash), the same pins (number, name,
+    electrical type, pad) and the same `text_hash` (store_record.text_hash: the normalised footprint and symbol text,
+    so silk, fab, courtyard, text, attributes and symbol graphics all count). Independent means another contributor,
+    or a maintainer's own builds with another AI model reading the datasheet. Two runs of the same code on the same
+    input do not count. A build with the same pads and pins but another drawing is kept as evidence and confirms
+    nothing;
+  - a person's sign-off of that drawing, recorded with the record (who, when, against which datasheet revision);
   - the part is the KiCad library's own entry for this exact MPN (a curated source).
 - **withdrawn**: pulled. Never used; local copies are flagged.
 
@@ -96,7 +103,8 @@ Contributors agree, in the pull request template, that their record is offered u
 | Record | Default behaviour |
 |---|---|
 | confirmed | Used. Still goes through the local release check like any part |
-| checked | Not used on its own. Kept as a second opinion: if the user's own build agrees and was made independently (another kind of source, or two datasheet reads by different AI models), the hold that only waited for a confirmation is lifted; if it disagrees, the part is held and the note says the store has another answer |
+| confirmed, reached through an `also` code or without a maker | Not used on its own. A second opinion that can release: if the user's own build agrees and was made independently (another kind of source, or two datasheet reads by different AI models), the hold that only waited for a confirmation is lifted; if it disagrees, the part is held |
+| checked | Not used on its own, and never releases anything. Compared with the user's own build: agreement is noted ("agrees with one unconfirmed build in the shared store; not enough to release"); disagreement holds the part and names both answers |
 | withdrawn | Ignored |
 
 `[store] accept = "confirmed"` is the default; `"checked"` takes single-build records too (more parts at once, more
@@ -121,9 +129,9 @@ problem with the record.
      confirmed); different pads or pins is a **conflict**, which blocks the pull request and marks the existing record
      disputed until a maintainer looks;
    - a contributor cannot confirm their own record (one GitHub account counts once).
-4. No pull request is safe to merge unseen: a new `checked` record is not used on its own, but its agreement with a
-   user's own build can lift that build's hold (the second opinion), so a wrong record that matches a wrong local read
-   would release it. Every pull request is merged by a maintainer who has looked at it; auto-merge is not planned.
+4. No pull request is safe to merge unseen: a new `checked` record is neither used on its own nor able to lift a hold,
+   but a second contributor's matching build makes it `confirmed`, and a confirmed record is used without a person
+   looking. Every pull request is merged by a maintainer who has looked at it; auto-merge is not planned.
 
 The checks cannot read the datasheet, so they cannot tell a wrong-but-plausible footprint from a right one. That gap is
 exactly what the `confirmed` rule covers.
@@ -136,9 +144,14 @@ exactly what the `confirmed` rule covers.
   link. Withdrawals are never deleted.
 - A report with a concrete difference (a pad size, a pin) marks the record **disputed** at once: it drops to
   second-opinion use until settled. Disputing never deletes anything, so abuse costs little.
-- Every client fetches the small withdrawn list on each run. A part in the user's library that came from a withdrawn
-  record is held on the next run and shown in `ecadlib upkeep`, with the reason. This uses the existing change-control
-  ledger: the part's source line says which record and revision it came from.
+- Every client that can read the store fetches the small withdrawn list on each run. A part in the user's library that
+  came from a withdrawn record (or was released by its agreement) is held on the next run that can read the list, and
+  shown in `ecadlib upkeep` and refused by every publisher, with the reason. A part that depends on the store is held
+  too when the store cannot vouch for it: switched off (`[store] url` empty or accept `"off"`: "release it yourself or
+  switch the store on"), or its list unreadable and no copy younger than 30 days (`HOLD_MAX_AGE_S`) saved on the
+  computer; a stale or missing list is never taken for "not withdrawn". A person's `--allow` keeps such a part
+  released, and those holds go again once the store can be read. The part's source line says which record and revision
+  it came from.
 - A nightly job on the store repo re-runs the release check on every record with the newest ecadlib. A record that a
   new rule catches is withdrawn automatically. So every general fix we make to the checks also cleans the store.
 
@@ -156,7 +169,9 @@ repo with protected `main` is the only source.
   which the public index lists beside the maker and part number. GitHub sees an IP address and those file names;
   ecadlib sends no account and no BOM. For stricter needs `[store] mode = "snapshot"` downloads the whole weekly bundle
   and looks parts up locally (the host then learns nothing about which parts), and `--offline` or
-  `[store] accept = "off"` contacts nothing.
+  `[store] accept = "off"` contacts nothing (parts that came from the store are then checked against the saved
+  withdrawn list, or held). Publishing commands (`kicad-export`, `altium365 push`, `dblib sync`, `export`, the
+  plugins) and `upkeep` contact the store too, only for the parts that depend on it, with the same requests.
 - **Sharing.** Only by the explicit command. A record holds only: maker, part number, a description only when a source
   gave it (a part search, a library, the datasheet; never the BOM's own Description or Notes text), the public
   datasheet link and hash, pins, pads, dimensions, the checks passed, the ecadlib version and the AI model name. It never holds the BOM, project or file names, the user's name or e-mail, internal part numbers, stock or
@@ -212,7 +227,7 @@ package dimensions in version 1 (`spec` is null; a client accepts one, a later v
 | `ecadlib/librarian.py` | New source `store`, tried after the user's own library and before `kicad`, only while `[store] url` is set (never in the default `[sources] order`: it runs by itself). Writes through the existing `put_fp` / `put_kicad_sym`, so footprint sharing, house style and notes behave as for any source. Second-opinion compare after the other sources ran |
 | `ecadlib/store_repo.py` | Maintainer and CI side: `index`, `verify`, `add`, `withdraw`, `snapshot`; and `store_template/` with the store repo's workflows, templates, README and NOTICE |
 | `ecadlib/store_cli.py` | `ecadlib store status / get / share / report`, `ecadlib store-repo ...` |
-| `ecadlib/upkeep.py`, `release_check.py` | A part from a withdrawn, disputed, gone or down-rated record, or released by such a record's agreement, is held, with the reason; the upkeep check runs by itself while `[store] url` is set |
+| `ecadlib/upkeep.py`, `release_check.py` | A part from a withdrawn, disputed, gone or down-rated record, or released by such a record's agreement, is held, with the reason; so is one the store cannot vouch for (switched off, or its withdrawn list unreadable with no saved copy younger than 30 days); the upkeep check runs by itself while `[store] url` is set or the plan has a part that depends on the store |
 | `ecadlib/rules.py` | `[store] url, accept, mode`; not in the default source order, and left out of the rules hash while the url is empty (nothing changes for anyone who has not set one) |
 | docs, PRIVACY.md, site/privacy | User guide `docs/shared-store.md`; privacy rows |
 
@@ -225,10 +240,14 @@ librarian. Showing "from the shared store, confirmed by 3" in their part views i
 2. Store lookup by maker + MPN. Confirmed hit: build from the record, source `store:<key_id>@r<rev>`. Checked hit: keep
    it aside.
 3. Other sources as today, for whatever is still missing.
-4. If a checked record was kept aside and the local build finished: same pads and pin map (both drawings hashed at
-   this ecadlib's digest version), and the two builds independent -> the agreement is recorded and the hold that
-   waited for a confirmation is lifted (the read's flagged items go to the review list); the lift is taken back if the
-   record is later withdrawn, disputed or gone. Different -> hold with both answers named.
+4. If a record was kept aside and the local build finished, they are compared: same pads and pins (both drawings hashed
+   at this ecadlib's digest version). Different -> hold with both answers named. The same, and the record is
+   **confirmed** (the lower of the index's level and the level recomputed from the record with the store's trusted
+   list and maintainers), active, with a drawing, and the two builds independent -> the agreement is recorded and the
+   hold that waited for a confirmation is lifted (the read's flagged items go to the review list); the lift is taken
+   back if the record is later withdrawn, disputed or gone, and held again while the store cannot vouch for it (off,
+   or its withdrawn list unreadable with no saved copy younger than 30 days). The same, but only `checked` -> noted,
+   nothing lifted.
 5. Release check, as today.
 
 ## Seeding

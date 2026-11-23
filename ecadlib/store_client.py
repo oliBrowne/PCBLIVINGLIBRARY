@@ -22,7 +22,9 @@ beside the maker and part number. mode="snapshot" downloads the whole store as o
 SNAPSHOT_TTL_S), unpacks it safely and answers every lookup from that folder: the host then learns nothing about
 which parts you look up. offline=True reads the cache only. Only https://, file:// URLs and folders are read: a
 plain http:// store or snapshot URL is refused (one trouble line), and every online answer is capped in size
-(FETCH_MAX_BYTES, RECORD_MAX_BYTES).
+(FETCH_MAX_BYTES, RECORD_MAX_BYTES). No store request follows an HTTP redirect (an answer comes from the store's own
+URL or not at all), except the snapshot download's from github.com to GitHub's release file host, over https only
+(redirect_ok).
 
 Caching (online mode, under cache_dir): store.json, the index shards and withdrawn.json are asked again after TTL_S;
 an older copy is used when the network fails. A record is immutable for its sha256, so it is kept for good by that
@@ -34,15 +36,22 @@ one trouble line saying how old the copy is.
 What a lookup checks before it returns a Hit: the record's sha256 is the index's, the index key id is the key's
 (store_keys.key_id), the record's own key, rev and status are the index entry's, and its level is the LOWER of the
 index's and the one store_record.level gives the record itself (store.json "trusted": the contributors whose
-evidence counts, null = everyone; "maintainers"). A match through another code (`also`) or without a maker is never
+evidence counts, null = everyone, a list always with the "maintainers" in it, as the store's own index counts them). A match through another code (`also`) or without a maker is never
 used to build a part (decide), only compared.
+
+Parts that depend on the store (built from a record, or released by a confirmed record's agreement: depends) are
+checked again by every librarian run, upkeep and publisher (problems): the store must vouch for them. One that is
+switched off ([store] url empty, accept "off") cannot, nor can one whose withdrawn list cannot be read when no copy
+younger than HOLD_MAX_AGE_S is saved on this computer: the part is held until a person releases it (--allow) or the
+store can be read. A list that could not be read is never taken for "nothing withdrawn". Parts that owe the store
+nothing are never touched, whatever the store's settings.
 
 A record's meaning is store_record.py's; this module reads its schema, key, rev, status and (for level) evidence.
 Everything from the store that is printed goes through safe() (no terminal control characters)."""
 import hashlib, io, json, os, re, shutil, tempfile, time, zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.request import url2pathname
 
 from . import store_keys as SK, store_record as SR
@@ -52,18 +61,25 @@ SNAPSHOT_TTL_S = 86400              # snapshot mode: the zip is downloaded again
 SNAPSHOT_MAX_BYTES = 1024 * 2 ** 20  # unpacked size of a snapshot, and the download's size
 SNAPSHOT_MAX_MEMBERS = 500_000
 MAX_AGE_S = 7 * 86400               # an index / withdrawn list / snapshot older than this builds no part
+HOLD_MAX_AGE_S = 30 * 86400         # a part that depends on the store is held once its withdrawn list is older than this
 FETCH_MAX_BYTES = 16 * 2 ** 20       # store.json, an index shard, withdrawn.json: the most an answer may hold
 RECORD_MAX_BYTES = 2 * SR.MAX_BYTES  # a record (store_record refuses one over MAX_BYTES anyway)
 ACCEPT = ("confirmed", "checked", "off")
 LEVELS = ("checked", "confirmed")    # low to high
 SOURCE = re.compile(r"store:([0-9a-f]{32})@r(\d+)")
 KID = re.compile(r"[0-9a-f]{32}")
-_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_CTRL = SR._CTRL                    # C0 / C1 controls, bidi controls, zero-width characters
+REDIRECT_HOSTS = ("github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com")
+OFF = ("this part came from the shared store, which is switched off, so withdrawals cannot be checked: release it "
+       "yourself or switch the store on")
+OFF_LIFTED = ("this part was released because a shared store record agreed with it, and the shared store is switched "
+              "off, so withdrawals cannot be checked: the holds it lifted are back; release it yourself or switch the "
+              "store on")
 
 
 def safe(text):
-    """Text from the store as it may be printed: C0 / C1 control characters (terminal escapes) taken out, newlines and
-    tabs kept."""
+    """Text from the store as it may be printed: C0 / C1 control characters (terminal escapes), bidirectional-text
+    controls and zero-width characters taken out, newlines and tabs kept."""
     return _CTRL.sub("", str(text))
 
 
@@ -143,6 +159,14 @@ def _rev(v):
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
+def redirect_ok(src, dest):
+    """A snapshot download may follow this redirect: both https, from github.com to GitHub's own hosts (a release
+    asset is served from objects.githubusercontent.com). Nothing else a store reads ever follows a redirect."""
+    a, b = urlparse(str(src)), urlparse(str(dest))
+    return a.scheme == b.scheme == "https" and (a.hostname or "") in REDIRECT_HOSTS and \
+        (b.hostname or "") in REDIRECT_HOSTS and not b.username and not b.password and b.port in (None, 443)
+
+
 def default_snapshot_url(url):
     """Where a store's weekly zip is: for a GitHub raw URL the rolling `snapshot` release of that repository (the
     store's snapshot workflow attaches it there; a zip is never committed), else <url>/snapshot.zip."""
@@ -164,6 +188,7 @@ class Store:
         self.meta = {}
         self._mem, self._usable, self._down, self._root, self._tmp = {}, None, False, None, None
         self._down_msg, self._ages, self._snap_age, self._wd_state, self._stale_said = "", {}, 0.0, None, False
+        self._old, self._snap_old, self._wd_old_said, self.withdrawn_age = set(), False, False, None
         low = self.url.lower()
         self.remote = low.startswith(("https://", "http://"))
         if not self.url:
@@ -208,8 +233,10 @@ class Store:
         http = self._http()
         from .httpcache import CachedHTTP
         if isinstance(http, CachedHTTP):             # the real client: streamed, so a huge answer is never read whole
-            r = http.s.get(url, timeout=http.timeout or 20, stream=True)
+            r = http.s.get(url, timeout=http.timeout or 20, stream=True, allow_redirects=False)
             try:
+                if 300 <= r.status_code < 400:       # never followed: the store's answer comes from the store's URL
+                    return r.status_code, "", f"HTTP {r.status_code} redirect not followed"
                 if r.status_code == 404:
                     return 404, "", None
                 if not 200 <= r.status_code < 300:
@@ -224,6 +251,8 @@ class Store:
                 r.close()
         r = http.get(url, cache=False)               # a test's fake or another client: its whole answer, then the cap
         status, text, err = getattr(r, "status", 0), getattr(r, "text", ""), getattr(r, "error", None)
+        if err is None and 300 <= status < 400:
+            return status, "", f"HTTP {status} redirect not followed"
         if err is None and 200 <= status < 300 and isinstance(text, str) and len(text.encode("utf-8")) > cap:
             return -1, "", None
         return status, text, err
@@ -308,6 +337,8 @@ class Store:
         old = self._read_cached(f)
         if old is not None and (self.offline or self._down or 0 <= self.now() - old["at"] < self.ttl):
             self._ages[rel] = max(0.0, self.now() - old["at"])
+            if not 0 <= self.now() - old["at"] < self.ttl:
+                self._old.add(rel)                   # served from this computer because the store was not asked
             return ("ok", old["text"]) if isinstance(old.get("text"), str) else ("missing", None)
         got, text = self._fetch(rel)
         if got == "ok" or got == "missing":
@@ -318,6 +349,7 @@ class Store:
             return "error", "bad"
         if old is not None:                          # the network failed: an old copy beats none (MAX_AGE_S decides
             self._ages[rel] = max(0.0, self.now() - old["at"])   # whether it may build a part)
+            self._old.add(rel)
             if text == "down":
                 self._unreached("using the copy saved on this computer earlier")
             return ("ok", old["text"]) if isinstance(old.get("text"), str) else ("missing", None)
@@ -332,7 +364,7 @@ class Store:
     def _digest_ok(text, sha):
         try:
             return SK.digest(json.loads(text)) == sha
-        except ValueError:
+        except Exception:                            # not JSON, nested too deep, too big: not the record
             return False
 
     def _json(self, rel):
@@ -345,8 +377,8 @@ class Store:
             if got == "ok":
                 try:
                     d = json.loads(text)
-                except ValueError:
-                    self._note(f"shared store: {rel} is not valid JSON; ignored")
+                except Exception as e:               # not JSON, or JSON nested too deep / too big to read
+                    self._note(f"shared store: {rel} is not readable JSON ({type(e).__name__}); ignored")
                     got, d = "error", "bad"
             elif got == "error":
                 d = text
@@ -369,6 +401,7 @@ class Store:
         have = stamp is not None and (tree / "store.json").is_file()
         if have and (self.offline or 0 <= self.now() - stamp["at"] < self.snapshot_ttl):
             self._root, self._snap_age = tree, max(0.0, self.now() - stamp["at"])
+            self._snap_old = not 0 <= self.now() - stamp["at"] < self.snapshot_ttl
             return tree
         data, err = self._download()
         new = self._unpack(data, base) if data is not None else None
@@ -385,6 +418,7 @@ class Store:
             self._root = tree if have else None
         if have and self._root == tree:              # an old copy serves: how old (MAX_AGE_S)
             self._snap_age = max(0.0, self.now() - stamp["at"])
+            self._snap_old = True
         self._down = self._root is None
         return self._root
 
@@ -397,7 +431,18 @@ class Store:
             if callable(getb):
                 data = getb(url)
             else:
-                r = http.s.get(url, timeout=max(120, getattr(http, "timeout", 0) or 0), stream=True)
+                for _ in range(5):                   # redirects: only GitHub's release download (github.com to its
+                    r = http.s.get(url, timeout=max(120, getattr(http, "timeout", 0) or 0), stream=True,  # file host)
+                                   allow_redirects=False)
+                    if not 300 <= r.status_code < 400:
+                        break
+                    nxt = urljoin(url, r.headers.get("Location") or "")
+                    r.close()
+                    if not redirect_ok(url, nxt):
+                        return None, f"redirected to {safe(nxt)[:80]}, which is not GitHub's release download over https"
+                    url = nxt
+                else:
+                    return None, "too many redirects"
                 if r.status_code != 200:
                     return None, f"HTTP {r.status_code}"
                 buf = io.BytesIO()
@@ -494,9 +539,12 @@ class Store:
         return True
 
     def trusted(self):
-        """store.json "trusted": the contributor names whose evidence counts (None: everyone's)."""
+        """store.json "trusted": the contributor names whose evidence counts (None: everyone's); a list always counts
+        the maintainers' too, as the store's own index does (store_repo._people), so both compute the same level."""
         t = self.meta.get("trusted")
-        return [x for x in t if isinstance(x, str)] if isinstance(t, list) else None
+        if not isinstance(t, list):
+            return None
+        return list(dict.fromkeys([x for x in t if isinstance(x, str)] + self.maintainers()))
 
     def maintainers(self):
         m = self.meta.get("maintainers")
@@ -510,13 +558,29 @@ class Store:
         return self._withdrawn() or {}
 
     def withdrawals(self):
-        """(key_id -> withdrawal entry, None) when the list was read; (None, why) when it cannot be told: 'down' (the
-        store could not be reached or is off: nothing can be said) or 'unknown' (the store answered, but its
-        withdrawn.json is missing or unreadable: no record of it can be trusted)."""
+        """(key_id -> withdrawal entry, None) when the list could be read; (None, why) when it cannot be told: 'off'
+        (no store, or accept "off"), 'down' (the store could not be read and no copy of its list is saved on this
+        computer), 'stale' (only a copy older than HOLD_MAX_AGE_S is: self.withdrawn_age says how old) or 'unknown' (the
+        store answered, but its withdrawn.json is missing or unreadable). A copy saved on this computer earlier and
+        younger than HOLD_MAX_AGE_S is used when the store cannot be read (one trouble line says so). A list that could
+        not be read is never taken for "nothing withdrawn"."""
+        self.withdrawn_age = None
+        if not self.enabled or self.accept == "off":
+            return None, "off"
         if not self.usable():
             return None, "down"
         wd = self._withdrawn()
-        return (wd, None) if wd is not None else (None, "down" if self._wd_state == "down" else "unknown")
+        if wd is None:
+            return None, "down" if self._wd_state == "down" else "unknown"
+        age = self.age("withdrawn.json")
+        self.withdrawn_age = age
+        if age > HOLD_MAX_AGE_S:
+            return None, "stale"
+        if ("withdrawn.json" in self._old or self._snap_old) and not self._wd_old_said:
+            self._wd_old_said = True
+            self._note(f"shared store could not be read; withdrawals were checked against the list saved on this "
+                       f"computer {age / 86400:.0f} day(s) ago")
+        return wd, None
 
     def _withdrawn(self):
         """As withdrawn(), but None when the list could not be read (a lookup then refuses: it cannot tell)."""
@@ -679,7 +743,7 @@ class Store:
             return None
         try:
             rec = json.loads(text)
-        except ValueError:
+        except Exception:
             rec = None
         if not isinstance(rec, dict) or SK.digest(rec) != sha:
             self._note(f"shared store: record {kid} does not match its hash in the index; refused")
@@ -740,34 +804,67 @@ def depends(item):
 
 def note_for(dep, why, redo=""):
     """The `verify` note for one of problems()'s answers: a part built from the record, or a part whose lifted holds
-    are back (redo: what to do, for a part built from it)."""
+    are back (redo: what to do, for a part built from it). A note that the store could not vouch for the part at all
+    (dep "unchecked": switched off, unreadable) is the same text wherever it is made, so a person's --allow keeps
+    covering it run after run."""
+    if dep.get("unchecked"):
+        return why if why.startswith("this part ") else (
+            f"{why}: this part's own build was released because that record agreed with it; the holds it lifted are "
+            "back" if dep.get("kind") == "lifted" else f"{why}: this part was built from it")
     if dep.get("kind") == "lifted":
         return f"{why}: this part's own build was released because that record agreed with it; the holds it lifted " \
                "are back"
     return f"{why}: this part was built from it" + (f"; {redo}" if redo else "")
 
 
+def _unchecked(deps, why):
+    return [(dict(d, unchecked=True), why(d)) for d in deps]
+
+
 def problems(item, store, accept=None):
-    """[(dependency, why)] for what a part owes the shared store (depends) that no longer holds: the record was
-    withdrawn at that rev, is disputed, is no longer in the store's index (or, for an agreement, no longer at that
-    rev), its level is now below [store] accept (a part built from it), or the store answers but its withdrawn list
-    cannot be read ("cannot tell"). [] when the part owes the store nothing, the store is off, or it cannot be
-    reached / is offline with nothing saved (nothing is said about a part then; the store's trouble says why).
+    """[(dependency, why)] for what a part owes the shared store (depends) that does not hold now. [] when the part
+    owes the store nothing (whatever the store's settings: a store that is off changes nothing for other parts).
+    For a part that does owe it, the store must vouch for it, or the part is held:
+      the record was withdrawn at that rev, is disputed, is no longer in the store's index (or, for an agreement, no
+      longer at that rev), or its level is now below [store] accept (a part built from it);
+      the store cannot vouch ("unchecked" dependencies; note_for words them the same every time): it is switched off
+      (store None or not enabled, [store] url empty or accept "off": OFF / OFF_LIFTED), its withdrawn list cannot be
+      read and no copy younger than HOLD_MAX_AGE_S is saved on this computer, or the store answers but its list or
+      index is missing or unreadable. A list that could not be read is never taken for "nothing withdrawn", and
+      anything that goes wrong while checking holds the part (never raises).
     why is text for a `verify` note: 'shared store record KEY rN ...'."""
     deps = depends(item)
-    if not deps or store is None or not getattr(store, "enabled", False) or not store.usable():
+    if not deps:
         return []
+    try:
+        return _problems(deps, store, accept)
+    except Exception as e:                            # a broken store file or a bug here: held, never a crash
+        name = type(e).__name__                       # `e` is cleared when the except block ends
+        return _unchecked(deps, lambda d: safe(f"shared store record {d['key'] or d['key_id']} r{d['rev']}: "
+                                               f"withdrawals could not be checked ({name})"))
+
+
+def _problems(deps, store, accept):
+    if store is None or not getattr(store, "enabled", False) or getattr(store, "accept", "confirmed") == "off" \
+            or accept == "off":
+        return _unchecked(deps, lambda d: OFF_LIFTED if d["kind"] == "lifted" else OFF)
     accept = accept or getattr(store, "accept", "confirmed")
     wd, why = store.withdrawals()
-    if wd is None and why == "down":
-        return []
+    lab = lambda d: safe(f"{d['key'] or d['key_id']} r{d['rev']}")
+    if wd is None:
+        days = HOLD_MAX_AGE_S // 86400
+        text = {"off": None,
+                "stale": f"withdrawals could not be checked for more than {days} days (the store could not be read, "
+                         f"and the copy of its withdrawn list saved on this computer is older than that)",
+                "unknown": "cannot tell whether the store withdrew it (its withdrawn list is missing or unreadable)"
+                }.get(why, "withdrawals could not be checked (the store could not be read, and no copy of its "
+                           f"withdrawn list younger than {days} days is saved on this computer)")
+        if text is None:
+            return _unchecked(deps, lambda d: OFF_LIFTED if d["kind"] == "lifted" else OFF)
+        return _unchecked(deps, lambda d: f"shared store record {lab(d)}: {text}")
     out = []
     for d in deps:
-        label = safe(f"{d['key'] or d['key_id']} r{d['rev']}")
-        if wd is None:
-            out.append((d, f"shared store record {label}: cannot tell whether the store withdrew it (its withdrawn "
-                           "list is missing or unreadable)"))
-            continue
+        label = lab(d)
         w = wd.get(d["key_id"])
         if w is not None and store._wrev(w) >= d["rev"]:
             reason = "; ".join(str(x) for x in (w.get("reason"), w.get("issue")) if x) or "no reason given"
@@ -777,10 +874,10 @@ def problems(item, store, accept=None):
             continue                                  # (no key: its index shard is unknown; withdrawals were checked)
         state, e = store.entry_state(d["key_id"], d["key"])
         if state == "down":
-            continue
+            continue                                  # (withdrawals were checked; a dispute is seen once it is read)
         if state == "bad":
-            out.append((d, f"shared store record {label}: cannot tell whether the store still lists it (its index "
-                           "cannot be read)"))
+            out.append((dict(d, unchecked=True), f"shared store record {label}: cannot tell whether the store still "
+                                                    "lists it (its index cannot be read)"))
         elif e is None:
             out.append((d, f"shared store record {label} is no longer in the store's index"))
         elif str(e.get("status") or "active") == "disputed":
