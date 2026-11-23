@@ -897,12 +897,14 @@ def record_releases(items, base, names, who=None, log=None):
         g.close()
 
 
-def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, change_holds=True):
+def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, change_holds=True, ai=None):
     """Run check_item on every item, set status ready / held, record --allow overrides. Returns report rows.
     rules: a loaded rules dict, a path, or None to use the ecadlib.toml found from `base` (defaults when none).
     change_holds: a part waiting for `ecadlib part approve` with no released revision (change_hold) stays held with
     its "change control:" reason, whatever the check finds and whatever --allow says. Only `part approve` passes False,
-    while it checks the version it is about to release."""
+    while it checks the version it is about to release.
+    ai: {part name: the "verify:" looks the AI reviewer passed this run} (ecadlib.ai_review.review), given only by the
+    librarian run that read the answers; a part whose every failure is one of them is ready ("ai_reviewed")."""
     from . import ledger as LG, rules as RU
     rules = RU.resolve(rules, base)
     rows, today = [], datetime.date.today().isoformat()
@@ -939,12 +941,15 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
                 if k in it:
                     it[k] = it.pop(k)
         covered = set((it.get("allow") or {}).get("failures", []))
+        looked = {m for m in (ai or {}).get(it.get("name"), ()) if str(m).startswith("verify: ")}
         hard = [m for m in msgs if m.startswith(UNFIXABLE)]
         open_ = [m for m in msgs if m not in covered or m.startswith(UNFIXABLE)]   # never covered, by hand neither
         if not msgs:
             it["status"], result = "ready", "pass"
         elif it.get("allow") and not open_:
             it["status"], result = "ready", "allowed"
+        elif looked and all(m in looked for m in msgs):      # ecadlib.ai_review: every hold was a look it passed
+            it["status"], result = "ready", "ai_reviewed"
         else:
             it["status"], result = "held", "held"
         it["hold_reasons"] = open_ if result == "held" else []
@@ -960,7 +965,8 @@ def apply(items, base=".", allow=(), unallow=(), who="--allow", rules=None, chan
         rows.append({"name": it["name"], "status": it["status"], "result": result,
                      "symbol_source": (it.get("source") or {}).get("symbol") or "", "footprint_source": (it.get("source") or {}).get("footprint") or "",
                      "height_mm": f"{info['height']:.2f}" if info.get("height") else "", "failures": "; ".join(msgs),
-                     "warnings": "; ".join(warns), "allowed": "yes" if it.get("allow") else ""})
+                     "warnings": "; ".join(warns), "allowed": "ai reviewer" if result == "ai_reviewed" else
+                     "yes" if it.get("allow") else ""})
     from .approvals import post_check          # sign-off policy (approvals.json next to the plan) and dedupe status
     post_check(items, base, rows)
     return rows

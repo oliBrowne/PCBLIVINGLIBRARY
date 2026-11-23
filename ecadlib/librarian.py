@@ -3064,6 +3064,10 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         t_check = time.time()
         TI.record(out, "build", t_build, t_check, parts=len(todo))
         checks = RC.apply(items, out, allow, rules=rules)
+        from . import ai_review as AR               # [review] ai_reviewer (off by default): a look at held parts
+        passed = AR.review(items, out, rules, cache=cache, log=log) if AR.mode(rules) != "off" else {}
+        if passed:
+            checks = RC.apply(items, out, allow, rules=rules, ai=passed)
         if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
             from .approvals import identity, post_check, stamp_allow
             stamp_allow(items, allow, identity(user, cwd=out))
