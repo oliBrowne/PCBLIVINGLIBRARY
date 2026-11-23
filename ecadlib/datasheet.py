@@ -3390,9 +3390,18 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             pass
         except Exception as e:
             review.append(f"footprint_adv.check_pad_table failed: {e!r}")
-    if ok:
+    # the build checks run whenever the read builds, schema error or not: the librarian builds the same spec without
+    # the schema (review 2026-11-23: a schema error skipped the standard package's, the land's and the shorts checks,
+    # and "schema:" alone holds nothing). A read that fails the schema and does not build has its schema lines
+    built = None
+    try:
+        built = F.build(spec)
+    except Exception as e:
+        if ok:
+            review.append(f"footprint_gen.build failed: {e!r}")
+    if built:
         try:
-            txt, rep = F.build(spec)
+            txt, rep = built
             from . import sexpr
             sexpr.parse(txt)
             far = std_copper(spec, rep)

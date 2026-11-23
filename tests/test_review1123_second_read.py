@@ -374,3 +374,46 @@ def test_an_answer_is_taken_only_for_the_request_its_folder_was_written_for():
         c = DA.folder(d, {"name": "P", "key": "check-0123456789abcdef-m-v1-cccccccccccc"}).name
         assert c.startswith("P-check-0123456789-") and DA.folder(d, {"name": "P", "key": "pins-ab12cd34ef567890"}).name.startswith("P-pins-")
         assert DA.folder(d, {"name": "P", "key": "check-0123456789abcdef-m1-v1-cccccccccccc"}).name != c
+
+
+# ---------------------------------------------------------------- a schema error does not switch the build checks off
+def _overlapping_land(name=None):
+    """A SOIC-8 read with a maker land whose pads overlap by 0.73 mm (a1 r1_schema_skips_checks.py)."""
+    e = copy.deepcopy(TD.INCH)
+    e["package"]["land"] = {"pad_length": 1.5, "pad_width": 2.0, "pad_center": 2.7, "pad_center_y": None}
+    if name:
+        e["package"]["name"] = name
+    return D.process(e, "TESTPART", "https://example.com/t.pdf")
+
+
+def test_a_name_the_schema_does_not_take_is_reported_and_the_build_checks_still_hold():
+    """The name is said, never altered (datasheet.py: a value is not changed to make a check pass); the land's copper
+    check runs all the same, and the part is held."""
+    for name in ("SOIC-8 (D) 3.9x4.9mm", "SOIC-8/D 3.9\u00d74.9mm", "SOIC 8 [D]"):
+        res = _overlapping_land(name)
+        assert res["spec"]["name"] == name
+        assert any(r.startswith("schema: name") for r in res["needs_review"]), res["needs_review"]
+        assert any(r.startswith("land pattern:") and "overlap" in r for r in res["needs_review"]), res["needs_review"]
+        out, st, got = put(res, symbol=LIB_SYMBOL)
+        assert out.startswith("held: ") and not got, (name, out)
+
+
+def test_any_other_schema_error_still_runs_the_build_checks_when_the_read_builds():
+    """A schema error the builder does not stop on (here a field the schema does not know): the librarian builds that
+    spec without the schema, so the land's copper check must have run."""
+    e = copy.deepcopy(TD.INCH)
+    e["package"]["land"] = {"pad_length": 1.5, "pad_width": 2.0, "pad_center": 2.7, "pad_center_y": None}
+    real = D.schema_check
+
+    def failing(spec, review):
+        real(spec, review)
+        review.append("schema: (root): a test's schema error")
+        return False
+    D.schema_check = failing
+    try:
+        res = D.process(e, "TESTPART", "https://example.com/t.pdf")
+    finally:
+        D.schema_check = real
+    assert any(r.startswith("schema:") for r in res["needs_review"])
+    assert any(r.startswith("land pattern:") and "overlap" in r for r in res["needs_review"]), res["needs_review"]
+    assert put(res, symbol=LIB_SYMBOL)[0].startswith("held: ")
