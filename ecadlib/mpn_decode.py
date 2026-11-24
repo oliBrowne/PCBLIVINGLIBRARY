@@ -169,10 +169,15 @@ def fill_lines(lines):
         toks = [t for t in re.split(r"[\s,;/|]+", str(ln.get("designator") or "")) if re.search(r"[A-Za-z]", t)]
         ours = lambda t: any(c.upper() in KIND_PREFIX[d["kind"]] for c in      # R1; R_AUX1 (leading R); AUX_R1
                              re.findall(r"^[A-Za-z]+(?=\d|_)|[A-Za-z]+(?=\d)", t))   # (the R before the 1)
-        if not toks or not all(ours(t) for t in toks):
-            continue                                  # no designator, or one of another kind (an R code on C1): not ours
+        if toks and not all(ours(t) for t in toks):
+            continue                                  # a designator of another kind (an R code on C1): not ours
         text, value = value_text(d), str(ln.get("value") or "").strip()
         cat = "Resistors" if d["kind"] == "R" else "Capacitors"
+        if not toks and not RC._filled(value):
+            continue                                  # no designator: nothing filled from the code; but a Value
+                                                      # there is still checked against it (2026-11-24 real BOM: a
+                                                      # purchase list, no designators, '1kΩ' on ERJ-6ENF1002V, a 10k,
+                                                      # was released as 1k)
         if not RC._filled(value):
             from .altium_export import description_values
             said = {float(v) for (c, v) in description_values(ln.get("description"), cat) if c == cat}

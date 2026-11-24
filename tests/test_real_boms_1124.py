@@ -134,3 +134,27 @@ def test_a_misspelt_maker_still_holds_a_size_clash(tmp_path):
     d.mkdir()
     plan = _run(d, head + '8,240,"R21, R22",RESISTOR0402-RES,0402-RES,Resistor,Yaego RC0402JR-07240RL\n')
     assert plan and all(i["status"] == "ready" for i in plan.values()), {n: (i["status"], _why(i)) for n, i in plan.items()}
+
+
+# A parts list with no designators (a purchase list): the Value still has to agree with the part number's code.
+NO_DESIGNATORS = """Category,Quantity,Part Number,Description,Manufacturer,Value,Package,Notes
+Motor Control,8,ERJ-6ENF1002V,1kΩ Resistor,Panasonic,1kΩ,0805,RC filter for encoders
+Sensors,2,ERJ-6ENF4701V,4.7kΩ Resistor,Panasonic,4.7kΩ,0805,I2C pull-up resistor
+"""
+
+
+def test_value_against_part_number_without_designators():
+    L = [{"mpn": "ERJ-6ENF1002V", "value": "1kΩ"}, {"mpn": "ERJ-6ENF4701V", "value": "4.7kΩ"},
+         {"mpn": "GRM188R71H104KA93D", "value": "10nF"}, {"mpn": "ERJ-6ENF1003V", "value": ""}]
+    MD.fill_lines(L)
+    assert "10kΩ" in L[0].get("bom_hold", "") and not L[1].get("bom_hold"), L
+    assert "100nF" in L[2].get("bom_hold", ""), L
+    assert L[3]["value"] == "" and not L[3].get("bom_hold")      # nothing is filled in without a designator
+
+
+@lite
+def test_value_against_part_number_without_designators_end_to_end(tmp_path):
+    plan = _run(tmp_path, NO_DESIGNATORS)
+    st = {n: i["status"] for n, i in plan.items()}
+    assert any("1k" in n for n in st) and all(s != "ready" for n, s in st.items() if "-1k" in n), st
+    assert any(s == "ready" for n, s in st.items() if "4.7k" in n), st
