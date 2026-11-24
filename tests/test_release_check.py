@@ -172,6 +172,7 @@ def test_allow_recorded_and_scoped():
         assert it["status"] == "held" and it["hold_reasons"] == ["verify: check me"] and "allow" not in it
         RC.apply([it], d, allow=["PART1"])
         assert it["status"] == "ready" and it["allow"]["failures"] == ["verify: check me"] and it["release_check"]["result"] == "allowed"
+        RC.record_allow([it], d, ["PART1"], "", "looked")   # 2026-11-23 (2.4): the ledger line is what makes it count
         RC.apply([it], d)                                   # recorded: still allowed on the next check
         assert it["status"] == "ready"
         it["description"] = ""                              # a new failure is not covered by the old --allow
@@ -230,7 +231,7 @@ def test_cli_and_report():
         md = (Path(d) / "release_check.md").read_text()
         assert "**2 parts: 1 ready, 1 held.**" in md and "A person has to check this part first: unchecked | pipe." in md, md
         assert re.search(r"^name,status,result", (Path(d) / "release_check.csv").read_text(encoding="utf-8-sig"))
-        assert RC.main([str(plan), "--allow", "PART2", "-o", str(Path(d) / "r2")]) == 0
+        assert RC.main([str(plan), "--allow", "PART2", "--reason", "checked against the datasheet", "-o", str(Path(d) / "r2")]) == 0
         assert json.loads(plan.read_text())[1]["allow"]["by"] == "--allow" and (Path(d) / "r2.md").exists()
         try:
             RC.main([str(plan), "--allow", "NOPE"])

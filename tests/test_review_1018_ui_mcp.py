@@ -9,12 +9,17 @@ import requests
 from ecadlib.app import Workspace
 from ecadlib.httpcache import CachedHTTP
 from ecadlib.ui import server as S
+from tests.test_ui import ui_cookie
+
+
+_KEY = {}
 
 
 @contextlib.contextmanager
 def _served(ws):
     srv = S.make_server(ws, "127.0.0.1", 0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    _KEY.update(ui_cookie(srv))                             # as the page ecadlib opened (review 2026-11-23, 2.1)
     try:
         yield srv.server_address[1]
     finally:
@@ -24,7 +29,7 @@ def _served(ws):
 
 def _req(port, method, path, body=None):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
-    c.request(method, path, body=body, headers={"Host": f"127.0.0.1:{port}"})
+    c.request(method, path, body=body, headers={"Host": f"127.0.0.1:{port}", **_KEY})
     r = c.getresponse()
     return r.status, dict((k.lower(), v) for k, v in r.getheaders()), r.read()
 

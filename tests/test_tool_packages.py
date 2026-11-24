@@ -372,7 +372,11 @@ def test_action_plugin_helpers():
     fp = sexpr.parse((d / "fp-lib-table").read_text())
     assert [sexpr.first(l, "name")[1] for l in sexpr.find(fp, "lib")] == ["Other", "ecadlib"]
     assert sexpr.first(next(sexpr.find(sexpr.parse((d / "sym-lib-table").read_text()), "lib")), "uri")[1] == "${KIPRJMOD}/ecadlib/ecadlib.kicad_sym"
-    assert mod.ecadlib_command({"ECADLIB_CMD": "py -m ecadlib"}) == ["py", "-m", "ecadlib"]
+    # a bare program name is looked up on PATH and started by its full path, never as the bare name (which Windows
+    # would look for in KiCad's current folder first: review 2026-11-23, 2.6)
+    py = os.path.abspath("py-launcher")
+    assert mod.ecadlib_command({"ECADLIB_CMD": "py -m ecadlib"}, which=lambda x: py if x == "py" else None) == [py, "-m", "ecadlib"]
+    assert mod.ecadlib_command({"ECADLIB_CMD": "py -m ecadlib"}, which=lambda x: None) is None
     assert mod.ecadlib_command({}, which=lambda x: "/bin/ecadlib" if x == "ecadlib" else None) == ["/bin/ecadlib"]
     assert mod.ecadlib_command({}, which=lambda x: None) is None
     src = (ROOT / "ecadlib" / "assets" / "kicad_action_plugin.py").read_text()

@@ -27,7 +27,7 @@ def renderer():
         import pypdfium2  # noqa: F401
         return "pypdfium2"
     except ImportError:
-        return "pdftoppm" if shutil.which("pdftoppm") else None
+        return "pdftoppm" if _pdftoppm() else None
 
 
 def _png(w, h, rows):
@@ -77,8 +77,14 @@ def _pdfium(pdf, page, dpi, band=None):
         doc.close()
 
 
+def _pdftoppm():
+    """poppler's pdftoppm on PATH, never a copy in the current folder (review 2026-11-23, 2.6)."""
+    from .progpath import find
+    return find("pdftoppm")
+
+
 def _poppler(pdf, page, dpi, band=None):
-    exe = shutil.which("pdftoppm")
+    exe = _pdftoppm()
     if not exe:
         raise RenderError("no PDF renderer: pip install pypdfium2 (or install poppler's pdftoppm)")
     with tempfile.TemporaryDirectory() as d:

@@ -94,14 +94,47 @@ def test_workspace_bom_shapes_and_bad_files():
         expect(ValueError, ws.preview_footprint, {"package_type": "chip"}, contains="name")
 
 
+def ui_cookie(srv):
+    """The header of a page that has the server's key: what the page ecadlib opened sends with every request (the
+    name is from when it was a cookie)."""
+    from ecadlib.ui.access import HEADER
+    return {HEADER: srv.RequestHandlerClass.access_.key}
+
+
+class _Entered:
+    """ui_browser(): open(link) as a browser does. A launcher's link (?key=...) is answered with a page that keeps
+    a session key in the tab and goes on to the address without the key; later requests carry that key."""
+
+    def __init__(self):
+        import urllib.request
+        self.o, self.key = urllib.request.build_opener(urllib.request.ProxyHandler({})), None   # never through a proxy
+
+    def open(self, url, data=None, timeout=30):
+        import re, urllib.parse, urllib.request
+        from ecadlib.ui.access import HEADER
+        r = self.o.open(urllib.request.Request(url, data=data, headers={HEADER: self.key} if self.key else {}), timeout=timeout)
+        if "key=" in urllib.parse.urlsplit(url).query:
+            m = re.search(rb'setItem\("ecadlib_key", "([^"]+)"\);[^\n]*\nlocation\.replace\("([^"]*)"', r.read())
+            if m:
+                self.key = m.group(1).decode()
+                return self.open(urllib.parse.urljoin(url, m.group(2).decode()), timeout=timeout)
+        return r
+
+
+def ui_browser():
+    return _Entered()
+
+
 def serve(ws):
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(ws))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     port = srv.server_address[1]
+    key = ui_cookie(srv)                                    # as the page ecadlib opened (review 2026-11-23, 2.1)
 
     def call(method, path, body=None, headers=None):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
-        c.request(method, path, body=body if isinstance(body, (bytes, str, type(None))) else json.dumps(body), headers=headers or {})
+        c.request(method, path, body=body if isinstance(body, (bytes, str, type(None))) else json.dumps(body),
+                  headers={**key, **(headers or {})})
         r = c.getresponse()
         data = r.read()
         try:

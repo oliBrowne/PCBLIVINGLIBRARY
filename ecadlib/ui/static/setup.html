@@ -190,7 +190,7 @@ details.lk summary { cursor: pointer; font-weight: 550; display: flex; gap: 10px
   <section class="card" id="c-done">
     <h2>Done?</h2>
     <p class="sub">Open ecadlib and drop a BOM (CSV or Excel, as Altium or KiCad export it) on the first card.</p>
-    <button class="primary" onclick="location.href='/'">Open ecadlib</button>
+    <button class="primary" id="opendone">Open ecadlib</button>
   </section>
 </main>
 <script>
@@ -198,8 +198,19 @@ const $ = (id) => document.getElementById(id);
 let S = null, prov = null, tool = null;
 
 async function api(path, body) {
-  const r = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  let key = "";                                   // this tab's key (ecadlib.ui.access): sent with every request
+  try { key = sessionStorage.getItem("ecadlib_key") || ""; } catch (e) {}
+  const r = await fetch(path, body === undefined ? {credentials: "omit", headers: {"X-Ecadlib-Key": key}}
+    : {method: "POST", credentials: "omit", headers: {"X-Ecadlib-Key": key, "Content-Type": "application/json"}, body: JSON.stringify(body)});
   const j = await r.json().catch(() => ({error: `HTTP ${r.status}`}));
+  if (r.status === 401 && !document.getElementById("nokey")) {
+    const d = document.createElement("div");
+    d.id = "nokey"; d.setAttribute("role", "alert");
+    d.style.cssText = "position:fixed;inset:0;z-index:9999;background:#fff;color:#111;padding:4em 1em;overflow:auto";
+    d.innerHTML = `<div style="max-width:40em;margin:0 auto"><h1 style="font-size:20px">Open this page from ecadlib</h1><p>${esc(j.error || "")}</p>
+      <p>To open it: press <b>Open ecadlib</b> in the small ecadlib window, use the ecadlib menu in Altium or KiCad, or run <code>ecadlib start</code> again.</p></div>`;
+    document.body.appendChild(d);
+  }
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
 }
@@ -429,6 +440,9 @@ $("add-kicad").onclick = async () => {
                   r.steps.map((s) => `<li>${esc(s)}</li>`).join("") + "</ol>", "ok");
   } catch (e) { msg("addmsg", esc(e.message), "bad"); }
 };
+
+// (no inline handler: the page's Content-Security-Policy runs only this script block; review 2026-11-23)
+$("opendone").onclick = () => { location.href = "/"; };
 
 load().catch((e) => { document.querySelector("main").insertAdjacentHTML("afterbegin", `<div class="msg bad">${esc(e.message)}</div>`); });
 </script>

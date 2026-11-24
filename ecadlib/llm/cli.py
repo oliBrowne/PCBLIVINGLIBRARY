@@ -8,7 +8,7 @@ and where it came from, and the rails a read would run, by layer. --detect asks 
 the model (GET /models, Ollama /api/show); without it nothing is sent anywhere."""
 import argparse, json, os, sys
 
-from . import AIConfigError, endpoint, key_for, NO_KEY, profiles as PR, rails as R
+from . import AIConfigError, endpoint, key_for, key_refused, NO_KEY, profiles as PR, rails as R
 
 
 def show(rules, model=None, section="datasheet", detect=False):
@@ -20,6 +20,8 @@ def show(rules, model=None, section="datasheet", detect=False):
     plan = R.plan(prof, ep["assist"], ep["feedback_retry"])
     k = key_for(ep)
     key = "none needed" if k == NO_KEY else (f"{ep['key_env'] or 'ANTHROPIC_API_KEY'} set" if k else f"{ep['key_env']} NOT set")
+    if not k and key_refused(ep):                     # review 2026-11-23 (2.2): set or not, it does not go to this server
+        key = f"{ep['key_env']} NOT sent: {key_refused(ep)}"
     return {"endpoint": {**ep, "key": key}, "profile": prof, "plan": plan, "layers": R.layers(plan)}
 
 

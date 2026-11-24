@@ -252,6 +252,22 @@ def upkeep_mr(gl, label, branch, base, title, body):
     return {"kind": "pr", "action": "opened", "number": new["iid"], "url": new.get("web_url"), "branch": branch}
 
 
+def token_refused(tok_env, api, env=None):
+    """Why the token [agent] gitlab_token_env names is not sent to the GitLab at `api`, or None (review 2026-11-23,
+    2.2: the name and the address both come from a rules file, so gitlab_token_env = "ANTHROPIC_API_KEY" with a
+    gitlab_api of someone else's sent that key there as PRIVATE-TOKEN). A token goes to gitlab.com, to the GitLab
+    this CI job runs on (CI_SERVER_HOST, set by the runner) and to a host this user allowed (ecadlib.keyhosts)."""
+    import os
+    from . import keyhosts as KH
+    env = os.environ if env is None else env
+    host = KH.host_of(api)
+    if KH.ok(tok_env, host, env):
+        return None
+    if host and host == KH.host_of(env.get("CI_SERVER_HOST")) and KH.HOMES.get(tok_env, ("gitlab.com",)) == ("gitlab.com",):
+        return None                                  # a GitLab token (or a name of your own) on its own CI server
+    return KH.refusal(tok_env, host, "the token")
+
+
 def client(cfg, remote, env, session=None):
     """(kind, client or None, why not) for the [agent] settings, the origin remote and the environment."""
     kind = host_kind(cfg, remote)
@@ -261,6 +277,9 @@ def client(cfg, remote, env, session=None):
         token = UC.secret(tok_env, env) if tok_env else None
         if not (remote and proj and token):
             return kind, None, "no GitLab remote or token"
+        why = token_refused(tok_env, cfg.get("gitlab_api") or GITLAB_API, env)
+        if why:
+            return kind, None, why
         bad = None if cfg.get("gitlab_project") else wrong_api_host(cfg.get("gitlab_api") or GITLAB_API, remote)
         if bad:
             return kind, None, bad

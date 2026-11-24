@@ -1134,6 +1134,11 @@ def require_key(key=None, rules=None, via_rules=True):
     ai = ((rules or {}).get("ai") or {}) if isinstance(rules, dict) else {}
     # another provider's key ([ai] provider = openai ...) is never sent to the Claude API
     ai_var = ai.get("api_key_env") if str(ai.get("provider") or "anthropic").strip().lower() == "anthropic" else None
+    from . import keyhosts as KH                      # review 2026-11-23 (2.2): a rules file names the key; one that
+    if ai_var and not KH.ok(ai_var, KH.ANTHROPIC):    # belongs to another service (OPENAI_API_KEY, GITLAB_TOKEN) is
+        ai_var = None                                 # never sent to the Claude API: ANTHROPIC_API_KEY is used
+    if not KH.ok(var, KH.ANTHROPIC):
+        var = SETTINGS["api_key_env"]
     if ai_var and var == SETTINGS["api_key_env"]:     # [datasheet] at its default: the [ai] key variable decides
         var = ai_var
     key = key or UC.secret(var) or (UC.secret(ai_var) if ai_var else None) or UC.secret("ANTHROPIC_API_KEY")

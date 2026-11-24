@@ -33,6 +33,36 @@ a minor release may change command-line options and file formats.
   status|get|share|report` (share writes record files and sends nothing; report builds a GitHub issue link) and
   `ecadlib store-repo` for the people who run a store. Guide: [docs/shared-store.md](docs/shared-store.md).
 
+### Security
+
+From the 2026-11-23 code review. None of these was seen being used.
+
+- **The local page needs this run's key.** A program on the computer that was not opened by ecadlib is refused (it
+  could swap the stored API key, start a paid read or move the workspace). The page opens as before from the app, the
+  command line and the Altium / KiCad menus; an address typed by hand in a fresh browser shows "Open this page from
+  ecadlib". Values from files are shown as text, and only the page's own script runs. The key is kept in the browser
+  tab, not in a cookie (a cookie of 127.0.0.1 goes to every local server), and on Linux a program of another account
+  is refused outright.
+- **A key goes only to the service it is for.** A settings file in the current folder can no longer send a stored key
+  to another server: a gateway of your own needs `ecadlib keys allow NAME HOST` once (or `ECADLIB_KEY_HOSTS`). The cost
+  dialogs name the server. The Altium 365 sign-in token is sent only to Altium's own servers; the headless browser
+  checks every redirect, in frames too, and a popup requests nothing. An address written so that two programs could
+  read two servers out of it (a backslash, a `user@` part) is refused.
+- **Over MCP the person approves, not the assistant.** A release anyway, a part approval and a paid read asked by an
+  MCP client wait for `ecadlib confirm ID` typed at a terminal. `save_rules` over MCP takes only harmless settings.
+  What `ecadlib confirm` shows is plain text (no control codes from the request), and its question names what "yes"
+  records.
+- **A release anyway needs a reason** and is recorded in the ledger with who and when; an `allow` block written into
+  plan.json by hand no longer counts. Parts released anyway before this version are held until released again with a
+  reason (`ecadlib release-check --allow PART --reason "why"`).
+- **Crash reports:** nothing of the sender's choice reaches a public issue (error names and the OS come from fixed
+  lists), new issues are limited per address, and a browser page cannot file them. The saved report blanks webhook
+  addresses, folders outside ecadlib's own and short keys.
+- **Windows:** the KiCad and Altium runners no longer start `ecadlib`, `python`, `git` and the like from the project
+  or current folder. Run "Add to KiCad" / `ecadlib altium-menu build` again to get the new runner.
+- **Privacy text** now lists the part searches that need no key (jlcpcb.com, jlcsearch.tscircuit.com, lcsc.com), the
+  datasheet hosts and the crash-report store; the address hash is keyed.
+
 ### Fixed
 
 A code review on 2026-11-23 found ways a wrong part could come out ready with no hold, all in the paths that release a

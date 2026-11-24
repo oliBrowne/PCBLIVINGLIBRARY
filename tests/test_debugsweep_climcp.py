@@ -162,7 +162,8 @@ def test_ds2_53_desktop_app_and_setup_start_with_the_library_folders_saved_on_th
     try:
         with contextlib.redirect_stderr(io.StringIO()):                  # the server's request log
             c = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
-            c.request("GET", "/api/info", headers={"Host": f"127.0.0.1:{app.port}"})
+            from tests.test_ui import ui_cookie
+            c.request("GET", "/api/info", headers={"Host": f"127.0.0.1:{app.port}", **ui_cookie(app.srv)})
             info = json.loads(c.getresponse().read())
     finally:
         app.stop()
@@ -190,7 +191,9 @@ def test_ds2_53_setup_page_save_gives_the_running_server_the_library_folders(tmp
     def call(method, path, body=None):
         c = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
         data = json.dumps(body).encode() if body is not None else None
-        c.request(method, path, data, {"Host": f"127.0.0.1:{app.port}", "Content-Type": "application/json"})
+        from tests.test_ui import ui_cookie
+        c.request(method, path, data, {"Host": f"127.0.0.1:{app.port}", "Content-Type": "application/json",
+                                       **ui_cookie(app.srv)})
         return json.loads(c.getresponse().read())
     try:
         with contextlib.redirect_stderr(io.StringIO()):                  # the server's request log

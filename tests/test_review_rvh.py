@@ -262,7 +262,7 @@ def test_cli_allow_survives_a_concurrent_agent_rebuild():
         locked.wait(10)
         cli_started.set()
         with mock.patch("builtins.print"):
-            RC.main([str(plan), "--allow", "P1", "--user", "Ann <ann@x.com>", "-o", str(Path(d) / "rc")])
+            RC.main([str(plan), "--allow", "P1", "--user", "Ann <ann@x.com>", "--reason", "checked against the datasheet", "-o", str(Path(d) / "rc")])
         t.join(10)
         it = json.loads(plan.read_text(encoding="utf-8"))[0]
         assert it.get("rebuilt") and it.get("allow", {}).get("user") == "Ann <ann@x.com>", it
@@ -289,7 +289,7 @@ def test_workspace_plan_rewrites_take_the_plan_lock():
         t = threading.Thread(target=other)
         t.start()
         held.wait(10)
-        for call in (lambda: ws.release_check("uploads/b.csv", allow=["P1"], user="Ann Lee"), lambda: ws.find_duplicates("uploads/b.csv", merge=True),
+        for call in (lambda: ws.release_check("uploads/b.csv", allow=["P1"], user="Ann Lee", reason="checked by hand"), lambda: ws.find_duplicates("uploads/b.csv", merge=True),
                      lambda: ws.choose_part("uploads/b.csv", "P1", "footprint", "spec:SOT-23")):
             try:
                 call()
@@ -298,7 +298,7 @@ def test_workspace_plan_rewrites_take_the_plan_lock():
                 assert "another ecadlib command" in str(e), e
         assert "allow" not in json.loads((out / "plan.json").read_text(encoding="utf-8"))[0]
         release.set(); t.join(10)
-        r = ws.release_check("uploads/b.csv", allow=["P1"], user="Ann Lee")
+        r = ws.release_check("uploads/b.csv", allow=["P1"], user="Ann Lee", reason="checked by hand")
         assert r["parts"] == 1 and json.loads((out / "plan.json").read_text(encoding="utf-8"))[0]["allow"]
         r = ws.choose_part("uploads/b.csv", "P1", "footprint", "spec:SOT-23")    # holds the lock, re-checks inside it
         assert r["chosen"]["source"] == "spec:SOT-23", r["chosen"]

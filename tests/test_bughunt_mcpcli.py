@@ -196,7 +196,8 @@ def test_mcp14_choose_part_without_a_person_is_no_approval(tmp_path):
         assert not _call(ws, "choose_part", args)["isError"]
         assert not _call(ws, "choose_part", dict(args, user="Ann Lee <ann@x.com>"))["isError"]
     assert seen[0][1]["approve"] is False and seen[0][0][5] is None, seen[0]
-    assert seen[1][1]["approve"] is True and seen[1][0][5] == "Ann Lee <ann@x.com>", seen[1]
+    # security review 2026-11-23 (2.3): a name the call passes is not a person either: never an approval
+    assert seen[1][1]["approve"] is False and seen[1][0][5] is None, seen[1]
     assert "approve" in inspect.signature(R.choose).parameters
 
 

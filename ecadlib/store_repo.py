@@ -575,7 +575,8 @@ def _git(root, *args):
     """Output of a read-only git command in root, or None when it fails (a file missing at that ref). Raw path bytes
     that are not UTF-8 come back as surrogate escapes (never a crash, never a dodged path)."""
     try:
-        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8",
+        from .progpath import resolved               # never a git in the current folder (review 2026-11-23, 2.6)
+        r = subprocess.run(resolved(["git", "-C", str(root), *args]), capture_output=True, text=True, encoding="utf-8",
                            errors="surrogateescape", timeout=120)
     except (OSError, subprocess.SubprocessError, ValueError):
         return None

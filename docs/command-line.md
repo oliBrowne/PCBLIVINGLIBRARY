@@ -103,9 +103,13 @@ releases anyway (default: `$ECADLIB_USER`, then git config).
 
 `ecadlib review` goes through the held parts one at a time: the reason and the fix in plain words, the datasheet link,
 and for a missing symbol / footprint (or pins that do not match the pads) the best candidates from `resolve`. Then it
-asks: `1-N` use a candidate (converted, written into the plan, re-checked), `a` release anyway (recorded with your name,
-like `release-check --allow`; not offered when a file is missing), `d` open the datasheet (at the page a reason names),
-`s` skip, `q` quit. With `--yes`, or when not on a terminal, it never asks: it prints each part with the commands that
+asks: `1-N` use a candidate (converted, written into the plan, re-checked), `a` release anyway (it asks for your reason
+and records it with your name in the library's ledger, like `release-check --allow PART --reason "why"`; not offered
+when a file is missing), `d` open the datasheet (at the page a reason names),
+`s` skip, `q` quit. A release anyway counts only with that ledger record: an `allow` block typed into plan.json
+releases nothing. `release-check --allow` and `librarian --allow` ask for the reason at a terminal and refuse without
+`--reason` elsewhere. `ecadlib confirm [ID]` answers what an assistant asked for over MCP (a release anyway, a
+sign-off, a paid run): see [mcp.md](mcp.md). With `--yes`, or when not on a terminal, it never asks: it prints each part with the commands that
 fix it. Without PLAN it reviews every plan in the workspace. Exit 2 while anything is still held.
 
 ## Easy setup: the Windows installer, the setup page and stored keys
@@ -146,6 +150,9 @@ For people who are used to installers, not terminals. The guide for them is `doc
   See [docs/api-keys.md](api-keys.md). `ecadlib keys set NAME` asks for the value without echoing it; `--stdin`
   reads it from standard input instead (scripts: `... | ecadlib keys set NAME --stdin`), so it never lands in the
   shell history.
+  `ecadlib keys allow NAME HOST` lets a key go to a server of your own (a model gateway, a self-hosted GitLab);
+  without it a key is sent only to the service it is for, whatever an `ecadlib.toml` says
+  ([docs/models.md](models.md), "Where a key may go"). `--remove` takes it back; `keys list` shows what is allowed.
 * **The doctor on a fresh install** now shows only what matters. A key or tool for a feature you have not turned on
   is OK ("only needed for ..."): pdftoppm for visual-check, git and GITHUB_TOKEN without an `[agent] github_repo`
   (upkeep pull requests), NEXAR_TOKEN without an `[altium365]` workspace, kicad-cli when you only make Altium

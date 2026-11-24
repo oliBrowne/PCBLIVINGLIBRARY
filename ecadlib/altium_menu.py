@@ -29,7 +29,8 @@
   ecadlib_run.cmd + ecadlib_run.vbs how the script runs ecadlib: the .vbs starts the .cmd without a console window
                                     (WScript.Shell.Run, window style 0) and the .cmd finds ecadlib (command= in the
                                     .ini, else `ecadlib` on PATH, else `py -3 -m ecadlib`, else `python -m ecadlib`;
-                                    a venv install is found only through command=)
+                                    a venv install is found only through command=). It works from its own folder
+                                    and looks on PATH only: nothing in Altium's current folder is ever run
   ecadlib_menu.DXPPrf               optional: a preferences file that adds the "ecadlib" menu to the schematic, PCB,
                                     SchLib and PcbLib editors (DXP > Preferences > Load, "System > Customizations"
                                     only). Written only when the Windows folder is known (--win-dir, or running on
@@ -161,10 +162,15 @@ rem Finds ecadlib: command.txt in the job (command= in ecadlib_menu.ini), else e
 rem that can import it. Runs `ecadlib altium-menu run-job JOBFOLDER` (which writes result.ini), then exit.txt.
 setlocal
 set "JOB=%~1"
+rem Altium's current folder can be the folder of a project someone sent you. Nothing is run or imported from it
+rem (review 2026-11-23): programs are looked for on PATH only, and the work starts in this script's own folder, so
+rem an ecadlib.bat, python.bat or ecadlib.py lying in that project is never picked up.
+set "NoDefaultCurrentDirectoryInExePath=1"
+cd /d "%~dp0" 2>nul || cd /d "%SystemRoot%"
 set "ECADLIB="
 if exist "%JOB%\command.txt" set /p ECADLIB=<"%JOB%\command.txt"
 if defined ECADLIB goto run
-where ecadlib >nul 2>nul && set "ECADLIB=ecadlib"
+where $PATH:ecadlib >nul 2>nul && set "ECADLIB=ecadlib"
 if defined ECADLIB goto run
 py -3 -c "import ecadlib" >nul 2>nul && set "ECADLIB=py -3 -m ecadlib"
 if defined ECADLIB goto run
@@ -341,7 +347,8 @@ def altium_running():
     if os.name != "nt":
         return False
     try:
-        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq X2.EXE", "/NH"], capture_output=True, text=True,
+        from .progpath import resolved               # Windows' own, never one in the current folder (review 2026-11-23, 2.6)
+        out = subprocess.run(resolved(["tasklist", "/FI", "IMAGENAME eq X2.EXE", "/NH"]), capture_output=True, text=True,
                              timeout=20).stdout
     except (OSError, subprocess.SubprocessError):
         return False
@@ -1366,7 +1373,7 @@ def release_part(cfg, req, progress=None):
                     "fix": f"Release it from the review queue ({_queue_hint(cfg)}), which shows every reason."}
         progress.step(0, 0, f"releasing {name}")
         who = A.identity(req.get("user") or None, cwd=plan.parent)
-        RV.release_anyway(plan, name, who, reason=reason)
+        RV.release_anyway(plan, name, who, reason=reason, via="altium menu")
         res = _part_result(cfg, ws, bom, rel, mpn, progress)
         if res.get("status") != "error":
             res["message"] = f"Released anyway by {who}: {reason}. " + (res.get("message") or "")
@@ -1689,14 +1696,20 @@ def open_file(cfg, path, opener=None):
 
 
 def probe_ui(port, host="127.0.0.1", timeout=1.5):
-    """What answers on the port: ("ecadlib", workspace) | ("ecadlib-team", None) | ("other", None) | (None, None)."""
+    """What answers on the port: ("ecadlib", workspace) | ("ecadlib-team", None) | ("other", None) | (None, None).
+    "ecadlib-team": an ecadlib this user has no key for (ecadlib.ui.access): another account's, on a shared computer."""
     import urllib.request, urllib.error
+    from .ui import access as AC
+    head = AC.header_for(port)                              # this user's own running ecadlib: its key is on file
     try:
         direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # never through a system proxy
-        with direct.open(f"http://{host}:{port}/api/info", timeout=timeout) as r:
+        req = urllib.request.Request(f"http://{host}:{port}/api/info", headers=head)
+        with direct.open(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
         return ("ecadlib", data.get("workspace")) if isinstance(data, dict) and "workspace" in data else ("other", None)
     except urllib.error.HTTPError as e:
+        if e.code == 401 and AC.header_for(port) != head:   # it was just starting: its key is on file only now
+            return probe_ui(port, host, timeout)
         return ("ecadlib-team", None) if e.code in (401, 403) else ("other", None)
     except (OSError, ValueError):
         return (None, None)
@@ -1727,7 +1740,12 @@ def queue_anchor(ws):
     return f"#review={quote(MENU_BOM)}" if (Path(ws) / MENU_BOM).is_file() else QUEUE_ANCHOR
 
 
-def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0, sleep=time.sleep):
+def _page_link(port, path):
+    from .ui import access as AC
+    return AC.link(port, path)
+
+
+def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0, sleep=time.sleep, link=None):
     """Open the web UI at the review queue, starting `ecadlib ui` for the workspace when nothing answers."""
     port, ws = cfg["port"], Path(cfg["workspace"])
     kicad = cfg.get("tool") == "kicad"
@@ -1745,6 +1763,9 @@ def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0,
     if kind == "ecadlib" and served and Path(served).resolve() != ws.resolve():
         return {"status": "error", "message": f"port {port} already serves another ecadlib workspace ({served})",
                 "fix": "stop that `ecadlib ui`" + ("" if kicad else f", or set port= to another port in {INI}")}
+    if kind == "ecadlib-team":                  # it would only show "open this page from ecadlib" (review 2026-11-23)
+        return {"status": "error", "message": f"port {port} is used by an ecadlib that this account did not start",
+                "fix": "stop that ecadlib" + ("" if kicad else f", or set port= to another port in {INI}")}
     if kind is None:
         ws.mkdir(parents=True, exist_ok=True)
         launcher(ws, port)
@@ -1754,9 +1775,11 @@ def open_queue(cfg, opener=None, probe=probe_ui, launcher=start_ui, wait_s=30.0,
                 return {"status": "error", "message": f"the ecadlib web UI did not start on port {port} within {int(wait_s)} s",
                         "fix": f"see {ws / 'altium_menu_ui.log'}, or run `ecadlib ui --workspace \"{ws}\"` by hand"}
             sleep(0.3)
-    if opener is not False and not _open(url, opener):
-        return {"status": "error", "message": f"could not open a browser at {url}", "fix": "open that address yourself",
-                "url": url}
+    # the browser gets the address with a one-time key of the running ecadlib (ecadlib.ui.access); the address this
+    # returns (shown in the dialog, kept in the job's files) has none
+    if opener is not False and not _open((link or _page_link)(port, queue_anchor(ws)), opener):
+        return {"status": "error", "message": f"could not open a browser at {url}",
+                "fix": "run `ecadlib start` (it opens the page of the ecadlib that is running)", "url": url}
     return {"status": "ok", "message": f"review queue: {url}" + (" (web UI started)" if started else ""), "url": url,
             "started": "1" if started else "0"}
 
@@ -1826,7 +1849,8 @@ def running_altium():
     ps = ("$p = Get-Process X2 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | "
           "Sort-Object StartTime | Select-Object -First 1; if ($p) { $p.Path + '|' + $p.MainWindowHandle }")
     try:
-        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+        from .progpath import resolved               # Windows' own, never one in the current folder (review 2026-11-23, 2.6)
+        out = subprocess.run(resolved(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps]), capture_output=True,
                              text=True, timeout=30).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         out = ""

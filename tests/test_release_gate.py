@@ -6,6 +6,7 @@ import json, tempfile
 from pathlib import Path
 
 from ecadlib import altium365 as A, altium_dblib_sync as S, altium_lib as AL, kicad_export as KX, release_check as RC
+from tests.fixtures_lite import in_dir
 from tests.test_release_check import SOIC, make
 
 
@@ -81,8 +82,10 @@ def test_a_sign_off_is_what_lets_a_doubtful_part_go():
         assert RC.publish_problems(it, d, None) == [f"verify: {it['verify'][0]}"]
         assert A.push(_absolute([dict(it)], d), None, "https://ws", dry_run=True)[0]["action"] == "skip"
         RC.apply([it], d, allow=["PART1"])                  # release anyway: who, when and what it covers
+        RC.record_allow([it], d, ["PART1"], "", "looked")   # 2026-11-23 (2.4): the ledger line is what makes it count
         assert it["status"] == "ready" and RC.publish_problems(it, d, None) == []
-        assert A.push(_absolute([json.loads(json.dumps(it))], d), None, "https://ws", dry_run=True)[0]["action"] == "release"
+        with in_dir(d):                                     # no library folder given: the ledger is looked for here
+            assert A.push(_absolute([json.loads(json.dumps(it))], d), None, "https://ws", dry_run=True)[0]["action"] == "release"
         it["verify"].append("symbol pinout X from the Y family table (ecadlib.stdparts): check pins 1-3 against the datasheet")
         it["source"]["symbol"] = "standard:X"
         assert RC.publish_problems(it, d, None) == [f"verify: {it['verify'][1]}"]     # a new doubt is not signed off
@@ -157,6 +160,7 @@ def test_a_doubt_an_older_ecadlib_only_noted_still_holds():
         it["status"] = "ready"
         assert A.push(_absolute([dict(it)], d), None, "https://ws", dry_run=True)[0]["action"] == "skip"
         RC.apply([it], d, allow=["PART1"])
+        RC.record_allow([it], d, ["PART1"], "", "looked")   # 2026-11-23 (2.4): the ledger line is what makes it count
         assert it["status"] == "ready" and RC.publish_problems(it, d, None) == []
 
 
@@ -385,9 +389,11 @@ def test_a_hand_written_allow_does_not_release_a_broken_file():
         it = make(d)
         Path(d, it["footprint"]["file"]).write_bytes(b"not an OLE file")
         it["allow"] = {"by": "--allow", "failures": [f"{r}: {m}" for r, m in RC.check_item(it, d)[0]]}
-        RC.apply([it], d)
+        RC.apply([it], d)                                   # 2026-11-23 (2.4): the block has no ledger line: dropped
         assert it["status"] == "held" and it["hold_reasons"][0].startswith("files: footprint file does not read back")
-        assert it["hold_reasons"][0].endswith("(cannot be overridden)"), it["hold_reasons"]
+        assert "allow" not in it and "no record of it" in it["hold_reasons"][-1], it["hold_reasons"]
+        RC.apply([it], d, allow=["PART1"])                  # and a real release anyway does not cover a broken file
+        assert it["status"] == "held" and it["hold_reasons"][0].endswith("(cannot be overridden)"), it["hold_reasons"]
 
 
 if __name__ == "__main__":

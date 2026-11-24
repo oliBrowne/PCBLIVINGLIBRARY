@@ -106,6 +106,40 @@ def _check_cost(rows, cfg, batch, rules=None):
     return typ, worst
 
 
+def host_of(model, rules=None, section="datasheet"):
+    """Where the requests of these models go (the key and the datasheet pages), for the dialogs: "api.anthropic.com",
+    "localhost (this computer)"; several servers joined with ", "; "" when the setup does not resolve. Review
+    2026-11-23 (2.2): the dialogs named only the model, and a settings file can name any server."""
+    from . import llm as LL
+    hosts = []
+    for m in [x.strip() for x in str(model or "").split(",") if x.strip()] or [None]:
+        try:
+            h = LL.host_text(LL.endpoint(rules if isinstance(rules, dict) else None, section, m))
+        except LL.AIConfigError:
+            h = ""
+        if h and h not in hosts:
+            hosts.append(h)
+    return ", ".join(hosts)
+
+
+def _key_refused(model, rules=None, section="datasheet"):
+    """Why the key the settings name is not sent to the server they name (llm.key_refused), or ""."""
+    from . import llm as LL
+    for m in [x.strip() for x in str(model or "").split(",") if x.strip()] or [None]:
+        try:
+            why = LL.key_refused(LL.endpoint(rules if isinstance(rules, dict) else None, section, m))
+        except LL.AIConfigError:
+            why = None
+        if why:
+            return why
+    return ""
+
+
+def _at(q):
+    """"model at host" for a dialog's text (the model alone when the host is not known)."""
+    return f"{q['model']} at {q['host']}" if q.get("host") else str(q["model"])
+
+
 def quote(est, rules=None, key_set=True):
     """What the dialogs show before the datasheet reads: None when no part needs one. est: Reader.estimate /
     datasheet.estimate_plan."""
@@ -130,6 +164,8 @@ def quote(est, rules=None, key_set=True):
          "cross_check": str(cfg.get("cross_check") or "auto") != "off", "key_set": bool(key_set),
          "skipped": [s["part"] for s in est.get("skipped") or []], "cached": list(est.get("cached") or [])}
     q["approve_usd"] = up(worst) if worst is not None else None
+    q["host"] = host_of(q["model"], rules)
+    q["key_refused"] = _key_refused(q["model"], rules) if not key_set else ""
     q["text"] = text(q)
     return q
 
@@ -137,7 +173,9 @@ def quote(est, rules=None, key_set=True):
 def text(q):
     """One plain paragraph for a dialog: how many reads, which model, about / at most, and the limit."""
     from . import messages as M
-    what = f"{M.plural(q['parts'], 'part')} need{'s' if q['parts'] == 1 else ''} the datasheet read by AI ({q['model']})"
+    what = f"{M.plural(q['parts'], 'part')} need{'s' if q['parts'] == 1 else ''} the datasheet read by AI ({_at(q)})"
+    if not q["key_set"] and q.get("key_refused"):     # the key is there, the settings file names a server it may not go to
+        return what + ". " + q["key_refused"][0].upper() + q["key_refused"][1:] + "."
     if not q["key_set"]:
         return what + ". No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."
     if not q["price_known"]:
@@ -241,12 +279,13 @@ def style_quote(system, user, schema, model, rules=None, max_tokens=8000, retry=
     worst = round((tin * p[0] + max_tokens * p[1]) / 1e6 * (2.2 if retry else 1), 4) if p else None
     q = {"step": "style", "parts": 1, "names": [], "model": model, "usd": usd, "usd_max": worst, "limit_usd": lim,
          "limit_name": which, "price_known": worst is not None, "over_limit": _over(worst, lim, which),
-         "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": []}
+         "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": [],
+         "host": host_of(model, rules)}
     q["approve_usd"] = up(worst) if worst is not None else None
     if worst is None:
-        q["text"] = f"Writing the style guide asks {model} once; ecadlib does not know its price."
+        q["text"] = f"Writing the style guide asks {_at(q)} once; ecadlib does not know its price."
     else:
-        q["text"] = (f"Writing the style guide asks {model} once: about {money(usd)}, at most {money(up(worst))}."
+        q["text"] = (f"Writing the style guide asks {_at(q)} once: about {money(usd)}, at most {money(up(worst))}."
                      + (f" That is more than your limit of {money(lim)} ([datasheet] {which})." if q["over_limit"] else ""))
     if not key_set:
         q["text"] += " No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."
@@ -260,12 +299,13 @@ def request_quote(step, model, usd, worst, rules=None, key_set=True, what="This 
     q = {"step": step, "parts": 1, "names": [], "model": model, "usd": usd, "usd_max": worst, "limit_usd": lim,
          "limit_name": which, "price_known": worst is not None,
          "over_limit": _over(worst, lim, which),
-         "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": []}
+         "exact": False, "cross_check": False, "key_set": bool(key_set), "skipped": [], "cached": [],
+         "host": host_of(model, rules, "proof" if step == "visual" else "datasheet")}
     q["approve_usd"] = up(worst) if worst is not None else None
     if worst is None:
-        q["text"] = f"{what} ({model}); ecadlib does not know its price."
+        q["text"] = f"{what} ({_at(q)}); ecadlib does not know its price."
     else:
-        q["text"] = (f"{what} ({model}): about {money(usd)}, at most {money(up(worst))}."
+        q["text"] = (f"{what} ({_at(q)}): about {money(usd)}, at most {money(up(worst))}."
                      + (f" That is more than your limit of {money(lim)} ([datasheet] {which})." if q["over_limit"] else ""))
     if not key_set:
         q["text"] += " No API key is stored for it yet: add one on the setup page or with `ecadlib keys set`."

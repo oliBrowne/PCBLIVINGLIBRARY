@@ -39,7 +39,7 @@ def _ws():
     run = lambda *a: E.ecadlib(w, *a, env=env, check=False)
     steps = {"init": run("init", "--yes", "--unofficial"),
              "librarian": run("librarian", "bom.csv", "-o", "lib/b", "--offline", "--cache", "cache"),
-             "release-check": run("release-check", "lib/b/plan.json", "--allow", SIGNED_OFF)}
+             "release-check": run("release-check", "lib/b/plan.json", "--allow", SIGNED_OFF, "--reason", "checked against the datasheet")}
     plan = "lib/b/plan.json"
     steps.update({
         "kicad-export": run("kicad-export", plan, "-o", "kicad", "--name", "b", "--offline", "--cache", "cache"),
@@ -137,7 +137,14 @@ def test_mcp_server_builds_the_same_library_as_the_cli():
         bom = json.loads(text(m.call("upload_bom", filename="bom.csv",
                                      content_base64=base64.b64encode(SAMPLE.read_bytes()).decode())))["bom"]
         lib = json.loads(text(m.call("librarian_run", bom=bom)))
-        rc = json.loads(text(m.call("release_check", bom=bom, allow=[SIGNED_OFF], user="Flows Tester")))
+        # security review 2026-11-23 (2.3): over MCP the release anyway is asked of the person; they give it with
+        # `ecadlib confirm ID` (here: confirm.grant, what that command does once they typed their reason)
+        from ecadlib import confirm as CF
+        asked = m.call("release_check", bom=bom, allow=[SIGNED_OFF], user="Flows Tester")
+        assert asked.get("isError") and "ecadlib confirm" in asked["content"][0]["text"], asked
+        (req,) = CF.pending(root / "ws")
+        CF.grant(root / "ws", req["id"], "Flows Tester", "pinout checked against the datasheet", log=lambda *a: None)
+        rc = json.loads(text(m.call("release_check", bom=bom, allow=[SIGNED_OFF])))
         mcp = {x["part"]: x["status"] for x in rc["review"]}
         assert {x["part"] for x in lib["review"]} == set(cli), (sorted(x["part"] for x in lib["review"]), sorted(cli))
         assert mcp == cli, {k: (mcp.get(k), cli.get(k)) for k in set(mcp) | set(cli) if mcp.get(k) != cli.get(k)}

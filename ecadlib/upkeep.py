@@ -450,7 +450,8 @@ def check_store(src, state_dir, ctx, cfg, now, rules=None, store=None):
         if not isinstance(it, dict) or not SC.depends(it):
             continue
         n += 1
-        covered = set((it.get("allow") or {}).get("failures") or [])
+        from . import release_check as RC       # only a release-anyway the ledger records (review 2026-11-23, 2.4)
+        covered = set(RC.allow_of(it, src.path.parent).get("failures") or [])
         for d, why in SC.problems(it, None if off else store):
             if any(why in str(c) for c in covered):   # a person released it despite this already
                 continue
@@ -587,7 +588,10 @@ class GitHubError(Exception):
 
 def default_runner(cmd, input=None, cwd=None):
     """(returncode, stdout, stderr) of a command; tests pass a fake."""
-    if shutil.which(cmd[0]) is None:
+    from .progpath import resolved                   # git / gh from PATH, never a copy in the current folder or in
+    try:                                             # the folder it works in (review 2026-11-23, 2.6)
+        cmd = resolved(cmd, avoid=[cwd])
+    except FileNotFoundError:
         return 127, "", f"{cmd[0]}: command not found"
     p = subprocess.run(cmd, input=input, capture_output=True, text=True, cwd=cwd)
     return p.returncode, p.stdout, p.stderr
@@ -818,6 +822,11 @@ def _gitlab_client(rules, a, runner=None):
     token = UC.secret(tok_env)
     if not token:
         raise forge.GitLabError(f"no GitLab token: set ${tok_env} (a project or personal access token with api scope)")
+    # review 2026-11-23 (2.2): a rules file names the token and the server; --gitlab-api on the command line with the
+    # default token name is the person's own word
+    why = None if a.gitlab_api and tok_env == "GITLAB_TOKEN" else forge.token_refused(tok_env, api)
+    if why:
+        raise forge.GitLabError(why)
     return forge.GitLab(proj, token, api=api)
 
 

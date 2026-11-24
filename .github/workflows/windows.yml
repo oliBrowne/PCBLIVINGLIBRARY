@@ -132,13 +132,20 @@ jobs:
           $ok = $false
           foreach ($i in 1..60) {
             Start-Sleep -Seconds 1
-            try { $s = Invoke-RestMethod "http://127.0.0.1:8790/api/setup"; $ok = $true; break } catch { }
+            # the page answers only with the key of this run (kept in this user's settings folder)
+            try {
+              $key = @{ "X-Ecadlib-Key" = (Get-Content "$env:ECADLIB_HOME\run\ui-8790.json" -Raw | ConvertFrom-Json).key }
+              $s = Invoke-RestMethod "http://127.0.0.1:8790/api/setup" -Headers $key; $ok = $true; break
+            } catch { }
           }
           if (-not $ok) { Get-Content "$env:ECADLIB_HOME\app.log" -ErrorAction SilentlyContinue; throw "the app did not start" }
           if (-not $s.frozen) { throw "not running the frozen app" }
           $page = Invoke-WebRequest "http://127.0.0.1:8790/setup" -UseBasicParsing
           if ($page.Content -notmatch "ecadlib setup") { throw "no setup page" }
-          $alt = Invoke-RestMethod "http://127.0.0.1:8790/api/setup/altium" -Method Post -ContentType "application/json" -Body "{}"
+          $refused = $false
+          try { Invoke-RestMethod "http://127.0.0.1:8790/api/setup" | Out-Null } catch { $refused = $_.Exception.Response.StatusCode.value__ -eq 401 }
+          if (-not $refused) { throw "the app answered a request without its key" }
+          $alt = Invoke-RestMethod "http://127.0.0.1:8790/api/setup/altium" -Method Post -ContentType "application/json" -Body "{}" -Headers $key
           if (-not (Test-Path $alt.project)) { throw "no Altium script project" }
           if (-not (Test-Path $alt.menu_file)) { throw "no Altium menu file" }
           Select-String -Path (Join-Path $alt.folder "ecadlib_menu.ini") -Pattern "^command=.*ecadlib.exe"

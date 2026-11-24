@@ -19,7 +19,7 @@ Stubs (document auth, raise NotConfigured without keys): SnapMagic, SamacSys (no
 All response bodies are untrusted: parsed as JSON only, fields read defensively."""
 import json, os, re, time, unicodedata
 from dataclasses import dataclass, field
-from . import userconfig as UC
+from . import keyhosts as KH, userconfig as UC
 
 
 # an answer that says this account may not ask (Nexar: "You have exceeded your part limit of 0"): the source was
@@ -875,8 +875,10 @@ class Nexar(_Official):
     name, env = "nexar", ("NEXAR_CLIENT_ID", "NEXAR_CLIENT_SECRET")
     auth = "OAuth2 client-credentials (identity.nexar.com) for the Octopart/Nexar GraphQL API; quota-limited"
     client_cls = "NexarSourcing"
-    TOKEN_URL = os.environ.get("NEXAR_TOKEN_URL", "https://identity.nexar.com/connect/token")
-    API_URL = os.environ.get("NEXAR_API_URL", "https://api.nexar.com/graphql")
+    # review 2026-11-23: the Client Secret goes to TOKEN_URL and the token to API_URL, so a value from the environment
+    # is used only when it is https (TOKEN_URL: on identity.nexar.com itself); see keyhosts.service_url
+    TOKEN_URL = KH.service_url("NEXAR_TOKEN_URL", "https://identity.nexar.com/connect/token", same_host=True)
+    API_URL = KH.service_url("NEXAR_API_URL", "https://api.nexar.com/graphql")
     _token = _token_err = None
 
     def configured(self):

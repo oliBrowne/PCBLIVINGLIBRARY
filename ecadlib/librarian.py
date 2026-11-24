@@ -3636,11 +3636,12 @@ def handoff_says(reader, progress):
 
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
         cache="out/http_cache", rate=0.5, providers=None, http=None, api_key=None, log=print, gen_step=True,
-        rules=None, user=None, datasheet_batch=False, reader=None, progress=None, store=None):
+        rules=None, user=None, datasheet_batch=False, reader=None, progress=None, store=None, reason=""):
     """Whole pipeline; returns the plan items. datasheet_batch: parts that reach the datasheet source are read as one
     Message Batch after every other source ran (reader: a ready datasheet.Reader, e.g. for --no-wait / --estimate). refresh: None = resume, [] = redo all, [names] = redo those.
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
-    sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity()).
+    sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity()); reason:
+    why (recorded with the user in the ledger: release_check.record_allow).
     progress: a term.Progress-like object (start(name) / done(name, status, detail)) for the per-part line.
     store: a ready store_client.Store (tests); None = the one [store] names (off while its url is empty). A store that
     is set is always tried first, whatever `sources` says, and what parts owe it is checked again (store_holds)."""
@@ -3825,7 +3826,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
             from .approvals import identity, post_check, stamp_allow
             stamp_allow(items, allow, identity(user, cwd=out))
-            post_check(items, out, checks)
+            RC.record_allow(items, out, allow, identity(user, cwd=out), reason, via="librarian --allow")   # the proof
+            post_check(items, out, checks)                         # the allow block needs (review 2026-11-23, 2.4)
         gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger (a new
                                                    # part with a released part's MPN is compared with it first)
         gate.retire([n for n in old if n not in {i["name"] for i in items}], f"no longer in the plan ({Path(bom).name})")
@@ -3921,6 +3923,8 @@ def main(argv=None):
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")
     ap.add_argument("--box", action="store_true", help="extruded 3D box instead of a generated STEP when there is no KiCad model")
     ap.add_argument("--user", help="who gives the --allow (default: $ECADLIB_USER, then git config user.name/email)")
+    ap.add_argument("--reason", help="why you release the --allow parts anyway (asked for in a terminal when left out); "
+                                     "recorded with your name in the library's ledger")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from -o or here; see `ecadlib init`)")
     ap.add_argument("--datasheet-batch", action="store_true",
                     help="read every datasheet still needed as one Message Batch (half price; waits for it, see --datasheet-no-wait)")
@@ -3955,11 +3959,16 @@ def main(argv=None):
     log = loud if (t.verbose or not t.styled) else (lambda m="", *x, **k: print(m) if str(m).startswith(("  BOM:", "  finding",
                                                                                                        "  store:")) else None)
     prog = TM.Progress(t.err, 0, "parts") if t.styled and not a.json else None   # piped: the plain log lines
+    reason = RC.ask_reason(a.reason, a.allow) if a.allow else ""
+    if a.allow and not reason:                           # review 2026-11-23 (2.4): who, when and why, or no release
+        print("ecadlib librarian: --allow needs your reason: add --reason \"why these parts may go out despite the "
+              "check\" (it is recorded with your name in the library's ledger)", file=sys.stderr)
+        return 2
     try:
         items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh,
                     a.refresh_index, a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules,
                     user=a.user, http=reader.http if reader else None, reader=reader,
-                    log=log, progress=prog)
+                    log=log, progress=prog, reason=reason)
     except ValueError as e:                              # unreadable / headerless BOM, unknown --sources
         from .firstrun import bom_hint
         print(f"ecadlib librarian: {e}" + bom_hint(e), file=sys.stderr)

@@ -240,7 +240,9 @@ def test_a_datasheet_with_a_rohs_or_reach_compliant_banner_is_still_taken():
 # ---------------------------------------------------------------- R-FX19-3: eval --base-url never takes [ai]'s key along
 def _env19():
     keep = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY")}
-    keep.update({"AI_KEY": "sk-ai-gw1", "PROXY_KEY": "sk-proxy", "OPENAI_API_KEY": "sk-openai", "ECADLIB_NO_STORED_KEYS": "1"})
+    keep.update({"AI_KEY": "sk-ai-gw1", "PROXY_KEY": "sk-proxy", "OPENAI_API_KEY": "sk-openai", "ECADLIB_NO_STORED_KEYS": "1",
+                 # review 2026-11-23 (2.2): a key under a name of your own goes to a server of your own only once you allowed it
+                 "ECADLIB_KEY_HOSTS": "AI_KEY=gw1.example.com,PROXY_KEY=proxy.corp"})
     return mock.patch.dict(os.environ, keep, clear=True)
 
 

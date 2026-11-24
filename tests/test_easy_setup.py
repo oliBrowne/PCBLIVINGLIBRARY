@@ -7,7 +7,7 @@ from unittest import mock
 
 from ecadlib import detect as DT, doctor as DR, easy_setup as ES, launcher as LA, userconfig as UC
 from ecadlib.app import Workspace
-from ecadlib.ui import server as S
+from ecadlib.ui import access as AC, server as S
 from tests.fixtures_lite import clean_all, scratch
 
 
@@ -273,6 +273,7 @@ def test_add_to_altium_writes_the_menu_set_to_this_ecadlib():
 def _call(port, method, path, body=None, origin=None):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
     h = {"Host": f"127.0.0.1:{port}", "Content-Type": "application/json"}
+    h.update(AC.header_for(port))               # the run file of the server under test (review 2026-11-23, 2.1)
     if origin:
         h["Origin"] = origin
     c.request(method, path, body=None if body is None else json.dumps(body), headers=h)
@@ -289,9 +290,11 @@ def _server(root):
     srv = S.make_server(Workspace(root), "127.0.0.1", 0)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
+    AC.publish(srv.server_address[1], srv.access)          # as `ecadlib ui` does: _call reads the key from it
     try:
         yield srv.server_address[1]
     finally:
+        AC.unpublish(srv.server_address[1], srv.access)
         srv.shutdown()
         srv.server_close()
 

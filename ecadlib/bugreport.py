@@ -19,7 +19,8 @@ MAX_KEPT = 20
 MAX_URL = 7000                                # GitHub refuses much longer links; the traceback's top is cut first
 MAX_TB_LINES = 80
 MAX_LINE, MAX_LAST, MAX_BODY_LINE = 500, 1000, 300   # characters per traceback line: saved / its last line / in the link
-SECRET_NAME = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT|CREDENTIALS?|SIGNIN)(?:$|_)", re.I)
+# (WEBHOOK / HOOK, review 2026-11-23: a Slack or Teams webhook URL is itself the secret)
+SECRET_NAME = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT|CREDENTIALS?|SIGNIN|WEBHOOK|HOOK)(?:$|_)", re.I)
 _SHAPES = [                                   # keys and tokens by their look, wherever they appear
     re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"),                          # Anthropic, OpenAI, OpenRouter
     re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"),                         # Google / Gemini
@@ -29,6 +30,58 @@ _SHAPES = [                                   # keys and tokens by their look, w
     re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),   # UUID keys (Mouser)
     re.compile(r"\b[0-9a-fA-F]{32,}\b"),                            # hex client ids and secrets
 ]
+# review 2026-11-23: a webhook address is a secret by itself (whoever has it can post): Slack, Teams / Office, Discord,
+# and any URL with a /webhook(s) or /hook(s) part; the host stays, the rest goes
+_WEBHOOK = re.compile(r"(?i)\b(https?://(?:hooks\.slack\.com|[\w.-]*webhook\.office\.com|outlook\.office(?:365)?\.com/webhook"
+                      r"|discord(?:app)?\.com/api/webhooks|[\w.-]+(?::\d+)?(?:/[^\s/\"'<>]+)*?/(?:web)?hooks?))/[^\s\"'<>)\]]+")
+# review 2026-11-23: a short key with no known look, named as one: "key 'DK_CLIENT' value Zx81Lm20PqRs", "mouser key
+# Zx81Lm20PqRs". After a word that says key / token / secret / password, the next word of 8 or more characters that
+# mixes capitals, small letters and digits is blanked (a part number has no small letters, a word has no digits).
+_NAMED = re.compile(r"(?i)((?<![A-Za-z0-9])(?:api[_ -]?key|key|token|secret|password|passwd|credentials?)(?![A-Za-z0-9])"
+                    r"[^\n]{0,40}?(?<![A-Za-z0-9_\-]))((?-i:(?=[A-Za-z0-9_\-+/=]*[a-z])(?=[A-Za-z0-9_\-+/=]*[A-Z])"
+                    r"(?=[A-Za-z0-9_\-+/=]*\d)[A-Za-z0-9_\-+/=]{8,}))(?![A-Za-z0-9_\-])")
+# review 2026-11-23: folders outside the home folder (D:\Projects\AcmeCorp\Board-X1, /srv/eng/acme) and below it
+# (~/Projects/AcmeCorp) carry customer and project names. Every folder and file name of a full path that is not one
+# of the names below becomes [folder] / [file].ext; relative paths (ecadlib/x.py in a traceback) are not touched.
+_KEEP_DIRS = frozenset("""ecadlib librarian uploads datasheet datasheets cache crashes out build dist tmp temp usr lib lib64 bin
+    sbin opt var etc home users windows system32 appdata roaming local programs library applications documents desktop
+    downloads site-packages dist-packages scripts python .config .cache .local share private mnt programdata footprints
+    symbols 3d models kicad altium ui static llm eval assets tests src""".split()) | {
+        "application support", "program files", "program files (x86)"}
+_KEEP_FILES = frozenset("""plan.json ecadlib.toml ecadlib_rules.json keys.json settings.json cost.jsonl api_log.jsonl
+    house_style.json fp-lib-table sym-lib-table kicad-cli kicad-cli.exe python python3 python.exe ecadlib ecadlib.exe
+    report.json triage.json ledger.jsonl""".split())
+_CODE_EXT = (".py", ".pyc", ".pyd", ".so", ".dll", ".exe", ".pas", ".js")
+_PATH = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]:|\\\\[^\\/\s\"']+|~)(\\|/)(?:[^\\/:*?\"<>|\r\n]+\1)*[^\\/:*?\"<>|\r\n\s',;)\]]*"
+                   r"|(?<![\w:/.\]>~\\<-])(?:/[^\s\"'`:;,()<>|*?\\\[\]]+){2,}")
+
+
+def _anon_path(m):
+    """A full path with the folder and file names ecadlib does not know taken out (see _KEEP_DIRS)."""
+    sep = m.group(1) or "/"
+    parts = m.group(0).split(sep)
+    if not parts[0] and parts[1].lower() in ("api", "v1", "v1beta"):   # ecadlib's own page routes (/api/status) and
+        return m.group(0)                                              # an API's (/v1/messages): not folders
+    out = [parts[0]]
+    for i, c in enumerate(parts[1:], 1):
+        low, last = c.lower(), i == len(parts) - 1
+        ext = c.rpartition(".")[2] if "." in c[1:] else ""
+        if not c:                                     # a path that ends in its separator (or \\ written twice)
+            new = "" if last else None
+        elif i >= 2 and parts[i - 1].lower() in ("home", "users", "documents and settings"):
+            new = "[user]"                            # another account's folder (this one's is already "~")
+        elif low in _KEEP_DIRS or c.startswith("[") or re.fullmatch(r"python[\d.]*|\.?venv|v?\d+(\.\d+)*", low) \
+                or last and (low in _KEEP_FILES or low.endswith(_CODE_EXT)):
+            new = c
+        elif last and re.fullmatch(r"[A-Za-z0-9_]{1,12}", ext):
+            new = "[file]." + ext
+        else:
+            new = "[folder]"
+        if new is not None and not (new == "[folder]" and out[-1] == "[folder]"):   # unknown folders in a row: one mark
+            out.append(new)
+    return sep.join(out)
+
+
 _USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{0,15}://)[^/\s:@]{1,200}:[^/\s@]{1,500}@")
 _BEARER = re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=\-]{8,}")
 _SECRET_WORDS = r"(?:api[_-]?key|apikey|key|token|secret|password|passwd|pass|sig|client[_-]?id)"
@@ -97,16 +150,19 @@ def scrub(text):
         text = text.replace(v, "[secret]")
     for rx in _SHAPES:
         text = rx.sub("[secret]", text)
+    text = _WEBHOOK.sub(lambda m: m.group(1) + "/[secret]", text)
     text = _USERINFO.sub(lambda m: m.group(1) + "[user]:[secret]@", text)
     text = _BEARER.sub(lambda m: m.group(1) + " [secret]", text)
     text = _QUOTED.sub(lambda m: m.group(1) + m.group(2)[0] + "[secret]" + m.group(2)[0], text)   # 'a pass phrase'
     text = _QUERY.sub(lambda m: m.group(1) + "[secret]", text)
+    text = _NAMED.sub(lambda m: m.group(1) + "[secret]", text)
     text = _LONG.sub(_long_token, text)
     text = _EMAIL.sub("[email]", text)
     home = str(Path.home())
     if len(home) > 3:
         for h in {home, home.replace("\\", "/"), home.replace("/", "\\")}:
             text = re.sub(re.escape(h) + r"(?=[\\/\"'\s:]|$)", "~", text, flags=re.I if os.name == "nt" else 0)
+    text = _PATH.sub(_anon_path, text)
     text = _USER_DIRS.sub(lambda m: m.group(1) + "[user]", text)
     text = _ORG.sub("OneDrive - [org]", text)
     text = _A365.sub("[workspace]", text)
@@ -355,6 +411,22 @@ def _match(rx, v, other):
     return m.group(0) if m else other
 
 
+_OS_FORMS = (("Windows", r"(\d{1,2}(?:\.\d)?)(?!\d)|(20\d\dServer)(?![0-9A-Za-z])"), ("macOS", r"(\d{2}(?:\.\d{1,2})?)(?!\d)"),
+             ("Linux", r"(\d\.\d{1,2})(?!\d)"))
+
+
+def _os_form(text):
+    """The system as one of the fixed forms the endpoint keeps (its osForm): Windows-11, Windows-2022Server,
+    macOS-14.5, Linux-6.8, the bare family, else Other-unknown. platform.platform() says more ("Linux-6.8.0-45-generic-
+    x86_64-with-glibc2.39"): the kernel build and the C library stay here (review 2026-11-23, 2.5)."""
+    t = str(text or "")
+    for fam, rx in _OS_FORMS:
+        if t == fam or t.startswith(fam + "-"):
+            m = re.match(rx, t[len(fam) + 1:], re.ASCII)
+            return f"{fam}-{m.group(1) or m.group(2)}" if m else fam
+    return "Other-unknown"
+
+
 def payload(rec):
     """The publishable part of a saved report: no message, only frames in ecadlib's own files, fixed-shape fields.
     A report saved before frames were kept (no "frames" field) goes without frames: text is never parsed for them."""
@@ -363,10 +435,9 @@ def payload(rec):
         m = _FRAME_LINE.match(ln.strip())
         if m:
             frames.append({"file": m.group(1), "line": max(1, int(m.group(2))), "function": m.group(3)})
-    osm = re.match(r"^(Windows|Linux|macOS|Darwin|FreeBSD)-([0-9A-Za-z._-]{1,50})", str(rec.get("os") or ""), re.ASCII)
     return {"schema": SCHEMA, "version": _match(r"\d{1,3}\.\d{1,3}\.\d{1,3}((a|b|rc)\d{1,3})?", rec.get("version"), "0.0.0"),
             "installed": "Windows app" if rec.get("installed") == "Windows app" else "pip",
-            "os": f"{osm.group(1)}-{osm.group(2)}" if osm else "Other-unknown",
+            "os": _os_form(rec.get("os")),
             "python": _match(r"3\.\d{1,2}\.\d{1,3}((a|b|rc)\d{1,2})?", rec.get("python"), "3.0.0"),
             "where": _place(rec.get("where")), "error": _match(r"[A-Z][A-Za-z0-9]{1,40}$", rec.get("error"), "Exception"),
             "frames": frames[-30:]}

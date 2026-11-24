@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ecadlib import altium365 as A, altium_export as X, altium_lib as AL, bom_triage as T
 from ecadlib.kicad_index import KiCadIndex, Symbol, package_of
-from tests.fixtures_lite import released_anyway
+from tests.fixtures_lite import in_dir, released_anyway
 
 
 def _write(text, name="bom.csv", raw=None):
@@ -100,13 +100,13 @@ def _two_resistors(d):
     for sub in ("SchLib", "PcbLib"):                 # real models: push reads them back (release check)
         (Path(d) / sub).mkdir(exist_ok=True)
     AL.write_schlib(Path(d) / "SchLib" / "Resistor.SchLib", [AL.resistor_symbol()])
-    spec = json.loads(Path("ecadlib/package_specs/R_0603_1608Metric.json").read_text())
+    spec = json.loads((Path(A.__file__).parent / "package_specs" / "R_0603_1608Metric.json").read_text())   # from any folder
     AL.write_pcblib(Path(d) / "PcbLib" / "R_0603_1608Metric.PcbLib", [AL.footprint_from_spec(spec)[0]])
     return lines
 
 
 def test_p5_push_is_idempotent_and_clears_fields():
-    with tempfile.TemporaryDirectory() as d:
+    with tempfile.TemporaryDirectory() as d, in_dir(d):       # the ledger line goes into d (review 2026-11-23, 2.4)
         items = released_anyway(A.plan(_two_resistors(d), models=d))   # no maker / datasheet in the BOM: released anyway
         ws = Stateful()
         assert {r["action"] for r in A.push(items, ws, "w")} == {"release"}
@@ -123,7 +123,7 @@ def test_p5_push_is_idempotent_and_clears_fields():
 
 
 def test_p6_shared_models_reuse_item_names_and_uploads():
-    with tempfile.TemporaryDirectory() as d:
+    with tempfile.TemporaryDirectory() as d, in_dir(d):       # the ledger line goes into d (review 2026-11-23, 2.4)
         items = released_anyway(A.plan(_two_resistors(d), models=d))   # no maker / datasheet in the BOM: released anyway
         ws = Stateful()
         A.push(items, ws, "w")

@@ -670,7 +670,11 @@ def test_open_queue_starts_reuses_and_refuses():
     r = AM.open_queue(cfg, opener=opened.append, probe=lambda p: (None, None), launcher=lambda w, p: None,
                       wait_s=0.0, sleep=lambda s: None)
     assert r["status"] == "error" and "did not start" in r["message"] and "altium_menu_ui.log" in r["fix"]
-    assert AM.open_queue(cfg, opener=opened.append, probe=lambda p: ("ecadlib-team", None))["status"] == "ok"
+    # an ecadlib this account has no key for (another account's): its page would only say "open this page from
+    # ecadlib", so the menu says what is on the port instead of opening it (review 2026-11-23, 2.1)
+    n = len(opened)
+    r = AM.open_queue(cfg, opener=opened.append, probe=lambda p: ("ecadlib-team", None))
+    assert r["status"] == "error" and "did not start" in r["message"] and "port=" in r["fix"] and len(opened) == n
 
 
 def test_open_queue_starts_the_real_web_ui():
@@ -684,8 +688,9 @@ def test_open_queue_starts_the_real_web_ui():
     try:
         r = AM.open_queue(cfg, opener=opened.append, launcher=lambda ws, port: procs.append(AM.start_ui(ws, port)))
         assert r["status"] == "ok" and r["started"] == "1", r
-        page = urllib.request.urlopen(opened[0].split("#")[0], timeout=10).read().decode("utf-8")
-        assert 'id="libcard"' in page and opened[0].endswith("#libcard")
+        from tests.test_ui import ui_browser                # the link carries a one-time key (review 2026-11-23, 2.1)
+        page = ui_browser().open(opened[0].split("#")[0], timeout=10).read().decode("utf-8")
+        assert 'id="libcard"' in page and opened[0].endswith("#libcard") and "key=" not in r["url"]
         assert AM.probe_ui(cfg["port"]) == ("ecadlib", str(cfg["workspace"].resolve()))
     finally:
         for p in procs:

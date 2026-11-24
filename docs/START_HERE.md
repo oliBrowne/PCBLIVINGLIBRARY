@@ -146,7 +146,9 @@ the window stops ecadlib. Nothing runs in the background after that.
 
 ## If something is wrong
 
-- **The browser page does not open:** go to <http://127.0.0.1:8765/> yourself.
+- **The browser page does not open:** press **Open ecadlib** in the ecadlib window, or start ecadlib again. Typing
+  the address <http://127.0.0.1:8765/> yourself is not enough in a browser ecadlib has not opened yet: the page answers
+  only to a browser that got ecadlib's link, so that other programs on the computer cannot use it.
 - **"no Altium 365 (Nexar) token":** run `ecadlib nexar signin` (or save a token on the setup page, **Optional keys**),
   then try again.
   Altium does not need a restart.

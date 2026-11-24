@@ -33,8 +33,11 @@ from .altium_dblib_sync import readback_problems     # the read-back dblib-sync 
 from .bom_triage import read_bom
 from . import userconfig as UC
 
-API_URL = os.environ.get("NEXAR_API_URL", "https://api.nexar.com/graphql")
-FILES_URL = os.environ.get("NEXAR_FILES_URL", "https://files.nexar.com")
+from . import keyhosts as KH
+# (review 2026-11-23: the sign-in token goes to both, so a value from the environment must be https, or this computer)
+API_URL = KH.service_url("NEXAR_API_URL", "https://api.nexar.com/graphql")
+FILES_URL = KH.service_url("NEXAR_FILES_URL", "https://files.nexar.com")
+TOKEN_HOSTS = ("nexar.com", "altium.com", "altium365.com")   # and their subdomains: where the sign-in token may go
 
 Q_WORKSPACES = "query { desWorkspaceInfos { name url } }"
 
@@ -182,6 +185,19 @@ def _http(token, send):
                                "connection or proxy, then try again") from None
 
 
+def token_host_ok(url):
+    """May the sign-in token be sent to this address? Only https on nexar.com / altium.com / altium365.com (or a
+    subdomain), or the very server NEXAR_API_URL / NEXAR_FILES_URL name (the same scheme, host and port)."""
+    got = KH.split_host(url) if "://" in str(url) else None       # None: no host, or one two parsers read differently
+    if not got:
+        return False
+    scheme, host, port = got
+    for mine in (API_URL, FILES_URL):
+        if got == KH.split_host(mine):
+            return True
+    return scheme == "https" and any(host == h or host.endswith("." + h) for h in TOKEN_HOSTS)
+
+
 class Nexar:
     def __init__(self, token, session=None):
         import requests
@@ -216,9 +232,15 @@ class Nexar:
 
     def download(self, url):
         """A symbol/footprint dataDownloadUrl. Tried without credentials first (pre-signed URLs reject extra auth),
-        then with the bearer token."""
+        then with the bearer token, which goes only to Altium's own servers over https (token_host_ok; review
+        2026-11-23, 2.8: the address comes in a workspace answer, and any host that answered 401 got the token).
+        A redirect to another host never carries it: requests drops the Authorization header when the host changes."""
         r = self.s.get(url, timeout=120)
         if r.status_code in (401, 403):
+            if not token_host_ok(url):
+                raise NexarError(f"Altium 365 gave a download address on {KH.host_of(url) or 'an unknown server'} that "
+                                 f"asks for a sign-in ({r.status_code}). The sign-in token is only sent to Altium's own "
+                                 "servers over https, so it was not sent and the file was not downloaded.")
             r = self.s.get(url, headers={"Authorization": f"Bearer {self.token}"}, timeout=120)
         r.raise_for_status()
         return r.content

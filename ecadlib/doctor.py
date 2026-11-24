@@ -183,6 +183,9 @@ def check_ai(rules=None, environ=None):
         out.append(_c("ai key", "OK", "none needed (a server on this machine or your network)"))
     elif key:
         out.append(_c("ai key", "OK", f"{ep['key_env'] or 'ANTHROPIC_API_KEY'} set"))
+    elif LL.key_refused(ep, environ):                  # review 2026-11-23 (2.2): the key may not go to this server
+        out.append(_c("ai key", "WARN", f"{ep['key_env']} is not sent to {LL.KH.host_of(ep['base_url'])} (datasheet "
+                                        "reader and visual-check skipped)", LL.key_refused(ep, environ)))
     else:
         out.append(_c("ai key", "WARN", f"{ep['key_env']} not set (datasheet reader and visual-check skipped)",
                       key_hint(ep["key_env"])))
@@ -467,13 +470,16 @@ def check_altium_menu(ini, run=subprocess.run, which=shutil.which, probe=True):
                                          "python; an install in a virtual environment (venv) is found by none of them", fix)
     argv = split_command(cmd)
     exe = argv[0] if argv else ""
-    found = exe if (os.sep in exe or "/" in exe or "\\" in exe) and Path(exe).is_file() else which(exe) if exe else None
+    given = (os.sep in exe or "/" in exe or "\\" in exe) and Path(exe).is_file()
+    if which is shutil.which:                        # PATH only: an ecadlib / py in the current folder is not what the
+        from .progpath import find as which          # menu would run, and is never run here (review 2026-11-23, 2.6)
+    found = exe if given else which(exe) if exe else None
     if not found:
         return _c("altium menu", "FAIL", f"{ini}: command= {cmd}: {exe or '(nothing)'} does not exist", fix)
     if not probe:
         return _c("altium menu", "OK", f"{ini}: command= {cmd} (found; not run: give --altium-menu {ini} to try it)")
     try:
-        r = run(argv + ["--version"], capture_output=True, text=True, timeout=60)
+        r = run(([str(found)] if not given else argv[:1]) + argv[1:] + ["--version"], capture_output=True, text=True, timeout=60)
         out = ((r.stdout or "") + (r.stderr or "")).strip()
     except (OSError, subprocess.SubprocessError) as e:
         return _c("altium menu", "FAIL", f"{ini}: command= {cmd} did not run ({e})", fix)

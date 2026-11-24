@@ -15,7 +15,7 @@ with a job id for job_status instead of running into the client's timeout. Logs 
 moved aside so not even a child process can corrupt the protocol stream."""
 import argparse, contextlib, json, math, re, sys, threading, time, traceback
 
-from . import __version__
+from . import __version__, confirm as CF
 from .app import Workspace
 
 PROTOCOL = "2025-06-18"
@@ -102,14 +102,14 @@ TOOLS = [
                                                 "description": "part names to redo"},
                                     "refresh_all": {"type": "boolean", "description": "redo every part"}}}},
     {"name": "release_check",
-     "description": "Re-run the release check on the librarian's plan for a BOM. allow releases the named parts despite "
-                    "their current failures (only when the user has looked and agreed; it is recorded in the plan); "
-                    "unallow takes that back. user is the person giving the allow, required with allow (recorded for "
-                    "sign-off; ask the user who they are and pass their own answer, never invent a name). Held "
-                    "parts are never pushed to Altium 365.",
+     "description": "Re-run the release check on the librarian's plan for a BOM. allow asks to release the named held "
+                    "parts despite their failures: that is the person's decision, so the first call releases nothing "
+                    "and answers with a command (`ecadlib confirm ID`) for the person to run in a terminal, where they "
+                    "see why each part is held and give their reason; call again afterwards. unallow takes a release "
+                    "anyway back. Held parts are never pushed to Altium 365.",
      "inputSchema": {"type": "object", "required": ["bom"],
                      "properties": {"bom": {"type": "string"},
-                                    "user": {"type": "string"},
+                                    "user": {"type": "string", "description": "not used: the person is who confirms"},
                                     "allow": {"type": "array", "items": {"type": "string"}},
                                     "unallow": {"type": "array", "items": {"type": "string"}}}}},
     {"name": "held_parts",
@@ -130,13 +130,14 @@ TOOLS = [
      "description": "Use a candidate from part_candidates (kicad:Lib:Name, local:Lib:Name or spec:Name) for one half of "
                     "a plan part: converts it to Altium files, records the choice in the plan (a librarian re-run keeps "
                     "it) and re-runs the release check. pin_map maps symbol pin numbers to pad numbers. Show the user "
-                    "the candidates and let them pick; do not choose on a guess. user is the person choosing (their own "
-                    "answer, e.g. \"Ann Lee <ann@example.com>\"): for a part already released, their choice is the "
-                    "approval of the change; without user such a change is held for a person to approve.",
+                    "the candidates and let them pick; do not choose on a guess. For a part already released the change "
+                    "is held until the person approves it themselves (`ecadlib part approve`, or the ecadlib page): "
+                    "a choice made over MCP is never that approval.",
      "inputSchema": {"type": "object", "required": ["bom", "part", "kind", "candidate_id"],
                      "properties": {"bom": {"type": "string"}, "part": {"type": "string"},
                                     "kind": {"type": "string", "enum": ["symbol", "footprint"]},
-                                    "candidate_id": {"type": "string"}, "user": {"type": "string"},
+                                    "candidate_id": {"type": "string"},
+                                    "user": {"type": "string", "description": "not used: see the description"},
                                     "pin_map": {"type": "object", "additionalProperties": {"type": "string"}}}}},
     {"name": "approval_status",
      "description": "Sign-off state of the librarian's plan for a BOM: the approvals policy (approvals.json next to the "
@@ -144,10 +145,11 @@ TOOLS = [
                     "still missing. Parts awaiting approval are not pushed to Altium 365.",
      "inputSchema": {"type": "object", "required": ["bom"], "properties": {"bom": {"type": "string"}}}},
     {"name": "approve_part",
-     "description": "Record a person's approve or reject decision for one plan part (reject needs a comment). user is the "
-                    "person deciding, e.g. \"Ann Lee <ann@example.com>\": ask the user who they are and pass their own "
-                    "answer; never approve on your own behalf or invent a name. Logged in approvals_audit.jsonl.",
-     "inputSchema": {"type": "object", "required": ["bom", "part", "decision", "user"],
+     "description": "Ask for a person's approve or reject decision for one plan part (reject needs a comment). A sign-off "
+                    "is the person's own, under their own name, so this records nothing by itself: it answers with a "
+                    "command (`ecadlib confirm ID`) for the person to run in a terminal; once they have, the same call "
+                    "returns the recorded decision. user is not used. Logged in approvals_audit.jsonl.",
+     "inputSchema": {"type": "object", "required": ["bom", "part", "decision"],
                      "properties": {"bom": {"type": "string"}, "part": {"type": "string"},
                                     "decision": {"type": "string", "enum": ["approve", "reject"]},
                                     "user": {"type": "string"}, "role": {"type": "string"},
@@ -274,9 +276,13 @@ TOOLS = [
      "description": "Write the workspace's ecadlib.toml (the `toml` from propose_rules, possibly edited with the user). Only "
                     "after the user has agreed to the proposal. If a different file exists nothing is written and the diff "
                     "comes back (needs_confirm): show it and call again with overwrite true only when the user says to "
-                    "replace it (the old file is kept as ecadlib.toml.bak). Release gates ([altium365], [release], [change], "
-                    "parameters required (may only grow), datasheet cross_check off, agent.proof fail_on) and where "
-                    "requests / keys go or the spending limits are refused: the user edits those themselves.",
+                    "replace it (the old file is kept as ecadlib.toml.bak). Only these may change over MCP: [naming], "
+                    "[folders], [bom] columns, [symbols], parameters names / supplier_slots / defaults (not of a "
+                    "required parameter), the assembly / 3D body / silkscreen / designator layers, footprint density, "
+                    "[style] apply; and release gates may be made stricter (parameters required may grow, [release] / "
+                    "[change] warn -> hold). Every other setting (prices and model profiles, the datasheet checks and "
+                    "folder, sources, providers, the store, where requests and keys go, spending limits) is refused: "
+                    "the user edits those themselves.",
      "inputSchema": {"type": "object", "required": ["toml"],
                      "properties": {"toml": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}}},
     {"name": "learn_house_style",
@@ -489,6 +495,44 @@ def _menu_win_dir(win_dir):
     return w
 
 
+def _asked_over_mcp(fn):
+    """Review 2026-11-23 (2.3): every tool call is marked as asked over MCP (confirm.over_mcp), so a paid step takes
+    its approval from the person (confirm.spend), never from the call's own arguments."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(ws, name, args, progress=None):
+        with CF.over_mcp(name):
+            return fn(ws, name, args, progress)
+    return run
+
+
+def _held_to_release(ws, bom, allow):
+    """release_check allow over MCP: the named parts that are held now. Releasing them anyway is asked of the person
+    (confirm.ask_release); a part they already released needs nothing more, so the call succeeds on retry."""
+    _, plan_f, items = ws._plan(bom)
+    by = {i["name"]: i for i in items}
+    unknown = sorted(set(allow) - set(by))
+    if unknown:
+        raise ValueError(f"not parts of this plan: {', '.join(unknown)}")
+    return plan_f, [n for n in dict.fromkeys(allow) if by[n].get("status") == "held"]
+
+
+def _decided(ws, bom, part, decision):
+    """approve_part over MCP: the plan and, when the part's latest sign-off record already is this decision on the
+    part as it is now (the person gave it: ecadlib confirm, the page, ecadlib approve), that record."""
+    from . import approvals as AP
+    if decision not in ("approve", "reject"):
+        raise ValueError("decision must be approve or reject")
+    _, plan_f, items = ws._plan(bom)
+    it = ws._part(items, part)
+    recs = it.get("approvals") or []
+    last = recs[-1] if recs else None
+    same = last and last.get("decision") == decision and AP.hash_matches(last.get("hash"), it, plan_f.parent)
+    return plan_f, last if same else None
+
+
+@_asked_over_mcp
 def call_tool(ws, name, args, progress=None):
     with contextlib.redirect_stdout(sys.stderr):          # library code prints progress; keep stdout for JSON-RPC
         if name == "workspace_info":
@@ -538,7 +582,12 @@ def call_tool(ws, name, args, progress=None):
             return ws.style_guide(args["approved_usd"], args.get("over_limit_ok") is True,
                                   args.get("price_unknown_ok") is True, args.get("model") or None, progress)
         if name == "release_check":
-            r = ws.release_check(args["bom"], args.get("allow") or [], args.get("unallow") or [], args.get("user"))
+            allow = [str(x) for x in args.get("allow") or []]
+            if allow:                                    # review 2026-11-23 (2.3): never released on the call's word
+                plan_f, held = _held_to_release(ws, args["bom"], allow)
+                if held:
+                    CF.ask_release(ws.root, plan_f, args["bom"], held)
+            r = ws.release_check(args["bom"], [], args.get("unallow") or [], None, via="mcp")
             r.pop("log", None)
             return r
         if name == "held_parts":
@@ -546,17 +595,21 @@ def call_tool(ws, name, args, progress=None):
         if name == "part_candidates":
             return ws.part_candidates(args["bom"], args["part"], args.get("kind"), args.get("limit") or 10)
         if name == "choose_part":
-            user = str(args.get("user") or "").strip() or None      # never the server's login: no person, no approval
+            # review 2026-11-23 (2.3): a name passed over MCP is not a person: the choice is never an approval
             r = ws.choose_part(args["bom"], args["part"], args["kind"], args["candidate_id"], args.get("pin_map") or None,
-                               user, approve=bool(user))
+                               None, approve=False)
             r.pop("log", None)
             return r
         if name == "approval_status":
             return ws.approval_status(args["bom"])
-        if name == "approve_part":
-            r = ws.approve_part(args["bom"], args["part"], args["decision"], args["user"], args.get("role"),
-                                args.get("comment") or "")
-            r.pop("log", None)
+        if name == "approve_part":                       # review 2026-11-23 (2.3): asked of the person, never recorded
+            plan_f, done = _decided(ws, args["bom"], args["part"], args["decision"])   # under a name the call passes
+            if not done:
+                CF.ask_decision(ws.root, plan_f, args["bom"], args["part"], args["decision"],
+                                str(args.get("role") or "").strip(), str(args.get("comment") or ""))
+            r = ws.approval_status(args["bom"])
+            r["decision"] = {"part": args["part"], "decision": args["decision"], "who": done.get("who"),
+                             "role": done.get("role") or "", "recorded": done.get("when")}
             return r
         if name == "find_duplicates":
             r = ws.find_duplicates(args["bom"], args.get("merge") is True)
@@ -676,7 +729,10 @@ Rules:
 - Money: librarian_run never pays for a model. ai_read, datasheet_batch, house_style_guide, visual_check and
   apply_house_style ai cost money and need approved_usd: show the quote (ai_quote, datasheet_estimate, learn_house_style
   ai, visual_check render_only, apply_house_style ai without approved_usd), wait for the user's yes, pass that amount.
-- Never approve, reject or allow parts on your own: pass the user's own name and decision.
+  The amount you pass is not the approval: unless the user set their own cap ([datasheet] max_cost_usd in ecadlib.toml)
+  the call answers with `ecadlib confirm ID` for the user to run in a terminal; call again once they have.
+- You cannot approve, reject or release parts anyway: release_check allow and approve_part answer with
+  `ecadlib confirm ID` for the user to run in a terminal (it records their name and reason); call again afterwards.
 - altium365_push defaults to a dry run; a real run only when the user asked for it.
 - BOM and file paths are absolute, or relative to the workspace folder (workspace_info shows it).
 - Show held parts' `text` and `fix` sentences to the user as written."""
@@ -1014,6 +1070,84 @@ def _check_endpoints(ws, text):
                          "the required parameters, the datasheet cross-check, the pin-1 names, the courtyard layer). A "
                          f"person must change them, in {ws._label(f)} or on the rules page of the ecadlib web UI; a "
                          "model over MCP may only make them stricter" + keep)
+    _check_allowed(ws, f, text, keep)          # review 2026-11-23: every other setting, unless it is on the allow-list
+
+
+# Review 2026-11-23 (2.3): save_rules over MCP is an allow-list. Only a setting named here may change; a new setting
+# is refused until someone adds it. A release gate (below) may still be made stricter, as before.
+HARMLESS_UNDER = ("naming.", "folders.", "bom.columns.", "symbols.", "parameters.names.")
+HARMLESS = {"parameters.supplier_slots", "layers.assembly", "layers.body3d", "layers.silkscreen", "layers.designator",
+            "footprint.density", "style.apply", "setup.tool"}
+DROP_ONLY = {"setup.workspace", "setup.libs"}           # the `ecadlib init` answers of a parent file: a workspace file
+                                                        # may leave them out, never name another folder
+STRICTER_OK = ("release.", "change.")                   # with parameters.required and footprint.pin1: _loosens decides
+ALWAYS_REQUIRED = ("Manufacturer", "Manufacturer Part Number", "Datasheet", "Description", "Value", "Comment")
+
+
+def _leaves(text, name="ecadlib.toml"):
+    """{dotted key: value} of every setting in a rules text (a table's keys one by one; an empty table sets nothing)."""
+    from .rules import parse_text
+    data = parse_text(text, name) if text else {}
+    out = {}
+
+    def walk(v, at):
+        for k, x in v.items():
+            key = f"{at}.{k}" if at else str(k)
+            if isinstance(x, dict):
+                walk(x, key)
+            else:
+                out[key] = x
+    if isinstance(data, dict):
+        walk(data, "")
+    return out
+
+
+def _may_change(k, required, new):
+    """Whether save_rules over MCP may change setting k at all (how far, for a gate, is _loosens' business). new: the
+    settings of the text to save."""
+    if k in DROP_ONLY:
+        return k not in new
+    if k in HARMLESS or k.startswith(HARMLESS_UNDER) or k.startswith(STRICTER_OK) or \
+            k in ("parameters.required", "footprint.pin1"):
+        return True
+    if k.startswith("parameters.defaults."):             # a default value for a required parameter or a link would
+        n = k[len("parameters.defaults."):].strip().lower()   # fill the field the release check asks a person for
+        return n not in required and not any(w in n for w in ("datasheet", "link", "url"))
+    return False
+
+
+def _check_allowed(ws, f, text, keep):
+    from .rules import RulesError
+    mine = ws.rules_file()
+    try:
+        old_text = f.read_text(encoding="utf-8-sig") if f.is_file() else ""
+        old = _leaves(old_text, f.name)
+    except (OSError, RulesError):
+        old_text, old = "", {}
+    new_text = text if isinstance(text, str) else ""
+    new = _leaves(new_text, mine.name)
+    same = lambda a, b: json.dumps(_canon(a), sort_keys=True, default=str) == json.dumps(_canon(b), sort_keys=True, default=str)
+    changed = sorted(k for k in set(old) | set(new)
+                     if not same(old.get(k, _gate_default(k)), new.get(k, _gate_default(k))))
+    required = {str(x).strip().lower() for x in ALWAYS_REQUIRED}
+    for t, n in ((old_text, f.name), (new_text, mine.name)):
+        names = _param_names(t, n)
+        g = _gates(t, n).get("parameters.required", _gate_default("parameters.required")) if t else _gate_default("parameters.required")
+        for x in list(g or []) + _canon_required(g, names):
+            required.add(str(x).strip().lower())
+        required |= {str(v).strip().lower() for c, v in names.items() if str(c).strip().lower() in required}
+    refused = [k for k in changed if not _may_change(k, required, new)]
+    # a spending cap the file in force does not set, written at its default value: no change of value, but a cap in
+    # the file counts as the person's own (datasheet.cap_chosen), which a paid run asked over MCP may start under
+    refused += [k for k in sorted(set(new) - set(old)) if k.rsplit(".", 1)[-1] == "max_cost_usd" and k not in refused]
+    if refused:
+        raise ValueError(f"save_rules cannot change {', '.join(refused[:12])}{' ...' if len(refused) > 12 else ''}: over "
+                         "MCP only naming, folders, BOM columns, symbol style, parameter names and defaults (not of "
+                         "a required parameter), supplier slots, the assembly / 3D body / silkscreen / designator "
+                         "layers, the footprint density and [style] apply may change. Prices and model profiles, "
+                         "the datasheet checks and folder, sources, providers, the store and anything that says "
+                         f"where requests or keys go are the person's: ask the user to edit {ws._label(f)} themselves "
+                         "or use the rules page of the ecadlib web UI" + keep)
 
 
 GATE_SECTIONS = ("altium365", "release", "change")      # every setting under these is a release gate

@@ -12,7 +12,7 @@
 Installed by KiCad's Plugin and Content Manager from the zip `ecadlib kicad-pcm --plugin` writes (or copied into
 KiCad's scripting/plugins folder by the setup page's "Add to KiCad" button). It runs in KiCad's own Python, so it does
 not import ecadlib: it starts the `ecadlib` command (ECADLIB_CMD if set, else the command in ecadlib_cmd.json next to
-this file, else `ecadlib` on PATH, else a python3 that can import ecadlib) as
+this file, else `ecadlib` on PATH, else a python3 that can import ecadlib; never one in the project's folder) as
 `ecadlib kicad-menu run-job JOB --action ... --kicad N` (N: this KiCad's major version; 7 gets KiCad 7 library files)
 and shows JOB/progress.ini while it works and JOB/result.ini when done, or what went wrong (JOB/log.txt).
 The window does not block KiCad: keep working while ecadlib looks parts up. Closed while a job works, the job still
@@ -63,24 +63,74 @@ def split_command(text, nt=None):
     return [w[1:-1] if len(w) > 1 and w[0] == w[-1] == '"' else w for w in shlex.split(text, posix=False)]
 
 
-def ecadlib_command(environ=None, which=shutil.which, run=subprocess.run, cmd_file=None):
-    """The command line that runs ecadlib, or None."""
+def _same_dir(a, b):
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except (OSError, ValueError):
+        return False
+
+
+def safe_which(name, environ=None, avoid=(), nt=None, cwd=None):
+    """The program `name` on PATH as an absolute path, or None: never one in the current folder or in a folder of
+    `avoid` (the open project). KiCad's working folder is normally the open project's, and on Windows both
+    shutil.which and Windows itself (CreateProcess with a bare name) look in the current folder before PATH, so a
+    project that came with an ecadlib.bat or python.bat would have it run (review 2026-11-23, 2.6). PATH entries that
+    are empty, relative or one of those folders are skipped; on Windows the PATHEXT endings are tried, as Windows does."""
     environ = os.environ if environ is None else environ
+    nt = os.name == "nt" if nt is None else nt
+    if not name or os.path.basename(name) != name or name in (".", ".."):
+        return None
+    try:
+        skip = [cwd or os.getcwd()]
+    except OSError:
+        skip = []
+    skip += [d for d in avoid if d]
+    exts = [""]
+    if nt:
+        pathext = [e for e in (environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD").split(";") if e.startswith(".")]
+        exts = [""] if any(name.lower().endswith(e.lower()) for e in pathext) else pathext
+    for d in (environ.get("PATH") or "").split(";" if nt else os.pathsep):
+        d = d.strip('"') if nt else d
+        if not d or not os.path.isabs(d) or any(_same_dir(d, s) for s in skip):
+            continue
+        for e in exts:
+            p = os.path.join(d, name + e)
+            if os.path.isfile(p) and (nt or os.access(p, os.X_OK)):
+                return p
+    return None
+
+
+def _program(first, find):
+    """The program a command starts with, as a path Windows cannot swap for a file in the current folder: a path
+    (with a folder in it) made absolute, a bare name ("py", "ecadlib") looked up with find. None when not found."""
+    if os.path.dirname(first):
+        return os.path.abspath(first)
+    return find(first)
+
+
+def ecadlib_command(environ=None, which=None, run=subprocess.run, cmd_file=None, project=None):
+    """The command line that runs ecadlib, or None. Its program is always an absolute path that is not in the current
+    folder or the project's (safe_which; `which`: a stand-in for the tests)."""
+    environ = os.environ if environ is None else environ
+    find = which or (lambda name: safe_which(name, environ, avoid=[project]))
     if environ.get("ECADLIB_CMD"):
-        return split_command(environ["ECADLIB_CMD"])
+        cmd = split_command(environ["ECADLIB_CMD"])
+        exe = _program(cmd[0], find) if cmd else None
+        return [exe] + cmd[1:] if exe else None
     cmd_file = cmd_file or os.path.join(HERE, "ecadlib_cmd.json")
     try:
         with open(cmd_file, encoding="utf-8") as f:
             cmd = json.load(f).get("command")
-        if isinstance(cmd, list) and cmd and all(isinstance(x, str) for x in cmd) and os.path.isfile(cmd[0]):
+        if (isinstance(cmd, list) and cmd and all(isinstance(x, str) for x in cmd) and os.path.isabs(cmd[0])
+                and os.path.isfile(cmd[0])):                 # absolute: a relative one would be read from KiCad's folder
             return cmd
     except (OSError, ValueError, AttributeError):
         pass
-    exe = which("ecadlib")
+    exe = find("ecadlib")
     if exe:
         return [exe]
     for py in ("python3", "python"):
-        p = which(py)
+        p = find(py)
         if p and _imports_ecadlib(p, run):
             return [p, "-m", "ecadlib"]
     return None
@@ -739,7 +789,7 @@ def _window_class():
 
         # -------------------------------------------------- jobs
         def command(self, action, **kw):
-            cmd = ecadlib_command()
+            cmd = ecadlib_command(project=self.project)
             if not cmd:
                 raise ValueError("ecadlib is not installed where KiCad can find it.\nNext: install ecadlib (the Windows "
                                  "installer, or pip install ecadlib) and press \"Add to KiCad\" on its setup page again, "

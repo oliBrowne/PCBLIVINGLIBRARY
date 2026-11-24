@@ -61,7 +61,7 @@ def test_an_offline_run_refuses_an_unfetched_link_without_looking_its_host_up(tm
 
 class _Req:
     def __init__(self, url):
-        self.url = url
+        self.url, self.service_worker = url, object()    # (no page: judged by its address, as a worker's request is)
 
 
 class _Route:

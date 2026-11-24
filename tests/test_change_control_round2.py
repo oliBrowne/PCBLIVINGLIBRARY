@@ -329,9 +329,12 @@ def _two_approvers(lib):
 
 
 def _cut_part(lib, part):
+    """The part's release history cut out of the ledger. Its release-anyway line stays (security review 2026-11-23,
+    2.4: the demo's AO3401A is released by that record alone; without it the part is simply held, and these tests are
+    about adopting a part that may be released)."""
     led = lib / LG.LEDGER
-    led.write_text("".join(l + "\n" for l in led.read_text(encoding="utf-8").splitlines() if f'"{part}"' not in l),
-                   encoding="utf-8")
+    led.write_text("".join(l + "\n" for l in led.read_text(encoding="utf-8").splitlines()
+                           if f'"{part}"' not in l or '"event": "release_anyway"' in l), encoding="utf-8")
 
 
 def test_adopt_accept_changes_adopts_the_stored_version_and_holds_the_disk():
