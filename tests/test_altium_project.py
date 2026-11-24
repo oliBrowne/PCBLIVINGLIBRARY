@@ -499,3 +499,21 @@ def test_a_document_keeps_its_spelling_on_disk_on_a_case_insensitive_file_system
         with mock.patch.object(Path, "exists", exists_any_case):
             got = AP._find_file(td, "sheets\\io.schdoc")
     assert got is not None and got.name == "IO.SchDoc" and got.parent.name == "Sheets", got
+
+
+def test_a_parent_folder_document_from_a_relative_project_folder():
+    """Review 2026-11-24: '..\\Shared\\x.SchDoc' read from a relative base ('.') must go up, not into ./Shared."""
+    import os
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "Shared").mkdir()
+        (Path(td) / "Shared" / "x.SchDoc").write_bytes(b"up")
+        prj = Path(td) / "prj"
+        (prj / "Shared").mkdir(parents=True)
+        (prj / "Shared" / "x.SchDoc").write_bytes(b"wrong")
+        old = os.getcwd()
+        os.chdir(prj)
+        try:
+            got = AP._find_file(Path("."), "..\\Shared\\x.SchDoc")
+        finally:
+            os.chdir(old)
+        assert got is not None and got.read_bytes() == b"up", got
