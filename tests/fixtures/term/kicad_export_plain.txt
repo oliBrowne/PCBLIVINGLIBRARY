@@ -13,5 +13,5 @@ written:
   kx/sym-lib-table, fp-lib-table  library tables (paths use ${KIPRJMOD})
 next:
   ecadlib kicad-export ws/librarian/demo_bom_demo/plan.json -o <your KiCad project folder> --name mylib  # into the project: its own lib-table rows are kept (copying these tables over would drop them); or Preferences > Manage Symbol / Footprint Libraries
-  ecadlib kicad-export ws/librarian/demo_bom_demo/plan.json -o kx --name mylib --install                 # or into KiCad itself, for every project (close KiCad first; 3D models included)
+  ecadlib kicad-export ws/librarian/demo_bom_demo/plan.json -o kx --name mylib --install                 # or into KiCad itself, for every project (close KiCad first; add any other options you exported with)
   ecadlib review ws/librarian/demo_bom_demo/plan.json                                                    # the held parts

@@ -123,3 +123,43 @@ def test_kicad_export_suggests_install_through_the_export_not_a_dead_end(tmp_pat
     text = out.getvalue()
     assert "ecadlib kicad-install" not in text, text
     assert "--install" in text, text
+
+
+@lite
+def test_keys_set_reads_a_piped_key_and_still_shows_a_prompt(tmp_path, monkeypatch):
+    from ecadlib import userconfig as UC
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("sk-test-123\n"))
+    err = io.StringIO()
+    with redirect_stderr(err), redirect_stdout(io.StringIO()):
+        code = UC.main(["set", "MY_TEST_KEY"])
+    assert code == 0 and UC.get_key("MY_TEST_KEY") == "sk-test-123", code
+    assert "MY_TEST_KEY" in err.getvalue() and "echo" not in err.getvalue(), err.getvalue()
+
+
+@lite
+def test_keys_set_with_no_stdin_at_all_says_no_input(tmp_path, monkeypatch):
+    from ecadlib import userconfig as UC
+    monkeypatch.setenv("ECADLIB_HOME", str(tmp_path))
+    monkeypatch.setattr(sys, "stdin", None)
+    err = io.StringIO()
+    with redirect_stderr(err), redirect_stdout(io.StringIO()):
+        code = UC.main(["set", "MY_TEST_KEY"])
+    assert code == 2 and "--stdin" in err.getvalue(), err.getvalue()
+
+
+def test_a_link_without_a_key_is_never_offered_as_the_way_in():
+    from ecadlib.ui import server as S
+    said = []
+    S.open_or_say("http://127.0.0.1:8765/setup", opener=lambda u: False, tty=True, say=said.append)
+    assert said and "keep it to yourself" not in said[0] and "ecadlib start" in said[0], said
+
+
+@lite
+def test_option_values_are_not_taken_for_the_plan(tmp_path):
+    from ecadlib import firstrun as FR
+    notes = tmp_path / "notes.txt"
+    notes.write_text("x")
+    plan = tmp_path / "plan.json"
+    plan.write_text("[]")
+    assert FR.preflight("approve", ["-m", str(notes), str(plan), "approve"]) is None

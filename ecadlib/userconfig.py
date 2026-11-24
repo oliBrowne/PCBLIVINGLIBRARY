@@ -319,11 +319,15 @@ def key_hint(name):
 
 
 # ------------------------------------------------------------------ ecadlib keys
-def _stdin_tty():
+def _stdin_piped():
+    """stdin is a pipe or a file (`echo KEY | ecadlib keys set NAME`). A console that is not a TTY (Git Bash on
+    Windows, an IDE's run window) is neither: getpass still asks there, with its prompt."""
+    import stat
     try:
-        return sys.stdin is not None and sys.stdin.isatty()
-    except (AttributeError, ValueError, OSError):
-        return False
+        mode = os.fstat(sys.stdin.fileno()).st_mode
+    except (AttributeError, ValueError, OSError):            # a StringIO (tests, an embedding app): read it
+        return sys.stdin is not None and not getattr(sys.stdin, "isatty", lambda: True)()
+    return stat.S_ISFIFO(mode) or stat.S_ISREG(mode) or stat.S_ISCHR(mode) and not sys.stdin.isatty()
 
 
 def main(argv=None, inp=None, out=print, http=None, confirm=None):
@@ -414,8 +418,13 @@ def _keys(a, inp, out):
         return 0
     if a.cmd == "set":
         check_name(a.name)
-        if a.stdin or (inp is None and not _stdin_tty()):   # piped in, or no terminal to type it in: no getpass
-            value = sys.stdin.readline()                      # warning that the key "may be echoed"
+        if inp is None and sys.stdin is None:              # pythonw: nothing to read from
+            raise EOFError()
+        if a.stdin:
+            value = sys.stdin.readline()
+        elif inp is None and _stdin_piped():               # piped, or a console getpass cannot hide input in (Git
+            print(f"{a.name}: ", end="", file=sys.stderr, flush=True)   # Bash): the prompt, without getpass's
+            value = sys.stdin.readline()                                # "input may be echoed" warning
         else:
             value = (inp or getpass.getpass)(f"{a.name} (input hidden): ")
         set_key(a.name, value)

@@ -6624,6 +6624,7 @@
 "_keys",
 "_read_for_write",
 "_read_json",
+"_stdin_piped",
 "_stdin_tty",
 "_write_private",
 "apply_env",

@@ -1625,7 +1625,7 @@ def _export(plan, out, name, include_held=False, libs=(), http=None, log=print, 
     return rep
 
 
-def print_result(rep, out, plan, t=None, installing=False):
+def print_result(rep, out, plan, t=None, installing=False, can_install=True):
     """Terminal view of an export: a row per part (-v: with the conversion notes), skipped parts with the reason in
     plain words, errors, then the summary (what was written, how to add it in KiCad)."""
     from . import messages as M, term as TM
@@ -1667,9 +1667,10 @@ def print_result(rep, out, plan, t=None, installing=False):
               next=([] if installing else           # --install: KiCad's own tables get the rows (printed after this)
                     [(f"ecadlib kicad-export {q(plan)} -o <your KiCad project folder> --name {q(lib)}",
                       "into the project: its own lib-table rows are kept (copying these tables over would drop them); "
-                      "or Preferences > Manage Symbol / Footprint Libraries"),
-                     (f"ecadlib kicad-export {q(plan)} -o {q(out)} --name {q(lib)} --install",
-                      "or into KiCad itself, for every project (close KiCad first; 3D models included)")])
+                      "or Preferences > Manage Symbol / Footprint Libraries")])
+              + ([(f"ecadlib kicad-export {q(plan)} -o {q(out)} --name {q(lib)} --install",   # never while --install
+                   "or into KiCad itself, for every project (close KiCad first; add any other options you exported "
+                   "with)")] if can_install and not installing else [])                     # would be skipped
               + ([(f"ecadlib review {q(plan)}", "the held parts")] if rep["skipped"] else [])
               + ([(f"ecadlib part status {q(plan)}", f"{M.plural(len(rep['held_changes']), 'held change')} waiting for "
                    "a person (exit code 1 until then)")] if rep.get("held_changes") else [])
@@ -1718,7 +1719,10 @@ def main(argv=None):
     # exit 1 also while a change is held: the library on disk is not what was exported, a person has to look
     bad = bool(rep["errors"] or rep.get("held_changes") or rep.get("refused"))
     if not a.json:
-        print_result(rep, Path(a.out), a.plan, installing=a.install and not bad)
+        print_result(rep, Path(a.out), a.plan, installing=a.install and not bad, can_install=not bad)
+        if a.install and bad:
+            print("--install skipped: KiCad gets the library once the errors, refused parts or held changes above are "
+                  "sorted out", file=sys.stderr)
     if a.install and not bad:
         from . import kicad_install
         if not a.json:

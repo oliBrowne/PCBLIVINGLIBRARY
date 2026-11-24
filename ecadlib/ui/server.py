@@ -804,7 +804,7 @@ def open_or_say(link, opener=None, tty=None, say=None):
     except Exception:                                   # webbrowser.Error, a broken BROWSER setting: same as not opened
         opened = False
     if not opened:
-        if tty:
+        if tty and "key=" in link:                     # a plain address would be refused: never offer it as the way in
             say("No web browser could be opened here. Open this link in a browser on this computer (it works once, "
                 f"and carries this run's key, so keep it to yourself):\n  {link}")
         else:

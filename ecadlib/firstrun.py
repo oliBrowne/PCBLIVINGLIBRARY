@@ -410,7 +410,8 @@ _VALUE_FLAGS = {"-o", "--out", "--to", "--lib", "--name", "--part", "--format", 
                 "--bom", "--plan", "--allow", "--unallow", "--author", "--base-url", "--cache", "--comment", "--config",
                 "--description", "--driver", "--dsn", "--homepage", "--identifier", "--keep", "--kinds", "--license",
                 "--limit", "--message", "--models-var", "--pkg-version", "--prefix", "--project", "--reason", "--role",
-                "--rules", "--schema", "--svn-url", "--user", "--win-dir"}   # the options these commands give a value
+                "--rules", "--schema", "--svn-url", "--user", "--win-dir", "-m", "--a365", "--kind", "--map",
+                "--kicad-footprints"}   # the options these commands give a value
 
 
 def _values(argv, flags):
