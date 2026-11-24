@@ -299,11 +299,12 @@ def test_ceramics_on_the_kicad_chip_name_stay_ready(tmp_path, monkeypatch):
     plan = _run_said(tmp_path, monkeypatch, said, KICAD_HEAD +
                      f"C1,100n,{c0603},UMK107B7104KA-T,Taiyo Yuden,,,,Device:C\n"
                      f"C2,1uF,{c0603},GRM188R61C105KA93D,Murata,,,no,Device:C\n"
-                     f"C3,2.2uF,{c0603},EMK107BJ225KA-T,Taiyo Yuden,,,,Device:C_Small\n"   # the remaining case: an unread
+                     f"C3,2.2uF,{c0603},XQ7A225K016,,,,,Device:C_Small\n"   # the remaining case: an unread
                      f"C4,10n,{c0603},,,,,,Device:C\n")                                    # number, KiCad's chip name
     st = _status(plan)
     # round 3 (A8, the owner's safe side): KiCad's chip name alone no longer releases a capacitor whose part number no
-    # MLCC code reads and that nothing calls ceramic (C3, EMK107BJ225KA-T: was ready). The other three stay ready
+    # MLCC code reads and that nothing calls ceramic (C3: was ready). The other three stay ready. (C3 was Taiyo Yuden's
+    # EMK107BJ225KA-T until 2026-11-24, when mpn_decode learnt that series: it reads now, so an unread number stands in)
     assert len(plan) == 4 and all((s == "ready") == (n != "CAP-0603-2.2uF") for n, (s, _) in st.items()), st
     assert all(_fp(i) == "standard:Capacitor_SMD:C_0603_1608Metric" for n, i in plan.items() if n != "CAP-0603-2.2uF"), \
         {n: _fp(i) for n, i in plan.items()}

@@ -161,13 +161,23 @@ _MAKER_ALIAS.update({"MCC": "MICROCOMMERCIAL",                           # Micro
                      "RFMD": "QORVO", "RFMICRO": "QORVO", "TRIQUINT": "QORVO",   # RF Micro Devices + TriQuint = Qorvo, 2015
                      "HRS": "HIROSE",                                    # Hirose Electric's brand
                      "JAE": "JAPANAVIATION"})                            # Japan Aviation Electronics
+# 2026-11-24 real BOMs: one company under two names, where the maker check held a part whose number is that company's
+# own code (UniOhm 0603WAF1002T5E, Dale CRCW0805..., "Yageo Group" on a KEMET C0603C105K4RACTU, the 'Yaego' typo)
+_MAKER_ALIAS.update({"UNIOHM": "UNIROYAL", "ROYALOHM": "UNIROYAL",   # Uni-Royal's brands
+                     "DALE": "VISHAY",                                   # Vishay Dale ("Vishay ..." is VISHAY already)
+                     "KEMET": "YAGEO",                                   # part of Yageo since 2020
+                     "YAEGO": "YAGEO",                                   # common misspellings; no company by
+                     "TAYOYUDEN": "TAIYOYUDEN",                          # either name
+                     "KEMETTOKIN": "YAGEO", "PHYCOMP": "YAGEO",          # KEMET's TOKIN, Yageo's Phycomp brand
+                     "TDKEPC": "TDK"})                                   # TDK Electronics (EPCOS) on Digi-Key
 # the words of a company name an alias maps to, where it has several: where a shorter name may end in it ("Texas" /
 # "TI"), and where not ("Teco" is no "TE" = TE Connectivity)
 _ALIAS_WORDS = {"TEXASINSTRUMENTS": ["TEXAS", "INSTRUMENTS"], "TECONNECTIVITY": ["TE", "CONNECTIVITY"],
                 "WURTHELEKTRONIK": ["WURTH", "ELEKTRONIK"], "MONOLITHICPOWER": ["MONOLITHIC", "POWER"],
                 "ALPHAOMEGA": ["ALPHA", "OMEGA"], "SILICONLABORATORIES": ["SILICON", "LABORATORIES"],
                 "SAMSUNGELECTROMECHANICS": ["SAMSUNG", "ELECTROMECHANICS"], "GLOBALCONNECTOR": ["GLOBAL", "CONNECTOR"],
-                "CIRRUSLOGIC": ["CIRRUS", "LOGIC"], "CENTRALSEMICONDUCTOR": ["CENTRAL", "SEMICONDUCTOR"]}
+                "CIRRUSLOGIC": ["CIRRUS", "LOGIC"], "CENTRALSEMICONDUCTOR": ["CENTRAL", "SEMICONDUCTOR"],
+                "TAIYOYUDEN": ["TAIYO", "YUDEN"]}
 # a company's other makers under its own brand, named on their own (distributors list both): the whole key only, so
 # "Wurth" is Würth Elektronik and Würth Electronics Midcom, never any "Wurth <anything>" (Würth Industrie, a fastener
 # trader), and "Catalyst Lighting" is no Catalyst Semiconductor (onsemi)

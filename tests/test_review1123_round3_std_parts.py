@@ -305,7 +305,8 @@ def test_bipolar_end_to_end(tmp_path):
 # ---------------------------------------------------------------- A8 KiCad's chip name alone releases no unread number
 def test_kicads_chip_name_alone_does_not_release_an_unread_capacitor_number():
     c1206 = "Capacitor_SMD:C_1206_3216Metric"
-    for mpn in ["TMCMA1C106MTRF", "T58A0106M016C0200", "CA45-A-16V-10uF-K", "XQ7A106K016", "EMK107BJ225KA-T"]:
+    for mpn in ["TMCMA1C106MTRF", "T58A0106M016C0200", "CA45-A-16V-10uF-K", "XQ7A106K016"]:   # (EMK107BJ225KA-T reads
+                                                    # as a Taiyo Yuden 0603 MLCC since 2026-11-24: the size check holds it)
         r = SP.resolve([c1206], "C", mpn, "", value="10uF")
         assert r["footprint"] is None and r["symbol"] is None, (mpn, r)
     for mpn in ["TMCMA1C106MTRF", "T58A0106M016C0200", "CA45-A-16V-10uF-K"]:

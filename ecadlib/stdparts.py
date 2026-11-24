@@ -978,7 +978,7 @@ def _mpn_rules():
         ("murata", c(r"BLM(\d\d)[A-Z]{2}\d{3}[A-Z]{2}\d[A-Z]?"), "L", m3),                     # beads: BLM18AG601SN1D
         # KEMET MLCC: C<imperial><C standard | X flexible | F ...><capacitance><tolerance><voltage><dielectric>A<C|L>
         # [-]TU: C0603X563K1RACTU is an imperial 0603 (X then digits is KEMET's capacitance, not TDK's dielectric)
-        ("kemet", c(r"C" + imp + r"[CXF](?:\d{3}|\dR\d)[A-Z][0-9A-Z][A-Z]A[CL](?:-?TU|AUTO|\d{4})?"), "C", None),
+        ("kemet", c(r"C" + imp + r"[CXF](?:\d{3}|\dR\d)[A-Z][0-9A-Z][A-Z][AE][CL](?:-?TU|AUTO|\d{4})?"), "C", None),
         # TDK MLCC: C<metric size><dielectric><voltage code><capacitance><tolerance>, then the thickness and packing
         # codes of the current form (C1608X7R1H104K080AA, read by mpn_decode) or none / T of the older one
         ("tdk", c(r"C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][RSTPVL]|JB|CH)\d[A-Z](?:\d{3}|\dR\d)"
@@ -997,6 +997,10 @@ def _mpn_rules():
         ("stackpole", c(r"RNC[FSP]" + imp + r"[A-Z][TK][A-Z][0-9RKM]{3,6}"), "R", None),
         ("te", c(r"CPF" + imp + r"[A-Z][0-9RKM]{2,5}[A-Z]\d"), "R", None),
         ("fenghua", c(imp + r"(?:CG|N|B|X|F)(?:\d{3}|\dR\d)[BCDFGJKMZ]\d{3}[NC]T"), "C", None),
+        # Wurth WCAP-CSGP MLCC: 88501 2, dielectric digit, size code, serial (885012206046: an 0603). The size codes are
+        # the ones real BOMs confirmed (2026-11-24: 05 on 0402, 06 on 0603, 07 on 0805, 09 on 1210 lands); the value
+        # is a serial, not a code
+        ("wurth", c(r"885012[0-2](05|06|07|09)\d{3}"), "C", {"05": "0402", "06": "0603", "07": "0805", "09": "1210"}),
     ]
 
 
@@ -1008,7 +1012,9 @@ MAKER_NAMES = {"yageo": ("yageo", "phycomp", "kemet"), "samsung": ("samsung", "s
                "bourns": ("bourns",), "koa": ("koa",), "tdk": ("tdk", "epcos"),
                "uni-royal": ("uni-royal", "uniroyal", "uni royal", "uniohm", "royalohm", "royal ohm", "厚声"),
                "kyocera": ("kyocera", "avx"), "te": ("te", "te connectivity", "tyco", "neohm", "holsworthy"),
-               "fenghua": ("fenghua", "fh", "风华", "walsin", "华新科")}
+               "fenghua": ("fenghua", "fh", "风华", "walsin", "华新科"),
+               "wurth": ("wurth", "würth", "we", "wurth elektronik", "würth elektronik"),
+               "taiyo": ("taiyo", "tayo yuden")}
 NO_MAKER = re.compile(r"(?i)\s*(?:|-+|n/?a|none|tbd|any|generic|various|multiple|standard|unknown|\?+)\s*")
 
 
@@ -1018,7 +1024,11 @@ def maker_is(rule_maker, maker):
     m = str(maker or "").lower()
     if NO_MAKER.fullmatch(m):
         return True
-    return any(re.search(r"(?<![a-z])" + re.escape(n) + r"(?![a-z])", m) for n in MAKER_NAMES.get(rule_maker, (rule_maker,)))
+    if any(re.search(r"(?<![a-z])" + re.escape(n) + r"(?![a-z])", m) for n in MAKER_NAMES.get(rule_maker, (rule_maker,))):
+        return True
+    from .providers import same_maker               # 2026-11-24: a name the maker check takes as this maker's ('Yaego')
+    return same_maker(rule_maker, maker)            # must give the size too, or the size check is silent where the
+                                                    # maker check no longer holds (0603 part on an 0402 land released)
 
 
 def mpn_size(mpn, maker=""):

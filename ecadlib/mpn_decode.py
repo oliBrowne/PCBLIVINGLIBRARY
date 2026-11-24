@@ -14,11 +14,14 @@ import sys
 IMP = r"(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)"
 METRIC_SIZE = {"0402": "01005", "0603": "0201", "1005": "0402", "1608": "0603", "2012": "0805", "3216": "1206",
                "3225": "1210", "4532": "1812", "5025": "2010", "5750": "2220", "6432": "2512"}
-M2 = {"03": "0201", "15": "0402", "18": "0603", "21": "0805", "31": "1206", "32": "1210", "43": "1812", "55": "2220"}   # Murata
+M2 = {"02": "01005", "03": "0201", "15": "0402", "18": "0603", "21": "0805", "31": "1206", "32": "1210", "43": "1812", "55": "2220"}   # Murata
 CL = {"03": "0201", "05": "0402", "10": "0603", "21": "0805", "31": "1206", "32": "1210", "43": "1812", "55": "2220"}   # Samsung
 ERJ = {"XG": "01005", "1G": "0201", "2": "0402", "3": "0603", "6": "0805", "8": "1206", "14": "1210", "12Z": "2010",
        "12": "1812", "1T": "2512", "P03": "0603", "P06": "0805", "P08": "1206", "PA2": "0402", "PA3": "0603",
        "PA6": "0805", "PA8": "1206"}
+# Taiyo Yuden MLCC size code (EMK107BJ105KA-T is an 0603), TDK CGA size digit (CGA3E2X7R1H104K080AA is an 0603)
+TY = {"042": "01005", "063": "0201", "105": "0402", "107": "0603", "212": "0805", "316": "1206", "325": "1210", "432": "1812"}
+CGA = {"1": "0201", "2": "0402", "3": "0603", "4": "0805", "5": "1206", "6": "1210", "8": "1812", "9": "2220"}
 KOA = {"1H": "0201", "1E": "0402", "1J": "0603", "2A": "0805", "2B": "1206", "2E": "1210", "2H": "2010", "3A": "2512"}
 # tantalum case letter -> EIA metric case (KiCad CP_EIA-<case>_Kemet-<letter> / _AVX-<letter>): the cases both makers
 # give the same size and height for; others (KEMET E, R, S, T, U, V, W, X; AVX E, H, K ...) read as no case
@@ -42,12 +45,19 @@ RULES = [
     ("KOA RK73", "R", re.compile(r"^RK73[HB](1H|1E|1J|2A|2B|2E|2H|3A)TT[DP]" + EIA_R + r"[BDFGJ]$"), 1, KOA, 2, "eia"),
     ("UNI-ROYAL", "R", re.compile(r"^" + IMP + r"W[A-Z][BDFGJ](\d{4})T5E$"), 1, None, 2, "eia"),
     ("Murata GRM/GCM/GJM/GRT/GCJ/GQM", "C",
-     re.compile(r"^(?:GRM|GCM|GJM|GRT|GCJ|GCQ|GQM)(03|15|18|21|31|32|43|55)[0-9A-Z][0-9A-Z]{2}[0-9A-Z]{2}" + EIA_C +
+     re.compile(r"^(?:GRM|GCM|GJM|GRT|GCJ|GCQ|GQM|ZRB)(02|03|15|18|21|31|32|43|55)[0-9A-Z][0-9A-Z]{2}[0-9A-Z]{2}" + EIA_C +
                 r"[BCDFGJKMWZ][0-9A-Z]{2,4}$"), 1, M2, 2, "eia"),
     ("Samsung CL", "C", re.compile(r"^CL(03|05|10|21|31|32|43|55)[A-Z]" + EIA_C + r"[ABCDFGJKMZ][A-Z][0-9A-Z]{5}$"), 1, CL, 2, "eia"),
     ("TDK C", "C", re.compile(r"^C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][RSTPV]|JB|CH)\d[A-Z]" + EIA_C +
-                              r"[BCDFGJKMZ]\d{3}[A-Z]{2}$"), 1, "metric", 2, "eia"),
-    ("KEMET C", "C", re.compile(r"^C" + IMP + r"[CX](\d{3}|\dR\d)[BCDFGJKMZ]\d[A-Z]A[CL](?:TU|AUTO|\d{4}|7\d{3})?$"), 1, None, 2, "eia9"),
+                              r"[BCDFGJKMZ](?:\d{3}[A-Z]{2}|T\d{3}E|TJ\d{2}E)$"), 1, "metric", 2, "eia"),   # ...MT000E, ...MTJ00E
+    ("TDK CGA", "C", re.compile(r"^CGA([1-689])[A-Z]\d(?:C0G|NP0|X[5-8][RSTPV])\d[A-Z]" + EIA_C +
+                                r"[BCDFGJKMZ](?:\d{3}[A-Z]{2}|\d{3}|T0Y0[A-Z])$"), 1, CGA, 2, "eia"),   # CGA3E2X7R1H104K080AA
+    ("Taiyo Yuden", "C", re.compile(r"^[AEGHJLMQTU]MK(042|063|105|107|212|316|325|432)(?:A|B|C|S|BB|AB|SD|AS)?"
+                                    r"(?:BJ|B7|C6|C7|CG|CK|SD|F|SJ)" + EIA_C + r"[BCDFGJKMZ][A-Z]{1,3}(?:-[A-Z]{1,2})?$"),
+     1, TY, 2, "eia"),                                    # EMK107BJ105KA-T, LMK107BBJ106MALT, JMK325B7476MM-PR
+    ("Vishay VJ", "C", re.compile(r"^VJ" + IMP + r"[ADGQXY](\d{3}|\dR\d)[BCDFGJKMZ][A-Z]{2,3}[A-Z0-9]{2,4}$"), 1, None, 2, "eia9"),
+    ("KEMET C", "C", re.compile(r"^C" + IMP + r"[CX](\d{3}|\dR\d)[BCDFGJKMZ]\d[A-Z][AE][CL](?:TU|AUTO|\d{4}|7\d{3})?$"), 1, None, 2,
+     "eia9"),                                             # failure rate A, or E (C0805C102K5GECAUTO, ...RECTU)
     # (AC0603KRX7R9BB104: Yageo's automotive MLCC series, the same code as CC; not an AC resistor: review 2026-11-23;
     #  the voltage code is a digit or, from 200 V up, a letter: CC1206KKX7RABB105 is 200 V, round 2)
     ("Yageo CC/AC", "C", re.compile(r"^(?:CC|AC)" + IMP + r"[BCDFGJKMZ][RKP](?:NPO|COG|C0G|X7R|X5R|X7S|X6S|X8R|Y5V)[0-9A-DYZ]B[BN]" + EIA_C + r"$"),
