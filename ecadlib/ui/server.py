@@ -788,6 +788,30 @@ def start_text(url, path, root, key, browser, tty):
     return out + "\nThe page opens only with this run's key: open it from the Altium / KiCad menu, or with `ecadlib start`."
 
 
+def open_or_say(link, opener=None, tty=None, say=None):
+    """Hand the browser `link` (it carries a one-time key). When no browser opens (an SSH session, Linux with no
+    desktop, WSL, a blocked browser), a person at a terminal gets the link to open themselves; a log file (the menus
+    run `ecadlib ui` with their output in the workspace) only gets the plain advice, never the key. -> opened?"""
+    opener = opener or webbrowser.open
+    if tty is None:
+        try:
+            tty = sys.stdout.isatty()                   # pythonw (the Windows app): no stdout at all
+        except (AttributeError, ValueError, OSError):
+            tty = False
+    say = say or (lambda t: print(t, flush=True))
+    try:
+        opened = bool(opener(link))
+    except Exception:                                   # webbrowser.Error, a broken BROWSER setting: same as not opened
+        opened = False
+    if not opened:
+        if tty and "key=" in link:                     # a plain address would be refused: never offer it as the way in
+            say("No web browser could be opened here. Open this link in a browser on this computer (it works once, "
+                f"and carries this run's key, so keep it to yourself):\n  {link}")
+        else:
+            say("No web browser could be opened: open ecadlib from the Altium / KiCad menu, or with `ecadlib start`.")
+    return opened
+
+
 def _loopback(host):
     if host == "localhost":
         return True
@@ -827,7 +851,7 @@ def main(argv=None):
     AC.publish(srv.server_address[1], srv.access, ws.root)   # this user's menus and a second start find the key there
     print(start_text(url, path, ws.root, srv.access.key, not a.no_browser, sys.stdout.isatty()), flush=True)
     if not a.no_browser:                    # a thread: a console browser (w3m, lynx) waits for the page we serve below
-        threading.Thread(target=webbrowser.open, args=(AC.with_key(url + path, srv.access.ticket()),), daemon=True).start()
+        threading.Thread(target=open_or_say, args=(AC.with_key(url + path, srv.access.ticket()),), daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

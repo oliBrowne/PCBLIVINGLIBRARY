@@ -155,7 +155,8 @@ def next_steps(ans, rules_file="ecadlib.toml"):
                                                              "release check (`ecadlib status` shows the result)")]
     if ans.get("tool") in ("kicad", "both"):
         steps.append((f"ecadlib kicad-export {q(lib + '/plan.json')} -o {q(f'{ws}/kicad/YOUR_BOM')} --name YOUR_BOM",
-                      "the library as KiCad files with fp-lib-table / sym-lib-table"))
+                      "the library as KiCad files with fp-lib-table / sym-lib-table; add --install (KiCad closed) "
+                      "to put it into KiCad itself, so every project sees it"))
     if ans.get("tool") in ("altium", "both"):
         steps.append(("ecadlib ui", f"or do it in the web UI on {ws}: drop your BOM there, review held parts, sign off, send "
                                     "to Altium (DbLib, .SchLib/.PcbLib, Altium 365); a plan made on the command line is "
@@ -400,6 +401,17 @@ LIB_CHECKED = {"triage", "librarian", "resolve", "kicad-export", "mcp", "ui", "d
 LIB_FILE_OK = {"dedupe", "where-used"}        # these also read one library file (.DbLib .SchLib .PcbLib .kicad_mod ...)
 OUT_CHECKED = {"init", "demo", "triage", "librarian", "kicad-export", "kicad-dblib", "dblib",
                "export-parts", "dblib-sync"}
+# commands that take the plan.json `ecadlib librarian` writes, never the BOM itself (a first-time user's usual slip:
+# the BOM goes in, and the command answered "not valid JSON: Expecting value")
+PLAN_ONLY = {"kicad-export", "altium-pkg", "review", "release-check", "resolve", "dblib-sync", "kicad-dblib",
+             "approve", "parity", "export-parts", "dedupe", "fp-edit", "kicad-pcm"}
+BOM_SUFFIXES = {".csv", ".tsv", ".xlsx", ".xlsm", ".xls", ".txt"}
+_VALUE_FLAGS = {"-o", "--out", "--to", "--lib", "--name", "--part", "--format", "--workspace", "--kicad", "--altium",
+                "--bom", "--plan", "--allow", "--unallow", "--author", "--base-url", "--cache", "--comment", "--config",
+                "--description", "--driver", "--dsn", "--homepage", "--identifier", "--keep", "--kinds", "--license",
+                "--limit", "--message", "--models-var", "--pkg-version", "--prefix", "--project", "--reason", "--role",
+                "--rules", "--schema", "--svn-url", "--user", "--win-dir", "-m", "--a365", "--kind", "--map",
+                "--kicad-footprints"}   # the options these commands give a value
 
 
 def _values(argv, flags):
@@ -459,6 +471,30 @@ def preflight(cmd, argv, environ=None):
             why = writable_problem(o)
             if why:
                 return (f"cannot write the output {o}: {why}", "pick another -o / --out folder you can write to")
+    if cmd in PLAN_ONLY:
+        bom = _bom_given(argv)
+        if bom:
+            return (f"{bom} is a BOM, but `ecadlib {cmd}` takes the plan.json that `ecadlib librarian` writes",
+                    f"run `ecadlib librarian {bom} -o out/lib` first, then `ecadlib {cmd} out/lib/plan.json ...` "
+                    "(`ecadlib status` lists the plans in your workspace)")
+    return None
+
+
+def _bom_given(argv):
+    """The plan argument (the first one that is not an option or an option's value, e.g. `dedupe --bom B.csv`)
+    when it is an existing BOM file (.csv .xlsx ...); else None."""
+    skip = False
+    for a in argv:
+        if a == "--":
+            break
+        if skip:
+            skip = False
+            continue
+        if a.startswith("-"):
+            skip = a in _VALUE_FLAGS
+            continue
+        p = Path(a).expanduser()
+        return a if p.suffix.lower() in BOM_SUFFIXES and p.is_file() else None
     return None
 
 

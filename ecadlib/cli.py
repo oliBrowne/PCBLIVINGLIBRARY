@@ -216,7 +216,11 @@ def _main(argv=None):
         return 2
     cmd = COMMANDS.get(argv[0])
     if not cmd:
-        print(f"ecadlib: unknown command {argv[0]!r}. Commands: {', '.join(COMMANDS)}", file=sys.stderr)
+        import difflib
+        near = difflib.get_close_matches(argv[0], list(COMMANDS), n=1, cutoff=0.75)
+        print(f"ecadlib: unknown command {argv[0]!r}" + (f": did you mean `ecadlib {near[0]}`?" if near else "")
+              + "\n  hint: `ecadlib -h` lists every command; start with `ecadlib demo` or `ecadlib setup`",
+              file=sys.stderr)
         return 2
     from . import term, userconfig
     userconfig.apply_env()                                   # kicad-cli on PATH; keys are read from the store, never exported

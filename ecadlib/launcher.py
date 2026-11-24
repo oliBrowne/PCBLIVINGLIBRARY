@@ -142,8 +142,8 @@ def main(argv=None):
     if running:
         print(f"ecadlib is already running on http://127.0.0.1:{port}/ (workspace {running})")
         if not a.no_browser:
-            from .ui import access as AC
-            webbrowser.open(AC.link(port, first))           # with a one-time key from the ecadlib that is running
+            from .ui import access as AC, server as S
+            S.open_or_say(AC.link(port, first))             # with a one-time key from the ecadlib that is running
         return 0
     app = App(ws, port)
     app.start()
@@ -151,7 +151,8 @@ def main(argv=None):
     print(f"ecadlib {__version__} on {app.url}{first} (workspace {app.workspace})")   # first run: the setup page
 
     def open_page(path):
-        webbrowser.open(app.link(path))
+        from .ui import server as S
+        S.open_or_say(app.link(path))                       # no browser here (SSH, no desktop): the link is printed
     if not a.no_browser:
         open_page(first)
     try:

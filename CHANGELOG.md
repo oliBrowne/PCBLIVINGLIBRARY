@@ -65,6 +65,23 @@ From the 2026-11-23 code review. None of these was seen being used.
 
 ### Fixed
 
+- **First run, for someone new** (v0.6.0 "Easy to adopt"). Found by installing ecadlib in a clean folder and
+  following the docs as a new user:
+  - When no browser can be opened (SSH, Linux with no desktop, WSL), `ecadlib setup`, `ecadlib ui` and `ecadlib start`
+    now print the one-time link to open instead. Before, they printed only the plain address, which the page refuses
+    without the key, so a new user was stuck on "this page has no key".
+  - A BOM given to a command that takes `plan.json` (`kicad-export`, `review`, `release-check`, `altium-pkg`,
+    `resolve` and others) now says "... is a BOM" and to run `ecadlib librarian` first, instead of "not valid JSON:
+    Expecting value".
+  - A mistyped command suggests the closest one ("did you mean `ecadlib librarian`?") instead of listing every command.
+  - `ecadlib keys set` with no terminal to type in reads the key from standard input without the "input may be
+    echoed" warning, and an empty key says how to give one (`--stdin`, a terminal window, or the setup page).
+  - After `kicad-export`, the suggested way into KiCad for every project is `kicad-export ... --install`, shown even
+    when parts are held. The old suggestion, `kicad-install` on the same folder, warned that the 3D models would not
+    load and sent you back to re-export. `ecadlib init` names `--install` too.
+  - docs/START_HERE.md has a command-line path (install, demo, setup, BOM, review, KiCad or Altium) and covers
+    "No matching distribution found" (Python older than 3.10) and "ecadlib is not recognized" (`python -m ecadlib`).
+
 A code review on 2026-11-23 found ways a wrong part could come out ready with no hold, all in the paths that release a
 part with no person's look. Each was shown with made-up inputs, none was seen in a real part. They are held now:
 

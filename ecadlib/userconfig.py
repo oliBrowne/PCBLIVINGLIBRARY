@@ -319,6 +319,17 @@ def key_hint(name):
 
 
 # ------------------------------------------------------------------ ecadlib keys
+def _stdin_piped():
+    """stdin is a pipe or a file (`echo KEY | ecadlib keys set NAME`). A console that is not a TTY (Git Bash on
+    Windows, an IDE's run window) is neither: getpass still asks there, with its prompt."""
+    import stat
+    try:
+        mode = os.fstat(sys.stdin.fileno()).st_mode
+    except (AttributeError, ValueError, OSError):            # a StringIO (tests, an embedding app): read it
+        return sys.stdin is not None and not getattr(sys.stdin, "isatty", lambda: True)()
+    return stat.S_ISFIFO(mode) or stat.S_ISREG(mode) or stat.S_ISCHR(mode) and not sys.stdin.isatty()
+
+
 def main(argv=None, inp=None, out=print, http=None, confirm=None):
     ap = argparse.ArgumentParser(prog="ecadlib keys", description="API keys stored for this user (names only are shown)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -345,6 +356,10 @@ def main(argv=None, inp=None, out=print, http=None, confirm=None):
         return _keys(a, inp, out)
     except (ValueError, EOFError) as e:          # an empty key, a bad name, no input: the user's to fix, not a bug
         print(f"ecadlib keys {a.cmd}: {str(e) or 'no input (nothing was typed)'}", file=sys.stderr)
+        if a.cmd == "set" and (not str(e) or "is empty" in str(e)):   # nothing came in: say how to give it
+            n = getattr(a, "name", "NAME")
+            print(f"  hint: run `ecadlib keys set {n}` in a terminal window and paste the key when asked, or pipe it in "
+                  f"with `ecadlib keys set {n} --stdin`; the setup page (`ecadlib setup`) also stores keys", file=sys.stderr)
         return 2
 
 
@@ -403,8 +418,13 @@ def _keys(a, inp, out):
         return 0
     if a.cmd == "set":
         check_name(a.name)
+        if inp is None and sys.stdin is None:              # pythonw: nothing to read from
+            raise EOFError()
         if a.stdin:
             value = sys.stdin.readline()
+        elif inp is None and _stdin_piped():               # piped, or a console getpass cannot hide input in (Git
+            print(f"{a.name}: ", end="", file=sys.stderr, flush=True)   # Bash): the prompt, without getpass's
+            value = sys.stdin.readline()                                # "input may be echoed" warning
         else:
             value = (inp or getpass.getpass)(f"{a.name} (input hidden): ")
         set_key(a.name, value)

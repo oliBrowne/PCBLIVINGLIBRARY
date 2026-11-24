@@ -16,7 +16,8 @@ released into Altium 365. If you would rather not use a terminal, it is all you 
 ecadlib comes with everything it needs (its own Python), so there is nothing else to install. It shows up in the
 Start menu as **ecadlib** and **ecadlib setup**.
 
-On macOS or Linux, or if you like the command line: `pip install ecadlib`, then `ecadlib start`.
+On macOS or Linux, or if you like the command line: `pip install ecadlib`, then `ecadlib start`
+([From the command line](#from-the-command-line), below, has the whole path).
 
 ## 2. Set it up (the setup page)
 
@@ -129,6 +130,28 @@ as Altium or KiCad export it. Then **Check the BOM**, **Fill the library** and *
 `.SchLib`/`.PcbLib` files, an Altium 365 workspace, or KiCad `.kicad_sym`/`.pretty` files. In KiCad, the PCB editor
 has **Tools > External Plugins > ecadlib** after **Add to KiCad**.
 
+## From the command line
+
+The same path without the installer, on Windows, macOS or Linux. Each command prints what it wrote and the next
+command to run.
+
+1. **Install:** `pip install ecadlib` (Python 3.10 or newer). Check it with `ecadlib --version`.
+2. **See it work:** `ecadlib demo` builds a small library from a bundled BOM in under a minute, offline and with no keys.
+3. **Set up:** `ecadlib setup` opens the setup page (section 2). If no browser opens (over SSH, or on a computer with no
+   desktop), ecadlib prints a link instead: open it in a browser on the same computer. The link works once.
+   `ecadlib init` in the folder where your BOMs live writes `ecadlib.toml` and checks everything (`ecadlib doctor`
+   checks again at any time).
+4. **Your BOM:** `ecadlib librarian my_board.csv -o out/lib` finds or builds every part, runs the release check and
+   writes `out/lib/plan.json`. Every later step takes that **plan.json**, not the BOM.
+5. **Held parts:** `ecadlib review out/lib/plan.json` goes through them one by one.
+6. **Into your tool:**
+   - **KiCad:** `ecadlib kicad-export out/lib/plan.json -o kicad-libs/my_board --name my_board --install` puts the
+     library into KiCad itself, so every project sees it. Close KiCad first, and start KiCad once beforehand if it is
+     a new install. Without `--install` the files are for one project ([kicad.md](kicad.md)).
+   - **Altium:** `ecadlib dblib out/lib/plan.json -o out/altium` writes a database library to open in Altium, or
+     `ecadlib altium-pkg out/lib/plan.json --out out/altium_pkg` a package with an install script. For Altium 365,
+     sign in once (`ecadlib nexar signin`, section 3b) and use `ecadlib altium365` ([altium.md](altium.md)).
+
 ## Trying ecadlib for us? Send two numbers
 
 After your first BOM, run `ecadlib status` in a terminal (or `ecadlib status --json`) and send us the **last run**
@@ -148,7 +171,15 @@ the window stops ecadlib. Nothing runs in the background after that.
 
 - **The browser page does not open:** press **Open ecadlib** in the ecadlib window, or start ecadlib again. Typing
   the address <http://127.0.0.1:8765/> yourself is not enough in a browser ecadlib has not opened yet: the page answers
-  only to a browser that got ecadlib's link, so that other programs on the computer cannot use it.
+  only to a browser that got ecadlib's link, so that other programs on the computer cannot use it. When no browser
+  can be opened at all (over SSH, or a computer with no desktop), `ecadlib setup` and `ecadlib start` print that link
+  in the terminal: open it in a browser on the same computer.
+- **pip says "No matching distribution found for ecadlib":** your Python is older than 3.10. `python --version`
+  shows it; install a newer Python from <https://www.python.org/downloads/>, or use the Windows installer.
+- **"ecadlib" is not recognized / command not found after `pip install`:** pip put the command in a folder that is
+  not on your PATH (pip warns about it while installing). `python -m ecadlib ...` works the same without it.
+- **"... is a BOM, but `ecadlib ...` takes the plan.json":** run `ecadlib librarian` on the BOM first; the other
+  commands take the `plan.json` it writes.
 - **"no Altium 365 (Nexar) token":** run `ecadlib nexar signin` (or save a token on the setup page, **Optional keys**),
   then try again.
   Altium does not need a restart.
