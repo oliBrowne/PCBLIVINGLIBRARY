@@ -319,6 +319,13 @@ def key_hint(name):
 
 
 # ------------------------------------------------------------------ ecadlib keys
+def _stdin_tty():
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
 def main(argv=None, inp=None, out=print, http=None, confirm=None):
     ap = argparse.ArgumentParser(prog="ecadlib keys", description="API keys stored for this user (names only are shown)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -345,6 +352,10 @@ def main(argv=None, inp=None, out=print, http=None, confirm=None):
         return _keys(a, inp, out)
     except (ValueError, EOFError) as e:          # an empty key, a bad name, no input: the user's to fix, not a bug
         print(f"ecadlib keys {a.cmd}: {str(e) or 'no input (nothing was typed)'}", file=sys.stderr)
+        if a.cmd == "set" and (not str(e) or "is empty" in str(e)):   # nothing came in: say how to give it
+            n = getattr(a, "name", "NAME")
+            print(f"  hint: run `ecadlib keys set {n}` in a terminal window and paste the key when asked, or pipe it in "
+                  f"with `ecadlib keys set {n} --stdin`; the setup page (`ecadlib setup`) also stores keys", file=sys.stderr)
         return 2
 
 
@@ -403,8 +414,8 @@ def _keys(a, inp, out):
         return 0
     if a.cmd == "set":
         check_name(a.name)
-        if a.stdin:
-            value = sys.stdin.readline()
+        if a.stdin or (inp is None and not _stdin_tty()):   # piped in, or no terminal to type it in: no getpass
+            value = sys.stdin.readline()                      # warning that the key "may be echoed"
         else:
             value = (inp or getpass.getpass)(f"{a.name} (input hidden): ")
         set_key(a.name, value)
