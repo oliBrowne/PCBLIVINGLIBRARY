@@ -266,7 +266,9 @@ def test_the_headless_browser_checks_every_redirect_hop():
                     # second review (I3): a popup, and a frame of another site (its own process where the browser
                     # isolates sites) whose image and own navigation redirect
                     "/popup": f"<script>window.open('http://localhost:{outer}/go-popup')</script>ok".encode(),
-                    "/frames": f"<iframe src='http://127.0.0.2:{outer}/frame'></iframe>ok".encode(),
+                    # (frame.localhost, which the browser itself sends to this machine: 127.0.0.2 does not
+                    # exist on macOS, whose loopback has only 127.0.0.1, so that frame never loaded)
+                    "/frames": f"<iframe src='http://frame.localhost:{outer}/frame'></iframe>ok".encode(),
                     "/frame": b"<img src='/go-frame-img'><script>setTimeout(function(){location.href='/go-frame-nav'}, 300)</script>",
                     }.get(self.path, b"ok")
             self.send_response(200)

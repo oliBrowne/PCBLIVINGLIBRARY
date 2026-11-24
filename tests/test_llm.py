@@ -574,3 +574,61 @@ def test_eval_compares_providers_with_record_and_replay():
         with mock.patch("sys.stdout", buf):
             assert EC.main(["compare", str(Path(d) / "live"), str(Path(d) / "replayed")]) == 0
         assert "gpt-4o via openai-compatible" in buf.getvalue()
+
+
+def test_openrouter_model_id_checked_against_its_public_catalog():
+    """OpenRouter's GET /models is its whole catalog (no key needed): an id it does not list is refused before any
+    paid request, with the closest ids it does list (a Claude id written with dashes where OpenRouter uses dots)."""
+    class R:
+        status_code = 200
+
+        def __init__(self, ids):
+            self.ids = ids
+
+        def json(self):
+            return {"data": [{"id": i, "context_length": 200000} for i in self.ids]}
+    cat = ["anthropic/claude-opus-5.5", "anthropic/claude-haiku-5.5", "openai/gpt-6-sol"]
+    PR._DETECTED.clear()
+    LR._INFO.clear()
+    r = RU.load({"ai": {"provider": "openrouter", "model": "anthropic/claude-opus-5-5"}})
+    try:
+        LR.info("anthropic/claude-opus-5-5", r, get=lambda *a, **k: R(cat))
+        raise AssertionError("an id OpenRouter does not list was accepted")
+    except LL.AIConfigError as e:
+        assert "OpenRouter does not list anthropic/claude-opus-5-5" in str(e), e
+        assert "anthropic/claude-opus-5.5" in str(e), e
+    PR._DETECTED.clear()
+    LR._INFO.clear()
+    r = RU.load({"ai": {"provider": "openrouter", "model": "anthropic/claude-opus-5.5"}})
+    inf = LR.info("anthropic/claude-opus-5.5", r, get=lambda *a, **k: R(cat))
+    assert inf["prof"]["context"] == 200000
+    # a routing variant (:nitro, :floor, :online) of a listed id is that id
+    PR._DETECTED.clear()
+    LR._INFO.clear()
+    r = RU.load({"ai": {"provider": "openrouter", "model": "anthropic/claude-opus-5.5:nitro"}})
+    assert LR.info("anthropic/claude-opus-5.5:nitro", r, get=lambda *a, **k: R(cat))["prof"]["context"] == 200000
+    # [ai] detect = false turns the check off, even after an earlier run in this process found the id missing
+    PR._DETECTED.clear()
+    LR._INFO.clear()
+    r = RU.load({"ai": {"provider": "openrouter", "model": "x/never-listed"}})
+    try:
+        LR.info("x/never-listed", r, get=lambda *a, **k: R(cat))
+        raise AssertionError("not refused")
+    except LL.AIConfigError:
+        pass
+    r = RU.load({"ai": {"provider": "openrouter", "model": "x/never-listed", "detect": False}})
+    LR.info("x/never-listed", r, get=lambda *a, **k: R(cat))
+    # unreachable catalog, or --offline: nothing is refused (the table decides, as before)
+    PR._DETECTED.clear()
+    LR._INFO.clear()
+    r = RU.load({"ai": {"provider": "openrouter", "model": "x/never-listed"}})
+    LR.info("x/never-listed", r, get=lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    LR._INFO.clear()
+    LR.info("x/never-listed", r, get=lambda *a, **k: R(cat), probe=False)
+    # another openai-compatible server's /models need not list aliases it serves: never refused
+    PR._DETECTED.clear()
+    LR._INFO.clear()
+    r = RU.load({"ai": {"provider": "vllm", "base_url": "http://localhost:8000/v1", "model": "alias"}})
+    LR.info("alias", r, get=lambda *a, **k: R(cat))
+    PR._DETECTED.clear()
+    LR._INFO.clear()

@@ -51,8 +51,10 @@ DOCUMENT = ["AnnotationEnabled=1", "AnnotateStartValue=1", "AnnotationIndexContr
 
 
 def win_rel(path, base):
-    """`path` relative to `base`, with Windows separators (SchLib\\x.SchLib)."""
-    return str(PureWindowsPath(*PurePosixPath(Path(os.path.relpath(path, base)).as_posix()).parts))
+    """`path` relative to `base`, with Windows separators (SchLib\\x.SchLib). Both resolved first: on macOS the temp
+    folder /var/... is /private/var/..., and one side resolved and the other not gave ..\\..\\private\\var\\...
+    (every document "not in the folder")."""
+    return str(PureWindowsPath(*PurePosixPath(Path(os.path.relpath(Path(path).resolve(), Path(base).resolve())).as_posix()).parts))
 
 
 def libpkg_text(docs):

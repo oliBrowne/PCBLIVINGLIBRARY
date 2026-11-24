@@ -141,6 +141,20 @@ def check_field(k, v):
 
 # ---------------------------------------------------------------- cheap auto-detection (openai-compatible servers)
 _DETECTED = {}
+UNLISTED = {}            # (base_url, model) -> the closest ids /models does list, when it answered without this one
+
+
+def closest_ids(model, ids, n=3):
+    """The listed ids nearest to a model id: the same id with dots for dashes in its version first (OpenRouter writes
+    anthropic/claude-opus-5.5 where Anthropic's own API says claude-opus-5-5), then difflib's nearest."""
+    import difflib
+    m = str(model)
+    dotted = re.sub(r"(?<=\d)-(?=\d)", ".", m)
+    out = [i for i in ids if i.lower() in (dotted.lower(), "anthropic/" + dotted.lower()) and i != m]
+    for i in difflib.get_close_matches(m, ids, n=n, cutoff=0.6):
+        if i not in out:
+            out.append(i)
+    return out[:n]
 
 
 def _num(v):
@@ -190,6 +204,7 @@ def detect(ep, key=None, get=None, post=None, timeout=5):
     ck = (ep.get("base_url"), ep.get("model"))
     if ck in _DETECTED:
         return _DETECTED[ck]
+    UNLISTED.pop(ck, None)                            # this probe's answer only, never an earlier one's
     import requests
     get, post = get or requests.get, post or requests.post
     h = {"Authorization": f"Bearer {key}"} if key and key != "no-key-needed" else {}
@@ -199,12 +214,19 @@ def detect(ep, key=None, get=None, post=None, timeout=5):
         r = get(base + "/models", headers=h, timeout=timeout)
         data = r.json() if getattr(r, "status_code", 0) == 200 else None
         rows = (data or {}).get("data") if isinstance(data, dict) else data
-        hit = next((e for e in rows or [] if isinstance(e, dict) and str(e.get("id")) in (ep["model"], bare(ep["model"]))), None)
+        want = {ep["model"], bare(ep["model"])}
+        if ep.get("preset") == "openrouter":          # anthropic/claude-opus-5.5:nitro / :floor / :online: a routing
+            want.add(ep["model"].split(":", 1)[0])    # variant of a listed id, which /models lists only once
+        hit = next((e for e in rows or [] if isinstance(e, dict) and
+                    ({str(e.get("id")), str(e.get("canonical_slug") or "")} & want)), None)
         if hit:
             fields.update(from_models_entry(hit))
             notes.append("/models")
         elif rows is not None:
             notes.append(f"/models does not list {ep['model']}")
+            ids = [str(e.get("id")) for e in rows if isinstance(e, dict) and e.get("id")]
+            if ids:
+                UNLISTED[ck] = closest_ids(ep["model"], ids)
     except Exception as e:                                # unreachable, not JSON, ...: the table decides
         notes.append(f"/models: {type(e).__name__}")
     root = re.sub(r"/v1/?$", "", base)

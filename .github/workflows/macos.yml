@@ -1,0 +1,95 @@
+name: macos
+
+# The macOS side, which nobody has run on a real Mac yet: the whole test suite on macOS (Apple silicon), and a plain
+# `pip install .` (not editable: what a user gets) that runs the commands a Mac user starts with. GitHub's macOS
+# images carry Google Chrome and Microsoft Edge, so the headless-browser datasheet tests drive a real Mac browser.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: pdftoppm for the visual-check tests
+        run: brew install poppler
+      - name: Run all tests (offline; no secrets needed)
+        env:
+          SOURCE_DATE_EPOCH: "1791936000"
+        run: python -m tests.run_all
+
+  install:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    env:
+      ECADLIB_HOME: ${{ github.workspace }}/../ecadlib-home
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install as a user would (a fresh venv, not editable)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install .
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: First commands
+        run: |
+          set -euxo pipefail
+          cd "$RUNNER_TEMP"
+          ecadlib --version
+          ecadlib doctor --workspace ws
+          ecadlib demo -o demo
+          test -f demo/kicad/demo_bom_demo/ecadlib_demo.kicad_sym
+          ls demo/librarian/demo_bom_demo/models | grep -q SchLib
+          ecadlib status --workspace demo
+          ecadlib completion zsh > /dev/null
+          echo "sk-test-not-a-real-key" | ecadlib keys set ANTHROPIC_API_KEY --stdin
+          ecadlib keys list | grep -q ANTHROPIC_API_KEY
+          ecadlib keys remove ANTHROPIC_API_KEY
+          (cd demo && ecadlib style learn --from kicad/demo_bom_demo && ecadlib style show)
+      - name: The desktop app answers (no window)
+        run: |
+          set -eux
+          ecadlib start --no-window --no-browser --port 8790 --workspace "$RUNNER_TEMP/appws" > "$RUNNER_TEMP/app.out" 2>&1 &
+          app=$!
+          keyfile="$ECADLIB_HOME/run/ui-8790.json"   # the page answers only with this run's key (#295)
+          for i in $(seq 1 60); do
+            if [ -f "$keyfile" ]; then
+              key=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["key"])' "$keyfile")
+              if curl -sf -H "X-Ecadlib-Key: $key" http://127.0.0.1:8790/api/setup -o "$RUNNER_TEMP/setup.json"; then break; fi
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/setup.json" || { cat "$RUNNER_TEMP/app.out"; exit 1; }
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8790/api/setup)
+          test "$code" = 401                        # and nothing without it
+          curl -sf http://127.0.0.1:8790/setup | grep -q "ecadlib setup"
+          kill $app
+      - name: The headless browser finds a Mac browser
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "")
+          from ecadlib import pdf_fetch as PF
+          b = PF.Browser(timeout=20)
+          why = b._worker.call(lambda: (b._start(b._s), b._s.why)[1], 120)
+          print("engine:", b.engine, "why:", why)
+          b.close()
+          sys.exit(1 if why else 0)
+          PY
+        working-directory: ${{ runner.temp }}

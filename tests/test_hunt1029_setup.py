@@ -368,3 +368,28 @@ if __name__ == "__main__":
     import sys
     from tests import run_all
     sys.exit(run_all.main(["test_hunt1029_setup"]))
+
+
+def test_local_servers_bind_without_a_name_lookup():
+    """macOS CI 2026-11-22: http.server's server_bind asked socket.getfqdn("127.0.0.1"), 14.8 s on GitHub's macOS
+    runner: the web UI answered late and a second Nexar sign-in found its own port still taken. No server of ecadlib's
+    looks a name up when it binds."""
+    import socket, threading
+    from unittest import mock
+    from ecadlib import mcp_http as MH, nexar_signin as NS
+    from ecadlib.ui import server as UI
+    from ecadlib.app import Workspace
+    import tempfile
+    asked = []
+    with mock.patch.object(socket, "getfqdn", lambda *a: asked.append(a) or "slow.example"), tempfile.TemporaryDirectory() as d:
+        srv = UI.make_server(Workspace(d), port=0)
+        srv.server_close()
+        srv = MH.make_server(Workspace(d), port=0)
+        srv.server_close()
+        stop = threading.Event()
+        stop.set()                                    # cancelled at once: only the bind matters here
+        try:
+            NS.wait_for_code(f"http://localhost:{_free_port()}/login", "s", timeout=5, cancel=stop)
+        except NS.SigninError:
+            pass
+    assert asked == [], asked

@@ -9,6 +9,8 @@ key (ecadlib.ui.access): the browser gets it from the link the launcher opens, o
 import argparse, contextlib, ipaddress, itertools, json, mimetypes, re, secrets, socket, sys, threading, os, time, \
     traceback, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from ..localserver import NoLookupBind
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
@@ -755,7 +757,7 @@ def make_handler(ws: Workspace, access=None):
     return H
 
 
-class Server(ThreadingHTTPServer):
+class Server(NoLookupBind, ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 128                               # a burst of requests must queue, not get connection resets
 

@@ -4324,6 +4324,7 @@
 "bare",
 "builtin",
 "check_field",
+"closest_ids",
 "describe",
 "detect",
 "dumps",
@@ -4397,6 +4398,16 @@
 "check",
 "params",
 "takes_sampling"
+],
+"ecadlib/localserver.py":[
+"<dictcomp>",
+"<genexpr>",
+"<lambda>",
+"<listcomp>",
+"<module>",
+"<setcomp>",
+"NoLookupBind.server_bind",
+"server_bind"
 ],
 "ecadlib/lookup_keys.py":[
 "<dictcomp>",
@@ -4884,6 +4895,7 @@
 "Browser._get.<locals>.on_response",
 "Browser._start",
 "Browser._start.<locals>.unasked",
+"Browser._tidy",
 "Browser.close",
 "Browser.engine",
 "Browser.get",
@@ -4913,6 +4925,7 @@
 "_run",
 "_runs",
 "_start",
+"_tidy",
 "call",
 "check",
 "close",

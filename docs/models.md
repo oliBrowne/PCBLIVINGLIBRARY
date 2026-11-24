@@ -45,7 +45,9 @@ model = "gpt-5"
 
 [ai]                                   # OpenRouter (any model it serves)
 provider = "openrouter"                # ecadlib keys set OPENROUTER_API_KEY
-model = "anthropic/claude-opus-5-5"    # or "openai/gpt-5", "qwen/qwen-2.5-72b-instruct", ...
+model = "anthropic/claude-opus-5.5"    # OpenRouter's ids use dots: anthropic/claude-sonnet-5.5, anthropic/claude-haiku-5.5,
+                                       # or any id listed at https://openrouter.ai/models (an id it does not list is
+                                       # refused before any request, with the closest ids it does list)
 
 [ai]                                   # Ollama on this machine: free, no key, nothing leaves the machine
 provider = "ollama"                    # ollama pull qwen2.5vl:7b   (base_url defaults to http://localhost:11434/v1)

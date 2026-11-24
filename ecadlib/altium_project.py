@@ -293,14 +293,19 @@ def _find_file(base, rel):
     p = Path(base) / Path(*PureWindowsPath(rel).parts) if rel else None
     if p is None:
         return None
-    if p.exists() and os.name != "nt":
-        return p
-    cur = Path(base)                                  # Windows paths are case-insensitive: match part by part (on
-    for part in PureWindowsPath(rel).parts:           # Windows too, for the name as it is spelled on disk)
+    # Windows paths are case-insensitive: match part by part, for the name as it is spelled on disk. Also where
+    # p.exists() already: Windows and macOS file systems say yes to any case (IO.SchDoc for io.schdoc)
+    cur = Path(base).absolute()                       # (absolute: '..' must go up from a relative base too)
+    for part in PureWindowsPath(rel).parts:
         if part == "..":
             cur = cur.parent
             continue
-        hit = cur.is_dir() and next((c for c in cur.iterdir() if c.name.lower() == part.lower()), None)
+        try:
+            names = list(cur.iterdir()) if cur.is_dir() else []
+        except OSError:                               # a folder that can be entered but not listed
+            return p if p.exists() else None
+        hit = next((c for c in names if c.name == part), None) or \
+            next((c for c in names if c.name.lower() == part.lower()), None)
         if not hit:
             return p if p.exists() else None
         cur = hit

@@ -314,6 +314,7 @@ class _State:
     def __init__(self):
         self.pw = self.browser = self.ctx = self.why = self.engine = self.pid = self.proc = self.route = None
         self.warm, self.public = set(), getattr(self, "public", False)   # (kept when a dead browser is started again)
+        self.leftover = []                            # pages to close once the call's answer has gone back
         self.own, self.opening = set(), False        # the pages get() opened itself; True while it opens one
 
 
@@ -412,6 +413,7 @@ class Browser:
         self.timeout, self.settle, self.challenge_s, self.allow_local = timeout, settle, challenge_s, allow_local
         self.executable = executable or os.environ.get("ECADLIB_BROWSER") or None
         self.limit = timeout * 3 + 30                # the most one call may take, warm-up and challenge included
+        self.close_s = 10                             # the most closing its page may take (get(), _tidy)
         self._lock, self._worker, self._s = threading.Lock(), _Worker(), _State()
         atexit.register(self.close)
 
@@ -611,10 +613,7 @@ class Browser:
                 page.goto("about:blank", timeout=1500)
             except Exception:
                 pass
-            try:
-                page.close()
-            except Exception:
-                pass
+            s.leftover.append(page)                   # closed by get() after this answer is handed back (_tidy)
 
     def _fetch_in_page(self, page, url):
         """The PDF fetched again by the page itself: the same browser, cookies and TLS, with a time limit and
@@ -668,6 +667,16 @@ class Browser:
                 pass
         return status, bytes(buf), ctype, url, None
 
+    def _tidy(self, s):
+        """Close the pages the last call left. page.close() has no time limit and Edge 151+ on Windows sometimes never
+        closes a page (seen once in ~50 CI runs): get() runs this under close_s of its own, after the answer."""
+        while s.leftover:
+            page = s.leftover.pop()
+            try:
+                page.close()
+            except Exception:
+                pass
+
     def _close(self, s):
         # a driver whose process is gone answers nothing: asking its context or browser to close would wait for ever
         # (the call then ran out its whole time limit and the datasheet was given up), so they are only let go
@@ -693,13 +702,18 @@ class Browser:
             s = self._s
             s.public = public_only()                  # (the worker thread's route check: a web search's link)
             try:
-                return self._worker.call(lambda: self._get(url, s), limit)
+                got = self._worker.call(lambda: self._get(url, s), limit)
             except concurrent.futures.TimeoutError:   # stuck (a site that stopped sending): a new worker and browser
                 self._abandon()
                 return 0, None, "", url, f"the browser did not finish in {limit} s"
             except Exception as e:                    # a browser that died under the call: started again next time
                 self._abandon()
                 return 0, None, "", url, f"browser: {type(e).__name__}: {(str(e).splitlines() or [''])[0][:160]}"
+            try:                                      # the page it used: a page that will not close takes its browser
+                self._worker.call(lambda: self._tidy(s), self.close_s)
+            except Exception:                         # with it (a new one next call); the answer is kept either way
+                self._abandon()
+            return got
 
     def _abandon(self):
         """Leave the current worker and browser: closed once its call returns; its driver (and with it the

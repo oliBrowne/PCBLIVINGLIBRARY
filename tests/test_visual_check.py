@@ -142,6 +142,18 @@ def item(d, **kw):
 
 
 # ---------------------------------------------------------------- renders
+def test_pad_count_with_the_fallback_font():
+    """macOS CI (2026-11-22): no font file found, so Pillow's own font drew the pad numbers; the count must hold."""
+    saved = V.FONT_FILES, V.BOLD_FILES
+    V.FONT_FILES, V.BOLD_FILES = ("/no/such/font.ttf",), ()
+    V._font.cache_clear()
+    try:
+        test_pad_count_by_connected_components()
+    finally:
+        V.FONT_FILES, V.BOLD_FILES = saved
+        V._font.cache_clear()
+
+
 def test_render_is_deterministic():
     with tempfile.TemporaryDirectory() as d:
         a = V.render_footprint(SOIC, Path(d) / "a.png")
@@ -158,6 +170,10 @@ def test_pad_count_by_connected_components():
             png = V.render_footprint(spec, Path(d) / f"{spec.stem}.png")
             legend_y = Image.open(png).height - 70                          # the legend swatches are below the drawing
             pads = [c for c in components(png) if c[0] > 60 and c[2] < legend_y]
+            # a pad's white number can cut a sliver off it (Pillow's own font on macOS, where no DejaVu or Arial was
+            # found: the inside of the "2" in pad 12): a piece under a tenth of the median pad is not a pad
+            big = sorted(c[0] for c in pads)[len(pads) // 2] / 10 if pads else 0
+            pads = [c for c in pads if c[0] >= big]
             assert len(pads) == n, (spec.stem, len(pads))
 
 

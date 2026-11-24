@@ -49,6 +49,12 @@ PIN_EXAMPLE = {"overbar": "~{RESET}, a bar over the name", "hash": "RESET#", "sl
 SAFE_UNITS = {"v", "vdc", "vac", "%", "w", "a", "ohm", "ohms"}   # unit spellings safe to re-case (no SI prefix to confuse)
 NUMUNIT = re.compile(r"^(±|\+/-)?\s*(\d+(?:\.\d+)?)(\s*)([A-Za-zµΩ%°]+)$")
 NUM = re.compile(r"\d+(?:[.,]\d+)?")
+UNIT_IN_TEXT = re.compile(r"(?<=\d)( ?)(?:VDC|VAC|V|W|mW|A|mA)\b")   # 16 V / 0.1 W in a description: one value
+# parameters a part's own text can state (rules.line_fields): field -> the house parameter names it fills
+FIELD_PARAMS = {"tolerance": ("tolerance", "tol"), "voltage": ("voltage", "rated voltage", "voltage rating",
+                                                               "voltage - rated", "voltage rated"),
+                "power": ("power", "power rating", "power (watts)", "rated power"),
+                "dielectric": ("dielectric", "temperature coefficient", "tempco", "temp coefficient")}
 # how much a model sees and how it is asked, by tier ([ai] assist = "full" counts as small, "off" as frontier)
 TIER = {"frontier": {"examples": 8, "batch": 20, "guide": 40, "worked_example": False},
         "mid": {"examples": 4, "batch": 8, "guide": 20, "worked_example": True},
@@ -262,8 +268,10 @@ def infer_descriptions(comps):
         if cat in RU.PASSIVES:
             temps, ex, styles = Counter(), defaultdict(list), []
             pm = sum(bool(re.search(r"±\s?\d", d)) for _, d in ds)
+            spaced = [bool(m.group(1)) for _, d in ds for m in UNIT_IN_TEXT.finditer(d)]
             for c, d in ds:
-                t = I.name_template(dict(c, name=re.sub(r"±\s?(?=\d)", "", d)), styles)   # ±1% is a {tolerance} too
+                d1 = UNIT_IN_TEXT.sub(lambda m: m.group(0).replace(" ", ""), re.sub(r"±\s?(?=\d)", "", d))
+                t = I.name_template(dict(c, name=d1), styles)   # ±1% and 16 V are a {tolerance} / {voltage} too
                 if t and "{" in t and not t.startswith("{mpn}"):
                     temps[t] += 1
                     ex[t].append(d)
@@ -273,7 +281,8 @@ def infer_descriptions(comps):
                     st = Counter(s for x in styles for s in x)
                     rec.update(template=t, share=round(votes / len(ds), 2), examples=ex[t][:3],
                                value_style=st.most_common(1)[0][0] if st else "keep",
-                               tolerance_prefix="±" if "{tolerance}" in t and pm >= 0.8 * len(ds) else "")
+                               tolerance_prefix="±" if "{tolerance}" in t and pm >= 0.8 * len(ds) else "",
+                               unit_space=bool(spaced) and sum(spaced) >= 0.8 * len(spaced))
         out[cat] = rec
     return out
 
@@ -415,8 +424,12 @@ def check_item(it, prof, rules=None):
     rule = description_rule(prof, cat)
     if rule and cat in RU.PASSIVES:
         f = _fields(it, cat, rules, rule.get("value_style"))
+        f = dict(f)
         if f.get("tolerance") and rule.get("tolerance_prefix"):
             f["tolerance"] = rule["tolerance_prefix"] + f["tolerance"]
+        if rule.get("unit_space"):                    # "16 V", as the library's descriptions write it
+            for n in ("voltage", "power"):
+                f[n] = UNIT_IN_TEXT.sub(lambda m: " " + m.group(0).lstrip(), f.get(n) or "")
         need = [n for n in RU._template_fields(rule["template"]) if n in ("value", "package")]
         want = RU.render(rule["template"], f)
         if want and all(f.get(n) for n in need) and want != (it.get("description") or ""):
@@ -434,8 +447,18 @@ def check_item(it, prof, rules=None):
                               ", ".join(fmt["examples"][:2]) + ")"})
     have = {_house_name(k, rules, prof) for k, v in _params(it).items() if str(v).strip()} | set(_params(it))
     have |= set(rules["parameters"]["defaults"])
+    stated = None
     for k, share in sorted(((prof.get("param_presence") or {}).get(cat) or {}).items()):
         if k not in have and I.canonical_of(k) not in _params(it):
+            field = next((n for n, names in FIELD_PARAMS.items() if k.strip().lower() in names), None)
+            if field and cat in RU.PASSIVES:
+                stated = stated if stated is not None else _fields(it, cat, rules, "keep")
+                v = stated.get(field) or ""
+                if v:                                 # the part's own description / value says it (1%, 16V, X7R)
+                    want = restyle_value(v, fmts.get(k))
+                    out.append({"field": f"parameters.{k}", "now": "", "want": want, "fix": True, "add": True,
+                                "by": f"{int(share * 100)}% of your {cat.lower()} have it; the part's own text says {v}"})
+                    continue
             out.append({"field": f"parameters.{k}", "now": "", "want": "(a value)", "fix": False,
                         "by": f"{int(share * 100)}% of your {cat.lower()} have it; ecadlib has no value for it"})
     want_t = setting(prof, f"naming.by_category.{cat}") or (setting(prof, "naming.passive") if cat in RU.PASSIVES
@@ -467,6 +490,8 @@ def adapt_items(items, prof, rules=None, only=None):
                 it["description"] = f["want"]
             else:
                 k = f["field"].split(".", 1)[1]
+                if f.get("add"):
+                    it.setdefault("parameters", []).append({"name": k, "value": f["want"]})
                 for p in it["parameters"]:
                     if p["name"] == k:
                         p["value"] = f["want"]
