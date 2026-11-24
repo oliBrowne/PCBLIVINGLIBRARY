@@ -79,28 +79,10 @@ def test_sign_in_again_after_signing_out_of_a_waiting_sign_in(tmp_path, monkeypa
     monkeypatch.setenv("ECADLIB_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("NEXAR_REDIRECT_URI", f"http://localhost:{_free_port()}/login")
     try:
-        import time
-        t0 = time.monotonic()
         first = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})
         assert first["waiting"], first
-        t1 = time.monotonic()
         ES.nexar_signout({})
-        t2 = time.monotonic()
-        try:
-            again = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})   # raised ValueError: port in use
-        except ValueError as e:                     # (macOS CI 2026-11-22: say how long each step took)
-            import faulthandler, socket, sys
-            try:
-                faulthandler.dump_traceback(sys.__stderr__, all_threads=True)
-            except (AttributeError, ValueError, OSError):
-                pass
-            fq = []
-            for h in ("127.0.0.1", "::1"):
-                t = time.monotonic()
-                socket.getfqdn(h)
-                fq.append(f"getfqdn({h}) {time.monotonic() - t:.1f} s")
-            raise AssertionError(f"{fq}; {e}; start {t1 - t0:.1f} s, sign out {t2 - t1:.1f} s, again {time.monotonic() - t2:.1f} s, "
-                                 f"url {first.get('url')!r}") from e
+        again = ES.start_nexar_signin({"client_id": "abc", "client_secret": "def"})   # raised ValueError: port in use
         assert again["waiting"], again
     finally:
         ES.nexar_signout({})
@@ -386,3 +368,28 @@ if __name__ == "__main__":
     import sys
     from tests import run_all
     sys.exit(run_all.main(["test_hunt1029_setup"]))
+
+
+def test_local_servers_bind_without_a_name_lookup():
+    """macOS CI 2026-11-22: http.server's server_bind asked socket.getfqdn("127.0.0.1"), 14.8 s on GitHub's macOS
+    runner: the web UI answered late and a second Nexar sign-in found its own port still taken. No server of ecadlib's
+    looks a name up when it binds."""
+    import socket, threading
+    from unittest import mock
+    from ecadlib import mcp_http as MH, nexar_signin as NS
+    from ecadlib.ui import server as UI
+    from ecadlib.app import Workspace
+    import tempfile
+    asked = []
+    with mock.patch.object(socket, "getfqdn", lambda *a: asked.append(a) or "slow.example"), tempfile.TemporaryDirectory() as d:
+        srv = UI.make_server(Workspace(d), port=0)
+        srv.server_close()
+        srv = MH.make_server(Workspace(d), port=0)
+        srv.server_close()
+        stop = threading.Event()
+        stop.set()                                    # cancelled at once: only the bind matters here
+        try:
+            NS.wait_for_code(f"http://localhost:{_free_port()}/login", "s", timeout=5, cancel=stop)
+        except NS.SigninError:
+            pass
+    assert asked == [], asked

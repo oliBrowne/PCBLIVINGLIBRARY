@@ -7,9 +7,13 @@ def test_kemet_flex_termination_mpn_is_imperial_not_tdk_metric():
     # pattern (C0603 + "X5") and resolve to the 0201 land
     for mpn, want in (("C0603X563K1RACTU", "C_0603_1608Metric"), ("C0603X683M1RACTU", "C_0603_1608Metric"),
                       ("C1206F224K5RACTU", "C_1206_3216Metric"), ("C0603C104K5RACTU", "C_0603_1608Metric"),
-                      ("C0603X5R0J104M", "C_0201_0603Metric"), ("C1608X7R1H104K", "C_0603_1608Metric"),
+                      ("C1608X7R1H104K", "C_0603_1608Metric"),
                       ("C1005X8L1E104K", "C_0402_1005Metric")):                       # TDK metric stays metric
         assert S.resolve([""], "C", mpn)["footprint"] == want, mpn
+    # review 2026-11-23 round 2: TDK's size-only form with a code that is an inch size too (0603) is read as metric
+    # only when the line names TDK; with no maker it is held (it was built as an 0201 here on the number alone)
+    assert S.resolve([""], "C", "C0603X5R0J104M", maker="TDK")["footprint"] == "C_0201_0603Metric"
+    assert S.resolve([""], "C", "C0603X5R0J104M")["footprint"] is None
     assert S.resolve(["0603"], "C", "C0603X563K1RACTU")["footprint"] == "C_0603_1608Metric"
 
 

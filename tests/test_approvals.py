@@ -114,7 +114,7 @@ def test_no_self_approval_of_allow_and_audit():
     with tempfile.TemporaryDirectory() as d:
         bad = make(d, name="PART2", height=9.0)                    # implausible height -> held
         plan = _plan(d, [make(d), bad], {"required": 1})
-        assert _quiet(RC.main, [str(plan), "--allow", "PART2", "--user", ANN, "-o", str(Path(d, "rc"))]) == 0
+        assert _quiet(RC.main, [str(plan), "--allow", "PART2", "--user", ANN, "--reason", "checked against the datasheet", "-o", str(Path(d, "rc"))]) == 0
         items = json.loads(plan.read_text())
         assert items[1]["allow"]["user"] == ANN and items[1]["allow"]["by"] == "--allow"
         assert [i["status"] for i in items] == ["awaiting_approval", "awaiting_approval"]

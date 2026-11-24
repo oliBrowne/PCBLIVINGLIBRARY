@@ -19,9 +19,11 @@ an independent source agrees, as for any read). The answer goes into the result 
 does not ask for it again. Each folder's name carries the request's key: a run that asks for more pages of the same
 part (its first answer left something out) gets a new folder.
 
-Not made in this mode: the paid cross-check's second read (one assistant reading twice is not a second source) and the
-web search for a missing PDF (it is billed). Message Batches are off. Nothing here talks to the network."""
+The cross-check's second read is asked for the same way, in its own folder (<part>-check-<key>), once the first read
+is answered: its request says to read the pages afresh and never reuse the first answer (through the API the second read
+is the same model reading again; 2026-11-23). Not made in this mode: the web search for a missing PDF (it is billed). Message Batches are off. Nothing here talks to the network."""
 import base64
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -48,9 +50,45 @@ def _stem(s):
     return re.sub(r"[^A-Za-z0-9._-]+", "_", str(s or "part")).strip("._") or "part"
 
 
+KINDS = ("check-", "pins-")                           # a second read's and a pin drawing read's keys say what they are
+
+
+def _names(job):
+    """(this request's folder name, the name it had before 2026-11-23)."""
+    raw, key = str(job.get("name") or job.get("part") or "part"), str(job.get("key") or "nokey")
+    stem = _stem(raw)
+    if stem != raw:
+        stem += "~" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:6]
+    kind = next((k for k in KINDS if key.startswith(k)), "")
+    new = f"{stem}-{kind}{key[len(kind):][:10]}-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:8]}"
+    old = key[:16] + key.rsplit("-", 1)[-1][:6] if kind == "check-" else key[:10]
+    return new, f"{stem}-{old}"
+
+
+def same_request(d, job):
+    """Is the folder d this very request's: its job.json carries the request's whole key and its part? A folder
+    with no job.json, or another request's, is not (review 2026-11-23: an answer.json was taken on the folder's name)."""
+    try:
+        had = json.loads((Path(d) / "job.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(had, dict) and bool(job.get("key")) and had.get("key") == str(job.get("key")) \
+        and str(had.get("part")) == str(job.get("part"))
+
+
 def folder(base, job):
-    """<base>/<part>-<first 10 characters of the request key>: one folder per request."""
-    return Path(base) / f"{_stem(job.get('name') or job.get('part'))}-{str(job.get('key') or 'nokey')[:10]}"
+    """<base>/<part>-<kind><first 10 characters of the PDF's hash>-<8 of the hash of the whole request key>: one folder
+    per request. The key's first characters are only the PDF's hash, so a name made of them (as it was) gave every
+    request of one PDF one folder: more pages, another package or another model was answered by the old answer.json
+    (review 2026-11-23). A second read's folder keeps "-check-" in its name and a pin drawing read's "-pins-". A name
+    the folder cannot hold as written (TESTPART/A and TESTPART#A both stem to TESTPART_A, FOO_ to FOO) gets 6 characters
+    of its own hash too, so two parts never share a folder and each other's answers.
+    A folder under the old name is still this request's when its job.json carries the request's whole key (an answer
+    saved before the change is kept, for the request it answered and no other)."""
+    new, old = _names(job)
+    if not (Path(base) / new).exists() and same_request(Path(base) / old, job):
+        return Path(base) / old
+    return Path(base) / new
 
 
 def _blocks(job):
@@ -78,12 +116,12 @@ def answer(base, job, model="assistant"):
     An answer.json that is not JSON raises DatasheetError naming the file (fix it and run again)."""
     from .datasheet import DatasheetError
     f = folder(base, job) / "answer.json"
-    if not f.is_file():
+    if not f.is_file() or not same_request(f.parent, job):   # another request's folder: no answer yet (asked afresh)
         return None
-    text = f.read_text(encoding="utf-8-sig")
-    try:
+    try:                                              # (UTF-16 from PowerShell's > is not UTF-8: said, not a crash)
+        text = f.read_text(encoding="utf-8-sig")
         json.loads(text)
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         raise DatasheetError(f"{f} is not JSON ({e}): fix it and run again")
     return {"id": f"assistant-{_stem(job.get('part'))}", "type": "message", "role": "assistant", "model": model,
             "stop_reason": "end_turn", "content": [{"type": "text", "text": text}],
@@ -94,7 +132,9 @@ def request(base, job):
     """Write this request's folder (the pages, the instructions, the schema) and the READ_ME index -> the folder."""
     d = folder(base, job)
     d.mkdir(parents=True, exist_ok=True)
-    content, system = _blocks(job)
+    if (d / "answer.json").is_file() and not same_request(d, job):   # an answer to no request this folder knows (its
+        (d / "answer.json").replace(d / "answer.other-request.json")   # job.json gone or another's): set aside, never
+    content, system = _blocks(job)                                    # taken for this one once job.json is written
     files, texts, links, n_img = [], [], [], 0
     for b in content:
         if not isinstance(b, dict):
@@ -143,6 +183,14 @@ def request(base, job):
         if tried:                                            # why: refused, dead, the Archive had no copy ...
             md += ["What ecadlib tried:", ""] + [f"- {a.get('where') or ''}: {a.get('error') or ''}"[:400]
                                                   for a in tried[:8]] + [""]
+    if str(job.get("key") or "").startswith("check-"):      # the cross-check's second read (ecadlib.crosscheck)
+        md += ["## A second read", "",
+               "This is the cross-check: a second, separate read of the same part, compared in code with the first "
+               "read before a footprint built from it is released. Read it from these pages alone, as if for the "
+               "first time: do not open or reuse any other folder's answer.json, and do not copy numbers from an "
+               "earlier answer. If you answered this part's first read in this conversation, have a fresh session "
+               "or sub-agent answer this one. A disagreement holds the part for a person, which is safe; a copied "
+               "answer agrees with any mistake.", ""]
     md += ["Read the pages below as the instructions say, then write **answer.json** in this folder: one JSON object "
            "matching schema.json (no comments, no text around it). Leave a value out, or empty, when the pages do not "
            "print it: a guessed number is worse than none, because ecadlib holds a part with a missing value but may "

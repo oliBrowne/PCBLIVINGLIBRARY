@@ -1,9 +1,12 @@
 """Writes api/_crash-report-allow.json: what the site's crash-report endpoint (api/crash-report.js) accepts. Each
-ecadlib source file with the functions in it, the command names, and ecadlib's own error classes. The endpoint refuses
-anything else, so a made-up file or function name can never reach a public issue. Entries are only ever added (older
-releases still report the functions they had). tests/test_crash_report_endpoint.py fails when this file is behind.
+ecadlib source file with the functions in it, the command names, and the error classes: Python's own, ecadlib's, and
+those of the standard-library modules and libraries ecadlib's code imports (requests' ReadTimeout, json's
+JSONDecodeError: read from the modules installed where this runs). The endpoint refuses any other file or function
+name and files any other error name as "OtherError", so a made-up name can never reach a public issue (review
+2026-11-23, 2.5: the error name used to be any word ending in Error). Entries are only ever added (older releases
+still report the functions they had). tests/test_crash_report_endpoint.py fails when this file is behind.
 Run:  python3 scripts/build_crash_report_allow.py"""
-import ast, builtins, json, sys
+import ast, builtins, importlib, json, re, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,9 +37,50 @@ def _errors(tree):
                 ("Error", "Exception", "Warning", "Exit")) for b in n.bases)}
 
 
-def current():
+ERROR_NAME = re.compile(r"[A-Z][A-Za-z0-9]{1,40}")       # the shape api/crash-report.js takes for an error name
+
+
+def _imported(tree):
+    """The top-level modules a file imports from outside ecadlib."""
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            out.update(a.name.split(".")[0] for a in n.names)
+        elif isinstance(n, ast.ImportFrom) and not n.level and n.module:
+            out.add(n.module.split(".")[0])
+    return out - {"ecadlib"}
+
+
+def library_errors(modules):
+    """Error class names of the modules ecadlib imports (those installed here; one that does not import is skipped):
+    every exception class loaded once they are, that lives in one of them or in the standard library."""
+    tops = set(modules)
+    for m in sorted(tops):
+        try:
+            importlib.import_module(m)
+        except BaseException:                        # not installed here (pcbnew, wx), or it stops on import
+            continue
+    ours = tops | set(getattr(sys, "stdlib_module_names", ()))
+    out, todo, seen = set(), [BaseException], set()
+    while todo:
+        c = todo.pop()
+        if c in seen:
+            continue
+        seen.add(c)
+        try:
+            todo.extend(c.__subclasses__())
+        except TypeError:
+            continue
+        if str(getattr(c, "__module__", "")).split(".")[0] in ours and ERROR_NAME.fullmatch(c.__name__):
+            out.add(c.__name__)
+    return out
+
+
+def current(libraries=False):
+    """libraries: also the error classes of the modules ecadlib imports (the write; missing() does not need them)."""
     files, errors = {}, {n for n in dir(builtins) if isinstance(getattr(builtins, n), type)
                          and issubclass(getattr(builtins, n), BaseException)}
+    imported = set()
     for p in sorted((ROOT / "ecadlib").rglob("*.py")):
         rel = p.relative_to(ROOT).as_posix()
         try:
@@ -45,13 +89,16 @@ def current():
             continue
         files[rel] = _names(tree) | set(SPECIAL)
         errors |= _errors(tree)
+        imported |= _imported(tree)
     sys.path.insert(0, str(ROOT))
     from ecadlib.cli import COMMANDS
+    if libraries:
+        errors |= library_errors(imported)
     return {"files": files, "commands": set(COMMANDS), "errors": errors}
 
 
 def merged(old=None):
-    cur = current()
+    cur = current(libraries=True)
     old = old or {}
     files = {k: set(v) for k, v in (old.get("files") or {}).items()}
     for k, v in cur["files"].items():

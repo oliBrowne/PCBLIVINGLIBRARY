@@ -251,7 +251,8 @@ def test_ui_serves_the_page_to_a_browser_that_waits_for_it(tmp_path, monkeypatch
     monkeypatch.setattr(S, "make_server", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
 
     def console_browser(url, *a, **k):          # like w3m: fetches the page and only then returns
-        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        from tests.test_ui import ui_browser
+        direct = ui_browser()                   # (it keeps the cookie the link's key is answered with)
         try:
             with direct.open(url, timeout=3) as r:
                 seen.append(r.status)
@@ -275,9 +276,11 @@ def test_first_start_prints_the_setup_page_and_the_main_page_links_to_it(tmp_pat
     got = {}
 
     def window(app, open_page):                 # the 'ecadlib is running' window: fetch what was printed, then close
+        from tests.test_ui import ui_browser
         url = re.search(r"(http://\S+)", got["out"].getvalue()).group(1)
-        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        got["printed"] = direct.open(url, timeout=10).read().decode()
+        assert url == app.url + "setup"         # printed without the run's key (review 2026-11-23, 2.1) ...
+        direct = ui_browser()                   # ... the browser is opened with a link that carries one
+        got["printed"] = direct.open(app.link("setup"), timeout=10).read().decode()
         got["main"] = direct.open(app.url, timeout=10).read().decode()
         return True
     monkeypatch.setattr(L, "window", window)

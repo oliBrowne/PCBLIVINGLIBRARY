@@ -27,7 +27,8 @@ makes them match the rest of your library. **Every part is verified before it is
 check, or still needs a person, is held until someone signs it off. The rest goes to **Altium 365**, a database
 library or **KiCad**. After that it keeps the library alive: released parts never change behind your back, and a
 weekly check reports parts going end of life, upstream KiCad changes and drift in your Altium 365 workspace. Free and
-open source (MIT); you bring your own API key and pick the model.
+open source (MIT). Datasheet reads use your own API key and whichever model you pick, or, with no key at all, an AI
+assistant you already use (see [no API key](#no-api-key)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/readme/flow-dark.svg">
@@ -40,11 +41,12 @@ open source (MIT); you bring your own API key and pick the model.
 schematics, or a hand-made CSV/XLSX, with whatever column names it has. Each line comes back as already in your
 library, available from a source, needs a footprint, or DNP. `ecadlib where-used` shows which projects use which part.
 
-**2. Fill the library.** Your own libraries first, then the official KiCad libraries and ecadlib's checked table of
-standard packages, then EasyEDA/LCSC (an unofficial source, used last; `[providers] unofficial = false` turns it off).
-Nexar, DigiKey and Mouser identify the part. When nobody has it, a datasheet reader (Claude by default, or any model
-you choose, local ones included) reads the package drawing and a deterministic IPC-7351B generator draws the land:
-chips, gull-wing and no-lead ICs, QFPs, BGAs, connectors and pad tables. Symbols follow one pin rule (inputs left,
+**2. Fill the library.** Your own libraries first, then the official KiCad libraries, then EasyEDA/LCSC (an unofficial
+source; `[providers] unofficial = false` turns it off), then ecadlib's checked table of standard packages. The order
+is `[sources] order` in `ecadlib.toml`. Nexar, DigiKey and Mouser identify the part. When nobody has it, a datasheet
+reader (Claude by default, or any model you choose, local ones included) reads the package drawing and a
+deterministic IPC-7351B generator draws the land: chips, gull-wing and no-lead ICs, QFPs, BGAs, connectors and pad
+tables. Symbols follow one pin rule (inputs left,
 outputs right, power top, ground bottom), and parts get a 3D model (KiCad's, EasyEDA's, or a package-shaped STEP that
 ecadlib makes).
 
@@ -79,8 +81,9 @@ same library and report any drift.
 
 * **Inside Altium Designer:** an **ecadlib** menu adds a part from its MPN, checks the project's BOM, builds the
   libraries and opens the parts that need a person, with Altium's own dialogs.
-* **Inside KiCad:** a plugin (**Tools > External Plugins > ecadlib** in the PCB editor) opens an ecadlib window that
-  does the same for KiCad projects.
+* **Inside KiCad:** a plugin (**Tools > External Plugins > ecadlib** in the PCB editor, and a toolbar button in the
+  schematic editor of KiCad 9 and newer) opens an ecadlib window that does the same for KiCad projects. **Use in every
+  project** (or `ecadlib kicad-install`) puts the library into KiCad's own tables, so every project sees it.
 * **In your browser:** a local web UI (`ecadlib ui`) for the whole flow, from dropping a BOM to releasing to Altium 365.
 * **From an AI agent:** an MCP server (`ecadlib mcp`) lets Claude, Codex, Grok or another agent run the same steps in
   conversation, with the same holds and cost checks.
@@ -94,15 +97,32 @@ All of them run on your own machine: your libraries and API keys stay there.
   [Releases page](https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases) and run it. A setup page opens where you
   paste an API key, pick a model and add ecadlib to Altium or KiCad. [docs/START_HERE.md](docs/START_HERE.md) walks
   through it.
-* **Command line:** `pip install ecadlib` (Python 3.10+). These docs follow the main branch; anything
-  [CHANGELOG.md](CHANGELOG.md) lists under *Unreleased* is not on PyPI yet. To get it:
+* **Command line:** `pip install ecadlib` (Python 3.10+; Windows and Linux are tested on every change, macOS less so). The install is a few hundred MB,
+  because it includes the download tools for makers' sites that refuse scripts (Playwright and curl_cffi). Playwright
+  drives the Edge or Chrome already on the machine; with neither, run `playwright install chromium` once.
+* **The newest code:** these docs follow the main branch, and anything [CHANGELOG.md](CHANGELOG.md) lists under
+  *Unreleased* is not on PyPI yet. To get it:
   `pip install "ecadlib @ git+https://github.com/oliBrowne/PCBLIVINGLIBRARY"`.
+
+Then run `ecadlib demo` (below) to see it work, and `ecadlib init` in the folder where your libraries and BOMs live.
 
 ## Setup
 
 `ecadlib setup` (or the Windows app) opens a setup page: pick an AI model and paste its key, choose Altium and/or
 KiCad, and add ecadlib to them. Every key stays on your computer and goes only to the company it belongs to
-([how keys are stored](docs/api-keys.md)).
+([how keys are stored](docs/api-keys.md)). `ecadlib doctor` checks the setup at any time.
+
+An AI model is needed only for parts that must be drawn from a datasheet. The choices
+([docs/models.md](docs/models.md)):
+
+* **Claude with your own Anthropic key** (the default), or **Claude through your AWS account** (Amazon Bedrock,
+  `[ai] provider = "bedrock"`, signed with your AWS credentials, no Anthropic key).
+* **Another provider or a local model** (OpenAI-compatible APIs, OpenRouter, Ollama and others), with extra checks
+  for smaller models.
+* **No key at all:** `--read-with-assistant` hands each datasheet read to an AI assistant you already use
+  ([below](#no-api-key)). Nothing is paid, and ecadlib sends nothing to an AI service.
+
+Parts found in KiCad's libraries, EasyEDA/LCSC or the standard package table need no model and no key.
 
 ### DigiKey, Mouser and Nexar keys (optional, free)
 
@@ -179,7 +199,11 @@ written:
   ecadlib-demo/librarian/demo_bom_demo/plan.json     the library plan
   ecadlib-demo/librarian/demo_bom_demo/review.md     review: what to check, part by part
   ecadlib-demo/librarian/demo_bom_demo/models/       11 Altium files (.SchLib, .PcbLib)
-  ecadlib-demo/kicad/demo_bom_demo/                  KiCad: .kicad_dbl, .kicad_sym, .pretty/
+  ecadlib-demo/kicad/demo_bom_demo/                  KiCad: ecadlib_demo.kicad_dbl, ecadlib_demo.kicad_sym, ecadlib_demo.pretty/
+next:
+  ecadlib status --workspace ecadlib-demo  # one-screen summary
+  ecadlib ui --workspace ecadlib-demo      # look at it in the browser (held parts, sign-off, exports)
+  ecadlib init                             # set up for your own libraries and BOMs
 ```
 
 CH340C is held on purpose (the demo has no symbol for it), so you see what a held part looks like. The regulator and
@@ -211,6 +235,12 @@ ecadlib datasheet estimate my_bom.csv            # optional: what the AI reads w
 ecadlib librarian my_bom.csv                     # writes ecadlib_workspace/librarian/my_bom (the init workspace)
 ecadlib status                                   # ready, held, waiting for sign-off
 ```
+
+<a id="no-api-key"></a>**No API key?** Add `--read-with-assistant` to the librarian command. Nothing is sent to any AI
+service: each datasheet read the run needs is written to `<plan folder>/datasheet/assistant/` as a request, the PDF
+pages and the answer format. Ask an assistant you already use (Claude Code, Claude Desktop or another chat that reads
+PDFs) to answer each `request.md`, then run the same command again. The answers go through the same checks and holds
+as a paid read. Details: [docs/bom-and-datasheets.md](docs/bom-and-datasheets.md#no-api-key-your-own-assistant-reads-the-datasheets-ds_assistantpy).
 
 **3. Deal with held parts.** `ecadlib review` goes through them one at a time: why each is held, ranked symbol or
 footprint candidates to pick from, or **release anyway** after you have looked (recorded in the plan).
@@ -246,7 +276,7 @@ builds an install package, and `ecadlib kicad-export` writes KiCad libraries.
 ```
 ecadlib part status ecadlib_workspace/librarian/my_bom/plan.json   # released parts with a change waiting for a person
 ecadlib upkeep ecadlib_workspace/librarian/my_bom/plan.json --github issue   # lifecycle, KiCad upstream, A365 drift
-ecadlib style check ecadlib_workspace/librarian/my_bom/plan.json             # how far new parts are from your style
+ecadlib style check ecadlib_workspace/librarian/my_bom/plan.json             # how far new parts are from your style (after `ecadlib style learn`)
 ```
 
 [`examples/upkeep.yml`](examples/upkeep.yml) is a ready-to-copy weekly GitHub Actions job for your library repo. See
@@ -260,7 +290,10 @@ What has been measured so far:
 
 | What | Result | What it tells you |
 |---|---|---|
-| **Reading real datasheets** (the number that matters) | 86 of 110 real parts built fully right (78 %), 0 built wrong | Claude Opus 5.5's live datasheet reads of 2026-10-25 plus two targeted re-reads, re-scored free on current code (87 on the code of PR #194; a stricter rule since then holds one part). The live run itself scored 77. The 23 misses were held or left unread, never built. The code was tuned on these same parts, so a fresh set is the real test. Method, every miss and earlier runs: [docs/benchmark.md](docs/benchmark.md). |
+| **Reading real datasheets** (the number that matters) | 86 of 110 real parts built fully right (78 %), measured 2026-10-29 | Claude Opus 5.5's live datasheet reads of 2026-10-25 plus two targeted re-reads, re-scored free on the code of that week. The live run itself scored 77. The code was tuned on these same parts, so this flatters it. On 40 parts it had not seen, a first pass in November built some parts wrong; those causes are fixed, but they were fixed while looking at those 40 too. A fresh set is the real test and is still to come. Check every part before you build a board with it. Method, every miss and earlier runs: [docs/benchmark.md](docs/benchmark.md). |
+| **A 1000-part BOM** (998 lines of real parts, many makers) | 709 of 998 ready with no person's look, measured 2026-11-20 on the code of that day | An offline replay of the whole pipeline with saved datasheets, the datasheet reads made by Claude Haiku 5.5 (on Amazon Bedrock, about half a cent a part). The rest were held, mostly for a missing symbol, footprint or datasheet, not for a bad read. The first run released one part built wrong (an oscillator's pad misread); the check that missed it was fixed (PR #279) before the 709. None of the 709 was found built wrong. |
+| **Real open-source BOMs**, no keys and no AI | 95 of 323 lines ready across 9 BOMs from open-source boards, measured 2026-11-22 on main with PR #284 | A fresh install as a new user, with no API key, no DigiKey / Mouser / Nexar keys and no EasyEDA (the test machine could not reach it). The rest wait for a key, a datasheet read or a person. Version 0.4.0 from PyPI got 0 of 16 ready on the first of those BOMs, where main of the same day got 6. What the test found was fixed in PR #284. |
+| **Public BOMs in bulk**, no keys and no AI | 1,552 BOM files from 1,301 open-source hardware projects on GitHub, 2026-11-22: no crashes (one run stopped on a footprint name, now fixed) | A stress test of BOM reading, not an accuracy number. With fake BOMs in the same formats, it found three ways a part could be built wrong (a resistor value that disagreed with its part number, a chip size read as a value, a part number's size under a footprint name of another size); all three are held now (PR #285). With the KiCad source on 150 of the BOMs, the 68 ready ICs, connectors and switches were checked by hand and none was wrong. |
 | Footprint generator (replay check) | 328 / 331 on every pull request | Given a correct package description, the generator draws the right pads. It does not test datasheet reading. |
 | Altium Designer 26 | Tried | The generated libraries, the ecadlib menu and parts released to Altium 365. Older Altium versions are untested. |
 | Keeping it current (lifecycle, KiCad upstream, Altium 365 drift, upkeep) | Offline tests; the KiCad upstream check run live | The distributor, Nexar and GitHub calls are tested against their documented responses, not yet on a real library over months. |

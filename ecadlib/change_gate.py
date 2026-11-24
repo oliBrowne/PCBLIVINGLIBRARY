@@ -102,6 +102,10 @@ NOT_LIBRARY_WRITERS = {
     "ecadlib.review_cli": "release anyway (status only); its choices go through ecadlib.resolve (gated)",
     "ecadlib.change_cli": "ecadlib part: the gate's own approve / reject / revert",
     "ecadlib.change_gate": "the gate itself",
+    "ecadlib.store_record": "shared store record files (JSON) in the folder a person names; library files go through the "
+                            "librarian (gated)",
+    "ecadlib.store_cli": "ecadlib store share / get: record files in the folder a person names, never library files",
+    "ecadlib.store_repo": "the shared store's own repository (record files), not a library",
     "ecadlib.upkeep": "upkeep --apply reconverts through change_gate.guarded_rewrite (writer upstream-update)",
 }
 

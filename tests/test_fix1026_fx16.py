@@ -7,7 +7,9 @@ from unittest import mock
 from tests.fixtures_lite import lite
 
 _KEYS = {"GW1_KEY": "sk-gw1-secret", "GW2_KEY": "sk-gw2", "PROXY_KEY": "sk-proxy-secret", "OPENAI_API_KEY": "sk-openai",
-         "OR_KEY": "sk-or-secret", "ECADLIB_NO_STORED_KEYS": "1"}
+         "OR_KEY": "sk-or-secret", "ECADLIB_NO_STORED_KEYS": "1",
+         # review 2026-11-23 (2.2): a key under a name of your own goes to a server of your own only once you allowed it
+         "ECADLIB_KEY_HOSTS": "GW1_KEY=gw1.example.com,GW2_KEY=gw2.example.net,PROXY_KEY=openai-proxy.corp.example"}
 _CLEAR = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY")
 GW0, GW1, GW2 = "https://gw0.example.org/v1", "https://gw1.example.com/v1", "https://gw2.example.net/v1"
 PROXY = "https://openai-proxy.corp.example/v1"

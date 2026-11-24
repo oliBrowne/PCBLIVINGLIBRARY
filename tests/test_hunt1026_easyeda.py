@@ -192,7 +192,7 @@ def test_same_maker():
                  ("Alpha & Omega Semiconductor", "AOS"), ("muRata(村田)", "Murata Electronics"),
                  ("Vishay Dale", "Vishay Intertech")):
         assert S(a, b) and S(b, a), (a, b)
-    for a, b in (("TI", "UMW(友台半导体)"), ("Nexperia", "NXP"), ("", "TI"), ("Texas Instruments", "Microchip")):
+    for a, b in (("TI", "UMW(友台半导体)"), ("Nexperia", "onsemi"), ("", "TI"), ("Texas Instruments", "Microchip")):
         assert not S(a, b) and not S(b, a), (a, b)
 
 

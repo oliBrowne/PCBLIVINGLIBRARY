@@ -17,7 +17,7 @@ key), PdfStore (download + %PDF check + provenance), prepare (page ranges, auto 
 ResultCache (PDF hash + model + schema version: re-runs are free), Reader (one job per part -> cache, a synchronous
 call, or one Message Batch with custom_id = part name, resumable through <out>/datasheet/batch_state.json),
 fill_plan (a librarian plan's open parts -> batch -> .SchLib/.PcbLib marked verify -> release check)."""
-import argparse, base64, contextlib, copy, datetime, hashlib, io, json, math, os, random, re, sys, threading, time, unicodedata
+import argparse, base64, contextlib, copy, datetime, glob, hashlib, io, json, math, os, random, re, sys, threading, time, unicodedata
 from pathlib import Path
 
 import requests
@@ -1134,6 +1134,11 @@ def require_key(key=None, rules=None, via_rules=True):
     ai = ((rules or {}).get("ai") or {}) if isinstance(rules, dict) else {}
     # another provider's key ([ai] provider = openai ...) is never sent to the Claude API
     ai_var = ai.get("api_key_env") if str(ai.get("provider") or "anthropic").strip().lower() == "anthropic" else None
+    from . import keyhosts as KH                      # review 2026-11-23 (2.2): a rules file names the key; one that
+    if ai_var and not KH.ok(ai_var, KH.ANTHROPIC):    # belongs to another service (OPENAI_API_KEY, GITLAB_TOKEN) is
+        ai_var = None                                 # never sent to the Claude API: ANTHROPIC_API_KEY is used
+    if not KH.ok(var, KH.ANTHROPIC):
+        var = SETTINGS["api_key_env"]
     if ai_var and var == SETTINGS["api_key_env"]:     # [datasheet] at its default: the [ai] key variable decides
         var = ai_var
     key = key or UC.secret(var) or (UC.secret(ai_var) if ai_var else None) or UC.secret("ANTHROPIC_API_KEY")
@@ -2144,11 +2149,24 @@ def _header_mount(spec):
     return []
 
 
+ELECTROLYTIC_CAN = re.compile(r"alumin(?:i)?um[\w\s,-]{0,40}?electrolytic|\bCP_Elec_", re.I)
+NOT_CAN = re.compile(r"tantal|niob|non-?\s*electrolytic|polymer", re.I)   # solid / polymer chips: block bodies
+
+
+def _electrolytic_can(spec):
+    """An SMD aluminium electrolytic, by the read's description or KiCad's CP_Elec_ name: its two terminals are strips
+    0.65-1.3 mm wide under a 6.6-19 mm base plate (Panasonic FK/FC, Nichicon UWX, Wurth WCAP-ASLI), 7-13 % of the
+    body width (2026-11-22: EEE-FK1V101P's W 0.90 on an 8.3 mm plate was refused as a misread)."""
+    text = f"{spec.get('name') or ''} {spec.get('description') or ''}"
+    return bool(ELECTROLYTIC_CAN.search(text)) and not NOT_CAN.search(text)
+
+
 def _two_terminal_terms(spec):
     """A chip / molded part's terminals against its body (review 196 R-RD-1): a terminal in inches (SMC's terminal_width
     0.108-0.125 "mm"), wider than the body, or an inner_span as long as the body builds pads off the part with nothing
     else to catch it. Bounds no real part breaks (KiCad's 74 chip sizes, JEDEC DO-214, EIA tantalum cases, MELF): the
-    terminal_length max at least 5 % of the body length, terminal_width max at least 20 % of the body width and its nom
+    terminal_length max at least 5 % of the body length, terminal_width max at least 20 % of the body width (5 % for an
+    aluminium electrolytic whose maker's land sizes the pads: its terminals are narrow strips) and its nom
     no more than 1.1 x the body's, the inner_span max under the body length min. A molded part's terminal_width is
     needed: left blank, the pads would be built as wide as the body; a MELF's end caps are about its diameter.
     -> review lines (a failed read)."""
@@ -2160,9 +2178,10 @@ def _two_terminal_terms(spec):
     if T and L and 0 < T[2] < 0.05 * L[1]:
         out.append(f"terminal_length max {T[2]:g} mm is under 5% of the {L[1]:g} mm body_length, which is implausible "
                    "for a terminal (unit mislabelled, inches read as mm?)")
-    if b and W and 0 < b[2] < 0.2 * W[1]:
-        out.append(f"terminal_width max {b[2]:g} mm is under 20% of the {W[1]:g} mm body_width, which is implausible "
-                   "for a terminal (unit mislabelled, inches read as mm?)")
+    floor = 0.05 if _electrolytic_can(spec) and F.lead_land(spec) else 0.2   # (a can's strips under its base plate)
+    if b and W and 0 < b[2] < floor * W[1]:
+        out.append(f"terminal_width max {b[2]:g} mm is under {floor:.0%} of the {W[1]:g} mm body_width, which is "
+                   "implausible for a terminal (unit mislabelled, inches read as mm?)")
     if b and W and spec.get("lead_type") == "melf" and b[2] < 0.6 * W[1]:   # a MELF's end caps are its diameter
         out.append(f"terminal_width max {b[2]:g} mm is under 60% of the {W[1]:g} mm body diameter, which is implausible "
                    "for a MELF's end caps (they are as wide as the body; a land width read as the terminal?)")
@@ -3145,6 +3164,98 @@ def two_sided(spec, review):
                   f"{spec['name']} is a two-sided package; check against the drawing")
 
 
+ROWS_UNREAD = "pins per side not read"
+
+
+def rows_blank(spec):
+    """A no-lead read that gives no row split, no pin_sides and no pin_positions (and has a pin count to split)."""
+    n = spec.get("pin_count")
+    return spec.get("package_type") == "qfn" and isinstance(n, int) and not isinstance(n, bool) and n > 0 \
+        and "pins_left_right" not in spec and "pins_top_bottom" not in spec and not F.listed_sides(spec) \
+        and not spec.get("pin_positions")
+
+
+def standard_rows(spec):
+    """(pins_left_right, pins_top_bottom, table name, how) from the one checked standard package the read's name
+    resolves to, or else the one its own pin count, pitch, body and exposed pad name (stdparts.identify, which never
+    looks at the rows), or None."""
+    from . import stdparts as SP
+    said = str(spec.get("name") or "")
+    for how, find in (("the read names", lambda: SP.footprint_for([str(spec.get("name") or "")])[0]),
+                      ("the read's pin count, pitch, body and exposed pad name", lambda: SP.identify(spec)[0])):
+        if how != "the read names" and NOT_QUAD_ROWS.search(said):
+            continue                                  # (review 2026-11-23 round 3, B2) "FCQFN16" with an ordinary QFN-16's
+        try:                                          # numbers is no ordinary QFN-16: its name says so
+            name = find()
+            t = SP.spec(name) if name else None
+        except Exception:                             # a name or read stdparts cannot judge names no package
+            t = None
+        if t and t.get("package_type") == "qfn" and t.get("pin_count") == spec.get("pin_count") \
+                and all(isinstance(t.get(k), int) for k in ("pins_left_right", "pins_top_bottom")):
+            return t["pins_left_right"], t["pins_top_bottom"], name, how
+    return None
+
+
+# a four-sided no-lead package by its name: QFN with JEDEC's height letters (VQFN, WQFN, TQFN, UQFN, LQFN, XQFN, X2QFN,
+# HVQFN, UTQFN), ST's VFQFPN / UFQFPN / WFQFPN / TFQFPN, LFCSP and MLF, after a vendor prefix or a lead count. Not MLP /
+# LLP (makers use them for DFNs too), and not a name that says power, dual-row or flip-chip (PQFN, DRQFN, aQFN, VQFN-HR:
+# their pads are not four equal rows)
+QUAD_ROW_NAME = re.compile(r"(?:^|[-_\s\d])(?:[HU]?[VWTULX]2?QFN|QFN|[VUWT]FQFPN|LFCSP|MLF)(?![A-Z])", re.I)
+# (2026-11-23 review round 3, B2: FC-QFN-16, DR-QFN-44 and QFN-16-HR got the default: FC / DR may stand apart before the
+# QFN word, and FC / DR / HR after it or after its lead count, never as the start of a longer word: "QFN-16 (DRB)")
+NOT_QUAD_ROWS = re.compile(r"PQFN|DRQFN|AQFN|FCQFN|power|dual|multi|two.?row|stagger|flip|hot.?rod|"
+                           r"(?<![A-Z])(?:FC|DR)[-_\s]*[A-Z]{0,2}2?QFN|QFN[-_\s]*(?:\d+[-_\s]*)?(?:HR|FC|DR)(?![A-Z])", re.I)
+QUAD_ROW_MIN = 12                                         # under 12 pins a square no-lead body is as often two-sided
+QUAD_SQUARE = 0.05                                        # mm the body's two nominals may differ and still be square
+
+
+def quad_rows(spec):
+    """pin_count / 4 when a no-lead read with no rows can only be four equal rows (review 2026-11-23, round 2: every
+    ordinary QFN-16 / 20 / 24 / 32 / 48 whose read left the rows blank was held), else None. All of: the name says a
+    four-sided no-lead package (QUAD_ROW_NAME); the body is square; pin_count is a multiple of 4 and at least
+    QUAD_ROW_MIN; a quarter of the pins fits along a side at the read's pitch; and half of them does not (so the pins
+    cannot be on two sides only: a 3 x 3 mm "QFN-12" of 0.45 mm pitch may be a DFN-12 and stays held). The split is still
+    the default's, not a reading: crosscheck compares it with the sides the second read gives (pin_positions)."""
+    n, name = spec.get("pin_count"), str(spec.get("name") or "")
+    if not rows_blank(spec) or n < QUAD_ROW_MIN or n % 4 or not QUAD_ROW_NAME.search(name) or NOT_QUAD_ROWS.search(name):
+        return None
+    side, other, pitch = _nom(spec.get("body_length")), _nom(spec.get("body_width")), _nom(spec.get("pitch"))
+    if not side or not other or not pitch or abs(side - other) > QUAD_SQUARE:
+        return None
+    lead = _nom(spec.get("terminal_width")) or 0.0
+    along = lambda k: (k - 1) * pitch + lead              # the length a row of k terminals takes
+    return n // 4 if along(n // 4) <= side + 1e-9 < along(n // 2) else None
+
+
+def rows_unread(spec, review):
+    """A no-lead read with no row split left after two_sided (review 2026-11-23, 1.8: a DFN-8 3 x 3 named MLP-8 was
+    built 2 + 2 + 2 + 2 by footprint_gen's quarter-per-side default, the second read agreed and it was released). The
+    split is a default only where nothing else fits (quad_rows: a square QFN of 12 pins or more whose pins cannot be on
+    two sides): a checked standard package the read names (by its name, or by its numbers) gives the rows, with a review
+    line; otherwise the read fails (ds_route.FAILED: "pins per side", a hard line: the part is held)."""
+    if not rows_blank(spec):
+        return
+    got = standard_rows(spec)
+    n = spec["pin_count"]
+    if got:
+        spec["pins_left_right"], spec["pins_top_bottom"] = got[0], got[1]
+        review.append(f"pins_left_right / pins_top_bottom were left blank: {got[0]} per side left and right, {got[1]} top "
+                      f"and bottom, as the checked standard package {got[2]} ({got[3]}) has them; check against the "
+                      "drawing")
+        return
+    per = quad_rows(spec)
+    if per:
+        spec["pins_left_right"] = spec["pins_top_bottom"] = per
+        review.append(f"pins_left_right / pins_top_bottom were left blank: {per} per side on four sides, as {spec['name']} "
+                      f"is a four-sided no-lead package with a square body and {n} pins do not fit on two sides at its "
+                      "pitch; check against the drawing")
+        return
+    review.append(f"{ROWS_UNREAD}: {n} pins on a no-lead package and pins_left_right / pins_top_bottom / pin_sides all "
+                  "left blank, and no checked standard package gives the rows; a quarter of the pins on each of four "
+                  f"sides would be a guess (an {n}-pin DFN has {n // 2} on each of two sides): give the split or list "
+                  "the sides in pin_sides, from the pin figure")
+
+
 def _pin_count_from(spec, ext):
     """A read that left pin_count blank (UCC25800, UCC256301: live benchmark 2026-10-19) -> (n, how) from the package
     name it gave (SOIC-16, HTSSOP-20-1EP_...) and the pin table, when they agree or only one is there; (None, "").
@@ -3291,6 +3402,7 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             spec["pin_count"] = n
             review.append(f"pin_count was left blank: {n} from {how}; check it against the drawing")
     two_sided(spec, review)
+    rows_unread(spec, review)
     grid_from_balls(spec, ext, review)
     ep_number(spec, ext, review)
     read_ext, read_pins = ext, ext["pins"]            # as read: the review and the cross-check compare these
@@ -3325,9 +3437,18 @@ def process(ext, part, datasheet, model=MODEL, offset=0, msg=None, n_sent=None, 
             pass
         except Exception as e:
             review.append(f"footprint_adv.check_pad_table failed: {e!r}")
-    if ok:
+    # the build checks run whenever the read builds, schema error or not: the librarian builds the same spec without
+    # the schema (review 2026-11-23: a schema error skipped the standard package's, the land's and the shorts checks,
+    # and "schema:" alone holds nothing). A read that fails the schema and does not build has its schema lines
+    built = None
+    try:
+        built = F.build(spec)
+    except Exception as e:
+        if ok:
+            review.append(f"footprint_gen.build failed: {e!r}")
+    if built:
         try:
-            txt, rep = F.build(spec)
+            txt, rep = built
             from . import sexpr
             sexpr.parse(txt)
             far = std_copper(spec, rep)
@@ -4121,14 +4242,15 @@ def _nat64_ipv4(ip):
     return [ipaddress.IPv4Address(bytes(x)) for x in (b[12:16], b[6:8] + b[9:11], b[7:8] + b[9:12], b[9:13])]
 
 
-def unsafe_download(url, public=False):
+def unsafe_download(url, public=False, resolve=True):
     """Why a datasheet link must not be downloaded, or None: only http(s), and never this machine (loopback), a
     link-local address (cloud metadata at 169.254.169.254) or another non-routable address. A datasheet link comes
     from a BOM or a web page someone else wrote, and the bytes are stored and sent to the model; a datasheet server
     on your own network (10.x, 192.168.x) stays allowed. A host name is looked up and refused when any address it
     resolves to is one of those (169.254.169.254.nip.io, localtest.me ...); names under .example / .test / .invalid
     are not looked up. public: a link a web search gave (no person chose it): a private network's address is refused
-    too.
+    too. resolve=False: the link's text only, no name lookup (a check that must not reach the network, e.g. of a
+    shared-store record a stranger wrote: a lookup would tell their DNS server who reads it).
     Limits (the best a check before the request can do): the lookup here is not the one the HTTP stack makes when it
     connects, so a name whose answer changes between the two (DNS rebinding) is not caught; and behind an HTTP proxy
     (HTTPS_PROXY) the proxy resolves the name itself, from its own network, so the answer here is only a guess at
@@ -4156,7 +4278,7 @@ def unsafe_download(url, public=False):
         if re.search(r"\.(example|test|invalid)\.?$", host, re.I):
             return None
         ips = []
-        for a in _resolve(host):
+        for a in (_resolve(host) if resolve else ()):
             try:
                 ips.append(ipaddress.ip_address(a.split("%")[0]))
             except ValueError:
@@ -4891,6 +5013,62 @@ def hold_on_doubt(inf, model, res):
                                  "read the datasheet yourself")
 
 
+
+def _pad_rows(t):
+    """A pad table (or its JSON text) as a comparable list of its pads' and arrays' numbers, places and sizes."""
+    if isinstance(t, str):
+        try:
+            t = json.loads(t) if t.strip() else None
+        except (ValueError, RecursionError):
+            return None
+    if not isinstance(t, dict):
+        return None
+    rows = [json.dumps(p, sort_keys=True) for p in (t.get("pads") or []) + (t.get("arrays") or []) if isinstance(p, dict)]
+    return sorted(rows) or None
+
+
+def _own_second_read(msg, body, base, here, job):
+    """Raise crosscheck.Unavailable unless the assistant's answer in a check folder is a second read of its own: the
+    check's own schema (no field of a full extraction), and not any first read's answer for this part copied in
+    (review 2026-11-23: the first answer.json copied into the check folder agreed with itself and was released)."""
+    from . import crosscheck as CC
+    text = msg["content"][0]["text"]
+    try:
+        got = json.loads(text)
+    except ValueError:
+        got = None
+    schema = ((body.get("output_config") or {}).get("format") or {}).get("schema") or {}
+    top = set((schema.get("properties") or {}))
+    pkg = set(((schema.get("properties") or {}).get("package") or {}).get("properties") or ())
+    if not isinstance(got, dict) or not top or set(got) - top or not isinstance(got.get("package"), dict) \
+            or (pkg and set(got["package"]) - pkg) or not got["package"].get("package_type") \
+            or not isinstance(got["package"].get("dims"), list):
+        extra = sorted((set(got) - top) | (set(got["package"]) - pkg if isinstance(got.get("package"), dict) else set())
+                       ) if isinstance(got, dict) else []
+        raise CC.Unavailable(f"{here.name}/answer.json is not in the second read's own schema"
+                             + (f" ({', '.join(extra[:4])} not in it)" if extra else "")
+                             + ": answer it afresh from its pages (see request.md there)")
+    stem = here.name.rsplit("-check-", 1)[0]
+    mine = _pad_rows(got["package"].get("pad_table_json"))
+    for f in Path(base).glob(f"{glob.escape(stem)}-*/answer.json"):
+        if "-check-" in f.parent.name or f.parent == here:
+            continue
+        try:
+            first = json.loads(f.read_text(encoding="utf-8-sig"))
+            if first == got:
+                raise CC.Unavailable(f"{here.name}/answer.json is the first read's answer ({f.parent.name}) copied: "
+                                     "a second read must be made afresh from its own pages")
+            # the first read's pad table copied into an otherwise fresh answer: its pads would agree with themselves
+            pkg = first.get("package") if isinstance(first, dict) else None
+            other = json.loads(pkg.get("other_json") or "{}") if isinstance(pkg, dict) and \
+                isinstance(pkg.get("other_json"), str) else (pkg or {}).get("other_json") if isinstance(pkg, dict) else None
+            theirs = _pad_rows((other or {}).get("pad_table") if isinstance(other, dict) else None)
+            if mine and theirs and mine == theirs:
+                raise CC.Unavailable(f"{here.name}/answer.json copies the first read's pad table ({f.parent.name}): "
+                                     "a second read must read the land drawing afresh")
+        except (OSError, ValueError, RecursionError, AttributeError):
+            continue
+
 class Reader:
     """Reads datasheets for many parts. job() finds and validates the PDF, cached() answers from the result cache,
     read_now() makes one synchronous call; with batch=True (or estimate=True) jobs are collected with submit() and
@@ -5302,6 +5480,20 @@ class Reader:
             if got[0] is not None:
                 how = got[2].replace("in the datasheet folder", "saved by your assistant (datasheet/assistant/pdfs)")
                 data, prov = got[0], dict(got[1], where=how)
+                # an AI agent chose and saved this file: the same test a downloaded link gets (PdfStore.fetch), not
+                # the file's name alone (review 2026-11-23: another part's PDF under this part's name was read, and the
+                # land text, the pin table and the second read all then agreed with that same wrong PDF)
+                bad = self._not_this_part(data, mpn or part)
+                if bad and bad[0] == "other":         # a notice or certificate: nothing of the part to read
+                    how = f"{prov['local']} in your assistant's pdfs folder: {bad[1]}: replace it with the datasheet"
+                    attempts.append({"url": prov["local"], "where": "datasheet folder", "error": how})
+                    data, prov = None, None
+                elif bad:                             # read, flagged: its review line keeps the part with a person
+                    # ("untold": no text layer, or too little text to tell by. A link's PDF like that is read on the
+                    # link's word; this file has only an AI agent's choice behind it. Review 2026-11-23, round 2)
+                    prov["unnamed"] = f"{prov['local']} saved by your assistant (datasheet/assistant/pdfs) " + (
+                        f"doesn't mention {mpn or part}" if bad[0] == "unnamed" else
+                        f"has no text to tell by that it is {mpn or part}'s (a scan?)")
         note = folder_problem(self.cfg.get("folder")) if data is None else None
         tries = [(v, w) for u, w in urls for v in dict.fromkeys((u, api_url(u)))] if data is None else []
         for url, where in tries:                      # http, then https
@@ -5412,6 +5604,25 @@ class Reader:
         base = dict(job, url=url, where=where, src_hash="url" + hashlib.sha256(url.encode()).hexdigest(), base_prov=prov,
                     more_urls=rest[1:])
         return self._walk(self._at(base, job["rung"], job["level"]))
+
+    @staticmethod
+    def _not_this_part(data, mpn):
+        """PdfStore.fetch's test of a downloaded PDF, for a file taken on its name: ("other", why) for a notice or a
+        certificate (not_a_datasheet), ("unnamed", None) when its first pages do not name the part (mentions_part says
+        False), ("untold", None) when it cannot be told (no text layer, text that does not read, a part number too
+        short to look for: the file is not refused, as a download is not, but the caller says so), None when they name
+        it."""
+        from . import ds_route as DR
+        try:
+            other = not_a_datasheet(DR.page_texts(data, 1), NEVER_DATASHEET)
+            if other:
+                return "other", other
+            said = mentions_part(DR.page_texts(data, MENTION_PAGES), mpn)
+            if said is False and (pdf_pages(data) or 0) > MENTION_BIG:
+                said = mentions_part(DR.page_texts(data, MENTION_DEEP), mpn)
+        except Exception:                             # a PDF whose text does not read: it cannot be told
+            return "untold", None
+        return None if said else ("unnamed", None) if said is False else ("untold", None)
 
     def _folder_pdf(self, part, urls, kinds, attempts, folder=None):
         """The part's PDF from the [datasheet] folder (or `folder`: the assistant's pdfs folder) when a file there is
@@ -5687,7 +5898,9 @@ class Reader:
         if job["prov"].get("found_by") == "web search":
             res["needs_review"].append(SEARCHED)
         if job["prov"].get("unnamed"):
-            res["needs_review"].append(f"{job['prov']['unnamed']} (no other link gave a PDF): check it is this part's datasheet")
+            res["needs_review"].append(f"{job['prov']['unnamed']} ("
+                                       + ("it was taken on its file name" if job["prov"].get("local") else "no other link gave a PDF")
+                                       + "): check it is this part's datasheet")
         if job["prov"].get("local") and re.search(r"\((?:a family datasheet|named for another part number)", str(job["prov"].get("where"))):
             res["needs_review"].append(f"datasheet from your folder: {job['prov']['where']}; check it covers this part")
         for o in job["prov"].get("outline") or ():
@@ -5723,8 +5936,26 @@ class Reader:
         its tokens and USD go to cost.jsonl. -> (message, via). Raises crosscheck.Unavailable."""
         from . import crosscheck as CC, ds_route as DR
         rec = self.results.get_check(key)
-        if rec and "message" in rec:
-            return rec["message"], "cached"
+        if rec and "message" in rec:                  # (an assistant's answer is named so in the report, cached or not)
+            return rec["message"], "assistant" if rec.get("via") == "assistant" else "cached"
+        if self.assistant is not None:                # reader = "assistant": its own folder (<part>-check-<key>), read
+            from . import ds_assistant as DA          # from the pages alone, judged by the same code as the API's
+            ajob = dict(job, key=key, body=body, name=str(job.get("name") or job.get("part")))   # <part>-check-<key>
+            here = DA.folder(self.assistant, ajob)
+            try:
+                msg = DA.answer(self.assistant, ajob)
+            except DatasheetError as e:               # a broken answer.json holds the part, saying why
+                raise CC.Unavailable(str(e))
+            self.assistant_asked.add(here.name)
+            if msg is None:
+                d = DA.request(self.assistant, ajob)
+                raise CC.Unavailable(f"waiting for your assistant's second read: {d.name} (see READ_ME.md there)")
+            _own_second_read(msg, body, self.assistant, here, job)
+            CC.parse(msg)                             # (kept only once it reads: a fixed answer.json is read again)
+            self.results.put(key, {"key": key, "part": job["part"], "url": job.get("url", ""), "model": "assistant",
+                                   "via": "assistant", "purpose": "cross_check", "message": msg,
+                                   "at": datetime.datetime.now().isoformat(timespec="seconds")})
+            return msg, "assistant"
         if self.estimate_only or not self.key:
             raise CC.Unavailable("no answer: no key for the second read")
         from .llm import rails as LRL
@@ -5751,7 +5982,10 @@ class Reader:
             if isinstance(e, APIError):
                 raise                                 # no answer came back: the part is retried next run
             raise CC.Unavailable(str(e)[:200])
-        msg = LRL.repair_message(msg, CC.output_schema(), p)
+        # (the schema that was asked: with pin_rows for a placed read and every no-lead package, which the plain schema
+        # would have the repair drop; review 2026-11-23, 1.8)
+        asked = ((body.get("output_config") or {}).get("format") or {}).get("schema") if isinstance(body.get("output_config"), dict) else None
+        msg = LRL.repair_message(msg, asked or CC.output_schema(), p)
         self._settle(key, model, msg, "sync")
         r = DR.attempt_record(job["part"], job.get("name"), model, msg, "sync", pages_sent, job.get("n_pages"), "cross-check")
         r["purpose"] = "cross_check"

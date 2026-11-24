@@ -54,6 +54,34 @@ jobs:
           PYTHONUTF8: "1"
         run: python -m tests.run_all
 
+  pip-install:
+    # What a Windows user who types `pip install ecadlib` gets: the wheel in a clean venv, then the first commands from
+    # the README (demo, init, doctor, librarian on their own BOM, status) from outside the checkout. No PYTHONUTF8 here
+    # (the test job sets it), so a print a Windows console can't encode fails this job.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install build
+      - run: python -m build --wheel
+      - name: Install the wheel in a clean venv and run the first commands
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m venv "$env:RUNNER_TEMP\venv"
+          $whl = (Get-ChildItem dist -Filter *.whl)[0].FullName
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" -m pip install -q $whl; if ($LASTEXITCODE) { exit 1 }
+          Push-Location $env:RUNNER_TEMP
+          & "$env:RUNNER_TEMP\venv\Scripts\python.exe" "$env:GITHUB_WORKSPACE\.github\scripts\smoke_installed.py"
+          if ($LASTEXITCODE) { exit 1 }
+          Pop-Location
+
   installer:
     runs-on: windows-latest
     defaults:
@@ -104,13 +132,20 @@ jobs:
           $ok = $false
           foreach ($i in 1..60) {
             Start-Sleep -Seconds 1
-            try { $s = Invoke-RestMethod "http://127.0.0.1:8790/api/setup"; $ok = $true; break } catch { }
+            # the page answers only with the key of this run (kept in this user's settings folder)
+            try {
+              $key = @{ "X-Ecadlib-Key" = (Get-Content "$env:ECADLIB_HOME\run\ui-8790.json" -Raw | ConvertFrom-Json).key }
+              $s = Invoke-RestMethod "http://127.0.0.1:8790/api/setup" -Headers $key; $ok = $true; break
+            } catch { }
           }
           if (-not $ok) { Get-Content "$env:ECADLIB_HOME\app.log" -ErrorAction SilentlyContinue; throw "the app did not start" }
           if (-not $s.frozen) { throw "not running the frozen app" }
           $page = Invoke-WebRequest "http://127.0.0.1:8790/setup" -UseBasicParsing
           if ($page.Content -notmatch "ecadlib setup") { throw "no setup page" }
-          $alt = Invoke-RestMethod "http://127.0.0.1:8790/api/setup/altium" -Method Post -ContentType "application/json" -Body "{}"
+          $refused = $false
+          try { Invoke-RestMethod "http://127.0.0.1:8790/api/setup" | Out-Null } catch { $refused = $_.Exception.Response.StatusCode.value__ -eq 401 }
+          if (-not $refused) { throw "the app answered a request without its key" }
+          $alt = Invoke-RestMethod "http://127.0.0.1:8790/api/setup/altium" -Method Post -ContentType "application/json" -Body "{}" -Headers $key
           if (-not (Test-Path $alt.project)) { throw "no Altium script project" }
           if (-not (Test-Path $alt.menu_file)) { throw "no Altium menu file" }
           Select-String -Path (Join-Path $alt.folder "ecadlib_menu.ini") -Pattern "^command=.*ecadlib.exe"

@@ -192,7 +192,7 @@ def test_altium_pkg_keeps_the_kicad_credit(tmp_path, monkeypatch):
                                       "U2,1,LM358DR,SOIC-8_3.9x4.9mm_P1.27mm,Texas Instruments,LM358DR,,Dual op amp\n")
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         _exit_code(lambda: LB.main(["bom.csv", "-o", "lib", "--offline", "--cache", "cache"]))
-        _exit_code(lambda: RC.main(["lib/plan.json", "--allow", "LM358DR", "--user", "test"]))
+        _exit_code(lambda: RC.main(["lib/plan.json", "--allow", "LM358DR", "--user", "test", "--reason", "checked against the datasheet"]))
         PK.build(tmp_path / "lib/plan.json", tmp_path / "pkg", log=lambda *a, **k: None)
     assert KX.KICAD_NOTICE.strip() in (tmp_path / "pkg/NOTICE.txt").read_text(encoding="utf-8")
     recs = AL.read_schlib(tmp_path / "pkg/SchLib/LM358DR.SchLib")[1][0]["records"]

@@ -46,7 +46,7 @@ def counts(statuses, order=ORDER):
     return ", ".join(f"{n[w]} {w}" for w in keys) or "nothing yet"
 
 
-SOURCES = {"kicad": "KiCad library", "local": "your library", "easyeda": "EasyEDA", "standard": "standard parts",
+SOURCES = {"store": "shared store", "kicad": "KiCad library", "local": "your library", "easyeda": "EasyEDA", "standard": "standard parts",
            "datasheet": "datasheet reader", "resolve": "picked by a person", "spec": "package spec",
            "a365": "Altium 365", "generated": "footprint generator"}
 
@@ -220,6 +220,35 @@ CODES = {
                                   "Check which size the part is, then fix the BOM's footprint or its part number.",
                                   [r"^(?:verify: )?footprint: the land built is (?P<have>\S+) \(\S+\) but the part number "
                                    r"(?P<mpn>\S+) is an (?P<said>\S+):"]),
+    "librarian.source_package_clash": ("The footprint built is {have}, but the {where} names {said}.",
+                                       "Check which package the part has in its datasheet, then fix the BOM line or "
+                                       "pick the right footprint.",
+                                       [r"^(?:verify: )?footprint: the land built is (?P<have>.+?) but the "
+                                        r"(?P<where>BOM footprint|BOM description|BOM value|part search package|"
+                                        r"part search description|part number) (?:names|says) (?P<said>.+?) \("]),
+    "librarian.land_kind_clash": ("The part is filed under {cat}, but its footprint {land} is another kind's land.",
+                                  "Check which part the BOM line is, then fix its value, description or footprint.",
+                                  [r"^(?:verify: )?footprint: the part is filed under (?P<cat>\w+) but the land built "
+                                   r"is (?P<land>\S+), another kind's land"]),
+    "librarian.value_prefix": ("The Value {value} is spelled like another kind of part, but the part is filed under {cat}.",
+                               "Check which part the BOM line is, then fix its value or description.",
+                               [r"^(?:verify: )?value: Value (?P<value>.+?) is spelled with a \w+ prefix but the part "
+                                r"is filed under (?P<cat>\w+)"]),
+    "librarian.value_clash": ("The Value {value} does not match the value in the {where}.",
+                              "Check which value the part is, then fix the BOM's value or description.",
+                              [r"^(?:verify: )?value: Value (?P<value>.+?) but the (?P<where>BOM description|"
+                               r"part search description) .* names another value"]),
+    "librarian.kind_word_clash": ("The part is filed under {cat}, but the BOM description calls it a {said}.",
+                                  "Check which part the BOM line is, then fix its value or description.",
+                                  [r"^(?:verify: )?part kind: filed under (?P<cat>\w+) but the BOM description .* "
+                                   r"names an? (?P<said>\w+): check which part the BOM line is"]),
+    "librarian.check_failed": ("The {name} check could not read this BOM line, so the part is held.",
+                               "Check the part by hand, then release it or fix the BOM line.",
+                               [r"^(?:verify: )?check: the (?P<name>[a-z ]+) check could not read this line"]),
+    "librarian.maker_clash": ("The BOM names the maker {bom}, but {said}.",
+                              "Check whose part it is, then fix the BOM's maker or part number.",
+                              [r"^(?:verify: )?maker: the BOM names (?P<bom>.+?) but (?P<said>the part (?:number|search) "
+                               r".+?): check whose part it is"]),
     "librarian.thermistor_type": ("Nothing says whether this thermistor is NTC or PTC, so no symbol was chosen.",
                                   "Write NTC or PTC in the BOM line's description (or add the part number), then run again.",
                                   [r"^(?:verify: )?thermistor: NTC or PTC is not said"]),
@@ -402,6 +431,62 @@ CODES = {
                                  "Write the value without the comma on the BOM line, or release it anyway if the part is right.",
                                  [r"^(?:verify: )?value (?P<value>.+?) reads two ways: (?P<first>.+?) or (?P<second>.+?)"
                                   r"(?:; write it without the comma| \(a decimal or a thousands comma\))"]),
+    # the shared store (librarian src_store / second_opinion / store_holds, release_check.store_problems)
+    "store.disagree": ("An independent build of this part in the shared store ({record}) has other {what} than this one.",
+                       "Compare both with the datasheet (`ecadlib store get` shows the store's record), then fix this "
+                       "part or release it anyway.",
+                       [r"^(?:verify: )?shared store: the store's record (?P<record>\S+ r\d+) \(\w+\) has other "
+                        r"(?P<what>.+?) than this build"]),
+    "store.lift_back": ("This part's own build was released because the shared store's record {record} agreed with it; "
+                        "that no longer stands ({why}), so the holds it lifted are back.",
+                        "Check the part against the datasheet, or build it again with `--refresh`.",
+                        [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+):? (?P<why>.+?): this part's own build "
+                         r"was released because that record agreed with it"]),
+    "store.withdrawn": ("This part was built from the shared store's record {record}, which the store has withdrawn "
+                        "({why}).",
+                        "Build it again (`ecadlib librarian BOM --refresh PART`) or check it against the datasheet.",
+                        [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) was withdrawn from the store "
+                         r"\((?P<why>.+?)\)(?::|$)"]),
+    "store.disputed": ("This part was built from the shared store's record {record}, which someone reported as wrong.",
+                       "Check it against the datasheet (`ecadlib store get` shows the record), or build it again with "
+                       "`--refresh`.",
+                       [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is disputed"]),
+    "store.unknown": ("This part depends on the shared store's record {record}, and the store cannot tell whether it "
+                      "still stands ({why}).",
+                      "Ask the store's maintainers, or build the part again without the store (`--refresh`).",
+                      [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+): cannot tell whether the store "
+                       r"(?P<why>.+?)(?::|$)"]),
+    "store.unchecked": ("This part depends on the shared store's record {record}, and the store could not be read to "
+                        "check whether that record was withdrawn ({why}).",
+                        "Let the store be read again (go online), or check the part against the datasheet and "
+                        "release it yourself.",
+                        [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+): withdrawals could not be checked "
+                         r"(?P<why>.+?)(?::|$)"]),
+    "store.off": ("This part came from the shared store, or was released because a store record agreed with it, and "
+                  "the store is switched off, so nobody can tell this computer if that record is withdrawn.",
+                  "Check the part against the datasheet and release it yourself, or switch the store on again "
+                  "(the store's url in ecadlib.toml).",
+                  [r"^(?:verify: )?this part (?:came from the shared store|was released because a shared store record "
+                   r"agreed with it).*switched off"]),
+    "store.gone": ("This part was built from the shared store's record {record}, which the store no longer lists.",
+                   "Build it again (`ecadlib librarian BOM --refresh PART`) or check it against the datasheet.",
+                   [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is no longer (?:in the store's index|"
+                    r"the store's)"]),
+    "store.level": ("This part was built from the shared store's record {record}, which is now only {level}: below "
+                    "what your store accept setting takes.",
+                    "Check it against the datasheet, or build it again with `--refresh`.",
+                    [r"^(?:verify: )?shared store record (?P<record>\S+ r\d+) is now only (?P<level>\S+)"]),
+    "store.extras": ("The shared store's footprint for this part has {what}, which ecadlib's own check of a drawing "
+                     "does not cover.",
+                     "Compare the footprint with the datasheet, then release it anyway if it is right.",
+                     [r"^(?:verify: )?shared store: the store's footprint has (?P<what>.+?): compare"]),
+    "store.package_clash": ("The BOM names the footprint {bom}, but the shared store's record {record} is another "
+                            "package.",
+                            "Check which package the part has; fix the BOM line or pick the footprint by hand.",
+                            [r"^(?:verify: )?footprint: the BOM names (?P<bom>\S+)(?: \(\d+ pins\))? but the shared "
+                             r"store's record (?P<record>\S+ r\d+)"]),
+    "store.note": ("Shared store: {detail}.", "Check that the store's part is this part before you release it.",
+                   [r"^shared store: (?P<detail>.+)"]),
     # any other `verify` note, after the specific ones above (some of them come as verify notes too)
     "verify.other": ("A person has to check this part first: {detail}.", "Check it, then release it anyway if it is right.",
                      [r"^verify: (?P<detail>.+)"]),

@@ -9,6 +9,7 @@ from ecadlib import approvals as AP, datasheet as D, mcp_server as M
 from ecadlib.app import Workspace
 from ecadlib.httpcache import CachedHTTP
 from tests import test_ai_cost as TA, test_datasheet_batch as TB
+from tests.fixtures_lite import confirmed_call, fresh_home
 
 
 @contextlib.contextmanager
@@ -18,6 +19,7 @@ def _quiet():
 
 
 # ------------------------------------------------------------------ MCP-2: paid MCP tools need a server-side approval
+@fresh_home
 def test_mcp2_datasheet_batch_needs_the_approved_amount():
     with TA._workspace() as (ws, bom, api), _quiet():
         ws.librarian_run(bom, ai=False)
@@ -31,13 +33,16 @@ def test_mcp2_datasheet_batch_needs_the_approved_amount():
                 assert "approve" in str(e) or "more than" in str(e), e
         assert not api.of("/v1/messages"), "a paid call before the person said yes"
         q = ws.datasheet_quote(bom, sync=True)
-        r = M.call_tool(ws, "datasheet_batch", {"bom": bom, "sync": True, "approved_usd": q["approve_usd"],
-                                                 "over_limit_ok": True})
+        # security review 2026-11-23 (2.3): the amount the call passes is not the person's yes: refused, then
+        # granted by the person (ecadlib confirm), then it runs
+        r = confirmed_call(ws, "datasheet_batch", {"bom": bom, "sync": True, "approved_usd": q["approve_usd"],
+                                                   "over_limit_ok": True})
         assert api.of("/v1/messages") and r["parts"], r
         est = M.call_tool(ws, "datasheet_estimate", {"bom": bom})
         assert "ai" in est                                              # the quote datasheet_batch's approval is of
 
 
+@fresh_home
 def test_mcp2_visual_check_quotes_first_and_holds_the_call_to_the_approval():
     from ecadlib import visual_check as VC
     with tempfile.TemporaryDirectory() as d:
@@ -61,10 +66,11 @@ def test_mcp2_visual_check_quotes_first_and_holds_the_call_to_the_approval():
                 except ValueError as e:
                     assert "approve" in str(e) or "more than" in str(e), e
             assert all(r for r, _ in seen), seen                        # nothing but render-only runs so far
-            r = M.call_tool(ws, "visual_check", {"target": "footprints/X.kicad_mod", "approved_usd": 0.3})
-            assert r["verdict"] == "pass" and seen[-1] == (False, 0.3), seen
+            r = confirmed_call(ws, "visual_check", {"target": "footprints/X.kicad_mod", "approved_usd": 0.3})
+            assert r["verdict"] == "pass" and seen[-1] == (False, 0.3), seen   # 2026-11-23: after the person's own yes
 
 
+@fresh_home
 def test_mcp2_apply_house_style_ai_is_a_quote_until_approved():
     from ecadlib import house_style as HS
     with tempfile.TemporaryDirectory() as d:
@@ -87,8 +93,8 @@ def test_mcp2_apply_house_style_ai_is_a_quote_until_approved():
                 raise AssertionError("approved less than the quote")
             except ValueError:
                 assert not calls
-            M.call_tool(ws, "apply_house_style", {"bom": "b.csv", "ai": True, "approved_usd": 0.02})
-            assert calls == [1]
+            confirmed_call(ws, "apply_house_style", {"bom": "b.csv", "ai": True, "approved_usd": 0.02})
+            assert calls == [1]                                         # 2026-11-23: after the person's own yes
     # the quote itself builds the requests and sends none
     with tempfile.TemporaryDirectory() as d, mock.patch.object(HS, "_sender", lambda inf: (_ for _ in ()).throw(
             AssertionError("restyle_quote sent a request"))):

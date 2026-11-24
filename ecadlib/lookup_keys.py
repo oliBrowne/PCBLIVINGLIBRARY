@@ -113,9 +113,27 @@ def _part(pid, c):
     return S.parse_nexar_part(data, p, res, c.currency)
 
 
+_KEY_IN_TEXT = re.compile(r"(?i)\b((?:api[_-]?key|client[_-]?secret|client[_-]?id|access[_-]?token|token|secret|password)"
+                          r"[\"']?\s*[=:]\s*[\"']?)([^&\s\"',;)}\]]+)")
+
+
+def _hide(pid, text):
+    """An error text with this lookup's keys taken out: the saved values themselves (also as written inside a URL)
+    and anything after apiKey= / client_secret= / token=. Review 2026-11-23: an exception's own text was shown as
+    it came (a requests error names the URL, and Mouser's URL carries ?apiKey=<the key>)."""
+    from urllib.parse import quote, quote_plus
+    text = str(text or "")
+    names = [n for n, _ in guide(pid)["fields"]] + (["NEXAR_SUPPLY_TOKEN", "NEXAR_TOKEN"] if pid == "nexar" else [])
+    for n in names:
+        v = UC.secret(n)
+        for form in ({v, quote(v, safe=""), quote_plus(v)} if v and len(v) >= 4 else ()):
+            text = text.replace(form, "[key]")
+    return _KEY_IN_TEXT.sub(lambda m: m.group(1) + "[key]", text)
+
+
 def _why(pid, err):
     """The provider's error, plus what to do about it in words a first-time user can act on."""
-    g, e = guide(pid), str(err or "")
+    g, e = guide(pid), _hide(pid, err)
     low = e.lower()
     if any(w in low for w in ("proxy", "connection", "timeout", "timed out", "offline")):   # first: a network error's
         return f"could not reach {g['label']} ({e}): check the internet connection or proxy, then try again"  # URL may say apiKey
@@ -150,7 +168,7 @@ def check(pid, http=None):
     try:
         info = _part(pid, _client(pid, http))
     except Exception as e:                       # a provider answering in an odd shape is the check's answer, not a crash
-        return {"ok": False, "message": _why(pid, f"{type(e).__name__}: {e}"[:200])}
+        return {"ok": False, "message": _why(pid, _hide(pid, f"{type(e).__name__}: {e}")[:200])}   # hidden before the cut
     finally:
         if tmp is not None:
             tmp.cleanup()

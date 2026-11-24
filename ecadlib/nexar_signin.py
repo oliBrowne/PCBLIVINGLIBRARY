@@ -143,12 +143,17 @@ def wait_for_code(redirect, state, timeout=300, ready=None, cancel=None):
         def log_message(self, *a):                              # the query holds the code: never log it
             pass
 
-    class Server6(HTTPServer):
+    from .localserver import NoLookupBind
+
+    class Server4(NoLookupBind, HTTPServer):           # (no reverse lookup: 15 s on macOS)
+        pass
+
+    class Server6(NoLookupBind, HTTPServer):
         address_family = socket.AF_INET6
     servers = []
     for addr in (["127.0.0.1", "::1"] if host == "localhost" else [host]):   # "localhost" may resolve to either
         try:
-            servers.append((Server6 if ":" in addr else HTTPServer)((addr, port), Handler))
+            servers.append((Server6 if ":" in addr else Server4)((addr, port), Handler))
         except OSError:
             continue
     if not servers:

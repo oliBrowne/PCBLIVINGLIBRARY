@@ -369,7 +369,8 @@ def test_ledger_is_append_only_json_lines_and_status_cli():
     assert "pin 1 was G now S" in r.stdout and "hold" in r.stdout, r.stdout + r.stderr
     js = json.loads(subprocess.run([sys.executable, "-m", "ecadlib", "part", "history", str(lib), "AO3401A", "--json"],
                                    cwd=ROOT, capture_output=True, text=True, timeout=120).stdout)
-    assert [e["event"] for e in js if e["event"] != "publish"] == ["release", "hold"], js
+    # 2026-11-23 (2.4): the demo's AO3401A was released anyway by a reviewer: that line (who, why) comes first
+    assert [e["event"] for e in js if e["event"] != "publish"] == ["release_anyway", "release", "hold"], js
 
 
 def test_rebuild_check_ignores_the_ledger():

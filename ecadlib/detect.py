@@ -103,8 +103,10 @@ def _cli_version(cli, run=subprocess.run):
         return ""
 
 
-def kicad(program_files=None, applications=None, which=shutil.which, run=subprocess.run):
+def kicad(program_files=None, applications=None, which=None, run=subprocess.run):
     """[{name, version, series, folder, cli}] newest first. series is the major.minor of KiCad's per-user folders."""
+    if which is None:                                # PATH only: a kicad-cli in the current folder is never run
+        from .progpath import find as which          # (review 2026-11-23, 2.6)
     found = {}
 
     def add(folder, cli, version):

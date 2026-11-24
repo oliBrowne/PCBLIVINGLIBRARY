@@ -578,15 +578,48 @@ const STATUS = {
 const GENERATE = new Set(["needs_footprint_generation", "unverified (source unreachable)", "easyeda_footprint_only"]);
 let current = null, filter = null, specs = {}, info = null, busy = false;
 
+// The key of this tab (ecadlib.ui.access): put here by the link ecadlib opened, sent with every request. It is kept
+// per address and port and the browser never sends it by itself, so no other local server or site gets it.
+const pageKey = () => { try { return sessionStorage.getItem("ecadlib_key") || ""; } catch (e) { return ""; } };
+function noKey(why) {
+  if (document.getElementById("nokey")) return;
+  const d = document.createElement("div");
+  d.id = "nokey"; d.setAttribute("role", "alert");
+  d.style.cssText = "position:fixed;inset:0;z-index:9999;background:var(--bg,#fff);color:var(--fg,#111);padding:4em 1em;overflow:auto";
+  d.innerHTML = `<div style="max-width:40em;margin:0 auto"><h1 style="font-size:20px">Open this page from ecadlib</h1><p>${esc(why)}</p>
+    <p>To open it: press <b>Open ecadlib</b> in the small ecadlib window, use the ecadlib menu in Altium or KiCad, or run <code>ecadlib start</code> again.
+    Started with <code>ecadlib ui --no-browser</code> in a terminal? It printed the link to open.</p></div>`;
+  document.body.appendChild(d);
+}
 async function api(path, body, raw) {
-  const opt = body === undefined ? { credentials: "same-origin" } : { method: "POST", credentials: "same-origin", body: raw ? body : JSON.stringify(body),
-    headers: raw ? { "X-Filename": encodeURIComponent(raw) } : { "Content-Type": "application/json" } };
+  const key = { "X-Ecadlib-Key": pageKey() };
+  const opt = body === undefined ? { credentials: "omit", headers: key } : { method: "POST", credentials: "omit", body: raw ? body : JSON.stringify(body),
+    headers: raw ? { ...key, "X-Filename": encodeURIComponent(raw) } : { ...key, "Content-Type": "application/json" } };
   let r;
   try { r = await fetch(path, opt); } catch (e) { throw new Error("ecadlib isn't responding. Is it still running in your terminal?"); }
   const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (r.status === 401) noKey(j.error || "This page has no key of the ecadlib that is running.");
   if (!r.ok) { const e = new Error(j.error || r.statusText); e.status = r.status; throw e; }
   return j;
 }
+// A file of the workspace (a report, an export): fetched with the key and saved, since a plain link carries no key.
+document.addEventListener("click", async ev => {
+  const a = ev.target.closest && ev.target.closest('a[href^="/api/file?"]');
+  if (!a) return;
+  ev.preventDefault();
+  try {
+    const r = await fetch(a.getAttribute("href"), { credentials: "omit", headers: { "X-Ecadlib-Key": pageKey() } });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); if (r.status === 401) noKey(j.error || ""); throw new Error(j.error || r.statusText); }
+    const url = URL.createObjectURL(await r.blob()), dl = document.createElement("a");
+    dl.href = url; dl.download = decodeURIComponent(new URL(a.href).searchParams.get("path") || "file").split("/").pop();
+    document.body.appendChild(dl); dl.click(); dl.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) { toast("Could not download: " + e.message, { bad: true }); }
+});
+// Every value that came from the server goes through esc() before it is put into innerHTML, numbers and counts too:
+// the server reads them from files in the workspace (a triage report, a plan), and a file from someone else can hold
+// markup where a number is expected (review 2026-11-23, 2.7). The only markup taken as it is: the footprint pictures
+// (p.picture, r.svg), which the server draws itself. tests/test_security1123_local_page.py tries every value.
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fileUrl = p => "/api/file?path=" + encodeURIComponent(p);
 const fileLink = p => `<a href="${fileUrl(p)}">${esc(p.split("/").pop())}</a>`;
@@ -708,7 +741,7 @@ function render() {
   $("#reportmd").href = fileUrl(t.reports[0]); $("#reportcsv").href = fileUrl(t.reports[1]);
   $("#chips").innerHTML = Object.entries(t.counts).map(([k, v]) => {
     const [lab, cls] = STATUS[k] || [k, "s-info"];
-    return `<span class="chip ${cls} ${filter === k ? "active" : ""}" data-s="${esc(k)}" role="button" tabindex="0">${esc(lab)}: ${v}</span>`;
+    return `<span class="chip ${cls} ${filter === k ? "active" : ""}" data-s="${esc(k)}" role="button" tabindex="0">${esc(lab)}: ${esc(v)}</span>`;
   }).join("");
   const q = $("#q").value.trim().toLowerCase();
   const rows = t.rows.filter(r => (!filter || r.status === filter) &&
@@ -717,7 +750,7 @@ function render() {
     const [lab, cls] = STATUS[r.status] || [r.status, "s-info"];
     const src = [r.src_symbol, r.src_footprint, r.src_3d].map(x => x || "–").join(" / ");
     const act = GENERATE.has(r.status) ? `<button data-gen="${esc(r.line)}">Generate…</button>` : "";
-    return `<tr><td>${r.line}</td><td>${esc(r.designator)}</td><td><code>${esc(r.mpn) || "–"}</code><div class="muted">${esc(r.manufacturer)}</div></td>
+    return `<tr><td>${esc(r.line)}</td><td>${esc(r.designator)}</td><td><code>${esc(r.mpn) || "–"}</code><div class="muted">${esc(r.manufacturer)}</div></td>
       <td>${esc(r.package)}<div class="muted">${esc(r.value)}</div></td><td><span class="pill ${cls}">${esc(lab)}</span></td>
       <td><div>${esc(r.local_symbol) || "<span class=muted>–</span>"}</div><div class="muted mono">${esc(r.local_footprint)}</div></td>
       <td>${r.src ? esc(r.src) + ": " : ""}${esc(src)}</td><td class="notes">${esc(r.notes)}</td><td>${act}</td></tr>`;
@@ -803,7 +836,7 @@ function renderHistory() {
     const todo = Object.entries(h.counts || {}).filter(([k]) => !k.startsWith("in_library") && !k.startsWith("dnp")).reduce((a, [, v]) => a + v, 0);
     return `<tr><td>${esc(h.name)}<div class="muted sub">${esc(h.bom ? uploadNote(h.bom) : "BOM not recorded")}${h.bom && !h.bom_exists ? " (file gone)" : ""}</div></td>
       <td class="mono small">${esc((h.finished || "").replace("T", " ").replace("+00:00", ""))}</td><td>${esc(h.user || "–")}</td><td>${esc(h.lines)}</td>
-      <td>${todo ? `<span class="pill s-warn">${todo} need work</span>` : '<span class="pill s-ok">all in library</span>'}</td>
+      <td>${todo ? `<span class="pill s-warn">${esc(todo)} need work</span>` : '<span class="pill s-ok">all in library</span>'}</td>
       <td><button class="small" data-open="${esc(h.id)}">Open</button></td></tr>`;
   }).join("") || `<tr><td colspan="6" class="muted">No triages match.</td></tr>`;
 }
@@ -829,7 +862,7 @@ async function action(btn, out, fn) {
 }
 $("#dblib").addEventListener("click", e => action(e.target, $("#dblibout"), async () => {
   const r = await api("/api/export/dblib", { bom: current.bom });
-  return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span>: ` + r.files.map(fileLink).join(" · ") +
+  return `${esc(r.written)} part(s) in <span class="mono">${esc(r.folder)}</span>: ` + r.files.map(fileLink).join(" · ") +
     (r.held.length ? `<div class="muted">Held, left out until a person decides: ${esc(r.held.join(", "))}</div>` : "") +
     `<div class="next s-info"><span>Next: copy the whole folder (with its SchLib and PcbLib folders) next to your Altium libraries and open the .DbLib in Altium Designer. The Excel workbook needs the Access database engine.</span></div>`;
 }));
@@ -837,7 +870,7 @@ function kicadOut(r) {
   const inst = r.install;
   const vs = inst ? Object.entries(inst.versions) : [];
   const ok = vs.filter(([, st]) => st === "installed" || st === "already installed");
-  return `${r.written} part(s) in <span class="mono">${esc(r.folder)}</span> as <span class="mono">${esc(r.library)}</span>` +
+  return `${esc(r.written)} part(s) in <span class="mono">${esc(r.folder)}</span> as <span class="mono">${esc(r.library)}</span>` +
     (r.held.length ? `<div class="muted">Held, left out until a person decides: ${esc(r.held.join(", "))}</div>` : "") +
     (r.errors.length ? `<div class="next s-warn"><span>${esc(r.errors[0])}</span></div>` : "") +
     (!inst ? `<div class="next s-info"><span>Next: Put it in KiCad, or add the folder in KiCad (Preferences &gt; Manage Symbol / Footprint Libraries).</span></div>`
@@ -852,7 +885,7 @@ $("#kicadinst").addEventListener("click", e => action(e.target, $("#kicadout"), 
 $("#models").addEventListener("click", e => action(e.target, $("#modelsout"), async () => {
   const r = await api("/api/altium/models", { bom: current.bom });
   await loadInfo();
-  return `${r.footprints.length} footprint(s) as .PcbLib${r.footprints.length ? ": " + esc(r.footprints.join(", ")) : ""}. Symbols: ${esc(r.symbols.join(", ") || "none")}.` +
+  return `${esc(r.footprints.length)} footprint(s) as .PcbLib${r.footprints.length ? ": " + esc(r.footprints.join(", ")) : ""}. Symbols: ${esc(r.symbols.join(", ") || "none")}.` +
     (r.skipped.length ? `<div class="muted">Not converted: ${esc(r.skipped.join("; "))}</div>` : "") +
     ((r.notes || []).length ? `<div class="muted">Check: ${esc(r.notes.join("; "))}</div>` : "") +
     `<div class="muted">Files are in the <span class="mono">altium_models</span> folder of the workspace.</div>` +
@@ -886,8 +919,8 @@ $("#plan").addEventListener("click", e => action(e.target, $("#planout"), async 
     i.status === "duplicate" ? "duplicate of " + (i.duplicate_of || "?") :
     !i.symbol.file && !i.footprint.file ? "needs symbol and footprint" : !i.symbol.file ? `needs symbol ${i.symbol.ref}.SchLib` : `needs footprint ${i.footprint.ref}.PcbLib`;
   const notReady = planned.total - planned.ready;
-  return wsNote + `<strong>${planned.ready} of ${planned.total}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}` +
-    `<div class="next s-info"><span>Next: <i>Dry run</i> lists what would be sent, without sending anything.${notReady ? ` The ${notReady} part(s) not ready are skipped; step 2 shows why.` : ""}</span></div>` + `
+  return wsNote + `<strong>${esc(planned.ready)} of ${esc(planned.total)}</strong> parts ready to release${planned.source === "librarian" ? " (from Fill the library, after its release check)" : ""}. ${fileLink(planned.plan)}` +
+    `<div class="next s-info"><span>Next: <i>Dry run</i> lists what would be sent, without sending anything.${notReady ? ` The ${esc(notReady)} part(s) not ready are skipped; step 2 shows why.` : ""}</span></div>` + `
     <table style="margin-top:6px"><tbody>${planned.items.map(i => `<tr><td>${esc(i.name)}<div class="muted">${esc(i.folder)}</div></td>
     <td>${i.status === "ready" ? '<span class="pill s-ok">ready</span>' : `<span class="pill s-warn">${esc(why(i))}</span>`}</td></tr>`).join("")}</tbody></table>`;
 }));
@@ -1039,7 +1072,7 @@ $("#aiprice").addEventListener("click", async e => {
 async function showLibrarian(r) {
   $("#librerun").hidden = false; $("#libtools").hidden = false;
   try { await loadParts(); }
-  catch (e) { $("#libout").innerHTML = `<strong>${r.ready} of ${r.parts}</strong> parts ready, ${r.held} held. ` + r.reports.map(fileLink).join(" · ") + libNext(r); }
+  catch (e) { $("#libout").innerHTML = `<strong>${esc(r.ready)} of ${esc(r.parts)}</strong> parts ready, ${esc(r.held)} held. ` + r.reports.map(fileLink).join(" · ") + libNext(r); }
 }
 async function loadParts(quiet) {
   const bom = current && current.bom;
@@ -1055,9 +1088,9 @@ async function loadParts(quiet) {
 function libNext(r) {
   const held = r.held || 0, aw = r.awaiting_approval || 0;
   const out = [];
-  if (held) out.push(`<b>${held} held</b>: click a part to see why and how to fix it. There you can <i>Pick…</i> a symbol or footprint, open the datasheet, or <i>Release anyway</i> once you have checked the part.`);
-  if (aw) out.push(`<b>${aw} waiting for sign-off</b>: type your name above, then click Approve on each.`);
-  if (r.ready) out.push(`${out.length ? "Meanwhile" : "Next"}: the <b>${r.ready}</b> ready part(s) can go to Altium (step 3).`);
+  if (held) out.push(`<b>${esc(held)} held</b>: click a part to see why and how to fix it. There you can <i>Pick…</i> a symbol or footprint, open the datasheet, or <i>Release anyway</i> once you have checked the part.`);
+  if (aw) out.push(`<b>${esc(aw)} waiting for sign-off</b>: type your name above, then click Approve on each.`);
+  if (r.ready) out.push(`${out.length ? "Meanwhile" : "Next"}: the <b>${esc(r.ready)}</b> ready part(s) can go to Altium (step 3).`);
   else if (!out.length) out.push("No part is ready yet.");
   return `<div class="next ${held || aw ? "s-warn" : "s-ok"}" role="status"><span>${out.join("<br>")}</span>${r.ready ? '<button class="small" data-go="export">Go to step 3</button>' : ""}</div>`;
 }
@@ -1070,18 +1103,18 @@ function renderParts() {
   const c = parts.counts, cost = parts.cost, q = ($("#pq") && $("#pq").value || "").trim().toLowerCase();
   const sum = { ready: c.ready, held: c.held, awaiting_approval: c.waiting, parts: c.parts };
   const r9 = [];
-  if (c.cross_check_disagreed) r9.push(`<span class="pill s-warn">cross-check: ${c.cross_check_disagreed} disagree</span>`);
-  if (c.cross_check_pins_unchecked) r9.push(`<span class="pill s-off">pin names not cross-checked: ${c.cross_check_pins_unchecked}</span>`);
-  if (c.changes_held) r9.push(`<span class="pill s-warn">updates to released parts held: ${c.changes_held}</span>`);
-  if (c.parity_mismatch) r9.push(`<span class="pill s-warn">KiCad / Altium: ${c.parity_mismatch} differ</span>`);
+  if (c.cross_check_disagreed) r9.push(`<span class="pill s-warn">cross-check: ${esc(c.cross_check_disagreed)} disagree</span>`);
+  if (c.cross_check_pins_unchecked) r9.push(`<span class="pill s-off">pin names not cross-checked: ${esc(c.cross_check_pins_unchecked)}</span>`);
+  if (c.changes_held) r9.push(`<span class="pill s-warn">updates to released parts held: ${esc(c.changes_held)}</span>`);
+  if (c.parity_mismatch) r9.push(`<span class="pill s-warn">KiCad / Altium: ${esc(c.parity_mismatch)} differ</span>`);
   else if (parts.parts.some(p => p.parity.result === "match")) r9.push(`<span class="pill s-ok">KiCad / Altium: all compared parts match</span>`);
-  r9.push(cost.answers ? `<span class="pill s-info">datasheet reads so far: ${usd(cost.usd)} for ${cost.answers} read(s)${cost.models.length ? " · " + esc(cost.models.join(", ")) : ""}</span>`
+  r9.push(cost.answers ? `<span class="pill s-info">datasheet reads so far: ${esc(usd(cost.usd))} for ${esc(cost.answers)} read(s)${cost.models.length ? " · " + esc(cost.models.join(", ")) : ""}</span>`
     : `<span class="pill s-off">no datasheet reads yet ($0)</span>`);
   const keep = document.activeElement && document.activeElement.id === "pq";
   const states = ["held", "awaiting_approval", "ready", "duplicate"].filter(s => parts.parts.some(p => effective(p) === s));
   const shown = parts.parts.filter(p => (!pfilter || effective(p) === pfilter) &&
     (!q || [p.part, p.description, p.folder, p.footprint.ref, p.symbol.ref].join(" ").toLowerCase().includes(q)));
-  $("#libout").innerHTML = `<div class="libsum"><span class="big"><strong>${c.ready} of ${c.parts}</strong> parts ready</span><span>${esc(counts(c))}</span><span class="small">${parts.reports.map(fileLink).join(" · ")}</span></div>
+  $("#libout").innerHTML = `<div class="libsum"><span class="big"><strong>${esc(c.ready)} of ${esc(c.parts)}</strong> parts ready</span><span>${esc(counts(c))}</span><span class="small">${parts.reports.map(fileLink).join(" · ")}</span></div>
     <div class="r9">${r9.join("")}</div>` + libNext(sum) +
     `<div class="ptools"><input type="search" id="pq" placeholder="Search parts, footprints, folders…" aria-label="Search parts" value="${esc(q)}">
       <div class="chips" role="group" aria-label="Show parts">${[["", `All ${c.parts}`]].concat(states.map(s => [s, `${WORD[s] || s} ${parts.parts.filter(p => effective(p) === s).length}`]))
@@ -1101,7 +1134,7 @@ function card(p) {
     tags.push(`<span class="pill ${cls}">cross-check: ${esc(word)}</span>`);
   }
   if (p.parity.result) tags.push(`<span class="pill ${p.parity.result === "match" ? "s-ok" : "s-warn"}">KiCad / Altium ${p.parity.result === "match" ? "match" : "differ"}</span>`);
-  if (p.cost) tags.push(`<span class="pill s-off">${usd(p.cost.usd)}${p.cost.models.length ? " · " + esc(p.cost.models[0]) : ""}</span>`);
+  if (p.cost) tags.push(`<span class="pill s-off">${esc(usd(p.cost.usd))}${p.cost.models.length ? " · " + esc(p.cost.models[0]) : ""}</span>`);
   if (p.approval && p.approval.approved_by && p.approval.approved_by.length) tags.push(`<span class="pill s-ok">approved by ${esc(p.approval.approved_by.join(", "))}</span>`);
   const why = d ? `<div class="pwhy">${esc(d.what)}, sending in a moment… <button class="small" data-undo="${esc(p.part)}">Undo</button></div>`
     : st === "held" && p.reasons.length ? `<div class="pwhy">${esc(p.reasons[0].text)}${p.reasons.length > 1 ? ` <span class="muted">(+${p.reasons.length - 1} more)</span>` : ""}</div>`
@@ -1112,7 +1145,7 @@ function card(p) {
     <div class="thumb${p.picture ? "" : " none"}" aria-hidden="true">${p.picture || (p.footprint.found ? "" : "no<br>footprint")}</div>
     <div class="pmain"><button class="pname" data-openp="${esc(p.part)}" aria-label="${esc(p.part)}, ${esc(WORD[st] || st)}: open details">${esc(p.part)}</button>
       <span class="pill ${PILL[st] || "s-info"}">${esc(d ? d.label : WORD[st] || st)}</span>
-      <div class="pdesc">${esc(p.description || p.folder)}${p.footprint.ref ? ` · ${esc(p.footprint.ref)}` : ""}${p.footprint.pads ? ` · ${p.footprint.pads} pads` : ""}</div>
+      <div class="pdesc">${esc(p.description || p.folder)}${p.footprint.ref ? ` · ${esc(p.footprint.ref)}` : ""}${p.footprint.pads ? ` · ${esc(p.footprint.pads)} pads` : ""}</div>
       ${why}<div class="ptags">${tags.join("")}</div></div>
     <div class="pacts">${acts}</div></li>`;
 }
@@ -1146,11 +1179,11 @@ function showPanel(p, focus = true) {
     <h3>KiCad and Altium</h3><div class="small">${par.result === "match" ? '<span class="pill s-ok">match</span> The KiCad footprint and the Altium files read back the same.' : par.result === "mismatch" ? '<span class="pill s-warn">differ</span> Both values are below.' : '<span class="muted">Not compared yet: compared once both files exist.</span>'}</div>${parRows}
     <h3>Where it came from</h3>
     <dl class="kv"><dt>Symbol</dt><dd>${p.symbol.found ? esc(p.symbol.from || p.symbol.ref) : `<span class="s-warn pill">none yet</span>`}</dd>
-      <dt>Footprint</dt><dd>${p.footprint.found ? esc(p.footprint.from || p.footprint.ref) : `<span class="s-warn pill">none yet</span>`}${p.footprint.pads ? ` · ${p.footprint.pads} pads` : ""}</dd>
+      <dt>Footprint</dt><dd>${p.footprint.found ? esc(p.footprint.from || p.footprint.ref) : `<span class="s-warn pill">none yet</span>`}${p.footprint.pads ? ` · ${esc(p.footprint.pads)} pads` : ""}</dd>
       <dt>Folder</dt><dd>${esc(p.folder || "–")}</dd>
       <dt>Datasheet</dt><dd>${url ? dsLink(p.datasheet.page, url.replace(/^https:\/\//, "")) : "no link"}</dd>
-      <dt>Datasheet reads</dt><dd>${p.cost ? `${usd(p.cost.usd)} for ${p.cost.answers} read(s)${p.cost.models.length ? " · " + esc(p.cost.models.join(", ")) : ""}` : "none ($0)"}</dd></dl>
-    ${p.tried.length ? `<details style="margin-top:10px"><summary class="muted small">What ecadlib tried (${p.tried.length})</summary><ul class="why small">${p.tried.map(t => `<li>${esc(t)}</li>`).join("")}</ul></details>` : ""}`;
+      <dt>Datasheet reads</dt><dd>${p.cost ? `${esc(usd(p.cost.usd))} for ${esc(p.cost.answers)} read(s)${p.cost.models.length ? " · " + esc(p.cost.models.join(", ")) : ""}` : "none ($0)"}</dd></dl>
+    ${p.tried.length ? `<details style="margin-top:10px"><summary class="muted small">What ecadlib tried (${esc(p.tried.length)})</summary><ul class="why small">${p.tried.map(t => `<li>${esc(t)}</li>`).join("")}</ul></details>` : ""}`;
   loadPartHistory(p.part);
   const panel = $("#panel");
   if (!panel.classList.contains("open")) panel.returnFocus = document.activeElement;
@@ -1184,7 +1217,7 @@ async function loadPartHistory(part) {
       : `r${e.revision} ${e.event === "revert" ? "reverted" : e.decision || "released"}`;
     box().classList.remove("muted");
     box().innerHTML = `<div class="scroll"><table class="vs"><thead><tr><th>When</th><th>What</th><th>Who</th><th></th></tr></thead><tbody>` +
-      rows.slice(0, 50).map(e => `<tr><td>${esc((e.at || "").slice(0, 16).replace("T", " "))}</td><td>${esc(what(e))}${e.reason ? `<div class="muted">${esc(e.reason)}</div>` : ""}${e.changes && e.changes.length ? `<details><summary class="muted">${e.changes.length} change(s)</summary>${changeRows(e.changes)}</details>` : ""}</td>` +
+      rows.slice(0, 50).map(e => `<tr><td>${esc((e.at || "").slice(0, 16).replace("T", " "))}</td><td>${esc(what(e))}${e.reason ? `<div class="muted">${esc(e.reason)}</div>` : ""}${e.changes && e.changes.length ? `<details><summary class="muted">${esc(e.changes.length)} change(s)</summary>${changeRows(e.changes)}</details>` : ""}</td>` +
         `<td>${esc(e.by || e.writer || "")}</td><td>${e.revision && (e.event === "release" || e.event === "revert") && e.revision !== r.revision ? `<button class="small" data-revert="${esc(e.revision)}" data-part="${esc(part)}">Release r${esc(e.revision)} again…</button>` : e.revision === r.revision && e.event !== "publish" ? '<span class="pill s-ok">released now</span>' : ""}</td></tr>`).join("") + "</tbody></table></div>";
   } catch (err) { if (box()) box().textContent = `Could not read the history: ${err.message}`; }
 }
@@ -1251,8 +1284,11 @@ window.addEventListener("pagehide", () => pending.forEach(d => { if (d.toast) { 
 async function release(part, allow) {
   const who = allow ? signer(popen ? $("#perr") : $("#liberr"), "Type your name in \u201cYour name\u201d first: releasing a part anyway is recorded under your name, so someone else signs it off. There is no login, so nothing fills it in for you.") : $("#signer").value.trim();
   if (allow && !who) return;
+  // 2026-11-23 security review 2.4: a release anyway is recorded with why, beside who and when
+  const why = allow ? (window.prompt(`Why may ${part} go out anyway? This is recorded with your name.`) || "").trim() : "";
+  if (allow && !why) { toast(`${part}: not released. A release anyway needs a reason.`, { bad: true }); return; }
   try {
-    const rc = await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: who });
+    const rc = await api("/api/release-check", { bom: current.bom, allow: allow ? [part] : [], unallow: allow ? [] : [part], user: who, reason: why });
     if (rc.pending) toast(`${part}: ${rc.pending}.`);
     await loadParts(); loadStatus().catch(() => {});
     const p = findPart(part), hard = p && p.reasons.find(r => /^files\./.test(r.code)), st = p && effective(p);
@@ -1321,19 +1357,19 @@ const pinMapText = m => Object.entries(m || {}).map(([a, b]) => `${a} → ${b}`)
 function showCandidates(r) {
   const it = r.item, cmp = it.pins_vs_pads;
   $("#pickinfo").innerHTML = `<div><span class="pill s-warn">${esc(it.status)}</span> ${esc(it.description || "")} <span class="muted">(${esc(it.folder)})</span></div>` +
-    `<div class="muted" style="margin-top:4px">Symbol: ${esc(it.symbol.source || "none")}${it.symbol.pins ? ` (${it.symbol.pins.length} pins)` : ""} · Footprint: ${esc(it.footprint.source || "none")}${it.footprint.pads ? ` (${new Set(it.footprint.pads).size} pads)` : ""}` +
+    `<div class="muted" style="margin-top:4px">Symbol: ${esc(it.symbol.source || "none")}${it.symbol.pins ? ` (${esc(it.symbol.pins.length)} pins)` : ""} · Footprint: ${esc(it.footprint.source || "none")}${it.footprint.pads ? ` (${new Set(it.footprint.pads).size} pads)` : ""}` +
     (cmp && !cmp.match ? ` · pins without pad: ${esc(cmp.pins_without_pad.join(", ") || "–")}, pads without pin: ${esc(cmp.pads_without_pin.join(", ") || "–")}` : "") + `</div>` +
     (it.hold_reasons.length ? `<ul class="why" style="margin-top:4px">${it.hold_reasons.map(h => `<li>${esc(h)}</li>`).join("")}</ul>` : "");
   $("#picklist").innerHTML = Object.entries(r.candidates).map(([kind, cs]) => `<h3 style="font-size:14px;margin:14px 0 4px">${kind === "symbol" ? "Symbols" : "Footprints"}</h3>` +
     (cs.length ? `<div class="scroll"><table><thead><tr><th>Candidate</th><th>Why</th><th>${kind === "symbol" ? "Pins" : "Pads"}</th><th>Match</th><th>Suggested pin map</th><th></th></tr></thead><tbody>` +
-    cs.map((c, i) => `<tr><td class="mono">${esc(c.id)}${c.current ? ' <span class="pill s-info">current</span>' : ""}<div class="muted sub">score ${c.score}</div></td>
+    cs.map((c, i) => `<tr><td class="mono">${esc(c.id)}${c.current ? ' <span class="pill s-info">current</span>' : ""}<div class="muted sub">score ${esc(c.score)}</div></td>
       <td>${whyList(c.why.join("; "))}${c.error ? `<div class="s-bad sub">${esc(c.error)}</div>` : ""}</td>
-      <td>${c.count ?? "?"}</td>
+      <td>${esc(c.count ?? "?")}</td>
       <td>${c.match === true ? '<span class="pill s-ok">yes</span>' : c.match === false ? '<span class="pill s-warn">no</span>' +
         `<div class="muted sub">${c.pins_without_pad.length ? "pins without pad: " + esc(c.pins_without_pad.join(", ")) : ""}${c.pads_without_pin.length ? " pads without pin: " + esc(c.pads_without_pin.join(", ")) : ""}</div>` : '<span class="muted">?</span>'}</td>
-      <td>${c.pin_map ? `<label class="field"><input type="checkbox" data-usemap="${kind}:${i}" checked> <span class="mono">${esc(pinMapText(c.pin_map))}</span></label>` : '<span class="muted">–</span>'}</td>
-      <td><button class="small${c.match ? " primary" : ""}" data-choose="${kind}:${i}" ${c.error ? "disabled" : ""}>Choose</button></td></tr>`).join("") +
-    `</tbody></table></div>` : `<div class="muted">No ${kind} candidates found. Try the other half, or add a library with --lib.</div>`)).join("");
+      <td>${c.pin_map ? `<label class="field"><input type="checkbox" data-usemap="${esc(kind)}:${i}" checked> <span class="mono">${esc(pinMapText(c.pin_map))}</span></label>` : '<span class="muted">–</span>'}</td>
+      <td><button class="small${c.match ? " primary" : ""}" data-choose="${esc(kind)}:${i}" ${c.error ? "disabled" : ""}>Choose</button></td></tr>`).join("") +
+    `</tbody></table></div>` : `<div class="muted">No ${esc(kind)} candidates found. Try the other half, or add a library with --lib.</div>`)).join("");
   showCandidates.last = r;
 }
 $("#pickkind").addEventListener("change", loadCandidates);
@@ -1383,7 +1419,7 @@ $("#apprstatus").addEventListener("click", e => action(e.target, $("#approut"), 
 function showDupes(r) {
   const plan = r.mapping.filter(m => m.parts).length;
   const who = m => `<span class="mono">${esc(m.name)}</span> <span class="muted">(${esc(m.origin)}${m.used_by ? ", used by " + esc(m.used_by.join(", ")) : ""})</span>`;
-  return (r.groups.length ? `<strong>${r.groups.length}</strong> duplicate group(s). ` : "No duplicates found. ") + r.reports.map(fileLink).join(" · ") +
+  return (r.groups.length ? `<strong>${esc(r.groups.length)}</strong> duplicate group(s). ` : "No duplicates found. ") + r.reports.map(fileLink).join(" · ") +
     (r.groups.length ? `<div class="scroll"><table style="margin-top:6px"><thead><tr><th>Kind</th><th>Keep</th><th>Duplicates</th></tr></thead><tbody>` +
       r.groups.map(g => { const k = g.members.find(m => m.name === g.keeper);
         return `<tr><td>${esc(g.kind.replace("_", " "))}${g.kind === "mpn" ? `<div class="muted sub mono">${esc(g.key)}</div>` : ""}</td><td>${k ? who(k) : '<span class="muted">same name, different content: pick by hand</span>'}</td>
@@ -1498,10 +1534,10 @@ function showRules() {
   const rows = p.settings.map(s => `<tr><td class="mono">${esc(s.key)}</td><td>${qs[s.key]
       ? `<select data-key="${esc(s.key)}" aria-label="${esc(qs[s.key].text)}">${qs[s.key].choices.map(c => `<option${c === s.value ? " selected" : ""}>${esc(c)}</option>`).join("")}</select><div class="muted sub">${esc(qs[s.key].text)}</div>`
       : `<span class="mono">${esc(val(s.value))}</span>`}</td>
-    <td><span class="pill ${lvl[s.level]}">${esc(s.level)} ${Math.round(s.confidence * 100)}%</span></td>
+    <td><span class="pill ${lvl[s.level] || "s-info"}">${esc(s.level)} ${esc(Math.round(s.confidence * 100))}%</span></td>
     <td class="notes">${esc(s.source)}<ul class="why">${s.evidence.slice(0, 3).map(e => `<li>${esc(e)}</li>`).join("")}</ul></td></tr>`).join("");
-  $("#rulesout").innerHTML = `<div>Scanned ${esc(scanned)}: ${p.components} parts, ${p.footprints} footprints, ${p.boms} BOMs.` +
-    (p.questions.length ? ` <strong>${p.questions.length} setting(s) had split evidence</strong>: pick below, then Apply my answers.` : "") + `</div>` +
+  $("#rulesout").innerHTML = `<div>Scanned ${esc(scanned)}: ${esc(p.components)} parts, ${esc(p.footprints)} footprints, ${esc(p.boms)} BOMs.` +
+    (p.questions.length ? ` <strong>${esc(p.questions.length)} setting(s) had split evidence</strong>: pick below, then Apply my answers.` : "") + `</div>` +
     (p.warnings.length ? `<div class="muted small">${p.warnings.slice(0, 5).map(esc).join("<br>")}</div>` : "") +
     (p.errors.length ? `<div class="banner s-bad">${p.errors.map(esc).join("<br>")}</div>` : "") +
     (rows ? `<div class="tablewrap"><table style="margin-top:6px"><thead><tr><th>Setting</th><th>Proposed</th><th>Confidence</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table></div>`

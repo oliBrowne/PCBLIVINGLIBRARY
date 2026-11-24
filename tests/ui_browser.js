@@ -13,7 +13,7 @@ async function page(browser, width) {
   p.on("response", r => { if (r.status() >= 400) p.bad.push(`${r.status()} ${new URL(r.url()).pathname}`); });
   p.on("pageerror", e => p.errors.push("pageerror: " + e.message));
   p.on("console", m => { if (m.type() === "error" && !/status of (401|400|409)/.test(m.text())) p.errors.push("console: " + m.text()); });
-  p.on("dialog", d => d.accept());
+  p.on("dialog", d => d.accept("checked by hand"));   // the reason a release anyway asks for (a confirm takes no text)
   return p;
 }
 const overflow = p => p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -43,7 +43,7 @@ async function local(browser, width) {
     check("focus lands on Fill missing parts" + w, await p.evaluate(() => document.activeElement && document.activeElement.id) === "librun");
   });
   await step("part cards" + w, async () => {
-    const id = await p.evaluate(async () => (await (await fetch("/api/triage/history")).json()).triages.find(h => h.bom === "uploads/sample_bom.csv").id);
+    const id = await p.evaluate(async () => (await (await fetch("/api/triage/history", { headers: { "X-Ecadlib-Key": sessionStorage.getItem("ecadlib_key") } })).json()).triages.find(h => h.bom === "uploads/sample_bom.csv").id);
     await p.click(`#histrows [data-open="${id}"]`);
     await p.waitForSelector("#plist .pcard", { timeout: 20000 });
     check("parts shown as cards" + w, await p.locator("#plist .pcard").count() === 14, await p.locator("#plist .pcard").count());

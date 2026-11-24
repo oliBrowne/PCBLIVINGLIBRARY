@@ -11,6 +11,7 @@ GATEWAY = ('[ai]\nprovider = "openai-compatible"\nbase_url = "https://llm-gatewa
 
 def _offline(monkeypatch, sent):
     monkeypatch.setattr(UC, "secret", lambda name, env=None: {"ACME_KEY": "dummy-acme"}.get(name))
+    monkeypatch.setenv("ECADLIB_KEY_HOSTS", "ACME_KEY=llm-gateway.example.com")   # review 2026-11-23 (2.2): a key under a name of your own goes to a server of your own only once you allowed it
 
     def offline(url, *a, **k):                        # nothing leaves this test: a request is recorded and fails
         sent.append(url)

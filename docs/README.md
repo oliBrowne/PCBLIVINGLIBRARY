@@ -19,6 +19,8 @@ terminal.
   library rules, safe updates and keeping the library current.
 * [Change control](change-control.md): released parts never change behind your back.
 * [Teach it your house style](house-style.md).
+* [The shared store of checked parts](shared-store.md): parts other people already built and checked, a second
+  opinion on your own builds, sharing yours (not switched on yet).
 
 ## Parts
 

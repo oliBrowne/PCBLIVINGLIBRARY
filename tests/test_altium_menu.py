@@ -670,7 +670,11 @@ def test_open_queue_starts_reuses_and_refuses():
     r = AM.open_queue(cfg, opener=opened.append, probe=lambda p: (None, None), launcher=lambda w, p: None,
                       wait_s=0.0, sleep=lambda s: None)
     assert r["status"] == "error" and "did not start" in r["message"] and "altium_menu_ui.log" in r["fix"]
-    assert AM.open_queue(cfg, opener=opened.append, probe=lambda p: ("ecadlib-team", None))["status"] == "ok"
+    # an ecadlib this account has no key for (another account's): its page would only say "open this page from
+    # ecadlib", so the menu says what is on the port instead of opening it (review 2026-11-23, 2.1)
+    n = len(opened)
+    r = AM.open_queue(cfg, opener=opened.append, probe=lambda p: ("ecadlib-team", None))
+    assert r["status"] == "error" and "did not start" in r["message"] and "port=" in r["fix"] and len(opened) == n
 
 
 def test_open_queue_starts_the_real_web_ui():
@@ -681,28 +685,17 @@ def test_open_queue_starts_the_real_web_ui():
         s.bind(("127.0.0.1", 0))
         cfg["port"] = s.getsockname()[1]
     procs, opened = [], []
-    os.environ["PYTHONFAULTHANDLER"] = "1"          # the UI process prints its stacks if it is stopped with SIGABRT
     try:
         r = AM.open_queue(cfg, opener=opened.append, launcher=lambda ws, port: procs.append(AM.start_ui(ws, port)))
-        log = Path(cfg["workspace"]) / "altium_menu_ui.log"
-        if r["status"] != "ok":                     # (macOS CI 2026-11-22) where the UI process is: its stacks
-            import signal, time
-            for p in procs:
-                if p.poll() is None:
-                    p.send_signal(signal.SIGABRT if os.name != "nt" else signal.SIGTERM)
-                    p.wait(timeout=10)
-            time.sleep(0.5)
-        assert r["status"] == "ok" and r["started"] == "1", (r, [p.poll() for p in procs],
-                                                             log.read_text(errors="replace")[-3000:] if log.is_file() else "no log")
-        page = urllib.request.urlopen(opened[0].split("#")[0], timeout=10).read().decode("utf-8")
-        assert 'id="libcard"' in page and opened[0].endswith("#libcard")
+        assert r["status"] == "ok" and r["started"] == "1", r
+        from tests.test_ui import ui_browser                # the link carries a one-time key (review 2026-11-23, 2.1)
+        page = ui_browser().open(opened[0].split("#")[0], timeout=10).read().decode("utf-8")
+        assert 'id="libcard"' in page and opened[0].endswith("#libcard") and "key=" not in r["url"]
         assert AM.probe_ui(cfg["port"]) == ("ecadlib", str(cfg["workspace"].resolve()))
     finally:
-        os.environ.pop("PYTHONFAULTHANDLER", None)
         for p in procs:
-            if p.poll() is None:
-                p.terminate()
-                p.wait(timeout=10)
+            p.terminate()
+            p.wait(timeout=10)
 
 
 def test_errors_are_one_line_with_a_fix():

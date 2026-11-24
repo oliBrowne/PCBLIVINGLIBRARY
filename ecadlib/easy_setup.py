@@ -21,7 +21,8 @@ What the page does (each step also works on its own, later):
 Saving writes <workspace>/ecadlib.toml through `ecadlib init`'s own code (rules_infer.propose: it also learns naming
 conventions from the library folders given) and the answers to the user's settings.json.
 
-The routes are served by the local web UI (ecadlib/ui/server.py), which checks Host and Origin first."""
+The routes are served by the local web UI (ecadlib/ui/server.py), which checks Host, Origin and this run's key
+(ecadlib/ui/access.py) first."""
 import argparse, json, os, re, shutil, sys, threading, urllib.parse
 from pathlib import Path
 
@@ -180,6 +181,8 @@ def save(ws_root, b):
         raise ValueError("give the workspace as a full path, e.g. " + str(UC.default_workspace()))
     if ws.exists() and not ws.is_dir():
         raise ValueError(f"{ws} is a file, not a folder")
+    if ws.resolve() != Path(ws_root).resolve():
+        _not_settings(ws)
     p = _provider(b.get("provider") or "anthropic")
     model = str(b.get("model") or (p[4][0][0] if p[4] else "")).strip()
     from .llm import MODEL_RE
@@ -223,11 +226,22 @@ def save(ws_root, b):
             "toml": str(out), "backup": res.get("backup"), "learned": len(prop["settings"])}
 
 
+def _not_settings(ws):
+    """The workspace never moves to ecadlib's settings folder, into it, or to a folder that holds it (review
+    2026-11-23, 2.1): every file under the workspace can be downloaded through the page, and the stored keys are
+    in the settings folder."""
+    from .ui import access as AC
+    if AC.no_workspace(ws):
+        raise ValueError(f"{ws} is, or holds, ecadlib's own settings folder ({UC.config_dir()}), where your keys are "
+                         f"kept: pick another folder for the workspace, e.g. {UC.default_workspace()}")
+
+
 def restart(ws):
     if not isinstance(ws, (str, Path)) or len(str(ws)) > 500 or "\0" in str(ws) \
             or not Path(_path_text(str(ws))).expanduser().is_absolute():
         raise ValueError("give the workspace as a full path, e.g. " + str(UC.default_workspace()))
     ws = Path(_path_text(str(ws))).expanduser()
+    _not_settings(ws)
     if not ws.is_dir():                         # save() makes it: a folder that is not there is a typo, not a move
         raise ValueError(f"workspace folder not found: {ws}; save the setup first")
     if RESTART is None:
@@ -543,7 +557,8 @@ def install_kicad_plugin(series=None):
 
 
 # ------------------------------------------------------------------ web routes
-# Keys and installs are per person, on their own computer. The web UI checks Host and Origin before any of them runs.
+# Keys and installs are per person, on their own computer. The web UI checks Host, Origin and the run's key (only the
+# page ecadlib opened has it) before any of them runs.
 GET_ROUTES = {"/api/setup": lambda ws, b: state(ws)}
 POST_ROUTES = {"/api/setup": save, "/api/setup/key": lambda ws, b: store_key(b),
                "/api/setup/key/forget": lambda ws, b: forget_key(b), "/api/setup/key/check": lambda ws, b: check_key(b),

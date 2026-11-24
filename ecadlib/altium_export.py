@@ -411,7 +411,8 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                 by_line[int(str(t.get("line", "")).strip())] = t    # line must not take the last row's land
             except ValueError:
                 pass
-    holds, on = {}, {}
+    holds, on, told = {}, {}, {}             # told: {part: {column: (cell, BOM line)}} of its lines with no MPN
+    unread = {}                              # {part: [(BOM line, why it is no generic chip or None)]} of the same lines
     out, seen, renamed, same_value, canon, first, notes, unstorable = {}, {}, {}, {}, {}, {}, {}, {}
     # a name already in the plan stays with its part (SYS-1): when the part released under it is still in the BOM, a
     # line added above it with another MPN takes the suffixed name instead
@@ -420,6 +421,9 @@ def to_rows(lines, triage=None, rules=None, prior=None):
     # keyed folded, as Altium compares part numbers: a new 'RES-0603-10K' must not take a released 'RES-0603-10k' (R-B2-4)
     reserved = {n.casefold(): (n, norm_mpn(p["mpn"])) for n, p in prior.items() if norm_mpn(p["mpn"]) in present}
     for i, ln in enumerate(lines, 1):
+        if ln.get("dnp") and not any(str(ln.get(f) or "").strip() for f in ("mpn", "value", "footprint", "lcsc",
+                                                                           "libref", "description", "digikey")):
+            continue                            # 'J3 | DNP | DNP | DNP': a place left empty, not a part to build
         bad = []
         prefix = re.match(r"[A-Z]+", ln.get("designator", "").upper() or "U")
         cat = CATEGORY.get(prefix.group(0) if prefix else "U", "Misc")
@@ -435,6 +439,13 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             got = t if t is not None else {}
             kind = kind_of((ln.get("description"), got.get("src_description")),
                            (fp, got.get("local_footprint"), got.get("package")))
+            if kind == "Resistors":             # FB1 '120R' on an R_0603 land, a BLM18 / 742792 part number: a ferrite
+                from . import stdparts as SP    # bead's impedance in ohms, not a resistor (left unfiled: held)
+                from . import mpn_decode as MD
+                said_res = re.search(r"(?i)\bres(?:istors?)?\b", str(ln.get("description") or "")) or \
+                    (MD.decode(mpn) or {}).get("kind") == "R"          # FB4 = 0R RC0603JR-070RL: a resistor fitted
+                if SP.is_ferrite(ln.get("designator"), ln.get("description"), mpn) and not said_res:   # in a bead's place
+                    kind = None
             if kind:
                 cat, ref = kind, RU.CAT_REF[kind]
         sensor = sensor_folder(ln, t, mpn, cat, fp)
@@ -504,7 +515,7 @@ def to_rows(lines, triage=None, rules=None, prior=None):
             "Value": value, "Comment": "=Value" if cat in GENERIC_SYMBOL else mpn,
             "Manufacturer": ln.get("manufacturer", ""), "Manufacturer Part Number": mpn,
             "Supplier 1": "LCSC" if lcsc else "", "Supplier Part Number 1": lcsc,
-            "Supplier 2": "", "Supplier Part Number 2": "",
+            "Supplier 2": "DigiKey" if ln.get("digikey") else "", "Supplier Part Number 2": ln.get("digikey", ""),
             "ComponentLink1Description": "LCSC" if lcsc else "",
             "ComponentLink1URL": f"https://www.lcsc.com/product-detail/{lcsc}.html" if lcsc else "",
             "ComponentLink2Description": "Datasheet" if lcsc else "",
@@ -515,8 +526,54 @@ def to_rows(lines, triage=None, rules=None, prior=None):
         if not ln.get("dnp"):
             for r in ref_keys(ln.get("designator", "")):
                 on.setdefault(r, {}).setdefault(pn, des)
+        if ln.get("digikey") and ln.get("bom_note"):   # a DigiKey number in the MPN column: say so in the review
+            notes.setdefault(pn, []).extend(n for n in ln["bom_note"].split("; ") if "order number" in n)
         if ln.get("bom_hold"):                  # a row read_bom could not read as the header says (shifted cells)
             holds.setdefault(pn, []).append(f"BOM line {des}: {ln['bom_hold']}")
+        if not row["Manufacturer Part Number"]:
+            # 2026-11-23 review (a6 finding 4): lines with no part number become one part on value and footprint
+            # alone. Every other cell they have but designator and quantity, mapped to a field or not, has to say
+            # the same (a Color column's red and green, Tolerance 1% and 5%, Voltage 16V and 50V, another maker,
+            # library symbol or datasheet): else held. An empty cell says nothing, as for the Description below.
+            # Round 2 (I3): not the columns that say how the part is bought or where it is used (a per-row price,
+            # stock, supplier name, sheet, function: bom_triage.admin_header), and not two names of the kind's
+            # plain symbol (Device:R and Device:R_Small, Altium's Res1 and Res2: stdparts.plain_symbol_name).
+            # Round 2 (C1): an empty cell says nothing, so a word that holds a generic part ('tantalum', 'x4',
+            # 'array', 'Polarized: yes') on a later line whose first line's cell is empty was never read: the
+            # librarian reads one line of the part. Every line is read here (unread: below the loop).
+            from . import stdparts as SP
+            from .bom_triage import admin_header, line_cells, other_cells, symbol_header
+            from .providers import same_maker
+            flat = lambda v: " ".join(str(v or "").split())
+            mine = {"Manufacturer": ln.get("manufacturer"), "LibRef": ln.get("libref"), "Datasheet": ln.get("datasheet"),
+                    **{k: v for k, v in other_cells(ln).items() if not admin_header(k)}}
+            sym_kind = {"Resistors": "R", "Capacitors": "C", "Inductors": "L"}.get(cat)
+            was, differ = told.setdefault(pn, {}), {}
+            for k, v in mine.items():
+                v = flat(v)
+                if not v:
+                    continue
+                old, odes = was.setdefault(k, (v, des))
+                if old.casefold() != v.casefold() and not (k == "Manufacturer" and same_maker(old, v)) and not (
+                        (k == "LibRef" or symbol_header(k)) and SP.plain_symbol_name(old, sym_kind)
+                        and SP.plain_symbol_name(v, sym_kind)):
+                    differ.setdefault(odes, []).append(f"{k} {old[:40]!r} vs {v[:40]!r}")
+            unread.setdefault(pn, []).append((des, SP.generic_passive_hold(      # (round 3: each cell by what its
+                cat, ln.get("value", ""), ln.get("description", ""), (), line_cells(ln))))   # column is, the maker too)
+            # round 3 (B3): a rating written in a column on what the part is for is still a rating of the part
+            # ('Usage: 0.1% reference' and '5% pull-up', 'Function: 16V rail' and '50V rail' are two parts)
+            rated = was.setdefault("\0ratings", ({}, des))[0]
+            for k, v in other_cells(ln).items():
+                for num, unit in re.findall(r"(?<![\w.])(\d+(?:\.\d+)?)\s?(%|V|W|ppm)(?![A-Za-z])", str(v)) if admin_header(k) else ():
+                    old, odes = rated.setdefault((k, unit), (float(num), des))
+                    if old != float(num):
+                        differ.setdefault(odes, []).append(f"{k} {old:g}{unit} vs {float(num):g}{unit}")
+            for odes, d in differ.items():
+                holds.setdefault(pn, []).append(
+                    f"BOM lines {odes} and {des} have no part number and are built as one part {pn} (same value "
+                    f"and footprint), but are described differently in other columns ({'; '.join(d[:4])}"
+                    f"{' ...' if len(d) > 4 else ''}): give them part numbers if they are two parts, or the same "
+                    "cells if they are one")
         if pn not in first:
             first[pn] = (row, des, ln.get("footprint", ""))
         else:                                   # a second BOM line for this part: the first one wins, say what differs
@@ -552,6 +609,13 @@ def to_rows(lines, triage=None, rules=None, prior=None):
                     f"BOM lines {kdes} and {des} have no part number and are built as one part {pn} (same value "
                     f"and footprint), but are described differently ({said[0]!r} vs {said[1]!r}): give them part "
                     "numbers if they are two parts, or one description if they are one")
+    for pn, each in unread.items():             # round 2 (C1): the lines with no part number built as one part
+        if len(each) > 1:                       # (one line alone: librarian.passive_kind reads it and says so)
+            for des, why in each:
+                if why:
+                    holds.setdefault(pn, []).append(
+                        f"BOM line {des} is one of {len(each)} lines with no part number built as one part {pn} "
+                        f"(same value and footprint), and {why}")
     said = {}                                   # a part's review names 5 of them (200 lines sharing 'R1-R9999')
     for r, parts in sorted(on.items()):         # R3 on a 10k line and on a 1k line: one of the two lines is wrong
         for pn in parts if len(parts) > 1 else ():

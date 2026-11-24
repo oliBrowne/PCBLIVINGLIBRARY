@@ -6,6 +6,12 @@ models and the altium365 plan, run the release check, and stop with a review lis
 
 Per plan item (one per unique part), parts the triage found in a --lib library are converted from there; for
 anything still missing, the sources are tried in --sources order, each filling only what is still missing:
+  store      the shared store of checked parts (ecadlib/store_client.py, docs/shared-store.md), by maker + MPN, first
+             and by itself whenever [store] url is set (empty by default: nothing is asked, and it is never in the
+             default order). A record [store] accept trusts is drawn through the same writers and release check
+             (source store:<key_id>@r<rev>); one it does not is a second opinion: other pads or pins hold the part;
+             the same pads and pins lift this run's own independent build's unconfirmed-build hold only when the
+             record is confirmed (taken back if it is withdrawn), and a checked record's agreement is only noted
   kicad      the official KiCad libraries on gitlab.com. A name index of kicad-symbols (KiCad 9 <Lib>.kicad_symdir/
              <Name>.kicad_sym, so derived symbols/aliases are names too) and kicad-footprints is built once from the
              GitLab tree API and cached (<cache>/kicad_library_index.json, 30 days; a build stopped by a timeout or
@@ -46,7 +52,7 @@ from . import fp_tidy as FT, symbol_layout as SL
 from .kicad_index import KiCadIndex, METRIC_TO_IMPERIAL, norm_mpn, package_of, two_readings
 
 TREE = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2F{repo}/repository/tree?ref=master&recursive=true&per_page=100&page={page}"
-SOURCES = ("kicad", "easyeda", "standard", "datasheet")
+SOURCES = RU.SOURCES                             # store, kicad, easyeda, standard, datasheet
 IMP2MET = {v: k for k, v in METRIC_TO_IMPERIAL.items()}
 PASSIVE = {"R": ("Device:R", "Resistor_SMD:R_{}_{}Metric"), "C": ("Device:C", "Capacitor_SMD:C_{}_{}Metric"),
            "CP": ("Device:C_Polarized", None), "L": ("Device:L", "Inductor_SMD:L_{}_{}Metric"), "LED": ("Device:LED", "LED_SMD:LED_{}_{}Metric"),
@@ -570,10 +576,10 @@ def _hold_lost_copper(st, name, notes):
         st.setdefault("verify", []).append(held)
 
 
-def own_symbol_ref(item, ln):
+def own_symbol_ref(item, ln, search=""):
     """One shared symbol per kind: a polarized capacitor never takes the plain capacitor's file, nor a ferrite bead the
     inductor's. Sets item's Library Ref to its own shared one (every run, a resumed part too) -> the ref."""
-    kind, ref = passive_kind(item, ln), item["symbol"]["ref"]
+    kind, ref = passive_kind(item, ln, search), item["symbol"]["ref"]
     if kind == "CP" and ref == AX.GENERIC_SYMBOL["Capacitors"]:
         ref = item["symbol"]["ref"] = POLARIZED_SYMBOL
     elif kind == "L" and ref == AX.GENERIC_SYMBOL["Inductors"] and Run.ferrite(item, ln):
@@ -581,15 +587,55 @@ def own_symbol_ref(item, ln):
     return ref
 
 
-def passive_kind(item, ln=None):
+def passive_kind(item, ln=None, search=""):
     """R / C / CP / L / LED for a part that takes the generic passive symbol and a chip land by package, else None.
     The description decides too: a part it calls an array, a common-mode choke, 4-terminal or RGB is not a two-pin
     passive (None: it is looked up by its part number like any other part), and a capacitor it calls tantalum /
-    polymer / electrolytic is polarized whatever its part number is."""
-    from . import stdparts as SP
+    polymer / electrolytic is polarized whatever its part number is.
+    Review 2026-11-23 (1.1, 1.12): every cell of the BOM line is read, not only the Description (the Value, the
+    LibRef, the footprint cell, EAGLE's Device and the cells of columns the reader does not map: line 'other_cells').
+    A resistor or capacitor with NO part number is a generic passive only when its Value and Description are
+    understood whole (stdparts.generic_passive_hold); else item['generic_hold'] says which word held it (the release
+    check shows it) and the part is no generic passive. A capacitor WITH a part number is the unpolarized 'C' only
+    when something says ceramic (an MLCC code reads the number, or the line names a ceramic dielectric).
+    Round 2 (I8): search is the part search's description of the part. KiCad's own chip land name in the footprint
+    cell ('C_1206_3216Metric') counts as the BOM saying unpolarized, but a word that says polarized from ANY source
+    beats it: the Value, the Description, any other cell, a header ('Polarized: yes') and the part search ('CAP TANT')."""
+    from . import mpn_decode as MD, stdparts as SP
+    from .bom_triage import placeholder_mpn
     cat, fp = item["folder"].split("/")[-1], item["footprint"].get("kicad") or item["footprint"]["ref"] or ""
     desc = " ".join(dict.fromkeys(str(x) for x in (item.get("description"), (ln or {}).get("description")) if x))
-    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc):
+    par = _par(item)
+    mpn = "" if placeholder_mpn(par.get("Manufacturer Part Number", "")) else str(par.get("Manufacturer Part Number", "") or "").strip()
+    value = str((ln or {}).get("value") or par.get("Value") or "")
+    own = [str(item["footprint"].get(k) or "") for k in ("kicad", "bom_ref", "ref")]   # the item's own footprint text
+    from .bom_triage import line_cells, said_cells   # the footprint cell, the LibRef and every unmapped cell; a bare
+    cells = said_cells(ln or {}) + own               # yes / number is read with its header ('Polarized: yes', round 2 I10)
+    counted = said_cells(ln or {}, admin=False) + own    # round 3 (B3): a Function / Notes column says what the part is
+    by_role = line_cells(ln or {})                       # for: its words that count elements are not the part's
+    if not mpn and cells[0] and cells[0] not in own and any(own):
+        cells[0] = counted[0] = ""           # a no-MPN item is paired with a line by its value (_line_for): of two
+        by_role = [c for c in by_role if c[0] != "footprint"]   # 10k lines, '0603' and '0603 8P4R', each item reads its
+        #                                                         own footprint text
+    code = MD.decode(mpn) if mpn else None
+    polar = cat == "Capacitors" and bool(
+        fp.startswith("CP_") or SP.polar_size_prefix(cells[0], *own)     # ('CP1206', 'cp0805': round 3, A1)
+        or SP.says_polarized(desc, value, *cells) or SP.says_polarized(SP.cap_words(search))
+        or (mpn and SP.POLAR_CAP.match(SP._norm(mpn))) or (code and code["kind"] == "CP"))
+    if ln is not None:                       # decided from the BOM line; a caller with no line keeps what it decided
+        hold = None if mpn or polar else SP.generic_passive_hold(cat, value, desc, own, by_role)   # (round 3: each
+        #                                      cell is read by what its column is: stdparts.cell_hold)
+        said = next((t for t in (value, desc, *cells) if SP.says_polarized(t)), "") if polar and not mpn else ""
+        if said:                             # 'C1, 10uF tantalum, 1206': the word that makes it a polarized part
+            hold = (f"the BOM line says {SP.POLAR_WORD.search(said).group(0).strip()!r} ({said.strip()[:60]!r}): a "
+                    "capacitor with a + side is not a generic chip of its value and size; give its part number")
+        if hold:
+            item["generic_hold"] = hold
+        else:
+            item.pop("generic_hold", None)
+    if item.get("generic_hold") and not mpn and not polar:
+        return None
+    if cat in ("Resistors", "Capacitors", "Inductors", "Diodes") and SP.multi_terminal(desc, value, *counted):
         return None
     if cat in ("Thermistors", "Varistors"):  # altium_export.sensor_folder filed it: NTC / PTC / VAR, TH (type unsaid)
         kind = SP.sensor_kind((item.get("description"), (ln or {}).get("value"), (ln or {}).get("description")),
@@ -597,11 +643,14 @@ def passive_kind(item, ln=None):
         return kind if kind in ("NTC", "PTC", "VAR") and SP.SENSOR_FOLDER[kind] == cat else "TH" if cat == "Thermistors" else None
     if cat == "Resistors":
         return "R"
-    if cat == "Capacitors":                  # polarized by its land, its description or its part number's series
-        mpn = SP._norm(_par(item).get("Manufacturer Part Number", ""))     # (KEMET T491, AVX TAJ, Panasonic EEE ...)
-        bom_fp = SP._strip_lib(str((ln or {}).get("footprint") or "")).strip()
-        return "CP" if fp.startswith("CP_") or bom_fp.startswith("CP_") or SP.says_polarized(desc) or \
-            (mpn and SP.POLAR_CAP.match(mpn)) else "C"
+    if cat == "Capacitors":                  # polarized by its land, any cell of its line or its part number's series
+        if polar:                            # (KEMET T491, AVX TAJ, Panasonic EEE ...)
+            return "CP"
+        if mpn and not (code and code["kind"] == "C") and SP.mpn_size(mpn, par.get("Manufacturer", ""))[0] != "C" \
+                and not SP.says_unpolarized(desc, value, SP.cap_words(search), *cells):
+            return None                      # a part number no MLCC code reads, nothing says ceramic: not known to be
+        return "C"                           # unpolarized, so no generic capacitor (stdparts.resolve says why). Round 3
+        #                                      (A8): KiCad's chip land name alone ('C_1206_3216Metric') does not say so
     if cat == "Inductors":
         return "L"
     if cat == "Diodes" and (fp.startswith("LED_") or SP.says_led(item.get("description"))):
@@ -629,6 +678,13 @@ def _set_par(item, k, v):
     item["cleared"] = [c for c in item.get("cleared", []) if c != k]
 
 
+def _name_key(s):
+    """A footprint name as the library stores it, for comparing: a BOM footprint Altium can't store ('6.25卫星轴')
+    compares as the '_' name the plan gave it (altium_export._safe_name), never stops the run."""
+    from .altium_export import _safe_name
+    return _safe_name(s, [])
+
+
 def _line_for(item, lines, rows):
     """The BOM line and triage row of a plan item: same MPN, else (no MPN) same value. Of several, the line whose
     footprint is the item's wins (10k 0603 and 10k 0402 are two items with one value: a DNP 0402 line must never be
@@ -636,12 +692,12 @@ def _line_for(item, lines, rows):
     par = _par(item)
     mpn, val = par.get("Manufacturer Part Number", ""), par.get("Value", "")
     fp = item.get("footprint") or {}
-    want = {AL.lib_name(str(x).split(":")[-1]) for x in (fp.get("kicad"), fp.get("bom_ref"), fp.get("ref")) if x}
+    want = {_name_key(str(x).split(":")[-1]) for x in (fp.get("kicad"), fp.get("bom_ref"), fp.get("ref")) if x}
     best, score = ({}, {}), None
     for ln, row in zip(lines, rows):
         lm = "" if T.placeholder_mpn(ln.get("mpn")) else ln.get("mpn")    # 'N/A': planned without an MPN (altium_export)
         if (mpn and lm == mpn) or (not mpn and not lm and ln.get("value", "") == val):
-            fps = {AL.lib_name(str(x).split(" ")[0].split(":")[-1]) for x in (ln.get("footprint"), row.get("local_footprint")) if x}
+            fps = {_name_key(str(x).split(" ")[0].split(":")[-1]) for x in (ln.get("footprint"), row.get("local_footprint")) if x}
             s = (bool(fps & want), not ln.get("dnp") and not str(row.get("status") or "").startswith("dnp"))
             if score is None or s > score:
                 best, score = (ln, row), s
@@ -675,7 +731,7 @@ def chip_size_clash(st, item, ln):
     1210 ohm resistor) is a value, not a size."""
     from . import stdparts as SP
     fp = st.get("footprint") or {}
-    src = str(fp.get("source") or "")
+    src = str(fp.get("origin") or fp.get("source") or "")   # origin: what a shared-store record was made from
     built = src.split(":")[-1] if src.startswith(("kicad:", "standard:")) else ""
     have = SP.chip_size(built, strict=True) if built else None
     if not have or str(have).startswith("conflict"):
@@ -699,6 +755,335 @@ def chip_size_clash(st, item, ln):
             return (f"footprint: the land built is {have} ({built}) but the part number {mpn} is an {size}: "
                     f"check which size the part is")
     return None
+
+
+# IC families that name one outline kind: a text naming another kind than the land built names another package
+_FAMILY_KIND = {"SOIC": "SO", "SO": "SO", "SOP": "SO", "TSSOP": "TSSOP", "HTSSOP": "TSSOP", "MSOP": "MSOP",
+                "VSSOP": "MSOP", "SSOP": "SSOP", "QSOP": "QSOP", "TSOP": "TSOP", "LQFP": "QFP", "TQFP": "QFP",
+                "QFP": "QFP", "PQFP": "QFP", "DIP": "DIP", "PDIP": "DIP", "SPDIP": "DIP"}
+# no-lead outlines, DigiKey's spellings too (16-VFQFN, 48-UFQFN, 10-XFDFN): pin count and a stated body compared
+_FAMILY_KIND.update({f: "QFN" for f in ("QFN", "VQFN", "WQFN", "UQFN", "TQFN", "HVQFN", "LQFN", "VFQFN", "WFQFN",
+                                        "UFQFN", "XQFN", "UFQFPN", "LFCSP")})
+_FAMILY_KIND.update({f: "DFN" for f in ("DFN", "TDFN", "WDFN", "UDFN", "VDFN", "XDFN", "WFDFN", "XFDFN", "UFDFN",
+                                        "SON", "VSON", "WSON", "USON", "X2SON")})
+_TANT_IMPERIAL = {"1206": "3216", "1411": "3528", "2312": "6032", "2917": "7343"}
+
+
+def _families_named(text):
+    """(outline kind, pin count, body width or None, body (w, l) or None) for each IC family a text names: '8-TSSOP',
+    'SOIC-8', '48LQFP', '8-SOIC (0.209", 5.30mm Width)', 'TSSOP-20_4.4x6.5mm', '16QFN 4x4', 'VQFN-16-1EP_3x3mm'."""
+    from . import stdparts as SP
+    fams = "|".join(sorted(_FAMILY_KIND, key=len, reverse=True))
+    out = []
+    t = str(text or "")
+    for m in re.finditer(rf"(?<![A-Za-z0-9.])(?:(\d{{1,3}})-?({fams})|({fams})[-_ ]?(\d{{1,3}}))(W)?(?![A-Za-z0-9])", t, re.I):
+        fam = (m.group(2) or m.group(3)).upper()
+        pins = int(m.group(1) or m.group(4))
+        kind = _FAMILY_KIND[fam]
+        a = SP._free_attrs(f"{'QFN' if kind == 'QFN' else 'DFN' if kind == 'DFN' else fam}-{pins}"
+                           f"{t[m.end():m.end() + 60]}") or {}
+        body = a.get("body") if a.get("body") and a["body"][0] <= 30 else None
+        raw = re.match(r"[^,;/]{0,25}?(\d+(?:\.\d+)?)\s*[x\u00d7]\s*(\d+(?:\.\d+)?)\s*mm", t[m.end():m.end() + 60], re.I)
+        # a leaded outline's width is the first size as written (TSSOP-8_4.4x3mm is 4.4 wide, SOIC-8_3.9x4.9mm 3.9)
+        width = None if kind == "DIP" else (float(raw.group(1)) if raw and kind not in ("QFN", "DFN") else
+                                            (body or (None,))[0] or a.get("body_w"))
+        if kind == "TSSOP" and width and width <= 3.1 and (not body or max(body) <= 3.1):
+            kind = "MSOP"                                 # KiCad's TSSOP-8_3x3mm / TSSOP-10_3x3mm: the MSOP body
+        if kind == "SSOP" and width and width <= 4.0:     # a 3.9 mm SSOP is the QSOP body (DigiKey lists QSOPs so)
+            kind = "QSOP"
+        out.append((kind, pins, width, body))
+    return out
+
+
+def _lands_named(text, diode, weak=False, kind=None):
+    """Every standard-table land a text names, read whole and by its comma / slash parts ('SOT-23-5 Thin, TSOT-23-5'
+    names SOT-23-5 and TSOT-23-5). weak (a description): a bare family name ('SOT23' on a 5-pin regulator) names
+    the 3-lead package only for a transistor or diode (stdparts.named_package)."""
+    from . import stdparts as SP
+    t = str(text or "")
+    out = set()
+    for frag in [t] + [f for f in re.split(r"[,;/]|\s+-\s+", t) if f.strip()]:
+        n, why = SP.named_package(frag, diode=diode, weak=weak, kind=kind)
+        if n:
+            out.add(n)
+        elif "ambiguous (KiCad has" in str(why or ""):   # TO-252-2: either tab numbering, the same outline
+            out.update(n for n in re.findall(r"(?:has|and) (\S+?)(?=[ ,)])", str(why).split("ambiguous", 1)[1])[:4]
+                       if n in SP.packages())
+    return out
+
+
+def _tant_cases(text):
+    """The tantalum EIA sizes a text names: '3528-21', 'CP_EIA-3528-21_Kemet-B', 'case B', '1411 (3528 Metric)',
+    a bare imperial case '1411' -> {'3528'} (the metric size; the height is not compared)."""
+    from . import stdparts as SP, mpn_decode as MD
+    t = str(text or "")
+    got = {m.group(1) for m in SP.EIA_CASE.finditer(t)}
+    got |= {MD.TANT_CASE[m.group(1).upper()].split("-")[0] for m in SP.CASE_LETTER.finditer(t)
+            if m.group(1).upper() in MD.TANT_CASE}
+    got |= {m.group(1) for m in re.finditer(r"(?<!\d)(3216|3528|6032|7343)\s*Metric", t, re.I)}
+    got |= {_TANT_IMPERIAL[m.group(1)] for m in re.finditer(r"(?<![\d.])(1206|1411|2312|2917)(?![\d.])", t)}
+    return got
+
+
+# crystal and oscillator size codes (length x width in 0.1 mm): 3225 is 3.2 x 2.5 mm
+_XTAL_CODE = {"1210": (1.2, 1.0), "1612": (1.6, 1.2), "2012": (2.0, 1.2), "2016": (2.0, 1.6), "2520": (2.5, 2.0),
+              "3215": (3.2, 1.5), "3225": (3.2, 2.5), "5032": (5.0, 3.2), "6035": (6.0, 3.5), "7050": (7.0, 5.0)}
+
+
+def _crystal_clash(built, texts):
+    """A crystal land's body ('_3.2x2.5mm') and pad count ('-4Pin') against a body ('2.0x1.6mm'), a size code ('2520')
+    or a pad count ('4-SMD') a text names."""
+    m = re.search(r"_(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)mm", built)
+    body = tuple(sorted((float(m.group(1)), float(m.group(2))), reverse=True)) if m else None
+    pins = re.search(r"-(\d+)Pin", built)
+    for w, t in texts:
+        said = [tuple(sorted((float(a), float(b)), reverse=True)) for a, b in
+                re.findall(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*mm)?(?![\d.])", t)]
+        said += [_XTAL_CODE[c] for c in re.findall(r"(?<![\d.])(\d{4})(?![\d.])", t) if c in _XTAL_CODE]
+        if body and said and not any(all(abs(x - y) <= 0.15 for x, y in zip(body, b)) for b in said):
+            return (f"footprint: the land built is {built} ({body[0]:g}x{body[1]:g} mm) but the {w} names "
+                    f"{said[0][0]:g}x{said[0][1]:g} mm ({t[:60]!r}): check which size the crystal is")
+        n = re.search(r"(?<!\d)(\d)-SMD\b", t)
+        if pins and n and n.group(1) != pins.group(1):
+            return (f"footprint: the land built is {built} ({pins.group(1)} pads) but the {w} names {n.group(1)} "
+                    f"pads ({t[:60]!r}): check which package the crystal has")
+    return None
+
+
+def _positions_clash(built, texts):
+    """A connector land's positions (rows x cols in its name: _1x04, _2x05; mounting pads apart) against a count a
+    text names ('3POS', '5 positions', '10-pin')."""
+    m = re.search(r"_(\d+)x(\d+)(?:-\d+MP)?_", built)
+    if not m:
+        return None
+    have = int(m.group(1)) * int(m.group(2))
+    for w, t in texts:
+        said = {int(x) for x in re.findall(r"(?i)(?<![\d.])(\d{1,3})\s*[- ]?\s*(?:POS(?:ITIONS?)?|WAYS?|CONTACTS?|PINS?)\b", t)}
+        if said and have not in said:
+            return (f"footprint: the land built is {built} ({have} positions) but the {w} names {min(said)} "
+                    f"({t[:60]!r}): check which connector the part is")
+    return None
+
+
+def package_clash(st, item, ln, row, kind):
+    """'footprint: ...' when the land built is a standard outline (a KiCad or table land: SOT-23-5, SOIC-8, D_SMA, a
+    tantalum case, a chip size) and one of the line's own texts -- the BOM's footprint, description or value, the part
+    search's package or description -- names another one. Which source was read first must not decide a package two
+    sources disagree on (a part search's SC-70-5 on a DBV SOT-23-5 part, an SMB package with an SMA description, a
+    case-A footprint on a case-B tantalum code), so a person says which. A text naming no outline, or the land built
+    among those it names, is no clash."""
+    from . import stdparts as SP, mpn_decode as MD
+    src = str((st.get("footprint") or {}).get("source") or "")
+    if not src.startswith(("kicad:", "standard:")):
+        return None
+    built = src.split(":")[-1]
+    texts = [("BOM footprint", ln.get("footprint")), ("BOM description", ln.get("description")),
+             ("BOM value", ln.get("value")), ("part search package", row.get("src_package")),
+             ("part search description", row.get("src_description"))]
+    texts = [(w, str(t).strip()) for w, t in texts if str(t or "").strip()]
+    mpn = _par(item).get("Manufacturer Part Number", "")
+    if built in SP.TANT_LAND.values():                        # a tantalum case: size by code, words and part number
+        have = built.split("-")[1]
+        said = [(w, t, c) for w, t in texts for c in _tant_cases(t)]
+        d = MD.decode(mpn)
+        if d and d["kind"] == "CP" and d.get("case"):
+            said.append(("part number", mpn, d["case"].split("-")[0]))
+        other = [(w, t, c) for w, t, c in said if c != have]
+        if other:
+            w, t, c = other[0]
+            return (f"footprint: the land built is the {have} tantalum case ({built}) but the {w} names {c} "
+                    f"({t[:60]!r}): check which case the part is")
+        return None
+    lib = src.split(":")[-2] if src.count(":") >= 2 else ""
+    if lib in ("Crystal", "Oscillator"):                      # a crystal's body and pad count by its land's name
+        return _crystal_clash(built, texts)
+    if lib.startswith("Connector"):                           # a connector's position count by its land's rows x cols
+        return _positions_clash(built, texts)
+    chip = SP.chip_size(built, strict=True)
+    if chip and not str(chip).startswith("conflict"):        # a chip land: the part search's size words too
+        for w, t in texts:
+            if not w.startswith("part search"):
+                continue                                      # (the BOM's own texts: chip_size_clash)
+            said = SP.chip_size(t)
+            if said and str(said).startswith("conflict"):
+                continue
+            if said and said != chip:
+                return (f"footprint: the land built is {chip} ({built}) but the {w} says {said} ({t[:60]!r}): "
+                        "check which size the part is")
+        return None
+    diode = kind in ("D", "LED") or built.startswith("D_")
+    mine = _families_named(built)
+    table = built in SP.packages()             # a table land: compared by name too (another maker's land: by family)
+    for w, t in texts:
+        if w == "BOM value" and not re.search(r"[A-Za-z]{2}", t):
+            continue
+        named = _lands_named(t, diode, weak="description" in w or w == "BOM value", kind="D" if diode else kind) \
+            if table else set()
+        if named and built not in named and not any(SP._same_land([built, n]) or _same_outline(built, n) for n in named):
+            return (f"footprint: the land built is {built} but the {w} names {'/'.join(sorted(named))} "
+                    f"({t[:60]!r}): check which package the part has")
+        if mine:
+            kind_, pins, width, body = mine[0]
+            no_lead = kind_ in ("QFN", "DFN")
+            other = []
+            for k2, p2, w2, b2 in _families_named(t):
+                if {k2, kind_} in ({"TSSOP", "MSOP"}, {"SSOP", "QSOP"}) and not w2:
+                    continue          # NXP's 'TSSOP8' is a 3 mm body, a widthless SSOP may be a QSOP: names neither
+                if k2 != kind_ or p2 != pins or (not no_lead and width and w2 and abs(width - w2) > 0.2) or \
+                        (no_lead and body and b2 and any(abs(x - y) > 0.2 for x, y in zip(body, b2))):
+                    other.append((k2, p2, w2, b2))
+                else:
+                    other = None                  # the land built is among the outlines it names ('8-SOIC / 8-TSSOP')
+                    break
+            if other:
+                k2, p2, w2, b2 = other[0]
+                size = f" {b2[0]:g}x{b2[1]:g} mm" if no_lead and b2 else f" {w2:g} mm wide" if w2 else ""
+                return (f"footprint: the land built is {built} but the {w} names {_an(str(p2))} {p2}-pin {k2} "
+                        f"outline{size} ({t[:60]!r}): check which package the part has")
+    return None
+
+
+def _clashes(st, item, ln, row, kind):
+    """Every source-clash note for a built part; a check that fails on an odd line holds the part (never stops the
+    run)."""
+    out = []
+    for name, f, args in (("package", package_clash, (st, item, ln, row, kind)),
+                          ("land kind", land_kind_clash, (st, item)), ("part kind", kind_clash, (item, ln)),
+                          ("value", value_clash, (item, ln, row)), ("maker", maker_clash, (ln, row))):
+        try:
+            out.append(f(*args))
+        except Exception as e:                       # noqa: BLE001 -- a check's own failure holds the part
+            out.append(f"check: the {name} check could not read this line ({type(e).__name__}): check the part by hand")
+    return out
+
+
+_SAME_OUTLINE = ({"SOT-23-6", "SC-74-6_1.55x2.9mm_P0.95mm"},)   # SC-74 / SOT-457: the SOT-23-6 outline and land
+
+
+def _same_outline(a, b):
+    return any(a in g and b in g for g in _SAME_OUTLINE)
+
+
+def _an(word):
+    """'a' or 'an' before a word or number as said aloud ('an 8-pin', 'an 11-pin', 'an inductor', 'a 16-pin')."""
+    w = str(word).lower()
+    return "an" if re.match(r"[aeio]|8|11(?!\d)|18(?!\d)", w) else "a"
+
+
+_LAND_KIND = {"R": "Resistors", "C": "Capacitors", "CP": "Capacitors", "L": "Inductors"}
+
+
+def land_kind_clash(st, item):
+    """'footprint: ...' when a resistor, capacitor or inductor is built on another kind's chip land (a 100nF C15 whose
+    BOM footprint is R_0402_1005Metric): the BOM line names two parts, so a person says which."""
+    src = str((st.get("footprint") or {}).get("source") or "")
+    if not src.startswith(("kicad:", "standard:")):
+        return None
+    name = src.split(":")[-1]
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    m = re.match(r"(R|C|CP|L)_", name)
+    if not m or cat not in _LAND_KIND.values() or _LAND_KIND[m.group(1)] == cat:
+        return None
+    return (f"footprint: the part is filed under {cat} but the land built is {name}, another kind's land: check "
+            "which part the BOM line is")
+
+
+def value_clash(item, ln, row):
+    """'value: ...' when a resistor's, capacitor's or inductor's (ferrite bead's) Value names another value than the
+    BOM's description or the part search's description names (Value 22uH on a 'FIXED IND 2.2UH' part, a 10 nF part
+    number whose part search says 1000PF): one of the two is a slip, so a person says which. A description naming
+    no value of the kind, or the Value among those it names, is no clash."""
+    from .altium_export import description_values
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    if cat not in ("Resistors", "Capacitors", "Inductors"):
+        return None
+    value = str(_par(item).get("Value") or "").strip()
+    if not value:
+        return None
+    cats = (cat, "Resistors") if cat == "Inductors" else (cat,)        # a bead's value is its impedance
+    have = None
+    for c in cats:
+        for raw in (value, value.lower(), value.replace(" ", ""), value.replace(" ", "").lower()):
+            v = passive_value(raw, c)
+            if v is not None:
+                have = (c, v)
+                break
+        if have:
+            break
+    prefix = re.fullmatch(r"\d+(?:[.,]\d+)?\s*([kKM]|[pnuµμ])", value)
+    if not have and prefix and cat in ("Resistors", "Capacitors") and \
+            (prefix.group(1) in "kKM") == (cat == "Capacitors"):   # '10k' on a capacitor, '100n' on a resistor
+        return (f"value: Value {value} is spelled with a {'resistance' if cat == 'Capacitors' else 'capacitance'} "
+                f"prefix but the part is filed under {cat}: check which part the BOM line is")
+    readings = [have[1]] if have else []
+    if not have and cat == "Resistors" and re.fullmatch(r"\d+(?:\.\d+)?", value):
+        from .mpn_decode import _eia                             # a resistor's bare '22' is 22 ohm, '103' may be EIA
+        readings = [float(value)] + ([_eia(value)] if re.fullmatch(r"\d{3,4}", value) and _eia(value) is not None else [])
+        have = ("Resistors", readings[0])
+    if not have:
+        return None
+    for w, text in (("BOM description", ln.get("description")), ("part search description", row.get("src_description"))):
+        said = {(c, float(v)) for (c, v) in description_values(text, cat)}
+        same = [v for c, v in said if c == have[0]]
+        if same and not any(abs(v - r) <= 1e-6 * max(abs(v), abs(r), 1e-15) for v in same for r in readings):
+            return (f"value: Value {value} but the {w} {str(text)[:60]!r} names another value: one of the two is a "
+                    "slip; check which value the part is")
+    return None
+
+
+_KIND_WORD = {"Resistors": r"resistors?|\bRES\b", "Capacitors": r"capacitors?|\bCAP\b",
+              "Inductors": r"inductors?|\bIND\b|ferrite|bead"}
+
+
+def kind_clash(item, ln):
+    """'part kind: ...' when the BOM description calls the part a resistor, capacitor or inductor and the line was
+    filed (by designator, value or part number) as another of the three ('Capacitor 10k' on R20): the line names two
+    parts, so a person says which. A description naming two kinds names neither."""
+    cat = str(item.get("folder") or "").rstrip("/").rsplit("/", 1)[-1]
+    if cat not in _KIND_WORD:
+        return None
+    desc = str(ln.get("description") or "")
+    said = [k for k, rx in _KIND_WORD.items() if re.search(rf"(?i)(?<![A-Za-z])(?:{rx})(?![A-Za-z])", desc)]
+    if len(said) == 1 and said[0] != cat:
+        return (f"part kind: filed under {cat} but the BOM description {desc[:60]!r} names "
+                f"{_an(said[0])} {said[0][:-1].lower()}: "
+                "check which part the BOM line is")
+    return None
+
+
+def maker_clash(ln, row):
+    """'maker: ...' when the BOM names a maker and the part search lists this exact part number only under other
+    makers (an MCP2562 the BOM says is Microchip's, found only as Texas Instruments'): the part built may be another
+    maker's part of the same number, so a person says which."""
+    from .release_check import _filled
+    bom = str(ln.get("manufacturer") or "").strip()
+    if not _filled(bom) or re.fullmatch(r"(?i)generic|any|various|multiple|unknown|(?:any|other) (?:maker|vendor)s?|"
+                                        r"equivalent|equiv\.?", bom):
+        return None                                      # a stand-in, not a maker
+
+    from . import mpn_decode as MD
+    mpn = str(ln.get("mpn") or "").strip()
+    d = MD.decode(mpn) if mpn else None
+    if d or (mpn and re.sub(r"[\s-]", "", bom).upper() == re.sub(r"[\s-]", "", mpn).upper()):
+        words = d["series"].split(" ") if d else []
+        coder = " ".join(words[:-1]) if len(words) > 1 else " ".join(words)   # 'Yageo RC/AC/..' -> Yageo
+        if not d or not P.same_maker(bom, coder):     # a maker's own ordering code (RC0402FR-07..L is Yageo's), or
+            return (f"maker: the BOM names {bom} but the part number {mpn} is "   # the part number typed as the maker
+                    + (f"{coder}'s ({d['series']} code)" if d else "in the maker column too")
+                    + ": check whose part it is")
+    listed = [m.strip() for m in str(row.get("src_makers") or "").split(";") if m.strip()]
+    listed += [m for m in [str(row.get("src_manufacturer") or "").strip()] if m and m not in listed]
+    if not listed or any(P.same_maker(bom, m) for m in listed):
+        return None
+    if {P.maker_key(bom)} | {P.maker_key(m) for m in listed} <= {"NXP", "NEXPERIA"}:
+        return None                       # NXP's standard products (logic, discretes) are Nexperia's since 2017
+
+    return (f"maker: the BOM names {bom} but the part search lists {_par_safe(listed)} for this part number: check "
+            "whose part it is")
+
+
+def _par_safe(makers):
+    return " / ".join(makers[:3]) + (" ..." if len(makers) > 3 else "")
 
 
 def _own_land(names, plain):
@@ -731,8 +1116,9 @@ def cost_hint(msg):
 
 class Run:
     def __init__(self, out, http, index, libs, sources, api_key=None, kicad_cache=None, refresh_index=False, gen_step=True,
-                 rules=None, reader=None):
+                 rules=None, reader=None, store=None):
         self.out, self.http, self.index, self.libs, self.sources = Path(out), http, index, libs, sources
+        self.store, self.second = store, {}             # shared store (store_client.Store); its second opinions
         self.rules = rules or RU.DEFAULTS
         self.models = self.out / "models"
         for d in ("PcbLib", "SchLib", "KiCad"):
@@ -757,12 +1143,16 @@ class Run:
         return os.path.relpath(p, self.out).replace(os.sep, "/")
 
     # ---- writers: everything goes through kicad_import's converters
-    def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None, model=None):
+    def put_fp(self, st, text, name, source, http=None, height=None, height_src="", spec=None, model=None, meta=None):
         """One file per footprint, shared only by parts whose pads are the same (ecadlib/fp_share.py).
-        model: a downloaded 3D model already placed on the footprint (easyeda_model), the part's body and height."""
+        model: a downloaded 3D model already placed on the footprint (easyeda_model), the part's body and height.
+        meta: {"origin", "store_key"} of a footprint built from a shared-store record (src_store): the record's own
+        source decides the sharing by library name and the KiCad licence, as for a part built from that source."""
         bom_name = name
+        meta = dict(meta or {})
+        share = meta.get("origin") or source              # what the footprint really is (a store record: its source)
         own_h = model["info"].get("height") if model else height    # the part's own body: shared only with one as high
-        name, pcb, same, h = FS.pick(self.written, self.models, name, text, source, st["name"], self.out, self.hashes,
+        name, pcb, same, h = FS.pick(self.written, self.models, name, text, share, st["name"], self.out, self.hashes,
                                      own_h)
         renamed = {"renamed_from": bom_name} if name != bom_name else {}
         if same is not None:                    # (its own file from an earlier run, kept for a skipped part: not shared)
@@ -774,12 +1164,12 @@ class Run:
             return
         pcb, stem = Path(pcb), AL.file_stem(name)
         body = renamed and own_h is not None and any(       # same pads, but another 3D body (R-CV-2)
-            FS.base_of(r).casefold() == bom_name.casefold() and FS.same_fp(r, h, source, self.out, self.hashes, text)
+            FS.base_of(r).casefold() == bom_name.casefold() and FS.same_fp(r, h, share, self.out, self.hashes, text)
             for r in self.written.values())
         notes = [f"named {name}: footprint {bom_name} is another part's, with "
                  + (f"another 3D body (this part's is {own_h} mm high)" if body else "other pads")] if renamed else []
         fp, t = K.convert_footprint(text, name, source.split(":", 1)[-1], notes,
-                                    K.KICAD_LICENSE if source.startswith("kicad:") else "")
+                                    K.KICAD_LICENSE if is_kicad_source(share) else "")
         _hold_lost_copper(st, name, notes)
         if model:                               # the source's own 3D model: its shape and height beat any table
             E3.add_body(fp, model["text"], model["info"], model["ref"], notes, embed=self.gen_step)
@@ -803,6 +1193,7 @@ class Run:
         st["footprint"] = {"source": source, "file": self.rel(pcb), "kicad_mod": self.rel(kmod), "notes": notes, "by": st["name"],
                            "name": name, "hash": h, "hash_v": FS.HASH_V, "height": fp.get("height_mm") or None, **renamed,
                            **({"mount_pads": explicit_mount_pads(spec)} if explicit_mount_pads(spec) else {}),
+                           **{k: v for k, v in meta.items() if k in ("origin", "store_key") and v},
                            **({"model": {"source": f"easyeda:{model['ref']['uuid']}", "url": model["ref"]["url"],
                                          "title": model["ref"]["title"], "credit": EC.CREDIT}} if model else {})}
         self.written[str(pcb)] = st["footprint"]
@@ -819,9 +1210,9 @@ class Run:
         AL.write_schlib(path, [sym])
         rec.setdefault("notes", []).append(f"footprint link {name} (the BOM's {bom_name} is another footprint)")
 
-    def put_sym(self, st, sym, source, notes=(), kicad_types=None):
+    def put_sym(self, st, sym, source, notes=(), kicad_types=None, meta=None):
         """kicad_types: {pin number: KiCad type} the .SchLib cannot hold (kicad_only_types), kept with the plan's
-        symbol so the KiCad export puts them back."""
+        symbol so the KiCad export puts them back. meta: {"origin", "store_key"} of a symbol from a store record."""
         path = self.models / "SchLib" / f"{AL.file_stem(sym['name'])}.SchLib"
         if st.get("kind") in SHARED_KINDS:      # one Resistor / Capacitor / Inductor symbol for every value and size,
             sym = shared_symbol(sym)            # whichever source drew it: no footprint, no one part's MPN
@@ -836,12 +1227,13 @@ class Run:
             return
         AL.write_schlib(path, [sym])
         self.syms[str(path)] = sym
-        st["symbol"] = {"source": source, "file": self.rel(path), "notes": list(notes), "by": st["name"]}
+        st["symbol"] = {"source": source, "file": self.rel(path), "notes": list(notes), "by": st["name"],
+                        **{k: v for k, v in (meta or {}).items() if k in ("origin", "store_key") and v}}
         if kicad_types:
             st["symbol"]["kicad_types"] = dict(kicad_types)
         self.written[str(path)] = st["symbol"]
 
-    def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False):
+    def put_kicad_sym(self, st, chain, name, fp_name, source, extra=(), layout=False, meta=None):
         """layout: re-lay plain IC symbols out by the house pin rule (EasyEDA symbols). KiCad library symbols are curated
         and kept as drawn, unless their pin text would overlap in Altium (symbol_layout.text_problems)."""
         notes = []
@@ -858,8 +1250,8 @@ class Run:
             notes.append(f"pin text overlaps ({'; '.join(clash[:3])}); not a plain IC box, so kept as drawn: check it")
         elif stacked:
             notes.append(f"pins {', '.join(stacked[:3])} share one pin end; not a plain IC box, so kept as drawn: check it")
-        self.put_sym(st, sym, source, notes,
-                     kicad_types=kicad_chain_types(chain) if source.startswith(("kicad:", "local:")) else None)
+        self.put_sym(st, sym, source, notes, **({"meta": meta} if meta else {}),
+                     kicad_types=kicad_chain_types(chain) if source.startswith(("kicad:", "local:", "store:")) else None)
 
     # ---- per part
     def resolve(self, item, ln, row, keep=None):
@@ -880,8 +1272,9 @@ class Run:
         dnp = (row.get("status") or "").startswith("dnp")   # not assembled, but still on the schematic and the PCB:
         if dnp:                                              # built from the free sources, no paid datasheet read
             st["tried"].append("DNP line: built for the schematic/PCB (not assembled), from the free sources only")
-        own_symbol_ref(item, ln)
-        kind, fp_name, sym_name = passive_kind(item, ln), item["footprint"]["ref"], item["symbol"]["ref"]
+        search = str(row.get("src_description") or "")       # what the part search calls the part ('CAP TANT ...')
+        own_symbol_ref(item, ln, search)
+        kind, fp_name, sym_name = passive_kind(item, ln, search), item["footprint"]["ref"], item["symbol"]["ref"]
         st["passive"], st["folder"] = is_passive_part(item, ln), item.get("folder")
         st["kind"], st["names"] = kind, [item["footprint"].get("kicad") or "", ln.get("footprint") or "", item.get("description") or ""]
         sensor_hold(st, item, ln, row, kind)
@@ -917,6 +1310,9 @@ class Run:
         clash = chip_size_clash(st, item, ln)
         if clash:
             st["verify"].append(clash)
+        for clash in _clashes(st, item, ln, row, kind):
+            if clash and clash not in st["verify"]:           # the line's own sources disagree: never the first read's
+                st["verify"].append(clash)
         self._finish_found(st, row)
         if kind in ("NTC", "PTC", "VAR") and st["footprint"] and st["symbol"]:   # nothing else describes it (a BOM
             from . import stdparts as SP                    # line with only the MPN, no part search): what it is and
@@ -969,6 +1365,190 @@ class Run:
         if ls or lf:
             st["tried"].append(f"local library: symbol {'from ' + ls if st['symbol'] else 'not used' if ls else 'none'}, "
                                f"footprint {'from ' + lf if st['footprint'] else 'none'}")
+
+    # ---- the shared store of checked parts (docs/shared-store.md; store_client reads it, store_record owns a record)
+    def src_store(self, st, item, ln, row, kind, mpn, fp_name, sym_name):
+        """The shared store, by maker + MPN. A record the [store] accept policy lets in (store_client.decide "use": the
+        exact maker + MPN, not a code the record also covers, not a lookup without a maker) is drawn through the same
+        writers as every source (footprint sharing, house style, layers, notes) and goes through the same release check;
+        its source is store:<key_id>@r<rev>, and the record's own source (kicad / standard / datasheet) is kept as the
+        half's `origin`, so a KiCad record keeps the KiCad licence and credit. A record not trusted on its own (one
+        build under accept = "confirmed", a disputed record, a match through `also` or without a maker) builds nothing:
+        it is kept as a second opinion on what the other sources build (second_opinion). An EasyEDA pointer record is
+        only noted. The record is checked again here (store_record.validate: its hashes against its own drawing, its
+        KiCad text against its fields) and the BOM's footprint name against the record's package (store_land_clash).
+        A record never fills the Manufacturer field. No store set ([store] url ""): nothing is asked, nothing is said."""
+        store = self.store
+        if store is None or not getattr(store, "enabled", False):
+            return
+        from . import store_client as SC, store_record as SR
+        hit = store.lookup(st.get("maker") or "", mpn)
+        if hit is None:
+            if mpn and store.usable() and not getattr(store, "_stale_said", False):
+                st["tried"].append(f"store: {mpn} is not in the shared store")
+            return
+        rec, label = hit.record, SC.safe(f"{hit.key} r{hit.rev}")
+        if hit.note:
+            note = SC.safe(hit.note)
+            st["tried"].append(f"store: {note}")
+            st["review"].append(f"shared store: {note}")
+        bad = SR.validate(rec)
+        if bad:
+            st["tried"].append(SC.safe(f"store: record {label} refused: {bad[0]}"
+                                       + (f" (+{len(bad) - 1} more)" if len(bad) > 1 else "")))
+            return
+        if SR.footprint_text(rec) is None or SR.symbol_chain(rec) is None:
+            st["tried"].append(f"store: record {label} is a pointer to {SC.safe(rec['footprint']['source'])}: recorded "
+                               "for later; this version neither builds from it nor compares with it")
+            return
+        how = SC.decide(hit, store.accept)
+        what = f"{hit.level}{', disputed' if hit.status == 'disputed' else ''}"
+        if how == "skip":
+            st["tried"].append(f"store: record {label} ({what}) not used ([store] accept = \"{store.accept}\")")
+            return
+        if how == "second-opinion":
+            self.second[st["name"]] = (st, hit, sym_name)
+            why = {"also": "it was found through another code it covers", "no-maker": "it was found without a maker"}
+            st["tried"].append(f"store: record {label} ({what}) is not used on its own"
+                               + (f" ({why[hit.via]})" if hit.via in why else "")
+                               + "; kept as a second opinion on this part's own build")
+            return
+        meta = lambda half: {"origin": rec[half]["source"], "store_key": hit.key}
+        got = []
+        if not st["footprint"]:
+            body = rec.get("body") or {}
+            hs = f"shared store record {label}" + (f": {SC.safe(body['height_src'])}" if body.get("height_src") else "")
+            self.put_fp(st, SR.footprint_text(rec), fp_name, hit.source, None, SR.height(rec), hs, SR.spec(rec),
+                        meta=meta("footprint"))
+            mount = (rec.get("footprint") or {}).get("mount_pads")
+            if mount and st["footprint"].get("source") == hit.source and not st["footprint"].get("mount_pads"):
+                st["footprint"]["mount_pads"] = int(mount)
+            got.append("footprint")
+            clash = store_land_clash(rec, [ln.get("footprint"), item["footprint"].get("kicad")], label)
+            if clash:
+                st["verify"].append(clash)
+            extras = store_extras(SR.footprint_text(rec))   # strangers' text, not ecadlib's generator: what the pad
+            if extras:                                       # hash leaves out (bottom-side pads, custom copper, paste
+                st["verify"].append(f"shared store: the store's footprint has {extras}: compare with the datasheet")
+        if not st["symbol"]:
+            shared = kind in SHARED_KINDS
+            self.put_kicad_sym(st, SR.symbol_chain(rec), sym_name, None if shared else fp_name, hit.source,
+                               kicad_params(mpn, shared, is_kicad_source(rec["symbol"]["source"])), meta=meta("symbol"))
+            got.append("symbol")
+        st["store"] = {"key": hit.key, "key_id": hit.key_id, "rev": hit.rev, "level": hit.level, "sha256": hit.sha256}
+        st["tried"].append(f"store: {' and '.join(got) or 'nothing needed'} from the shared store's record {label} "
+                           f"({hit.level}" + (", taken alone as [store] accept = \"checked\"" if hit.level != "confirmed"
+                                              else "") + f"; made from {SC.safe(rec['footprint']['source'])})")
+        part, src = rec.get("part") or {}, f"shared store record {hit.key_id} r{hit.rev}"
+        if str(part.get("description") or "").strip():
+            st["found"].setdefault("description", (part["description"], src))
+        url = str((part.get("datasheet") or {}).get("url") or "")
+        if url.startswith(("http://", "https://")):
+            st["found"].setdefault("datasheet", (url, src))
+
+    def _independent(self, st, rec, mine):
+        """(True, "") when the store's record and this part's own build were made independently, so that their
+        agreement confirms the build: for each half, another kind of source (a KiCad / standard entry against a
+        datasheet read), or two datasheet reads by different readers (the record holds an agreeing `build` entry whose
+        reader, provider and model, is not this read's). (False, why) otherwise: the same KiCad or standard entry kind
+        (a KiCad alias is not resolved here, so two KiCad entries never count), the same reader model, a reader not
+        known on either side, or a half from a source the store does not take (a --lib library, a person's pick)."""
+        from . import rebuild as LK, store_record as SR
+        trusted = self.store.trusted() if hasattr(self.store, "trusted") else None
+        for h in ("symbol", "footprint"):
+            lk, rk = SR.kind_of(mine[h]), SR.kind_of((rec.get(h) or {}).get("source"))
+            if lk is None:
+                return False, f"this build's {h} ({mine[h] or 'none'}) is not a source the store compares with"
+            if lk != rk:
+                continue
+            if lk != "datasheet":
+                return False, f"the {h} came from the same kind of source ({lk}) as the store's record, so it is no " \
+                              "second build"
+            ds = LK._datasheet(self.out, mine[h][len("datasheet:"):]) if mine[h].startswith("datasheet:") else {}
+            ours = (str(ds.get("provider") or ""), str(ds.get("model") or "")) if ds.get("model") else None
+            theirs = {(str(e["reader"].get("provider") or ""), str(e["reader"].get("model") or ""))
+                      for e in rec.get("evidence") or [] if isinstance(e, dict) and e.get("kind") == "build"
+                      and SR._agrees(rec, e) and isinstance(e.get("reader"), dict) and e["reader"].get("model")
+                      and (trusted is None or e.get("by") in trusted)}
+            if ours is None or not theirs:
+                return False, "it agrees, but not an independent read (the datasheet reader of " + \
+                    ("this build" if ours is None else "the store's record") + " is not known)"
+            if not theirs - {ours}:
+                return False, f"it agrees, but not an independent read (both read by {ours[1]})"
+        return True, ""
+
+    def second_opinion(self, st, hit, sym_name):
+        """A store record kept aside (src_store) against what the other sources built for the part: the pads (both
+        drawings hashed by fp_share.digest at this ecadlib's digest version, never the record's stored hash) and the
+        pins (store_record.pins_hash: number, name with its active-low bar, pad, and the mounting-pad count). Other pads
+        or pins: held, naming both. The same: noted, and the holds that wait only for someone to confirm an unconfirmed
+        build (a datasheet read, a KiCad symbol or footprint matched by a near name, an EasyEDA conversion, a family
+        pinout: unconfirmed()) are lifted, when the agreement is evidence: the record is active (not disputed) and the
+        two builds are independent (_independent). A lifted datasheet read's flagged items go to the review list, as a
+        cross-check's do. The lift is recorded (store_check: key_id, rev, lifted) and taken back on a later run or by
+        upkeep when that record is withdrawn, disputed or gone (store_holds). Every other hold stays."""
+        from . import store_client as SC, store_record as SR
+        rec, label = hit.record, SC.safe(f"{hit.key} r{hit.rev}")
+        review = st.pop("read_review", None) or []
+        mine = {h: str((st.get(h) or {}).get("source") or "") for h in ("symbol", "footprint")}
+        if any(SC.parse_source(s) for s in mine.values()):
+            return                                     # (a store part is never its own second opinion)
+        fp = st.get("footprint") or {}
+        if not fp.get("kicad_mod") or not (st.get("symbol") or {}).get("file"):
+            st["tried"].append(f"store: record {label} not compared: no symbol and footprint were built to compare it with")
+            return
+        try:
+            text = (self.out / fp["kicad_mod"]).read_text(encoding="utf-8")
+            pads = FS.digest(text) == FS.digest(SR.footprint_text(rec))
+            sym = st["symbol"]
+            mine_pins = SR.schlib_pins(self.out / sym["file"], "x", AL.lib_name(sym_name) if sym_name else None,
+                                       sym.get("kicad_types"), sym.get("source") or "")   # (types too: as a record)
+            pins = SR.pins_hash(mine_pins, mount_pads=fp.get("mount_pads")) == SR.pins_hash(rec)
+        except Exception as e:                         # a comparison that did not run lifts nothing
+            st["tried"].append(f"store: record {label} not compared ({type(e).__name__}: {SC.safe(e)[:120]})")
+            return
+        check = {"key": hit.key, "key_id": hit.key_id, "rev": hit.rev, "level": hit.level, "status": hit.status}
+        differ = [w for w, same in (("pads", pads), ("pins", pins)) if not same]
+        if differ:
+            dens = str((self.rules.get("footprint") or {}).get("density") or "N")
+            st["verify"].append(
+                f"shared store: the store's record {label} ({hit.level}) has other {' and '.join(differ)} than this build "
+                f"(symbol {M.source_word(mine['symbol'])}, footprint {M.source_word(mine['footprint'])}): compare both "
+                f"with the datasheet (`ecadlib store get` shows the record)"
+                + (f"; your [footprint] density is {dens}, the store's parts are usually N" if "pads" in differ
+                   and dens != "N" else ""))
+            st["store_check"] = dict(check, result="disagreed", differ=differ)
+            return
+        ok, why = self._independent(st, rec, mine)
+        if hit.status == "active" and hit.level != "confirmed":
+            st["tried"].append(f"store: this build agrees with one unconfirmed build in the shared store ({label}, "
+                               f"{hit.level}); not enough to release: no hold is lifted")
+            st["store_check"] = dict(check, result="agreed, unconfirmed",
+                                     why="agrees with one unconfirmed build in the shared store; not enough to release")
+            return
+        if hit.status != "active" or not ok:
+            why = "it is disputed" if hit.status != "active" else why
+            st["tried"].append(f"store: this build matches the shared store's record {label}, but {why}: no hold is "
+                               "lifted")
+            st["store_check"] = dict(check, result="agreed, not independent", why=why)
+            return
+        lift = [v for v in st["verify"] if unconfirmed(v)]
+        st["verify"] = [v for v in st["verify"] if v not in lift]
+        if any(str(v).startswith("datasheet reader output (") for v in lift):   # the read's flagged items: to review,
+            st["review"].extend(f"datasheet read: {r}" for r in review)          # as a cross-check that agrees does
+        st["tried"].append(f"store: matches an independent build in the shared store ({hit.key_id} r{hit.rev}, "
+                           f"{hit.level})" + (f"; that confirms: {'; '.join(lift)}" if lift else ""))
+        st["store_check"] = dict(check, result="agreed", lifted=lift)
+
+    def second_opinions(self):
+        """second_opinion() for every part that kept a record aside, once its own build is finished (after the
+        datasheet batch)."""
+        for st, hit, sym_name in self.second.values():
+            try:
+                self.second_opinion(st, hit, sym_name)
+            except Exception as e:                     # never stops the run; nothing is lifted
+                st["tried"].append(f"store: second opinion failed ({type(e).__name__}: {e})")
+        self.second = {}
 
     def _wild_other_pinout(self, lib, mpn, sym_ref, chain):
         """Another x-wildcard name the MPN fits whose pin number -> name map differs from sym_ref's (MCP6L01x-xOT
@@ -1029,7 +1609,7 @@ class Run:
             pkg = package_of(item["footprint"].get("kicad") or fp_name, item.get("description"))
             if not pkg and kind in ("R", "C", "L"):    # no package in the BOM: the size the maker's part number states
                 from . import stdparts as SP           # (RC0603FR-0710KL is an 0603), before any converted source
-                mk, size = SP.mpn_size(mpn)
+                mk, size = SP.mpn_size(mpn, str(ln.get("manufacturer") or st.get("maker") or ""))
                 pkg = size if size and mk in ("", kind) else None
             elif not pkg and kind in SENSOR_KINDS:     # a thermistor / varistor series' size code (NCP18: 0603)
                 from . import stdparts as SP
@@ -1042,8 +1622,9 @@ class Run:
                 from . import stdparts as SP
                 land, why = SP.tantalum_land([ln.get("footprint", ""), item["footprint"].get("kicad") or ""], mpn,
                                               item.get("description") or ln.get("description") or "")
-                if land and lib.footprint(land):
-                    fp_ref, fp_how = lib.footprint(land), why
+                if land and lib.footprint(land) and "same copper" not in why:    # another height's land (stdparts.
+                    fp_ref, fp_how = lib.footprint(land), why       # TANT_SIZE_LAND) carries KiCad's 3D body at the
+                                                                    # wrong height: the standard source builds it
             elif PASSIVE[kind][1] and pkg in IMP2MET:
                 guess = PASSIVE[kind][1].format(pkg, IMP2MET[pkg])
                 own = _own_land(names, guess.split(":")[-1])
@@ -1228,13 +1809,26 @@ class Run:
             desc = f"{desc} {way}".strip()
         if case and (k == "CP" or k == "C" and SP.POLAR_CAP.match(SP._norm(mpn))):    # a tantalum's size + height
             case = SP.tantalum_search_text(case, row.get("src_height"), mpn)            # name its EIA case
-        res = resolve_standard([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad"), ln.get("value")],
-                               case, str(row.get("src_package_device") or ""), k, mpn, desc)
+        if item.get("generic_hold") and not mpn and k != "CP":   # a no-MPN R / C whose line is not understood: no chip
+            res = {"footprint": None, "kicad_ref": None, "symbol": None, "fp_how": item["generic_hold"],
+                   "sym_how": "not a generic passive (see the footprint)"}
+        else:                                      # review 2026-11-23: the Value cell is passed as the value (it names
+            # no land by itself: '1210' is 1.21 kOhm), with the line's maker (a part-number size rule of another maker
+            # is not used) and the part search's own description (what a capacitor is made of)
+            res = resolve_standard([st["hint_fp"], ln.get("footprint"), item["footprint"].get("kicad")],
+                                   case, str(row.get("src_package_device") or ""), k, mpn, desc,
+                                   value=str(ln.get("value") or ""), search=str(row.get("src_description") or ""),
+                                   maker=str(ln.get("manufacturer") or st.get("maker") or row.get("src_manufacturer") or ""))
         got = []
         if not st["footprint"] and res["footprint"]:
             sp = SP.spec(res["footprint"])
             text, _ = SP.build(res["footprint"], RU.density_for(sp, self.rules))
             h = F.dim(sp["height_max"])[2] if sp.get("height_max") else None
+            own = re.match(r"tantalum case EIA (\d{4})-(\d{2})\b", str(res.get("fp_how") or ""))
+            land = SP.EIA_CASE.search(res["footprint"])
+            if res["footprint"] in SP.TANT_LAND.values() and own and land and own.groups() != land.groups():
+                h = int(own.group(2)) / 10      # a tantalum on its size's land (stdparts.TANT_SIZE_LAND): the case
+                sp = dict(sp, height_max=h)     # tantalum_land matched sets the 3D body's height, not the table land's
             self.put_fp(st, text, fp_name, f"standard:{res['kicad_ref']}", None, h, "standard package table", sp)
             got.append(f"footprint {res['kicad_ref']} ({res['fp_how']})")
         fp_src = str((st["footprint"] or {}).get("source") or "")
@@ -1568,13 +2162,17 @@ class Run:
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
         if not data:
             return None
+        # the order must be this part's PACKAGE's: a family sheet prints the TO-92 table as text and draws the SOT-23
+        # (review 2026-11-23, 1.4). The package is the land the part was given, by name
+        land, doubts = str((st.get("footprint") or {}).get("source") or "").split(":")[-1], []
         try:
-            orders = PT.pin_orders_pdf(data, "GSD" if what.endswith("MOS") else "BEC")
+            orders = PT.pin_orders_pdf(data, "GSD" if what.endswith("MOS") else "BEC", part=mpn,
+                                       package=(land,) if land else (), doubts=doubts)
         except Exception:
             return None
         if len(orders) != 1:
             st["tried"].append(f"standard: {mpn} ({what}): its datasheet's text does not settle the pin order "
-                               f"({' and '.join(orders) + ' both agree' if orders else 'no pin table or drawing read'})")
+                               f"({doubts[0] if doubts else ' and '.join(orders) + ' both agree' if orders else 'no pin table or drawing read'})")
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link}, and in no "
                            "other order")
@@ -1591,15 +2189,20 @@ class Run:
         if not data:
             return None
         want, others = SP.so8_fet_orders()
+        # the order must be this part's PACKAGE's (review 2026-11-23, 1.4): the package is the land the part was given
+        land = str((st.get("footprint") or {}).get("source") or "").split(":")[-1]
         try:
             texts, figs = PT.page_texts(data), PT.page_figures(data)
-            ok = [o for o in [want] + others
-                  if PT.check(texts, list(zip(map(str, range(1, 9)), o)), figs, pin_count=8)["status"] == "agreed"]
+            got = {o: PT.check(texts, list(zip(map(str, range(1, 9)), o)), figs, pin_count=8, part=mpn,
+                               package=(land,) if land else ()) for o in [want] + others}
+            ok = [o for o in got if got[o]["status"] == "agreed"]
+            doubt = PT.package_doubt(texts, got[want].get("page"), (land,) if land else (), 8, got[want].get("where"),
+                                     got[want].get("above"), part=mpn) if ok == [want] else None
         except Exception:
             return None
-        if ok != [want]:
+        if ok != [want] or doubt:
             st["tried"].append(f"standard: {mpn} ({what}, SO-8): its datasheet's text does not settle pins 1-8 "
-                               f"({', '.join(ok) + ' agree' if ok else 'no pin table or drawing read'})")
+                               f"({'it prints ' + ', '.join(want) + ', but ' + doubt if doubt else ', '.join(ok) + ' agree' if ok else 'no pin table or drawing read'})")
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1-8 are {', '.join(want)} in {link}, and in no other "
                            "order a maker prints")
@@ -1615,13 +2218,16 @@ class Run:
         data, link = self.datasheet_pdf(item, ln, row, st, mpn)
         if not data:
             return None
+        # the order must be this part's PACKAGE's: a family sheet prints the TO-92 table as text and draws the SOT-23
+        # (review 2026-11-23, 1.4). The package is the land the part was given, by name
+        land, doubts = str((st.get("footprint") or {}).get("source") or "").split(":")[-1], []
         try:
-            orders = PT.diode_orders_pdf(data)
+            orders = PT.diode_orders_pdf(data, package=(land,) if land else (), doubts=doubts, part=mpn)
         except Exception:
             return None
         if len(orders) != 1:
             st["tried"].append(f"standard: {mpn} ({what}, three leads): its datasheet's words do not settle which lead "
-                               "is the anode and which the cathode")
+                               "is the anode and which the cathode" + (f" ({doubts[0]})" if doubts else ""))
             return None
         st["tried"].append(f"standard: {mpn} ({what}): pins 1, 2, 3 are {', '.join(orders[0])} in {link} "
                            "(A anode, K cathode, N not connected), and in no other order")
@@ -2047,6 +2653,8 @@ class Run:
             if held:                                  # checked land, no settle), a read that still fails a check
                 raise D.DatasheetError(held)          # that can build it wrong is held, nothing written
             st["review"].extend(pad_table_problems(res["spec"]))
+            if res.get("cross_check"):                # built from the read's own numbers: an agreement that compared
+                res = dict(res, cross_check=CC.built_from_read(res["cross_check"]))   # not all of them is none (review 2026-11-23, 1.7)
             try:
                 text, _ = F.build(res["spec"], RU.density_for(res["spec"], self.rules))
             except (KeyError, TypeError) as e:     # a read that left a needed dimension blank: name it, not KeyError
@@ -2105,6 +2713,9 @@ class Run:
             st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                                 "see datasheet/*.review.md"
                                 + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+            if self.store is not None and getattr(self.store, "enabled", False) and res["needs_review"]:
+                st["read_review"] = [str(r) for r in res["needs_review"]]   # (a store agreement lifting the hold
+                #                                                           moves them to the review list)
 
     def drawn_pins(self, st, res, job):
         """The pinout drawing's verdict on the read's symbol (ecadlib.pin_drawing), for a PDF whose text layer has no pin
@@ -2329,17 +2940,17 @@ def land_symbol_fits(filters, pins, pads, land_ref):
     return bool(pins) and set(pins) == set(pads) and _filter_hit(filters, land_ref)
 
 
-def resolve_standard(texts, case, device, kind, mpn, desc):
+def resolve_standard(texts, case, device, kind, mpn, desc, **line):
     """stdparts.resolve for a part's own texts and its part search's case. Where they name no land (DigiKey's group
     'TO-236-3, SC-59, SOT-23-3' read name by name ends at KiCad's ambiguous 'SOT-23-3'; '44-TQFP' names no body), the
     one land the case and its device package name together (case_or_device_land) is the part's."""
     from . import stdparts as SP
-    res = SP.resolve(list(texts) + [case], kind, mpn, desc)
+    res = SP.resolve(list(texts) + [case], kind, mpn, desc, **line)      # line: value, maker, search (stdparts.resolve)
     if res["footprint"] or not case or kind == "CP" or "disagree" in str(res.get("fp_how") or ""):
         return res                                    # (a case whose own size codes disagree, '0402 (1006 Metric)',
     land = case_or_device_land(case, device, kind)    # names no land by any reading: held as before)
     if land:
-        named = SP.resolve(list(texts) + [land], kind, mpn, desc)
+        named = SP.resolve(list(texts) + [land], kind, mpn, desc, **line)
         if named["footprint"] == land:
             named["fp_how"] = f"the part search's case {case!r}" + (f" and device package {device!r}" if device else "") \
                 + f" name {land}"
@@ -2476,6 +3087,11 @@ def case_land(case, kind=None):
 UNSURE_READ = re.compile(r"does not seem to name|datasheet from your folder|not downloaded here|found by a web search|"
                          r"package drawing came from|no drawing of this package|instruction-like text|"
                          r"set aside|check it is this part", re.I)
+# ...except the one difference set aside that leaves no doubt about the part: a two-terminal read built from the maker's
+# whole land, called chip on one side and molded on the other, with its pin count and body agreed (crosscheck._label_only)
+WORD_ONLY = re.compile(r"cross-check agreed once a difference was set aside: package type read (?:chip|molded), other "
+                       r"source (?:chip|molded): a word only, the pads are built from the maker's land; check it on the "
+                       r"drawing")
 
 
 def read_confirmed(res, job, got, drawn=None):
@@ -2486,7 +3102,7 @@ def read_confirmed(res, job, got, drawn=None):
                  name picked, which only shows the read fits its own name)
       symbol     every named pin agrees, in one column of one table, with the PDF's own text layer (ecadlib.pin_text)
     and no review item says the PDF or its drawing may not be this part's (UNSURE_READ)."""
-    if not got or any(UNSURE_READ.search(str(r)) for r in res.get("needs_review") or ()):
+    if not got or any(UNSURE_READ.search(str(r)) and not WORD_ONLY.fullmatch(str(r)) for r in res.get("needs_review") or ()):
         return None
     why = []
     if "footprint" in got or any(g.startswith("footprint") for g in got):
@@ -2494,13 +3110,16 @@ def read_confirmed(res, job, got, drawn=None):
         if cc.get("status") != "agreed":
             return None
         src = [c for c in cc.get("checks") or () if c.get("status") == "agreed" and c.get("via") != "the read's package name"]
-        why.append("footprint agrees with " + (f"{src[0].get('against')} ({src[0].get('via') or src[0].get('source')})"
-                                               if src else "the cross-check"))
+        how = src and (src[0].get("via") or src[0].get("source"))
+        why.append("footprint agrees with " + ((f"{src[0].get('against')}" + (f" ({how})" if how and how not in
+                                                str(src[0].get("against")) else "")) if src else "the cross-check"))
     if "symbol" in got:
         from . import pin_text as PT
         pins = [(q.get("num"), q.get("name")) for q in (res.get("symbol") or {}).get("pins") or ()]
         data = job.get("data")
-        v = PT.check_pdf(data, pins, pin_count=(res.get("spec") or {}).get("pin_count"))
+        # few_named, as variant_agrees and pinout_agrees apply it: a read that names two pins of eight and calls the
+        # rest NC compared too little to release on (review 2026-11-23, 1.10)
+        v = few_named(PT.check_pdf(data, pins, pin_count=(res.get("spec") or {}).get("pin_count"), blank=True), pins)
         if v["status"] == "agreed":
             why.append(f"{v['pins']} pins agree with the {v.get('where', 'pin table')} on PDF page {v['page']} (text layer)")
         elif v["status"] == "unchecked" and not v.get("doubt") and drawn is not None:   # no pin table in the text: the pinout DRAWING, read
@@ -2589,11 +3208,16 @@ def _done(st, out):
 OWN_UNIT = {"Resistors": ("R", "kKMG"), "Capacitors": ("F", "pnuµμ"), "Inductors": ("H", "nuµμ")}
 
 
+METRIC_SIZE_MARK = re.compile(r"(?:0402|0603|1005|1608|2012|2520|3216|3225|4532|5025|5750|6332)\s*M(?:etric)?", re.I)
+
+
 def passive_value(raw, cat):
     """A BOM value in the part type's own unit ('10kΩ', '100nF', '600R' is no inductance) or bare with a prefix only
     that type uses ('10k' resistor, '100n' cap, '4.7u' cap / inductor) -> float, else None: a bare number or EIA code
     ('104', '1002', '0.1') and another unit ('3.3V', '600R@100MHz' bead, '2A') are no value of it."""
     from .kicad_index import parse_value
+    if METRIC_SIZE_MARK.fullmatch(str(raw).strip()):   # '0603M', '1608M': a metric chip size, not 603 / 1608 megohm
+        return None
     v, u = parse_value(raw, with_unit=True)
     unit, prefixes = OWN_UNIT[cat]
     m = re.match(r"\d+(?:[.,]\d+)?\s*(\D)", raw)
@@ -2632,12 +3256,128 @@ def is_kicad_source(source):
     return str(source or "").startswith("kicad:")
 
 
+def kicad_origin(item, half):
+    """The half of a plan item came from the KiCad libraries, directly or through a shared-store record made from them
+    (store_client.item_origin): either way it keeps the KiCad licence, credit and NOTICE."""
+    from .store_client import item_origin
+    return is_kicad_source(item_origin(item, half))
+
+
+def built_pins(out, st, sym_name):
+    """[{num, name}] of the symbol a part's state record names (its .SchLib, the entry sym_name or the only one)."""
+    from .kicad_export import _pick
+    f = Path(out) / st["symbol"]["file"]
+    sym = _pick(AL.read_schlib(f)[1], AL.lib_name(sym_name) if sym_name else None, f, "symbol")
+    return [{"num": str(r.get("num")), "name": str(r.get("name") or "")} for r in sym["records"] if r.get("RECORD") == "2"]
+
+
+def unconfirmed(note):
+    """A `verify` hold that waits only for someone to confirm an unconfirmed build (a datasheet read nothing
+    independent confirmed, a near-name KiCad match, an EasyEDA conversion, a family pinout: release_check.DOUBTS), which
+    an independent build with the same pads and pins answers (Run.second_opinion). Never a BOM clash, a field, a
+    datasheet that may be another part's, or any other hold."""
+    return str(note).startswith("datasheet reader output (") or RC._doubt(note) is not None
+
+
+def _record_lands(rec):
+    """The land names a store record's footprint is: the KiCad / standard footprint it was made from, and the checked
+    standard package its datasheet read identifies (stdparts.identify on the record's spec)."""
+    from . import stdparts as SP
+    fp = rec.get("footprint") or {}
+    out = [str(fp.get("source")).rsplit(":", 1)[-1]] if str(fp.get("source") or "").startswith(("kicad:", "standard:")) else []
+    if isinstance(fp.get("spec"), dict) and fp["spec"]:
+        try:
+            name = SP.identify(fp["spec"])[0]
+        except Exception:                              # a spec stdparts cannot judge names nothing
+            name = None
+        if name:
+            out.append(str(name).rsplit(":", 1)[-1])
+    return list(dict.fromkeys(out))
+
+
+def store_land_clash(rec, bom_names, label):
+    """'footprint: ...' when the BOM's footprint field names another land than the store record's (R-BF-5 for a store
+    part): a land name of the record (_record_lands) none of which is the BOM's land (altium_export.lands_differ); with
+    no land name to compare (a datasheet read of a package no table has), the pin count an IC land name in the BOM gives
+    against the record's numbered pads. None when they agree, or the BOM names no land."""
+    lands = _record_lands(rec)
+    text = (rec.get("footprint") or {}).get("kicad_mod") or ""
+    pads = {str(p[1]) for p in sexpr.find(sexpr.parse(text), "pad") if len(p) > 1 and str(p[1])} if text else set()
+    for b in dict.fromkeys(str(x or "").strip() for x in bom_names):
+        if not b:
+            continue
+        if lands:
+            if all(AX.lands_differ(b, l) for l in lands):
+                return (f"footprint: the BOM names {b} but the shared store's record {label} is {lands[0]}: check which "
+                        "package the part has")
+            continue
+        ia = AX._ic_land(AX._land_canon(AX._distributor_alias(b.split(":")[-1])))
+        if ia and ia.get("pins") and pads and len(pads) not in (ia["pins"], ia["pins"] + 1):
+            return (f"footprint: the BOM names {b} ({ia['pins']} pins) but the shared store's record {label} has "
+                    f"{len(pads)} numbered pads: check which package the part has")
+    return None
+
+
+STORE_EXTRAS = {"side": "SMD pads on the bottom copper side", "custom": "custom-shape pads",
+                "aperture": "paste- or mask-only apertures", "openings": "pads without the usual paste / mask opening",
+                "margin": "pad paste / mask margins", "fp": "footprint-wide paste / mask margins",
+                "graphic": "copper, paste or mask graphics"}
+
+
+def store_extras(text):
+    """fp_share.extra in words ("" for a plain footprint; an unreadable one is said so): what a shared-store
+    footprint holds beyond its pads (src_store holds the part for it)."""
+    try:
+        kinds = list(dict.fromkeys(str(e[0]) for e in FS.extra(text)))
+    except Exception as e:                     # a footprint extra() cannot read is not a plain one
+        return f"parts the check cannot read ({type(e).__name__})"
+    return ", ".join(STORE_EXTRAS.get(k, k) for k in kinds)
+
+
+STORE_HOLD = "shared store record "
+
+
+def store_holds(st, store, name, bom=""):
+    """What a part owes the shared store, checked again on every run, whatever the store's settings (skipped parts
+    too: their state carries the hold, so the release check and every publisher hold them; a part that owes the store
+    nothing is left exactly as it is). A part built from a record that the store has since withdrawn, disputes, no
+    longer lists or rates below [store] accept is held with the reason; a part whose own build a record's agreement
+    released (store_check, Run.second_opinion) gets the holds that agreement lifted back, with the reason
+    (store_client.problems). Such a hold stays once given (a withdrawal is for good; a settled dispute is released by a
+    person, or by building the part again with --refresh). store: the run's Store, or None when the store is off.
+    When the store cannot vouch for the part (switched off, its withdrawn list unreadable and no copy younger than
+    store_client.HOLD_MAX_AGE_S saved here) the part is held too, but only for as long as that lasts: those notes
+    (and any lifted holds put back for them) are kept in st["store_unchecked"] and taken out again first on the next
+    run. Their text never changes, so a person's --allow keeps covering them."""
+    from . import store_client as SC
+    prev = st.pop("store_unchecked", None)
+    if isinstance(prev, list) and prev:
+        st["verify"] = [v for v in st.get("verify") or [] if v not in prev]
+    if not SC.depends(st):
+        return
+    store = store if store is not None and getattr(store, "enabled", False) else None
+    redo = f"build it again (`ecadlib librarian {bom or 'BOM'} --refresh {name}`) or check it against the datasheet"
+    have, new, unchecked = list(st.get("verify") or []), [], []
+    for d, why in SC.problems(st, store):
+        back = list(d.get("lifted") or []) if d["kind"] == "lifted" else []
+        note = SC.note_for(d, why, redo)
+        if d.get("unchecked"):
+            unchecked += [v for v in back + [note] if v not in have]
+        elif d["kind"] == "lifted":
+            st["store_check"] = dict(st.get("store_check") or {}, revoked=why)
+        new += back + [note]
+    st["verify"] = list(dict.fromkeys(have + new))
+    if unchecked:
+        st["store_unchecked"] = list(dict.fromkeys(unchecked))
+
+
 def write_notice(out, items):
     """<out>/NOTICE.txt naming the third-party terms of what the plan holds (KiCad CC-BY-SA, EasyEDA's credit);
     removed again when nothing from those sources is left. Returns the path written, else None."""
     from . import easyeda_convert as EC, kicad_export as KX
     srcs = [str(s or "") for it in items for s in (it.get("source") or {}).values()]
-    text = (KX.KICAD_NOTICE if any(is_kicad_source(s) for s in srcs) else "") + \
+    kicad = any(kicad_origin(it, h) for it in items for h in ("symbol", "footprint"))   # a store record of KiCad's too
+    text = (KX.KICAD_NOTICE if kicad else "") + \
            (f"Parts converted from EasyEDA: {EC.CREDIT}. Keep this credit if you share the library.\n"
             if any(s.startswith("easyeda:") for s in srcs) else "")
     f = Path(out) / "NOTICE.txt"
@@ -2680,7 +3420,7 @@ def alternate_footprint(ln, st):
     if want and own == want:
         return None, (f"{ALTERNATE} {mpn}: the base part's footprint {fp} kept: {mpn}'s datasheet read names the same "
                       "package")
-    mk, ms = SP.mpn_size(ln.get("mpn"))                # a passive whose part number codes its chip size (RC0603FR..,
+    mk, ms = SP.mpn_size(ln.get("mpn"), ln.get("manufacturer", ""))   # a passive whose part number codes its chip size (RC0603FR..,
     if ms and not SP.own_land_name(fp):                # GRM155..): that size and kind on a plain chip land (R-FX10-5)
         m = re.match(r"^(R|C|L)_(\d{4,5})_\d{4,5}Metric$", want or "")
         kind, size = (m.group(1), m.group(2)) if m else (st.get("kind"), SP.chip_size(fp, strict=True))
@@ -2703,6 +3443,26 @@ def explicit_mount_pads(spec):
                 and q.get("role") in ("mount", "shield"):
             n += 1
     return n
+
+
+def store_block(item, st):
+    """item["store"]: where the halves built from shared-store records really came from ({"symbol", "footprint": the
+    record's own source}, {"keys": {key_id: key}}, and the record the part was looked up with: key, key_id, rev, level);
+    item["store_check"]: a second opinion's result (Run.second_opinion). Removed when the part has neither."""
+    from .store_client import parse_source
+    out = {k: v for k, v in (st.get("store") or {}).items() if k in ("key", "key_id", "rev", "level")}
+    for h in ("symbol", "footprint"):
+        r = st.get(h) or {}
+        p = parse_source(r.get("source"))
+        if p and r.get("origin"):
+            out[h] = r["origin"]
+            if r.get("store_key"):
+                out.setdefault("keys", {})[p[0]] = r["store_key"]
+    for k, v in (("store", out), ("store_check", st.get("store_check"))):
+        if v:
+            item[k] = json.loads(json.dumps(v))
+        else:
+            item.pop(k, None)
 
 
 def apply_state(item, st, ln):
@@ -2729,6 +3489,7 @@ def apply_state(item, st, ln):
                 if st[k].get("name") and st[k].get("renamed_from") == was:     # another footprint has the BOM's name
                     item[k]["bom_ref"], item[k]["ref"] = was, st[k]["name"]
     item["source"] = {k: (st.get(k) or {}).get("source") for k in ("symbol", "footprint")}
+    store_block(item, st)
     par, fields = _par(item), {}
     if ln.get("datasheet", "").startswith("http"):
         _set_par(item, "ComponentLink2Description", "Datasheet"); _set_par(item, "ComponentLink2URL", ln["datasheet"]); fields["ComponentLink2URL"] = "BOM"
@@ -2747,7 +3508,7 @@ def apply_state(item, st, ln):
         v, w = st["found"]["manufacturer"]
         _set_par(item, "Manufacturer", v); fields["Manufacturer"] = w
     credits = [st["found"]["credit"]] if "credit" in st.get("found", {}) else []   # EasyEDA asks for credit on every reuse
-    kicad = [k for k in ("symbol", "footprint") if is_kicad_source(item["source"][k])]
+    kicad = [k for k in ("symbol", "footprint") if kicad_origin(item, k)]   # (a store record made from KiCad's too)
     if kicad:                                    # so does KiCad's CC-BY-SA library
         credits.append((K.KICAD_CREDIT, f"KiCad library {' and '.join(kicad)}"))
     if credits:
@@ -2862,7 +3623,7 @@ def write_review(rows, out, bom, items=None):
 def _desc_label(row):
     """Who wrote the part search's description: LCSC/JLCPCB for the unofficial routes, else the official API's name."""
     src = row.get("src_description_from") or row.get("src") or ""
-    return "LCSC/JLCPCB" if src in ("", "jlcpcb_search", "easyeda") else src
+    return "LCSC/JLCPCB" if src in ("", "jlcpcb_search", "lcsc_search", "easyeda") else src
 
 
 def handoff_says(reader, progress):
@@ -2875,12 +3636,15 @@ def handoff_says(reader, progress):
 
 def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_index=False, allow=(), offline=False,
         cache="out/http_cache", rate=0.5, providers=None, http=None, api_key=None, log=print, gen_step=True,
-        rules=None, user=None, datasheet_batch=False, reader=None, progress=None):
+        rules=None, user=None, datasheet_batch=False, reader=None, progress=None, store=None, reason=""):
     """Whole pipeline; returns the plan items. datasheet_batch: parts that reach the datasheet source are read as one
     Message Batch after every other source ran (reader: a ready datasheet.Reader, e.g. for --no-wait / --estimate). refresh: None = resume, [] = redo all, [names] = redo those.
     rules: library rules (a loaded dict or a path); None uses the ecadlib.toml found from `out` (defaults when none).
-    sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity()).
-    progress: a term.Progress-like object (start(name) / done(name, status, detail)) for the per-part line."""
+    sources: None = the rules' [sources] order. user: who gives the --allow (default: approvals.identity()); reason:
+    why (recorded with the user in the ledger: release_check.record_allow).
+    progress: a term.Progress-like object (start(name) / done(name, status, detail)) for the per-part line.
+    store: a ready store_client.Store (tests); None = the one [store] names (off while its url is empty). A store that
+    is set is always tried first, whatever `sources` says, and what parts owe it is checked again (store_holds)."""
     out = Path(out)
     rules = RU.resolve(rules, out)
     lines, mapping = T.read_bom(bom, RU.bom_columns(rules))       # first: an unreadable BOM writes nothing
@@ -2901,6 +3665,13 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         raise ValueError(f"unknown sources {sorted(bad)}; use {','.join(SOURCES)}")
     from .approvals import load_policy
     load_policy(out)                                   # a broken approval policy stops the run before anything is written
+    from . import store_client as SC                   # the shared store, whenever one is set ([store] url, accept not
+    if store is None and SC.configured(rules):         # "off"; or a ready Store a caller passed), is asked first,
+        store = SC.from_rules(rules, cache_dir=cache, offline=offline)   # whatever the order or --sources says: a record
+    store = store if store is not None and getattr(store, "enabled", False) else None   # it trusts is used as is, one
+    sources = [s for s in sources if s != "store"]     # it does not is a second opinion on what the others build. No
+    if store is not None:                              # store: "store" in an order is left out (the order, the lock
+        sources.insert(0, "store")                     # file and the log are as without it)
     if "standard" in sources and "kicad" in sources and sources.index("standard") < sources.index("kicad"):
         sources.remove("standard")                     # never ahead of the KiCad library
         sources.insert(sources.index("kicad") + 1, "standard")
@@ -2934,14 +3705,15 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     if reader is not None and offline and not getattr(reader, "replay", None):   # --offline: nothing goes to the model
         reader.offline, reader.key = True, None                                # (a replay of recorded answers sends nothing)
     r = Run(out, http, index, libs, list(sources), api_key, Path(cache) / "kicad_library_index.json", refresh_index, gen_step, rules,
-            reader)
+            reader, store)
     todo = []
     for it in items:
         ln, row = _line_for(it, lines, rows)
         if not it["footprint"]["ref"]:
             it["footprint"]["ref"] = AL.lib_name(it["name"])
         fpr, st = _fingerprint(it, ln, row), state.get(it["name"])
-        own_symbol_ref(it, ln)                 # before a resumed part is skipped: the same Library Ref as when built
+        own_symbol_ref(it, ln, str(row.get("src_description") or ""))   # before a resumed part is skipped: the same
+        #                                                                 Library Ref as when built
         redo = refresh is not None and (not refresh or it["name"] in refresh)
         stale = bool(st) and (old.get(it["name"]) or {}).get("status") == "held" and not _built_now(st, rules)
         if stale and st.get("key") == fpr and _done(st, out) and not redo:
@@ -3001,12 +3773,19 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
             save_state()
         raise
     r.flush_datasheets(log)                    # --datasheet-batch: one batch for every part that got this far
+    r.second_opinions()                        # shared-store records kept aside, against each part's own build
+    for st in state.values():                  # (a read's flagged items kept for a store agreement: not kept after it)
+        if isinstance(st, dict):
+            st.pop("read_review", None)
     if getattr(r.reader, "assistant", None) is not None:   # [datasheet] reader = "assistant": what waits for it
         from . import ds_assistant as DA
         wait = DA.index(r.reader.assistant, r.reader.assistant_asked)
         if wait:
             log(f"  {len(wait)} datasheet read(s) wait for your assistant: {r.reader.assistant / DA.README} says how "
                 "to answer them; then run this again")
+    for it in items:                           # what parts owe the store, checked again (withdrawn, disputed, gone, or a
+        if state.get(it["name"]):              # store that is off or cannot vouch for them): held. Parts that owe it
+            store_holds(state[it["name"]], r.store, it["name"], Path(bom).name)   # nothing are left as they are
     if todo:
         save_state()                           # a stop while the summary is logged keeps them too
     from . import ledger as LG                 # the library lock across the whole block, then plan.lock (fsutil's order):
@@ -3040,10 +3819,15 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
         t_check = time.time()
         TI.record(out, "build", t_build, t_check, parts=len(todo))
         checks = RC.apply(items, out, allow, rules=rules)
+        from . import ai_review as AR               # [review] ai_reviewer (off by default): a look at held parts
+        passed = AR.review(items, out, rules, cache=cache, log=log) if AR.mode(rules) != "off" else {}
+        if passed:
+            checks = RC.apply(items, out, allow, rules=rules, ai=passed)
         if allow:                                  # record who gave the --allow, so approvals can refuse self-approval
             from .approvals import identity, post_check, stamp_allow
             stamp_allow(items, allow, identity(user, cwd=out))
-            post_check(items, out, checks)
+            RC.record_allow(items, out, allow, identity(user, cwd=out), reason, via="librarian --allow")   # the proof
+            post_check(items, out, checks)                         # the allow block needs (review 2026-11-23, 2.4)
         gate.baseline(items)                       # parts released for the first time: revision 1 in the ledger (a new
                                                    # part with a released part's MPN is compared with it first)
         gate.retire([n for n in old if n not in {i["name"] for i in items}], f"no longer in the plan ({Path(bom).name})")
@@ -3056,6 +3840,8 @@ def run(bom, libs=(), out="out/librarian", sources=None, refresh=None, refresh_i
     RC.write_report(checks, out / "release_check", plan_f)
     write_review(review_rows(items), out, bom, items)
     TI.record(out, "release_check", t_check, held=sum(i.get("status") == "held" for i in items))
+    for t in getattr(r.store, "trouble", None) or []:   # a store that could not be read: said once, held nothing
+        log(f"  store: {t}")
     return items
 
 
@@ -3125,17 +3911,20 @@ def main(argv=None):
     ap.add_argument("--lib", action="append", default=[], help="local KiCad library dir (repeatable)")
     ap.add_argument("-o", "--out", help="plan folder (default: <[setup] workspace>/librarian/<BOM name> after "
                     "`ecadlib init`, else out/librarian)")
-    ap.add_argument("--sources", help="order of sources to try (default: the rules' [sources] order, else " + ",".join(SOURCES) + ")")
+    ap.add_argument("--sources", help="order of sources to try (default: the rules' [sources] order, else " +
+                    ",".join(RU.DEFAULT_SOURCES) + "; the shared store, when [store] url is set, is always asked first)")
     ap.add_argument("--refresh", nargs="*", metavar="PART", help="redo finished parts: all, or the named ones")
     ap.add_argument("--refresh-index", action="store_true", help="rebuild the KiCad library name index")
     ap.add_argument("--allow", action="append", default=[], metavar="PART", help="release PART despite its release-check failures")
-    ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else nexar,digikey,mouser,jlcpcb_search,easyeda)")
+    ap.add_argument("--providers", help="triage providers in order (default: [providers] order, else nexar,digikey,mouser,jlcpcb_search,lcsc_search,easyeda)")
     ap.add_argument("--offline", action="store_true", help="use the HTTP cache only")
     from .firstrun import default_cache    # <workspace>/http_cache when a workspace is set up
     ap.add_argument("--cache", default=default_cache())
     ap.add_argument("--rate", type=float, default=0.5, help="min seconds between requests per host")
     ap.add_argument("--box", action="store_true", help="extruded 3D box instead of a generated STEP when there is no KiCad model")
     ap.add_argument("--user", help="who gives the --allow (default: $ECADLIB_USER, then git config user.name/email)")
+    ap.add_argument("--reason", help="why you release the --allow parts anyway (asked for in a terminal when left out); "
+                                     "recorded with your name in the library's ledger")
     ap.add_argument("--rules", help="library rules file (default: ecadlib.toml found from -o or here; see `ecadlib init`)")
     ap.add_argument("--datasheet-batch", action="store_true",
                     help="read every datasheet still needed as one Message Batch (half price; waits for it, see --datasheet-no-wait)")
@@ -3167,13 +3956,19 @@ def main(argv=None):
     t = TM.Term()
     loud = (lambda *x, **k: None) if a.json or t.quiet else print
     # on a terminal the per-step log is -v detail (the live progress line and the table below say it); piped, as before
-    log = loud if (t.verbose or not t.styled) else (lambda m="", *x, **k: print(m) if str(m).startswith(("  BOM:", "  finding")) else None)
+    log = loud if (t.verbose or not t.styled) else (lambda m="", *x, **k: print(m) if str(m).startswith(("  BOM:", "  finding",
+                                                                                                       "  store:")) else None)
     prog = TM.Progress(t.err, 0, "parts") if t.styled and not a.json else None   # piped: the plain log lines
+    reason = RC.ask_reason(a.reason, a.allow) if a.allow else ""
+    if a.allow and not reason:                           # review 2026-11-23 (2.4): who, when and why, or no release
+        print("ecadlib librarian: --allow needs your reason: add --reason \"why these parts may go out despite the "
+              "check\" (it is recorded with your name in the library's ledger)", file=sys.stderr)
+        return 2
     try:
         items = run(a.bom, a.lib, a.out, [s for s in a.sources.split(",") if s] if a.sources else None, a.refresh,
                     a.refresh_index, a.allow, a.offline, a.cache, a.rate, a.providers, gen_step=not a.box, rules=rules,
                     user=a.user, http=reader.http if reader else None, reader=reader,
-                    log=log, progress=prog)
+                    log=log, progress=prog, reason=reason)
     except ValueError as e:                              # unreadable / headerless BOM, unknown --sources
         from .firstrun import bom_hint
         print(f"ecadlib librarian: {e}" + bom_hint(e), file=sys.stderr)

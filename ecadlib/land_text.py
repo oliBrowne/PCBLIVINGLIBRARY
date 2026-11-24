@@ -10,10 +10,18 @@ whether the read's land is made of those numbers:
     pad length (along the line through both pads)   printed
     pad width                                        printed
     the spacing                                      printed as the gap between the pads or the span over both
-                                                     (centre distance -+ pad length), which also proves the read
-                                                     did not turn the pads; or as the centre distance alone, when
-                                                     the pads are square or the text's own direction shows which
-                                                     printed number runs along the pads' line
+                                                     (centre distance -+ pad length), or as the centre distance
+                                                     alone when the pads are square
+
+A read that turned the pads 90 degrees (pad length and width swapped, the centre distance worked out from the printed
+gap or span with its own wrong pad length) is made of the same three printed numbers, so "pad length + gap" and
+"pad length + span" count only when that turned land is ruled out (2026-11-23, review): because the drawing prints
+the pad length on both pads, either side of the gap on the gap's line (_layout), or because the turned land is no
+land of this body by the wide limits of fits_body(sure=True). Where three single numbers stand, and which way their
+text runs, rules nothing out (round 3 of that review: every such rule says the same of the turned read in the mirror
+placement, and two of them were beaten by ordinary drawings). Gap + span, and a centre distance with the gap or the
+span, give the pad length themselves and leave no such question; pad length + centre distance agrees only when the
+same numbers do not agree turned (check). Otherwise: no verdict.
 
 Only two-pad lands are checked (spec["land"] of a two-pin part, or a two-pad pad_table), the numbers are compared in
 mm as printed (a drawing in inches only is not converted: no verdict), within half the last printed digit.
@@ -25,8 +33,8 @@ must be distinct and sit within SPREAD of one another; a size labelled on both p
 may not equal a size along the pads' line; the land must fit the body size the read gives (fits_body); and a PDF
 with two different land drawings, or a drawing that agrees just as well with the pads turned, gives no verdict.
 A drawing
-whose numbers sit in a table of several sizes (two or more lines of three or more numbers) agrees only when the
-read's numbers are all on one line that names the part's series. The result is
+whose numbers sit in a table of several sizes (two or more lines of numbers in columns, five or more numbers in all:
+_lines) agrees only when the read's numbers are all on one line that names the part's series. The result is
 
     {"status": "agreed", "page": n, "printed": {...}}   every number found in one land drawing
     {"status": "unchecked", "why": ...}                 no land drawing in the text, a number not printed there, an
@@ -191,7 +199,7 @@ def body(spec):
     return min(dims), max(dims)
 
 
-def fits_body(pads, size):
+def fits_body(pads, size, can=False, sure=False):
     """Why the two pads cannot be this body's land, or None. The pads must not touch (a gap of 0.1 mm or more), their
     span must reach at least 0.6 x the body's smaller size and at most 3 mm past its larger one, and the pad width must
     be at least a fifth of the smaller size and at most 1.5 mm more than the larger: a land made of a body or
@@ -199,24 +207,46 @@ def fits_body(pads, size):
     reaches to within 0.5 mm of the body's end, and has at least 0.4 of its length under the body: the pads sit at the
     body's two ends, so a read that took the gap for the span (pads pushed out past the body) or the span for the gap
     or the gap for the pad length (pads pulled in short of the ends) breaks one of these. The body's larger size is
-    taken as its length along the pads' line."""
+    taken as its length along the pads' line. can: an SMD aluminium electrolytic, whose maker's land reaches past the
+    square base plate (pads up to 0.6 x its size long, as narrow as 0.15 x it: Panasonic FK/FC 1.6-2.0 mm on 8.3-10.3,
+    Wurth WCAP-ASLI 3.5 mm on 6.6, 2026-11-22).
+    sure (2026-11-23, review round 2): the question is no longer "is this read's land likely" (a doubt only holds the
+    part) but "can this other land be ruled out", where a wrong yes lets a turned read through. The limits above
+    turn real lands away (a 0603's pads are 0.9 mm long on a 1.6 mm body, an SOD-323's 1.0 on 1.7), and the body
+    may lie either way under the pads (4.06 x 4.45). So: pads 0.1 to 0.8 x the body long, ending up to 1 mm short of
+    its ends, a fifth of their length under it, 0.1 x the smaller size wide to 2.5 mm more than the larger; and a
+    reason is given only when the land fits neither with the larger nor with the smaller size along the pads' line."""
+    small, large = min(size), max(size)
+    if sure:
+        lim = (0.1, 0.8, 1.0, 0.2, 0.1, 2.5)
+        return _fit(pads, large, small, lim, "0.8 x") and _fit(pads, small, large, lim, "0.8 x")
+    return _fit(pads, large, small, (0.15, 0.6, 0.5, 0.4, 0.15, 1.5) if can else (0.15, 0.5, 0.5, 0.4, 0.2, 1.5),
+                "0.6 x" if can else "half")
+
+
+def _fit(pads, length, other, lim, long_word):
+    """fits_body for a body `length` mm along the pads' line and `other` mm across it. lim: the least and the most of
+    the body's length a pad is long, how far short of the body's ends the pads may end (mm), the least part of a pad
+    under the body, the least pad width as a part of the body's smaller size, and how much wider than the body's
+    larger size a pad may be (mm)."""
     along, across, centre = pads
-    small, large = size
+    short, long_, ends, under, narrow, wide = lim
+    small, large = min(length, other), max(length, other)
     if centre - along < 0.1:
         return f"the pads would touch (gap {centre - along:.2f} mm)"
-    if not 0.6 * small <= centre + along <= large + 3.0:
+    if not 0.6 * small <= centre + along <= length + 3.0:
         return f"a span of {centre + along:.2f} mm does not fit a {small:g} x {large:g} mm body"
-    if along < 0.15 * large:
-        return f"a pad {along:g} mm long is too short for a {large:g} mm body"
-    if along > 0.5 * large:
-        return f"a pad {along:g} mm long is more than half the {large:g} mm body"
-    inner, outer, end = (centre - along) / 2, (centre + along) / 2, large / 2
-    if outer < end - 0.5:
+    if along < short * length:
+        return f"a pad {along:g} mm long is too short for a {length:g} mm body"
+    if along > long_ * length:
+        return f"a pad {along:g} mm long is more than {long_word} the {length:g} mm body"
+    inner, outer, end = (centre - along) / 2, (centre + along) / 2, length / 2
+    if outer < end - ends:
         return (f"the pads end {end - outer:.2f} mm short of the body's ends (the land reaches {outer:.2f} mm from the "
                 f"centre, the body {end:g} mm)")
-    if min(outer, end) - inner < 0.4 * along:
+    if min(outer, end) - inner < under * along:
         return "the pads lie mostly outside the body"
-    if not 0.2 * small <= across <= large + 1.5:
+    if not narrow * small <= across <= large + wide:
         return f"a pad width of {across:g} mm does not fit a {small:g} x {large:g} mm body"
     return None
 
@@ -226,24 +256,30 @@ def _has(region, value, extra=0.0):
 
 
 def _lines(region):
-    """The rows of a table in the drawing's numbers: printed lines (same y, unrotated) of three or more numbers whose
-    places line up in columns with two other such lines (three or more numbers at the same x, within 3 pt). Dimension
-    labels that happen to share a y are no table: their places do not line up with another line's."""
+    """The rows of a table in the drawing's numbers: printed lines (same y, unrotated) of two or more numbers whose
+    places line up in columns with another such line (two or more numbers at the same x, within 3 pt), when those
+    lines hold five or more numbers between them: more than one land needs in aligned rows. Dimension labels that
+    happen to share a y are no table: their places do not line up with another line's.
+    2026-11-23 (review): a table needed three rows of three numbers, so a family sheet of two sizes was no table,
+    and a row that lost a number (a broken run, a dash) took the whole table rule with it; in both the other
+    size's row agreed. An inch label over the same in mm is no second row: drawn_numbers leaves the inch twin out."""
     lines = []
     for n in sorted((n for n in region if not n[4]), key=lambda n: n[3]):
         if lines and abs(n[3] - lines[-1][-1][3]) <= 1.5:
             lines[-1].append(n)
         else:
             lines.append([n])
-    lines = [ln for ln in lines if len(ln) >= 3]
+    lines = [ln for ln in lines if len(ln) >= 2]
     cols = lambda a, b: sum(any(abs(p[2] - q[2]) <= 3 for q in b) for p in a)
-    # a table has three or more such lines in columns; two (a label printed in inches over the same in mm) is not one
-    return [a for a in lines if sum(b is not a and cols(a, b) >= 3 for b in lines) >= 2]
+    rows = [a for a in lines if any(b is not a and cols(a, b) >= 2 for b in lines)]
+    return rows if sum(len(r) for r in rows) >= 5 else []
 
 
 def _line_text(line_text, y):
-    """The whole printed text of the line at y (every unrotated run within 1.5 pt of it)."""
-    return " ".join(t for ly, t in line_text or () if abs(ly - y) <= 1.5)
+    """The whole printed text of the line at y (every unrotated run within 1.5 pt of it). A number read with its
+    characters' places sits at their centre, above its run's baseline, so a run counts up to its text height
+    (2026-11-23, review: a real PDF's table row never found its own name, which only held true parts back)."""
+    return " ".join(t for ly, t, size in line_text or () if ly - 1.5 <= y <= ly + 0.75 * (size or 0) + 1.5)
 
 
 def _series(part):
@@ -277,9 +313,47 @@ def _symmetry_says_otherwise(region, used):
     return False
 
 
-def check_region(region, pads, line_text=None, part=None):
-    """The verdict on one land drawing's numbers. pads: two_pads(). line_text: [(y, text)] of the page's unrotated runs,
-    for naming a table row. The read agrees when its pad width and two of the four sizes along the line through the
+def _on_both_pads(length, gap, region):
+    """True when the drawing prints length's number once more, the two either side of gap's number on one line with
+    it: all three printed in one direction, on one row or one column (within 2 pt), the gap's number between the two
+    and no farther from their middle than a fifth of their distance (a chain 'L | gap | L' has it at the middle).
+    Only a pad's own size is labelled once per pad with the gap between: this is no question of where one label
+    stands. What it rests on: a drawing does not print the pad WIDTH twice, beside either pad at the gap's height
+    with the gap's number between (a size is dimensioned once; it is the chain along the pads that repeats). Such a
+    drawing would read as the turned land's chain."""
+    for other in region:
+        if other is length or other[1] != length[1] or not other[4] == length[4] == gap[4]:
+            continue
+        for k, j in ((3, 2), (2, 3)):               # k: the coordinate a line shares, j: the one running along it
+            sep = abs(other[j] - length[j])
+            if abs(length[k] - gap[k]) <= 2 and abs(other[k] - gap[k]) <= 2 and sep >= 12 and \
+                    abs(gap[j] - (other[j] + length[j]) / 2) <= 0.2 * sep:
+                return True
+    return False
+
+
+def _layout(length, spacing, width, region, role):
+    """What the drawing shows about a read that takes three of its numbers for the pad length, the gap or span (role)
+    and the pad width: "kept" when the pad length is printed on both pads either side of the gap on the gap's line
+    (_on_both_pads) and the width is not; "turned" when it is the other way round; None otherwise. region: the
+    drawing's numbers.
+    2026-11-23 (review): the printed numbers alone agree just as well with the pads turned. Rounds 2 and 3 of that
+    review: rules about where three bare numbers stand ("pad length and gap on one line", "nearer than a number
+    beside the pads would be", "pad length and gap in one text direction, the width in the other") were each beaten
+    by another ordinary layout: the pad-length label pushed outside its pad, or printed turned alone. They must be:
+    a rule that reads three places says of the turned read in the mirror placement what it says of the true one.
+    So one label's place and direction count for nothing; a span has no such line (its dimension line runs over both
+    pads)."""
+    if role != "gap":
+        return None
+    kept, other = _on_both_pads(length, spacing, region), _on_both_pads(width, spacing, region)
+    return None if kept == other else "kept" if kept else "turned"
+
+
+def check_region(region, pads, line_text=None, part=None, size=None, can=False):
+    """The verdict on one land drawing's numbers. pads: two_pads(). line_text: [(y, text, text height or 0)] of the page's
+    unrotated runs, for naming a table row. size, can: the body (body()) and whether it is an electrolytic can, to judge the turned
+    land against (fits_body). The read agrees when its pad width and two of the four sizes along the line through the
     pads (pad length, gap, span, centre distance: any two give the other two) are printed, each by a number of its own
     (one number cannot be two sizes)."""
     along, across, centre = pads
@@ -321,6 +395,23 @@ def check_region(region, pads, line_text=None, part=None):
                                 why = why or ("the land drawing's numbers are a table of several sizes, and the "
                                               "read's numbers are not all on one row that names this part")
                                 continue
+                        if r1 == "pad length" and r2 in ("gap", "span"):
+                            # 2026-11-23 (review): a read that swapped the pad's two sizes and worked the centre
+                            # distance out from this gap / span is made of the same three numbers. It is ruled out
+                            # by the pad length printed on both pads (_layout), or by the turned land not fitting
+                            # the body; never by where three single numbers stand (round 3)
+                            turned = (across, along, centre - along + across if r2 == "gap" else centre + along - across)
+                            lay = _layout(t1, t2, tw, region, r2)
+                            if lay == "turned" or (lay is None and not (size and fits_body(turned, size, can, sure=True))):
+                                why = why or (f"the printed numbers fit the pads turned 90 degrees as well (pad "
+                                              f"{across:g} mm along the pads' line and {along:g} mm across it, "
+                                              f"with the same {r2}), and " +
+                                              ("the drawing prints that turned land's pad length on both pads"
+                                               if lay == "turned" else
+                                               "neither the body size nor a pad length printed on both pads either "
+                                               "side of the gap shows which way the pads lie (where single numbers "
+                                               "stand does not)"))
+                                continue
                         if _symmetry_says_otherwise(region, {r1: t1, r2: t2}):
                             why = why or ("the drawing prints one size on both pads and another between them, and "
                                           "the read gives them the other way round")
@@ -339,13 +430,15 @@ def check(pages, spec, part=None):
     size = body(spec)
     if not size:
         return {"status": "unchecked", "why": "the read gives no body size to judge the land against"}
-    bad = fits_body(pads, size)
+    from .datasheet import _electrolytic_can
+    can = _electrolytic_can(spec)
+    bad = fits_body(pads, size, can=can)
     if bad:
         return {"status": "unchecked", "why": bad}
     found = []
     for pg in sorted(pages):
         runs = pages[pg]
-        line_text = [(y, t) for x, y, t, size, vertical, *_ in runs if not vertical]
+        line_text = [(y, t, size if len(rest) > 1 and rest[1] else 0) for x, y, t, size, *rest in runs if not rest[0]]
         found += [(pg, region, line_text) for _, region in regions(runs)]
     if not found:
         return {"status": "unchecked", "why": "no land drawing title in the PDF's text"}
@@ -355,11 +448,11 @@ def check(pages, spec, part=None):
                                               "the text cannot show which one is this part's"}
     why = None
     for pg, region, line_text in found:
-        v = check_region(region, pads, line_text, part)
+        v = check_region(region, pads, line_text, part, size, can)
         if v["status"] == "agreed":
             along, across, centre = pads
             if abs(along - across) > 0.011 and \
-                    check_region(region, (across, along, centre), line_text, part)["status"] == "agreed":
+                    check_region(region, (across, along, centre), line_text, part, size, can)["status"] == "agreed":
                 # the same numbers give the pads turned 90 degrees too (a centre distance and both pad sizes): the
                 # text does not show which way they lie
                 why = why or ("the printed numbers fit the pads turned 90 degrees as well, so the text does not show "
@@ -402,7 +495,7 @@ def placed_runs(pdf_bytes, limit=80):
 
 def _runs_of(chars):
     """Characters [(char, left, bottom, right, top, angle)] -> runs, broken at a line break and at a gap wider than
-    one character height (a space the PDF writes as a character still joins words of one line)."""
+    1.2 x the run's text height (a space the PDF writes as a character still joins words of one line)."""
     runs, cur = [], []
 
     def flush():
@@ -423,7 +516,11 @@ def _runs_of(chars):
         if cur and not c.isspace():
             last = next((p for p in reversed(cur) if not p[0].isspace()), None)
             if last is not None:
-                h = max(last[4] - last[2], last[3] - last[1], 1.0)
+                # 2026-11-23 (review): the gap is measured against the run's own text height (the median glyph, or
+                # the coming one if larger), not the last glyph's: after a decimal point that is about 1 pt, and
+                # '1.1' was broken into '1.' and '1', neither of them a number
+                tall = sorted(max(p[4] - p[2], p[3] - p[1]) for p in cur if not p[0].isspace())
+                h = max(tall[len(tall) // 2], t - b, r - l, 1.0)
                 if max(l - last[3], last[1] - r, b - last[4], last[2] - t) > 1.2 * h:
                     flush()
         cur.append(ch)

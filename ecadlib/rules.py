@@ -27,7 +27,11 @@ CAT_REF = {"Resistors": "R", "Capacitors": "C", "Inductors": "L", "Diodes": "D",
            "Connectors": "J", "ICs": "U", "Misc": "U", "Thermistors": "TH",
            "Varistors": "RV"}
 PASSIVES = ("Resistors", "Capacitors", "Inductors")          # the categories with a generic symbol and a synthetic name
-SOURCES = ("kicad", "easyeda", "standard", "datasheet")   # standard: ecadlib.stdparts (offline, before Claude)
+DEFAULT_SOURCES = ("kicad", "easyeda", "standard", "datasheet")   # standard: ecadlib.stdparts (offline, before Claude)
+# store: the shared store of checked parts (ecadlib.store_client). Never in the default order and never written by
+# `ecadlib init`: it runs first by itself whenever [store] url is set (accept = "off" turns it off); an explicit order
+# may name it (harmless)
+SOURCES = ("store",) + DEFAULT_SOURCES
 FIELDS = ("mpn", "manufacturer", "value", "package", "metric", "category", "cat3", "ref", "tolerance", "voltage",
           "dielectric", "power", "description")
 FP_FIELDS = ("kicad", "package", "metric", "ref", "cat3", "density", "pins")
@@ -58,16 +62,17 @@ DEFAULTS = {
     "layers": {"courtyard": "Mechanical15", "assembly": "Mechanical13", "body3d": "Mechanical13",
                "silkscreen": "TopOverlay", "designator": "TopOverlay"},
     "footprint": {"density": "N", "pin1": ["1", "A1"]},
-    "sources": {"order": list(SOURCES)},
+    "sources": {"order": list(DEFAULT_SOURCES)},
     "bom": {"columns": {}},                    # ecadlib field (mpn, manufacturer, value, ...) -> your BOM header
     "release": {"approvals": {},               # same keys as approvals.json; used when there is no approvals.json
                 "parity": "hold",              # hold | warn | off: KiCad vs Altium files of a part differ (ecadlib.parity)
                 "height": "warn",              # hold | warn: a missing or implausible 3D height holds the part, or is a note
                 "allow_missing_3d": False,     # true: a part with NO 3D height is never held for it (even height = "hold")
                 "manufacturer": "warn",        # hold | warn: an empty Manufacturer holds the part, or is a note
-                "datasheet": "warn"},          # hold | warn: no datasheet link holds the part, or is a note
+                "datasheet": "warn",           # hold | warn: no datasheet link holds the part, or is a note
+                "mpn": "warn"},                # hold | warn: a generic resistor / capacitor with no MPN, or is a note
     "altium365": {"workspace": ""},
-    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes"]},   # ecadlib.upkeep
+    "upkeep": {"schedule": "weekly", "checks": ["lifecycle", "upstream", "a365", "changes"]},   # ecadlib.upkeep (+ store, by itself, when [store] url is set)
     "datasheet": {"model": "claude-opus-5-5", "effort": "high",              # ecadlib.datasheet (Claude datasheet reader)
                   "api_key_env": "ANTHROPIC_API_KEY", "max_cost_usd": 10.0, "auto_pages": 40,   # per run; 0 = no cap
                   "ask_above_usd": 1.0,                 # ecadlib.ai_cost: the dialogs ask twice above this (a max_cost_usd you set wins)
@@ -139,7 +144,16 @@ DEFAULTS["ai"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _LL.DEF
 for _k in _LL.SECTION_KEYS:                           # [datasheet] / [agent.proof] may pick their own ("" = [ai])
     DEFAULTS["datasheet"].setdefault(_k, "")
     DEFAULTS["agent"]["proof"].setdefault(_k, "")
+# [review]: ai_reviewer = "assistant" writes a review task for your own assistant for each built part held only for a
+# person's look, and releases the ones it passes (ecadlib.ai_review); "off" (the default) leaves them for a person.
+DEFAULTS["review"] = {"ai_reviewer": "off"}
 DEFAULTS["providers"] = {"order": [], "unofficial": True}    # EasyEDA / JLCPCB search: on, asked last; false opts out
+# [store]: the shared store of checked parts (docs/shared-store.md). url "" = off (nothing is asked, nothing changes);
+# accept: confirmed (default: only parts two independent builds or a sign-off confirmed are used, a single build is a
+# second opinion) | checked (single builds are used too) | off; mode: online (one index slice and one record per part)
+# | snapshot (the whole store as one weekly zip, looked up locally); snapshot: the zip's URL ("" = <url>/snapshot.zip).
+DEFAULTS["store"] = {"url": "", "accept": "confirmed", "mode": "online", "snapshot": ""}
+STORE_ACCEPT, STORE_MODES = ("confirmed", "checked", "off"), ("online", "snapshot")
 # [setup]: written by the `ecadlib init` setup questions (ecadlib.firstrun). libs / workspace are the defaults for
 # --lib / --workspace (after the command line and ECADLIB_LIB / ECADLIB_WORKSPACE); empty = as before.
 DEFAULTS["setup"] = {"tool": "both", "libs": [], "workspace": ""}
@@ -429,6 +443,11 @@ def validate(raw, where="ecadlib.toml"):
     for s in (raw.get("sources") or {}).get("order", []):
         if s not in SOURCES:
             _err(where, "sources.order", f"has {s!r}: sources are {', '.join(SOURCES)}")
+    st = raw.get("store") or {}
+    if "accept" in st and st["accept"] not in STORE_ACCEPT:
+        _err(where, "store.accept", f"= {st['accept']!r}: must be one of {', '.join(STORE_ACCEPT)}")
+    if "mode" in st and st["mode"] not in STORE_MODES:
+        _err(where, "store.mode", f"= {st['mode']!r}: must be one of {', '.join(STORE_MODES)}")
     for f in (raw.get("bom") or {}).get("columns", {}):
         if f not in BOM_FIELDS:
             _err(where, f"bom.columns.{f}", f"is not a BOM field; fields are {', '.join(BOM_FIELDS)}")
@@ -486,13 +505,17 @@ def validate(raw, where="ecadlib.toml"):
         _err(where, "style.apply", f"= {sty['apply']!r}: must be auto (adapt new parts to house_style.json) or off")
     if sty.get("profile") and not str(sty["profile"]).endswith(".json"):
         _err(where, "style.profile", f"= {sty['profile']!r}: must be a .json file (written by `ecadlib style learn`)")
+    rv = raw.get("review") or {}
+    if "ai_reviewer" in rv and str(rv["ai_reviewer"]).strip().lower() not in ("off", "assistant"):
+        _err(where, "review.ai_reviewer", f"= {rv['ai_reviewer']!r}: must be off or assistant (your own assistant "
+             "reviews held parts; ecadlib.ai_review)")
     if "parity" in (raw.get("release") or {}) and raw["release"]["parity"] not in ("hold", "warn", "off"):
         _err(where, "release.parity", f"= {raw['release']['parity']!r}: must be hold, warn or off")
     if "height" in (raw.get("release") or {}) and raw["release"]["height"] not in ("hold", "warn"):
         _err(where, "release.height", f"= {raw['release']['height']!r}: must be hold or warn")
     if "allow_missing_3d" in (raw.get("release") or {}) and not isinstance(raw["release"]["allow_missing_3d"], bool):
         _err(where, "release.allow_missing_3d", f"= {raw['release']['allow_missing_3d']!r}: must be true or false")
-    for key in ("manufacturer", "datasheet"):
+    for key in ("manufacturer", "datasheet", "mpn"):
         if key in (raw.get("release") or {}) and raw["release"][key] not in ("hold", "warn"):
             _err(where, f"release.{key}", f"= {raw['release'][key]!r}: must be hold or warn")
     if (raw.get("release") or {}).get("approvals"):
@@ -962,11 +985,24 @@ HELP = {
     "folders": "Altium 365 / DbLib folder per category or designator class",
     "layers": "Altium layers for footprint content (Mechanical1..16, TopOverlay)",
     "footprint": "IPC-7351 density L (least) | N (nominal) | M (most); pin-1 pad names accepted",
-    "sources": "Where missing symbols and footprints are looked for, in order",
+    "sources": "Where missing symbols and footprints are looked for, in order (the shared store, when [store] url is "
+               "set, is always asked first and need not be listed)",
+    "store": "The shared store of checked parts (docs/shared-store.md): url (\"\" = off, the default), accept = "
+             "confirmed | checked | off, mode = online | snapshot",
+    "store.url": "the store: a GitHub raw URL (https://raw.githubusercontent.com/OWNER/REPO/main), a file:// URL or a "
+                 "folder; \"\" = off: nothing is asked",
+    "store.accept": "confirmed: only parts confirmed by two independent builds or a sign-off are used, a single build is "
+                    "a second opinion on your own build | checked: single builds are used too | off: never asked",
+    "store.mode": "online: one index file (1/256 of all parts) and one record per part | snapshot: the whole store as "
+                  "one zip, looked up on this computer",
     "bom": "Your BOM column headers, when ecadlib's guess is wrong (field = header, or field = [\"header\", \"alias\"])",
     "release": "Sign-off policy (same keys as approvals.json); an approvals.json next to a plan wins",
+    "review": "The AI hold reviewer: ai_reviewer = off (default) or assistant (your assistant looks at held parts)",
     "release.parity": "hold | warn | off: a part whose KiCad and Altium files differ (pads, drills, courtyard, 3D, pins) is held",
     "release.height": "warn | hold: a missing or out-of-range 3D height is a note to check (warn, the default) or holds the part",
+    "release.mpn": "warn | hold: a generic resistor or capacitor with a value and a size but no Manufacturer Part "
+                   "Number is a note to fill it (warn, the default) or holds the part; other parts (inductors, beads, "
+                   "ICs) are always held without one",
     "change": "Change control: what a change to a released part needs, per class (hold = a person approves it, warn = "
               "released and listed, pass = released); approvers = people per held change (2 = two-person rule)",
     "change.identity": "hold | warn: the MPN, manufacturer or value changed",

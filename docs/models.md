@@ -74,6 +74,15 @@ route = "ladder"
 ladder = ["local:qwen2.5vl:7b", "claude-sonnet-5-5", "claude-opus-5-5"]
 ```
 
+**Where a key may go.** `ecadlib.toml` names the server and the key's name, and the file may be one that came with
+a project folder. So a key is sent only to the service it is for: `ANTHROPIC_API_KEY` to Claude, `OPENAI_API_KEY` to
+OpenAI, and so on. A key under a name of your own (`api_key_env = "CORP_LLM_KEY"`) goes to those known services and
+to a server on this computer (`localhost`). For any other server, a gateway of your own for example, say so once in
+a terminal: `ecadlib keys allow CORP_LLM_KEY llm.corp.example` (it asks, and keeps the answer in your user
+settings, not in the project). In a script or CI, set `ECADLIB_KEY_HOSTS="CORP_LLM_KEY=llm.corp.example"` instead.
+Without it nothing is sent and the message names the key and the host. A local server that takes no key needs
+none of this. The cost dialogs name the server next to the model ("claude-opus-5-5 at api.anthropic.com").
+
 `ecadlib ai show` prints the model, endpoint, whether its key variable is set (never the value), the capability
 profile and the rails a read runs; `--detect` asks the server about the model; `ecadlib ai rails` lists every rail;
 `ecadlib doctor` has an `ai model` line. `[datasheet]` and `[agent.proof]` may set their own `provider` /

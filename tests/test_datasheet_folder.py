@@ -573,6 +573,7 @@ def test_an_endpoint_that_cannot_fetch_links_keeps_the_advice():
                                                             "price_in": 2.0, "price_out": 8.0}}}}
     import os
     os.environ["ECADLIB_TEST_REMOTE_KEY"] = "sk-remote-test"
+    os.environ["ECADLIB_KEY_HOSTS"] = "ECADLIB_TEST_REMOTE_KEY=llm.example.invalid"   # review 2026-11-23 (2.2): a key under a name of your own goes to a server of your own only once you allowed it
     try:
         with tempfile.TemporaryDirectory() as d:
             TL.run(d, http=TB.PdfHTTP({}), bom=TL.BOM)
@@ -585,6 +586,7 @@ def test_an_endpoint_that_cannot_fetch_links_keeps_the_advice():
             assert len([r for r in it["librarian"]["review"] if r.startswith("datasheet download refused")]) == 1
     finally:
         os.environ.pop("ECADLIB_TEST_REMOTE_KEY", None)
+        os.environ.pop("ECADLIB_KEY_HOSTS", None)
 
 
 class CheckOverloaded(TC.API):

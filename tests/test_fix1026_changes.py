@@ -289,7 +289,7 @@ def test_fix_changes_2a_release_anyway_during_a_librarian_run_is_recorded_at_onc
     b = _BusyLibrary(tmp_path, monkeypatch)
     try:
         b.start()
-        st, j = b.timed("POST", "/api/release-check", {"bom": b.bom, "allow": ["AO3401A"], "user": ANN})
+        st, j = b.timed("POST", "/api/release-check", {"bom": b.bom, "allow": ["AO3401A"], "user": ANN, "reason": "checked by hand"})
         assert st == 200, j
         assert _plan_items(b.plan)["AO3401A"].get("allow"), "the release anyway was not recorded"
         assert j.get("pending"), j                    # it says the release is recorded when the run finishes
@@ -406,7 +406,7 @@ def test_fix_changes_2e_a_command_line_run_holding_the_lock_queues_and_keeps_ui_
     srv, call = serve(ws)
     try:
         t0 = time.time()
-        st, j = call("POST", "/api/release-check", {"bom": bom, "allow": ["AO3401A"], "user": ANN})
+        st, j = call("POST", "/api/release-check", {"bom": bom, "allow": ["AO3401A"], "user": ANN, "reason": "checked by hand"})
         assert st == 200 and j.get("pending"), (st, j)
         st, q = call("POST", "/api/change/revert", {"bom": bom, "part": "CAP-0402-100nF", "revision": 1, "user": ANN,
                                                     "comment": "back"})

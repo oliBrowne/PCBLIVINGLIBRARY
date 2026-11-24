@@ -50,7 +50,7 @@ tab = 2), 78xx/79xx and LM317 in TO-220, 78Lxx in TO-92/SOT-89. Other parts get 
 The librarian records `source: standard:<Lib>:<Name>` (footprint) and `standard:<symbol kind>`; it tries this
 source after kicad and easyeda and before datasheet, and never replaces a symbol or footprint an earlier source or
 the user's own library already filled."""
-import argparse, functools, gzip, json, math, re, sys
+import argparse, functools, gzip, json, math, os, re, sys
 from pathlib import Path
 
 from . import footprint_gen as F
@@ -139,7 +139,7 @@ EP_WORD = re.compile(r"exposed[ _-]?pad|thermal[ _-]?pad|(?<![A-Z0-9])\d?EP(?![A
 # 2026-11-10: 'SMA FLAT' gave the standard SMA, 'TO-92 Formed Leads' the 1.27 mm inline holes): flat leads
 # (SMAF, SOD-123FL), a smaller namesake (Mini SMA), leads formed or kinked to another hole pattern
 OTHER_LAND = re.compile(r"(?<![A-Za-z])(flat(?:[ _-]?leads?)?|FL|mini|micro|sub|(?:pre[ -]?)?formed|kinked|"
-                        r"lead[ _-]?form\w*)(?![A-Za-z])", re.I)
+                        r"lead[ _-]?form\w*|gull[ _-]?wing|full[ _-]?pac?k)(?![A-Za-z])", re.I)
 # a lead count given beside the name: 'SOT-23 (5)', 'SOT-323 5 pins', '6 leads', '5L', '5-pin'
 LEAD_COUNT = re.compile(r"\(\s*(\d{1,2})\s*\)|(?<![\d.A-Za-z])(\d{1,2})[ -]?(?:pins?|leads?|ld|L)(?![A-Za-z])", re.I)
 # words in a footprint field that name a part with more pads, or another land, on a chip size code
@@ -168,14 +168,17 @@ MULTI_WORD = re.compile(
 # words in a description that name another land than the plain chip of the size code: an LED mounted through a hole
 # in the board or shining sideways sits on its own land
 DESC_LAND = re.compile(r"(?<![A-Za-z])(reverse[ _-]?(?:mount\w*|gull\w*)|side[ _-]?(?:view\w*|emit\w*|look\w*|fir\w*)|"
-                       r"right[ _-]?angled?)(?![a-z])", re.I)
+                       r"right[ _-]?angled?|R/A)(?![a-z])", re.I)
 # words that say a capacitor has a + side (tantalum, polymer, aluminium, niobium, electrolytic), in any maker's or
 # distributor's wording ('CAP TANT', 'CAP ALUM POLY'); 'non-polarized' / 'unpolarized' / 'bipolar' say the opposite
-POLAR_WORD = re.compile(r"(?<![A-Za-z])(tant(?:al\w*|cap)?|Ta|electrolytic\w*|elektrolyt\w*|elect?|elko|lytic|e[ _-]?cap|"
+# (review 2026-11-23: 'CAP TAN', '15uF/16V/TAN', 'POL', 'C-POL', EAGLE's device 'CPOL-EUC1206'; not 'tan δ', the loss)
+POLAR_WORD = re.compile(r"(?<![A-Za-z])(tant(?:al\w*|cap)?|tan(?![ ]?(?:δ|d(?![a-z])|delta))|Ta|c[ _-]?pol|pol|"
+                        r"chimique|electrolytic\w*|elektrolyt\w*|elect?|elko|lytic|e[ _-]?cap|"
                         r"polymer|poly|alum(?:inum|inium)?|alu|niobium|poscap|os[ _-]?con|sp[ _-]?cap|hybrid|mno2|"
-                        r"super[ _-]?cap\w*|ultra[ _-]?cap\w*|EDLC|double[ _-]?layer|polari[sz]ed)(?![a-z])"
+                        r"super[ _-]?cap\w*|ultra[ _-]?cap\w*|EDLC|double[ _-]?layer|polari[sz]ed|polarity)(?![a-z])"
                         r"|\u94bd|\u7535\u89e3|\u805a\u5408\u7269", re.I)   # tantalum, electrolytic, polymer in Chinese
-NOT_POLAR = re.compile(r"(?<![A-Za-z])(non|un|bi)[ _-]?polar", re.I)
+NOT_POLAR = re.compile(r"(?<![A-Za-z])(?:(non|un|bi)[ _-]?polar|(?:no|without)[ _-]polarity)", re.I)
+_NOT_POLAR_TOKEN = re.compile(r"(?<![A-Za-z])(?:(?:non|un|bi)[ _-]?polar\w*|(?:no|without)[ _-]polarity)", re.I)   # the word whole
 
 
 def multi_terminal(*texts):
@@ -190,9 +193,534 @@ def multi_terminal(*texts):
 
 def says_polarized(*texts):
     """A capacitor's description says it has a + side. The MPN prefix list (POLAR_CAP) is only extra evidence: a
-    series it does not know is still caught by what the BOM says the part is."""
+    series it does not know is still caught by what the BOM says the part is.
+    Review 2026-11-23 round 3 (A4): 'non-polarized' / 'unpolarized' / 'bipolar' takes out only itself, never another
+    word of the line ('Tantalum capacitor for bipolar supply' is a tantalum; a 'bipolar electrolytic' is still an
+    electrolytic, no plain chip)."""
     said = " ".join(str(t or "") for t in texts)
-    return bool(POLAR_WORD.search(said)) and not NOT_POLAR.search(said)
+    return bool(POLAR_WORD.search(_NOT_POLAR_TOKEN.sub(" ", said)))
+
+
+# words that say a capacitor is ceramic (no + side): the dielectric code or the word, in any distributor's wording
+CERAMIC_WORD = re.compile(r"(?<![A-Za-z0-9])(ceramic\w*|cer|cerm|mlcc|keramik\w*|c[eé]ramique|X[5-8][RSTUVL]|Y5[UV]|Z5U|"
+                          r"C0G|COG|NP0|NPO|U2J)(?![A-Za-z])", re.I)
+
+
+def says_ceramic(*texts):
+    """A capacitor's words name a ceramic dielectric (X7R, C0G, 'CAP CER', 'MLCC')."""
+    return bool(CERAMIC_WORD.search(" ".join(str(t or "") for t in texts)))
+
+
+# a film capacitor has no + side either ('CAP FILM 0.1UF', 'Polyester film capacitor', 'polypropylene', 'PPS')
+FILM_WORD = re.compile(r"(?<![A-Za-z])(film|polyester|polypropylene|PPS|PET|PEN|mylar)(?![A-Za-z])", re.I)
+
+
+def says_unpolarized(*texts):
+    """Something positive says the capacitor has no + side: a ceramic dielectric, a film, or the words 'non-polar' /
+    'unpolarized'. The evidence an unpolarized chip needs when no MLCC part-number code reads its number (review
+    2026-11-23, 1.12): the absence of 'tantalum' is not evidence."""
+    said = " ".join(str(t or "") for t in texts)
+    return bool(CERAMIC_WORD.search(said) or FILM_WORD.search(said) or NOT_POLAR.search(said))
+
+
+def names_c_chip(texts):
+    """A footprint text is KiCad's own unpolarized chip capacitor land by its full name ('C_0805_2012Metric',
+    'Capacitor_SMD:C_0603_1608Metric'): the BOM itself chose that land for the part (a polarized one is CP_...), which
+    a bare size code ('1206') does not say."""
+    return any(re.fullmatch(r"C_\d{4,5}_\d{4,5}Metric", _strip_lib(str(t or "")).strip()) for t in texts)
+
+
+def cap_words(text):
+    """The words of a part search's description that say what a capacitor is made of ('CER X7R', 'TANT'): the line's
+    evidence for or against a + side. Its other words (a size code of the listing) are not passed on."""
+    t = str(text or "")
+    return " ".join(m.group(0).strip() for rx in (CERAMIC_WORD, FILM_WORD, NOT_POLAR, POLAR_WORD) for m in rx.finditer(t))
+
+
+# ---- every word understood (review 2026-11-23, 1.1 / 1.3): a list of words to refuse always misses a spelling ('TAN',
+# 'x4', '8P4R', 'CMC', 'bicolor'), so the test is turned round: what is left of a text once the value, tolerance,
+# ratings, dielectric, size and the plain words of the kind are taken out must be nothing, or the part is held
+_NUM = r"\d+(?:[.,]\d+)?"
+_OHM = "ΩΩ"
+_UNDERSTOOD = re.compile(
+    r"(?:[+\-±~<>]*" + _NUM +                                                 # a bare number, an EIA code
+    r"|[+\-±~<>]*" + _NUM + r"%"                                              # tolerance
+    r"|" + _NUM + r"(?:[kmgre]|meg|[kmgµμu]?(?:ohms?|om|[" + _OHM + r"]|r))|\d*[rkme]\d+"   # resistance: 10k, 4k7, 0R1, 10kΩ
+    r"|" + _NUM + r"(?:[pnuµμm]fd?|[pnuµμ]|f)|\d+[pnuµμ]\d+"                      # capacitance: 100nF, 4u7, 10u
+    r"|" + _NUM + r"[pnuµμm]?h"                                                    # inductance
+    r"|[+\-±]*" + _NUM + r"[mk]?v(?:dc|ac|rms|olts?)?|\d+v\d+"                # voltage rating: 50V, 6V3
+    r"|" + _NUM + r"[mk]?w(?:atts?)?"                                              # power rating: 100mW, 1/10W
+    r"|[+\-±]*" + _NUM + r"°c?|°c|[+\-±]*\d{2,3}c"            # temperature
+    r"|[+\-±]*(?:" + _NUM + r")?ppm(?:°?[ck])?"                          # temperature coefficient
+    r"|X[5-8][RSTUVL]|Y5[UV]|Z5U|C0G|COG|NP0|NPO|U2J"                             # dielectric
+    # body 1.6x0.8, 2x1.25mm: lengths (a decimal point or 'mm'); '0603x4', '4x10k' are counts, never understood
+    r"|(?=[^.]*(?:\.|mm))" + _NUM + r"(?:mm)?[x×*]" + _NUM + r"(?:mm)?(?:[x×*]" + _NUM + r"(?:mm)?)?"
+    r"|[hltwp]?=?" + _NUM + r"(?:mm|mil)"
+    r"|(?:RES|CAP|IND|LED|DIO|FUS)C\d{4}X\d+[A-Z]?)", re.I)                        # IPC-7351 name
+_UNDERSTOOD_RATED = re.compile(_NUM + r"(?:[mµμu]?a|[kmg]?hz)", re.I)             # a bead's / fuse's / LED's rating
+_SIZE_TOKEN = re.compile(r"(R|C|CP|L|D|F|FB|LED|RES|CAP|IND|FUSE|SMD|SMT|RC|CC|CR|MLCC|CHIP|EIA)?(\d{4,5})(?:M|Metric)?",
+                         re.I)                                                     # (the chip words chip_size reads glued)
+# review 2026-11-23 round 3 (A1): the prefix glued to a size code names a kind of part ('CP1206' a polarized capacitor,
+# 'LED1206', 'R0603'). On a line of another kind the code is not understood: the line contradicts itself
+_PREFIX_KIND = {"R": "R", "RES": "R", "RC": "R", "CR": "R", "C": "C", "CAP": "C", "CC": "C", "MLCC": "C", "CP": "CP",
+                "L": "L", "IND": "L", "FB": "L", "D": "D", "LED": "LED", "F": "F", "FUSE": "F"}
+_PREFIX_OK = {"R": {"R"}, "C": {"C"}, "CP": {"C", "CP"}, "L": {"L"}, "LED": {"LED", "D"}, "D": {"D"}, "F": {"F"}}
+
+
+def size_prefix_clash(tok, kind):
+    """A size code with a kind prefix glued on ('CP1206', 'LED0603', 'C0603') on a line of another kind -> the
+    prefix's kind, else None. 'CP' is always a polarized capacitor: never the plain C."""
+    m = _SIZE_TOKEN.fullmatch(str(tok or ""))
+    if not m or not (m.group(2) in IMPERIAL or m.group(2) in METRIC):
+        return None
+    pk = _PREFIX_KIND.get((m.group(1) or "").upper())
+    return pk if pk and kind in _PREFIX_OK and pk not in _PREFIX_OK[kind] else None
+
+
+def polar_size_prefix(*texts):
+    """A text carries a chip size with the polarized capacitor's prefix glued on ('CP1206', 'Capacitors:CP0805',
+    'cp1206') or KiCad's 'CP_' name: the BOM itself says the capacitor has a + side (round 3, A1)."""
+    for t in texts:
+        n = _strip_lib(str(t or "")).strip()
+        if n.upper().startswith("CP_") or any(size_prefix_clash(x.strip(".,"), "C") == "CP" for x in _SPLIT.split(n)):
+            return True
+    return False
+
+
+_PLAIN = set("smd smt chip surface mount mounted generic general purpose standard std gp rohs pb free lead leadfree "
+             "halogen aec q200 automotive grade commercial precision high low power voltage rated rating tol "
+             "tolerance value val type class size case package pkg footprint metric imperial inch eia code passive "
+             "device small us eu and at to mm t&r tape reel tr temp temperature coefficient tc tcr max min typ "
+             "nom nominal dc ac symbol semiconductor sim model ipc iec din jis sml med hd hi density".split())   # (KiCad's 'Resistor, US symbol',
+#                                                                         Altium's 'Capacitor (Semiconductor SIM Model)')
+# review 2026-11-23 round 2 (C5): no single letter is a plain word ('10uF/16V/A', '1206_A', '1206 L': a tantalum's case
+# letter), and the kind's own letter is none beside these words ('case C', 'D-case', 'type C', 'size A')
+_CASE_WORD = set("case size type pkg package style code".split())
+_NOT_SAID = re.compile(r"(?i)(?<![A-Za-z0-9])n\s?/\s?a(?![A-Za-z0-9])")       # 'N/A': nothing said, no word of the part
+_PLUS_MARK = re.compile(r"\+(?!\s?[\d.]|\s?/?\s?[-−–])")              # a '+' that is no sign of a number or of '+/-'
+_PLAIN_KIND = {
+    "R": "r res resistor resistors resistance resistive ohm ohms thick thin film metal jumper zero pullup pulldown "
+         "pull up down anti sulfur sulphur antisulfur resistant moisture widerstand résistance resistencia",
+    "C": "c cap caps capacitor capacitors capacitance ceramic cer cerm mlcc multilayer multi layer monolithic soft "
+         "termination flex flexible decoupling bypass ii i kondensator keramik condensateur céramique condensador",
+    "L": "l ind inductor inductors inductance fb ferrite bead beads multilayer ceramic",
+    "LED": "led leds d diode indicator light emitting clear diffused red green blue yellow amber orange white "
+           "polarized polarised",                         # (an LED and a diode are: '0603 (1608 metric), polarized')
+    "D": "d diode diodes polarized polarised",
+    "F": "f fuse fuses fast slow blow acting ptc pptc resettable polyfuse",
+}
+_PLAIN_KIND = {k: set(v.split()) for k, v in _PLAIN_KIND.items()}
+_PLAIN_KIND["CP"] = _PLAIN_KIND["C"]
+_GLUE_UNIT = re.compile(r"(?<=\d)[ ]+(?=(?:[kmg]?ohms?|[kM]?[" + _OHM + r"]|kR|[kM]?Om|Meg|[pnuµμ]F|[nuµμm]H|V(?:DC|AC)?|m?W|%|ppm|mm|[kKMR])"
+                        r"(?![A-Za-z]))", re.I)
+_SPLIT = re.compile(r"[\s;/|()\[\]{}_:=\"'+~@\-]+|,(?!\d)|(?<!\d),")
+
+# ---- review 2026-11-23 round 3: which words hold a resistor or capacitor. The round-1 rule (every word understood or
+# the part is held) lost 18 % of the correct plain parts of 1,449 real BOMs to words that say nothing about how the
+# part is built ('CAPACITOR, European symbol', 'Resistor Fixed - ANSI', 'Yageo', 'decoupling', 'Verified.'). The rule's
+# purpose is to catch a word that could mean more than two pads, a + side, another technology or a body that is no
+# chip. So a word is judged by what kind of word it is:
+#   - an ordinary written word (letters only, four or more) holds only when it is a word of a part's build
+#     (_BUILD_WORD: stems, so inflections, compounds and misspellings are caught: 'Tantalkondensator', 'electrolitic');
+#   - a short word, a code, a lone letter or anything with a digit ('TAN', 'POL', 'CMC', 'A', '8P4R', 'x4') is where a
+#     list of words to refuse always missed a spelling: it must be understood (a value, rating, size, plain word, a
+#     grammar word, a designator, an order number, a part number of the same kind) or it holds, as before.
+# The words of a grammar (articles, prepositions, auxiliaries: a closed class) and of not fitting a part say nothing
+_NO_BUILD = set("an the of for to in on at by as is be or and if it its was are were per via vs see with from this "
+                "that than then when not no all any each both use used into onto over out off but so do does has "
+                "have had may must will been also only etc end top new old tbd tba na nil dnp dnf dni dnm nc nf nm "
+                "np pop nop opt fit".split())             # (.. and of fitting: 'DNP', 'NO POP', 'OPT', 'not fitted')
+_WORD = re.compile(r"[A-Za-zÀ-ɏ]{4,}")                                  # an ordinary written word (Latin letters)
+_CJK = re.compile(r"[㐀-鿿豈-﫿぀-ヿ]")
+_BUILD_WORD = {
+    # more than two terminals, a part that is set by hand, a body that is no chip, another kind of part
+    None: re.compile(
+        r"arra[iy]|arry|netw|netz|^(?:r|res|c|cap|chip)?pac?ks?$|ladder|divid|^dual|^twin|^quad|tripl|^pairs?$|isolat|"
+        r"buss|convex|concav|gang|matched|tapp?ed$|^taps$|bridg|kelvin|feedth|coupled|bifilar|"
+        r"trim|vari|adjust|tunab|tuning|potent|^poti?s?$|rheost|slide|rotar|encoder|wiper|"
+        r"melf|axial|radial|leaded|through|thru|hole|snap|screw|stud|chassis|panel|^dis[ck]s?$|^cans?$|solder|^pads?$|"
+        r"castell|wide|"
+        r"induct|ferrit|bead|choke|coil|^fus|therm|varis|diod|zener|schottk|resonat|sens|shunt|heater|connector"),
+    # a + side, another capacitor technology
+    "C": re.compile(
+        r"tant|electrol|elektrol|elettrol|lytic|litic|elko|elco|elyt|^elect?$|pol|alum|niob|oscon|poscap|spcap|hybrid|solid|"
+        r"mou?ld|anod|cathod|kathod|katod|positiv|negativ|^plus$|^minus$|stripe|supercap|ultracap|goldcap|doublelayer|"
+        r"film|foil|mica|glass|paper|mylar|styr|teflon|silicon|trench|vacuum|safety|suppress|chimi|jumper"),
+    # another resistor technology or body
+    "R": re.compile(r"wound|^wire|carbon|oxide|cement|foil|fusib|photo|strain|gau?ge"),
+}
+_BUILD_WORD["CP"] = _BUILD_WORD["C"]
+# tantalum, electrolytic, polymer, solid, aluminium, niobium, polarity, + / - pole, array (resistor, capacitor),
+# network, thermistor, varistor, light-dependent, adjustable, variable, potentiometer, trimmer, through-hole,
+# leaded, axial, radial, wire-wound, cement, fuse, bead, inductor, coil, diode, film capacitor, mica, safety, super,
+# farad, sampling (sense), Kelvin, four- / three-terminal; tantalum, electrolytic, aluminium in Japanese
+_CJK_BUILD = re.compile("钽|电解|電解|聚合物|高分子|固态|固態|铝|鋁|铌|极性|極性|正极|负极|排阻|排容|排|网络|網絡|阵列|陣列|热敏|熱敏|压敏|壓敏|"
+                        "光敏|可调|可調|可变|可變|电位器|電位器|微调|插件|直插|引线|轴向|径向|绕线|线绕|水泥|保险|熔|磁珠|电感|電感|线圈|二极管|"
+                        "二極管|薄膜电容|云母|安规|超级|法拉|采样|取样|检流|开尔文|四端|三端|タンタル|アルミ|[぀-ヿ]")
+_REF_DES = re.compile(r"(?:R|C|L|D|Q|U|J|JP|IC|SW|FB)\d{1,3}", re.I)              # 'R4', 'C11', 'U2' in a note
+_ORDER_CODE = re.compile(r"C\d{4,7}", re.I)                                       # LCSC's order number
+_URL = re.compile(r"(?i)(?<![A-Za-z0-9])(?:https?://|www\.)[^\s,;)\]]+")
+_STANDARD = re.compile(r"(?i)(?<![A-Za-z0-9])(?:IPC|JEDEC|IEC|JIS|MIL|ISO|DIN|ANSI)(?:[-_ ][A-Z]{1,4})?[-_ ]?\d+[A-Z]?(?![A-Za-z0-9])")
+_PART_CHUNK = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9\-/.]{5,}[A-Za-z0-9](?![A-Za-z0-9])")
+
+
+def build_word(tok, kind):
+    """An ordinary word that is a word of a part's build for this kind of line ('tantalum', 'Elektrolytkondensator',
+    'array', 'wirewound', 'MELF', 'thermistor'): the stem anywhere in the word."""
+    t = str(tok or "").lower()
+    return bool(_BUILD_WORD[None].search(t) or (kind in _BUILD_WORD and _BUILD_WORD[kind].search(t)))
+
+
+def embedded_parts(text, kind):
+    """The part numbers written inside a Value or Description that a maker's code reads whole ('RC0603FR-071K5L',
+    '10k - RC0805FR-0710KL', '0603 1uF 50V X5R (Murata GRM188R61H105KAALD)') -> ([(chunk, kind, size, value)], the
+    text without them). A number of the line's own kind says nothing against a plain chip (generic_passive_hold then
+    checks its size and value against the line's); a tantalum's number stays in the text and holds."""
+    from . import mpn_decode as MD
+    t, found = str(text or ""), []
+    for m in list(_PART_CHUNK.finditer(t)):
+        whole = m.group(0).strip(".-/")
+        for chunk in [whole] + [whole[j + 1:] for j, ch in enumerate(whole) if ch in "-/"]:
+            if len(chunk) < 7 or not (re.search(r"\d", chunk) and re.search(r"[A-Za-z]", chunk)):
+                continue
+            d = MD.decode(chunk)
+            k, size = (d["kind"], d.get("size")) if d else mpn_size(chunk)
+            if k in ("R", "C") and size and (k == kind or (k == "C" and kind == "CP")):
+                found.append((chunk, k, size, d["value"] if d else None))
+                break
+    for chunk, *_ in found:
+        t = t.replace(chunk, " ")
+    return found, t
+
+
+def unread_words(text, kind=None, footprint=False, strict=False):
+    """The words of a BOM text that are NOT understood as part of a plain two-pad chip of this kind. [] = nothing in
+    the text speaks against the plain chip. footprint: the text is a footprint name (its library prefix and path are
+    no words). strict: the text is a symbol's name, where every word names the symbol: all of it must be understood.
+    Understood: a value, tolerance, voltage / power rating, dielectric or temperature code, a chip size (with no
+    prefix of another kind: size_prefix_clash) and the plain words of the kind (resistor, capacitor, ceramic, chip,
+    SMD ...). Round 3, for a resistor's or capacitor's text that is no symbol name: also an ordinary written word
+    that is no word of a part's build (build_word), the words of a grammar, a designator, an order number, a standard
+    ('IPC-7351'), a web address and a part number of the line's own kind (embedded_parts). A short word, a code and a
+    lone letter must still be understood."""
+    t = _strip_lib(text) if footprint else str(text or "")
+    free = kind in ("R", "C", "CP") and not strict        # (inductors, LEDs, diodes, fuses: every word, as before)
+    if footprint:                                         # 'MC_S6/SM/R_0603_IPC', 'My lib-import:0603-NO': the folders
+        for sep in (":", "/", "\\"):                      # and the library before the name are no words of the land.
+            head, _, tail = t.rpartition(sep)             # A folder's name is read all the same ('TANT/C_1206',
+            if head and re.search(r"[A-Za-z]", head) and chip_size(tail, strict=True) and not chip_size(head):   # 'ARV/R_0603',
+                parts = [x for x in re.split(r"[\s_/\\:.,;()\-]+", head) if x]                                  # 'lib/CP/1206'):
+                first = _SIZE_TOKEN.fullmatch(re.split(r"[\s_\-]+", tail.strip())[0])     # only its two-character codes
+                own = _PREFIX_KIND.get(re.split(r"[\s_\-]+", tail.strip())[0].upper()) == kind or bool(   # are let be, and
+                    first and _PREFIX_KIND.get((first.group(1) or "").upper()) == kind)     # only before a name that says
+                if sep == ":" and free or sep != ":" and own and not (unread_words(" ".join(x for x in parts if len(x) != 2), kind)   # the kind
+                                              or any(x.upper() in _PREFIX_KIND and x.upper() != kind for x in parts)):   # ('R_0603')
+                    t = tail
+    if free:
+        t = _STANDARD.sub(" ", _URL.sub(" ", t))
+        t = embedded_parts(t, kind)[1]
+        t = re.sub(r"(?<=\d)(mm)?\s+[xX×]\s+(?=\d+\.\d|\d+\s?mm)", r"\1x", t)   # a body '0.6 x 0.3', '2 x 1.25mm'
+    if kind in ("C", "CP"):                               # KiCad's own 'Unpolarized capacitor', 'non-polarized': no + side
+        t = re.sub(r"(?i)(?<![A-Za-z])(?:non|un)[ _-]?polar(?:i[sz]ed)?(?![a-z])", " ", t)
+    words = _PLAIN | _PLAIN_KIND.get(kind, set())
+    out = []
+    t = _NOT_SAID.sub(" ", t)
+    if kind in ("C", "CP") and _PLUS_MARK.search(t):      # '10uF +', '1206 (+)': the + side of a polarized capacitor,
+        out.append("+")                                   # never part of a plain chip's text (round 2, C5)
+    toks = [x for x in (tok.strip(".,").rstrip("*?!") if free else tok.strip(".,")
+                        for tok in _SPLIT.split(_GLUE_UNIT.sub("", t))) if x]
+    for i, tok in enumerate(toks):
+        if footprint and re.fullmatch(r"[2-9][A-Za-z]|\d{1,3}", tok):   # (and '0603_4', '0603 4': a count)      # '0603 4R' in a footprint cell: four resistors
+            out.append(tok)                                          # in one body, not a 4 ohm value
+            continue
+        if len(tok) == 1 and tok.isalpha() and {x.lower() for x in toks[max(i - 1, 0):i + 2]} & _CASE_WORD:
+            out.append(tok)                                          # 'case C', 'D-case': a case letter, not 'C' the
+            continue                                                 # capacitor
+        if i and re.fullmatch(r"[2-9]", tok) and toks[i - 1].lower() not in ("class", "grade") and not (
+                i + 1 < len(toks) and re.fullmatch(r"(?i)\d+m?w(?:atts?)?", toks[i + 1])):
+            out.append(tok)                                          # '10k 4', 'Resistor 4': a count of elements, where
+            continue                                                 # 'Class 2' and '3/4W' are a class and a rating
+        if size_prefix_clash(tok, kind):                             # 'CP1206' on a capacitor, 'LED0603' on a resistor,
+            out.append(tok)                                          # 'R1206' on a capacitor (no 0.1206 ohm value)
+            continue
+        if not re.search(r"\w", tok) or tok.lower() in words or _UNDERSTOOD.fullmatch(tok):
+            continue
+        m = _SIZE_TOKEN.fullmatch(tok)
+        if m and (m.group(2) in IMPERIAL or m.group(2) in METRIC):
+            continue
+        if kind in ("L", "F", "LED", "D") and _UNDERSTOOD_RATED.fullmatch(tok):
+            continue
+        if free and _free_word(tok, toks, i, kind):
+            continue
+        out.append(tok)
+    return out
+
+
+@functools.lru_cache(maxsize=1)
+def _maker_words():
+    """The words of the names of the resistor and capacitor makers whose part numbers are read ('avx', 'tdk', 'koa',
+    'uni', 'royal'): a maker's name in a description says nothing about how the part is built."""
+    return frozenset(w for names in MAKER_NAMES.values() for n in names for w in re.split(r"[ -]", n) if w.isascii())
+
+
+def _free_word(tok, toks, i, kind):
+    """Round 3: a word of a resistor's or capacitor's text that says nothing about how the part is built (see
+    _NO_BUILD above)."""
+    low = tok.lower()
+    if _CJK.search(tok):                                  # Chinese / Japanese: no spaces between words, so the words
+        return not _CJK_BUILD.search(tok)                 # of a build are looked for anywhere in it
+    if _WORD.fullmatch(tok):
+        return not build_word(tok, kind)
+    if low in _NO_BUILD or low in _maker_words():
+        return True
+    if tok == "a" and i + 1 < len(toks) and re.fullmatch(r"[A-Za-z]{3,}", toks[i + 1]):
+        return True                                       # the article ('for a button'); 'A' and '16V a' are a letter
+    if kind in ("C", "CP") and POLAR_CAP.match(_norm(tok)) and len(tok) >= 4:
+        return False                                      # a tantalum / polymer / aluminium series ('T491', 'TAJA106..')
+    if _REF_DES.fullmatch(tok):
+        return True
+    return bool(_ORDER_CODE.fullmatch(tok)) and tok[1:] not in EIA_HEIGHTS    # ('C7343' is a tantalum's size)
+
+
+_VALUE_TOKEN = re.compile(_NUM + r"(?:[kmgre]|[kmg]?(?:ohms?|[" + _OHM + r"]|r)|[pnuµμm]f?|f|[pnuµμm]?h)|\d*[rkmpnuµμ]\d+", re.I)
+
+
+def value_names_size(value, kind=None):
+    """The Value cell may name the chip size only when it also carries a value ('10k 0603', '100nF 0402'): alone, a
+    number in it is the value ('1210' is 1.21 kOhm, never the 1210 land; review 2026-11-23, a4 M1). For a kind with no
+    numeric value (an LED's 'red 0603') another word does."""
+    toks = [x.strip(".,") for x in _SPLIT.split(_GLUE_UNIT.sub("", str(value or ""))) if x.strip(".,")]
+    rest = [x for x in toks if not re.fullmatch(r"[RCL]?\d{4,5}(?:M|Metric)?", x, re.I)]
+    if len(rest) == len(toks):
+        return False                                      # no size code in it at all
+    if kind in ("R", "C", "CP", "L", "NTC", "PTC", "VAR", "TH"):
+        return any(_VALUE_TOKEN.fullmatch(x) and not x.isdigit() for x in rest)
+    return any(re.search(r"[A-Za-z]", x) for x in rest)
+
+
+def generic_passive_hold(cat, value="", description="", other=(), cells=()):
+    """Why a resistor or capacitor line with NO part number is not released as a generic chip of its value and size
+    (review 2026-11-23, 1.1), or None. Its Value and Description are read whole (unread_words): a word that names
+    another build, or a code that is not understood ('tantalum', 'x4', 'array', 'TAN'), holds it, and the hold names
+    the word. other: texts written for other reasons (the item's own footprint texts, a description from another
+    source): there only words that say polarized or more than two terminals count. cells: the line's other cells,
+    each with what its column is (bom_triage.line_cells: role, header, cell), read by cell_hold.
+    Round 3: a part number written in the Value or Description that a maker's code reads (embedded_parts) must be of
+    the size the line's footprint names and of the line's value, or the line contradicts itself."""
+    kind = {"Resistors": "R", "Capacitors": "C"}.get(str(cat or "").replace("\\", "/").split("/")[-1])
+    if not kind:
+        return None
+    what = "resistor" if kind == "R" else "capacitor"
+    tail = "with no part number the part is not released as a generic one; give its part number"
+    for name, text in (("Value", value), ("Description", description)):
+        left = unread_words(text, kind)
+        if left:
+            return (f"the BOM line's {name} {str(text).strip()[:60]!r} says {left[0]!r}, which is not read as part of a "
+                    f"plain two-pad chip {what} (value, tolerance, rating, dielectric, size): with no part number the "
+                    "part is not released as a generic one; give its part number, or take the word out if it is a "
+                    "plain chip")
+    lands = [t for t in other] + [c for role, _, c in cells if role == "footprint"]
+    sizes = {z for z in (chip_size(t, strict=True) for t in lands) if z and not str(z).startswith("conflict")}
+    for name, text in (("Value", value), ("Description", description)):
+        for chunk, _, size, v in embedded_parts(text, kind)[0]:
+            if sizes and size not in sizes:
+                return (f"the BOM line's {name} names the part number {chunk}, a {size} chip, but its footprint is "
+                        f"{'/'.join(sorted(sizes))}: the line names two sizes; {tail}")
+            mine = _line_value(value if name == "Description" else str(value).replace(chunk, " "), kind)
+            if v is not None and mine is not None and abs(v - mine) > 0.011 * max(abs(v), abs(mine)):
+                return (f"the BOM line's {name} names the part number {chunk}, whose code reads another value than "
+                        f"the line's Value {str(value).strip()[:40]!r}: the line names two parts; {tail}")
+    for text in other:
+        t = str(text or "")
+        word = multi_terminal(t) or (POLAR_WORD.search(_NOT_POLAR_TOKEN.sub(" ", t)).group(0).strip()
+                                     if kind == "C" and says_polarized(t) else None)
+        if word:
+            return f"the BOM line says {word!r} ({t.strip()[:60]!r}): not a plain two-pad chip {what}; {tail}"
+    for role, header, cell in cells:
+        why = cell_hold(kind, role, header, cell, lands)
+        if why:
+            return f"{why}; {tail}"
+    return None
+
+
+def _line_value(text, kind):
+    """The value a Value cell states, in base units, or None: the first value word of it ('10k' of '10k 1% 0603')."""
+    from .kicad_index import parse_value
+    for tok in _SPLIT.split(_GLUE_UNIT.sub("", str(text or ""))):
+        tok = tok.strip(".,")
+        if tok and (_VALUE_TOKEN.fullmatch(tok) or re.fullmatch(r"\d+(?:[.,]\d+)?", tok)):
+            v, unit = parse_value(tok, with_unit=True)
+            if v is not None and unit in ("", "R" if kind == "R" else "F"):
+                return v
+    return None
+
+
+# what the header of an unmapped column says its cells are (round 3, A2 / A3). An attribute of the part itself: its
+# cells are read whole, like the Description
+_ATTR_HEADER = re.compile(r"(?<![a-z])(?:type|kind|case|size|package|pack|pkg|style|mount\w*|tech\w*|dielectric|"
+                          r"material|construction|polar\w*|categor\w*|class|family|comments?|desc\w*|details?|"
+                          r"designation|name|part|value|val)(?![a-z])")
+# a count of what is inside one body: a number above two there is a part with more than two terminals
+_COUNT_HEADER = re.compile(r"(?<![a-z])(?:pins?|pads?|leads?(?! ?(?:time|free))|terminals?|terminations?|contacts?|elements?|"
+                           r"resistors?|capacitors?|channels?|circuits?|ways?|poles?|sides?|"
+                           r"(?:res|caps?|parts?|pcs|pieces|qty|quantity|units?|devices?) per (?:package|pkg|pack|part|body|case|device|chip))(?![a-z])")
+_UNIT_HEADER = re.compile(r"(?<![a-z])(?:gangs?|units?|sections?|elements?|channels?|circuits?|poles?)(?![a-z])")
+_CLEAR_NO = re.compile(r"(?i)\s*(?:|no|n|false|f|nein|non|none|0+(?:[.,]0+)?|-+|—|n\s?/\s?a|not?[ _-]polari[sz]ed|"
+                       r"(?:non|un)[ _-]?polar\w*|np)\s*")
+
+
+# a column of numbers, links or names that identify the part somewhere (an order number, a link, a library): no words
+# of the part ('Mouser Part Number', 'Supplier Part', 'Footprint Name', 'LCSC Part #'; 'Case Code' is a case)
+_ID_HEADER = re.compile(r"(?<![a-z])(?:number|no|nr|num|pn|sku|id|ref|reference|link|url|datasheet|footprint|library|lib|"
+                        r"supplier|vendor|distributor|seller|digi ?key|mouser|lcsc|jlc\w*|farnell|newark|rs|tme|arrow|"
+                        r"(?:order|part|stock|item|catalog|product) code)(?![a-z])")
+
+
+def _hdr(text):
+    return re.sub(r"[^a-z0-9]", "", str(text or "").lower())
+
+
+def _camel(text):
+    """'ResChip' -> 'Res Chip', 'CapCer' -> 'Cap Cer': the words of a name written in camel case."""
+    return re.sub(r"(?<=[A-Za-z][a-z])(?=[A-Z])", " ", str(text or ""))        # (not the unit of '22uF')
+
+
+def header_words(header, lower=True):
+    """A header as words: 'PinCount' -> 'pin count', '# Pins' -> 'number pins', 'Res_per_pkg' -> 'res per pkg'."""
+    h = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", str(header or "").replace("#", " number "))
+    return " ".join(re.sub(r"(?i)^num(?=pins?|pads?|leads?|term|elem|res|cap)", "num ", w)
+                    for w in re.split(r"[\W_]+", h.lower() if lower else h) if w)
+
+
+def cell_hold(kind, role, header, cell, lands=()):
+    """Why one cell of a no-part-number resistor's or capacitor's line, beside its Value and Description, holds the
+    line, or None (review 2026-11-23 round 3, A2 / A3 / B3). role says what the column is (bom_triage.line_cells):
+      footprint: the words that say polarized or more than two terminals (the land itself is read by footprint_for);
+      symbol:    the cell names the schematic symbol the row was drawn with (LibRef, KiCad's LibPart, EAGLE's Device):
+                 it must be the plain symbol of the kind and nothing more, once the row's own footprint name is taken
+                 out of it (EAGLE's 'C-EUC0603' is symbol C-EU on package C0603). 'Device:CP', 'Res Adj1', 'Cap Var',
+                 'Device:Thermistor_NTC' are other parts;
+      maker:     the Manufacturer cell: a word or a series that says polarized ('AVX TAJ series');
+      admin:     a column on how the part is bought or used (Function, Notes, Supplier): only the words of a
+                 capacitor's + side and of another technology, not counts of elements ('RC filter', '4 pin header');
+      said:      any other column: its header is read with every cell that is not a clear no ('Polarized: Yes.',
+                 'Total Pins: 8', 'Case: A'); a column on what the part is (Type, Case, Mounting, Comment) is read
+                 whole like the Description, another one for the words that say polarized or more than two terminals."""
+    what = "resistor" if kind == "R" else "capacitor"
+    c = str(cell or "").strip()
+    if not c:
+        return None
+    where = f"the BOM line's {header} {c[:60]!r}"
+    polar = lambda t: (POLAR_WORD.search(_NOT_POLAR_TOKEN.sub(" ", t)).group(0).strip() if says_polarized(t) else
+                       "+" if _PLUS_MARK.search(t) or t.strip() == "+" else None) if kind == "C" else None
+    tech = lambda t: next((w for w in re.findall(r"[A-Za-zÀ-ɏ]{4,}", t) if _BUILD_WORD[kind].search(w.lower())), None)
+    if role == "footprint":
+        word = multi_terminal(c) or polar(c) or ("CP" if kind == "C" and polar_size_prefix(c) else None)
+        return f"the BOM line says {word!r} ({c[:60]!r}): not a plain two-pad chip {what}" if word else None
+    if role == "symbol":
+        from .altium_project import is_vault_id
+        # KiCad's rescued symbols ('proj-cache:R-RESCUE-proj', 'C-proj-rescue') are the symbol under the project's name
+        c0 = re.sub(r"(?i)-RESCUE-.*$|^(.{1,12}?)-.+-rescue$", r"\1", _strip_lib(c)) if re.search(r"(?i)-rescue", c) else c
+        names = [c0]
+        for land in sorted({_strip_lib(str(x or "")).strip() for x in lands} - {""}, key=len, reverse=True):
+            if len(land) >= 4 and land.lower() in c0.lower():        # EAGLE: the device's name ends in its package's
+                j = c0.lower().index(land.lower())
+                names.append(c0[:j] + " " + c0[j + len(land):])
+                break
+            pre = os.path.commonprefix([land.lower(), c0.lower()])   # .. both under the library's name ('LIB_RR0402' is
+            pre = pre[:max(pre.rfind("_"), pre.rfind("-")) + 1]      # device R on package R0402 of 'LIB_')
+            if len(pre) >= 4 and len(land) - len(pre) >= 4 and c0.lower().endswith(land.lower()[len(pre):]):
+                names.append(c0[len(pre):len(c0) - (len(land) - len(pre))])
+                break
+        if re.fullmatch(r"(?i)C\d{5,8}", c0.strip()):                # LCSC's order number in the column: no symbol's name
+            return None
+        found, rest = embedded_parts(c0, kind)                       # '10NF-C0603C103K5RACTU': a symbol named after a
+        if found and (not re.search(r"[A-Za-z]", rest) or not unread_words(rest, kind, strict=True)):   # chip of the kind
+            return None
+        # a size code with letters before it that are no prefix of this kind ('R-EU_M0805': EAGLE's MELF) is a land
+        # the symbol's name carries, and letters with a number after them ('R2', 'CP1') another drawing: never a value
+        odd = lambda n: any(g and (len(g.group(2)) < 3 or (g.group(2) in IMPERIAL or g.group(2) in METRIC) and not (
+            _SIZE_TOKEN.fullmatch(x) and not size_prefix_clash(x, kind)))
+            for x in _SPLIT.split(n) for g in [re.fullmatch(r"([A-Za-z]+)(\d{1,5})", x.strip(".,"))])
+        if is_vault_id(c) or _hdr(c) in ("", "libref", "symbol", "device", "none", "na") or any(
+                plain_symbol_name(n, kind) or not re.search(r"[A-Za-z]", n)
+                or not (odd(n) or unread_words(_camel(n), kind, strict=True)) for n in names):
+            return None                                   # (an Altium vault id or the column's own name names no symbol)
+        return (f"{where} is not the plain {what} symbol (another symbol, such as a polarized, adjustable, tapped or "
+                f"array part, has other pins): not a plain two-pad chip {what}")
+    if role == "maker":                                   # a series code ('TAJ', 'T491') or a part number, not a name
+        word = polar(c) or (next((w for w in re.split(r"[\s,;/()]+", c) if POLAR_CAP.match(_norm(w)) and len(w) >= 3
+                                  and (len(w) <= 4 or re.search(r"\d", w))), None) if kind == "C" else None)
+        return f"{where} says {word!r}: a capacitor with a + side, not a plain two-pad chip {what}" if word else None
+    if role == "admin":
+        word = polar(c) or tech(c)
+        return f"{where} says {word!r}: not a plain two-pad chip {what}" if word else None
+    hw = header_words(header)                             # ---- any other column
+    if _CLEAR_NO.fullmatch(c):
+        if re.search(r"(?<![a-z])(?:non|un) ?polar", hw) and kind == "C" and re.fullmatch(r"(?i)\s*(?:no|n|false|f|nein|non|0)\s*", c):
+            return f"{where}: polarized, not a plain two-pad chip {what}"       # 'Non-polarized: no'
+        return None
+    said = polar(hw) or (kind == "C" and re.search(r"polar", hw) and "polar") or multi_terminal(hw) or \
+        (kind == "C" and tech(hw)) or None
+    if said:                                              # 'Polarized: Yes.', 'Polar: 1', 'Array: x', 'Tantalum: P'
+        return f"{where}: the column says {said!r} and the cell is no clear no: not a plain two-pad chip {what}"
+    num = re.fullmatch(r"\s*(\d+)(?:[.,]0+)?\s*(?:pcs?|pins?|x)?\s*", c, re.I)
+    if num and (_COUNT_HEADER.search(hw) and int(num.group(1)) > 2 or
+                (_UNIT_HEADER.search(hw) or " per " in f" {hw} ") and int(num.group(1)) >= 2
+                and not re.search(r"(?<![a-z])(?:price|cost|board|pcb|order|reel|unit price)(?![a-z])", hw)):
+        return (f"the BOM line says '{num.group(1)} {header_words(header, lower=False)}', a count of what is in one "
+                f"part: more than a plain two-pad chip {what}")
+    if _ATTR_HEADER.search(hw) and not _ID_HEADER.search(hw) and not (
+            re.search(r"(?<![a-z])name(?![a-z])", hw) and hw not in ("name", "part name", "component name")):   # 'Type: MELF', 'Case: A', 'Mounting: THT', 'Comment: array'
+        glue = " ".join(w for w in hw.split() if w in _CASE_WORD)       # 'Case: C' is a case letter, not 'C'
+        left = unread_words(f"{glue} {c}" if glue and re.search(r"(?<![A-Za-z0-9])[A-Za-z](?![A-Za-z0-9])", c) else c, kind)
+        if left:
+            return (f"{where} says {left[0]!r}, which is not read as part of a plain two-pad chip {what} (value, "
+                    "tolerance, rating, dielectric, size)")
+    text = _URL.sub(" ", c)                               # (the words of a web address are no words of the part)
+    word = multi_terminal(text) or polar(text)
+    return f"the BOM line says {word!r} ({header}: {c[:60]!r}): not a plain two-pad chip {what}" if word else None
+
+
+_SYMBOL_WORD = {"R": "r res resistor resc", "C": "c cap capacitor capc", "L": "l ind inductor"}   # (IPC's RESC / CAPC)
+_SYMBOL_PLAIN = set("small us eu device generic smd chip np semi ceramic nooutline".split())   # (Altium's 'Cap Semi',
+#                                                                         EAGLE's 'CAP_CERAMIC0805-NOOUTLINE')
+
+
+def plain_symbol_name(text, kind):
+    """A cell names the plain schematic symbol of the kind and nothing more ('Device:R', 'R_Small', 'R_US', Altium's
+    'Res1' / 'Res2' / 'Res3' / 'RES', 'Cap', 'R-EU_R0603'): two lines drawn with two such symbols are one part (review
+    2026-11-23 round 2, I3). Any other word ('Res Pack4', 'C_Polarized', 'Cap Pol1') is not plain.
+    Round 3: a digit at the end is part of the name. Only Altium's numbered resistors are the same two-pin part
+    ('Res1', 'Res2', 'Res3'); 'Cap2' is another drawing (used for electrolytics), 'C2' / 'CP1' / 'R2' are not known."""
+    own = set(_SYMBOL_WORD.get(kind, "").split())
+    toks = [x for x in re.split(r"[\s_\-/.,;()]+", _camel(_strip_lib(text))) if x]
+    if not own or not toks:
+        return False
+    word = lambda tok: re.sub(r"(?i)^(res)[1-3]$", r"\1", tok).lower() if kind == "R" else tok.lower()
+    named = False
+    for tok in toks:
+        m = _SIZE_TOKEN.fullmatch(tok)
+        if m and (m.group(2) in IMPERIAL or m.group(2) in METRIC):
+            if size_prefix_clash(tok, kind):
+                return False
+            named |= _PREFIX_KIND.get((m.group(1) or "").upper()) == kind      # 'CAP0603': the kind and its size
+            continue
+        g = re.fullmatch(r"([A-Za-z]+)(\d{4,5})", tok)               # EAGLE: 'RESISTOR0603', 'C-EUC0603' (C-EU on C0603)
+        if g and (g.group(2) in IMPERIAL or g.group(2) in METRIC) and (
+                g.group(1).lower() in own or re.fullmatch(r"(?i)(?:eu|us)" + re.escape(kind or ""), g.group(1))):
+            named = True
+            continue
+        if g and (g.group(2) in IMPERIAL or g.group(2) in METRIC) and g.group(1).lower() in _SYMBOL_PLAIN:
+            continue                                                 # (EAGLE: CERAMIC0805, SMD0603)
+
+        if re.fullmatch(r"(?i)(?:eu|us)" + re.escape(kind or "-"), tok):
+            named = True
+            continue
+        if word(tok) not in own | _SYMBOL_PLAIN:
+            return False
+        named |= word(tok) in own
+    return named
 
 
 # a land named KiCad's way after a maker or series (L_Wuerth_WE-PD-Typ-LS_1210, R_Shunt_..): its own land, whatever
@@ -425,56 +953,114 @@ def chip_size(text, strict=False):
     return found.pop() if len(found) == 1 else ("conflict:" + "/".join(sorted(found)) if found else None)
 
 
-# MPN -> (kind, imperial size); kind "" = any passive kind (decided by the part)
+# MPN -> (kind, imperial size). Review 2026-11-23 (1.2): the rules matched only the START of a part number, so another
+# maker's number that began the same way was read by the wrong code (Venkel's imperial C0603X7R500-104KNE fitted TDK's
+# metric 'C0603X7R' and was built as an 0201). Now a size comes from a part number only when one rule reads the WHOLE
+# number: mpn_decode's value rules first, then these size-only rules (anchored at both ends) for the forms and series
+# mpn_decode has no value rule for. Each rule names its maker: a line that names another maker does not use it.
 def _mpn_rules():
     m3 = {"03": "0201", "15": "0402", "18": "0603", "21": "0805", "31": "1206", "32": "1210", "43": "1812", "55": "2220"}
-    cl = {"03": "0201", "05": "0402", "10": "0603", "21": "0805", "31": "1206", "32": "1210", "43": "1812", "55": "2220"}
     erj = {"XG": "01005", "1G": "0201", "2": "0402", "3": "0603", "6": "0805", "8": "1206", "14": "1210", "12Z": "2010",
            "12": "1812", "1T": "2512", "P03": "0603", "P06": "0805", "P08": "1206", "PA2": "0402", "PA3": "0603", "PA6": "0805",
            "PA8": "1206"}
     koa = {"1H": "0201", "1E": "0402", "1J": "0603", "2A": "0805", "2B": "1206", "2E": "1210", "2H": "2010", "3A": "2512"}
     imp = "(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)"
-    # Samsung RC series: RC<metric size><tolerance><resistance digits> (RC0603F103CS is a 0201)
+    # Samsung RC series: RC<metric size><tolerance><resistance digits>CS (RC0603F103CS is a 0201)
     src = {"0402": "01005", "0603": "0201", "1005": "0402", "1608": "0603", "2012": "0805", "3216": "1206", "3225": "1210",
            "5025": "2010", "6432": "2512"}
+    c = re.compile
     return [
-        (re.compile(r"^RC(0402|0603|1005|1608|2012|3216|3225|5025|6432)[BDFGJK]\d"), "R", src),     # Samsung resistors
-        # Yageo resistors: <series><imperial size><tolerance><packing letter>... (RC0603FR-07, RT0603BRD07)
-        (re.compile(r"^(?:RC|RT|RL|AC|AF|AT|PE|PT|RV)" + imp + r"[A-Z][A-Z]"), "R", None),
-        (re.compile(r"^CC" + imp + r"[A-Z]{2}"), "C", None),                                     # Yageo MLCC
-        (re.compile(r"^(?:GRM|GCM|GJM|GCJ|GRT|GCQ|GQM|GMA)(\d\d)"), "C", m3),                   # Murata MLCC
-        (re.compile(r"^(?:LQG|LQM|LQW|LQP)(\d\d)"), "L", m3), (re.compile(r"^BLM(\d\d)"), "L", m3),   # Murata L, beads
-        (re.compile(r"^CL(\d\d)[A-Z]\d"), "C", cl),                                              # Samsung MLCC
-        (re.compile(r"^C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][A-Z]|JB|CH)"), "C", "metric"),   # TDK
-        # KEMET MLCC: C<imperial><C standard | X flexible termination | F ...><capacitance>; C0603X563K1RACTU is an
-        # imperial 0603, not TDK's metric 0603 (X followed by a digit is KEMET's capacitance code, not a dielectric)
-        (re.compile(r"^C" + imp + r"[CXF]\d{3}[A-Z]"), "C", None),
-        (re.compile(r"^ERJ-?(XG|1G|1T|12Z|12|14|PA[2368]|P0[368]|[2368])"), "R", erj),           # Panasonic
-        (re.compile(r"^(?:CRCW|TNPW|RCG|RCS)" + imp), "R", None),                                # Vishay
-        (re.compile(r"^RMCF" + imp), "R", None), (re.compile(r"^CR" + imp + r"-"), "R", None),   # Stackpole, Bourns
-        (re.compile(r"^RK73[HB](1H|1E|1J|2A|2B|2E|2H|3A)"), "R", koa),                           # KOA
-        (re.compile(r"^" + imp + r"W[A-Z]{2}[A-Z0-9]"), "R", None),                              # Uni-Royal 0603WAF1002T5E
+        ("samsung", c(r"RC(0402|0603|1005|1608|2012|3216|3225|5025|6432)[BDFGJK][0-9R]{3,4}CS"), "R", src),
+        # Yageo resistors: <series><imperial size><tolerance><packing><-|TCR><taping 2><resistance>L (RC0603FR-0710KL,
+        # RT0603BRD0710KL, AT0603BRD0710KL); 'AC0603KRX7R9BB104' is Yageo's automotive MLCC (mpn_decode reads it)
+        ("yageo", c(r"(?:RC|RT|RL|AC|AF|AT|PE|PT|RV)" + imp + r"[A-Z][A-Z][A-Z-][0-9A-Z]{2}[0-9RKM]{2,5}L"), "R", None),
+        ("murata", c(r"(?:LQG|LQM|LQW|LQP)(\d\d)[A-Z]{2}[0-9A-Z]{3}[A-Z][0-9A-Z]{2,3}[A-Z]?"), "L", m3),   # LQG15HS4N7S02D
+        ("murata", c(r"BLM(\d\d)[A-Z]{2}\d{3}[A-Z]{2}\d[A-Z]?"), "L", m3),                     # beads: BLM18AG601SN1D
+        # KEMET MLCC: C<imperial><C standard | X flexible | F ...><capacitance><tolerance><voltage><dielectric>A<C|L>
+        # [-]TU: C0603X563K1RACTU is an imperial 0603 (X then digits is KEMET's capacitance, not TDK's dielectric)
+        ("kemet", c(r"C" + imp + r"[CXF](?:\d{3}|\dR\d)[A-Z][0-9A-Z][A-Z]A[CL](?:-?TU|AUTO|\d{4})?"), "C", None),
+        # TDK MLCC: C<metric size><dielectric><voltage code><capacitance><tolerance>, then the thickness and packing
+        # codes of the current form (C1608X7R1H104K080AA, read by mpn_decode) or none / T of the older one
+        ("tdk", c(r"C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][RSTPVL]|JB|CH)\d[A-Z](?:\d{3}|\dR\d)"
+                  r"[BCDFGJKMZ](?:T|\d{3}[A-Z]{2}[A-Z]?)?"), "C", "metric"),
+        ("panasonic", c(r"ERJ-?(XG|1G|1T|12Z|12|14|PA[2368]|P0[368]|[2368])[A-Z]{1,4}[0-9R]{3,4}[A-Z]"), "R", erj),
+        ("vishay", c(r"(?:CRCW|TNPW|RCG|RCS)" + imp + r"[0-9RKM]{4}[A-Z][A-Z0-9]{1,6}"), "R", None),
+        ("stackpole", c(r"RMC[FP]" + imp + r"[A-Z][TG][0-9RKM]{3,5}"), "R", None),
+        ("bourns", c(r"CR" + imp + r"-[A-Z][A-Z/]-[0-9R]{3,4}[EG]?LF"), "R", None),
+        ("koa", c(r"RK73[HBZ](1H|1E|1J|2A|2B|2E|2H|3A)TT[A-Z]{1,2}(?:[0-9R]{3,4}[A-Z])?"), "R", koa),
+        ("uni-royal", c(imp + r"W[A-Z0-9][A-Z][0-9]{3}[0-9JKLMR]T[0-9A-Z]E"), "R", None),        # 0603WAF1002T5E
+        # review 2026-11-23 round 3 (Part 2): three more chip series seen in the real BOMs, whose code names the size.
+        # Stackpole's thin film RNCF / RNCS / RNCP (RNCF0805DTE23K2), TE's thin film CPF (CPF0603B10KE1: size,
+        # tolerance, value, TCR, packing digit; Vishay's leaded CPF1 / CPF2 end otherwise) and Fenghua's MLCC
+        # (0603B104K500NT, the form Walsin writes too: size, dielectric CG / N / B / X / F, capacitance, tolerance,
+        # voltage, N or C, T)
+        ("stackpole", c(r"RNC[FSP]" + imp + r"[A-Z][TK][A-Z][0-9RKM]{3,6}"), "R", None),
+        ("te", c(r"CPF" + imp + r"[A-Z][0-9RKM]{2,5}[A-Z]\d"), "R", None),
+        ("fenghua", c(imp + r"(?:CG|N|B|X|F)(?:\d{3}|\dR\d)[BCDFGJKMZ]\d{3}[NC]T"), "C", None),
     ]
 
 
 MPN_RULES = _mpn_rules()
+# the names a BOM or a part search writes each rule's maker with (lower case; KEMET is a Yageo company, EPCOS TDK's)
+MAKER_NAMES = {"yageo": ("yageo", "phycomp", "kemet"), "samsung": ("samsung", "semco"), "murata": ("murata",),
+               "kemet": ("kemet", "yageo"), "panasonic": ("panasonic", "matsushita"),
+               "vishay": ("vishay", "dale", "beyschlag", "draloric"), "stackpole": ("stackpole", "sei"),
+               "bourns": ("bourns",), "koa": ("koa",), "tdk": ("tdk", "epcos"),
+               "uni-royal": ("uni-royal", "uniroyal", "uni royal", "uniohm", "royalohm", "royal ohm", "厚声"),
+               "kyocera": ("kyocera", "avx"), "te": ("te", "te connectivity", "tyco", "neohm", "holsworthy"),
+               "fenghua": ("fenghua", "fh", "风华", "walsin", "华新科")}
+NO_MAKER = re.compile(r"(?i)\s*(?:|-+|n/?a|none|tbd|any|generic|various|multiple|standard|unknown|\?+)\s*")
 
 
-def mpn_size(mpn):
-    """-> (kind, imperial size) or (None, None)."""
-    s = re.sub(r"\s+", "", str(mpn or "").upper())
-    for rx, kind, conv in MPN_RULES:
-        m = rx.match(s)
-        if m:
-            code = m.group(1)
-            size = METRIC.get(code) if conv == "metric" else conv.get(code) if isinstance(conv, dict) else code
-            if size:
-                return kind, size
-    from . import mpn_decode as MD                    # the value decoder's makers too (KYOCERA AVX 0603YC104KAT2A):
-    d = MD.decode(s)                                  # it reads the whole part number, size included
+def maker_is(rule_maker, maker):
+    """May a rule of `rule_maker` read a line whose maker cell or part search says `maker`? Yes when no maker is
+    named, or the name is one of that maker's; another maker's number that fits the code is not that maker's code."""
+    m = str(maker or "").lower()
+    if NO_MAKER.fullmatch(m):
+        return True
+    return any(re.search(r"(?<![a-z])" + re.escape(n) + r"(?![a-z])", m) for n in MAKER_NAMES.get(rule_maker, (rule_maker,)))
+
+
+def mpn_size(mpn, maker=""):
+    """-> (kind, imperial size) or (None, None). Only a part number one rule reads whole, and only a rule of the
+    line's own maker when one is named (maker: the BOM's maker cell or the part search's)."""
+    from . import mpn_decode as MD
+    s = str(mpn or "")
+    m = re.fullmatch(r"\s*\(\s*([^()]+?)\s*\)\s*|\s*([^()]+?)\s*\(\s*([A-Za-z][\w .&-]*?)\s*\)\s*", s)
+    if m:                                                 # round 3: '(CL05B104KO5NNNC)', 'CL10C100JB8NNNC (Samsung)':
+        s = m.group(1) or m.group(2)                      # the number in brackets, or its maker in brackets after it
+        maker = maker if m.group(1) or not NO_MAKER.fullmatch(str(maker or "").lower()) else m.group(3)
+    s = re.sub(r"\s+", "", s.upper())
+    d = MD.decode(s)                                      # the value decoder: whole number, size included
     if d and d["kind"] in ("R", "C") and d.get("size"):
-        return d["kind"], d["size"]
+        return (d["kind"], d["size"]) if maker_is(d["series"].split()[0].lower(), maker) else (None, None)
+    for who, rx, kind, conv in MPN_RULES:
+        m = rx.fullmatch(s)
+        if m:
+            size = METRIC.get(m.group(1)) if conv == "metric" else conv.get(m.group(1)) if isinstance(conv, dict) else m.group(1)
+            if size and maker_is(who, maker) and not mpn_maker_doubt(s, maker):
+                return kind, size
+            return None, None
     return None, None
+
+
+def mpn_maker_doubt(mpn, maker=""):
+    """Why a part number that fits a size-only rule gives no size without its maker, or None. Review 2026-11-23 round
+    2: 'C0603X7R1H104K' with no maker named was read by TDK's size-only rule as a metric 0603 (an inch 0201); other
+    makers write an inch 0603 the same way. A size-only rule that reads its code as metric where the same digits are
+    an inch size too (0402, 0603) is used only when the line names that maker; else the part is held for the maker."""
+    s = re.sub(r"\s+", "", str(mpn or "").upper())
+    if not NO_MAKER.fullmatch(str(maker or "").lower()):
+        return None
+    for who, rx, kind, conv in MPN_RULES:
+        m = rx.fullmatch(s)
+        if m:
+            if conv == "metric" and m.group(1) in IMPERIAL:
+                return (f"MPN {s} reads as {who.upper()}'s metric {m.group(1)} (an inch {METRIC[m.group(1)]}) only if the "
+                        f"part is {who.upper()}'s; another maker's number of this form is an inch {m.group(1)}, and the "
+                        "line names no maker: name the manufacturer")
+            return None
+    return None
 
 
 def _free_attrs(text):
@@ -962,9 +1548,48 @@ def _other_bend(text, name):
 BARE_FAMILY = {"SOT23", "TO220", "TO220AB", "TO263", "TO252", "DPAK", "D2PAK", "TO92"}   # in a description: often the family
 
 
-def named_package(text, diode=False, weak=False, kind=None):
+# words beside a package name that leave it the plain land of that name; any other word left over (review 2026-11-23,
+# a4 M2: 'SMB Gull Wing', 'TO-220 Full Pack', 'SOT-23 Thin') may name another land, so it holds
+PKG_HARMLESS = set("smd smt package pkg case footprint diode diodes d led q u ic transistor mosfet bjt fet jedec jeita "
+                   "eiaj pin pins lead leads ld l std standard plastic".split())
+_PKG_TOKEN = re.compile(r"(?<![A-Z0-9])(SOT|TSOT|SOD|SC|DO|TO|SM[ABCF]|D2PAK|DPAK|MICROMELF|MINIMELF|MELF|LL)[-_ ]?(\d{0,3}[A-Z]{0,2})"
+                        r"(?:[-_ ]?(\d)L?)?(?![A-Z0-9]|[-_ ]?\d)")
+
+
+def _beside_package(text, name, span):
+    """The first word beside a package name (text[span]) that is not known to leave it the plain land `name`: another
+    name of the same land ('DO-214AC, SMA'), a lead count (checked by the caller), 'SMD', 'package', a number, and
+    for the lands that are mounted one way ('TO-220 vertical', an axial 'DO-41 P10.16mm horizontal') that way."""
+    rest = text[:span[0]] + " " + text[span[1]:]
+    rest = LEAD_COUNT.sub(" ", _strip_lib(rest) if re.match(r"^[A-Za-z0-9_.\-]+:", text[:span[0]]) else rest)
+    for m in _PKG_TOKEN.finditer(rest.upper()):           # another name: of the same land, or it is not this land
+        key = _norm(m.group(0))
+        key = re.sub(r"L$", "", key) if re.fullmatch(r"(SOT|TSOT)\d+\dL", key) else key
+        same = ALIASES.get(key) == name or DIODE_ALIASES.get(key) == name or \
+            (name == "SOT-23" and key in ("SOT233", "TO2363"))            # the 3 leads of SOT-23 said with the name
+        if not same:
+            return m.group(0).strip()
+    rest = _PKG_TOKEN.sub(" ", rest.upper())
+    ok = set(PKG_HARMLESS)
+    if name.startswith("TO-220"):
+        ok |= {"vertical", "standing", "upright"}
+    if name.startswith("TO-92"):
+        ok |= {"inline", "straight"}
+    if name.endswith("_Horizontal"):
+        ok |= {"axial", "horizontal", "laid", "lying", "tht", "through", "hole", "mm", "pitch", "bend"}
+    for tok in _SPLIT.split(rest):
+        tok = tok.strip(".,")
+        if not tok or not re.search(r"\w", tok) or tok.lower() in ok or re.fullmatch(r"\d{1,2}", tok) or \
+                (name.endswith("_Horizontal") and re.fullmatch(r"P?\d{1,2}(?:\.\d{1,2})?(?:MM)?", tok)):   # its bend (_other_bend)
+            continue
+        return tok
+    return None
+
+
+def named_package(text, diode=False, weak=False, kind=None, strict=False):
     """SOT/SOD/DO-214/TO names -> (table name, how) / (None, why) / (None, None). weak (a description): a bare family
-    name (SOT-23, TO-220 ...) counts only for a transistor or diode, where it means the 3-lead package."""
+    name (SOT-23, TO-220 ...) counts only for a transistor or diode, where it means the 3-lead package. strict (a
+    footprint text, a part search's case): every word beside the name must be understood (_beside_package)."""
     pdi = POWERDI123.search(str(text or ""))
     if pdi and diode and not POWER_PKG.search(POWERDI123.sub(" ", str(text))) and not EP_WORD.search(str(text)) \
             and not OTHER_LAND.search(POWERDI123.sub(" ", str(text))):
@@ -1006,14 +1631,43 @@ def named_package(text, diode=False, weak=False, kind=None):
         if name and have and said and have not in said:
             return None, (f"{m.group(0).strip()} with {said[0]} leads: {name} has {have}; name the package with its "
                           "lead count (SOT-23-5, SOT-353)")
+        left = _beside_package(str(text), name, m.span()) if strict and name and name in packages() else None
+        if left:
+            return None, (f"{m.group(0).strip()}: {left!r} beside the package name is not understood, so it may name "
+                          f"another land than the plain {name} (a lead form, a variant); name the package alone")
         if name and name in packages():
             return name, f"{m.group(0).strip()} -> {name}"
     return None, None
 
 
-def footprint_for(texts, kind=None, mpn="", weak=()):
+def not_plain_chip(texts):
+    """(text, word) for the first text of a line that names a part with more than two terminals or another land than
+    the plain chip of its size code, or None. One check for every text of the line: the footprint column, a KiCad
+    name, the value, the part search's case text and the description (review 2026-11-23, 1.3: the long word list was
+    only run over the description, so '0603 x4' or 'Resistor Network 0603' in the footprint column built a chip)."""
+    for t in texts:
+        t = str(t or "")
+        w = MULTI_WORD.search(t) or DESC_LAND.search(t)
+        if w:
+            return t.strip(), w.group(0).strip()
+    return None
+
+
+def unread_beside_size(texts, kind):
+    """(text, word) for the first footprint text that carries a chip size code and a word beside it that is not
+    understood, or None. A footprint text gives the chip's size only when the rest of it is understood: any other word
+    ('0603 frobnic', a variant no list knows) may name another land (review 2026-11-23, 1.3)."""
+    for t in texts:
+        left = unread_words(t, kind, footprint=True) if chip_size(t, strict=True) else None
+        if left:
+            return _strip_lib(t).strip(), left[0]
+    return None
+
+
+def footprint_for(texts, kind=None, mpn="", weak=(), maker=""):
     """texts: footprint-like strings in priority order (BOM footprint, KiCad footprint names); weak: descriptions and
-    values, trusted less (no JEDEC default sizes for IC families). kind: R C L LED D F or None.
+    values, trusted less (no JEDEC default sizes for IC families). kind: R C L LED D F or None. maker: the line's
+    maker (mpn_size: a part-number rule of another maker is not used).
     -> (table name, how) or (None, why)."""
     pk = packages()
     texts = [str(t) for t in texts if str(t or "").strip()]
@@ -1037,6 +1691,10 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
                           "the table's land for the size or package in its name)")   # (bare 'TO-92' is the package)
     if kind in CHIP_PREFIX:                              # chip passives: size from the texts, then the MPN
         sizes = {}
+        multi = not_plain_chip(texts + weak)              # any text of the line, before any size is read
+        if multi:
+            return None, (f"{_strip_lib(multi[0])[:60]!r} says {multi[1]!r}: more than two terminals or another land, "
+                          "not the plain two-pad chip of that size")
         for t in texts:                                   # a footprint field naming a multi-pad part or another
             w = NOT_CHIP.search(t)                        # land on a chip size ('LED_RGB_1210', '4x0603 array')
             if w:
@@ -1050,12 +1708,31 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
             s = chip_size(t, strict=t in texts)
             if s:
                 sizes.setdefault(s, t)
-        mk, ms = mpn_size(mpn)
+        left = unread_beside_size(texts, kind)
+        if left and size_prefix_clash(left[1], kind):     # round 3 (A1): 'CP1206' on a capacitor, 'LED0603' on a resistor
+            return None, (f"{left[0][:60]!r}: the size code {left[1]!r} carries the prefix of another kind of part "
+                          f"({'a polarized capacitor' if size_prefix_clash(left[1], kind) == 'CP' else size_prefix_clash(left[1], kind)}"
+                          f") than this {kind}: the line contradicts itself, so no chip land is built; fix the "
+                          "footprint or the designator")
+        if left:
+            return None, (f"{left[0][:60]!r}: {left[1]!r} beside the size code is not understood, so it may name "
+                          "another land than the plain chip; write the size alone or the footprint's KiCad name")
+        doubt = mpn_maker_doubt(mpn, maker)               # 'C0603X7R1H104K' and no maker: metric or inch is not known
+        if doubt:
+            return None, doubt
+        mk, ms = mpn_size(mpn, maker)
         if ms and (mk == kind or (mk == "C" and kind == "C") or (mk == "L" and kind == "L")):
             sizes.setdefault(ms, f"MPN {mpn}")
         elif ms and mk != kind:
             return None, f"MPN {mpn} looks like a {mk} ({ms}) but the part is a {kind}"
         real = {s for s in sizes if not s.startswith("conflict")}
+        if real and all(w.startswith("MPN ") for w in sizes.values()):    # the size is the MPN's alone: a footprint
+            for t in texts:                                               # name the reader can't place that still
+                seen = set(re.findall(r"(?<![0-9])(0201|0402|0603|0805|1206|1210|1812|2010|2512)(?![0-9])",
+                                      _strip_lib(t)))                     # names another chip code ('RF-C0402' on a
+                if seen and not seen & real:                              # GRM033 0201 part): which is right is unknown
+                    return None, ("size codes disagree: " + ", ".join(f"{s} ({w})" for s, w in sizes.items())
+                                  + f", {'/'.join(sorted(seen))} in the footprint name {_strip_lib(t).strip()}")
         if any(s.startswith("conflict") for s in sizes) or len(real) > 1:
             return None, "size codes disagree: " + ", ".join(f"{s} ({w})" for s, w in sizes.items())
         if real:
@@ -1066,7 +1743,7 @@ def footprint_for(texts, kind=None, mpn="", weak=()):
             return None, f"{kind} chip {s}: not a standard KiCad size"
     why = None
     for t in texts + weak:
-        n, how = named_package(t, diode=kind in ("D", "LED"), weak=t not in texts, kind=kind)
+        n, how = named_package(t, diode=kind in ("D", "LED"), weak=t not in texts, kind=kind, strict=t in texts)
         if n or how:
             return n, how
         n, how = ic_package(t, defaults=t in texts)
@@ -1399,10 +2076,16 @@ def symbol_kind(kind, mpn, fp_name, description=""):
         d = str(description or "") + " " + str(mpn or "")
         if re.match(r"^D_\d{4}", fp_name) and not re.search(r"diode|rectifier|zener|schottky|\bTVS\b|\bESD\b", d, re.I):
             return None, "chip-size D part: LED or diode is not stated (footprint is the same)"
-        sub = "D_Zener" if re.search(r"zener|BZX|BZT|MMSZ|\bZD", d, re.I) else "D_TVS" if re.search(r"\bTVS\b|transient|SMAJ|SMBJ|SMCJ|P6KE|ESD", d, re.I) \
+        # the direction is asked first (review 2026-11-23, a4 M3): a part of an A / CA numbered TVS series (the same
+        # list as tvs_bidirectional: P6SMB6.8CA, 1.5SMC33CA) or one the text calls bidirectional has no cathode, so it
+        # never gets a symbol that draws one, whatever else its words say ('TVS zener bidirectional', 'Diode')
+        series = TVS_SERIES.match(str(mpn or "").strip())
+        if tvs_bidirectional(mpn, description):           # both ways: no cathode, pins A1 / A2 as KiCad's D_TVS
+            return "D_TVS_Bidirectional", "2-pin bidirectional TVS diode, pins A1 / A2"
+        if re.search(r"(?i)\bbi-?directional|\bbidir", d):  # said both ways, but its number or text also says one way
+            return None, "TVS diode: uni- or bidirectional is not certain from the MPN; symbol left to the other sources"
+        sub = "D_TVS" if series else "D_Zener" if re.search(r"zener|BZX|BZT|MMSZ|\bZD", d, re.I) else "D_TVS" if re.search(r"\bTVS\b|transient|SMAJ|SMBJ|SMCJ|P6KE|ESD", d, re.I) \
             else "D_Schottky" if re.search(r"schottky|\bBAT\d|\bSS\d|\bB5\d|\bMBR|\bSK\d|\bSB\d|1N58[1-9]", d, re.I) else "D"
-        if sub == "D_TVS" and tvs_bidirectional(mpn, description):      # both ways: no cathode, pins A1 / A2 as
-            return "D_TVS_Bidirectional", "2-pin bidirectional TVS diode, pins A1 / A2"     # KiCad's D_TVS
         if sub == "D_TVS" and not tvs_unidirectional(mpn, description):  # KiCad's D_TVS is bidirectional (A1/A2)
             return None, "TVS diode: uni- or bidirectional is not certain from the MPN; symbol left to the other sources"
         return sub, "2-pin diode, pin 1 = cathode"
@@ -1668,7 +2351,8 @@ def part_kind(category, footprint="", description="", designator=""):
 
 # polarized capacitors (tantalum, polymer, aluminium) by MPN: their case is not a chip-capacitor land and pin 1 is +
 POLAR_CAP = re.compile(r"^(T49[1-9]|T5[2-9]\d|TAJ|TPS[A-Z]|TPM|TRJ|TCJ|TCM|TCN|TCQ|TLJ|TPC|NOJ|NOS|F9[1-8]|293D|593D|298D|"
-                       r"T8[36]|TR3|TP3|EEE|EEV|EEH|EEF|EEU|ECA|\d+TP[A-Z]|\d+SVP|\d+SEP|UWT|UWX|UUD|UUX|UCD|PCJ|PCF|PLV)")
+                       r"T8[36]|TR3|TP3|EEE|EEV|EEH|EEF|EEU|ECA|\d+TP[A-Z]|\d+SVP|\d+SEP|UWT|UWX|UUD|UUX|UCD|PCJ|PCF|PLV|"
+                       r"TMCM|T58|CA45)")                 # (round 3, A8: Vishay TMCM / T58, the CA45 tantalums)
 
 
 def _kicad_own(t):
@@ -1692,6 +2376,13 @@ def _names_other_land(texts, name):
 # these four cases (same body); other cases (low-profile, AVX-only) are not in the table
 TANT_LAND = {"3216-18": "CP_EIA-3216-18_Kemet-A", "3528-21": "CP_EIA-3528-21_Kemet-B",
              "6032-28": "CP_EIA-6032-28_Kemet-C", "7343-31": "CP_EIA-7343-31_Kemet-D"}
+# KiCad's tantalum lands of one EIA size are the same copper at every height (Capacitor_Tantalum_SMD, checked
+# 2026-11-23: CP_EIA-3216-10/-12/-18, 3528-12/-15/-21, 6032-15/-20/-28, 7343-15/-20/-30/-31/-40/-43 share their size's
+# pads); the generator sizes the land from the body's length and width, not its height. A height the table has no name
+# for (KEMET T520B 3528-19, T495X 7343-43) takes its size's table land, only when it is one of EIA_HEIGHTS written as a
+# case code ('3528-19', never '3528 16V') of a part something says is a tantalum; the 3D body keeps the part's own height
+# (librarian.src_standard reads it from the reason).
+TANT_SIZE_LAND = {c.split("-")[0]: n for c, n in TANT_LAND.items()}
 EIA_CASE = re.compile(r"(?<![\d.])(3216|3528|6032|7343|2012|1608|7260|7132)[-_ ](\d{2})(?![\d.])")
 CASE_LETTER = re.compile(r"(?i)(?<![A-Za-z0-9])case[-_ ]?([A-E])(?![A-Za-z0-9])")
 
@@ -1711,7 +2402,8 @@ EIA_HEIGHTS = {"3216": (10, 12, 16, 18), "3528": (12, 15, 19, 21), "6032": (15, 
 def tantalum_eia(case, height):
     """A part search's case text and maximum height -> the tantalum's EIA case ('3528-21'), or None. The maximum is
     the code's height or up to 0.15 mm over it (293D B: 2.11 mm max, EIA 3528-21); exactly one of the size's heights
-    must fit, or none is named. T520B (2.00 mm max) is 3528-19, a case the table does not have: no land."""
+    must fit, or none is named. T520B (2.00 mm max) is 3528-19, a height the table has no name for (tantalum_land: its
+size's land)."""
     size = re.findall(r"(?<!\d)(\d{4}) Metric\b", str(case or ""))
     mm = re.search(r"(\d+(?:\.\d+)?)\s*mm\b", str(height or ""))
     if len(set(size)) != 1 or size[0] not in EIA_HEIGHTS or not mm:
@@ -1772,18 +2464,49 @@ def tantalum_land(texts, mpn="", description=""):
     if len(found) > 1:
         return None, "two tantalum cases named: " + ", ".join(f"{c} ({w})" for c, w in said)
     case = found.pop()
-    if case not in TANT_LAND:
-        return None, f"tantalum case {case} is not in the standard table"
-    return TANT_LAND[case], f"tantalum case EIA {case} (" + ", ".join(dict.fromkeys(w for _, w in said)) + ")"
+    where = ", ".join(dict.fromkeys(w for _, w in said))
+    if case in TANT_LAND:
+        return TANT_LAND[case], f"tantalum case EIA {case} ({where})"
+    size, high = case.split("-")[0], case.split("-")[-1]
+    written = re.compile(rf"(?<![\d.]){size}-{high}(?![\d.])")   # a case code, not '3528 16V' or 'LED_3528_10'
+    kicad = any(re.search(r"CP_EIA-\d{4}-\d{2}_|Capacitor_Tantalum_SMD|CP_Tantalum_", w) for _, w in said)
+    if size in TANT_SIZE_LAND and (tantalum or kicad) and high.isdigit() and int(high) in EIA_HEIGHTS.get(size, ()) and \
+            (any(written.search(w) for _, w in said) or bool(d and d.get("case") == case)):
+        return TANT_SIZE_LAND[size], (f"tantalum case EIA {case} ({where}): KiCad's EIA {size} lands are the same "
+                                      f"copper at every height, so its size's land; the 3D body keeps its own height")
+    return None, f"tantalum case {case} is not in the standard table"
 
 
-def resolve(texts, kind=None, mpn="", description=""):
+TEXT_MAX = 1000                                           # characters of one text resolve() reads
+
+
+def _no_mpn(mpn):
+    from .bom_triage import placeholder_mpn
+    return not str(mpn or "").strip() or placeholder_mpn(mpn)
+
+
+def resolve(texts, kind=None, mpn="", description="", value="", maker="", search=""):
     """What the standard source builds for one part:
     {"footprint": table name | None, "fp_how": str, "kicad_ref": "Lib:Name", "symbol": key | None, "sym_how": str}.
     A polarized capacitor (kind CP, or a C whose MPN is a tantalum / polymer / electrolytic series) gets nothing: the
-    table has no polarized case, and a chip-capacitor land would lose the + mark."""
+    table has no polarized case, and a chip-capacitor land would lose the + mark.
+    texts: the footprint texts (BOM footprint, KiCad name, the part search's case). value: the BOM's Value cell: its
+    words are read like the description's, but it names a chip size only beside a value (value_names_size). maker: the
+    line's maker (mpn_size). search: the part search's description of this part number (its words on what a capacitor
+    is made of count as the line's own)."""
+    texts = [t for t in texts]
+    held = lambda why, sym=None: {"footprint": None, "fp_how": why, "kicad_ref": None, "symbol": None, "sym_how": sym or why}
+    long = next((str(x) for x in (*texts, description, value) if len(str(x or "")) > TEXT_MAX), None)
+    if long:                                              # round 2 of the 2026-11-23 review: a 20 000 character cell
+        return held(f"a cell of the BOM line is {len(long)} characters long ({long[:40]!r} ...): too long to be a "    # took
+                    "footprint name, a value or a description, so nothing is built from it; shorten the cell")   # 30 s
+    said = [str(x) for x in (description, value) if str(x or "").strip()]      # the line's free words
+    weak = [description] + ([value] if value_names_size(value, kind) else [])
     if kind in ("NTC", "PTC", "VAR", "TH"):                # a thermistor / varistor: a resistor's chip land by size
-        name, how = footprint_for(list(texts), "R", "", weak=[description])     # (not the resistor MPN codes)
+        multi = not_plain_chip(said)                       # (the same checks as a chip resistor: review 2026-11-23)
+        if multi:
+            return held(f"{multi[0][:60]!r} says {multi[1]!r}: more than two terminals or another land, not a two-pad chip")
+        name, how = footprint_for(list(texts), "R", "", weak=weak)     # (not the resistor MPN codes)
         size = sensor_size(mpn)
         if not name and size:
             name, how = footprint_for([size], "R")[0], f"{mpn}: the series' size code says {size}"
@@ -1791,27 +2514,53 @@ def resolve(texts, kind=None, mpn="", description=""):
         return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name) if name else None, "symbol": sym,
                 "sym_how": f"{SYMBOLS[sym][2].lower()}, 2 pins" if sym else
                 "thermistor: NTC or PTC is not said" if kind == "TH" else "no chip land"}
-    if kind == "C" and (POLAR_CAP.match(_norm(mpn)) or says_polarized(description) or
-                        any(_strip_lib(str(t or "")).strip().startswith("CP_") for t in texts)):
+    from . import mpn_decode as MD
+    code = MD.decode(mpn)
+    cp_land = next((str(t) for t in texts if polar_size_prefix(t)), None)     # 'CP_EIA-3528-21_Kemet-B', 'CP1206'
+    if kind in ("C", "CP") and cp_land and not _no_mpn(mpn) and ((code and code["kind"] == "C") or mpn_size(mpn, maker)[0] == "C"):
+        # round 3 (minor): 'CP_EIA-3216-18_Kemet-A' with GRM31CR61C106KA88L was built as a polarized part on a
+        # tantalum land although the number is a ceramic chip's: which of the two is wrong is not known
+        return held(f"capacitor {mpn}: the part number reads as a ceramic chip capacitor but the footprint "
+                    f"{_strip_lib(cp_land).strip()[:60]!r} is a polarized capacitor's: the line contradicts itself; fix "
+                    "the footprint or the part number")
+    if kind == "C" and (POLAR_CAP.match(_norm(mpn)) or says_polarized(description, value, cap_words(search)) or
+                        (code and code["kind"] == "CP") or cp_land):
         kind = "CP"                                       # a C on a polarized land ('CP_EIA-3528-21_Kemet-B') is one
     if kind == "CP":
-        name, how = tantalum_land(texts, mpn, description)
+        name, how = tantalum_land(texts + ([value] if str(value or "").strip() else []), mpn, description)
         if name:
             return {"footprint": name, "fp_how": how, "kicad_ref": kicad_ref(name), "symbol": "CP",
                     "sym_how": "polarized capacitor, pin 1 = + as the land marks it"}
         return {"footprint": None, "fp_how": f"polarized capacitor: {how}", "kicad_ref": None, "symbol": None,
                 "sym_how": "polarized capacitor: pin 1 = + only with a footprint that marks it"}
-    multi = multi_terminal(description) if kind in CHIP_PREFIX else None
+    multi = multi_terminal(*said) if kind in CHIP_PREFIX else None
     if multi:                                             # 'RES ARRAY 4 RES 10K 1206': the size is the array's body
         return {"footprint": None, "fp_how": f"the description says {multi!r}: more than two terminals, not a two-pad "
                 "chip land", "kicad_ref": None, "symbol": None, "sym_how": f"the description says {multi!r}: not a "
                 "two-pin part"}
+    if kind == "C" and not _no_mpn(mpn) and not (code and code["kind"] == "C") and mpn_size(mpn, maker)[0] != "C" \
+            and not says_unpolarized(description, value, cap_words(search), *texts):
+        # round 3 (A8, the safe side while the owner is away): KiCad's own chip land name in the footprint cell
+        # ('C_1206_3216Metric') no longer counts as the BOM saying unpolarized: a tantalum of a series no list knows
+        # (Vishay TMCM / T58, CA45) on that name was released as a ceramic. names_c_chip is kept for the reversal.
+        # review 2026-11-23 (1.12): the test is turned round. A list of polarized series always misses one (Vishay
+        # TMCM / T58, AVX TACR, ROHM TCA ...), so a capacitor with a part number gets the unpolarized chip only when
+        # something says it is ceramic: an MLCC code reads the whole number, or the line or the part search names a
+        # ceramic dielectric. POLAR_CAP above only chooses the polarized side; it no longer permits this one
+        return held(f"capacitor {mpn}: nothing says it is ceramic (no MLCC part-number code reads the number, and "
+                    "neither the line nor the part search names a ceramic dielectric such as X7R or C0G, or a film), so it may "
+                    "be a tantalum or polymer part with a + side: not built as an unpolarized chip; write the "
+                    "dielectric in the description, or name its footprint",
+                    f"capacitor {mpn}: polarized or not is not known (nothing says ceramic)")
     fk = {"Q": None, "U": None}.get(kind, kind)
-    other = DESC_LAND.search(str(description or "")) if kind in CHIP_PREFIX else None
+    other = next((DESC_LAND.search(x) for x in said if DESC_LAND.search(x)), None) if kind in CHIP_PREFIX else None
     if other:                                             # 'LED 0603 reverse mount': the size is the body, not the land
         name, how = None, f"the description says {other.group(0)!r}: another land than the plain chip of that size"
     else:
-        name, how = footprint_for(list(texts), fk, mpn, weak=[description])
+        name, how = footprint_for(list(texts), fk, mpn, weak=weak if kind in CHIP_PREFIX else [description], maker=maker)
+        if not name and kind in CHIP_PREFIX and (not_plain_chip(texts) or unread_beside_size(texts, kind)):
+            return held(how)                              # a word in a footprint text says more than two terminals or
+            #                                               is not understood: no generic two-pin symbol either
         if name in TANT_LAND.values():                    # a tantalum land: only a polarized capacitor's (pin 1 = +)
             name, how = None, f"{name} is a polarized capacitor's land, but the part is not one (kind {kind or 'unknown'})"
     if not name:                                          # a known MPN family settles a bare family name (SOT-223, TO-220)
@@ -1859,7 +2608,8 @@ def coverage(boms, rules=None):
             if cat in ("ICs", "Misc"):
                 cat = AE.kind_of((ln.get("description"),), (ln.get("footprint"),)) or cat
             kind = part_kind(cat, ln.get("footprint"), ln.get("description"), ln.get("designator"))
-            r = resolve([ln.get("footprint"), ln.get("value")], kind, ln.get("mpn") or "", ln.get("description") or "")
+            r = resolve([ln.get("footprint")], kind, ln.get("mpn") or "", ln.get("description") or "",
+                        value=ln.get("value") or "", maker=ln.get("manufacturer") or "")
             out.append({"bom": str(b), "designator": str(ln.get("designator") or "")[:40], "mpn": ln.get("mpn") or "",
                         "footprint_text": ln.get("footprint") or "", "kind": kind or "", **r})
     return out

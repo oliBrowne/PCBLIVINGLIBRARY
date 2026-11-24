@@ -1,0 +1,48 @@
+name: verify
+
+# Every pull request: the changed records are rebuilt from the record alone with the ecadlib version pinned in the base
+# branch's ecadlib-version.txt and must pass its release check, match their hashes and follow the contributor rules
+# (ecadlib store-repo verify). No AI, no secrets. Safe for pull requests from forks: the `pull_request` event (not the
+# one that runs with write access), a read-only token, ecadlib installed from PyPI with `python -I` in a folder outside
+# the checkout (no file of the pull request is on the path), and nothing in the checkout is ever run.
+#
+# The version comes from the BASE branch (git show origin/<base>:ecadlib-version.txt), never from the pull request, and
+# ecadlib-version.txt is maintainer-only. A maintainer bumps it after checking a new ecadlib release against the store
+# (the nightly re-check runs the newest release every night and shows what a bump would change).
+#
+# Caveat: a pull_request run uses the pull request's OWN copy of this file. A pull request that touches .github/ is
+# therefore never proven by its own green check: CODEOWNERS and branch protection ("Require review from Code Owners")
+# make a maintainer's review required for it (README.md, maintainer checklist).
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/checkout@v4
+        with:
+          path: store
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the ecadlib version the base branch pins (ecadlib-version.txt)
+        working-directory: ${{ runner.temp }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          v="$(git -C "$GITHUB_WORKSPACE/store" show "origin/$BASE_REF:ecadlib-version.txt" | tr -d '[:space:]')"
+          if ! printf '%s' "$v" | grep -Eqx '[0-9]+(\.[0-9]+){1,3}'; then
+            echo "ecadlib-version.txt on $BASE_REF does not name a version: '$v'"; exit 1
+          fi
+          python -I -m pip install "ecadlib==$v"
+      - name: Check the changed records
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: ecadlib store-repo verify store --base "origin/$BASE_REF" --author "$AUTHOR"

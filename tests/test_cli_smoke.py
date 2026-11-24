@@ -67,6 +67,7 @@ CASES = [
     (["resolve", "{out}/lib/plan.json", "--offline", "--cache", "{out}/cache", "list"], (0,)),
     (["review", "--workspace", "{out}/ws", "--yes", "--offline"], (0, 2)),
     (["approve", "{out}/lib/plan.json", "status"], (0,)),
+    (["confirm", "--workspace", "{out}/ws"], (0,)),                             # nothing is waiting: says so
     (["dedupe", "{out}/lib/plan.json", "-o", "{out}/dedupe"], (0,)),
     (["datasheet", "estimate", "{out}/lib/plan.json"], (0, 1, 2)),
     (["step-gen", "{pkg}/package_specs/SOIC-8_3.9x4.9mm_P1.27mm.json", "-o", "{out}/soic.step"], (0,)),
@@ -104,9 +105,12 @@ CASES = [
     (["stdparts", "bench", "--fixture", "{tests}/fixtures/stdparts_kicad_numbers.json.gz"], (0,)),
     (["testpack", "--out", "{out}/testpack"], (0,)),
     (["parity", "{out}/lib/plan.json", "-o", "{out}/parity"], (0, 1)),
+    (["store", "status", "--rules", "{in}/ecadlib.toml"], (0,)),          # store off: says so, contacts nothing
+    (["store", "share", "{out}/lib/plan.json", "-o", "{out}/share"], (0, 1)),   # 1: nothing shareable (all held)
+    (["store", "report", "ACME", "X1", "--print"], (0,)),
     (["parity", "{out}/lib/plan.json", "--kicad", "{out}/kicad", "--name", "ecadlib", "-o", "{out}/parity_k"], (0, 1)),
 ]
-HELP_ONLY = {"ui", "mcp", "project", "setup", "start", "sources-check"}   # need a server / network / an Altium project: -h (and mcp below)
+HELP_ONLY = {"ui", "mcp", "project", "setup", "start", "sources-check", "store-repo"}   # need a server / network / an Altium project: -h (and mcp below)
 
 
 def _snapshot(root, skip):

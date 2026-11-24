@@ -77,7 +77,7 @@ def test_workspace_approvals():
         ws.choose_part(bom, "FTSH-105-TEST", "footprint", HDR)
         r = ws.choose_part(bom, "USBC-FAKE", "symbol", SHIELD)                    # S1 has no pad: held on pins
         assert r["chosen"]["status"] == "held"
-        r = ws.release_check(bom, allow=["USBC-FAKE"], user=BOB)                    # Bob releases it anyway
+        r = ws.release_check(bom, allow=["USBC-FAKE"], user=BOB, reason="checked by hand")                    # Bob releases it anyway
         assert {x["part"]: x["status"] for x in r["review"]}["USBC-FAKE"] == "awaiting_approval", r["review"]
         assert r["awaiting_approval"] == 2 and r["ready"] == 0, r
         assert json.loads(plan.read_text())[0]["allow"]["user"] == BOB
@@ -177,7 +177,9 @@ def test_ui_endpoints():
 def test_mcp_tools():
     names = {t["name"] for t in M.TOOLS}
     assert {"held_parts", "part_candidates", "choose_part", "approval_status", "approve_part", "find_duplicates"} <= names
-    assert "user" in next(t for t in M.TOOLS if t["name"] == "approve_part")["inputSchema"]["required"]
+    # security review 2026-11-23 (2.3): the person signs off themselves (ecadlib confirm); a name passed over MCP is
+    # not one, so `user` is no longer asked for
+    assert "user" not in next(t for t in M.TOOLS if t["name"] == "approve_part")["inputSchema"]["required"]
     with workspace() as (ws, bom, plan):
         call = lambda i, name, args: {"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": name, "arguments": args}}
         lines = [call(1, "held_parts", {"bom": bom}),
@@ -185,7 +187,6 @@ def test_mcp_tools():
                  call(3, "choose_part", {"bom": bom, "part": "FTSH-105-TEST", "kind": "footprint", "candidate_id": HDR}),
                  call(4, "approve_part", {"bom": bom, "part": "FTSH-105-TEST", "decision": "approve"}),
                  call(5, "approve_part", {"bom": bom, "part": "FTSH-105-TEST", "decision": "approve", "user": ANN}),
-                 call(6, "approval_status", {"bom": bom}),
                  call(7, "find_duplicates", {"bom": bom}),
                  call(8, "choose_part", {"bom": bom, "part": "FTSH-105-TEST", "kind": "footprint", "candidate_id": "spec:../x"})]
         out = io.BytesIO()
@@ -196,8 +197,17 @@ def test_mcp_tools():
         fps = body(2)["candidates"]["footprint"]
         assert fps[0]["id"] == HDR and len(fps) <= 3, fps
         assert body(3)["chosen"]["status"] == "ready" and "log" not in body(3)
-        r4 = resp[4]["result"]                             # a tool error the model can read and fix, not a protocol error
-        assert r4["isError"] and "user" in r4["content"][0]["text"], resp[4]
+        for i in (4, 5):                                   # with a name or without: asked of the person, not recorded
+            r = resp[i]["result"]                          # (a tool error the model can read, not a protocol error)
+            assert r["isError"] and "ecadlib confirm" in r["content"][0]["text"], resp[i]
+        assert not next(i for i in json.loads(plan.read_text()) if i["name"] == "FTSH-105-TEST").get("approvals")
+        from tests.fixtures_lite import person_confirms
+        with contextlib.redirect_stdout(io.StringIO()):
+            person_confirms(ws.root, ANN)                  # the person's own `ecadlib confirm ID`
+        out2 = io.BytesIO()
+        M.serve(ws, io.BytesIO("\n".join(map(json.dumps, [lines[4], call(6, "approval_status", {"bom": bom})])).encode()
+                               + b"\n"), out2)
+        resp.update({r["id"]: r for r in map(json.loads, out2.getvalue().decode().splitlines())})
         assert body(5)["decision"]["who"] == ANN and "log" not in body(5)
         assert next(r for r in body(6)["rows"] if r["name"] == "FTSH-105-TEST")["approved_by"] == ANN
         assert body(7)["merged"] is False

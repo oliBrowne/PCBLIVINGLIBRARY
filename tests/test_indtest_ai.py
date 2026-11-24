@@ -65,6 +65,7 @@ def test_t056_ledger_has_no_cost_for_a_request_never_sent(tmp_path, monkeypatch)
     sent = []
     monkeypatch.setattr(D.requests, "post", lambda *a, **k: sent.append(a) or (_ for _ in ()).throw(AssertionError("sent")))
     monkeypatch.setenv("REMOTE_KEY", "sk-remote-test")
+    monkeypatch.setenv("ECADLIB_KEY_HOSTS", "REMOTE_KEY=llm.example.invalid")   # review 2026-11-23 (2.2): a key under a name of your own goes to a server of your own only once you allowed it
     rules = {"ai": {"provider": "openai-compatible", "base_url": "https://llm.example.invalid/v1", "api_key_env": "REMOTE_KEY",
                     "model": "priced-model", "detect": False,
                     "profiles": {"priced-model": {"tier": "frontier", "pdf": True, "json_schema": True,

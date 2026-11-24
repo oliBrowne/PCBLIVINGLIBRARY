@@ -189,7 +189,8 @@ def make_server(ws, host="127.0.0.1", port=8766, path="/mcp", token=None, origin
                 headers["Mcp-Session-Id"] = secrets.token_hex(16)   # informational: every request stands alone
             self._send(200, resp, headers)
 
-    srv = http.server.ThreadingHTTPServer((host, port), Handler)
+    from .localserver import NoLookupBind
+    srv = type("Server", (NoLookupBind, http.server.ThreadingHTTPServer), {})((host, port), Handler)
     srv.daemon_threads = True
     return srv
 

@@ -126,7 +126,7 @@ def test_t043_refused_choice_puts_the_released_step_back():
     with tempfile.TemporaryDirectory() as d:
         lib, home = _demo(d), Path(d) / "home"
         plan = lib / "plan.json"
-        _run(d, home, "release-check", plan, "--allow", "AO3401A")                            # AO3401A released
+        _run(d, home, "release-check", plan, "--allow", "AO3401A", "--reason", "checked against the datasheet")                            # AO3401A released
         step = lib / "models/PcbLib/ecadlib_3d/SOT-23_0/SOT-23.step"
         assert _run(d, home, "resolve", plan, "--part", "AO3401A", "--offline", "choose", "footprint", "spec:SOT-23").returncode == 0
         released = step.read_bytes()                   # an equivalent footprint again: same part, new PcbLib bytes

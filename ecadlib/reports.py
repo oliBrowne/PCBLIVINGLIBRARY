@@ -21,7 +21,7 @@ CHIP = {"ready": "ok", "held": "bad", "awaiting_approval": "info", "duplicate": 
 def tried_line(t):
     """A librarian "what was tried" entry with its source in words: "standard: footprint ..." -> "standard parts: ..."."""
     t = M.clean(t)
-    m = re.match(r"(kicad|standard|easyeda|local|datasheet)( reader)?\b", t)
+    m = re.match(r"(store|kicad|standard|easyeda|local|datasheet)( reader)?\b", t)
     return M.SOURCES[m.group(1)] + t[m.end():] if m else t
 
 

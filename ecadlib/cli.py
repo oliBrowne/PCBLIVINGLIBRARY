@@ -33,6 +33,7 @@ Every other command:
     ecadlib review    [plan.json] [--part P] [--yes]   go through held parts one by one: why, pick a candidate, release anyway
     ecadlib upstream  check-kicad|check-a365 ...  upstream change alerts (KiCad sources, Altium 365 drift)
     ecadlib approve   plan.json approve|reject|status [--part P]   sign-off before altium365 push
+    ecadlib confirm   [ID] [--workspace DIR]      answer what your assistant asked over MCP: release anyway, sign-off, a paid run
     ecadlib dedupe    plan.json [--lib ...] [--merge]  duplicate parts, footprints and symbols
     ecadlib project   BOARD.PrjPcb [-o bom.csv] [--variant V]   BOM straight from an Altium project (.PrjPcb/.SchDoc)
     ecadlib where-used --projects DIR... [--part X] [--plan plan.json]   which projects use which library part
@@ -61,6 +62,8 @@ Every other command:
     ecadlib rebuild   LIB_DIR [--check]           rebuild a library from library.lock.json offline; report drift
     ecadlib testpack  --out DIR                   small Altium + KiCad test pack (6 parts) + CHECKLIST.md for a person to open
     ecadlib parity    plan.json [--kicad DIR] [--altium DIR] | pair A B | survey   KiCad and Altium files of every part match
+    ecadlib store     status|get|share|report ... shared parts store: look parts up, write records to share (sends nothing)
+    ecadlib store-repo ...                        for the people who run a shared store: check and merge record files
 
 `ecadlib <command> -h` shows that command's options. -q / --quiet prints only the outcome, -v / --verbose every
 detail; colour only on a terminal (NO_COLOR=1 or ECADLIB_COLOR=never turns it off). --debug (or ECADLIB_DEBUG=1) shows tracebacks instead of a
@@ -99,6 +102,7 @@ COMMANDS = {
     "review": ("ecadlib.review_cli", "go through held parts one at a time: the reason in plain words, pick a candidate, release anyway, open the datasheet"),
     "upstream": ("ecadlib.upstream", "KiCad upstream changes and Altium 365 drift"),
     "approve": ("ecadlib.approvals", "approve / reject plan items before release"),
+    "confirm": ("ecadlib.confirm", "answer what your assistant asked for over MCP and only you can grant: a release anyway, a sign-off, a paid run"),
     "dedupe": ("ecadlib.dedupe", "find and merge duplicate parts, footprints and symbols"),
     "step-gen": ("ecadlib.step_gen", "package-shaped STEP 3D models from a package spec or footprint name"),
     "upkeep": ("ecadlib.upkeep", "weekly lifecycle / upstream / A365 checks; new changes as one issue or PR"),
@@ -126,6 +130,8 @@ COMMANDS = {
     "rebuild": ("ecadlib.rebuild", "rebuild a library from its library.lock.json offline; --check reports any drift"),
     "parity": ("ecadlib.parity", "read back the KiCad and the Altium library and compare every part (pads, drills, 3D, pins, fields)"),
     "stdparts": ("ecadlib.stdparts", "standard packages and pinouts without Claude: resolve, list, bench vs KiCad, BOM coverage"),
+    "store": ("ecadlib.store_cli", "shared parts store: status, look a part up, write your parts to share (sends nothing), report one"),
+    "store-repo": ("ecadlib.store_cli:store_repo_main", "for the people who run a shared store: check and merge record files"),
 }
 
 

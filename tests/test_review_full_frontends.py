@@ -7,12 +7,17 @@ from urllib.parse import quote
 from ecadlib import firstrun as FR, mcp_server as M
 from ecadlib.app import Workspace
 from ecadlib.ui import server as S
+from tests.test_ui import ui_cookie
+
+
+_KEY = {}
 
 
 @contextlib.contextmanager
 def _served(ws):
     srv = S.make_server(ws, "127.0.0.1", 0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    _KEY.update(ui_cookie(srv))                             # as the page ecadlib opened (review 2026-11-23, 2.1)
     try:
         yield srv.server_address[1]
     finally:
@@ -33,7 +38,7 @@ def test_download_of_a_file_whose_name_is_not_latin1():
         with contextlib.redirect_stderr(io.StringIO()), _served(ws) as port:
             for rel, body in files:
                 c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-                c.request("GET", "/api/file?path=" + quote(rel))
+                c.request("GET", "/api/file?path=" + quote(rel), headers=_KEY)
                 r = c.getresponse()
                 assert r.status == 200 and r.read() == body, rel
                 cd = r.getheader("Content-Disposition")
@@ -58,7 +63,7 @@ def test_ipv6_host_binds_an_ipv6_socket():
             port = srv.server_address[1]
             c = http.client.HTTPConnection("::1", port, timeout=10)
             with contextlib.redirect_stderr(io.StringIO()):
-                c.request("GET", "/api/info", headers={"Host": f"[::1]:{port}"})
+                c.request("GET", "/api/info", headers={"Host": f"[::1]:{port}", **ui_cookie(srv)})
                 r = c.getresponse()
             assert r.status == 200 and isinstance(json.loads(r.read()), dict)
         finally:

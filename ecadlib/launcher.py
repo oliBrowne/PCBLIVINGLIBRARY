@@ -10,7 +10,10 @@ Ctrl+C instead.
 The workspace is --workspace, else the one picked on the setup page (settings.json), else Documents/ecadlib. When an
 ecadlib is already answering on the port, the browser is pointed at it and nothing new starts, so a second click on
 the Start menu entry just brings the page back. When the setup page moves the workspace, the server restarts there on
-the same port (easy_setup.RESTART)."""
+the same port (easy_setup.RESTART).
+
+The page answers only to a browser that has this run's key (ecadlib.ui.access; review 2026-11-23): every address
+opened here carries a one-time key, and the run keeps its key across a restart in another workspace."""
 import argparse, os, sys, threading, webbrowser
 from pathlib import Path
 
@@ -22,23 +25,33 @@ class App:
         self.host, self.port, self.workspace = host, port, str(workspace)
         self.srv, self.thread, self.lock = None, None, threading.Lock()
         self.on_change = lambda: None
+        from .ui import access as AC
+        self.access = AC.Access()               # one key for the whole run: the open page survives a restart
 
     @property
     def url(self):
         return f"http://{self.host}:{self.port}/"
 
+    def link(self, path=""):
+        """The address to hand a browser: it carries a key that works once (the page then has a session key of its own)."""
+        from .ui import access as AC
+        return AC.with_key(self.url + path, self.access.ticket())
+
     def start(self):
         from .app import Workspace
-        from .ui import server as S
+        from .ui import access as AC, server as S
         Path(self.workspace).mkdir(parents=True, exist_ok=True)
         ws = Workspace(self.workspace, ES.ws_libs(self.workspace))     # the library folders from the setup page
-        self.srv = S.make_server(ws, self.host, self.port)
+        self.srv = S.make_server(ws, self.host, self.port, access=self.access)
         self.port = self.srv.server_address[1]
+        AC.publish(self.port, self.access, ws.root)                    # for a second start and the Altium / KiCad menu
         self.thread = threading.Thread(target=self.srv.serve_forever, name="ecadlib-ui", daemon=True)
         self.thread.start()
 
     def stop(self):
         if self.srv:
+            from .ui import access as AC
+            AC.unpublish(self.port, self.access)
             self.srv.shutdown()
             self.srv.server_close()
             self.srv = None
@@ -129,7 +142,8 @@ def main(argv=None):
     if running:
         print(f"ecadlib is already running on http://127.0.0.1:{port}/ (workspace {running})")
         if not a.no_browser:
-            webbrowser.open(f"http://127.0.0.1:{port}/{first}")
+            from .ui import access as AC
+            webbrowser.open(AC.link(port, first))           # with a one-time key from the ecadlib that is running
         return 0
     app = App(ws, port)
     app.start()
@@ -137,7 +151,7 @@ def main(argv=None):
     print(f"ecadlib {__version__} on {app.url}{first} (workspace {app.workspace})")   # first run: the setup page
 
     def open_page(path):
-        webbrowser.open(app.url + path)
+        webbrowser.open(app.link(path))
     if not a.no_browser:
         open_page(first)
     try:

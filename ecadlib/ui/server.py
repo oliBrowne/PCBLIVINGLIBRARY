@@ -4,15 +4,19 @@
     (or: python -m ecadlib.ui ...)
 
 Standard library only (http.server), bound to 127.0.0.1; a single-user desktop tool, provider API keys stay in
-ecadlib's own key store (or the user's environment); the server never returns one."""
+ecadlib's own key store (or the user's environment); the server never returns one. Every request needs this run's
+key (ecadlib.ui.access): the browser gets it from the link the launcher opens, other programs have none."""
 import argparse, contextlib, ipaddress, itertools, json, mimetypes, re, secrets, socket, sys, threading, os, time, \
     traceback, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from ..localserver import NoLookupBind
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from ..app import WAITING, LibraryBusy, Workspace
 from .. import easy_setup as ES
+from . import access as AC
 
 STATIC = Path(__file__).with_name("static")
 
@@ -26,7 +30,26 @@ def _save_bug(where, e):
 MAX_UPLOAD = 20 * 1024 * 1024
 MAX_JSON = 2 * 1024 * 1024                 # JSON bodies: no 20 MB parse
 EXPECTED = (ValueError, KeyError, FileExistsError, json.JSONDecodeError, PermissionError)   # user errors: no traceback
-LOCAL_HEADERS = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
+LOCAL_HEADERS = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'",
+                 "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}
+# A file of the workspace, downloaded: whatever it holds, a browser shown it runs nothing in it.
+FILE_CSP = "sandbox; default-src 'none'; frame-ancestors 'none'"
+PAGES = {"/": "index.html", "/index.html": "index.html", "/setup": "setup.html"}
+KEY_IN_LOG = re.compile(r"([?&]key=)[^&\s\"']*")
+# Shown instead of a page to a browser that has no key of this run (review 2026-11-23, 2.1). No script, no values.
+NO_KEY_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>ecadlib</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font: 16px/1.5 system-ui, sans-serif; max-width: 40em; margin: 4em auto; padding: 0 1em">
+<h1 style="font-size: 20px">Open this page from ecadlib</h1>
+<p>__WHY__</p>
+<p>To open it: press <b>Open ecadlib</b> in the small ecadlib window, use the ecadlib menu in Altium or KiCad, or run
+<code>ecadlib start</code> again. Each of them opens this page with the key of the ecadlib that is running.
+Started with <code>ecadlib ui --no-browser</code> in a terminal (for example on another computer, over SSH)? It
+printed the link to open.</p>
+<p style="color: #555">Why: the page can change your stored keys and start paid reads, so it answers only to the
+browser that ecadlib opened, not to any program on this computer.</p></body></html>"""
+NO_KEY = "this page has no key of the ecadlib that is running (it was started again, or the page was not opened by " \
+         "ecadlib): open it again from the ecadlib window, the Altium / KiCad menu, or with `ecadlib start`"
 # Actions that rewrite library files under change control: while another run holds the library lock they are queued
 # as a job that waits for it (Handler._or_queue). Decisions (sign-off, release anyway) are recorded at once instead.
 QUEUED = {"/api/resolve/choose", "/api/change/decide", "/api/change/revert", "/api/dedupe"}
@@ -256,7 +279,32 @@ def _strs(v, what):
     return [x for x in v if x.strip()]
 
 
-def make_handler(ws: Workspace):
+def page_bytes(name, nonce):
+    """A page of the UI with this response's nonce on its own <script> tags: the Content-Security-Policy sent with it
+    (page_csp) lets only those run, so markup that reaches the page from a file (a part name, a report) cannot run
+    script, whatever the page's escaping missed (review 2026-11-23, 2.7)."""
+    return (STATIC / name).read_text(encoding="utf-8").replace("<script", f'<script nonce="{nonce}"').encode("utf-8")
+
+
+def page_csp(nonce):
+    """Only this response's own <script> tags run (not 'self': /api/file serves workspace files from this address,
+    and a file someone sent must not be loadable as the page's script; second review 2026-11-23, M1)."""
+    return {"Content-Security-Policy": f"frame-ancestors 'none'; script-src 'nonce-{nonce}'; object-src 'none'; "
+                                       "base-uri 'none'; form-action 'self'"}
+
+
+def enter_page(session, to, nonce):
+    """The answer to a launcher's link: a page that keeps the session key in this tab (sessionStorage is per address
+    and port, and the browser never sends it anywhere by itself) and goes on to the address without the key."""
+    val = lambda v: json.dumps(v).replace("<", "\\u003c")
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>ecadlib</title></head><body>'
+            f'<script nonce="{nonce}">try {{ sessionStorage.setItem({val(AC.STORE)}, {val(session)}); }} catch (e) {{}}\n'
+            f'location.replace({val(to)} + location.hash);</script>'
+            '<noscript>ecadlib\'s page needs JavaScript.</noscript></body></html>').encode("utf-8")
+
+
+def make_handler(ws: Workspace, access=None):
+    access = access or AC.Access()                         # this run's key (the desktop app passes its own)
     jobs = Jobs(ws.root)
     write_lock = threading.Lock()                          # one writer at a time in the workspace
 
@@ -264,9 +312,10 @@ def make_handler(ws: Workspace):
         server_version = "ecadlib-ui/0.1"
         job_runner = jobs
         _body_read = False
+        access_ = access
 
-        def log_message(self, fmt, *args):
-            sys.stderr.write("ui: " + fmt % args + "\n")
+        def log_message(self, fmt, *args):                 # (the key of a link never reaches the log)
+            sys.stderr.write("ui: " + KEY_IN_LOG.sub(r"\1...", fmt % args) + "\n")
 
         def _send(self, code, body, ctype="application/json", headers=None):
             data = body if isinstance(body, bytes) else (json.dumps(body) if ctype == "application/json" else body).encode()
@@ -275,7 +324,8 @@ def make_handler(ws: Workspace):
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             for k, v in LOCAL_HEADERS.items():             # no other page may frame the UI (clickjacking)
-                self.send_header(k, v)
+                if k not in (headers or {}):                # (a page brings its own, stricter policy)
+                    self.send_header(k, v)
             for k, v in (headers or {}).items():
                 self.send_header(k, v)
             self.end_headers()
@@ -299,10 +349,49 @@ def make_handler(ws: Workspace):
                 return self._send(403, {"error": "unexpected Host header"})
             if method == "POST" and not self._origin_ok():
                 return self._send(403, {"error": "cross-origin request refused"})
+            if not self._key_ok(method, u):                 # (it answered: the link's page, or a refusal)
+                return None
             if u.path.startswith("/api/") and not (ws.root / "uploads").is_dir():   # the workspace folder was deleted or
                 with contextlib.suppress(OSError):                                   # moved while this runs: make it again
                     ws.ensure_folders()
             return u
+
+        def _key(self):
+            """The key this request carries (the page's script and this user's own programs add it), or None."""
+            return self.headers.get(AC.HEADER)
+
+        def _key_ok(self, method, u):
+            """Only the browser the launcher opened (and this user's own programs) get an answer: review 2026-11-23,
+            2.1. A page address with ?key=... (the launcher's link) is answered once, with a page that keeps a session
+            key in that tab and goes on to the address without the key (so the key is in no history entry and no
+            reload). The pages themselves hold nothing (they are ecadlib's own files); everything they show comes from
+            /api, which answers only to a request that carries a key. True: go on with the request."""
+            if AC.other_account(self.client_address, self.server.server_address):
+                self._send(403, {"error": "this ecadlib belongs to another account on this computer"})
+                return False
+            q = parse_qs(u.query, keep_blank_values=True)
+            if method == "GET" and "key" in q and u.path in PAGES:
+                session = access.enter(q["key"][0])
+                if session is None:
+                    self._send(401, NO_KEY_PAGE.replace("__WHY__", "This link was used already, or is too old: each "
+                                                        "link ecadlib opens works once."), "text/html; charset=utf-8")
+                    return False
+                rest = "&".join(f"{quote(k)}={quote(v)}" for k, vs in q.items() if k != "key" for v in vs)
+                nonce = secrets.token_urlsafe(16)
+                self._send(200, enter_page(session, u.path + ("?" + rest if rest else ""), nonce),
+                           "text/html; charset=utf-8", page_csp(nonce))
+                return False
+            if (method == "GET" and (u.path in PAGES or u.path == "/hairline.js")) or access.allowed(self._key()):
+                return True
+            self._send(401, {"error": NO_KEY})
+            return False
+
+        def _inside(self, path):
+            """ws.inside, and never ecadlib's own settings folder (the key file) when the workspace is above it."""
+            p = ws.inside(path)
+            if AC.private_file(p, ws.root):
+                raise PermissionError("that is ecadlib's own settings folder: the page does not open files in it")
+            return p
 
         # ---------------------------------------------------------- request bodies
         def _bom(self, body=None, write=False):
@@ -312,7 +401,7 @@ def make_handler(ws: Workspace):
                 raise ValueError("no BOM given")
             if len(bom) > 1000 or any(len(x) > 200 for x in bom.replace("\\", "/").split("/")):
                 raise ValueError("that BOM name is too long; pick a BOM from the list")
-            ws.inside(bom)                                 # refuses a path outside the workspace
+            self._inside(bom)                              # refuses a path outside the workspace
             if write and jobs.running(self._plan_key(bom)):
                 raise FileExistsError(f"the librarian is still running on {bom}; try again when it has finished")
             return bom
@@ -365,10 +454,9 @@ def make_handler(ws: Workspace):
                 return
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             try:
-                if u.path in ("/", "/index.html"):
-                    return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
-                if u.path == "/setup":                         # setup page (ecadlib.easy_setup)
-                    return self._send(200, (STATIC / "setup.html").read_bytes(), "text/html; charset=utf-8")
+                if u.path in PAGES:                            # the main page; /setup: ecadlib.easy_setup
+                    nonce = secrets.token_urlsafe(16)
+                    return self._send(200, page_bytes(PAGES[u.path], nonce), "text/html; charset=utf-8", page_csp(nonce))
                 if u.path in ES.GET_ROUTES:
                     return self._send(200, ES.GET_ROUTES[u.path](ws.root, q))
                 if u.path == "/hairline.js":                    # the line figures (scripts/build_ui_figures.sh)
@@ -404,13 +492,14 @@ def make_handler(ws: Workspace):
                     job = jobs.get(q.get("id", ""))
                     return self._send(200, job) if job else self._send(404, {"error": "no such job"})
                 if u.path == "/api/file":                       # download anything inside the workspace
-                    p = ws.inside(q.get("path", ""))
+                    p = self._inside(q.get("path", ""))
                     if not p.is_file():
                         return self._send(404, {"error": "not found"})
                     ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
                     plain = re.sub(r'[^\x20-\x7e]|["\\]', "_", p.name)   # headers are latin-1: UTF-8 name in filename*
                     return self._send(200, p.read_bytes(), ctype,
-                                      {"Content-Disposition": f'attachment; filename="{plain}"'
+                                      {"Content-Security-Policy": FILE_CSP,
+                                       "Content-Disposition": f'attachment; filename="{plain}"'
                                                               + (f"; filename*=UTF-8''{quote(p.name, errors='replace')}" if plain != p.name else "")})
                 return self._send(404, {"error": "not found"})
             except Exception as e:
@@ -460,6 +549,11 @@ def make_handler(ws: Workspace):
                         ws.libs = [x for x in ws.libs if x not in before or x in after] + [
                             x for x in after if x not in ws.libs]
                     return self._send(200, out)
+            if u.path == "/api/access/ticket":                    # this user's own program (a second start, the
+                self._json()                                      # Altium / KiCad menu) asks for a link to open
+                if not access.owner(self._key()):                 # (with the run's key, not a page's session)
+                    return self._send(403, {"error": "only ecadlib itself can ask for a link to this page"})
+                return self._send(200, {"ticket": access.ticket()})
             if u.path == "/api/footprint/preview":                # read-only, no lock
                 b = self._json()
                 return self._send(200, ws.preview_footprint(b["spec"], b.get("density")))
@@ -526,7 +620,8 @@ def make_handler(ws: Workspace):
                 "/api/altium/models": lambda b: ws.build_altium_models(self._bom(b, True)),
                 "/api/altium365/plan": lambda b: ws.altium365_plan(self._bom(b, True)),
                 "/api/release-check": lambda b: ws.release_check(self._bom(b), _names(b.get("allow")), _names(b.get("unallow")),
-                                                                 _str(b.get("user"), "user", True)),
+                                                                 _str(b.get("user"), "user", True),
+                                                                 reason=_str(b.get("reason"), "reason", True) or ""),
                 "/api/resolve/held": lambda b: ws.held_parts(self._bom(b)),
                 "/api/resolve/choose": lambda b: ws.choose_part(self._bom(b), _str(b.get("part"), "part"), b.get("kind"),
                                                                 _str(b.get("id"), "id"), b.get("pin_map") or None,
@@ -662,7 +757,7 @@ def make_handler(ws: Workspace):
     return H
 
 
-class Server(ThreadingHTTPServer):
+class Server(NoLookupBind, ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 128                               # a burst of requests must queue, not get connection resets
 
@@ -673,13 +768,26 @@ class Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-def make_server(ws, host="127.0.0.1", port=0):
-    """The UI server (not started)."""
+def make_server(ws, host="127.0.0.1", port=0, access=None):
+    """The UI server (not started). srv.access: this run's key and sessions (ecadlib.ui.access)."""
     host = host.strip("[]")
     cls = type("Server6", (Server,), {"address_family": socket.AF_INET6}) if ":" in host else Server   # --host ::1
-    srv = cls((host, port), make_handler(ws))
+    srv = cls((host, port), make_handler(ws, access))
     srv.jobs = srv.RequestHandlerClass.job_runner
+    srv.access = srv.RequestHandlerClass.access_
     return srv
+
+
+def start_text(url, path, root, key, browser, tty):
+    """What `ecadlib ui` prints when it starts. The link with the run's key is printed only when no browser is
+    opened and a person reads the output (a terminal): never into a log file (the Altium / KiCad menu starts
+    `ecadlib ui --no-browser` with its output in the workspace)."""
+    out = f"ecadlib UI on {url}{path}  (workspace {root}; Ctrl+C to stop)"
+    if browser:
+        return out
+    if tty:
+        return out + f"\nOpen it with this link (it carries this run's key, so keep it to yourself):\n  {AC.with_key(url + path, key)}"
+    return out + "\nThe page opens only with this run's key: open it from the Altium / KiCad menu, or with `ecadlib start`."
 
 
 def _loopback(host):
@@ -709,21 +817,25 @@ def main(argv=None):
     if not _loopback(a.host):
         sys.exit(f"refusing to serve on {a.host}: the UI has no login, so anyone who can reach it could edit the "
                  "workspace and push to Altium 365 with your token. Keep the default 127.0.0.1; to use it from another "
-                 "machine, forward the port over SSH (ssh -L 8765:127.0.0.1:8765 host).")
+                 "machine, forward the port over SSH (ssh -L 8765:127.0.0.1:8765 host) and open the link that "
+                 "`ecadlib ui --no-browser` prints there.")
     ws = Workspace(a.workspace, a.lib, a.providers.split(",") if a.providers else None, a.offline)
     try:
         srv = make_server(ws, a.host, a.port)
     except OSError as e:
         sys.exit(f"can't listen on {a.host}:{a.port} ({e.strerror}); is ecadlib already running? Try --port {a.port + 1}")
     shown = f"[{a.host}]" if ":" in a.host and not a.host.startswith("[") else a.host   # IPv6 literal in a URL
-    url = f"http://{shown}:{srv.server_address[1]}/"
-    print(f"ecadlib UI on {url}{'setup' if a.setup else ''}  (workspace {ws.root}; Ctrl+C to stop)")
+    url, path = f"http://{shown}:{srv.server_address[1]}/", "setup" if a.setup else ""
+    AC.publish(srv.server_address[1], srv.access, ws.root)   # this user's menus and a second start find the key there
+    print(start_text(url, path, ws.root, srv.access.key, not a.no_browser, sys.stdout.isatty()), flush=True)
     if not a.no_browser:                    # a thread: a console browser (w3m, lynx) waits for the page we serve below
-        threading.Thread(target=webbrowser.open, args=(url + ("setup" if a.setup else ""),), daemon=True).start()
+        threading.Thread(target=webbrowser.open, args=(AC.with_key(url + path, srv.access.ticket()),), daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        AC.unpublish(srv.server_address[1], srv.access)
 
 
 if __name__ == "__main__":

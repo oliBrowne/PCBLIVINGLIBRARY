@@ -9,6 +9,179 @@ a minor release may change command-line options and file formats.
 
 ### Added
 
+- **Shared store of checked parts** (not switched on: there is no public store yet and no default address). With
+  `[store] url` set, the librarian looks each part up in the store first (by itself: it is never in `[sources] order`,
+  and with the url empty nothing changes, not even the rules hash). A
+  `confirmed` record (`[store] accept`, default `"confirmed"`; `"checked"` takes single-build records too, `"off"` never
+  asks) is drawn into the library and goes through the same release check as any part; its source reads
+  `store:<id>@r<rev>`, and a record made from the KiCad libraries keeps the KiCad licence, Library Credit and
+  NOTICE.txt. "Confirmed" means two builders drew the same whole part (pads, pins with their types, and the record's
+  `text_hash`: silk, fab, courtyard, text and symbol graphics), or a person signed that drawing off. A record not used
+  directly is a second opinion: different pads or pins hold the part and name both; the same pads and pins release
+  your own build only when the record is confirmed (reached through an `also` code or with no maker) and the two were
+  made independently (another kind of source, or a datasheet read by another AI model): a `checked` record's
+  agreement is only noted and releases nothing. A record is refused unless its footprint is plain (no zones, no BOM /
+  DNP / board-only flags, nothing but pads on copper, mask or paste, only the reference, value and one
+  `${REFERENCE}` text) and its symbol has no hidden or alternate pins; KiCad-library parts are cleaned to that shape.
+  A part that depends on the store (built from it, or released by its agreement) is held when the store withdraws,
+  disputes or drops the record, and also when the store cannot vouch for it: switched off ("release it yourself or
+  switch the store on"), or its withdrawn list unreadable with no copy younger than 30 days saved; a person's
+  `--allow` keeps it released, and parts that owe the store nothing never change. The librarian, every publisher and
+  `ecadlib upkeep` (a `store` check that runs by itself while a url is set or the plan has such a part) all check
+  this; a broken store file holds, never crashes. Store requests follow no redirect (the snapshot download only
+  GitHub's own, over https). New commands: `ecadlib store
+  status|get|share|report` (share writes record files and sends nothing; report builds a GitHub issue link) and
+  `ecadlib store-repo` for the people who run a store. Guide: [docs/shared-store.md](docs/shared-store.md).
+
+### Security
+
+From the 2026-11-23 code review. None of these was seen being used.
+
+- **The local page needs this run's key.** A program on the computer that was not opened by ecadlib is refused (it
+  could swap the stored API key, start a paid read or move the workspace). The page opens as before from the app, the
+  command line and the Altium / KiCad menus; an address typed by hand in a fresh browser shows "Open this page from
+  ecadlib". Values from files are shown as text, and only the page's own script runs. The key is kept in the browser
+  tab, not in a cookie (a cookie of 127.0.0.1 goes to every local server), and on Linux a program of another account
+  is refused outright.
+- **A key goes only to the service it is for.** A settings file in the current folder can no longer send a stored key
+  to another server: a gateway of your own needs `ecadlib keys allow NAME HOST` once (or `ECADLIB_KEY_HOSTS`). The cost
+  dialogs name the server. The Altium 365 sign-in token is sent only to Altium's own servers; the headless browser
+  checks every redirect, in frames too, and a popup requests nothing. An address written so that two programs could
+  read two servers out of it (a backslash, a `user@` part) is refused.
+- **Over MCP the person approves, not the assistant.** A release anyway, a part approval and a paid read asked by an
+  MCP client wait for `ecadlib confirm ID` typed at a terminal. `save_rules` over MCP takes only harmless settings.
+  What `ecadlib confirm` shows is plain text (no control codes from the request), and its question names what "yes"
+  records.
+- **A release anyway needs a reason** and is recorded in the ledger with who and when; an `allow` block written into
+  plan.json by hand no longer counts. Parts released anyway before this version are held until released again with a
+  reason (`ecadlib release-check --allow PART --reason "why"`).
+- **Crash reports:** nothing of the sender's choice reaches a public issue (error names and the OS come from fixed
+  lists), new issues are limited per address, and a browser page cannot file them. The saved report blanks webhook
+  addresses, folders outside ecadlib's own and short keys.
+- **Windows:** the KiCad and Altium runners no longer start `ecadlib`, `python`, `git` and the like from the project
+  or current folder. Run "Add to KiCad" / `ecadlib altium-menu build` again to get the new runner.
+- **Privacy text** now lists the part searches that need no key (jlcpcb.com, jlcsearch.tscircuit.com, lcsc.com), the
+  datasheet hosts and the crash-report store; the address hash is keyed.
+
+### Fixed
+
+A code review on 2026-11-23 found ways a wrong part could come out ready with no hold, all in the paths that release a
+part with no person's look. Each was shown with made-up inputs, none was seen in a real part. They are held now:
+
+- A resistor or capacitor with no part number is released as a generic chip only when every word on its BOM line is
+  understood (value, tolerance, rating, dielectric, size). `10uF tantalum`, `47uF electrolytic`, `1k x4` in the Value,
+  Comment or any other column are held.
+- A chip size is taken from a part number only when a maker's rule reads the whole number (Venkel's
+  `C0603X7R500-104KNE` was read with TDK's metric code and built as an 0201).
+- Words beside a size or package name in the footprint column (`0603 x4`, `0603 8P4R`, `1206 4-terminal`,
+  `SMB Gull Wing`, `TO-220 Full Pack`) hold the part instead of building the plain land.
+- A capacitor with a part number is built as an unpolarized chip only when something says it is ceramic or film (a
+  decoded MLCC number, a dielectric in the text, KiCad's own chip name). Tantalum and polymer series that were not on
+  the list (Vishay TMCM, T58, AVX TACR) are held.
+- A bare number in the Value column (`1210` for 1.21 k) is no longer read as the chip size.
+- A transistor's, SO-8 MOSFET's or diode's pin order is taken from the datasheet's text only when the text is about
+  this part's package (a family sheet's TO-92 table no longer gives its order to the SOT-23 part).
+- Active-low marks are compared in the free pin checks (Q and not-Q swapped, EN for not-EN), and pins a read calls NC
+  must be NC in the datasheet's table too.
+- A series diode pair with a joined `CATHODE/ANODE` label is no longer read as one diode.
+- The check of a land against the PDF's printed numbers no longer agrees with pads turned 90 degrees, nor with another
+  size's row of a family table.
+- The second read is asked for the terminal's length and width and for the pins on each side of a no-lead package; a
+  footprint built from a read's own numbers is released only when every number that places or sizes a pad was
+  compared. Second-read answers saved before this change do not cover those numbers and are asked for again.
+- A no-lead package whose read gives no pins per side is held, not built with a quarter of the pins on each side.
+  The exception is a square package named QFN (or VQFN, WQFN, LFCSP and the like) with 12 or more pins that cannot
+  sit on two sides at its pitch; it is released only when the second read gives the same sides.
+- A small terminal read at half or 1.5 times its size is a disagreement between the two reads.
+- A PDF saved by your assistant is tested to name the part, like a downloaded one.
+- An assistant answer is used only for the request its folder was written for.
+- A schema error in a read no longer switches off the checks of the built footprint; an entry the read lists as
+  unresolved holds however it is worded.
+- Another maker's listing is never taken as this part's package or LCSC number (BOM says Vishay SS34, the source lists
+  only onsemi's).
+- BOM reader: a `Package (mm)` column of only 0603 / 0402 is noted and held; lines with no part number that differ in
+  an unmapped column (Color, Tolerance, Voltage) are held instead of merged; words before the number in a
+  `Manufacturer/MPN` cell are the maker only when ecadlib knows the maker; a crafted MPN cell no longer hangs the reader.
+- Lines with no part number: every merged line is read for words such as tantalum, array or x4, not only the first;
+  a case letter or a lone `+` beside the value, and a bare yes or number under a header such as `Polarized` or `Pins`,
+  hold the part. Buying columns (price, stock, supplier name) and two names of the plain symbol (`R`, `R_Small`,
+  `Res1`) no longer keep lines apart.
+- A pin order taken from a datasheet's text counts only when the table's own heading names this part's package; a pin
+  a read calls NC is confirmed only by a no-connect row in the table.
+- Another maker's listing gives no description, datasheet link or CAD answer either. One company under two names is
+  one maker (MCC, Unisonic/UTC, Cree/Wolfspeed, Silicon Labs/Skyworks, NXP standard parts/Nexperia and others).
+- A metric size code in a part number that is also an inch size (TDK `C0603...`) is used only when the line names
+  that maker.
+- A PDF saved by your assistant that has no text to tell the part by (a scan) is flagged for a person.
+- Third pass: a size code with another kind's prefix (`CP1206`, `LED0603` on a resistor) holds; the symbol column of
+  a line with no part number must name the plain symbol; `bipolar` no longer cancels `tantalum`; a search result that
+  names no maker, or two, is not the BOM maker's listing; a text pin order is tied to the part's own number, not to a
+  list of package names; the place of three single numbers on a land drawing no longer rules out pads turned 90
+  degrees; an unresolved entry of a read holds unless it is about weight, marking, packing and the like.
+- A capacitor with a part number ecadlib cannot read is no longer released on KiCad's `C_0603_1608Metric` name alone:
+  the line or the part search must say it is ceramic.
+- Lines with no part number: words that say nothing about the build (EAGLE's "European symbol", makers, function
+  notes, DNP) no longer hold a plain resistor or capacitor; a word holds when it names another build (tantalum, array,
+  network, MELF, thermistor ...), and short codes must still be understood.
+
+### Changed
+
+- Expect more holds: these checks hold some correct parts too (for example an MLCC from a maker ecadlib has no
+  part-number rule for, with no dielectric on the line).
+
+## [0.4.1] - 2026-11-22
+
+The first release since 0.4.0, with four weeks of work from `main`. Nothing in it needs a new setting, but a few
+defaults changed (below, under *Changed defaults*). It is a patch-numbered release because 0.5.0 is kept for the proven
+BOM-to-Altium 365 flow.
+
+**Why upgrade.** On a fresh install with no keys and no AI (2026-11-22), 0.4.0 got 0 of 16 parts ready on the first
+real open-source BOM tried (The Open Book) in 212 s; `main` of the same day, just before the last fixes in this
+release, got 6 of 16 in 20 s. Across 9 real open-source BOMs, `main` with #284 got 95 of 323 lines ready with no keys.
+1,552 public BOM files ran through it (one run stopped on a footprint name, now fixed), and together with fake BOMs
+in the same formats they showed three ways to build a part wrong; all three are held now (#285). On a 1000-part BOM (998 lines, offline replay with saved datasheets,
+datasheet reads by Claude Haiku 5.5 on Amazon Bedrock, 2026-11-20) 709 lines were ready with no person's look, and
+none was found built wrong (one found wrong in the first run was fixed by #279 before that count). These are
+measurements on those sets, not a promise for your BOM: check parts before you build a board with them.
+
+**Highlights.**
+
+- Datasheet reads with no API key and no cost: `--read-with-assistant` hands each read to an AI assistant you
+  already use, with the same checks as a paid read.
+- Claude through Amazon Bedrock (`[ai] provider = "bedrock"`), signed with your AWS credentials.
+- KiCad: a toolbar button in the schematic editor (KiCad 9+), and `ecadlib kicad-install` / *Use in every project*
+  to put a library into KiCad's own tables.
+- More datasheets found by themselves: every download way in a plain `pip install`, the Internet Archive's copy of a
+  dead link, distributor copies labelled as such, and a web search (on by default, billed to your own key).
+- Step-by-step DigiKey, Mouser and Nexar key guide, and `ecadlib keys check`.
+- Many more safety checks that hold a wrong part for a person instead of building it, and many false holds released
+  where an independent source agrees.
+- Real BOMs read better: EAGLE text BOMs, combined Manufacturer/MPN columns, Octopart and Digi-Key exports, DNP lines.
+- Opt-in automatic crash reports.
+
+**Changed defaults** (the first two can be set back):
+
+- `[datasheet] web_search` is on: a part no free way finds a datasheet for gets one web search, billed to your own
+  Claude key (about $0.03 a part on Haiku 5.5, counted in `max_cost_usd`). `web_search = false` turns it off.
+- An empty Manufacturer, a missing datasheet link, and a plain resistor or capacitor with a value and size but no
+  MPN are now notes, not holds. `[release] manufacturer = "hold"`, `datasheet = "hold"` and `mpn = "hold"` bring the
+  holds back.
+- `pip install ecadlib` now installs Playwright and curl_cffi, so the install is larger (a few hundred MB).
+
+### Fixed
+
+- Datasheets: a custom or connector footprint whose pads the read placed itself (a pad table copied from the maker's land) is no longer released because a second read agreed on the body, pin count, pin names or pin sides: that check never looks at the pads. It now needs the land drawing's printed numbers to agree (or, for an exposed-pad table, a second read agreeing on every number the table was checked against); otherwise it is held for a look, and the review says why. Footprints built from a standard table instead, and land blocks (three numbers sizing a row of pads, already checked by the copper check), are unchanged. Found on Haiku 5.5 through Bedrock: SiT1533's pad 3 was read 0.2 mm wide at 0.9 where the drawing has 0.4 at 0.8, and the part was released.
+
+### Added
+
+- KiCad 9 and newer, the ecadlib button in the schematic editor: *Add part* now hands the part it built to KiCad's own
+  Paste. The window puts the symbol on the clipboard in the form KiCad's Copy uses, so Ctrl+V (Cmd+V on a Mac) in the
+  schematic editor puts it on the cursor to place, linked to `ecadlib:<symbol>` with its footprint, part number and
+  maker filled in, as Place > Add Symbol would. Before, the part had to be looked up again in Place > Add Symbol. A
+  part with several units pastes unit A (the window names the others). *Copy the symbol again* puts it back after
+  another copy. The job writes the text to `JOB/paste.txt` (`kicad_menu.schematic_paste`). Pasted and placed in real
+  KiCad 9.0.9 and 10.0.8 (Linux).
+- A second way to find parts sold only at LCSC: `lcsc_search` (on by default after `jlcpcb_search`, before `easyeda`). When JLCPCB's part search refuses (on the 1000-part run it answered 403 after the 12th line, so 914 lines never got an LCSC number) or lists nothing, the MPN is looked up in the free jlcsearch parts index and each exact match's LCSC product page is read for maker, package, description and datasheet link. Only an exact MPN counts; a product page that names another part or number is not used; with clone listings no single maker is named. A 403/429 from either site stops it for the rest of the run. `ecadlib sources-check` (weekly) now checks both endpoints too. `[providers] unofficial = false` keeps it out.
 - Claude through Amazon Bedrock: `[ai] provider = "bedrock"` (with `region`, else `AWS_REGION`) sends the same datasheet reads to Claude on your AWS account, signed with your AWS credentials, with no Anthropic key. `model` stays the Claude name (`claude-haiku-5-5`); ecadlib sends the region's inference profile. No Message Batches, refusal fallback or web search through Bedrock, and it does not fetch PDF links, so a datasheet ecadlib could not download is not read. See docs/models.md.
 - Datasheet reads confirmed by more of the datasheet's own text (free, no model). A pinout drawing ("8-pin package connections, top view") now counts like a pin table: each pin number is paired with the name printed beside it, by position on the page, and a name halfway between two numbers is never guessed. A pin table on another page for a package with more pins than the part (TL074's 20-pin LCCC table after its 14-pin SOIC one) no longer keeps the part waiting. On the 17 reads of the 1000-part sample, 5 symbols are now released with no person's look instead of 2 (TL074CDR, M24C02-WMN6TP, SI4401BDY-T1-E3 added); none of 403 deliberately scrambled pinouts was accepted.
 - Datasheets: molded and chip parts (power inductors) whose datasheet prints the maker's land but not the terminal length are built from that land instead of failing (NRS4018). With no terminal to compare, the land must reach the body's ends and its pads must not meet, or the read fails its checks.
@@ -34,6 +207,24 @@ a minor release may change command-line options and file formats.
 
 ### Fixed
 
+- Real BOMs from open-source boards (a fresh-install test with nine of them, 2026-11-22), read better:
+  - A column with the maker and the part number together (`Manufacturer/MPN`: `YAGEO RC0402FR-071KL`) is split into
+    the two; `A X, B Y` gives the first maker's part, the second named as an alternate. Before, the maker's name was
+    part of the MPN (`Octavo_Systems_OSD3358-512M-BSM`) and nothing was found for it.
+  - Octopart's `Unit Price (@ Batch Size: 1)` column was read as the footprint (a "footprint" 0.45 held parts that
+    KiCad's library has), and its row of distributor names as a part with no name.
+  - A DigiKey order number in the MPN column (`WM15144-ND`) was released as the maker's part number. It is now left
+    out of the MPN, kept as the DigiKey number (Supplier 2), and said in the review.
+  - A line whose every cell says `DNP` became a held part named `DNP`; it now names no part (still DNP in triage).
+  - `ANY` under MPN and Manufacturer (Tomu's BOM) held each passive as "a maker's name, not a part number"; it is a
+    placeholder: no MPN, no maker.
+- A plain resistor or capacitor with a value and a size but no MPN (most passives in hobby KiCad BOMs) is a note to
+  fill the MPN, not a hold. `[release] mpn = "hold"` holds it again. Inductors, beads and every other part with no
+  MPN are still held. On the nine BOMs: 71 of 325 parts ready before, 95 of 323 after (the DNP-only lines are no part),
+  with no API key, no AI and no part-lookup keys.
+- CI: a Windows job installs the wheel in a clean venv on Python 3.10 and 3.13 and runs a new user's first
+  commands, without `PYTHONUTF8` (the test job sets it). The installed-package smoke test now also runs the librarian
+  on a small BOM (maker/MPN in one column, Ω and µ) and `ecadlib status`.
 - KiCad export: a part the librarian called passive only from its BOM line's letter (R5, C3, L1 with a folder that does not say so) got passive pins in the Altium symbol but kept its source's pin types (input, output) in the KiCad one. The plan now records the decision (`librarian.passive`) and the export and `resolve` use it.
 - Open items of the deep-dive testing (2026-11-12), closed:
   - Datasheet reader: a read that names a package of the standard table is now compared with it pad by pad, not only by the box around its leads. Held now: a terminal read twice too long or half as long on a larger part (the pads grow inwards, the box stays the same) and a two-pad part's length and width the other way round. A pad's centre over 0.5 mm from the package's, or a side over 0.75 mm and a quarter off, holds the read. Lands with a tab are left out of this check. An exposed pad far from the size its own name states (over 0.4 mm and a quarter) holds the read; it was a note before. A body far from the size code in its name (`EIA-3528`, `3216Metric`) holds the read. On the sweep of 609 one-value misreads: held 467 -> 484, built with changed pads 56 -> 40, gross ones 5 -> 3. The 88 real reads of the 2026-10-25 benchmark: none is newly held. A value read twice or half its size whose pads stay inside what makers draw for that package still cannot be told from the numbers.
@@ -81,9 +272,55 @@ a minor release may change command-line options and file formats.
 - A part source answering that the account's limit is used up (Nexar: "You have exceeded your part limit of 0") no longer counts as unreachable: a part number no source knows says Not found again, and the BOM check stops counting those lines as "source refused/unreachable".
 - The Altium dialog's status line no longer runs past its edge while Altium builds and installs the library; long progress text ends in "...".
 
+### Also in this release (pull requests merged without their own changelog lines)
+
+Summarised from the pull requests; each PR's description has the details.
+
+- Part search (DigiKey, Mouser, Nexar, LCSC): value and size read from makers' part numbers (#252); the part
+  search's case text kept and used, so fewer parts are held after it (#253, #254, #266); DigiKey's case found when
+  several makers share a part number (#258), its token renewed on a long run instead of HTTP 401 for every later part
+  (#257), its per-minute limit waited out and its daily limit stopped at (#260); Mouser's NXP case read after its
+  category (#260) and Mouser paced (#255); a typo-away listed number suggested, maker names in an MPN cell held
+  (#268); Molex zero-padded numbers and renamed makers matched, and the review says why no source lists a part
+  (#264); a Nexperia/NXP packing code (`,125`) is not part of the part number (#276); messy MPN cells cleaned (#266).
+- Kinds of parts: thermistors and varistors get their own kind and KiCad's own symbols (#261); fuses, test points and
+  mounting holes get symbols (#252), and fiducials and mounting holes release (#259); tantalum case lands and AVX chip
+  sizes (#252, #259); Coilcraft "XXX" inductor lands (#266); bead values in kilo-ohms (#268); diodes and LEDs in axial,
+  DO-15, PowerDI-123 and SOD-882 cases and a two-way TVS symbol (#269); transistors and SOT diodes, including SO-8
+  MOSFETs and diodes named by ANODE/CATHODE words (#272).
+- Releasing more parts with no person's look, only when an independent source agrees (#256, #263, #267, #270, #271,
+  #273, #275, #277): KiCad matches by name checked against the part search and the part number; a maker's land read
+  released when the PDF's land drawing prints its sizes; pinouts confirmed from a datasheet's pin drawing by a second
+  picture-only read checked against package rules; free checks that use the part's own PDF from your datasheet folder
+  or your assistant's downloads. An error inside one of these checks keeps the part held (#271).
+- Holding wrong parts (the datasheet reader and the BOM): reader holds for misreads found on parts the code had not
+  seen (#245, #247), on tab packages (#238), and for lead widths read half or twice, a named exposed pad left
+  out, or a pitch that is not the package name's (#243); a BOM with no Value column no longer releases resistors,
+  capacitors and inductors with a blank value (#240); a resistor or capacitor whose Value is only a rating (`50V`,
+  `X7R`, `1%`, `0603`) or whose sizes clash is held (#249, #250); foreign-language and EAGLE BOM headers read (#249);
+  a part's own symbol kept on a re-run (#254); fixes from the 100-part real BOM run, including stacked pins, TVS
+  direction and connector symbols (#255).
+- Real BOMs from public hardware projects (#285): EAGLE Partlist / Values text exports read (they were refused or
+  read as one garbled column); EAGLE's `Part` column of designators beside a real MPN column is the designator; MPN
+  cells holding a size and value (`0805, 4.7uF`), a Digi-Key order code (`-ND`) or plain words (`Blue LED`) are not
+  used as the part number. Held now instead of built wrong: a resistor whose bare-number Value disagrees with its part
+  number's code (Value `430`, MPN `0603WAF4302T5E` = 43k), `0603M` / `1608M` read as a resistance, and a chip passive
+  sized only by its part number under a footprint name of another chip size. A footprint name Altium can't store holds
+  that part instead of stopping the run; an .xlsx openpyxl refuses is read by the plain reader; a Git LFS pointer file
+  says so.
+- Datasheets: distributor copies labelled as such, and every link listed when a PDF must be fetched by hand (#274).
+- Site: a new Altium and KiCad walkthrough (#231).
+- Testing fixes: BOM grouping, metric chip sizes, duplicate part names, designators that name no entry, kicad-install
+  safety, plugin and command crashes (#242); LCSC package ranking, EasyEDA conversion, reader over-holds, edited
+  ledger lines, the spend cap across repeats and JSON errors (#244); `step-gen` takes a `.kicad_mod` file and the
+  DbLib export is ready for pandas 4 (#230).
+- Benchmark: a stricter scorer (a footprint from the reader's own land counts as right only when that land was checked
+  against the datasheet) and active-low pins from the PDF (#236, #237); `eval run --skip` for the held-out part of
+  the set (#243); the site's benchmark card made honest (#228).
+
 ## [0.4.0] - 2026-10-27
 
-The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right with none built wrong (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
+The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_state v3), so it is a minor release. Highlights: the release gate (only parts that pass the release check publish), change control (`ecadlib part`), the live accuracy benchmark at 87 of 110 parts fully right on the parts the code was tuned on (docs/benchmark.md), `ecadlib nexar signin`, `ecadlib mcp --http`, and the time and review lines in `ecadlib status`.
 
 ### Added
 
@@ -438,7 +675,8 @@ The first release since 0.3.1. It writes files 0.3.1 cannot read (librarian_stat
 - Initial prototypes: IPC-7351B footprint generator driven by `package_schema.json`, BOM triage
   against local KiCad libraries and public part sources, and Altium Database Library (DbLib) export.
 
-[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/oliBrowne/PCBLIVINGLIBRARY/compare/v0.2.0...v0.3.0

@@ -183,6 +183,21 @@ def test_window_without_pcbnew_registers_nothing_and_reads_kicads_version():
     assert mod.kicad_major({"KICAD11_SYMBOL_DIR": "/s"}) == 11
     line = mod.place_yourself({"part": "LM358DR", "footprint": "SOIC-8_3.9x4.9mm_P1.27mm"})
     assert "ecadlib:LM358DR" in line and "ecadlib:SOIC-8" in line and "Add Symbol" in line, line
+    res = {"part": "LM358DR", "symbol": "LM358DR-TI", "footprint": "SOIC-8_3.9x4.9mm_P1.27mm", "units": "2"}
+    line = mod.place_yourself(res, copied=True)
+    assert "ecadlib:LM358DR-TI" in line and "V and click" in line and "other 1 unit:" in line, line
+    assert "unit" not in mod.place_yourself(dict(res, units="1"), copied=True)
+
+
+@lite
+def test_window_reads_only_the_jobs_own_paste_file(tmp_path):
+    mod = _window_module()
+    (tmp_path / "paste.txt").write_text("(lib_symbols)", encoding="utf-8")
+    assert mod.paste_text(str(tmp_path), {"paste": "paste.txt"}) == "(lib_symbols)"
+    assert mod.paste_text(str(tmp_path), {}) == ""
+    assert mod.paste_text(str(tmp_path), {"paste": "gone.txt"}) == ""
+    (tmp_path / "x").mkdir()                                       # so x/../paste.txt would open without the check
+    assert mod.paste_text(str(tmp_path / "x"), {"paste": "../paste.txt"}) == ""            # never outside the job
 
 
 @lite

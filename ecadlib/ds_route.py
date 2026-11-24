@@ -1108,6 +1108,12 @@ FAILED = re.compile(r"^(schema:|self-check:|symbol:|footprint_gen\.build failed|
 #     channel's pin (the numbered-bank check) is held here: it builds a symbol wired to the wrong channel.
 SOFT_FAILED = re.compile(r"^(schema:|self-check:(?!.*(?:too far apart to build from|would be built without its exposed pad))|footprint_gen\.build failed|altium_lib\.symbol_from_json failed|"
                          r"symbol:(?!.* bank has no ))", re.I)
+# One build line is not soft (review 2026-11-23, 1.7): a build that succeeds with pads that touch, when the pads were
+# placed from the read's dimensions (an SMA's terminal read twice was written with its two pads 0 mm apart, and the
+# librarian builds that read as it is). A pad table is the maker's land copied pad by pad, where pads that meet can be
+# the drawing's own (a power package's drain leads on its pad, a 0.35 mm ball grid: eval gate lands scored right): that
+# stays advice, and the release check holds the footprint for a person.
+SHORTS = re.compile(r"^footprint_gen\.build failed: the pads would short", re.I)
 SYMBOL_FAILED = re.compile(r"^symbol:", re.I)
 
 
@@ -1118,6 +1124,8 @@ _EP_SMALL = re.compile(r"^exposed_pad\.\w+: ([\d.]+) mm is implausibly small for
 
 
 def _soft(line, spec=None):
+    if SHORTS.match(line) and not (spec or {}).get("pad_table"):
+        return False
     if SOFT_FAILED.match(line):
         return True
     m = _EP_SMALL.match(line)
@@ -1183,7 +1191,7 @@ def unread_copper(spec):
     out = []
     dip = None
     for u in (spec or {}).get("unresolved") or []:
-        top = unresolved_field(u).split(".")[0]
+        top = named_field(u)
         if top in ("drill", "hole", "holes", "land") and not DIP_PLACE.search(str(u)):   # a plain DIP's hole and
             # pad sizes: KiCad's standard ones fill them (never where the pins are: positions, rows, pitch)
             if dip is None:                           # (the librarian puts them in: datasheet.standard_dip_holes)
@@ -1219,6 +1227,79 @@ def unresolved_field(u):
     """'lead_span (not printed)' -> 'lead_span': the field an unresolved entry names."""
     m = re.match(r"\s*([A-Za-z_.]+)", str(u))
     return m.group(1) if m else ""
+
+
+def named_field(u):
+    """The package field an unresolved entry is about, however the model worded it (review 2026-11-23: only an entry
+    that began with the exact field name held, so 'E (lead span): digits blurred', 'lead span blurred',
+    'package.lead_span', 'Lead_span unreadable' and 'the lead span' were all built from the guessed value): the entry's
+    first word when that is a field, else a field named anywhere in it with case, spaces and punctuation folded
+    ('lead span' is lead_span), the longest name at the earliest place, one that changes copper before an advisory
+    one; an exposed pad by its usual words (EP, thermal pad). '' when it names none."""
+    from .datasheet import SCHEMA
+    from .crosscheck import EP_WORDS
+    known = (set(SCHEMA["properties"]) | set(ADVISORY)) - {"unresolved"}
+    top = unresolved_field(u).split(".")[0].lower()
+    if top in known:
+        return top
+    text = "_" + re.sub(r"[^a-z0-9]+", "_", str(u).lower()).strip("_") + "_"
+    found = sorted((text.find(f"_{f}_"), -len(f), f) for f in known if f"_{f}_" in text)
+    copper = [f for _, _, f in found if f not in NOT_COPPER + ADVISORY]
+    if copper or found:
+        return copper[0] if copper else found[0][2]
+    return "exposed_pad" if EP_WORDS.search(str(u)) or re.search(r"\bEP\b", str(u)) else ""
+
+
+# an unresolved entry that says the thing does not apply to this part: nothing was guessed
+NOT_APPLICABLE = re.compile(r"\bnot[\s_-]+applicable\b|\bdoes(?:\s+not|n't)\s+apply\b|(?<![\w/])n\s*/\s*a(?![\w/])|^\W*(?:none|nothing|nil)\W*$", re.I)
+# 2026-11-23 review round 3 (B1): the things an unresolved entry may be about that no pad, pin or outline stands on
+# (the part's weight, its marking, its thermal figures, how it is packed and ordered, its moisture level, RoHS) ...
+HARMLESS_WORDS = frozenset("weight mass marking markings thermal theta rth packing packaging tape reel tray tube ordering "
+                           "orderable moisture msl rohs reach halogen".split())
+# ... and the words that may stand beside them, or beside "not applicable", and say nothing more. Every word of an
+# entry must be one of the two: "marking code not shown" is harmless, "cathode marking not found" and "marking
+# differs: datasheet is for a different part" are not
+HARMLESS_FILLER = frozenset("not no none nothing nil n a an the this that of for and or in on to per is was are were it its "
+                            "applicable apply does doesn t given stated shown found printed specified listed available "
+                            "provided mentioned indicated included datasheet document sheet unknown missing omitted code "
+                            "codes quantity qty status level sensitivity information info data details top device part "
+                            "component resistance impedance characteristics ratings junction ambient case size free "
+                            "compliance compliant".split())
+
+
+def harmless(u):
+    """Is an unresolved entry that names no package field wholly about a thing the footprint does not stand on
+    (HARMLESS_WORDS), or does it only say that nothing applies ("not applicable", "N/A", "none")? Every word must be
+    known: a word this does not know ("scale", "variant", "blurry", a JEDEC dimension letter: e, D, E, b, L, D2, A1) may
+    be the doubt, so the entry counts."""
+    words = re.findall(r"[^\W\d_]+", str(u).lower())
+    if not words or not all(w in HARMLESS_WORDS or w in HARMLESS_FILLER for w in words):
+        return False
+    return any(w in HARMLESS_WORDS for w in words) or bool(NOT_APPLICABLE.search(str(u)))
+
+
+def open_unresolved(spec):
+    """The read's unresolved entries that are not clearly advisory: everything but the fields no pad and no pin
+    stands on (ADVISORY, NOT_COPPER) and a limit left out of a dimension whose value was read (a nominal-only
+    drawing). A read that says it could not read something is not released with no person on a footprint built from
+    its own numbers, whatever agrees with it: a second read can make the same guess (review 2026-11-23).
+    Round 2 of that review skipped every free-form entry without a word about the drawing, and every "n/a": "scale",
+    "variant A vs B", "e", "the scan is blurry", "wrong datasheet?", "from memory" and "not applicable: pitch" stopped
+    holding. Round 3 (B1) turns it round: an entry that names a field that changes copper holds, as it always did
+    ("lead_span: n/a" too: a read that calls a build field not applicable has not read it), and one that names no
+    field holds unless every word of it is harmless (harmless: "weight", "marking code", "thermal resistance not
+    stated", "tape and reel quantity", "RoHS status", "not applicable", "N/A", "none")."""
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    out = []
+    for u in (spec or {}).get("unresolved") or []:
+        top = named_field(u)
+        if top in NOT_COPPER + ADVISORY or not top and harmless(u):
+            continue
+        v = (spec or {}).get(top) if top else None
+        if ONLY_LIMITS.search(str(u)) and (num(v) or isinstance(v, dict) and (num(v.get("nom")) or num(v.get("min")) and num(v.get("max")))):
+            continue
+        out.append(str(u))
+    return out
 
 
 def assess(res):

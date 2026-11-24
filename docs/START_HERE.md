@@ -26,6 +26,8 @@ The first start opens the setup page in your web browser. It has four steps:
    (Ollama), or no AI for now. Paste your API key and press **Check key**. You pay the provider directly. The key is
    stored only on this computer, encrypted with your Windows account. Without AI, parts still come from KiCad's
    library, EasyEDA/LCSC and ecadlib's built-in standard packages; only parts that need a datasheet read are held.
+   (On the command line, `ecadlib librarian my_bom.csv --read-with-assistant` lets an AI assistant you already use
+   read those datasheets instead, with no key: see [the README](../README.md#no-api-key).)
 2. **Your tools.** ecadlib shows which of Altium Designer and KiCad it found. Pick the one you make libraries for,
    or both.
 3. **Folders.** The workspace, where ecadlib keeps your BOMs and the libraries it builds (default:
@@ -83,8 +85,9 @@ parts and counts them: already in your library, found in a public library, or mi
 
 ### 3d. Fill the library
 
-**Fill the library now** finds or builds every missing part: KiCad's library and ecadlib's standard packages first,
-then EasyEDA/LCSC, and only then the AI datasheet reader. The dialog shows its progress live.
+**Fill the library now** finds or builds every missing part: your own libraries and KiCad's library first, then
+EasyEDA/LCSC, then ecadlib's standard packages, and only then the AI datasheet reader. The dialog shows its
+progress live.
 
 Before any datasheet is read by AI, the dialog shows the model and the estimated cost ("3 parts need the datasheet
 read by AI (claude-opus-5-5): about $0.42, at most $1.10") and waits for you. Say no and those parts stay held. Afterwards it shows what the reads really cost. [api-keys.md](api-keys.md) has the details.
@@ -143,7 +146,9 @@ the window stops ecadlib. Nothing runs in the background after that.
 
 ## If something is wrong
 
-- **The browser page does not open:** go to <http://127.0.0.1:8765/> yourself.
+- **The browser page does not open:** press **Open ecadlib** in the ecadlib window, or start ecadlib again. Typing
+  the address <http://127.0.0.1:8765/> yourself is not enough in a browser ecadlib has not opened yet: the page answers
+  only to a browser that got ecadlib's link, so that other programs on the computer cannot use it.
 - **"no Altium 365 (Nexar) token":** run `ecadlib nexar signin` (or save a token on the setup page, **Optional keys**),
   then try again.
   Altium does not need a restart.

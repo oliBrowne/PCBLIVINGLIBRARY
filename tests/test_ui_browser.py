@@ -219,7 +219,8 @@ def _servers(d):
         srv = S.make_server(ws, "127.0.0.1", 0)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         srvs.append(srv)
-        return f"http://127.0.0.1:{srv.server_address[1]}/"
+        from ecadlib.ui import access as AC             # the address ecadlib would open: with the run's key
+        return AC.with_key(f"http://127.0.0.1:{srv.server_address[1]}/", srv.access.key)
     try:
         for w in (1280, 390):
             urls["local"][str(w)] = up(FX.build(Path(d) / f"local{w}")[0])

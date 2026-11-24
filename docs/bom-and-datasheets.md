@@ -32,7 +32,7 @@ python3 -m tests.test_offline
   * `unverified (source unreachable)`, which is kept separate on purpose so a network failure is never reported as "needs generation"
 * **Providers** (`providers.py`, interface `lookup(line) -> SourceResult`, raising `NotConfigured`):
 
-  Default order: `nexar,digikey,mouser,jlcpcb_search,easyeda`. The official APIs come first; each is skipped with a
+  Default order: `nexar,digikey,mouser,jlcpcb_search,lcsc_search,easyeda`. The official APIs come first; each is skipped with a
   "not configured" note until its key is set. None of them hands out symbol or footprint geometry, so they identify
   the part (maker, description, datasheet link, package, and the LCSC number when LCSC sells it) and the EasyEDA
   route or the datasheet reader supplies the CAD data.
@@ -43,11 +43,12 @@ python3 -m tests.test_offline
   | `digikey` | yes (Product Information API v4) | OAuth2 client credentials (`DIGIKEY_CLIENT_ID/SECRET`) | MPN match, maker, description, datasheet, package |
   | `mouser` | yes (Search API v1) | `MOUSER_API_KEY` | MPN match, maker, description, datasheet |
   | `jlcpcb_search` | **no**: anonymous JSON POST to `jlcpcb.com/api/overseas-pcb-order/v1/shoppingCart/smtGood/selectSmtComponentList` (from easyeda2kicad 1.0.1) | none | MPN → LCSC, only when no official source found the LCSC number |
+  | `lcsc_search` | **no**: `GET https://jlcsearch.tscircuit.com/api/search?q={MPN}` (tscircuit's free community index of JLCPCB/LCSC parts) and, for each exact match, `GET https://wmsc.lcsc.com/ftps/wm/product/detail?productCode={LCSC}` (the JSON LCSC's own website reads) | none | MPN → LCSC with maker, package, description and LCSC's datasheet link; asked only while no LCSC number is known (JLCPCB's search refused or found nothing). Exact MPN only; a maker is named only when every exact listing's product page was read |
   | `easyeda` | **no**: `GET https://easyeda.com/api/products/{LCSC}/components` with `Referer: https://easyeda.com/` | none | the symbol, footprint and 3D data (the only free source of ready CAD data) |
   | `snapmagic` | partner token only, no self-serve public API | | stub |
   | `samacsys` | account plus Library Loader or partner access, no documented public REST API | | stub |
 
-  * The two undocumented endpoints are on by default and always asked after the official APIs: many parts (often
+  * The undocumented endpoints are on by default and always asked after the official APIs: many parts (often
     Chinese-made ones such as YXC crystals) are only on LCSC. `ecadlib init` asks whether to use them (`--no-unofficial`
     answers no); `[providers] unofficial = false` in `ecadlib.toml` keeps them out of triage, the librarian's EasyEDA
     source and the UI, and parts then come from your libraries, the KiCad libraries, the standard packages and the
@@ -103,6 +104,9 @@ python3 -m tests.test_integration_io
   * KiCad netlist / BOM exports: the XML from `kicad-cli sch export netlist --format kicadxml`, `sch export python-bom` and Eeschema's BOM generator, and the S-expression `.net`. Picked by content, so other `.xml` files are not taken for one; an XML with a DOCTYPE or ENTITY is refused.
   * `.xlsx` without openpyxl: when openpyxl is missing, the workbook is read with `zipfile` and ElementTree (shared and inline strings, sparse cells, numbers written the same way as before). pandas is still a dependency.
   * CSV: comma / semicolon / tab / pipe and UTF-8 (with or without BOM), cp1252, latin-1 and UTF-16 were already detected; they are now pinned by fixture files in `tests/fixtures/bom_inputs/`.
+  * One column for the maker and the part number (`Manufacturer/MPN`, `Mfr / MPN`, `Manufacturer & Part Number`, as PocketBeagle's BOM has): `YAGEO RC0402FR-071KL` is read as the maker YAGEO and the part RC0402FR-071KL. `MTCONN MCTF-0403, Suntech ST-TF-003A` is the first maker's part, with the second named as an alternate. A header without the `/`, `&` or `and` (`Manufacturer Part Number`) is the MPN alone, as before.
+  * A DigiKey order number in the MPN column (`WM15144-ND`, `490-3285-1-ND`) is not the maker's part number: it is left out of the MPN, kept as the part's DigiKey number (Supplier 2), and the review says so. A line whose cells only say `DNP` (`J3 | DNP | DNP | DNP`) names no part: it stays a DNP line in the triage report and no library part is made for it. `ANY` / `Generic` in the MPN and Manufacturer columns name no part (any maker's part of that value).
+  * Price columns are not footprints: Octopart's `Unit Price (@ Batch Size: 1)` is no chip `Size`.
   * `[bom] columns` may give a list of house names for a field (`mpn = ["Herst.-Nr.", "Mfr Part #"]`): the first one present in a BOM is used. The named headers also help find the header row below title rows.
   * Altium ActiveBOM `.BomDoc` / `.PrjPcb` / `.SchDoc` were already read ([BOM from an Altium project](#altium_projectpy-bom-from-an-altium-project-and-where-used)).
 * **Checked with real KiCad:** `tests/fixtures/kicad_sch/` is a hierarchical schematic (one sheet used twice, a nested sheet in a sub-folder, a 2-unit part, a power symbol, a DNP part and an excluded test point). KiCad 7.0.11's `kicad-cli` exported it as XML, S-expression and python-bom netlists, and all three read the same lines as our schematic reader. `test_kicad_cli_agrees_with_our_schematic_reader` repeats that whenever `kicad-cli` is installed and skips otherwise.

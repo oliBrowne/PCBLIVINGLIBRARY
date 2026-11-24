@@ -42,7 +42,7 @@ else:
     with tempfile.TemporaryDirectory() as d:
         env = {**os.environ, "ECADLIB_HOME": str(Path(d, "home")), "HOME": d, "USERPROFILE": d}
         env.pop("ECADLIB_WORKSPACE", None)
-        run = lambda *a: subprocess.run([str(exe), *a], cwd=d, env=env, capture_output=True, text=True)
+        run = lambda *a: subprocess.run([str(exe), *a], cwd=d, env=env, capture_output=True, text=True, errors="replace")
         r = run("demo", "-o", "demo")
         assert r.returncode == 0 and "ready" in r.stdout, r.stdout + r.stderr
         assert list(Path(d, "demo").rglob("plan.json")) and list(Path(d, "demo").rglob("*.kicad_sym")), "demo wrote no library"
@@ -52,4 +52,16 @@ else:
         assert r.returncode == 0, r.stdout + r.stderr
         bad = [c for c in json.loads(r.stdout)["checks"] if c["level"] == "FAIL"]
         assert not bad, bad
+        # then their own BOM, the way open-source boards write one: maker and MPN in one column, Ω and µ in the
+        # descriptions, a passive with no MPN. Offline (the HTTP cache only), so it is the same on every runner; on
+        # Windows the console is not UTF-8 unless PYTHONUTF8 is set, which this job does not set
+        Path(d, "board_bom.csv").write_text(
+            "Designator,Manufacturer/MPN,Qty,Description\n"
+            '"R1,R2",YAGEO RC0603FR-0710KL,2,"10KΩ resistor, 0603"\n'
+            "C1,,1,\"1µF capacitor, 0603\"\n", encoding="utf-8")
+        r = run("librarian", "board_bom.csv", "--offline", "--sources", "standard")
+        assert r.returncode in (0, 2) and "Traceback" not in r.stdout + r.stderr, r.stdout + r.stderr
+        assert list(Path(d).rglob("board_bom/plan.json")), r.stdout + r.stderr
+        r = run("status")
+        assert r.returncode == 0 and "Traceback" not in r.stdout + r.stderr, r.stdout + r.stderr
 print(f"ok: ecadlib {ecadlib.__version__} from {pkg}, {len(specs)} package specs")

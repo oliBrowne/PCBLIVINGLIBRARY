@@ -579,6 +579,15 @@ class Workspace:
             q["offline"] = True
         return q
 
+    def _approve_cost(self, q, approved_usd, over_limit_ok, price_unknown_ok, what=""):
+        """ai_cost.approve for every paid step. Review 2026-11-23 (2.3): when the step was asked for over MCP, the
+        approval is the person's, not the call's arguments: their grant of this quote (`ecadlib confirm`) or the cap
+        they set themselves in the rules file (confirm.spend); without either nothing starts (confirm.NeedsPerson)."""
+        from . import ai_cost as AC, confirm as CF
+        if CF.caller():
+            approved_usd, over_limit_ok, price_unknown_ok = CF.spend(self.root, q, approved_usd, what)
+        return AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+
     def ai_read(self, bom, approved_usd=None, over_limit_ok=False, price_unknown_ok=False, parts=None, progress=None):
         """Read the datasheets of ai_quote() after the person approved its cost: one synchronous request per part,
         held to approved_usd (the Reader's max_cost_usd), built, marked verify, release check re-run. The summary's
@@ -596,7 +605,7 @@ class Workspace:
             return dict(r, ai=None, ai_cost=None)
         if not q["key_set"]:
             raise ValueError(q["text"])
-        cap, yes = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+        cap, yes = self._approve_cost(q, approved_usd, over_limit_ok, price_unknown_ok, out)
         rd = self._datasheet_reader(out, batch=False, yes=yes)
         rd.set_cap(cap)                               # never more than the person saw and approved: a cap they set
         log, n = [], [0]
@@ -615,22 +624,25 @@ class Workspace:
         r["ai_cost"] = AC.after(q, AC.spent(out, since))
         return r
 
-    def release_check(self, bom, allow=(), unallow=(), user=None):
+    def release_check(self, bom, allow=(), unallow=(), user=None, reason="", via="local page"):
         """Re-run the release check on the librarian's plan, optionally releasing named parts despite their
         failures (allow) or taking that back (unallow). user is recorded as the person who gave the allow
         (approvals' no_self_approval uses it): an allow needs it (refused without, as an approval is), never taken from
-        this computer's identity, which on a shared computer is not who clicked. Never touches the network.
+        this computer's identity, which on a shared computer is not who clicked. reason: why they release it; with
+        who and when it goes into the library's ledger (release_check.record_allow), which is what makes the plan's
+        allow block count. Never called with allow for an MCP client (mcp_server asks the person instead). Never
+        touches the network.
         While another run holds the library lock (a librarian run, a publisher), the decision is recorded in
         plan.json at once under plan.lock only: that run keeps decisions recorded meanwhile (librarian DECISIONS,
         save_plan), and the release itself goes into the ledger when a writer next settles the library (the run's
         own baseline) -> the summary then says so in `pending`."""
         try:
             with self._plan_lock(bom):
-                return self._release_check(bom, allow, unallow, user)
+                return self._release_check(bom, allow, unallow, user, reason=reason, via=via)
         except LibraryBusy:
             pass
         with self._decision_lock():
-            out = self._release_check(bom, allow, unallow, user, record=False)
+            out = self._release_check(bom, allow, unallow, user, record=False, reason=reason, via=via)
         out["pending"] = (f"recorded; another run is changing this library right now, so the release is recorded in "
                           f"the change ledger when it finishes")
         return out
@@ -647,7 +659,7 @@ class Workspace:
                 raise ValueError("another ecadlib command is changing this plan right now; decide again in a minute")
             yield
 
-    def _release_check(self, bom, allow=(), unallow=(), user=None, record=True):
+    def _release_check(self, bom, allow=(), unallow=(), user=None, record=True, reason="", via="local page"):
         from . import release_check as RC
         user = user.strip() if isinstance(user, str) else ""
         if allow:                                          # as _approve_part: never this machine's git identity, which on a
@@ -656,6 +668,12 @@ class Workspace:
                                  "\"Ann Lee <ann@example.com>\"); it is recorded so that person cannot also approve it")
             if len(user) > 200 or any(c in user for c in "\r\n\0"):
                 raise ValueError("user must be one line of at most 200 characters")
+            reason = reason.strip() if isinstance(reason, str) else ""
+            if not reason:                                 # security review 2026-11-23, 2.4: who, when and why
+                raise ValueError("say why: a release anyway needs a reason (it is recorded with your name, so the "
+                                 "person who signs the part off can see why it went out with its failures)")
+            if len(reason) > 500 or "\0" in reason:
+                raise ValueError("the reason must be at most 500 characters")
         bom_path = self._bom_path(bom)
         out = self._librarian_dir(bom_path)
         plan_f = out / "plan.json"
@@ -670,7 +688,10 @@ class Workspace:
         if allow:                                          # the person who released it, so no_self_approval can see them
             from .approvals import post_check, stamp_allow
             stamp_allow(items, list(allow), user)
-            post_check(items, out, rows)
+            RC.record_allow(items, out, list(allow), user, reason, via=via)   # who / when / why in the ledger: the
+            post_check(items, out, rows)                                      # proof the allow block needs (2026-11-23)
+        if unallow:
+            RC.record_unallow(out, list(unallow), user, via=via)
         if allow and record:                               # change control: revision 1 of what was released
             RC.record_releases(items, out, list(allow), user)
         write_text_atomic(plan_f, json.dumps(items, indent=2))
@@ -1017,7 +1038,7 @@ class Workspace:
                              "datasheet_estimate for the cost")
         q = self.datasheet_quote(bom, sync, parts)
         if q is not None:                             # None: nothing left to buy (a submitted batch is only collected)
-            cap, unknown_ok = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+            cap, unknown_ok = self._approve_cost(q, approved_usd, over_limit_ok, price_unknown_ok, out)
             rd.yes = rd.yes or unknown_ok
             rd.set_cap(cap)                           # never more than the person saw and approved: a cap they set
         log = []
@@ -1338,7 +1359,7 @@ class Workspace:
         if self.offline:
             raise ValueError(STYLE_OFFLINE)
         q = self.style_quote(model)
-        AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+        self._approve_cost(q, approved_usd, over_limit_ok, price_unknown_ok, "the house style guide")
         prof = self._style_or_raise()
         if progress:
             progress(1, 2, "the model is writing the guide")
@@ -1420,7 +1441,7 @@ class Workspace:
                         "text": "the model was not asked: approve the quote (approved_usd) to have it reword the parts"}
             if not quote["key_set"]:
                 raise ValueError(quote["text"])
-            AC.approve(quote, approved_usd, over_limit_ok, price_unknown_ok)
+            self._approve_cost(quote, approved_usd, over_limit_ok, price_unknown_ok, plan_f.parent)
             more, rejected = HS.adapt_with_model(items, prof, self.rules(), model, only=only)
             for k, v in more.items():
                 done.setdefault(k, []).extend(v)
@@ -1513,7 +1534,7 @@ class Workspace:
                                           "`ecadlib keys set`.", "")
             pr["ai"] = q
         if not render_only and q is not None:     # a paid call: only for the amount the person approved
-            cap, unknown_ok = AC.approve(q, approved_usd, over_limit_ok, price_unknown_ok)
+            cap, unknown_ok = self._approve_cost(q, approved_usd, over_limit_ok, price_unknown_ok, f"visual check of {target}")
             import copy
             rules = copy.deepcopy(rules)
             pc = rules.setdefault("agent", {}).setdefault("proof", {})

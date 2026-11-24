@@ -19,6 +19,11 @@ Checks (each runs in-process; a check whose credentials are missing is skipped w
              the usage index (`ecadlib project scan`) that use an older revision than the released one, and KiCad
              projects there whose parts differ from the library in a way the [change] policy holds
              (`ecadlib project check`). Reports only; it never applies a change.
+  store      the shared store, run by itself whenever [store] url is set or the plan holds a part that owes the store
+             (never listed, never run otherwise), on a plan: parts built from a store record, or released by a store
+             record's agreement, that the store has since withdrawn, disputes, no longer lists or no longer rates high
+             enough, or that it cannot vouch for (switched off; its withdrawn list unreadable and no copy younger than
+             30 days saved here), with the reason (the next librarian run holds them). Never an error.
 
 State (--state DIR, default out/upkeep_state): one JSON file per check; what each run saw, so the next run reports only
 transitions. Report: <REPORT>.md and <REPORT>.json (default out/upkeep). Exit codes: 0 nothing new, 1 new changes,
@@ -45,7 +50,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from . import userconfig as UC
 
-CHECKS = ("lifecycle", "upstream", "a365", "changes")
+CHECKS = ("lifecycle", "upstream", "a365", "changes")        # the default list ([upkeep] checks)
+STORE_CHECKS = ("store",)                                     # run by itself when [store] url is set; may be named
 CUT_CHECKS = ("sourcing",)                          # removed on 2026-10-19; an old list that names one still runs
 LABEL = "ecadlib-upkeep"
 DEFAULTS = {"schedule": "weekly", "checks": list(CHECKS)}
@@ -108,9 +114,10 @@ class Source:
 
 class Ctx:
     """Clients the checks use; tests pass fakes. http: CachedHTTP-like; gitlab: upstream.GitLab; design: Nexar Design
-    client with gql(); env: environment mapping (credential checks)."""
-    def __init__(self, http=None, gitlab=None, design=None, env=None, cache="out/http_cache", offline=False):
+    client with gql(); env: environment mapping (credential checks); store: a store_client.Store (None: [store])."""
+    def __init__(self, http=None, gitlab=None, design=None, env=None, cache="out/http_cache", offline=False, store=None):
         self._http, self._gitlab, self.design, self.env = http, gitlab, design, os.environ if env is None else env
+        self.store = store
         self.cache, self.offline = cache, offline
 
     @property
@@ -404,9 +411,73 @@ def check_changes(src, state_dir, ctx, cfg, now, rules=None):
     return sec
 
 
+# ------------------------------------------------------------------ shared store
+def _store_on(rules, ctx):
+    """A shared store is set: [store] url (accept not "off"), or the ready Store a caller (a test) put in ctx."""
+    from . import store_client as SC
+    st = getattr(ctx, "store", None)
+    return bool(st.enabled) if st is not None else SC.configured(rules)
+
+
+def _owes_store(src):
+    """The plan holds a part that owes the shared store (store_client.depends): built from a record, or released by a
+    record's agreement. Such a part is checked whether or not a store is set (a store that is off cannot vouch)."""
+    from . import store_client as SC
+    return getattr(src, "kind", "") == "plan" and any(isinstance(it, dict) and SC.depends(it)
+                                                      for it in getattr(src, "items", None) or [])
+
+
+def check_store(src, state_dir, ctx, cfg, now, rules=None, store=None):
+    """Parts of the plan that owe the shared store (store_client.depends: built from a record, source
+    store:<key_id>@r<rev>, or released by a record's agreement, store_check) where that no longer holds
+    (store_client.problems: withdrawn, disputed, no longer listed, below [store] accept, or the store's withdrawn list
+    cannot be read). store: a ready store_client.Store (tests); None = the one [store] names, with --offline and
+    --cache."""
+    from . import store_client as SC
+    sec = _section("store")
+    if store is None:
+        store = SC.from_rules(rules or {}, cache_dir=ctx.cache, offline=ctx.offline)
+    off = not store.enabled or store.accept == "off"
+    if off and not _owes_store(src):
+        sec.update(status="skipped", reason="no shared store set ([store] url is empty, or accept = \"off\")")
+        return sec
+    if src.kind != "plan":
+        sec.update(status="skipped", reason="needs a plan.json (the parts' sources say which store record each came from)")
+        return sec
+    old = _load(state_dir / "store_state.json", {"version": 1, "updated": None, "seen": []})
+    seen, n = [], 0
+    for it in src.items or []:
+        if not isinstance(it, dict) or not SC.depends(it):
+            continue
+        n += 1
+        from . import release_check as RC       # only a release-anyway the ledger records (review 2026-11-23, 2.4)
+        covered = set(RC.allow_of(it, src.path.parent).get("failures") or [])
+        for d, why in SC.problems(it, None if off else store):
+            if any(why in str(c) for c in covered):   # a person released it despite this already
+                continue
+            p = SC.note_for(d, why)
+            key = _fp("store", it.get("name"), p)
+            seen.append(key)
+            if key not in old["seen"]:
+                kind = "store: " + ("cannot vouch" if d.get("unchecked") else "lifted holds back" if d["kind"] == "lifted"
+                                    else "withdrawn" if "withdrawn from" in why else "disputed" if "disputed" in why
+                                    else "record no longer stands")
+                sec["changes"].append(_change(kind, it.get("name"), f"store:{d['key_id']}@r{d['rev']}",
+                                              "held at the next librarian run", p))
+    sec["notes"] += [SC.safe(t) for t in store.trouble]
+    sec["notes"].append(f"{n} part(s) owe the shared store (built from it, or released by its agreement)"
+                        + ("; the store is switched off, so they are held until a person releases them or it is on "
+                           "again" if off else ""))
+    sec["resolved"] = [_change("resolved", "", "", "", f"{k} item(s) from earlier runs no longer seen")] \
+        if (k := len(set(old["seen"]) - set(seen))) else []
+    sec["_state"] = {"store_state.json": {"version": 1, "updated": now, "seen": seen}}
+    return sec
+
+
 # ------------------------------------------------------------------ run, report, state
 TITLES = {"lifecycle": "Lifecycle (NRND / EOL / stock)", "upstream": "KiCad upstream",
           "a365": "Altium 365 drift", "changes": "Change control (held changes, project drift)",
+          "store": "Shared store (withdrawn or disputed records)",
           "sourcing": "Price and stock (removed)"}
 
 
@@ -414,16 +485,19 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
         workspace=None, apply=False, rules=None, ctx=None, now=None, save=True):
     """Run the checks, write <out>.md and <out>.json, save the state (save=False leaves that to save_state)."""
     cfg = upkeep_rules(rules)
+    asked = bool(checks)
     checks = list(checks or cfg["checks"])
     cut = [c for c in checks if c in CUT_CHECKS]
     checks = [c for c in checks if c not in CUT_CHECKS]
-    bad = [c for c in checks if c not in CHECKS]
+    bad = [c for c in checks if c not in CHECKS + STORE_CHECKS]
     if bad:
-        raise ValueError(f"unknown check(s) {', '.join(bad)}; choose from {', '.join(CHECKS)}")
+        raise ValueError(f"unknown check(s) {', '.join(bad)}; choose from {', '.join(CHECKS + STORE_CHECKS)}")
     workspace = workspace or ((rules or {}).get("altium365") or {}).get("workspace") or None
     ctx, now, state_dir = ctx or Ctx(), now or _now(), Path(state_dir)
     src = Source(input_path, manifest, bom, dict(((rules or {}).get("bom") or {}).get("columns") or {}) or None)
-    prev = _load(state_dir / "upkeep_last.json", {}).get("date")
+    if not asked and "store" not in checks and (_store_on(rules, ctx) or _owes_store(src)):
+        checks.append("store")     # the shared store's check runs by itself whenever a store is set, or the plan holds
+    prev = _load(state_dir / "upkeep_last.json", {}).get("date")   # a part that owes it; never otherwise
     sections = []
     for name in checks:
         try:
@@ -433,6 +507,8 @@ def run(input_path, checks=None, state_dir="out/upkeep_state", out="out/upkeep",
                 sec = check_upstream(src, state_dir, ctx, cfg, now, apply)
             elif name == "changes":
                 sec = check_changes(src, state_dir, ctx, cfg, now, rules)
+            elif name == "store":
+                sec = check_store(src, state_dir, ctx, cfg, now, rules, getattr(ctx, "store", None))
             else:
                 sec = check_a365(src, state_dir, ctx, cfg, now, workspace, rules)
         except Exception as e:                       # one broken check never hides the others
@@ -512,7 +588,10 @@ class GitHubError(Exception):
 
 def default_runner(cmd, input=None, cwd=None):
     """(returncode, stdout, stderr) of a command; tests pass a fake."""
-    if shutil.which(cmd[0]) is None:
+    from .progpath import resolved                   # git / gh from PATH, never a copy in the current folder or in
+    try:                                             # the folder it works in (review 2026-11-23, 2.6)
+        cmd = resolved(cmd, avoid=[cwd])
+    except FileNotFoundError:
         return 127, "", f"{cmd[0]}: command not found"
     p = subprocess.run(cmd, input=input, capture_output=True, text=True, cwd=cwd)
     return p.returncode, p.stdout, p.stderr
@@ -654,7 +733,8 @@ def main(argv=None, ctx=None, gh=None, runner=None, notifier=None):
     ap = argparse.ArgumentParser(description="Weekly library upkeep: lifecycle, KiCad upstream, Altium 365 drift "
                                              "and change control; report what is new; one GitHub issue or PR")
     ap.add_argument("input", help="altium365 plan.json (all checks) or a BOM .csv/.xlsx (lifecycle)")
-    ap.add_argument("--checks", help=f"comma list from {','.join(CHECKS)} (default: [upkeep] checks, else all)")
+    ap.add_argument("--checks", help=f"comma list from {','.join(CHECKS + STORE_CHECKS)} (default: [upkeep] checks, else "
+                                     "all; store runs by itself when [store] url is set)")
     ap.add_argument("--state", default="out/upkeep_state", help="folder with the last run's state")
     ap.add_argument("-o", "--out", default="out/upkeep", help="report path stem (.md and .json)")
     ap.add_argument("--manifest", help="KiCad provenance manifest.json (default: next to the plan, or <plan dir>/models/)")
@@ -742,6 +822,11 @@ def _gitlab_client(rules, a, runner=None):
     token = UC.secret(tok_env)
     if not token:
         raise forge.GitLabError(f"no GitLab token: set ${tok_env} (a project or personal access token with api scope)")
+    # review 2026-11-23 (2.2): a rules file names the token and the server; --gitlab-api on the command line with the
+    # default token name is the person's own word
+    why = None if a.gitlab_api and tok_env == "GITLAB_TOKEN" else forge.token_refused(tok_env, api)
+    if why:
+        raise forge.GitLabError(why)
     return forge.GitLab(proj, token, api=api)
 
 

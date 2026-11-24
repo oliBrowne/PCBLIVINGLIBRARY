@@ -34,7 +34,7 @@ name given; ecadlib never puts a key into the environment or writes it anywhere 
 no hosted service of this project; requests go only to the endpoint you configure."""
 import ipaddress, os, re
 from urllib.parse import urlparse
-from .. import userconfig as UC
+from .. import keyhosts as KH, userconfig as UC
 
 PROVIDERS = ("anthropic", "bedrock", "openai-compatible")
 # preset name -> (base_url, key env var name); every preset is an openai-compatible endpoint
@@ -245,12 +245,42 @@ def key_for(ep, explicit=None, environ=None):
             return None
     if explicit:
         return explicit
-    k = UC.secret(ep["key_env"], env) if ep.get("key_env") else None
+    # review 2026-11-23 (2.2): the key name and the server both come from a rules file, which may merely sit in the
+    # folder the command runs in; a key goes only to the service it is for, or to a host this user allowed (keyhosts)
+    named = ep.get("key_env") if ep.get("key_env") and KH.ok(ep["key_env"], key_host(ep), env) else None
+    k = UC.secret(named, env) if named else None
     if ep["provider"] == "anthropic":
         return k or UC.secret(ANTHROPIC_KEY, env)
     if k:
         return k
+    if ep.get("key_env") and not named:
+        return None                                   # a key was named for a server it may not go to: stop, say so
     return NO_KEY if ep["local"] or not ep.get("key_env") else None   # no key named: the server takes none
+
+
+def key_host(ep):
+    """The server a key for this endpoint is sent to: Claude's API, else the endpoint's base_url."""
+    return KH.ANTHROPIC if ep.get("provider") == "anthropic" else ep.get("base_url") or ""
+
+
+def key_refused(ep, environ=None):
+    """Why the key this endpoint names is not sent to its server (one plain message naming both), or None. Claude's
+    own endpoint is never refused: a name that belongs to another service is skipped for ANTHROPIC_API_KEY."""
+    if ep.get("preset") == "bedrock" or ep.get("provider") == "anthropic" or not ep.get("key_env"):
+        return None
+    return None if KH.ok(ep["key_env"], key_host(ep), environ) else KH.refusal(ep["key_env"], key_host(ep))
+
+
+def host_text(ep):
+    """Where a request (the key and the datasheet pages) goes, for the cost dialogs: "api.anthropic.com",
+    "localhost (this computer)", "Amazon Bedrock (us-east-1)". Claude: ANTHROPIC_BASE_URL's host when that is set."""
+    if ep.get("preset") == "bedrock":
+        return "Amazon Bedrock" + (f" ({ep['region']})" if ep.get("region") else "")
+    host = KH.host_of(os.environ.get("ANTHROPIC_BASE_URL") or KH.ANTHROPIC) if ep.get("provider") == "anthropic" \
+        else KH.host_of(ep.get("base_url"))
+    if not host:
+        return ""
+    return host + (" (this computer)" if KH.this_computer(host) else " (your network)" if is_local("//" + host) else "")
 
 
 def needs_key_message(ep):
@@ -258,8 +288,12 @@ def needs_key_message(ep):
         return ("Bedrock needs an AWS region: set [ai] region (e.g. \"us-east-1\") or AWS_REGION, and AWS credentials "
                 "(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or an AWS CLI profile with botocore installed)")
     if ep["provider"] == "anthropic":
-        return (f"{ep['key_env']} is not set: add your Claude API key on the setup page (`ecadlib setup`) or with "
-                f"`ecadlib keys set {ep['key_env']}`")
+        name = ep["key_env"] if KH.ok(ep["key_env"], KH.ANTHROPIC) else ANTHROPIC_KEY   # another service's key: not asked for
+        return (f"{name} is not set: add your Claude API key on the setup page (`ecadlib setup`) or with "
+                f"`ecadlib keys set {name}`")
+    why = key_refused(ep)
+    if why:                                           # review 2026-11-23 (2.2): the key is there, the server is not its own
+        return why[0].upper() + why[1:]
     name = ep['key_env'] or '[ai] api_key_env'
     return (f"{name} is not set: add the key for {ep['base_url']} on the setup page (`ecadlib setup`) or with "
             f"`ecadlib keys set {name}` (or point [ai] base_url at a local server, which needs none)")
@@ -346,6 +380,9 @@ def validate(where, raw_ai, sections, err):
             err(where, f"{label}.assist", f"= {d['assist']!r}: must be auto (by the model's tier), off or full")
         if d.get("base_url") and not re.fullmatch(r"https?://[^\s]+", str(d["base_url"])):
             err(where, f"{label}.base_url", "must be an http(s):// URL such as http://localhost:11434/v1")
+        elif d.get("base_url") and not KH.host_of(d["base_url"]):
+            err(where, f"{label}.base_url", "is written so that its server cannot be read for certain (a backslash, a "
+                                            "blank, or a user@ part): write it plainly, https://host/path")
         if d.get("base_url") and str(d["base_url"]).startswith("http://") and not is_local(d["base_url"]):
             err(where, f"{label}.base_url", "plain http:// is only allowed for a server on this machine or your own "
                                             "network (the key would travel unencrypted); use https://")

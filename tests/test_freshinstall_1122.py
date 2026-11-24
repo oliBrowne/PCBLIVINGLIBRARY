@@ -1,0 +1,165 @@
+"""Real open-source BOMs run by a brand-new user (2026-11-22): what ecadlib read wrong, and the no-MPN passive rule.
+Offline. Run:  python3 -m tests.test_freshinstall_1122"""
+import tempfile
+from pathlib import Path
+
+from ecadlib import altium_export as AX, bom_triage as T, release_check as RC, rules as RU
+from tests.test_release_check import fails, make
+
+
+def _bom(text, name="bom.csv"):
+    f = Path(tempfile.mkdtemp()) / name
+    f.write_text(text, encoding="utf-8")
+    return T.read_bom(f)
+
+
+POCKETBEAGLE = '''Designator,Manufacturer/MPN,Qty,Description
+"C1,C5,C7",YAGEO CC0402KRX7R7BB104,3,"Cap,100nF,10%,16V,X7R,0402,YAGEO"
+POWER,C&K Components KMR231GLFS,1,SWITCH TACTILE SPST-NO 0.05A 32V
+,"Nexperia 74LVC1G07GV,125",1,"IC,SINGLE BUFFER"
+X2,"MTCONN MCTF-0403, Suntech ST-TF-003A",1,"Connector,MicroSD"
+U9,LM358,1,op amp
+'''
+
+
+def test_maker_and_mpn_in_one_column():
+    lines, mapping = _bom(POCKETBEAGLE)
+    got = [(l.get("manufacturer", ""), l.get("mpn", "")) for l in lines]
+    # 2026-11-23 review (a6 finding 7): the words before the number are a maker only when ecadlib knows the maker
+    # (YAGEO by its own ordering code, Nexperia by the maker table). 'C&K Components' and 'MTCONN' are not in the
+    # table, and read the same way 'Capacitor GRM188...' gave the maker Capacitor: those cells now stay whole and
+    # the lines are held for a person (was: makers C&K Components and MTCONN, alternate Suntech ST-TF-003A)
+    assert got[0] == ("YAGEO", "CC0402KRX7R7BB104") and got[2] == ("Nexperia", "74LVC1G07GV,125") and got[4] == ("", "LM358"), got
+    for l in (lines[1], lines[3]):
+        assert not l.get("manufacturer") and "could not be read as a maker and a part number" in l["bom_hold"], l
+    assert lines[1]["mpn"] == "C&K Components KMR231GLFS", lines[1]
+    lines, _ = _bom('Designator,Manufacturer/MPN,Qty\nX2,"Hirose DM3AT-SF-PEJM5, JST SM04B-SRSS-TB",1\n')
+    assert (lines[0]["manufacturer"], lines[0]["mpn"]) == ("Hirose", "DM3AT-SF-PEJM5"), lines[0]
+    assert "alternates JST SM04B-SRSS-TB" in lines[0]["bom_note"], lines[0]
+
+
+def test_maker_split_only_when_it_reads_as_a_maker():
+    """Review of #284: the words before the last one must read as a company, and the last word must not be a value
+    or a size; otherwise the cell stays whole and the line is held."""
+    lines, _ = _bom('Designator,Manufacturer/MPN,Qty,Description\n'
+                    'Y1,Epson FC-135 32.768KA-AG0,1,crystal\n'
+                    'R1,Generic 10k 0603,1,resistor\n'
+                    'Q1,ON Semi MMBT3904 LT1G,1,npn\n'
+                    'R2,ANY RC0402FR-071KL,1,resistor\n')
+    for l in lines:
+        assert not l.get("manufacturer") and " " in l["mpn"] and "could not be read as a maker" in l["bom_hold"], l
+
+
+def test_digikey_number_beside_a_maker_is_held():
+    lines, _ = _bom("Designator,Manufacturer,MPN\nR1,Foo,ABC123-ND\nR2,,RMCF0402JT10K0CT-ND\n")
+    assert "order number" in lines[0]["bom_hold"] and lines[0]["digikey"] == "ABC123-ND", lines[0]
+    assert "bom_hold" not in lines[1] and lines[1]["digikey"] == "RMCF0402JT10K0CT-ND", lines[1]
+
+
+def test_dnp_cleanup_keeps_other_holds():
+    lines, _ = _bom("Designator,Value,Footprint,Manufacturer,MPN\n"
+                    '"J3,J6",DNP,DNP,DNP,DNP\n')
+    assert "bom_hold" not in lines[0]
+
+
+def test_plain_mpn_header_is_not_split():
+    """'Manufacturer Part Number' is the MPN alone: a cell with a space keeps its old reading."""
+    lines, _ = _bom("Designator,Manufacturer Part Number\nX1,FC-135 32.768KA-AG0\n")
+    assert lines[0].get("manufacturer", "") == "", lines
+    for h in ("Manufacturer/MPN", "Mfr / MPN", "Manufacturer & Part Number", "Mfr. / Part No.", "Mfr/PN"):
+        assert T._MAKER_MPN_HEADER.fullmatch(h), h
+    for h in ("Manufacturer Part Number", "MPN", "Mfr Part #", "Manufacturer"):
+        assert not T._MAKER_MPN_HEADER.fullmatch(h), h
+
+
+OCTOPART = '''Qty,Line Item,Manufacturer,MPN,Schematic Reference,Description,SKU,SKU,Unit Price (@ Batch Size: 1),Unit Price (@ Batch Size: 1)
+,,,,,,Digi-Key,Mouser,Digi-Key,Mouser
+2,WM50018-05-ND,Molex,22-28-4054,J1,,WM50018-05-ND,538-22-28-4054,0.45,0.41
+1,IRLML6401TRPBFCT-ND,Infineon,IRLML6401TRPBF,Q1,,x,y,0.38,0.40
+'''
+
+
+def test_octopart_price_is_not_a_footprint():
+    lines, mapping = _bom(OCTOPART)
+    assert "footprint" not in mapping, mapping
+    assert [l["mpn"] for l in lines] == ["22-28-4054", "IRLML6401TRPBF"], lines      # the supplier-name row is no part
+
+
+def test_digikey_number_is_not_the_mpn():
+    lines, _ = _bom("Designator,Value,Footprint,Manufacturer,Manufacturer Part Number\n"
+                    "J1,GPIO1,Molex_Nano-Fit_105313-xx05,Molex,WM15144-ND\n"
+                    "R1,10k,R_0603_1608Metric,,RC0603FR-0710KL\n")
+    assert "mpn" not in lines[0] and lines[0]["digikey"] == "WM15144-ND", lines[0]
+    assert "DigiKey order number" in lines[0]["bom_note"]
+    assert lines[1]["mpn"] == "RC0603FR-0710KL"
+    assert T.distributor_sku("490-3285-1-ND") == "DigiKey" and not T.distributor_sku("22-28-4054")
+    rows = AX.to_rows(lines)
+    row = next(r for df in rows.values() for _, r in df.iterrows() if r["Supplier Part Number 2"])
+    assert row["Manufacturer Part Number"] == "" and row["Supplier 2"] == "DigiKey" and row["Supplier Part Number 2"] == "WM15144-ND"
+
+
+def test_line_that_only_says_dnp_names_no_part():
+    lines, _ = _bom("Line Item,Quantity,Designator,Footprint,Value,Manufacturer,Manufacturer Part Number\n"
+                    '9,5,"J3,J6",DNP,DNP,DNP,DNP\n'
+                    '12,2,"R1,R2",Resistor_SMD:R_0603_1608Metric,27R,Yageo,RC0603FR-0727RL\n')
+    assert lines[0] == {"qty": "5", "designator": "J3,J6", "dnp": True}, lines[0]
+    rows = AX.to_rows(lines)
+    names = [r["Part Number"] for df in rows.values() for _, r in df.iterrows()]
+    assert names == ["RES-0603-27R"], names
+
+
+def test_any_maker_any_part_is_a_placeholder():
+    lines, _ = _bom('Reference,Value,Footprint,MPN,Manufacturer\nC2,"1uF, 10V, X5R, 0402",C_0402,ANY,ANY\n')
+    assert "bom_hold" not in lines[0] and "manufacturer" not in lines[0], lines[0]
+    rows = AX.to_rows(lines)
+    assert [r["Manufacturer Part Number"] for df in rows.values() for _, r in df.iterrows()] == [""]
+
+
+def _passive(d, folder="Components/Resistors", sym="Resistor"):
+    it = make(d, name="RES-0603-10k")
+    it["folder"], it["symbol"]["ref"], it["librarian"] = folder, sym, {"passive": True}
+    it["parameters"] = [p for p in it["parameters"] if p["name"] != "Manufacturer Part Number"] + \
+        [{"name": "Value", "value": "10k"}]
+    return it
+
+
+def test_generic_resistor_without_mpn_is_a_note():
+    hold_mpn = {**RU.DEFAULTS, "release": {**RU.DEFAULTS["release"], "mpn": "hold"}}
+    with tempfile.TemporaryDirectory() as d:
+        f, w = fails(_passive(d), d)
+        assert "fields: Manufacturer Part Number is empty" not in f, f
+        assert any(x.startswith("Manufacturer Part Number is empty: a generic part") for x in w), w
+        assert "fields: Manufacturer Part Number is empty" in fails(_passive(d), d, hold_mpn)[0]
+        assert "fields: Manufacturer Part Number is empty" in fails(_passive(d, "Components/Inductors", "Inductor"), d)[0]
+        ic = _passive(d, "Components/ICs", "RES-0603-10k")
+        ic["librarian"] = {"passive": False}
+        assert "fields: Manufacturer Part Number is empty" in fails(ic, d)[0]
+
+
+def test_polarized_or_unread_value_is_still_held():
+    with tempfile.TemporaryDirectory() as d:
+        tant = _passive(d, "Components/Capacitors", "C_Polarized")
+        assert "fields: Manufacturer Part Number is empty" in fails(tant, d)[0]
+        bad = _passive(d)
+        bad["name"] = "RES-0603-10K-"
+        assert "fields: Manufacturer Part Number is empty" in fails(bad, d)[0]
+        novalue = _passive(d)
+        novalue["parameters"] = [p for p in novalue["parameters"] if p["name"] != "Value"]
+        assert "fields: Manufacturer Part Number is empty" in fails(novalue, d)[0]
+
+
+def test_release_mpn_rule_is_checked():
+    assert RU.validate({"release": {"mpn": "hold"}})
+    try:
+        RU.validate({"release": {"mpn": "maybe"}})
+    except RU.RulesError as e:
+        assert "release.mpn" in str(e)
+    else:
+        raise AssertionError("release.mpn = 'maybe' was accepted")
+
+
+if __name__ == "__main__":
+    for k, v in list(globals().items()):
+        if k.startswith("test_"):
+            v()
+    print("ok")

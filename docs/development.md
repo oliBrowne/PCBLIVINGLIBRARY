@@ -213,6 +213,9 @@ The version lives in one place, `ecadlib/__init__.py` (`__version__`); `pyprojec
 2. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [0.3.0] - YYYY-MM-DD`, add a new empty `## [Unreleased]` above it, and update the compare links at the bottom.
 3. Run `python -m tests.run_all`, commit, and merge to `main`.
 4. Tag that commit and push the tag: `git tag v0.3.0 && git push origin v0.3.0`.
+   Or, without a terminal, make the tag on GitHub's release page:
+   `https://github.com/oliBrowne/PCBLIVINGLIBRARY/releases/new?tag=v0.3.0&target=main`, title `ecadlib 0.3.0`,
+   then **Publish release**. The workflow attaches the files and replaces the notes with the changelog section.
 
 The `release` workflow (`.github/workflows/release.yml`) then checks that the tag, `__version__` and the changelog agree, runs the tests, builds the sdist and wheel, smoke-tests both in a clean venv, creates the GitHub release with that version's changelog section as its notes, and publishes to PyPI. Every PR also builds and smoke-tests the packages (the `package` job in `tests.yml`).
 

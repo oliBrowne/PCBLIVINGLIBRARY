@@ -16,8 +16,8 @@ from tests.fixtures_lite import lite
 
 ROOT = Path(__file__).parent.parent
 BOM = """Designator,Qty,Value,Footprint,Manufacturer,Mfr. Part #,LCSC Part Number,Description
-C1,1,100nF,C_0402_1005Metric,ACME,CAP0402X,C1001,Capacitor 100nF 0402
-C2,1,10uF,C_0805_2012Metric,ACME,CAP0805X,C1002,Capacitor 10uF 0805
+C1,1,100nF,C_0402_1005Metric,ACME,CAP0402X,C1001,Ceramic capacitor 100nF 0402
+C2,1,10uF,C_0805_2012Metric,ACME,CAP0805X,C1002,Ceramic capacitor 10uF 0805
 R1,1,10k,R_0603_1608Metric,ACME,RES0603X,C1003,Resistor 10k 0603
 """
 

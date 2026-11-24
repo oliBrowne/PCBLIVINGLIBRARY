@@ -48,7 +48,9 @@ RULES = [
     ("TDK C", "C", re.compile(r"^C(0402|0603|1005|1608|2012|3216|3225|4532|5750)(?:C0G|NP0|X[5-8][RSTPV]|JB|CH)\d[A-Z]" + EIA_C +
                               r"[BCDFGJKMZ]\d{3}[A-Z]{2}$"), 1, "metric", 2, "eia"),
     ("KEMET C", "C", re.compile(r"^C" + IMP + r"[CX](\d{3}|\dR\d)[BCDFGJKMZ]\d[A-Z]A[CL](?:TU|AUTO|\d{4}|7\d{3})?$"), 1, None, 2, "eia9"),
-    ("Yageo CC", "C", re.compile(r"^CC" + IMP + r"[BCDFGJKMZ][RKP](?:NPO|COG|C0G|X7R|X5R|X7S|X6S|X8R|Y5V)\dB[BN]" + EIA_C + r"$"),
+    # (AC0603KRX7R9BB104: Yageo's automotive MLCC series, the same code as CC; not an AC resistor: review 2026-11-23;
+    #  the voltage code is a digit or, from 200 V up, a letter: CC1206KKX7RABB105 is 200 V, round 2)
+    ("Yageo CC/AC", "C", re.compile(r"^(?:CC|AC)" + IMP + r"[BCDFGJKMZ][RKP](?:NPO|COG|C0G|X7R|X5R|X7S|X6S|X8R|Y5V)[0-9A-DYZ]B[BN]" + EIA_C + r"$"),
      1, None, 2, "eia"),
     ("KYOCERA AVX", "C", re.compile(r"^" + IMP + r"[0-9YZ][ACDGUZ](\d{3}|\dR\d)[BCDFGJKMZ]A[T7J][0-9A-Z]{2}$"), 1, None, 2, "eia9"),
     ("KEMET T491", "CP", re.compile(r"^T491([ABCD])(\d{3})[JKM](\d{3})A[TS]\d{0,4}$"), 1, TANT_CASE, 2, "eia_uf"),
@@ -154,8 +156,10 @@ def fill_lines(lines):
         d = decode(mpn) if mpn else None
         if not d:
             continue
-        refs = re.findall(r"[A-Za-z]+(?=\d)", str(ln.get("designator") or ""))
-        if not refs or any(r.upper() not in KIND_PREFIX[d["kind"]] for r in refs):
+        toks = [t for t in re.split(r"[\s,;/|]+", str(ln.get("designator") or "")) if re.search(r"[A-Za-z]", t)]
+        ours = lambda t: any(c.upper() in KIND_PREFIX[d["kind"]] for c in      # R1; R_AUX1 (leading R); AUX_R1
+                             re.findall(r"^[A-Za-z]+(?=\d|_)|[A-Za-z]+(?=\d)", t))   # (the R before the 1)
+        if not toks or not all(ours(t) for t in toks):
             continue                                  # no designator, or one of another kind (an R code on C1): not ours
         text, value = value_text(d), str(ln.get("value") or "").strip()
         cat = "Resistors" if d["kind"] == "R" else "Capacitors"
@@ -181,6 +185,32 @@ def fill_lines(lines):
         v = passive_value(value, cat)
         if v is None and cat == "Capacitors":
             v = passive_value(value.lower(), cat)     # '100N', '10U': BOM capitals
+        if v is None and cat == "Resistors" and re.fullmatch(r"\d+(?:[.,]\d+)?", value):
+            bare = float(value.replace(",", "."))     # a resistor's bare '430' is 430 ohm, or an EIA code ('103' =
+            eia = _eia(value) if re.fullmatch(r"\d{3,4}", value) else None   # 10k, '1002' = 10k): held only when
+            near = lambda x: x is not None and abs(x - d["value"]) <= 1e-6 * max(abs(x), abs(d["value"]), 1e-15)
+            v = None if near(bare) or near(eia) else bare   # neither reading is the part number's value (JLCPCB:
+                                                      # Value 430 on a 43 kOhm 0603WAF4302T5E was released)
+        if v is None and cat == "Resistors" and re.match(r"\d", value) and not re.fullmatch(r"\d+(?:[.,]\d+)?", value):
+            near = lambda x: x is not None and abs(x - d["value"]) <= 1e-6 * max(abs(x), abs(d["value"]), 1e-15)
+            reads = []                                # a spelling the reader skips ('1mR', '22E 1%', '4E7', '75B')
+            for core in dict.fromkeys((value, re.split(r"[\s,;]+", value)[0])):                # whole, or before a '1%' / rating
+                core = re.sub(r"(?i)(?<=[\dkm])\s*(?:r|e|b|f|j|g|d|ohms?|Ω|\?)$", "", core)   # 24.9kR, 470r, 22E, 75B,
+                                                                                # 220? (an Ω lost in an encoding)
+                core = re.sub(r"(?i)^(\d+)[er](\d+)$", r"\1.\2", core)        # '4E7', '4r7': 4.7 ohm
+                reads.append(passive_value(core, cat))
+                if re.fullmatch(r"\d+(?:\.\d+)?", core):
+                    reads.append(float(core))
+                    reads.append(_eia(core) if re.fullmatch(r"\d{3,4}", core) else None)   # '103 1%'
+                elif re.fullmatch(r"\d+[kKM]\d+", core):                       # '2k49'
+                    reads.append(passive_value(core.lower().replace("m", "M"), cat))
+                elif re.fullmatch(r"\d+(?:\.\d+)?m", core):                    # '100mR': 0.1 ohm
+                    reads.append(float(core[:-1]) / 1000)
+            if not any(near(x) for x in reads):       # '1mR' on a 1 MOhm code, '40B' on a 39.2 ohm one, '220 1%' on
+                hold = (f"Value {value} does not read as the part number's value: {mpn} is {text} by its "   # a 10k
+                        f"{d['series']} code: fix the BOM line")                # one: released as typed before
+                ln["bom_hold"] = f"{ln['bom_hold']}; {hold}" if ln.get("bom_hold") else hold
+            continue
         if v is not None and abs(v - d["value"]) > 1e-6 * max(abs(v), abs(d["value"]), 1e-15):
             hold = (f"Value {value} but the part number {mpn} is {text} by its {d['series']} code: one of the two is "
                     "wrong; fix the BOM line")

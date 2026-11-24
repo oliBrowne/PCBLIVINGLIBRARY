@@ -2,7 +2,7 @@
     @lite
     def test_x(tmp_path, monkeypatch): ...
 The wrapper takes no arguments, so pytest and tests.run_all both call it as is."""
-import inspect, os, shutil, stat, tempfile
+import contextlib, inspect, os, shutil, stat, tempfile
 from pathlib import Path
 
 _MISSING = object()
@@ -136,13 +136,53 @@ def released_anyway(items, base=".", who="--allow"):
     back cannot be covered. For tests about something else than the release check. Returns items."""
     import datetime
     from ecadlib import release_check as RC, rules as RU
+    assert not (Path(base) / "pyproject.toml").is_file(), "released_anyway would write a ledger into the repo: pass the test's folder, or use in_dir(d)"
     rules = RU.resolve(None, base)              # the rules the publishers use: ecadlib.toml found from the plan
+    named = []
     for it in items:
         if it.get("status", "ready") == "ready":
             fails = [f"{r}: {m}" for r, m in RC.check_item(it, base, rules)[0] if r not in RC.UNFIXABLE]
             if fails:
                 it["allow"] = {"by": who, "date": datetime.date.today().isoformat(), "failures": fails}
+                named.append(it["name"])
+    # security review 2026-11-23 (2.4): an allow block counts only with its line in the library's ledger, so the
+    # fixture writes that line too (into `base`, where the publishers look: pass the test's own folder, or be in it)
+    RC.record_allow(items, base, named, "", "a test part released anyway", via="tests.fixtures_lite")
     return items
+
+
+@contextlib.contextmanager
+def in_dir(d):
+    """Run a block with `d` as the current folder (a publisher given no library folder looks for the ledger here)."""
+    old = os.getcwd()
+    os.chdir(d)
+    try:
+        yield
+    finally:
+        os.chdir(old)
+
+
+PERSON = "Test Person <person@example.com>"
+
+
+def person_confirms(ws_root, user=PERSON, reason="checked against the datasheet"):
+    """What the person does with `ecadlib confirm ID` for every request an MCP call left waiting in the workspace
+    (security review 2026-11-23, 2.3: a release anyway, a sign-off or a paid run asked for over MCP is theirs to
+    grant). -> [confirm.grant's result per request]"""
+    from ecadlib import confirm as CF
+    return [CF.grant(ws_root, r["id"], user, reason, log=lambda *a, **k: None) for r in CF.pending(ws_root)]
+
+
+def confirmed_call(ws, name, args, user=PERSON, reason="checked against the datasheet"):
+    """An MCP tool call only the person can grant: it must be refused first (confirm.NeedsPerson), is then granted
+    as the person, and made again -> its result."""
+    from ecadlib import confirm as CF, mcp_server as M
+    try:
+        M.call_tool(ws, name, args)
+    except CF.NeedsPerson:
+        person_confirms(ws.root, user, reason)
+        return M.call_tool(ws, name, args)
+    raise AssertionError(f"{name} ran on the caller's own approval")
 
 
 DEMO_PINOUTS = ("AMS1117-3.3", "AO3401A")      # the demo parts held for a family-table pinout until a person looks
@@ -157,7 +197,7 @@ def demo_released(out, cwd=None):
     assert run("ecadlib", "demo", "-o", str(out)).returncode == 0
     lib = Path(out) / "librarian" / "demo_bom_demo"
     r = run("ecadlib.release_check", str(lib / "plan.json"), *[x for n in DEMO_PINOUTS for x in ("--allow", n)],
-            "--user", "Demo Reviewer <reviewer@example.com>")
+            "--user", "Demo Reviewer <reviewer@example.com>", "--reason", "pinouts checked against the datasheets")
     assert r.returncode == 2 and "1 held" in r.stdout, r     # 2: CH340C stays held (the demo has no symbol for it)
     assert run("ecadlib", "demo", "-o", str(out)).returncode == 0
     return lib
