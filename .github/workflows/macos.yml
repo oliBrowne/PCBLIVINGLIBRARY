@@ -67,11 +67,17 @@ jobs:
           set -eux
           ecadlib start --no-window --no-browser --port 8790 --workspace "$RUNNER_TEMP/appws" > "$RUNNER_TEMP/app.out" 2>&1 &
           app=$!
+          keyfile="$ECADLIB_HOME/run/ui-8790.json"   # the page answers only with this run's key (#295)
           for i in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:8790/api/setup -o "$RUNNER_TEMP/setup.json"; then break; fi
+            if [ -f "$keyfile" ]; then
+              key=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["key"])' "$keyfile")
+              if curl -sf -H "X-Ecadlib-Key: $key" http://127.0.0.1:8790/api/setup -o "$RUNNER_TEMP/setup.json"; then break; fi
+            fi
             sleep 1
           done
           cat "$RUNNER_TEMP/setup.json" || { cat "$RUNNER_TEMP/app.out"; exit 1; }
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8790/api/setup)
+          test "$code" = 401                        # and nothing without it
           curl -sf http://127.0.0.1:8790/setup | grep -q "ecadlib setup"
           kill $app
       - name: The headless browser finds a Mac browser
