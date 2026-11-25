@@ -532,7 +532,8 @@ def _read_csv(p, widths=None):
     lines = [ln for ln in re.findall(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$", text) if ln.strip()]
     if not lines:
         raise ValueError(f"{p}: the BOM file is empty")
-    lines = _unwrap_quoted_rows(lines)
+    unwrapped = _unwrap_quoted_rows(lines)
+    unwrap, lines = unwrapped is not lines, unwrapped
 
     def score(d):                                                         # rows sharing the commonest width > 1
         ws = [len(r) for r in csv.reader(lines[:30], delimiter=d)]
@@ -546,7 +547,7 @@ def _read_csv(p, widths=None):
             starts.append(prev)                                           # first physical line of the row
             prev = rd.line_num
             rows.append(r)
-        if rows and text.count('"') % 2 and any("\n" in c or "\r" in c for c in rows[-1]):   # a quote never closed:
+        if rows and ("".join(lines) if unwrap else text).count('"') % 2 and any("\n" in c or "\r" in c for c in rows[-1]):   # a quote never closed:
             k = starts[-1]                                                                  # it ran to EOF
             print(f"  warning: {Path(p).name}: row {k + 1}: a double quote is never closed; the rows after it are read "
                   "line by line (check that row)", file=sys.stderr)
@@ -559,6 +560,7 @@ def _read_csv(p, widths=None):
     df = pd.DataFrame([r + [""] * (width - len(r)) for r in rows], dtype=str)                         # <newline>0603'
     df.attrs["text"] = True                                               # cells past the header are an unquoted comma
     df.attrs["delimiter"] = delim
+    df.attrs["unwrapped"] = unwrap                                        # each row's first field lost its quotes
     if widths is not None:
         widths[:] = [len(r) for r in rows]                                # before padding: 'Footprint,' declares a column
     return df
@@ -857,7 +859,7 @@ def read_bom(path, columns=None, rules=None, root=None):
                  and (re.fullmatch(r"\d+\s*[pnuµμmkKMGR]?(?:[FfHh]|Hz|Ω|[Oo]hms?)?", cells[vj + 1])   # a value's own
                       # unit: '100,50V' is 100 and a 50 V rating in the next column, not 100.50 V (R-BF-8);
                       or _rated_value(cells[vj], cells[vj + 1])))     # a zener's '3,3V', a fuse's '1,5A' (R-FX10-4)
-        if text_src and split and widths and widths[idx] > max(hwidth, hlen):   # 'R1,1,4,7k,X,0603,': the last
+        if text_src and (split or raw.attrs.get("unwrapped")) and widths and widths[idx] > max(hwidth, hlen):   # 'R1,1,4,7k,X,0603,': the last
             n = max(n, hlen + widths[idx] - max(hwidth, hlen))     # cell empty, the row still a cell wider than the
                                                                   # header (a bare trailing ',' splits no value)
         if text_src and n > hlen:                                 # more cells than the header: an unquoted '4,7k'

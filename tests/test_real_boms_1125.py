@@ -32,3 +32,30 @@ def test_a_one_column_file_is_not_unwrapped():
     assert BT._unwrap_quoted_rows(lines) == lines
     lines = ['"Reference";"Value";"Footprint"\n', '"C9; C12";"10u/16";"CP_EIA-3216-18_Kemet-A"\n']   # ';' file, every
     assert BT._unwrap_quoted_rows(lines) == lines                  # cell quoted: read as it is (found on a real BOM)
+
+
+def _wrap(inner):
+    return "".join('"' + ln.replace('"', '""') + '"\n' for ln in inner.strip().splitlines())
+
+
+@lite
+def test_unwrapped_rows_shifted_by_the_lost_quotes_are_held(tmp_path):
+    # review 2026-11-25: the row's last real column empty, so the extra cell is empty too: still a cell wider
+    for inner in ['Reference,"Value","Footprint","MPN","Datasheet"\nC1,C2,"100nF","C_0603","",""\nD1,"LED","LED_0603","",""',
+                  'Reference,"Value","Footprint","LCSC"\nR1,R2,"10k","0603",""\nD1,"LED","LED_0603",""']:
+        p = tmp_path / "bom.csv"
+        p.write_text(_wrap(inner), encoding="utf-8")
+        lines, _ = BT.read_bom(p)
+        by = {d["designator"]: d for d in lines}
+        assert by["D1"]["value"] == "LED" and not by["D1"].get("bom_hold"), by
+        shifted = [d for d in lines if d["designator"] != "D1"]
+        assert shifted and all(d.get("bom_hold") for d in shifted), shifted
+
+
+@lite
+def test_an_unclosed_quote_inside_unwrapped_rows_is_still_mended(tmp_path):
+    p = tmp_path / "bom.csv"
+    p.write_text(_wrap('Reference,Qty,Value,Footprint\nR1,1,"10k,0603\nR2,1,22k,0402\nR3,1,47k,0805'), encoding="utf-8")
+    lines, _ = BT.read_bom(p)
+    by = {d["designator"]: d for d in lines}
+    assert by.get("R2", {}).get("value") == "22k" and by.get("R3", {}).get("footprint") == "0805", lines
