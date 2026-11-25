@@ -63,6 +63,8 @@ def test_a_lift_is_taken_back_when_its_record_is_no_longer_confirmed():
         meta = json.loads((root / "store.json").read_text())
         meta["trusted"] = ["alice"]                                   # mallory no longer counts: only checked
         (root / "store.json").write_text(json.dumps(meta))
+        got = [w for _, w in SC.problems(lifted, SC.Store(str(root)))]   # before the index is made again: the
+        assert got and "only a confirmed record lifts" in got[0], got     # record's own level, as lookup reads it
         SRP.index(root, log=quiet)
         got = [w for _, w in SC.problems(lifted, SC.Store(str(root)))]
         assert got and "only a confirmed record lifts" in got[0], got
@@ -124,3 +126,10 @@ def test_the_second_read_compares_each_function_s_active_low_mark():
         assert any(d["field"] == "pin_names" for d in CC.compare_pins(base + [("5", a)], base + [("5", b)])), (a, b)
     assert CC.compare_pins(base + [("5", "~{RESET}/PB5")], base + [("5", "PB5/~{RESET}")]) == []
     assert CC.compare_pins(base + [("5", "SDA/PB5")], base + [("5", "PB5/SDA")]) == []
+
+
+def test_a_rail_on_several_pins_spelt_differently_still_matches():
+    # self-review 2026-11-25: VSS on 2 and 4 is the drawing's GND on 2 and 4 (one name of the class on each side)
+    sym = [("1", "IN"), ("2", "VSS"), ("3", "EN"), ("4", "VSS")]
+    assert PD.compare("other", sym, {"1": "IN", "2": "GND", "3": "EN", "4": "GND"}) == []
+    assert PD.compare("other", [("1", "VIN"), ("2", "VIN"), ("3", "GND")], {"1": "IN", "2": "IN", "3": "GND"}) == []

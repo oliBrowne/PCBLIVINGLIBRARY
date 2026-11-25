@@ -670,7 +670,8 @@ def compare(first, second, kind="read"):
             nom = lambda v: v[0] if isinstance(v, (tuple, list)) and v and _num(v[0]) else \
                 (_val(v) or (None,))[0]
             bl, bw = nom(first.get("body_length")), nom(first.get("body_width"))
-            square = bl is None or bw is None or abs(bl - bw) <= 0.1
+            square = bl is None or bw is None or abs(bl - bw) <= 0.1 or \
+                nom(second.get("body_length")) is None or nom(second.get("body_width")) is None
             turns = (0, 1, 2, 3) if square else (1, 3) if "body" in turned else (0, 2)
             put("pads", *pads_alike(first["pad_layout"], second["pad_layout"], turns))
         else:

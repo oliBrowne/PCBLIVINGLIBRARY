@@ -445,13 +445,15 @@ def _same_class(a, b, names):
     if not (PT.norm_name(a) in loose and cls is not None and cls == PT.loose_class(b)):
         return False
     # review 2026-11-25 (r3 F1): loose_names counts names, not pins. A symbol with VCC on two pins where the part has
-    # VCC and VS took VS as 'the only rail' VCC: the class stands in only for a name on ONE symbol pin, the drawing's
-    # label of that class on one terminal, and a symbol name the drawing does not print on another terminal
-    if sum(PT.norm_name(n) == PT.norm_name(a) for n in sym) != 1:
-        return False
-    if drawn and (sum(PT.loose_class(n) == cls for n in drawn) != 1
-                  or any(PT.norm_name(n) == PT.norm_name(a) for n in drawn if PT.norm_name(n) != PT.norm_name(b))):
-        return False
+    # VCC on one and VS on the other took VS as 'the only rail' VCC. The class stands in only when the drawing has one
+    # name of that class too, on as many terminals as the symbol's name has pins (VSS on 2 and 4 is GND on 2 and 4),
+    # and the drawing does not print the symbol's own name on another terminal
+    if drawn:
+        mine = {PT.norm_name(n) for n in drawn if PT.loose_class(n) == cls}
+        if len(mine) != 1 or sum(PT.norm_name(n) == PT.norm_name(a) for n in sym) != \
+                sum(PT.norm_name(n) == PT.norm_name(b) for n in drawn) \
+                or any(PT.norm_name(n) == PT.norm_name(a) for n in drawn if PT.norm_name(n) != PT.norm_name(b)):
+            return False
     return True
 
 

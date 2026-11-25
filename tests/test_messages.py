@@ -120,7 +120,7 @@ EXAMPLES = {
                                           "it pad by pad (it gave no pad to compare); the standard land "
                                           "Package_TO_SOT_SMD:SOT-23 is used",
     "datasheet.maker_land_pins": "maker land: a second read of the datasheet disagrees on the pins (pin_names: read 1 A, "
-                                 "3 K, second read 1 K, 3 A): check the symbol against the datasheet",
+                                 "3 K, second read 1 K, 3 A): check the symbol and the pads against the datasheet",
     "datasheet.not_this_part": "datasheet: a person confirms the PDF read is this part's (the datasheet does not seem to "
                                "name this part)",
     "datasheet.maker_land_waiting": "maker land: waiting for your assistant's second read: Q1-check-abc (see READ_ME.md "

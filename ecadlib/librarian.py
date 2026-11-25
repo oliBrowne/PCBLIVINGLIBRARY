@@ -2650,7 +2650,7 @@ class Run:
             said = "; ".join(f"{d.get('field')}: read {d.get('first')}, second read {d.get('second')}"   # pins: what
                              for d in pins_off[:2])   # any other read's disagreeing cross-check does, a hold
             st["verify"].append(f"maker land: a second read of the datasheet disagrees on the pins ({said[:200]}): "
-                                "check the symbol against the datasheet")
+                                "check the symbol and the pads against the datasheet")
             return stay("its second read disagrees on the pins")
         if rec.get("status") != "agreed" or "pads" not in (rec.get("agreed") or ()):
             said = "; ".join(f"{d.get('field')}: read {d.get('first')}, second read {d.get('second')}"
@@ -2886,7 +2886,8 @@ class Run:
             st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                                 "see datasheet/*.review.md"
                                 + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
-            unsure = [str(r) for r in res.get("needs_review") or () if NOT_THIS_PART.search(str(r))]
+            unsure = [str(r) for r in res.get("needs_review") or ()
+                      if NOT_THIS_PART.search(str(r)) and not WORD_ONLY.search(str(r))]
             if unsure:                                # review 2026-11-25 (r1 F2): a PDF that may be another part's is a
                 st["verify"].append(f"datasheet: a person confirms the PDF read is this part's ({unsure[0][:160]})")
                 # person's to confirm, never the opt-in AI hold reviewer's (its LOOKS reads the line above only)

@@ -36,3 +36,26 @@ def test_a_value_in_the_mpn_column_with_nothing_else_still_reads(tmp_path):
     lines = _read(tmp_path, "Designator,Qty,Value,Footprint,PART,Notes,Stock\nC1,1,4.7uF,0603,4.7uF,keep away from U1,B12\n")
     assert not lines[0].get("bom_hold"), lines
 
+
+
+@lite
+def test_an_empty_looking_second_mpn_does_not_skip_the_scan(tmp_path):
+    # self-review 2026-11-25: '-', 'N/A', 'DNP' or the designator in MPN 2 is no part number
+    for mpn2 in ["-", "N/A", "DNP", "C1"]:
+        lines = _read(tmp_path, "Designator,Qty,Value,Footprint,Manufacturer Part Number 1,Manufacturer Part Number 2,"
+                                f"Order Code\nC1,1,10uF,1206,10uF,{mpn2},TAJA106K016RNJ\n")
+        assert not lines[0].get("mpn") and not lines[0].get("dnp") and lines[0].get("bom_hold"), (mpn2, lines)
+
+
+@lite
+def test_the_second_mpn_takes_its_own_maker(tmp_path):
+    lines = _read(tmp_path, "Designator,Qty,Value,Footprint,Manufacturer 1,Manufacturer Part Number 1,Manufacturer 2,"
+                            "Manufacturer Part Number 2\nC1,1,10uF,1206,Murata,10uF,AVX,TAJA106K016RNJ\n")
+    assert lines[0].get("mpn") == "TAJA106K016RNJ" and lines[0].get("manufacturer") == "AVX", lines
+
+
+@lite
+def test_package_height_and_rating_columns_hold_nothing(tmp_path):
+    lines = _read(tmp_path, "Designator,Qty,Value,Footprint,PART,Package,Height,Rating,Supplier Part Number\n"
+                            "C1,1,4.7uF,0603,4.7uF,C_0603_1608Metric,0.85mm,10uF/16V,490-1234-1-ND\n")
+    assert not lines[0].get("bom_hold"), lines

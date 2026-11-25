@@ -767,6 +767,19 @@ class Store:
         level = lower(str(e.get("level") or ""), own)
         return Hit(rec, e["key"], kid, rev, level, status, sha, note, via)
 
+    def level_now(self, kid, e):
+        """The level a lookup would give this index entry now: the lower of the index's and the record's own under
+        today's store.json (trusted, maintainers), as lookup works it out; "" when the record cannot be read."""
+        try:
+            sha = e.get("sha256")
+            got, text = self._raw(f"parts/{SK.shard(e['key'])}/{kid}.json", sha)
+            rec = json.loads(text) if got == "ok" else None
+            if not isinstance(rec, dict) or SK.digest(rec) != sha:
+                return ""
+            return lower(str(e.get("level") or ""), SR.level(rec, trusted=self.trusted(), maintainers=self.maintainers()))
+        except Exception:
+            return ""
+
     # ------------------------------------------------------------ parts that depend on the store
     def problems(self, item, accept=None):
         """problems(item, self, accept): see the module function."""
@@ -884,12 +897,12 @@ def _problems(deps, store, accept):
             out.append((d, f"shared store record {label} is disputed"))
         elif d["kind"] == "lifted" and _rev(e.get("rev")) != d["rev"]:
             out.append((d, f"shared store record {label} is no longer the store's (it is at r{e.get('rev')} now)"))
-        elif (d["kind"] == "lifted" and (str(e.get("level")) not in LEVELS or
-                                         LEVELS.index(str(e.get("level"))) < LEVELS.index("confirmed"))):
+        elif d["kind"] == "lifted" and (lv := (store.level_now(d["key_id"], e) if hasattr(store, "level_now")
+                                               else str(e.get("level") or ""))) != "confirmed":
             # review 2026-11-25 (r5 M1): a hold lifted by a confirmed record is lifted no longer once the record is
-            # only checked (the maintainers narrowed who may confirm): only a confirmed record lifts (from the plan)
-            out.append((d, f"shared store record {label} is now only {safe(e.get('level') or 'unrated')}, and only a "
-                           "confirmed record lifts a hold"))
+            # only checked (the maintainers narrowed who may confirm), read as a lookup reads it (index and record)
+            out.append((d, f"shared store record {label} is now only {safe(lv or 'unrated')}, and only a confirmed "
+                           "record lifts a hold"))
         elif d["kind"] == "built" and accept in ACCEPT and accept != "off" and \
                 LEVELS.index(str(e.get("level"))) < LEVELS.index("confirmed" if accept == "confirmed" else "checked") \
                 if str(e.get("level")) in LEVELS else d["kind"] == "built":
