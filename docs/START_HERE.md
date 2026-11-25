@@ -147,8 +147,17 @@ command to run.
 5. **Held parts:** `ecadlib review ecadlib_workspace/librarian/my_board/plan.json` goes through them one by one.
    Expect a good share held on a first run with no keys. Parts that need a datasheet read and have no API key:
    add `--read-with-assistant` to step 4 and answer the reads with an AI assistant you already use, then run step 4
-   again. [Your first real BOM](../README.md#your-first-real-bom-what-to-expect) has the details, including how to
-   give ecadlib datasheets it could not find.
+   again. Parts with no datasheet link (the end of the run counts them): save each PDF as `<MPN>.pdf` in one folder
+   and add these two lines to `ecadlib.toml` with that folder's full path (single quotes keep Windows backslashes as
+   they are), or add the free DigiKey and Mouser keys ([part-lookup-keys.md](part-lookup-keys.md)):
+
+   ```toml
+   [datasheet]
+   folder = 'C:\Users\you\Documents\datasheets'
+   ```
+
+   If `ecadlib.toml` already has a `[datasheet]` line, add only the `folder` line under it.
+   [Your first real BOM](../README.md#your-first-real-bom-what-to-expect) has the details.
 6. **Into your tool:**
    - **KiCad:** `ecadlib kicad-export ecadlib_workspace/librarian/my_board/plan.json -o kicad-libs/my_board --name
      my_board --install` puts the library into KiCad itself, so every project sees it. Close KiCad first, and start
@@ -185,6 +194,8 @@ the window stops ecadlib. Nothing runs in the background after that.
   shows it; install a newer Python from <https://www.python.org/downloads/>, or use the Windows installer.
 - **"ecadlib" is not recognized / command not found after `pip install`:** pip put the command in a folder that is
   not on your PATH (pip warns about it while installing). `python -m ecadlib ...` works the same without it.
+- **"N part(s) have no datasheet to read":** see step 5 of [From the command line](#from-the-command-line): save
+  the PDFs in a `[datasheet] folder`, add a Datasheet column to the BOM, or add a free DigiKey or Mouser key.
 - **"... is a BOM, but `ecadlib ...` takes the plan.json":** run `ecadlib librarian` on the BOM first; the other
   commands take the `plan.json` it writes.
 - **"no Altium 365 (Nexar) token":** run `ecadlib nexar signin` (or save a token on the setup page, **Optional keys**),

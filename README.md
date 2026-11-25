@@ -282,10 +282,12 @@ along, all free:
 * **Give it the datasheets.** A part with no datasheet link cannot be read. Either add a **Datasheet** column with a
   link on each line (KiCad BOMs often have one), or save the PDFs yourself as `<MPN>.pdf` in one folder and add
   `[datasheet]` `folder = "datasheets"` to `ecadlib.toml` (a relative path is from the folder you run ecadlib in).
+  The end of each run says how many parts had no datasheet to read.
   Free DigiKey and Mouser keys ([above](#digikey-mouser-and-nexar-keys-optional-free)) find links for many parts.
 * **Answer the reads, then run again.** With `--read-with-assistant`, run the same librarian command after each round
-  of answers until `READ_ME.md` lists nothing waiting. Expect two or three rounds: a read can ask for more pages, and
-  the pinout is asked for separately, as pictures of the pages.
+  of answers until `READ_ME.md` lists nothing waiting. Expect two or three rounds: a read can ask for more pages, the
+  pinout is asked for separately (as pictures of the pages), and the cross-check's second read comes in its own
+  folder (answer it fresh, never by copying the first answer).
 
 Even then, a part drawn from a datasheet read is often held for you to compare with the datasheet: a footprint from
 a read is released with no person's look only when an independent source agrees with it. That is on purpose. Check

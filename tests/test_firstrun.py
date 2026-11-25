@@ -345,3 +345,26 @@ def test_help_shows_examples_through_the_cli():
     assert rc == 0 and "approve a held change" in out    # subcommand description from its help text
     rc, out, _ = _run(["-h"])
     assert "ecadlib demo" in out
+
+
+def test_librarian_notes_parts_with_no_datasheet_to_read():
+    """A new user's BOM with no datasheet column and no lookup keys: the held parts say what to do (2026-11-25)."""
+    rows = [{"part": "GD25Q16CTIGR", "status": "held", "tried": "standard: symbol: no standard package; datasheet reader: "
+                                                                 "no datasheet URL known"},
+            {"part": "R1", "status": "ready", "tried": "kicad: Device:R"}]
+    msg, fix = FR.blockers(rows)[0]
+    assert msg.startswith("1 part(s) have no datasheet to read") and "GD25Q16CTIGR" in msg
+    assert "<MPN>.pdf" in fix and "set folder under [datasheet]" in fix and "DigiKey or Mouser" in fix
+    _, fix = FR.blockers(rows, {"datasheet": {"folder": "/home/x/sheets"}})[0]
+    assert "your [datasheet] folder (sheets)" in fix and "/home/x" not in fix
+    assert FR.blockers(rows[1:]) == []
+
+
+def test_missing_key_points_at_the_free_assistant_path():
+    rows = [{"part": "A", "tried": "needs datasheet reader (no API key): https://x/y.pdf"}]
+    assert "--read-with-assistant" in FR.blockers(rows)[0][1]
+    from ecadlib import doctor as DR
+    warn = [c for c in DR.check_keys({}, environ={}) if c["check"] == "key anthropic"]
+    assert warn and "--read-with-assistant" in str(warn[0])
+    ok = [c for c in DR.check_keys({"datasheet": {"reader": "assistant"}}, environ={}) if c["check"] == "key anthropic"]
+    assert ok and "not needed" in str(ok[0]) and ok[0]["level"] == "OK"
