@@ -141,16 +141,23 @@ command to run.
    desktop), ecadlib prints a link instead: open it in a browser on the same computer. The link works once.
    `ecadlib init` in the folder where your BOMs live writes `ecadlib.toml` and checks everything (`ecadlib doctor`
    checks again at any time).
-4. **Your BOM:** `ecadlib librarian my_board.csv -o out/lib` finds or builds every part, runs the release check and
-   writes `out/lib/plan.json`. Every later step takes that **plan.json**, not the BOM.
-5. **Held parts:** `ecadlib review out/lib/plan.json` goes through them one by one.
+4. **Your BOM:** `ecadlib librarian my_board.csv` finds or builds every part, runs the release check and writes
+   `ecadlib_workspace/librarian/my_board/plan.json` (`-o FOLDER` puts it elsewhere). Every later step takes that
+   **plan.json**, not the BOM. `ecadlib status` shows how many parts are ready and held.
+5. **Held parts:** `ecadlib review ecadlib_workspace/librarian/my_board/plan.json` goes through them one by one.
+   Expect a good share held on a first run with no keys. Parts that need a datasheet read and have no API key:
+   add `--read-with-assistant` to step 4 and answer the reads with an AI assistant you already use, then run step 4
+   again. [Your first real BOM](../README.md#your-first-real-bom-what-to-expect) has the details, including how to
+   give ecadlib datasheets it could not find.
 6. **Into your tool:**
-   - **KiCad:** `ecadlib kicad-export out/lib/plan.json -o kicad-libs/my_board --name my_board --install` puts the
-     library into KiCad itself, so every project sees it. Close KiCad first, and start KiCad once beforehand if it is
-     a new install. Without `--install` the files are for one project ([kicad.md](kicad.md)).
-   - **Altium:** `ecadlib dblib out/lib/plan.json -o out/altium` writes a database library to open in Altium, or
-     `ecadlib altium-pkg out/lib/plan.json --out out/altium_pkg` a package with an install script. For Altium 365,
-     sign in once (`ecadlib nexar signin`, section 3b) and use `ecadlib altium365` ([altium.md](altium.md)).
+   - **KiCad:** `ecadlib kicad-export ecadlib_workspace/librarian/my_board/plan.json -o kicad-libs/my_board --name
+     my_board --install` puts the library into KiCad itself, so every project sees it. Close KiCad first, and start
+     KiCad once beforehand if it is a new install. Without `--install` the files are for one project
+     ([kicad.md](kicad.md)).
+   - **Altium:** `ecadlib dblib ecadlib_workspace/librarian/my_board/plan.json -o altium-lib` writes the ready parts
+     as a database library to open in Altium, or `ecadlib altium-pkg ecadlib_workspace/librarian/my_board/plan.json
+     --out altium_pkg` a package with an install script. For Altium 365, sign in once (`ecadlib nexar signin`,
+     section 3b) and use `ecadlib altium365` ([altium.md](altium.md)).
 
 ## Trying ecadlib for us? Send two numbers
 

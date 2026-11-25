@@ -190,7 +190,7 @@ pip install ecadlib
 ecadlib demo
 ```
 
-About a second, offline, no API keys. It builds a 7-part library (0603 resistors, a 0402 capacitor, an LED, a SOT-23
+A few seconds, offline, no API keys. It builds a 7-part library (0603 resistors, a 0402 capacitor, an LED, a SOT-23
 MOSFET, a SOT-223 regulator and a SOIC-16 chip) from a BOM bundled with ecadlib:
 
 ```
@@ -270,6 +270,26 @@ ecadlib altium365 push ecadlib_workspace/librarian/my_bom/plan.json --workspace 
 
 No Altium 365? `ecadlib dblib-sync` writes the same plan into a `.DbLib`/`.SVNDbLib` folder, `ecadlib altium-pkg`
 builds an install package, and `ecadlib kicad-export` writes KiCad libraries.
+
+## Your first real BOM: what to expect
+
+With no keys at all, many parts are held on the first run. On 9 BOMs from open-source boards (2026-11-22, no keys,
+no AI), 95 of 323 lines were ready; the rest waited for a pick, a datasheet or a person. Three things move held parts
+along, all free:
+
+* **Pick a symbol or footprint.** `ecadlib review` lists ranked candidates from KiCad's library for each held part
+  (a Raspberry Pi Pico gets KiCad's Pico symbol and footprints, for example). Check the pinout, then pick one.
+* **Give it the datasheets.** A part with no datasheet link cannot be read. Either add a **Datasheet** column with a
+  link on each line (KiCad BOMs often have one), or save the PDFs yourself as `<MPN>.pdf` in one folder and add
+  `[datasheet]` `folder = "datasheets"` to `ecadlib.toml` (a relative path is from the folder you run ecadlib in).
+  Free DigiKey and Mouser keys ([above](#digikey-mouser-and-nexar-keys-optional-free)) find links for many parts.
+* **Answer the reads, then run again.** With `--read-with-assistant`, run the same librarian command after each round
+  of answers until `READ_ME.md` lists nothing waiting. Expect two or three rounds: a read can ask for more pages, and
+  the pinout is asked for separately, as pictures of the pages.
+
+Even then, a part drawn from a datasheet read is often held for you to compare with the datasheet: a footprint from
+a read is released with no person's look only when an independent source agrees with it. That is on purpose. Check
+every part before you build a board with it, released or not.
 
 ## After the release: keeping the library current
 

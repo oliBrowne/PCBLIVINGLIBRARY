@@ -6,6 +6,8 @@ terminal.
 ## Using it
 
 * [Start here](START_HERE.md): the Windows installer and setup page, no terminal needed.
+* [Your first real BOM: what to expect](../README.md#your-first-real-bom-what-to-expect): why many parts are held
+  on a first run with no keys, and the free ways to move them along.
 * [Using ecadlib](using-ecadlib.md): the local web UI, the MCP server and the command line.
 * [Using ecadlib from an AI agent (MCP)](mcp.md): setup for Claude, Codex, Grok and other clients.
 * [Command line, setup and integrations](command-line.md): first run, `doctor`, `status`, `--json`, the installer,

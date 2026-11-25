@@ -226,6 +226,15 @@ def _pages(pdf, d):
     return out
 
 
+def _has_pages(d):
+    """Whether a request folder holds the pages to read: sent.pdf, or the pictures a pinout read sends instead."""
+    try:
+        return any(p.is_file() and (p.name == "sent.pdf" or re.match(r"(page|image)-\d+\.(png|jpg)$", p.name))
+                   for p in d.iterdir())
+    except OSError:
+        return False
+
+
 def waiting(base):
     """Folders with a request and no answer.json yet, by name: the ones the last run asked for (waiting.json), else
     every folder on disk."""
@@ -257,7 +266,7 @@ def index(base, asked=None):
           "Claude Code or Claude Desktop pointed at this folder. Then run the same `ecadlib librarian` command again: "
           "the answers are checked and built like any read, and parts that pass are released.", "",
           f"Waiting: {len(wait)}", ""]
-    need = [w for w in wait if not (b / w / "sent.pdf").is_file()]
+    need = [w for w in wait if not _has_pages(b / w)]       # (a pinout read sends page pictures, no sent.pdf)
     md += [f"- {w}/request.md" + ("  (no PDF yet: download it first, see its request.md)" if w in need else "")
            for w in wait]
     if need:

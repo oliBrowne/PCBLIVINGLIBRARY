@@ -192,3 +192,22 @@ def test_a_pdf_ecadlib_could_not_download_is_asked_of_the_assistant_then_read():
             job = rd.job("BAS16,215", [(dead, "BOM")], "SOD-323")
         assert "unnamed" not in job["prov"] and "saved by your assistant" in job["prov"]["where"], job["prov"]
     assert api.calls == []
+
+
+def test_a_read_sent_as_page_pictures_is_not_listed_as_missing_its_pdf():
+    """A new user's first free run (2026-11-25): the pinout read sends page pictures (image-01.png ...) and no sent.pdf.
+    READ_ME.md said "no PDF yet: download it first" for it, though the user's own PDF was in their [datasheet] folder
+    and the pictures were right there. Only a folder with no pages at all needs a PDF downloaded."""
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        pics, bare = base / "PART-pins-1", base / "PART-2"
+        for f in (pics, bare):
+            f.mkdir()
+            (f / "request.md").write_text("# read", encoding="utf-8")
+        (pics / "image-01.png").write_bytes(b"\x89PNG")
+        DA.index(base, [pics.name, bare.name])
+        md = (base / DA.README).read_text(encoding="utf-8")
+        line = {ln.split("/")[0].lstrip("- "): ln for ln in md.splitlines() if ln.startswith("- ")}
+        assert "no PDF yet" not in line[pics.name], md
+        assert "no PDF yet" in line[bare.name], md
+        assert "1 of these have no PDF" in md, md
