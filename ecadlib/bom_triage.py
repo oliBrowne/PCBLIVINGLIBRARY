@@ -54,7 +54,7 @@ def _fold(h):
 FOREIGN_HEADERS = {_fold(k): v for v, ks in {
     "designator": ["Bezeichner", "Referenz", "Bauteilbezeichner", "Bestückungsbezeichner", "Repère", "Repères",
                    "Désignateur", "Designador", "Designadores", "Riferimento", "Designatore", "位号", "元件位号", "标号",
-                   "器件位号", "参考位号", "參考位號", "位號", "元件位號", "器件位號", "標號", "指定符",
+                   "器件位号", "参考位号", "參考位號", "位號", "元件位號", "器件位號", "標號", "指定符", "指示符",
                    "リファレンス", "部品記号"],
     "qty": ["Anzahl", "Menge", "Stück", "Stückzahl", "Quantité", "Qté", "Cantidad", "Cant", "Quantità", "数量", "數量", "用量"],
     "value": ["Wert", "Valeur", "Valor", "Valore", "值", "参数", "標準値", "定数"],
