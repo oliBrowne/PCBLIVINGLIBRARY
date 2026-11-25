@@ -515,12 +515,19 @@ NET_RE = re.compile(r"(ProxyError|ConnectionError|ConnectTimeout|ReadTimeout|tim
                     r"Max retries exceeded|offline(?::| and) not (?:in cache|in the cache|cached|downloaded))", re.I)
 
 
+def _folder_name(folder):
+    from .datasheet import folder_name
+    return folder_name(folder)
+
+
 def blockers(rows, rules=None, offline=False):
     """[(message, fix)] for causes outside the parts that held them back: part sources that could not be reached, and
     the datasheet reader without an API key, and one field missing on many parts (a BOM without that column).
     rows: librarian.review_rows(items) (each has `part`, `tried`, and `status` / `why`)."""
-    net, nokey, off = {}, [], []
+    net, nokey, off, nolink = {}, [], [], []
     for r in rows:
+        if r.get("status") == "held" and "no datasheet URL known" in str(r.get("tried") or ""):
+            nolink.append(r["part"])
         for step in re.split(r";\s+(?=[a-z_]+[: ])", r.get("tried") or ""):
             src = step.split(":", 1)[0].split(" ", 1)[0].strip()
             m = NET_RE.search(step)
@@ -555,6 +562,15 @@ def blockers(rows, rules=None, offline=False):
     if off:
         out.append((f"{len(set(off))} part(s) need the datasheet read by AI: --offline sends nothing to the model",
                     "run without --offline to read them"))
+    if nolink:                                 # nothing for any reader, paid or free, to read (2026-11-25: a new user's
+        nolink = list(dict.fromkeys(nolink))   # BOM with no datasheet column and no lookup keys held these with no word)
+        folder = str(((rules or {}).get("datasheet") or {}).get("folder") or "").strip() if isinstance(rules, dict) else ""
+        out.append((f"{len(nolink)} part(s) have no datasheet to read: no link in the BOM, and no part lookup found one "
+                    f"({', '.join(nolink[:3])}{' ...' if len(nolink) > 3 else ''})",
+                    "save each datasheet as <MPN>.pdf in " + (f"your [datasheet] folder ({_folder_name(folder)})" if folder else
+                                                              "a folder and set folder under [datasheet] in ecadlib.toml")
+                    + ", add a Datasheet column to the BOM, or add a free DigiKey or Mouser key so ecadlib can find "
+                    "the links (docs/part-lookup-keys.md); then run the same command again"))
     if nokey:
         from .doctor import _ai_key_env
         env = _ai_key_env(rules)
@@ -573,8 +589,9 @@ def blockers(rows, rules=None, offline=False):
                         "(or an AWS CLI profile with botocore installed)"))
         else:
             out.append((f"{len(set(nokey))} part(s) need the datasheet reader, but {env} is not set",
-                        f"add it on the setup page (`ecadlib setup`) or with `ecadlib keys set {env}`, or take datasheet "
-                        "out of [sources] order in ecadlib.toml"))
+                        f"add it on the setup page (`ecadlib setup`) or with `ecadlib keys set {env}`; with no key, add "
+                        "--read-with-assistant to hand each read to an AI assistant you already use (free); or take "
+                        "datasheet out of [sources] order in ecadlib.toml"))
     return out
 
 

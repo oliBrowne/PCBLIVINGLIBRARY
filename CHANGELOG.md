@@ -65,6 +65,21 @@ From the 2026-11-23 code review. None of these was seen being used.
 
 ### Fixed
 
+- `--read-with-assistant`: `READ_ME.md` no longer says "no PDF yet: download it first" for a pinout read, which sends
+  pictures of the pages and no `sent.pdf`. A new user whose PDF was already in their `[datasheet] folder` was told to
+  download it again.
+- **First BOM with no keys:** parts held because nothing gave a datasheet (no link in the BOM, and no DigiKey,
+  Mouser or Nexar key to find one) were held with no word at the end of the run. The librarian now says how many, and
+  what to do: save each PDF as `<MPN>.pdf` in a `[datasheet] folder`, add a Datasheet column, or add a free DigiKey or
+  Mouser key. `ecadlib doctor` and the librarian's missing-key note now name `--read-with-assistant` as the free way,
+  and `doctor` no longer warns about a missing model key when `[datasheet] reader = "assistant"`.
+  docs/bom-and-datasheets.md no longer says the cross-check's second read is skipped without a key (it is asked of
+  your assistant since #287).
+- Docs for new users: the README has a "Your first real BOM: what to expect" section (why many parts are held on a
+  first run with no keys, and the free ways to move them along: picking candidates, giving ecadlib the datasheets, and
+  answering reads over two or three rounds). START_HERE's command-line path now uses the workspace `ecadlib init`
+  sets up, so `ecadlib status` sees the plan, and links to that section.
+
 - **First run, for someone new** (v0.6.0 "Easy to adopt"). Found by installing ecadlib in a clean folder and
   following the docs as a new user:
   - When no browser can be opened (SSH, Linux with no desktop, WSL), `ecadlib setup`, `ecadlib ui` and `ecadlib start`

@@ -186,10 +186,27 @@ def check_ai(rules=None, environ=None):
     elif LL.key_refused(ep, environ):                  # review 2026-11-23 (2.2): the key may not go to this server
         out.append(_c("ai key", "WARN", f"{ep['key_env']} is not sent to {LL.KH.host_of(ep['base_url'])} (datasheet "
                                         "reader and visual-check skipped)", LL.key_refused(ep, environ)))
+    elif _assistant_reads(rules):
+        out.append(_c("ai key", "OK", f"{ep['key_env']} not set; not needed: your own assistant reads the datasheets "
+                                      "([datasheet] reader = \"assistant\")"))
     else:
         out.append(_c("ai key", "WARN", f"{ep['key_env']} not set (datasheet reader and visual-check skipped)",
-                      key_hint(ep["key_env"])))
+                      key_hint(ep["key_env"]) + f"; {NO_KEY_HINT}"))
     return out
+
+
+# no key at all: the datasheet reads are handed to an AI assistant the person already uses (ds_assistant), free
+NO_KEY_HINT = ("or no key at all: `ecadlib librarian BOM --read-with-assistant` hands each datasheet read to an AI "
+               "assistant you already use (free)")
+
+
+def _assistant_reads(rules):
+    """[datasheet] reader = "assistant" (or ECADLIB_DATASHEET_READER=assistant): no model key is needed."""
+    try:
+        from . import datasheet as D
+        return D.settings(rules if isinstance(rules, dict) else None).get("reader") == "assistant"
+    except Exception:
+        return False
 
 
 def key_hint(name):
@@ -228,9 +245,13 @@ def check_keys(rules=None, environ=None):
             continue
         if ok:
             out.append(_c(f"key {name}", "OK", f"{' + '.join(env)} set"))
+        elif name == "anthropic" and _assistant_reads(rules):
+            out.append(_c(f"key {name}", "OK", f"{' + '.join(env)} not set; not needed: your own assistant reads the "
+                                                "datasheets ([datasheet] reader = \"assistant\")"))
         elif _configured(name, rules):
             out.append(_c(f"key {name}", "WARN", f"{' + '.join(env)} not set ({why} skipped)", key_hint(env[0])
-                          + ("; NEXAR_CLIENT_ID + NEXAR_CLIENT_SECRET also work" if name == "altium365" else "")))
+                          + ("; NEXAR_CLIENT_ID + NEXAR_CLIENT_SECRET also work" if name == "altium365" else "")
+                          + (f"; {NO_KEY_HINT}" if name == "anthropic" else "")))
         else:
             out.append(_c(f"key {name}", "OK", f"{' + '.join(env)} not set; only needed for {why}"))
     if lookups:
