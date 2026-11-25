@@ -948,7 +948,7 @@ def read_bom(path, columns=None, rules=None, root=None):
                 d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
         bad = _not_a_part_number(d.get("mpn", ""))
         if bad:                                         # left out of the MPN, as an empty cell is: the line is built
-            why = {"size_value": "a size and value", "words": "words"}[bad]   # (or held) from its value and footprint,
+            why = {"size_value": "a size and value", "words": "words", "value": "a value"}[bad]   # (or held) from its value and footprint,
             note.append(f"the MPN cell holds {d['mpn']!r}, {why}, not the maker's part number: read as the "   # never
                         "description")                                  # with this as its MPN ('Part' = '0805, 4.7uF'
             d["description"] = f"{d['description']}; {d['mpn']}" if d.get("description") else d["mpn"]   # / 'Blue LED')
@@ -1459,7 +1459,15 @@ def _not_a_part_number(s):
         return "size_value"
     if _WORDS_PN.fullmatch(s) and not placeholder_mpn(s) and not DNP_MARK.search(s):
         return "words"
-    return None
+    if _VALUE_ONLY.fullmatch(s):                           # '4.7uF', '10k', '4K7', '100 nH' (2026-11-25 real BOM: a
+        return "value"                                     # 'PART' column of values, the MPN in 'MAN PART NUMBER':
+    return None                                            # an 0805 line built on another line's 0603 part)
+
+
+# a passive's value with its unit or multiplier, and nothing else: no maker's part number is only this. At most 3
+# digits before and after the unit: Wurth '9774030243R', '7M16000017', Keystone '5121K331' are part numbers
+_VALUE_ONLY = re.compile(r"\d{1,3}(?:[.,]\d{1,3})?\s*(?:[pPnNuUµμm]\s*[FfHh]|[FfHh]|[kKM]\s*(?:Ω|[Oo]hms?|[Rr])?|Ω|[Oo]hms?|[Rr])"
+                         r"|\d{1,3}[pnuµμRrkKM]\d{1,3}\s*[FH]?")       # '4K7', '1n5' (lower case: '2N7002' is a part)
 
 
 def maker_only_mpn(s, maker=""):
