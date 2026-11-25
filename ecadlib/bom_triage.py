@@ -957,6 +957,20 @@ def read_bom(path, columns=None, rules=None, root=None):
                         "is wrong; fix the BOM line")              # even when the description repeats the Value
                 d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
             d["mpn"] = ""
+            for jm, jf in alt:                          # review 2026-11-25 F1: Altium's 'Manufacturer Part Number 2'
+                if jm < len(cells) and cells[jm] and not _not_a_part_number(SS.unquote(cells[jm])):   # is read when the
+                    d["mpn"] = clean_part_number(SS.unquote(cells[jm]))                          # first held a value
+                    if jf is not None and jf < len(cells) and cells[jf] and not d.get("manufacturer"):
+                        d["manufacturer"] = SS.unquote(cells[jf])
+                    break
+            else:                                       # a part number in a column no field reads ('MAN PART NUMBER',
+                seen = [(headers[j], SS.unquote(cells[j]).strip()) for j in others   # 'Vendor Part', 'Order Code'):
+                        if j < len(cells) and _part_number_shape(SS.unquote(cells[j]))]   # the line is not the plain
+                if seen:                                # part its value says; it may be a tantalum (held, named)
+                    hold = (f"the MPN cell holds {why}, and the column '{seen[0][0]}' holds {seen[0][1]!r}, which reads "
+                            "like the part number: the part number is not read from that column; put it in the MPN "
+                            "column")
+                    d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
         if d.get("mpn"):
             d["mpn"], extra, mpn_dnp = _split_mpn(d["mpn"], d.get("manufacturer", ""))
             note += extra
@@ -1449,6 +1463,18 @@ def _size_value_cell(s):
                 seen.add((e, min(k + 1, 2)))
                 starts.append((e, min(k + 1, 2)))
     return False
+def _part_number_shape(s):
+    """A cell that reads like a maker's part number: one word of letters and digits (- _ . / # + allowed), at least 6
+    characters with 2 letters and 2 digits, and no value, chip size, web address or DNP mark ('TAJA106K016RNJ',
+    'T491A106K016AT', 'GRM188R61A106KE69D'; not '10uF', '0603', '4K7', 'B12', 'X7R')."""
+    s = str(s or "").strip()
+    if len(s) < 6 or len(s) > 60 or not re.fullmatch(r"[A-Za-z0-9][-A-Za-z0-9_./#+]*", s) or "//" in s:
+        return False
+    if sum(ch.isalpha() for ch in s) < 2 or sum(ch.isdigit() for ch in s) < 2:
+        return False
+    return not (_VALUE_ONLY.fullmatch(s) or _not_a_part_number(s) or DNP_MARK.fullmatch(s) or placeholder_mpn(s))
+
+
 _WORDS_PN = re.compile(r"[A-Za-z][A-Za-z\-]*(?:\s+[A-Za-z][A-Za-z\-]*)+")
 
 

@@ -192,11 +192,8 @@ def service_url(var, default, environ=None, same_host=False, warn=None):
     got = str(env.get(var) or "").strip()
     if not got or got == default:
         return default
-    try:
-        u = urlsplit(got)
-        scheme, host = u.scheme.lower(), (u.hostname or "").lower()
-    except ValueError:
-        scheme = host = ""
+    sp = split_host(got) if "://" in got else None    # review 2026-11-25 (r4 F4): read as split_host reads it, so
+    scheme, host = (sp[0], sp[1]) if sp else ("", "")  # 'https://evil\\@api.nexar.com' is refused, not api.nexar.com
     if str(env.get(TEST_ENDPOINTS) or "").strip() == "1" and scheme in ("http", "https") and host:
         return got
     if scheme == "http" and host and this_computer(host) and not same_host:

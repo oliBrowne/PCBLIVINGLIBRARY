@@ -119,6 +119,10 @@ EXAMPLES = {
     "datasheet.maker_land_kept_standard": "maker land: the datasheet prints its own land, but a second read did not confirm "
                                           "it pad by pad (it gave no pad to compare); the standard land "
                                           "Package_TO_SOT_SMD:SOT-23 is used",
+    "datasheet.maker_land_pins": "maker land: a second read of the datasheet disagrees on the pins (pin_names: read 1 A, "
+                                 "3 K, second read 1 K, 3 A): check the symbol against the datasheet",
+    "datasheet.not_this_part": "datasheet: a person confirms the PDF read is this part's (the datasheet does not seem to "
+                               "name this part)",
     "datasheet.maker_land_waiting": "maker land: waiting for your assistant's second read: Q1-check-abc (see READ_ME.md "
                                     "there); the maker's land replaces the standard land Package_TO_SOT_SMD:SOT-23 when "
                                     "that read agrees with it pad by pad",
@@ -381,7 +385,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 35, "datasheet.py": 10,
+    "librarian.py": 37, "datasheet.py": 10,
 }
 
 

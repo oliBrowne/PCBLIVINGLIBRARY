@@ -884,6 +884,12 @@ def _problems(deps, store, accept):
             out.append((d, f"shared store record {label} is disputed"))
         elif d["kind"] == "lifted" and _rev(e.get("rev")) != d["rev"]:
             out.append((d, f"shared store record {label} is no longer the store's (it is at r{e.get('rev')} now)"))
+        elif (d["kind"] == "lifted" and (str(e.get("level")) not in LEVELS or
+                                         LEVELS.index(str(e.get("level"))) < LEVELS.index("confirmed"))):
+            # review 2026-11-25 (r5 M1): a hold lifted by a confirmed record is lifted no longer once the record is
+            # only checked (the maintainers narrowed who may confirm): only a confirmed record lifts (from the plan)
+            out.append((d, f"shared store record {label} is now only {safe(e.get('level') or 'unrated')}, and only a "
+                           "confirmed record lifts a hold"))
         elif d["kind"] == "built" and accept in ACCEPT and accept != "off" and \
                 LEVELS.index(str(e.get("level"))) < LEVELS.index("confirmed" if accept == "confirmed" else "checked") \
                 if str(e.get("level")) in LEVELS else d["kind"] == "built":
