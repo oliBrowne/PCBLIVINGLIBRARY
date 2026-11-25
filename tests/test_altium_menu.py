@@ -129,7 +129,8 @@ def test_build_writes_well_formed_files():
     rep = AM.build(out, "D:\\ecadlib ws", None, win_dir="D:\\Altium Scripts\\ecadlib (menu)")
     assert rep["problems"] == [] and rep["menu_file"] == AM.PREFS, rep
     units = (AF.DIALOG_UNIT, AF.DIALOG_FORM, AN.UNIT)
-    assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README, AM.PREFS}
+    assert set(rep["written"]) == {AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README, AM.PREFS,
+                                  AM.REQUEST_TEMPLATE}
     for f in (AM.PROJECT, AM.UNIT, *units, AM.INI, AM.RUN_CMD, AM.RUN_VBS, AM.README):
         raw = (out / f).read_bytes()
         assert b"\n" not in raw.replace(b"\r\n", b""), f"{f}: every line ends with CRLF (Windows tools)"
