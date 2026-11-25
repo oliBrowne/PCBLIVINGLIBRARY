@@ -64,7 +64,9 @@ package or the part family: a guessed number is worse than none.
 - numbers_printed: true only when a pin number is printed beside every terminal.
 - terminals: one per terminal (lead, pad, ball) of the drawing, in any order:
     number: the pin number printed beside it, exactly as printed ("" when none is printed);
-    label: the name or letter printed beside it or on it ("G", "VDD", "GND", "XTAL"), "" when none;
+    label: the name or letter printed beside it or on it ("G", "VDD", "GND", "XTAL"), "" when none. A name drawn
+          with a bar over it (active low) is written with "/" before it ("/RESET", "PC6 (/RESET/PCINT14)"); never
+          add a "/" the drawing does not show as a bar, a "/", a "#" or a "~";
     side: which side of the outline, as it lies on the page (top, bottom, left, right). A corner pad: the side it is
           on in the direction the outline is longer, else top / bottom;
     position: its place along that side, 1 = leftmost for the top and bottom sides, 1 = topmost for the left and right
@@ -390,9 +392,54 @@ def same_pin(kind, num, a, b, names=((), ())):
     # names_agree() reads both as one name, so the mark is compared on its own, as crosscheck.compare_pins does
     # (review 2026-11-23, 1.9)
     from .eval.score import active_low
+    if kind in ("other", "dual") and (len(_alternates(a)) > 1 or len(_alternates(b)) > 1):
+        # a multi-function pin: its functions, each with its own mark. The whole-name check below cannot stand in:
+        # it reads no mark in a name with a '/' inside ('~{RESET}/PB5' and 'RESET/PB5' would agree)
+        return _one_of(a, b, names)
     if active_low(a, names[0]) != active_low(b, names[1]):
         return False
-    return names_agree(a, b)
+    return names_agree(a, b) or kind in ("other", "dual") and _same_class(a, b, names[0])
+
+
+_ALT = re.compile(r"[()\[\],;\s]+|(?<=[^/\s(\[,;])/(?=[^/\s)\],;])")
+_FILL = {"OR", "AND"}
+
+
+def _alternates(name):
+    """The functions a multi-function pin's name lists, each as written (its active-low mark kept): 'XTAL1/PB3' ->
+    [XTAL1, PB3]; '(PCINT5/RESET/ADC0/dW) PB5' -> [PCINT5, RESET, ADC0, dW, PB5]; '/WP (IO2)' -> [/WP, IO2];
+    'R\\E\\S\\E\\T\\/PB5' (a bar over RESET only) -> [R\\E\\S\\E\\T\\, PB5]. A '/' that starts a function is
+    its mark, not a separator."""
+    s = str(name or "").replace("_{", "").replace("^{", "")
+    s = re.sub(r"~\{([^{}]*)\}", lambda m: "~" + m.group(1), s).replace("}", "").replace("//", "/ /")
+    s = re.sub(r"(?<![A-Za-z0-9])I/O", "IO", s)                             # 'I/O1' is one function
+    return [t for t in _ALT.split(s) if t and re.search(r"[A-Za-z0-9+\-]", t) and t.upper() not in _FILL]
+
+
+def _one_of(a, b, names):
+    """A multi-function pin named by two sources (KiCad's 'XTAL1/PB3', the drawing's '(PCINT3/XTAL1/CLKI/OC1B/ADC3)
+    PB3'; 'PB3' and 'TOSC1/PB3'): the same pin when every function one side lists is a function the other lists too,
+    with the same active-low mark on each. Two pins swapped still differ unless their names share every function."""
+    from .eval.score import active_low
+    from .crosscheck import norm_pin_name
+    fa = {norm_pin_name(t): active_low(t, names[0]) for t in _alternates(a)}
+    fb = {norm_pin_name(t): active_low(t, names[1]) for t in _alternates(b)}
+    fa.pop("", None), fb.pop("", None)
+    (small, big), other = ((fa, fb), names[1]) if len(fa) <= len(fb) else ((fb, fa), names[0])
+    if not small or not all(k in big and big[k] == low for k, low in small.items()):
+        return False
+    # the shorter name must fit one pin only: 'OC1B' alone is a function of both PB3 and PB4 in Atmel's drawing
+    fits = {str(o) for o in other if set(small) <= {norm_pin_name(t) for t in _alternates(o)}}
+    return len(fits) <= 1
+
+
+def _same_class(a, b, names):
+    """A rail or a single input / output two sources spell differently (KiCad's VS+ is the drawing's V+, VCC its VDD,
+    Vin- its IN-, IN its VIN): the same pin when it is the symbol's only name of that class (pin_text.loose_names), so
+    a part with both VCC and VDD keeps them apart by their exact names."""
+    from . import pin_text as PT
+    loose = PT.loose_names([(str(i), n) for i, n in enumerate(names)])
+    return PT.norm_name(a) in loose and PT.loose_class(a) is not None and PT.loose_class(a) == PT.loose_class(b)
 
 
 def compare(kind, pins, mapping):
@@ -424,7 +471,16 @@ def text_names(texts, page_list, pins, data=None, words_of=None):
     if not words:
         return "the drawing's pages have no text layer to find the pin names in"
     tokens = lambda s: [norm_name(x) for x in re.split(r"[\s,;:()\[\]]+", str(s)) if x]   # "PA11 [PA9]": both
-    miss = [s for n, s in pins if s and not numbered(n, s) and not all(x in words for x in tokens(s))]
+    # a multi-function name ("XTAL1/PB3", RESET with its bar + "/PB5") is printed function by function, in the
+    # drawing's own order and brackets: every function must be a word of the page
+    parts = lambda s: [norm_name(x) for x in _alternates(s)]
+    split = words | {norm_name(x) for p in page_list for w in re.split(r"\s+", str(texts.get(p) or ""))
+                     for x in _alternates(w)}                       # "(PCINT3/XTAL1/CLKI/OC1B/ADC3)" is one word
+    if data is not None:
+        split |= {norm_name(x) for p in page_list for w, _, _ in phrases((words_of or page_words)(data, p))
+                  for x in _alternates(w)}
+    miss = [s for n, s in pins if s and not numbered(n, s) and not all(x in words for x in tokens(s))
+            and not (len(parts(s)) > 1 and all(x and x in split for x in parts(s)))]
     return f"pin names not in the PDF's text on pages {', '.join(map(str, page_list))}: {', '.join(miss[:6])}" if miss else None
 
 
@@ -514,8 +570,19 @@ def placed_names(data, page_list, mapping, words_of=None):
     first = lambda s: re.split(r"[\s\[(]", str(s).strip())[0]
     named = {num: {norm_name(first(s)), norm_name(first(s).rsplit("_", 1)[0])} for num, s in mapping.items()
              if str(s or "").strip() and not numbered(num, s)}     # "PC14-OSC32_IN": the "_IN" may be its own word
+    # a multi-function label ("(PCINT3/XTAL1/CLKI/OC1B/ADC3) PB3"): the functions no other pin's label lists, each a
+    # word of its own in the text layer (the label as a whole is none)
+    alts = {num: {norm_name(x) for x in _alternates(s)} - {""} for num, s in mapping.items() if num in named}
+    owns = {}
+    for num, mine in alts.items():
+        if len(mine) > 1:
+            own = mine - set().union(*[v for k, v in alts.items() if k != num])
+            if own:
+                named[num], owns[num] = named[num] | own, own
     if len(named) < 2:
         return "fewer than two named pins to place"
+    # a name several pins carry (GND on 3, 5 and 21): its copies sit by every one of those pins, and by no other
+    same = {num: {m for m in named if named[m] == named[num]} for num in named}
     confirmed, conflict, partial = None, None, None
     for page in page_list:
         raw = (words_of or page_words)(data, page)
@@ -528,13 +595,14 @@ def placed_names(data, page_list, mapping, words_of=None):
         seen = [dict() for _ in whole]                 # per drawing: pin -> numbers its name's copies sit by
         for num, nm in named.items():
             for w, x, y in words:
-                if w.isdecimal() or norm_name(w) not in nm:
-                    continue
+                if w.isdecimal() or not (norm_name(w) in nm or num in owns and
+                                         owns[num] & {norm_name(a) for a in _alternates(w)}):
+                    continue                           # "(PCINT3/XTAL1/CLKI/OC1B/ADC3)": one word, its own functions
                 i = min(range(len(nums)), key=lambda q: (nums[q][1] - x) ** 2 + (nums[q][2] - y) ** 2)
                 if i in where:
                     seen[where[i]].setdefault(num, set()).add(nums[i][0])
         for k, got in enumerate(seen):
-            off = [f"{mapping[num]} by {'/'.join(sorted(v, key=int))}" for num, v in got.items() if v != {num}]
+            off = [f"{mapping[num]} by {'/'.join(sorted(v, key=int))}" for num, v in got.items() if v != same[num]]
             if off:
                 conflict = conflict or f"page {page}: {'; '.join(off[:4])}" + (", not by its pin" if len(off) else "")
             elif len(got) == len(named):
@@ -565,6 +633,12 @@ def families(texts):
     return out
 
 
+def _family_name(f):
+    """One name for a family datasheets and distributors write several ways: SO / SOP / SOIC (a small-outline package;
+    SSOP, TSSOP and MSOP stay their own), PDIP / SPDIP / CDIP / DIP."""
+    return "DIP" if f.endswith("DIP") else "SOIC" if f in ("SO", "SOP", "SOIC") else f
+
+
 def same_package(title, packages):
     """None when the drawing's title names no package, or names one the part's package texts name too; else why not."""
     a, b = families([title]), families(packages)
@@ -572,7 +646,7 @@ def same_package(title, packages):
         return None
     for fa, na in a:
         for fb, nb in b:
-            if fa == fb and (not na or not nb or na == nb):
+            if _family_name(fa) == _family_name(fb) and (not na or not nb or na == nb):
                 return None
     return f"the drawing is titled {title}, not this part's package ({', '.join(sorted(f + n for f, n in b))})"
 
@@ -621,7 +695,8 @@ def judge(rd, pins, kind, packages, data=None, page_list=(), texts=None, placed=
             miss = placed_names(data, page_list, mapping) if placed is None else placed(mapping)
         if miss:
             return {"status": "unchecked", "why": miss}
-    return {"status": "agreed", "why": f"{len(pins)} pins agree with the pinout drawing ({how})", "drawing": mapping}
+    return {"status": "agreed", "why": f"{len(pins)} pins agree with the pinout drawing ({how})", "drawing": mapping,
+            "how": how}
 
 
 # ---------------------------------------------------------------- the whole check
