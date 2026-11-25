@@ -1026,6 +1026,36 @@ def second_read(reader, job, first, first_pins, model):
     return rec
 
 
+def built_layout(text):
+    """A built .kicad_mod's pads as pad_layout gives a pad table's: [(number, x, y, w, h)] centred on the pads' extent,
+    or None for a footprint that says more than numbered SMD rectangles (a hole, a pad with no number)."""
+    from . import footprint_bench as B
+    try:
+        pads = B.numbers(text)["pads"]
+    except Exception:
+        return None
+    if not pads or any(len(q) > 5 and q[5] for q in pads) or not all(str(q[0]).strip() for q in pads):
+        return None
+    x0 = (min(q[1] - q[3] / 2 for q in pads) + max(q[1] + q[3] / 2 for q in pads)) / 2
+    y0 = (min(q[2] - q[4] / 2 for q in pads) + max(q[2] + q[4] / 2 for q in pads)) / 2
+    return [(str(q[0]), q[1] - x0, q[2] - y0, q[3], q[4]) for q in pads]
+
+
+def land_second(reader, job, res, text, model):
+    """A second read of the maker's land, pad by pad, against the footprint `text` built from the read's own land (its
+    pads as built: built_layout) -> the check record of second_read, "agreed" with "pads" among its agreed fields only
+    when the second read's own copy of the land drawing gives every pad the same place and size (pads_alike). For a
+    part whose footprint another source already gave (librarian.maker_land): run() makes no second read then."""
+    layout = built_layout(text)
+    if not layout:
+        return {"source": "second read", "status": "unchecked", "why": "the built land is not numbered SMD pads only",
+                "compared": [], "agreed": [], "disagreed": [], "not_compared": ["pads"]}
+    first = dict(critical(res["spec"]), pads_read=True, pad_layout=layout)
+    read = (res.get("sidecar") or {}).get("pins") if (res.get("sidecar") or {}).get("merged_pins") else None
+    pins = pdf_bars(job, [(p["num"], p["name"]) for p in (read or (res.get("symbol") or {}).get("pins") or [])])
+    return second_read(reader, job, first, pins, model)
+
+
 def land_printed(job, res):
     """The read's two-pad land against the numbers its own PDF prints in the land drawing (ecadlib.land_text): a free
     second source that reads no model's answer, for the maker lands no standard table has (inductors, crystals,
