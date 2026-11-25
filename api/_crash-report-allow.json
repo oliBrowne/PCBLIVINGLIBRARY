@@ -1150,6 +1150,7 @@
 "_two_row_header",
 "_uncached_formulas",
 "_uncached_message",
+"_unwrap_quoted_rows",
 "_value_class",
 "_warn_unmatched_columns",
 "_xl_text",
