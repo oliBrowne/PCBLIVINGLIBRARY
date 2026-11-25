@@ -1156,6 +1156,8 @@ class Run:
                                      own_h)
         renamed = {"renamed_from": bom_name} if name != bom_name else {}
         if same is not None:                    # (its own file from an earlier run, kept for a skipped part: not shared)
+            if same.get("by") != st["name"]:    # another part's file is now this part's too: never rewritten for one
+                self.shared_fp = getattr(self, "shared_fp", set()) | {str(pcb).casefold()}    # of them (maker_land)
             st["footprint"] = {**{k: v for k, v in same.items() if k not in ("renamed_from", "chosen")},
                                "notes": _own_notes(same) if same.get("by") == st["name"] else
                                [f"shared with {same['by']}"], "name": name, "hash": h, "hash_v": FS.HASH_V, **renamed}
@@ -2581,14 +2583,19 @@ class Run:
         on the standard land's pad of that number: near_standard), the read's footprint replaces the standard one
         -> the cross-check record it is released on. Otherwise None and nothing changes: the standard land stays, said
         in the part's review. Never a new hold, but one: a second read still waiting for your assistant (the part
-        waits for the answer rather than changing its pads after it was released)."""
-        from . import ds_route as DR
+        waits for the answer rather than changing its pads after it was released).
+        Review 2026-11-25: the read's own body (and exposed pad) must be the standard package's by the table's numbers
+        (the second read reads the same PDF, so a family datasheet's other drawing can be read the same way twice);
+        a second read that set a difference aside or quotes instruction-like text confirms nothing; a file another
+        part shares is never rewritten (the land gets a file of its own); a failed write puts every file back."""
+        from . import ds_route as DR, stdparts as SP
         fp = st.get("footprint") or {}
         spec = res.get("spec") or {}
         rd = getattr(self, "reader", None)
         if not str(fp.get("source") or "").startswith("standard:") or not fp.get("kicad_mod") or st.get("alternate") \
                 or not isinstance(spec, dict) or not (spec.get("land") or spec.get("pad_table")) \
-                or rd is None or getattr(rd, "estimate_only", False) or CC.mode_of(getattr(rd, "cfg", None)) == "off":
+                or rd is None or getattr(rd, "estimate_only", False) or CC.mode_of(getattr(rd, "cfg", None)) == "off" \
+                or not (st.get("symbol") or (res.get("symbol") or {}).get("pins")):    # (no pins: held in put_datasheet)
             return None
         stay = lambda why: st["review"].append(f"maker land: the datasheet prints its own land, but {why}; the standard "
                                                f"land {fp['source'].split(':', 1)[1]} is used") and None
@@ -2606,6 +2613,17 @@ class Run:
                                         D.body_on_holes(spec), D.read_hold(res), D.F.joined(spec) and "leads joined") if h]
             if hard:
                 return stay(f"the read of it fails a check ({str(hard[0])[:120]})")
+            pkg = fp["source"].rsplit(":", 1)[-1]
+            if pkg not in SP.packages():
+                return stay("the standard land's package is not in the checked table")
+            c = CC.critical(spec)
+            tb = CC.compare(c, CC.critical(SP.spec(pkg)), "table")
+            need = ["body_length", "body_width"] + (["ep_length", "ep_width"] if c.get("has_ep") else [])
+            if tb["disagreed"] or not set(need) <= set(tb["agreed"]):
+                said = "; ".join(f"{CC.LABEL.get(d['field'], d['field'])}: read {d['first']}, {pkg} {d['second']}"
+                                 for d in tb["disagreed"][:2]) or \
+                    "no " + ", ".join(CC.LABEL.get(k, k) for k in need if k not in tb["agreed"]) + " to compare"
+                return stay(f"the read's package is not shown to be the standard land's ({said[:200]})")
             text, _ = F.build(spec, RU.density_for(spec, self.rules))
             theirs = (self.out / fp["kicad_mod"]).read_text(encoding="utf-8")
         except Exception as e:
@@ -2626,23 +2644,41 @@ class Run:
             said = "; ".join(f"{d.get('field')}: read {d.get('first')}, second read {d.get('second')}"
                              for d in (rec.get("disagreed") or ())[:2]) or rec.get("why") or "it gave no pad to compare"
             return stay(f"a second read did not confirm it pad by pad ({str(said)[:200]})")
+        if rec.get("tie_breaks") or rec.get("embedded_instructions"):     # what holds any other read (UNSURE_READ)
+            return stay("its second read " + ("set a difference aside" if rec.get("tie_breaks") else
+                                              "found instruction-like text in the PDF"))
         old, key = fp["source"], str(self.out / fp["file"]) if fp.get("file") else None
         try:
             h = F.dim(spec["height_max"])[2] if spec.get("height_max") else None
         except (KeyError, TypeError, ValueError):
             h = None
-        mine = bool(key) and fp.get("by") == st["name"] and self.written.get(key) is fp
-        if mine:        # this part's own file, written a moment ago and shared by no one yet: the land takes its name
+        mine = bool(key) and fp.get("by") == st["name"] and self.written.get(key) is fp \
+            and key.casefold() not in getattr(self, "shared_fp", ())
+        # this part's own file, written a moment ago and shared by no one: the land takes its name. A file a later
+        # part shares (a batch builds the reads after every other part) keeps the standard land for that part
+        was = dict(self.written)
+        kdir = getattr(self, "models", None) and Path(self.models) / "KiCad"
+        there = set(kdir.iterdir()) if kdir and kdir.is_dir() else set()
+        saved = {q: q.read_bytes() for q in (self.out / fp["kicad_mod"], Path(key)) if q.is_file()} if mine else {}
+        if mine:
             self.written.pop(key, None)
         st["footprint"] = None
         try:
             self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max" if h else "", spec)
-        except Exception as e:                        # nothing half done: the standard land is put back as it was
+        except Exception as e:                        # nothing half done: every file and record as it was
             st["footprint"] = fp
-            if mine:
-                self.written[key] = fp
-                try:                                  # (its .kicad_mod too, should the failed write have touched it)
-                    (self.out / fp["kicad_mod"]).write_text(theirs, encoding="utf-8", newline="\n")
+            for k in [k for k in self.written if k not in was]:
+                new = self.written.pop(k)
+                for q in (Path(k), self.out / str(new.get("kicad_mod") or "?")):
+                    if q not in saved and q.is_file():
+                        q.unlink()
+            self.written.update(was)
+            for q in (set(kdir.iterdir()) if kdir and kdir.is_dir() else set()) - there:   # a file with no record yet
+                if q not in saved and q.is_file():
+                    q.unlink()
+            for q, data in saved.items():
+                try:
+                    q.write_bytes(data)
                 except OSError:
                     pass
             return stay(f"it could not be written ({type(e).__name__})")
@@ -2867,6 +2903,7 @@ LAND_POS_TOL, LAND_SIZE_TOL = 0.15, 0.15        # mm: a maker's land drawn by Ki
 # or out, by up to NEAR_POS) and resizes it, never along the row: the pitch is the package's (NEAR_PITCH), so the land
 # of the next package down the family (SC-70 for SOT-23: 0.3 mm less pitch) is not near
 NEAR_POS, NEAR_PITCH, NEAR_SIZE = 0.3, 0.05, (0.4, 2.5)
+NEAR_SQUARE = (0.75, 1.34)      # a pad with no lead direction (an exposed pad, a square pad): its size is the package's
 
 
 def near_standard(mine, theirs):
@@ -2889,12 +2926,25 @@ def near_standard(mine, theirs):
         return {str(p[0]): (p[1] - cx, p[2] - cy, p[3], p[4]) for p in ps}
     A, Bc = centred(pa), centred(pb)
     worst = 0.0
+    areas = sorted(q[2] * q[3] for q in Bc.values())
+    big = 4 * areas[len(areas) // 2] if len(areas) > 2 else float("inf")     # an exposed pad among leads
+    two = None
+    if len(Bc) == 2:            # two pads: the lead runs from one pad to the other, whatever the pad's shape
+        (x1, y1, _, _), (x2, y2, _, _) = Bc.values()
+        two = "x" if abs(x1 - x2) >= abs(y1 - y2) else "y"
     for n, (x, y, w, h) in A.items():
         qx, qy, qw, qh = Bc[n]
         d = max(abs(qx - x), abs(qy - y))
         # along the lead: the standard pad's long side (a square pad: either axis)
-        across = abs(qy - y) if qw >= 1.2 * qh else abs(qx - x) if qh >= 1.2 * qw else min(abs(qx - x), abs(qy - y))
-        if d > NEAR_POS or across > NEAR_PITCH or not all(NEAR_SIZE[0] <= a / b <= NEAR_SIZE[1] for a, b in ((w, qw), (h, qh)) if b > 0):
+        square = not (qw >= 1.2 * qh or qh >= 1.2 * qw)
+        across = abs(qy - y) if two == "x" else abs(qx - x) if two == "y" else \
+            abs(qy - y) if qw >= 1.2 * qh else abs(qx - x) if qh >= 1.2 * qw else max(abs(qx - x), abs(qy - y))
+        # a maker makes a pad longer or shorter along its lead; across it the pad is the lead's (a chip's: the body's)
+        # width, and a pad far larger than the rest (an exposed pad) or square has no lead direction at all
+        tight = NEAR_SQUARE
+        wide_x = two == "x" if two else qw >= 1.2 * qh
+        rw, rh = ((NEAR_SIZE, tight) if wide_x else (tight, NEAR_SIZE)) if (two or not square) and qw * qh < big else (tight, tight)
+        if d > NEAR_POS or across > NEAR_PITCH or not all(lo <= a / b <= hi for a, b, (lo, hi) in ((w, qw, rw), (h, qh, rh)) if b > 0):
             return False, f"pad {n} is {d:.2f} mm from the standard pad, {w:g} x {h:g} against {qw:g} x {qh:g}"
         worst = max(worst, d)
     return True, f"{len(A)} pads within {worst:.2f} mm of the standard land's"

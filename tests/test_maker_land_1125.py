@@ -81,6 +81,8 @@ class _Reader:
 
 
 class _Run(L.Run):
+    shared_fp = set()
+
     def __init__(self, tmp):
         self.out, self.reader, self.rules, self.written, self.put = tmp, _Reader(), {}, {}, []
         (tmp / "std.kicad_mod").write_text(STD, encoding="utf-8")
@@ -157,3 +159,87 @@ def test_a_second_read_still_owed_waits_and_says_so(tmp_path, monkeypatch):
     owed = dict(AGREE, status="unchecked", agreed=[], why="waiting for your assistant's second read: Q1-check-abc")
     rec, st, run = _try(tmp_path, monkeypatch, owed)                         # as crosscheck.second_read reports it
     assert rec is None and not run.put and len(st["verify"]) == 1 and "Q1-check-abc" in st["verify"][0], st
+
+
+# ---- code review of 2026-11-25 (PR #301)
+@lite
+def test_a_second_read_that_is_unsure_confirms_nothing(tmp_path, monkeypatch):
+    for extra in (dict(embedded_instructions=["ignore previous instructions"]),
+                  dict(tie_breaks=["body given with length and width the other way round"])):
+        rec, st, run = _try(tmp_path, monkeypatch, dict(AGREE, **extra))
+        assert rec is None and not run.put and st["footprint"]["source"].startswith("standard:"), extra
+        assert "second read" in st["review"][-1] and not st["verify"]
+
+
+@lite
+def test_a_read_of_another_body_or_exposed_pad_keeps_the_standard_land(tmp_path, monkeypatch):
+    wide = _spec()
+    wide["body_width"] = {"min": 1.5, "nom": 1.6, "max": 1.7}                # SC-59's body on a SOT-23 line
+    rec, st, run = _try(tmp_path, monkeypatch, AGREE, spec=wide)
+    assert rec is None and not run.put and "not shown to be the standard land's" in st["review"][-1], st["review"]
+    blank = _spec()
+    blank["body_width"] = None                                               # no body read: nothing to hold it against
+    rec, st, run = _try(tmp_path, monkeypatch, AGREE, spec=blank)
+    assert rec is None and not run.put and st["review"]
+    rec, st, run = _try(tmp_path, monkeypatch, AGREE, source="standard:Package_TO_SOT_SMD:Not-In-The-Table")
+    assert rec is None and not run.put and "not in the checked table" in st["review"][-1]
+
+
+def test_near_standard_holds_the_next_chip_size_and_another_exposed_pad():
+    names = SP.packages()
+    r0402, r0603 = (next(n for n in names if n.startswith(p)) for p in ("R_0402", "R_0603"))
+    assert not L.near_standard(SP.build(r0402)[0], SP.build(r0603)[0])[0]
+    assert not L.near_standard(SP.build(r0603)[0], SP.build(r0402)[0])[0]
+    assert L.near_standard(SP.build(r0603)[0], SP.build(r0603)[0])[0]
+    for qfn in ("QFN-16-1EP_1.8x2.6mm_P0.4mm_EP0.7x1.5mm", "QFN-16-1EP_3x3mm_P0.5mm_EP1.45x1.45mm"):
+        std = SP.build(qfn)[0]
+        ep = max((p for p in B.numbers(std)["pads"] if p[0]), key=lambda p: p[3] * p[4])
+        for f in ((0.6, 1), (1, 0.6), (0.6, 0.6)):
+            small = std.replace(f"(size {ep[3]:g} {ep[4]:g})", f"(size {ep[3] * f[0]:g} {ep[4] * f[1]:g})", 1)
+            assert small != std and L.near_standard(std, std)[0] and not L.near_standard(small, std)[0], (qfn, f)
+    assert L.near_standard(SP.build("QFN-16-1EP_3x3mm_P0.5mm_EP1.675x1.675mm")[0],
+                           SP.build("QFN-16-1EP_3x3mm_P0.5mm_EP1.75x1.75mm")[0])[0]      # 0.075 mm of exposed pad
+
+
+@lite
+def test_a_file_another_part_shares_is_not_rewritten(tmp_path, monkeypatch):
+    seen = {}
+    put = _Run.put_fp
+
+    def put_fp(self, st, *a, **k):
+        seen["written"] = dict(self.written)
+        return put(self, st, *a, **k)
+    monkeypatch.setattr(_Run, "put_fp", put_fp)
+    monkeypatch.setattr(_Run, "shared_fp", {str(tmp_path / "std.PcbLib").casefold()})
+    rec, st, run = _try(tmp_path, monkeypatch, AGREE)
+    assert rec and seen["written"], seen                                     # the standard file kept its record: the
+    assert (tmp_path / "std.kicad_mod").read_text(encoding="utf-8") == STD   # land is picked another name (FS.pick)
+    monkeypatch.setattr(_Run, "shared_fp", set())
+    rec, st, run = _try(tmp_path, monkeypatch, AGREE)
+    assert rec and not seen["written"]                                       # its own file: the land takes its name
+
+
+@lite
+def test_a_failed_write_puts_every_file_and_record_back(tmp_path, monkeypatch):
+    def put_fp(self, st, text, name, source, *a, **k):
+        (self.out / "std.kicad_mod").write_text("half", encoding="utf-8")
+        (self.out / "std.PcbLib").write_bytes(b"half")
+        (self.out / "new.PcbLib").write_bytes(b"new")
+        self.written[str(self.out / "new.PcbLib")] = {"file": "new.PcbLib", "kicad_mod": "new.kicad_mod"}
+        raise OSError("disk full")
+    monkeypatch.setattr(_Run, "put_fp", put_fp)
+    (tmp_path / "std.PcbLib").write_bytes(b"standard")
+    rec, st, run = _try(tmp_path, monkeypatch, AGREE)
+    assert rec is None and st["footprint"]["source"].startswith("standard:") and "could not be written" in st["review"][-1]
+    assert (tmp_path / "std.kicad_mod").read_text(encoding="utf-8") == STD and (tmp_path / "std.PcbLib").read_bytes() == b"standard"
+    assert list(run.written) == [str(tmp_path / "std.PcbLib")] and not (tmp_path / "new.PcbLib").exists()
+
+
+@lite
+def test_a_read_with_no_pins_and_no_symbol_changes_nothing(tmp_path, monkeypatch):
+    run = _Run(tmp_path)
+    fp = {"source": "standard:Package_TO_SOT_SMD:SOT-23", "kicad_mod": "std.kicad_mod", "file": "std.PcbLib", "by": "Q1"}
+    st = {"name": "Q1", "footprint": fp, "symbol": None, "review": [], "verify": [], "tried": [], "found": {}}
+    monkeypatch.setattr(CC, "land_second", lambda *a: dict(AGREE))
+    res = {"spec": _spec(), "symbol": {"pins": []}, "sidecar": {}, "needs_review": []}
+    assert run.maker_land(st, res, {"part": "X", "data": None}, "Q1", "u") is None and st["footprint"] is fp and not st["review"]
