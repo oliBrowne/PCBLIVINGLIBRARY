@@ -116,6 +116,12 @@ EXAMPLES = {
     "datasheet.active_low_bar": "pin names the datasheet prints with a bar over them, marked active low: SHDN, CHRG",
     "datasheet.dip_holes": "DIP holes: the datasheet prints no hole size, so KiCad's DIP hole and pad (0.8 mm / 1.6 mm) were "
                            "used in place of the read's; check the maker's recommended hole",
+    "datasheet.maker_land_kept_standard": "maker land: the datasheet prints its own land, but a second read did not confirm "
+                                          "it pad by pad (it gave no pad to compare); the standard land "
+                                          "Package_TO_SOT_SMD:SOT-23 is used",
+    "datasheet.maker_land_waiting": "maker land: waiting for your assistant's second read: Q1-check-abc (see READ_ME.md "
+                                    "there); the maker's land replaces the standard land Package_TO_SOT_SMD:SOT-23 when "
+                                    "that read agrees with it pad by pad",
     "datasheet.standard_land": "standard land: the datasheet read identified SOIC-8_3.9x4.9mm_P1.27mm (8 pins, pitch 1.27, body "
                                "3.9 x 4.9 -> SOIC-8_3.9x4.9mm_P1.27mm); the read left terminal_length blank, so the checked "
                                "standard land was used. Check the package code on the drawing is this one",
@@ -375,7 +381,7 @@ def test_every_parity_field_has_a_specific_code():
 
 
 NOTE_SITES = {   # file -> number of places that append a review / verify note (each has an EXAMPLES entry above)
-    "librarian.py": 33, "datasheet.py": 10,
+    "librarian.py": 35, "datasheet.py": 10,
 }
 
 

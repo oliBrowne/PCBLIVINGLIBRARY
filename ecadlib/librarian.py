@@ -2573,6 +2573,83 @@ class Run:
             "the datasheet gives no land of its own" if not own else "[datasheet] standard_land = always"
         return name, how, why
 
+    def maker_land(self, st, res, job, fp_name, url):
+        """The maker's recommended land wins over a standard table's (Oliver 2026-11-25): a part whose footprint the
+        standard source built (KiCad's checked land for the package the part search names) and whose datasheet is
+        read anyway for its symbol. When that read gives the maker's own land, a second read of the land drawing
+        gives every pad the same place and size (crosscheck.land_second), and the land is this package's (each pad
+        on the standard land's pad of that number: near_standard), the read's footprint replaces the standard one
+        -> the cross-check record it is released on. Otherwise None and nothing changes: the standard land stays, said
+        in the part's review. Never a new hold, but one: a second read still waiting for your assistant (the part
+        waits for the answer rather than changing its pads after it was released)."""
+        from . import ds_route as DR
+        fp = st.get("footprint") or {}
+        spec = res.get("spec") or {}
+        rd = getattr(self, "reader", None)
+        if not str(fp.get("source") or "").startswith("standard:") or not fp.get("kicad_mod") or st.get("alternate") \
+                or not isinstance(spec, dict) or not (spec.get("land") or spec.get("pad_table")) \
+                or rd is None or getattr(rd, "estimate_only", False) or CC.mode_of(getattr(rd, "cfg", None)) == "off":
+            return None
+        stay = lambda why: st["review"].append(f"maker land: the datasheet prints its own land, but {why}; the standard "
+                                               f"land {fp['source'].split(':', 1)[1]} is used") and None
+        owed = lambda why: st["verify"].append(f"maker land: {why}; the maker's land replaces the standard land "
+                                               f"{fp['source'].split(':', 1)[1]} when that read agrees with it pad by "
+                                               "pad") and None
+        if any(UNSURE_READ.search(str(r)) for r in res.get("needs_review") or ()):
+            return stay("the PDF or its drawing may not be this part's")
+        try:
+            hard = DR.hold_reasons(res, True) or DR.open_unresolved(spec) or pad_table_problems(spec)
+            maker = st.get("maker") or (st.get("found", {}).get("manufacturer") or ("",))[0]
+            hard = hard or [h for h in (D.joined_to_pad(spec, (res.get("symbol") or {}).get("pins")),
+                                        D.thermal_land_missing(spec, maker, url), D.thermal_land_body_sized(spec),
+                                        D.body_unread(spec), D.tab_land_unread(spec), D.tht_holes_unread(spec),
+                                        D.body_on_holes(spec), D.read_hold(res), D.F.joined(spec) and "leads joined") if h]
+            if hard:
+                return stay(f"the read of it fails a check ({str(hard[0])[:120]})")
+            text, _ = F.build(spec, RU.density_for(spec, self.rules))
+            theirs = (self.out / fp["kicad_mod"]).read_text(encoding="utf-8")
+        except Exception as e:
+            return stay(f"the read of it does not build ({type(e).__name__})")
+        near, how = near_standard(text, theirs)
+        if not near:
+            return stay(f"it is not the standard land's package ({how})")
+        try:
+            rec = CC.land_second(rd, job, res, text, (res["sidecar"].get("route") or {}).get("model") or job.get("model")
+                                 or getattr(rd, "model", None))
+        except D.AssistantPending as e:
+            return owed(e)
+        except Exception as e:
+            return stay(f"its second read failed ({type(e).__name__})")
+        if rec.get("status") == "unchecked" and "waiting for your assistant" in str(rec.get("why") or ""):
+            return owed(rec["why"])
+        if rec.get("status") != "agreed" or "pads" not in (rec.get("agreed") or ()):
+            said = "; ".join(f"{d.get('field')}: read {d.get('first')}, second read {d.get('second')}"
+                             for d in (rec.get("disagreed") or ())[:2]) or rec.get("why") or "it gave no pad to compare"
+            return stay(f"a second read did not confirm it pad by pad ({str(said)[:200]})")
+        old, key = fp["source"], str(self.out / fp["file"]) if fp.get("file") else None
+        try:
+            h = F.dim(spec["height_max"])[2] if spec.get("height_max") else None
+        except (KeyError, TypeError, ValueError):
+            h = None
+        mine = bool(key) and fp.get("by") == st["name"] and self.written.get(key) is fp
+        if mine:        # this part's own file, written a moment ago and shared by no one yet: the land takes its name
+            self.written.pop(key, None)
+        st["footprint"] = None
+        try:
+            self.put_fp(st, text, fp_name, f"datasheet:{url}", None, h, "datasheet height_max" if h else "", spec)
+        except Exception as e:                        # nothing half done: the standard land is put back as it was
+            st["footprint"] = fp
+            if mine:
+                self.written[key] = fp
+                try:                                  # (its .kicad_mod too, should the failed write have touched it)
+                    (self.out / fp["kicad_mod"]).write_text(theirs, encoding="utf-8", newline="\n")
+                except OSError:
+                    pass
+            return stay(f"it could not be written ({type(e).__name__})")
+        st["tried"].append(f"maker land: the datasheet's own land replaces {old} ({how}; a second read gives every pad "
+                           "the same place and size)")
+        return {"mode": CC.mode_of(rd.cfg), "status": "agreed", "checks": [rec], "pins": CC.pins_status([rec])}
+
     def put_datasheet(self, st, res, job, fp_name, sym_name, how=""):
         pdf = res["sidecar"].get("pdf") or {}        # the link read (the next one when the API could not fetch the first)
         url, where = pdf.get("url") or job["url"], pdf.get("where") or job["where"]
@@ -2593,6 +2670,10 @@ class Run:
         st["review"].extend(other)
         st["verify"].extend(other)                    # its own hold reason: a person confirms this PDF is this part's
         got = []
+        own = self.maker_land(st, res, job, fp_name, url)   # the maker's own land in place of a standard table's
+        if own:
+            res = dict(res, cross_check=own)
+            got.append("footprint")
 
         def need_pins():                              # EPM240F100: the handbook has no pinout; checked before anything
             if not st["symbol"] and not (res.get("symbol") or {}).get("pins"):   # is written, after the footprint's holds
@@ -2780,6 +2861,43 @@ class Run:
 
 
 LAND_POS_TOL, LAND_SIZE_TOL = 0.15, 0.15        # mm: a maker's land drawn by KiCad and read from the datasheet
+
+
+# mm, mm, ratio: a maker's land for a package against the standard land for it. A maker moves a pad along its lead (in
+# or out, by up to NEAR_POS) and resizes it, never along the row: the pitch is the package's (NEAR_PITCH), so the land
+# of the next package down the family (SC-70 for SOT-23: 0.3 mm less pitch) is not near
+NEAR_POS, NEAR_PITCH, NEAR_SIZE = 0.3, 0.05, (0.4, 2.5)
+
+
+def near_standard(mine, theirs):
+    """The maker's land `mine` is a land for the package the standard land `theirs` is for: the same pad numbers, and
+    each pad's centre within NEAR_POS of the standard pad of that number along one axis and NEAR_PITCH along the other
+    (both centred on their pads, not turned: one builder's frame), neither side of it under NEAR_SIZE[0] or over NEAR_SIZE[1] times the standard pad's. A land read
+    from another package's drawing of a family datasheet (a second read of the same pages may pick it too) fails here:
+    the standard land comes from the part search's package, not from the PDF. -> (True, how) or (False, why)."""
+    from . import footprint_bench as B
+    try:
+        pa, pb = B.numbers(mine)["pads"], B.numbers(theirs)["pads"]
+    except Exception as e:
+        return False, f"not readable ({type(e).__name__})"
+    if not pa or sorted(str(p[0]) for p in pa) != sorted(str(p[0]) for p in pb) or len({str(p[0]) for p in pa}) != len(pa):
+        return False, "other pad numbers"
+
+    def centred(ps):
+        cx = (min(p[1] for p in ps) + max(p[1] for p in ps)) / 2
+        cy = (min(p[2] for p in ps) + max(p[2] for p in ps)) / 2
+        return {str(p[0]): (p[1] - cx, p[2] - cy, p[3], p[4]) for p in ps}
+    A, Bc = centred(pa), centred(pb)
+    worst = 0.0
+    for n, (x, y, w, h) in A.items():
+        qx, qy, qw, qh = Bc[n]
+        d = max(abs(qx - x), abs(qy - y))
+        # along the lead: the standard pad's long side (a square pad: either axis)
+        across = abs(qy - y) if qw >= 1.2 * qh else abs(qx - x) if qh >= 1.2 * qw else min(abs(qx - x), abs(qy - y))
+        if d > NEAR_POS or across > NEAR_PITCH or not all(NEAR_SIZE[0] <= a / b <= NEAR_SIZE[1] for a, b in ((w, qw), (h, qh)) if b > 0):
+            return False, f"pad {n} is {d:.2f} mm from the standard pad, {w:g} x {h:g} against {qw:g} x {qh:g}"
+        worst = max(worst, d)
+    return True, f"{len(A)} pads within {worst:.2f} mm of the standard land's"
 
 
 def lands_agree(a, b):

@@ -364,6 +364,15 @@ CODES = {
                                 "instead of the pads read from the drawing.",
                                 "Check the package code on the datasheet's drawing is {package}.",
                                 [r"standard land: the datasheet read identified (?P<package>\S+) \(.*\); (?P<why>.+?), so the checked standard land"]),
+    "datasheet.maker_land_kept_standard": ("The datasheet prints the maker's own land, but {why}, so the checked standard land "
+                                           "{package} was used.",
+                                           "Nothing to do unless you want the maker's pads: compare the footprint with the "
+                                           "datasheet's land drawing.",
+                                           [r"maker land: the datasheet prints its own land, but (?P<why>.+); the standard land (?P<package>\S+) is used"]),
+    "datasheet.maker_land_waiting": ("The datasheet prints the maker's own land. It replaces the standard land {package} once "
+                                     "a second read of the land drawing agrees with it pad by pad; that read is still owed.",
+                                     "Have your assistant answer the request named here, then run again: {why}.",
+                                     [r"maker land: (?P<why>.+); the maker's land replaces the standard land (?P<package>\S+) when that read agrees"]),
     "datasheet.joined_land": ("The maker's land joins pins {pins} into one pad, so that pad was built instead of the standard "
                               "package's separate pads, and the symbol has one pin for it.",
                               "Check on the datasheet's land drawing that those pins share the pad.",
