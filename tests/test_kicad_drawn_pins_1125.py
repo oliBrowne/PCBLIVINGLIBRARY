@@ -43,7 +43,7 @@ def _variant(monkeypatch, text_verdict, drawing):
 
 
 NO_TABLE = {"status": "unchecked", "why": "page 7 names 3 of 8 pins"}
-AGREED = {"status": "agreed", "why": "8 pins agree with the pinout drawing (printed)", "pages": [1]}
+AGREED = {"status": "agreed", "why": "8 pins agree with the pinout drawing (printed)", "pages": [1], "how": "printed"}
 
 
 @lite
@@ -110,6 +110,8 @@ def test_drawn_kicad_pins_asks_only_with_the_datasheet_source_and_passes_the_sym
     assert seen["job"] == {"data": b"pdf", "part": "MAX485ESA+", "name": "U7"}
     assert seen["res"]["symbol"]["pins"][1] == {"num": "2", "name": "~{RE}"} and len(seen["res"]["symbol"]["pins"]) == 8
     assert seen["kind"] == "other" and seen["packages"] == [LAND, CASE, ""]
+    monkeypatch.setattr(PD, "confirm", lambda *a: dict(AGREED, how="pins counted from the outline"))
+    assert run.drawn_kicad_pins(st, item, row, "MAX485ESA+", SO8, b"pdf", (LAND, CASE, ""))["status"] == "unchecked"
     run.reader.estimate_only = True                                        # an estimate asks nothing
     assert run.drawn_kicad_pins(st, item, row, "MAX485ESA+", SO8, b"pdf", (LAND, CASE, "")) is None
 
@@ -160,6 +162,10 @@ def test_the_active_low_mark_is_compared_function_by_function():
     assert not _same("RESET/PB5", "PB5 (/RESET)")
     assert _same("W\\P\\/IO_{2}", "/WP (IO2)") and not _same("W\\P\\/IO_{2}", "WP (IO2)")
     assert _same("H\\O\\L\\D\\/" + BAR + "/IO_{3}", "/HOLD or /RESET (IO3)")
+    for a, b in (("~{RESET}/PB5", "RESET/PB5"), ("R/~{W}", "R/W"), ("SCK/~{WR}", "SCK/WR"), ("R/W", "R//W"),
+                 ("~{CS}/SS", "CS/SS")):                                  # review 2026-11-25: a bar dropped by the read
+        assert not _same(a, b), (a, b)
+    assert _same("~{CS}/SS", "/CS /SS") is False and _same("~{CS}/SS", "/CS SS")
     assert _same("R\\S\\T\\", "/RST") and not _same("R\\S\\T\\", "RST") and not _same("EN", "/EN")
 
 
@@ -195,3 +201,37 @@ def test_so_is_soic_and_spdip_is_dip_in_a_drawings_title():
 
 def test_the_prompt_asks_for_the_bar():
     assert "bar over it" in PD.SYSTEM and '"/RESET"' in PD.SYSTEM
+
+
+def test_a_name_several_pins_carry_is_placed_by_all_of_its_pins():
+    """ATmega328P's GND is pins 3, 5 and 21: its copies sit by every one of them (round 2: held as 'GND by 3/5/21')."""
+    from tests.test_pin_drawing_1119 import so8_words
+    two = [("1", "IN"), ("2", "GND"), ("3", "GND"), ("4", "EN"), ("5", "NC1"), ("6", "OUT"), ("7", "FB"), ("8", "VCC")]
+    page = lambda data, p: so8_words(two)
+    assert PD.placed_names(b"pdf", [1], dict(two), page) is None
+    moved = dict(two, **{"3": "EN", "4": "GND"})                             # one GND read on the wrong pin
+    assert PD.placed_names(b"pdf", [1], moved, page) is not None
+    one = dict(two, **{"3": "SYNC"})                                        # the drawing has two GNDs, the reading one
+    assert PD.placed_names(b"pdf", [1], one, page) is not None
+
+
+def test_functions_printed_as_one_bracketed_word_are_found_and_placed():
+    from tests.test_pin_drawing_1119 import so8_words
+    sym = [("1", "~{RESET}/PB5"), ("2", "XTAL1/PB3"), ("3", "XTAL2/PB4"), ("4", "GND"), ("5", "AREF/PB0"), ("6", "PB1"),
+           ("7", "PB2"), ("8", "VCC")]
+    drawn = [("1", "(PCINT5/RESET/ADC0/dW)"), ("2", "(PCINT3/XTAL1/CLKI/OC1B/ADC3)"), ("3", "(PCINT4/XTAL2/CLKO/OC1B/ADC2)"),
+             ("4", "GND"), ("5", "(MOSI/DI/SDA/AIN0/OC0A/OC1A/AREF/PCINT0)"), ("6", "(MISO/DO/AIN1/OC0B/OC1A/PCINT1)"),
+             ("7", "(SCK/USCK/SCL/ADC1/T0/INT0/PCINT2)"), ("8", "VCC")]
+    ports = {"1": "PB5", "2": "PB3", "3": "PB4", "5": "PB0", "6": "PB1", "7": "PB2"}
+
+    def page(data, p, names=drawn):                      # the bracket and the port are two words by the same number
+        w = so8_words(names)
+        return w + [(ports[n], x - 5 if x < 100 else x + 5, y) for n, x, y in [(a, *b) for a, b in
+                    [(n, next((x, y) for s, x, y in w if s == dict(names)[n])) for n in ports]]]
+    mapping = {n: f"{s} {ports[n]}" if n in ports else s for n, s in drawn}
+    assert PD.text_names({}, [1], sym, b"pdf", page) is None
+    assert PD.placed_names(b"pdf", [1], mapping, page) is None
+    swapped = dict(mapping, **{"2": mapping["3"], "3": mapping["2"]})
+    assert PD.placed_names(b"pdf", [1], swapped, page) is not None
+    assert PD.text_names({}, [1], [("2", "XTAL1/PB9")] + sym[2:], b"pdf", page) is not None
+

@@ -2059,7 +2059,12 @@ class Run:
             res = {"symbol": {"pins": [{"num": n, "name": nm} for n, nm in pins]}}
             text = " ".join(str(x or "") for x in (row.get("src_description"),
                                                    (st.get("found", {}).get("description") or ("",))[0]))
-            return PD.confirm(self.reader, job, res, PD.kind_of(text), [str(p or "") for p in packages])
+            v = PD.confirm(self.reader, job, res, PD.kind_of(text), [str(p or "") for p in packages])
+            if (v or {}).get("status") == "agreed" and v.get("how") != "printed":
+                # a library symbol is confirmed only by numbers the drawing prints, never by numbers worked out
+                # from the outline (a discrete's drawing skips the text-layer checks an IC's gets)
+                return {"status": "unchecked", "why": "the drawing prints no pin numbers of its own"}
+            return v
         except D.AssistantPending as e:
             return {"status": "waiting", "why": str(e)}
         except Exception as e:                         # a check that breaks never releases a part: it stays held
