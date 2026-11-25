@@ -2019,13 +2019,51 @@ class Run:
         v = few_named(PT.check_pdf(data, pins, part=mpn, package=(land, case, device)), pins)
         if v["status"] != "agreed":
             st["tried"].append(f"kicad: {sym_ref} for {mpn}: the datasheet's pin table did not confirm it ({v.get('why')})")
-            return False
+            # no pin table in the text layer (a drawn pinout, a table with no numbers): the pinout DRAWING, read from
+            # pictures and judged in code (ecadlib.pin_drawing), as a datasheet read's symbol is. Never after a doubt
+            # (names printed with other numbers) or a disagreement: those stay with a person.
+            d = None
+            if v["status"] == "unchecked" and not v.get("doubt") and data:
+                d = self.drawn_kicad_pins(st, item, row, mpn, pins, data, (land, case, device))
+            if not d or d.get("status") != "agreed":
+                if d and d.get("why") and d.get("status") in ("disagreed", "waiting", "unchecked"):
+                    st["tried"].append(f"kicad: {sym_ref} for {mpn}: pinout drawing: {d['status']}: {d['why']}")
+                return False
+            st["tried"].append(f"kicad: {sym_ref} for {mpn} confirmed: {said} is its land {land}" +
+                               (" (a package its footprint filters leave out)" if unfiltered else "") +
+                               f", and {d['why']}, read from pictures of PDF page{'s' if len(d.get('pages') or ()) > 1 else ''} "
+                               f"{', '.join(map(str, d.get('pages') or ()))} of {link}")
+            return True
         st["tried"].append(f"kicad: {sym_ref} for {mpn} confirmed: {row.get('src_package_from') or 'the part search'}'s "
                            f"case {case!r} is its land {land}" + (" (a package its footprint filters leave out)"
                                                                   if unfiltered else "") +
                            f", and its {v['pins']} pins agree with the {v.get('where', 'pin table')} on page {v['page']} "
                            f"of {link}")
         return True
+
+    def drawn_kicad_pins(self, st, item, row, mpn, pins, data, packages):
+        """The pinout drawing's verdict (ecadlib.pin_drawing) on a KiCad symbol matched by name + ordering suffix,
+        when the datasheet's text layer has no pin table that names its pins: the same second read of the pinout
+        pages' pictures and the same code checks a datasheet read's symbol gets. Only with the datasheet source on
+        (it is that source's reader, key or assistant, cost cap and cache); -> verdict dict, or None when not asked."""
+        from . import pin_drawing as PD
+        if "datasheet" not in (self.sources or ()):
+            return None
+        try:
+            if self.reader is None:
+                self.reader = D.Reader(self.out, Path(self._kicad_args[0] or self.out / "cache").parent, self.api_key,
+                                       self.rules, self.http)
+            if getattr(self.reader, "estimate_only", False):
+                return None
+            job = {"data": data, "part": mpn, "name": item["name"]}
+            res = {"symbol": {"pins": [{"num": n, "name": nm} for n, nm in pins]}}
+            text = " ".join(str(x or "") for x in (row.get("src_description"),
+                                                   (st.get("found", {}).get("description") or ("",))[0]))
+            return PD.confirm(self.reader, job, res, PD.kind_of(text), [str(p or "") for p in packages])
+        except D.AssistantPending as e:
+            return {"status": "waiting", "why": str(e)}
+        except Exception as e:                         # a check that breaks never releases a part: it stays held
+            return {"status": "unchecked", "why": f"the pinout drawing check failed ({type(e).__name__}: {str(e)[:120]})"}
 
     def same_copper(self, a, b):
         """Two KiCad land names (table names) are the same land: the same pads within lands_agree's tolerances (KiCad's
