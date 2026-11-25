@@ -532,6 +532,7 @@ def _read_csv(p, widths=None):
     lines = [ln for ln in re.findall(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$", text) if ln.strip()]
     if not lines:
         raise ValueError(f"{p}: the BOM file is empty")
+    lines = _unwrap_quoted_rows(lines)
 
     def score(d):                                                         # rows sharing the commonest width > 1
         ws = [len(r) for r in csv.reader(lines[:30], delimiter=d)]
@@ -561,6 +562,23 @@ def _read_csv(p, widths=None):
     if widths is not None:
         widths[:] = [len(r) for r in rows]                                # before padding: 'Footprint,' declares a column
     return df
+
+
+_ONE_QUOTED_CELL = re.compile(r'\s*"(?:[^"]|"")*"\s*')
+
+
+def _unwrap_quoted_rows(lines):
+    """A CSV whose every row was saved as one quoted cell ('"Reference,""Qty"",""Value""'): a KiCad BOM pasted into
+    one spreadsheet column and saved again (2026-11-25 real BOM). -> the rows inside the cells; any other file is
+    returned as it is. Only when every row is one cell that starts with a quote and holds a comma, semicolon or tab."""
+    try:
+        rows = list(csv.reader(lines))
+    except csv.Error:
+        return lines
+    if len(rows) < 2 or not all(len(r) == 1 and re.search(r"[,;\t]", r[0]) for r in rows) or \
+            not all(_ONE_QUOTED_CELL.fullmatch(ln) for ln in lines):   # not '"Reference";"Value"' (a ';' file with
+        return lines                                                   # every cell quoted)
+    return [r[0] + "\n" for r in rows]
 
 
 _FIXED_HEADER = re.compile(r"(?:Part|Qty)[ ]+Value[ ]+(?:Device|Package)\b.*")   # EAGLE: 'Part  Value  Device ...'
