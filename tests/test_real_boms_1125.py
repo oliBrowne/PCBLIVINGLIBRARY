@@ -89,3 +89,44 @@ def test_lines_with_a_value_as_part_number_are_not_built_as_one_part(tmp_path):
     assert "4.7uF" not in mpns, plan
     names = sorted(i["name"] for i in plan)
     assert len(names) == 2 and "0603" in names[0] and "0805" in names[1], names    # one part per size
+
+
+def test_more_value_spellings_are_no_part_number():
+    for s in ["4700pF", "1000pF", "10000pF", "1000uF", "100n", "10u", "22p", ".1uF", "100mOhm", "10mR", "R010",
+              "4700Ω", "1000 Ohm"]:
+        assert BT._not_a_part_number(s) == "value", s
+    for s in ["100N", "22P", "2200U", "1000", "R12", "R1000", "R0805", "R0603", "R0402", "10000", "74HC595", "CL10"]:
+        assert BT._not_a_part_number(s) is None, s
+
+
+VALUE_AS_PART_4DIGIT = """ITEM,QTY,REFERENCE DESIGNATORS,PART,DESCRIPTION,MANUFACTURER
+1,1,C1,4700pF,CAP CER 4700PF 50V X7R 0603,Murata
+2,1,C2,4700pF,CAP CER 4700PF 50V X7R 0805,Murata
+"""
+
+
+@lite
+def test_four_digit_values_as_part_number_are_not_built_as_one_part(tmp_path):
+    import json
+    from ecadlib import librarian as L
+    bom = tmp_path / "bom.csv"
+    bom.write_text(VALUE_AS_PART_4DIGIT, encoding="utf-8")
+    L.run(bom, out=tmp_path / "lib", sources=["standard"], offline=True, cache=tmp_path / "cache", log=lambda *a, **k: None)
+    plan = json.loads((tmp_path / "lib" / "plan.json").read_text(encoding="utf-8"))
+    mpns = {p["value"] for i in plan for p in i.get("parameters", []) if p["name"] == "Manufacturer Part Number"}
+    assert "4700pF" not in mpns, plan
+    assert len(plan) == 2, [i["name"] for i in plan]
+
+
+@lite
+def test_a_value_in_the_mpn_cell_that_is_not_the_value_is_held(tmp_path):
+    p = tmp_path / "bom.csv"
+    p.write_text("Reference,Value,Footprint,MPN,Description\n"
+                 "C2,1uF,Capacitor_SMD:C_0603_1608Metric,10uF,CAP 1uF 0603\n"
+                 "R7,1k,Resistor_SMD:R_0603_1608Metric,10k,RES 1k 0603\n"
+                 "R8,4k7,Resistor_SMD:R_0603_1608Metric,4.7K,RES 4.7K 0603\n"
+                 "C3,100nF,Capacitor_SMD:C_0603_1608Metric,0.1uF,CAP 0603\n", encoding="utf-8")
+    lines, _ = BT.read_bom(p)
+    hold = {d["designator"]: d.get("bom_hold", "") for d in lines}
+    assert "10uF" in hold["C2"] and "10k" in hold["R7"], hold
+    assert not hold["R8"] and not hold["C3"], hold                 # the same value spelt another way

@@ -952,6 +952,10 @@ def read_bom(path, columns=None, rules=None, root=None):
             note.append(f"the MPN cell holds {d['mpn']!r}, {why}, not the maker's part number: read as the "   # never
                         "description")                                  # with this as its MPN ('Part' = '0805, 4.7uF'
             d["description"] = f"{d['description']}; {d['mpn']}" if d.get("description") else d["mpn"]   # / 'Blue LED')
+            if bad == "value" and _values_differ(d.get("value", ""), d["mpn"]):   # Value 1uF, MPN cell 10uF: one is a
+                hold = (f"Value {d['value']} but the MPN cell holds another value, {d['mpn']}: one of the two "   # slip,
+                        "is wrong; fix the BOM line")              # even when the description repeats the Value
+                d["bom_hold"] = f"{d['bom_hold']}; {hold}" if d.get("bom_hold") else hold
             d["mpn"] = ""
         if d.get("mpn"):
             d["mpn"], extra, mpn_dnp = _split_mpn(d["mpn"], d.get("manufacturer", ""))
@@ -1465,9 +1469,29 @@ def _not_a_part_number(s):
 
 
 # a passive's value with its unit or multiplier, and nothing else: no maker's part number is only this. At most 3
-# digits before and after the unit: Wurth '9774030243R', '7M16000017', Keystone '5121K331' are part numbers
+# digits before and after a bare multiplier or R: Wurth '9774030243R', '7M16000017', Keystone '5121K331' are part
+# numbers. A farad or henry with its prefix ('4700pF', '1000uF', '.1uF') or an ohm sign may have more digits; a bare
+# lower-case p/n/u ('100n', '22p') or milliohm ('100mOhm', '10mR', 'R010') is a value too
 _VALUE_ONLY = re.compile(r"\d{1,3}(?:[.,]\d{1,3})?\s*(?:[pPnNuUµμm]\s*[FfHh]|[FfHh]|[kKM]\s*(?:Ω|[Oo]hms?|[Rr])?|Ω|[Oo]hms?|[Rr])"
-                         r"|\d{1,3}[pnuµμRrkKM]\d{1,3}\s*[FH]?")       # '4K7', '1n5' (lower case: '2N7002' is a part)
+                         r"|\d{1,3}[pnuµμRrkKM]\d{1,3}\s*[FH]?"        # '4K7', '1n5' (lower case: '2N7002' is a part)
+                         r"|(?:\d{1,5}(?:[.,]\d{1,3})?|[.,]\d{1,3})\s*[pPnNuUµμ]\s*[FfHh]"   # '4700pF', '1000uF', '.1uF'
+                         r"|\d{1,4}(?:[.,]\d{1,3})?\s*[kKM]?\s*(?:Ω|[Oo]hms?)"            # '1000 Ohm', '4700Ω'
+                         r"|\d{1,3}(?:[.,]\d{1,3})?\s*(?:[pnuµμ]|m\s*(?:Ω|[Oo]hms?|[Rr]))"   # '100n', '22p', '10mR'
+                         r"|[Rr]0\d{2}")             # 'R010': 10 milliohm ('R0805', 'R0603' are chip sizes)
+
+
+def _values_differ(value, other):
+    """True when a line's Value and a value written in its MPN cell both read as values and are not the same one
+    ('1uF' and '10uF', '1k' and '10k'); False when they agree or either does not read ('DNP', a name)."""
+    from .kicad_index import parse_value
+    def read(s):
+        s = str(s or "").strip()
+        v = parse_value(s)
+        return parse_value(s.lower()) if v is None else v       # '100N' as 100n
+    a, b = read(value), read(other)
+    if a is None or b is None:
+        return False
+    return abs(a - b) > 1e-6 * max(abs(a), abs(b), 1e-15)
 
 
 def maker_only_mpn(s, maker=""):
