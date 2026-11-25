@@ -67,7 +67,24 @@ def test_a_quarter_turn_and_another_origin_agree():
         p["x"], p["y"] = -p["y"] + 5.0, p["x"] + 3.0                 # turned 90 degrees, origin off centre
         p["w"], p["h"] = p["h"], p["w"]
     t["origin"] = "datum"
-    assert read(first(), second(t))["status"] == "agreed"
+    s = second(t)
+    s["body_length"], s["body_width"] = {"nom": 1.2}, {"nom": 2.0}  # the whole drawing turned: body with it
+    assert read(first(), s)["status"] == "agreed"
+
+
+def test_pads_turned_against_the_same_body_disagree():
+    # review 2026-11-25 (r3 F3): the same 2.0 x 1.2 body in both reads and the pads a quarter turn against it: one
+    # read has its copper across the body, so the pads do not agree
+    t = copy.deepcopy(SIT)
+    for p in t["pads"]:
+        p["x"], p["y"] = -p["y"], p["x"]
+        p["w"], p["h"] = p["h"], p["w"]
+    c = read(first(), second(t))
+    assert c["status"] == "disagreed" and any(d["field"] == "pads" for d in c["disagreed"]), c
+    t2 = copy.deepcopy(SIT)                                          # a half turn is the same land: still agrees
+    for p in t2["pads"]:
+        p["x"], p["y"] = -p["x"], -p["y"]
+    assert read(first(), second(t2))["status"] == "agreed"
 
 
 def test_a_mirror_image_disagrees():

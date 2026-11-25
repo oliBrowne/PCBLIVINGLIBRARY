@@ -399,7 +399,7 @@ def main(argv=None, inp=input):
         print("\nNot granted.")
         return 2
     try:
-        res = grant(ws, r["id"], a.user, reason)
+        res = grant(ws, r["id"], who, reason)   # the name shown is the name recorded (review 2026-11-25, r4 F3)
     except ValueError as e:
         print(f"ecadlib confirm: {e}", file=sys.stderr)
         return 2

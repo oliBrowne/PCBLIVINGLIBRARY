@@ -373,6 +373,15 @@ CODES = {
                                      "a second read of the land drawing agrees with it pad by pad; that read is still owed.",
                                      "Have your assistant answer the request named here, then run again: {why}.",
                                      [r"maker land: (?P<why>.+); the maker's land replaces the standard land (?P<package>\S+) when that read agrees"]),
+    "datasheet.maker_land_pins": ("A second read of the datasheet disagrees with the symbol's pins ({said}), so the part is "
+                                  "held and the standard land stays.",
+                                  "Check the symbol's pins against the datasheet's pin table, then release it anyway if "
+                                  "they match.",
+                                  [r"maker land: a second read of the datasheet disagrees on the pins \((?P<said>.+)\): check the symbol"]),
+    "datasheet.not_this_part": ("The datasheet read may not be this part's ({why}), so a person confirms it before release.",
+                                "Open the PDF and check it names this part and its package, then release it anyway if "
+                                "it does.",
+                                [r"datasheet: a person confirms the PDF read is this part's \((?P<why>.+)\)"]),
     "datasheet.joined_land": ("The maker's land joins pins {pins} into one pad, so that pad was built instead of the standard "
                               "package's separate pads, and the symbol has one pin for it.",
                               "Check on the datasheet's land drawing that those pins share the pad.",

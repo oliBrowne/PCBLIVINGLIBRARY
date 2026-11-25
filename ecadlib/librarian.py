@@ -1309,10 +1309,14 @@ class Run:
         if st.get("hint_fp") and bom_fp and AX.lands_differ(st["hint_fp"], bom_fp):    # R-BF-5: the BOM's land is
             st["verify"].append(f"footprint: the BOM names {bom_fp} but the symbol's Footprint property is "   # built;
                                 f"{st['hint_fp']}: check which package the part has")    # the symbol says another
-        clash = chip_size_clash(st, item, ln)
+        # review 2026-11-25 (r1 F1): a maker land read in this pass (maker_land) replaced a standard land; the clash
+        # checks read only a land whose source names its outline, so they are asked about the land it replaced (the
+        # maker land was confirmed to be that package's): a clash the standard land had still holds the part
+        cst = dict(st, footprint=st["maker_land_from"]) if st.get("maker_land_from") else st
+        clash = chip_size_clash(cst, item, ln)
         if clash:
             st["verify"].append(clash)
-        for clash in _clashes(st, item, ln, row, kind):
+        for clash in _clashes(cst, item, ln, row, kind):
             if clash and clash not in st["verify"]:           # the line's own sources disagree: never the first read's
                 st["verify"].append(clash)
         self._finish_found(st, row)
@@ -2640,6 +2644,14 @@ class Run:
             return stay(f"its second read failed ({type(e).__name__})")
         if rec.get("status") == "unchecked" and "waiting for your assistant" in str(rec.get("why") or ""):
             return owed(rec["why"])
+        pins_off = [d for d in rec.get("disagreed") or () if isinstance(d, dict)
+                    and str(d.get("field") or "") in ("pins", "pin_names", "pin_count", "pin_positions")]
+        if pins_off:                                  # review 2026-11-25 (r1 F4): the second read disagrees on the
+            said = "; ".join(f"{d.get('field')}: read {d.get('first')}, second read {d.get('second')}"   # pins: what
+                             for d in pins_off[:2])   # any other read's disagreeing cross-check does, a hold
+            st["verify"].append(f"maker land: a second read of the datasheet disagrees on the pins ({said[:200]}): "
+                                "check the symbol and the pads against the datasheet")
+            return stay("its second read disagrees on the pins")
         if rec.get("status") != "agreed" or "pads" not in (rec.get("agreed") or ()):
             said = "; ".join(f"{d.get('field')}: read {d.get('first')}, second read {d.get('second')}"
                              for d in (rec.get("disagreed") or ())[:2]) or rec.get("why") or "it gave no pad to compare"
@@ -2682,6 +2694,7 @@ class Run:
                 except OSError:
                     pass
             return stay(f"it could not be written ({type(e).__name__})")
+        st["maker_land_from"] = fp                    # the clash checks still read the standard land it replaced
         st["tried"].append(f"maker land: the datasheet's own land replaces {old} ({how}; a second read gives every pad "
                            "the same place and size)")
         return {"mode": CC.mode_of(rd.cfg), "status": "agreed", "checks": [rec], "pins": CC.pins_status([rec])}
@@ -2873,6 +2886,11 @@ class Run:
             st["verify"].append(f"datasheet reader output ({', '.join(got)}): compare with {url or where}; "
                                 "see datasheet/*.review.md"
                                 + (f" ({len(res['needs_review'])} items flagged)" if res["needs_review"] else ""))
+            unsure = [str(r) for r in res.get("needs_review") or ()
+                      if NOT_THIS_PART.search(str(r)) and not WORD_ONLY.search(str(r))]
+            if unsure:                                # review 2026-11-25 (r1 F2): a PDF that may be another part's is a
+                st["verify"].append(f"datasheet: a person confirms the PDF read is this part's ({unsure[0][:160]})")
+                # person's to confirm, never the opt-in AI hold reviewer's (its LOOKS reads the line above only)
             if self.store is not None and getattr(self.store, "enabled", False) and res["needs_review"]:
                 st["read_review"] = [str(r) for r in res["needs_review"]]   # (a store agreement lifting the hold
                 #                                                           moves them to the review list)
@@ -3298,6 +3316,10 @@ def case_land(case, kind=None):
 UNSURE_READ = re.compile(r"does not seem to name|datasheet from your folder|not downloaded here|found by a web search|"
                          r"package drawing came from|no drawing of this package|instruction-like text|"
                          r"set aside|check it is this part", re.I)
+# ...of which these say the PDF read may be another part's, or not what it seems: a person's to confirm, never the opt-in
+# AI hold reviewer's (review 2026-11-25, r1 F2)
+NOT_THIS_PART = re.compile(r"does not seem to name|found by a web search|package drawing came from|"
+                           r"no drawing of this package|instruction-like text|set aside|check it is this part", re.I)
 # ...except the one difference set aside that leaves no doubt about the part: a two-terminal read built from the maker's
 # whole land, called chip on one side and molded on the other, with its pin count and body agreed (crosscheck._label_only)
 WORD_ONLY = re.compile(r"cross-check agreed once a difference was set aside: package type read (?:chip|molded), other "

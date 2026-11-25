@@ -259,16 +259,17 @@ def pad_layout(spec):
     return [(n, x - x0, y - y0, w, h) for n, x, y, w, h in out]
 
 
-def pads_alike(a, b):
+def pads_alike(a, b, turns=(0, 1, 2, 3)):
     """Two reads' pad layouts (pad_layout) -> (agree, first, second) for the check record: the same pad numbers, and
     every pad within PAD_TOL of the other read's pad of that number in place and size, the second read's footprint
     turned by 0, 90, 180 or 270 degrees as a whole (a drawing printed the other way round), never mirrored (a bottom
-    view read as top: its pads would land on the other side)."""
+    view read as top: its pads would land on the other side). turns: the quarter turns allowed (compare passes the
+    ones that keep the pads the body's way round: review 2026-11-25, r3 F3)."""
     na, nb = sorted(p[0] for p in a), sorted(p[0] for p in b)
     if na != nb:
         return False, f"{len(a)} pads ({', '.join(na[:12])})", f"{len(b)} pads ({', '.join(nb[:12])})"
     worst = None
-    for q in range(4):
+    for q in turns:
         def turn(p, q=q):
             n, x, y, w, h = p
             for _ in range(q):
@@ -663,7 +664,16 @@ def compare(first, second, kind="read"):
         rec["rows_agree"] = tuple(first["rows"]) == theirs or bool(turned) and tuple(first["rows"]) == theirs[::-1]
     if kind == "read" and first.get("pad_layout"):     # pads the read placed one by one, against the second read's
         if second.get("pad_layout"):
-            put("pads", *pads_alike(first["pad_layout"], second["pad_layout"]))
+            # the pads turn with the body: a second read that gives the same body and the pads a quarter turn against
+            # it agrees on neither land (one read has its copper across the body). A square body, or one either read
+            # leaves out, does not say which way round
+            nom = lambda v: v[0] if isinstance(v, (tuple, list)) and v and _num(v[0]) else \
+                (_val(v) or (None,))[0]
+            bl, bw = nom(first.get("body_length")), nom(first.get("body_width"))
+            square = bl is None or bw is None or abs(bl - bw) <= 0.1 or \
+                nom(second.get("body_length")) is None or nom(second.get("body_width")) is None
+            turns = (0, 1, 2, 3) if square else (1, 3) if "body" in turned else (0, 2)
+            put("pads", *pads_alike(first["pad_layout"], second["pad_layout"], turns))
         else:
             rec["not_compared"].append("pads")
     dims = [f for f in rec["compared"] if f in DIMS]
@@ -710,7 +720,18 @@ def compare_pins(a, b, ep=()):
     # the same name with the active-low mark in one read only (EN vs ~{EN}, Q vs /Q) is the pin's sense inverted:
     # names_agree() reads both as one name, so the mark is compared on its own (full review 2026-11-10, 3.4)
     from .eval.score import active_low
-    flipped = lambda n: active_low(na[n], na.values()) != active_low(nb[n], nb.values())
+    from .pin_drawing import _alternates
+
+    def marks(name, names):                       # a multi-function name's functions, each with its own mark: active_low
+        return {norm_pin_name(t): active_low(t, names) for t in _alternates(name)}   # reads none in '~{RESET}/PB5'
+
+    def flipped(n):                               # (review 2026-11-25, r3 F2: '~{RESET}/PB5' agreed with 'RESET/PB5')
+        if active_low(na[n], na.values()) != active_low(nb[n], nb.values()):
+            return True
+        if len(_alternates(na[n])) < 2 and len(_alternates(nb[n])) < 2:
+            return False
+        ma, mb = marks(na[n], na.values()), marks(nb[n], nb.values())
+        return any(k and k in mb and ma[k] != mb[k] for k in ma)
     diff = [n for n in sorted(set(da) & set(db), key=key) if da[n] and db[n] and not same(n)
             and (not names_agree(na[n], nb[n]) or flipped(n))
             and not (n in ep and (ep_named(na[n]) or ep_named(nb[n])))]

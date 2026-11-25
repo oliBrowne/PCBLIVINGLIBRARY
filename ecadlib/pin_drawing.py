@@ -386,8 +386,8 @@ def same_pin(kind, num, a, b, names=((), ())):
         return xtal_role(num, a) is not None and xtal_role(num, a) == xtal_role(num, b)
     if kind in ("mosfet", "bjt", "diode") and role(a) and role(a) == role(b):
         return True
-    if (not str(b or "").strip() or role(b) == "NC") and role(a) == "NC":
-        return True
+    if str(b or "").strip() and role(b) == "NC" and role(a) == "NC":   # (a blank label confirms nothing: review 2026-11-25, r3 F6, a symbol's
+        return True                            # NC on the part's EN pin agreed with an unlabelled terminal)
     # the same name with the active-low mark on one side only (Q vs ~{Q}, EN vs ~{EN}) is the pin's sense inverted:
     # names_agree() reads both as one name, so the mark is compared on its own, as crosscheck.compare_pins does
     # (review 2026-11-23, 1.9)
@@ -398,7 +398,7 @@ def same_pin(kind, num, a, b, names=((), ())):
         return _one_of(a, b, names)
     if active_low(a, names[0]) != active_low(b, names[1]):
         return False
-    return names_agree(a, b) or kind in ("other", "dual") and _same_class(a, b, names[0])
+    return names_agree(a, b) or kind in ("other", "dual") and _same_class(a, b, names)
 
 
 _ALT = re.compile(r"[()\[\],;\s]+|(?<=[^/\s(\[,;])/(?=[^/\s)\],;])")
@@ -438,8 +438,23 @@ def _same_class(a, b, names):
     Vin- its IN-, IN its VIN): the same pin when it is the symbol's only name of that class (pin_text.loose_names), so
     a part with both VCC and VDD keeps them apart by their exact names."""
     from . import pin_text as PT
-    loose = PT.loose_names([(str(i), n) for i, n in enumerate(names)])
-    return PT.norm_name(a) in loose and PT.loose_class(a) is not None and PT.loose_class(a) == PT.loose_class(b)
+    sym, drawn = (list(names[0]), list(names[1])) if len(names) == 2 and isinstance(names[0], (list, tuple)) \
+        else (list(names), [])
+    loose = PT.loose_names([(str(i), n) for i, n in enumerate(sym)])
+    cls = PT.loose_class(a)
+    if not (PT.norm_name(a) in loose and cls is not None and cls == PT.loose_class(b)):
+        return False
+    # review 2026-11-25 (r3 F1): loose_names counts names, not pins. A symbol with VCC on two pins where the part has
+    # VCC on one and VS on the other took VS as 'the only rail' VCC. The class stands in only when the drawing has one
+    # name of that class too, on as many terminals as the symbol's name has pins (VSS on 2 and 4 is GND on 2 and 4),
+    # and the drawing does not print the symbol's own name on another terminal
+    if drawn:
+        mine = {PT.norm_name(n) for n in drawn if PT.loose_class(n) == cls}
+        if len(mine) != 1 or sum(PT.norm_name(n) == PT.norm_name(a) for n in sym) != \
+                sum(PT.norm_name(n) == PT.norm_name(b) for n in drawn) \
+                or any(PT.norm_name(n) == PT.norm_name(a) for n in drawn if PT.norm_name(n) != PT.norm_name(b)):
+            return False
+    return True
 
 
 def compare(kind, pins, mapping):
